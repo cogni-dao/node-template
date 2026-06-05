@@ -28,6 +28,8 @@
     "@cogni/db-client": "workspace:*",
     "@cogni/db-schema": "workspace:*",
     "@cogni/financial-ledger": "workspace:*",
+    "@cogni/graph-execution-core": "workspace:*",
+    "@cogni/graph-execution-host": "workspace:*",
     "@cogni/ids": "workspace:*",
     "@cogni/node-core": "workspace:*",
     "@cogni/node-contracts": "workspace:*",
