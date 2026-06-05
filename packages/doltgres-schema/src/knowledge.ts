@@ -12,8 +12,8 @@
  *   - DB_PER_NODE: this schema applies to `knowledge_node_template` only.
  *   - SCHEMA_GENERIC_CONTENT_SPECIFIC: per-node specificity lives in row content
  *     (domain registry values, `tags` JSONB, `source_node`), not in column shape.
- *   - Dialect separation: this package is NOT globbed by nodes/node-template/drizzle.config.ts
- *     (which targets Postgres); only by nodes/node-template/drizzle.doltgres.config.ts.
+ *   - Dialect separation: this package is NOT globbed by drizzle.config.ts
+ *     (which targets Postgres); only by drizzle.doltgres.config.ts.
  * Side-effects: none
  * Links: docs/spec/knowledge-data-plane.md, docs/spec/knowledge-syntropy.md, docs/research/dolt-baseline-port-syntropy.md
  * @public

@@ -1,0 +1,65 @@
+// SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
+
+/**
+ * Module: `@cogni/langgraph-graphs/graphs/types`
+ * Purpose: Shared graph type definitions for all LangGraph agents.
+ * Scope: Type firewall for LangGraph generics. Does NOT implement graph logic.
+ * Invariants:
+ *   - SINGLE_INVOKABLE_INTERFACE: All graphs implement InvokableGraph<I,O>
+ *   - LANGCHAIN_ALIGNED: Uses RunnableConfig/RunnableInterface from @langchain/core
+ * Side-effects: none
+ * Links: LANGGRAPH_AI.md, AGENT_DEVELOPMENT_GUIDE.md
+ * @public
+ */
+
+import type { LanguageModelLike } from "@langchain/core/language_models/base";
+import type { BaseMessage } from "@langchain/core/messages";
+import type {
+  RunnableConfig,
+  RunnableInterface,
+} from "@langchain/core/runnables";
+import type { StructuredToolInterface } from "@langchain/core/tools";
+
+/**
+ * Options for graph invocation.
+ * Alias to Partial<RunnableConfig> matching RunnableInterface.invoke() signature.
+ *
+ * Includes: signal, configurable, metadata, tags, callbacks, runId, timeout, etc.
+ */
+export type GraphInvokeOptions = Partial<RunnableConfig>;
+
+/**
+ * Generic invokable graph interface.
+ * Type firewall: exposes only invoke() from RunnableInterface.
+ *
+ * @typeParam I - Input type (e.g., { messages: BaseMessage[] })
+ * @typeParam O - Output type (e.g., { messages: BaseMessage[] })
+ */
+export type InvokableGraph<I, O> = Pick<RunnableInterface<I, O>, "invoke">;
+
+/**
+ * Standard input/output types for message-based graphs.
+ * NOTE: Mutable arrays to align with LangGraph's UpdateType expectations.
+ * Immutability should be enforced at runtime after validation, not in boundary types.
+ */
+export type MessageGraphInput = { messages: BaseMessage[] };
+export type MessageGraphOutput = { messages: BaseMessage[] };
+
+/**
+ * Base options for React agent graph factories.
+ * Extend per-graph when additional dependencies are needed.
+ */
+export interface CreateReactAgentGraphOptions {
+  /** LLM instance - LanguageModelLike to match createReactAgent expectation */
+  readonly llm: LanguageModelLike;
+  /** Tools wrapped via toLangChainTools() */
+  readonly tools: ReadonlyArray<StructuredToolInterface>;
+  /** Optional structured output format. When set, graph returns `structuredResponse`. */
+  readonly responseFormat?: {
+    readonly prompt?: string;
+    readonly schema: unknown;
+  };
+  /** Optional system prompt override. Used by operator graphs that are configured via catalog. */
+  readonly systemPrompt?: string;
+}

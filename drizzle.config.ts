@@ -2,12 +2,12 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `nodes/node-template/drizzle.config`
+ * Module: `drizzle.config`
  * Purpose: Per-node drizzle-kit config for the node-template scaffold — core schema only.
- * Scope: Drizzle-kit CLI boundary. Forks duplicate this config when copying nodes/node-template to nodes/<fork>.
+ * Scope: Drizzle-kit CLI boundary for a node-at-repo-root template fork.
  * Invariants: Core schema only — node-local tables are added post-fork via a schema array extension. DATABASE_URL must be provided by caller.
- * Side-effects: IO (drizzle-kit writes to ./nodes/node-template/app/src/adapters/server/db/migrations).
- * Notes: node-template is not deployed; this file exists so the fork workflow has a working template. No relative imports — drizzle-kit compiles configs to a temp dir, breaking `./app/...`-style paths. All paths are repo-root-relative.
+ * Side-effects: IO (drizzle-kit writes to ./app/src/adapters/server/db/migrations).
+ * Notes: No relative imports — drizzle-kit compiles configs to a temp dir, breaking `./app/...`-style paths. All paths are repo-root-relative.
  * Links: work/items/task.0324.per-node-db-schema-independence.md
  * @internal
  */
@@ -18,7 +18,7 @@ function requireDatabaseUrl(): string {
   const url = process.env.DATABASE_URL?.trim();
   if (!url) {
     throw new Error(
-      "DATABASE_URL is required for drizzle-kit (nodes/node-template/drizzle.config.ts). " +
+      "DATABASE_URL is required for drizzle-kit (drizzle.config.ts). " +
         "Forks must invoke via a caller that sets DATABASE_URL from their .env file or container env.",
     );
   }
@@ -27,7 +27,7 @@ function requireDatabaseUrl(): string {
 
 export default defineConfig({
   schema: "./packages/db-schema/src/**/*.ts",
-  out: "./nodes/node-template/app/src/adapters/server/db/migrations",
+  out: "./app/src/adapters/server/db/migrations",
   dialect: "postgresql",
   dbCredentials: { url: requireDatabaseUrl() },
   verbose: true,

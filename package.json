@@ -1,0 +1,20 @@
+{
+  "name": "@cogni/node-template-root",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@9.12.2",
+  "scripts": {
+    "build": "pnpm build:packages && pnpm build:app",
+    "build:packages": "pnpm -r --if-present --filter \"./packages/**\" --filter \"./graphs\" build && tsc -b packages/*/tsconfig.json packages/langgraph-graphs/tsconfig.build.json packages/doltgres-schema/tsconfig.json",
+    "build:app": "pnpm --filter @cogni/node-template-app build",
+    "typecheck": "pnpm --filter @cogni/node-template-graphs typecheck && pnpm --filter @cogni/node-template-doltgres-schema typecheck && pnpm --filter @cogni/node-template-app typecheck",
+    "test": "pnpm --filter @cogni/node-template-graphs test && pnpm --filter @cogni/node-template-app test",
+    "check": "pnpm build:packages"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "drizzle-kit": "^0.31.7",
+    "tsx": "^4.20.6",
+    "typescript": "^5"
+  }
+}

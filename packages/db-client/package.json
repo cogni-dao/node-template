@@ -1,0 +1,42 @@
+{
+  "name": "@cogni/db-client",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./service": {
+      "types": "./dist/service.d.ts",
+      "import": "./dist/service.js",
+      "default": "./dist/service.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "postbuild": "node -e \"const fs=require('fs'); for(const f of ['dist/index.js','dist/service.js']){if(!fs.existsSync(f)){console.error('ERROR: '+f+' missing'); process.exit(1)}}\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@cogni/ai-core": "workspace:*",
+    "@cogni/db-schema": "workspace:*",
+    "@cogni/attribution-ledger": "workspace:*",
+    "@cogni/ids": "workspace:*",
+    "@cogni/scheduler-core": "workspace:*",
+    "drizzle-orm": "^0.44.7",
+    "postgres": "^3.4.5",
+    "type-fest": "^5.4.1"
+  },
+  "devDependencies": {
+    "tsup": "^8.5.1",
+    "typescript": "^5"
+  }
+}

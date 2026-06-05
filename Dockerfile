@@ -15,10 +15,9 @@ RUN apk add --no-cache g++ make python3
 # 1. Copy dependency manifests first (maximizes install layer caching)
 #    --parents preserves directory structure with wildcards (BuildKit feature)
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY --parents nodes/node-template/app/package.json ./
+COPY --parents app/package.json ./
 COPY --parents packages/*/package.json ./
-COPY --parents nodes/*/app/package.json ./
-COPY --parents nodes/*/packages/*/package.json ./
+COPY --parents graphs/package.json ./
 
 # Use official node dist to avoid unofficial-builds.nodejs.org flakiness
 ENV npm_config_disturl=https://nodejs.org/dist
@@ -43,10 +42,8 @@ ENV NEXT_TELEMETRY_DISABLED=1 \
     NODE_ENV=production \
     APP_ENV=${APP_ENV}
 
-# Build all workspace packages (brute-force, not graph-scoped)
-# Required: package exports point to dist/, must exist before Next.js build
-# Uses canonical packages:build: tsup (JS) + tsc -b (declarations) + validation
-RUN pnpm packages:build
+# Build workspace packages whose exports point at dist/.
+RUN pnpm build:packages
 
 # Build-time placeholder for AUTH_SECRET (required by env validation during Next.js page collection)
 # Not a real secret; runtime containers must provide real AUTH_SECRET via deployment env
@@ -54,7 +51,7 @@ ARG AUTH_SECRET_BUILD="build-time-placeholder-min-32-chars-xxxxxxxxxxxxxxxx"
 ENV AUTH_SECRET=${AUTH_SECRET_BUILD}
 
 # Build the web app
-RUN --mount=type=cache,id=next-cache-node-template,target=/app/nodes/node-template/app/.next/cache,sharing=locked \
+RUN --mount=type=cache,id=next-cache-node-template,target=/app/app/.next/cache,sharing=locked \
     pnpm --filter @cogni/node-template-app build
 
 # Migrator — node-template scaffold migrator (task.0324).
@@ -65,12 +62,12 @@ WORKDIR /app
 
 COPY --from=builder /app/package.json /app/pnpm-lock.yaml /app/pnpm-workspace.yaml ./
 COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/nodes/node-template/drizzle.config.ts ./nodes/node-template/drizzle.config.ts
+COPY --from=builder /app/drizzle.config.ts ./drizzle.config.ts
 COPY --from=builder /app/packages/db-schema/src ./packages/db-schema/src
-COPY --from=builder /app/nodes/node-template/app/src/shared/db ./nodes/node-template/app/src/shared/db
-COPY --from=builder /app/nodes/node-template/app/src/adapters/server/db/migrations ./nodes/node-template/app/src/adapters/server/db/migrations
+COPY --from=builder /app/app/src/shared/db ./app/src/shared/db
+COPY --from=builder /app/app/src/adapters/server/db/migrations ./app/src/adapters/server/db/migrations
 
-CMD ["tsx", "node_modules/drizzle-kit/bin.cjs", "migrate", "--config=nodes/node-template/drizzle.config.ts"]
+CMD ["tsx", "node_modules/drizzle-kit/bin.cjs", "migrate", "--config=drizzle.config.ts"]
 
 # Runner – lean production image
 FROM node:22-alpine AS runner
@@ -89,31 +86,30 @@ ENV LOG_FORMAT=json
 LABEL org.opencontainers.image.title="cogni-node-template"
 
 # Copy standalone bundle (includes production dependencies)
-# outputFileTracingRoot=../../../ means standalone output mirrors monorepo structure
-COPY --from=builder --chown=nextjs:nodejs /app/nodes/node-template/app/.next/standalone ./
-COPY --from=builder --chown=nextjs:nodejs /app/nodes/node-template/app/.next/static ./nodes/node-template/app/.next/static
-COPY --from=builder --chown=nextjs:nodejs /app/nodes/node-template/app/public ./nodes/node-template/app/public
+# outputFileTracingRoot=../ means standalone output mirrors this repo-root workspace.
+COPY --from=builder --chown=nextjs:nodejs /app/app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/app/.next/static ./app/.next/static
+COPY --from=builder --chown=nextjs:nodejs /app/app/public ./app/public
 
-# Repo-spec: DAO config (node_id, chain, governance). Per-node, NOT repo-root —
-# copying /app/.cogni would land operator's identity in this node's runtime.
-COPY --from=builder --chown=nextjs:nodejs /app/nodes/node-template/.cogni ./.cogni
+# Repo-spec: DAO config (node_id, chain, governance).
+COPY --from=builder --chown=nextjs:nodejs /app/.cogni ./.cogni
 
 # Postgres migrator: base node-app deployment runs `node $NODE_NAME/app/migrate.mjs $NODE_NAME/app/migrations`
 # as an initContainer. The runner needs the shared wrapper + this node's migrations folder
 # colocated at the expected paths. Mirrors operator/Dockerfile (task.0370 step 1).
-COPY --from=builder --chown=nextjs:nodejs /app/nodes/node-template/app/src/adapters/server/db/migrations /app/nodes/node-template/app/migrations
-COPY --from=builder --chown=nextjs:nodejs /app/scripts/db/migrate.mjs /app/nodes/node-template/app/migrate.mjs
+COPY --from=builder --chown=nextjs:nodejs /app/app/src/adapters/server/db/migrations /app/app/migrations
+COPY --from=builder --chown=nextjs:nodejs /app/scripts/db/migrate.mjs /app/app/migrate.mjs
 # Doltgres migrate runner — task.5077: applies @cogni/node-template-doltgres-schema
 # migrations against `knowledge_node_template`, then stamps a dolt_commit so DDL
 # lands in dolt_log.
-COPY --from=builder --chown=nextjs:nodejs /app/nodes/node-template/app/src/adapters/server/db/doltgres-migrations /app/nodes/node-template/app/doltgres-migrations
+COPY --from=builder --chown=nextjs:nodejs /app/app/src/adapters/server/db/doltgres-migrations /app/app/doltgres-migrations
 # Doltgres migrator + verifier — shared scripts (parity with the Postgres
 # migrate.mjs COPY above). Verifier is sibling-imported by migrate-doltgres.mjs
 # and runs the post-migrate schema check before any tracking-row stamping,
 # closing the silent-skip gap from drizzle-orm's folderMillis-only "applied?"
 # check.
-COPY --from=builder --chown=nextjs:nodejs /app/scripts/db/migrate-doltgres.mjs /app/nodes/node-template/app/migrate-doltgres.mjs
-COPY --from=builder --chown=nextjs:nodejs /app/scripts/db/verify-doltgres-schema.mjs /app/nodes/node-template/app/verify-doltgres-schema.mjs
+COPY --from=builder --chown=nextjs:nodejs /app/scripts/db/migrate-doltgres.mjs /app/app/migrate-doltgres.mjs
+COPY --from=builder --chown=nextjs:nodejs /app/scripts/db/verify-doltgres-schema.mjs /app/app/verify-doltgres-schema.mjs
 
 # Codex CLI for BYO-AI ChatGPT execution.
 # Standalone output tracing can't detect spawned binaries.
@@ -127,8 +123,8 @@ RUN corepack enable && corepack prepare pnpm@9.12.2 --activate && pnpm add -g @o
 COPY --from=builder --chown=nextjs:nodejs /tmp/codex-native/@openai/ ./node_modules/@openai/
 
 # MCP server config — parseMcpConfigFromEnv reads config/mcp.servers.json relative to CWD.
-# Next.js standalone does process.chdir(__dirname) → CWD becomes /app/nodes/node-template/app at runtime.
-COPY --from=builder --chown=nextjs:nodejs /app/config/mcp.servers.json ./nodes/node-template/app/config/mcp.servers.json
+# Next.js standalone does process.chdir(__dirname) → CWD becomes /app/app at runtime.
+COPY --from=builder --chown=nextjs:nodejs /app/config/mcp.servers.json ./app/config/mcp.servers.json
 
 # Build SHA plumbing: CI passes --build-arg BUILD_SHA=${GITHUB_SHA}; app reads APP_BUILD_SHA at runtime.
 # Placed last so cache invalidation from a new commit only rebuilds the trailing metadata layer,
@@ -144,4 +140,4 @@ EXPOSE 3200
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3 \
   CMD curl -fsS http://localhost:3200/livez || exit 1
 
-CMD ["node", "nodes/node-template/app/server.js"]
+CMD ["node", "app/server.js"]

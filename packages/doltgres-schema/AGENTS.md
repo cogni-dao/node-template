@@ -16,10 +16,10 @@ Contents: re-exports from `@cogni/knowledge-base` of the 6 syntropy-seed tables 
 
 ## Pointers
 
-- [Work Items Port Spec](../../../../docs/spec/work-items-port.md) — port + adapter contract
-- [Knowledge Data Plane Spec](../../../../docs/spec/knowledge-data-plane.md) — Doltgres-side architecture
-- [Packages Architecture](../../../../docs/spec/packages-architecture.md) — workspace package shape
-- [@cogni/operator-doltgres-schema](../../../operator/packages/doltgres-schema/AGENTS.md) — sibling package; reference structure
+- Work Items Port Spec in `Cogni-DAO/cogni/docs/spec/work-items-port.md` — port + adapter contract
+- Knowledge Data Plane Spec in `Cogni-DAO/cogni/docs/spec/knowledge-data-plane.md` — Doltgres-side architecture
+- Packages Architecture in `Cogni-DAO/cogni/docs/spec/packages-architecture.md` — workspace package shape
+- `@cogni/operator-doltgres-schema` in the operator monorepo — sibling package; reference structure
 - task.5077 — substrate + contributions API port that created this package
 
 ## Boundaries
@@ -56,7 +56,7 @@ Contents: re-exports from `@cogni/knowledge-base` of the 6 syntropy-seed tables 
 
 ## Dialect separation (non-negotiable)
 
-This package is globbed ONLY by `nodes/node-template/drizzle.doltgres.config.ts` (Doltgres target). `nodes/node-template/drizzle.config.ts` (Postgres target) MUST NOT include this path — if it did, the Postgres migrator would try creating Doltgres-only tables in node-template's Postgres DB.
+This package is globbed ONLY by `drizzle.doltgres.config.ts` (Doltgres target). `drizzle.config.ts` (Postgres target) MUST NOT include this path — if it did, the Postgres migrator would try creating Doltgres-only tables in node-template's Postgres DB.
 
 ## Migrator behavior (runs in node-template migrator initContainer)
 

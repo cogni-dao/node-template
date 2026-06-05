@@ -1,0 +1,17 @@
+# Build outputs
+dist/
+*.tsbuildinfo
+
+# Dependencies
+node_modules/
+
+# IDE
+.vscode/
+.idea/
+
+# Test
+coverage/
+.vitest/
+
+# LangGraph API
+.langgraph_api
