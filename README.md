@@ -19,6 +19,13 @@ pnpm check
 docker build --target runner -t cogni-node-template:local .
 ```
 
+## Node developer guides
+
+- `docs/guides/contributing-to-cogni.md` — node contribution loop and ownership boundaries.
+- `docs/guides/new-node-styling.md` — first-pass rebrand for a minted node.
+- `docs/guides/add-secret.md` — node-owned secret declarations and typed consumption.
+- `docs/guides/contribute-knowledge.md` — when reusable findings should become durable node knowledge.
+
 ## Conductor workspaces
 
 This template ships a shared Conductor setup entrypoint:
