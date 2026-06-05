@@ -15,5 +15,9 @@
   },
   "include": ["src/**/*.ts"],
   "exclude": ["node_modules", "dist"],
-  "references": [{ "path": "../node-core" }, { "path": "../repo-spec" }]
+  "references": [
+    { "path": "../ai-core" },
+    { "path": "../node-core" },
+    { "path": "../repo-spec" }
+  ]
 }

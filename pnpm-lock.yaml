@@ -662,6 +662,9 @@ importers:
 
   packages/node-shared:
     dependencies:
+      '@cogni/ai-core':
+        specifier: workspace:*
+        version: link:../ai-core
       '@cogni/node-core':
         specifier: workspace:*
         version: link:../node-core
