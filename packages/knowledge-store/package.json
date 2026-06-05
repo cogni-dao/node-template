@@ -38,6 +38,7 @@
   },
   "dependencies": {
     "@cogni/ai-tools": "workspace:*",
+    "postgres": "^3.4.5",
     "zod": "^4.1.12"
   },
   "devDependencies": {

@@ -21,7 +21,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@types/json-schema": "^7.0.15"
+    "@types/json-schema": "^7.0.15",
+    "zod": "^4.1.12"
   },
   "devDependencies": {
     "tsup": "^8.5.1",
