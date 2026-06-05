@@ -11,6 +11,14 @@
     "test": "pnpm --filter @cogni/node-template-graphs test && pnpm --filter @cogni/node-template-app test",
     "check": "pnpm build:packages"
   },
+  "pnpm": {
+    "overrides": {
+      "@assistant-ui/react": "0.12.10",
+      "@assistant-ui/react-ai-sdk": "1.3.7",
+      "@assistant-ui/react-data-stream": "0.12.4",
+      "@assistant-ui/react-markdown": "0.12.3"
+    }
+  },
   "devDependencies": {
     "@types/node": "^22",
     "drizzle-kit": "^0.31.7",
