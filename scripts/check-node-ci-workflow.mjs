@@ -46,6 +46,13 @@ if (!branches.includes("main")) {
 
 expectEqual(workflow?.permissions?.contents, "read", "permissions.contents");
 expectEqual(workflow?.permissions?.packages, "write", "permissions.packages");
+if (Object.hasOwn(workflow ?? {}, "env") && Object.hasOwn(workflow.env ?? {}, "IMAGE_TAG")) {
+  fail("workflow must derive IMAGE_TAG from event metadata, not a top-level default");
+}
+expectIncludes(workflow?.concurrency?.group, "node-ci-pr-{0}", "concurrency.group");
+expectIncludes(workflow?.concurrency?.group, "node-ci-mq-{0}", "concurrency.group");
+expectIncludes(workflow?.concurrency?.group, "github.ref", "concurrency.group");
+expectEqual(workflow?.concurrency?.["cancel-in-progress"], true, "concurrency.cancel-in-progress");
 
 const job = workflow?.jobs?.build;
 expectIncludes(
@@ -70,11 +77,29 @@ expectIncludes(metaRun, "BUILD_SHA=\"$PR_HEAD_SHA\"", "pull_request build SHA");
 expectIncludes(metaRun, "BUILD_SHA=\"$PUSH_SHA\"", "push/merge_group build SHA");
 
 const checkout = steps.find((step) => step?.name === "Checkout");
-expectEqual(checkout?.uses, "actions/checkout@v4", "Checkout action");
+expectEqual(
+  checkout?.uses,
+  "actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955",
+  "Checkout action",
+);
 expectEqual(
   checkout?.with?.ref,
   "${{ steps.meta.outputs.checkout_ref }}",
   "Checkout ref",
+);
+
+const pnpmSetup = steps.find((step) => step?.name === "Set up pnpm");
+expectEqual(
+  pnpmSetup?.uses,
+  "pnpm/action-setup@c5ba7f7862a0f64c1b1a05fbac13e0b8e86ba08c",
+  "Set up pnpm action",
+);
+
+const nodeSetup = steps.find((step) => step?.name === "Set up Node");
+expectEqual(
+  nodeSetup?.uses,
+  "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
+  "Set up Node action",
 );
 
 const imageMetadata = steps.find((step) => step?.name === "Prepare image metadata");
