@@ -112,7 +112,7 @@ expectIncludes(
 );
 expectIncludes(
   imageMetadataRun,
-  "ghcr.io/${owner_lc}/${repo_lc}",
+  "ghcr.io/${owner_lc}/${repo_lc}-node",
   "Prepare image metadata",
 );
 
