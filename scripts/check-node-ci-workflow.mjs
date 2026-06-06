@@ -2,10 +2,17 @@ import { readFileSync } from "node:fs";
 import { parse } from "yaml";
 
 const WORKFLOW_PATH = ".github/workflows/ci.yaml";
+const PR_LINT_WORKFLOW_PATH = ".github/workflows/pr-lint.yaml";
 const workflow = parse(readFileSync(WORKFLOW_PATH, "utf8"));
+const prLintWorkflow = parse(readFileSync(PR_LINT_WORKFLOW_PATH, "utf8"));
 
 function fail(message) {
   console.error(`${WORKFLOW_PATH}: ${message}`);
+  process.exitCode = 1;
+}
+
+function failPrLint(message) {
+  console.error(`${PR_LINT_WORKFLOW_PATH}: ${message}`);
   process.exitCode = 1;
 }
 
@@ -26,6 +33,26 @@ function expectOwnKey(object, key, label) {
 function expectIncludes(value, fragment, label) {
   if (!String(value ?? "").includes(fragment)) {
     fail(`${label} must include ${JSON.stringify(fragment)}`);
+  }
+}
+
+function expectPrLintEqual(actual, expected, label) {
+  if (actual !== expected) {
+    failPrLint(`${label} must be ${JSON.stringify(expected)}; got ${JSON.stringify(actual)}`);
+  }
+}
+
+function expectPrLintOwnKey(object, key, label) {
+  if (!object || typeof object !== "object" || !Object.hasOwn(object, key)) {
+    failPrLint(`${label} must define ${key}`);
+    return undefined;
+  }
+  return object[key];
+}
+
+function expectPrLintIncludes(value, fragment, label) {
+  if (!String(value ?? "").includes(fragment)) {
+    failPrLint(`${label} must include ${JSON.stringify(fragment)}`);
   }
 }
 
@@ -163,3 +190,62 @@ if (process.exitCode) {
 }
 
 console.log("Node CI workflow invariants passed");
+
+expectPrLintEqual(prLintWorkflow?.name, "Lint PR", "workflow name");
+const prLintTriggers = expectPrLintOwnKey(prLintWorkflow, "on", "workflow");
+const prLintPullRequest = expectPrLintOwnKey(
+  prLintTriggers,
+  "pull_request",
+  "workflow triggers",
+);
+const prLintTypes = Array.isArray(prLintPullRequest?.types) ? prLintPullRequest.types : [];
+for (const type of ["opened", "edited", "reopened", "synchronize"]) {
+  if (!prLintTypes.includes(type)) {
+    failPrLint(`pull_request trigger must include ${type}`);
+  }
+}
+
+const prLintJob = prLintWorkflow?.jobs?.main;
+expectPrLintEqual(prLintJob?.name, "Validate PR title", "job name");
+expectPrLintEqual(prLintJob?.permissions?.["pull-requests"], "read", "pull request permission");
+const prLintSteps = Array.isArray(prLintJob?.steps) ? prLintJob.steps : [];
+const semanticTitleStep = prLintSteps.find(
+  (step) => step?.uses === "amannn/action-semantic-pull-request@v6",
+);
+expectPrLintEqual(
+  semanticTitleStep?.env?.GITHUB_TOKEN,
+  "${{ secrets.GITHUB_TOKEN }}",
+  "semantic PR title token",
+);
+for (const type of [
+  "feat",
+  "fix",
+  "docs",
+  "style",
+  "refactor",
+  "perf",
+  "test",
+  "chore",
+  "revert",
+  "ci",
+  "build",
+  "release",
+]) {
+  expectPrLintIncludes(semanticTitleStep?.with?.types, type, "semantic PR title types");
+}
+expectPrLintIncludes(
+  semanticTitleStep?.with?.subjectPattern,
+  "[Cc]omplete",
+  "semantic PR title subjectPattern",
+);
+expectPrLintIncludes(
+  semanticTitleStep?.with?.subjectPattern,
+  "[Pp]roduction[ ]+[Rr]eady",
+  "semantic PR title subjectPattern",
+);
+
+if (process.exitCode) {
+  process.exit();
+}
+
+console.log("PR lint workflow invariants passed");
