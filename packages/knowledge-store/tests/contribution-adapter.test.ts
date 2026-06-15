@@ -16,6 +16,7 @@ import { describe, expect, it } from "vitest";
 
 import { DoltgresKnowledgeContributionAdapter } from "../src/adapters/doltgres/contribution-adapter.js";
 import type { Principal } from "../src/domain/contribution-schemas.js";
+import { CitationTargetNotFoundError } from "../src/port/knowledge-store.port.js";
 
 const record = {
   id: "contrib-agent-1-abc123",
@@ -231,4 +232,141 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
       )
     ).toBe(true);
   });
+
+  // bug.5024: an EDO batch citing a row that was merged to main AFTER the
+  // contribution branch forked. The target resolves on main but not on the
+  // branch HEAD; the cite must still succeed (main ∪ branch resolution) and
+  // the edge is recorded on the branch. createEdoDecision writes a
+  // `derives_from` edge to a hypothesis — no branch-local confidence recompute,
+  // so this exercises the cross-plane resolve + main-only INSERT path.
+  it("accepts a cross-plane EDO cite (target on main, absent from branch)", async () => {
+    const fake = new CrossPlaneFakeSql({
+      mainEntryTypes: new Map([["hyp-merged-main", "hypothesis"]]),
+      branchEntryTypes: new Map(),
+    });
+
+    const adapter = new DoltgresKnowledgeContributionAdapter({
+      sql: fake as unknown as Sql,
+    });
+    const rec = await adapter.createEdoDecision({
+      principal: { id: "agent-1", kind: "agent" },
+      message: "decide from a merged-main hypothesis on a fresh branch",
+      entry: {
+        id: "dec-1",
+        domain: "meta",
+        title: "decision",
+        content: "content",
+      },
+      derivesFromHypothesisId: "hyp-merged-main",
+    });
+
+    expect(rec.contributionId).toBe("contrib-agent-1-abc123");
+    // The edge is recorded on the branch even though the target is main-only.
+    expect(
+      fake.conn.queries.some(
+        (q) =>
+          q.includes("INSERT INTO citations") && q.includes("'hyp-merged-main'")
+      )
+    ).toBe(true);
+    // main was consulted for the cited entry_type when the branch lookup missed.
+    expect(
+      fake.queries.some(
+        (q) =>
+          q.includes("entry_type FROM knowledge") &&
+          q.includes("'hyp-merged-main'")
+      )
+    ).toBe(true);
+  });
+
+  it("throws CitationTargetNotFoundError when the cited row is on neither branch nor main", async () => {
+    const fake = new CrossPlaneFakeSql({
+      mainEntryTypes: new Map(),
+      branchEntryTypes: new Map(),
+    });
+
+    const adapter = new DoltgresKnowledgeContributionAdapter({
+      sql: fake as unknown as Sql,
+    });
+    await expect(
+      adapter.createEdoDecision({
+        principal: { id: "agent-1", kind: "agent" },
+        message: "decide from a bogus hypothesis id",
+        entry: {
+          id: "dec-2",
+          domain: "meta",
+          title: "decision",
+          content: "content",
+        },
+        derivesFromHypothesisId: "does-not-exist-anywhere",
+      })
+    ).rejects.toBeInstanceOf(CitationTargetNotFoundError);
+  });
 });
+
+/**
+ * Fakes that distinguish the branch (reserved connection) plane from the merged
+ * `main` (pool) plane so the cross-plane cite path (bug.5024) can be exercised.
+ * `entry_type FROM knowledge` reads resolve against the per-plane id maps; the
+ * domain-registry + citing-row existence checks always resolve on the branch.
+ */
+function idFromQuery(query: string): string | undefined {
+  return query.match(/id = '([^']+)'/)?.[1];
+}
+
+class CrossPlaneFakeReservedSql {
+  readonly queries: string[] = [];
+
+  constructor(private readonly branchEntryTypes: Map<string, string>) {}
+
+  async unsafe(
+    query: string
+  ): Promise<Record<string, unknown>[] & { count?: number }> {
+    this.queries.push(query);
+    if (query.includes("dolt_hashof")) return [{ dolt_hashof: "head123" }];
+    if (query.includes("dolt_commit")) return [{ dolt_commit: ["{next456}"] }];
+    if (query.includes("FROM domains")) return [{ "?column?": 1 }];
+    if (query.includes("entry_type FROM knowledge")) {
+      const t = this.branchEntryTypes.get(idFromQuery(query) ?? "");
+      return t ? [{ entry_type: t }] : [];
+    }
+    if (query.includes("UPDATE knowledge_contributions")) {
+      const rows: Record<string, unknown>[] & { count?: number } = [];
+      rows.count = 1;
+      return rows;
+    }
+    return [];
+  }
+
+  release(): void {
+    this.queries.push("release");
+  }
+}
+
+class CrossPlaneFakeSql {
+  readonly queries: string[] = [];
+  readonly conn: CrossPlaneFakeReservedSql;
+  private readonly mainEntryTypes: Map<string, string>;
+
+  constructor(opts: {
+    mainEntryTypes: Map<string, string>;
+    branchEntryTypes: Map<string, string>;
+  }) {
+    this.mainEntryTypes = opts.mainEntryTypes;
+    this.conn = new CrossPlaneFakeReservedSql(opts.branchEntryTypes);
+  }
+
+  async unsafe(query: string): Promise<Record<string, unknown>[]> {
+    this.queries.push(query);
+    if (query.includes("FROM knowledge_contributions")) return [record];
+    if (query.includes("entry_type FROM knowledge")) {
+      const t = this.mainEntryTypes.get(idFromQuery(query) ?? "");
+      return t ? [{ entry_type: t }] : [];
+    }
+    if (query.includes("dolt_diff")) return [];
+    return [];
+  }
+
+  async reserve(): Promise<ReservedSql> {
+    return this.conn as unknown as ReservedSql;
+  }
+}

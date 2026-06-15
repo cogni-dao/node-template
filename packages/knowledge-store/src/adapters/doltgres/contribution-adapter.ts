@@ -338,25 +338,55 @@ async function getKnowledgeEntryTypeOnConn(
   return (rows[0] as Record<string, unknown>).entry_type as string;
 }
 
+/**
+ * Resolve a cited row's entry_type against the contribution branch first, then
+ * the merged `main` plane. A branch contribution must be able to cite
+ * already-merged knowledge: the branch was forked from `main`, but any atom
+ * merged AFTER the fork is absent from the branch HEAD while present on `main`
+ * (the dominant RECALL→CITE case — see bug.5024). The branch read uses the
+ * reserved (branch-checked-out) connection; the main read uses the pooled `sql`
+ * which stays on `main` (every other branch op runs through `withReserved`).
+ * `citations.cited_id` has no FK, so an edge to a main-only target inserts on
+ * the branch and stays valid once the branch merges. Returns null only when the
+ * row exists on neither plane.
+ */
+async function resolveCitedEntryType(
+  branchConn: ReservedSql,
+  mainSql: Sql,
+  citedId: string
+): Promise<{ entryType: string; onBranch: boolean } | null> {
+  const onBranch = await getKnowledgeEntryTypeOnConn(branchConn, citedId);
+  if (onBranch !== null) return { entryType: onBranch, onBranch: true };
+  const rows = await mainSql.unsafe(
+    `SELECT entry_type FROM knowledge WHERE id = ${escapeValue(citedId)} LIMIT 1`
+  );
+  if (rows.length === 0) return null;
+  return {
+    entryType: (rows[0] as Record<string, unknown>).entry_type as string,
+    onBranch: false,
+  };
+}
+
 async function insertCitationRow(input: {
   conn: ReservedSql;
+  mainSql: Sql;
   citingId: string;
   citedId: string;
   citationType: CitationType;
   context?: string;
-}): Promise<string> {
-  const { conn, citingId, citedId, citationType, context } = input;
-  // CITATION_TARGET_EXISTS_AT_WRITE + EDGE_TYPE_MATCHES_CITED_ENTRY_TYPE.
-  const citedType = await getKnowledgeEntryTypeOnConn(conn, citedId);
-  if (citedType === null) {
+}): Promise<{ id: string; citedOnBranch: boolean }> {
+  const { conn, mainSql, citingId, citedId, citationType, context } = input;
+  // CITATION_TARGET_EXISTS_AT_WRITE (main ∪ branch) + EDGE_TYPE_MATCHES_CITED_ENTRY_TYPE.
+  const cited = await resolveCitedEntryType(conn, mainSql, citedId);
+  if (cited === null) {
     throw new CitationTargetNotFoundError(citedId);
   }
   const expected = expectedCitedEntryTypeFor(citationType);
-  if (expected !== null && citedType !== expected) {
+  if (expected !== null && cited.entryType !== expected) {
     throw new CitationTypeMismatchError(
       citationType,
       citedId,
-      citedType,
+      cited.entryType,
       expected
     );
   }
@@ -370,7 +400,7 @@ async function insertCitationRow(input: {
     if (!msg.toLowerCase().includes("duplicate")) throw e;
     // Already exists — idempotent.
   }
-  return id;
+  return { id, citedOnBranch: cited.onBranch };
 }
 
 /**
@@ -569,6 +599,7 @@ export class DoltgresKnowledgeContributionAdapter
       for (const evidenceId of input.evidenceForIds ?? []) {
         await insertCitationRow({
           conn,
+          mainSql: this.sql,
           citingId: input.entry.id,
           citedId: evidenceId,
           citationType: "evidence_for",
@@ -606,6 +637,7 @@ export class DoltgresKnowledgeContributionAdapter
       });
       await insertCitationRow({
         conn,
+        mainSql: this.sql,
         citingId: input.entry.id,
         citedId: input.derivesFromHypothesisId,
         citationType: "derives_from",
@@ -640,6 +672,7 @@ export class DoltgresKnowledgeContributionAdapter
       });
       await insertCitationRow({
         conn,
+        mainSql: this.sql,
         citingId: input.entry.id,
         citedId: input.hypothesisId,
         citationType: input.edge,
@@ -832,6 +865,7 @@ export class DoltgresKnowledgeContributionAdapter
       for (const evidenceId of input.evidenceForIds ?? []) {
         await insertCitationRow({
           conn,
+          mainSql: this.sql,
           citingId: input.entry.id,
           citedId: evidenceId,
           citationType: "evidence_for",
@@ -864,6 +898,7 @@ export class DoltgresKnowledgeContributionAdapter
       });
       await insertCitationRow({
         conn,
+        mainSql: this.sql,
         citingId: input.entry.id,
         citedId: input.derivesFromHypothesisId,
         citationType: "derives_from",
@@ -893,6 +928,7 @@ export class DoltgresKnowledgeContributionAdapter
       });
       await insertCitationRow({
         conn,
+        mainSql: this.sql,
         citingId: input.entry.id,
         citedId: input.hypothesisId,
         citationType: input.edge,
