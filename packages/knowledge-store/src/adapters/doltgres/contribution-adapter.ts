@@ -443,12 +443,13 @@ async function recomputeConfidenceOnConn(
 
 async function applyEdit(input: {
   conn: ReservedSql;
+  mainSql: Sql;
   contributionId: string;
   principal: Principal;
   seq: number;
   edit: KnowledgeContributionEdit;
 }): Promise<void> {
-  const { conn, contributionId, principal, seq, edit } = input;
+  const { conn, mainSql, contributionId, principal, seq, edit } = input;
   const ref = sourceRef(contributionId, seq);
   const sourceNode = principal.id;
   if (edit.op === "deprecate") {
@@ -456,6 +457,33 @@ async function applyEdit(input: {
     await conn.unsafe(
       `UPDATE knowledge SET status = ${escapeValue("deprecated")}, source_type = ${escapeValue("external")}, source_ref = ${escapeValue(ref)}, source_node = ${escapeValue(sourceNode)}, updated_at = now() WHERE id = ${escapeValue(edit.targetRowId)}`
     );
+    return;
+  }
+
+  if (edit.op === "cite") {
+    // Generic typed edge between two knowledge rows. The citing row must
+    // resolve on the branch (it may have been inserted by an earlier edit in
+    // the same batch, so order inserts before the cites that reference them).
+    // `insertCitationRow` enforces CITATION_TARGET_EXISTS (main ∪ branch) +
+    // EDGE_TYPE_MATCHES_CITED_ENTRY_TYPE (a no-op for these non-hypothesis
+    // edges) and is idempotent on duplicate.
+    await assertKnowledgeRowExists(conn, edit.citingId);
+    const { citedOnBranch } = await insertCitationRow({
+      conn,
+      mainSql,
+      citingId: edit.citingId,
+      citedId: edit.citedId,
+      citationType: edit.citationType,
+      context: edit.context,
+    });
+    // Recompute the cited row's confidence inside the branch so the reviewer
+    // sees the supports/contradicts effect pre-merge (mirrors the EDO outcome
+    // path). Skip when the target lives only on `main` (cross-plane cite,
+    // bug.5024): there is no branch row to UPDATE, and the edge recomputes on
+    // main's own write path. The edge itself is still recorded on the branch.
+    if (citedOnBranch) {
+      await recomputeConfidenceOnConn(conn, edit.citedId);
+    }
     return;
   }
 
@@ -530,6 +558,7 @@ export class DoltgresKnowledgeContributionAdapter
         for (const edit of edits) {
           await applyEdit({
             conn,
+            mainSql: this.sql,
             contributionId,
             principal: input.principal,
             seq: 1,
@@ -780,6 +809,7 @@ export class DoltgresKnowledgeContributionAdapter
         for (const edit of input.edits) {
           await applyEdit({
             conn,
+            mainSql: this.sql,
             contributionId: input.contributionId,
             principal: input.principal,
             seq,

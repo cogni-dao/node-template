@@ -278,6 +278,62 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
     ).toBe(true);
   });
 
+  // bug.5024 parity for the generic op:cite path (not the EDO batch ops). An
+  // agent appends a `supports` edge whose cited target was merged to main AFTER
+  // the branch forked: it resolves on main but is absent from the branch HEAD.
+  // The citing row lives on the branch. The cite must succeed (main ∪ branch),
+  // the edge INSERTs on the branch, and the branch-local confidence recompute
+  // is skipped because the cited row only exists on main.
+  it("accepts a cross-plane op:cite append (cited on main, citing on branch)", async () => {
+    const fake = new CrossPlaneFakeSql({
+      mainEntryTypes: new Map([["cited-merged-main", "finding"]]),
+      branchEntryTypes: new Map([["citing-on-branch", "finding"]]),
+    });
+
+    const adapter = new DoltgresKnowledgeContributionAdapter({
+      sql: fake as unknown as Sql,
+    });
+    const commit = await adapter.appendCommit({
+      contributionId: "contrib-agent-1-abc123",
+      principal: { id: "agent-1", kind: "agent" },
+      message: "link to a merged-main finding",
+      edits: [
+        {
+          op: "cite",
+          citingId: "citing-on-branch",
+          citedId: "cited-merged-main",
+          citationType: "supports",
+        },
+      ],
+    });
+
+    expect(commit.commitHash).toBe("next456");
+    // The edge is recorded on the branch even though the target is main-only.
+    expect(
+      fake.conn.queries.some(
+        (q) =>
+          q.includes("INSERT INTO citations") &&
+          q.includes("'cited-merged-main'")
+      )
+    ).toBe(true);
+    // main was consulted for the cited entry_type when the branch lookup missed.
+    expect(
+      fake.queries.some(
+        (q) =>
+          q.includes("entry_type FROM knowledge") &&
+          q.includes("'cited-merged-main'")
+      )
+    ).toBe(true);
+    // Cross-plane: no branch-local confidence recompute on the main-only target.
+    expect(
+      fake.conn.queries.some(
+        (q) =>
+          q.includes("UPDATE knowledge SET confidence_pct") &&
+          q.includes("'cited-merged-main'")
+      )
+    ).toBe(false);
+  });
+
   it("throws CitationTargetNotFoundError when the cited row is on neither branch nor main", async () => {
     const fake = new CrossPlaneFakeSql({
       mainEntryTypes: new Map(),
@@ -328,6 +384,10 @@ class CrossPlaneFakeReservedSql {
     if (query.includes("entry_type FROM knowledge")) {
       const t = this.branchEntryTypes.get(idFromQuery(query) ?? "");
       return t ? [{ entry_type: t }] : [];
+    }
+    // assertKnowledgeRowExists (citing-row presence) resolves on the branch.
+    if (query.includes("SELECT 1 FROM knowledge")) {
+      return this.branchEntryTypes.has(idFromQuery(query) ?? "") ? [{}] : [];
     }
     if (query.includes("UPDATE knowledge_contributions")) {
       const rows: Record<string, unknown>[] & { count?: number } = [];
