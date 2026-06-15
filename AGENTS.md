@@ -7,6 +7,20 @@
 > `provision-env`, or touch Argo. See `docs/spec/node-ci-cd-contract.md` in the
 > operator monorepo for the full two-views model.
 
+## Your cognition is delivered at session start
+
+A SessionStart hook ([`.claude/settings.json`](.claude/settings.json) for Claude Code,
+[`.codex/config.toml`](.codex/config.toml) for Codex) runs the shared loader
+[`scripts/agent/session-cognition.sh`](scripts/agent/session-cognition.sh), which pulls a
+**cognition bundle** — tooling invariants + a live skills index + knowledge-domain pointers —
+and injects it into context. Codex needs a one-time trust (`/hooks`).
+
+- Default source is the operator (`https://cognidao.org/api/v1/cognition`) — the shared Cogni
+  agent contract. Set `COGNI_COGNITION_URL` to **your own** node once deployed
+  (`https://<your-node>/api/v1/cognition`) to serve this node's cognition.
+- Self-serve any time: `curl -fsS "$COGNI_COGNITION_URL" | jq -r .markdown`.
+- This node serves its own bundle at `GET /api/v1/cognition` (public, index-only).
+
 ## What you own (node-dev half)
 
 - **App + graphs + packages** at the repo root.

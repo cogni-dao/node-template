@@ -19,12 +19,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mockGetToken = vi.fn();
 
 vi.mock("next-auth/jwt", () => ({
-  getToken: (...args: unknown[]) => mockGetToken(...args),
+	getToken: (...args: unknown[]) => mockGetToken(...args),
 }));
 
 vi.mock("@/auth", () => ({
-  authSecret: "test-secret",
-  authOptions: { secret: "test-secret" },
+	authSecret: "test-secret",
+	authOptions: { secret: "test-secret" },
 }));
 
 // Import after mocks
@@ -33,186 +33,195 @@ import { proxy } from "@/proxy";
 // --- Helpers ---
 
 function makeRequest(path: string): NextRequest {
-  return new NextRequest(new URL(path, "http://localhost:3000"));
+	return new NextRequest(new URL(path, "http://localhost:3000"));
 }
 
 function makeAgentRequest(path: string): NextRequest {
-  return new NextRequest(new URL(path, "http://localhost:3000"), {
-    headers: {
-      authorization: "Bearer cogni_ag_sk_v1_test.payload.signature",
-    },
-  });
+	return new NextRequest(new URL(path, "http://localhost:3000"), {
+		headers: {
+			authorization: "Bearer cogni_ag_sk_v1_test.payload.signature",
+		},
+	});
 }
 
 function expectRedirectTo(res: Response, pathname: string): void {
-  expect(res.status).toBe(307);
-  const location = res.headers.get("location") ?? "";
-  expect(new URL(location).pathname).toBe(pathname);
+	expect(res.status).toBe(307);
+	const location = res.headers.get("location") ?? "";
+	expect(new URL(location).pathname).toBe(pathname);
 }
 
 // --- Tests ---
 
 describe("proxy — page-level routing", () => {
-  beforeEach(() => {
-    mockGetToken.mockReset();
-  });
+	beforeEach(() => {
+		mockGetToken.mockReset();
+	});
 
-  it("redirects authenticated user on / to /chat", async () => {
-    mockGetToken.mockResolvedValue({ id: "user-1" });
+	it("redirects authenticated user on / to /chat", async () => {
+		mockGetToken.mockResolvedValue({ id: "user-1" });
 
-    const res = await proxy(makeRequest("/"));
+		const res = await proxy(makeRequest("/"));
 
-    expectRedirectTo(res, "/chat");
-  });
+		expectRedirectTo(res, "/chat");
+	});
 
-  it("passes through unauthenticated user on /", async () => {
-    mockGetToken.mockResolvedValue(null);
+	it("passes through unauthenticated user on /", async () => {
+		mockGetToken.mockResolvedValue(null);
 
-    const res = await proxy(makeRequest("/"));
+		const res = await proxy(makeRequest("/"));
 
-    expect(res.status).toBe(200);
-  });
+		expect(res.status).toBe(200);
+	});
 
-  it("redirects unauthenticated user on /chat to /", async () => {
-    mockGetToken.mockResolvedValue(null);
+	it("redirects unauthenticated user on /chat to /", async () => {
+		mockGetToken.mockResolvedValue(null);
 
-    const res = await proxy(makeRequest("/chat"));
+		const res = await proxy(makeRequest("/chat"));
 
-    expectRedirectTo(res, "/");
-  });
+		expectRedirectTo(res, "/");
+	});
 
-  it("redirects unauthenticated user on /profile to /", async () => {
-    mockGetToken.mockResolvedValue(null);
+	it("redirects unauthenticated user on /profile to /", async () => {
+		mockGetToken.mockResolvedValue(null);
 
-    const res = await proxy(makeRequest("/profile"));
+		const res = await proxy(makeRequest("/profile"));
 
-    expectRedirectTo(res, "/");
-  });
+		expectRedirectTo(res, "/");
+	});
 
-  it("redirects unauthenticated user on /chat/some-id to /", async () => {
-    mockGetToken.mockResolvedValue(null);
+	it("redirects unauthenticated user on /chat/some-id to /", async () => {
+		mockGetToken.mockResolvedValue(null);
 
-    const res = await proxy(makeRequest("/chat/some-id"));
+		const res = await proxy(makeRequest("/chat/some-id"));
 
-    expectRedirectTo(res, "/");
-  });
+		expectRedirectTo(res, "/");
+	});
 
-  it("passes through authenticated user on /chat", async () => {
-    mockGetToken.mockResolvedValue({ id: "user-1" });
+	it("passes through authenticated user on /chat", async () => {
+		mockGetToken.mockResolvedValue({ id: "user-1" });
 
-    const res = await proxy(makeRequest("/chat"));
+		const res = await proxy(makeRequest("/chat"));
 
-    expect(res.status).toBe(200);
-  });
+		expect(res.status).toBe(200);
+	});
 
-  it("passes through authenticated user on /profile", async () => {
-    mockGetToken.mockResolvedValue({ id: "user-1" });
+	it("passes through authenticated user on /profile", async () => {
+		mockGetToken.mockResolvedValue({ id: "user-1" });
 
-    const res = await proxy(makeRequest("/profile"));
+		const res = await proxy(makeRequest("/profile"));
 
-    expect(res.status).toBe(200);
-  });
+		expect(res.status).toBe(200);
+	});
 });
 
 describe("proxy — API route protection", () => {
-  beforeEach(() => {
-    mockGetToken.mockReset();
-  });
+	beforeEach(() => {
+		mockGetToken.mockReset();
+	});
 
-  it("allows /api/v1/public/* without auth", async () => {
-    mockGetToken.mockResolvedValue(null);
+	it("allows /api/v1/public/* without auth", async () => {
+		mockGetToken.mockResolvedValue(null);
 
-    const res = await proxy(makeRequest("/api/v1/public/health"));
+		const res = await proxy(makeRequest("/api/v1/public/health"));
 
-    expect(res.status).toBe(200);
-    // getToken should not even be called for public routes
-    expect(mockGetToken).not.toHaveBeenCalled();
-  });
+		expect(res.status).toBe(200);
+		// getToken should not even be called for public routes
+		expect(mockGetToken).not.toHaveBeenCalled();
+	});
 
-  it("allows /api/v1/agent/register without auth", async () => {
-    mockGetToken.mockResolvedValue(null);
+	it("allows /api/v1/agent/register without auth", async () => {
+		mockGetToken.mockResolvedValue(null);
 
-    const res = await proxy(makeRequest("/api/v1/agent/register"));
+		const res = await proxy(makeRequest("/api/v1/agent/register"));
 
-    expect(res.status).toBe(200);
-    expect(mockGetToken).not.toHaveBeenCalled();
-  });
+		expect(res.status).toBe(200);
+		expect(mockGetToken).not.toHaveBeenCalled();
+	});
 
-  it("rejects unauthenticated on /api/v1/*", async () => {
-    mockGetToken.mockResolvedValue(null);
+	it("allows /api/v1/cognition without auth", async () => {
+		mockGetToken.mockResolvedValue(null);
 
-    const res = await proxy(makeRequest("/api/v1/users/me"));
+		const res = await proxy(makeRequest("/api/v1/cognition"));
 
-    expect(res.status).toBe(401);
-    const body = await res.json();
-    expect(body.error).toBe("Unauthorized");
-  });
+		expect(res.status).toBe(200);
+		expect(mockGetToken).not.toHaveBeenCalled();
+	});
 
-  it("allows authenticated on /api/v1/*", async () => {
-    mockGetToken.mockResolvedValue({ id: "user-1" });
+	it("rejects unauthenticated on /api/v1/*", async () => {
+		mockGetToken.mockResolvedValue(null);
 
-    const res = await proxy(makeRequest("/api/v1/users/me"));
+		const res = await proxy(makeRequest("/api/v1/users/me"));
 
-    expect(res.status).toBe(200);
-  });
+		expect(res.status).toBe(401);
+		const body = await res.json();
+		expect(body.error).toBe("Unauthorized");
+	});
 
-  it("allows agent bearer on /api/v1/chat/completions", async () => {
-    mockGetToken.mockResolvedValue(null);
+	it("allows authenticated on /api/v1/*", async () => {
+		mockGetToken.mockResolvedValue({ id: "user-1" });
 
-    const res = await proxy(makeAgentRequest("/api/v1/chat/completions"));
+		const res = await proxy(makeRequest("/api/v1/users/me"));
 
-    expect(res.status).toBe(200);
-    expect(mockGetToken).not.toHaveBeenCalled();
-  });
+		expect(res.status).toBe(200);
+	});
 
-  it("allows agent bearer on /api/v1/agent/runs", async () => {
-    mockGetToken.mockResolvedValue(null);
+	it("allows agent bearer on /api/v1/chat/completions", async () => {
+		mockGetToken.mockResolvedValue(null);
 
-    const res = await proxy(makeAgentRequest("/api/v1/agent/runs"));
+		const res = await proxy(makeAgentRequest("/api/v1/chat/completions"));
 
-    expect(res.status).toBe(200);
-    expect(mockGetToken).not.toHaveBeenCalled();
-  });
+		expect(res.status).toBe(200);
+		expect(mockGetToken).not.toHaveBeenCalled();
+	});
 
-  it("allows agent bearer on /api/v1/ai/chat (agent-first)", async () => {
-    mockGetToken.mockResolvedValue(null);
+	it("allows agent bearer on /api/v1/agent/runs", async () => {
+		mockGetToken.mockResolvedValue(null);
 
-    const res = await proxy(makeAgentRequest("/api/v1/ai/chat"));
+		const res = await proxy(makeAgentRequest("/api/v1/agent/runs"));
 
-    expect(res.status).toBe(200);
-    expect(mockGetToken).not.toHaveBeenCalled();
-  });
+		expect(res.status).toBe(200);
+		expect(mockGetToken).not.toHaveBeenCalled();
+	});
 
-  it("allows agent bearer on /api/v1/ai/models (agent-first)", async () => {
-    mockGetToken.mockResolvedValue(null);
+	it("allows agent bearer on /api/v1/ai/chat (agent-first)", async () => {
+		mockGetToken.mockResolvedValue(null);
 
-    const res = await proxy(makeAgentRequest("/api/v1/ai/models"));
+		const res = await proxy(makeAgentRequest("/api/v1/ai/chat"));
 
-    expect(res.status).toBe(200);
-    expect(mockGetToken).not.toHaveBeenCalled();
-  });
+		expect(res.status).toBe(200);
+		expect(mockGetToken).not.toHaveBeenCalled();
+	});
 
-  it("allows agent bearer on /api/v1/schedules/* (agent-first)", async () => {
-    mockGetToken.mockResolvedValue(null);
+	it("allows agent bearer on /api/v1/ai/models (agent-first)", async () => {
+		mockGetToken.mockResolvedValue(null);
 
-    const res = await proxy(makeAgentRequest("/api/v1/schedules/my-schedule"));
+		const res = await proxy(makeAgentRequest("/api/v1/ai/models"));
 
-    expect(res.status).toBe(200);
-    expect(mockGetToken).not.toHaveBeenCalled();
-  });
+		expect(res.status).toBe(200);
+		expect(mockGetToken).not.toHaveBeenCalled();
+	});
+
+	it("allows agent bearer on /api/v1/schedules/* (agent-first)", async () => {
+		mockGetToken.mockResolvedValue(null);
+
+		const res = await proxy(makeAgentRequest("/api/v1/schedules/my-schedule"));
+
+		expect(res.status).toBe(200);
+		expect(mockGetToken).not.toHaveBeenCalled();
+	});
 });
 
 describe("proxy — unmatched routes", () => {
-  beforeEach(() => {
-    mockGetToken.mockReset();
-  });
+	beforeEach(() => {
+		mockGetToken.mockReset();
+	});
 
-  it("passes through unmatched routes without checking auth", async () => {
-    // Routes not in APP_ROUTES and not /api/v1/* should pass through
-    const res = await proxy(makeRequest("/api/auth/callback/github"));
+	it("passes through unmatched routes without checking auth", async () => {
+		// Routes not in APP_ROUTES and not /api/v1/* should pass through
+		const res = await proxy(makeRequest("/api/auth/callback/github"));
 
-    expect(res.status).toBe(200);
-    // getToken should not be called for non-auth routes
-    expect(mockGetToken).not.toHaveBeenCalled();
-  });
+		expect(res.status).toBe(200);
+		// getToken should not be called for non-auth routes
+		expect(mockGetToken).not.toHaveBeenCalled();
+	});
 });

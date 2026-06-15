@@ -21,11 +21,11 @@ export * from "./ai.agents.v1.contract";
 // with ai.completions.v1.contract (TS2308). The completions ChatMessage
 // (OpenAI-compatible format) is the one used by consumers.
 export {
-  AssistantUiInputSchema,
-  aiChatOperation,
-  type ChatInput,
-  ChatMessageSchema,
-  type ChatOutput,
+	AssistantUiInputSchema,
+	aiChatOperation,
+	type ChatInput,
+	ChatMessageSchema,
+	type ChatOutput,
 } from "./ai.chat.v1.contract";
 export * from "./ai.completions.v1.contract";
 export * from "./ai.models.v1.contract";
@@ -47,6 +47,8 @@ export * from "./attribution.review-subject-overrides.v1.contract";
 export * from "./attribution.sign-data.v1.contract";
 // ── Billing ─────────────────────────────────────────────────────────────────
 export * from "./billing-ingest.internal.v1.contract";
+// ── Cognition (session-start substrate bundle) ──────────────────────────────
+export * from "./cognition.v1.contract";
 // ── Chat errors ─────────────────────────────────────────────────────────────
 export * from "./error.chat.v1.contract";
 export * from "./governance.status.v1.contract";
