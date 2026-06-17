@@ -72,3 +72,28 @@ jobs:
 
       - name: Unit + contract coverage tests
         run: pnpm test:ci
+
+  component:
+    # Skip on merge_group: kept off the required-status-checks path so the
+    # queue doesn't re-run testcontainers on every rebased candidate.
+    if: github.event_name != 'merge_group'
+    runs-on: ubuntu-latest # GitHub-hosted runners provide Docker for testcontainers
+    needs: static
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - uses: pnpm/action-setup@c5ba7f7862a0f64c1b1a05fbac13e0b8e86ba08c # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace packages
+        run: pnpm packages:build
+
+      - name: Component tests (testcontainers)
+        run: pnpm test:component
