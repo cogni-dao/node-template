@@ -1,6 +1,6 @@
 ---
 name: schema-update
-description: Use any time you are about to add, change, or migrate a Postgres or Doltgres table in this node — editing schema TS under `packages/db-schema/src` or `packages/doltgres-schema/src`, running `drizzle-kit generate`, writing a migration `.sql`, touching `meta/_journal.json` / `*_snapshot.json`, or debugging a migration that didn't apply on candidate. Mandatory before any schema edit.
+description: Use any time you are about to add, change, or migrate a Postgres or Doltgres table in this node — editing schema TS under `packages/db-schema/src` or `packages/doltgres-schema/src`, running `drizzle-kit generate`, writing a migration `.sql`, touching `meta/_journal.json` / `*_snapshot.json`, adding row-level security / tenant isolation (a table with a FK to `users` or `billing_accounts`), or debugging a migration that didn't apply on candidate. Mandatory before any schema edit. Covers the RLS-first rule + the component gate that enforces it.
 ---
 
 # schema-update
@@ -23,6 +23,45 @@ drizzle-kit reads these via `drizzle.config.ts` (Postgres) and `drizzle.doltgres
 3. **Validate the chain.** The snapshot `prevId` chain and journal `when` values must be intact. Journal `when` must be **strictly increasing**: a new entry whose `when` lands before a prior entry's `when` will silently no-op on deploy (see failure mode #1). If the auto-gen `Date.now()` produced a non-monotonic `when`, bump the new entry's `when` past the prior max.
 4. Commit `NNNN_*.sql` + `meta/_journal.json` + `meta/NNNN_snapshot.json` **together, in one commit**. Never `--no-verify` a schema PR.
 5. **Post-flight:** the migrator (`scripts/db/migrate.mjs`, run in the node's migrate initContainer) must log your tag as applied. If it didn't run, your column won't exist at runtime.
+
+## RLS coverage — mandatory for any tenant-scoped table (RLS-first)
+
+drizzle-kit does **not** generate RLS. If your table is tenant-scoped — a foreign
+key to `users` (per-user) or `billing_accounts` (per-account) — it ships with
+row-level security in the **same migration that creates it**, never "added later."
+This is the rule that makes multi-tenant safe by default; skip it and you leak
+every account's rows to every other account.
+
+Two correct shapes:
+
+- **User/account-facing reads** → an owner-scoped policy. Per-account:
+  `USING ("account_id" IN (SELECT "id" FROM "billing_accounts" WHERE "owner_user_id" = current_setting('app.current_user_id', true)))`
+  (per-user is the direct `"user_id" = current_setting('app.current_user_id', true)` form). Mirror `0004_enable_rls.sql`.
+- **Service-role-only** (only the BYPASSRLS worker role touches it, no app-role
+  path) → `ENABLE` + `FORCE` with **no policy** = deny-all / fail-closed. No fake
+  policy needed.
+
+Always pair `ENABLE ROW LEVEL SECURITY` with `FORCE ROW LEVEL SECURITY`. Without
+FORCE, the table owner (the app role that runs migrations) bypasses its own RLS —
+tests pass while production leaks. drizzle-kit emits neither; hand-author both
+(see the fallback below).
+
+### The component gate is your "done"
+
+The `component` CI lane (`app/tests/component/setup/testcontainers-postgres.global.ts`)
+runs three catalog-derived preflights against a real Postgres on every PR, with no
+hard-coded table list:
+
+1. every `public` table with a FK to `users` has RLS **enabled** (`RLS_COVERAGE`),
+2. every table that enables RLS also **forces** it (no owner bypass),
+3. at least one table has RLS (catches a dropped migration).
+
+A tenant table with missing/owner-bypassable RLS fails the lane **before any test
+runs** — that is the gate that makes this class of leak un-mergeable. Then prove
+isolation explicitly: add a 2-account test under `app/tests/component/db/*.int.test.ts`
+that writes rows for two accounts and asserts each account's
+`SET LOCAL app.current_user_id` session sees only its own. See the `test-expert`
+skill for the component-lane mechanics.
 
 ## Hand-authored fallback — only if drizzle-kit literally can't emit it
 
@@ -88,3 +127,4 @@ scripts/db/migrate.mjs / migrate-doltgres.mjs        runtime migrators
 
 - Choosing Postgres vs Doltgres for a new table → keep AI content in `knowledge` rows; only add operational tables to Postgres.
 - Migrator initContainer not firing or crash-looping → that's a deploy/image-wiring problem, not a schema one.
+- Anything about the *substrate* — migrator image build, the candidate→preview→prod promote chain, DB backups, cross-env credential/DSN wiring — is **operator-managed (the node BaaS), not yours.** Your scope ends at: schema TS, the migration, RLS on it, and the component test that proves it. File it with the operator if the substrate is wrong.
