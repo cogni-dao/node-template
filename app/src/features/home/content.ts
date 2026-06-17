@@ -62,13 +62,13 @@ export interface HeroContent {
 }
 
 export const HERO: HeroContent = {
-  statusLabel: "Agent online",
-  headlineTop: "Build something",
-  headlineAccent: "community-owned.",
+  statusLabel: "Template online",
+  headlineTop: "Choose a niche.",
+  headlineAccent: "Launch its AI node.",
   subhead:
-    "A community-built AI agent that researches, monitors, and acts on what matters to your mission — working in the open, accountable to the people it serves.",
-  primaryCta: "Try the demo",
-  ctaTagline: "Teach it. Guide it. Own it.",
+    "Spawn this template, give the node a mission, and set an AI to work in public. Contributors earn governance tokens, then vote on the agent's roadmap, priorities, and budget.",
+  primaryCta: "Try the template",
+  ctaTagline: "Pick the mission. Train the agent. Govern the budget.",
 };
 
 /* ─── HERO LINKS ──────────────────────────────────────────────────────────
@@ -107,31 +107,31 @@ export const AGENT_STREAM_SEQUENCES: StreamEvent[][] = [
     {
       id: "a1",
       type: "thinking",
-      text: "Reviewing the goals the community set for this week...",
+      text: "Reading the niche brief: independent coffee shops in Nashville",
       at: 0,
     },
     {
       id: "a2",
       type: "searching",
-      text: "Gathering fresh sources across the mission's watch list",
+      text: "Scanning local calendars, review sites, and supplier chatter",
       at: 1800,
     },
     {
       id: "a3",
       type: "analyzing",
-      text: "Cross-checking 3 new findings against what we already know",
+      text: "Mapping demand spikes against staffing and inventory risks",
       at: 3400,
     },
     {
       id: "a4",
       type: "signal",
-      text: "Signal: a high-confidence opportunity that fits the mission. Drafting a recommendation.",
+      text: "Signal: weekend event cluster likely to strain 5 shops. Drafting an action plan.",
       at: 5600,
     },
     {
       id: "a5",
       type: "done",
-      text: "Pass complete. 1 recommendation ready for member review.",
+      text: "Pass complete. Recommendation queued for token-holder review.",
       at: 7200,
     },
   ],
@@ -139,31 +139,31 @@ export const AGENT_STREAM_SEQUENCES: StreamEvent[][] = [
     {
       id: "b1",
       type: "thinking",
-      text: "Picking up where the last run left off...",
+      text: "Checking governance priorities from the latest member vote...",
       at: 0,
     },
     {
       id: "b2",
       type: "searching",
-      text: "Scanning the latest activity — 42 items in the queue",
+      text: "Ranking requested work by impact, cost, and mission fit",
       at: 2000,
     },
     {
       id: "b3",
       type: "analyzing",
-      text: "Comparing against the community's stated priorities",
+      text: "Estimating budget needed for the next agent capability",
       at: 3800,
     },
     {
       id: "b4",
       type: "signal",
-      text: "Signal: two items worth a closer look. Tagging for member input.",
+      text: "Signal: route automation beats dashboard polish this epoch.",
       at: 5400,
     },
     {
       id: "b5",
       type: "done",
-      text: "Pass complete. 2 items surfaced, 42 reviewed.",
+      text: "Pass complete. Draft budget proposal ready for governance.",
       at: 6800,
     },
   ],
@@ -171,25 +171,25 @@ export const AGENT_STREAM_SEQUENCES: StreamEvent[][] = [
     {
       id: "c1",
       type: "thinking",
-      text: "Listening for new requests from members...",
+      text: "Tallying contribution receipts for the current epoch...",
       at: 0,
     },
     {
       id: "c2",
       type: "searching",
-      text: "No open requests — running the routine background sweep",
+      text: "Matching merged work, reviewed signals, and verified outcomes",
       at: 1600,
     },
     {
       id: "c3",
       type: "analyzing",
-      text: "Everything tracking to plan. No action needed right now.",
+      text: "Calculating token weights before the next priority vote",
       at: 3200,
     },
     {
       id: "c4",
       type: "done",
-      text: "Pass complete. 0 new signals — all clear.",
+      text: "Pass complete. Governance distribution ready to review.",
       at: 5000,
     },
   ],
@@ -226,76 +226,76 @@ export interface ShowcaseItem {
 }
 
 export const SHOWCASE_SECTION = {
-  eyebrow: "Live coverage",
-  heading: "One agent. Every signal.",
+  eyebrow: "Launch pattern",
+  heading: "A full node, ready to specialize.",
   subhead:
-    "It goes where the signal is. The node watches the surfaces your community cares about, so nothing important slips by — wherever it shows up.",
+    "The layout is already here: mission intake, agent work, contribution accounting, and governance. Swap in your niche, copy, and colors — then let the node start producing useful work.",
 } as const;
 
 export const SHOWCASE_CATEGORIES = [
   "All",
-  "Research",
-  "Operations",
-  "Community",
-  "Risk",
+  "Niche",
+  "Agent",
+  "Tokens",
+  "Governance",
 ] as const;
 
 export const SHOWCASE_ITEMS: ShowcaseItem[] = [
   {
     id: "1",
-    title: "Should we prioritize the v2 roadmap this quarter?",
-    category: "Operations",
-    source: "Governance",
-    metric: "62%",
-    change: 4,
+    title: "Pick a narrow mission the AI can actually serve",
+    category: "Niche",
+    source: "Node brief",
+    metric: "1",
+    change: 12,
     outcomes: [
-      { label: "Yes", value: 62 },
-      { label: "No", value: 38 },
+      { label: "Focused", value: 82 },
+      { label: "Vague", value: 18 },
     ],
-    footerLeft: "128 voters",
-    footerRight: "Closes Jun 18",
+    footerLeft: "Coffee, local policy, markets",
+    footerRight: "First decision",
   },
   {
     id: "2",
-    title: "Is the new contributor onboarding working?",
-    category: "Community",
-    source: "Activity ledger",
-    metric: "78%",
-    change: 6,
+    title: "Set the agent loose on research, monitoring, and action",
+    category: "Agent",
+    source: "Mission loop",
+    metric: "24/7",
+    change: 9,
     outcomes: [
-      { label: "On-track", value: 78 },
-      { label: "At-risk", value: 22 },
+      { label: "Autonomous", value: 74 },
+      { label: "Manual", value: 26 },
     ],
-    footerLeft: "34 contributors",
-    footerRight: "Updated 2h ago",
+    footerLeft: "Watchlists + workflows",
+    footerRight: "Always on",
   },
   {
     id: "3",
-    title: "Treasury runway under the current burn?",
-    category: "Risk",
-    source: "Treasury",
-    metric: "$1.2M",
-    change: -3,
+    title: "Reward useful work with governance token weight",
+    category: "Tokens",
+    source: "Activity ledger",
+    metric: "100%",
+    change: 6,
     outcomes: [
-      { label: "Healthy", value: 71 },
-      { label: "Tight", value: 29 },
+      { label: "Earned", value: 68 },
+      { label: "Unclaimed", value: 32 },
     ],
-    footerLeft: "18-mo runway",
-    footerRight: "Updated 1d ago",
+    footerLeft: "Receipts, reviews, outcomes",
+    footerRight: "Epoch based",
   },
   {
     id: "4",
-    title: "Does the latest research support the thesis?",
-    category: "Research",
-    source: "Knowledge base",
-    metric: "84%",
-    change: 7,
+    title: "Vote on what the AI should learn and fund next",
+    category: "Governance",
+    source: "Treasury + roadmap",
+    metric: "DAO",
+    change: 5,
     outcomes: [
-      { label: "Supports", value: 84 },
-      { label: "Refutes", value: 16 },
+      { label: "Members", value: 79 },
+      { label: "Founder", value: 21 },
     ],
-    footerLeft: "9 sources",
-    footerRight: "Updated 4h ago",
+    footerLeft: "Priorities + budget",
+    footerRight: "Next vote",
   },
 ];
 
@@ -323,16 +323,16 @@ export interface FeedSignal {
 }
 
 export const FEED_SECTION = {
-  eyebrow: "Agent activity",
-  heading: "What the agent is thinking.",
+  eyebrow: "Example node loop",
+  heading: "From blank template to governed AI.",
   subhead:
-    "Live output from the node's reasoning engine. Every signal is public — see exactly what it sees, and why it decided what it did.",
+    "This default feed shows the shape of a real node: pick a niche, make the AI useful, account for work, and let token holders steer what happens next.",
 } as const;
 
 /** The status-bar verbs and the running totals shown above the feed. */
 export const FEED_STATUS = {
-  scannedLabel: "items reviewed",
-  signalsLabel: "signals today",
+  scannedLabel: "template events",
+  signalsLabel: "launch steps",
   startScanned: 2847,
   signalsToday: 12,
 } as const;
@@ -340,50 +340,50 @@ export const FEED_STATUS = {
 export const FEED_SIGNALS: FeedSignal[] = [
   {
     id: "s1",
-    title: "Should we prioritize the v2 roadmap this quarter?",
-    category: "Operations",
-    source: "Governance",
+    title: "Niche selected: Nashville independent coffee ops",
+    category: "Niche",
+    source: "Launch brief",
     direction: "positive",
-    confidence: 74,
+    confidence: 86,
     thesis:
-      "Member sentiment and the last two retros both point to v2 as the highest-leverage bet. Recommend opening a formal proposal.",
-    sources: ["Retro notes", "Member poll", "Roadmap draft"],
+      "The mission is narrow enough for the agent to monitor real-world sources and broad enough for contributors to improve the playbook.",
+    sources: ["Node brief", "Local events", "Operator handoff"],
     timestamp: "2m ago",
   },
   {
     id: "s2",
-    title: "New contributor onboarding is converting well",
-    category: "Community",
-    source: "Activity ledger",
+    title: "Agent run proposed: event-driven staffing forecast",
+    category: "Agent",
+    source: "Mission loop",
     direction: "positive",
-    confidence: 61,
+    confidence: 72,
     thesis:
-      "First-PR-to-second-PR rate is up 18% since the new guide shipped. Worth doubling down on the mentorship pairing step.",
-    sources: ["Activity ledger", "PR history"],
+      "A focused forecast is an early useful behavior: clear inputs, visible outputs, and an outcome the community can judge.",
+    sources: ["Event feeds", "Store hours", "Past signals"],
     timestamp: "8m ago",
   },
   {
     id: "s3",
-    title: "Treasury burn is trending above plan",
-    category: "Risk",
-    source: "Treasury",
-    direction: "negative",
-    confidence: 58,
+    title: "Contribution receipts ready for token accounting",
+    category: "Tokens",
+    source: "Activity ledger",
+    direction: "neutral",
+    confidence: 69,
     thesis:
-      "Three months of above-forecast spend. Runway still healthy at ~18 months, but recommend a budget review before the next epoch.",
-    sources: ["Treasury ledger", "Budget forecast"],
+      "Useful work should become governance weight only after it is reviewable: merged changes, verified research, and accepted operations all leave receipts.",
+    sources: ["PR history", "Review notes", "Activity ledger"],
     timestamp: "14m ago",
   },
   {
     id: "s4",
-    title: "Latest research is inconclusive — no action yet",
-    category: "Research",
-    source: "Knowledge base",
-    direction: "neutral",
-    confidence: 67,
+    title: "First governance question drafted",
+    category: "Governance",
+    source: "Roadmap",
+    direction: "positive",
+    confidence: 76,
     thesis:
-      "Sources are split and the sample is small. Holding for more data before making a recommendation. Re-checking next pass.",
-    sources: ["Knowledge base", "External reports"],
+      "Token holders should decide whether the next budget goes to better source coverage, stronger automation, or a public dashboard.",
+    sources: ["Treasury", "Roadmap", "Member requests"],
     timestamp: "21m ago",
   },
 ];
@@ -397,10 +397,10 @@ export interface StatItem {
 }
 
 export const STATS: StatItem[] = [
-  { value: "0%", label: "Payment Fees" },
-  { value: "100%", label: "Open Source" },
-  { value: "24/7", label: "Always On" },
-  { value: "1", label: "Community" },
+  { value: "1", label: "Niche" },
+  { value: "1", label: "Mission" },
+  { value: "24/7", label: "AI Worker" },
+  { value: "DAO", label: "Governance" },
 ];
 
 /* ─── STREAM ICONS ────────────────────────────────────────────────────────
