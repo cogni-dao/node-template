@@ -74,6 +74,24 @@ writes with its **own** in-cluster OpenBao identity — your key never carries c
 ESO + Stakater Reloader then carry the value into the running pod. Confirm with the `version`
 in the response (no `kubectl` needed).
 
+### Holding `secrets_manager` is safe — it's authority, not custody
+
+This is the error to avoid: thinking the grant gives you operator-level / cluster
+power and declining it. It does not. `secrets_manager` is the secrets twin of
+`developer`/`production_promoter` — **per-node, least-privilege.** Two separate things:
+
+| | **You** (grant holder = authority) | **The operator** (mediator = custody) |
+| --- | --- | --- |
+| hold | only an API key | the OpenBao writer identity (projected SA token, kube) |
+| reach | **only `cogni/<env>/<your-node>/*`** | mediates the write; enforces the gates |
+| see | the `version` you wrote | never hands you a value; other nodes are invisible to you |
+
+So **request it for your node.** You never receive the writer token, a kubeconfig,
+cross-node reach, or any value but your own — the operator *mediates* the write, which
+is not the same as you holding operator power. Declining the grant and asking an operator
+to "just run it for me" is the **legacy admin path being retired** — it re-inserts a
+privileged human into every secret write and forfeits your node's self-sovereignty.
+
 > **`503 secrets_plane_config_missing`?** This env's operator doesn't have the secrets-writer
 > identity provisioned yet. candidate-a is live; preview/production roll out with the operator
 > deploy — ping the operator team rather than reaching for the CLI.
