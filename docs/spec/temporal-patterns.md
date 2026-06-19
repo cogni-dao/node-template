@@ -177,6 +177,61 @@ export async function IncidentRouterWorkflow(scope: string): Promise<void> {
 
 ### Schedule Configuration
 
+#### Node recurring work
+
+This is the canonical pattern for a node to run recurring or scheduled work on the Cogni
+Temporal substrate. The substrate is **one shared generic worker**. For normal recurring
+route/graph work, a node runs **no worker** and writes **no** Temporal workflow code.
+
+The model is three parts: **declare -> create -> execute**.
+
+**1. Declare** the recurring jobs as `schedules[]` in the node repo-spec (`route` XOR `graph`):
+
+```yaml
+schedules:
+  - id: metrics-ingest
+    cron: "*/15 * * * *"
+    timezone: UTC
+    route: /api/internal/ops/metrics-ingest
+    payload: { window: "15m" }
+  - id: nightly-report
+    cron: "0 0 * * *"
+    graph: my-node:report
+```
+
+**2. Create -- node-direct target.** The node app holds its own Temporal client and creates
+the schedule against its own per-node task queue (`scheduler-tasks-<nodeId>`), with
+`NodeTaskWorkflow` for `route` or `GraphRunWorkflow` for `graph`. The long-term contract keeps
+the operator out of the create path.
+
+**3. Execute -- shared generic worker.** On each tick the shared worker runs the generic
+workflow under the node tenant identity. `NodeTaskWorkflow` calls the node route;
+`GraphRunWorkflow` runs the node graph. The node provides a route or graph, not custom
+workflow code.
+
+```
+schedule.create on scheduler-tasks-<nodeId>
+  route -> NodeTaskWorkflow
+  graph -> GraphRunWorkflow
+
+NodeTaskWorkflow
+  scheduledFor = TemporalScheduledStartTime
+  -> dispatchNodeTaskActivity: POST {nodeUrl}{route}
+     Idempotency-Key: {nodeId}/{scheduleId}/{scheduledFor}
+```
+
+The route must dedup on the idempotency key. A key the receiver ignores does not make a POST
+idempotent.
+
+#### Durable multi-step / HITL roadmap
+
+If recurring work needs durable state **between** route/graph steps -- signals, long human
+waits, or multi-step orchestration that cannot honestly be collapsed into one graph run --
+the target is a generic shared-worker step-list engine, not a per-node worker by default.
+
+Use a per-node worker only when the generic engine cannot express the workflow. It is opt-in
+and never the node-template default.
+
 #### Standard Schedule Setup
 
 ```typescript
@@ -208,7 +263,6 @@ await temporalClient.schedule.create({
 | Update/Pause | `PATCH /schedules`  | None          |
 | Delete       | `DELETE /schedules` | None          |
 | Execute      | Temporal fires      | Runs workflow |
-| Reconcile    | Admin CLI only      | None          |
 
 ### Pipeline Stage Composition
 
@@ -351,17 +405,15 @@ This violates ONE_RUN_EXECUTION_PATH. The graph run is invisible to the dashboar
 
 #### Namespaces
 
-| Namespace          | Purpose                                                   |
-| ------------------ | --------------------------------------------------------- |
-| `cogni-governance` | Governance workflows (signal collection, routing, agents) |
-| `cogni-scheduler`  | User-created scheduled graph executions                   |
+| Namespace     | Purpose                              |
+| ------------- | ------------------------------------ |
+| `cogni-<env>` | One shared namespace per environment |
 
 #### Task Queues
 
-| Queue              | Workers             | Workflows                 |
-| ------------------ | ------------------- | ------------------------- |
-| `governance-tasks` | `governance-worker` | Collection, Router, Agent |
-| `scheduler-tasks`  | `scheduler-worker`  | ScheduledGraphRun         |
+| Queue                      | Workers                   | Workflows                               |
+| -------------------------- | ------------------------- | --------------------------------------- |
+| `scheduler-tasks-<nodeId>` | shared `scheduler-worker` | `NodeTaskWorkflow` / `GraphRunWorkflow` |
 
 #### Search Attributes
 
