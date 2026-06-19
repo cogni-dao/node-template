@@ -15,6 +15,10 @@ scope_key: "default"
 
 intent:
   name: node-template
+  # `mission` is your node's one-line identity — surfaced at the top of every
+  # agent's session cognition (the node's reason to exist). Forkers: replace the
+  # default below with your node's actual mission (what it does + why it matters).
+  mission: "A Cogni node — a web3-governed, AI-powered organization with its own mission, built on the shared operator substrate."
 
 cogni_dao:
   chain_id: "8453" # Base mainnet

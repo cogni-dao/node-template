@@ -17,6 +17,8 @@ import {
   extractLedgerApprovers,
   extractLedgerConfig,
   extractNodeId,
+  extractNodeMission,
+  extractNodeName,
   extractOperatorWalletConfig,
   extractPaymentConfig,
   extractScopeId,
@@ -84,6 +86,37 @@ function buildFullSpec(): RepoSpec {
 describe("extractNodeId", () => {
   it("returns node_id from spec", () => {
     expect(extractNodeId(buildSpec())).toBe(TEST_NODE_ID);
+  });
+});
+
+describe("extractNodeName", () => {
+  it("returns intent.name when present", () => {
+    const spec = buildSpec({ intent: { name: "beacon" } });
+    expect(extractNodeName(spec)).toBe("beacon");
+  });
+
+  it("falls back to node_id for pre-intent specs", () => {
+    expect(extractNodeName(buildSpec())).toBe(TEST_NODE_ID);
+  });
+});
+
+describe("extractNodeMission", () => {
+  it("returns intent.mission when present", () => {
+    const spec = buildSpec({
+      intent: {
+        name: "operator",
+        mission: "Coordinate code, deploys, and validation for Cogni nodes.",
+      },
+    });
+
+    expect(extractNodeMission(spec)).toBe(
+      "Coordinate code, deploys, and validation for Cogni nodes."
+    );
+  });
+
+  it("returns null when mission is absent", () => {
+    const spec = buildSpec({ intent: { name: "operator" } });
+    expect(extractNodeMission(spec)).toBeNull();
   });
 });
 

@@ -20,6 +20,8 @@ export {
   getGovernanceConfig,
   getLedgerApprovers,
   getNodeId,
+  getNodeMission,
+  getNodeName,
   getOperatorWalletConfig,
   getPaymentConfig,
   getScopeId,
