@@ -8,12 +8,12 @@ You read your node's logs through one operator endpoint, using your Cogni API ke
 
 ```bash
 curl -G "https://cognidao.org/api/v1/nodes/<node>/observability/logs" \
-  -H "authorization: Bearer $COGNI_KEY" \
+  -H "authorization: Bearer $COGNI_API_KEY" \
   --data-urlencode "env=candidate-a" \
   --data-urlencode 'query={service="app"} | json | level="error"'
 ```
 
-- `<node>` — your node slug or `node_id` (from `.cogni/repo-spec.yaml` `intent.name`).
+- `<node>` — your node `slug` (= `.cogni/repo-spec.yaml` `intent.name`) or its `node_id` (the `node_id` field in the same file).
 - `env` — `candidate-a`, `preview`, or `production`.
 - `query` — full LogQL, URL-encoded. Same query you'd write directly against Loki.
 - Empty `query` → your node's `app` stream (everything the node app emitted).
@@ -26,7 +26,7 @@ Reading logs needs a `developer` grant on the node. Request it; the owner approv
 
 ```bash
 curl -X POST "https://cognidao.org/api/v1/nodes/<node>/access-requests" \
-  -H "authorization: Bearer $COGNI_KEY" \
+  -H "authorization: Bearer $COGNI_API_KEY" \
   -H 'content-type: application/json' \
   -d '{"role":"developer"}'
 ```
