@@ -20,6 +20,8 @@ import {
   extractDaoTreasuryAddress,
   extractGovernanceConfig,
   extractLedgerApprovers,
+  extractNodeMission,
+  extractNodeName,
   extractOperatorWalletConfig,
   extractPaymentConfig,
   type GovernanceConfig,
@@ -93,6 +95,20 @@ export function getNodeId(): string {
   const spec = loadRepoSpec();
   cachedNodeId = spec.node_id;
   return cachedNodeId;
+}
+
+let cachedNodeName: string | null = null;
+
+/** Human-facing node slug from repo-spec `intent.name` (falls back to node_id). */
+export function getNodeName(): string {
+  if (cachedNodeName) return cachedNodeName;
+  cachedNodeName = extractNodeName(loadRepoSpec());
+  return cachedNodeName;
+}
+
+/** One-line node mission from repo-spec `intent.mission`, or null when undeclared. */
+export function getNodeMission(): string | null {
+  return extractNodeMission(loadRepoSpec());
 }
 
 let cachedScopeId: string | null = null;
