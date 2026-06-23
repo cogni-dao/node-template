@@ -159,7 +159,7 @@ export function renderBundleMarkdown(input: RenderBundleInput): string {
 				"",
 				orientation.excerpt,
 				"",
-				`_Current-node operating map. Recall \`${orientation.id}\` for the full context (where to edit, what not to run, what can break prod/candidate, what to recall next), and refine it when repo layout, scripts, CI, deploy, auth, or validation change._`,
+				`_The above is a bounded excerpt — recall \`${orientation.id}\` for this node's full operating map._`,
 			]
 		: [
 				"## Orientation — recall this first",
