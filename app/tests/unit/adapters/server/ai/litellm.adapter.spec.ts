@@ -25,20 +25,23 @@ vi.mock("@/shared/env", () => ({
   }),
 }));
 
-// Capture logger.warn calls for private error diagnostic assertions (bug.0059)
-const { mockLoggerWarn } = vi.hoisted(() => ({
+// Capture logger.warn / logger.error for private error diagnostic assertions
+// (bug.0059). Per bug.5056, operator-fault HTTP errors (402, 5xx) log at error
+// (they page); benign 4xx stay at warn — assert against the matching channel.
+const { mockLoggerWarn, mockLoggerError } = vi.hoisted(() => ({
   mockLoggerWarn: vi.fn(),
+  mockLoggerError: vi.fn(),
 }));
 vi.mock("@/shared/observability", () => ({
   makeLogger: () => ({
     warn: mockLoggerWarn,
     info: vi.fn(),
-    error: vi.fn(),
+    error: mockLoggerError,
     debug: vi.fn(),
     child: vi.fn().mockReturnValue({
       warn: mockLoggerWarn,
       info: vi.fn(),
-      error: vi.fn(),
+      error: mockLoggerError,
       debug: vi.fn(),
     }),
   }),
@@ -448,7 +451,8 @@ describe("LiteLlmAdapter", () => {
 
       await expect(adapter.completionStream(errorTestParams)).rejects.toThrow();
 
-      expect(mockLoggerWarn).toHaveBeenCalledWith(
+      // status 500 is operator-fault (bug.5056) → logged at error, not warn
+      expect(mockLoggerError).toHaveBeenCalledWith(
         expect.objectContaining({
           responseExcerpt: "[unreadable]",
         }),
