@@ -12,19 +12,24 @@
  * @public
  */
 
-"use client";
-
 import { Github } from "lucide-react";
-import Image from "next/image";
 import Link from "next/link";
 import type { ReactElement } from "react";
 
 import { ModeToggle } from "@/components";
 import { TreasuryBadge } from "@/features/treasury/components/TreasuryBadge";
+import { resolveBrandIcon } from "@/shared/brand/brandIcons";
+import { getBrandMark } from "@/shared/config/repoSpec.server";
 
 import { AccountSlot } from "./AccountSlot";
 
 export function AppHeader(): ReactElement {
+  // Brand mark from this node's repo-spec — the single source for icon + color.
+  // Server component reading the build-safe brand loader; forks never hand-edit this JSX.
+  const { slug, icon, color } = getBrandMark();
+  const BrandIcon = resolveBrandIcon(icon);
+  const brandColor = color ?? undefined;
+
   return (
     <header className="border-border border-b bg-background py-3">
       <a
@@ -45,15 +50,15 @@ export function AppHeader(): ReactElement {
               aria-current="page"
               className="flex min-w-0 items-center gap-2 pl-4 sm:pl-0"
             >
-              <Image
-                src="/TransparentBrainOnly.png"
-                alt="Cogni"
-                width={24}
-                height={24}
-                className="shrink-0"
+              <BrandIcon
+                className="size-6 shrink-0"
+                color={brandColor}
+                strokeWidth={2}
+                aria-hidden="true"
               />
-              <span className="hidden truncate font-bold text-gradient-accent text-xl md:inline">
-                Cogni
+              <span className="hidden truncate font-bold text-xl md:inline">
+                cogni
+                <span className="text-gradient-accent">/{slug}</span>
               </span>
             </Link>
 
