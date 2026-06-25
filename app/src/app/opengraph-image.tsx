@@ -24,6 +24,11 @@ import {
 } from "@/shared/config/repoSpec.server";
 
 export const runtime = "nodejs";
+// Render at request time, never at build. The image is drawn from repo-spec,
+// which resolves via serverEnv() (full runtime env) — absent during the build
+// prerender. force-dynamic defers execution to the deployed pod, mirroring how
+// the .well-known/agent.json route stays dynamic by reading request headers.
+export const dynamic = "force-dynamic";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 export const alt = "Cogni node identity card";
