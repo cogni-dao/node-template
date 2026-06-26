@@ -16,63 +16,77 @@ import type { OperatorWalletPort, TransferIntent } from "@/ports";
 const FAKE_OPERATOR_ADDRESS = "0x1111111111111111111111111111111111111111";
 const FAKE_SPLIT_ADDRESS = "0x2222222222222222222222222222222222222222";
 const FAKE_TX_HASH =
-  "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+	"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 export class FakeOperatorWalletAdapter implements OperatorWalletPort {
-  private address = FAKE_OPERATOR_ADDRESS;
-  private splitAddress = FAKE_SPLIT_ADDRESS;
-  private distributeSplitResult = FAKE_TX_HASH;
-  private fundTopUpResult = FAKE_TX_HASH;
+	private address = FAKE_OPERATOR_ADDRESS;
+	private splitAddress = FAKE_SPLIT_ADDRESS;
+	private distributeSplitResult = FAKE_TX_HASH;
+	private fundTopUpResult = FAKE_TX_HASH;
+	private withdrawToStewardResult = FAKE_TX_HASH;
 
-  /** Last params passed to distributeSplit */
-  public lastDistributeSplitToken: string | undefined;
-  /** Last params passed to fundOpenRouterTopUp */
-  public lastFundTopUpIntent: TransferIntent | undefined;
+	/** Last params passed to distributeSplit */
+	public lastDistributeSplitToken: string | undefined;
+	/** Last params passed to fundOpenRouterTopUp */
+	public lastFundTopUpIntent: TransferIntent | undefined;
+	/** Last amount passed to withdrawToSteward */
+	public lastWithdrawToStewardAmount: bigint | undefined;
 
-  async getAddress(): Promise<string> {
-    return this.address;
-  }
+	async getAddress(): Promise<string> {
+		return this.address;
+	}
 
-  getSplitAddress(): string {
-    return this.splitAddress;
-  }
+	getSplitAddress(): string {
+		return this.splitAddress;
+	}
 
-  async distributeSplit(token: string): Promise<string> {
-    this.lastDistributeSplitToken = token;
-    return this.distributeSplitResult;
-  }
+	async distributeSplit(token: string): Promise<string> {
+		this.lastDistributeSplitToken = token;
+		return this.distributeSplitResult;
+	}
 
-  async fundOpenRouterTopUp(intent: TransferIntent): Promise<string> {
-    this.lastFundTopUpIntent = intent;
-    return this.fundTopUpResult;
-  }
+	async fundOpenRouterTopUp(intent: TransferIntent): Promise<string> {
+		this.lastFundTopUpIntent = intent;
+		return this.fundTopUpResult;
+	}
 
-  // ── Test helpers ──
+	async withdrawToSteward(amountUsdcAtomic: bigint): Promise<string> {
+		this.lastWithdrawToStewardAmount = amountUsdcAtomic;
+		return this.withdrawToStewardResult;
+	}
 
-  setAddress(address: string): void {
-    this.address = address;
-  }
+	// ── Test helpers ──
 
-  setSplitAddress(splitAddress: string): void {
-    this.splitAddress = splitAddress;
-  }
+	setAddress(address: string): void {
+		this.address = address;
+	}
 
-  setDistributeSplitResult(txHash: string): void {
-    this.distributeSplitResult = txHash;
-  }
+	setSplitAddress(splitAddress: string): void {
+		this.splitAddress = splitAddress;
+	}
 
-  setFundTopUpResult(txHash: string): void {
-    this.fundTopUpResult = txHash;
-  }
+	setDistributeSplitResult(txHash: string): void {
+		this.distributeSplitResult = txHash;
+	}
 
-  reset(): void {
-    this.address = FAKE_OPERATOR_ADDRESS;
-    this.splitAddress = FAKE_SPLIT_ADDRESS;
-    this.distributeSplitResult = FAKE_TX_HASH;
-    this.fundTopUpResult = FAKE_TX_HASH;
-    this.lastDistributeSplitToken = undefined;
-    this.lastFundTopUpIntent = undefined;
-  }
+	setFundTopUpResult(txHash: string): void {
+		this.fundTopUpResult = txHash;
+	}
+
+	setWithdrawToStewardResult(txHash: string): void {
+		this.withdrawToStewardResult = txHash;
+	}
+
+	reset(): void {
+		this.address = FAKE_OPERATOR_ADDRESS;
+		this.splitAddress = FAKE_SPLIT_ADDRESS;
+		this.distributeSplitResult = FAKE_TX_HASH;
+		this.fundTopUpResult = FAKE_TX_HASH;
+		this.withdrawToStewardResult = FAKE_TX_HASH;
+		this.lastDistributeSplitToken = undefined;
+		this.lastFundTopUpIntent = undefined;
+		this.lastWithdrawToStewardAmount = undefined;
+	}
 }
 
 // ============================================================================
@@ -82,14 +96,14 @@ export class FakeOperatorWalletAdapter implements OperatorWalletPort {
 let _testInstance: FakeOperatorWalletAdapter | null = null;
 
 export function getTestOperatorWallet(): FakeOperatorWalletAdapter {
-  if (!_testInstance) {
-    _testInstance = new FakeOperatorWalletAdapter();
-  }
-  return _testInstance;
+	if (!_testInstance) {
+		_testInstance = new FakeOperatorWalletAdapter();
+	}
+	return _testInstance;
 }
 
 export function resetTestOperatorWallet(): void {
-  if (_testInstance) {
-    _testInstance.reset();
-  }
+	if (_testInstance) {
+		_testInstance.reset();
+	}
 }

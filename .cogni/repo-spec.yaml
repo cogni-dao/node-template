@@ -52,6 +52,14 @@ activity_ledger:
 payments:
   status: pending_activation
 
+# Outbound payment config — the human-custodied steward wallet that settles vendor
+# invoices (OpenRouter) via manual USDC checkout. The operator wallet funds this one
+# pinned address via withdrawToSteward; a human then completes each vendor checkout.
+# Default = Derek's admin wallet (he admins all current forks). See docs/design/node-steward-wallet.md.
+payments_out:
+  steward_wallet:
+    address: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
+
 # Born-reviewable default gates. When this node is minted as a single-node fork
 # (node-at-root, no `nodes:` registry) the operator's review path runs these gates
 # against the repo-root `.cogni/rules/` below. The mint (`renderRepoSpec`) re-emits
