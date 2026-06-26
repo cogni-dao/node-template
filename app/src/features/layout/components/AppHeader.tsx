@@ -12,6 +12,8 @@
  * @public
  */
 
+"use client";
+
 import { Github } from "lucide-react";
 import Link from "next/link";
 import type { ReactElement } from "react";
@@ -19,16 +21,17 @@ import type { ReactElement } from "react";
 import { ModeToggle } from "@/components";
 import { TreasuryBadge } from "@/features/treasury/components/TreasuryBadge";
 import { resolveBrandIcon } from "@/shared/brand/brandIcons";
-import { getBrandMark } from "@/shared/config/repoSpec.server";
+import type { BrandMark } from "@/shared/config/repoSpec.server";
 
 import { AccountSlot } from "./AccountSlot";
 
-export function AppHeader(): ReactElement {
-  // Brand mark from this node's repo-spec — the single source for icon + color.
-  // Server component reading the build-safe brand loader; forks never hand-edit this JSX.
-  const { slug, icon, color } = getBrandMark();
-  const BrandIcon = resolveBrandIcon(icon);
-  const brandColor = color ?? undefined;
+export function AppHeader({ brandMark }: { brandMark: BrandMark }): ReactElement {
+  // Brand mark resolved from this node's repo-spec (passed by the server layout —
+  // serializable {slug,icon,color}). Single source for the icon + color; forks set
+  // the repo-spec fields and never hand-edit this JSX. Icon name → component here.
+  const BrandIcon = resolveBrandIcon(brandMark.icon);
+  const brandColor = brandMark.color ?? undefined;
+  const slug = brandMark.slug;
 
   return (
     <header className="border-border border-b bg-background py-3">
