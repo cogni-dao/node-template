@@ -3,54 +3,53 @@
 
 /**
  * Module: `@components/markdown`
- * Purpose: Renders trusted text - work-item bodies and knowledge text entries - as
- *   GitHub-flavored markdown (headings, bold/italic, lists, tables, links, code).
- *   Content is authored as markdown everywhere, so it renders as markdown everywhere,
- *   with no per-entry "is this markdown?" flag.
- * Scope: Pure presentation. Uses `remark-gfm` for tables/strikethrough/task-lists.
- *   `rehype-raw` is intentionally NOT enabled here - text entries are markdown, and the
- *   dedicated `entryType === 'html'` path (HtmlRenderer) sandboxes raw HTML separately.
+ * Purpose: Render trusted-source markdown (work-item bodies, knowledge text entries) as styled HTML.
+ * Scope: GFM only. Raw embedded HTML is NOT rendered; arbitrary HTML belongs in the sandboxed
+ *   `entryType=html` iframe path, never inline. This keeps the markdown lane injection-free.
  * @public
  */
 
 "use client";
 
 import { cn } from "@cogni/node-ui-kit/util/cn";
-import type { ComponentPropsWithoutRef, JSX, ReactElement } from "react";
-import ReactMarkdown from "react-markdown";
+import type { ReactElement } from "react";
+import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-interface MarkdownProps {
-  readonly content: string;
-  readonly className?: string;
-}
-
-type ElProps<T extends keyof JSX.IntrinsicElements> =
-  ComponentPropsWithoutRef<T>;
-
-const components = {
-  h1: ({ className, ...props }: ElProps<"h1">) => (
+// `node` is forwarded to every component by react-markdown; strip it so it never
+// lands on the DOM element.
+const components: Components = {
+  h1: ({ node, className, ...rest }) => (
     <h1
-      className={cn("mt-6 mb-3 font-semibold text-xl first:mt-0", className)}
-      {...props}
+      className={cn("mt-6 mb-3 font-semibold text-2xl first:mt-0", className)}
+      {...rest}
     />
   ),
-  h2: ({ className, ...props }: ElProps<"h2">) => (
+  h2: ({ node, className, ...rest }) => (
     <h2
-      className={cn("mt-6 mb-3 font-semibold text-lg first:mt-0", className)}
-      {...props}
+      className={cn("mt-6 mb-3 font-semibold text-xl first:mt-0", className)}
+      {...rest}
     />
   ),
-  h3: ({ className, ...props }: ElProps<"h3">) => (
+  h3: ({ node, className, ...rest }) => (
     <h3
-      className={cn("mt-5 mb-2 font-semibold text-base first:mt-0", className)}
-      {...props}
+      className={cn("mt-4 mb-2 font-semibold text-base first:mt-0", className)}
+      {...rest}
     />
   ),
-  p: ({ className, ...props }: ElProps<"p">) => (
-    <p className={cn("my-3 first:mt-0 last:mb-0", className)} {...props} />
+  h4: ({ node, className, ...rest }) => (
+    <h4
+      className={cn("mt-4 mb-2 font-semibold text-sm first:mt-0", className)}
+      {...rest}
+    />
   ),
-  a: ({ className, ...props }: ElProps<"a">) => (
+  p: ({ node, className, ...rest }) => (
+    <p
+      className={cn("my-3 leading-7 first:mt-0 last:mb-0", className)}
+      {...rest}
+    />
+  ),
+  a: ({ node, className, ...rest }) => (
     <a
       className={cn(
         "font-medium text-primary underline underline-offset-4",
@@ -58,79 +57,85 @@ const components = {
       )}
       target="_blank"
       rel="noreferrer"
-      {...props}
+      {...rest}
     />
   ),
-  ul: ({ className, ...props }: ElProps<"ul">) => (
+  ul: ({ node, className, ...rest }) => (
     <ul
-      className={cn("my-3 ml-5 list-disc [&>li]:mt-1", className)}
-      {...props}
+      className={cn("my-3 ml-6 list-disc [&>li]:mt-1", className)}
+      {...rest}
     />
   ),
-  ol: ({ className, ...props }: ElProps<"ol">) => (
+  ol: ({ node, className, ...rest }) => (
     <ol
-      className={cn("my-3 ml-5 list-decimal [&>li]:mt-1", className)}
-      {...props}
+      className={cn("my-3 ml-6 list-decimal [&>li]:mt-1", className)}
+      {...rest}
     />
   ),
-  blockquote: ({ className, ...props }: ElProps<"blockquote">) => (
+  blockquote: ({ node, className, ...rest }) => (
     <blockquote
       className={cn(
-        "my-3 border-border border-l-2 pl-4 text-muted-foreground italic",
+        "my-3 border-l-2 pl-4 text-muted-foreground italic",
         className
       )}
-      {...props}
+      {...rest}
     />
   ),
-  hr: ({ className, ...props }: ElProps<"hr">) => (
-    <hr className={cn("my-4 border-border border-b", className)} {...props} />
+  hr: ({ node, className, ...rest }) => (
+    <hr className={cn("my-4 border-border", className)} {...rest} />
   ),
-  table: ({ className, ...props }: ElProps<"table">) => (
+  table: ({ node, className, ...rest }) => (
     <div className="my-3 overflow-x-auto">
-      <table
-        className={cn("w-full border-collapse text-sm", className)}
-        {...props}
-      />
+      <table className={cn("w-full text-sm", className)} {...rest} />
     </div>
   ),
-  th: ({ className, ...props }: ElProps<"th">) => (
-    <th
-      className={cn(
-        "border border-border bg-muted px-3 py-1.5 text-left font-semibold",
-        className
-      )}
-      {...props}
+  thead: ({ node, className, ...rest }) => (
+    <thead
+      className={cn("border-border border-b text-left", className)}
+      {...rest}
     />
   ),
-  td: ({ className, ...props }: ElProps<"td">) => (
-    <td
-      className={cn("border border-border px-3 py-1.5", className)}
-      {...props}
-    />
+  tbody: ({ node, className, ...rest }) => (
+    <tbody className={cn("divide-y divide-border", className)} {...rest} />
   ),
-  code: ({ className, ...props }: ElProps<"code">) => (
-    <code
-      className={cn(
-        "rounded border border-border bg-muted px-1 py-0.5 font-mono text-xs",
-        className
-      )}
-      {...props}
-    />
+  th: ({ node, className, ...rest }) => (
+    <th className={cn("px-3 py-1.5 font-semibold", className)} {...rest} />
   ),
-  pre: ({ className, ...props }: ElProps<"pre">) => (
+  td: ({ node, className, ...rest }) => (
+    <td className={cn("px-3 py-1.5", className)} {...rest} />
+  ),
+  pre: ({ node, className, ...rest }) => (
     <pre
       className={cn(
-        "my-3 overflow-x-auto rounded-md border border-border bg-muted p-3 text-xs [&>code]:border-0 [&>code]:bg-transparent [&>code]:p-0",
+        "my-3 overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs",
         className
       )}
-      {...props}
+      {...rest}
     />
   ),
+  code: ({ node, className, ...rest }) => {
+    const isBlock =
+      typeof className === "string" && className.includes("language-");
+    return (
+      <code
+        className={
+          isBlock ? className : "rounded bg-muted px-1 py-0.5 font-mono text-sm"
+        }
+        {...rest}
+      />
+    );
+  },
 };
 
+interface MarkdownProps {
+  readonly content: string;
+  readonly className?: string;
+}
+
+/** Render `content` as GFM markdown. Raw HTML is escaped, not rendered. */
 export function Markdown({ content, className }: MarkdownProps): ReactElement {
   return (
-    <div className={cn("break-words text-sm leading-7", className)}>
+    <div className={cn("text-sm", className)}>
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
         {content}
       </ReactMarkdown>
