@@ -21,7 +21,8 @@ and injects it into context. Codex needs a one-time trust (`/hooks`).
 - Self-serve if cognition does not load: register a NODE agent, save
   `COGNI_NODE_API_KEY` in `.env.cogni`, then retry. `.env.cogni` holds two accounts
   (NODE + OPERATOR for CI/CD) — see [`.env.cogni.example`](.env.cogni.example) and
-  the `node-launch-handoff` knowledge entry. Conductor symlinks `.env.cogni` into future worktrees.
+  the `node-launch-handoff` knowledge entry. Conductor ensures the main workspace
+  has `COGNI_NODE_API_KEY` and symlinks `.env.cogni` into future worktrees.
 - This node serves its own bundle at `GET /api/v1/cognition` (authed, index-only — needs a principal; `/api/v1/agent/register` stays the one public bootstrap seam).
 
 ## What you own (node-dev half)
