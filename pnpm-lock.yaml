@@ -59,9 +59,15 @@ importers:
       '@cogni/aragon-osx':
         specifier: workspace:*
         version: link:../packages/aragon-osx
+      '@cogni/attribution-collect':
+        specifier: workspace:*
+        version: link:../packages/attribution-collect
       '@cogni/attribution-ledger':
         specifier: workspace:*
         version: link:../packages/attribution-ledger
+      '@cogni/attribution-pipeline-plugins':
+        specifier: workspace:*
+        version: link:../packages/attribution-pipeline-plugins
       '@cogni/cogni-contracts':
         specifier: workspace:*
         version: link:../packages/cogni-contracts
