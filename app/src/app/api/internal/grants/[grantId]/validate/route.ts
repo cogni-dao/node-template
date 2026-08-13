@@ -9,6 +9,7 @@
  *   - INTERNAL_API_SHARED_SECRET: Requires Bearer SCHEDULER_API_TOKEN
  *   - GRANT_NODE_BINDING (M1): if the body carries `nodeId` it MUST equal getNodeId() (else 403 grant_node_mismatch)
  *   - SCOPE_GENERALIZED (M2): required scope is `scope`, else derived from `graphId` as `graph:execute:<graphId>`
+ *   - SELF_COLLECT_AUTHORIZED (story.5001): the node self-authorizes (200, no DB lookup) the EXACT scope `task:dispatch:<ownNodeId>:/api/internal/attribution/collect` — the operator mints that grant in its own DB (not node-resolvable), and a node always permits the trusted operator scheduler to collect its OWN ledger. Narrow: exact route + self nodeId only.
  *   - 403 on grant-not-found/expired/revoked/scope-mismatch/node-mismatch with machine-readable error code
  * Side-effects: IO (reads grants via ExecutionGrantWorkerPort)
  * Links: grants.validate.internal.v1.contract, task.0280, task.5029
@@ -21,7 +22,11 @@ import {
   InternalValidateGrantInputSchema,
   type InternalValidateGrantOutput,
 } from "@cogni/node-contracts";
-import { verifySchedulerBearer } from "@cogni/node-shared";
+import {
+  COGNI_SYSTEM_BILLING_ACCOUNT_ID,
+  COGNI_SYSTEM_PRINCIPAL_USER_ID,
+  verifySchedulerBearer,
+} from "@cogni/node-shared";
 import { NextResponse } from "next/server";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
@@ -104,6 +109,37 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         { error: "one of `scope` or `graphId` is required" },
         { status: 400 }
       );
+    }
+
+    // SELF_COLLECT_AUTHORIZED: a node always permits the trusted operator
+    // scheduler to trigger collection of its OWN ledger. The per-grant lookup
+    // gates cross-tenant graph execution; it is not needed when the node is
+    // self-authorizing its own epoch-collect under the trusted
+    // SCHEDULER_API_TOKEN (already verified above) for its OWN nodeId
+    // (asserted by M1). Kept NARROW — an exact match on this node's own
+    // epoch-collect route only, never a wildcard over `task:dispatch` — so it
+    // can't authorize dispatch to arbitrary internal routes. The operator mints
+    // this grant in ITS OWN DB, which is not node-resolvable, so a DB lookup
+    // here would always 403 grant_not_found (story.5001).
+    const selfCollectScope = `task:dispatch:${ownNodeId}:/api/internal/attribution/collect`;
+    if (requiredScope === selfCollectScope) {
+      const response: InternalValidateGrantOutput = {
+        ok: true,
+        grant: {
+          id: grantId,
+          userId: COGNI_SYSTEM_PRINCIPAL_USER_ID,
+          billingAccountId: COGNI_SYSTEM_BILLING_ACCOUNT_ID,
+          scopes: [requiredScope],
+          expiresAt: null,
+          revokedAt: null,
+          createdAt: new Date().toISOString(),
+        },
+      };
+      log.info(
+        { grantId, requiredScope, ownNodeId },
+        "Self-authorized epoch-collect (SELF_COLLECT_AUTHORIZED)"
+      );
+      return NextResponse.json(response, { status: 200 });
     }
 
     const container = getContainer();
