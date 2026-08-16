@@ -4,7 +4,7 @@
 /**
  * Module: `@app/(app)/profile/view`
  * Purpose: Client component for user profile settings — display name, avatar color, and linked accounts.
- * Scope: Reads/updates user profile via /api/v1/users/me; does not handle OAuth flow directly or manage session persistence.
+ * Scope: Reads/updates user profile via /api/v1/users/me; does not handle OAuth flow directly or manage session persistence. Also handles the operator attestation return leg (#attestation=<jwt> → POST /api/v1/identity/bindings/import) and the "Verify GitHub via hub" fallback when node-local GitHub OAuth is unconfigured (task.5024).
  * Invariants: Requires authenticated session (enforced by parent layout); avatar color updates reflected in session via update().
  * Side-effects: IO (fetch API, session update, navigation for OAuth linking)
  * Links: src/contracts/users.profile.v1.contract.ts, src/app/api/v1/users/me/route.ts
@@ -171,6 +171,15 @@ function formatUnits(units: string): string {
   return value.toLocaleString();
 }
 
+/** Display host of the operator attestation issuer (e.g. "cognidao.org"). */
+function issuerHost(issuerUrl: string): string {
+  try {
+    return new URL(issuerUrl).host;
+  } catch {
+    return issuerUrl;
+  }
+}
+
 /* ─── Feedback banner ──────────────────────────────────────────────── */
 
 const FEEDBACK_MESSAGES: Record<
@@ -185,7 +194,27 @@ const FEEDBACK_MESSAGES: Record<
     text: "Account linking failed. Please try again.",
     variant: "error",
   },
+  invalid_token: {
+    text: "GitHub verification token was invalid or expired. Please try again.",
+    variant: "error",
+  },
+  wallet_mismatch: {
+    text: "GitHub verification was issued for a different wallet. Sign in with the attested wallet and try again.",
+    variant: "error",
+  },
+  jwks_unavailable: {
+    text: "Could not reach the verification hub. Please try again later.",
+    variant: "error",
+  },
 };
+
+/** Attestation error codes surfaced verbatim as feedback banners. */
+const ATTESTATION_ERROR_CODES = new Set([
+  "invalid_token",
+  "wallet_mismatch",
+  "jwks_unavailable",
+  "already_linked",
+]);
 
 function FeedbackBanner({
   linkedProvider,
@@ -511,7 +540,11 @@ function ChatGptConnectFlow({
 
 /* ─── View ─────────────────────────────────────────────────────────── */
 
-export function ProfileView(): ReactElement {
+export function ProfileView({
+  operatorIssuerUrl,
+}: {
+  operatorIssuerUrl: string;
+}): ReactElement {
   const { data: session, update: updateSession } = useSession();
   const { openConnectModal } = useConnectModal();
   const router = useRouter();
@@ -523,6 +556,7 @@ export function ProfileView(): ReactElement {
   const [configuredProviders, setConfiguredProviders] = useState<Set<string>>(
     new Set()
   );
+  const [providersLoaded, setProvidersLoaded] = useState(false);
   const [chatGptConnected, setChatGptConnected] = useState(false);
   const [chatGptLoading, setChatGptLoading] = useState(false);
   const [ollamaConnected, setOllamaConnected] = useState(false);
@@ -546,6 +580,42 @@ export function ProfileView(): ReactElement {
       router.replace("/profile");
     }
   }, [linkedProvider, error, router, updateSession]);
+
+  // Operator attestation return leg (task.5024): the hub redirects back with
+  // #attestation=<jwt>. Auto-POST it to the import route, then replace the
+  // URL (full navigation) so the token never lingers in history and the
+  // existing ?linked= / ?error= feedback + profile refetch path is reused.
+  const attestationHandled = useRef(false);
+  useEffect(() => {
+    if (attestationHandled.current) return;
+    const hash = window.location.hash;
+    if (!hash.startsWith("#attestation=")) return;
+    attestationHandled.current = true;
+
+    const token = decodeURIComponent(hash.slice("#attestation=".length));
+    void (async () => {
+      try {
+        const res = await fetch("/api/v1/identity/bindings/import", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token }),
+        });
+        if (res.ok) {
+          window.location.replace("/profile?linked=GitHub");
+          return;
+        }
+        const data: { errorCode?: string } | null = await res
+          .json()
+          .catch(() => null);
+        const code = data?.errorCode ?? "";
+        window.location.replace(
+          `/profile?error=${ATTESTATION_ERROR_CODES.has(code) ? code : "link_failed"}`
+        );
+      } catch {
+        window.location.replace("/profile?error=link_failed");
+      }
+    })();
+  }, []);
 
   // Fetch profile data + configured providers in parallel
   useEffect(() => {
@@ -577,6 +647,7 @@ export function ProfileView(): ReactElement {
           Object.keys(providers).filter((id) => id !== "credentials")
         );
         setConfiguredProviders(ids);
+        setProvidersLoaded(true);
       })
       .catch(() => {
         // Provider fetch failed — show nothing rather than broken links
@@ -733,6 +804,30 @@ export function ProfileView(): ReactElement {
           </SettingRow>
         );
       })}
+
+      {/* GitHub fallback when node-local OAuth is not configured (task.5024):
+          verify GitHub once on the operator hub, which redirects back with
+          #attestation=<jwt> for the auto-import effect above. */}
+      {providersLoaded &&
+        !configuredProviders.has("github") &&
+        !linkedProviderIds.has("github") && (
+          <SettingRow
+            icon={<GitHubIcon className="size-5" />}
+            label="GitHub"
+            description={`Verify your GitHub account via ${issuerHost(operatorIssuerUrl)}.`}
+          >
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                const returnTo = `${window.location.origin}/profile`;
+                window.location.href = `${operatorIssuerUrl}/identity/attest?return_to=${encodeURIComponent(returnTo)}`;
+              }}
+            >
+              Verify
+            </Button>
+          </SettingRow>
+        )}
 
       {/* ── AI Providers (BYO-AI) ── */}
 

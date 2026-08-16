@@ -265,6 +265,15 @@ export const serverSchema = z.object({
   POSTHOG_API_KEY: optionalString,
   POSTHOG_HOST: optionalUrl,
   POSTHOG_PROJECT_ID: optionalString,
+
+  // Operator identity attestation issuer — trusted hub that signs portable
+  // {wallet ↔ github} attestations (task.5024). JWKS fetched from
+  // ${COGNI_OPERATOR_ISSUER_URL}/.well-known/jwks.json. Optional with default;
+  // forks pointing at a different hub override this.
+  COGNI_OPERATOR_ISSUER_URL: z.preprocess(
+    emptyToUndefined,
+    z.string().url().default("https://cognidao.org")
+  ),
 });
 
 type ServerEnv = z.infer<typeof serverSchema> & {
