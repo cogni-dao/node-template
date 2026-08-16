@@ -106,6 +106,16 @@ export const governanceSpecSchema = z.object({
     .string()
     .regex(/^0x[0-9a-fA-F]{40}$/, "Invalid EVM address")
     .optional(),
+  /** Aragon GovernanceERC20 token address used for contributor distributions */
+  token_contract: z
+    .string()
+    .regex(/^0x[0-9a-fA-F]{40}$/, "Invalid EVM address")
+    .optional(),
+  /** DAO-controlled holder/vault containing minted token inventory for emissions */
+  emissions_holder: z
+    .string()
+    .regex(/^0x[0-9a-fA-F]{40}$/, "Invalid EVM address")
+    .optional(),
   /** Proposal launcher base URL (for deep links) */
   base_url: z.string().url().optional(),
   /** Governance council schedules (cron-triggered charters) */
@@ -579,6 +589,35 @@ export const repoSpecSchema = z
     payments: z
       .object({
         status: z.enum(["pending_activation", "active"]),
+      })
+      .optional(),
+
+    /** Token distribution activation status — active only after DAO-controlled minted inventory is verified */
+    distributions: z
+      .object({
+        status: z.enum(["pending_activation", "active"]),
+        claim_contract_pattern: z
+          .enum([
+            "uniswap.merkle-distributor.v1",
+            "1inch.cumulative-merkle-drop.v1",
+          ])
+          .optional(),
+        /**
+         * The ONE cumulative Merkle distributor deployed for this node at
+         * distributions activation (R2). DAO-owned (ownership transferred to
+         * `governance.dao_contract` post-deploy). Epoch finalization (R3) resolves
+         * this address, calls `setMerkleRoot` per epoch, and mints only the delta —
+         * there is no per-epoch redeploy. Recorded once and treated as immutable.
+         */
+        distributor_address: z
+          .string()
+          .regex(/^0x[0-9a-fA-F]{40}$/, "Invalid EVM address")
+          .optional(),
+        /** Deploy transaction hash for the distributor (audit/provenance). */
+        distributor_deploy_tx: z
+          .string()
+          .regex(/^0x[0-9a-fA-F]{64}$/, "Invalid tx hash")
+          .optional(),
       })
       .optional(),
 
