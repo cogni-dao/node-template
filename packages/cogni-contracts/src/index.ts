@@ -13,3 +13,6 @@
 
 // CogniSignal
 export { COGNI_SIGNAL_ABI, COGNI_SIGNAL_BYTECODE } from "./cogni-signal";
+// CumulativeMerkleDrop (1inch) — R4 claim-read surface reads/claims against the
+// node's ONE deployed distributor. ABI only; no bytecode (nodes never deploy it).
+export { CUMULATIVE_MERKLE_DISTRIBUTOR_ABI } from "./cumulative-merkle-distributor";
