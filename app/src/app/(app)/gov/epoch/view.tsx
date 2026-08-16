@@ -28,6 +28,7 @@ import {
 } from "@/components";
 import { EpochCountdown } from "@/features/governance/components/EpochCountdown";
 import { EpochDetail } from "@/features/governance/components/EpochDetail";
+import { ExecuteDistributionPanel } from "@/features/governance/components/ExecuteDistributionPanel";
 import { useEpochsPage } from "@/features/governance/hooks/useEpochsPage";
 import { buildPieChartData } from "@/features/governance/lib/build-pie-data";
 import type { EpochView } from "@/features/governance/types";
@@ -189,7 +190,17 @@ function PastEpochsSection({
                   "text-right",
                   "text-right",
                 ]}
-                expandedContent={<EpochDetail epoch={epoch} />}
+                expandedContent={
+                  <div className="space-y-4">
+                    <EpochDetail epoch={epoch} />
+                    {/* Finalized epochs surface the owner PUBLISH control. The panel
+                        self-gates on manifest + distributor via the authed route, so
+                        it quietly shows "not ready" until R3 has recorded them. */}
+                    {epoch.status === "finalized" && (
+                      <ExecuteDistributionPanel epochId={epoch.id} />
+                    )}
+                  </div>
+                }
                 cells={[
                   <span key="id" className="font-bold text-foreground/60">
                     {epoch.id}
