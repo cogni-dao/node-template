@@ -4,10 +4,12 @@ import { parse } from "yaml";
 const CI_WORKFLOW_PATH = ".github/workflows/ci.yaml";
 const PR_BUILD_WORKFLOW_PATH = ".github/workflows/pr-build.yml";
 const PR_LINT_WORKFLOW_PATH = ".github/workflows/pr-lint.yaml";
+const REPO_POLICY_PATH = ".cogni/repo-policy.json";
 
 const ciWorkflow = readWorkflow(CI_WORKFLOW_PATH);
 const prBuildWorkflow = readWorkflow(PR_BUILD_WORKFLOW_PATH);
 const prLintWorkflow = readWorkflow(PR_LINT_WORKFLOW_PATH);
+const repoPolicy = JSON.parse(readFileSync(REPO_POLICY_PATH, "utf8"));
 
 function readWorkflow(path) {
   return parse(readFileSync(path, "utf8"));
@@ -61,6 +63,75 @@ function expectNoWorkflowDispatch(path, workflow) {
   const triggers = expectOwnKey(path, workflow, "on", "workflow");
   if (Object.hasOwn(triggers ?? {}, "workflow_dispatch")) {
     fail(path, "workflow must not use workflow_dispatch as launch or image evidence");
+  }
+}
+
+function requiredCheckContexts(policy) {
+  expectEqual(
+    REPO_POLICY_PATH,
+    policy?.schemaVersion,
+    "cogni.node-repo-policy.v1",
+    "schemaVersion"
+  );
+  expectEqual(
+    REPO_POLICY_PATH,
+    policy?.ruleset?.target,
+    "default_branch",
+    "ruleset.target"
+  );
+  expectEqual(
+    REPO_POLICY_PATH,
+    policy?.ruleset?.enforcement,
+    "active",
+    "ruleset.enforcement"
+  );
+  const bypassActors = policy?.ruleset?.bypassActors;
+  if (!Array.isArray(bypassActors) || bypassActors.length !== 0) {
+    fail(REPO_POLICY_PATH, "ruleset.bypassActors must be an empty array");
+  }
+  const contexts = policy?.ruleset?.requiredStatusChecks?.contexts;
+  if (
+    !Array.isArray(contexts) ||
+    contexts.length === 0 ||
+    contexts.some(
+      (context) => typeof context !== "string" || context.length === 0
+    ) ||
+    new Set(contexts).size !== contexts.length
+  ) {
+    fail(
+      REPO_POLICY_PATH,
+      "ruleset.requiredStatusChecks.contexts must be non-empty unique strings"
+    );
+    return [];
+  }
+  return contexts;
+}
+
+function assertRequiredChecksRunOnReviewEvents(policy, workflows) {
+  for (const context of requiredCheckContexts(policy)) {
+    const providers = workflows.filter(({ workflow }) =>
+      Object.hasOwn(workflow?.jobs ?? {}, context)
+    );
+    if (providers.length !== 1) {
+      fail(
+        REPO_POLICY_PATH,
+        `required check ${JSON.stringify(context)} must be provided by exactly one workflow; found ${providers.length}`
+      );
+      continue;
+    }
+    const [{ path, workflow }] = providers;
+    expectTrigger(path, workflow, "pull_request");
+    expectTrigger(path, workflow, "merge_group");
+    const jobIf = String(workflow.jobs[context]?.if ?? "");
+    if (
+      jobIf.includes("github.event_name") ||
+      jobIf.includes("github.event.action")
+    ) {
+      fail(
+        path,
+        `required job ${JSON.stringify(context)} must not conditionally disappear for a review event`
+      );
+    }
   }
 }
 
@@ -166,3 +237,9 @@ expectStep(PR_BUILD_WORKFLOW_PATH, manifestSteps, "Upload build manifest");
 expectEqual(PR_LINT_WORKFLOW_PATH, prLintWorkflow?.name, "Lint PR", "workflow name");
 expectTrigger(PR_LINT_WORKFLOW_PATH, prLintWorkflow, "pull_request");
 expectNoWorkflowDispatch(PR_LINT_WORKFLOW_PATH, prLintWorkflow);
+
+assertRequiredChecksRunOnReviewEvents(repoPolicy, [
+  { path: CI_WORKFLOW_PATH, workflow: ciWorkflow },
+  { path: PR_BUILD_WORKFLOW_PATH, workflow: prBuildWorkflow },
+  { path: PR_LINT_WORKFLOW_PATH, workflow: prLintWorkflow },
+]);
