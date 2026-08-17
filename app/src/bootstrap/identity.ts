@@ -20,11 +20,50 @@
  * @public
  */
 
-import { and, eq } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
+
+import { and, eq, gt, isNull } from "drizzle-orm";
 
 import { getServiceDb } from "@/adapters/server/db/drizzle.service-client";
 import { createBinding } from "@/adapters/server/identity/create-binding";
-import { userBindings } from "@/shared/db/schema";
+import { linkTransactions, userBindings } from "@/shared/db/schema";
+
+const ATTESTATION_NONCE_TTL_MS = 5 * 60 * 1000;
+
+/** Mint a session-owned, durable, opaque nonce for one attestation round trip. */
+export async function createIdentityAttestationNonce(
+	userId: string,
+): Promise<string> {
+	const nonce = randomUUID();
+	await getServiceDb().insert(linkTransactions).values({
+		id: nonce,
+		userId,
+		provider: "github",
+		expiresAt: new Date(Date.now() + ATTESTATION_NONCE_TTL_MS),
+	});
+	return nonce;
+}
+
+/** Atomically consume a nonce only for its owning user; null means invalid/replay. */
+export async function consumeIdentityAttestationNonce(params: {
+	nonce: string;
+	userId: string;
+}): Promise<string | null> {
+	const [consumed] = await getServiceDb()
+		.update(linkTransactions)
+		.set({ consumedAt: new Date() })
+		.where(
+			and(
+				eq(linkTransactions.id, params.nonce),
+				eq(linkTransactions.userId, params.userId),
+				eq(linkTransactions.provider, "github"),
+				isNull(linkTransactions.consumedAt),
+				gt(linkTransactions.expiresAt, new Date()),
+			),
+		)
+		.returning({ id: linkTransactions.id });
+	return consumed?.id ?? null;
+}
 
 export type ImportAttestedBindingResult =
 	| "created"
@@ -38,7 +77,7 @@ export type ImportAttestedBindingResult =
 export async function importAttestedGithubBinding(params: {
 	userId: string;
 	githubId: string;
-	githubLogin: string;
+	githubLogin: string | null;
 	issuer: string;
 	jti: string;
 	iat: number;

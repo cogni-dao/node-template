@@ -20,7 +20,10 @@
  */
 
 import { createRemoteJWKSet, errors, jwtVerify } from "jose";
-import { z } from "zod";
+import {
+	IdentityAttestationClaimsSchema,
+	identityAttestationAudience,
+} from "@cogni/node-contracts";
 
 import { serverEnv } from "@/shared/env/server";
 
@@ -30,7 +33,9 @@ export interface OperatorAttestationClaims {
 	issuer: string;
 	/** Wallet address the operator attests (lowercased). */
 	wallet: string;
-	github: { id: string; login: string };
+	github: { id: string; login: string | null };
+	nodeId: string;
+	nonce: string;
 	jti: string;
 	iat: number;
 }
@@ -39,26 +44,18 @@ export type OperatorAttestationResult =
 	| { ok: true; claims: OperatorAttestationClaims }
 	| { ok: false; errorCode: "invalid_token" | "jwks_unavailable" };
 
-// Payload shape per task.5024 design: {iss,sub,wallet,github:{id,login},iat,exp,jti}.
-// github.id tolerated as number or string (GitHub ids are numeric); stored as string.
-const attestationPayloadSchema = z.object({
-	wallet: z.string().min(1),
-	github: z.object({
-		id: z.union([z.string().min(1), z.number().int()]),
-		login: z.string().min(1),
-	}),
-	jti: z.string().min(1),
-	iat: z.number(),
-});
-
-/** Strip trailing slashes so env values with/without `/` compare equal. */
-function normalizeIssuerUrl(url: string): string {
-	return url.replace(/\/+$/, "");
+/** Require a bare origin so issuer/JWKS trust cannot drift by URL path. */
+function configuredOrigin(url: string): string {
+	const parsed = new URL(url);
+	if (parsed.pathname !== "/" || parsed.search || parsed.hash) {
+		throw new Error("COGNI_OPERATOR_ISSUER_URL must be an origin URL");
+	}
+	return parsed.origin;
 }
 
 /** Issuer URL for operator attestations (pinned, default https://cognidao.org). */
 export function getOperatorIssuerUrl(): string {
-	return normalizeIssuerUrl(serverEnv().COGNI_OPERATOR_ISSUER_URL);
+	return configuredOrigin(serverEnv().COGNI_OPERATOR_ISSUER_URL);
 }
 
 // Remote JWKS is cached per issuer URL; jose handles key caching + refetch on
@@ -68,7 +65,10 @@ const jwksCache = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
 function getJwks(issuerUrl: string): ReturnType<typeof createRemoteJWKSet> {
 	let jwks = jwksCache.get(issuerUrl);
 	if (!jwks) {
-		jwks = createRemoteJWKSet(new URL(`${issuerUrl}/.well-known/jwks.json`));
+		jwks = createRemoteJWKSet(new URL(`${issuerUrl}/.well-known/jwks.json`), {
+			timeoutDuration: 5_000,
+			cooldownDuration: 30_000,
+		});
 		jwksCache.set(issuerUrl, jwks);
 	}
 	return jwks;
@@ -101,17 +101,20 @@ function isTokenError(error: unknown): boolean {
  */
 export async function verifyOperatorAttestation(
 	token: string,
+	expectedNodeId: string,
 ): Promise<OperatorAttestationResult> {
 	const issuerUrl = getOperatorIssuerUrl();
+	const expectedAudience = identityAttestationAudience(expectedNodeId);
 
 	try {
 		const { payload } = await jwtVerify(token, getJwks(issuerUrl), {
 			issuer: issuerUrl,
+			audience: expectedAudience,
 			algorithms: ["EdDSA"],
 		});
 
-		const parsed = attestationPayloadSchema.safeParse(payload);
-		if (!parsed.success) {
+		const parsed = IdentityAttestationClaimsSchema.safeParse(payload);
+		if (!parsed.success || parsed.data.nodeId !== expectedNodeId) {
 			return { ok: false, errorCode: "invalid_token" };
 		}
 
@@ -120,10 +123,9 @@ export async function verifyOperatorAttestation(
 			claims: {
 				issuer: issuerUrl,
 				wallet: parsed.data.wallet.toLowerCase(),
-				github: {
-					id: String(parsed.data.github.id),
-					login: parsed.data.github.login,
-				},
+				github: parsed.data.github,
+				nodeId: parsed.data.nodeId,
+				nonce: parsed.data.nonce,
 				jti: parsed.data.jti,
 				iat: parsed.data.iat,
 			},

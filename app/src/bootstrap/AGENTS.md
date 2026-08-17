@@ -53,6 +53,7 @@ System setup installers were moved to `scripts/bootstrap/` and are out of scope 
   - `resetContainer()` - Reset singleton (tests only)
   - `Container` interface - Ports + logger + config (includes accountsForUser(userId), serviceAccountService, metricsQuery, metricsCapability, repoCapability, toolSource, threadPersistenceForUser(userId), modelCatalog, providerResolver; no usageService)
   - `ContainerConfig` interface - Runtime config (unhandledErrorPolicy, rateLimitBypass, DEPLOY_ENVIRONMENT)
+  - `createIdentityAttestationNonce(userId)`, `consumeIdentityAttestationNonce(params)`, `importAttestedGithubBinding(params)` - durable operator-attestation RP lifecycle and local binding import
   - `UnhandledErrorPolicy` type - `"rethrow" | "respond_500"`
   - `getTemporalWorkflowClient()` - Process-wide Temporal WorkflowClient singleton (race-safe init, cleaned up by resetContainer)
   - `resolveAiAdapterDeps()` - AI adapter dependencies for factory

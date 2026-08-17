@@ -27,15 +27,19 @@ import { z } from "zod";
 
 import { verifyOperatorAttestation } from "@/app/_lib/auth/operator-attestation";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
-import { importAttestedGithubBinding } from "@/bootstrap/identity";
+import {
+	consumeIdentityAttestationNonce,
+	importAttestedGithubBinding,
+} from "@/bootstrap/identity";
 import { getServerSessionUser } from "@/lib/auth/server";
+import { getNodeId } from "@/shared/config";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 const importBindingBodySchema = z.object({
 	token: z.string().min(1),
-});
+}).strict();
 
 export const POST = wrapRouteHandlerWithLogging(
 	{
@@ -58,7 +62,8 @@ export const POST = wrapRouteHandlerWithLogging(
 			);
 		}
 
-		const verified = await verifyOperatorAttestation(parsed.data.token);
+		const nodeId = getNodeId();
+		const verified = await verifyOperatorAttestation(parsed.data.token, nodeId);
 		if (!verified.ok) {
 			const status = verified.errorCode === "jwks_unavailable" ? 503 : 401;
 			ctx.log.warn(
@@ -78,6 +83,17 @@ export const POST = wrapRouteHandlerWithLogging(
 			return NextResponse.json(
 				{ errorCode: "wallet_mismatch" },
 				{ status: 403 },
+			);
+		}
+
+		const consumedNonce = await consumeIdentityAttestationNonce({
+			nonce: verified.claims.nonce,
+			userId: sessionUser.id,
+		});
+		if (!consumedNonce) {
+			return NextResponse.json(
+				{ errorCode: "invalid_token" },
+				{ status: 401 },
 			);
 		}
 
@@ -104,6 +120,7 @@ export const POST = wrapRouteHandlerWithLogging(
 				result,
 				issuer: verified.claims.issuer,
 				jti: verified.claims.jti,
+				nodeId,
 			},
 			"Operator-attested github binding imported",
 		);

@@ -565,6 +565,7 @@ export function ProfileView({
   const [ollamaUrl, setOllamaUrl] = useState("");
   const [ollamaApiKey, setOllamaApiKey] = useState("");
   const [ollamaError, setOllamaError] = useState("");
+  const [attestationStarting, setAttestationStarting] = useState(false);
 
   // Read feedback query params and strip them to prevent re-display on refresh
   const linkedProvider = searchParams.get("linked");
@@ -819,12 +820,24 @@ export function ProfileView({
             <Button
               variant="outline"
               size="sm"
+              disabled={attestationStarting}
               onClick={() => {
-                const returnTo = `${window.location.origin}/profile`;
-                window.location.href = `${operatorIssuerUrl}/identity/attest?return_to=${encodeURIComponent(returnTo)}`;
+                setAttestationStarting(true);
+                void fetch("/api/v1/identity/bindings/import/start", {
+                  method: "POST",
+                })
+                  .then(async (res) => {
+                    if (!res.ok) throw new Error("start failed");
+                    const data = (await res.json()) as { authorizeUrl: string };
+                    window.location.assign(data.authorizeUrl);
+                  })
+                  .catch(() => {
+                    setAttestationStarting(false);
+                    window.location.assign("/profile?error=link_failed");
+                  });
               }}
             >
-              Verify
+              {attestationStarting ? "Starting…" : "Verify"}
             </Button>
           </SettingRow>
         )}
