@@ -12,6 +12,7 @@
  */
 
 import {
+  assertSettlementGovernanceTargetSafe,
   type ReconcileSettlementsResult,
   retryPendingSettlements,
   type RunReconcileSettlementsDeps,
@@ -28,6 +29,7 @@ import { base, sepolia } from "viem/chains";
 
 import { getServiceDb } from "@/adapters/server/db/drizzle.service-client";
 import {
+  getEmissionsHolderAddress,
   getNodeId,
   getNodeTokenomicsConfig,
   getScopeId,
@@ -54,11 +56,23 @@ function buildSettlementReconcileDeps(
 ): RunReconcileSettlementsDeps {
   const serviceDb = getServiceDb();
   const tokenomics = getNodeTokenomicsConfig();
+  const walletResolver = tokenomics.tokenAddress
+    ? new DrizzleClaimantWalletResolver(serviceDb)
+    : null;
+  if (
+    tokenomics.tokenAddress &&
+    tokenomics.distributorAddress &&
+    walletResolver
+  ) {
+    assertSettlementGovernanceTargetSafe({
+      deploymentEnvironment: serverEnv().DEPLOY_ENVIRONMENT,
+      emissionsHolderAddress: getEmissionsHolderAddress(),
+      context: "settlement reconciliation",
+    });
+  }
   return {
     settlementStore: new DrizzleAttributionAdapter(serviceDb, getScopeId()),
-    walletResolver: tokenomics.tokenAddress
-      ? new DrizzleClaimantWalletResolver(serviceDb)
-      : null,
+    walletResolver,
     nodeId: getNodeId(),
     scopeId: getScopeId(),
     chainId: tokenomics.chainId,

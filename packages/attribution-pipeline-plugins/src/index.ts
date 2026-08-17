@@ -36,6 +36,7 @@ export {
   type SettlementLogger,
   type SettlementReconcileTrigger,
 } from "./settlement/run-reconcile-settlements";
+export { assertSettlementGovernanceTargetSafe } from "./settlement/governance-target-guard";
 export { createEchoAdapter } from "./plugins/echo/adapter";
 // Echo plugin
 export {

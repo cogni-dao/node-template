@@ -35,6 +35,7 @@ import { dispatchAllocator } from "@cogni/attribution-pipeline-contracts";
 import { verifyTypedData } from "viem";
 
 import type { DefaultRegistries } from "../registry";
+import { assertSettlementGovernanceTargetSafe } from "../settlement/governance-target-guard";
 import {
   runReconcileSettlements,
   type SettlementReconcileTrigger,
@@ -45,15 +46,6 @@ import {
  * credit becomes one whole-token liability (× 10^18 base units).
  */
 const TOKEN_BASE_UNITS = 10n ** 18n;
-
-/**
- * The PRODUCTION Cogni DAO / emissions-holder address. The bug.5020 execute-guard
- * refuses to build any distribution against this address on a non-production runtime,
- * so a candidate/preview deploy can never mint into or set a root for production
- * governance — defense-in-depth behind the per-node-spec seam.
- */
-const PROD_COGNI_DAO_ADDRESS =
-  "0xF61c3fafD4D34b4568e7a500d92b28Ac175e83C6".toLowerCase();
 
 /**
  * Codes for CLIENT/REQUEST-STATE finalize failures — the caller can fix these (wrong
@@ -238,39 +230,6 @@ export async function runFinalizeEpoch(
   );
 
   /**
-   * bug.5020 execute-guard: fail-closed refusal to build a distribution against the
-   * PRODUCTION Cogni DAO from a non-production runtime. Thrown inside the fold, which
-   * the finalize body wraps in try/catch — a trip leaves the off-chain statement
-   * finalized and simply skips the on-chain manifest (safe no-op), loudly logged.
-   */
-  function assertNotProdGovernanceOnNonProd(
-    emissionsHolderAddress: string | null,
-    epochId: bigint
-  ): void {
-    if (deploymentEnvironment === "production") return;
-    if (
-      emissionsHolderAddress &&
-      emissionsHolderAddress.toLowerCase() === PROD_COGNI_DAO_ADDRESS
-    ) {
-      throw new Error(
-        `[bug.5020 execute-guard] refusing to build a distribution against the PRODUCTION Cogni DAO ${emissionsHolderAddress} from a non-production runtime (DEPLOY_ENVIRONMENT=${deploymentEnvironment ?? "<unset>"}, epoch ${epochId.toString()})`
-      );
-    }
-    // NULL-BLIND FAIL-CLOSED: this guard runs AFTER the tokenAddress gate, i.e. we are
-    // about to build a real distribution. On a non-prod runtime a null emissionsHolder
-    // means the baked-fallback path (the gateway didn't authoritatively give us the DAO)
-    // — we CANNOT prove the governance target is not prod, so we refuse rather than trust
-    // a baked identity. The legitimate non-prod path (own spec) no-ops earlier on a null
-    // tokenAddress and never reaches here; the authoritative gateway always supplies a
-    // non-null holder.
-    if (emissionsHolderAddress === null) {
-      throw new Error(
-        `[bug.5020 execute-guard] refusing to build a distribution with an UNKNOWN emissions holder (baked-fallback path) from a non-production runtime (DEPLOY_ENVIRONMENT=${deploymentEnvironment ?? "<unset>"}, epoch ${epochId.toString()}) — cannot prove the governance target is not the production DAO`
-      );
-    }
-  }
-
-  /**
    * Resolve the effective per-node distribution config for THIS runtime's node at fold
    * time (bug.5020). Order: (1) the per-node gateway (authoritative — the finalizing
    * node's own repo-spec); (2) on a transient gateway failure, the baked config (prod
@@ -343,7 +302,11 @@ export async function runFinalizeEpoch(
       return null;
     }
 
-    assertNotProdGovernanceOnNonProd(effective.emissionsHolderAddress, epochId);
+    assertSettlementGovernanceTargetSafe({
+      deploymentEnvironment,
+      emissionsHolderAddress: effective.emissionsHolderAddress,
+      context: `epoch ${epochId.toString()}`,
+    });
     const result = await runReconcileSettlements(
       {
         settlementStore: attributionStore,
