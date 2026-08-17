@@ -18,6 +18,8 @@ describe("ledger.epoch-distribution.v1 contract", () => {
   it("should validate a well-formed claim response", () => {
     const data = {
       claim: {
+        settlementRevisionId: "revision-1",
+        settlementSequence: 1,
         epochId: "1",
         root: "0x9f00000000000000000000000000000000000000000000000000000000000000",
         distributor: "0x717a747df71111a678202BfCD2E3B0081A9aeB56",
@@ -39,6 +41,8 @@ describe("ledger.epoch-distribution.v1 contract", () => {
   it("should validate a claim with a not-yet-deployed (null) distributor", () => {
     const data = {
       claim: {
+        settlementRevisionId: "revision-1",
+        settlementSequence: 1,
         epochId: "1",
         root: "0x9f00000000000000000000000000000000000000000000000000000000000000",
         distributor: null,

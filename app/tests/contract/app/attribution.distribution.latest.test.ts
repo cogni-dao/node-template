@@ -21,10 +21,14 @@ const TEST_ACCOUNT = "0x1111111111111111111111111111111111111111";
 // --- Mocks ---
 
 const mockAttributionStore = {
-  listEpochs: vi.fn(),
-  getDistributionManifestForEpoch: vi.fn(),
-  getDistributionClaimForAccount: vi.fn(),
+  getLatestSettlementRevision: vi.fn(),
+  getSettlementRevisionByMerkleRoot: vi.fn(),
+  getSettlementClaimForAccount: vi.fn(),
 };
+
+const { mockReadLiveRoot } = vi.hoisted(() => ({
+  mockReadLiveRoot: vi.fn(),
+}));
 
 // wrapPublicRoute + its logging wrapper read container.{log,clock,config};
 // the route reads container.attributionStore.
@@ -58,8 +62,16 @@ vi.mock("@/bootstrap/container", () => ({
 
 vi.mock("@/shared/config", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/shared/config")>();
-  return { ...actual, getNodeId: vi.fn(() => TEST_NODE_ID) };
+  return {
+    ...actual,
+    getNodeId: vi.fn(() => TEST_NODE_ID),
+    getScopeId: vi.fn(() => "default"),
+  };
 });
+
+vi.mock("@/bootstrap/settlement-runtime", () => ({
+  readLiveDistributionMerkleRoot: mockReadLiveRoot,
+}));
 
 // Always allow in contract tests (no real IP rate limiting).
 vi.mock("@/bootstrap/http/rateLimiter", () => ({
@@ -71,44 +83,25 @@ vi.mock("@/bootstrap/http/rateLimiter", () => ({
 // Import after mocks.
 import { GET } from "@/app/api/v1/public/attribution/distribution/latest/route";
 
-function makeEpoch(id: bigint, status: string) {
+function makeRevision() {
   return {
-    id,
+    id: "revision-3",
     nodeId: TEST_NODE_ID,
     scopeId: "default",
-    status,
-    periodStart: new Date("2025-01-01T00:00:00Z"),
-    periodEnd: new Date("2025-01-08T00:00:00Z"),
-    weightConfig: {},
-    poolTotalCredits: null,
-    approverSetHash: null,
-    approvers: null,
-    allocationAlgoRef: null,
-    weightConfigHash: null,
-    artifactsHash: null,
-    openedAt: new Date("2025-01-01T00:00:00Z"),
-    closedAt: null,
-    createdAt: new Date("2025-01-01T00:00:00Z"),
-  };
-}
-
-function makeManifest(epochId: bigint) {
-  return {
-    id: `manifest-${epochId}`,
-    nodeId: TEST_NODE_ID,
-    scopeId: "default",
-    epochId,
-    distributionId: `dist-${epochId}`,
+    sequence: 3n,
+    previousRevisionId: "revision-2",
+    distributionId: "settlement-3",
     statementHash: "0xstatement",
     merkleRoot:
       "0x9f00000000000000000000000000000000000000000000000000000000000000",
     chainId: 8453,
     tokenAddress: "0x0166Db3d42603E790Fb685059DcAa37087B032c8",
-    distributionAmount: 1000n,
-    totalAllocated: 1000n,
+    mintDelta: 1000n,
+    cumulativeTotal: 5000000000000000000n,
     distributorAddress: "0x717a747df71111a678202BfCD2E3B0081A9aeB56",
+    triggerKind: "identity_binding",
+    triggerRef: "event-1",
     createdAt: new Date("2025-01-08T00:00:00Z"),
-    updatedAt: new Date("2025-01-08T00:00:00Z"),
   };
 }
 
@@ -128,18 +121,13 @@ describe("GET /api/v1/public/attribution/distribution/latest", () => {
     const body = await res.json();
     expect(body).toHaveProperty("error");
     // Store is never touched when the account param is absent.
-    expect(mockAttributionStore.listEpochs).not.toHaveBeenCalled();
+    expect(
+      mockAttributionStore.getLatestSettlementRevision
+    ).not.toHaveBeenCalled();
   });
 
-  it("returns { claim: null } when no finalized epoch carries a manifest", async () => {
-    // One open epoch (skipped), and one finalized epoch with NO manifest.
-    mockAttributionStore.listEpochs.mockResolvedValue([
-      makeEpoch(1n, "open"),
-      makeEpoch(2n, "finalized"),
-    ]);
-    mockAttributionStore.getDistributionManifestForEpoch.mockResolvedValue(
-      null
-    );
+  it("returns { claim: null } when no settlement revision exists", async () => {
+    mockAttributionStore.getLatestSettlementRevision.mockResolvedValue(null);
 
     const req = new NextRequest(
       `http://localhost:3000/api/v1/public/attribution/distribution/latest?account=${TEST_ACCOUNT}`
@@ -152,41 +140,30 @@ describe("GET /api/v1/public/attribution/distribution/latest", () => {
     const parsed = latestDistributionOperation.output.parse(body);
     expect(parsed.claim).toBeNull();
 
-    // Only the finalized epoch is probed for a manifest.
     expect(
-      mockAttributionStore.getDistributionManifestForEpoch
-    ).toHaveBeenCalledTimes(1);
+      mockAttributionStore.getLatestSettlementRevision
+    ).toHaveBeenCalledWith(TEST_NODE_ID, "default");
     expect(
-      mockAttributionStore.getDistributionManifestForEpoch
-    ).toHaveBeenCalledWith(2n);
-    // No manifest → the claim lookup is never reached.
-    expect(
-      mockAttributionStore.getDistributionClaimForAccount
+      mockAttributionStore.getSettlementClaimForAccount
     ).not.toHaveBeenCalled();
   });
 
-  it("returns the cumulative claim DTO from the newest finalized manifest", async () => {
-    // Two finalized epochs both carry manifests; the newest (3n) wins.
-    mockAttributionStore.listEpochs.mockResolvedValue([
-      makeEpoch(2n, "finalized"),
-      makeEpoch(3n, "finalized"),
-    ]);
-    mockAttributionStore.getDistributionManifestForEpoch.mockResolvedValue(
-      makeManifest(3n)
+  it("returns the cumulative claim DTO from the live settlement revision", async () => {
+    const revision = makeRevision();
+    mockAttributionStore.getLatestSettlementRevision.mockResolvedValue(revision);
+    mockReadLiveRoot.mockResolvedValue(revision.merkleRoot);
+    mockAttributionStore.getSettlementRevisionByMerkleRoot.mockResolvedValue(
+      revision
     );
-    mockAttributionStore.getDistributionClaimForAccount.mockResolvedValue({
-      epochId: 3n,
-      merkleRoot:
-        "0x9f00000000000000000000000000000000000000000000000000000000000000",
-      distributorAddress: "0x717a747df71111a678202BfCD2E3B0081A9aeB56",
-      chainId: 8453,
-      tokenAddress: "0x0166Db3d42603E790Fb685059DcAa37087B032c8",
+    mockAttributionStore.getSettlementClaimForAccount.mockResolvedValue({
+      revision,
       leaf: {
         index: 0,
         claimantKey: "user-1",
         account: TEST_ACCOUNT,
-        // CUMULATIVE_MODEL: bigint cumulativeAmount, serialized as a string.
-        amount: 5000000000000000000n,
+        cumulativeAmount: 5000000000000000000n,
+        deltaAmount: 5000000000000000000n,
+        receiptIds: ["receipt-1"],
         leafHash: "0xleaf",
         proof: [
           "0xabc0000000000000000000000000000000000000000000000000000000000000",
@@ -207,7 +184,9 @@ describe("GET /api/v1/public/attribution/distribution/latest", () => {
 
     expect(parsed.claim).not.toBeNull();
     const claim = parsed.claim as NonNullable<typeof parsed.claim>;
-    expect(claim.epochId).toBe("3");
+    expect(claim.settlementRevisionId).toBe("revision-3");
+    expect(claim.settlementSequence).toBe(3);
+    expect(claim.epochId).toBeNull();
     expect(claim.root).toBe(
       "0x9f00000000000000000000000000000000000000000000000000000000000000"
     );
@@ -227,21 +206,19 @@ describe("GET /api/v1/public/attribution/distribution/latest", () => {
       "0xdef0000000000000000000000000000000000000000000000000000000000000",
     ]);
 
-    // The newest finalized epoch is the one queried.
     expect(
-      mockAttributionStore.getDistributionClaimForAccount
-    ).toHaveBeenCalledWith(3n, TEST_ACCOUNT);
+      mockAttributionStore.getSettlementClaimForAccount
+    ).toHaveBeenCalledWith("revision-3", TEST_ACCOUNT);
   });
 
-  it("returns { claim: null } when the latest manifest exists but the account has no leaf", async () => {
-    mockAttributionStore.listEpochs.mockResolvedValue([
-      makeEpoch(3n, "finalized"),
-    ]);
-    mockAttributionStore.getDistributionManifestForEpoch.mockResolvedValue(
-      makeManifest(3n)
+  it("returns { claim: null } when the live revision has no leaf for the account", async () => {
+    const revision = makeRevision();
+    mockAttributionStore.getLatestSettlementRevision.mockResolvedValue(revision);
+    mockReadLiveRoot.mockResolvedValue(revision.merkleRoot);
+    mockAttributionStore.getSettlementRevisionByMerkleRoot.mockResolvedValue(
+      revision
     );
-    // Account has no leaf in the latest manifest.
-    mockAttributionStore.getDistributionClaimForAccount.mockResolvedValue(null);
+    mockAttributionStore.getSettlementClaimForAccount.mockResolvedValue(null);
 
     const req = new NextRequest(
       `http://localhost:3000/api/v1/public/attribution/distribution/latest?account=${TEST_ACCOUNT}`

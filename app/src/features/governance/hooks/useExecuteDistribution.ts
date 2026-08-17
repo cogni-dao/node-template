@@ -100,6 +100,8 @@ function buildPublishProbeData(
 
 export interface ExecuteDistributionPayload {
   readonly epochId: string;
+  readonly settlementRevisionId: string;
+  readonly settlementSequence: number;
   readonly merkleRoot: `0x${string}`;
   /** Cumulative-delta to mint, in base units (decimal string). BigInt() before use. */
   readonly mintDelta: string;
@@ -116,10 +118,14 @@ export type NotReadyReason =
   | "epoch_not_found"
   | "node_not_found"
   | "epoch_not_finalized"
-  | "no_distribution_manifest"
+  | "no_settlement_revision"
   | "distributor_not_recorded"
   | "node_missing_governance"
-  | "negative_mint_delta";
+  | "negative_mint_delta"
+  | "live_root_unavailable"
+  | "live_root_unknown"
+  | "live_root_not_ancestor"
+  | "already_published";
 
 interface ExecuteDistributionResult {
   readonly payload: ExecuteDistributionPayload | null;

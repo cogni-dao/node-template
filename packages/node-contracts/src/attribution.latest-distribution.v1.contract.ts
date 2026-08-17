@@ -25,8 +25,13 @@ import { z } from "zod";
  * null until recorded at activation.
  */
 export const LatestDistributionClaimSchema = z.object({
-  // Epoch id whose manifest produced this cumulative root.
-  epochId: z.string(),
+  // Settlement revisions are independent of epoch lifecycle: a late identity
+  // link can append a new cumulative root without opening or rewriting an epoch.
+  settlementRevisionId: z.string(),
+  settlementSequence: z.number().int().positive(),
+  // Compatibility context only. Latest settlement claims need not belong to a
+  // newly-finalized epoch, so this is null on the canonical latest endpoint.
+  epochId: z.string().nullable(),
   // Cumulative merkle root the contract verifies the proof against (merkleRoot()).
   root: z.string(),
   // CumulativeMerkleDrop contract address; null until recorded.

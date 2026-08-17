@@ -3,9 +3,9 @@
 
 /**
  * Module: `@app/api/v1/public/attribution/epochs/[id]/distribution/route`
- * Purpose: Public HTTP endpoint serving one claimant's DAO token merkle claim (leaf + proof) for a finalized epoch.
- * Scope: Public route using wrapPublicRoute(); returns the claim account's {index, amount, proof, root, distributor} from the epoch's distribution manifest, or claim:null when no leaf exists. Does not contain business logic.
- * Invariants: NODE_SCOPED, ALL_MATH_BIGINT, VALIDATE_IO, PUBLIC_READS_FINALIZED_ONLY, NO_SECRETS.
+ * Purpose: Compatibility endpoint serving a claimant's proof for the exact settlement root live on-chain.
+ * Scope: Requires the requested epoch to be finalized, but resolves the proof by live settlement revision; the epoch id is request context, not revision ownership.
+ * Invariants: NODE_SCOPED, LIVE_ROOT_IS_CHAIN_AUTHORITY, ALL_MATH_BIGINT, VALIDATE_IO, PUBLIC_READS_FINALIZED_ONLY, NO_SECRETS.
  * Side-effects: IO (HTTP response, database read)
  * Links: contracts/attribution.epoch-distribution.v1.contract, packages/aragon-osx/src/token-distribution.ts
  * @public
@@ -15,6 +15,7 @@ import { epochDistributionOperation } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
 import { getContainer } from "@/bootstrap/container";
 import { wrapPublicRoute } from "@/bootstrap/http";
+import { readLiveDistributionMerkleRoot } from "@/bootstrap/settlement-runtime";
 
 export const dynamic = "force-dynamic";
 
@@ -54,23 +55,54 @@ export const GET = wrapPublicRoute(
       return NextResponse.json({ error: "Epoch not found" }, { status: 404 });
     }
 
-    const claim = await store.getDistributionClaimForAccount(epochId, account);
+    const latest = await store.getLatestSettlementRevision(
+      epoch.nodeId,
+      epoch.scopeId
+    );
+    if (!latest || !latest.distributorAddress) {
+      return NextResponse.json({ error: "Claim not found" }, { status: 404 });
+    }
+
+    const liveRoot = await readLiveDistributionMerkleRoot(
+      latest.chainId,
+      latest.distributorAddress
+    );
+    if (liveRoot === null) {
+      return NextResponse.json(
+        { error: "live_root_unavailable" },
+        { status: 503 }
+      );
+    }
+    const liveRevision = await store.getSettlementRevisionByMerkleRoot(
+      epoch.nodeId,
+      epoch.scopeId,
+      liveRoot
+    );
+    if (!liveRevision) {
+      return NextResponse.json({ error: "Claim not found" }, { status: 404 });
+    }
+
+    const claim = await store.getSettlementClaimForAccount(
+      liveRevision.id,
+      account
+    );
     if (!claim) {
-      // No manifest for this epoch, or no leaf for this account.
       return NextResponse.json({ error: "Claim not found" }, { status: 404 });
     }
 
     return NextResponse.json(
       epochDistributionOperation.output.parse({
         claim: {
-          epochId: claim.epochId.toString(),
-          root: claim.merkleRoot,
-          distributor: claim.distributorAddress,
-          chainId: claim.chainId,
-          tokenAddress: claim.tokenAddress,
+          settlementRevisionId: claim.revision.id,
+          settlementSequence: Number(claim.revision.sequence),
+          epochId: epochId.toString(),
+          root: claim.revision.merkleRoot,
+          distributor: claim.revision.distributorAddress,
+          chainId: claim.revision.chainId,
+          tokenAddress: claim.revision.tokenAddress,
           index: claim.leaf.index,
           account: claim.leaf.account,
-          amount: claim.leaf.amount.toString(),
+          amount: claim.leaf.cumulativeAmount.toString(),
           proof: [...claim.leaf.proof],
         },
       })

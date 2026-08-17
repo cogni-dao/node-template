@@ -74,9 +74,9 @@ const DISTRIBUTOR_MERKLE_ROOT_ABI = parseAbi([
   "function merkleRoot() view returns (bytes32)",
 ]);
 
-/** Deterministic per-epoch callId for DAO.execute — cosmetic (uniqueness only). */
-function publishCallId(epochId: string): `0x${string}` {
-  return keccak256(toBytes(`cogni.publish.${epochId}`));
+/** Deterministic per-revision callId for DAO.execute — cosmetic (uniqueness only). */
+function publishCallId(settlementRevisionId: string): `0x${string}` {
+  return keccak256(toBytes(`cogni.publish.${settlementRevisionId}`));
 }
 
 export function ExecuteDistributionPanel({
@@ -122,9 +122,9 @@ function NotReadyNotice({ reason }: { reason: string | null }) {
       title: "Epoch not finalized yet",
       body: "Finalize this epoch before executing its distribution.",
     },
-    no_distribution_manifest: {
+    no_settlement_revision: {
       title: "No distribution built yet",
-      body: "The cumulative manifest for this epoch hasn't been persisted yet.",
+      body: "No wallet-resolved settlement is ready to publish yet.",
     },
     distributor_not_recorded: {
       title: "Distributor not recorded",
@@ -136,7 +136,23 @@ function NotReadyNotice({ reason }: { reason: string | null }) {
     },
     negative_mint_delta: {
       title: "Nothing to mint",
-      body: "This epoch's cumulative total does not increase over the prior distribution.",
+      body: "The new cumulative total does not increase over the live distribution.",
+    },
+    live_root_unavailable: {
+      title: "Can’t verify the live distribution",
+      body: "The chain root is temporarily unavailable. Publishing is paused to protect token supply.",
+    },
+    live_root_unknown: {
+      title: "Live distribution needs reconciliation",
+      body: "The on-chain root isn't present in this node's settlement history.",
+    },
+    live_root_not_ancestor: {
+      title: "Settlement history diverged",
+      body: "The newest settlement does not descend from the live on-chain root.",
+    },
+    already_published: {
+      title: "Published",
+      body: "The newest settlement root is already live on-chain.",
     },
   };
   const { title, body } = copy[reason ?? ""] ?? {
@@ -334,10 +350,16 @@ function PublishStep({
       abi: DAO_ABI,
       address: payload.daoAddress,
       functionName: "execute",
-      args: [publishCallId(payload.epochId), actions, 0n],
+      args: [publishCallId(payload.settlementRevisionId), actions, 0n],
       account: address,
     });
-  }, [actions, address, payload.daoAddress, payload.epochId, writeContract]);
+  }, [
+    actions,
+    address,
+    payload.daoAddress,
+    payload.settlementRevisionId,
+    writeContract,
+  ]);
 
   // Already live on-chain (this session or a prior one) → terminal state, no button.
   if (published) {

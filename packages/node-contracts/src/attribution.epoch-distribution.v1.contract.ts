@@ -23,6 +23,11 @@ import { z } from "zod";
  * `distributor` is the on-chain MerkleDistributor address, null until deployed.
  */
 export const EpochDistributionClaimSchema = z.object({
+  // The immutable settlement revision whose root/proof is live on-chain.
+  settlementRevisionId: z.string(),
+  settlementSequence: z.number().int().positive(),
+  // Request context retained for the epoch compatibility route. Settlement
+  // revisions themselves are intentionally independent of epoch lifecycle.
   epochId: z.string(),
   // Merkle root the claim contract verifies the proof against.
   root: z.string(),
