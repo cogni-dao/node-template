@@ -531,7 +531,7 @@
           "value": "\"claimant_liabilities\".\"amount_atomic\" > 0"
         }
       },
-      "isRLSEnabled": false
+      "isRLSEnabled": true
     },
     "public.distribution_settlement_leaves": {
       "name": "distribution_settlement_leaves",
@@ -680,7 +680,7 @@
           "value": "\"distribution_settlement_leaves\".\"cumulative_amount\" >= 0 AND \"distribution_settlement_leaves\".\"delta_amount\" >= 0 AND \"distribution_settlement_leaves\".\"delta_amount\" <= \"distribution_settlement_leaves\".\"cumulative_amount\""
         }
       },
-      "isRLSEnabled": false
+      "isRLSEnabled": true
     },
     "public.distribution_settlement_revisions": {
       "name": "distribution_settlement_revisions",
@@ -916,7 +916,7 @@
           "value": "(\"distribution_settlement_revisions\".\"previous_revision_id\" IS NULL AND \"distribution_settlement_revisions\".\"previous_merkle_root\" IS NULL AND \"distribution_settlement_revisions\".\"sequence\" = 1) OR (\"distribution_settlement_revisions\".\"previous_revision_id\" IS NOT NULL AND \"distribution_settlement_revisions\".\"previous_merkle_root\" IS NOT NULL AND \"distribution_settlement_revisions\".\"sequence\" > 1)"
         }
       },
-      "isRLSEnabled": false
+      "isRLSEnabled": true
     },
     "public.epoch_distribution_leaves": {
       "name": "epoch_distribution_leaves",

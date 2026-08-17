@@ -67,6 +67,13 @@ CREATE UNIQUE INDEX "distribution_settlement_revisions_root_unique" ON "distribu
 --> statement-breakpoint
 
 -- Handwritten appendix: append-only settlement history and exactly-once liability state.
+ALTER TABLE "claimant_liabilities" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "claimant_liabilities" FORCE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "distribution_settlement_revisions" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "distribution_settlement_revisions" FORCE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "distribution_settlement_leaves" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "distribution_settlement_leaves" FORCE ROW LEVEL SECURITY;--> statement-breakpoint
+
 CREATE OR REPLACE FUNCTION validate_distribution_settlement_revision_insert() RETURNS trigger AS $$
 DECLARE
   parent distribution_settlement_revisions%ROWTYPE;

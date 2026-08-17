@@ -757,7 +757,7 @@ export const distributionSettlementRevisions = pgTable(
       sql`(${table.previousRevisionId} IS NULL AND ${table.previousMerkleRoot} IS NULL AND ${table.sequence} = 1) OR (${table.previousRevisionId} IS NOT NULL AND ${table.previousMerkleRoot} IS NOT NULL AND ${table.sequence} > 1)`
     ),
   ]
-);
+).enableRLS();
 
 /**
  * Token-atomic debt fixed at source-epoch finalization. The source and amount
@@ -798,7 +798,7 @@ export const claimantLiabilities = pgTable(
       sql`${table.amountAtomic} > 0`
     ),
   ]
-);
+).enableRLS();
 
 /** Complete cumulative leaf/proof snapshot for one settlement revision. */
 export const distributionSettlementLeaves = pgTable(
@@ -837,4 +837,4 @@ export const distributionSettlementLeaves = pgTable(
       sql`${table.cumulativeAmount} >= 0 AND ${table.deltaAmount} >= 0 AND ${table.deltaAmount} <= ${table.cumulativeAmount}`
     ),
   ]
-);
+).enableRLS();

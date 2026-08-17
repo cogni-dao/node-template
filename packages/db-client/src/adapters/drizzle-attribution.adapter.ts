@@ -2149,19 +2149,72 @@ export class DrizzleAttributionAdapter implements AttributionStore {
           });
       }
 
-      const liabilityClaimantKeys = params.claimantLiabilities.map(
-        (liability) => liability.claimantKey
+      const atomicUnitsPerCredit = 10n ** 18n;
+      const expectedLiabilities = new Map<
+        string,
+        { amountAtomic: bigint; receiptIds: string[] }
+      >();
+      for (const line of statementRow.statementLinesJson) {
+        let creditAmount: bigint;
+        try {
+          creditAmount = BigInt(line.credit_amount);
+        } catch {
+          throw new Error(
+            `finalizeEpochAtomic: invalid signed credit amount for ${line.claimant_key}`
+          );
+        }
+        if (creditAmount < 0n) {
+          throw new Error(
+            `finalizeEpochAtomic: negative signed credit amount for ${line.claimant_key}`
+          );
+        }
+        if (creditAmount === 0n) continue;
+        const receiptIds = [...new Set(line.receipt_ids)].sort();
+        if (
+          expectedLiabilities.has(line.claimant_key) ||
+          receiptIds.length !== line.receipt_ids.length
+        ) {
+          throw new Error(
+            `finalizeEpochAtomic: signed statement has duplicate liability data for ${line.claimant_key}`
+          );
+        }
+        expectedLiabilities.set(line.claimant_key, {
+          amountAtomic: creditAmount * atomicUnitsPerCredit,
+          receiptIds,
+        });
+      }
+
+      const suppliedLiabilities = new Map(
+        params.claimantLiabilities.map(
+          (liability) => [liability.claimantKey, liability] as const
+        )
       );
       if (
-        new Set(liabilityClaimantKeys).size !== liabilityClaimantKeys.length ||
-        params.claimantLiabilities.some(
-          (liability) => liability.amountAtomic <= 0n
-        )
+        suppliedLiabilities.size !== params.claimantLiabilities.length ||
+        suppliedLiabilities.size !== expectedLiabilities.size
       ) {
         throw new Error(
-          "finalizeEpochAtomic: claimant liabilities must have distinct keys and positive amounts"
+          "finalizeEpochAtomic: claimant liability set does not match signed statement"
         );
       }
+      for (const [claimantKey, expected] of expectedLiabilities) {
+        const supplied = suppliedLiabilities.get(claimantKey);
+        const suppliedReceiptIds = supplied
+          ? [...new Set(supplied.receiptIds)].sort()
+          : [];
+        if (
+          !supplied ||
+          supplied.amountAtomic !== expected.amountAtomic ||
+          suppliedReceiptIds.length !== supplied.receiptIds.length ||
+          JSON.stringify(suppliedReceiptIds) !==
+            JSON.stringify(expected.receiptIds)
+        ) {
+          throw new Error(
+            `finalizeEpochAtomic: claimant liability does not match signed statement for ${claimantKey}`
+          );
+        }
+      }
+
       for (const liability of params.claimantLiabilities) {
         const receiptIds = [...new Set(liability.receiptIds)].sort();
         await tx
