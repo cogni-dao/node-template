@@ -16,7 +16,7 @@
  * @public
  */
 
-// Finalize-in-process (story.5007) — runtime-agnostic epoch finalization + R3 fold
+// Finalize-in-process (story.5007) — atomic statement/liability seal + reconciliation
 export {
   type FinalizeDistributionConfigResolver,
   FinalizeEpochError,
@@ -28,6 +28,14 @@ export {
   type RunFinalizeEpochDeps,
   runFinalizeEpoch,
 } from "./finalize/run-finalize-epoch";
+export {
+  type ReconcileSettlementsResult,
+  retryPendingSettlements,
+  type RunReconcileSettlementsDeps,
+  runReconcileSettlements,
+  type SettlementLogger,
+  type SettlementReconcileTrigger,
+} from "./settlement/run-reconcile-settlements";
 export { createEchoAdapter } from "./plugins/echo/adapter";
 // Echo plugin
 export {

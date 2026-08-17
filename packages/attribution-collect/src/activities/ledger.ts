@@ -60,6 +60,8 @@ import type {
 import type { Logger } from "pino";
 import { verifyTypedData } from "viem";
 
+const TOKEN_BASE_UNITS = 10n ** 18n;
+
 /**
  * Dependencies injected into ledger activities at worker creation.
  */
@@ -1116,6 +1118,13 @@ export function createAttributionActivities(deps: AttributionActivityDeps) {
           poolTotalCredits: existing.poolTotalCredits,
           statementLines: existing.statementLines,
         },
+        claimantLiabilities: existing.statementLines
+          .filter((line) => BigInt(line.credit_amount) > 0n)
+          .map((line) => ({
+            claimantKey: line.claimant_key,
+            amountAtomic: BigInt(line.credit_amount) * TOKEN_BASE_UNITS,
+            receiptIds: [...line.receipt_ids].sort(),
+          })),
         signature: {
           nodeId,
           signerWallet: input.signerAddress,
@@ -1300,6 +1309,13 @@ export function createAttributionActivities(deps: AttributionActivityDeps) {
           reviewOverrides:
             reviewOverrideSnapshots.length > 0 ? reviewOverrideSnapshots : null,
         },
+        claimantLiabilities: statementLines
+          .filter((line) => line.creditAmount > 0n)
+          .map((line) => ({
+            claimantKey: line.claimantKey,
+            amountAtomic: line.creditAmount * TOKEN_BASE_UNITS,
+            receiptIds: [...line.receiptIds].sort(),
+          })),
         signature: {
           nodeId,
           signerWallet: input.signerAddress,
