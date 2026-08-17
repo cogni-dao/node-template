@@ -19,6 +19,8 @@ import { z } from "zod";
 
 export const IDENTITY_ATTESTATION_V1 = "identity.attestation.v1" as const;
 export const IDENTITY_ATTESTATION_AUDIENCE_PREFIX = "urn:cogni:node:";
+/** Shared issuer/verifier lifetime contract. RP nonces outlive this window. */
+export const IDENTITY_ATTESTATION_TTL_SECONDS = 10 * 60;
 
 export const IdentityAttestationNodeIdSchema = z.string().uuid();
 

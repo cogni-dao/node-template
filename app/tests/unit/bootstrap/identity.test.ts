@@ -3,14 +3,10 @@
 
 /**
  * Module: `@tests/unit/bootstrap/identity`
- * Purpose: Unit tests for importAttestedGithubBinding — idempotency, NO_AUTO_MERGE,
- *   and operator_attestation evidence (task.5024).
- * Scope: Mocked service DB + createBinding. Does not test real database interactions.
- * Invariants:
- *   - same-user existing binding → already_bound (no createBinding call)
- *   - foreign-user existing binding → already_linked (no writes)
- *   - new binding → created via createBinding with operator_attestation evidence
- *   - lost insert race against a foreign bind → already_linked
+ * Purpose: Proves nonce redemption and binding import share one transaction.
+ * Scope: Transactional in-memory service DB mock; no real database.
+ * Invariants: concurrent redemption has one winner; infrastructure failures
+ *   roll nonce consumption back; terminal conflicts consume the nonce.
  * Side-effects: none
  * Links: src/bootstrap/identity.ts
  * @internal
@@ -19,27 +15,72 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockFindFirst = vi.fn();
-const mockWhere = vi.fn().mockResolvedValue(undefined);
-const mockSet = vi.fn(() => ({ where: mockWhere }));
-const mockUpdate = vi.fn(() => ({ set: mockSet }));
 const mockCreateBinding = vi.fn();
+const mockProviderLoginWhere = vi.fn().mockResolvedValue(undefined);
+const mockProviderLoginSet = vi.fn(() => ({ where: mockProviderLoginWhere }));
+
+let nonceConsumed = false;
+let transactionTail: Promise<void> = Promise.resolve();
+
+function makeNonceUpdate(staged: { consumed: boolean }) {
+	return {
+		set: vi.fn().mockReturnValue({
+			where: vi.fn().mockReturnValue({
+				returning: vi.fn(async () => {
+					if (nonceConsumed || staged.consumed) return [];
+					staged.consumed = true;
+					return [{ id: "nonce-1" }];
+				}),
+			}),
+		}),
+	};
+}
+
+const mockDb = {
+	transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => {
+		let release!: () => void;
+		const previous = transactionTail;
+		transactionTail = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		await previous;
+
+		const staged = { consumed: false };
+		let updateCount = 0;
+		const tx = {
+			query: { userBindings: { findFirst: mockFindFirst } },
+			update: vi.fn(() => {
+				updateCount += 1;
+				return updateCount === 1
+					? makeNonceUpdate(staged)
+					: { set: mockProviderLoginSet };
+			}),
+		};
+
+		try {
+			const result = await callback(tx);
+			if (staged.consumed) nonceConsumed = true;
+			return result;
+		} finally {
+			release();
+		}
+	}),
+};
 
 vi.mock("@/adapters/server/db/drizzle.service-client", () => ({
-	getServiceDb: () => ({
-		query: { userBindings: { findFirst: mockFindFirst } },
-		update: mockUpdate,
-	}),
+	getServiceDb: () => mockDb,
 }));
 
 vi.mock("@/adapters/server/identity/create-binding", () => ({
-	createBinding: (...args: unknown[]) => mockCreateBinding(...args),
+	createBindingInTransaction: (...args: unknown[]) =>
+		mockCreateBinding(...args),
 }));
 
-// Import after mocks
-import { importAttestedGithubBinding } from "@/bootstrap/identity";
+import { redeemAttestedGithubBinding } from "@/bootstrap/identity";
 
 const PARAMS = {
 	userId: "user-1",
+	nonce: "nonce-1",
 	githubId: "12345",
 	githubLogin: "octocat",
 	issuer: "https://hub.test.example",
@@ -49,61 +90,81 @@ const PARAMS = {
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	nonceConsumed = false;
+	transactionTail = Promise.resolve();
+	mockCreateBinding.mockResolvedValue(true);
 });
 
-describe("importAttestedGithubBinding", () => {
-	it("returns already_bound and refreshes provider_login for a same-user binding", async () => {
+describe("redeemAttestedGithubBinding", () => {
+	it("commits already_bound and refreshes provider login", async () => {
 		mockFindFirst.mockResolvedValue({ id: "b1", userId: "user-1" });
 
-		const result = await importAttestedGithubBinding(PARAMS);
-
-		expect(result).toBe("already_bound");
+		expect(await redeemAttestedGithubBinding(PARAMS)).toBe("already_bound");
+		expect(nonceConsumed).toBe(true);
 		expect(mockCreateBinding).not.toHaveBeenCalled();
-		expect(mockSet).toHaveBeenCalledWith({ providerLogin: "octocat" });
+		expect(mockProviderLoginSet).toHaveBeenCalledWith({
+			providerLogin: "octocat",
+		});
 	});
 
-	it("returns already_linked for a binding owned by a different user (NO_AUTO_MERGE)", async () => {
+	it("commits terminal already_linked without re-pointing", async () => {
 		mockFindFirst.mockResolvedValue({ id: "b1", userId: "other-user" });
 
-		const result = await importAttestedGithubBinding(PARAMS);
-
-		expect(result).toBe("already_linked");
+		expect(await redeemAttestedGithubBinding(PARAMS)).toBe("already_linked");
+		expect(nonceConsumed).toBe(true);
 		expect(mockCreateBinding).not.toHaveBeenCalled();
-		expect(mockUpdate).not.toHaveBeenCalled();
+		expect(mockProviderLoginSet).not.toHaveBeenCalled();
 	});
 
-	it("creates a new binding with operator_attestation evidence", async () => {
+	it("creates binding and evidence inside the nonce transaction", async () => {
 		mockFindFirst
-			.mockResolvedValueOnce(undefined) // pre-check: no binding
-			.mockResolvedValueOnce({ id: "b2", userId: "user-1" }); // post-insert read
+			.mockResolvedValueOnce(undefined)
+			.mockResolvedValueOnce({ id: "b2", userId: "user-1" });
 
-		const result = await importAttestedGithubBinding(PARAMS);
-
-		expect(result).toBe("created");
+		expect(await redeemAttestedGithubBinding(PARAMS)).toBe("created");
+		expect(nonceConsumed).toBe(true);
 		expect(mockCreateBinding).toHaveBeenCalledWith(
 			expect.anything(),
 			"user-1",
 			"github",
 			"12345",
-			{
+			expect.objectContaining({
 				method: "operator_attestation",
 				issuer: "https://hub.test.example",
 				jti: "jti-abc",
-				login: "octocat",
-				iat: 1_700_000_000,
-			},
+			}),
 		);
-		expect(mockSet).toHaveBeenCalledWith({ providerLogin: "octocat" });
 	});
 
-	it("returns already_linked when the insert race is lost to a foreign bind", async () => {
+	it("allows only one winner across concurrent redemption attempts", async () => {
 		mockFindFirst
-			.mockResolvedValueOnce(undefined) // pre-check: no binding
-			.mockResolvedValueOnce({ id: "b3", userId: "other-user" }); // conflict winner
+			.mockResolvedValueOnce(undefined)
+			.mockResolvedValueOnce({ id: "b2", userId: "user-1" });
 
-		const result = await importAttestedGithubBinding(PARAMS);
+		const results = await Promise.all([
+			redeemAttestedGithubBinding(PARAMS),
+			redeemAttestedGithubBinding(PARAMS),
+		]);
 
-		expect(result).toBe("already_linked");
-		expect(mockUpdate).not.toHaveBeenCalled();
+		expect(results).toEqual(["created", "invalid_nonce"]);
+		expect(mockCreateBinding).toHaveBeenCalledTimes(1);
+	});
+
+	it("rolls nonce consumption back on infrastructure failure", async () => {
+		mockFindFirst
+			.mockResolvedValueOnce(undefined)
+			.mockResolvedValueOnce(undefined)
+			.mockResolvedValueOnce({ id: "b2", userId: "user-1" });
+		mockCreateBinding
+			.mockRejectedValueOnce(new Error("database unavailable"))
+			.mockResolvedValueOnce(true);
+
+		await expect(redeemAttestedGithubBinding(PARAMS)).rejects.toThrow(
+			"database unavailable",
+		);
+		expect(nonceConsumed).toBe(false);
+
+		expect(await redeemAttestedGithubBinding(PARAMS)).toBe("created");
+		expect(nonceConsumed).toBe(true);
 	});
 });

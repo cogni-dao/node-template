@@ -27,6 +27,23 @@ import { assertEnvInvariants } from "./invariants";
 const emptyToUndefined = (v: unknown) =>
   typeof v === "string" && v === "" ? undefined : v;
 const optionalUrl = z.preprocess(emptyToUndefined, z.string().url().optional());
+const originUrl = z.string().url().refine(
+  (value) => {
+    try {
+      const parsed = new URL(value);
+      return (
+        parsed.pathname === "/" &&
+        !parsed.search &&
+        !parsed.hash &&
+        !parsed.username &&
+        !parsed.password
+      );
+    } catch {
+      return false;
+    }
+  },
+  { message: "must be an origin URL without path, query, or credentials" }
+);
 const optionalString = z.preprocess(
   emptyToUndefined,
   z.string().min(1).optional()
@@ -272,7 +289,7 @@ export const serverSchema = z.object({
   // forks pointing at a different hub override this.
   COGNI_OPERATOR_ISSUER_URL: z.preprocess(
     emptyToUndefined,
-    z.string().url().default("https://cognidao.org")
+    originUrl.default("https://cognidao.org")
   ),
 });
 

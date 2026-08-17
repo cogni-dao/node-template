@@ -103,10 +103,9 @@ export async function verifyOperatorAttestation(
 	token: string,
 	expectedNodeId: string,
 ): Promise<OperatorAttestationResult> {
-	const issuerUrl = getOperatorIssuerUrl();
-	const expectedAudience = identityAttestationAudience(expectedNodeId);
-
 	try {
+		const issuerUrl = getOperatorIssuerUrl();
+		const expectedAudience = identityAttestationAudience(expectedNodeId);
 		const { payload } = await jwtVerify(token, getJwks(issuerUrl), {
 			issuer: issuerUrl,
 			audience: expectedAudience,

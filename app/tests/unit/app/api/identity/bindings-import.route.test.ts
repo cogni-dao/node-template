@@ -34,14 +34,14 @@ const NONCE = "33333333-3333-4333-8333-333333333333";
 const JTI = "44444444-4444-4444-8444-444444444444";
 
 const mockGetSessionUser = vi.fn();
-const mockImportBinding = vi.fn();
-const mockConsumeNonce = vi.fn();
+const mockRedeemBinding = vi.fn();
 const mockCreateNonce = vi.fn();
+let mockIssuerUrl = ISSUER;
 
 // Keep the verifier's env read isolated from full server env validation
 vi.mock("@/shared/env/server", () => ({
 	serverEnv: () => ({
-		COGNI_OPERATOR_ISSUER_URL: ISSUER,
+		COGNI_OPERATOR_ISSUER_URL: mockIssuerUrl,
 		APP_BASE_URL: "https://node.test.example",
 	}),
 }));
@@ -54,10 +54,8 @@ vi.mock("@/shared/config", () => ({ getNodeId: () => NODE_ID }));
 
 vi.mock("@/bootstrap/identity", () => ({
 	createIdentityAttestationNonce: (...args: unknown[]) => mockCreateNonce(...args),
-	consumeIdentityAttestationNonce: (...args: unknown[]) =>
-		mockConsumeNonce(...args),
-	importAttestedGithubBinding: (...args: unknown[]) =>
-		mockImportBinding(...args),
+	redeemAttestedGithubBinding: (...args: unknown[]) =>
+		mockRedeemBinding(...args),
 }));
 
 // wrapRouteHandlerWithLogging deps — keep this a true unit (no pino/prom-client)
@@ -174,6 +172,7 @@ function makeRequest(body: unknown): NextRequest {
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	mockIssuerUrl = ISSUER;
 	resetOperatorAttestationJwksCacheForTests();
 	fetchMock.mockImplementation(async () => jwksOk());
 	mockGetSessionUser.mockResolvedValue({
@@ -182,8 +181,7 @@ beforeEach(() => {
 		displayName: null,
 		avatarColor: null,
 	});
-	mockImportBinding.mockResolvedValue("created");
-	mockConsumeNonce.mockResolvedValue(NONCE);
+	mockRedeemBinding.mockResolvedValue("created");
 	mockCreateNonce.mockResolvedValue(NONCE);
 });
 
@@ -193,8 +191,9 @@ describe("POST /api/v1/identity/bindings/import", () => {
 
 		expect(res.status).toBe(201);
 		expect(await res.json()).toEqual({ bound: true });
-		expect(mockImportBinding).toHaveBeenCalledWith({
+		expect(mockRedeemBinding).toHaveBeenCalledWith({
 			userId: USER_ID,
+			nonce: NONCE,
 			githubId: "12345",
 			githubLogin: "octocat",
 			issuer: ISSUER,
@@ -217,7 +216,7 @@ describe("POST /api/v1/identity/bindings/import", () => {
 			makeRequest({ token: await mintToken({ githubLogin: null }) }),
 		);
 		expect(res.status).toBe(201);
-		expect(mockImportBinding).toHaveBeenCalledWith(
+		expect(mockRedeemBinding).toHaveBeenCalledWith(
 			expect.objectContaining({ githubLogin: null }),
 		);
 	});
@@ -227,7 +226,7 @@ describe("POST /api/v1/identity/bindings/import", () => {
 			makeRequest({ token: await mintToken({ audience: "urn:cogni:node:99999999-9999-4999-8999-999999999999" }) }),
 		);
 		expect(res.status).toBe(401);
-		expect(mockConsumeNonce).not.toHaveBeenCalled();
+		expect(mockRedeemBinding).not.toHaveBeenCalled();
 	});
 
 	it("401 when the signed nodeId disagrees with the exact audience", async () => {
@@ -238,15 +237,16 @@ describe("POST /api/v1/identity/bindings/import", () => {
 	});
 
 	it("consumes nonce once and rejects a replay before binding", async () => {
-		mockConsumeNonce.mockResolvedValue(null);
+		mockRedeemBinding.mockResolvedValue("invalid_nonce");
 		const res = await IMPORT_POST(makeRequest({ token: await mintToken() }));
 		expect(res.status).toBe(401);
-		expect(mockConsumeNonce).toHaveBeenCalledWith({ nonce: NONCE, userId: USER_ID });
-		expect(mockImportBinding).not.toHaveBeenCalled();
+		expect(mockRedeemBinding).toHaveBeenCalledWith(
+			expect.objectContaining({ nonce: NONCE, userId: USER_ID }),
+		);
 	});
 
 	it("200 already_bound when the same binding already exists (idempotent)", async () => {
-		mockImportBinding.mockResolvedValue("already_bound");
+		mockRedeemBinding.mockResolvedValue("already_bound");
 
 		const res = await IMPORT_POST(makeRequest({ token: await mintToken() }));
 
@@ -255,7 +255,7 @@ describe("POST /api/v1/identity/bindings/import", () => {
 	});
 
 	it("409 already_linked when the github id is bound to a different user (NO_AUTO_MERGE)", async () => {
-		mockImportBinding.mockResolvedValue("already_linked");
+		mockRedeemBinding.mockResolvedValue("already_linked");
 
 		const res = await IMPORT_POST(makeRequest({ token: await mintToken() }));
 
@@ -270,7 +270,7 @@ describe("POST /api/v1/identity/bindings/import", () => {
 
 		expect(res.status).toBe(401);
 		expect(await res.json()).toEqual({ errorCode: "invalid_token" });
-		expect(mockImportBinding).not.toHaveBeenCalled();
+		expect(mockRedeemBinding).not.toHaveBeenCalled();
 	});
 
 	it("401 invalid_token for an expired token", async () => {
@@ -304,7 +304,18 @@ describe("POST /api/v1/identity/bindings/import", () => {
 
 		expect(res.status).toBe(403);
 		expect(await res.json()).toEqual({ errorCode: "wallet_mismatch" });
-		expect(mockImportBinding).not.toHaveBeenCalled();
+		expect(mockRedeemBinding).not.toHaveBeenCalled();
+	});
+
+	it("503 jwks_unavailable when the configured issuer is not an origin", async () => {
+		mockIssuerUrl = `${ISSUER}/unexpected-path`;
+
+		const res = await IMPORT_POST(makeRequest({ token: await mintToken() }));
+
+		expect(res.status).toBe(503);
+		expect(await res.json()).toEqual({ errorCode: "jwks_unavailable" });
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(mockRedeemBinding).not.toHaveBeenCalled();
 	});
 
 	it("403 wallet_mismatch when the session has no wallet (OAuth-only user)", async () => {
@@ -328,7 +339,7 @@ describe("POST /api/v1/identity/bindings/import", () => {
 
 		expect(res.status).toBe(503);
 		expect(await res.json()).toEqual({ errorCode: "jwks_unavailable" });
-		expect(mockImportBinding).not.toHaveBeenCalled();
+		expect(mockRedeemBinding).not.toHaveBeenCalled();
 	});
 
 	it("401 Session required without a session", async () => {

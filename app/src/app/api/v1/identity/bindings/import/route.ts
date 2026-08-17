@@ -27,10 +27,7 @@ import { z } from "zod";
 
 import { verifyOperatorAttestation } from "@/app/_lib/auth/operator-attestation";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
-import {
-	consumeIdentityAttestationNonce,
-	importAttestedGithubBinding,
-} from "@/bootstrap/identity";
+import { redeemAttestedGithubBinding } from "@/bootstrap/identity";
 import { getServerSessionUser } from "@/lib/auth/server";
 import { getNodeId } from "@/shared/config";
 
@@ -86,25 +83,22 @@ export const POST = wrapRouteHandlerWithLogging(
 			);
 		}
 
-		const consumedNonce = await consumeIdentityAttestationNonce({
+		const result = await redeemAttestedGithubBinding({
+			userId: sessionUser.id,
 			nonce: verified.claims.nonce,
-			userId: sessionUser.id,
-		});
-		if (!consumedNonce) {
-			return NextResponse.json(
-				{ errorCode: "invalid_token" },
-				{ status: 401 },
-			);
-		}
-
-		const result = await importAttestedGithubBinding({
-			userId: sessionUser.id,
 			githubId: verified.claims.github.id,
 			githubLogin: verified.claims.github.login,
 			issuer: verified.claims.issuer,
 			jti: verified.claims.jti,
 			iat: verified.claims.iat,
 		});
+
+		if (result === "invalid_nonce") {
+			return NextResponse.json(
+				{ errorCode: "invalid_token" },
+				{ status: 401 },
+			);
+		}
 
 		if (result === "already_linked") {
 			// NO_AUTO_MERGE: bound to a different user — never re-point.
