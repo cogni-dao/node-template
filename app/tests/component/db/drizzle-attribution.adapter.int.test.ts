@@ -956,6 +956,13 @@ describe("DrizzleAttributionAdapter (Component)", () => {
         receipt_ids: ["receipt-2"],
       },
     ];
+    const CLAIMANT_LIABILITIES = STATEMENT_LINES.filter(
+      (line) => BigInt(line.credit_amount) > 0n
+    ).map((line) => ({
+      claimantKey: line.claimant_key,
+      amountAtomic: BigInt(line.credit_amount) * 10n ** 18n,
+      receiptIds: [...line.receipt_ids].sort(),
+    }));
 
     function makeAtomicParams(epochId: bigint) {
       return {
@@ -967,6 +974,7 @@ describe("DrizzleAttributionAdapter (Component)", () => {
             epochId,
           })
         ),
+        claimantLiabilities: CLAIMANT_LIABILITIES,
         statement: {
           nodeId: TEST_NODE_ID,
           finalAllocationSetHash: HASH,
@@ -1132,6 +1140,45 @@ describe("DrizzleAttributionAdapter (Component)", () => {
       await expect(adapter.finalizeEpochAtomic(divergeParams)).rejects.toThrow(
         /signature divergence/
       );
+    });
+
+    it("rejects omitted or repriced liabilities against the signed statement", async () => {
+      const epoch = await adapter.createEpoch({
+        nodeId: TEST_NODE_ID,
+        scopeId: TEST_SCOPE_ID,
+        ...epochWindow(26),
+        weightConfig: TEST_WEIGHT_CONFIG,
+      });
+      await adapter.closeIngestion(
+        epoch.id,
+        [],
+        "liability-mismatch-approver",
+        "weight-sum-v0",
+        "liability-mismatch-wch"
+      );
+
+      const params = makeAtomicParams(epoch.id);
+      await expect(
+        adapter.finalizeEpochAtomic({
+          ...params,
+          claimantLiabilities: params.claimantLiabilities.slice(1),
+        })
+      ).rejects.toThrow(/liability set does not match signed statement/);
+
+      await expect(
+        adapter.finalizeEpochAtomic({
+          ...params,
+          claimantLiabilities: params.claimantLiabilities.map(
+            (liability, index) =>
+              index === 0
+                ? { ...liability, amountAtomic: liability.amountAtomic + 1n }
+                : liability
+          ),
+        })
+      ).rejects.toThrow(/liability does not match signed statement/);
+
+      expect((await adapter.getEpoch(epoch.id))?.status).toBe("review");
+      await adapter.finalizeEpochAtomic(params);
     });
 
     it("open epoch → throws EpochNotOpenError", async () => {
