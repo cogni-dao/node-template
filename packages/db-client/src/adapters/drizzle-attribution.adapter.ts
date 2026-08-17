@@ -1800,7 +1800,11 @@ export class DrizzleAttributionAdapter implements AttributionStore {
             liability.claimantKey
           );
           if (!identityMatch) return { status: "conflict" } as const;
-          const [, provider, externalId] = identityMatch;
+          const provider = identityMatch[1];
+          const externalId = identityMatch[2];
+          if (!provider || !externalId) {
+            return { status: "conflict" } as const;
+          }
           const [binding] = await tx
             .select({ userId: userBindings.userId })
             .from(userBindings)
