@@ -109,6 +109,39 @@ CREATE TRIGGER distribution_settlement_leaves_append_only
   BEFORE UPDATE OR DELETE ON "distribution_settlement_leaves"
   FOR EACH ROW EXECUTE FUNCTION ledger_reject_mutation();--> statement-breakpoint
 
+CREATE OR REPLACE FUNCTION validate_claimant_liability_insert() RETURNS trigger AS $$
+DECLARE
+  source_node_id uuid;
+  source_scope_id uuid;
+  source_statement_id uuid;
+BEGIN
+  IF NEW.settled_revision_id IS NOT NULL THEN
+    RAISE EXCEPTION 'claimant liability must be inserted pending';
+  END IF;
+
+  SELECT e.node_id, e.scope_id, s.id
+    INTO source_node_id, source_scope_id, source_statement_id
+    FROM epochs e
+    JOIN epoch_statements s
+      ON s.epoch_id = e.id
+      AND s.id = NEW.statement_id
+      AND s.node_id = e.node_id
+    WHERE e.id = NEW.source_epoch_id;
+  IF NOT FOUND
+    OR source_node_id <> NEW.node_id
+    OR source_scope_id <> NEW.scope_id
+    OR source_statement_id <> NEW.statement_id
+  THEN
+    RAISE EXCEPTION 'claimant liability source does not match its epoch statement';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;--> statement-breakpoint
+
+CREATE TRIGGER claimant_liabilities_validate_insert
+  BEFORE INSERT ON "claimant_liabilities"
+  FOR EACH ROW EXECUTE FUNCTION validate_claimant_liability_insert();--> statement-breakpoint
+
 CREATE OR REPLACE FUNCTION claimant_liability_settle_once() RETURNS trigger AS $$
 DECLARE
   revision_node_id uuid;

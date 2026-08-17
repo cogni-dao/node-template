@@ -1810,7 +1810,8 @@ export class DrizzleAttributionAdapter implements AttributionStore {
                 eq(userBindings.externalId, externalId)
               )
             )
-            .limit(1);
+            .limit(1)
+            .for("share");
           if (binding?.userId !== resolution.resolvedUserId) {
             return { status: "conflict" } as const;
           }
@@ -1825,12 +1826,14 @@ export class DrizzleAttributionAdapter implements AttributionStore {
               eq(userBindings.userId, resolution.resolvedUserId),
               eq(userBindings.provider, "wallet")
             )
-          );
+          )
+          .for("share");
         const [userRow] = await tx
           .select({ walletAddress: users.walletAddress })
           .from(users)
           .where(eq(users.id, resolution.resolvedUserId))
-          .limit(1);
+          .limit(1)
+          .for("share");
         const ownsAccount =
           walletBindings.some(
             (binding) => binding.externalId.toLowerCase() === normalizedAccount
