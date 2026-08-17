@@ -41,6 +41,7 @@ import {
   computeWeightConfigHash,
   estimatePoolComponentsV0,
   explodeToClaimants,
+  parseEIP712DeploymentEnvironment,
   sha256OfCanonicalJson,
   toReviewSubjectOverrides,
   validateWeightConfig,
@@ -69,6 +70,8 @@ export interface AttributionActivityDeps {
   readonly nodeId: string;
   readonly scopeId: string;
   readonly chainId: number;
+  /** Server runtime authority for deployment-bound EIP-712 v2 finalization. */
+  readonly deploymentEnvironment?: string | undefined;
   readonly logger: Logger;
 }
 
@@ -300,6 +303,7 @@ export function createAttributionActivities(deps: AttributionActivityDeps) {
     nodeId,
     scopeId,
     chainId,
+    deploymentEnvironment: unvalidatedDeploymentEnvironment,
     logger,
   } = deps;
 
@@ -1059,6 +1063,11 @@ export function createAttributionActivities(deps: AttributionActivityDeps) {
   async function finalizeEpoch(
     input: FinalizeEpochInput
   ): Promise<FinalizeEpochOutput> {
+    // Legacy activity path remains fail-closed even though new nodes finalize
+    // in-process through runFinalizeEpoch.
+    const deploymentEnvironment = parseEIP712DeploymentEnvironment(
+      unvalidatedDeploymentEnvironment
+    );
     const epochId = BigInt(input.epochId);
 
     logger.info(
@@ -1241,6 +1250,7 @@ export function createAttributionActivities(deps: AttributionActivityDeps) {
       nodeId,
       scopeId,
       epochId: input.epochId,
+      deploymentEnvironment,
       finalAllocationSetHash,
       poolTotalCredits: poolTotal.toString(),
       chainId,
