@@ -11,12 +11,16 @@
  * @public
  */
 
-import { identityAttestationStartOperation } from "@cogni/node-contracts";
+import {
+	IdentityAttestationOriginSchema,
+	IDENTITY_ATTESTATION_V1_PROTOCOL_SHA256,
+	identityAttestationStartOperation,
+} from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
 
+import { createIdentityAttestationNonce } from "@/app/_facades/identity/operator-attested-binding.server";
 import { getOperatorIssuerUrl } from "@/app/_lib/auth/operator-attestation";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
-import { createIdentityAttestationNonce } from "@/bootstrap/identity";
 import { getServerSessionUser } from "@/lib/auth/server";
 import { getNodeId } from "@/shared/config";
 import { serverEnv } from "@/shared/env/server";
@@ -27,9 +31,8 @@ export const runtime = "nodejs";
 function configuredNodeOrigin(): string | null {
 	const configured = serverEnv().APP_BASE_URL;
 	if (!configured) return null;
-	const parsed = new URL(configured);
-	if (parsed.pathname !== "/" || parsed.search || parsed.hash) return null;
-	return parsed.origin;
+	const parsed = IdentityAttestationOriginSchema.safeParse(configured);
+	return parsed.success ? parsed.data : null;
 }
 
 export const POST = wrapRouteHandlerWithLogging(
@@ -47,8 +50,21 @@ export const POST = wrapRouteHandlerWithLogging(
 		}
 
 		const nodeId = getNodeId();
+		let issuer: string;
+		try {
+			issuer = getOperatorIssuerUrl();
+		} catch {
+			return NextResponse.json(
+				{ errorCode: "operator_issuer_unavailable" },
+				{ status: 503 },
+			);
+		}
 		const nonce = await createIdentityAttestationNonce(sessionUser.id);
-		const authorizeUrl = new URL("/identity/attest", getOperatorIssuerUrl());
+		const authorizeUrl = new URL("/identity/attest", issuer);
+		authorizeUrl.searchParams.set(
+			"protocol",
+			IDENTITY_ATTESTATION_V1_PROTOCOL_SHA256,
+		);
 		authorizeUrl.searchParams.set("node_id", nodeId);
 		authorizeUrl.searchParams.set("nonce", nonce);
 		authorizeUrl.searchParams.set("target_origin", nodeOrigin);

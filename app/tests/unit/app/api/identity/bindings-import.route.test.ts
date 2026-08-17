@@ -19,6 +19,7 @@
  * @internal
  */
 
+import { IDENTITY_ATTESTATION_V1_PROTOCOL_SHA256 } from "@cogni/node-contracts";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -37,12 +38,13 @@ const mockGetSessionUser = vi.fn();
 const mockRedeemBinding = vi.fn();
 const mockCreateNonce = vi.fn();
 let mockIssuerUrl = ISSUER;
+let mockNodeOrigin = "https://node.test.example";
 
 // Keep the verifier's env read isolated from full server env validation
 vi.mock("@/shared/env/server", () => ({
 	serverEnv: () => ({
 		COGNI_OPERATOR_ISSUER_URL: mockIssuerUrl,
-		APP_BASE_URL: "https://node.test.example",
+		APP_BASE_URL: mockNodeOrigin,
 	}),
 }));
 
@@ -52,7 +54,7 @@ vi.mock("@/lib/auth/server", () => ({
 
 vi.mock("@/shared/config", () => ({ getNodeId: () => NODE_ID }));
 
-vi.mock("@/bootstrap/identity", () => ({
+vi.mock("@/app/_facades/identity/operator-attested-binding.server", () => ({
 	createIdentityAttestationNonce: (...args: unknown[]) => mockCreateNonce(...args),
 	redeemAttestedGithubBinding: (...args: unknown[]) =>
 		mockRedeemBinding(...args),
@@ -137,11 +139,13 @@ async function mintToken(opts?: {
 	nonce?: string;
 	targetOrigin?: string;
 	githubLogin?: string | null;
+	protocol?: string;
 }): Promise<string> {
 	const now = Math.floor(Date.now() / 1000);
 	const exp = opts?.expiredBy ? now - opts.expiredBy : now + 600;
 	return await new SignJWT({
 		type: "identity.attestation.v1",
+		protocol: opts?.protocol ?? IDENTITY_ATTESTATION_V1_PROTOCOL_SHA256,
 		nodeId: opts?.nodeId ?? NODE_ID,
 		nonce: opts?.nonce ?? NONCE,
 		targetOrigin: opts?.targetOrigin ?? "https://node.test.example",
@@ -175,6 +179,7 @@ function makeRequest(body: unknown): NextRequest {
 beforeEach(() => {
 	vi.clearAllMocks();
 	mockIssuerUrl = ISSUER;
+	mockNodeOrigin = "https://node.test.example";
 	resetOperatorAttestationJwksCacheForTests();
 	fetchMock.mockImplementation(async () => jwksOk());
 	mockGetSessionUser.mockResolvedValue({
@@ -226,6 +231,14 @@ describe("POST /api/v1/identity/bindings/import", () => {
 	it("401 when audience is not this node", async () => {
 		const res = await IMPORT_POST(
 			makeRequest({ token: await mintToken({ audience: "urn:cogni:node:99999999-9999-4999-8999-999999999999" }) }),
+		);
+		expect(res.status).toBe(401);
+		expect(mockRedeemBinding).not.toHaveBeenCalled();
+	});
+
+	it("401 when the operator signs a different protocol fingerprint", async () => {
+		const res = await IMPORT_POST(
+			makeRequest({ token: await mintToken({ protocol: "0".repeat(64) }) }),
 		);
 		expect(res.status).toBe(401);
 		expect(mockRedeemBinding).not.toHaveBeenCalled();
@@ -383,6 +396,9 @@ describe("POST /api/v1/identity/bindings/import/start", () => {
 		const authorizeUrl = new URL(body.authorizeUrl);
 		expect(authorizeUrl.origin).toBe(ISSUER);
 		expect(authorizeUrl.pathname).toBe("/identity/attest");
+		expect(authorizeUrl.searchParams.get("protocol")).toBe(
+			IDENTITY_ATTESTATION_V1_PROTOCOL_SHA256,
+		);
 		expect(authorizeUrl.searchParams.get("node_id")).toBe(NODE_ID);
 		expect(authorizeUrl.searchParams.get("nonce")).toBe(NONCE);
 		expect(authorizeUrl.searchParams.get("target_origin")).toBe(
@@ -391,5 +407,39 @@ describe("POST /api/v1/identity/bindings/import/start", () => {
 		expect(authorizeUrl.searchParams.get("return_to")).toBe(
 			"https://node.test.example/profile",
 		);
+	});
+
+	it.each([
+		"http://hub.test.example",
+		"https://user:pass@hub.test.example",
+	])("rejects unsafe operator issuer %s before minting a nonce", async (issuer) => {
+		mockIssuerUrl = issuer;
+		const res = await START_POST(
+			new NextRequest(
+				"http://localhost:3200/api/v1/identity/bindings/import/start",
+				{ method: "POST" },
+			),
+		);
+		expect(res.status).toBe(503);
+		expect(await res.json()).toEqual({
+			errorCode: "operator_issuer_unavailable",
+		});
+		expect(mockCreateNonce).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		"http://node.test.example",
+		"https://user:pass@node.test.example",
+	])("rejects unsafe node origin %s before minting a nonce", async (origin) => {
+		mockNodeOrigin = origin;
+		const res = await START_POST(
+			new NextRequest(
+				"http://localhost:3200/api/v1/identity/bindings/import/start",
+				{ method: "POST" },
+			),
+		);
+		expect(res.status).toBe(503);
+		expect(await res.json()).toEqual({ errorCode: "node_origin_unavailable" });
+		expect(mockCreateNonce).not.toHaveBeenCalled();
 	});
 });

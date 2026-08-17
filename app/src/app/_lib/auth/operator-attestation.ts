@@ -7,7 +7,7 @@
  *   JWTs binding {wallet ↔ github id+login} — against the issuer's remote JWKS.
  * Scope: Signature/exp/issuer verification + claim shape validation only. Does
  *   NOT compare the wallet to the session (route's job) or write bindings
- *   (bootstrap/identity's job).
+ *   (identity feature service's job).
  * Invariants:
  *   - FAIL_CLOSED: any error that is not provably a bad token maps to
  *     `jwks_unavailable` (503 at the route) — never silently accepts.
@@ -24,6 +24,7 @@
 import { createRemoteJWKSet, errors, jwtVerify } from "jose";
 import {
 	IdentityAttestationClaimsSchema,
+	IdentityAttestationOriginSchema,
 	identityAttestationAudience,
 } from "@cogni/node-contracts";
 
@@ -49,11 +50,7 @@ export type OperatorAttestationResult =
 
 /** Require a bare origin so issuer/JWKS trust cannot drift by URL path. */
 function configuredOrigin(url: string): string {
-	const parsed = new URL(url);
-	if (parsed.pathname !== "/" || parsed.search || parsed.hash) {
-		throw new Error("COGNI_OPERATOR_ISSUER_URL must be an origin URL");
-	}
-	return parsed.origin;
+	return IdentityAttestationOriginSchema.parse(url);
 }
 
 /** Issuer URL for operator attestations (pinned, default https://cognidao.org). */

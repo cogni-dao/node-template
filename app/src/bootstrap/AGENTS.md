@@ -53,7 +53,7 @@ System setup installers were moved to `scripts/bootstrap/` and are out of scope 
   - `resetContainer()` - Reset singleton (tests only)
   - `Container` interface - Ports + logger + config (includes accountsForUser(userId), serviceAccountService, metricsQuery, metricsCapability, repoCapability, toolSource, threadPersistenceForUser(userId), modelCatalog, providerResolver; no usageService)
   - `ContainerConfig` interface - Runtime config (unhandledErrorPolicy, rateLimitBypass, DEPLOY_ENVIRONMENT)
-  - `createIdentityAttestationNonce(userId)`, `redeemAttestedGithubBinding(params)` - durable operator-attestation RP lifecycle; nonce consumption + binding/evidence import are one transaction
+  - `resolveIdentityBindingDependencies()` - Identity binding adapter/clock/randomness composition; policy remains in the feature service
   - `UnhandledErrorPolicy` type - `"rethrow" | "respond_500"`
   - `getTemporalWorkflowClient()` - Process-wide Temporal WorkflowClient singleton (race-safe init, cleaned up by resetContainer)
   - `resolveAiAdapterDeps()` - AI adapter dependencies for factory
@@ -61,7 +61,6 @@ System setup installers were moved to `scripts/bootstrap/` and are out of scope 
   - `createScopedGraphExecutor({ executor, billing, preflightCheckFn, resolver, actorId, abortSignal?, broker?, commitByoUsage? })` - Per-run wrapper: resolves LlmService from ModelProviderResolverPort, applies billing/preflight/observability/usage-commit decorators, seeds ALS ExecutionScope
   - `runGraphWithScope({ executor, req, ctx?, billing, llmService, abortSignal? })` - App-local helper that seeds per-run ALS scope with resolved LlmService
   - `createAgentCatalog()`, `listAgentsForApi()` - Discovery factory (from `agent-discovery.ts`)
-  - `redeemAttestedGithubBinding()` - Atomic operator-attested github binding redemption bound to the service DB (from `identity.ts`, task.5024)
   - `wrapRouteHandlerWithLogging()` - Route logging wrapper with metrics (from `http/`)
   - `wrapPublicRoute()` - Lazy singleton wrapper for public routes with rate limiting (from `http/`)
   - `makeWrapPublicRoute()` - Pure factory for testing (from `http/wrapPublicRoute`)

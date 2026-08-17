@@ -18,16 +18,16 @@
  *   - NODE_WRITES_OWN_LEDGER: binding + evidence rows are written locally with
  *     provenance {method: operator_attestation, issuer, jti}.
  * Side-effects: IO (remote JWKS fetch, service-role database writes)
- * Links: src/app/_lib/auth/operator-attestation.ts, src/bootstrap/identity.ts, task.5024
+ * Links: src/app/_lib/auth/operator-attestation.ts, src/features/identity/services/operator-attested-binding.ts, task.5024
  * @public
  */
 
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
+import { redeemAttestedGithubBinding } from "@/app/_facades/identity/operator-attested-binding.server";
 import { verifyOperatorAttestation } from "@/app/_lib/auth/operator-attestation";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
-import { redeemAttestedGithubBinding } from "@/bootstrap/identity";
 import { getServerSessionUser } from "@/lib/auth/server";
 import { getNodeId } from "@/shared/config";
 

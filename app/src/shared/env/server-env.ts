@@ -32,6 +32,7 @@ const originUrl = z.string().url().refine(
     try {
       const parsed = new URL(value);
       return (
+        parsed.protocol === "https:" &&
         parsed.pathname === "/" &&
         !parsed.search &&
         !parsed.hash &&
@@ -42,7 +43,7 @@ const originUrl = z.string().url().refine(
       return false;
     }
   },
-  { message: "must be an origin URL without path, query, or credentials" }
+  { message: "must be an HTTPS origin URL without path, query, or credentials" }
 );
 const optionalString = z.preprocess(
   emptyToUndefined,

@@ -2,13 +2,13 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@tests/unit/bootstrap/identity`
+ * Module: `@tests/unit/features/identity/operator-attested-binding`
  * Purpose: Proves nonce redemption and binding import share one transaction.
  * Scope: Transactional in-memory service DB mock; no real database.
  * Invariants: concurrent redemption has one winner; infrastructure failures
  *   roll nonce consumption back; terminal conflicts consume the nonce.
  * Side-effects: none
- * Links: src/bootstrap/identity.ts
+ * Links: src/features/identity/services/operator-attested-binding.ts
  * @internal
  */
 
@@ -67,16 +67,13 @@ const mockDb = {
 	}),
 };
 
-vi.mock("@/adapters/server/db/drizzle.service-client", () => ({
-	getServiceDb: () => mockDb,
-}));
-
 vi.mock("@/adapters/server/identity/create-binding", () => ({
 	createBindingInTransaction: (...args: unknown[]) =>
 		mockCreateBinding(...args),
 }));
 
-import { redeemAttestedGithubBinding } from "@/bootstrap/identity";
+import { DrizzleIdentityBindingRepository } from "@/adapters/server/identity/identity-binding.adapter";
+import { createIdentityBindingService } from "@/features/identity/services/operator-attested-binding";
 
 const PARAMS = {
 	userId: "user-1",
@@ -87,6 +84,14 @@ const PARAMS = {
 	jti: "jti-abc",
 	iat: 1_700_000_000,
 };
+
+function redeemAttestedGithubBinding(params: typeof PARAMS) {
+	return createIdentityBindingService({
+		repository: new DrizzleIdentityBindingRepository(mockDb as never),
+		clock: { now: () => "2026-08-17T00:00:00.000Z" },
+		createNonceId: () => "nonce-1",
+	}).redeemGithubBinding(params);
+}
 
 beforeEach(() => {
 	vi.clearAllMocks();
