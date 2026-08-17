@@ -135,6 +135,7 @@ async function mintToken(opts?: {
 	audience?: string;
 	nodeId?: string;
 	nonce?: string;
+	targetOrigin?: string;
 	githubLogin?: string | null;
 }): Promise<string> {
 	const now = Math.floor(Date.now() / 1000);
@@ -143,6 +144,7 @@ async function mintToken(opts?: {
 		type: "identity.attestation.v1",
 		nodeId: opts?.nodeId ?? NODE_ID,
 		nonce: opts?.nonce ?? NONCE,
+		targetOrigin: opts?.targetOrigin ?? "https://node.test.example",
 		wallet: opts?.wallet ?? TOKEN_WALLET,
 		github: {
 			id: "12345",
@@ -234,6 +236,16 @@ describe("POST /api/v1/identity/bindings/import", () => {
 			makeRequest({ token: await mintToken({ nodeId: "99999999-9999-4999-8999-999999999999" }) }),
 		);
 		expect(res.status).toBe(401);
+	});
+
+	it("401 when the token targets a different deployment origin", async () => {
+		const res = await IMPORT_POST(
+			makeRequest({
+				token: await mintToken({ targetOrigin: "https://node.example" }),
+			}),
+		);
+		expect(res.status).toBe(401);
+		expect(mockRedeemBinding).not.toHaveBeenCalled();
 	});
 
 	it("consumes nonce once and rejects a replay before binding", async () => {
@@ -373,6 +385,9 @@ describe("POST /api/v1/identity/bindings/import/start", () => {
 		expect(authorizeUrl.pathname).toBe("/identity/attest");
 		expect(authorizeUrl.searchParams.get("node_id")).toBe(NODE_ID);
 		expect(authorizeUrl.searchParams.get("nonce")).toBe(NONCE);
+		expect(authorizeUrl.searchParams.get("target_origin")).toBe(
+			"https://node.test.example",
+		);
 		expect(authorizeUrl.searchParams.get("return_to")).toBe(
 			"https://node.test.example/profile",
 		);

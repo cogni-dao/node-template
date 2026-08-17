@@ -51,6 +51,7 @@ export const POST = wrapRouteHandlerWithLogging(
 		const authorizeUrl = new URL("/identity/attest", getOperatorIssuerUrl());
 		authorizeUrl.searchParams.set("node_id", nodeId);
 		authorizeUrl.searchParams.set("nonce", nonce);
+		authorizeUrl.searchParams.set("target_origin", nodeOrigin);
 		authorizeUrl.searchParams.set("return_to", `${nodeOrigin}/profile`);
 
 		return NextResponse.json(

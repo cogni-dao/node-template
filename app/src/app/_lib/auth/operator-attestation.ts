@@ -14,6 +14,8 @@
  *   - PINNED_ISSUER: JWKS is fetched from COGNI_OPERATOR_ISSUER_URL only and
  *     the token `iss` claim must equal that pinned URL.
  *   - EDDSA_ONLY: `alg` restricted to EdDSA (Ed25519) — no HS/none downgrade.
+ *   - EXACT_DEPLOYMENT_ORIGIN: signed targetOrigin must equal this node's
+ *     canonical APP_BASE_URL, preventing candidate/preview/production replay.
  * Side-effects: IO (remote JWKS fetch, cached per issuer by jose)
  * Links: docs task.5024 fleet-identity design, src/app/api/v1/identity/bindings/import/route.ts
  * @public
@@ -35,6 +37,7 @@ export interface OperatorAttestationClaims {
 	wallet: string;
 	github: { id: string; login: string | null };
 	nodeId: string;
+	targetOrigin: string;
 	nonce: string;
 	jti: string;
 	iat: number;
@@ -56,6 +59,13 @@ function configuredOrigin(url: string): string {
 /** Issuer URL for operator attestations (pinned, default https://cognidao.org). */
 export function getOperatorIssuerUrl(): string {
 	return configuredOrigin(serverEnv().COGNI_OPERATOR_ISSUER_URL);
+}
+
+/** Exact relying-node origin used for deployment-bound attestation checks. */
+export function getNodeOriginUrl(): string {
+	const configured = serverEnv().APP_BASE_URL;
+	if (!configured) throw new Error("APP_BASE_URL is required");
+	return configuredOrigin(configured);
 }
 
 // Remote JWKS is cached per issuer URL; jose handles key caching + refetch on
@@ -113,7 +123,11 @@ export async function verifyOperatorAttestation(
 		});
 
 		const parsed = IdentityAttestationClaimsSchema.safeParse(payload);
-		if (!parsed.success || parsed.data.nodeId !== expectedNodeId) {
+		if (
+			!parsed.success ||
+			parsed.data.nodeId !== expectedNodeId ||
+			parsed.data.targetOrigin !== getNodeOriginUrl()
+		) {
 			return { ok: false, errorCode: "invalid_token" };
 		}
 
@@ -124,6 +138,7 @@ export async function verifyOperatorAttestation(
 				wallet: parsed.data.wallet.toLowerCase(),
 				github: parsed.data.github,
 				nodeId: parsed.data.nodeId,
+				targetOrigin: parsed.data.targetOrigin,
 				nonce: parsed.data.nonce,
 				jti: parsed.data.jti,
 				iat: parsed.data.iat,
