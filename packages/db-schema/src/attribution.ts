@@ -4,7 +4,7 @@
 /**
  * Module: `@cogni/db-schema/attribution`
  * Purpose: Five-stage epoch ledger schema for auditable activity-based credit distribution.
- * Scope: Defines all ledger tables (epochs, ingestion_receipts, epoch_selection, epoch_user_projections, epoch_evaluations, ingestion_cursors, epoch_pool_components, epoch_review_subject_overrides, epoch_final_claimant_allocations, epoch_statements, epoch_statement_signatures). Does not contain queries, business logic, or I/O.
+ * Scope: Defines all ledger tables, including claimant liabilities and append-only global distribution settlement revisions. Does not contain queries, business logic, or I/O.
  * Invariants:
  * - All credit/unit columns use BIGINT (ALL_MATH_BIGINT).
  * - Ingestion layer (ingestion_receipts, epoch_pool_components) are append-only (DB triggers in migration).
@@ -687,5 +687,154 @@ export const epochDistributionLeaves = pgTable(
       table.accountLower
     ),
     index("epoch_distribution_leaves_epoch_idx").on(table.epochId),
+  ]
+);
+
+// ---------------------------------------------------------------------------
+// Global settlement revisions (late-linked claimant settlement)
+// ---------------------------------------------------------------------------
+
+/**
+ * Append-only cumulative distribution roots for a node+scope settlement stream.
+ * Each revision replaces the claimable root globally; `mintDelta` is only the
+ * newly resolved liability amount while `cumulativeTotal` is the full root sum.
+ */
+export const distributionSettlementRevisions = pgTable(
+  "distribution_settlement_revisions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    nodeId: uuid("node_id").notNull(),
+    scopeId: uuid("scope_id").notNull(),
+    sequence: bigint("sequence", { mode: "bigint" }).notNull(),
+    previousRevisionId: uuid("previous_revision_id").references(
+      // biome-ignore lint/suspicious/noExplicitAny: Drizzle self-referencing FK requires explicit type to break circular inference
+      (): any => distributionSettlementRevisions.id
+    ),
+    previousMerkleRoot: text("previous_merkle_root"),
+    distributionId: text("distribution_id").notNull(),
+    statementHash: text("statement_hash").notNull(),
+    merkleRoot: text("merkle_root").notNull(),
+    chainId: bigint("chain_id", { mode: "bigint" }).notNull(),
+    tokenAddress: text("token_address").notNull(),
+    distributorAddress: text("distributor_address"),
+    mintDelta: numeric("mint_delta", { mode: "bigint" }).notNull(),
+    cumulativeTotal: numeric("cumulative_total", {
+      mode: "bigint",
+    }).notNull(),
+    triggerKind: text("trigger_kind").notNull(),
+    triggerRef: text("trigger_ref").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("distribution_settlement_revisions_stream_sequence_unique").on(
+      table.nodeId,
+      table.scopeId,
+      table.sequence
+    ),
+    uniqueIndex("distribution_settlement_revisions_previous_unique").on(
+      table.previousRevisionId
+    ),
+    uniqueIndex("distribution_settlement_revisions_genesis_unique")
+      .on(table.nodeId, table.scopeId)
+      .where(sql`${table.previousRevisionId} IS NULL`),
+    uniqueIndex("distribution_settlement_revisions_root_unique").on(
+      table.nodeId,
+      table.scopeId,
+      table.merkleRoot
+    ),
+    check(
+      "distribution_settlement_revisions_sequence_positive",
+      sql`${table.sequence} > 0`
+    ),
+    check(
+      "distribution_settlement_revisions_amounts_nonnegative",
+      sql`${table.mintDelta} >= 0 AND ${table.cumulativeTotal} >= 0`
+    ),
+    check(
+      "distribution_settlement_revisions_chain_shape",
+      sql`(${table.previousRevisionId} IS NULL AND ${table.previousMerkleRoot} IS NULL AND ${table.sequence} = 1) OR (${table.previousRevisionId} IS NOT NULL AND ${table.previousMerkleRoot} IS NOT NULL AND ${table.sequence} > 1)`
+    ),
+  ]
+);
+
+/**
+ * Token-atomic debt fixed at source-epoch finalization. The source and amount
+ * never change; settlement is the sole nullable-to-non-null state transition.
+ */
+export const claimantLiabilities = pgTable(
+  "claimant_liabilities",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    nodeId: uuid("node_id").notNull(),
+    scopeId: uuid("scope_id").notNull(),
+    sourceEpochId: bigint("source_epoch_id", { mode: "bigint" })
+      .notNull()
+      .references(() => epochs.id),
+    statementId: uuid("statement_id")
+      .notNull()
+      .references(() => epochStatements.id),
+    claimantKey: text("claimant_key").notNull(),
+    amountAtomic: numeric("amount_atomic", { mode: "bigint" }).notNull(),
+    receiptIdsJson: jsonb("receipt_ids_json").$type<string[]>().notNull(),
+    settledRevisionId: uuid("settled_revision_id").references(
+      () => distributionSettlementRevisions.id
+    ),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("claimant_liabilities_source_claimant_unique").on(
+      table.sourceEpochId,
+      table.claimantKey
+    ),
+    index("claimant_liabilities_pending_stream_idx")
+      .on(table.nodeId, table.scopeId)
+      .where(sql`${table.settledRevisionId} IS NULL`),
+    check(
+      "claimant_liabilities_amount_positive",
+      sql`${table.amountAtomic} > 0`
+    ),
+  ]
+);
+
+/** Complete cumulative leaf/proof snapshot for one settlement revision. */
+export const distributionSettlementLeaves = pgTable(
+  "distribution_settlement_leaves",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    revisionId: uuid("revision_id")
+      .notNull()
+      .references(() => distributionSettlementRevisions.id),
+    leafIndex: integer("leaf_index").notNull(),
+    claimantKey: text("claimant_key").notNull(),
+    account: text("account").notNull(),
+    accountLower: text("account_lower").notNull(),
+    cumulativeAmount: numeric("cumulative_amount", {
+      mode: "bigint",
+    }).notNull(),
+    deltaAmount: numeric("delta_amount", { mode: "bigint" }).notNull(),
+    receiptIdsJson: jsonb("receipt_ids_json").$type<string[]>().notNull(),
+    leafHash: text("leaf_hash").notNull(),
+    proofJson: jsonb("proof_json").$type<string[]>().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("distribution_settlement_leaves_revision_index_unique").on(
+      table.revisionId,
+      table.leafIndex
+    ),
+    uniqueIndex("distribution_settlement_leaves_revision_account_unique").on(
+      table.revisionId,
+      table.accountLower
+    ),
+    check(
+      "distribution_settlement_leaves_amounts_nonnegative",
+      sql`${table.cumulativeAmount} >= 0 AND ${table.deltaAmount} >= 0 AND ${table.deltaAmount} <= ${table.cumulativeAmount}`
+    ),
   ]
 );

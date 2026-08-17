@@ -25,6 +25,8 @@
  */
 
 import type {
+  AppendSettlementRevisionParams,
+  AppendSettlementRevisionResult,
   AttributionEpoch,
   AttributionEvaluation,
   AttributionPoolComponent,
@@ -33,6 +35,7 @@ import type {
   AttributionStatementLineRecord,
   AttributionStatementSignature,
   AttributionStore,
+  ClaimantLiabilityRecord,
   CloseIngestionWithEvaluationsParams,
   DistributionClaimRecord,
   DistributionLeafRecord,
@@ -53,6 +56,8 @@ import type {
   PoolComponentInsertResult,
   ReceiptClaimantsRecord,
   ReviewSubjectOverrideRecord,
+  SettlementLeafRecord,
+  SettlementRevisionRecord,
   SelectedReceiptForAllocation,
   SelectedReceiptForAttribution,
   SelectedReceiptWithMetadata,
@@ -70,6 +75,9 @@ import {
   type EpochStatus,
 } from "@cogni/attribution-ledger";
 import {
+  claimantLiabilities,
+  distributionSettlementLeaves,
+  distributionSettlementRevisions,
   epochDistributionLeaves,
   epochDistributionManifests,
   epochEvaluations,
@@ -87,8 +95,10 @@ import {
 } from "@cogni/db-schema/attribution";
 import { userBindings } from "@cogni/db-schema/identity";
 import { userProfiles } from "@cogni/db-schema/profile";
+import { users } from "@cogni/db-schema/refs";
 import {
   and,
+  desc,
   eq,
   gte,
   inArray,
@@ -266,6 +276,63 @@ function toDistributionLeaf(
     claimantKey: row.claimantKey,
     account: row.account,
     amount: row.amount,
+    leafHash: row.leafHash,
+    proof: row.proofJson,
+  };
+}
+
+function toClaimantLiability(
+  row: typeof claimantLiabilities.$inferSelect
+): ClaimantLiabilityRecord {
+  return {
+    id: row.id,
+    nodeId: row.nodeId,
+    scopeId: row.scopeId,
+    sourceEpochId: row.sourceEpochId,
+    statementId: row.statementId,
+    claimantKey: row.claimantKey,
+    amountAtomic: row.amountAtomic,
+    receiptIds: row.receiptIdsJson,
+    settledRevisionId: row.settledRevisionId,
+    createdAt: row.createdAt,
+  };
+}
+
+function toSettlementRevision(
+  row: typeof distributionSettlementRevisions.$inferSelect
+): SettlementRevisionRecord {
+  return {
+    id: row.id,
+    nodeId: row.nodeId,
+    scopeId: row.scopeId,
+    sequence: row.sequence,
+    previousRevisionId: row.previousRevisionId,
+    previousMerkleRoot: row.previousMerkleRoot,
+    distributionId: row.distributionId,
+    statementHash: row.statementHash,
+    merkleRoot: row.merkleRoot,
+    chainId: Number(row.chainId),
+    tokenAddress: row.tokenAddress,
+    distributorAddress: row.distributorAddress,
+    mintDelta: row.mintDelta,
+    cumulativeTotal: row.cumulativeTotal,
+    triggerKind: row.triggerKind,
+    triggerRef: row.triggerRef,
+    createdAt: row.createdAt,
+  };
+}
+
+function toSettlementLeaf(
+  row: typeof distributionSettlementLeaves.$inferSelect
+): SettlementLeafRecord {
+  return {
+    revisionId: row.revisionId,
+    index: row.leafIndex,
+    claimantKey: row.claimantKey,
+    account: row.account,
+    cumulativeAmount: row.cumulativeAmount,
+    deltaAmount: row.deltaAmount,
+    receiptIds: row.receiptIdsJson,
     leafHash: row.leafHash,
     proof: row.proofJson,
   };
@@ -1518,12 +1585,419 @@ export class DrizzleAttributionAdapter implements AttributionStore {
     return leafRows.map(toDistributionLeaf);
   }
 
+  // ── Global settlement revisions ───────────────────────────
+
+  async listPendingClaimantLiabilities(
+    nodeId: string,
+    scopeId: string
+  ): Promise<readonly ClaimantLiabilityRecord[]> {
+    if (scopeId !== this.scopeId) return [];
+    const rows = await this.db
+      .select()
+      .from(claimantLiabilities)
+      .where(
+        and(
+          eq(claimantLiabilities.nodeId, nodeId),
+          eq(claimantLiabilities.scopeId, scopeId),
+          isNull(claimantLiabilities.settledRevisionId)
+        )
+      );
+    return rows.map(toClaimantLiability);
+  }
+
+  async getLatestSettlementRevision(
+    nodeId: string,
+    scopeId: string
+  ): Promise<SettlementRevisionRecord | null> {
+    if (scopeId !== this.scopeId) return null;
+    const [row] = await this.db
+      .select()
+      .from(distributionSettlementRevisions)
+      .where(
+        and(
+          eq(distributionSettlementRevisions.nodeId, nodeId),
+          eq(distributionSettlementRevisions.scopeId, scopeId)
+        )
+      )
+      .orderBy(desc(distributionSettlementRevisions.sequence))
+      .limit(1);
+    return row ? toSettlementRevision(row) : null;
+  }
+
+  async getSettlementRevision(
+    revisionId: string
+  ): Promise<SettlementRevisionRecord | null> {
+    const [row] = await this.db
+      .select()
+      .from(distributionSettlementRevisions)
+      .where(
+        and(
+          eq(distributionSettlementRevisions.id, revisionId),
+          eq(distributionSettlementRevisions.scopeId, this.scopeId)
+        )
+      )
+      .limit(1);
+    return row ? toSettlementRevision(row) : null;
+  }
+
+  async getSettlementRevisionByMerkleRoot(
+    nodeId: string,
+    scopeId: string,
+    merkleRoot: string
+  ): Promise<SettlementRevisionRecord | null> {
+    if (scopeId !== this.scopeId) return null;
+    const [row] = await this.db
+      .select()
+      .from(distributionSettlementRevisions)
+      .where(
+        and(
+          eq(distributionSettlementRevisions.nodeId, nodeId),
+          eq(distributionSettlementRevisions.scopeId, scopeId),
+          eq(distributionSettlementRevisions.merkleRoot, merkleRoot)
+        )
+      )
+      .limit(1);
+    return row ? toSettlementRevision(row) : null;
+  }
+
+  async getSettlementLeavesForRevision(
+    revisionId: string
+  ): Promise<readonly SettlementLeafRecord[]> {
+    const revision = await this.getSettlementRevision(revisionId);
+    if (!revision) return [];
+    const rows = await this.db
+      .select()
+      .from(distributionSettlementLeaves)
+      .where(eq(distributionSettlementLeaves.revisionId, revisionId))
+      .orderBy(distributionSettlementLeaves.leafIndex);
+    return rows.map(toSettlementLeaf);
+  }
+
+  async getSettlementClaimForAccount(
+    revisionId: string,
+    account: string
+  ): Promise<
+    | {
+        readonly revision: SettlementRevisionRecord;
+        readonly leaf: SettlementLeafRecord;
+      }
+    | null
+  > {
+    const revision = await this.getSettlementRevision(revisionId);
+    if (!revision) return null;
+    const [row] = await this.db
+      .select()
+      .from(distributionSettlementLeaves)
+      .where(
+        and(
+          eq(distributionSettlementLeaves.revisionId, revisionId),
+          eq(distributionSettlementLeaves.accountLower, account.toLowerCase())
+        )
+      )
+      .limit(1);
+    return row ? { revision, leaf: toSettlementLeaf(row) } : null;
+  }
+
+  async appendSettlementRevisionAtomic(
+    params: AppendSettlementRevisionParams
+  ): Promise<AppendSettlementRevisionResult> {
+    if (params.scopeId !== this.scopeId) return { status: "conflict" };
+    if (!Number.isSafeInteger(params.chainId) || params.chainId < 0) {
+      throw new Error("appendSettlementRevisionAtomic: invalid chainId");
+    }
+    if (params.mintDelta <= 0n || params.cumulativeTotal <= 0n) {
+      throw new Error(
+        "appendSettlementRevisionAtomic: settlement amounts must be positive"
+      );
+    }
+
+    return await this.db.transaction(async (tx) => {
+      // Serialize this node+scope stream. Hash collisions only over-serialize.
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(hashtextextended(${`${params.nodeId}:${params.scopeId}`}, 0))`
+      );
+
+      const [previousRow] = await tx
+        .select()
+        .from(distributionSettlementRevisions)
+        .where(
+          and(
+            eq(distributionSettlementRevisions.nodeId, params.nodeId),
+            eq(distributionSettlementRevisions.scopeId, params.scopeId)
+          )
+        )
+        .orderBy(desc(distributionSettlementRevisions.sequence))
+        .limit(1);
+
+      if ((previousRow?.id ?? null) !== params.expectedPreviousRevisionId) {
+        return { status: "conflict" } as const;
+      }
+      if (
+        previousRow &&
+        (previousRow.chainId !== BigInt(params.chainId) ||
+          previousRow.tokenAddress.toLowerCase() !==
+            params.tokenAddress.toLowerCase() ||
+          (previousRow.distributorAddress?.toLowerCase() ?? null) !==
+            (params.distributorAddress?.toLowerCase() ?? null))
+      ) {
+        throw new Error(
+          "appendSettlementRevisionAtomic: deployment identity changed within settlement stream"
+        );
+      }
+
+      const expectedCumulative =
+        (previousRow?.cumulativeTotal ?? 0n) + params.mintDelta;
+      if (expectedCumulative !== params.cumulativeTotal) {
+        throw new Error(
+          "appendSettlementRevisionAtomic: cumulativeTotal does not equal prior total plus mintDelta"
+        );
+      }
+
+      const liabilityIds = params.resolutions.map((item) => item.liabilityId);
+      if (
+        liabilityIds.length === 0 ||
+        new Set(liabilityIds).size !== liabilityIds.length
+      ) {
+        throw new Error(
+          "appendSettlementRevisionAtomic: resolutions must contain distinct liabilities"
+        );
+      }
+      const liabilityRows = await tx
+        .select()
+        .from(claimantLiabilities)
+        .where(
+          and(
+            inArray(claimantLiabilities.id, liabilityIds),
+            eq(claimantLiabilities.nodeId, params.nodeId),
+            eq(claimantLiabilities.scopeId, params.scopeId),
+            isNull(claimantLiabilities.settledRevisionId)
+          )
+        )
+        .for("update");
+      if (liabilityRows.length !== liabilityIds.length) {
+        return { status: "conflict" } as const;
+      }
+
+      const liabilitiesById = new Map(
+        liabilityRows.map((row) => [row.id, row] as const)
+      );
+      let liabilityTotal = 0n;
+      const deltaByAccount = new Map<string, bigint>();
+      const receiptsByAccount = new Map<string, Set<string>>();
+      for (const resolution of params.resolutions) {
+        const liability = liabilitiesById.get(resolution.liabilityId);
+        if (!liability) return { status: "conflict" } as const;
+
+        const claimantUserId = liability.claimantKey.startsWith("user:")
+          ? liability.claimantKey.slice("user:".length)
+          : null;
+        if (claimantUserId) {
+          if (claimantUserId !== resolution.resolvedUserId) {
+            return { status: "conflict" } as const;
+          }
+        } else {
+          const identityMatch = /^identity:([^:]+):(.+)$/.exec(
+            liability.claimantKey
+          );
+          if (!identityMatch) return { status: "conflict" } as const;
+          const [, provider, externalId] = identityMatch;
+          const [binding] = await tx
+            .select({ userId: userBindings.userId })
+            .from(userBindings)
+            .where(
+              and(
+                eq(userBindings.provider, provider),
+                eq(userBindings.externalId, externalId)
+              )
+            )
+            .limit(1);
+          if (binding?.userId !== resolution.resolvedUserId) {
+            return { status: "conflict" } as const;
+          }
+        }
+
+        const normalizedAccount = resolution.account.toLowerCase();
+        const walletBindings = await tx
+          .select({ externalId: userBindings.externalId })
+          .from(userBindings)
+          .where(
+            and(
+              eq(userBindings.userId, resolution.resolvedUserId),
+              eq(userBindings.provider, "wallet")
+            )
+          );
+        const [userRow] = await tx
+          .select({ walletAddress: users.walletAddress })
+          .from(users)
+          .where(eq(users.id, resolution.resolvedUserId))
+          .limit(1);
+        const ownsAccount =
+          walletBindings.some(
+            (binding) => binding.externalId.toLowerCase() === normalizedAccount
+          ) || userRow?.walletAddress?.toLowerCase() === normalizedAccount;
+        if (!ownsAccount) return { status: "conflict" } as const;
+
+        liabilityTotal += liability.amountAtomic;
+        deltaByAccount.set(
+          normalizedAccount,
+          (deltaByAccount.get(normalizedAccount) ?? 0n) + liability.amountAtomic
+        );
+        const receiptSet =
+          receiptsByAccount.get(normalizedAccount) ?? new Set<string>();
+        for (const receiptId of liability.receiptIdsJson) {
+          receiptSet.add(receiptId);
+        }
+        receiptsByAccount.set(normalizedAccount, receiptSet);
+      }
+      if (liabilityTotal !== params.mintDelta) {
+        throw new Error(
+          "appendSettlementRevisionAtomic: liabilities do not sum to mintDelta"
+        );
+      }
+
+      const previousLeaves = previousRow
+        ? await tx
+            .select()
+            .from(distributionSettlementLeaves)
+            .where(
+              eq(distributionSettlementLeaves.revisionId, previousRow.id)
+            )
+        : [];
+      const expectedByAccount = new Map<
+        string,
+        { cumulative: bigint; delta: bigint; receipts: Set<string> }
+      >();
+      for (const leaf of previousLeaves) {
+        expectedByAccount.set(leaf.accountLower, {
+          cumulative: leaf.cumulativeAmount,
+          delta: 0n,
+          receipts: new Set(leaf.receiptIdsJson),
+        });
+      }
+      for (const [account, delta] of deltaByAccount) {
+        const expected = expectedByAccount.get(account) ?? {
+          cumulative: 0n,
+          delta: 0n,
+          receipts: new Set<string>(),
+        };
+        expected.cumulative += delta;
+        expected.delta += delta;
+        for (const receiptId of receiptsByAccount.get(account) ?? []) {
+          expected.receipts.add(receiptId);
+        }
+        expectedByAccount.set(account, expected);
+      }
+
+      const seenAccounts = new Set<string>();
+      const seenIndexes = new Set<number>();
+      let leafTotal = 0n;
+      let leafDeltaTotal = 0n;
+      for (const leaf of params.leaves) {
+        const account = leaf.account.toLowerCase();
+        const expected = expectedByAccount.get(account);
+        if (
+          !expected ||
+          seenAccounts.has(account) ||
+          seenIndexes.has(leaf.index) ||
+          leaf.cumulativeAmount !== expected.cumulative ||
+          leaf.deltaAmount !== expected.delta ||
+          JSON.stringify([...leaf.receiptIds].sort()) !==
+            JSON.stringify([...expected.receipts].sort())
+        ) {
+          throw new Error(
+            "appendSettlementRevisionAtomic: leaves are not the complete expected cumulative snapshot"
+          );
+        }
+        seenAccounts.add(account);
+        seenIndexes.add(leaf.index);
+        leafTotal += leaf.cumulativeAmount;
+        leafDeltaTotal += leaf.deltaAmount;
+      }
+      if (
+        seenAccounts.size !== expectedByAccount.size ||
+        leafTotal !== params.cumulativeTotal ||
+        leafDeltaTotal !== params.mintDelta
+      ) {
+        throw new Error(
+          "appendSettlementRevisionAtomic: leaf totals do not match revision totals"
+        );
+      }
+
+      const [revisionRow] = await tx
+        .insert(distributionSettlementRevisions)
+        .values({
+          nodeId: params.nodeId,
+          scopeId: params.scopeId,
+          sequence: (previousRow?.sequence ?? 0n) + 1n,
+          previousRevisionId: previousRow?.id ?? null,
+          previousMerkleRoot: previousRow?.merkleRoot ?? null,
+          distributionId: params.distributionId,
+          statementHash: params.statementHash,
+          merkleRoot: params.merkleRoot,
+          chainId: BigInt(params.chainId),
+          tokenAddress: params.tokenAddress,
+          distributorAddress: params.distributorAddress ?? null,
+          mintDelta: params.mintDelta,
+          cumulativeTotal: params.cumulativeTotal,
+          triggerKind: params.triggerKind,
+          triggerRef: params.triggerRef,
+        })
+        .returning();
+      if (!revisionRow) {
+        throw new Error(
+          "appendSettlementRevisionAtomic: revision insert returned no row"
+        );
+      }
+
+      await tx.insert(distributionSettlementLeaves).values(
+        params.leaves.map((leaf) => ({
+          revisionId: revisionRow.id,
+          leafIndex: leaf.index,
+          claimantKey: leaf.claimantKey,
+          account: leaf.account,
+          accountLower: leaf.account.toLowerCase(),
+          cumulativeAmount: leaf.cumulativeAmount,
+          deltaAmount: leaf.deltaAmount,
+          receiptIdsJson: [...leaf.receiptIds].sort(),
+          leafHash: leaf.leafHash,
+          proofJson: [...leaf.proof],
+        }))
+      );
+
+      const settledRows = await tx
+        .update(claimantLiabilities)
+        .set({ settledRevisionId: revisionRow.id })
+        .where(
+          and(
+            inArray(claimantLiabilities.id, liabilityIds),
+            isNull(claimantLiabilities.settledRevisionId)
+          )
+        )
+        .returning({ id: claimantLiabilities.id });
+      if (settledRows.length !== liabilityIds.length) {
+        throw new Error(
+          "appendSettlementRevisionAtomic: liability state changed under stream lock"
+        );
+      }
+
+      return {
+        status: "appended",
+        revision: toSettlementRevision(revisionRow),
+      } as const;
+    });
+  }
+
   // ── Atomic finalize ────────────────────────────────────────
 
   async finalizeEpochAtomic(params: {
     epochId: bigint;
     poolTotal: bigint;
     finalClaimantAllocations: readonly InsertFinalClaimantAllocationParams[];
+    claimantLiabilities: readonly {
+      readonly claimantKey: string;
+      readonly amountAtomic: bigint;
+      readonly receiptIds: readonly string[];
+    }[];
     statement: Omit<InsertStatementParams, "epochId">;
     signature: Omit<InsertSignatureParams, "statementId">;
     expectedFinalAllocationSetHash: string;
@@ -1670,6 +2144,64 @@ export class DrizzleAttributionAdapter implements AttributionStore {
               updatedAt: new Date(),
             },
           });
+      }
+
+      const liabilityClaimantKeys = params.claimantLiabilities.map(
+        (liability) => liability.claimantKey
+      );
+      if (
+        new Set(liabilityClaimantKeys).size !== liabilityClaimantKeys.length ||
+        params.claimantLiabilities.some(
+          (liability) => liability.amountAtomic <= 0n
+        )
+      ) {
+        throw new Error(
+          "finalizeEpochAtomic: claimant liabilities must have distinct keys and positive amounts"
+        );
+      }
+      for (const liability of params.claimantLiabilities) {
+        const receiptIds = [...new Set(liability.receiptIds)].sort();
+        await tx
+          .insert(claimantLiabilities)
+          .values({
+            nodeId: epochRow.nodeId,
+            scopeId: epochRow.scopeId,
+            sourceEpochId: params.epochId,
+            statementId: statementRow.id,
+            claimantKey: liability.claimantKey,
+            amountAtomic: liability.amountAtomic,
+            receiptIdsJson: receiptIds,
+          })
+          .onConflictDoNothing({
+            target: [
+              claimantLiabilities.sourceEpochId,
+              claimantLiabilities.claimantKey,
+            ],
+          });
+
+        const [persistedLiability] = await tx
+          .select()
+          .from(claimantLiabilities)
+          .where(
+            and(
+              eq(claimantLiabilities.sourceEpochId, params.epochId),
+              eq(claimantLiabilities.claimantKey, liability.claimantKey)
+            )
+          )
+          .limit(1);
+        if (
+          !persistedLiability ||
+          persistedLiability.nodeId !== epochRow.nodeId ||
+          persistedLiability.scopeId !== epochRow.scopeId ||
+          persistedLiability.statementId !== statementRow.id ||
+          persistedLiability.amountAtomic !== liability.amountAtomic ||
+          JSON.stringify(persistedLiability.receiptIdsJson) !==
+            JSON.stringify(receiptIds)
+        ) {
+          throw new Error(
+            `finalizeEpochAtomic: claimant liability divergence for ${liability.claimantKey}`
+          );
+        }
       }
 
       // 2d/3b. Upsert signature — ON CONFLICT (statement_id, signer_wallet) DO NOTHING
