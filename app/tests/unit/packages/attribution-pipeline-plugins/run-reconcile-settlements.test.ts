@@ -214,4 +214,62 @@ describe("runReconcileSettlements", () => {
       cumulativeTotal: 12n,
     });
   });
+
+  it("preserves prior receipt lineage when revision 2 adds to the same account", async () => {
+    const append = vi.fn(async (params) => ({
+      status: "appended" as const,
+      revision: { id: "revision-2", sequence: 2n, ...params },
+    }));
+    const store = {
+      listPendingClaimantLiabilities: vi.fn().mockResolvedValue([
+        liability({
+          id: "liability-2",
+          amountAtomic: 7n,
+          receiptIds: ["receipt-current"],
+        }),
+      ]),
+      getLatestSettlementRevision: vi.fn().mockResolvedValue({
+        id: "revision-1",
+        sequence: 1n,
+      }),
+      getSettlementLeavesForRevision: vi.fn().mockResolvedValue([
+        {
+          revisionId: "revision-1",
+          index: 0,
+          claimantKey: "identity:github:42",
+          account: WALLET,
+          cumulativeAmount: 5n,
+          deltaAmount: 5n,
+          receiptIds: ["receipt-prior"],
+          leafHash: "0x00",
+          proof: [],
+        },
+      ]),
+      appendSettlementRevisionAtomic: append,
+    };
+
+    const result = await runReconcileSettlements(
+      deps(store, resolver(WALLET)),
+      {
+        kind: "identity_binding",
+        eventId: "event-2",
+      }
+    );
+
+    expect(result).toMatchObject({
+      status: "appended",
+      sequence: 2n,
+      mintDelta: 7n,
+      cumulativeTotal: 12n,
+      leafCount: 1,
+    });
+    expect(append.mock.calls[0]?.[0].leaves).toEqual([
+      expect.objectContaining({
+        account: WALLET,
+        cumulativeAmount: 12n,
+        deltaAmount: 7n,
+        receiptIds: ["receipt-current", "receipt-prior"],
+      }),
+    ]);
+  });
 });

@@ -214,6 +214,9 @@ export async function runReconcileSettlements(
         receiptIds: liability.receiptIds,
       })),
     });
+    const priorLeafByAccount = new Map(
+      previousLeaves.map((leaf) => [leaf.account.toLowerCase(), leaf])
+    );
 
     const append = await settlementStore.appendSettlementRevisionAtomic({
       nodeId,
@@ -229,16 +232,27 @@ export async function runReconcileSettlements(
       cumulativeTotal: distribution.cumulativeTotal,
       triggerKind: trigger.kind,
       triggerRef: triggerRef(trigger),
-      leaves: distribution.leaves.map((leaf) => ({
-        index: leaf.index,
-        claimantKey: leaf.claimantKey,
-        account: leaf.account,
-        cumulativeAmount: leaf.cumulativeAmount,
-        deltaAmount: leaf.deltaAmount,
-        receiptIds: leaf.receiptIds,
-        leafHash: leaf.leafHash,
-        proof: leaf.proof,
-      })),
+      leaves: distribution.leaves.map((leaf) => {
+        const priorLeaf = priorLeafByAccount.get(leaf.account.toLowerCase());
+        return {
+          index: leaf.index,
+          claimantKey:
+            leaf.claimantKey.startsWith("account:") && priorLeaf
+              ? priorLeaf.claimantKey
+              : leaf.claimantKey,
+          account: leaf.account,
+          cumulativeAmount: leaf.cumulativeAmount,
+          deltaAmount: leaf.deltaAmount,
+          // Receipt IDs are non-Merkle lineage metadata, but each append persists a
+          // COMPLETE cumulative snapshot. Preserve prior evidence while adding the
+          // newly settled liability receipts for this account.
+          receiptIds: [
+            ...new Set([...(priorLeaf?.receiptIds ?? []), ...leaf.receiptIds]),
+          ].sort(),
+          leafHash: leaf.leafHash,
+          proof: leaf.proof,
+        };
+      }),
       resolutions: resolvable.map(({ liability, userId, wallet }) => ({
         liabilityId: liability.id,
         resolvedUserId: userId,
