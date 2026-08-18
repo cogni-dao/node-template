@@ -16,7 +16,7 @@
  * - USER_PROJECTIONS_RECOMPUTABLE: upsertUserProjections updates projected_units/receipt_count and never stores signed final units.
  * - POOL_LOCKED_AT_REVIEW: insertPoolComponent rejects inserts when epoch status != 'open'. Idempotent via ON CONFLICT DO NOTHING + SELECT fallback; returns { component, created }.
  * - CONFIG_LOCKED_AT_REVIEW: closeIngestion pins allocationAlgoRef + weightConfigHash.
- * - EVALUATION_FINAL_ATOMIC: closeIngestionWithEvaluations inserts locked evaluations + sets artifacts_hash + transitions epoch in one transaction.
+ * - REVIEW_SNAPSHOT_ATOMIC: closeIngestionWithEvaluations locks claimant rows, inserts locked evaluations, sets artifacts_hash, and transitions epoch in one transaction. Re-posting an unsigned review repairs a legacy partial snapshot without changing its pinned config.
  * - EPOCH_CLOSE_ON_TRANSITION: transitionEpochForWindow closes stale open epoch + creates new epoch in one DB transaction.
  * - STATEMENT_LINES_BOUNDARY_CLONE: toStatementLinesJson converts readonly statement lines to mutable Drizzle-compatible JSONB at the adapter boundary.
  * Side-effects: IO (database operations)
@@ -685,19 +685,35 @@ export class DrizzleAttributionAdapter implements AttributionStore {
         .where(
           and(eq(epochs.id, params.epochId), eq(epochs.scopeId, this.scopeId))
         )
-        .limit(1);
+        .limit(1)
+        .for("update");
       if (!epochRows[0]) {
         throw new EpochNotFoundError(params.epochId.toString());
       }
-      if (epochRows[0].status !== "open") {
-        // Idempotent: already in review/finalized → return as-is
-        if (
-          epochRows[0].status === "review" ||
-          epochRows[0].status === "finalized"
-        ) {
-          return toEpoch(epochRows[0]);
-        }
+      const current = epochRows[0];
+      if (current.status === "finalized") {
+        // A signed/finalized snapshot is immutable; never repair it in place.
+        return toEpoch(current);
+      }
+      if (current.status !== "open" && current.status !== "review") {
         throw new EpochNotOpenError(params.epochId.toString());
+      }
+
+      if (current.status === "review") {
+        // REVIEW_REPAIR_PRESERVES_AUTHORITY: an idempotent repair may fill the
+        // claimant/evaluation snapshot only when its already-pinned authority
+        // exactly matches this request. Never silently re-pin an epoch.
+        if (
+          current.approverSetHash !== params.approverSetHash ||
+          current.allocationAlgoRef !== params.allocationAlgoRef ||
+          current.weightConfigHash !== params.weightConfigHash ||
+          (current.artifactsHash !== null &&
+            current.artifactsHash !== params.artifactsHash)
+        ) {
+          throw new Error(
+            `closeIngestionWithEvaluations: review snapshot mismatch for epoch ${params.epochId.toString()}`
+          );
+        }
       }
 
       // 2. Insert locked evaluations
@@ -723,7 +739,68 @@ export class DrizzleAttributionAdapter implements AttributionStore {
           });
       }
 
-      // 3. Transition epoch open → review with config pins + artifacts_hash
+      // 3. Freeze the claimant snapshot in the SAME transaction as review.
+      // The former manual-review path only flipped the epoch status, leaving
+      // correct claimant rows in draft and making sign-data fail later.
+      await tx
+        .update(epochReceiptClaimants)
+        .set({ status: "locked" })
+        .where(
+          and(
+            eq(epochReceiptClaimants.epochId, params.epochId),
+            eq(epochReceiptClaimants.status, "draft")
+          )
+        );
+
+      // Fail before review if any included selection lacks a locked claimant.
+      // explodeToClaimants remains fail-closed; this is the lifecycle gate that
+      // prevents the invalid state from being created in the first place.
+      const missingClaimants = await tx
+        .select({ receiptId: epochSelection.receiptId })
+        .from(epochSelection)
+        .leftJoin(
+          epochReceiptClaimants,
+          and(
+            eq(epochReceiptClaimants.epochId, epochSelection.epochId),
+            eq(epochReceiptClaimants.receiptId, epochSelection.receiptId),
+            eq(epochReceiptClaimants.status, "locked")
+          )
+        )
+        .where(
+          and(
+            eq(epochSelection.epochId, params.epochId),
+            eq(epochSelection.included, true),
+            isNull(epochReceiptClaimants.id)
+          )
+        )
+        .limit(1);
+      if (missingClaimants[0]) {
+        throw new Error(
+          `closeIngestionWithEvaluations: included receipt "${missingClaimants[0].receiptId}" has no claimant snapshot`
+        );
+      }
+
+      if (current.status === "review") {
+        // Existing unsigned reviews may have been created by the old partial
+        // close path. Persist only the missing artifacts hash; pins stay frozen.
+        if (current.artifactsHash === null) {
+          const [repaired] = await tx
+            .update(epochs)
+            .set({ artifactsHash: params.artifactsHash })
+            .where(
+              and(
+                eq(epochs.id, params.epochId),
+                eq(epochs.scopeId, this.scopeId),
+                eq(epochs.status, "review")
+              )
+            )
+            .returning();
+          if (repaired) return toEpoch(repaired);
+        }
+        return toEpoch(current);
+      }
+
+      // 4. Transition epoch open → review with config pins + artifacts_hash
       const [updated] = await tx
         .update(epochs)
         .set({
@@ -810,6 +887,47 @@ export class DrizzleAttributionAdapter implements AttributionStore {
               epochEvaluations.status,
             ],
           });
+      }
+
+      // Freeze claimant drafts inside the same transaction as the stale epoch
+      // transition. The activity layer formerly did this in a separate call,
+      // leaving a crash window between claimant lock and epoch close.
+      await tx
+        .update(epochReceiptClaimants)
+        .set({ status: "locked" })
+        .where(
+          and(
+            eq(
+              epochReceiptClaimants.epochId,
+              params.closeParams.epochId
+            ),
+            eq(epochReceiptClaimants.status, "draft")
+          )
+        );
+
+      const missingClaimants = await tx
+        .select({ receiptId: epochSelection.receiptId })
+        .from(epochSelection)
+        .leftJoin(
+          epochReceiptClaimants,
+          and(
+            eq(epochReceiptClaimants.epochId, epochSelection.epochId),
+            eq(epochReceiptClaimants.receiptId, epochSelection.receiptId),
+            eq(epochReceiptClaimants.status, "locked")
+          )
+        )
+        .where(
+          and(
+            eq(epochSelection.epochId, params.closeParams.epochId),
+            eq(epochSelection.included, true),
+            isNull(epochReceiptClaimants.id)
+          )
+        )
+        .limit(1);
+      if (missingClaimants[0]) {
+        throw new Error(
+          `transitionEpochForWindow: included receipt "${missingClaimants[0].receiptId}" has no claimant snapshot`
+        );
       }
 
       // Transition stale epoch open → review

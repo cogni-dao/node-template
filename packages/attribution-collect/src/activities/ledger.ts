@@ -977,24 +977,14 @@ export function createAttributionActivities(deps: AttributionActivityDeps) {
    * Atomic epoch transition: close stale open epoch (if any) + get-or-create epoch for the given window.
    * Single DB transaction — no race window between close and create.
    * Computes config hashes internally (crypto not safe in Temporal workflow code).
-   * Locks claimant rows for stale epoch before transition.
+   * Claimant locking is part of the store's atomic transition transaction.
    */
   async function transitionEpochForWindow(
     input: TransitionEpochForWindowInput
   ): Promise<TransitionEpochForWindowOutput> {
     const { closeParams: inputClose } = input;
 
-    // Lock claimants for stale epoch before the atomic transition
     const staleEpochId = BigInt(inputClose.staleEpochId);
-    const lockedCount =
-      await attributionStore.lockClaimantsForEpoch(staleEpochId);
-    logger.info(
-      {
-        staleEpochId: inputClose.staleEpochId,
-        lockedClaimants: lockedCount,
-      },
-      "Claimant rows locked for stale epoch"
-    );
 
     // Compute hashes from raw values (crypto happens here, not in workflow)
     validateWeightConfig(inputClose.staleWeightConfig);

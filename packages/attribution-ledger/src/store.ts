@@ -654,9 +654,10 @@ export interface EpochWriter {
   /** Transition epoch review → finalized. Sets poolTotalCredits and closedAt. */
   finalizeEpoch(epochId: bigint, poolTotal: bigint): Promise<AttributionEpoch>;
 
-  /** Transition epoch open → review with locked evaluations in a single transaction (EVALUATION_FINAL_ATOMIC).
-   *  Inserts locked evaluations + sets artifacts_hash + pins approverSetHash, allocationAlgoRef, weightConfigHash.
-   *  Rejects if epoch is not open. */
+  /** Seal the review snapshot in one transaction (REVIEW_SNAPSHOT_ATOMIC).
+   *  Locks draft claimants, inserts locked evaluations, sets artifacts_hash, and pins
+   *  approverSetHash/allocationAlgoRef/weightConfigHash while transitioning open → review.
+   *  An unsigned legacy review may be repaired only when its pinned authority matches. */
   closeIngestionWithEvaluations(
     params: CloseIngestionWithEvaluationsParams
   ): Promise<AttributionEpoch>;
