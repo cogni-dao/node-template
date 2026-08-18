@@ -1433,6 +1433,17 @@ describe("DrizzleAttributionAdapter (Component)", () => {
         }),
       ]);
 
+      await adapter.upsertDraftClaimants({
+        nodeId: TEST_NODE_ID,
+        epochId: closeEpochId,
+        receiptId: `eval-close-receipt-${closeEpochId}-1`,
+        resolverRef: "cogni.default-author.v0",
+        algoRef: "default-author-v0",
+        inputsHash: "eval-close-claimant-hash",
+        claimantKeys: [`user:${actor.user.id}`],
+        createdBy: "system",
+      });
+
       await adapter.insertUserProjections([
         makeUserProjection({
           nodeId: TEST_NODE_ID,
@@ -1491,6 +1502,16 @@ describe("DrizzleAttributionAdapter (Component)", () => {
       expect(all).toHaveLength(2);
       const statuses = all.map((e) => e.status).sort();
       expect(statuses).toEqual(["draft", "locked"]);
+
+      const lockedClaimants =
+        await adapter.loadLockedClaimants(closeEpochId);
+      expect(lockedClaimants).toHaveLength(1);
+      expect(lockedClaimants[0]?.receiptId).toBe(
+        `eval-close-receipt-${closeEpochId}-1`
+      );
+      expect(lockedClaimants[0]?.claimantKeys).toEqual([
+        `user:${actor.user.id}`,
+      ]);
     });
 
     it("idempotent on already-reviewed epoch", async () => {
@@ -1507,6 +1528,140 @@ describe("DrizzleAttributionAdapter (Component)", () => {
       });
 
       expect(result.status).toBe("review");
+    });
+
+    it("repairs draft claimants on an idempotent close of a legacy review epoch", async () => {
+      const legacyEpoch = await adapter.createEpoch({
+        nodeId: TEST_NODE_ID,
+        scopeId: TEST_SCOPE_ID,
+        ...epochWindow(44),
+        weightConfig: TEST_WEIGHT_CONFIG,
+      });
+      const receiptId = `legacy-review-receipt-${legacyEpoch.id}`;
+      const { periodStart, periodEnd } = epochWindow(44);
+      const eventTime = new Date(
+        (periodStart.getTime() + periodEnd.getTime()) / 2
+      );
+      await adapter.insertIngestionReceipts([
+        makeIngestionReceipt({
+          receiptId,
+          nodeId: TEST_NODE_ID,
+          eventTime,
+          retrievedAt: eventTime,
+        }),
+      ]);
+      await adapter.insertSelectionDoNothing([
+        makeSelectionAuto({
+          nodeId: TEST_NODE_ID,
+          epochId: legacyEpoch.id,
+          receiptId,
+          userId: actor.user.id,
+          included: true,
+        }),
+      ]);
+      await adapter.upsertDraftClaimants({
+        nodeId: TEST_NODE_ID,
+        epochId: legacyEpoch.id,
+        receiptId,
+        resolverRef: "cogni.default-author.v0",
+        algoRef: "default-author-v0",
+        inputsHash: "legacy-review-claimant-hash",
+        claimantKeys: [`user:${actor.user.id}`],
+        createdBy: "system",
+      });
+
+      await adapter.closeIngestion(
+        legacyEpoch.id,
+        [],
+        "legacy-review-approver-hash",
+        "weight-sum-v0",
+        "legacy-review-weight-hash"
+      );
+      expect(await adapter.loadLockedClaimants(legacyEpoch.id)).toHaveLength(0);
+
+      const repaired = await adapter.closeIngestionWithEvaluations({
+        epochId: legacyEpoch.id,
+        approvers: [],
+        approverSetHash: "legacy-review-approver-hash",
+        allocationAlgoRef: "weight-sum-v0",
+        weightConfigHash: "legacy-review-weight-hash",
+        evaluations: [],
+        artifactsHash: "legacy-review-artifacts-hash",
+      });
+
+      expect(repaired.status).toBe("review");
+      expect(repaired.artifactsHash).toBe("legacy-review-artifacts-hash");
+      const locked = await adapter.loadLockedClaimants(legacyEpoch.id);
+      expect(locked).toHaveLength(1);
+      expect(locked[0]?.receiptId).toBe(receiptId);
+    });
+
+    it("rolls back when an included receipt has no claimant snapshot", async () => {
+      const incompleteEpoch = await adapter.createEpoch({
+        nodeId: TEST_NODE_ID,
+        scopeId: TEST_SCOPE_ID,
+        ...epochWindow(45),
+        weightConfig: TEST_WEIGHT_CONFIG,
+      });
+      const receiptId = `missing-claimant-receipt-${incompleteEpoch.id}`;
+      const { periodStart, periodEnd } = epochWindow(45);
+      const eventTime = new Date(
+        (periodStart.getTime() + periodEnd.getTime()) / 2
+      );
+      await adapter.insertIngestionReceipts([
+        makeIngestionReceipt({
+          receiptId,
+          nodeId: TEST_NODE_ID,
+          eventTime,
+          retrievedAt: eventTime,
+        }),
+      ]);
+      await adapter.insertSelectionDoNothing([
+        makeSelectionAuto({
+          nodeId: TEST_NODE_ID,
+          epochId: incompleteEpoch.id,
+          receiptId,
+          userId: actor.user.id,
+          included: true,
+        }),
+      ]);
+      const closeParams = {
+        epochId: incompleteEpoch.id,
+        approvers: [],
+        approverSetHash: "missing-claimant-approver-hash",
+        allocationAlgoRef: "weight-sum-v0",
+        weightConfigHash: "missing-claimant-weight-hash",
+        evaluations: [
+          makeEvaluation({ epochId: incompleteEpoch.id, status: "locked" }),
+        ],
+        artifactsHash: "missing-claimant-artifacts-hash",
+      };
+
+      await expect(
+        adapter.closeIngestionWithEvaluations(closeParams)
+      ).rejects.toThrow(
+        `included receipt "${receiptId}" has no claimant snapshot`
+      );
+      expect((await adapter.getEpoch(incompleteEpoch.id))?.status).toBe("open");
+      expect(
+        await adapter.getEvaluation(
+          incompleteEpoch.id,
+          evalRef,
+          "locked"
+        )
+      ).toBeNull();
+
+      await adapter.upsertDraftClaimants({
+        nodeId: TEST_NODE_ID,
+        epochId: incompleteEpoch.id,
+        receiptId,
+        resolverRef: "cogni.default-author.v0",
+        algoRef: "default-author-v0",
+        inputsHash: "missing-claimant-repair-hash",
+        claimantKeys: [`user:${actor.user.id}`],
+        createdBy: "system",
+      });
+      await adapter.closeIngestionWithEvaluations(closeParams);
     });
 
     it("throws EpochNotFoundError for wrong scope", async () => {
