@@ -39,7 +39,6 @@ import {
   DISTRIBUTION_PUBLISH_CONDITION_BYTECODE,
 } from "@cogni/cogni-contracts";
 import { useCallback, useEffect, useState } from "react";
-import { encodeFunctionData } from "viem";
 import {
   useAccount,
   useDeployContract,
@@ -48,13 +47,9 @@ import {
 } from "wagmi";
 
 import {
-  DAO_ABI,
-  EXECUTE_PERMISSION_ID,
+  buildPublishAuthorizationProposalArgs,
   TOKEN_VOTING_ABI,
 } from "@/features/governance/lib/proposal-abis";
-
-/** Aragon IMajorityVoting.VoteOption: None=0, Abstain=1, Yes=2, No=3. */
-const VOTE_OPTION_YES = 2;
 
 /** Coarse phase of the deploy-condition → grant-proposal pipeline. */
 export type AuthorizePublishingPhase =
@@ -149,33 +144,15 @@ export function useAuthorizePublishing(
       return;
     }
     setPhase("granting");
-    const revokeData = encodeFunctionData({
-      abi: DAO_ABI,
-      functionName: "revoke",
-      args: [dao, wallet, EXECUTE_PERMISSION_ID],
-    });
-    const grantData = encodeFunctionData({
-      abi: DAO_ABI,
-      functionName: "grantWithCondition",
-      args: [dao, wallet, EXECUTE_PERMISSION_ID, conditionAddress],
-    });
-    const permissionActions = [
-      { to: dao, value: 0n, data: revokeData },
-      { to: dao, value: 0n, data: grantData },
-    ] as const;
     writeContract({
       abi: TOKEN_VOTING_ABI,
       address: plugin,
       functionName: "createProposal",
-      args: [
-        "0x", // _metadata
-        permissionActions, // _actions: revoke legacy/unset, then grant CAS V2
-        0n, // _allowFailureMap
-        0n, // _startDate (0 ⇒ plugin derives)
-        0n, // _endDate (0 ⇒ plugin derives; EarlyExecution bypasses minDuration)
-        VOTE_OPTION_YES, // _voteOption
-        true, // _tryEarlyExecution
-      ],
+      args: buildPublishAuthorizationProposalArgs(
+        dao,
+        wallet,
+        conditionAddress
+      ),
       account: wallet,
       // EXPLICIT GAS — do NOT let the wallet gas-estimate this tx. createProposal with
       // _tryEarlyExecution executes the grant in the SAME tx (a nested DAO.execute); many

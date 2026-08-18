@@ -36,8 +36,6 @@ import {
   buildPublishProbeData,
   classifyPublishPermission,
   type PublishPermissionState,
-} from "@/features/governance/lib/distribution-publish-cas";
-import {
   DAO_ABI,
   EXECUTE_PERMISSION_ID,
 } from "@/features/governance/lib/proposal-abis";
@@ -182,19 +180,30 @@ export function useHasExecutePermission(params: {
     refetch: refetchRoot,
   } = useReadContract({
     abi: DISTRIBUTOR_ROOT_ABI,
-    address: distributorAddress,
+    address: distributorAddress ?? undefined,
     functionName: "merkleRoot",
     chainId,
     query: { enabled },
   });
-  const rootReady = typeof liveRoot === "string";
+  const expectedRoot = typeof liveRoot === "string" ? liveRoot : undefined;
+  const rootReady = expectedRoot !== undefined;
   const validProbeData =
-    tokenAddress && distributorAddress && rootReady
-      ? buildPublishProbeData(tokenAddress, distributorAddress, liveRoot, 0n)
+    tokenAddress && distributorAddress && expectedRoot
+      ? buildPublishProbeData(
+          tokenAddress,
+          distributorAddress,
+          expectedRoot,
+          0n
+        )
       : "0x";
   const invalidFailureProbeData =
-    tokenAddress && distributorAddress && rootReady
-      ? buildPublishProbeData(tokenAddress, distributorAddress, liveRoot, 1n)
+    tokenAddress && distributorAddress && expectedRoot
+      ? buildPublishProbeData(
+          tokenAddress,
+          distributorAddress,
+          expectedRoot,
+          1n
+        )
       : "0x";
 
   const validProbe = useReadContract({

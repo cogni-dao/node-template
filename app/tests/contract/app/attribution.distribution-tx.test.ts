@@ -12,13 +12,26 @@
  */
 
 import { NextRequest } from "next/server";
+import { decodeFunctionData } from "viem";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  buildPublishAuthorizationProposalArgs,
+  buildPublishProbeData,
+  classifyPublishPermission,
+  DAO_ABI,
+  EXECUTE_PERMISSION_ID,
+} from "@/features/governance/lib/proposal-abis";
 
 const NODE_ID = "00000000-0000-4000-a000-000000000001";
 const LIVE_ROOT =
   "0x1100000000000000000000000000000000000000000000000000000000000000";
 const TARGET_ROOT =
   "0x3300000000000000000000000000000000000000000000000000000000000000";
+const TOKEN = "0x1111111111111111111111111111111111111111";
+const DISTRIBUTOR = "0x2222222222222222222222222222222222222222";
+const DAO = "0x3333333333333333333333333333333333333333";
+const WALLET = "0x4444444444444444444444444444444444444444";
+const CONDITION = "0x5555555555555555555555555555555555555555";
 
 const { store, readLiveRoot } = vi.hoisted(() => ({
   store: {
@@ -166,5 +179,48 @@ describe("GET epoch distribution-tx", () => {
       error: "live_root_unknown",
       merkleRoot: LIVE_ROOT,
     });
+  });
+});
+
+describe("publish CAS calldata", () => {
+  it("encodes the live root and distinguishes strict V2 from legacy authority", () => {
+    const validData = buildPublishProbeData(TOKEN, DISTRIBUTOR, LIVE_ROOT, 0n);
+    const invalidFailureData = buildPublishProbeData(
+      TOKEN,
+      DISTRIBUTOR,
+      LIVE_ROOT,
+      1n
+    );
+    const valid = decodeFunctionData({ abi: DAO_ABI, data: validData });
+    const invalidFailure = decodeFunctionData({
+      abi: DAO_ABI,
+      data: invalidFailureData,
+    });
+
+    expect(valid.functionName).toBe("execute");
+    expect(valid.args?.[0]).toBe(LIVE_ROOT);
+    expect(valid.args?.[2]).toBe(0n);
+    expect(invalidFailure.args?.[2]).toBe(1n);
+    expect(classifyPublishPermission(true, false)).toBe("cas_v2");
+    expect(classifyPublishPermission(true, true)).toBe("legacy_or_unscoped");
+    expect(classifyPublishPermission(false, false)).toBe("none");
+  });
+
+  it("migrates authority atomically in revoke then grant order", () => {
+    const proposalArgs = buildPublishAuthorizationProposalArgs(
+      DAO,
+      WALLET,
+      CONDITION
+    );
+    const actions = proposalArgs[1];
+    const revoke = decodeFunctionData({ abi: DAO_ABI, data: actions[0].data });
+    const grant = decodeFunctionData({ abi: DAO_ABI, data: actions[1].data });
+
+    expect(proposalArgs[2]).toBe(0n);
+    expect(actions).toHaveLength(2);
+    expect(revoke.functionName).toBe("revoke");
+    expect(revoke.args).toEqual([DAO, WALLET, EXECUTE_PERMISSION_ID]);
+    expect(grant.functionName).toBe("grantWithCondition");
+    expect(grant.args).toEqual([DAO, WALLET, EXECUTE_PERMISSION_ID, CONDITION]);
   });
 });

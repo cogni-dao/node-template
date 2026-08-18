@@ -3,15 +3,15 @@
 
 /**
  * Module: `@features/governance/lib/proposal-abis`
- * Purpose: Contract ABIs for DAO proposal creation (CogniSignal + Aragon TokenVoting).
- * Scope: ABI definitions only — no contract calls, no state.
+ * Purpose: Contract ABIs and pure calldata builders for DAO proposal execution.
+ * Scope: ABI definitions and deterministic encoding only — no contract calls, no state.
  * Invariants: ABIs must match deployed contract versions.
  * Side-effects: none
  * Links: cogni-proposal-launcher/src/lib/abis.ts
  * @public
  */
 
-import { keccak256, toBytes } from "viem";
+import { encodeFunctionData, keccak256, toBytes } from "viem";
 
 /**
  * Aragon OSx permission id for the DAO's `execute` entrypoint:
@@ -152,3 +152,111 @@ export const DAO_ABI = [
     ],
   },
 ] as const;
+
+const MINT_ABI = [
+  {
+    type: "function",
+    name: "mint",
+    stateMutability: "nonpayable",
+    inputs: [{ type: "address" }, { type: "uint256" }],
+    outputs: [],
+  },
+] as const;
+const SET_MERKLE_ROOT_ABI = [
+  {
+    type: "function",
+    name: "setMerkleRoot",
+    stateMutability: "nonpayable",
+    inputs: [{ type: "bytes32" }],
+    outputs: [],
+  },
+] as const;
+const ZERO_ROOT =
+  "0x0000000000000000000000000000000000000000000000000000000000000000" as const;
+const PROBE_NEXT_ROOT =
+  "0x0000000000000000000000000000000000000000000000000000000000000001" as const;
+
+/** Build a representative strict publish payload for DAO.hasPermission. */
+export function buildPublishProbeData(
+  token: `0x${string}`,
+  distributor: `0x${string}`,
+  expectedRoot: `0x${string}`,
+  allowFailureMap: bigint
+): `0x${string}` {
+  const nextRoot =
+    expectedRoot.toLowerCase() === PROBE_NEXT_ROOT.toLowerCase()
+      ? ZERO_ROOT
+      : PROBE_NEXT_ROOT;
+  const mintData = encodeFunctionData({
+    abi: MINT_ABI,
+    functionName: "mint",
+    args: [distributor, 0n],
+  });
+  const rootData = encodeFunctionData({
+    abi: SET_MERKLE_ROOT_ABI,
+    functionName: "setMerkleRoot",
+    args: [nextRoot],
+  });
+  return encodeFunctionData({
+    abi: DAO_ABI,
+    functionName: "execute",
+    args: [
+      expectedRoot,
+      [
+        { to: token, value: 0n, data: mintData },
+        { to: distributor, value: 0n, data: rootData },
+      ],
+      allowFailureMap,
+    ],
+  });
+}
+
+export type PublishPermissionState =
+  | "cas_v2"
+  | "legacy_or_unscoped"
+  | "none"
+  | "loading";
+
+/** Paired probes distinguish strict V2 from legacy or unconditional authority. */
+export function classifyPublishPermission(
+  validProbe: boolean | undefined,
+  invalidFailureProbe: boolean | undefined
+): PublishPermissionState {
+  if (validProbe === undefined || invalidFailureProbe === undefined) {
+    return "loading";
+  }
+  if (validProbe && !invalidFailureProbe) return "cas_v2";
+  if (validProbe && invalidFailureProbe) return "legacy_or_unscoped";
+  return "none";
+}
+
+/** Build the atomic migration proposal: revoke legacy/unset authority, then grant CAS V2. */
+export function buildPublishAuthorizationProposalArgs(
+  dao: `0x${string}`,
+  wallet: `0x${string}`,
+  condition: `0x${string}`
+) {
+  const revokeData = encodeFunctionData({
+    abi: DAO_ABI,
+    functionName: "revoke",
+    args: [dao, wallet, EXECUTE_PERMISSION_ID],
+  });
+  const grantData = encodeFunctionData({
+    abi: DAO_ABI,
+    functionName: "grantWithCondition",
+    args: [dao, wallet, EXECUTE_PERMISSION_ID, condition],
+  });
+
+  return [
+    "0x", // _metadata
+    [
+      { to: dao, value: 0n, data: revokeData },
+      { to: dao, value: 0n, data: grantData },
+    ],
+    0n, // _allowFailureMap: revoke + grant are atomic
+    0n, // _startDate (0 ⇒ plugin derives)
+    0n, // _endDate (0 ⇒ plugin derives)
+    2, // _voteOption: IMajorityVoting.VoteOption.Yes
+    true, // _tryEarlyExecution
+  ] as const;
+}
