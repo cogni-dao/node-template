@@ -7,8 +7,8 @@
  *   - `useExecuteDistribution` fetches the publish payload for a finalized epoch — the mint delta,
  *     new merkle root, distributor/token/DAO/plugin addresses, and chain — so the owner's wallet can
  *     build the mint + setMerkleRoot actions. Read-only: the write is the caller's wagmi hook.
- *   - `useHasExecutePermission` uses paired permission probes to distinguish CAS V2 authority from
- *     the legacy shape-only condition. Only V2 may expose publish; legacy must be revoked/regranted.
+ *   - `useHasExecutePermission` uses paired permission probes so only strict compare-and-swap
+ *     authority may expose publish; every other permission shape fails closed.
  * Scope: Client-side. SINGLE-NODE — the payload fetch hits THIS node's authed epoch route
  *   (`/api/v1/attribution/epochs/[id]/distribution-tx`) same-origin with the session cookie; there is
  *   no `nodes/[id]` gateway segment. The permission read is a pure on-chain view call. Neither
@@ -20,8 +20,8 @@
  *   - CALMLY_NULL_ON_NOT_READY: 404 (epoch) and 409 (not finalized / no manifest / no distributor)
  *     resolve to a typed not-ready reason rather than throwing, so the panel can render a quiet
  *     "not ready yet" state.
- *   - PERMISSION_GATES_UI: CAS V2 returns valid=true/allowFailure=true? false; a legacy condition
- *     returns true to both probes and therefore fails closed until reauthorization.
+ *   - PERMISSION_GATES_UI: strict CAS returns valid=true/allowFailure=true? false; every other
+ *     permission shape fails closed and sends setup back to the canonical operator surface.
  * Side-effects: IO (HTTP GET to the authed distribution-tx route; on-chain hasPermission read).
  * Links: src/app/api/v1/attribution/epochs/[id]/distribution-tx/route.ts,
  *   src/features/governance/lib/proposal-abis.ts
@@ -241,7 +241,9 @@ export function useHasExecutePermission(params: {
 
   return {
     hasPermission:
-      permissionState === "loading" ? undefined : permissionState === "cas_v2",
+      permissionState === "loading"
+        ? undefined
+        : permissionState === "authorized",
     permissionState,
     isLoading:
       isRootLoading || validProbe.isLoading || invalidFailureProbe.isLoading,

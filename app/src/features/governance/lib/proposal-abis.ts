@@ -40,48 +40,9 @@ export const COGNI_SIGNAL_ABI = [
   },
 ] as const;
 
-export const TOKEN_VOTING_ABI = [
-  {
-    type: "function",
-    name: "createProposal",
-    inputs: [
-      { name: "_metadata", type: "bytes", internalType: "bytes" },
-      {
-        name: "_actions",
-        type: "tuple[]",
-        internalType: "struct Action[]",
-        components: [
-          { name: "to", type: "address", internalType: "address" },
-          { name: "value", type: "uint256", internalType: "uint256" },
-          { name: "data", type: "bytes", internalType: "bytes" },
-        ],
-      },
-      {
-        name: "_allowFailureMap",
-        type: "uint256",
-        internalType: "uint256",
-      },
-      { name: "_startDate", type: "uint64", internalType: "uint64" },
-      { name: "_endDate", type: "uint64", internalType: "uint64" },
-      {
-        name: "_voteOption",
-        type: "uint8",
-        internalType: "enum IMajorityVoting.VoteOption",
-      },
-      { name: "_tryEarlyExecution", type: "bool", internalType: "bool" },
-    ],
-    outputs: [{ name: "proposalId", type: "uint256", internalType: "uint256" }],
-    stateMutability: "nonpayable",
-  },
-] as const;
-
 /**
  * Aragon OSx DAO minimal ABI — the functions the publish surface needs:
- *   - `hasPermission`      (view) — gate the two-state UI on whether the wallet is authorized.
- *   - `grantWithCondition` (nonpayable) — the ONE-TIME SCOPED authorize action (wrapped in a
- *     createProposal so the DAO grants EXECUTE_PERMISSION on itself to the executor, bound to a
- *     DistributionPublishCondition so the grant only permits the publish action set).
- *   - `revoke`             (nonpayable) — removes a legacy shape-only grant before V2 regrant.
+ *   - `hasPermission` (view) — gate the two-state UI on whether the wallet has strict CAS authority.
  *   - `execute`            (nonpayable) — the PER-EPOCH direct publish, callable once the wallet
  *     holds EXECUTE_PERMISSION; runs [mint, setMerkleRoot] atomically as msg.sender=DAO.
  * Source: Aragon OSx v1.3 `DAO.sol` (IDAO). Kept minimal — reads/writes only what publish uses.
@@ -98,35 +59,6 @@ export const DAO_ABI = [
       { name: "_data", type: "bytes", internalType: "bytes" },
     ],
     outputs: [{ name: "", type: "bool", internalType: "bool" }],
-  },
-  {
-    type: "function",
-    name: "revoke",
-    stateMutability: "nonpayable",
-    inputs: [
-      { name: "_where", type: "address", internalType: "address" },
-      { name: "_who", type: "address", internalType: "address" },
-      { name: "_permissionId", type: "bytes32", internalType: "bytes32" },
-    ],
-    outputs: [],
-  },
-  {
-    // SCOPED authorize: bind the executor's EXECUTE_PERMISSION to a condition contract so
-    // the grant only permits the publish action set. Executes AS the DAO inside the proposal.
-    type: "function",
-    name: "grantWithCondition",
-    stateMutability: "nonpayable",
-    inputs: [
-      { name: "_where", type: "address", internalType: "address" },
-      { name: "_who", type: "address", internalType: "address" },
-      { name: "_permissionId", type: "bytes32", internalType: "bytes32" },
-      {
-        name: "_condition",
-        type: "address",
-        internalType: "contract IPermissionCondition",
-      },
-    ],
-    outputs: [],
   },
   {
     type: "function",
@@ -211,13 +143,9 @@ export function buildPublishProbeData(
   });
 }
 
-export type PublishPermissionState =
-  | "cas_v2"
-  | "legacy_or_unscoped"
-  | "none"
-  | "loading";
+export type PublishPermissionState = "authorized" | "none" | "loading";
 
-/** Paired probes distinguish strict V2 from legacy or unconditional authority. */
+/** Only strict compare-and-swap authority passes; every other permission shape fails closed. */
 export function classifyPublishPermission(
   validProbe: boolean | undefined,
   invalidFailureProbe: boolean | undefined
@@ -225,38 +153,6 @@ export function classifyPublishPermission(
   if (validProbe === undefined || invalidFailureProbe === undefined) {
     return "loading";
   }
-  if (validProbe && !invalidFailureProbe) return "cas_v2";
-  if (validProbe && invalidFailureProbe) return "legacy_or_unscoped";
+  if (validProbe && !invalidFailureProbe) return "authorized";
   return "none";
-}
-
-/** Build the atomic migration proposal: revoke legacy/unset authority, then grant CAS V2. */
-export function buildPublishAuthorizationProposalArgs(
-  dao: `0x${string}`,
-  wallet: `0x${string}`,
-  condition: `0x${string}`
-) {
-  const revokeData = encodeFunctionData({
-    abi: DAO_ABI,
-    functionName: "revoke",
-    args: [dao, wallet, EXECUTE_PERMISSION_ID],
-  });
-  const grantData = encodeFunctionData({
-    abi: DAO_ABI,
-    functionName: "grantWithCondition",
-    args: [dao, wallet, EXECUTE_PERMISSION_ID, condition],
-  });
-
-  return [
-    "0x", // _metadata
-    [
-      { to: dao, value: 0n, data: revokeData },
-      { to: dao, value: 0n, data: grantData },
-    ],
-    0n, // _allowFailureMap: revoke + grant are atomic
-    0n, // _startDate (0 ⇒ plugin derives)
-    0n, // _endDate (0 ⇒ plugin derives)
-    2, // _voteOption: IMajorityVoting.VoteOption.Yes
-    true, // _tryEarlyExecution
-  ] as const;
 }

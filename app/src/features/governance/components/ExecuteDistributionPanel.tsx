@@ -8,8 +8,8 @@
  * Purpose: Node-owner PER-EPOCH PUBLISH surface on the finalized-epoch governance view. Publishing is
  *   a SINGLE clean action — once the node is set up, each epoch publishes in one transaction with NO
  *   vote: the wallet calls the DAO DIRECTLY, `DAO.execute(callId, [mint, setMerkleRoot], 0)`. There is
- *   no authorize step here — the one-time SCOPED grant ("Authorize publishing") lives in the
- *   distribution SETUP sequence (`DistributionsCard`). This panel only PUBLISHES.
+ *   no authorize step here — the one-time SCOPED grant lives on the canonical Cogni Operator node
+ *   page. This child-node panel only PUBLISHES.
  * Scope: Client component. Fetch the publish payload (useExecuteDistribution) + read hasPermission
  *   (useHasExecutePermission) → wagmi useWriteContract. Connect-wallet + chain(chainId) gating, mint +
  *   root preview, tx hash + explorer link, success state. Does NOT perform DB access; the fold/worker
@@ -19,7 +19,7 @@
  *     one transaction, no vote; labeled as such. Never called a "proposal".
  *   - SETUP_GATES_PUBLISH: read DAO.hasPermission(DAO, wallet, EXECUTE_PERMISSION, <probe>). NOT granted ⇒
  *     do NOT offer authorize here; show a quiet "finish distribution setup" notice. Granted ⇒ the single
- *     "Publish distribution" button. The authorize governance step lives in setup, never here.
+ *     "Publish distribution" button. The authorize governance step lives in Operator setup, never here.
  *   - TWO_ACTIONS_ORDERED: [0] token.mint(distributor, mintDelta) then [1] distributor.setMerkleRoot(root),
  *     both run as msg.sender=DAO (DAO holds MINT + owns the distributor).
  *   - ALL_MATH_BIGINT: mintDelta stays bigint (BigInt(payload.mintDelta)); formatted only at display.
@@ -27,7 +27,6 @@
  *   - PUBLIC_NO_SECRETS: all inputs come from the authed payload route + the connected wallet.
  * Side-effects: blockchain writes (direct DAO.execute tx).
  * Links: src/features/governance/hooks/useExecuteDistribution.ts,
- *   src/features/governance/components/DistributionsCard.client.tsx (the setup/authorize home),
  *   src/features/governance/lib/proposal-abis.ts,
  *   packages/cogni-contracts/src/cumulative-merkle-distributor/abi.ts
  * @public
@@ -76,9 +75,12 @@ const DISTRIBUTOR_MERKLE_ROOT_ABI = parseAbi([
 
 export function ExecuteDistributionPanel({
   epochId,
+  operatorSetupUrl,
 }: {
   /** Finalized epoch id (decimal string). */
   epochId: string;
+  /** Canonical operator-owned one-time setup surface for this node. */
+  operatorSetupUrl: string;
 }) {
   const { payload, notReady, isLoading, error } =
     useExecuteDistribution(epochId);
@@ -102,16 +104,40 @@ export function ExecuteDistributionPanel({
             <AlertDescription>{error.message}</AlertDescription>
           </Alert>
         ) : notReady || !payload ? (
-          <NotReadyNotice reason={notReady} />
+          <NotReadyNotice
+            reason={notReady}
+            operatorSetupUrl={operatorSetupUrl}
+          />
         ) : (
-          <PublishBody payload={payload} />
+          <PublishBody
+            payload={payload}
+            operatorSetupUrl={operatorSetupUrl}
+          />
         )}
       </CardContent>
     </Card>
   );
 }
 
-function NotReadyNotice({ reason }: { reason: string | null }) {
+function NotReadyNotice({
+  reason,
+  operatorSetupUrl,
+}: {
+  reason: string | null;
+  operatorSetupUrl: string;
+}) {
+  if (
+    reason === "distributor_not_recorded" ||
+    reason === "node_missing_governance"
+  ) {
+    return (
+      <OperatorSetupNotice
+        operatorSetupUrl={operatorSetupUrl}
+        body="This node’s DAO distribution contracts are not fully configured in the app yet."
+      />
+    );
+  }
+
   const copy: Record<string, { title: string; body: string }> = {
     epoch_not_finalized: {
       title: "Epoch not finalized yet",
@@ -120,14 +146,6 @@ function NotReadyNotice({ reason }: { reason: string | null }) {
     no_settlement_revision: {
       title: "No distribution built yet",
       body: "No wallet-resolved settlement is ready to publish yet.",
-    },
-    distributor_not_recorded: {
-      title: "Distributor not recorded",
-      body: "Activate distributions so the distributor address is on record, then retry.",
-    },
-    node_missing_governance: {
-      title: "Governance not configured",
-      body: "This node is missing its DAO or voting-plugin address.",
     },
     negative_mint_delta: {
       title: "Nothing to mint",
@@ -167,7 +185,13 @@ function NotReadyNotice({ reason }: { reason: string | null }) {
  * NOT authorized ⇒ a quiet "finish setup" notice (this panel never offers the authorize governance
  * step); authorized ⇒ the per-epoch direct `DAO.execute` publish. Connect-wallet + chain gating live here.
  */
-function PublishBody({ payload }: { payload: ExecuteDistributionPayload }) {
+function PublishBody({
+  payload,
+  operatorSetupUrl,
+}: {
+  payload: ExecuteDistributionPayload;
+  operatorSetupUrl: string;
+}) {
   const { address, isConnected } = useAccount();
   const chainId = useChainId();
   const { switchChain } = useSwitchChain();
@@ -181,11 +205,7 @@ function PublishBody({ payload }: { payload: ExecuteDistributionPayload }) {
 
   // SETUP_GATES_PUBLISH: does the connected wallet already hold scoped EXECUTE_PERMISSION on the
   // DAO? Probed with token + distributor so the scoped condition evaluates a real publish shape.
-  const {
-    hasPermission,
-    permissionState,
-    isLoading: isPermLoading,
-  } = useHasExecutePermission({
+  const { hasPermission, isLoading: isPermLoading } = useHasExecutePermission({
     daoAddress: payload.daoAddress,
     wallet: address,
     tokenAddress: payload.tokenAddress,
@@ -251,8 +271,9 @@ function PublishBody({ payload }: { payload: ExecuteDistributionPayload }) {
           chainName={chainName}
         />
       ) : (
-        <SetupNeededNotice
-          needsCasUpgrade={permissionState === "legacy_or_unscoped"}
+        <OperatorSetupNotice
+          operatorSetupUrl={operatorSetupUrl}
+          body="This wallet does not have the strict on-chain authority required to publish this node’s distributions."
         />
       )}
     </div>
@@ -261,25 +282,27 @@ function PublishBody({ payload }: { payload: ExecuteDistributionPayload }) {
 
 /**
  * Quiet notice shown when the wallet is NOT yet authorized to publish. The authorize governance step
- * is deliberately NOT offered here — it belongs to the one-time distribution SETUP.
+ * is deliberately NOT offered here — it belongs to the operator-owned one-time distribution setup.
  */
-function SetupNeededNotice({ needsCasUpgrade }: { needsCasUpgrade: boolean }) {
+function OperatorSetupNotice({
+  operatorSetupUrl,
+  body,
+}: {
+  operatorSetupUrl: string;
+  body: string;
+}) {
   return (
     <Alert>
-      <AlertTitle>
-        {needsCasUpgrade
-          ? "Upgrade publishing authorization"
-          : "Finish distribution setup first"}
-      </AlertTitle>
+      <AlertTitle>Finish distribution setup in Cogni Operator</AlertTitle>
       <AlertDescription>
-        {needsCasUpgrade
-          ? "The existing authorization lacks the on-chain compare-and-swap guard. Reauthorize publishing before continuing. "
-          : "Your wallet isn’t authorized to publish yet. Complete the one-time Authorize publishing step. "}
+        {body} Complete the one-time setup on the canonical operator node page.{" "}
         <Link
-          href="/gov/system"
+          href={operatorSetupUrl}
+          target="_blank"
+          rel="noreferrer"
           className="hover:text-foreground underline transition-colors"
         >
-          on the governance setup page →
+          Open Cogni Operator →
         </Link>
       </AlertDescription>
     </Alert>
