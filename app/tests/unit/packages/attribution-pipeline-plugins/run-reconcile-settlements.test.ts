@@ -11,7 +11,11 @@
  * @internal
  */
 
-import type { ClaimantWalletResolver } from "@cogni/aragon-osx";
+import {
+  type ClaimantWalletResolver,
+  hashCumulativeClaimLeaf,
+  verifyCumulativeMerkleProof,
+} from "@cogni/aragon-osx";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -155,6 +159,19 @@ describe("runReconcileSettlements", () => {
         },
       ],
     });
+    const persisted = append.mock.calls[0]?.[0];
+    const leaf = persisted?.leaves[0];
+    if (!persisted || !leaf) throw new Error("expected persisted leaf");
+    expect(leaf.leafHash).toBe(
+      hashCumulativeClaimLeaf(WALLET, 10_000n * 10n ** 18n)
+    );
+    expect(
+      verifyCumulativeMerkleProof(
+        leaf.leafHash,
+        leaf.proof,
+        persisted.merkleRoot
+      )
+    ).toBe(true);
   });
 
   it("rebuilds from the latest cumulative head after an append conflict", async () => {

@@ -24,6 +24,12 @@
  * @public
  */
 
+import {
+  hashCumulativeClaimLeaf,
+  type Hex,
+  type HexAddress,
+  verifyCumulativeMerkleProof,
+} from "@cogni/aragon-osx";
 import type {
   AppendSettlementRevisionParams,
   AppendSettlementRevisionResult,
@@ -897,10 +903,7 @@ export class DrizzleAttributionAdapter implements AttributionStore {
         .set({ status: "locked" })
         .where(
           and(
-            eq(
-              epochReceiptClaimants.epochId,
-              params.closeParams.epochId
-            ),
+            eq(epochReceiptClaimants.epochId, params.closeParams.epochId),
             eq(epochReceiptClaimants.status, "draft")
           )
         );
@@ -1794,13 +1797,10 @@ export class DrizzleAttributionAdapter implements AttributionStore {
   async getSettlementClaimForAccount(
     revisionId: string,
     account: string
-  ): Promise<
-    | {
-        readonly revision: SettlementRevisionRecord;
-        readonly leaf: SettlementLeafRecord;
-      }
-    | null
-  > {
+  ): Promise<{
+    readonly revision: SettlementRevisionRecord;
+    readonly leaf: SettlementLeafRecord;
+  } | null> {
     const revision = await this.getSettlementRevision(revisionId);
     if (!revision) return null;
     const [row] = await this.db
@@ -1984,9 +1984,7 @@ export class DrizzleAttributionAdapter implements AttributionStore {
         ? await tx
             .select()
             .from(distributionSettlementLeaves)
-            .where(
-              eq(distributionSettlementLeaves.revisionId, previousRow.id)
-            )
+            .where(eq(distributionSettlementLeaves.revisionId, previousRow.id))
         : [];
       const expectedByAccount = new Map<
         string,
@@ -2020,10 +2018,21 @@ export class DrizzleAttributionAdapter implements AttributionStore {
       for (const leaf of params.leaves) {
         const account = leaf.account.toLowerCase();
         const expected = expectedByAccount.get(account);
+        const expectedLeafHash = hashCumulativeClaimLeaf(
+          leaf.account as HexAddress,
+          leaf.cumulativeAmount
+        );
+        const hasValidProof = verifyCumulativeMerkleProof(
+          leaf.leafHash as Hex,
+          leaf.proof as readonly Hex[],
+          params.merkleRoot as Hex
+        );
         if (
           !expected ||
           seenAccounts.has(account) ||
           seenIndexes.has(leaf.index) ||
+          leaf.leafHash.toLowerCase() !== expectedLeafHash.toLowerCase() ||
+          !hasValidProof ||
           leaf.cumulativeAmount !== expected.cumulative ||
           leaf.deltaAmount !== expected.delta ||
           JSON.stringify([...leaf.receiptIds].sort()) !==
@@ -2037,6 +2046,13 @@ export class DrizzleAttributionAdapter implements AttributionStore {
         seenIndexes.add(leaf.index);
         leafTotal += leaf.cumulativeAmount;
         leafDeltaTotal += leaf.deltaAmount;
+      }
+      for (let index = 0; index < params.leaves.length; index += 1) {
+        if (!seenIndexes.has(index)) {
+          throw new Error(
+            "appendSettlementRevisionAtomic: leaf indexes must be contiguous from zero"
+          );
+        }
       }
       if (
         seenAccounts.size !== expectedByAccount.size ||

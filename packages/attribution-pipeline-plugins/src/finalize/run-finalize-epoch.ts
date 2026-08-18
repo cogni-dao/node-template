@@ -19,6 +19,7 @@
 
 import { type ClaimantWalletResolver } from "@cogni/aragon-osx";
 import {
+  type AttributionEpoch,
   type AttributionStore,
   applyReceiptWeightOverrides,
   buildEIP712TypedData,
@@ -158,6 +159,78 @@ export interface FinalizeEpochInput {
   readonly epochId: string; // bigint serialized
   readonly signature: string; // EIP-712 hex
   readonly signerAddress: string; // from SIWE session
+}
+
+async function verifyFinalizeAuthorization(params: {
+  readonly epoch: AttributionEpoch;
+  readonly input: FinalizeEpochInput;
+  readonly nodeId: string;
+  readonly scopeId: string;
+  readonly deploymentEnvironment: ReturnType<
+    typeof parseEIP712DeploymentEnvironment
+  >;
+  readonly finalAllocationSetHash: string;
+  readonly poolTotalCredits: bigint;
+  readonly chainId: number;
+}): Promise<void> {
+  const {
+    epoch,
+    input,
+    nodeId,
+    scopeId,
+    deploymentEnvironment,
+    finalAllocationSetHash,
+    poolTotalCredits,
+    chainId,
+  } = params;
+
+  if (!epoch.approvers || epoch.approvers.length === 0) {
+    throw new FinalizeEpochError(
+      "no_approvers",
+      `finalizeEpoch: epoch ${input.epochId} has no pinned approvers (APPROVERS_PINNED_AT_REVIEW violated)`
+    );
+  }
+  const signerLower = input.signerAddress.toLowerCase();
+  const approversLower = epoch.approvers.map((approver) =>
+    approver.toLowerCase()
+  );
+  if (!approversLower.includes(signerLower)) {
+    throw new FinalizeEpochError(
+      "signer_not_approver",
+      `finalizeEpoch: signer ${input.signerAddress} not in approvers`
+    );
+  }
+
+  const pinnedApproverSetHash = await computeApproverSetHash(epoch.approvers);
+  if (epoch.approverSetHash !== pinnedApproverSetHash) {
+    throw new Error(
+      `finalizeEpoch: approver set hash integrity failure — stored hash ${epoch.approverSetHash} does not match recomputed ${pinnedApproverSetHash}`
+    );
+  }
+
+  const typedData = buildEIP712TypedData({
+    nodeId,
+    scopeId,
+    epochId: input.epochId,
+    deploymentEnvironment,
+    finalAllocationSetHash,
+    poolTotalCredits: poolTotalCredits.toString(),
+    chainId,
+  });
+  const isValid = await verifyTypedData({
+    address: input.signerAddress as `0x${string}`,
+    domain: typedData.domain,
+    types: typedData.types,
+    primaryType: typedData.primaryType,
+    message: typedData.message,
+    signature: input.signature as `0x${string}`,
+  });
+  if (!isValid) {
+    throw new FinalizeEpochError(
+      "signature_invalid",
+      `finalizeEpoch: signature verification failed for signer ${input.signerAddress}`
+    );
+  }
 }
 
 /** Output from finalizeEpoch. */
@@ -363,6 +436,20 @@ export async function runFinalizeEpoch(
       );
     }
 
+    // A repair may add a missing signature, so it must satisfy the exact same
+    // pinned-approver and EIP-712 checks as the original finalization. The
+    // already-signed statement is the immutable message being authorized.
+    await verifyFinalizeAuthorization({
+      epoch,
+      input,
+      nodeId,
+      scopeId,
+      deploymentEnvironment,
+      finalAllocationSetHash: existing.finalAllocationSetHash,
+      poolTotalCredits: existing.poolTotalCredits,
+      chainId,
+    });
+
     // Repair: ensure this signer's signature exists via atomic method
     await attributionStore.finalizeEpochAtomic({
       epochId,
@@ -442,30 +529,7 @@ export async function runFinalizeEpoch(
     );
   }
 
-  // 3. Verify signer is in pinned approvers (APPROVERS_PINNED_AT_REVIEW)
-  if (!epoch.approvers || epoch.approvers.length === 0) {
-    throw new FinalizeEpochError(
-      "no_approvers",
-      `finalizeEpoch: epoch ${input.epochId} has no pinned approvers (APPROVERS_PINNED_AT_REVIEW violated)`
-    );
-  }
-  const signerLower = input.signerAddress.toLowerCase();
-  const approversLower = epoch.approvers.map((a) => a.toLowerCase());
-  if (!approversLower.includes(signerLower)) {
-    throw new FinalizeEpochError(
-      "signer_not_approver",
-      `finalizeEpoch: signer ${input.signerAddress} not in approvers`
-    );
-  }
-  // Self-consistent integrity check: recompute hash from pinned list
-  const pinnedApproverSetHash = await computeApproverSetHash(epoch.approvers);
-  if (epoch.approverSetHash !== pinnedApproverSetHash) {
-    throw new Error(
-      `finalizeEpoch: approver set hash integrity failure — stored hash ${epoch.approverSetHash} does not match recomputed ${pinnedApproverSetHash}`
-    );
-  }
-
-  // 4. Load pool components → pool_total = SUM(amount_credits)
+  // 3. Load pool components → pool_total = SUM(amount_credits)
   const poolComponents =
     await attributionStore.getPoolComponentsForEpoch(epochId);
   if (poolComponents.length === 0) {
@@ -489,7 +553,7 @@ export async function runFinalizeEpoch(
     0n
   );
 
-  // 5. Load locked claimants + receipt weights + overrides → explode to claimant allocations
+  // 4. Load locked claimants + receipt weights + overrides → explode to claimant allocations
   const lockedClaimants = await attributionStore.loadLockedClaimants(epochId);
   if (lockedClaimants.length === 0) {
     throw new FinalizeEpochError(
@@ -536,44 +600,30 @@ export async function runFinalizeEpoch(
     overrides
   );
 
-  // 6. Compute statement lines from final allocations
+  // 5. Compute statement lines from final allocations
   const statementLines = computeAttributionStatementLines(
     finalClaimantAllocations,
     poolTotal
   );
 
-  // 7. Compute allocation set hash (deterministic)
+  // 6. Compute allocation set hash (deterministic)
   const finalAllocationSetHash = await computeFinalClaimantAllocationSetHash(
     finalClaimantAllocations
   );
 
-  // 8. Build EIP-712 typed data and verify signature
-  const typedData = buildEIP712TypedData({
+  // 7. Verify the pinned signer and EIP-712 authorization.
+  await verifyFinalizeAuthorization({
+    epoch,
+    input,
     nodeId,
     scopeId,
-    epochId: input.epochId,
     deploymentEnvironment,
     finalAllocationSetHash,
-    poolTotalCredits: poolTotal.toString(),
+    poolTotalCredits: poolTotal,
     chainId,
   });
 
-  const isValid = await verifyTypedData({
-    address: input.signerAddress as `0x${string}`,
-    domain: typedData.domain,
-    types: typedData.types,
-    primaryType: typedData.primaryType,
-    message: typedData.message,
-    signature: input.signature as `0x${string}`,
-  });
-  if (!isValid) {
-    throw new FinalizeEpochError(
-      "signature_invalid",
-      `finalizeEpoch: signature verification failed for signer ${input.signerAddress}`
-    );
-  }
-
-  // 9. Atomic finalize — epoch transition + statement + signature in one transaction
+  // 8. Atomic finalize — epoch transition + statement + signature in one transaction
   const { epoch: finalizedEpoch, statement } =
     await attributionStore.finalizeEpochAtomic({
       epochId,

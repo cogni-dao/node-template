@@ -34,6 +34,66 @@ const SCOPE_ID = "44479543-87d0-5d3b-ac57-73a6242770cf";
 const SIGNER = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 describe("runFinalizeEpoch claimant liabilities", () => {
+  it("rejects an invalid signature before repairing a finalized epoch", async () => {
+    vi.mocked(verifyTypedData).mockResolvedValue(false);
+    const epoch: AttributionEpoch = {
+      id: 2n,
+      nodeId: NODE_ID,
+      scopeId: SCOPE_ID,
+      status: "finalized",
+      periodStart: new Date("2026-08-03T00:00:00Z"),
+      periodEnd: new Date("2026-08-10T00:00:00Z"),
+      weightConfig: { "github:pr_merged": 1000 },
+      poolTotalCredits: 10_000n,
+      approverSetHash: await computeApproverSetHash([SIGNER]),
+      approvers: [SIGNER],
+      allocationAlgoRef: "weight-sum-v0",
+      weightConfigHash: "weight-config-hash",
+      artifactsHash: "artifacts-hash",
+      openedAt: new Date(),
+      closedAt: new Date(),
+      createdAt: new Date(),
+    };
+    const finalizeEpochAtomic = vi.fn();
+    const store = {
+      getEpoch: vi.fn().mockResolvedValue(epoch),
+      getStatementForEpoch: vi.fn().mockResolvedValue({
+        id: "statement-2",
+        nodeId: NODE_ID,
+        epochId: 2n,
+        finalAllocationSetHash: "allocation-set-hash",
+        poolTotalCredits: 10_000n,
+        statementLines: [],
+        supersedesStatementId: null,
+        createdAt: new Date(),
+      }),
+      finalizeEpochAtomic,
+    } as unknown as AttributionStore;
+
+    await expect(
+      runFinalizeEpoch(
+        {
+          attributionStore: store,
+          registries: createDefaultRegistries(),
+          nodeId: NODE_ID,
+          scopeId: SCOPE_ID,
+          chainId: 8453,
+          tokenAddress: null,
+          distributorAddress: null,
+          walletResolver: null,
+          deploymentEnvironment: "candidate-a",
+          logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        },
+        {
+          epochId: "2",
+          signature: "0xdeadbeef",
+          signerAddress: SIGNER,
+        }
+      )
+    ).rejects.toMatchObject({ code: "signature_invalid" });
+    expect(finalizeEpochAtomic).not.toHaveBeenCalled();
+  });
+
   it("writes the exact token-atomic liability in the finalize transaction", async () => {
     vi.mocked(verifyTypedData).mockResolvedValue(true);
     const epoch: AttributionEpoch = {

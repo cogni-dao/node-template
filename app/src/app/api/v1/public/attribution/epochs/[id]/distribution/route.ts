@@ -22,8 +22,9 @@ export const dynamic = "force-dynamic";
 export const GET = wrapPublicRoute(
   {
     routeId: "ledger.epoch-distribution.public",
-    cacheTtlSeconds: 60,
-    staleWhileRevalidateSeconds: 300,
+    // A root rotation immediately invalidates proofs from the prior revision.
+    cacheTtlSeconds: 0,
+    staleWhileRevalidateSeconds: 0,
   },
   async (_ctx, request, context) => {
     const { id } = await (context as { params: Promise<{ id: string }> })

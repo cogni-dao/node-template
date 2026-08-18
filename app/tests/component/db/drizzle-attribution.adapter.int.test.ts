@@ -11,6 +11,7 @@
  * @public
  */
 
+import { buildDaoTokenCumulativeDistribution } from "@cogni/aragon-osx";
 import {
   EpochNotFoundError,
   EpochNotInReviewError,
@@ -1181,6 +1182,140 @@ describe("DrizzleAttributionAdapter (Component)", () => {
       await adapter.finalizeEpochAtomic(params);
     });
 
+    it("validates merkle data before settling and serializes competing revisions", async () => {
+      const epoch = await adapter.createEpoch({
+        nodeId: TEST_NODE_ID,
+        scopeId: TEST_SCOPE_ID,
+        ...epochWindow(27),
+        weightConfig: TEST_WEIGHT_CONFIG,
+      });
+      await adapter.closeIngestion(
+        epoch.id,
+        [],
+        "settlement-boundary-approver",
+        "weight-sum-v0",
+        "settlement-boundary-wch"
+      );
+
+      const claimantKey = `user:${actor.user.id}`;
+      const walletAddress = actor.user.walletAddress;
+      if (!walletAddress) throw new Error("expected actor wallet address");
+      const amountAtomic = 10_000n * 10n ** 18n;
+      const { statement } = await adapter.finalizeEpochAtomic({
+        ...makeAtomicParams(epoch.id),
+        finalClaimantAllocations: [
+          {
+            nodeId: TEST_NODE_ID,
+            epochId: epoch.id,
+            claimantKey,
+            claimant: { kind: "user", userId: actor.user.id },
+            finalUnits: 10_000n,
+            receiptIds: ["settlement-boundary-receipt"],
+          },
+        ],
+        claimantLiabilities: [
+          {
+            claimantKey,
+            amountAtomic,
+            receiptIds: ["settlement-boundary-receipt"],
+          },
+        ],
+        statement: {
+          nodeId: TEST_NODE_ID,
+          finalAllocationSetHash: HASH,
+          poolTotalCredits: 10_000n,
+          statementLines: [
+            {
+              claimant_key: claimantKey,
+              claimant: { kind: "user", userId: actor.user.id },
+              final_units: "10000",
+              pool_share: "1.000000",
+              credit_amount: "10000",
+              receipt_ids: ["settlement-boundary-receipt"],
+            },
+          ],
+        },
+      });
+      const liability = (
+        await adapter.listPendingClaimantLiabilities(
+          TEST_NODE_ID,
+          TEST_SCOPE_ID
+        )
+      ).find((item) => item.sourceEpochId === epoch.id);
+      if (!liability) throw new Error("expected pending claimant liability");
+
+      const distribution = buildDaoTokenCumulativeDistribution({
+        distributionId: "settlement-boundary-distribution",
+        nodeId: TEST_NODE_ID,
+        scopeId: TEST_SCOPE_ID,
+        statementHash: statement.finalAllocationSetHash,
+        chainId: 8453,
+        tokenAddress: "0x1111111111111111111111111111111111111111",
+        priorCumulative: [],
+        epochDeltas: [
+          {
+            claimantKey,
+            account: walletAddress as `0x${string}`,
+            deltaAmount: amountAtomic,
+            receiptIds: ["settlement-boundary-receipt"],
+          },
+        ],
+      });
+      const appendParams = {
+        nodeId: TEST_NODE_ID,
+        scopeId: TEST_SCOPE_ID,
+        expectedPreviousRevisionId: null,
+        distributionId: distribution.distributionId,
+        statementHash: distribution.statementHash,
+        merkleRoot: distribution.merkleRoot,
+        chainId: distribution.chainId,
+        tokenAddress: distribution.tokenAddress,
+        distributorAddress: "0x2222222222222222222222222222222222222222",
+        mintDelta: distribution.mintDelta,
+        cumulativeTotal: distribution.cumulativeTotal,
+        triggerKind: "component_test",
+        triggerRef: epoch.id.toString(),
+        leaves: distribution.leaves,
+        resolutions: [
+          {
+            liabilityId: liability.id,
+            resolvedUserId: actor.user.id,
+            account: walletAddress,
+          },
+        ],
+      };
+
+      await expect(
+        adapter.appendSettlementRevisionAtomic({
+          ...appendParams,
+          leaves: appendParams.leaves.map((leaf) => ({
+            ...leaf,
+            leafHash:
+              "0x0000000000000000000000000000000000000000000000000000000000000000",
+          })),
+        })
+      ).rejects.toThrow(
+        /leaves are not the complete expected cumulative snapshot/
+      );
+      expect(
+        (
+          await adapter.listPendingClaimantLiabilities(
+            TEST_NODE_ID,
+            TEST_SCOPE_ID
+          )
+        ).some((item) => item.id === liability.id)
+      ).toBe(true);
+
+      const results = await Promise.all([
+        adapter.appendSettlementRevisionAtomic(appendParams),
+        adapter.appendSettlementRevisionAtomic(appendParams),
+      ]);
+      expect(results.map((result) => result.status).sort()).toEqual([
+        "appended",
+        "conflict",
+      ]);
+    });
+
     it("open epoch → throws EpochNotOpenError", async () => {
       const epoch = await adapter.createEpoch({
         nodeId: TEST_NODE_ID,
@@ -1503,8 +1638,7 @@ describe("DrizzleAttributionAdapter (Component)", () => {
       const statuses = all.map((e) => e.status).sort();
       expect(statuses).toEqual(["draft", "locked"]);
 
-      const lockedClaimants =
-        await adapter.loadLockedClaimants(closeEpochId);
+      const lockedClaimants = await adapter.loadLockedClaimants(closeEpochId);
       expect(lockedClaimants).toHaveLength(1);
       expect(lockedClaimants[0]?.receiptId).toBe(
         `eval-close-receipt-${closeEpochId}-1`
@@ -1644,11 +1778,7 @@ describe("DrizzleAttributionAdapter (Component)", () => {
       );
       expect((await adapter.getEpoch(incompleteEpoch.id))?.status).toBe("open");
       expect(
-        await adapter.getEvaluation(
-          incompleteEpoch.id,
-          evalRef,
-          "locked"
-        )
+        await adapter.getEvaluation(incompleteEpoch.id, evalRef, "locked")
       ).toBeNull();
 
       await adapter.upsertDraftClaimants({

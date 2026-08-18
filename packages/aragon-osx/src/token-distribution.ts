@@ -323,6 +323,15 @@ export function hashCumulativeClaimLeaf(
   );
 }
 
+/** Verify one cumulative claim leaf against the root persisted for its revision. */
+export function verifyCumulativeMerkleProof(
+  leafHash: Hex,
+  proof: readonly Hex[],
+  merkleRoot: Hex
+): boolean {
+  return SimpleMerkleTree.verify(merkleRoot, leafHash, [...proof]);
+}
+
 /**
  * Build the cumulative DAO-token distribution for one epoch finalization.
  *

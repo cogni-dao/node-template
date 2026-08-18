@@ -26,8 +26,9 @@ export const dynamic = "force-dynamic";
 export const GET = wrapPublicRoute(
   {
     routeId: "ledger.latest-distribution.public",
-    cacheTtlSeconds: 30,
-    staleWhileRevalidateSeconds: 120,
+    // A root rotation immediately invalidates proofs from the prior revision.
+    cacheTtlSeconds: 0,
+    staleWhileRevalidateSeconds: 0,
   },
   async (_ctx, request) => {
     const url = new URL(request.url);

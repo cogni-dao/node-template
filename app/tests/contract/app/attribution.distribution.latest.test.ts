@@ -135,6 +135,9 @@ describe("GET /api/v1/public/attribution/distribution/latest", () => {
 
     const res = await GET(req);
     expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe(
+      "public, max-age=0, stale-while-revalidate=0"
+    );
 
     const body = await res.json();
     const parsed = latestDistributionOperation.output.parse(body);
@@ -150,7 +153,9 @@ describe("GET /api/v1/public/attribution/distribution/latest", () => {
 
   it("returns the cumulative claim DTO from the live settlement revision", async () => {
     const revision = makeRevision();
-    mockAttributionStore.getLatestSettlementRevision.mockResolvedValue(revision);
+    mockAttributionStore.getLatestSettlementRevision.mockResolvedValue(
+      revision
+    );
     mockReadLiveRoot.mockResolvedValue(revision.merkleRoot);
     mockAttributionStore.getSettlementRevisionByMerkleRoot.mockResolvedValue(
       revision
@@ -213,7 +218,9 @@ describe("GET /api/v1/public/attribution/distribution/latest", () => {
 
   it("returns { claim: null } when the live revision has no leaf for the account", async () => {
     const revision = makeRevision();
-    mockAttributionStore.getLatestSettlementRevision.mockResolvedValue(revision);
+    mockAttributionStore.getLatestSettlementRevision.mockResolvedValue(
+      revision
+    );
     mockReadLiveRoot.mockResolvedValue(revision.merkleRoot);
     mockAttributionStore.getSettlementRevisionByMerkleRoot.mockResolvedValue(
       revision
