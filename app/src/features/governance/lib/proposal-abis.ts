@@ -17,7 +17,7 @@ import { encodeFunctionData, keccak256, toBytes } from "viem";
  * Aragon OSx permission id for the DAO's `execute` entrypoint:
  * `keccak256("EXECUTE_PERMISSION")`. A wallet holding this on the DAO (where=DAO,
  * who=wallet) may call `DAO.execute(...)` directly — the standing authority the
- * ONE-TIME authorize grants, so per-epoch publishing needs no vote.
+ * operator grants during one-time setup, so per-epoch publishing needs no vote.
  */
 export const EXECUTE_PERMISSION_ID = keccak256(
   toBytes("EXECUTE_PERMISSION")
@@ -36,6 +36,42 @@ export const COGNI_SIGNAL_ABI = [
       { name: "extra", type: "bytes", internalType: "bytes" },
     ],
     outputs: [],
+    stateMutability: "nonpayable",
+  },
+] as const;
+
+/** Aragon TokenVoting proposal creation used by the public merge-proposal flow. */
+export const TOKEN_VOTING_ABI = [
+  {
+    type: "function",
+    name: "createProposal",
+    inputs: [
+      { name: "_metadata", type: "bytes", internalType: "bytes" },
+      {
+        name: "_actions",
+        type: "tuple[]",
+        internalType: "struct Action[]",
+        components: [
+          { name: "to", type: "address", internalType: "address" },
+          { name: "value", type: "uint256", internalType: "uint256" },
+          { name: "data", type: "bytes", internalType: "bytes" },
+        ],
+      },
+      {
+        name: "_allowFailureMap",
+        type: "uint256",
+        internalType: "uint256",
+      },
+      { name: "_startDate", type: "uint64", internalType: "uint64" },
+      { name: "_endDate", type: "uint64", internalType: "uint64" },
+      {
+        name: "_voteOption",
+        type: "uint8",
+        internalType: "enum IMajorityVoting.VoteOption",
+      },
+      { name: "_tryEarlyExecution", type: "bool", internalType: "bool" },
+    ],
+    outputs: [{ name: "proposalId", type: "uint256", internalType: "uint256" }],
     stateMutability: "nonpayable",
   },
 ] as const;
