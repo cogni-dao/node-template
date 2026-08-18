@@ -94,7 +94,7 @@ export function DistributionsCard({
           }
         />
       ) : (
-        <p className="mt-2 text-muted-foreground text-sm">
+        <p className="text-muted-foreground mt-2 text-sm">
           Deploy + authorize become available once this node has a token, DAO,
           and chain configured in its repo-spec.
         </p>
@@ -136,9 +136,17 @@ function SetupSequence({
   // Step 2 gate: does the connected wallet already hold scoped EXECUTE_PERMISSION on the DAO?
   // Probed with token + distributor so the SCOPED condition evaluates a real publish shape
   // (empty "0x" would make the condition deny a live grant → button falsely reappears).
-  const { hasPermission, refetch: refetchPermission } = useHasExecutePermission(
-    { daoAddress, wallet: address, tokenAddress, distributorAddress, chainId }
-  );
+  const {
+    hasPermission,
+    permissionState,
+    refetch: refetchPermission,
+  } = useHasExecutePermission({
+    daoAddress,
+    wallet: address,
+    tokenAddress,
+    distributorAddress,
+    chainId,
+  });
   const authorized = hasPermission === true;
 
   const onCorrectChain = connectedChainId === chainId;
@@ -162,8 +170,8 @@ function SetupSequence({
       {/* Wallet + chain gating is shared by both on-chain steps. Surface the connect / switch
           control once, up top. */}
       {!isConnected ? (
-        <div className="rounded-lg border border-border bg-muted/20 p-3">
-          <p className="mb-2 text-muted-foreground text-sm">
+        <div className="border-border bg-muted/20 rounded-lg border p-3">
+          <p className="text-muted-foreground mb-2 text-sm">
             Connect the node owner wallet to deploy + authorize.
           </p>
           <WalletConnectButton />
@@ -195,6 +203,7 @@ function SetupSequence({
         distributorAddress={distributorAddress}
         wallet={address ?? null}
         walletReady={isConnected && onCorrectChain}
+        needsCasUpgrade={permissionState === "legacy_or_unscoped"}
         onAuthorized={refetchPermission}
       />
 
@@ -256,7 +265,7 @@ function DeployStep({
     return (
       <StepRow n={1} state="done" title="Distributor deployed">
         {shown ? (
-          <p className="break-all font-mono text-muted-foreground text-xs">
+          <p className="text-muted-foreground font-mono text-xs break-all">
             Distributor: {shown}
           </p>
         ) : null}
@@ -308,7 +317,7 @@ function DeployStep({
             </ExternalLinkRow>
           ) : null}
           {distributorAddress ? (
-            <p className="break-all font-mono text-muted-foreground text-xs">
+            <p className="text-muted-foreground font-mono text-xs break-all">
               Distributor: {distributorAddress}
             </p>
           ) : null}
@@ -341,6 +350,7 @@ function AuthorizeStep({
   distributorAddress,
   wallet,
   walletReady,
+  needsCasUpgrade,
   onAuthorized,
 }: {
   state: StepState;
@@ -351,6 +361,7 @@ function AuthorizeStep({
   distributorAddress: `0x${string}` | null;
   wallet: `0x${string}` | null;
   walletReady: boolean;
+  needsCasUpgrade: boolean;
   onAuthorized: () => void;
 }): ReactElement {
   if (state === "done") {
@@ -365,7 +376,15 @@ function AuthorizeStep({
   }
 
   return (
-    <StepRow n={2} state={state} title="Authorize publishing">
+    <StepRow
+      n={2}
+      state={state}
+      title={
+        needsCasUpgrade
+          ? "Upgrade publishing authorization"
+          : "Authorize publishing"
+      }
+    >
       {state === "current" ? (
         <AuthorizeStepBody
           chainId={chainId}
@@ -375,10 +394,11 @@ function AuthorizeStep({
           distributorAddress={distributorAddress}
           wallet={wallet}
           walletReady={walletReady}
+          needsCasUpgrade={needsCasUpgrade}
           onAuthorized={onAuthorized}
         />
       ) : (
-        <p className="pl-0 text-muted-foreground text-sm">
+        <p className="text-muted-foreground pl-0 text-sm">
           Grant your wallet scoped authority to publish — after the distributor
           is deployed.
         </p>
@@ -396,6 +416,7 @@ function AuthorizeStepBody({
   distributorAddress,
   wallet,
   walletReady,
+  needsCasUpgrade,
   onAuthorized,
 }: {
   chainId: number;
@@ -405,6 +426,7 @@ function AuthorizeStepBody({
   distributorAddress: `0x${string}` | null;
   wallet: `0x${string}` | null;
   walletReady: boolean;
+  needsCasUpgrade: boolean;
   onAuthorized: () => void;
 }): ReactElement {
   const ready = Boolean(
@@ -438,16 +460,20 @@ function AuthorizeStepBody({
       ? "Deploying condition… confirm in wallet"
       : phase === "granting"
         ? "Submitting grant proposal…"
-        : "Authorize publishing";
+        : needsCasUpgrade
+          ? "Upgrade publishing authorization"
+          : "Authorize publishing";
 
   return (
     <>
       <p className="text-muted-foreground text-sm">
-        Grants your wallet permission to publish THIS node&apos;s distributions
-        and nothing else (enforced on-chain by a scoped condition contract).
-        This IS a governance proposal — two transactions, deploy the condition
-        then submit the grant — run once. After this, each epoch publishes in a
-        single transaction with no vote.
+        {needsCasUpgrade
+          ? "Replaces the legacy shape-only grant with compare-and-swap protection. "
+          : "Grants your wallet permission to publish THIS node’s distributions and nothing else. "}
+        Enforcement lives on-chain in a scoped condition contract. This IS a
+        governance proposal — two transactions, deploy the condition then submit
+        the grant — run once. After this, each epoch publishes in a single
+        transaction with no vote.
       </p>
 
       {!pluginAddress ? (
@@ -497,7 +523,7 @@ function ExternalLinkRow({
       href={href}
       target="_blank"
       rel="noreferrer"
-      className="inline-flex items-center gap-1.5 text-primary text-sm hover:underline"
+      className="text-primary inline-flex items-center gap-1.5 text-sm hover:underline"
     >
       {children}
       <ExternalLink className="size-3.5" />

@@ -81,6 +81,7 @@ export const TOKEN_VOTING_ABI = [
  *   - `grantWithCondition` (nonpayable) — the ONE-TIME SCOPED authorize action (wrapped in a
  *     createProposal so the DAO grants EXECUTE_PERMISSION on itself to the executor, bound to a
  *     DistributionPublishCondition so the grant only permits the publish action set).
+ *   - `revoke`             (nonpayable) — removes a legacy shape-only grant before V2 regrant.
  *   - `execute`            (nonpayable) — the PER-EPOCH direct publish, callable once the wallet
  *     holds EXECUTE_PERMISSION; runs [mint, setMerkleRoot] atomically as msg.sender=DAO.
  * Source: Aragon OSx v1.3 `DAO.sol` (IDAO). Kept minimal — reads/writes only what publish uses.
@@ -97,6 +98,17 @@ export const DAO_ABI = [
       { name: "_data", type: "bytes", internalType: "bytes" },
     ],
     outputs: [{ name: "", type: "bool", internalType: "bool" }],
+  },
+  {
+    type: "function",
+    name: "revoke",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "_where", type: "address", internalType: "address" },
+      { name: "_who", type: "address", internalType: "address" },
+      { name: "_permissionId", type: "bytes32", internalType: "bytes32" },
+    ],
+    outputs: [],
   },
   {
     // SCOPED authorize: bind the executor's EXECUTE_PERMISSION to a condition contract so

@@ -10,11 +10,10 @@
  *     1. DEPLOY `DistributionPublishCondition(token, distributor)` — a tiny per-node permission
  *        condition whose `isGranted` returns true ONLY for the exact publish action set. Capture its
  *        address from the deploy receipt.
- *     2. GOVERNANCE PROPOSAL: `plugin.createProposal([DAO.grantWithCondition(DAO, wallet,
- *        EXECUTE_PERMISSION, condition)], 0, 0, 0, Yes, tryEarlyExecution)`. On a 100%-owner
- *        EarlyExecution DAO this auto-executes, giving the wallet the SCOPED standing grant. This IS
- *        a governance proposal — honest, and labeled as such by the caller; never an unconditional
- *        EXECUTE grant (even a compromised executor key can only publish, never drain the treasury).
+ *     2. GOVERNANCE PROPOSAL: atomically revoke any legacy publish permission, then
+ *        `grantWithCondition(DAO, wallet, EXECUTE_PERMISSION, condition)`. On a 100%-owner
+ *        EarlyExecution DAO this auto-executes, replacing shape-only authority with CAS-scoped
+ *        authority. This IS a governance proposal; never an unconditional EXECUTE grant.
  * Scope: Client-side wagmi wiring shared by BOTH the per-epoch publish panel and the node distribution
  *   setup sequence so both drive the same authorize flow. Reads no secrets; the connected wallet signs
  *   every transaction. Does NOT read `hasPermission` — the caller reads it (via `useHasExecutePermission`)
@@ -22,7 +21,7 @@
  * Invariants:
  *   - AUTHORIZE_IS_A_PROPOSAL: the grant is wrapped in createProposal(Yes, tryEarlyExecution); it is a
  *     governance action, never "executed".
- *   - SCOPED_GRANT: always `grantWithCondition` bound to the deployed condition — never a bare `grant`.
+ *   - SCOPED_GRANT: revoke + `grantWithCondition` execute atomically — never a bare `grant`.
  *   - WALLET_SIGNS: deploy + proposal are both signed by the connected wallet, never the operator.
  *   - ADDRESSES_ONLY: no token math — every value is an address/hash/bytes.
  * Side-effects: blockchain writes (condition deploy tx; createProposal-with-grant tx).
@@ -139,9 +138,9 @@ export function useAuthorizePublishing(
     });
   }, [account, deployContract, token, distributor]);
 
-  // Condition deployed → submit the grantWithCondition proposal. The grant executes AS the DAO
-  // (msg.sender=DAO) inside the proposal: DAO.grantWithCondition(_where=DAO, _who=wallet,
-  // EXECUTE_PERMISSION, _condition=condition), wrapped in createProposal(Yes, tryEarlyExecution).
+  // Condition deployed → atomically replace any existing grant. Aragon refuses to overwrite a
+  // different condition, while revoke is a no-op when unset, so revoke→grant is correct for both
+  // first authorization and migration from the legacy shape-only condition.
   useEffect(() => {
     if (phase !== "deploying" || !deployReceipt) return;
     // A mined-but-REVERTED condition deploy resolves without throwing — never advance it.
@@ -150,19 +149,27 @@ export function useAuthorizePublishing(
       return;
     }
     setPhase("granting");
+    const revokeData = encodeFunctionData({
+      abi: DAO_ABI,
+      functionName: "revoke",
+      args: [dao, wallet, EXECUTE_PERMISSION_ID],
+    });
     const grantData = encodeFunctionData({
       abi: DAO_ABI,
       functionName: "grantWithCondition",
       args: [dao, wallet, EXECUTE_PERMISSION_ID, conditionAddress],
     });
-    const grantAction = { to: dao, value: 0n, data: grantData } as const;
+    const permissionActions = [
+      { to: dao, value: 0n, data: revokeData },
+      { to: dao, value: 0n, data: grantData },
+    ] as const;
     writeContract({
       abi: TOKEN_VOTING_ABI,
       address: plugin,
       functionName: "createProposal",
       args: [
         "0x", // _metadata
-        [grantAction], // _actions
+        permissionActions, // _actions: revoke legacy/unset, then grant CAS V2
         0n, // _allowFailureMap
         0n, // _startDate (0 ⇒ plugin derives)
         0n, // _endDate (0 ⇒ plugin derives; EarlyExecution bypasses minDuration)
