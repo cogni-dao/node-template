@@ -220,6 +220,20 @@ describe("GET attribution settlement lifecycle", () => {
     expect(parsed.epochs[0].publishedLiabilityCount).toBeNull();
   });
 
+  it("fails closed when the live-root RPC rejects", async () => {
+    readLiveRoot.mockRejectedValue(new Error("rpc unavailable"));
+    const response = await callRoute();
+    const parsed = settlementLifecycleOperation.output.parse(
+      await response.json()
+    );
+
+    expect(parsed.publicationEvidence).toBe("unknown");
+    expect(parsed.liveRevision).toBeNull();
+    expect(
+      parsed.epochs.map((epochItem) => epochItem.publishedLiabilityCount)
+    ).toEqual([null, null]);
+  });
+
   it("reports known zero coverage when the distributor root is empty", async () => {
     readLiveRoot.mockResolvedValue(ZERO_ROOT);
     const response = await callRoute();
