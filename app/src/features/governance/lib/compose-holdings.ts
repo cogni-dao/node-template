@@ -24,7 +24,7 @@ export function composeHoldings(
   epochs: readonly EpochDto[],
   claimants: readonly EpochClaimantsDto[]
 ): HoldingsData {
-  const claimantMap = new Map<
+  const ownerMap = new Map<
     string,
     {
       claimantKey: string;
@@ -45,9 +45,12 @@ export function composeHoldings(
 
     for (const item of epochClaimants.items) {
       const credits = Number(item.amountCredits);
+      const ownerKind = item.canonicalOwnerKey.startsWith("user:")
+        ? "user"
+        : item.claimant.kind;
       totalCreditsAll += credits;
 
-      const existing = claimantMap.get(item.canonicalOwnerKey);
+      const existing = ownerMap.get(item.canonicalOwnerKey);
       if (existing) {
         existing.totalCredits += credits;
         existing.epochs.add(epoch.id);
@@ -55,15 +58,13 @@ export function composeHoldings(
           existing.displayName = item.displayName;
         }
         existing.isLinked = existing.isLinked || item.isLinked;
-        if (item.canonicalOwnerKey.startsWith("user:")) {
+        if (ownerKind === "user") {
           existing.claimantKind = "user";
         }
       } else {
-        claimantMap.set(item.canonicalOwnerKey, {
+        ownerMap.set(item.canonicalOwnerKey, {
           claimantKey: item.canonicalOwnerKey,
-          claimantKind: item.canonicalOwnerKey.startsWith("user:")
-            ? "user"
-            : item.claimant.kind,
+          claimantKind: ownerKind,
           isLinked: item.isLinked,
           displayName: item.displayName,
           totalCredits: credits,
@@ -73,7 +74,7 @@ export function composeHoldings(
     }
   }
 
-  const holdings: HoldingView[] = [...claimantMap.values()]
+  const holdings: HoldingView[] = [...ownerMap.values()]
     .sort((a, b) => b.totalCredits - a.totalCredits)
     .map((entry) => ({
       claimantKey: entry.claimantKey,
