@@ -26,7 +26,6 @@ import { and, eq, gt, isNull } from "drizzle-orm";
 import type { NextAuthOptions } from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import Discord from "next-auth/providers/discord";
-import GitHub from "next-auth/providers/github";
 import Google from "next-auth/providers/google";
 import { getCsrfToken } from "next-auth/react";
 import { SiweMessage } from "siwe";
@@ -263,15 +262,8 @@ export const authOptions: NextAuthOptions = {
         }
       },
     }),
-    // Only register OAuth providers when credentials are configured
-    ...(process.env.GH_OAUTH_CLIENT_ID && process.env.GH_OAUTH_CLIENT_SECRET
-      ? [
-          GitHub({
-            clientId: process.env.GH_OAUTH_CLIENT_ID,
-            clientSecret: process.env.GH_OAUTH_CLIENT_SECRET,
-          }),
-        ]
-      : []),
+    // GitHub identity is verified by the environment operator and imported as
+    // a local binding. Nodes never register their own GitHub OAuth provider.
     ...(process.env.DISCORD_OAUTH_CLIENT_ID &&
     process.env.DISCORD_OAUTH_CLIENT_SECRET
       ? [
