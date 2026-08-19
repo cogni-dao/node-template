@@ -47,7 +47,7 @@ export function composeHoldings(
       const credits = Number(item.amountCredits);
       totalCreditsAll += credits;
 
-      const existing = claimantMap.get(item.claimantKey);
+      const existing = claimantMap.get(item.canonicalOwnerKey);
       if (existing) {
         existing.totalCredits += credits;
         existing.epochs.add(epoch.id);
@@ -55,10 +55,15 @@ export function composeHoldings(
           existing.displayName = item.displayName;
         }
         existing.isLinked = existing.isLinked || item.isLinked;
+        if (item.canonicalOwnerKey.startsWith("user:")) {
+          existing.claimantKind = "user";
+        }
       } else {
-        claimantMap.set(item.claimantKey, {
-          claimantKey: item.claimantKey,
-          claimantKind: item.claimant.kind,
+        claimantMap.set(item.canonicalOwnerKey, {
+          claimantKey: item.canonicalOwnerKey,
+          claimantKind: item.canonicalOwnerKey.startsWith("user:")
+            ? "user"
+            : item.claimant.kind,
           isLinked: item.isLinked,
           displayName: item.displayName,
           totalCredits: credits,
