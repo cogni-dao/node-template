@@ -26,7 +26,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // --- Mocks (must precede imports of modules under test) ---
 
-const ISSUER = "https://hub.test.example";
+const ISSUER = "https://test.cognidao.org";
 const SESSION_WALLET = "0xAbCd000000000000000000000000000000001234"; // mixed case on purpose
 const TOKEN_WALLET = SESSION_WALLET.toLowerCase();
 const USER_ID = "11111111-1111-4111-8111-111111111111";
@@ -37,12 +37,14 @@ const JTI = "44444444-4444-4444-8444-444444444444";
 const mockGetSessionUser = vi.fn();
 const mockRedeemBinding = vi.fn();
 const mockCreateNonce = vi.fn();
-let mockIssuerUrl = ISSUER;
+let mockDeploymentEnvironment: string | undefined = "candidate-a";
+let mockIssuerUrl: string | undefined;
 let mockNodeOrigin = "https://node.test.example";
 
 // Keep the verifier's env read isolated from full server env validation
 vi.mock("@/shared/env/server", () => ({
 	serverEnv: () => ({
+		DEPLOY_ENVIRONMENT: mockDeploymentEnvironment,
 		COGNI_OPERATOR_ISSUER_URL: mockIssuerUrl,
 		APP_BASE_URL: mockNodeOrigin,
 	}),
@@ -101,7 +103,10 @@ vi.mock("@/bootstrap/container", () => ({
 }));
 
 // Import after mocks
-import { resetOperatorAttestationJwksCacheForTests } from "@/app/_lib/auth/operator-attestation";
+import {
+	resetOperatorAttestationJwksCacheForTests,
+	resolveOperatorIssuerUrl,
+} from "@/app/_lib/auth/operator-attestation";
 import { POST as IMPORT_POST } from "@/app/api/v1/identity/bindings/import/route";
 import { POST as START_POST } from "@/app/api/v1/identity/bindings/import/start/route";
 
@@ -178,7 +183,8 @@ function makeRequest(body: unknown): NextRequest {
 
 beforeEach(() => {
 	vi.clearAllMocks();
-	mockIssuerUrl = ISSUER;
+	mockDeploymentEnvironment = "candidate-a";
+	mockIssuerUrl = undefined;
 	mockNodeOrigin = "https://node.test.example";
 	resetOperatorAttestationJwksCacheForTests();
 	fetchMock.mockImplementation(async () => jwksOk());
@@ -318,6 +324,18 @@ describe("POST /api/v1/identity/bindings/import", () => {
 		expect(await res.json()).toEqual({ errorCode: "invalid_token" });
 	});
 
+	it("401 invalid_token when a production attestation is replayed in candidate-a", async () => {
+		const res = await IMPORT_POST(
+			makeRequest({
+				token: await mintToken({ issuer: "https://cognidao.org" }),
+			}),
+		);
+
+		expect(res.status).toBe(401);
+		expect(await res.json()).toEqual({ errorCode: "invalid_token" });
+		expect(mockRedeemBinding).not.toHaveBeenCalled();
+	});
+
 	it("403 wallet_mismatch when the token attests a different wallet", async () => {
 		const res = await IMPORT_POST(
 			makeRequest({
@@ -383,6 +401,27 @@ describe("POST /api/v1/identity/bindings/import", () => {
 });
 
 describe("POST /api/v1/identity/bindings/import/start", () => {
+	it.each([
+		["candidate-a", "https://test.cognidao.org"],
+		["preview", "https://preview.cognidao.org"],
+		["production", "https://cognidao.org"],
+	])(
+		"uses the canonical %s operator issuer",
+		async (deploymentEnvironment, expectedIssuer) => {
+			mockDeploymentEnvironment = deploymentEnvironment;
+			const res = await START_POST(
+				new NextRequest(
+					"http://localhost:3200/api/v1/identity/bindings/import/start",
+					{ method: "POST" },
+				),
+			);
+
+			expect(res.status).toBe(200);
+			const body = (await res.json()) as { authorizeUrl: string };
+			expect(new URL(body.authorizeUrl).origin).toBe(expectedIssuer);
+		},
+	);
+
 	it("mints a user-owned nonce and binds broker parameters server-side", async () => {
 		const res = await START_POST(
 			new NextRequest(
@@ -410,8 +449,8 @@ describe("POST /api/v1/identity/bindings/import/start", () => {
 	});
 
 	it.each([
-		"http://hub.test.example",
-		"https://user:pass@hub.test.example",
+		"http://test.cognidao.org",
+		"https://user:pass@test.cognidao.org",
 	])("rejects unsafe operator issuer %s before minting a nonce", async (issuer) => {
 		mockIssuerUrl = issuer;
 		const res = await START_POST(
@@ -427,6 +466,38 @@ describe("POST /api/v1/identity/bindings/import/start", () => {
 		expect(mockCreateNonce).not.toHaveBeenCalled();
 	});
 
+	it("rejects a safe but wrong-environment issuer before minting a nonce", async () => {
+		mockIssuerUrl = "https://cognidao.org";
+		const res = await START_POST(
+			new NextRequest(
+				"http://localhost:3200/api/v1/identity/bindings/import/start",
+				{ method: "POST" },
+			),
+		);
+
+		expect(res.status).toBe(503);
+		expect(await res.json()).toEqual({
+			errorCode: "operator_issuer_unavailable",
+		});
+		expect(mockCreateNonce).not.toHaveBeenCalled();
+	});
+
+	it.each([undefined, "local", "candidate-b"])(
+		"rejects missing or unsupported deployment environment %s before minting a nonce",
+		async (deploymentEnvironment) => {
+			mockDeploymentEnvironment = deploymentEnvironment;
+			const res = await START_POST(
+				new NextRequest(
+					"http://localhost:3200/api/v1/identity/bindings/import/start",
+					{ method: "POST" },
+				),
+			);
+
+			expect(res.status).toBe(503);
+			expect(mockCreateNonce).not.toHaveBeenCalled();
+		},
+	);
+
 	it.each([
 		"http://node.test.example",
 		"https://user:pass@node.test.example",
@@ -441,5 +512,35 @@ describe("POST /api/v1/identity/bindings/import/start", () => {
 		expect(res.status).toBe(503);
 		expect(await res.json()).toEqual({ errorCode: "node_origin_unavailable" });
 		expect(mockCreateNonce).not.toHaveBeenCalled();
+	});
+});
+
+describe("resolveOperatorIssuerUrl", () => {
+	it.each([
+		["candidate-a", "https://test.cognidao.org"],
+		["preview", "https://preview.cognidao.org"],
+		["production", "https://cognidao.org"],
+	])("maps %s to %s", (deploymentEnvironment, issuer) => {
+		expect(
+			resolveOperatorIssuerUrl({
+				deploymentEnvironment,
+				configuredIssuer: undefined,
+			}),
+		).toBe(issuer);
+		expect(
+			resolveOperatorIssuerUrl({
+				deploymentEnvironment,
+				configuredIssuer: issuer,
+			}),
+		).toBe(issuer);
+	});
+
+	it("rejects a canonical issuer belonging to another environment", () => {
+		expect(() =>
+			resolveOperatorIssuerUrl({
+				deploymentEnvironment: "preview",
+				configuredIssuer: "https://cognidao.org",
+			}),
+		).toThrow(/must equal https:\/\/preview\.cognidao\.org/);
 	});
 });

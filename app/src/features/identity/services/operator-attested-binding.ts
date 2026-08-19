@@ -62,7 +62,7 @@ export function createIdentityBindingService(deps: {
 					return "already_bound";
 				}
 
-				await tx.createGithubBinding({
+				const created = await tx.createGithubBinding({
 					userId: params.userId,
 					githubId: params.githubId,
 					evidence: {
@@ -78,7 +78,7 @@ export function createIdentityBindingService(deps: {
 					return "already_linked";
 				}
 				await tx.updateGithubLogin(bound.id, params.githubLogin);
-				return "created";
+				return created ? "created" : "already_bound";
 			});
 		},
 	};

@@ -171,15 +171,6 @@ function formatUnits(units: string): string {
   return value.toLocaleString();
 }
 
-/** Display host of the operator attestation issuer (e.g. "cognidao.org"). */
-function issuerHost(issuerUrl: string): string {
-  try {
-    return new URL(issuerUrl).host;
-  } catch {
-    return issuerUrl;
-  }
-}
-
 /* ─── Feedback banner ──────────────────────────────────────────────── */
 
 const FEEDBACK_MESSAGES: Record<
@@ -540,11 +531,7 @@ function ChatGptConnectFlow({
 
 /* ─── View ─────────────────────────────────────────────────────────── */
 
-export function ProfileView({
-  operatorIssuerUrl,
-}: {
-  operatorIssuerUrl: string;
-}): ReactElement {
+export function ProfileView(): ReactElement {
   const { data: session, update: updateSession } = useSession();
   const { openConnectModal } = useConnectModal();
   const router = useRouter();
@@ -593,9 +580,9 @@ export function ProfileView({
     if (!hash.startsWith("#attestation=")) return;
     attestationHandled.current = true;
 
-    const token = decodeURIComponent(hash.slice("#attestation=".length));
     void (async () => {
       try {
+        const token = decodeURIComponent(hash.slice("#attestation=".length));
         const res = await fetch("/api/v1/identity/bindings/import", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -815,7 +802,7 @@ export function ProfileView({
           <SettingRow
             icon={<GitHubIcon className="size-5" />}
             label="GitHub"
-            description={`Verify your GitHub account via ${issuerHost(operatorIssuerUrl)}.`}
+            description="Verify your GitHub account via this environment's operator hub."
           >
             <Button
               variant="outline"

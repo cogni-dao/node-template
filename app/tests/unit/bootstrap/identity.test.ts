@@ -97,7 +97,7 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	nonceConsumed = false;
 	transactionTail = Promise.resolve();
-	mockCreateBinding.mockResolvedValue(true);
+	mockCreateBinding.mockResolvedValue({ created: true, eventId: "event-1" });
 });
 
 describe("redeemAttestedGithubBinding", () => {
@@ -141,6 +141,19 @@ describe("redeemAttestedGithubBinding", () => {
 		);
 	});
 
+	it("reports already_bound when a same-user binding wins the insert race", async () => {
+		mockFindFirst
+			.mockResolvedValueOnce(undefined)
+			.mockResolvedValueOnce({ id: "b2", userId: "user-1" });
+		mockCreateBinding.mockResolvedValue({ created: false, eventId: null });
+
+		expect(await redeemAttestedGithubBinding(PARAMS)).toBe("already_bound");
+		expect(nonceConsumed).toBe(true);
+		expect(mockProviderLoginSet).toHaveBeenCalledWith({
+			providerLogin: "octocat",
+		});
+	});
+
 	it("allows only one winner across concurrent redemption attempts", async () => {
 		mockFindFirst
 			.mockResolvedValueOnce(undefined)
@@ -162,7 +175,7 @@ describe("redeemAttestedGithubBinding", () => {
 			.mockResolvedValueOnce({ id: "b2", userId: "user-1" });
 		mockCreateBinding
 			.mockRejectedValueOnce(new Error("database unavailable"))
-			.mockResolvedValueOnce(true);
+			.mockResolvedValueOnce({ created: true, eventId: "event-1" });
 
 		await expect(redeemAttestedGithubBinding(PARAMS)).rejects.toThrow(
 			"database unavailable",

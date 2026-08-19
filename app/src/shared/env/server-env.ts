@@ -284,13 +284,12 @@ export const serverSchema = z.object({
   POSTHOG_HOST: optionalUrl,
   POSTHOG_PROJECT_ID: optionalString,
 
-  // Operator identity attestation issuer — trusted hub that signs portable
-  // {wallet ↔ github} attestations (task.5024). JWKS fetched from
-  // ${COGNI_OPERATOR_ISSUER_URL}/.well-known/jwks.json. Optional with default;
-  // forks pointing at a different hub override this.
+  // Optional assertion for the environment-local operator attestation issuer.
+  // Runtime resolution derives the issuer from DEPLOY_ENVIRONMENT and rejects
+  // this value unless it exactly matches that environment's canonical host.
   COGNI_OPERATOR_ISSUER_URL: z.preprocess(
     emptyToUndefined,
-    originUrl.default("https://cognidao.org")
+    originUrl.optional()
   ),
 });
 

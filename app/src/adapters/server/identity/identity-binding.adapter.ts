@@ -63,12 +63,12 @@ class DrizzleIdentityBindingTransaction
 			.where(eq(userBindings.id, bindingId));
 	}
 
-	createGithubBinding(params: {
+	async createGithubBinding(params: {
 		userId: string;
 		githubId: string;
 		evidence: AttestedGithubBindingEvidence;
 	}): Promise<boolean> {
-		return createBindingInTransaction(
+		const result = await createBindingInTransaction(
 			this.tx,
 			params.userId,
 			"github",
@@ -78,6 +78,7 @@ class DrizzleIdentityBindingTransaction
 				...params.evidence,
 			},
 		);
+		return result.created;
 	}
 }
 
