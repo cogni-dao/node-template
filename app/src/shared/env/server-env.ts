@@ -285,8 +285,8 @@ export const serverSchema = z.object({
   POSTHOG_PROJECT_ID: optionalString,
 
   // Optional assertion for the environment-local operator attestation issuer.
-  // Runtime resolution derives the issuer from DEPLOY_ENVIRONMENT and rejects
-  // this value unless it exactly matches that environment's canonical host.
+  // Runtime resolution derives the issuer from DOMAIN and rejects this value
+  // unless it exactly matches that environment's operator/base origin.
   COGNI_OPERATOR_ISSUER_URL: z.preprocess(
     emptyToUndefined,
     originUrl.optional()

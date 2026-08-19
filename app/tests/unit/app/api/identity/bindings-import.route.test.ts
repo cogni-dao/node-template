@@ -38,6 +38,7 @@ const mockGetSessionUser = vi.fn();
 const mockRedeemBinding = vi.fn();
 const mockCreateNonce = vi.fn();
 let mockDeploymentEnvironment: string | undefined = "candidate-a";
+let mockDomain: string | undefined = "test.cognidao.org";
 let mockIssuerUrl: string | undefined;
 let mockNodeOrigin = "https://node.test.example";
 
@@ -45,6 +46,7 @@ let mockNodeOrigin = "https://node.test.example";
 vi.mock("@/shared/env/server", () => ({
 	serverEnv: () => ({
 		DEPLOY_ENVIRONMENT: mockDeploymentEnvironment,
+		DOMAIN: mockDomain,
 		COGNI_OPERATOR_ISSUER_URL: mockIssuerUrl,
 		APP_BASE_URL: mockNodeOrigin,
 	}),
@@ -184,6 +186,7 @@ function makeRequest(body: unknown): NextRequest {
 beforeEach(() => {
 	vi.clearAllMocks();
 	mockDeploymentEnvironment = "candidate-a";
+	mockDomain = "test.cognidao.org";
 	mockIssuerUrl = undefined;
 	mockNodeOrigin = "https://node.test.example";
 	resetOperatorAttestationJwksCacheForTests();
@@ -402,13 +405,14 @@ describe("POST /api/v1/identity/bindings/import", () => {
 
 describe("POST /api/v1/identity/bindings/import/start", () => {
 	it.each([
-		["candidate-a", "https://test.cognidao.org"],
-		["preview", "https://preview.cognidao.org"],
-		["production", "https://cognidao.org"],
+		["candidate-a", "test.cognidao.org", "https://test.cognidao.org"],
+		["preview", "staging.example.org", "https://staging.example.org"],
+		["production", "dao.example.org", "https://dao.example.org"],
 	])(
-		"uses the canonical %s operator issuer",
-		async (deploymentEnvironment, expectedIssuer) => {
+		"uses the %s environment's configured base domain",
+		async (deploymentEnvironment, domain, expectedIssuer) => {
 			mockDeploymentEnvironment = deploymentEnvironment;
+			mockDomain = domain;
 			const res = await START_POST(
 				new NextRequest(
 					"http://localhost:3200/api/v1/identity/bindings/import/start",
@@ -482,6 +486,25 @@ describe("POST /api/v1/identity/bindings/import/start", () => {
 		expect(mockCreateNonce).not.toHaveBeenCalled();
 	});
 
+	it.each([undefined, "https://test.cognidao.org", "test.cognidao.org/path"])(
+		"rejects missing or invalid DOMAIN %s before minting a nonce",
+		async (domain) => {
+			mockDomain = domain;
+			const res = await START_POST(
+				new NextRequest(
+					"http://localhost:3200/api/v1/identity/bindings/import/start",
+					{ method: "POST" },
+				),
+			);
+
+			expect(res.status).toBe(503);
+			expect(await res.json()).toEqual({
+				errorCode: "operator_issuer_unavailable",
+			});
+			expect(mockCreateNonce).not.toHaveBeenCalled();
+		},
+	);
+
 	it.each([undefined, "local", "candidate-b"])(
 		"rejects missing or unsupported deployment environment %s before minting a nonce",
 		async (deploymentEnvironment) => {
@@ -517,30 +540,46 @@ describe("POST /api/v1/identity/bindings/import/start", () => {
 
 describe("resolveOperatorIssuerUrl", () => {
 	it.each([
-		["candidate-a", "https://test.cognidao.org"],
-		["preview", "https://preview.cognidao.org"],
-		["production", "https://cognidao.org"],
-	])("maps %s to %s", (deploymentEnvironment, issuer) => {
+		["candidate-a", "test.cognidao.org", "https://test.cognidao.org"],
+		["preview", "staging.example.org", "https://staging.example.org"],
+		["production", "dao.example.org", "https://dao.example.org"],
+	])("maps %s / %s to %s", (deploymentEnvironment, domain, issuer) => {
 		expect(
 			resolveOperatorIssuerUrl({
 				deploymentEnvironment,
+				domain,
 				configuredIssuer: undefined,
 			}),
 		).toBe(issuer);
 		expect(
 			resolveOperatorIssuerUrl({
 				deploymentEnvironment,
+				domain,
 				configuredIssuer: issuer,
 			}),
 		).toBe(issuer);
 	});
 
-	it("rejects a canonical issuer belonging to another environment", () => {
+	it("rejects a canonical issuer that differs from the environment base domain", () => {
 		expect(() =>
 			resolveOperatorIssuerUrl({
 				deploymentEnvironment: "preview",
+				domain: "preview.example.org",
 				configuredIssuer: "https://cognidao.org",
 			}),
-		).toThrow(/must equal https:\/\/preview\.cognidao\.org/);
+		).toThrow(/must equal https:\/\/preview\.example\.org/);
 	});
+
+	it.each([undefined, "https://example.org", "example.org/path"])(
+		"rejects missing or non-host DOMAIN %s",
+		(domain) => {
+			expect(() =>
+				resolveOperatorIssuerUrl({
+					deploymentEnvironment: "candidate-a",
+					domain,
+					configuredIssuer: undefined,
+				}),
+			).toThrow();
+		},
+	);
 });

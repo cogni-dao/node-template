@@ -66,7 +66,7 @@ Unified serverEnv() provides all vars:
 - APP_ENV (test|production)
 - SERVICE_NAME (default: "app") - for observability service label
 - DEPLOY_ENVIRONMENT - deployment env label for metrics and analytics filtering
-- COGNI_OPERATOR_ISSUER_URL - optional assertion for the environment-local identity issuer; must match the canonical DEPLOY_ENVIRONMENT host
+- COGNI_OPERATOR_ISSUER_URL - optional assertion for the environment-local identity issuer; must match the canonical `https://${DOMAIN}` operator origin
 - DATABASE_URL (required, app_user role with RLS enforced)
 - DATABASE_SERVICE_URL (required, app_service role with BYPASSRLS)
 - LITELLM_BASE_URL (url, auto-detects: localhost:4000 for dev, litellm:4000 for production)
