@@ -158,17 +158,6 @@ export const IdentityAttestationClaimsSchema = z
 		}
 	});
 
-export const identityAttestationOperation = {
-	id: IDENTITY_ATTESTATION_V1,
-	input: IdentityAttestationRequestSchema,
-	output: z
-		.object({
-			attestation: z.string().min(1),
-			expiresIn: z.number().int().positive(),
-		})
-		.strict(),
-} as const;
-
 /** Node-local start endpoint: mints the nonce and returns the pinned broker URL. */
 export const identityAttestationStartOperation = {
 	id: "identity.attestation.start.v1",
