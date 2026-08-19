@@ -82,9 +82,8 @@ jobs:
         run: pnpm test:ci
 
   component:
-    # Skip on merge_group: kept off the required-status-checks path so the
-    # queue doesn't re-run testcontainers on every rebased candidate.
-    if: github.event_name != 'merge_group'
+    # Required by .cogni/repo-policy.json on both pull_request and merge_group.
+    # A required job must never disappear from a merge-queue candidate.
     runs-on: ubuntu-latest # GitHub-hosted runners provide Docker for testcontainers
     needs: static
     steps:
