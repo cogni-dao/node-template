@@ -11,9 +11,8 @@
  * Invariants:
  *   - FAIL_CLOSED: any error that is not provably a bad token maps to
  *     `jwks_unavailable` (503 at the route) — never silently accepts.
- *   - PINNED_ISSUER: the deployment's DOMAIN selects one canonical operator
- *     host; an explicit COGNI_OPERATOR_ISSUER_URL must equal that host, and
- *     the token `iss` claim must equal the resolved URL.
+ *   - PINNED_ISSUER: the deployment's DOMAIN selects the canonical operator
+ *     host, and the token `iss` claim must equal that resolved URL.
  *   - EDDSA_ONLY: `alg` restricted to EdDSA (Ed25519) — no HS/none downgrade.
  *   - EXACT_DEPLOYMENT_ORIGIN: signed targetOrigin must equal this node's
  *     canonical APP_BASE_URL, preventing candidate/preview/production replay.
@@ -55,44 +54,18 @@ function configuredOrigin(url: string): string {
 }
 
 /** Resolve the environment-local issuer from the same base domain that routes the operator. */
-export function resolveOperatorIssuerUrl(input: {
-	deploymentEnvironment: string | undefined;
-	domain: string | undefined;
-	configuredIssuer: string | undefined;
-}): string {
-	switch (input.deploymentEnvironment) {
-		case "candidate-a":
-		case "preview":
-		case "production":
-			break;
-		default:
-			throw new Error(
-				`Unsupported DEPLOY_ENVIRONMENT for operator attestations: ${input.deploymentEnvironment ?? "missing"}`,
-			);
-	}
-	if (!input.domain) {
+export function resolveOperatorIssuerUrl(
+	domain: string | undefined,
+): string {
+	if (!domain) {
 		throw new Error("DOMAIN is required for operator attestations");
 	}
-	const canonicalIssuer = configuredOrigin(`https://${input.domain}`);
-	if (!input.configuredIssuer) return canonicalIssuer;
-
-	const configuredIssuer = configuredOrigin(input.configuredIssuer);
-	if (configuredIssuer !== canonicalIssuer) {
-		throw new Error(
-			`COGNI_OPERATOR_ISSUER_URL must equal ${canonicalIssuer} for DEPLOY_ENVIRONMENT=${input.deploymentEnvironment}`,
-		);
-	}
-	return configuredIssuer;
+	return configuredOrigin(`https://${domain}`);
 }
 
 /** Issuer URL for operator attestations, pinned to this deployment environment. */
 export function getOperatorIssuerUrl(): string {
-	const env = serverEnv();
-	return resolveOperatorIssuerUrl({
-		deploymentEnvironment: env.DEPLOY_ENVIRONMENT,
-		domain: env.DOMAIN,
-		configuredIssuer: env.COGNI_OPERATOR_ISSUER_URL,
-	});
+	return resolveOperatorIssuerUrl(serverEnv().DOMAIN);
 }
 
 /** Exact relying-node origin used for deployment-bound attestation checks. */

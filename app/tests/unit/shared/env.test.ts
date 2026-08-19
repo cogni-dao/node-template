@@ -61,19 +61,6 @@ describe("env schemas", () => {
     expect(env.DATABASE_URL).toBe("sqlite://build.db");
   });
 
-  it.each([
-    "http://cognidao.org",
-    "https://user:pass@cognidao.org",
-  ])("rejects unsafe operator identity issuer %s", async (issuer) => {
-    Object.assign(process.env, {
-      ...BASE_VALID_ENV,
-      COGNI_OPERATOR_ISSUER_URL: issuer,
-    });
-
-    const { serverEnv } = await import("@/shared/env/server");
-    expect(() => serverEnv()).toThrow();
-  });
-
   it("throws when DATABASE_URL is missing", async () => {
     const envWithoutDbUrl = { ...BASE_VALID_ENV };
     // @ts-expect-error - intentionally removing required field for test

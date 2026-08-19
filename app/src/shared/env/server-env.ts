@@ -27,24 +27,6 @@ import { assertEnvInvariants } from "./invariants";
 const emptyToUndefined = (v: unknown) =>
   typeof v === "string" && v === "" ? undefined : v;
 const optionalUrl = z.preprocess(emptyToUndefined, z.string().url().optional());
-const originUrl = z.string().url().refine(
-  (value) => {
-    try {
-      const parsed = new URL(value);
-      return (
-        parsed.protocol === "https:" &&
-        parsed.pathname === "/" &&
-        !parsed.search &&
-        !parsed.hash &&
-        !parsed.username &&
-        !parsed.password
-      );
-    } catch {
-      return false;
-    }
-  },
-  { message: "must be an HTTPS origin URL without path, query, or credentials" }
-);
 const optionalString = z.preprocess(
   emptyToUndefined,
   z.string().min(1).optional()
@@ -284,13 +266,6 @@ export const serverSchema = z.object({
   POSTHOG_HOST: optionalUrl,
   POSTHOG_PROJECT_ID: optionalString,
 
-  // Optional assertion for the environment-local operator attestation issuer.
-  // Runtime resolution derives the issuer from DOMAIN and rejects this value
-  // unless it exactly matches that environment's operator/base origin.
-  COGNI_OPERATOR_ISSUER_URL: z.preprocess(
-    emptyToUndefined,
-    originUrl.optional()
-  ),
 });
 
 type ServerEnv = z.infer<typeof serverSchema> & {
