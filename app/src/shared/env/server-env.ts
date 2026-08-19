@@ -265,7 +265,6 @@ export const serverSchema = z.object({
   POSTHOG_API_KEY: optionalString,
   POSTHOG_HOST: optionalUrl,
   POSTHOG_PROJECT_ID: optionalString,
-
 });
 
 type ServerEnv = z.infer<typeof serverSchema> & {
