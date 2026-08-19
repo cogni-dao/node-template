@@ -75,10 +75,15 @@ async function resolvePublicationEvidence(
     return { evidence: "unknown", liveRevision: null };
   }
 
-  const liveRoot = await deps.readLiveRoot(
-    deps.chainId,
-    deps.distributorAddress
-  );
+  let liveRoot: string | null;
+  try {
+    liveRoot = await deps.readLiveRoot(
+      deps.chainId,
+      deps.distributorAddress
+    );
+  } catch {
+    return { evidence: "unknown", liveRevision: null };
+  }
   if (liveRoot === null) {
     return { evidence: "unknown", liveRevision: null };
   }
