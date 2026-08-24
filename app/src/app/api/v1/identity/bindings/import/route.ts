@@ -7,12 +7,12 @@
  *   proved GitHub on the operator hub become claimable on this node without
  *   node-local OAuth (task.5024, fixes bug.5039 class of unresolved claimants).
  * Scope: POST-only. Verifies the attestation JWT (delegated to
- *   operator-attestation verifier), enforces session-wallet === token-wallet,
- *   then writes THIS node's own user_bindings row via bootstrap/identity.
+ *   operator-attestation verifier), then writes THIS node's own user_bindings
+ *   row for the local user who owns the one-time nonce.
  *   Does not issue attestations (operator's job) or run identity resolution.
  * Invariants:
- *   - SIWE_SESSION_REQUIRED: token alone is useless — a live session for the
- *     attested wallet must present it (replay-safe by construction).
+ *   - LOCAL_SESSION_REQUIRED: token alone is useless — a live local session
+ *     must own and consume the one-time nonce.
  *   - FAIL_CLOSED: JWKS unreachable → 503 jwks_unavailable, never a silent bind.
  *   - NO_AUTO_MERGE: github id owned by a different user → 409 already_linked.
  *   - NODE_WRITES_OWN_LEDGER: binding + evidence rows are written locally with
@@ -68,19 +68,6 @@ export const POST = wrapRouteHandlerWithLogging(
 				"Attestation verification failed",
 			);
 			return NextResponse.json({ errorCode: verified.errorCode }, { status });
-		}
-
-		// Token is only redeemable by a live session for the attested wallet.
-		const sessionWallet = sessionUser.walletAddress?.toLowerCase() ?? null;
-		if (!sessionWallet || sessionWallet !== verified.claims.wallet) {
-			ctx.log.warn(
-				{ errorCode: "wallet_mismatch" },
-				"Attestation wallet does not match session wallet",
-			);
-			return NextResponse.json(
-				{ errorCode: "wallet_mismatch" },
-				{ status: 403 },
-			);
 		}
 
 		const result = await redeemAttestedGithubBinding({

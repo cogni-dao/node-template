@@ -3,11 +3,10 @@
 
 /**
  * Module: `@app/_lib/auth/operator-attestation`
- * Purpose: Verifies operator-signed identity attestations — short-lived EdDSA
- *   JWTs binding {wallet ↔ github id+login} — against the issuer's remote JWKS.
+ * Purpose: Verifies operator-signed GitHub OAuth attestations against the issuer's remote JWKS.
  * Scope: Signature/exp/issuer verification + claim shape validation only. Does
- *   NOT compare the wallet to the session (route's job) or write bindings
- *   (identity feature service's job).
+ *   NOT decide which local user owns the binding (the consume-once nonce does)
+ *   or write bindings (identity feature service's job).
  * Invariants:
  *   - FAIL_CLOSED: any error that is not provably a bad token maps to
  *     `jwks_unavailable` (503 at the route) — never silently accepts.
@@ -34,8 +33,6 @@ import { serverEnv } from "@/shared/env/server";
 export interface OperatorAttestationClaims {
 	/** Pinned issuer URL the token was verified against. */
 	issuer: string;
-	/** Wallet address the operator attests (lowercased). */
-	wallet: string;
 	github: { id: string; login: string | null };
 	nodeId: string;
 	targetOrigin: string;
@@ -142,7 +139,6 @@ export async function verifyOperatorAttestation(
 			ok: true,
 			claims: {
 				issuer: issuerUrl,
-				wallet: parsed.data.wallet.toLowerCase(),
 				github: parsed.data.github,
 				nodeId: parsed.data.nodeId,
 				targetOrigin: parsed.data.targetOrigin,

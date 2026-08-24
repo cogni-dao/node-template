@@ -189,10 +189,6 @@ const FEEDBACK_MESSAGES: Record<
     text: "GitHub verification token was invalid or expired. Please try again.",
     variant: "error",
   },
-  wallet_mismatch: {
-    text: "GitHub verification was issued for a different wallet. Sign in with the attested wallet and try again.",
-    variant: "error",
-  },
   jwks_unavailable: {
     text: "Could not reach the verification hub. Please try again later.",
     variant: "error",
@@ -202,7 +198,6 @@ const FEEDBACK_MESSAGES: Record<
 /** Attestation error codes surfaced verbatim as feedback banners. */
 const ATTESTATION_ERROR_CODES = new Set([
   "invalid_token",
-  "wallet_mismatch",
   "jwks_unavailable",
   "already_linked",
 ]);

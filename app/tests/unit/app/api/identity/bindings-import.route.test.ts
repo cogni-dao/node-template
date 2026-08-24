@@ -10,7 +10,7 @@
  *   or database.
  * Invariants:
  *   - tampered/expired/wrong-issuer token → 401 invalid_token
- *   - session wallet ≠ token wallet → 403 wallet_mismatch
+ *   - the live node-local session must own the consume-once nonce
  *   - github id bound to different user → 409 already_linked (NO_AUTO_MERGE)
  *   - JWKS unreachable → 503 jwks_unavailable (fail closed)
  *   - happy path → 201 {bound:true}; repeat → 200 already_bound
@@ -28,7 +28,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const ISSUER = "https://test.cognidao.org";
 const SESSION_WALLET = "0xAbCd000000000000000000000000000000001234"; // mixed case on purpose
-const TOKEN_WALLET = SESSION_WALLET.toLowerCase();
 const USER_ID = "11111111-1111-4111-8111-111111111111";
 const NODE_ID = "22222222-2222-4222-8222-222222222222";
 const NONCE = "33333333-3333-4333-8333-333333333333";
@@ -132,7 +131,6 @@ function jwksOk(): Response {
 }
 
 async function mintToken(opts?: {
-	wallet?: string;
 	issuer?: string;
 	expiredBy?: number;
 	key?: typeof privateKey;
@@ -152,7 +150,6 @@ async function mintToken(opts?: {
 		nodeId: opts?.nodeId ?? NODE_ID,
 		nonce: opts?.nonce ?? NONCE,
 		targetOrigin: opts?.targetOrigin ?? "https://node.test.example",
-		wallet: opts?.wallet ?? TOKEN_WALLET,
 		github: {
 			id: "12345",
 			login: opts && "githubLogin" in opts ? opts.githubLogin : "octocat",
@@ -160,7 +157,6 @@ async function mintToken(opts?: {
 	})
 		.setProtectedHeader({ alg: "EdDSA", kid: opts?.kid ?? "k1" })
 		.setIssuer(opts?.issuer ?? ISSUER)
-		.setSubject(USER_ID)
 		.setAudience(opts?.audience ?? `urn:cogni:node:${NODE_ID}`)
 		.setJti(JTI)
 		.setIssuedAt(opts?.expiredBy ? now - opts.expiredBy - 600 : now)
@@ -333,20 +329,6 @@ describe("POST /api/v1/identity/bindings/import", () => {
 		expect(mockRedeemBinding).not.toHaveBeenCalled();
 	});
 
-	it("403 wallet_mismatch when the token attests a different wallet", async () => {
-		const res = await IMPORT_POST(
-			makeRequest({
-				token: await mintToken({
-					wallet: "0x9999999999999999999999999999999999999999",
-				}),
-			}),
-		);
-
-		expect(res.status).toBe(403);
-		expect(await res.json()).toEqual({ errorCode: "wallet_mismatch" });
-		expect(mockRedeemBinding).not.toHaveBeenCalled();
-	});
-
 	it("503 jwks_unavailable when DOMAIN is not a bare host", async () => {
 		mockDomain = "test.cognidao.org/unexpected-path";
 
@@ -358,7 +340,7 @@ describe("POST /api/v1/identity/bindings/import", () => {
 		expect(mockRedeemBinding).not.toHaveBeenCalled();
 	});
 
-	it("403 wallet_mismatch when the session has no wallet (OAuth-only user)", async () => {
+	it("binds to the nonce-owning local account without requiring a wallet", async () => {
 		mockGetSessionUser.mockResolvedValue({
 			id: USER_ID,
 			walletAddress: null,
@@ -368,8 +350,10 @@ describe("POST /api/v1/identity/bindings/import", () => {
 
 		const res = await IMPORT_POST(makeRequest({ token: await mintToken() }));
 
-		expect(res.status).toBe(403);
-		expect(await res.json()).toEqual({ errorCode: "wallet_mismatch" });
+		expect(res.status).toBe(201);
+		expect(mockRedeemBinding).toHaveBeenCalledWith(
+			expect.objectContaining({ userId: USER_ID, nonce: NONCE }),
+		);
 	});
 
 	it("503 jwks_unavailable when the issuer JWKS is unreachable (fail closed)", async () => {
