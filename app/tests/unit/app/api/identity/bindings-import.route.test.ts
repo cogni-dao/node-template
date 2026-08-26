@@ -13,7 +13,7 @@
  *   - the live node-local session must own the consume-once nonce
  *   - github id bound to different user → 409 already_linked (NO_AUTO_MERGE)
  *   - JWKS unreachable → 503 jwks_unavailable (fail closed)
- *   - happy path → 201 {bound:true}; repeat → 200 already_bound
+ *   - happy path → 201 {bound:true, githubLogin}; repeat → 200 already_bound
  * Side-effects: none (global fetch stubbed)
  * Links: src/app/api/v1/identity/bindings/import/route.ts, src/app/_lib/auth/operator-attestation.ts
  * @internal
@@ -196,7 +196,10 @@ describe("POST /api/v1/identity/bindings/import", () => {
 		const res = await IMPORT_POST(makeRequest({ token: await mintToken() }));
 
 		expect(res.status).toBe(201);
-		expect(await res.json()).toEqual({ bound: true });
+		expect(await res.json()).toEqual({
+			bound: true,
+			githubLogin: "octocat",
+		});
 		expect(mockRedeemBinding).toHaveBeenCalledWith({
 			userId: USER_ID,
 			nonce: NONCE,
@@ -275,7 +278,11 @@ describe("POST /api/v1/identity/bindings/import", () => {
 		const res = await IMPORT_POST(makeRequest({ token: await mintToken() }));
 
 		expect(res.status).toBe(200);
-		expect(await res.json()).toEqual({ bound: true, code: "already_bound" });
+		expect(await res.json()).toEqual({
+			bound: true,
+			code: "already_bound",
+			githubLogin: "octocat",
+		});
 	});
 
 	it("409 already_linked when the github id is bound to a different user (NO_AUTO_MERGE)", async () => {

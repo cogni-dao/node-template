@@ -17,6 +17,8 @@
  *   - NO_AUTO_MERGE: github id owned by a different user → 409 already_linked.
  *   - NODE_WRITES_OWN_LEDGER: binding + evidence rows are written locally with
  *     provenance {method: operator_attestation, issuer, jti}.
+ *   - ECHO_THE_BOUND_LOGIN: the response names the GitHub login actually bound, so
+ *     the UI can prove WHICH account was recorded rather than saying "verified".
  * Side-effects: IO (remote JWKS fetch, service-role database writes)
  * Links: src/app/_lib/auth/operator-attestation.ts, src/features/identity/services/operator-attested-binding.ts, task.5024
  * @public
@@ -106,13 +108,23 @@ export const POST = wrapRouteHandlerWithLogging(
 			"Operator-attested github binding imported",
 		);
 
+		// Echo the bound login so the UI can name the account it just recorded.
+		// A generic "verified" is what let the wrong account pass unnoticed on the
+		// 2026-08-19 candidate; the human must be able to read back WHO was bound.
 		if (result === "already_bound") {
 			return NextResponse.json(
-				{ bound: true, code: "already_bound" },
+				{
+					bound: true,
+					code: "already_bound",
+					githubLogin: verified.claims.github.login,
+				},
 				{ status: 200 },
 			);
 		}
 
-		return NextResponse.json({ bound: true }, { status: 201 });
+		return NextResponse.json(
+			{ bound: true, githubLogin: verified.claims.github.login },
+			{ status: 201 },
+		);
 	},
 );

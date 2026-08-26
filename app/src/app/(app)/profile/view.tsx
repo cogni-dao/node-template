@@ -204,15 +204,24 @@ const ATTESTATION_ERROR_CODES = new Set([
 
 function FeedbackBanner({
   linkedProvider,
+  linkedLogin,
   error,
 }: {
   linkedProvider: string | null;
+  linkedLogin: string | null;
   error: string | null;
 }): ReactElement | null {
   if (linkedProvider) {
     return (
       <div className="rounded-md border border-primary/30 bg-primary/5 px-4 py-3 text-foreground text-sm">
-        Successfully linked your {linkedProvider} account.
+        {linkedLogin ? (
+          <>
+            Verified <strong>{linkedProvider} @{linkedLogin}</strong> on this
+            node. Contributions by that account can now be claimed here.
+          </>
+        ) : (
+          <>Successfully linked your {linkedProvider} account.</>
+        )}
       </div>
     );
   }
@@ -551,6 +560,7 @@ export function ProfileView(): ReactElement {
 
   // Read feedback query params and strip them to prevent re-display on refresh
   const linkedProvider = searchParams.get("linked");
+  const linkedLogin = searchParams.get("login");
   const error = searchParams.get("error");
 
   useEffect(() => {
@@ -584,7 +594,17 @@ export function ProfileView(): ReactElement {
           body: JSON.stringify({ token }),
         });
         if (res.ok) {
-          window.location.replace("/profile?linked=GitHub");
+          // Name the account that was actually bound — a generic "verified" is
+          // exactly what hid the wrong-account bug on the 2026-08-19 candidate.
+          const bound: { githubLogin?: string | null } | null = await res
+            .json()
+            .catch(() => null);
+          const login = bound?.githubLogin;
+          window.location.replace(
+            login
+              ? `/profile?linked=GitHub&login=${encodeURIComponent(login)}`
+              : "/profile?linked=GitHub"
+          );
           return;
         }
         const data: { errorCode?: string } | null = await res
@@ -685,7 +705,11 @@ export function ProfileView(): ReactElement {
       <div className="border-border border-b" />
 
       {/* Feedback banner for linking results */}
-      <FeedbackBanner linkedProvider={linkedProvider} error={error} />
+      <FeedbackBanner
+        error={error}
+        linkedLogin={linkedLogin}
+        linkedProvider={linkedProvider}
+      />
 
       {/* ── Profile section (display name + avatar color, no divider between) ── */}
 
