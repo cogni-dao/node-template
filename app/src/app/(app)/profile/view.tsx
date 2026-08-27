@@ -30,6 +30,7 @@ import {
   GoogleIcon,
   PageContainer,
 } from "@/components";
+import { Spinner } from "@cogni/node-ui-kit/shadcn/spinner";
 import { OpenAIIcon } from "@/features/ai/icons/providers/OpenAIIcon";
 
 /* ─── Types ────────────────────────────────────────────────────────── */
@@ -578,12 +579,14 @@ export function ProfileView(): ReactElement {
   // #attestation=<jwt>. Auto-POST it to the import route, then replace the
   // URL (full navigation) so the token never lingers in history and the
   // existing ?linked= / ?error= feedback + profile refetch path is reused.
+  const [attestationImporting, setAttestationImporting] = useState(false);
   const attestationHandled = useRef(false);
   useEffect(() => {
     if (attestationHandled.current) return;
     const hash = window.location.hash;
     if (!hash.startsWith("#attestation=")) return;
     attestationHandled.current = true;
+    setAttestationImporting(true);
 
     void (async () => {
       try {
@@ -697,6 +700,22 @@ export function ProfileView(): ReactElement {
       callbackUrl: `/profile?linked=${providerId}`,
     });
   };
+
+  // Return leg from the operator identity broker: the page would otherwise render
+  // an empty profile for the duration of the import POST and then hard-navigate,
+  // which read as a blank flash. Show the shared Spinner and say what is happening.
+  if (attestationImporting) {
+    return (
+      <PageContainer maxWidth="2xl">
+        <div className="flex min-h-[60vh] flex-col items-center justify-center gap-3">
+          <Spinner className="size-6 text-muted-foreground" />
+          <p className="text-muted-foreground text-sm">
+            Recording your verified GitHub account on this node…
+          </p>
+        </div>
+      </PageContainer>
+    );
+  }
 
   return (
     <PageContainer maxWidth="2xl">
@@ -843,7 +862,14 @@ export function ProfileView(): ReactElement {
                   });
               }}
             >
-              {attestationStarting ? "Starting…" : "Verify"}
+              {attestationStarting ? (
+                <>
+                  <Spinner />
+                  Redirecting to GitHub…
+                </>
+              ) : (
+                "Verify"
+              )}
             </Button>
           </SettingRow>
         )}
