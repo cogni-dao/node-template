@@ -107,22 +107,69 @@ function requiredCheckContexts(policy) {
   return contexts;
 }
 
+// GitHub names a check run after the job's static `name` when one is present, and
+// falls back to the job ID otherwise. Matching a required context against the job ID
+// alone is therefore unsound: adding `name: Unit Tests` to job `unit` leaves the job
+// ID intact while the emitted context becomes "Unit Tests" — the required check
+// `unit` then never reports and the ruleset deadlocks the repo. Resolve the effective
+// name the same way GitHub does.
+function effectiveCheckName(jobId, job) {
+  const declared = job?.name;
+  return typeof declared === "string" && declared.length > 0 ? declared : jobId;
+}
+
+// A required context must resolve to ONE statically-known check name. Expressions are
+// interpolated at run time and matrices fan one job out into `name (value)` per leg,
+// so neither can be proven to emit the exact context this policy requires.
+function unprovableCheckNameReason(jobId, job) {
+  if (String(job?.name ?? "").includes("${{")) {
+    return "declares a templated `name:` whose emitted check context cannot be resolved statically";
+  }
+  if (job?.strategy?.matrix !== undefined) {
+    return "uses `strategy.matrix`, which emits one check per matrix leg rather than the bare context";
+  }
+  return null;
+}
+
+function findRequiredCheckProviders(workflows, context) {
+  const providers = [];
+  for (const { path, workflow } of workflows) {
+    for (const [jobId, job] of Object.entries(workflow?.jobs ?? {})) {
+      if (effectiveCheckName(jobId, job) === context) {
+        providers.push({ path, workflow, jobId, job });
+      }
+    }
+  }
+  return providers;
+}
+
 function assertRequiredChecksRunOnReviewEvents(policy, workflows) {
   for (const context of requiredCheckContexts(policy)) {
-    const providers = workflows.filter(({ workflow }) =>
-      Object.hasOwn(workflow?.jobs ?? {}, context)
-    );
+    const providers = findRequiredCheckProviders(workflows, context);
     if (providers.length !== 1) {
+      // Name the near-miss explicitly: a job whose ID matches but whose `name:` has
+      // been changed is the exact drift this check exists to catch, and "found 0" on
+      // its own sends the reader hunting for a deleted job.
+      const renamed = workflows.flatMap(({ path, workflow }) =>
+        Object.entries(workflow?.jobs ?? {})
+          .filter(([jobId, job]) => jobId === context && effectiveCheckName(jobId, job) !== context)
+          .map(([jobId, job]) => `${path} job ${jobId} now emits ${JSON.stringify(effectiveCheckName(jobId, job))}`)
+      );
       fail(
         REPO_POLICY_PATH,
-        `required check ${JSON.stringify(context)} must be provided by exactly one workflow; found ${providers.length}`
+        `required check ${JSON.stringify(context)} must be emitted by exactly one job; found ${providers.length}` +
+          (renamed.length ? ` (${renamed.join("; ")})` : "")
       );
       continue;
     }
-    const [{ path, workflow }] = providers;
+    const [{ path, workflow, jobId, job }] = providers;
+    const unprovable = unprovableCheckNameReason(jobId, job);
+    if (unprovable) {
+      fail(path, `required check ${JSON.stringify(context)} ${unprovable}`);
+    }
     expectTrigger(path, workflow, "pull_request");
     expectTrigger(path, workflow, "merge_group");
-    const jobIf = String(workflow.jobs[context]?.if ?? "");
+    const jobIf = String(job?.if ?? "");
     if (
       jobIf.includes("github.event_name") ||
       jobIf.includes("github.event.action")
@@ -132,6 +179,36 @@ function assertRequiredChecksRunOnReviewEvents(policy, workflows) {
         `required job ${JSON.stringify(context)} must not conditionally disappear for a review event`
       );
     }
+  }
+}
+
+// A required context that can SKIP is a required context that can pass while nothing
+// ran — GitHub scores a skipped required check as success. Any required job whose
+// upstream deps are themselves optional must therefore run under a bare `always()`
+// and assert those deps itself, rather than gating its own `if` on their results.
+function assertRequiredChecksFailClosed(policy, workflows) {
+  for (const context of requiredCheckContexts(policy)) {
+    const providers = findRequiredCheckProviders(workflows, context);
+    if (providers.length !== 1) continue; // already reported by the emitter check
+    const [{ path, job }] = providers;
+    if (!Object.hasOwn(job ?? {}, "if")) continue; // no condition: cannot skip
+    const condition = String(job.if).replace(/\s+/g, " ").trim();
+    if (condition === "always()") continue;
+    if (condition.includes("needs.") && condition.includes(".result")) {
+      fail(
+        path,
+        `required check ${JSON.stringify(context)} gates its own \`if\` on upstream ` +
+          `results (${JSON.stringify(condition)}); it would SKIP on upstream failure and ` +
+          "GitHub scores a skipped required check as SUCCESS. Use `if: always()` and " +
+          "assert the upstream results in a failing step instead."
+      );
+      continue;
+    }
+    fail(
+      path,
+      `required check ${JSON.stringify(context)} declares a conditional \`if\` ` +
+        `(${JSON.stringify(condition)}); a required check must not be skippable`
+    );
   }
 }
 
@@ -238,8 +315,11 @@ expectEqual(PR_LINT_WORKFLOW_PATH, prLintWorkflow?.name, "Lint PR", "workflow na
 expectTrigger(PR_LINT_WORKFLOW_PATH, prLintWorkflow, "pull_request");
 expectNoWorkflowDispatch(PR_LINT_WORKFLOW_PATH, prLintWorkflow);
 
-assertRequiredChecksRunOnReviewEvents(repoPolicy, [
+const REQUIRED_CHECK_WORKFLOWS = [
   { path: CI_WORKFLOW_PATH, workflow: ciWorkflow },
   { path: PR_BUILD_WORKFLOW_PATH, workflow: prBuildWorkflow },
   { path: PR_LINT_WORKFLOW_PATH, workflow: prLintWorkflow },
-]);
+];
+
+assertRequiredChecksRunOnReviewEvents(repoPolicy, REQUIRED_CHECK_WORKFLOWS);
+assertRequiredChecksFailClosed(repoPolicy, REQUIRED_CHECK_WORKFLOWS);

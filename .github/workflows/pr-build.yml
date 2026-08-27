@@ -216,14 +216,40 @@ jobs:
           if-no-files-found: error
           overwrite: true
 
+  # `manifest` is a REQUIRED status check on every spawned node repo
+  # (.cogni/repo-policy.json). GitHub scores a SKIPPED required check as SUCCESS, so
+  # this job must never skip: gating it on upstream success meant a failed `detect` or
+  # `build` silently satisfied the required set and a broken image could merge.
+  # `detect` and `build` are deliberately not themselves required (they are
+  # change-scoped and skip legitimately), which is exactly why the fail-closed
+  # assertion has to live here, in the one job the ruleset always waits on.
   manifest:
     needs: [resolve, detect, build]
-    if: |
-      always() &&
-      needs.detect.result == 'success' &&
-      (needs.build.result == 'success' || needs.build.result == 'skipped')
+    if: always()
     runs-on: ubuntu-latest
     steps:
+      - name: Assert upstream build succeeded
+        env:
+          RESOLVE_RESULT: ${{ needs.resolve.result }}
+          DETECT_RESULT: ${{ needs.detect.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+        run: |
+          fail=0
+          # `build` skips legitimately when detect finds no affected targets.
+          for pair in "resolve:$RESOLVE_RESULT:success" \
+                      "detect:$DETECT_RESULT:success" \
+                      "build:$BUILD_RESULT:success|skipped"; do
+            job=${pair%%:*}; rest=${pair#*:}; result=${rest%%:*}; allowed=${rest#*:}
+            case "|$allowed|" in
+              *"|$result|"*) echo "  $job = $result (ok)" ;;
+              *) echo "::error::required upstream job '$job' finished as '$result'; allowed: ${allowed//|/, }"; fail=1 ;;
+            esac
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::manifest fails closed — a required check must not pass on a broken build"
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
