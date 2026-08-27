@@ -831,16 +831,19 @@ export function ProfileView(): ReactElement {
         );
       })}
 
-      {/* GitHub fallback when node-local OAuth is not configured (task.5024):
-          verify GitHub once on the operator hub, which redirects back with
-          #attestation=<jwt> for the auto-import effect above. */}
+      {/* GitHub when node-local OAuth is not configured (task.5024): the operator
+          hub runs the authorization and redirects back with #attestation=<jwt> for the
+          auto-import effect above. Copy deliberately matches OAUTH_PROVIDERS above —
+          "Link your GitHub account." / "Link" — because the operator hop is OUR
+          plumbing, not something a contributor should have to understand. Any wording
+          that leaks it ("verify via this environment's operator hub") is a bug. */}
       {providersLoaded &&
         !configuredProviders.has("github") &&
         !linkedProviderIds.has("github") && (
           <SettingRow
             icon={<GitHubIcon className="size-5" />}
             label="GitHub"
-            description="Verify your GitHub account via this environment's operator hub."
+            description="Link your GitHub account."
           >
             <Button
               variant="outline"
@@ -868,7 +871,7 @@ export function ProfileView(): ReactElement {
                   Redirecting to GitHub…
                 </>
               ) : (
-                "Verify"
+                "Link"
               )}
             </Button>
           </SettingRow>
