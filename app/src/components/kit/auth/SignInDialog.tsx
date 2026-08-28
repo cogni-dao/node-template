@@ -33,6 +33,7 @@ import {
 	GoogleIcon,
 } from "@/components/kit/data-display/ProviderIcons";
 import { Button } from "@/components/kit/inputs/Button";
+import { OPERATOR_ATTESTED_PROVIDER_ID } from "@/shared/identity/signin-paths";
 
 /**
  * Presentation for providers we ship artwork for. This is a LOOKUP, never a filter —
@@ -45,6 +46,10 @@ const PROVIDER_META: Record<
 	{ readonly label: string; readonly icon: typeof GitHubIcon }
 > = {
 	github: { label: "Continue with GitHub", icon: GitHubIcon },
+	[OPERATOR_ATTESTED_PROVIDER_ID]: {
+		label: "Continue with GitHub",
+		icon: GitHubIcon,
+	},
 	google: { label: "Continue with Google", icon: GoogleIcon },
 	discord: { label: "Continue with Discord", icon: DiscordIcon },
 };
@@ -52,6 +57,33 @@ const PROVIDER_META: Record<
 interface OauthProvider {
 	readonly id: string;
 	readonly name: string;
+}
+
+/**
+ * Begin sign-in for one provider.
+ *
+ * A real OAuth provider goes straight to NextAuth. `operator-github` is NOT one: it is a
+ * Credentials provider whose credential is an attestation the OPERATOR has to mint first,
+ * so calling `signIn()` on it posts an empty credential to the callback and bounces with
+ * `?error=CredentialsSignin`. It has to take the broker round trip and only returns to
+ * NextAuth from the completion page, token in hand.
+ *
+ * Caught by clicking the real button on the deployed candidate: the provider was
+ * correctly advertised by `/api/auth/providers` AND correctly registered in `auth.ts`,
+ * and the button still did nothing. Neither typecheck nor unit tests can see this.
+ */
+async function startSignIn(providerId: string): Promise<void> {
+	if (providerId !== OPERATOR_ATTESTED_PROVIDER_ID) {
+		void signIn(providerId, { callbackUrl: "/chat" });
+		return;
+	}
+	const res = await fetch("/api/v1/identity/bindings/import/start", {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+	});
+	if (!res.ok) return;
+	const { authorizeUrl } = (await res.json()) as { authorizeUrl: string };
+	window.location.assign(authorizeUrl);
 }
 
 interface SignInDialogProps {
@@ -124,7 +156,7 @@ export function SignInDialog({
 								key={provider.id}
 								variant="outline"
 								className="h-12 justify-start gap-3 text-sm"
-								onClick={() => signIn(provider.id, { callbackUrl: "/chat" })}
+								onClick={() => startSignIn(provider.id)}
 							>
 								{Icon ? <Icon className="size-5" /> : null}
 								{meta?.label ?? `Continue with ${provider.name}`}

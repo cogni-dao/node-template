@@ -92,3 +92,52 @@ describe("SignInDialog — renders configured providers (bug.5074)", () => {
 		expect(screen.queryByText("Continue with GitHub")).not.toBeInTheDocument();
 	});
 });
+
+describe("SignInDialog — operator-attested GitHub takes the broker round trip (task.5042)", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	it("does NOT hand operator-github to signIn() — it has no credential yet", async () => {
+		// Clicking it with signIn() posts an empty credential straight to the callback and
+		// bounces with ?error=CredentialsSignin. Found by clicking the deployed button.
+		const assign = vi.fn();
+		vi.stubGlobal("location", { assign });
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(() =>
+				Promise.resolve({
+					ok: true,
+					json: () =>
+						Promise.resolve({
+							credentials: { id: "credentials", name: "SIWE" },
+							"operator-github": { id: "operator-github", name: "GitHub" },
+						}),
+				}),
+			),
+		);
+		render(
+			<SignInDialog open onOpenChange={() => {}} onWalletConnect={() => {}} />,
+		);
+		const btn = await screen.findByText("Continue with GitHub");
+
+		// Re-stub fetch for the start-leg call the click makes.
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(() =>
+				Promise.resolve({
+					ok: true,
+					json: () =>
+						Promise.resolve({
+							authorizeUrl: "https://op.test/identity/attest?x=1",
+						}),
+				}),
+			),
+		);
+		btn.click();
+		await new Promise((r) => setTimeout(r, 0));
+
+		expect(signIn).not.toHaveBeenCalled();
+		expect(assign).toHaveBeenCalledWith("https://op.test/identity/attest?x=1");
+	});
+});
