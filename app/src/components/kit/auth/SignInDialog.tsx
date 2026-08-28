@@ -81,7 +81,7 @@ async function startSignIn(providerId: string): Promise<void> {
 		method: "POST",
 		headers: { "content-type": "application/json" },
 	});
-	if (!res.ok) return;
+	if (!res.ok) throw new Error("start leg failed");
 	const { authorizeUrl } = (await res.json()) as { authorizeUrl: string };
 	window.location.assign(authorizeUrl);
 }
@@ -102,10 +102,16 @@ export function SignInDialog({
 	// which providers exist is per-deployment, so guessing renders buttons that vanish
 	// (or worse, ones that cannot work).
 	const [providers, setProviders] = useState<readonly OauthProvider[]>([]);
+	// `operator-github` has to fetch a challenge before it can leave the page, so the
+	// click is followed by a real network hop. Without this the button sits inert and
+	// the page looks hung until the redirect finally happens.
+	const [pendingId, setPendingId] = useState<string | null>(null);
 
+	// Fetch on MOUNT, not on open. The dialog is always mounted and merely toggles
+	// `open`, so gating the fetch on `open` meant every user paid the round trip AFTER
+	// clicking Connect and watched an empty dialog fill in. Warm it ahead of time and
+	// the buttons are already there when the dialog appears.
 	useEffect(() => {
-		if (!open) return;
-
 		let cancelled = false;
 		fetch("/api/auth/providers")
 			.then((res) => res.json())
@@ -124,7 +130,7 @@ export function SignInDialog({
 		return () => {
 			cancelled = true;
 		};
-	}, [open]);
+	}, []);
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
@@ -156,7 +162,11 @@ export function SignInDialog({
 								key={provider.id}
 								variant="outline"
 								className="h-12 justify-start gap-3 text-sm"
-								onClick={() => startSignIn(provider.id)}
+								disabled={pendingId !== null}
+								onClick={() => {
+									setPendingId(provider.id);
+									void startSignIn(provider.id).catch(() => setPendingId(null));
+								}}
 							>
 								{Icon ? <Icon className="size-5" /> : null}
 								{meta?.label ?? `Continue with ${provider.name}`}
