@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 /**
- * Module: `@app/auth/attest/complete/view`
+ * Module: `@app/(public)/auth/attest/complete/view`
  * Purpose: The account-intent gate for operator-attested sign-in, rendered on the NODE.
  * Scope: Reads the attestation from the URL fragment, shows who is entering where, and
  *   signs in on a deliberate click. Verifies nothing — the server owns every decision.
@@ -18,6 +18,10 @@
  *   - NO_AUTO_SUBMIT: nothing fires without a human click. This screen is the intent
  *     gate, and it lives here rather than on the operator so a person signing in to a
  *     node never reads a page belonging to a product they did not ask for (task.5042).
+ *   - NODE_CHROME_IS_THE_NODE'S: this sits in `(public)`, so the node's own header
+ *     (brand mark, colours, name) and footer render around it. The destination identity
+ *     is established by the node's real chrome rather than re-drawn here — which is
+ *     also why the body only has to answer "is this you?".
  * Side-effects: IO (signIn), history.replaceState
  * @public
  */
@@ -70,39 +74,43 @@ export function AttestSignInComplete({
 
 	if (expired) {
 		return (
-			<main className="flex min-h-dvh flex-col items-center justify-center gap-6 p-6">
+			<div className="mx-auto flex min-h-[60vh] max-w-sm flex-col items-center justify-center gap-6 px-6 text-center">
 				<p className="text-muted-foreground">Link expired</p>
 				<Button asChild variant="outline">
 					<a href="/">Start over</a>
 				</Button>
-			</main>
+			</div>
 		);
 	}
 
 	return (
-		<main className="flex min-h-dvh flex-col items-center justify-center gap-8 p-6">
-			{/* The face answers "is this you?" faster than any handle can, which is the
-			    only question this screen asks — so it is the only large thing on it. */}
+		<div className="mx-auto flex min-h-[60vh] max-w-sm flex-col items-center justify-center gap-7 px-6">
+			{/* The node's header already says whose house this is. The body answers the
+			    only remaining question — "is this you?" — and a face answers it faster
+			    than a handle can, so the avatar leads and the handle confirms it. */}
 			{login ? (
 				// biome-ignore lint/performance/noImgElement: remote GitHub avatar; next/image would need per-node remote-pattern config for no benefit
 				<img
 					alt=""
-					className="size-20 rounded-full ring-1 ring-border"
-					src={`https://github.com/${login}.png?size=160`}
+					className="size-16 rounded-full ring-1 ring-border"
+					src={`https://github.com/${login}.png?size=128`}
 				/>
-			) : null}
+			) : (
+				<div className="size-16 animate-pulse rounded-full bg-muted" />
+			)}
 
 			<div className="space-y-1.5 text-center">
 				<p className="font-semibold text-2xl tracking-tight">
-					{login ? `@${login}` : "…"}
+					{login ? `@${login}` : "\u00a0"}
 				</p>
 				<p className="text-muted-foreground text-sm">
 					signing in to <span className="text-foreground">{nodeName}</span>
 				</p>
 			</div>
 
-			<div className="flex items-center gap-1">
+			<div className="flex w-full flex-col gap-2">
 				<Button
+					className="w-full"
 					disabled={!token || pending}
 					onClick={() => {
 						setPending(true);
@@ -117,12 +125,12 @@ export function AttestSignInComplete({
 						});
 					}}
 				>
-					{pending ? "Signing in…" : "Continue"}
+					{pending ? "Signing in\u2026" : "Continue"}
 				</Button>
-				<Button asChild variant="ghost">
+				<Button asChild className="w-full" variant="ghost">
 					<a href="/">Cancel</a>
 				</Button>
 			</div>
-		</main>
+		</div>
 	);
 }

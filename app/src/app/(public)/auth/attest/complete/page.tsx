@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 /**
- * Module: `@app/auth/attest/complete`
+ * Module: `@app/(public)/auth/attest/complete`
  * Purpose: Server shell for the sign-in intent gate — supplies THIS node's own name.
  * Scope: Reads repo-spec config and renders the client island. No auth, no IO beyond config.
  * Invariants:
