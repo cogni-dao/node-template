@@ -155,7 +155,7 @@ describe("composeHoldings", () => {
       epochsCompleted: 2,
       holdings: [
         {
-          claimantKey: ownerKey,
+          canonicalOwnerKey: ownerKey,
           claimantKind: "user",
           displayName: "flock-leader",
           totalCredits: "20000",
@@ -211,9 +211,51 @@ describe("composeHoldings", () => {
     );
 
     expect(data.totalContributors).toBe(2);
-    expect(data.holdings.map((holding) => holding.claimantKey)).toEqual([
+    expect(data.holdings.map((holding) => holding.canonicalOwnerKey)).toEqual([
       "user:owner-1",
       "user:owner-2",
     ]);
+  });
+
+  it("keeps credit totals exact above Number.MAX_SAFE_INTEGER", () => {
+    const large = "90071992547409930000";
+    const data = composeHoldings(
+      [
+        {
+          id: "large",
+          status: "finalized",
+          periodStart: "2026-08-24T00:00:00.000Z",
+          periodEnd: "2026-08-31T00:00:00.000Z",
+          weightConfig: {},
+          poolTotalCredits: large,
+        },
+      ],
+      [
+        {
+          epochId: "large",
+          poolTotalCredits: large,
+          items: [
+            {
+              canonicalOwnerKey: "user:large-owner",
+              claimantKey: "user:large-owner",
+              claimant: { kind: "user", userId: "large-owner" },
+              displayName: "large-owner",
+              isLinked: true,
+              totalUnits: large,
+              share: "1.000000",
+              amountCredits: large,
+              receiptIds: ["r-large"],
+            },
+          ],
+        },
+      ]
+    );
+
+    expect(data.totalCreditsIssued).toBe(large);
+    expect(data.holdings[0]).toMatchObject({
+      canonicalOwnerKey: "user:large-owner",
+      totalCredits: large,
+      ownershipPercent: 100,
+    });
   });
 });

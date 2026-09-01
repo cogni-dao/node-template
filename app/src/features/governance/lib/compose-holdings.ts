@@ -6,7 +6,8 @@
  * Purpose: Aggregates finalized claimant attribution across epochs into cumulative holdings.
  * Scope: Pure function. Does not perform IO or access external services.
  * Invariants:
- *   - ALL_MATH_BIGINT: credit values stay as strings until final display derivation
+ *   - ALL_MATH_BIGINT: credit values stay bigint until serialized into the view model
+ *   - CANONICAL_OWNER_IDENTITY: aggregation and deterministic ties use canonicalOwnerKey
  *   - Source of truth is finalized claimant attribution (not mutable allocations)
  * Side-effects: none
  * Links: src/features/governance/types.ts
@@ -17,9 +18,6 @@ import type { HoldingsData, HoldingView } from "@/features/governance/types";
 
 import type { EpochClaimantsDto, EpochDto } from "./compose-epoch";
 
-const DEFAULT_AVATAR = "👤";
-const DEFAULT_COLOR = "220 15% 50%";
-
 export function composeHoldings(
   epochs: readonly EpochDto[],
   claimants: readonly EpochClaimantsDto[]
@@ -27,16 +25,16 @@ export function composeHoldings(
   const ownerMap = new Map<
     string,
     {
-      claimantKey: string;
+      canonicalOwnerKey: string;
       claimantKind: "user" | "identity";
       isLinked: boolean;
       displayName: string | null;
-      totalCredits: number;
+      totalCredits: bigint;
       epochs: Set<string>;
     }
   >();
 
-  let totalCreditsAll = 0;
+  let totalCreditsAll = 0n;
 
   for (let i = 0; i < epochs.length; i++) {
     const epoch = epochs[i];
@@ -44,7 +42,7 @@ export function composeHoldings(
     if (!epoch || !epochClaimants) continue;
 
     for (const item of epochClaimants.items) {
-      const credits = Number(item.amountCredits);
+      const credits = BigInt(item.amountCredits);
       const ownerKind = item.canonicalOwnerKey.startsWith("user:")
         ? "user"
         : item.claimant.kind;
@@ -63,7 +61,7 @@ export function composeHoldings(
         }
       } else {
         ownerMap.set(item.canonicalOwnerKey, {
-          claimantKey: item.canonicalOwnerKey,
+          canonicalOwnerKey: item.canonicalOwnerKey,
           claimantKind: ownerKind,
           isLinked: item.isLinked,
           displayName: item.displayName,
@@ -75,26 +73,32 @@ export function composeHoldings(
   }
 
   const holdings: HoldingView[] = [...ownerMap.values()]
-    .sort((a, b) => b.totalCredits - a.totalCredits)
+    .sort((a, b) => {
+      if (a.totalCredits !== b.totalCredits) {
+        return a.totalCredits > b.totalCredits ? -1 : 1;
+      }
+      return a.canonicalOwnerKey.localeCompare(b.canonicalOwnerKey);
+    })
     .map((entry) => ({
-      claimantKey: entry.claimantKey,
+      canonicalOwnerKey: entry.canonicalOwnerKey,
       claimantKind: entry.claimantKind,
       isLinked: entry.isLinked,
       displayName: entry.displayName,
       claimantLabel: entry.isLinked ? "Linked account" : "Unlinked account",
-      avatar: DEFAULT_AVATAR,
-      color: DEFAULT_COLOR,
-      totalCredits: String(entry.totalCredits),
+      totalCredits: entry.totalCredits.toString(),
       ownershipPercent:
-        totalCreditsAll > 0
-          ? Math.round((entry.totalCredits / totalCreditsAll) * 1000) / 10
+        totalCreditsAll > 0n
+          ? Number(
+              (entry.totalCredits * 1000n + totalCreditsAll / 2n) /
+                totalCreditsAll
+            ) / 10
           : 0,
       epochsContributed: entry.epochs.size,
     }));
 
   return {
     holdings,
-    totalCreditsIssued: String(totalCreditsAll),
+    totalCreditsIssued: totalCreditsAll.toString(),
     totalContributors: holdings.length,
     epochsCompleted: claimants.length,
   };
