@@ -93,6 +93,7 @@ governance: {}
     const result = run(DETECT, cwd, {
       IMAGE_NAME: "ghcr.io/example/node",
       GITHUB_REPOSITORY: "example/node",
+      GITHUB_OUTPUT: "",
     });
 
     expect(result.stderr).toBe("");
@@ -134,6 +135,7 @@ deployment:
     const result = run(DETECT, cwd, {
       IMAGE_NAME: "ghcr.io/example/node",
       GITHUB_REPOSITORY: "example/node",
+      GITHUB_OUTPUT: "",
     });
 
     expect(result.status).toBe(0);
