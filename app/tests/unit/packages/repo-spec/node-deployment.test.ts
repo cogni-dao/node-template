@@ -30,7 +30,7 @@ describe("node deployment repo-spec", () => {
         secretRefs: [],
         bindHost: "0.0.0.0",
         internalUrl: "http://app:3200",
-        resources: { cpuUnits: 0.5, memoryMi: 1024, storageMi: 2048 },
+        resources: { cpuUnits: 2, memoryMi: 2048, storageMi: 4096 },
       },
     ]);
   });
@@ -173,6 +173,18 @@ describe("node deployment repo-spec", () => {
         node_id: "00000000-0000-4000-8000-000000000001",
         governance: {},
         deployment: { services: [appWithoutResources] },
+      })
+    ).toThrow(/Invalid repo-spec structure/);
+  });
+
+  it("rejects partial explicit sizing", () => {
+    expect(() =>
+      parseRepoSpec({
+        node_id: "00000000-0000-4000-8000-000000000001",
+        governance: {},
+        deployment: {
+          services: [{ ...APP, resources: { cpu_units: 2 } }],
+        },
       })
     ).toThrow(/Invalid repo-spec structure/);
   });
