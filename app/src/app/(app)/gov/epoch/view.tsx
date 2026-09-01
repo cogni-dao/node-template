@@ -3,21 +3,22 @@
 
 /**
  * Module: `@app/(app)/gov/epoch/view`
- * Purpose: Read-only epoch page with one lifecycle rail for current and historical epochs.
- * Scope: Renders epoch data and page-level settlement evidence via useEpochsPage.
- * Invariants: EPOCH_OVERVIEW_READ_ONLY, SAME_RAIL_EVERY_EPOCH, UNKNOWN_NEVER_COMPLETE.
- * Side-effects: IO (via useEpochsPage hook)
+ * Purpose: Unified epoch overview with one lifecycle rail for current and historical epochs.
+ * Scope: Renders epoch data, settlement evidence, and the existing contribution sync trigger.
+ * Invariants: NO_ADMIN_SETTLEMENT_ACTIONS, SAME_RAIL_EVERY_EPOCH, UNKNOWN_NEVER_COMPLETE.
+ * Side-effects: IO (via epoch query and contribution sync hooks)
  * Links: docs/spec/epoch-ledger.md, src/features/governance/types.ts
  * @public
  */
 
 "use client";
 
-import { CheckCircle, Clock, Eye } from "lucide-react";
+import { CheckCircle, Clock, Eye, Loader2, RefreshCw } from "lucide-react";
 import type { ReactElement } from "react";
 import { useMemo } from "react";
 import {
   Badge,
+  Button,
   ExpandableTableRow,
   PieChart,
   Table,
@@ -29,6 +30,7 @@ import {
 import { EpochCountdown } from "@/features/governance/components/EpochCountdown";
 import { EpochDetail } from "@/features/governance/components/EpochDetail";
 import { EpochLifecycleProgress } from "@/features/governance/components/EpochLifecycleProgress";
+import { useCollectEpoch } from "@/features/governance/hooks/useCollectEpoch";
 import { useEpochsPage } from "@/features/governance/hooks/useEpochsPage";
 import { buildPieChartData } from "@/features/governance/lib/build-pie-data";
 import type { SettlementLifecycleEvidence } from "@/features/governance/lib/epoch-lifecycle-state";
@@ -97,6 +99,7 @@ function CurrentEpochSection({
   readonly epoch: EpochView;
   readonly lifecycle: SettlementLifecycleEvidence;
 }): ReactElement {
+  const collectEpoch = useCollectEpoch();
   const sorted = useMemo(
     () => [...epoch.contributors].sort(compareUnitsDescending),
     [epoch.contributors]
@@ -126,14 +129,76 @@ function CurrentEpochSection({
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="mb-1 font-bold text-3xl tracking-tight">
-          Epoch <span className="text-primary">#{epoch.id}</span>
-        </h1>
-        <p className="text-muted-foreground">
-          {new Date(epoch.periodStart).toLocaleDateString()} —{" "}
-          {new Date(epoch.periodEnd).toLocaleDateString()}
-        </p>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h1 className="mb-1 font-bold text-3xl tracking-tight">
+            Epoch <span className="text-primary">#{epoch.id}</span>
+          </h1>
+          <p className="text-muted-foreground">
+            {new Date(epoch.periodStart).toLocaleDateString()} —{" "}
+            {new Date(epoch.periodEnd).toLocaleDateString()}
+          </p>
+        </div>
+
+        {epoch.status === "open" ? (
+          <div className="flex w-full flex-col items-stretch gap-2 sm:w-auto sm:items-end">
+            <Button
+              type="button"
+              variant="outline"
+              size="lg"
+              className="w-full sm:w-auto"
+              disabled={
+                collectEpoch.loading || collectEpoch.cooldownSeconds !== null
+              }
+              aria-busy={collectEpoch.loading}
+              aria-describedby={
+                collectEpoch.error ||
+                collectEpoch.successMessage ||
+                collectEpoch.cooldownSeconds !== null
+                  ? "epoch-sync-feedback"
+                  : undefined
+              }
+              onClick={() => void collectEpoch.trigger()}
+            >
+              {collectEpoch.loading ? (
+                <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+              ) : (
+                <RefreshCw className="size-4" aria-hidden="true" />
+              )}
+              {collectEpoch.loading ? "Syncing…" : "Sync contributions"}
+            </Button>
+            {collectEpoch.error ? (
+              <p
+                id="epoch-sync-feedback"
+                role="alert"
+                className="max-w-sm text-destructive text-xs sm:text-right"
+              >
+                Couldn’t sync contributions: {collectEpoch.error}
+              </p>
+            ) : collectEpoch.successMessage ? (
+              <p
+                id="epoch-sync-feedback"
+                role="status"
+                className="max-w-sm text-success text-xs sm:text-right"
+              >
+                {collectEpoch.successMessage}
+              </p>
+            ) : collectEpoch.cooldownSeconds !== null ? (
+              <p
+                id="epoch-sync-feedback"
+                role="status"
+                className="max-w-sm text-muted-foreground text-xs sm:text-right"
+              >
+                Recently synced. Try again in about{" "}
+                {Math.ceil(collectEpoch.cooldownSeconds / 60)} min.
+              </p>
+            ) : (
+              <p className="max-w-sm text-muted-foreground text-xs sm:text-right">
+                Pull the latest contributions into this open epoch.
+              </p>
+            )}
+          </div>
+        ) : null}
       </div>
 
       <div className="rounded-lg border bg-card px-3 py-4">
