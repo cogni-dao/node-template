@@ -3,24 +3,36 @@
 
 /**
  * Module: `epoch-page-wiring.test`
- * Purpose: Prove the Epoch overview is read-only and uses one rail for current and historical epochs.
+ * Purpose: Prove the Epoch overview keeps contribution sync while admin settlement actions stay in Review.
  * Scope: App-view composition with visual children and the page query mocked.
- * Invariants: EPOCH_OVERVIEW_READ_ONLY, SAME_RAIL_EVERY_EPOCH, ADMIN_ACTIONS_LIVE_IN_REVIEW.
+ * Invariants: CONTRIBUTION_SYNC_REMAINS, SAME_RAIL_EVERY_EPOCH, ADMIN_ACTIONS_LIVE_IN_REVIEW.
  * Side-effects: none
  * Links: src/app/(app)/gov/epoch/view.tsx, task.5039
  * @vitest-environment jsdom
  */
 
 import { render, screen } from "@testing-library/react";
-import type { ReactNode } from "react";
+import type { ButtonHTMLAttributes, ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { EpochView } from "@/features/governance/types";
 
-const epochs = vi.hoisted(() => ({ data: undefined as unknown }));
+const state = vi.hoisted(() => ({
+  data: undefined as unknown,
+  collect: {
+    loading: false,
+    error: null as string | null,
+    successMessage: null as string | null,
+    cooldownSeconds: null as number | null,
+    trigger: vi.fn(),
+  },
+}));
 
 vi.mock("@/features/governance/hooks/useEpochsPage", () => ({
-  useEpochsPage: () => ({ data: epochs.data, isLoading: false, error: null }),
+  useEpochsPage: () => ({ data: state.data, isLoading: false, error: null }),
+}));
+vi.mock("@/features/governance/hooks/useCollectEpoch", () => ({
+  useCollectEpoch: () => state.collect,
 }));
 vi.mock("@/features/governance/components/EpochCountdown", () => ({
   EpochCountdown: () => <div>Epoch countdown</div>,
@@ -37,6 +49,29 @@ vi.mock("@/features/governance/components/EpochLifecycleProgress", () => ({
 }));
 vi.mock("@/components", () => ({
   Badge: ({ children }: { children: ReactNode }) => <span>{children}</span>,
+  Button: ({
+    children,
+    className,
+    disabled,
+    onClick,
+    type,
+    "aria-busy": ariaBusy,
+    "aria-describedby": ariaDescribedBy,
+  }: ButtonHTMLAttributes<HTMLButtonElement> & {
+    variant?: string;
+    size?: string;
+  }) => (
+    <button
+      type={type}
+      className={className}
+      disabled={disabled}
+      onClick={onClick}
+      aria-busy={ariaBusy}
+      aria-describedby={ariaDescribedBy}
+    >
+      {children}
+    </button>
+  ),
   ExpandableTableRow: ({
     cells,
     expandedContent,
@@ -74,10 +109,10 @@ function epoch(id: string, status: EpochView["status"]): EpochView {
 }
 
 describe("Epoch page wiring", () => {
-  it("shows current and historical rails without mutation controls", () => {
+  it("shows lifecycle rails and contribution sync without admin settlement controls", () => {
     const current = epoch("8", "open");
     const past = epoch("7", "finalized");
-    epochs.data = {
+    state.data = {
       current,
       pastEpochs: [past],
       settlementLifecycle: {
@@ -92,8 +127,54 @@ describe("Epoch page wiring", () => {
 
     expect(screen.getByTestId("rail-8")).toBeInTheDocument();
     expect(screen.getByTestId("rail-7")).toBeInTheDocument();
-    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Sync contributions" })
+    ).toBeInTheDocument();
     expect(screen.queryByText(/publish distribution/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/open for review/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/sign and finalize/i)).not.toBeInTheDocument();
+  });
+
+  it("shows cooldown feedback and disables repeat sync", () => {
+    state.collect.cooldownSeconds = 125;
+    state.data = {
+      current: epoch("8", "open"),
+      pastEpochs: [],
+      settlementLifecycle: {
+        publicationEvidence: "unknown",
+        liveRevision: null,
+        latestRevision: null,
+        epochs: [],
+      },
+    };
+
+    render(<CurrentEpochView />);
+
+    expect(
+      screen.getByRole("button", { name: "Sync contributions" })
+    ).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Recently synced. Try again in about 3 min."
+    );
+    state.collect.cooldownSeconds = null;
+  });
+
+  it("does not show contribution sync after the epoch enters review", () => {
+    state.data = {
+      current: epoch("8", "review"),
+      pastEpochs: [],
+      settlementLifecycle: {
+        publicationEvidence: "unknown",
+        liveRevision: null,
+        latestRevision: null,
+        epochs: [],
+      },
+    };
+
+    render(<CurrentEpochView />);
+
+    expect(
+      screen.queryByRole("button", { name: "Sync contributions" })
+    ).not.toBeInTheDocument();
   });
 });
