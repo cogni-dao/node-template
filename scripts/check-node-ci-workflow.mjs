@@ -361,6 +361,12 @@ expectIncludes(
   ":bundle-sha-${SOURCE_SHA}",
   "deterministic source-SHA bundle tag"
 );
+expectIncludes(
+  PR_BUILD_WORKFLOW_PATH,
+  publishBundleStep?.run,
+  "node-artifact-bundle.json:${PAYLOAD_MEDIA_TYPE}",
+  "canonical OCI payload filename"
+);
 expectStep(PR_BUILD_WORKFLOW_PATH, manifestSteps, "Upload build manifest");
 const uploadBundleStep = expectStep(
   PR_BUILD_WORKFLOW_PATH,

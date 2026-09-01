@@ -316,6 +316,7 @@ jobs:
       - name: Publish immutable node artifact bundle
         id: publish_bundle
         if: needs.resolve.outputs.should_push == 'true'
+        working-directory: ${{ runner.temp }}
         env:
           MANIFEST_FILE: ${{ runner.temp }}/build-manifest.json
           BUNDLE_FILE: ${{ runner.temp }}/node-artifact-bundle.json
@@ -331,14 +332,14 @@ jobs:
             --artifact-type "$ARTIFACT_TYPE" \
             --annotation "org.opencontainers.image.source=https://github.com/${SOURCE_REPOSITORY}" \
             --annotation "org.opencontainers.image.revision=${SOURCE_SHA}" \
-            "${BUNDLE_FILE}:${PAYLOAD_MEDIA_TYPE}"
+            "node-artifact-bundle.json:${PAYLOAD_MEDIA_TYPE}"
           bundle_digest="$(oras resolve "$bundle_tag_ref")"
           if [[ ! "$bundle_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
             echo "::error::ORAS returned an invalid bundle digest: $bundle_digest"
             exit 1
           fi
           BUNDLE_TAG_REF="$bundle_tag_ref" BUNDLE_DIGEST="$bundle_digest" \
-            node scripts/ci/record-node-bundle-publication.mjs
+            node "$GITHUB_WORKSPACE/scripts/ci/record-node-bundle-publication.mjs"
           echo "bundle_digest_ref=${BUNDLE_REPOSITORY}@${bundle_digest}" >> "$GITHUB_OUTPUT"
           echo "Published ${BUNDLE_REPOSITORY}@${bundle_digest}" >> "$GITHUB_STEP_SUMMARY"
 
