@@ -230,6 +230,8 @@ jobs:
     needs: [resolve, detect, build]
     if: always()
     runs-on: ubuntu-latest
+    outputs:
+      bundle_digest_ref: ${{ steps.publish_bundle.outputs.bundle_digest_ref }}
     steps:
       - name: Assert upstream build succeeded
         env:
@@ -274,6 +276,18 @@ jobs:
       - name: Build repo-spec contract
         run: pnpm --filter @cogni/repo-spec build
 
+      - name: Set up ORAS
+        if: needs.resolve.outputs.should_push == 'true'
+        uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d # v2.0.1
+
+      - name: Login to GHCR for bundle publication
+        if: needs.resolve.outputs.should_push == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Download build fragments
         if: needs.detect.outputs.has_targets == 'true'
         uses: actions/download-artifact@v4
@@ -286,7 +300,7 @@ jobs:
         env:
           FRAGMENTS_DIR: ${{ runner.temp }}/build-fragments
           MANIFEST_FILE: ${{ runner.temp }}/build-manifest.json
-          BUNDLE_FILE: ${{ runner.temp }}/node-artifact-bundle-${{ needs.resolve.outputs.source_sha }}.json
+          BUNDLE_FILE: ${{ runner.temp }}/node-artifact-bundle.json
           IMAGE_NAME: ${{ needs.resolve.outputs.image_name }}
           IMAGE_TAG: ${{ needs.resolve.outputs.image_tag }}
           SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
@@ -298,6 +312,35 @@ jobs:
           WORKFLOW_NAME: ${{ github.workflow }}
           REF_NAME: ${{ needs.resolve.outputs.ref_name }}
         run: node scripts/ci/write-node-build-manifest.mjs
+
+      - name: Publish immutable node artifact bundle
+        id: publish_bundle
+        if: needs.resolve.outputs.should_push == 'true'
+        env:
+          MANIFEST_FILE: ${{ runner.temp }}/build-manifest.json
+          BUNDLE_FILE: ${{ runner.temp }}/node-artifact-bundle.json
+          BUNDLE_REPOSITORY: ${{ needs.resolve.outputs.image_name }}
+          SOURCE_REPOSITORY: ${{ needs.resolve.outputs.checkout_repo }}
+          SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
+          ARTIFACT_TYPE: application/vnd.cogni.node-artifact-bundle.v1
+          PAYLOAD_MEDIA_TYPE: application/vnd.cogni.node-artifact-bundle.v1+json
+        run: |
+          set -euo pipefail
+          bundle_tag_ref="${BUNDLE_REPOSITORY}:bundle-sha-${SOURCE_SHA}"
+          oras push "$bundle_tag_ref" \
+            --artifact-type "$ARTIFACT_TYPE" \
+            --annotation "org.opencontainers.image.source=https://github.com/${SOURCE_REPOSITORY}" \
+            --annotation "org.opencontainers.image.revision=${SOURCE_SHA}" \
+            "${BUNDLE_FILE}:${PAYLOAD_MEDIA_TYPE}"
+          bundle_digest="$(oras resolve "$bundle_tag_ref")"
+          if [[ ! "$bundle_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::ORAS returned an invalid bundle digest: $bundle_digest"
+            exit 1
+          fi
+          BUNDLE_TAG_REF="$bundle_tag_ref" BUNDLE_DIGEST="$bundle_digest" \
+            node scripts/ci/record-node-bundle-publication.mjs
+          echo "bundle_digest_ref=${BUNDLE_REPOSITORY}@${bundle_digest}" >> "$GITHUB_OUTPUT"
+          echo "Published ${BUNDLE_REPOSITORY}@${bundle_digest}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload build manifest
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -313,7 +356,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: node-artifact-bundle-${{ needs.resolve.outputs.source_sha }}
-          path: ${{ runner.temp }}/node-artifact-bundle-${{ needs.resolve.outputs.source_sha }}.json
+          path: ${{ runner.temp }}/node-artifact-bundle.json
           retention-days: 7
           if-no-files-found: error
           overwrite: true

@@ -22,6 +22,7 @@ function spec() {
           artifact: { name: "app" },
           port: 3200,
           visibility: "public",
+          resources: { cpu_units: 1, memory_mi: 2048, storage_mi: 4096 },
         },
         {
           name: "worker",
@@ -31,6 +32,7 @@ function spec() {
           },
           port: 9100,
           visibility: "private",
+          resources: { cpu_units: 0.5, memory_mi: 1024, storage_mi: 2048 },
         },
       ],
     },
@@ -66,16 +68,26 @@ describe("node artifact bundle", () => {
         { artifact: "worker", sourceSha: SHA, image: WORKER_IMAGE },
       ],
     });
-    expect(bundle.services.map((service) => service.service)).toEqual([
-      "app",
-      "worker",
-    ]);
-    expect(
-      resolveNodeArtifactBundle(declaration, bundle, {
+    expect(bundle).toMatchObject({
+      source: { repository: "example/node", sha: SHA },
+      artifacts: [
+        { name: "app", image: APP_IMAGE },
+        { name: "worker", image: WORKER_IMAGE },
+      ],
+      services: [
+        { name: "app", artifact: "app" },
+        { name: "worker", artifact: "worker" },
+      ],
+    });
+    const resolved = resolveNodeArtifactBundle(declaration, bundle, {
         sourceSha: SHA,
         repository: "example/node",
-      })
-    ).toMatchObject({ nodeId: TEST_NODE_IDS.default, sourceSha: SHA });
+      });
+    expect(resolved).toMatchObject({
+      nodeId: TEST_NODE_IDS.default,
+      source: { repository: "example/node", sha: SHA },
+    });
+    expect(resolved.services[0]?.service.secretRefs).toEqual([]);
   });
 
   it.each([
@@ -138,5 +150,25 @@ describe("node artifact bundle", () => {
     expect(() =>
       resolveNodeArtifactBundle(declaration, bundle, expected)
     ).toThrow(message);
+  });
+
+  it("canonicalizes GitHub repository identity case", () => {
+    const declaration = spec();
+    const bundle = buildNodeArtifactBundle({
+      spec: declaration,
+      sourceSha: SHA,
+      repository: "Example/Node",
+      artifacts: [
+        { artifact: "app", sourceSha: SHA, image: APP_IMAGE },
+        { artifact: "worker", sourceSha: SHA, image: WORKER_IMAGE },
+      ],
+    });
+    expect(bundle.source.repository).toBe("example/node");
+    expect(() =>
+      resolveNodeArtifactBundle(declaration, bundle, {
+        sourceSha: SHA,
+        repository: "EXAMPLE/NODE",
+      })
+    ).not.toThrow();
   });
 });

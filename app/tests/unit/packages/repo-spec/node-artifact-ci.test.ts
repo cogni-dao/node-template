@@ -29,6 +29,10 @@ const MANIFEST = path.join(
   REPO_ROOT,
   "scripts/ci/write-node-build-manifest.mjs"
 );
+const RECORD_PUBLICATION = path.join(
+  REPO_ROOT,
+  "scripts/ci/record-node-bundle-publication.mjs"
+);
 const SHA = "a".repeat(40);
 
 const temporaryDirectories: string[] = [];
@@ -120,10 +124,12 @@ deployment:
       artifact: { name: app }
       port: 3200
       visibility: public
+      resources: { cpu_units: 1, memory_mi: 2048, storage_mi: 4096 }
     - name: worker
       artifact: { name: app }
       port: 9100
       visibility: private
+      resources: { cpu_units: 0.5, memory_mi: 1024, storage_mi: 2048 }
     - name: api
       artifact:
         name: api
@@ -131,6 +137,7 @@ deployment:
         dockerfile: services/api/Dockerfile
       port: 9200
       visibility: private
+      resources: { cpu_units: 0.5, memory_mi: 1024, storage_mi: 2048 }
 `);
     const result = run(DETECT, cwd, {
       IMAGE_NAME: "ghcr.io/example/node",
@@ -162,10 +169,12 @@ deployment:
       artifact: { name: app }
       port: 3200
       visibility: public
+      resources: { cpu_units: 1, memory_mi: 2048, storage_mi: 4096 }
     - name: worker
       artifact: { name: worker }
       port: 9100
       visibility: private
+      resources: { cpu_units: 0.5, memory_mi: 1024, storage_mi: 2048 }
 `);
     const fragments = path.join(cwd, "fragments");
     mkdirSync(fragments);
@@ -183,7 +192,7 @@ deployment:
     });
 
     const manifest = path.join(cwd, "build-manifest.json");
-    const bundle = path.join(cwd, `node-artifact-bundle-${SHA}.json`);
+    const bundle = path.join(cwd, "node-artifact-bundle.json");
     const environment = {
       FRAGMENTS_DIR: fragments,
       MANIFEST_FILE: manifest,
@@ -202,22 +211,42 @@ deployment:
     expect(JSON.parse(readFileSync(bundle, "utf8"))).toEqual({
       schema_version: 1,
       node_id: "00000000-0000-4000-8000-000000000001",
-      source_sha: SHA,
-      repository: "example/node",
-      services: [
+      source: { repository: "example/node", sha: SHA },
+      artifacts: [
         {
-          service: "app",
-          artifact: "app",
-          source_sha: SHA,
+          name: "app",
           image: `ghcr.io/example/node@sha256:${"1".repeat(64)}`,
         },
         {
-          service: "worker",
-          artifact: "worker",
-          source_sha: SHA,
+          name: "worker",
           image: `ghcr.io/example/node-worker@sha256:${"2".repeat(64)}`,
         },
       ],
+      services: [
+        { name: "app", artifact: "app" },
+        { name: "worker", artifact: "worker" },
+      ],
+    });
+
+    const publication = run(RECORD_PUBLICATION, cwd, {
+      MANIFEST_FILE: manifest,
+      BUNDLE_REPOSITORY: "ghcr.io/example/node",
+      BUNDLE_TAG_REF: `ghcr.io/example/node:bundle-sha-${SHA}`,
+      BUNDLE_DIGEST: `sha256:${"9".repeat(64)}`,
+      ARTIFACT_TYPE: "application/vnd.cogni.node-artifact-bundle.v1",
+      PAYLOAD_MEDIA_TYPE:
+        "application/vnd.cogni.node-artifact-bundle.v1+json",
+    });
+    expect(publication.stderr).toBe("");
+    expect(publication.status).toBe(0);
+    expect(JSON.parse(readFileSync(manifest, "utf8"))).toMatchObject({
+      artifact_bundle: {
+        tag_ref: `ghcr.io/example/node:bundle-sha-${SHA}`,
+        digest_ref: `ghcr.io/example/node@sha256:${"9".repeat(64)}`,
+        artifact_type: "application/vnd.cogni.node-artifact-bundle.v1",
+        payload_media_type:
+          "application/vnd.cogni.node-artifact-bundle.v1+json",
+      },
     });
 
     rmSync(bundle);
@@ -240,7 +269,7 @@ governance: {}
       imageName: "ghcr.io/example/node",
     });
     const manifest = path.join(cwd, "build-manifest.json");
-    const bundle = path.join(cwd, `node-artifact-bundle-${SHA}.json`);
+    const bundle = path.join(cwd, "node-artifact-bundle.json");
     const result = run(MANIFEST, cwd, {
       FRAGMENTS_DIR: fragments,
       MANIFEST_FILE: manifest,

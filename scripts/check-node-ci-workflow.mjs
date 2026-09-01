@@ -320,6 +320,13 @@ if (!Array.isArray(manifestJob?.needs) || manifestJob.needs.join(",") !== "resol
 const manifestSteps = Array.isArray(manifestJob?.steps) ? manifestJob.steps : [];
 expectStep(PR_BUILD_WORKFLOW_PATH, manifestSteps, "Download build fragments");
 expectStep(PR_BUILD_WORKFLOW_PATH, manifestSteps, "Build repo-spec contract");
+const setupOrasStep = expectStep(PR_BUILD_WORKFLOW_PATH, manifestSteps, "Set up ORAS");
+expectEqual(
+  PR_BUILD_WORKFLOW_PATH,
+  setupOrasStep?.if,
+  "needs.resolve.outputs.should_push == 'true'",
+  "ORAS setup trust gate"
+);
 const writeManifestStep = expectStep(
   PR_BUILD_WORKFLOW_PATH,
   manifestSteps,
@@ -330,6 +337,29 @@ expectEqual(
   writeManifestStep?.env?.EMIT_BUNDLE,
   "${{ needs.resolve.outputs.should_push }}",
   "trusted bundle publication gate"
+);
+const publishBundleStep = expectStep(
+  PR_BUILD_WORKFLOW_PATH,
+  manifestSteps,
+  "Publish immutable node artifact bundle"
+);
+expectEqual(
+  PR_BUILD_WORKFLOW_PATH,
+  publishBundleStep?.if,
+  "needs.resolve.outputs.should_push == 'true'",
+  "OCI bundle publication trust gate"
+);
+expectIncludes(
+  PR_BUILD_WORKFLOW_PATH,
+  publishBundleStep?.run,
+  "oras push",
+  "OCI bundle publisher"
+);
+expectIncludes(
+  PR_BUILD_WORKFLOW_PATH,
+  publishBundleStep?.run,
+  ":bundle-sha-${SOURCE_SHA}",
+  "deterministic source-SHA bundle tag"
 );
 expectStep(PR_BUILD_WORKFLOW_PATH, manifestSteps, "Upload build manifest");
 const uploadBundleStep = expectStep(
