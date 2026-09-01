@@ -20,9 +20,13 @@ import { useCumulativeClaim } from "@/features/governance/hooks/useCumulativeCla
 
 const refetchAfterClaim = vi.fn<() => Promise<void>>();
 
-vi.mock("@cogni/node-shared", () => ({
-  getTransactionExplorerUrl: () => "https://explorer.test/tx/0xabc",
-}));
+vi.mock("@cogni/node-shared", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@cogni/node-shared")>();
+  return {
+    ...actual,
+    getTransactionExplorerUrl: () => "https://explorer.test/tx/0xabc",
+  };
+});
 
 vi.mock("wagmi", () => ({
   useAccount: () => ({ address: "0x0000000000000000000000000000000000000001", isConnected: true }),
