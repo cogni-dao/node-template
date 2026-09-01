@@ -284,6 +284,7 @@ const detectJob = prBuildWorkflow?.jobs?.detect;
 if (!detectJob) fail(PR_BUILD_WORKFLOW_PATH, "jobs must include detect");
 expectEqual(PR_BUILD_WORKFLOW_PATH, detectJob?.needs, "resolve", "jobs.detect.needs");
 const detectSteps = Array.isArray(detectJob?.steps) ? detectJob.steps : [];
+expectStep(PR_BUILD_WORKFLOW_PATH, detectSteps, "Typecheck package closure");
 expectStep(PR_BUILD_WORKFLOW_PATH, detectSteps, "Detect node image targets");
 
 const buildJob = prBuildWorkflow?.jobs?.build;
@@ -294,10 +295,20 @@ if (!Array.isArray(buildJob?.needs) || buildJob.needs.join(",") !== "resolve,det
 expectEqual(PR_BUILD_WORKFLOW_PATH, buildJob?.strategy?.["fail-fast"], false, "jobs.build.strategy.fail-fast");
 const buildSteps = Array.isArray(buildJob?.steps) ? buildJob.steps : [];
 expectStep(PR_BUILD_WORKFLOW_PATH, buildSteps, "Checkout");
-expectStep(PR_BUILD_WORKFLOW_PATH, buildSteps, "Install");
-expectStep(PR_BUILD_WORKFLOW_PATH, buildSteps, "Typecheck package closure");
 expectStep(PR_BUILD_WORKFLOW_PATH, buildSteps, "Login to GHCR");
-expectStep(PR_BUILD_WORKFLOW_PATH, buildSteps, "Build app image");
+const imageBuildStep = expectStep(PR_BUILD_WORKFLOW_PATH, buildSteps, "Build app image");
+expectEqual(
+  PR_BUILD_WORKFLOW_PATH,
+  imageBuildStep?.with?.context,
+  "${{ matrix.target.context }}",
+  "declared artifact build context"
+);
+expectEqual(
+  PR_BUILD_WORKFLOW_PATH,
+  imageBuildStep?.with?.file,
+  "${{ matrix.target.dockerfile }}",
+  "declared artifact Dockerfile"
+);
 expectStep(PR_BUILD_WORKFLOW_PATH, buildSteps, "Write build fragment");
 expectStep(PR_BUILD_WORKFLOW_PATH, buildSteps, "Upload build fragment");
 
@@ -308,8 +319,30 @@ if (!Array.isArray(manifestJob?.needs) || manifestJob.needs.join(",") !== "resol
 }
 const manifestSteps = Array.isArray(manifestJob?.steps) ? manifestJob.steps : [];
 expectStep(PR_BUILD_WORKFLOW_PATH, manifestSteps, "Download build fragments");
-expectStep(PR_BUILD_WORKFLOW_PATH, manifestSteps, "Write build manifest");
+expectStep(PR_BUILD_WORKFLOW_PATH, manifestSteps, "Build repo-spec contract");
+const writeManifestStep = expectStep(
+  PR_BUILD_WORKFLOW_PATH,
+  manifestSteps,
+  "Write build manifest"
+);
+expectEqual(
+  PR_BUILD_WORKFLOW_PATH,
+  writeManifestStep?.env?.EMIT_BUNDLE,
+  "${{ needs.resolve.outputs.should_push }}",
+  "trusted bundle publication gate"
+);
 expectStep(PR_BUILD_WORKFLOW_PATH, manifestSteps, "Upload build manifest");
+const uploadBundleStep = expectStep(
+  PR_BUILD_WORKFLOW_PATH,
+  manifestSteps,
+  "Upload node artifact bundle"
+);
+expectEqual(
+  PR_BUILD_WORKFLOW_PATH,
+  uploadBundleStep?.if,
+  "needs.resolve.outputs.should_push == 'true'",
+  "immutable bundle upload trust gate"
+);
 
 expectEqual(PR_LINT_WORKFLOW_PATH, prLintWorkflow?.name, "Lint PR", "workflow name");
 expectTrigger(PR_LINT_WORKFLOW_PATH, prLintWorkflow, "pull_request");
