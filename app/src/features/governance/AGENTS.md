@@ -36,9 +36,9 @@ Governance feature slice — schedule sync, governance status dashboard, claiman
 ## Public Surface
 
 - **Exports (services):** `syncGovernanceSchedules()`, `GovernanceScheduleSyncDeps`, `GovernanceScheduleSyncResult`, `governanceScheduleId()`, `getGovernanceStatus()`, `GovernanceStatusResult`, `dispatchSignalExecution()`, `handleSignal()`, `SignalHandlerDeps`
-- **Exports (hooks):** `useCurrentEpoch()`, `useEpochHistory()`, `useHoldings()`, `useFinishEpochWorkspace()`, `useSignEpoch()`, `useReviewSubjectOverrides()`, `useOpenEpochReview()`, `useEpochReviewReadiness()`
-- **Exports (components):** `ContributorCard`, `ContributionRow`, `EpochCard`, `EpochCountdown`, `EpochDetail`, `EpochReviewAction`, `HoldingCard`, `SourceBadge`
-- **Exports (lib):** `composeEpochView()`, `composeEpochViewFromClaimants()`, `applyOverridesToEpochView()`, `composeHoldings()`
+- **Exports (hooks):** `useCurrentEpoch()`, `useEpochHistory()`, `useHoldings()`, `useFinishEpochWorkspace()`, `useSignEpoch()`, `useReviewSubjectOverrides()`, `useOpenEpochReview()`
+- **Exports (components):** `ContributorCard`, `ContributionRow`, `EpochCard`, `EpochCountdown`, `EpochDetail`, `EpochLifecycleProgress`, `EpochReviewAction`, `HoldingCard`, `SourceBadge`
+- **Exports (lib):** `composeEpochView()`, `composeEpochViewFromClaimants()`, `applyOverridesToEpochView()`, `composeHoldings()`, `deriveEpochLifecycle()`
 - **Exports (types):** `EpochView`, `EpochContributor`, `IngestionReceipt`, `HoldingView`, `CurrentEpochData`, `EpochHistoryData`, `HoldingsData`, `SignEpochState`, `SignEpochPhase`, `ReviewSubjectOverrideView`, `EpochDetailProps`, `Signal`, `ActionResult`, `RepoRef`
 - **Exports (signal):** `parseCogniAction()`, `parseRepoRef()`, `COGNI_TOPIC0`, `resolveAction()`, `mergeChange()`, `grantCollaborator()`, `revokeCollaborator()`
 - **Routes (app pages):** `/gov` (overview), `/gov/epoch` (current + historical), `/gov/holdings` (aggregated), `/gov/review` (Finish Epoch admin workspace — open review, sign/finalize, publish)
