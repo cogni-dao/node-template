@@ -136,6 +136,9 @@ Tailor the default graph and graph list to the node's domain. Prediction-market 
 
 - [ ] Update logo or icon in header and sidebar.
 - [ ] Update visible node name and external links.
+- [ ] Rewrite `README.md` — it ships describing node-template, not your node. Lead with
+      `.cogni/repo-spec.yaml` `intent.mission` so the README cannot drift from what the
+      node declares itself to be.
 - [ ] Pick a primary hue and update `tailwind.css` light and dark variables.
 - [ ] Set `layout.tsx` metadata.
 - [ ] Customize the public homepage by rewriting `app/src/features/home/content.ts` (hero, agent stream, showcase cards, activity feed, stats).

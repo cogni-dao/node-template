@@ -34,3 +34,10 @@ node_local:
   # Node identity + persona.
   - ".cogni/repo-spec.yaml"
   - ".cogni/persona/**"
+  # The repo's front page. Until this was carved out, every minted node shipped
+  # node-template's README and could not durably fix it: a node that rewrote its own
+  # had it overwritten on the next sync. So `cogni-dao/levelup` — live in all three
+  # envs with a fully branded homepage — still opened "# node-template" and then
+  # described the template it was minted from. A README is the first thing a human or
+  # an agent reads on the repo; by the rule above it is identity, not substrate.
+  - "README.md"
