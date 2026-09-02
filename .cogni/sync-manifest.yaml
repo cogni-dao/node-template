@@ -34,6 +34,8 @@ node_local:
   # Node identity + persona.
   - ".cogni/repo-spec.yaml"
   - ".cogni/persona/**"
+  # Spawned-node secret names, targets, and OpenBao paths are node identity.
+  - "k8s/external-secrets/**"
   # The repo's front page — the same call as `tailwind.css` above, for the same reason.
   # Until this was carved out, every minted node shipped
   # node-template's README and could not durably fix it: a node that rewrote its own
