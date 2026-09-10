@@ -311,6 +311,13 @@ export type NodeServiceResourcesSpec = z.infer<
   typeof nodeServiceResourcesSchema
 >;
 
+/** Named app compatibility contracts; absent means generic runtime behavior. */
+export const nodeServiceRuntimeProfileSchema = z.literal("cogni-node-app-v1");
+
+export type NodeServiceRuntimeProfileSpec = z.infer<
+  typeof nodeServiceRuntimeProfileSchema
+>;
+
 /**
  * One app-tier service declared by a sovereign node.
  *
@@ -325,6 +332,8 @@ export const nodeServiceSpecSchema = z
     args: z.array(z.string().max(4096)).max(64).optional(),
     port: z.number().int().min(1).max(65535),
     visibility: z.enum(["public", "private"]),
+    /** Explicit non-provider compatibility selector; absent stays generic. */
+    runtime_profile: nodeServiceRuntimeProfileSchema.optional(),
     /** Git-owned environment variable → sibling service references. */
     bindings: z
       .record(serviceEnvKeySchema, serviceNameSchema)
@@ -421,6 +430,14 @@ export const nodeDeploymentSchema = z
           });
         }
       });
+      if (service.visibility === "private" && service.runtime_profile) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["services", index, "runtime_profile"],
+          message:
+            "cogni-node-app-v1 runtime_profile requires the public service",
+        });
+      }
     });
   });
 
