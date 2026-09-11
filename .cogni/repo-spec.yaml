@@ -62,6 +62,11 @@ payments_out:
   steward_wallet:
     address: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
 
+# PR review is opt-in for spawned nodes. The operator honors this repo-owned
+# setting; forks can flip it to true when they want Cogni Git Review.
+review:
+  enabled: false
+
 # Born-reviewable default gates. When this node is minted as a single-node fork
 # (node-at-root, no `nodes:` registry) the operator's review path runs these gates
 # against the repo-root `.cogni/rules/` below. The mint (`renderRepoSpec`) re-emits
