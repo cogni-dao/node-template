@@ -20,29 +20,10 @@ import { type NextRequest, NextResponse } from "next/server";
 import { getToken } from "next-auth/jwt";
 
 import { authOptions, authSecret } from "@/auth";
+import { isPrivateRoute as isAppRoute } from "@/shared/routes/private-routes";
 import { getNodeId } from "@/shared/config";
 import { EVENT_NAMES, makeLogger } from "@/shared/observability";
 
-/** App routes that require authentication — unauthenticated visitors are redirected to /. */
-const APP_ROUTES = [
-	"/chat",
-	"/dashboard",
-	"/profile",
-	"/credits",
-	"/gov",
-	"/knowledge",
-	"/schedules",
-	"/setup",
-	"/work",
-	"/activity",
-	"/admin",
-];
-
-function isAppRoute(pathname: string): boolean {
-	return APP_ROUTES.some(
-		(route) => pathname === route || pathname.startsWith(`${route}/`),
-	);
-}
 
 const AGENT_BEARER_PREFIX = "Bearer cogni_ag_sk_v1_";
 
