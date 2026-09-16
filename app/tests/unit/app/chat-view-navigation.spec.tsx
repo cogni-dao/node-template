@@ -26,6 +26,8 @@ const nav = vi.hoisted(() => ({
   mounts: 0,
   unmounts: 0,
   threadError: null as Error | null,
+  loadedThreadKey: null as string | null,
+  loadedMessages: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock("next/navigation", () => ({
@@ -63,13 +65,19 @@ vi.mock("@/features/ai/public", () => ({
     refetch: vi.fn(),
   }),
   useThreads: () => ({ data: { threads: [] } }),
-  useLoadThread: () => ({
-    data: undefined,
-    isPending: false,
-    isError: nav.threadError != null,
-    error: nav.threadError,
-    refetch: vi.fn(),
-  }),
+  useLoadThread: (stateKey: string) => {
+    nav.loadedThreadKey = stateKey;
+    return {
+      data:
+        nav.loadedMessages.length > 0
+          ? { stateKey, messages: nav.loadedMessages }
+          : undefined,
+      isPending: false,
+      isError: nav.threadError != null,
+      error: nav.threadError,
+      refetch: vi.fn(),
+    };
+  },
   useDeleteThread: () => ({ mutate: vi.fn() }),
 }));
 
@@ -90,6 +98,8 @@ vi.mock("@/features/ai/chat/providers/ChatRuntimeProvider.client", async () => {
       stateKey: string;
       children: React.ReactNode;
       onOptimisticSend: (envelope: Record<string, unknown>) => void;
+      onSettled: () => void;
+      initialMessages: unknown[];
     }) => {
       React.useEffect(() => {
         nav.mounts += 1;
@@ -98,7 +108,11 @@ vi.mock("@/features/ai/chat/providers/ChatRuntimeProvider.client", async () => {
         };
       }, []);
       return (
-        <div data-testid="provider" data-state-key={props.stateKey}>
+        <div
+          data-testid="provider"
+          data-state-key={props.stateKey}
+          data-initial-count={props.initialMessages.length}
+        >
           <button
             type="button"
             onClick={() =>
@@ -114,6 +128,9 @@ vi.mock("@/features/ai/chat/providers/ChatRuntimeProvider.client", async () => {
             }
           >
             send
+          </button>
+          <button type="button" onClick={props.onSettled}>
+            terminal error settled
           </button>
           {props.children}
         </div>
@@ -137,6 +154,8 @@ describe("ChatView navigation lifecycle", () => {
     nav.mounts = 0;
     nav.unmounts = 0;
     nav.threadError = null;
+    nav.loadedThreadKey = null;
+    nav.loadedMessages = [];
     vi.clearAllMocks();
   });
 
@@ -158,6 +177,36 @@ describe("ChatView navigation lifecycle", () => {
     expect(nav.push).toHaveBeenCalledWith("/chat?thread=thread-2");
     await waitFor(() => expect(nav.mounts).toBe(2));
     expect(nav.unmounts).toBe(1);
+  });
+
+  it("clears the new-thread pointer on terminal failure and cold-loads authoritative history", async () => {
+    const first = renderView();
+    await screen.findByTestId("provider");
+    const stateKey = screen.getByTestId("provider").dataset.stateKey as string;
+    fireEvent.click(screen.getByRole("button", { name: "send" }));
+    expect(readNewThreadStateKey()).toBe(stateKey);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "terminal error settled" })
+    );
+    expect(readNewThreadStateKey()).toBeNull();
+
+    first.unmount();
+    nav.search = `thread=${stateKey}`;
+    nav.loadedMessages = [
+      {
+        id: "message-1",
+        role: "user",
+        parts: [{ type: "text", text: "hello" }],
+      },
+    ];
+    renderView();
+
+    await waitFor(() => expect(nav.loadedThreadKey).toBe(stateKey));
+    expect(await screen.findByTestId("provider")).toHaveAttribute(
+      "data-initial-count",
+      "1"
+    );
   });
 
   it.each([

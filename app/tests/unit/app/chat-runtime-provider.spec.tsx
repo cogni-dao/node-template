@@ -98,7 +98,7 @@ function pending() {
 
 function renderProvider(
   initialMessages: UIMessage[] = [],
-  callbacks: { onFinish?: () => void } = {}
+  callbacks: { onFinish?: () => void; onSettled?: () => void } = {}
 ) {
   const queryClient = new QueryClient();
   return render(
@@ -110,6 +110,7 @@ function renderProvider(
         initialMessages={initialMessages}
         stateKey={stateKey}
         onFinish={callbacks.onFinish}
+        onSettled={callbacks.onSettled}
       >
         <div>chat</div>
       </ChatRuntimeProvider>
@@ -241,8 +242,9 @@ describe("ChatRuntimeProvider durable lifecycle", () => {
 
   it("clears accepted work as successful only for a successful terminal replay", async () => {
     const onFinish = vi.fn();
+    const onSettled = vi.fn();
     writePendingEnvelope(acceptPendingEnvelope(pending(), serverRunId));
-    renderProvider([], { onFinish });
+    renderProvider([], { onFinish, onSettled });
     await waitFor(() => expect(sdk.resumeStream).toHaveBeenCalledOnce());
     const messages = [
       {
@@ -270,6 +272,7 @@ describe("ChatRuntimeProvider durable lifecycle", () => {
     expect(response?.status).toBe(204);
     expect(sdk.setMessages).toHaveBeenCalledWith(messages);
     expect(readPendingEnvelope(stateKey)).toBeNull();
+    expect(onSettled).toHaveBeenCalledOnce();
     expect(onFinish).toHaveBeenCalledOnce();
   });
 
@@ -281,8 +284,9 @@ describe("ChatRuntimeProvider durable lifecycle", () => {
     "surfaces terminal %s without mislabeling it as success",
     async (terminalStatus, label) => {
       const onFinish = vi.fn();
+      const onSettled = vi.fn();
       writePendingEnvelope(acceptPendingEnvelope(pending(), serverRunId));
-      renderProvider([], { onFinish });
+      renderProvider([], { onFinish, onSettled });
       await waitFor(() => expect(sdk.resumeStream).toHaveBeenCalledOnce());
       vi.spyOn(globalThis, "fetch")
         .mockResolvedValueOnce(
@@ -301,6 +305,7 @@ describe("ChatRuntimeProvider durable lifecycle", () => {
 
       expect(sdk.setMessages).toHaveBeenCalledWith([]);
       expect(readPendingEnvelope(stateKey)).toBeNull();
+      expect(onSettled).toHaveBeenCalledOnce();
       expect(onFinish).not.toHaveBeenCalled();
       expect(screen.getByText(label)).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();

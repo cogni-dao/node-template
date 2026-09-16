@@ -285,7 +285,7 @@ export function ChatView(): ReactNode {
     [deleteThread, handleNewThread, threadSession.stateKey]
   );
 
-  const handleThreadFinish = useCallback(() => {
+  const handleThreadSettled = useCallback(() => {
     clearNewThreadStateKey(threadSession.stateKey);
     queryClient.invalidateQueries({ queryKey: ["ai-threads"] });
   }, [queryClient, threadSession.stateKey]);
@@ -522,7 +522,7 @@ export function ChatView(): ReactNode {
           stateKey={threadSession.stateKey}
           onAuthExpired={() => signOut()}
           onError={handleError}
-          onFinish={handleThreadFinish}
+          onSettled={handleThreadSettled}
           onOptimisticSend={handleOptimisticSend}
         >
           <Thread

@@ -74,6 +74,9 @@ interface ChatRuntimeProviderProps {
   stateKey: string;
   onAuthExpired?: () => void;
   onError?: (error: ChatError) => void;
+  /** Runs for every authoritative terminal outcome, including failed runs. */
+  onSettled?: () => void;
+  /** Runs only after an authoritative successful completion. */
   onFinish?: () => void;
   onOptimisticSend?: (envelope: PendingChatEnvelope) => void;
 }
@@ -87,6 +90,7 @@ export function ChatRuntimeProvider({
   stateKey,
   onAuthExpired,
   onError,
+  onSettled,
   onFinish,
   onOptimisticSend,
 }: ChatRuntimeProviderProps) {
@@ -173,8 +177,9 @@ export function ChatRuntimeProvider({
     setPhase("idle");
     queryClient.invalidateQueries({ queryKey: ["payments-summary"] });
     queryClient.invalidateQueries({ queryKey: ["ai-threads"] });
+    onSettled?.();
     onFinish?.();
-  }, [onFinish, queryClient, stateKey, updatePending]);
+  }, [onFinish, onSettled, queryClient, stateKey, updatePending]);
 
   const reloadAuthoritativeThread = useCallback(async () => {
     const response = await globalThis.fetch(
@@ -195,8 +200,9 @@ export function ChatRuntimeProvider({
       setPhase("failed");
       queryClient.invalidateQueries({ queryKey: ["payments-summary"] });
       queryClient.invalidateQueries({ queryKey: ["ai-threads"] });
+      onSettled?.();
     },
-    [queryClient, stateKey, updatePending]
+    [onSettled, queryClient, stateKey, updatePending]
   );
 
   const handleResponse = useCallback(
