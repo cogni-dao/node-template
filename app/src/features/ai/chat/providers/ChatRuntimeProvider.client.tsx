@@ -2,27 +2,30 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@features/chat/providers/ChatRuntimeProvider`
- * Purpose: Runtime provider for chat using AI SDK streaming with multi-turn state and thread switching.
- * Scope: Feature-local provider. Uses useChatRuntime for AI SDK Data Stream Protocol streaming. Manages stateKey state for conversation continuity. Accepts initialMessages and initialStateKey for loading existing threads. Does not persist messages or manage auth.
- * Invariants:
- *   - CLIENT_SENDS_MESSAGE_ONLY: prepareSendMessagesRequest extracts last user message text and sends { message, modelRef, graphName, stateKey }
- *   - THREAD_STATE_BY_KEY: stateKey stored in stateKeyMap; seeded from initialStateKey for existing threads
- * Side-effects: IO (fetch to /api/v1/ai/chat via runtime)
- * Notes: Uses useChatRuntime from @assistant-ui/react-ai-sdk; captures X-State-Key from response header.
- * Links: ai.chat.v1 contract, chat/AGENTS.md (Thread State Management)
+ * Module: `@features/ai/chat/providers/ChatRuntimeProvider`
+ * Purpose: Optimistic, draft-safe AI SDK chat runtime with durable stream resume.
+ * Scope: Client transport, sessionStorage lifecycle, and run status UI only.
+ * Invariants: A request's stateKey/messageId/runId/body never change across retries.
+ * Side-effects: Chat/threads fetches, sessionStorage, React Query invalidation.
+ * Links: ai.chat.v1, GET /api/v1/ai/runs/{runId}/ui-stream
  * @public
  */
 
 "use client";
 
-import { AssistantRuntimeProvider } from "@assistant-ui/react";
-import { useChatRuntime } from "@assistant-ui/react-ai-sdk";
+import { useChat } from "@ai-sdk/react";
+import {
+  type AppendMessage,
+  AssistantRuntimeProvider,
+  useAui,
+  useAuiState,
+} from "@assistant-ui/react";
+import { useAISDKRuntime } from "@assistant-ui/react-ai-sdk";
 import type { GraphId, ModelRef } from "@cogni/ai-core";
-import type { ChatError } from "@cogni/node-contracts";
+import type { ChatError, LoadThreadOutput } from "@cogni/node-contracts";
 import { clientLogger, EVENT_NAMES } from "@cogni/node-shared";
 import { useQueryClient } from "@tanstack/react-query";
-import type { UIMessage } from "ai";
+import type { CreateUIMessage, UIMessage } from "ai";
 import { DefaultChatTransport } from "ai";
 import {
   type ReactNode,
@@ -34,29 +37,33 @@ import {
 } from "react";
 
 import { createWebSpeechDictationAdapter } from "../adapters/web-speech-dictation.adapter";
+import {
+  type ChatRunPhase,
+  acceptPendingEnvelope,
+  clearChatDraft,
+  clearPendingEnvelope,
+  createPendingEnvelope,
+  createReconnectRequest,
+  type PendingChatEnvelope,
+  readChatDraft,
+  readPendingEnvelope,
+  writeChatDraft,
+  writePendingEnvelope,
+} from "../hooks/chat-session.client";
 import { mapHttpError } from "../utils/mapHttpError";
-
-/**
- * Ref handle for ChatRuntimeProvider
- */
-export interface ChatRuntimeRef {
-  retryLastSend: () => void;
-}
 
 interface ChatRuntimeProviderProps {
   children: ReactNode;
-  /** Fully-resolved model reference (provider + model + optional connection) */
   modelRef: ModelRef;
   selectedGraph: GraphId;
   defaultModelId: string;
-  /** Pre-loaded messages for an existing thread, or [] for a new thread. */
   initialMessages: UIMessage[];
-  /** stateKey for an existing thread, or null for a new thread. */
-  initialStateKey: string | null;
+  /** Stable client-allocated key. The server must echo it in X-State-Key. */
+  stateKey: string;
   onAuthExpired?: () => void;
   onError?: (error: ChatError) => void;
-  /** Called after each assistant response finishes (for sidebar refresh, etc.). */
   onFinish?: () => void;
+  onOptimisticSend?: (envelope: PendingChatEnvelope) => void;
 }
 
 export function ChatRuntimeProvider({
@@ -65,26 +72,23 @@ export function ChatRuntimeProvider({
   selectedGraph,
   defaultModelId,
   initialMessages,
-  initialStateKey,
+  stateKey,
   onAuthExpired,
   onError,
   onFinish,
+  onOptimisticSend,
 }: ChatRuntimeProviderProps) {
   const queryClient = useQueryClient();
   const modelRefRef = useRef(modelRef);
   const selectedGraphRef = useRef(selectedGraph);
+  const chatRef = useRef<ReturnType<typeof useChat<UIMessage>> | null>(null);
+  // Storage is hydrated after mount so server/client markup is identical.
+  const [pending, setPending] = useState<PendingChatEnvelope | null>(null);
+  const pendingRef = useRef<PendingChatEnvelope | null>(null);
+  const [phase, setPhase] = useState<ChatRunPhase>("idle");
+  const resumedRunRef = useRef<string | null>(null);
+  const hydratedStorageRef = useRef(false);
 
-  // State key for multi-turn conversations
-  // When initialStateKey is provided (existing thread), seed the map so stateKey is
-  // always included in prepareSendMessagesRequest — impossible to omit for existing threads.
-  const activeStateKey = "default";
-  const [stateKeyMap, setStateKeyMap] = useState<Record<string, string>>(
-    initialStateKey != null ? { [activeStateKey]: initialStateKey } : {}
-  );
-  const stateKey = stateKeyMap[activeStateKey];
-  const stateKeyRef = useRef(stateKey);
-
-  // Keep refs in sync
   useEffect(() => {
     modelRefRef.current = modelRef;
   }, [modelRef]);
@@ -94,20 +98,62 @@ export function ChatRuntimeProvider({
   }, [selectedGraph]);
 
   useEffect(() => {
-    stateKeyRef.current = stateKey;
+    if (hydratedStorageRef.current) return;
+    hydratedStorageRef.current = true;
+    const restored = readPendingEnvelope(stateKey);
+    pendingRef.current = restored;
+    setPending(restored);
+    setPhase(restored?.accepted ? "reconnecting" : restored ? "failed" : "idle");
+    if (
+      restored &&
+      !restored.accepted &&
+      restored.message &&
+      !initialMessages.some((message) => message.id === restored.messageId)
+    ) {
+      chatRef.current?.setMessages([
+        ...initialMessages,
+        {
+          id: restored.messageId,
+          role: "user",
+          parts: [{ type: "text", text: restored.message }],
+        },
+      ]);
+    }
+  }, [initialMessages, stateKey]);
+
+  const updatePending = useCallback((next: PendingChatEnvelope | null) => {
+    pendingRef.current = next;
+    setPending(next);
+    if (next) writePendingEnvelope(next);
+    else clearPendingEnvelope(stateKey);
   }, [stateKey]);
 
-  // Handle response - capture stateKey and handle errors
+  const finishRun = useCallback(() => {
+    updatePending(null);
+    clearChatDraft(stateKey);
+    setPhase("idle");
+    queryClient.invalidateQueries({ queryKey: ["payments-summary"] });
+    queryClient.invalidateQueries({ queryKey: ["ai-threads"] });
+    onFinish?.();
+  }, [onFinish, queryClient, stateKey, updatePending]);
+
+  const reloadAuthoritativeThread = useCallback(async () => {
+    const response = await globalThis.fetch(
+      `/api/v1/ai/threads/${encodeURIComponent(stateKey)}`,
+      { cache: "no-store" }
+    );
+    if (!response.ok) throw new Error("Unable to reload completed conversation");
+    const thread = (await response.json()) as LoadThreadOutput;
+    chatRef.current?.setMessages(thread.messages as UIMessage[]);
+    finishRun();
+  }, [finishRun, stateKey]);
+
   const handleResponse = useCallback(
-    async (response: Response) => {
-      // Capture stateKey from response header for multi-turn continuity
-      // Server generates stateKey on first request, we reuse it for subsequent requests
-      const newStateKey = response.headers.get("X-State-Key");
-      if (newStateKey && newStateKey !== stateKeyRef.current) {
-        setStateKeyMap((prev) => ({
-          ...prev,
-          [activeStateKey]: newStateKey,
-        }));
+    async (response: Response, method: string) => {
+      if (method === "GET" && response.status === 410) {
+        await reloadAuthoritativeThread();
+        // AI SDK treats 204 as a clean replay miss and keeps the loaded history.
+        return new Response(null, { status: 204 });
       }
 
       if (response.status === 401) {
@@ -117,97 +163,266 @@ export function ChatRuntimeProvider({
 
       if (response.status === 402) {
         const body = await response.json().catch(() => ({}));
-        const error = mapHttpError(402, body, crypto.randomUUID());
-        onError?.(error);
+        onError?.(mapHttpError(402, body, crypto.randomUUID()));
         throw new Error("Insufficient credits");
       }
 
       if (response.status === 409) {
-        // UX-001: Invalid model - log warning but let retry happen via body.model
-        clientLogger.warn(EVENT_NAMES.CLIENT_CHAT_MODEL_INVALID_RETRY, {
-          model: modelRefRef.current.modelId,
-          defaultModelId,
-        });
-        // The server returns defaultModelId in the 409 response
-        // For now, throw to trigger retry - user can resend with default model
-        throw new Error("Invalid model");
+        const body = await response.json().catch(() => ({}));
+        if (body.code === "MODEL_UNAVAILABLE") {
+          clientLogger.warn(EVENT_NAMES.CLIENT_CHAT_MODEL_INVALID_RETRY, {
+            model: modelRefRef.current.modelId,
+            defaultModelId,
+          });
+          throw new Error("Invalid model");
+        }
+        onError?.(mapHttpError(409, body, crypto.randomUUID()));
+        throw new Error(body.error || "Chat request identity conflict");
       }
 
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
-        const error = mapHttpError(response.status, body, crypto.randomUUID());
-        onError?.(error);
+        onError?.(
+          mapHttpError(response.status, body, crypto.randomUUID())
+        );
         throw new Error(body.error || "Request failed");
       }
+
+      if (method === "POST") {
+        const envelope = pendingRef.current;
+        const responseStateKey = response.headers.get("X-State-Key");
+        const responseRunId = response.headers.get("X-Run-Id");
+        if (
+          !envelope ||
+          responseStateKey !== envelope.stateKey ||
+          responseRunId !== envelope.runId
+        ) {
+          throw new Error("Chat was not durably acknowledged");
+        }
+        updatePending(acceptPendingEnvelope(envelope));
+        clearChatDraft(stateKey);
+        setPhase("queued");
+      }
+
+      return response;
     },
-    [defaultModelId, onAuthExpired, onError]
+    [defaultModelId, onAuthExpired, onError, reloadAuthoritativeThread, stateKey, updatePending]
   );
 
-  // Handle stream finish - invalidate credits query + notify parent
-  const handleFinish = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: ["payments-summary"] });
-    onFinish?.();
-  }, [queryClient, onFinish]);
-
-  // Dictation adapter — stable across renders (Web Speech API availability doesn't change)
-  const dictationAdapter = useMemo(() => createWebSpeechDictationAdapter(), []);
-
-  // Transport-level options (api, request shape, response interception) must be
-  // on the transport — they are NOT valid ChatInit/useChatRuntime options.
-  // useDynamicChatTransport inside useChatRuntime wraps this in a ref-based
-  // proxy, so recreating each render is safe.
-  const runtime = useChatRuntime({
-    messages: initialMessages,
-    adapters: dictationAdapter ? { dictation: dictationAdapter } : undefined,
-    transport: new DefaultChatTransport({
-      api: "/api/v1/ai/chat",
-      prepareSendMessagesRequest: ({ messages }) => ({
-        body: {
-          message: extractLastUserText(messages),
-          modelRef: modelRefRef.current,
-          graphName: selectedGraphRef.current,
-          ...(stateKeyRef.current ? { stateKey: stateKeyRef.current } : {}),
+  const transport = useMemo(
+    () =>
+      new DefaultChatTransport<UIMessage>({
+        api: "/api/v1/ai/chat",
+        prepareSendMessagesRequest: () => {
+          const envelope = pendingRef.current;
+          if (!envelope?.message) {
+            throw new Error("Missing stable chat request envelope");
+          }
+          return {
+            body: {
+              message: envelope.message,
+              messageId: envelope.messageId,
+              runId: envelope.runId,
+              modelRef: envelope.modelRef,
+              graphName: envelope.graphName,
+              stateKey: envelope.stateKey,
+            },
+          };
+        },
+        prepareReconnectToStreamRequest: () => {
+          const envelope = pendingRef.current;
+          if (!envelope) throw new Error("Missing run to reconnect");
+          return createReconnectRequest(envelope);
+        },
+        fetch: async (url, init) => {
+          const method = init?.method ?? "GET";
+          const response = await globalThis.fetch(url, init);
+          return handleResponse(response, method);
         },
       }),
-      // Wrap fetch to intercept responses (stateKey capture + error handling).
-      // ChatInit has no onResponse; fetch wrapper is the transport-level equivalent.
-      fetch: async (url, init) => {
-        const response = await globalThis.fetch(url, init);
-        await handleResponse(response);
-        return response;
-      },
-    }),
-    onFinish: handleFinish,
+    [handleResponse]
+  );
+
+  const toCreateMessage = useCallback(
+    <UI_MESSAGE extends UIMessage>(
+      message: AppendMessage
+    ): CreateUIMessage<UI_MESSAGE> => {
+      const text = message.content
+        .filter((part) => part.type === "text")
+        .map((part) => part.text)
+        .join("\n");
+      if (pendingRef.current) {
+        throw new Error("Finish or retry the active message before sending another");
+      }
+      const envelope = createPendingEnvelope({
+        stateKey,
+        message: text,
+        modelRef: modelRefRef.current,
+        graphName: selectedGraphRef.current,
+      });
+      updatePending(envelope);
+      setPhase("saving");
+      onOptimisticSend?.(envelope);
+      return {
+        id: envelope.messageId,
+        role: "user",
+        parts: [{ type: "text", text }],
+        metadata: message.metadata,
+      } as CreateUIMessage<UI_MESSAGE>;
+    },
+    [onOptimisticSend, stateKey, updatePending]
+  );
+
+  const chat = useChat<UIMessage>({
+    id: stateKey,
+    messages: initialMessages,
+    transport,
+    onData: (part) => {
+      const cursor = getRunCursor(part);
+      if (cursor && pendingRef.current) {
+        updatePending({ ...pendingRef.current, cursor });
+      }
+      setPhase("running");
+    },
+    onFinish: finishRun,
     onError: (error) => {
+      setPhase("failed");
       clientLogger.error(EVENT_NAMES.CLIENT_CHAT_STREAM_ERROR, {
         message: error instanceof Error ? error.message : String(error),
       });
     },
   });
+  chatRef.current = chat;
 
-  // Note: disabled prop is handled by parent - composer should be disabled there
+  const retry = useCallback(() => {
+    const envelope = pendingRef.current;
+    if (!envelope) return;
+    chat.clearError();
+    if (envelope.accepted) {
+      setPhase("reconnecting");
+      void chat.resumeStream();
+    } else {
+      setPhase("saving");
+      void chat.regenerate({ messageId: envelope.messageId });
+    }
+  }, [chat]);
+
+  useEffect(() => {
+    const restored = pendingRef.current;
+    if (!restored?.accepted || resumedRunRef.current === restored.runId) return;
+    resumedRunRef.current = restored.runId;
+    setPhase("reconnecting");
+    void chat.resumeStream();
+  }, [chat, pending?.accepted, pending?.runId]);
+
+  const dictationAdapter = useMemo(() => createWebSpeechDictationAdapter(), []);
+  const runtime = useAISDKRuntime(chat, {
+    adapters: dictationAdapter ? { dictation: dictationAdapter } : undefined,
+    toCreateMessage,
+  });
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      {children}
+      <div className="relative h-full min-h-0">
+        {children}
+        <ChatDraftLifecycle
+          stateKey={stateKey}
+          pending={pending}
+          phase={phase}
+        />
+        <ChatRunStatus phase={phase} onRetry={retry} />
+      </div>
     </AssistantRuntimeProvider>
   );
 }
 
-/**
- * Extract the text content from the last user message in the messages array.
- * Falls back to empty string if no user message found.
- */
-function extractLastUserText(
-  messages: Array<{
-    role: string;
-    parts?: Array<{ type: string; text?: string }>;
-  }>
-): string {
-  const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
-  if (!lastUserMsg?.parts) return "";
-  return lastUserMsg.parts
-    .filter((p) => p.type === "text" && p.text)
-    .map((p) => p.text as string)
-    .join("\n");
+function ChatDraftLifecycle({
+  stateKey,
+  pending,
+  phase,
+}: {
+  stateKey: string;
+  pending: PendingChatEnvelope | null;
+  phase: ChatRunPhase;
+}) {
+  const aui = useAui();
+  const composerText = useAuiState((state) => state.composer.text);
+  const restoredRef = useRef(false);
+  const acceptedRef = useRef(pending?.accepted === true);
+  acceptedRef.current = pending?.accepted === true;
+
+  useEffect(() => {
+    if (restoredRef.current) return;
+    restoredRef.current = true;
+    const restored = pending?.message ?? readChatDraft(stateKey);
+    if (restored) aui.composer().setText(restored);
+  }, [aui, pending, stateKey]);
+
+  useEffect(() => {
+    if (phase === "saving" && pending?.message && !composerText) {
+      aui.composer().setText(pending.message);
+    }
+    if (pending?.accepted && composerText) {
+      aui.composer().setText("");
+    }
+  }, [aui, composerText, pending, phase]);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      if (!pending?.accepted) writeChatDraft(stateKey, composerText);
+    }, 250);
+    return () => {
+      window.clearTimeout(timeout);
+      if (!acceptedRef.current) writeChatDraft(stateKey, composerText);
+    };
+  }, [composerText, pending?.accepted, stateKey]);
+
+  return null;
+}
+
+function ChatRunStatus({
+  phase,
+  onRetry,
+}: {
+  phase: ChatRunPhase;
+  onRetry: () => void;
+}) {
+  const labels: Record<ChatRunPhase, string> = {
+    idle: "",
+    saving: "Saving message…",
+    queued: "Queued…",
+    running: "Running…",
+    reconnecting: "Reconnecting…",
+    failed: "Message failed.",
+  };
+
+  return (
+    <div
+      className={`pointer-events-none absolute right-4 bottom-24 z-10 flex min-h-8 items-center gap-2 rounded-full border bg-background/95 px-3 py-1 text-muted-foreground text-xs shadow-sm backdrop-blur transition-opacity duration-200 ${phase === "idle" ? "invisible opacity-0" : "opacity-100"}`}
+      aria-live="polite"
+      aria-atomic="true"
+    >
+      <span>{labels[phase]}</span>
+      {phase === "failed" && (
+        <button
+          type="button"
+          onClick={onRetry}
+          className="pointer-events-auto font-medium text-foreground underline underline-offset-2"
+        >
+          Retry
+        </button>
+      )}
+    </div>
+  );
+}
+
+function getRunCursor(part: unknown): string | null {
+  if (!part || typeof part !== "object") return null;
+  const value = part as { type?: unknown; data?: unknown };
+  if (value.type !== "data-run-cursor") return null;
+  if (typeof value.data === "string") return value.data;
+  if (!value.data || typeof value.data !== "object") return null;
+  const data = value.data as { cursor?: unknown; id?: unknown };
+  if (typeof data.cursor === "string") return data.cursor;
+  return typeof data.id === "string" ? data.id : null;
 }
