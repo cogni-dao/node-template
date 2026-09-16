@@ -21,13 +21,16 @@ const mocks = vi.hoisted(() => ({
   assertTemporalConnectivity: vi.fn(),
   checkEvmRpcConnectivity: vi.fn(),
   error: vi.fn(),
+  info: vi.fn(),
   serverEnv: vi.fn(),
   setBuildInfo: vi.fn(),
   verifySystemTenant: vi.fn(),
+  warn: vi.fn(),
 }));
 
 vi.mock("@/bootstrap/container", () => ({
   getContainer: () => ({
+    evmOnchainClient: {},
     paymentRailsActive: false,
     scheduleControl: {},
     serviceAccountService: {},
@@ -61,8 +64,8 @@ vi.mock("@/bootstrap/http", () => ({
           log: {
             debug: vi.fn(),
             error: mocks.error,
-            info: vi.fn(),
-            warn: vi.fn(),
+            info: mocks.info,
+            warn: mocks.warn,
           },
         },
         request
@@ -111,12 +114,80 @@ describe("GET /readyz async substrate contract", () => {
     vi.clearAllMocks();
     mocks.serverEnv.mockReturnValue({
       APP_BUILD_SHA: "readyz-contract-sha",
-      APP_ENV: "test",
+      APP_ENV: "production",
     });
     mocks.assertTemporalConnectivity.mockResolvedValue(undefined);
     mocks.assertSchedulerWorkerConnectivity.mockResolvedValue(undefined);
     mocks.checkEvmRpcConnectivity.mockResolvedValue({ ok: true });
     mocks.verifySystemTenant.mockResolvedValue(undefined);
+  });
+
+  it("checks RPC before payment activation while keeping a transient failure non-draining", async () => {
+    mocks.checkEvmRpcConnectivity.mockResolvedValue({
+      ok: false,
+      source: "live",
+      errorMessage: "upstream 429",
+    });
+
+    const response = await GET(request());
+
+    expect(response.status).toBe(200);
+    expect(mocks.assertEvmRpcConfig).toHaveBeenCalledOnce();
+    expect(mocks.checkEvmRpcConnectivity).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ APP_ENV: "production" }),
+      { forceLive: false }
+    );
+    expect(mocks.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "substrate.evm_rpc.unreachable",
+        severity: "degraded",
+        dependency: "evm-rpc",
+      }),
+      expect.stringContaining("returning ready")
+    );
+  });
+
+  it("forces a live RPC read and returns 503 when the deep probe cannot reach Base", async () => {
+    mocks.checkEvmRpcConnectivity.mockResolvedValue({
+      ok: false,
+      source: "live",
+      errorMessage: "RPC timeout",
+    });
+
+    const response = await GET(request("/readyz?deep=1"));
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      status: "error",
+      reason: "INFRA_UNREACHABLE",
+      message: "EVM RPC connectivity check failed: RPC timeout",
+    });
+    expect(mocks.checkEvmRpcConnectivity).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ APP_ENV: "production" }),
+      { forceLive: true }
+    );
+    expect(mocks.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "substrate.evm_rpc.unreachable",
+        severity: "critical",
+      }),
+      "deep readiness: EVM RPC unreachable"
+    );
+  });
+
+  it("records successful deep RPC proof", async () => {
+    const response = await GET(request("/readyz?deep=1"));
+
+    expect(response.status).toBe(200);
+    expect(mocks.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "substrate.evm_rpc.reachable",
+        dependency: "evm-rpc",
+      }),
+      "deep readiness: EVM RPC reachable"
+    );
   });
 
   it("keeps shallow readiness healthy and critically observes both missing dependencies", async () => {
