@@ -137,6 +137,7 @@ export function ChatRuntimeProvider({
       pendingRef.current = null;
       setPending(null);
       setPhase("idle");
+      onSettled?.();
       return;
     }
     restoredRunToResumeRef.current = restored?.accepted
@@ -160,7 +161,7 @@ export function ChatRuntimeProvider({
         },
       ]);
     }
-  }, [initialMessages, stateKey]);
+  }, [initialMessages, onSettled, stateKey]);
 
   const updatePending = useCallback((next: PendingChatEnvelope | null) => {
     pendingRef.current = next;
@@ -350,6 +351,9 @@ export function ChatRuntimeProvider({
         message: text,
         modelRef: modelRefRef.current,
         graphName: selectedGraphRef.current,
+        hasDurableHistory:
+          initialMessages.length > 0 ||
+          (chatRef.current?.messages.length ?? 0) > 0,
       });
       updatePending(envelope);
       setTerminalFailure(null);
@@ -362,7 +366,7 @@ export function ChatRuntimeProvider({
         metadata: message.metadata,
       } as CreateUIMessage<UI_MESSAGE>;
     },
-    [onOptimisticSend, stateKey, updatePending]
+    [initialMessages.length, onOptimisticSend, stateKey, updatePending]
   );
 
   const chat = useChat<UIMessage>({
@@ -380,6 +384,7 @@ export function ChatRuntimeProvider({
         isAbort ||
         isDisconnect ||
         isError ||
+        !finishReason ||
         finishReason === "error"
       ) {
         setPhase("failed");
@@ -419,6 +424,19 @@ export function ChatRuntimeProvider({
     }
   }, [chat]);
 
+  const editPendingMessage = useCallback(() => {
+    const envelope = pendingRef.current;
+    if (!envelope || envelope.accepted) return;
+    const message = envelope.message ?? "";
+    chat.setMessages(
+      chat.messages.filter((item) => item.id !== envelope.messageId)
+    );
+    updatePending(null);
+    if (message) writeChatDraft(stateKey, message);
+    setTerminalFailure(null);
+    setPhase("idle");
+  }, [chat, stateKey, updatePending]);
+
   useEffect(() => {
     const restored = pendingRef.current;
     if (
@@ -454,7 +472,9 @@ export function ChatRuntimeProvider({
           phase={phase}
           terminalFailure={terminalFailure}
           canRetry={pending !== null}
+          canEdit={pending != null && pending.accepted !== true}
           onRetry={retry}
+          onEdit={editPendingMessage}
         />
       </div>
     </AssistantRuntimeProvider>
@@ -513,12 +533,16 @@ function ChatRunStatus({
   phase,
   terminalFailure,
   canRetry,
+  canEdit,
   onRetry,
+  onEdit,
 }: {
   phase: ChatRunPhase;
   terminalFailure: TerminalFailureStatus | null;
   canRetry: boolean;
+  canEdit: boolean;
   onRetry: () => void;
+  onEdit: () => void;
 }) {
   const labels: Record<ChatRunPhase, string> = {
     idle: "",
@@ -544,13 +568,24 @@ function ChatRunStatus({
         {terminalFailure ? terminalLabels[terminalFailure] : labels[phase]}
       </span>
       {phase === "failed" && canRetry && !terminalFailure && (
-        <button
-          type="button"
-          onClick={onRetry}
-          className="pointer-events-auto font-medium text-foreground underline underline-offset-2"
-        >
-          Retry
-        </button>
+        <>
+          <button
+            type="button"
+            onClick={onRetry}
+            className="pointer-events-auto font-medium text-foreground underline underline-offset-2"
+          >
+            Retry
+          </button>
+          {canEdit && (
+            <button
+              type="button"
+              onClick={onEdit}
+              className="pointer-events-auto font-medium text-foreground underline underline-offset-2"
+            >
+              Edit message
+            </button>
+          )}
+        </>
       )}
     </div>
   );

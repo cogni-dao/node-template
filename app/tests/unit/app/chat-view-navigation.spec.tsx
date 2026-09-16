@@ -16,7 +16,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ChatView } from "@/app/(app)/chat/view";
 import { useChatSidebarStore } from "@/features/ai/chat/components/ChatSidebarContext";
-import { readNewThreadStateKey } from "@/features/ai/chat/hooks/chat-session.client";
+import {
+  createPendingEnvelope,
+  readNewThreadStateKey,
+  writePendingEnvelope,
+} from "@/features/ai/chat/hooks/chat-session.client";
 import { ThreadFetchError } from "@/features/ai/chat/hooks/useThreads";
 
 const nav = vi.hoisted(() => ({
@@ -203,6 +207,36 @@ describe("ChatView navigation lifecycle", () => {
     renderView();
 
     await waitFor(() => expect(nav.loadedThreadKey).toBe(stateKey));
+    expect(await screen.findByTestId("provider")).toHaveAttribute(
+      "data-initial-count",
+      "1"
+    );
+  });
+
+  it("loads existing history before restoring an unaccepted follow-up", async () => {
+    const existingStateKey = "existing-thread";
+    writePendingEnvelope(
+      createPendingEnvelope({
+        stateKey: existingStateKey,
+        message: "follow up",
+        modelRef: { providerKey: "platform", modelId: "free-model" },
+        graphName: "langgraph:default",
+        hasDurableHistory: true,
+        generateId: () => "pending-id",
+      })
+    );
+    nav.search = `thread=${existingStateKey}`;
+    nav.loadedMessages = [
+      {
+        id: "prior-user",
+        role: "user",
+        parts: [{ type: "text", text: "prior" }],
+      },
+    ];
+
+    renderView();
+
+    await waitFor(() => expect(nav.loadedThreadKey).toBe(existingStateKey));
     expect(await screen.findByTestId("provider")).toHaveAttribute(
       "data-initial-count",
       "1"

@@ -36,6 +36,8 @@ export interface PendingChatEnvelope {
   message?: string;
   modelRef: ModelRef;
   graphName: GraphId;
+  /** True when this turn was appended to an already-persisted conversation. */
+  hasDurableHistory?: boolean;
   createdAt: string;
   /** True only after X-State-Key and X-Run-Id acknowledge durable acceptance. */
   accepted?: boolean;
@@ -50,7 +52,11 @@ export interface ChatSessionStorage {
 export function shouldLoadExistingThread(
   pending: PendingChatEnvelope | null
 ): boolean {
-  return pending == null || pending.accepted === true;
+  return (
+    pending == null ||
+    pending.accepted === true ||
+    pending.hasDurableHistory === true
+  );
 }
 
 export function acceptPendingEnvelope(
@@ -151,6 +157,7 @@ export function createPendingEnvelope(input: {
   message: string;
   modelRef: ModelRef;
   graphName: GraphId;
+  hasDurableHistory?: boolean;
   now?: Date;
   generateId?: () => string;
 }): PendingChatEnvelope {
@@ -162,6 +169,7 @@ export function createPendingEnvelope(input: {
     message: input.message,
     modelRef: input.modelRef,
     graphName: input.graphName,
+    hasDurableHistory: input.hasDurableHistory ?? false,
     createdAt: (input.now ?? new Date()).toISOString(),
   };
 }
@@ -223,7 +231,9 @@ export function readPendingEnvelope(
       typeof value.createdAt !== "string" ||
       typeof value.modelRef !== "object" ||
       value.modelRef == null ||
-      typeof value.graphName !== "string"
+      typeof value.graphName !== "string" ||
+      (value.hasDurableHistory !== undefined &&
+        typeof value.hasDurableHistory !== "boolean")
     ) {
       return null;
     }

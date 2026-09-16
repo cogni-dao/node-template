@@ -87,6 +87,19 @@ describe("chat session durability", () => {
     expect(shouldLoadExistingThread(null)).toBe(true);
   });
 
+  it("loads durable history before restoring an unaccepted follow-up", () => {
+    const pending = createPendingEnvelope({
+      stateKey: "existing-thread",
+      message: "follow up",
+      modelRef,
+      graphName,
+      hasDurableHistory: true,
+      generateId: () => "stable-id",
+    });
+
+    expect(shouldLoadExistingThread(pending)).toBe(true);
+  });
+
   it("purges prompt text after durable acceptance but retains replay identity", () => {
     const storage = new MemoryStorage();
     const accepted = acceptPendingEnvelope(

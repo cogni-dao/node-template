@@ -34,6 +34,7 @@ const sdk = vi.hoisted(() => ({
   setMessages: vi.fn(),
   setText: vi.fn(),
   stop: vi.fn(),
+  messages: [] as UIMessage[],
 }));
 
 vi.mock("@ai-sdk/react", () => ({
@@ -45,6 +46,7 @@ vi.mock("@ai-sdk/react", () => ({
       resumeStream: sdk.resumeStream,
       setMessages: sdk.setMessages,
       stop: sdk.stop,
+      messages: sdk.messages,
     };
   },
 }));
@@ -125,6 +127,7 @@ describe("ChatRuntimeProvider durable lifecycle", () => {
     sdk.chatOptions = null;
     sdk.runtimeOptions = null;
     sdk.transportOptions = null;
+    sdk.messages = [];
   });
 
   afterEach(() => {
@@ -195,6 +198,16 @@ describe("ChatRuntimeProvider durable lifecycle", () => {
         isAbort: false,
         isDisconnect: false,
         isError: false,
+        finishReason: undefined,
+      } as never);
+    });
+    expect(readPendingEnvelope(stateKey)).not.toBeNull();
+
+    act(() => {
+      sdk.chatOptions?.onFinish?.({
+        isAbort: false,
+        isDisconnect: false,
+        isError: false,
         finishReason: "stop",
       } as never);
     });
@@ -228,16 +241,70 @@ describe("ChatRuntimeProvider durable lifecycle", () => {
   });
 
   it("uses authoritative terminal history without replay duplication", async () => {
+    const onSettled = vi.fn();
     writePendingEnvelope(acceptPendingEnvelope(pending(), serverRunId));
-    renderProvider([
-      {
-        id: `assistant-${serverRunId}`,
-        role: "assistant",
-        parts: [{ type: "text", text: "complete" }],
-      },
-    ]);
+    renderProvider(
+      [
+        {
+          id: `assistant-${serverRunId}`,
+          role: "assistant",
+          parts: [{ type: "text", text: "complete" }],
+        },
+      ],
+      { onSettled }
+    );
     await waitFor(() => expect(readPendingEnvelope(stateKey)).toBeNull());
     expect(sdk.resumeStream).not.toHaveBeenCalled();
+    expect(onSettled).toHaveBeenCalledOnce();
+  });
+
+  it("hydrates an unaccepted existing-thread turn on top of durable history", async () => {
+    const restored = createPendingEnvelope({
+      stateKey,
+      message: "follow up",
+      modelRef: { providerKey: "platform", modelId: "test-model" },
+      graphName: "langgraph:default",
+      hasDurableHistory: true,
+      generateId: () => "pending-id",
+    });
+    writePendingEnvelope(restored);
+    const history: UIMessage[] = [
+      {
+        id: "prior-user",
+        role: "user",
+        parts: [{ type: "text", text: "prior" }],
+      },
+    ];
+    renderProvider(history);
+
+    await waitFor(() =>
+      expect(sdk.setMessages).toHaveBeenCalledWith([
+        ...history,
+        {
+          id: restored.messageId,
+          role: "user",
+          parts: [{ type: "text", text: "follow up" }],
+        },
+      ])
+    );
+    expect(sdk.resumeStream).not.toHaveBeenCalled();
+  });
+
+  it("lets the user discard a rejected pre-ack envelope and edit its text", async () => {
+    renderProvider();
+    act(() => {
+      sdk.runtimeOptions?.toCreateMessage?.({
+        role: "user",
+        content: [{ type: "text", text: "bad model request" }],
+      } as never);
+      sdk.chatOptions?.onError?.(new Error("Invalid model") as never);
+    });
+
+    expect(readPendingEnvelope(stateKey)).not.toBeNull();
+    screen.getByRole("button", { name: "Edit message" }).click();
+
+    expect(readPendingEnvelope(stateKey)).toBeNull();
+    expect(sdk.setMessages).toHaveBeenCalledWith([]);
   });
 
   it("clears accepted work as successful only for a successful terminal replay", async () => {
