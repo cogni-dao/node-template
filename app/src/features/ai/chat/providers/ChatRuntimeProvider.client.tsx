@@ -53,6 +53,9 @@ import {
 } from "../hooks/chat-session.client";
 import { mapHttpError } from "../utils/mapHttpError";
 
+const REPLAY_RETRY_STATUSES = new Set([404, 409, 425]);
+const REPLAY_RETRY_DELAYS_MS = [300, 600, 1_200, 2_400] as const;
+
 interface ChatRuntimeProviderProps {
   children: ReactNode;
   modelRef: ModelRef;
@@ -88,7 +91,12 @@ export function ChatRuntimeProvider({
   const pendingRef = useRef<PendingChatEnvelope | null>(null);
   const [phase, setPhase] = useState<ChatRunPhase>("idle");
   const resumedRunRef = useRef<string | null>(null);
+  const restoredRunToResumeRef = useRef<string | null>(null);
   const hydratedStorageRef = useRef(false);
+  const providerAbortRef = useRef(new AbortController());
+  // Cursor is intentionally memory-only: after remount the partial assistant is
+  // gone, so replay must restart at 0-0 to reconstruct its full prefix.
+  const cursorRef = useRef<string | null>(null);
 
   useEffect(() => {
     modelRefRef.current = modelRef;
@@ -102,6 +110,24 @@ export function ChatRuntimeProvider({
     if (hydratedStorageRef.current) return;
     hydratedStorageRef.current = true;
     const restored = readPendingEnvelope(stateKey);
+    const authoritativeAssistantId = restored?.runId
+      ? `assistant-${restored.runId}`
+      : null;
+    if (
+      restored?.accepted &&
+      authoritativeAssistantId &&
+      initialMessages.some((message) => message.id === authoritativeAssistantId)
+    ) {
+      clearPendingEnvelope(stateKey);
+      clearChatDraft(stateKey);
+      pendingRef.current = null;
+      setPending(null);
+      setPhase("idle");
+      return;
+    }
+    restoredRunToResumeRef.current = restored?.accepted
+      ? (restored.runId ?? null)
+      : null;
     pendingRef.current = restored;
     setPending(restored);
     setPhase(restored?.accepted ? "reconnecting" : restored ? "failed" : "idle");
@@ -130,6 +156,7 @@ export function ChatRuntimeProvider({
   }, [stateKey]);
 
   const finishRun = useCallback(() => {
+    cursorRef.current = null;
     updatePending(null);
     clearChatDraft(stateKey);
     setPhase("idle");
@@ -234,11 +261,22 @@ export function ChatRuntimeProvider({
         prepareReconnectToStreamRequest: () => {
           const envelope = pendingRef.current;
           if (!envelope) throw new Error("Missing run to reconnect");
-          return createReconnectRequest(envelope);
+          return createReconnectRequest(
+            envelope,
+            cursorRef.current ?? undefined
+          );
         },
         fetch: async (url, init) => {
           const method = init?.method ?? "GET";
-          const response = await globalThis.fetch(url, init);
+          const providerSignal = providerAbortRef.current.signal;
+          const signal = init?.signal
+            ? AbortSignal.any([init.signal, providerSignal])
+            : providerSignal;
+          const response = await fetchWithReplayRetry(
+            url,
+            { ...init, signal },
+            method
+          );
           return handleResponse(response, method);
         },
       }),
@@ -281,12 +319,21 @@ export function ChatRuntimeProvider({
     transport,
     onData: (part) => {
       const cursor = getRunCursor(part);
-      if (cursor && pendingRef.current) {
-        updatePending({ ...pendingRef.current, cursor });
-      }
+      if (cursor) cursorRef.current = cursor;
       setPhase("running");
     },
-    onFinish: finishRun,
+    onFinish: ({ isAbort, isDisconnect, isError, finishReason }) => {
+      if (
+        isAbort ||
+        isDisconnect ||
+        isError ||
+        finishReason === "error"
+      ) {
+        setPhase("failed");
+        return;
+      }
+      finishRun();
+    },
     onError: (error) => {
       setPhase("failed");
       clientLogger.error(EVENT_NAMES.CLIENT_CHAT_STREAM_ERROR, {
@@ -295,6 +342,15 @@ export function ChatRuntimeProvider({
     },
   });
   chatRef.current = chat;
+
+  useEffect(() => {
+    return () => {
+      // This detaches the browser consumer only. The durable server run continues
+      // and the stored envelope remains available for a later reconnect.
+      chatRef.current?.stop();
+      providerAbortRef.current.abort();
+    };
+  }, []);
 
   const retry = useCallback(() => {
     const envelope = pendingRef.current;
@@ -314,10 +370,12 @@ export function ChatRuntimeProvider({
     if (
       !restored?.accepted ||
       !restored.runId ||
+      restoredRunToResumeRef.current !== restored.runId ||
       resumedRunRef.current === restored.runId
     ) {
       return;
     }
+    restoredRunToResumeRef.current = null;
     resumedRunRef.current = restored.runId;
     setPhase("reconnecting");
     void chat.resumeStream();
@@ -367,7 +425,11 @@ function ChatDraftLifecycle({
   }, [aui, pending, stateKey]);
 
   useEffect(() => {
-    if (phase === "saving" && pending?.message && !composerText) {
+    if (
+      !pending?.accepted &&
+      pending?.message &&
+      composerText !== pending.message
+    ) {
       aui.composer().setText(pending.message);
     }
     if (pending?.accepted && composerText) {
@@ -439,4 +501,45 @@ function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
     value
   );
+}
+
+async function fetchWithReplayRetry(
+  url: RequestInfo | URL,
+  init: RequestInit | undefined,
+  method: string
+): Promise<Response> {
+  let response = await globalThis.fetch(url, init);
+  if (method !== "GET") return response;
+
+  for (const delayMs of REPLAY_RETRY_DELAYS_MS) {
+    if (!REPLAY_RETRY_STATUSES.has(response.status)) break;
+    const retryAfterHeader = response.headers.get("Retry-After");
+    const retryAfterSeconds =
+      retryAfterHeader == null ? Number.NaN : Number(retryAfterHeader);
+    const retryAfterMs = Number.isFinite(retryAfterSeconds)
+      ? Math.min(Math.max(retryAfterSeconds * 1_000, 0), 5_000)
+      : null;
+    const jitterMs = Math.floor(Math.random() * Math.min(delayMs * 0.2, 100));
+    await abortableDelay(retryAfterMs ?? delayMs + jitterMs, init?.signal);
+    response = await globalThis.fetch(url, init);
+  }
+  return response;
+}
+
+function abortableDelay(delayMs: number, signal?: AbortSignal | null) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException("Aborted", "AbortError"));
+      return;
+    }
+    const timeout = window.setTimeout(resolve, delayMs);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        window.clearTimeout(timeout);
+        reject(new DOMException("Aborted", "AbortError"));
+      },
+      { once: true }
+    );
+  });
 }

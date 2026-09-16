@@ -108,13 +108,13 @@ describe("chat session durability", () => {
 
   it("builds the UI-message replay request with the last cursor", () => {
     expect(
-      createReconnectRequest({
-        ...acceptPendingEnvelope(
+      createReconnectRequest(
+        acceptPendingEnvelope(
           envelope(),
           "22222222-2222-4222-8222-222222222222"
         ),
-        cursor: "42-7",
-      })
+        "42-7"
+      )
     ).toEqual({
       api: "/api/v1/ai/runs/22222222-2222-4222-8222-222222222222/ui-stream",
       headers: { "Last-Event-ID": "42-7" },

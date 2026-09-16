@@ -37,8 +37,6 @@ export interface PendingChatEnvelope {
   modelRef: ModelRef;
   graphName: GraphId;
   createdAt: string;
-  /** Last acknowledged Redis stream ID received from data-run-cursor. */
-  cursor?: string;
   /** True only after X-State-Key and X-Run-Id acknowledge durable acceptance. */
   accepted?: boolean;
 }
@@ -63,7 +61,10 @@ export function acceptPendingEnvelope(
   return { ...accepted, runId: authoritativeRunId, accepted: true };
 }
 
-export function createReconnectRequest(envelope: PendingChatEnvelope): {
+export function createReconnectRequest(
+  envelope: PendingChatEnvelope,
+  inMemoryCursor?: string
+): {
   api: string;
   headers?: { "Last-Event-ID": string };
 } {
@@ -72,8 +73,8 @@ export function createReconnectRequest(envelope: PendingChatEnvelope): {
   }
   return {
     api: `/api/v1/ai/runs/${encodeURIComponent(envelope.runId)}/ui-stream`,
-    ...(envelope.cursor
-      ? { headers: { "Last-Event-ID": envelope.cursor } }
+    ...(inMemoryCursor
+      ? { headers: { "Last-Event-ID": inMemoryCursor } }
       : {}),
   };
 }

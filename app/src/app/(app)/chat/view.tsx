@@ -47,6 +47,7 @@ import {
   writeNewThreadStateKey,
 } from "@/features/ai/chat/hooks/chat-session.client";
 import { ChatRuntimeProvider } from "@/features/ai/chat/providers/ChatRuntimeProvider.client";
+import { ThreadFetchError } from "@/features/ai/chat/hooks/useThreads";
 import { toErrorAlertProps } from "@/features/ai/chat/utils/toErrorAlertProps";
 import { CHATGPT_MODELS } from "@/features/ai/components/ModelPicker";
 import {
@@ -285,8 +286,9 @@ export function ChatView(): ReactNode {
   );
 
   const handleThreadFinish = useCallback(() => {
+    clearNewThreadStateKey(threadSession.stateKey);
     queryClient.invalidateQueries({ queryKey: ["ai-threads"] });
-  }, [queryClient]);
+  }, [queryClient, threadSession.stateKey]);
 
   const handleOptimisticSend = useCallback(
     (envelope: PendingChatEnvelope) => {
@@ -303,7 +305,6 @@ export function ChatView(): ReactNode {
       };
 
       navigationTargetRef.current = envelope.stateKey;
-      clearNewThreadStateKey(envelope.stateKey);
       queryClient.setQueriesData<ListThreadsOutput>(
         { queryKey: ["ai-threads"] },
         (current) => ({
@@ -474,6 +475,31 @@ export function ChatView(): ReactNode {
     !threadSession.sessionHydrated ||
     (threadSession.loadExisting && threadData.isPending);
 
+  if (threadSession.loadExisting && threadData.isError) {
+    const notFound =
+      threadData.error instanceof ThreadFetchError &&
+      threadData.error.status === 404;
+    return (
+      <div className="flex min-h-0 flex-1 flex-col items-center justify-center">
+        <div className="mx-auto w-full max-w-[var(--size-container-sm)] px-4">
+          <ErrorAlert
+            code={notFound ? "THREAD_NOT_FOUND" : "THREAD_LOAD_FAILED"}
+            message={
+              notFound
+                ? "This conversation was not found. It may still be saving; retry or start a new chat."
+                : "This conversation could not be loaded. Check your connection and retry."
+            }
+            retryable={true}
+            showRetry={true}
+            showSwitchFree={false}
+            showAddCredits={false}
+            onRetry={() => void threadData.refetch()}
+          />
+        </div>
+      </div>
+    );
+  }
+
   // After the isThreadLoading gate, threadData.data is guaranteed for existing threads.
   const initialMessages: UIMessage[] =
     threadSession.loadExisting && threadData.data
@@ -515,10 +541,10 @@ export function ChatView(): ReactNode {
               errorAlertProps ? (
                 <ChatErrorBubble
                   message={errorAlertProps.message}
-                  showRetry={errorAlertProps.showRetry}
+                  // The provider's Failed status owns exact-envelope retry.
+                  showRetry={false}
                   showSwitchFree={errorAlertProps.showSwitchFree}
                   showAddCredits={errorAlertProps.showAddCredits}
-                  onRetry={handleRetry}
                   onSwitchFreeModel={handleSwitchFreeModel}
                   onAddCredits={handleAddCredits}
                 />
