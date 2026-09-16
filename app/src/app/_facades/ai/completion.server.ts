@@ -112,10 +112,15 @@ export interface CompletionInput {
   stateKey?: string;
   /** Idempotency key for workflow start dedupe */
   idempotencyKey?: string;
-  /** Stable caller-provided run identity for stream reconnection. */
-  runId?: string;
+  /** Server-authoritative, tenant-scoped run identity for stream reconnection. */
+  serverRunId?: string;
   /** Stable chat user-message identity for cross-plane correlation. */
   messageId?: string;
+  /**
+   * `first-event` preserves synchronous preflight/error semantics. UI chat may
+   * opt into `workflow-start` so HTTP headers return immediately after durable acceptance.
+   */
+  acceptanceMode?: "first-event" | "workflow-start";
 }
 
 function toDeterministicRunId(seed: string): string {
@@ -130,6 +135,18 @@ function toDeterministicRunId(seed: string): string {
   const p4 = `${variantNibble}${hex.slice(17, 20)}`;
   const p5 = hex.slice(20, 32);
   return `${p1}-${p2}-${p3}-${p4}-${p5}`;
+}
+
+/** Scope the global execution_requests key before Temporal/internal execution. */
+export function scopeExecutionIdempotencyKey(
+  nodeId: string,
+  billingAccountId: string,
+  callerKey: string
+): string {
+  const digest = createHash("sha256")
+    .update(`${nodeId}:${billingAccountId}:${callerKey}`, "utf8")
+    .digest("hex");
+  return `ai:${digest}`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -352,9 +369,16 @@ export async function completionStream(
   const graphId = input.graphName.includes(":")
     ? input.graphName
     : `langgraph:${input.graphName}`;
-  const idempotencyKey = input.idempotencyKey ?? `api:${ctx.reqId}`;
-  const workflowId = `graph-run:${billingAccount.id}:${idempotencyKey}`;
-  const runId = input.runId ?? toDeterministicRunId(`${workflowId}:${graphId}`);
+  const nodeId = getNodeId();
+  const callerIdempotencyKey = input.idempotencyKey ?? `api:${ctx.reqId}`;
+  const idempotencyKey = scopeExecutionIdempotencyKey(
+    nodeId,
+    billingAccount.id,
+    callerIdempotencyKey
+  );
+  const workflowId = `graph-run:${idempotencyKey}`;
+  const runId =
+    input.serverRunId ?? toDeterministicRunId(`${workflowId}:${graphId}`);
 
   const { client: workflowClient, taskQueue } =
     await getTemporalWorkflowClient();
@@ -365,7 +389,7 @@ export async function completionStream(
       workflowId,
       args: [
         {
-          nodeId: getNodeId(),
+          nodeId,
           graphId,
           executionGrantId: null,
           input: {
@@ -413,6 +437,35 @@ export async function completionStream(
   );
   const iterator = rawSubscription[Symbol.asyncIterator]();
   const acceptedAtMs = performance.now();
+
+  let prefetchedEntry: Awaited<ReturnType<typeof iterator.next>> | undefined;
+  if ((input.acceptanceMode ?? "first-event") === "first-event") {
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<"timeout">((resolve) => {
+      deadline = setTimeout(() => resolve("timeout"), FIRST_EVENT_DEADLINE_MS);
+    });
+    const first = await Promise.race([iterator.next(), timeout]);
+    if (deadline) clearTimeout(deadline);
+    if (first === "timeout") {
+      subscriptionAbort.abort();
+      throw new AiExecutionError("timeout");
+    }
+    if (first.done) {
+      subscriptionAbort.abort();
+      throw new AiExecutionError(
+        input.abortSignal?.aborted ? "aborted" : "internal"
+      );
+    }
+    aiChatPhaseDurationMs.observe(
+      { phase: "accepted_to_first_event" },
+      performance.now() - acceptedAtMs
+    );
+    if (first.value.event.type === "error") {
+      subscriptionAbort.abort();
+      throw new AiExecutionError(first.value.event.error);
+    }
+    prefetchedEntry = first;
+  }
 
   let resolveFinal: ((value: StreamFinalResult) => void) | undefined;
   const final = new Promise<StreamFinalResult>((resolve) => {
@@ -470,12 +523,15 @@ export async function completionStream(
     }
 
     let sawTerminal = false;
-    let sawFirstEvent = false;
+    let sawFirstEvent = prefetchedEntry !== undefined;
     try {
       while (true) {
         let next: Awaited<ReturnType<typeof iterator.next>>;
 
-        if (!sawFirstEvent) {
+        if (prefetchedEntry) {
+          next = prefetchedEntry;
+          prefetchedEntry = undefined;
+        } else if (!sawFirstEvent) {
           let deadline: ReturnType<typeof setTimeout> | undefined;
           const timeout = new Promise<"timeout">((resolve) => {
             deadline = setTimeout(
@@ -518,10 +574,18 @@ export async function completionStream(
         yield event;
       }
       if (!sawTerminal) {
-        failStream("stream_ended_no_terminal");
+        if (input.abortSignal?.aborted) {
+          resolveFinal?.({ ok: false, requestId: runId, error: "aborted" });
+        } else {
+          failStream("stream_ended_no_terminal");
+        }
       }
     } catch {
-      failStream("stream_subscribe_error");
+      if (input.abortSignal?.aborted) {
+        resolveFinal?.({ ok: false, requestId: runId, error: "aborted" });
+      } else {
+        failStream("stream_subscribe_error");
+      }
     } finally {
       input.abortSignal?.removeEventListener("abort", abortSubscription);
     }

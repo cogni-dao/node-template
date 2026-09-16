@@ -155,6 +155,12 @@ export const aiChatPersistenceFailuresTotal = getOrCreateCounter(
   [] as const
 );
 
+export const aiChatTerminalPublishFailuresTotal = getOrCreateCounter(
+  "ai_chat_terminal_publish_failures_total",
+  "Total terminal chat stream publication failures",
+  [] as const
+);
+
 // =============================================================================
 // AI LLM Call Metrics
 // =============================================================================

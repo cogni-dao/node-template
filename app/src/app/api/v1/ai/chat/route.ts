@@ -18,7 +18,7 @@
  * @public
  */
 
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { isAiExecutionError, type ModelRef } from "@cogni/ai-core";
 import { toUserId } from "@cogni/ids";
 import { aiChatOperation, type ChatInput } from "@cogni/node-contracts";
@@ -28,12 +28,14 @@ import { createUIMessageStream, createUIMessageStreamResponse } from "ai";
 import { nanoid } from "nanoid";
 import { NextResponse } from "next/server";
 import { executionErrorToHttpStatus } from "@/app/_facades/ai/execution-error-mapper";
+import { completionStream } from "@/app/_facades/ai/completion.server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { isAccountsFeatureError } from "@/features/accounts/public";
 import {
   redactSecretsInMessages,
+  redactSecretsInText,
   uiMessagesToMessageDtos,
 } from "@/features/ai/public.server";
 import {
@@ -54,7 +56,12 @@ export const runtime = "nodejs";
 
 interface ChatTurnEnvelope {
   readonly version: 1;
-  readonly runId: string;
+  /** SHA-256 of canonical redacted text, allowing retries after persistence. */
+  readonly messageDigest: string;
+  /** Server-authoritative ID used by Temporal, Redis, graph_runs, and reconnect. */
+  readonly serverRunId: string;
+  /** Optional untrusted client seed used only when deriving serverRunId. */
+  readonly clientRunSeed?: string;
   readonly graphName: string;
   readonly modelRef: ModelRef;
 }
@@ -64,13 +71,6 @@ class ChatTurnMismatchError extends Error {
     super(`Chat turn ${messageId} was retried with a different envelope`);
     this.name = "ChatTurnMismatchError";
   }
-}
-
-function textOf(message: UIMessage): string {
-  return message.parts
-    .filter((part) => part.type === "text")
-    .map((part) => part.text)
-    .join("");
 }
 
 function envelopeOf(message: UIMessage): ChatTurnEnvelope | undefined {
@@ -90,24 +90,50 @@ function deterministicUuid(seed: string): string {
 
 function assertSameTurn(
   existing: UIMessage,
-  input: ChatInput
+  input: ChatInput,
+  userId: string,
+  stateKey: string
 ): ChatTurnEnvelope {
   const envelope = envelopeOf(existing);
+  const expectedServerRunId = deriveServerRunId(
+    userId,
+    stateKey,
+    existing.id,
+    input.runId
+  );
   const sameModel =
     envelope?.modelRef.providerKey === input.modelRef.providerKey &&
     envelope.modelRef.modelId === input.modelRef.modelId &&
     envelope.modelRef.connectionId === input.modelRef.connectionId;
   if (
     existing.role !== "user" ||
-    textOf(existing) !== input.message ||
     envelope?.version !== 1 ||
+    envelope.messageDigest !== messageDigest(input.message) ||
+    envelope.serverRunId !== expectedServerRunId ||
+    envelope.clientRunSeed !== input.runId ||
     envelope.graphName !== input.graphName ||
-    !sameModel ||
-    (input.runId !== undefined && envelope.runId !== input.runId)
+    !sameModel
   ) {
     throw new ChatTurnMismatchError(existing.id);
   }
   return envelope;
+}
+
+function messageDigest(message: string): string {
+  return createHash("sha256")
+    .update(redactSecretsInText(message), "utf8")
+    .digest("hex");
+}
+
+function deriveServerRunId(
+  userId: string,
+  stateKey: string,
+  messageId: string,
+  clientRunSeed?: string
+): string {
+  return deterministicUuid(
+    `chat-run:${userId}:${stateKey}:${messageId}:${clientRunSeed ?? "server"}`
+  );
 }
 
 /**
@@ -306,16 +332,22 @@ export const POST = wrapRouteHandlerWithLogging(
       const existingTurn = existingThread.find(
         (message) => message.id === messageId
       );
-      const runId = existingTurn
-        ? assertSameTurn(existingTurn, input).runId
-        : (input.runId ??
-          (legacySeed ? deterministicUuid(legacySeed) : randomUUID()));
-      const chatTurn: ChatTurnEnvelope = {
-        version: 1,
-        runId,
-        graphName: input.graphName,
-        modelRef: input.modelRef,
-      };
+      let chatTurn: ChatTurnEnvelope = existingTurn
+        ? assertSameTurn(existingTurn, input, sessionUser.id, stateKey)
+        : {
+            version: 1,
+            messageDigest: messageDigest(input.message),
+            serverRunId: deriveServerRunId(
+              sessionUser.id,
+              stateKey,
+              messageId,
+              input.runId
+            ),
+            ...(input.runId ? { clientRunSeed: input.runId } : {}),
+            graphName: input.graphName,
+            modelRef: input.modelRef,
+          };
+      let runId = chatTurn.serverRunId;
 
       // Build user UIMessage with immutable retry envelope.
       const userUIMessage: UIMessage = {
@@ -358,7 +390,13 @@ export const POST = wrapRouteHandlerWithLogging(
             (message) => message.id === messageId
           );
           if (concurrentTurn) {
-            assertSameTurn(concurrentTurn, input);
+            chatTurn = assertSameTurn(
+              concurrentTurn,
+              input,
+              sessionUser.id,
+              stateKey
+            );
+            runId = chatTurn.serverRunId;
             duplicateTurn = true;
             threadWithUser = existingThread;
           } else {
@@ -396,9 +434,6 @@ export const POST = wrapRouteHandlerWithLogging(
       );
 
       // --- Convert persisted thread → DTOs for execution ---
-      const { completionStream } = await import(
-        "@/app/_facades/ai/completion.server"
-      );
       const messageDtos = uiMessagesToMessageDtos(threadWithUser);
 
       const idempotencyKey = input.messageId || input.runId
@@ -419,8 +454,9 @@ export const POST = wrapRouteHandlerWithLogging(
           graphName: input.graphName,
           stateKey,
           idempotencyKey,
-          runId,
+          serverRunId: runId,
           messageId,
+          acceptanceMode: "workflow-start",
         },
         ctx
       );
@@ -449,7 +485,7 @@ export const POST = wrapRouteHandlerWithLogging(
       let firstDeltaLogged = false;
 
       // --- Stream response via AI SDK Data Stream Protocol (SSE) ---
-      const textPartId = nanoid();
+      const textPartId = `run-${acceptedRunId}`;
       let textBlockOpen = false;
 
       const uiStream = createUIMessageStream({

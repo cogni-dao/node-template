@@ -5,7 +5,7 @@
  * Module: `@app/api/v1/ai/runs/[runId]/ui-stream`
  * Purpose: Reconnect an authenticated chat client to a graph run using AI SDK UIMessageChunk SSE.
  * Scope: Ownership check, Redis replay subscription, and AiEvent-to-UIMessageChunk delivery only.
- * Invariants: Redis is ephemeral transport; terminal+expired streams return 410 so clients reload Postgres.
+ * Invariants: Redis is ephemeral transport; terminal runs return 410 so clients reload Postgres.
  * Side-effects: IO (graph-run lookup, Redis subscription, HTTP stream)
  * Links: sibling raw /stream endpoint, /api/v1/ai/chat
  * @public
@@ -53,10 +53,9 @@ export const GET = wrapRouteHandlerWithLogging<RouteParams>(
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    const streamLength = await container.runStream.streamLength(runId);
-    if (TERMINAL_STATUSES.has(run.status) && streamLength === 0) {
-      ctx.log.info({ runId, status: run.status }, "AI UI stream expired");
-      return NextResponse.json({ error: "Stream expired" }, { status: 410 });
+    if (TERMINAL_STATUSES.has(run.status)) {
+      ctx.log.info({ runId, status: run.status }, "AI UI stream is terminal");
+      return NextResponse.json({ error: "Run is terminal" }, { status: 410 });
     }
 
     const headerCursor = request.headers.get("last-event-id");
@@ -80,20 +79,23 @@ export const GET = wrapRouteHandlerWithLogging<RouteParams>(
           }
         };
 
+        const writeCursor = (cursor: string) => {
+          writer.write({
+            type: "data-run-cursor",
+            data: { cursor },
+            transient: true,
+          } as UIMessageChunk);
+        };
+
         for await (const entry of container.runStream.subscribe(
           runId,
           request.signal,
           cursor
         )) {
-          writer.write({
-            type: "data-run-cursor",
-            data: { cursor: entry.id },
-            transient: true,
-          } as UIMessageChunk);
-
           const event = entry.event;
-          if (event.type === "usage_report") continue;
-          if (event.type === "text_delta") {
+          if (event.type === "usage_report") {
+            writeCursor(entry.id);
+          } else if (event.type === "text_delta") {
             if (!textOpen) {
               writer.write({ type: "text-start", id: textPartId });
               textOpen = true;
@@ -104,7 +106,10 @@ export const GET = wrapRouteHandlerWithLogging<RouteParams>(
               id: textPartId,
               delta: event.delta,
             });
+            writeCursor(entry.id);
           } else if (event.type === "assistant_final") {
+            // Buffered until done reconciliation. Do not advance the durable
+            // client cursor until the buffered content has been written.
             assistantFinal = event.content;
           } else if (event.type === "tool_call_start") {
             closeText();
@@ -119,12 +124,14 @@ export const GET = wrapRouteHandlerWithLogging<RouteParams>(
               toolName: event.toolName,
               input: event.args,
             } as UIMessageChunk);
+            writeCursor(entry.id);
           } else if (event.type === "tool_call_result") {
             writer.write({
               type: "tool-output-available",
               toolCallId: event.toolCallId,
               output: event.result,
             } as UIMessageChunk);
+            writeCursor(entry.id);
           } else if (event.type === "status") {
             writer.write({
               type: "data-status",
@@ -134,9 +141,11 @@ export const GET = wrapRouteHandlerWithLogging<RouteParams>(
               },
               transient: true,
             } as UIMessageChunk);
+            writeCursor(entry.id);
           } else if (event.type === "error") {
             closeText();
             writer.write({ type: "error", errorText: event.error });
+            writeCursor(entry.id);
           } else if (event.type === "done") {
             if (
               assistantFinal !== undefined &&
@@ -164,6 +173,7 @@ export const GET = wrapRouteHandlerWithLogging<RouteParams>(
                 | "other"
                 | "error",
             });
+            writeCursor(entry.id);
           }
         }
         closeText();

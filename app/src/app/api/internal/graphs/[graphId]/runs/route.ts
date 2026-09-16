@@ -46,7 +46,10 @@ import { commitUsageFact } from "@/features/ai/services/billing";
 import { preflightCreditCheck } from "@/features/ai/services/preflight-credit-check";
 import type { PreflightCreditCheckFn } from "@/ports";
 import { isInsufficientCreditsPortError } from "@/ports";
-import { persistAssistantThenPublishTerminal } from "@/app/_lib/ai/durable-chat-terminal";
+import {
+  persistAssistantThenPublishTerminal,
+  TerminalPublicationError,
+} from "@/app/_lib/ai/durable-chat-terminal";
 import {
   isGrantExpiredError,
   isGrantNotFoundError,
@@ -57,6 +60,7 @@ import { serverEnv } from "@/shared/env";
 import {
   aiChatPersistenceFailuresTotal,
   aiChatPhaseDurationMs,
+  aiChatTerminalPublishFailuresTotal,
 } from "@/shared/observability";
 
 export const dynamic = "force-dynamic";
@@ -662,41 +666,53 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
               );
             },
             publishTerminal: async () => {
+              await runStream.publish(runId, enriched);
               try {
-                await runStream.publish(runId, enriched);
                 await runStream.expire(
                   runId,
                   RUN_STREAM_DEFAULT_TTL_SECONDS
                 );
-                log.info(
-                  {
-                    reqId: chatRequestId ?? ctx.reqId,
-                    stateKey,
-                    messageId: chatMessageId,
-                    runId,
-                    workflowId: chatWorkflowId,
-                  },
-                  "ai.chat_terminal_published"
-                );
-              } catch (publishErr) {
+              } catch (expireErr) {
                 log.warn(
-                  { runId, err: publishErr },
-                  "Redis publish of enriched done failed"
+                  { runId, err: expireErr },
+                  "Redis expiry after terminal publication failed"
                 );
               }
+              log.info(
+                {
+                  reqId: chatRequestId ?? ctx.reqId,
+                  stateKey,
+                  messageId: chatMessageId,
+                  runId,
+                  workflowId: chatWorkflowId,
+                },
+                "ai.chat_terminal_published"
+              );
             },
           });
-        } catch (threadErr) {
-          aiChatPersistenceFailuresTotal.inc();
-          aiChatPhaseDurationMs.observe(
-            { phase: "assistant_persist" },
-            performance.now() - assistantPersistStartMs
-          );
+        } catch (terminalError) {
+          if (terminalError instanceof TerminalPublicationError) {
+            aiChatTerminalPublishFailuresTotal.inc();
+          } else {
+            aiChatPersistenceFailuresTotal.inc();
+            aiChatPhaseDurationMs.observe(
+              { phase: "assistant_persist" },
+              performance.now() - assistantPersistStartMs
+            );
+          }
           log.error(
-            { runId, stateKey, err: threadErr },
-            "Thread persistence failed — suppressing terminal success"
+            {
+              runId,
+              stateKey,
+              phase:
+                terminalError instanceof TerminalPublicationError
+                  ? "terminal_publish"
+                  : "assistant_persist",
+              err: terminalError,
+            },
+            "Durable chat terminal failed — suppressing run success"
           );
-          throw threadErr;
+          throw terminalError;
         }
       }
     } catch (error) {

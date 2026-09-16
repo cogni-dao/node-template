@@ -288,27 +288,45 @@ function createOpenAiSseStream(
 
         // Await final result for finish_reason and usage
         const result = await final;
-        const finishReason = result.ok
-          ? toOpenAiFinishReason(result.finishReason)
-          : "stop";
-
         if (!result.ok) {
           log.error({ error: result.error }, "Stream completed with error");
+          const mapped = executionErrorToOpenAiError(result.error);
+          logEvent(log, EVENT_NAMES.AI_COMPLETION, {
+            reqId: completionId.replace("chatcmpl-", ""),
+            routeId: "chat.completions",
+            streaming: true,
+            model,
+            outcome: "error",
+            finishReason: "error",
+          });
+          controller.enqueue(
+            encoder.encode(
+              sseEncode(
+                JSON.stringify({
+                  error: {
+                    message: mapped.message,
+                    type: mapped.type,
+                    param: null,
+                    code: result.error,
+                  },
+                })
+              )
+            )
+          );
+          controller.close();
+          return;
         }
+        const finishReason = toOpenAiFinishReason(result.finishReason);
 
         logEvent(log, EVENT_NAMES.AI_COMPLETION, {
           reqId: completionId.replace("chatcmpl-", ""),
           routeId: "chat.completions",
           streaming: true,
           model,
-          outcome: result.ok ? "success" : "error",
+          outcome: "success",
           finishReason,
-          ...(result.ok
-            ? {
-                promptTokens: result.usage.promptTokens,
-                completionTokens: result.usage.completionTokens,
-              }
-            : {}),
+          promptTokens: result.usage.promptTokens,
+          completionTokens: result.usage.completionTokens,
         });
 
         // Final chunk with finish_reason

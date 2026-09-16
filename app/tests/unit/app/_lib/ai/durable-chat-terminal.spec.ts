@@ -12,7 +12,10 @@
 
 import type { ThreadPersistencePort } from "@/ports";
 import { describe, expect, it, vi } from "vitest";
-import { persistAssistantThenPublishTerminal } from "@/app/_lib/ai/durable-chat-terminal";
+import {
+  persistAssistantThenPublishTerminal,
+  TerminalPublicationError,
+} from "@/app/_lib/ai/durable-chat-terminal";
 
 function persistenceWith(
   saveThread: ThreadPersistencePort["saveThread"]
@@ -68,5 +71,38 @@ describe("persistAssistantThenPublishTerminal", () => {
 
     await expect(operation).rejects.toThrow("database down");
     expect(publishTerminal).not.toHaveBeenCalled();
+  });
+
+  it("propagates terminal publication failure after the assistant is durable", async () => {
+    const saveThread = vi.fn().mockResolvedValue(undefined);
+    const operation = persistAssistantThenPublishTerminal({
+      ...inputBase,
+      threadPersistenceForUser: () => persistenceWith(saveThread),
+      publishTerminal: vi.fn().mockRejectedValue(new Error("redis down")),
+    });
+
+    await expect(operation).rejects.toBeInstanceOf(TerminalPublicationError);
+    expect(saveThread).toHaveBeenCalledOnce();
+  });
+
+  it("bounds terminal publication when Redis never settles", async () => {
+    vi.useFakeTimers();
+    try {
+      const operation = persistAssistantThenPublishTerminal({
+        ...inputBase,
+        threadPersistenceForUser: () =>
+          persistenceWith(vi.fn().mockResolvedValue(undefined)),
+        publishTerminal: vi.fn(() => new Promise<void>(() => undefined)),
+        terminalPublishTimeoutMs: 25,
+      });
+
+      const rejection = expect(operation).rejects.toBeInstanceOf(
+        TerminalPublicationError
+      );
+      await vi.advanceTimersByTimeAsync(25);
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

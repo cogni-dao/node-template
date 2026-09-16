@@ -5,7 +5,7 @@
 ## Metadata
 
 - **Owners:** @derek @core-dev
-- **Last reviewed:** 2026-03-18
+- **Last reviewed:** 2026-09-15
 - **Status:** stable
 
 ## Purpose
@@ -46,7 +46,7 @@ AI feature owns all LLM interaction endpoints, runtimes, and services. Provides 
   - `AiEvent` (union of all AI runtime events: text_delta, tool events, done)
   - `createToolRunner` (tool execution factory; owns toolCallId; emits tool lifecycle AiEvents)
   - `uiMessagesToMessageDtos` (UIMessage[] → MessageDto[] bridge for thread persistence pipeline)
-  - `redactSecretsInMessages` (best-effort credential redaction before persistence)
+  - `redactSecretsInMessages`, `redactSecretsInText` (best-effort credential redaction before persistence/idempotency digesting)
   - `assembleAssistantMessage` (AiEvent[] → UIMessage; deterministic ID `assistant-{runId}` for idempotent thread persistence)
 - **Routes:**
   - `/api/v1/chat/completions` (POST) - OpenAI-compatible chat completions (streaming + non-streaming, `cogni_status` extension)

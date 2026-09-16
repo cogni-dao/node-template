@@ -5,7 +5,7 @@
  * Module: `@tests/contract/app/ai.runs.ui-stream`
  * Purpose: Prove chat replay uses AI SDK SSE, cursor forwarding, ownership, and Postgres fallback signaling.
  * Scope: Route contract with mocked run repository and Redis stream.
- * Invariants: terminal+empty Redis returns 410; raw AiEvents are mapped to UIMessageChunks.
+ * Invariants: terminal runs return 410; raw AiEvents are mapped before cursor advancement.
  * Side-effects: none
  * @internal
  */
@@ -94,7 +94,6 @@ describe("GET /api/v1/ai/runs/{runId}/ui-stream", () => {
 
   it("rejects an invalid replay cursor", async () => {
     graphRunRepository.getRunByRunId.mockResolvedValue(makeRun());
-    vi.mocked(runStream.streamLength).mockResolvedValue(1);
     await testApiHandler({
       appHandler,
       params: { runId: RUN_ID },
@@ -108,9 +107,9 @@ describe("GET /api/v1/ai/runs/{runId}/ui-stream", () => {
     });
   });
 
-  it("returns 410 for a terminal run after Redis replay expires", async () => {
+  it("returns 410 for every terminal run even when Redis still has entries", async () => {
     graphRunRepository.getRunByRunId.mockResolvedValue(makeRun("success"));
-    vi.mocked(runStream.streamLength).mockResolvedValue(0);
+    vi.mocked(runStream.streamLength).mockResolvedValue(3);
 
     await testApiHandler({
       appHandler,
@@ -118,15 +117,15 @@ describe("GET /api/v1/ai/runs/{runId}/ui-stream", () => {
       async test({ fetch }) {
         const response = await fetch({ method: "GET" });
         expect(response.status).toBe(410);
-        expect(await response.json()).toEqual({ error: "Stream expired" });
+        expect(await response.json()).toEqual({ error: "Run is terminal" });
         expect(runStream.subscribe).not.toHaveBeenCalled();
+        expect(runStream.streamLength).not.toHaveBeenCalled();
       },
     });
   });
 
   it("maps Redis events to AI SDK chunks and forwards the replay cursor", async () => {
     graphRunRepository.getRunByRunId.mockResolvedValue(makeRun());
-    vi.mocked(runStream.streamLength).mockResolvedValue(3);
     vi.mocked(runStream.subscribe).mockReturnValue(
       (async function* () {
         yield {
@@ -156,6 +155,13 @@ describe("GET /api/v1/ai/runs/{runId}/ui-stream", () => {
         expect(body).toContain('"type":"text-delta"');
         expect(body).toContain(" world");
         expect(body).toContain('"type":"finish"');
+        expect(body.indexOf('"type":"text-delta"')).toBeLessThan(
+          body.indexOf('"cursor":"2-0"')
+        );
+        expect(body.indexOf('"type":"finish"')).toBeLessThan(
+          body.indexOf('"cursor":"4-0"')
+        );
+        expect(body).not.toContain('"cursor":"3-0"');
         expect(runStream.subscribe).toHaveBeenCalledWith(
           RUN_ID,
           expect.any(AbortSignal),
