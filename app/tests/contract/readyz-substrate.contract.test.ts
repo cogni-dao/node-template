@@ -103,7 +103,10 @@ vi.mock("@/shared/observability/server/metrics", () => ({
 }));
 
 import { GET } from "@/app/(infra)/readyz/route";
-import { InfraConnectivityError } from "@/shared/env/invariants";
+import {
+  InfraConnectivityError,
+  RuntimeSecretError,
+} from "@/shared/env/invariants";
 
 function request(path = "/readyz"): NextRequest {
   return new NextRequest(`http://localhost:3200${path}`);
@@ -112,6 +115,7 @@ function request(path = "/readyz"): NextRequest {
 describe("GET /readyz async substrate contract", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.assertEvmRpcConfig.mockReset();
     mocks.serverEnv.mockReturnValue({
       APP_BUILD_SHA: "readyz-contract-sha",
       APP_ENV: "production",
@@ -146,6 +150,22 @@ describe("GET /readyz async substrate contract", () => {
       }),
       expect.stringContaining("returning ready")
     );
+  });
+
+  it("returns 503 when the mandatory RPC secret is missing", async () => {
+    mocks.assertEvmRpcConfig.mockImplementation(() => {
+      throw new RuntimeSecretError("EVM_RPC_URL is required");
+    });
+
+    const response = await GET(request());
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      status: "error",
+      reason: "MISSING_RUNTIME_SECRET",
+      message: "EVM_RPC_URL is required",
+    });
+    expect(mocks.checkEvmRpcConnectivity).not.toHaveBeenCalled();
   });
 
   it("forces a live RPC read and returns 503 when the deep probe cannot reach Base", async () => {
