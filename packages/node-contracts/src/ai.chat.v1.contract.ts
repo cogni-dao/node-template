@@ -87,6 +87,15 @@ export const AssistantUiInputSchema = z.object({
     .max(MAX_STATE_KEY_CHARS)
     .regex(STATE_KEY_SAFE_PATTERN, "stateKey must contain only safe characters")
     .optional(),
+  /** Stable client-generated user-message identity for idempotent retries. */
+  messageId: z
+    .string()
+    .min(1)
+    .max(MAX_ID_CHARS)
+    .regex(STATE_KEY_SAFE_PATTERN, "messageId must contain only safe characters")
+    .optional(),
+  /** Stable client-generated graph-run identity for reconnecting to the stream. */
+  runId: z.string().uuid().optional(),
 });
 
 export const aiChatOperation = {

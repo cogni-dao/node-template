@@ -18,7 +18,8 @@
  * @public
  */
 
-import { isAiExecutionError } from "@cogni/ai-core";
+import { createHash, randomUUID } from "node:crypto";
+import { isAiExecutionError, type ModelRef } from "@cogni/ai-core";
 import { toUserId } from "@cogni/ids";
 import { aiChatOperation, type ChatInput } from "@cogni/node-contracts";
 import { ChatValidationError } from "@cogni/node-shared";
@@ -41,6 +42,8 @@ import {
   ThreadConflictError,
 } from "@/ports";
 import {
+  aiChatDuplicateTurnsTotal,
+  aiChatPhaseDurationMs,
   aiChatStreamDurationMs,
   logRequestWarn,
   type RequestContext,
@@ -48,6 +51,64 @@ import {
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+
+interface ChatTurnEnvelope {
+  readonly version: 1;
+  readonly runId: string;
+  readonly graphName: string;
+  readonly modelRef: ModelRef;
+}
+
+class ChatTurnMismatchError extends Error {
+  constructor(messageId: string) {
+    super(`Chat turn ${messageId} was retried with a different envelope`);
+    this.name = "ChatTurnMismatchError";
+  }
+}
+
+function textOf(message: UIMessage): string {
+  return message.parts
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("");
+}
+
+function envelopeOf(message: UIMessage): ChatTurnEnvelope | undefined {
+  const metadata = message.metadata as
+    | { chatTurn?: ChatTurnEnvelope }
+    | undefined;
+  return metadata?.chatTurn;
+}
+
+function deterministicUuid(seed: string): string {
+  const hex = createHash("sha256").update(seed).digest("hex");
+  const variant = (((Number.parseInt(hex[16] ?? "0", 16) & 0x3) | 0x8) >>> 0)
+    .toString(16)
+    .slice(0, 1);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
+function assertSameTurn(
+  existing: UIMessage,
+  input: ChatInput
+): ChatTurnEnvelope {
+  const envelope = envelopeOf(existing);
+  const sameModel =
+    envelope?.modelRef.providerKey === input.modelRef.providerKey &&
+    envelope.modelRef.modelId === input.modelRef.modelId &&
+    envelope.modelRef.connectionId === input.modelRef.connectionId;
+  if (
+    existing.role !== "user" ||
+    textOf(existing) !== input.message ||
+    envelope?.version !== 1 ||
+    envelope.graphName !== input.graphName ||
+    !sameModel ||
+    (input.runId !== undefined && envelope.runId !== input.runId)
+  ) {
+    throw new ChatTurnMismatchError(existing.id);
+  }
+  return envelope;
+}
 
 /**
  * Local error handler for chat route.
@@ -72,6 +133,14 @@ function handleRouteError(
     logRequestWarn(ctx.log, error, "THREAD_CONFLICT");
     return NextResponse.json(
       { error: "Thread conflict — please retry" },
+      { status: 409 }
+    );
+  }
+
+  if (error instanceof ChatTurnMismatchError) {
+    logRequestWarn(ctx.log, error, "CHAT_TURN_MISMATCH");
+    return NextResponse.json(
+      { error: "Message identity already exists with different content" },
       { status: 409 }
     );
   }
@@ -212,17 +281,48 @@ export const POST = wrapRouteHandlerWithLogging(
       const threadPersistence = getContainer().threadPersistenceForUser(userId);
 
       // --- Load authoritative thread from DB ---
+      const threadLoadStartMs = performance.now();
       let existingThread = await threadPersistence.loadThread(
         sessionUser.id,
         stateKey
       );
+      aiChatPhaseDurationMs.observe(
+        { phase: "thread_load" },
+        performance.now() - threadLoadStartMs
+      );
       let expectedLen = existingThread.length;
 
-      // Build user UIMessage
+      const legacyIdempotencyKey = request.headers.get("idempotency-key");
+      const legacySeed = legacyIdempotencyKey
+        ? `${sessionUser.id}:${stateKey}:${legacyIdempotencyKey}`
+        : undefined;
+      const messageId =
+        input.messageId ??
+        (input.runId
+          ? input.runId
+          : legacySeed
+            ? `idem-${createHash("sha256").update(legacySeed).digest("hex").slice(0, 32)}`
+            : nanoid());
+      const existingTurn = existingThread.find(
+        (message) => message.id === messageId
+      );
+      const runId = existingTurn
+        ? assertSameTurn(existingTurn, input).runId
+        : (input.runId ??
+          (legacySeed ? deterministicUuid(legacySeed) : randomUUID()));
+      const chatTurn: ChatTurnEnvelope = {
+        version: 1,
+        runId,
+        graphName: input.graphName,
+        modelRef: input.modelRef,
+      };
+
+      // Build user UIMessage with immutable retry envelope.
       const userUIMessage: UIMessage = {
-        id: nanoid(),
+        id: messageId,
         role: "user",
         parts: [{ type: "text" as const, text: userText }],
+        metadata: { chatTurn },
       };
 
       // --- Phase 1: persist user message before execution (optimistic) ---
@@ -232,35 +332,53 @@ export const POST = wrapRouteHandlerWithLogging(
           ? { model: input.modelRef.modelId, graphName: input.graphName }
           : undefined;
 
-      let threadWithUser = [...existingThread, userUIMessage];
-      try {
-        await threadPersistence.saveThread(
-          sessionUser.id,
-          stateKey,
-          redactSecretsInMessages(threadWithUser),
-          expectedLen,
-          threadMetadata
-        );
-      } catch (e) {
-        if (!(e instanceof ThreadConflictError)) throw e;
-        // Retry once: reload + re-append
-        existingThread = await threadPersistence.loadThread(
-          sessionUser.id,
-          stateKey
-        );
-        expectedLen = existingThread.length;
-        threadWithUser = [...existingThread, userUIMessage];
-        await threadPersistence.saveThread(
-          sessionUser.id,
-          stateKey,
-          redactSecretsInMessages(threadWithUser),
-          expectedLen,
-          expectedLen === 0 ? threadMetadata : undefined
-        );
-        // If this throws ThreadConflictError again, handleRouteError catches → 409
+      const userPersistStartMs = performance.now();
+      let duplicateTurn = existingTurn !== undefined;
+      let threadWithUser = duplicateTurn
+        ? existingThread
+        : [...existingThread, userUIMessage];
+      if (!duplicateTurn) {
+        try {
+          await threadPersistence.saveThread(
+            sessionUser.id,
+            stateKey,
+            redactSecretsInMessages(threadWithUser),
+            expectedLen,
+            threadMetadata
+          );
+        } catch (e) {
+          if (!(e instanceof ThreadConflictError)) throw e;
+          // Retry once: reload and suppress an exact concurrent duplicate.
+          existingThread = await threadPersistence.loadThread(
+            sessionUser.id,
+            stateKey
+          );
+          expectedLen = existingThread.length;
+          const concurrentTurn = existingThread.find(
+            (message) => message.id === messageId
+          );
+          if (concurrentTurn) {
+            assertSameTurn(concurrentTurn, input);
+            duplicateTurn = true;
+            threadWithUser = existingThread;
+          } else {
+            threadWithUser = [...existingThread, userUIMessage];
+            await threadPersistence.saveThread(
+              sessionUser.id,
+              stateKey,
+              redactSecretsInMessages(threadWithUser),
+              expectedLen,
+              expectedLen === 0 ? threadMetadata : undefined
+            );
+          }
+        }
       }
+      aiChatPhaseDurationMs.observe(
+        { phase: "user_persist" },
+        performance.now() - userPersistStartMs
+      );
+      if (duplicateTurn) aiChatDuplicateTurnsTotal.inc();
       const expectedLenAfterUser = threadWithUser.length;
-
       ctx.log.info(
         {
           reqId: ctx.reqId,
@@ -270,8 +388,11 @@ export const POST = wrapRouteHandlerWithLogging(
           connectionId: input.modelRef.connectionId ?? null,
           threadMessages: expectedLenAfterUser,
           stateKey,
+          messageId,
+          runId,
+          duplicateTurn,
         },
-        "ai.chat_received"
+        "ai.chat_user_persisted"
       );
 
       // --- Convert persisted thread → DTOs for execution ---
@@ -280,11 +401,16 @@ export const POST = wrapRouteHandlerWithLogging(
       );
       const messageDtos = uiMessagesToMessageDtos(threadWithUser);
 
-      const streamStartMs = performance.now();
-      const idempotencyKey =
-        request.headers.get("idempotency-key") ?? undefined;
+      const idempotencyKey = input.messageId || input.runId
+        ? `chat:${stateKey}:${messageId}`
+        : (legacyIdempotencyKey ?? `chat:${stateKey}:${messageId}`);
 
-      const { stream: deltaStream, final } = await completionStream(
+      const {
+        stream: deltaStream,
+        final,
+        runId: acceptedRunId,
+        workflowId,
+      } = await completionStream(
         {
           messages: messageDtos,
           modelRef: input.modelRef,
@@ -292,19 +418,26 @@ export const POST = wrapRouteHandlerWithLogging(
           abortSignal: request.signal,
           graphName: input.graphName,
           stateKey,
-          ...(idempotencyKey ? { idempotencyKey } : {}),
+          idempotencyKey,
+          runId,
+          messageId,
         },
         ctx
       );
+      const streamStartMs = performance.now();
 
       ctx.log.info(
         {
           reqId: ctx.reqId,
           handlerMs: performance.now() - handlerStartMs,
           resolvedModel: input.modelRef.modelId,
+          stateKey,
+          messageId,
+          runId: acceptedRunId,
+          workflowId,
           stream: true,
         },
-        "ai.chat_response_started"
+        "ai.chat_accepted"
       );
 
       // --- SSE reconciliation state (display only, NOT for persistence) ---
@@ -313,6 +446,7 @@ export const POST = wrapRouteHandlerWithLogging(
       // if assistant_final has more content than deltas delivered, append the remainder to the SSE stream.
       let accumulatedText = "";
       let assistantFinalContent: string | undefined;
+      let firstDeltaLogged = false;
 
       // --- Stream response via AI SDK Data Stream Protocol (SSE) ---
       const textPartId = nanoid();
@@ -328,6 +462,23 @@ export const POST = wrapRouteHandlerWithLogging(
               eventSeq++;
 
               if (event.type === "text_delta") {
+                if (!firstDeltaLogged) {
+                  firstDeltaLogged = true;
+                  aiChatPhaseDurationMs.observe(
+                    { phase: "first_text_delta" },
+                    performance.now() - streamStartMs
+                  );
+                  ctx.log.info(
+                    {
+                      reqId: ctx.reqId,
+                      stateKey,
+                      messageId,
+                      runId: acceptedRunId,
+                      workflowId,
+                    },
+                    "ai.chat_first_delta"
+                  );
+                }
                 accumulatedText += event.delta;
                 if (!textBlockOpen) {
                   writer.write({ type: "text-start", id: textPartId });
@@ -526,7 +677,10 @@ export const POST = wrapRouteHandlerWithLogging(
       // but wrapRouteHandlerWithLogging expects NextResponse.
       const sseResponse = createUIMessageStreamResponse({
         stream: uiStream,
-        headers: { "X-State-Key": stateKey },
+        headers: {
+          "X-State-Key": stateKey,
+          "X-Run-Id": acceptedRunId,
+        },
       });
       return new NextResponse(sseResponse.body, {
         status: sseResponse.status,

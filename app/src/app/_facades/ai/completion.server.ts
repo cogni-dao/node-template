@@ -45,13 +45,17 @@ import {
   isVirtualKeyNotFoundPortError,
 } from "@/ports";
 import { getNodeId } from "@/shared/config";
-import type { RequestContext } from "@/shared/observability";
+import {
+  aiChatPhaseDurationMs,
+  type RequestContext,
+} from "@/shared/observability";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Default graph for requests that don't specify one
 // ─────────────────────────────────────────────────────────────────────────────
 
 const DEFAULT_GRAPH_NAME = "langgraph:default";
+const FIRST_EVENT_DEADLINE_MS = 20_000;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Message conversion: OpenAI → internal MessageDto
@@ -108,6 +112,10 @@ export interface CompletionInput {
   stateKey?: string;
   /** Idempotency key for workflow start dedupe */
   idempotencyKey?: string;
+  /** Stable caller-provided run identity for stream reconnection. */
+  runId?: string;
+  /** Stable chat user-message identity for cross-plane correlation. */
+  messageId?: string;
 }
 
 function toDeterministicRunId(seed: string): string {
@@ -320,10 +328,13 @@ export async function completionStream(
 ): Promise<{
   stream: AsyncIterable<AiEvent>;
   final: Promise<StreamFinalResult>;
+  runId: string;
+  workflowId: string;
 }> {
   const userId = toUserId(input.sessionUser.id);
   const { accountService } = resolveAiAdapterDeps(userId);
 
+  const billingStartMs = performance.now();
   const billingAccount = await getOrCreateBillingAccountForUser(
     accountService,
     {
@@ -333,16 +344,21 @@ export async function completionStream(
         : {}),
     }
   );
+  aiChatPhaseDurationMs.observe(
+    { phase: "billing_resolve" },
+    performance.now() - billingStartMs
+  );
 
   const graphId = input.graphName.includes(":")
     ? input.graphName
     : `langgraph:${input.graphName}`;
   const idempotencyKey = input.idempotencyKey ?? `api:${ctx.reqId}`;
   const workflowId = `graph-run:${billingAccount.id}:${idempotencyKey}`;
-  const runId = toDeterministicRunId(`${workflowId}:${graphId}`);
+  const runId = input.runId ?? toDeterministicRunId(`${workflowId}:${graphId}`);
 
   const { client: workflowClient, taskQueue } =
     await getTemporalWorkflowClient();
+  const temporalStartMs = performance.now();
   try {
     await workflowClient.start("GraphRunWorkflow", {
       taskQueue,
@@ -359,6 +375,9 @@ export async function completionStream(
             actorUserId: input.sessionUser.id,
             billingAccountId: billingAccount.id,
             virtualKeyId: billingAccount.defaultVirtualKeyId,
+            chatRequestId: ctx.reqId,
+            chatMessageId: input.messageId,
+            chatWorkflowId: workflowId,
           },
           runKind: "user_immediate" as const,
           triggerSource: "api",
@@ -373,23 +392,27 @@ export async function completionStream(
       throw error;
     }
   }
+  aiChatPhaseDurationMs.observe(
+    { phase: "temporal_start" },
+    performance.now() - temporalStartMs
+  );
 
   const runStream = getContainer().runStream;
-  const signal = input.abortSignal ?? new AbortController().signal;
-  const rawSubscription = runStream.subscribe(runId, signal);
+  const subscriptionAbort = new AbortController();
+  const abortSubscription = () => subscriptionAbort.abort();
+  if (input.abortSignal?.aborted) {
+    subscriptionAbort.abort();
+  } else {
+    input.abortSignal?.addEventListener("abort", abortSubscription, {
+      once: true,
+    });
+  }
+  const rawSubscription = runStream.subscribe(
+    runId,
+    subscriptionAbort.signal
+  );
   const iterator = rawSubscription[Symbol.asyncIterator]();
-
-  // First-event peek: if the first event is a terminal error (e.g. insufficient_credits),
-  // throw AiExecutionError BEFORE the caller commits SSE headers.
-  // Mid-stream errors are fine — 200 is already sent, error arrives in the stream.
-  const first = await iterator.next();
-  if (first.done) {
-    throw new AiExecutionError("internal");
-  }
-  const firstEvent = first.value.event;
-  if (firstEvent.type === "error") {
-    throw new AiExecutionError(firstEvent.error);
-  }
+  const acceptedAtMs = performance.now();
 
   let resolveFinal: ((value: StreamFinalResult) => void) | undefined;
   const final = new Promise<StreamFinalResult>((resolve) => {
@@ -403,7 +426,6 @@ export async function completionStream(
       function: { name: string; arguments: string };
     }> = [];
 
-    // Process first event (already peeked and validated as non-error)
     function processEvent(event: AiEvent) {
       if (event.type === "tool_call_start") {
         toolCalls.push({
@@ -434,10 +456,6 @@ export async function completionStream(
       }
     }
 
-    // Yield peeked first event
-    processEvent(firstEvent);
-    yield firstEvent;
-
     function failStream(errorCode: string) {
       ctx.log.warn(
         {
@@ -451,14 +469,46 @@ export async function completionStream(
       resolveFinal?.({ ok: false, requestId: runId, error: "internal" });
     }
 
-    // Continue with remaining events
     let sawTerminal = false;
+    let sawFirstEvent = false;
     try {
-      let next = await iterator.next();
-      while (!next.done) {
+      while (true) {
+        let next: Awaited<ReturnType<typeof iterator.next>>;
+
+        if (!sawFirstEvent) {
+          let deadline: ReturnType<typeof setTimeout> | undefined;
+          const timeout = new Promise<"timeout">((resolve) => {
+            deadline = setTimeout(
+              () => resolve("timeout"),
+              FIRST_EVENT_DEADLINE_MS
+            );
+          });
+          const first = await Promise.race([iterator.next(), timeout]);
+          if (deadline) clearTimeout(deadline);
+          if (first === "timeout") {
+            subscriptionAbort.abort();
+            const timeoutEvent: AiEvent = {
+              type: "error",
+              error: "timeout",
+            };
+            sawTerminal = true;
+            processEvent(timeoutEvent);
+            yield timeoutEvent;
+            return;
+          }
+          next = first;
+          sawFirstEvent = true;
+          aiChatPhaseDurationMs.observe(
+            { phase: "accepted_to_first_event" },
+            performance.now() - acceptedAtMs
+          );
+        } else {
+          next = await iterator.next();
+        }
+
+        if (next.done) break;
         const event = next.value.event;
         if (event.type === "usage_report") {
-          next = await iterator.next();
           continue;
         }
         if (event.type === "done" || event.type === "error") {
@@ -466,15 +516,16 @@ export async function completionStream(
         }
         processEvent(event);
         yield event;
-        next = await iterator.next();
       }
       if (!sawTerminal) {
         failStream("stream_ended_no_terminal");
       }
     } catch {
       failStream("stream_subscribe_error");
+    } finally {
+      input.abortSignal?.removeEventListener("abort", abortSubscription);
     }
   })();
 
-  return { stream, final };
+  return { stream, final, runId, workflowId };
 }
