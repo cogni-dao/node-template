@@ -16,6 +16,7 @@ import { RunStreamParamsSchema } from "@cogni/node-contracts";
 import type { UIMessageChunk } from "ai";
 import { createUIMessageStream, createUIMessageStreamResponse } from "ai";
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
@@ -23,7 +24,12 @@ import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const TERMINAL_STATUSES = new Set(["success", "error", "skipped", "cancelled"]);
+const TerminalRunStatusSchema = z.enum([
+  "success",
+  "error",
+  "skipped",
+  "cancelled",
+]);
 const REDIS_CURSOR_PATTERN = /^\d+-\d+$/;
 
 interface RouteParams {
@@ -53,9 +59,17 @@ export const GET = wrapRouteHandlerWithLogging<RouteParams>(
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    if (TERMINAL_STATUSES.has(run.status)) {
+    const terminalStatus = TerminalRunStatusSchema.safeParse(run.status);
+    if (terminalStatus.success) {
       ctx.log.info({ runId, status: run.status }, "AI UI stream is terminal");
-      return NextResponse.json({ error: "Run is terminal" }, { status: 410 });
+      return NextResponse.json(
+        {
+          error: "Run is terminal",
+          terminalStatus: terminalStatus.data,
+          ...(run.errorCode ? { errorCode: run.errorCode } : {}),
+        },
+        { status: 410 }
+      );
     }
 
     const headerCursor = request.headers.get("last-event-id");

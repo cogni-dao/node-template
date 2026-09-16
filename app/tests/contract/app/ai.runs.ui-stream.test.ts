@@ -107,7 +107,7 @@ describe("GET /api/v1/ai/runs/{runId}/ui-stream", () => {
     });
   });
 
-  it("returns 410 for every terminal run even when Redis still has entries", async () => {
+  it("returns a successful terminal outcome even when Redis still has entries", async () => {
     graphRunRepository.getRunByRunId.mockResolvedValue(makeRun("success"));
     vi.mocked(runStream.streamLength).mockResolvedValue(3);
 
@@ -117,9 +117,35 @@ describe("GET /api/v1/ai/runs/{runId}/ui-stream", () => {
       async test({ fetch }) {
         const response = await fetch({ method: "GET" });
         expect(response.status).toBe(410);
-        expect(await response.json()).toEqual({ error: "Run is terminal" });
+        expect(await response.json()).toEqual({
+          error: "Run is terminal",
+          terminalStatus: "success",
+        });
         expect(runStream.subscribe).not.toHaveBeenCalled();
         expect(runStream.streamLength).not.toHaveBeenCalled();
+      },
+    });
+  });
+
+  it("returns the terminal failure status and error code", async () => {
+    graphRunRepository.getRunByRunId.mockResolvedValue({
+      ...makeRun("error"),
+      errorCode: "provider_unavailable",
+      errorMessage: "provider failed",
+    });
+
+    await testApiHandler({
+      appHandler,
+      params: { runId: RUN_ID },
+      async test({ fetch }) {
+        const response = await fetch({ method: "GET" });
+        expect(response.status).toBe(410);
+        expect(await response.json()).toEqual({
+          error: "Run is terminal",
+          terminalStatus: "error",
+          errorCode: "provider_unavailable",
+        });
+        expect(runStream.subscribe).not.toHaveBeenCalled();
       },
     });
   });
