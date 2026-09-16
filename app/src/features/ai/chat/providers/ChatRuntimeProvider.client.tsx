@@ -55,6 +55,14 @@ import { mapHttpError } from "../utils/mapHttpError";
 
 const REPLAY_RETRY_STATUSES = new Set([404, 409, 425]);
 const REPLAY_RETRY_DELAYS_MS = [300, 600, 1_200, 2_400] as const;
+const TERMINAL_FAILURE_STATUSES = ["error", "skipped", "cancelled"] as const;
+
+type TerminalFailureStatus = (typeof TERMINAL_FAILURE_STATUSES)[number];
+
+interface TerminalReplayResponse {
+  terminalStatus?: "success" | TerminalFailureStatus;
+  errorCode?: string;
+}
 
 interface ChatRuntimeProviderProps {
   children: ReactNode;
@@ -90,6 +98,8 @@ export function ChatRuntimeProvider({
   const [pending, setPending] = useState<PendingChatEnvelope | null>(null);
   const pendingRef = useRef<PendingChatEnvelope | null>(null);
   const [phase, setPhase] = useState<ChatRunPhase>("idle");
+  const [terminalFailure, setTerminalFailure] =
+    useState<TerminalFailureStatus | null>(null);
   const resumedRunRef = useRef<string | null>(null);
   const restoredRunToResumeRef = useRef<string | null>(null);
   const hydratedStorageRef = useRef(false);
@@ -159,6 +169,7 @@ export function ChatRuntimeProvider({
     cursorRef.current = null;
     updatePending(null);
     clearChatDraft(stateKey);
+    setTerminalFailure(null);
     setPhase("idle");
     queryClient.invalidateQueries({ queryKey: ["payments-summary"] });
     queryClient.invalidateQueries({ queryKey: ["ai-threads"] });
@@ -173,13 +184,38 @@ export function ChatRuntimeProvider({
     if (!response.ok) throw new Error("Unable to reload completed conversation");
     const thread = (await response.json()) as LoadThreadOutput;
     chatRef.current?.setMessages(thread.messages as UIMessage[]);
-    finishRun();
-  }, [finishRun, stateKey]);
+  }, [stateKey]);
+
+  const finishFailedRun = useCallback(
+    (terminalStatus: TerminalFailureStatus) => {
+      cursorRef.current = null;
+      updatePending(null);
+      clearChatDraft(stateKey);
+      setTerminalFailure(terminalStatus);
+      setPhase("failed");
+      queryClient.invalidateQueries({ queryKey: ["payments-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["ai-threads"] });
+    },
+    [queryClient, stateKey, updatePending]
+  );
 
   const handleResponse = useCallback(
     async (response: Response, method: string) => {
       if (method === "GET" && response.status === 410) {
+        const body = (await response.json().catch(() => null)) as
+          | TerminalReplayResponse
+          | null;
+        if (!body?.terminalStatus) {
+          throw new Error("Unable to determine terminal run status");
+        }
         await reloadAuthoritativeThread();
+        if (body.terminalStatus === "success") {
+          finishRun();
+        } else if (isTerminalFailureStatus(body.terminalStatus)) {
+          finishFailedRun(body.terminalStatus);
+        } else {
+          throw new Error("Unknown terminal run status");
+        }
         // AI SDK treats 204 as a clean replay miss and keeps the loaded history.
         return new Response(null, { status: 204 });
       }
@@ -235,7 +271,16 @@ export function ChatRuntimeProvider({
 
       return response;
     },
-    [defaultModelId, onAuthExpired, onError, reloadAuthoritativeThread, stateKey, updatePending]
+    [
+      defaultModelId,
+      finishFailedRun,
+      finishRun,
+      onAuthExpired,
+      onError,
+      reloadAuthoritativeThread,
+      stateKey,
+      updatePending,
+    ]
   );
 
   const transport = useMemo(
@@ -301,6 +346,7 @@ export function ChatRuntimeProvider({
         graphName: selectedGraphRef.current,
       });
       updatePending(envelope);
+      setTerminalFailure(null);
       setPhase("saving");
       onOptimisticSend?.(envelope);
       return {
@@ -320,6 +366,7 @@ export function ChatRuntimeProvider({
     onData: (part) => {
       const cursor = getRunCursor(part);
       if (cursor) cursorRef.current = cursor;
+      setTerminalFailure(null);
       setPhase("running");
     },
     onFinish: ({ isAbort, isDisconnect, isError, finishReason }) => {
@@ -356,6 +403,7 @@ export function ChatRuntimeProvider({
     const envelope = pendingRef.current;
     if (!envelope) return;
     chat.clearError();
+    setTerminalFailure(null);
     if (envelope.accepted) {
       setPhase("reconnecting");
       void chat.resumeStream();
@@ -396,7 +444,12 @@ export function ChatRuntimeProvider({
           pending={pending}
           phase={phase}
         />
-        <ChatRunStatus phase={phase} onRetry={retry} />
+        <ChatRunStatus
+          phase={phase}
+          terminalFailure={terminalFailure}
+          canRetry={pending !== null}
+          onRetry={retry}
+        />
       </div>
     </AssistantRuntimeProvider>
   );
@@ -452,9 +505,13 @@ function ChatDraftLifecycle({
 
 function ChatRunStatus({
   phase,
+  terminalFailure,
+  canRetry,
   onRetry,
 }: {
   phase: ChatRunPhase;
+  terminalFailure: TerminalFailureStatus | null;
+  canRetry: boolean;
   onRetry: () => void;
 }) {
   const labels: Record<ChatRunPhase, string> = {
@@ -465,6 +522,11 @@ function ChatRunStatus({
     reconnecting: "Reconnecting…",
     failed: "Message failed.",
   };
+  const terminalLabels: Record<TerminalFailureStatus, string> = {
+    error: "Run failed.",
+    skipped: "Run was skipped.",
+    cancelled: "Run was cancelled.",
+  };
 
   return (
     <div
@@ -472,8 +534,10 @@ function ChatRunStatus({
       aria-live="polite"
       aria-atomic="true"
     >
-      <span>{labels[phase]}</span>
-      {phase === "failed" && (
+      <span>
+        {terminalFailure ? terminalLabels[terminalFailure] : labels[phase]}
+      </span>
+      {phase === "failed" && canRetry && !terminalFailure && (
         <button
           type="button"
           onClick={onRetry}
@@ -484,6 +548,12 @@ function ChatRunStatus({
       )}
     </div>
   );
+}
+
+function isTerminalFailureStatus(
+  value: string
+): value is TerminalFailureStatus {
+  return TERMINAL_FAILURE_STATUSES.some((status) => status === value);
 }
 
 function getRunCursor(part: unknown): string | null {

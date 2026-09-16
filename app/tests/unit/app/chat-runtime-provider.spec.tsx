@@ -11,7 +11,7 @@
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import type { UIMessage } from "ai";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -96,7 +96,10 @@ function pending() {
   });
 }
 
-function renderProvider(initialMessages: UIMessage[] = []) {
+function renderProvider(
+  initialMessages: UIMessage[] = [],
+  callbacks: { onFinish?: () => void } = {}
+) {
   const queryClient = new QueryClient();
   return render(
     <QueryClientProvider client={queryClient}>
@@ -106,6 +109,7 @@ function renderProvider(initialMessages: UIMessage[] = []) {
         defaultModelId="test-model"
         initialMessages={initialMessages}
         stateKey={stateKey}
+        onFinish={callbacks.onFinish}
       >
         <div>chat</div>
       </ChatRuntimeProvider>
@@ -234,6 +238,80 @@ describe("ChatRuntimeProvider durable lifecycle", () => {
     await waitFor(() => expect(readPendingEnvelope(stateKey)).toBeNull());
     expect(sdk.resumeStream).not.toHaveBeenCalled();
   });
+
+  it("clears accepted work as successful only for a successful terminal replay", async () => {
+    const onFinish = vi.fn();
+    writePendingEnvelope(acceptPendingEnvelope(pending(), serverRunId));
+    renderProvider([], { onFinish });
+    await waitFor(() => expect(sdk.resumeStream).toHaveBeenCalledOnce());
+    const messages = [
+      {
+        id: `assistant-${serverRunId}`,
+        role: "assistant",
+        parts: [{ type: "text", text: "complete" }],
+      },
+    ];
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        Response.json(
+          { error: "Run is terminal", terminalStatus: "success" },
+          { status: 410 }
+        )
+      )
+      .mockResolvedValueOnce(Response.json({ messages }));
+
+    let response: Response | undefined;
+    await act(async () => {
+      response = (await sdk.transportOptions?.fetch?.("/ui-stream", {
+        method: "GET",
+      } as never)) as Response;
+    });
+
+    expect(response?.status).toBe(204);
+    expect(sdk.setMessages).toHaveBeenCalledWith(messages);
+    expect(readPendingEnvelope(stateKey)).toBeNull();
+    expect(onFinish).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["error", "Run failed."],
+    ["skipped", "Run was skipped."],
+    ["cancelled", "Run was cancelled."],
+  ] as const)(
+    "surfaces terminal %s without mislabeling it as success",
+    async (terminalStatus, label) => {
+      const onFinish = vi.fn();
+      writePendingEnvelope(acceptPendingEnvelope(pending(), serverRunId));
+      renderProvider([], { onFinish });
+      await waitFor(() => expect(sdk.resumeStream).toHaveBeenCalledOnce());
+      vi.spyOn(globalThis, "fetch")
+        .mockResolvedValueOnce(
+          Response.json(
+            { error: "Run is terminal", terminalStatus, errorCode: "TEST" },
+            { status: 410 }
+          )
+        )
+        .mockResolvedValueOnce(Response.json({ messages: [] }));
+
+      await act(async () => {
+        await sdk.transportOptions?.fetch?.("/ui-stream", {
+          method: "GET",
+        } as never);
+      });
+
+      expect(sdk.setMessages).toHaveBeenCalledWith([]);
+      expect(readPendingEnvelope(stateKey)).toBeNull();
+      expect(onFinish).not.toHaveBeenCalled();
+      expect(screen.getByText(label)).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+      expect(() =>
+        sdk.runtimeOptions?.toCreateMessage?.({
+          role: "user",
+          content: [{ type: "text", text: "next" }],
+        } as never)
+      ).not.toThrow();
+    }
+  );
 
   it("bounds replay visibility retries and keeps one logical envelope", async () => {
     vi.useFakeTimers();
