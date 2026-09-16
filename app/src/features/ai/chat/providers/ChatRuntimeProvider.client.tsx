@@ -5,7 +5,8 @@
  * Module: `@features/ai/chat/providers/ChatRuntimeProvider`
  * Purpose: Optimistic, draft-safe AI SDK chat runtime with durable stream resume.
  * Scope: Client transport, sessionStorage lifecycle, and run status UI only.
- * Invariants: A request's stateKey/messageId/runId/body never change across retries.
+ * Invariants: Pre-ack POST retries preserve stateKey/messageId/clientRunSeed/body;
+ *   replay uses only the tenant-scoped run ID acknowledged by the server.
  * Side-effects: Chat/threads fetches, sessionStorage, React Query invalidation.
  * Links: ai.chat.v1, GET /api/v1/ai/runs/{runId}/ui-stream
  * @public
@@ -195,11 +196,12 @@ export function ChatRuntimeProvider({
         if (
           !envelope ||
           responseStateKey !== envelope.stateKey ||
-          responseRunId !== envelope.runId
+          !responseRunId ||
+          !isUuid(responseRunId)
         ) {
           throw new Error("Chat was not durably acknowledged");
         }
-        updatePending(acceptPendingEnvelope(envelope));
+        updatePending(acceptPendingEnvelope(envelope, responseRunId));
         clearChatDraft(stateKey);
         setPhase("queued");
       }
@@ -222,7 +224,7 @@ export function ChatRuntimeProvider({
             body: {
               message: envelope.message,
               messageId: envelope.messageId,
-              runId: envelope.runId,
+              runId: envelope.clientRunSeed,
               modelRef: envelope.modelRef,
               graphName: envelope.graphName,
               stateKey: envelope.stateKey,
@@ -309,7 +311,13 @@ export function ChatRuntimeProvider({
 
   useEffect(() => {
     const restored = pendingRef.current;
-    if (!restored?.accepted || resumedRunRef.current === restored.runId) return;
+    if (
+      !restored?.accepted ||
+      !restored.runId ||
+      resumedRunRef.current === restored.runId
+    ) {
+      return;
+    }
     resumedRunRef.current = restored.runId;
     setPhase("reconnecting");
     void chat.resumeStream();
@@ -425,4 +433,10 @@ function getRunCursor(part: unknown): string | null {
   const data = value.data as { cursor?: unknown; id?: unknown };
   if (typeof data.cursor === "string") return data.cursor;
   return typeof data.id === "string" ? data.id : null;
+}
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value
+  );
 }

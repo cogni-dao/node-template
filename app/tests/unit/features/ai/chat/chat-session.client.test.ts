@@ -67,7 +67,7 @@ describe("chat session durability", () => {
     expect(createChatIds(() => `id-${++sequence}`)).toEqual({
       stateKey: "id-1",
       messageId: "id-2",
-      runId: "id-3",
+      clientRunSeed: "id-3",
     });
   });
 
@@ -76,19 +76,30 @@ describe("chat session durability", () => {
     const pending = envelope(storage);
     expect(readPendingEnvelope("thread-1", storage)).toEqual(pending);
     expect(shouldLoadExistingThread(pending)).toBe(false);
-    expect(shouldLoadExistingThread(acceptPendingEnvelope(pending))).toBe(true);
+    expect(
+      shouldLoadExistingThread(
+        acceptPendingEnvelope(
+          pending,
+          "00000000-0000-4000-8000-000000000000"
+        )
+      )
+    ).toBe(true);
     expect(shouldLoadExistingThread(null)).toBe(true);
   });
 
   it("purges prompt text after durable acceptance but retains replay identity", () => {
     const storage = new MemoryStorage();
-    const accepted = acceptPendingEnvelope(envelope());
+    const accepted = acceptPendingEnvelope(
+      envelope(),
+      "11111111-1111-4111-8111-111111111111"
+    );
     writePendingEnvelope(accepted, storage);
 
     const restored = readPendingEnvelope("thread-1", storage);
     expect(restored).toMatchObject({
       messageId: "stable-1",
-      runId: "stable-2",
+      clientRunSeed: "stable-2",
+      runId: "11111111-1111-4111-8111-111111111111",
       accepted: true,
     });
     expect(restored).not.toHaveProperty("message");
@@ -97,11 +108,28 @@ describe("chat session durability", () => {
 
   it("builds the UI-message replay request with the last cursor", () => {
     expect(
-      createReconnectRequest({ ...acceptPendingEnvelope(envelope()), cursor: "42-7" })
+      createReconnectRequest({
+        ...acceptPendingEnvelope(
+          envelope(),
+          "22222222-2222-4222-8222-222222222222"
+        ),
+        cursor: "42-7",
+      })
     ).toEqual({
-      api: "/api/v1/ai/runs/stable-2/ui-stream",
+      api: "/api/v1/ai/runs/22222222-2222-4222-8222-222222222222/ui-stream",
       headers: { "Last-Event-ID": "42-7" },
     });
+  });
+
+  it("keeps the client seed for POST retry but reconnects with the server ID", () => {
+    const pending = envelope();
+    const accepted = acceptPendingEnvelope(
+      pending,
+      "33333333-3333-4333-8333-333333333333"
+    );
+    expect(accepted.clientRunSeed).toBe(pending.clientRunSeed);
+    expect(accepted.runId).not.toBe(accepted.clientRunSeed);
+    expect(createReconnectRequest(accepted).api).toContain(accepted.runId);
   });
 
   it("caps drafts and treats quota failures as non-fatal", () => {

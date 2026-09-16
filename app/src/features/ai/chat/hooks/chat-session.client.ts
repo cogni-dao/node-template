@@ -28,7 +28,10 @@ export type ChatRunPhase =
 export interface PendingChatEnvelope {
   stateKey: string;
   messageId: string;
-  runId: string;
+  /** Stable untrusted seed sent on every pre-ack POST retry. */
+  clientRunSeed: string;
+  /** Tenant-scoped authoritative run ID returned by X-Run-Id after acceptance. */
+  runId?: string;
   /** Present until durable acceptance; removed before accepted state is stored. */
   message?: string;
   modelRef: ModelRef;
@@ -53,16 +56,20 @@ export function shouldLoadExistingThread(
 }
 
 export function acceptPendingEnvelope(
-  envelope: PendingChatEnvelope
+  envelope: PendingChatEnvelope,
+  authoritativeRunId: string
 ): PendingChatEnvelope {
   const { message: _acceptedPrompt, ...accepted } = envelope;
-  return { ...accepted, accepted: true };
+  return { ...accepted, runId: authoritativeRunId, accepted: true };
 }
 
 export function createReconnectRequest(envelope: PendingChatEnvelope): {
   api: string;
   headers?: { "Last-Event-ID": string };
 } {
+  if (!envelope.accepted || !envelope.runId) {
+    throw new Error("Authoritative run ID is required for reconnect");
+  }
   return {
     api: `/api/v1/ai/runs/${encodeURIComponent(envelope.runId)}/ui-stream`,
     ...(envelope.cursor
@@ -126,15 +133,15 @@ export function clearNewThreadStateKey(
 
 export function createChatIds(generateId?: () => string): Pick<
   PendingChatEnvelope,
-  "stateKey" | "messageId" | "runId"
+  "stateKey" | "messageId" | "clientRunSeed"
 >;
 export function createChatIds(
   generateId: () => string = () => crypto.randomUUID()
-): Pick<PendingChatEnvelope, "stateKey" | "messageId" | "runId"> {
+): Pick<PendingChatEnvelope, "stateKey" | "messageId" | "clientRunSeed"> {
   return {
     stateKey: generateId(),
     messageId: generateId(),
-    runId: generateId(),
+    clientRunSeed: generateId(),
   };
 }
 
@@ -150,7 +157,7 @@ export function createPendingEnvelope(input: {
   return {
     stateKey: input.stateKey,
     messageId: generateId(),
-    runId: generateId(),
+    clientRunSeed: generateId(),
     message: input.message,
     modelRef: input.modelRef,
     graphName: input.graphName,
@@ -211,7 +218,7 @@ export function readPendingEnvelope(
     if (
       value.stateKey !== stateKey ||
       typeof value.messageId !== "string" ||
-      typeof value.runId !== "string" ||
+      typeof value.clientRunSeed !== "string" ||
       typeof value.createdAt !== "string" ||
       typeof value.modelRef !== "object" ||
       value.modelRef == null ||
@@ -220,6 +227,7 @@ export function readPendingEnvelope(
       return null;
     }
     if (!value.accepted && typeof value.message !== "string") return null;
+    if (value.accepted && typeof value.runId !== "string") return null;
     return value as PendingChatEnvelope;
   } catch {
     return null;
