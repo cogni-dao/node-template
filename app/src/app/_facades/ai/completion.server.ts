@@ -177,6 +177,7 @@ export function completionRequestHash(input: {
   stateKey?: string;
 }, key: string): string {
   return createHmac("sha256", key)
+    .update("completion-request:v1\0", "utf8")
     .update(
       JSON.stringify(
         canonicalize({

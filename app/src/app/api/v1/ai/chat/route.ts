@@ -122,7 +122,10 @@ function assertSameTurn(
 }
 
 function messageDigest(message: string, key: string): string {
-  return createHmac("sha256", key).update(message, "utf8").digest("hex");
+  return createHmac("sha256", key)
+    .update("chat-prompt:v1\0", "utf8")
+    .update(message, "utf8")
+    .digest("hex");
 }
 
 function deriveServerRunId(

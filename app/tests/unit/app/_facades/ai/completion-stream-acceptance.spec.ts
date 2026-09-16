@@ -10,7 +10,7 @@
  * @internal
  */
 
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { WorkflowExecutionAlreadyStartedError } from "@temporalio/client";
 import { TEST_SESSION_USER_1 } from "@tests/_fakes";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -118,6 +118,24 @@ describe("completionStream durable acceptance", () => {
     const persistedHash = [...mocks.claims.values()][0]?.requestHash;
     expect(persistedHash).not.toBe(
       createHash("sha256").update("hello", "utf8").digest("hex")
+    );
+    const canonicalRequest = JSON.stringify({
+      graphId: "langgraph:default",
+      messages: [{ content: "hello", role: "user" }],
+      modelRef: { modelId: "test-model", providerKey: "platform" },
+      stateKey: null,
+    });
+    expect(persistedHash).toBe(
+      createHmac("sha256", "stable-completion-idempotency-secret")
+        .update("completion-request:v1\0", "utf8")
+        .update(canonicalRequest, "utf8")
+        .digest("hex")
+    );
+    expect(persistedHash).not.toBe(
+      createHmac("sha256", "stable-completion-idempotency-secret")
+        .update("chat-prompt:v1\0", "utf8")
+        .update(canonicalRequest, "utf8")
+        .digest("hex")
     );
     expect(mocks.workflowStart).toHaveBeenCalledTimes(2);
     expect(mocks.subscribe).toHaveBeenCalledTimes(2);

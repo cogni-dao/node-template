@@ -302,12 +302,20 @@ describe("POST /api/v1/ai/chat idempotency", () => {
     expect(JSON.stringify(thread)).not.toContain("sk-abc123456789012345678901");
     expect(digest).toBe(
       createHmac("sha256", "stable-test-prompt-digest-secret")
+        .update("chat-prompt:v1\0", "utf8")
         .update(original, "utf8")
         .digest("hex")
     );
     expect(digest).not.toBe(
       createHmac("sha256", "stable-test-prompt-digest-secret")
+        .update("chat-prompt:v1\0", "utf8")
         .update(mutated, "utf8")
+        .digest("hex")
+    );
+    expect(digest).not.toBe(
+      createHmac("sha256", "stable-test-prompt-digest-secret")
+        .update("completion-request:v1\0", "utf8")
+        .update(original, "utf8")
         .digest("hex")
     );
     expect(thread.filter((message) => message.role === "user")).toHaveLength(1);

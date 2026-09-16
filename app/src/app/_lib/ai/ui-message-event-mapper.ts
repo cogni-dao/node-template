@@ -176,6 +176,7 @@ export class UiMessageEventMapper {
 
 function normalizeFinishReason(finishReason: string): FinishReason {
   if (finishReason === "tool_calls") return "tool-calls";
+  if (finishReason === "content_filter") return "content-filter";
   if (
     finishReason === "stop" ||
     finishReason === "length" ||

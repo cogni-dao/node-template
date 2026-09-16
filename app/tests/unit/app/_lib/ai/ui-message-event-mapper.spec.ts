@@ -27,6 +27,20 @@ function mapSequence(events: AiEvent[]): UIMessageChunk[] {
 }
 
 describe("UiMessageEventMapper", () => {
+  it("normalizes content_filter to the AI SDK finish reason", () => {
+    const chunks: UIMessageChunk[] = [];
+    const mapper = new UiMessageEventMapper(
+      { write: (chunk) => chunks.push(chunk) },
+      "run-filtered"
+    );
+
+    mapper.finish("content_filter");
+
+    expect(chunks).toEqual([
+      { type: "finish", finishReason: "content-filter" },
+    ]);
+  });
+
   it("maps a live and replay sequence with exact ordered parity", () => {
     const events: AiEvent[] = [
       { type: "status", phase: "thinking", label: "Planning" },
