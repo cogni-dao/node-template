@@ -10,7 +10,7 @@
  * @internal
  */
 
-import { createHash } from "node:crypto";
+import { createHmac } from "node:crypto";
 import { TEST_SESSION_USER_1 } from "@tests/_fakes/ids";
 import type { UIMessage } from "ai";
 import { NextRequest } from "next/server";
@@ -86,6 +86,10 @@ vi.mock("@/bootstrap/http", () => ({
 
 vi.mock("@/app/_lib/auth/session", () => ({
   getSessionUser: vi.fn().mockResolvedValue(TEST_SESSION_USER_1),
+}));
+
+vi.mock("@/shared/env", () => ({
+  serverEnv: () => ({ AUTH_SECRET: "stable-test-prompt-digest-secret" }),
 }));
 
 const { completionStream } = vi.hoisted(() => ({
@@ -232,13 +236,13 @@ describe("POST /api/v1/ai/chat idempotency", () => {
     expect(thread).toHaveLength(1);
   });
 
-  it("stores only a digest of canonical redacted prompt text", async () => {
+  it("uses a keyed prompt digest and rejects redaction-equivalent mutation", async () => {
     const original = "use sk-abc123456789012345678901";
     const mutated = "use sk-xyz123456789012345678901";
 
     const first = await send(original);
     const exactRetry = await send(original);
-    const redactionEquivalentRetry = await send(mutated);
+    const redactionEquivalentMutation = await send(mutated);
     const digest = (
       thread[0]?.metadata as
         | { chatTurn?: { messageDigest?: string } }
@@ -247,18 +251,17 @@ describe("POST /api/v1/ai/chat idempotency", () => {
 
     expect(first.status).toBe(200);
     expect(exactRetry.status).toBe(200);
-    expect(redactionEquivalentRetry.status).toBe(200);
+    expect(redactionEquivalentMutation.status).toBe(409);
     expect(JSON.stringify(thread)).not.toContain("sk-abc123456789012345678901");
     expect(digest).toBe(
-      createHash("sha256")
-        .update("use [REDACTED_API_KEY]", "utf8")
+      createHmac("sha256", "stable-test-prompt-digest-secret")
+        .update(original, "utf8")
         .digest("hex")
     );
     expect(digest).not.toBe(
-      createHash("sha256").update(original, "utf8").digest("hex")
-    );
-    expect(digest).not.toBe(
-      createHash("sha256").update(mutated, "utf8").digest("hex")
+      createHmac("sha256", "stable-test-prompt-digest-secret")
+        .update(mutated, "utf8")
+        .digest("hex")
     );
     expect(thread.filter((message) => message.role === "user")).toHaveLength(1);
   });

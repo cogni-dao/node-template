@@ -85,22 +85,33 @@ describe("persistAssistantThenPublishTerminal", () => {
     expect(saveThread).toHaveBeenCalledOnce();
   });
 
-  it("bounds terminal publication when Redis never settles", async () => {
+  it("does not fabricate failure while terminal publication is still pending", async () => {
     vi.useFakeTimers();
     try {
+      let releasePublish: (() => void) | undefined;
+      let settled = false;
       const operation = persistAssistantThenPublishTerminal({
         ...inputBase,
         threadPersistenceForUser: () =>
           persistenceWith(vi.fn().mockResolvedValue(undefined)),
-        publishTerminal: vi.fn(() => new Promise<void>(() => undefined)),
-        terminalPublishTimeoutMs: 25,
+        publishTerminal: vi.fn(
+          () =>
+            new Promise<void>((resolve) => {
+              releasePublish = resolve;
+            })
+        ),
+      });
+      void operation.finally(() => {
+        settled = true;
       });
 
-      const rejection = expect(operation).rejects.toBeInstanceOf(
-        TerminalPublicationError
-      );
-      await vi.advanceTimersByTimeAsync(25);
-      await rejection;
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(settled).toBe(false);
+      expect(releasePublish).toBeTypeOf("function");
+
+      releasePublish?.();
+      await expect(operation).resolves.toMatchObject({ persisted: true });
+      expect(settled).toBe(true);
     } finally {
       vi.useRealTimers();
     }

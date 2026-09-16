@@ -40,7 +40,4 @@ export {
 // never call directly for enforcement — the decorator is the single enforcement path)
 export { preflightCreditCheck } from "./services/preflight-credit-check";
 // Secrets redaction for thread persistence
-export {
-  redactSecretsInMessages,
-  redactSecretsInText,
-} from "./services/secrets-redaction";
+export { redactSecretsInMessages } from "./services/secrets-redaction";

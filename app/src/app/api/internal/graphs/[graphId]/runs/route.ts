@@ -219,7 +219,15 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     const runId = providedRunId ?? randomUUID();
 
     // --- 5. Compute request hash for idempotency ---
-    const requestHash = computeRequestHash(graphId, input);
+    // API completions preclaim the slot before Temporal start and pass the
+    // canonical hash through the workflow. Scheduled runs compute it here.
+    const suppliedRequestHash =
+      typeof input.executionRequestHash === "string" &&
+      /^[0-9a-f]{64}$/.test(input.executionRequestHash)
+        ? input.executionRequestHash
+        : undefined;
+    const requestHash =
+      suppliedRequestHash ?? computeRequestHash(graphId, input);
 
     // --- 6. Check idempotency ---
     const idempotencyResult =
@@ -254,22 +262,29 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       }
     }
 
+    let requestAlreadyClaimed = false;
     if (idempotencyResult.status === "pending") {
       // Execution in progress - return 409 Conflict to signal retry later
       const pending = idempotencyResult.request;
-      log.info(
-        { idempotencyKey, runId: pending.runId },
-        "Execution already in progress"
-      );
-      return NextResponse.json(
-        {
-          error: "Execution in progress",
-          message:
-            "Request with this Idempotency-Key is currently being processed",
-          runId: pending.runId,
-        },
-        { status: 409 }
-      );
+      if (suppliedRequestHash && pending.runId === runId) {
+        // The completion facade durably claimed this exact request before
+        // starting Temporal. This workflow owns the pending record.
+        requestAlreadyClaimed = true;
+      } else {
+        log.info(
+          { idempotencyKey, runId: pending.runId },
+          "Execution already in progress"
+        );
+        return NextResponse.json(
+          {
+            error: "Execution in progress",
+            message:
+              "Request with this Idempotency-Key is currently being processed",
+            runId: pending.runId,
+          },
+          { status: 409 }
+        );
+      }
     }
 
     if (idempotencyResult.status === "mismatch") {
@@ -417,12 +432,14 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
 
     // --- 9a. Create pending idempotency record BEFORE execution ---
     // This ensures the record exists even if execution fails/times out
-    await container.executionRequestPort.createPendingRequest(
-      idempotencyKey,
-      requestHash,
-      runId,
-      traceId
-    );
+    if (!requestAlreadyClaimed) {
+      await container.executionRequestPort.createPendingRequest(
+        idempotencyKey,
+        requestHash,
+        runId,
+        traceId
+      );
+    }
 
     // --- 9b. Patch stateKey onto graph_runs record (bug.0197) ---
     // stateKey is derived here (internal API) but graph_runs was created by

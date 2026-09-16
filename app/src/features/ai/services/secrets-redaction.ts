@@ -47,7 +47,7 @@ const SECRET_PATTERNS: Array<{ pattern: RegExp; replacement: string }> = [
 /**
  * Apply best-effort secret redaction to a string.
  */
-export function redactSecretsInText(text: string): string {
+function redactSecrets(text: string): string {
   let result = text;
   for (const { pattern, replacement } of SECRET_PATTERNS) {
     // Reset lastIndex for global regexes
@@ -70,7 +70,7 @@ export function redactSecretsInMessages(messages: UIMessage[]): UIMessage[] {
     ...msg,
     parts: msg.parts.map((part) => {
       if (part.type === "text") {
-        return { ...part, text: redactSecretsInText(part.text) };
+        return { ...part, text: redactSecrets(part.text) };
       }
       // Redact tool inputs and outputs
       if (part.type === "dynamic-tool") {
@@ -80,9 +80,7 @@ export function redactSecretsInMessages(messages: UIMessage[]): UIMessage[] {
           part.input !== undefined &&
           part.input !== null
         ) {
-          masked.input = JSON.parse(
-            redactSecretsInText(JSON.stringify(part.input))
-          );
+          masked.input = JSON.parse(redactSecrets(JSON.stringify(part.input)));
         }
         if (
           "output" in part &&
@@ -90,7 +88,7 @@ export function redactSecretsInMessages(messages: UIMessage[]): UIMessage[] {
           part.output !== null
         ) {
           masked.output = JSON.parse(
-            redactSecretsInText(JSON.stringify(part.output))
+            redactSecrets(JSON.stringify(part.output))
           );
         }
         return masked;

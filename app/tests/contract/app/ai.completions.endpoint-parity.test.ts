@@ -26,6 +26,7 @@ import {
 } from "@tests/_fakes";
 import { TEST_MODEL_ID } from "@tests/_fakes/ai/fakes";
 import {
+  createExecutionRequestPortMock,
   createRunStreamMock,
   createTemporalClientMock,
 } from "@tests/_fixtures/ai/completion-facade-setup";
@@ -84,6 +85,9 @@ vi.mock("@/features/ai/public.server", async (importOriginal) => {
 vi.mock("@/shared/config", () => ({
   getNodeId: () => "node_template",
 }));
+vi.mock("@/shared/env", () => ({
+  serverEnv: () => ({ AUTH_SECRET: "stable-completion-idempotency-secret" }),
+}));
 
 import { getSessionUser } from "@/app/_lib/auth/session";
 import {
@@ -117,6 +121,23 @@ function setupMocks(
 
   const fakeClock = new FakeClock("2025-01-15T12:00:00.000Z");
   const mockAccountService = createMockAccountServiceWithDefaults();
+  const executionRequestPort = createExecutionRequestPortMock();
+  const runStream = createRunStreamMock({
+    responseContent,
+    toolCalls: options.toolCalls,
+    statusEvents: options.statusEvents,
+    ...(options.errorEvent
+      ? {}
+      : {
+          usageReport: {
+            inputTokens: 15,
+            outputTokens: 25,
+            model: TEST_MODEL_ID,
+          },
+        }),
+    ...(options.errorEvent ? { emitError: options.errorEvent } : {}),
+  });
+  const temporal = createTemporalClientMock();
 
   // Restore getContainer mock (reset by vi.resetAllMocks in beforeEach)
   mockGetContainer.mockReturnValue({
@@ -129,25 +150,10 @@ function setupMocks(
       child: vi.fn().mockReturnThis(),
     },
     clock: fakeClock,
-    runStream: createRunStreamMock({
-      responseContent,
-      toolCalls: options.toolCalls,
-      statusEvents: options.statusEvents,
-      ...(options.errorEvent
-        ? {}
-        : {
-            usageReport: {
-              inputTokens: 15,
-              outputTokens: 25,
-              model: TEST_MODEL_ID,
-            },
-          }),
-      ...(options.errorEvent ? { emitError: options.errorEvent } : {}),
-    }),
+    executionRequestPort,
+    runStream,
   } as never);
-  mockGetTemporalWorkflowClient.mockResolvedValue(
-    createTemporalClientMock() as never
-  );
+  mockGetTemporalWorkflowClient.mockResolvedValue(temporal as never);
 
   mockGetSessionUser.mockResolvedValue(TEST_SESSION_USER_1);
 
@@ -158,6 +164,7 @@ function setupMocks(
     aiTelemetry: new FakeAiTelemetryAdapter(),
     langfuse: undefined,
   });
+  return { executionRequestPort, runStream, temporal };
 }
 
 /**
@@ -177,6 +184,7 @@ function setupMocksWithError(error: Error) {
       child: vi.fn().mockReturnThis(),
     },
     clock: fakeClock,
+    executionRequestPort: createExecutionRequestPortMock(),
     runStream: createRunStreamMock({ responseContent: "" }),
   } as never);
 
@@ -337,6 +345,47 @@ describe("OpenAI Endpoint Parity (POST /v1/chat/completions)", () => {
   });
 
   describe("streaming response parity", () => {
+    it("returns 409 before execution when an idempotency key is reused with changed input", async () => {
+      const { temporal } = setupMocks();
+      const { POST } = await import("@/app/api/v1/chat/completions/route");
+      const headers = {
+        "content-type": "application/json",
+        "idempotency-key": "same-caller-key",
+      };
+
+      const first = await POST(
+        new NextRequest("http://localhost:3000/api/v1/chat/completions", {
+          method: "POST",
+          headers,
+          body: JSON.stringify(
+            createCompletionRequest({
+              stream: true,
+              messages: [{ role: "user", content: "first" }],
+            })
+          ),
+        })
+      );
+      await first.text();
+      const changed = await POST(
+        new NextRequest("http://localhost:3000/api/v1/chat/completions", {
+          method: "POST",
+          headers,
+          body: JSON.stringify(
+            createCompletionRequest({
+              stream: true,
+              messages: [{ role: "user", content: "changed" }],
+            })
+          ),
+        })
+      );
+
+      expect(changed.status).toBe(409);
+      expect(await changed.json()).toMatchObject({
+        error: { code: "idempotency_conflict" },
+      });
+      expect(temporal.client.start).toHaveBeenCalledOnce();
+    });
+
     it("maps a first execution error event before committing SSE headers", async () => {
       setupMocks({ responseContent: "", errorEvent: "insufficient_credits" });
 

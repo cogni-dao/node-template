@@ -17,6 +17,7 @@ import type { UIMessageChunk } from "ai";
 import { createUIMessageStream, createUIMessageStreamResponse } from "ai";
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { UiMessageEventMapper } from "@/app/_lib/ai/ui-message-event-mapper";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
@@ -82,16 +83,7 @@ export const GET = wrapRouteHandlerWithLogging<RouteParams>(
     const textPartId = `run-${runId}`;
     const uiStream = createUIMessageStream({
       execute: async ({ writer }) => {
-        let textOpen = false;
-        let accumulatedText = "";
-        let assistantFinal: string | undefined;
-
-        const closeText = () => {
-          if (textOpen) {
-            writer.write({ type: "text-end", id: textPartId });
-            textOpen = false;
-          }
-        };
+        const mapper = new UiMessageEventMapper(writer, textPartId);
 
         const writeCursor = (cursor: string) => {
           writer.write({
@@ -107,90 +99,15 @@ export const GET = wrapRouteHandlerWithLogging<RouteParams>(
           cursor
         )) {
           const event = entry.event;
-          if (event.type === "usage_report") {
+          const mapping = mapper.consume(event);
+          if (event.type === "done") {
+            mapper.finish(event.finishReason);
             writeCursor(entry.id);
-          } else if (event.type === "text_delta") {
-            if (!textOpen) {
-              writer.write({ type: "text-start", id: textPartId });
-              textOpen = true;
-            }
-            accumulatedText += event.delta;
-            writer.write({
-              type: "text-delta",
-              id: textPartId,
-              delta: event.delta,
-            });
-            writeCursor(entry.id);
-          } else if (event.type === "assistant_final") {
-            // Buffered until done reconciliation. Do not advance the durable
-            // client cursor until the buffered content has been written.
-            assistantFinal = event.content;
-          } else if (event.type === "tool_call_start") {
-            closeText();
-            writer.write({
-              type: "tool-input-start",
-              toolCallId: event.toolCallId,
-              toolName: event.toolName,
-            } as UIMessageChunk);
-            writer.write({
-              type: "tool-input-available",
-              toolCallId: event.toolCallId,
-              toolName: event.toolName,
-              input: event.args,
-            } as UIMessageChunk);
-            writeCursor(entry.id);
-          } else if (event.type === "tool_call_result") {
-            writer.write({
-              type: "tool-output-available",
-              toolCallId: event.toolCallId,
-              output: event.result,
-            } as UIMessageChunk);
-            writeCursor(entry.id);
-          } else if (event.type === "status") {
-            writer.write({
-              type: "data-status",
-              data: {
-                phase: event.phase,
-                ...(event.label ? { label: event.label } : {}),
-              },
-              transient: true,
-            } as UIMessageChunk);
-            writeCursor(entry.id);
-          } else if (event.type === "error") {
-            closeText();
-            writer.write({ type: "error", errorText: event.error });
-            writeCursor(entry.id);
-          } else if (event.type === "done") {
-            if (
-              assistantFinal !== undefined &&
-              assistantFinal.startsWith(accumulatedText) &&
-              assistantFinal.length > accumulatedText.length
-            ) {
-              if (!textOpen) {
-                writer.write({ type: "text-start", id: textPartId });
-                textOpen = true;
-              }
-              writer.write({
-                type: "text-delta",
-                id: textPartId,
-                delta: assistantFinal.slice(accumulatedText.length),
-              });
-            }
-            closeText();
-            writer.write({
-              type: "finish",
-              finishReason: (event.finishReason ?? "stop") as
-                | "stop"
-                | "length"
-                | "tool-calls"
-                | "content-filter"
-                | "other"
-                | "error",
-            });
+          } else if (mapping !== "buffered") {
             writeCursor(entry.id);
           }
         }
-        closeText();
+        mapper.close();
       },
     });
 

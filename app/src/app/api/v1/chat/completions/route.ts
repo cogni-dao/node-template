@@ -25,6 +25,7 @@ import { NextResponse } from "next/server";
 import {
   chatCompletion,
   chatCompletionStream,
+  CompletionIdempotencyConflictError,
   toOpenAiFinishReason,
 } from "@/app/_facades/ai/completion.server";
 import { executionErrorToOpenAiError } from "@/app/_facades/ai/execution-error-mapper";
@@ -67,6 +68,16 @@ function handleRouteError(
   ctx: RequestContext,
   error: unknown
 ): NextResponse | null {
+  if (error instanceof CompletionIdempotencyConflictError) {
+    logRequestWarn(ctx.log, error, "IDEMPOTENCY_CONFLICT");
+    return openAiError(
+      error.message,
+      "invalid_request_error",
+      409,
+      "idempotency_conflict"
+    );
+  }
+
   // Zod validation errors
   if (error && typeof error === "object" && "issues" in error) {
     logRequestWarn(ctx.log, error, "VALIDATION_ERROR");

@@ -18,24 +18,24 @@
  * @public
  */
 
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { isAiExecutionError, type ModelRef } from "@cogni/ai-core";
 import { toUserId } from "@cogni/ids";
 import { aiChatOperation, type ChatInput } from "@cogni/node-contracts";
 import { ChatValidationError } from "@cogni/node-shared";
-import type { UIMessage, UIMessageChunk } from "ai";
+import type { UIMessage } from "ai";
 import { createUIMessageStream, createUIMessageStreamResponse } from "ai";
 import { nanoid } from "nanoid";
 import { NextResponse } from "next/server";
 import { executionErrorToHttpStatus } from "@/app/_facades/ai/execution-error-mapper";
 import { completionStream } from "@/app/_facades/ai/completion.server";
 import { getSessionUser } from "@/app/_lib/auth/session";
+import { UiMessageEventMapper } from "@/app/_lib/ai/ui-message-event-mapper";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { isAccountsFeatureError } from "@/features/accounts/public";
 import {
   redactSecretsInMessages,
-  redactSecretsInText,
   uiMessagesToMessageDtos,
 } from "@/features/ai/public.server";
 import {
@@ -50,13 +50,14 @@ import {
   logRequestWarn,
   type RequestContext,
 } from "@/shared/observability";
+import { serverEnv } from "@/shared/env";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 interface ChatTurnEnvelope {
   readonly version: 1;
-  /** SHA-256 of canonical redacted text, allowing retries after persistence. */
+  /** HMAC-SHA256 of original text; supports retry equality without storing prompt material. */
   readonly messageDigest: string;
   /** Server-authoritative ID used by Temporal, Redis, graph_runs, and reconnect. */
   readonly serverRunId: string;
@@ -92,7 +93,8 @@ function assertSameTurn(
   existing: UIMessage,
   input: ChatInput,
   userId: string,
-  stateKey: string
+  stateKey: string,
+  promptDigestKey: string
 ): ChatTurnEnvelope {
   const envelope = envelopeOf(existing);
   const expectedServerRunId = deriveServerRunId(
@@ -108,7 +110,7 @@ function assertSameTurn(
   if (
     existing.role !== "user" ||
     envelope?.version !== 1 ||
-    envelope.messageDigest !== messageDigest(input.message) ||
+    envelope.messageDigest !== messageDigest(input.message, promptDigestKey) ||
     envelope.serverRunId !== expectedServerRunId ||
     envelope.clientRunSeed !== input.runId ||
     envelope.graphName !== input.graphName ||
@@ -119,10 +121,8 @@ function assertSameTurn(
   return envelope;
 }
 
-function messageDigest(message: string): string {
-  return createHash("sha256")
-    .update(redactSecretsInText(message), "utf8")
-    .digest("hex");
+function messageDigest(message: string, key: string): string {
+  return createHmac("sha256", key).update(message, "utf8").digest("hex");
 }
 
 function deriveServerRunId(
@@ -300,6 +300,7 @@ export const POST = wrapRouteHandlerWithLogging(
       // Catalog-based allowlist check is deferred to execution-time preflight.
 
       if (!sessionUser) throw new Error("sessionUser required");
+      const promptDigestKey = serverEnv().AUTH_SECRET;
 
       // --- stateKey lifecycle ---
       const stateKey = input.stateKey ?? nanoid(21);
@@ -333,10 +334,16 @@ export const POST = wrapRouteHandlerWithLogging(
         (message) => message.id === messageId
       );
       let chatTurn: ChatTurnEnvelope = existingTurn
-        ? assertSameTurn(existingTurn, input, sessionUser.id, stateKey)
+        ? assertSameTurn(
+            existingTurn,
+            input,
+            sessionUser.id,
+            stateKey,
+            promptDigestKey
+          )
         : {
             version: 1,
-            messageDigest: messageDigest(input.message),
+            messageDigest: messageDigest(input.message, promptDigestKey),
             serverRunId: deriveServerRunId(
               sessionUser.id,
               stateKey,
@@ -394,7 +401,8 @@ export const POST = wrapRouteHandlerWithLogging(
               concurrentTurn,
               input,
               sessionUser.id,
-              stateKey
+              stateKey,
+              promptDigestKey
             );
             runId = chatTurn.serverRunId;
             duplicateTurn = true;
@@ -476,176 +484,68 @@ export const POST = wrapRouteHandlerWithLogging(
         "ai.chat_accepted"
       );
 
-      // --- SSE reconciliation state (display only, NOT for persistence) ---
-      // Per PERSIST_AFTER_PUMP: assistant persistence moved to execution layer (internal API route).
-      // These variables track text_delta accumulation solely for SSE reconciliation:
-      // if assistant_final has more content than deltas delivered, append the remainder to the SSE stream.
-      let accumulatedText = "";
-      let assistantFinalContent: string | undefined;
-      let firstDeltaLogged = false;
-
       // --- Stream response via AI SDK Data Stream Protocol (SSE) ---
       const textPartId = `run-${acceptedRunId}`;
-      let textBlockOpen = false;
 
       const uiStream = createUIMessageStream({
         execute: async ({ writer }) => {
           try {
             let eventSeq = 0;
+            const mapper = new UiMessageEventMapper(writer, textPartId, {
+              onFirstTextDelta: () => {
+                aiChatPhaseDurationMs.observe(
+                  { phase: "first_text_delta" },
+                  performance.now() - streamStartMs
+                );
+                ctx.log.info(
+                  {
+                    reqId: ctx.reqId,
+                    stateKey,
+                    messageId,
+                    runId: acceptedRunId,
+                    workflowId,
+                  },
+                  "ai.chat_first_delta"
+                );
+              },
+              onAssistantFinal: ({ accumulatedLength, finalLength }) => {
+                ctx.log.debug(
+                  {
+                    seq: eventSeq,
+                    accLen: accumulatedLength,
+                    finalLen: finalLength,
+                  },
+                  "ai.chat_assistant_final_received"
+                );
+              },
+              onContentDiverged: ({ accumulatedText, finalText }) => {
+                ctx.log.warn(
+                  {
+                    accLen: accumulatedText.length,
+                    finalLen: finalText.length,
+                    accTail: accumulatedText.slice(-40),
+                    finalTail: finalText.slice(-40),
+                  },
+                  "ai.chat_reconcile_content_diverged"
+                );
+              },
+            });
 
             for await (const event of deltaStream) {
               if (request.signal.aborted) break;
               eventSeq++;
-
-              if (event.type === "text_delta") {
-                if (!firstDeltaLogged) {
-                  firstDeltaLogged = true;
-                  aiChatPhaseDurationMs.observe(
-                    { phase: "first_text_delta" },
-                    performance.now() - streamStartMs
-                  );
-                  ctx.log.info(
-                    {
-                      reqId: ctx.reqId,
-                      stateKey,
-                      messageId,
-                      runId: acceptedRunId,
-                      workflowId,
-                    },
-                    "ai.chat_first_delta"
-                  );
-                }
-                accumulatedText += event.delta;
-                if (!textBlockOpen) {
-                  writer.write({ type: "text-start", id: textPartId });
-                  textBlockOpen = true;
-                }
-                writer.write({
-                  type: "text-delta",
-                  delta: event.delta,
-                  id: textPartId,
-                });
-              } else if (event.type === "assistant_final") {
-                assistantFinalContent = event.content;
-                ctx.log.debug(
-                  {
-                    seq: eventSeq,
-                    accLen: accumulatedText.length,
-                    finalLen: event.content.length,
-                  },
-                  "ai.chat_assistant_final_received"
-                );
-              } else if (event.type === "tool_call_start") {
-                // Close text block before tool call
-                if (textBlockOpen) {
-                  writer.write({ type: "text-end", id: textPartId });
-                  textBlockOpen = false;
-                }
-
+              mapper.consume(event);
+              if (event.type === "tool_call_start") {
                 ctx.log.info(
                   { toolCallId: event.toolCallId, toolName: event.toolName },
                   "tool_call_start received"
                 );
-
-                writer.write({
-                  type: "tool-input-start",
-                  toolCallId: event.toolCallId,
-                  toolName: event.toolName,
-                } as UIMessageChunk);
-
-                if (event.args != null) {
-                  writer.write({
-                    type: "tool-input-available",
-                    toolCallId: event.toolCallId,
-                    toolName: event.toolName,
-                    input: event.args,
-                  } as UIMessageChunk);
-                }
               } else if (event.type === "tool_call_result") {
-                writer.write({
-                  type: "tool-output-available",
-                  toolCallId: event.toolCallId,
-                  output: event.result,
-                } as UIMessageChunk);
-
                 ctx.log.info(
                   { toolCallId: event.toolCallId },
                   "tool_call_result completed"
                 );
-              } else if (event.type === "status") {
-                // STATUS_IS_EPHEMERAL: transient data part, never persisted in UIMessage
-                // STATUS_BEST_EFFORT: safe to skip if stream is backpressured
-                writer.write({
-                  type: "data-status",
-                  data: {
-                    phase: event.phase,
-                    ...(event.label ? { label: event.label } : {}),
-                  },
-                  transient: true,
-                } as UIMessageChunk);
               }
-            }
-
-            // Reconcile: if assistant_final has text beyond what deltas delivered,
-            // append the remainder.
-            if (
-              assistantFinalContent !== undefined &&
-              assistantFinalContent.length > accumulatedText.length &&
-              assistantFinalContent.startsWith(accumulatedText)
-            ) {
-              const remainder = assistantFinalContent.slice(
-                accumulatedText.length
-              );
-              ctx.log.info(
-                {
-                  accLen: accumulatedText.length,
-                  finalLen: assistantFinalContent.length,
-                  remainderLen: remainder.length,
-                },
-                "ai.chat_reconcile_appending_remainder"
-              );
-              if (!textBlockOpen) {
-                writer.write({ type: "text-start", id: textPartId });
-                textBlockOpen = true;
-              }
-              writer.write({
-                type: "text-delta",
-                delta: remainder,
-                id: textPartId,
-              });
-            } else if (
-              assistantFinalContent !== undefined &&
-              assistantFinalContent !== accumulatedText &&
-              !assistantFinalContent.startsWith(accumulatedText)
-            ) {
-              ctx.log.warn(
-                {
-                  accLen: accumulatedText.length,
-                  finalLen: assistantFinalContent.length,
-                  accTail: accumulatedText.slice(-40),
-                  finalTail: assistantFinalContent.slice(-40),
-                },
-                "ai.chat_reconcile_content_diverged"
-              );
-            }
-
-            if (
-              assistantFinalContent === undefined &&
-              accumulatedText.length > 0
-            ) {
-              ctx.log.error(
-                {
-                  accLen: accumulatedText.length,
-                  eventCount: eventSeq,
-                },
-                "ai.chat_assistant_final_missing — ASSISTANT_FINAL_REQUIRED violated"
-              );
-            }
-
-            // Close text block if still open
-            if (textBlockOpen) {
-              writer.write({ type: "text-end", id: textPartId });
-              textBlockOpen = false;
             }
 
             // Flush barrier
@@ -664,27 +564,13 @@ export const POST = wrapRouteHandlerWithLogging(
             const result = await Promise.race([final, finalTimeout]);
 
             if (result.ok) {
-              // AI SDK uiMessageChunkSchema uses z.strictObject for finish —
-              // only finishReason and messageMetadata are allowed (no usage).
-              writer.write({
-                type: "finish",
-                finishReason: result.finishReason as
-                  | "stop"
-                  | "length"
-                  | "tool-calls"
-                  | "content-filter"
-                  | "other"
-                  | "error",
-              });
+              mapper.finish(result.finishReason);
             } else {
               ctx.log.warn(
                 { reqId: ctx.reqId, error: result.error },
                 "ai.chat_stream_final_error"
               );
-              writer.write({
-                type: "error",
-                errorText: `Stream finalization failed: ${result.error}`,
-              });
+              mapper.writeError(`Stream finalization failed: ${result.error}`);
             }
           } catch (error) {
             if (error instanceof Error && error.name === "AbortError") {

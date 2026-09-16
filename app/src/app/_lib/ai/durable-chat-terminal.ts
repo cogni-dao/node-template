@@ -27,10 +27,7 @@ interface DurableChatTerminalInput {
     attempt: number;
   }) => void;
   readonly maxAttempts?: number;
-  readonly terminalPublishTimeoutMs?: number;
 }
-
-const DEFAULT_TERMINAL_PUBLISH_TIMEOUT_MS = 5_000;
 
 export class TerminalPublicationError extends Error {
   constructor(cause: unknown) {
@@ -39,25 +36,13 @@ export class TerminalPublicationError extends Error {
   }
 }
 
-async function publishTerminalBounded(
-  publish: () => Promise<void>,
-  timeoutMs: number
+async function publishTerminalConfirmed(
+  publish: () => Promise<void>
 ): Promise<void> {
-  let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
-    await Promise.race([
-      publish(),
-      new Promise<never>((_resolve, reject) => {
-        timeout = setTimeout(
-          () => reject(new Error("Terminal publication timed out")),
-          timeoutMs
-        );
-      }),
-    ]);
+    await publish();
   } catch (cause) {
     throw new TerminalPublicationError(cause);
-  } finally {
-    if (timeout) clearTimeout(timeout);
   }
 }
 
@@ -116,9 +101,6 @@ export async function persistAssistantThenPublishTerminal(
     }
   }
 
-  await publishTerminalBounded(
-    input.publishTerminal,
-    input.terminalPublishTimeoutMs ?? DEFAULT_TERMINAL_PUBLISH_TIMEOUT_MS
-  );
+  await publishTerminalConfirmed(input.publishTerminal);
   return result;
 }
