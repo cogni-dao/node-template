@@ -171,6 +171,17 @@ function handleRouteError(
     );
   }
 
+  if (
+    error instanceof Error &&
+    error.name === "CompletionIdempotencyConflictError"
+  ) {
+    logRequestWarn(ctx.log, error, "COMPLETION_IDEMPOTENCY_CONFLICT");
+    return NextResponse.json(
+      { error: "Completion identity already exists with different input" },
+      { status: 409 }
+    );
+  }
+
   // Port-level credit errors (thrown directly by PreflightCreditCheckDecorator
   // during stream iteration — not mapped to feature errors by the facade in
   // the streaming path)
@@ -441,8 +452,20 @@ export const POST = wrapRouteHandlerWithLogging(
         "ai.chat_user_persisted"
       );
 
-      // --- Convert persisted thread → DTOs for execution ---
-      const messageDtos = uiMessagesToMessageDtos(threadWithUser);
+      // Retries must execute the same immutable prefix used by the original
+      // request. A completed retry reloads a thread that already contains the
+      // assistant response; including that suffix would change the completion
+      // request hash and turn an exact replay into an idempotency conflict.
+      const targetTurnIndex = threadWithUser.findIndex(
+        (message) => message.id === messageId
+      );
+      if (targetTurnIndex < 0) {
+        throw new Error("Persisted chat turn missing before execution");
+      }
+      const executionThread = threadWithUser.slice(0, targetTurnIndex + 1);
+
+      // --- Convert immutable persisted prefix → DTOs for execution ---
+      const messageDtos = uiMessagesToMessageDtos(executionThread);
 
       const idempotencyKey = input.messageId || input.runId
         ? `chat:${stateKey}:${messageId}`

@@ -93,21 +93,26 @@ vi.mock("@/shared/env", () => ({
 }));
 
 const { completionStream } = vi.hoisted(() => ({
-  completionStream: vi.fn(async (input: { serverRunId?: string }) => ({
-    stream: (async function* () {
-      yield { type: "assistant_final" as const, content: "ok" };
-      yield { type: "done" as const };
-    })(),
-    final: Promise.resolve({
-      ok: true as const,
-      requestId: input.serverRunId ?? "run",
-      usage: { promptTokens: 1, completionTokens: 1 },
-      finishReason: "stop",
-    }),
-    runId:
-      input.serverRunId ?? "123e4567-e89b-42d3-a456-426614174000",
-    workflowId: "graph-run:billing:chat:thread-1:message-1",
-  })),
+  completionStream: vi.fn(
+    async (input: {
+      serverRunId?: string;
+      messages?: Array<{ role: string; content: string }>;
+    }) => ({
+      stream: (async function* () {
+        yield { type: "assistant_final" as const, content: "ok" };
+        yield { type: "done" as const };
+      })(),
+      final: Promise.resolve({
+        ok: true as const,
+        requestId: input.serverRunId ?? "run",
+        usage: { promptTokens: 1, completionTokens: 1 },
+        finishReason: "stop",
+      }),
+      runId:
+        input.serverRunId ?? "123e4567-e89b-42d3-a456-426614174000",
+      workflowId: "graph-run:billing:chat:thread-1:message-1",
+    })
+  ),
 }));
 
 vi.mock("@/app/_facades/ai/completion.server", () => ({ completionStream }));
@@ -158,6 +163,48 @@ describe("POST /api/v1/ai/chat idempotency", () => {
     expect(completionStream.mock.calls[0]?.[0].serverRunId).toBe(
       completionStream.mock.calls[1]?.[0].serverRunId
     );
+  });
+
+  it("retries the immutable user prefix after the assistant is persisted", async () => {
+    const first = await send("hello");
+    expect(first.status).toBe(200);
+    thread = [
+      ...thread,
+      {
+        id: `assistant-${first.headers.get("X-Run-Id")}`,
+        role: "assistant",
+        parts: [{ type: "text", text: "persisted answer" }],
+      },
+    ];
+
+    const retry = await send("hello");
+
+    expect(retry.status).toBe(200);
+    expect(saveThread).toHaveBeenCalledOnce();
+    expect(completionStream).toHaveBeenCalledTimes(2);
+    expect(completionStream.mock.calls[0]?.[0].messages).toEqual(
+      completionStream.mock.calls[1]?.[0].messages
+    );
+    expect(completionStream.mock.calls[1]?.[0].messages).toEqual([
+      expect.objectContaining({ role: "user", content: "hello" }),
+    ]);
+    expect(thread.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+    ]);
+  });
+
+  it("maps a facade idempotency conflict to 409", async () => {
+    const conflict = new Error("conflict");
+    conflict.name = "CompletionIdempotencyConflictError";
+    completionStream.mockRejectedValueOnce(conflict);
+
+    const response = await send("hello");
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: "Completion identity already exists with different input",
+    });
   });
 
   it("returns discovery headers while the first graph event is still deferred", async () => {
