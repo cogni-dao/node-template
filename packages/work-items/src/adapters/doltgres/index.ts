@@ -16,6 +16,9 @@ export {
   type DoltgresWorkItemAdapterOptions,
   OPERATOR_ID_FLOOR,
   WorkItemAlreadyExistsError,
+  WorkItemAuthorizationError,
+  WorkItemLeaseConflictError,
+  WorkItemsBusyError,
 } from "./adapter.js";
 export {
   decodeCursor,

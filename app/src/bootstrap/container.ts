@@ -713,9 +713,19 @@ function createContainer(): Container {
 			connectionString: env.DOLTGRES_URL,
 			applicationName: `cogni_knowledge_${env.SERVICE_NAME ?? "app"}`,
 		});
+		const createWorkItemsClient = () =>
+			buildDoltgresClient({
+				connectionString: env.DOLTGRES_URL as string,
+				applicationName: `cogni_work_items_${env.SERVICE_NAME ?? "app"}`,
+				max: 1,
+			});
+		const workItemsClient = createWorkItemsClient();
 		// Node stores start their allocator at 1; operator alone reserves the
 		// imported legacy range below 5000.
-		doltgresWorkItems = new DoltgresWorkItemAdapter(doltClient);
+		doltgresWorkItems = new DoltgresWorkItemAdapter(workItemsClient, {
+			logger: log,
+			recreateClient: createWorkItemsClient,
+		});
 		const knowledgePort = new DoltgresKnowledgeStoreAdapter({
 			sql: doltClient,
 		});
@@ -794,6 +804,9 @@ function createContainer(): Container {
 			create: notConfiguredWorkItems,
 			patch: notConfiguredWorkItems,
 			delete: notConfiguredWorkItems,
+			claim: notConfiguredWorkItems,
+			heartbeat: notConfiguredWorkItems,
+			release: notConfiguredWorkItems,
 		};
 		log.warn("Knowledge store not configured (DOLTGRES_URL not set)");
 	}

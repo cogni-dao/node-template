@@ -19,6 +19,7 @@ import type { Sql } from "postgres";
 import { describe, expect, it } from "vitest";
 
 import { DoltgresWorkItemAdapter } from "../../src/adapters/doltgres/adapter.js";
+import { makeFakeDoltgresSql } from "./fake-doltgres-sql.js";
 
 type Row = Record<string, unknown>;
 
@@ -154,21 +155,18 @@ function parseLimit(q: string): number {
 function makeFakeSql(rows: Row[]): { sql: Sql; queries: string[] } {
   const sorted = sortDataset(rows);
   const queries: string[] = [];
-  const fake = {
-    unsafe: async (q: string) => {
-      queries.push(q);
-      // Only handle the SELECT * FROM work_items list path — that's what
-      // adapter.list() issues. Anything else throws so the test surfaces
-      // unexpected SQL.
-      if (!q.startsWith("SELECT * FROM work_items")) {
-        throw new Error(`Unexpected SQL in test: ${q}`);
-      }
-      const cursor = parseCursorFromQuery(q);
-      const filtered = evaluateKeyset(sorted, cursor);
-      const limit = parseLimit(q);
-      return filtered.slice(0, limit);
-    },
-  } as unknown as Sql;
+  const fake = makeFakeDoltgresSql((q) => {
+    // Only handle the SELECT * FROM work_items list path — that's what
+    // adapter.list() issues. Anything else throws so the test surfaces
+    // unexpected SQL.
+    if (!q.startsWith("SELECT *, (claim_expires_at")) {
+      throw new Error(`Unexpected SQL in test: ${q}`);
+    }
+    const cursor = parseCursorFromQuery(q);
+    const filtered = evaluateKeyset(sorted, cursor);
+    const limit = parseLimit(q);
+    return filtered.slice(0, limit);
+  }, queries);
   return { sql: fake, queries };
 }
 

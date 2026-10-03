@@ -20,6 +20,7 @@ import type { Sql } from "postgres";
 import { describe, expect, it } from "vitest";
 
 import { DoltgresWorkItemAdapter } from "../../src/adapters/doltgres/adapter.js";
+import { makeFakeDoltgresSql } from "./fake-doltgres-sql.js";
 
 function makeFakeSql(): { sql: Sql; queries: string[] } {
   const queries: string[] = [];
@@ -44,22 +45,10 @@ function makeFakeSql(): { sql: Sql; queries: string[] } {
         },
       ];
     }
-    if (q.startsWith("SELECT dolt_commit")) return [{}];
-    if (q.startsWith("SELECT * FROM work_items")) return [];
+    if (q.includes("FROM work_items")) return [];
     return [];
   };
-  const fn = ((strings: TemplateStringsArray, ..._args: unknown[]) => {
-    const q = Array.isArray(strings) ? strings.join("?") : String(strings);
-    queries.push(q);
-    return Promise.resolve(respond(q));
-  }) as unknown as Sql;
-  (fn as unknown as { unsafe: (q: string) => Promise<unknown[]> }).unsafe = (
-    q: string
-  ) => {
-    queries.push(q);
-    return Promise.resolve(respond(q));
-  };
-  return { sql: fn, queries };
+  return { sql: makeFakeDoltgresSql(respond, queries), queries };
 }
 
 describe("DoltgresWorkItemAdapter.patch — bug.5005 allowlist", () => {

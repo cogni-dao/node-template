@@ -2,16 +2,7 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@cogni/work-items/adapters/doltgres/cursor`
- * Purpose: Opaque cursor encode/decode for keyset pagination of work_items.
- * Scope: Pure helpers encoding the composite sort key (priority, rank, createdAt, id) as base64url(JSON). Does not perform IO or SQL.
- * Invariants:
- *   - OPAQUE_TO_CLIENTS: clients must treat cursor as a black box.
- *   - STABLE_TIEBREAK: id is the unique tiebreaker so progression is deterministic
- *     even when many rows share createdAt (importer batch wrote ~462 in one tick).
- * Side-effects: none
- * Links: bug.5162, docs/spec/work-items-port.md
- * @internal
+ * Opaque keyset cursor for the Doltgres work-items read model.
  */
 
 export class InvalidCursorError extends Error {
@@ -20,62 +11,64 @@ export class InvalidCursorError extends Error {
     this.name = "InvalidCursorError";
   }
 }
-
 export type WorkItemCursor = {
-  /** priority (null becomes 999 in sort key — encoded as null here) */
   p: number | null;
-  /** rank (null becomes 999 in sort key — encoded as null here) */
   r: number | null;
-  /** createdAt ISO string */
   ts: string;
-  /** row id (e.g. "task.5042") */
   id: string;
 };
 
-function base64UrlEncode(s: string): string {
-  return Buffer.from(s, "utf8")
-    .toString("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
-}
-
-function base64UrlDecode(s: string): string {
-  const pad = s.length % 4 === 0 ? "" : "=".repeat(4 - (s.length % 4));
-  const b64 = s.replace(/-/g, "+").replace(/_/g, "/") + pad;
-  return Buffer.from(b64, "base64").toString("utf8");
-}
-
-export function encodeCursor(c: WorkItemCursor): string {
-  return base64UrlEncode(JSON.stringify(c));
+export function encodeCursor(cursor: WorkItemCursor): string {
+  return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
 }
 
 export function decodeCursor(raw: string): WorkItemCursor {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(base64UrlDecode(raw));
+    parsed = JSON.parse(Buffer.from(raw, "base64url").toString("utf8"));
   } catch {
     throw new InvalidCursorError();
   }
+
   if (
     !parsed ||
     typeof parsed !== "object" ||
-    !("ts" in parsed) ||
-    !("id" in parsed) ||
     !("p" in parsed) ||
-    !("r" in parsed)
+    !("r" in parsed) ||
+    !("ts" in parsed) ||
+    !("id" in parsed)
   ) {
     throw new InvalidCursorError();
   }
-  const obj = parsed as Record<string, unknown>;
-  const p = obj.p === null ? null : Number(obj.p);
-  const r = obj.r === null ? null : Number(obj.r);
-  if (p !== null && !Number.isFinite(p)) throw new InvalidCursorError();
-  if (r !== null && !Number.isFinite(r)) throw new InvalidCursorError();
+
+  const value = parsed as Record<string, unknown>;
+  const p = value.p === null ? null : value.p;
+  const r = value.r === null ? null : value.r;
+  if (p !== null && (!Number.isInteger(p) || Number(p) < 0)) {
+    throw new InvalidCursorError();
+  }
+  if (r !== null && (!Number.isInteger(r) || Number(r) < 0)) {
+    throw new InvalidCursorError();
+  }
+  if (typeof value.ts !== "string") throw new InvalidCursorError();
+  const timestamp = new Date(value.ts);
+  if (
+    !Number.isFinite(timestamp.getTime()) ||
+    timestamp.toISOString() !== value.ts
+  ) {
+    throw new InvalidCursorError();
+  }
+  if (
+    typeof value.id !== "string" ||
+    !/^(task|bug|story|spike|subtask)\.\d+$/.test(value.id)
+  ) {
+    throw new InvalidCursorError();
+  }
+
   return {
-    p,
-    r,
-    ts: String(obj.ts),
-    id: String(obj.id),
+    p: p as number | null,
+    r: r as number | null,
+    ts: value.ts,
+    id: value.id,
   };
 }

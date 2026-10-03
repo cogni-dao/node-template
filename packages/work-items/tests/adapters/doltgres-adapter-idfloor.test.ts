@@ -21,6 +21,7 @@ import {
   DoltgresWorkItemAdapter,
   OPERATOR_ID_FLOOR,
 } from "../../src/adapters/doltgres/adapter.js";
+import { makeFakeDoltgresSql } from "./fake-doltgres-sql.js";
 
 /** Fake `Sql` whose `work_items` table contains exactly `existingIds`. */
 function makeFakeSql(existingIds: string[]): { sql: Sql; queries: string[] } {
@@ -52,21 +53,9 @@ function makeFakeSql(existingIds: string[]): { sql: Sql; queries: string[] } {
         },
       ];
     }
-    if (q.startsWith("SELECT dolt_commit")) return [{}];
     return [];
   };
-  const fn = ((strings: TemplateStringsArray, ..._args: unknown[]) => {
-    const q = Array.isArray(strings) ? strings.join("?") : String(strings);
-    queries.push(q);
-    return Promise.resolve(respond(q));
-  }) as unknown as Sql;
-  (fn as unknown as { unsafe: (q: string) => Promise<unknown[]> }).unsafe = (
-    q: string
-  ) => {
-    queries.push(q);
-    return Promise.resolve(respond(q));
-  };
-  return { sql: fn, queries };
+  return { sql: makeFakeDoltgresSql(respond, queries), queries };
 }
 
 describe("DoltgresWorkItemAdapter.create — ID_FLOOR_IS_PER_STORE", () => {
