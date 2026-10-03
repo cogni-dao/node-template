@@ -11,7 +11,10 @@
  * @internal
  */
 
-import type { WorkItemsListOutput } from "@cogni/node-contracts";
+import type {
+  WorkItemDto,
+  WorkItemsListOutput,
+} from "@cogni/node-contracts";
 
 export async function fetchWorkItems(): Promise<WorkItemsListOutput> {
   const response = await fetch("/api/v1/work/items", {
@@ -31,4 +34,20 @@ export async function fetchWorkItems(): Promise<WorkItemsListOutput> {
   }
 
   return response.json();
+}
+
+export async function fetchWorkItem(id: string): Promise<WorkItemDto> {
+  const response = await fetch(`/api/v1/work/items/${encodeURIComponent(id)}`, {
+    method: "GET",
+    headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({
+      error: "Failed to fetch work item",
+    }));
+    throw new Error(error.error || `HTTP ${response.status}`);
+  }
+  return response.json() as Promise<WorkItemDto>;
 }

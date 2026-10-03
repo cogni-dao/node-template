@@ -67,6 +67,7 @@ interface OperationContext {
 
 interface WorkItemConnection {
   readonly context: OperationContext;
+  readonly pool: Sql;
   unsafe(query: string): Promise<ReadonlyArray<Record<string, unknown>>>;
 }
 
@@ -562,8 +563,79 @@ export class DoltgresWorkItemAdapter
   ): WorkItemConnection {
     return {
       context,
+      pool,
       unsafe: (query) => this.executeQuery(pool, conn, context, query),
     };
+  }
+
+  private async withFreshRecoveryLock<T>(
+    context: OperationContext,
+    fn: (conn: WorkItemConnection) => Promise<T>
+  ): Promise<T> {
+    const recoveryPool = this.sql;
+    let rawConn: ReservedSql | undefined;
+    let locked = false;
+    let reserveTimedOut = false;
+    let reserveTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await this.executeQuery(
+        recoveryPool,
+        recoveryPool as unknown as ReservedSql,
+        context,
+        "SELECT 1 AS work_items_ready"
+      );
+      reserveTimer = setTimeout(() => {
+        reserveTimedOut = true;
+        void this.terminateClient(
+          recoveryPool,
+          context,
+          "connection.reserve",
+          "recovery_reserve_timeout"
+        );
+      }, this.reserveTimeoutMs);
+      rawConn = await recoveryPool.reserve();
+      if (reserveTimedOut) {
+        await this.terminateClient(
+          recoveryPool,
+          context,
+          "connection.reserve",
+          "recovery_reserve_completed_after_timeout"
+        );
+        throw new WorkItemsBusyError(
+          "Work-item store timed out reserving a recovery connection"
+        );
+      }
+      if (reserveTimer) clearTimeout(reserveTimer);
+
+      const conn = this.instrumentConnection(recoveryPool, rawConn, context);
+      locked = await this.acquireGlobalLock(conn, context);
+      const checkoutRows = await conn.unsafe("SELECT dolt_checkout('main')");
+      assertDoltStatus(checkoutRows, "dolt_checkout");
+      return await fn(conn);
+    } finally {
+      if (reserveTimer) clearTimeout(reserveTimer);
+      if (locked && rawConn) {
+        try {
+          await this.executeQuery(
+            recoveryPool,
+            rawConn,
+            context,
+            `SELECT pg_advisory_unlock(${GLOBAL_LOCK_KEY})`
+          );
+        } catch {
+          await this.terminateClient(
+            recoveryPool,
+            context,
+            "lock.release",
+            "recovery_unlock_failed"
+          );
+          rawConn = undefined;
+        }
+      }
+      if (rawConn && this.sql === recoveryPool && !this.poisoned) {
+        rawConn.release();
+      }
+    }
   }
 
   private async withGlobalLock<T>(
@@ -833,31 +905,58 @@ export class DoltgresWorkItemAdapter
         // DOLT_MERGE implicitly commits. A transport error can therefore arrive
         // after main moved. Reachability is the authority: never replay a
         // create/update/delete whose branch commit is already on main.
-        let reachable: boolean;
-        try {
-          reachable = await this.branchCommitIsOnMain(conn, branchCommit);
-        } catch (proofError) {
-          this.poisoned = true;
-          this.logger.error(
-            {
-              event: "adapter.work_items.merge_outcome_unknown",
-              component: "doltgres-work-items",
-              branch,
-              ...errorFields(proofError),
-            },
-            "work_items merge reachability could not be proven"
+        const resolveOutcome = async (proofConn: WorkItemConnection) => {
+          let reachable: boolean;
+          try {
+            reachable = await this.branchCommitIsOnMain(
+              proofConn,
+              branchCommit
+            );
+          } catch (proofError) {
+            await this.terminateClient(
+              proofConn.pool,
+              proofConn.context,
+              "merge.reachability",
+              "outcome_unknown"
+            );
+            // A successfully recreated pool is clean and may reconcile the
+            // abandoned operation branch on the next request. Only latch when
+            // the adapter still points at the failed pool.
+            this.poisoned = this.sql === proofConn.pool;
+            this.logger.error(
+              {
+                event: "adapter.work_items.merge_outcome_unknown",
+                component: "doltgres-work-items",
+                branch,
+                ...errorFields(proofError),
+              },
+              "work_items merge reachability could not be proven"
+            );
+            throw new DoltMergeOutcomeUnknownError();
+          }
+          if (reachable) {
+            await this.postMergeHousekeeping(proofConn, branch).catch(
+              () => undefined
+            );
+            return result;
+          }
+          const aborted = await this.abortOwnedMergeIfPresent(
+            proofConn,
+            branch
           );
-          throw new DoltMergeOutcomeUnknownError();
+          if (aborted || isMergeConflict(mergeError)) {
+            throw new WorkItemMergeConflictError();
+          }
+          throw mergeError;
+        };
+
+        // Query timeout/terminal handling destroys the old reserved session and
+        // swaps in a recreated pool. Never ask that dead session to prove the
+        // merge outcome: reacquire serialization and prove it on a fresh one.
+        if (conn.pool !== this.sql) {
+          return await this.withFreshRecoveryLock(conn.context, resolveOutcome);
         }
-        if (reachable) {
-          await this.postMergeHousekeeping(conn, branch).catch(() => undefined);
-          return result;
-        }
-        const aborted = await this.abortOwnedMergeIfPresent(conn, branch);
-        if (aborted || isMergeConflict(mergeError)) {
-          throw new WorkItemMergeConflictError();
-        }
-        throw mergeError;
+        return await resolveOutcome(conn);
       }
       // The merge is now durable. Cleanup is repairable housekeeping and must
       // not turn a committed mutation into an API failure that callers replay.

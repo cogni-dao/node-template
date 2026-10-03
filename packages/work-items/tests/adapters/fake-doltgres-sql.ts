@@ -15,10 +15,10 @@ export function makeFakeDoltgresSql(
       return [{ work_items_ready: 1 }];
     }
     if (query.startsWith("SELECT pg_try_advisory_lock")) {
-      return [{ locked: true }];
+      return [{ pg_try_advisory_lock: true }];
     }
     if (query.startsWith("SELECT pg_advisory_unlock")) {
-      return [{ unlocked: true }];
+      return [{ pg_advisory_unlock: true }];
     }
     if (query === "SELECT dolt_checkout('main')") {
       return [{ dolt_checkout: [0, ""] }];
