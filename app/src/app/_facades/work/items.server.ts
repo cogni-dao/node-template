@@ -13,6 +13,7 @@
 
 import type {
   WorkItemsCreateInput as ContractCreateInput,
+  WorkItemCoordinationOutput,
   WorkItemsPatchInput as ContractPatchInput,
   WorkItemDto,
   WorkItemsListInput,
@@ -42,6 +43,20 @@ export class WorkItemNotFoundError extends Error {
   constructor(id: string) {
     super(`Work item not found: ${id}`);
     this.name = "WorkItemNotFoundError";
+  }
+}
+
+export class WorkItemForbiddenError extends Error {
+  constructor(id: string) {
+    super(`Not authorized to mutate work item: ${id}`);
+    this.name = "WorkItemForbiddenError";
+  }
+}
+
+export class WorkItemLeaseConflictError extends Error {
+  constructor(id: string) {
+    super(`Work item is claimed by another principal or lease: ${id}`);
+    this.name = "WorkItemLeaseConflictError";
   }
 }
 
@@ -85,12 +100,27 @@ function toDto(item: WorkItem): WorkItemDto {
   };
 }
 
-function authorTagFromSession(user: {
-  id: string;
-  displayName: string | null;
-}): string {
-  const handle = user.displayName?.trim() || user.id;
-  return `actor:${handle}`;
+function nextActionForWorkItem(item: WorkItem): string | null {
+  if (item.blockedBy) return "blocked";
+  switch (item.status) {
+    case "needs_triage":
+      return "/triage";
+    case "needs_research":
+      return "/research";
+    case "needs_design":
+      return "/design";
+    case "needs_implement":
+      return "/implement";
+    case "needs_closeout":
+      return "/closeout";
+    case "needs_merge":
+      return item.deployVerified ? "/merge" : "/validate-candidate";
+    case "blocked":
+      return "blocked";
+    case "done":
+    case "cancelled":
+      return null;
+  }
 }
 
 type StripUndefined<T> = {
@@ -105,6 +135,28 @@ function dropUndefined<T extends Record<string, unknown>>(
     if (v !== undefined) out[k] = v;
   }
   return out as StripUndefined<T>;
+}
+
+function rethrowBackendError(error: unknown): never {
+  const message = (error as Error)?.message ?? "";
+  const notFound = /^Work item not found: (.+)$/.exec(message);
+  if (notFound?.[1]) throw new WorkItemNotFoundError(notFound[1]);
+  if (
+    (error as Error)?.name === "DoltgresNotConfiguredError" ||
+    (error as Error)?.name === "WorkItemsBusyError" ||
+    (error as Error)?.name === "DoltMergeOutcomeUnknownError"
+  ) {
+    throw new WorkItemsBackendNotReadyError(message);
+  }
+  if ((error as Error)?.name === "WorkItemAuthorizationError") {
+    const id = (error as { id?: string }).id ?? "unknown";
+    throw new WorkItemForbiddenError(id);
+  }
+  if ((error as Error)?.name === "WorkItemLeaseConflictError") {
+    const id = (error as { id?: string }).id ?? "unknown";
+    throw new WorkItemLeaseConflictError(id);
+  }
+  throw error;
 }
 
 export async function listWorkItems(
@@ -188,7 +240,7 @@ export async function getWorkItem(id: string): Promise<WorkItemDto | null> {
 
 export async function createWorkItem(
   input: ContractCreateInput,
-  sessionUser: { id: string; displayName: string | null }
+  sessionUser: { id: string }
 ): Promise<WorkItemDto> {
   const container = getContainer();
   try {
@@ -214,20 +266,17 @@ export async function createWorkItem(
         ...(input.rank !== undefined && { rank: input.rank }),
         ...(input.estimate !== undefined && { estimate: input.estimate }),
       },
-      authorTagFromSession(sessionUser)
+      sessionUser.id
     );
     return toDto(created);
   } catch (e) {
-    if ((e as Error)?.name === "DoltgresNotConfiguredError") {
-      throw new WorkItemsBackendNotReadyError((e as Error).message);
-    }
-    throw e;
+    rethrowBackendError(e);
   }
 }
 
 export async function patchWorkItem(
   input: ContractPatchInput,
-  sessionUser: { id: string; displayName: string | null }
+  sessionUser: { id: string }
 ): Promise<WorkItemDto> {
   const container = getContainer();
   try {
@@ -236,32 +285,107 @@ export async function patchWorkItem(
         id: toWorkItemId(input.id),
         set: dropUndefined(input.set),
       },
-      authorTagFromSession(sessionUser)
+      sessionUser.id
     );
     if (!patched) throw new WorkItemNotFoundError(input.id);
     return toDto(patched);
   } catch (e) {
-    if ((e as Error)?.name === "DoltgresNotConfiguredError") {
-      throw new WorkItemsBackendNotReadyError((e as Error).message);
-    }
-    throw e;
+    rethrowBackendError(e);
   }
 }
 
 export async function deleteWorkItem(
   id: string,
-  sessionUser: { id: string; displayName: string | null }
+  sessionUser: { id: string }
 ): Promise<boolean> {
   const container = getContainer();
   try {
     return await container.doltgresWorkItems.delete(
       toWorkItemId(id),
-      authorTagFromSession(sessionUser)
+      sessionUser.id
     );
   } catch (e) {
-    if ((e as Error)?.name === "DoltgresNotConfiguredError") {
-      throw new WorkItemsBackendNotReadyError((e as Error).message);
-    }
-    throw e;
+    rethrowBackendError(e);
+  }
+}
+
+export async function claimWorkItem(input: {
+  id: string;
+  runId: string;
+  command: string;
+  principalId: string;
+}): Promise<WorkItemDto> {
+  const container = getContainer();
+  try {
+    const item = await container.doltgresWorkItems.claim({
+      id: toWorkItemId(input.id),
+      runId: input.runId,
+      command: input.command,
+      principalId: input.principalId,
+    });
+    return toDto(item);
+  } catch (error) {
+    rethrowBackendError(error);
+  }
+}
+
+export async function releaseWorkItem(input: {
+  id: string;
+  runId: string;
+  principalId: string;
+}): Promise<WorkItemDto> {
+  const container = getContainer();
+  try {
+    const item = await container.doltgresWorkItems.release({
+      id: toWorkItemId(input.id),
+      runId: input.runId,
+      principalId: input.principalId,
+    });
+    return toDto(item);
+  } catch (error) {
+    rethrowBackendError(error);
+  }
+}
+
+export async function heartbeatWorkItem(input: {
+  id: string;
+  runId: string;
+  command?: string;
+  principalId: string;
+}): Promise<WorkItemDto> {
+  const container = getContainer();
+  try {
+    const item = await container.doltgresWorkItems.heartbeat({
+      id: toWorkItemId(input.id),
+      runId: input.runId,
+      ...(input.command !== undefined && { command: input.command }),
+      principalId: input.principalId,
+    });
+    return toDto(item);
+  } catch (error) {
+    rethrowBackendError(error);
+  }
+}
+
+export async function getWorkItemCoordination(
+  id: string
+): Promise<WorkItemCoordinationOutput> {
+  const container = getContainer();
+  try {
+    const current = await container.doltgresWorkItems.get(toWorkItemId(id));
+    if (!current) throw new WorkItemNotFoundError(id);
+    return {
+      nextAction: nextActionForWorkItem(current),
+      session: {
+        status: current.claimedByRun ? "active" : "none",
+        claimedByRun: current.claimedByRun ?? null,
+        claimedByDisplayName: current.claimedByRun ?? null,
+        claimedAt: current.claimedAt ?? null,
+        lastCommand: current.lastCommand ?? null,
+      },
+    };
+  } catch (error) {
+    if (error instanceof WorkItemNotFoundError) throw error;
+    rethrowBackendError(error);
   }
 }

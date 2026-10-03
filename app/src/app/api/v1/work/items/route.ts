@@ -113,7 +113,6 @@ export const POST = wrapRouteHandlerWithLogging(
     try {
       const created = await createWorkItem(parseResult.data, {
         id: sessionUser.id,
-        displayName: sessionUser.displayName,
       });
       ctx.log.info(
         { workItemId: created.id, node: created.node },

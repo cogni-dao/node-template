@@ -50,5 +50,13 @@ describe("GET /.well-known/agent.json", () => {
     expect(body.actions.updateWorkItem.inputSchema.properties).toHaveProperty(
       "set"
     );
+    expect(body.actions.claimWorkItem).toMatchObject({
+      method: "POST",
+      endpoint: "https://node.example/api/v1/work/items/{id}/claims",
+      auth: { type: "bearer" },
+    });
+    expect(body.actions.heartbeatWorkItem.method).toBe("POST");
+    expect(body.actions.releaseWorkItem.method).toBe("DELETE");
+    expect(body.actions.getWorkItemCoordination.method).toBe("GET");
   });
 });

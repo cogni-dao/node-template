@@ -19,8 +19,12 @@
  */
 
 import {
+	workItemsClaimOperation,
+	workItemsCoordinationOperation,
 	workItemsCreateOperation,
+	workItemsHeartbeatOperation,
 	workItemsPatchOperation,
+	workItemsReleaseOperation,
 } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
 import { z } from "zod";
@@ -86,6 +90,9 @@ export async function GET(request: Request) {
 			// index + domain pointers). A SessionStart hook fetches + injects it.
 			cognition: `${origin}/api/v1/cognition`,
 			workItems: `${origin}/api/v1/work/items`,
+			workItemClaims: `${origin}/api/v1/work/items/{id}/claims`,
+			workItemHeartbeat: `${origin}/api/v1/work/items/{id}/heartbeat`,
+			workItemCoordination: `${origin}/api/v1/work/items/{id}/coordination`,
 		},
 		actions: {
 			createWorkItem: {
@@ -101,6 +108,34 @@ export async function GET(request: Request) {
 				auth: { type: "bearer" },
 				inputSchema: z.toJSONSchema(workItemsPatchOperation.input),
 				outputSchema: z.toJSONSchema(workItemsPatchOperation.output),
+			},
+			claimWorkItem: {
+				method: "POST",
+				endpoint: `${origin}/api/v1/work/items/{id}/claims`,
+				auth: { type: "bearer" },
+				inputSchema: z.toJSONSchema(workItemsClaimOperation.input),
+				outputSchema: z.toJSONSchema(workItemsClaimOperation.output),
+			},
+			heartbeatWorkItem: {
+				method: "POST",
+				endpoint: `${origin}/api/v1/work/items/{id}/heartbeat`,
+				auth: { type: "bearer" },
+				inputSchema: z.toJSONSchema(workItemsHeartbeatOperation.input),
+				outputSchema: z.toJSONSchema(workItemsHeartbeatOperation.output),
+			},
+			releaseWorkItem: {
+				method: "DELETE",
+				endpoint: `${origin}/api/v1/work/items/{id}/claims?runId={runId}`,
+				auth: { type: "bearer" },
+				inputSchema: z.toJSONSchema(workItemsReleaseOperation.input),
+				outputSchema: z.toJSONSchema(workItemsReleaseOperation.output),
+			},
+			getWorkItemCoordination: {
+				method: "GET",
+				endpoint: `${origin}/api/v1/work/items/{id}/coordination`,
+				auth: { type: "bearer" },
+				inputSchema: z.toJSONSchema(workItemsCoordinationOperation.input),
+				outputSchema: z.toJSONSchema(workItemsCoordinationOperation.output),
 			},
 		},
 		cognition: {
