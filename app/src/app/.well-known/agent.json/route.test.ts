@@ -42,6 +42,8 @@ describe("GET /.well-known/agent.json", () => {
     expect(
       body.actions.createWorkItem.inputSchema.properties.type.enum
     ).toEqual(["task", "bug", "story", "spike", "subtask"]);
+    expect(body.actions.listWorkItems.method).toBe("GET");
+    expect(body.actions.getWorkItem.method).toBe("GET");
     expect(body.actions.updateWorkItem).toMatchObject({
       method: "PATCH",
       endpoint: "https://node.example/api/v1/work/items/{id}",
@@ -50,6 +52,7 @@ describe("GET /.well-known/agent.json", () => {
     expect(body.actions.updateWorkItem.inputSchema.properties).toHaveProperty(
       "set"
     );
+    expect(body.actions.deleteWorkItem.method).toBe("DELETE");
     expect(body.actions.claimWorkItem).toMatchObject({
       method: "POST",
       endpoint: "https://node.example/api/v1/work/items/{id}/claims",

@@ -13,7 +13,10 @@ describe("GET /openapi.json", () => {
     };
 
     expect(document.paths?.["/work/items"]?.post).toBeDefined();
+    expect(document.paths?.["/work/items"]?.get).toBeDefined();
+    expect(document.paths?.["/work/items/{id}"]?.get).toBeDefined();
     expect(document.paths?.["/work/items/{id}"]?.patch).toBeDefined();
+    expect(document.paths?.["/work/items/{id}"]?.delete).toBeDefined();
     expect(document.paths?.["/work/items/{id}/claims"]?.post).toBeDefined();
     expect(document.paths?.["/work/items/{id}/claims"]?.delete).toBeDefined();
     expect(document.paths?.["/work/items/{id}/heartbeat"]?.post).toBeDefined();

@@ -200,7 +200,7 @@ export async function listWorkItems(
     if (name === "InvalidCursorError") {
       throw new InvalidCursorError((e as Error).message);
     }
-    if (name !== "DoltgresNotConfiguredError") throw e;
+    if (name !== "DoltgresNotConfiguredError") rethrowBackendError(e);
   }
 
   let merged: WorkItem[] = dgItems;
@@ -232,7 +232,9 @@ export async function getWorkItem(id: string): Promise<WorkItemDto | null> {
     const item = await container.doltgresWorkItems.get(toWorkItemId(id));
     if (item) return toDto(item);
   } catch (e) {
-    if ((e as Error)?.name !== "DoltgresNotConfiguredError") throw e;
+    if ((e as Error)?.name !== "DoltgresNotConfiguredError") {
+      rethrowBackendError(e);
+    }
   }
   const mdItem = await container.workItemQuery.get(id as WorkItemId);
   return mdItem ? toDto(mdItem) : null;

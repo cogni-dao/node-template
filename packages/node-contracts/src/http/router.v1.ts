@@ -18,12 +18,15 @@ import { metaLivezOutputSchema } from "../meta.livez.read.v1.contract";
 import { metaReadyzOutputSchema } from "../meta.readyz.read.v1.contract";
 import { metaRoutesOutputSchema } from "../meta.route-manifest.read.v1.contract";
 import { workItemsCreateOperation } from "../work.items.create.v1.contract";
+import { workItemsDeleteOperation } from "../work.items.delete.v1.contract";
+import { workItemsGetOperation } from "../work.items.get.v1.contract";
 import {
   workItemsClaimOperation,
   workItemsCoordinationOperation,
   workItemsHeartbeatOperation,
   workItemsReleaseOperation,
 } from "../work.items.coordination.v1.contract";
+import { workItemsListOperation } from "../work.items.list.v1.contract";
 import { workItemsPatchOperation } from "../work.items.patch.v1.contract";
 
 const c = initContract();
@@ -69,6 +72,25 @@ export const ApiContractV1 = c.router({
       201: workItemsCreateOperation.output,
     },
   },
+  workItemsList: {
+    method: "GET",
+    path: "/work/items",
+    summary: workItemsListOperation.summary,
+    description: workItemsListOperation.description,
+    query: workItemsListOperation.input,
+    responses: {
+      200: workItemsListOperation.output,
+    },
+  },
+  workItemsGet: {
+    method: "GET",
+    path: "/work/items/:id",
+    summary: workItemsGetOperation.summary,
+    description: workItemsGetOperation.description,
+    responses: {
+      200: workItemsGetOperation.output,
+    },
+  },
   workItemsPatch: {
     method: "PATCH",
     path: "/work/items/:id",
@@ -77,6 +99,16 @@ export const ApiContractV1 = c.router({
     body: workItemsPatchOperation.input.omit({ id: true }),
     responses: {
       200: workItemsPatchOperation.output,
+    },
+  },
+  workItemsDelete: {
+    method: "DELETE",
+    path: "/work/items/:id",
+    summary: workItemsDeleteOperation.summary,
+    description: workItemsDeleteOperation.description,
+    body: c.noBody(),
+    responses: {
+      200: workItemsDeleteOperation.output,
     },
   },
   workItemsClaim: {

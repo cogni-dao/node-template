@@ -46,6 +46,19 @@ export const POST = wrapRouteHandlerWithLogging<{
       return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
     }
 
+    if (
+      typeof body === "object" &&
+      body !== null &&
+      "id" in body &&
+      body.id !== undefined &&
+      body.id !== id
+    ) {
+      return NextResponse.json(
+        { error: "body id must match path id" },
+        { status: 400 }
+      );
+    }
+
     const parsed = workItemsHeartbeatOperation.input.safeParse({
       ...(typeof body === "object" && body !== null ? body : {}),
       id,

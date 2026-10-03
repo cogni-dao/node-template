@@ -44,7 +44,15 @@ export const GET = wrapRouteHandlerWithLogging<{
     if (!context) throw new Error("context required for dynamic routes");
     const { id } = await context.params;
 
-    const item = await getWorkItem(id);
+    let item: Awaited<ReturnType<typeof getWorkItem>>;
+    try {
+      item = await getWorkItem(id);
+    } catch (e) {
+      if (e instanceof WorkItemsBackendNotReadyError) {
+        return NextResponse.json({ error: e.message }, { status: 503 });
+      }
+      throw e;
+    }
 
     if (!item) {
       return NextResponse.json(
@@ -62,8 +70,8 @@ export const GET = wrapRouteHandlerWithLogging<{
 /**
  * PATCH /api/v1/work/items/:id — Patch a work item (Doltgres only).
  *
- * v0 trusts the bearer of a valid token (no expectedRevision, no transition
- * state-machine — see PATCH_ALLOWLIST). Author embedded in dolt_log.
+ * The immutable authenticated principal must match the creator stamped when
+ * the row was inserted. The path id remains authoritative over request data.
  */
 export const PATCH = wrapRouteHandlerWithLogging<{
   params: Promise<{ id: string }>;

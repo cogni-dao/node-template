@@ -72,6 +72,9 @@ export const GET = wrapRouteHandlerWithLogging(
       if (e instanceof InvalidCursorError) {
         return NextResponse.json({ error: "invalid cursor" }, { status: 400 });
       }
+      if (e instanceof WorkItemsBackendNotReadyError) {
+        return NextResponse.json({ error: e.message }, { status: 503 });
+      }
       throw e;
     }
 

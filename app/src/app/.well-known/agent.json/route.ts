@@ -22,7 +22,10 @@ import {
 	workItemsClaimOperation,
 	workItemsCoordinationOperation,
 	workItemsCreateOperation,
+	workItemsDeleteOperation,
+	workItemsGetOperation,
 	workItemsHeartbeatOperation,
+	workItemsListOperation,
 	workItemsPatchOperation,
 	workItemsReleaseOperation,
 } from "@cogni/node-contracts";
@@ -95,6 +98,13 @@ export async function GET(request: Request) {
 			workItemCoordination: `${origin}/api/v1/work/items/{id}/coordination`,
 		},
 		actions: {
+			listWorkItems: {
+				method: "GET",
+				endpoint: `${origin}/api/v1/work/items`,
+				auth: { type: "bearer" },
+				inputSchema: z.toJSONSchema(workItemsListOperation.input),
+				outputSchema: z.toJSONSchema(workItemsListOperation.output),
+			},
 			createWorkItem: {
 				method: "POST",
 				endpoint: `${origin}/api/v1/work/items`,
@@ -102,12 +112,26 @@ export async function GET(request: Request) {
 				inputSchema: z.toJSONSchema(workItemsCreateOperation.input),
 				outputSchema: z.toJSONSchema(workItemsCreateOperation.output),
 			},
+			getWorkItem: {
+				method: "GET",
+				endpoint: `${origin}/api/v1/work/items/{id}`,
+				auth: { type: "bearer" },
+				inputSchema: z.toJSONSchema(workItemsGetOperation.input),
+				outputSchema: z.toJSONSchema(workItemsGetOperation.output),
+			},
 			updateWorkItem: {
 				method: "PATCH",
 				endpoint: `${origin}/api/v1/work/items/{id}`,
 				auth: { type: "bearer" },
 				inputSchema: z.toJSONSchema(workItemsPatchOperation.input),
 				outputSchema: z.toJSONSchema(workItemsPatchOperation.output),
+			},
+			deleteWorkItem: {
+				method: "DELETE",
+				endpoint: `${origin}/api/v1/work/items/{id}`,
+				auth: { type: "bearer" },
+				inputSchema: z.toJSONSchema(workItemsDeleteOperation.input),
+				outputSchema: z.toJSONSchema(workItemsDeleteOperation.output),
 			},
 			claimWorkItem: {
 				method: "POST",
