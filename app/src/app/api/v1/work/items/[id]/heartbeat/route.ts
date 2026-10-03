@@ -72,7 +72,11 @@ export const POST = wrapRouteHandlerWithLogging<{
 
     try {
       const result = await heartbeatWorkItem({
-        ...parsed.data,
+        id: parsed.data.id,
+        runId: parsed.data.runId,
+        ...(parsed.data.command !== undefined && {
+          command: parsed.data.command,
+        }),
         principalId: sessionUser.id,
       });
       ctx.log.info(
