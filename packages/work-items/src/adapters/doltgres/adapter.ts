@@ -15,8 +15,8 @@ import type {
   WorkItemType,
   WorkQuery,
   WorkRelation,
-} from "@cogni/work-items";
-import { toWorkItemId } from "@cogni/work-items";
+} from "../../index.js";
+import { toWorkItemId } from "../../index.js";
 import type { ReservedSql, Sql } from "postgres";
 
 import type {
@@ -30,7 +30,7 @@ import {
   decodeCursor,
   encodeCursor,
   type WorkItemCursor,
-} from "./work-items-cursor";
+} from "./cursor.js";
 
 export const OPERATOR_ID_FLOOR = 5000;
 const AUTO_ID_RETRIES = 5;
