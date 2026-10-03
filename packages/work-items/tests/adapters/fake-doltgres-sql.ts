@@ -6,7 +6,7 @@ import type { ReservedSql, Sql } from "postgres";
 type Rows = ReadonlyArray<Record<string, unknown>>;
 
 export function makeFakeDoltgresSql(
-  respond: (query: string) => Rows,
+  respond: (query: string) => Rows | Promise<Rows>,
   queries: string[]
 ): Sql {
   const unsafe = async (query: string): Promise<Rows> => {
@@ -41,7 +41,7 @@ export function makeFakeDoltgresSql(
     if (query.startsWith("SELECT dolt_branch")) {
       return [{ dolt_branch: [0, ""] }];
     }
-    return respond(query);
+    return await respond(query);
   };
 
   const reserved = {

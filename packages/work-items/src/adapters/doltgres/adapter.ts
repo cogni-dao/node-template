@@ -41,6 +41,7 @@ const OP_BRANCH_PREFIX = "work-item-op/";
 const MERGE_RETRIES = 3;
 const LOCK_WAIT_MS = 2_000;
 const LOCK_RETRY_MS = 50;
+const OPERATION_QUEUE_WAIT_MS = 2_000;
 const QUERY_TIMEOUT_MS = 5_000;
 const RESERVE_TIMEOUT_MS = 5_000;
 
@@ -54,6 +55,7 @@ export interface DoltgresWorkItemAdapterOptions {
   readonly logger?: WorkItemLogger;
   readonly lockWaitMs?: number;
   readonly lockRetryMs?: number;
+  readonly queueWaitMs?: number;
   readonly queryTimeoutMs?: number;
   readonly reserveTimeoutMs?: number;
   readonly recreateClient?: () => Sql;
@@ -413,12 +415,13 @@ function isConnectionTerminal(error: unknown): boolean {
 export class DoltgresWorkItemAdapter
   implements WorkItemsDoltgresPort, WorkItemQueryPort
 {
-  private operationActive = false;
+  private operationTail: Promise<void> = Promise.resolve();
   private poisoned = false;
   private readonly logger: WorkItemLogger;
   private readonly idFloor: number;
   private readonly lockWaitMs: number;
   private readonly lockRetryMs: number;
+  private readonly queueWaitMs: number;
   private readonly queryTimeoutMs: number;
   private readonly reserveTimeoutMs: number;
   private readonly recreateClient: (() => Sql) | undefined;
@@ -432,6 +435,7 @@ export class DoltgresWorkItemAdapter
     this.idFloor = options.idFloor ?? 1;
     this.lockWaitMs = options.lockWaitMs ?? LOCK_WAIT_MS;
     this.lockRetryMs = options.lockRetryMs ?? LOCK_RETRY_MS;
+    this.queueWaitMs = options.queueWaitMs ?? OPERATION_QUEUE_WAIT_MS;
     this.queryTimeoutMs = options.queryTimeoutMs ?? QUERY_TIMEOUT_MS;
     this.reserveTimeoutMs = options.reserveTimeoutMs ?? RESERVE_TIMEOUT_MS;
     this.recreateClient = options.recreateClient;
@@ -638,18 +642,70 @@ export class DoltgresWorkItemAdapter
     }
   }
 
+  private async enterOperationQueue(
+    context: OperationContext
+  ): Promise<() => void> {
+    const predecessor = this.operationTail;
+    let releaseTurn: () => void = () => undefined;
+    const turnDone = new Promise<void>((resolve) => {
+      releaseTurn = resolve;
+    });
+    this.operationTail = predecessor.then(() => turnDone);
+
+    const startedAt = Date.now();
+    this.logStage("info", context, "operation.queue", "start");
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        predecessor,
+        new Promise<never>((_resolve, reject) => {
+          timeoutId = setTimeout(
+            () =>
+              reject(
+                new WorkItemsBusyError(
+                  "Work-item store queue wait timed out; retry shortly"
+                )
+              ),
+            this.queueWaitMs
+          );
+        }),
+      ]);
+    } catch (error) {
+      // Keep the FIFO chain live even though this caller abandoned its turn.
+      // The resolved ticket is skipped once its predecessor eventually exits.
+      releaseTurn();
+      this.logStage("warn", context, "operation.queue", "error", {
+        durationMs: Date.now() - startedAt,
+        reason: "wait_timeout",
+      });
+      throw error;
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
+    }
+
+    this.logStage("info", context, "operation.queue", "complete", {
+      durationMs: Date.now() - startedAt,
+    });
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      releaseTurn();
+    };
+  }
+
   private async withGlobalLock<T>(
     operation: string,
     fn: (conn: WorkItemConnection) => Promise<T>
   ): Promise<T> {
+    const context = { operationId: randomUUID(), operation };
+    const leaveQueue = await this.enterOperationQueue(context);
     if (this.poisoned) {
+      leaveQueue();
       throw new WorkItemsBusyError(
         "Work-item store requires restart reconciliation"
       );
     }
-    if (this.operationActive) throw new WorkItemsBusyError();
-    this.operationActive = true;
-    const context = { operationId: randomUUID(), operation };
     const operationPool = this.sql;
     const reserveStartedAt = Date.now();
     let rawConn: ReservedSql | undefined;
@@ -737,7 +793,7 @@ export class DoltgresWorkItemAdapter
       if (rawConn && this.sql === operationPool && !this.poisoned) {
         rawConn.release();
       }
-      this.operationActive = false;
+      leaveQueue();
     }
   }
 
