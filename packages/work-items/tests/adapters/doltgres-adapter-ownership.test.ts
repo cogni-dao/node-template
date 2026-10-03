@@ -21,6 +21,9 @@ const row = {
   revision: 1,
   deploy_verified: false,
   created_by_principal_id: "principal-1",
+  claimed_by_run: "run-1",
+  claim_owner_principal_id: "principal-1",
+  claim_expires_at: "2099-10-02T00:05:00.000Z",
   created_at: "2026-10-02T00:00:00.000Z",
   updated_at: "2026-10-02T00:00:00.000Z",
 };
@@ -93,5 +96,26 @@ describe("DoltgresWorkItemAdapter ownership and leases", () => {
     expect(heartbeat).toContain(
       "claim_owner_principal_id = 'principal-1' AND claimed_by_run = 'run-1'"
     );
+  });
+
+  it("rejects a stale heartbeat before creating an operation branch", async () => {
+    const { adapter, queries } = adapterWithQueries();
+
+    await expect(
+      adapter.heartbeat({
+        id: toWorkItemId(row.id),
+        runId: "stale-run",
+        principalId: "principal-1",
+      })
+    ).rejects.toMatchObject({ name: "WorkItemLeaseConflictError" });
+
+    expect(queries.some((query) => query.includes("dolt_checkout('-b'"))).toBe(
+      false
+    );
+    expect(
+      queries.some((query) =>
+        query.startsWith("UPDATE work_items SET claim_expires_at")
+      )
+    ).toBe(false);
   });
 });

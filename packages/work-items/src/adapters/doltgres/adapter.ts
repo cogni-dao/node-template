@@ -73,6 +73,11 @@ interface WorkItemConnection {
   unsafe(query: string): Promise<ReadonlyArray<Record<string, unknown>>>;
 }
 
+interface MutationOptions<T> {
+  readonly preflight?: (conn: WorkItemConnection) => Promise<void>;
+  readonly shouldCommit?: (result: T) => boolean;
+}
+
 const noopLogger: WorkItemLogger = {
   info: () => undefined,
   warn: () => undefined,
@@ -899,20 +904,21 @@ export class DoltgresWorkItemAdapter
     message: string,
     principalId: string,
     fn: (conn: WorkItemConnection) => Promise<T>,
-    shouldCommit: (result: T) => boolean = () => true
+    options: MutationOptions<T> = {}
   ): Promise<T> {
     let lastConflict: unknown;
     for (let attempt = 0; attempt < MERGE_RETRIES; attempt += 1) {
       try {
-        return await this.withGlobalLock(message, (conn) =>
-          this.mutateOnBranch(
+        return await this.withGlobalLock(message, async (conn) => {
+          await options.preflight?.(conn);
+          return this.mutateOnBranch(
             conn,
             message,
             requirePrincipal(principalId),
             fn,
-            shouldCommit
-          )
-        );
+            options.shouldCommit ?? (() => true)
+          );
+        });
       } catch (error) {
         if (!(error instanceof WorkItemMergeConflictError)) throw error;
         lastConflict = error;
@@ -1293,6 +1299,16 @@ export class DoltgresWorkItemAdapter
         const row = rows[0] as Record<string, unknown> | undefined;
         if (!row) await this.throwMissingOrUnauthorized(conn, input.id);
         return rowToWorkItem(row as Record<string, unknown>);
+      },
+      {
+        preflight: async (conn) => {
+          const current = await this.getWith(conn, input.id);
+          if (!current)
+            throw new Error(`Work item not found: ${input.id as string}`);
+          if (String(current.created_by_principal_id) !== principal) {
+            throw new WorkItemAuthorizationError(input.id as string);
+          }
+        },
       }
     );
   }
@@ -1311,7 +1327,7 @@ export class DoltgresWorkItemAdapter
         if (current) throw new WorkItemAuthorizationError(id as string);
         return false;
       },
-      Boolean
+      { shouldCommit: Boolean }
     );
   }
 
@@ -1342,6 +1358,19 @@ export class DoltgresWorkItemAdapter
         const row = rows[0] as Record<string, unknown> | undefined;
         if (!row) await this.throwLeaseConflictOrMissing(conn, input.id);
         return rowToWorkItem(row as Record<string, unknown>);
+      },
+      {
+        preflight: async (conn) => {
+          const current = await this.getWith(conn, input.id);
+          if (!current)
+            throw new Error(`Work item not found: ${input.id as string}`);
+          const sameLease =
+            String(current.claim_owner_principal_id ?? "") === principal &&
+            String(current.claimed_by_run ?? "") === input.runId;
+          if (current.claim_active !== false && !sameLease) {
+            throw new WorkItemLeaseConflictError(input.id as string);
+          }
+        },
       }
     );
   }
@@ -1367,6 +1396,20 @@ export class DoltgresWorkItemAdapter
         const row = rows[0] as Record<string, unknown> | undefined;
         if (!row) await this.throwLeaseConflictOrMissing(conn, input.id);
         return rowToWorkItem(row as Record<string, unknown>);
+      },
+      {
+        preflight: async (conn) => {
+          const current = await this.getWith(conn, input.id);
+          if (!current)
+            throw new Error(`Work item not found: ${input.id as string}`);
+          const leaseMatches =
+            current.claim_active !== false &&
+            String(current.claim_owner_principal_id ?? "") === principal &&
+            String(current.claimed_by_run ?? "") === input.runId;
+          if (!leaseMatches) {
+            throw new WorkItemLeaseConflictError(input.id as string);
+          }
+        },
       }
     );
   }
@@ -1387,6 +1430,19 @@ export class DoltgresWorkItemAdapter
         const row = rows[0] as Record<string, unknown> | undefined;
         if (!row) await this.throwLeaseConflictOrMissing(conn, input.id);
         return rowToWorkItem(row as Record<string, unknown>);
+      },
+      {
+        preflight: async (conn) => {
+          const current = await this.getWith(conn, input.id);
+          if (!current)
+            throw new Error(`Work item not found: ${input.id as string}`);
+          const leaseMatches =
+            String(current.claim_owner_principal_id ?? "") === principal &&
+            String(current.claimed_by_run ?? "") === input.runId;
+          if (!leaseMatches) {
+            throw new WorkItemLeaseConflictError(input.id as string);
+          }
+        },
       }
     );
   }
