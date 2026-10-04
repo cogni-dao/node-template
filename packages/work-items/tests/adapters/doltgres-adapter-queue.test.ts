@@ -4,7 +4,7 @@
 /** Proves in-process Dolt operations wait FIFO instead of failing on overlap. */
 
 import { toWorkItemId } from "@cogni/work-items";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   DoltgresWorkItemAdapter,
@@ -34,7 +34,7 @@ const row = {
   updated_at: "2026-10-03T00:00:00.000Z",
 };
 
-function makeBlockedHeartbeatAdapter(queueWaitMs: number) {
+function makeBlockedHeartbeatAdapter(queueWaitMs?: number) {
   const queries: string[] = [];
   let releaseHeartbeat: (rows: ReadonlyArray<Record<string, unknown>>) => void =
     () => undefined;
@@ -53,7 +53,10 @@ function makeBlockedHeartbeatAdapter(queueWaitMs: number) {
     return [];
   }, queries);
   return {
-    adapter: new DoltgresWorkItemAdapter(sql, { queueWaitMs }),
+    adapter: new DoltgresWorkItemAdapter(
+      sql,
+      queueWaitMs === undefined ? {} : { queueWaitMs }
+    ),
     queries,
     releaseHeartbeat: () => releaseHeartbeat([{ ...row, claim_active: true }]),
   };
@@ -175,6 +178,46 @@ describe("DoltgresWorkItemAdapter operation queue", () => {
         query.startsWith("UPDATE work_items SET claim_expires_at = NOW()")
       )
     ).toBe(false);
+  });
+
+  it("keeps the default queue wait bounded at 30 seconds", async () => {
+    const { adapter, queries, releaseHeartbeat } =
+      makeBlockedHeartbeatAdapter();
+    const heartbeat = adapter.heartbeat({
+      id: toWorkItemId(row.id),
+      runId: "run-1",
+      principalId: "principal-1",
+    });
+    await waitForHeartbeatDml(queries);
+
+    vi.useFakeTimers();
+    try {
+      const queryCountBeforeQueuedRead = queries.length;
+      let readOutcome: "pending" | "resolved" | "rejected" = "pending";
+      const queuedRead = adapter.get(toWorkItemId(row.id));
+      void queuedRead.then(
+        () => {
+          readOutcome = "resolved";
+        },
+        () => {
+          readOutcome = "rejected";
+        }
+      );
+
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(readOutcome).toBe("pending");
+      expect(queries).toHaveLength(queryCountBeforeQueuedRead);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(queuedRead).rejects.toMatchObject({
+        name: "WorkItemsBusyError",
+        message: "Work-item store queue wait timed out; retry shortly",
+      });
+    } finally {
+      releaseHeartbeat();
+      await heartbeat;
+      vi.useRealTimers();
+    }
   });
 
   it("returns bounded busy and skips an abandoned queue ticket", async () => {
