@@ -16,23 +16,29 @@ type Rows = ReadonlyArray<Record<string, unknown>>;
 
 interface ReconciliationState {
   branch?: string;
-  readonly branchCommit: string;
+  readonly branchCommit?: string;
   readonly mergeBase: string;
+  readonly listError?: Error;
   readonly proofError?: Error;
   readonly queries: string[];
 }
 
 function makeReconciliationHarness({
   mergeBase,
+  listError,
+  omitBranchCommit = false,
   proofError,
 }: {
   readonly mergeBase: string;
+  readonly listError?: Error;
+  readonly omitBranchCommit?: boolean;
   readonly proofError?: Error;
 }) {
   const state: ReconciliationState = {
     branch: "work-item-op/restart-evidence",
-    branchCommit: "operation-commit",
+    branchCommit: omitBranchCommit ? undefined : "operation-commit",
     mergeBase,
+    listError,
     proofError,
     queries: [],
   };
@@ -54,6 +60,7 @@ function makeReconciliationHarness({
     if (query.includes("FROM dolt.merge_status")) return [];
     if (query === "SELECT table_name FROM dolt.status") return [];
     if (query === "SELECT name, hash FROM dolt.branches") {
+      if (state.listError) throw state.listError;
       return state.branch
         ? [{ name: state.branch, hash: state.branchCommit }]
         : [];
@@ -131,6 +138,47 @@ describe("DoltgresWorkItemAdapter restart reconciliation", () => {
     ).rejects.toBeInstanceOf(WorkItemsBusyError);
 
     expect(state.branch).toBe("work-item-op/restart-evidence");
+    expect(
+      state.queries.some((query) => query.startsWith("SELECT dolt_branch('-D'"))
+    ).toBe(false);
+    expect(
+      state.queries.some((query) => query.includes("FROM work_items"))
+    ).toBe(false);
+  });
+
+  it("preserves evidence and fails busy when the branch lookup errors", async () => {
+    const { adapter, state } = makeReconciliationHarness({
+      mergeBase: "operation-commit",
+      listError: new Error("branch lookup failed"),
+    });
+
+    await expect(
+      adapter.get(toWorkItemId("task.missing"))
+    ).rejects.toBeInstanceOf(WorkItemsBusyError);
+
+    expect(state.branch).toBe("work-item-op/restart-evidence");
+    expect(
+      state.queries.some((query) => query.startsWith("SELECT dolt_branch('-D'"))
+    ).toBe(false);
+    expect(
+      state.queries.some((query) => query.includes("FROM work_items"))
+    ).toBe(false);
+  });
+
+  it("preserves evidence and fails busy when the branch tip is missing", async () => {
+    const { adapter, state } = makeReconciliationHarness({
+      mergeBase: "operation-commit",
+      omitBranchCommit: true,
+    });
+
+    await expect(
+      adapter.get(toWorkItemId("task.missing"))
+    ).rejects.toBeInstanceOf(WorkItemsBusyError);
+
+    expect(state.branch).toBe("work-item-op/restart-evidence");
+    expect(
+      state.queries.some((query) => query.startsWith("SELECT dolt_merge_base"))
+    ).toBe(false);
     expect(
       state.queries.some((query) => query.startsWith("SELECT dolt_branch('-D'"))
     ).toBe(false);
