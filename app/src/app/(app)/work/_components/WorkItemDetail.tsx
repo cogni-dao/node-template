@@ -95,7 +95,7 @@ export function WorkItemDetail({
           <SheetHeader className="px-6 py-16 text-center sm:text-center">
             <SheetTitle>Unable to load work item</SheetTitle>
             <SheetDescription className="text-xs leading-relaxed">
-              The work-item service could not load{" "}
+              The work-item route could not load{" "}
               <code className="font-mono">{itemId ?? "the selected item"}</code>
               . Try again shortly.
             </SheetDescription>

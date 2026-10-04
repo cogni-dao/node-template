@@ -96,8 +96,10 @@ function makeTimeoutHarness({
         return [{ dolt_checkout: [0, ""] }];
       }
       if (query === "SELECT table_name FROM dolt.status") return [];
-      if (query === "SELECT name FROM dolt.branches") {
-        return state.branch ? [{ name: state.branch }] : [];
+      if (query === "SELECT name, hash FROM dolt.branches") {
+        return state.branch
+          ? [{ name: state.branch, hash: "test-commit" }]
+          : [];
       }
       if (query.includes("FROM dolt.merge_status")) return [];
       if (query === "SELECT dolt_add('work_items')") {

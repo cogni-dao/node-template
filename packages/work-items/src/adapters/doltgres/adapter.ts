@@ -378,7 +378,7 @@ function queryStage(query: string): string {
   if (query.startsWith("SELECT dolt_branch")) return "branch.delete";
   if (query.includes("FROM dolt.merge_status")) return "merge.status";
   if (query === "SELECT table_name FROM dolt.status") return "main.status";
-  if (query === "SELECT name FROM dolt.branches") return "branches.list";
+  if (query === "SELECT name, hash FROM dolt.branches") return "branches.list";
   if (query.startsWith("INSERT INTO work_items")) return "dml.create";
   if (query.startsWith("UPDATE work_items")) return "dml.update";
   if (query.startsWith("DELETE FROM work_items")) return "dml.delete";
@@ -832,12 +832,34 @@ export class DoltgresWorkItemAdapter
     await this.abortOwnedMergeIfPresent(conn);
     await this.assertMainClean(conn);
 
-    const branchRows = (await conn.unsafe(
-      "SELECT name FROM dolt.branches"
-    )) as ReadonlyArray<Record<string, unknown>>;
+    let branchRows: ReadonlyArray<Record<string, unknown>>;
+    try {
+      branchRows = await conn.unsafe("SELECT name, hash FROM dolt.branches");
+    } catch {
+      throw new WorkItemsBusyError(
+        "Work-item branch reconciliation could not list evidence; retry shortly"
+      );
+    }
     for (const row of branchRows) {
       const branch = String(row.name ?? "");
       if (!branch.startsWith(OP_BRANCH_PREFIX)) continue;
+
+      let branchCommit: string;
+      let reachable: boolean;
+      try {
+        branchCommit = doltScalar([row], "hash");
+        reachable = await this.branchCommitIsOnMain(conn, branchCommit);
+      } catch {
+        throw new WorkItemsBusyError(
+          `Work-item branch ${branch} requires reconciliation proof; retry shortly`
+        );
+      }
+      if (!reachable) {
+        throw new WorkItemsBusyError(
+          `Work-item branch ${branch} is not reachable from main; preserving evidence`
+        );
+      }
+
       const deleteRows = await conn.unsafe(
         `SELECT dolt_branch('-D', ${escapeValue(branch)})`
       );
