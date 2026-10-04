@@ -44,9 +44,7 @@ function makeBlockedHeartbeatAdapter(queueWaitMs: number) {
     }
   );
   const sql = makeFakeDoltgresSql((query) => {
-    if (
-      query.startsWith("UPDATE work_items SET claim_expires_at = NOW()")
-    ) {
+    if (query.startsWith("UPDATE work_items SET claim_expires_at = NOW()")) {
       return heartbeatGate;
     }
     if (query.includes("FROM work_items")) {
@@ -75,6 +73,53 @@ async function waitForHeartbeatDml(queries: string[]): Promise<void> {
   throw new Error("heartbeat did not reach its DML gate");
 }
 
+function makeBlockedStaleHeartbeatAdapter() {
+  const queries: string[] = [];
+  let releasePreflight: (rows: ReadonlyArray<Record<string, unknown>>) => void =
+    () => undefined;
+  const preflightGate = new Promise<ReadonlyArray<Record<string, unknown>>>(
+    (resolve) => {
+      releasePreflight = resolve;
+    }
+  );
+  let blockFirstExactRead = true;
+  const sql = makeFakeDoltgresSql((query) => {
+    if (
+      blockFirstExactRead &&
+      query.includes("FROM work_items") &&
+      query.includes("WHERE id = 'task.0001'")
+    ) {
+      blockFirstExactRead = false;
+      return preflightGate;
+    }
+    if (query.includes("FROM work_items")) {
+      return [{ ...row, claim_active: true }];
+    }
+    return [];
+  }, queries);
+  return {
+    adapter: new DoltgresWorkItemAdapter(sql, { queueWaitMs: 1_000 }),
+    queries,
+    releasePreflight: () => releasePreflight([{ ...row, claim_active: true }]),
+  };
+}
+
+async function waitForExactRead(queries: string[]): Promise<void> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (
+      queries.some(
+        (query) =>
+          query.includes("FROM work_items") &&
+          query.includes("WHERE id = 'task.0001'")
+      )
+    ) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+  throw new Error("heartbeat did not reach its stale-lease preflight");
+}
+
 describe("DoltgresWorkItemAdapter operation queue", () => {
   it("queues a concurrent read behind heartbeat and serves both", async () => {
     const { adapter, queries, releaseHeartbeat } =
@@ -91,7 +136,8 @@ describe("DoltgresWorkItemAdapter operation queue", () => {
     await new Promise((resolve) => setTimeout(resolve, 5));
     expect(
       queries.some(
-        (query) => query.includes("FROM work_items") && query.includes("ORDER BY")
+        (query) =>
+          query.includes("FROM work_items") && query.includes("ORDER BY")
       )
     ).toBe(false);
 
@@ -102,8 +148,38 @@ describe("DoltgresWorkItemAdapter operation queue", () => {
     });
   });
 
+  it("serves 20/20 reads queued behind a cheap stale-heartbeat preflight", async () => {
+    const { adapter, queries, releasePreflight } =
+      makeBlockedStaleHeartbeatAdapter();
+    const staleHeartbeat = adapter.heartbeat({
+      id: toWorkItemId(row.id),
+      runId: "stale-run",
+      principalId: "principal-1",
+    });
+    await waitForExactRead(queries);
+
+    const reads = Array.from({ length: 20 }, () => adapter.list());
+    releasePreflight();
+
+    await expect(staleHeartbeat).rejects.toMatchObject({
+      name: "WorkItemLeaseConflictError",
+    });
+    const results = await Promise.all(reads);
+    expect(results).toHaveLength(20);
+    expect(results.every((result) => result.items.length === 1)).toBe(true);
+    expect(queries.some((query) => query.includes("dolt_checkout('-b'"))).toBe(
+      false
+    );
+    expect(
+      queries.some((query) =>
+        query.startsWith("UPDATE work_items SET claim_expires_at = NOW()")
+      )
+    ).toBe(false);
+  });
+
   it("returns bounded busy and skips an abandoned queue ticket", async () => {
-    const { adapter, queries, releaseHeartbeat } = makeBlockedHeartbeatAdapter(5);
+    const { adapter, queries, releaseHeartbeat } =
+      makeBlockedHeartbeatAdapter(5);
     const heartbeat = adapter.heartbeat({
       id: toWorkItemId(row.id),
       runId: "run-1",
@@ -111,12 +187,12 @@ describe("DoltgresWorkItemAdapter operation queue", () => {
     });
     await waitForHeartbeatDml(queries);
 
-    await expect(adapter.get(toWorkItemId(row.id))).rejects.toBeInstanceOf(
-      WorkItemsBusyError
-    );
+    const expiredWaiter = adapter.get(toWorkItemId(row.id));
+    await expect(expiredWaiter).rejects.toBeInstanceOf(WorkItemsBusyError);
+    const laterRead = adapter.get(toWorkItemId(row.id));
     releaseHeartbeat();
     await heartbeat;
-    await expect(adapter.get(toWorkItemId(row.id))).resolves.toMatchObject({
+    await expect(laterRead).resolves.toMatchObject({
       id: "task.0001",
     });
   });

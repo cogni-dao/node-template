@@ -118,4 +118,65 @@ describe("DoltgresWorkItemAdapter ownership and leases", () => {
       )
     ).toBe(false);
   });
+
+  it("rejects an unauthorized patch before branch creation and DML", async () => {
+    const { adapter, queries } = adapterWithQueries();
+
+    await expect(
+      adapter.patch(
+        { id: toWorkItemId(row.id), set: { title: "not yours" } },
+        "principal-2"
+      )
+    ).rejects.toMatchObject({ name: "WorkItemAuthorizationError" });
+
+    expect(queries.some((query) => query.includes("dolt_checkout('-b'"))).toBe(
+      false
+    );
+    expect(
+      queries.some((query) => query.startsWith("UPDATE work_items SET title"))
+    ).toBe(false);
+  });
+
+  it("rejects a conflicting claim before branch creation and DML", async () => {
+    const { adapter, queries } = adapterWithQueries();
+
+    await expect(
+      adapter.claim({
+        id: toWorkItemId(row.id),
+        runId: "stale-run",
+        command: "/implement",
+        principalId: "principal-1",
+      })
+    ).rejects.toMatchObject({ name: "WorkItemLeaseConflictError" });
+
+    expect(queries.some((query) => query.includes("dolt_checkout('-b'"))).toBe(
+      false
+    );
+    expect(
+      queries.some((query) =>
+        query.startsWith("UPDATE work_items SET claimed_by_run")
+      )
+    ).toBe(false);
+  });
+
+  it("rejects a stale release before branch creation and DML", async () => {
+    const { adapter, queries } = adapterWithQueries();
+
+    await expect(
+      adapter.release({
+        id: toWorkItemId(row.id),
+        runId: "stale-run",
+        principalId: "principal-1",
+      })
+    ).rejects.toMatchObject({ name: "WorkItemLeaseConflictError" });
+
+    expect(queries.some((query) => query.includes("dolt_checkout('-b'"))).toBe(
+      false
+    );
+    expect(
+      queries.some((query) =>
+        query.startsWith("UPDATE work_items SET claimed_by_run = NULL")
+      )
+    ).toBe(false);
+  });
 });

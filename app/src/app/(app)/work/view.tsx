@@ -53,6 +53,7 @@ import { WorkItemDetail } from "./_components/WorkItemDetail";
 import {
   closeWorkItemPermalink,
   openWorkItemPermalink,
+  workViewHref,
 } from "./_lib/workItemNavigation";
 
 const ACTIVE_STATUSES = [
@@ -127,25 +128,23 @@ export function WorkDashboardView({
       newSorting: SortingState,
       newQuery: string
     ) => {
-      const params = new URLSearchParams();
-      for (const f of newFilters) {
-        const key = f.id === "projectId" ? "project" : f.id;
-        if (Array.isArray(f.value) && f.value.length > 0) {
-          params.set(key, (f.value as string[]).join(","));
-        }
-      }
-      if (newSorting.length > 0 && newSorting[0]) {
-        const s = newSorting[0];
-        params.set("sort", s.desc ? `-${s.id}` : s.id);
-      }
-      if (newQuery) params.set("q", newQuery);
-      const qs = params.toString();
-      const basePath = selectedItemId
-        ? `/work/${encodeURIComponent(selectedItemId)}`
-        : "/work";
-      router.replace(qs ? `${basePath}?${qs}` : basePath, { scroll: false });
+      const valuesFor = (id: string): readonly string[] => {
+        const value = newFilters.find((filter) => filter.id === id)?.value;
+        return Array.isArray(value) ? (value as string[]) : [];
+      };
+      const sort = newSorting[0];
+      router.replace(
+        workViewHref(selectedItemId, searchParams, {
+          type: valuesFor("type"),
+          status: valuesFor("status"),
+          project: valuesFor("projectId"),
+          sort: sort ? `${sort.desc ? "-" : ""}${sort.id}` : null,
+          query: newQuery,
+        }),
+        { scroll: false }
+      );
     },
-    [router, selectedItemId]
+    [router, searchParams, selectedItemId]
   );
 
   const openItem = useCallback(

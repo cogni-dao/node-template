@@ -11,10 +11,39 @@
  * @internal
  */
 
-import type {
-  WorkItemDto,
-  WorkItemsListOutput,
-} from "@cogni/node-contracts";
+import type { WorkItemDto, WorkItemsListOutput } from "@cogni/node-contracts";
+
+export class WorkItemFetchError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "WorkItemFetchError";
+    this.status = status;
+  }
+}
+
+export function isWorkItemNotFoundError(
+  error: unknown
+): error is WorkItemFetchError {
+  return error instanceof WorkItemFetchError && error.status === 404;
+}
+
+async function responseErrorMessage(
+  response: Response,
+  fallback: string
+): Promise<string> {
+  const body: unknown = await response.json().catch(() => undefined);
+  if (
+    typeof body === "object" &&
+    body !== null &&
+    "error" in body &&
+    typeof body.error === "string"
+  ) {
+    return body.error;
+  }
+  return fallback;
+}
 
 export async function fetchWorkItems(): Promise<WorkItemsListOutput> {
   const response = await fetch("/api/v1/work/items", {
@@ -44,10 +73,11 @@ export async function fetchWorkItem(id: string): Promise<WorkItemDto> {
     cache: "no-store",
   });
   if (!response.ok) {
-    const error = await response.json().catch(() => ({
-      error: "Failed to fetch work item",
-    }));
-    throw new Error(error.error || `HTTP ${response.status}`);
+    const message = await responseErrorMessage(
+      response,
+      `Failed to fetch work item (HTTP ${response.status})`
+    );
+    throw new WorkItemFetchError(message, response.status);
   }
   return response.json() as Promise<WorkItemDto>;
 }

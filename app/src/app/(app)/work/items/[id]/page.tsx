@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
-/** Authenticated human permalink for one node-local work item. */
+/** Authenticated canonical human permalink for one node-local work item. */
 
 import { redirect } from "next/navigation";
 
 import { getServerSessionUser } from "@/lib/auth/server";
-import { WorkDashboardView } from "../view";
+import { WorkDashboardView } from "../../view";
 
 export default async function WorkItemPage({
   params,

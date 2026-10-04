@@ -12,7 +12,7 @@ vi.mock("@/lib/auth/server", () => ({ getServerSessionUser: auth }));
 vi.mock("next/navigation", () => ({ redirect }));
 vi.mock("@/app/(app)/work/view", () => ({ WorkDashboardView: () => null }));
 
-import WorkItemPage from "@/app/(app)/work/[id]/page";
+import WorkItemPage from "@/app/(app)/work/items/[id]/page";
 
 describe("WorkItemPage", () => {
   beforeEach(() => {
@@ -29,6 +29,16 @@ describe("WorkItemPage", () => {
 
     expect(element.props.selectedItemId).toBe("story.5000");
     expect(redirect).not.toHaveBeenCalled();
+  });
+
+  it("passes the logical route id through without decoding it again", async () => {
+    auth.mockResolvedValue({ id: "user-1" });
+
+    const element = await WorkItemPage({
+      params: Promise.resolve({ id: "bug.%2F" }),
+    });
+
+    expect(element.props.selectedItemId).toBe("bug.%2F");
   });
 
   it("keeps direct permalinks behind the authenticated app boundary", async () => {
