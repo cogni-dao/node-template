@@ -6,7 +6,7 @@ import type { ReservedSql, Sql } from "postgres";
 type Rows = ReadonlyArray<Record<string, unknown>>;
 
 export function makeFakeDoltgresSql(
-  respond: (query: string) => Rows,
+  respond: (query: string) => Rows | Promise<Rows>,
   queries: string[]
 ): Sql {
   const unsafe = async (query: string): Promise<Rows> => {
@@ -15,10 +15,10 @@ export function makeFakeDoltgresSql(
       return [{ work_items_ready: 1 }];
     }
     if (query.startsWith("SELECT pg_try_advisory_lock")) {
-      return [{ locked: true }];
+      return [{ pg_try_advisory_lock: true }];
     }
     if (query.startsWith("SELECT pg_advisory_unlock")) {
-      return [{ unlocked: true }];
+      return [{ pg_advisory_unlock: true }];
     }
     if (query === "SELECT dolt_checkout('main')") {
       return [{ dolt_checkout: [0, ""] }];
@@ -27,7 +27,7 @@ export function makeFakeDoltgresSql(
       return [{ dolt_checkout: [0, ""] }];
     }
     if (query === "SELECT table_name FROM dolt.status") return [];
-    if (query === "SELECT name FROM dolt.branches") return [];
+    if (query === "SELECT name, hash FROM dolt.branches") return [];
     if (query.includes("FROM dolt.merge_status")) return [];
     if (query === "SELECT dolt_add('work_items')") {
       return [{ dolt_add: [0, ""] }];
@@ -41,7 +41,7 @@ export function makeFakeDoltgresSql(
     if (query.startsWith("SELECT dolt_branch")) {
       return [{ dolt_branch: [0, ""] }];
     }
-    return respond(query);
+    return await respond(query);
   };
 
   const reserved = {

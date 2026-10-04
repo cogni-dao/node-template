@@ -40,12 +40,33 @@ function makeFakeSql(): { sql: Sql; queries: string[] } {
           spec_refs: [],
           revision: 0,
           deploy_verified: true,
+          created_by_principal_id: "test",
           created_at: "2026-05-01",
           updated_at: "2026-05-01",
         },
       ];
     }
-    if (q.includes("FROM work_items")) return [];
+    if (q.includes("FROM work_items")) {
+      return [
+        {
+          id: "bug.5005",
+          type: "bug",
+          title: "t",
+          status: "needs_implement",
+          node: "operator",
+          actor: "either",
+          assignees: [],
+          external_refs: [],
+          labels: [],
+          spec_refs: [],
+          revision: 0,
+          deploy_verified: false,
+          created_by_principal_id: "test",
+          created_at: "2026-05-01",
+          updated_at: "2026-05-01",
+        },
+      ];
+    }
     return [];
   };
   return { sql: makeFakeDoltgresSql(respond, queries), queries };
