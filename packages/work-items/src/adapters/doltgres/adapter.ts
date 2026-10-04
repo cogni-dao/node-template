@@ -41,6 +41,7 @@ const OP_BRANCH_PREFIX = "work-item-op/";
 const MERGE_RETRIES = 3;
 const LOCK_WAIT_MS = 2_000;
 const LOCK_RETRY_MS = 50;
+const OPERATION_QUEUE_WAIT_MS = 30_000;
 const QUERY_TIMEOUT_MS = 5_000;
 const RESERVE_TIMEOUT_MS = 5_000;
 
@@ -54,6 +55,7 @@ export interface DoltgresWorkItemAdapterOptions {
   readonly logger?: WorkItemLogger;
   readonly lockWaitMs?: number;
   readonly lockRetryMs?: number;
+  readonly queueWaitMs?: number;
   readonly queryTimeoutMs?: number;
   readonly reserveTimeoutMs?: number;
   readonly recreateClient?: () => Sql;
@@ -67,7 +69,13 @@ interface OperationContext {
 
 interface WorkItemConnection {
   readonly context: OperationContext;
+  readonly pool: Sql;
   unsafe(query: string): Promise<ReadonlyArray<Record<string, unknown>>>;
+}
+
+interface MutationOptions<T> {
+  readonly preflight?: (conn: WorkItemConnection) => Promise<void>;
+  readonly shouldCommit?: (result: T) => boolean;
 }
 
 const noopLogger: WorkItemLogger = {
@@ -370,7 +378,7 @@ function queryStage(query: string): string {
   if (query.startsWith("SELECT dolt_branch")) return "branch.delete";
   if (query.includes("FROM dolt.merge_status")) return "merge.status";
   if (query === "SELECT table_name FROM dolt.status") return "main.status";
-  if (query === "SELECT name FROM dolt.branches") return "branches.list";
+  if (query === "SELECT name, hash FROM dolt.branches") return "branches.list";
   if (query.startsWith("INSERT INTO work_items")) return "dml.create";
   if (query.startsWith("UPDATE work_items")) return "dml.update";
   if (query.startsWith("DELETE FROM work_items")) return "dml.delete";
@@ -412,12 +420,13 @@ function isConnectionTerminal(error: unknown): boolean {
 export class DoltgresWorkItemAdapter
   implements WorkItemsDoltgresPort, WorkItemQueryPort
 {
-  private operationActive = false;
+  private operationTail: Promise<void> = Promise.resolve();
   private poisoned = false;
   private readonly logger: WorkItemLogger;
   private readonly idFloor: number;
   private readonly lockWaitMs: number;
   private readonly lockRetryMs: number;
+  private readonly queueWaitMs: number;
   private readonly queryTimeoutMs: number;
   private readonly reserveTimeoutMs: number;
   private readonly recreateClient: (() => Sql) | undefined;
@@ -431,6 +440,7 @@ export class DoltgresWorkItemAdapter
     this.idFloor = options.idFloor ?? 1;
     this.lockWaitMs = options.lockWaitMs ?? LOCK_WAIT_MS;
     this.lockRetryMs = options.lockRetryMs ?? LOCK_RETRY_MS;
+    this.queueWaitMs = options.queueWaitMs ?? OPERATION_QUEUE_WAIT_MS;
     this.queryTimeoutMs = options.queryTimeoutMs ?? QUERY_TIMEOUT_MS;
     this.reserveTimeoutMs = options.reserveTimeoutMs ?? RESERVE_TIMEOUT_MS;
     this.recreateClient = options.recreateClient;
@@ -562,7 +572,130 @@ export class DoltgresWorkItemAdapter
   ): WorkItemConnection {
     return {
       context,
+      pool,
       unsafe: (query) => this.executeQuery(pool, conn, context, query),
+    };
+  }
+
+  private async withFreshRecoveryLock<T>(
+    context: OperationContext,
+    fn: (conn: WorkItemConnection) => Promise<T>
+  ): Promise<T> {
+    const recoveryPool = this.sql;
+    let rawConn: ReservedSql | undefined;
+    let locked = false;
+    let reserveTimedOut = false;
+    let reserveTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await this.executeQuery(
+        recoveryPool,
+        recoveryPool as unknown as ReservedSql,
+        context,
+        "SELECT 1 AS work_items_ready"
+      );
+      reserveTimer = setTimeout(() => {
+        reserveTimedOut = true;
+        void this.terminateClient(
+          recoveryPool,
+          context,
+          "connection.reserve",
+          "recovery_reserve_timeout"
+        );
+      }, this.reserveTimeoutMs);
+      rawConn = await recoveryPool.reserve();
+      if (reserveTimedOut) {
+        await this.terminateClient(
+          recoveryPool,
+          context,
+          "connection.reserve",
+          "recovery_reserve_completed_after_timeout"
+        );
+        throw new WorkItemsBusyError(
+          "Work-item store timed out reserving a recovery connection"
+        );
+      }
+      if (reserveTimer) clearTimeout(reserveTimer);
+
+      const conn = this.instrumentConnection(recoveryPool, rawConn, context);
+      locked = await this.acquireGlobalLock(conn, context);
+      const checkoutRows = await conn.unsafe("SELECT dolt_checkout('main')");
+      assertDoltStatus(checkoutRows, "dolt_checkout");
+      return await fn(conn);
+    } finally {
+      if (reserveTimer) clearTimeout(reserveTimer);
+      if (locked && rawConn) {
+        try {
+          await this.executeQuery(
+            recoveryPool,
+            rawConn,
+            context,
+            `SELECT pg_advisory_unlock(${GLOBAL_LOCK_KEY})`
+          );
+        } catch {
+          await this.terminateClient(
+            recoveryPool,
+            context,
+            "lock.release",
+            "recovery_unlock_failed"
+          );
+          rawConn = undefined;
+        }
+      }
+      if (rawConn && this.sql === recoveryPool && !this.poisoned) {
+        rawConn.release();
+      }
+    }
+  }
+
+  private async enterOperationQueue(
+    context: OperationContext
+  ): Promise<() => void> {
+    const predecessor = this.operationTail;
+    let releaseTurn: () => void = () => undefined;
+    const turnDone = new Promise<void>((resolve) => {
+      releaseTurn = resolve;
+    });
+    this.operationTail = predecessor.then(() => turnDone);
+
+    const startedAt = Date.now();
+    this.logStage("info", context, "operation.queue", "start");
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        predecessor,
+        new Promise<never>((_resolve, reject) => {
+          timeoutId = setTimeout(
+            () =>
+              reject(
+                new WorkItemsBusyError(
+                  "Work-item store queue wait timed out; retry shortly"
+                )
+              ),
+            this.queueWaitMs
+          );
+        }),
+      ]);
+    } catch (error) {
+      // Keep the FIFO chain live even though this caller abandoned its turn.
+      // The resolved ticket is skipped once its predecessor eventually exits.
+      releaseTurn();
+      this.logStage("warn", context, "operation.queue", "error", {
+        durationMs: Date.now() - startedAt,
+        reason: "wait_timeout",
+      });
+      throw error;
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
+    }
+
+    this.logStage("info", context, "operation.queue", "complete", {
+      durationMs: Date.now() - startedAt,
+    });
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      releaseTurn();
     };
   }
 
@@ -570,14 +703,14 @@ export class DoltgresWorkItemAdapter
     operation: string,
     fn: (conn: WorkItemConnection) => Promise<T>
   ): Promise<T> {
+    const context = { operationId: randomUUID(), operation };
+    const leaveQueue = await this.enterOperationQueue(context);
     if (this.poisoned) {
+      leaveQueue();
       throw new WorkItemsBusyError(
         "Work-item store requires restart reconciliation"
       );
     }
-    if (this.operationActive) throw new WorkItemsBusyError();
-    this.operationActive = true;
-    const context = { operationId: randomUUID(), operation };
     const operationPool = this.sql;
     const reserveStartedAt = Date.now();
     let rawConn: ReservedSql | undefined;
@@ -665,7 +798,7 @@ export class DoltgresWorkItemAdapter
       if (rawConn && this.sql === operationPool && !this.poisoned) {
         rawConn.release();
       }
-      this.operationActive = false;
+      leaveQueue();
     }
   }
 
@@ -699,12 +832,34 @@ export class DoltgresWorkItemAdapter
     await this.abortOwnedMergeIfPresent(conn);
     await this.assertMainClean(conn);
 
-    const branchRows = (await conn.unsafe(
-      "SELECT name FROM dolt.branches"
-    )) as ReadonlyArray<Record<string, unknown>>;
+    let branchRows: ReadonlyArray<Record<string, unknown>>;
+    try {
+      branchRows = await conn.unsafe("SELECT name, hash FROM dolt.branches");
+    } catch {
+      throw new WorkItemsBusyError(
+        "Work-item branch reconciliation could not list evidence; retry shortly"
+      );
+    }
     for (const row of branchRows) {
       const branch = String(row.name ?? "");
       if (!branch.startsWith(OP_BRANCH_PREFIX)) continue;
+
+      let branchCommit: string;
+      let reachable: boolean;
+      try {
+        branchCommit = doltScalar([row], "hash");
+        reachable = await this.branchCommitIsOnMain(conn, branchCommit);
+      } catch {
+        throw new WorkItemsBusyError(
+          `Work-item branch ${branch} requires reconciliation proof; retry shortly`
+        );
+      }
+      if (!reachable) {
+        throw new WorkItemsBusyError(
+          `Work-item branch ${branch} is not reachable from main; preserving evidence`
+        );
+      }
+
       const deleteRows = await conn.unsafe(
         `SELECT dolt_branch('-D', ${escapeValue(branch)})`
       );
@@ -771,20 +926,21 @@ export class DoltgresWorkItemAdapter
     message: string,
     principalId: string,
     fn: (conn: WorkItemConnection) => Promise<T>,
-    shouldCommit: (result: T) => boolean = () => true
+    options: MutationOptions<T> = {}
   ): Promise<T> {
     let lastConflict: unknown;
     for (let attempt = 0; attempt < MERGE_RETRIES; attempt += 1) {
       try {
-        return await this.withGlobalLock(message, (conn) =>
-          this.mutateOnBranch(
+        return await this.withGlobalLock(message, async (conn) => {
+          await options.preflight?.(conn);
+          return this.mutateOnBranch(
             conn,
             message,
             requirePrincipal(principalId),
             fn,
-            shouldCommit
-          )
-        );
+            options.shouldCommit ?? (() => true)
+          );
+        });
       } catch (error) {
         if (!(error instanceof WorkItemMergeConflictError)) throw error;
         lastConflict = error;
@@ -833,31 +989,59 @@ export class DoltgresWorkItemAdapter
         // DOLT_MERGE implicitly commits. A transport error can therefore arrive
         // after main moved. Reachability is the authority: never replay a
         // create/update/delete whose branch commit is already on main.
-        let reachable: boolean;
-        try {
-          reachable = await this.branchCommitIsOnMain(conn, branchCommit);
-        } catch (proofError) {
-          this.poisoned = true;
-          this.logger.error(
-            {
-              event: "adapter.work_items.merge_outcome_unknown",
-              component: "doltgres-work-items",
-              branch,
-              ...errorFields(proofError),
-            },
-            "work_items merge reachability could not be proven"
+        const resolveOutcome = async (proofConn: WorkItemConnection) => {
+          let reachable: boolean;
+          try {
+            reachable = await this.branchCommitIsOnMain(
+              proofConn,
+              branchCommit
+            );
+          } catch (proofError) {
+            await this.terminateClient(
+              proofConn.pool,
+              proofConn.context,
+              "merge.reachability",
+              "outcome_unknown"
+            );
+            // The merge result is ambiguous and the operation branch is the
+            // only durable evidence. Stay fail-closed even if pool recreation
+            // succeeded so a later reconciliation cannot discard that branch
+            // or admit a replay before an operator proves the outcome.
+            this.poisoned = true;
+            this.logger.error(
+              {
+                event: "adapter.work_items.merge_outcome_unknown",
+                component: "doltgres-work-items",
+                branch,
+                ...errorFields(proofError),
+              },
+              "work_items merge reachability could not be proven"
+            );
+            throw new DoltMergeOutcomeUnknownError();
+          }
+          if (reachable) {
+            await this.postMergeHousekeeping(proofConn, branch).catch(
+              () => undefined
+            );
+            return result;
+          }
+          const aborted = await this.abortOwnedMergeIfPresent(
+            proofConn,
+            branch
           );
-          throw new DoltMergeOutcomeUnknownError();
+          if (aborted || isMergeConflict(mergeError)) {
+            throw new WorkItemMergeConflictError();
+          }
+          throw mergeError;
+        };
+
+        // Query timeout/terminal handling destroys the old reserved session and
+        // swaps in a recreated pool. Never ask that dead session to prove the
+        // merge outcome: reacquire serialization and prove it on a fresh one.
+        if (conn.pool !== this.sql) {
+          return await this.withFreshRecoveryLock(conn.context, resolveOutcome);
         }
-        if (reachable) {
-          await this.postMergeHousekeeping(conn, branch).catch(() => undefined);
-          return result;
-        }
-        const aborted = await this.abortOwnedMergeIfPresent(conn, branch);
-        if (aborted || isMergeConflict(mergeError)) {
-          throw new WorkItemMergeConflictError();
-        }
-        throw mergeError;
+        return await resolveOutcome(conn);
       }
       // The merge is now durable. Cleanup is repairable housekeeping and must
       // not turn a committed mutation into an API failure that callers replay.
@@ -1138,6 +1322,16 @@ export class DoltgresWorkItemAdapter
         const row = rows[0] as Record<string, unknown> | undefined;
         if (!row) await this.throwMissingOrUnauthorized(conn, input.id);
         return rowToWorkItem(row as Record<string, unknown>);
+      },
+      {
+        preflight: async (conn) => {
+          const current = await this.getWith(conn, input.id);
+          if (!current)
+            throw new Error(`Work item not found: ${input.id as string}`);
+          if (String(current.created_by_principal_id) !== principal) {
+            throw new WorkItemAuthorizationError(input.id as string);
+          }
+        },
       }
     );
   }
@@ -1156,7 +1350,7 @@ export class DoltgresWorkItemAdapter
         if (current) throw new WorkItemAuthorizationError(id as string);
         return false;
       },
-      Boolean
+      { shouldCommit: Boolean }
     );
   }
 
@@ -1187,6 +1381,19 @@ export class DoltgresWorkItemAdapter
         const row = rows[0] as Record<string, unknown> | undefined;
         if (!row) await this.throwLeaseConflictOrMissing(conn, input.id);
         return rowToWorkItem(row as Record<string, unknown>);
+      },
+      {
+        preflight: async (conn) => {
+          const current = await this.getWith(conn, input.id);
+          if (!current)
+            throw new Error(`Work item not found: ${input.id as string}`);
+          const sameLease =
+            String(current.claim_owner_principal_id ?? "") === principal &&
+            String(current.claimed_by_run ?? "") === input.runId;
+          if (current.claim_active !== false && !sameLease) {
+            throw new WorkItemLeaseConflictError(input.id as string);
+          }
+        },
       }
     );
   }
@@ -1212,6 +1419,20 @@ export class DoltgresWorkItemAdapter
         const row = rows[0] as Record<string, unknown> | undefined;
         if (!row) await this.throwLeaseConflictOrMissing(conn, input.id);
         return rowToWorkItem(row as Record<string, unknown>);
+      },
+      {
+        preflight: async (conn) => {
+          const current = await this.getWith(conn, input.id);
+          if (!current)
+            throw new Error(`Work item not found: ${input.id as string}`);
+          const leaseMatches =
+            current.claim_active !== false &&
+            String(current.claim_owner_principal_id ?? "") === principal &&
+            String(current.claimed_by_run ?? "") === input.runId;
+          if (!leaseMatches) {
+            throw new WorkItemLeaseConflictError(input.id as string);
+          }
+        },
       }
     );
   }
@@ -1232,6 +1453,19 @@ export class DoltgresWorkItemAdapter
         const row = rows[0] as Record<string, unknown> | undefined;
         if (!row) await this.throwLeaseConflictOrMissing(conn, input.id);
         return rowToWorkItem(row as Record<string, unknown>);
+      },
+      {
+        preflight: async (conn) => {
+          const current = await this.getWith(conn, input.id);
+          if (!current)
+            throw new Error(`Work item not found: ${input.id as string}`);
+          const leaseMatches =
+            String(current.claim_owner_principal_id ?? "") === principal &&
+            String(current.claimed_by_run ?? "") === input.runId;
+          if (!leaseMatches) {
+            throw new WorkItemLeaseConflictError(input.id as string);
+          }
+        },
       }
     );
   }
