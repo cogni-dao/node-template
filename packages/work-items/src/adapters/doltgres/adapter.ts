@@ -981,10 +981,11 @@ export class DoltgresWorkItemAdapter
               "merge.reachability",
               "outcome_unknown"
             );
-            // A successfully recreated pool is clean and may reconcile the
-            // abandoned operation branch on the next request. Only latch when
-            // the adapter still points at the failed pool.
-            this.poisoned = this.sql === proofConn.pool;
+            // The merge result is ambiguous and the operation branch is the
+            // only durable evidence. Stay fail-closed even if pool recreation
+            // succeeded so a later reconciliation cannot discard that branch
+            // or admit a replay before an operator proves the outcome.
+            this.poisoned = true;
             this.logger.error(
               {
                 event: "adapter.work_items.merge_outcome_unknown",
