@@ -53,6 +53,12 @@ describe("knowledge base seeds", () => {
 		expect(orientation?.content).toContain("`<slug>-agent-orientation`");
 		expect(orientation?.content).toContain("this node's own Dolt hub");
 		expect(orientation?.content).toContain(
+			"`https://<node-slug>.cognidao.org/work/items/{id}`",
+		);
+		expect(orientation?.content).toContain(
+			"operator node alone uses the apex `https://cognidao.org/work/items/{id}`",
+		);
+		expect(orientation?.content).toContain(
 			"Never copy another node's mission or node-specific contract",
 		);
 	});
@@ -82,9 +88,17 @@ describe("knowledge base seeds", () => {
 			start,
 			terminalStart + terminal.length,
 		)}\n`;
-		expect(createHash("sha256").update(sharedContract).digest("hex")).toBe(
-			"5b31d2166c819002120bb1c3b88ab1c9fd299510c5a160b1bf7fa3a20a91a914",
+		const nodeWorkItemUrl = "https://<node-slug>.cognidao.org/work/items/{id}";
+		const operatorWorkItemUrl = "https://cognidao.org/work/items/{id}";
+		expect(sharedContract.split(nodeWorkItemUrl)).toHaveLength(2);
+		expect(sharedContract).not.toContain(operatorWorkItemUrl);
+		const operatorNormalizedContract = sharedContract.replace(
+			nodeWorkItemUrl,
+			operatorWorkItemUrl,
 		);
+		expect(
+			createHash("sha256").update(operatorNormalizedContract).digest("hex"),
+		).toBe("5b31d2166c819002120bb1c3b88ab1c9fd299510c5a160b1bf7fa3a20a91a914");
 	});
 
 	it("fits the complete starter bundle inside the fail-closed byte ceiling", () => {
