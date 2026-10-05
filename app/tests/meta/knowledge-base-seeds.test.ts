@@ -12,6 +12,12 @@
 
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import {
+	assertBundleWithinBudget,
+	renderBundleMarkdown,
+	SESSION_BOOTSTRAP_INVARIANTS,
+	SESSION_COGNITION_MAX_BYTES,
+} from "@/app/api/v1/cognition/_bundle";
 import { BASE_KNOWLEDGE_SEEDS } from "../../../packages/knowledge-base/src/seeds/base";
 import { BASE_DOMAIN_SEEDS } from "../../../packages/knowledge-base/src/seeds/domains";
 
@@ -79,5 +85,35 @@ describe("knowledge base seeds", () => {
 		expect(createHash("sha256").update(sharedContract).digest("hex")).toBe(
 			"5b31d2166c819002120bb1c3b88ab1c9fd299510c5a160b1bf7fa3a20a91a914",
 		);
+	});
+
+	it("fits the complete starter bundle inside the fail-closed byte ceiling", () => {
+		const orientation = BASE_KNOWLEDGE_SEEDS.find(
+			({ id }) => id === "cogni-agent-orientation",
+		);
+		expect(orientation).toBeDefined();
+		const markdown = renderBundleMarkdown({
+			node: "00000000-0000-0000-0000-000000000000",
+			name: "new-node",
+			mission: "A newly formed sovereign Cogni node.",
+			generatedAt: "2026-10-05T00:00:00.000Z",
+			origin: "https://new-node.cognidao.org",
+			buildSha: "0".repeat(40),
+			toolingInvariants: SESSION_BOOTSTRAP_INVARIANTS,
+			skillsIndex: [],
+			domainPointers: BASE_DOMAIN_SEEDS.map((domain) => ({
+				domain: domain.id,
+				entryCount: 0,
+				description: domain.description ?? "",
+			})),
+			orientation: {
+				id: orientation?.id ?? "cogni-agent-orientation",
+				content: orientation?.content ?? "",
+			},
+		});
+		expect(() => assertBundleWithinBudget(markdown)).not.toThrow();
+		expect(
+			Buffer.byteLength(`${markdown.replace(/\n+$/, "")}\n`),
+		).toBeLessThanOrEqual(SESSION_COGNITION_MAX_BYTES);
 	});
 });

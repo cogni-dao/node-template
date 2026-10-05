@@ -46,7 +46,7 @@ export const BASE_KNOWLEDGE_SEEDS: NewKnowledge[] = [
       "4. Refine this starter into a sibling `<slug>-agent-orientation` in this node's own Dolt hub. Preserve the shared contract below exactly; replace generic identity with the node's mission, authority boundaries, and recall routes.",
       "5. The cognition bundle prefers the exact `<slug>-agent-orientation`; this generic row remains only the safe fallback. Never copy another node's mission or node-specific contract.",
       "",
-      "Git owns only the universal baseline: domains `meta`, `mission`, and `strategy`, plus this node-neutral starter. Every node owns its evolving mission and orientation in its own Dolt database.",
+      "Git owns only the universal node-neutral baseline, including domains `meta`, `mission`, and `strategy` and this starter. Every node owns its evolving mission and orientation in its own Dolt database.",
       "",
       "## The agent-contract — breach means invalid agent",
       "",
