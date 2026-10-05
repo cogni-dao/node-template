@@ -126,6 +126,16 @@ describe("session cognition hook", () => {
 		);
 	});
 
+	it("documents the node-owned Conductor bootstrap without a monorepo auth root", () => {
+		const readme = readFileSync(path.join(REPO_ROOT, "README.md"), "utf8");
+		const agents = readFileSync(path.join(REPO_ROOT, "AGENTS.md"), "utf8");
+
+		expect(readme).toContain("COGNI_NODE_AUTH_ROOT");
+		expect(readme).not.toContain("COGNI_TEMPLATE_ROOT");
+		expect(readme).toContain("stable user-level\nCodex cognition presenter");
+		expect(agents).toContain("pnpm codex:cognition:install");
+	});
+
 	it("presents a bounded cache verbatim and rejects an oversized cache whole", () => {
 		const root = fixture();
 		const noUserHook = path.join(root, "no-user-hook");

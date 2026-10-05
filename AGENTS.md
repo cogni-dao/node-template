@@ -15,7 +15,10 @@ A SessionStart hook ([`.claude/settings.json`](.claude/settings.json) for Claude
 **cognition bundle** — tooling invariants + a live skills index + knowledge-domain pointers —
 from a durable local cache, refreshes it asynchronously, and injects it into
 context. The 16 KiB ceiling fails closed rather than truncating instructions.
-Codex needs a one-time trust (`/hooks`).
+Local Conductor setup installs one stable user-level Codex presenter so future
+worktrees do not depend on per-worktree project-hook trust. Approve its one-time
+trust with `/hooks` when prompted; outside Conductor, run
+`pnpm codex:cognition:install` once.
 
 - The loader derives `https://<node-slug>.cognidao.org/api/v1/cognition` from
   `.cogni/repo-spec.yaml` `intent.name` and recalls **this node's own hub** with
