@@ -86,7 +86,7 @@ interface MutationProof {
   itemId?: string;
   beforeRow?: Record<string, unknown>;
   afterRow?: Record<string, unknown>;
-  readonly patchColumns?: readonly string[];
+  readonly patchValues?: Readonly<Record<string, unknown>>;
   readonly runId?: string;
   readonly command?: string;
   readonly commandProvided?: boolean;
@@ -107,6 +107,7 @@ interface PendingBranchState<T> {
   readonly proof: MutationProof;
   result?: T;
   branchCommit?: string;
+  requiresFreshOutcomeProof?: boolean;
 }
 
 interface ValidatedBranchTransition {
@@ -623,8 +624,11 @@ function validateTransitionMatrix(
       );
     }
     case "patch": {
+      const requestedColumns = proof.patchValues
+        ? Object.keys(proof.patchValues)
+        : [...PATCH_DB_COLUMNS];
       const allowed = new Set<string>([
-        ...PATCH_DB_COLUMNS,
+        ...requestedColumns,
         "revision",
         "updated_at",
       ]);
@@ -643,8 +647,11 @@ function validateTransitionMatrix(
         changed.has("updated_at") &&
         onlyAllowedChanges(changed, allowed) &&
         revisionAdvanced &&
-        (proof.patchColumns ?? []).every((column) =>
-          PATCH_DB_COLUMNS.has(column)
+        Object.entries(proof.patchValues ?? {}).every(
+          ([column, value]) =>
+            PATCH_DB_COLUMNS.has(column) &&
+            JSON.stringify(after[column as PersistedColumn]) ===
+              JSON.stringify(normalizedPersistedValue(value))
         )
       );
     }
@@ -1163,6 +1170,43 @@ export class DoltgresWorkItemAdapter
     );
   }
 
+  private preservedBranchError(
+    branch: string,
+    error: unknown
+  ): WorkItemsBusyError {
+    return error instanceof WorkItemsBusyError
+      ? error
+      : new WorkItemsBusyError(
+          `Work-item branch ${branch} could not be safely proven; preserving evidence`
+        );
+  }
+
+  private async cleanupVerifiedBranch(
+    conn: WorkItemConnection,
+    transition: ValidatedBranchTransition,
+    startedAt: number
+  ): Promise<boolean> {
+    try {
+      await this.deleteOperationBranch(conn, transition.branch);
+      return true;
+    } catch (error) {
+      // Once reachability (and, for a fresh merge, the exact current row) is
+      // proven, ref deletion is repairable housekeeping. Returning a 503 here
+      // would invite callers to replay an already-durable PATCH/CREATE.
+      this.logReconciliation("warn", conn, {
+        branch: transition.branch,
+        baseHash: transition.baseHash,
+        tip: transition.tip,
+        verb: transition.proof.verb,
+        itemId: transition.proof.itemId,
+        classification: "cleanup_pending",
+        durationMs: Date.now() - startedAt,
+        ...errorFields(error),
+      });
+      return false;
+    }
+  }
+
   private async operationBranchRow(
     conn: WorkItemConnection,
     branch: string
@@ -1298,21 +1342,65 @@ export class DoltgresWorkItemAdapter
     originalError?: unknown
   ): Promise<T | undefined> {
     const startedAt = Date.now();
-    const checkoutRows = await conn.unsafe("SELECT dolt_checkout('main')");
-    assertDoltStatus(checkoutRows, "dolt_checkout");
-    await this.abortOwnedMergeIfPresent(conn, branch);
-    await this.assertMainClean(conn);
+    try {
+      const checkoutRows = await conn.unsafe("SELECT dolt_checkout('main')");
+      assertDoltStatus(checkoutRows, "dolt_checkout");
+      await this.abortOwnedMergeIfPresent(conn, branch);
+      await this.assertMainClean(conn);
+    } catch (error) {
+      this.logReconciliation("error", conn, {
+        branch,
+        classification: "preserved_unsafe",
+        durationMs: Date.now() - startedAt,
+        ...errorFields(error),
+      });
+      throw this.preservedBranchError(branch, error);
+    }
 
-    const row = await this.operationBranchRow(conn, branch);
+    let row: Record<string, unknown> | undefined;
+    try {
+      row = await this.operationBranchRow(conn, branch);
+    } catch (error) {
+      this.logReconciliation("error", conn, {
+        branch,
+        classification: "preserved_unsafe",
+        durationMs: Date.now() - startedAt,
+        ...errorFields(error),
+      });
+      throw this.preservedBranchError(branch, error);
+    }
     if (!row && !pending?.branchCommit) {
       if (pending) throw originalError;
       return undefined;
     }
-    const tip = row
-      ? doltScalar([row], "hash")
-      : String(pending?.branchCommit ?? "");
+    let tip: string;
+    try {
+      tip = row
+        ? doltScalar([row], "hash")
+        : String(pending?.branchCommit ?? "");
+    } catch (error) {
+      this.logReconciliation("error", conn, {
+        branch,
+        classification: "preserved_unsafe",
+        durationMs: Date.now() - startedAt,
+        ...errorFields(error),
+      });
+      throw this.preservedBranchError(branch, error);
+    }
     if (pending && tip === pending.baseHash) {
-      await this.deleteOperationBranch(conn, branch);
+      try {
+        await this.deleteOperationBranch(conn, branch);
+      } catch (error) {
+        this.logReconciliation("error", conn, {
+          branch,
+          baseHash: pending.baseHash,
+          tip,
+          classification: "preserved_unsafe",
+          durationMs: Date.now() - startedAt,
+          ...errorFields(error),
+        });
+        throw this.preservedBranchError(branch, error);
+      }
       this.logReconciliation("info", conn, {
         branch,
         baseHash: pending.baseHash,
@@ -1324,8 +1412,61 @@ export class DoltgresWorkItemAdapter
       });
       throw originalError;
     }
+    if (!pending) {
+      let currentMain: string;
+      try {
+        currentMain = doltScalar(
+          await conn.unsafe("SELECT dolt_hashof('main') AS dolt_hashof"),
+          "dolt_hashof"
+        );
+      } catch (error) {
+        this.logReconciliation("error", conn, {
+          branch,
+          tip,
+          classification: "preserved_unsafe",
+          durationMs: Date.now() - startedAt,
+          ...errorFields(error),
+        });
+        throw this.preservedBranchError(branch, error);
+      }
+      if (tip === currentMain) {
+        try {
+          await this.deleteOperationBranch(conn, branch);
+        } catch (error) {
+          this.logReconciliation("error", conn, {
+            branch,
+            baseHash: currentMain,
+            tip,
+            classification: "preserved_unsafe",
+            durationMs: Date.now() - startedAt,
+            ...errorFields(error),
+          });
+          throw this.preservedBranchError(branch, error);
+        }
+        this.logReconciliation("info", conn, {
+          branch,
+          baseHash: currentMain,
+          tip,
+          classification: "empty_deleted",
+          durationMs: Date.now() - startedAt,
+        });
+        return undefined;
+      }
+    }
 
-    const reachable = await this.branchCommitIsOnMain(conn, tip);
+    let reachable: boolean;
+    try {
+      reachable = await this.branchCommitIsOnMain(conn, tip);
+    } catch (error) {
+      this.logReconciliation("error", conn, {
+        branch,
+        tip,
+        classification: "preserved_unsafe",
+        durationMs: Date.now() - startedAt,
+        ...errorFields(error),
+      });
+      throw this.preservedBranchError(branch, error);
+    }
     let transition: ValidatedBranchTransition;
     try {
       transition = await this.validateOperationBranch(
@@ -1342,18 +1483,39 @@ export class DoltgresWorkItemAdapter
         durationMs: Date.now() - startedAt,
         ...errorFields(error),
       });
-      throw error;
+      throw this.preservedBranchError(branch, error);
     }
 
     if (reachable) {
-      if (row) await this.deleteOperationBranch(conn, branch);
+      if (pending?.requiresFreshOutcomeProof) {
+        try {
+          await this.proveFreshMergeOutcome(conn, transition);
+        } catch (error) {
+          this.logReconciliation("error", conn, {
+            branch,
+            baseHash: transition.baseHash,
+            tip,
+            verb: transition.proof.verb,
+            itemId: transition.proof.itemId,
+            classification: "preserved_unsafe",
+            durationMs: Date.now() - startedAt,
+            ...errorFields(error),
+          });
+          throw this.preservedBranchError(branch, error);
+        }
+      }
+      const cleaned = row
+        ? await this.cleanupVerifiedBranch(conn, transition, startedAt)
+        : true;
       this.logReconciliation("info", conn, {
         branch,
         baseHash: transition.baseHash,
         tip,
         verb: transition.proof.verb,
         itemId: transition.proof.itemId,
-        classification: "reachable_cleaned",
+        classification: cleaned
+          ? "reachable_cleaned"
+          : "reachable_cleanup_pending",
         durationMs: Date.now() - startedAt,
       });
       return pending?.result;
@@ -1377,10 +1539,28 @@ export class DoltgresWorkItemAdapter
         durationMs: Date.now() - startedAt,
         ...errorFields(error),
       });
-      throw error;
+      throw this.preservedBranchError(branch, error);
     }
-    await this.proveFreshMergeOutcome(conn, transition);
-    await this.deleteOperationBranch(conn, branch);
+    try {
+      await this.proveFreshMergeOutcome(conn, transition);
+    } catch (error) {
+      this.logReconciliation("error", conn, {
+        branch,
+        baseHash: transition.baseHash,
+        tip,
+        verb: transition.proof.verb,
+        itemId: transition.proof.itemId,
+        classification: "preserved_unsafe",
+        durationMs: Date.now() - startedAt,
+        ...errorFields(error),
+      });
+      throw this.preservedBranchError(branch, error);
+    }
+    const cleaned = await this.cleanupVerifiedBranch(
+      conn,
+      transition,
+      startedAt
+    );
     this.logReconciliation("info", conn, {
       branch,
       baseHash: transition.baseHash,
@@ -1389,16 +1569,23 @@ export class DoltgresWorkItemAdapter
       itemId: transition.proof.itemId,
       mergeHash: merge.hash,
       classification: "merged_verified",
+      cleanupPending: !cleaned,
       durationMs: Date.now() - startedAt,
     });
     return pending?.result;
   }
 
   private async reconcileUnderLock(conn: WorkItemConnection): Promise<void> {
-    const checkoutRows = await conn.unsafe("SELECT dolt_checkout('main')");
-    assertDoltStatus(checkoutRows, "dolt_checkout");
-    await this.abortOwnedMergeIfPresent(conn);
-    await this.assertMainClean(conn);
+    try {
+      const checkoutRows = await conn.unsafe("SELECT dolt_checkout('main')");
+      assertDoltStatus(checkoutRows, "dolt_checkout");
+      await this.abortOwnedMergeIfPresent(conn);
+      await this.assertMainClean(conn);
+    } catch {
+      throw new WorkItemsBusyError(
+        "Work-item main could not be made safe for reconciliation; retry shortly"
+      );
+    }
 
     let branchRows: ReadonlyArray<Record<string, unknown>>;
     try {
@@ -1520,6 +1707,7 @@ export class DoltgresWorkItemAdapter
     proof: MutationProof,
     shouldCommit: (result: T) => boolean
   ): Promise<T> {
+    const startedAt = Date.now();
     const branch = `${OP_BRANCH_PREFIX}${randomUUID()}`;
     conn.context.branch = branch;
     const baseRows = await conn.unsafe(
@@ -1565,10 +1753,11 @@ export class DoltgresWorkItemAdapter
           `SELECT hash, fast_forward, conflicts, message FROM dolt_merge(${escapeValue(branch)})`
         )
       );
+      state.requiresFreshOutcomeProof = true;
       // A merge acknowledgement alone is not success. Reachability and the
       // exact current row are proven while serialization is still held.
       await this.proveFreshMergeOutcome(conn, transition);
-      await this.deleteOperationBranch(conn, branch);
+      await this.cleanupVerifiedBranch(conn, transition, startedAt);
       return result;
     } catch (error) {
       throw new PendingBranchRecoveryError(state, error);
@@ -1844,12 +2033,14 @@ export class DoltgresWorkItemAdapter
           verb: "patch",
           principal,
           itemId: input.id as string,
-          patchColumns: (Object.entries(PATCH_COLUMNS) as [
-            keyof WorkItemsPatchSet,
-            string,
-          ][])
-            .filter(([key]) => input.set[key] !== undefined)
-            .map(([, column]) => column),
+          patchValues: Object.fromEntries(
+            (Object.entries(PATCH_COLUMNS) as [
+              keyof WorkItemsPatchSet,
+              string,
+            ][])
+              .filter(([key]) => input.set[key] !== undefined)
+              .map(([key, column]) => [column, input.set[key]])
+          ),
         },
         preflight: async (conn, proof) => {
           const current = await this.getWith(conn, input.id);
