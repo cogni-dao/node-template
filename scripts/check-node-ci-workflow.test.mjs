@@ -93,7 +93,7 @@ const CASES = [
       '    "bypassActors": [{ "actorId": 3956976 }],\n    "operatorGeneratedChange": {'
     ),
     expectExit: 1,
-    expectMatch: /must not contain caller-selected or raw GitHub identities/,
+    expectMatch: /ruleset keys must be exactly/,
   },
   {
     name: "an installation-specific App ID cannot replace the semantic actor",
@@ -124,6 +124,26 @@ const CASES = [
     ),
     expectExit: 1,
     expectMatch: /must contain only protocol and actor/,
+  },
+  {
+    name: "extra top-level identity fields are rejected",
+    mutate: edit(
+      ".cogni/repo-policy.json",
+      '  "schemaVersion": "cogni.node-repo-policy.v2",',
+      '  "schemaVersion": "cogni.node-repo-policy.v2",\n  "appId": 3956976,'
+    ),
+    expectExit: 1,
+    expectMatch: /policy keys must be exactly/,
+  },
+  {
+    name: "extra ruleset identity fields are rejected",
+    mutate: edit(
+      ".cogni/repo-policy.json",
+      '    "name": "main-pr-and-standard-ci",',
+      '    "name": "main-pr-and-standard-ci",\n    "operatorAppId": 3956976,'
+    ),
+    expectExit: 1,
+    expectMatch: /ruleset keys must be exactly/,
   },
 ];
 

@@ -40,6 +40,17 @@ function expectIncludes(path, value, fragment, label) {
   }
 }
 
+function expectExactKeys(path, object, expected, label) {
+  const actual = Object.keys(object ?? {}).sort();
+  const wanted = [...expected].sort();
+  if (JSON.stringify(actual) !== JSON.stringify(wanted)) {
+    fail(
+      path,
+      `${label} keys must be exactly ${JSON.stringify(wanted)}; got ${JSON.stringify(actual)}`
+    );
+  }
+}
+
 function expectStep(path, steps, name) {
   const step = steps.find((candidate) => candidate?.name === name);
   if (!step) fail(path, `steps must include ${JSON.stringify(name)}`);
@@ -67,6 +78,25 @@ function expectNoWorkflowDispatch(path, workflow) {
 }
 
 function requiredCheckContexts(policy) {
+  expectExactKeys(
+    REPO_POLICY_PATH,
+    policy,
+    ["schemaVersion", "ruleset"],
+    "policy"
+  );
+  expectExactKeys(
+    REPO_POLICY_PATH,
+    policy?.ruleset,
+    [
+      "enforcement",
+      "name",
+      "operatorGeneratedChange",
+      "pullRequest",
+      "requiredStatusChecks",
+      "target",
+    ],
+    "ruleset"
+  );
   expectEqual(
     REPO_POLICY_PATH,
     policy?.schemaVersion,
