@@ -279,6 +279,7 @@ function makeTimeoutHarness({
       }
       if (query.startsWith("INSERT INTO work_items")) {
         state.inserts += 1;
+        state.branchBefore = undefined;
         const values =
           /VALUES \('([^']+)', '([^']+)', '([^']+)'/.exec(query);
         state.pendingRow = {
