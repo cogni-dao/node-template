@@ -70,7 +70,7 @@ function requiredCheckContexts(policy) {
   expectEqual(
     REPO_POLICY_PATH,
     policy?.schemaVersion,
-    "cogni.node-repo-policy.v1",
+    "cogni.node-repo-policy.v2",
     "schemaVersion"
   );
   expectEqual(
@@ -85,10 +85,38 @@ function requiredCheckContexts(policy) {
     "active",
     "ruleset.enforcement"
   );
-  const bypassActors = policy?.ruleset?.bypassActors;
-  if (!Array.isArray(bypassActors) || bypassActors.length !== 0) {
-    fail(REPO_POLICY_PATH, "ruleset.bypassActors must be an empty array");
+  if (Object.hasOwn(policy?.ruleset ?? {}, "bypassActors")) {
+    fail(
+      REPO_POLICY_PATH,
+      "ruleset.bypassActors must not contain caller-selected or raw GitHub identities"
+    );
   }
+  const operatorGeneratedChange = policy?.ruleset?.operatorGeneratedChange;
+  const operatorGeneratedKeys = Object.keys(
+    operatorGeneratedChange ?? {}
+  ).sort();
+  if (
+    operatorGeneratedKeys.length !== 2 ||
+    operatorGeneratedKeys[0] !== "actor" ||
+    operatorGeneratedKeys[1] !== "protocol"
+  ) {
+    fail(
+      REPO_POLICY_PATH,
+      "ruleset.operatorGeneratedChange must contain only protocol and actor"
+    );
+  }
+  expectEqual(
+    REPO_POLICY_PATH,
+    operatorGeneratedChange?.protocol,
+    "cogni.operator-change.v1",
+    "ruleset.operatorGeneratedChange.protocol"
+  );
+  expectEqual(
+    REPO_POLICY_PATH,
+    operatorGeneratedChange?.actor,
+    "configured_operator_app",
+    "ruleset.operatorGeneratedChange.actor"
+  );
   const contexts = policy?.ruleset?.requiredStatusChecks?.contexts;
   if (
     !Array.isArray(contexts) ||
