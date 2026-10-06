@@ -207,6 +207,8 @@ export function makeFakeDoltgresSql(
             Date.parse(String(beforeRow?.claim_expires_at ?? afterRow.updated_at)) +
               300_000
           ).toISOString();
+          const command = /last_command = '([^']*)'/.exec(query)?.[1];
+          if (command !== undefined) afterRow.last_command = unquote(command);
         } else if (query.includes("SET claimed_by_run = NULL")) {
           afterRow.claimed_by_run = null;
           afterRow.claim_owner_principal_id = null;

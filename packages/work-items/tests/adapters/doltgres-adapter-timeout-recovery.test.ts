@@ -279,7 +279,14 @@ function makeTimeoutHarness({
       }
       if (query.startsWith("INSERT INTO work_items")) {
         state.inserts += 1;
-        state.pendingRow = { ...baseRow };
+        const values =
+          /VALUES \('([^']+)', '([^']+)', '([^']+)'/.exec(query);
+        state.pendingRow = {
+          ...baseRow,
+          id: values?.[1] ?? baseRow.id,
+          type: values?.[2] ?? baseRow.type,
+          title: values?.[3] ?? baseRow.title,
+        };
         state.branchAfter = state.pendingRow;
         return [state.pendingRow];
       }
@@ -458,7 +465,7 @@ describe("DoltgresWorkItemAdapter merge timeout recovery", () => {
           "principal-1"
         )
       )
-    ).resolves.toMatchObject({ id: "task.0001" });
+    ).resolves.toMatchObject({ id: "bug.0001" });
     expect(state.inserts).toBe(2);
     expect(state.deadUnlockAttempts).toBe(0);
   });
