@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "cogni.node-repo-policy.v1",
+  "schemaVersion": "cogni.node-repo-policy.v2",
   "ruleset": {
     "name": "main-pr-and-standard-ci",
     "target": "default_branch",
@@ -17,6 +17,9 @@
       "strict": false,
       "contexts": ["unit", "component", "static", "manifest"]
     },
-    "bypassActors": []
+    "operatorGeneratedChange": {
+      "protocol": "cogni.operator-change.v1",
+      "actor": "configured_operator_app"
+    }
   }
 }

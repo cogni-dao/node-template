@@ -85,6 +85,66 @@ const CASES = [
     expectExit: 1,
     expectMatch: /required check "nonexistent-check"/,
   },
+  {
+    name: "a caller-selected raw bypass actor is rejected",
+    mutate: edit(
+      ".cogni/repo-policy.json",
+      '    "operatorGeneratedChange": {',
+      '    "bypassActors": [{ "actorId": 3956976 }],\n    "operatorGeneratedChange": {'
+    ),
+    expectExit: 1,
+    expectMatch: /ruleset keys must be exactly/,
+  },
+  {
+    name: "an installation-specific App ID cannot replace the semantic actor",
+    mutate: edit(
+      ".cogni/repo-policy.json",
+      '"actor": "configured_operator_app"',
+      '"actor": 3956976'
+    ),
+    expectExit: 1,
+    expectMatch: /ruleset\.operatorGeneratedChange\.actor/,
+  },
+  {
+    name: "an unknown operator-change protocol is rejected",
+    mutate: edit(
+      ".cogni/repo-policy.json",
+      '"protocol": "cogni.operator-change.v1"',
+      '"protocol": "cogni.operator-change.v2"'
+    ),
+    expectExit: 1,
+    expectMatch: /ruleset\.operatorGeneratedChange\.protocol/,
+  },
+  {
+    name: "extra operator lane identity fields are rejected",
+    mutate: edit(
+      ".cogni/repo-policy.json",
+      '"actor": "configured_operator_app"',
+      '"actor": "configured_operator_app", "appId": 3956976'
+    ),
+    expectExit: 1,
+    expectMatch: /must contain only protocol and actor/,
+  },
+  {
+    name: "extra top-level identity fields are rejected",
+    mutate: edit(
+      ".cogni/repo-policy.json",
+      '  "schemaVersion": "cogni.node-repo-policy.v2",',
+      '  "schemaVersion": "cogni.node-repo-policy.v2",\n  "appId": 3956976,'
+    ),
+    expectExit: 1,
+    expectMatch: /policy keys must be exactly/,
+  },
+  {
+    name: "extra ruleset identity fields are rejected",
+    mutate: edit(
+      ".cogni/repo-policy.json",
+      '    "name": "main-pr-and-standard-ci",',
+      '    "name": "main-pr-and-standard-ci",\n    "operatorAppId": 3956976,'
+    ),
+    expectExit: 1,
+    expectMatch: /ruleset keys must be exactly/,
+  },
 ];
 
 let failed = 0;
