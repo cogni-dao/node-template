@@ -45,15 +45,15 @@ const QUERY_TIMEOUT_MS = 5_000;
 const RESERVE_TIMEOUT_MS = 5_000;
 
 /**
- * How a locked scope treats an operation branch it cannot prove.
+ * What a locked scope owes when it meets an operation branch it cannot prove.
  *
- * - `full` — fail closed. A write must never build on unproven evidence.
- * - `read` — reconcile what is provable, then serve from committed `main` even
- *   if a branch stays unprovable (bug.5358).
- * - `none` — the caller already owns one specific branch and reconciles it
- *   itself; a generic sweep would race that work.
+ * - `required` — fail closed. A write must never build on unproven evidence.
+ * - `best_effort` — keep the evidence, re-prove `main`, and serve from it
+ *   anyway. For reads, which cannot observe an operation branch (bug.5358).
+ * - `skipped` — the caller already owns one branch and reconciles it itself; a
+ *   generic sweep would race that work.
  */
-type ReconcileScope = "full" | "read" | "none";
+type BranchReconciliation = "required" | "best_effort" | "skipped";
 
 export interface WorkItemLogger {
   info(fields: Record<string, unknown>, message: string): void;
@@ -1012,7 +1012,7 @@ export class DoltgresWorkItemAdapter
   private async withGlobalLock<T>(
     context: OperationContext,
     fn: (conn: WorkItemConnection) => Promise<T>,
-    options: { readonly reconcile?: ReconcileScope } = {}
+    options: { readonly reconcile?: BranchReconciliation } = {}
   ): Promise<T> {
     if (this.poisoned) {
       throw new WorkItemsBusyError(
@@ -1073,8 +1073,9 @@ export class DoltgresWorkItemAdapter
       });
       const conn = this.instrumentConnection(operationPool, rawConn, context);
       locked = await this.acquireGlobalLock(conn, context);
-      const scope = options.reconcile ?? "full";
-      if (scope !== "none") await this.reconcileUnderLock(conn, scope);
+      const reconciliation = options.reconcile ?? "required";
+      if (reconciliation !== "skipped")
+        await this.reconcileUnderLock(conn, reconciliation);
       return await fn(conn);
     } catch (error) {
       pendingRecovery = error instanceof PendingBranchRecoveryError;
@@ -1355,16 +1356,24 @@ export class DoltgresWorkItemAdapter
     conn: WorkItemConnection,
     branch: string,
     pending?: PendingBranchState<T>,
-    originalError?: unknown
+    originalError?: unknown,
+    reconciliation: BranchReconciliation = "required"
   ): Promise<T | undefined> {
     const startedAt = Date.now();
+    // A read that will serve anyway records handled degradation, not failure:
+    // the request still succeeds, so an error level would make every healthy
+    // read on a node carrying residual evidence look like an outage.
+    const served = reconciliation === "best_effort";
+    const preserveLevel = served ? "warn" : "error";
+    const preserveFields = served ? { served: true } : {};
     try {
       const checkoutRows = await conn.unsafe("SELECT dolt_checkout('main')");
       assertDoltStatus(checkoutRows, "dolt_checkout");
       await this.abortOwnedMergeIfPresent(conn, branch);
       await this.assertMainClean(conn);
     } catch (error) {
-      this.logReconciliation("error", conn, {
+      this.logReconciliation(preserveLevel, conn, {
+        ...preserveFields,
         branch,
         classification: "preserved_unsafe",
         durationMs: Date.now() - startedAt,
@@ -1377,7 +1386,8 @@ export class DoltgresWorkItemAdapter
     try {
       row = await this.operationBranchRow(conn, branch);
     } catch (error) {
-      this.logReconciliation("error", conn, {
+      this.logReconciliation(preserveLevel, conn, {
+        ...preserveFields,
         branch,
         classification: "preserved_unsafe",
         durationMs: Date.now() - startedAt,
@@ -1395,7 +1405,8 @@ export class DoltgresWorkItemAdapter
         ? doltScalar([row], "hash")
         : String(pending?.branchCommit ?? "");
     } catch (error) {
-      this.logReconciliation("error", conn, {
+      this.logReconciliation(preserveLevel, conn, {
+        ...preserveFields,
         branch,
         classification: "preserved_unsafe",
         durationMs: Date.now() - startedAt,
@@ -1407,7 +1418,8 @@ export class DoltgresWorkItemAdapter
       try {
         await this.deleteOperationBranch(conn, branch);
       } catch (error) {
-        this.logReconciliation("error", conn, {
+        this.logReconciliation(preserveLevel, conn, {
+          ...preserveFields,
           branch,
           baseHash: pending.baseHash,
           tip,
@@ -1436,7 +1448,8 @@ export class DoltgresWorkItemAdapter
           "dolt_hashof"
         );
       } catch (error) {
-        this.logReconciliation("error", conn, {
+        this.logReconciliation(preserveLevel, conn, {
+          ...preserveFields,
           branch,
           tip,
           classification: "preserved_unsafe",
@@ -1449,7 +1462,8 @@ export class DoltgresWorkItemAdapter
         try {
           await this.deleteOperationBranch(conn, branch);
         } catch (error) {
-          this.logReconciliation("error", conn, {
+          this.logReconciliation(preserveLevel, conn, {
+            ...preserveFields,
             branch,
             baseHash: currentMain,
             tip,
@@ -1474,7 +1488,8 @@ export class DoltgresWorkItemAdapter
     try {
       reachable = await this.branchCommitIsOnMain(conn, tip);
     } catch (error) {
-      this.logReconciliation("error", conn, {
+      this.logReconciliation(preserveLevel, conn, {
+        ...preserveFields,
         branch,
         tip,
         classification: "preserved_unsafe",
@@ -1492,7 +1507,8 @@ export class DoltgresWorkItemAdapter
         pending as PendingBranchState<unknown> | undefined
       );
     } catch (error) {
-      this.logReconciliation("error", conn, {
+      this.logReconciliation(preserveLevel, conn, {
+        ...preserveFields,
         branch,
         tip,
         classification: "preserved_unsafe",
@@ -1507,7 +1523,8 @@ export class DoltgresWorkItemAdapter
         try {
           await this.proveFreshMergeOutcome(conn, transition);
         } catch (error) {
-          this.logReconciliation("error", conn, {
+          this.logReconciliation(preserveLevel, conn, {
+            ...preserveFields,
             branch,
             baseHash: transition.baseHash,
             tip,
@@ -1545,7 +1562,8 @@ export class DoltgresWorkItemAdapter
         )
       );
     } catch (error) {
-      this.logReconciliation("error", conn, {
+      this.logReconciliation(preserveLevel, conn, {
+        ...preserveFields,
         branch,
         baseHash: transition.baseHash,
         tip,
@@ -1560,7 +1578,8 @@ export class DoltgresWorkItemAdapter
     try {
       await this.proveFreshMergeOutcome(conn, transition);
     } catch (error) {
-      this.logReconciliation("error", conn, {
+      this.logReconciliation(preserveLevel, conn, {
+        ...preserveFields,
         branch,
         baseHash: transition.baseHash,
         tip,
@@ -1606,7 +1625,7 @@ export class DoltgresWorkItemAdapter
 
   private async reconcileUnderLock(
     conn: WorkItemConnection,
-    scope: Exclude<ReconcileScope, "none"> = "full"
+    reconciliation: Exclude<BranchReconciliation, "skipped">
   ): Promise<void> {
     await this.makeMainSafe(conn);
 
@@ -1622,30 +1641,32 @@ export class DoltgresWorkItemAdapter
       .map((row) => String(row.name ?? ""))
       .filter((branch) => branch.startsWith(OP_BRANCH_PREFIX))
       .sort();
+    // bug.5358: a read is served from committed `main`, which an unprovable
+    // evidence branch cannot corrupt. Failing the read closed here let one
+    // residual branch return 503 for every read permanently — nothing deletes a
+    // `preserved_unsafe` branch, and this sweep re-walks `dolt.branches` on each
+    // request, so a restart does not clear it. `resolveOperationBranch` already
+    // recorded the branch; keep sweeping, because a sibling may still be
+    // provable and skipping it would drop read-your-writes for a durable write
+    // that only needs its merge finished.
+    let tolerated = false;
     for (const branch of branches) {
       try {
-        await this.resolveOperationBranch(conn, branch);
-      } catch (error) {
-        if (scope === "full") throw error;
-        // bug.5358: a read is served from committed `main`, which an unprovable
-        // evidence branch cannot corrupt. Failing the read closed here let one
-        // residual branch return 503 for every read permanently — nothing
-        // deletes a `preserved_unsafe` branch, and the sweep re-walks
-        // `dolt.branches` each request, so a restart does not clear it. Keep the
-        // evidence, re-prove `main`, and serve the read. Writes still fail
-        // closed on the same branch.
-        this.logReconciliation("warn", conn, {
+        await this.resolveOperationBranch(
+          conn,
           branch,
-          classification: "preserved_unsafe_read_served",
-          ...errorFields(error),
-        });
-        // Re-prove `main` so the next branch — and the read itself — never runs
-        // on a half-reconciled session, then keep going: a sibling branch may
-        // still be provable, and skipping it would drop read-your-writes for a
-        // durable write that only needs its merge finished.
-        await this.makeMainSafe(conn);
+          undefined,
+          undefined,
+          reconciliation
+        );
+      } catch (error) {
+        if (reconciliation === "required") throw error;
+        tolerated = true;
       }
     }
+    // Each iteration re-proves `main` itself, so one pass at the end is enough
+    // to guarantee the caller's read never runs on a half-reconciled session.
+    if (tolerated) await this.makeMainSafe(conn);
   }
 
   private async mergeState(
@@ -1733,7 +1754,7 @@ export class DoltgresWorkItemAdapter
               error.state as PendingBranchState<T>,
               error.originalError
             ),
-          { reconcile: "none" }
+          { reconcile: "skipped" }
         );
         if (resolved === undefined) {
           throw new DoltMergeOutcomeUnknownError();
@@ -1832,7 +1853,7 @@ export class DoltgresWorkItemAdapter
     fn: (conn: WorkItemConnection) => Promise<T>
   ): Promise<T> {
     return this.withOperationQueue("read work items", (context) =>
-      this.withGlobalLock(context, fn, { reconcile: "read" })
+      this.withGlobalLock(context, fn, { reconcile: "best_effort" })
     );
   }
 
