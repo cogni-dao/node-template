@@ -266,3 +266,39 @@ describe("DoltgresWorkItemAdapter.list keyset SQL", () => {
     expect(cursorQuery).toMatch(/AND id\s*>\s*'/);
   });
 });
+
+// COMMAND_QUERY_SEPARATION at runtime (work-items-port.md). Reads must not enter
+// the write admission queue: on operator production `operation.queue` averaged
+// 2660ms (peak 7334ms) against a 677ms dml.read, because a `max: 1` pool behind
+// a single-slot FIFO makes read concurrency structurally 1.
+describe("reads leave the write lane when a read pool is supplied", () => {
+  it("serves N concurrent reads concurrently, not one-at-a-time", async () => {
+    const started: number[] = [];
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const readPool = Object.assign(
+      async () => [],
+      {
+        unsafe: async (_q: string) => {
+          inFlight += 1;
+          maxInFlight = Math.max(maxInFlight, inFlight);
+          started.push(Date.now());
+          await new Promise((r) => setTimeout(r, 25));
+          inFlight -= 1;
+          return [] as unknown[];
+        },
+      }
+    ) as unknown as never;
+
+    const { DoltgresWorkItemAdapter } = await import(
+      "../../src/adapters/doltgres/adapter.js"
+    );
+    const adapter = new DoltgresWorkItemAdapter(readPool, { readClient: readPool });
+
+    await Promise.all([adapter.list({}), adapter.list({}), adapter.list({})]);
+
+    // Non-vacuous: without the read lane these serialize and maxInFlight === 1.
+    expect(maxInFlight).toBeGreaterThan(1);
+    expect(started.length).toBeGreaterThanOrEqual(3);
+  });
+});
