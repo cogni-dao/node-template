@@ -22,7 +22,13 @@ on:
         options: ["true", "false"]
 
 permissions:
-  contents: read
+  # `contents: write` creates the Release that carries the tarball. That asset is
+  # the PRIMARY distribution: a public repo serves it ANONYMOUSLY, so a fork can
+  # `pnpm install` with no credentials. GitHub Packages' npm registry cannot —
+  # it returns 401 even for a public package in a public repo — and node-template
+  # exists to be forked, so a registry that breaks every fork's build is
+  # disqualified. The registry publish below is kept as a secondary option.
+  contents: write
   packages: write
 
 concurrency:
@@ -78,8 +84,35 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && inputs.dry_run == 'true'
         run: pnpm --filter @cogni-dao/work-items exec npm pack --dry-run
 
-      - name: Publish
+      - name: Pack the tarball
         if: github.event_name == 'push' || inputs.dry_run == 'false'
+        id: pack
+        run: |
+          set -euo pipefail
+          mkdir -p dist-pack
+          pnpm --filter @cogni-dao/work-items exec npm pack --pack-destination "$PWD/dist-pack"
+          tgz="$(ls dist-pack/*.tgz)"
+          echo "tgz=$tgz" >> "$GITHUB_OUTPUT"
+          echo "packed $tgz"
+
+      # Anonymous, versioned, integrity-pinned by the consumer's lockfile, and no
+      # registry account anywhere. A node depends on it as:
+      #   "@cogni/work-items": "https://github.com/cogni-dao/node-template/releases/download/work-items-v<v>/cogni-dao-work-items-<v>.tgz"
+      # The alias keeps every existing import path untouched.
+      - name: Attach the tarball to a Release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" "${{ steps.pack.outputs.tgz }}" \
+            --title "$GITHUB_REF_NAME" \
+            --notes "Published build of @cogni-dao/work-items. Depend on the tarball URL below; a public repo serves it anonymously, so forks need no credentials (story.5069)." \
+            || gh release upload "$GITHUB_REF_NAME" "${{ steps.pack.outputs.tgz }}" --clobber
+
+      - name: Publish to GitHub Packages
+        if: github.event_name == 'push' || inputs.dry_run == 'false'
+        continue-on-error: true
         run: pnpm --filter @cogni-dao/work-items publish --no-git-checks --access restricted
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
