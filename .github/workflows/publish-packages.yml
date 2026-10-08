@@ -1,0 +1,85 @@
+name: Publish Packages
+
+# Publishes `@cogni-dao/work-items` so node repos can DEPEND on the adapter
+# instead of vendoring its source. Four divergent copies of that one file
+# existed across the fleet when bug.5358 was audited, and a single availability
+# fix then cost nine PRs across six repositories (story.5069).
+#
+# Not covered by the CI/CD freeze: docs/spec/cicd-platform-boundary.md scopes
+# that to the operator control plane, and a node's own GitHub Actions are
+# explicitly exempt. This workflow publishes a package; it deploys nothing.
+on:
+  push:
+    tags:
+      - "work-items-v*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Pack and inspect without publishing"
+        required: false
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-work-items-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "24"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - uses: pnpm/action-setup@c5ba7f7862a0f64c1b1a05fbac13e0b8e86ba08c # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          registry-url: "https://npm.pkg.github.com"
+          scope: "@cogni-dao"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The adapter ships as `dist` only (`files: ["dist"]`), so a missing build
+      # would publish an empty package. The package's own postbuild asserts
+      # dist/index.js exists.
+      - name: Build the package
+        run: pnpm --filter @cogni-dao/work-items build
+
+      # A published version must already be gated by the real-Doltgres lane that
+      # lives in this repo (task.5199). Unit tests here are the cheap backstop;
+      # `ci.yaml` is the gate that matters and runs on the commit being tagged.
+      - name: Unit tests
+        run: pnpm --filter @cogni-dao/work-items test
+
+      - name: Tag must match the package version
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          pkg="$(node -p "require('./packages/work-items/package.json').version")"
+          tag="${GITHUB_REF_NAME#work-items-v}"
+          if [ "$pkg" != "$tag" ]; then
+            echo "::error::tag work-items-v$tag does not match package version $pkg"
+            exit 1
+          fi
+          echo "publishing @cogni-dao/work-items@$pkg"
+
+      - name: Pack (dry run)
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run == 'true'
+        run: pnpm --filter @cogni-dao/work-items exec npm pack --dry-run
+
+      - name: Publish
+        if: github.event_name == 'push' || inputs.dry_run == 'false'
+        run: pnpm --filter @cogni-dao/work-items publish --no-git-checks --access restricted
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -132,7 +132,7 @@ importers:
         specifier: workspace:*
         version: link:../packages/scheduler-core
       '@cogni/work-items':
-        specifier: workspace:*
+        specifier: workspace:@cogni-dao/work-items@*
         version: link:../packages/work-items
       '@dnd-kit/core':
         specifier: ^6.3.1

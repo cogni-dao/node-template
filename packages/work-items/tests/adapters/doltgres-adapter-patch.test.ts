@@ -15,7 +15,7 @@
  * @internal
  */
 
-import { toWorkItemId } from "@cogni/work-items";
+import { toWorkItemId } from "@cogni-dao/work-items";
 import type { Sql } from "postgres";
 import { describe, expect, it } from "vitest";
 

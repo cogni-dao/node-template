@@ -6,7 +6,7 @@
  * an unprovable branch fails writes closed without taking reads down (bug.5358).
  */
 
-import { toWorkItemId } from "@cogni/work-items";
+import { toWorkItemId } from "@cogni-dao/work-items";
 import type { ReservedSql, Sql } from "postgres";
 import { describe, expect, it } from "vitest";
 
