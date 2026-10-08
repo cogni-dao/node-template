@@ -1639,8 +1639,11 @@ export class DoltgresWorkItemAdapter
           classification: "preserved_unsafe_read_served",
           ...errorFields(error),
         });
+        // Re-prove `main` so the next branch — and the read itself — never runs
+        // on a half-reconciled session, then keep going: a sibling branch may
+        // still be provable, and skipping it would drop read-your-writes for a
+        // durable write that only needs its merge finished.
         await this.makeMainSafe(conn);
-        return;
       }
     }
   }

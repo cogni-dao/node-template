@@ -19,6 +19,7 @@ type Rows = ReadonlyArray<Record<string, unknown>>;
 
 interface ReconciliationState {
   branch?: string;
+  extraBranch?: string;
   readonly branchCommit?: string;
   readonly mergeBase: string;
   readonly listError?: Error;
@@ -49,15 +50,19 @@ function makeReconciliationHarness({
   listError,
   omitBranchCommit = false,
   proofError,
+  withProvableSibling = false,
 }: {
   readonly branchCommit?: string;
   readonly mergeBase: string;
   readonly listError?: Error;
   readonly omitBranchCommit?: boolean;
   readonly proofError?: Error;
+  /** A second branch, sorted after the first, whose tip is already main. */
+  readonly withProvableSibling?: boolean;
 }) {
   const state: ReconciliationState = {
     branch: "work-item-op/restart-evidence",
+    extraBranch: withProvableSibling ? "work-item-op/zz-sibling" : undefined,
     branchCommit: omitBranchCommit ? undefined : branchCommit,
     mergeBase,
     listError,
@@ -87,9 +92,13 @@ function makeReconciliationHarness({
     }
     if (query === "SELECT name, hash FROM dolt.branches") {
       if (state.listError) throw state.listError;
-      return state.branch
-        ? [{ name: state.branch, hash: state.branchCommit }]
-        : [];
+      const rows: Array<Record<string, unknown>> = [];
+      if (state.branch)
+        rows.push({ name: state.branch, hash: state.branchCommit });
+      // Tip already equals current main, so the sweep can delete it outright.
+      if (state.extraBranch)
+        rows.push({ name: state.extraBranch, hash: "current-main" });
+      return rows;
     }
     if (query.startsWith("SELECT dolt_merge_base")) {
       if (state.proofError) throw state.proofError;
@@ -149,7 +158,9 @@ function makeReconciliationHarness({
       ];
     }
     if (query.startsWith("SELECT dolt_branch('-D'")) {
-      state.branch = undefined;
+      const deleted = /'(work-item-op\/[^']+)'/.exec(query)?.[1];
+      if (deleted === state.extraBranch) state.extraBranch = undefined;
+      else state.branch = undefined;
       return [{ dolt_branch: [0, ""] }];
     }
     if (query.startsWith("SELECT * FROM work_items WHERE id = 'task.0001'")) {
@@ -302,6 +313,23 @@ describe("DoltgresWorkItemAdapter restart reconciliation", () => {
       state.queries.filter((query) => query === "SELECT dolt_checkout('main')")
         .length
     ).toBeGreaterThanOrEqual(2);
+  });
+
+  it("still reconciles a provable sibling after tolerating an unprovable branch", async () => {
+    const { adapter, state } = makeReconciliationHarness({
+      mergeBase: "operation-commit",
+      proofError: new Error("proof query failed"),
+      withProvableSibling: true,
+    });
+
+    await expect(
+      adapter.get(toWorkItemId("task.missing"))
+    ).resolves.toBeNull();
+
+    // The unprovable branch is kept as evidence; the sweep does not stop there,
+    // so a sibling that only needed its merge finished is still resolved.
+    expect(state.branch).toBe("work-item-op/restart-evidence");
+    expect(state.extraBranch).toBeUndefined();
   });
 
   it("preserves evidence and fails busy when the branch lookup errors", async () => {
