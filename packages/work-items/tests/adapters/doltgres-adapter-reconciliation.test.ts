@@ -180,7 +180,20 @@ function makeReconciliationHarness({
     end: async () => undefined,
   } as unknown as Sql;
 
-  return { adapter: new DoltgresWorkItemAdapter(sql), state };
+  const logs: Array<{ level: string; fields: Record<string, unknown> }> = [];
+  const record =
+    (level: string) => (fields: Record<string, unknown>, _message: string) =>
+      void logs.push({ level, fields });
+  const logger = {
+    info: record("info"),
+    warn: record("warn"),
+    error: record("error"),
+  };
+  return {
+    adapter: new DoltgresWorkItemAdapter(sql, { logger }),
+    state,
+    logs,
+  };
 }
 
 describe("DoltgresWorkItemAdapter restart reconciliation", () => {
@@ -313,6 +326,54 @@ describe("DoltgresWorkItemAdapter restart reconciliation", () => {
       state.queries.filter((query) => query === "SELECT dolt_checkout('main')")
         .length
     ).toBeGreaterThanOrEqual(2);
+  });
+
+  it("records a served read as handled degradation, never as an error", async () => {
+    // `omitBranchCommit` fails the branch proof without failing a query, which
+    // is the production signature: poly's wedged reads log no stage_error, only
+    // the reconciliation verdict.
+    const { adapter, logs } = makeReconciliationHarness({
+      mergeBase: "operation-commit",
+      omitBranchCommit: true,
+    });
+
+    await expect(
+      adapter.get(toWorkItemId("task.missing"))
+    ).resolves.toBeNull();
+
+    // The request SUCCEEDED. Any error level would make every healthy read on a
+    // node carrying residual evidence look like an outage.
+    expect(logs.filter((entry) => entry.level === "error")).toEqual([]);
+    const preserved = logs.filter(
+      (entry) => entry.fields.classification === "preserved_unsafe"
+    );
+    expect(preserved).toHaveLength(1);
+    expect(preserved[0]?.level).toBe("warn");
+    // Vocabulary is unchanged, so existing `preserved_unsafe` queries still
+    // match; `served` is what distinguishes the tolerated read.
+    expect(preserved[0]?.fields.served).toBe(true);
+    expect(preserved[0]?.fields.branch).toBe("work-item-op/restart-evidence");
+  });
+
+  it("records an unprovable branch as an error when a write fails closed", async () => {
+    const { adapter, logs } = makeReconciliationHarness({
+      mergeBase: "operation-commit",
+      omitBranchCommit: true,
+    });
+
+    await expect(
+      adapter.patch(
+        { id: toWorkItemId("task.missing"), set: { title: "blocked" } },
+        "principal-1"
+      )
+    ).rejects.toBeInstanceOf(WorkItemsBusyError);
+
+    const preserved = logs.filter(
+      (entry) => entry.fields.classification === "preserved_unsafe"
+    );
+    expect(preserved).toHaveLength(1);
+    expect(preserved[0]?.level).toBe("error");
+    expect(preserved[0]?.fields.served).toBeUndefined();
   });
 
   it("still reconciles a provable sibling after tolerating an unprovable branch", async () => {
