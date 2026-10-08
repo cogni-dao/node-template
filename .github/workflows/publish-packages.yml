@@ -56,11 +56,13 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # The adapter ships as `dist` only (`files: ["dist"]`), so a missing build
-      # would publish an empty package. The package's own postbuild asserts
-      # dist/index.js exists.
-      - name: Build the package
-        run: pnpm --filter @cogni-dao/work-items build
+      # `pnpm packages:build`, NOT the package's own `build`. tsup is configured
+      # `dts: false` on every entry, so the .d.ts files that `exports.*.types`
+      # points at come from the `tsc -b` half of this script. Running only the
+      # package build publishes JS with no declarations, and every TypeScript
+      # consumer then fails to resolve the module — 0.1.1 shipped exactly that.
+      - name: Build the workspace packages
+        run: pnpm packages:build
 
       # A published version must already be gated by the real-Doltgres lane that
       # lives in this repo (task.5199). Unit tests here are the cheap backstop;
@@ -94,6 +96,39 @@ jobs:
           tgz="$(ls dist-pack/*.tgz)"
           echo "tgz=$tgz" >> "$GITHUB_OUTPUT"
           echo "packed $tgz"
+
+      # Verify the ARTIFACT, not the build that produced it. 0.1.1 published with
+      # exports.types pointing at .d.ts files the tarball did not contain, which
+      # a green build could not reveal. Assert every declared entrypoint is
+      # actually inside the tarball before anything depends on it.
+      - name: Tarball must contain every declared entrypoint
+        if: github.event_name == 'push' || inputs.dry_run == 'false'
+        run: |
+          set -euo pipefail
+          tar tzf "${{ steps.pack.outputs.tgz }}" | sed 's|^package/||' | sort -u > /tmp/have.txt
+          node -e '
+            const fs = require("node:fs");
+            const pkg = require("./packages/work-items/package.json");
+            const want = new Set();
+            for (const map of Object.values(pkg.exports ?? {})) {
+              for (const key of ["types", "import", "default"]) {
+                if (map?.[key]) want.add(map[key].replace(/^\.\//, ""));
+              }
+            }
+            if (want.size === 0) {
+              console.error("no exports declared - nothing to verify");
+              process.exit(1);
+            }
+            fs.writeFileSync("/tmp/want.txt", [...want].sort().join("\n") + "\n");
+            console.log(`${want.size} declared entrypoints to verify`);
+          '
+          missing="$(comm -23 /tmp/want.txt /tmp/have.txt || true)"
+          if [ -n "$missing" ]; then
+            echo "::error::tarball is missing declared entrypoints:"
+            echo "$missing"
+            exit 1
+          fi
+          echo "all declared entrypoints present"
 
       # Anonymous, versioned, integrity-pinned by the consumer's lockfile, and no
       # registry account anywhere. A node depends on it as:
