@@ -34,7 +34,7 @@
     "@cogni/graph-execution-host": "workspace:*",
     "@cogni/ids": "workspace:*",
     "@cogni/ingestion-core": "workspace:*",
-    "@cogni/knowledge-store": "workspace:*",
+    "@cogni/knowledge-store": "workspace:@cogni-dao/knowledge-store@*",
     "@cogni/langgraph-graphs": "workspace:*",
     "@cogni/node-app": "workspace:*",
     "@cogni/node-contracts": "workspace:*",

@@ -99,7 +99,7 @@ importers:
         specifier: workspace:*
         version: link:../packages/ingestion-core
       '@cogni/knowledge-store':
-        specifier: workspace:*
+        specifier: workspace:@cogni-dao/knowledge-store@*
         version: link:../packages/knowledge-store
       '@cogni/langgraph-graphs':
         specifier: workspace:*
@@ -480,6 +480,12 @@ importers:
       typescript:
         specifier: ^5
         version: 5.9.3
+      vite-tsconfig-paths:
+        specifier: ^5.1.4
+        version: 5.1.4(typescript@5.9.3)(vite@7.3.5(@types/node@22.19.19)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.22.4)(yaml@2.9.0))
+      vitest:
+        specifier: ^3.1.4
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@22.19.19)(happy-dom@20.10.2(bufferutil@4.1.0)(utf-8-validate@5.0.10))(jiti@2.7.0)(jsdom@27.4.0(@noble/hashes@1.8.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10))(lightningcss@1.32.0)(tsx@4.22.4)(yaml@2.9.0)
 
   packages/aragon-osx:
     dependencies:
@@ -649,7 +655,7 @@ importers:
   packages/doltgres-schema:
     dependencies:
       '@cogni/knowledge-base':
-        specifier: workspace:*
+        specifier: workspace:@cogni-dao/knowledge-base@*
         version: link:../knowledge-base
       drizzle-orm:
         specifier: ^0.44.7
@@ -731,25 +737,28 @@ importers:
 
   packages/knowledge-base:
     dependencies:
-      '@cogni/knowledge-store':
-        specifier: workspace:*
-        version: link:../knowledge-store
       drizzle-orm:
         specifier: ^0.44.7
         version: 0.44.7(@opentelemetry/api@1.9.1)(postgres@3.4.9)
     devDependencies:
+      '@cogni/knowledge-store':
+        specifier: workspace:@cogni-dao/knowledge-store@*
+        version: link:../knowledge-store
       tsup:
         specifier: ^8.5.1
         version: 8.5.1(jiti@2.7.0)(postcss@8.5.15)(tsx@4.22.4)(typescript@5.9.3)(yaml@2.9.0)
       typescript:
         specifier: ^5
         version: 5.9.3
+      vite-tsconfig-paths:
+        specifier: ^5.1.4
+        version: 5.1.4(typescript@5.9.3)(vite@7.3.5(@types/node@22.19.19)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.22.4)(yaml@2.9.0))
+      vitest:
+        specifier: ^3.1.4
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@22.19.19)(happy-dom@20.10.2(bufferutil@4.1.0)(utf-8-validate@5.0.10))(jiti@2.7.0)(jsdom@27.4.0(@noble/hashes@1.8.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10))(lightningcss@1.32.0)(tsx@4.22.4)(yaml@2.9.0)
 
   packages/knowledge-store:
     dependencies:
-      '@cogni/ai-tools':
-        specifier: workspace:*
-        version: link:../ai-tools
       postgres:
         specifier: ^3.4.5
         version: 3.4.9
@@ -757,12 +766,21 @@ importers:
         specifier: ^4.1.12
         version: 4.4.3
     devDependencies:
+      '@cogni/ai-tools':
+        specifier: workspace:*
+        version: link:../ai-tools
       tsup:
         specifier: ^8.5.1
         version: 8.5.1(jiti@2.7.0)(postcss@8.5.15)(tsx@4.22.4)(typescript@5.9.3)(yaml@2.9.0)
       typescript:
         specifier: ^5
         version: 5.9.3
+      vite-tsconfig-paths:
+        specifier: ^5.1.4
+        version: 5.1.4(typescript@5.9.3)(vite@7.3.5(@types/node@22.19.19)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.22.4)(yaml@2.9.0))
+      vitest:
+        specifier: ^3.1.4
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@22.19.19)(happy-dom@20.10.2(bufferutil@4.1.0)(utf-8-validate@5.0.10))(jiti@2.7.0)(jsdom@27.4.0(@noble/hashes@1.8.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10))(lightningcss@1.32.0)(tsx@4.22.4)(yaml@2.9.0)
 
   packages/langgraph-graphs:
     dependencies:
@@ -835,7 +853,7 @@ importers:
         specifier: workspace:*
         version: link:../aragon-osx
       '@cogni/knowledge-store':
-        specifier: workspace:*
+        specifier: workspace:@cogni-dao/knowledge-store@*
         version: link:../knowledge-store
       '@cogni/node-core':
         specifier: workspace:*
