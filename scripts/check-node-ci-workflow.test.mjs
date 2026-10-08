@@ -21,6 +21,7 @@ const FILES = [
   ".github/workflows/ci.yaml",
   ".github/workflows/pr-build.yml",
   ".github/workflows/pr-lint.yaml",
+  ".github/workflows/publish-packages.yml",
   ".cogni/repo-policy.json",
 ];
 
@@ -84,6 +85,62 @@ const CASES = [
     mutate: edit(".cogni/repo-policy.json", '"manifest"]', '"manifest", "nonexistent-check"]'),
     expectExit: 1,
     expectMatch: /required check "nonexistent-check"/,
+  },
+  {
+    name: "a --clobber in the publish lane makes a published version mutable",
+    mutate: edit(
+      ".github/workflows/publish-packages.yml",
+      'gh release create "$GITHUB_REF_NAME" "${{ steps.pack.outputs.tgz }}" \\',
+      'gh release upload "$GITHUB_REF_NAME" "${{ steps.pack.outputs.tgz }}" --clobber \\'
+    ),
+    expectExit: 1,
+    expectMatch: /uses --clobber/,
+  },
+  {
+    name: "a continue-on-error publish step cannot fail, so it proves nothing",
+    mutate: edit(
+      ".github/workflows/publish-packages.yml",
+      "      - name: Attach the tarball to a Release\n        if: github.event_name == 'push'",
+      "      - name: Attach the tarball to a Release\n        continue-on-error: true\n        if: github.event_name == 'push'"
+    ),
+    expectExit: 1,
+    expectMatch: /continue-on-error/,
+  },
+  {
+    name: "an ungated release step lets workflow_dispatch publish without a tag",
+    mutate: edit(
+      ".github/workflows/publish-packages.yml",
+      "      - name: Attach the tarball to a Release\n        if: github.event_name == 'push'\n",
+      "      - name: Attach the tarball to a Release\n"
+    ),
+    expectExit: 1,
+    expectMatch: /publishes or attests but is not gated/,
+  },
+  {
+    name: "deleting the required-checks gate lets an ungated commit be published",
+    mutate: edit(
+      ".github/workflows/publish-packages.yml",
+      "      - name: Tagged commit must have passed every required check",
+      "      - name: Tagged commit checks are assumed green"
+    ),
+    expectExit: 1,
+    expectMatch: /Tagged commit must have passed every required check/,
+  },
+  {
+    name: "re-adding packages: write signals a second, unreachable distribution channel",
+    mutate: edit(
+      ".github/workflows/publish-packages.yml",
+      "  id-token: write\n  attestations: write",
+      "  id-token: write\n  attestations: write\n  packages: write"
+    ),
+    expectExit: 1,
+    expectMatch: /permissions\.packages must not be granted/,
+  },
+  {
+    name: "building the artifact on a different Node major than CI gates it",
+    mutate: edit(".github/workflows/publish-packages.yml", 'NODE_VERSION: "22"', 'NODE_VERSION: "24"'),
+    expectExit: 1,
+    expectMatch: /env\.NODE_VERSION must match/,
   },
 ];
 

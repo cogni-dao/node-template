@@ -4,11 +4,13 @@ import { parse } from "yaml";
 const CI_WORKFLOW_PATH = ".github/workflows/ci.yaml";
 const PR_BUILD_WORKFLOW_PATH = ".github/workflows/pr-build.yml";
 const PR_LINT_WORKFLOW_PATH = ".github/workflows/pr-lint.yaml";
+const PUBLISH_WORKFLOW_PATH = ".github/workflows/publish-packages.yml";
 const REPO_POLICY_PATH = ".cogni/repo-policy.json";
 
 const ciWorkflow = readWorkflow(CI_WORKFLOW_PATH);
 const prBuildWorkflow = readWorkflow(PR_BUILD_WORKFLOW_PATH);
 const prLintWorkflow = readWorkflow(PR_LINT_WORKFLOW_PATH);
+const publishWorkflow = readWorkflow(PUBLISH_WORKFLOW_PATH);
 const repoPolicy = JSON.parse(readFileSync(REPO_POLICY_PATH, "utf8"));
 
 function readWorkflow(path) {
@@ -391,6 +393,107 @@ expectEqual(
 expectEqual(PR_LINT_WORKFLOW_PATH, prLintWorkflow?.name, "Lint PR", "workflow name");
 expectTrigger(PR_LINT_WORKFLOW_PATH, prLintWorkflow, "pull_request");
 expectNoWorkflowDispatch(PR_LINT_WORKFLOW_PATH, prLintWorkflow);
+
+// The publish lane distributes bytes that every node repo then pins. The checks
+// below are the invariants that make a published version trustworthy; each one is
+// here because its absence was a live defect in the first version of this
+// workflow (story.5069), and each is cheap to re-break by hand.
+expectEqual(PUBLISH_WORKFLOW_PATH, publishWorkflow?.name, "Publish Packages", "workflow name");
+{
+  const tags = publishWorkflow?.on?.push?.tags;
+  if (!Array.isArray(tags) || !tags.includes("work-items-v*")) {
+    fail(PUBLISH_WORKFLOW_PATH, 'push trigger must include the tag filter "work-items-v*"');
+  }
+}
+expectEqual(PUBLISH_WORKFLOW_PATH, publishWorkflow?.permissions?.contents, "write", "permissions.contents");
+// Provenance is not optional: `npm publish --provenance` only works against
+// registry.npmjs.org, so a Release asset's equivalent is an attestation over the
+// exact tarball, and that needs Sigstore OIDC plus attestation storage.
+expectEqual(PUBLISH_WORKFLOW_PATH, publishWorkflow?.permissions?.["id-token"], "write", "permissions.id-token");
+expectEqual(PUBLISH_WORKFLOW_PATH, publishWorkflow?.permissions?.attestations, "write", "permissions.attestations");
+// Least privilege, and an honesty check. A `packages: write` grant here means
+// someone re-added a GitHub Packages publish — a registry that returns 401 even
+// for a public package in a public repo, so it is unreachable for the forks this
+// repo exists to serve. One distribution channel, or consumers cannot tell which
+// bytes are canonical.
+if (publishWorkflow?.permissions?.packages !== undefined) {
+  fail(
+    PUBLISH_WORKFLOW_PATH,
+    "permissions.packages must not be granted: the Release asset is the only distribution channel"
+  );
+}
+// A publish must never be cancelled mid-upload, or a Release exists with no asset.
+expectEqual(
+  PUBLISH_WORKFLOW_PATH,
+  publishWorkflow?.concurrency?.["cancel-in-progress"],
+  false,
+  "concurrency.cancel-in-progress"
+);
+// Build the artifact on the toolchain that gates it and runs it. Skew here ships
+// dist + .d.ts files off a Node major no consumer uses.
+expectEqual(
+  PUBLISH_WORKFLOW_PATH,
+  publishWorkflow?.env?.NODE_VERSION,
+  ciWorkflow?.env?.NODE_VERSION,
+  `env.NODE_VERSION must match ${CI_WORKFLOW_PATH}`
+);
+{
+  const publishJob = publishWorkflow?.jobs?.publish;
+  if (!publishJob) fail(PUBLISH_WORKFLOW_PATH, "jobs must include publish");
+  const publishSteps = Array.isArray(publishJob?.steps) ? publishJob.steps : [];
+
+  // Each of these encodes one fail-closed assertion. Deleting a step is the
+  // regression this guards, so require them by name.
+  for (const name of [
+    "Tagged commit must have passed every required check",
+    "Tag must match the package version",
+    "Release must not already exist",
+    "Tarball must contain every declared entrypoint",
+    "Tarball must carry its licence",
+    "Attest the tarball",
+    "Attach the tarball to a Release",
+  ]) {
+    expectStep(PUBLISH_WORKFLOW_PATH, publishSteps, name);
+  }
+
+  for (const step of publishSteps) {
+    const label = JSON.stringify(step?.name ?? step?.uses ?? "<unnamed step>");
+
+    // A version is immutable or it is not a version. `--clobber` replaces the
+    // asset bytes at an already-published version, so every consumer pinning that
+    // URL either breaks on an integrity mismatch or silently receives different
+    // code under a version they already reviewed.
+    if (String(step?.run ?? "").includes("--clobber")) {
+      fail(
+        PUBLISH_WORKFLOW_PATH,
+        `step ${label} uses --clobber; a published version must never be overwritten. Bump the version instead.`
+      );
+    }
+
+    // A step that cannot fail proves nothing, and reads as coverage it does not have.
+    if (step?.["continue-on-error"] === true) {
+      fail(
+        PUBLISH_WORKFLOW_PATH,
+        `step ${label} sets continue-on-error: true; a publish step that cannot fail proves nothing`
+      );
+    }
+
+    // Anything that mutates the published world must be unreachable from
+    // workflow_dispatch, which carries no tag and therefore skips the
+    // tag/version correspondence proof.
+    const mutatesPublishedState =
+      /gh release (create|upload|edit|delete)/.test(String(step?.run ?? "")) ||
+      /\b(npm|pnpm)\b[^\n]*\bpublish\b/.test(String(step?.run ?? "")) ||
+      String(step?.uses ?? "").includes("attest-build-provenance");
+    if (mutatesPublishedState && step?.if !== "github.event_name == 'push'") {
+      fail(
+        PUBLISH_WORKFLOW_PATH,
+        `step ${label} publishes or attests but is not gated on \`if: github.event_name == 'push'\`; ` +
+          "a workflow_dispatch carries no tag, so it cannot prove the version it would publish"
+      );
+    }
+  }
+}
 
 const REQUIRED_CHECK_WORKFLOWS = [
   { path: CI_WORKFLOW_PATH, workflow: ciWorkflow },
