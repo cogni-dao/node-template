@@ -44,6 +44,17 @@ const OPERATION_QUEUE_WAIT_MS = 30_000;
 const QUERY_TIMEOUT_MS = 5_000;
 const RESERVE_TIMEOUT_MS = 5_000;
 
+/**
+ * How a locked scope treats an operation branch it cannot prove.
+ *
+ * - `full` — fail closed. A write must never build on unproven evidence.
+ * - `read` — reconcile what is provable, then serve from committed `main` even
+ *   if a branch stays unprovable (bug.5358).
+ * - `none` — the caller already owns one specific branch and reconciles it
+ *   itself; a generic sweep would race that work.
+ */
+type ReconcileScope = "full" | "read" | "none";
+
 export interface WorkItemLogger {
   info(fields: Record<string, unknown>, message: string): void;
   warn(fields: Record<string, unknown>, message: string): void;
@@ -1001,7 +1012,7 @@ export class DoltgresWorkItemAdapter
   private async withGlobalLock<T>(
     context: OperationContext,
     fn: (conn: WorkItemConnection) => Promise<T>,
-    options: { readonly reconcile?: boolean } = {}
+    options: { readonly reconcile?: ReconcileScope } = {}
   ): Promise<T> {
     if (this.poisoned) {
       throw new WorkItemsBusyError(
@@ -1062,7 +1073,8 @@ export class DoltgresWorkItemAdapter
       });
       const conn = this.instrumentConnection(operationPool, rawConn, context);
       locked = await this.acquireGlobalLock(conn, context);
-      if (options.reconcile !== false) await this.reconcileUnderLock(conn);
+      const scope = options.reconcile ?? "full";
+      if (scope !== "none") await this.reconcileUnderLock(conn, scope);
       return await fn(conn);
     } catch (error) {
       pendingRecovery = error instanceof PendingBranchRecoveryError;
@@ -1579,7 +1591,7 @@ export class DoltgresWorkItemAdapter
     return pending?.result;
   }
 
-  private async reconcileUnderLock(conn: WorkItemConnection): Promise<void> {
+  private async makeMainSafe(conn: WorkItemConnection): Promise<void> {
     try {
       const checkoutRows = await conn.unsafe("SELECT dolt_checkout('main')");
       assertDoltStatus(checkoutRows, "dolt_checkout");
@@ -1590,6 +1602,13 @@ export class DoltgresWorkItemAdapter
         "Work-item main could not be made safe for reconciliation; retry shortly"
       );
     }
+  }
+
+  private async reconcileUnderLock(
+    conn: WorkItemConnection,
+    scope: Exclude<ReconcileScope, "none"> = "full"
+  ): Promise<void> {
+    await this.makeMainSafe(conn);
 
     let branchRows: ReadonlyArray<Record<string, unknown>>;
     try {
@@ -1604,7 +1623,25 @@ export class DoltgresWorkItemAdapter
       .filter((branch) => branch.startsWith(OP_BRANCH_PREFIX))
       .sort();
     for (const branch of branches) {
-      await this.resolveOperationBranch(conn, branch);
+      try {
+        await this.resolveOperationBranch(conn, branch);
+      } catch (error) {
+        if (scope === "full") throw error;
+        // bug.5358: a read is served from committed `main`, which an unprovable
+        // evidence branch cannot corrupt. Failing the read closed here let one
+        // residual branch return 503 for every read permanently — nothing
+        // deletes a `preserved_unsafe` branch, and the sweep re-walks
+        // `dolt.branches` each request, so a restart does not clear it. Keep the
+        // evidence, re-prove `main`, and serve the read. Writes still fail
+        // closed on the same branch.
+        this.logReconciliation("warn", conn, {
+          branch,
+          classification: "preserved_unsafe_read_served",
+          ...errorFields(error),
+        });
+        await this.makeMainSafe(conn);
+        return;
+      }
     }
   }
 
@@ -1693,7 +1730,7 @@ export class DoltgresWorkItemAdapter
               error.state as PendingBranchState<T>,
               error.originalError
             ),
-          { reconcile: false }
+          { reconcile: "none" }
         );
         if (resolved === undefined) {
           throw new DoltMergeOutcomeUnknownError();
@@ -1792,7 +1829,7 @@ export class DoltgresWorkItemAdapter
     fn: (conn: WorkItemConnection) => Promise<T>
   ): Promise<T> {
     return this.withOperationQueue("read work items", (context) =>
-      this.withGlobalLock(context, fn)
+      this.withGlobalLock(context, fn, { reconcile: "read" })
     );
   }
 

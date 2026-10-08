@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
-/** Proves restart reconciliation preserves unproven operation branches. */
+/**
+ * Proves restart reconciliation preserves unproven operation branches, and that
+ * an unprovable branch fails writes closed without taking reads down (bug.5358).
+ */
 
 import { toWorkItemId } from "@cogni/work-items";
 import type { ReservedSql, Sql } from "postgres";
@@ -222,14 +225,17 @@ describe("DoltgresWorkItemAdapter restart reconciliation", () => {
     ).toBe(true);
   });
 
-  it("preserves evidence and fails busy when the reachability proof errors", async () => {
+  it("preserves evidence and fails a write busy when the reachability proof errors", async () => {
     const { adapter, state } = makeReconciliationHarness({
       mergeBase: "operation-commit",
       proofError: new Error("proof query failed"),
     });
 
     await expect(
-      adapter.get(toWorkItemId("task.missing"))
+      adapter.patch(
+        { id: toWorkItemId("task.missing"), set: { title: "blocked" } },
+        "principal-1"
+      )
     ).rejects.toBeInstanceOf(WorkItemsBusyError);
 
     expect(state.branch).toBe("work-item-op/restart-evidence");
@@ -239,6 +245,63 @@ describe("DoltgresWorkItemAdapter restart reconciliation", () => {
     expect(
       state.queries.some((query) => query.includes("FROM work_items"))
     ).toBe(false);
+  });
+
+  it("serves a read when a branch cannot be proven, keeping the evidence", async () => {
+    const { adapter, state } = makeReconciliationHarness({
+      mergeBase: "operation-commit",
+      proofError: new Error("proof query failed"),
+    });
+
+    await expect(
+      adapter.get(toWorkItemId("task.missing"))
+    ).resolves.toBeNull();
+
+    // Evidence is preserved, but it is no longer on the read path (bug.5358).
+    expect(state.branch).toBe("work-item-op/restart-evidence");
+    expect(
+      state.queries.some((query) => query.startsWith("SELECT dolt_branch('-D'"))
+    ).toBe(false);
+    expect(
+      state.queries.some((query) => query.includes("FROM work_items"))
+    ).toBe(true);
+  });
+
+  it("serves a read when the branch tip is missing, keeping the evidence", async () => {
+    const { adapter, state } = makeReconciliationHarness({
+      mergeBase: "operation-commit",
+      omitBranchCommit: true,
+    });
+
+    await expect(
+      adapter.get(toWorkItemId("task.missing"))
+    ).resolves.toBeNull();
+
+    expect(state.branch).toBe("work-item-op/restart-evidence");
+    expect(
+      state.queries.some((query) => query.startsWith("SELECT dolt_branch('-D'"))
+    ).toBe(false);
+    expect(
+      state.queries.some((query) => query.includes("FROM work_items"))
+    ).toBe(true);
+  });
+
+  it("re-proves main is safe before serving a read past unprovable evidence", async () => {
+    const { adapter, state } = makeReconciliationHarness({
+      mergeBase: "operation-commit",
+      proofError: new Error("proof query failed"),
+    });
+
+    await expect(
+      adapter.get(toWorkItemId("task.missing"))
+    ).resolves.toBeNull();
+
+    // One checkout makes main safe up front; a second re-proves it after the
+    // tolerated failure, so the read never runs on a half-reconciled session.
+    expect(
+      state.queries.filter((query) => query === "SELECT dolt_checkout('main')")
+        .length
+    ).toBeGreaterThanOrEqual(2);
   });
 
   it("preserves evidence and fails busy when the branch lookup errors", async () => {
@@ -260,14 +323,17 @@ describe("DoltgresWorkItemAdapter restart reconciliation", () => {
     ).toBe(false);
   });
 
-  it("preserves evidence and fails busy when the branch tip is missing", async () => {
+  it("preserves evidence and fails a write busy when the branch tip is missing", async () => {
     const { adapter, state } = makeReconciliationHarness({
       mergeBase: "operation-commit",
       omitBranchCommit: true,
     });
 
     await expect(
-      adapter.get(toWorkItemId("task.missing"))
+      adapter.patch(
+        { id: toWorkItemId("task.missing"), set: { title: "blocked" } },
+        "principal-1"
+      )
     ).rejects.toBeInstanceOf(WorkItemsBusyError);
 
     expect(state.branch).toBe("work-item-op/restart-evidence");
