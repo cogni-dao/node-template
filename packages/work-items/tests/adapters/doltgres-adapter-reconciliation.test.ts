@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
-/** Proves restart reconciliation preserves unproven operation branches. */
+/**
+ * Proves restart reconciliation preserves unproven operation branches, and that
+ * an unprovable branch fails writes closed without taking reads down (bug.5358).
+ */
 
 import { toWorkItemId } from "@cogni/work-items";
 import type { ReservedSql, Sql } from "postgres";
@@ -16,6 +19,7 @@ type Rows = ReadonlyArray<Record<string, unknown>>;
 
 interface ReconciliationState {
   branch?: string;
+  extraBranch?: string;
   readonly branchCommit?: string;
   readonly mergeBase: string;
   readonly listError?: Error;
@@ -46,15 +50,19 @@ function makeReconciliationHarness({
   listError,
   omitBranchCommit = false,
   proofError,
+  withProvableSibling = false,
 }: {
   readonly branchCommit?: string;
   readonly mergeBase: string;
   readonly listError?: Error;
   readonly omitBranchCommit?: boolean;
   readonly proofError?: Error;
+  /** A second branch, sorted after the first, whose tip is already main. */
+  readonly withProvableSibling?: boolean;
 }) {
   const state: ReconciliationState = {
     branch: "work-item-op/restart-evidence",
+    extraBranch: withProvableSibling ? "work-item-op/zz-sibling" : undefined,
     branchCommit: omitBranchCommit ? undefined : branchCommit,
     mergeBase,
     listError,
@@ -84,9 +92,13 @@ function makeReconciliationHarness({
     }
     if (query === "SELECT name, hash FROM dolt.branches") {
       if (state.listError) throw state.listError;
-      return state.branch
-        ? [{ name: state.branch, hash: state.branchCommit }]
-        : [];
+      const rows: Array<Record<string, unknown>> = [];
+      if (state.branch)
+        rows.push({ name: state.branch, hash: state.branchCommit });
+      // Tip already equals current main, so the sweep can delete it outright.
+      if (state.extraBranch)
+        rows.push({ name: state.extraBranch, hash: "current-main" });
+      return rows;
     }
     if (query.startsWith("SELECT dolt_merge_base")) {
       if (state.proofError) throw state.proofError;
@@ -146,7 +158,9 @@ function makeReconciliationHarness({
       ];
     }
     if (query.startsWith("SELECT dolt_branch('-D'")) {
-      state.branch = undefined;
+      const deleted = /'(work-item-op\/[^']+)'/.exec(query)?.[1];
+      if (deleted === state.extraBranch) state.extraBranch = undefined;
+      else state.branch = undefined;
       return [{ dolt_branch: [0, ""] }];
     }
     if (query.startsWith("SELECT * FROM work_items WHERE id = 'task.0001'")) {
@@ -222,14 +236,17 @@ describe("DoltgresWorkItemAdapter restart reconciliation", () => {
     ).toBe(true);
   });
 
-  it("preserves evidence and fails busy when the reachability proof errors", async () => {
+  it("preserves evidence and fails a write busy when the reachability proof errors", async () => {
     const { adapter, state } = makeReconciliationHarness({
       mergeBase: "operation-commit",
       proofError: new Error("proof query failed"),
     });
 
     await expect(
-      adapter.get(toWorkItemId("task.missing"))
+      adapter.patch(
+        { id: toWorkItemId("task.missing"), set: { title: "blocked" } },
+        "principal-1"
+      )
     ).rejects.toBeInstanceOf(WorkItemsBusyError);
 
     expect(state.branch).toBe("work-item-op/restart-evidence");
@@ -239,6 +256,80 @@ describe("DoltgresWorkItemAdapter restart reconciliation", () => {
     expect(
       state.queries.some((query) => query.includes("FROM work_items"))
     ).toBe(false);
+  });
+
+  it("serves a read when a branch cannot be proven, keeping the evidence", async () => {
+    const { adapter, state } = makeReconciliationHarness({
+      mergeBase: "operation-commit",
+      proofError: new Error("proof query failed"),
+    });
+
+    await expect(
+      adapter.get(toWorkItemId("task.missing"))
+    ).resolves.toBeNull();
+
+    // Evidence is preserved, but it is no longer on the read path (bug.5358).
+    expect(state.branch).toBe("work-item-op/restart-evidence");
+    expect(
+      state.queries.some((query) => query.startsWith("SELECT dolt_branch('-D'"))
+    ).toBe(false);
+    expect(
+      state.queries.some((query) => query.includes("FROM work_items"))
+    ).toBe(true);
+  });
+
+  it("serves a read when the branch tip is missing, keeping the evidence", async () => {
+    const { adapter, state } = makeReconciliationHarness({
+      mergeBase: "operation-commit",
+      omitBranchCommit: true,
+    });
+
+    await expect(
+      adapter.get(toWorkItemId("task.missing"))
+    ).resolves.toBeNull();
+
+    expect(state.branch).toBe("work-item-op/restart-evidence");
+    expect(
+      state.queries.some((query) => query.startsWith("SELECT dolt_branch('-D'"))
+    ).toBe(false);
+    expect(
+      state.queries.some((query) => query.includes("FROM work_items"))
+    ).toBe(true);
+  });
+
+  it("re-proves main is safe before serving a read past unprovable evidence", async () => {
+    const { adapter, state } = makeReconciliationHarness({
+      mergeBase: "operation-commit",
+      proofError: new Error("proof query failed"),
+    });
+
+    await expect(
+      adapter.get(toWorkItemId("task.missing"))
+    ).resolves.toBeNull();
+
+    // One checkout makes main safe up front; a second re-proves it after the
+    // tolerated failure, so the read never runs on a half-reconciled session.
+    expect(
+      state.queries.filter((query) => query === "SELECT dolt_checkout('main')")
+        .length
+    ).toBeGreaterThanOrEqual(2);
+  });
+
+  it("still reconciles a provable sibling after tolerating an unprovable branch", async () => {
+    const { adapter, state } = makeReconciliationHarness({
+      mergeBase: "operation-commit",
+      proofError: new Error("proof query failed"),
+      withProvableSibling: true,
+    });
+
+    await expect(
+      adapter.get(toWorkItemId("task.missing"))
+    ).resolves.toBeNull();
+
+    // The unprovable branch is kept as evidence; the sweep does not stop there,
+    // so a sibling that only needed its merge finished is still resolved.
+    expect(state.branch).toBe("work-item-op/restart-evidence");
+    expect(state.extraBranch).toBeUndefined();
   });
 
   it("preserves evidence and fails busy when the branch lookup errors", async () => {
@@ -260,14 +351,17 @@ describe("DoltgresWorkItemAdapter restart reconciliation", () => {
     ).toBe(false);
   });
 
-  it("preserves evidence and fails busy when the branch tip is missing", async () => {
+  it("preserves evidence and fails a write busy when the branch tip is missing", async () => {
     const { adapter, state } = makeReconciliationHarness({
       mergeBase: "operation-commit",
       omitBranchCommit: true,
     });
 
     await expect(
-      adapter.get(toWorkItemId("task.missing"))
+      adapter.patch(
+        { id: toWorkItemId("task.missing"), set: { title: "blocked" } },
+        "principal-1"
+      )
     ).rejects.toBeInstanceOf(WorkItemsBusyError);
 
     expect(state.branch).toBe("work-item-op/restart-evidence");
