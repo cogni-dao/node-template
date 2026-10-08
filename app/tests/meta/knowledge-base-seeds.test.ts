@@ -13,10 +13,8 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
-	assertBundleWithinBudget,
 	renderBundleMarkdown,
 	SESSION_BOOTSTRAP_INVARIANTS,
-	SESSION_COGNITION_MAX_BYTES,
 } from "@/app/api/v1/cognition/_bundle";
 import { BASE_KNOWLEDGE_SEEDS } from "../../../packages/knowledge-base/src/seeds/base";
 import { BASE_DOMAIN_SEEDS } from "../../../packages/knowledge-base/src/seeds/domains";
@@ -101,7 +99,7 @@ describe("knowledge base seeds", () => {
 		).toBe("5b31d2166c819002120bb1c3b88ab1c9fd299510c5a160b1bf7fa3a20a91a914");
 	});
 
-	it("fits the complete starter bundle inside the fail-closed byte ceiling", () => {
+	it("renders the complete starter bundle whole, with no serve-side ceiling (story.5070)", () => {
 		const orientation = BASE_KNOWLEDGE_SEEDS.find(
 			({ id }) => id === "cogni-agent-orientation",
 		);
@@ -125,9 +123,9 @@ describe("knowledge base seeds", () => {
 				content: orientation?.content ?? "",
 			},
 		});
-		expect(() => assertBundleWithinBudget(markdown)).not.toThrow();
-		expect(
-			Buffer.byteLength(`${markdown.replace(/\n+$/, "")}\n`),
-		).toBeLessThanOrEqual(SESSION_COGNITION_MAX_BYTES);
+		// Both SessionStart channels are uncapped (story.5070), so the starter
+		// orientation must render WHOLE — never clipped to a byte ceiling.
+		expect(markdown).toContain(orientation?.content ?? "");
+		expect(markdown).toContain("</agent-contract>");
 	});
 });

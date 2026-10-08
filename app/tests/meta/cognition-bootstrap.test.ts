@@ -3,9 +3,9 @@
 
 /**
  * Module: `@tests/meta/cognition-bootstrap`
- * Purpose: Guard the bounded, single-presenter SessionStart contract.
+ * Purpose: Guard the uncapped, single-presenter SessionStart contract (story.5070).
  * Scope: Repo config plus hermetic loader/legacy-installer subprocesses.
- * Invariants: NO_CODEX_SPILL, STRICT_OUTPUT_CAP, INSTALLER_RECONCILES.
+ * Invariants: NO_CODEX_SPILL, UNCAPPED_BOTH_CHANNELS, INSTALLER_RECONCILES.
  * Side-effects: Temporary files under the OS temp directory only.
  * Links: .codex/config.toml, scripts/agent/session-cognition.sh
  * @public
@@ -36,7 +36,9 @@ const CONDUCTOR_SETUP = path.join(
 	REPO_ROOT,
 	"scripts/conductor-worktree-setup.sh",
 );
-const MAX_BYTES = 16 * 1024;
+// The former hard cap (bug.5284), kept only to size an over-cap bundle that must
+// now surface WHOLE rather than be rejected (story.5070).
+const FORMER_CAP_BYTES = 16 * 1024;
 const CACHE_PATH = ".cogni/.cognition-cache.md";
 const fixtures: string[] = [];
 
@@ -44,6 +46,30 @@ function fixture(): string {
 	const dir = mkdtempSync(path.join(tmpdir(), "cogni-bootstrap-"));
 	fixtures.push(dir);
 	return dir;
+}
+
+// The text the agent actually receives, regardless of which channel the loader
+// used: Claude Code structured JSON (hookSpecificOutput.additionalContext) or
+// Codex raw stdout. Lets a content assertion stay channel-agnostic.
+function surfaced(hookStdout: string): string {
+	try {
+		const parsed = JSON.parse(hookStdout);
+		const ctx = parsed?.hookSpecificOutput?.additionalContext;
+		if (typeof ctx === "string") return ctx;
+	} catch {
+		// Not JSON ⇒ raw stdout channel (Codex).
+	}
+	return hookStdout;
+}
+
+// True iff the loader used the Claude Code structured additionalContext channel.
+function usedAdditionalContextChannel(hookStdout: string): boolean {
+	try {
+		const parsed = JSON.parse(hookStdout);
+		return typeof parsed?.hookSpecificOutput?.additionalContext === "string";
+	} catch {
+		return false;
+	}
 }
 
 afterEach(() => {
@@ -97,11 +123,13 @@ describe("session cognition hook", () => {
 			encoding: "utf8",
 		});
 
-		expect(output).toBe("live cognition\n");
+		// CODEX_THREAD_ID="" ⇒ Claude Code path ⇒ structured JSON channel.
+		expect(usedAdditionalContextChannel(output)).toBe(true);
+		expect(surfaced(output)).toBe("live cognition");
 		expect(readFileSync(cache, "utf8")).toBe("live cognition\n");
 	});
 
-	it("opts out of Codex spilling only behind the strict loader cap", () => {
+	it("disables Codex's spill and caps neither delivery channel (story.5070)", () => {
 		const config = readFileSync(
 			path.join(REPO_ROOT, ".codex/config.toml"),
 			"utf8",
@@ -110,7 +138,14 @@ describe("session cognition hook", () => {
 
 		expect(config).toContain("additionalContextLimit = 0");
 		expect(config).toContain("git rev-parse --show-toplevel");
-		expect(loader).toContain(`SESSION_COGNITION_MAX_BYTES=${MAX_BYTES}`);
+		// No producer-side byte ceiling survives on either channel.
+		expect(loader).not.toContain("SESSION_COGNITION_MAX_BYTES");
+		expect(loader).not.toContain("bundle_fits_budget");
+		expect(loader).not.toContain("oversized_bundle_notice");
+		// The loader routes through the channel-aware emitter.
+		expect(loader).toContain("emit_agent_context");
+		expect(loader).toContain("hookSpecificOutput");
+		expect(loader).toContain("additionalContext");
 	});
 
 	it("installs the stable user presenter during local Conductor setup", () => {
@@ -136,7 +171,7 @@ describe("session cognition hook", () => {
 		expect(agents).toContain("pnpm codex:cognition:install");
 	});
 
-	it("presents a bounded cache verbatim and rejects an oversized cache whole", () => {
+	it("surfaces a cache verbatim on both channels and never rejects an oversized one (story.5070)", () => {
 		const root = fixture();
 		const noUserHook = path.join(root, "no-user-hook");
 		const env = {
@@ -151,8 +186,22 @@ describe("session cognition hook", () => {
 			path.join(small, ".cogni/.cognition-cache.md"),
 			"complete cognition\n",
 		);
+		// Claude Code path: surfaced verbatim through the structured channel.
+		const smallOut = execFileSync("bash", [LOADER], {
+			cwd: small,
+			env,
+			encoding: "utf8",
+		});
+		expect(usedAdditionalContextChannel(smallOut)).toBe(true);
+		expect(surfaced(smallOut)).toBe("complete cognition");
+
+		// Codex path: raw stdout verbatim (its spill is disabled in config).
 		expect(
-			execFileSync("bash", [LOADER], { cwd: small, env, encoding: "utf8" }),
+			execFileSync("bash", [LOADER], {
+				cwd: small,
+				env: { ...env, CODEX_THREAD_ID: "codex-raw", TMPDIR: root },
+				encoding: "utf8",
+			}),
 		).toBe("complete cognition\n");
 
 		mkdirSync(path.join(root, "cogni-cognition-lock-test.lock"));
@@ -168,19 +217,24 @@ describe("session cognition hook", () => {
 			}),
 		).toBe("");
 
+		// story.5070 regression: a bundle past the former 16 KB cap must surface
+		// WHOLE through the Claude Code structured channel — never truncated or
+		// rejected. This is the assertion the original bug.5284 ceiling got backwards.
+		const overCapBytes = FORMER_CAP_BYTES + 1000;
 		const large = path.join(root, "large");
 		mkdirSync(path.join(large, ".cogni"), { recursive: true });
 		writeFileSync(
 			path.join(large, ".cogni/.cognition-cache.md"),
-			"x".repeat(MAX_BYTES + 1),
+			"x".repeat(overCapBytes),
 		);
-		const output = execFileSync("bash", [LOADER], {
+		const largeOut = execFileSync("bash", [LOADER], {
 			cwd: large,
 			env,
 			encoding: "utf8",
 		});
-		expect(output).toContain("bundle rejected before injection");
-		expect(Buffer.byteLength(output)).toBeLessThan(1024);
+		expect(usedAdditionalContextChannel(largeOut)).toBe(true);
+		expect(surfaced(largeOut)).toHaveLength(overCapBytes);
+		expect(largeOut).not.toContain("bundle rejected before injection");
 	});
 
 	it("reconciles the legacy user hook idempotently", () => {
