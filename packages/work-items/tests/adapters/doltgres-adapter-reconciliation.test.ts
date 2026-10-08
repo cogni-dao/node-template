@@ -19,6 +19,8 @@ type Rows = ReadonlyArray<Record<string, unknown>>;
 
 interface ReconciliationState {
   branch?: string;
+  readonly deleteError?: Error;
+  readonly deleteLeavesRef?: boolean;
   extraBranch?: string;
   readonly branchCommit?: string;
   readonly mergeBase: string;
@@ -51,6 +53,8 @@ function makeReconciliationHarness({
   omitBranchCommit = false,
   proofError,
   withProvableSibling = false,
+  deleteError,
+  deleteLeavesRef = false,
 }: {
   readonly branchCommit?: string;
   readonly mergeBase: string;
@@ -59,10 +63,16 @@ function makeReconciliationHarness({
   readonly proofError?: Error;
   /** A second branch, sorted after the first, whose tip is already main. */
   readonly withProvableSibling?: boolean;
+  /** `dolt_branch('-D', ...)` throws — e.g. the query deadline fired. */
+  readonly deleteError?: Error;
+  /** With `deleteError`, the ref survives: the delete genuinely did not land. */
+  readonly deleteLeavesRef?: boolean;
 }) {
   const state: ReconciliationState = {
     branch: "work-item-op/restart-evidence",
     extraBranch: withProvableSibling ? "work-item-op/zz-sibling" : undefined,
+    deleteError,
+    deleteLeavesRef,
     branchCommit: omitBranchCommit ? undefined : branchCommit,
     mergeBase,
     listError,
@@ -159,6 +169,15 @@ function makeReconciliationHarness({
     }
     if (query.startsWith("SELECT dolt_branch('-D'")) {
       const deleted = /'(work-item-op\/[^']+)'/.exec(query)?.[1];
+      if (state.deleteError) {
+        // Doltgres applied the delete durably unless the fixture says the ref
+        // survived; either way the acknowledgement is lost.
+        if (!state.deleteLeavesRef) {
+          if (deleted === state.extraBranch) state.extraBranch = undefined;
+          else state.branch = undefined;
+        }
+        throw state.deleteError;
+      }
       if (deleted === state.extraBranch) state.extraBranch = undefined;
       else state.branch = undefined;
       return [{ dolt_branch: [0, ""] }];
@@ -213,7 +232,7 @@ describe("DoltgresWorkItemAdapter restart reconciliation", () => {
     ).toBe(false);
   });
 
-  it("deletes a stale operation branch only after its tip is proven on main", async () => {
+  it("deletes a redundant restart branch once its old-main tip is proven reachable", async () => {
     const { adapter, state } = makeReconciliationHarness({
       mergeBase: "operation-commit",
     });
@@ -391,6 +410,58 @@ describe("DoltgresWorkItemAdapter restart reconciliation", () => {
     // so a sibling that only needed its merge finished is still resolved.
     expect(state.branch).toBe("work-item-op/restart-evidence");
     expect(state.extraBranch).toBeUndefined();
+  });
+
+  it("treats a lost delete acknowledgement as cleaned when the ref is gone", async () => {
+    const { adapter, state, logs } = makeReconciliationHarness({
+      mergeBase: "operation-commit",
+      deleteError: new Error(
+        "Work-item store timed out during branch.delete; retry shortly"
+      ),
+    });
+
+    await expect(
+      adapter.get(toWorkItemId("task.missing"))
+    ).resolves.toBeNull();
+
+    // Doltgres applied the delete and lost the ack to the query deadline — the
+    // bug.5358 shape one layer down. Reporting that as pending would send an
+    // operator chasing a ref that is already gone.
+    expect(state.branch).toBeUndefined();
+    const verdicts = logs.filter((e) =>
+      String(e.fields.classification ?? "").startsWith("reachable_redundant")
+    );
+    expect(verdicts).toHaveLength(1);
+    expect(verdicts[0]?.fields.classification).toBe(
+      "reachable_redundant_cleaned"
+    );
+    expect(logs.some((e) => e.fields.deleteAckLost === true)).toBe(true);
+    // The injected failure IS a real query error, so a `stage_error` is correct
+    // here. This test asserts the reconciliation VERDICT, not query-level
+    // logging; the served-read tests cover the verdict's level.
+  });
+
+  it("keeps a delete pending when the ref really survived", async () => {
+    const { adapter, state, logs } = makeReconciliationHarness({
+      mergeBase: "operation-commit",
+      deleteError: new Error(
+        "Work-item store timed out during branch.delete; retry shortly"
+      ),
+      deleteLeavesRef: true,
+    });
+
+    await expect(
+      adapter.get(toWorkItemId("task.missing"))
+    ).resolves.toBeNull();
+
+    expect(state.branch).toBe("work-item-op/restart-evidence");
+    expect(
+      logs.some(
+        (e) =>
+          e.fields.classification === "reachable_redundant_cleanup_pending"
+      )
+    ).toBe(true);
+    expect(logs.some((e) => e.fields.deleteAckLost === true)).toBe(false);
   });
 
   it("preserves evidence and fails busy when the branch lookup errors", async () => {
