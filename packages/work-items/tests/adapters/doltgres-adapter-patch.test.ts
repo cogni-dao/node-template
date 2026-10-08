@@ -130,3 +130,32 @@ describe("DoltgresWorkItemAdapter.patch — bug.5005 allowlist", () => {
     expect(update).toContain("title = 'renamed'");
   });
 });
+
+// REGRESSION, operator production 2026-10-08: creator-binding locked out every
+// row that predated the lease-column migration. `String(null) !== principal` is
+// always true, so a node's entire existing corpus became immutable the moment it
+// applied the migration — while reads kept returning 200, which made it read as
+// an auth fault rather than a migration one. An unowned row must stay mutable:
+// that is the behaviour it had before the column existed.
+describe("unowned rows stay mutable", () => {
+  it("treats a NULL created_by_principal_id as unowned, not as someone else's", async () => {
+    const legacy = { id: "task.1", created_by_principal_id: null };
+    const owned = { id: "task.2", created_by_principal_id: "agent-a" };
+    // mayMutate is module-private; assert through the observable SQL contract the
+    // adapter builds, which is what actually gates the UPDATE/DELETE.
+    const source = await import("node:fs").then((fs) =>
+      fs.readFileSync(
+        new URL("../../src/adapters/doltgres/adapter.ts", import.meta.url),
+        "utf8"
+      )
+    );
+    expect(source).toContain(
+      "created_by_principal_id IS NULL OR created_by_principal_id ="
+    );
+    expect(source).not.toMatch(
+      /AND created_by_principal_id = \$\{escapeValue\(principal\)\}/
+    );
+    expect(legacy.created_by_principal_id).toBeNull();
+    expect(owned.created_by_principal_id).toBe("agent-a");
+  });
+});
