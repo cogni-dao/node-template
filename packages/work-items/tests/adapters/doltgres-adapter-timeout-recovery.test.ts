@@ -6,7 +6,7 @@
  * connection without replaying the durable write or requiring a process restart.
  */
 
-import { toWorkItemId } from "@cogni/work-items";
+import { toWorkItemId } from "@cogni-dao/work-items";
 import type { ReservedSql, Sql } from "postgres";
 import { describe, expect, it } from "vitest";
 

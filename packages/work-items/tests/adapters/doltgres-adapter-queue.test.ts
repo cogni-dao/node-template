@@ -3,7 +3,7 @@
 
 /** Proves in-process Dolt operations wait FIFO instead of failing on overlap. */
 
-import { toWorkItemId } from "@cogni/work-items";
+import { toWorkItemId } from "@cogni-dao/work-items";
 import { describe, expect, it, vi } from "vitest";
 
 import {

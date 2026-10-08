@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
-import { toWorkItemId } from "@cogni/work-items";
+import { toWorkItemId } from "@cogni-dao/work-items";
 import { describe, expect, it } from "vitest";
 
 import { DoltgresWorkItemAdapter } from "../../src/adapters/doltgres/adapter.js";
