@@ -118,3 +118,9 @@ jobs:
 
       - name: Component tests (testcontainers)
         run: pnpm test:component
+
+      # node-template owns `@cogni/work-items`' Doltgres adapter, so the real
+      # engine must gate it here and not only in a fork (task.5199). Dolt branch
+      # semantics are invisible to the fake-SQL unit tests.
+      - name: Doltgres 0.57.3 work-item acceptance
+        run: pnpm --filter @cogni/node-template-app test:doltgres

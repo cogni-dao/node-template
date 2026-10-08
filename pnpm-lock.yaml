@@ -405,6 +405,9 @@ importers:
       next-test-api-route-handler:
         specifier: ^5.0.3
         version: 5.0.5(next@16.2.3(@opentelemetry/api@1.9.1)(@playwright/test@1.61.0)(react-dom@19.0.0(react@19.0.0))(react@19.0.0))
+      testcontainers:
+        specifier: 11.14.0
+        version: 11.14.0
       undici:
         specifier: ^7.24.0
         version: 7.27.2
@@ -15503,7 +15506,7 @@ snapshots:
 
   extension-port-stream@3.0.0:
     dependencies:
-      readable-stream: 3.6.2
+      readable-stream: 4.7.0
       webextension-polyfill: 0.10.0
 
   extract-zip@2.0.1:
