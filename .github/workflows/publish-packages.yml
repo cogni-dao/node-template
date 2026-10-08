@@ -8,35 +8,56 @@ name: Publish Packages
 # Not covered by the CI/CD freeze: docs/spec/cicd-platform-boundary.md scopes
 # that to the operator control plane, and a node's own GitHub Actions are
 # explicitly exempt. This workflow publishes a package; it deploys nothing.
+#
+# DISTRIBUTION IS A RELEASE ASSET, AND ONLY A RELEASE ASSET. A public repo
+# serves one anonymously, so a fork can `pnpm install` with no credentials.
+# GitHub Packages' npm registry cannot — it returns 401 even for a public
+# package in a public repo — and this repo exists to be forked, so a registry
+# that breaks every fork's build is disqualified. A second, `continue-on-error`
+# registry publish used to run here as a "secondary option"; it is removed. A
+# step that cannot fail proves nothing, it published `access: restricted` (a
+# PRIVATE package) while the comment beside it advertised public anonymous
+# reads, and keeping it forced `packages: write` into this workflow for no
+# reachable consumer.
+#
+# THE PUBLISH PATH IS FAIL-CLOSED. Every assertion below exists because the
+# alternative is a consumer pinning bytes nobody gated:
+#   - the tagged commit must have passed every required check in repo-policy
+#   - the tag must match the package version
+#   - the Release must not already exist (a version is immutable, or it is not a version)
+#   - the tarball must contain every entrypoint its own `exports` declares
+#   - the exact tarball is attested before it is uploaded
+# `workflow_dispatch` can pack and verify but can NEVER publish.
 on:
   push:
     tags:
       - "work-items-v*"
+  # Rehearsal only. Every publishing step below is gated on `push`, so a
+  # dispatch packs the tarball and runs the artifact assertions against it
+  # without creating a Release, attesting anything, or moving a version. The
+  # previous `dry_run: false` input could publish to the registry off any
+  # branch, which skipped the tag/version check (itself `push`-only) — a
+  # publish with no tag correspondence and no version proof.
   workflow_dispatch:
-    inputs:
-      dry_run:
-        description: "Pack and inspect without publishing"
-        required: false
-        default: "true"
-        type: choice
-        options: ["true", "false"]
 
 permissions:
-  # `contents: write` creates the Release that carries the tarball. That asset is
-  # the PRIMARY distribution: a public repo serves it ANONYMOUSLY, so a fork can
-  # `pnpm install` with no credentials. GitHub Packages' npm registry cannot —
-  # it returns 401 even for a public package in a public repo — and node-template
-  # exists to be forked, so a registry that breaks every fork's build is
-  # disqualified. The registry publish below is kept as a secondary option.
+  # `contents: write` creates the Release that carries the tarball.
   contents: write
-  packages: write
+  # Sigstore OIDC + attestation storage for build provenance. `npm publish
+  # --provenance` only works against registry.npmjs.org, so the equivalent for
+  # a Release asset is `actions/attest-build-provenance` over the exact file.
+  id-token: write
+  attestations: write
 
 concurrency:
   group: publish-work-items-${{ github.ref }}
   cancel-in-progress: false
 
 env:
-  NODE_VERSION: "24"
+  # Must match ci.yaml's NODE_VERSION and the Dockerfile's `node:22-alpine`.
+  # This workflow built on 24 while the artifact was gated on 22 and runs on 22,
+  # so the published dist and .d.ts files came off a toolchain no consumer uses.
+  NODE_VERSION: "22"
 
 jobs:
   publish:
@@ -44,14 +65,64 @@ jobs:
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
 
+      # A published version must already be gated by this repo's required checks
+      # — including the real-Doltgres lane from task.5199. The previous version
+      # of this workflow asserted that in a comment ("ci.yaml is the gate that
+      # matters and runs on the commit being tagged") and nowhere in code. A tag
+      # can be pushed at any commit, including one that never ran CI, so that was
+      # an assumption. story.5069 requires that a node must not be able to
+      # consume a version that was never gated; this is where that is enforced.
+      - name: Tagged commit must have passed every required check
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/commits/${COMMIT_SHA}/check-runs?per_page=100" \
+            --jq '.check_runs[] | {name, status, conclusion}' > /tmp/check-runs.ndjson
+          node -e '
+            const fs = require("node:fs");
+            const policy = JSON.parse(fs.readFileSync(".cogni/repo-policy.json", "utf8"));
+            const required = policy?.ruleset?.requiredStatusChecks?.contexts ?? [];
+            if (required.length === 0) {
+              console.error("repo-policy declares no required checks - refusing to publish ungated bytes");
+              process.exit(1);
+            }
+            const runs = fs.readFileSync("/tmp/check-runs.ndjson", "utf8")
+              .split("\n").filter(Boolean).map((line) => JSON.parse(line));
+            const problems = [];
+            for (const context of required) {
+              // Latest attempt wins: a re-run that went green must count, and the
+              // API returns every attempt for the commit.
+              const matching = runs.filter((run) => run.name === context);
+              if (matching.length === 0) {
+                problems.push(`${context}: never reported on this commit`);
+                continue;
+              }
+              const passed = matching.some(
+                (run) => run.status === "completed" && run.conclusion === "success"
+              );
+              if (!passed) {
+                const seen = matching.map((r) => `${r.status}/${r.conclusion}`).join(", ");
+                problems.push(`${context}: ${seen}`);
+              }
+            }
+            if (problems.length > 0) {
+              console.error("refusing to publish: required checks not green on " + process.env.COMMIT_SHA);
+              for (const problem of problems) console.error("  " + problem);
+              process.exit(1);
+            }
+            console.log(`all ${required.length} required checks green on ${process.env.COMMIT_SHA}`);
+          '
+
       - uses: pnpm/action-setup@c5ba7f7862a0f64c1b1a05fbac13e0b8e86ba08c # v4
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
-          registry-url: "https://npm.pkg.github.com"
-          scope: "@cogni-dao"
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -64,9 +135,6 @@ jobs:
       - name: Build the workspace packages
         run: pnpm packages:build
 
-      # A published version must already be gated by the real-Doltgres lane that
-      # lives in this repo (task.5199). Unit tests here are the cheap backstop;
-      # `ci.yaml` is the gate that matters and runs on the commit being tagged.
       - name: Unit tests
         run: pnpm --filter @cogni-dao/work-items test
 
@@ -82,12 +150,27 @@ jobs:
           fi
           echo "publishing @cogni-dao/work-items@$pkg"
 
-      - name: Pack (dry run)
-        if: github.event_name == 'workflow_dispatch' && inputs.dry_run == 'true'
-        run: pnpm --filter @cogni-dao/work-items exec npm pack --dry-run
+      # A VERSION IS IMMUTABLE, OR IT IS NOT A VERSION. The previous step ran
+      # `gh release create ... || gh release upload --clobber`, so re-running the
+      # tag silently replaced the asset bytes at an existing version. Every
+      # consumer pins that URL, so a clobber either breaks all of them on an
+      # integrity mismatch or — worse, for anyone installing fresh — hands them
+      # different code under a version they already reviewed. Publishing a
+      # corrected NEW version is the only safe fix for a bad release, which is
+      # also how every npm registry behaves (409 on republish).
+      - name: Release must not already exist
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" --json tagName >/dev/null 2>&1; then
+            echo "::error::release $GITHUB_REF_NAME already exists; a published version is immutable. Bump the version and tag again."
+            exit 1
+          fi
+          echo "$GITHUB_REF_NAME is unpublished"
 
       - name: Pack the tarball
-        if: github.event_name == 'push' || inputs.dry_run == 'false'
         id: pack
         run: |
           set -euo pipefail
@@ -102,7 +185,6 @@ jobs:
       # a green build could not reveal. Assert every declared entrypoint is
       # actually inside the tarball before anything depends on it.
       - name: Tarball must contain every declared entrypoint
-        if: github.event_name == 'push' || inputs.dry_run == 'false'
         run: |
           set -euo pipefail
           tar tzf "${{ steps.pack.outputs.tgz }}" | sed 's|^package/||' | sort -u > /tmp/have.txt
@@ -130,8 +212,36 @@ jobs:
           fi
           echo "all declared entrypoints present"
 
-      # Anonymous, versioned, integrity-pinned by the consumer's lockfile, and no
-      # registry account anywhere. A node depends on it as:
+      # The licence is not optional metadata on a publicly downloadable artifact.
+      # Every source file in this repo carries
+      # `SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0`, so a tarball
+      # that omits it misrepresents the terms under which it may be used.
+      - name: Tarball must carry its licence
+        run: |
+          set -euo pipefail
+          if ! tar tzf "${{ steps.pack.outputs.tgz }}" | grep -qE '^package/LICENSE'; then
+            echo "::error::tarball contains no LICENSE file"
+            exit 1
+          fi
+          license="$(node -p "require('./packages/work-items/package.json').license ?? ''")"
+          if [ -z "$license" ]; then
+            echo "::error::package.json declares no license field"
+            exit 1
+          fi
+          echo "licence present: $license"
+
+      # Attest the EXACT file that is about to be uploaded, then upload that same
+      # file, so what consumers download is byte-for-byte what was attested.
+      # Verify downstream with:
+      #   gh attestation verify cogni-dao-work-items-<v>.tgz -R Cogni-DAO/node-template
+      - name: Attest the tarball
+        if: github.event_name == 'push'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ steps.pack.outputs.tgz }}
+
+      # Anonymous, versioned, and integrity-pinned by the consumer's lockfile.
+      # A node depends on it as:
       #   "@cogni/work-items": "https://github.com/cogni-dao/node-template/releases/download/work-items-v<v>/cogni-dao-work-items-<v>.tgz"
       # The alias keeps every existing import path untouched.
       - name: Attach the tarball to a Release
@@ -140,14 +250,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          {
+            echo "Published build of @cogni-dao/work-items. Depend on the tarball URL below;"
+            echo "a public repo serves it anonymously, so forks need no credentials (story.5069)."
+            echo
+            echo "Build provenance is attested. Verify before depending on it:"
+            echo "    gh attestation verify cogni-dao-work-items-*.tgz -R ${GITHUB_REPOSITORY}"
+          } > /tmp/release-notes.md
           gh release create "$GITHUB_REF_NAME" "${{ steps.pack.outputs.tgz }}" \
             --title "$GITHUB_REF_NAME" \
-            --notes "Published build of @cogni-dao/work-items. Depend on the tarball URL below; a public repo serves it anonymously, so forks need no credentials (story.5069)." \
-            || gh release upload "$GITHUB_REF_NAME" "${{ steps.pack.outputs.tgz }}" --clobber
-
-      - name: Publish to GitHub Packages
-        if: github.event_name == 'push' || inputs.dry_run == 'false'
-        continue-on-error: true
-        run: pnpm --filter @cogni-dao/work-items publish --no-git-checks --access restricted
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            --notes-file /tmp/release-notes.md
