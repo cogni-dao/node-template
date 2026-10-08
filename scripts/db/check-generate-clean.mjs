@@ -17,7 +17,7 @@
 // biome-ignore-all lint/suspicious/noConsole: validator script
 // biome-ignore-all lint/style/noProcessEnv: script entry point
 
-import { execFileSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 
 // Every drizzle lane this repo owns. A lane absent from this list is a lane whose
@@ -67,25 +67,23 @@ function restore(mig, newSql, newMeta, journalBefore) {
 function checkLane({ label, config, mig }) {
   const before = snapshotDir(mig);
   const journalBefore = readFileSync(`${mig}/meta/_journal.json`, "utf8");
-  let exitZero = true;
-  let output = "";
-  try {
-    output = execFileSync(
-      "tsx",
-      ["node_modules/drizzle-kit/bin.cjs", "generate", `--config=${config}`],
-      {
-        stdio: ["ignore", "pipe", "pipe"],
-        env: {
-          ...process.env,
-          DATABASE_URL: "postgres://check@localhost:0/check",
-        },
-        encoding: "utf8",
-      }
-    );
-  } catch (err) {
-    exitZero = false;
-    output = `${err.stdout ?? ""}${err.stderr ?? ""}`;
-  }
+  // spawnSync, not execFileSync: drizzle-kit EXITS 0 even when it cannot resolve the
+  // schema module, so the only way to tell "clean" from "never ran" is to read the
+  // output on the success path too -- and execFileSync discards stderr there.
+  const result = spawnSync(
+    "tsx",
+    ["node_modules/drizzle-kit/bin.cjs", "generate", `--config=${config}`],
+    {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: {
+        ...process.env,
+        DATABASE_URL: "postgres://check@localhost:0/check",
+      },
+      encoding: "utf8",
+    }
+  );
+  const exitZero = result.status === 0;
+  const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
 
   const after = snapshotDir(mig);
   const newSql = [...after.sql].filter((f) => !before.sql.has(f));
@@ -118,9 +116,20 @@ function checkLane({ label, config, mig }) {
       /* already gone */
     }
   }
-  if (!exitZero && newSql.length === 0) {
+  // NOT-CLEAN WITH NOTHING GENERATED IS ALMOST NEVER DRIFT. drizzle-kit exits 0
+  // when it cannot resolve the schema module, so reporting "schema TS has drifted"
+  // with no further output actively misleads: the real cause is a schema that never
+  // loaded, and the usual trigger is an unbuilt workspace package (the doltgres lane
+  // resolves @cogni-dao/knowledge-base through `exports` -> dist, NOT src). Print
+  // the captured output and say so.
+  if (newSql.length === 0 && newMeta.length === 0) {
     console.error(
-      `\n[${label}] drizzle-kit generate exited non-zero. Output:\n${output.slice(-2000)}`
+      `\n[${label}] drizzle-kit generate emitted no migration and never confirmed ` +
+        `"No schema changes" (exit ${result.status}). drizzle-kit exits 0 even when it ` +
+        "cannot load the schema, so this is far more likely a SCHEMA THAT FAILED TO " +
+        "LOAD than real drift -- run `pnpm packages:build` first; this lane reads a " +
+        "package's built dist, not its src. Captured output:\n" +
+        (output.trim().length > 0 ? output.slice(-2000) : "<no output>")
     );
   }
   restore(mig, newSql, newMeta, journalBefore);
