@@ -51,24 +51,39 @@ function adapterWithQueries() {
 
 /**
  * An UNADOPTED row: created before `created_by_principal_id` existed, so NULL.
+ *
+ * Deliberately mirrors `adapterWithQueries` query-for-query — including the
+ * `SELECT id FROM work_items` arm, which must come BEFORE the generic
+ * `FROM work_items` arm or it swallows the id probe and the branch
+ * acknowledgement check derails into recovery. `recreateClient` is supplied
+ * for the same reason the production wiring supplies one: a recovery handoff
+ * terminates the pool, and without a factory to rebuild it the adapter stays
+ * poisoned and every later call reports `requires restart reconciliation`.
  */
 function adapterWithUnadoptedRow() {
   const queries: string[] = [];
   const legacy = { ...row, created_by_principal_id: null };
-  const sql = makeFakeDoltgresSql((query) => {
+  const respond = (query: string) => {
+    if (query.startsWith("SELECT id FROM work_items")) return [];
+    if (query.startsWith("INSERT INTO work_items")) return [legacy];
     if (query.startsWith("UPDATE work_items")) {
       return [
         {
           ...legacy,
           title: /title = '([^']*)'/.exec(query)?.[1] ?? legacy.title,
+          claim_active: query.includes("claim_expires_at"),
         },
       ];
     }
     if (query.startsWith("DELETE FROM work_items")) return [{ id: legacy.id }];
     if (query.includes("FROM work_items")) return [legacy];
     return [];
-  }, queries);
-  return { adapter: new DoltgresWorkItemAdapter(sql), queries };
+  };
+  const build = () => makeFakeDoltgresSql(respond, queries);
+  const adapter = new DoltgresWorkItemAdapter(build(), {
+    recreateClient: build,
+  });
+  return { adapter, queries };
 }
 
 function adapterWithCoarseCommitDate() {
