@@ -120,6 +120,8 @@ export interface DoltgresWorkItemAdapterOptions {
   readonly branchTimeoutMs?: number;
   readonly reserveTimeoutMs?: number;
   readonly recreateClient?: () => Sql;
+  /** Rebuilds the dedicated QUERY pool after a terminal connection failure. */
+  readonly recreateReadClient?: () => Sql;
   /**
    * Dedicated pool for the QUERY port. Reads run on it instead of the write
    * lane — see `readOnCleanMain`.
@@ -937,14 +939,15 @@ export class DoltgresWorkItemAdapter
   private readonly branchTimeoutMs: number;
   private readonly reserveTimeoutMs: number;
   private readonly recreateClient: (() => Sql) | undefined;
-  private readonly providedReadClient: Sql | undefined;
+  private readClient: Sql | undefined;
+  private readonly recreateReadClient: (() => Sql) | undefined;
+  private readonly readLaneConfigured: boolean;
   /**
    * Read pool derived from `recreateClient` when the caller passed no
    * `readClient`. Built on first read, not in the constructor: a node that
    * never reads must not pay for a connection, and construction must not
    * depend on the database being reachable.
    */
-  private derivedReadClient: Sql | undefined;
   private readonly terminatingPools = new WeakMap<object, Promise<void>>();
 
   constructor(
@@ -960,7 +963,12 @@ export class DoltgresWorkItemAdapter
     this.branchTimeoutMs = options.branchTimeoutMs ?? BRANCH_TIMEOUT_MS;
     this.reserveTimeoutMs = options.reserveTimeoutMs ?? RESERVE_TIMEOUT_MS;
     this.recreateClient = options.recreateClient;
-    this.providedReadClient = options.readClient;
+    this.readClient = options.readClient;
+    this.recreateReadClient =
+      options.recreateReadClient ?? options.recreateClient;
+    this.readLaneConfigured = Boolean(
+      options.readClient || options.recreateReadClient || options.recreateClient
+    );
   }
 
   private logStage(
@@ -2152,27 +2160,34 @@ export class DoltgresWorkItemAdapter
    * sharing it would put every read back behind the in-flight write.
    */
   private resolveReadPool(): Sql | undefined {
-    if (this.providedReadClient) return this.providedReadClient;
-    if (this.derivedReadClient) return this.derivedReadClient;
-    if (!this.recreateClient) return undefined;
+    if (this.readClient) return this.readClient;
+    if (!this.recreateReadClient) {
+      if (this.readLaneConfigured) {
+        throw new WorkItemsBusyError(
+          "Work-item read lane requires a fresh connection; retry shortly"
+        );
+      }
+      return undefined;
+    }
     try {
-      this.derivedReadClient = this.recreateClient();
+      this.readClient = this.recreateReadClient();
     } catch (error) {
-      // Never let pool construction fail a read: the shared lane still works.
       this.logger.warn(
         {
           event: "adapter.work_items.read_pool_derive_failed",
           ...errorFields(error),
         },
-        "work_items could not derive a read pool; reads use the shared lane"
+        "work_items could not rebuild its dedicated read pool"
       );
-      return undefined;
+      throw new WorkItemsBusyError(
+        "Work-item read lane could not reconnect; retry shortly"
+      );
     }
     this.logger.info(
       { event: "adapter.work_items.read_pool_derived" },
       "work_items derived a dedicated read pool from recreateClient"
     );
-    return this.derivedReadClient;
+    return this.readClient;
   }
 
   private async readOnCleanMain<T>(
@@ -2201,22 +2216,21 @@ export class DoltgresWorkItemAdapter
         )
       );
     } catch (error) {
-      // A query timeout terminates the pool it ran on. A DERIVED pool is ours
-      // to rebuild, so drop it and the next read builds a fresh one; a pool
-      // the caller provided is not, so that one stays as given. Either way
-      // this call falls back to the shared lane rather than failing a read the
-      // legacy path could still serve — slow beats unavailable, and bug.5358's
-      // whole point is that reads stay available.
-      if (readPool === this.derivedReadClient) {
-        this.derivedReadClient = undefined;
-      }
+      // A terminal read error has already condemned this pool in
+      // `executeQuery`. Forget it so the next request gets a clean generation.
+      // Never retry on the write lane: a server-side query panic would execute
+      // the same query again there, poison the session-pinned pool, and turn a
+      // read defect into a fleet-wide write outage.
+      if (!(error instanceof WorkItemsBusyError)) throw error;
+      if (readPool === this.readClient) this.readClient = undefined;
       this.logger.warn(
-        { event: "adapter.work_items.read_lane_fallback", ...errorFields(error) },
-        "work_items read lane failed; retrying on the shared lane"
+        {
+          event: "adapter.work_items.read_lane_unavailable",
+          ...errorFields(error),
+        },
+        "work_items read lane failed; a fresh pool will serve the next retry"
       );
-      return this.withOperationQueue("read work items", (ctx) =>
-        this.withGlobalLock(ctx, fn, { reconcile: "best_effort" })
-      );
+      throw error;
     }
   }
 
@@ -2261,13 +2275,7 @@ export class DoltgresWorkItemAdapter
       const nodes = Array.isArray(query.node) ? query.node : [query.node];
       conditions.push(`node IN (${nodes.map(escapeValue).join(", ")})`);
     }
-    if (query.text) {
-      const escaped = query.text.toLowerCase().replace(/[%_\\]/g, "\\$&");
-      const pattern = escapeValue(`%${escaped}%`);
-      conditions.push(
-        `(LOWER(title) LIKE ${pattern} OR LOWER(COALESCE(summary,'')) LIKE ${pattern})`
-      );
-    }
+    const textNeedle = query.text?.toLowerCase();
     if (query.cursor) {
       const cursor = decodeCursor(query.cursor);
       const priority = cursor.p ?? 999;
@@ -2285,11 +2293,25 @@ export class DoltgresWorkItemAdapter
     const rows = await this.readOnCleanMain(
       async (conn) =>
         (await conn.unsafe(
-          `SELECT *, (claim_expires_at IS NOT NULL AND claim_expires_at > NOW()) AS claim_active FROM work_items ${where} ORDER BY COALESCE(priority, 999) ASC, COALESCE(rank, 999) ASC, created_at DESC, id ASC LIMIT ${limit + 1}`
+          `SELECT *, (claim_expires_at IS NOT NULL AND claim_expires_at > NOW()) AS claim_active FROM work_items ${where} ORDER BY COALESCE(priority, 999) ASC, COALESCE(rank, 999) ASC, created_at DESC, id ASC${textNeedle ? "" : ` LIMIT ${limit + 1}`}`
         )) as ReadonlyArray<Record<string, unknown>>
     );
-    const hasMore = rows.length > limit;
-    const pageRows = hasMore ? rows.slice(0, limit) : rows;
+    // Doltgres 0.57.3 panics when LOWER() receives an out-of-line TEXT value
+    // (`*val.TextStorage`). It also has no ILIKE. Keep every structural filter
+    // and the keyset in SQL, then case-fold the remaining ordered shelf here.
+    // The SQL LIMIT must be absent on this path or a match beyond the first N
+    // rows would be silently lost.
+    const matchedRows = textNeedle
+      ? rows.filter((row) =>
+          [row.title, row.summary].some((value) =>
+            String(value ?? "")
+              .toLowerCase()
+              .includes(textNeedle)
+          )
+        )
+      : rows;
+    const hasMore = matchedRows.length > limit;
+    const pageRows = hasMore ? matchedRows.slice(0, limit) : matchedRows;
     const items = pageRows.map(rowToWorkItem);
     let endCursor: string | null = null;
     if (hasMore && pageRows.length) {

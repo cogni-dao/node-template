@@ -105,6 +105,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			lockRetryMs: 25,
 			queryTimeoutMs: 5_000,
 			readClient: readSql,
+			recreateReadClient: createWorkItemClient,
 			recreateClient: () => {
 				sql = createWorkItemClient();
 				return sql;
@@ -112,6 +113,22 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 		});
 		const id = toWorkItemId("task.9501");
 		const principalId = "doltgres-acceptance-agent";
+		const searchId = toWorkItemId("task.9500");
+
+		await adapter.create(
+			{
+				id: searchId,
+				type: "task",
+				title: "Out-of-line text search",
+				summary: `prefix ${"x".repeat(8_000)} panic-proof-needle`,
+			},
+			principalId,
+		);
+		await expect(
+			adapter.list({ text: "PANIC-PROOF-NEEDLE" }),
+		).resolves.toMatchObject({
+			items: [expect.objectContaining({ id: searchId })],
+		});
 
 		const created = await adapter.create(
 			{ id, type: "task", title: "Doltgres acceptance" },
@@ -232,6 +249,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 		});
 		expect(released.claimedByRun).toBeUndefined();
 		await expect(adapter.delete(id, principalId)).resolves.toBe(true);
+		await expect(adapter.delete(searchId, principalId)).resolves.toBe(true);
 		await expect(adapter.get(id)).resolves.toBeNull();
 		await readSql.end({ timeout: 0 });
 	}, 60_000);
