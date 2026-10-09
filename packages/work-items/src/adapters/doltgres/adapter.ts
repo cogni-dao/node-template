@@ -49,6 +49,25 @@ const LOCK_WAIT_MS = 2_000;
 const LOCK_RETRY_MS = 50;
 const OPERATION_QUEUE_WAIT_MS = 30_000;
 const QUERY_TIMEOUT_MS = 5_000;
+/**
+ * Budget for REF HOUSEKEEPING — `dolt_branch` create/delete/rename. Six times
+ * the DML budget, because these are not DML and they do not share its failure
+ * mode.
+ *
+ * Measured on operator production 2026-10-09: with one budget for everything,
+ * `dolt_branch` exceeded 5s under load, `terminateClient` destroyed the pool,
+ * and the PATCH 500'd AFTER its merge had already landed on `main`. Worse, the
+ * same 5s applied to the quarantine rename, so the one operation whose job is
+ * to clear a stuck branch was itself killed by the timeout — writes stayed
+ * down with the fix deployed.
+ *
+ * A longer budget here is strictly safer than a shorter one: a rename or a
+ * delete of an operation ref mutates no rows, so the only thing a timeout buys
+ * is a destroyed connection and an orphaned ref.
+ */
+const BRANCH_TIMEOUT_MS = 30_000;
+/** Stages that are ref housekeeping, not DML — see BRANCH_TIMEOUT_MS. */
+const BRANCH_HOUSEKEEPING_STAGES = new Set(["branch.delete"]);
 const RESERVE_TIMEOUT_MS = 5_000;
 
 /**
@@ -74,6 +93,11 @@ export interface DoltgresWorkItemAdapterOptions {
   readonly lockRetryMs?: number;
   readonly queueWaitMs?: number;
   readonly queryTimeoutMs?: number;
+  /**
+   * Budget for `dolt_branch` ref housekeeping. Defaults to 6× `queryTimeoutMs`'s
+   * default; see BRANCH_TIMEOUT_MS for why it is separate.
+   */
+  readonly branchTimeoutMs?: number;
   readonly reserveTimeoutMs?: number;
   readonly recreateClient?: () => Sql;
   /**
@@ -865,6 +889,7 @@ export class DoltgresWorkItemAdapter
   private readonly lockRetryMs: number;
   private readonly queueWaitMs: number;
   private readonly queryTimeoutMs: number;
+  private readonly branchTimeoutMs: number;
   private readonly reserveTimeoutMs: number;
   private readonly recreateClient: (() => Sql) | undefined;
   private readonly providedReadClient: Sql | undefined;
@@ -887,6 +912,7 @@ export class DoltgresWorkItemAdapter
     this.lockRetryMs = options.lockRetryMs ?? LOCK_RETRY_MS;
     this.queueWaitMs = options.queueWaitMs ?? OPERATION_QUEUE_WAIT_MS;
     this.queryTimeoutMs = options.queryTimeoutMs ?? QUERY_TIMEOUT_MS;
+    this.branchTimeoutMs = options.branchTimeoutMs ?? BRANCH_TIMEOUT_MS;
     this.reserveTimeoutMs = options.reserveTimeoutMs ?? RESERVE_TIMEOUT_MS;
     this.recreateClient = options.recreateClient;
     this.providedReadClient = options.readClient;
@@ -969,10 +995,13 @@ export class DoltgresWorkItemAdapter
     const queryFields = branch ? { branch } : {};
     this.logStage("info", context, stage, "start", queryFields);
     const pending = conn.unsafe(query);
+    const budgetMs = BRANCH_HOUSEKEEPING_STAGES.has(stage)
+      ? Math.max(this.branchTimeoutMs, this.queryTimeoutMs)
+      : this.queryTimeoutMs;
     const timeoutTimer = setTimeout(() => {
       timedOut = true;
       void this.terminateClient(pool, context, stage, "query_timeout");
-    }, this.queryTimeoutMs);
+    }, budgetMs);
     try {
       const rows = (await pending) as ReadonlyArray<Record<string, unknown>>;
       if (timedOut) {

@@ -61,11 +61,16 @@ function makeTimeoutHarness({
   timeoutAfterDml = false,
   timeoutFreshHousekeeping = false,
   laterMainUpdateAfterLostAck = false,
+  slowBranchMs = 0,
+  branchTimeoutMs = 10,
 }: {
   readonly failFreshReachability?: boolean;
   readonly timeoutAfterDml?: boolean;
   readonly timeoutFreshHousekeeping?: boolean;
   readonly laterMainUpdateAfterLostAck?: boolean;
+  /** Make `dolt_branch` take this long, to exercise the housekeeping budget. */
+  readonly slowBranchMs?: number;
+  readonly branchTimeoutMs?: number;
 } = {}) {
   const state: TimeoutHarnessState = {
     durable: false,
@@ -252,6 +257,9 @@ function makeTimeoutHarness({
         ];
       }
       if (query.startsWith("SELECT dolt_branch")) {
+        if (slowBranchMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, slowBranchMs));
+        }
         if (
           poolNumber === 2 &&
           timeoutFreshHousekeeping &&
@@ -335,6 +343,10 @@ function makeTimeoutHarness({
   const adapter = new DoltgresWorkItemAdapter(buildPool(), {
     logger,
     queryTimeoutMs: 5,
+    // Explicit, and deliberately tight: `BRANCH_TIMEOUT_MS` defaults to 30s, so
+    // leaving it unset would make the hang-based housekeeping tests below wait
+    // half a minute each.
+    branchTimeoutMs,
     reserveTimeoutMs: 100,
     recreateClient: buildPool,
   });
@@ -509,5 +521,45 @@ describe("DoltgresWorkItemAdapter merge timeout recovery", () => {
     expect(
       state.queries.some((query) => /SELECT dolt_branch/.test(query))
     ).toBe(true);
+  });
+});
+
+// Operator production, 2026-10-09: ONE budget covered DML and ref housekeeping
+// alike, `dolt_branch` exceeded 5s under load, `terminateClient` destroyed the
+// pool, and the PATCH returned 500 AFTER its merge had already landed on
+// `main`. The same 5s then killed the quarantine rename — the one operation
+// whose job is to clear a stuck branch — so writes stayed down with the
+// bug.5358 fix deployed.
+describe("ref housekeeping gets its own budget", () => {
+  it("survives a dolt_branch slower than the DML budget", async () => {
+    // 60ms is 12x queryTimeoutMs (5ms) and well inside branchTimeoutMs.
+    const { adapter, state } = makeTimeoutHarness({
+      slowBranchMs: 60,
+      branchTimeoutMs: 1_000,
+    });
+
+    await expect(
+      adapter.create({ type: "task", title: "slow housekeeping" }, "principal-1")
+    ).resolves.toMatchObject({ id: "task.0001" });
+
+    expect(state.durable).toBe(true);
+    // Non-vacuous: the slow query really was the housekeeping one...
+    expect(state.queries.some((q) => /SELECT dolt_branch/.test(q))).toBe(true);
+    // ...and no pool was destroyed, which is what a blown budget does: a
+    // termination forces `recreateClient`, so poolBuilds would climb.
+    expect(state.poolBuilds).toBe(1);
+  });
+
+  it("still enforces the DML budget", async () => {
+    // Same harness, but the housekeeping budget is now BELOW the delay, so the
+    // separation is proven by the fact that the SAME 60ms query fails here.
+    const { adapter } = makeTimeoutHarness({
+      slowBranchMs: 60,
+      branchTimeoutMs: 10,
+    });
+
+    await expect(
+      adapter.create({ type: "task", title: "blown budget" }, "principal-1")
+    ).rejects.toBeInstanceOf(WorkItemsBusyError);
   });
 });
