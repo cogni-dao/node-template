@@ -32,8 +32,6 @@ export function makeFakeDoltgresSql(
 
   const unquote = (value: string | undefined) =>
     value?.replace(/''/g, "'");
-  const actorFromCommit = () =>
-    / by actor:(.+)$/.exec(commitMessage)?.[1] ?? "actor:test";
   const prefixed = (
     prefix: "from_" | "to_",
     row: Record<string, unknown> | undefined
@@ -88,9 +86,6 @@ export function makeFakeDoltgresSql(
       commitMessage =
         unquote(/SELECT dolt_commit\('-m', '(.*)'\)/.exec(query)?.[1]) ?? "";
       commitDate = options.commitDate ?? nextCommitDate(afterRow ?? beforeRow);
-      if (afterRow && !afterRow.created_by_principal_id) {
-        afterRow.created_by_principal_id = actorFromCommit();
-      }
       return [{ dolt_commit: branchCommit }];
     }
     if (query.includes("FROM dolt_merge(")) {
@@ -175,6 +170,13 @@ export function makeFakeDoltgresSql(
       beforeRow = undefined;
       afterRow = rows[0] ? { ...rows[0] } : undefined;
       if (afterRow) {
+        // The real INSERT RETURNING row includes the creator supplied as the
+        // sixth value. Model that at INSERT time; a later Dolt commit never
+        // mutates application columns.
+        const insertedValues = [...query.matchAll(/'((?:''|[^'])*)'/g)].map(
+          ([, value]) => unquote(value)
+        );
+        afterRow.created_by_principal_id ??= insertedValues[5];
         afterRow.revision = 0;
         afterRow.claimed_by_run = null;
         afterRow.claimed_at = null;
