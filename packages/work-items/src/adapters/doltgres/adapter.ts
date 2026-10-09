@@ -77,10 +77,17 @@ export interface DoltgresWorkItemAdapterOptions {
   readonly reserveTimeoutMs?: number;
   readonly recreateClient?: () => Sql;
   /**
-   * Dedicated pool for the QUERY port. When provided, reads bypass the write
-   * admission queue and the advisory lock entirely — see `readOnCleanMain`.
-   * Omit it and reads keep the legacy shared-lane behaviour, so no existing
-   * consumer changes behaviour by upgrading.
+   * Dedicated pool for the QUERY port. Reads run on it instead of the write
+   * lane — see `readOnCleanMain`.
+   *
+   * Omitting it does NOT opt out of the read lane. When `recreateClient` is
+   * set, the adapter derives its own read pool from that factory on first
+   * read, because 0.1.5 shipped the read lane as an option every node had to
+   * hand-wire and not one of them did: the whole fleet kept serializing reads
+   * behind the write queue while the fix sat in the package, inert. A lane
+   * that only works when six repositories each remember to pass an argument
+   * is not a fix, so the package owns it. Pass this explicitly only to give
+   * reads a WIDER pool than the write factory builds.
    */
   readonly readClient?: Sql;
 }
@@ -860,7 +867,14 @@ export class DoltgresWorkItemAdapter
   private readonly queryTimeoutMs: number;
   private readonly reserveTimeoutMs: number;
   private readonly recreateClient: (() => Sql) | undefined;
-  private readonly readClient: Sql | undefined;
+  private readonly providedReadClient: Sql | undefined;
+  /**
+   * Read pool derived from `recreateClient` when the caller passed no
+   * `readClient`. Built on first read, not in the constructor: a node that
+   * never reads must not pay for a connection, and construction must not
+   * depend on the database being reachable.
+   */
+  private derivedReadClient: Sql | undefined;
   private readonly terminatingPools = new WeakMap<object, Promise<void>>();
 
   constructor(
@@ -875,7 +889,7 @@ export class DoltgresWorkItemAdapter
     this.queryTimeoutMs = options.queryTimeoutMs ?? QUERY_TIMEOUT_MS;
     this.reserveTimeoutMs = options.reserveTimeoutMs ?? RESERVE_TIMEOUT_MS;
     this.recreateClient = options.recreateClient;
-    this.readClient = options.readClient;
+    this.providedReadClient = options.readClient;
   }
 
   private logStage(
@@ -2039,9 +2053,11 @@ export class DoltgresWorkItemAdapter
    * peaked at 7334 ms while the actual `dml.read` was 677 ms — a dashboard
    * firing four list calls took ~30 s to paint.
    *
-   * With `readClient` the read path reserves from its own pool and runs the
-   * query. It never calls `dolt_checkout`, never takes the lock, and never
-   * reconciles, so read concurrency equals that pool's width.
+   * The read path runs on a pool of its own — `readClient` when the caller
+   * passed one, otherwise one the adapter derives from `recreateClient`. It
+   * never calls `dolt_checkout`, never takes the lock, and never reconciles,
+   * so read concurrency equals that pool's width and no read ever waits on a
+   * write. Only a consumer that passes neither falls back to the shared lane.
    *
    * WHY NOT CHECKING OUT IS SAFE: a fresh connection opens on the database's
    * default branch, which is `main`. This lane never moves it, so every read
@@ -2050,10 +2066,45 @@ export class DoltgresWorkItemAdapter
    * observe. Reads remain available through residual branch evidence, which is
    * the bug.5358 guarantee, and they no longer pay to enumerate it.
    */
+  /**
+   * The pool reads run on, or `undefined` when there is none and reads must
+   * take the shared write lane.
+   *
+   * `recreateClient` is the caller's own factory for a work-items connection,
+   * so a pool built from it has the right URL, the right `application_name`
+   * shape, and the right driver options by construction — nothing here has to
+   * guess a DSN. Reads need their OWN pool rather than a second checkout from
+   * the write pool because that pool is `max: 1` on every node in the fleet:
+   * sharing it would put every read back behind the in-flight write.
+   */
+  private resolveReadPool(): Sql | undefined {
+    if (this.providedReadClient) return this.providedReadClient;
+    if (this.derivedReadClient) return this.derivedReadClient;
+    if (!this.recreateClient) return undefined;
+    try {
+      this.derivedReadClient = this.recreateClient();
+    } catch (error) {
+      // Never let pool construction fail a read: the shared lane still works.
+      this.logger.warn(
+        {
+          event: "adapter.work_items.read_pool_derive_failed",
+          ...errorFields(error),
+        },
+        "work_items could not derive a read pool; reads use the shared lane"
+      );
+      return undefined;
+    }
+    this.logger.info(
+      { event: "adapter.work_items.read_pool_derived" },
+      "work_items derived a dedicated read pool from recreateClient"
+    );
+    return this.derivedReadClient;
+  }
+
   private async readOnCleanMain<T>(
     fn: (conn: WorkItemConnection) => Promise<T>
   ): Promise<T> {
-    const readPool = this.readClient;
+    const readPool = this.resolveReadPool();
     if (!readPool) {
       // Legacy shared lane — unchanged for consumers that pass no read client.
       return this.withOperationQueue("read work items", (context) =>
@@ -2076,11 +2127,15 @@ export class DoltgresWorkItemAdapter
         )
       );
     } catch (error) {
-      // A query timeout terminates the pool it ran on, and `recreateClient`
-      // only rebuilds the WRITE client — so a terminated read pool would stay
-      // dead. Fall back to the shared lane for this call rather than failing a
-      // read the legacy path could still serve. Slow beats unavailable, and
-      // bug.5358's whole point is that reads stay available.
+      // A query timeout terminates the pool it ran on. A DERIVED pool is ours
+      // to rebuild, so drop it and the next read builds a fresh one; a pool
+      // the caller provided is not, so that one stays as given. Either way
+      // this call falls back to the shared lane rather than failing a read the
+      // legacy path could still serve — slow beats unavailable, and bug.5358's
+      // whole point is that reads stay available.
+      if (readPool === this.derivedReadClient) {
+        this.derivedReadClient = undefined;
+      }
       this.logger.warn(
         { event: "adapter.work_items.read_lane_fallback", ...errorFields(error) },
         "work_items read lane failed; retrying on the shared lane"
