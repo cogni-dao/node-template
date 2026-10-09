@@ -66,8 +66,28 @@ const QUERY_TIMEOUT_MS = 5_000;
  * is a destroyed connection and an orphaned ref.
  */
 const BRANCH_TIMEOUT_MS = 30_000;
-/** Stages that are ref housekeeping, not DML — see BRANCH_TIMEOUT_MS. */
-const BRANCH_HOUSEKEEPING_STAGES = new Set(["branch.delete"]);
+/**
+ * Stages that move REFS or SESSION STATE and write no rows — see
+ * BRANCH_TIMEOUT_MS. `branch.create` is `dolt_checkout('-b', …)` and
+ * `main.checkout` is `dolt_checkout('main')`; neither touches
+ * `public.work_items`, so neither has a half-written row for a timeout to
+ * protect. `merge.apply` and every `dml.*` stage deliberately stay on the DML
+ * budget, because those DO write rows and a runaway one must be cut off.
+ *
+ * `branch.create` belongs here for a measured reason: Doltgres ref operations
+ * get slower as refs accumulate, and the quarantine lane ADDS a ref each time
+ * it parks an unprovable branch. On operator production that closed a loop —
+ * `dolt_checkout -b` blew the 5s budget, the pool was destroyed, the orphaned
+ * branch became unprovable residue, the next attempt quarantined it and added
+ * another ref, and the following attempt was slower still. Writes to one item
+ * failed six consecutive times while a freshly created item patched fine,
+ * because the pile only has to be big enough to cross the budget.
+ */
+const BRANCH_HOUSEKEEPING_STAGES = new Set([
+  "branch.create",
+  "branch.delete",
+  "main.checkout",
+]);
 const RESERVE_TIMEOUT_MS = 5_000;
 
 /**
