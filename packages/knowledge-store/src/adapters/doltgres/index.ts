@@ -575,3 +575,9 @@ export {
   DoltgresEdoResolverAdapter,
   type DoltgresEdoResolverConfig,
 } from "./edo-resolver.js";
+export {
+  type BranchSessionLogger,
+  type BranchSessionOptions,
+  DoltBranchSessionRunner,
+  KNOWLEDGE_BRANCH_LOCK_KEY,
+} from "./session-admission.js";

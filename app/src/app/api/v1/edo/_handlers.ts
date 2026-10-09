@@ -43,6 +43,7 @@ import {
   DomainNotRegisteredError,
   EdoEntryTypeRequiresAtomicToolError,
   HypothesisMissingEvaluateAtError,
+  KnowledgeBusyError,
   KnowledgeGateError,
   type PrincipalAuthSource,
   sessionUserToPrincipal,
@@ -63,6 +64,14 @@ function authSource(request: Request): PrincipalAuthSource {
 }
 
 function mapError(e: unknown): NextResponse {
+  // Admission control refused, reserved, or lock-contended: nothing was
+  // applied, so this is retryable capacity pressure, never a client conflict
+  // and never a 500. Same contract as knowledge/contributions (bug.5391).
+  if (e instanceof KnowledgeBusyError)
+    return NextResponse.json(
+      { error: e.message, retryable: true },
+      { status: 503, headers: { "Retry-After": "2" } }
+    );
   if (e instanceof HypothesisMissingEvaluateAtError)
     return NextResponse.json({ error: e.message }, { status: 400 });
   if (e instanceof CitationTargetNotFoundError)

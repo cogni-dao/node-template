@@ -736,8 +736,23 @@ function createContainer(): Container {
 			store: knowledgePort,
 		});
 		edoCapability = createEdoCapability(knowledgePort, edoResolver);
+		// Branch work gets its own `max: 1` client, deliberately NOT the pool that
+		// serves reads. Dolt branch ops need a session-pinned connection; bounding
+		// them above the pool (FIFO + advisory lock, see `DoltBranchSessionRunner`)
+		// is what keeps a burst of admin rejects from burning every slot — and
+		// keeping them off the read pool is what keeps knowledge reads alive while
+		// a write is degraded (bug.5391, bug.5358).
+		const createKnowledgeBranchClient = () =>
+			buildDoltgresClient({
+				connectionString: env.DOLTGRES_URL as string,
+				applicationName: `cogni_knowledge_branch_${env.SERVICE_NAME ?? "app"}`,
+				max: 1,
+			});
 		const contributionPort = new DoltgresKnowledgeContributionAdapter({
 			sql: doltClient,
+			branchSql: createKnowledgeBranchClient(),
+			recreateBranchClient: createKnowledgeBranchClient,
+			logger: log,
 		});
 		// Optional post-merge mirror to DoltHub (task.5069). Disabled when
 		// DOLTHUB_REMOTE_URL is unset. Gate-by-secret-presence follows the
