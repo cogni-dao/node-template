@@ -87,22 +87,11 @@ function adapterWithUnadoptedRow() {
   // database, so pinning every lane to one instance is the faithful analogue,
   // not a workaround.
   const sql = makeFakeDoltgresSql(respond, queries);
-  // TEMPORARY DIAGNOSTIC (remove before merge): print every adapter stage so
-  // CI shows which predicate of the patch arm rejects an unadopted row.
-  const logger = {
-    info: (f: Record<string, unknown>, m: string) =>
-      console.log("DIAG info", m, JSON.stringify(f)),
-    warn: (f: Record<string, unknown>, m: string) =>
-      console.log("DIAG warn", m, JSON.stringify(f)),
-    error: (f: Record<string, unknown>, m: string) =>
-      console.log("DIAG error", m, JSON.stringify(f)),
-  };
   const adapter = new DoltgresWorkItemAdapter(sql, {
     readClient: sql,
     recreateClient: () => sql,
-    logger,
   });
-  return { adapter, queries, sql };
+  return { adapter, queries };
 }
 
 function adapterWithCoarseCommitDate() {
@@ -283,18 +272,13 @@ describe("DoltgresWorkItemAdapter ownership and leases", () => {
 // refused.
 describe("unadopted rows (NULL creator) stay mutable", () => {
   it("patches an unadopted row instead of failing its own transition proof", async () => {
-    const { adapter, queries } = adapterWithUnadoptedRow();
-    try {
-      await expect(
-        adapter.patch(
-          { id: toWorkItemId(row.id), set: { title: "renamed" } },
-          "principal-1"
-        )
-      ).resolves.toMatchObject({ id: row.id, title: "renamed" });
-    } finally {
-      // TEMPORARY DIAGNOSTIC (remove before merge).
-      console.log("DIAG queries:\n" + queries.join("\n"));
-    }
+    const { adapter } = adapterWithUnadoptedRow();
+    await expect(
+      adapter.patch(
+        { id: toWorkItemId(row.id), set: { title: "renamed" } },
+        "principal-1"
+      )
+    ).resolves.toMatchObject({ id: row.id, title: "renamed" });
   });
 
   it("deletes an unadopted row", async () => {
