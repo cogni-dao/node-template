@@ -69,6 +69,13 @@ export interface DoltgresWorkItemAdapterOptions {
   readonly queryTimeoutMs?: number;
   readonly reserveTimeoutMs?: number;
   readonly recreateClient?: () => Sql;
+  /**
+   * Dedicated pool for the QUERY port. When provided, reads bypass the write
+   * admission queue and the advisory lock entirely — see `readOnCleanMain`.
+   * Omit it and reads keep the legacy shared-lane behaviour, so no existing
+   * consumer changes behaviour by upgrading.
+   */
+  readonly readClient?: Sql;
 }
 
 interface OperationContext {
@@ -830,6 +837,7 @@ export class DoltgresWorkItemAdapter
   private readonly queryTimeoutMs: number;
   private readonly reserveTimeoutMs: number;
   private readonly recreateClient: (() => Sql) | undefined;
+  private readonly readClient: Sql | undefined;
   private readonly terminatingPools = new WeakMap<object, Promise<void>>();
 
   constructor(
@@ -844,6 +852,7 @@ export class DoltgresWorkItemAdapter
     this.queryTimeoutMs = options.queryTimeoutMs ?? QUERY_TIMEOUT_MS;
     this.reserveTimeoutMs = options.reserveTimeoutMs ?? RESERVE_TIMEOUT_MS;
     this.recreateClient = options.recreateClient;
+    this.readClient = options.readClient;
   }
 
   private logStage(
@@ -1935,12 +1944,71 @@ export class DoltgresWorkItemAdapter
     assertDoltStatus(rows, "dolt_branch");
   }
 
+  /**
+   * COMMAND_QUERY_SEPARATION AT RUNTIME, not just in the type system.
+   * `work-items-port.md` splits `WorkItemQueryPort` from
+   * `WorkItemCommandPort`; this method is why that split has to hold in
+   * execution too.
+   *
+   * `dolt_checkout` is session state, so a WRITE must own its session: pinned
+   * connection, FIFO admission, advisory lock `GLOBAL_LOCK_KEY`. A READ needs
+   * none of that — it reads committed `main`, which is plain SQL. Routing reads
+   * through the write lane made read concurrency structurally 1 (a `max: 1`
+   * pool behind a single-slot queue), so N concurrent readers serialized.
+   * Measured on operator production: `operation.queue` averaged 2660 ms and
+   * peaked at 7334 ms while the actual `dml.read` was 677 ms — a dashboard
+   * firing four list calls took ~30 s to paint.
+   *
+   * With `readClient` the read path reserves from its own pool and runs the
+   * query. It never calls `dolt_checkout`, never takes the lock, and never
+   * reconciles, so read concurrency equals that pool's width.
+   *
+   * WHY NOT CHECKING OUT IS SAFE: a fresh connection opens on the database's
+   * default branch, which is `main`. This lane never moves it, so every read
+   * sees committed `main`. Writes never commit to `main` outside their proven
+   * `work-item-op/*` merge, so there is no dirty-main window for a reader to
+   * observe. Reads remain available through residual branch evidence, which is
+   * the bug.5358 guarantee, and they no longer pay to enumerate it.
+   */
   private async readOnCleanMain<T>(
     fn: (conn: WorkItemConnection) => Promise<T>
   ): Promise<T> {
-    return this.withOperationQueue("read work items", (context) =>
-      this.withGlobalLock(context, fn, { reconcile: "best_effort" })
-    );
+    const readPool = this.readClient;
+    if (!readPool) {
+      // Legacy shared lane — unchanged for consumers that pass no read client.
+      return this.withOperationQueue("read work items", (context) =>
+        this.withGlobalLock(context, fn, { reconcile: "best_effort" })
+      );
+    }
+    const context = { operationId: randomUUID(), operation: "read work items" };
+    try {
+      // No reserve(): a read pins no session state, so it does not need a
+      // dedicated connection. postgres.js hands each concurrent query its own
+      // pooled connection, which is exactly the bounded concurrency we want —
+      // and is why this needs no hand-rolled semaphore. `executeQuery` only
+      // uses `pool` for termination; the query itself goes through `.unsafe`,
+      // which a pool exposes identically to a reserved connection.
+      return await fn(
+        this.instrumentConnection(
+          readPool,
+          readPool as unknown as ReservedSql,
+          context
+        )
+      );
+    } catch (error) {
+      // A query timeout terminates the pool it ran on, and `recreateClient`
+      // only rebuilds the WRITE client — so a terminated read pool would stay
+      // dead. Fall back to the shared lane for this call rather than failing a
+      // read the legacy path could still serve. Slow beats unavailable, and
+      // bug.5358's whole point is that reads stay available.
+      this.logger.warn(
+        { event: "adapter.work_items.read_lane_fallback", ...errorFields(error) },
+        "work_items read lane failed; retrying on the shared lane"
+      );
+      return this.withOperationQueue("read work items", (ctx) =>
+        this.withGlobalLock(ctx, fn, { reconcile: "best_effort" })
+      );
+    }
   }
 
   private async getWith(conn: WorkItemConnection, id: WorkItemId) {
