@@ -297,7 +297,14 @@ jobs:
       - name: Tarball must carry its licence
         run: |
           set -euo pipefail
-          if ! tar tzf "${{ steps.pack.outputs.tgz }}" | grep -qE '^package/LICENSE'; then
+          # Materialise the listing first. `grep -q` exits at its first match and
+          # closes the pipe, `tar` then dies with EPIPE, and `pipefail` promotes
+          # that to the pipeline's status — so `! <pipeline>` fired the error
+          # branch even though the LICENSE was present. Size-dependent, which is
+          # why it spared small tarballs and bit knowledge-store v0.1.0 and
+          # work-items v0.1.3 once they grew past tar's buffer.
+          tar tzf "${{ steps.pack.outputs.tgz }}" > /tmp/licence-list.txt
+          if ! grep -qE '^package/LICENSE' /tmp/licence-list.txt; then
             echo "::error::tarball contains no LICENSE file"
             exit 1
           fi
