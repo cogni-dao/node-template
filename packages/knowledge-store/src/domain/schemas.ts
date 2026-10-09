@@ -138,6 +138,7 @@ export const KnowledgeSchema = z.object({
   entityId: z.string().nullable().optional(),
   title: z.string().min(1),
   content: z.string().min(1),
+  useWhen: z.string().max(320).nullable().optional(),
   entryType: z.string().min(1).optional(),
   confidencePct: z.number().int().min(0).max(100).nullable().optional(),
   sourceType: SourceTypeSchema,

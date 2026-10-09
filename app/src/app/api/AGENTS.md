@@ -65,6 +65,7 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
   - `/api/v1/work/items/[id]/claims` [POST, DELETE] - acquire or release an authenticated principal+run lease
   - `/api/v1/work/items/[id]/heartbeat` [POST] - refresh an authenticated principal+run lease
   - `/api/v1/work/items/[id]/coordination` [GET] - read lease and next-action coordination state
+  - `/api/v1/knowledge/index` [GET] - content-free retrieval-trigger projection with optional `useWhen` substring filter
   - `/api/v1/agent/register` [POST] - unauthenticated machine actor registration (returns Bearer API key)
   - `/api/v1/agent/runs` [GET] - machine-authenticated run list
   - `/api/v1/agent/runs/[runId]/stream` [GET] - machine-authenticated run stream SSE
