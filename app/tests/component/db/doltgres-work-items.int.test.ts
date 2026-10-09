@@ -274,13 +274,20 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 					`SELECT name FROM dolt.branches WHERE name = '${quarantined}'`,
 				),
 			).resolves.toHaveLength(1);
+			// Proving the ROW survived is the point of quarantine. Doltgres is
+			// Postgres dialect, so MySQL backtick branch-qualification does not
+			// parse; check the branch out on the maintenance session instead.
+			await maintenance.unsafe(`SELECT dolt_checkout('${quarantined}')`);
 			await expect(
 				maintenance.unsafe(
-					`SELECT id FROM \`${quarantined}\`.work_items WHERE id = 'task.9599'`,
+					"SELECT id FROM work_items WHERE id = 'task.9599'",
 				),
 			).resolves.toHaveLength(1);
+			await maintenance.unsafe("SELECT dolt_checkout('main')");
 
-			await maintenance.unsafe(`SELECT dolt_branch('-D', '${branch}')`);
+			// `branch` no longer exists — quarantine renamed it — so drop the
+			// quarantined ref to prove a clean store still reads null.
+			await maintenance.unsafe(`SELECT dolt_branch('-D', '${quarantined}')`);
 			await expect(
 				adapter.get(toWorkItemId("task.9599")),
 			).resolves.toBeNull();
