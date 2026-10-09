@@ -92,11 +92,19 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 	it("creates, lists, patches, coordinates, and deletes through Dolt branches", async () => {
 		const createWorkItemClient = () =>
 			postgres(dbUrl, { max: 1, fetch_types: false });
+		// An EXPLICIT read pool, so `recreateClient` below stays a pure
+		// write-pool factory and `sql` keeps tracking the write pool — which the
+		// pool-death scenario further down depends on. The 0.1.7 derivation path
+		// (no readClient, pool built from recreateClient) is covered in the unit
+		// lane; mixing it in here would mean `sql` sometimes pointed at the read
+		// pool and the pool-death assertions would kill the wrong connection.
+		const readSql = createWorkItemClient();
 		const adapter = new DoltgresWorkItemAdapter(sql, {
 			logger: stageLogger,
 			lockWaitMs: 250,
 			lockRetryMs: 25,
 			queryTimeoutMs: 5_000,
+			readClient: readSql,
 			recreateClient: () => {
 				sql = createWorkItemClient();
 				return sql;
@@ -157,7 +165,15 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 				(error) => error,
 			);
 			await new Promise((resolve) => setTimeout(resolve, 50));
-			const recoveryAttempt = adapter.get(id);
+			// A WRITE, not a read: the write pool is the only pool a write uses,
+			// so it is the only operation that can observe that pool dying and
+			// then prove `recreateClient` rebuilt it. Before 0.1.7 a read shared
+			// that pool and stood in for this; it no longer does, and a read
+			// standing in would now assert nothing.
+			const recoveryAttempt = adapter.patch(
+				{ id, set: { title: "pool death" } },
+				principalId,
+			);
 			const destroyTimer = setTimeout(() => {
 				void oldPool.end({ timeout: 0 });
 			}, 100);
@@ -172,7 +188,16 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			await lockHolder.end({ timeout: 0 });
 		}
 
+		// Reads kept serving throughout — including while the write pool was
+		// dead, which is the bug.5358 guarantee.
 		await expect(adapter.get(id)).resolves.toMatchObject({ id });
+		// ...and the next WRITE both proves the pool was rebuilt and sweeps the
+		// orphan branch. Sweeping is a branch mutation, so it belongs to the
+		// write plane (COMMAND_QUERY_SEPARATION); a read used to do it here only
+		// because a read used to take the write lock.
+		await expect(
+			adapter.patch({ id, set: { title: "Doltgres accepted" } }, principalId),
+		).resolves.toMatchObject({ id, title: "Doltgres accepted" });
 		const verifier = createWorkItemClient();
 		try {
 			await expect(
@@ -208,6 +233,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 		expect(released.claimedByRun).toBeUndefined();
 		await expect(adapter.delete(id, principalId)).resolves.toBe(true);
 		await expect(adapter.get(id)).resolves.toBeNull();
+		await readSql.end({ timeout: 0 });
 	}, 60_000);
 
 	it("serves reads past an unprovable operation branch and quarantines it so writes recover", async () => {
