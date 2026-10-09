@@ -152,9 +152,9 @@ export function createContributionService(
     if (!edits || edits.length === 0 || gates.length === 0) return edits;
     const out: KnowledgeContributionEdit[] = [];
     for (const edit of edits) {
-      // deprecate + cite carry no knowledge-entry content to gate — a cite is
-      // a typed edge between existing rows. Pass them through untouched.
-      if (edit.op === "delete" || edit.op === "cite") {
+      // delete + cite carry no entry payload. Patch carries only fields that
+      // the current gate chain does not govern, so forward all three unchanged.
+      if (edit.op === "delete" || edit.op === "cite" || edit.op === "patch") {
         out.push(edit);
         continue;
       }
