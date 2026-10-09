@@ -79,9 +79,17 @@ function adapterWithUnadoptedRow() {
     if (query.includes("FROM work_items")) return [legacy];
     return [];
   };
-  const build = () => makeFakeDoltgresSql(respond, queries);
-  const adapter = new DoltgresWorkItemAdapter(build(), {
-    recreateClient: build,
+  // ONE fake, used as every lane. The fake is stateful (branch, commit hash,
+  // diff rows), and 0.1.7 derives a read pool from `recreateClient` — which in
+  // a harness means a SECOND fake with its own state, so the commit the write
+  // lane created is invisible to the proof's reads and the branch reads as
+  // "unprovable commit evidence". Against a real database both pools see one
+  // database, so pinning every lane to one instance is the faithful analogue,
+  // not a workaround.
+  const sql = makeFakeDoltgresSql(respond, queries);
+  const adapter = new DoltgresWorkItemAdapter(sql, {
+    readClient: sql,
+    recreateClient: () => sql,
   });
   return { adapter, queries };
 }
