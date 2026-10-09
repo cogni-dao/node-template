@@ -38,6 +38,13 @@ const CLAIM_TTL_SECONDS = 300;
 const COMMIT_TAG = "work-items";
 const GLOBAL_LOCK_KEY = 5_001_001;
 const OP_BRANCH_PREFIX = "work-item-op/";
+/**
+ * Where an unprovable operation branch is parked. Renaming out of
+ * `OP_BRANCH_PREFIX` is what lets writes recover: the sweep only enumerates the
+ * op namespace, so a quarantined ref stops blocking every future write while
+ * its commits stay byte-for-byte intact and inspectable.
+ */
+const QUARANTINE_BRANCH_PREFIX = "work-item-quarantine/";
 const LOCK_WAIT_MS = 2_000;
 const LOCK_RETRY_MS = 50;
 const OPERATION_QUEUE_WAIT_MS = 30_000;
@@ -216,6 +223,22 @@ export class WorkItemsBusyError extends Error {
     this.name = "WorkItemsBusyError";
   }
 }
+
+/**
+ * The branch is STRUCTURALLY verified — linear history, frozen base intact,
+ * exactly one `public.work_items` row diff, authoritative commit time — and
+ * fails only `validateTransitionMatrix`. That distinction is what makes
+ * quarantine safe: we know the ref holds at most one work-item row change, so
+ * parking it loses nothing, whereas a branch whose tip or reachability could
+ * not be established has proven nothing and must keep failing closed.
+ */
+class UnprovableTransitionError extends WorkItemsBusyError {
+  constructor(message: string) {
+    super(message);
+    this.name = "UnprovableTransitionError";
+  }
+}
+
 
 class DoltMergeOutcomeUnknownError extends WorkItemsBusyError {
   constructor() {
@@ -1370,7 +1393,7 @@ export class DoltgresWorkItemAdapter
       pending?.proof ??
       legacyProofFromMessage(String(commit.message ?? ""), before, after);
     if (!proof || !validateTransitionMatrix(proof, before, after, commitAt)) {
-      throw new WorkItemsBusyError(
+      throw new UnprovableTransitionError(
         `Work-item branch ${branch} failed its operation proof; preserving evidence`
       );
     }
@@ -1755,7 +1778,38 @@ export class DoltgresWorkItemAdapter
           reconciliation
         );
       } catch (error) {
-        if (reconciliation === "required") throw error;
+        if (reconciliation === "required") {
+          // ONLY the structurally-verified arm is quarantinable. A branch whose
+          // tip is missing, or whose reachability could not be proven, has
+          // established nothing about its contents — parking it could hide
+          // arbitrary divergence, so those keep failing closed exactly as
+          // before.
+          if (!(error instanceof UnprovableTransitionError)) throw error;
+          // ONE UNPROVABLE BRANCH MUST NOT BLOCK EVERY FUTURE WRITE.
+          // bug.5358 left this arm throwing, which made writes permanently
+          // unavailable on a node carrying a single residual branch: nothing
+          // deletes a `preserved_unsafe` ref, and this sweep re-walks
+          // `dolt.branches` on every request, so no restart clears it. Measured
+          // on operator production — a promote failed at 05:27:04Z, the lost
+          // `branch.create` ack left `work-item-op/9ee34c81…` behind at
+          // 05:28:33Z, and 88 consecutive write attempts 503'd over the next
+          // two hours while reads stayed 200.
+          //
+          // Quarantine rather than delete. The branch reached this arm having
+          // ALREADY passed every structural check — linear history, frozen base
+          // intact, exactly one `public.work_items` row diff, authoritative
+          // commit time — and fails only its transition proof. So it may hold a
+          // real one-row write, and deleting it is the data loss bug.5358 was
+          // filed to prevent. Renaming it out of the enumerated namespace
+          // preserves those commits byte-for-byte with zero data mutation,
+          // keeps them reachable for a human to merge, and unblocks writes now.
+          // A failed rename still throws: quarantine must not be best-effort,
+          // or a write would proceed believing evidence was parked when it was
+          // not.
+          await this.quarantineOperationBranch(conn, branch, error);
+          tolerated = true;
+          continue;
+        }
         tolerated = true;
       }
     }
@@ -1932,6 +1986,32 @@ export class DoltgresWorkItemAdapter
     assertDoltStatus(checkoutRows, "dolt_checkout");
     await this.assertMainClean(conn);
     await this.deleteOperationBranch(conn, branch);
+  }
+
+  /**
+   * Move an unprovable operation branch out of the swept namespace, loudly.
+   * `error` is the proof failure that sent it here and is logged with it, so
+   * the quarantine record says WHY this ref could not be proven rather than
+   * just that it moved.
+   */
+  private async quarantineOperationBranch(
+    conn: WorkItemConnection,
+    branch: string,
+    error: unknown
+  ): Promise<void> {
+    const target = `${QUARANTINE_BRANCH_PREFIX}${branch.slice(
+      OP_BRANCH_PREFIX.length
+    )}`;
+    const rows = await conn.unsafe(
+      `SELECT dolt_branch('-m', ${escapeValue(branch)}, ${escapeValue(target)})`
+    );
+    assertDoltStatus(rows, "dolt_branch");
+    this.logReconciliation("warn", conn, {
+      branch,
+      quarantinedAs: target,
+      classification: "quarantined_unprovable",
+      ...errorFields(error),
+    });
   }
 
   private async deleteOperationBranch(

@@ -51,6 +51,7 @@ function makeReconciliationHarness({
   mergeBase,
   listError,
   omitBranchCommit = false,
+  unprovableTransition = false,
   proofError,
   withProvableSibling = false,
   deleteError,
@@ -60,6 +61,8 @@ function makeReconciliationHarness({
   readonly mergeBase: string;
   readonly listError?: Error;
   readonly omitBranchCommit?: boolean;
+  /** Make the diff row fail validateTransitionMatrix — the ONLY quarantinable arm. */
+  readonly unprovableTransition?: boolean;
   readonly proofError?: Error;
   /** A second branch, sorted after the first, whose tip is already main. */
   readonly withProvableSibling?: boolean;
@@ -76,6 +79,7 @@ function makeReconciliationHarness({
     branchCommit: omitBranchCommit ? undefined : branchCommit,
     mergeBase,
     listError,
+    unprovableTransition,
     proofError,
     queries: [],
     merged: false,
@@ -124,7 +128,13 @@ function makeReconciliationHarness({
       return [
         {
           commit_hash: state.branchCommit,
-          message: "work-items: create work item by actor:principal-1",
+          // An unparseable message yields NO legacy proof, so the transition
+          // proof fails while every STRUCTURAL check still passes — linear
+          // history, frozen base, exactly one work_items row, real commit time.
+          // That is precisely the quarantinable arm, and the only one.
+          message: state.unprovableTransition
+            ? "unrelated commit with no work-item proof"
+            : "work-items: create work item by actor:principal-1",
           date: "2026-10-03T00:01:00.000Z",
         },
       ];
@@ -166,6 +176,13 @@ function makeReconciliationHarness({
       return [
         { hash: "merge-commit", fast_forward: 0, conflicts: 0, message: "ok" },
       ];
+    }
+    if (query.startsWith("SELECT dolt_branch('-m'")) {
+      // Quarantine: the ref leaves the swept `work-item-op/` namespace and its
+      // commits stay intact. Clearing `state.branch` models exactly that — the
+      // sweep stops seeing it, nothing is deleted.
+      state.branch = undefined;
+      return [{ dolt_branch: 0 }];
     }
     if (query.startsWith("SELECT dolt_branch('-D'")) {
       const deleted = /'(work-item-op\/[^']+)'/.exec(query)?.[1];
@@ -393,6 +410,47 @@ describe("DoltgresWorkItemAdapter restart reconciliation", () => {
     expect(preserved).toHaveLength(1);
     expect(preserved[0]?.level).toBe("error");
     expect(preserved[0]?.fields.served).toBeUndefined();
+  });
+
+
+  // bug.5358: the write path used to throw here, which made writes permanently
+  // unavailable on a node carrying one residual branch — 88 consecutive 503s
+  // over two hours on operator production while reads stayed 200. The branch
+  // reaches this arm structurally verified and fails only its transition proof,
+  // so it may hold a real one-row write: park it, never delete it.
+  it("quarantines a structurally-verified but unprovable branch so writes recover", async () => {
+    const { adapter, state, logs } = makeReconciliationHarness({
+      mergeBase: "main-commit",
+      unprovableTransition: true,
+    });
+
+    // The write is no longer blocked BY THE BRANCH: it gets past reconciliation
+    // and fails only because this fixture has no such row. Before quarantine it
+    // rejected with WorkItemsBusyError and never reached the item at all — that
+    // difference is the whole fix.
+    await expect(
+      adapter.patch(
+        { id: toWorkItemId("task.missing"), set: { title: "unblocked" } },
+        "principal-1"
+      )
+    ).rejects.toThrow(/Work item not found/);
+
+    // Renamed OUT of the swept namespace, never deleted.
+    const rename = state.queries.find((q) => q.includes("dolt_branch('-m'"));
+    expect(rename).toContain("work-item-op/restart-evidence");
+    expect(rename).toContain("work-item-quarantine/restart-evidence");
+    expect(
+      state.queries.some((q) => q.startsWith("SELECT dolt_branch('-D'"))
+    ).toBe(false);
+
+    const q = logs.filter(
+      (e) => e.fields.classification === "quarantined_unprovable"
+    );
+    expect(q).toHaveLength(1);
+    expect(q[0]?.level).toBe("warn");
+    expect(q[0]?.fields.quarantinedAs).toBe(
+      "work-item-quarantine/restart-evidence"
+    );
   });
 
   it("still reconciles a provable sibling after tolerating an unprovable branch", async () => {
