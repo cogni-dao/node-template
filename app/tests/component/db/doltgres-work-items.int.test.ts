@@ -202,7 +202,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 		await expect(adapter.get(id)).resolves.toBeNull();
 	}, 60_000);
 
-	it("serves reads past an unreachable operation branch while writes fail closed", async () => {
+	it("serves reads past an unprovable operation branch and quarantines it so writes recover", async () => {
 		const branch = "work-item-op/component-unreachable";
 		const maintenance = postgres(dbUrl, { max: 1, fetch_types: false });
 		try {
@@ -237,8 +237,19 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 				),
 			).resolves.toHaveLength(1);
 
-			// A write still fails closed on the same branch: it must never build on
-			// unproven evidence.
+			// CONTRACT CHANGE, deliberate (bug.5358). This case previously asserted
+			// that the write stays 503 forever. That is what made operator
+			// production unwritable: nothing deletes this ref, the sweep re-walks
+			// `dolt.branches` on every request, and no restart clears it — 88
+			// consecutive write 503s over two hours while reads stayed 200.
+			//
+			// The safety property is unchanged: the write still does not build on
+			// unproven evidence. Instead the ref is RENAMED out of the swept
+			// namespace, so its commits survive byte-for-byte for a human to
+			// merge, and the write then proceeds. Here it proceeds to a genuine
+			// "not found", because committed `main` does not carry task.9599 —
+			// which is exactly the point: the branch no longer decides the
+			// outcome.
 			await expect(
 				adapter.patch(
 					{
@@ -247,10 +258,25 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 					},
 					"component-agent",
 				),
-			).rejects.toBeInstanceOf(WorkItemsBusyError);
+			).rejects.toThrow(/Work item not found/);
+			// Parked, never deleted: gone from the op namespace, present under
+			// quarantine with its row intact.
 			await expect(
 				maintenance.unsafe(
 					`SELECT name FROM dolt.branches WHERE name = '${branch}'`,
+				),
+			).resolves.toHaveLength(0);
+			const quarantined = `work-item-quarantine/${branch.slice(
+				"work-item-op/".length,
+			)}`;
+			await expect(
+				maintenance.unsafe(
+					`SELECT name FROM dolt.branches WHERE name = '${quarantined}'`,
+				),
+			).resolves.toHaveLength(1);
+			await expect(
+				maintenance.unsafe(
+					`SELECT id FROM \`${quarantined}\`.work_items WHERE id = 'task.9599'`,
 				),
 			).resolves.toHaveLength(1);
 
@@ -264,6 +290,11 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 				.catch(() => undefined);
 			await maintenance
 				.unsafe(`SELECT dolt_branch('-D', '${branch}')`)
+				.catch(() => undefined);
+			await maintenance
+				.unsafe(
+					`SELECT dolt_branch('-D', 'work-item-quarantine/${branch.slice("work-item-op/".length)}')`,
+				)
 				.catch(() => undefined);
 			await maintenance.end({ timeout: 0 });
 		}
