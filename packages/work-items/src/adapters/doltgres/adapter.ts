@@ -233,6 +233,26 @@ function escapeValue(value: unknown): string {
   return `'${String(value).replace(/\0/g, "").replace(/'/g, "''")}'`;
 }
 
+/**
+ * Creator-binding constrains rows that HAVE a recorded creator. A row whose
+ * `created_by_principal_id` is NULL predates the column and is unowned, so every
+ * authenticated principal may mutate it — which is exactly the behaviour those
+ * rows had before the column existed.
+ *
+ * Getting this wrong is a silent fleet-wide lockout, not a 403 on one row:
+ * `String(null) !== principal` is always true, so the moment a node applies the
+ * lease-column migration its entire pre-existing corpus becomes immutable while
+ * reads keep returning 200. Observed on operator production 2026-10-08 — every
+ * item created before the migration rejected every PATCH, every newly created
+ * item was fine, so the failure looked like an auth problem rather than a
+ * migration one.
+ */
+function mayMutate(row: Record<string, unknown>, principal: string): boolean {
+  const creator = row.created_by_principal_id;
+  if (creator === null || creator === undefined || creator === "") return true;
+  return String(creator) === principal;
+}
+
 function requirePrincipal(principalId: string): string {
   const value = principalId.trim();
   if (!value) throw new WorkItemAuthorizationError("unknown");
@@ -2139,7 +2159,7 @@ export class DoltgresWorkItemAdapter
         const current = await this.getWith(conn, input.id);
         if (!current)
           throw new Error(`Work item not found: ${input.id as string}`);
-        if (String(current.created_by_principal_id) !== principal) {
+        if (!mayMutate(current, principal)) {
           throw new WorkItemAuthorizationError(input.id as string);
         }
         return rowToWorkItem(current);
@@ -2152,7 +2172,7 @@ export class DoltgresWorkItemAdapter
       async (conn, proof) => {
         clauses.push("revision = revision + 1", "updated_at = NOW()");
         const rows = await conn.unsafe(
-          `UPDATE work_items SET ${clauses.join(", ")} WHERE id = ${escapeValue(input.id as string)} AND created_by_principal_id = ${escapeValue(principal)} RETURNING *, (claim_expires_at IS NOT NULL AND claim_expires_at > NOW()) AS claim_active`
+          `UPDATE work_items SET ${clauses.join(", ")} WHERE id = ${escapeValue(input.id as string)} AND (created_by_principal_id IS NULL OR created_by_principal_id = ${escapeValue(principal)}) RETURNING *, (claim_expires_at IS NOT NULL AND claim_expires_at > NOW()) AS claim_active`
         );
         const row = rows[0] as Record<string, unknown> | undefined;
         if (!row) await this.throwMissingOrUnauthorized(conn, input.id);
@@ -2177,7 +2197,7 @@ export class DoltgresWorkItemAdapter
           const current = await this.getWith(conn, input.id);
           if (!current)
             throw new Error(`Work item not found: ${input.id as string}`);
-          if (String(current.created_by_principal_id) !== principal) {
+          if (!mayMutate(current, principal)) {
             throw new WorkItemAuthorizationError(input.id as string);
           }
           proof.beforeRow = current;
@@ -2193,7 +2213,7 @@ export class DoltgresWorkItemAdapter
       principal,
       async (conn) => {
         const rows = await conn.unsafe(
-          `DELETE FROM work_items WHERE id = ${escapeValue(id as string)} AND created_by_principal_id = ${escapeValue(principal)} RETURNING id`
+          `DELETE FROM work_items WHERE id = ${escapeValue(id as string)} AND (created_by_principal_id IS NULL OR created_by_principal_id = ${escapeValue(principal)}) RETURNING id`
         );
         if (rows.length) return true;
         const current = await this.getWith(conn, id);
@@ -2205,7 +2225,7 @@ export class DoltgresWorkItemAdapter
         preflight: async (conn, proof) => {
           const current = await this.getWith(conn, id);
           if (!current) return;
-          if (String(current.created_by_principal_id) !== principal) {
+          if (!mayMutate(current, principal)) {
             throw new WorkItemAuthorizationError(id as string);
           }
           proof.beforeRow = current;
