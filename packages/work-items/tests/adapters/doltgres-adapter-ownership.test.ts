@@ -49,6 +49,28 @@ function adapterWithQueries() {
   return { adapter: new DoltgresWorkItemAdapter(sql), queries };
 }
 
+/**
+ * An UNADOPTED row: created before `created_by_principal_id` existed, so NULL.
+ */
+function adapterWithUnadoptedRow() {
+  const queries: string[] = [];
+  const legacy = { ...row, created_by_principal_id: null };
+  const sql = makeFakeDoltgresSql((query) => {
+    if (query.startsWith("UPDATE work_items")) {
+      return [
+        {
+          ...legacy,
+          title: /title = '([^']*)'/.exec(query)?.[1] ?? legacy.title,
+        },
+      ];
+    }
+    if (query.startsWith("DELETE FROM work_items")) return [{ id: legacy.id }];
+    if (query.includes("FROM work_items")) return [legacy];
+    return [];
+  }, queries);
+  return { adapter: new DoltgresWorkItemAdapter(sql), queries };
+}
+
 function adapterWithCoarseCommitDate() {
   const queries: string[] = [];
   const sql = makeFakeDoltgresSql((query) => {
@@ -213,5 +235,44 @@ describe("DoltgresWorkItemAdapter ownership and leases", () => {
         query.startsWith("UPDATE work_items SET claimed_by_run = NULL")
       )
     ).toBe(false);
+  });
+});
+
+// bug.5358. `mayMutate` lets anyone mutate an UNADOPTED row (NULL creator) —
+// otherwise every work item predating the column is frozen forever. The
+// transition matrix did not share that rule: it demanded `creator ===
+// principal`, so the UPDATE was admitted, committed to the operation branch,
+// and then failed its own proof. Measured on operator production: every item
+// created on or before 2026-10-08 returned 500 on PATCH, every item created
+// after returned 200 — the cutover being exactly when creators started being
+// stamped. Authorization and proof must agree, or a write is admitted and then
+// refused.
+describe("unadopted rows (NULL creator) stay mutable", () => {
+  it("patches an unadopted row instead of failing its own transition proof", async () => {
+    const { adapter } = adapterWithUnadoptedRow();
+    await expect(
+      adapter.patch(
+        { id: toWorkItemId(row.id), set: { title: "renamed" } },
+        "principal-1"
+      )
+    ).resolves.toMatchObject({ id: row.id, title: "renamed" });
+  });
+
+  it("deletes an unadopted row", async () => {
+    const { adapter } = adapterWithUnadoptedRow();
+    await expect(
+      adapter.delete(toWorkItemId(row.id), "principal-1")
+    ).resolves.toBe(true);
+  });
+
+  it("still refuses a row owned by someone else", async () => {
+    // Non-vacuous: the exemption is for NULL only, not for any mismatch.
+    const { adapter } = adapterWithQueries();
+    await expect(
+      adapter.patch(
+        { id: toWorkItemId(row.id), set: { title: "stolen" } },
+        "principal-2"
+      )
+    ).rejects.toThrow();
   });
 });

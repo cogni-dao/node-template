@@ -328,6 +328,29 @@ function escapeValue(value: unknown): string {
  * item was fine, so the failure looked like an auth problem rather than a
  * migration one.
  */
+/**
+ * Does `creator` (a `created_by_principal_id` rendered as a string, `""` for
+ * NULL) permit `principal` to mutate the row?
+ *
+ * This is the SAME rule `mayMutate` applies to the row it reads, and the two
+ * must agree or a write is admitted and then refused. An UNADOPTED row — one
+ * created before `created_by_principal_id` existed, so NULL — is mutable by
+ * anyone: that is deliberate, because the alternative is that every work item
+ * predating the column is frozen forever with no path to adopt it.
+ *
+ * bug.5358: the transition matrix did NOT share this rule. It demanded
+ * `creator === principal` outright, so a NULL-creator row passed `mayMutate`,
+ * had its UPDATE committed to the operation branch, then failed its own
+ * transition proof — a 500, every time, with the branch left behind as
+ * unprovable residue for the next sweep to quarantine. Measured on operator
+ * production: every item created on or before 2026-10-08 returned 500 on
+ * PATCH while every item created after returned 200, because only the latter
+ * carry a creator.
+ */
+function creatorPermits(creator: string, principal: string): boolean {
+  return creator === "" || creator === principal;
+}
+
 function mayMutate(row: Record<string, unknown>, principal: string): boolean {
   const creator = row.created_by_principal_id;
   if (creator === null || creator === undefined || creator === "") return true;
@@ -747,8 +770,10 @@ function validateTransitionMatrix(
       return (
         String(before.id) === itemId &&
         String(after.id) === itemId &&
-        creatorBefore === proof.principal &&
-        creatorAfter === proof.principal &&
+        // `created_by_principal_id` is immutable, so the equality below also
+        // forbids a patch from quietly adopting an unadopted row.
+        creatorBefore === creatorAfter &&
+        creatorPermits(creatorBefore, proof.principal) &&
         [...IMMUTABLE_COLUMNS].every(
           (column) =>
             JSON.stringify(before[column as PersistedColumn]) ===
@@ -770,7 +795,7 @@ function validateTransitionMatrix(
     case "delete":
       return (
         String(before.id) === itemId &&
-        creatorBefore === proof.principal &&
+        creatorPermits(creatorBefore, proof.principal) &&
         isNullSnapshot(after)
       );
     case "claim": {
