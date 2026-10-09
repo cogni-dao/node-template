@@ -1,9 +1,22 @@
 name: Publish Packages
 
-# Publishes `@cogni-dao/work-items` so node repos can DEPEND on the adapter
-# instead of vendoring its source. Four divergent copies of that one file
-# existed across the fleet when bug.5358 was audited, and a single availability
-# fix then cost nine PRs across six repositories (story.5069).
+# Publishes the shared packages this repo owns — `@cogni-dao/work-items`,
+# `@cogni-dao/knowledge-store`, `@cogni-dao/knowledge-base` — so node repos can
+# DEPEND on them instead of vendoring their source. Four divergent copies of the
+# work-items adapter existed across the fleet when bug.5358 was audited, and a
+# single availability fix then cost nine PRs across six repositories (story.5069).
+# The knowledge packages are the same shape of liability, one tier down.
+#
+# ONE LANE, N PACKAGES. The per-package registry lives in `env.PACKAGES` below —
+# the single source of truth for name, directory, and tag prefix. A `select` job
+# resolves the pushed tag to exactly one registry entry and emits it as the
+# publish matrix, so every leg that runs is a leg that genuinely should run and no
+# step needs a leg-selection `if`. That matters: `matrix` is not available in
+# `jobs.<id>.if`, so a static matrix could only be gated step-by-step, which would
+# force every mutating step's `if` into a compound expression and break the
+# `github.event_name == 'push'` exact-equality assertion that keeps this lane
+# fail-closed. Registry-in-YAML also keeps the workflow checker's inputs to
+# workflow YAML + repo-policy, which is all its self-test harness copies.
 #
 # Not covered by the CI/CD freeze: docs/spec/cicd-platform-boundary.md scopes
 # that to the operator control plane, and a node's own GitHub Actions are
@@ -32,9 +45,13 @@ on:
   push:
     tags:
       - "work-items-v*"
+      - "knowledge-store-v*"
+      - "knowledge-base-v*"
   # Rehearsal only. Every publishing step below is gated on `push`, so a
   # dispatch packs the tarball and runs the artifact assertions against it
-  # without creating a Release, attesting anything, or moving a version. The
+  # without creating a Release, attesting anything, or moving a version. A
+  # dispatch rehearses EVERY registry entry, because the thing worth rehearsing
+  # is that each package can still pack and satisfy its own `exports`. The
   # previous `dry_run: false` input could publish to the registry off any
   # branch, which skipped the tag/version check (itself `push`-only) — a
   # publish with no tag correspondence and no version proof.
@@ -50,7 +67,9 @@ permissions:
   attestations: write
 
 concurrency:
-  group: publish-work-items-${{ github.ref }}
+  # `github.ref` is the tag on a push, so the group is unique per package+version
+  # and two different packages' tags never serialize behind each other.
+  group: publish-packages-${{ github.ref }}
   cancel-in-progress: false
 
 env:
@@ -58,10 +77,69 @@ env:
   # This workflow built on 24 while the artifact was gated on 22 and runs on 22,
   # so the published dist and .d.ts files came off a toolchain no consumer uses.
   NODE_VERSION: "22"
+  # THE PACKAGE REGISTRY. Adding a publishable package means adding one entry
+  # here AND its `<tagPrefix>*` filter to `on.push.tags` above;
+  # scripts/check-node-ci-workflow.mjs fails the build if those two drift apart
+  # in either direction, so neither an unselectable tag nor an untaggable
+  # package can ship.
+  PACKAGES: >-
+    [{"name":"@cogni-dao/work-items","dir":"packages/work-items","tagPrefix":"work-items-v"},
+     {"name":"@cogni-dao/knowledge-store","dir":"packages/knowledge-store","tagPrefix":"knowledge-store-v"},
+     {"name":"@cogni-dao/knowledge-base","dir":"packages/knowledge-base","tagPrefix":"knowledge-base-v"}]
 
 jobs:
-  publish:
+  # Resolve WHICH packages this run acts on, before anything is built. A push
+  # must map to exactly one registry entry: zero means a tag filter fires a run
+  # nothing can publish, and more than one means two prefixes overlap and the
+  # tag is ambiguous about which version it certifies. Both are configuration
+  # bugs, and both fail here rather than half-publishing.
+  select:
     runs-on: ubuntu-latest
+    outputs:
+      packages: ${{ steps.select.outputs.packages }}
+    steps:
+      - name: Resolve the publish matrix from the tag
+        id: select
+        run: |
+          set -euo pipefail
+          node -e '
+            const registry = JSON.parse(process.env.PACKAGES);
+            if (!Array.isArray(registry) || registry.length === 0) {
+              console.error("env.PACKAGES must be a non-empty JSON array");
+              process.exit(1);
+            }
+            let selected = registry;
+            if (process.env.GITHUB_EVENT_NAME === "push") {
+              const ref = process.env.GITHUB_REF_NAME;
+              const matched = registry.filter((p) => ref.startsWith(p.tagPrefix));
+              if (matched.length !== 1) {
+                console.error(
+                  `tag ${ref} matches ${matched.length} registry entries (need exactly 1): ` +
+                    JSON.stringify(matched.map((p) => p.tagPrefix))
+                );
+                process.exit(1);
+              }
+              selected = matched;
+            }
+            console.log(`selected: ${selected.map((p) => p.name).join(", ")}`);
+            require("node:fs").appendFileSync(
+              process.env.GITHUB_OUTPUT,
+              `packages=${JSON.stringify(selected)}\n`
+            );
+          '
+
+  publish:
+    needs: select
+    runs-on: ubuntu-latest
+    strategy:
+      # One package's failure must not cancel another's in-flight publish.
+      fail-fast: false
+      matrix:
+        pkg: ${{ fromJSON(needs.select.outputs.packages) }}
+    env:
+      PKG_NAME: ${{ matrix.pkg.name }}
+      PKG_DIR: ${{ matrix.pkg.dir }}
+      TAG_PREFIX: ${{ matrix.pkg.tagPrefix }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
 
@@ -136,19 +214,19 @@ jobs:
         run: pnpm packages:build
 
       - name: Unit tests
-        run: pnpm --filter @cogni-dao/work-items test
+        run: pnpm --filter "$PKG_NAME" test
 
       - name: Tag must match the package version
         if: github.event_name == 'push'
         run: |
           set -euo pipefail
-          pkg="$(node -p "require('./packages/work-items/package.json').version")"
-          tag="${GITHUB_REF_NAME#work-items-v}"
+          pkg="$(node -p "require('./' + process.env.PKG_DIR + '/package.json').version")"
+          tag="${GITHUB_REF_NAME#"$TAG_PREFIX"}"
           if [ "$pkg" != "$tag" ]; then
-            echo "::error::tag work-items-v$tag does not match package version $pkg"
+            echo "::error::tag ${TAG_PREFIX}${tag} does not match package version $pkg"
             exit 1
           fi
-          echo "publishing @cogni-dao/work-items@$pkg"
+          echo "publishing ${PKG_NAME}@$pkg"
 
       # A VERSION IS IMMUTABLE, OR IT IS NOT A VERSION. The previous step ran
       # `gh release create ... || gh release upload --clobber`, so re-running the
@@ -175,7 +253,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist-pack
-          pnpm --filter @cogni-dao/work-items exec npm pack --pack-destination "$PWD/dist-pack"
+          pnpm --filter "$PKG_NAME" exec npm pack --pack-destination "$PWD/dist-pack"
           tgz="$(ls dist-pack/*.tgz)"
           echo "tgz=$tgz" >> "$GITHUB_OUTPUT"
           echo "packed $tgz"
@@ -190,7 +268,7 @@ jobs:
           tar tzf "${{ steps.pack.outputs.tgz }}" | sed 's|^package/||' | sort -u > /tmp/have.txt
           node -e '
             const fs = require("node:fs");
-            const pkg = require("./packages/work-items/package.json");
+            const pkg = require(`${process.cwd()}/${process.env.PKG_DIR}/package.json`);
             const want = new Set();
             for (const map of Object.values(pkg.exports ?? {})) {
               for (const key of ["types", "import", "default"]) {
@@ -223,7 +301,7 @@ jobs:
             echo "::error::tarball contains no LICENSE file"
             exit 1
           fi
-          license="$(node -p "require('./packages/work-items/package.json').license ?? ''")"
+          license="$(node -p "require('./' + process.env.PKG_DIR + '/package.json').license ?? ''")"
           if [ -z "$license" ]; then
             echo "::error::package.json declares no license field"
             exit 1
@@ -233,7 +311,7 @@ jobs:
       # Attest the EXACT file that is about to be uploaded, then upload that same
       # file, so what consumers download is byte-for-byte what was attested.
       # Verify downstream with:
-      #   gh attestation verify cogni-dao-work-items-<v>.tgz -R Cogni-DAO/node-template
+      #   gh attestation verify <tarball>.tgz -R Cogni-DAO/node-template
       - name: Attest the tarball
         if: github.event_name == 'push'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
@@ -243,19 +321,23 @@ jobs:
       # Anonymous, versioned, and integrity-pinned by the consumer's lockfile.
       # A node depends on it as:
       #   "@cogni/work-items": "https://github.com/cogni-dao/node-template/releases/download/work-items-v<v>/cogni-dao-work-items-<v>.tgz"
-      # The alias keeps every existing import path untouched.
+      # The alias keeps every existing import path untouched — which is also why
+      # the published knowledge packages declare their in-repo peers as `"*"`
+      # rather than `workspace:*`: `npm pack` does not rewrite `workspace:`
+      # specifiers, so a tarball carrying one cannot be installed at all.
       - name: Attach the tarball to a Release
         if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          tgz_name="$(basename "${{ steps.pack.outputs.tgz }}")"
           {
-            echo "Published build of @cogni-dao/work-items. Depend on the tarball URL below;"
+            echo "Published build of ${PKG_NAME}. Depend on the tarball URL below;"
             echo "a public repo serves it anonymously, so forks need no credentials (story.5069)."
             echo
             echo "Build provenance is attested. Verify before depending on it:"
-            echo "    gh attestation verify cogni-dao-work-items-*.tgz -R ${GITHUB_REPOSITORY}"
+            echo "    gh attestation verify ${tgz_name} -R ${GITHUB_REPOSITORY}"
           } > /tmp/release-notes.md
           gh release create "$GITHUB_REF_NAME" "${{ steps.pack.outputs.tgz }}" \
             --title "$GITHUB_REF_NAME" \

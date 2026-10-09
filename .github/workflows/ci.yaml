@@ -53,6 +53,15 @@ jobs:
       - name: Build workspace packages
         run: pnpm packages:build
 
+      # F2 (task.5198): `pnpm db:check` was wired into the local-only `pnpm check`
+      # chain and into NO CI job, so the drift guard it fronts was decorative —
+      # `use_when` could reach the schema TS while the committed Doltgres snapshot
+      # still lacked the column and every required check stayed green. It runs here,
+      # after the build, because check-generate-clean's doltgres lane resolves
+      # @cogni-dao/knowledge-base through its `exports` -> dist, not src.
+      - name: Database schema checks
+        run: pnpm db:check
+
       - name: Type check
         run: pnpm typecheck
 

@@ -1,7 +1,12 @@
 {
-  "name": "@cogni/knowledge-base",
-  "private": true,
-  "version": "0.0.0",
+  "name": "@cogni-dao/knowledge-base",
+  "version": "0.1.0",
+  "license": "LicenseRef-PolyForm-Shield-1.0.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Cogni-DAO/node-template.git",
+    "directory": "packages/knowledge-base"
+  },
   "type": "module",
   "sideEffects": false,
   "exports": {
@@ -18,14 +23,20 @@
   "scripts": {
     "build": "tsup",
     "postbuild": "node -e \"const fs=require('fs'); if(!fs.existsSync('dist/index.js')){console.error('ERROR: dist/index.js missing'); process.exit(1)}\"",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --config vitest.config.ts"
   },
   "dependencies": {
-    "drizzle-orm": "^0.44.7",
-    "@cogni/knowledge-store": "workspace:*"
+    "drizzle-orm": "^0.44.7"
+  },
+  "peerDependencies": {
+    "@cogni/knowledge-store": "*"
   },
   "devDependencies": {
+    "@cogni/knowledge-store": "workspace:@cogni-dao/knowledge-store@*",
     "tsup": "^8.5.1",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vite-tsconfig-paths": "^5.1.4",
+    "vitest": "^3.1.4"
   }
 }

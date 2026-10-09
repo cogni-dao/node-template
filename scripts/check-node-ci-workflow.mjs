@@ -399,11 +399,120 @@ expectNoWorkflowDispatch(PR_LINT_WORKFLOW_PATH, prLintWorkflow);
 // here because its absence was a live defect in the first version of this
 // workflow (story.5069), and each is cheap to re-break by hand.
 expectEqual(PUBLISH_WORKFLOW_PATH, publishWorkflow?.name, "Publish Packages", "workflow name");
+// THE PACKAGE REGISTRY IS THE CONTRACT. `env.PACKAGES` in the publish workflow is
+// the single source of truth for which packages this repo distributes; `on.push.tags`
+// is what makes each one reachable. Those two drifting apart is silent in both
+// directions — an entry with no tag filter can never be published, and a tag filter
+// with no entry starts a run whose `select` job fails after the tag is already pushed
+// (and a pushed tag is not retractable in any consumer's eyes). Assert the bijection.
+//
+// The registry lives in the workflow YAML rather than being derived from
+// `packages/*/package.json` on purpose: the self-test harness copies only the 5 files
+// in its FILES list into a tmpdir, so a checker that read package manifests would be
+// unrunnable there. Keeping it in `env.PACKAGES` satisfies that by construction.
+const publishRegistry = (() => {
+  const raw = publishWorkflow?.env?.PACKAGES;
+  if (typeof raw !== "string" || raw.trim().length === 0) {
+    fail(PUBLISH_WORKFLOW_PATH, "env.PACKAGES must declare the publishable package registry");
+    return [];
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    fail(PUBLISH_WORKFLOW_PATH, `env.PACKAGES must be valid JSON; ${error.message}`);
+    return [];
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    fail(PUBLISH_WORKFLOW_PATH, "env.PACKAGES must be a non-empty JSON array");
+    return [];
+  }
+  const seen = new Set();
+  for (const [index, entry] of parsed.entries()) {
+    for (const field of ["name", "dir", "tagPrefix"]) {
+      if (typeof entry?.[field] !== "string" || entry[field].length === 0) {
+        fail(
+          PUBLISH_WORKFLOW_PATH,
+          `env.PACKAGES[${index}] must declare a non-empty string "${field}"`
+        );
+      }
+    }
+    // Two entries under one name would publish twice from one tag, or silently
+    // shadow each other in the matrix.
+    if (typeof entry?.name === "string") {
+      if (seen.has(entry.name)) {
+        fail(PUBLISH_WORKFLOW_PATH, `env.PACKAGES declares ${entry.name} more than once`);
+      }
+      seen.add(entry.name);
+    }
+  }
+  return parsed;
+})();
+
 {
   const tags = publishWorkflow?.on?.push?.tags;
-  if (!Array.isArray(tags) || !tags.includes("work-items-v*")) {
-    fail(PUBLISH_WORKFLOW_PATH, 'push trigger must include the tag filter "work-items-v*"');
+  if (!Array.isArray(tags) || tags.length === 0) {
+    fail(PUBLISH_WORKFLOW_PATH, "push trigger must declare tag filters");
+  } else {
+    const tagSet = new Set(tags);
+    // Every registered package must be taggable.
+    for (const entry of publishRegistry) {
+      if (typeof entry?.tagPrefix !== "string") continue;
+      const filter = `${entry.tagPrefix}*`;
+      if (!tagSet.has(filter)) {
+        fail(
+          PUBLISH_WORKFLOW_PATH,
+          `push trigger must include the tag filter ${JSON.stringify(filter)} for ` +
+            `${entry.name}; without it no tag can ever publish that package`
+        );
+      }
+    }
+    // ...and every tag filter must map back to a registered package, or pushing a
+    // matching tag starts a run that `select` can only fail.
+    const prefixes = publishRegistry
+      .map((entry) => entry?.tagPrefix)
+      .filter((prefix) => typeof prefix === "string");
+    for (const filter of tags) {
+      if (!prefixes.some((prefix) => filter === `${prefix}*`)) {
+        fail(
+          PUBLISH_WORKFLOW_PATH,
+          `tag filter ${JSON.stringify(filter)} matches no env.PACKAGES entry; it would ` +
+            "fire a publish run that selects nothing"
+        );
+      }
+    }
   }
+}
+
+// The matrix must be DERIVED from `select`, never a static list. GitHub does not
+// expose `matrix` in `jobs.<id>.if`, so a static matrix could only be narrowed to the
+// pushed tag step-by-step — which forces every mutating step's `if` into a compound
+// expression and breaks the `github.event_name == 'push'` exact-equality assertion
+// below. Deriving it means every emitted leg is one that should run, and the gate
+// stays a literal.
+{
+  const selectJob = publishWorkflow?.jobs?.select;
+  if (!selectJob) {
+    fail(PUBLISH_WORKFLOW_PATH, "jobs must include select (it resolves the publish matrix)");
+  } else if (typeof selectJob?.outputs?.packages !== "string" || selectJob.outputs.packages.length === 0) {
+    fail(PUBLISH_WORKFLOW_PATH, "jobs.select must expose a non-empty `packages` output");
+  }
+
+  const publishNeeds = publishWorkflow?.jobs?.publish?.needs;
+  const needsList = Array.isArray(publishNeeds) ? publishNeeds : [publishNeeds];
+  if (!needsList.includes("select")) {
+    fail(
+      PUBLISH_WORKFLOW_PATH,
+      `jobs.publish.needs must include "select"; got ${JSON.stringify(publishNeeds)}`
+    );
+  }
+
+  expectEqual(
+    PUBLISH_WORKFLOW_PATH,
+    publishWorkflow?.jobs?.publish?.strategy?.matrix?.pkg,
+    "${{ fromJSON(needs.select.outputs.packages) }}",
+    "jobs.publish.strategy.matrix.pkg must be derived from jobs.select"
+  );
 }
 expectEqual(PUBLISH_WORKFLOW_PATH, publishWorkflow?.permissions?.contents, "write", "permissions.contents");
 // Provenance is not optional: `npm publish --provenance` only works against

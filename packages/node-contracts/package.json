@@ -22,7 +22,7 @@
   "dependencies": {
     "@cogni/ai-core": "workspace:*",
     "@cogni/aragon-osx": "workspace:*",
-    "@cogni/knowledge-store": "workspace:*",
+    "@cogni/knowledge-store": "workspace:@cogni-dao/knowledge-store@*",
     "@cogni/node-core": "workspace:*",
     "@ts-rest/core": "^3.52.1",
     "@ts-rest/open-api": "^3.52.1",
