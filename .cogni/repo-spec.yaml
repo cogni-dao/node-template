@@ -50,6 +50,7 @@ activity_ledger:
     github:
       attribution_pipeline: cogni-v0.0
       source_refs: ["Cogni-DAO/standalone-node"]
+      excluded_logins: ["cogni-operator[bot]"]
 
 payments:
   status: pending_activation
