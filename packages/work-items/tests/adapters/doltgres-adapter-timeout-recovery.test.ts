@@ -489,15 +489,25 @@ describe("DoltgresWorkItemAdapter merge timeout recovery", () => {
     expect(state.branch).toMatch(/^work-item-op\//);
     expect(events).toContain("adapter.work_items.reconcile");
 
+    // The read serves the committed row while the evidence branch still
+    // stands, and — unlike before 0.1.7 — does NOT clean it up. Reconciliation
+    // renames or drops a branch, which is a WRITE; having it ride along on
+    // `get` violated COMMAND_QUERY_SEPARATION (docs/spec/work-items-port.md)
+    // and was the reason a read had to take the write lock at all.
     await expect(adapter.get(toWorkItemId("task.0001"))).resolves.toMatchObject({
       id: "task.0001",
     });
     expect(state.inserts).toBe(1);
+    expect(state.branch).toMatch(/^work-item-op\//);
+
+    // The next WRITE is what reconciles it, and still succeeds.
+    await expect(
+      adapter.create({ type: "bug", title: "successor" }, "principal-1")
+    ).resolves.toMatchObject({ id: "bug.0001" });
+    expect(state.inserts).toBe(2);
     expect(state.branch).toBeUndefined();
     expect(
-      state.queries.some((query) =>
-        query.startsWith("pool-3:SELECT dolt_branch")
-      )
+      state.queries.some((query) => /SELECT dolt_branch/.test(query))
     ).toBe(true);
   });
 });

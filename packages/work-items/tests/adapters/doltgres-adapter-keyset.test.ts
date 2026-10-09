@@ -348,13 +348,15 @@ describe("the read lane arms itself from recreateClient", () => {
   });
 
   it("keeps the shared lane when there is no factory to derive from", async () => {
-    const write = countingPool();
-    const { DoltgresWorkItemAdapter } = await import(
-      "../../src/adapters/doltgres/adapter.js"
-    );
-    const adapter = new DoltgresWorkItemAdapter(write.pool as unknown as never);
-    await adapter.list({});
-    // Non-vacuous: the only pool available is the write one, so reads used it.
-    expect(write.peak()).toBe(1);
+    // A consumer that passes neither option must keep its 0.1.4 behaviour
+    // exactly: reads take the admission queue and the advisory lock on the one
+    // pool it gave us. The full fake is needed here because the shared lane
+    // reserves a connection, which the read lane deliberately does not.
+    const { sql, queries } = makeFakeSql(buildDataset());
+    const adapter = new DoltgresWorkItemAdapter(sql);
+    const page = await adapter.list({ limit: 5 });
+    expect(page.items).toHaveLength(5);
+    // Non-vacuous: the shared lane is the only lane that takes the lock.
+    expect(queries.some((q) => q.includes("pg_try_advisory_lock"))).toBe(true);
   });
 });

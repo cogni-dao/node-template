@@ -118,10 +118,18 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 		);
 		expect(patched.title).toBe("Doltgres accepted");
 
+		// bug.5358's core guarantee, against a REAL held lock: a write holding
+		// the global work-items lock must not take reads down with it. Before
+		// 0.1.7 this same lock made `get` reject with WorkItemsBusyError, because
+		// reads shared the write lane. The write lane still fails closed — the
+		// `patch` below proves that on the same held lock.
 		const blocker = createWorkItemClient();
 		try {
 			await blocker.unsafe("SELECT pg_advisory_lock(5001001)");
-			await expect(adapter.get(id)).rejects.toBeInstanceOf(WorkItemsBusyError);
+			await expect(adapter.get(id)).resolves.toMatchObject({ id });
+			await expect(
+				adapter.patch({ id, set: { title: "blocked" } }, principalId),
+			).rejects.toBeInstanceOf(WorkItemsBusyError);
 		} finally {
 			await blocker
 				.unsafe("SELECT pg_advisory_unlock(5001001)")
