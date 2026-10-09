@@ -61,11 +61,22 @@ function makeTimeoutHarness({
   timeoutAfterDml = false,
   timeoutFreshHousekeeping = false,
   laterMainUpdateAfterLostAck = false,
+  slowCheckoutMs = 0,
+  branchTimeoutMs = 10,
 }: {
   readonly failFreshReachability?: boolean;
   readonly timeoutAfterDml?: boolean;
   readonly timeoutFreshHousekeeping?: boolean;
   readonly laterMainUpdateAfterLostAck?: boolean;
+  /**
+   * Make `dolt_checkout('-b', …)` take this long, to exercise the housekeeping
+   * budget. `branch.create` is the right stage to test it on: it runs BEFORE
+   * the write, so blowing its budget fails the operation. A `branch.delete`
+   * timeout is deliberately TOLERATED (`cleanup_pending`) because by then the
+   * merge is already durable — so it proves nothing about the budget.
+   */
+  readonly slowCheckoutMs?: number;
+  readonly branchTimeoutMs?: number;
 } = {}) {
   const state: TimeoutHarnessState = {
     durable: false,
@@ -128,6 +139,9 @@ function makeTimeoutHarness({
         return [{ dolt_hashof: "main" }];
       }
       if (query.includes("dolt_checkout('-b'")) {
+        if (slowCheckoutMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, slowCheckoutMs));
+        }
         state.branch = /'(work-item-op\/[^']+)'/.exec(query)?.[1];
         state.branchCommit = undefined;
         state.branchBase = "main";
@@ -335,6 +349,10 @@ function makeTimeoutHarness({
   const adapter = new DoltgresWorkItemAdapter(buildPool(), {
     logger,
     queryTimeoutMs: 5,
+    // Explicit, and deliberately tight: `BRANCH_TIMEOUT_MS` defaults to 30s, so
+    // leaving it unset would make the hang-based housekeeping tests below wait
+    // half a minute each.
+    branchTimeoutMs,
     reserveTimeoutMs: 100,
     recreateClient: buildPool,
   });
@@ -489,15 +507,63 @@ describe("DoltgresWorkItemAdapter merge timeout recovery", () => {
     expect(state.branch).toMatch(/^work-item-op\//);
     expect(events).toContain("adapter.work_items.reconcile");
 
+    // The read serves the committed row while the evidence branch still
+    // stands, and — unlike before 0.1.7 — does NOT clean it up. Reconciliation
+    // renames or drops a branch, which is a WRITE; having it ride along on
+    // `get` violated COMMAND_QUERY_SEPARATION (docs/spec/work-items-port.md)
+    // and was the reason a read had to take the write lock at all.
     await expect(adapter.get(toWorkItemId("task.0001"))).resolves.toMatchObject({
       id: "task.0001",
     });
     expect(state.inserts).toBe(1);
+    expect(state.branch).toMatch(/^work-item-op\//);
+
+    // The next WRITE is what reconciles it, and still succeeds.
+    await expect(
+      adapter.create({ type: "bug", title: "successor" }, "principal-1")
+    ).resolves.toMatchObject({ id: "bug.0001" });
+    expect(state.inserts).toBe(2);
     expect(state.branch).toBeUndefined();
     expect(
-      state.queries.some((query) =>
-        query.startsWith("pool-3:SELECT dolt_branch")
-      )
+      state.queries.some((query) => /SELECT dolt_branch/.test(query))
     ).toBe(true);
+  });
+});
+
+// Operator production, 2026-10-09: ONE budget covered DML and ref housekeeping
+// alike, `dolt_branch` exceeded 5s under load, `terminateClient` destroyed the
+// pool, and the PATCH returned 500 AFTER its merge had already landed on
+// `main`. The same 5s then killed the quarantine rename — the one operation
+// whose job is to clear a stuck branch — so writes stayed down with the
+// bug.5358 fix deployed.
+describe("ref housekeeping gets its own budget", () => {
+  // 60ms is 12x the harness DML budget (queryTimeoutMs: 5). The SAME delay is
+  // used in both cases, so the budget is the only variable — the assertions
+  // turn on the separation, not on the delay.
+  const SLOW_CHECKOUT_MS = 60;
+
+  it("survives a dolt_checkout slower than the DML budget", async () => {
+    const { adapter, state } = makeTimeoutHarness({
+      slowCheckoutMs: SLOW_CHECKOUT_MS,
+      branchTimeoutMs: 1_000,
+    });
+
+    await expect(
+      adapter.create({ type: "task", title: "slow checkout" }, "principal-1")
+    ).resolves.toMatchObject({ id: "task.0001" });
+    expect(state.durable).toBe(true);
+    // Non-vacuous: the slow query really was the ref-movement one.
+    expect(state.queries.some((q) => /dolt_checkout\('-b'/.test(q))).toBe(true);
+  });
+
+  it("still fails closed when the housekeeping budget itself is exceeded", async () => {
+    const { adapter } = makeTimeoutHarness({
+      slowCheckoutMs: SLOW_CHECKOUT_MS,
+      branchTimeoutMs: 10,
+    });
+
+    await expect(
+      adapter.create({ type: "task", title: "blown budget" }, "principal-1")
+    ).rejects.toBeInstanceOf(WorkItemsBusyError);
   });
 });

@@ -302,3 +302,61 @@ describe("reads leave the write lane when a read pool is supplied", () => {
     expect(started.length).toBeGreaterThanOrEqual(3);
   });
 });
+
+// 0.1.5 shipped the read lane as an opt-in `readClient`, and every node in the
+// fleet upgraded without passing it — poly's /work kept hanging on a fix that
+// was already in its node_modules. The lane has to arm itself from what nodes
+// DO pass, which is `recreateClient`.
+describe("the read lane arms itself from recreateClient", () => {
+  function countingPool() {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const pool = Object.assign(async () => [], {
+      unsafe: async (_q: string) => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((r) => setTimeout(r, 25));
+        inFlight -= 1;
+        return [] as unknown[];
+      },
+    });
+    return { pool, peak: () => maxInFlight };
+  }
+
+  it("derives a read pool when the caller passed only recreateClient", async () => {
+    const write = countingPool();
+    const read = countingPool();
+    let built = 0;
+    const { DoltgresWorkItemAdapter } = await import(
+      "../../src/adapters/doltgres/adapter.js"
+    );
+    const adapter = new DoltgresWorkItemAdapter(write.pool as unknown as never, {
+      recreateClient: (() => {
+        built += 1;
+        return read.pool;
+      }) as unknown as () => never,
+    });
+
+    await Promise.all([adapter.list({}), adapter.list({}), adapter.list({})]);
+
+    // Derived once and reused — not a pool per read.
+    expect(built).toBe(1);
+    // The reads landed on the derived pool, concurrently.
+    expect(read.peak()).toBeGreaterThan(1);
+    // ...and never touched the max:1 write pool.
+    expect(write.peak()).toBe(0);
+  });
+
+  it("keeps the shared lane when there is no factory to derive from", async () => {
+    // A consumer that passes neither option must keep its 0.1.4 behaviour
+    // exactly: reads take the admission queue and the advisory lock on the one
+    // pool it gave us. The full fake is needed here because the shared lane
+    // reserves a connection, which the read lane deliberately does not.
+    const { sql, queries } = makeFakeSql(buildDataset());
+    const adapter = new DoltgresWorkItemAdapter(sql);
+    const page = await adapter.list({ limit: 5 });
+    expect(page.items).toHaveLength(5);
+    // Non-vacuous: the shared lane is the only lane that takes the lock.
+    expect(queries.some((q) => q.includes("pg_try_advisory_lock"))).toBe(true);
+  });
+});

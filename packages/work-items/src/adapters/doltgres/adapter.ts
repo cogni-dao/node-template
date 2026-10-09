@@ -49,6 +49,45 @@ const LOCK_WAIT_MS = 2_000;
 const LOCK_RETRY_MS = 50;
 const OPERATION_QUEUE_WAIT_MS = 30_000;
 const QUERY_TIMEOUT_MS = 5_000;
+/**
+ * Budget for REF HOUSEKEEPING — `dolt_branch` create/delete/rename. Six times
+ * the DML budget, because these are not DML and they do not share its failure
+ * mode.
+ *
+ * Measured on operator production 2026-10-09: with one budget for everything,
+ * `dolt_branch` exceeded 5s under load, `terminateClient` destroyed the pool,
+ * and the PATCH 500'd AFTER its merge had already landed on `main`. Worse, the
+ * same 5s applied to the quarantine rename, so the one operation whose job is
+ * to clear a stuck branch was itself killed by the timeout — writes stayed
+ * down with the fix deployed.
+ *
+ * A longer budget here is strictly safer than a shorter one: a rename or a
+ * delete of an operation ref mutates no rows, so the only thing a timeout buys
+ * is a destroyed connection and an orphaned ref.
+ */
+const BRANCH_TIMEOUT_MS = 30_000;
+/**
+ * Stages that move REFS or SESSION STATE and write no rows — see
+ * BRANCH_TIMEOUT_MS. `branch.create` is `dolt_checkout('-b', …)` and
+ * `main.checkout` is `dolt_checkout('main')`; neither touches
+ * `public.work_items`, so neither has a half-written row for a timeout to
+ * protect. `merge.apply` and every `dml.*` stage deliberately stay on the DML
+ * budget, because those DO write rows and a runaway one must be cut off.
+ *
+ * `branch.create` belongs here for a measured reason: Doltgres ref operations
+ * get slower as refs accumulate, and the quarantine lane ADDS a ref each time
+ * it parks an unprovable branch. On operator production that closed a loop —
+ * `dolt_checkout -b` blew the 5s budget, the pool was destroyed, the orphaned
+ * branch became unprovable residue, the next attempt quarantined it and added
+ * another ref, and the following attempt was slower still. Writes to one item
+ * failed six consecutive times while a freshly created item patched fine,
+ * because the pile only has to be big enough to cross the budget.
+ */
+const BRANCH_HOUSEKEEPING_STAGES = new Set([
+  "branch.create",
+  "branch.delete",
+  "main.checkout",
+]);
 const RESERVE_TIMEOUT_MS = 5_000;
 
 /**
@@ -74,13 +113,25 @@ export interface DoltgresWorkItemAdapterOptions {
   readonly lockRetryMs?: number;
   readonly queueWaitMs?: number;
   readonly queryTimeoutMs?: number;
+  /**
+   * Budget for `dolt_branch` ref housekeeping. Defaults to 6× `queryTimeoutMs`'s
+   * default; see BRANCH_TIMEOUT_MS for why it is separate.
+   */
+  readonly branchTimeoutMs?: number;
   readonly reserveTimeoutMs?: number;
   readonly recreateClient?: () => Sql;
   /**
-   * Dedicated pool for the QUERY port. When provided, reads bypass the write
-   * admission queue and the advisory lock entirely — see `readOnCleanMain`.
-   * Omit it and reads keep the legacy shared-lane behaviour, so no existing
-   * consumer changes behaviour by upgrading.
+   * Dedicated pool for the QUERY port. Reads run on it instead of the write
+   * lane — see `readOnCleanMain`.
+   *
+   * Omitting it does NOT opt out of the read lane. When `recreateClient` is
+   * set, the adapter derives its own read pool from that factory on first
+   * read, because 0.1.5 shipped the read lane as an option every node had to
+   * hand-wire and not one of them did: the whole fleet kept serializing reads
+   * behind the write queue while the fix sat in the package, inert. A lane
+   * that only works when six repositories each remember to pass an argument
+   * is not a fix, so the package owns it. Pass this explicitly only to give
+   * reads a WIDER pool than the write factory builds.
    */
   readonly readClient?: Sql;
 }
@@ -858,9 +909,17 @@ export class DoltgresWorkItemAdapter
   private readonly lockRetryMs: number;
   private readonly queueWaitMs: number;
   private readonly queryTimeoutMs: number;
+  private readonly branchTimeoutMs: number;
   private readonly reserveTimeoutMs: number;
   private readonly recreateClient: (() => Sql) | undefined;
-  private readonly readClient: Sql | undefined;
+  private readonly providedReadClient: Sql | undefined;
+  /**
+   * Read pool derived from `recreateClient` when the caller passed no
+   * `readClient`. Built on first read, not in the constructor: a node that
+   * never reads must not pay for a connection, and construction must not
+   * depend on the database being reachable.
+   */
+  private derivedReadClient: Sql | undefined;
   private readonly terminatingPools = new WeakMap<object, Promise<void>>();
 
   constructor(
@@ -873,9 +932,10 @@ export class DoltgresWorkItemAdapter
     this.lockRetryMs = options.lockRetryMs ?? LOCK_RETRY_MS;
     this.queueWaitMs = options.queueWaitMs ?? OPERATION_QUEUE_WAIT_MS;
     this.queryTimeoutMs = options.queryTimeoutMs ?? QUERY_TIMEOUT_MS;
+    this.branchTimeoutMs = options.branchTimeoutMs ?? BRANCH_TIMEOUT_MS;
     this.reserveTimeoutMs = options.reserveTimeoutMs ?? RESERVE_TIMEOUT_MS;
     this.recreateClient = options.recreateClient;
-    this.readClient = options.readClient;
+    this.providedReadClient = options.readClient;
   }
 
   private logStage(
@@ -955,10 +1015,13 @@ export class DoltgresWorkItemAdapter
     const queryFields = branch ? { branch } : {};
     this.logStage("info", context, stage, "start", queryFields);
     const pending = conn.unsafe(query);
+    const budgetMs = BRANCH_HOUSEKEEPING_STAGES.has(stage)
+      ? Math.max(this.branchTimeoutMs, this.queryTimeoutMs)
+      : this.queryTimeoutMs;
     const timeoutTimer = setTimeout(() => {
       timedOut = true;
       void this.terminateClient(pool, context, stage, "query_timeout");
-    }, this.queryTimeoutMs);
+    }, budgetMs);
     try {
       const rows = (await pending) as ReadonlyArray<Record<string, unknown>>;
       if (timedOut) {
@@ -2039,9 +2102,11 @@ export class DoltgresWorkItemAdapter
    * peaked at 7334 ms while the actual `dml.read` was 677 ms — a dashboard
    * firing four list calls took ~30 s to paint.
    *
-   * With `readClient` the read path reserves from its own pool and runs the
-   * query. It never calls `dolt_checkout`, never takes the lock, and never
-   * reconciles, so read concurrency equals that pool's width.
+   * The read path runs on a pool of its own — `readClient` when the caller
+   * passed one, otherwise one the adapter derives from `recreateClient`. It
+   * never calls `dolt_checkout`, never takes the lock, and never reconciles,
+   * so read concurrency equals that pool's width and no read ever waits on a
+   * write. Only a consumer that passes neither falls back to the shared lane.
    *
    * WHY NOT CHECKING OUT IS SAFE: a fresh connection opens on the database's
    * default branch, which is `main`. This lane never moves it, so every read
@@ -2050,10 +2115,45 @@ export class DoltgresWorkItemAdapter
    * observe. Reads remain available through residual branch evidence, which is
    * the bug.5358 guarantee, and they no longer pay to enumerate it.
    */
+  /**
+   * The pool reads run on, or `undefined` when there is none and reads must
+   * take the shared write lane.
+   *
+   * `recreateClient` is the caller's own factory for a work-items connection,
+   * so a pool built from it has the right URL, the right `application_name`
+   * shape, and the right driver options by construction — nothing here has to
+   * guess a DSN. Reads need their OWN pool rather than a second checkout from
+   * the write pool because that pool is `max: 1` on every node in the fleet:
+   * sharing it would put every read back behind the in-flight write.
+   */
+  private resolveReadPool(): Sql | undefined {
+    if (this.providedReadClient) return this.providedReadClient;
+    if (this.derivedReadClient) return this.derivedReadClient;
+    if (!this.recreateClient) return undefined;
+    try {
+      this.derivedReadClient = this.recreateClient();
+    } catch (error) {
+      // Never let pool construction fail a read: the shared lane still works.
+      this.logger.warn(
+        {
+          event: "adapter.work_items.read_pool_derive_failed",
+          ...errorFields(error),
+        },
+        "work_items could not derive a read pool; reads use the shared lane"
+      );
+      return undefined;
+    }
+    this.logger.info(
+      { event: "adapter.work_items.read_pool_derived" },
+      "work_items derived a dedicated read pool from recreateClient"
+    );
+    return this.derivedReadClient;
+  }
+
   private async readOnCleanMain<T>(
     fn: (conn: WorkItemConnection) => Promise<T>
   ): Promise<T> {
-    const readPool = this.readClient;
+    const readPool = this.resolveReadPool();
     if (!readPool) {
       // Legacy shared lane — unchanged for consumers that pass no read client.
       return this.withOperationQueue("read work items", (context) =>
@@ -2076,11 +2176,15 @@ export class DoltgresWorkItemAdapter
         )
       );
     } catch (error) {
-      // A query timeout terminates the pool it ran on, and `recreateClient`
-      // only rebuilds the WRITE client — so a terminated read pool would stay
-      // dead. Fall back to the shared lane for this call rather than failing a
-      // read the legacy path could still serve. Slow beats unavailable, and
-      // bug.5358's whole point is that reads stay available.
+      // A query timeout terminates the pool it ran on. A DERIVED pool is ours
+      // to rebuild, so drop it and the next read builds a fresh one; a pool
+      // the caller provided is not, so that one stays as given. Either way
+      // this call falls back to the shared lane rather than failing a read the
+      // legacy path could still serve — slow beats unavailable, and bug.5358's
+      // whole point is that reads stay available.
+      if (readPool === this.derivedReadClient) {
+        this.derivedReadClient = undefined;
+      }
       this.logger.warn(
         { event: "adapter.work_items.read_lane_fallback", ...errorFields(error) },
         "work_items read lane failed; retrying on the shared lane"
