@@ -7,7 +7,9 @@ export default defineConfig({
     worker: "src/worker.ts",
   },
   format: ["esm"],
-  dts: true,
+  // Declarations come from the workspace `tsc -b` pass. tsup's isolated dts
+  // worker is incompatible with this repo's composite tsconfig.
+  dts: false,
   sourcemap: true,
   clean: true,
   splitting: false,
