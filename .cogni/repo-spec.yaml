@@ -98,7 +98,9 @@ schedules:
             content: "Write one short poem about trustworthy community software."
         modelRef:
           providerKey: platform
-          modelId: gpt-4o-mini
+          # agent-api-validation.md: bare default_free id; fresh node agents
+          # require no wallet funding or credit top-up for the proof run.
+          modelId: gpt-oss-120b
 
 # Akash lane (story.5016). Declares WHAT this node runs so the operator can
 # render a provider-neutral workload. Emitted verbatim by
