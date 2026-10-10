@@ -116,7 +116,7 @@ export async function runAgentWorkflowSchedulesSyncJob(): Promise<AgentWorkflowS
       reservedConn.release();
       outcome = "success";
       reasonCode = "already_running";
-      return { created, updated, unchanged, triggered, buildId };
+      return { created, updated, unchanged, deleted, triggered, buildId };
     }
 
     let temporal: Awaited<ReturnType<typeof connectAgentWorkflowTemporal>> | null =
