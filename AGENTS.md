@@ -23,12 +23,13 @@ trust with `/hooks` when prompted; outside Conductor, run
 - The loader derives `https://<node-slug>.cognidao.org/api/v1/cognition` from
   `.cogni/repo-spec.yaml` `intent.name` and recalls **this node's own hub** with
   the NODE account key (`COGNI_NODE_API_KEY`); there is no `COGNI_COGNITION_URL` override.
-- Self-serve if cognition does not load: register a NODE agent, save
+- If cognition does not load, ask an authorized human for a one-use node-local
+  spawn grant, redeem it at `POST /api/v1/agent/register`, save the returned
   `COGNI_NODE_API_KEY` in `.env.cogni`, then retry. `.env.cogni` holds two accounts
   (NODE + OPERATOR for CI/CD) — see [`.env.cogni.example`](.env.cogni.example) and
   the `node-launch-handoff` knowledge entry. Conductor ensures the main workspace
   has `COGNI_NODE_API_KEY` and symlinks `.env.cogni` into future worktrees.
-- This node serves its own bundle at `GET /api/v1/cognition` (authed, index-only — needs a principal; `/api/v1/agent/register` stays the one public bootstrap seam).
+- This node serves its own bundle at `GET /api/v1/cognition` (authed, index-only — needs a principal; `/api/v1/agent/register` is public only for one-use spawn-grant redemption).
 
 ## What you own (node-dev half)
 

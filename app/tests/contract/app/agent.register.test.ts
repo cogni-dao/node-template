@@ -1,0 +1,99 @@
+// SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
+
+/** Contract proof that public registration only redeems a pre-authorized spawn grant. */
+
+import { testApiHandler } from "next-test-api-route-handler";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const mockRedeem = vi.fn().mockResolvedValue({
+	actorId: "11111111-1111-4111-8111-111111111111",
+	principalId:
+		"agent:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/11111111-1111-4111-8111-111111111111",
+	credentialId: "22222222-2222-4222-8222-222222222222",
+	apiKey: "cogni_ag_sk_v2_22222222-2222-4222-8222-222222222222.secret",
+	billingAccountId: "44444444-4444-4444-8444-444444444444",
+	authenticateUntil: "2026-01-31T00:00:00.000Z",
+	renewUntil: "2026-02-07T00:00:00.000Z",
+});
+
+vi.mock("@/bootstrap/container", () => {
+	const childLogger = {
+		info: vi.fn(),
+		error: vi.fn(),
+		warn: vi.fn(),
+		debug: vi.fn(),
+	};
+	const log = {
+		child: vi.fn(() => childLogger),
+		info: vi.fn(),
+		error: vi.fn(),
+		warn: vi.fn(),
+		debug: vi.fn(),
+	};
+	return {
+		getContainer: vi.fn(() => ({
+			log,
+			clock: { now: vi.fn(() => new Date("2026-01-01T00:00:00Z")) },
+			config: { unhandledErrorPolicy: "rethrow" },
+			agentIdentity: { redeemSpawnGrant: mockRedeem },
+		})),
+	};
+});
+
+import * as appHandler from "@/app/api/v1/agent/register/route";
+
+describe("POST /api/v1/agent/register", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+	});
+
+	it("returns 201 with actor credentials", async () => {
+		await testApiHandler({
+			appHandler,
+			url: "/api/v1/agent/register",
+			async test({ fetch }) {
+				const response = await fetch({
+					method: "POST",
+					body: JSON.stringify({
+						spawnToken: "cogni_ag_sg_v1_abcdefghijklmnopqrstuvwxyz0123456789",
+					}),
+					headers: { "content-type": "application/json" },
+				});
+
+				expect(response.status).toBe(201);
+				const json = await response.json();
+				expect(json.actorId).toBe("11111111-1111-4111-8111-111111111111");
+				expect(json.principalId).toBe(
+					"agent:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/11111111-1111-4111-8111-111111111111",
+				);
+				expect(json.apiKey).toContain("cogni_ag_sk_v2_");
+				expect(json.billingAccountId).toBe(
+					"44444444-4444-4444-8444-444444444444",
+				);
+				expect(mockRedeem).toHaveBeenCalledWith(
+					"cogni_ag_sg_v1_abcdefghijklmnopqrstuvwxyz0123456789",
+				);
+			},
+		});
+	});
+
+	it.each([
+		{ name: "anonymous" },
+		{ spawnToken: "" },
+	])("returns 400 and never mints for legacy/invalid payload %#", async (body) => {
+		await testApiHandler({
+			appHandler,
+			url: "/api/v1/agent/register",
+			async test({ fetch }) {
+				const response = await fetch({
+					method: "POST",
+					body: JSON.stringify(body),
+					headers: { "content-type": "application/json" },
+				});
+				expect(response.status).toBe(400);
+				expect(mockRedeem).not.toHaveBeenCalled();
+			},
+		});
+	});
+});

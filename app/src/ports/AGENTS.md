@@ -54,6 +54,7 @@ Does NOT re-export packages with `node:` transitive dependencies.
 - ThreadPersistencePort, ThreadConflictError, ThreadSummary
 - OperatorWalletPort
 - IdentityBindingRepositoryPort, IdentityBindingTransactionPort
+- AgentIdentityPort (spawn/recovery grants plus DB-backed rotate/confirm lifecycle)
 - TreasurySettlementPort, TreasurySettlementOutcome
 - Types (ChargeReceiptParams, LlmCaller, BillingAccount, CreditLedgerEntry, etc.)
 

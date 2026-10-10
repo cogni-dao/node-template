@@ -12,7 +12,8 @@
  *   domains — their full bodies stay behind the same authed read routes
  *   (KNOWLEDGE_READ_REQUIRES_PRINCIPAL); the current-node orientation entry is
  *   rendered IN FULL so the bootstrap IS the agent's operating map.
- *   The public bootstrap seam stays /api/v1/agent/register: register → key → cognition.
+ *   The public bootstrap seam only redeems a pre-authorized one-use spawn grant:
+ *   spawn grant → /api/v1/agent/register → node-local key → cognition.
  * Invariants:
  *   - INDEX_FIRST: returns skill/domain pointers; the current-node orientation
  *     entry is the one full body (ORIENTATION_LOADED_IN_FULL).
