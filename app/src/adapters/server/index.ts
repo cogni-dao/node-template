@@ -85,6 +85,7 @@ export {
 } from "./connections/drizzle-broker.adapter";
 export { type Database, getAppDb } from "./db/client";
 export { DrizzleGovernanceStatusAdapter } from "./governance/drizzle-governance-status.adapter";
+export { DrizzleAgentIdentityAdapter } from "./identity/agent-identity.adapter";
 export {
   ALCHEMY_ADAPTER_VERSION,
   AlchemyWebhookNormalizer,

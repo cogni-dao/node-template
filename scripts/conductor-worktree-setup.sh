@@ -136,42 +136,47 @@ node_hub_base_url() {
   esac
 }
 
-register_auth_root_cogni_agent() {
+redeem_auth_root_cogni_spawn_grant() {
   local env_file="$AUTH_ROOT/.env.cogni"
-  local agent_name response key base_url
+  local spawn_token response key base_url tmp
 
   if ! command -v curl >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
-    warn "curl and jq are required to auto-register Cogni credentials"
+    warn "curl and jq are required to redeem a Cogni spawn grant"
     return 1
   fi
 
   base_url="$(node_hub_base_url)"
-  agent_name="${USER:-agent}-conductor-$(hostname -s 2>/dev/null || printf 'local')-$(date -u +%Y%m%dT%H%M%SZ)"
+  spawn_token="${COGNI_AGENT_SPAWN_TOKEN:-$(read_env_file_value COGNI_AGENT_SPAWN_TOKEN "$env_file")}"
+  if [[ -z "$spawn_token" ]]; then
+    warn "no COGNI_AGENT_SPAWN_TOKEN was provided"
+    return 1
+  fi
   response="$(
     curl -fsS --max-time 10 -X POST "$base_url/api/v1/agent/register" \
       -H 'content-type: application/json' \
-      -d "$(jq -cn --arg name "$agent_name" '{name:$name}')"
+      -d "$(jq -cn --arg token "$spawn_token" '{spawnToken:$token}')"
   )" || return 1
   key="$(printf '%s\n' "$response" | jq -r '.apiKey // empty')"
   [[ -n "$key" ]] || return 1
 
-  {
-    if [[ -f "$env_file" ]]; then
-      printf '\n'
-    else
-      printf '# Cogni node API keys (gitignored via .env*)\n'
-    fi
-    printf '# Agent name: %s\n' "$agent_name"
-    printf 'COGNI_NODE_API_KEY=%s\n' "$key"
-  } >>"$env_file"
-  chmod 600 "$env_file"
+  mkdir -p "$(dirname "$env_file")"
+  tmp="$(mktemp "$(dirname "$env_file")/.env.cogni.bootstrap.XXXXXX")"
+  chmod 600 "$tmp"
+  if [[ -f "$env_file" ]]; then
+    awk '$0 !~ /^COGNI_(NODE_API_KEY(_PENDING)?|AGENT_SPAWN_TOKEN)=/' "$env_file" >"$tmp"
+  else
+    printf '# Cogni node API keys (gitignored via .env*)\n' >"$tmp"
+  fi
+  printf 'COGNI_NODE_API_KEY=%s\n' "$key" >>"$tmp"
+  sync -f "$tmp" >/dev/null 2>&1 || sync >/dev/null 2>&1 || true
+  mv -f "$tmp" "$env_file"
 }
 
 ensure_auth_root_cogni_env() {
   local lock_dir
 
   if [[ -z "$AUTH_ROOT" ]]; then
-    warn "no auth root resolved; cannot auto-register COGNI_NODE_API_KEY safely"
+    warn "no auth root resolved; cannot redeem COGNI_NODE_API_KEY safely"
     exit 1
   fi
 
@@ -195,11 +200,11 @@ ensure_auth_root_cogni_env() {
     return
   fi
 
-  warn "$AUTH_ROOT/.env.cogni missing COGNI_NODE_API_KEY; attempting NODE agent registration"
-  if register_auth_root_cogni_agent; then
-    printf 'registered Cogni NODE agent and saved COGNI_NODE_API_KEY in %s\n' "$AUTH_ROOT/.env.cogni"
+  warn "$AUTH_ROOT/.env.cogni missing COGNI_NODE_API_KEY; attempting one-use spawn-grant redemption"
+  if redeem_auth_root_cogni_spawn_grant; then
+    printf 'redeemed Cogni spawn grant and saved COGNI_NODE_API_KEY in %s\n' "$AUTH_ROOT/.env.cogni"
   else
-    warn "could not auto-register Cogni NODE agent; POST $(node_hub_base_url)/api/v1/agent/register and save COGNI_NODE_API_KEY in $AUTH_ROOT/.env.cogni"
+    warn "credential bootstrap requires a human-issued spawn grant; set COGNI_AGENT_SPAWN_TOKEN, then rerun setup"
     exit 1
   fi
 }
@@ -258,6 +263,12 @@ ensure_auth_root_cogni_env
 # canonical checkout are immediately reflected in active Conductor worktrees.
 link_from_auth_root ".env.cogni"
 link_from_auth_root ".local-auth"
+
+# Rotate the shared credential synchronously during setup. SessionStart retries
+# in the background; neither path ever registers a replacement principal after
+# an authentication failure.
+bash scripts/agent/refresh-agent-credential.sh ".env.cogni" \
+  "$(node_hub_base_url)/api/v1" || true
 
 # Codex requires hook trust per config source. Keep one stable, user-level
 # presenter installed so every local Conductor worktree inherits the

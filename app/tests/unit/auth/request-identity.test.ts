@@ -19,10 +19,12 @@
  * @public
  */
 
+import { createHmac } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockGetServerSessionUser = vi.fn();
 const mockHeaders = vi.fn();
+const mockAuthenticate = vi.fn();
 
 vi.mock("@/lib/auth/server", () => ({
   getServerSessionUser: (...args: unknown[]) =>
@@ -31,6 +33,12 @@ vi.mock("@/lib/auth/server", () => ({
 
 vi.mock("next/headers", () => ({
   headers: (...args: unknown[]) => mockHeaders(...args),
+}));
+
+vi.mock("@/bootstrap/container", () => ({
+  getContainer: () => ({
+    agentIdentity: { authenticate: mockAuthenticate },
+  }),
 }));
 
 vi.mock("@/shared/env/server", () => ({
@@ -80,6 +88,31 @@ describe("resolveRequestIdentity — circular-recursion regression", () => {
     const user = await resolveRequestIdentity();
 
     expect(user).toBeNull();
+    expect(mockGetServerSessionUser).not.toHaveBeenCalled();
+  });
+
+  it("rejects an operator v1 bearer even when AUTH_SECRET is identical", async () => {
+    const sharedSecret = "test-secret-for-unit-tests-only";
+    const payload = Buffer.from(
+      JSON.stringify({
+        sub: "operator-agent",
+        displayName: "operator",
+        iat: Math.floor(Date.now() / 1000),
+        exp: Math.floor(Date.now() / 1000) + 3600,
+      }),
+      "utf8"
+    ).toString("base64url");
+    const signature = createHmac("sha256", sharedSecret)
+      .update(payload)
+      .digest("base64url");
+    mockHeaders.mockResolvedValue(
+      headersFromRecord({
+        authorization: `Bearer cogni_ag_sk_v1_${payload}.${signature}`,
+      })
+    );
+
+    await expect(resolveRequestIdentity()).resolves.toBeNull();
+    expect(mockAuthenticate).not.toHaveBeenCalled();
     expect(mockGetServerSessionUser).not.toHaveBeenCalled();
   });
 
