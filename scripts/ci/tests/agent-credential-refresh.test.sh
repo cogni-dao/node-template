@@ -105,7 +105,7 @@ bash "$REFRESH" "$ENV_LINK" https://node.example/api/v1
   fail "legacy credential was altered"
 [[ ! -s "$FAKE_CALLS" ]] || fail "legacy credential reached a node endpoint"
 
-mode="$(stat -f '%Lp' "$ENV_TARGET" 2>/dev/null || stat -c '%a' "$ENV_TARGET")"
+mode="$(stat -c '%a' "$ENV_TARGET" 2>/dev/null || stat -f '%Lp' "$ENV_TARGET")"
 [[ "$mode" == 600 ]] || fail "credential file mode is $mode, expected 600"
 
 echo "agent-credential-refresh.test: PASS"
