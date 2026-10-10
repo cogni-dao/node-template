@@ -3,6 +3,7 @@
 
 /** Reconcile node-owned Workflow schedules only after the exact Worker is ready. */
 import {
+  deleteOrphanedWorkflowSchedules,
   reconcileWorkflowSchedule,
   triggerWorkflowSchedule,
 } from "@cogni-dao/agent-workflow-runtime/schedule";
@@ -30,6 +31,7 @@ export interface AgentWorkflowSyncSummary {
   readonly created: number;
   readonly updated: number;
   readonly unchanged: number;
+  readonly deleted: number;
   readonly triggered: number;
   readonly buildId: string;
 }
@@ -51,15 +53,32 @@ export async function runAgentWorkflowSchedulesSyncJob(): Promise<AgentWorkflowS
   let created = 0;
   let updated = 0;
   let unchanged = 0;
+  let deleted = 0;
   let triggered = 0;
 
   try {
-    if (workflows.length === 0) {
+    const runtimeConfigured = Boolean(
+      address && namespace && workerHealthUrl && buildId
+    );
+    if (workflows.length === 0 && !runtimeConfigured) {
       outcome = "success";
       reasonCode = "no_workflows";
-      return { created, updated, unchanged, triggered, buildId: buildId ?? "" };
+      return {
+        created,
+        updated,
+        unchanged,
+        deleted,
+        triggered,
+        buildId: buildId ?? "",
+      };
     }
-    if (!address || !namespace || !workerHealthUrl || !buildId) {
+    if (
+      !runtimeConfigured ||
+      !address ||
+      !namespace ||
+      !workerHealthUrl ||
+      !buildId
+    ) {
       reasonCode = "runtime_config_missing";
       throw new Error("Node workflow runtime configuration is incomplete");
     }
@@ -150,6 +169,13 @@ export async function runAgentWorkflowSchedulesSyncJob(): Promise<AgentWorkflowS
           unchanged += 1;
         }
       }
+      deleted = (
+        await deleteOrphanedWorkflowSchedules(
+          temporal.client,
+          nodeId,
+          workflows.map((schedule) => schedule.id)
+        )
+      ).length;
     } finally {
       await temporal?.close();
       await reservedConn`SELECT pg_advisory_unlock(hashtext('agent_workflow_sync'))`;
@@ -158,7 +184,7 @@ export async function runAgentWorkflowSchedulesSyncJob(): Promise<AgentWorkflowS
 
     outcome = "success";
     reasonCode = "ok";
-    return { created, updated, unchanged, triggered, buildId };
+    return { created, updated, unchanged, deleted, triggered, buildId };
   } finally {
     container.log[outcome === "success" ? "info" : "error"](
       {
@@ -170,6 +196,7 @@ export async function runAgentWorkflowSchedulesSyncJob(): Promise<AgentWorkflowS
         created,
         updated,
         unchanged,
+        deleted,
         triggered,
         durationMs: Math.round(performance.now() - startedAt),
       },

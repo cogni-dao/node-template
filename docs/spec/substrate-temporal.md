@@ -74,7 +74,10 @@ namespace string is not tenant isolation.
 The node app owns the node-scoped Temporal client and schedule reconciliation. It reconciles
 only repo-spec entries whose target is explicitly `workflow`. The action comparison covers
 Workflow type, input, Task Queue, cron/calendar, timezone, and policies. Pause state is
-preserved. Platform invariants are overlap `SKIP` and catchup window `0`.
+never silently overwritten, but a paused declared schedule is unhealthy. Reconciliation also
+deletes node-prefixed schedules absent from repo-spec, so removing desired state cannot leave a
+billable orphan. Platform invariants are overlap `SKIP` and Temporal's minimum positive
+catchup window of `10s`; zero is forbidden because the server interprets it as its large default.
 
 The app verifies the exact Worker before creating work:
 
@@ -82,6 +85,10 @@ The app verifies the exact Worker before creating work:
 2. Temporal sees deployment version `node-<nodeId>-workflows.<sourceSha>`;
 3. the app makes that version current and verifies propagation; then
 4. schedules reconcile and a newly created schedule is eagerly triggered once.
+
+Worker decommission is two-phase: first remove the Workflow schedules while retaining the
+private Worker profile, then confirm reconciliation deleted every orphan before removing the
+Worker service. This keeps destructive lifecycle changes observable and reproducible.
 
 Existing `graph` and `route` schedule targets remain on the compatibility lane. Merely adding a
 Worker never duplicates or retargets a billable schedule.
@@ -122,7 +129,7 @@ Every node exposes authenticated `GET /api/v1/temporal/health` and
 - Workflow and Activity pollers are active;
 - private Worker identity, registered types, deployment, and Build ID match the app;
 - the exact Worker Deployment Version is current;
-- schedule drift is zero; and
+- declared schedule drift and orphaned node schedule count are zero; and
 - the latest due/eager run completed.
 
 The command exits non-zero for every other condition. The health check emits one terminal

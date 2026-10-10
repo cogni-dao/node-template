@@ -1159,6 +1159,9 @@ importers:
       '@cogni-dao/agent-workflow-runtime':
         specifier: workspace:*
         version: link:../agent-workflow-runtime
+      '@temporalio/common':
+        specifier: 1.17.5
+        version: 1.17.5
       '@temporalio/workflow':
         specifier: 1.17.5
         version: 1.17.5

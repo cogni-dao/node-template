@@ -6,6 +6,8 @@ import {
 
 import { workflowScheduleId } from "./contracts.js";
 
+export const AGENT_WORKFLOW_CATCHUP_WINDOW_MS = 10_000;
+
 export interface DesiredWorkflowSchedule {
   readonly id: string;
   readonly nodeId: string;
@@ -22,6 +24,51 @@ export interface WorkflowScheduleState {
   readonly created: boolean;
   readonly paused: boolean;
   readonly fingerprint: string;
+}
+
+function workflowSchedulePrefix(nodeId: string): string {
+  return `node-workflow:${nodeId}:`;
+}
+
+export async function listOrphanedWorkflowSchedules(
+  client: Client,
+  nodeId: string,
+  desiredIds: readonly string[]
+): Promise<string[]> {
+  const prefix = workflowSchedulePrefix(nodeId);
+  const desiredScheduleIds = new Set(
+    desiredIds.map((id) => workflowScheduleId(nodeId, id))
+  );
+  const orphaned: string[] = [];
+  for await (const schedule of client.schedule.list()) {
+    if (
+      schedule.scheduleId.startsWith(prefix) &&
+      !desiredScheduleIds.has(schedule.scheduleId)
+    ) {
+      orphaned.push(schedule.scheduleId);
+    }
+  }
+  return orphaned.sort();
+}
+
+export async function deleteOrphanedWorkflowSchedules(
+  client: Client,
+  nodeId: string,
+  desiredIds: readonly string[]
+): Promise<string[]> {
+  const orphaned = await listOrphanedWorkflowSchedules(
+    client,
+    nodeId,
+    desiredIds
+  );
+  for (const scheduleId of orphaned) {
+    try {
+      await client.schedule.getHandle(scheduleId).delete();
+    } catch (error) {
+      if (!(error instanceof ScheduleNotFoundError)) throw error;
+    }
+  }
+  return orphaned;
 }
 
 function stableValue(value: unknown): unknown {
@@ -47,7 +94,7 @@ export function workflowScheduleFingerprint(
       taskQueue: desired.taskQueue,
       input: desired.input,
       overlap: "SKIP",
-      catchupWindowMs: 0,
+      catchupWindowMs: AGENT_WORKFLOW_CATCHUP_WINDOW_MS,
     })
   );
 }
@@ -80,7 +127,7 @@ export async function reconcileWorkflowSchedule(
   };
   const policies = {
     overlap: ScheduleOverlapPolicy.SKIP,
-    catchupWindow: 0,
+    catchupWindow: AGENT_WORKFLOW_CATCHUP_WINDOW_MS,
   };
 
   if (!existing) {

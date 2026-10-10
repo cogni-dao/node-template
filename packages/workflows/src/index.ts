@@ -5,6 +5,11 @@ import {
   scheduledGraphWorkflowInputSchema,
   SCHEDULED_GRAPH_WORKFLOW_TYPE,
 } from "@cogni-dao/agent-workflow-runtime";
+import {
+  ApplicationFailure,
+  defineSearchAttributeKey,
+  SearchAttributeType,
+} from "@temporalio/common";
 import { proxyActivities, workflowInfo } from "@temporalio/workflow";
 
 export interface NodeWorkflowActivities {
@@ -22,8 +27,22 @@ const { runGraph } = proxyActivities<NodeWorkflowActivities>({
   },
 });
 
+const temporalScheduledStartTime = defineSearchAttributeKey(
+  "TemporalScheduledStartTime",
+  SearchAttributeType.DATETIME
+);
+
 function scheduledForIso(): string {
-  return workflowInfo().startTime.toISOString();
+  const scheduledFor = workflowInfo().typedSearchAttributes.get(
+    temporalScheduledStartTime
+  );
+  if (!scheduledFor) {
+    throw ApplicationFailure.nonRetryable(
+      "ScheduledGraphWorkflow requires TemporalScheduledStartTime",
+      "scheduled_start_time_missing"
+    );
+  }
+  return scheduledFor.toISOString();
 }
 
 /** A node-owned durable Workflow containing one billed LangGraph graph run. */

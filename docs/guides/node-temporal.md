@@ -79,8 +79,13 @@ At startup the app:
 1. verifies the private Worker identity and exact Build ID;
 2. waits until Temporal sees that Worker Deployment Version;
 3. makes and verifies that exact version current;
-4. reconciles full schedule action state with overlap `SKIP` and catchup `0`; and
-5. eagerly triggers a newly created schedule once, giving candidate validation immediate proof.
+4. reconciles full schedule action state with overlap `SKIP` and Temporal's minimum positive
+   catchup window of `10s`;
+5. deletes node-owned schedules removed from repo-spec; and
+6. eagerly triggers a newly created schedule once, giving candidate validation immediate proof.
+
+To retire the Worker, first remove its Workflow schedules while leaving the Worker service
+declared. Deploy and verify zero orphaned schedules, then remove the Worker in a second release.
 
 Production remains fail-closed until Temporal enforces namespace-scoped authentication. The
 private Worker profile is candidate/preview-only during that boundary rollout.
@@ -96,7 +101,8 @@ Healthy means all of the following are true:
 - the Workflow and Activity pollers are polling;
 - Worker node, namespace, queue, catalog, deployment, and Build ID match the app;
 - the exact Worker Deployment Version is current;
-- declared schedules exist without action drift; and
+- declared schedules exist without action drift or pause, and no orphaned node schedules exist;
+  and
 - the latest eager/due Workflow completed successfully.
 
 The endpoint emits exactly one `substrate.temporal.health_checked` terminal event and bounded,

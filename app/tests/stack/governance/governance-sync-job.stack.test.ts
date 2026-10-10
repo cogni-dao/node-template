@@ -108,7 +108,7 @@ describe("Governance Schedule Sync Job (Stack)", () => {
     // Verify raw Temporal schedule has correct policies (flat structure, not nested)
     expect(rawDesc.spec.timezone).toBe("UTC");
     expect(rawDesc.policies.overlap).toBe("SKIP");
-    // Note: catchupWindow defaults to 1 year (31536000000ms) - tracked as separate issue
+    expect(rawDesc.policies.catchupWindow).toBe(10_000);
     expect(rawDesc.policies.pauseOnFailure).toBe(false);
   });
 

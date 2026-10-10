@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@cogni-dao/agent-workflow-runtime": "workspace:*",
+    "@temporalio/common": "1.17.5",
     "@temporalio/workflow": "1.17.5"
   },
   "devDependencies": {

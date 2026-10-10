@@ -10,6 +10,11 @@ import {
   workflowScheduleId,
 } from "@cogni-dao/agent-workflow-runtime";
 import {
+  AGENT_WORKFLOW_CATCHUP_WINDOW_MS,
+  listOrphanedWorkflowSchedules,
+} from "@cogni-dao/agent-workflow-runtime/schedule";
+import { ScheduleOverlapPolicy } from "@temporalio/client";
+import {
   connectAgentWorkflowTemporal,
   inspectWorkerDeployment,
 } from "@/adapters/server/temporal";
@@ -61,6 +66,7 @@ export interface AgentWorkflowHealth {
   readonly worker: unknown | null;
   readonly deployment: unknown | null;
   readonly schedules: readonly ScheduleHealth[];
+  readonly orphanedScheduleIds: readonly string[];
   readonly checkedAt: string;
   readonly durationMs: number;
 }
@@ -103,6 +109,35 @@ function actionDrift(
   );
 }
 
+function scheduleDrift(
+  description: {
+    readonly action: unknown;
+    readonly spec: {
+      readonly cronExpressions?: readonly string[];
+      readonly timezone?: string;
+    };
+    readonly policies: {
+      readonly overlap: ScheduleOverlapPolicy;
+      readonly catchupWindow: number;
+    };
+    readonly state: { readonly paused: boolean };
+  },
+  expected: Parameters<typeof actionDrift>[1] & {
+    readonly cron: string;
+    readonly timezone: string;
+  }
+): boolean {
+  return (
+    actionDrift(description.action, expected) ||
+    description.spec.cronExpressions?.length !== 1 ||
+    description.spec.cronExpressions[0] !== expected.cron ||
+    description.spec.timezone !== expected.timezone ||
+    description.policies.overlap !== ScheduleOverlapPolicy.SKIP ||
+    description.policies.catchupWindow !== AGENT_WORKFLOW_CATCHUP_WINDOW_MS ||
+    description.state.paused
+  );
+}
+
 export async function checkAgentWorkflowHealth(): Promise<AgentWorkflowHealth> {
   const startedAt = performance.now();
   const env = serverEnv();
@@ -118,11 +153,19 @@ export async function checkAgentWorkflowHealth(): Promise<AgentWorkflowHealth> {
   let worker: unknown | null = null;
   let deployment: unknown | null = null;
   const schedules: ScheduleHealth[] = [];
+  let orphanedScheduleIds: string[] = [];
 
   try {
-    if (workflows.length === 0) {
+    const runtimeConfigured = Boolean(
+      env.AGENT_WORKFLOW_TEMPORAL_ADDRESS &&
+        namespace &&
+        env.AGENT_WORKFLOW_WORKER_HEALTH_URL &&
+        buildId
+    );
+    if (workflows.length === 0 && !runtimeConfigured) {
       reason = "not_configured";
     } else if (
+      !runtimeConfigured ||
       !env.AGENT_WORKFLOW_TEMPORAL_ADDRESS ||
       !namespace ||
       !env.AGENT_WORKFLOW_WORKER_HEALTH_URL ||
@@ -149,7 +192,12 @@ export async function checkAgentWorkflowHealth(): Promise<AgentWorkflowHealth> {
         workerSnapshot.namespace !== namespace ||
         workerSnapshot.taskQueue !== env.AGENT_WORKFLOW_TEMPORAL_TASK_QUEUE ||
         workerSnapshot.deploymentName !== deploymentName ||
-        workerSnapshot.buildId !== buildId
+        workerSnapshot.buildId !== buildId ||
+        workflows.some(
+          (schedule) =>
+            !schedule.workflow ||
+            !workerSnapshot.workflows.includes(schedule.workflow)
+        )
       ) {
         reason = "worker_identity_mismatch";
         throw new Error(reason);
@@ -190,12 +238,14 @@ export async function checkAgentWorkflowHealth(): Promise<AgentWorkflowHealth> {
               reason = "schedule_drift";
               throw new Error(reason);
             });
-          const drift = actionDrift(description.action, {
+          const drift = scheduleDrift(description, {
             workflowType: schedule.workflow ?? "",
             taskQueue: env.AGENT_WORKFLOW_TEMPORAL_TASK_QUEUE,
             scheduleId: schedule.id,
             graphId: payload.graphId,
             input: payload.input,
+            cron: schedule.cron,
+            timezone: schedule.timezone,
           });
           const recent = (
             description.info as unknown as {
@@ -225,11 +275,18 @@ export async function checkAgentWorkflowHealth(): Promise<AgentWorkflowHealth> {
           }
           schedules.push({ id: schedule.id, temporalScheduleId, drift, latestRun });
         }
+        orphanedScheduleIds = await listOrphanedWorkflowSchedules(
+          temporal.client,
+          nodeId,
+          workflows.map((schedule) => schedule.id)
+        );
       } finally {
         await temporal.close();
       }
 
-      const driftCount = schedules.filter((schedule) => schedule.drift).length;
+      const driftCount =
+        schedules.filter((schedule) => schedule.drift).length +
+        orphanedScheduleIds.length;
       temporalScheduleDrift.set(driftCount);
       if (driftCount > 0) reason = "schedule_drift";
       else if (schedules.some((schedule) => !schedule.latestRun)) reason = "latest_run_missing";
@@ -258,6 +315,7 @@ export async function checkAgentWorkflowHealth(): Promise<AgentWorkflowHealth> {
       buildId,
       scheduleCount: workflows.length,
       driftCount: schedules.filter((schedule) => schedule.drift).length,
+      orphanedScheduleCount: orphanedScheduleIds.length,
       durationMs,
     },
     "substrate.temporal.health_checked"
@@ -273,6 +331,7 @@ export async function checkAgentWorkflowHealth(): Promise<AgentWorkflowHealth> {
     worker,
     deployment,
     schedules,
+    orphanedScheduleIds,
     checkedAt: new Date().toISOString(),
     durationMs,
   };

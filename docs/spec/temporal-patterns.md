@@ -57,7 +57,7 @@ Ensure all Temporal workflows are replay-safe, Workflow code performs no I/O dir
 
 6. **OVERLAP_SKIP_DEFAULT**: Schedules use `overlap: 'SKIP'` by default. Only one workflow instance per schedule runs at a time.
 
-7. **CATCHUP_WINDOW_ZERO**: P0 does not backfill missed runs. Set `catchupWindow: 0` to skip missed slots.
+7. **CATCHUP_WINDOW_MINIMUM**: P0 minimizes backfill with Temporal's minimum positive `catchupWindow: 10s`. Zero means “unset” and expands to the server default (normally one year), so zero is forbidden.
 
 8. **CRUD_AUTHORITY**: Schedule lifecycle (create/update/pause/delete) is owned by CRUD endpoints, not workers. Workers only execute workflows fired by Temporal.
 
@@ -233,7 +233,7 @@ await temporalClient.schedule.create({
   },
   policies: {
     overlap: ScheduleOverlapPolicy.SKIP,
-    catchupWindow: "0s", // No backfill in P0
+    catchupWindow: "10s", // Temporal's minimum positive window
   },
 });
 ```
@@ -420,7 +420,7 @@ This violates ONE_RUN_EXECUTION_PATH. The graph run is invisible to the dashboar
 
 1. Verify all Workflow code contains no I/O — only Activity calls, conditionals, and deterministic transforms
 2. Verify all Activities are idempotent (check for idempotency keys on side effects)
-3. Verify schedules use `overlap: SKIP` and `catchupWindow: 0`
+3. Verify schedules use `overlap: SKIP` and `catchupWindow: 10s`
 
 **Automated:**
 
