@@ -15,3 +15,11 @@ export {
   TemporalScheduleControlAdapter,
   type TemporalScheduleControlConfig,
 } from "./schedule-control.adapter";
+export {
+  activateExactWorkerDeployment,
+  connectAgentWorkflowTemporal,
+  inspectWorkerDeployment,
+  type AgentWorkflowTemporalClient,
+  type AgentWorkflowTemporalConfig,
+  type WorkerDeploymentState,
+} from "./agent-workflow.adapter";

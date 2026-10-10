@@ -75,7 +75,7 @@ pnpm test:stack
 
 ## Notes
 
-- Temporal adapter hardcodes `overlap=SKIP` and `catchupWindow=0` per spec
+- Governance sync passes `overlap=SKIP` and Temporal's minimum positive `catchupWindow=10s` per spec
 - Connection is lazy - only connects when first schedule operation is called
 - `updateSchedule()` preserves existing schedule state (pause, notes) via `previous.state`
 - `describeSchedule()` returns input from action args; cron returns null (Temporal compiles crons to calendars)
