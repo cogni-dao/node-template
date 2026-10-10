@@ -4,97 +4,152 @@ type: spec
 title: Temporal Substrate
 status: draft
 trust: draft
-summary: "Temporal is a Cogni substrate. One shared, operator-run worker executes generic workflows and dispatches work into nodes. Nodes schedule their own routes and graphs; no per-workflow Temporal code and no per-node worker by default."
-read_when: "Designing how a node runs recurring, triggered, or durable work; before proposing a per-node worker, pg-boss, cron, or an operator-in-the-loop create API."
+summary: "Temporal is shared infrastructure with node-sovereign execution: each node owns its durable agent Workflows and private Worker while the operator provisions namespaces, identity, deployment wiring, and visibility."
+read_when: "Designing, shipping, or debugging scheduled AI, durable orchestration, Worker deployment, schedule reconciliation, or Temporal health on a node."
 owner: derekg1729
 created: 2026-06-18
-verified: 2026-06-18
-tags: [temporal, node-template, substrate, scheduling]
+verified: 2026-10-09
+tags: [temporal, node-template, substrate, scheduling, langgraph]
 ---
 
 # Temporal Substrate
 
-## Model
+## Decision
 
-One shared, operator-run worker executes only **generic** workflows and dispatches the work
-**into the node**. A node consumes the substrate by scheduling its own routes and graphs
-through those generic workflows.
+Cogni uses a **node-sovereign architecture for durable agent workflows**. Temporal is the
+durable outer runtime and LangGraph is the AI reasoning/dataflow runtime inside it.
 
-No per-workflow Temporal code. No per-node worker by default.
+The operator owns shared infrastructure:
 
-## Building block
+- the Temporal service and environment lifecycle;
+- one namespace and runtime identity per `(node, environment)`;
+- secret materialization, deployment wiring, visibility, and decommissioning; and
+- admission policy that prevents an unsafe Worker topology from reaching a workload.
 
-`/schedules` is the node's recurring-work console. A node schedules any route or graph it owns:
+Each node owns product execution:
 
-| A node wants to...                    | It schedules...                        | The work runs...          |
-| ------------------------------------- | -------------------------------------- | ------------------------- |
-| run one HTTP ops route on a cron      | `NodeTaskWorkflow` -> the node's route | in the node route handler |
-| run one AI graph on a cron or trigger | `GraphRunWorkflow` -> the node's graph | in the node graph runtime |
+- Workflow and Activity code;
+- LangGraph graphs;
+- one private Worker and stable `agent-workflows` Task Queue;
+- schedule declaration/reconciliation; and
+- its app+Worker release and health proof.
 
-The workflow types are fixed and generic. The variety lives in node-owned routes and graphs.
-A new node should add zero worker code and trigger no shared-worker redeploy for normal
-recurring work.
+A centralized Worker remains only as an explicit compatibility lane for existing generic
+`graph` and `route` schedules and for operator-owned governance work. It is not the target for
+new node product Workflows.
 
-## As-built
+## Why
 
-- AI graphs run through `GraphRunWorkflow`; the shared `scheduler-worker` dispatches into the
-  node graph runtime.
-- `NodeTaskWorkflow` is the route-dispatch sibling: fire a node HTTP route on a schedule.
-- `/schedules` and `POST /api/v1/schedules` exist for schedule CRUD.
+Node workflow code must evolve with the node's product, graph catalog, and release. Putting that
+code in a fleet-wide Worker makes every node release depend on operator deployment, couples
+unrelated products, and hides failures behind a shared poller. Shipping a private Worker in the
+same source-SHA artifact bundle as the app restores release ownership while retaining one
+operator-managed Temporal service.
 
-The substrate exists. The remaining sovereignty delta is node-direct schedule create: the
-node app should hold its own Temporal client and namespace-scoped credentials, then create
-schedules itself instead of routing create through the operator.
+The infrastructure boundary stays thin: nodes use the official `@temporalio/*` and
+`@langchain/langgraph` packages directly. `@cogni-dao/agent-workflow-runtime` carries only
+shared contracts and safe defaults for Worker startup, schedules, and health.
 
-## Create vs execute
+## Declare → provision → create → execute
 
-1. **Create -- node-direct target.** The node's app holds its own Temporal client and calls
-   `schedule.create(...)` for `NodeTaskWorkflow` or `GraphRunWorkflow`.
-   Today schedule create may still run through the app/operator-owned adapter path; node-direct
-   client credentials are the build target.
-2. **Execute -- shared and generic.** The shared worker polls shared workload queues, runs the
-   generic workflow, and dispatches into the owning node route or graph. The work runs in the
-   node.
+### 1. Declare
 
-The shared worker is substrate plumbing, not node-specific business logic.
+The node's repo-spec declares one public app, at most one private
+`cogni-workflow-worker-v1` service, and recurring entries with an explicit `workflow` target.
+The worker may be environment-gated. A Workflow schedule is invalid without the Worker profile.
 
-## Queue model
+### 2. Provision
 
-Tenancy lives in the workflow payload (`nodeId`, grant, route/graph), not in queue topology.
-The target worker pool polls a bounded set of workload queues such as `dispatch` and
-`graph-exec`. Current deployments may still poll transitional per-node queues; that is
-compatibility, not the architecture target.
+The operator creates namespace `cogni-<env>-<nodeId>` and deploys app plus Worker from the same
+exact source SHA. The runtime profile injects the node ID, namespace, `agent-workflows` queue,
+Worker Deployment name, Build ID, private app URL, and private health URL. Nodes declare only
+non-standard bindings and secrets.
 
-## Dispatch hop
+The profile is pre-production-only until the Temporal server enforces namespace-scoped auth.
+Production admission fails closed; sharing an unauthenticated frontend and relying on a
+namespace string is not tenant isolation.
 
-The shared worker holds no node code, so it calls the node over HTTP for route dispatch or
-graph execution. The route or graph must be idempotent for its own business effects. The v0
-retry profile is at-most-once (`maximumAttempts: 1`) until the dedup contract is proven.
+### 3. Create
 
-## Roadmap: durable multi-step and HITL
+The node app owns the node-scoped Temporal client and schedule reconciliation. It reconciles
+only repo-spec entries whose target is explicitly `workflow`. The action comparison covers
+Workflow type, input, Task Queue, cron/calendar, timezone, and policies. Pause state is
+preserved. Platform invariants are overlap `SKIP` and catchup window `0`.
 
-The current substrate runs one route or one graph per schedule tick. A graph can contain an
-in-run AI pipeline, but that is not the durable multi-step answer for
-`run graph -> wait for human -> run graph -> branch` or other cross-run orchestration.
+The app verifies the exact Worker before creating work:
 
-The roadmap shape is one generic durable step-list workflow on the shared worker: Temporal
-owns signals, waits, timers, and replay; node-specific work still dispatches into node routes
-and graphs.
+1. private `/readyz` identity and both local pollers match;
+2. Temporal sees deployment version `node-<nodeId>-workflows.<sourceSha>`;
+3. the app makes that version current and verifies propagation; then
+4. schedules reconcile and a newly created schedule is eagerly triggered once.
 
-## Escape hatch: per-node worker
+Existing `graph` and `route` schedule targets remain on the compatibility lane. Merely adding a
+Worker never duplicates or retargets a billable schedule.
 
-A node runs its own Temporal worker only for custom durable orchestration the generic engine
-cannot express. That worker registers node-owned workflow definitions and polls its own queue.
-This costs a worker pod per node and is not the node-template default.
+### 4. Execute
 
-## Not this
+The node Worker registers node-owned Workflow definitions and Activities. Workflow code stays
+replay-safe. A graph Activity calls the app's private graph-run endpoint with a stable
+idempotency key, so execution continues through `GraphExecutorPort`, execution grants, billing,
+deduplication, persistence, and telemetry. Direct graph-host execution in the Worker is rejected
+until that complete contract is process-portable.
 
-- per-node worker as the default;
-- one queue per node as the default isolation model;
-- a second scheduler such as pg-boss or cron;
-- an operator-in-the-loop schedule create API as the long-term node contract.
+```text
+repo-spec workflow schedule
+  → node app reconcile → node namespace / agent-workflows
+      → node private Worker (exact source SHA, PINNED)
+          → ScheduledGraphWorkflow
+              → runGraph Activity
+                  → app private graph route
+                      → GraphExecutorPort → node LangGraph
+```
+
+## Versioning and upgrades
+
+Worker Deployment Versioning is mandatory. The deployment name is
+`node-<nodeId>-workflows`; Build ID is the exact source SHA; default behavior is `PINNED`.
+Startup never promotes itself. The app activates only a Worker it has independently observed at
+the expected identity and SHA. Long-lived Workflows cross incompatible releases through an
+explicit Continue-as-New or migration boundary. Old versions remain available while pinned
+executions require them.
+
+## Health and observability
+
+Every node exposes authenticated `GET /api/v1/temporal/health` and
+`pnpm temporal:health -- --env <env>`. A healthy response proves:
+
+- Temporal and the node namespace are reachable;
+- Workflow and Activity pollers are active;
+- private Worker identity, registered types, deployment, and Build ID match the app;
+- the exact Worker Deployment Version is current;
+- schedule drift is zero; and
+- the latest due/eager run completed.
+
+The command exits non-zero for every other condition. The health check emits one terminal
+`substrate.temporal.health_checked` event with a stable reason code and duration. Metrics expose
+last-success time, poller presence by bounded task type, drift count, and check result/duration.
+No schedule IDs, Workflow IDs, run IDs, or Build IDs become metric labels; no credentials,
+prompts, or raw Workflow inputs/results are logged.
+
+Worker logs are independently queryable by service name, including crash loops. Process uptime,
+an open frontend connection, a green build, or a deployed SHA alone is never substrate proof.
+
+## Invariants
+
+| Invariant | Rule |
+| --- | --- |
+| NODE_OWNS_WORKFLOW | Product Workflow and Activity code ships from the node repo. |
+| OPERATOR_OWNS_SUBSTRATE | Temporal service, namespace/identity, runtime wiring, and lifecycle are operator responsibilities. |
+| NAMESPACE_PER_NODE_ENV | Namespace derives from the catalog-pinned node ID and environment. |
+| APP_WORKER_SAME_SHA | App and private Worker come from one exact-set artifact bundle revision. |
+| WORKER_VERSION_GATED | Exact Worker identity/version becomes current before schedule reconciliation. |
+| EXPLICIT_CUTOVER | Only explicit `workflow` schedules use the sovereign lane in P0. |
+| GRAPH_PATH_SINGLE | Graph Activities reuse the app's billed/idempotent `GraphExecutorPort` path. |
+| PRODUCTION_AUTH_REQUIRED | Production rejects the Worker profile until namespace auth is enforced. |
+| OBSERVABLE_OR_UNHEALTHY | Missing wiring, pollers, version, schedule, or completed run is a named unhealthy state. |
 
 ## References
 
-- [temporal-patterns.md](./temporal-patterns.md) -- deterministic workflow and schedule rules.
-- [langgraph-patterns.md](./langgraph-patterns.md) -- graph execution boundary.
+- [temporal-patterns.md](./temporal-patterns.md) — deterministic implementation rules.
+- [langgraph-patterns.md](./langgraph-patterns.md) — graph execution boundary.
+- [node-temporal.md](../guides/node-temporal.md) — node-author workflow.

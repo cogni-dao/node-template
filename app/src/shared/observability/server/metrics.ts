@@ -232,6 +232,39 @@ export const appBuildInfo = getOrCreateGauge(
   ["version", "commit_sha"] as const
 );
 
+// =============================================================================
+// Node-sovereign Temporal substrate metrics
+// =============================================================================
+
+export const temporalSubstrateLastSuccessTimestampSeconds = getOrCreateGauge(
+  "temporal_substrate_last_success_timestamp_seconds",
+  "Unix timestamp of the last successful end-to-end Temporal substrate check"
+);
+
+export const temporalSubstratePollers = getOrCreateGauge(
+  "temporal_substrate_pollers",
+  "Whether each required node Workflow poller is healthy",
+  ["task_type"] as const
+);
+
+export const temporalScheduleDrift = getOrCreateGauge(
+  "temporal_schedule_drift",
+  "Number of node-owned Workflow schedules that differ from repo-spec"
+);
+
+export const temporalSubstrateChecksTotal = getOrCreateCounter(
+  "temporal_substrate_checks_total",
+  "Temporal substrate health checks by bounded result and reason",
+  ["result", "reason"] as const
+);
+
+export const temporalSubstrateCheckDurationSeconds = getOrCreateHistogram(
+  "temporal_substrate_check_duration_seconds",
+  "Temporal substrate health-check duration in seconds",
+  ["result", "reason"] as const,
+  [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5]
+);
+
 export function setBuildInfo(version: string, commitSha: string) {
   appBuildInfo.labels({ version, commit_sha: commitSha }).set(1);
 }

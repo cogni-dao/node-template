@@ -1,7 +1,8 @@
 name: Publish Packages
 
 # Publishes the shared packages this repo owns — `@cogni-dao/work-items`,
-# `@cogni-dao/knowledge-store`, `@cogni-dao/knowledge-base` — so node repos can
+# `@cogni-dao/knowledge-store`, `@cogni-dao/knowledge-base`, and
+# `@cogni-dao/agent-workflow-runtime` — so node repos can
 # DEPEND on them instead of vendoring their source. Four divergent copies of the
 # work-items adapter existed across the fleet when bug.5358 was audited, and a
 # single availability fix then cost nine PRs across six repositories (story.5069).
@@ -47,6 +48,7 @@ on:
       - "work-items-v*"
       - "knowledge-store-v*"
       - "knowledge-base-v*"
+      - "agent-workflow-runtime-v*"
   # Rehearsal only. Every publishing step below is gated on `push`, so a
   # dispatch packs the tarball and runs the artifact assertions against it
   # without creating a Release, attesting anything, or moving a version. A
@@ -85,7 +87,8 @@ env:
   PACKAGES: >-
     [{"name":"@cogni-dao/work-items","dir":"packages/work-items","tagPrefix":"work-items-v"},
      {"name":"@cogni-dao/knowledge-store","dir":"packages/knowledge-store","tagPrefix":"knowledge-store-v"},
-     {"name":"@cogni-dao/knowledge-base","dir":"packages/knowledge-base","tagPrefix":"knowledge-base-v"}]
+     {"name":"@cogni-dao/knowledge-base","dir":"packages/knowledge-base","tagPrefix":"knowledge-base-v"},
+     {"name":"@cogni-dao/agent-workflow-runtime","dir":"packages/agent-workflow-runtime","tagPrefix":"agent-workflow-runtime-v"}]
 
 jobs:
   # Resolve WHICH packages this run acts on, before anything is built. A push

@@ -1,100 +1,119 @@
 ---
 id: guide.node-temporal
 type: guide
-title: Building recurring & AI workflows in a node
+title: Building durable agent workflows in a node
 status: draft
 trust: draft
-summary: "How a node-template node builds recurring and AI workflows on the shared Temporal substrate. The default needs NO node worker: AI work that fits in one graph run is scheduled through GraphRunWorkflow; plain crons are routes. Durable multi-step and human-in-the-loop composition is roadmap work, with per-node workers only as a rare escape hatch."
-read_when: "You are a node dev adding scheduled, recurring, AI, or human-in-the-loop work to a node; deciding graph vs route vs own-worker; or wondering whether you need a Temporal worker."
+summary: "Build a node-owned Temporal Workflow around node-owned LangGraph runs. The operator provisions the shared Temporal service and private Worker runtime; the node owns Workflow code, schedules, release, and health."
+read_when: "You are adding scheduled AI, durable orchestration, retries, timers, signals, or human-in-the-loop work to a node."
 owner: derekg1729
 created: 2026-06-18
-verified: 2026-06-18
+verified: 2026-10-09
 tags: [temporal, langgraph, node-template, scheduling, guide]
 ---
 
-# Building recurring & AI workflows in a node
+# Building durable agent workflows in a node
 
-Temporal is a provisioned substrate ([substrate-temporal.md](../spec/substrate-temporal.md)).
-**One shared worker** runs generic workflows and dispatches the work **into your node**.
-You almost never run your own worker -- you write a **graph** or a **route**.
+The default product unit is a **durable agent workflow**:
 
-## Pick your tier
-
-| You're building...                                                                                               | You write...                                    | Needs a node worker?         |
-| ---------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- | ---------------------------- |
-| **AI work that fits inside one run** (ingest -> reason -> score -> branch)                                       | a **LangGraph graph** in your `graphs/` package | **No** -- schedule it        |
-| **plain recurring job** (no AI, e.g. metrics ingest)                                                             | a **route** (`defineScheduledJob`)              | **No**                       |
-| **durable multi-step / human-in-the-loop** (state between graph runs, approvals, long waits, cross-crash resume) | a **generic durable step-list engine**          | **No by default** -- roadmap |
-| **custom durable orchestration** the generic engine cannot express                                               | a **Temporal workflow** on your **own worker**  | **Yes** -- rare escape hatch |
-
-The first two are the default and the substrate already runs them. Durable composition
-between runs is not solved by pretending one graph is the whole answer; it is roadmap work.
-
-## Create schedules from the node app
-
-Node users create recurring work through the node app's schedule surface:
-
-- `POST /api/v1/schedules` with `graphId` starts `GraphRunWorkflow`.
-- `POST /api/v1/schedules` with `route` starts `NodeTaskWorkflow`.
-- `defineScheduledJob` is the node-author shortcut for plain recurring route work.
-
-The node provides a graph or route. The shared worker runs the generic workflow and
-dispatches into the node. Do not add workflow code or a worker service for ordinary
-scheduled AI, cron, or route work.
-
-## Default: AI work is a graph
-
-If the work can complete inside one graph run, keep the AI pipeline **inside one LangGraph
-graph**. LangGraph handles steps, branching, tools, and loops within that run. Schedule the
-graph; the shared worker runs it via `GraphRunWorkflow`, dispatched into your node runtime.
-See [langgraph-patterns.md](../spec/langgraph-patterns.md).
-
-```ts
-// graphs/ -- your node owns this. "300 workflows" = 300 graphs.
-export const growthLoop =
-  compileGraph(/* ingest -> analyze (LLM) -> score -> draft (LLM) */);
-// then schedule it (cron) -> GraphRunWorkflow runs it.
+```text
+node-owned Temporal Workflow          durable outer control flow
+  → node-owned Activity
+      → node app GraphExecutorPort
+          → node-owned LangGraph      AI reasoning/dataflow
 ```
 
-## Default: plain cron is a route
+The operator supplies the shared Temporal service, creates the environment-scoped node
+namespace, wires the private Worker, and deploys app plus Worker from one source SHA. The node
+owns Workflow and Activity code, its LangGraph catalog, schedule declarations, release, and
+health. Adding a node Workflow never requires a centralized Worker release.
 
-```ts
-export const metricsIngest = defineScheduledJob({
-  id: "metrics-ingest",
-  cron: "*/15 * * * *",
-  run: async (ctx) => {
-    /* the work, inline -- no node worker, no Temporal workflow code */
-  },
-});
+## Start with the working scaffold
+
+- `packages/workflows` contains replay-safe Temporal Workflows.
+- `services/workflow-worker` registers those Workflows and their Activities.
+- `packages/agent-workflow-runtime` contains only reusable Worker, schedule, and contract glue.
+- `packages/langgraph-graphs` contains node-owned LangGraph graphs.
+- `.cogni/repo-spec.yaml` declares the private Worker and recurring Workflow schedules.
+
+Node code imports `@temporalio/*` and `@langchain/langgraph` directly. The Cogni runtime package
+is deliberately thin: it supplies integration defaults, not a second orchestration framework.
+
+## Add a recurring Workflow
+
+1. Export a Workflow function from `packages/workflows`. Keep it deterministic: no network,
+   filesystem, database, environment, random, or wall-clock access in Workflow code.
+2. Put side effects in Activities. A graph Activity calls the app's private graph-run route so
+   execution continues through the existing `GraphExecutorPort`, billing, grant, idempotency,
+   and telemetry path.
+3. Add its stable type to the Worker catalog.
+4. Declare the schedule in `.cogni/repo-spec.yaml` with the explicit `workflow` target.
+5. Inspect the deployed substrate with `pnpm temporal:health -- --env candidate-a`.
+
+```yaml
+schedules:
+  - id: nightly-research
+    cron: "0 0 * * *"
+    timezone: UTC
+    workflow: ScheduledGraphWorkflow
+    payload:
+      graphId: "langgraph:research"
+      input:
+        messages: [{ role: user, content: "Research today's open question." }]
+        modelRef: { providerKey: platform, modelId: gpt-4o-mini }
 ```
 
-## Roadmap: durable multi-step and HITL
+The app reconciles only explicit `workflow` entries into the node namespace and stable
+`agent-workflows` Task Queue. Existing `graph` and `route` entries remain on the centralized
+compatibility lane until an explicit per-schedule migration; Worker presence never retargets
+them implicitly.
 
-The moment a workflow must carry durable state **between** graph/route steps, or **pause for a
-human** across hours or days, a single graph run is the wrong tool. That does **not** require
-a worker per node.
+## Release handshake
 
-The target is **one generic durable workflow engine on the shared worker** that interprets a
-node-supplied step list -- `run graph -> await human signal -> run graph -> branch` -- where:
+The Worker starts with deployment name `node-<nodeId>-workflows`, exact source SHA as Build ID,
+Worker Versioning enabled, and `PINNED` default behavior. Its private `/readyz` reports node ID,
+namespace, Task Queue, deployment, Build ID, registered Workflow types, and both poller states.
 
-- human waits are generic Temporal mechanics;
-- node-specific work still dispatches into the node as graph runs or routes;
-- a node defines its HITL workflow as data, not Temporal code.
+At startup the app:
 
-A **per-node worker** is the last resort for arbitrary custom durable logic the generic engine
-cannot express.
+1. verifies the private Worker identity and exact Build ID;
+2. waits until Temporal sees that Worker Deployment Version;
+3. makes and verifies that exact version current;
+4. reconciles full schedule action state with overlap `SKIP` and catchup `0`; and
+5. eagerly triggers a newly created schedule once, giving candidate validation immediate proof.
+
+Production remains fail-closed until Temporal enforces namespace-scoped authentication. The
+private Worker profile is candidate/preview-only during that boundary rollout.
+
+## One-call health
+
+`GET /api/v1/temporal/health` is authenticated and returns non-2xx unless the whole substrate is
+healthy. `pnpm temporal:health -- --env <env>` calls it with `COGNI_NODE_API_KEY` and exits
+non-zero on unhealthy, timeout, authentication failure, or malformed output.
+
+Healthy means all of the following are true:
+
+- the Workflow and Activity pollers are polling;
+- Worker node, namespace, queue, catalog, deployment, and Build ID match the app;
+- the exact Worker Deployment Version is current;
+- declared schedules exist without action drift; and
+- the latest eager/due Workflow completed successfully.
+
+The endpoint emits exactly one `substrate.temporal.health_checked` terminal event and bounded,
+low-cardinality metrics. It never returns prompts, tokens, credentials, or raw graph output.
 
 ## Rules
 
-- Use Temporal Schedules, not cron.
-- Schedule lifecycle belongs to app CRUD endpoints.
-- Tenancy lives in the schedule/workflow payload. Queue topology is shared-worker
-  infrastructure; do not create one worker per node by default.
-- AI runs inside graphs/activities, never in workflow code.
-- Dispatch is at-most-once for v0; make routes idempotent.
+- Temporal Schedules, never process cron.
+- AI work and external I/O live in Activities/graphs, never Workflow code.
+- Every Activity is idempotent under retry; graph calls use a stable idempotency key.
+- The app owns schedule reconciliation; the Worker never creates or updates schedules.
+- App and Worker ship from the same source SHA.
+- CI is qualification only. Completion requires `/validate-candidate`: exact `/version` SHA,
+  healthy deployed diagnostic, completed Workflow/graph run, and feature-specific Loki evidence.
 
 ## References
 
-- [substrate-temporal.md](../spec/substrate-temporal.md) -- shared-worker substrate.
-- [langgraph-patterns.md](../spec/langgraph-patterns.md) -- graph execution.
-- [temporal-patterns.md](../spec/temporal-patterns.md) -- deterministic workflow rules.
+- [substrate-temporal.md](../spec/substrate-temporal.md) — ownership and runtime topology.
+- [temporal-patterns.md](../spec/temporal-patterns.md) — replay, retries, schedules, versioning.
+- [langgraph-patterns.md](../spec/langgraph-patterns.md) — node graph execution boundary.

@@ -179,55 +179,41 @@ export async function IncidentRouterWorkflow(scope: string): Promise<void> {
 
 #### Node recurring work
 
-This is the canonical pattern for a node to run recurring or scheduled work on the Cogni
-Temporal substrate. The substrate is **one shared generic worker**. For normal recurring
-route/graph work, a node runs **no worker** and writes **no** Temporal workflow code.
+The canonical unit is a **durable agent workflow**: a node-owned Temporal Workflow containing
+node-owned LangGraph runs. The operator provisions the shared Temporal service, environment/node
+namespace, private Worker runtime wiring, and lifecycle. The node owns Workflow/Activity code,
+graphs, schedules, app+Worker release, and health.
 
-The model is three parts: **author -> create -> execute**.
+The model is **declare -> provision -> reconcile -> execute**:
 
-**1. Author** the node-owned work as a route or graph:
-
-- For AI work that fits one run, add a graph in `graphs/`.
-- For plain recurring work, add a route or use `defineScheduledJob`.
-- Optional repo-spec `schedules[]` is an infra-as-code declaration path, not the
-  runtime tenant create path.
-
-**2. Create.** Node users create schedules through the node app (`POST /api/v1/schedules`).
-`graphId` schedules start `GraphRunWorkflow`; `route` schedules start `NodeTaskWorkflow`.
-The node-direct target is that the node app holds its own Temporal client and creates the
-schedule itself. The long-term contract keeps the operator out of the create path.
-
-**3. Execute -- shared generic worker.** On each tick the shared worker runs the generic
-workflow under the node tenant identity. `NodeTaskWorkflow` calls the node route;
-`GraphRunWorkflow` runs the node graph. The node provides a route or graph, not custom
-workflow code.
+1. The node declares a private `cogni-workflow-worker-v1` service plus explicit `workflow`
+   schedules in repo-spec.
+2. The operator deploys app and Worker from one source SHA into namespace
+   `cogni-<env>-<nodeId>`.
+3. The app verifies the exact versioned Worker, activates it, and reconciles schedules on the
+   stable `agent-workflows` queue.
+4. The Worker runs replay-safe node Workflows; Activities call the app's private graph endpoint
+   so billing, grants, idempotency, persistence, and telemetry stay on `GraphExecutorPort`.
 
 ```
-schedule.create
-  route -> NodeTaskWorkflow
-  graph -> GraphRunWorkflow
-
-NodeTaskWorkflow
-  scheduledFor = TemporalScheduledStartTime
-  -> dispatchNodeTaskActivity: POST {nodeUrl}{route}
-     Idempotency-Key: {nodeId}/{scheduleId}/{scheduledFor}
+repo-spec workflow schedule
+  -> node app reconcile
+  -> node namespace / agent-workflows
+  -> node private Worker / exact source SHA
+  -> node Workflow
+     -> graph Activity: POST http://app/api/internal/graphs/<graphId>/runs
+        Idempotency-Key: <scheduleId>:<workflowStartTime>
 ```
 
-The route must dedup on the idempotency key. A key the receiver ignores does not make a POST
-idempotent.
+The app must dedup the idempotency key. A header the receiver ignores does not make a retry safe.
+Workflow code performs no I/O; AI and side effects live in Activities/graphs.
 
-Queue topology is shared-worker infrastructure. Tenancy is carried in workflow input; the
-target is a bounded set of workload queues, not one queue or worker per node. Transitional
-per-node queues may exist during migration and as the sovereign escape hatch.
+#### Compatibility cutover
 
-#### Durable multi-step / HITL roadmap
-
-If recurring work needs durable state **between** route/graph steps -- signals, long human
-waits, or multi-step orchestration that cannot honestly be collapsed into one graph run --
-the target is a generic shared-worker step-list engine, not a per-node worker by default.
-
-Use a per-node worker only when the generic engine cannot express the workflow. It is opt-in
-and never the node-template default.
+Existing schedule entries with `graph` or `route` targets remain on the centralized generic
+Worker. In P0 only an explicit `workflow` target enters the sovereign lane. Adding a private
+Worker never retargets existing schedules. Each later sugar migration is a deliberate,
+versioned per-schedule cutover.
 
 #### Standard Schedule Setup
 
