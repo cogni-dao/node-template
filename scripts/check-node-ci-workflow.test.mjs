@@ -168,8 +168,8 @@ const CASES = [
     name: "deleting a registry entry while its tag filter remains is rejected",
     mutate: edit(
       ".github/workflows/publish-packages.yml",
-      '"knowledge-store-v"},\n     {"name":"@cogni-dao/knowledge-base","dir":"packages/knowledge-base","tagPrefix":"knowledge-base-v"}]',
-      '"knowledge-store-v"}]'
+      '"knowledge-store-v"},\n     {"name":"@cogni-dao/knowledge-base","dir":"packages/knowledge-base","tagPrefix":"knowledge-base-v"},\n     {"name":"@cogni-dao/agent-workflow-runtime","dir":"packages/agent-workflow-runtime","tagPrefix":"agent-workflow-runtime-v"}]',
+      '"knowledge-store-v"},\n     {"name":"@cogni-dao/agent-workflow-runtime","dir":"packages/agent-workflow-runtime","tagPrefix":"agent-workflow-runtime-v"}]'
     ),
     expectExit: 1,
     expectMatch: /tag filter "knowledge-base-v\*" matches no env\.PACKAGES entry/,
