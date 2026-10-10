@@ -93,11 +93,12 @@ export async function activateExactWorkerDeployment(input: {
       ? `${info.routingConfig.currentDeploymentVersion.deploymentName}.${info.routingConfig.currentDeploymentVersion.buildId}`
       : undefined);
   if (currentVersion !== version) {
+    const conflictToken = description.conflictToken;
     await service.setWorkerDeploymentCurrentVersion({
       namespace: input.namespace,
       deploymentName: input.deploymentName,
       version,
-      conflictToken: description.conflictToken,
+      ...(conflictToken ? { conflictToken } : {}),
     });
     for (let attempt = 0; attempt < 10; attempt++) {
       const verified = await inspectWorkerDeployment(input);
