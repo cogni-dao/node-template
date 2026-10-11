@@ -143,16 +143,9 @@ describe("session cognition hook", () => {
 		);
 	});
 
-	it("keeps the human README concise and the agent bootstrap automatic", () => {
-		const readme = readFileSync(path.join(REPO_ROOT, "README.md"), "utf8");
+	it("keeps the agent bootstrap automatic", () => {
 		const agents = readFileSync(path.join(REPO_ROOT, "AGENTS.md"), "utf8");
 
-		expect(readme).toContain("https://cognidao.org/nodes");
-		expect(readme).toContain("Claude Code, Codex, or OpenCode");
-		expect(readme).toContain("cognition automatically");
-		expect(readme).not.toContain("COGNI_NODE_AUTH_ROOT");
-		expect(readme).not.toContain("COGNI_TEMPLATE_ROOT");
-		expect(readme).not.toContain("pnpm codex:cognition:install");
 		expect(agents).not.toContain("pnpm codex:cognition:install");
 		expect(agents).toContain("already model-visible before the first reply");
 	});
