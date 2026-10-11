@@ -5,7 +5,7 @@
 ## Metadata
 
 - **Owners:** @derek @core-dev
-- **Last reviewed:** 2026-10-02
+- **Last reviewed:** 2026-10-11
 - **Status:** draft
 
 ## Purpose
@@ -69,6 +69,7 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
   - `/api/v1/agent/register` [POST] - unauthenticated machine actor registration (returns Bearer API key)
   - `/api/v1/agent/runs` [GET] - machine-authenticated run list
   - `/api/v1/agent/runs/[runId]/stream` [GET] - machine-authenticated run stream SSE
+  - `/api/v1/temporal/health` [GET] - authenticated, read-only shared-worker artifact and server-observed poller proof
   - `/api/v1/ai/runs/[runId]/ui-stream` [GET] - session-authenticated AI SDK chat replay stream
 - **Files considered API:** v1/_/route.ts, admin/_/route.ts
 
