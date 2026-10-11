@@ -57,7 +57,7 @@ Ensure all Temporal workflows are replay-safe, Workflow code performs no I/O dir
 
 6. **OVERLAP_SKIP_DEFAULT**: Schedules use `overlap: 'SKIP'` by default. Only one workflow instance per schedule runs at a time.
 
-7. **CATCHUP_WINDOW_MINIMUM**: P0 minimizes backfill with Temporal's minimum positive `catchupWindow: 10s`. Zero means “unset” and expands to the server default (normally one year), so zero is forbidden.
+7. **CATCHUP_WINDOW_ZERO**: P0 does not backfill missed runs. Set `catchupWindow: 0` to skip missed slots.
 
 8. **CRUD_AUTHORITY**: Schedule lifecycle (create/update/pause/delete) is owned by CRUD endpoints, not workers. Workers only execute workflows fired by Temporal.
 
@@ -179,41 +179,55 @@ export async function IncidentRouterWorkflow(scope: string): Promise<void> {
 
 #### Node recurring work
 
-The canonical unit is a **durable agent workflow**: a node-owned Temporal Workflow containing
-node-owned LangGraph runs. The operator provisions the shared Temporal service, environment/node
-namespace, private Worker runtime wiring, and lifecycle. The node owns Workflow/Activity code,
-graphs, schedules, app+Worker release, and health.
+This is the canonical pattern for a node to run recurring or scheduled work on the Cogni
+Temporal substrate. The substrate is **one shared generic worker**. For normal recurring
+route/graph work, a node runs **no worker** and writes **no** Temporal workflow code.
 
-The model is **declare -> provision -> reconcile -> execute**:
+The model is three parts: **author -> create -> execute**.
 
-1. The node declares a private `cogni-workflow-worker-v1` service plus explicit `workflow`
-   schedules in repo-spec.
-2. The operator deploys app and Worker from one source SHA into namespace
-   `cogni-<env>-<nodeId>`.
-3. The app verifies the exact versioned Worker, activates it, and reconciles schedules on the
-   stable `agent-workflows` queue.
-4. The Worker runs replay-safe node Workflows; Activities call the app's private graph endpoint
-   so billing, grants, idempotency, persistence, and telemetry stay on `GraphExecutorPort`.
+**1. Author** the node-owned work as a route or graph:
+
+- For AI work that fits one run, add a graph in `graphs/`.
+- For plain recurring work, add a route or use `defineScheduledJob`.
+- Optional repo-spec `schedules[]` is an infra-as-code declaration path, not the
+  runtime tenant create path.
+
+**2. Create.** Node users create schedules through the node app (`POST /api/v1/schedules`).
+`graphId` schedules start `GraphRunWorkflow`; `route` schedules start `NodeTaskWorkflow`.
+The node-direct target is that the node app holds its own Temporal client and creates the
+schedule itself. The long-term contract keeps the operator out of the create path.
+
+**3. Execute -- shared generic worker.** On each tick the shared worker runs the generic
+workflow under the node tenant identity. `NodeTaskWorkflow` calls the node route;
+`GraphRunWorkflow` runs the node graph. The node provides a route or graph, not custom
+workflow code.
 
 ```
-repo-spec workflow schedule
-  -> node app reconcile
-  -> node namespace / agent-workflows
-  -> node private Worker / exact source SHA
-  -> node Workflow
-     -> graph Activity: POST http://app/api/internal/graphs/<graphId>/runs
-        Idempotency-Key: <scheduleId>:<workflowStartTime>
+schedule.create
+  route -> NodeTaskWorkflow
+  graph -> GraphRunWorkflow
+
+NodeTaskWorkflow
+  scheduledFor = TemporalScheduledStartTime
+  -> dispatchNodeTaskActivity: POST {nodeUrl}{route}
+     Idempotency-Key: {nodeId}/{scheduleId}/{scheduledFor}
 ```
 
-The app must dedup the idempotency key. A header the receiver ignores does not make a retry safe.
-Workflow code performs no I/O; AI and side effects live in Activities/graphs.
+The route must dedup on the idempotency key. A key the receiver ignores does not make a POST
+idempotent.
 
-#### Compatibility cutover
+Queue topology is shared-worker infrastructure. Tenancy is carried in workflow input; the
+target is a bounded set of workload queues, not one queue or worker per node. Transitional
+per-node queues may exist during migration and as the sovereign escape hatch.
 
-Existing schedule entries with `graph` or `route` targets remain on the centralized generic
-Worker. In P0 only an explicit `workflow` target enters the sovereign lane. Adding a private
-Worker never retargets existing schedules. Each later sugar migration is a deliberate,
-versioned per-schedule cutover.
+#### Durable multi-step / HITL roadmap
+
+If recurring work needs durable state **between** route/graph steps -- signals, long human
+waits, or multi-step orchestration that cannot honestly be collapsed into one graph run --
+the target is a generic shared-worker step-list engine, not a per-node worker by default.
+
+Use a per-node worker only when the generic engine cannot express the workflow. It is opt-in
+and never the node-template default.
 
 #### Standard Schedule Setup
 
@@ -233,7 +247,7 @@ await temporalClient.schedule.create({
   },
   policies: {
     overlap: ScheduleOverlapPolicy.SKIP,
-    catchupWindow: "10s", // Temporal's minimum positive window
+    catchupWindow: "0s", // No backfill in P0
   },
 });
 ```
@@ -420,7 +434,7 @@ This violates ONE_RUN_EXECUTION_PATH. The graph run is invisible to the dashboar
 
 1. Verify all Workflow code contains no I/O — only Activity calls, conditionals, and deterministic transforms
 2. Verify all Activities are idempotent (check for idempotency keys on side effects)
-3. Verify schedules use `overlap: SKIP` and `catchupWindow: 10s`
+3. Verify schedules use `overlap: SKIP` and `catchupWindow: 0`
 
 **Automated:**
 

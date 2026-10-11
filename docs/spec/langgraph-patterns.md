@@ -50,11 +50,6 @@ Define the package boundaries, execution paths, and invariants that govern LangG
 
 9. **NO_PARALLEL_REQUEST_TYPES**: Providers use `GraphRunRequest`/`GraphRunResult` from `@/ports`.
 
-10. **TEMPORAL_OUTER_LANGGRAPH_INNER**: A scheduled or durable agent product is a Temporal
-    Workflow whose Activities invoke LangGraph through `GraphExecutorPort`. LangGraph owns AI
-    reasoning/dataflow within a run; Temporal owns retries, timers, signals, and cross-run state.
-    Workflow code never imports graph implementations or performs model/network I/O directly.
-
 ## Design
 
 ### Architecture Contract
@@ -76,15 +71,6 @@ Define the package boundaries, execution paths, and invariants that govern LangG
 | **Server** | `LangGraphServerAdapter`      | External LangGraph Server container                  |
 
 All AI execution flows through `GraphExecutorPort`. The executor choice is an implementation detail behind the unified interface.
-
-### Durable agent workflows
-
-“AI graph” names only the inner reasoning program. The deployable, scheduled product unit is a
-**durable agent workflow**: node-owned Temporal orchestration around one or more node-owned graph
-runs. A graph Activity calls the node app's private graph-run endpoint, preserving the single
-billing, grant, idempotency, persistence, and telemetry path. See
-[Temporal Substrate](./substrate-temporal.md) and
-[Temporal Patterns](./temporal-patterns.md).
 
 ### Package Structure
 
