@@ -5,7 +5,7 @@
  * Module: `@tests/meta/cognition-bootstrap`
  * Purpose: Guard the uncapped, single-presenter SessionStart contract (story.5070).
  * Scope: Repo config plus hermetic loader/legacy-installer subprocesses.
- * Invariants: NO_CODEX_SPILL, UNCAPPED_BOTH_CHANNELS, INSTALLER_RECONCILES.
+ * Invariants: NATIVE_HARNESS_CHANNELS, NO_CODEX_SPILL, INSTALLER_RECONCILES.
  * Side-effects: Temporary files under the OS temp directory only.
  * Links: .codex/config.toml, scripts/agent/session-cognition.sh
  * @public
@@ -46,30 +46,6 @@ function fixture(): string {
 	const dir = mkdtempSync(path.join(tmpdir(), "cogni-bootstrap-"));
 	fixtures.push(dir);
 	return dir;
-}
-
-// The text the agent actually receives, regardless of which channel the loader
-// used: Claude Code structured JSON (hookSpecificOutput.additionalContext) or
-// Codex raw stdout. Lets a content assertion stay channel-agnostic.
-function surfaced(hookStdout: string): string {
-	try {
-		const parsed = JSON.parse(hookStdout);
-		const ctx = parsed?.hookSpecificOutput?.additionalContext;
-		if (typeof ctx === "string") return ctx;
-	} catch {
-		// Not JSON ⇒ raw stdout channel (Codex).
-	}
-	return hookStdout;
-}
-
-// True iff the loader used the Claude Code structured additionalContext channel.
-function usedAdditionalContextChannel(hookStdout: string): boolean {
-	try {
-		const parsed = JSON.parse(hookStdout);
-		return typeof parsed?.hookSpecificOutput?.additionalContext === "string";
-	} catch {
-		return false;
-	}
 }
 
 afterEach(() => {
@@ -123,29 +99,35 @@ describe("session cognition hook", () => {
 			encoding: "utf8",
 		});
 
-		// CODEX_THREAD_ID="" ⇒ Claude Code path ⇒ structured JSON channel.
-		expect(usedAdditionalContextChannel(output)).toBe(true);
-		expect(surfaced(output)).toBe("live cognition");
+		// Claude imports the cache through CLAUDE.md; its SessionStart hook only
+		// refreshes the file and must not duplicate a partial stdout preview.
+		expect(output).toBe("");
 		expect(readFileSync(cache, "utf8")).toBe("live cognition\n");
 	});
 
-	it("disables Codex's spill and caps neither delivery channel (story.5070)", () => {
+	it("uses one native, uncapped channel per supported harness (story.5070)", () => {
 		const config = readFileSync(
 			path.join(REPO_ROOT, ".codex/config.toml"),
 			"utf8",
 		);
+		const claude = readFileSync(path.join(REPO_ROOT, "CLAUDE.md"), "utf8");
+		const opencode = JSON.parse(
+			readFileSync(path.join(REPO_ROOT, "opencode.json"), "utf8"),
+		) as { instructions?: string[] };
 		const loader = readFileSync(LOADER, "utf8");
 
 		expect(config).toContain("additionalContextLimit = 0");
 		expect(config).toContain("git rev-parse --show-toplevel");
+		expect(claude).toContain("@AGENTS.md");
+		expect(claude).toContain("@.cogni/.cognition-cache.md");
+		expect(opencode.instructions).toContain(CACHE_PATH);
 		// No producer-side byte ceiling survives on either channel.
 		expect(loader).not.toContain("SESSION_COGNITION_MAX_BYTES");
 		expect(loader).not.toContain("bundle_fits_budget");
 		expect(loader).not.toContain("oversized_bundle_notice");
-		// The loader routes through the channel-aware emitter.
+		// Only Codex consumes hook stdout; Claude's hook is write-only.
 		expect(loader).toContain("emit_agent_context");
-		expect(loader).toContain("hookSpecificOutput");
-		expect(loader).toContain("additionalContext");
+		expect(loader).not.toContain("hookSpecificOutput");
 	});
 
 	it("installs the stable user presenter during local Conductor setup", () => {
@@ -161,17 +143,21 @@ describe("session cognition hook", () => {
 		);
 	});
 
-	it("documents the node-owned Conductor bootstrap without a monorepo auth root", () => {
+	it("keeps the human README concise and the agent bootstrap automatic", () => {
 		const readme = readFileSync(path.join(REPO_ROOT, "README.md"), "utf8");
 		const agents = readFileSync(path.join(REPO_ROOT, "AGENTS.md"), "utf8");
 
-		expect(readme).toContain("COGNI_NODE_AUTH_ROOT");
+		expect(readme).toContain("https://cognidao.org/nodes");
+		expect(readme).toContain("Claude Code, Codex, or OpenCode");
+		expect(readme).toContain("cognition automatically");
+		expect(readme).not.toContain("COGNI_NODE_AUTH_ROOT");
 		expect(readme).not.toContain("COGNI_TEMPLATE_ROOT");
-		expect(readme).toContain("stable user-level\nCodex cognition presenter");
-		expect(agents).toContain("pnpm codex:cognition:install");
+		expect(readme).not.toContain("pnpm codex:cognition:install");
+		expect(agents).not.toContain("pnpm codex:cognition:install");
+		expect(agents).toContain("already model-visible before the first reply");
 	});
 
-	it("surfaces a cache verbatim on both channels and never rejects an oversized one (story.5070)", () => {
+	it("presents only to Codex while Claude reads the complete cache import (story.5070)", () => {
 		const root = fixture();
 		const noUserHook = path.join(root, "no-user-hook");
 		const env = {
@@ -186,14 +172,13 @@ describe("session cognition hook", () => {
 			path.join(small, ".cogni/.cognition-cache.md"),
 			"complete cognition\n",
 		);
-		// Claude Code path: surfaced verbatim through the structured channel.
+		// Claude Code path: write-only hook; CLAUDE.md owns presentation.
 		const smallOut = execFileSync("bash", [LOADER], {
 			cwd: small,
 			env,
 			encoding: "utf8",
 		});
-		expect(usedAdditionalContextChannel(smallOut)).toBe(true);
-		expect(surfaced(smallOut)).toBe("complete cognition");
+		expect(smallOut).toBe("");
 
 		// Codex path: raw stdout verbatim (its spill is disabled in config).
 		expect(
@@ -217,9 +202,8 @@ describe("session cognition hook", () => {
 			}),
 		).toBe("");
 
-		// story.5070 regression: a bundle past the former 16 KB cap must surface
-		// WHOLE through the Claude Code structured channel — never truncated or
-		// rejected. This is the assertion the original bug.5284 ceiling got backwards.
+		// story.5070 regression: a bundle past the former 16 KB cap remains whole
+		// in the cache Claude imports; the write-only hook never emits a preview.
 		const overCapBytes = FORMER_CAP_BYTES + 1000;
 		const large = path.join(root, "large");
 		mkdirSync(path.join(large, ".cogni"), { recursive: true });
@@ -232,8 +216,10 @@ describe("session cognition hook", () => {
 			env,
 			encoding: "utf8",
 		});
-		expect(usedAdditionalContextChannel(largeOut)).toBe(true);
-		expect(surfaced(largeOut)).toHaveLength(overCapBytes);
+		expect(largeOut).toBe("");
+		expect(readFileSync(path.join(large, CACHE_PATH), "utf8")).toHaveLength(
+			overCapBytes,
+		);
 		expect(largeOut).not.toContain("bundle rejected before injection");
 	});
 
