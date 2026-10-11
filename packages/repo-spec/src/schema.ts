@@ -149,7 +149,7 @@ export type GovernanceSpec = z.infer<typeof governanceSpecSchema>;
  *     is inferred from which field is present.
  *   - PLATFORM_OVERLAP_AND_CATCHUP: `overlap`/`catchupWindow` are NOT node-facing.
  *     They are platform invariants the operator fixes (OVERLAP_SKIP_DEFAULT /
- *     CATCHUP_WINDOW_ZERO). The schema does not accept them — a node cannot tune them.
+ *     CATCHUP_WINDOW_MINIMUM). The schema does not accept them — a node cannot tune them.
  *   - ROUTE_IS_RELATIVE: `route` is a relative path on the node's own resolved host
  *     (operator allow-lists it to the node's nodeUrl — never an absolute/foreign URL).
  *   - PAYLOAD_OPAQUE: `payload` is opaque to the operator; the node's route owns its
