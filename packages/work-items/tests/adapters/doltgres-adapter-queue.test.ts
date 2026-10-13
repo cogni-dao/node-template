@@ -180,7 +180,7 @@ describe("DoltgresWorkItemAdapter operation queue", () => {
     ).toBe(false);
   });
 
-  it("keeps the default queue wait bounded at 30 seconds", async () => {
+  it("keeps the default queue wait bounded at 90 seconds", async () => {
     const { adapter, queries, releaseHeartbeat } =
       makeBlockedHeartbeatAdapter();
     const heartbeat = adapter.heartbeat({
@@ -204,7 +204,7 @@ describe("DoltgresWorkItemAdapter operation queue", () => {
         }
       );
 
-      await vi.advanceTimersByTimeAsync(29_999);
+      await vi.advanceTimersByTimeAsync(89_999);
       expect(readOutcome).toBe("pending");
       expect(queries).toHaveLength(queryCountBeforeQueuedRead);
 
