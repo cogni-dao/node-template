@@ -45,14 +45,27 @@ const OP_BRANCH_PREFIX = "work-item-op/";
  * its commits stay byte-for-byte intact and inspectable.
  */
 const QUARANTINE_BRANCH_PREFIX = "work-item-quarantine/";
-const LOCK_WAIT_MS = 2_000;
-const LOCK_RETRY_MS = 50;
-const OPERATION_QUEUE_WAIT_MS = 30_000;
-const QUERY_TIMEOUT_MS = 5_000;
 /**
- * Budget for REF HOUSEKEEPING — `dolt_branch` create/delete/rename. Six times
- * the DML budget, because these are not DML and they do not share its failure
- * mode.
+ * Production Dolt operations routinely occupy the shared writer for 19-33s
+ * and have reached 75s under ordinary load. Admission must wait longer than a
+ * healthy predecessor; a 2s lock budget mislabeled normal serialization as a
+ * replica failure.
+ */
+const LOCK_WAIT_MS = 90_000;
+const LOCK_RETRY_MS = 50;
+const OPERATION_QUEUE_WAIT_MS = 90_000;
+/**
+ * The old 5s stage deadline killed healthy `dolt_merge` and read operations.
+ * Production on 2026-10-13 recorded successful work-item writes at 23.9s and
+ * failures at `merge.apply`, `sql.other`, and `dml.read` solely because those
+ * stages crossed 5s. Keep a bounded deadline, but place it above measured
+ * healthy stage latency.
+ */
+const QUERY_TIMEOUT_MS = 30_000;
+/**
+ * Budget for REF HOUSEKEEPING — `dolt_branch` create/delete/rename. This stays
+ * longer than the DML budget because these are not DML and they do not share
+ * its failure mode.
  *
  * Measured on operator production 2026-10-09: with one budget for everything,
  * `dolt_branch` exceeded 5s under load, `terminateClient` destroyed the pool,
@@ -65,7 +78,7 @@ const QUERY_TIMEOUT_MS = 5_000;
  * delete of an operation ref mutates no rows, so the only thing a timeout buys
  * is a destroyed connection and an orphaned ref.
  */
-const BRANCH_TIMEOUT_MS = 30_000;
+const BRANCH_TIMEOUT_MS = 90_000;
 /**
  * Stages that move REFS or SESSION STATE and write no rows — see
  * BRANCH_TIMEOUT_MS. `branch.create` is `dolt_checkout('-b', …)` and
@@ -88,7 +101,7 @@ const BRANCH_HOUSEKEEPING_STAGES = new Set([
   "branch.delete",
   "main.checkout",
 ]);
-const RESERVE_TIMEOUT_MS = 5_000;
+const RESERVE_TIMEOUT_MS = 15_000;
 
 /**
  * What a locked scope owes when it meets an operation branch it cannot prove.
@@ -114,8 +127,8 @@ export interface DoltgresWorkItemAdapterOptions {
   readonly queueWaitMs?: number;
   readonly queryTimeoutMs?: number;
   /**
-   * Budget for `dolt_branch` ref housekeeping. Defaults to 6× `queryTimeoutMs`'s
-   * default; see BRANCH_TIMEOUT_MS for why it is separate.
+   * Budget for `dolt_branch` ref housekeeping. Defaults above the query-stage
+   * budget; see BRANCH_TIMEOUT_MS for why it is separate.
    */
   readonly branchTimeoutMs?: number;
   readonly reserveTimeoutMs?: number;
