@@ -1,6 +1,6 @@
 ---
 name: knowledge-syntropy-expert
-description: Authoritative planner for Cogni knowledge hubs — Dolt-backed, compounding, agent-first knowledge stores per node, each node growing into a decentralized subject-matter expert for its niche. Use whenever designing, curating, refining, or debugging a hub — adding entries/domains/entry-types, reviewing a contribution, deciding what becomes a knowledge block vs a skill vs code, sequencing roadmap work, choosing UI shape, or arbitrating "more docs vs more code." Holds the syntropy-vs-sprawl line and the refine-over-extend rule.
+description: Authoritative planner for Cogni knowledge hubs — Dolt-backed, compounding, agent-first knowledge stores per node, each node growing into a decentralized subject-matter expert for its niche. Use whenever designing, curating, refining, or debugging a hub — adding entries/domains/entry-types, reviewing a contribution, deciding what becomes a knowledge block vs a skill vs code, sequencing roadmap work, choosing UI shape, or arbitrating "more docs vs more code." Holds the syntropy-vs-sprawl line and the refine-over-extend rule. It is the single steward skill for the ongoing .md-to-hub knowledge migration — load it to know where any piece of knowledge belongs.
 ---
 
 # knowledge-syntropy-expert
@@ -12,6 +12,17 @@ description: Authoritative planner for Cogni knowledge hubs — Dolt-backed, com
 Each Cogni node grows into the subject-matter expert for a specific niche community and mission. The knowledge hub is how that expertise compounds — agent skills + AI/human guides + wiki-style references + architectural docs, all in one Dolt-backed store. Most nodes start dolt-only; services arrive when the niche demands them. The cogni monorepo + node-template are the founding building blocks — fork the patterns, fork the hub, grow syntropy independently per niche.
 
 End state: open-core today, optionally privileged/paywalled tomorrow. Agents are first-class consumers. Cross-node federation and x402-gated retrieval are deliberate destinations, not afterthoughts. Every claim is attributable end-to-end — lineage is foundational for cross-node reputation and downstream equity mechanics.
+
+## North star: `.md` → hub (this skill is the steward)
+
+Durable knowledge is migrating out of git `.md` and into the hub, where agents recall it and humans scan it:
+
+- **Skills become thin triggers** that recall from the hub — pattern: [`observability`](../observability/SKILL.md) ("the contract lives in the hub, not here").
+- **Design, rationale, and references are hub entries** — an agent-facing text entry (`finding`/`conclusion`/`rule`) **plus** a human-facing `entryType: html` visual (via [`dolt-human-visuals`](../dolt-human-visuals/SKILL.md)), authored through [`contribute-knowledge-to-cogni`](../contribute-knowledge-to-cogni/SKILL.md). A `/design` run produces both.
+- **`docs/spec/*` is a migration target, not an exception** — specs are not break-glass; their design narrative moves to the hub, while contracts/invariants/acceptance stay until a spec is migrated.
+- **The only full-content `.md` that remain are break-glass** — they must render with the hub down: the code-owned session constitution (`AGENTS.md` + the cognition cache), hub-recovery, `docs/runbooks/*`, and these skill trigger stubs.
+
+As **steward**, when you touch a `.md` that holds durable knowledge, RECALL/REFINE it into the hub and leave a pointer, rather than extending the `.md`. Track this node's migration progress as a hub entry (`entryType: html`), never a `.md` — tracking the migration in a `.md` would be the exact anti-pattern it exists to kill.
 
 ## What makes knowledge valuable
 
