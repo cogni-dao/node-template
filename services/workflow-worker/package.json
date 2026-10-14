@@ -1,0 +1,27 @@
+{
+  "name": "@cogni/node-template-workflow-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "start": "node dist/index.js",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@cogni-dao/agent-workflow-runtime": "workspace:*",
+    "@cogni/node-template-workflows": "workspace:*",
+    "@temporalio/activity": "1.17.5",
+    "@temporalio/common": "1.17.5",
+    "@temporalio/worker": "1.17.5",
+    "pino": "10.1.0",
+    "zod": "3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "tsup": "^8.5.1",
+    "typescript": "^5",
+    "vitest": "^4.0.9"
+  }
+}

@@ -9,7 +9,7 @@
  *   - Per CRUD_IS_TEMPORAL_AUTHORITY: Only CRUD endpoints and governance sync use this adapter
  *   - Per WORKER_NEVER_CONTROLS_SCHEDULES: Worker must not depend on this
  *   - Per OVERLAP_SKIP_DEFAULT: Schedules use overlap=SKIP
- *   - Per CATCHUP_WINDOW_ZERO: No backfill (catchupWindow=0)
+ *   - Per CATCHUP_WINDOW_MINIMUM: Governance uses Temporal's minimum positive 10s catchup window
  *   - updateSchedule preserves existing state (pause, notes) via previous.state
  *   - describeSchedule extracts input + dbScheduleId from action.args[0]; cron returns null (compiled to calendars by Temporal)
  * Side-effects: IO (Temporal RPC calls)
@@ -66,7 +66,7 @@ function toTemporalOverlapPolicy(
 
 /**
  * Temporal implementation of ScheduleControlPort.
- * Per TEMPORAL_PATTERNS.md: overlap=SKIP, catchupWindow=0 hardcoded.
+ * Per TEMPORAL_PATTERNS.md: governance passes overlap=SKIP and catchupWindow=10s.
  */
 export class TemporalScheduleControlAdapter implements ScheduleControlPort {
   private client: Client | null = null;

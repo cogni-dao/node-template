@@ -279,7 +279,7 @@ export async function syncGovernanceSchedules(
       executionGrantId: grantId,
       input: desiredInput,
       overlapPolicy: "skip",
-      catchupWindowMs: 0,
+      catchupWindowMs: 10_000,
       workflowType,
       taskQueueOverride,
     };

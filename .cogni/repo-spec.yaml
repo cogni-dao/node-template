@@ -83,6 +83,25 @@ gates:
     with:
       rule_file: repo-goal-alignment.yaml
 
+# Node-owned durable agent workflow. The app reconciles this Workflow into the
+# node's private Temporal namespace only after its exact-SHA Worker is polling.
+schedules:
+  - id: node-template-daily-poem
+    cron: "0 0 * * *"
+    timezone: UTC
+    workflow: ScheduledGraphWorkflow
+    payload:
+      graphId: "langgraph:poet"
+      input:
+        messages:
+          - role: user
+            content: "Write one short poem about trustworthy community software."
+        modelRef:
+          providerKey: platform
+          # agent-api-validation.md: bare default_free id; fresh node agents
+          # require no wallet funding or credit top-up for the proof run.
+          modelId: gpt-oss-120b
+
 # Akash lane (story.5016). Declares WHAT this node runs so the operator can
 # render a provider-neutral workload. Emitted verbatim by
 # `renderNodeDeploymentYaml()` in @cogni/repo-spec -- the SAME renderer the node
@@ -105,3 +124,21 @@ deployment:
         cpu_units: 2
         memory_mi: 2048
         storage_mi: 4096
+    - name: workflow-worker
+      artifact:
+        name: workflow-worker
+        context: .
+        dockerfile: Dockerfile
+        target: workflow-worker
+      port: 9100
+      visibility: private
+      envs: [candidate-a]
+      runtime_profile: cogni-workflow-worker-v1
+      bindings: {}
+      secret_refs:
+        - key: SCHEDULER_API_TOKEN
+      bind_host: 0.0.0.0
+      resources:
+        cpu_units: 1
+        memory_mi: 1024
+        storage_mi: 1024

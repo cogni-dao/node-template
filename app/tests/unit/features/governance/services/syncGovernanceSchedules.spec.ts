@@ -160,7 +160,7 @@ describe("syncGovernanceSchedules", () => {
         executionGrantId: GRANT_ID,
         input: { message: "COMMUNITY", model: "kimi-k2.5" },
         overlapPolicy: "skip",
-        catchupWindowMs: 0,
+        catchupWindowMs: 10_000,
       })
     );
   });

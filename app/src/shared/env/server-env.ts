@@ -216,6 +216,15 @@ export const serverSchema = z.object({
   TEMPORAL_NAMESPACE: z.string().min(1), // e.g., "cogni-test" or "cogni-production"
   TEMPORAL_TASK_QUEUE: z.string().default("scheduler-tasks"),
 
+  // Node-owned durable agent workflows. The full set is optional so legacy
+  // route/graph schedules continue on the compatibility worker unchanged.
+  AGENT_WORKFLOW_TEMPORAL_ADDRESS: optionalString,
+  AGENT_WORKFLOW_TEMPORAL_NAMESPACE: optionalString,
+  AGENT_WORKFLOW_TEMPORAL_TASK_QUEUE: z
+    .literal("agent-workflows")
+    .default("agent-workflows"),
+  AGENT_WORKFLOW_WORKER_HEALTH_URL: optionalUrl,
+
   // Scheduler-worker health check URL
   // Used by /readyz to verify scheduler-worker is ready before stack tests
   // Default: http://scheduler-worker:9000 (Docker network)

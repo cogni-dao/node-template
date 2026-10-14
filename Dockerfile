@@ -18,6 +18,7 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY --parents app/package.json ./
 COPY --parents packages/*/package.json ./
 COPY --parents graphs/package.json ./
+COPY --parents services/*/package.json ./
 
 # Use official node dist to avoid unofficial-builds.nodejs.org flakiness
 ENV npm_config_disturl=https://nodejs.org/dist
@@ -44,6 +45,7 @@ ENV NEXT_TELEMETRY_DISABLED=1 \
 
 # Build workspace packages whose exports point at dist/.
 RUN pnpm build:packages
+RUN pnpm build:services
 
 # Build-time placeholder for AUTH_SECRET (required by env validation during Next.js page collection)
 # Not a real secret; runtime containers must provide real AUTH_SECRET via deployment env
@@ -141,3 +143,31 @@ HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3 \
   CMD curl -fsS http://localhost:3200/livez || exit 1
 
 CMD ["node", "app/server.js"]
+
+# Node-owned Temporal Worker — same source SHA as the app, separate process and
+# private health surface. The app activates this exact version before schedule sync.
+FROM node:22-alpine AS workflow-worker
+WORKDIR /app
+
+RUN addgroup --system --gid 1001 nodejs \
+  && adduser --system --uid 1001 workflow \
+  && apk add --no-cache curl
+
+ENV NODE_ENV=production \
+    HOST=0.0.0.0 \
+    PORT=9100 \
+    SERVICE_NAME=workflow-worker
+
+COPY --from=builder --chown=workflow:nodejs /app/node_modules ./node_modules
+COPY --from=builder --chown=workflow:nodejs /app/packages/agent-workflow-runtime ./packages/agent-workflow-runtime
+COPY --from=builder --chown=workflow:nodejs /app/packages/workflows ./packages/workflows
+COPY --from=builder --chown=workflow:nodejs /app/services/workflow-worker ./services/workflow-worker
+
+ARG BUILD_SHA
+ENV APP_BUILD_SHA=$BUILD_SHA
+
+USER workflow
+EXPOSE 9100
+HEALTHCHECK --interval=10s --timeout=5s --start-period=20s --retries=3 \
+  CMD curl -fsS http://localhost:9100/readyz || exit 1
+CMD ["node", "services/workflow-worker/dist/index.js"]

@@ -54,7 +54,7 @@ export interface CreateScheduleParams {
   readonly input: JsonValue;
   /** Overlap policy hint. Default: "buffer_one" for tenant schedules. Governance sync passes "skip". */
   readonly overlapPolicy?: ScheduleOverlapPolicyHint;
-  /** Catchup window in milliseconds. Default: 60_000 (1m). Governance passes 0. */
+  /** Catchup window in milliseconds. Default: 60_000 (1m). Governance passes Temporal's 10s minimum. */
   readonly catchupWindowMs?: number;
   /** Workflow type to start (default: GraphRunWorkflow) */
   readonly workflowType?: string;

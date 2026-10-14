@@ -29,6 +29,7 @@ import {
 	extractNodeHook,
 	extractNodeMission,
 	extractNodeName,
+	extractNodeSchedules,
 	extractNodeThumbnail,
 	extractOperatorWalletConfig,
 	extractPaymentConfig,
@@ -37,6 +38,7 @@ import {
 	type InboundPaymentConfig,
 	type LedgerConfig,
 	type OperatorWalletSpec,
+	type NodeScheduleConfig,
 	parseRepoSpec,
 	type RepoSpec,
 	type StewardWalletSpec,
@@ -50,6 +52,7 @@ export type {
 	InboundPaymentConfig,
 	LedgerConfig,
 	LedgerPoolConfig,
+	NodeScheduleConfig,
 } from "@cogni/repo-spec";
 
 // ---------------------------------------------------------------------------
@@ -247,6 +250,15 @@ export function getGovernanceConfig(): GovernanceConfig {
 	const spec = loadRepoSpec();
 	cachedGovernanceConfig = extractGovernanceConfig(spec);
 	return cachedGovernanceConfig;
+}
+
+let cachedNodeSchedules: NodeScheduleConfig[] | null = null;
+
+/** Node-owned recurring workflow declarations from this repository's spec. */
+export function getNodeSchedules(): NodeScheduleConfig[] {
+	if (cachedNodeSchedules) return cachedNodeSchedules;
+	cachedNodeSchedules = extractNodeSchedules(loadRepoSpec());
+	return cachedNodeSchedules;
 }
 
 // ---------------------------------------------------------------------------

@@ -20,6 +20,10 @@
 import { NodeSDK } from "@opentelemetry/sdk-node";
 import pino from "pino";
 import {
+  resolveAgentWorkflowBootSyncConfig,
+  runAgentWorkflowBootSync,
+} from "@/lib/agent-workflow-boot-sync";
+import {
   resolveBootSyncConfig,
   runGovernanceBootSync,
 } from "@/lib/governance-boot-sync";
@@ -139,6 +143,9 @@ export async function register(): Promise<void> {
   const bootEnv = process.env;
   if (bootEnv.APP_ENV !== "test") {
     void runGovernanceBootSync(resolveBootSyncConfig(bootEnv)).catch(() => {});
+    void runAgentWorkflowBootSync(
+      resolveAgentWorkflowBootSyncConfig(bootEnv)
+    ).catch(() => {});
   }
 
   // Dev mode (not test): warn if LiteLLM has stale test config from a previous session.
