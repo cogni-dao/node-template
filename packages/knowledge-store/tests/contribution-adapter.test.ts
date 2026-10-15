@@ -72,6 +72,9 @@ class FakeReservedSql {
       rows.count = 1;
       return rows;
     }
+    if (query.includes("FROM knowledge_contributions")) {
+      return [record];
+    }
     // cite-path lookups: both endpoints resolve, no incoming edges yet.
     if (query.includes("SELECT 1 FROM knowledge WHERE id")) {
       return [{ "?column?": 1 }];
@@ -172,6 +175,7 @@ class FakeMergeReservedSql {
       rows.count = 1;
       return rows;
     }
+    if (query.includes("FROM knowledge_contributions")) return [record];
     return [];
   }
 
@@ -661,6 +665,7 @@ class CrossPlaneFakeReservedSql {
       rows.count = 1;
       return rows;
     }
+    if (query.includes("FROM knowledge_contributions")) return [record];
     if (query.includes("FROM knowledge_contribution_commits")) {
       return [
         {
