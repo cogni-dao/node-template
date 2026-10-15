@@ -20,17 +20,16 @@ describe("knowledge-base-ui", () => {
     const document = new DOMParser().parseFromString(html, "text/html");
 
     expect(document.querySelector("base")).toBeNull();
-    expect(document.querySelector("#safe")).toHaveAttribute(
-      "href",
+    const safe = document.querySelector("#safe");
+    expect(safe?.getAttribute("href")).toBe(
       "https://node.example/knowledge/core"
     );
-    expect(document.querySelector("#safe")).toHaveAttribute("target", "_top");
-    expect(document.querySelector("#safe")).toHaveAttribute(
-      "rel",
-      "noopener noreferrer"
-    );
-    expect(document.querySelector("#unsafe")).not.toHaveAttribute("href");
-    expect(document.querySelector("#unsafe")).not.toHaveAttribute("target");
+    expect(safe?.getAttribute("target")).toBe("_top");
+    expect(safe?.getAttribute("rel")).toBe("noopener noreferrer");
+
+    const unsafe = document.querySelector("#unsafe");
+    expect(unsafe?.hasAttribute("href")).toBe(false);
+    expect(unsafe?.hasAttribute("target")).toBe(false);
   });
 
   it("owns the iframe sandbox and normalized document", async () => {
