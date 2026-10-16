@@ -93,7 +93,7 @@ importers:
         specifier: workspace:*
         version: link:../packages/graph-execution-core
       '@cogni/graph-execution-host':
-        specifier: workspace:*
+        specifier: workspace:@cogni-dao/graph-execution@*
         version: link:../packages/graph-execution-host
       '@cogni/ids':
         specifier: workspace:*
