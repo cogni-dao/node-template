@@ -1,7 +1,6 @@
 {
-  "name": "@cogni/graph-execution-host",
-  "private": true,
-  "version": "0.0.0",
+  "name": "@cogni-dao/graph-execution",
+  "version": "0.1.0",
   "type": "module",
   "sideEffects": false,
   "exports": {

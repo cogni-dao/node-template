@@ -31,7 +31,7 @@
     "@cogni/db-schema": "workspace:*",
     "@cogni/financial-ledger": "workspace:*",
     "@cogni/graph-execution-core": "workspace:*",
-    "@cogni/graph-execution-host": "workspace:*",
+    "@cogni/graph-execution-host": "workspace:@cogni-dao/graph-execution@*",
     "@cogni/ids": "workspace:*",
     "@cogni/ingestion-core": "workspace:*",
     "@cogni/knowledge-base-ui": "workspace:@cogni-dao/knowledge-base-ui@*",
