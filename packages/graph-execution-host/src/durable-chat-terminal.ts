@@ -21,11 +21,23 @@ import type {
   ThreadPersistenceLike,
 } from "./ports/thread-persistence.port";
 
-/** Raised when the terminal publication itself fails after a durable persist. */
+/**
+ * Raised when the terminal publication itself fails after a durable persist.
+ *
+ * `cause` is attached with `defineProperty` rather than the two-argument `Error`
+ * constructor: this package compiles standalone at `target: ES2020` with no
+ * `lib` override, so `ErrorOptions` is not in scope here even though it is in
+ * the app. The runtime shape is identical.
+ */
 export class TerminalPublicationError extends Error {
   constructor(cause: unknown) {
-    super("Terminal stream publication failed", { cause });
+    super("Terminal stream publication failed");
     this.name = "TerminalPublicationError";
+    Object.defineProperty(this, "cause", {
+      value: cause,
+      configurable: true,
+      writable: true,
+    });
   }
 }
 
