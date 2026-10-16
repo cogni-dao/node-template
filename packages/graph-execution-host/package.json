@@ -1,6 +1,7 @@
 {
   "name": "@cogni-dao/graph-execution",
   "version": "0.1.0",
+  "license": "LicenseRef-PolyForm-Shield-1.0.0",
   "type": "module",
   "sideEffects": false,
   "exports": {
