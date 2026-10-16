@@ -49,6 +49,7 @@ on:
       - "knowledge-store-v*"
       - "knowledge-base-v*"
       - "knowledge-base-ui-v*"
+      - "graph-execution-v*"
   # Rehearsal only. Every publishing step below is gated on `push`, so a
   # dispatch packs the tarball and runs the artifact assertions against it
   # without creating a Release, attesting anything, or moving a version. A
@@ -88,7 +89,8 @@ env:
     [{"name":"@cogni-dao/work-items","dir":"packages/work-items","tagPrefix":"work-items-v"},
      {"name":"@cogni-dao/knowledge-store","dir":"packages/knowledge-store","tagPrefix":"knowledge-store-v"},
      {"name":"@cogni-dao/knowledge-base","dir":"packages/knowledge-base","tagPrefix":"knowledge-base-v"},
-     {"name":"@cogni-dao/knowledge-base-ui","dir":"packages/knowledge-base-ui","tagPrefix":"knowledge-base-ui-v"}]
+     {"name":"@cogni-dao/knowledge-base-ui","dir":"packages/knowledge-base-ui","tagPrefix":"knowledge-base-ui-v"},
+     {"name":"@cogni-dao/graph-execution","dir":"packages/graph-execution-host","tagPrefix":"graph-execution-v"}]
 
 jobs:
   # Resolve WHICH packages this run acts on, before anything is built. A push
