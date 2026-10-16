@@ -18,6 +18,11 @@
  *     against stale metadata before recording the next sequence number.
  *   - try/finally restores dolt_checkout('main') and releases the connection on error.
  *   - knowledge_contributions metadata table on main tracks state/principal/idempotency.
+ *   - IDEMPOTENCY_CHECK_INSIDE_ADMISSION: create replays are resolved only
+ *     after the cross-replica write lock, so concurrent retries cannot both
+ *     create branches before the unique metadata row is visible.
+ *   - APPEND_HEAD_READ_INSIDE_ADMISSION: append metadata is read under the
+ *     same lock as the branch write; queued appends observe their predecessor.
  *   - Reads from a branch use reserved-conn checkout (AS OF deferred to v1).
  *   - PATCH_CARRIES_ONLY_UNGATED_FIELDS: `patch` can change only `useWhen`
  *     and `entryType`, never content or any gate-governed field.
@@ -598,6 +603,34 @@ async function applyEdit(input: {
     return;
   }
 
+  if (edit.op === "uncite") {
+    const existing = (await conn.unsafe(
+      `SELECT cited_id FROM citations WHERE citing_id = ${escapeValue(edit.citingId)} AND cited_id = ${escapeValue(edit.citedId)} AND citation_type = ${escapeValue(edit.citationType)} LIMIT 1`
+    )) as Array<{ cited_id: string }>;
+    if (existing.length === 0) {
+      throw new ContributionConflictError(
+        `citation edge not found: '${edit.citingId}' -[${edit.citationType}]-> '${edit.citedId}'`
+      );
+    }
+    await conn.unsafe(
+      `DELETE FROM citations WHERE citing_id = ${escapeValue(edit.citingId)} AND cited_id = ${escapeValue(edit.citedId)} AND citation_type = ${escapeValue(edit.citationType)}`
+    );
+
+    // supports/contradicts affect the cited atom's confidence. Recompute only
+    // when that atom exists on the contribution branch; cross-plane work-item
+    // edges and main-only endpoints have no branch knowledge row to update.
+    if (
+      edit.citationType !== "tracks" &&
+      (edit.citationType === "supports" || edit.citationType === "contradicts")
+    ) {
+      const cited = await resolveCitationEndpoint(conn, mainSql, edit.citedId);
+      if (cited?.kind === "knowledge" && cited.onBranch) {
+        await recomputeConfidenceOnConn(conn, edit.citedId);
+      }
+    }
+    return;
+  }
+
   if (edit.op === "cite") {
     const citing = await resolveCitationEndpoint(conn, mainSql, edit.citingId);
     if (citing === null) {
@@ -705,14 +738,7 @@ async function applyEdit(input: {
     return;
   }
 
-  // Server-stamped fallback id uses `-` not `:` so the result satisfies the
-  // v0 shape gate (kebab only). The contribution prefix is still long; this
-  // is a transitional concession — clients SHOULD supply `entry.id`
-  // explicitly per the syntropy expert decision tree (write atomic with a
-  // sharp slug). Auto-stamps will be removed once the UI form enforces
-  // explicit ids (P0.6.v0b).
-  const entryId =
-    edit.entry.id ?? `${contributionId}-${randomBytes(3).toString("hex")}`;
+  const entryId = edit.entry.id;
   const entryType = edit.entry.entryType ?? "finding";
   const useWhenColumn = hasUseWhen ? ", use_when" : "";
   const useWhenValue = hasUseWhen
@@ -851,6 +877,15 @@ export class DoltgresKnowledgeContributionAdapter
     const edits = input.edits ?? [];
 
     return await this.withBranch("contribution.create", async (conn) => {
+      await conn.unsafe(`SELECT dolt_checkout('main')`);
+      if (input.idempotencyKey) {
+        const replayRows = await conn.unsafe(
+          `SELECT * FROM knowledge_contributions WHERE principal_id = ${escapeValue(input.principal.id)} AND idempotency_key = ${escapeValue(input.idempotencyKey)} LIMIT 1`
+        );
+        if (replayRows.length > 0) {
+          return mapRecord(replayRows[0] as Record<string, unknown>);
+        }
+      }
       const baseCommit = await currentHash(conn, "main");
       await conn.unsafe(
         `SELECT dolt_checkout('-b', ${escapeRef(branch)}, 'main')`
@@ -1053,6 +1088,15 @@ export class DoltgresKnowledgeContributionAdapter
     return await this.withBranch(
       "contribution.create_edo_batch",
       async (conn) => {
+        await conn.unsafe(`SELECT dolt_checkout('main')`);
+        if (input.idempotencyKey) {
+          const replayRows = await conn.unsafe(
+            `SELECT * FROM knowledge_contributions WHERE principal_id = ${escapeValue(input.principal.id)} AND idempotency_key = ${escapeValue(input.idempotencyKey)} LIMIT 1`
+          );
+          if (replayRows.length > 0) {
+            return mapRecord(replayRows[0] as Record<string, unknown>);
+          }
+        }
         const baseCommit = await currentHash(conn, "main");
         await conn.unsafe(
           `SELECT dolt_checkout('-b', ${escapeRef(branch)}, 'main')`
@@ -1100,23 +1144,32 @@ export class DoltgresKnowledgeContributionAdapter
     edits: KnowledgeContributionEdit[];
   }): Promise<ContributionCommitRecord> {
     return await withContributionAppendLock(input.contributionId, async () => {
-      const rec = await this.getById(input.contributionId);
-      if (!rec) throw new ContributionNotFoundError(input.contributionId);
-      if (rec.state !== "open") {
-        throw new ContributionStateError(
-          `contribution ${input.contributionId} is ${rec.state}`
-        );
-      }
-      const seq = rec.commitCount + 1;
-      const ref = sourceRef(input.contributionId, seq);
-      const expectedHead = rec.headCommit ?? rec.baseCommit;
-      const headPredicate = rec.headCommit
-        ? `head_commit = ${escapeValue(rec.headCommit)}`
-        : "head_commit IS NULL";
-
       return await this.withBranch(
         "contribution.append_commit",
         async (conn) => {
+          // Re-read metadata only after admission and the cross-replica lock.
+          // Reading before the queue makes every caller in a burst capture the
+          // same stale head, wait its turn, then fail after doing useful work.
+          await conn.unsafe(`SELECT dolt_checkout('main')`);
+          const recordRows = await conn.unsafe(
+            `SELECT * FROM knowledge_contributions WHERE id = ${escapeValue(input.contributionId)} LIMIT 1`
+          );
+          if (recordRows.length === 0) {
+            throw new ContributionNotFoundError(input.contributionId);
+          }
+          const rec = mapRecord(recordRows[0] as Record<string, unknown>);
+          if (rec.state !== "open") {
+            throw new ContributionStateError(
+              `contribution ${input.contributionId} is ${rec.state}`
+            );
+          }
+          const seq = rec.commitCount + 1;
+          const ref = sourceRef(input.contributionId, seq);
+          const expectedHead = rec.headCommit ?? rec.baseCommit;
+          const headPredicate = rec.headCommit
+            ? `head_commit = ${escapeValue(rec.headCommit)}`
+            : "head_commit IS NULL";
+
           await conn.unsafe(`SELECT dolt_checkout(${escapeRef(rec.branch)})`);
           const actualHead = await currentHash(conn, rec.branch);
           if (
@@ -1326,23 +1379,32 @@ export class DoltgresKnowledgeContributionAdapter
     }) => Promise<{ editCount: number; message: string }>
   ): Promise<ContributionRecord> {
     return await withContributionAppendLock(input.contributionId, async () => {
-      const rec = await this.getById(input.contributionId);
-      if (!rec) throw new ContributionNotFoundError(input.contributionId);
-      if (rec.state !== "open") {
-        throw new ContributionStateError(
-          `contribution ${input.contributionId} is ${rec.state}`
-        );
-      }
-      const seq = rec.commitCount + 1;
-      const ref = sourceRef(input.contributionId, seq);
-      const expectedHead = rec.headCommit ?? rec.baseCommit;
-      const headPredicate = rec.headCommit
-        ? `head_commit = ${escapeValue(rec.headCommit)}`
-        : "head_commit IS NULL";
-
       return await this.withBranch(
         "contribution.append_edo_commit",
         async (conn) => {
+          // The record read belongs inside the same admitted, cross-replica
+          // critical section as the branch update. Otherwise concurrent EDO
+          // appends serialize only their writes and still race on a stale head.
+          await conn.unsafe(`SELECT dolt_checkout('main')`);
+          const recordRows = await conn.unsafe(
+            `SELECT * FROM knowledge_contributions WHERE id = ${escapeValue(input.contributionId)} LIMIT 1`
+          );
+          if (recordRows.length === 0) {
+            throw new ContributionNotFoundError(input.contributionId);
+          }
+          const rec = mapRecord(recordRows[0] as Record<string, unknown>);
+          if (rec.state !== "open") {
+            throw new ContributionStateError(
+              `contribution ${input.contributionId} is ${rec.state}`
+            );
+          }
+          const seq = rec.commitCount + 1;
+          const ref = sourceRef(input.contributionId, seq);
+          const expectedHead = rec.headCommit ?? rec.baseCommit;
+          const headPredicate = rec.headCommit
+            ? `head_commit = ${escapeValue(rec.headCommit)}`
+            : "head_commit IS NULL";
+
           await conn.unsafe(`SELECT dolt_checkout(${escapeRef(rec.branch)})`);
           const actualHead = await currentHash(conn, rec.branch);
           if (

@@ -18,7 +18,10 @@
 import type { Sql } from "postgres";
 import { describe, expect, it } from "vitest";
 
-import { DoltgresWorkItemAdapter } from "../../src/adapters/doltgres/adapter.js";
+import {
+  DoltgresWorkItemAdapter,
+  WorkItemsBusyError,
+} from "../../src/adapters/doltgres/adapter.js";
 import { makeFakeDoltgresSql } from "./fake-doltgres-sql.js";
 
 type Row = Record<string, unknown>;
@@ -265,6 +268,49 @@ describe("DoltgresWorkItemAdapter.list keyset SQL", () => {
     expect(cursorQuery).toMatch(/created_at\s*<\s*'/);
     expect(cursorQuery).toMatch(/AND id\s*>\s*'/);
   });
+
+  it("filters text after the query without LOWER or a premature LIMIT", async () => {
+    const ts = "2026-04-30T00:00:00.000Z";
+    const rows = [
+      makeRow({
+        id: "task.5200",
+        priority: 1,
+        rank: 10,
+        created_at: ts,
+        summary: "x".repeat(8_000),
+      }),
+      makeRow({
+        id: "task.5201",
+        priority: 1,
+        rank: 10,
+        created_at: ts,
+        title: "First NEEDLE match",
+      }),
+      makeRow({
+        id: "task.5202",
+        priority: 1,
+        rank: 10,
+        created_at: ts,
+        summary: `second ${"x".repeat(8_000)} needle match`,
+      }),
+    ];
+    const { sql, queries } = makeFakeSql(rows);
+    const adapter = new DoltgresWorkItemAdapter(sql);
+
+    const first = await adapter.list({ text: "needle", limit: 1 });
+    expect(first.items.map((item) => item.id)).toEqual(["task.5201"]);
+    expect(first.pageInfo.hasMore).toBe(true);
+    expect(queries[0]).not.toMatch(/LOWER\s*\(/i);
+    expect(queries[0]).not.toMatch(/\sLIMIT\s/i);
+
+    const second = await adapter.list({
+      text: "NEEDLE",
+      limit: 1,
+      cursor: first.nextCursor,
+    });
+    expect(second.items.map((item) => item.id)).toEqual(["task.5202"]);
+    expect(second.pageInfo.hasMore).toBe(false);
+  });
 });
 
 // COMMAND_QUERY_SEPARATION at runtime (work-items-port.md). Reads must not enter
@@ -300,6 +346,49 @@ describe("reads leave the write lane when a read pool is supplied", () => {
     // Non-vacuous: without the read lane these serialize and maxInFlight === 1.
     expect(maxInFlight).toBeGreaterThan(1);
     expect(started.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("rebuilds a terminal read pool without replaying on the write lane", async () => {
+    let writeQueries = 0;
+    let firstEnded = 0;
+    let rebuilds = 0;
+    const writePool = Object.assign(async () => [], {
+      unsafe: async () => {
+        writeQueries += 1;
+        return [];
+      },
+    }) as unknown as Sql;
+    const terminalReadPool = Object.assign(async () => [], {
+      unsafe: async () => {
+        const error = new Error("read connection ended") as Error & {
+          code: string;
+        };
+        error.code = "CONNECTION_ENDED";
+        throw error;
+      },
+      end: async () => {
+        firstEnded += 1;
+      },
+    }) as unknown as Sql;
+    const healthyReadPool = Object.assign(async () => [], {
+      unsafe: async () => [],
+      end: async () => undefined,
+    }) as unknown as Sql;
+    const adapter = new DoltgresWorkItemAdapter(writePool, {
+      readClient: terminalReadPool,
+      recreateReadClient: () => {
+        rebuilds += 1;
+        return healthyReadPool;
+      },
+    });
+
+    await expect(adapter.list()).rejects.toBeInstanceOf(WorkItemsBusyError);
+    expect(firstEnded).toBe(1);
+    expect(writeQueries).toBe(0);
+
+    await expect(adapter.list()).resolves.toMatchObject({ items: [] });
+    expect(rebuilds).toBe(1);
+    expect(writeQueries).toBe(0);
   });
 });
 
