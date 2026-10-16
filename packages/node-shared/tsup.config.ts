@@ -14,7 +14,7 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-  entry: ["src/index.ts"],
+  entry: ["src/index.ts", "src/ai/content-scrubbing.ts"],
   format: ["esm"],
   dts: false,
   clean: false,

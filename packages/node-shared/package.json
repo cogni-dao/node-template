@@ -8,6 +8,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./ai/content-scrubbing": {
+      "types": "./dist/ai/content-scrubbing.d.ts",
+      "import": "./dist/ai/content-scrubbing.js"
     }
   },
   "types": "./dist/index.d.ts",
