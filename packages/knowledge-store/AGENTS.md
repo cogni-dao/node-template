@@ -5,11 +5,11 @@
 ## Metadata
 
 - **Owners:** @derekg1729
-- **Status:** draft
+- **Status:** stable
 
 ## Purpose
 
-Shared port + adapter for versioned domain knowledge backed by Doltgres. Generic across all nodes — each node provides its own schema and seeds via `nodes/{node}/packages/knowledge/`.
+Shared ports, contribution workflow, and adapters for versioned domain knowledge backed by Doltgres. Generic schema lives in `@cogni/knowledge-base`; each node may add companion tables and niche seeds.
 
 ## Pointers
 
