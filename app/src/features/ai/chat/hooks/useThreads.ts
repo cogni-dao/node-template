@@ -26,11 +26,21 @@ import {
 const THREADS_KEY = "ai-threads";
 const THREAD_KEY = "ai-thread";
 
+export class ThreadFetchError extends Error {
+  constructor(
+    message: string,
+    readonly status: number
+  ) {
+    super(message);
+    this.name = "ThreadFetchError";
+  }
+}
+
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, { cache: "no-store", ...init });
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: "Request failed" }));
-    throw new Error(body.error ?? `HTTP ${res.status}`);
+    throw new ThreadFetchError(body.error ?? `HTTP ${res.status}`, res.status);
   }
   return res.json() as Promise<T>;
 }

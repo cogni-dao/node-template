@@ -23,6 +23,11 @@ import {
 } from "@tests/_fixtures/ai/fixtures";
 import { ChatView as ChatPage } from "@/app/(app)/chat/view";
 
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
+  useSearchParams: () => new URLSearchParams(),
+}));
+
 // Mock components only (use real hooks with seeded QueryClient)
 vi.mock("@/features/ai/public", async () => {
   const actual = await vi.importActual("@/features/ai/public");

@@ -67,18 +67,20 @@ export function ChatThreadsSidebarGroup(): ReactElement {
         />
       </SidebarMenuButton>
 
-      <SidebarMenuAction
-        onClick={() => {
-          if (chatStore.onNewThread) {
-            chatStore.onNewThread();
-          }
-        }}
-        asChild
-      >
-        <Link href="/chat" aria-label="New thread">
+      {chatStore.onNewThread ? (
+        <SidebarMenuAction
+          onClick={chatStore.onNewThread}
+          aria-label="New thread"
+        >
           <Plus />
-        </Link>
-      </SidebarMenuAction>
+        </SidebarMenuAction>
+      ) : (
+        <SidebarMenuAction asChild>
+          <Link href="/chat" aria-label="New thread">
+            <Plus />
+          </Link>
+        </SidebarMenuAction>
+      )}
 
       {open && (
         <SidebarMenuSub>

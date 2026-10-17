@@ -5,6 +5,7 @@ import {
   ErrorPrimitive,
   MessagePrimitive,
   ThreadPrimitive,
+  useAuiState,
 } from "@assistant-ui/react";
 import { Button } from "@cogni/node-ui-kit/shadcn/button";
 import { ToolFallback } from "@cogni/node-ui-kit/tool-fallback";
@@ -160,6 +161,7 @@ const ThreadSuggestions: FC = () => {
 };
 
 const Composer: FC = () => {
+  const isRunning = useAuiState((state) => state.thread.isRunning);
   return (
     <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
       <ComposerPrimitive.AttachmentDropzone className="aui-composer-attachment-dropzone flex w-full flex-col rounded-3xl border border-input bg-background px-1 pt-2 shadow-xs outline-none transition-[color,box-shadow] has-[textarea:focus-visible]:border-ring has-[textarea:focus-visible]:ring-[3px] has-[textarea:focus-visible]:ring-ring/50 data-[dragging=true]:border-ring data-[dragging=true]:border-dashed data-[dragging=true]:bg-accent/50 dark:bg-background">
@@ -170,6 +172,7 @@ const Composer: FC = () => {
           rows={1}
           autoFocus
           aria-label="Message input"
+          disabled={isRunning}
         />
         <ComposerAction />
       </ComposerPrimitive.AttachmentDropzone>
@@ -208,7 +211,8 @@ const ComposerAction: FC = () => {
               variant="default"
               size="icon"
               className="aui-composer-cancel size-[34px] rounded-full border border-muted-foreground/60 hover:bg-primary/75 dark:border-muted-foreground/90"
-              aria-label="Stop generating"
+              aria-label="Disconnect from response; run continues"
+              title="Disconnect (run continues)"
             >
               <Square className="aui-composer-cancel-icon size-3.5 fill-white dark:fill-black" />
             </Button>

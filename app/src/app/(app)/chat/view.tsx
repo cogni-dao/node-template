@@ -19,10 +19,14 @@
 "use client";
 
 import type { ModelRef } from "@cogni/ai-core";
-import type { ChatError } from "@cogni/node-contracts";
+import type {
+  ChatError,
+  ListThreadsOutput,
+  ThreadSummary,
+} from "@cogni/node-contracts";
 import { useQueryClient } from "@tanstack/react-query";
 import type { UIMessage } from "ai";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { signOut } from "next-auth/react";
 import {
   type ReactNode,
@@ -33,7 +37,17 @@ import {
 } from "react";
 import { ErrorAlert, Thread } from "@/components";
 import { useChatSidebarStore } from "@/features/ai/chat/components/ChatSidebarContext";
+import {
+  clearNewThreadStateKey,
+  createChatIds,
+  type PendingChatEnvelope,
+  readNewThreadStateKey,
+  readPendingEnvelope,
+  shouldLoadExistingThread,
+  writeNewThreadStateKey,
+} from "@/features/ai/chat/hooks/chat-session.client";
 import { ChatRuntimeProvider } from "@/features/ai/chat/providers/ChatRuntimeProvider.client";
+import { ThreadFetchError } from "@/features/ai/chat/hooks/useThreads";
 import { toErrorAlertProps } from "@/features/ai/chat/utils/toErrorAlertProps";
 import { CHATGPT_MODELS } from "@/features/ai/components/ModelPicker";
 import {
@@ -68,9 +82,10 @@ const ChatWelcomeWithHint = () => (
 );
 
 export function ChatView(): ReactNode {
+  const router = useRouter();
   const modelsQuery = useModels();
-  const { data: creditsData, isLoading: isCreditsLoading } =
-    useCreditsSummary();
+  const creditsQuery = useCreditsSummary();
+  const { data: creditsData, isLoading: isCreditsLoading } = creditsQuery;
   // Display raw balance (including negative); no unsafe defaults
   const balance = creditsData?.balanceCredits ?? 0;
 
@@ -86,12 +101,23 @@ export function ChatView(): ReactNode {
   const [chatError, setChatError] = useState<ChatError | null>(null);
   const [isBlocked, setIsBlocked] = useState(false);
 
-  // Thread switching state — initialize from ?thread= URL param for deep-linking
+  // Runtime identity is intentionally separate from the URL thread key. The first
+  // submit replaces the URL with the already-mounted runtime's preallocated key.
+  // Explicit navigation creates a new runtime and therefore aborts only the view,
+  // never the durable server run.
   const searchParams = useSearchParams();
-  const [activeThreadKey, setActiveThreadKey] = useState<string | null>(
-    () => searchParams?.get("thread") ?? null
-  );
-
+  const [threadSession, setThreadSession] = useState(() => {
+    const urlStateKey = searchParams?.get("thread");
+    return {
+      stateKey:
+        urlStateKey ?? readNewThreadStateKey() ?? createChatIds().stateKey,
+      committed: urlStateKey != null,
+      loadExisting: false,
+      sessionHydrated: false,
+      runtimeKey: crypto.randomUUID(),
+    };
+  });
+  const navigationTargetRef = useRef<string | null>(null);
   // Extract server-provided defaults (NO CLIENT INVENTION)
   const models = modelsQuery.data?.models ?? [];
   const defaultPreferredModelId = modelsQuery.data?.defaultRef?.modelId ?? null;
@@ -201,6 +227,10 @@ export function ChatView(): ReactNode {
     setChatError(null);
   }, []);
 
+  const handleBootRetry = useCallback(() => {
+    void Promise.all([modelsQuery.refetch(), creditsQuery.refetch()]);
+  }, [creditsQuery, modelsQuery]);
+
   // Add credits action (navigate to credits page)
   const handleAddCredits = useCallback(() => {
     window.location.href = "/credits";
@@ -209,30 +239,135 @@ export function ChatView(): ReactNode {
   // Thread data hooks
   const queryClient = useQueryClient();
   const threadsQuery = useThreads();
-  const threadData = useLoadThread(activeThreadKey);
+  const threadData = useLoadThread(
+    threadSession.sessionHydrated && threadSession.loadExisting
+      ? threadSession.stateKey
+      : null
+  );
   const deleteThread = useDeleteThread();
 
-  const handleSelectThread = useCallback((key: string) => {
-    setChatError(null);
-    setActiveThreadKey(key);
-  }, []);
+  const openThread = useCallback(
+    (stateKey: string, loadExisting: boolean, committed = loadExisting) => {
+      setChatError(null);
+      setThreadSession({
+        stateKey,
+        committed,
+        loadExisting,
+        sessionHydrated: true,
+        runtimeKey: crypto.randomUUID(),
+      });
+    },
+    []
+  );
+
+  const handleSelectThread = useCallback(
+    (key: string) => {
+      navigationTargetRef.current = key;
+      openThread(key, true);
+      router.push(`/chat?thread=${encodeURIComponent(key)}`);
+    },
+    [openThread, router]
+  );
 
   const handleNewThread = useCallback(() => {
-    setChatError(null);
-    setActiveThreadKey(null);
-  }, []);
+    navigationTargetRef.current = "";
+    const stateKey = createChatIds().stateKey;
+    writeNewThreadStateKey(stateKey);
+    openThread(stateKey, false);
+    router.push("/chat");
+  }, [openThread, router]);
 
   const handleDeleteThread = useCallback(
     (key: string) => {
       deleteThread.mutate(key);
-      if (activeThreadKey === key) setActiveThreadKey(null);
+      if (threadSession.stateKey === key) handleNewThread();
     },
-    [activeThreadKey, deleteThread]
+    [deleteThread, handleNewThread, threadSession.stateKey]
   );
 
-  const handleThreadFinish = useCallback(() => {
+  const handleThreadSettled = useCallback(() => {
+    clearNewThreadStateKey(threadSession.stateKey);
     queryClient.invalidateQueries({ queryKey: ["ai-threads"] });
-  }, [queryClient]);
+  }, [queryClient, threadSession.stateKey]);
+
+  const handleOptimisticSend = useCallback(
+    (envelope: PendingChatEnvelope) => {
+      const optimisticThread: ThreadSummary = {
+        stateKey: envelope.stateKey,
+        title: (envelope.message ?? "Untitled").slice(0, 100),
+        updatedAt: envelope.createdAt,
+        messageCount: 1,
+        metadata: {
+          modelRef: envelope.modelRef,
+          graphName: envelope.graphName,
+          pending: true,
+        },
+      };
+
+      navigationTargetRef.current = envelope.stateKey;
+      queryClient.setQueriesData<ListThreadsOutput>(
+        { queryKey: ["ai-threads"] },
+        (current) => ({
+          threads: [
+            optimisticThread,
+            ...(current?.threads ?? []).filter(
+              (thread) => thread.stateKey !== envelope.stateKey
+            ),
+          ],
+        })
+      );
+
+      // Mark active for the sidebar without changing runtimeKey or loading history.
+      setThreadSession((current) =>
+        current.stateKey === envelope.stateKey
+          ? { ...current, committed: true }
+          : current
+      );
+      router.replace(
+        `/chat?thread=${encodeURIComponent(envelope.stateKey)}`,
+        { scroll: false }
+      );
+    },
+    [queryClient, router]
+  );
+
+  // Reconcile browser Back/Forward (and external URL changes) with one runtime.
+  useEffect(() => {
+    const urlStateKey = searchParams?.get("thread");
+    if (!threadSession.sessionHydrated) {
+      if (!urlStateKey) writeNewThreadStateKey(threadSession.stateKey);
+      setThreadSession((current) => ({
+        ...current,
+        loadExisting:
+          urlStateKey != null &&
+          shouldLoadExistingThread(readPendingEnvelope(current.stateKey)),
+        sessionHydrated: true,
+      }));
+      return;
+    }
+    if (navigationTargetRef.current != null) {
+      if (navigationTargetRef.current === (urlStateKey ?? "")) {
+        navigationTargetRef.current = null;
+      } else {
+        return;
+      }
+    }
+    if (urlStateKey === threadSession.stateKey) return;
+    if (urlStateKey) {
+      openThread(
+        urlStateKey,
+        shouldLoadExistingThread(readPendingEnvelope(urlStateKey)),
+        true
+      );
+      return;
+    }
+    if (threadSession.committed) {
+      const stateKey =
+        readNewThreadStateKey() ?? createChatIds().stateKey;
+      writeNewThreadStateKey(stateKey);
+      openThread(stateKey, false);
+    }
+  }, [openThread, searchParams, threadSession]);
 
   // Register thread state with global sidebar store
   const registerSidebar = useChatSidebarStore((s) => s.register);
@@ -241,7 +376,9 @@ export function ChatView(): ReactNode {
   useEffect(() => {
     registerSidebar({
       threads: threadsQuery.data?.threads ?? [],
-      activeThreadKey,
+      activeThreadKey: threadSession.committed
+        ? threadSession.stateKey
+        : null,
       onSelectThread: handleSelectThread,
       onNewThread: handleNewThread,
       onDeleteThread: handleDeleteThread,
@@ -249,7 +386,7 @@ export function ChatView(): ReactNode {
   }, [
     registerSidebar,
     threadsQuery.data?.threads,
-    activeThreadKey,
+    threadSession,
     handleSelectThread,
     handleNewThread,
     handleDeleteThread,
@@ -263,6 +400,24 @@ export function ChatView(): ReactNode {
   const errorAlertProps = chatError
     ? toErrorAlertProps(chatError, !!defaultFreeModelId)
     : null;
+
+  if (modelsQuery.isError || creditsQuery.isError) {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col items-center justify-center">
+        <div className="mx-auto w-full max-w-[var(--size-container-sm)] px-4">
+          <ErrorAlert
+            code="CHAT_BOOT_FAILED"
+            message="Chat could not load models or account status. Check your connection and try again."
+            retryable={true}
+            showRetry={true}
+            showSwitchFree={false}
+            showAddCredits={false}
+            onRetry={handleBootRetry}
+          />
+        </div>
+      </div>
+    );
+  }
 
   // INV-UI-NO-PAID-DEFAULT-WHEN-ZERO: Gate rendering until init completes
   if (!hasInitializedRef.current) {
@@ -316,11 +471,38 @@ export function ChatView(): ReactNode {
   }
 
   // Gate provider render: for existing threads, wait until messages are loaded.
-  const isThreadLoading = activeThreadKey != null && threadData.isPending;
+  const isThreadLoading =
+    !threadSession.sessionHydrated ||
+    (threadSession.loadExisting && threadData.isPending);
+
+  if (threadSession.loadExisting && threadData.isError) {
+    const notFound =
+      threadData.error instanceof ThreadFetchError &&
+      threadData.error.status === 404;
+    return (
+      <div className="flex min-h-0 flex-1 flex-col items-center justify-center">
+        <div className="mx-auto w-full max-w-[var(--size-container-sm)] px-4">
+          <ErrorAlert
+            code={notFound ? "THREAD_NOT_FOUND" : "THREAD_LOAD_FAILED"}
+            message={
+              notFound
+                ? "This conversation was not found. It may still be saving; retry or start a new chat."
+                : "This conversation could not be loaded. Check your connection and retry."
+            }
+            retryable={true}
+            showRetry={true}
+            showSwitchFree={false}
+            showAddCredits={false}
+            onRetry={() => void threadData.refetch()}
+          />
+        </div>
+      </div>
+    );
+  }
 
   // After the isThreadLoading gate, threadData.data is guaranteed for existing threads.
   const initialMessages: UIMessage[] =
-    activeThreadKey != null && threadData.data
+    threadSession.loadExisting && threadData.data
       ? (threadData.data.messages as UIMessage[])
       : [];
 
@@ -332,15 +514,16 @@ export function ChatView(): ReactNode {
         </div>
       ) : (
         <ChatRuntimeProvider
-          key={activeThreadKey ?? "new"}
+          key={threadSession.runtimeKey}
           modelRef={selectedModelRef}
           selectedGraph={selectedGraph}
           defaultModelId={uiDefaultModelId}
           initialMessages={initialMessages}
-          initialStateKey={activeThreadKey}
+          stateKey={threadSession.stateKey}
           onAuthExpired={() => signOut()}
           onError={handleError}
-          onFinish={handleThreadFinish}
+          onSettled={handleThreadSettled}
+          onOptimisticSend={handleOptimisticSend}
         >
           <Thread
             welcomeMessage={<ChatWelcomeWithHint />}
@@ -358,10 +541,10 @@ export function ChatView(): ReactNode {
               errorAlertProps ? (
                 <ChatErrorBubble
                   message={errorAlertProps.message}
-                  showRetry={errorAlertProps.showRetry}
+                  // The provider's Failed status owns exact-envelope retry.
+                  showRetry={false}
                   showSwitchFree={errorAlertProps.showSwitchFree}
                   showAddCredits={errorAlertProps.showAddCredits}
-                  onRetry={handleRetry}
                   onSwitchFreeModel={handleSwitchFreeModel}
                   onAddCredits={handleAddCredits}
                 />
