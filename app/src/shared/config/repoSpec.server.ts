@@ -147,6 +147,8 @@ export interface BrandMark {
 	readonly slug: string;
 	readonly icon: string | null;
 	readonly color: string | null;
+	/** `intent.hook` — the node's one-line pitch, or null when undeclared. */
+	readonly hook: string | null;
 }
 
 /**
@@ -193,13 +195,14 @@ export function getBrandMark(): BrandMark {
 				slug: extractNodeName(spec),
 				icon: extractNodeBrandIcon(spec),
 				color: extractNodeBrandColor(spec),
+				hook: extractNodeHook(spec),
 			};
 			return cachedBrandMark;
 		} catch {
 			// fall through to neutral default
 		}
 	}
-	cachedBrandMark = { slug: "cogni", icon: null, color: null };
+	cachedBrandMark = { slug: "cogni", icon: null, color: null, hook: null };
 	return cachedBrandMark;
 }
 
