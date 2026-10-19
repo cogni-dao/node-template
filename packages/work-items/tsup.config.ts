@@ -32,8 +32,12 @@ export const tsupConfig = defineConfig([
     platform: "node",
   },
   {
-    entry: ["src/adapters/doltgres/index.ts"],
-    outDir: "dist/adapters/doltgres",
+    entry: {
+      "doltgres/index": "src/adapters/doltgres/index.ts",
+      "postgres/index": "src/adapters/postgres/index.ts",
+    },
+    outDir: "dist/adapters",
+    outExtension: () => ({ js: ".js" }),
     format: ["esm"],
     dts: false,
     clean: false,

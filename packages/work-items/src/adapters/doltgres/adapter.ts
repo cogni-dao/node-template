@@ -19,22 +19,20 @@ import type {
 import { toWorkItemId } from "../../index.js";
 import type { ReservedSql, Sql } from "postgres";
 
+import { WorkItemDeletionRetiredError, WorkItemsBusyError } from "../../errors.js";
+export { WorkItemLeaseConflictError, WorkItemsBusyError } from "../../errors.js";
+
 import type {
   WorkItemsCreateInput,
-  WorkItemsDoltgresPort,
+  WorkItemsContentPort,
   WorkItemsPatchInput,
   WorkItemsPatchSet,
 } from "./ports.js";
 
-import {
-  decodeCursor,
-  encodeCursor,
-  type WorkItemCursor,
-} from "./cursor.js";
+import { decodeCursor, encodeCursor, type WorkItemCursor } from "./cursor.js";
 
 export const OPERATOR_ID_FLOOR = 5000;
 const AUTO_ID_RETRIES = 5;
-const CLAIM_TTL_SECONDS = 300;
 const COMMIT_TAG = "work-items";
 const GLOBAL_LOCK_KEY = 5_001_001;
 const OP_BRANCH_PREFIX = "work-item-op/";
@@ -90,16 +88,8 @@ const BRANCH_HOUSEKEEPING_STAGES = new Set([
 ]);
 const RESERVE_TIMEOUT_MS = 5_000;
 
-/**
- * What a locked scope owes when it meets an operation branch it cannot prove.
- *
- * - `required` — fail closed. A write must never build on unproven evidence.
- * - `best_effort` — keep the evidence, re-prove `main`, and serve from it
- *   anyway. For reads, which cannot observe an operation branch (bug.5358).
- * - `skipped` — the caller already owns one branch and reconciles it itself; a
- *   generic sweep would race that work.
- */
-type BranchReconciliation = "required" | "best_effort" | "skipped";
+/** Only content commands own a branch session and reconcile interrupted writes. */
+type BranchReconciliation = "required" | "skipped";
 
 export interface WorkItemLogger {
   info(fields: Record<string, unknown>, message: string): void;
@@ -228,13 +218,6 @@ export class WorkItemAuthorizationError extends Error {
   }
 }
 
-export class WorkItemLeaseConflictError extends Error {
-  constructor(public readonly id: string) {
-    super(`Work item is claimed by another principal or lease: ${id}`);
-    this.name = "WorkItemLeaseConflictError";
-  }
-}
-
 export class DoltCommitFailedError extends Error {
   constructor() {
     super("Dolt work-item commit did not return a commit hash");
@@ -270,13 +253,6 @@ export class WorkItemMergeConflictError extends Error {
   }
 }
 
-export class WorkItemsBusyError extends Error {
-  constructor(message = "Work-item store is busy; retry shortly") {
-    super(message);
-    this.name = "WorkItemsBusyError";
-  }
-}
-
 /**
  * The branch is STRUCTURALLY verified — linear history, frozen base intact,
  * exactly one `public.work_items` row diff, authoritative commit time — and
@@ -291,7 +267,6 @@ class UnprovableTransitionError extends WorkItemsBusyError {
     this.name = "UnprovableTransitionError";
   }
 }
-
 
 class DoltMergeOutcomeUnknownError extends WorkItemsBusyError {
   constructor() {
@@ -398,7 +373,6 @@ function optionalWorkItemId(value: unknown): WorkItemId | undefined {
 }
 
 function rowToWorkItem(row: Record<string, unknown>): WorkItem {
-  const claimIsActive = row.claim_active !== false;
   const item: Record<string, unknown> = {
     id: toWorkItemId(String(row.id)),
     type: String(row.type) as WorkItemType,
@@ -428,11 +402,6 @@ function rowToWorkItem(row: Record<string, unknown>): WorkItem {
     pr: optionalString(row.pr),
     reviewer: optionalString(row.reviewer),
     blockedBy: optionalWorkItemId(row.blocked_by),
-    claimedByRun: claimIsActive
-      ? optionalString(row.claimed_by_run)
-      : undefined,
-    claimedAt: claimIsActive ? optionalString(row.claimed_at) : undefined,
-    lastCommand: claimIsActive ? optionalString(row.last_command) : undefined,
   };
   for (const [key, value] of Object.entries(optional)) {
     if (value !== undefined) item[key] = value;
@@ -606,10 +575,7 @@ function normalizedPersistedValue(value: unknown): unknown {
   return value ?? null;
 }
 
-function snapshotRow(
-  row: Record<string, unknown>,
-  prefix = ""
-): RowSnapshot {
+function snapshotRow(row: Record<string, unknown>, prefix = ""): RowSnapshot {
   return Object.fromEntries(
     PERSISTED_WORK_ITEM_COLUMNS.map((column) => [
       column,
@@ -620,8 +586,7 @@ function snapshotRow(
 
 function snapshotsEqual(left: RowSnapshot, right: RowSnapshot): boolean {
   return PERSISTED_WORK_ITEM_COLUMNS.every(
-    (column) =>
-      JSON.stringify(left[column]) === JSON.stringify(right[column])
+    (column) => JSON.stringify(left[column]) === JSON.stringify(right[column])
   );
 }
 
@@ -672,7 +637,8 @@ function legacyProofFromMessage(
   const explicitId = match[2];
   const principal = match[3];
   if (!operation || !principal) return undefined;
-  const verb = operation === "create work item" ? "create" : operation.split(" ")[0];
+  const verb =
+    operation === "create work item" ? "create" : operation.split(" ")[0];
   if (
     verb !== "create" &&
     verb !== "patch" &&
@@ -684,7 +650,7 @@ function legacyProofFromMessage(
     return undefined;
   }
   const diffId = String(
-    verb === "delete" ? before.id ?? "" : after.id ?? ""
+    verb === "delete" ? (before.id ?? "") : (after.id ?? "")
   );
   if (!diffId || (explicitId && explicitId !== diffId)) return undefined;
   return {
@@ -806,7 +772,8 @@ function validateTransitionMatrix(
       const afterExpiry = asEpoch(after.claim_expires_at);
       const sameLease =
         String(before.claim_owner_principal_id ?? "") === proof.principal &&
-        String(before.claimed_by_run ?? "") === String(after.claimed_by_run ?? "");
+        String(before.claimed_by_run ?? "") ===
+          String(after.claimed_by_run ?? "");
       return (
         String(before.id) === itemId &&
         String(after.id) === itemId &&
@@ -881,7 +848,10 @@ function queryStage(query: string): string {
   if (query.startsWith("SELECT dolt_commit")) return "branch.commit";
   if (query.startsWith("SELECT dolt_merge_base")) return "merge.reachability";
   if (query === "SELECT dolt_merge('--abort')") return "merge.abort";
-  if (query.startsWith("SELECT dolt_merge") || query.includes("FROM dolt_merge"))
+  if (
+    query.startsWith("SELECT dolt_merge") ||
+    query.includes("FROM dolt_merge")
+  )
     return "merge.apply";
   if (query.startsWith("SELECT dolt_branch")) return "branch.delete";
   if (query.includes("FROM dolt.merge_status")) return "merge.status";
@@ -926,7 +896,7 @@ function isConnectionTerminal(error: unknown): boolean {
 }
 
 export class DoltgresWorkItemAdapter
-  implements WorkItemsDoltgresPort, WorkItemQueryPort
+  implements WorkItemsContentPort, WorkItemQueryPort
 {
   private operationTail: Promise<void> = Promise.resolve();
   private poisoned = false;
@@ -941,7 +911,6 @@ export class DoltgresWorkItemAdapter
   private readonly recreateClient: (() => Sql) | undefined;
   private readClient: Sql | undefined;
   private readonly recreateReadClient: (() => Sql) | undefined;
-  private readonly readLaneConfigured: boolean;
   /**
    * Read pool derived from `recreateClient` when the caller passed no
    * `readClient`. Built on first read, not in the constructor: a node that
@@ -966,9 +935,16 @@ export class DoltgresWorkItemAdapter
     this.readClient = options.readClient;
     this.recreateReadClient =
       options.recreateReadClient ?? options.recreateClient;
-    this.readLaneConfigured = Boolean(
-      options.readClient || options.recreateReadClient || options.recreateClient
-    );
+    if (!this.readClient && !this.recreateReadClient) {
+      throw new Error(
+        "DoltgresWorkItemAdapter requires a dedicated readClient or read-client factory"
+      );
+    }
+    if (this.readClient === this.sql) {
+      throw new Error(
+        "DoltgresWorkItemAdapter read and write clients must be separate pools"
+      );
+    }
   }
 
   private logStage(
@@ -1223,7 +1199,7 @@ export class DoltgresWorkItemAdapter
       locked = await this.acquireGlobalLock(conn, context);
       const reconciliation = options.reconcile ?? "required";
       if (reconciliation !== "skipped")
-        await this.reconcileUnderLock(conn, reconciliation);
+        await this.reconcileUnderLock(conn);
       return await fn(conn);
     } catch (error) {
       pendingRecovery = error instanceof PendingBranchRecoveryError;
@@ -1248,12 +1224,7 @@ export class DoltgresWorkItemAdapter
         rawConn = undefined;
         locked = false;
       }
-      if (
-        locked &&
-        rawConn &&
-        this.sql === operationPool &&
-        !this.poisoned
-      ) {
+      if (locked && rawConn && this.sql === operationPool && !this.poisoned) {
         try {
           await this.executeQuery(
             operationPool,
@@ -1389,7 +1360,10 @@ export class DoltgresWorkItemAdapter
         // No `classification` key: the caller records the cleaned verdict, and
         // adding a value here would make existing classification queries
         // incomplete. `deleteAckLost` is the queryable substrate signal.
-        this.logReconciliation("info", conn, { ...fields, deleteAckLost: true });
+        this.logReconciliation("info", conn, {
+          ...fields,
+          deleteAckLost: true,
+        });
         return true;
       }
       // Once reachability (and, for a fresh merge, the exact current row) is
@@ -1535,16 +1509,11 @@ export class DoltgresWorkItemAdapter
     conn: WorkItemConnection,
     branch: string,
     pending?: PendingBranchState<T>,
-    originalError?: unknown,
-    reconciliation: BranchReconciliation = "required"
+    originalError?: unknown
   ): Promise<T | undefined> {
     const startedAt = Date.now();
-    // A read that will serve anyway records handled degradation, not failure:
-    // the request still succeeds, so an error level would make every healthy
-    // read on a node carrying residual evidence look like an outage.
-    const served = reconciliation === "best_effort";
-    const preserveLevel = served ? "warn" : "error";
-    const preserveFields = served ? { served: true } : {};
+    const preserveLevel = "error";
+    const preserveFields = {};
     try {
       const checkoutRows = await conn.unsafe("SELECT dolt_checkout('main')");
       assertDoltStatus(checkoutRows, "dolt_checkout");
@@ -1837,10 +1806,7 @@ export class DoltgresWorkItemAdapter
     }
   }
 
-  private async reconcileUnderLock(
-    conn: WorkItemConnection,
-    reconciliation: Exclude<BranchReconciliation, "skipped">
-  ): Promise<void> {
+  private async reconcileUnderLock(conn: WorkItemConnection): Promise<void> {
     await this.makeMainSafe(conn);
 
     let branchRows: ReadonlyArray<Record<string, unknown>>;
@@ -1855,14 +1821,8 @@ export class DoltgresWorkItemAdapter
       .map((row) => String(row.name ?? ""))
       .filter((branch) => branch.startsWith(OP_BRANCH_PREFIX))
       .sort();
-    // bug.5358: a read is served from committed `main`, which an unprovable
-    // evidence branch cannot corrupt. Failing the read closed here let one
-    // residual branch return 503 for every read permanently — nothing deletes a
-    // `preserved_unsafe` branch, and this sweep re-walks `dolt.branches` on each
-    // request, so a restart does not clear it. `resolveOperationBranch` already
-    // recorded the branch; keep sweeping, because a sibling may still be
-    // provable and skipping it would drop read-your-writes for a durable write
-    // that only needs its merge finished.
+    // Reads never enter this method. A write preserves unprovable evidence
+    // and may quarantine only a structurally verified obsolete operation.
     let tolerated = false;
     for (const branch of branches) {
       try {
@@ -1870,11 +1830,9 @@ export class DoltgresWorkItemAdapter
           conn,
           branch,
           undefined,
-          undefined,
-          reconciliation
+          undefined
         );
       } catch (error) {
-        if (reconciliation === "required") {
           // ONLY the structurally-verified arm is quarantinable. A branch whose
           // tip is missing, or whose reachability could not be proven, has
           // established nothing about its contents — parking it could hide
@@ -1905,12 +1863,10 @@ export class DoltgresWorkItemAdapter
           await this.quarantineOperationBranch(conn, branch, error);
           tolerated = true;
           continue;
-        }
-        tolerated = true;
       }
     }
     // Each iteration re-proves `main` itself, so one pass at the end is enough
-    // to guarantee the caller's read never runs on a half-reconciled session.
+    // to guarantee the next command never runs on a half-reconciled session.
     if (tolerated) await this.makeMainSafe(conn);
   }
 
@@ -2139,7 +2095,7 @@ export class DoltgresWorkItemAdapter
    * passed one, otherwise one the adapter derives from `recreateClient`. It
    * never calls `dolt_checkout`, never takes the lock, and never reconciles,
    * so read concurrency equals that pool's width and no read ever waits on a
-   * write. Only a consumer that passes neither falls back to the shared lane.
+   * write. A missing independent read pool is a configuration error.
    *
    * WHY NOT CHECKING OUT IS SAFE: a fresh connection opens on the database's
    * default branch, which is `main`. This lane never moves it, so every read
@@ -2149,8 +2105,8 @@ export class DoltgresWorkItemAdapter
    * the bug.5358 guarantee, and they no longer pay to enumerate it.
    */
   /**
-   * The pool reads run on, or `undefined` when there is none and reads must
-   * take the shared write lane.
+   * Resolve the independent query pool. Missing configuration never falls
+   * back to writer admission.
    *
    * `recreateClient` is the caller's own factory for a work-items connection,
    * so a pool built from it has the right URL, the right `application_name`
@@ -2159,18 +2115,19 @@ export class DoltgresWorkItemAdapter
    * the write pool because that pool is `max: 1` on every node in the fleet:
    * sharing it would put every read back behind the in-flight write.
    */
-  private resolveReadPool(): Sql | undefined {
+  private resolveReadPool(): Sql {
     if (this.readClient) return this.readClient;
     if (!this.recreateReadClient) {
-      if (this.readLaneConfigured) {
-        throw new WorkItemsBusyError(
-          "Work-item read lane requires a fresh connection; retry shortly"
-        );
-      }
-      return undefined;
+      throw new WorkItemsBusyError(
+        "Work-item read lane requires a fresh connection; retry shortly"
+      );
     }
     try {
       this.readClient = this.recreateReadClient();
+      if (this.readClient === this.sql) {
+        this.readClient = undefined;
+        throw new Error("Read-client factory returned the writer pool");
+      }
     } catch (error) {
       this.logger.warn(
         {
@@ -2194,12 +2151,6 @@ export class DoltgresWorkItemAdapter
     fn: (conn: WorkItemConnection) => Promise<T>
   ): Promise<T> {
     const readPool = this.resolveReadPool();
-    if (!readPool) {
-      // Legacy shared lane — unchanged for consumers that pass no read client.
-      return this.withOperationQueue("read work items", (context) =>
-        this.withGlobalLock(context, fn, { reconcile: "best_effort" })
-      );
-    }
     const context = { operationId: randomUUID(), operation: "read work items" };
     try {
       // No reserve(): a read pins no session state, so it does not need a
@@ -2236,7 +2187,7 @@ export class DoltgresWorkItemAdapter
 
   private async getWith(conn: WorkItemConnection, id: WorkItemId) {
     const rows = await conn.unsafe(
-      `SELECT *, (claim_expires_at IS NOT NULL AND claim_expires_at > NOW()) AS claim_active FROM work_items WHERE id = ${escapeValue(id as string)} LIMIT 1`
+      `SELECT * FROM work_items WHERE id = ${escapeValue(id as string)} LIMIT 1`
     );
     return rows.length > 0 ? (rows[0] as Record<string, unknown>) : undefined;
   }
@@ -2293,7 +2244,7 @@ export class DoltgresWorkItemAdapter
     const rows = await this.readOnCleanMain(
       async (conn) =>
         (await conn.unsafe(
-          `SELECT *, (claim_expires_at IS NOT NULL AND claim_expires_at > NOW()) AS claim_active FROM work_items ${where} ORDER BY COALESCE(priority, 999) ASC, COALESCE(rank, 999) ASC, created_at DESC, id ASC${textNeedle ? "" : ` LIMIT ${limit + 1}`}`
+          `SELECT * FROM work_items ${where} ORDER BY COALESCE(priority, 999) ASC, COALESCE(rank, 999) ASC, created_at DESC, id ASC${textNeedle ? "" : ` LIMIT ${limit + 1}`}`
         )) as ReadonlyArray<Record<string, unknown>>
     );
     // Doltgres 0.57.3 panics when LOWER() receives an out-of-line TEXT value
@@ -2341,71 +2292,76 @@ export class DoltgresWorkItemAdapter
   ): Promise<WorkItem> {
     const principal = requirePrincipal(principalId);
     const createOnce = (allocatedId?: string) =>
-      this.mutate("create work item", principal, async (conn, proof) => {
-        const insert = async (allocatedId: string) => {
-          const columns = [
-            "id",
-            "type",
-            "title",
-            "status",
-            "node",
-            "created_by_principal_id",
-          ];
-          const values = [
-            escapeValue(allocatedId),
-            escapeValue(input.type),
-            escapeValue(input.title),
-            escapeValue(input.status ?? "needs_triage"),
-            escapeValue(input.node ?? "shared"),
-            escapeValue(principal),
-          ];
-          const add = (column: string, value: unknown) => {
-            if (value === undefined) return;
-            columns.push(column);
-            values.push(escapeValue(value));
+      this.mutate(
+        "create work item",
+        principal,
+        async (conn, proof) => {
+          const insert = async (allocatedId: string) => {
+            const columns = [
+              "id",
+              "type",
+              "title",
+              "status",
+              "node",
+              "created_by_principal_id",
+            ];
+            const values = [
+              escapeValue(allocatedId),
+              escapeValue(input.type),
+              escapeValue(input.title),
+              escapeValue(input.status ?? "needs_triage"),
+              escapeValue(input.node ?? "shared"),
+              escapeValue(principal),
+            ];
+            const add = (column: string, value: unknown) => {
+              if (value === undefined) return;
+              columns.push(column);
+              values.push(escapeValue(value));
+            };
+            add("summary", input.summary);
+            add("outcome", input.outcome);
+            add("project_id", input.projectId);
+            add("parent_id", input.parentId);
+            add("priority", input.priority);
+            add("rank", input.rank);
+            add("estimate", input.estimate);
+            add("assignees", input.assignees);
+            add("labels", input.labels);
+            add("spec_refs", input.specRefs);
+            const rows = await conn.unsafe(
+              `INSERT INTO work_items (${columns.join(", ")}) VALUES (${values.join(", ")}) RETURNING *`
+            );
+            const row = rows[0] as Record<string, unknown> | undefined;
+            if (!row) throw new Error("INSERT returned no row");
+            proof.itemId = allocatedId;
+            proof.afterRow = row;
+            return rowToWorkItem(row);
           };
-          add("summary", input.summary);
-          add("outcome", input.outcome);
-          add("project_id", input.projectId);
-          add("parent_id", input.parentId);
-          add("priority", input.priority);
-          add("rank", input.rank);
-          add("estimate", input.estimate);
-          add("assignees", input.assignees);
-          add("labels", input.labels);
-          add("spec_refs", input.specRefs);
-          const rows = await conn.unsafe(
-            `INSERT INTO work_items (${columns.join(", ")}) VALUES (${values.join(", ")}) RETURNING *, FALSE AS claim_active`
+
+          if (allocatedId) return insert(allocatedId);
+
+          const idRows = await conn.unsafe(
+            `SELECT id FROM work_items WHERE type = ${escapeValue(input.type)}`
           );
-          const row = rows[0] as Record<string, unknown> | undefined;
-          if (!row) throw new Error("INSERT returned no row");
-          proof.itemId = allocatedId;
-          proof.afterRow = row;
-          return rowToWorkItem(row);
-        };
-
-        if (allocatedId) return insert(allocatedId);
-
-        const idRows = await conn.unsafe(
-          `SELECT id FROM work_items WHERE type = ${escapeValue(input.type)}`
-        );
-        let maxSuffix = this.idFloor - 1;
-        for (const row of idRows as ReadonlyArray<Record<string, unknown>>) {
-          const suffix = parseSuffix(String(row.id), input.type);
-          if (suffix !== null && suffix > maxSuffix) maxSuffix = suffix;
-        }
-        const nextId = `${input.type}.${String(maxSuffix + 1).padStart(4, "0")}`;
-        try {
-          return await insert(nextId);
-        } catch (error) {
-          if (isDuplicateError(error)) {
-            throw new WorkItemAlreadyExistsError(nextId);
+          let maxSuffix = this.idFloor - 1;
+          for (const row of idRows as ReadonlyArray<Record<string, unknown>>) {
+            const suffix = parseSuffix(String(row.id), input.type);
+            if (suffix !== null && suffix > maxSuffix) maxSuffix = suffix;
           }
-          throw error;
+          const nextId = `${input.type}.${String(maxSuffix + 1).padStart(4, "0")}`;
+          try {
+            return await insert(nextId);
+          } catch (error) {
+            if (isDuplicateError(error)) {
+              throw new WorkItemAlreadyExistsError(nextId);
+            }
+            throw error;
+          }
+        },
+        {
+          proof: { verb: "create", principal },
         }
-      }, {
-        proof: { verb: "create", principal },
-      });
+      );
 
     if (input.id) {
       const requested = String(input.id);
@@ -2471,7 +2427,7 @@ export class DoltgresWorkItemAdapter
       async (conn, proof) => {
         clauses.push("revision = revision + 1", "updated_at = NOW()");
         const rows = await conn.unsafe(
-          `UPDATE work_items SET ${clauses.join(", ")} WHERE id = ${escapeValue(input.id as string)} AND (created_by_principal_id IS NULL OR created_by_principal_id = ${escapeValue(principal)}) RETURNING *, (claim_expires_at IS NOT NULL AND claim_expires_at > NOW()) AS claim_active`
+          `UPDATE work_items SET ${clauses.join(", ")} WHERE id = ${escapeValue(input.id as string)} AND (created_by_principal_id IS NULL OR created_by_principal_id = ${escapeValue(principal)}) RETURNING *`
         );
         const row = rows[0] as Record<string, unknown> | undefined;
         if (!row) await this.throwMissingOrUnauthorized(conn, input.id);
@@ -2484,10 +2440,12 @@ export class DoltgresWorkItemAdapter
           principal,
           itemId: input.id as string,
           patchValues: Object.fromEntries(
-            (Object.entries(PATCH_COLUMNS) as [
-              keyof WorkItemsPatchSet,
-              string,
-            ][])
+            (
+              Object.entries(PATCH_COLUMNS) as [
+                keyof WorkItemsPatchSet,
+                string,
+              ][]
+            )
               .filter(([key]) => input.set[key] !== undefined)
               .map(([key, column]) => [column, input.set[key]])
           ),
@@ -2505,33 +2463,8 @@ export class DoltgresWorkItemAdapter
     );
   }
 
-  async delete(id: WorkItemId, principalId: string): Promise<boolean> {
-    const principal = requirePrincipal(principalId);
-    return this.mutate(
-      `delete ${id as string}`,
-      principal,
-      async (conn) => {
-        const rows = await conn.unsafe(
-          `DELETE FROM work_items WHERE id = ${escapeValue(id as string)} AND (created_by_principal_id IS NULL OR created_by_principal_id = ${escapeValue(principal)}) RETURNING id`
-        );
-        if (rows.length) return true;
-        const current = await this.getWith(conn, id);
-        if (current) throw new WorkItemAuthorizationError(id as string);
-        return false;
-      },
-      {
-        proof: { verb: "delete", principal, itemId: id as string },
-        preflight: async (conn, proof) => {
-          const current = await this.getWith(conn, id);
-          if (!current) return;
-          if (!mayMutate(current, principal)) {
-            throw new WorkItemAuthorizationError(id as string);
-          }
-          proof.beforeRow = current;
-        },
-        shouldCommit: Boolean,
-      }
-    );
+  async delete(_id: WorkItemId, _principalId: string): Promise<boolean> {
+    throw new WorkItemDeletionRetiredError();
   }
 
   private async throwMissingOrUnauthorized(
@@ -2540,150 +2473,6 @@ export class DoltgresWorkItemAdapter
   ): Promise<never> {
     if (await this.getWith(conn, id)) {
       throw new WorkItemAuthorizationError(id as string);
-    }
-    throw new Error(`Work item not found: ${id as string}`);
-  }
-
-  async claim(input: {
-    id: WorkItemId;
-    runId: string;
-    command: string;
-    principalId: string;
-  }): Promise<WorkItem> {
-    const principal = requirePrincipal(input.principalId);
-    return this.mutate(
-      `claim ${input.id as string}`,
-      principal,
-      async (conn, proof) => {
-        const rows = await conn.unsafe(
-          `UPDATE work_items SET claimed_by_run = ${escapeValue(input.runId)}, claim_owner_principal_id = ${escapeValue(principal)}, claimed_at = NOW(), claim_expires_at = NOW() + INTERVAL '${CLAIM_TTL_SECONDS} seconds', last_command = ${escapeValue(input.command)}, revision = revision + 1, updated_at = NOW() WHERE id = ${escapeValue(input.id as string)} AND (claim_expires_at IS NULL OR claim_expires_at <= NOW() OR (claim_owner_principal_id = ${escapeValue(principal)} AND claimed_by_run = ${escapeValue(input.runId)})) RETURNING *, TRUE AS claim_active`
-        );
-        const row = rows[0] as Record<string, unknown> | undefined;
-        if (!row) await this.throwLeaseConflictOrMissing(conn, input.id);
-        proof.afterRow = row as Record<string, unknown>;
-        return rowToWorkItem(row as Record<string, unknown>);
-      },
-      {
-        proof: {
-          verb: "claim",
-          principal,
-          itemId: input.id as string,
-          runId: input.runId,
-          command: input.command,
-          commandProvided: true,
-        },
-        preflight: async (conn, proof) => {
-          const current = await this.getWith(conn, input.id);
-          if (!current)
-            throw new Error(`Work item not found: ${input.id as string}`);
-          const sameLease =
-            String(current.claim_owner_principal_id ?? "") === principal &&
-            String(current.claimed_by_run ?? "") === input.runId;
-          if (current.claim_active !== false && !sameLease) {
-            throw new WorkItemLeaseConflictError(input.id as string);
-          }
-          proof.beforeRow = current;
-        },
-      }
-    );
-  }
-
-  async heartbeat(input: {
-    id: WorkItemId;
-    runId: string;
-    command?: string;
-    principalId: string;
-  }): Promise<WorkItem> {
-    const principal = requirePrincipal(input.principalId);
-    return this.mutate(
-      `heartbeat ${input.id as string}`,
-      principal,
-      async (conn, proof) => {
-        const command =
-          input.command === undefined
-            ? ""
-            : `, last_command = ${escapeValue(input.command)}`;
-        const rows = await conn.unsafe(
-          `UPDATE work_items SET claim_expires_at = NOW() + INTERVAL '${CLAIM_TTL_SECONDS} seconds'${command}, revision = revision + 1, updated_at = NOW() WHERE id = ${escapeValue(input.id as string)} AND claim_owner_principal_id = ${escapeValue(principal)} AND claimed_by_run = ${escapeValue(input.runId)} AND claim_expires_at > NOW() RETURNING *, TRUE AS claim_active`
-        );
-        const row = rows[0] as Record<string, unknown> | undefined;
-        if (!row) await this.throwLeaseConflictOrMissing(conn, input.id);
-        proof.afterRow = row as Record<string, unknown>;
-        return rowToWorkItem(row as Record<string, unknown>);
-      },
-      {
-        proof: {
-          verb: "heartbeat",
-          principal,
-          itemId: input.id as string,
-          runId: input.runId,
-          command: input.command,
-          commandProvided: input.command !== undefined,
-        },
-        preflight: async (conn, proof) => {
-          const current = await this.getWith(conn, input.id);
-          if (!current)
-            throw new Error(`Work item not found: ${input.id as string}`);
-          const leaseMatches =
-            current.claim_active !== false &&
-            String(current.claim_owner_principal_id ?? "") === principal &&
-            String(current.claimed_by_run ?? "") === input.runId;
-          if (!leaseMatches) {
-            throw new WorkItemLeaseConflictError(input.id as string);
-          }
-          proof.beforeRow = current;
-        },
-      }
-    );
-  }
-
-  async release(input: {
-    id: WorkItemId;
-    runId: string;
-    principalId: string;
-  }): Promise<WorkItem> {
-    const principal = requirePrincipal(input.principalId);
-    return this.mutate(
-      `release ${input.id as string}`,
-      principal,
-      async (conn, proof) => {
-        const rows = await conn.unsafe(
-          `UPDATE work_items SET claimed_by_run = NULL, claim_owner_principal_id = NULL, claimed_at = NULL, claim_expires_at = NULL, revision = revision + 1, updated_at = NOW() WHERE id = ${escapeValue(input.id as string)} AND claim_owner_principal_id = ${escapeValue(principal)} AND claimed_by_run = ${escapeValue(input.runId)} RETURNING *, FALSE AS claim_active`
-        );
-        const row = rows[0] as Record<string, unknown> | undefined;
-        if (!row) await this.throwLeaseConflictOrMissing(conn, input.id);
-        proof.afterRow = row as Record<string, unknown>;
-        return rowToWorkItem(row as Record<string, unknown>);
-      },
-      {
-        proof: {
-          verb: "release",
-          principal,
-          itemId: input.id as string,
-          runId: input.runId,
-        },
-        preflight: async (conn, proof) => {
-          const current = await this.getWith(conn, input.id);
-          if (!current)
-            throw new Error(`Work item not found: ${input.id as string}`);
-          const leaseMatches =
-            String(current.claim_owner_principal_id ?? "") === principal &&
-            String(current.claimed_by_run ?? "") === input.runId;
-          if (!leaseMatches) {
-            throw new WorkItemLeaseConflictError(input.id as string);
-          }
-          proof.beforeRow = current;
-        },
-      }
-    );
-  }
-
-  private async throwLeaseConflictOrMissing(
-    conn: WorkItemConnection,
-    id: WorkItemId
-  ): Promise<never> {
-    if (await this.getWith(conn, id)) {
-      throw new WorkItemLeaseConflictError(id as string);
     }
     throw new Error(`Work item not found: ${id as string}`);
   }

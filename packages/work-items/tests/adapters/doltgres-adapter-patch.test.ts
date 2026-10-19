@@ -20,7 +20,10 @@ import type { Sql } from "postgres";
 import { describe, expect, it } from "vitest";
 
 import { DoltgresWorkItemAdapter } from "../../src/adapters/doltgres/adapter.js";
-import { makeFakeDoltgresSql } from "./fake-doltgres-sql.js";
+import {
+  independentReadPool,
+  makeFakeDoltgresSql,
+} from "./fake-doltgres-sql.js";
 
 function makeFakeSql(): { sql: Sql; queries: string[] } {
   const queries: string[] = [];
@@ -42,8 +45,7 @@ function makeFakeSql(): { sql: Sql; queries: string[] } {
           revision: 0,
           deploy_verified: q.includes("deploy_verified = TRUE"),
           project_id: q.includes("project_id = NULL") ? null : undefined,
-          parent_id:
-            /parent_id = '([^']*)'/.exec(q)?.[1] ?? undefined,
+          parent_id: /parent_id = '([^']*)'/.exec(q)?.[1] ?? undefined,
           blocked_by: q.includes("blocked_by = NULL") ? null : undefined,
           created_by_principal_id: "test",
           created_at: "2026-05-01",
@@ -80,7 +82,9 @@ function makeFakeSql(): { sql: Sql; queries: string[] } {
 describe("DoltgresWorkItemAdapter.patch — bug.5005 allowlist", () => {
   it("emits deploy_verified = TRUE for {deployVerified:true}", async () => {
     const { sql, queries } = makeFakeSql();
-    const adapter = new DoltgresWorkItemAdapter(sql);
+    const adapter = new DoltgresWorkItemAdapter(sql, {
+      readClient: independentReadPool(sql),
+    });
     await adapter.patch(
       { id: toWorkItemId("bug.5005"), set: { deployVerified: true } },
       "test"
@@ -92,7 +96,9 @@ describe("DoltgresWorkItemAdapter.patch — bug.5005 allowlist", () => {
 
   it("emits project_id = NULL for {projectId:null}", async () => {
     const { sql, queries } = makeFakeSql();
-    const adapter = new DoltgresWorkItemAdapter(sql);
+    const adapter = new DoltgresWorkItemAdapter(sql, {
+      readClient: independentReadPool(sql),
+    });
     await adapter.patch(
       { id: toWorkItemId("bug.5005"), set: { projectId: null } },
       "test"
@@ -104,7 +110,9 @@ describe("DoltgresWorkItemAdapter.patch — bug.5005 allowlist", () => {
 
   it("emits parent_id and blocked_by columns", async () => {
     const { sql, queries } = makeFakeSql();
-    const adapter = new DoltgresWorkItemAdapter(sql);
+    const adapter = new DoltgresWorkItemAdapter(sql, {
+      readClient: independentReadPool(sql),
+    });
     await adapter.patch(
       {
         id: toWorkItemId("bug.5005"),
@@ -120,7 +128,9 @@ describe("DoltgresWorkItemAdapter.patch — bug.5005 allowlist", () => {
 
   it("still emits the existing whitelisted columns (title)", async () => {
     const { sql, queries } = makeFakeSql();
-    const adapter = new DoltgresWorkItemAdapter(sql);
+    const adapter = new DoltgresWorkItemAdapter(sql, {
+      readClient: independentReadPool(sql),
+    });
     await adapter.patch(
       { id: toWorkItemId("bug.5005"), set: { title: "renamed" } },
       "test"

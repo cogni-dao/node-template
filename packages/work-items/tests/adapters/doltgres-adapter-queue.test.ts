@@ -1,242 +1,96 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
-/** Proves in-process Dolt operations wait FIFO instead of failing on overlap. */
-
-import { toWorkItemId } from "@cogni-dao/work-items";
+/** Reads have no writer admission path; leases cannot call versioned content. */
+import type { Sql } from "postgres";
 import { describe, expect, it, vi } from "vitest";
+import { toWorkItemId, type WorkItemLeasePort } from "../../src/index.js";
+import { DoltgresWorkItemAdapter } from "../../src/adapters/doltgres/adapter.js";
+import { withWorkItemLeases } from "../../src/with-leases.js";
+import type { WorkItemsContentPort } from "../../src/adapters/doltgres/ports.js";
 
-import {
-  DoltgresWorkItemAdapter,
-  WorkItemsBusyError,
-} from "../../src/adapters/doltgres/adapter.js";
-import { makeFakeDoltgresSql } from "./fake-doltgres-sql.js";
-
-const row = {
-  id: "task.0001",
-  type: "task",
-  title: "queued",
-  status: "needs_implement",
-  node: "shared",
-  actor: "either",
-  assignees: [],
-  external_refs: [],
-  labels: [],
-  spec_refs: [],
-  revision: 1,
-  deploy_verified: false,
-  created_by_principal_id: "principal-1",
-  claimed_by_run: "run-1",
-  claim_owner_principal_id: "principal-1",
-  claimed_at: "2026-10-03T00:00:00.000Z",
-  claim_expires_at: "2026-10-03T00:05:00.000Z",
-  created_at: "2026-10-03T00:00:00.000Z",
-  updated_at: "2026-10-03T00:00:00.000Z",
-};
-
-function makeBlockedHeartbeatAdapter(queueWaitMs?: number) {
-  const queries: string[] = [];
-  let releaseHeartbeat: (rows: ReadonlyArray<Record<string, unknown>>) => void =
-    () => undefined;
-  const heartbeatGate = new Promise<ReadonlyArray<Record<string, unknown>>>(
-    (resolve) => {
-      releaseHeartbeat = resolve;
-    }
+it("rejects a shared read/write pool before executing SQL", () => {
+  const pool = { unsafe: vi.fn() } as unknown as Sql;
+  expect(() => new DoltgresWorkItemAdapter(pool, { readClient: pool })).toThrow(
+    /separate pools/
   );
-  const sql = makeFakeDoltgresSql((query) => {
-    if (query.startsWith("UPDATE work_items SET claim_expires_at = NOW()")) {
-      return heartbeatGate;
-    }
-    if (query.includes("FROM work_items")) {
-      return [{ ...row, claim_active: true }];
-    }
-    return [];
-  }, queries);
-  return {
-    adapter: new DoltgresWorkItemAdapter(
-      sql,
-      queueWaitMs === undefined ? {} : { queueWaitMs }
-    ),
-    queries,
-    releaseHeartbeat: () => releaseHeartbeat([{ ...row, claim_active: true }]),
-  };
-}
+  expect(pool.unsafe).not.toHaveBeenCalled();
+});
 
-async function waitForHeartbeatDml(queries: string[]): Promise<void> {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    if (
-      queries.some((query) =>
-        query.startsWith("UPDATE work_items SET claim_expires_at = NOW()")
-      )
-    ) {
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 1));
-  }
-  throw new Error("heartbeat did not reach its DML gate");
-}
-
-function makeBlockedStaleHeartbeatAdapter() {
-  const queries: string[] = [];
-  let releasePreflight: (rows: ReadonlyArray<Record<string, unknown>>) => void =
-    () => undefined;
-  const preflightGate = new Promise<ReadonlyArray<Record<string, unknown>>>(
-    (resolve) => {
-      releasePreflight = resolve;
-    }
+it("all concurrent read methods never reserve, lock, checkout, reconcile, or query writer", async () => {
+  const write = {
+    unsafe: vi.fn(() => {
+      throw new Error("writer must stay untouched");
+    }),
+    reserve: vi.fn(),
+  } as unknown as Sql;
+  const read = { unsafe: vi.fn(async () => []) } as unknown as Sql;
+  const adapter = new DoltgresWorkItemAdapter(write, { readClient: read });
+  await Promise.all(Array.from({ length: 100 }, () => Promise.all([adapter.list(), adapter.get(toWorkItemId("task.0001")), adapter.listRelations(toWorkItemId("task.0001"))])));
+  expect(write.unsafe).not.toHaveBeenCalled();
+  expect(write.reserve).not.toHaveBeenCalled();
+  expect(read.unsafe).toHaveBeenCalledTimes(300);
+  expect(read.unsafe).not.toHaveBeenCalledWith(
+    expect.stringMatching(/dolt_|advisory/)
   );
-  let blockFirstExactRead = true;
-  const sql = makeFakeDoltgresSql((query) => {
-    if (
-      blockFirstExactRead &&
-      query.includes("FROM work_items") &&
-      query.includes("WHERE id = 'task.0001'")
-    ) {
-      blockFirstExactRead = false;
-      return preflightGate;
-    }
-    if (query.includes("FROM work_items")) {
-      return [{ ...row, claim_active: true }];
-    }
-    return [];
-  }, queries);
-  return {
-    adapter: new DoltgresWorkItemAdapter(sql, { queueWaitMs: 1_000 }),
-    queries,
-    releasePreflight: () => releasePreflight([{ ...row, claim_active: true }]),
-  };
-}
+});
 
-async function waitForExactRead(queries: string[]): Promise<void> {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    if (
-      queries.some(
-        (query) =>
-          query.includes("FROM work_items") &&
-          query.includes("WHERE id = 'task.0001'")
-      )
-    ) {
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 1));
-  }
-  throw new Error("heartbeat did not reach its stale-lease preflight");
-}
-
-describe("DoltgresWorkItemAdapter operation queue", () => {
-  it("queues a concurrent read behind heartbeat and serves both", async () => {
-    const { adapter, queries, releaseHeartbeat } =
-      makeBlockedHeartbeatAdapter(100);
-    const heartbeat = adapter.heartbeat({
-      id: toWorkItemId(row.id),
-      runId: "run-1",
-      command: "/implement:heartbeat",
-      principalId: "principal-1",
+describe("lease/content composition", () => {
+  it("heartbeat and release never read Dolt, including errors", async () => {
+    const content = {
+      get: vi.fn(() => {
+        throw new Error("Dolt unavailable");
+      }),
+    } as unknown as WorkItemsContentPort;
+    const leases = {
+      heartbeat: vi.fn(async () => {
+        throw new Error("conflict");
+      }),
+      release: vi.fn(async () => ({ active: false })),
+    } as unknown as WorkItemLeasePort;
+    const adapter = withWorkItemLeases(content, leases);
+    const input = {
+      id: toWorkItemId("task.0001"),
+      principalId: "p",
+      runId: "r",
+      leaseToken: "token",
+    };
+    await expect(adapter.heartbeat(input)).rejects.toThrow("conflict");
+    await expect(adapter.release(input)).resolves.toMatchObject({
+      active: false,
     });
-    await waitForHeartbeatDml(queries);
-
-    const list = adapter.list();
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    expect(
-      queries.some(
-        (query) =>
-          query.includes("FROM work_items") && query.includes("ORDER BY")
-      )
-    ).toBe(false);
-
-    releaseHeartbeat();
-    await expect(heartbeat).resolves.toMatchObject({ id: "task.0001" });
-    await expect(list).resolves.toMatchObject({
-      items: [expect.objectContaining({ id: "task.0001" })],
-    });
+    expect(content.get).not.toHaveBeenCalled();
   });
 
-  it("serves 20/20 reads queued behind a cheap stale-heartbeat preflight", async () => {
-    const { adapter, queries, releasePreflight } =
-      makeBlockedStaleHeartbeatAdapter();
-    const staleHeartbeat = adapter.heartbeat({
-      id: toWorkItemId(row.id),
-      runId: "stale-run",
-      principalId: "principal-1",
-    });
-    await waitForExactRead(queries);
-
-    const reads = Array.from({ length: 20 }, () => adapter.list());
-    releasePreflight();
-
-    await expect(staleHeartbeat).rejects.toMatchObject({
-      name: "WorkItemLeaseConflictError",
-    });
-    const results = await Promise.all(reads);
-    expect(results).toHaveLength(20);
-    expect(results.every((result) => result.items.length === 1)).toBe(true);
-    expect(queries.some((query) => query.includes("dolt_checkout('-b'"))).toBe(
-      false
-    );
-    expect(
-      queries.some((query) =>
-        query.startsWith("UPDATE work_items SET claim_expires_at = NOW()")
-      )
-    ).toBe(false);
+  it("ignores legacy Dolt claims and projects PostgreSQL authority in one page batch", async () => {
+    const item = {
+      id: toWorkItemId("task.0001"),
+      claimedByRun: "obsolete",
+      claimedAt: "old",
+      lastCommand: "old",
+    };
+    const content = {
+      list: vi.fn(async () => ({
+        items: [item],
+        pageInfo: { endCursor: null, hasMore: false },
+      })),
+    } as unknown as WorkItemsContentPort;
+    const leases = {
+      getMany: vi.fn(async () => new Map()),
+    } as unknown as WorkItemLeasePort;
+    const page = await withWorkItemLeases(content, leases).list();
+    expect(page.items[0]?.claimedByRun).toBeUndefined();
+    expect(page.items[0]?.lastCommand).toBeUndefined();
+    expect(leases.getMany).toHaveBeenCalledExactlyOnceWith([item.id]);
+  });
+  it("content mutation success never depends on PostgreSQL hydration", async () => {
+    const item = { id: toWorkItemId("task.0001"), title: "committed" };
+    const content = { create: vi.fn(async () => item), patch: vi.fn(async () => item) } as unknown as WorkItemsContentPort;
+    const leases = { getMany: vi.fn(async () => { throw new Error("PostgreSQL unavailable"); }) } as unknown as WorkItemLeasePort;
+    const adapter = withWorkItemLeases(content, leases);
+    await expect(adapter.create({type:"task",title:"committed"}, "p")).resolves.toBe(item);
+    await expect(adapter.patch({id:item.id,set:{title:"committed"}}, "p")).resolves.toBe(item);
+    expect(leases.getMany).not.toHaveBeenCalled();
   });
 
-  it("keeps the default queue wait bounded at 30 seconds", async () => {
-    const { adapter, queries, releaseHeartbeat } =
-      makeBlockedHeartbeatAdapter();
-    const heartbeat = adapter.heartbeat({
-      id: toWorkItemId(row.id),
-      runId: "run-1",
-      principalId: "principal-1",
-    });
-    await waitForHeartbeatDml(queries);
-
-    vi.useFakeTimers();
-    try {
-      const queryCountBeforeQueuedRead = queries.length;
-      let readOutcome: "pending" | "resolved" | "rejected" = "pending";
-      const queuedRead = adapter.get(toWorkItemId(row.id));
-      void queuedRead.then(
-        () => {
-          readOutcome = "resolved";
-        },
-        () => {
-          readOutcome = "rejected";
-        }
-      );
-
-      await vi.advanceTimersByTimeAsync(29_999);
-      expect(readOutcome).toBe("pending");
-      expect(queries).toHaveLength(queryCountBeforeQueuedRead);
-
-      await vi.advanceTimersByTimeAsync(1);
-      await expect(queuedRead).rejects.toMatchObject({
-        name: "WorkItemsBusyError",
-        message: "Work-item store queue wait timed out; retry shortly",
-      });
-    } finally {
-      releaseHeartbeat();
-      await heartbeat;
-      vi.useRealTimers();
-    }
-  });
-
-  it("returns bounded busy and skips an abandoned queue ticket", async () => {
-    const { adapter, queries, releaseHeartbeat } =
-      makeBlockedHeartbeatAdapter(5);
-    const heartbeat = adapter.heartbeat({
-      id: toWorkItemId(row.id),
-      runId: "run-1",
-      principalId: "principal-1",
-    });
-    await waitForHeartbeatDml(queries);
-
-    const expiredWaiter = adapter.get(toWorkItemId(row.id));
-    await expect(expiredWaiter).rejects.toBeInstanceOf(WorkItemsBusyError);
-    const laterRead = adapter.get(toWorkItemId(row.id));
-    releaseHeartbeat();
-    await heartbeat;
-    await expect(laterRead).resolves.toMatchObject({
-      id: "task.0001",
-    });
-  });
 });

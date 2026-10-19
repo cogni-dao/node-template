@@ -11,6 +11,7 @@
  * @internal
  */
 
+import type { WorkItemLease } from "@cogni/work-items";
 import type {
   WorkItemsCreateInput as ContractCreateInput,
   WorkItemCoordinationOutput,
@@ -316,7 +317,7 @@ export async function claimWorkItem(input: {
   runId: string;
   command: string;
   principalId: string;
-}): Promise<WorkItemDto> {
+}): Promise<WorkItemLease> {
   const container = getContainer();
   try {
     const item = await container.doltgresWorkItems.claim({
@@ -325,7 +326,7 @@ export async function claimWorkItem(input: {
       command: input.command,
       principalId: input.principalId,
     });
-    return toDto(item);
+    return item;
   } catch (error) {
     rethrowBackendError(error);
   }
@@ -334,16 +335,18 @@ export async function claimWorkItem(input: {
 export async function releaseWorkItem(input: {
   id: string;
   runId: string;
+  leaseToken: string;
   principalId: string;
-}): Promise<WorkItemDto> {
+}): Promise<WorkItemLease> {
   const container = getContainer();
   try {
     const item = await container.doltgresWorkItems.release({
       id: toWorkItemId(input.id),
       runId: input.runId,
+      leaseToken: input.leaseToken,
       principalId: input.principalId,
     });
-    return toDto(item);
+    return item;
   } catch (error) {
     rethrowBackendError(error);
   }
@@ -352,18 +355,20 @@ export async function releaseWorkItem(input: {
 export async function heartbeatWorkItem(input: {
   id: string;
   runId: string;
+  leaseToken: string;
   command?: string;
   principalId: string;
-}): Promise<WorkItemDto> {
+}): Promise<WorkItemLease> {
   const container = getContainer();
   try {
     const item = await container.doltgresWorkItems.heartbeat({
       id: toWorkItemId(input.id),
       runId: input.runId,
+      leaseToken: input.leaseToken,
       ...(input.command !== undefined && { command: input.command }),
       principalId: input.principalId,
     });
-    return toDto(item);
+    return item;
   } catch (error) {
     rethrowBackendError(error);
   }

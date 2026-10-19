@@ -32,3 +32,7 @@ export type {
   WorkItemsPatchInput,
   WorkItemsPatchSet,
 } from "./ports.js";
+
+export type { WorkItemsContentPort } from "./ports.js";
+
+export { WorkItemDeletionRetiredError } from "../../errors.js";

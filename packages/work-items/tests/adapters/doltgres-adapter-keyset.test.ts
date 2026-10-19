@@ -22,7 +22,10 @@ import {
   DoltgresWorkItemAdapter,
   WorkItemsBusyError,
 } from "../../src/adapters/doltgres/adapter.js";
-import { makeFakeDoltgresSql } from "./fake-doltgres-sql.js";
+import {
+  independentReadPool,
+  makeFakeDoltgresSql,
+} from "./fake-doltgres-sql.js";
 
 type Row = Record<string, unknown>;
 
@@ -162,7 +165,7 @@ function makeFakeSql(rows: Row[]): { sql: Sql; queries: string[] } {
     // Only handle the SELECT * FROM work_items list path — that's what
     // adapter.list() issues. Anything else throws so the test surfaces
     // unexpected SQL.
-    if (!q.startsWith("SELECT *, (claim_expires_at")) {
+    if (!q.startsWith("SELECT * FROM work_items")) {
       throw new Error(`Unexpected SQL in test: ${q}`);
     }
     const cursor = parseCursorFromQuery(q);
@@ -177,7 +180,9 @@ describe("DoltgresWorkItemAdapter.list keyset SQL", () => {
   it("walks 30 rows with limit=10 in 3 pages, no dups, no skips", async () => {
     const dataset = buildDataset();
     const { sql, queries } = makeFakeSql(dataset);
-    const adapter = new DoltgresWorkItemAdapter(sql);
+    const adapter = new DoltgresWorkItemAdapter(sql, {
+      readClient: independentReadPool(sql),
+    });
 
     const seen: string[] = [];
     let cursor: string | undefined;
@@ -219,7 +224,9 @@ describe("DoltgresWorkItemAdapter.list keyset SQL", () => {
       })
     );
     const { sql } = makeFakeSql(rows);
-    const adapter = new DoltgresWorkItemAdapter(sql);
+    const adapter = new DoltgresWorkItemAdapter(sql, {
+      readClient: independentReadPool(sql),
+    });
 
     const seen: string[] = [];
     let cursor: string | undefined;
@@ -242,7 +249,9 @@ describe("DoltgresWorkItemAdapter.list keyset SQL", () => {
   it("hasMore=false on the last page", async () => {
     const dataset = buildDataset().slice(0, 7);
     const { sql } = makeFakeSql(dataset);
-    const adapter = new DoltgresWorkItemAdapter(sql);
+    const adapter = new DoltgresWorkItemAdapter(sql, {
+      readClient: independentReadPool(sql),
+    });
     const r = await adapter.list({ limit: 10 });
     expect(r.items.length).toBe(7);
     expect(r.pageInfo.hasMore).toBe(false);
@@ -251,7 +260,9 @@ describe("DoltgresWorkItemAdapter.list keyset SQL", () => {
 
   it("issues the mixed-direction OR-chain in the SQL string", async () => {
     const { sql, queries } = makeFakeSql(buildDataset());
-    const adapter = new DoltgresWorkItemAdapter(sql);
+    const adapter = new DoltgresWorkItemAdapter(sql, {
+      readClient: independentReadPool(sql),
+    });
     const first = await adapter.list({ limit: 10 });
     const second = await adapter.list({
       limit: 10,
@@ -295,7 +306,9 @@ describe("DoltgresWorkItemAdapter.list keyset SQL", () => {
       }),
     ];
     const { sql, queries } = makeFakeSql(rows);
-    const adapter = new DoltgresWorkItemAdapter(sql);
+    const adapter = new DoltgresWorkItemAdapter(sql, {
+      readClient: independentReadPool(sql),
+    });
 
     const first = await adapter.list({ text: "needle", limit: 1 });
     expect(first.items.map((item) => item.id)).toEqual(["task.5201"]);
@@ -322,24 +335,23 @@ describe("reads leave the write lane when a read pool is supplied", () => {
     const started: number[] = [];
     let inFlight = 0;
     let maxInFlight = 0;
-    const readPool = Object.assign(
-      async () => [],
-      {
-        unsafe: async (_q: string) => {
-          inFlight += 1;
-          maxInFlight = Math.max(maxInFlight, inFlight);
-          started.push(Date.now());
-          await new Promise((r) => setTimeout(r, 25));
-          inFlight -= 1;
-          return [] as unknown[];
-        },
-      }
-    ) as unknown as never;
+    const readPool = Object.assign(async () => [], {
+      unsafe: async (_q: string) => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        started.push(Date.now());
+        await new Promise((r) => setTimeout(r, 25));
+        inFlight -= 1;
+        return [] as unknown[];
+      },
+    }) as unknown as never;
 
     const { DoltgresWorkItemAdapter } = await import(
       "../../src/adapters/doltgres/adapter.js"
     );
-    const adapter = new DoltgresWorkItemAdapter(readPool, { readClient: readPool });
+    const adapter = new DoltgresWorkItemAdapter(independentReadPool(readPool), {
+      readClient: readPool,
+    });
 
     await Promise.all([adapter.list({}), adapter.list({}), adapter.list({})]);
 
@@ -419,12 +431,15 @@ describe("the read lane arms itself from recreateClient", () => {
     const { DoltgresWorkItemAdapter } = await import(
       "../../src/adapters/doltgres/adapter.js"
     );
-    const adapter = new DoltgresWorkItemAdapter(write.pool as unknown as never, {
-      recreateClient: (() => {
-        built += 1;
-        return read.pool;
-      }) as unknown as () => never,
-    });
+    const adapter = new DoltgresWorkItemAdapter(
+      write.pool as unknown as never,
+      {
+        recreateClient: (() => {
+          built += 1;
+          return read.pool;
+        }) as unknown as () => never,
+      }
+    );
 
     await Promise.all([adapter.list({}), adapter.list({}), adapter.list({})]);
 
@@ -436,16 +451,11 @@ describe("the read lane arms itself from recreateClient", () => {
     expect(write.peak()).toBe(0);
   });
 
-  it("keeps the shared lane when there is no factory to derive from", async () => {
-    // A consumer that passes neither option must keep its 0.1.4 behaviour
-    // exactly: reads take the admission queue and the advisory lock on the one
-    // pool it gave us. The full fake is needed here because the shared lane
-    // reserves a connection, which the read lane deliberately does not.
+  it("rejects missing read configuration before any SQL", () => {
     const { sql, queries } = makeFakeSql(buildDataset());
-    const adapter = new DoltgresWorkItemAdapter(sql);
-    const page = await adapter.list({ limit: 5 });
-    expect(page.items).toHaveLength(5);
-    // Non-vacuous: the shared lane is the only lane that takes the lock.
-    expect(queries.some((q) => q.includes("pg_try_advisory_lock"))).toBe(true);
+    expect(() => new DoltgresWorkItemAdapter(sql)).toThrow(
+      /dedicated readClient/
+    );
+    expect(queries).toEqual([]);
   });
 });

@@ -5,7 +5,10 @@ import { toWorkItemId } from "@cogni-dao/work-items";
 import { describe, expect, it } from "vitest";
 
 import { DoltgresWorkItemAdapter } from "../../src/adapters/doltgres/adapter.js";
-import { makeFakeDoltgresSql } from "./fake-doltgres-sql.js";
+import {
+  independentReadPool,
+  makeFakeDoltgresSql,
+} from "./fake-doltgres-sql.js";
 
 const row = {
   id: "task.0001",
@@ -46,7 +49,12 @@ function adapterWithQueries() {
     if (query.includes("FROM work_items")) return [row];
     return [];
   }, queries);
-  return { adapter: new DoltgresWorkItemAdapter(sql), queries };
+  return {
+    adapter: new DoltgresWorkItemAdapter(sql, {
+      readClient: independentReadPool(sql),
+    }),
+    queries,
+  };
 }
 
 /**
@@ -88,29 +96,13 @@ function adapterWithUnadoptedRow() {
   // not a workaround.
   const sql = makeFakeDoltgresSql(respond, queries);
   const adapter = new DoltgresWorkItemAdapter(sql, {
-    readClient: sql,
+    readClient: independentReadPool(sql),
     recreateClient: () => sql,
   });
   return { adapter, queries };
 }
 
-function adapterWithCoarseCommitDate() {
-  const queries: string[] = [];
-  const sql = makeFakeDoltgresSql((query) => {
-    if (query.startsWith("UPDATE work_items")) {
-      return [{ ...row, claim_active: true }];
-    }
-    if (query.includes("FROM work_items")) return [row];
-    return [];
-  }, queries, {
-    commitDate: "2026-10-02T00:01:00.000Z",
-    claimClaimedAt: "2026-10-02T00:01:00.900Z",
-    claimExpiresAt: "2026-10-02T00:06:00.000Z",
-  });
-  return { adapter: new DoltgresWorkItemAdapter(sql), queries };
-}
-
-describe("DoltgresWorkItemAdapter ownership and leases", () => {
+describe("DoltgresWorkItemAdapter content ownership", () => {
   it("stamps the immutable session principal on create", async () => {
     const { adapter, queries } = adapterWithQueries();
     await adapter.create(
@@ -139,66 +131,6 @@ describe("DoltgresWorkItemAdapter ownership and leases", () => {
     expect(update).toContain("created_by_principal_id = 'principal-1'");
   });
 
-  it("binds claims and heartbeats to principal plus run", async () => {
-    const { adapter, queries } = adapterWithQueries();
-    await adapter.claim({
-      id: toWorkItemId(row.id),
-      runId: "run-1",
-      command: "implement",
-      principalId: "principal-1",
-    });
-    await adapter.heartbeat({
-      id: toWorkItemId(row.id),
-      runId: "run-1",
-      principalId: "principal-1",
-    });
-
-    const claim = queries.find((query) =>
-      query.includes("SET claimed_by_run = 'run-1'")
-    );
-    const heartbeat = queries.find((query) =>
-      query.includes("SET claim_expires_at = NOW()")
-    );
-    expect(claim).toContain("claim_owner_principal_id = 'principal-1'");
-    expect(heartbeat).toContain(
-      "claim_owner_principal_id = 'principal-1' AND claimed_by_run = 'run-1'"
-    );
-  });
-
-  it("accepts a claim in the same second as a coarse Dolt commit date", async () => {
-    const { adapter } = adapterWithCoarseCommitDate();
-
-    await expect(
-      adapter.claim({
-        id: toWorkItemId(row.id),
-        runId: "run-1",
-        command: "implement",
-        principalId: "principal-1",
-      })
-    ).resolves.toMatchObject({ claimedByRun: "run-1" });
-  });
-
-  it("rejects a stale heartbeat before creating an operation branch", async () => {
-    const { adapter, queries } = adapterWithQueries();
-
-    await expect(
-      adapter.heartbeat({
-        id: toWorkItemId(row.id),
-        runId: "stale-run",
-        principalId: "principal-1",
-      })
-    ).rejects.toMatchObject({ name: "WorkItemLeaseConflictError" });
-
-    expect(queries.some((query) => query.includes("dolt_checkout('-b'"))).toBe(
-      false
-    );
-    expect(
-      queries.some((query) =>
-        query.startsWith("UPDATE work_items SET claim_expires_at")
-      )
-    ).toBe(false);
-  });
-
   it("rejects an unauthorized patch before branch creation and DML", async () => {
     const { adapter, queries } = adapterWithQueries();
 
@@ -214,49 +146,6 @@ describe("DoltgresWorkItemAdapter ownership and leases", () => {
     );
     expect(
       queries.some((query) => query.startsWith("UPDATE work_items SET title"))
-    ).toBe(false);
-  });
-
-  it("rejects a conflicting claim before branch creation and DML", async () => {
-    const { adapter, queries } = adapterWithQueries();
-
-    await expect(
-      adapter.claim({
-        id: toWorkItemId(row.id),
-        runId: "stale-run",
-        command: "/implement",
-        principalId: "principal-1",
-      })
-    ).rejects.toMatchObject({ name: "WorkItemLeaseConflictError" });
-
-    expect(queries.some((query) => query.includes("dolt_checkout('-b'"))).toBe(
-      false
-    );
-    expect(
-      queries.some((query) =>
-        query.startsWith("UPDATE work_items SET claimed_by_run")
-      )
-    ).toBe(false);
-  });
-
-  it("rejects a stale release before branch creation and DML", async () => {
-    const { adapter, queries } = adapterWithQueries();
-
-    await expect(
-      adapter.release({
-        id: toWorkItemId(row.id),
-        runId: "stale-run",
-        principalId: "principal-1",
-      })
-    ).rejects.toMatchObject({ name: "WorkItemLeaseConflictError" });
-
-    expect(queries.some((query) => query.includes("dolt_checkout('-b'"))).toBe(
-      false
-    );
-    expect(
-      queries.some((query) =>
-        query.startsWith("UPDATE work_items SET claimed_by_run = NULL")
-      )
     ).toBe(false);
   });
 });
@@ -281,11 +170,11 @@ describe("unadopted rows (NULL creator) stay mutable", () => {
     ).resolves.toMatchObject({ id: row.id, title: "renamed" });
   });
 
-  it("deletes an unadopted row", async () => {
+  it("rejects hard-delete even for an unadopted row", async () => {
     const { adapter } = adapterWithUnadoptedRow();
     await expect(
       adapter.delete(toWorkItemId(row.id), "principal-1")
-    ).resolves.toBe(true);
+    ).rejects.toMatchObject({ name: "WorkItemDeletionRetiredError" });
   });
 
   it("still refuses a row owned by someone else", async () => {

@@ -69,7 +69,8 @@ import {
 import { numberToPpm } from "@cogni/operator-wallet";
 import { PrivyOperatorWalletAdapter } from "@cogni/operator-wallet/adapters/privy";
 import type { ScheduleControlPort } from "@cogni/scheduler-core";
-import type { WorkItemQueryPort } from "@cogni/work-items";
+import { type WorkItemQueryPort, withWorkItemLeases } from "@cogni/work-items";
+import { PostgresWorkItemLeaseAdapter } from "@cogni/work-items/adapters/postgres";
 import { DoltgresWorkItemAdapter } from "@cogni/work-items/adapters/doltgres";
 import { MarkdownWorkItemAdapter } from "@cogni/work-items/markdown";
 import {
@@ -722,10 +723,10 @@ function createContainer(): Container {
 		const workItemsClient = createWorkItemsClient();
 		// Node stores start their allocator at 1; operator alone reserves the
 		// imported legacy range below 5000.
-		doltgresWorkItems = new DoltgresWorkItemAdapter(workItemsClient, {
+		doltgresWorkItems = withWorkItemLeases(new DoltgresWorkItemAdapter(workItemsClient, {
 			logger: log,
 			recreateClient: createWorkItemsClient,
-		});
+		}), new PostgresWorkItemLeaseAdapter(serviceDb.$client, {logger: log}));
 		const knowledgePort = new DoltgresKnowledgeStoreAdapter({
 			sql: doltClient,
 		});
