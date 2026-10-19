@@ -21,7 +21,11 @@ import type {
   WorkItemsListOutput,
 } from "@cogni/node-contracts";
 import type { WorkItem, WorkItemId } from "@cogni/work-items";
-import { toWorkItemId } from "@cogni/work-items";
+import {
+  toWorkItemId,
+  WorkItemWriteOutcomeUnknownError,
+} from "@cogni/work-items";
+export { WorkItemWriteOutcomeUnknownError };
 
 import { getContainer } from "@/bootstrap/container";
 
@@ -142,6 +146,15 @@ function rethrowBackendError(error: unknown): never {
   const message = (error as Error)?.message ?? "";
   const notFound = /^Work item not found: (.+)$/.exec(message);
   if (notFound?.[1]) throw new WorkItemNotFoundError(notFound[1]);
+  if ((error as Error)?.name === "WorkItemWriteOutcomeUnknownError") {
+    const receipt = error as WorkItemWriteOutcomeUnknownError;
+    throw new WorkItemWriteOutcomeUnknownError(
+      receipt.operationId,
+      receipt.branch,
+      receipt.commitHash,
+      receipt.itemId
+    );
+  }
   if (
     (error as Error)?.name === "DoltgresNotConfiguredError" ||
     (error as Error)?.name === "WorkItemsBusyError" ||

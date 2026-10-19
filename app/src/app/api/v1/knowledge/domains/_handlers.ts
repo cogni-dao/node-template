@@ -18,7 +18,11 @@
  * @internal
  */
 
-import { DomainAlreadyRegisteredError } from "@cogni/knowledge-store";
+import {
+  DomainAlreadyRegisteredError,
+  KnowledgeWriteOutcomeUnknownError,
+  KnowledgeWriteScopeRequiredError,
+} from "@cogni/knowledge-store";
 import {
   DomainsCreateRequestSchema,
   DomainsCreateResponseSchema,
@@ -92,6 +96,27 @@ export async function handleCreate(
       status: 201,
     });
   } catch (e: unknown) {
+    if (e instanceof KnowledgeWriteOutcomeUnknownError)
+      return NextResponse.json(
+        {
+          error: e.message,
+          errorCode: e.code,
+          retryable: false,
+          operationId: e.operationId,
+          branch: e.branch,
+          commitHash: e.commitHash ?? null,
+        },
+        { status: 409 }
+      );
+    if (e instanceof KnowledgeWriteScopeRequiredError)
+      return NextResponse.json(
+        {
+          error: e.message,
+          errorCode: "knowledge_write_scope_required",
+          retryable: false,
+        },
+        { status: 500 }
+      );
     if (e instanceof DomainAlreadyRegisteredError) {
       return NextResponse.json({ error: e.message }, { status: 409 });
     }

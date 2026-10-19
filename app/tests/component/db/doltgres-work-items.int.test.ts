@@ -17,6 +17,10 @@ import { toWorkItemId } from "@cogni/work-items";
 import { acquireDoltWriterLocks } from "@cogni-dao/doltgres-admission";
 import postgres, { type Sql } from "postgres";
 import {
+	DoltBranchSessionRunner,
+	DoltgresKnowledgeStoreAdapter,
+} from "@cogni/knowledge-store/adapters/doltgres";
+import {
 	GenericContainer,
 	type StartedTestContainer,
 	Wait,
@@ -511,4 +515,86 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			]);
 		}
 	}, 5_000);
+	it("knowledge and work-item writers share one database scope throughout a logical write", async () => {
+		const knowledgeSql = postgres(dbUrl, { max: 1, fetch_types: false });
+		const knowledgeRead = postgres(dbUrl, { max: 1, fetch_types: false });
+		const workSql = postgres(dbUrl, { max: 1, fetch_types: false });
+		const workRead = postgres(dbUrl, { max: 1, fetch_types: false });
+		const store = new DoltgresKnowledgeStoreAdapter({
+			sql: knowledgeRead,
+			writerSession: new DoltBranchSessionRunner(knowledgeSql, {
+				writerProtocol: "database",
+			}),
+		});
+		const work = new DoltgresWorkItemAdapter(workSql, {
+			readClient: workRead,
+			lockWaitMs: 100,
+			lockRetryMs: 10,
+		});
+		let release: () => void = () => {};
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let entered: () => void = () => {};
+		let failed: (error: unknown) => void = () => {};
+		const ready = new Promise<void>((resolve, reject) => {
+			entered = resolve;
+			failed = reject;
+		});
+		let holding: Promise<unknown> | undefined;
+		const id = toWorkItemId("task.9600");
+		try {
+			await store.registerDomain({ id: "scope-mix", name: "Scope proof" });
+			await work.create(
+				{ id, type: "task", title: "before mixed write" },
+				"mixed-principal",
+			);
+			holding = store.withWrite(
+				{
+					operationId: "native.knowledge.workitem.mix",
+					message: "mixed writer proof",
+				},
+				async (write) => {
+					await write.addKnowledge({
+						id: "native-mixed-scope",
+						domain: "scope-mix",
+						title: "Scoped knowledge",
+						content: "Atomic content",
+						entryType: "finding",
+						sourceType: "agent",
+					});
+					entered();
+					await gate;
+					return "committed";
+				},
+			);
+			void holding.catch(failed);
+			await ready;
+			await expect(
+				work.patch({ id, set: { title: "must wait" } }, "mixed-principal"),
+			).rejects.toBeInstanceOf(WorkItemsBusyError);
+			await expect(work.get(id)).resolves.toMatchObject({
+				title: "before mixed write",
+			});
+			release();
+			await expect(holding).resolves.toBe("committed");
+			await expect(
+				store.getKnowledge("native-mixed-scope"),
+			).resolves.toMatchObject({ content: "Atomic content" });
+			await expect(
+				work.patch(
+					{ id, set: { title: "after knowledge acknowledgement" } },
+					"mixed-principal",
+				),
+			).resolves.toMatchObject({ title: "after knowledge acknowledgement" });
+		} finally {
+			release();
+			await holding?.catch(() => undefined);
+			await Promise.all(
+				[knowledgeSql, knowledgeRead, workSql, workRead].map((client) =>
+					client.end({ timeout: 0 }),
+				),
+			);
+		}
+	}, 15_000);
 });

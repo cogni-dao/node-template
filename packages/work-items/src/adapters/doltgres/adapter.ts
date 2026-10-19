@@ -26,6 +26,7 @@ import type { ReservedSql, Sql } from "postgres";
 
 import {
   WorkItemDeletionRetiredError,
+  WorkItemWriteOutcomeUnknownError,
   WorkItemsBusyError,
 } from "../../errors.js";
 export {
@@ -185,6 +186,9 @@ interface MutationOptions<T> {
 }
 
 interface PendingBranchState<T> {
+  readonly operationId: string;
+  commitAttempted?: boolean;
+  outcomeSafelyAbsent?: boolean;
   readonly branch: string;
   readonly baseHash: string;
   readonly proof: MutationProof;
@@ -1591,7 +1595,9 @@ export class DoltgresWorkItemAdapter
       });
       throw this.preservedBranchError(branch, error);
     }
-    if (pending && tip === pending.baseHash) {
+    if (pending && !pending.branchCommit && tip === pending.baseHash) {
+      // The owned ref never acquired a commit; no later sweep can land this intent.
+      pending.outcomeSafelyAbsent = true;
       try {
         await this.deleteOperationBranch(conn, branch);
       } catch (error) {
@@ -1970,21 +1976,33 @@ export class DoltgresWorkItemAdapter
         });
       } catch (error) {
         if (!(error instanceof PendingBranchRecoveryError)) throw error;
-        const resolved = await this.withGlobalLock(
-          context,
-          (conn) =>
-            this.resolveOperationBranch(
-              conn,
+        try {
+          const resolved = await this.withGlobalLock(
+            context,
+            (conn) =>
+              this.resolveOperationBranch(
+                conn,
+                error.state.branch,
+                error.state as PendingBranchState<T>,
+                error.originalError
+              ),
+            { reconcile: "skipped" }
+          );
+          if (resolved === undefined) throw new DoltMergeOutcomeUnknownError();
+          return resolved;
+        } catch (recoveryError) {
+          // This wrapper belongs only to the CURRENT command. Old orphan preflight
+          // failures occur before mutateOnBranch and remain safe admission failures.
+          if (error.state.commitAttempted && !error.state.outcomeSafelyAbsent) {
+            throw new WorkItemWriteOutcomeUnknownError(
+              error.state.operationId,
               error.state.branch,
-              error.state as PendingBranchState<T>,
-              error.originalError
-            ),
-          { reconcile: "skipped" }
-        );
-        if (resolved === undefined) {
-          throw new DoltMergeOutcomeUnknownError();
+              error.state.branchCommit,
+              error.state.proof.itemId
+            );
+          }
+          throw recoveryError;
         }
-        return resolved;
       }
     });
   }
@@ -2004,6 +2022,7 @@ export class DoltgresWorkItemAdapter
       "SELECT dolt_hashof('main') AS dolt_hashof"
     );
     const state: PendingBranchState<T> = {
+      operationId: conn.context.operationId,
       branch,
       baseHash: doltScalar(baseRows, "dolt_hashof"),
       proof,
@@ -2024,6 +2043,7 @@ export class DoltgresWorkItemAdapter
       }
       const addRows = await conn.unsafe("SELECT dolt_add('work_items')");
       assertDoltStatus(addRows, "dolt_add");
+      state.commitAttempted = true;
       const commitRows = await conn.unsafe(
         `SELECT dolt_commit('-m', ${escapeValue(`${COMMIT_TAG}: ${message} by actor:${principalId}`)})`
       );

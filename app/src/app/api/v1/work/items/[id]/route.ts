@@ -24,6 +24,7 @@ import {
   WorkItemForbiddenError,
   WorkItemNotFoundError,
   WorkItemsBackendNotReadyError,
+  WorkItemWriteOutcomeUnknownError,
 } from "@/app/_facades/work/items.server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
@@ -127,6 +128,17 @@ export const PATCH = wrapRouteHandlerWithLogging<{
       }
       if (e instanceof WorkItemForbiddenError) {
         return NextResponse.json({ error: e.message }, { status: 403 });
+      }
+      if (e instanceof WorkItemWriteOutcomeUnknownError) {
+        return NextResponse.json(
+          {
+            error: e.code,
+            retryable: false,
+            lookup: e.receipt.lookup,
+            message: e.message,
+          },
+          { status: 409 }
+        );
       }
       if (e instanceof WorkItemsBackendNotReadyError) {
         return NextResponse.json({ error: e.message }, { status: 503 });

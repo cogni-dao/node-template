@@ -43,6 +43,14 @@ function makeStubPort() {
     commits: [],
   };
   const port = {
+    withWrite: async (
+      input: { message: string },
+      run: (write: KnowledgeStorePort) => Promise<unknown>
+    ) => {
+      const result = await run(port);
+      calls.commits.push(input.message);
+      return result;
+    },
     upsertKnowledge: async (entry: NewKnowledge): Promise<Knowledge> => {
       calls.upsert.push(entry);
       return stubKnowledge(entry);

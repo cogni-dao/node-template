@@ -51,6 +51,7 @@ import {
 import {
 	buildDoltgresClient,
 	createDoltgresPusher,
+	DoltBranchSessionRunner,
 	DoltgresEdoResolverAdapter,
 	DoltgresKnowledgeContributionAdapter,
 	DoltgresKnowledgeStoreAdapter,
@@ -740,8 +741,22 @@ function createContainer(): Container {
 			}),
 			new PostgresWorkItemLeaseAdapter(serviceDb.$client, { logger: log })
 		);
+		const createKnowledgeBranchClient = () =>
+			buildDoltgresClient({
+				connectionString: env.DOLTGRES_URL as string,
+				applicationName: `cogni_knowledge_branch_${env.SERVICE_NAME ?? "app"}`,
+				max: 1,
+			});
+		const knowledgeWriter = new DoltBranchSessionRunner(
+			createKnowledgeBranchClient(),
+			{
+				logger: log,
+				recreateClient: createKnowledgeBranchClient,
+			}
+		);
 		const knowledgePort = new DoltgresKnowledgeStoreAdapter({
 			sql: doltClient,
+			writerSession: knowledgeWriter,
 		});
 		knowledgeStorePort = knowledgePort;
 		knowledgeCapability = createKnowledgeCapability(knowledgePort);
@@ -756,16 +771,9 @@ function createContainer(): Container {
 		// is what keeps a burst of admin rejects from burning every slot — and
 		// keeping them off the read pool is what keeps knowledge reads alive while
 		// a write is degraded (bug.5391, bug.5358).
-		const createKnowledgeBranchClient = () =>
-			buildDoltgresClient({
-				connectionString: env.DOLTGRES_URL as string,
-				applicationName: `cogni_knowledge_branch_${env.SERVICE_NAME ?? "app"}`,
-				max: 1,
-			});
 		const contributionPort = new DoltgresKnowledgeContributionAdapter({
 			sql: doltClient,
-			branchSql: createKnowledgeBranchClient(),
-			recreateBranchClient: createKnowledgeBranchClient,
+			writerSession: knowledgeWriter,
 			logger: log,
 		});
 		// Optional post-merge mirror to DoltHub (task.5069). Disabled when

@@ -29,6 +29,7 @@ import {
 import {
   buildDoltgresClient,
   DoltgresKnowledgeContributionAdapter,
+  DoltBranchSessionRunner,
   DoltgresKnowledgeStoreAdapter,
 } from "@cogni/knowledge-store/adapters/doltgres";
 import postgres, { type Sql } from "postgres";
@@ -154,12 +155,19 @@ describe("knowledge useWhen patch + q filter (task.5204)", () => {
     const createBranchClient = () =>
       buildDoltgresClient({ connectionString: dbUrl, max: 1 });
     branchClient = createBranchClient();
+    const writerSession = new DoltBranchSessionRunner(branchClient, {
+      recreateClient: createBranchClient,
+    });
     adapter = new DoltgresKnowledgeContributionAdapter({
+      writerSession,
       sql: readClient,
       branchSql: branchClient,
       recreateBranchClient: createBranchClient,
     });
-    store = new DoltgresKnowledgeStoreAdapter({ sql: readClient });
+    store = new DoltgresKnowledgeStoreAdapter({
+      sql: readClient,
+      writerSession,
+    });
 
     // DOMAIN_FK_ENFORCED_AT_WRITE — the shelf must exist on `main` before any
     // branch write, because the contribution branch forks from it.

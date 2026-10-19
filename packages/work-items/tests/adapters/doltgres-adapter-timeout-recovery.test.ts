@@ -7,6 +7,7 @@
  */
 
 import { toWorkItemId } from "@cogni-dao/work-items";
+import { WorkItemWriteOutcomeUnknownError } from "../../src/errors.js";
 import type { ReservedSql, Sql } from "postgres";
 import { describe, expect, it } from "vitest";
 
@@ -54,6 +55,7 @@ interface TimeoutHarnessState {
   commitMessage?: string;
   commitDate?: string;
   branchBase?: string;
+  failHistoricalReachability?: boolean;
 }
 
 function makeTimeoutHarness({
@@ -234,7 +236,10 @@ function makeTimeoutHarness({
         ];
       }
       if (query.startsWith("SELECT dolt_merge_base")) {
-        if (poolNumber === 2 && failFreshReachability) {
+        if (
+          (poolNumber === 2 && failFreshReachability) ||
+          state.failHistoricalReachability
+        ) {
           const error = new Error("reachability connection ended") as Error & {
             code: string;
           };
@@ -490,7 +495,7 @@ describe("DoltgresWorkItemAdapter merge timeout recovery", () => {
     expect(state.deadUnlockAttempts).toBe(0);
   });
 
-  it("preserves evidence on a fresh proof failure and retries on the next request", async () => {
+  it("returns a nonretryable current-intent receipt when durable outcome cannot be proven", async () => {
     const { adapter, events, state } = makeTimeoutHarness({
       failFreshReachability: true,
     });
@@ -500,7 +505,21 @@ describe("DoltgresWorkItemAdapter merge timeout recovery", () => {
         { type: "task", title: "ambiguous durable merge" },
         "principal-1"
       )
-    ).rejects.toBeInstanceOf(WorkItemsBusyError);
+    ).rejects.toMatchObject({
+      name: "WorkItemWriteOutcomeUnknownError",
+      code: "work_item_write_outcome_unknown",
+      retryable: false,
+      receipt: {
+        code: "work_item_write_outcome_unknown",
+        retryable: false,
+        lookup: {
+          operationId: expect.any(String),
+          branch: expect.stringMatching(/^work-item-op\//),
+          commitHash: "test-commit-1",
+          itemId: "task.0001",
+        },
+      },
+    });
 
     expect(state.durable).toBe(true);
     expect(state.inserts).toBe(1);
@@ -530,6 +549,22 @@ describe("DoltgresWorkItemAdapter merge timeout recovery", () => {
     expect(
       state.queries.some((query) => /SELECT dolt_branch/.test(query))
     ).toBe(true);
+  });
+  it("old orphan preflight failure stays retryable because the current intent never runs", async () => {
+    const { adapter, state } = makeTimeoutHarness({
+      failFreshReachability: true,
+    });
+    await expect(
+      adapter.create({ type: "task", title: "prior unknown" }, "principal-1")
+    ).rejects.toBeInstanceOf(WorkItemWriteOutcomeUnknownError);
+    state.failHistoricalReachability = true;
+    const error = await adapter
+      .create({ type: "bug", title: "new intent never runs" }, "principal-1")
+      .catch((error) => error);
+    expect(error).toBeInstanceOf(WorkItemsBusyError);
+    expect(error).not.toBeInstanceOf(WorkItemWriteOutcomeUnknownError);
+    expect(error.receipt).toBeUndefined();
+    expect(state.inserts).toBe(1);
   });
 });
 
