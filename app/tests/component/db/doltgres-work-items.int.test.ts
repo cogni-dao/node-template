@@ -14,6 +14,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { toWorkItemId } from "@cogni/work-items";
+import { acquireDoltWriterLocks } from "@cogni-dao/doltgres-admission";
 import postgres, { type Sql } from "postgres";
 import {
 	GenericContainer,
@@ -166,6 +167,25 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			await blocker.end({ timeout: 0 });
 		}
 
+		// The common scope used by knowledge and work items must cover the
+		// whole write, even while a different client holds a database-only guard.
+		const scopedBlocker = createWorkItemClient();
+		await scopedBlocker.unsafe("SELECT 1");
+		const scopedSession = await scopedBlocker.reserve();
+		const writerGuard = await acquireDoltWriterLocks(scopedSession, {
+			protocol: "database",
+		});
+		try {
+			await expect(adapter.get(id)).resolves.toMatchObject({ id });
+			await expect(
+				adapter.patch({ id, set: { title: "scoped blocked" } }, principalId),
+			).rejects.toBeInstanceOf(WorkItemsBusyError);
+		} finally {
+			await writerGuard.release();
+			scopedSession.release();
+			await scopedBlocker.end({ timeout: 0 });
+		}
+
 		const maintenance = createWorkItemClient();
 		try {
 			await maintenance.unsafe(
@@ -230,10 +250,18 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			await verifier.end({ timeout: 0 });
 		}
 
-		await expect(adapter.delete(id, principalId)).rejects.toMatchObject({ name: "WorkItemDeletionRetiredError" });
-		await adapter.patch({id, set:{status:"cancelled"}}, principalId);
-		await adapter.patch({id: searchId, set:{status:"cancelled"}}, principalId);
-		await expect(adapter.get(id)).resolves.toMatchObject({id,status:"cancelled"});
+		await expect(adapter.delete(id, principalId)).rejects.toMatchObject({
+			name: "WorkItemDeletionRetiredError",
+		});
+		await adapter.patch({ id, set: { status: "cancelled" } }, principalId);
+		await adapter.patch(
+			{ id: searchId, set: { status: "cancelled" } },
+			principalId,
+		);
+		await expect(adapter.get(id)).resolves.toMatchObject({
+			id,
+			status: "cancelled",
+		});
 		await readSql.end({ timeout: 0 });
 	}, 60_000);
 
@@ -406,7 +434,9 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			).resolves.toHaveLength(1);
 		} finally {
 			if (workItemCreated) {
-				await adapter.patch({id,set:{status:"cancelled"}},principalId).catch(() => undefined);
+				await adapter
+					.patch({ id, set: { status: "cancelled" } }, principalId)
+					.catch(() => undefined);
 			}
 			if (knowledgeSession) {
 				await knowledgeSession
@@ -438,4 +468,47 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			).resolves.toEqual(beforeStatus);
 		}
 	}, 60_000);
+	it("a timed-out GET preserves healthy old and new readers while draining its own generation", async () => {
+		const clients: Sql[] = [];
+		const createReader = () => {
+			const client = postgres(dbUrl, { max: 2, fetch_types: false });
+			const unsafe = client.unsafe.bind(client);
+			client.unsafe = ((query: string) =>
+				query.includes("task.9001")
+					? unsafe("SELECT pg_sleep(3)").then(() => [])
+					: query.includes("task.9002")
+						? unsafe("SELECT pg_sleep(0.5)").then(() => [])
+						: unsafe(query)) as typeof client.unsafe;
+			clients.push(client);
+			return client;
+		};
+		const writer = postgres(dbUrl, { max: 1, fetch_types: false });
+		const reader = createReader();
+		try {
+			await reader.unsafe("SELECT 1");
+			const adapter = new DoltgresWorkItemAdapter(writer, {
+				readClient: reader,
+				recreateReadClient: createReader,
+				queryTimeoutMs: 1_000,
+				readConnectionBudget: 4,
+			});
+			const first = adapter
+				.get(toWorkItemId("task.9001"))
+				.catch((error) => error);
+			await new Promise((resolve) => setTimeout(resolve, 600));
+			const healthyOld = adapter.get(toWorkItemId("task.9002"));
+			expect(await first).toBeInstanceOf(WorkItemsBusyError);
+			await expect(adapter.get(toWorkItemId("task.9003"))).resolves.toBeNull();
+			await expect(healthyOld).resolves.toBeNull();
+			expect(clients).toHaveLength(2);
+			// The expired read does not destroy siblings or poison the replacement.
+			await new Promise((resolve) => setTimeout(resolve, 1_100));
+			await expect(adapter.get(toWorkItemId("task.9003"))).resolves.toBeNull();
+		} finally {
+			await Promise.all([
+				writer.end({ timeout: 0 }),
+				...clients.map((client) => client.end({ timeout: 0 })),
+			]);
+		}
+	}, 5_000);
 });

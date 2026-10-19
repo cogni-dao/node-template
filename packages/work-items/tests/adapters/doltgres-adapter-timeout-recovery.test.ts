@@ -123,6 +123,8 @@ function makeTimeoutHarness({
         error.code = "CONNECTION_ENDED";
         throw error;
       }
+      if (query === "SELECT current_database() AS dolt_writer_database")
+        return [{ dolt_writer_database: "knowledge_test" }];
       if (query === "SELECT 1 AS work_items_ready") {
         return [{ work_items_ready: 1 }];
       }
@@ -169,8 +171,9 @@ function makeTimeoutHarness({
       if (query.startsWith("SELECT dolt_commit")) {
         state.commits += 1;
         state.branchCommit = `test-commit-${state.commits}`;
-        state.commitMessage =
-          /SELECT dolt_commit\('-m', '(.*)'\)/.exec(query)?.[1]?.replace(/''/g, "'");
+        state.commitMessage = /SELECT dolt_commit\('-m', '(.*)'\)/
+          .exec(query)?.[1]
+          ?.replace(/''/g, "'");
         state.commitDate =
           state.inserts === 1
             ? "2026-10-03T00:01:00.000Z"
@@ -294,8 +297,7 @@ function makeTimeoutHarness({
       if (query.startsWith("INSERT INTO work_items")) {
         state.inserts += 1;
         state.branchBefore = undefined;
-        const values =
-          /VALUES \('([^']+)', '([^']+)', '([^']+)'/.exec(query);
+        const values = /VALUES \('([^']+)', '([^']+)', '([^']+)'/.exec(query);
         state.pendingRow = {
           ...baseRow,
           id: values?.[1] ?? baseRow.id,
@@ -315,10 +317,7 @@ function makeTimeoutHarness({
         state.branchAfter = state.pendingRow;
         return [state.pendingRow];
       }
-      if (
-        query.startsWith("SELECT * FROM work_items WHERE id") &&
-        state.row
-      ) {
+      if (query.startsWith("SELECT * FROM work_items WHERE id") && state.row) {
         return [state.row];
       }
       if (query.includes("FROM work_items")) {
@@ -363,7 +362,10 @@ async function within<T>(promise: Promise<T>, milliseconds = 100): Promise<T> {
   return await Promise.race([
     promise,
     new Promise<never>((_resolve, reject) => {
-      setTimeout(() => reject(new Error("test operation timed out")), milliseconds);
+      setTimeout(
+        () => reject(new Error("test operation timed out")),
+        milliseconds
+      );
     }),
   ]);
 }
@@ -407,20 +409,19 @@ describe("DoltgresWorkItemAdapter merge timeout recovery", () => {
     });
 
     await expect(
-      adapter.create(
-        { type: "task", title: "survives timeout" },
-        "principal-1"
-      )
+      adapter.create({ type: "task", title: "survives timeout" }, "principal-1")
     ).resolves.toMatchObject({
       id: "task.0001",
       title: "survives timeout",
     });
 
     expect(state.inserts).toBe(1);
-    await expect(adapter.get(toWorkItemId("task.0001"))).resolves.toMatchObject({
-      title: "later serialized update",
-      revision: 1,
-    });
+    await expect(adapter.get(toWorkItemId("task.0001"))).resolves.toMatchObject(
+      {
+        title: "later serialized update",
+        revision: 1,
+      }
+    );
   });
 
   it("releases the queue after a post-DML timeout destroys the locked connection", async () => {
@@ -512,9 +513,11 @@ describe("DoltgresWorkItemAdapter merge timeout recovery", () => {
     // renames or drops a branch, which is a WRITE; having it ride along on
     // `get` violated COMMAND_QUERY_SEPARATION (docs/spec/work-items-port.md)
     // and was the reason a read had to take the write lock at all.
-    await expect(adapter.get(toWorkItemId("task.0001"))).resolves.toMatchObject({
-      id: "task.0001",
-    });
+    await expect(adapter.get(toWorkItemId("task.0001"))).resolves.toMatchObject(
+      {
+        id: "task.0001",
+      }
+    );
     expect(state.inserts).toBe(1);
     expect(state.branch).toMatch(/^work-item-op\//);
 

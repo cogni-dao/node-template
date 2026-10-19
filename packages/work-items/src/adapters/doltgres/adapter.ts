@@ -4,6 +4,11 @@
 /** Doltgres runtime authority for deployed work items. */
 
 import { randomUUID } from "node:crypto";
+import {
+  acquireDoltWriterLocks,
+  DoltWriterAdmissionError,
+  type DoltWriterLock,
+} from "@cogni-dao/doltgres-admission";
 import type {
   ActorKind,
   ExternalRef,
@@ -19,8 +24,14 @@ import type {
 import { toWorkItemId } from "../../index.js";
 import type { ReservedSql, Sql } from "postgres";
 
-import { WorkItemDeletionRetiredError, WorkItemsBusyError } from "../../errors.js";
-export { WorkItemLeaseConflictError, WorkItemsBusyError } from "../../errors.js";
+import {
+  WorkItemDeletionRetiredError,
+  WorkItemsBusyError,
+} from "../../errors.js";
+export {
+  WorkItemLeaseConflictError,
+  WorkItemsBusyError,
+} from "../../errors.js";
 
 import type {
   WorkItemsCreateInput,
@@ -34,7 +45,6 @@ import { decodeCursor, encodeCursor, type WorkItemCursor } from "./cursor.js";
 export const OPERATOR_ID_FLOOR = 5000;
 const AUTO_ID_RETRIES = 5;
 const COMMIT_TAG = "work-items";
-const GLOBAL_LOCK_KEY = 5_001_001;
 const OP_BRANCH_PREFIX = "work-item-op/";
 /**
  * Where an unprovable operation branch is parked. Renaming out of
@@ -101,6 +111,8 @@ export interface DoltgresWorkItemAdapterOptions {
   readonly logger?: WorkItemLogger;
   readonly lockWaitMs?: number;
   readonly lockRetryMs?: number;
+  /** Database mode requires proof that no legacy writer serves this database. */
+  readonly writerLockProtocol?: "bridge" | "database";
   readonly queueWaitMs?: number;
   readonly queryTimeoutMs?: number;
   /**
@@ -112,6 +124,8 @@ export interface DoltgresWorkItemAdapterOptions {
   readonly recreateClient?: () => Sql;
   /** Rebuilds the dedicated QUERY pool after a terminal connection failure. */
   readonly recreateReadClient?: () => Sql;
+  /** Maximum reader connections across the live and draining generations. Caller budgets two pool widths. */
+  readonly readConnectionBudget?: number;
   /**
    * Dedicated pool for the QUERY port. Reads run on it instead of the write
    * lane — see `readOnCleanMain`.
@@ -904,6 +918,7 @@ export class DoltgresWorkItemAdapter
   private readonly idFloor: number;
   private readonly lockWaitMs: number;
   private readonly lockRetryMs: number;
+  private readonly writerLockProtocol: "bridge" | "database";
   private readonly queueWaitMs: number;
   private readonly queryTimeoutMs: number;
   private readonly branchTimeoutMs: number;
@@ -918,6 +933,10 @@ export class DoltgresWorkItemAdapter
    * depend on the database being reachable.
    */
   private readonly terminatingPools = new WeakMap<object, Promise<void>>();
+  private readonly readPools = new Set<Sql>();
+  private readonly retiredReadPools = new WeakSet<object>();
+  private readonly drainingReadPools = new WeakMap<object, Promise<void>>();
+  private readonly readConnectionBudget: number | undefined;
 
   constructor(
     private sql: Sql,
@@ -927,12 +946,20 @@ export class DoltgresWorkItemAdapter
     this.idFloor = options.idFloor ?? 1;
     this.lockWaitMs = options.lockWaitMs ?? LOCK_WAIT_MS;
     this.lockRetryMs = options.lockRetryMs ?? LOCK_RETRY_MS;
+    this.writerLockProtocol = options.writerLockProtocol ?? "bridge";
     this.queueWaitMs = options.queueWaitMs ?? OPERATION_QUEUE_WAIT_MS;
     this.queryTimeoutMs = options.queryTimeoutMs ?? QUERY_TIMEOUT_MS;
     this.branchTimeoutMs = options.branchTimeoutMs ?? BRANCH_TIMEOUT_MS;
     this.reserveTimeoutMs = options.reserveTimeoutMs ?? RESERVE_TIMEOUT_MS;
     this.recreateClient = options.recreateClient;
     this.readClient = options.readClient;
+    this.readConnectionBudget = options.readConnectionBudget;
+    if (
+      this.readConnectionBudget !== undefined &&
+      (!Number.isInteger(this.readConnectionBudget) ||
+        this.readConnectionBudget < 1)
+    )
+      throw new Error("readConnectionBudget must be a positive integer");
     this.recreateReadClient =
       options.recreateReadClient ?? options.recreateClient;
     if (!this.readClient && !this.recreateReadClient) {
@@ -945,6 +972,7 @@ export class DoltgresWorkItemAdapter
         "DoltgresWorkItemAdapter read and write clients must be separate pools"
       );
     }
+    if (this.readClient) this.validateReadPool(this.readClient);
   }
 
   private logStage(
@@ -1146,7 +1174,7 @@ export class DoltgresWorkItemAdapter
     const operationPool = this.sql;
     const reserveStartedAt = Date.now();
     let rawConn: ReservedSql | undefined;
-    let locked = false;
+    let writerLock: DoltWriterLock | undefined;
     let reserveTimedOut = false;
     let reserveTimer: ReturnType<typeof setTimeout> | undefined;
     let pendingRecovery = false;
@@ -1196,12 +1224,36 @@ export class DoltgresWorkItemAdapter
         durationMs: Date.now() - reserveStartedAt,
       });
       const conn = this.instrumentConnection(operationPool, rawConn, context);
-      locked = await this.acquireGlobalLock(conn, context);
+      this.logStage("info", context, "lock.acquire", "start", {
+        protocol: this.writerLockProtocol,
+      });
+      writerLock = await acquireDoltWriterLocks(conn, {
+        protocol: this.writerLockProtocol,
+        lockWaitMs: this.lockWaitMs,
+        lockRetryMs: this.lockRetryMs,
+      });
+      this.logStage("info", context, "lock.acquire", "complete", {
+        protocol: writerLock.protocol,
+        baseDatabase: writerLock.baseDatabase,
+      });
       const reconciliation = options.reconcile ?? "required";
-      if (reconciliation !== "skipped")
-        await this.reconcileUnderLock(conn);
+      if (reconciliation !== "skipped") await this.reconcileUnderLock(conn);
       return await fn(conn);
     } catch (error) {
+      if (error instanceof DoltWriterAdmissionError) {
+        if (error.discardSession) {
+          await this.terminateClient(
+            operationPool,
+            context,
+            "lock.acquire",
+            error.reason
+          );
+          rawConn = undefined;
+        }
+        throw new WorkItemsBusyError(
+          `Work-item writer admission unavailable: ${error.reason}`
+        );
+      }
       pendingRecovery = error instanceof PendingBranchRecoveryError;
       this.logStage("error", context, "operation", "error", {
         durationMs: Date.now() - reserveStartedAt,
@@ -1222,18 +1274,18 @@ export class DoltgresWorkItemAdapter
           "pending_branch_recovery"
         );
         rawConn = undefined;
-        locked = false;
+        writerLock = undefined;
       }
-      if (locked && rawConn && this.sql === operationPool && !this.poisoned) {
+      if (
+        writerLock &&
+        rawConn &&
+        this.sql === operationPool &&
+        !this.poisoned
+      ) {
         try {
-          await this.executeQuery(
-            operationPool,
-            rawConn,
-            context,
-            `SELECT pg_advisory_unlock(${GLOBAL_LOCK_KEY})`
-          );
+          await writerLock.release();
         } catch {
-          // Never return a session that may still own the global lock to the
+          // Never return a session that may still own the writer locks to the
           // pool. This client is dedicated to work items, so terminate the old
           // pool before the injected factory constructs a clean replacement.
           await this.terminateClient(
@@ -1264,30 +1316,6 @@ export class DoltgresWorkItemAdapter
       // recovery so an in-process successor cannot overtake reconciliation.
       leaveQueue();
     }
-  }
-
-  private async acquireGlobalLock(
-    conn: WorkItemConnection,
-    context: OperationContext
-  ): Promise<boolean> {
-    const deadline = Date.now() + this.lockWaitMs;
-    do {
-      const rows = await conn.unsafe(
-        `SELECT pg_try_advisory_lock(${GLOBAL_LOCK_KEY})`
-      );
-      if (doltBoolean(rows, "pg_try_advisory_lock")) return true;
-      if (Date.now() >= deadline) {
-        this.logStage("warn", context, "lock.acquire", "error", {
-          durationMs: this.lockWaitMs,
-          reason: "contended",
-        });
-        throw new WorkItemsBusyError();
-      }
-      await sleep(
-        Math.min(this.lockRetryMs, Math.max(0, deadline - Date.now()))
-      );
-    } while (Date.now() <= deadline);
-    throw new WorkItemsBusyError();
   }
 
   private logReconciliation(
@@ -1826,43 +1854,38 @@ export class DoltgresWorkItemAdapter
     let tolerated = false;
     for (const branch of branches) {
       try {
-        await this.resolveOperationBranch(
-          conn,
-          branch,
-          undefined,
-          undefined
-        );
+        await this.resolveOperationBranch(conn, branch, undefined, undefined);
       } catch (error) {
-          // ONLY the structurally-verified arm is quarantinable. A branch whose
-          // tip is missing, or whose reachability could not be proven, has
-          // established nothing about its contents — parking it could hide
-          // arbitrary divergence, so those keep failing closed exactly as
-          // before.
-          if (!(error instanceof UnprovableTransitionError)) throw error;
-          // ONE UNPROVABLE BRANCH MUST NOT BLOCK EVERY FUTURE WRITE.
-          // bug.5358 left this arm throwing, which made writes permanently
-          // unavailable on a node carrying a single residual branch: nothing
-          // deletes a `preserved_unsafe` ref, and this sweep re-walks
-          // `dolt.branches` on every request, so no restart clears it. Measured
-          // on operator production — a promote failed at 05:27:04Z, the lost
-          // `branch.create` ack left `work-item-op/9ee34c81…` behind at
-          // 05:28:33Z, and 88 consecutive write attempts 503'd over the next
-          // two hours while reads stayed 200.
-          //
-          // Quarantine rather than delete. The branch reached this arm having
-          // ALREADY passed every structural check — linear history, frozen base
-          // intact, exactly one `public.work_items` row diff, authoritative
-          // commit time — and fails only its transition proof. So it may hold a
-          // real one-row write, and deleting it is the data loss bug.5358 was
-          // filed to prevent. Renaming it out of the enumerated namespace
-          // preserves those commits byte-for-byte with zero data mutation,
-          // keeps them reachable for a human to merge, and unblocks writes now.
-          // A failed rename still throws: quarantine must not be best-effort,
-          // or a write would proceed believing evidence was parked when it was
-          // not.
-          await this.quarantineOperationBranch(conn, branch, error);
-          tolerated = true;
-          continue;
+        // ONLY the structurally-verified arm is quarantinable. A branch whose
+        // tip is missing, or whose reachability could not be proven, has
+        // established nothing about its contents — parking it could hide
+        // arbitrary divergence, so those keep failing closed exactly as
+        // before.
+        if (!(error instanceof UnprovableTransitionError)) throw error;
+        // ONE UNPROVABLE BRANCH MUST NOT BLOCK EVERY FUTURE WRITE.
+        // bug.5358 left this arm throwing, which made writes permanently
+        // unavailable on a node carrying a single residual branch: nothing
+        // deletes a `preserved_unsafe` ref, and this sweep re-walks
+        // `dolt.branches` on every request, so no restart clears it. Measured
+        // on operator production — a promote failed at 05:27:04Z, the lost
+        // `branch.create` ack left `work-item-op/9ee34c81…` behind at
+        // 05:28:33Z, and 88 consecutive write attempts 503'd over the next
+        // two hours while reads stayed 200.
+        //
+        // Quarantine rather than delete. The branch reached this arm having
+        // ALREADY passed every structural check — linear history, frozen base
+        // intact, exactly one `public.work_items` row diff, authoritative
+        // commit time — and fails only its transition proof. So it may hold a
+        // real one-row write, and deleting it is the data loss bug.5358 was
+        // filed to prevent. Renaming it out of the enumerated namespace
+        // preserves those commits byte-for-byte with zero data mutation,
+        // keeps them reachable for a human to merge, and unblocks writes now.
+        // A failed rename still throws: quarantine must not be best-effort,
+        // or a write would proceed believing evidence was parked when it was
+        // not.
+        await this.quarantineOperationBranch(conn, branch, error);
+        tolerated = true;
+        continue;
       }
     }
     // Each iteration re-proves `main` itself, so one pass at the end is enough
@@ -2083,7 +2106,7 @@ export class DoltgresWorkItemAdapter
    * execution too.
    *
    * `dolt_checkout` is session state, so a WRITE must own its session: pinned
-   * connection, FIFO admission, advisory lock `GLOBAL_LOCK_KEY`. A READ needs
+   * connection, FIFO admission, the common per-database writer lock. A READ needs
    * none of that — it reads committed `main`, which is plain SQL. Routing reads
    * through the write lane made read concurrency structurally 1 (a `max: 1`
    * pool behind a single-slot queue), so N concurrent readers serialized.
@@ -2115,8 +2138,116 @@ export class DoltgresWorkItemAdapter
    * the write pool because that pool is `max: 1` on every node in the fleet:
    * sharing it would put every read back behind the in-flight write.
    */
+  private validateReadPool(pool: Sql): void {
+    if (
+      !pool ||
+      typeof pool.unsafe !== "function" ||
+      pool === this.sql ||
+      this.retiredReadPools.has(pool as object)
+    ) {
+      throw new Error(
+        "Read-client factory must return a fresh independent reader pool"
+      );
+    }
+    const knownWidths = [
+      ...this.readPools,
+      ...(this.readPools.has(pool) ? [] : [pool]),
+    ].map((client) => client.options?.max);
+    if (
+      this.readConnectionBudget !== undefined &&
+      (!knownWidths.every((width) => Number.isInteger(width) && width > 0) ||
+        knownWidths.reduce((sum, width) => sum + width, 0) >
+          this.readConnectionBudget)
+    ) {
+      throw new Error(
+        "Reader generations exceed the declared readConnectionBudget"
+      );
+    }
+    this.readPools.add(pool);
+  }
+
+  /** Stop new assignments immediately; existing siblings retain their own deadlines. */
+  private retireReadPool(
+    pool: Sql,
+    context: OperationContext,
+    stage: string,
+    graceMs = this.queryTimeoutMs
+  ): void {
+    if (this.readClient === pool) this.readClient = undefined;
+    if (this.drainingReadPools.has(pool as object)) return;
+    this.retiredReadPools.add(pool as object);
+    const draining = Promise.resolve()
+      .then(() => pool.end({ timeout: graceMs / 1000 }))
+      .then(() => {
+        this.readPools.delete(pool);
+        this.logStage("info", context, "read_pool.drain", "complete", {
+          failedStage: stage,
+        });
+      })
+      .catch((error) => {
+        // Unknown shutdown retains its generation slot; never grow without bound.
+        this.logStage("error", context, "read_pool.drain", "error", {
+          ...errorFields(error),
+          failedStage: stage,
+        });
+      });
+    this.drainingReadPools.set(pool as object, draining);
+  }
+
+  private async executeReadQuery(
+    pool: Sql,
+    context: OperationContext,
+    query: string
+  ): Promise<ReadonlyArray<Record<string, unknown>>> {
+    const stage = queryStage(query);
+    const startedAt = Date.now();
+    this.logStage("info", context, stage, "start");
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let expired = false;
+    try {
+      return await Promise.race([
+        Promise.resolve(pool.unsafe(query)).then((rows) => {
+          if (!expired)
+            this.logStage("info", context, stage, "complete", {
+              durationMs: Date.now() - startedAt,
+            });
+          return rows as ReadonlyArray<Record<string, unknown>>;
+        }),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            expired = true;
+            this.retireReadPool(pool, context, stage);
+            reject(
+              new WorkItemsBusyError(
+                `Work-item read timed out during ${stage}; retry shortly`
+              )
+            );
+          }, this.queryTimeoutMs);
+        }),
+      ]);
+    } catch (error) {
+      if (isConnectionTerminal(error))
+        this.retireReadPool(pool, context, stage);
+      this.logStage("error", context, stage, "error", {
+        ...errorFields(error),
+        durationMs: Date.now() - startedAt,
+      });
+      if (isConnectionTerminal(error))
+        throw new WorkItemsBusyError(
+          `Work-item reader connection ended during ${stage}; retry shortly`
+        );
+      throw error;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
   private resolveReadPool(): Sql {
     if (this.readClient) return this.readClient;
+    if (this.readPools.size >= 2)
+      throw new WorkItemsBusyError(
+        "Work-item reader generations are draining; retry shortly"
+      );
     if (!this.recreateReadClient) {
       throw new WorkItemsBusyError(
         "Work-item read lane requires a fresh connection; retry shortly"
@@ -2124,11 +2255,25 @@ export class DoltgresWorkItemAdapter
     }
     try {
       this.readClient = this.recreateReadClient();
-      if (this.readClient === this.sql) {
-        this.readClient = undefined;
-        throw new Error("Read-client factory returned the writer pool");
-      }
+      this.validateReadPool(this.readClient);
     } catch (error) {
+      const candidate = this.readClient;
+      this.readClient = undefined;
+      if (
+        candidate &&
+        candidate !== this.sql &&
+        typeof candidate.unsafe === "function" &&
+        !this.readPools.has(candidate) &&
+        !this.retiredReadPools.has(candidate as object)
+      ) {
+        this.readPools.add(candidate);
+        this.retireReadPool(
+          candidate,
+          { operationId: randomUUID(), operation: "configure reader" },
+          "reader.configuration",
+          0
+        );
+      }
       this.logger.warn(
         {
           event: "adapter.work_items.read_pool_derive_failed",
@@ -2152,37 +2297,12 @@ export class DoltgresWorkItemAdapter
   ): Promise<T> {
     const readPool = this.resolveReadPool();
     const context = { operationId: randomUUID(), operation: "read work items" };
-    try {
-      // No reserve(): a read pins no session state, so it does not need a
-      // dedicated connection. postgres.js hands each concurrent query its own
-      // pooled connection, which is exactly the bounded concurrency we want —
-      // and is why this needs no hand-rolled semaphore. `executeQuery` only
-      // uses `pool` for termination; the query itself goes through `.unsafe`,
-      // which a pool exposes identically to a reserved connection.
-      return await fn(
-        this.instrumentConnection(
-          readPool,
-          readPool as unknown as ReservedSql,
-          context
-        )
-      );
-    } catch (error) {
-      // A terminal read error has already condemned this pool in
-      // `executeQuery`. Forget it so the next request gets a clean generation.
-      // Never retry on the write lane: a server-side query panic would execute
-      // the same query again there, poison the session-pinned pool, and turn a
-      // read defect into a fleet-wide write outage.
-      if (!(error instanceof WorkItemsBusyError)) throw error;
-      if (readPool === this.readClient) this.readClient = undefined;
-      this.logger.warn(
-        {
-          event: "adapter.work_items.read_lane_unavailable",
-          ...errorFields(error),
-        },
-        "work_items read lane failed; a fresh pool will serve the next retry"
-      );
-      throw error;
-    }
+    // No reserve, checkout, advisory lock, reconciliation or writer-pool call.
+    return fn({
+      pool: readPool,
+      context,
+      unsafe: (query) => this.executeReadQuery(readPool, context, query),
+    });
   }
 
   private async getWith(conn: WorkItemConnection, id: WorkItemId) {

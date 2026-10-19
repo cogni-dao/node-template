@@ -88,6 +88,8 @@ function makeReconciliationHarness({
 
   const unsafe = async (query: string): Promise<Rows> => {
     state.queries.push(query);
+    if (query === "SELECT current_database() AS dolt_writer_database")
+      return [{ dolt_writer_database: "knowledge_test" }];
     if (query === "SELECT 1 AS work_items_ready") {
       return [{ work_items_ready: 1 }];
     }
@@ -242,7 +244,10 @@ describe("DoltgresWorkItemAdapter restart reconciliation", () => {
     });
 
     await expect(
-      adapter.patch({ id: toWorkItemId("task.missing"), set: {title: "probe"} }, "principal-1")
+      adapter.patch(
+        { id: toWorkItemId("task.missing"), set: { title: "probe" } },
+        "principal-1"
+      )
     ).rejects.toThrow(/Work item not found/);
 
     expect(state.branch).toBeUndefined();
@@ -257,7 +262,10 @@ describe("DoltgresWorkItemAdapter restart reconciliation", () => {
     });
 
     await expect(
-      adapter.patch({ id: toWorkItemId("task.missing"), set: {title: "probe"} }, "principal-1")
+      adapter.patch(
+        { id: toWorkItemId("task.missing"), set: { title: "probe" } },
+        "principal-1"
+      )
     ).rejects.toThrow(/Work item not found/);
 
     expect(state.branch).toBeUndefined();
@@ -275,7 +283,10 @@ describe("DoltgresWorkItemAdapter restart reconciliation", () => {
     });
 
     await expect(
-      adapter.patch({ id: toWorkItemId("task.missing"), set: {title: "probe"} }, "principal-1")
+      adapter.patch(
+        { id: toWorkItemId("task.missing"), set: { title: "probe" } },
+        "principal-1"
+      )
     ).rejects.toThrow(/Work item not found/);
 
     expect(state.branch).toBeUndefined();
@@ -464,7 +475,10 @@ describe("DoltgresWorkItemAdapter restart reconciliation", () => {
     });
 
     await expect(
-      adapter.patch({ id: toWorkItemId("task.missing"), set: {title: "probe"} }, "principal-1")
+      adapter.patch(
+        { id: toWorkItemId("task.missing"), set: { title: "probe" } },
+        "principal-1"
+      )
     ).rejects.toThrow(/Work item not found/);
 
     // Doltgres applied the delete and lost the ack to the query deadline — the
@@ -494,7 +508,10 @@ describe("DoltgresWorkItemAdapter restart reconciliation", () => {
     });
 
     await expect(
-      adapter.patch({ id: toWorkItemId("task.missing"), set: {title: "probe"} }, "principal-1")
+      adapter.patch(
+        { id: toWorkItemId("task.missing"), set: { title: "probe" } },
+        "principal-1"
+      )
     ).rejects.toThrow(/Work item not found/);
 
     expect(state.branch).toBe("work-item-op/restart-evidence");
@@ -513,7 +530,10 @@ describe("DoltgresWorkItemAdapter restart reconciliation", () => {
     });
 
     await expect(
-      adapter.patch({ id: toWorkItemId("task.missing"), set: {title: "probe"} }, "principal-1")
+      adapter.patch(
+        { id: toWorkItemId("task.missing"), set: { title: "probe" } },
+        "principal-1"
+      )
     ).rejects.toBeInstanceOf(WorkItemsBusyError);
 
     expect(state.branch).toBe("work-item-op/restart-evidence");

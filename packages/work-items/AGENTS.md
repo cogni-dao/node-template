@@ -36,7 +36,7 @@ Work item port interfaces, domain types, and storage adapters for structured wor
 }
 ```
 
-**External deps:** `type-fest` (Tagged branded types), `yaml` (frontmatter parsing — adapter only).
+**External deps:** `type-fest` (Tagged branded types), `yaml` (frontmatter parsing — adapter only). Doltgres adapter alone bundles `@cogni-dao/doltgres-admission` for the shared engine writer protocol; root/content/lease ports stay database-neutral.
 
 ## Public Surface
 
@@ -52,7 +52,7 @@ Work item port interfaces, domain types, and storage adapters for structured wor
   - `StaleRevisionError` — thrown on optimistic concurrency conflict
   - `InvalidTransitionError` — thrown on invalid status transition
 - **Exports (adapter `@cogni/work-items/adapters/doltgres`):**
-  - `DoltgresWorkItemAdapter` — node-local query/create/patch/delete implementation
+  - `DoltgresWorkItemAdapter` — node-local content query/create/patch; hard delete fails with a typed retirement error
   - `DoltgresWorkItemAdapterOptions` — per-store allocator configuration (`idFloor`)
   - cursor codec + Doltgres port/error types
 - **Files considered API:** `src/index.ts`, `src/adapters/markdown/index.ts`, `src/adapters/doltgres/index.ts`
@@ -97,8 +97,12 @@ pnpm vitest run packages/work-items/tests/
 - `toWorkItemId()` does no format validation — WorkItemIds include both numeric (`task.0149`) and slug-based (`proj.agentic-project-management`) formats
 - `MarkdownWorkItemAdapter` constructor takes `workDir` (repo root) — scans `work/items/` and `work/projects/`
 - `blocked` can transition to any `needs_*` status — adapters may enforce stricter return-to-previous-status logic
-- ID allocation race: two concurrent `create()` calls can collide. v0 assumes single-caller.
+- Dolt ID allocation is inside the common per-database writer scope; never move it before admission.
 
 ## Operational leases
 
 Work-item leases live in PostgreSQL `work_item_leases`; shared package `@cogni-dao/work-items/adapters/postgres` owns atomic principal/run/token predicates. Heartbeat and release return lease-only data and never call Dolt. Runtime uses the service-role pool; RLS denies app-role SQL. Content get/list project this authority via `withWorkItemLeases`. Old Dolt lease columns are historical evidence, never current authority.
+
+## Reader fault containment
+
+A read has its own deadline and never enters writer admission. Reader timeout retires only the captured generation, gracefully drains siblings and permits at most one replacement; maximum two generations. Runtime factories must budget the overlap. Explicit `readConnectionBudget` fails closed on unknown or invalid public pool widths. The template uses max 1 per reader generation, at most two reader connections plus one writer. See [README](README.md) for cutover and fault proof limits.

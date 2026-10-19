@@ -53,6 +53,8 @@ export function makeFakeDoltgresSql(
 
   const unsafe = async (query: string): Promise<Rows> => {
     queries.push(query);
+    if (query === "SELECT current_database() AS dolt_writer_database")
+      return [{ dolt_writer_database: "knowledge_test" }];
     if (query === "SELECT 1 AS work_items_ready") {
       return [{ work_items_ready: 1 }];
     }

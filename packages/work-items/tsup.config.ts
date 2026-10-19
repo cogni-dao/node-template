@@ -46,6 +46,7 @@ export const tsupConfig = defineConfig([
     // postgres.js is the caller's client; this adapter only consumes the `Sql`
     // type and must never bundle a driver copy of its own.
     external: ["postgres"],
+    noExternal: ["@cogni-dao/doltgres-admission"],
   },
 ]);
 

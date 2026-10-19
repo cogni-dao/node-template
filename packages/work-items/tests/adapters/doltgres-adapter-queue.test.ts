@@ -17,6 +17,17 @@ it("rejects a shared read/write pool before executing SQL", () => {
   expect(pool.unsafe).not.toHaveBeenCalled();
 });
 
+it("derived/recreated readers cannot return the writer pool", async () => {
+  const writer = { unsafe: vi.fn() } as unknown as Sql;
+  const adapter = new DoltgresWorkItemAdapter(writer, {
+    recreateReadClient: () => writer,
+  });
+  await expect(adapter.get(toWorkItemId("task.0001"))).rejects.toMatchObject({
+    name: "WorkItemsBusyError",
+  });
+  expect(writer.unsafe).not.toHaveBeenCalled();
+});
+
 it("all concurrent read methods never reserve, lock, checkout, reconcile, or query writer", async () => {
   const write = {
     unsafe: vi.fn(() => {
@@ -26,7 +37,15 @@ it("all concurrent read methods never reserve, lock, checkout, reconcile, or que
   } as unknown as Sql;
   const read = { unsafe: vi.fn(async () => []) } as unknown as Sql;
   const adapter = new DoltgresWorkItemAdapter(write, { readClient: read });
-  await Promise.all(Array.from({ length: 100 }, () => Promise.all([adapter.list(), adapter.get(toWorkItemId("task.0001")), adapter.listRelations(toWorkItemId("task.0001"))])));
+  await Promise.all(
+    Array.from({ length: 100 }, () =>
+      Promise.all([
+        adapter.list(),
+        adapter.get(toWorkItemId("task.0001")),
+        adapter.listRelations(toWorkItemId("task.0001")),
+      ])
+    )
+  );
   expect(write.unsafe).not.toHaveBeenCalled();
   expect(write.reserve).not.toHaveBeenCalled();
   expect(read.unsafe).toHaveBeenCalledTimes(300);
@@ -85,12 +104,105 @@ describe("lease/content composition", () => {
   });
   it("content mutation success never depends on PostgreSQL hydration", async () => {
     const item = { id: toWorkItemId("task.0001"), title: "committed" };
-    const content = { create: vi.fn(async () => item), patch: vi.fn(async () => item) } as unknown as WorkItemsContentPort;
-    const leases = { getMany: vi.fn(async () => { throw new Error("PostgreSQL unavailable"); }) } as unknown as WorkItemLeasePort;
+    const content = {
+      create: vi.fn(async () => item),
+      patch: vi.fn(async () => item),
+    } as unknown as WorkItemsContentPort;
+    const leases = {
+      getMany: vi.fn(async () => {
+        throw new Error("PostgreSQL unavailable");
+      }),
+    } as unknown as WorkItemLeasePort;
     const adapter = withWorkItemLeases(content, leases);
-    await expect(adapter.create({type:"task",title:"committed"}, "p")).resolves.toBe(item);
-    await expect(adapter.patch({id:item.id,set:{title:"committed"}}, "p")).resolves.toBe(item);
+    await expect(
+      adapter.create({ type: "task", title: "committed" }, "p")
+    ).resolves.toBe(item);
+    await expect(
+      adapter.patch({ id: item.id, set: { title: "committed" } }, "p")
+    ).resolves.toBe(item);
     expect(leases.getMany).not.toHaveBeenCalled();
   });
+});
 
+it("a timed-out reader drains siblings, fails at its own deadline, and cannot spawn a third generation", async () => {
+  vi.useFakeTimers();
+  try {
+    const writer = { unsafe: vi.fn() } as unknown as Sql;
+    const closes: Array<() => void> = [];
+    const builds: Sql[] = [];
+    const factory = () => {
+      const reader = {
+        options: { max: 1 },
+        unsafe: vi.fn(() => new Promise<never>(() => undefined)),
+        end: vi.fn(() => new Promise<void>((resolve) => closes.push(resolve))),
+      } as unknown as Sql;
+      builds.push(reader);
+      return reader;
+    };
+    const adapter = new DoltgresWorkItemAdapter(writer, {
+      readClient: factory(),
+      recreateReadClient: factory,
+      queryTimeoutMs: 100,
+      readConnectionBudget: 2,
+    });
+    const first = adapter.list().catch((error) => error);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(await first).toMatchObject({ name: "WorkItemsBusyError" });
+    expect(builds[0]?.end).toHaveBeenCalledWith({ timeout: 0.1 });
+    const second = adapter.list().catch((error) => error);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(await second).toMatchObject({ name: "WorkItemsBusyError" });
+    await expect(adapter.list()).rejects.toThrow(/generations are draining/);
+    expect(builds).toHaveLength(2);
+    closes[0]?.();
+    await vi.advanceTimersByTimeAsync(0);
+    const third = adapter.list().catch((error) => error);
+    expect(builds).toHaveLength(3);
+    await vi.advanceTimersByTimeAsync(100);
+    await third;
+    expect(writer.unsafe).not.toHaveBeenCalled();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("validates declared generation connection budgets using public pool options", () => {
+  const writer = { unsafe: vi.fn() } as unknown as Sql;
+  const read = { unsafe: vi.fn(), options: { max: 5 } } as unknown as Sql;
+  expect(
+    () =>
+      new DoltgresWorkItemAdapter(writer, {
+        readClient: read,
+        readConnectionBudget: 4,
+      })
+  ).toThrow(/readConnectionBudget/);
+});
+
+it("rejects unknown widths under an explicit budget and destroys only a fresh rejected factory candidate", async () => {
+  const writer = { unsafe: vi.fn(), end: vi.fn() } as unknown as Sql;
+  expect(
+    () =>
+      new DoltgresWorkItemAdapter(writer, {
+        readClient: { unsafe: vi.fn() } as unknown as Sql,
+        readConnectionBudget: 2,
+      })
+  ).toThrow(/readConnectionBudget/);
+  const candidate = {
+    unsafe: vi.fn(),
+    end: vi.fn(async () => undefined),
+    options: { max: 3 },
+  } as unknown as Sql;
+  const adapter = new DoltgresWorkItemAdapter(writer, {
+    recreateReadClient: () => candidate,
+    readConnectionBudget: 2,
+  });
+  await expect(adapter.list()).rejects.toMatchObject({
+    name: "WorkItemsBusyError",
+  });
+  expect(candidate.end).toHaveBeenCalledExactlyOnceWith({ timeout: 0 });
+  await expect(adapter.list()).rejects.toMatchObject({
+    name: "WorkItemsBusyError",
+  });
+  expect(candidate.end).toHaveBeenCalledTimes(1);
+  expect(writer.end).not.toHaveBeenCalled();
 });
