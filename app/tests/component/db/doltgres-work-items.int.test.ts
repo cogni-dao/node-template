@@ -527,6 +527,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			}),
 		});
 		const work = new DoltgresWorkItemAdapter(workSql, {
+			writerLockProtocol: "database",
 			readClient: workRead,
 			lockWaitMs: 100,
 			lockRetryMs: 10,

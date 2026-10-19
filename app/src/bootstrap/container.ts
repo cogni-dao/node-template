@@ -733,6 +733,8 @@ function createContainer(): Container {
 		// imported legacy range below 5000.
 		doltgresWorkItems = withWorkItemLeases(
 			new DoltgresWorkItemAdapter(workItemsClient, {
+				// First write follows the coordinated per-database legacy-producer drain.
+				writerLockProtocol: "database",
 				logger: log,
 				recreateClient: createWorkItemsClient,
 				readClient: createWorkItemsReadClient(),
@@ -750,6 +752,7 @@ function createContainer(): Container {
 		const knowledgeWriter = new DoltBranchSessionRunner(
 			createKnowledgeBranchClient(),
 			{
+				writerProtocol: "database",
 				logger: log,
 				recreateClient: createKnowledgeBranchClient,
 			}
