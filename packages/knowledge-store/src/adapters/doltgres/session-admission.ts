@@ -8,26 +8,35 @@
  * Invariants:
  *   - DOLT_SESSION_ADMISSION: admit one operation BEFORE reserving, never after.
  *     Reserving first is what wedges the pool; see `DoltBranchSessionRunner`.
- *   - `KNOWLEDGE_BRANCH_LOCK_KEY` must differ from every other advisory-lock key
- *     used against the same Doltgres database — `@cogni/work-items` owns
- *     `5_001_001` and shares `DOLTGRES_URL` with this package.
+ *   - Work-item and knowledge writers share one native-base-database domain.
+ *     Bridge mode acquires both process-global legacy keys during cutover.
  *   - The runner owns the only `sql.reserve()` call in this package.
  * Side-effects: IO (database connections), time (deadlines + lock retry backoff)
  * Links: docs/spec/knowledge-syntropy.md, packages/knowledge-store/AGENTS.md
  * @public
  */
 
+import {
+  acquireDoltWriterLocks,
+  DoltWriterAdmissionError,
+} from "@cogni-dao/doltgres-admission";
 import type { ReservedSql, Sql } from "postgres";
+
+export interface DoltWriteConnection {
+  unsafe(
+    query: string
+  ): Promise<readonly Record<string, unknown>[] & { readonly count?: number }>;
+}
+export interface DoltBranchWriterGuard {
+  readonly baseDatabase: string;
+  readonly protocol: "bridge" | "database";
+  readonly keys: readonly string[];
+  release(): Promise<void>;
+}
+
 import { KnowledgeBusyError } from "../../port/knowledge-store.port.js";
 
-/**
- * Advisory-lock key for knowledge branch operations.
- *
- * PostgreSQL advisory locks are per-database, and operator points both
- * `@cogni/work-items` and this package at the same `DOLTGRES_URL`. Work items
- * hold `5_001_001`; taking the same key here would make a work-item write and a
- * knowledge write exclude each other for no reason.
- */
+/** Historical key retained for bridge compatibility, not an independent writer domain. */
 export const KNOWLEDGE_BRANCH_LOCK_KEY = 5_001_002;
 
 /** How long a queued operation waits for its turn before giving up. */
@@ -62,30 +71,19 @@ export interface BranchSessionOptions {
   readonly acquireTimeoutMs?: number;
   readonly lockWaitMs?: number;
   readonly lockRetryMs?: number;
-  readonly lockKey?: number;
+  readonly writerProtocol?: "bridge" | "database";
+  readonly queryTimeoutMs?: number;
   /**
    * Rebuilds the client after a wedged session is terminated. Without it a
-   * terminated pool cannot be replaced, so the runner declines to terminate and
-   * only fails the operation.
+   * terminated pool cannot be replaced; it stays failed closed until runtime restart.
    */
   readonly recreateClient?: () => Sql;
-}
-
-function sleep(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function errorFields(error: unknown): Record<string, unknown> {
   return error instanceof Error
     ? { errorName: error.name, errorMessage: error.message }
     : { errorMessage: String(error) };
-}
-
-function doltBoolean(rows: unknown, field: string): boolean {
-  if (!Array.isArray(rows) || rows.length === 0) return false;
-  const value = (rows[0] as Record<string, unknown>)[field];
-  const raw = Array.isArray(value) ? value[0] : value;
-  return raw === true || raw === 1 || String(raw).toLowerCase() === "true";
 }
 
 /**
@@ -144,7 +142,10 @@ export class DoltBranchSessionRunner {
   private readonly acquireTimeoutMs: number;
   private readonly lockWaitMs: number;
   private readonly lockRetryMs: number;
-  private readonly lockKey: number;
+  private readonly writerProtocol: "bridge" | "database";
+  private readonly queryTimeoutMs: number;
+  private readonly retiredPools = new WeakSet<object>();
+  private readonly connectionPools = new WeakMap<object, Sql>();
   private readonly recreateClient: (() => Sql) | undefined;
   private readonly terminatingPools = new WeakMap<object, Promise<void>>();
 
@@ -155,7 +156,8 @@ export class DoltBranchSessionRunner {
     this.acquireTimeoutMs = options.acquireTimeoutMs ?? ACQUIRE_TIMEOUT_MS;
     this.lockWaitMs = options.lockWaitMs ?? LOCK_WAIT_MS;
     this.lockRetryMs = options.lockRetryMs ?? LOCK_RETRY_MS;
-    this.lockKey = options.lockKey ?? KNOWLEDGE_BRANCH_LOCK_KEY;
+    this.writerProtocol = options.writerProtocol ?? "bridge";
+    this.queryTimeoutMs = options.queryTimeoutMs ?? 30000;
     this.recreateClient = options.recreateClient;
   }
 
@@ -173,7 +175,7 @@ export class DoltBranchSessionRunner {
    */
   async run<T>(
     operation: string,
-    fn: (conn: ReservedSql) => Promise<T>
+    fn: (conn: DoltWriteConnection, guard: DoltBranchWriterGuard) => Promise<T>
   ): Promise<T> {
     const leaveQueue = await this.enterQueue(operation);
     try {
@@ -256,48 +258,146 @@ export class DoltBranchSessionRunner {
     };
   }
 
+  /** Retire a session whose mutation or lock acknowledgement is uncertain. */
+  async retire(connection: DoltWriteConnection, error: unknown): Promise<void> {
+    this.log(
+      "error",
+      "knowledge.write",
+      "session.uncertain",
+      "error",
+      errorFields(error)
+    );
+    const pool = this.connectionPools.get(connection);
+    if (!pool) throw new Error("Unknown knowledge writer connection");
+    await this.terminateClient(
+      pool,
+      "knowledge.write",
+      "session",
+      "outcome_uncertain"
+    );
+  }
+
+  private async restoreMain(
+    connection: DoltWriteConnection,
+    pool: Sql,
+    operation: string
+  ): Promise<void> {
+    try {
+      if ((await connection.unsafe("SELECT * FROM dolt.status")).length)
+        throw new Error("Writer left an unproven dirty working set");
+      const rows = await connection.unsafe(
+        "SELECT active_branch() AS branch_name"
+      );
+      const active = rows[0]?.branch_name;
+      if (active !== "main") {
+        await connection.unsafe("SELECT dolt_checkout('main')");
+        const proof = await connection.unsafe(
+          "SELECT active_branch() AS branch_name"
+        );
+        if (
+          proof[0]?.branch_name !== "main" ||
+          (await connection.unsafe("SELECT * FROM dolt.status")).length
+        )
+          throw new Error("Clean main restoration was not proven");
+      }
+    } catch {
+      await this.terminateClient(
+        pool,
+        operation,
+        "checkout",
+        "restore_uncertain"
+      );
+    }
+  }
+
   private async withSession<T>(
     operation: string,
-    fn: (conn: ReservedSql) => Promise<T>
+    fn: (conn: DoltWriteConnection, guard: DoltBranchWriterGuard) => Promise<T>
   ): Promise<T> {
     const pool = this.sql;
-    const startedAt = Date.now();
-    let conn: ReservedSql | undefined;
-    let locked = false;
-
+    let native: ReservedSql | undefined;
+    let guard: DoltBranchWriterGuard | undefined;
+    let connection: DoltWriteConnection | undefined;
     try {
-      conn = await this.acquireSession(pool, operation);
-      locked = await this.acquireLock(conn, operation);
-      return await fn(conn);
+      native = await this.acquireSession(pool, operation);
+      const reserved = native;
+      connection = {
+        unsafe: async (query: string) => {
+          if (this.retiredPools.has(pool))
+            throw new KnowledgeBusyError(
+              "Knowledge writer session was retired"
+            );
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          try {
+            return await Promise.race([
+              reserved.unsafe(query),
+              new Promise<never>((_resolve, reject) => {
+                timer = setTimeout(
+                  () =>
+                    reject(
+                      new KnowledgeBusyError("Knowledge SQL deadline exceeded")
+                    ),
+                  this.queryTimeoutMs
+                );
+              }),
+            ]);
+          } catch (error) {
+            if (error instanceof KnowledgeBusyError)
+              await this.terminateClient(
+                pool,
+                operation,
+                "query",
+                "query_timeout"
+              );
+            throw error;
+          } finally {
+            if (timer) clearTimeout(timer);
+          }
+        },
+      };
+      this.connectionPools.set(connection, pool);
+      try {
+        guard = await acquireDoltWriterLocks(connection, {
+          protocol: this.writerProtocol,
+          lockWaitMs: this.lockWaitMs,
+          lockRetryMs: this.lockRetryMs,
+        });
+      } catch (error) {
+        if (error instanceof DoltWriterAdmissionError && error.discardSession)
+          await this.terminateClient(
+            pool,
+            operation,
+            "lock.acquire",
+            error.reason
+          );
+        throw new KnowledgeBusyError(
+          "Knowledge writer admission unavailable; retry before starting a mutation"
+        );
+      }
+      return await fn(connection, guard);
     } finally {
-      if (locked && conn && this.sql === pool) {
+      if (guard && connection && !this.retiredPools.has(pool))
+        await this.restoreMain(connection, pool, operation);
+      if (guard && !this.retiredPools.has(pool)) {
         try {
-          await conn.unsafe(`SELECT pg_advisory_unlock(${this.lockKey})`);
+          await guard.release();
         } catch (error) {
-          // Never return a session that may still own the lock to the pool.
-          this.log("error", operation, "lock.release", "error", {
-            ...errorFields(error),
-          });
+          this.log(
+            "error",
+            operation,
+            "lock.release",
+            "error",
+            errorFields(error)
+          );
           await this.terminateClient(
             pool,
             operation,
             "lock.release",
-            "unlock_failed"
+            "unlock_uncertain"
           );
-          conn = undefined;
         }
       }
-      if (conn && this.sql === pool) {
-        try {
-          await conn.unsafe(`SELECT dolt_checkout('main')`);
-        } catch {
-          /* best effort: the next operation checks out explicitly */
-        }
-        conn.release();
-      }
-      this.log("info", operation, "session", "complete", {
-        durationMs: Date.now() - startedAt,
-      });
+      if (native && !this.retiredPools.has(pool)) native.release();
     }
   }
 
@@ -347,36 +447,10 @@ export class DoltBranchSessionRunner {
     }
   }
 
-  private async acquireLock(
-    conn: ReservedSql,
-    operation: string
-  ): Promise<boolean> {
-    const deadline = Date.now() + this.lockWaitMs;
-    for (;;) {
-      const rows = await conn.unsafe(
-        `SELECT pg_try_advisory_lock(${this.lockKey})`
-      );
-      if (doltBoolean(rows, "pg_try_advisory_lock")) return true;
-      if (Date.now() >= deadline) {
-        this.log("warn", operation, "lock.acquire", "error", {
-          durationMs: this.lockWaitMs,
-          reason: "contended",
-        });
-        throw new KnowledgeBusyError(
-          "Another replica holds the knowledge write lock; retry shortly"
-        );
-      }
-      await sleep(
-        Math.min(this.lockRetryMs, Math.max(0, deadline - Date.now()))
-      );
-    }
-  }
-
   /**
    * End a wedged client and rebuild it, so the next caller gets a whole pool
-   * rather than one with a permanently burnt slot. Declines to terminate when
-   * no factory was supplied — a dead pool with no replacement is worse than a
-   * degraded one.
+   * rather than one with a permanently burnt slot. Without a factory the pool
+   * remains retired; unknown native lock/session state is never reused.
    */
   private async terminateClient(
     pool: Sql,
@@ -384,17 +458,10 @@ export class DoltBranchSessionRunner {
     stage: string,
     reason: string
   ): Promise<void> {
-    if (!this.recreateClient) {
-      this.log("error", operation, stage, "error", {
-        reason,
-        terminated: false,
-        detail: "no recreateClient factory; pool left in place",
-      });
-      return;
-    }
     const active = this.terminatingPools.get(pool as object);
     if (active) return active;
 
+    this.retiredPools.add(pool);
     const termination = (async () => {
       this.log("error", operation, "connection.terminate", "error", {
         failedStage: stage,
@@ -410,7 +477,7 @@ export class DoltBranchSessionRunner {
         });
         return;
       }
-      if (this.sql !== pool) return;
+      if (this.sql !== pool || !this.recreateClient) return;
       try {
         this.sql = this.recreateClient?.() ?? pool;
         this.log("info", operation, "connection.recreate", "complete", {

@@ -20,6 +20,7 @@
  */
 
 import net from "node:net";
+import type { Sql } from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildDoltgresClient } from "../src/adapters/doltgres/build-client.js";
 import { DoltBranchSessionRunner } from "../src/adapters/doltgres/session-admission.js";
@@ -79,6 +80,36 @@ const LOCK_DATA_ROW = msg(
   Buffer.concat([int16(1), int32(1), Buffer.from("t", "ascii")])
 );
 
+function valueResponse(name: string, value: string, type = 25): Buffer {
+  return Buffer.concat([
+    PARSE_COMPLETE,
+    BIND_COMPLETE,
+    msg(
+      "T",
+      Buffer.concat([
+        int16(1),
+        Buffer.from(`${name}\0`, "ascii"),
+        int32(0),
+        int16(0),
+        int32(type),
+        int16(-1),
+        int32(-1),
+        int16(0),
+      ])
+    ),
+    msg(
+      "D",
+      Buffer.concat([
+        int16(1),
+        int32(value.length),
+        Buffer.from(value, "ascii"),
+      ])
+    ),
+    msg("C", Buffer.from("SELECT 1\0", "ascii")),
+    READY_IDLE,
+  ]);
+}
+
 function parameterStatus(key: string, value: string): Buffer {
   return msg("S", Buffer.from(`${key}\0${value}\0`, "ascii"));
 }
@@ -134,7 +165,13 @@ function startFakePostgres(): Promise<{
           socket.write(
             buf.includes("pg_try_advisory_lock")
               ? LOCK_RESPONSE
-              : QUERY_RESPONSE
+              : buf.includes("pg_advisory_unlock")
+                ? valueResponse("pg_advisory_unlock", "t", 16)
+                : buf.includes("current_database()")
+                  ? valueResponse("dolt_writer_database", "knowledge_test")
+                  : buf.includes("active_branch()")
+                    ? valueResponse("branch_name", "main")
+                    : QUERY_RESPONSE
           );
         }
       });
@@ -348,5 +385,77 @@ describe("Dolt session admission control (bug.5386, bug.5391)", () => {
       void runner.client.end({ timeout: 0 }).catch(() => undefined);
       void first.end({ timeout: 0 }).catch(() => undefined);
     }
+  });
+});
+
+describe("writer runner guard and pool ownership", () => {
+  function pool(lock = true) {
+    const queries: string[] = [];
+    let ended = false;
+    const reserved = {
+      unsafe: async (query: string): Promise<Record<string, unknown>[]> => {
+        queries.push(query);
+        if (query === "STALLED") return new Promise(() => undefined);
+        if (query.includes("current_database"))
+          return [{ dolt_writer_database: "knowledge_test" }];
+        if (query.includes("pg_try_advisory_lock"))
+          return [{ pg_try_advisory_lock: lock }];
+        if (query.includes("pg_advisory_unlock"))
+          return [{ pg_advisory_unlock: true }];
+        if (query.includes("active_branch")) return [{ branch_name: "main" }];
+        return [];
+      },
+      release: () => undefined,
+    };
+    const client = {
+      unsafe: async () => [],
+      reserve: async () => reserved,
+      end: async () => {
+        ended = true;
+      },
+    } as unknown as Sql;
+    return { client, queries, ended: () => ended };
+  }
+
+  it("cannot restore or checkout a branch after admission fails without a guard", async () => {
+    const first = pool(false);
+    const runner = new DoltBranchSessionRunner(first.client, { lockWaitMs: 0 });
+    let invoked = false;
+    await expect(
+      runner.run("contended", async () => {
+        invoked = true;
+      })
+    ).rejects.toBeInstanceOf(KnowledgeBusyError);
+    expect(invoked).toBe(false);
+    expect(
+      first.queries.some((query) =>
+        /dolt_checkout|dolt.status|active_branch/.test(query)
+      )
+    ).toBe(false);
+  });
+
+  it("a stale operation's uncertainty retires only its original pool after a timeout replacement", async () => {
+    const first = pool();
+    const successor = pool();
+    const runner = new DoltBranchSessionRunner(first.client, {
+      queryTimeoutMs: 5,
+      recreateClient: () => successor.client,
+    });
+    await runner.run("timeout", async (connection) => {
+      await expect(connection.unsafe("STALLED")).rejects.toBeInstanceOf(
+        KnowledgeBusyError
+      );
+      expect(runner.client).toBe(successor.client);
+      await runner.retire(
+        connection,
+        new Error("old operation outcome uncertain")
+      );
+    });
+    expect(first.ended()).toBe(true);
+    expect(successor.ended()).toBe(false);
+    expect(first.queries.some((query) => query.includes("dolt_checkout"))).toBe(
+      false
+    );
+    await expect(runner.run("fresh", async () => "ok")).resolves.toBe("ok");
   });
 });

@@ -36,7 +36,7 @@
  */
 
 import { randomBytes } from "node:crypto";
-import type { ReservedSql, Sql } from "postgres";
+import type { Sql } from "postgres";
 import {
   initializeConfidence,
   recomputeConfidence as recomputeConfidenceByPolicy,
@@ -74,6 +74,7 @@ import {
   CitationTypeMismatchError,
   HypothesisMissingEvaluateAtError,
 } from "../../port/knowledge-store.port.js";
+import type { DoltWriteConnection as ReservedSql } from "./session-admission.js";
 import {
   type BranchSessionLogger,
   type BranchSessionOptions,
@@ -762,6 +763,8 @@ export interface DoltgresKnowledgeContributionAdapterConfig {
    * write burst starve reads — production wiring must pass its own.
    */
   branchSql?: Sql;
+  /** Shared process admission for all logical knowledge writers. */
+  writerSession?: DoltBranchSessionRunner;
   /** Rebuilds `branchSql` after a wedged session is terminated. */
   recreateBranchClient?: () => Sql;
   logger?: BranchSessionLogger;
@@ -777,13 +780,15 @@ export class DoltgresKnowledgeContributionAdapter
 
   constructor(config: DoltgresKnowledgeContributionAdapterConfig) {
     this.sql = config.sql;
-    this.session = new DoltBranchSessionRunner(config.branchSql ?? config.sql, {
-      ...(config.branchSession ?? {}),
-      ...(config.logger ? { logger: config.logger } : {}),
-      ...(config.recreateBranchClient
-        ? { recreateClient: config.recreateBranchClient }
-        : {}),
-    });
+    this.session =
+      config.writerSession ??
+      new DoltBranchSessionRunner(config.branchSql ?? config.sql, {
+        ...(config.branchSession ?? {}),
+        ...(config.logger ? { logger: config.logger } : {}),
+        ...(config.recreateBranchClient
+          ? { recreateClient: config.recreateBranchClient }
+          : {}),
+      });
   }
 
   /**
