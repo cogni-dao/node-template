@@ -30,7 +30,7 @@ export const workItemsClaimOperation = {
   id: "work.items.claim.v2",
   summary: "Claim a work item",
   description:
-    "Acquires or renews a work-item lease for the authenticated principal and run.",
+    "Acquires a lease or returns the identical active principal/run claim; renewal uses heartbeat.",
   input: z.object({
     id: WorkItemIdSchema,
     runId: z.string().min(1),

@@ -8,6 +8,7 @@ export interface DoltWriterConnection {
   unsafe(query: string): PromiseLike<readonly Record<string, unknown>[]>;
 }
 export type DoltWriterProtocol = "bridge" | "database";
+/** Opaque capability for this module instance; never interchange guards across separately bundled copies. */
 export interface DoltWriterLock {
   readonly baseDatabase: string;
   readonly protocol: DoltWriterProtocol;
