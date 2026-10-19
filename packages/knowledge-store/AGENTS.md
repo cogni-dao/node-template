@@ -77,3 +77,5 @@ Shared ports, contribution workflow, and adapters for versioned domain knowledge
 - **`fetch_types: false` required** on all postgres.js connections (pg_type grants missing).
 - Schema lives in node packages (`nodes/{node}/packages/doltgres-schema/`) because nodes may add companion tables and fork takes schema with it.
 - `core__knowledge_search` / `core__knowledge_read` / `core__knowledge_write` BoundTools shipped in `@cogni/ai-tools`; brain graph uses them via tool runtime.
+
+Contribution adapters require an explicit independent `writerSession` or `branchSql`; no write path falls back to its read client. The existing session runner registers each reader and rejects both initial and replacement writer aliases before SQL; rejected replacement factories never destroy a reader. Pure read-only store construction remains supported.

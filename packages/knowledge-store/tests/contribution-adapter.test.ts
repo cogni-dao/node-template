@@ -15,6 +15,10 @@ import type { ReservedSql, Sql } from "postgres";
 import { describe, expect, it } from "vitest";
 
 import { DoltgresKnowledgeContributionAdapter } from "../src/adapters/doltgres/contribution-adapter.js";
+import {
+  DoltBranchSessionRunner,
+  DoltgresKnowledgeStoreAdapter,
+} from "../src/adapters/doltgres/index.js";
 import type { Principal } from "../src/domain/contribution-schemas.js";
 import { CitationTargetNotFoundError } from "../src/port/knowledge-store.port.js";
 
@@ -208,15 +212,53 @@ class FakeMergeSql {
   }
 }
 
+function independentWriter(fake: {
+  unsafe(query: string): Promise<Record<string, unknown>[]>;
+  reserve(): Promise<ReservedSql>;
+}): Sql {
+  return {
+    unsafe: fake.unsafe.bind(fake),
+    reserve: fake.reserve.bind(fake),
+    end: async () => undefined,
+  } as unknown as Sql;
+}
+
 function adapterFor(
   fake: FakeSql | FakeMergeSql
 ): DoltgresKnowledgeContributionAdapter {
   return new DoltgresKnowledgeContributionAdapter({
     sql: fake as unknown as Sql,
+    branchSql: independentWriter(fake),
   });
 }
 
 describe("DoltgresKnowledgeContributionAdapter", () => {
+  it("rejects missing or read-aliased branch configuration before SQL", () => {
+    const fake = new FakeSql();
+    const sql = fake as unknown as Sql;
+    expect(() => new DoltgresKnowledgeContributionAdapter({ sql })).toThrow(
+      /independent/
+    );
+    expect(
+      () => new DoltgresKnowledgeContributionAdapter({ sql, branchSql: sql })
+    ).toThrow(/independent/);
+    expect(() => new DoltgresKnowledgeStoreAdapter({ sql })).not.toThrow();
+    const aliasedRunner = new DoltBranchSessionRunner(sql);
+    expect(
+      () =>
+        new DoltgresKnowledgeContributionAdapter({
+          sql,
+          writerSession: aliasedRunner,
+        })
+    ).toThrow(/independent/);
+    expect(
+      () =>
+        new DoltgresKnowledgeStoreAdapter({ sql, writerSession: aliasedRunner })
+    ).toThrow(/independent/);
+    expect(fake.queries).toHaveLength(0);
+    expect(fake.conn.queries).toHaveLength(0);
+  });
+
   it("anchors contribution diff to the recorded base and head commits", async () => {
     const fake = new FakeSql();
 
@@ -461,6 +503,7 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
 
     const adapter = new DoltgresKnowledgeContributionAdapter({
       sql: fake as unknown as Sql,
+      branchSql: independentWriter(fake),
     });
     const commit = await adapter.appendCommit({
       contributionId: "contrib-agent-1-abc123",
@@ -513,6 +556,7 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
 
     const adapter = new DoltgresKnowledgeContributionAdapter({
       sql: fake as unknown as Sql,
+      branchSql: independentWriter(fake),
     });
     await adapter.appendCommit({
       contributionId: "contrib-agent-1-abc123",
@@ -558,6 +602,7 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
 
     const adapter = new DoltgresKnowledgeContributionAdapter({
       sql: fake as unknown as Sql,
+      branchSql: independentWriter(fake),
     });
     await expect(
       adapter.appendCommit({
@@ -585,6 +630,7 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
 
     const adapter = new DoltgresKnowledgeContributionAdapter({
       sql: fake as unknown as Sql,
+      branchSql: independentWriter(fake),
     });
     await expect(
       adapter.appendCommit({
@@ -611,6 +657,7 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
 
     const adapter = new DoltgresKnowledgeContributionAdapter({
       sql: fake as unknown as Sql,
+      branchSql: independentWriter(fake),
     });
     await expect(
       adapter.appendCommit({

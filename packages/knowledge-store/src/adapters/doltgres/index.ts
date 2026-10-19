@@ -207,6 +207,7 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
     this.sql = config.sql;
     this.readSql = config.sql;
     this.writerSession = config.writerSession;
+    this.writerSession?.assertIndependentReadClient(config.sql);
   }
 
   private assertWriteScope(): void {

@@ -458,4 +458,28 @@ describe("writer runner guard and pool ownership", () => {
     );
     await expect(runner.run("fresh", async () => "ok")).resolves.toBe("ok");
   });
+  it("a replacement factory cannot alias or destroy a registered reader", async () => {
+    const first = pool();
+    const reader = pool();
+    const runner = new DoltBranchSessionRunner(first.client, {
+      recreateClient: () => reader.client,
+    });
+    expect(() => runner.assertIndependentReadClient(first.client)).toThrow(
+      /independent/
+    );
+    runner.assertIndependentReadClient(reader.client);
+    await runner.run("retire", async (connection) => {
+      await runner.retire(connection, new Error("unknown writer outcome"));
+    });
+    expect(first.ended()).toBe(true);
+    expect(reader.ended()).toBe(false);
+    expect(runner.client).toBe(first.client);
+    let invoked = false;
+    await expect(
+      runner.run("fail closed", async () => {
+        invoked = true;
+      })
+    ).rejects.toBeInstanceOf(KnowledgeBusyError);
+    expect(invoked).toBe(false);
+  });
 });

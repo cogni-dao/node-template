@@ -758,9 +758,8 @@ export interface DoltgresKnowledgeContributionAdapterConfig {
   /** Pooled client for ordinary reads. Never used for branch work. */
   sql: Sql;
   /**
-   * Dedicated client for session-pinned branch work, ideally `max: 1`.
-   * Defaults to `sql`, which keeps single-process tests working but lets a
-   * write burst starve reads — production wiring must pass its own.
+   * Independent client for session-pinned branch work, normally max:1.
+   * Required unless writerSession is supplied; never falls back to sql.
    */
   branchSql?: Sql;
   /** Shared process admission for all logical knowledge writers. */
@@ -780,15 +779,23 @@ export class DoltgresKnowledgeContributionAdapter
 
   constructor(config: DoltgresKnowledgeContributionAdapterConfig) {
     this.sql = config.sql;
+    if (
+      !config.writerSession &&
+      (!config.branchSql || config.branchSql === config.sql)
+    )
+      throw new Error(
+        "Knowledge contribution writes require an independent branchSql or writerSession"
+      );
     this.session =
       config.writerSession ??
-      new DoltBranchSessionRunner(config.branchSql ?? config.sql, {
+      new DoltBranchSessionRunner(config.branchSql as Sql, {
         ...(config.branchSession ?? {}),
         ...(config.logger ? { logger: config.logger } : {}),
         ...(config.recreateBranchClient
           ? { recreateClient: config.recreateBranchClient }
           : {}),
       });
+    this.session.assertIndependentReadClient(config.sql);
   }
 
   /**

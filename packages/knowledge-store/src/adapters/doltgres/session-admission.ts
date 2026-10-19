@@ -145,6 +145,7 @@ export class DoltBranchSessionRunner {
   private readonly writerProtocol: "bridge" | "database";
   private readonly queryTimeoutMs: number;
   private readonly retiredPools = new WeakSet<object>();
+  private readonly readClients = new WeakSet<object>();
   private readonly connectionPools = new WeakMap<object, Sql>();
   private readonly recreateClient: (() => Sql) | undefined;
   private readonly terminatingPools = new WeakMap<object, Promise<void>>();
@@ -159,6 +160,15 @@ export class DoltBranchSessionRunner {
     this.writerProtocol = options.writerProtocol ?? "bridge";
     this.queryTimeoutMs = options.queryTimeoutMs ?? 30000;
     this.recreateClient = options.recreateClient;
+  }
+
+  /** Register independent readers so current or recreated writer pools cannot alias them. */
+  assertIndependentReadClient(reader: Sql): void {
+    if (reader === this.sql)
+      throw new Error(
+        "Knowledge branch writer must use an independent pool from ordinary reads"
+      );
+    this.readClients.add(reader);
   }
 
   /** The client currently backing branch work. Swapped on termination. */
@@ -479,7 +489,16 @@ export class DoltBranchSessionRunner {
       }
       if (this.sql !== pool || !this.recreateClient) return;
       try {
-        this.sql = this.recreateClient?.() ?? pool;
+        const replacement = this.recreateClient();
+        if (
+          !replacement ||
+          this.readClients.has(replacement) ||
+          this.retiredPools.has(replacement)
+        )
+          throw new Error(
+            "Knowledge writer factory must return a fresh independent writer pool"
+          );
+        this.sql = replacement;
         this.log("info", operation, "connection.recreate", "complete", {
           failedStage: stage,
         });

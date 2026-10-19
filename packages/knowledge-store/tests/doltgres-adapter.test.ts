@@ -139,7 +139,7 @@ class FakeSql {
 function adapterFor(fake: FakeSql): DoltgresKnowledgeStoreAdapter {
   const sql = fake as unknown as Sql;
   return new DoltgresKnowledgeStoreAdapter({
-    sql,
+    sql: { unsafe: sql.unsafe.bind(sql) } as unknown as Sql,
     writerSession: new DoltBranchSessionRunner(sql),
   });
 }
