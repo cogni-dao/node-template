@@ -819,9 +819,6 @@ importers:
         specifier: ^4.1.12
         version: 4.4.3
     devDependencies:
-      '@cogni-dao/doltgres-admission':
-        specifier: workspace:*
-        version: link:../doltgres-admission
       '@cogni/ai-tools':
         specifier: workspace:*
         version: link:../ai-tools

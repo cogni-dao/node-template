@@ -720,13 +720,26 @@ function createContainer(): Container {
 				applicationName: `cogni_work_items_${env.SERVICE_NAME ?? "app"}`,
 				max: 1,
 			});
+		// One live and one draining generation: at most two reader connections.
+		const createWorkItemsReadClient = () =>
+			buildDoltgresClient({
+				connectionString: env.DOLTGRES_URL as string,
+				applicationName: `cogni_work_items_read_${env.SERVICE_NAME ?? "app"}`,
+				max: 1,
+			});
 		const workItemsClient = createWorkItemsClient();
 		// Node stores start their allocator at 1; operator alone reserves the
 		// imported legacy range below 5000.
-		doltgresWorkItems = withWorkItemLeases(new DoltgresWorkItemAdapter(workItemsClient, {
-			logger: log,
-			recreateClient: createWorkItemsClient,
-		}), new PostgresWorkItemLeaseAdapter(serviceDb.$client, {logger: log}));
+		doltgresWorkItems = withWorkItemLeases(
+			new DoltgresWorkItemAdapter(workItemsClient, {
+				logger: log,
+				recreateClient: createWorkItemsClient,
+				readClient: createWorkItemsReadClient(),
+				recreateReadClient: createWorkItemsReadClient,
+				readConnectionBudget: 2,
+			}),
+			new PostgresWorkItemLeaseAdapter(serviceDb.$client, { logger: log })
+		);
 		const knowledgePort = new DoltgresKnowledgeStoreAdapter({
 			sql: doltClient,
 		});
