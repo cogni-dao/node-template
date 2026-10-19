@@ -24,3 +24,36 @@ export class WorkItemDeletionRetiredError extends Error {
     this.name = "WorkItemDeletionRetiredError";
   }
 }
+
+/** Current intent may have committed; inspect its durable branch before any replay. */
+export class WorkItemWriteOutcomeUnknownError extends Error {
+  readonly code = "work_item_write_outcome_unknown" as const;
+  readonly retryable = false;
+  constructor(
+    readonly operationId: string,
+    readonly branch: string,
+    readonly commitHash?: string,
+    readonly itemId?: string
+  ) {
+    super(
+      `Work-item write outcome requires inspection; do not replay ${operationId}. Inspect main and ${branch} using the operation receipt.`
+    );
+    this.name = "WorkItemWriteOutcomeUnknownError";
+  }
+  get receipt(): {
+    code: string;
+    retryable: false;
+    lookup: Readonly<Record<string, string | null>>;
+  } {
+    return {
+      code: this.code,
+      retryable: false,
+      lookup: {
+        operationId: this.operationId,
+        branch: this.branch,
+        commitHash: this.commitHash ?? null,
+        itemId: this.itemId ?? null,
+      },
+    };
+  }
+}

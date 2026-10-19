@@ -49,6 +49,9 @@ class FakeReservedSql {
     query: string
   ): Promise<Record<string, unknown>[] & { count?: number }> {
     this.queries.push(query);
+    if (query.includes("current_database()"))
+      return [{ dolt_writer_database: "knowledge_test" }];
+    if (query.includes("active_branch()")) return [{ branch_name: "main" }];
     // Admission control takes a session advisory lock before any branch work
     // (bug.5391); a fake that cannot answer it would fail every write as busy.
     if (query.includes("pg_try_advisory_lock"))
@@ -154,6 +157,9 @@ class FakeMergeReservedSql {
     query: string
   ): Promise<Record<string, unknown>[] & { count?: number }> {
     this.queries.push(query);
+    if (query.includes("current_database()"))
+      return [{ dolt_writer_database: "knowledge_test" }];
+    if (query.includes("active_branch()")) return [{ branch_name: "main" }];
     // Admission control takes a session advisory lock before any branch work
     // (bug.5391); a fake that cannot answer it would fail every write as busy.
     if (query.includes("pg_try_advisory_lock"))
@@ -643,6 +649,9 @@ class CrossPlaneFakeReservedSql {
     query: string
   ): Promise<Record<string, unknown>[] & { count?: number }> {
     this.queries.push(query);
+    if (query.includes("current_database()"))
+      return [{ dolt_writer_database: "knowledge_test" }];
+    if (query.includes("active_branch()")) return [{ branch_name: "main" }];
     // Admission control takes a session advisory lock before any branch work
     // (bug.5391); a fake that cannot answer it would fail every write as busy.
     if (query.includes("pg_try_advisory_lock"))

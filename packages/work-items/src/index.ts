@@ -36,3 +36,5 @@ export type {
 
 export type { WorkItemsContentPort, WorkItemsPort } from "./content.js";
 export { withWorkItemLeases } from "./with-leases.js";
+
+export { WorkItemWriteOutcomeUnknownError } from "./errors.js";
