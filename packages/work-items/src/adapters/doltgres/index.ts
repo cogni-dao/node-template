@@ -19,6 +19,7 @@ export {
   WorkItemAuthorizationError,
   WorkItemLeaseConflictError,
   WorkItemsBusyError,
+  WorkItemsCapacityError,
 } from "./adapter.js";
 export {
   decodeCursor,
@@ -36,3 +37,5 @@ export type {
 export type { WorkItemsContentPort } from "./ports.js";
 
 export { WorkItemDeletionRetiredError } from "../../errors.js";
+
+export { WorkItemWriteOutcomeUnknownError } from "../../errors.js";

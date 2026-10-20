@@ -31,6 +31,7 @@ import {
 export {
   WorkItemLeaseConflictError,
   WorkItemsBusyError,
+  WorkItemsCapacityError,
 } from "../../errors.js";
 
 import type {

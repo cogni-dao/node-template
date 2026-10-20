@@ -15,6 +15,16 @@ export class WorkItemsBusyError extends Error {
   }
 }
 
+/** Native work still owns capacity; caller retries must not create a replacement. */
+export class WorkItemsCapacityError extends WorkItemsBusyError {
+  readonly code = "work_items_native_capacity_held" as const;
+  constructor(readonly nativeState: "pending" | "unknown") {
+    super(
+      `Work-item native capacity is ${nativeState}; retry after settlement`
+    );
+  }
+}
+
 /** Durable identities are never reused; cancel the versioned row instead. */
 export class WorkItemDeletionRetiredError extends Error {
   constructor() {
@@ -22,5 +32,38 @@ export class WorkItemDeletionRetiredError extends Error {
       "Work-item hard deletion is retired; PATCH status=cancelled to preserve identity and provenance"
     );
     this.name = "WorkItemDeletionRetiredError";
+  }
+}
+
+/** Current intent may have committed; inspect its durable branch before any replay. */
+export class WorkItemWriteOutcomeUnknownError extends Error {
+  readonly code = "work_item_write_outcome_unknown" as const;
+  readonly retryable = false;
+  constructor(
+    readonly operationId: string,
+    readonly branch: string,
+    readonly commitHash?: string,
+    readonly itemId?: string
+  ) {
+    super(
+      `Work-item write outcome requires inspection; do not replay ${operationId}. Inspect main and ${branch} using the operation receipt.`
+    );
+    this.name = "WorkItemWriteOutcomeUnknownError";
+  }
+  get receipt(): {
+    code: string;
+    retryable: false;
+    lookup: Readonly<Record<string, string | null>>;
+  } {
+    return {
+      code: this.code,
+      retryable: false,
+      lookup: {
+        operationId: this.operationId,
+        branch: this.branch,
+        commitHash: this.commitHash ?? null,
+        itemId: this.itemId ?? null,
+      },
+    };
   }
 }
