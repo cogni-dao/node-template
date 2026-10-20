@@ -27,3 +27,14 @@ export type {
   DoltPersistedCleanEditReceipt,
   DoltFreshCleanEditReceipt,
 } from "./branch-mutation.js";
+
+export { DoltNativeSessionExecutor } from "./native-session-executor.js";
+export type {
+  DoltNativeSessionOptions,
+  DoltNativeSessionErrors,
+  DoltNativeSessionLogger,
+  DoltNativeWriterPool,
+  DoltNativeReservedConnection,
+  DoltNativeWriteConnection,
+  DoltNativeWriterGuard,
+} from "./native-session-executor.js";
