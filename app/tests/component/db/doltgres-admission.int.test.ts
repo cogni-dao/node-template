@@ -261,7 +261,7 @@ describe("Doltgres 0.57.3 common per-database writer protocol", () => {
 		}
 	});
 
-  async function cliFixture(database: string) {
+  async function cliFixture(database: string, nodeName = database.replace(/^knowledge_/, "").replaceAll("_", "-")) {
     const folder = await mkdtemp(path.join(tmpdir(), "doltgres-cli-"));
     await mkdir(path.join(folder, "meta"));
     const entry = (idx: number) => ({ idx, version: "7", when: idx + 1, tag: `000${idx}_probe`, breakpoints: true });
@@ -280,10 +280,10 @@ describe("Doltgres 0.57.3 common per-database writer protocol", () => {
     await admin.unsafe(`CREATE DATABASE ${database}`);
     const url = `${origin}/${database}`;
     const root = path.resolve(__dirname, "../../../..");
-    const migrate = async (timeout = 30_000) => {
+    const migrate = async (timeout = 30_000, databaseUrl = url) => {
       try {
         const result = await promisify(execFile)(process.execPath, [path.join(root, "scripts/db/migrate-doltgres.mjs"), folder], {
-          cwd: root, env: { ...process.env, NODE_NAME: database.replace(/^knowledge_/, "").replaceAll("_", "-"), DATABASE_URL: url }, timeout,
+          cwd: root, env: { ...process.env, NODE_NAME: nodeName, DATABASE_URL: databaseUrl }, timeout,
         });
         return { code: 0, output: result.stdout + result.stderr };
       } catch (error) {
@@ -295,8 +295,8 @@ describe("Doltgres 0.57.3 common per-database writer protocol", () => {
     return { admin, url, root, folder, database, migrate, writeJournal, async close() { await admin.end({ timeout: 1 }); await rm(folder, { recursive: true, force: true }); } };
   }
 
-  it("already-applied runtime init is read-only beside a dirty live writer", async () => {
-    const fixture = await cliFixture("knowledge_cli_noop");
+  it("suffixed lane startup then already-applied init is read-only beside a dirty live writer", async () => {
+    const fixture = await cliFixture("knowledge_cli_noop_candidate_a", "cli-noop");
     const writer = postgres(fixture.url, { max: 1, fetch_types: false });
     try {
       await writer.unsafe("INSERT INTO migration_probe VALUES (42)");
@@ -310,6 +310,21 @@ describe("Doltgres 0.57.3 common per-database writer protocol", () => {
       expect(await writer.unsafe("SELECT * FROM dolt.status")).toEqual(dirty);
       expect(await writer.unsafe("SELECT id FROM migration_probe")).toEqual([{ id: 42 }]);
       expect(await writer.unsafe("SELECT COUNT(*)::integer AS count FROM drizzle.__drizzle_migrations")).toEqual([{ count: 1 }]);
+      for (const pathname of [
+        "knowledge_foreign_candidate_a",
+        "knowledge_cli_noop_candidate_z",
+        "knowledge_cli_noop_candidate_a_preview",
+        "knowledge_cli_noop_candidate_a/branch",
+        "knowledge_cli_noop%2Fcandidate_a",
+        "knowledge_cli_noop_candidаte_a", // Cyrillic a is not a canonical ASCII lane.
+      ]) {
+        const rejected = new URL(fixture.url);
+        rejected.port = "1"; // A connection attempt cannot satisfy this control.
+        rejected.pathname = `/${pathname}`;
+        const negative = await fixture.migrate(5_000, rejected.toString());
+        expect(negative.code).toBe(1);
+        expect(negative.output).toContain('"code":"migration_database_identity_mismatch"');
+      }
     } finally { await writer.end({ timeout: 1 }); await fixture.close(); }
   });
 
