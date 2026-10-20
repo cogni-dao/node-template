@@ -692,7 +692,7 @@ describe("writer runner native ownership", () => {
         query.includes("dolt_merge(")
           ? pending.promise
           : query.includes("dolt_commit(")
-            ? Promise.resolve([{ dolt_commit: "abc123" }])
+            ? Promise.resolve([{ dolt_commit: "a".repeat(32) }])
             : undefined,
     });
     const runner = new DoltBranchSessionRunner(first.client, {
@@ -718,7 +718,7 @@ describe("writer runner native ownership", () => {
       retryable: false,
       operationId: "knowledge:stable-input",
       branch: "dolt-op/owned",
-      commitHash: "abc123",
+      commitHash: "a".repeat(32),
     });
     expect(first.queries.some((q) => q.includes("pg_advisory_unlock"))).toBe(
       false
