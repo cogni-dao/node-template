@@ -46,6 +46,8 @@ export function EntityCitationLinks({
       entityId={entityId}
       loadPage={fetchCitationLinks}
       className="flex flex-col gap-1"
+      headingClassName="font-medium text-muted-foreground text-xs uppercase tracking-wider"
+      linksClassName="flex flex-wrap gap-1.5"
       moreButtonClassName="w-fit rounded border px-2 py-1 text-xs disabled:opacity-50"
       renderLink={(link) => {
         const endpoint = otherEndpoint(link, entityId);

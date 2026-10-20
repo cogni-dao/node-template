@@ -28,6 +28,8 @@ export interface DirectRelationLinksProps<T extends { readonly id: string }> {
   /** The node retains routing and its own chip or link appearance. */
   readonly renderLink: (link: T) => ReactNode;
   readonly className?: string;
+  readonly headingClassName?: string;
+  readonly linksClassName?: string;
   readonly moreButtonClassName?: string;
 }
 
@@ -46,6 +48,8 @@ export function DirectRelationLinks<T extends { readonly id: string }>({
   loadPage,
   renderLink,
   className,
+  headingClassName,
+  linksClassName,
   moreButtonClassName,
 }: DirectRelationLinksProps<T>): ReactElement | null {
   const generation = useRef(0);
@@ -113,10 +117,10 @@ export function DirectRelationLinks<T extends { readonly id: string }>({
 
   return (
     <section aria-label="Related links" className={className}>
-      <span className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
+      <span className={headingClassName}>
         Links
       </span>
-      <div className="flex flex-wrap gap-1.5">
+      <div className={linksClassName}>
         {state.links.map((link) => (
           <span key={link.id}>{renderLink(link)}</span>
         ))}
