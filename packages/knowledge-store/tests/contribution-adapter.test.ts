@@ -176,7 +176,13 @@ class FakeMergeReservedSql {
       return [{ dolt_merge: ["", "0", "0", "aborted"] }];
     }
     if (query.includes("dolt_merge(")) {
-      if (this.throwOnMerge) throw new Error(this.throwOnMerge);
+      // This fixture models Dolt's terminal SQL error response after an
+      // autocommit conflict, not a missing transport acknowledgement.
+      if (this.throwOnMerge)
+        throw Object.assign(new Error(this.throwOnMerge), {
+          name: "PostgresError",
+          code: "XX000",
+        });
       return [{ dolt_merge: this.mergeRow }];
     }
     if (query.includes("dolt_commit")) {
