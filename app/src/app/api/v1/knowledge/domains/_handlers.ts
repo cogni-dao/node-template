@@ -20,6 +20,8 @@
 
 import {
   DomainAlreadyRegisteredError,
+  KnowledgeBusyError,
+  KnowledgeWriteConflictError,
   KnowledgeWriteOutcomeUnknownError,
   KnowledgeWriteScopeRequiredError,
 } from "@cogni/knowledge-store";
@@ -116,6 +118,21 @@ export async function handleCreate(
           retryable: false,
         },
         { status: 500 }
+      );
+    if (e instanceof KnowledgeWriteConflictError)
+      return NextResponse.json(
+        {
+          error: e.message,
+          errorCode: e.receipt.code,
+          retryable: false,
+          entryId: e.entryId,
+        },
+        { status: 409 }
+      );
+    if (e instanceof KnowledgeBusyError)
+      return NextResponse.json(
+        { error: e.message, retryable: true },
+        { status: 503, headers: { "Retry-After": "2" } }
       );
     if (e instanceof DomainAlreadyRegisteredError) {
       return NextResponse.json({ error: e.message }, { status: 409 });

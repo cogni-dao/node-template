@@ -92,7 +92,15 @@ function mapError(e: unknown): NextResponse {
   // applied, so this is retryable capacity pressure, never a client conflict
   // and never a 500. Same contract as knowledge/contributions (bug.5391).
   if (e instanceof KnowledgeWriteConflictError)
-    return NextResponse.json({ error: e.message }, { status: 409 });
+    return NextResponse.json(
+      {
+        error: e.message,
+        errorCode: e.receipt.code,
+        retryable: false,
+        entryId: e.entryId,
+      },
+      { status: 409 }
+    );
   if (e instanceof KnowledgeBusyError)
     return NextResponse.json(
       { error: e.message, retryable: true },
