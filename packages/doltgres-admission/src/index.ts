@@ -14,9 +14,11 @@ export type {
 } from "./locks.js";
 export {
   runDoltBranchMutation,
+  reconcileAbandonedDoltOperation,
   DoltBranchMutationUncertainError,
 } from "./branch-mutation.js";
 export type {
   DoltBranchMutationOptions,
   DoltBranchMutationResult,
+  DoltAbandonedOperationProof,
 } from "./branch-mutation.js";

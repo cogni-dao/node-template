@@ -84,6 +84,8 @@ export async function acquireDoltWriterLocks(
     protocol?: DoltWriterProtocol;
     lockWaitMs?: number;
     lockRetryMs?: number;
+    /** Caller-owned scope check; denial must not revoke the guard or ownership. */
+    authorizeRelease?: () => void;
   } = {}
 ): Promise<DoltWriterLock> {
   if (
@@ -110,6 +112,7 @@ export async function acquireDoltWriterLocks(
   let released = false;
   let guard: DoltWriterLock | undefined;
   const release = async () => {
+    options.authorizeRelease?.();
     if (released) return;
     released = true;
     pendingConnections.add(connection);

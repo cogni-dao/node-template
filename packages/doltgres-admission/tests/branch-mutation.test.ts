@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   DoltBranchMutationUncertainError,
   runDoltBranchMutation,
+  reconcileAbandonedDoltOperation,
 } from "../src/branch-mutation.js";
 import {
   acquireDoltWriterLocks,
@@ -13,6 +14,7 @@ import {
 } from "../src/locks.js";
 
 const HASH = "a".repeat(32);
+const BASE = "b".repeat(32);
 function engine(
   overrides: {
     lostMergeAck?: boolean;
@@ -20,10 +22,14 @@ function engine(
     callbackSqlFails?: boolean;
     existing?: boolean;
     malformedMerge?: boolean;
+    commitFails?: boolean;
   } = {}
 ) {
   let active = "main";
   let dirty = false;
+  let head = BASE;
+  let mergeRows: Record<string, unknown>[] = [{ is_merging: false }];
+  let conflicts: Record<string, unknown>[] = [];
   const queries: string[] = [];
   const connection: DoltWriterConnection = {
     async unsafe(query) {
@@ -45,6 +51,9 @@ function engine(
         return [{ dolt_checkout: 0 }];
       }
       if (query.includes("active_branch()")) return [{ branch_name: active }];
+      if (query === "SELECT is_merging FROM dolt.merge_status")
+        return mergeRows;
+      if (query === "SELECT * FROM dolt.conflicts") return conflicts;
       if (query === "SELECT * FROM dolt.status")
         return dirty ? [{ table_name: "knowledge" }] : [];
       if (query === "INSERT domain row") {
@@ -58,11 +67,13 @@ function engine(
         return [{ dolt_reset: 0 }];
       }
       if (query.startsWith("SELECT dolt_commit")) {
+        if (overrides.commitFails) throw new Error("terminal commit failed");
         dirty = false;
+        head = HASH;
         return [{ dolt_commit: [HASH] }];
       }
       if (query.startsWith("SELECT dolt_hashof"))
-        return [{ commit_hash: HASH }];
+        return [{ commit_hash: query.includes("'HEAD'") ? head : HASH }];
       if (query.startsWith("SELECT hash, fast_forward")) {
         if (overrides.lostMergeAck)
           throw new Error("merge acknowledgement lost");
@@ -86,7 +97,25 @@ function engine(
       throw new Error(`Unexpected query: ${query}`);
     },
   };
-  return { connection, queries };
+  return {
+    connection,
+    queries,
+    setActive: (value: string) => {
+      active = value;
+    },
+    setHead: (value: string) => {
+      head = value;
+    },
+    setDirty: (value: boolean) => {
+      dirty = value;
+    },
+    setMerge: (value: Record<string, unknown>[]) => {
+      mergeRows = value;
+    },
+    setConflicts: (value: Record<string, unknown>[]) => {
+      conflicts = value;
+    },
+  };
 }
 async function setup(options: Parameters<typeof engine>[0] = {}) {
   const fixture = engine(options);
@@ -341,5 +370,198 @@ describe("runDoltBranchMutation", () => {
     expect(f.queries).not.toContain("SELECT dolt_checkout('main')");
     expect(run).not.toHaveBeenCalled();
     expect(f.poison).toHaveBeenCalledOnce();
+  });
+  it("reconciles settled uncommitted DML only on its proven original owned branch and preserves the ref", async () => {
+    const f = await setup({ callbackSqlFails: true });
+    let reconcile!: () => Promise<boolean>;
+    await expect(
+      runDoltBranchMutation(f.connection, {
+        guard: f.guard,
+        operationId: "owned:settled",
+        message: "owned",
+        onSessionUncertain: f.poison,
+        onReconcile: (plan) => {
+          reconcile = plan;
+        },
+        run: async (sql) => {
+          await sql.unsafe("INSERT domain row");
+        },
+      })
+    ).rejects.toBeInstanceOf(DoltBranchMutationUncertainError);
+    const before = f.queries.length;
+    await expect(reconcile()).resolves.toBe(true);
+    const cleanup = f.queries.slice(before);
+    expect(cleanup).toContain("SELECT dolt_reset('--hard', 'HEAD')");
+    expect(cleanup.indexOf("SELECT dolt_checkout('main')")).toBeGreaterThan(
+      cleanup.indexOf("SELECT dolt_reset('--hard', 'HEAD')")
+    );
+    expect(
+      cleanup.some((query) =>
+        /dolt_commit|dolt_merge\(|dolt_branch\(/.test(query)
+      )
+    ).toBe(false);
+    expect(
+      f.queries.filter((query) => query === "INSERT domain row")
+    ).toHaveLength(1);
+  });
+
+  it.each([
+    "foreign",
+    "head-moved",
+    "commit-attempt",
+    "merge",
+    "conflicts",
+    "empty-merge-proof",
+  ])("refuses unsafe reconciliation: %s", async (scenario) => {
+    const f = await setup({ callbackSqlFails: true });
+    let reconcile!: () => Promise<boolean>;
+    await expect(
+      runDoltBranchMutation(f.connection, {
+        guard: f.guard,
+        operationId: "owned:guarded",
+        message: "owned",
+        onSessionUncertain: f.poison,
+        onReconcile: (plan) => {
+          reconcile = plan;
+        },
+        run: async (sql) => {
+          await sql.unsafe("INSERT domain row");
+        },
+      })
+    ).rejects.toBeInstanceOf(DoltBranchMutationUncertainError);
+    if (scenario === "foreign") f.setActive("foreign/branch");
+    if (scenario === "head-moved") f.setHead(HASH);
+    if (scenario === "merge") f.setMerge([{ is_merging: true }]);
+    if (scenario === "conflicts")
+      f.setConflicts([{ table: "knowledge", num_conflicts: 1 }]);
+    if (scenario === "empty-merge-proof") f.setMerge([]);
+    const before = f.queries.length;
+    if (scenario === "commit-attempt") {
+      const branch = f.queries
+        .find((query) => query.startsWith("SELECT dolt_checkout('-b'"))
+        ?.split("'")[3];
+      await expect(
+        reconcileAbandonedDoltOperation(f.connection, {
+          guard: f.guard,
+          branch,
+          baseHash: BASE,
+          creationProven: true,
+          commitAttempted: true,
+          mergeAttempted: false,
+        })
+      ).resolves.toBe(false);
+    } else await expect(reconcile()).resolves.toBe(false);
+    expect(
+      f.queries
+        .slice(before)
+        .some((query) => /dolt_reset|dolt_checkout|dolt_branch/.test(query))
+    ).toBe(false);
+  });
+
+  it("keeps a dirty branch after a terminal failed COMMIT as an explicit recovery case", async () => {
+    const f = await setup({ commitFails: true });
+    let reconcile!: () => Promise<boolean>;
+    await expect(
+      runDoltBranchMutation(f.connection, {
+        guard: f.guard,
+        operationId: "owned:commit-failed",
+        message: "owned",
+        onSessionUncertain: f.poison,
+        onReconcile: (plan) => {
+          reconcile = plan;
+        },
+        run: async (sql) => {
+          await sql.unsafe("INSERT domain row");
+        },
+      })
+    ).rejects.toBeInstanceOf(DoltBranchMutationUncertainError);
+    const before = f.queries.length;
+    await expect(reconcile()).resolves.toBe(false);
+    expect(
+      f.queries
+        .slice(before)
+        .some((query) => /dolt_reset|dolt_checkout/.test(query))
+    ).toBe(false);
+  });
+
+  it("hands the proven result to its owner before deferred ref cleanup", async () => {
+    const f = await setup();
+    let cleanup!: () => Promise<void>;
+    const committed = vi.fn((result, plan: () => Promise<void>) => {
+      cleanup = plan;
+      expect(result).toEqual({ value: 42, commitHash: HASH });
+    });
+    const result = await runDoltBranchMutation(f.connection, {
+      guard: f.guard,
+      operationId: "owned:ack",
+      message: "owned",
+      onSessionUncertain: f.poison,
+      onCommitted: committed,
+      run: async (sql) => {
+        await sql.unsafe("INSERT domain row");
+        return 42;
+      },
+    });
+    expect(result.value).toBe(42);
+    expect(committed).toHaveBeenCalledOnce();
+    expect(
+      f.queries.some((query) => query.startsWith("SELECT dolt_branch('-D'"))
+    ).toBe(false);
+    await cleanup();
+    expect(
+      f.queries.filter((query) => query.startsWith("SELECT dolt_branch('-D'"))
+    ).toHaveLength(1);
+  });
+
+  it("preserves proven success and the ref when its notification observer throws", async () => {
+    const f = await setup();
+    const result = await runDoltBranchMutation(f.connection, {
+      guard: f.guard,
+      operationId: "owned:observer",
+      message: "owned",
+      onSessionUncertain: f.poison,
+      onCommitted: () => {
+        throw new Error("observer bug");
+      },
+      run: async (sql) => {
+        await sql.unsafe("INSERT domain row");
+        return 42;
+      },
+    });
+    expect(result).toEqual({
+      value: 42,
+      commitHash: HASH,
+      cleanupUncertain: true,
+    });
+    expect(
+      f.queries.some((query) => query.startsWith("SELECT dolt_branch('-D'"))
+    ).toBe(false);
+  });
+  it("deferred callbacks reject a released guard before issuing any SQL", async () => {
+    const f = await setup();
+    let cleanup!: () => Promise<void>;
+    let reconcile!: () => Promise<boolean>;
+    await runDoltBranchMutation(f.connection, {
+      guard: f.guard,
+      operationId: "owned:closed-guard",
+      message: "owned",
+      onSessionUncertain: f.poison,
+      onReconcile: (plan) => {
+        reconcile = plan;
+      },
+      onCommitted: (_result, plan) => {
+        cleanup = plan;
+      },
+      run: async (sql) => {
+        await sql.unsafe("INSERT domain row");
+      },
+    });
+    await f.guard.release();
+    const count = f.queries.length;
+    await expect(cleanup()).rejects.toMatchObject({ reason: "guard_invalid" });
+    await expect(reconcile()).rejects.toMatchObject({
+      reason: "guard_invalid",
+    });
+    expect(f.queries).toHaveLength(count);
   });
 });
