@@ -505,6 +505,121 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
     }
   );
 
+  it("maps unproven metadata merge proof to the public nonretryable inspection receipt", async () => {
+    const fake = new FakeSql(),
+      native = fake.conn.unsafe.bind(fake.conn);
+    fake.conn.unsafe = async (query) =>
+      query.includes("dolt_merge_base")
+        ? [{ merge_base: "unproven" }]
+        : native(query);
+    await expect(
+      adapterFor(fake).close({
+        contributionId: String(record.id),
+        principal: reviewer,
+        reason: "unproven merge",
+      })
+    ).rejects.toMatchObject({
+      name: "KnowledgeWriteOutcomeUnknownError",
+      retryable: false,
+      receipt: { lookup: { branch: expect.stringMatching(/^dolt-op\//) } },
+    });
+    expect(
+      fake.conn.queries.filter((query) =>
+        query.startsWith("UPDATE knowledge_contributions")
+      )
+    ).toHaveLength(1);
+    expect(
+      fake.conn.queries.some((query) =>
+        /dolt_reset|dolt_branch\('-D'/.test(query)
+      )
+    ).toBe(false);
+  });
+
+  it.each(["merge", "close"] as const)(
+    "rereads queued %s state under its existing guard and skips duplicate metadata DML",
+    async (action) => {
+      const fake = new FakeSql(),
+        native = fake.conn.unsafe.bind(fake.conn);
+      let current: Record<string, unknown> = { ...record },
+        staged: Record<string, unknown> | undefined;
+      let entered!: () => void, settle!: () => void;
+      const editing = new Promise<void>((resolve) => {
+          entered = resolve;
+        }),
+        finite = new Promise<void>((resolve) => {
+          settle = resolve;
+        });
+      let metadataCalls = 0,
+        merges = 0;
+      fake.conn.unsafe = async (query) => {
+        if (query.includes("FROM knowledge_contributions")) {
+          fake.conn.queries.push(query);
+          return [current];
+        }
+        if (query.startsWith("SELECT dolt_merge('contrib/")) merges++;
+        if (query.startsWith("UPDATE knowledge_contributions")) {
+          metadataCalls++;
+          const rows = await native(query);
+          staged = {
+            ...current,
+            state: action === "merge" ? "merged" : "closed",
+            merged_commit: action === "merge" ? "merge123" : null,
+          };
+          entered();
+          await finite;
+          return rows;
+        }
+        const rows = await native(query);
+        if (
+          query.startsWith(
+            "SELECT hash, fast_forward, conflicts, message FROM dolt_merge("
+          ) &&
+          staged
+        ) {
+          current = staged;
+          staged = undefined;
+        }
+        return rows;
+      };
+      const adapter = adapterFor(fake);
+      const invoke = () =>
+        action === "merge"
+          ? adapter.merge({
+              contributionId: String(record.id),
+              principal: reviewer,
+            })
+          : adapter.close({
+              contributionId: String(record.id),
+              principal: reviewer,
+              reason: "close once",
+            });
+      const first = invoke();
+      await editing;
+      const queued = invoke();
+      await expect
+        .poll(
+          () =>
+            fake.queries.filter((query) =>
+              query.includes("FROM knowledge_contributions")
+            ).length
+        )
+        .toBe(2);
+      settle();
+      await expect(Promise.all([first, queued])).resolves.toEqual(
+        action === "merge"
+          ? [{ commitHash: "merge123" }, { commitHash: "merge123" }]
+          : [undefined, undefined]
+      );
+      expect(metadataCalls).toBe(1);
+      expect(merges).toBe(action === "merge" ? 1 : 0);
+      expect(
+        fake.conn.queries.filter((query) =>
+          query.includes("FROM knowledge_contributions")
+        )
+      ).toHaveLength(2);
+    }
+  );
+
   it.each(["dirty", "head"])(
     "preserves a typed conflict for preexisting %s contribution state before edits",
     async (condition) => {

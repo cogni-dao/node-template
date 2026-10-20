@@ -40,6 +40,7 @@ import {
   captureDoltPersistedCleanEdit,
   runDoltBranchMutation,
   DoltPersistedCleanEditConflictError,
+  DoltBranchMutationUncertainError,
   reconcileAbandonedDoltOperation,
   type DoltPersistedCleanEditReceipt,
 } from "@cogni-dao/doltgres-admission";
@@ -78,6 +79,7 @@ import {
 } from "../../port/contribution.port.js";
 import {
   CitationTargetNotFoundError,
+  KnowledgeWriteOutcomeUnknownError,
   CitationTypeMismatchError,
   HypothesisMissingEvaluateAtError,
 } from "../../port/knowledge-store.port.js";
@@ -882,22 +884,34 @@ export class DoltgresKnowledgeContributionAdapter
           // Historical contribution commits are preserved. Metadata receives its
           // own fresh branch and cannot authorize a reset of the contribution.
           transition();
-          const result = await runDoltBranchMutation(conn, {
-            guard,
-            operationId: `contribution.metadata:${randomBytes(16).toString("hex")}`,
-            message,
-            run: async (scoped) =>
-              run({ unsafe: async (query) => await scoped.unsafe(query) }),
-            onReconcile: (plan) => {
-              reconcilePhase = plan;
-            },
-            onSessionUncertain: (error) => this.session.retire(conn, error),
-            onCommitted: (committed, cleanup) =>
-              control.committed(committed, async () => {
-                await cleanup();
-                if (reap) await this.reapBranch(conn, reap);
-              }),
-          });
+          let result;
+          try {
+            result = await runDoltBranchMutation(conn, {
+              guard,
+              operationId: `contribution.metadata:${randomBytes(16).toString("hex")}`,
+              message,
+              run: async (scoped) =>
+                run({ unsafe: async (query) => await scoped.unsafe(query) }),
+              onReconcile: (plan) => {
+                reconcilePhase = plan;
+              },
+              onSessionUncertain: (error) => this.session.retire(conn, error),
+              onCommitted: (committed, cleanup) =>
+                control.committed(committed, async () => {
+                  await cleanup();
+                  if (reap) await this.reapBranch(conn, reap);
+                }),
+            });
+          } catch (error) {
+            if (error instanceof DoltBranchMutationUncertainError)
+              throw new KnowledgeWriteOutcomeUnknownError(
+                error.operationId,
+                error.branch,
+                error.commitHash
+              );
+            throw error;
+          }
+
           return result.value;
         },
       });
@@ -1657,6 +1671,22 @@ export class DoltgresKnowledgeContributionAdapter
       "contribution.merge",
       async (conn, owner) => {
         await conn.unsafe(`SELECT dolt_checkout('main')`);
+        // An optimistic read before admission can become stale while queued.
+        // Canonical state under this same guard decides whether DML may run.
+        const current = await conn.unsafe(
+          `SELECT * FROM knowledge_contributions WHERE id = ${escapeValue(input.contributionId)} LIMIT 1`
+        );
+        if (!current.length)
+          throw new ContributionNotFoundError(input.contributionId);
+        const rec = mapRecord(current[0] as Record<string, unknown>);
+        if (rec.state === "merged" && rec.mergedCommit) {
+          await this.reapBranch(conn, rec.branch);
+          return { commitHash: rec.mergedCommit };
+        }
+        if (rec.state !== "open")
+          throw new ContributionStateError(
+            `contribution ${input.contributionId} is ${rec.state}`
+          );
 
         let mergeCommit: string;
         let conflicts: number;
@@ -1732,6 +1762,23 @@ export class DoltgresKnowledgeContributionAdapter
 
     await this.withBranch<void>("contribution.close", async (conn, owner) => {
       await conn.unsafe(`SELECT dolt_checkout('main')`);
+      // An optimistic read before admission can become stale while queued.
+      // Canonical state under this same guard decides whether DML may run.
+      const current = await conn.unsafe(
+        `SELECT * FROM knowledge_contributions WHERE id = ${escapeValue(input.contributionId)} LIMIT 1`
+      );
+      if (!current.length)
+        throw new ContributionNotFoundError(input.contributionId);
+      const rec = mapRecord(current[0] as Record<string, unknown>);
+      if (rec.state === "closed") {
+        await this.reapBranch(conn, rec.branch);
+        return;
+      }
+      if (rec.state !== "open")
+        throw new ContributionStateError(
+          `contribution ${input.contributionId} is ${rec.state}`
+        );
+
       return await owner.metadata(
         `contrib-close: ${input.contributionId}`,
         async (conn) => {
