@@ -38,6 +38,8 @@
 import { randomBytes } from "node:crypto";
 import {
   captureDoltPersistedCleanEdit,
+  captureDoltFreshCleanEdit,
+  type DoltFreshCleanEditReceipt,
   runDoltBranchMutation,
   DoltPersistedCleanEditConflictError,
   DoltBranchMutationUncertainError,
@@ -255,13 +257,6 @@ function normalizeOptionalDoltCommitRef(value: unknown): string | null {
 const MERGE_CONFLICT_MESSAGE =
   "This contribution conflicts with newer entries already on main.";
 const MERGE_FAILED_MESSAGE = "This contribution couldn't be merged.";
-
-async function currentHash(conn: ReservedSql, ref: string): Promise<string> {
-  const rows = await conn.unsafe(
-    `SELECT dolt_hashof(${escapeRef(ref)}) AS dolt_hashof`
-  );
-  return parseDoltResult(rows[0] as Record<string, unknown>, "dolt_hashof");
-}
 
 /** Contribution branches may predate the additive use_when migration. */
 async function knowledgeColumnExists(
@@ -820,6 +815,7 @@ export class DoltgresKnowledgeContributionAdapter
       conn: ReservedSql,
       owner: {
         beginPersistedEdit(record: ContributionRecord): Promise<void>;
+        beginFreshEdit(branch: string): Promise<string>;
         transition(): void;
         metadata(
           message: string,
@@ -831,6 +827,7 @@ export class DoltgresKnowledgeContributionAdapter
   ): Promise<T> {
     return await this.session.run(operation, async (conn, guard, control) => {
       let receipt: DoltPersistedCleanEditReceipt | undefined;
+      let freshReceipt: DoltFreshCleanEditReceipt | undefined;
       let transitionDispatched = false;
       let registered = false;
       let reconcilePhase: (() => Promise<boolean>) | undefined;
@@ -846,8 +843,30 @@ export class DoltgresKnowledgeContributionAdapter
       const transition = () => {
         transitionDispatched = true;
         receipt?.invalidate();
+        freshReceipt?.invalidate();
       };
       return await fn(conn, {
+        beginFreshEdit: async (branch) => {
+          if (registered || receipt || freshReceipt || transitionDispatched)
+            throw new Error("Fresh edit entry cannot be replaced");
+          registered = true;
+          reconcilePhase = () =>
+            reconcileAbandonedDoltOperation(conn, {
+              guard,
+              creationProven: false,
+              commitAttempted: transitionDispatched,
+              mergeAttempted: transitionDispatched,
+              ...(freshReceipt ? { freshCleanEdit: freshReceipt } : {}),
+            });
+          freshReceipt = await captureDoltFreshCleanEdit(conn, {
+            guard,
+            branch,
+            onCaptured: (captured) => {
+              freshReceipt = captured;
+            },
+          });
+          return freshReceipt.head;
+        },
         beginPersistedEdit: async (record) => {
           if (registered || receipt || transitionDispatched)
             throw new Error("Persisted edit entry cannot be replaced");
@@ -1006,10 +1025,7 @@ export class DoltgresKnowledgeContributionAdapter
             return mapRecord(replayRows[0] as Record<string, unknown>);
           }
         }
-        const baseCommit = await currentHash(conn, "main");
-        await conn.unsafe(
-          `SELECT dolt_checkout('-b', ${escapeRef(branch)}, 'main')`
-        );
+        const baseCommit = await owner.beginFreshEdit(branch);
 
         let headCommit: string | null = null;
         if (edits.length > 0) {
@@ -1024,6 +1040,7 @@ export class DoltgresKnowledgeContributionAdapter
             });
           }
           const commitMessage = contributionMessage(slug, input.message);
+          owner.transition();
           const commitResult = await conn.unsafe(
             `SELECT dolt_commit('-Am', ${escapeValue(commitMessage)})`
           );
@@ -1033,6 +1050,7 @@ export class DoltgresKnowledgeContributionAdapter
           );
         }
 
+        owner.transition();
         await conn.unsafe(`SELECT dolt_checkout('main')`);
         return await owner.metadata(
           metaMessage(contributionId),
@@ -1219,16 +1237,14 @@ export class DoltgresKnowledgeContributionAdapter
             return mapRecord(replayRows[0] as Record<string, unknown>);
           }
         }
-        const baseCommit = await currentHash(conn, "main");
-        await conn.unsafe(
-          `SELECT dolt_checkout('-b', ${escapeRef(branch)}, 'main')`
-        );
+        const baseCommit = await owner.beginFreshEdit(branch);
 
         const { editCount, message } = await applyBatch({
           conn,
           contributionId,
         });
         const commitMessage = contributionMessage(slug, message);
+        owner.transition();
         const commitResult = await conn.unsafe(
           `SELECT dolt_commit('-Am', ${escapeValue(commitMessage)})`
         );
@@ -1237,6 +1253,7 @@ export class DoltgresKnowledgeContributionAdapter
           "dolt_commit"
         );
 
+        owner.transition();
         await conn.unsafe(`SELECT dolt_checkout('main')`);
         return await owner.metadata(
           metaMessage(contributionId),

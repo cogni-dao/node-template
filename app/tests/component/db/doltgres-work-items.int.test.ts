@@ -1071,6 +1071,198 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 		},
 		15_000,
 	);
+	it.each(["checkout", "content"] as const)(
+		"recovers finite initial contribution %s on its proven new branch",
+		async (stage) => {
+			const writer = postgres(dbUrl, { max: 1, fetch_types: false }),
+				reader = postgres(dbUrl, { max: 1, fetch_types: false }),
+				competitor = postgres(dbUrl, { max: 1, fetch_types: false });
+			const runner = new DoltBranchSessionRunner(writer, {
+				writerProtocol: "database",
+				queryTimeoutMs: 500,
+			});
+			const contributions = new DoltgresKnowledgeContributionAdapter({
+				sql: reader,
+				writerSession: runner,
+			});
+			const store = new DoltgresKnowledgeStoreAdapter({
+				sql: reader,
+				writerSession: runner,
+			});
+			const principal = { id: `native-fresh-${stage}`, kind: "agent" as const },
+				domain = `fresh-native-${stage}`,
+				rowId = `fresh-native-entry-${stage}`;
+			let armed = false,
+				nativeSettled = false,
+				earlyAdmission = false,
+				branch = "",
+				edits = 0,
+				resets = 0,
+				commits = 0;
+			let pending: Promise<unknown> | undefined;
+			let rival: Awaited<ReturnType<Sql["reserve"]>> | undefined;
+			let fresh: Awaited<ReturnType<typeof contributions.create>> | undefined;
+			const reserve = writer.reserve.bind(writer),
+				wrapped = new WeakSet<object>();
+			writer.reserve = (async () => {
+				const session = await reserve();
+				if (wrapped.has(session)) return session;
+				wrapped.add(session);
+				const unsafe = session.unsafe.bind(session);
+				session.unsafe = (async (query: string) => {
+					if (armed && query.startsWith("SELECT dolt_commit(")) commits++;
+					if (query === "SELECT dolt_reset('--hard', 'HEAD')") resets++;
+					const creating = query.startsWith(
+						"SELECT dolt_checkout('-b', 'contrib/",
+					);
+					if (armed && creating) branch = query.split("'")[3]!;
+					if (armed && query.startsWith("INSERT INTO knowledge ")) edits++;
+					if (
+						armed &&
+						!pending &&
+						(stage === "checkout"
+							? creating
+							: query.startsWith("INSERT INTO knowledge "))
+					) {
+						const rows = await unsafe(query);
+						pending = unsafe("SELECT pg_sleep(2)").then(() => {
+							nativeSettled = true;
+							return rows;
+						});
+						return pending;
+					}
+					return unsafe(query);
+				}) as typeof session.unsafe;
+				return session;
+			}) as typeof writer.reserve;
+			try {
+				await store.registerDomain({
+					id: domain,
+					name: "Native fresh branch proof",
+				});
+				const base = String(
+					(await reader.unsafe("SELECT dolt_hashof('main') AS hash"))[0]?.hash,
+				);
+				const input = {
+					principal,
+					message: "One original contribution intent",
+					edits: [
+						{
+							op: "insert" as const,
+							entry: {
+								id: rowId,
+								domain,
+								title: "Fresh intent",
+								content: "No uncommitted residue",
+							},
+						},
+					],
+				};
+				armed = true;
+				const error = await contributions.create(input).catch((error) => error);
+				expect(error).toMatchObject({
+					name: "KnowledgeWriteOutcomeUnknownError",
+					retryable: false,
+					receipt: { lookup: { branch: expect.stringMatching(/^contrib\//) } },
+				});
+				expect(branch).toMatch(/^contrib\//);
+				expect(edits).toBe(stage === "content" ? 1 : 0);
+				expect(resets).toBe(0);
+				expect(commits).toBe(0);
+				expect(nativeSettled).toBe(false);
+				await competitor.unsafe("SELECT 1");
+				rival = await competitor.reserve();
+				const session = rival;
+				await expect
+					.poll(
+						async () => {
+							try {
+								const guard = await acquireDoltWriterLocks(session, {
+									protocol: "database",
+									lockWaitMs: 0,
+								});
+								earlyAdmission ||= !nativeSettled;
+								await guard.release();
+								return true;
+							} catch {
+								return false;
+							}
+						},
+						{ timeout: 5000 },
+					)
+					.toBe(true);
+				expect(earlyAdmission).toBe(false);
+				expect(nativeSettled).toBe(true);
+				expect(resets).toBe(stage === "content" ? 1 : 0);
+				expect(edits).toBe(stage === "content" ? 1 : 0);
+				expect(commits).toBe(0);
+				await expect(
+					writer.unsafe("SELECT active_branch() AS branch"),
+				).resolves.toEqual([{ branch: "main" }]);
+				await expect(
+					writer.unsafe("SELECT * FROM dolt.status"),
+				).resolves.toHaveLength(0);
+				await expect(
+					reader.unsafe(
+						`SELECT id FROM knowledge_contributions WHERE branch = '${branch}'`,
+					),
+				).resolves.toHaveLength(0);
+				const guard = await acquireDoltWriterLocks(session, {
+					protocol: "database",
+					lockWaitMs: 0,
+				});
+				try {
+					await session.unsafe(`SELECT dolt_checkout('${branch}')`);
+					await expect(
+						session.unsafe("SELECT dolt_hashof('HEAD') AS hash"),
+					).resolves.toEqual([{ hash: base }]);
+					await expect(
+						session.unsafe("SELECT * FROM dolt.status"),
+					).resolves.toHaveLength(0);
+					await expect(
+						session.unsafe(`SELECT id FROM knowledge WHERE id = '${rowId}'`),
+					).resolves.toHaveLength(0);
+					await session.unsafe("SELECT dolt_checkout('main')");
+				} finally {
+					await guard.release();
+				}
+				rival.release();
+				rival = undefined;
+				armed = false;
+				fresh = await contributions.create({
+					...input,
+					message: "New inspected request after settlement",
+				});
+				expect(fresh.commitCount).toBe(1);
+				expect(fresh.branch).not.toBe(branch);
+				expect(edits).toBe(stage === "content" ? 1 : 0);
+				expect(commits).toBe(0);
+				await expect(
+					reader.unsafe(
+						`SELECT commit_count FROM knowledge_contributions WHERE id = '${fresh.contributionId}'`,
+					),
+				).resolves.toEqual([{ commit_count: 1 }]);
+			} finally {
+				await pending?.catch(() => undefined);
+				rival?.release();
+				armed = false;
+				if (fresh)
+					await contributions
+						.close({
+							contributionId: fresh.contributionId,
+							principal,
+							reason: "Fresh proof cleanup",
+						})
+						.catch(() => undefined);
+				await Promise.allSettled(
+					[writer, reader, competitor].map((client) =>
+						client.end({ timeout: 0 }),
+					),
+				);
+			}
+		},
+		15000,
+	);
 	it.each(["create", "append", "close"] as const)(
 		"recovers finite %s metadata only on its owned operation branch",
 		async (stage) => {
