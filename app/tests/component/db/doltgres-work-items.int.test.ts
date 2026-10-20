@@ -9,9 +9,9 @@
  * tests cannot see Dolt branch semantics; bug.5358 shipped green against them.
  */
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { toWorkItemId } from "@cogni/work-items";
 import { acquireDoltWriterLocks } from "@cogni-dao/doltgres-admission";
@@ -515,6 +515,248 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			]);
 		}
 	}, 5_000);
+	it("bounds native writer sessions across timeout retries and a fresh process", async () => {
+		const sleepSeconds = 12;
+		const queryTimeoutMs = 500;
+		// The owning DI declares ONE writer connection. Destroying JS clients or
+		// restarting their process must not reset this native outstanding budget.
+		const nativeWriterBudget = 1;
+		const clients: Sql[] = [];
+		const producerPids: number[] = [];
+		const snapshots: unknown[] = [];
+		const observer = postgres(dbUrl, { max: 1, fetch_types: false });
+		const reader = postgres(dbUrl, { max: 1, fetch_types: false });
+		let retirements = 0;
+		let recreations = 0;
+		let admissions = 0;
+		let mutationQueries = 0;
+		let lastSleepStartedAt = 0;
+		const pause = (ms: number) =>
+			new Promise((resolve) => setTimeout(resolve, ms));
+		const makeWriter = () => {
+			const client = postgres(dbUrl, { max: 1, fetch_types: false });
+			const unsafe = client.unsafe.bind(client);
+			const end = client.end.bind(client);
+			const reserve = client.reserve.bind(client);
+			client.unsafe = ((query: string) => {
+				if (query === "SELECT 1 AS work_items_ready") {
+					lastSleepStartedAt = Date.now();
+					// Real finite engine work at the production pre-guard prime seam.
+					return unsafe(`SELECT pg_sleep(${sleepSeconds})`).then(() => []);
+				}
+				if (/INSERT|UPDATE|DELETE|dolt_|advisory/i.test(query)) mutationQueries++;
+				return unsafe(query);
+			}) as typeof client.unsafe;
+			client.reserve = (() => {
+				admissions++;
+				return reserve();
+			}) as typeof client.reserve;
+			client.end = (async (options) => {
+				await end(options);
+				retirements++;
+			}) as typeof client.end;
+			clients.push(client);
+			return client;
+		};
+		let writer = makeWriter();
+		const adapter = new DoltgresWorkItemAdapter(writer, {
+			readClient: reader,
+			writerLockProtocol: "database",
+			queryTimeoutMs,
+			recreateClient: () => {
+				recreations++;
+				writer = makeWriter();
+				return writer;
+			},
+		});
+		const census = async () =>
+			observer.unsafe<{ pid: number; state: string; query: string }[]>(
+				`SELECT DISTINCT pid, state, query FROM pg_catalog.pg_stat_activity WHERE pid IN (${producerPids.join(",")}) ORDER BY pid`,
+			);
+		const confirmNativeSleep = async (pid: number) => {
+			const deadline = Date.now() + queryTimeoutMs;
+			while (Date.now() < deadline) {
+				const rows = await census();
+				if (
+					rows.some(
+						(row) =>
+							Number(row.pid) === pid &&
+							row.state === "active" &&
+							row.query.includes("pg_sleep"),
+					)
+				)
+					return;
+				await pause(5);
+			}
+			throw new Error(
+				`Native sleep did not start before retirement for PID ${pid}`,
+			);
+		};
+		let child: ReturnType<typeof spawn> | undefined;
+		let childDeadline: ReturnType<typeof setTimeout> | undefined;
+		let childClosed:
+			| Promise<{ code: number | null; signal: string | null }>
+			| undefined;
+		let firstSleepStartedAt = 0;
+		try {
+			const observerPid = Number(
+				(await observer.unsafe("SELECT pg_backend_pid() AS pid"))[0]?.pid,
+			);
+			for (let wave = 0; wave < 4; wave++) {
+				const previous = writer;
+				const pid = Number(
+					(await writer.unsafe("SELECT pg_backend_pid() AS pid"))[0]?.pid,
+				);
+				expect(Number.isInteger(pid)).toBe(true);
+				expect(pid).not.toBe(observerPid);
+				producerPids.push(pid);
+				const result = adapter
+					.create(
+						{
+							id: toWorkItemId("task.9610"),
+							type: "task",
+							title: "Must never execute",
+						},
+						"orphan-budget-probe",
+					)
+					.catch((error: unknown) => error);
+				await confirmNativeSleep(pid);
+				firstSleepStartedAt ||= lastSleepStartedAt;
+				expect(await result).toBeInstanceOf(WorkItemsBusyError);
+				expect(retirements).toBe(wave + 1);
+				expect(recreations).toBe(wave + 1);
+				expect(writer).not.toBe(previous);
+				snapshots.push({ wave, rows: await census() });
+			}
+
+			// A separate Node process imports the BUILT public adapter, not Vitest's
+			// workspace alias, and exits after its actual end(0)/recreate path.
+			const adapterUrl = pathToFileURL(
+				path.join(
+					REPO_ROOT,
+					"packages/work-items/dist/adapters/doltgres/index.js",
+				),
+			).href;
+			const source = `
+	import postgres from 'postgres';
+	import { DoltgresWorkItemAdapter, WorkItemsBusyError } from ${JSON.stringify(adapterUrl)};
+	const pools = [];
+	let retired = 0, recreated = 0, admissions = 0, mutations = 0;
+	function makeWriter() {
+	  const pool = postgres(process.env.ORPHAN_PROBE_DB_URL, {max: 1, fetch_types: false});
+	  const unsafe = pool.unsafe.bind(pool), end = pool.end.bind(pool), reserve = pool.reserve.bind(pool);
+	  pool.unsafe = query => query === 'SELECT 1 AS work_items_ready'
+	    ? unsafe('SELECT pg_sleep(${sleepSeconds})').then(() => [])
+	    : (mutations += /INSERT|UPDATE|DELETE|dolt_|advisory/i.test(query) ? 1 : 0, unsafe(query));
+	  pool.reserve = () => { admissions++; return reserve(); };
+	  pool.end = async options => { await end(options); retired++; };
+	  pools.push(pool); return pool;
+	}
+	const writer = makeWriter();
+	const reader = postgres(process.env.ORPHAN_PROBE_DB_URL, {max: 1, fetch_types: false});
+	const adapter = new DoltgresWorkItemAdapter(writer, {readClient: reader, writerLockProtocol: 'database', queryTimeoutMs: ${queryTimeoutMs},
+	  recreateClient: () => { recreated++; return makeWriter(); }});
+	const pid = Number((await writer.unsafe('SELECT pg_backend_pid() AS pid'))[0].pid);
+	process.send({phase: 'ready', pid, processPid: process.pid});
+	await new Promise(resolve => process.once('message', resolve));
+	const result = await adapter.create({id: 'task.9611', type: 'task', title: 'Must never execute'}, 'orphan-child').catch(error => error);
+	process.send({phase: 'result', busy: result instanceof WorkItemsBusyError, retired, recreated, admissions, mutations}, async () => {
+	  await Promise.allSettled([...pools, reader].map(pool => pool.end({timeout: 0})));
+	  process.exit(0);
+	});`;
+			child = spawn(process.execPath, ["--input-type=module", "--eval", source], {
+				cwd: path.join(REPO_ROOT, "app"),
+				env: { ...process.env, ORPHAN_PROBE_DB_URL: dbUrl },
+				stdio: ["ignore", "pipe", "pipe", "ipc"],
+			});
+			const childProcess = child;
+			let diagnostics = "";
+			child.stderr?.on("data", (data: Buffer) => {
+				diagnostics += data.toString();
+			});
+			childClosed = new Promise((resolve, reject) => {
+				childProcess.once("error", reject);
+				childProcess.once("close", (code, signal) => resolve({ code, signal }));
+			});
+			childDeadline = setTimeout(() => childProcess.kill("SIGKILL"), 6_000);
+			const message = (phase: string) =>
+				new Promise<Record<string, unknown>>((resolve, reject) => {
+					const receive = (value: unknown) => {
+						if (
+							value &&
+							typeof value === "object" &&
+							"phase" in value &&
+							value.phase === phase
+						) {
+							childProcess.off("message", receive);
+							resolve(value as Record<string, unknown>);
+						}
+					};
+					childProcess.on("message", receive);
+					void childClosed?.then(
+						() =>
+							reject(new Error(`Child exited before ${phase}: ${diagnostics}`)),
+						reject,
+					);
+				});
+			const ready = await message("ready");
+			expect(ready.processPid).toBe(child.pid);
+			expect(ready.processPid).not.toBe(process.pid);
+			const childPid = Number(ready.pid);
+			expect(Number.isInteger(childPid)).toBe(true);
+			expect(childPid).toBeGreaterThan(0);
+			expect(childPid).not.toBe(observerPid);
+			expect(producerPids).not.toContain(childPid);
+			producerPids.push(childPid);
+			const resultMessage = message("result");
+			// Preserve a setup/invariant failure if the teardown closes IPC before
+			// this result is awaited; the original promise still propagates below.
+			void resultMessage.catch(() => undefined);
+			lastSleepStartedAt = Date.now();
+			child.send({ phase: "retry" });
+			await confirmNativeSleep(childPid);
+			expect(await resultMessage).toMatchObject({
+				busy: true,
+				retired: 1,
+				recreated: 1,
+				admissions: 0,
+				mutations: 0,
+			});
+			expect(await childClosed, diagnostics).toEqual({ code: 0, signal: null });
+			clearTimeout(childDeadline);
+			expect(admissions).toBe(0);
+			expect(mutationQueries).toBe(0);
+			expect(new Set(producerPids).size).toBe(5);
+			const remaining = await census();
+			snapshots.push({ phase: "after-child-exit", rows: remaining });
+			console.info(
+				"native orphan writer budget",
+				JSON.stringify({ nativeWriterBudget, producerPids, snapshots }),
+			);
+			// Reject a timing-induced false pass: no sleep may have finished
+			// naturally before the native resource bound is measured.
+			expect(Date.now() - firstSleepStartedAt).toBeLessThan(
+				(sleepSeconds - 1) * 1_000,
+			);
+			expect(remaining.length, JSON.stringify(snapshots)).toBeLessThanOrEqual(
+				nativeWriterBudget,
+			);
+		} finally {
+			if (childDeadline) clearTimeout(childDeadline);
+			if (child && child.exitCode === null && child.signalCode === null)
+				child.kill("SIGKILL");
+			await childClosed?.catch(() => undefined);
+			await Promise.allSettled(
+				[...clients, reader].map((client) => client.end({ timeout: 0 })),
+			);
+			// Finite owned work only: let the last sleep finish before closing
+			// the auditor; suite teardown then destroys the disposable engine.
+			await pause(
+				Math.max(0, lastSleepStartedAt + sleepSeconds * 1_000 + 250 - Date.now()),
+			);
+			await observer.end({ timeout: 0 });
+		}
+	}, 30_000);
 	it("knowledge and work-item writers share one database scope throughout a logical write", async () => {
 		const knowledgeSql = postgres(dbUrl, { max: 1, fetch_types: false });
 		const knowledgeRead = postgres(dbUrl, { max: 1, fetch_types: false });
