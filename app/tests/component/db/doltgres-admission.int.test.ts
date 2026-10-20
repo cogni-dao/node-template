@@ -328,17 +328,23 @@ INSERT INTO migration_once SELECT 7 WHERE pg_sleep(${sleepSeconds}) IS NULL;`);
         cwd: fixture.root, env: { ...process.env, NODE_NAME: database.replace(/^knowledge_/, "").replaceAll("_", "-"), DATABASE_URL: fixture.url }, stdio: ["ignore", "pipe", "pipe"],
       });
       let diagnostics = "";
+      child.stdout?.on("data", (data: Buffer) => { diagnostics += data.toString(); });
       child.stderr?.on("data", (data: Buffer) => { diagnostics += data.toString(); });
       const cli = child;
       let pid = 0;
-      await expect.poll(async () => {
+      let observed: unknown[] = [];
+      try { await expect.poll(async () => {
         if (cli.exitCode !== null || cli.signalCode !== null)
           throw new Error(`CLI exited before native delayed SQL: code=${cli.exitCode} signal=${cli.signalCode} ${diagnostics}`);
-        const rows = await fixture.admin.unsafe("SELECT pid,datname,query FROM pg_catalog.pg_stat_activity");
+        const rows = await fixture.admin.unsafe("SELECT pid,datname,state,query FROM pg_catalog.pg_stat_activity");
+        observed = rows.slice(0, 40).map(({ pid, datname, state, query }) => ({ pid, datname, state, query: String(query).slice(0, 240) }));
         const active = rows.find((row) => String(row.datname).startsWith(database) && String(row.query).includes("pg_sleep"));
         pid = Number(active?.pid ?? 0);
         return pid > 0;
-      }, { timeout: 10_000, message: diagnostics }).toBe(true);
+      }, { timeout: 10_000 }).toBe(true);
+      } catch (cause) {
+        throw new Error(`Native CLI observation failed: exit=${cli.exitCode} signal=${cli.signalCode} output=${diagnostics} census=${JSON.stringify(observed)}`, { cause });
+      }
       const census = () => fixture.admin.unsafe(`SELECT pid FROM pg_catalog.pg_stat_activity WHERE pid = ${pid} AND state = 'active' AND query LIKE '%pg_sleep%'`);
       const exited = once(child, "exit", { signal: AbortSignal.timeout(40_000) });
       if (boundary === "SIGKILL") child.kill("SIGKILL");

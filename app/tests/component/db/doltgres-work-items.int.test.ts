@@ -81,7 +81,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			env: {
 				...process.env,
 				DATABASE_URL: dbUrl,
-				NODE_NAME: "node-template-test",
+				NODE_NAME: "node-template-work-items",
 			},
 			encoding: "utf8",
 			stdio: "pipe",
