@@ -19,14 +19,21 @@ import {
   DoltBranchSessionRunner,
   DoltgresKnowledgeStoreAdapter,
 } from "../src/adapters/doltgres/index.js";
+import { ContributionConflictError } from "../src/port/contribution.port.js";
 import type { Principal } from "../src/domain/contribution-schemas.js";
-import { CitationTargetNotFoundError } from "../src/port/knowledge-store.port.js";
+import {
+  CitationTargetNotFoundError,
+  KnowledgeWriteOutcomeUnknownError,
+  KnowledgeBusyError,
+} from "../src/port/knowledge-store.port.js";
+
+const HEAD = "a".repeat(32);
 
 const record = {
   id: "contrib-agent-1-abc123",
   branch: "contrib/agent-1-abc123",
   base_commit: "base123",
-  head_commit: "head123",
+  head_commit: HEAD,
   commit_count: 3,
   state: "open",
   principal_kind: "agent",
@@ -48,6 +55,7 @@ const reviewer: Principal = {
 
 class FakeReservedSql {
   readonly queries: string[] = [];
+  private activeBranch = "main";
 
   async unsafe(
     query: string
@@ -55,7 +63,13 @@ class FakeReservedSql {
     this.queries.push(query);
     if (query.includes("current_database()"))
       return [{ dolt_writer_database: "knowledge_test" }];
-    if (query.includes("active_branch()")) return [{ branch_name: "main" }];
+    if (query.includes("active_branch()"))
+      return [{ branch_name: this.activeBranch }];
+    if (query.includes("dolt_checkout(")) {
+      const args = [...query.matchAll(/'([^']*)'/g)].map((match) => match[1]);
+      this.activeBranch = args[0] === "-b" ? args[1]! : args[0]!;
+      return [{ dolt_checkout: 0 }];
+    }
     if (query.includes("dolt.merge_status")) return [{ is_merging: false }];
     // Admission control takes a session advisory lock before any branch work
     // (bug.5391); a fake that cannot answer it would fail every write as busy.
@@ -64,7 +78,9 @@ class FakeReservedSql {
     if (query.includes("pg_advisory_unlock"))
       return [{ pg_advisory_unlock: true }];
     if (query.includes("dolt_hashof")) {
-      return [{ dolt_hashof: "head123" }];
+      return query.includes("AS commit_hash")
+        ? [{ commit_hash: HEAD }]
+        : [{ dolt_hashof: HEAD }];
     }
     if (query.includes("dolt_commit")) {
       return [{ dolt_commit: ["{next456}"] }];
@@ -241,6 +257,147 @@ function adapterFor(
 }
 
 describe("DoltgresKnowledgeContributionAdapter", () => {
+  it("recovers only this append's finite uncommitted edits and releases queued callers", async () => {
+    const fake = new FakeSql();
+    const original = fake.conn.unsafe.bind(fake.conn);
+    let settle!: () => void;
+    const pending = new Promise<Record<string, unknown>[]>((resolve) => {
+      settle = () => resolve([]);
+    });
+    let dirty = false;
+    let edits = 0;
+    let resets = 0;
+    let stall = true;
+    fake.conn.unsafe = async (query) => {
+      if (query.includes("information_schema.columns"))
+        return [{ "?column?": 1 }];
+      if (query === "SELECT * FROM dolt.status") {
+        fake.conn.queries.push(query);
+        return dirty ? [{ table_name: "knowledge" }] : [];
+      }
+      if (query === "SELECT dolt_reset('--hard', 'HEAD')") {
+        fake.conn.queries.push(query);
+        resets++;
+        dirty = false;
+        return [{ dolt_reset: 0 }];
+      }
+      if (query.startsWith("UPDATE knowledge SET")) {
+        edits++;
+        dirty = true;
+        fake.conn.queries.push(query);
+        if (stall) return pending;
+        return [];
+      }
+      if (query.includes("dolt_commit")) dirty = false;
+      return original(query);
+    };
+    let ended = 0;
+    const writer = independentWriter(fake);
+    writer.end = async () => {
+      ended++;
+    };
+    const adapter = new DoltgresKnowledgeContributionAdapter({
+      sql: fake as unknown as Sql,
+      branchSql: writer,
+      branchSession: { queryTimeoutMs: 10 },
+    });
+    const input = {
+      contributionId: String(record.id),
+      principal: { id: "agent-1", kind: "agent" as const },
+      message: "private edit",
+      edits: [
+        {
+          op: "patch" as const,
+          targetRowId: "row-1",
+          entry: { useWhen: "new intent" },
+        },
+      ],
+    };
+    const first = adapter.appendCommit(input).catch((error: unknown) => error);
+    const queued = adapter
+      .appendCommit({ ...input, contributionId: "contrib-other" })
+      .catch((error: unknown) => error);
+    const receipt = await first;
+    expect(receipt).toBeInstanceOf(KnowledgeWriteOutcomeUnknownError);
+    expect(await queued).toBeInstanceOf(KnowledgeBusyError);
+    expect(
+      fake.conn.queries.filter((query) =>
+        query.includes("FROM knowledge_contributions")
+      )
+    ).toHaveLength(1);
+    expect(edits).toBe(1);
+    expect(resets).toBe(0);
+    expect(
+      fake.conn.queries.some((q) => q.includes("pg_advisory_unlock"))
+    ).toBe(false);
+    expect(fake.conn.queries.some((q) => q.includes("dolt_commit"))).toBe(
+      false
+    );
+    stall = false;
+    settle();
+    await expect
+      .poll(() => fake.conn.queries.filter((q) => q === "release").length)
+      .toBe(1);
+    expect(resets).toBe(1);
+    expect(edits).toBe(1);
+    expect(ended).toBe(0);
+    expect(
+      fake.conn.queries.filter((q) => q.includes("pg_advisory_unlock"))
+    ).toHaveLength(3);
+    expect(
+      fake.conn.queries.some((q) =>
+        /dolt_branch|INSERT INTO knowledge_contribution/.test(q)
+      )
+    ).toBe(false);
+    expect(receipt).toMatchObject({
+      retryable: false,
+      receipt: { lookup: { branch: record.branch } },
+    });
+    await expect(adapter.appendCommit(input)).resolves.toMatchObject({
+      commitHash: "next456",
+    });
+    expect(edits).toBe(2);
+    expect(resets).toBe(1);
+    expect(ended).toBe(0);
+  });
+
+  it.each(["dirty", "head"])(
+    "preserves a typed conflict for preexisting %s contribution state before edits",
+    async (condition) => {
+      const fake = new FakeSql();
+      const original = fake.conn.unsafe.bind(fake.conn);
+      let active = "main";
+      fake.conn.unsafe = async (query) => {
+        if (query.includes("dolt_checkout(")) active = query.split("'")[1]!;
+        if (
+          condition === "dirty" &&
+          query === "SELECT * FROM dolt.status" &&
+          active !== "main"
+        ) {
+          fake.conn.queries.push(query);
+          return [{ table_name: "knowledge" }];
+        }
+        if (condition === "head" && query.includes("AS commit_hash"))
+          return [{ commit_hash: "b".repeat(32) }];
+        return original(query);
+      };
+      await expect(
+        adapterFor(fake).appendCommit({
+          contributionId: String(record.id),
+          principal: { id: "agent-1", kind: "agent" },
+          message: "must not overwrite old work",
+          edits: [
+            { op: "patch", targetRowId: "row-1", entry: { useWhen: "new" } },
+          ],
+        })
+      ).rejects.toBeInstanceOf(ContributionConflictError);
+      expect(
+        fake.conn.queries.some((q) =>
+          /UPDATE knowledge SET|dolt_reset|dolt_commit/.test(q)
+        )
+      ).toBe(false);
+    }
+  );
   it("rejects missing or read-aliased branch configuration before SQL", () => {
     const fake = new FakeSql();
     const sql = fake as unknown as Sql;
@@ -273,7 +430,7 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
     await adapterFor(fake).diff("contrib-agent-1-abc123");
 
     expect(fake.queries.at(-1)).toContain(
-      "dolt_diff('base123', 'head123', 'knowledge')"
+      `dolt_diff('base123', '${HEAD}', 'knowledge')`
     );
   });
 
@@ -291,13 +448,13 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
     const fake = new FakeSql({
       ...record,
       base_commit: "{base123}",
-      head_commit: "{head123}",
+      head_commit: `{${HEAD}}`,
     });
 
     await adapterFor(fake).diff("contrib-agent-1-abc123");
 
     expect(fake.queries.at(-1)).toContain(
-      "dolt_diff('base123', 'head123', 'knowledge')"
+      `dolt_diff('base123', '${HEAD}', 'knowledge')`
     );
   });
 
@@ -454,11 +611,11 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
 
     expect(commit.commitHash).toBe("next456");
     expect(fake.conn.queries).toContain(
-      "SELECT dolt_hashof('contrib/agent-1-abc123') AS dolt_hashof"
+      "SELECT dolt_hashof('HEAD') AS commit_hash"
     );
     expect(
       fake.conn.queries.some((query) =>
-        query.includes("head_commit = 'head123'")
+        query.includes(`head_commit = '${HEAD}'`)
       )
     ).toBe(true);
   });
@@ -697,6 +854,7 @@ function idFromQuery(query: string): string | undefined {
 
 class CrossPlaneFakeReservedSql {
   readonly queries: string[] = [];
+  private activeBranch = "main";
 
   constructor(private readonly branchEntryTypes: Map<string, string>) {}
 
@@ -706,7 +864,13 @@ class CrossPlaneFakeReservedSql {
     this.queries.push(query);
     if (query.includes("current_database()"))
       return [{ dolt_writer_database: "knowledge_test" }];
-    if (query.includes("active_branch()")) return [{ branch_name: "main" }];
+    if (query.includes("active_branch()"))
+      return [{ branch_name: this.activeBranch }];
+    if (query.includes("dolt_checkout(")) {
+      const args = [...query.matchAll(/'([^']*)'/g)].map((match) => match[1]);
+      this.activeBranch = args[0] === "-b" ? args[1]! : args[0]!;
+      return [{ dolt_checkout: 0 }];
+    }
     if (query.includes("dolt.merge_status")) return [{ is_merging: false }];
     // Admission control takes a session advisory lock before any branch work
     // (bug.5391); a fake that cannot answer it would fail every write as busy.
@@ -714,7 +878,10 @@ class CrossPlaneFakeReservedSql {
       return [{ pg_try_advisory_lock: true }];
     if (query.includes("pg_advisory_unlock"))
       return [{ pg_advisory_unlock: true }];
-    if (query.includes("dolt_hashof")) return [{ dolt_hashof: "head123" }];
+    if (query.includes("dolt_hashof"))
+      return query.includes("AS commit_hash")
+        ? [{ commit_hash: HEAD }]
+        : [{ dolt_hashof: HEAD }];
     if (query.includes("dolt_commit")) return [{ dolt_commit: ["{next456}"] }];
     if (query.includes("SELECT 1 FROM knowledge WHERE id"))
       return [{ "?column?": 1 }];

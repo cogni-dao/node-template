@@ -36,6 +36,12 @@
  */
 
 import { randomBytes } from "node:crypto";
+import {
+  captureDoltPersistedCleanEdit,
+  DoltPersistedCleanEditConflictError,
+  reconcileAbandonedDoltOperation,
+  type DoltPersistedCleanEditReceipt,
+} from "@cogni-dao/doltgres-admission";
 import type { Sql } from "postgres";
 import {
   initializeConfidence,
@@ -807,9 +813,57 @@ export class DoltgresKnowledgeContributionAdapter
    */
   private async withBranch<T>(
     operation: string,
-    fn: (conn: ReservedSql) => Promise<T>
+    fn: (
+      conn: ReservedSql,
+      owner: {
+        beginPersistedEdit(record: ContributionRecord): Promise<void>;
+        transition(): void;
+      }
+    ) => Promise<T>
   ): Promise<T> {
-    return await this.session.run(operation, fn);
+    return await this.session.run(operation, async (conn, guard, control) => {
+      let receipt: DoltPersistedCleanEditReceipt | undefined;
+      let transitionDispatched = false;
+      let registered = false;
+      return await fn(conn, {
+        beginPersistedEdit: async (record) => {
+          if (registered || receipt || transitionDispatched)
+            throw new Error("Persisted edit entry cannot be replaced");
+          registered = true;
+          control.registerReconciliation(() =>
+            reconcileAbandonedDoltOperation(conn, {
+              guard,
+              creationProven: false,
+              commitAttempted: transitionDispatched,
+              mergeAttempted: transitionDispatched,
+              ...(receipt ? { persistedCleanEdit: receipt } : {}),
+            })
+          );
+          try {
+            receipt = await captureDoltPersistedCleanEdit(conn, {
+              guard,
+              branch: record.branch,
+              onCaptured: (captured) => {
+                receipt = captured;
+              },
+              expectedHead: normalizeDoltCommitRef(
+                record.headCommit ?? record.baseCommit
+              ),
+            });
+          } catch (error) {
+            if (error instanceof DoltPersistedCleanEditConflictError)
+              throw new ContributionConflictError(
+                `contribution ${record.contributionId} branch is dirty or its head changed while appending`
+              );
+            throw error;
+          }
+        },
+        transition: () => {
+          transitionDispatched = true;
+          receipt?.invalidate();
+        },
+      });
+    });
   }
 
   /**
@@ -1158,7 +1212,7 @@ export class DoltgresKnowledgeContributionAdapter
     return await withContributionAppendLock(input.contributionId, async () => {
       return await this.withBranch(
         "contribution.append_commit",
-        async (conn) => {
+        async (conn, owner) => {
           // Re-read metadata only after admission and the cross-replica lock.
           // Reading before the queue makes every caller in a burst capture the
           // same stale head, wait its turn, then fail after doing useful work.
@@ -1177,21 +1231,11 @@ export class DoltgresKnowledgeContributionAdapter
           }
           const seq = rec.commitCount + 1;
           const ref = sourceRef(input.contributionId, seq);
-          const expectedHead = rec.headCommit ?? rec.baseCommit;
           const headPredicate = rec.headCommit
             ? `head_commit = ${escapeValue(rec.headCommit)}`
             : "head_commit IS NULL";
 
-          await conn.unsafe(`SELECT dolt_checkout(${escapeRef(rec.branch)})`);
-          const actualHead = await currentHash(conn, rec.branch);
-          if (
-            normalizeDoltCommitRef(actualHead) !==
-            normalizeDoltCommitRef(expectedHead)
-          ) {
-            throw new ContributionConflictError(
-              `contribution ${input.contributionId} branch head changed while appending`
-            );
-          }
+          await owner.beginPersistedEdit(rec);
 
           for (const edit of input.edits) {
             await applyEdit({
@@ -1207,6 +1251,7 @@ export class DoltgresKnowledgeContributionAdapter
             principalSlug(input.principal),
             input.message
           );
+          owner.transition();
           const commitResult = await conn.unsafe(
             `SELECT dolt_commit('-Am', ${escapeValue(commitMessage)})`
           );
@@ -1393,7 +1438,7 @@ export class DoltgresKnowledgeContributionAdapter
     return await withContributionAppendLock(input.contributionId, async () => {
       return await this.withBranch(
         "contribution.append_edo_commit",
-        async (conn) => {
+        async (conn, owner) => {
           // The record read belongs inside the same admitted, cross-replica
           // critical section as the branch update. Otherwise concurrent EDO
           // appends serialize only their writes and still race on a stale head.
@@ -1412,21 +1457,11 @@ export class DoltgresKnowledgeContributionAdapter
           }
           const seq = rec.commitCount + 1;
           const ref = sourceRef(input.contributionId, seq);
-          const expectedHead = rec.headCommit ?? rec.baseCommit;
           const headPredicate = rec.headCommit
             ? `head_commit = ${escapeValue(rec.headCommit)}`
             : "head_commit IS NULL";
 
-          await conn.unsafe(`SELECT dolt_checkout(${escapeRef(rec.branch)})`);
-          const actualHead = await currentHash(conn, rec.branch);
-          if (
-            normalizeDoltCommitRef(actualHead) !==
-            normalizeDoltCommitRef(expectedHead)
-          ) {
-            throw new ContributionConflictError(
-              `contribution ${input.contributionId} branch head changed while appending`
-            );
-          }
+          await owner.beginPersistedEdit(rec);
 
           const { editCount, message } = await applyBatch({
             conn,
@@ -1436,6 +1471,7 @@ export class DoltgresKnowledgeContributionAdapter
             principalSlug(input.principal),
             message
           );
+          owner.transition();
           const commitResult = await conn.unsafe(
             `SELECT dolt_commit('-Am', ${escapeValue(commitMessage)})`
           );

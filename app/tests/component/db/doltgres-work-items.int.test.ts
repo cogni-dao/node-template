@@ -19,6 +19,7 @@ import postgres, { type Sql } from "postgres";
 import {
 	DoltBranchSessionRunner,
 	DoltgresKnowledgeStoreAdapter,
+	DoltgresKnowledgeContributionAdapter,
 } from "@cogni/knowledge-store/adapters/doltgres";
 import {
 	GenericContainer,
@@ -860,12 +861,225 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			);
 		}
 	}, 10_000);
-	it("bounds native writer sessions across timeout retries and a fresh process", async () => {
+	it.each(["checkout", "edit"] as const)(
+		"restores a persisted clean contribution after finite %s settles",
+		async (stage) => {
+			const writer = postgres(dbUrl, { max: 1, fetch_types: false });
+			const reader = postgres(dbUrl, { max: 1, fetch_types: false });
+			const competitor = postgres(dbUrl, { max: 1, fetch_types: false });
+			const runner = new DoltBranchSessionRunner(writer, {
+				writerProtocol: "database",
+				queryTimeoutMs: 500,
+			});
+			const contributions = new DoltgresKnowledgeContributionAdapter({
+				sql: reader,
+				writerSession: runner,
+			});
+			const store = new DoltgresKnowledgeStoreAdapter({
+				sql: reader,
+				writerSession: runner,
+			});
+			const principal = {
+				id: `native-persisted-clean-${stage}`,
+				kind: "agent" as const,
+			};
+			const rowId = `native-persisted-clean-entry-${stage}`;
+			const domainId = `persisted-clean-native-${stage}`;
+			let contribution:
+				| Awaited<ReturnType<typeof contributions.create>>
+				| undefined;
+			let pending: Promise<unknown> | undefined;
+			let nativeSettled = false;
+			let earlyAdmission = false;
+			let armed = false;
+			let edits = 0;
+			let resets = 0;
+			let commits = 0;
+			const reserve = writer.reserve.bind(writer);
+			const wrapped = new WeakSet<object>();
+			writer.reserve = (async () => {
+				const session = await reserve();
+				if (wrapped.has(session)) return session;
+				wrapped.add(session);
+				const unsafe = session.unsafe.bind(session);
+				session.unsafe = (async (query: string) => {
+					if (armed && query.startsWith("SELECT dolt_commit")) commits++;
+					if (query === "SELECT dolt_reset('--hard', 'HEAD')") resets++;
+					if (
+						armed &&
+						stage === "checkout" &&
+						query.startsWith("SELECT dolt_checkout('contrib/") &&
+						!pending
+					) {
+						const rows = await unsafe(query);
+						pending = unsafe("SELECT pg_sleep(2)").then(() => {
+							nativeSettled = true;
+							return rows;
+						});
+						return pending;
+					}
+					if (armed && query.startsWith("UPDATE knowledge SET")) {
+						edits++;
+						const rows = await unsafe(query);
+						if (!pending) {
+							pending = unsafe("SELECT pg_sleep(2)").then(() => {
+								nativeSettled = true;
+								return rows;
+							});
+							return pending;
+						}
+						return rows;
+					}
+					return unsafe(query);
+				}) as typeof session.unsafe;
+				return session;
+			}) as typeof writer.reserve;
+			let rival: Awaited<ReturnType<Sql["reserve"]>> | undefined;
+			try {
+				await store.registerDomain({
+					id: domainId,
+					name: "Persisted clean native proof",
+				});
+				contribution = await contributions.create({
+					principal,
+					message: "Historical committed entry",
+					edits: [
+						{
+							op: "insert",
+							entry: {
+								id: rowId,
+								domain: domainId,
+								title: "Keep history",
+								content: "Historical content",
+							},
+						},
+					],
+				});
+				const seedHead = contribution.headCommit;
+				expect(seedHead).toMatch(/^[a-z0-9]{32}$/);
+				armed = true;
+				const error = await contributions
+					.appendCommit({
+						contributionId: contribution.contributionId,
+						principal,
+						message: "Finite abandoned edit",
+						edits: [
+							{
+								op: "patch",
+								targetRowId: rowId,
+								entry: { useWhen: "must be rolled back" },
+							},
+						],
+					})
+					.catch((failure: unknown) => failure);
+				expect(error).toMatchObject({
+					name: "KnowledgeWriteOutcomeUnknownError",
+					retryable: false,
+				});
+				expect(edits).toBe(stage === "edit" ? 1 : 0);
+				expect(resets).toBe(0);
+				expect(nativeSettled).toBe(false);
+				expect(commits).toBe(0);
+				await competitor.unsafe("SELECT 1");
+				rival = await competitor.reserve();
+				const rivalSession = rival;
+				await expect
+					.poll(
+						async () => {
+							try {
+								const guard = await acquireDoltWriterLocks(rivalSession, {
+									protocol: "database",
+									lockWaitMs: 0,
+								});
+								earlyAdmission ||= !nativeSettled;
+								await guard.release();
+								return true;
+							} catch {
+								return false;
+							}
+						},
+						{ timeout: 5_000 },
+					)
+					.toBe(true);
+				expect(earlyAdmission).toBe(false);
+				expect(nativeSettled).toBe(true);
+				expect(resets).toBe(stage === "edit" ? 1 : 0);
+				expect(edits).toBe(stage === "edit" ? 1 : 0);
+				expect(commits).toBe(0);
+				await expect(
+					writer.unsafe("SELECT active_branch() AS branch_name"),
+				).resolves.toEqual([{ branch_name: "main" }]);
+				await expect(
+					writer.unsafe("SELECT * FROM dolt.status"),
+				).resolves.toHaveLength(0);
+				await rival.unsafe(`SELECT dolt_checkout('${contribution.branch}')`);
+				await expect(
+					rival.unsafe("SELECT dolt_hashof('HEAD') AS hash"),
+				).resolves.toEqual([{ hash: seedHead }]);
+				await expect(
+					rival.unsafe(
+						`SELECT title, content, use_when FROM knowledge WHERE id = '${rowId}'`,
+					),
+				).resolves.toEqual([
+					{
+						title: "Keep history",
+						content: "Historical content",
+						use_when: null,
+					},
+				]);
+				await rival.unsafe("SELECT dolt_checkout('main')");
+				rival.release();
+				rival = undefined;
+				const fresh = await contributions.appendCommit({
+					contributionId: contribution.contributionId,
+					principal,
+					message: "Legitimate new intent",
+					edits: [
+						{
+							op: "patch",
+							targetRowId: rowId,
+							entry: { useWhen: "new committed intent" },
+						},
+					],
+				});
+				expect(fresh.commitHash).not.toBe(seedHead);
+				expect(edits).toBe(stage === "edit" ? 2 : 1);
+				expect(resets).toBe(stage === "edit" ? 1 : 0);
+				expect(commits).toBe(2);
+				await expect(
+					reader.unsafe(
+						`SELECT commit_count FROM knowledge_contributions WHERE id = '${contribution.contributionId}'`,
+					),
+				).resolves.toEqual([{ commit_count: 2 }]);
+			} finally {
+				await pending?.catch(() => undefined);
+				rival?.release();
+				if (contribution)
+					await contributions
+						.close({
+							contributionId: contribution.contributionId,
+							principal,
+							reason: "owned native proof complete",
+						})
+						.catch(() => undefined);
+				await Promise.allSettled(
+					[writer, reader, competitor].map((client) =>
+						client.end({ timeout: 0 }),
+					),
+				);
+			}
+		},
+		15_000,
+	);
+	it("accounts for two admitted producers and waits for their finite native cleanup", async () => {
 		const sleepSeconds = 12;
 		const queryTimeoutMs = 500;
-		// The owning DI declares ONE writer connection. Destroying JS clients or
-		// restarting their process must not reset this native outstanding budget.
-		const nativeWriterBudget = 1;
+		// Fixture allocation: two independent max-one producer generations. This
+		// is explicit workload accounting, not a server-enforced production cap.
+		const fixtureOverlapBudget = 2;
+		let stallPrime = true;
+		let primeSettled = false;
+		let freshCreated = false;
 		const clients: Sql[] = [];
 		const producerPids: number[] = [];
 		const snapshots: unknown[] = [];
@@ -884,18 +1098,27 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			const end = client.end.bind(client);
 			const reserve = client.reserve.bind(client);
 			client.unsafe = ((query: string) => {
-				if (query === "SELECT 1 AS work_items_ready") {
+				if (query === "SELECT 1 AS work_items_ready" && stallPrime) {
 					lastSleepStartedAt = Date.now();
 					// Real finite engine work at the production pre-guard prime seam.
-					return unsafe(`SELECT pg_sleep(${sleepSeconds})`).then(() => []);
+					return unsafe(`SELECT pg_sleep(${sleepSeconds})`).then(() => {
+						primeSettled = true;
+						return [];
+					});
 				}
 				if (/INSERT|UPDATE|DELETE|dolt_|advisory/i.test(query))
 					mutationQueries++;
 				return unsafe(query);
 			}) as typeof client.unsafe;
-			client.reserve = (() => {
+			client.reserve = (async () => {
 				admissions++;
-				return reserve();
+				const session = await reserve();
+				const execute = session.unsafe.bind(session);
+				session.unsafe = ((query: string) => {
+					if (/^(INSERT|UPDATE|DELETE)\b/i.test(query)) mutationQueries++;
+					return execute(query);
+				}) as typeof session.unsafe;
+				return session;
 			}) as typeof client.reserve;
 			client.end = (async (options) => {
 				await end(options);
@@ -974,12 +1197,15 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 				expect(retirements).toBe(0);
 				expect(recreations).toBe(0);
 				expect(writer).toBe(original);
-				snapshots.push({ wave, rows: await census() });
+				const rows = await census();
+				expect(rows).toHaveLength(1);
+				expect(Number(rows[0]?.pid)).toBe(pid);
+				snapshots.push({ wave, rows });
 			}
 
 			// A separate Node process imports the BUILT public adapter, not Vitest's
-			// workspace alias. Process termination remains an UNSOLVED boundary:
-			// its fresh local counters cannot see the parent's outstanding query.
+			// workspace alias. Its independently admitted pool adds one generation;
+			// process exit is not native completion, so count its retained query.
 			const adapterUrl = pathToFileURL(
 				path.join(
 					REPO_ROOT,
@@ -1083,20 +1309,59 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			const remaining = await census();
 			snapshots.push({ phase: "after-child-exit", rows: remaining });
 			console.info(
-				"native orphan writer budget",
-				JSON.stringify({ nativeWriterBudget, producerPids, snapshots }),
+				"native admitted producer overlap",
+				JSON.stringify({ fixtureOverlapBudget, producerPids, snapshots }),
 			);
-			// Preserve the cross-process gate: an in-process fix alone cannot
-			// certify the one-writer bound across a restarted producer.
 			// Reject a timing-induced false pass: no sleep may have finished
 			// naturally before the native resource bound is measured.
 			expect(Date.now() - firstSleepStartedAt).toBeLessThan(
 				(sleepSeconds - 1) * 1_000,
 			);
 			expect(remaining.length, JSON.stringify(snapshots)).toBeLessThanOrEqual(
-				nativeWriterBudget,
+				fixtureOverlapBudget,
 			);
+			expect(remaining).toHaveLength(2);
+			await expect
+				.poll(
+					async () => {
+						const rows = await census();
+						return (
+							rows.some((row) => Number(row.pid) === childPid) ||
+							rows.some(
+								(row) =>
+									row.state === "active" && row.query.includes("pg_sleep"),
+							)
+						);
+					},
+					{ timeout: sleepSeconds * 1_000 + 2_000 },
+				)
+				.toBe(false);
+			expect(primeSettled).toBe(true);
+			await pause(0);
+			stallPrime = false;
+			await expect(adapter.get(toWorkItemId("task.9610"))).resolves.toBeNull();
+			const fresh = await adapter.create(
+				{
+					id: toWorkItemId("task.9612"),
+					type: "task",
+					title: "New intent after actual settlement",
+				},
+				"orphan-budget-probe",
+			);
+			freshCreated = true;
+			expect(fresh.id).toBe("task.9612");
+			expect(admissions).toBe(1);
+			expect(mutationQueries).toBe(1);
+			expect(retirements).toBe(0);
+			expect(recreations).toBe(0);
 		} finally {
+			if (freshCreated)
+				await adapter
+					.patch(
+						{ id: toWorkItemId("task.9612"), set: { status: "cancelled" } },
+						"orphan-budget-probe",
+					)
+					.catch(() => undefined);
 			if (childDeadline) clearTimeout(childDeadline);
 			if (child && child.exitCode === null && child.signalCode === null)
 				child.kill("SIGKILL");
@@ -1115,6 +1380,285 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			await observer.end({ timeout: 0 });
 		}
 	}, 30_000);
+	it.each(["pre-guard", "merged"] as const)(
+		"replaces a sole crashed producer after %s with explicit overlap and canonical recovery",
+		async (stage) => {
+			const sleepSeconds = 8;
+			// Two generations are explicitly admitted for this fixture. This is not
+			// a Dolt-native cap or a production deployment allocation certificate.
+			const fixtureOverlapBudget = 2;
+			const observer = postgres(dbUrl, { max: 1, fetch_types: false });
+			const itemId = stage === "merged" ? "task.9622" : "task.9620";
+			const freshId = "task.9623";
+			const adapterUrl = pathToFileURL(
+				path.join(
+					REPO_ROOT,
+					"packages/work-items/dist/adapters/doltgres/index.js",
+				),
+			).href;
+			const children: Array<ReturnType<typeof start>> = [];
+			let sleepStartedAt = 0;
+			function start(role: "original" | "replacement") {
+				const source = `
+import postgres from 'postgres';
+import { DoltgresWorkItemAdapter } from ${JSON.stringify(adapterUrl)};
+const stage = ${JSON.stringify(stage)}, role = ${JSON.stringify(role)}, itemId = ${JSON.stringify(itemId)};
+const writer = postgres(process.env.RESTART_PROBE_DB_URL, {max: 1, fetch_types: false});
+const reader = postgres(process.env.RESTART_PROBE_DB_URL, {max: 1, fetch_types: false});
+const unsafe = writer.unsafe.bind(writer), reserve = writer.reserve.bind(writer);
+let inserts = 0, delayed = false;
+writer.unsafe = query => role === 'original' && stage === 'pre-guard' && query === 'SELECT 1 AS work_items_ready'
+ ? unsafe('SELECT pg_sleep(${sleepSeconds})').then(() => []) : unsafe(query);
+writer.reserve = async () => {
+ const session = await reserve(), execute = session.unsafe.bind(session);
+ session.unsafe = async query => {
+  if (query.startsWith('INSERT INTO work_items')) inserts++;
+  const rows = await execute(query);
+  if (role === 'original' && stage === 'merged' && query.startsWith('SELECT hash, fast_forward, conflicts, message FROM dolt_merge(') && !delayed) {
+   delayed = true;
+   return execute('SELECT pg_sleep(${sleepSeconds})').then(() => rows);
+  }
+  return rows;
+ };
+ return session;
+};
+const adapter = new DoltgresWorkItemAdapter(writer, {readClient: reader, writerLockProtocol: 'database', queryTimeoutMs: role === 'original' ? 1000 : 5000});
+const wait = phase => new Promise(resolve => { const receive = message => { if (message?.phase === phase) { process.off('message', receive); resolve(); } }; process.on('message', receive); });
+const pid = Number((await writer.unsafe('SELECT pg_backend_pid() AS pid'))[0].pid);
+process.send({phase: 'ready', pid, processPid: process.pid});
+await wait('go');
+if (role === 'original') {
+ const error = await adapter.create({id: itemId, type: 'task', title: 'One canonical original intent'}, 'restart-probe').catch(error => error);
+ process.send({phase: 'outcome', name: error.name, retryable: error.retryable, lookup: error.receipt?.lookup ?? null, inserts});
+ await new Promise(() => {});
+} else {
+ if (stage === 'merged') {
+  const item = await adapter.get(itemId);
+  process.send({phase: 'lookup', item});
+  await wait('admit');
+ }
+ const retry = await adapter.create({id: itemId, type: 'task', title: 'One canonical original intent'}, 'restart-probe').catch(error => error);
+ if (stage === 'merged') await adapter.create({id: ${JSON.stringify(freshId)}, type: 'task', title: 'Distinct new request'}, 'restart-probe');
+ const item = await adapter.get(itemId);
+ // Test-only quiescence probe: waits for the reserved cleanup to return the
+ // max-one writer before process teardown, without cancelling native work.
+ await writer.unsafe('SELECT 1');
+ process.send({phase: 'result', item, retryName: retry.name ?? null, retryId: retry.id ?? null, inserts}, async () => {
+  await Promise.allSettled([writer, reader].map(client => client.end({timeout: 0})));
+  process.exit(0);
+ });
+}`;
+				const child = spawn(
+					process.execPath,
+					["--input-type=module", "--eval", source],
+					{
+						cwd: path.join(REPO_ROOT, "app"),
+						env: { ...process.env, RESTART_PROBE_DB_URL: dbUrl },
+						stdio: ["ignore", "ignore", "pipe", "ipc"],
+					},
+				);
+				const buffered = new Map<string, Record<string, unknown>>();
+				const listeners = new Map<
+					string,
+					(value: Record<string, unknown>) => void
+				>();
+				let diagnostics = "";
+				child.stderr?.on("data", (data: Buffer) => {
+					diagnostics += data.toString();
+				});
+				child.on("message", (value) => {
+					if (
+						!value ||
+						typeof value !== "object" ||
+						!("phase" in value) ||
+						typeof value.phase !== "string"
+					)
+						return;
+					const receive = listeners.get(value.phase);
+					if (receive) {
+						listeners.delete(value.phase);
+						receive(value as Record<string, unknown>);
+					} else buffered.set(value.phase, value as Record<string, unknown>);
+				});
+				const closed = new Promise<{
+					code: number | null;
+					signal: string | null;
+				}>((resolve, reject) => {
+					child.once("error", reject);
+					child.once("close", (code, signal) => resolve({ code, signal }));
+				});
+				void closed.catch(() => undefined);
+				const deadline = setTimeout(() => child.kill("SIGKILL"), 20_000);
+				void closed
+					.finally(() => clearTimeout(deadline))
+					.catch(() => undefined);
+				return {
+					child,
+					closed,
+					wait: (phase: string) => {
+						const existing = buffered.get(phase);
+						if (existing) {
+							buffered.delete(phase);
+							return Promise.resolve(existing);
+						}
+						return new Promise<Record<string, unknown>>((resolve, reject) => {
+							listeners.set(phase, resolve);
+							void closed.then(
+								() =>
+									reject(
+										new Error(
+											`Producer exited before ${phase}: ${diagnostics}`,
+										),
+									),
+								reject,
+							);
+						});
+					},
+				};
+			}
+			try {
+				await observer.unsafe("SELECT 1");
+				const original = start("original");
+				children.push(original);
+				const readyA = await original.wait("ready");
+				expect(readyA.processPid).toBe(original.child.pid);
+				const pidA = Number(readyA.pid);
+				expect(Number.isInteger(pidA) && pidA > 0).toBe(true);
+				sleepStartedAt = Date.now();
+				original.child.send({ phase: "go" });
+				await expect
+					.poll(
+						async () =>
+							(
+								await observer.unsafe(
+									`SELECT pid FROM pg_catalog.pg_stat_activity WHERE pid = ${pidA} AND state = 'active' AND query LIKE '%pg_sleep%'`,
+								)
+							).length,
+						{ timeout: 3_000 },
+					)
+					.toBe(1);
+				const outcome = await original.wait("outcome");
+				expect(outcome.inserts).toBe(stage === "merged" ? 1 : 0);
+				if (stage === "merged")
+					expect(outcome).toMatchObject({
+						name: "WorkItemWriteOutcomeUnknownError",
+						retryable: false,
+						lookup: { itemId },
+					});
+				else expect(outcome.name).toBe("WorkItemsBusyError");
+				original.child.kill("SIGKILL");
+				expect(await original.closed).toEqual({
+					code: null,
+					signal: "SIGKILL",
+				});
+				const retained = await observer.unsafe(
+					`SELECT pid, state, query FROM pg_catalog.pg_stat_activity WHERE pid = ${pidA}`,
+				);
+				expect(retained).toMatchObject([
+					{
+						pid: pidA,
+						state: "active",
+						query: expect.stringContaining("pg_sleep"),
+					},
+				]);
+				// Only now create the replacement OS process; A is never restarted.
+				const replacement = start("replacement");
+				children.push(replacement);
+				const readyB = await replacement.wait("ready");
+				expect(readyB.processPid).toBe(replacement.child.pid);
+				expect(readyB.processPid).not.toBe(readyA.processPid);
+				const pidB = Number(readyB.pid);
+				expect(Number.isInteger(pidB) && pidB > 0 && pidB !== pidA).toBe(true);
+				const overlap = await observer.unsafe(
+					`SELECT DISTINCT pid, state, query FROM pg_catalog.pg_stat_activity WHERE pid IN (${pidA}, ${pidB})`,
+				);
+				expect(overlap).toHaveLength(fixtureOverlapBudget);
+				console.info(
+					"native producer replacement overlap",
+					JSON.stringify({
+						stage,
+						fixtureOverlapBudget,
+						overlap,
+						oldProcessExited: true,
+					}),
+				);
+				replacement.child.send({ phase: "go" });
+				if (stage === "merged") {
+					const lookup = await replacement.wait("lookup");
+					expect(lookup.item).toMatchObject({
+						id: itemId,
+						title: "One canonical original intent",
+						revision: 0,
+					});
+					// The nonretryable receipt is read back while the old native guard is
+					// still counted. Admission waits for actual engine cleanup, not EOF.
+					await expect
+						.poll(
+							async () =>
+								(
+									await observer.unsafe(
+										`SELECT pid FROM pg_catalog.pg_stat_activity WHERE pid = ${pidA}`,
+									)
+								).length,
+							{ timeout: 10_000 },
+						)
+						.toBe(0);
+					replacement.child.send({ phase: "admit" });
+				}
+				const result = await replacement.wait("result");
+				expect(result.item).toMatchObject({ id: itemId, revision: 0 });
+				expect(result.inserts).toBe(1);
+				if (stage === "merged")
+					expect(result.retryName).toBe("WorkItemAlreadyExistsError");
+				else expect(result.retryId).toBe(itemId);
+				expect(await replacement.closed).toEqual({ code: 0, signal: null });
+				await expect
+					.poll(
+						async () =>
+							(
+								await observer.unsafe(
+									`SELECT pid FROM pg_catalog.pg_stat_activity WHERE pid IN (${pidA}, ${pidB})`,
+								)
+							).length,
+						{ timeout: 10_000 },
+					)
+					.toBe(0);
+				await expect(
+					observer.unsafe(
+						`SELECT id, revision FROM work_items WHERE id = '${itemId}'`,
+					),
+				).resolves.toEqual([{ id: itemId, revision: 0 }]);
+				if (stage === "merged") {
+					const lookup = outcome.lookup as { branch: string };
+					expect(lookup.branch).toMatch(/^work-item-op\//);
+					await expect(
+						observer.unsafe(
+							`SELECT name FROM dolt.branches WHERE name = '${lookup.branch}'`,
+						),
+					).resolves.toHaveLength(0);
+				}
+			} finally {
+				for (const producer of children)
+					if (
+						producer.child.exitCode === null &&
+						producer.child.signalCode === null
+					)
+						producer.child.kill("SIGKILL");
+				await Promise.allSettled(children.map((producer) => producer.closed));
+				await new Promise((resolve) =>
+					setTimeout(
+						resolve,
+						Math.max(
+							0,
+							sleepStartedAt + sleepSeconds * 1_000 + 500 - Date.now(),
+						),
+					),
+				);
+				await observer.end({ timeout: 0 });
+			}
+		},
+		30_000,
+	);
 	it("knowledge and work-item writers share one database scope throughout a logical write", async () => {
 		const knowledgeSql = postgres(dbUrl, { max: 1, fetch_types: false });
 		const knowledgeRead = postgres(dbUrl, { max: 1, fetch_types: false });
