@@ -183,6 +183,8 @@ export type {
 } from "./port/edo-resolver.port.js";
 // Port interfaces + domain-registry types/errors
 export {
+  type CitationLinkPage,
+  type CitationLinkSummary,
   CitationTargetNotFoundError,
   CitationTypeMismatchError,
   type Domain,
