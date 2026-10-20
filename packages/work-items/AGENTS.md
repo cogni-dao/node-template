@@ -52,7 +52,9 @@ Work item port interfaces, domain types, and storage adapters for structured wor
   - `StaleRevisionError` — thrown on optimistic concurrency conflict
   - `InvalidTransitionError` — thrown on invalid status transition
 - **Exports (adapter `@cogni/work-items/adapters/doltgres`):**
-  - `DoltgresWorkItemAdapter` — node-local query/create/patch/delete implementation
+  - `DoltgresWorkItemAdapter` — node-local query/create/patch/delete/setPriorityRank implementation
+  - `setPriorityRank({id, expectedRevision, priority, rank}, principalId)` — compare-and-set on `revision`; collaborator-authorized (NOT creator-bound, caller enforces node policy); writes only `priority`/`rank`/`revision`/`updated_at`
+  - `WorkItemRevisionConflictError` (`expectedRevision`, `currentRevision`), `WorkItemNotFoundError` — typed `setPriorityRank` outcomes
   - `DoltgresWorkItemAdapterOptions` — per-store allocator configuration (`idFloor`)
   - cursor codec + Doltgres port/error types
 - **Files considered API:** `src/index.ts`, `src/adapters/markdown/index.ts`, `src/adapters/doltgres/index.ts`
@@ -97,4 +99,5 @@ pnpm vitest run packages/work-items/tests/
 - `toWorkItemId()` does no format validation — WorkItemIds include both numeric (`task.0149`) and slug-based (`proj.agentic-project-management`) formats
 - `MarkdownWorkItemAdapter` constructor takes `workDir` (repo root) — scans `work/items/` and `work/projects/`
 - `blocked` can transition to any `needs_*` status — adapters may enforce stricter return-to-previous-status logic
+- Creator-binding applies to `patch`/`delete`; `setPriorityRank` is the one collaboration op, kept safe by its column allowlist in the transition proof (story.5096)
 - ID allocation race: two concurrent `create()` calls can collide. v0 assumes single-caller.
