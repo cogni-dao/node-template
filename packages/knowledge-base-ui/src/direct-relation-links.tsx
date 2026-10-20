@@ -1,5 +1,15 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
+
+/**
+ * Module: `@cogni/knowledge-base-ui/direct-relation-links`
+ * Purpose: Load one direct relation page initially and expose explicit pagination.
+ * Scope: Shared React request and rendering state. Does not own auth, routing, or styles.
+ * Invariants: FIVE_INITIAL_LINKS, EXPLICIT_PAGINATION, STALE_REQUESTS_IGNORED.
+ * Side-effects: IO (injected page loader)
+ * Links: https://github.com/cogni-dao/cogni/issues/2832
+ * @public
+ */
 
 "use client";
 

@@ -1,5 +1,15 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
+
+/**
+ * Module: `@cogni/knowledge-base-ui/tests/direct-relation-links`
+ * Purpose: Prove bounded initial reads, explicit paging, and stale request handling.
+ * Scope: Shared React component with injected loaders. Does not use a network.
+ * Invariants: FIVE_INITIAL_LINKS, EXPLICIT_PAGINATION, PRESERVE_RESULTS_ON_FAILURE.
+ * Side-effects: global (React test DOM)
+ * Links: https://github.com/cogni-dao/cogni/issues/2832
+ * @internal
+ */
 
 import "@testing-library/jest-dom/vitest";
 import {
