@@ -30,6 +30,17 @@ interface ReconciliationState {
   merged: boolean;
 }
 
+/**
+ * A restart-time branch holding a one-row MODIFICATION (not the default create)
+ * committed under `message`. Used to prove how the sweep classifies an orphaned
+ * mutation whose session died after commit — e.g. a prioritizer apply.
+ */
+interface OrphanModification {
+  readonly message: string;
+  readonly before: Record<string, unknown>;
+  readonly after: Record<string, unknown>;
+}
+
 const recoveredRow = {
   id: "task.0001",
   type: "task",
@@ -56,6 +67,7 @@ function makeReconciliationHarness({
   withProvableSibling = false,
   deleteError,
   deleteLeavesRef = false,
+  orphanModification,
 }: {
   readonly branchCommit?: string;
   readonly mergeBase: string;
@@ -70,6 +82,7 @@ function makeReconciliationHarness({
   readonly deleteError?: Error;
   /** With `deleteError`, the ref survives: the delete genuinely did not land. */
   readonly deleteLeavesRef?: boolean;
+  readonly orphanModification?: OrphanModification;
 }) {
   const state: ReconciliationState = {
     branch: "work-item-op/restart-evidence",
@@ -132,9 +145,11 @@ function makeReconciliationHarness({
           // proof fails while every STRUCTURAL check still passes — linear
           // history, frozen base, exactly one work_items row, real commit time.
           // That is precisely the quarantinable arm, and the only one.
-          message: state.unprovableTransition
-            ? "unrelated commit with no work-item proof"
-            : "work-items: create work item by actor:principal-1",
+          message: orphanModification
+            ? orphanModification.message
+            : state.unprovableTransition
+              ? "unrelated commit with no work-item proof"
+              : "work-items: create work item by actor:principal-1",
           date: "2026-10-03T00:01:00.000Z",
         },
       ];
@@ -159,6 +174,22 @@ function makeReconciliationHarness({
       ];
     }
     if (query.startsWith("SELECT * FROM dolt_diff(")) {
+      if (orphanModification) {
+        const prefixed = (prefix: string, row: Record<string, unknown>) =>
+          Object.fromEntries(
+            Object.entries(row).map(([key, value]) => [
+              `${prefix}${key}`,
+              value,
+            ])
+          );
+        return [
+          {
+            ...prefixed("from_", orphanModification.before),
+            ...prefixed("to_", orphanModification.after),
+            diff_type: "modified",
+          },
+        ];
+      }
       return [
         {
           ...Object.fromEntries(
@@ -200,7 +231,8 @@ function makeReconciliationHarness({
       return [{ dolt_branch: [0, ""] }];
     }
     if (query.startsWith("SELECT * FROM work_items WHERE id = 'task.0001'")) {
-      return state.merged ? [recoveredRow] : [];
+      if (!state.merged) return [];
+      return [orphanModification?.after ?? recoveredRow];
     }
     if (query.includes("FROM work_items")) return [];
     return [];
@@ -564,5 +596,63 @@ describe("DoltgresWorkItemAdapter restart reconciliation", () => {
     expect(
       state.queries.some((query) => query.includes("FROM work_items"))
     ).toBe(false);
+  });
+});
+
+// story.5096. `setPriorityRank` is collaborator-authorized, so a session that
+// dies after committing one leaves a branch whose committer is NOT the row's
+// creator. The restart sweep must recover that branch from its commit message
+// alone — and must still refuse one that touched anything beyond priority/rank,
+// because the column allowlist is what makes the wider authorization safe.
+describe("restart reconciliation of an orphaned set-priority-rank branch", () => {
+  const before = { ...recoveredRow, revision: 3, priority: 2, rank: 7 };
+  const after = {
+    ...before,
+    priority: 0,
+    rank: 1,
+    revision: 4,
+    updated_at: "2026-10-03T00:00:30.000Z",
+  };
+  const message =
+    "work-items: set-priority-rank task.0001 by actor:system-prioritizer";
+
+  it("merges a non-creator priority/rank change proven from its commit message", async () => {
+    const { adapter, state, logs } = makeReconciliationHarness({
+      mergeBase: "main-commit",
+      orphanModification: { message, before, after },
+    });
+
+    await expect(
+      adapter.get(toWorkItemId("task.missing"))
+    ).resolves.toBeNull();
+
+    expect(state.merged).toBe(true);
+    expect(state.branch).toBeUndefined();
+    expect(
+      logs.some((log) => log.fields.classification === "quarantined_unprovable")
+    ).toBe(false);
+  });
+
+  it("quarantines a set-priority-rank branch that also changed another column", async () => {
+    const { adapter, state, logs } = makeReconciliationHarness({
+      mergeBase: "main-commit",
+      orphanModification: {
+        message,
+        before,
+        after: { ...after, title: "smuggled title change" },
+      },
+    });
+
+    await adapter
+      .patch(
+        { id: toWorkItemId("task.missing"), set: { title: "next write" } },
+        "principal-1"
+      )
+      .catch(() => undefined);
+
+    expect(state.merged).toBe(false);
+    expect(
+      logs.some((log) => log.fields.classification === "quarantined_unprovable")
+    ).toBe(true);
   });
 });

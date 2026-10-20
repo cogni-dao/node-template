@@ -24,6 +24,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
 	DoltgresWorkItemAdapter,
+	WorkItemAuthorizationError,
+	WorkItemNotFoundError,
+	WorkItemRevisionConflictError,
 	WorkItemsBusyError,
 } from "@cogni/work-items/adapters/doltgres";
 
@@ -252,6 +255,109 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 		await expect(adapter.delete(searchId, principalId)).resolves.toBe(true);
 		await expect(adapter.get(id)).resolves.toBeNull();
 		await readSql.end({ timeout: 0 });
+	}, 60_000);
+
+	// story.5096: the prioritizer's apply op, against the real engine. A
+	// collaborator (not the creator) compare-and-sets priority/rank; a stale
+	// revision is refused with nothing written; patch stays creator-bound.
+	it("compare-and-sets priority and rank for a collaborator through a Dolt commit", async () => {
+		const adapter = new DoltgresWorkItemAdapter(sql, {
+			logger: stageLogger,
+			lockWaitMs: 250,
+			lockRetryMs: 25,
+			queryTimeoutMs: 5_000,
+		});
+		const id = toWorkItemId("task.9503");
+		const creator = "doltgres-priority-creator";
+		const prioritizer = "doltgres-priority-system";
+		const created = await adapter.create(
+			{ id, type: "task", title: "Prioritize me", priority: 3, rank: 9 },
+			creator,
+		);
+		try {
+			const before = String(
+				(await sql.unsafe("SELECT dolt_hashof('main') AS hash"))[0]?.hash ?? "",
+			);
+			const applied = await adapter.setPriorityRank(
+				{
+					id,
+					expectedRevision: created.revision,
+					priority: 0,
+					rank: 1,
+				},
+				prioritizer,
+			);
+			expect(applied).toMatchObject({
+				id,
+				priority: 0,
+				rank: 1,
+				revision: created.revision + 1,
+			});
+			// An attributable commit under the COLLABORATOR's principal.
+			await expect(
+				sql.unsafe(
+					`SELECT commit_hash FROM dolt.commits WHERE message = 'work-items: set-priority-rank ${id} by actor:${prioritizer}'`,
+				),
+			).resolves.toHaveLength(1);
+			expect(
+				String(
+					(await sql.unsafe("SELECT dolt_hashof('main') AS hash"))[0]?.hash ??
+						"",
+				),
+			).not.toBe(before);
+
+			await expect(
+				adapter.setPriorityRank(
+					{
+						id,
+						expectedRevision: created.revision,
+						priority: 4,
+						rank: null,
+					},
+					prioritizer,
+				),
+			).rejects.toBeInstanceOf(WorkItemRevisionConflictError);
+			await expect(adapter.get(id)).resolves.toMatchObject({
+				priority: 0,
+				rank: 1,
+				revision: created.revision + 1,
+			});
+
+			await expect(
+				adapter.setPriorityRank(
+					{
+						id,
+						expectedRevision: applied.revision,
+						priority: 2,
+						rank: null,
+					},
+					prioritizer,
+				),
+			).resolves.toMatchObject({ priority: 2, revision: applied.revision + 1 });
+			expect((await adapter.get(id))?.rank).toBeUndefined();
+
+			await expect(
+				adapter.setPriorityRank(
+					{
+						id: toWorkItemId("task.9598"),
+						expectedRevision: 0,
+						priority: 0,
+						rank: 1,
+					},
+					prioritizer,
+				),
+			).rejects.toBeInstanceOf(WorkItemNotFoundError);
+			await expect(
+				adapter.patch({ id, set: { title: "not yours" } }, prioritizer),
+			).rejects.toBeInstanceOf(WorkItemAuthorizationError);
+			await expect(
+				sql.unsafe(
+					"SELECT name FROM dolt.branches WHERE name LIKE 'work-item-op/%'",
+				),
+			).resolves.toHaveLength(0);
+		} finally {
+			await adapter.delete(id, creator).catch(() => undefined);
+		}
 	}, 60_000);
 
 	it("serves reads past an unprovable operation branch and quarantines it so writes recover", async () => {
