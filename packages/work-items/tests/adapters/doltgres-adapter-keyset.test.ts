@@ -336,6 +336,7 @@ describe("reads leave the write lane when a read pool is supplied", () => {
     let inFlight = 0;
     let maxInFlight = 0;
     const readPool = Object.assign(async () => [], {
+      options: { max: 3 },
       unsafe: async (_q: string) => {
         inFlight += 1;
         maxInFlight = Math.max(maxInFlight, inFlight);
@@ -360,7 +361,7 @@ describe("reads leave the write lane when a read pool is supplied", () => {
     expect(started.length).toBeGreaterThanOrEqual(3);
   });
 
-  it("rebuilds a terminal read pool without replaying on the write lane", async () => {
+  it("quarantines a transport-unknown reader without destruction or writer replay", async () => {
     let writeQueries = 0;
     let firstEnded = 0;
     let rebuilds = 0;
@@ -395,11 +396,12 @@ describe("reads leave the write lane when a read pool is supplied", () => {
     });
 
     await expect(adapter.list()).rejects.toBeInstanceOf(WorkItemsBusyError);
-    expect(firstEnded).toBe(1);
+    expect(firstEnded).toBe(0);
     expect(writeQueries).toBe(0);
 
     await expect(adapter.list()).resolves.toMatchObject({ items: [] });
     expect(rebuilds).toBe(1);
+    expect(firstEnded).toBe(0);
     expect(writeQueries).toBe(0);
   });
 });
@@ -413,6 +415,7 @@ describe("the read lane arms itself from recreateClient", () => {
     let inFlight = 0;
     let maxInFlight = 0;
     const pool = Object.assign(async () => [], {
+      options: { max: 3 },
       unsafe: async (_q: string) => {
         inFlight += 1;
         maxInFlight = Math.max(maxInFlight, inFlight);

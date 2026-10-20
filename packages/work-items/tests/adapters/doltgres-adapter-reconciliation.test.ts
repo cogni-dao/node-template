@@ -236,6 +236,16 @@ function makeReconciliationHarness({
   };
 }
 
+function terminalServerError(): Error {
+  return Object.assign(
+    new Error("Server completed ref removal with an SQL error"),
+    {
+      name: "PostgresError",
+      code: "XX000",
+    }
+  );
+}
+
 describe("DoltgresWorkItemAdapter restart reconciliation", () => {
   it("deletes a restart-time empty branch only when its tip equals current main", async () => {
     const { adapter, state } = makeReconciliationHarness({
@@ -466,12 +476,10 @@ describe("DoltgresWorkItemAdapter restart reconciliation", () => {
     expect(state.extraBranch).toBeDefined();
   });
 
-  it("treats a lost delete acknowledgement as cleaned when the ref is gone", async () => {
+  it("proves ref absence after an authoritative server SQL error", async () => {
     const { adapter, state, logs } = makeReconciliationHarness({
       mergeBase: "operation-commit",
-      deleteError: new Error(
-        "Work-item store timed out during branch.delete; retry shortly"
-      ),
+      deleteError: terminalServerError(),
     });
 
     await expect(
@@ -481,9 +489,8 @@ describe("DoltgresWorkItemAdapter restart reconciliation", () => {
       )
     ).rejects.toThrow(/Work item not found/);
 
-    // Doltgres applied the delete and lost the ack to the query deadline — the
-    // bug.5358 shape one layer down. Reporting that as pending would send an
-    // operator chasing a ref that is already gone.
+    // An authoritative SQL response is terminal, so a same-session ref readback
+    // can prove absence. This does not model a lost transport acknowledgement.
     expect(state.branch).toBeUndefined();
     const verdicts = logs.filter((e) =>
       String(e.fields.classification ?? "").startsWith("reachable_redundant")
@@ -498,12 +505,10 @@ describe("DoltgresWorkItemAdapter restart reconciliation", () => {
     // logging; the served-read tests cover the verdict's level.
   });
 
-  it("keeps a delete pending when the ref really survived", async () => {
+  it("keeps a surviving ref pending after an authoritative server SQL error", async () => {
     const { adapter, state, logs } = makeReconciliationHarness({
       mergeBase: "operation-commit",
-      deleteError: new Error(
-        "Work-item store timed out during branch.delete; retry shortly"
-      ),
+      deleteError: terminalServerError(),
       deleteLeavesRef: true,
     });
 
@@ -522,6 +527,52 @@ describe("DoltgresWorkItemAdapter restart reconciliation", () => {
     ).toBe(true);
     expect(logs.some((e) => e.fields.deleteAckLost === true)).toBe(false);
   });
+
+  it.each([false, true])(
+    "quarantines a lost delete transport ACK when ref survives=%s",
+    async (deleteLeavesRef) => {
+      const { adapter, state, logs } = makeReconciliationHarness({
+        mergeBase: "operation-commit",
+        deleteError: new Error("transport acknowledgement lost"),
+        deleteLeavesRef,
+      });
+      await expect(
+        adapter.patch(
+          {
+            id: toWorkItemId("task.missing"),
+            set: { title: "never dispatched" },
+          },
+          "principal-1"
+        )
+      ).rejects.toMatchObject({ code: "work_items_native_capacity_held" });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(state.branch).toBe(
+        deleteLeavesRef ? "work-item-op/restart-evidence" : undefined
+      );
+      const deleteIndex = state.queries.findIndex((query) =>
+        query.startsWith("SELECT dolt_branch('-D'")
+      );
+      expect(deleteIndex).toBeGreaterThan(-1);
+      expect(state.queries.slice(deleteIndex + 1)).toEqual([]);
+      expect(logs.some((entry) => entry.fields.deleteAckLost === true)).toBe(
+        false
+      );
+      const count = state.queries.length;
+      await expect(
+        adapter.patch(
+          { id: toWorkItemId("task.missing"), set: { title: "retry" } },
+          "principal-1"
+        )
+      ).rejects.toMatchObject({
+        code: "work_items_native_capacity_held",
+        nativeState: "unknown",
+      });
+      expect(state.queries).toHaveLength(count);
+      await expect(
+        adapter.get(toWorkItemId("task.missing"))
+      ).resolves.toBeNull();
+    }
+  );
 
   it("preserves evidence and fails busy when the branch lookup errors", async () => {
     const { adapter, state } = makeReconciliationHarness({
