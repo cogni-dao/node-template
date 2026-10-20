@@ -18,6 +18,8 @@ export {
   WorkItemAlreadyExistsError,
   WorkItemAuthorizationError,
   WorkItemLeaseConflictError,
+  WorkItemNotFoundError,
+  WorkItemRevisionConflictError,
   WorkItemsBusyError,
 } from "./adapter.js";
 export {
@@ -31,4 +33,5 @@ export type {
   WorkItemsDoltgresPort,
   WorkItemsPatchInput,
   WorkItemsPatchSet,
+  WorkItemsSetPriorityRankInput,
 } from "./ports.js";

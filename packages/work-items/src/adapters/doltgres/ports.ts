@@ -14,6 +14,7 @@
  */
 
 import type {
+  Revision,
   WorkItem,
   WorkItemCommandPort,
   WorkItemId,
@@ -36,6 +37,22 @@ export interface WorkItemsPatchInput {
   readonly set: WorkItemsPatchSet;
 }
 
+/**
+ * Input for the narrow `setPriorityRank` collaboration op (story.5096).
+ *
+ * - CAS_ON_REVISION: applied only if the row's current `revision` equals
+ *   `expectedRevision`; otherwise `WorkItemRevisionConflictError` and no write.
+ * - `expectedRevision` is the Doltgres row version (`WorkItem.revision`); a
+ *   numeric string is accepted for `Revision` callers.
+ * - `rank: null` clears the rank.
+ */
+export interface WorkItemsSetPriorityRankInput {
+  readonly id: WorkItemId;
+  readonly expectedRevision: Revision | number;
+  readonly priority: number;
+  readonly rank: number | null;
+}
+
 export interface WorkItemsDoltgresPort {
   get(id: WorkItemId): Promise<WorkItem | null>;
   list(query?: WorkQuery): Promise<{
@@ -46,6 +63,16 @@ export interface WorkItemsDoltgresPort {
   create(input: WorkItemsCreateInput, principalId: string): Promise<WorkItem>;
   patch(input: WorkItemsPatchInput, principalId: string): Promise<WorkItem>;
   delete(id: WorkItemId, principalId: string): Promise<boolean>;
+  /**
+   * Compare-and-set priority + rank. COLLABORATOR_AUTHZ: any authenticated
+   * principal may call it — unlike `patch`/`delete` it is NOT creator-bound; the
+   * caller enforces node policy upstream. Writes exactly `priority`, `rank`,
+   * `revision`, `updated_at` as one attributable Dolt commit.
+   */
+  setPriorityRank(
+    input: WorkItemsSetPriorityRankInput,
+    principalId: string
+  ): Promise<WorkItem>;
   claim(input: {
     id: WorkItemId;
     runId: string;

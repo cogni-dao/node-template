@@ -819,6 +819,7 @@ function createContainer(): Container {
 			create: notConfiguredWorkItems,
 			patch: notConfiguredWorkItems,
 			delete: notConfiguredWorkItems,
+			setPriorityRank: notConfiguredWorkItems,
 			claim: notConfiguredWorkItems,
 			heartbeat: notConfiguredWorkItems,
 			release: notConfiguredWorkItems,

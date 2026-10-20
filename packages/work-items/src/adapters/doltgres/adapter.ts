@@ -24,6 +24,7 @@ import type {
   WorkItemsDoltgresPort,
   WorkItemsPatchInput,
   WorkItemsPatchSet,
+  WorkItemsSetPriorityRankInput,
 } from "./ports.js";
 
 import {
@@ -156,7 +157,8 @@ type MutationVerb =
   | "delete"
   | "claim"
   | "heartbeat"
-  | "release";
+  | "release"
+  | "set-priority-rank";
 
 interface MutationProof {
   readonly verb: MutationVerb;
@@ -168,6 +170,8 @@ interface MutationProof {
   readonly runId?: string;
   readonly command?: string;
   readonly commandProvided?: boolean;
+  /** `set-priority-rank` only: the revision the CAS was conditioned on. */
+  readonly expectedRevision?: number;
 }
 
 interface MutationOptions<T> {
@@ -225,6 +229,34 @@ export class WorkItemAuthorizationError extends Error {
   constructor(public readonly id: string) {
     super(`Not authorized to mutate work item: ${id}`);
     this.name = "WorkItemAuthorizationError";
+  }
+}
+
+/**
+ * `setPriorityRank` found the item but its `revision` no longer matches the
+ * caller's `expectedRevision`. Nothing was written; re-read and recompute.
+ */
+export class WorkItemRevisionConflictError extends Error {
+  constructor(
+    public readonly id: string,
+    public readonly expectedRevision: number,
+    public readonly currentRevision: number
+  ) {
+    super(
+      `Work item revision conflict: ${id} expected revision ${expectedRevision}, current ${currentRevision}`
+    );
+    this.name = "WorkItemRevisionConflictError";
+  }
+}
+
+/**
+ * Typed not-found for `setPriorityRank`. The message is byte-identical to the
+ * plain `Error` the other mutations throw, so message matchers keep working.
+ */
+export class WorkItemNotFoundError extends Error {
+  constructor(public readonly id: string) {
+    super(`Work item not found: ${id}`);
+    this.name = "WorkItemNotFoundError";
   }
 }
 
@@ -579,6 +611,17 @@ const HEARTBEAT_COLUMNS = new Set<string>([
   "revision",
   "updated_at",
 ]);
+/**
+ * The ENTIRE write surface of `set-priority-rank`. The op is authorized by
+ * collaboration, not by creator, so its proof must refuse any other column —
+ * that narrowness is what makes the wider authorization safe.
+ */
+const PRIORITY_RANK_COLUMNS = new Set<string>([
+  "priority",
+  "rank",
+  "revision",
+  "updated_at",
+]);
 const RELEASE_COLUMNS = new Set<string>([
   "claimed_by_run",
   "claim_owner_principal_id",
@@ -664,7 +707,7 @@ function legacyProofFromMessage(
   after: RowSnapshot
 ): MutationProof | undefined {
   const match =
-    /^work-items: (create work item|(?:patch|delete|claim|heartbeat|release) ([^ ]+)) by actor:([^ ]+)$/.exec(
+    /^work-items: (create work item|(?:patch|delete|claim|heartbeat|release|set-priority-rank) ([^ ]+)) by actor:([^ ]+)$/.exec(
       message
     );
   if (!match) return undefined;
@@ -679,7 +722,8 @@ function legacyProofFromMessage(
     verb !== "delete" &&
     verb !== "claim" &&
     verb !== "heartbeat" &&
-    verb !== "release"
+    verb !== "release" &&
+    verb !== "set-priority-rank"
   ) {
     return undefined;
   }
@@ -855,6 +899,28 @@ function validateTransitionMatrix(
         revisionAdvanced
       );
     }
+    case "set-priority-rank":
+      // COLLABORATOR_AUTHZ: deliberately no creatorPermits() — any
+      // authenticated principal may reprioritize. Safety comes from the column
+      // allowlist instead: priority/rank plus the revision bump, nothing else.
+      return (
+        String(before.id) === itemId &&
+        String(after.id) === itemId &&
+        proof.principal.length > 0 &&
+        creatorBefore === creatorAfter &&
+        changed.has("revision") &&
+        changed.has("updated_at") &&
+        onlyAllowedChanges(changed, PRIORITY_RANK_COLUMNS) &&
+        revisionAdvanced &&
+        (proof.expectedRevision === undefined ||
+          beforeRevision === proof.expectedRevision) &&
+        Object.entries(proof.patchValues ?? {}).every(
+          ([column, value]) =>
+            (column === "priority" || column === "rank") &&
+            JSON.stringify(after[column as PersistedColumn]) ===
+              JSON.stringify(normalizedPersistedValue(value))
+        )
+      );
     case "release":
       return (
         String(before.id) === itemId &&
@@ -2531,6 +2597,104 @@ export class DoltgresWorkItemAdapter
         },
         shouldCommit: Boolean,
       }
+    );
+  }
+
+  /**
+   * Compare-and-set `priority` + `rank` (story.5096).
+   *
+   * - CAS_ON_REVISION: the preflight refuses a stale `expectedRevision` before
+   *   any branch exists, and the UPDATE itself is conditioned on the same
+   *   revision, so a writer outside this adapter's lock still cannot be
+   *   overwritten.
+   * - COLLABORATOR_AUTHZ: not creator-bound. Any authenticated principal may
+   *   set priority/rank; node policy is enforced by the caller.
+   * - ONE_STATEMENT: one UPDATE on the operation branch, committed under the
+   *   caller's principal and proven by the `set-priority-rank` transition
+   *   matrix, exactly like every other mutation.
+   */
+  async setPriorityRank(
+    input: WorkItemsSetPriorityRankInput,
+    principalId: string
+  ): Promise<WorkItem> {
+    const principal = requirePrincipal(principalId);
+    const id = input.id as string;
+    const expectedRevision = Number(input.expectedRevision);
+    if (
+      (typeof input.expectedRevision === "string" &&
+        !/^\d+$/.test(input.expectedRevision.trim())) ||
+      !Number.isSafeInteger(expectedRevision) ||
+      expectedRevision < 0
+    ) {
+      throw new Error(
+        `setPriorityRank: expectedRevision must be a non-negative integer (got ${String(input.expectedRevision)})`
+      );
+    }
+    if (!Number.isSafeInteger(input.priority) || input.priority < 0) {
+      throw new Error(
+        `setPriorityRank: priority must be a non-negative integer (got ${String(input.priority)})`
+      );
+    }
+    if (input.rank !== null && !Number.isSafeInteger(input.rank)) {
+      throw new Error(
+        `setPriorityRank: rank must be an integer or null (got ${String(input.rank)})`
+      );
+    }
+
+    return this.mutate(
+      `set-priority-rank ${id}`,
+      principal,
+      async (conn, proof) => {
+        const rows = await conn.unsafe(
+          `UPDATE work_items SET priority = ${escapeValue(input.priority)}, rank = ${escapeValue(input.rank)}, revision = revision + 1, updated_at = NOW() WHERE id = ${escapeValue(id)} AND revision = ${escapeValue(expectedRevision)} RETURNING *, (claim_expires_at IS NOT NULL AND claim_expires_at > NOW()) AS claim_active`
+        );
+        const row = rows[0] as Record<string, unknown> | undefined;
+        if (!row) {
+          await this.throwMissingOrRevisionConflict(
+            conn,
+            input.id,
+            expectedRevision
+          );
+        }
+        proof.afterRow = row as Record<string, unknown>;
+        return rowToWorkItem(row as Record<string, unknown>);
+      },
+      {
+        proof: {
+          verb: "set-priority-rank",
+          principal,
+          itemId: id,
+          expectedRevision,
+          patchValues: { priority: input.priority, rank: input.rank },
+        },
+        preflight: async (conn, proof) => {
+          const current = await this.getWith(conn, input.id);
+          if (!current) throw new WorkItemNotFoundError(id);
+          const currentRevision = Number(current.revision ?? 0);
+          if (currentRevision !== expectedRevision) {
+            throw new WorkItemRevisionConflictError(
+              id,
+              expectedRevision,
+              currentRevision
+            );
+          }
+          proof.beforeRow = current;
+        },
+      }
+    );
+  }
+
+  private async throwMissingOrRevisionConflict(
+    conn: WorkItemConnection,
+    id: WorkItemId,
+    expectedRevision: number
+  ): Promise<never> {
+    const current = await this.getWith(conn, id);
+    if (!current) throw new WorkItemNotFoundError(id as string);
+    throw new WorkItemRevisionConflictError(
+      id as string,
+      expectedRevision,
+      Number(current.revision ?? 0)
     );
   }
 

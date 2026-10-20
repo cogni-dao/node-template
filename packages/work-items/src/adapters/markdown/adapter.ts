@@ -409,6 +409,37 @@ export class MarkdownWorkItemAdapter
     return result.item;
   }
 
+  /**
+   * Parity with the Doltgres `setPriorityRank` op. Markdown has no principal
+   * model, so `_principalId` is accepted and ignored like every other op here;
+   * the CAS is the file-revision check (`StaleRevisionError` on mismatch).
+   * `rank: null` clears the rank.
+   */
+  async setPriorityRank(
+    input: {
+      id: WorkItemId;
+      expectedRevision: Revision;
+      priority: number;
+      rank: number | null;
+    },
+    _principalId?: string
+  ): Promise<WorkItem> {
+    const entry = await findById(this.workDir, input.id);
+    if (!entry) throw new Error(`Work item not found: ${input.id as string}`);
+
+    const result = await atomicWrite(
+      entry.filePath,
+      input.expectedRevision,
+      (raw) => {
+        raw.priority = input.priority;
+        if (input.rank === null) delete raw.rank;
+        else raw.rank = input.rank;
+        raw.updated = new Date().toISOString().slice(0, 10);
+      }
+    );
+    return result.item;
+  }
+
   async transitionStatus(input: {
     id: WorkItemId;
     expectedRevision: Revision;
