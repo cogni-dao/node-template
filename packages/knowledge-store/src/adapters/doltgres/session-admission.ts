@@ -21,6 +21,7 @@ import { randomUUID } from "node:crypto";
 import {
   acquireDoltWriterLocks,
   DoltWriterAdmissionError,
+  reconcileAbandonedDoltOperation,
 } from "@cogni-dao/doltgres-admission";
 import type { ReservedSql, Sql } from "postgres";
 
@@ -48,9 +49,12 @@ interface NativeOperation {
   commitHash?: string;
   abandoned?: Error;
   rejectCaller?: (error: Error) => void;
-  unknown?: boolean;
+  transportUnknown?: boolean;
   admitting?: boolean;
   closed?: boolean;
+  reconciliationRequired?: boolean;
+  reconcile?: () => Promise<boolean>;
+  committedCleanup?: () => Promise<void>;
   readonly pending: Set<Promise<unknown>>;
 }
 
@@ -209,7 +213,17 @@ export class DoltBranchSessionRunner {
    */
   async run<T>(
     operation: string,
-    fn: (conn: DoltWriteConnection, guard: DoltBranchWriterGuard) => Promise<T>,
+    fn: (
+      conn: DoltWriteConnection,
+      guard: DoltBranchWriterGuard,
+      owner: {
+        registerReconciliation(reconcile: () => Promise<boolean>): void;
+        committed(
+          result: { value: T; commitHash: string },
+          cleanup: () => Promise<void>
+        ): void;
+      }
+    ) => Promise<T>,
     options: { readonly operationId?: string } = {}
   ): Promise<T> {
     if (this.heldOperation || this.retiredPools.has(this.sql))
@@ -240,7 +254,7 @@ export class DoltBranchSessionRunner {
         return await this.withSession(operation, fn, context, succeed);
       } finally {
         if (
-          !context.unknown &&
+          !context.transportUnknown &&
           !this.retiredPools.has(this.sql) &&
           this.heldOperation === context
         )
@@ -291,7 +305,7 @@ export class DoltBranchSessionRunner {
         !returned &&
         !(error instanceof Error && error.name === "PostgresError")
       ) {
-        context.unknown = true;
+        context.transportUnknown = true;
         this.retiredPools.add(pool);
         this.abandon(context);
       }
@@ -402,7 +416,7 @@ export class DoltBranchSessionRunner {
     const context = this.connectionOperations.get(connection);
     this.quarantine(pool, "knowledge.write", "session", "outcome_uncertain");
     if (context) {
-      context.unknown = true;
+      context.reconciliationRequired = true;
       this.heldOperation = context;
     }
   }
@@ -437,7 +451,17 @@ export class DoltBranchSessionRunner {
 
   private async withSession<T>(
     operation: string,
-    fn: (conn: DoltWriteConnection, guard: DoltBranchWriterGuard) => Promise<T>,
+    fn: (
+      conn: DoltWriteConnection,
+      guard: DoltBranchWriterGuard,
+      owner: {
+        registerReconciliation(reconcile: () => Promise<boolean>): void;
+        committed(
+          result: { value: T; commitHash: string },
+          cleanup: () => Promise<void>
+        ): void;
+      }
+    ) => Promise<T>,
     context: NativeOperation,
     succeed: (value: T) => void
   ): Promise<T> {
@@ -460,7 +484,7 @@ export class DoltBranchSessionRunner {
             !cleanup &&
             !admissionUnlock
           ) {
-            if (context.admitting && !context.unknown)
+            if (context.admitting && !context.transportUnknown)
               throw new DoltWriterAdmissionError("lock_contended", false, {
                 cause: context.abandoned,
               });
@@ -469,7 +493,10 @@ export class DoltBranchSessionRunner {
               new Error("Knowledge writer scope has closed")
             );
           }
-          if (context.unknown || this.retiredPools.has(pool))
+          if (
+            context.transportUnknown ||
+            (this.retiredPools.has(pool) && !cleanup)
+          )
             throw new KnowledgeBusyError(
               "Knowledge writer session was retired"
             );
@@ -485,7 +512,7 @@ export class DoltBranchSessionRunner {
             context,
             reserved.unsafe(query),
             this.queryTimeoutMs,
-            context.admitting || unlock
+            context.admitting || unlock || cleanup
           );
           if (/dolt_commit\(|dolt_hashof\(/i.test(query)) {
             const hash = rows[0]?.dolt_commit ?? rows[0]?.commit_hash;
@@ -526,7 +553,30 @@ export class DoltBranchSessionRunner {
       const callbackConnection = connection;
       const callbackGuard = guard;
       const value = await this.cleanupContext.exit(() =>
-        fn(callbackConnection, callbackGuard)
+        fn(callbackConnection, callbackGuard, {
+          registerReconciliation: (reconcile) => {
+            if (context.reconcile || context.closed || context.abandoned)
+              throw new Error(
+                "Knowledge reconciliation plan cannot be replaced"
+              );
+            context.reconcile = reconcile;
+          },
+          committed: (result, cleanup) => {
+            if (
+              context.committedCleanup ||
+              context.closed ||
+              context.abandoned ||
+              context.pending.size
+            )
+              throw new Error(
+                "Knowledge commit acknowledgement is no longer available"
+              );
+            context.committedCleanup = cleanup;
+            context.commitHash = result.commitHash;
+            context.closed = true;
+            succeed(result.value);
+          },
+        })
       );
       context.closed = true;
       // The caller owns the business proof represented by a successful callback.
@@ -538,19 +588,67 @@ export class DoltBranchSessionRunner {
       // Closing the public scope precedes the drain. An escaped callback can
       // neither add another native query nor inherit private cleanup authority.
       await Promise.allSettled([...context.pending]);
-      if (context.abandoned && (context.effectsPossible || context.unknown)) {
-        this.retiredPools.add(pool);
+      if (context.transportUnknown) {
+        this.quarantine(
+          pool,
+          operation,
+          "settlement",
+          "native_transport_unknown"
+        );
         this.heldOperation = context;
-      }
-      if (guard && connection && !this.retiredPools.has(pool)) {
+      } else if (guard && connection) {
         const ownedGuard = guard;
         const ownedConnection = connection;
         await this.cleanupContext.run(context, async () => {
-          if (!context.abandoned)
-            await this.restoreMain(ownedConnection, pool, operation);
-          if (this.retiredPools.has(pool)) return;
+          if (context.committedCleanup) {
+            const cleanup = context.committedCleanup;
+            context.committedCleanup = undefined;
+            try {
+              await cleanup();
+            } catch {
+              context.reconciliationRequired = true;
+            }
+          }
+          if (context.transportUnknown) return;
+          let safe = false;
+          if (context.reconcile) {
+            try {
+              safe = await context.reconcile();
+            } catch {
+              safe = false;
+            }
+          } else {
+            // Without an owning plan, never infer ownership of a dirty/foreign
+            // branch. Successful normal callbacks retain existing clean restore.
+            if (!context.abandoned && !context.reconciliationRequired)
+              await this.restoreMain(ownedConnection, pool, operation);
+            if (!context.transportUnknown)
+              safe = await reconcileAbandonedDoltOperation(ownedConnection, {
+                guard: ownedGuard,
+                creationProven: false,
+                commitAttempted: true,
+                mergeAttempted: true,
+              });
+          }
+          if (!safe || context.transportUnknown) {
+            this.quarantine(
+              pool,
+              operation,
+              "reconciliation",
+              "operation_receipt_requires_recovery"
+            );
+            this.heldOperation = context;
+            this.log("error", operation, "recovery", "error", {
+              operationId: context.operationId,
+              branch: context.branch,
+              commitHash: context.commitHash ?? null,
+            });
+            return;
+          }
           try {
             await ownedGuard.release();
+            this.retiredPools.delete(pool);
+            context.reconciliationRequired = false;
           } catch (error) {
             this.log(
               "error",
@@ -565,6 +663,7 @@ export class DoltBranchSessionRunner {
               "lock.release",
               "unlock_uncertain"
             );
+            this.heldOperation = context;
           }
         });
       }
@@ -605,7 +704,7 @@ export class DoltBranchSessionRunner {
     return reserved;
   }
 
-  /** Quarantine unknown native work without abandoning its socket or replacing capacity. */
+  /** Quarantine transportUnknown native work without abandoning its socket or replacing capacity. */
   private quarantine(
     pool: Sql,
     operation: string,

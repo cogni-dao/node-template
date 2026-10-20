@@ -35,17 +35,23 @@ it("all concurrent read methods never reserve, lock, checkout, reconcile, or que
     }),
     reserve: vi.fn(),
   } as unknown as Sql;
-  const read = { unsafe: vi.fn(async () => []) } as unknown as Sql;
+  const read = {
+    options: { max: 1 },
+    unsafe: vi.fn(async () => []),
+  } as unknown as Sql;
   const adapter = new DoltgresWorkItemAdapter(write, { readClient: read });
-  await Promise.all(
-    Array.from({ length: 100 }, () =>
-      Promise.all([
-        adapter.list(),
-        adapter.get(toWorkItemId("task.0001")),
-        adapter.listRelations(toWorkItemId("task.0001")),
-      ])
-    )
-  );
+  // Keep each healthy fanout within the declared bounded reader queue; all
+  // 300 method calls still prove the independent, lock-free reader surface.
+  for (let batch = 0; batch < 10; batch++)
+    await Promise.all(
+      Array.from({ length: 10 }, () =>
+        Promise.all([
+          adapter.list(),
+          adapter.get(toWorkItemId("task.0001")),
+          adapter.listRelations(toWorkItemId("task.0001")),
+        ])
+      )
+    );
   expect(write.unsafe).not.toHaveBeenCalled();
   expect(write.reserve).not.toHaveBeenCalled();
   expect(read.unsafe).toHaveBeenCalledTimes(300);
@@ -124,16 +130,19 @@ describe("lease/content composition", () => {
   });
 });
 
-it("a timed-out reader drains siblings, fails at its own deadline, and cannot spawn a third generation", async () => {
+it("a timed-out reader retains real native capacity and cannot spawn a third generation", async () => {
   vi.useFakeTimers();
   try {
     const writer = { unsafe: vi.fn() } as unknown as Sql;
     const closes: Array<() => void> = [];
+    const outcomes: Array<(rows: []) => void> = [];
     const builds: Sql[] = [];
     const factory = () => {
       const reader = {
         options: { max: 1 },
-        unsafe: vi.fn(() => new Promise<never>(() => undefined)),
+        unsafe: vi.fn(
+          () => new Promise<[]>((resolve) => outcomes.push(resolve))
+        ),
         end: vi.fn(() => new Promise<void>((resolve) => closes.push(resolve))),
       } as unknown as Sql;
       builds.push(reader);
@@ -148,18 +157,33 @@ it("a timed-out reader drains siblings, fails at its own deadline, and cannot sp
     const first = adapter.list().catch((error) => error);
     await vi.advanceTimersByTimeAsync(100);
     expect(await first).toMatchObject({ name: "WorkItemsBusyError" });
-    expect(builds[0]?.end).toHaveBeenCalledWith({ timeout: 0.1 });
+    expect(builds[0]?.end).not.toHaveBeenCalled();
     const second = adapter.list().catch((error) => error);
     await vi.advanceTimersByTimeAsync(100);
     expect(await second).toMatchObject({ name: "WorkItemsBusyError" });
-    await expect(adapter.list()).rejects.toThrow(/generations are draining/);
+    await expect(adapter.list()).rejects.toMatchObject({
+      code: "work_items_native_capacity_held",
+    });
     expect(builds).toHaveLength(2);
+    expect(builds[1]?.end).not.toHaveBeenCalled();
+    outcomes[0]?.([]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(builds[0]?.end).toHaveBeenCalledExactlyOnceWith({ timeout: 0 });
+    // Even a completed query does not free a generation until idle shutdown
+    // has completed; neither timeout nor end invocation is a capacity receipt.
+    await expect(adapter.list()).rejects.toMatchObject({
+      code: "work_items_native_capacity_held",
+    });
     closes[0]?.();
     await vi.advanceTimersByTimeAsync(0);
     const third = adapter.list().catch((error) => error);
     expect(builds).toHaveLength(3);
     await vi.advanceTimersByTimeAsync(100);
     await third;
+    for (const resolve of outcomes) resolve([]);
+    await vi.advanceTimersByTimeAsync(0);
+    for (const close of closes) close();
+    await vi.advanceTimersByTimeAsync(0);
     expect(writer.unsafe).not.toHaveBeenCalled();
   } finally {
     vi.useRealTimers();

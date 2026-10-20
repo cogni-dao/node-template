@@ -56,6 +56,7 @@ class FakeReservedSql {
     if (query.includes("current_database()"))
       return [{ dolt_writer_database: "knowledge_test" }];
     if (query.includes("active_branch()")) return [{ branch_name: "main" }];
+    if (query.includes("dolt.merge_status")) return [{ is_merging: false }];
     // Admission control takes a session advisory lock before any branch work
     // (bug.5391); a fake that cannot answer it would fail every write as busy.
     if (query.includes("pg_try_advisory_lock"))
@@ -164,6 +165,7 @@ class FakeMergeReservedSql {
     if (query.includes("current_database()"))
       return [{ dolt_writer_database: "knowledge_test" }];
     if (query.includes("active_branch()")) return [{ branch_name: "main" }];
+    if (query.includes("dolt.merge_status")) return [{ is_merging: false }];
     // Admission control takes a session advisory lock before any branch work
     // (bug.5391); a fake that cannot answer it would fail every write as busy.
     if (query.includes("pg_try_advisory_lock"))
@@ -699,6 +701,7 @@ class CrossPlaneFakeReservedSql {
     if (query.includes("current_database()"))
       return [{ dolt_writer_database: "knowledge_test" }];
     if (query.includes("active_branch()")) return [{ branch_name: "main" }];
+    if (query.includes("dolt.merge_status")) return [{ is_merging: false }];
     // Admission control takes a session advisory lock before any branch work
     // (bug.5391); a fake that cannot answer it would fail every write as busy.
     if (query.includes("pg_try_advisory_lock"))

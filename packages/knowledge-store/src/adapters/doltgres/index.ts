@@ -224,10 +224,12 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
     try {
       return await writer.run(
         "knowledge.logical_write",
-        async (conn, guard) => {
+        async (conn, guard, owner) => {
           const result = await runDoltBranchMutation(conn, {
             ...input,
             guard,
+            onReconcile: owner.registerReconciliation,
+            onCommitted: owner.committed,
             onSessionUncertain: (error) => writer.retire(conn, error),
             run: async (scopedConnection) => {
               const scoped = new DoltgresKnowledgeStoreAdapter({
@@ -246,7 +248,8 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
             },
           });
           return result.value;
-        }
+        },
+        input
       );
     } catch (error) {
       if (error instanceof DoltBranchMutationUncertainError)

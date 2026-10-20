@@ -28,6 +28,8 @@ import {
   type DoltWriteConnection,
   type DoltBranchWriterGuard,
 } from "../src/adapters/doltgres/session-admission.js";
+import { DoltgresKnowledgeStoreAdapter } from "../src/adapters/doltgres/index.js";
+import type { KnowledgeWriteSession } from "../src/port/knowledge-store.port.js";
 import {
   KnowledgeBusyError,
   KnowledgeWriteOutcomeUnknownError,
@@ -178,7 +180,9 @@ function startFakePostgres(): Promise<{
                   ? valueResponse("dolt_writer_database", "knowledge_test")
                   : buf.includes("active_branch()")
                     ? valueResponse("branch_name", "main")
-                    : QUERY_RESPONSE
+                    : buf.includes("dolt.merge_status")
+                      ? valueResponse("is_merging", "f", 16)
+                      : QUERY_RESPONSE
           );
         }
       });
@@ -432,6 +436,7 @@ describe("writer runner native ownership", () => {
         if (query.includes("pg_advisory_unlock"))
           return [{ pg_advisory_unlock: true }];
         if (query.includes("active_branch")) return [{ branch_name: "main" }];
+        if (query.includes("dolt.merge_status")) return [{ is_merging: false }];
         return [];
       },
       release: () => {
@@ -460,6 +465,71 @@ describe("writer runner native ownership", () => {
       reserved: () => reservedCount,
       primed: () => primeCount,
     };
+  }
+  function logicalEngine(
+    options: { body?: Promise<Rows>; deletion?: Promise<Rows> } = {}
+  ) {
+    const base = "b".repeat(32);
+    const committed = "a".repeat(32);
+    let active = "main";
+    let dirty = false;
+    let mainHead = base;
+    let branchHead = base;
+    return pool({
+      query: (query) => {
+        if (query.startsWith("SELECT name FROM dolt.branches"))
+          return Promise.resolve([]);
+        if (query.startsWith("SELECT dolt_checkout('-b'")) {
+          active = query.split("'")[3] ?? "";
+          branchHead = mainHead;
+          return Promise.resolve([{ dolt_checkout: 0 }]);
+        }
+        if (query === "SELECT dolt_checkout('main')") {
+          expect(dirty).toBe(false);
+          active = "main";
+          return Promise.resolve([{ dolt_checkout: 0 }]);
+        }
+        if (query.includes("active_branch"))
+          return Promise.resolve([{ branch_name: active }]);
+        if (query.includes("dolt_hashof"))
+          return Promise.resolve([
+            {
+              commit_hash: query.includes("'HEAD'")
+                ? active === "main"
+                  ? mainHead
+                  : branchHead
+                : branchHead,
+            },
+          ]);
+        if (query === "SELECT * FROM dolt.status")
+          return Promise.resolve(dirty ? [{ table_name: "knowledge" }] : []);
+        if (query.startsWith("DELETE FROM knowledge")) {
+          dirty = true;
+          return options.body ?? Promise.resolve([]);
+        }
+        if (query.startsWith("SELECT dolt_reset")) {
+          expect(active).not.toBe("main");
+          dirty = false;
+          return Promise.resolve([{ dolt_reset: 0 }]);
+        }
+        if (query.startsWith("SELECT dolt_commit")) {
+          dirty = false;
+          branchHead = committed;
+          return Promise.resolve([{ dolt_commit: [committed] }]);
+        }
+        if (query.startsWith("SELECT hash, fast_forward")) {
+          mainHead = branchHead;
+          return Promise.resolve([
+            { hash: mainHead, conflicts: 0, fast_forward: true },
+          ]);
+        }
+        if (query.startsWith("SELECT dolt_merge_base"))
+          return Promise.resolve([{ merge_base: branchHead }]);
+        if (query.startsWith("SELECT dolt_branch('-D'"))
+          return options.deletion ?? Promise.resolve([{ dolt_branch: 0 }]);
+        return undefined;
+      },
+    });
   }
   const flush = () => sleep(0);
 
@@ -615,7 +685,7 @@ describe("writer runner native ownership", () => {
     }
   );
 
-  it("preserves the current operation receipt and guard after a mutation deadline", async () => {
+  it("preserves the issued receipt while clean positive settlement releases shared admission", async () => {
     const pending = deferred<Rows>();
     const first = pool({
       query: (query) =>
@@ -656,16 +726,12 @@ describe("writer runner native ownership", () => {
     expect(first.released()).toBe(0);
     pending.resolve([{ conflicts: 0 }]);
     await flush();
-    expect(
-      first.queries.some((q) =>
-        /must-not-run|pg_advisory_unlock|dolt.status/.test(q)
-      )
-    ).toBe(false);
+    expect(first.queries.some((q) => /must-not-run/.test(q))).toBe(false);
     expect(first.ended()).toBe(0);
-    expect(first.released()).toBe(0);
+    expect(first.released()).toBe(1);
     await expect(
-      runner.run("retry", async () => "unsafe")
-    ).rejects.toBeInstanceOf(KnowledgeBusyError);
+      runner.run("after-settlement", async () => "ok")
+    ).resolves.toBe("ok");
   });
 
   it("a swallowed late SQL rejection cannot reopen an abandoned callback", async () => {
@@ -690,10 +756,8 @@ describe("writer runner native ownership", () => {
     pending.resolve([]);
     await flush();
     expect(first.queries).not.toContain("SELECT forbidden_continuation");
-    expect(first.released()).toBe(0);
-    await expect(
-      runner.run("after", async () => "unsafe")
-    ).rejects.toBeInstanceOf(KnowledgeBusyError);
+    expect(first.released()).toBe(1);
+    await expect(runner.run("after", async () => "ok")).resolves.toBe("ok");
   });
 
   it("quarantines transport uncertainty without closing or replacing native capacity", async () => {
@@ -756,11 +820,11 @@ describe("writer runner native ownership", () => {
       });
       pending.resolve([]);
       await flush();
-      expect(first.released()).toBe(0);
+      expect(first.released()).toBe(1);
       expect(first.ended()).toBe(0);
       expect(
-        first.queries.some((sql) => sql.includes("pg_advisory_unlock"))
-      ).toBe(false);
+        first.queries.filter((sql) => sql.includes("pg_advisory_unlock"))
+      ).toHaveLength(3);
     }
   );
 
@@ -855,7 +919,7 @@ describe("writer runner native ownership", () => {
     ).toHaveLength(acquired.length);
   });
 
-  it("preserves a successful callback ACK while private cleanup retains capacity", async () => {
+  it("preserves a successful callback ACK while finite private cleanup retains capacity", async () => {
     const cleanup = deferred<Rows>();
     const started = deferred<void>();
     const first = pool({
@@ -883,11 +947,9 @@ describe("writer runner native ownership", () => {
     await expect(request).resolves.toBe("business-result");
     cleanup.resolve([]);
     await flush();
-    expect(first.released()).toBe(0);
+    expect(first.released()).toBe(1);
     expect(first.ended()).toBe(0);
-    await expect(
-      runner.run("quarantined", async () => "unsafe")
-    ).rejects.toBeInstanceOf(KnowledgeBusyError);
+    await expect(runner.run("after", async () => "ok")).resolves.toBe("ok");
   });
 
   it("drains unawaited SQL before unlocking or releasing its FIFO ticket", async () => {
@@ -910,10 +972,112 @@ describe("writer runner native ownership", () => {
     );
     pending.resolve([]);
     await flush();
-    expect(first.released()).toBe(0);
+    expect(first.released()).toBe(1);
   });
 
-  it("retirement preserves the original writer and never aliases or destroys a registered reader", async () => {
+  it("the actual withWrite path resets only its settled uncommitted branch, preserves the 409/ref, and serves the next write", async () => {
+    const body = deferred<Rows>();
+    const first = logicalEngine({ body: body.promise });
+    const runner = new DoltBranchSessionRunner(first.client, {
+      queryTimeoutMs: 10,
+    });
+    const store = new DoltgresKnowledgeStoreAdapter({
+      sql: pool().client,
+      writerSession: runner,
+    });
+    let continued = false;
+    let escaped!: KnowledgeWriteSession;
+    const request = store.withWrite(
+      { operationId: "logical:finite-body", message: "owned body" },
+      async (write) => {
+        escaped = write;
+        await write.deleteKnowledge("owned");
+        continued = true;
+        return 42;
+      }
+    );
+    await expect(request).rejects.toMatchObject({
+      code: "knowledge_write_outcome_unknown",
+      retryable: false,
+      operationId: "logical:finite-body",
+    });
+    expect(
+      first.queries.some((query) => /dolt_reset|pg_advisory_unlock/.test(query))
+    ).toBe(false);
+    expect(first.released()).toBe(0);
+    body.resolve([]);
+    await flush();
+    expect(continued).toBe(false);
+    expect(
+      first.queries.filter((query) => query.startsWith("DELETE FROM knowledge"))
+    ).toHaveLength(1);
+    expect(first.queries).toContain("SELECT dolt_reset('--hard', 'HEAD')");
+    expect(
+      first.queries.some((query) => query.startsWith("SELECT dolt_branch('-D'"))
+    ).toBe(false);
+    expect(first.released()).toBe(1);
+    await expect(request).rejects.toBeInstanceOf(
+      KnowledgeWriteOutcomeUnknownError
+    );
+    await expect(escaped.deleteKnowledge("escaped")).rejects.toThrow();
+    await expect(
+      store.withWrite(
+        { operationId: "logical:next", message: "next" },
+        async (write) => {
+          await write.deleteKnowledge("next");
+          return 43;
+        }
+      )
+    ).resolves.toBe(43);
+  });
+
+  it("the actual withWrite path ACKs proven merge before ref deletion and holds capacity until finite cleanup settles", async () => {
+    const deletion = deferred<Rows>();
+    const first = logicalEngine({ deletion: deletion.promise });
+    const runner = new DoltBranchSessionRunner(first.client, {
+      queryTimeoutMs: 10,
+      queueWaitMs: 5,
+    });
+    const store = new DoltgresKnowledgeStoreAdapter({
+      sql: pool().client,
+      writerSession: runner,
+    });
+    let escaped!: KnowledgeWriteSession;
+    const request = store.withWrite(
+      { operationId: "logical:committed-ack", message: "committed" },
+      async (write) => {
+        escaped = write;
+        await write.deleteKnowledge("owned");
+        return 42;
+      }
+    );
+    await expect(request).resolves.toBe(42);
+    await expect(escaped.deleteKnowledge("escaped")).rejects.toThrow();
+    expect(
+      first.queries.some((query) => query.startsWith("SELECT dolt_merge_base"))
+    ).toBe(true);
+    expect(
+      first.queries.filter((query) =>
+        query.startsWith("SELECT dolt_branch('-D'")
+      )
+    ).toHaveLength(1);
+    expect(
+      first.queries.some((query) => query.includes("pg_advisory_unlock"))
+    ).toBe(false);
+    expect(first.released()).toBe(0);
+    await expect(
+      runner.run("queued", async () => "unsafe")
+    ).rejects.toBeInstanceOf(KnowledgeBusyError);
+    await sleep(15);
+    await expect(request).resolves.toBe(42);
+    deletion.resolve([]);
+    await flush();
+    expect(first.released()).toBe(1);
+    expect(first.ended()).toBe(0);
+    await expect(runner.run("after", async () => "ok")).resolves.toBe("ok");
+  });
+
+  it("business uncertainty reconciles the original writer without aliasing or destroying readers", async () => {
     const first = pool();
     const reader = pool();
     let created = 0;
@@ -937,8 +1101,9 @@ describe("writer runner native ownership", () => {
     expect(reader.ended()).toBe(0);
     expect(created).toBe(0);
     expect(runner.client).toBe(first.client);
+    await flush();
     await expect(
-      runner.run("fail-closed", async () => "unsafe")
-    ).rejects.toBeInstanceOf(KnowledgeBusyError);
+      runner.run("clean-settlement", async () => "ok")
+    ).resolves.toBe("ok");
   });
 });

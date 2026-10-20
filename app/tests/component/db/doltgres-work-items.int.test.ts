@@ -29,6 +29,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
 	DoltgresWorkItemAdapter,
+	WorkItemWriteOutcomeUnknownError,
 	WorkItemsBusyError,
 } from "@cogni/work-items/adapters/doltgres";
 
@@ -108,18 +109,20 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 		// lane; mixing it in here would mean `sql` sometimes pointed at the read
 		// pool and the pool-death assertions would kill the wrong connection.
 		const readSql = createWorkItemClient();
-		const adapter = new DoltgresWorkItemAdapter(sql, {
-			logger: stageLogger,
-			lockWaitMs: 250,
-			lockRetryMs: 25,
-			queryTimeoutMs: 5_000,
-			readClient: readSql,
-			recreateReadClient: createWorkItemClient,
-			recreateClient: () => {
-				sql = createWorkItemClient();
-				return sql;
-			},
-		});
+		const createAdapter = () =>
+			new DoltgresWorkItemAdapter(sql, {
+				logger: stageLogger,
+				lockWaitMs: 250,
+				lockRetryMs: 25,
+				queryTimeoutMs: 5_000,
+				readClient: readSql,
+				recreateReadClient: createWorkItemClient,
+				recreateClient: () => {
+					sql = createWorkItemClient();
+					return sql;
+				},
+			});
+		let adapter = createAdapter();
 		const id = toWorkItemId("task.9501");
 		const principalId = "doltgres-acceptance-agent";
 		const searchId = toWorkItemId("task.9500");
@@ -201,6 +204,9 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 		}
 
 		const oldPool = sql;
+		const oldPid = Number(
+			(await oldPool.unsafe("SELECT pg_backend_pid() AS pid"))[0]?.pid,
+		);
 		const lockHolder = createWorkItemClient();
 		try {
 			await lockHolder.unsafe("SELECT pg_advisory_lock(9501002)");
@@ -210,11 +216,8 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 				(error) => error,
 			);
 			await new Promise((resolve) => setTimeout(resolve, 50));
-			// A WRITE, not a read: the write pool is the only pool a write uses,
-			// so it is the only operation that can observe that pool dying and
-			// then prove `recreateClient` rebuilt it. Before 0.1.7 a read shared
-			// that pool and stood in for this; it no longer does, and a read
-			// standing in would now assert nothing.
+			// Only a write can observe this write-pool transport loss. It must
+			// quarantine its native capacity while the independent reader serves.
 			const recoveryAttempt = adapter.patch(
 				{ id, set: { title: "pool death" } },
 				principalId,
@@ -232,11 +235,31 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 				.catch(() => undefined);
 			await lockHolder.end({ timeout: 0 });
 		}
+		// Transport failure does not prove that Dolt finished the old statement.
+		// Keep that adapter quarantined, including after the lock-holder exits.
+		await expect(
+			adapter.patch({ id, set: { title: "no replacement" } }, principalId),
+		).rejects.toMatchObject({ code: "work_items_native_capacity_held" });
+		// This owned test can explicitly observe the old native session depart
+		// before constructing a replacement; production needs its own authority.
+		await expect
+			.poll(
+				async () =>
+					(
+						await readSql.unsafe(
+							`SELECT pid FROM pg_catalog.pg_stat_activity WHERE pid = ${oldPid}`,
+						)
+					).length,
+				{ timeout: 3_000 },
+			)
+			.toBe(0);
+		sql = createWorkItemClient();
+		adapter = createAdapter();
 
 		// Reads kept serving throughout — including while the write pool was
 		// dead, which is the bug.5358 guarantee.
 		await expect(adapter.get(id)).resolves.toMatchObject({ id });
-		// ...and the next WRITE both proves the pool was rebuilt and sweeps the
+		// ...and an explicit replacement after native absence sweeps the
 		// orphan branch. Sweeping is a branch mutation, so it belongs to the
 		// write plane (COMMAND_QUERY_SEPARATION); a read used to do it here only
 		// because a read used to take the write lock.
@@ -474,15 +497,19 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 	}, 60_000);
 	it("a timed-out GET preserves healthy old and new readers while draining its own generation", async () => {
 		const clients: Sql[] = [];
+		const nativeReads: PromiseLike<unknown>[] = [];
 		const createReader = () => {
 			const client = postgres(dbUrl, { max: 2, fetch_types: false });
 			const unsafe = client.unsafe.bind(client);
-			client.unsafe = ((query: string) =>
-				query.includes("task.9001")
+			client.unsafe = ((query: string) => {
+				const pending = query.includes("task.9001")
 					? unsafe("SELECT pg_sleep(3)").then(() => [])
 					: query.includes("task.9002")
 						? unsafe("SELECT pg_sleep(0.5)").then(() => [])
-						: unsafe(query)) as typeof client.unsafe;
+						: unsafe(query);
+				nativeReads.push(pending);
+				return pending;
+			}) as typeof client.unsafe;
 			clients.push(client);
 			return client;
 		};
@@ -509,12 +536,330 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			await new Promise((resolve) => setTimeout(resolve, 1_100));
 			await expect(adapter.get(toWorkItemId("task.9003"))).resolves.toBeNull();
 		} finally {
+			await Promise.allSettled(nativeReads);
 			await Promise.all([
 				writer.end({ timeout: 0 }),
 				...clients.map((client) => client.end({ timeout: 0 })),
 			]);
 		}
 	}, 5_000);
+	it("keeps reader generation slots until native settlement and bounds repeated timeouts", async () => {
+		const clients: Sql[] = [];
+		const native: Promise<unknown>[] = [];
+		let ended = 0;
+		const observer = postgres(dbUrl, { max: 1, fetch_types: false });
+		const writer = postgres(dbUrl, { max: 1, fetch_types: false });
+		const reader = () => {
+			const client = postgres(dbUrl, { max: 1, fetch_types: false });
+			const unsafe = client.unsafe.bind(client);
+			const end = client.end.bind(client);
+			client.unsafe = ((query: string) => {
+				if (!query.includes("task.9613")) return unsafe(query);
+				const pending = unsafe(
+					"SELECT pg_sleep(3) /* reader_generation_probe */",
+				).then(() => []);
+				native.push(pending);
+				return pending;
+			}) as typeof client.unsafe;
+			client.end = (async (options) => {
+				await end(options);
+				ended++;
+			}) as typeof client.end;
+			clients.push(client);
+			return client;
+		};
+		try {
+			const observerPid = Number(
+				(await observer.unsafe("SELECT pg_backend_pid() AS pid"))[0]?.pid,
+			);
+			const adapter = new DoltgresWorkItemAdapter(writer, {
+				readClient: reader(),
+				recreateReadClient: reader,
+				readConnectionBudget: 2,
+				queryTimeoutMs: 500,
+			});
+			for (let attempt = 0; attempt < 2; attempt++)
+				await expect(
+					adapter.get(toWorkItemId("task.9613")),
+				).rejects.toBeInstanceOf(WorkItemsBusyError);
+			await expect(
+				adapter.get(toWorkItemId("task.9613")),
+			).rejects.toBeInstanceOf(WorkItemsBusyError);
+			expect(clients).toHaveLength(2);
+			expect(ended).toBe(0);
+			const rows = await observer.unsafe(
+				`SELECT DISTINCT pid FROM pg_catalog.pg_stat_activity WHERE pid <> ${observerPid} AND state = 'active' AND query LIKE '%reader_generation_probe%'`,
+			);
+			expect(rows).toHaveLength(2);
+			await Promise.all(native);
+			await expect.poll(() => ended).toBe(2);
+			await expect(
+				Promise.all(
+					Array.from({ length: 8 }, () =>
+						adapter.get(toWorkItemId("task.9614")),
+					),
+				),
+			).resolves.toEqual(Array.from({ length: 8 }, () => null));
+			expect(clients).toHaveLength(3);
+		} finally {
+			await Promise.allSettled(native);
+			await Promise.allSettled(
+				[...clients, writer, observer].map((client) =>
+					client.end({ timeout: 0 }),
+				),
+			);
+		}
+	}, 6_000);
+	it("the legacy end(0) strategy is a sensitive native orphan control", async () => {
+		const observer = postgres(dbUrl, { max: 1, fetch_types: false });
+		const clients: Sql[] = [];
+		const pids: number[] = [];
+		const started = Date.now();
+		let lastConfirmedSleepAt = started;
+		try {
+			for (let attempt = 0; attempt < 2; attempt++) {
+				const client = postgres(dbUrl, { max: 1, fetch_types: false });
+				clients.push(client);
+				const pid = Number(
+					(await client.unsafe("SELECT pg_backend_pid() AS pid"))[0]?.pid,
+				);
+				pids.push(pid);
+				const pending = client
+					.unsafe("SELECT pg_sleep(6)")
+					.catch(() => undefined);
+				await expect
+					.poll(
+						async () =>
+							(
+								await observer.unsafe(
+									`SELECT pid FROM pg_catalog.pg_stat_activity WHERE pid = ${pid} AND state = 'active' AND query LIKE '%pg_sleep%'`,
+								)
+							).length,
+						{ timeout: 1_000 },
+					)
+					.toBe(1);
+				lastConfirmedSleepAt = Date.now();
+				await client.end({ timeout: 0 });
+				await pending;
+			}
+			const rows = await observer.unsafe(
+				`SELECT DISTINCT pid FROM pg_catalog.pg_stat_activity WHERE pid IN (${pids.join(",")})`,
+			);
+			expect(Date.now() - started).toBeLessThan(5_000);
+			expect(rows).toHaveLength(2);
+		} finally {
+			await new Promise((resolve) =>
+				setTimeout(
+					resolve,
+					Math.max(0, lastConfirmedSleepAt + 6_250 - Date.now()),
+				),
+			);
+			await Promise.allSettled(
+				[...clients, observer].map((client) => client.end({ timeout: 0 })),
+			);
+		}
+	}, 12_000);
+	it("retains one native writer through caller retries and recovers after actual settlement", async () => {
+		const writer = postgres(dbUrl, { max: 1, fetch_types: false });
+		const reader = postgres(dbUrl, { max: 1, fetch_types: false });
+		const observer = postgres(dbUrl, { max: 1, fetch_types: false });
+		const otherDb = postgres(dbUrl.replace(`/${DB_NAME}`, "/postgres"), {
+			max: 1,
+			fetch_types: false,
+		});
+		const unsafe = writer.unsafe.bind(writer);
+		const reserve = writer.reserve.bind(writer);
+		let native: Promise<unknown> | undefined;
+		let primed = false;
+		let reservations = 0;
+		let replacements = 0;
+		let mutations = 0;
+		writer.unsafe = ((query: string) => {
+			if (query === "SELECT 1 AS work_items_ready" && !primed) {
+				primed = true;
+				native = unsafe("SELECT pg_sleep(2)").then(() => []);
+				return native;
+			}
+			if (/INSERT|UPDATE|DELETE/.test(query)) mutations++;
+			return unsafe(query);
+		}) as typeof writer.unsafe;
+		writer.reserve = (() => {
+			reservations++;
+			return reserve();
+		}) as typeof writer.reserve;
+		const adapter = new DoltgresWorkItemAdapter(writer, {
+			writerLockProtocol: "database",
+			readClient: reader,
+			queryTimeoutMs: 250,
+			recreateClient: () => {
+				replacements++;
+				throw new Error("No replacement while native SQL is pending");
+			},
+		});
+		try {
+			const pid = Number(
+				(await unsafe("SELECT pg_backend_pid() AS pid"))[0]?.pid,
+			);
+			const abandoned = adapter
+				.create(
+					{
+						id: toWorkItemId("task.9612"),
+						type: "task",
+						title: "Never resume",
+					},
+					"native-capacity-probe",
+				)
+				.catch((error: unknown) => error);
+			await expect
+				.poll(
+					async () =>
+						(
+							await observer.unsafe(
+								`SELECT pid FROM pg_catalog.pg_stat_activity WHERE pid = ${pid} AND state = 'active' AND query LIKE '%pg_sleep%'`,
+							)
+						).length,
+					{ timeout: 1_000 },
+				)
+				.toBe(1);
+			expect(await abandoned).toMatchObject({
+				code: "work_items_native_capacity_held",
+			});
+			for (let retry = 0; retry < 4; retry++)
+				await expect(
+					adapter.create(
+						{ type: "task", title: "Retry cannot allocate" },
+						"native-capacity-probe",
+					),
+				).rejects.toMatchObject({ code: "work_items_native_capacity_held" });
+			expect(reservations).toBe(0);
+			expect(replacements).toBe(0);
+			expect(mutations).toBe(0);
+			await expect(adapter.get(toWorkItemId("task.9612"))).resolves.toBeNull();
+			await expect(
+				otherDb.unsafe("SELECT 1 AS independent_database"),
+			).resolves.toEqual([{ independent_database: 1 }]);
+			await native;
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(reservations).toBe(0);
+			expect(mutations).toBe(0);
+			await expect(
+				adapter.patch(
+					{ id: toWorkItemId("task.9612"), set: { title: "Fresh request" } },
+					"native-capacity-probe",
+				),
+			).rejects.toThrow(/not found/);
+			expect(reservations).toBe(1);
+			expect(replacements).toBe(0);
+			await expect(
+				observer.unsafe("SELECT id FROM work_items WHERE id = 'task.9612'"),
+			).resolves.toHaveLength(0);
+		} finally {
+			await native?.catch(() => undefined);
+			await Promise.allSettled(
+				[writer, reader, observer, otherDb].map((client) =>
+					client.end({ timeout: 0 }),
+				),
+			);
+		}
+	}, 6_000);
+	it("reconciles finite post-DML abandonment before releasing its database guard", async () => {
+		const writer = postgres(dbUrl, { max: 1, fetch_types: false });
+		const reader = postgres(dbUrl, { max: 1, fetch_types: false });
+		const observer = postgres(dbUrl, { max: 1, fetch_types: false });
+		const competitor = postgres(dbUrl, { max: 1, fetch_types: false });
+		const reserve = writer.reserve.bind(writer);
+		let stalled: Promise<unknown> | undefined;
+		let inserts = 0;
+		let commits = 0;
+		let resets = 0;
+		writer.reserve = (async () => {
+			const session = await reserve();
+			const unsafe = session.unsafe.bind(session);
+			session.unsafe = ((query: string) => {
+				if (query.startsWith("INSERT INTO work_items")) inserts++;
+				if (query.startsWith("SELECT dolt_commit")) commits++;
+				if (query === "SELECT dolt_reset('--hard', 'HEAD')") resets++;
+				if (query === "SELECT dolt_add('work_items')" && !stalled) {
+					stalled = unsafe("SELECT pg_sleep(2)").then(() => []);
+					return stalled;
+				}
+				return unsafe(query);
+			}) as typeof session.unsafe;
+			return session;
+		}) as typeof writer.reserve;
+		const adapter = new DoltgresWorkItemAdapter(writer, {
+			writerLockProtocol: "database",
+			readClient: reader,
+			queryTimeoutMs: 500,
+		});
+		let rival: Awaited<ReturnType<Sql["reserve"]>> | undefined;
+		try {
+			const error = await adapter
+				.create(
+					{
+						id: toWorkItemId("task.9615"),
+						type: "task",
+						title: "Must remain uncommitted",
+					},
+					"native-cleanup-probe",
+				)
+				.catch((failure: unknown) => failure);
+			expect(error).toBeInstanceOf(WorkItemWriteOutcomeUnknownError);
+			if (!(error instanceof WorkItemWriteOutcomeUnknownError)) throw error;
+			expect(inserts).toBe(1);
+			expect(commits).toBe(0);
+			expect(resets).toBe(0);
+			await competitor.unsafe("SELECT 1");
+			rival = await competitor.reserve();
+			const rivalSession = rival;
+			await expect
+				.poll(
+					async () => {
+						try {
+							const guard = await acquireDoltWriterLocks(rivalSession, {
+								protocol: "database",
+								lockWaitMs: 0,
+							});
+							await guard.release();
+							return true;
+						} catch {
+							return false;
+						}
+					},
+					{ timeout: 5_000 },
+				)
+				.toBe(true);
+			expect(resets).toBe(1);
+			expect(inserts).toBe(1);
+			expect(commits).toBe(0);
+			await expect(
+				writer.unsafe("SELECT active_branch() AS branch_name"),
+			).resolves.toEqual([{ branch_name: "main" }]);
+			await expect(
+				writer.unsafe("SELECT * FROM dolt.status"),
+			).resolves.toHaveLength(0);
+			await expect(
+				observer.unsafe("SELECT id FROM work_items WHERE id = 'task.9615'"),
+			).resolves.toHaveLength(0);
+			await expect(
+				observer.unsafe(
+					`SELECT name FROM dolt.branches WHERE name = '${error.branch}'`,
+				),
+			).resolves.toHaveLength(1);
+			expect(error).toMatchObject({
+				retryable: false,
+				branch: expect.stringMatching(/^work-item-op\//),
+			});
+		} finally {
+			await stalled?.catch(() => undefined);
+			rival?.release();
+			await Promise.allSettled(
+				[writer, reader, observer, competitor].map((client) =>
+					client.end({ timeout: 0 }),
+				),
+			);
+		}
+	}, 10_000);
 	it("bounds native writer sessions across timeout retries and a fresh process", async () => {
 		const sleepSeconds = 12;
 		const queryTimeoutMs = 500;
@@ -544,7 +889,8 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 					// Real finite engine work at the production pre-guard prime seam.
 					return unsafe(`SELECT pg_sleep(${sleepSeconds})`).then(() => []);
 				}
-				if (/INSERT|UPDATE|DELETE|dolt_|advisory/i.test(query)) mutationQueries++;
+				if (/INSERT|UPDATE|DELETE|dolt_|advisory/i.test(query))
+					mutationQueries++;
 				return unsafe(query);
 			}) as typeof client.unsafe;
 			client.reserve = (() => {
@@ -602,14 +948,14 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			const observerPid = Number(
 				(await observer.unsafe("SELECT pg_backend_pid() AS pid"))[0]?.pid,
 			);
+			const original = writer;
+			const pid = Number(
+				(await writer.unsafe("SELECT pg_backend_pid() AS pid"))[0]?.pid,
+			);
+			expect(Number.isInteger(pid)).toBe(true);
+			expect(pid).not.toBe(observerPid);
+			producerPids.push(pid);
 			for (let wave = 0; wave < 4; wave++) {
-				const previous = writer;
-				const pid = Number(
-					(await writer.unsafe("SELECT pg_backend_pid() AS pid"))[0]?.pid,
-				);
-				expect(Number.isInteger(pid)).toBe(true);
-				expect(pid).not.toBe(observerPid);
-				producerPids.push(pid);
 				const result = adapter
 					.create(
 						{
@@ -620,17 +966,20 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 						"orphan-budget-probe",
 					)
 					.catch((error: unknown) => error);
-				await confirmNativeSleep(pid);
-				firstSleepStartedAt ||= lastSleepStartedAt;
+				if (wave === 0) {
+					await confirmNativeSleep(pid);
+					firstSleepStartedAt = lastSleepStartedAt;
+				}
 				expect(await result).toBeInstanceOf(WorkItemsBusyError);
-				expect(retirements).toBe(wave + 1);
-				expect(recreations).toBe(wave + 1);
-				expect(writer).not.toBe(previous);
+				expect(retirements).toBe(0);
+				expect(recreations).toBe(0);
+				expect(writer).toBe(original);
 				snapshots.push({ wave, rows: await census() });
 			}
 
 			// A separate Node process imports the BUILT public adapter, not Vitest's
-			// workspace alias, and exits after its actual end(0)/recreate path.
+			// workspace alias. Process termination remains an UNSOLVED boundary:
+			// its fresh local counters cannot see the parent's outstanding query.
 			const adapterUrl = pathToFileURL(
 				path.join(
 					REPO_ROOT,
@@ -664,11 +1013,15 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 	  await Promise.allSettled([...pools, reader].map(pool => pool.end({timeout: 0})));
 	  process.exit(0);
 	});`;
-			child = spawn(process.execPath, ["--input-type=module", "--eval", source], {
-				cwd: path.join(REPO_ROOT, "app"),
-				env: { ...process.env, ORPHAN_PROBE_DB_URL: dbUrl },
-				stdio: ["ignore", "pipe", "pipe", "ipc"],
-			});
+			child = spawn(
+				process.execPath,
+				["--input-type=module", "--eval", source],
+				{
+					cwd: path.join(REPO_ROOT, "app"),
+					env: { ...process.env, ORPHAN_PROBE_DB_URL: dbUrl },
+					stdio: ["ignore", "pipe", "pipe", "ipc"],
+				},
+			);
 			const childProcess = child;
 			let diagnostics = "";
 			child.stderr?.on("data", (data: Buffer) => {
@@ -717,8 +1070,8 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			await confirmNativeSleep(childPid);
 			expect(await resultMessage).toMatchObject({
 				busy: true,
-				retired: 1,
-				recreated: 1,
+				retired: 0,
+				recreated: 0,
 				admissions: 0,
 				mutations: 0,
 			});
@@ -726,13 +1079,15 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			clearTimeout(childDeadline);
 			expect(admissions).toBe(0);
 			expect(mutationQueries).toBe(0);
-			expect(new Set(producerPids).size).toBe(5);
+			expect(new Set(producerPids).size).toBe(2);
 			const remaining = await census();
 			snapshots.push({ phase: "after-child-exit", rows: remaining });
 			console.info(
 				"native orphan writer budget",
 				JSON.stringify({ nativeWriterBudget, producerPids, snapshots }),
 			);
+			// Preserve the cross-process gate: an in-process fix alone cannot
+			// certify the one-writer bound across a restarted producer.
 			// Reject a timing-induced false pass: no sleep may have finished
 			// naturally before the native resource bound is measured.
 			expect(Date.now() - firstSleepStartedAt).toBeLessThan(
@@ -752,7 +1107,10 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			// Finite owned work only: let the last sleep finish before closing
 			// the auditor; suite teardown then destroys the disposable engine.
 			await pause(
-				Math.max(0, lastSleepStartedAt + sleepSeconds * 1_000 + 250 - Date.now()),
+				Math.max(
+					0,
+					lastSleepStartedAt + sleepSeconds * 1_000 + 250 - Date.now(),
+				),
 			);
 			await observer.end({ timeout: 0 });
 		}

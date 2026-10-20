@@ -3,9 +3,11 @@
 
 /** Doltgres runtime authority for deployed work items. */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import {
   acquireDoltWriterLocks,
+  reconcileAbandonedDoltOperation,
   DoltWriterAdmissionError,
   type DoltWriterLock,
 } from "@cogni-dao/doltgres-admission";
@@ -28,6 +30,7 @@ import {
   WorkItemDeletionRetiredError,
   WorkItemWriteOutcomeUnknownError,
   WorkItemsBusyError,
+  WorkItemsCapacityError,
 } from "../../errors.js";
 export {
   WorkItemLeaseConflictError,
@@ -148,6 +151,20 @@ interface OperationContext {
   readonly operationId: string;
   readonly operation: string;
   branch?: string;
+  abandoned?: Error;
+  rejectCaller?: (error: Error) => void;
+  nativeUnknown?: boolean;
+  mutationState?: PendingBranchState<unknown>;
+  admitting?: boolean;
+  laneMutated?: boolean;
+  acknowledged?: boolean;
+  acknowledge?: (value: unknown) => void;
+}
+
+interface ReadWaiter {
+  readonly deadline: number;
+  start(): void;
+  reject(error: Error): void;
 }
 
 interface WorkItemConnection {
@@ -188,6 +205,8 @@ interface MutationOptions<T> {
 interface PendingBranchState<T> {
   readonly operationId: string;
   commitAttempted?: boolean;
+  creationProven?: boolean;
+  mergeAttempted?: boolean;
   outcomeSafelyAbsent?: boolean;
   readonly branch: string;
   readonly baseHash: string;
@@ -914,11 +933,19 @@ function isConnectionTerminal(error: unknown): boolean {
   );
 }
 
+function isServerSqlError(error: unknown): boolean {
+  return error instanceof Error && error.name === "PostgresError";
+}
+
 export class DoltgresWorkItemAdapter
   implements WorkItemsContentPort, WorkItemQueryPort
 {
   private operationTail: Promise<void> = Promise.resolve();
+  private queuedOperations = 0;
+  private readonly queueWaiters = new Set<() => void>();
+  private readonly cleanupScope = new AsyncLocalStorage<OperationContext>();
   private poisoned = false;
+  private heldWriter: OperationContext | undefined;
   private readonly logger: WorkItemLogger;
   private readonly idFloor: number;
   private readonly lockWaitMs: number;
@@ -942,6 +969,9 @@ export class DoltgresWorkItemAdapter
   private readonly retiredReadPools = new WeakSet<object>();
   private readonly drainingReadPools = new WeakMap<object, Promise<void>>();
   private readonly readConnectionBudget: number | undefined;
+  private readonly readPending = new Map<Sql, number>();
+  private readonly readWaiters = new Map<Sql, ReadWaiter[]>();
+  private readonly unknownReadPools = new WeakSet<object>();
 
   constructor(
     private sql: Sql,
@@ -1006,6 +1036,11 @@ export class DoltgresWorkItemAdapter
     stage: string,
     reason: string
   ): Promise<void> {
+    if (context.abandoned || context.nativeUnknown) {
+      this.poisoned = true;
+      this.heldWriter = context;
+      return;
+    }
     const activeTermination = this.terminatingPools.get(pool as object);
     if (activeTermination) return activeTermination;
 
@@ -1050,9 +1085,27 @@ export class DoltgresWorkItemAdapter
     context: OperationContext,
     query: string
   ): Promise<ReadonlyArray<Record<string, unknown>>> {
+    const unlock = /^SELECT pg_advisory_unlock\(/.test(query);
+    const cleanup = this.cleanupScope.getStore() === context;
+    if (context.nativeUnknown)
+      throw context.abandoned ?? new WorkItemsCapacityError("unknown");
+    if (context.abandoned && !cleanup && !unlock) {
+      if (context.admitting && !context.nativeUnknown)
+        throw new DoltWriterAdmissionError("lock_contended", false, {
+          cause: context.abandoned,
+        });
+      throw context.abandoned;
+    }
+    if (
+      /^\s*(?:INSERT|UPDATE|DELETE)|dolt_(?:checkout|commit|merge|branch|reset|add)\(/i.test(
+        query
+      )
+    )
+      context.laneMutated = true;
     const stage = queryStage(query);
     const startedAt = Date.now();
     let timedOut = false;
+    let nativeReturned = false;
     const branch = /'(work-item-op\/[^']+)'/.exec(query)?.[1] ?? context.branch;
     const queryFields = branch ? { branch } : {};
     this.logStage("info", context, stage, "start", queryFields);
@@ -1062,15 +1115,25 @@ export class DoltgresWorkItemAdapter
       : this.queryTimeoutMs;
     const timeoutTimer = setTimeout(() => {
       timedOut = true;
-      void this.terminateClient(pool, context, stage, "query_timeout");
+      this.abandonOperation(context, stage);
     }, budgetMs);
     try {
       const rows = (await pending) as ReadonlyArray<Record<string, unknown>>;
-      if (timedOut) {
-        await this.terminateClient(pool, context, stage, "query_timeout");
-        throw new WorkItemsBusyError(
-          `Work-item store timed out during ${stage}; retry shortly`
-        );
+      nativeReturned = true;
+      if (
+        stage === "branch.create" &&
+        context.mutationState &&
+        query.includes(escapeValue(context.mutationState.branch))
+      ) {
+        try {
+          assertDoltStatus(rows, "dolt_checkout");
+          context.mutationState.creationProven = true;
+        } catch {
+          /* failed creation never grants cleanup ownership */
+        }
+      }
+      if (timedOut && !context.admitting && !unlock && !cleanup) {
+        throw context.abandoned;
       }
       this.logStage("info", context, stage, "complete", {
         ...queryFields,
@@ -1078,28 +1141,50 @@ export class DoltgresWorkItemAdapter
       });
       return rows;
     } catch (error) {
+      if (!nativeReturned && !isServerSqlError(error)) {
+        context.nativeUnknown = true;
+        this.poisoned = true;
+        this.abandonOperation(context, stage);
+      }
       this.logStage("error", context, stage, "error", {
         ...queryFields,
         durationMs: Date.now() - startedAt,
         timedOut,
         ...errorFields(error),
       });
-      if (timedOut) {
-        await this.terminateClient(pool, context, stage, "query_timeout");
-        throw new WorkItemsBusyError(
-          `Work-item store timed out during ${stage}; retry shortly`
-        );
+      if (timedOut && !cleanup) {
+        throw context.abandoned;
       }
       if (isConnectionTerminal(error)) {
-        await this.terminateClient(pool, context, stage, "connection_terminal");
-        throw new WorkItemsBusyError(
-          `Work-item store connection ended during ${stage}; retry shortly`
-        );
+        context.nativeUnknown = true;
+        this.poisoned = true;
+        this.abandonOperation(context, stage);
+        throw context.abandoned;
       }
       throw error;
     } finally {
       clearTimeout(timeoutTimer);
     }
+  }
+
+  private abandonOperation(context: OperationContext, stage: string): void {
+    if (context.abandoned) return;
+    context.abandoned = context.branch
+      ? new WorkItemWriteOutcomeUnknownError(
+          context.operationId,
+          context.branch,
+          context.mutationState?.branchCommit,
+          context.mutationState?.proof.itemId
+        )
+      : new WorkItemsCapacityError(
+          context.nativeUnknown ? "unknown" : "pending"
+        );
+    this.heldWriter = context;
+    for (const reject of this.queueWaiters) reject();
+    this.logStage("warn", context, stage, "error", {
+      reason: "caller_abandoned_native_retained",
+    });
+    context.rejectCaller?.(context.abandoned);
   }
 
   private instrumentConnection(
@@ -1117,6 +1202,9 @@ export class DoltgresWorkItemAdapter
   private async enterOperationQueue(
     context: OperationContext
   ): Promise<() => void> {
+    if (this.queuedOperations >= 32)
+      throw new WorkItemsCapacityError("pending");
+    this.queuedOperations++;
     const predecessor = this.operationTail;
     let releaseTurn: () => void = () => undefined;
     const turnDone = new Promise<void>((resolve) => {
@@ -1127,9 +1215,15 @@ export class DoltgresWorkItemAdapter
     const startedAt = Date.now();
     this.logStage("info", context, "operation.queue", "start");
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let rejectCapacity: () => void = () => undefined;
+    const heldCapacity = new Promise<never>((_resolve, reject) => {
+      rejectCapacity = () => reject(new WorkItemsCapacityError("pending"));
+    });
+    this.queueWaiters.add(rejectCapacity);
     try {
       await Promise.race([
         predecessor,
+        heldCapacity,
         new Promise<never>((_resolve, reject) => {
           timeoutId = setTimeout(
             () =>
@@ -1153,6 +1247,8 @@ export class DoltgresWorkItemAdapter
       throw error;
     } finally {
       if (timeoutId) clearTimeout(timeoutId);
+      this.queuedOperations--;
+      this.queueWaiters.delete(rejectCapacity);
     }
 
     this.logStage("info", context, "operation.queue", "complete", {
@@ -1179,6 +1275,7 @@ export class DoltgresWorkItemAdapter
     const operationPool = this.sql;
     const reserveStartedAt = Date.now();
     let rawConn: ReservedSql | undefined;
+    let connection: WorkItemConnection | undefined;
     let writerLock: DoltWriterLock | undefined;
     let reserveTimedOut = false;
     let reserveTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1196,12 +1293,7 @@ export class DoltgresWorkItemAdapter
       this.logStage("info", context, "connection.reserve", "start");
       reserveTimer = setTimeout(() => {
         reserveTimedOut = true;
-        void this.terminateClient(
-          operationPool,
-          context,
-          "connection.reserve",
-          "reserve_timeout"
-        );
+        this.abandonOperation(context, "connection.reserve");
       }, this.reserveTimeoutMs);
       try {
         rawConn = await operationPool.reserve();
@@ -1214,29 +1306,30 @@ export class DoltgresWorkItemAdapter
         throw error;
       }
       if (reserveTimedOut) {
-        await this.terminateClient(
-          operationPool,
-          context,
-          "connection.reserve",
-          "reserve_completed_after_timeout"
-        );
-        throw new WorkItemsBusyError(
-          "Work-item store timed out reserving a connection; retry shortly"
-        );
+        rawConn.release();
+        rawConn = undefined;
+        throw context.abandoned;
       }
       if (reserveTimer) clearTimeout(reserveTimer);
       this.logStage("info", context, "connection.reserve", "complete", {
         durationMs: Date.now() - reserveStartedAt,
       });
       const conn = this.instrumentConnection(operationPool, rawConn, context);
+      connection = conn;
       this.logStage("info", context, "lock.acquire", "start", {
         protocol: this.writerLockProtocol,
       });
-      writerLock = await acquireDoltWriterLocks(conn, {
-        protocol: this.writerLockProtocol,
-        lockWaitMs: this.lockWaitMs,
-        lockRetryMs: this.lockRetryMs,
-      });
+      context.admitting = true;
+      try {
+        writerLock = await acquireDoltWriterLocks(conn, {
+          protocol: this.writerLockProtocol,
+          lockWaitMs: this.lockWaitMs,
+          lockRetryMs: this.lockRetryMs,
+        });
+      } finally {
+        context.admitting = false;
+      }
+      if (context.abandoned) throw context.abandoned;
       this.logStage("info", context, "lock.acquire", "complete", {
         protocol: writerLock.protocol,
         baseDatabase: writerLock.baseDatabase,
@@ -1267,11 +1360,52 @@ export class DoltgresWorkItemAdapter
       throw error;
     } finally {
       if (reserveTimer) clearTimeout(reserveTimer);
-      // A branch operation with an uncertain acknowledgement is handed to a
-      // second, fresh lock scope only after this session is definitively dead.
-      // This releases the session-scoped advisory lock and abandons any dirty
-      // working set without asking the failed connection to reconcile itself.
-      if (pendingRecovery && rawConn) {
+      let reconciled = false;
+      if (
+        context.abandoned &&
+        context.laneMutated &&
+        !context.nativeUnknown &&
+        writerLock &&
+        connection
+      ) {
+        const state = context.mutationState;
+        const ownedConnection = connection;
+        const ownedGuard = writerLock;
+        try {
+          reconciled = await this.cleanupScope.run(context, () =>
+            reconcileAbandonedDoltOperation(ownedConnection, {
+              guard: ownedGuard,
+              ...(context.branch ? { branch: context.branch } : {}),
+              ...(state?.baseHash ? { baseHash: state.baseHash } : {}),
+              creationProven: state?.creationProven === true,
+              commitAttempted: state?.commitAttempted === true,
+              mergeAttempted: state?.mergeAttempted === true,
+            })
+          );
+        } catch (error) {
+          this.logStage(
+            "error",
+            context,
+            "abandoned.reconcile",
+            "error",
+            errorFields(error)
+          );
+        }
+      }
+      // Every native await above settled before entering finally. A branch or
+      // unknown lock acknowledgement needs inspection; never resume/replay it.
+      if (
+        context.abandoned &&
+        !reconciled &&
+        (context.laneMutated || context.nativeUnknown)
+      ) {
+        this.poisoned = true;
+        this.heldWriter = context;
+      }
+      // Fresh recovery is permitted only after authoritative native settlement.
+      // Caller abandonment and transport uncertainty bypass this path entirely:
+      // closing a client is not evidence that its native work or locks stopped.
+      if (pendingRecovery && rawConn && !context.abandoned) {
         await this.terminateClient(
           operationPool,
           context,
@@ -1312,15 +1446,33 @@ export class DoltgresWorkItemAdapter
     operation: string,
     fn: (context: OperationContext) => Promise<T>
   ): Promise<T> {
-    const context = { operationId: randomUUID(), operation };
+    if (this.heldWriter || this.poisoned)
+      throw new WorkItemsCapacityError(this.poisoned ? "unknown" : "pending");
+    const context: OperationContext = { operationId: randomUUID(), operation };
     const leaveQueue = await this.enterOperationQueue(context);
-    try {
-      return await fn(context);
-    } finally {
-      // The FIFO ticket spans the original lock scope and any fresh-session
-      // recovery so an in-process successor cannot overtake reconciliation.
-      leaveQueue();
-    }
+    const caller = new Promise<T>((resolve, reject) => {
+      context.rejectCaller = reject;
+      context.acknowledge = (value) => {
+        if (context.abandoned) return;
+        context.acknowledged = true;
+        resolve(value as T);
+      };
+    });
+    const execution = (async () => {
+      try {
+        if (this.heldWriter || this.poisoned)
+          throw new WorkItemsCapacityError(
+            this.poisoned ? "unknown" : "pending"
+          );
+        return await fn(context);
+      } finally {
+        // Caller deadline does not release the actual execution's FIFO ticket.
+        if (!this.poisoned && this.heldWriter === context)
+          this.heldWriter = undefined;
+        leaveQueue();
+      }
+    })();
+    return Promise.race([execution, caller]);
   }
 
   private logReconciliation(
@@ -1755,6 +1907,8 @@ export class DoltgresWorkItemAdapter
           throw this.preservedBranchError(branch, error);
         }
       }
+      if (pending?.result !== undefined)
+        conn.context.acknowledge?.(pending.result);
       const cleaned = row
         ? await this.cleanupVerifiedBranch(conn, transition, startedAt)
         : true;
@@ -1809,6 +1963,8 @@ export class DoltgresWorkItemAdapter
       });
       throw this.preservedBranchError(branch, error);
     }
+    if (pending?.result !== undefined)
+      conn.context.acknowledge?.(pending.result);
     const cleaned = await this.cleanupVerifiedBranch(
       conn,
       transition,
@@ -1975,6 +2131,7 @@ export class DoltgresWorkItemAdapter
           );
         });
       } catch (error) {
+        if (context.abandoned) throw context.abandoned;
         if (!(error instanceof PendingBranchRecoveryError)) throw error;
         try {
           const resolved = await this.withGlobalLock(
@@ -2017,16 +2174,17 @@ export class DoltgresWorkItemAdapter
   ): Promise<T> {
     const startedAt = Date.now();
     const branch = `${OP_BRANCH_PREFIX}${randomUUID()}`;
-    conn.context.branch = branch;
     const baseRows = await conn.unsafe(
       "SELECT dolt_hashof('main') AS dolt_hashof"
     );
+    conn.context.branch = branch;
     const state: PendingBranchState<T> = {
       operationId: conn.context.operationId,
       branch,
       baseHash: doltScalar(baseRows, "dolt_hashof"),
       proof,
     };
+    conn.context.mutationState = state as PendingBranchState<unknown>;
     // Arm recovery before branch-create: the ref can be durable even when the
     // checkout acknowledgement is lost (bug.5358 Rev3).
     try {
@@ -2058,6 +2216,7 @@ export class DoltgresWorkItemAdapter
         branchCommit,
         state as PendingBranchState<unknown>
       );
+      state.mergeAttempted = true;
       requireNamedMerge(
         await conn.unsafe(
           `SELECT hash, fast_forward, conflicts, message FROM dolt_merge(${escapeValue(branch)})`
@@ -2067,6 +2226,7 @@ export class DoltgresWorkItemAdapter
       // A merge acknowledgement alone is not success. Reachability and the
       // exact current row are proven while serialization is still held.
       await this.proveFreshMergeOutcome(conn, transition);
+      conn.context.acknowledge?.(result);
       await this.cleanupVerifiedBranch(conn, transition, startedAt);
       return result;
     } catch (error) {
@@ -2191,16 +2351,30 @@ export class DoltgresWorkItemAdapter
   private retireReadPool(
     pool: Sql,
     context: OperationContext,
-    stage: string,
-    graceMs = this.queryTimeoutMs
+    stage: string
   ): void {
     if (this.readClient === pool) this.readClient = undefined;
-    if (this.drainingReadPools.has(pool as object)) return;
     this.retiredReadPools.add(pool as object);
+    const waiters = this.readWaiters.get(pool) ?? [];
+    this.readWaiters.delete(pool);
+    for (const waiter of waiters)
+      waiter.reject(
+        new WorkItemsCapacityError(
+          this.unknownReadPools.has(pool as object) ? "unknown" : "pending"
+        )
+      );
+    if (
+      this.drainingReadPools.has(pool as object) ||
+      (this.readPending.get(pool) ?? 0) > 0 ||
+      this.unknownReadPools.has(pool as object)
+    )
+      return;
     const draining = Promise.resolve()
-      .then(() => pool.end({ timeout: graceMs / 1000 }))
+      // All native results arrived. Closing idle sockets cannot abandon SQL.
+      .then(() => pool.end({ timeout: 0 }))
       .then(() => {
         this.readPools.delete(pool);
+        this.readPending.delete(pool);
         this.logStage("info", context, "read_pool.drain", "complete", {
           failedStage: stage,
         });
@@ -2215,6 +2389,87 @@ export class DoltgresWorkItemAdapter
     this.drainingReadPools.set(pool as object, draining);
   }
 
+  private readWidth(pool: Sql): number {
+    const width = pool.options?.max;
+    return typeof width === "number" && Number.isInteger(width) && width > 0
+      ? width
+      : 1;
+  }
+
+  private async enterReaderQueue(pool: Sql, deadline: number): Promise<void> {
+    if (this.retiredReadPools.has(pool as object))
+      throw new WorkItemsCapacityError("pending");
+    if ((this.readPending.get(pool) ?? 0) < this.readWidth(pool)) {
+      this.readPending.set(pool, (this.readPending.get(pool) ?? 0) + 1);
+      return;
+    }
+    const waiters = this.readWaiters.get(pool) ?? [];
+    if (waiters.length >= 32) throw new WorkItemsCapacityError("pending");
+    this.readWaiters.set(pool, waiters);
+    return new Promise<void>((resolve, reject) => {
+      let timer: ReturnType<typeof setTimeout>;
+      const waiter: ReadWaiter = {
+        deadline,
+        start: () => {
+          clearTimeout(timer);
+          this.readPending.set(pool, (this.readPending.get(pool) ?? 0) + 1);
+          resolve();
+        },
+        reject: (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      };
+      waiters.push(waiter);
+      timer = setTimeout(
+        () => {
+          const index = waiters.indexOf(waiter);
+          if (index >= 0) waiters.splice(index, 1);
+          waiter.reject(
+            new WorkItemsBusyError(
+              "Work-item read deadline elapsed before native dispatch"
+            )
+          );
+        },
+        Math.max(1, deadline - Date.now())
+      );
+    });
+  }
+
+  private releaseReaderPermit(
+    pool: Sql,
+    context: OperationContext,
+    stage: string
+  ): void {
+    this.readPending.set(
+      pool,
+      Math.max(0, (this.readPending.get(pool) ?? 1) - 1)
+    );
+    if (
+      this.retiredReadPools.has(pool as object) ||
+      this.unknownReadPools.has(pool as object)
+    ) {
+      this.retireReadPool(pool, context, stage);
+      return;
+    }
+    const waiters = this.readWaiters.get(pool) ?? [];
+    while (
+      waiters.length &&
+      (this.readPending.get(pool) ?? 0) < this.readWidth(pool)
+    ) {
+      const waiter = waiters.shift();
+      if (!waiter) break;
+      if (Date.now() >= waiter.deadline)
+        waiter.reject(
+          new WorkItemsBusyError(
+            "Work-item read deadline elapsed before native dispatch"
+          )
+        );
+      else waiter.start();
+    }
+    if (!waiters.length) this.readWaiters.delete(pool);
+  }
+
   private async executeReadQuery(
     pool: Sql,
     context: OperationContext,
@@ -2222,12 +2477,33 @@ export class DoltgresWorkItemAdapter
   ): Promise<ReadonlyArray<Record<string, unknown>>> {
     const stage = queryStage(query);
     const startedAt = Date.now();
+    const deadline = startedAt + this.queryTimeoutMs;
     this.logStage("info", context, stage, "start");
     let timer: ReturnType<typeof setTimeout> | undefined;
     let expired = false;
+    await this.enterReaderQueue(pool, deadline);
+    let nativeStarted = false;
+    const native = Promise.resolve().then(() => {
+      if (Date.now() >= deadline || this.retiredReadPools.has(pool as object))
+        throw new WorkItemsCapacityError("pending");
+      nativeStarted = true;
+      return pool.unsafe(query);
+    });
+    const settled = native
+      .then(
+        (rows) => rows,
+        (error: unknown) => {
+          if (nativeStarted && !isServerSqlError(error))
+            this.unknownReadPools.add(pool as object);
+          throw error;
+        }
+      )
+      .finally(() => {
+        this.releaseReaderPermit(pool, context, stage);
+      });
     try {
       return await Promise.race([
-        Promise.resolve(pool.unsafe(query)).then((rows) => {
+        settled.then((rows) => {
           if (!expired)
             this.logStage("info", context, stage, "complete", {
               durationMs: Date.now() - startedAt,
@@ -2235,19 +2511,22 @@ export class DoltgresWorkItemAdapter
           return rows as ReadonlyArray<Record<string, unknown>>;
         }),
         new Promise<never>((_, reject) => {
-          timer = setTimeout(() => {
-            expired = true;
-            this.retireReadPool(pool, context, stage);
-            reject(
-              new WorkItemsBusyError(
-                `Work-item read timed out during ${stage}; retry shortly`
-              )
-            );
-          }, this.queryTimeoutMs);
+          timer = setTimeout(
+            () => {
+              expired = true;
+              this.retireReadPool(pool, context, stage);
+              reject(
+                new WorkItemsBusyError(
+                  `Work-item read timed out during ${stage}; retry shortly`
+                )
+              );
+            },
+            Math.max(1, deadline - Date.now())
+          );
         }),
       ]);
     } catch (error) {
-      if (isConnectionTerminal(error))
+      if (this.unknownReadPools.has(pool as object))
         this.retireReadPool(pool, context, stage);
       this.logStage("error", context, stage, "error", {
         ...errorFields(error),
@@ -2266,8 +2545,12 @@ export class DoltgresWorkItemAdapter
   private resolveReadPool(): Sql {
     if (this.readClient) return this.readClient;
     if (this.readPools.size >= 2)
-      throw new WorkItemsBusyError(
-        "Work-item reader generations are draining; retry shortly"
+      throw new WorkItemsCapacityError(
+        [...this.readPools].some((pool) =>
+          this.unknownReadPools.has(pool as object)
+        )
+          ? "unknown"
+          : "pending"
       );
     if (!this.recreateReadClient) {
       throw new WorkItemsBusyError(
@@ -2291,8 +2574,7 @@ export class DoltgresWorkItemAdapter
         this.retireReadPool(
           candidate,
           { operationId: randomUUID(), operation: "configure reader" },
-          "reader.configuration",
-          0
+          "reader.configuration"
         );
       }
       this.logger.warn(
