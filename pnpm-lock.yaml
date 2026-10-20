@@ -13,6 +13,10 @@ overrides:
 importers:
 
   .:
+    dependencies:
+      '@cogni-dao/doltgres-admission':
+        specifier: workspace:*
+        version: link:packages/doltgres-admission
     devDependencies:
       '@playwright/test':
         specifier: ^1.56.1

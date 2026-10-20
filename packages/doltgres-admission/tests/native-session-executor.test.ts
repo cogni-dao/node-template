@@ -20,6 +20,9 @@ function engine(
   overrides: {
     lostMergeAck?: boolean;
     cleanupFails?: boolean;
+    cleanupWait?: Promise<void>;
+    callbackWait?: Promise<void>;
+    unlockError?: Error;
     callbackSqlFails?: boolean;
     existing?: boolean;
     malformedMerge?: boolean;
@@ -40,8 +43,10 @@ function engine(
         return [{ dolt_writer_database: "knowledge_operator" }];
       if (query.includes("pg_try_advisory_lock"))
         return [{ pg_try_advisory_lock: true }];
-      if (query.includes("pg_advisory_unlock"))
+      if (query.includes("pg_advisory_unlock")) {
+        if (overrides.unlockError) throw overrides.unlockError;
         return [{ pg_advisory_unlock: true }];
+      }
       if (query.startsWith("SELECT name FROM dolt.branches"))
         return overrides.existing ? [{ name: "retained" }] : [];
       if (query === "SELECT dolt_checkout('main')") {
@@ -65,6 +70,7 @@ function engine(
         return dirty ? [{ table_name: "knowledge" }] : [];
       if (query === "INSERT domain row") {
         dirty = true;
+        if (overrides.callbackWait) await overrides.callbackWait;
         if (overrides.callbackSqlFails) throw new Error("connection lost");
         return [];
       }
@@ -98,6 +104,7 @@ function engine(
       if (query.startsWith("SELECT dolt_merge_base"))
         return [{ merge_base: HASH }];
       if (query.startsWith("SELECT dolt_branch('-D'")) {
+        if (overrides.cleanupWait) await overrides.cleanupWait;
         if (overrides.cleanupFails) throw new Error("cleanup failed");
         return [{ dolt_branch: 0 }];
       }
@@ -127,11 +134,11 @@ function engine(
 
 const errors = {
   busy: (message: string) => new Error(message),
-  outcomeUnknown: (id: string) => new Error(`Uncertain ${id}`),
+  outcomeUnknown: vi.fn((id: string, branch: string, commitHash?: string) => Object.assign(new Error(`Uncertain ${id}`), { operationId: id, branch, commitHash })),
   fault: (message: string) => new Error(message),
 };
-function session() {
-  const f = engine();
+function session(overrides: Parameters<typeof engine>[0] = {}, queryTimeoutMs = 30_000) {
+  const f = engine(overrides);
   const release = vi.fn();
   const pool = {
     unsafe: async () => [],
@@ -140,7 +147,7 @@ function session() {
   return {
     ...f,
     release,
-    executor: new DoltNativeSessionExecutor(pool, { errors }),
+    executor: new DoltNativeSessionExecutor(pool, { errors, queryTimeoutMs }),
   };
 }
 
@@ -174,6 +181,67 @@ describe("native executor module identity", () => {
     expect(
       f.queries.some((query) => query.startsWith("SELECT dolt_branch('-D'"))
     ).toBe(true);
+  });
+
+  it.each([false, true])("awaitSettlement=%s preserves the requested ACK boundary", async (awaitSettlement) => {
+    let allowCleanup!: () => void;
+    const cleanupWait = new Promise<void>((resolve) => { allowCleanup = resolve; });
+    const f = session({ cleanupWait });
+    const settled = vi.fn();
+    const result = f.executor.run("settlement.gated", async (connection, guard, owner) => {
+      const written = await runDoltBranchMutation(connection, {
+        guard, operationId: "settlement.gated", message: "gated private cleanup",
+        onSessionUncertain: (error) => f.executor.retire(connection, error),
+        onReconcile: owner.registerReconciliation, onCommitted: owner.committed,
+        run: async (sql) => { await sql.unsafe("INSERT domain row"); return "committed"; },
+      });
+      return written.value;
+    }, { operationId: "settlement.gated", awaitSettlement });
+    void result.then(settled);
+    await expect.poll(() => f.queries.some((query) => query.startsWith("SELECT dolt_branch('-D'"))).toBe(true);
+    expect(settled.mock.calls.length).toBe(awaitSettlement ? 0 : 1);
+    expect(f.release).not.toHaveBeenCalled();
+    allowCleanup();
+    expect(await result).toBe("committed");
+    await expect.poll(() => f.release.mock.calls.length).toBe(1);
+    expect(f.queries.filter((query) => query === "INSERT domain row")).toHaveLength(1);
+  });
+
+  it.each(["cleanup transport", "unlock SQL"])("CLI settlement rejects quarantined %s with stable identity", async (stage) => {
+    const unlockError = Object.assign(new Error("unlock refused"), { name: "PostgresError" });
+    const f = session(stage === "cleanup transport" ? { cleanupFails: true } : { unlockError });
+    await expect(f.executor.run("settlement.failed", async (connection, guard, owner) => {
+      const result = await runDoltBranchMutation(connection, {
+        guard, operationId: "settlement.failed", message: "private cleanup failure",
+        onSessionUncertain: (error) => f.executor.retire(connection, error),
+        onReconcile: owner.registerReconciliation, onCommitted: owner.committed,
+        run: async (sql) => { await sql.unsafe("INSERT domain row"); return "committed"; },
+      });
+      return result.value;
+    }, { operationId: "settlement.failed", awaitSettlement: true })).rejects.toThrow("Uncertain settlement.failed");
+    expect(errors.outcomeUnknown).toHaveBeenLastCalledWith("settlement.failed", expect.stringMatching(/^dolt-op\/[a-f0-9]{64}$/), HASH);
+    expect(f.release).not.toHaveBeenCalled();
+    expect(f.queries.filter((query) => query === "INSERT domain row")).toHaveLength(1);
+  });
+
+  it("a precommit deadline never attributes historical MAIN HEAD to the operation", async () => {
+    let settle!: () => void;
+    const callbackWait = new Promise<void>((resolve) => { settle = resolve; });
+    const f = session({ callbackWait }, 10);
+    try {
+      await expect(f.executor.run("precommit.deadline", async (connection, guard, owner) => {
+        const result = await runDoltBranchMutation(connection, {
+          guard, operationId: "precommit.deadline", message: "precommit identity",
+          onSessionUncertain: (error) => f.executor.retire(connection, error),
+          onReconcile: owner.registerReconciliation, onCommitted: owner.committed,
+          run: async (sql) => { await sql.unsafe("INSERT domain row"); return "committed"; },
+        });
+        return result.value;
+      }, { operationId: "precommit.deadline", awaitSettlement: true })).rejects.toThrow("Uncertain precommit.deadline");
+      expect(errors.outcomeUnknown).toHaveBeenLastCalledWith("precommit.deadline", expect.stringMatching(/^dolt-op\/[a-f0-9]{64}$/), undefined);
+      expect(f.release).not.toHaveBeenCalled();
+    } finally { settle(); }
+    await expect.poll(() => f.release.mock.calls.length).toBe(1);
   });
 
   it("rejects a guard from a physically separate complete helper module graph before DML", async () => {

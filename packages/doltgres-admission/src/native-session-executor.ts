@@ -213,7 +213,11 @@ export class DoltNativeSessionExecutor<TPool extends DoltNativeWriterPool> {
         ): void;
       }
     ) => Promise<T>,
-    options: { readonly operationId?: string } = {}
+    options: {
+      readonly operationId?: string;
+      /** Runtime init requires private cleanup/unlock proof before acknowledging success. */
+      readonly awaitSettlement?: boolean;
+    } = {}
   ): Promise<T> {
     if (this.heldOperation || this.retiredPools.has(this.sql))
       throw this.errors.busy(
@@ -238,7 +242,10 @@ export class DoltNativeSessionExecutor<TPool extends DoltNativeWriterPool> {
       try {
         if (this.heldOperation || this.retiredPools.has(this.sql))
           throw this.errors.busy("Dolt native writer capacity is retained");
-        return await this.withSession(operation, fn, context, succeed);
+        const value = await this.withSession(operation, fn, context, succeed);
+        if (options.awaitSettlement && (context.transportUnknown || this.retiredPools.has(this.sql)))
+          throw this.errors.outcomeUnknown(context.operationId, context.branch, context.commitHash);
+        return value;
       } finally {
         if (
           !context.transportUnknown &&
@@ -249,7 +256,9 @@ export class DoltNativeSessionExecutor<TPool extends DoltNativeWriterPool> {
         leaveQueue();
       }
     })();
-    return Promise.race([execution, abandoned, completed]);
+    return options.awaitSettlement
+      ? Promise.race([execution, abandoned])
+      : Promise.race([execution, abandoned, completed]);
   }
 
   private abandon(context: NativeOperation): void {
@@ -500,9 +509,12 @@ export class DoltNativeSessionExecutor<TPool extends DoltNativeWriterPool> {
             this.queryTimeoutMs,
             context.admitting || unlock || cleanup
           );
-          if (/dolt_commit\(|dolt_hashof\(/i.test(query)) {
-            const hash = rows[0]?.dolt_commit ?? rows[0]?.commit_hash;
-            if (typeof hash === "string") context.commitHash = hash;
+          if (/dolt_commit\(/i.test(query)) {
+            // A base HEAD lookup is historical evidence, never this operation's commit.
+            const value = rows[0]?.dolt_commit;
+            const hash = Array.isArray(value) ? value[0] : value;
+            if (typeof hash === "string" && /^[a-z0-9]{32,64}$/i.test(hash))
+              context.commitHash = hash;
           }
           return rows;
         },
