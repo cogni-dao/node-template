@@ -2227,6 +2227,25 @@ if (role === 'original') {
 		}
 	});
 	it("knowledge and work-item writers share one database scope throughout a logical write", async () => {
+		// Load the actual shipped JS bundles rather than Vitest workspace aliases.
+		// Each public package embeds its own helper realm; the native DB mutex must still coordinate them.
+		const { DoltBranchSessionRunner, DoltgresKnowledgeStoreAdapter } =
+			(await import(
+				/* @vite-ignore */ pathToFileURL(
+					path.join(
+						REPO_ROOT,
+						"packages/knowledge-store/dist/adapters/doltgres/index.js",
+					),
+				).href
+			)) as typeof import("@cogni/knowledge-store/adapters/doltgres");
+		const { DoltgresWorkItemAdapter, WorkItemsBusyError } = (await import(
+			/* @vite-ignore */ pathToFileURL(
+				path.join(
+					REPO_ROOT,
+					"packages/work-items/dist/adapters/doltgres/index.js",
+				),
+			).href
+		)) as typeof import("@cogni/work-items/adapters/doltgres");
 		const knowledgeSql = postgres(dbUrl, { max: 1, fetch_types: false });
 		const knowledgeRead = postgres(dbUrl, { max: 1, fetch_types: false });
 		const workSql = postgres(dbUrl, { max: 1, fetch_types: false });
