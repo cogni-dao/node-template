@@ -16,6 +16,7 @@ export {
   runDoltBranchMutation,
   reconcileAbandonedDoltOperation,
   captureDoltPersistedCleanEdit,
+  captureDoltFreshCleanEdit,
   DoltPersistedCleanEditConflictError,
   DoltBranchMutationUncertainError,
 } from "./branch-mutation.js";
@@ -24,4 +25,5 @@ export type {
   DoltBranchMutationResult,
   DoltAbandonedOperationProof,
   DoltPersistedCleanEditReceipt,
+  DoltFreshCleanEditReceipt,
 } from "./branch-mutation.js";

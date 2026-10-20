@@ -87,6 +87,7 @@ const persistedCleanEdits = new WeakMap<
     guard: DoltWriterLock;
     active: boolean;
     targetCleanVerified: boolean;
+    cleanConflictHead?: string;
   }
 >();
 
@@ -162,6 +163,7 @@ export async function captureDoltPersistedCleanEdit(
     guard: options.guard,
     active: true,
     targetCleanVerified: false,
+    cleanConflictHead: "",
   };
   persistedCleanEdits.set(receipt, state);
   options.onCaptured?.(receipt);
@@ -170,14 +172,124 @@ export async function captureDoltPersistedCleanEdit(
     await connection.unsafe("SELECT dolt_hashof('HEAD') AS commit_hash"),
     "commit_hash"
   );
+  const active = await current();
+  const targetClean = await clean();
+  const targetUnmerged = await noMergeOrConflicts(connection);
   if (
-    (await current()) !== options.branch ||
+    active !== options.branch ||
     head !== options.expectedHead ||
+    !targetClean ||
+    !targetUnmerged
+  ) {
+    // No edit capability was granted. A rejected but actually clean target can
+    // be left for MAIN without discarding anything, even when its HEAD moved.
+    // This is never reset authority and must retain that exact observed HEAD.
+    if (
+      active === options.branch &&
+      targetClean &&
+      targetUnmerged &&
+      /^[a-z0-9]{32,64}$/i.test(head)
+    )
+      state.cleanConflictHead = head;
+    throw new DoltPersistedCleanEditConflictError(
+      "target_not_clean_or_head_changed"
+    );
+  }
+  state.targetCleanVerified = true;
+  return receipt;
+}
+
+/** Opaque creation receipt; a native clean-main/absent-target/new-checkout proof owns it. */
+export interface DoltFreshCleanEditReceipt {
+  readonly branch: string;
+  readonly head: string;
+  invalidate(): void;
+}
+const freshCleanEdits = new WeakMap<
+  DoltFreshCleanEditReceipt,
+  {
+    connection: DoltWriterConnection;
+    guard: DoltWriterLock;
+    active: boolean;
+    targetCleanVerified: boolean;
+    cleanConflictHead?: string;
+  }
+>();
+
+/** Create one new branch from actual clean MAIN; never adopt an existing ref. */
+export async function captureDoltFreshCleanEdit(
+  connection: DoltWriterConnection,
+  options: {
+    guard: DoltWriterLock;
+    branch: string;
+    onCaptured?: (receipt: DoltFreshCleanEditReceipt) => void;
+  }
+): Promise<DoltFreshCleanEditReceipt> {
+  assertDoltWriterLock(connection, options.guard);
+  if (
+    !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,511}$/.test(options.branch) ||
+    options.branch === "main" ||
+    options.branch.includes("..")
+  )
+    throw new Error("Fresh branch identity is malformed");
+  const current = async () =>
+    scalar(
+      await connection.unsafe("SELECT active_branch() AS branch_name"),
+      "branch_name"
+    );
+  const clean = async () =>
+    !(await connection.unsafe("SELECT * FROM dolt.status")).length;
+  if (
+    (await current()) !== "main" ||
     !(await clean()) ||
     !(await noMergeOrConflicts(connection))
   )
-    throw new DoltPersistedCleanEditConflictError(
-      "target_not_clean_or_head_changed"
+    throw new Error("Fresh edit requires proven clean main entry");
+  const head = scalar(
+    await connection.unsafe("SELECT dolt_hashof('HEAD') AS commit_hash"),
+    "commit_hash"
+  );
+  if (!/^[a-z0-9]{32,64}$/i.test(head))
+    throw new Error("Fresh edit main HEAD was not proven");
+  if (
+    (
+      await connection.unsafe(
+        `SELECT name FROM dolt.branches WHERE name = ${literal(options.branch)}`
+      )
+    ).length
+  )
+    throw new Error("Fresh edit cannot adopt an existing branch");
+  const receipt: DoltFreshCleanEditReceipt = Object.freeze({
+    branch: options.branch,
+    head,
+    invalidate() {
+      const state = freshCleanEdits.get(receipt);
+      if (state) state.active = false;
+    },
+  });
+  const state = {
+    connection,
+    guard: options.guard,
+    active: true,
+    targetCleanVerified: false,
+    cleanConflictHead: "",
+  };
+  freshCleanEdits.set(receipt, state);
+  options.onCaptured?.(receipt);
+  await connection.unsafe(
+    `SELECT dolt_checkout('-b', ${literal(options.branch)}, 'main')`
+  );
+  if (
+    (await current()) !== options.branch ||
+    scalar(
+      await connection.unsafe("SELECT dolt_hashof('HEAD') AS commit_hash"),
+      "commit_hash"
+    ) !== head ||
+    !(await clean()) ||
+    !(await noMergeOrConflicts(connection))
+  )
+    throw new Error(
+      "Fresh edit new branch entry was not proven clean at its captured HEAD"
     );
   state.targetCleanVerified = true;
   return receipt;
@@ -192,6 +304,7 @@ export interface DoltAbandonedOperationProof {
   readonly commitAttempted: boolean;
   readonly mergeAttempted: boolean;
   readonly persistedCleanEdit?: DoltPersistedCleanEditReceipt;
+  readonly freshCleanEdit?: DoltFreshCleanEditReceipt;
 }
 
 /**
@@ -224,19 +337,22 @@ export async function reconcileAbandonedDoltOperation(
   try {
     const active = await current();
     if (active === "main") return await cleanMain();
-    const receipt = proof.persistedCleanEdit;
-    const entry = receipt && persistedCleanEdits.get(receipt);
-    const persistedEntry = Boolean(
+    if (proof.persistedCleanEdit && proof.freshCleanEdit) return false;
+    const receipt = proof.persistedCleanEdit ?? proof.freshCleanEdit;
+    const entry = proof.persistedCleanEdit
+      ? persistedCleanEdits.get(proof.persistedCleanEdit)
+      : proof.freshCleanEdit
+        ? freshCleanEdits.get(proof.freshCleanEdit)
+        : undefined;
+    const cleanEntry = Boolean(
       entry?.active &&
         entry.connection === connection &&
         entry.guard === proof.guard
     );
-    const expected =
-      proof.branch ?? (persistedEntry ? receipt?.branch : undefined);
-    const baseHash =
-      proof.baseHash ?? (persistedEntry ? receipt?.head : undefined);
+    const expected = proof.branch ?? (cleanEntry ? receipt?.branch : undefined);
+    const baseHash = proof.baseHash ?? (cleanEntry ? receipt?.head : undefined);
     if (
-      (!proof.creationProven && !persistedEntry) ||
+      (!proof.creationProven && !cleanEntry) ||
       !expected ||
       expected === "main" ||
       !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,511}$/.test(expected) ||
@@ -245,8 +361,20 @@ export async function reconcileAbandonedDoltOperation(
       !(await hasNoMergeOrConflicts())
     )
       return false;
+    if (cleanEntry && entry?.cleanConflictHead) {
+      if (
+        entry.targetCleanVerified ||
+        proof.commitAttempted ||
+        proof.mergeAttempted ||
+        (await head()) !== entry.cleanConflictHead ||
+        !(await clean())
+      )
+        return false;
+      await connection.unsafe("SELECT dolt_checkout('main')");
+      return await cleanMain();
+    }
     if (
-      persistedEntry &&
+      cleanEntry &&
       (proof.commitAttempted ||
         proof.mergeAttempted ||
         expected !== receipt?.branch ||
