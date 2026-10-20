@@ -56,6 +56,7 @@ const reviewer: Principal = {
 class FakeReservedSql {
   readonly queries: string[] = [];
   private activeBranch = "main";
+  private metadataDirty = false;
 
   async unsafe(
     query: string
@@ -70,6 +71,26 @@ class FakeReservedSql {
       this.activeBranch = args[0] === "-b" ? args[1]! : args[0]!;
       return [{ dolt_checkout: 0 }];
     }
+    if (query === "SELECT * FROM dolt.status")
+      return this.metadataDirty
+        ? [{ table_name: "knowledge_contributions" }]
+        : [];
+    if (/^(INSERT INTO|UPDATE) knowledge_contribution/.test(query)) {
+      if (!this.activeBranch.startsWith("dolt-op/"))
+        throw new Error("Metadata DML escaped its owned operation branch");
+      this.metadataDirty = true;
+    }
+    if (query.includes("dolt_commit") || query.includes("dolt_reset"))
+      this.metadataDirty = false;
+    if (query.includes("dolt_merge_base")) return [{ merge_base: "next456" }];
+    if (
+      query.startsWith(
+        "SELECT hash, fast_forward, conflicts, message FROM dolt_merge("
+      )
+    )
+      return [
+        { hash: "next456", conflicts: 0, fast_forward: 1, message: "merged" },
+      ];
     if (query.includes("dolt.merge_status")) return [{ is_merging: false }];
     // Admission control takes a session advisory lock before any branch work
     // (bug.5391); a fake that cannot answer it would fail every write as busy.
@@ -164,36 +185,20 @@ class FakeSql {
 // (hash, fast_forward, conflicts, message) record — the real shape a merge of a
 // non-trivial branch produces — parameterized so tests can drive both a clean
 // merge and a conflicted one. Abort returns its own benign record.
-class FakeMergeReservedSql {
-  readonly queries: string[] = [];
-
+class FakeMergeReservedSql extends FakeReservedSql {
   constructor(
     private readonly mergeRow: unknown[],
-    // When set, the branch merge THROWS this raw message (Doltgres @autocommit
-    // rollback behaviour) instead of returning a row — the real prod path.
     private readonly throwOnMerge?: string
-  ) {}
-
-  async unsafe(
+  ) {
+    super();
+  }
+  override async unsafe(
     query: string
   ): Promise<Record<string, unknown>[] & { count?: number }> {
-    this.queries.push(query);
-    if (query.includes("current_database()"))
-      return [{ dolt_writer_database: "knowledge_test" }];
-    if (query.includes("active_branch()")) return [{ branch_name: "main" }];
-    if (query.includes("dolt.merge_status")) return [{ is_merging: false }];
-    // Admission control takes a session advisory lock before any branch work
-    // (bug.5391); a fake that cannot answer it would fail every write as busy.
-    if (query.includes("pg_try_advisory_lock"))
-      return [{ pg_try_advisory_lock: true }];
-    if (query.includes("pg_advisory_unlock"))
-      return [{ pg_advisory_unlock: true }];
-    if (query.includes("dolt_merge('--abort')")) {
-      return [{ dolt_merge: ["", "0", "0", "aborted"] }];
-    }
-    if (query.includes("dolt_merge(")) {
-      // This fixture models Dolt's terminal SQL error response after an
-      // autocommit conflict, not a missing transport acknowledgement.
+    if (query.startsWith("SELECT dolt_merge(")) {
+      this.queries.push(query);
+      if (query.includes("'--abort'"))
+        return [{ dolt_merge: ["", "0", "0", "aborted"] }];
       if (this.throwOnMerge)
         throw Object.assign(new Error(this.throwOnMerge), {
           name: "PostgresError",
@@ -201,20 +206,7 @@ class FakeMergeReservedSql {
         });
       return [{ dolt_merge: this.mergeRow }];
     }
-    if (query.includes("dolt_commit")) {
-      return [{ dolt_commit: ["{next456}"] }];
-    }
-    if (query.includes("UPDATE knowledge_contributions")) {
-      const rows: Record<string, unknown>[] & { count?: number } = [];
-      rows.count = 1;
-      return rows;
-    }
-    if (query.includes("FROM knowledge_contributions")) return [record];
-    return [];
-  }
-
-  release(): void {
-    this.queries.push("release");
+    return super.unsafe(query);
   }
 }
 
@@ -288,6 +280,8 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
         if (stall) return pending;
         return [];
       }
+      if (/^(INSERT INTO|UPDATE) knowledge_contribution/.test(query))
+        dirty = true;
       if (query.includes("dolt_commit")) dirty = false;
       return original(query);
     };
@@ -360,6 +354,156 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
     expect(resets).toBe(1);
     expect(ended).toBe(0);
   });
+
+  it("keeps metadata DML private through a finite timeout and admits a fresh close after native settlement", async () => {
+    const fake = new FakeSql();
+    const native = fake.conn.unsafe.bind(fake.conn);
+    let settle!: () => void;
+    const finite = new Promise<void>((resolve) => {
+      settle = resolve;
+    });
+    let stalled = false,
+      metadataCalls = 0,
+      resets = 0;
+    fake.conn.unsafe = async (query) => {
+      if (query.startsWith("UPDATE knowledge_contributions")) {
+        metadataCalls++;
+        const rows = await native(query);
+        if (!stalled) {
+          stalled = true;
+          await finite;
+        }
+        return rows;
+      }
+      if (query === "SELECT dolt_reset('--hard', 'HEAD')") resets++;
+      return native(query);
+    };
+    const adapter = new DoltgresKnowledgeContributionAdapter({
+      sql: fake as unknown as Sql,
+      branchSql: independentWriter(fake),
+      branchSession: { queryTimeoutMs: 10 },
+    });
+    const input = {
+      contributionId: String(record.id),
+      principal: reviewer,
+      reason: "finite metadata",
+    };
+    const outcome = await adapter.close(input).catch((error) => error);
+    expect(outcome).toMatchObject({
+      name: "KnowledgeWriteOutcomeUnknownError",
+      retryable: false,
+      receipt: { lookup: { branch: expect.stringMatching(/^dolt-op\//) } },
+    });
+    expect(metadataCalls).toBe(1);
+    expect(resets).toBe(0);
+    expect(
+      fake.conn.queries.some((query) => query.includes("pg_advisory_unlock"))
+    ).toBe(false);
+    await expect(adapter.close(input)).rejects.toBeInstanceOf(
+      KnowledgeBusyError
+    );
+    expect(metadataCalls).toBe(1);
+    settle();
+    await expect
+      .poll(
+        () => fake.conn.queries.filter((query) => query === "release").length
+      )
+      .toBe(1);
+    expect(resets).toBe(1);
+    expect(metadataCalls).toBe(1);
+    expect(
+      fake.conn.queries.filter((query) => query.includes("pg_advisory_unlock"))
+    ).toHaveLength(3);
+    expect(
+      fake.conn.queries.some(
+        (query) => query === `SELECT dolt_branch('-D', '${record.branch}')`
+      )
+    ).toBe(false);
+    await expect(
+      adapter.close({ ...input, reason: "new inspected request" })
+    ).resolves.toBeUndefined();
+    await expect
+      .poll(
+        () => fake.conn.queries.filter((query) => query === "release").length
+      )
+      .toBe(2);
+    expect(metadataCalls).toBe(2);
+    expect(resets).toBe(1);
+  });
+
+  it.each(["commit-ack", "transport"] as const)(
+    "preserves metadata inspection evidence for %s uncertainty without replay",
+    async (stage) => {
+      const fake = new FakeSql(),
+        native = fake.conn.unsafe.bind(fake.conn);
+      let settle!: () => void;
+      const finite = new Promise<void>((resolve) => {
+        settle = resolve;
+      });
+      let metadataCalls = 0;
+      fake.conn.unsafe = async (query) => {
+        if (query.startsWith("UPDATE knowledge_contributions")) {
+          metadataCalls++;
+          const rows = await native(query);
+          if (stage === "transport")
+            throw new Error("Socket acknowledgement disappeared");
+          return rows;
+        }
+        const rows = await native(query);
+        if (stage === "commit-ack" && query.startsWith("SELECT dolt_commit("))
+          await finite;
+        return rows;
+      };
+      const adapter = new DoltgresKnowledgeContributionAdapter({
+        sql: fake as unknown as Sql,
+        branchSql: independentWriter(fake),
+        branchSession: { queryTimeoutMs: 10 },
+      });
+      const error = await adapter
+        .close({
+          contributionId: String(record.id),
+          principal: reviewer,
+          reason: "retain metadata inspection",
+        })
+        .catch((error) => error);
+      expect(error).toMatchObject({
+        name: "KnowledgeWriteOutcomeUnknownError",
+        retryable: false,
+      });
+      expect(metadataCalls).toBe(1);
+      expect(
+        fake.conn.queries.some((query) => query.includes("pg_advisory_unlock"))
+      ).toBe(false);
+      if (stage === "commit-ack") {
+        settle();
+        await expect
+          .poll(
+            () =>
+              fake.conn.queries.filter((query) => query === "release").length
+          )
+          .toBe(1);
+      } else {
+        await expect(
+          adapter.close({
+            contributionId: String(record.id),
+            principal: reviewer,
+            reason: "no replay",
+          })
+        ).rejects.toBeInstanceOf(KnowledgeBusyError);
+        expect(
+          fake.conn.queries.some((query) =>
+            query.includes("pg_advisory_unlock")
+          )
+        ).toBe(false);
+      }
+      expect(metadataCalls).toBe(1);
+      expect(
+        fake.conn.queries.some((query) =>
+          /dolt_reset|dolt_branch\('-D'/.test(query)
+        )
+      ).toBe(false);
+    }
+  );
 
   it.each(["dirty", "head"])(
     "preserves a typed conflict for preexisting %s contribution state before edits",
@@ -466,6 +610,13 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
       principal: reviewer,
     });
 
+    await expect
+      .poll(() =>
+        fake.conn.queries.some(
+          (query) => query === `SELECT dolt_branch('-D', '${record.branch}')`
+        )
+      )
+      .toBe(true);
     const updateIndex = fake.conn.queries.findIndex((query) =>
       query.includes("SET state = 'merged'")
     );
@@ -535,7 +686,13 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
     expect(conn.queries.some((q) => q.includes("SET state = 'merged'"))).toBe(
       true
     );
-    expect(conn.queries.some((q) => q.includes("dolt_branch('-D'"))).toBe(true);
+    await expect
+      .poll(() =>
+        conn.queries.some(
+          (q) => q === `SELECT dolt_branch('-D', '${record.branch}')`
+        )
+      )
+      .toBe(true);
   });
 
   it("maps a thrown Dolt conflict to a clean human message, never the raw SQL (bug.5120)", async () => {
@@ -574,6 +731,13 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
       reason: "superseded",
     });
 
+    await expect
+      .poll(() =>
+        fake.conn.queries.some(
+          (query) => query === `SELECT dolt_branch('-D', '${record.branch}')`
+        )
+      )
+      .toBe(true);
     const updateIndex = fake.conn.queries.findIndex((query) =>
       query.includes("SET state = 'closed'")
     );
@@ -855,6 +1019,7 @@ function idFromQuery(query: string): string | undefined {
 class CrossPlaneFakeReservedSql {
   readonly queries: string[] = [];
   private activeBranch = "main";
+  private metadataDirty = false;
 
   constructor(private readonly branchEntryTypes: Map<string, string>) {}
 
@@ -871,6 +1036,26 @@ class CrossPlaneFakeReservedSql {
       this.activeBranch = args[0] === "-b" ? args[1]! : args[0]!;
       return [{ dolt_checkout: 0 }];
     }
+    if (query === "SELECT * FROM dolt.status")
+      return this.metadataDirty
+        ? [{ table_name: "knowledge_contributions" }]
+        : [];
+    if (/^(INSERT INTO|UPDATE) knowledge_contribution/.test(query)) {
+      if (!this.activeBranch.startsWith("dolt-op/"))
+        throw new Error("Metadata DML escaped its owned operation branch");
+      this.metadataDirty = true;
+    }
+    if (query.includes("dolt_commit") || query.includes("dolt_reset"))
+      this.metadataDirty = false;
+    if (query.includes("dolt_merge_base")) return [{ merge_base: "next456" }];
+    if (
+      query.startsWith(
+        "SELECT hash, fast_forward, conflicts, message FROM dolt_merge("
+      )
+    )
+      return [
+        { hash: "next456", conflicts: 0, fast_forward: 1, message: "merged" },
+      ];
     if (query.includes("dolt.merge_status")) return [{ is_merging: false }];
     // Admission control takes a session advisory lock before any branch work
     // (bug.5391); a fake that cannot answer it would fail every write as busy.

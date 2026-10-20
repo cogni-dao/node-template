@@ -38,6 +38,7 @@
 import { randomBytes } from "node:crypto";
 import {
   captureDoltPersistedCleanEdit,
+  runDoltBranchMutation,
   DoltPersistedCleanEditConflictError,
   reconcileAbandonedDoltOperation,
   type DoltPersistedCleanEditReceipt,
@@ -818,6 +819,11 @@ export class DoltgresKnowledgeContributionAdapter
       owner: {
         beginPersistedEdit(record: ContributionRecord): Promise<void>;
         transition(): void;
+        metadata(
+          message: string,
+          run: (scoped: ReservedSql) => Promise<T>,
+          reap?: string
+        ): Promise<T>;
       }
     ) => Promise<T>
   ): Promise<T> {
@@ -825,20 +831,33 @@ export class DoltgresKnowledgeContributionAdapter
       let receipt: DoltPersistedCleanEditReceipt | undefined;
       let transitionDispatched = false;
       let registered = false;
+      let reconcilePhase: (() => Promise<boolean>) | undefined;
+      control.registerReconciliation(async () => {
+        if (reconcilePhase) return await reconcilePhase();
+        return await reconcileAbandonedDoltOperation(conn, {
+          guard,
+          creationProven: false,
+          commitAttempted: true,
+          mergeAttempted: true,
+        });
+      });
+      const transition = () => {
+        transitionDispatched = true;
+        receipt?.invalidate();
+      };
       return await fn(conn, {
         beginPersistedEdit: async (record) => {
           if (registered || receipt || transitionDispatched)
             throw new Error("Persisted edit entry cannot be replaced");
           registered = true;
-          control.registerReconciliation(() =>
+          reconcilePhase = () =>
             reconcileAbandonedDoltOperation(conn, {
               guard,
               creationProven: false,
               commitAttempted: transitionDispatched,
               mergeAttempted: transitionDispatched,
               ...(receipt ? { persistedCleanEdit: receipt } : {}),
-            })
-          );
+            });
           try {
             receipt = await captureDoltPersistedCleanEdit(conn, {
               guard,
@@ -858,9 +877,28 @@ export class DoltgresKnowledgeContributionAdapter
             throw error;
           }
         },
-        transition: () => {
-          transitionDispatched = true;
-          receipt?.invalidate();
+        transition,
+        metadata: async (message, run, reap) => {
+          // Historical contribution commits are preserved. Metadata receives its
+          // own fresh branch and cannot authorize a reset of the contribution.
+          transition();
+          const result = await runDoltBranchMutation(conn, {
+            guard,
+            operationId: `contribution.metadata:${randomBytes(16).toString("hex")}`,
+            message,
+            run: async (scoped) =>
+              run({ unsafe: async (query) => await scoped.unsafe(query) }),
+            onReconcile: (plan) => {
+              reconcilePhase = plan;
+            },
+            onSessionUncertain: (error) => this.session.retire(conn, error),
+            onCommitted: (committed, cleanup) =>
+              control.committed(committed, async () => {
+                await cleanup();
+                if (reap) await this.reapBranch(conn, reap);
+              }),
+          });
+          return result.value;
         },
       });
     });
@@ -942,65 +980,69 @@ export class DoltgresKnowledgeContributionAdapter
     const branch = `contrib/${slug}-${sid}`;
     const edits = input.edits ?? [];
 
-    return await this.withBranch("contribution.create", async (conn) => {
-      await conn.unsafe(`SELECT dolt_checkout('main')`);
-      if (input.idempotencyKey) {
-        const replayRows = await conn.unsafe(
-          `SELECT * FROM knowledge_contributions WHERE principal_id = ${escapeValue(input.principal.id)} AND idempotency_key = ${escapeValue(input.idempotencyKey)} LIMIT 1`
-        );
-        if (replayRows.length > 0) {
-          return mapRecord(replayRows[0] as Record<string, unknown>);
+    return await this.withBranch<ContributionRecord>(
+      "contribution.create",
+      async (conn, owner) => {
+        await conn.unsafe(`SELECT dolt_checkout('main')`);
+        if (input.idempotencyKey) {
+          const replayRows = await conn.unsafe(
+            `SELECT * FROM knowledge_contributions WHERE principal_id = ${escapeValue(input.principal.id)} AND idempotency_key = ${escapeValue(input.idempotencyKey)} LIMIT 1`
+          );
+          if (replayRows.length > 0) {
+            return mapRecord(replayRows[0] as Record<string, unknown>);
+          }
         }
-      }
-      const baseCommit = await currentHash(conn, "main");
-      await conn.unsafe(
-        `SELECT dolt_checkout('-b', ${escapeRef(branch)}, 'main')`
-      );
-
-      let headCommit: string | null = null;
-      if (edits.length > 0) {
-        for (const edit of edits) {
-          await applyEdit({
-            conn,
-            mainSql: this.sql,
-            contributionId,
-            principal: input.principal,
-            seq: 1,
-            edit,
-          });
-        }
-        const commitMessage = contributionMessage(slug, input.message);
-        const commitResult = await conn.unsafe(
-          `SELECT dolt_commit('-Am', ${escapeValue(commitMessage)})`
-        );
-        headCommit = parseDoltResult(
-          commitResult[0] as Record<string, unknown>,
-          "dolt_commit"
-        );
-      }
-
-      await conn.unsafe(`SELECT dolt_checkout('main')`);
-      await conn.unsafe(
-        `INSERT INTO knowledge_contributions (id, branch, state, principal_id, principal_kind, message, base_commit, head_commit, commit_count, idempotency_key) VALUES (${escapeValue(contributionId)}, ${escapeValue(branch)}, 'open', ${escapeValue(input.principal.id)}, ${escapeValue(input.principal.kind)}, ${escapeValue(input.message)}, ${escapeValue(baseCommit)}, ${escapeValue(headCommit)}, ${edits.length > 0 ? 1 : 0}, ${escapeValue(input.idempotencyKey ?? null)})`
-      );
-      if (headCommit) {
-        const ref = sourceRef(contributionId, 1);
-        const authSource =
-          input.principal.kind === "agent" ? "bearer" : "session";
+        const baseCommit = await currentHash(conn, "main");
         await conn.unsafe(
-          `INSERT INTO knowledge_contribution_commits (contribution_id, seq, commit_hash, principal_id, principal_kind, auth_source, message, edit_count, source_ref) VALUES (${escapeValue(contributionId)}, 1, ${escapeValue(headCommit)}, ${escapeValue(input.principal.id)}, ${escapeValue(input.principal.kind)}, ${escapeValue(authSource)}, ${escapeValue(input.message)}, ${edits.length}, ${escapeValue(ref)})`
+          `SELECT dolt_checkout('-b', ${escapeRef(branch)}, 'main')`
+        );
+
+        let headCommit: string | null = null;
+        if (edits.length > 0) {
+          for (const edit of edits) {
+            await applyEdit({
+              conn,
+              mainSql: this.sql,
+              contributionId,
+              principal: input.principal,
+              seq: 1,
+              edit,
+            });
+          }
+          const commitMessage = contributionMessage(slug, input.message);
+          const commitResult = await conn.unsafe(
+            `SELECT dolt_commit('-Am', ${escapeValue(commitMessage)})`
+          );
+          headCommit = parseDoltResult(
+            commitResult[0] as Record<string, unknown>,
+            "dolt_commit"
+          );
+        }
+
+        await conn.unsafe(`SELECT dolt_checkout('main')`);
+        return await owner.metadata(
+          metaMessage(contributionId),
+          async (conn) => {
+            await conn.unsafe(
+              `INSERT INTO knowledge_contributions (id, branch, state, principal_id, principal_kind, message, base_commit, head_commit, commit_count, idempotency_key) VALUES (${escapeValue(contributionId)}, ${escapeValue(branch)}, 'open', ${escapeValue(input.principal.id)}, ${escapeValue(input.principal.kind)}, ${escapeValue(input.message)}, ${escapeValue(baseCommit)}, ${escapeValue(headCommit)}, ${edits.length > 0 ? 1 : 0}, ${escapeValue(input.idempotencyKey ?? null)})`
+            );
+            if (headCommit) {
+              const ref = sourceRef(contributionId, 1);
+              const authSource =
+                input.principal.kind === "agent" ? "bearer" : "session";
+              await conn.unsafe(
+                `INSERT INTO knowledge_contribution_commits (contribution_id, seq, commit_hash, principal_id, principal_kind, auth_source, message, edit_count, source_ref) VALUES (${escapeValue(contributionId)}, 1, ${escapeValue(headCommit)}, ${escapeValue(input.principal.id)}, ${escapeValue(input.principal.kind)}, ${escapeValue(authSource)}, ${escapeValue(input.message)}, ${edits.length}, ${escapeValue(ref)})`
+              );
+            }
+
+            const rows = await conn.unsafe(
+              `SELECT * FROM knowledge_contributions WHERE id = ${escapeValue(contributionId)} LIMIT 1`
+            );
+            return mapRecord(rows[0] as Record<string, unknown>);
+          }
         );
       }
-      const metadataMessage = metaMessage(contributionId);
-      await conn.unsafe(
-        `SELECT dolt_commit('-Am', ${escapeValue(metadataMessage)})`
-      );
-
-      const rows = await conn.unsafe(
-        `SELECT * FROM knowledge_contributions WHERE id = ${escapeValue(contributionId)} LIMIT 1`
-      );
-      return mapRecord(rows[0] as Record<string, unknown>);
-    });
+    );
   }
 
   /**
@@ -1151,9 +1193,9 @@ export class DoltgresKnowledgeContributionAdapter
     const contributionId = `contrib-${slug}-${sid}`;
     const branch = `contrib/${slug}-${sid}`;
 
-    return await this.withBranch(
+    return await this.withBranch<ContributionRecord>(
       "contribution.create_edo_batch",
-      async (conn) => {
+      async (conn, owner) => {
         await conn.unsafe(`SELECT dolt_checkout('main')`);
         if (input.idempotencyKey) {
           const replayRows = await conn.unsafe(
@@ -1182,23 +1224,25 @@ export class DoltgresKnowledgeContributionAdapter
         );
 
         await conn.unsafe(`SELECT dolt_checkout('main')`);
-        await conn.unsafe(
-          `INSERT INTO knowledge_contributions (id, branch, state, principal_id, principal_kind, message, base_commit, head_commit, commit_count, idempotency_key) VALUES (${escapeValue(contributionId)}, ${escapeValue(branch)}, 'open', ${escapeValue(input.principal.id)}, ${escapeValue(input.principal.kind)}, ${escapeValue(input.message)}, ${escapeValue(baseCommit)}, ${escapeValue(headCommit)}, 1, ${escapeValue(input.idempotencyKey ?? null)})`
-        );
-        const ref = sourceRef(contributionId, 1);
-        const authSource =
-          input.principal.kind === "agent" ? "bearer" : "session";
-        await conn.unsafe(
-          `INSERT INTO knowledge_contribution_commits (contribution_id, seq, commit_hash, principal_id, principal_kind, auth_source, message, edit_count, source_ref) VALUES (${escapeValue(contributionId)}, 1, ${escapeValue(headCommit)}, ${escapeValue(input.principal.id)}, ${escapeValue(input.principal.kind)}, ${escapeValue(authSource)}, ${escapeValue(input.message)}, ${editCount}, ${escapeValue(ref)})`
-        );
-        await conn.unsafe(
-          `SELECT dolt_commit('-Am', ${escapeValue(metaMessage(contributionId))})`
-        );
+        return await owner.metadata(
+          metaMessage(contributionId),
+          async (conn) => {
+            await conn.unsafe(
+              `INSERT INTO knowledge_contributions (id, branch, state, principal_id, principal_kind, message, base_commit, head_commit, commit_count, idempotency_key) VALUES (${escapeValue(contributionId)}, ${escapeValue(branch)}, 'open', ${escapeValue(input.principal.id)}, ${escapeValue(input.principal.kind)}, ${escapeValue(input.message)}, ${escapeValue(baseCommit)}, ${escapeValue(headCommit)}, 1, ${escapeValue(input.idempotencyKey ?? null)})`
+            );
+            const ref = sourceRef(contributionId, 1);
+            const authSource =
+              input.principal.kind === "agent" ? "bearer" : "session";
+            await conn.unsafe(
+              `INSERT INTO knowledge_contribution_commits (contribution_id, seq, commit_hash, principal_id, principal_kind, auth_source, message, edit_count, source_ref) VALUES (${escapeValue(contributionId)}, 1, ${escapeValue(headCommit)}, ${escapeValue(input.principal.id)}, ${escapeValue(input.principal.kind)}, ${escapeValue(authSource)}, ${escapeValue(input.message)}, ${editCount}, ${escapeValue(ref)})`
+            );
 
-        const rows = await conn.unsafe(
-          `SELECT * FROM knowledge_contributions WHERE id = ${escapeValue(contributionId)} LIMIT 1`
+            const rows = await conn.unsafe(
+              `SELECT * FROM knowledge_contributions WHERE id = ${escapeValue(contributionId)} LIMIT 1`
+            );
+            return mapRecord(rows[0] as Record<string, unknown>);
+          }
         );
-        return mapRecord(rows[0] as Record<string, unknown>);
       }
     );
   }
@@ -1210,7 +1254,7 @@ export class DoltgresKnowledgeContributionAdapter
     edits: KnowledgeContributionEdit[];
   }): Promise<ContributionCommitRecord> {
     return await withContributionAppendLock(input.contributionId, async () => {
-      return await this.withBranch(
+      return await this.withBranch<ContributionCommitRecord>(
         "contribution.append_commit",
         async (conn, owner) => {
           // Re-read metadata only after admission and the cross-replica lock.
@@ -1261,28 +1305,29 @@ export class DoltgresKnowledgeContributionAdapter
           );
 
           await conn.unsafe(`SELECT dolt_checkout('main')`);
-          const updateResult = await conn.unsafe(
-            `UPDATE knowledge_contributions SET head_commit = ${escapeValue(commitHash)}, commit_count = ${seq} WHERE id = ${escapeValue(input.contributionId)} AND commit_count = ${rec.commitCount} AND ${headPredicate}`
-          );
-          if (updateResult.count === 0) {
-            throw new ContributionConflictError(
-              `contribution ${input.contributionId} changed while appending`
-            );
-          }
-          const authSource =
-            input.principal.kind === "agent" ? "bearer" : "session";
-          await conn.unsafe(
-            `INSERT INTO knowledge_contribution_commits (contribution_id, seq, commit_hash, principal_id, principal_kind, auth_source, message, edit_count, source_ref) VALUES (${escapeValue(input.contributionId)}, ${seq}, ${escapeValue(commitHash)}, ${escapeValue(input.principal.id)}, ${escapeValue(input.principal.kind)}, ${escapeValue(authSource)}, ${escapeValue(input.message)}, ${input.edits.length}, ${escapeValue(ref)})`
-          );
-          const metadataMessage = metaMessage(input.contributionId, seq);
-          await conn.unsafe(
-            `SELECT dolt_commit('-Am', ${escapeValue(metadataMessage)})`
-          );
+          return await owner.metadata(
+            metaMessage(input.contributionId, seq),
+            async (conn) => {
+              const updateResult = await conn.unsafe(
+                `UPDATE knowledge_contributions SET head_commit = ${escapeValue(commitHash)}, commit_count = ${seq} WHERE id = ${escapeValue(input.contributionId)} AND commit_count = ${rec.commitCount} AND ${headPredicate}`
+              );
+              if (updateResult.count === 0) {
+                throw new ContributionConflictError(
+                  `contribution ${input.contributionId} changed while appending`
+                );
+              }
+              const authSource =
+                input.principal.kind === "agent" ? "bearer" : "session";
+              await conn.unsafe(
+                `INSERT INTO knowledge_contribution_commits (contribution_id, seq, commit_hash, principal_id, principal_kind, auth_source, message, edit_count, source_ref) VALUES (${escapeValue(input.contributionId)}, ${seq}, ${escapeValue(commitHash)}, ${escapeValue(input.principal.id)}, ${escapeValue(input.principal.kind)}, ${escapeValue(authSource)}, ${escapeValue(input.message)}, ${input.edits.length}, ${escapeValue(ref)})`
+              );
 
-          const rows = await conn.unsafe(
-            `SELECT * FROM knowledge_contribution_commits WHERE contribution_id = ${escapeValue(input.contributionId)} AND seq = ${seq} LIMIT 1`
+              const rows = await conn.unsafe(
+                `SELECT * FROM knowledge_contribution_commits WHERE contribution_id = ${escapeValue(input.contributionId)} AND seq = ${seq} LIMIT 1`
+              );
+              return mapCommitRecord(rows[0] as Record<string, unknown>);
+            }
           );
-          return mapCommitRecord(rows[0] as Record<string, unknown>);
         }
       );
     });
@@ -1436,7 +1481,7 @@ export class DoltgresKnowledgeContributionAdapter
     }) => Promise<{ editCount: number; message: string }>
   ): Promise<ContributionRecord> {
     return await withContributionAppendLock(input.contributionId, async () => {
-      return await this.withBranch(
+      return await this.withBranch<ContributionRecord>(
         "contribution.append_edo_commit",
         async (conn, owner) => {
           // The record read belongs inside the same admitted, cross-replica
@@ -1481,28 +1526,29 @@ export class DoltgresKnowledgeContributionAdapter
           );
 
           await conn.unsafe(`SELECT dolt_checkout('main')`);
-          const updateResult = await conn.unsafe(
-            `UPDATE knowledge_contributions SET head_commit = ${escapeValue(commitHash)}, commit_count = ${seq} WHERE id = ${escapeValue(input.contributionId)} AND commit_count = ${rec.commitCount} AND ${headPredicate}`
-          );
-          if (updateResult.count === 0) {
-            throw new ContributionConflictError(
-              `contribution ${input.contributionId} changed while appending`
-            );
-          }
-          const authSource =
-            input.principal.kind === "agent" ? "bearer" : "session";
-          await conn.unsafe(
-            `INSERT INTO knowledge_contribution_commits (contribution_id, seq, commit_hash, principal_id, principal_kind, auth_source, message, edit_count, source_ref) VALUES (${escapeValue(input.contributionId)}, ${seq}, ${escapeValue(commitHash)}, ${escapeValue(input.principal.id)}, ${escapeValue(input.principal.kind)}, ${escapeValue(authSource)}, ${escapeValue(message)}, ${editCount}, ${escapeValue(ref)})`
-          );
-          const metadataMessage = metaMessage(input.contributionId, seq);
-          await conn.unsafe(
-            `SELECT dolt_commit('-Am', ${escapeValue(metadataMessage)})`
-          );
+          return await owner.metadata(
+            metaMessage(input.contributionId, seq),
+            async (conn) => {
+              const updateResult = await conn.unsafe(
+                `UPDATE knowledge_contributions SET head_commit = ${escapeValue(commitHash)}, commit_count = ${seq} WHERE id = ${escapeValue(input.contributionId)} AND commit_count = ${rec.commitCount} AND ${headPredicate}`
+              );
+              if (updateResult.count === 0) {
+                throw new ContributionConflictError(
+                  `contribution ${input.contributionId} changed while appending`
+                );
+              }
+              const authSource =
+                input.principal.kind === "agent" ? "bearer" : "session";
+              await conn.unsafe(
+                `INSERT INTO knowledge_contribution_commits (contribution_id, seq, commit_hash, principal_id, principal_kind, auth_source, message, edit_count, source_ref) VALUES (${escapeValue(input.contributionId)}, ${seq}, ${escapeValue(commitHash)}, ${escapeValue(input.principal.id)}, ${escapeValue(input.principal.kind)}, ${escapeValue(authSource)}, ${escapeValue(message)}, ${editCount}, ${escapeValue(ref)})`
+              );
 
-          const rows = await conn.unsafe(
-            `SELECT * FROM knowledge_contributions WHERE id = ${escapeValue(input.contributionId)} LIMIT 1`
+              const rows = await conn.unsafe(
+                `SELECT * FROM knowledge_contributions WHERE id = ${escapeValue(input.contributionId)} LIMIT 1`
+              );
+              return mapRecord(rows[0] as Record<string, unknown>);
+            }
           );
-          return mapRecord(rows[0] as Record<string, unknown>);
         }
       );
     });
@@ -1607,56 +1653,61 @@ export class DoltgresKnowledgeContributionAdapter
       );
     }
 
-    return await this.withBranch("contribution.merge", async (conn) => {
-      await conn.unsafe(`SELECT dolt_checkout('main')`);
+    return await this.withBranch<{ commitHash: string }>(
+      "contribution.merge",
+      async (conn, owner) => {
+        await conn.unsafe(`SELECT dolt_checkout('main')`);
 
-      let mergeCommit: string;
-      let conflicts: number;
-      try {
-        const mergeRes = await conn.unsafe(
-          `SELECT dolt_merge(${escapeRef(rec.branch)})`
-        );
-        const parsed = parseDoltMergeResult(
-          mergeRes[0] as Record<string, unknown>
-        );
-        mergeCommit = parsed.commitHash;
-        conflicts = parsed.conflicts;
-      } catch (e: unknown) {
-        // Doltgres throws on a conflicted merge (@autocommit rollback). Map it
-        // to the human conflict message; anything else to the generic failure.
-        const msg = e instanceof Error ? e.message : String(e);
-        throw new ContributionConflictError(
-          /conflict/i.test(msg) ? MERGE_CONFLICT_MESSAGE : MERGE_FAILED_MESSAGE
-        );
-      }
-
-      // dolt_merge does NOT throw on data conflicts (bug.5120): it returns a
-      // non-zero conflict count and leaves the working set conflicted and
-      // uncommittable. If we proceeded, the later dolt_commit would throw an
-      // untyped error that surfaces as an opaque 500 the inbox UI drops
-      // silently, and the branch would linger as `open`. Abort so the working
-      // set is clean for the next merge, then surface a typed 409.
-      if (conflicts > 0) {
+        let mergeCommit: string;
+        let conflicts: number;
         try {
-          await conn.unsafe(`SELECT dolt_merge('--abort')`);
-        } catch {
-          // Best-effort cleanup; the session runner also checks out main.
+          const mergeRes = await conn.unsafe(
+            `SELECT dolt_merge(${escapeRef(rec.branch)})`
+          );
+          const parsed = parseDoltMergeResult(
+            mergeRes[0] as Record<string, unknown>
+          );
+          mergeCommit = parsed.commitHash;
+          conflicts = parsed.conflicts;
+        } catch (e: unknown) {
+          // Doltgres throws on a conflicted merge (@autocommit rollback). Map it
+          // to the human conflict message; anything else to the generic failure.
+          const msg = e instanceof Error ? e.message : String(e);
+          throw new ContributionConflictError(
+            /conflict/i.test(msg)
+              ? MERGE_CONFLICT_MESSAGE
+              : MERGE_FAILED_MESSAGE
+          );
         }
-        throw new ContributionConflictError(MERGE_CONFLICT_MESSAGE);
+
+        // dolt_merge does NOT throw on data conflicts (bug.5120): it returns a
+        // non-zero conflict count and leaves the working set conflicted and
+        // uncommittable. If we proceeded, the later dolt_commit would throw an
+        // untyped error that surfaces as an opaque 500 the inbox UI drops
+        // silently, and the branch would linger as `open`. Abort so the working
+        // set is clean for the next merge, then surface a typed 409.
+        if (conflicts > 0) {
+          try {
+            await conn.unsafe(`SELECT dolt_merge('--abort')`);
+          } catch {
+            // Best-effort cleanup; the session runner also checks out main.
+          }
+          throw new ContributionConflictError(MERGE_CONFLICT_MESSAGE);
+        }
+
+        return await owner.metadata(
+          `contrib-merge: ${input.contributionId}`,
+          async (conn) => {
+            await conn.unsafe(
+              `UPDATE knowledge_contributions SET state = 'merged', merged_commit = ${escapeValue(mergeCommit)}, resolved_at = now(), resolved_by = ${escapeValue(input.principal.id)} WHERE id = ${escapeValue(input.contributionId)}`
+            );
+
+            return { commitHash: mergeCommit };
+          },
+          rec.branch
+        );
       }
-
-      await conn.unsafe(
-        `UPDATE knowledge_contributions SET state = 'merged', merged_commit = ${escapeValue(mergeCommit)}, resolved_at = now(), resolved_by = ${escapeValue(input.principal.id)} WHERE id = ${escapeValue(input.contributionId)}`
-      );
-
-      const mergeMessage = `contrib-merge: ${input.contributionId}`;
-      await conn.unsafe(
-        `SELECT dolt_commit('-Am', ${escapeValue(mergeMessage)})`
-      );
-      await this.reapBranch(conn, rec.branch);
-
-      return { commitHash: mergeCommit };
-    });
+    );
   }
 
   async close(input: {
@@ -1679,16 +1730,17 @@ export class DoltgresKnowledgeContributionAdapter
       );
     }
 
-    await this.withBranch("contribution.close", async (conn) => {
+    await this.withBranch<void>("contribution.close", async (conn, owner) => {
       await conn.unsafe(`SELECT dolt_checkout('main')`);
-      await conn.unsafe(
-        `UPDATE knowledge_contributions SET state = 'closed', closed_reason = ${escapeValue(input.reason)}, resolved_at = now(), resolved_by = ${escapeValue(input.principal.id)} WHERE id = ${escapeValue(input.contributionId)}`
+      return await owner.metadata(
+        `contrib-close: ${input.contributionId}`,
+        async (conn) => {
+          await conn.unsafe(
+            `UPDATE knowledge_contributions SET state = 'closed', closed_reason = ${escapeValue(input.reason)}, resolved_at = now(), resolved_by = ${escapeValue(input.principal.id)} WHERE id = ${escapeValue(input.contributionId)}`
+          );
+        },
+        rec.branch
       );
-      const closeMessage = `contrib-close: ${input.contributionId}`;
-      await conn.unsafe(
-        `SELECT dolt_commit('-Am', ${escapeValue(closeMessage)})`
-      );
-      await this.reapBranch(conn, rec.branch);
     });
   }
 }

@@ -1071,6 +1071,272 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 		},
 		15_000,
 	);
+	it.each(["create", "append", "close"] as const)(
+		"recovers finite %s metadata only on its owned operation branch",
+		async (stage) => {
+			const writer = postgres(dbUrl, { max: 1, fetch_types: false });
+			const reader = postgres(dbUrl, { max: 1, fetch_types: false });
+			const competitor = postgres(dbUrl, { max: 1, fetch_types: false });
+			const runner = new DoltBranchSessionRunner(writer, {
+				writerProtocol: "database",
+				queryTimeoutMs: 500,
+			});
+			const contributions = new DoltgresKnowledgeContributionAdapter({
+				sql: reader,
+				writerSession: runner,
+			});
+			const store = new DoltgresKnowledgeStoreAdapter({
+				sql: reader,
+				writerSession: runner,
+			});
+			const principal = {
+				id: `native-metadata-${stage}`,
+				kind: "agent" as const,
+			};
+			const domain = `metadata-native-${stage}`,
+				rowId = `metadata-native-entry-${stage}`;
+			let armed = false,
+				nativeSettled = false,
+				earlyAdmission = false,
+				metadataCalls = 0,
+				edits = 0,
+				resets = 0;
+			let branch = "",
+				metadataBranch = "",
+				metadataBase = "";
+			let pending: Promise<unknown> | undefined;
+			let seed: Awaited<ReturnType<typeof contributions.create>> | undefined;
+			let fresh: Awaited<ReturnType<typeof contributions.create>> | undefined;
+			let rival: Awaited<ReturnType<Sql["reserve"]>> | undefined;
+			const reserve = writer.reserve.bind(writer),
+				wrapped = new WeakSet<object>();
+			writer.reserve = (async () => {
+				const session = await reserve();
+				if (wrapped.has(session)) return session;
+				wrapped.add(session);
+				const unsafe = session.unsafe.bind(session);
+				session.unsafe = (async (query: string) => {
+					if (query.startsWith("SELECT dolt_checkout('-b', 'contrib/"))
+						branch = query.split("'")[3]!;
+					if (armed && query.startsWith("UPDATE knowledge SET")) edits++;
+					if (query === "SELECT dolt_reset('--hard', 'HEAD')") resets++;
+					const targeted =
+						stage === "create"
+							? query.startsWith("INSERT INTO knowledge_contributions ")
+							: stage === "append"
+								? query.startsWith(
+										"UPDATE knowledge_contributions SET head_commit",
+									)
+								: query.startsWith(
+										"UPDATE knowledge_contributions SET state = 'closed'",
+									);
+					if (armed && targeted) {
+						metadataCalls++;
+						metadataBranch = String(
+							(await unsafe("SELECT active_branch() AS branch"))[0]?.branch,
+						);
+						metadataBase = String(
+							(await unsafe("SELECT dolt_hashof('HEAD') AS hash"))[0]?.hash,
+						);
+						const rows = await unsafe(query);
+						if (!pending) {
+							pending = unsafe("SELECT pg_sleep(2)").then(() => {
+								nativeSettled = true;
+								return rows;
+							});
+							return pending;
+						}
+						return rows;
+					}
+					return unsafe(query);
+				}) as typeof session.unsafe;
+				return session;
+			}) as typeof writer.reserve;
+			const createInput = {
+				principal,
+				message: "Historical metadata intent",
+				edits: [
+					{
+						op: "insert" as const,
+						entry: {
+							id: rowId,
+							domain,
+							title: "Historical entry",
+							content: "Keep committed content",
+						},
+					},
+				],
+			};
+			try {
+				await store.registerDomain({
+					id: domain,
+					name: "Native metadata proof",
+				});
+				if (stage !== "create") seed = await contributions.create(createInput);
+				armed = true;
+				const outcome = await (
+					stage === "create"
+						? contributions.create(createInput)
+						: stage === "close"
+							? contributions.close({
+									contributionId: seed!.contributionId,
+									principal,
+									reason: "Finite close metadata",
+								})
+							: contributions.appendCommit({
+									contributionId: seed!.contributionId,
+									principal,
+									message: "Persisted append metadata",
+									edits: [
+										{
+											op: "patch",
+											targetRowId: rowId,
+											entry: { useWhen: "historical committed append" },
+										},
+									],
+								})
+				).catch((error) => error);
+				expect(outcome).toMatchObject({
+					name: "KnowledgeWriteOutcomeUnknownError",
+					retryable: false,
+					receipt: { lookup: { branch: expect.stringMatching(/^dolt-op\//) } },
+				});
+				expect(metadataBranch).toMatch(/^dolt-op\//);
+				expect(metadataCalls).toBe(1);
+				expect(resets).toBe(0);
+				expect(nativeSettled).toBe(false);
+				await competitor.unsafe("SELECT 1");
+				rival = await competitor.reserve();
+				const session = rival;
+				await expect
+					.poll(
+						async () => {
+							try {
+								const guard = await acquireDoltWriterLocks(session, {
+									protocol: "database",
+									lockWaitMs: 0,
+								});
+								earlyAdmission ||= !nativeSettled;
+								await guard.release();
+								return true;
+							} catch {
+								return false;
+							}
+						},
+						{ timeout: 5000 },
+					)
+					.toBe(true);
+				expect(earlyAdmission).toBe(false);
+				expect(nativeSettled).toBe(true);
+				expect(resets).toBe(1);
+				expect(metadataCalls).toBe(1);
+				await expect(
+					writer.unsafe("SELECT active_branch() AS branch"),
+				).resolves.toEqual([{ branch: "main" }]);
+				await expect(
+					writer.unsafe("SELECT * FROM dolt.status"),
+				).resolves.toHaveLength(0);
+				await expect(
+					reader.unsafe(
+						`SELECT state, head_commit, commit_count FROM knowledge_contributions WHERE branch = '${branch}'`,
+					),
+				).resolves.toEqual(
+					stage === "create"
+						? []
+						: [
+								{
+									state: "open",
+									head_commit: seed!.headCommit,
+									commit_count: 1,
+								},
+							],
+				);
+				const guard = await acquireDoltWriterLocks(session, {
+					protocol: "database",
+					lockWaitMs: 0,
+				});
+				try {
+					await session.unsafe(`SELECT dolt_checkout('${metadataBranch}')`);
+					await expect(
+						session.unsafe("SELECT dolt_hashof('HEAD') AS hash"),
+					).resolves.toEqual([{ hash: metadataBase }]);
+					await expect(
+						session.unsafe("SELECT * FROM dolt.status"),
+					).resolves.toHaveLength(0);
+					await session.unsafe(`SELECT dolt_checkout('${branch}')`);
+					const hash = String(
+						(await session.unsafe("SELECT dolt_hashof('HEAD') AS hash"))[0]
+							?.hash,
+					);
+					expect(hash).toMatch(/^[a-z0-9]{32}$/);
+					if (stage === "append") expect(hash).not.toBe(seed!.headCommit);
+					if (stage === "close") expect(hash).toBe(seed!.headCommit);
+					await expect(
+						session.unsafe(
+							`SELECT content, use_when FROM knowledge WHERE id = '${rowId}'`,
+						),
+					).resolves.toEqual([
+						{
+							content: "Keep committed content",
+							use_when:
+								stage === "append" ? "historical committed append" : null,
+						},
+					]);
+					await session.unsafe("SELECT dolt_checkout('main')");
+				} finally {
+					await guard.release();
+				}
+				rival.release();
+				rival = undefined;
+				if (stage === "append") {
+					await expect(
+						contributions.appendCommit({
+							contributionId: seed!.contributionId,
+							principal,
+							message: "Inspect before replay",
+							edits: [
+								{
+									op: "patch",
+									targetRowId: rowId,
+									entry: { useWhen: "must not replay" },
+								},
+							],
+						}),
+					).rejects.toMatchObject({ name: "ContributionConflictError" });
+					expect(edits).toBe(1);
+					expect(metadataCalls).toBe(1);
+				}
+				armed = false;
+				fresh = await contributions.create({
+					principal,
+					message: "Distinct fresh intent after settlement",
+				});
+				expect(fresh.state).toBe("open");
+				expect(metadataCalls).toBe(1);
+			} finally {
+				await pending?.catch(() => undefined);
+				rival?.release();
+				armed = false;
+				for (const contribution of [seed, fresh])
+					if (contribution)
+						await contributions
+							.close({
+								contributionId: contribution.contributionId,
+								principal,
+								reason: "Native metadata proof cleanup",
+							})
+							.catch(() => undefined);
+				// A create whose metadata never landed retains its historical branch as
+				// an inspection receipt; no automatic reset/deletion of that evidence.
+				await Promise.allSettled(
+					[writer, reader, competitor].map((client) =>
+						client.end({ timeout: 0 }),
+					),
+				);
+			}
+		},
+		15000,
+	);
 	it("accounts for two admitted producers and waits for their finite native cleanup", async () => {
 		const sleepSeconds = 12;
 		const queryTimeoutMs = 500;
@@ -1437,7 +1703,9 @@ if (role === 'original') {
   process.send({phase: 'lookup', item});
   await wait('admit');
  }
- const retry = await adapter.create({id: itemId, type: 'task', title: 'One canonical original intent'}, 'restart-probe').catch(error => error);
+ // A nonretryable landed-intent receipt is resolved by canonical lookup;
+ // it is never permission to issue the original DML a second time.
+ const retry = stage === 'merged' ? await adapter.get(itemId) : await adapter.create({id: itemId, type: 'task', title: 'One canonical original intent'}, 'restart-probe').catch(error => error);
  if (stage === 'merged') await adapter.create({id: ${JSON.stringify(freshId)}, type: 'task', title: 'Distinct new request'}, 'restart-probe');
  const item = await adapter.get(itemId);
  // Test-only quiescence probe: waits for the reserved cleanup to return the
@@ -1608,9 +1876,8 @@ if (role === 'original') {
 				const result = await replacement.wait("result");
 				expect(result.item).toMatchObject({ id: itemId, revision: 0 });
 				expect(result.inserts).toBe(1);
-				if (stage === "merged")
-					expect(result.retryName).toBe("WorkItemAlreadyExistsError");
-				else expect(result.retryId).toBe(itemId);
+				expect(result.retryName).toBeNull();
+				expect(result.retryId).toBe(itemId);
 				expect(await replacement.closed).toEqual({ code: 0, signal: null });
 				await expect
 					.poll(
@@ -1659,6 +1926,114 @@ if (role === 'original') {
 		},
 		30_000,
 	);
+	it("canonical writer recreation rejects an explicit duplicate and admits a distinct fresh create", async () => {
+		const observer = postgres(dbUrl, { max: 1, fetch_types: false });
+		const reader = postgres(dbUrl, { max: 1, fetch_types: false });
+		const writers: Sql[] = [];
+		let inserts = 0;
+		const recreateClient = () => {
+			const pool = postgres(dbUrl, { max: 1, fetch_types: false });
+			const reserve = pool.reserve.bind(pool),
+				wrapped = new WeakSet<object>();
+			pool.reserve = (async () => {
+				const session = await reserve();
+				if (wrapped.has(session)) return session;
+				wrapped.add(session);
+				const unsafe = session.unsafe.bind(session);
+				session.unsafe = (async (query: string) => {
+					if (query.startsWith("INSERT INTO work_items")) inserts++;
+					return unsafe(query);
+				}) as typeof session.unsafe;
+				return session;
+			}) as typeof pool.reserve;
+			writers.push(pool);
+			return pool;
+		};
+		const initial = recreateClient();
+		const adapter = new DoltgresWorkItemAdapter(initial, {
+			readClient: reader,
+			recreateClient,
+			writerLockProtocol: "database",
+		});
+		const id = toWorkItemId("task.9624"),
+			freshId = toWorkItemId("task.9625");
+		try {
+			await adapter.create(
+				{ id, type: "task", title: "Canonical duplicate fixture" },
+				"native-duplicate-proof",
+			);
+			await initial.unsafe("SELECT 1");
+			const pidA = Number(
+				(await initial.unsafe("SELECT pg_backend_pid() AS pid"))[0]?.pid,
+			);
+			await expect(
+				adapter.create(
+					{ id, type: "task", title: "Canonical duplicate fixture" },
+					"native-duplicate-proof",
+				),
+			).rejects.toMatchObject({ name: "WorkItemAlreadyExistsError" });
+			// Existing terminal domain-error recovery retires the settled session.
+			// Canonical DI supplies this factory; a factoryless constructor remains
+			// unavailable after this path. This is not unknown-transport recovery.
+			expect(writers).toHaveLength(2);
+			const replacement = writers[1]!;
+			const pidB = Number(
+				(await replacement.unsafe("SELECT pg_backend_pid() AS pid"))[0]?.pid,
+			);
+			expect(Number.isInteger(pidA) && pidA > 0).toBe(true);
+			expect(Number.isInteger(pidB) && pidB > 0 && pidB !== pidA).toBe(true);
+			const nativeGenerations = await observer.unsafe(
+				`SELECT pid, state, query FROM pg_catalog.pg_stat_activity WHERE pid IN (${pidA}, ${pidB})`,
+			);
+			expect(nativeGenerations.length).toBeLessThanOrEqual(2);
+			console.info(
+				"canonical duplicate recovery generations",
+				JSON.stringify({
+					perPoolBudget: 1,
+					admittedGenerations: writers.length,
+					nativeGenerations,
+				}),
+			);
+			await expect
+				.poll(
+					async () =>
+						(
+							await observer.unsafe(
+								`SELECT pid FROM pg_catalog.pg_stat_activity WHERE pid = ${pidA}`,
+							)
+						).length,
+					{ timeout: 5000 },
+				)
+				.toBe(0);
+			await expect(
+				adapter.create(
+					{
+						id: freshId,
+						type: "task",
+						title: "Distinct request after duplicate",
+					},
+					"native-duplicate-proof",
+				),
+			).resolves.toMatchObject({ id: freshId, revision: 0 });
+			await replacement.unsafe("SELECT 1");
+			expect(writers).toHaveLength(2);
+			expect(inserts).toBe(3);
+			await expect(
+				reader.unsafe(
+					`SELECT id, revision FROM work_items WHERE id IN ('${id}', '${freshId}') ORDER BY id`,
+				),
+			).resolves.toEqual([
+				{ id, revision: 0 },
+				{ id: freshId, revision: 0 },
+			]);
+		} finally {
+			await Promise.allSettled(
+				[...writers, reader, observer].map((client) =>
+					client.end({ timeout: 0 }),
+				),
+			);
+		}
+	});
 	it("knowledge and work-item writers share one database scope throughout a logical write", async () => {
 		const knowledgeSql = postgres(dbUrl, { max: 1, fetch_types: false });
 		const knowledgeRead = postgres(dbUrl, { max: 1, fetch_types: false });
