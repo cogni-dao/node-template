@@ -15,10 +15,13 @@ export type {
 export {
   runDoltBranchMutation,
   reconcileAbandonedDoltOperation,
+  captureDoltPersistedCleanEdit,
+  DoltPersistedCleanEditConflictError,
   DoltBranchMutationUncertainError,
 } from "./branch-mutation.js";
 export type {
   DoltBranchMutationOptions,
   DoltBranchMutationResult,
   DoltAbandonedOperationProof,
+  DoltPersistedCleanEditReceipt,
 } from "./branch-mutation.js";

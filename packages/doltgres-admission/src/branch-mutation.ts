@@ -73,6 +73,116 @@ function scalar(
     : String(raw).replace(/^\{/, "").replace(/\}$/, "").trim();
 }
 
+/** Opaque guarded identity; only completed native clean-entry proof grants reset authority. */
+export interface DoltPersistedCleanEditReceipt {
+  readonly branch: string;
+  readonly head: string;
+  invalidate(): void;
+}
+
+const persistedCleanEdits = new WeakMap<
+  DoltPersistedCleanEditReceipt,
+  {
+    connection: DoltWriterConnection;
+    guard: DoltWriterLock;
+    active: boolean;
+    targetCleanVerified: boolean;
+  }
+>();
+
+async function noMergeOrConflicts(
+  connection: DoltWriterConnection
+): Promise<boolean> {
+  const rows = await connection.unsafe(
+    "SELECT is_merging FROM dolt.merge_status"
+  );
+  if (
+    rows.length !== 1 ||
+    ![false, "false", 0].includes(rows[0]?.is_merging as false | "false" | 0)
+  )
+    return false;
+  return !(await connection.unsafe("SELECT * FROM dolt.conflicts")).length;
+}
+
+/** A semantic entry-state conflict; native SQL/transport errors retain their own identity. */
+export class DoltPersistedCleanEditConflictError extends Error {
+  constructor(
+    readonly reason: "main_not_clean" | "target_not_clean_or_head_changed"
+  ) {
+    super(
+      reason === "main_not_clean"
+        ? "Persisted edit requires proven clean main entry"
+        : "Persisted contribution branch is dirty or its head changed"
+    );
+    this.name = "DoltPersistedCleanEditConflictError";
+  }
+}
+
+/** Capture actual clean main and target state before the trusted owner dispatches edits. */
+export async function captureDoltPersistedCleanEdit(
+  connection: DoltWriterConnection,
+  options: {
+    guard: DoltWriterLock;
+    branch: string;
+    expectedHead: string;
+    onCaptured?: (receipt: DoltPersistedCleanEditReceipt) => void;
+  }
+): Promise<DoltPersistedCleanEditReceipt> {
+  assertDoltWriterLock(connection, options.guard);
+  if (
+    !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,511}$/.test(options.branch) ||
+    options.branch === "main" ||
+    options.branch.includes("..") ||
+    !/^[a-z0-9]{32,64}$/i.test(options.expectedHead)
+  )
+    throw new Error("Persisted contribution branch identity is malformed");
+  const current = async () =>
+    scalar(
+      await connection.unsafe("SELECT active_branch() AS branch_name"),
+      "branch_name"
+    );
+  const clean = async () =>
+    !(await connection.unsafe("SELECT * FROM dolt.status")).length;
+  if (
+    (await current()) !== "main" ||
+    !(await clean()) ||
+    !(await noMergeOrConflicts(connection))
+  )
+    throw new DoltPersistedCleanEditConflictError("main_not_clean");
+  const receipt: DoltPersistedCleanEditReceipt = Object.freeze({
+    branch: options.branch,
+    head: options.expectedHead,
+    invalidate() {
+      const state = persistedCleanEdits.get(receipt);
+      if (state) state.active = false;
+    },
+  });
+  const state = {
+    connection,
+    guard: options.guard,
+    active: true,
+    targetCleanVerified: false,
+  };
+  persistedCleanEdits.set(receipt, state);
+  options.onCaptured?.(receipt);
+  await connection.unsafe(`SELECT dolt_checkout(${literal(options.branch)})`);
+  const head = scalar(
+    await connection.unsafe("SELECT dolt_hashof('HEAD') AS commit_hash"),
+    "commit_hash"
+  );
+  if (
+    (await current()) !== options.branch ||
+    head !== options.expectedHead ||
+    !(await clean()) ||
+    !(await noMergeOrConflicts(connection))
+  )
+    throw new DoltPersistedCleanEditConflictError(
+      "target_not_clean_or_head_changed"
+    );
+  state.targetCleanVerified = true;
+  return receipt;
+}
+
 export interface DoltAbandonedOperationProof {
   readonly guard: DoltWriterLock;
   readonly branch?: string;
@@ -81,6 +191,7 @@ export interface DoltAbandonedOperationProof {
   readonly creationProven: boolean;
   readonly commitAttempted: boolean;
   readonly mergeAttempted: boolean;
+  readonly persistedCleanEdit?: DoltPersistedCleanEditReceipt;
 }
 
 /**
@@ -105,44 +216,52 @@ export async function reconcileAbandonedDoltOperation(
     );
   const clean = async () =>
     !(await connection.unsafe("SELECT * FROM dolt.status")).length;
-  const noMergeOrConflicts = async () => {
-    const merging = await connection.unsafe(
-      "SELECT is_merging FROM dolt.merge_status"
-    );
-    if (
-      merging.length !== 1 ||
-      (merging[0]?.is_merging !== false &&
-        merging[0]?.is_merging !== "false" &&
-        merging[0]?.is_merging !== 0)
-    )
-      return false;
-    return !(await connection.unsafe("SELECT * FROM dolt.conflicts")).length;
-  };
+  const hasNoMergeOrConflicts = () => noMergeOrConflicts(connection);
   const cleanMain = async () =>
     (await current()) === "main" &&
     (await clean()) &&
-    (await noMergeOrConflicts());
+    (await hasNoMergeOrConflicts());
   try {
     const active = await current();
     if (active === "main") return await cleanMain();
-    const expected = proof.branch;
+    const receipt = proof.persistedCleanEdit;
+    const entry = receipt && persistedCleanEdits.get(receipt);
+    const persistedEntry = Boolean(
+      entry?.active &&
+        entry.connection === connection &&
+        entry.guard === proof.guard
+    );
+    const expected =
+      proof.branch ?? (persistedEntry ? receipt?.branch : undefined);
+    const baseHash =
+      proof.baseHash ?? (persistedEntry ? receipt?.head : undefined);
     if (
-      !proof.creationProven ||
+      (!proof.creationProven && !persistedEntry) ||
       !expected ||
       expected === "main" ||
       !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,511}$/.test(expected) ||
       expected.includes("..") ||
       active !== expected ||
-      !(await noMergeOrConflicts())
+      !(await hasNoMergeOrConflicts())
+    )
+      return false;
+    if (
+      persistedEntry &&
+      (proof.commitAttempted ||
+        proof.mergeAttempted ||
+        expected !== receipt?.branch ||
+        baseHash !== receipt?.head ||
+        (await head()) !== receipt?.head)
     )
       return false;
     if (!(await clean())) {
       if (
         proof.commitAttempted ||
         proof.mergeAttempted ||
-        !proof.baseHash ||
-        !/^[a-z0-9]{32,64}$/i.test(proof.baseHash) ||
-        (await head()) !== proof.baseHash
+        (!proof.creationProven && !entry?.targetCleanVerified) ||
+        !baseHash ||
+        !/^[a-z0-9]{32,64}$/i.test(baseHash) ||
+        (await head()) !== baseHash
       )
         return false;
       // The owned branch still has its captured original HEAD. Only its
@@ -151,8 +270,8 @@ export async function reconcileAbandonedDoltOperation(
       if (
         (await current()) !== expected ||
         !(await clean()) ||
-        !(await noMergeOrConflicts()) ||
-        (await head()) !== proof.baseHash
+        !(await hasNoMergeOrConflicts()) ||
+        (await head()) !== baseHash
       )
         return false;
     }

@@ -7,6 +7,7 @@ import {
   DoltBranchMutationUncertainError,
   runDoltBranchMutation,
   reconcileAbandonedDoltOperation,
+  captureDoltPersistedCleanEdit,
 } from "../src/branch-mutation.js";
 import {
   acquireDoltWriterLocks,
@@ -23,6 +24,7 @@ function engine(
     existing?: boolean;
     malformedMerge?: boolean;
     commitFails?: boolean;
+    targetDirty?: boolean;
   } = {}
 ) {
   let active = "main";
@@ -48,6 +50,11 @@ function engine(
       }
       if (query.startsWith("SELECT dolt_checkout('-b'")) {
         active = query.split("'")[3] ?? "";
+        return [{ dolt_checkout: 0 }];
+      }
+      if (query.startsWith("SELECT dolt_checkout('contrib/")) {
+        active = query.split("'")[1] ?? "";
+        if (overrides.targetDirty) dirty = true;
         return [{ dolt_checkout: 0 }];
       }
       if (query.includes("active_branch()")) return [{ branch_name: active }];
@@ -563,5 +570,145 @@ describe("runDoltBranchMutation", () => {
       reason: "guard_invalid",
     });
     expect(f.queries).toHaveLength(count);
+  });
+});
+
+describe("persisted clean edit receipts", () => {
+  it.each([false, true])(
+    "an interrupted capture restores only a clean target; dirty=%s",
+    async (dirty) => {
+      const f = await setup();
+      let staged:
+        | Awaited<ReturnType<typeof captureDoltPersistedCleanEdit>>
+        | undefined;
+      await expect(
+        captureDoltPersistedCleanEdit(f.connection, {
+          guard: f.guard,
+          branch: "contrib/existing",
+          expectedHead: BASE,
+          onCaptured: (receipt) => {
+            staged = receipt;
+            throw new Error("public capture abandoned before return");
+          },
+        })
+      ).rejects.toThrow();
+      // Model the positive native checkout settling after its public deadline.
+      f.setActive("contrib/existing");
+      f.setDirty(dirty);
+      const before = f.queries.length;
+      await expect(
+        reconcileAbandonedDoltOperation(f.connection, {
+          guard: f.guard,
+          creationProven: false,
+          commitAttempted: false,
+          mergeAttempted: false,
+          persistedCleanEdit: staged,
+        })
+      ).resolves.toBe(!dirty);
+      expect(
+        f.queries.slice(before).some((q) => q.includes("dolt_reset"))
+      ).toBe(false);
+    }
+  );
+  it("discards only new uncommitted edits while preserving existing HEAD and ref", async () => {
+    const f = await setup();
+    const receipt = await captureDoltPersistedCleanEdit(f.connection, {
+      guard: f.guard,
+      branch: "contrib/existing",
+      expectedHead: BASE,
+    });
+    f.setDirty(true);
+    await expect(
+      reconcileAbandonedDoltOperation(f.connection, {
+        guard: f.guard,
+        creationProven: false,
+        commitAttempted: false,
+        mergeAttempted: false,
+        persistedCleanEdit: receipt,
+      })
+    ).resolves.toBe(true);
+    expect(f.queries.filter((q) => q.includes("dolt_reset"))).toEqual([
+      "SELECT dolt_reset('--hard', 'HEAD')",
+    ]);
+    expect(f.queries.some((q) => /dolt_commit|dolt_branch/.test(q))).toBe(
+      false
+    );
+    await f.guard.release();
+  });
+  it.each([
+    "dirty-main",
+    "dirty-target",
+    "changed-head",
+    "invalidated",
+    "forged",
+    "foreign-session",
+    "commit",
+    "merge",
+    "conflicts",
+  ])("fails closed for %s", async (condition) => {
+    const f = await setup();
+    if (condition === "dirty-main") {
+      f.setDirty(true);
+      await expect(
+        captureDoltPersistedCleanEdit(f.connection, {
+          guard: f.guard,
+          branch: "contrib/existing",
+          expectedHead: BASE,
+        })
+      ).rejects.toThrow();
+      return;
+    }
+    if (condition === "dirty-target") {
+      const target = await setup({ targetDirty: true });
+      await expect(
+        captureDoltPersistedCleanEdit(target.connection, {
+          guard: target.guard,
+          branch: "contrib/existing",
+          expectedHead: BASE,
+        })
+      ).rejects.toThrow();
+      return;
+    }
+    const receipt = await captureDoltPersistedCleanEdit(f.connection, {
+      guard: f.guard,
+      branch: "contrib/existing",
+      expectedHead: BASE,
+    });
+    f.setDirty(true);
+    if (condition === "changed-head") f.setHead(HASH);
+    if (condition === "invalidated") receipt.invalidate();
+    if (condition === "merge") f.setMerge([{ is_merging: true }]);
+    if (condition === "conflicts") f.setConflicts([{ table: "knowledge" }]);
+    let supplied = receipt;
+    if (condition === "forged") supplied = { ...receipt };
+    if (condition === "foreign-session") {
+      const other = await setup();
+      other.setActive("contrib/existing");
+      other.setDirty(true);
+      await expect(
+        reconcileAbandonedDoltOperation(other.connection, {
+          guard: other.guard,
+          creationProven: false,
+          commitAttempted: false,
+          mergeAttempted: false,
+          persistedCleanEdit: supplied,
+        })
+      ).resolves.toBe(false);
+      expect(other.queries.some((q) => q.includes("dolt_reset"))).toBe(false);
+      return;
+    }
+    const before = f.queries.length;
+    await expect(
+      reconcileAbandonedDoltOperation(f.connection, {
+        guard: f.guard,
+        creationProven: false,
+        commitAttempted: condition === "commit",
+        mergeAttempted: condition === "merge",
+        persistedCleanEdit: supplied,
+      })
+    ).resolves.toBe(false);
+    expect(
+      f.queries.slice(before).some((q) => /dolt_reset|dolt_checkout/.test(q))
+    ).toBe(false);
   });
 });
