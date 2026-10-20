@@ -317,13 +317,14 @@ describe("Doltgres 0.57.3 common per-database writer protocol", () => {
     const database = boundary === "SIGKILL" ? "knowledge_cli_pending" : "knowledge_cli_deadline";
     const fixture = await cliFixture(database);
     const sleepSeconds = boundary === "SIGKILL" ? 15 : 45;
+    const probe = `migration_cli_${database}`;
     let child: ReturnType<typeof spawn> | undefined;
     let observer: Sql | undefined;
     try {
       await fixture.writeJournal(true);
       await writeFile(path.join(fixture.folder, "0001_probe.sql"), `CREATE TABLE migration_once (id integer NOT NULL);
 --> statement-breakpoint
-INSERT INTO migration_once SELECT 7 WHERE pg_sleep(${sleepSeconds}) IS NULL;`);
+INSERT INTO migration_once SELECT 7 WHERE pg_sleep(${sleepSeconds}) IS NULL /* ${probe} */;`);
       child = spawn(process.execPath, [path.join(fixture.root, "scripts/db/migrate-doltgres.mjs"), fixture.folder], {
         cwd: fixture.root, env: { ...process.env, NODE_NAME: database.replace(/^knowledge_/, "").replaceAll("_", "-"), DATABASE_URL: fixture.url }, stdio: ["ignore", "pipe", "pipe"],
       });
@@ -338,8 +339,11 @@ INSERT INTO migration_once SELECT 7 WHERE pg_sleep(${sleepSeconds}) IS NULL;`);
           throw new Error(`CLI exited before native delayed SQL: code=${cli.exitCode} signal=${cli.signalCode} ${diagnostics}`);
         const rows = await fixture.admin.unsafe("SELECT pid,datname,state,query FROM pg_catalog.pg_stat_activity");
         observed = rows.slice(0, 40).map(({ pid, datname, state, query }) => ({ pid, datname, state, query: String(query).slice(0, 240) }));
-        const active = rows.find((row) => String(row.datname).startsWith(database) && String(row.query).includes("pg_sleep"));
-        pid = Number(active?.pid ?? 0);
+        // Native 0.57.3 reports datname=NULL even during branch SQL. Bind
+        // this exact child to its unique fixture query, never infer a DB name.
+        const active = rows.filter((row) => row.state === "active" && String(row.query).includes(probe) && String(row.query).includes(`pg_sleep(${sleepSeconds})`));
+        if (active.length > 1) throw new Error("duplicate native CLI probe sessions");
+        pid = Number(active[0]?.pid ?? 0);
         return pid > 0;
       }, { timeout: 10_000 }).toBe(true);
       } catch (cause) {
