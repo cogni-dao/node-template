@@ -4,7 +4,7 @@
 /**
  * Module: `@cogni/knowledge-store/adapters/doltgres/session-admission`
  * Purpose: Admission control for Dolt branch work — bound concurrency ABOVE the connection pool so a burst of writers queues instead of starving the pool.
- * Scope: FIFO queue, cross-replica advisory lock, bounded reserve, and client recreation for session-pinned operations. Does not gate ordinary pooled reads — a write-side proof must never decide whether a read is served (bug.5358).
+ * Scope: FIFO queue, cross-replica advisory lock, bounded reserve, and retained native capacity for session-pinned operations. Does not gate ordinary pooled reads — a write-side proof must never decide whether a read is served (bug.5358).
  * Invariants:
  *   - DOLT_SESSION_ADMISSION: admit one operation BEFORE reserving, never after.
  *     Reserving first is what wedges the pool; see `DoltBranchSessionRunner`.
@@ -16,6 +16,8 @@
  * @public
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
 import {
   acquireDoltWriterLocks,
   DoltWriterAdmissionError,
@@ -34,7 +36,23 @@ export interface DoltBranchWriterGuard {
   release(): Promise<void>;
 }
 
-import { KnowledgeBusyError } from "../../port/knowledge-store.port.js";
+import {
+  KnowledgeBusyError,
+  KnowledgeWriteOutcomeUnknownError,
+} from "../../port/knowledge-store.port.js";
+
+interface NativeOperation {
+  readonly operationId: string;
+  branch: string;
+  effectsPossible: boolean;
+  commitHash?: string;
+  abandoned?: Error;
+  rejectCaller?: (error: Error) => void;
+  unknown?: boolean;
+  admitting?: boolean;
+  closed?: boolean;
+  readonly pending: Set<Promise<unknown>>;
+}
 
 /** Historical key retained for bridge compatibility, not an independent writer domain. */
 export const KNOWLEDGE_BRANCH_LOCK_KEY = 5_001_002;
@@ -74,8 +92,8 @@ export interface BranchSessionOptions {
   readonly writerProtocol?: "bridge" | "database";
   readonly queryTimeoutMs?: number;
   /**
-   * Rebuilds the client after a wedged session is terminated. Without it a
-   * terminated pool cannot be replaced; it stays failed closed until runtime restart.
+   * Legacy configuration accepted for source compatibility. Automatic client
+   * replacement is disabled: a closed client cannot prove native work ended.
    */
   readonly recreateClient?: () => Sql;
 }
@@ -123,11 +141,10 @@ function errorFields(error: unknown): Record<string, unknown> {
  *   1. FIFO queue — admit ONE operation before it reserves, so a burst queues
  *      instead of racing. Bounded by `queueWaitMs` so a caller fails fast.
  *   2. Prime, then reserve, under ONE deadline covering both. The deadline must
- *      span the prime: on an already-exhausted pool the priming query is itself
- *      parked on the unbounded backlog, so bounding only the reserve still
- *      hangs. Missing the deadline means the pool is wedged: terminate the
- *      client and rebuild it, rather than hand the next caller a pool with one
- *      fewer slot.
+ *      span the prime: a deadline does not prove native completion. Retain
+ *      the original socket and FIFO until SQL actually settles. Transport
+ *      uncertainty quarantines the writer without another native generation.
+ *      Process death still requires a separate native completion proof.
  *   3. `pg_try_advisory_lock` — the same one-at-a-time guarantee across
  *      replicas, which an in-process queue cannot give.
  *
@@ -137,6 +154,10 @@ function errorFields(error: unknown): Record<string, unknown> {
 export class DoltBranchSessionRunner {
   private sql: Sql;
   private operationTail: Promise<void> = Promise.resolve();
+  private queuedOperations = 0;
+  private readonly queueWaiters = new Set<
+    (error: KnowledgeBusyError) => void
+  >();
   private readonly logger: BranchSessionLogger;
   private readonly queueWaitMs: number;
   private readonly acquireTimeoutMs: number;
@@ -147,8 +168,12 @@ export class DoltBranchSessionRunner {
   private readonly retiredPools = new WeakSet<object>();
   private readonly readClients = new WeakSet<object>();
   private readonly connectionPools = new WeakMap<object, Sql>();
-  private readonly recreateClient: (() => Sql) | undefined;
-  private readonly terminatingPools = new WeakMap<object, Promise<void>>();
+  private readonly cleanupContext = new AsyncLocalStorage<NativeOperation>();
+  private heldOperation: NativeOperation | undefined;
+  private readonly connectionOperations = new WeakMap<
+    object,
+    NativeOperation
+  >();
 
   constructor(sql: Sql, options: BranchSessionOptions = {}) {
     this.sql = sql;
@@ -159,10 +184,9 @@ export class DoltBranchSessionRunner {
     this.lockRetryMs = options.lockRetryMs ?? LOCK_RETRY_MS;
     this.writerProtocol = options.writerProtocol ?? "bridge";
     this.queryTimeoutMs = options.queryTimeoutMs ?? 30000;
-    this.recreateClient = options.recreateClient;
   }
 
-  /** Register independent readers so current or recreated writer pools cannot alias them. */
+  /** Register readers so writer and ordinary read pools cannot alias. */
   assertIndependentReadClient(reader: Sql): void {
     if (reader === this.sql)
       throw new Error(
@@ -171,7 +195,7 @@ export class DoltBranchSessionRunner {
     this.readClients.add(reader);
   }
 
-  /** The client currently backing branch work. Swapped on termination. */
+  /** The fixed writer pool; uncertainty never creates another native generation. */
   get client(): Sql {
     return this.sql;
   }
@@ -185,13 +209,96 @@ export class DoltBranchSessionRunner {
    */
   async run<T>(
     operation: string,
-    fn: (conn: DoltWriteConnection, guard: DoltBranchWriterGuard) => Promise<T>
+    fn: (conn: DoltWriteConnection, guard: DoltBranchWriterGuard) => Promise<T>,
+    options: { readonly operationId?: string } = {}
   ): Promise<T> {
+    if (this.heldOperation || this.retiredPools.has(this.sql))
+      throw new KnowledgeBusyError(
+        "Knowledge native writer capacity is retained; retry after settlement"
+      );
     const leaveQueue = await this.enterQueue(operation);
+    const context: NativeOperation = {
+      operationId: options.operationId ?? randomUUID(),
+      // Lookup location, not proof that this operation owns a created branch.
+      branch: "main",
+      effectsPossible: false,
+      pending: new Set(),
+    };
+    const abandoned = new Promise<never>((_resolve, reject) => {
+      context.rejectCaller = reject;
+    });
+    let succeed!: (value: T) => void;
+    const completed = new Promise<T>((resolve) => {
+      succeed = resolve;
+    });
+    const execution = (async () => {
+      try {
+        if (this.heldOperation || this.retiredPools.has(this.sql))
+          throw new KnowledgeBusyError(
+            "Knowledge native writer capacity is retained"
+          );
+        return await this.withSession(operation, fn, context, succeed);
+      } finally {
+        if (
+          !context.unknown &&
+          !this.retiredPools.has(this.sql) &&
+          this.heldOperation === context
+        )
+          this.heldOperation = undefined;
+        leaveQueue();
+      }
+    })();
+    return Promise.race([execution, abandoned, completed]);
+  }
+
+  private abandon(context: NativeOperation): void {
+    if (context.abandoned) return;
+    context.abandoned = context.effectsPossible
+      ? new KnowledgeWriteOutcomeUnknownError(
+          context.operationId,
+          context.branch,
+          context.commitHash
+        )
+      : new KnowledgeBusyError(
+          "Knowledge native operation retained after caller deadline; retry after settlement"
+        );
+    this.heldOperation = context;
+    context.rejectCaller?.(context.abandoned);
+    for (const reject of this.queueWaiters)
+      reject(
+        new KnowledgeBusyError("Knowledge native writer capacity is retained")
+      );
+  }
+
+  private async awaitNative<T>(
+    pool: Sql,
+    context: NativeOperation,
+    native: PromiseLike<T>,
+    budgetMs: number,
+    allowAbandonedReturn = false
+  ): Promise<T> {
+    const pending = Promise.resolve(native);
+    context.pending.add(pending);
+    const timer = setTimeout(() => this.abandon(context), budgetMs);
+    let returned = false;
     try {
-      return await this.withSession(operation, fn);
+      const result = await pending;
+      returned = true;
+      if (context.abandoned && !allowAbandonedReturn) throw context.abandoned;
+      return result;
+    } catch (error) {
+      if (
+        !returned &&
+        !(error instanceof Error && error.name === "PostgresError")
+      ) {
+        context.unknown = true;
+        this.retiredPools.add(pool);
+        this.abandon(context);
+      }
+      throw context.abandoned ?? error;
     } finally {
-      leaveQueue();
+      clearTimeout(timer);
+      context.pending.delete(pending);
     }
   }
 
@@ -221,6 +328,9 @@ export class DoltBranchSessionRunner {
    * chain cannot deadlock behind an abandoned turn.
    */
   private async enterQueue(operation: string): Promise<() => void> {
+    if (this.queuedOperations >= 32)
+      throw new KnowledgeBusyError("Knowledge writer queue capacity reached");
+    this.queuedOperations++;
     const predecessor = this.operationTail;
     let releaseTurn: () => void = () => undefined;
     const turnDone = new Promise<void>((resolve) => {
@@ -230,9 +340,15 @@ export class DoltBranchSessionRunner {
 
     const startedAt = Date.now();
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let rejectWaiter!: (error: KnowledgeBusyError) => void;
+    const capacityRetained = new Promise<never>((_resolve, reject) => {
+      rejectWaiter = reject;
+    });
+    this.queueWaiters.add(rejectWaiter);
     try {
       await Promise.race([
         predecessor,
+        capacityRetained,
         new Promise<never>((_resolve, reject) => {
           timeoutId = setTimeout(
             () =>
@@ -250,11 +366,15 @@ export class DoltBranchSessionRunner {
       releaseTurn();
       this.log("warn", operation, "queue", "error", {
         durationMs: Date.now() - startedAt,
-        reason: "wait_timeout",
+        reason: this.heldOperation
+          ? "native_capacity_retained"
+          : "wait_timeout",
       });
       throw error;
     } finally {
       if (timeoutId) clearTimeout(timeoutId);
+      this.queuedOperations--;
+      this.queueWaiters.delete(rejectWaiter);
     }
 
     this.log("info", operation, "queue", "complete", {
@@ -279,12 +399,12 @@ export class DoltBranchSessionRunner {
     );
     const pool = this.connectionPools.get(connection);
     if (!pool) throw new Error("Unknown knowledge writer connection");
-    await this.terminateClient(
-      pool,
-      "knowledge.write",
-      "session",
-      "outcome_uncertain"
-    );
+    const context = this.connectionOperations.get(connection);
+    this.quarantine(pool, "knowledge.write", "session", "outcome_uncertain");
+    if (context) {
+      context.unknown = true;
+      this.heldOperation = context;
+    }
   }
 
   private async restoreMain(
@@ -311,101 +431,142 @@ export class DoltBranchSessionRunner {
           throw new Error("Clean main restoration was not proven");
       }
     } catch {
-      await this.terminateClient(
-        pool,
-        operation,
-        "checkout",
-        "restore_uncertain"
-      );
+      this.quarantine(pool, operation, "checkout", "restore_uncertain");
     }
   }
 
   private async withSession<T>(
     operation: string,
-    fn: (conn: DoltWriteConnection, guard: DoltBranchWriterGuard) => Promise<T>
+    fn: (conn: DoltWriteConnection, guard: DoltBranchWriterGuard) => Promise<T>,
+    context: NativeOperation,
+    succeed: (value: T) => void
   ): Promise<T> {
     const pool = this.sql;
     let native: ReservedSql | undefined;
     let guard: DoltBranchWriterGuard | undefined;
     let connection: DoltWriteConnection | undefined;
     try {
-      native = await this.acquireSession(pool, operation);
+      native = await this.acquireSession(pool, context);
       const reserved = native;
       connection = {
         unsafe: async (query: string) => {
-          if (this.retiredPools.has(pool))
+          const unlock = /^SELECT pg_advisory_unlock\(/.test(query);
+          const cleanup = this.cleanupContext.getStore() === context;
+          // Admission owns its partial locks before a user callback exists.
+          const admissionUnlock =
+            unlock && context.admitting && !context.pending.size;
+          if (
+            (context.closed || context.abandoned) &&
+            !cleanup &&
+            !admissionUnlock
+          ) {
+            if (context.admitting && !context.unknown)
+              throw new DoltWriterAdmissionError("lock_contended", false, {
+                cause: context.abandoned,
+              });
+            throw (
+              context.abandoned ??
+              new Error("Knowledge writer scope has closed")
+            );
+          }
+          if (context.unknown || this.retiredPools.has(pool))
             throw new KnowledgeBusyError(
               "Knowledge writer session was retired"
             );
-          let timer: ReturnType<typeof setTimeout> | undefined;
-          try {
-            return await Promise.race([
-              reserved.unsafe(query),
-              new Promise<never>((_resolve, reject) => {
-                timer = setTimeout(
-                  () =>
-                    reject(
-                      new KnowledgeBusyError("Knowledge SQL deadline exceeded")
-                    ),
-                  this.queryTimeoutMs
-                );
-              }),
-            ]);
-          } catch (error) {
-            if (error instanceof KnowledgeBusyError)
-              await this.terminateClient(
-                pool,
-                operation,
-                "query",
-                "query_timeout"
-              );
-            throw error;
-          } finally {
-            if (timer) clearTimeout(timer);
+          const branch = /dolt_checkout\('(?:-b',\s*')?([^']+)'/.exec(
+            query
+          )?.[1];
+          if (branch && branch !== "main") context.branch = branch;
+          // Raw callback SQL can invoke effectful functions, CTEs or CALLs.
+          // Only admission and runner-owned cleanup have narrower semantics.
+          if (!context.admitting && !cleanup) context.effectsPossible = true;
+          const rows = await this.awaitNative(
+            pool,
+            context,
+            reserved.unsafe(query),
+            this.queryTimeoutMs,
+            context.admitting || unlock
+          );
+          if (/dolt_commit\(|dolt_hashof\(/i.test(query)) {
+            const hash = rows[0]?.dolt_commit ?? rows[0]?.commit_hash;
+            if (typeof hash === "string") context.commitHash = hash;
           }
+          return rows;
         },
       };
       this.connectionPools.set(connection, pool);
+      this.connectionOperations.set(connection, context);
       try {
+        context.admitting = true;
         guard = await acquireDoltWriterLocks(connection, {
           protocol: this.writerProtocol,
           lockWaitMs: this.lockWaitMs,
           lockRetryMs: this.lockRetryMs,
+          authorizeRelease: () => {
+            if (
+              !context.admitting &&
+              this.cleanupContext.getStore() !== context
+            )
+              throw new Error(
+                "Knowledge writer release is private to its owner"
+              );
+          },
         });
       } catch (error) {
+        if (context.abandoned) throw context.abandoned;
         if (error instanceof DoltWriterAdmissionError && error.discardSession)
-          await this.terminateClient(
-            pool,
-            operation,
-            "lock.acquire",
-            error.reason
-          );
+          this.quarantine(pool, operation, "lock.acquire", error.reason);
         throw new KnowledgeBusyError(
           "Knowledge writer admission unavailable; retry before starting a mutation"
         );
+      } finally {
+        context.admitting = false;
       }
-      return await fn(connection, guard);
+      if (context.abandoned) throw context.abandoned;
+      const callbackConnection = connection;
+      const callbackGuard = guard;
+      const value = await this.cleanupContext.exit(() =>
+        fn(callbackConnection, callbackGuard)
+      );
+      context.closed = true;
+      // The caller owns the business proof represented by a successful callback.
+      // Cleanup latency must not rewrite that ACK, but unawaited SQL is not ACKed.
+      if (!context.abandoned && !context.pending.size) succeed(value);
+      return value;
     } finally {
-      if (guard && connection && !this.retiredPools.has(pool))
-        await this.restoreMain(connection, pool, operation);
-      if (guard && !this.retiredPools.has(pool)) {
-        try {
-          await guard.release();
-        } catch (error) {
-          this.log(
-            "error",
-            operation,
-            "lock.release",
-            "error",
-            errorFields(error)
-          );
-          await this.terminateClient(
-            pool,
-            operation,
-            "lock.release",
-            "unlock_uncertain"
-          );
-        }
+      context.closed = true;
+      // Closing the public scope precedes the drain. An escaped callback can
+      // neither add another native query nor inherit private cleanup authority.
+      await Promise.allSettled([...context.pending]);
+      if (context.abandoned && (context.effectsPossible || context.unknown)) {
+        this.retiredPools.add(pool);
+        this.heldOperation = context;
+      }
+      if (guard && connection && !this.retiredPools.has(pool)) {
+        const ownedGuard = guard;
+        const ownedConnection = connection;
+        await this.cleanupContext.run(context, async () => {
+          if (!context.abandoned)
+            await this.restoreMain(ownedConnection, pool, operation);
+          if (this.retiredPools.has(pool)) return;
+          try {
+            await ownedGuard.release();
+          } catch (error) {
+            this.log(
+              "error",
+              operation,
+              "lock.release",
+              "error",
+              errorFields(error)
+            );
+            this.quarantine(
+              pool,
+              operation,
+              "lock.release",
+              "unlock_uncertain"
+            );
+          }
+        });
       }
       if (native && !this.retiredPools.has(pool)) native.release();
     }
@@ -415,101 +576,46 @@ export class DoltBranchSessionRunner {
    * Prime, then reserve, under a single deadline.
    *
    * PRIME_BEFORE_RESERVE: an ordinary query reaches postgres.js `onopen`, which
-   * a cold `reserve()` does not. The deadline spans the prime because on an
-   * exhausted pool the prime is what parks. Missing it means the client is
-   * wedged, so it is condemned and rebuilt rather than handed on.
+   * a cold `reserve()` does not. A timed-out prime stays owned until its actual
+   * settlement; a late reservation is returned without starting a callback.
    */
   private async acquireSession(
     pool: Sql,
-    operation: string
+    context: NativeOperation
   ): Promise<ReservedSql> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const expiry = new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(
-        () =>
-          reject(
-            new KnowledgeBusyError(
-              `Knowledge write plane timed out after ${this.acquireTimeoutMs}ms acquiring a session-pinned connection; retry shortly`
-            )
-          ),
-        this.acquireTimeoutMs
-      );
-    });
-
-    const acquire = (async () => {
-      await pool.unsafe("SELECT 1 AS knowledge_ready");
-      return await pool.reserve();
-    })();
-
-    try {
-      return await Promise.race([acquire, expiry]);
-    } catch (error) {
-      // The losing acquire may still settle; hand its slot straight back so a
-      // timed-out call cannot leak one on top of the failure.
-      void acquire.then(
-        (late) => late.release(),
-        () => undefined
-      );
-      await this.terminateClient(pool, operation, "acquire", "acquire_timeout");
-      throw error;
-    } finally {
-      if (timer) clearTimeout(timer);
+    const started = Date.now();
+    await this.awaitNative(
+      pool,
+      context,
+      pool.unsafe("SELECT 1 AS knowledge_ready"),
+      this.acquireTimeoutMs
+    );
+    if (context.abandoned) throw context.abandoned;
+    const reserved = await this.awaitNative(
+      pool,
+      context,
+      pool.reserve(),
+      Math.max(1, this.acquireTimeoutMs - (Date.now() - started)),
+      true
+    );
+    if (context.abandoned) {
+      reserved.release();
+      throw context.abandoned;
     }
+    return reserved;
   }
 
-  /**
-   * End a wedged client and rebuild it, so the next caller gets a whole pool
-   * rather than one with a permanently burnt slot. Without a factory the pool
-   * remains retired; unknown native lock/session state is never reused.
-   */
-  private async terminateClient(
+  /** Quarantine unknown native work without abandoning its socket or replacing capacity. */
+  private quarantine(
     pool: Sql,
     operation: string,
     stage: string,
     reason: string
-  ): Promise<void> {
-    const active = this.terminatingPools.get(pool as object);
-    if (active) return active;
-
+  ): void {
     this.retiredPools.add(pool);
-    const termination = (async () => {
-      this.log("error", operation, "connection.terminate", "error", {
-        failedStage: stage,
-        reason,
-      });
-      try {
-        await pool.end({ timeout: 0 });
-      } catch (error) {
-        this.log("error", operation, "connection.terminate", "error", {
-          failedStage: stage,
-          reason: "terminate_failed",
-          ...errorFields(error),
-        });
-        return;
-      }
-      if (this.sql !== pool || !this.recreateClient) return;
-      try {
-        const replacement = this.recreateClient();
-        if (
-          !replacement ||
-          this.readClients.has(replacement) ||
-          this.retiredPools.has(replacement)
-        )
-          throw new Error(
-            "Knowledge writer factory must return a fresh independent writer pool"
-          );
-        this.sql = replacement;
-        this.log("info", operation, "connection.recreate", "complete", {
-          failedStage: stage,
-        });
-      } catch (error) {
-        this.log("error", operation, "connection.recreate", "error", {
-          failedStage: stage,
-          ...errorFields(error),
-        });
-      }
-    })();
-    this.terminatingPools.set(pool as object, termination);
-    return termination;
+    this.log("error", operation, "connection.quarantine", "error", {
+      failedStage: stage,
+      reason,
+    });
   }
 }
