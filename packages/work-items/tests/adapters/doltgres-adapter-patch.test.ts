@@ -9,8 +9,10 @@
  *   - PATCH_DEPLOY_VERIFIED: deployVerified:true emits `deploy_verified = TRUE`.
  *   - PATCH_NULLABLE_CLEAR: projectId:null emits `project_id = NULL`.
  *   - PATCH_PRESERVES_EXISTING: title still emits `title = '...'`.
+ *   - PATCH_CAS (task.5284): expectedRevision is in the UPDATE predicate; a stale one throws WorkItemRevisionConflictError with nothing committed.
+ *   - COLLABORATOR_TRIAGE (task.5284): a non-creator may patch only priority/rank/labels; any other field keeps the whole patch creator-bound.
  * Side-effects: none
- * Links: bug.5005,
+ * Links: bug.5005, task.5284,
  *   packages/work-items/src/adapters/doltgres/adapter.ts
  * @internal
  */
@@ -19,7 +21,11 @@ import { toWorkItemId } from "@cogni-dao/work-items";
 import type { Sql } from "postgres";
 import { describe, expect, it } from "vitest";
 
-import { DoltgresWorkItemAdapter } from "../../src/adapters/doltgres/adapter.js";
+import {
+  DoltgresWorkItemAdapter,
+  WorkItemAuthorizationError,
+  WorkItemRevisionConflictError,
+} from "../../src/adapters/doltgres/adapter.js";
 import {
   independentReadPool,
   makeFakeDoltgresSql,
@@ -167,5 +173,238 @@ describe("unowned rows stay mutable", () => {
     );
     expect(legacy.created_by_principal_id).toBeNull();
     expect(owned.created_by_principal_id).toBe("agent-a");
+  });
+});
+
+// task.5284 (story.5096): `patch` honors `expectedRevision` as a real
+// compare-and-set, and a non-creator may patch the triage fields only.
+const CAS_ID = "task.0001";
+const CREATOR = "principal-creator";
+const COLLABORATOR = "system-prioritizer";
+
+const casSeed = {
+  id: CAS_ID,
+  type: "task",
+  title: "triage me",
+  status: "needs_implement",
+  node: "operator",
+  actor: "either",
+  assignees: [],
+  external_refs: [],
+  labels: [],
+  spec_refs: [],
+  priority: 2,
+  rank: 7,
+  revision: 3,
+  deploy_verified: false,
+  created_by_principal_id: CREATOR,
+  claimed_by_run: null,
+  claimed_at: null,
+  claim_owner_principal_id: null,
+  claim_expires_at: null,
+  created_at: "2026-10-03T00:00:00.000Z",
+  updated_at: "2026-10-03T00:00:00.000Z",
+};
+
+/**
+ * One in-memory row behind the stateful Dolt fake. The UPDATE arm honours the
+ * statement's own `revision = N` and creator predicates, so the CAS and the
+ * authz are exercised as SQL, not assumed. `concurrentBumpBeforeUpdate` models
+ * a writer outside this adapter's lock landing between preflight and UPDATE.
+ */
+function casHarness(options: { concurrentBumpBeforeUpdate?: boolean } = {}) {
+  const queries: string[] = [];
+  const store = new Map<string, Record<string, unknown>>([
+    [CAS_ID, { ...casSeed }],
+  ]);
+  const respond = (query: string) => {
+    if (query.startsWith("SELECT id FROM work_items")) return [];
+    if (query.startsWith("UPDATE work_items")) {
+      const id = /WHERE id = '([^']+)'/.exec(query)?.[1] ?? "";
+      const current = store.get(id);
+      if (current && options.concurrentBumpBeforeUpdate) {
+        current.revision = Number(current.revision) + 1;
+      }
+      if (!current) return [];
+      const expected = /AND revision = (\d+)/.exec(query)?.[1];
+      if (expected !== undefined && Number(current.revision) !== Number(expected))
+        return [];
+      const owner = /created_by_principal_id = '([^']+)'\)/.exec(query)?.[1];
+      if (owner !== undefined && current.created_by_principal_id !== owner)
+        return [];
+      const next: Record<string, unknown> = {
+        ...current,
+        revision: Number(current.revision) + 1,
+        claim_active: false,
+      };
+      const priority = /\bpriority = (-?\d+)/.exec(query)?.[1];
+      if (priority !== undefined) next.priority = Number(priority);
+      const rank = /\brank = (NULL|-?\d+)/.exec(query)?.[1];
+      if (rank !== undefined) next.rank = rank === "NULL" ? null : Number(rank);
+      const labels = /\blabels = '(.*?)'::jsonb/.exec(query)?.[1];
+      if (labels !== undefined) next.labels = JSON.parse(labels);
+      const title = /\btitle = '([^']*)'/.exec(query)?.[1];
+      if (title !== undefined) next.title = title;
+      store.set(id, next);
+      return [next];
+    }
+    const byId = /FROM work_items WHERE id = '([^']+)'/.exec(query)?.[1];
+    if (byId) {
+      const row = store.get(byId);
+      return row ? [{ ...row, claim_active: false }] : [];
+    }
+    return [];
+  };
+  const sql = makeFakeDoltgresSql(respond, queries);
+  const adapter = new DoltgresWorkItemAdapter(sql, {
+    readClient: independentReadPool(sql),
+    recreateClient: () => sql,
+  });
+  return { adapter, queries, store };
+}
+
+const branchCreated = (queries: string[]) =>
+  queries.some((query) => query.includes("dolt_checkout('-b'"));
+const committed = (queries: string[]) =>
+  queries.some((query) => query.startsWith("SELECT dolt_commit"));
+const updateOf = (queries: string[]) =>
+  queries.find((query) => query.startsWith("UPDATE work_items"));
+
+describe("DoltgresWorkItemAdapter.patch — expectedRevision CAS (task.5284)", () => {
+  it("lands a matching expectedRevision and bumps revision by exactly one", async () => {
+    const { adapter, queries } = casHarness();
+
+    const result = await adapter.patch(
+      { id: toWorkItemId(CAS_ID), expectedRevision: 3, set: { title: "cas" } },
+      CREATOR
+    );
+
+    expect(result).toMatchObject({ id: CAS_ID, title: "cas", revision: 4 });
+    // The CAS is in the statement itself, not only in the preflight.
+    expect(updateOf(queries)).toContain(
+      `WHERE id = '${CAS_ID}' AND (created_by_principal_id IS NULL OR created_by_principal_id = '${CREATOR}') AND revision = 3 RETURNING`
+    );
+    expect(queries).toContain(
+      `SELECT dolt_commit('-m', 'work-items: patch ${CAS_ID} by actor:${CREATOR}')`
+    );
+  });
+
+  it("refuses a stale expectedRevision before any branch or DML, leaving the row unchanged", async () => {
+    const { adapter, queries, store } = casHarness();
+
+    const attempt = adapter.patch(
+      { id: toWorkItemId(CAS_ID), expectedRevision: 2, set: { priority: 0 } },
+      CREATOR
+    );
+
+    await expect(attempt).rejects.toBeInstanceOf(WorkItemRevisionConflictError);
+    await expect(attempt).rejects.toMatchObject({
+      id: CAS_ID,
+      expectedRevision: 2,
+      currentRevision: 3,
+    });
+    expect(branchCreated(queries)).toBe(false);
+    expect(updateOf(queries)).toBeUndefined();
+    expect(store.get(CAS_ID)).toMatchObject({ priority: 2, revision: 3 });
+  });
+
+  it("reports a conflict, commits nothing, and drops the op branch when the UPDATE loses a race", async () => {
+    const { adapter, queries, store } = casHarness({
+      concurrentBumpBeforeUpdate: true,
+    });
+
+    await expect(
+      adapter.patch(
+        { id: toWorkItemId(CAS_ID), expectedRevision: 3, set: { priority: 0 } },
+        CREATOR
+      )
+    ).rejects.toMatchObject({
+      name: "WorkItemRevisionConflictError",
+      expectedRevision: 3,
+      currentRevision: 4,
+    });
+    expect(committed(queries)).toBe(false);
+    expect(
+      queries.some((query) => query.startsWith("SELECT dolt_branch('-D'"))
+    ).toBe(true);
+    expect(store.get(CAS_ID)).toMatchObject({ priority: 2, rank: 7 });
+  });
+
+  it("leaves an omitted expectedRevision unconditioned, as before", async () => {
+    const { adapter, queries } = casHarness();
+
+    await expect(
+      adapter.patch({ id: toWorkItemId(CAS_ID), set: { title: "plain" } }, CREATOR)
+    ).resolves.toMatchObject({ title: "plain", revision: 4 });
+    expect(updateOf(queries)).not.toContain("AND revision =");
+    expect(updateOf(queries)).toContain(
+      `created_by_principal_id = '${CREATOR}'`
+    );
+  });
+
+  it("rejects a malformed expectedRevision without touching the store", async () => {
+    const { adapter, queries } = casHarness();
+
+    await expect(
+      adapter.patch(
+        { id: toWorkItemId(CAS_ID), expectedRevision: "abc", set: { priority: 1 } },
+        CREATOR
+      )
+    ).rejects.toThrow(/expectedRevision/);
+    expect(queries).toHaveLength(0);
+  });
+});
+
+describe("DoltgresWorkItemAdapter.patch — collaborator triage fields (task.5284)", () => {
+  it("lets a non-creator set priority, rank and labels", async () => {
+    const { adapter, queries } = casHarness();
+
+    await expect(
+      adapter.patch(
+        {
+          id: toWorkItemId(CAS_ID),
+          expectedRevision: 3,
+          set: { priority: 0, rank: 1, labels: ["triaged"] },
+        },
+        COLLABORATOR
+      )
+    ).resolves.toMatchObject({
+      priority: 0,
+      rank: 1,
+      labels: ["triaged"],
+      revision: 4,
+    });
+    expect(updateOf(queries)).not.toContain("created_by_principal_id");
+    expect(updateOf(queries)).toContain("AND revision = 3");
+    expect(queries).toContain(
+      `SELECT dolt_commit('-m', 'work-items: patch ${CAS_ID} by actor:${COLLABORATOR}')`
+    );
+  });
+
+  it("keeps the whole patch creator-bound when it names any other field", async () => {
+    const { adapter, queries, store } = casHarness();
+
+    await expect(
+      adapter.patch(
+        { id: toWorkItemId(CAS_ID), set: { priority: 0, title: "not yours" } },
+        COLLABORATOR
+      )
+    ).rejects.toBeInstanceOf(WorkItemAuthorizationError);
+    expect(branchCreated(queries)).toBe(false);
+    expect(committed(queries)).toBe(false);
+    expect(store.get(CAS_ID)).toMatchObject({
+      priority: 2,
+      title: "triage me",
+      revision: 3,
+    });
+  });
+
+  it("still refuses a blank principal for triage fields", async () => {
+    const { adapter, queries } = casHarness();
+
+    await expect(
+      adapter.patch({ id: toWorkItemId(CAS_ID), set: { priority: 0 } }, "  ")
+    ).rejects.toBeInstanceOf(WorkItemAuthorizationError);
+    expect(queries).toHaveLength(0);
   });
 });

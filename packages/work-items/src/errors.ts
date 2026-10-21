@@ -67,3 +67,17 @@ export class WorkItemWriteOutcomeUnknownError extends Error {
     };
   }
 }
+
+/** A requested revision no longer matches; no content commit was made. */
+export class WorkItemRevisionConflictError extends Error {
+  constructor(
+    public readonly id: string,
+    public readonly expectedRevision: number,
+    public readonly currentRevision: number
+  ) {
+    super(
+      `Work item revision conflict: ${id} expected revision ${expectedRevision}, current ${currentRevision}`
+    );
+    this.name = "WorkItemRevisionConflictError";
+  }
+}

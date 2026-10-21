@@ -27,12 +27,14 @@ import { toWorkItemId } from "../../index.js";
 import type { ReservedSql, Sql } from "postgres";
 
 import {
+  WorkItemRevisionConflictError,
   WorkItemDeletionRetiredError,
   WorkItemWriteOutcomeUnknownError,
   WorkItemsBusyError,
   WorkItemsCapacityError,
 } from "../../errors.js";
 export {
+  WorkItemRevisionConflictError,
   WorkItemLeaseConflictError,
   WorkItemsBusyError,
   WorkItemsCapacityError,
@@ -191,6 +193,8 @@ interface MutationProof {
   readonly runId?: string;
   readonly command?: string;
   readonly commandProvided?: boolean;
+  /** `patch` only: the revision the compare-and-set was conditioned on. */
+  readonly expectedRevision?: number;
 }
 
 interface MutationOptions<T> {
@@ -370,6 +374,26 @@ function mayMutate(row: Record<string, unknown>, principal: string): boolean {
   const creator = row.created_by_principal_id;
   if (creator === null || creator === undefined || creator === "") return true;
   return String(creator) === principal;
+}
+
+/**
+ * `expectedRevision` is optional: omitted means an unconditioned patch, exactly
+ * as before. When present it must be the row's integer version.
+ */
+function parseExpectedRevision(value: unknown): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  const parsed =
+    typeof value === "string"
+      ? /^\d+$/.test(value.trim())
+        ? Number(value.trim())
+        : Number.NaN
+      : Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new Error(
+      `patch: expectedRevision must be a non-negative integer (got ${String(value)})`
+    );
+  }
+  return parsed;
 }
 
 function requirePrincipal(principalId: string): string {
@@ -565,6 +589,24 @@ type PersistedColumn = (typeof PERSISTED_WORK_ITEM_COLUMNS)[number];
 type RowSnapshot = Record<PersistedColumn, unknown>;
 
 const PATCH_DB_COLUMNS = new Set<string>(Object.values(PATCH_COLUMNS));
+/**
+ * COLLABORATOR_TRIAGE (story.5096): the only fields any authenticated principal
+ * may patch on an item it did not create. A `set` naming ANY other field stays
+ * creator-bound as a whole.
+ */
+const TRIAGE_PATCH_KEYS = new Set<keyof WorkItemsPatchSet>([
+  "priority",
+  "rank",
+  "labels",
+]);
+/** The full row-diff surface a non-creator patch may prove. */
+const TRIAGE_COLUMNS = new Set<string>([
+  "priority",
+  "rank",
+  "labels",
+  "revision",
+  "updated_at",
+]);
 const IMMUTABLE_COLUMNS = new Set<string>([
   "id",
   "type",
@@ -779,7 +821,11 @@ function validateTransitionMatrix(
         // `created_by_principal_id` is immutable, so the equality below also
         // forbids a patch from quietly adopting an unadopted row.
         creatorBefore === creatorAfter &&
-        creatorPermits(creatorBefore, proof.principal) &&
+        (creatorPermits(creatorBefore, proof.principal) ||
+          (proof.principal.length > 0 &&
+            onlyAllowedChanges(changed, TRIAGE_COLUMNS))) &&
+        (proof.expectedRevision === undefined ||
+          beforeRevision === proof.expectedRevision) &&
         [...IMMUTABLE_COLUMNS].every(
           (column) =>
             JSON.stringify(before[column as PersistedColumn]) ===
@@ -2823,37 +2869,76 @@ export class DoltgresWorkItemAdapter
     principalId: string
   ): Promise<WorkItem> {
     const principal = requirePrincipal(principalId);
+    const id = input.id as string;
+    const expectedRevision = parseExpectedRevision(input.expectedRevision);
     const clauses: string[] = [];
+    const setKeys: (keyof WorkItemsPatchSet)[] = [];
     for (const [key, column] of Object.entries(PATCH_COLUMNS) as [
       keyof WorkItemsPatchSet,
       string,
     ][]) {
       const value = input.set[key];
-      if (value !== undefined)
+      if (value !== undefined) {
         clauses.push(`${column} = ${escapeValue(value)}`);
+        setKeys.push(key);
+      }
     }
+    const triageOnly =
+      setKeys.length > 0 && setKeys.every((key) => TRIAGE_PATCH_KEYS.has(key));
+    const permits = (row: Record<string, unknown>) =>
+      triageOnly || mayMutate(row, principal);
+    const revisionConflict = (row: Record<string, unknown>) => {
+      const currentRevision = Number(row.revision ?? 0);
+      return expectedRevision !== undefined &&
+        currentRevision !== expectedRevision
+        ? new WorkItemRevisionConflictError(
+            id,
+            expectedRevision,
+            currentRevision
+          )
+        : undefined;
+    };
     if (!clauses.length) {
       return this.readOnCleanMain(async (conn) => {
         const current = await this.getWith(conn, input.id);
-        if (!current)
-          throw new Error(`Work item not found: ${input.id as string}`);
+        if (!current) throw new Error(`Work item not found: ${id}`);
         if (!mayMutate(current, principal)) {
-          throw new WorkItemAuthorizationError(input.id as string);
+          throw new WorkItemAuthorizationError(id);
         }
+        const conflict = revisionConflict(current);
+        if (conflict) throw conflict;
         return rowToWorkItem(current);
       });
     }
 
-    return this.mutate(
-      `patch ${input.id as string}`,
+    const where = [`id = ${escapeValue(id)}`];
+    if (!triageOnly) {
+      where.push(
+        `(created_by_principal_id IS NULL OR created_by_principal_id = ${escapeValue(principal)})`
+      );
+    }
+    if (expectedRevision !== undefined) {
+      where.push(`revision = ${escapeValue(expectedRevision)}`);
+    }
+    const result = await this.mutate<WorkItem | WorkItemRevisionConflictError>(
+      `patch ${id}`,
       principal,
       async (conn, proof) => {
         clauses.push("revision = revision + 1", "updated_at = NOW()");
         const rows = await conn.unsafe(
-          `UPDATE work_items SET ${clauses.join(", ")} WHERE id = ${escapeValue(input.id as string)} AND (created_by_principal_id IS NULL OR created_by_principal_id = ${escapeValue(principal)}) RETURNING *`
+          `UPDATE work_items SET ${clauses.join(", ")} WHERE ${where.join(" AND ")} RETURNING *`
         );
         const row = rows[0] as Record<string, unknown> | undefined;
-        if (!row) await this.throwMissingOrUnauthorized(conn, input.id);
+        if (!row) {
+          // CAS lost after preflight: a writer outside this lock moved the
+          // revision. Returned, not thrown, so `shouldCommit` drops the empty
+          // op branch with nothing committed.
+          const current = await this.getWith(conn, input.id);
+          const conflict =
+            current && permits(current) ? revisionConflict(current) : undefined;
+          if (conflict) return conflict;
+          await this.throwMissingOrUnauthorized(conn, input.id);
+        }
         proof.afterRow = row as Record<string, unknown>;
         return rowToWorkItem(row as Record<string, unknown>);
       },
@@ -2861,29 +2946,27 @@ export class DoltgresWorkItemAdapter
         proof: {
           verb: "patch",
           principal,
-          itemId: input.id as string,
+          itemId: id,
+          expectedRevision,
           patchValues: Object.fromEntries(
-            (
-              Object.entries(PATCH_COLUMNS) as [
-                keyof WorkItemsPatchSet,
-                string,
-              ][]
-            )
-              .filter(([key]) => input.set[key] !== undefined)
-              .map(([key, column]) => [column, input.set[key]])
+            setKeys.map((key) => [PATCH_COLUMNS[key], input.set[key]])
           ),
         },
         preflight: async (conn, proof) => {
           const current = await this.getWith(conn, input.id);
-          if (!current)
-            throw new Error(`Work item not found: ${input.id as string}`);
-          if (!mayMutate(current, principal)) {
-            throw new WorkItemAuthorizationError(input.id as string);
+          if (!current) throw new Error(`Work item not found: ${id}`);
+          if (!permits(current)) {
+            throw new WorkItemAuthorizationError(id);
           }
+          const conflict = revisionConflict(current);
+          if (conflict) throw conflict;
           proof.beforeRow = current;
         },
+        shouldCommit: (value) => !(value instanceof WorkItemRevisionConflictError),
       }
     );
+    if (result instanceof WorkItemRevisionConflictError) throw result;
+    return result;
   }
 
   async delete(_id: WorkItemId, _principalId: string): Promise<boolean> {

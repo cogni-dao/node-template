@@ -31,6 +31,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
 	DoltgresWorkItemAdapter,
 	WorkItemWriteOutcomeUnknownError,
+	WorkItemAuthorizationError,
+	WorkItemRevisionConflictError,
 	WorkItemsBusyError,
 } from "@cogni/work-items/adapters/doltgres";
 
@@ -291,6 +293,111 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			status: "cancelled",
 		});
 		await readSql.end({ timeout: 0 });
+	}, 60_000);
+
+	// task.5284 (story.5096): `patch` honors `expectedRevision` as a real
+	// compare-and-set, and a non-creator may patch ONLY the triage fields
+	// (priority, rank, labels). Any other field keeps the whole patch
+	// creator-bound. Refusals must leave `main` and the op namespace untouched.
+	it("compare-and-sets patch on expectedRevision and admits collaborator triage fields only", async () => {
+		const casSql = postgres(dbUrl, { max: 1, fetch_types: false });
+		const casReadSql = postgres(dbUrl, { max: 1, fetch_types: false });
+		const adapter = new DoltgresWorkItemAdapter(casSql, {
+			readClient: casReadSql,
+			logger: stageLogger,
+			lockWaitMs: 250,
+			lockRetryMs: 25,
+			queryTimeoutMs: 5_000,
+		});
+		const id = toWorkItemId("task.9503");
+		const creator = "doltgres-cas-creator";
+		const collaborator = "doltgres-cas-collaborator";
+		const mainHash = async () =>
+			String(
+				(await casSql.unsafe("SELECT dolt_hashof('main') AS hash"))[0]?.hash ?? "",
+			);
+		try {
+			const created = await adapter.create(
+				{ id, type: "task", title: "CAS me", priority: 3, rank: 9 },
+				creator,
+			);
+			// Matching expectedRevision lands and bumps the revision by one.
+			const casPatched = await adapter.patch(
+				{ id, expectedRevision: created.revision, set: { title: "CAS landed" } },
+				creator,
+			);
+			expect(casPatched).toMatchObject({
+				id,
+				title: "CAS landed",
+				revision: created.revision + 1,
+			});
+
+			// Stale expectedRevision: conflict, nothing written.
+			const beforeStale = await mainHash();
+			await expect(
+				adapter.patch(
+					{ id, expectedRevision: created.revision, set: { title: "stale" } },
+					creator,
+				),
+			).rejects.toBeInstanceOf(WorkItemRevisionConflictError);
+			expect(await mainHash()).toBe(beforeStale);
+			await expect(adapter.get(id)).resolves.toMatchObject({
+				title: "CAS landed",
+				revision: casPatched.revision,
+			});
+
+			// A non-creator may set the triage fields, attributed to itself.
+			const triaged = await adapter.patch(
+				{
+					id,
+					expectedRevision: casPatched.revision,
+					set: { priority: 0, rank: 1, labels: ["triaged"] },
+				},
+				collaborator,
+			);
+			expect(triaged).toMatchObject({
+				priority: 0,
+				rank: 1,
+				labels: ["triaged"],
+				revision: casPatched.revision + 1,
+			});
+			await expect(
+				casSql.unsafe(
+					`SELECT commit_hash FROM dolt.commits WHERE message = 'work-items: patch ${id} by actor:${collaborator}'`,
+				),
+			).resolves.toHaveLength(1);
+
+			// ...but naming any other field keeps the whole patch creator-bound.
+			const beforeMixed = await mainHash();
+			await expect(
+				adapter.patch(
+					{ id, set: { priority: 5, title: "not yours" } },
+					collaborator,
+				),
+			).rejects.toBeInstanceOf(WorkItemAuthorizationError);
+			expect(await mainHash()).toBe(beforeMixed);
+			await expect(adapter.get(id)).resolves.toMatchObject({
+				priority: 0,
+				title: "CAS landed",
+				revision: triaged.revision,
+			});
+
+			// The creator's unconditioned patch is unchanged.
+			await expect(
+				adapter.patch({ id, set: { title: "creator unconditioned" } }, creator),
+			).resolves.toMatchObject({
+				title: "creator unconditioned",
+				revision: triaged.revision + 1,
+			});
+			await expect(
+				casSql.unsafe(
+					"SELECT name FROM dolt.branches WHERE name LIKE 'work-item-op/%'",
+				),
+			).resolves.toHaveLength(0);
+		} finally {
+			await casReadSql.end({ timeout: 0 });
+			await casSql.end({ timeout: 0 });
+		}
 	}, 60_000);
 
 	it("serves reads past an unprovable operation branch and quarantines it so writes recover", async () => {
