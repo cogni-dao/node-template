@@ -15,8 +15,14 @@ import type { ReservedSql, Sql } from "postgres";
 import { describe, expect, it } from "vitest";
 
 import { DoltgresKnowledgeContributionAdapter } from "../src/adapters/doltgres/contribution-adapter.js";
-import type { Principal } from "../src/domain/contribution-schemas.js";
-import { CitationTargetNotFoundError } from "../src/port/knowledge-store.port.js";
+import {
+  KnowledgeContributionEditSchema,
+  type Principal,
+} from "../src/domain/contribution-schemas.js";
+import {
+  CitationTargetNotFoundError,
+  HypothesisMissingEvaluateAtError,
+} from "../src/port/knowledge-store.port.js";
 
 const record = {
   id: "contrib-agent-1-abc123",
@@ -82,8 +88,12 @@ class FakeReservedSql {
     if (query.includes("entry_type FROM knowledge")) {
       return [{ entry_type: "finding" }];
     }
-    if (query.includes("source_type FROM knowledge")) {
-      return [{ source_type: "external" }];
+    if (
+      query.includes("source_type, entry_type, confidence_pct FROM knowledge")
+    ) {
+      return [
+        { source_type: "external", entry_type: "finding", confidence_pct: 30 },
+      ];
     }
     if (query.includes("citation_type FROM citations")) {
       return [];
