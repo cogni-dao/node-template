@@ -14,6 +14,7 @@
  */
 
 import type {
+  Revision,
   WorkItem,
   WorkItemCommandPort,
   WorkItemId,
@@ -33,6 +34,13 @@ export type WorkItemsPatchSet = NonNullable<
 
 export interface WorkItemsPatchInput {
   readonly id: WorkItemId;
+  /**
+   * Compare-and-set on the row version (`WorkItem.revision`). When present the
+   * write lands only if the row is still at this revision, otherwise
+   * `WorkItemRevisionConflictError` and nothing is committed. Omitted means an
+   * unconditioned patch.
+   */
+  readonly expectedRevision?: Revision | number;
   readonly set: WorkItemsPatchSet;
 }
 

@@ -18,6 +18,7 @@ export {
   WorkItemAlreadyExistsError,
   WorkItemAuthorizationError,
   WorkItemLeaseConflictError,
+  WorkItemRevisionConflictError,
   WorkItemsBusyError,
 } from "./adapter.js";
 export {
