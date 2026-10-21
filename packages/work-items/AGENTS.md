@@ -53,6 +53,7 @@ Work item port interfaces, domain types, and storage adapters for structured wor
   - `InvalidTransitionError` — thrown on invalid status transition
 - **Exports (adapter `@cogni/work-items/adapters/doltgres`):**
   - `DoltgresWorkItemAdapter` — node-local query/create/patch/delete implementation
+  - `WorkItemRevisionConflictError` — `patch` with a stale `expectedRevision`; nothing committed
   - `DoltgresWorkItemAdapterOptions` — per-store allocator configuration (`idFloor`)
   - cursor codec + Doltgres port/error types
 - **Files considered API:** `src/index.ts`, `src/adapters/markdown/index.ts`, `src/adapters/doltgres/index.ts`
@@ -98,3 +99,5 @@ pnpm vitest run packages/work-items/tests/
 - `MarkdownWorkItemAdapter` constructor takes `workDir` (repo root) — scans `work/items/` and `work/projects/`
 - `blocked` can transition to any `needs_*` status — adapters may enforce stricter return-to-previous-status logic
 - ID allocation race: two concurrent `create()` calls can collide. v0 assumes single-caller.
+- PATCH_CAS (task.5284): Doltgres `patch` with `expectedRevision` adds `AND revision = <expected>` to its UPDATE; a mismatch throws `WorkItemRevisionConflictError` and drops the empty op branch with no commit. Omitted = unconditioned, as before.
+- COLLABORATOR_TRIAGE (task.5284): any non-blank principal may `patch` only `priority`, `rank`, `labels` on items it did not create. A `set` naming any other field is creator-bound as a whole (`created_by_principal_id IS NULL OR = principal`); the patch transition proof admits a non-creator only when the row diff touches nothing beyond those columns + `revision`/`updated_at`.
