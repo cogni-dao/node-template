@@ -11,3 +11,8 @@ export {
   formatCitationLabel,
   type CitationLabelEndpoint,
 } from "./citation-label.js";
+export {
+  DirectRelationLinks,
+  type DirectRelationLinksProps,
+  type DirectRelationPage,
+} from "./direct-relation-links.js";
