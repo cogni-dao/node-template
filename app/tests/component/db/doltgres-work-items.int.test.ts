@@ -2280,6 +2280,42 @@ if (role === 'original') {
 				{ id, type: "task", title: "before mixed write" },
 				"mixed-principal",
 			);
+			// Preserve the historical null-title case through the public write API.
+			await store.withWrite(
+				{
+					operationId: "native.citation.seed",
+					message: "seed direct citation pages",
+				},
+				async (write) => {
+					await write.addKnowledge({
+						id: "native-citation-root",
+						domain: "scope-mix",
+						title: "Citation root",
+						content: "Root body",
+						sourceType: "agent",
+					});
+					for (let i = 0; i < 7; i++) {
+						const neighbor = `native-citation-${i}`;
+						await write.addKnowledge({
+							id: neighbor,
+							domain: "scope-mix",
+							title: `Neighbor ${i}`,
+							content: "Neighbor body",
+							sourceType: "agent",
+						});
+						await write.addCitation({
+							id: `native-citation-edge-${i}`,
+							citingId: i % 2 ? neighbor : "native-citation-root",
+							citedId: i % 2 ? "native-citation-root" : neighbor,
+							citationType: "supports",
+						});
+					}
+					await write.deleteKnowledge("native-citation-0");
+				},
+			);
+			const mainBefore = await knowledgeRead.unsafe(
+				"SELECT dolt_hashof('main') AS hash",
+			);
 			holding = store.withWrite(
 				{
 					operationId: "native.knowledge.workitem.mix",
@@ -2301,6 +2337,50 @@ if (role === 'original') {
 			);
 			void holding.catch(failed);
 			await ready;
+			// Both pages must finish before releasing the independently held writer.
+			// The shipped JS read adapter stays on MAIN while the writer has dirty branch DML.
+			let pageDeadline: ReturnType<typeof setTimeout> | undefined;
+			const pages = await Promise.race([
+				(async () => {
+					const first = await store.listCitationLinks("native-citation-root");
+					expect(first.links.map((link) => link.id)).toEqual(
+						Array.from({ length: 5 }, (_, i) => `native-citation-edge-${i}`),
+					);
+					expect(first.nextCursor).toBe("native-citation-edge-4");
+					const cursor = first.nextCursor;
+					if (!cursor) throw new Error("missing citation continuation cursor");
+					const second = await store.listCitationLinks("native-citation-root", cursor);
+					expect(second.links.map((link) => link.id)).toEqual([
+						"native-citation-edge-5",
+						"native-citation-edge-6",
+					]);
+					expect(second.nextCursor).toBeNull();
+					return [...first.links, ...second.links];
+				})(),
+				new Promise<never>((_, reject) => {
+					pageDeadline = setTimeout(
+						() => reject(new Error("citation read waited for writer release")),
+						2_000,
+					);
+				}),
+			]).finally(() => clearTimeout(pageDeadline));
+			expect(new Set(pages.map((link) => link.id)).size).toBe(7);
+			for (const link of pages) {
+				expect([link.citingId, link.citedId]).toContain("native-citation-root");
+				expect(link).not.toHaveProperty("content");
+				expect(link).not.toHaveProperty("outcome");
+			}
+			expect(pages[0]).toMatchObject({
+				sourceTitle: "Citation root", targetTitle: null, context: null,
+			});
+			expect(pages[1]).toMatchObject({
+				sourceTitle: "Neighbor 1", targetTitle: "Citation root",
+			});
+			await expect(store.getKnowledge("native-mixed-scope")).resolves.toBeNull();
+			expect(
+				await knowledgeRead.unsafe("SELECT dolt_hashof('main') AS hash"),
+			).toEqual(mainBefore);
+			expect(await knowledgeRead.unsafe("SELECT * FROM dolt_status")).toHaveLength(0);
 			await expect(
 				work.patch({ id, set: { title: "must wait" } }, "mixed-principal"),
 			).rejects.toBeInstanceOf(WorkItemsBusyError);
