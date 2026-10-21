@@ -146,8 +146,10 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
-      - name: Typecheck package closure
-        run: pnpm check
+      # Detection imports repo-spec/dist, not the app or its test suites.
+      # Required static/unit/component checks run independently in ci.yaml.
+      - name: Build repo-spec contract
+        run: pnpm --filter @cogni/repo-spec build
 
       - name: Detect node image targets
         id: detect
