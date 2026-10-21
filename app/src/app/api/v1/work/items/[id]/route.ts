@@ -24,6 +24,7 @@ import {
   patchWorkItem,
   WorkItemForbiddenError,
   WorkItemNotFoundError,
+  WorkItemPriorityAuthzError,
   WorkItemsBackendNotReadyError,
 } from "@/app/_facades/work/items.server";
 import { getSessionUser } from "@/app/_lib/auth/session";
@@ -119,6 +120,7 @@ export const PATCH = wrapRouteHandlerWithLogging<{
     try {
       const patched = await patchWorkItem(parseResult.data, {
         id: sessionUser.id,
+        walletAddress: sessionUser.walletAddress,
       });
       ctx.log.info({ workItemId: id }, "work.items.patch_success");
       return NextResponse.json(workItemsPatchOperation.output.parse(patched));
@@ -128,6 +130,9 @@ export const PATCH = wrapRouteHandlerWithLogging<{
       }
       if (e instanceof WorkItemForbiddenError) {
         return NextResponse.json({ error: e.message }, { status: 403 });
+      }
+      if (e instanceof WorkItemPriorityAuthzError) {
+        return NextResponse.json(e.body, { status: e.status });
       }
       if (e instanceof WorkItemsBackendNotReadyError) {
         return NextResponse.json({ error: e.message }, { status: 503 });

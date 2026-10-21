@@ -29,6 +29,8 @@ import type {
 } from "@cogni/work-items";
 import { toWorkItemId } from "@cogni/work-items";
 
+import { isPrivilegedPriority } from "@/bootstrap/node-admin-gate";
+
 /**
  * Dependencies for creating the work item capability.
  */
@@ -117,6 +119,15 @@ export function createWorkItemCapability(
     },
 
     async patch(input): Promise<WorkItemInfo> {
+      // P0P1_IS_NODE_ADMIN (story.5101): node admin is a wallet-bearing human
+      // session (`checkNodeAdmin`); a tool invocation carries no wallet, so an AI
+      // patch to priority 0/1 is refused before any write.
+      const priority = input.set.priority;
+      if (priority != null && isPrivilegedPriority(priority)) {
+        throw new Error(
+          `authz_denied: priority ${priority} requires node admin — propose it instead`
+        );
+      }
       const current = await workItemQuery.get(toWorkItemId(input.id));
       if (!current) {
         throw new Error(`Work item not found: ${input.id}`);

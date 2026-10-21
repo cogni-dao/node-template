@@ -5,7 +5,8 @@
  * Module: `@app/_facades/work/items.server`
  * Purpose: Server-side facade for work item read/write operations across the markdown + Doltgres surfaces.
  * Scope: Maps port results to contract DTOs and merges node-local Doltgres rows with legacy markdown rows.
- * Invariants: PORT_VIA_CONTAINER (no direct adapter imports), CONTRACTS_ARE_TRUTH, NODE_STORE_IS_LOCAL.
+ * Invariants: P0P1_IS_NODE_ADMIN (story.5101: priority 0/1 on create/patch requires node admin,
+ *   checked before the store write), PORT_VIA_CONTAINER (no direct adapter imports), CONTRACTS_ARE_TRUTH, NODE_STORE_IS_LOCAL.
  * Side-effects: IO (filesystem read via port; database read/write via Doltgres port)
  * Links: contracts/work.items.{list,get,create,patch}.v1.contract
  * @internal
@@ -23,6 +24,13 @@ import type { WorkItem, WorkItemId } from "@cogni/work-items";
 import { toWorkItemId } from "@cogni/work-items";
 
 import { getContainer } from "@/bootstrap/container";
+import {
+  checkNodeAdmin,
+  isPrivilegedPriority,
+  type NodeAdminDenied,
+  type NodeAdminUnavailable,
+  nodeAdminFailureBody,
+} from "@/bootstrap/node-admin-gate";
 
 /**
  * Thrown when the opaque pagination cursor cannot be decoded — translated
@@ -51,6 +59,44 @@ export class WorkItemForbiddenError extends Error {
     super(`Not authorized to mutate work item: ${id}`);
     this.name = "WorkItemForbiddenError";
   }
+}
+
+/**
+ * P0P1_IS_NODE_ADMIN (story.5101): a create/patch setting priority 0 or 1 by a
+ * caller who is not this node's admin. `status`/`errorCode` keep a denial (403
+ * `authz_denied`) distinct from an unconfigured admin set (503 `authz_unavailable`).
+ */
+export class WorkItemPriorityAuthzError extends Error {
+  readonly status: 403 | 503;
+  readonly body: { error: string; errorCode: string; action: string };
+  constructor(gate: NodeAdminDenied | NodeAdminUnavailable, priority: number) {
+    super(`${gate.errorCode}: priority ${priority} requires node admin`);
+    this.name = "WorkItemPriorityAuthzError";
+    this.status = gate.status;
+    this.body = nodeAdminFailureBody(gate, `work.items.priority.p${priority}`);
+  }
+}
+
+/**
+ * P0P1_IS_NODE_ADMIN: refuse a priority-0/1 write unless the caller is node
+ * admin, BEFORE any store write. A no-op for any other priority (incl. absent).
+ */
+function assertPriorityAuthority(
+  priority: number | null | undefined,
+  actor: WorkItemActor
+): void {
+  if (priority == null || !isPrivilegedPriority(priority)) return;
+  const gate = checkNodeAdmin({
+    userId: actor.id,
+    walletAddress: actor.walletAddress,
+  });
+  if (!gate.ok) throw new WorkItemPriorityAuthzError(gate, priority);
+}
+
+/** The caller of a work-item write; `walletAddress` is null for agent keys. */
+export interface WorkItemActor {
+  id: string;
+  walletAddress?: string | null;
 }
 
 export class WorkItemLeaseConflictError extends Error {
@@ -242,8 +288,9 @@ export async function getWorkItem(id: string): Promise<WorkItemDto | null> {
 
 export async function createWorkItem(
   input: ContractCreateInput,
-  sessionUser: { id: string }
+  sessionUser: WorkItemActor
 ): Promise<WorkItemDto> {
+  assertPriorityAuthority(input.priority, sessionUser);
   const container = getContainer();
   try {
     const created = await container.doltgresWorkItems.create(
@@ -278,8 +325,9 @@ export async function createWorkItem(
 
 export async function patchWorkItem(
   input: ContractPatchInput,
-  sessionUser: { id: string }
+  sessionUser: WorkItemActor
 ): Promise<WorkItemDto> {
+  assertPriorityAuthority(input.set.priority, sessionUser);
   const container = getContainer();
   try {
     const patched = await container.doltgresWorkItems.patch(

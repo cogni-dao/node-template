@@ -21,6 +21,7 @@ import {
   createWorkItem,
   InvalidCursorError,
   listWorkItems,
+  WorkItemPriorityAuthzError,
   WorkItemsBackendNotReadyError,
 } from "@/app/_facades/work/items.server";
 import { getSessionUser } from "@/app/_lib/auth/session";
@@ -116,6 +117,7 @@ export const POST = wrapRouteHandlerWithLogging(
     try {
       const created = await createWorkItem(parseResult.data, {
         id: sessionUser.id,
+        walletAddress: sessionUser.walletAddress,
       });
       ctx.log.info(
         { workItemId: created.id, node: created.node },
@@ -125,6 +127,9 @@ export const POST = wrapRouteHandlerWithLogging(
         status: 201,
       });
     } catch (e) {
+      if (e instanceof WorkItemPriorityAuthzError) {
+        return NextResponse.json(e.body, { status: e.status });
+      }
       if (e instanceof WorkItemsBackendNotReadyError) {
         return NextResponse.json({ error: e.message }, { status: 503 });
       }
