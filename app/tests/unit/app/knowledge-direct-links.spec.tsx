@@ -76,13 +76,14 @@ function mount(fetchMock: ReturnType<typeof vi.fn>) {
   );
 }
 
-function body() {
+function body(useWhen?: string | null) {
   return {
     id: "root",
     domain: "meta",
     entityId: null,
     title: "Root atom",
     content: "Only the selected atom body",
+    useWhen,
     entryType: "finding",
     confidencePct: 80,
     sourceType: "human",
@@ -98,6 +99,50 @@ afterEach(() => {
 });
 
 describe("ordinary knowledge reads", () => {
+  it.each([
+    {
+      label: "trimmed plain text",
+      useWhen: "  Use for <strong>review</strong>. \n",
+      expected: "Use for <strong>review</strong>.",
+    },
+    { label: "missing", useWhen: undefined, expected: null },
+    { label: "null", useWhen: null, expected: null },
+    { label: "empty", useWhen: "", expected: null },
+    { label: "whitespace", useWhen: " \n\t ", expected: null },
+  ])("renders a $label retrieval trigger without another read", async ({
+    useWhen,
+    expected,
+  }) => {
+    const fetchMock = vi.fn(async (input: string) => {
+      if (input === "/api/v1/knowledge/root")
+        return Response.json(body(useWhen));
+      if (input === "/api/v1/citations/root") {
+        return Response.json({ links: [], nextCursor: null });
+      }
+      throw new Error(`Unexpected read: ${input}`);
+    });
+    mount(fetchMock);
+    const heading = await screen.findByRole("heading", {
+      level: 1,
+      name: "Root atom",
+    });
+    const subtitle = heading.nextElementSibling;
+    if (expected === null) {
+      expect(subtitle?.tagName).toBe("DIV");
+    } else {
+      expect(subtitle?.tagName).toBe("P");
+      expect(subtitle?.textContent).toBe(`Use when: ${expected}`);
+      expect(subtitle?.querySelector("strong")).toBeNull();
+    }
+    expect(screen.getByText("Only the selected atom body")).toBeTruthy();
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+        "/api/v1/knowledge/root",
+        "/api/v1/citations/root",
+      ])
+    );
+  });
+
   it("fetches one body and five direct links, then fetches more only after a click", async () => {
     const fetchMock = vi.fn(async (input: string) => {
       if (input === "/api/v1/knowledge/root") return Response.json(body());
