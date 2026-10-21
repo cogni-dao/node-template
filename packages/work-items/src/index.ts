@@ -5,7 +5,7 @@
  * Module: `@cogni/work-items`
  * Purpose: Work item port interfaces, domain types, and status transition table.
  * Scope: Public barrel export. Does not contain I/O or adapter code.
- * Invariants: All exports are pure types, interfaces, or data constants.
+ * Invariants: Domain types and injected-port composition; no runtime configuration.
  * Side-effects: none
  * Links: docs/spec/development-lifecycle.md, docs/spec/identity-model.md
  * @public
@@ -27,3 +27,15 @@ export type {
   WorkRelation,
 } from "./types.js";
 export { toWorkItemId } from "./types.js";
+
+export type {
+  WorkItemLease,
+  WorkItemLeaseOwner,
+  WorkItemLeasePort,
+} from "./leases.js";
+
+export type { WorkItemsContentPort, WorkItemsPort } from "./content.js";
+export { withWorkItemLeases } from "./with-leases.js";
+
+export { WorkItemWriteOutcomeUnknownError } from "./errors.js";
+export { WorkItemsCapacityError } from "./errors.js";

@@ -11,6 +11,7 @@
  * @internal
  */
 
+import type { WorkItemLease } from "@cogni/work-items";
 import type {
   WorkItemsCreateInput as ContractCreateInput,
   WorkItemCoordinationOutput,
@@ -20,7 +21,11 @@ import type {
   WorkItemsListOutput,
 } from "@cogni/node-contracts";
 import type { WorkItem, WorkItemId } from "@cogni/work-items";
-import { toWorkItemId } from "@cogni/work-items";
+import {
+  toWorkItemId,
+  WorkItemWriteOutcomeUnknownError,
+} from "@cogni/work-items";
+export { WorkItemWriteOutcomeUnknownError };
 
 import { getContainer } from "@/bootstrap/container";
 
@@ -141,6 +146,15 @@ function rethrowBackendError(error: unknown): never {
   const message = (error as Error)?.message ?? "";
   const notFound = /^Work item not found: (.+)$/.exec(message);
   if (notFound?.[1]) throw new WorkItemNotFoundError(notFound[1]);
+  if ((error as Error)?.name === "WorkItemWriteOutcomeUnknownError") {
+    const receipt = error as WorkItemWriteOutcomeUnknownError;
+    throw new WorkItemWriteOutcomeUnknownError(
+      receipt.operationId,
+      receipt.branch,
+      receipt.commitHash,
+      receipt.itemId
+    );
+  }
   if (
     (error as Error)?.name === "DoltgresNotConfiguredError" ||
     (error as Error)?.name === "WorkItemsBusyError" ||
@@ -316,7 +330,7 @@ export async function claimWorkItem(input: {
   runId: string;
   command: string;
   principalId: string;
-}): Promise<WorkItemDto> {
+}): Promise<WorkItemLease> {
   const container = getContainer();
   try {
     const item = await container.doltgresWorkItems.claim({
@@ -325,7 +339,7 @@ export async function claimWorkItem(input: {
       command: input.command,
       principalId: input.principalId,
     });
-    return toDto(item);
+    return item;
   } catch (error) {
     rethrowBackendError(error);
   }
@@ -334,16 +348,18 @@ export async function claimWorkItem(input: {
 export async function releaseWorkItem(input: {
   id: string;
   runId: string;
+  leaseToken: string;
   principalId: string;
-}): Promise<WorkItemDto> {
+}): Promise<WorkItemLease> {
   const container = getContainer();
   try {
     const item = await container.doltgresWorkItems.release({
       id: toWorkItemId(input.id),
       runId: input.runId,
+      leaseToken: input.leaseToken,
       principalId: input.principalId,
     });
-    return toDto(item);
+    return item;
   } catch (error) {
     rethrowBackendError(error);
   }
@@ -352,18 +368,20 @@ export async function releaseWorkItem(input: {
 export async function heartbeatWorkItem(input: {
   id: string;
   runId: string;
+  leaseToken: string;
   command?: string;
   principalId: string;
-}): Promise<WorkItemDto> {
+}): Promise<WorkItemLease> {
   const container = getContainer();
   try {
     const item = await container.doltgresWorkItems.heartbeat({
       id: toWorkItemId(input.id),
       runId: input.runId,
+      leaseToken: input.leaseToken,
       ...(input.command !== undefined && { command: input.command }),
       principalId: input.principalId,
     });
-    return toDto(item);
+    return item;
   } catch (error) {
     rethrowBackendError(error);
   }

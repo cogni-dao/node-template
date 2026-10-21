@@ -20,28 +20,36 @@ describe("direct citation pages", () => {
   it("pages a high-degree root without visiting its neighbors' citations or bodies", async () => {
     const store = new FakeKnowledgeStoreAdapter();
     await store.registerDomain({ id: "meta", name: "Meta" });
-    for (let i = 0; i < 14; i++) {
-      await store.addKnowledge({
-        id: `atom-${String(i).padStart(2, "0")}`,
-        domain: "meta",
-        title: `Atom ${i}`,
-        content: "Large body ".repeat(1000),
-        sourceType: "human",
-      });
-    }
-    for (let i = 1; i <= 12; i++) {
-      const neighbor = `atom-${String(i).padStart(2, "0")}`;
-      await store.addCitation({
-        citingId: i % 2 ? "atom-00" : neighbor,
-        citedId: i % 2 ? neighbor : "atom-00",
-        citationType: "supports",
-      });
-    }
-    await store.addCitation({
-      citingId: "atom-01",
-      citedId: "atom-13",
-      citationType: "supports",
-    });
+    await store.withWrite(
+      {
+        operationId: "seed-direct-citation-pages",
+        message: "seed direct citation pages",
+      },
+      async (write) => {
+        for (let i = 0; i < 14; i++) {
+          await write.addKnowledge({
+            id: `atom-${String(i).padStart(2, "0")}`,
+            domain: "meta",
+            title: `Atom ${i}`,
+            content: "Large body ".repeat(1000),
+            sourceType: "human",
+          });
+        }
+        for (let i = 1; i <= 12; i++) {
+          const neighbor = `atom-${String(i).padStart(2, "0")}`;
+          await write.addCitation({
+            citingId: i % 2 ? "atom-00" : neighbor,
+            citedId: i % 2 ? neighbor : "atom-00",
+            citationType: "supports",
+          });
+        }
+        await write.addCitation({
+          citingId: "atom-01",
+          citedId: "atom-13",
+          citationType: "supports",
+        });
+      }
+    );
     const getBody = vi.spyOn(store, "getKnowledge");
     const ids: string[] = [];
     let cursor: string | undefined;

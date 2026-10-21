@@ -51,6 +51,7 @@ import {
 import {
 	buildDoltgresClient,
 	createDoltgresPusher,
+	DoltBranchSessionRunner,
 	DoltgresEdoResolverAdapter,
 	DoltgresKnowledgeContributionAdapter,
 	DoltgresKnowledgeStoreAdapter,
@@ -69,7 +70,8 @@ import {
 import { numberToPpm } from "@cogni/operator-wallet";
 import { PrivyOperatorWalletAdapter } from "@cogni/operator-wallet/adapters/privy";
 import type { ScheduleControlPort } from "@cogni/scheduler-core";
-import type { WorkItemQueryPort } from "@cogni/work-items";
+import { type WorkItemQueryPort, withWorkItemLeases } from "@cogni/work-items";
+import { PostgresWorkItemLeaseAdapter } from "@cogni/work-items/adapters/postgres";
 import { DoltgresWorkItemAdapter } from "@cogni/work-items/adapters/doltgres";
 import { MarkdownWorkItemAdapter } from "@cogni/work-items/markdown";
 import {
@@ -719,15 +721,45 @@ function createContainer(): Container {
 				applicationName: `cogni_work_items_${env.SERVICE_NAME ?? "app"}`,
 				max: 1,
 			});
+		// One live and one draining generation: at most two reader connections.
+		const createWorkItemsReadClient = () =>
+			buildDoltgresClient({
+				connectionString: env.DOLTGRES_URL as string,
+				applicationName: `cogni_work_items_read_${env.SERVICE_NAME ?? "app"}`,
+				max: 1,
+			});
 		const workItemsClient = createWorkItemsClient();
 		// Node stores start their allocator at 1; operator alone reserves the
 		// imported legacy range below 5000.
-		doltgresWorkItems = new DoltgresWorkItemAdapter(workItemsClient, {
-			logger: log,
-			recreateClient: createWorkItemsClient,
-		});
+		doltgresWorkItems = withWorkItemLeases(
+			new DoltgresWorkItemAdapter(workItemsClient, {
+				// First write follows the coordinated per-database legacy-producer drain.
+				writerLockProtocol: "database",
+				logger: log,
+				recreateClient: createWorkItemsClient,
+				readClient: createWorkItemsReadClient(),
+				recreateReadClient: createWorkItemsReadClient,
+				readConnectionBudget: 2,
+			}),
+			new PostgresWorkItemLeaseAdapter(serviceDb.$client, { logger: log })
+		);
+		const createKnowledgeBranchClient = () =>
+			buildDoltgresClient({
+				connectionString: env.DOLTGRES_URL as string,
+				applicationName: `cogni_knowledge_branch_${env.SERVICE_NAME ?? "app"}`,
+				max: 1,
+			});
+		const knowledgeWriter = new DoltBranchSessionRunner(
+			createKnowledgeBranchClient(),
+			{
+				writerProtocol: "database",
+				logger: log,
+				recreateClient: createKnowledgeBranchClient,
+			}
+		);
 		const knowledgePort = new DoltgresKnowledgeStoreAdapter({
 			sql: doltClient,
+			writerSession: knowledgeWriter,
 		});
 		knowledgeStorePort = knowledgePort;
 		knowledgeCapability = createKnowledgeCapability(knowledgePort);
@@ -742,16 +774,9 @@ function createContainer(): Container {
 		// is what keeps a burst of admin rejects from burning every slot — and
 		// keeping them off the read pool is what keeps knowledge reads alive while
 		// a write is degraded (bug.5391, bug.5358).
-		const createKnowledgeBranchClient = () =>
-			buildDoltgresClient({
-				connectionString: env.DOLTGRES_URL as string,
-				applicationName: `cogni_knowledge_branch_${env.SERVICE_NAME ?? "app"}`,
-				max: 1,
-			});
 		const contributionPort = new DoltgresKnowledgeContributionAdapter({
 			sql: doltClient,
-			branchSql: createKnowledgeBranchClient(),
-			recreateBranchClient: createKnowledgeBranchClient,
+			writerSession: knowledgeWriter,
 			logger: log,
 		});
 		// Optional post-merge mirror to DoltHub (task.5069). Disabled when

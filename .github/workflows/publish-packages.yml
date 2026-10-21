@@ -46,6 +46,7 @@ on:
   push:
     tags:
       - "work-items-v*"
+      - "doltgres-admission-v*"
       - "knowledge-store-v*"
       - "knowledge-base-v*"
       - "knowledge-base-ui-v*"
@@ -87,6 +88,7 @@ env:
   # package can ship.
   PACKAGES: >-
     [{"name":"@cogni-dao/work-items","dir":"packages/work-items","tagPrefix":"work-items-v"},
+     {"name":"@cogni-dao/doltgres-admission","dir":"packages/doltgres-admission","tagPrefix":"doltgres-admission-v"},
      {"name":"@cogni-dao/knowledge-store","dir":"packages/knowledge-store","tagPrefix":"knowledge-store-v"},
      {"name":"@cogni-dao/knowledge-base","dir":"packages/knowledge-base","tagPrefix":"knowledge-base-v"},
      {"name":"@cogni-dao/knowledge-base-ui","dir":"packages/knowledge-base-ui","tagPrefix":"knowledge-base-ui-v"},

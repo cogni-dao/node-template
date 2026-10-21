@@ -102,6 +102,13 @@ export {
   type MetricResolutionStrategy,
   MetricResolutionStrategySchema,
 } from "./domain/goal-loop.js";
+// Knowledge-graph view model (shared assembly, no N+1)
+export {
+  buildKnowledgeGraph,
+  type KnowledgeGraphEdge,
+  type KnowledgeGraphModel,
+  type KnowledgeGraphNode,
+} from "./domain/knowledge-graph.js";
 export {
   createConfidenceSmokeReader,
   createExternalCountReader,
@@ -124,13 +131,6 @@ export {
   classifyResolutionStrategy,
   type ResolverTarget,
 } from "./domain/resolver-dispatch.js";
-// Knowledge-graph view model (shared assembly, no N+1)
-export {
-  buildKnowledgeGraph,
-  type KnowledgeGraphEdge,
-  type KnowledgeGraphModel,
-  type KnowledgeGraphNode,
-} from "./domain/knowledge-graph.js";
 // Domain types & schemas
 export {
   type Citation,
@@ -157,6 +157,7 @@ export {
   type SourceType,
   SourceTypeSchema,
 } from "./domain/schemas.js";
+export { KnowledgeWriteConflictError } from "./domain/write-replay.js";
 export { createEdoCapability } from "./edo-capability.js";
 export {
   ContributionConflictError,
@@ -194,6 +195,9 @@ export {
   HypothesisMissingEvaluateAtError,
   KnowledgeBusyError,
   type KnowledgeStorePort,
+  KnowledgeWriteOutcomeUnknownError,
+  KnowledgeWriteScopeRequiredError,
+  type KnowledgeWriteSession,
   type NewDomain,
 } from "./port/knowledge-store.port.js";
 // KPI reader port (goal-loop — verifier-independent metric read)

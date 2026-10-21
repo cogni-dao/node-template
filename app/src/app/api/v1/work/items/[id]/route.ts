@@ -4,8 +4,8 @@
 /**
  * Module: `@app/api/v1/work/items/[id]/route`
  * Purpose: HTTP endpoints for getting, patching, and deleting a single work item by ID.
- * Scope: Auth-protected GET (node-local Doltgres first, markdown fallback), PATCH (Doltgres only), and DELETE (Doltgres hard-delete with dolt_log audit).
- * Invariants: VALIDATE_IO, CONTRACTS_ARE_TRUTH, AUTH_VIA_GETSESSIONUSER, PATCH_ALLOWLIST, HARD_DELETE_RECOVERABLE_VIA_DOLT_REVERT.
+ * Scope: Auth-protected GET (node-local Doltgres first, markdown fallback), PATCH (Doltgres only), and DELETE (retired, HTTP 410).
+ * Invariants: VALIDATE_IO, CONTRACTS_ARE_TRUTH, AUTH_VIA_GETSESSIONUSER, PATCH_ALLOWLIST, DURABLE_IDENTITY_NEVER_REUSED.
  * Side-effects: IO (HTTP response, filesystem read via port, Doltgres read/write/delete)
  * Links: contracts/work.items.{get,patch,delete}.v1.contract
  * @public
@@ -19,12 +19,12 @@ import {
 import { NextResponse } from "next/server";
 
 import {
-  deleteWorkItem,
   getWorkItem,
   patchWorkItem,
   WorkItemForbiddenError,
   WorkItemNotFoundError,
   WorkItemsBackendNotReadyError,
+  WorkItemWriteOutcomeUnknownError,
 } from "@/app/_facades/work/items.server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
@@ -129,6 +129,17 @@ export const PATCH = wrapRouteHandlerWithLogging<{
       if (e instanceof WorkItemForbiddenError) {
         return NextResponse.json({ error: e.message }, { status: 403 });
       }
+      if (e instanceof WorkItemWriteOutcomeUnknownError) {
+        return NextResponse.json(
+          {
+            error: e.code,
+            retryable: false,
+            lookup: e.receipt.lookup,
+            message: e.message,
+          },
+          { status: 409 }
+        );
+      }
       if (e instanceof WorkItemsBackendNotReadyError) {
         return NextResponse.json({ error: e.message }, { status: 503 });
       }
@@ -137,55 +148,26 @@ export const PATCH = wrapRouteHandlerWithLogging<{
   }
 );
 
-/**
- * DELETE /api/v1/work/items/:id — Hard-delete a work item from Doltgres.
- *
- * The deletion is captured as a dolt_log commit; recovery via dolt_revert
- * remains available. Idempotent at the contract level: a missing id returns 404,
- * not 500. Returns `{id, deleted: true}` on success.
- */
+/** Retired hard-delete: preserve versioned identity and provenance. */
 export const DELETE = wrapRouteHandlerWithLogging<{
   params: Promise<{ id: string }>;
 }>(
   { routeId: "work.items.delete", auth: { mode: "required", getSessionUser } },
-  async (ctx, _request, sessionUser, context) => {
+  async (_ctx, _request, sessionUser, context) => {
     if (!context) throw new Error("context required for dynamic routes");
-    if (!sessionUser) {
+    if (!sessionUser)
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-    }
-
     const { id } = await context.params;
-
-    const inputParse = workItemsDeleteOperation.input.safeParse({ id });
-    if (!inputParse.success) {
-      return NextResponse.json(
-        { error: "invalid input", issues: inputParse.error.issues },
-        { status: 400 }
-      );
-    }
-
-    try {
-      const deleted = await deleteWorkItem(id, {
-        id: sessionUser.id,
-      });
-      if (!deleted) {
-        return NextResponse.json(
-          { error: `Work item not found: ${id}` },
-          { status: 404 }
-        );
-      }
-      ctx.log.info({ workItemId: id }, "work.items.delete_success");
-      return NextResponse.json(
-        workItemsDeleteOperation.output.parse({ id, deleted: true })
-      );
-    } catch (e) {
-      if (e instanceof WorkItemForbiddenError) {
-        return NextResponse.json({ error: e.message }, { status: 403 });
-      }
-      if (e instanceof WorkItemsBackendNotReadyError) {
-        return NextResponse.json({ error: e.message }, { status: 503 });
-      }
-      throw e;
-    }
+    const parsed = workItemsDeleteOperation.input.safeParse({ id });
+    if (!parsed.success)
+      return NextResponse.json({ error: "invalid input" }, { status: 400 });
+    return NextResponse.json(
+      workItemsDeleteOperation.output.parse({
+        error: "work_item_deletion_retired",
+        message:
+          "PATCH status=cancelled to preserve work-item identity and provenance",
+      }),
+      { status: 410 }
+    );
   }
 );
