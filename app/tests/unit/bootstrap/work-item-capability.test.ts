@@ -6,7 +6,7 @@
  * Purpose: The AI work-item capability queries the live (Doltgres) backlog when wired, and refuses AI patches
  *   to priority <= 1.
  * Scope: Factory with fake ports. No Doltgres.
- * Invariants: QUERY_READS_THE_LIVE_BACKLOG, WRITES_NOT_WIDENED, P0P1_IS_NODE_ADMIN.
+ * Invariants: QUERY_READS_THE_LIVE_BACKLOG, COMPLETE_SNAPSHOT (queryPage), WRITES_NOT_WIDENED, P0P1_IS_NODE_ADMIN.
  * Side-effects: none
  * Links: src/bootstrap/capabilities/work-item.ts, story.5101
  * @internal
@@ -46,6 +46,24 @@ describe("createWorkItemCapability", () => {
     expect(markdown.list).toHaveBeenCalledWith({
       statuses: ["needs_implement"],
     });
+  });
+
+  it("queryPage pages the live backlog: forwards cursor, returns nextCursor (COMPLETE_SNAPSHOT)", async () => {
+    const backlog = {
+      list: vi
+        .fn()
+        .mockResolvedValueOnce({ ...empty, nextCursor: "c1" })
+        .mockResolvedValueOnce(empty),
+    };
+    const cap = createWorkItemCapability({
+      workItemQuery: { list: vi.fn(), get: vi.fn() } as unknown as WorkItemQueryPort,
+      workItemCommand: {} as WorkItemCommandPort,
+      backlogReader: backlog as unknown as Pick<WorkItemQueryPort, "list">,
+    });
+    if (!cap.queryPage) throw new Error("queryPage missing");
+    expect((await cap.queryPage({ limit: 50 })).nextCursor).toBe("c1");
+    expect((await cap.queryPage({ limit: 50, cursor: "c1" })).nextCursor).toBeUndefined();
+    expect(backlog.list).toHaveBeenLastCalledWith({ limit: 50, cursor: "c1" });
   });
 
   it("an AI patch to priority <= 1 is refused before any write", async () => {

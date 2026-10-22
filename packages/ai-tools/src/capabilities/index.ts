@@ -29,6 +29,7 @@ export type {
 } from "./edo";
 // Knowledge capability (per knowledge-data-plane spec)
 export type {
+  ActiveGoalInfo,
   KnowledgeCapability,
   KnowledgeEntry,
   KnowledgeListParams,

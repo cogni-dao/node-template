@@ -12,6 +12,8 @@
  *   - NODE_BUNDLE_IS_CANONICAL: Resolves BoundTool from injected node bundle (CORE_TOOL_BUNDLE [+ POLY_TOOL_BUNDLE for poly]); never iterates the global TOOL_CATALOG (which is per-package and can drift behind per-node bundles).
  *   - DENY_BY_DEFAULT: Tool policy explicitly provided per graph
  *   - MCP_VIA_ASYNC_SOURCE: MCP tools resolved via async getMcpToolSource() function (shared cache with reconnect-on-error)
+ *   - CATALOG_REPORT_SEAM: a catalog entry's `report` (not a graph name) decides whether the run's structured
+ *     telemetry is logged as registered events and echoed onto the stream; graphs never touch the logger or ALS.
  * Side-effects: IO (executes graphs via package runner, MCP tool resolution via HTTP)
  * Notes: Discovery is in LangGraphInProcAgentCatalogProvider, not here.
  * Links: GRAPH_EXECUTION.md, LANGGRAPH_AI.md
@@ -29,6 +31,8 @@ import {
   type CompletionFn,
   type CreateGraphFn,
   createInProcGraphRunner,
+  GRAPH_REPORT_CLOSE,
+  GRAPH_REPORT_OPEN,
   type GraphResult,
   type InProcGraphRequest,
   LANGGRAPH_CATALOG,
@@ -81,6 +85,14 @@ interface ProviderCatalogEntry {
   readonly mcpServerIds?: readonly string[];
   readonly graphFactory: CreateGraphFn;
   readonly systemPrompt?: string;
+  /** Graph-owned run report to log + echo on the stream (CatalogEntry.report). */
+  readonly report?: GraphReportDecl;
+}
+
+/** CatalogEntry.report: registered event names for the graph's telemetry and per-batch samples. */
+interface GraphReportDecl {
+  readonly event: string;
+  readonly sampleEvent?: string;
 }
 
 /**
@@ -278,7 +290,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
         configurable: { model, toolIds },
       };
 
-      return createInProcGraphRunner({
+      const runner = createInProcGraphRunner({
         createGraph: entry.graphFactory,
         completionFn,
         createToolExecFn,
@@ -292,12 +304,31 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
           systemPrompt: entry.systemPrompt,
         }),
       });
+      // CatalogEntry.report: the graph's own report → registry events (graphs have no logger).
+      const report = entry.report;
+      if (report) {
+        void runner.final
+          .then((result) => {
+            for (const fields of graphReportLogFields(
+              report,
+              runId,
+              result.structuredOutput
+            )) {
+              this.log.info(fields, "graph report");
+            }
+          })
+          .catch(() => {
+            // Run failure is already logged by the inproc error path.
+          });
+      }
+      return runner;
     };
 
     // Execute: resolve MCP (if needed) then run graph.
     // Returns {stream, final} synchronously per GraphRunResult contract;
     // the inner async generator awaits the promise.
     const innerResult = resolveMcpAndExecute();
+    const report = entry.report;
 
     const stream = (async function* () {
       let inner: Awaited<ReturnType<typeof resolveMcpAndExecute>>;
@@ -311,7 +342,14 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
         yield { type: "done" as const };
         return;
       }
-      yield* inner.stream;
+      for await (const event of inner.stream) {
+        // CatalogEntry.report: echo the telemetry as one text delta just before `done`.
+        if (event.type === "done" && report) {
+          const delta = graphReportDelta((await inner.final).structuredOutput);
+          if (delta) yield { type: "text_delta" as const, delta };
+        }
+        yield event;
+      }
     })();
 
     const final = innerResult.then(
@@ -453,4 +491,40 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
       }),
     };
   }
+}
+
+/**
+ * Log lines for a catalog-declared report: one `report.event` from `structuredOutput.telemetry`, plus one
+ * `report.sampleEvent` per `structuredOutput.samples[]` entry (≤10). Empty when the output carries none.
+ */
+export function graphReportLogFields(
+  report: GraphReportDecl,
+  runId: string,
+  structuredOutput: Record<string, unknown> | undefined
+): Record<string, unknown>[] {
+  const telemetry = structuredOutput?.telemetry;
+  const samples = structuredOutput?.samples;
+  return [
+    ...(telemetry && typeof telemetry === "object"
+      ? [{ event: report.event, runId, ...telemetry }]
+      : []),
+    ...(report.sampleEvent && Array.isArray(samples)
+      ? samples.slice(0, 10).map((sample, batch) => ({
+          event: report.sampleEvent,
+          runId,
+          batch,
+          ...(sample as Record<string, unknown>),
+        }))
+      : []),
+  ];
+}
+
+/** The stream echo of a catalog-declared report (`<graph_report>{telemetry}</graph_report>`), or null. */
+export function graphReportDelta(
+  structuredOutput: Record<string, unknown> | undefined
+): string | null {
+  const telemetry = structuredOutput?.telemetry;
+  return telemetry && typeof telemetry === "object"
+    ? `\n${GRAPH_REPORT_OPEN}${JSON.stringify(telemetry)}${GRAPH_REPORT_CLOSE}\n`
+    : null;
 }
