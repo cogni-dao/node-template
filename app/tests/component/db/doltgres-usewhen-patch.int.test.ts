@@ -27,6 +27,11 @@ import { fileURLToPath } from "node:url";
 import {
   EmptyKnowledgePatchError,
   KnowledgeContributionEditSchema,
+  createContributionService,
+  defaultCanMergeKnowledge,
+  NodeAdminRequiredError,
+  ContributionConflictError,
+  HypothesisMissingEvaluateAtError
 } from "@cogni/knowledge-store";
 import {
   buildDoltgresClient,
@@ -211,6 +216,123 @@ describe("knowledge useWhen patch + q filter (task.5204)", () => {
     await branchClient?.end({ timeout: 5 }).catch(() => undefined);
     if (container) await container.stop();
   });
+
+  it("preserves goal admin gates, rejects a changed reviewed head and acknowledges a reaped merged branch", async () => {
+    const reviewer = {
+      id: "goal-reviewer",
+      kind: "user" as const,
+      role: "admin" as const
+    };
+    const goalId = "goal-native-gated";
+    let allowed = false;
+    let checks = 0;
+    let advanceHead = false;
+    let contributionId = "";
+    const service = createContributionService({
+      port: adapter,
+      canMergeKnowledge: defaultCanMergeKnowledge,
+      rateLimit: { maxOpenPerPrincipal: 5 },
+      gates: [],
+      nodeAdmin: {
+        check: async () => {
+          checks++;
+          if (advanceHead) {
+            advanceHead = false;
+            await adapter.appendCommit({
+              contributionId,
+              principal: principal("goal-author"),
+              message: "advance reviewed goal",
+              edits: [
+                {
+                  op: "patch",
+                  targetRowId: goalId,
+                  entry: { evaluateAt: "2027-02-01T00:00:00.000Z" }
+                }
+              ]
+            });
+          }
+          return allowed
+            ? { ok: true as const }
+            : { ok: false as const, errorCode: "authz_denied" as const };
+        }
+      }
+    });
+    await expect(
+      adapter.create({
+        principal: principal("undated-goal"),
+        message: "must refuse",
+        edits: [
+          {
+            op: "insert",
+            entry: {
+              id: "goal-native-undated",
+              domain: DOMAIN,
+              title: "Undated goal",
+              content: "Must have By",
+              entryType: "goal"
+            }
+          }
+        ]
+      })
+    ).rejects.toBeInstanceOf(HypothesisMissingEvaluateAtError);
+    const rec = await adapter.create({
+      principal: principal("goal-author"),
+      message: "propose goal",
+      edits: [
+        {
+          op: "insert",
+          entry: {
+            id: goalId,
+            domain: DOMAIN,
+            title: "Native commitment",
+            content: "KPI x, target one",
+            entryType: "goal",
+            evaluateAt: "2027-01-01T00:00:00.000Z"
+          }
+        }
+      ]
+    });
+    contributionId = rec.contributionId;
+    const mainBefore = await readClient.unsafe(
+      "SELECT dolt_hashof('main') AS hash"
+    );
+    await expect(
+      service.merge({ principal: reviewer, contributionId })
+    ).rejects.toBeInstanceOf(NodeAdminRequiredError);
+    expect(await store.getKnowledge(goalId)).toBeNull();
+    expect(
+      await readClient.unsafe("SELECT dolt_hashof('main') AS hash")
+    ).toEqual(mainBefore);
+    allowed = true;
+    advanceHead = true; // Real append occurs AFTER raw-diff policy read but BEFORE native admission.
+    await expect(
+      service.merge({ principal: reviewer, contributionId })
+    ).rejects.toBeInstanceOf(ContributionConflictError);
+    expect((await adapter.getById(contributionId))?.state).toBe("open");
+    expect(await store.getKnowledge(goalId)).toBeNull();
+    const merged = await service.merge({ principal: reviewer, contributionId });
+    expect(
+      (await store.listActiveGoals()).find((goal) => goal.id === goalId)
+        ?.evaluateAt
+    ).toEqual(new Date("2027-02-01T00:00:00.000Z"));
+    expect(
+      await readClient.unsafe(
+        `SELECT name FROM dolt.branches WHERE name = '${rec.branch}'`
+      )
+    ).toHaveLength(0);
+    const mergedHead = await readClient.unsafe(
+      "SELECT dolt_hashof('main') AS hash"
+    );
+    const checksAtMerge = checks;
+    allowed = false;
+    await expect(
+      service.merge({ principal: reviewer, contributionId })
+    ).resolves.toEqual(merged);
+    expect(checks).toBe(checksAtMerge);
+    expect(
+      await readClient.unsafe("SELECT dolt_hashof('main') AS hash")
+    ).toEqual(mergedHead);
+  }, 180_000);
 
   it("RED CONTROL: op:'update' clobbers content when the resend drifts", async () => {
     // This is the defect. `op:'update'` carries a FULL entry, so a caller that

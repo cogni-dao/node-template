@@ -171,10 +171,24 @@ export interface KnowledgeContributionPort {
 
   diff(contributionId: string): Promise<ContributionDiffEntry[]>;
 
+  /**
+   * MERGE_GATE_ON_RAW_DIFF: every knowledge row id and citation edge the
+   * contribution changes between its base and current head, read from the raw
+   * Dolt diff (not the display diff), plus that head. Feeds the merge gate and
+   * its expected-head check.
+   */
+  touchedIds(contributionId: string): Promise<ContributionTouchedIds>;
+
   merge(input: {
     contributionId: string;
     principal: Principal;
     confidencePct?: number;
+    /**
+     * MERGE_EXPECTED_HEAD: refuse (ContributionConflictError) when the branch
+     * head moved after the caller's review/gate read, so a commit appended
+     * between the gate and the merge can never ride along.
+     */
+    expectedHeadCommit?: string;
   }): Promise<{ commitHash: string }>;
 
   close(input: {
@@ -182,6 +196,17 @@ export interface KnowledgeContributionPort {
     principal: Principal;
     reason: string;
   }): Promise<void>;
+}
+
+/** Raw ids a contribution touches between its base and `headCommit`. */
+export interface ContributionTouchedIds {
+  readonly headCommit: string;
+  readonly knowledgeIds: readonly string[];
+  readonly citations: readonly {
+    readonly citingId: string;
+    readonly citedId: string;
+    readonly citationType: string;
+  }[];
 }
 
 export class ContributionConflictError extends Error {

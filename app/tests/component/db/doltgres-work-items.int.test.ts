@@ -2391,7 +2391,7 @@ if (role === 'original') {
 			await store.withWrite(
 				{
 					operationId: "native.citation.seed",
-					message: "seed direct citation pages",
+					message: "seed direct citation pages"
 				},
 				async (write) => {
 					await write.addKnowledge({
@@ -2418,7 +2418,16 @@ if (role === 'original') {
 						});
 					}
 					await write.deleteKnowledge("native-citation-0");
-				},
+					await write.addKnowledge({
+						id: "goal-native-committed",
+						domain: "scope-mix",
+						title: "Committed goal",
+						content: "Existing commitment",
+						entryType: "goal",
+						evaluateAt: new Date("2027-01-01T00:00:00Z"),
+						sourceType: "human"
+					});
+				}
 			);
 			const mainBefore = await knowledgeRead.unsafe(
 				"SELECT dolt_hashof('main') AS hash",
@@ -2426,7 +2435,7 @@ if (role === 'original') {
 			holding = store.withWrite(
 				{
 					operationId: "native.knowledge.workitem.mix",
-					message: "mixed writer proof",
+					message: "mixed writer proof"
 				},
 				async (write) => {
 					await write.addKnowledge({
@@ -2437,10 +2446,19 @@ if (role === 'original') {
 						entryType: "finding",
 						sourceType: "agent",
 					});
+					await write.addKnowledge({
+						id: "goal-native-dirty",
+						domain: "scope-mix",
+						title: "Uncommitted goal",
+						content: "Must remain branch-local",
+						entryType: "goal",
+						evaluateAt: new Date("2027-02-01T00:00:00Z"),
+						sourceType: "human"
+					});
 					entered();
 					await gate;
 					return "committed";
-				},
+				}
 			);
 			void holding.catch(failed);
 			await ready;
@@ -2449,6 +2467,16 @@ if (role === 'original') {
 			let pageDeadline: ReturnType<typeof setTimeout> | undefined;
 			const pages = await Promise.race([
 				(async () => {
+					const goals = await store.listActiveGoals();
+					expect(goals).toContainEqual({
+						id: "goal-native-committed",
+						title: "Committed goal",
+						content: "Existing commitment",
+						evaluateAt: new Date("2027-01-01T00:00:00Z")
+					});
+					expect(goals.some((goal) => goal.id === "goal-native-dirty")).toBe(
+						false
+					);
 					const first = await store.listCitationLinks("native-citation-root");
 					expect(first.links.map((link) => link.id)).toEqual(
 						Array.from({ length: 5 }, (_, i) => `native-citation-edge-${i}`),
@@ -2469,7 +2497,7 @@ if (role === 'original') {
 						() => reject(new Error("citation read waited for writer release")),
 						2_000,
 					);
-				}),
+				})
 			]).finally(() => clearTimeout(pageDeadline));
 			expect(new Set(pages.map((link) => link.id)).size).toBe(7);
 			for (const link of pages) {
@@ -2496,6 +2524,9 @@ if (role === 'original') {
 			});
 			release();
 			await expect(holding).resolves.toBe("committed");
+			expect((await store.listActiveGoals()).map((goal) => goal.id)).toContain(
+				"goal-native-dirty"
+			);
 			await expect(
 				store.getKnowledge("native-mixed-scope"),
 			).resolves.toMatchObject({ content: "Atomic content" });

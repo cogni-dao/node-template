@@ -22,6 +22,12 @@ import {
 } from "@cogni-dao/doltgres-admission";
 import type { Sql } from "postgres";
 import { initializeConfidence } from "../../domain/confidence-policy.js";
+import {
+  type ActiveGoal,
+  GOAL_ENTRY_TYPE,
+  GOAL_RETIRING_EDGE,
+  selectActiveGoals,
+} from "../../domain/dao-goals.js";
 import type {
   Citation,
   CitationType,
@@ -32,8 +38,10 @@ import type {
   NewKnowledge,
 } from "../../domain/schemas.js";
 import {
+  citedEntryTypesFor,
   HYPOTHESIS_TARGETED_EDGES,
   isWorkItemEndpointId,
+  requiresEvaluateAt,
 } from "../../domain/schemas.js";
 import {
   assertKnowledgeReplay,
@@ -45,12 +53,13 @@ import {
   CitationTypeMismatchError,
   type Domain,
   DomainAlreadyRegisteredError,
+  GoalRequiresContributionError,
   HypothesisMissingEvaluateAtError,
   type KnowledgeStorePort,
   KnowledgeWriteOutcomeUnknownError,
   KnowledgeWriteScopeRequiredError,
   type KnowledgeWriteSession,
-  type NewDomain,
+  type NewDomain
 } from "../../port/knowledge-store.port.js";
 import type {
   DoltBranchSessionRunner,
@@ -165,8 +174,12 @@ function citationId(
  * EDGE_TYPE_MATCHES_CITED_ENTRY_TYPE — strict edges that target hypotheses.
  * Mirrors HYPOTHESIS_TARGETED_EDGES from the domain layer.
  */
-function expectedEntryTypeForEdge(type: CitationType): string | null {
-  return HYPOTHESIS_TARGETED_EDGES.includes(type) ? "hypothesis" : null;
+function expectedEntryTypeForEdge(
+  type: CitationType
+): readonly string[] | null {
+  return HYPOTHESIS_TARGETED_EDGES.includes(type)
+    ? citedEntryTypesFor(type)
+    : null;
 }
 
 /**
@@ -175,8 +188,8 @@ function expectedEntryTypeForEdge(type: CitationType): string | null {
  * DOMAIN_FK_ENFORCED_AT_WRITE pattern from task.5038.
  */
 function assertHypothesisEvaluateAt(entry: NewKnowledge): void {
-  if (entry.entryType === "hypothesis" && !entry.evaluateAt) {
-    throw new HypothesisMissingEvaluateAtError(entry.id);
+  if (requiresEvaluateAt(entry.entryType) && !entry.evaluateAt) {
+    throw new HypothesisMissingEvaluateAtError(entry.id, entry.entryType);
   }
 }
 
@@ -353,6 +366,41 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
     return matched;
   }
 
+  async listActiveGoals(): Promise<ActiveGoal[]> {
+    // Direct read of the main-plane `knowledge` table — contribution branches
+    // are separate Dolt branches and never appear here. The id-prefix and
+    // status checks run in `selectActiveGoals` (app layer) rather than SQL, the
+    // same Doltgres-safe idiom as `searchKnowledge`; the shelf is tiny.
+    const rows = await this.readSql.unsafe(
+      `SELECT id, entry_type, status, title, content, evaluate_at FROM knowledge WHERE entry_type = ${escapeValue(GOAL_ENTRY_TYPE)}`
+    );
+    // GOAL_RETIRED_BY_SUPERSEDES: a merged `supersedes` edge onto a goal
+    // retires it (DEPRECATE_NOT_DELETE — a cited goal cannot be deleted and no
+    // contribution op sets `status`). Same Doltgres-safe idiom: filter in code.
+    const superseded = await this.readSql.unsafe(
+      `SELECT cited_id FROM citations WHERE citation_type = ${escapeValue(GOAL_RETIRING_EDGE)}`
+    );
+    const supersededIds = new Set(
+      superseded.map((r) => (r as Record<string, unknown>).cited_id as string)
+    );
+    return selectActiveGoals(
+      rows.map((r) => {
+        const row = r as Record<string, unknown>;
+        return {
+          id: row.id as string,
+          entryType: row.entry_type as string,
+          status: (row.status as string | null) ?? null,
+          title: row.title as string,
+          content: row.content as string,
+          evaluateAt: row.evaluate_at
+            ? new Date(row.evaluate_at as string)
+            : null,
+        };
+      }),
+      supersededIds
+    );
+  }
+
   async listDomains(): Promise<string[]> {
     const rows = await this.sql.unsafe(
       "SELECT DISTINCT domain FROM knowledge ORDER BY domain"
@@ -433,12 +481,13 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
     await assertDomainRegistered(this.sql, entry.domain);
     assertHypothesisEvaluateAt(entry);
     const insert = insertColumnsSql(knowledgeInsertColumns(entry));
-
     const existing = await this.getKnowledge(entry.id);
     if (existing) {
+      await this.assertNotGoalWrite(entry.id, entry.entryType);
       assertKnowledgeReplay(existing, entry);
       return existing;
     }
+
     const rows = await this.sql.unsafe(
       `INSERT INTO knowledge (${insert.names}) VALUES (${insert.values}) RETURNING *`
     );
@@ -470,6 +519,7 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
     if (update.domain !== undefined) {
       await assertDomainRegistered(this.sql, update.domain);
     }
+    await this.assertNotGoalWrite(id, update.entryType);
     const setClauses = updateSetSql(knowledgeUpdateColumns(update));
 
     if (setClauses.length === 0) {
@@ -483,6 +533,22 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
     );
     if (rows.length === 0) throw new Error(`Knowledge ${id} not found`);
     return rowToKnowledge(rows[0] as Record<string, unknown>);
+  }
+
+  /**
+   * GOAL_CHANGE_IS_NODE_ADMIN: the direct-write plane never modifies an
+   * existing goal row, nor retypes a row into one.
+   */
+  private async assertNotGoalWrite(
+    id: string,
+    nextEntryType: string | null | undefined
+  ): Promise<void> {
+    if (
+      nextEntryType === GOAL_ENTRY_TYPE ||
+      (await this.getKnowledgeEntryType(id)) === GOAL_ENTRY_TYPE
+    ) {
+      throw new GoalRequiresContributionError(id);
+    }
   }
 
   async deleteKnowledge(id: string): Promise<void> {
@@ -556,12 +622,12 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
       }
     }
     const expected = expectedEntryTypeForEdge(edge.citationType);
-    if (expected !== null && citedEntryType !== expected) {
+    if (expected !== null && !expected.includes(citedEntryType ?? "")) {
       throw new CitationTypeMismatchError(
         edge.citationType,
         edge.citedId,
         citedEntryType ?? "(none)",
-        expected
+        expected.join("|")
       );
     }
 

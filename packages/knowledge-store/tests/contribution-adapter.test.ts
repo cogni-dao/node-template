@@ -20,11 +20,16 @@ import {
   DoltgresKnowledgeStoreAdapter,
 } from "../src/adapters/doltgres/index.js";
 import { ContributionConflictError } from "../src/port/contribution.port.js";
-import type { Principal } from "../src/domain/contribution-schemas.js";
+import {
+  KnowledgeContributionEditSchema,
+  type Principal,
+} from "../src/domain/contribution-schemas.js";
 import {
   CitationTargetNotFoundError,
+  HypothesisMissingEvaluateAtError,
+  GoalRequiresContributionError,
   KnowledgeWriteOutcomeUnknownError,
-  KnowledgeBusyError,
+  KnowledgeBusyError
 } from "../src/port/knowledge-store.port.js";
 
 const HEAD = "a".repeat(32);
@@ -89,7 +94,7 @@ class FakeReservedSql {
       )
     )
       return [
-        { hash: "next456", conflicts: 0, fast_forward: 1, message: "merged" },
+        { hash: "next456", conflicts: 0, fast_forward: 1, message: "merged" }
       ];
     if (query.includes("dolt.merge_status")) return [{ is_merging: false }];
     // Admission control takes a session advisory lock before any branch work
@@ -127,8 +132,12 @@ class FakeReservedSql {
     if (query.includes("entry_type FROM knowledge")) {
       return [{ entry_type: "finding" }];
     }
-    if (query.includes("source_type FROM knowledge")) {
-      return [{ source_type: "external" }];
+    if (
+      query.includes("source_type, entry_type, confidence_pct FROM knowledge")
+    ) {
+      return [
+        { source_type: "external", entry_type: "finding", confidence_pct: 30 },
+      ];
     }
     if (query.includes("citation_type FROM citations")) {
       return [];
@@ -145,8 +154,8 @@ class FakeReservedSql {
           message: "append",
           edit_count: 1,
           source_ref: "contribution:contrib-agent-1-abc123:4",
-          created_at: new Date("2026-05-19T00:00:00.000Z"),
-        },
+          created_at: new Date("2026-05-19T00:00:00.000Z")
+        }
       ];
     }
     return [];
@@ -392,7 +401,7 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
     expect(outcome).toMatchObject({
       name: "KnowledgeWriteOutcomeUnknownError",
       retryable: false,
-      receipt: { lookup: { branch: expect.stringMatching(/^dolt-op\//) } },
+      receipt: { lookup: { branch: expect.stringMatching(/^dolt-op\//) } }
     });
     expect(metadataCalls).toBe(1);
     expect(resets).toBe(0);
@@ -516,12 +525,12 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
       adapterFor(fake).close({
         contributionId: String(record.id),
         principal: reviewer,
-        reason: "unproven merge",
+        reason: "unproven merge"
       })
     ).rejects.toMatchObject({
       name: "KnowledgeWriteOutcomeUnknownError",
       retryable: false,
-      receipt: { lookup: { branch: expect.stringMatching(/^dolt-op\//) } },
+      receipt: { lookup: { branch: expect.stringMatching(/^dolt-op\//) } }
     });
     expect(
       fake.conn.queries.filter((query) =>
@@ -1118,6 +1127,201 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
         ],
       })
     ).rejects.toBeInstanceOf(CitationTargetNotFoundError);
+  });
+
+  it("refuses an existing goal inside a real admitted write scope before DML", async () => {
+    const fake = new FakeSql();
+    const original = fake.conn.unsafe.bind(fake.conn);
+    fake.conn.unsafe = async (query: string) => {
+      if (
+        query.includes("entry_type FROM knowledge") &&
+        query.includes("'goal-a'")
+      )
+        return [{ entry_type: "goal" }];
+      if (query.includes("SELECT * FROM knowledge WHERE id")) {
+        fake.conn.queries.push(query);
+        return [
+          {
+            id: "goal-a",
+            entry_type: "goal",
+            domain: "strategy",
+            content: "original",
+            title: "Goal",
+            source_type: "human",
+            confidence_pct: 30
+          }
+        ];
+      }
+      return original(query);
+    };
+    const store = new DoltgresKnowledgeStoreAdapter({
+      sql: fake as unknown as Sql,
+      writerSession: new DoltBranchSessionRunner(independentWriter(fake))
+    });
+    await expect(
+      store.withWrite(
+        { operationId: "refuse-goal-change", message: "must refuse" },
+        (write) =>
+          write.upsertKnowledge({
+            id: "goal-a",
+            domain: "strategy",
+            title: "changed",
+            content: "changed",
+            sourceType: "agent"
+          })
+      )
+    ).rejects.toBeInstanceOf(GoalRequiresContributionError);
+    expect(
+      fake.conn.queries.some((q) =>
+        /^INSERT INTO knowledge |^UPDATE knowledge SET/.test(q)
+      )
+    ).toBe(false);
+    expect(
+      fake.conn.queries.some((q) => q.includes("pg_try_advisory_lock"))
+    ).toBe(true);
+  });
+
+  it("refuses a merge whose branch head moved after the gate read (MERGE_EXPECTED_HEAD)", async () => {
+    const fake = new FakeSql();
+    await expect(
+      adapterFor(fake).merge({
+        contributionId: "contrib-agent-1-abc123",
+        principal: reviewer,
+        expectedHeadCommit: "reviewed-older-head",
+      })
+    ).rejects.toBeInstanceOf(ContributionConflictError);
+    expect(fake.conn.queries.some((q) => q.includes("SELECT dolt_merge("))).toBe(false);
+  });
+
+  it("merges when the expected head is still the branch head", async () => {
+    const fake = new FakeSql();
+    await adapterFor(fake).merge({
+      contributionId: "contrib-agent-1-abc123",
+      principal: reviewer,
+      expectedHeadCommit: HEAD
+    });
+    expect(fake.conn.queries.some((q) => q.includes("SELECT dolt_merge("))).toBe(true);
+  });
+
+  it("touchedIds reads raw knowledge + citation diffs at the head (MERGE_GATE_ON_RAW_DIFF)", async () => {
+    const fake = new FakeSql();
+    const original = fake.unsafe.bind(fake);
+    fake.unsafe = async (query: string) => {
+      if (query.includes("'knowledge')")) {
+        fake.queries.push(query);
+        return [{ from_id: "goal-a", to_id: "goal-a" }, { from_id: null, to_id: "row-b" }];
+      }
+      if (query.includes("'citations')")) {
+        fake.queries.push(query);
+        return [
+          { from_citing_id: null, from_cited_id: null, to_citing_id: "x", to_cited_id: "goal-a", to_citation_type: "supersedes" },
+        ];
+      }
+      return original(query);
+    };
+    const touched = await adapterFor(fake).touchedIds("contrib-agent-1-abc123");
+    expect(touched).toEqual({
+      headCommit: HEAD,
+      knowledgeIds: ["goal-a", "row-b"],
+      citations: [
+        { citingId: "x", citedId: "goal-a", citationType: "supersedes" }
+      ]
+    });
+    expect(
+      fake.queries.some((q) =>
+        q.includes(`dolt_diff('base123', '${HEAD}', 'knowledge')`)
+      )
+    ).toBe(true);
+  });
+
+  it("refuses a patch that retypes a row to goal without a deadline (GOAL_REQUIRES_DEADLINE)", async () => {
+    const fake = new FakeSql();
+    await expect(
+      adapterFor(fake).appendCommit({
+        contributionId: "contrib-agent-1-abc123",
+        principal: { id: "agent-1", kind: "agent" },
+        message: "retype",
+        edits: [{ op: "patch", targetRowId: "row-1", entry: { entryType: "goal" } }],
+      })
+    ).rejects.toBeInstanceOf(HypothesisMissingEvaluateAtError);
+    expect(fake.conn.queries.some((q) => q.startsWith("UPDATE knowledge SET"))).toBe(false);
+  });
+
+  it("a patch may set a goal's deadline, and an update persists evaluate_at + resolution_strategy", async () => {
+    const fake = new FakeSql();
+    await adapterFor(fake).appendCommit({
+      contributionId: "contrib-agent-1-abc123",
+      principal: { id: "agent-1", kind: "agent" },
+      message: "retype with deadline",
+      edits: [
+        {
+          op: "patch",
+          targetRowId: "row-1",
+          entry: { entryType: "goal", evaluateAt: "2027-01-01T00:00:00.000Z" },
+        },
+      ],
+    });
+    const patch = fake.conn.queries.find((q) => q.startsWith("UPDATE knowledge SET"));
+    expect(patch).toContain("evaluate_at = '2027-01-01T00:00:00.000Z'");
+
+    const fake2 = new FakeSql();
+    await adapterFor(fake2).appendCommit({
+      contributionId: "contrib-agent-1-abc123",
+      principal: { id: "agent-1", kind: "agent" },
+      message: "move the By date",
+      edits: [
+        KnowledgeContributionEditSchema.parse({
+          op: "update",
+          targetRowId: "goal-a",
+          entry: {
+            id: "goal-a",
+            domain: "strategy",
+            title: "Goal: a",
+            content: "Statement.",
+            entryType: "goal",
+            evaluateAt: "2027-02-01T00:00:00.000Z",
+            resolutionStrategy: "manual",
+          },
+        }),
+      ],
+    });
+    const update = fake2.conn.queries.find((q) => q.startsWith("UPDATE knowledge SET domain"));
+    expect(update).toContain("evaluate_at = '2027-02-01T00:00:00.000Z'");
+    expect(update).toContain("resolution_strategy = 'manual'");
+  });
+
+  it("an update that omits evaluateAt / entryType keeps the row's deadline and type", async () => {
+    const fake = new FakeSql();
+    const original = fake.conn.unsafe.bind(fake.conn);
+    fake.conn.unsafe = async (query: string) => {
+      if (query.includes("entry_type, evaluate_at, resolution_strategy FROM knowledge")) {
+        fake.conn.queries.push(query);
+        return [
+          {
+            entry_type: "goal",
+            evaluate_at: "2027-03-01T00:00:00.000Z",
+            resolution_strategy: "manual",
+          },
+        ];
+      }
+      return original(query);
+    };
+    await adapterFor(fake).appendCommit({
+      contributionId: "contrib-agent-1-abc123",
+      principal: { id: "agent-1", kind: "agent" },
+      message: "reword the goal",
+      edits: [
+        KnowledgeContributionEditSchema.parse({
+          op: "update",
+          targetRowId: "goal-a",
+          entry: { id: "goal-a", domain: "strategy", title: "Goal: a", content: "Reworded." },
+        }),
+      ],
+    });
+    const update = fake.conn.queries.find((q) => q.startsWith("UPDATE knowledge SET domain"));
+    expect(update).toContain("entry_type = 'goal'");
+    expect(update).toContain("evaluate_at = '2027-03-01T00:00:00.000Z'");
+    expect(update).toContain("resolution_strategy = 'manual'");
   });
 });
 

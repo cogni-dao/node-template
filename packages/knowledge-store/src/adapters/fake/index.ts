@@ -13,8 +13,14 @@
 
 import {
   initializeConfidence,
+  isConfidenceExempt,
   recomputeConfidence as recomputeConfidenceByPolicy,
 } from "../../domain/confidence-policy.js";
+import {
+  type ActiveGoal,
+  GOAL_RETIRING_EDGE,
+  selectActiveGoals,
+} from "../../domain/dao-goals.js";
 import type {
   Citation,
   CitationType,
@@ -25,8 +31,10 @@ import type {
   NewKnowledge,
 } from "../../domain/schemas.js";
 import {
+  citedEntryTypesFor,
   HYPOTHESIS_TARGETED_EDGES,
   isWorkItemEndpointId,
+  requiresEvaluateAt,
 } from "../../domain/schemas.js";
 import {
   assertKnowledgeReplay,
@@ -47,11 +55,12 @@ import {
   type Domain,
   DomainAlreadyRegisteredError,
   DomainNotRegisteredError,
+  GoalRequiresContributionError,
   HypothesisMissingEvaluateAtError,
   type KnowledgeStorePort,
   KnowledgeWriteScopeRequiredError,
   type KnowledgeWriteSession,
-  type NewDomain,
+  type NewDomain
 } from "../../port/knowledge-store.port.js";
 
 // ---------------------------------------------------------------------------
@@ -61,8 +70,8 @@ import {
 const WALK_CHAIN_DEFAULT_DEPTH = 5;
 const WALK_CHAIN_MAX_DEPTH = 10;
 
-function expectedEntryTypeForEdge(t: CitationType): string | null {
-  return HYPOTHESIS_TARGETED_EDGES.includes(t) ? "hypothesis" : null;
+function expectedEntryTypeForEdge(t: CitationType): readonly string[] | null {
+  return HYPOTHESIS_TARGETED_EDGES.includes(t) ? citedEntryTypesFor(t) : null;
 }
 
 function citationId(
@@ -169,6 +178,25 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
     return opts?.limit ? out.slice(0, opts.limit) : out;
   }
 
+  async listActiveGoals(): Promise<ActiveGoal[]> {
+    // The fake holds only main-plane rows and has no status column, so every
+    // row is a non-deprecated candidate; supersedes edges retire, as on Doltgres.
+    return selectActiveGoals(
+      Array.from(this.rows.values()).map((r) => ({
+        id: r.id,
+        entryType: r.entryType,
+        title: r.title,
+        content: r.content,
+        evaluateAt: r.evaluateAt ?? null,
+      })),
+      new Set(
+        Array.from(this.edges.values())
+          .filter((c) => c.citationType === GOAL_RETIRING_EDGE)
+          .map((c) => c.citedId)
+      )
+    );
+  }
+
   async searchKnowledge(
     domain: string,
     query: string,
@@ -237,10 +265,16 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
     if (!this.domainsMap.has(entry.domain)) {
       throw new DomainNotRegisteredError(entry.domain);
     }
-    if (entry.entryType === "hypothesis" && !entry.evaluateAt) {
-      throw new HypothesisMissingEvaluateAtError(entry.id);
+    if (requiresEvaluateAt(entry.entryType) && !entry.evaluateAt) {
+      throw new HypothesisMissingEvaluateAtError(entry.id, entry.entryType);
     }
     const existing = this.rows.get(entry.id);
+    if (
+      existing &&
+      (existing.entryType === "goal" || entry.entryType === "goal")
+    ) {
+      throw new GoalRequiresContributionError(entry.id);
+    }
     if (existing) {
       assertKnowledgeReplay(existing, entry);
       return existing;
@@ -270,8 +304,8 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
     if (!this.domainsMap.has(entry.domain)) {
       throw new DomainNotRegisteredError(entry.domain);
     }
-    if (entry.entryType === "hypothesis" && !entry.evaluateAt) {
-      throw new HypothesisMissingEvaluateAtError(entry.id);
+    if (requiresEvaluateAt(entry.entryType) && !entry.evaluateAt) {
+      throw new HypothesisMissingEvaluateAtError(entry.id, entry.entryType);
     }
     return this.upsertKnowledge(entry);
   }
@@ -283,6 +317,9 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
     this.assertWriteScope();
     const existing = this.rows.get(id);
     if (!existing) throw new Error(`Knowledge ${id} not found`);
+    if (existing.entryType === "goal" || update.entryType === "goal") {
+      throw new GoalRequiresContributionError(id);
+    }
     if (update.domain && !this.domainsMap.has(update.domain)) {
       throw new DomainNotRegisteredError(update.domain);
     }
@@ -354,12 +391,12 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
       throw new CitationTargetNotFoundError(edge.citingId);
     }
     const expected = expectedEntryTypeForEdge(edge.citationType);
-    if (expected !== null && citedRow?.entryType !== expected) {
+    if (expected !== null && !expected.includes(citedRow?.entryType ?? "")) {
       throw new CitationTypeMismatchError(
         edge.citationType,
         edge.citedId,
         citedRow?.entryType ?? "(none)",
-        expected
+        expected.join("|")
       );
     }
     const id =
@@ -603,6 +640,7 @@ export class FakeEdoResolverAdapter implements EdoResolverPort {
     if (!entry) {
       throw new Error(`recomputeConfidence: entry '${entryId}' not found`);
     }
+    if (isConfidenceExempt(entry.entryType)) return entry.confidencePct ?? 0;
 
     const incoming: Citation[] = await write.listCitationsByCitedId(entryId);
     const confidenceEdges = incoming.filter((c) => c.citationType !== "tracks");
