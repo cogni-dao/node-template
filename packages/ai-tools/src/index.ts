@@ -177,6 +177,7 @@ export {
 } from "./tools/knowledge-read";
 export {
   createKnowledgeSearchImplementation,
+  KNOWLEDGE_SEARCH_CONTENT_MAX_CHARS,
   KNOWLEDGE_SEARCH_NAME,
   type KnowledgeSearchDeps,
   type KnowledgeSearchInput,
