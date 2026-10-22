@@ -12,7 +12,10 @@
  */
 
 // Capability factories (shared across all nodes)
-export { createKnowledgeCapability } from "./capability.js";
+export {
+  type CapabilityActiveGoal,
+  createKnowledgeCapability,
+} from "./capability.js";
 // Domain types & schemas
 export {
   assertWritableConfidence,

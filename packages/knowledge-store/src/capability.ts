@@ -76,13 +76,35 @@ export interface KnowledgeCapabilityOptions {
  *   write is rejected at the seam, never reaches Doltgres.
  * - Confidence defaults to DRAFT (30%) if not specified.
  */
+/** One approved goal as tools see it (matches `@cogni-dao/ai-tools` ActiveGoalInfo). */
+export interface CapabilityActiveGoal {
+  readonly id: string;
+  readonly title: string;
+  readonly content: string;
+  /** ISO `By:` deadline, when set. */
+  readonly evaluateAt: string | null;
+}
+
 export function createKnowledgeCapability(
   port: KnowledgeStorePort,
   options: KnowledgeCapabilityOptions = {}
-): KnowledgeCapability {
+): KnowledgeCapability & {
+  /** ONE_GOAL_LIST reader for `core__goal_list` (optional on `KnowledgeCapability`). */
+  listActiveGoals(): Promise<readonly CapabilityActiveGoal[]>;
+} {
   const gates = options.gates ?? V0_DETERMINISTIC_GATES;
 
   return {
+    async listActiveGoals(): Promise<readonly CapabilityActiveGoal[]> {
+      const goals = await port.listActiveGoals();
+      return goals.map((g) => ({
+        id: g.id,
+        title: g.title,
+        content: g.content,
+        evaluateAt: g.evaluateAt ? g.evaluateAt.toISOString() : null,
+      }));
+    },
+
     async search(params: KnowledgeSearchParams): Promise<KnowledgeEntry[]> {
       const results = await port.searchKnowledge(params.domain, params.query, {
         limit: params.limit,
