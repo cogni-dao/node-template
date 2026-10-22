@@ -3,7 +3,7 @@
 
 /**
  * Module: `@tests/unit/bootstrap/node-admin-gate`
- * Purpose: toks5's NodeAdminAuthority decides on the repo-spec admin seam (approvers), and the shared
+ * Purpose: This node's NodeAdminAuthority decides on the repo-spec admin seam (approvers), and the shared
  *   privileged-priority rule covers priority <= 1.
  * Scope: Pure authority with mocked config. Does not touch routes or stores.
  * Invariants: GOAL_CHANGE_IS_NODE_ADMIN, P0P1_IS_NODE_ADMIN, FAIL_CLOSED_WITH_DISTINCTION.

@@ -6,7 +6,7 @@
  * Purpose: This node's implementation of the shared `NodeAdminAuthority` seam
  *   (`@cogni/knowledge-store`) — the one check behind the goal-layer
  *   privileges: merging a goal-layer change and setting priority <= 1.
- * Scope: Composition only. toks5 has no OpenFGA, so the authority is the
+ * Scope: Composition only. This node has no OpenFGA, so the authority is the
  *   existing node-local admin seam `isDaoAdmin` (repo-spec
  *   `activity_ledger.approvers` + steward wallet), the same check that gates
  *   `(admin)/` and attribution writes. When this node adopts OpenFGA, swap this

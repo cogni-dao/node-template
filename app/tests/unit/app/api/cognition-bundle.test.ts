@@ -289,7 +289,7 @@ describe("Goals section — approved goals right after the orientation (story.51
 	it("renders a goal after the orientation and before the invariants", async () => {
 		const md = renderBundleMarkdown({
 			...baseInput,
-			orientation: { id: "toks5-agent-orientation", content: "the map" },
+			orientation: { id: "node-agent-orientation", content: "the map" },
 			goals: await resolveGoals(
 				port([
 					{
