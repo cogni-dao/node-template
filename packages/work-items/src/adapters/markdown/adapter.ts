@@ -236,6 +236,29 @@ function matchesQuery(item: WorkItem, query: WorkQuery): boolean {
   return true;
 }
 
+// ── Pagination cursor ────────────────────────────────
+
+const MARKDOWN_CURSOR_PREFIX = "md:";
+
+/** Opaque offset cursor over the adapter's total sort order. */
+function encodeMarkdownCursor(offset: number): string {
+  return `${MARKDOWN_CURSOR_PREFIX}${offset}`;
+}
+
+/** Absent ⇒ 0. A cursor this adapter did not issue is a caller error, never page 1. */
+function decodeMarkdownCursor(cursor: string | undefined): number {
+  if (cursor === undefined) return 0;
+  const offset = Number(cursor.slice(MARKDOWN_CURSOR_PREFIX.length));
+  if (
+    !cursor.startsWith(MARKDOWN_CURSOR_PREFIX) ||
+    !Number.isSafeInteger(offset) ||
+    offset < 0
+  ) {
+    throw new Error(`invalid markdown work-item cursor: ${cursor}`);
+  }
+  return offset;
+}
+
 // ── Adapter class ────────────────────────────────────
 
 export class MarkdownWorkItemAdapter
@@ -260,22 +283,29 @@ export class MarkdownWorkItemAdapter
       items = items.filter((item) => matchesQuery(item, query));
     }
 
-    // Sort by priority ASC, then rank ASC
+    // Sort by priority ASC, then rank ASC, then id (a total order, so offset pages are stable)
     items.sort((a, b) => {
       const pa = a.priority ?? 99;
       const pb = b.priority ?? 99;
       if (pa !== pb) return pa - pb;
       const ra = a.rank ?? 99;
       const rb = b.rank ?? 99;
-      return ra - rb;
+      if (ra !== rb) return ra - rb;
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
     });
 
-    if (query?.limit) {
-      items = items.slice(0, query.limit);
+    // NO_SILENT_TRUNCATION: a page cut short by `limit` returns `nextCursor`, so a
+    // caller that walks pages (e.g. a complete backlog snapshot) never mistakes the
+    // first page for the whole backlog.
+    const offset = decodeMarkdownCursor(query?.cursor);
+    const rest = items.slice(offset);
+    if (query?.limit && rest.length > query.limit) {
+      return {
+        items: rest.slice(0, query.limit),
+        nextCursor: encodeMarkdownCursor(offset + query.limit),
+      };
     }
-
-    // Markdown adapter ignores cursor, returns all matching results
-    return { items };
+    return { items: rest };
   }
 
   async listRelations(id: WorkItemId): Promise<WorkRelation[]> {

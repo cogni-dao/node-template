@@ -432,6 +432,12 @@ importers:
 
   graphs:
     dependencies:
+      '@cogni/ai-core':
+        specifier: workspace:*
+        version: link:../packages/ai-core
+      '@cogni/ai-tools':
+        specifier: workspace:@cogni-dao/ai-tools@*
+        version: link:../packages/ai-tools
       '@cogni/langgraph-graphs':
         specifier: workspace:@cogni-dao/langgraph-graphs@*
         version: link:../packages/langgraph-graphs
