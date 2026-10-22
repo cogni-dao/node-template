@@ -681,7 +681,7 @@ function createContainer(): Container {
 	// RepoCapability for AI tools (requires COGNI_REPO_PATH)
 	const repoCapability = createRepoCapability(env);
 
-	// WorkItemCapability for AI tools (delegates to markdown adapter ports)
+	// WorkItemCapability for AI tools: query → Doltgres (backlogReader); transition/patch → markdown ports
 	const workItemAdapter = new MarkdownWorkItemAdapter(
 		env.COGNI_REPO_ROOT ?? "/nonexistent",
 	);
