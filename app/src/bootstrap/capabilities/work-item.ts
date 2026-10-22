@@ -8,16 +8,25 @@
  * Invariants:
  *   - PORTS_ARE_AUTHORITY: All operations delegate to WorkItemQueryPort/WorkItemCommandPort
  *   - TRANSITION_TABLE_ENFORCED: CommandPort validates transitions
+ *   - PATCH_ON_THE_LIVE_BACKLOG (story.5096, mirrors cogni): when `backlogWriter` is wired, `patch`
+ *     goes through the Doltgres `patch` attributed to `backlogWriter.principalId`; the store's own
+ *     authority applies unchanged. Without it, `patch` stays on the markdown ports.
+ *   - PATCH_CAS_PASSTHROUGH: a caller `expectedRevision` is forwarded as the Doltgres store's
+ *     compare-and-set (absent => that store's unconditioned patch); its `WorkItemRevisionConflictError`
+ *     becomes the ai-tools `WorkItemPatchConflictError`, nothing written. The markdown ports CAS on the
+ *     revision they re-read (`current.revision`, a content hash, not the integer the tool exposes),
+ *     so a caller `expectedRevision` there is refused, never silently dropped.
  * Side-effects: none (factory only)
  * Links: docs/spec/development-lifecycle.md
  * @internal
  */
 
-import type {
-  WorkItemCapability,
-  WorkItemInfo,
-  WorkItemQueryParams,
-  WorkItemTransitionResult,
+import {
+  type WorkItemCapability,
+  type WorkItemInfo,
+  WorkItemPatchConflictError,
+  type WorkItemQueryParams,
+  type WorkItemTransitionResult,
 } from "@cogni/ai-tools";
 import type {
   ActorKind,
@@ -29,6 +38,10 @@ import type {
   WorkItemType,
 } from "@cogni/work-items";
 import { toWorkItemId } from "@cogni/work-items";
+import {
+  WorkItemRevisionConflictError,
+  type WorkItemsDoltgresPort,
+} from "@cogni/work-items/adapters/doltgres";
 
 import { isPrivilegedPriority } from "@cogni/knowledge-store";
 
@@ -45,6 +58,14 @@ export interface WorkItemCapabilityDeps {
    * saw an empty backlog. Writes are unchanged.
    */
   readonly backlogReader?: Pick<WorkItemQueryPort, "list">;
+  /**
+   * PATCH_ON_THE_LIVE_BACKLOG: the node's Doltgres work-item store. When set, `patch`
+   * writes there as `principalId` (with caller compare-and-set) instead of the markdown ports.
+   */
+  readonly backlogWriter?: {
+    readonly store: Pick<WorkItemsDoltgresPort, "patch">;
+    readonly principalId: string;
+  };
 }
 
 function assigneeId(a: SubjectRef): string {
@@ -156,6 +177,37 @@ export function createWorkItemCapability(
       if (priority != null && isPrivilegedPriority(priority)) {
         throw new Error(
           `authz_denied: priority ${priority} requires node admin — propose it instead`
+        );
+      }
+      const writer = deps.backlogWriter;
+      if (writer) {
+        try {
+          const updated = await writer.store.patch(
+            {
+              id: toWorkItemId(input.id),
+              ...(input.expectedRevision !== undefined && {
+                expectedRevision: input.expectedRevision,
+              }),
+              set: input.set,
+            },
+            writer.principalId
+          );
+          return toWorkItemInfo(updated);
+        } catch (e) {
+          if (e instanceof WorkItemRevisionConflictError) {
+            throw new WorkItemPatchConflictError(
+              e.id,
+              e.expectedRevision,
+              e.currentRevision
+            );
+          }
+          throw e;
+        }
+      }
+
+      if (input.expectedRevision !== undefined) {
+        throw new Error(
+          "expectedRevision requires the Doltgres backlog writer (not wired)"
         );
       }
       const current = await workItemQuery.get(toWorkItemId(input.id));

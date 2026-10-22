@@ -6,13 +6,16 @@
  * Purpose: The AI work-item capability queries the live (Doltgres) backlog when wired, and refuses AI patches
  *   to priority <= 1.
  * Scope: Factory with fake ports. No Doltgres.
- * Invariants: QUERY_READS_THE_LIVE_BACKLOG, COMPLETE_SNAPSHOT (queryPage), WRITES_NOT_WIDENED, P0P1_IS_NODE_ADMIN.
+ * Invariants: QUERY_READS_THE_LIVE_BACKLOG, COMPLETE_SNAPSHOT (queryPage), WRITES_NOT_WIDENED, P0P1_IS_NODE_ADMIN,
+ *   PATCH_ON_THE_LIVE_BACKLOG, PATCH_CAS_PASSTHROUGH.
  * Side-effects: none
  * Links: src/bootstrap/capabilities/work-item.ts, story.5101
  * @internal
  */
 
+import { WorkItemPatchConflictError } from "@cogni/ai-tools";
 import type { WorkItemCommandPort, WorkItemQueryPort } from "@cogni/work-items";
+import { WorkItemRevisionConflictError } from "@cogni/work-items/adapters/doltgres";
 import { describe, expect, it, vi } from "vitest";
 
 import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
@@ -103,5 +106,44 @@ describe("createWorkItemCapability", () => {
     expect(command.transitionStatus).toHaveBeenCalledTimes(1);
     expect(command.patch).toHaveBeenCalledTimes(1);
     expect(backlog.list).not.toHaveBeenCalled();
+  });
+
+  it("PATCH_CAS_PASSTHROUGH: the backlogWriter gets expectedRevision + rank; its conflict becomes WorkItemPatchConflictError", async () => {
+    const row = { id: "task.5001", type: "task", title: "t", status: "needs_implement", labels: [], assignees: [], revision: 8 };
+    const store = {
+      patch: vi
+        .fn()
+        .mockResolvedValueOnce(row)
+        .mockRejectedValueOnce(new WorkItemRevisionConflictError("task.5001", 7, 9)),
+    };
+    const command = { patch: vi.fn() };
+    const cap = createWorkItemCapability({
+      workItemQuery: { list: vi.fn(), get: vi.fn() } as unknown as WorkItemQueryPort,
+      workItemCommand: command as unknown as WorkItemCommandPort,
+      backlogWriter: { store, principalId: "system" },
+    });
+    expect((await cap.patch({ id: "task.5001", expectedRevision: 7, set: { rank: 2 } })).revision).toBe(8);
+    expect(store.patch).toHaveBeenLastCalledWith(
+      { id: "task.5001", expectedRevision: 7, set: { rank: 2 } },
+      "system"
+    );
+    const lost = cap.patch({ id: "task.5001", expectedRevision: 7, set: { rank: 3 } });
+    await expect(lost).rejects.toBeInstanceOf(WorkItemPatchConflictError);
+    await expect(lost).rejects.toMatchObject({ expectedRevision: 7, currentRevision: 9 });
+    expect(command.patch).not.toHaveBeenCalled();
+  });
+
+  it("the markdown fallback refuses a caller expectedRevision instead of dropping it", async () => {
+    const command = { patch: vi.fn() };
+    const markdown = { list: vi.fn(), get: vi.fn() };
+    const cap = createWorkItemCapability({
+      workItemQuery: markdown as unknown as WorkItemQueryPort,
+      workItemCommand: command as unknown as WorkItemCommandPort,
+    });
+    await expect(
+      cap.patch({ id: "task.5001", expectedRevision: 7, set: { rank: 2 } })
+    ).rejects.toThrow("expectedRevision requires the Doltgres backlog writer");
+    expect(markdown.get).not.toHaveBeenCalled();
+    expect(command.patch).not.toHaveBeenCalled();
   });
 });
