@@ -98,15 +98,6 @@ function mapError(e: unknown): NextResponse {
     return NextResponse.json({ error: e.message }, { status: 400 });
   if (e instanceof EmptyKnowledgePatchError)
     return NextResponse.json({ error: e.message }, { status: 400 });
-  // GOAL_CHANGE_IS_NODE_ADMIN — refused before any side effect.
-  if (e instanceof NodeAdminRequiredError)
-    return NextResponse.json(
-      { error: e.message, errorCode: e.errorCode, action: e.action },
-      { status: e.status }
-    );
-  // HYPOTHESIS_HAS_EVALUATE_AT — a hypothesis or goal write without evaluateAt.
-  if (e instanceof HypothesisMissingEvaluateAtError)
-    return NextResponse.json({ error: e.message }, { status: 400 });
   // A cite/EDO edit whose target resolves on neither the branch nor main, or
   // whose edge type doesn't match the cited entry_type, is a client error â
   // never a 500 (bug.5024). The cross-plane (main âª branch) resolution lives in
