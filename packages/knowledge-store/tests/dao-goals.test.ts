@@ -5,7 +5,7 @@
  * Module: `@cogni/knowledge-store/tests/dao-goals`
  * Purpose: Coverage for the DAO goal list reader — `listActiveGoals` on the Doltgres + fake adapters — and the goal confidence exemption.
  * Scope: Fake postgres.js client; does not connect to live Doltgres.
- * Invariants: ONE_GOAL_LIST, MAX_THREE_GOALS, NO_GOALS_FAILS_LOUD (empty list, not an omission), goals excluded from confidence recompute.
+ * Invariants: ONE_GOAL_LIST, NO_GOAL_CAP, NO_GOALS_FAILS_LOUD (empty list, not an omission), goals excluded from confidence recompute.
  * Side-effects: none
  * Links: packages/knowledge-store/src/domain/dao-goals.ts, packages/knowledge-store/src/adapters/doltgres/index.ts
  * @internal
@@ -75,7 +75,7 @@ describe("DoltgresKnowledgeStoreAdapter.listActiveGoals", () => {
     await expect(adapter.listActiveGoals()).resolves.toEqual([]);
   });
 
-  it("returns 1–3 goals sorted by id with id, title, content, evaluateAt verbatim", async () => {
+  it("returns goals sorted by id with id, title, content, evaluateAt verbatim", async () => {
     const { adapter } = adapterFor([
       goalRow("goal-b"),
       goalRow("goal-a"),
@@ -157,7 +157,7 @@ describe("cognition Goals section (resolveGoals + renderGoalsLines)", () => {
     const lines = renderGoalsLines(await resolveGoals(port([])));
     expect(lines).toEqual(["", "## Goals", "", GOALS_BOOTSTRAP_INSTRUCTION]);
     expect(lines.join("\n")).toContain("no approved goals");
-    expect(GOALS_BOOTSTRAP_INSTRUCTION).toContain("Ask your node admin for 1–3 goals");
+    expect(GOALS_BOOTSTRAP_INSTRUCTION).toContain("Ask your node admin for the goals");
     expect(GOALS_BOOTSTRAP_INSTRUCTION).toContain("never merge them yourself");
   });
 

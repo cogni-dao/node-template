@@ -3,8 +3,8 @@
 
 /**
  * Module: `@cogni/knowledge-store/domain/dao-goals`
- * Purpose: Selects the at-most-three approved DAO goals every AI loop reads.
- * Scope: Pure selection + shape (which rows count, the cap). Does not perform I/O; the SQL read lives in the Doltgres adapter's `listActiveGoals`.
+ * Purpose: Selects the approved DAO goals every AI loop reads, and renders the cognition Goals section.
+ * Scope: Pure selection + shape (which rows count) + render. Does not perform I/O; the SQL read lives in the Doltgres adapter's `listActiveGoals`.
  * Invariants:
  *   - ONE_GOAL_LIST: a goal is a merged row with `entry_type = 'goal'` whose id
  *     starts `goal-`, not deprecated. A goal is a human commitment, not a
@@ -100,7 +100,7 @@ export function selectActiveGoals(
  * for goals instead of inventing them.
  */
 export const GOALS_BOOTSTRAP_INSTRUCTION =
-  "no approved goals. Ask your node admin for 1–3 goals that serve the mission above (outcome, KPI with its exact read, baseline, target, By date). File them in ONE contribution as `goal-<slug>` inserts (`entryType: goal`, `domain: strategy`, `evaluateAt` = the By date) and hand the admin the inbox link. Never invent goals, and never merge them yourself. If the mission is still the starter placeholder, settle it with the admin first." as const;
+  "no approved goals. Ask your node admin for the goals (one or more) that serve the mission above (outcome, KPI with its exact read, baseline, target, By date). File them in ONE contribution as `goal-<slug>` inserts (`entryType: goal`, `domain: strategy`, `evaluateAt` = the By date) and hand the admin the inbox link. Never invent goals, and never merge them yourself. If the mission is still the starter placeholder, settle it with the admin first." as const;
 
 /**
  * The Goals section state. `unavailable` is a visible line, never an omitted

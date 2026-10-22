@@ -51,6 +51,7 @@ import {
   type Domain,
   DomainAlreadyRegisteredError,
   DomainNotRegisteredError,
+  GoalRequiresContributionError,
   HypothesisMissingEvaluateAtError,
   type KnowledgeStorePort,
   type NewDomain,
@@ -116,7 +117,7 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
 
   async listActiveGoals(): Promise<ActiveGoal[]> {
     // The fake holds only main-plane rows and has no status column, so every
-    // row is a non-deprecated candidate; the cap matches the Doltgres adapter.
+    // row is a non-deprecated candidate; supersedes edges retire, as on Doltgres.
     return selectActiveGoals(
       Array.from(this.rows.values()).map((r) => ({
         id: r.id,
@@ -200,6 +201,13 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
       throw new HypothesisMissingEvaluateAtError(entry.id, entry.entryType);
     }
     const existing = this.rows.get(entry.id);
+    // GOAL_CHANGE_IS_NODE_ADMIN — parity with the Doltgres adapter.
+    if (
+      existing &&
+      (existing.entryType === "goal" || entry.entryType === "goal")
+    ) {
+      throw new GoalRequiresContributionError(entry.id);
+    }
     const row: Knowledge = {
       id: entry.id,
       domain: entry.domain,
@@ -238,6 +246,9 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
   ): Promise<Knowledge> {
     const existing = this.rows.get(id);
     if (!existing) throw new Error(`Knowledge ${id} not found`);
+    if (existing.entryType === "goal" || update.entryType === "goal") {
+      throw new GoalRequiresContributionError(id);
+    }
     if (update.domain && !this.domainsMap.has(update.domain)) {
       throw new DomainNotRegisteredError(update.domain);
     }

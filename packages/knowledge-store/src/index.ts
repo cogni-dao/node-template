@@ -228,6 +228,7 @@ export {
   DomainNotRegisteredError,
   EdoEntryTypeRequiresAtomicToolError,
   HypothesisMissingEvaluateAtError,
+  GoalRequiresContributionError,
   KnowledgeBusyError,
   type KnowledgeStorePort,
   type NewDomain,

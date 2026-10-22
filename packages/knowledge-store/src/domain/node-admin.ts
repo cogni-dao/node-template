@@ -55,10 +55,12 @@ export class NodeAdminRequiredError extends Error {
     decision: Exclude<NodeAdminDecision, { ok: true }>,
     action: string
   ) {
+    // The message is client-safe; the raw authority `reason` (which may carry
+    // OpenFGA / connection detail) stays on `.reason` for the server log only.
     super(
       decision.errorCode === "authz_denied"
         ? `${action} requires node admin`
-        : `${action} could not be authorized: ${decision.reason}`
+        : `${action}: authorization unavailable`
     );
     this.name = "NodeAdminRequiredError";
     this.errorCode = decision.errorCode;

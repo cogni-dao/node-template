@@ -45,6 +45,8 @@ Shared ports, contribution workflow, and adapters for versioned domain knowledge
 
 - Types: `KnowledgeStorePort`, `Knowledge`, `NewKnowledge`, `DoltCommit`, `DoltDiffEntry`, `SourceType`
 - Schemas: `KnowledgeSchema`, `NewKnowledgeSchema`, `DoltCommitSchema`, `DoltDiffEntrySchema`, `SourceTypeSchema`
+- Goal layer (story.5101): `KnowledgeStorePort.listActiveGoals()` (required port method, NO_GOAL_CAP), `ActiveGoal`, `GOAL_ENTRY_TYPE`, `GOAL_ID_PREFIX`, `GOAL_RETIRING_EDGE`, `isGoalRowId`, `selectActiveGoals`, `resolveGoals`, `renderGoalsLines`, `GOALS_BOOTSTRAP_INSTRUCTION`, `GoalsSection`, `GoalRequiresContributionError` (direct writes never touch goals), `createKnowledgeCapability(...).listActiveGoals` (for `core__goal_list`)
+- Node-admin seam: `NodeAdminAuthority`, `NodeAdminActor`, `NodeAdminDecision`, `checkNodeAdmin`, `isPrivilegedPriority` (priority <= 1), `NodeAdminRequiredError`, `touchesGoalLayer`, `TouchedCitation`
 
 **Subpath** (`@cogni/knowledge-store/adapters/doltgres`):
 
@@ -57,6 +59,7 @@ Shared ports, contribution workflow, and adapters for versioned domain knowledge
 
 - `createContributionService`, `ContributionService`, `ContributionServiceDeps`
 - `ContributionServiceDeps.pushMainOnMerge?: () => Promise<void>` — optional post-merge mirror hook; caller owns error handling (service does not await + does not catch)
+- `ContributionServiceDeps.nodeAdmin?: NodeAdminAuthority` — goal-layer merge gate (raw diff ids via the required port method `KnowledgeContributionPort.touchedIds`, merge pinned with `expectedHeadCommit`); absent ⇒ goal-layer merges fail closed 503
 
 ## Ports
 

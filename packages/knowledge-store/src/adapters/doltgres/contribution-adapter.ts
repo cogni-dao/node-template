@@ -781,10 +781,12 @@ async function applyEdit(input: {
   ).confidencePct;
   if (edit.op === "update") {
     await assertKnowledgeRowExists(conn, edit.targetRowId);
-    const entryType = edit.entry.entryType ?? "finding";
     // GOAL_REQUIRES_DEADLINE + persist: an update carries its own evaluateAt /
     // resolutionStrategy or keeps the row's current ones — never drops them.
     const current = await readDeadlineFields(conn, edit.targetRowId);
+    // An update that omits entryType keeps the row's type (a goal never
+    // silently retypes out of the goal list).
+    const entryType = edit.entry.entryType ?? current.entryType ?? "finding";
     const evaluateAt = edit.entry.evaluateAt
       ? new Date(edit.entry.evaluateAt)
       : current.evaluateAt;

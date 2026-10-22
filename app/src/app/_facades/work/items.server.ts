@@ -76,10 +76,20 @@ async function assertPriorityAuthority(
     walletAddress: actor.walletAddress ?? null,
   });
   if (!decision.ok) {
-    throw new NodeAdminRequiredError(
+    const err = new NodeAdminRequiredError(
       decision,
       `work.items.priority.p${priority}`
     );
+    getContainer().log.warn(
+      {
+        errorCode: err.errorCode,
+        reason: err.reason,
+        action: err.action,
+        userId: actor.id,
+      },
+      "work.items.priority_node_admin_refused"
+    );
+    throw err;
   }
 }
 

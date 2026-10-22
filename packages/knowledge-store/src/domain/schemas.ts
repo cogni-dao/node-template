@@ -82,6 +82,8 @@ export const RAW_WRITE_REJECTS_TYPES: readonly EntryType[] = [
   "hypothesis",
   "decision",
   "outcome",
+  // A goal is admin-merged through a contribution (GOAL_CHANGE_IS_NODE_ADMIN).
+  "goal",
 ];
 
 // ---------------------------------------------------------------------------

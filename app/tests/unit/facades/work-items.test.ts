@@ -274,6 +274,7 @@ describe("P0P1_IS_NODE_ADMIN — priority <= 1 needs node admin (story.5101)", (
     const store = doltgres();
     mockGetContainer.mockReturnValue({
       doltgresWorkItems: store,
+      log: { warn: vi.fn() },
       nodeAdmin: {
         check: async () =>
           ok ? { ok: true } : { ok: false, errorCode: "authz_denied" },

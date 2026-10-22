@@ -45,6 +45,7 @@ import {
   CitationTypeMismatchError,
   type Domain,
   DomainAlreadyRegisteredError,
+  GoalRequiresContributionError,
   HypothesisMissingEvaluateAtError,
   type KnowledgeStorePort,
   type NewDomain,
@@ -414,7 +415,8 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
       const msg = e instanceof Error ? e.message : String(e);
       if (!msg.includes("duplicate") && !msg.includes("Duplicate")) throw e;
     }
-    // Row exists — update it
+    // Row exists — update it, unless it is a goal (GOAL_CHANGE_IS_NODE_ADMIN).
+    await this.assertNotGoalWrite(entry.id, entry.entryType);
     const setClauses = updateSetSql(knowledgeUpdateColumns(entry));
     if (setClauses.length === 0) {
       const existing = await this.getKnowledge(entry.id);
@@ -447,6 +449,7 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
     if (update.domain !== undefined) {
       await assertDomainRegistered(this.sql, update.domain);
     }
+    await this.assertNotGoalWrite(id, update.entryType);
     const setClauses = updateSetSql(knowledgeUpdateColumns(update));
 
     if (setClauses.length === 0) {
@@ -460,6 +463,22 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
     );
     if (rows.length === 0) throw new Error(`Knowledge ${id} not found`);
     return rowToKnowledge(rows[0] as Record<string, unknown>);
+  }
+
+  /**
+   * GOAL_CHANGE_IS_NODE_ADMIN: the direct-write plane never modifies an
+   * existing goal row, nor retypes a row into one.
+   */
+  private async assertNotGoalWrite(
+    id: string,
+    nextEntryType: string | null | undefined
+  ): Promise<void> {
+    if (
+      nextEntryType === GOAL_ENTRY_TYPE ||
+      (await this.getKnowledgeEntryType(id)) === GOAL_ENTRY_TYPE
+    ) {
+      throw new GoalRequiresContributionError(id);
+    }
   }
 
   async deleteKnowledge(id: string): Promise<void> {

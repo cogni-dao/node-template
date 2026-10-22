@@ -163,6 +163,22 @@ export class CitationTypeMismatchError extends Error {
 }
 
 /**
+ * GOAL_CHANGE_IS_NODE_ADMIN on the direct-write plane: a goal row is created or
+ * changed only through a contribution plus a node-admin merge, never by a raw
+ * `core__knowledge_write` / `upsertKnowledge` / `updateKnowledge` on main.
+ */
+export class GoalRequiresContributionError extends Error {
+  readonly entryId: string;
+  constructor(entryId: string) {
+    super(
+      `'${entryId}' is a goal: goals change only through a contribution and a node-admin merge`
+    );
+    this.name = "GoalRequiresContributionError";
+    this.entryId = entryId;
+  }
+}
+
+/**
  * Thrown by `core__knowledge_write` when an EDO entry_type
  * (`hypothesis`/`decision`/`outcome`) bypasses the atomic tool.
  * Enforces `RAW_WRITE_REJECTS_TYPES`.

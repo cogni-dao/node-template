@@ -736,6 +736,40 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
     expect(update).toContain("evaluate_at = '2027-02-01T00:00:00.000Z'");
     expect(update).toContain("resolution_strategy = 'manual'");
   });
+
+  it("an update that omits evaluateAt / entryType keeps the row's deadline and type", async () => {
+    const fake = new FakeSql();
+    const original = fake.conn.unsafe.bind(fake.conn);
+    fake.conn.unsafe = async (query: string) => {
+      if (query.includes("entry_type, evaluate_at, resolution_strategy FROM knowledge")) {
+        fake.conn.queries.push(query);
+        return [
+          {
+            entry_type: "goal",
+            evaluate_at: "2027-03-01T00:00:00.000Z",
+            resolution_strategy: "manual",
+          },
+        ];
+      }
+      return original(query);
+    };
+    await adapterFor(fake).appendCommit({
+      contributionId: "contrib-agent-1-abc123",
+      principal: { id: "agent-1", kind: "agent" },
+      message: "reword the goal",
+      edits: [
+        KnowledgeContributionEditSchema.parse({
+          op: "update",
+          targetRowId: "goal-a",
+          entry: { id: "goal-a", domain: "strategy", title: "Goal: a", content: "Reworded." },
+        }),
+      ],
+    });
+    const update = fake.conn.queries.find((q) => q.startsWith("UPDATE knowledge SET domain"));
+    expect(update).toContain("entry_type = 'goal'");
+    expect(update).toContain("evaluate_at = '2027-03-01T00:00:00.000Z'");
+    expect(update).toContain("resolution_strategy = 'manual'");
+  });
 });
 
 /**

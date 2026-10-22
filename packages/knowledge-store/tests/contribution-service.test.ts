@@ -940,6 +940,16 @@ describe("createContributionService", () => {
       expect(port.lastMerge).toBeNull();
     });
 
+    it("a non-goal merge needs no authority, even when none is wired", async () => {
+      const { port, service } = make({
+        headCommit: "h0",
+        knowledgeIds: ["note-1"],
+        citations: [],
+      });
+      await service.merge({ principal: adminUser, contributionId: "contrib-agent-1-abc123" });
+      expect(port.lastMerge?.expectedHeadCommit).toBe("h0");
+    });
+
     it("an admin merge passes and pins the gated head (MERGE_EXPECTED_HEAD)", async () => {
       const { port, service } = make(goalRow, allow);
       await service.merge({
@@ -954,7 +964,7 @@ describe("createContributionService", () => {
       const retire = make(
         {
           headCommit: "h2",
-          knowledgeIds: ["goal-new"].slice(0, 0),
+          knowledgeIds: [],
           citations: [{ citingId: "x", citedId: "goal-old", citationType: "supersedes" }],
         },
         deny
