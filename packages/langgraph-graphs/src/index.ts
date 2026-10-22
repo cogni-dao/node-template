@@ -16,7 +16,10 @@
 
 // Re-export catalog (single source of truth for graph definitions)
 export {
+  type CatalogEntry,
   DEFAULT_LANGGRAPH_GRAPH_ID,
+  GRAPH_REPORT_CLOSE,
+  GRAPH_REPORT_OPEN,
   LANGGRAPH_CATALOG,
   LANGGRAPH_GRAPH_IDS,
   LANGGRAPH_PROVIDER_ID,
