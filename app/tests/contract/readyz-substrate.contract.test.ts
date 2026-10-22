@@ -395,4 +395,58 @@ describe("GET /readyz async substrate contract", () => {
     expect(mocks.warn).not.toHaveBeenCalled();
     expect(mocks.verifySystemTenant).toHaveBeenCalledTimes(2);
   });
+
+  it("still raises the critical alert when a non-fatal check fails after its budget", async () => {
+    vi.useFakeTimers();
+    mocks.assertTemporalConnectivity.mockReturnValue(
+      new Promise((_resolve, reject) =>
+        setTimeout(
+          () =>
+            reject(
+              new InfraConnectivityError(
+                "Temporal connectivity check failed: Temporal connection timeout"
+              )
+            ),
+          5000
+        )
+      )
+    );
+
+    const pending = GET(request());
+    await vi.advanceTimersByTimeAsync(1500);
+    const response = await pending;
+    expect(response.status).toBe(200);
+    expect(mocks.error).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(3500);
+    expect(mocks.error).toHaveBeenCalledOnce();
+    expect(mocks.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "substrate.temporal.unreachable",
+        severity: "critical",
+        reason: "INFRA_UNREACHABLE",
+        dependency: "temporal",
+      }),
+      expect.stringContaining("MISSION-CRITICAL async substrate down")
+    );
+    expect(response.status).toBe(200);
+  });
+
+  it("shares one in-flight tenant query and caches a success that lands after the budget", async () => {
+    vi.useFakeTimers();
+    mocks.verifySystemTenant.mockImplementation(
+      () => new Promise((resolve) => setTimeout(resolve, 2500))
+    );
+
+    const first = GET(request());
+    await vi.advanceTimersByTimeAsync(1000);
+    const second = GET(request()); // joins the in-flight query
+    await vi.advanceTimersByTimeAsync(1000);
+    expect((await first).status).toBe(503);
+
+    await vi.advanceTimersByTimeAsync(500); // query resolves at 2.5s
+    expect((await second).status).toBe(200);
+    expect((await GET(request())).status).toBe(200); // served from the cache
+    expect(mocks.verifySystemTenant).toHaveBeenCalledOnce();
+  });
 });

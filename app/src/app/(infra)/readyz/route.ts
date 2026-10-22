@@ -100,6 +100,8 @@ const SLOW_READINESS_LOG_MS = 1000;
 
 /** Epoch ms of the last successful default-path system-tenant check (0 = never). */
 let systemTenantVerifiedAtMs = 0;
+/** The single in-flight default-path tenant query, shared by concurrent probes. */
+let systemTenantInflight: Promise<void> | null = null;
 
 type CheckStatus = "ok" | "cached" | "degraded" | "timeout" | "failed";
 type CheckTimings = Record<string, { status: CheckStatus; durationMs: number }>;
@@ -162,6 +164,9 @@ function logBudgetExceeded(
  * Fatal system-tenant check (per SYSTEM_TENANT_STARTUP_CHECK). Bounded so a
  * wedged service pool fails the probe fast (503) instead of past its timeout;
  * success is cached briefly so steady-state probes do not hit Postgres.
+ * Probes share one in-flight query, and a success that lands after a probe's
+ * budget still fills the cache, so a slow-but-healthy DB does not stack
+ * queries or 503 forever. Failures are never cached.
  */
 async function checkSystemTenant(
   serviceAccountService: Parameters<typeof verifySystemTenant>[0]
@@ -172,8 +177,17 @@ async function checkSystemTenant(
   ) {
     return "cached";
   }
+  if (!systemTenantInflight) {
+    systemTenantInflight = verifySystemTenant(serviceAccountService)
+      .then(() => {
+        systemTenantVerifiedAtMs = Date.now();
+      })
+      .finally(() => {
+        systemTenantInflight = null;
+      });
+  }
   const result = await withBudget(
-    verifySystemTenant(serviceAccountService),
+    systemTenantInflight,
     SYSTEM_TENANT_BUDGET_MS
   );
   if (result === CHECK_TIMEOUT) {
@@ -181,7 +195,6 @@ async function checkSystemTenant(
       `System tenant check exceeded ${SYSTEM_TENANT_BUDGET_MS}ms budget`
     );
   }
-  systemTenantVerifiedAtMs = Date.now();
   return "ok";
 }
 
@@ -215,29 +228,44 @@ async function assertSubstrate(
       await check();
       return "ok";
     }
-    const result = await withBudget(check(), NON_FATAL_CHECK_BUDGET_MS);
+    const inflight = check();
+    const result = await withBudget(inflight, NON_FATAL_CHECK_BUDGET_MS);
     if (result === CHECK_TIMEOUT) {
       logBudgetExceeded(opts.ctx, opts.event, opts.dependency);
+      // The probe has already answered, but a hang-type outage must still page:
+      // a failure that lands after the budget logs the same critical event.
+      inflight.catch((error: unknown) => {
+        if (error instanceof InfraConnectivityError) {
+          logSubstrateUnreachable(opts, error);
+        }
+      });
       return "timeout";
     }
     return "ok";
   } catch (error) {
     if (opts.deep) throw error; // explicit deep probe: hard-fail (503)
     if (error instanceof InfraConnectivityError) {
-      opts.ctx.log.error(
-        {
-          event: opts.event,
-          severity: "critical",
-          reason: error.code,
-          dependency: opts.dependency,
-          message: error.message,
-        },
-        `readiness: ${opts.dependency} unreachable — MISSION-CRITICAL async substrate down (AI/chat is dispatched through Temporal). Returning ready: probe stays non-fatal so the fleet is not drained; the critical alert + request-time 503 cover it.`
-      );
+      logSubstrateUnreachable(opts, error);
       return "degraded";
     }
     throw error; // unexpected error type → fall through to default 503 handling
   }
+}
+
+function logSubstrateUnreachable(
+  opts: { ctx: RequestContext; event: string; dependency: string },
+  error: InfraConnectivityError
+): void {
+  opts.ctx.log.error(
+    {
+      event: opts.event,
+      severity: "critical",
+      reason: error.code,
+      dependency: opts.dependency,
+      message: error.message,
+    },
+    `readiness: ${opts.dependency} unreachable — MISSION-CRITICAL async substrate down (AI/chat is dispatched through Temporal). Returning ready: probe stays non-fatal so the fleet is not drained; the critical alert + request-time 503 cover it.`
+  );
 }
 
 /**
