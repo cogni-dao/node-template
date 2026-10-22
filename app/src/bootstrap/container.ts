@@ -688,6 +688,10 @@ function createContainer(): Container {
 	const workItemCapability = createWorkItemCapability({
 		workItemQuery: workItemAdapter,
 		workItemCommand: workItemAdapter,
+		// QUERY_READS_THE_LIVE_BACKLOG: the AI query tool (and the prioritizer) reads
+		// this node's Doltgres work items; `doltgresWorkItems` is assigned below and
+		// read only at call time.
+		backlogReader: { list: (query) => doltgresWorkItems.list(query) },
 	});
 
 	// ScheduleCapability for AI tools (reads actorUserId from ALS at invocation time)
