@@ -87,8 +87,8 @@ Pure tool definitions for AI agent execution. Defines `ToolContract`, `ToolImple
 ## Usage
 
 ```bash
-pnpm --filter @cogni/ai-tools typecheck
-pnpm --filter @cogni/ai-tools build
+pnpm --filter @cogni-dao/ai-tools typecheck
+pnpm --filter @cogni-dao/ai-tools build
 ```
 
 ## Standards

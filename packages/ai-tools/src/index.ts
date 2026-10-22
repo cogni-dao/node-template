@@ -64,6 +64,7 @@ export type {
   WorkItemAssignee,
   WorkItemCapability,
   WorkItemInfo,
+  WorkItemQueryPage,
   WorkItemQueryParams,
   WorkItemTransitionResult,
 } from "./capabilities";
