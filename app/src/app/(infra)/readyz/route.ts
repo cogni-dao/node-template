@@ -95,13 +95,18 @@ const NON_FATAL_CHECK_BUDGET_MS = 1500;
 const SYSTEM_TENANT_BUDGET_MS = 2000;
 /** Successful system-tenant checks are reused for at most this long. Failures are never cached. */
 const SYSTEM_TENANT_OK_TTL_MS = 30_000;
+/** An in-flight tenant query older than this is abandoned and a fresh one started. */
+const SYSTEM_TENANT_INFLIGHT_MAX_AGE_MS = 10_000;
 /** Readiness summaries at or above this duration log at info (debug otherwise). */
 const SLOW_READINESS_LOG_MS = 1000;
 
 /** Epoch ms of the last successful default-path system-tenant check (0 = never). */
 let systemTenantVerifiedAtMs = 0;
 /** The single in-flight default-path tenant query, shared by concurrent probes. */
-let systemTenantInflight: Promise<void> | null = null;
+let systemTenantInflight: {
+  promise: Promise<void>;
+  startedAtMs: number;
+} | null = null;
 
 type CheckStatus = "ok" | "cached" | "degraded" | "timeout" | "failed";
 type CheckTimings = Record<string, { status: CheckStatus; durationMs: number }>;
@@ -166,7 +171,9 @@ function logBudgetExceeded(
  * success is cached briefly so steady-state probes do not hit Postgres.
  * Probes share one in-flight query, and a success that lands after a probe's
  * budget still fills the cache, so a slow-but-healthy DB does not stack
- * queries or 503 forever. Failures are never cached.
+ * queries or 503 forever. A query that never settles (the DB client has no
+ * query timeout) is abandoned after SYSTEM_TENANT_INFLIGHT_MAX_AGE_MS so a
+ * fresh query can prove recovery. Failures are never cached.
  */
 async function checkSystemTenant(
   serviceAccountService: Parameters<typeof verifySystemTenant>[0]
@@ -177,17 +184,28 @@ async function checkSystemTenant(
   ) {
     return "cached";
   }
-  if (!systemTenantInflight) {
-    systemTenantInflight = verifySystemTenant(serviceAccountService)
-      .then(() => {
-        systemTenantVerifiedAtMs = Date.now();
-      })
-      .finally(() => {
-        systemTenantInflight = null;
-      });
+  if (
+    !systemTenantInflight ||
+    Date.now() - systemTenantInflight.startedAtMs >
+      SYSTEM_TENANT_INFLIGHT_MAX_AGE_MS
+  ) {
+    // An abandoned query that settles later must not touch the newer state.
+    const inflight = {
+      startedAtMs: Date.now(),
+      promise: verifySystemTenant(serviceAccountService)
+        .then(() => {
+          if (systemTenantInflight === inflight) {
+            systemTenantVerifiedAtMs = Date.now();
+          }
+        })
+        .finally(() => {
+          if (systemTenantInflight === inflight) systemTenantInflight = null;
+        }),
+    };
+    systemTenantInflight = inflight;
   }
   const result = await withBudget(
-    systemTenantInflight,
+    systemTenantInflight.promise,
     SYSTEM_TENANT_BUDGET_MS
   );
   if (result === CHECK_TIMEOUT) {

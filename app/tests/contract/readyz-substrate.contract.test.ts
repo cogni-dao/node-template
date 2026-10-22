@@ -449,4 +449,23 @@ describe("GET /readyz async substrate contract", () => {
     expect((await GET(request())).status).toBe(200); // served from the cache
     expect(mocks.verifySystemTenant).toHaveBeenCalledOnce();
   });
+
+  it("abandons a tenant query that never settles and retries after 10s", async () => {
+    vi.useFakeTimers();
+    mocks.verifySystemTenant
+      .mockReturnValueOnce(new Promise<never>(() => {}))
+      .mockResolvedValue(undefined);
+
+    for (let probe = 0; probe < 5; probe++) {
+      const pending = GET(request());
+      await vi.advanceTimersByTimeAsync(2000);
+      expect((await pending).status).toBe(503);
+    }
+    expect(mocks.verifySystemTenant).toHaveBeenCalledOnce(); // probes joined query 1
+
+    await vi.advanceTimersByTimeAsync(1); // query 1 is now older than 10s
+    expect((await GET(request())).status).toBe(200);
+    expect((await GET(request())).status).toBe(200); // cached
+    expect(mocks.verifySystemTenant).toHaveBeenCalledTimes(2);
+  });
 });
