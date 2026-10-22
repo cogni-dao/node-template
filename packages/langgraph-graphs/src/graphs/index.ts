@@ -47,17 +47,10 @@ export type {
   MessageGraphInput,
   MessageGraphOutput,
 } from "./types";
-// Work prioritizer (every node, propose-only AI workflow, story.5096 / story.5101)
+// Mission loop (every node, ReAct agent on the work-prioritizer slot, story.5108 / story.5101)
 export {
   createWorkPrioritizerGraph,
-  type PrioritizerCycleTelemetry,
-  type PrioritizerRunReport,
+  cycleTelemetry,
+  type MissionLoopTelemetry,
   WORK_PRIORITIZER_GRAPH_NAME,
 } from "./work-prioritizer/graph";
-export {
-  DECISION_SCHEMA_VERSION,
-  DecisionPayloadSchema,
-  PlanRowSchema,
-  RANK_HEURISTIC,
-  RankedRowSchema,
-} from "./work-prioritizer/schema";

@@ -18,7 +18,6 @@ import {
   EDO_DECIDE_NAME,
   EDO_HYPOTHESIZE_NAME,
   EDO_RECORD_OUTCOME_NAME,
-  GET_CURRENT_TIME_NAME,
   GOAL_LIST_NAME,
   KNOWLEDGE_READ_NAME,
   KNOWLEDGE_SEARCH_NAME,
@@ -28,6 +27,7 @@ import {
   VCS_TOOL_BUNDLE,
   WEB_SEARCH_NAME,
   WORK_ITEM_QUERY_NAME,
+  WORK_ITEM_TRANSITION_NAME,
 } from "@cogni/ai-tools";
 import { describe, expect, it } from "vitest";
 import {
@@ -81,20 +81,19 @@ describe("operator catalog entries", () => {
     );
   });
 
-  it("work-prioritizer runs on every node with the exact six-tool allowlist (propose-only)", () => {
+  it("work-prioritizer (mission loop) runs on every node with the exact four-tool allowlist", () => {
     const entry = LANGGRAPH_CATALOG["work-prioritizer"];
     expect(entry).toBeDefined();
     expect(entry?.graphFactory).toBe(createWorkPrioritizerGraph);
     expect([...(entry?.toolIds ?? [])].sort()).toEqual(
       [
-        WORK_ITEM_QUERY_NAME,
-        KNOWLEDGE_SEARCH_NAME,
-        KNOWLEDGE_READ_NAME,
-        EDO_DECIDE_NAME,
-        GET_CURRENT_TIME_NAME,
         GOAL_LIST_NAME,
+        WORK_ITEM_QUERY_NAME,
+        WORK_ITEM_TRANSITION_NAME,
+        KNOWLEDGE_SEARCH_NAME,
       ].sort()
     );
+    expect(entry?.report).toEqual({ event: "ai.work_prioritizer.cycle" });
     expect(LANGGRAPH_GRAPH_IDS["work-prioritizer"]).toBe(
       "langgraph:work-prioritizer"
     );

@@ -176,12 +176,11 @@ describe("LangGraphInProcProvider", () => {
   });
 
   describe("catalog report seam (CatalogEntry.report)", () => {
-    it("every catalog-declared report names registered events", () => {
+    it("every catalog-declared report names a registered event", () => {
       const registered = new Set<string>(Object.values(EVENT_NAMES));
       const declared = Object.values(LANGGRAPH_CATALOG).flatMap((e) => {
-        const r = (e as { report?: { event: string; sampleEvent?: string } })
-          .report;
-        return r ? [r.event, ...(r.sampleEvent ? [r.sampleEvent] : [])] : [];
+        const r = (e as { report?: { event: string } }).report;
+        return r ? [r.event] : [];
       });
       expect(declared.length).toBeGreaterThan(0);
       for (const name of declared) expect(registered.has(name)).toBe(true);
