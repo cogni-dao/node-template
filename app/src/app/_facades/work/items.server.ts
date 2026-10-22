@@ -24,9 +24,10 @@ import type {
 import type { WorkItem, WorkItemId } from "@cogni/work-items";
 import {
   toWorkItemId,
+  WorkItemRevisionConflictError,
   WorkItemWriteOutcomeUnknownError,
 } from "@cogni/work-items";
-export { WorkItemWriteOutcomeUnknownError };
+export { WorkItemRevisionConflictError, WorkItemWriteOutcomeUnknownError };
 
 import {
   checkNodeAdmin,
@@ -192,6 +193,26 @@ function rethrowBackendError(error: unknown): never {
   const message = (error as Error)?.message ?? "";
   const notFound = /^Work item not found: (.+)$/.exec(message);
   if (notFound?.[1]) throw new WorkItemNotFoundError(notFound[1]);
+  if ((error as Error)?.name === "WorkItemRevisionConflictError") {
+    // Root and adapter entrypoints may bundle separate copies of the class.
+    // Normalize to the public constructor used by the HTTP boundary.
+    const conflict = error as {
+      id?: unknown;
+      expectedRevision?: unknown;
+      currentRevision?: unknown;
+    };
+    if (
+      typeof conflict.id === "string" &&
+      typeof conflict.expectedRevision === "number" &&
+      typeof conflict.currentRevision === "number"
+    ) {
+      throw new WorkItemRevisionConflictError(
+        conflict.id,
+        conflict.expectedRevision,
+        conflict.currentRevision
+      );
+    }
+  }
   if ((error as Error)?.name === "WorkItemWriteOutcomeUnknownError") {
     const receipt = error as WorkItemWriteOutcomeUnknownError;
     throw new WorkItemWriteOutcomeUnknownError(
@@ -347,6 +368,9 @@ export async function patchWorkItem(
     const patched = await container.doltgresWorkItems.patch(
       {
         id: toWorkItemId(input.id),
+        ...(input.expectedRevision !== undefined && {
+          expectedRevision: input.expectedRevision,
+        }),
         set: dropUndefined(input.set),
       },
       sessionUser.id

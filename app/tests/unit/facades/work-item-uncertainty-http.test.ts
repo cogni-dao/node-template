@@ -31,6 +31,7 @@ vi.mock("@/app/_facades/work/items.server", async () => {
     WorkItemsBackendNotReadyError: class extends Error {},
     WorkItemNotFoundError: class extends Error {},
     WorkItemForbiddenError: class extends Error {},
+    WorkItemRevisionConflictError: class extends Error {},
   };
 });
 

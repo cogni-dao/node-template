@@ -23,6 +23,7 @@ import {
   patchWorkItem,
   WorkItemForbiddenError,
   WorkItemNotFoundError,
+  WorkItemRevisionConflictError,
   WorkItemsBackendNotReadyError,
   WorkItemWriteOutcomeUnknownError,
   NodeAdminRequiredError
@@ -130,6 +131,16 @@ export const PATCH = wrapRouteHandlerWithLogging<{
       }
       if (e instanceof WorkItemForbiddenError) {
         return NextResponse.json({ error: e.message }, { status: 403 });
+      }
+      if (e instanceof WorkItemRevisionConflictError) {
+        return NextResponse.json(
+          {
+            error: "revision_conflict",
+            expectedRevision: e.expectedRevision,
+            currentRevision: e.currentRevision,
+          },
+          { status: 409 }
+        );
       }
       if (e instanceof WorkItemWriteOutcomeUnknownError) {
         return NextResponse.json(
