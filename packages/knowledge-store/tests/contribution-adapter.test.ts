@@ -19,6 +19,7 @@ import {
   KnowledgeContributionEditSchema,
   type Principal,
 } from "../src/domain/contribution-schemas.js";
+import { ContributionConflictError } from "../src/port/contribution.port.js";
 import {
   CitationTargetNotFoundError,
   HypothesisMissingEvaluateAtError,
@@ -631,6 +632,109 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
         ],
       })
     ).rejects.toBeInstanceOf(CitationTargetNotFoundError);
+  });
+
+  it("refuses a merge whose branch head moved after the gate read (MERGE_EXPECTED_HEAD)", async () => {
+    const fake = new FakeSql();
+    await expect(
+      adapterFor(fake).merge({
+        contributionId: "contrib-agent-1-abc123",
+        principal: reviewer,
+        expectedHeadCommit: "reviewed-older-head",
+      })
+    ).rejects.toBeInstanceOf(ContributionConflictError);
+    expect(fake.conn.queries.some((q) => q.includes("SELECT dolt_merge("))).toBe(false);
+  });
+
+  it("merges when the expected head is still the branch head", async () => {
+    const fake = new FakeSql();
+    await adapterFor(fake).merge({
+      contributionId: "contrib-agent-1-abc123",
+      principal: reviewer,
+      expectedHeadCommit: "head123",
+    });
+    expect(fake.conn.queries.some((q) => q.includes("SELECT dolt_merge("))).toBe(true);
+  });
+
+  it("touchedIds reads raw knowledge + citation diffs at the head (MERGE_GATE_ON_RAW_DIFF)", async () => {
+    const fake = new FakeSql();
+    const original = fake.unsafe.bind(fake);
+    fake.unsafe = async (query: string) => {
+      if (query.includes("'knowledge')")) {
+        fake.queries.push(query);
+        return [{ from_id: "goal-a", to_id: "goal-a" }, { from_id: null, to_id: "row-b" }];
+      }
+      if (query.includes("'citations')")) {
+        fake.queries.push(query);
+        return [
+          { from_citing_id: null, from_cited_id: null, to_citing_id: "x", to_cited_id: "goal-a", to_citation_type: "supersedes" },
+        ];
+      }
+      return original(query);
+    };
+    const touched = await adapterFor(fake).touchedIds("contrib-agent-1-abc123");
+    expect(touched).toEqual({
+      headCommit: "head123",
+      knowledgeIds: ["goal-a", "row-b"],
+      citations: [{ citingId: "x", citedId: "goal-a", citationType: "supersedes" }],
+    });
+    expect(fake.queries.some((q) => q.includes("dolt_diff('base123', 'head123', 'knowledge')"))).toBe(true);
+  });
+
+  it("refuses a patch that retypes a row to goal without a deadline (GOAL_REQUIRES_DEADLINE)", async () => {
+    const fake = new FakeSql();
+    await expect(
+      adapterFor(fake).appendCommit({
+        contributionId: "contrib-agent-1-abc123",
+        principal: { id: "agent-1", kind: "agent" },
+        message: "retype",
+        edits: [{ op: "patch", targetRowId: "row-1", entry: { entryType: "goal" } }],
+      })
+    ).rejects.toBeInstanceOf(HypothesisMissingEvaluateAtError);
+    expect(fake.conn.queries.some((q) => q.startsWith("UPDATE knowledge SET"))).toBe(false);
+  });
+
+  it("a patch may set a goal's deadline, and an update persists evaluate_at + resolution_strategy", async () => {
+    const fake = new FakeSql();
+    await adapterFor(fake).appendCommit({
+      contributionId: "contrib-agent-1-abc123",
+      principal: { id: "agent-1", kind: "agent" },
+      message: "retype with deadline",
+      edits: [
+        {
+          op: "patch",
+          targetRowId: "row-1",
+          entry: { entryType: "goal", evaluateAt: "2027-01-01T00:00:00.000Z" },
+        },
+      ],
+    });
+    const patch = fake.conn.queries.find((q) => q.startsWith("UPDATE knowledge SET"));
+    expect(patch).toContain("evaluate_at = '2027-01-01T00:00:00.000Z'");
+
+    const fake2 = new FakeSql();
+    await adapterFor(fake2).appendCommit({
+      contributionId: "contrib-agent-1-abc123",
+      principal: { id: "agent-1", kind: "agent" },
+      message: "move the By date",
+      edits: [
+        KnowledgeContributionEditSchema.parse({
+          op: "update",
+          targetRowId: "goal-a",
+          entry: {
+            id: "goal-a",
+            domain: "strategy",
+            title: "Goal: a",
+            content: "Statement.",
+            entryType: "goal",
+            evaluateAt: "2027-02-01T00:00:00.000Z",
+            resolutionStrategy: "manual",
+          },
+        }),
+      ],
+    });
+    const update = fake2.conn.queries.find((q) => q.startsWith("UPDATE knowledge SET domain"));
+    expect(update).toContain("evaluate_at = '2027-02-01T00:00:00.000Z'");
+    expect(update).toContain("resolution_strategy = 'manual'");
   });
 });
 

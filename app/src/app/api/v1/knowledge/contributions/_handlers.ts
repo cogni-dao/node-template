@@ -23,8 +23,10 @@ import {
   ContributionStateError,
   DomainNotRegisteredError,
   EmptyKnowledgePatchError,
+  HypothesisMissingEvaluateAtError,
   KnowledgeBusyError,
   KnowledgeGateError,
+  NodeAdminRequiredError,
   type PrincipalAuthSource,
   sessionUserToPrincipal,
 } from "@cogni/knowledge-store";
@@ -79,6 +81,17 @@ function mapError(e: unknown): NextResponse {
   if (e instanceof ContributionQuotaError)
     return NextResponse.json({ error: e.message }, { status: 429 });
   if (e instanceof DomainNotRegisteredError)
+    return NextResponse.json({ error: e.message }, { status: 400 });
+  // GOAL_CHANGE_IS_NODE_ADMIN — the service refused a goal-layer merge before
+  // any side effect: 403 authz_denied, or 503 authz_unavailable when no
+  // node-admin authority is wired.
+  if (e instanceof NodeAdminRequiredError)
+    return NextResponse.json(
+      { error: e.message, errorCode: e.errorCode, action: e.action },
+      { status: e.status }
+    );
+  // HYPOTHESIS_HAS_EVALUATE_AT — a hypothesis or goal write without evaluateAt.
+  if (e instanceof HypothesisMissingEvaluateAtError)
     return NextResponse.json({ error: e.message }, { status: 400 });
   if (e instanceof EmptyKnowledgePatchError)
     return NextResponse.json({ error: e.message }, { status: 400 });

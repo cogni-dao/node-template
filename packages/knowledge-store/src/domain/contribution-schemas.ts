@@ -114,6 +114,8 @@ export type KnowledgeEntryInput = z.infer<typeof KnowledgeEntryInputSchema>;
 export const KnowledgeEntryPatchSchema = z.strictObject({
   useWhen: z.string().min(1).max(320).optional(),
   entryType: z.string().min(1).max(64).optional(),
+  /** ISO datetime — a goal's `By:` deadline / a hypothesis's resolution date. */
+  evaluateAt: z.string().datetime({ offset: true }).optional(),
 });
 export type KnowledgeEntryPatch = z.infer<typeof KnowledgeEntryPatchSchema>;
 
@@ -121,6 +123,7 @@ export type KnowledgeEntryPatch = z.infer<typeof KnowledgeEntryPatchSchema>;
 export const KNOWLEDGE_ENTRY_PATCH_FIELDS = [
   "useWhen",
   "entryType",
+  "evaluateAt",
 ] as const satisfies readonly (keyof KnowledgeEntryPatch)[];
 
 /** True when a parsed patch names at least one field to set. */

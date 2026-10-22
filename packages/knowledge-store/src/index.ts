@@ -70,6 +70,17 @@ export {
   resolveGoals,
   selectActiveGoals,
 } from "./domain/dao-goals.js";
+// Node-admin seam (GOAL_CHANGE_IS_NODE_ADMIN · P0P1_IS_NODE_ADMIN) — one injected authority per node
+export {
+  checkNodeAdmin,
+  isPrivilegedPriority,
+  type NodeAdminActor,
+  type NodeAdminAuthority,
+  type NodeAdminDecision,
+  NodeAdminRequiredError,
+  type TouchedCitation,
+  touchesGoalLayer,
+} from "./domain/node-admin.js";
 // Write-pipeline gates (proj.knowledge-syntropy — W0 Gates tier)
 export {
   type GateContext,
@@ -185,6 +196,7 @@ export {
   ContributionNotFoundError,
   ContributionQuotaError,
   ContributionStateError,
+  type ContributionTouchedIds,
   type CreateEdoDecisionInput,
   type CreateEdoHypothesisInput,
   type CreateEdoOutcomeInput,
