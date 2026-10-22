@@ -17,6 +17,7 @@
  * @public
  */
 
+import type { ActiveGoal } from "../domain/dao-goals.js";
 import type {
   Citation,
   CitationType,
@@ -102,17 +103,21 @@ export class DomainAlreadyRegisteredError extends Error {
 // ---------------------------------------------------------------------------
 
 /**
- * Thrown by `addKnowledge` / `upsertKnowledge` when a hypothesis row is
- * written without `evaluate_at`. Enforces `HYPOTHESIS_HAS_EVALUATE_AT`.
+ * Thrown when a hypothesis or goal row is written without `evaluate_at`.
+ * Enforces `HYPOTHESIS_HAS_EVALUATE_AT` (goals: their `By:` deadline).
  */
 export class HypothesisMissingEvaluateAtError extends Error {
   readonly entryId: string;
-  constructor(entryId: string) {
+  readonly entryType: string;
+  constructor(entryId: string, entryType = "hypothesis") {
     super(
-      `hypothesis '${entryId}' is missing evaluate_at — hypothesis rows must declare a resolution date`
+      entryType === "goal"
+        ? `goal '${entryId}' is missing evaluate_at — goal rows must declare their By: deadline`
+        : `hypothesis '${entryId}' is missing evaluate_at — hypothesis rows must declare a resolution date`
     );
     this.name = "HypothesisMissingEvaluateAtError";
     this.entryId = entryId;
+    this.entryType = entryType;
   }
 }
 
@@ -158,6 +163,22 @@ export class CitationTypeMismatchError extends Error {
 }
 
 /**
+ * GOAL_CHANGE_IS_NODE_ADMIN on the direct-write plane: a goal row is created or
+ * changed only through a contribution plus a node-admin merge, never by a raw
+ * `core__knowledge_write` / `upsertKnowledge` / `updateKnowledge` on main.
+ */
+export class GoalRequiresContributionError extends Error {
+  readonly entryId: string;
+  constructor(entryId: string) {
+    super(
+      `'${entryId}' is a goal: goals change only through a contribution and a node-admin merge`
+    );
+    this.name = "GoalRequiresContributionError";
+    this.entryId = entryId;
+  }
+}
+
+/**
  * Thrown by `core__knowledge_write` when an EDO entry_type
  * (`hypothesis`/`decision`/`outcome`) bypasses the atomic tool.
  * Enforces `RAW_WRITE_REJECTS_TYPES`.
@@ -199,6 +220,13 @@ export interface KnowledgeStorePort {
     query: string,
     opts?: { limit?: number }
   ): Promise<Knowledge[]>;
+  /**
+   * The approved DAO goals (ONE_GOAL_LIST): merged `entry_type = 'goal'` rows
+   * with id prefix `goal-`, not deprecated or superseded, sorted by id. Returns
+   * [] when none are merged; no count cap (NO_GOAL_CAP).
+   * Contribution-branch rows are never visible here.
+   */
+  listActiveGoals(): Promise<ActiveGoal[]>;
   /** List distinct domain values present in the `knowledge` table (legacy / back-compat). */
   listDomains(): Promise<string[]>;
 

@@ -39,6 +39,7 @@ import { randomBytes } from "node:crypto";
 import type { ReservedSql, Sql } from "postgres";
 import {
   initializeConfidence,
+  isConfidenceExempt,
   recomputeConfidence as recomputeConfidenceByPolicy,
 } from "../../domain/confidence-policy.js";
 import type {
@@ -56,13 +57,16 @@ import {
 } from "../../domain/contribution-schemas.js";
 import type { CitationType } from "../../domain/schemas.js";
 import {
+  citedEntryTypesFor,
   HYPOTHESIS_TARGETED_EDGES,
   isWorkItemEndpointId,
+  requiresEvaluateAt,
 } from "../../domain/schemas.js";
 import {
   ContributionConflictError,
   ContributionNotFoundError,
   ContributionStateError,
+  type ContributionTouchedIds,
   type CreateEdoDecisionInput,
   type CreateEdoHypothesisInput,
   type CreateEdoOutcomeInput,
@@ -245,6 +249,8 @@ function normalizeOptionalDoltCommitRef(value: unknown): string | null {
 const MERGE_CONFLICT_MESSAGE =
   "This contribution conflicts with newer entries already on main.";
 const MERGE_FAILED_MESSAGE = "This contribution couldn't be merged.";
+const MERGE_HEAD_MOVED_MESSAGE =
+  "This contribution changed after it was reviewed. Review it again, then merge.";
 
 async function currentHash(conn: ReservedSql, ref: string): Promise<string> {
   const rows = await conn.unsafe(
@@ -279,10 +285,48 @@ function knowledgePatchColumns(
   if (patch.entryType !== undefined) {
     columns.push({ column: "entry_type", value: patch.entryType });
   }
+  if (patch.evaluateAt !== undefined) {
+    columns.push({ column: "evaluate_at", value: new Date(patch.evaluateAt) });
+  }
   columns.push({ column: "source_type", value: "external" });
   columns.push({ column: "source_ref", value: provenance.sourceRef });
   columns.push({ column: "source_node", value: provenance.sourceNode });
   return columns;
+}
+
+/** The deadline-bearing fields of an existing row (patch/update keep them unless replaced). */
+async function readDeadlineFields(
+  conn: ReservedSql,
+  targetRowId: string
+): Promise<{
+  entryType: string | null;
+  evaluateAt: Date | null;
+  resolutionStrategy: string | null;
+}> {
+  const rows = await conn.unsafe(
+    `SELECT entry_type, evaluate_at, resolution_strategy FROM knowledge WHERE id = ${escapeValue(targetRowId)} LIMIT 1`
+  );
+  const row = (rows[0] ?? {}) as Record<string, unknown>;
+  return {
+    entryType: (row.entry_type as string | null | undefined) ?? null,
+    evaluateAt: row.evaluate_at ? new Date(row.evaluate_at as string) : null,
+    resolutionStrategy:
+      (row.resolution_strategy as string | null | undefined) ?? null,
+  };
+}
+
+/**
+ * GOAL_REQUIRES_DEADLINE on every write path (insert, patch, update): a row
+ * whose RESULTING entry type requires `evaluate_at` must end up with one.
+ */
+function assertResultingEvaluateAt(
+  rowId: string,
+  entryType: string | null,
+  evaluateAt: Date | null
+): void {
+  if (requiresEvaluateAt(entryType) && !evaluateAt) {
+    throw new HypothesisMissingEvaluateAtError(rowId, entryType ?? undefined);
+  }
 }
 
 async function assertKnowledgeRowExists(
@@ -313,8 +357,12 @@ function citationIdFor(
   return `${citingId}->${citedId}:${type}`;
 }
 
-function expectedCitedEntryTypeFor(type: CitationType): string | null {
-  return HYPOTHESIS_TARGETED_EDGES.includes(type) ? "hypothesis" : null;
+function expectedCitedEntryTypeFor(
+  type: CitationType
+): readonly string[] | null {
+  return HYPOTHESIS_TARGETED_EDGES.includes(type)
+    ? citedEntryTypesFor(type)
+    : null;
 }
 
 /**
@@ -499,13 +547,13 @@ async function insertCitationRow(input: {
   if (
     expected !== null &&
     cited.kind === "knowledge" &&
-    cited.entryType !== expected
+    !expected.includes(cited.entryType)
   ) {
     throw new CitationTypeMismatchError(
       citationType,
       citedId,
       cited.entryType,
-      expected
+      expected.join("|")
     );
   }
   const id = citationIdFor(citingId, citedId, citationType);
@@ -532,13 +580,17 @@ async function recomputeConfidenceOnConn(
   entryId: string
 ): Promise<number> {
   const entryRows = await conn.unsafe(
-    `SELECT source_type FROM knowledge WHERE id = ${escapeValue(entryId)} LIMIT 1`
+    `SELECT source_type, entry_type, confidence_pct FROM knowledge WHERE id = ${escapeValue(entryId)} LIMIT 1`
   );
   if (entryRows.length === 0) {
     throw new Error(`recomputeConfidence: entry '${entryId}' not found`);
   }
-  const sourceType = (entryRows[0] as Record<string, unknown>)
-    .source_type as string;
+  const entryRow = entryRows[0] as Record<string, unknown>;
+  // A DAO goal's confidence is not citation-driven (CONFIDENCE_EXEMPT_ENTRY_TYPES).
+  if (isConfidenceExempt(entryRow.entry_type as string | null)) {
+    return Number(entryRow.confidence_pct ?? 0);
+  }
+  const sourceType = entryRow.source_type as string;
   const incoming = await conn.unsafe(
     `SELECT citation_type FROM citations WHERE cited_id = ${escapeValue(entryId)} AND citation_type <> 'tracks'`
   );
@@ -699,6 +751,12 @@ async function applyEdit(input: {
         "cannot patch use_when: the knowledge table on this branch has no use_when column"
       );
     }
+    const current = await readDeadlineFields(conn, edit.targetRowId);
+    assertResultingEvaluateAt(
+      edit.targetRowId,
+      edit.entry.entryType ?? current.entryType,
+      edit.entry.evaluateAt ? new Date(edit.entry.evaluateAt) : current.evaluateAt
+    );
     const setClauses = updateSetSql(
       knowledgePatchColumns(edit.entry, { sourceRef: ref, sourceNode })
     );
@@ -723,12 +781,23 @@ async function applyEdit(input: {
   ).confidencePct;
   if (edit.op === "update") {
     await assertKnowledgeRowExists(conn, edit.targetRowId);
-    const entryType = edit.entry.entryType ?? "finding";
+    // GOAL_REQUIRES_DEADLINE + persist: an update carries its own evaluateAt /
+    // resolutionStrategy or keeps the row's current ones — never drops them.
+    const current = await readDeadlineFields(conn, edit.targetRowId);
+    // An update that omits entryType keeps the row's type (a goal never
+    // silently retypes out of the goal list).
+    const entryType = edit.entry.entryType ?? current.entryType ?? "finding";
+    const evaluateAt = edit.entry.evaluateAt
+      ? new Date(edit.entry.evaluateAt)
+      : current.evaluateAt;
+    assertResultingEvaluateAt(edit.targetRowId, entryType, evaluateAt);
+    const resolutionStrategy =
+      edit.entry.resolutionStrategy ?? current.resolutionStrategy;
     const useWhenAssignment = hasUseWhen
       ? `, use_when = ${edit.entry.useWhen ? escapeValue(edit.entry.useWhen) : "NULL"}`
       : "";
     const result = await conn.unsafe(
-      `UPDATE knowledge SET domain = ${escapeValue(edit.entry.domain)}, entity_id = ${escapeValue(edit.entry.entityId ?? null)}, title = ${escapeValue(edit.entry.title)}, content = ${escapeValue(edit.entry.content)}${useWhenAssignment}, entry_type = ${escapeValue(entryType)}, confidence_pct = ${escapeValue(confidencePct)}, source_type = ${escapeValue("external")}, source_ref = ${escapeValue(ref)}, source_node = ${escapeValue(sourceNode)}, tags = ${edit.entry.tags ? escapeValue(edit.entry.tags) : "NULL"}, updated_at = now() WHERE id = ${escapeValue(edit.targetRowId)}`
+      `UPDATE knowledge SET domain = ${escapeValue(edit.entry.domain)}, entity_id = ${escapeValue(edit.entry.entityId ?? null)}, title = ${escapeValue(edit.entry.title)}, content = ${escapeValue(edit.entry.content)}${useWhenAssignment}, entry_type = ${escapeValue(entryType)}, confidence_pct = ${escapeValue(confidencePct)}, source_type = ${escapeValue("external")}, source_ref = ${escapeValue(ref)}, source_node = ${escapeValue(sourceNode)}, tags = ${edit.entry.tags ? escapeValue(edit.entry.tags) : "NULL"}, evaluate_at = ${escapeValue(evaluateAt)}, resolution_strategy = ${escapeValue(resolutionStrategy)}, updated_at = now() WHERE id = ${escapeValue(edit.targetRowId)}`
     );
     if (result.count === 0) {
       throw new ContributionNotFoundError(
@@ -740,12 +809,21 @@ async function applyEdit(input: {
 
   const entryId = edit.entry.id;
   const entryType = edit.entry.entryType ?? "finding";
+  // HYPOTHESIS_HAS_EVALUATE_AT on the generic insert path too (bug.5504): a
+  // bet or a `goal` proposed through a focused inbox carries its own
+  // evaluateAt (a goal's `By:` deadline); neither may land without one.
+  const evaluateAt = edit.entry.evaluateAt
+    ? new Date(edit.entry.evaluateAt)
+    : null;
+  if (requiresEvaluateAt(entryType) && !evaluateAt) {
+    throw new HypothesisMissingEvaluateAtError(entryId, entryType);
+  }
   const useWhenColumn = hasUseWhen ? ", use_when" : "";
   const useWhenValue = hasUseWhen
     ? `, ${edit.entry.useWhen ? escapeValue(edit.entry.useWhen) : "NULL"}`
     : "";
   await conn.unsafe(
-    `INSERT INTO knowledge (id, domain, entity_id, title, content${useWhenColumn}, entry_type, confidence_pct, source_type, source_ref, source_node, tags) VALUES (${escapeValue(entryId)}, ${escapeValue(edit.entry.domain)}, ${escapeValue(edit.entry.entityId ?? null)}, ${escapeValue(edit.entry.title)}, ${escapeValue(edit.entry.content)}${useWhenValue}, ${escapeValue(entryType)}, ${escapeValue(confidencePct)}, ${escapeValue("external")}, ${escapeValue(ref)}, ${escapeValue(sourceNode)}, ${edit.entry.tags ? escapeValue(edit.entry.tags) : "NULL"})`
+    `INSERT INTO knowledge (id, domain, entity_id, title, content${useWhenColumn}, entry_type, confidence_pct, source_type, source_ref, source_node, tags, evaluate_at, resolution_strategy) VALUES (${escapeValue(entryId)}, ${escapeValue(edit.entry.domain)}, ${escapeValue(edit.entry.entityId ?? null)}, ${escapeValue(edit.entry.title)}, ${escapeValue(edit.entry.content)}${useWhenValue}, ${escapeValue(entryType)}, ${escapeValue(confidencePct)}, ${escapeValue("external")}, ${escapeValue(ref)}, ${escapeValue(sourceNode)}, ${edit.entry.tags ? escapeValue(edit.entry.tags) : "NULL"}, ${escapeValue(evaluateAt)}, ${escapeValue(edit.entry.resolutionStrategy ?? null)})`
   );
 }
 
@@ -1538,9 +1616,45 @@ export class DoltgresKnowledgeContributionAdapter
     });
   }
 
+  async touchedIds(contributionId: string): Promise<ContributionTouchedIds> {
+    const rec = await this.getById(contributionId);
+    if (!rec) throw new ContributionNotFoundError(contributionId);
+    const headCommit = rec.headCommit ?? rec.baseCommit;
+    const knowledgeRows = await this.sql.unsafe(
+      `SELECT from_id, to_id FROM dolt_diff(${escapeRef(rec.baseCommit)}, ${escapeRef(headCommit)}, 'knowledge')`
+    );
+    const citationRows = await this.sql.unsafe(
+      `SELECT from_citing_id, to_citing_id, from_cited_id, to_cited_id, from_citation_type, to_citation_type FROM dolt_diff(${escapeRef(rec.baseCommit)}, ${escapeRef(headCommit)}, 'citations')`
+    );
+    const knowledgeIds = new Set<string>();
+    for (const r of knowledgeRows) {
+      const row = r as Record<string, unknown>;
+      for (const id of [row.from_id, row.to_id]) {
+        if (typeof id === "string" && id) knowledgeIds.add(id);
+      }
+    }
+    const citations: { citingId: string; citedId: string; citationType: string }[] = [];
+    for (const r of citationRows) {
+      const row = r as Record<string, unknown>;
+      for (const side of ["from", "to"] as const) {
+        const citingId = row[`${side}_citing_id`];
+        const citedId = row[`${side}_cited_id`];
+        if (typeof citingId === "string" && typeof citedId === "string") {
+          citations.push({
+            citingId,
+            citedId,
+            citationType: String(row[`${side}_citation_type`] ?? ""),
+          });
+        }
+      }
+    }
+    return { headCommit, knowledgeIds: [...knowledgeIds], citations };
+  }
+
   async merge(input: {
     contributionId: string;
     principal: Principal;
+    expectedHeadCommit?: string;
   }): Promise<{ commitHash: string }> {
     const rec = await this.getById(input.contributionId);
     if (!rec) throw new ContributionNotFoundError(input.contributionId);
@@ -1561,6 +1675,15 @@ export class DoltgresKnowledgeContributionAdapter
 
     return await this.withBranch("contribution.merge", async (conn) => {
       await conn.unsafe(`SELECT dolt_checkout('main')`);
+
+      // MERGE_EXPECTED_HEAD: the reviewed/gated head must still be the branch
+      // head, inside the same writer session that merges it.
+      if (input.expectedHeadCommit) {
+        const head = await currentHash(conn, rec.branch);
+        if (head !== input.expectedHeadCommit) {
+          throw new ContributionConflictError(MERGE_HEAD_MOVED_MESSAGE);
+        }
+      }
 
       let mergeCommit: string;
       let conflicts: number;

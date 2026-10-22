@@ -11,6 +11,13 @@
  * @public
  */
 
+import {
+  checkNodeAdmin,
+  type NodeAdminActor,
+  type NodeAdminAuthority,
+  NodeAdminRequiredError,
+  touchesGoalLayer,
+} from "../domain/node-admin.js";
 import type {
   ContributionCommitRecord,
   ContributionDiffEntry,
@@ -90,6 +97,13 @@ export interface ContributionServiceDeps {
    * Per task.5069 + docs/runbooks/dolthub-remote-bootstrap.md.
    */
   pushMainOnMerge?: () => Promise<void>;
+  /**
+   * GOAL_CHANGE_IS_NODE_ADMIN: the node's one admin authority (OpenFGA
+   * `node.administer` on the operator, repo-spec admin wallets on a node
+   * without OpenFGA). A merge whose RAW diff touches the goal layer needs it;
+   * absent ⇒ such merges fail closed with `authz_unavailable`.
+   */
+  nodeAdmin?: NodeAdminAuthority;
 }
 
 export interface ContributionService {
@@ -133,6 +147,8 @@ export interface ContributionService {
     principal: Principal;
     contributionId: string;
     confidencePct?: number;
+    /** The acting session for the node-admin check (wallet when it has one). */
+    actor?: NodeAdminActor;
   }): Promise<{ commitHash: string }>;
   close(args: {
     principal: Principal;
@@ -327,14 +343,30 @@ export function createContributionService(
       return deps.port.diff(contributionId);
     },
 
-    async merge({ principal, contributionId, confidencePct }) {
+    async merge({ principal, contributionId, confidencePct, actor }) {
       if (!deps.canMergeKnowledge(principal)) {
         throw new ContributionForbiddenError("merge requires admin session");
+      }
+      // MERGE_GATE_ON_RAW_DIFF + MERGE_EXPECTED_HEAD: gate on the raw ids at
+      // the current head, then merge only if that head is still the branch head.
+      const touched = await deps.port.touchedIds(contributionId);
+      if (touchesGoalLayer(touched)) {
+        const decision = await checkNodeAdmin(
+          deps.nodeAdmin,
+          actor ?? { userId: principal.id }
+        );
+        if (!decision.ok) {
+          throw new NodeAdminRequiredError(
+            decision,
+            "knowledge.contributions.merge.goal"
+          );
+        }
       }
       const result = await deps.port.merge({
         contributionId,
         principal,
         confidencePct,
+        expectedHeadCommit: touched.headCommit,
       });
       // Best-effort mirror. Caller wraps with its own .catch — service stays
       // framework-agnostic and never blocks the merge response on the push.

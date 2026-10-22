@@ -10,6 +10,7 @@
  * @public
  */
 
+import { GOALS_BOOTSTRAP_INSTRUCTION } from "@cogni/knowledge-store";
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
@@ -122,7 +123,11 @@ describe("knowledge base seeds", () => {
 				id: orientation?.id ?? "cogni-agent-orientation",
 				content: orientation?.content ?? "",
 			},
+			// NODES_BOOT_EMPTY: a fresh node has no approved goals.
+			goals: { status: "ok", goals: [] },
 		});
+		// A fresh node's bundle carries the zero-goal bootstrap instruction (story.5101).
+		expect(markdown).toContain(`## Goals\n\n${GOALS_BOOTSTRAP_INSTRUCTION}`);
 		// Both SessionStart channels are uncapped (story.5070), so the starter
 		// orientation must render WHOLE — never clipped to a byte ceiling.
 		expect(markdown).toContain(orientation?.content ?? "");

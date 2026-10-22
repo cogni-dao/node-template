@@ -12,11 +12,15 @@
  */
 
 // Capability factories (shared across all nodes)
-export { createKnowledgeCapability } from "./capability.js";
+export {
+  type CapabilityActiveGoal,
+  createKnowledgeCapability,
+} from "./capability.js";
 // Domain types & schemas
 export {
   assertWritableConfidence,
   BASELINE_CONFIDENCE_BY_SOURCE,
+  CONFIDENCE_EXEMPT_ENTRY_TYPES,
   CONFIDENCE_POLICY_VERSION,
   type ConfidenceCitationBasis,
   type ConfidenceDecision,
@@ -24,6 +28,7 @@ export {
   clampConfidence,
   explainConfidence,
   initializeConfidence,
+  isConfidenceExempt,
   recomputeConfidence,
 } from "./domain/confidence-policy.js";
 // Contribution domain
@@ -52,6 +57,33 @@ export {
   PrincipalKindSchema,
   PrincipalSchema,
 } from "./domain/contribution-schemas.js";
+// DAO goal list (ONE_GOAL_LIST · NO_GOAL_CAP) — read via KnowledgeStorePort.listActiveGoals
+export {
+  type ActiveGoal,
+  GOAL_ENTRY_TYPE,
+  GOAL_ID_PREFIX,
+  GOAL_RETIRING_EDGE,
+  GOALS_BOOTSTRAP_INSTRUCTION,
+  type GoalCandidateRow,
+  type GoalsLookupPort,
+  type GoalsSection,
+  isActiveGoalRow,
+  isGoalRowId,
+  renderGoalsLines,
+  resolveGoals,
+  selectActiveGoals,
+} from "./domain/dao-goals.js";
+// Node-admin seam (GOAL_CHANGE_IS_NODE_ADMIN · P0P1_IS_NODE_ADMIN) — one injected authority per node
+export {
+  checkNodeAdmin,
+  isPrivilegedPriority,
+  type NodeAdminActor,
+  type NodeAdminAuthority,
+  type NodeAdminDecision,
+  NodeAdminRequiredError,
+  type TouchedCitation,
+  touchesGoalLayer,
+} from "./domain/node-admin.js";
 // Write-pipeline gates (proj.knowledge-syntropy — W0 Gates tier)
 export {
   type GateContext,
@@ -137,12 +169,14 @@ export {
   CitationSchema,
   type CitationType,
   CitationTypeSchema,
+  citedEntryTypesFor,
   type DoltCommit,
   DoltCommitSchema,
   type DoltDiffEntry,
   DoltDiffEntrySchema,
   type EntryType,
   EntryTypeSchema,
+  EVALUATE_AT_REQUIRED_ENTRY_TYPES,
   HYPOTHESIS_TARGETED_EDGES,
   isWorkItemEndpointId,
   type Knowledge,
@@ -154,6 +188,7 @@ export {
   RAW_WRITE_REJECTS_TYPES,
   type ResolutionStrategy,
   ResolutionStrategySchema,
+  requiresEvaluateAt,
   type SourceType,
   SourceTypeSchema,
 } from "./domain/schemas.js";
@@ -164,6 +199,7 @@ export {
   ContributionNotFoundError,
   ContributionQuotaError,
   ContributionStateError,
+  type ContributionTouchedIds,
   type CreateEdoDecisionInput,
   type CreateEdoHypothesisInput,
   type CreateEdoOutcomeInput,
@@ -192,6 +228,7 @@ export {
   DomainNotRegisteredError,
   EdoEntryTypeRequiresAtomicToolError,
   HypothesisMissingEvaluateAtError,
+  GoalRequiresContributionError,
   KnowledgeBusyError,
   type KnowledgeStorePort,
   type NewDomain,

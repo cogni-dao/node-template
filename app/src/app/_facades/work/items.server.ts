@@ -5,7 +5,8 @@
  * Module: `@app/_facades/work/items.server`
  * Purpose: Server-side facade for work item read/write operations across the markdown + Doltgres surfaces.
  * Scope: Maps port results to contract DTOs and merges node-local Doltgres rows with legacy markdown rows.
- * Invariants: PORT_VIA_CONTAINER (no direct adapter imports), CONTRACTS_ARE_TRUTH, NODE_STORE_IS_LOCAL.
+ * Invariants: P0P1_IS_NODE_ADMIN (story.5101: priority <= 1 on create/patch requires node admin,
+ *   checked before the store write), PORT_VIA_CONTAINER (no direct adapter imports), CONTRACTS_ARE_TRUTH, NODE_STORE_IS_LOCAL.
  * Side-effects: IO (filesystem read via port; database read/write via Doltgres port)
  * Links: contracts/work.items.{list,get,create,patch}.v1.contract
  * @internal
@@ -22,6 +23,11 @@ import type {
 import type { WorkItem, WorkItemId } from "@cogni/work-items";
 import { toWorkItemId } from "@cogni/work-items";
 
+import {
+  checkNodeAdmin,
+  isPrivilegedPriority,
+  NodeAdminRequiredError,
+} from "@cogni/knowledge-store";
 import { getContainer } from "@/bootstrap/container";
 
 /**
@@ -39,6 +45,8 @@ export class InvalidCursorError extends Error {
   }
 }
 
+export { NodeAdminRequiredError };
+
 export class WorkItemNotFoundError extends Error {
   constructor(id: string) {
     super(`Work item not found: ${id}`);
@@ -51,6 +59,44 @@ export class WorkItemForbiddenError extends Error {
     super(`Not authorized to mutate work item: ${id}`);
     this.name = "WorkItemForbiddenError";
   }
+}
+
+/**
+ * P0P1_IS_NODE_ADMIN (story.5101): refuse a priority <= 1 write unless the caller
+ * is node admin (the container's `nodeAdmin` authority), BEFORE any store write.
+ * Throws `NodeAdminRequiredError` (403 `authz_denied` / 503 `authz_unavailable`).
+ */
+async function assertPriorityAuthority(
+  priority: number | null | undefined,
+  actor: WorkItemActor
+): Promise<void> {
+  if (!isPrivilegedPriority(priority)) return;
+  const decision = await checkNodeAdmin(getContainer().nodeAdmin, {
+    userId: actor.id,
+    walletAddress: actor.walletAddress ?? null,
+  });
+  if (!decision.ok) {
+    const err = new NodeAdminRequiredError(
+      decision,
+      `work.items.priority.p${priority}`
+    );
+    getContainer().log.warn(
+      {
+        errorCode: err.errorCode,
+        reason: err.reason,
+        action: err.action,
+        userId: actor.id,
+      },
+      "work.items.priority_node_admin_refused"
+    );
+    throw err;
+  }
+}
+
+/** The caller of a work-item write; `walletAddress` is null for agent keys. */
+export interface WorkItemActor {
+  id: string;
+  walletAddress?: string | null;
 }
 
 export class WorkItemLeaseConflictError extends Error {
@@ -242,8 +288,9 @@ export async function getWorkItem(id: string): Promise<WorkItemDto | null> {
 
 export async function createWorkItem(
   input: ContractCreateInput,
-  sessionUser: { id: string }
+  sessionUser: WorkItemActor
 ): Promise<WorkItemDto> {
+  await assertPriorityAuthority(input.priority, sessionUser);
   const container = getContainer();
   try {
     const created = await container.doltgresWorkItems.create(
@@ -278,8 +325,9 @@ export async function createWorkItem(
 
 export async function patchWorkItem(
   input: ContractPatchInput,
-  sessionUser: { id: string }
+  sessionUser: WorkItemActor
 ): Promise<WorkItemDto> {
+  await assertPriorityAuthority(input.set.priority, sessionUser);
   const container = getContainer();
   try {
     const patched = await container.doltgresWorkItems.patch(

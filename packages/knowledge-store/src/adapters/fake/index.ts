@@ -13,8 +13,14 @@
 
 import {
   initializeConfidence,
+  isConfidenceExempt,
   recomputeConfidence as recomputeConfidenceByPolicy,
 } from "../../domain/confidence-policy.js";
+import {
+  type ActiveGoal,
+  GOAL_RETIRING_EDGE,
+  selectActiveGoals,
+} from "../../domain/dao-goals.js";
 import type {
   Citation,
   CitationType,
@@ -25,8 +31,10 @@ import type {
   NewKnowledge,
 } from "../../domain/schemas.js";
 import {
+  citedEntryTypesFor,
   HYPOTHESIS_TARGETED_EDGES,
   isWorkItemEndpointId,
+  requiresEvaluateAt,
 } from "../../domain/schemas.js";
 import type {
   ChainNode,
@@ -43,6 +51,7 @@ import {
   type Domain,
   DomainAlreadyRegisteredError,
   DomainNotRegisteredError,
+  GoalRequiresContributionError,
   HypothesisMissingEvaluateAtError,
   type KnowledgeStorePort,
   type NewDomain,
@@ -55,8 +64,8 @@ import {
 const WALK_CHAIN_DEFAULT_DEPTH = 5;
 const WALK_CHAIN_MAX_DEPTH = 10;
 
-function expectedEntryTypeForEdge(t: CitationType): string | null {
-  return HYPOTHESIS_TARGETED_EDGES.includes(t) ? "hypothesis" : null;
+function expectedEntryTypeForEdge(t: CitationType): readonly string[] | null {
+  return HYPOTHESIS_TARGETED_EDGES.includes(t) ? citedEntryTypesFor(t) : null;
 }
 
 function citationId(
@@ -104,6 +113,25 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
       (a, b) => (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0)
     );
     return opts?.limit ? out.slice(0, opts.limit) : out;
+  }
+
+  async listActiveGoals(): Promise<ActiveGoal[]> {
+    // The fake holds only main-plane rows and has no status column, so every
+    // row is a non-deprecated candidate; supersedes edges retire, as on Doltgres.
+    return selectActiveGoals(
+      Array.from(this.rows.values()).map((r) => ({
+        id: r.id,
+        entryType: r.entryType,
+        title: r.title,
+        content: r.content,
+        evaluateAt: r.evaluateAt ?? null,
+      })),
+      new Set(
+        Array.from(this.edges.values())
+          .filter((c) => c.citationType === GOAL_RETIRING_EDGE)
+          .map((c) => c.citedId)
+      )
+    );
   }
 
   async searchKnowledge(
@@ -169,10 +197,17 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
     if (!this.domainsMap.has(entry.domain)) {
       throw new DomainNotRegisteredError(entry.domain);
     }
-    if (entry.entryType === "hypothesis" && !entry.evaluateAt) {
-      throw new HypothesisMissingEvaluateAtError(entry.id);
+    if (requiresEvaluateAt(entry.entryType) && !entry.evaluateAt) {
+      throw new HypothesisMissingEvaluateAtError(entry.id, entry.entryType);
     }
     const existing = this.rows.get(entry.id);
+    // GOAL_CHANGE_IS_NODE_ADMIN — parity with the Doltgres adapter.
+    if (
+      existing &&
+      (existing.entryType === "goal" || entry.entryType === "goal")
+    ) {
+      throw new GoalRequiresContributionError(entry.id);
+    }
     const row: Knowledge = {
       id: entry.id,
       domain: entry.domain,
@@ -196,8 +231,8 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
     if (!this.domainsMap.has(entry.domain)) {
       throw new DomainNotRegisteredError(entry.domain);
     }
-    if (entry.entryType === "hypothesis" && !entry.evaluateAt) {
-      throw new HypothesisMissingEvaluateAtError(entry.id);
+    if (requiresEvaluateAt(entry.entryType) && !entry.evaluateAt) {
+      throw new HypothesisMissingEvaluateAtError(entry.id, entry.entryType);
     }
     if (this.rows.has(entry.id)) {
       throw new Error(`duplicate key: knowledge.id='${entry.id}'`);
@@ -211,6 +246,9 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
   ): Promise<Knowledge> {
     const existing = this.rows.get(id);
     if (!existing) throw new Error(`Knowledge ${id} not found`);
+    if (existing.entryType === "goal" || update.entryType === "goal") {
+      throw new GoalRequiresContributionError(id);
+    }
     if (update.domain && !this.domainsMap.has(update.domain)) {
       throw new DomainNotRegisteredError(update.domain);
     }
@@ -280,12 +318,12 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
       throw new CitationTargetNotFoundError(edge.citingId);
     }
     const expected = expectedEntryTypeForEdge(edge.citationType);
-    if (expected !== null && citedRow?.entryType !== expected) {
+    if (expected !== null && !expected.includes(citedRow?.entryType ?? "")) {
       throw new CitationTypeMismatchError(
         edge.citationType,
         edge.citedId,
         citedRow?.entryType ?? "(none)",
-        expected
+        expected.join("|")
       );
     }
     const id =
@@ -483,6 +521,7 @@ export class FakeEdoResolverAdapter implements EdoResolverPort {
     if (!entry) {
       throw new Error(`recomputeConfidence: entry '${entryId}' not found`);
     }
+    if (isConfidenceExempt(entry.entryType)) return entry.confidencePct ?? 0;
     const incoming = (await this.store.listCitationsByCitedId(entryId)).filter(
       (c) => c.citationType !== "tracks"
     );
