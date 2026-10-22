@@ -315,10 +315,13 @@ describe("knowledge useWhen patch + q filter (task.5204)", () => {
       (await store.listActiveGoals()).find((goal) => goal.id === goalId)
         ?.evaluateAt
     ).toEqual(new Date("2027-02-01T00:00:00.000Z"));
-    expect(
-      await readClient.unsafe(
+    // The durable merge ACK precedes private branch housekeeping. Observe its
+    // eventual completion through the independent reader without refreshing it.
+    await expect.poll(
+      () => readClient.unsafe(
         `SELECT name FROM dolt.branches WHERE name = '${rec.branch}'`
-      )
+      ),
+      { timeout: 5_000, interval: 50 }
     ).toHaveLength(0);
     const mergedHead = await readClient.unsafe(
       "SELECT dolt_hashof('main') AS hash"
