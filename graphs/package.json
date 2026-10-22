@@ -20,7 +20,7 @@
     "test": "vitest run --config vitest.config.ts --passWithNoTests"
   },
   "dependencies": {
-    "@cogni/langgraph-graphs": "workspace:*"
+    "@cogni/langgraph-graphs": "workspace:@cogni-dao/langgraph-graphs@*"
   },
   "devDependencies": {
     "tsup": "^8.5.1",

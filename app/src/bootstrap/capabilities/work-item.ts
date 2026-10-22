@@ -16,6 +16,7 @@
 import type {
   WorkItemCapability,
   WorkItemInfo,
+  WorkItemQueryParams,
   WorkItemTransitionResult,
 } from "@cogni/ai-tools";
 import type {
@@ -74,6 +75,11 @@ function toWorkItemInfo(item: WorkItem): WorkItemInfo {
     ...(item.branch !== undefined && { branch: item.branch }),
     ...(item.pr !== undefined && { pr: item.pr }),
     ...(item.blockedBy !== undefined && { blockedBy: item.blockedBy }),
+    ...(typeof item.revision === "number" && { revision: item.revision }),
+    ...(item.outcome !== undefined && { outcome: item.outcome }),
+    ...(item.estimate !== undefined && { estimate: item.estimate }),
+    ...(item.parentId !== undefined && { parentId: item.parentId }),
+    ...(item.specRefs !== undefined && { specRefs: [...item.specRefs] }),
   };
 }
 
@@ -85,23 +91,40 @@ export function createWorkItemCapability(
 ): WorkItemCapability {
   const { workItemQuery, workItemCommand } = deps;
 
+  function list(params: WorkItemQueryParams) {
+    return (deps.backlogReader ?? workItemQuery).list({
+      ...(params.statuses && {
+        statuses: params.statuses as readonly WorkItemStatus[],
+      }),
+      ...(params.types && {
+        types: params.types as readonly WorkItemType[],
+      }),
+      ...(params.text && { text: params.text }),
+      ...(params.actor && { actor: params.actor as ActorKind }),
+      ...(params.projectId && {
+        projectId: toWorkItemId(params.projectId),
+      }),
+      ...(params.ids && { ids: params.ids.map((id) => toWorkItemId(id)) }),
+      ...(params.cursor && { cursor: params.cursor }),
+      ...(params.limit && { limit: params.limit }),
+    });
+  }
+
   return {
     async query(params): Promise<readonly WorkItemInfo[]> {
-      const result = await (deps.backlogReader ?? workItemQuery).list({
-        ...(params.statuses && {
-          statuses: params.statuses as readonly WorkItemStatus[],
-        }),
-        ...(params.types && {
-          types: params.types as readonly WorkItemType[],
-        }),
-        ...(params.text && { text: params.text }),
-        ...(params.actor && { actor: params.actor as ActorKind }),
-        ...(params.projectId && {
-          projectId: toWorkItemId(params.projectId),
-        }),
-        ...(params.limit && { limit: params.limit }),
-      });
+      const result = await list(params);
       return result.items.map(toWorkItemInfo);
+    },
+
+    /** Paginated read: a complete backlog snapshot follows `nextCursor` to the end. */
+    async queryPage(params) {
+      const result = await list(params);
+      return {
+        items: result.items.map(toWorkItemInfo),
+        ...(result.nextCursor !== undefined && {
+          nextCursor: result.nextCursor,
+        }),
+      };
     },
 
     async transitionStatus(input): Promise<WorkItemTransitionResult> {
