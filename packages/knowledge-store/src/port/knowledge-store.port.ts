@@ -179,9 +179,9 @@ export class EdoEntryTypeRequiresAtomicToolError extends Error {
 }
 
 /**
- * Thrown by `listActiveGoals` when more than the allowed number of active DAO
- * goals are merged. Enforces `MAX_THREE_GOALS`: callers must surface it, never
- * truncate the list to fit.
+ * @deprecated since 0.3.5 — `listActiveGoals` no longer throws past the cap
+ * (a throw blanked every session's Goals section). It returns every active goal
+ * and callers surface `goalCapOverflow`. Kept exported for consumer compatibility.
  */
 export class TooManyActiveGoalsError extends Error {
   readonly code = "TOO_MANY_ACTIVE_GOALS" as const;
@@ -225,9 +225,10 @@ export interface KnowledgeStorePort {
   ): Promise<Knowledge[]>;
   /**
    * The approved DAO goals (ONE_GOAL_LIST): merged `entry_type = 'goal'` rows
-   * with id prefix `goal-`, not deprecated, sorted by id. Returns []
-   * when none are merged; throws `TooManyActiveGoalsError` past 3
-   * (MAX_THREE_GOALS). Contribution-branch rows are never visible here.
+   * with id prefix `goal-`, not deprecated or superseded, sorted by id. Returns
+   * [] when none are merged. Past MAX_ACTIVE_GOALS it still returns every active
+   * goal — callers surface `goalCapOverflow` (never throw, never truncate).
+   * Contribution-branch rows are never visible here.
    */
   listActiveGoals(): Promise<ActiveGoal[]>;
   /** List distinct domain values present in the `knowledge` table (legacy / back-compat). */

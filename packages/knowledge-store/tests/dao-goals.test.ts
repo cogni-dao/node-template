@@ -22,15 +22,13 @@ import {
 import {
   type ActiveGoal,
   GOALS_BOOTSTRAP_INSTRUCTION,
+  goalCapOverflow,
   isGoalRowId,
   MAX_ACTIVE_GOALS,
   renderGoalsLines,
   resolveGoals,
 } from "../src/domain/dao-goals.js";
-import {
-  HypothesisMissingEvaluateAtError,
-  TooManyActiveGoalsError,
-} from "../src/port/knowledge-store.port.js";
+import { HypothesisMissingEvaluateAtError } from "../src/port/knowledge-store.port.js";
 
 type Row = Record<string, unknown>;
 
@@ -108,14 +106,13 @@ describe("DoltgresKnowledgeStoreAdapter.listActiveGoals", () => {
     expect(goals.map((g) => g.id)).toEqual(["goal-live"]);
   });
 
-  it("throws TooManyActiveGoalsError past the max — never truncates (MAX_THREE_GOALS)", async () => {
-    const ids = ["goal-a", "goal-b", "goal-c", "goal-d"];
+  it("returns every goal past the cap, sorted, and reports the overflow — never throws or truncates", async () => {
+    const ids = ["goal-d", "goal-a", "goal-c", "goal-b"];
     const { adapter } = adapterFor(ids.map((id) => goalRow(id)));
-    const err = await adapter.listActiveGoals().catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(TooManyActiveGoalsError);
-    expect((err as TooManyActiveGoalsError).goalIds).toEqual(ids);
-    expect((err as TooManyActiveGoalsError).max).toBe(MAX_ACTIVE_GOALS);
-    expect((err as Error).message).toContain("4 active DAO goals");
+    const goals = await adapter.listActiveGoals();
+    expect(goals.map((g) => g.id)).toEqual(["goal-a", "goal-b", "goal-c", "goal-d"]);
+    expect(goalCapOverflow(goals)).toEqual({ count: 4, max: MAX_ACTIVE_GOALS });
+    expect(goalCapOverflow(goals.slice(0, 3))).toBeNull();
   });
 
   it("does not count deprecated rows toward the cap", async () => {
@@ -187,6 +184,21 @@ describe("cognition Goals section (resolveGoals + renderGoalsLines)", () => {
     expect(md).not.toContain("no approved goals");
   });
 
+  it("past the cap renders every goal under one overflow warning line", async () => {
+    const four = ["goal-a", "goal-b", "goal-c", "goal-d"].map((id) => ({
+      id,
+      title: `Goal: ${id}`,
+      content: "s",
+      evaluateAt: null,
+    }));
+    const section = await resolveGoals(port(four));
+    expect(section).toMatchObject({ status: "ok", overflow: { count: 4, max: 3 } });
+    const md = renderGoalsLines(section).join("\n");
+    expect(md).toContain("4 goals exceed the cap of 3: an admin should retire some");
+    for (const g of four) expect(md).toContain(`### Goal: ${g.id}`);
+    expect(md.indexOf("exceed the cap")).toBeLessThan(md.indexOf("### Goal: goal-a"));
+  });
+
   it("a failed read or missing hub is a visible `goals unavailable` line", async () => {
     const failed = await resolveGoals(port(new Error("4 active DAO goals exceed the max of 3")));
     expect(renderGoalsLines(failed)).toContain(
@@ -238,9 +250,9 @@ describe("FakeKnowledgeStoreAdapter — goal parity", () => {
     await seed(store, "goal-b");
     await seed(store, "goal-c");
     await seed(store, "goal-d");
-    await expect(store.listActiveGoals()).rejects.toBeInstanceOf(
-      TooManyActiveGoalsError
-    );
+    const all = await store.listActiveGoals();
+    expect(all).toHaveLength(4);
+    expect(goalCapOverflow(all)).toEqual({ count: 4, max: MAX_ACTIVE_GOALS });
   });
 
   it("retires a goal once a supersedes edge cites it", async () => {
