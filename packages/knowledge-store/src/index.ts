@@ -54,7 +54,7 @@ export {
   PrincipalKindSchema,
   PrincipalSchema,
 } from "./domain/contribution-schemas.js";
-// DAO goal list (ONE_GOAL_LIST · MAX_THREE_GOALS) — read via KnowledgeStorePort.listActiveGoals
+// DAO goal list (ONE_GOAL_LIST · NO_GOAL_CAP) — read via KnowledgeStorePort.listActiveGoals
 export {
   type ActiveGoal,
   GOAL_ENTRY_TYPE,
@@ -62,14 +62,10 @@ export {
   GOAL_RETIRING_EDGE,
   GOALS_BOOTSTRAP_INSTRUCTION,
   type GoalCandidateRow,
-  type GoalCapOverflow,
   type GoalsLookupPort,
   type GoalsSection,
-  goalCapOverflow,
-  goalsOverflowWarning,
   isActiveGoalRow,
   isGoalRowId,
-  MAX_ACTIVE_GOALS,
   renderGoalsLines,
   resolveGoals,
   selectActiveGoals,
@@ -220,7 +216,6 @@ export {
   KnowledgeBusyError,
   type KnowledgeStorePort,
   type NewDomain,
-  TooManyActiveGoalsError,
 } from "./port/knowledge-store.port.js";
 // KPI reader port (goal-loop — verifier-independent metric read)
 export {

@@ -10,10 +10,9 @@
  *     starts `goal-`, not deprecated. A goal is a human commitment, not a
  *     `hypothesis`: it is admin-merged and its confidence is never recomputed
  *     from citations. No new table — `entry_type` is plain text.
- *   - MAX_THREE_GOALS is a loud cap, never a blank: past the cap every active
- *     goal is still returned (sorted by id) and `goalCapOverflow` reports it;
- *     readers render/log the overflow. The list is never truncated or thrown
- *     away (a throw blanked the Goals section in every session).
+ *   - NO_GOAL_CAP: every active goal is returned, sorted by id. There is no
+ *     count cap (Derek, 2026-10-21: caps are a hack; the admin merge is the
+ *     only gate). The list is never truncated or thrown away.
  *   - NO_GOALS_FAILS_LOUD: zero goals is an empty array the caller must render
  *     visibly (the cognition bundle prints `no approved goals` plus the
  *     bootstrap instruction, `GOALS_BOOTSTRAP_INSTRUCTION`).
@@ -31,8 +30,6 @@
 export const GOAL_ENTRY_TYPE = "goal" as const;
 /** Id prefix every DAO goal atom carries (`goal-<slug>`). */
 export const GOAL_ID_PREFIX = "goal-" as const;
-/** MAX_THREE_GOALS. */
-export const MAX_ACTIVE_GOALS = 3 as const;
 /** The citation type whose merged edge onto a goal retires it. */
 export const GOAL_RETIRING_EDGE = "supersedes" as const;
 
@@ -76,24 +73,7 @@ export function isActiveGoalRow(
   );
 }
 
-/** Overflow of the active goal list past MAX_ACTIVE_GOALS, or null when within the cap. */
-export interface GoalCapOverflow {
-  count: number;
-  max: number;
-}
-
-/** MAX_THREE_GOALS check: report — never throw, never truncate. */
-export function goalCapOverflow(
-  goals: readonly unknown[],
-  max: number = MAX_ACTIVE_GOALS
-): GoalCapOverflow | null {
-  return goals.length > max ? { count: goals.length, max } : null;
-}
-
-/**
- * Filter candidate rows to the active goal list, sorted by id. Returns every
- * active goal even past MAX_ACTIVE_GOALS; callers surface `goalCapOverflow`.
- */
+/** Filter candidate rows to the active goal list, sorted by id (NO_GOAL_CAP). */
 export function selectActiveGoals(
   rows: readonly GoalCandidateRow[],
   supersededIds: ReadonlySet<string> = new Set()
@@ -128,12 +108,7 @@ export const GOALS_BOOTSTRAP_INSTRUCTION =
  * "could not read goals".
  */
 export type GoalsSection =
-  | {
-      status: "ok";
-      goals: readonly ActiveGoal[];
-      /** Set when more goals are active than the cap; all are still rendered. */
-      overflow?: GoalCapOverflow | null;
-    }
+  | { status: "ok"; goals: readonly ActiveGoal[] }
   | { status: "unavailable"; reason: string };
 
 /** Minimal read surface `resolveGoals` needs — `KnowledgeStorePort.listActiveGoals`. */
@@ -144,7 +119,7 @@ export interface GoalsLookupPort {
 /**
  * Read the approved goals by one direct query. A read failure or an
  * unconfigured hub becomes a visible `unavailable` state rather than a missing
- * section; more goals than the cap is `ok` with `overflow` set.
+ * section.
  */
 export async function resolveGoals(
   port: GoalsLookupPort | undefined
@@ -162,7 +137,6 @@ export async function resolveGoals(
         content: g.content,
         evaluateAt: g.evaluateAt,
       })),
-      overflow: goalCapOverflow(goals),
     };
   } catch (e) {
     return {
@@ -177,11 +151,6 @@ function goalsOneLine(value: string): string {
     .replace(/\s*\r?\n\s*/g, " ")
     .replace(/\|/g, "\\|")
     .trim();
-}
-
-/** The one warning line rendered (and logged) when the cap is exceeded. */
-export function goalsOverflowWarning(overflow: GoalCapOverflow): string {
-  return `⚠️ ${overflow.count} goals exceed the cap of ${overflow.max}: an admin should retire some (cite the old goal with \`supersedes\`).`;
 }
 
 /** `YYYY-MM-DD` from the `evaluate_at` column, or an explicit gap marker. */
@@ -200,10 +169,8 @@ export function renderGoalsLines(goals: GoalsSection): string[] {
     return [...head, `goals unavailable: ${goalsOneLine(goals.reason)}`];
   }
   if (goals.goals.length === 0) return [...head, GOALS_BOOTSTRAP_INSTRUCTION];
-  const overflow = goals.overflow ?? goalCapOverflow(goals.goals);
   return [
     ...head,
-    ...(overflow ? [goalsOverflowWarning(overflow), ""] : []),
     ...goals.goals.flatMap((g, i) => [
       ...(i > 0 ? [""] : []),
       `### ${g.title}`,

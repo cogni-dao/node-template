@@ -22,9 +22,7 @@ import {
 import {
   type ActiveGoal,
   GOALS_BOOTSTRAP_INSTRUCTION,
-  goalCapOverflow,
   isGoalRowId,
-  MAX_ACTIVE_GOALS,
   renderGoalsLines,
   resolveGoals,
 } from "../src/domain/dao-goals.js";
@@ -106,16 +104,14 @@ describe("DoltgresKnowledgeStoreAdapter.listActiveGoals", () => {
     expect(goals.map((g) => g.id)).toEqual(["goal-live"]);
   });
 
-  it("returns every goal past the cap, sorted, and reports the overflow — never throws or truncates", async () => {
+  it("returns every active goal sorted by id — no cap, never throws or truncates (NO_GOAL_CAP)", async () => {
     const ids = ["goal-d", "goal-a", "goal-c", "goal-b"];
     const { adapter } = adapterFor(ids.map((id) => goalRow(id)));
     const goals = await adapter.listActiveGoals();
     expect(goals.map((g) => g.id)).toEqual(["goal-a", "goal-b", "goal-c", "goal-d"]);
-    expect(goalCapOverflow(goals)).toEqual({ count: 4, max: MAX_ACTIVE_GOALS });
-    expect(goalCapOverflow(goals.slice(0, 3))).toBeNull();
   });
 
-  it("does not count deprecated rows toward the cap", async () => {
+  it("excludes deprecated rows from the active list", async () => {
     const { adapter } = adapterFor([
       goalRow("goal-a"),
       goalRow("goal-b"),
@@ -143,7 +139,7 @@ describe("DoltgresKnowledgeStoreAdapter.listActiveGoals", () => {
       [goalRow("goal-a"), goalRow("goal-b"), goalRow("goal-c"), goalRow("goal-old")],
       [{ cited_id: "goal-old" }]
     );
-    // Four goal rows, one superseded: three active, so the cap is not hit.
+    // Four goal rows, one superseded: three active.
     const goals = await adapter.listActiveGoals();
     expect(goals.map((g) => g.id)).toEqual(["goal-a", "goal-b", "goal-c"]);
   });
@@ -184,25 +180,22 @@ describe("cognition Goals section (resolveGoals + renderGoalsLines)", () => {
     expect(md).not.toContain("no approved goals");
   });
 
-  it("past the cap renders every goal under one overflow warning line", async () => {
+  it("renders every goal with no cap and no warning", async () => {
     const four = ["goal-a", "goal-b", "goal-c", "goal-d"].map((id) => ({
       id,
       title: `Goal: ${id}`,
       content: "s",
       evaluateAt: null,
     }));
-    const section = await resolveGoals(port(four));
-    expect(section).toMatchObject({ status: "ok", overflow: { count: 4, max: 3 } });
-    const md = renderGoalsLines(section).join("\n");
-    expect(md).toContain("4 goals exceed the cap of 3: an admin should retire some");
+    const md = renderGoalsLines(await resolveGoals(port(four))).join("\n");
     for (const g of four) expect(md).toContain(`### Goal: ${g.id}`);
-    expect(md.indexOf("exceed the cap")).toBeLessThan(md.indexOf("### Goal: goal-a"));
+    expect(md).not.toMatch(/exceed|cap of/);
   });
 
   it("a failed read or missing hub is a visible `goals unavailable` line", async () => {
-    const failed = await resolveGoals(port(new Error("4 active DAO goals exceed the max of 3")));
+    const failed = await resolveGoals(port(new Error("store read timed out")));
     expect(renderGoalsLines(failed)).toContain(
-      "goals unavailable: 4 active DAO goals exceed the max of 3"
+      "goals unavailable: store read timed out"
     );
     expect(renderGoalsLines(await resolveGoals(undefined))).toContain(
       "goals unavailable: knowledge hub not configured"
@@ -239,7 +232,7 @@ describe("FakeKnowledgeStoreAdapter — goal parity", () => {
     return store;
   }
 
-  it("selects goal-* goal rows and enforces the same cap", async () => {
+  it("selects goal-* goal rows with no cap", async () => {
     const store = await freshStore();
     await expect(store.listActiveGoals()).resolves.toEqual([]);
     await seed(store, "goal-a");
@@ -250,9 +243,7 @@ describe("FakeKnowledgeStoreAdapter — goal parity", () => {
     await seed(store, "goal-b");
     await seed(store, "goal-c");
     await seed(store, "goal-d");
-    const all = await store.listActiveGoals();
-    expect(all).toHaveLength(4);
-    expect(goalCapOverflow(all)).toEqual({ count: 4, max: MAX_ACTIVE_GOALS });
+    await expect(store.listActiveGoals()).resolves.toHaveLength(4);
   });
 
   it("retires a goal once a supersedes edge cites it", async () => {

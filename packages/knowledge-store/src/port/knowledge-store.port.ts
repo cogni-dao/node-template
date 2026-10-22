@@ -178,25 +178,6 @@ export class EdoEntryTypeRequiresAtomicToolError extends Error {
   }
 }
 
-/**
- * @deprecated since 0.3.5 — `listActiveGoals` no longer throws past the cap
- * (a throw blanked every session's Goals section). It returns every active goal
- * and callers surface `goalCapOverflow`. Kept exported for consumer compatibility.
- */
-export class TooManyActiveGoalsError extends Error {
-  readonly code = "TOO_MANY_ACTIVE_GOALS" as const;
-  readonly goalIds: readonly string[];
-  readonly max: number;
-  constructor(goalIds: readonly string[], max: number) {
-    super(
-      `${goalIds.length} active DAO goals exceed the max of ${max}: ${goalIds.join(", ")}`
-    );
-    this.name = "TooManyActiveGoalsError";
-    this.goalIds = goalIds;
-    this.max = max;
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Port interface
 // ---------------------------------------------------------------------------
@@ -226,8 +207,7 @@ export interface KnowledgeStorePort {
   /**
    * The approved DAO goals (ONE_GOAL_LIST): merged `entry_type = 'goal'` rows
    * with id prefix `goal-`, not deprecated or superseded, sorted by id. Returns
-   * [] when none are merged. Past MAX_ACTIVE_GOALS it still returns every active
-   * goal — callers surface `goalCapOverflow` (never throw, never truncate).
+   * [] when none are merged; no count cap (NO_GOAL_CAP).
    * Contribution-branch rows are never visible here.
    */
   listActiveGoals(): Promise<ActiveGoal[]>;
