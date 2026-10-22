@@ -31,9 +31,10 @@ import {
   type CompletionFn,
   type CreateGraphFn,
   createInProcGraphRunner,
-  GRAPH_REPORT_CLOSE,
-  GRAPH_REPORT_OPEN,
+  type GraphReportDecl,
   type GraphResult,
+  graphReportDelta,
+  graphReportLogFields,
   type InProcGraphRequest,
   LANGGRAPH_CATALOG,
   type ToolExecFn,
@@ -87,12 +88,6 @@ interface ProviderCatalogEntry {
   readonly systemPrompt?: string;
   /** Graph-owned run report to log + echo on the stream (CatalogEntry.report). */
   readonly report?: GraphReportDecl;
-}
-
-/** CatalogEntry.report: registered event names for the graph's telemetry and per-batch samples. */
-interface GraphReportDecl {
-  readonly event: string;
-  readonly sampleEvent?: string;
 }
 
 /**
@@ -491,40 +486,4 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
       }),
     };
   }
-}
-
-/**
- * Log lines for a catalog-declared report: one `report.event` from `structuredOutput.telemetry`, plus one
- * `report.sampleEvent` per `structuredOutput.samples[]` entry (≤10). Empty when the output carries none.
- */
-export function graphReportLogFields(
-  report: GraphReportDecl,
-  runId: string,
-  structuredOutput: Record<string, unknown> | undefined
-): Record<string, unknown>[] {
-  const telemetry = structuredOutput?.telemetry;
-  const samples = structuredOutput?.samples;
-  return [
-    ...(telemetry && typeof telemetry === "object"
-      ? [{ event: report.event, runId, ...telemetry }]
-      : []),
-    ...(report.sampleEvent && Array.isArray(samples)
-      ? samples.slice(0, 10).map((sample, batch) => ({
-          event: report.sampleEvent,
-          runId,
-          batch,
-          ...(sample as Record<string, unknown>),
-        }))
-      : []),
-  ];
-}
-
-/** The stream echo of a catalog-declared report (`<graph_report>{telemetry}</graph_report>`), or null. */
-export function graphReportDelta(
-  structuredOutput: Record<string, unknown> | undefined
-): string | null {
-  const telemetry = structuredOutput?.telemetry;
-  return telemetry && typeof telemetry === "object"
-    ? `\n${GRAPH_REPORT_OPEN}${JSON.stringify(telemetry)}${GRAPH_REPORT_CLOSE}\n`
-    : null;
 }

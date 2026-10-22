@@ -87,6 +87,7 @@ export {
   getToolIds,
   hasToolId,
   TOOL_CATALOG,
+  VCS_TOOL_BUNDLE,
   type ToolCatalog,
 } from "./catalog";
 // Runtime adapter
