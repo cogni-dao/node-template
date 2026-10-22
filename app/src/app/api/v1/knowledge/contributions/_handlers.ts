@@ -9,8 +9,8 @@
  * Scope: Operator-side wiring only. Mirrors poly's identical handler set.
  * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, KNOWLEDGE_MERGE_REQUIRES_ADMIN_SESSION,
  *   GOAL_CHANGE_IS_NODE_ADMIN (story.5101): a merge whose diff touches a `goal-*` row (or a
- *   citation from one) additionally requires node admin (`checkNodeAdmin`), checked BEFORE
- *   the merge — 403 `authz_denied`, 503 `authz_unavailable`. Every other merge is unchanged.
+ *   goal-retiring edge) additionally requires node admin — enforced in ContributionService.merge
+ *   on raw diff ids at the gated head; mapped here to 403 `authz_denied` / 503 `authz_unavailable`.
  * Side-effects: IO (HTTP response, Doltgres read/write via container service)
  * Links: docs/design/knowledge-contribution-api.md, packages/knowledge-store
  * @internal
@@ -27,7 +27,6 @@ import {
   DomainNotRegisteredError,
   EmptyKnowledgePatchError,
   HypothesisMissingEvaluateAtError,
-  isGoalRowId,
   KnowledgeBusyError,
   KnowledgeGateError,
   NodeAdminRequiredError,
@@ -45,10 +44,6 @@ import type { SessionUser } from "@cogni/node-shared";
 import { NextResponse } from "next/server";
 
 import { getContainer } from "@/bootstrap/container";
-import {
-  checkNodeAdmin,
-  nodeAdminFailureBody,
-} from "@/bootstrap/node-admin-gate";
 
 function service() {
   const svc = getContainer().knowledgeContributionService;
@@ -103,7 +98,13 @@ function mapError(e: unknown): NextResponse {
     return NextResponse.json({ error: e.message }, { status: 400 });
   if (e instanceof EmptyKnowledgePatchError)
     return NextResponse.json({ error: e.message }, { status: 400 });
-  // HYPOTHESIS_HAS_EVALUATE_AT — a hypothesis or goal insert without evaluateAt.
+  // GOAL_CHANGE_IS_NODE_ADMIN — refused before any side effect.
+  if (e instanceof NodeAdminRequiredError)
+    return NextResponse.json(
+      { error: e.message, errorCode: e.errorCode, action: e.action },
+      { status: e.status }
+    );
+  // HYPOTHESIS_HAS_EVALUATE_AT — a hypothesis or goal write without evaluateAt.
   if (e instanceof HypothesisMissingEvaluateAtError)
     return NextResponse.json({ error: e.message }, { status: 400 });
   // A cite/EDO edit whose target resolves on neither the branch nor main, or
@@ -323,19 +324,6 @@ export async function handleDiff(
   });
 }
 
-/** A diff entry that changes a goal row, or a citation edge leaving one. */
-function touchesGoal(entry: {
-  rowId: string;
-  before: Record<string, unknown> | null;
-  after: Record<string, unknown> | null;
-}): boolean {
-  return (
-    isGoalRowId(entry.rowId) ||
-    isGoalRowId(entry.before?.citingId) ||
-    isGoalRowId(entry.after?.citingId)
-  );
-}
-
 export async function handleMerge(
   request: Request,
   contributionId: string,
@@ -366,23 +354,15 @@ export async function handleMerge(
 
   const principal = sessionUserToPrincipal(sessionUser, authSource(request));
   try {
-    // GOAL_CHANGE_IS_NODE_ADMIN — read the diff first so the check precedes the merge.
-    const entries = await svc.diff(contributionId);
-    if (entries.some(touchesGoal)) {
-      const gate = checkNodeAdmin({
-        userId: sessionUser.id,
-        walletAddress: sessionUser.walletAddress,
-      });
-      if (!gate.ok) {
-        return NextResponse.json(
-          nodeAdminFailureBody(gate, "knowledge.contributions.merge.goal"),
-          { status: gate.status }
-        );
-      }
-    }
+    // GOAL_CHANGE_IS_NODE_ADMIN is enforced inside ContributionService.merge
+    // (raw diff ids + expected head); this passes the acting wallet.
     const result = await svc.merge({
       principal,
       contributionId,
+      actor: {
+        userId: sessionUser.id,
+        walletAddress: sessionUser.walletAddress,
+      },
       ...(parsed.data.confidencePct != null
         ? { confidencePct: parsed.data.confidencePct }
         : {}),

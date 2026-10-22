@@ -46,6 +46,7 @@ import {
 	createKnowledgeCapability,
 	defaultCanMergeKnowledge,
 	type KnowledgeStorePort,
+	type NodeAdminAuthority,
 	shapeGate,
 } from "@cogni/knowledge-store";
 import {
@@ -139,6 +140,7 @@ import { createScheduleCapability } from "@/bootstrap/capabilities/schedule";
 import { stubVcsCapability } from "@/bootstrap/capabilities/vcs";
 import { createWebSearchCapability } from "@/bootstrap/capabilities/web-search";
 import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
+import { createApproversNodeAdminAuthority } from "@/bootstrap/node-admin-gate";
 import type { RateLimitBypassConfig } from "@/bootstrap/http/wrapPublicRoute";
 import { startProcessHealthPublisher } from "@/bootstrap/publishers";
 import type {
@@ -242,6 +244,8 @@ export interface Container {
 	toolSource: ToolSourcePort;
 	/** External-agent knowledge contribution service — undefined when DOLTGRES_URL is unset */
 	knowledgeContributionService: ContributionService | undefined;
+	/** GOAL_CHANGE_IS_NODE_ADMIN / P0P1_IS_NODE_ADMIN: this node's one node-admin authority (repo-spec admin wallets). */
+	nodeAdmin: NodeAdminAuthority;
 	/** Direct knowledge store port — exposed for the cookie-only browse endpoint. Undefined when DOLTGRES_URL is unset. */
 	knowledgeStorePort: KnowledgeStorePort | undefined;
 	/** EDO hypothesis-loop capability for the langgraph tool bindings AND the bearer-auth REST routes under /api/v1/edo. Always present (stubs throw when DOLTGRES_URL is unset). */
@@ -706,6 +710,7 @@ function createContainer(): Container {
 	let knowledgeCapability: KnowledgeCapability;
 	let edoCapability: EdoCapability;
 	let knowledgeContributionService: ContributionService | undefined;
+	const nodeAdmin = createApproversNodeAdminAuthority();
 	let knowledgeStorePort: KnowledgeStorePort | undefined;
 	let doltgresWorkItems: WorkItemsDoltgresPort;
 	if (env.DOLTGRES_URL) {
@@ -786,6 +791,7 @@ function createContainer(): Container {
 			// reserved for internal `core__knowledge_write` where the caller
 			// controls those fields. See work/projects/proj.knowledge-syntropy.md.
 			gates: [shapeGate],
+			nodeAdmin,
 			...(pushMainOnMerge ? { pushMainOnMerge } : {}),
 		});
 		log.info(
@@ -986,6 +992,7 @@ function createContainer(): Container {
 		repoCapability,
 		toolSource,
 		knowledgeContributionService,
+		nodeAdmin,
 		knowledgeStorePort,
 		edoCapability,
 		threadPersistenceForUser: (userId: UserId) =>

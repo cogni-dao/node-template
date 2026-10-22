@@ -21,8 +21,8 @@ import {
   createWorkItem,
   InvalidCursorError,
   listWorkItems,
-  WorkItemPriorityAuthzError,
   WorkItemsBackendNotReadyError,
+  NodeAdminRequiredError,
 } from "@/app/_facades/work/items.server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
@@ -127,8 +127,11 @@ export const POST = wrapRouteHandlerWithLogging(
         status: 201,
       });
     } catch (e) {
-      if (e instanceof WorkItemPriorityAuthzError) {
-        return NextResponse.json(e.body, { status: e.status });
+      if (e instanceof NodeAdminRequiredError) {
+        return NextResponse.json(
+          { error: e.message, errorCode: e.errorCode, action: e.action },
+          { status: e.status }
+        );
       }
       if (e instanceof WorkItemsBackendNotReadyError) {
         return NextResponse.json({ error: e.message }, { status: 503 });
