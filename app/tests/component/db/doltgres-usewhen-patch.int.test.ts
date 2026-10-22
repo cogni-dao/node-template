@@ -25,18 +25,18 @@ import { execSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  EmptyKnowledgePatchError,
-  KnowledgeContributionEditSchema,
+  ContributionConflictError,
   createContributionService,
   defaultCanMergeKnowledge,
+  EmptyKnowledgePatchError,
+  HypothesisMissingEvaluateAtError,
+  KnowledgeContributionEditSchema,
   NodeAdminRequiredError,
-  ContributionConflictError,
-  HypothesisMissingEvaluateAtError
 } from "@cogni/knowledge-store";
 import {
   buildDoltgresClient,
-  DoltgresKnowledgeContributionAdapter,
   DoltBranchSessionRunner,
+  DoltgresKnowledgeContributionAdapter,
   DoltgresKnowledgeStoreAdapter,
 } from "@cogni/knowledge-store/adapters/doltgres";
 import postgres, { type Sql } from "postgres";
@@ -221,7 +221,7 @@ describe("knowledge useWhen patch + q filter (task.5204)", () => {
     const reviewer = {
       id: "goal-reviewer",
       kind: "user" as const,
-      role: "admin" as const
+      role: "admin" as const,
     };
     const goalId = "goal-native-gated";
     let allowed = false;
@@ -246,16 +246,16 @@ describe("knowledge useWhen patch + q filter (task.5204)", () => {
                 {
                   op: "patch",
                   targetRowId: goalId,
-                  entry: { evaluateAt: "2027-02-01T00:00:00.000Z" }
-                }
-              ]
+                  entry: { evaluateAt: "2027-02-01T00:00:00.000Z" },
+                },
+              ],
             });
           }
           return allowed
             ? { ok: true as const }
             : { ok: false as const, errorCode: "authz_denied" as const };
-        }
-      }
+        },
+      },
     });
     await expect(
       adapter.create({
@@ -269,10 +269,10 @@ describe("knowledge useWhen patch + q filter (task.5204)", () => {
               domain: DOMAIN,
               title: "Undated goal",
               content: "Must have By",
-              entryType: "goal"
-            }
-          }
-        ]
+              entryType: "goal",
+            },
+          },
+        ],
       })
     ).rejects.toBeInstanceOf(HypothesisMissingEvaluateAtError);
     const rec = await adapter.create({
@@ -287,10 +287,10 @@ describe("knowledge useWhen patch + q filter (task.5204)", () => {
             title: "Native commitment",
             content: "KPI x, target one",
             entryType: "goal",
-            evaluateAt: "2027-01-01T00:00:00.000Z"
-          }
-        }
-      ]
+            evaluateAt: "2027-01-01T00:00:00.000Z",
+          },
+        },
+      ],
     });
     contributionId = rec.contributionId;
     const mainBefore = await readClient.unsafe(
@@ -317,12 +317,15 @@ describe("knowledge useWhen patch + q filter (task.5204)", () => {
     ).toEqual(new Date("2027-02-01T00:00:00.000Z"));
     // The durable merge ACK precedes private branch housekeeping. Observe its
     // eventual completion through the independent reader without refreshing it.
-    await expect.poll(
-      () => readClient.unsafe(
-        `SELECT name FROM dolt.branches WHERE name = '${rec.branch}'`
-      ),
-      { timeout: 5_000, interval: 50 }
-    ).toHaveLength(0);
+    await expect
+      .poll(
+        () =>
+          readClient.unsafe(
+            `SELECT name FROM dolt.branches WHERE name = '${rec.branch}'`
+          ),
+        { timeout: 5_000, interval: 50 }
+      )
+      .toHaveLength(0);
     const mergedHead = await readClient.unsafe(
       "SELECT dolt_hashof('main') AS hash"
     );
