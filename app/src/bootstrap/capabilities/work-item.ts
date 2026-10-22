@@ -37,6 +37,13 @@ import { isPrivilegedPriority } from "@cogni/knowledge-store";
 export interface WorkItemCapabilityDeps {
   readonly workItemQuery: WorkItemQueryPort;
   readonly workItemCommand: WorkItemCommandPort;
+  /**
+   * QUERY_READS_THE_LIVE_BACKLOG: `query` lists through this when wired — the
+   * node's Doltgres work items (the same read `GET /api/v1/work/items` uses).
+   * The runtime image carries no `work/` tree, so a markdown-bound query always
+   * saw an empty backlog. Writes are unchanged.
+   */
+  readonly backlogReader?: Pick<WorkItemQueryPort, "list">;
 }
 
 function assigneeId(a: SubjectRef): string {
@@ -80,7 +87,7 @@ export function createWorkItemCapability(
 
   return {
     async query(params): Promise<readonly WorkItemInfo[]> {
-      const result = await workItemQuery.list({
+      const result = await (deps.backlogReader ?? workItemQuery).list({
         ...(params.statuses && {
           statuses: params.statuses as readonly WorkItemStatus[],
         }),
