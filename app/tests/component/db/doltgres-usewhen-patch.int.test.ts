@@ -243,7 +243,14 @@ describe("knowledge useWhen patch + q filter (task.5204)", () => {
       knowledgeSql: {
         unsafe: async (query) => {
           projectedQueries.push(query);
-          return readClient.unsafe(query);
+          try {
+            return await readClient.unsafe(query);
+          } catch (cause) {
+            // Isolated synthetic fixture only: identify the exact engine statement.
+            throw new Error(`Analytics fixture projection failed: ${query}`, {
+              cause,
+            });
+          }
         },
       },
     });
@@ -302,6 +309,29 @@ describe("knowledge useWhen patch + q filter (task.5204)", () => {
       (query) => query.includes("FROM dolt_diff") && query.endsWith("LIMIT 101")
     );
     expect(diffQuery).toBeDefined();
+    // Upstream #1405/#3115 report IN analyzer failures on system tables.
+    // Keep this bounded control diagnostic: future engine support is welcome.
+    const legacyQuery = diffQuery?.replace(
+      "diff_type = 'added' OR diff_type = 'removed'",
+      "diff_type IN ('added', 'removed')"
+    );
+    let legacyStatus = "supported";
+    let legacyFailure: string | null = null;
+    try {
+      expect(legacyQuery).toBeDefined();
+      await readClient.unsafe(legacyQuery as string);
+    } catch (error) {
+      legacyStatus = "failed";
+      legacyFailure = error instanceof Error ? error.message : String(error);
+    }
+    console.info(
+      JSON.stringify({
+        event: "test.knowledge_analytics.in_compatibility",
+        query: legacyQuery,
+        status: legacyStatus,
+        failure: legacyFailure,
+      })
+    );
     const durations: number[] = [];
     for (let sample = 0; sample < 10; sample++) {
       const started = performance.now();

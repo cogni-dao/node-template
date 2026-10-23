@@ -124,8 +124,10 @@ export function createDoltgresAnalyticsSources(input: {
     async changeIds(receipt, limit) {
       const base = commitHash(receipt.baseCommit);
       const head = commitHash(receipt.headCommit ?? receipt.baseCommit);
+      // Use equality predicates: Doltgres system-table IN analysis can fail
+      // underneath LIMIT (dolthub/doltgresql#1405, #3115).
       const rows = await contributions.unsafe(
-        `SELECT from_id, to_id FROM dolt_diff(${escapeRef(base)}, ${escapeRef(head)}, 'knowledge') WHERE diff_type IN ('added', 'removed') OR (diff_type = 'modified' AND (${contentChanged})) ORDER BY to_id, from_id LIMIT ${sentinelLimit(limit, ANALYTICS_BUDGET.changes)}`
+        `SELECT from_id, to_id FROM dolt_diff(${escapeRef(base)}, ${escapeRef(head)}, 'knowledge') WHERE diff_type = 'added' OR diff_type = 'removed' OR (diff_type = 'modified' AND (${contentChanged})) ORDER BY to_id, from_id LIMIT ${sentinelLimit(limit, ANALYTICS_BUDGET.changes)}`
       );
       return rows.map((row) => String(row.to_id ?? row.from_id));
     },
