@@ -792,6 +792,9 @@ importers:
 
   packages/knowledge-base-ui:
     devDependencies:
+      '@cogni/work-items':
+        specifier: workspace:@cogni-dao/work-items@*
+        version: link:../work-items
       '@testing-library/jest-dom':
         specifier: ^6.9.1
         version: 6.9.1
