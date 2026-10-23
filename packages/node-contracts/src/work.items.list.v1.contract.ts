@@ -33,13 +33,17 @@ const ExternalRefSchema = z.object({
  * Do-it-now scores (story.5111): axis id → { v: int 0–5, ev?: evidence URL }.
  * Axis ids are config (hub `work-item-scores-design`), so keys are an open,
  * bounded string set rather than an enum. Writes replace the whole object.
+ * `ev` is http(s) only: it is rendered as a link (javascript:/data: rejected).
  */
 export const WorkItemScoresInputSchema = z
   .record(
-    z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/),
+    z.string().regex(/^[a-z][a-z0-9_]{0,31}$/),
     z.strictObject({
       v: z.number().int().min(0).max(5),
-      ev: z.url().max(500).optional(),
+      ev: z
+        .url({ protocol: /^https?$/ })
+        .max(500)
+        .optional(),
     })
   )
   .refine((scores) => Object.keys(scores).length <= 12, {

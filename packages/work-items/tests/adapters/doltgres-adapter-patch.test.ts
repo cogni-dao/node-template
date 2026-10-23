@@ -264,6 +264,7 @@ function casHarness(options: { concurrentBumpBeforeUpdate?: boolean } = {}) {
       if (scores !== undefined) {
         next.scores = asJsonb(JSON.parse(scores.replace(/''/g, "'")));
       }
+      if (/\bscores = NULL\b/.test(query)) next.scores = null;
       store.set(id, next);
       return [next];
     }
@@ -451,5 +452,84 @@ describe("DoltgresWorkItemAdapter.patch — collaborator triage fields (task.528
       adapter.patch({ id: toWorkItemId(CAS_ID), set: { priority: 0 } }, "  ")
     ).rejects.toBeInstanceOf(WorkItemAuthorizationError);
     expect(queries).toHaveLength(0);
+  });
+});
+
+describe("DoltgresWorkItemAdapter — scores (story.5111)", () => {
+  const scores = {
+    goal: { v: 5, ev: "https://cognidao.org/knowledge/goal-fleet-pays-itself" },
+    ease: { v: 3 },
+  };
+
+  it("creates an item with scores and round-trips them", async () => {
+    const queries: string[] = [];
+    const sql = makeFakeDoltgresSql((query) => {
+      if (!query.startsWith("INSERT INTO work_items")) return [];
+      const id = /VALUES \('([^']+)'/.exec(query)?.[1] ?? "";
+      const written = /'(\{.*?\}\})'::jsonb/.exec(query)?.[1];
+      return [
+        {
+          ...casSeed,
+          id,
+          revision: 0,
+          scores: written ? asJsonb(JSON.parse(written)) : null,
+        },
+      ];
+    }, queries);
+
+    const created = await new DoltgresWorkItemAdapter(sql).create(
+      { type: "task", title: "scored", scores },
+      CREATOR
+    );
+
+    const insert = queries.find((q) => q.startsWith("INSERT INTO work_items"));
+    expect(insert).toMatch(/^INSERT INTO work_items \([^)]*\bscores\b[^)]*\) VALUES/);
+    expect(insert).toContain(`'${JSON.stringify(scores)}'::jsonb`);
+    expect(created.scores).toEqual(scores);
+    expect(committed(queries)).toBe(true);
+  });
+
+  it("reads a NULL scores column as absent", async () => {
+    const { adapter, store } = casHarness();
+    store.set(CAS_ID, { ...casSeed, scores: null });
+
+    const item = await adapter.get(toWorkItemId(CAS_ID));
+
+    expect(item).not.toBeNull();
+    expect(item && "scores" in item).toBe(false);
+  });
+
+  it("drops entries whose v is not an integer instead of coercing them", async () => {
+    const { adapter, store } = casHarness();
+    store.set(CAS_ID, {
+      ...casSeed,
+      scores: {
+        goal: { v: 4 },
+        time: { v: null },
+        ease: { v: true },
+        agent: { v: "3" },
+        unblocks: { v: 2.5 },
+      },
+    });
+
+    const item = await adapter.get(toWorkItemId(CAS_ID));
+
+    expect(item?.scores).toEqual({ goal: { v: 4 } });
+  });
+
+  it("clears scores to SQL NULL with scores:null, and the proof passes", async () => {
+    const { adapter, queries, store } = casHarness();
+    store.set(CAS_ID, { ...casSeed, scores: asJsonb(scores) });
+
+    const result = await adapter.patch(
+      { id: toWorkItemId(CAS_ID), expectedRevision: 3, set: { scores: null } },
+      COLLABORATOR
+    );
+
+    expect(updateOf(queries)).toContain("scores = NULL");
+    expect(committed(queries)).toBe(true);
+    expect(result.revision).toBe(4);
+    expect("scores" in result).toBe(false);
+    expect(store.get(CAS_ID)?.scores).toBeNull();
   });
 });

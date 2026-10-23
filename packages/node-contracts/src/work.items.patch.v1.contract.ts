@@ -50,7 +50,8 @@ export const workItemsPatchOperation = {
         priority: z.number().int().optional(),
         rank: z.number().int().optional(),
         estimate: z.number().int().optional(),
-        scores: WorkItemScoresInputSchema.optional(),
+        // null clears the column back to SQL NULL (scores read as absent).
+        scores: WorkItemScoresInputSchema.nullable().optional(),
         labels: z.array(z.string()).optional(),
         specRefs: z.array(z.string()).optional(),
         branch: z.string().optional(),

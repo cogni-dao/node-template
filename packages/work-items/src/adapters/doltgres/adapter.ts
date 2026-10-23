@@ -454,9 +454,10 @@ function optionalScores(value: unknown): WorkItemScores | undefined {
   for (const [axis, entry] of Object.entries(parsed)) {
     if (!entry || typeof entry !== "object") continue;
     const { v, ev } = entry as { v?: unknown; ev?: unknown };
-    const score = Number(v);
-    if (!Number.isFinite(score)) continue;
-    scores[axis] = typeof ev === "string" ? { v: score, ev } : { v: score };
+    // Never coerce: a null/boolean/string/fractional `v` is not a score, and a
+    // missing axis must read as absent, not zero.
+    if (typeof v !== "number" || !Number.isInteger(v)) continue;
+    scores[axis] = typeof ev === "string" ? { v, ev } : { v };
   }
   return scores;
 }

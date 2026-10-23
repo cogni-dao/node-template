@@ -18,6 +18,7 @@ import type {
   SubjectRef,
   WorkItem,
   WorkItemId,
+  WorkItemScores,
   WorkItemStatus,
   WorkItemType,
   WorkQuery,
@@ -51,7 +52,8 @@ export interface WorkItemCommandPort {
     priority?: number;
     rank?: number;
     estimate?: number;
-    scores?: WorkItem["scores"];
+    /** Doltgres-only (story.5111); the markdown adapter ignores it. */
+    scores?: WorkItemScores;
   }): Promise<WorkItem>;
 
   patch(input: {
@@ -64,7 +66,6 @@ export interface WorkItemCommandPort {
         | "summary"
         | "outcome"
         | "estimate"
-        | "scores"
         | "priority"
         | "rank"
         | "status"
@@ -75,7 +76,14 @@ export interface WorkItemCommandPort {
         | "reviewer"
         | "node"
       >
-    >;
+    > & {
+      /**
+       * Replaces the whole scores object; `null` clears it to SQL NULL.
+       * Doltgres-only (story.5111): the markdown adapter does not persist
+       * scores and ignores this field.
+       */
+      scores?: WorkItemScores | null;
+    };
   }): Promise<WorkItem>;
 
   transitionStatus(input: {
