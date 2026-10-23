@@ -4,6 +4,7 @@
 /**
  * Module: `tests/component/db/doltgres-usewhen-patch.int.test.ts`
  * Purpose: Prove against a real Doltgres that `op:'patch'` refines a retrieval trigger while leaving the body byte-identical, and that `listKnowledge({q})` finds the entry by a `useWhen` substring (task.5204).
+ * Analytics: proves metadata projections and semantic diff parity on the real engine, including null versus empty triggers and confidence-only exclusions.
  * Scope: Component test — boots `dolthub/doltgresql:0.57.3` via testcontainers and drives `DoltgresKnowledgeContributionAdapter` + `DoltgresKnowledgeStoreAdapter` directly. Does not exercise HTTP routes, auth, or the contribution service's policy gates.
  * Invariants:
  *   - RED CONTROL first: the pre-existing `op:'update'` path is shown to clobber
@@ -39,6 +40,7 @@ import {
   DoltgresKnowledgeContributionAdapter,
   DoltgresKnowledgeStoreAdapter,
 } from "@cogni/knowledge-store/adapters/doltgres";
+import { createDoltgresAnalyticsSources } from "@cogni/knowledge-store/analytics/doltgres";
 import postgres, { type Sql } from "postgres";
 import {
   GenericContainer,
@@ -216,6 +218,151 @@ describe("knowledge useWhen patch + q filter (task.5204)", () => {
     await branchClient?.end({ timeout: 5 }).catch(() => undefined);
     if (container) await container.stop();
   });
+
+  it("projects semantic changes and fresh metadata without hydrating bodies", async () => {
+    const prefix = "analytics-proof-";
+    await store.withWrite(
+      { operationId: "analytics:seed", message: "seed analytics parity" },
+      async (write) => {
+        for (const suffix of [
+          "body",
+          "title",
+          "null-empty",
+          "confidence",
+          "removed",
+        ]) {
+          await write.addKnowledge({
+            id: prefix + suffix,
+            domain: DOMAIN,
+            title: `Before ${suffix}`,
+            content: LONG_CONTENT,
+            entryType: "finding",
+            sourceType: "human",
+            useWhen: null,
+          });
+        }
+      }
+    );
+    const baseCommit = await store.currentCommit();
+    const projectedQueries: string[] = [];
+    const sources = createDoltgresAnalyticsSources({
+      knowledgeSql: {
+        unsafe: async (query) => {
+          projectedQueries.push(query);
+          try {
+            return await readClient.unsafe(query);
+          } catch (cause) {
+            // Isolated synthetic fixture only: identify the exact engine statement.
+            throw new Error(`Analytics fixture projection failed: ${query}`, {
+              cause,
+            });
+          }
+        },
+      },
+    });
+    // Prime the actual pool before an independent admitted writer commits.
+    expect(
+      (await sources.atoms(DOMAIN, 500)).find(
+        (atom) => atom.id === prefix + "title"
+      )?.title
+    ).toBe("Before title");
+    await store.withWrite(
+      { operationId: "analytics:change", message: "semantic parity changes" },
+      async (write) => {
+        await write.updateKnowledge(prefix + "body", {
+          // Equal long prefix: only a full-value comparison can detect this tail.
+          content: `${LONG_CONTENT}\nChanged tail: 😀`,
+        });
+        await write.updateKnowledge(prefix + "title", { title: "After title" });
+        await write.updateKnowledge(prefix + "null-empty", { useWhen: "" });
+        await write.updateKnowledge(prefix + "confidence", {
+          confidencePct: 31,
+        });
+        await write.deleteKnowledge(prefix + "removed");
+        await write.addKnowledge({
+          id: prefix + "added",
+          domain: DOMAIN,
+          title: "Added atom",
+          content: "Added body",
+          entryType: "finding",
+          sourceType: "human",
+        });
+      }
+    );
+    const headCommit = await store.currentCommit();
+    const receipt = {
+      contributionId: "fixture",
+      resolvedAt: new Date().toISOString(),
+      baseCommit,
+      headCommit,
+    };
+    expect((await sources.changeIds(receipt, 100)).sort()).toEqual(
+      ["added", "body", "null-empty", "removed", "title"].map(
+        (suffix) => prefix + suffix
+      )
+    );
+    expect(await sources.changeIds(receipt, 2)).toHaveLength(3); // limit+1 sentinel, not a silently complete prefix.
+    for (let pass = 0; pass < 3; pass++) {
+      const metadata = await sources.atoms(DOMAIN, 500);
+      expect(metadata.find((atom) => atom.id === prefix + "title")?.title).toBe(
+        "After title"
+      );
+      expect(
+        metadata.find((atom) => atom.id === prefix + "removed")
+      ).toBeUndefined();
+      expect(metadata.every((atom) => !("content" in atom))).toBe(true);
+    }
+    const diffQuery = projectedQueries.find(
+      (query) => query.includes("FROM dolt_diff") && query.endsWith("LIMIT 101")
+    );
+    expect(diffQuery).toBeDefined();
+    // Upstream #1405/#3115 report IN analyzer failures on system tables.
+    // Keep this bounded control diagnostic: future engine support is welcome.
+    const legacyQuery = diffQuery?.replace(
+      "diff_type = 'added' OR diff_type = 'removed'",
+      "diff_type IN ('added', 'removed')"
+    );
+    let legacyStatus = "supported";
+    let legacyFailure: string | null = null;
+    try {
+      expect(legacyQuery).toBeDefined();
+      await readClient.unsafe(legacyQuery as string);
+    } catch (error) {
+      legacyStatus = "failed";
+      legacyFailure = error instanceof Error ? error.message : String(error);
+    }
+    console.info(
+      JSON.stringify({
+        event: "test.knowledge_analytics.in_compatibility",
+        query: legacyQuery,
+        status: legacyStatus,
+        failure: legacyFailure,
+      })
+    );
+    const durations: number[] = [];
+    for (let sample = 0; sample < 10; sample++) {
+      const started = performance.now();
+      await sources.changeIds(receipt, 100);
+      durations.push(performance.now() - started);
+    }
+    let explainStatus = "available";
+    let plan: unknown = null;
+    try {
+      plan = await readClient.unsafe(`EXPLAIN ANALYZE ${diffQuery}`);
+    } catch {
+      explainStatus = "unsupported_or_failed";
+    }
+    console.info(
+      JSON.stringify({
+        event: "test.knowledge_analytics.synthetic_cost",
+        fixture: "five-semantic-deltas-long-tail-and-confidence-control",
+        samples: durations.length,
+        p95Ms: durations.sort((a, b) => a - b)[9],
+        explainStatus,
+        plan,
+      })
+    );
+  }, 180_000);
 
   it("preserves goal admin gates, rejects a changed reviewed head and acknowledges a reaped merged branch", async () => {
     const reviewer = {
