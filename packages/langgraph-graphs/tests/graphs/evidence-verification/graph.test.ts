@@ -9,7 +9,7 @@ import {
   WORK_ITEM_TRANSITION_NAME,
   workItemTransitionContract,
 } from "@cogni/ai-tools";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
   createEvidenceVerificationGraph,
@@ -62,7 +62,7 @@ function startExercise(
     missingHost?: boolean;
     toolIds?: string[];
     complete?: (messages: string, call: number) => CompletionResult;
-    slow?: boolean;
+    onCompletionStart?: () => void;
     usage?: boolean;
     beforeTool?: (name: string, index: number) => Promise<void>;
     completionGate?: Promise<void>;
@@ -86,6 +86,7 @@ function startExercise(
         text(accept),
       ])[i];
     if (!response) throw new Error("unexpected model call");
+    options.onCompletionStart?.();
     return {
       stream: (async function* () {
         await options.completionGate;
@@ -108,9 +109,7 @@ function startExercise(
             },
           };
       })(),
-      final: options.slow
-        ? new Promise((resolve) => setTimeout(() => resolve(response), 20))
-        : Promise.resolve(response),
+      final: Promise.resolve(response),
     };
   };
   const p = options.program ?? program;
@@ -186,22 +185,6 @@ function deferred() {
     resolve = done;
   });
   return { promise, resolve };
-}
-
-async function boundedResult<T>(
-  promise: Promise<T>
-): Promise<T | "still pending"> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<"still pending">((resolve) => {
-        timer = setTimeout(() => resolve("still pending"), 150);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 describe("evidence verification through the injected runner", () => {
@@ -392,15 +375,28 @@ describe("evidence verification through the injected runner", () => {
   });
 
   it("deadline prevents subsequent calls after one in-flight completion", async () => {
-    const { result, calls } = await exercise({
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const started = deferred();
+    const stalled = deferred();
+    const running = exercise({
       program: { ...program, limits: { deadlineMs: 5 } },
-      slow: true,
+      onCompletionStart: started.resolve,
+      completionGate: stalled.promise,
     });
-    expect(result.structuredOutput).toMatchObject({
-      status: "incomplete",
-      reason: "deadline_or_cancelled",
-    });
-    expect(calls).toHaveLength(1);
+    try {
+      await started.promise;
+      await vi.advanceTimersByTimeAsync(5);
+      stalled.resolve();
+      const { result, calls } = await running;
+      expect(result.structuredOutput).toMatchObject({
+        status: "incomplete",
+        reason: "deadline_or_cancelled",
+      });
+      expect(calls).toHaveLength(1);
+    } finally {
+      stalled.resolve();
+      vi.useRealTimers();
+    }
   });
 
   it.each([
@@ -408,22 +404,27 @@ describe("evidence verification through the injected runner", () => {
     "initial",
     "child",
   ] as const)("settles an unresolved %s read at deadline and ignores its late result", async (stage) => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const started = deferred();
     const stalled = deferred();
     const target = stage === "guidance" ? 0 : stage === "initial" ? 1 : 2;
     const { runner, calls, executions, events } = startExercise({
       program: { ...program, limits: { deadlineMs: 15 } },
       replies: [toolCall(GOAL_LIST_NAME)],
       beforeTool: async (_name, index) => {
-        if (index === target) await stalled.promise;
+        if (index === target) {
+          started.resolve();
+          await stalled.promise;
+        }
       },
     });
     const draining = (async () => {
       for await (const event of runner.stream) events.push(event);
     })();
     try {
-      const result = await boundedResult(runner.final);
-      expect(result).not.toBe("still pending");
-      if (result === "still pending") return;
+      await started.promise;
+      await vi.advanceTimersByTimeAsync(15);
+      const result = await runner.final;
       expect(result.structuredOutput).toMatchObject({
         status: "incomplete",
         reason: "deadline_or_cancelled",
@@ -431,7 +432,7 @@ describe("evidence verification through the injected runner", () => {
       await draining;
       const terminal = JSON.stringify(events);
       stalled.resolve();
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await vi.advanceTimersByTimeAsync(0);
       expect(JSON.stringify(events)).toBe(terminal);
       expect(calls).toHaveLength(stage === "child" ? 1 : 0);
       expect(executions).toHaveLength(target + 1);
@@ -440,14 +441,18 @@ describe("evidence verification through the injected runner", () => {
       );
     } finally {
       stalled.resolve();
+      vi.useRealTimers();
     }
   });
 
   it("drains a cancellation-ignoring model's late usage before terminal without continuation", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const started = deferred();
     const stalled = deferred();
     const { runner, calls, executions, events } = startExercise({
       program: { ...program, limits: { deadlineMs: 15 } },
       completionGate: stalled.promise,
+      onCompletionStart: started.resolve,
       usage: true,
       replies: [toolCall(WORK_ITEM_TRANSITION_NAME)],
     });
@@ -455,8 +460,14 @@ describe("evidence verification through the injected runner", () => {
       for await (const event of runner.stream) events.push(event);
     })();
     try {
+      let settled = false;
+      void runner.final.then(() => {
+        settled = true;
+      });
+      await started.promise;
+      await vi.advanceTimersByTimeAsync(15);
       // Unlike read waits, model cancellation is cooperative: keep billing custody.
-      expect(await boundedResult(runner.final)).toBe("still pending");
+      expect(settled).toBe(false);
       stalled.resolve();
       await draining;
       const result = await runner.final;
@@ -476,6 +487,7 @@ describe("evidence verification through the injected runner", () => {
       ]);
     } finally {
       stalled.resolve();
+      vi.useRealTimers();
     }
   });
 
