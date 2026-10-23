@@ -20,11 +20,13 @@
 "use client";
 
 import type { WorkItemDto } from "@cogni/node-contracts";
+import { Button } from "@cogni/node-ui-kit/shadcn/button";
 import { HeaderFilter } from "@cogni/node-ui-kit/header-filter";
 
 import { DataGridColumnHeader } from "@cogni/node-ui-kit/reui/data-grid/data-grid-column-header";
 import { rankScore } from "@cogni/work-items";
-import { createColumnHelper } from "@tanstack/react-table";
+import { type Column, createColumnHelper } from "@tanstack/react-table";
+import { ArrowDownIcon, ArrowUpIcon, ChevronsUpDownIcon } from "lucide-react";
 import { StatusPill, TypeIcon } from "./work-item-icons";
 
 const col = createColumnHelper<WorkItemDto>();
@@ -33,6 +35,33 @@ const formatStatus = (v: string) =>
   v.replace("needs_", "").replaceAll("_", " ");
 
 const formatProject = (v: string) => v.replace("proj.", "");
+
+/** App binding: the shared generic header otherwise forces ascending first. */
+export function WorkItemRankHeader<TData>({
+  column,
+}: {
+  readonly column: Column<TData, number | undefined>;
+}) {
+  const direction = column.getIsSorted();
+  const Icon =
+    direction === "desc"
+      ? ArrowDownIcon
+      : direction === "asc"
+        ? ArrowUpIcon
+        : ChevronsUpDownIcon;
+  return (
+    <Button
+      variant="ghost"
+      className="-ms-2 h-6 px-2 font-normal"
+      onClick={() => column.toggleSorting()}
+      disabled={
+        !column.getCanSort() || column.getFacetedRowModel().rows.length === 0
+      }
+    >
+      Rank <Icon className="size-3.25 opacity-60" aria-hidden="true" />
+    </Button>
+  );
+}
 
 export const columns = [
   col.accessor("priority", {
@@ -61,9 +90,7 @@ export const columns = [
   // story.5111: WSJF rank from the package; unscored items always sort last.
   col.accessor((row) => rankScore(row.scores), {
     id: "rankScore",
-    header: ({ column }) => (
-      <DataGridColumnHeader column={column} title="Rank" />
-    ),
+    header: ({ column }) => <WorkItemRankHeader column={column} />,
     size: 65,
     cell: (info) => {
       const v = info.getValue();
