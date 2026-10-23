@@ -24,6 +24,8 @@ export interface WorkItemInfo {
   readonly status: string;
   readonly priority?: number;
   readonly rank?: number;
+  /** Derived by the shared work-items package; never an agent-writeable field. */
+  readonly rankScore?: number;
   readonly summary?: string;
   readonly projectId?: string;
   readonly actor?: string;

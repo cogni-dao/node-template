@@ -56,6 +56,7 @@ describe("core__goal_list", () => {
           title: "Goal: a",
           evaluateAt: "2026-12-31T00:00:00.000Z",
           content: "KPI x",
+          sourceUrlUnavailable: true,
         },
       ],
     });

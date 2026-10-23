@@ -38,7 +38,7 @@ import type {
   WorkItemStatus,
   WorkItemType,
 } from "@cogni/work-items";
-import { toWorkItemId } from "@cogni/work-items";
+import { rankScore, toWorkItemId } from "@cogni/work-items";
 import {
   WorkItemRevisionConflictError,
   type WorkItemsDoltgresPort,
@@ -81,6 +81,7 @@ function assigneeId(a: SubjectRef): string {
 }
 
 function toWorkItemInfo(item: WorkItem): WorkItemInfo {
+  const evaluationRank = rankScore(item.scores);
   return {
     id: item.id,
     type: item.type,
@@ -92,6 +93,7 @@ function toWorkItemInfo(item: WorkItem): WorkItemInfo {
     ...(item.actor !== "either" && { actor: item.actor }),
     ...(item.priority !== undefined && { priority: item.priority }),
     ...(item.rank !== undefined && { rank: item.rank }),
+    ...(evaluationRank !== undefined && { rankScore: evaluationRank }),
     ...(item.summary !== undefined && { summary: item.summary }),
     ...(item.projectId !== undefined && { projectId: item.projectId }),
     ...(item.branch !== undefined && { branch: item.branch }),

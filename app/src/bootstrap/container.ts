@@ -879,6 +879,7 @@ function createContainer(): Container {
 
 	// ToolSource with real implementations (per CAPABILITY_INJECTION)
 	const toolBindings = createToolBindings({
+		nodePublicOrigin: env.APP_BASE_URL,
 		knowledgeCapability,
 		edoCapability,
 		metricsCapability,

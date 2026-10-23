@@ -31,6 +31,7 @@ const PATCHED: WorkItemInfo = {
   status: "needs_implement",
   priority: 1,
   rank: 4,
+  rankScore: 6.4,
   labels: [],
   assignees: [],
   updatedAt: "2026-10-21T00:00:00.000Z",
@@ -229,6 +230,7 @@ describe("core__work_item_transition patch", () => {
     });
     expect(out.success).toBe(true);
     expect(out.message).toContain("scores");
+    expect(out.rankScore).toBe(6.4);
   });
 
   it("sends no priority field on a scores-only patch (p0/p1 priority stays a proposal)", async () => {
@@ -255,10 +257,16 @@ describe("core__work_item_transition patch", () => {
       workItemCapability: cap,
     });
 
-    await tool.execute({ action: "patch", id: "task.5001", scores: null });
+    await tool.execute({
+      action: "patch",
+      id: "task.5001",
+      scores: null,
+      expectedRevision: 7,
+    });
 
     expect(cap.patch).toHaveBeenCalledWith({
       id: "task.5001",
+      expectedRevision: 7,
       set: { scores: null },
     });
   });
@@ -268,6 +276,7 @@ describe("core__work_item_transition patch", () => {
       WorkItemTransitionInputSchema.safeParse({
         action: "patch",
         id: "task.5001",
+        expectedRevision: 7,
         scores,
       }).success;
     expect(parse({ goal: { v: 7 } })).toBe(true);
@@ -311,9 +320,53 @@ describe("core__work_item_transition patch", () => {
         action: "patch",
         id: "task.5001",
         scores: { goal: { v: 5 } },
+        expectedRevision: 7,
       })
     ).rejects.toThrow(
       "Invalid work-item scores: goal: a score of 4 or 5 needs ev"
     );
+  });
+  it("requires CAS and forbids priority for scores and clear, before calling the capability", async () => {
+    const cap = capability(async () => PATCHED);
+    const tool = createWorkItemTransitionImplementation({
+      workItemCapability: cap,
+    });
+    for (const scores of [{ goal: { v: 3 } }, null]) {
+      const base = { action: "patch" as const, id: "task.5001", scores };
+      expect(WorkItemTransitionInputSchema.safeParse(base).success).toBe(false);
+      await expect(tool.execute(base)).rejects.toThrow(
+        "require expectedRevision"
+      );
+      const withPriority = { ...base, expectedRevision: 7, priority: 2 };
+      expect(
+        WorkItemTransitionInputSchema.safeParse(withPriority).success
+      ).toBe(false);
+      await expect(tool.execute(withPriority)).rejects.toThrow(
+        "must not carry priority"
+      );
+      expect(
+        WorkItemTransitionInputSchema.safeParse({
+          ...base,
+          expectedRevision: 7,
+        }).success
+      ).toBe(true);
+    }
+    expect(cap.patch).not.toHaveBeenCalled();
+    expect(
+      WorkItemTransitionInputSchema.safeParse({
+        action: "transition",
+        id: "task.5001",
+        scores: { goal: { v: 3 } },
+        expectedRevision: 7,
+        toStatus: "done",
+      }).success
+    ).toBe(false);
+    expect(
+      WorkItemTransitionInputSchema.safeParse({
+        action: "patch",
+        id: "task.5001",
+        priority: 2,
+      }).success
+    ).toBe(true);
   });
 });

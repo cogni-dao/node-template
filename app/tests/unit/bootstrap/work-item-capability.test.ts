@@ -227,7 +227,9 @@ describe("createWorkItemCapability", () => {
       { id: row.id, set: { scores } },
       "scheduled-grant-user-b"
     );
-    expect((await cap.query({ ids: [row.id] }))[0]?.scores).toEqual(scores);
+    const readback = (await cap.query({ ids: [row.id] }))[0];
+    expect(readback?.scores).toEqual(scores);
+    expect(readback?.rankScore).toBe(6.4);
   });
 
   it("a missing authenticated run actor fails before the live store writes", async () => {

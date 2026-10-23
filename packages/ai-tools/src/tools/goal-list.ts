@@ -19,6 +19,7 @@ import { z } from "zod";
 
 import type { KnowledgeCapability } from "../capabilities/knowledge";
 import type { BoundTool, ToolContract, ToolImplementation } from "../types";
+import { readSourceProvenance } from "../source-url";
 
 export const GoalListInputSchema = z.object({}).strict();
 export type GoalListInput = z.infer<typeof GoalListInputSchema>;
@@ -30,6 +31,8 @@ export const GoalListOutputSchema = z.object({
       title: z.string(),
       evaluateAt: z.string().nullable(),
       content: z.string(),
+      sourceUrl: z.string().url().optional(),
+      sourceUrlUnavailable: z.literal(true).optional(),
     })
   ),
 });
@@ -45,7 +48,7 @@ export const goalListContract: ToolContract<
 > = {
   name: GOAL_LIST_NAME,
   description:
-    "List the node's approved DAO goals: id, title, deadline, and statement with KPI and target.",
+    "List the node's approved DAO goals: id, title, deadline, statement with KPI and target, and canonical sourceUrl for the content read.",
   effect: "read_only",
   inputSchema: GoalListInputSchema,
   outputSchema: GoalListOutputSchema,
@@ -55,6 +58,8 @@ export const goalListContract: ToolContract<
 
 export interface GoalListDeps {
   readonly knowledgeCapability: KnowledgeCapability;
+  /** Trusted node public origin supplied by server composition, never tool input. */
+  readonly nodePublicOrigin?: string | undefined;
 }
 
 export function createGoalListImplementation(
@@ -72,6 +77,7 @@ export function createGoalListImplementation(
           title,
           evaluateAt,
           content,
+          ...readSourceProvenance(deps.nodePublicOrigin, "knowledge", id),
         })),
       };
     },
