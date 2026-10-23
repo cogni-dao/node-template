@@ -1,8 +1,9 @@
 name: Publish Packages
 
 # Publishes the shared packages this repo owns — `@cogni-dao/work-items`,
-# `@cogni-dao/knowledge-store`, `@cogni-dao/knowledge-base`, and
-# `@cogni-dao/knowledge-base-ui` — so node repos can
+# `@cogni-dao/knowledge-store`, `@cogni-dao/knowledge-base`,
+# `@cogni-dao/knowledge-base-ui`, `@cogni-dao/graph-execution`,
+# `@cogni-dao/ai-tools`, and `@cogni-dao/langgraph-graphs` — so node repos can
 # DEPEND on them instead of vendoring their source. Four divergent copies of the
 # work-items adapter existed across the fleet when bug.5358 was audited, and a
 # single availability fix then cost nine PRs across six repositories (story.5069).
@@ -50,6 +51,8 @@ on:
       - "knowledge-base-v*"
       - "knowledge-base-ui-v*"
       - "graph-execution-v*"
+      - "ai-tools-v*"
+      - "langgraph-graphs-v*"
   # Rehearsal only. Every publishing step below is gated on `push`, so a
   # dispatch packs the tarball and runs the artifact assertions against it
   # without creating a Release, attesting anything, or moving a version. A
@@ -90,7 +93,9 @@ env:
      {"name":"@cogni-dao/knowledge-store","dir":"packages/knowledge-store","tagPrefix":"knowledge-store-v"},
      {"name":"@cogni-dao/knowledge-base","dir":"packages/knowledge-base","tagPrefix":"knowledge-base-v"},
      {"name":"@cogni-dao/knowledge-base-ui","dir":"packages/knowledge-base-ui","tagPrefix":"knowledge-base-ui-v"},
-     {"name":"@cogni-dao/graph-execution","dir":"packages/graph-execution-host","tagPrefix":"graph-execution-v"}]
+     {"name":"@cogni-dao/graph-execution","dir":"packages/graph-execution-host","tagPrefix":"graph-execution-v"},
+     {"name":"@cogni-dao/ai-tools","dir":"packages/ai-tools","tagPrefix":"ai-tools-v"},
+     {"name":"@cogni-dao/langgraph-graphs","dir":"packages/langgraph-graphs","tagPrefix":"langgraph-graphs-v"}]
 
 jobs:
   # Resolve WHICH packages this run acts on, before anything is built. A push
@@ -294,6 +299,42 @@ jobs:
             exit 1
           fi
           echo "all declared entrypoints present"
+
+      # A tarball that contains its entrypoints can still be unloadable. tsc's
+      # extensionless per-file JS once overwrote the tsup bundles, so
+      # graph-execution 0.1.1 and the first langgraph-graphs rc threw
+      # ERR_MODULE_NOT_FOUND under plain Node ESM (vitest externals, scripts),
+      # which a bundler-only consumer never shows (story.5101). Import every
+      # declared entrypoint of the PACKED bytes with plain Node, resolving deps
+      # and peers from the package's own workspace node_modules, the way a node
+      # resolves them.
+      - name: Tarball must load under plain Node ESM
+        run: |
+          set -euo pipefail
+          smoke="$PKG_DIR/.pack-smoke"
+          rm -rf "$smoke" && mkdir -p "$smoke"
+          tar xzf "${{ steps.pack.outputs.tgz }}" -C "$smoke"
+          PKG_ROOT="$PWD/$smoke/package" node --input-type=module -e '
+            import { readFileSync } from "node:fs";
+            import { pathToFileURL } from "node:url";
+            const root = process.env.PKG_ROOT;
+            const pkg = JSON.parse(readFileSync(`${root}/package.json`, "utf8"));
+            let failed = 0;
+            for (const [sub, map] of Object.entries(pkg.exports ?? {})) {
+              const target = map?.import ?? map?.default;
+              if (!target) continue;
+              const label = sub === "." ? pkg.name : `${pkg.name}${sub.slice(1)}`;
+              try {
+                await import(pathToFileURL(`${root}/${target}`).href);
+                console.log(`loads: ${label}`);
+              } catch (error) {
+                failed++;
+                console.log(`::error::${label} does not load under plain Node ESM: ${String(error?.message ?? error).split("\n")[0]}`);
+              }
+            }
+            process.exit(failed ? 1 : 0);
+          '
+          rm -rf "$smoke"
 
       # The licence is not optional metadata on a publicly downloadable artifact.
       # Every source file in this repo carries

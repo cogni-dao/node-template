@@ -22,6 +22,8 @@ export const EVENT_NAMES = {
 	AI_LLM_CALL: "ai.llm_call",
 	AI_LLM_CALL_COMPLETED: "ai.llm_call_completed",
 	AI_TOOL_CALL_ERROR: "ai.tool_call.error",
+	/** One structured summary per mission-loop cycle on the work-prioritizer slot (story.5108; CatalogEntry.report). */
+	AI_WORK_PRIORITIZER_CYCLE: "ai.work_prioritizer.cycle",
 	AI_CHAT_RECEIVED: "ai.chat_received",
 	AI_CHAT_RESPONSE_STARTED: "ai.chat_response_started",
 	AI_CHAT_STREAM_CLOSED: "ai.chat_stream_closed",

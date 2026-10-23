@@ -24,14 +24,14 @@ export class WorkItemFetchError extends Error {
 }
 
 export function isWorkItemNotFoundError(
-  error: unknown
+  error: unknown,
 ): error is WorkItemFetchError {
   return error instanceof WorkItemFetchError && error.status === 404;
 }
 
 async function responseErrorMessage(
   response: Response,
-  fallback: string
+  fallback: string,
 ): Promise<string> {
   const body: unknown = await response.json().catch(() => undefined);
   if (
@@ -45,24 +45,45 @@ async function responseErrorMessage(
   return fallback;
 }
 
+/** Load every cursor page before client-side sorting, filtering and pagination. */
 export async function fetchWorkItems(): Promise<WorkItemsListOutput> {
-  const response = await fetch("/api/v1/work/items", {
-    method: "GET",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    credentials: "same-origin",
-    cache: "no-store",
-  });
+  const items = new Map<string, WorkItemDto>();
+  const seenCursors = new Set<string>();
+  let cursor: string | undefined;
 
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({
-      error: "Failed to fetch work items",
-    }));
-    throw new Error(error.error || `HTTP ${response.status}`);
+  for (;;) {
+    const params = new URLSearchParams({ limit: "500" });
+    if (cursor !== undefined) params.set("cursor", cursor);
+    const response = await fetch(`/api/v1/work/items?${params}`, {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      cache: "no-store",
+    });
+
+    if (!response.ok) {
+      throw new Error(
+        await responseErrorMessage(response, `HTTP ${response.status}`),
+      );
+    }
+
+    const page = (await response.json()) as WorkItemsListOutput;
+    for (const item of page.items) items.set(item.id, item);
+
+    const hasMore = page.pageInfo?.hasMore ?? Boolean(page.nextCursor);
+    if (!hasMore) {
+      return {
+        items: [...items.values()],
+        pageInfo: { endCursor: null, hasMore: false },
+      };
+    }
+    const nextCursor = page.pageInfo?.endCursor ?? page.nextCursor;
+    if (!nextCursor || seenCursors.has(nextCursor)) {
+      throw new Error("Work-item pagination did not advance");
+    }
+    seenCursors.add(nextCursor);
+    cursor = nextCursor;
   }
-
-  return response.json();
 }
 
 export async function fetchWorkItem(id: string): Promise<WorkItemDto> {
@@ -75,7 +96,7 @@ export async function fetchWorkItem(id: string): Promise<WorkItemDto> {
   if (!response.ok) {
     const message = await responseErrorMessage(
       response,
-      `Failed to fetch work item (HTTP ${response.status})`
+      `Failed to fetch work item (HTTP ${response.status})`,
     );
     throw new WorkItemFetchError(message, response.status);
   }

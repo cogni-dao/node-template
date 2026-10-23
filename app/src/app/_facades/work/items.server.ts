@@ -7,27 +7,32 @@
  * Scope: Maps port results to contract DTOs and merges node-local Doltgres rows with legacy markdown rows.
  * Invariants: P0P1_IS_NODE_ADMIN (story.5101: priority <= 1 on create/patch requires node admin,
  *   checked before the store write), PORT_VIA_CONTAINER (no direct adapter imports), CONTRACTS_ARE_TRUTH, NODE_STORE_IS_LOCAL.
+ * Evaluation: preserves scores in DTOs and normalizes package validation failures for HTTP400.
  * Side-effects: IO (filesystem read via port; database read/write via Doltgres port)
  * Links: contracts/work.items.{list,get,create,patch}.v1.contract
  * @internal
  */
 
-import type { WorkItemLease } from "@cogni/work-items";
 import type {
   WorkItemsCreateInput as ContractCreateInput,
-  WorkItemCoordinationOutput,
   WorkItemsPatchInput as ContractPatchInput,
+  WorkItemCoordinationOutput,
   WorkItemDto,
   WorkItemsListInput,
   WorkItemsListOutput,
 } from "@cogni/node-contracts";
-import type { WorkItem, WorkItemId } from "@cogni/work-items";
+import type { WorkItem, WorkItemId, WorkItemLease } from "@cogni/work-items";
 import {
   toWorkItemId,
   WorkItemRevisionConflictError,
+  WorkItemScoresInvalidError,
   WorkItemWriteOutcomeUnknownError,
 } from "@cogni/work-items";
-export { WorkItemRevisionConflictError, WorkItemWriteOutcomeUnknownError };
+export {
+  WorkItemRevisionConflictError,
+  WorkItemScoresInvalidError,
+  WorkItemWriteOutcomeUnknownError,
+};
 
 import {
   checkNodeAdmin,
@@ -129,6 +134,7 @@ function toDto(item: WorkItem): WorkItemDto {
     priority: item.priority,
     rank: item.rank,
     estimate: item.estimate,
+    ...(item.scores !== undefined && { scores: item.scores }),
     summary: item.summary,
     outcome: item.outcome,
     projectId: item.projectId as string | undefined,
@@ -212,6 +218,16 @@ function rethrowBackendError(error: unknown): never {
         conflict.currentRevision
       );
     }
+  }
+  if ((error as Error)?.name === "WorkItemScoresInvalidError") {
+    // SCORES_ONE_ENFORCER (story.5111): the adapter's parseWorkItemScores is
+    // the only bounds check; a rejection is the caller's error (400), never 500.
+    const issues = (error as { issues?: unknown }).issues;
+    throw new WorkItemScoresInvalidError(
+      Array.isArray(issues)
+        ? (issues as WorkItemScoresInvalidError["issues"])
+        : []
+    );
   }
   if ((error as Error)?.name === "WorkItemWriteOutcomeUnknownError") {
     const receipt = error as WorkItemWriteOutcomeUnknownError;
@@ -349,6 +365,7 @@ export async function createWorkItem(
         ...(input.priority !== undefined && { priority: input.priority }),
         ...(input.rank !== undefined && { rank: input.rank }),
         ...(input.estimate !== undefined && { estimate: input.estimate }),
+        ...(input.scores !== undefined && { scores: input.scores }),
       },
       sessionUser.id
     );

@@ -18,7 +18,10 @@
 
 import { z } from "zod";
 
-import { WorkItemDtoSchema } from "./work.items.list.v1.contract";
+import {
+  WorkItemDtoSchema,
+  WorkItemScoresInputSchema,
+} from "./work.items.list.v1.contract";
 
 const WorkItemStatusSchema = z.enum([
   "needs_triage",
@@ -49,6 +52,8 @@ export const workItemsPatchOperation = {
         priority: z.number().int().min(0).max(99).optional(),
         rank: z.number().int().optional(),
         estimate: z.number().int().optional(),
+        // null clears the column back to SQL NULL (scores read as absent).
+        scores: WorkItemScoresInputSchema.nullable().optional(),
         labels: z.array(z.string()).optional(),
         specRefs: z.array(z.string()).optional(),
         branch: z.string().optional(),
