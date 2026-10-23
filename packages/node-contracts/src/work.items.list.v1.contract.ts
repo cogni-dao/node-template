@@ -13,7 +13,6 @@
  * @internal
  */
 
-import { parseWorkItemScores } from "@cogni/work-items";
 import { z } from "zod";
 
 const SubjectRefSchema = z.discriminatedUnion("kind", [
@@ -35,29 +34,19 @@ const ExternalRefSchema = z.object({
  * Axis ids are config (hub `work-item-scores-design`), so keys are an open,
  * bounded string set rather than an enum. Writes replace the whole object.
  *
- * The zod shape is only the OpenAPI-visible outline. Every bound (axis-id
- * pattern, ≤12 axes, integer 0–5, SCORE_NEEDS_EVIDENCE, https allow-listed
- * `ev` ≤300 chars, ≤1 KB) comes from `parseWorkItemScores` in
- * `@cogni-dao/work-items`, the same function the Doltgres adapter enforces.
- * `looseObject` keeps unknown entry keys so the package validator rejects them.
+ * SCORES_ONE_ENFORCER: this schema is only the OpenAPI-visible outline and
+ * states no bounds. Every bound (axis-id pattern, ≤12 axes, integer 0–5,
+ * SCORE_NEEDS_EVIDENCE, https `ev` on the node's allow-list, ≤300 chars,
+ * ≤1 KB) is `parseWorkItemScores` from `@cogni-dao/work-items`, run by the
+ * Doltgres adapter with the node's ONE configured evidence-host list; the
+ * facade maps its `WorkItemScoresInvalidError` to HTTP 400. Validating here
+ * too would need a second copy of that list. `looseObject` keeps unknown
+ * entry keys so the package validator rejects them.
  */
-export const WorkItemScoresInputSchema = z
-  .record(
-    z.string(),
-    z.looseObject({ v: z.number(), ev: z.string().optional() })
-  )
-  .superRefine((scores, ctx) => {
-    const result = parseWorkItemScores(scores);
-    if (result.ok) return;
-    for (const issue of result.issues) {
-      ctx.addIssue({
-        code: "custom",
-        path: [...issue.path],
-        message: issue.message,
-        params: { scoresIssue: issue.code },
-      });
-    }
-  });
+export const WorkItemScoresInputSchema = z.record(
+  z.string(),
+  z.looseObject({ v: z.number(), ev: z.string().optional() })
+);
 
 const WorkItemScoresDtoSchema = z.record(
   z.string(),

@@ -22,6 +22,7 @@ import {
   InvalidCursorError,
   listWorkItems,
   WorkItemsBackendNotReadyError,
+  WorkItemScoresInvalidError,
   WorkItemWriteOutcomeUnknownError,
 } from "@/app/_facades/work/items.server";
 import { getSessionUser } from "@/app/_lib/auth/session";
@@ -126,6 +127,12 @@ export const POST = wrapRouteHandlerWithLogging(
         status: 201,
       });
     } catch (e) {
+      if (e instanceof WorkItemScoresInvalidError) {
+        return NextResponse.json(
+          { error: "invalid input", errorCode: e.code, issues: e.issues },
+          { status: 400 }
+        );
+      }
       if (e instanceof WorkItemWriteOutcomeUnknownError) {
         return NextResponse.json(
           {

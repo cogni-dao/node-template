@@ -24,6 +24,7 @@ import {
   WorkItemForbiddenError,
   WorkItemNotFoundError,
   WorkItemsBackendNotReadyError,
+  WorkItemScoresInvalidError,
   WorkItemWriteOutcomeUnknownError,
 } from "@/app/_facades/work/items.server";
 import { getSessionUser } from "@/app/_lib/auth/session";
@@ -123,6 +124,12 @@ export const PATCH = wrapRouteHandlerWithLogging<{
       ctx.log.info({ workItemId: id }, "work.items.patch_success");
       return NextResponse.json(workItemsPatchOperation.output.parse(patched));
     } catch (e) {
+      if (e instanceof WorkItemScoresInvalidError) {
+        return NextResponse.json(
+          { error: "invalid input", errorCode: e.code, issues: e.issues },
+          { status: 400 }
+        );
+      }
       if (e instanceof WorkItemNotFoundError) {
         return NextResponse.json({ error: e.message }, { status: 404 });
       }

@@ -141,6 +141,7 @@ import { createScheduleCapability } from "@/bootstrap/capabilities/schedule";
 import { stubVcsCapability } from "@/bootstrap/capabilities/vcs";
 import { createWebSearchCapability } from "@/bootstrap/capabilities/web-search";
 import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
+import { WORK_ITEM_SCORE_EVIDENCE_HOSTS } from "@/bootstrap/work-item-scores";
 import type { RateLimitBypassConfig } from "@/bootstrap/http/wrapPublicRoute";
 import { startProcessHealthPublisher } from "@/bootstrap/publishers";
 import type {
@@ -740,6 +741,8 @@ function createContainer(): Container {
 				readClient: createWorkItemsReadClient(),
 				recreateReadClient: createWorkItemsReadClient,
 				readConnectionBudget: 2,
+				// SCORES_ONE_ENFORCER (story.5111): the node's single ev allow-list.
+				scoreEvidenceHosts: WORK_ITEM_SCORE_EVIDENCE_HOSTS,
 			}),
 			new PostgresWorkItemLeaseAdapter(serviceDb.$client, { logger: log })
 		);

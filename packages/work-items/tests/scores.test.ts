@@ -41,7 +41,7 @@ describe("parseWorkItemScores", () => {
       unblocks: { v: 4, ev: "https://github.com/cogni-dao/node-template/pull/198" },
       ease: { v: 3 },
       confidence: { v: 4, ev: "https://test.cognidao.org/version" },
-      agent: { v: 4, ev: "https://cogni.grafana.net/explore?x=1" },
+      agent: { v: 4, ev: "https://cognidao.org/knowledge/work-item-scores-design" },
     };
     const result = parseWorkItemScores(input);
     expect(result).toEqual({ ok: true, value: input });
@@ -113,6 +113,19 @@ describe("parseWorkItemScores", () => {
         evidenceHosts: [...DEFAULT_SCORE_EVIDENCE_HOSTS, "mynode.org"],
       })
     ).toEqual([]);
+  });
+
+  it("rejects any Grafana Cloud tenant by default; a node adds its exact stack host", () => {
+    const stack = { goal: { v: 4, ev: "https://cogni.grafana.net/explore?x=1" } };
+    const attacker = { goal: { v: 4, ev: "https://attacker.grafana.net/d/x" } };
+    expect(DEFAULT_SCORE_EVIDENCE_HOSTS).not.toContain("*.grafana.net");
+    expect(codes(stack)).toContain("evidence_host_not_allowed");
+    expect(codes(attacker)).toContain("evidence_host_not_allowed");
+    const node = {
+      evidenceHosts: [...DEFAULT_SCORE_EVIDENCE_HOSTS, "cogni.grafana.net"],
+    };
+    expect(codes(stack, node)).toEqual([]);
+    expect(codes(attacker, node)).toContain("evidence_host_not_allowed");
   });
 
   it("matches *.host wildcards on subdomains only, and path prefixes", () => {

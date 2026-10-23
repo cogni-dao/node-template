@@ -53,6 +53,7 @@ Work item port interfaces, domain types, and storage adapters for structured wor
   - `MarkdownWorkItemAdapter` — implements QueryPort + CommandPort against markdown files
   - `StaleRevisionError` — thrown on optimistic concurrency conflict
   - `InvalidTransitionError` — thrown on invalid status transition
+  - `UnsupportedWorkItemFieldError` — thrown when create/patch names `scores` (Doltgres-only); nothing is written
 - **Exports (adapter `@cogni/work-items/adapters/doltgres`):**
   - `DoltgresWorkItemAdapter` — node-local content query/create/patch; hard delete fails with a typed retirement error
   - `WorkItemRevisionConflictError` — `patch` with a stale `expectedRevision`; nothing committed

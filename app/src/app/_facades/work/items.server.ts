@@ -23,9 +23,10 @@ import type {
 import type { WorkItem, WorkItemId } from "@cogni/work-items";
 import {
   toWorkItemId,
+  WorkItemScoresInvalidError,
   WorkItemWriteOutcomeUnknownError,
 } from "@cogni/work-items";
-export { WorkItemWriteOutcomeUnknownError };
+export { WorkItemScoresInvalidError, WorkItemWriteOutcomeUnknownError };
 
 import { getContainer } from "@/bootstrap/container";
 
@@ -147,6 +148,14 @@ function rethrowBackendError(error: unknown): never {
   const message = (error as Error)?.message ?? "";
   const notFound = /^Work item not found: (.+)$/.exec(message);
   if (notFound?.[1]) throw new WorkItemNotFoundError(notFound[1]);
+  if ((error as Error)?.name === "WorkItemScoresInvalidError") {
+    // SCORES_ONE_ENFORCER (story.5111): the adapter's parseWorkItemScores is
+    // the only bounds check; a rejection is the caller's error (400), never 500.
+    const issues = (error as { issues?: unknown }).issues;
+    throw new WorkItemScoresInvalidError(
+      Array.isArray(issues) ? (issues as WorkItemScoresInvalidError["issues"]) : []
+    );
+  }
   if ((error as Error)?.name === "WorkItemWriteOutcomeUnknownError") {
     const receipt = error as WorkItemWriteOutcomeUnknownError;
     throw new WorkItemWriteOutcomeUnknownError(

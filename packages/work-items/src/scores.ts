@@ -36,15 +36,16 @@ export const WORK_ITEM_SCORES_MAX_BYTES = 1024;
  * - `host/path/` also requires the URL path to start with `/path/`
  *   (compared case-insensitively, as GitHub org names are).
  *
- * The node-template repo config names no Grafana host, so Grafana Cloud is
- * allowed as `*.grafana.net`. A node on its own domain extends the list:
+ * No shared-tenant wildcard (e.g. `*.grafana.net`) is ever a default: anyone
+ * can create a tenant there and publish attacker-controlled "evidence". A node
+ * adds its own EXACT hosts (its domain, its Grafana stack host) by spreading
+ * the default:
  * `parseWorkItemScores(x, { evidenceHosts: [...DEFAULT_SCORE_EVIDENCE_HOSTS, "mynode.org"] })`.
  */
 export const DEFAULT_SCORE_EVIDENCE_HOSTS: readonly string[] = Object.freeze([
   "cognidao.org",
   "*.cognidao.org",
   "github.com/cogni-dao/",
-  "*.grafana.net",
 ]);
 
 export interface ParseWorkItemScoresOptions {

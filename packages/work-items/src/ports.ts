@@ -52,7 +52,10 @@ export interface WorkItemCommandPort {
     priority?: number;
     rank?: number;
     estimate?: number;
-    /** Doltgres-only (story.5111); the markdown adapter ignores it. */
+    /**
+     * Doltgres-only (story.5111): validated by `parseWorkItemScores`; the
+     * markdown adapter throws `UnsupportedWorkItemFieldError`.
+     */
     scores?: WorkItemScores;
   }): Promise<WorkItem>;
 
@@ -79,8 +82,8 @@ export interface WorkItemCommandPort {
     > & {
       /**
        * Replaces the whole scores object; `null` clears it to SQL NULL.
-       * Doltgres-only (story.5111): the markdown adapter does not persist
-       * scores and ignores this field.
+       * Doltgres-only (story.5111): validated by `parseWorkItemScores`; the
+       * markdown adapter throws `UnsupportedWorkItemFieldError`.
        */
       scores?: WorkItemScores | null;
     };

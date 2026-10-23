@@ -19,7 +19,6 @@
     { "path": "../ai-core" },
     { "path": "../aragon-osx" },
     { "path": "../knowledge-store" },
-    { "path": "../node-core" },
-    { "path": "../work-items" }
+    { "path": "../node-core" }
   ]
 }
