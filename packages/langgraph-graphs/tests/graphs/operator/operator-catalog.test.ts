@@ -28,7 +28,6 @@ import {
   VCS_TOOL_BUNDLE,
   WEB_SEARCH_NAME,
   WORK_ITEM_QUERY_NAME,
-  WORK_ITEM_TRANSITION_NAME,
 } from "@cogni/ai-tools";
 import { describe, expect, it } from "vitest";
 import {
@@ -82,7 +81,7 @@ describe("operator catalog entries", () => {
     );
   });
 
-  it("work-prioritizer (mission loop) runs on every node with the exact six-tool allowlist", () => {
+  it("work-prioritizer (mission loop) runs on every node with the exact read-only allowlist and final-only stream", () => {
     const entry = LANGGRAPH_CATALOG["work-prioritizer"];
     expect(entry).toBeDefined();
     expect(entry?.graphFactory).toBe(createWorkPrioritizerGraph);
@@ -90,13 +89,12 @@ describe("operator catalog entries", () => {
       [
         GOAL_LIST_NAME,
         WORK_ITEM_QUERY_NAME,
-        WORK_ITEM_TRANSITION_NAME,
-        KNOWLEDGE_SEARCH_NAME,
-        EDO_DECIDE_NAME,
+        KNOWLEDGE_READ_NAME,
         GET_CURRENT_TIME_NAME,
       ].sort()
     );
     expect(entry?.report).toEqual({ event: "ai.work_prioritizer.cycle" });
+    expect(entry?.finalOnly).toBe(true);
     expect(LANGGRAPH_GRAPH_IDS["work-prioritizer"]).toBe(
       "langgraph:work-prioritizer"
     );
