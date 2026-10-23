@@ -188,6 +188,14 @@ export const EVENT_NAMES = {
 	POLY_RECONCILER_NOT_FOUND: "poly.reconciler.not_found",
 	// Emitted at info when a stale row is promoted to canceled.
 	POLY_RECONCILER_NOT_FOUND_UPGRADE: "poly.reconciler.not_found_upgrade",
+
+	// Scoped, revocable agent access (story.5115) — one terminal event per op.
+	AGENT_GRANTS_ACCESS_REQUEST_CREATED: "agent_grants.access_request.created",
+	AGENT_GRANTS_DECIDED: "agent_grants.decided",
+	AGENT_GRANTS_REVOKED: "agent_grants.revoked",
+	AGENT_CREDENTIALS_REVOKED: "agent_credentials.revoked",
+	ACCOUNT_READ_ALLOWED: "account_read.allowed",
+	ACCOUNT_READ_DENIED: "account_read.denied",
 } as const;
 
 export type EventName = (typeof EVENT_NAMES)[keyof typeof EVENT_NAMES];
