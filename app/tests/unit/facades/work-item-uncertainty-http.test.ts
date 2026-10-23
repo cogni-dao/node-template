@@ -10,9 +10,8 @@ vi.mock("@/bootstrap/http", () => ({
 }));
 vi.mock("@/app/_lib/auth/session", () => ({ getSessionUser: vi.fn() }));
 vi.mock("@/app/_facades/work/items.server", async () => {
-  const { WorkItemWriteOutcomeUnknownError } = await import(
-    "@cogni/work-items"
-  );
+  const { WorkItemScoresInvalidError, WorkItemWriteOutcomeUnknownError } =
+    await import("@cogni/work-items");
   const uncertain = async () => {
     throw new WorkItemWriteOutcomeUnknownError(
       "op-1",
@@ -27,6 +26,7 @@ vi.mock("@/app/_facades/work/items.server", async () => {
     listWorkItems: vi.fn(),
     getWorkItem: vi.fn(),
     WorkItemWriteOutcomeUnknownError,
+    WorkItemScoresInvalidError,
     InvalidCursorError: class extends Error {},
     WorkItemsBackendNotReadyError: class extends Error {},
     WorkItemNotFoundError: class extends Error {},
@@ -35,8 +35,8 @@ vi.mock("@/app/_facades/work/items.server", async () => {
   };
 });
 
-import { POST } from "@/app/api/v1/work/items/route";
 import { PATCH } from "@/app/api/v1/work/items/[id]/route";
+import { POST } from "@/app/api/v1/work/items/route";
 
 type Handler = (
   context: unknown,

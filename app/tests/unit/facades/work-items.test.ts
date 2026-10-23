@@ -25,12 +25,12 @@ vi.mock("@/bootstrap/container", () => ({
 }));
 
 import {
+  createWorkItem,
   getWorkItem,
   listWorkItems,
-  createWorkItem,
-  WorkItemWriteOutcomeUnknownError,
   NodeAdminRequiredError,
-  patchWorkItem
+  patchWorkItem,
+  WorkItemWriteOutcomeUnknownError,
 } from "@/app/_facades/work/items.server";
 import { getContainer } from "@/bootstrap/container";
 
@@ -279,6 +279,30 @@ describe("app/_facades/work/items.server", () => {
       expect(result).not.toBeNull();
       expect(result?.id).toBe("task.0001");
       expect(result?.title).toBe("Sample task");
+      expect(() => WorkItemDtoSchema.parse(result)).not.toThrow();
+    });
+
+    it("omits scores when the item has none (story.5111)", async () => {
+      vi.mocked(mockPort.get).mockResolvedValue(SAMPLE_WORK_ITEM);
+
+      const result = await getWorkItem("task.0001");
+
+      expect(result && "scores" in result).toBe(false);
+    });
+
+    it("passes scores through to the DTO (story.5111)", async () => {
+      const scores = {
+        goal: { v: 5, ev: "https://cognidao.org/work/items/story.5108" },
+        ease: { v: 3 },
+      };
+      vi.mocked(mockPort.get).mockResolvedValue({
+        ...SAMPLE_WORK_ITEM,
+        scores,
+      });
+
+      const result = await getWorkItem("task.0001");
+
+      expect(result?.scores).toEqual(scores);
       expect(() => WorkItemDtoSchema.parse(result)).not.toThrow();
     });
 

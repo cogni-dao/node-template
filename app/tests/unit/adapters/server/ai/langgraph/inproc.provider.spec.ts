@@ -15,12 +15,14 @@
 
 import type { AiEvent, ToolSourcePort } from "@cogni/ai-core";
 import { TOOL_CATALOG, toBoundToolRuntime } from "@cogni/ai-tools";
+import { LANGGRAPH_CATALOG } from "@cogni/langgraph-graphs";
 import { describe, expect, it, vi } from "vitest";
 
 import { runInScope } from "@/adapters/server/ai/execution-scope";
 import type { CompletionUnitAdapter } from "@/adapters/server/ai/langgraph/inproc.provider";
 import { LangGraphInProcProvider } from "@/adapters/server/ai/langgraph/inproc.provider";
 import type { GraphRunRequest } from "@/ports";
+import { EVENT_NAMES } from "@/shared/observability";
 
 const TEST_SCOPE = {
   billing: {
@@ -170,6 +172,18 @@ describe("LangGraphInProcProvider", () => {
         // Result reflects success
         expect(result.ok).toBe(true);
       });
+    });
+  });
+
+  describe("catalog report seam (CatalogEntry.report)", () => {
+    it("every catalog-declared report names a registered event", () => {
+      const registered = new Set<string>(Object.values(EVENT_NAMES));
+      const declared = Object.values(LANGGRAPH_CATALOG).flatMap((e) => {
+        const r = (e as { report?: { event: string } }).report;
+        return r ? [r.event] : [];
+      });
+      expect(declared.length).toBeGreaterThan(0);
+      for (const name of declared) expect(registered.has(name)).toBe(true);
     });
   });
 

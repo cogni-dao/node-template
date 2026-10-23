@@ -29,6 +29,22 @@ const ExternalRefSchema = z.object({
   title: z.string().optional(),
 });
 
+/**
+ * Evaluation scores: configurable axis id → { v, ev? }. Writes replace the whole object.
+ * This transport outline retains unknown entry properties so the shared work-items
+ * validator rejects them. The Doltgres adapter owns all bounds, safe HTTPS URL
+ * checks and required Justification rules; the HTTP boundary maps its error to400.
+ */
+export const WorkItemScoresInputSchema = z.record(
+  z.string(),
+  z.looseObject({ v: z.number(), ev: z.string().optional() })
+);
+
+const WorkItemScoresDtoSchema = z.record(
+  z.string(),
+  z.object({ v: z.number(), ev: z.string().optional() })
+);
+
 export const WorkItemDtoSchema = z.object({
   id: z.string(),
   type: z.string(),
@@ -37,6 +53,7 @@ export const WorkItemDtoSchema = z.object({
   priority: z.number().optional(),
   rank: z.number().optional(),
   estimate: z.number().optional(),
+  scores: WorkItemScoresDtoSchema.optional(),
   summary: z.string().optional(),
   outcome: z.string().optional(),
   projectId: z.string().optional(),

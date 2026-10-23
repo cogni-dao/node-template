@@ -10,5 +10,5 @@ export default defineConfig({
   clean: false,
   sourcemap: true,
   platform: "browser",
-  external: ["react", "react/jsx-runtime"],
+  external: ["react", "react/jsx-runtime", "@cogni/work-items"],
 });

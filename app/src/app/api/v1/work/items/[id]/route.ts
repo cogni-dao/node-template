@@ -6,6 +6,7 @@
  * Purpose: HTTP endpoints for getting, patching, and deleting a single work item by ID.
  * Scope: Auth-protected GET (node-local Doltgres first, markdown fallback), PATCH (Doltgres only), and DELETE (retired, HTTP 410).
  * Invariants: VALIDATE_IO, CONTRACTS_ARE_TRUTH, AUTH_VIA_GETSESSIONUSER, PATCH_ALLOWLIST, DURABLE_IDENTITY_NEVER_REUSED.
+ * Evaluation: shared score validation failures return HTTP400 with typed issues.
  * Side-effects: IO (HTTP response, filesystem read via port, Doltgres read/write/delete)
  * Links: contracts/work.items.{get,patch,delete}.v1.contract
  * @public
@@ -20,13 +21,14 @@ import { NextResponse } from "next/server";
 
 import {
   getWorkItem,
+  NodeAdminRequiredError,
   patchWorkItem,
   WorkItemForbiddenError,
   WorkItemNotFoundError,
   WorkItemRevisionConflictError,
+  WorkItemScoresInvalidError,
   WorkItemsBackendNotReadyError,
   WorkItemWriteOutcomeUnknownError,
-  NodeAdminRequiredError
 } from "@/app/_facades/work/items.server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
@@ -126,6 +128,12 @@ export const PATCH = wrapRouteHandlerWithLogging<{
       ctx.log.info({ workItemId: id }, "work.items.patch_success");
       return NextResponse.json(workItemsPatchOperation.output.parse(patched));
     } catch (e) {
+      if (e instanceof WorkItemScoresInvalidError) {
+        return NextResponse.json(
+          { error: "invalid input", errorCode: e.code, issues: e.issues },
+          { status: 400 }
+        );
+      }
       if (e instanceof WorkItemNotFoundError) {
         return NextResponse.json({ error: e.message }, { status: 404 });
       }
