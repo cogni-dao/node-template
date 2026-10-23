@@ -6,6 +6,10 @@ const PR_BUILD_WORKFLOW_PATH = ".github/workflows/pr-build.yml";
 const PR_LINT_WORKFLOW_PATH = ".github/workflows/pr-lint.yaml";
 const PUBLISH_WORKFLOW_PATH = ".github/workflows/publish-packages.yml";
 const REPO_POLICY_PATH = ".cogni/repo-policy.json";
+const CONTRACT_INSTALL_COMMAND =
+  "pnpm --filter @cogni/repo-spec... install --frozen-lockfile --ignore-scripts --config.dedupe-peer-dependents=false";
+const MAIN_CACHE_EXPORT =
+  "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && format('type=gha,mode=max,scope=node-template-{0}', matrix.target.artifact) || '' }}";
 
 const ciWorkflow = readWorkflow(CI_WORKFLOW_PATH);
 const prBuildWorkflow = readWorkflow(PR_BUILD_WORKFLOW_PATH);
@@ -46,6 +50,23 @@ function expectStep(path, steps, name) {
   const step = steps.find((candidate) => candidate?.name === name);
   if (!step) fail(path, `steps must include ${JSON.stringify(name)}`);
   return step;
+}
+
+// These jobs consume one contract; required CI owns the full app/test closure.
+function expectContractInstall(steps, jobName) {
+  const install = expectStep(PR_BUILD_WORKFLOW_PATH, steps, "Install");
+  expectEqual(
+    PR_BUILD_WORKFLOW_PATH,
+    install?.run,
+    CONTRACT_INSTALL_COMMAND,
+    `${jobName} frozen contract install`
+  );
+  const node = expectStep(PR_BUILD_WORKFLOW_PATH, steps, "Set up Node");
+  for (const key of ["cache", "cache-dependency-path"]) {
+    if (Object.hasOwn(node?.with ?? {}, key)) {
+      fail(PR_BUILD_WORKFLOW_PATH, `${jobName} must not hydrate a broad Node cache`);
+    }
+  }
 }
 
 function expectTrigger(path, workflow, trigger) {
@@ -310,6 +331,7 @@ const detectJob = prBuildWorkflow?.jobs?.detect;
 if (!detectJob) fail(PR_BUILD_WORKFLOW_PATH, "jobs must include detect");
 expectEqual(PR_BUILD_WORKFLOW_PATH, detectJob?.needs, "resolve", "jobs.detect.needs");
 const detectSteps = Array.isArray(detectJob?.steps) ? detectJob.steps : [];
+expectContractInstall(detectSteps, "detect");
 const detectBuildStep = expectStep(
   PR_BUILD_WORKFLOW_PATH,
   detectSteps,
@@ -344,9 +366,19 @@ if (!Array.isArray(buildJob?.needs) || buildJob.needs.join(",") !== "resolve,det
 }
 expectEqual(PR_BUILD_WORKFLOW_PATH, buildJob?.strategy?.["fail-fast"], false, "jobs.build.strategy.fail-fast");
 const buildSteps = Array.isArray(buildJob?.steps) ? buildJob.steps : [];
+// Omitting Buildx teardown is bounded to this disposable GitHub-hosted job.
+expectEqual(PR_BUILD_WORKFLOW_PATH, buildJob?.["runs-on"], "ubuntu-latest", "ephemeral image runner");
+const buildxStep = expectStep(PR_BUILD_WORKFLOW_PATH, buildSteps, "Set up Docker Buildx");
+expectEqual(PR_BUILD_WORKFLOW_PATH, buildxStep?.with?.cleanup, false, "ephemeral Buildx cleanup");
 expectStep(PR_BUILD_WORKFLOW_PATH, buildSteps, "Checkout");
 expectStep(PR_BUILD_WORKFLOW_PATH, buildSteps, "Login to GHCR");
 const imageBuildStep = expectStep(PR_BUILD_WORKFLOW_PATH, buildSteps, "Build app image");
+expectEqual(
+  PR_BUILD_WORKFLOW_PATH,
+  imageBuildStep?.with?.["cache-to"],
+  MAIN_CACHE_EXPORT,
+  "trusted main cache export"
+);
 expectEqual(
   PR_BUILD_WORKFLOW_PATH,
   imageBuildStep?.with?.context,
@@ -368,6 +400,7 @@ if (!Array.isArray(manifestJob?.needs) || manifestJob.needs.join(",") !== "resol
   fail(PR_BUILD_WORKFLOW_PATH, "jobs.manifest.needs must be [\"resolve\", \"detect\", \"build\"]");
 }
 const manifestSteps = Array.isArray(manifestJob?.steps) ? manifestJob.steps : [];
+expectContractInstall(manifestSteps, "manifest");
 expectStep(PR_BUILD_WORKFLOW_PATH, manifestSteps, "Download build fragments");
 expectStep(PR_BUILD_WORKFLOW_PATH, manifestSteps, "Build repo-spec contract");
 const setupOrasStep = expectStep(PR_BUILD_WORKFLOW_PATH, manifestSteps, "Set up ORAS");
