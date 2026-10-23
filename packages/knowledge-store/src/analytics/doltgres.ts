@@ -40,11 +40,13 @@ function commitHash(value: unknown): string {
 }
 
 const changedFields = ["title", "content", "use_when", "entry_type", "domain"];
-// Explicit null-safe inequality: null and empty text are different content.
+// Doltgres 0.57.3 text_ne asserts string before unwrapping stored TEXT. text_eq
+// delegates to Compare, which unwraps the complete value. CASE keeps equality
+// explicit (no NOT-to-inequality rewrite) and distinguishes null from empty.
 const contentChanged = changedFields
   .map(
     (field) =>
-      `(from_${field} <> to_${field} OR (from_${field} IS NULL AND to_${field} IS NOT NULL) OR (from_${field} IS NOT NULL AND to_${field} IS NULL))`
+      `(CASE WHEN from_${field} = to_${field} THEN FALSE WHEN from_${field} IS NULL AND to_${field} IS NULL THEN FALSE ELSE TRUE END)`
   )
   .join(" OR ");
 

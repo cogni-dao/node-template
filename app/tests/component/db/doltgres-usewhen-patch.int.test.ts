@@ -224,7 +224,13 @@ describe("knowledge useWhen patch + q filter (task.5204)", () => {
     await store.withWrite(
       { operationId: "analytics:seed", message: "seed analytics parity" },
       async (write) => {
-        for (const suffix of ["body", "null-empty", "confidence", "removed"]) {
+        for (const suffix of [
+          "body",
+          "title",
+          "null-empty",
+          "confidence",
+          "removed",
+        ]) {
           await write.addKnowledge({
             id: prefix + suffix,
             domain: DOMAIN,
@@ -257,16 +263,17 @@ describe("knowledge useWhen patch + q filter (task.5204)", () => {
     // Prime the actual pool before an independent admitted writer commits.
     expect(
       (await sources.atoms(DOMAIN, 500)).find(
-        (atom) => atom.id === prefix + "body"
+        (atom) => atom.id === prefix + "title"
       )?.title
-    ).toBe("Before body");
+    ).toBe("Before title");
     await store.withWrite(
       { operationId: "analytics:change", message: "semantic parity changes" },
       async (write) => {
         await write.updateKnowledge(prefix + "body", {
-          title: "After body",
-          content: "Changed visible body",
+          // Equal long prefix: only a full-value comparison can detect this tail.
+          content: `${LONG_CONTENT}\nChanged tail: 😀`,
         });
+        await write.updateKnowledge(prefix + "title", { title: "After title" });
         await write.updateKnowledge(prefix + "null-empty", { useWhen: "" });
         await write.updateKnowledge(prefix + "confidence", {
           confidencePct: 31,
@@ -290,15 +297,15 @@ describe("knowledge useWhen patch + q filter (task.5204)", () => {
       headCommit,
     };
     expect((await sources.changeIds(receipt, 100)).sort()).toEqual(
-      ["added", "body", "null-empty", "removed"].map(
+      ["added", "body", "null-empty", "removed", "title"].map(
         (suffix) => prefix + suffix
       )
     );
     expect(await sources.changeIds(receipt, 2)).toHaveLength(3); // limit+1 sentinel, not a silently complete prefix.
     for (let pass = 0; pass < 3; pass++) {
       const metadata = await sources.atoms(DOMAIN, 500);
-      expect(metadata.find((atom) => atom.id === prefix + "body")?.title).toBe(
-        "After body"
+      expect(metadata.find((atom) => atom.id === prefix + "title")?.title).toBe(
+        "After title"
       );
       expect(
         metadata.find((atom) => atom.id === prefix + "removed")
@@ -348,7 +355,7 @@ describe("knowledge useWhen patch + q filter (task.5204)", () => {
     console.info(
       JSON.stringify({
         event: "test.knowledge_analytics.synthetic_cost",
-        fixture: "four-semantic-deltas-with-confidence-control",
+        fixture: "five-semantic-deltas-long-tail-and-confidence-control",
         samples: durations.length,
         p95Ms: durations.sort((a, b) => a - b)[9],
         explainStatus,

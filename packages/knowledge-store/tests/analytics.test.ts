@@ -357,9 +357,12 @@ it("projects bounded metadata and changed IDs without hydrating bodies or accept
   expect(queries[3]).toMatch(/^SELECT from_id, to_id FROM dolt_diff/);
   expect(queries[3]).toContain("diff_type = 'added' OR diff_type = 'removed'");
   expect(queries[3]).not.toContain(" IN (");
-  expect(queries[3]).toContain("from_content <> to_content");
   expect(queries[3]).toContain(
-    "from_use_when IS NULL AND to_use_when IS NOT NULL"
+    "CASE WHEN from_content = to_content THEN FALSE"
+  );
+  expect(queries[3]).not.toContain("<>");
+  expect(queries[3]).toContain(
+    "WHEN from_use_when IS NULL AND to_use_when IS NULL THEN FALSE ELSE TRUE END"
   );
   expect(queries[3]).not.toContain("confidence_pct");
   expect(queries[3]).toContain("LIMIT 21");
