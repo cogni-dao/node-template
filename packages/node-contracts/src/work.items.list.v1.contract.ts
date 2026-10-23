@@ -29,6 +29,28 @@ const ExternalRefSchema = z.object({
   title: z.string().optional(),
 });
 
+/**
+ * Do-it-now scores (story.5111): axis id → { v: int 0–5, ev?: evidence URL }.
+ * Axis ids are config (hub `work-item-scores-design`), so keys are an open,
+ * bounded string set rather than an enum. Writes replace the whole object.
+ */
+export const WorkItemScoresInputSchema = z
+  .record(
+    z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/),
+    z.strictObject({
+      v: z.number().int().min(0).max(5),
+      ev: z.url().max(500).optional(),
+    })
+  )
+  .refine((scores) => Object.keys(scores).length <= 12, {
+    message: "scores may carry at most 12 axes",
+  });
+
+const WorkItemScoresDtoSchema = z.record(
+  z.string(),
+  z.object({ v: z.number(), ev: z.string().optional() })
+);
+
 export const WorkItemDtoSchema = z.object({
   id: z.string(),
   type: z.string(),
@@ -37,6 +59,7 @@ export const WorkItemDtoSchema = z.object({
   priority: z.number().optional(),
   rank: z.number().optional(),
   estimate: z.number().optional(),
+  scores: WorkItemScoresDtoSchema.optional(),
   summary: z.string().optional(),
   outcome: z.string().optional(),
   projectId: z.string().optional(),

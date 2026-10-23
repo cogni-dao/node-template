@@ -51,6 +51,7 @@ export interface WorkItemCommandPort {
     priority?: number;
     rank?: number;
     estimate?: number;
+    scores?: WorkItem["scores"];
   }): Promise<WorkItem>;
 
   patch(input: {
@@ -63,6 +64,7 @@ export interface WorkItemCommandPort {
         | "summary"
         | "outcome"
         | "estimate"
+        | "scores"
         | "priority"
         | "rank"
         | "status"

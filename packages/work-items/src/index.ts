@@ -21,6 +21,8 @@ export type {
   SubjectRef,
   WorkItem,
   WorkItemId,
+  WorkItemScore,
+  WorkItemScores,
   WorkItemStatus,
   WorkItemType,
   WorkQuery,

@@ -275,6 +275,9 @@ export const workItems = pgTable(
     priority: integer("priority"),
     rank: integer("rank"),
     estimate: integer("estimate"),
+    // Do-it-now scores (story.5111): { "<axis id>": { v: 0–5, ev?: url } }.
+    // Axis ids are config (hub `work-item-scores-design`), so no column per axis.
+    scores: jsonb("scores"),
 
     // Free-text
     summary: text("summary"),

@@ -82,6 +82,7 @@ function toDto(item: WorkItem): WorkItemDto {
     priority: item.priority,
     rank: item.rank,
     estimate: item.estimate,
+    ...(item.scores !== undefined && { scores: item.scores }),
     summary: item.summary,
     outcome: item.outcome,
     projectId: item.projectId as string | undefined,
@@ -281,6 +282,7 @@ export async function createWorkItem(
         ...(input.priority !== undefined && { priority: input.priority }),
         ...(input.rank !== undefined && { rank: input.rank }),
         ...(input.estimate !== undefined && { estimate: input.estimate }),
+        ...(input.scores !== undefined && { scores: input.scores }),
       },
       sessionUser.id
     );
