@@ -3,7 +3,23 @@
 
 /** Doltgres runtime authority for deployed work items. */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
+import {
+  acquireDoltWriterLocks,
+  DoltWriterAdmissionError,
+  type DoltWriterLock,
+  reconcileAbandonedDoltOperation,
+} from "@cogni-dao/doltgres-admission";
+import type { ReservedSql, Sql } from "postgres";
+import {
+  WorkItemDeletionRetiredError,
+  WorkItemRevisionConflictError,
+  WorkItemScoresInvalidError,
+  WorkItemsBusyError,
+  WorkItemsCapacityError,
+  WorkItemWriteOutcomeUnknownError,
+} from "../../errors.js";
 import type {
   ActorKind,
   ExternalRef,
@@ -11,32 +27,35 @@ import type {
   WorkItem,
   WorkItemId,
   WorkItemQueryPort,
+  WorkItemScore,
+  WorkItemScores,
   WorkItemStatus,
   WorkItemType,
   WorkQuery,
   WorkRelation,
 } from "../../index.js";
 import { toWorkItemId } from "../../index.js";
-import type { ReservedSql, Sql } from "postgres";
 
+export {
+  WorkItemLeaseConflictError,
+  WorkItemRevisionConflictError,
+  WorkItemsBusyError,
+  WorkItemsCapacityError,
+} from "../../errors.js";
+
+import { parseWorkItemScores } from "../../scores.js";
+
+import { decodeCursor, encodeCursor, type WorkItemCursor } from "./cursor.js";
 import type {
+  WorkItemsContentPort,
   WorkItemsCreateInput,
-  WorkItemsDoltgresPort,
   WorkItemsPatchInput,
   WorkItemsPatchSet,
 } from "./ports.js";
 
-import {
-  decodeCursor,
-  encodeCursor,
-  type WorkItemCursor,
-} from "./cursor.js";
-
 export const OPERATOR_ID_FLOOR = 5000;
 const AUTO_ID_RETRIES = 5;
-const CLAIM_TTL_SECONDS = 300;
 const COMMIT_TAG = "work-items";
-const GLOBAL_LOCK_KEY = 5_001_001;
 const OP_BRANCH_PREFIX = "work-item-op/";
 /**
  * Where an unprovable operation branch is parked. Renaming out of
@@ -90,16 +109,8 @@ const BRANCH_HOUSEKEEPING_STAGES = new Set([
 ]);
 const RESERVE_TIMEOUT_MS = 5_000;
 
-/**
- * What a locked scope owes when it meets an operation branch it cannot prove.
- *
- * - `required` — fail closed. A write must never build on unproven evidence.
- * - `best_effort` — keep the evidence, re-prove `main`, and serve from it
- *   anyway. For reads, which cannot observe an operation branch (bug.5358).
- * - `skipped` — the caller already owns one branch and reconciles it itself; a
- *   generic sweep would race that work.
- */
-type BranchReconciliation = "required" | "best_effort" | "skipped";
+/** Only content commands own a branch session and reconcile interrupted writes. */
+type BranchReconciliation = "required" | "skipped";
 
 export interface WorkItemLogger {
   info(fields: Record<string, unknown>, message: string): void;
@@ -111,6 +122,8 @@ export interface DoltgresWorkItemAdapterOptions {
   readonly logger?: WorkItemLogger;
   readonly lockWaitMs?: number;
   readonly lockRetryMs?: number;
+  /** Database mode requires proof that no legacy writer serves this database. */
+  readonly writerLockProtocol?: "bridge" | "database";
   readonly queueWaitMs?: number;
   readonly queryTimeoutMs?: number;
   /**
@@ -122,6 +135,8 @@ export interface DoltgresWorkItemAdapterOptions {
   readonly recreateClient?: () => Sql;
   /** Rebuilds the dedicated QUERY pool after a terminal connection failure. */
   readonly recreateReadClient?: () => Sql;
+  /** Maximum reader connections across the live and draining generations. Caller budgets two pool widths. */
+  readonly readConnectionBudget?: number;
   /**
    * Dedicated pool for the QUERY port. Reads run on it instead of the write
    * lane — see `readOnCleanMain`.
@@ -142,6 +157,20 @@ interface OperationContext {
   readonly operationId: string;
   readonly operation: string;
   branch?: string;
+  abandoned?: Error;
+  rejectCaller?: (error: Error) => void;
+  nativeUnknown?: boolean;
+  mutationState?: PendingBranchState<unknown>;
+  admitting?: boolean;
+  laneMutated?: boolean;
+  acknowledged?: boolean;
+  acknowledge?: (value: unknown) => void;
+}
+
+interface ReadWaiter {
+  readonly deadline: number;
+  start(): void;
+  reject(error: Error): void;
 }
 
 interface WorkItemConnection {
@@ -182,6 +211,11 @@ interface MutationOptions<T> {
 }
 
 interface PendingBranchState<T> {
+  readonly operationId: string;
+  commitAttempted?: boolean;
+  creationProven?: boolean;
+  mergeAttempted?: boolean;
+  outcomeSafelyAbsent?: boolean;
   readonly branch: string;
   readonly baseHash: string;
   readonly proof: MutationProof;
@@ -230,30 +264,6 @@ export class WorkItemAuthorizationError extends Error {
   }
 }
 
-/**
- * `patch` was given an `expectedRevision` that no longer matches the row.
- * Nothing was written and no commit was made; re-read and retry.
- */
-export class WorkItemRevisionConflictError extends Error {
-  constructor(
-    public readonly id: string,
-    public readonly expectedRevision: number,
-    public readonly currentRevision: number
-  ) {
-    super(
-      `Work item revision conflict: ${id} expected revision ${expectedRevision}, current ${currentRevision}`
-    );
-    this.name = "WorkItemRevisionConflictError";
-  }
-}
-
-export class WorkItemLeaseConflictError extends Error {
-  constructor(public readonly id: string) {
-    super(`Work item is claimed by another principal or lease: ${id}`);
-    this.name = "WorkItemLeaseConflictError";
-  }
-}
-
 export class DoltCommitFailedError extends Error {
   constructor() {
     super("Dolt work-item commit did not return a commit hash");
@@ -289,13 +299,6 @@ export class WorkItemMergeConflictError extends Error {
   }
 }
 
-export class WorkItemsBusyError extends Error {
-  constructor(message = "Work-item store is busy; retry shortly") {
-    super(message);
-    this.name = "WorkItemsBusyError";
-  }
-}
-
 /**
  * The branch is STRUCTURALLY verified — linear history, frozen base intact,
  * exactly one `public.work_items` row diff, authoritative commit time — and
@@ -310,7 +313,6 @@ class UnprovableTransitionError extends WorkItemsBusyError {
     this.name = "UnprovableTransitionError";
   }
 }
-
 
 class DoltMergeOutcomeUnknownError extends WorkItemsBusyError {
   constructor() {
@@ -404,6 +406,17 @@ function requirePrincipal(principalId: string): string {
   return value;
 }
 
+/**
+ * SCORES_BOUNDS_IN_PACKAGE (story.5111): every adapter write runs the package
+ * validator, so a caller that skips the HTTP contract cannot store an
+ * unbounded or unevidenced `scores` blob. Throws before any write.
+ */
+function validScores(value: unknown): WorkItemScores | null {
+  const result = parseWorkItemScores(value);
+  if (!result.ok) throw new WorkItemScoresInvalidError(result.issues);
+  return result.value;
+}
+
 function actorOf(value: unknown): ActorKind {
   return value === "human" || value === "ai" ? value : "either";
 }
@@ -432,12 +445,58 @@ function optionalNumber(value: unknown): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+/**
+ * `scores` (story.5111) is a jsonb object keyed by axis id. Axis ids are config,
+ * so any key is kept; only the shape of each entry is checked. A non-object
+ * value reads as absent rather than failing the whole row.
+ */
+function optionalScores(value: unknown): WorkItemScores | undefined {
+  if (value === null || value === undefined) return undefined;
+  let parsed: unknown = value;
+  if (typeof value === "string") {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return undefined;
+    }
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return undefined;
+  }
+  const scores: Record<string, WorkItemScore> = {};
+  for (const [axis, entry] of Object.entries(parsed)) {
+    if (!entry || typeof entry !== "object") continue;
+    const { v, ev } = entry as { v?: unknown; ev?: unknown };
+    // Never coerce: a null/boolean/string/fractional `v` is not a score, and a
+    // missing axis must read as absent, not zero.
+    if (typeof v !== "number" || !Number.isInteger(v)) continue;
+    scores[axis] = typeof ev === "string" ? { v, ev } : { v };
+  }
+  return scores;
+}
+
+/**
+ * Key-order-insensitive JSON for comparing persisted values. jsonb does not
+ * preserve object key order, so a `scores` object read back from the row can
+ * legitimately differ in key order from the value that was written.
+ */
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, inner: unknown) =>
+    inner && typeof inner === "object" && !Array.isArray(inner)
+      ? Object.fromEntries(
+          Object.entries(inner as Record<string, unknown>).sort(([a], [b]) =>
+            a < b ? -1 : a > b ? 1 : 0
+          )
+        )
+      : inner
+  );
+}
+
 function optionalWorkItemId(value: unknown): WorkItemId | undefined {
   return value ? toWorkItemId(String(value)) : undefined;
 }
 
 function rowToWorkItem(row: Record<string, unknown>): WorkItem {
-  const claimIsActive = row.claim_active !== false;
   const item: Record<string, unknown> = {
     id: toWorkItemId(String(row.id)),
     type: String(row.type) as WorkItemType,
@@ -459,6 +518,7 @@ function rowToWorkItem(row: Record<string, unknown>): WorkItem {
     priority: optionalNumber(row.priority),
     rank: optionalNumber(row.rank),
     estimate: optionalNumber(row.estimate),
+    scores: optionalScores(row.scores),
     summary: optionalString(row.summary),
     outcome: optionalString(row.outcome),
     projectId: optionalWorkItemId(row.project_id),
@@ -467,11 +527,6 @@ function rowToWorkItem(row: Record<string, unknown>): WorkItem {
     pr: optionalString(row.pr),
     reviewer: optionalString(row.reviewer),
     blockedBy: optionalWorkItemId(row.blocked_by),
-    claimedByRun: claimIsActive
-      ? optionalString(row.claimed_by_run)
-      : undefined,
-    claimedAt: claimIsActive ? optionalString(row.claimed_at) : undefined,
-    lastCommand: claimIsActive ? optionalString(row.last_command) : undefined,
   };
   for (const [key, value] of Object.entries(optional)) {
     if (value !== undefined) item[key] = value;
@@ -548,6 +603,7 @@ const PATCH_COLUMNS: Record<keyof WorkItemsPatchSet, string> = {
   priority: "priority",
   rank: "rank",
   estimate: "estimate",
+  scores: "scores",
   labels: "labels",
   specRefs: "spec_refs",
   branch: "branch",
@@ -571,6 +627,7 @@ const PERSISTED_WORK_ITEM_COLUMNS = [
   "priority",
   "rank",
   "estimate",
+  "scores",
   "summary",
   "outcome",
   "branch",
@@ -600,18 +657,21 @@ const PATCH_DB_COLUMNS = new Set<string>(Object.values(PATCH_COLUMNS));
 /**
  * COLLABORATOR_TRIAGE (story.5096): the only fields any authenticated principal
  * may patch on an item it did not create. A `set` naming ANY other field stays
- * creator-bound as a whole.
+ * creator-bound as a whole. `scores` (story.5111) is ranking input, written by
+ * the prioritizer on items it did not create, so it is a triage field too.
  */
 const TRIAGE_PATCH_KEYS = new Set<keyof WorkItemsPatchSet>([
   "priority",
   "rank",
   "labels",
+  "scores",
 ]);
 /** The full row-diff surface a non-creator patch may prove. */
 const TRIAGE_COLUMNS = new Set<string>([
   "priority",
   "rank",
   "labels",
+  "scores",
   "revision",
   "updated_at",
 ]);
@@ -663,10 +723,7 @@ function normalizedPersistedValue(value: unknown): unknown {
   return value ?? null;
 }
 
-function snapshotRow(
-  row: Record<string, unknown>,
-  prefix = ""
-): RowSnapshot {
+function snapshotRow(row: Record<string, unknown>, prefix = ""): RowSnapshot {
   return Object.fromEntries(
     PERSISTED_WORK_ITEM_COLUMNS.map((column) => [
       column,
@@ -677,16 +734,14 @@ function snapshotRow(
 
 function snapshotsEqual(left: RowSnapshot, right: RowSnapshot): boolean {
   return PERSISTED_WORK_ITEM_COLUMNS.every(
-    (column) =>
-      JSON.stringify(left[column]) === JSON.stringify(right[column])
+    (column) => canonicalJson(left[column]) === canonicalJson(right[column])
   );
 }
 
 function changedColumns(before: RowSnapshot, after: RowSnapshot): Set<string> {
   return new Set(
     PERSISTED_WORK_ITEM_COLUMNS.filter(
-      (column) =>
-        JSON.stringify(before[column]) !== JSON.stringify(after[column])
+      (column) => canonicalJson(before[column]) !== canonicalJson(after[column])
     )
   );
 }
@@ -729,7 +784,8 @@ function legacyProofFromMessage(
   const explicitId = match[2];
   const principal = match[3];
   if (!operation || !principal) return undefined;
-  const verb = operation === "create work item" ? "create" : operation.split(" ")[0];
+  const verb =
+    operation === "create work item" ? "create" : operation.split(" ")[0];
   if (
     verb !== "create" &&
     verb !== "patch" &&
@@ -741,7 +797,7 @@ function legacyProofFromMessage(
     return undefined;
   }
   const diffId = String(
-    verb === "delete" ? before.id ?? "" : after.id ?? ""
+    verb === "delete" ? (before.id ?? "") : (after.id ?? "")
   );
   if (!diffId || (explicitId && explicitId !== diffId)) return undefined;
   return {
@@ -839,8 +895,8 @@ function validateTransitionMatrix(
           beforeRevision === proof.expectedRevision) &&
         [...IMMUTABLE_COLUMNS].every(
           (column) =>
-            JSON.stringify(before[column as PersistedColumn]) ===
-            JSON.stringify(after[column as PersistedColumn])
+            canonicalJson(before[column as PersistedColumn]) ===
+            canonicalJson(after[column as PersistedColumn])
         ) &&
         changed.size > 0 &&
         changed.has("revision") &&
@@ -850,8 +906,8 @@ function validateTransitionMatrix(
         Object.entries(proof.patchValues ?? {}).every(
           ([column, value]) =>
             PATCH_DB_COLUMNS.has(column) &&
-            JSON.stringify(after[column as PersistedColumn]) ===
-              JSON.stringify(normalizedPersistedValue(value))
+            canonicalJson(after[column as PersistedColumn]) ===
+              canonicalJson(normalizedPersistedValue(value))
         )
       );
     }
@@ -867,7 +923,8 @@ function validateTransitionMatrix(
       const afterExpiry = asEpoch(after.claim_expires_at);
       const sameLease =
         String(before.claim_owner_principal_id ?? "") === proof.principal &&
-        String(before.claimed_by_run ?? "") === String(after.claimed_by_run ?? "");
+        String(before.claimed_by_run ?? "") ===
+          String(after.claimed_by_run ?? "");
       return (
         String(before.id) === itemId &&
         String(after.id) === itemId &&
@@ -942,7 +999,10 @@ function queryStage(query: string): string {
   if (query.startsWith("SELECT dolt_commit")) return "branch.commit";
   if (query.startsWith("SELECT dolt_merge_base")) return "merge.reachability";
   if (query === "SELECT dolt_merge('--abort')") return "merge.abort";
-  if (query.startsWith("SELECT dolt_merge") || query.includes("FROM dolt_merge"))
+  if (
+    query.startsWith("SELECT dolt_merge") ||
+    query.includes("FROM dolt_merge")
+  )
     return "merge.apply";
   if (query.startsWith("SELECT dolt_branch")) return "branch.delete";
   if (query.includes("FROM dolt.merge_status")) return "merge.status";
@@ -986,15 +1046,24 @@ function isConnectionTerminal(error: unknown): boolean {
   );
 }
 
+function isServerSqlError(error: unknown): boolean {
+  return error instanceof Error && error.name === "PostgresError";
+}
+
 export class DoltgresWorkItemAdapter
-  implements WorkItemsDoltgresPort, WorkItemQueryPort
+  implements WorkItemsContentPort, WorkItemQueryPort
 {
   private operationTail: Promise<void> = Promise.resolve();
+  private queuedOperations = 0;
+  private readonly queueWaiters = new Set<() => void>();
+  private readonly cleanupScope = new AsyncLocalStorage<OperationContext>();
   private poisoned = false;
+  private heldWriter: OperationContext | undefined;
   private readonly logger: WorkItemLogger;
   private readonly idFloor: number;
   private readonly lockWaitMs: number;
   private readonly lockRetryMs: number;
+  private readonly writerLockProtocol: "bridge" | "database";
   private readonly queueWaitMs: number;
   private readonly queryTimeoutMs: number;
   private readonly branchTimeoutMs: number;
@@ -1002,7 +1071,6 @@ export class DoltgresWorkItemAdapter
   private readonly recreateClient: (() => Sql) | undefined;
   private readClient: Sql | undefined;
   private readonly recreateReadClient: (() => Sql) | undefined;
-  private readonly readLaneConfigured: boolean;
   /**
    * Read pool derived from `recreateClient` when the caller passed no
    * `readClient`. Built on first read, not in the constructor: a node that
@@ -1010,6 +1078,13 @@ export class DoltgresWorkItemAdapter
    * depend on the database being reachable.
    */
   private readonly terminatingPools = new WeakMap<object, Promise<void>>();
+  private readonly readPools = new Set<Sql>();
+  private readonly retiredReadPools = new WeakSet<object>();
+  private readonly drainingReadPools = new WeakMap<object, Promise<void>>();
+  private readonly readConnectionBudget: number | undefined;
+  private readonly readPending = new Map<Sql, number>();
+  private readonly readWaiters = new Map<Sql, ReadWaiter[]>();
+  private readonly unknownReadPools = new WeakSet<object>();
 
   constructor(
     private sql: Sql,
@@ -1019,17 +1094,33 @@ export class DoltgresWorkItemAdapter
     this.idFloor = options.idFloor ?? 1;
     this.lockWaitMs = options.lockWaitMs ?? LOCK_WAIT_MS;
     this.lockRetryMs = options.lockRetryMs ?? LOCK_RETRY_MS;
+    this.writerLockProtocol = options.writerLockProtocol ?? "bridge";
     this.queueWaitMs = options.queueWaitMs ?? OPERATION_QUEUE_WAIT_MS;
     this.queryTimeoutMs = options.queryTimeoutMs ?? QUERY_TIMEOUT_MS;
     this.branchTimeoutMs = options.branchTimeoutMs ?? BRANCH_TIMEOUT_MS;
     this.reserveTimeoutMs = options.reserveTimeoutMs ?? RESERVE_TIMEOUT_MS;
     this.recreateClient = options.recreateClient;
     this.readClient = options.readClient;
+    this.readConnectionBudget = options.readConnectionBudget;
+    if (
+      this.readConnectionBudget !== undefined &&
+      (!Number.isInteger(this.readConnectionBudget) ||
+        this.readConnectionBudget < 1)
+    )
+      throw new Error("readConnectionBudget must be a positive integer");
     this.recreateReadClient =
       options.recreateReadClient ?? options.recreateClient;
-    this.readLaneConfigured = Boolean(
-      options.readClient || options.recreateReadClient || options.recreateClient
-    );
+    if (!this.readClient && !this.recreateReadClient) {
+      throw new Error(
+        "DoltgresWorkItemAdapter requires a dedicated readClient or read-client factory"
+      );
+    }
+    if (this.readClient === this.sql) {
+      throw new Error(
+        "DoltgresWorkItemAdapter read and write clients must be separate pools"
+      );
+    }
+    if (this.readClient) this.validateReadPool(this.readClient);
   }
 
   private logStage(
@@ -1058,6 +1149,11 @@ export class DoltgresWorkItemAdapter
     stage: string,
     reason: string
   ): Promise<void> {
+    if (context.abandoned || context.nativeUnknown) {
+      this.poisoned = true;
+      this.heldWriter = context;
+      return;
+    }
     const activeTermination = this.terminatingPools.get(pool as object);
     if (activeTermination) return activeTermination;
 
@@ -1102,9 +1198,27 @@ export class DoltgresWorkItemAdapter
     context: OperationContext,
     query: string
   ): Promise<ReadonlyArray<Record<string, unknown>>> {
+    const unlock = /^SELECT pg_advisory_unlock\(/.test(query);
+    const cleanup = this.cleanupScope.getStore() === context;
+    if (context.nativeUnknown)
+      throw context.abandoned ?? new WorkItemsCapacityError("unknown");
+    if (context.abandoned && !cleanup && !unlock) {
+      if (context.admitting && !context.nativeUnknown)
+        throw new DoltWriterAdmissionError("lock_contended", false, {
+          cause: context.abandoned,
+        });
+      throw context.abandoned;
+    }
+    if (
+      /^\s*(?:INSERT|UPDATE|DELETE)|dolt_(?:checkout|commit|merge|branch|reset|add)\(/i.test(
+        query
+      )
+    )
+      context.laneMutated = true;
     const stage = queryStage(query);
     const startedAt = Date.now();
     let timedOut = false;
+    let nativeReturned = false;
     const branch = /'(work-item-op\/[^']+)'/.exec(query)?.[1] ?? context.branch;
     const queryFields = branch ? { branch } : {};
     this.logStage("info", context, stage, "start", queryFields);
@@ -1114,15 +1228,25 @@ export class DoltgresWorkItemAdapter
       : this.queryTimeoutMs;
     const timeoutTimer = setTimeout(() => {
       timedOut = true;
-      void this.terminateClient(pool, context, stage, "query_timeout");
+      this.abandonOperation(context, stage);
     }, budgetMs);
     try {
       const rows = (await pending) as ReadonlyArray<Record<string, unknown>>;
-      if (timedOut) {
-        await this.terminateClient(pool, context, stage, "query_timeout");
-        throw new WorkItemsBusyError(
-          `Work-item store timed out during ${stage}; retry shortly`
-        );
+      nativeReturned = true;
+      if (
+        stage === "branch.create" &&
+        context.mutationState &&
+        query.includes(escapeValue(context.mutationState.branch))
+      ) {
+        try {
+          assertDoltStatus(rows, "dolt_checkout");
+          context.mutationState.creationProven = true;
+        } catch {
+          /* failed creation never grants cleanup ownership */
+        }
+      }
+      if (timedOut && !context.admitting && !unlock && !cleanup) {
+        throw context.abandoned;
       }
       this.logStage("info", context, stage, "complete", {
         ...queryFields,
@@ -1130,28 +1254,50 @@ export class DoltgresWorkItemAdapter
       });
       return rows;
     } catch (error) {
+      if (!nativeReturned && !isServerSqlError(error)) {
+        context.nativeUnknown = true;
+        this.poisoned = true;
+        this.abandonOperation(context, stage);
+      }
       this.logStage("error", context, stage, "error", {
         ...queryFields,
         durationMs: Date.now() - startedAt,
         timedOut,
         ...errorFields(error),
       });
-      if (timedOut) {
-        await this.terminateClient(pool, context, stage, "query_timeout");
-        throw new WorkItemsBusyError(
-          `Work-item store timed out during ${stage}; retry shortly`
-        );
+      if (timedOut && !cleanup) {
+        throw context.abandoned;
       }
       if (isConnectionTerminal(error)) {
-        await this.terminateClient(pool, context, stage, "connection_terminal");
-        throw new WorkItemsBusyError(
-          `Work-item store connection ended during ${stage}; retry shortly`
-        );
+        context.nativeUnknown = true;
+        this.poisoned = true;
+        this.abandonOperation(context, stage);
+        throw context.abandoned;
       }
       throw error;
     } finally {
       clearTimeout(timeoutTimer);
     }
+  }
+
+  private abandonOperation(context: OperationContext, stage: string): void {
+    if (context.abandoned) return;
+    context.abandoned = context.branch
+      ? new WorkItemWriteOutcomeUnknownError(
+          context.operationId,
+          context.branch,
+          context.mutationState?.branchCommit,
+          context.mutationState?.proof.itemId
+        )
+      : new WorkItemsCapacityError(
+          context.nativeUnknown ? "unknown" : "pending"
+        );
+    this.heldWriter = context;
+    for (const reject of this.queueWaiters) reject();
+    this.logStage("warn", context, stage, "error", {
+      reason: "caller_abandoned_native_retained",
+    });
+    context.rejectCaller?.(context.abandoned);
   }
 
   private instrumentConnection(
@@ -1169,6 +1315,9 @@ export class DoltgresWorkItemAdapter
   private async enterOperationQueue(
     context: OperationContext
   ): Promise<() => void> {
+    if (this.queuedOperations >= 32)
+      throw new WorkItemsCapacityError("pending");
+    this.queuedOperations++;
     const predecessor = this.operationTail;
     let releaseTurn: () => void = () => undefined;
     const turnDone = new Promise<void>((resolve) => {
@@ -1179,9 +1328,15 @@ export class DoltgresWorkItemAdapter
     const startedAt = Date.now();
     this.logStage("info", context, "operation.queue", "start");
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let rejectCapacity: () => void = () => undefined;
+    const heldCapacity = new Promise<never>((_resolve, reject) => {
+      rejectCapacity = () => reject(new WorkItemsCapacityError("pending"));
+    });
+    this.queueWaiters.add(rejectCapacity);
     try {
       await Promise.race([
         predecessor,
+        heldCapacity,
         new Promise<never>((_resolve, reject) => {
           timeoutId = setTimeout(
             () =>
@@ -1205,6 +1360,8 @@ export class DoltgresWorkItemAdapter
       throw error;
     } finally {
       if (timeoutId) clearTimeout(timeoutId);
+      this.queuedOperations--;
+      this.queueWaiters.delete(rejectCapacity);
     }
 
     this.logStage("info", context, "operation.queue", "complete", {
@@ -1231,7 +1388,8 @@ export class DoltgresWorkItemAdapter
     const operationPool = this.sql;
     const reserveStartedAt = Date.now();
     let rawConn: ReservedSql | undefined;
-    let locked = false;
+    let connection: WorkItemConnection | undefined;
+    let writerLock: DoltWriterLock | undefined;
     let reserveTimedOut = false;
     let reserveTimer: ReturnType<typeof setTimeout> | undefined;
     let pendingRecovery = false;
@@ -1248,12 +1406,7 @@ export class DoltgresWorkItemAdapter
       this.logStage("info", context, "connection.reserve", "start");
       reserveTimer = setTimeout(() => {
         reserveTimedOut = true;
-        void this.terminateClient(
-          operationPool,
-          context,
-          "connection.reserve",
-          "reserve_timeout"
-        );
+        this.abandonOperation(context, "connection.reserve");
       }, this.reserveTimeoutMs);
       try {
         rawConn = await operationPool.reserve();
@@ -1266,27 +1419,52 @@ export class DoltgresWorkItemAdapter
         throw error;
       }
       if (reserveTimedOut) {
-        await this.terminateClient(
-          operationPool,
-          context,
-          "connection.reserve",
-          "reserve_completed_after_timeout"
-        );
-        throw new WorkItemsBusyError(
-          "Work-item store timed out reserving a connection; retry shortly"
-        );
+        rawConn.release();
+        rawConn = undefined;
+        throw context.abandoned;
       }
       if (reserveTimer) clearTimeout(reserveTimer);
       this.logStage("info", context, "connection.reserve", "complete", {
         durationMs: Date.now() - reserveStartedAt,
       });
       const conn = this.instrumentConnection(operationPool, rawConn, context);
-      locked = await this.acquireGlobalLock(conn, context);
+      connection = conn;
+      this.logStage("info", context, "lock.acquire", "start", {
+        protocol: this.writerLockProtocol,
+      });
+      context.admitting = true;
+      try {
+        writerLock = await acquireDoltWriterLocks(conn, {
+          protocol: this.writerLockProtocol,
+          lockWaitMs: this.lockWaitMs,
+          lockRetryMs: this.lockRetryMs,
+        });
+      } finally {
+        context.admitting = false;
+      }
+      if (context.abandoned) throw context.abandoned;
+      this.logStage("info", context, "lock.acquire", "complete", {
+        protocol: writerLock.protocol,
+        baseDatabase: writerLock.baseDatabase,
+      });
       const reconciliation = options.reconcile ?? "required";
-      if (reconciliation !== "skipped")
-        await this.reconcileUnderLock(conn, reconciliation);
+      if (reconciliation !== "skipped") await this.reconcileUnderLock(conn);
       return await fn(conn);
     } catch (error) {
+      if (error instanceof DoltWriterAdmissionError) {
+        if (error.discardSession) {
+          await this.terminateClient(
+            operationPool,
+            context,
+            "lock.acquire",
+            error.reason
+          );
+          rawConn = undefined;
+        }
+        throw new WorkItemsBusyError(
+          `Work-item writer admission unavailable: ${error.reason}`
+        );
+      }
       pendingRecovery = error instanceof PendingBranchRecoveryError;
       this.logStage("error", context, "operation", "error", {
         durationMs: Date.now() - reserveStartedAt,
@@ -1295,11 +1473,52 @@ export class DoltgresWorkItemAdapter
       throw error;
     } finally {
       if (reserveTimer) clearTimeout(reserveTimer);
-      // A branch operation with an uncertain acknowledgement is handed to a
-      // second, fresh lock scope only after this session is definitively dead.
-      // This releases the session-scoped advisory lock and abandons any dirty
-      // working set without asking the failed connection to reconcile itself.
-      if (pendingRecovery && rawConn) {
+      let reconciled = false;
+      if (
+        context.abandoned &&
+        context.laneMutated &&
+        !context.nativeUnknown &&
+        writerLock &&
+        connection
+      ) {
+        const state = context.mutationState;
+        const ownedConnection = connection;
+        const ownedGuard = writerLock;
+        try {
+          reconciled = await this.cleanupScope.run(context, () =>
+            reconcileAbandonedDoltOperation(ownedConnection, {
+              guard: ownedGuard,
+              ...(context.branch ? { branch: context.branch } : {}),
+              ...(state?.baseHash ? { baseHash: state.baseHash } : {}),
+              creationProven: state?.creationProven === true,
+              commitAttempted: state?.commitAttempted === true,
+              mergeAttempted: state?.mergeAttempted === true,
+            })
+          );
+        } catch (error) {
+          this.logStage(
+            "error",
+            context,
+            "abandoned.reconcile",
+            "error",
+            errorFields(error)
+          );
+        }
+      }
+      // Every native await above settled before entering finally. A branch or
+      // unknown lock acknowledgement needs inspection; never resume/replay it.
+      if (
+        context.abandoned &&
+        !reconciled &&
+        (context.laneMutated || context.nativeUnknown)
+      ) {
+        this.poisoned = true;
+        this.heldWriter = context;
+      }
+      // Fresh recovery is permitted only after authoritative native settlement.
+      // Caller abandonment and transport uncertainty bypass this path entirely:
+      // closing a client is not evidence that its native work or locks stopped.
+      if (pendingRecovery && rawConn && !context.abandoned) {
         await this.terminateClient(
           operationPool,
           context,
@@ -1307,23 +1526,18 @@ export class DoltgresWorkItemAdapter
           "pending_branch_recovery"
         );
         rawConn = undefined;
-        locked = false;
+        writerLock = undefined;
       }
       if (
-        locked &&
+        writerLock &&
         rawConn &&
         this.sql === operationPool &&
         !this.poisoned
       ) {
         try {
-          await this.executeQuery(
-            operationPool,
-            rawConn,
-            context,
-            `SELECT pg_advisory_unlock(${GLOBAL_LOCK_KEY})`
-          );
+          await writerLock.release();
         } catch {
-          // Never return a session that may still own the global lock to the
+          // Never return a session that may still own the writer locks to the
           // pool. This client is dedicated to work items, so terminate the old
           // pool before the injected factory constructs a clean replacement.
           await this.terminateClient(
@@ -1345,39 +1559,33 @@ export class DoltgresWorkItemAdapter
     operation: string,
     fn: (context: OperationContext) => Promise<T>
   ): Promise<T> {
-    const context = { operationId: randomUUID(), operation };
+    if (this.heldWriter || this.poisoned)
+      throw new WorkItemsCapacityError(this.poisoned ? "unknown" : "pending");
+    const context: OperationContext = { operationId: randomUUID(), operation };
     const leaveQueue = await this.enterOperationQueue(context);
-    try {
-      return await fn(context);
-    } finally {
-      // The FIFO ticket spans the original lock scope and any fresh-session
-      // recovery so an in-process successor cannot overtake reconciliation.
-      leaveQueue();
-    }
-  }
-
-  private async acquireGlobalLock(
-    conn: WorkItemConnection,
-    context: OperationContext
-  ): Promise<boolean> {
-    const deadline = Date.now() + this.lockWaitMs;
-    do {
-      const rows = await conn.unsafe(
-        `SELECT pg_try_advisory_lock(${GLOBAL_LOCK_KEY})`
-      );
-      if (doltBoolean(rows, "pg_try_advisory_lock")) return true;
-      if (Date.now() >= deadline) {
-        this.logStage("warn", context, "lock.acquire", "error", {
-          durationMs: this.lockWaitMs,
-          reason: "contended",
-        });
-        throw new WorkItemsBusyError();
+    const caller = new Promise<T>((resolve, reject) => {
+      context.rejectCaller = reject;
+      context.acknowledge = (value) => {
+        if (context.abandoned) return;
+        context.acknowledged = true;
+        resolve(value as T);
+      };
+    });
+    const execution = (async () => {
+      try {
+        if (this.heldWriter || this.poisoned)
+          throw new WorkItemsCapacityError(
+            this.poisoned ? "unknown" : "pending"
+          );
+        return await fn(context);
+      } finally {
+        // Caller deadline does not release the actual execution's FIFO ticket.
+        if (!this.poisoned && this.heldWriter === context)
+          this.heldWriter = undefined;
+        leaveQueue();
       }
-      await sleep(
-        Math.min(this.lockRetryMs, Math.max(0, deadline - Date.now()))
-      );
-    } while (Date.now() <= deadline);
-    throw new WorkItemsBusyError();
+    })();
+    return Promise.race([execution, caller]);
   }
 
   private logReconciliation(
@@ -1450,7 +1658,10 @@ export class DoltgresWorkItemAdapter
         // No `classification` key: the caller records the cleaned verdict, and
         // adding a value here would make existing classification queries
         // incomplete. `deleteAckLost` is the queryable substrate signal.
-        this.logReconciliation("info", conn, { ...fields, deleteAckLost: true });
+        this.logReconciliation("info", conn, {
+          ...fields,
+          deleteAckLost: true,
+        });
         return true;
       }
       // Once reachability (and, for a fresh merge, the exact current row) is
@@ -1596,16 +1807,11 @@ export class DoltgresWorkItemAdapter
     conn: WorkItemConnection,
     branch: string,
     pending?: PendingBranchState<T>,
-    originalError?: unknown,
-    reconciliation: BranchReconciliation = "required"
+    originalError?: unknown
   ): Promise<T | undefined> {
     const startedAt = Date.now();
-    // A read that will serve anyway records handled degradation, not failure:
-    // the request still succeeds, so an error level would make every healthy
-    // read on a node carrying residual evidence look like an outage.
-    const served = reconciliation === "best_effort";
-    const preserveLevel = served ? "warn" : "error";
-    const preserveFields = served ? { served: true } : {};
+    const preserveLevel = "error";
+    const preserveFields = {};
     try {
       const checkoutRows = await conn.unsafe("SELECT dolt_checkout('main')");
       assertDoltStatus(checkoutRows, "dolt_checkout");
@@ -1654,7 +1860,9 @@ export class DoltgresWorkItemAdapter
       });
       throw this.preservedBranchError(branch, error);
     }
-    if (pending && tip === pending.baseHash) {
+    if (pending && !pending.branchCommit && tip === pending.baseHash) {
+      // The owned ref never acquired a commit; no later sweep can land this intent.
+      pending.outcomeSafelyAbsent = true;
       try {
         await this.deleteOperationBranch(conn, branch);
       } catch (error) {
@@ -1812,6 +2020,8 @@ export class DoltgresWorkItemAdapter
           throw this.preservedBranchError(branch, error);
         }
       }
+      if (pending?.result !== undefined)
+        conn.context.acknowledge?.(pending.result);
       const cleaned = row
         ? await this.cleanupVerifiedBranch(conn, transition, startedAt)
         : true;
@@ -1866,6 +2076,8 @@ export class DoltgresWorkItemAdapter
       });
       throw this.preservedBranchError(branch, error);
     }
+    if (pending?.result !== undefined)
+      conn.context.acknowledge?.(pending.result);
     const cleaned = await this.cleanupVerifiedBranch(
       conn,
       transition,
@@ -1898,10 +2110,7 @@ export class DoltgresWorkItemAdapter
     }
   }
 
-  private async reconcileUnderLock(
-    conn: WorkItemConnection,
-    reconciliation: Exclude<BranchReconciliation, "skipped">
-  ): Promise<void> {
+  private async reconcileUnderLock(conn: WorkItemConnection): Promise<void> {
     await this.makeMainSafe(conn);
 
     let branchRows: ReadonlyArray<Record<string, unknown>>;
@@ -1916,62 +2125,46 @@ export class DoltgresWorkItemAdapter
       .map((row) => String(row.name ?? ""))
       .filter((branch) => branch.startsWith(OP_BRANCH_PREFIX))
       .sort();
-    // bug.5358: a read is served from committed `main`, which an unprovable
-    // evidence branch cannot corrupt. Failing the read closed here let one
-    // residual branch return 503 for every read permanently — nothing deletes a
-    // `preserved_unsafe` branch, and this sweep re-walks `dolt.branches` on each
-    // request, so a restart does not clear it. `resolveOperationBranch` already
-    // recorded the branch; keep sweeping, because a sibling may still be
-    // provable and skipping it would drop read-your-writes for a durable write
-    // that only needs its merge finished.
+    // Reads never enter this method. A write preserves unprovable evidence
+    // and may quarantine only a structurally verified obsolete operation.
     let tolerated = false;
     for (const branch of branches) {
       try {
-        await this.resolveOperationBranch(
-          conn,
-          branch,
-          undefined,
-          undefined,
-          reconciliation
-        );
+        await this.resolveOperationBranch(conn, branch, undefined, undefined);
       } catch (error) {
-        if (reconciliation === "required") {
-          // ONLY the structurally-verified arm is quarantinable. A branch whose
-          // tip is missing, or whose reachability could not be proven, has
-          // established nothing about its contents — parking it could hide
-          // arbitrary divergence, so those keep failing closed exactly as
-          // before.
-          if (!(error instanceof UnprovableTransitionError)) throw error;
-          // ONE UNPROVABLE BRANCH MUST NOT BLOCK EVERY FUTURE WRITE.
-          // bug.5358 left this arm throwing, which made writes permanently
-          // unavailable on a node carrying a single residual branch: nothing
-          // deletes a `preserved_unsafe` ref, and this sweep re-walks
-          // `dolt.branches` on every request, so no restart clears it. Measured
-          // on operator production — a promote failed at 05:27:04Z, the lost
-          // `branch.create` ack left `work-item-op/9ee34c81…` behind at
-          // 05:28:33Z, and 88 consecutive write attempts 503'd over the next
-          // two hours while reads stayed 200.
-          //
-          // Quarantine rather than delete. The branch reached this arm having
-          // ALREADY passed every structural check — linear history, frozen base
-          // intact, exactly one `public.work_items` row diff, authoritative
-          // commit time — and fails only its transition proof. So it may hold a
-          // real one-row write, and deleting it is the data loss bug.5358 was
-          // filed to prevent. Renaming it out of the enumerated namespace
-          // preserves those commits byte-for-byte with zero data mutation,
-          // keeps them reachable for a human to merge, and unblocks writes now.
-          // A failed rename still throws: quarantine must not be best-effort,
-          // or a write would proceed believing evidence was parked when it was
-          // not.
-          await this.quarantineOperationBranch(conn, branch, error);
-          tolerated = true;
-          continue;
-        }
+        // ONLY the structurally-verified arm is quarantinable. A branch whose
+        // tip is missing, or whose reachability could not be proven, has
+        // established nothing about its contents — parking it could hide
+        // arbitrary divergence, so those keep failing closed exactly as
+        // before.
+        if (!(error instanceof UnprovableTransitionError)) throw error;
+        // ONE UNPROVABLE BRANCH MUST NOT BLOCK EVERY FUTURE WRITE.
+        // bug.5358 left this arm throwing, which made writes permanently
+        // unavailable on a node carrying a single residual branch: nothing
+        // deletes a `preserved_unsafe` ref, and this sweep re-walks
+        // `dolt.branches` on every request, so no restart clears it. Measured
+        // on operator production — a promote failed at 05:27:04Z, the lost
+        // `branch.create` ack left `work-item-op/9ee34c81…` behind at
+        // 05:28:33Z, and 88 consecutive write attempts 503'd over the next
+        // two hours while reads stayed 200.
+        //
+        // Quarantine rather than delete. The branch reached this arm having
+        // ALREADY passed every structural check — linear history, frozen base
+        // intact, exactly one `public.work_items` row diff, authoritative
+        // commit time — and fails only its transition proof. So it may hold a
+        // real one-row write, and deleting it is the data loss bug.5358 was
+        // filed to prevent. Renaming it out of the enumerated namespace
+        // preserves those commits byte-for-byte with zero data mutation,
+        // keeps them reachable for a human to merge, and unblocks writes now.
+        // A failed rename still throws: quarantine must not be best-effort,
+        // or a write would proceed believing evidence was parked when it was
+        // not.
+        await this.quarantineOperationBranch(conn, branch, error);
         tolerated = true;
       }
     }
     // Each iteration re-proves `main` itself, so one pass at the end is enough
-    // to guarantee the caller's read never runs on a half-reconciled session.
+    // to guarantee the next command never runs on a half-reconciled session.
     if (tolerated) await this.makeMainSafe(conn);
   }
 
@@ -2050,22 +2243,35 @@ export class DoltgresWorkItemAdapter
           );
         });
       } catch (error) {
+        if (context.abandoned) throw context.abandoned;
         if (!(error instanceof PendingBranchRecoveryError)) throw error;
-        const resolved = await this.withGlobalLock(
-          context,
-          (conn) =>
-            this.resolveOperationBranch(
-              conn,
+        try {
+          const resolved = await this.withGlobalLock(
+            context,
+            (conn) =>
+              this.resolveOperationBranch(
+                conn,
+                error.state.branch,
+                error.state as PendingBranchState<T>,
+                error.originalError
+              ),
+            { reconcile: "skipped" }
+          );
+          if (resolved === undefined) throw new DoltMergeOutcomeUnknownError();
+          return resolved;
+        } catch (recoveryError) {
+          // This wrapper belongs only to the CURRENT command. Old orphan preflight
+          // failures occur before mutateOnBranch and remain safe admission failures.
+          if (error.state.commitAttempted && !error.state.outcomeSafelyAbsent) {
+            throw new WorkItemWriteOutcomeUnknownError(
+              error.state.operationId,
               error.state.branch,
-              error.state as PendingBranchState<T>,
-              error.originalError
-            ),
-          { reconcile: "skipped" }
-        );
-        if (resolved === undefined) {
-          throw new DoltMergeOutcomeUnknownError();
+              error.state.branchCommit,
+              error.state.proof.itemId
+            );
+          }
+          throw recoveryError;
         }
-        return resolved;
       }
     });
   }
@@ -2080,15 +2286,17 @@ export class DoltgresWorkItemAdapter
   ): Promise<T> {
     const startedAt = Date.now();
     const branch = `${OP_BRANCH_PREFIX}${randomUUID()}`;
-    conn.context.branch = branch;
     const baseRows = await conn.unsafe(
       "SELECT dolt_hashof('main') AS dolt_hashof"
     );
+    conn.context.branch = branch;
     const state: PendingBranchState<T> = {
+      operationId: conn.context.operationId,
       branch,
       baseHash: doltScalar(baseRows, "dolt_hashof"),
       proof,
     };
+    conn.context.mutationState = state as PendingBranchState<unknown>;
     // Arm recovery before branch-create: the ref can be durable even when the
     // checkout acknowledgement is lost (bug.5358 Rev3).
     try {
@@ -2105,6 +2313,7 @@ export class DoltgresWorkItemAdapter
       }
       const addRows = await conn.unsafe("SELECT dolt_add('work_items')");
       assertDoltStatus(addRows, "dolt_add");
+      state.commitAttempted = true;
       const commitRows = await conn.unsafe(
         `SELECT dolt_commit('-m', ${escapeValue(`${COMMIT_TAG}: ${message} by actor:${principalId}`)})`
       );
@@ -2119,6 +2328,7 @@ export class DoltgresWorkItemAdapter
         branchCommit,
         state as PendingBranchState<unknown>
       );
+      state.mergeAttempted = true;
       requireNamedMerge(
         await conn.unsafe(
           `SELECT hash, fast_forward, conflicts, message FROM dolt_merge(${escapeValue(branch)})`
@@ -2128,6 +2338,7 @@ export class DoltgresWorkItemAdapter
       // A merge acknowledgement alone is not success. Reachability and the
       // exact current row are proven while serialization is still held.
       await this.proveFreshMergeOutcome(conn, transition);
+      conn.context.acknowledge?.(result);
       await this.cleanupVerifiedBranch(conn, transition, startedAt);
       return result;
     } catch (error) {
@@ -2188,7 +2399,7 @@ export class DoltgresWorkItemAdapter
    * execution too.
    *
    * `dolt_checkout` is session state, so a WRITE must own its session: pinned
-   * connection, FIFO admission, advisory lock `GLOBAL_LOCK_KEY`. A READ needs
+   * connection, FIFO admission, the common per-database writer lock. A READ needs
    * none of that — it reads committed `main`, which is plain SQL. Routing reads
    * through the write lane made read concurrency structurally 1 (a `max: 1`
    * pool behind a single-slot queue), so N concurrent readers serialized.
@@ -2200,7 +2411,7 @@ export class DoltgresWorkItemAdapter
    * passed one, otherwise one the adapter derives from `recreateClient`. It
    * never calls `dolt_checkout`, never takes the lock, and never reconciles,
    * so read concurrency equals that pool's width and no read ever waits on a
-   * write. Only a consumer that passes neither falls back to the shared lane.
+   * write. A missing independent read pool is a configuration error.
    *
    * WHY NOT CHECKING OUT IS SAFE: a fresh connection opens on the database's
    * default branch, which is `main`. This lane never moves it, so every read
@@ -2210,8 +2421,8 @@ export class DoltgresWorkItemAdapter
    * the bug.5358 guarantee, and they no longer pay to enumerate it.
    */
   /**
-   * The pool reads run on, or `undefined` when there is none and reads must
-   * take the shared write lane.
+   * Resolve the independent query pool. Missing configuration never falls
+   * back to writer admission.
    *
    * `recreateClient` is the caller's own factory for a work-items connection,
    * so a pool built from it has the right URL, the right `application_name`
@@ -2220,19 +2431,264 @@ export class DoltgresWorkItemAdapter
    * the write pool because that pool is `max: 1` on every node in the fleet:
    * sharing it would put every read back behind the in-flight write.
    */
-  private resolveReadPool(): Sql | undefined {
-    if (this.readClient) return this.readClient;
-    if (!this.recreateReadClient) {
-      if (this.readLaneConfigured) {
-        throw new WorkItemsBusyError(
-          "Work-item read lane requires a fresh connection; retry shortly"
+  private validateReadPool(pool: Sql): void {
+    if (
+      !pool ||
+      typeof pool.unsafe !== "function" ||
+      pool === this.sql ||
+      this.retiredReadPools.has(pool as object)
+    ) {
+      throw new Error(
+        "Read-client factory must return a fresh independent reader pool"
+      );
+    }
+    const knownWidths = [
+      ...this.readPools,
+      ...(this.readPools.has(pool) ? [] : [pool]),
+    ].map((client) => client.options?.max);
+    if (
+      this.readConnectionBudget !== undefined &&
+      (!knownWidths.every((width) => Number.isInteger(width) && width > 0) ||
+        knownWidths.reduce((sum, width) => sum + width, 0) >
+          this.readConnectionBudget)
+    ) {
+      throw new Error(
+        "Reader generations exceed the declared readConnectionBudget"
+      );
+    }
+    this.readPools.add(pool);
+  }
+
+  /** Stop new assignments immediately; existing siblings retain their own deadlines. */
+  private retireReadPool(
+    pool: Sql,
+    context: OperationContext,
+    stage: string
+  ): void {
+    if (this.readClient === pool) this.readClient = undefined;
+    this.retiredReadPools.add(pool as object);
+    const waiters = this.readWaiters.get(pool) ?? [];
+    this.readWaiters.delete(pool);
+    for (const waiter of waiters)
+      waiter.reject(
+        new WorkItemsCapacityError(
+          this.unknownReadPools.has(pool as object) ? "unknown" : "pending"
+        )
+      );
+    if (
+      this.drainingReadPools.has(pool as object) ||
+      (this.readPending.get(pool) ?? 0) > 0 ||
+      this.unknownReadPools.has(pool as object)
+    )
+      return;
+    const draining = Promise.resolve()
+      // All native results arrived. Closing idle sockets cannot abandon SQL.
+      .then(() => pool.end({ timeout: 0 }))
+      .then(() => {
+        this.readPools.delete(pool);
+        this.readPending.delete(pool);
+        this.logStage("info", context, "read_pool.drain", "complete", {
+          failedStage: stage,
+        });
+      })
+      .catch((error) => {
+        // Unknown shutdown retains its generation slot; never grow without bound.
+        this.logStage("error", context, "read_pool.drain", "error", {
+          ...errorFields(error),
+          failedStage: stage,
+        });
+      });
+    this.drainingReadPools.set(pool as object, draining);
+  }
+
+  private readWidth(pool: Sql): number {
+    const width = pool.options?.max;
+    return typeof width === "number" && Number.isInteger(width) && width > 0
+      ? width
+      : 1;
+  }
+
+  private async enterReaderQueue(pool: Sql, deadline: number): Promise<void> {
+    if (this.retiredReadPools.has(pool as object))
+      throw new WorkItemsCapacityError("pending");
+    if ((this.readPending.get(pool) ?? 0) < this.readWidth(pool)) {
+      this.readPending.set(pool, (this.readPending.get(pool) ?? 0) + 1);
+      return;
+    }
+    const waiters = this.readWaiters.get(pool) ?? [];
+    if (waiters.length >= 32) throw new WorkItemsCapacityError("pending");
+    this.readWaiters.set(pool, waiters);
+    return new Promise<void>((resolve, reject) => {
+      let timer: ReturnType<typeof setTimeout>;
+      const waiter: ReadWaiter = {
+        deadline,
+        start: () => {
+          clearTimeout(timer);
+          this.readPending.set(pool, (this.readPending.get(pool) ?? 0) + 1);
+          resolve();
+        },
+        reject: (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      };
+      waiters.push(waiter);
+      timer = setTimeout(
+        () => {
+          const index = waiters.indexOf(waiter);
+          if (index >= 0) waiters.splice(index, 1);
+          waiter.reject(
+            new WorkItemsBusyError(
+              "Work-item read deadline elapsed before native dispatch"
+            )
+          );
+        },
+        Math.max(1, deadline - Date.now())
+      );
+    });
+  }
+
+  private releaseReaderPermit(
+    pool: Sql,
+    context: OperationContext,
+    stage: string
+  ): void {
+    this.readPending.set(
+      pool,
+      Math.max(0, (this.readPending.get(pool) ?? 1) - 1)
+    );
+    if (
+      this.retiredReadPools.has(pool as object) ||
+      this.unknownReadPools.has(pool as object)
+    ) {
+      this.retireReadPool(pool, context, stage);
+      return;
+    }
+    const waiters = this.readWaiters.get(pool) ?? [];
+    while (
+      waiters.length &&
+      (this.readPending.get(pool) ?? 0) < this.readWidth(pool)
+    ) {
+      const waiter = waiters.shift();
+      if (!waiter) break;
+      if (Date.now() >= waiter.deadline)
+        waiter.reject(
+          new WorkItemsBusyError(
+            "Work-item read deadline elapsed before native dispatch"
+          )
         );
-      }
-      return undefined;
+      else waiter.start();
+    }
+    if (!waiters.length) this.readWaiters.delete(pool);
+  }
+
+  private async executeReadQuery(
+    pool: Sql,
+    context: OperationContext,
+    query: string
+  ): Promise<ReadonlyArray<Record<string, unknown>>> {
+    const stage = queryStage(query);
+    const startedAt = Date.now();
+    const deadline = startedAt + this.queryTimeoutMs;
+    this.logStage("info", context, stage, "start");
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let expired = false;
+    await this.enterReaderQueue(pool, deadline);
+    let nativeStarted = false;
+    const native = Promise.resolve().then(() => {
+      if (Date.now() >= deadline || this.retiredReadPools.has(pool as object))
+        throw new WorkItemsCapacityError("pending");
+      nativeStarted = true;
+      return pool.unsafe(query);
+    });
+    const settled = native
+      .then(
+        (rows) => rows,
+        (error: unknown) => {
+          if (nativeStarted && !isServerSqlError(error))
+            this.unknownReadPools.add(pool as object);
+          throw error;
+        }
+      )
+      .finally(() => {
+        this.releaseReaderPermit(pool, context, stage);
+      });
+    try {
+      return await Promise.race([
+        settled.then((rows) => {
+          if (!expired)
+            this.logStage("info", context, stage, "complete", {
+              durationMs: Date.now() - startedAt,
+            });
+          return rows as ReadonlyArray<Record<string, unknown>>;
+        }),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => {
+              expired = true;
+              this.retireReadPool(pool, context, stage);
+              reject(
+                new WorkItemsBusyError(
+                  `Work-item read timed out during ${stage}; retry shortly`
+                )
+              );
+            },
+            Math.max(1, deadline - Date.now())
+          );
+        }),
+      ]);
+    } catch (error) {
+      if (this.unknownReadPools.has(pool as object))
+        this.retireReadPool(pool, context, stage);
+      this.logStage("error", context, stage, "error", {
+        ...errorFields(error),
+        durationMs: Date.now() - startedAt,
+      });
+      if (isConnectionTerminal(error))
+        throw new WorkItemsBusyError(
+          `Work-item reader connection ended during ${stage}; retry shortly`
+        );
+      throw error;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  private resolveReadPool(): Sql {
+    if (this.readClient) return this.readClient;
+    if (this.readPools.size >= 2)
+      throw new WorkItemsCapacityError(
+        [...this.readPools].some((pool) =>
+          this.unknownReadPools.has(pool as object)
+        )
+          ? "unknown"
+          : "pending"
+      );
+    if (!this.recreateReadClient) {
+      throw new WorkItemsBusyError(
+        "Work-item read lane requires a fresh connection; retry shortly"
+      );
     }
     try {
       this.readClient = this.recreateReadClient();
+      this.validateReadPool(this.readClient);
     } catch (error) {
+      const candidate = this.readClient;
+      this.readClient = undefined;
+      if (
+        candidate &&
+        candidate !== this.sql &&
+        typeof candidate.unsafe === "function" &&
+        !this.readPools.has(candidate) &&
+        !this.retiredReadPools.has(candidate as object)
+      ) {
+        this.readPools.add(candidate);
+        this.retireReadPool(
+          candidate,
+          { operationId: randomUUID(), operation: "configure reader" },
+          "reader.configuration"
+        );
+      }
       this.logger.warn(
         {
           event: "adapter.work_items.read_pool_derive_failed",
@@ -2255,49 +2711,18 @@ export class DoltgresWorkItemAdapter
     fn: (conn: WorkItemConnection) => Promise<T>
   ): Promise<T> {
     const readPool = this.resolveReadPool();
-    if (!readPool) {
-      // Legacy shared lane — unchanged for consumers that pass no read client.
-      return this.withOperationQueue("read work items", (context) =>
-        this.withGlobalLock(context, fn, { reconcile: "best_effort" })
-      );
-    }
     const context = { operationId: randomUUID(), operation: "read work items" };
-    try {
-      // No reserve(): a read pins no session state, so it does not need a
-      // dedicated connection. postgres.js hands each concurrent query its own
-      // pooled connection, which is exactly the bounded concurrency we want —
-      // and is why this needs no hand-rolled semaphore. `executeQuery` only
-      // uses `pool` for termination; the query itself goes through `.unsafe`,
-      // which a pool exposes identically to a reserved connection.
-      return await fn(
-        this.instrumentConnection(
-          readPool,
-          readPool as unknown as ReservedSql,
-          context
-        )
-      );
-    } catch (error) {
-      // A terminal read error has already condemned this pool in
-      // `executeQuery`. Forget it so the next request gets a clean generation.
-      // Never retry on the write lane: a server-side query panic would execute
-      // the same query again there, poison the session-pinned pool, and turn a
-      // read defect into a fleet-wide write outage.
-      if (!(error instanceof WorkItemsBusyError)) throw error;
-      if (readPool === this.readClient) this.readClient = undefined;
-      this.logger.warn(
-        {
-          event: "adapter.work_items.read_lane_unavailable",
-          ...errorFields(error),
-        },
-        "work_items read lane failed; a fresh pool will serve the next retry"
-      );
-      throw error;
-    }
+    // No reserve, checkout, advisory lock, reconciliation or writer-pool call.
+    return fn({
+      pool: readPool,
+      context,
+      unsafe: (query) => this.executeReadQuery(readPool, context, query),
+    });
   }
 
   private async getWith(conn: WorkItemConnection, id: WorkItemId) {
     const rows = await conn.unsafe(
-      `SELECT *, (claim_expires_at IS NOT NULL AND claim_expires_at > NOW()) AS claim_active FROM work_items WHERE id = ${escapeValue(id as string)} LIMIT 1`
+      `SELECT * FROM work_items WHERE id = ${escapeValue(id as string)} LIMIT 1`
     );
     return rows.length > 0 ? (rows[0] as Record<string, unknown>) : undefined;
   }
@@ -2354,7 +2779,7 @@ export class DoltgresWorkItemAdapter
     const rows = await this.readOnCleanMain(
       async (conn) =>
         (await conn.unsafe(
-          `SELECT *, (claim_expires_at IS NOT NULL AND claim_expires_at > NOW()) AS claim_active FROM work_items ${where} ORDER BY COALESCE(priority, 999) ASC, COALESCE(rank, 999) ASC, created_at DESC, id ASC${textNeedle ? "" : ` LIMIT ${limit + 1}`}`
+          `SELECT * FROM work_items ${where} ORDER BY COALESCE(priority, 999) ASC, COALESCE(rank, 999) ASC, created_at DESC, id ASC${textNeedle ? "" : ` LIMIT ${limit + 1}`}`
         )) as ReadonlyArray<Record<string, unknown>>
     );
     // Doltgres 0.57.3 panics when LOWER() receives an out-of-line TEXT value
@@ -2401,72 +2826,82 @@ export class DoltgresWorkItemAdapter
     principalId: string
   ): Promise<WorkItem> {
     const principal = requirePrincipal(principalId);
+    const scores =
+      input.scores === undefined
+        ? undefined
+        : (validScores(input.scores) ?? undefined);
     const createOnce = (allocatedId?: string) =>
-      this.mutate("create work item", principal, async (conn, proof) => {
-        const insert = async (allocatedId: string) => {
-          const columns = [
-            "id",
-            "type",
-            "title",
-            "status",
-            "node",
-            "created_by_principal_id",
-          ];
-          const values = [
-            escapeValue(allocatedId),
-            escapeValue(input.type),
-            escapeValue(input.title),
-            escapeValue(input.status ?? "needs_triage"),
-            escapeValue(input.node ?? "shared"),
-            escapeValue(principal),
-          ];
-          const add = (column: string, value: unknown) => {
-            if (value === undefined) return;
-            columns.push(column);
-            values.push(escapeValue(value));
+      this.mutate(
+        "create work item",
+        principal,
+        async (conn, proof) => {
+          const insert = async (allocatedId: string) => {
+            const columns = [
+              "id",
+              "type",
+              "title",
+              "status",
+              "node",
+              "created_by_principal_id",
+            ];
+            const values = [
+              escapeValue(allocatedId),
+              escapeValue(input.type),
+              escapeValue(input.title),
+              escapeValue(input.status ?? "needs_triage"),
+              escapeValue(input.node ?? "shared"),
+              escapeValue(principal),
+            ];
+            const add = (column: string, value: unknown) => {
+              if (value === undefined) return;
+              columns.push(column);
+              values.push(escapeValue(value));
+            };
+            add("summary", input.summary);
+            add("outcome", input.outcome);
+            add("project_id", input.projectId);
+            add("parent_id", input.parentId);
+            add("priority", input.priority);
+            add("rank", input.rank);
+            add("estimate", input.estimate);
+            add("scores", scores);
+            add("assignees", input.assignees);
+            add("labels", input.labels);
+            add("spec_refs", input.specRefs);
+            const rows = await conn.unsafe(
+              `INSERT INTO work_items (${columns.join(", ")}) VALUES (${values.join(", ")}) RETURNING *`
+            );
+            const row = rows[0] as Record<string, unknown> | undefined;
+            if (!row) throw new Error("INSERT returned no row");
+            proof.itemId = allocatedId;
+            proof.afterRow = row;
+            return rowToWorkItem(row);
           };
-          add("summary", input.summary);
-          add("outcome", input.outcome);
-          add("project_id", input.projectId);
-          add("parent_id", input.parentId);
-          add("priority", input.priority);
-          add("rank", input.rank);
-          add("estimate", input.estimate);
-          add("assignees", input.assignees);
-          add("labels", input.labels);
-          add("spec_refs", input.specRefs);
-          const rows = await conn.unsafe(
-            `INSERT INTO work_items (${columns.join(", ")}) VALUES (${values.join(", ")}) RETURNING *, FALSE AS claim_active`
+
+          if (allocatedId) return insert(allocatedId);
+
+          const idRows = await conn.unsafe(
+            `SELECT id FROM work_items WHERE type = ${escapeValue(input.type)}`
           );
-          const row = rows[0] as Record<string, unknown> | undefined;
-          if (!row) throw new Error("INSERT returned no row");
-          proof.itemId = allocatedId;
-          proof.afterRow = row;
-          return rowToWorkItem(row);
-        };
-
-        if (allocatedId) return insert(allocatedId);
-
-        const idRows = await conn.unsafe(
-          `SELECT id FROM work_items WHERE type = ${escapeValue(input.type)}`
-        );
-        let maxSuffix = this.idFloor - 1;
-        for (const row of idRows as ReadonlyArray<Record<string, unknown>>) {
-          const suffix = parseSuffix(String(row.id), input.type);
-          if (suffix !== null && suffix > maxSuffix) maxSuffix = suffix;
-        }
-        const nextId = `${input.type}.${String(maxSuffix + 1).padStart(4, "0")}`;
-        try {
-          return await insert(nextId);
-        } catch (error) {
-          if (isDuplicateError(error)) {
-            throw new WorkItemAlreadyExistsError(nextId);
+          let maxSuffix = this.idFloor - 1;
+          for (const row of idRows as ReadonlyArray<Record<string, unknown>>) {
+            const suffix = parseSuffix(String(row.id), input.type);
+            if (suffix !== null && suffix > maxSuffix) maxSuffix = suffix;
           }
-          throw error;
+          const nextId = `${input.type}.${String(maxSuffix + 1).padStart(4, "0")}`;
+          try {
+            return await insert(nextId);
+          } catch (error) {
+            if (isDuplicateError(error)) {
+              throw new WorkItemAlreadyExistsError(nextId);
+            }
+            throw error;
+          }
+        },
+        {
+          proof: { verb: "create", principal },
         }
-      }, {
-        proof: { verb: "create", principal },
-      });
+      );
 
     if (input.id) {
       const requested = String(input.id);
@@ -2507,13 +2942,20 @@ export class DoltgresWorkItemAdapter
     const principal = requirePrincipal(principalId);
     const id = input.id as string;
     const expectedRevision = parseExpectedRevision(input.expectedRevision);
+    const set: WorkItemsPatchSet =
+      input.set.scores === undefined
+        ? input.set
+        : {
+            ...input.set,
+            scores: validScores(input.set.scores),
+          };
     const clauses: string[] = [];
     const setKeys: (keyof WorkItemsPatchSet)[] = [];
     for (const [key, column] of Object.entries(PATCH_COLUMNS) as [
       keyof WorkItemsPatchSet,
       string,
     ][]) {
-      const value = input.set[key];
+      const value = set[key];
       if (value !== undefined) {
         clauses.push(`${column} = ${escapeValue(value)}`);
         setKeys.push(key);
@@ -2562,13 +3004,13 @@ export class DoltgresWorkItemAdapter
       async (conn, proof) => {
         clauses.push("revision = revision + 1", "updated_at = NOW()");
         const rows = await conn.unsafe(
-          `UPDATE work_items SET ${clauses.join(", ")} WHERE ${where.join(" AND ")} RETURNING *, (claim_expires_at IS NOT NULL AND claim_expires_at > NOW()) AS claim_active`
+          `UPDATE work_items SET ${clauses.join(", ")} WHERE ${where.join(" AND ")} RETURNING *`
         );
         const row = rows[0] as Record<string, unknown> | undefined;
         if (!row) {
           // CAS lost after preflight: a writer outside this lock moved the
           // revision. Returned, not thrown, so `shouldCommit` drops the empty
-          // op branch with nothing committed (the no-op path delete uses).
+          // op branch with nothing committed.
           const current = await this.getWith(conn, input.id);
           const conflict =
             current && permits(current) ? revisionConflict(current) : undefined;
@@ -2585,7 +3027,7 @@ export class DoltgresWorkItemAdapter
           itemId: id,
           expectedRevision,
           patchValues: Object.fromEntries(
-            setKeys.map((key) => [PATCH_COLUMNS[key], input.set[key]])
+            setKeys.map((key) => [PATCH_COLUMNS[key], set[key]])
           ),
         },
         preflight: async (conn, proof) => {
@@ -2598,40 +3040,16 @@ export class DoltgresWorkItemAdapter
           if (conflict) throw conflict;
           proof.beforeRow = current;
         },
-        shouldCommit: (value) => !(value instanceof WorkItemRevisionConflictError),
+        shouldCommit: (value) =>
+          !(value instanceof WorkItemRevisionConflictError),
       }
     );
     if (result instanceof WorkItemRevisionConflictError) throw result;
     return result;
   }
 
-  async delete(id: WorkItemId, principalId: string): Promise<boolean> {
-    const principal = requirePrincipal(principalId);
-    return this.mutate(
-      `delete ${id as string}`,
-      principal,
-      async (conn) => {
-        const rows = await conn.unsafe(
-          `DELETE FROM work_items WHERE id = ${escapeValue(id as string)} AND (created_by_principal_id IS NULL OR created_by_principal_id = ${escapeValue(principal)}) RETURNING id`
-        );
-        if (rows.length) return true;
-        const current = await this.getWith(conn, id);
-        if (current) throw new WorkItemAuthorizationError(id as string);
-        return false;
-      },
-      {
-        proof: { verb: "delete", principal, itemId: id as string },
-        preflight: async (conn, proof) => {
-          const current = await this.getWith(conn, id);
-          if (!current) return;
-          if (!mayMutate(current, principal)) {
-            throw new WorkItemAuthorizationError(id as string);
-          }
-          proof.beforeRow = current;
-        },
-        shouldCommit: Boolean,
-      }
-    );
+  async delete(_id: WorkItemId, _principalId: string): Promise<boolean> {
+    throw new WorkItemDeletionRetiredError();
   }
 
   private async throwMissingOrUnauthorized(
@@ -2640,150 +3058,6 @@ export class DoltgresWorkItemAdapter
   ): Promise<never> {
     if (await this.getWith(conn, id)) {
       throw new WorkItemAuthorizationError(id as string);
-    }
-    throw new Error(`Work item not found: ${id as string}`);
-  }
-
-  async claim(input: {
-    id: WorkItemId;
-    runId: string;
-    command: string;
-    principalId: string;
-  }): Promise<WorkItem> {
-    const principal = requirePrincipal(input.principalId);
-    return this.mutate(
-      `claim ${input.id as string}`,
-      principal,
-      async (conn, proof) => {
-        const rows = await conn.unsafe(
-          `UPDATE work_items SET claimed_by_run = ${escapeValue(input.runId)}, claim_owner_principal_id = ${escapeValue(principal)}, claimed_at = NOW(), claim_expires_at = NOW() + INTERVAL '${CLAIM_TTL_SECONDS} seconds', last_command = ${escapeValue(input.command)}, revision = revision + 1, updated_at = NOW() WHERE id = ${escapeValue(input.id as string)} AND (claim_expires_at IS NULL OR claim_expires_at <= NOW() OR (claim_owner_principal_id = ${escapeValue(principal)} AND claimed_by_run = ${escapeValue(input.runId)})) RETURNING *, TRUE AS claim_active`
-        );
-        const row = rows[0] as Record<string, unknown> | undefined;
-        if (!row) await this.throwLeaseConflictOrMissing(conn, input.id);
-        proof.afterRow = row as Record<string, unknown>;
-        return rowToWorkItem(row as Record<string, unknown>);
-      },
-      {
-        proof: {
-          verb: "claim",
-          principal,
-          itemId: input.id as string,
-          runId: input.runId,
-          command: input.command,
-          commandProvided: true,
-        },
-        preflight: async (conn, proof) => {
-          const current = await this.getWith(conn, input.id);
-          if (!current)
-            throw new Error(`Work item not found: ${input.id as string}`);
-          const sameLease =
-            String(current.claim_owner_principal_id ?? "") === principal &&
-            String(current.claimed_by_run ?? "") === input.runId;
-          if (current.claim_active !== false && !sameLease) {
-            throw new WorkItemLeaseConflictError(input.id as string);
-          }
-          proof.beforeRow = current;
-        },
-      }
-    );
-  }
-
-  async heartbeat(input: {
-    id: WorkItemId;
-    runId: string;
-    command?: string;
-    principalId: string;
-  }): Promise<WorkItem> {
-    const principal = requirePrincipal(input.principalId);
-    return this.mutate(
-      `heartbeat ${input.id as string}`,
-      principal,
-      async (conn, proof) => {
-        const command =
-          input.command === undefined
-            ? ""
-            : `, last_command = ${escapeValue(input.command)}`;
-        const rows = await conn.unsafe(
-          `UPDATE work_items SET claim_expires_at = NOW() + INTERVAL '${CLAIM_TTL_SECONDS} seconds'${command}, revision = revision + 1, updated_at = NOW() WHERE id = ${escapeValue(input.id as string)} AND claim_owner_principal_id = ${escapeValue(principal)} AND claimed_by_run = ${escapeValue(input.runId)} AND claim_expires_at > NOW() RETURNING *, TRUE AS claim_active`
-        );
-        const row = rows[0] as Record<string, unknown> | undefined;
-        if (!row) await this.throwLeaseConflictOrMissing(conn, input.id);
-        proof.afterRow = row as Record<string, unknown>;
-        return rowToWorkItem(row as Record<string, unknown>);
-      },
-      {
-        proof: {
-          verb: "heartbeat",
-          principal,
-          itemId: input.id as string,
-          runId: input.runId,
-          command: input.command,
-          commandProvided: input.command !== undefined,
-        },
-        preflight: async (conn, proof) => {
-          const current = await this.getWith(conn, input.id);
-          if (!current)
-            throw new Error(`Work item not found: ${input.id as string}`);
-          const leaseMatches =
-            current.claim_active !== false &&
-            String(current.claim_owner_principal_id ?? "") === principal &&
-            String(current.claimed_by_run ?? "") === input.runId;
-          if (!leaseMatches) {
-            throw new WorkItemLeaseConflictError(input.id as string);
-          }
-          proof.beforeRow = current;
-        },
-      }
-    );
-  }
-
-  async release(input: {
-    id: WorkItemId;
-    runId: string;
-    principalId: string;
-  }): Promise<WorkItem> {
-    const principal = requirePrincipal(input.principalId);
-    return this.mutate(
-      `release ${input.id as string}`,
-      principal,
-      async (conn, proof) => {
-        const rows = await conn.unsafe(
-          `UPDATE work_items SET claimed_by_run = NULL, claim_owner_principal_id = NULL, claimed_at = NULL, claim_expires_at = NULL, revision = revision + 1, updated_at = NOW() WHERE id = ${escapeValue(input.id as string)} AND claim_owner_principal_id = ${escapeValue(principal)} AND claimed_by_run = ${escapeValue(input.runId)} RETURNING *, FALSE AS claim_active`
-        );
-        const row = rows[0] as Record<string, unknown> | undefined;
-        if (!row) await this.throwLeaseConflictOrMissing(conn, input.id);
-        proof.afterRow = row as Record<string, unknown>;
-        return rowToWorkItem(row as Record<string, unknown>);
-      },
-      {
-        proof: {
-          verb: "release",
-          principal,
-          itemId: input.id as string,
-          runId: input.runId,
-        },
-        preflight: async (conn, proof) => {
-          const current = await this.getWith(conn, input.id);
-          if (!current)
-            throw new Error(`Work item not found: ${input.id as string}`);
-          const leaseMatches =
-            String(current.claim_owner_principal_id ?? "") === principal &&
-            String(current.claimed_by_run ?? "") === input.runId;
-          if (!leaseMatches) {
-            throw new WorkItemLeaseConflictError(input.id as string);
-          }
-          proof.beforeRow = current;
-        },
-      }
-    );
-  }
-
-  private async throwLeaseConflictOrMissing(
-    conn: WorkItemConnection,
-    id: WorkItemId
-  ): Promise<never> {
-    if (await this.getWith(conn, id)) {
-      throw new WorkItemLeaseConflictError(id as string);
     }
     throw new Error(`Work item not found: ${id as string}`);
   }

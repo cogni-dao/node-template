@@ -12,6 +12,11 @@
  */
 
 export {
+  WorkItemDeletionRetiredError,
+  WorkItemScoresInvalidError,
+  WorkItemWriteOutcomeUnknownError,
+} from "../../errors.js";
+export {
   DoltgresWorkItemAdapter,
   type DoltgresWorkItemAdapterOptions,
   OPERATOR_ID_FLOOR,
@@ -20,6 +25,7 @@ export {
   WorkItemLeaseConflictError,
   WorkItemRevisionConflictError,
   WorkItemsBusyError,
+  WorkItemsCapacityError,
 } from "./adapter.js";
 export {
   decodeCursor,
@@ -28,6 +34,7 @@ export {
   type WorkItemCursor,
 } from "./cursor.js";
 export type {
+  WorkItemsContentPort,
   WorkItemsCreateInput,
   WorkItemsDoltgresPort,
   WorkItemsPatchInput,

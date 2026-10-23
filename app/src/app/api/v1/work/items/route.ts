@@ -6,6 +6,7 @@
  * Purpose: HTTP endpoints for listing and creating work items.
  * Scope: Auth-protected GET (list — markdown ∪ node-local Doltgres) and POST (create — node-local Doltgres only).
  * Invariants: VALIDATE_IO, CONTRACTS_ARE_TRUTH, AUTH_VIA_GETSESSIONUSER, NODE_STORE_IS_LOCAL.
+ * Evaluation: shared score validation failures return HTTP400 with typed issues.
  * Side-effects: IO (HTTP response, filesystem read via port, Doltgres read/write)
  * Links: contracts/work.items.{list,create}.v1.contract
  * @public
@@ -21,8 +22,10 @@ import {
   createWorkItem,
   InvalidCursorError,
   listWorkItems,
-  WorkItemsBackendNotReadyError,
   NodeAdminRequiredError,
+  WorkItemScoresInvalidError,
+  WorkItemsBackendNotReadyError,
+  WorkItemWriteOutcomeUnknownError,
 } from "@/app/_facades/work/items.server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
@@ -127,6 +130,23 @@ export const POST = wrapRouteHandlerWithLogging(
         status: 201,
       });
     } catch (e) {
+      if (e instanceof WorkItemScoresInvalidError) {
+        return NextResponse.json(
+          { error: "invalid input", errorCode: e.code, issues: e.issues },
+          { status: 400 }
+        );
+      }
+      if (e instanceof WorkItemWriteOutcomeUnknownError) {
+        return NextResponse.json(
+          {
+            error: e.code,
+            retryable: false,
+            lookup: e.receipt.lookup,
+            message: e.message,
+          },
+          { status: 409 }
+        );
+      }
       if (e instanceof NodeAdminRequiredError) {
         return NextResponse.json(
           { error: e.message, errorCode: e.errorCode, action: e.action },

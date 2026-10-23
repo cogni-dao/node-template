@@ -10,7 +10,9 @@
  *   - PATCH_NULLABLE_CLEAR: projectId:null emits `project_id = NULL`.
  *   - PATCH_PRESERVES_EXISTING: title still emits `title = '...'`.
  *   - PATCH_CAS (task.5284): expectedRevision is in the UPDATE predicate; a stale one throws WorkItemRevisionConflictError with nothing committed.
- *   - COLLABORATOR_TRIAGE (task.5284): a non-creator may patch only priority/rank/labels; any other field keeps the whole patch creator-bound.
+ *   - COLLABORATOR_TRIAGE (task.5284): a non-creator may patch only priority/rank/labels/scores; any other field keeps the whole patch creator-bound.
+ *   - SCORES_JSONB_ORDER (story.5111): a scores patch is proven even when jsonb reorders its keys.
+ *   - SCORES_BOUNDS_IN_PACKAGE (story.5111): create/patch run parseWorkItemScores; invalid scores never reach SQL.
  * Side-effects: none
  * Links: bug.5005, task.5284,
  *   packages/work-items/src/adapters/doltgres/adapter.ts
@@ -26,7 +28,11 @@ import {
   WorkItemAuthorizationError,
   WorkItemRevisionConflictError,
 } from "../../src/adapters/doltgres/adapter.js";
-import { makeFakeDoltgresSql } from "./fake-doltgres-sql.js";
+import { WorkItemScoresInvalidError } from "../../src/errors.js";
+import {
+  independentReadPool,
+  makeFakeDoltgresSql,
+} from "./fake-doltgres-sql.js";
 
 function makeFakeSql(): { sql: Sql; queries: string[] } {
   const queries: string[] = [];
@@ -48,8 +54,7 @@ function makeFakeSql(): { sql: Sql; queries: string[] } {
           revision: 0,
           deploy_verified: q.includes("deploy_verified = TRUE"),
           project_id: q.includes("project_id = NULL") ? null : undefined,
-          parent_id:
-            /parent_id = '([^']*)'/.exec(q)?.[1] ?? undefined,
+          parent_id: /parent_id = '([^']*)'/.exec(q)?.[1] ?? undefined,
           blocked_by: q.includes("blocked_by = NULL") ? null : undefined,
           created_by_principal_id: "test",
           created_at: "2026-05-01",
@@ -86,7 +91,9 @@ function makeFakeSql(): { sql: Sql; queries: string[] } {
 describe("DoltgresWorkItemAdapter.patch — bug.5005 allowlist", () => {
   it("emits deploy_verified = TRUE for {deployVerified:true}", async () => {
     const { sql, queries } = makeFakeSql();
-    const adapter = new DoltgresWorkItemAdapter(sql);
+    const adapter = new DoltgresWorkItemAdapter(sql, {
+      readClient: independentReadPool(sql),
+    });
     await adapter.patch(
       { id: toWorkItemId("bug.5005"), set: { deployVerified: true } },
       "test"
@@ -98,7 +105,9 @@ describe("DoltgresWorkItemAdapter.patch — bug.5005 allowlist", () => {
 
   it("emits project_id = NULL for {projectId:null}", async () => {
     const { sql, queries } = makeFakeSql();
-    const adapter = new DoltgresWorkItemAdapter(sql);
+    const adapter = new DoltgresWorkItemAdapter(sql, {
+      readClient: independentReadPool(sql),
+    });
     await adapter.patch(
       { id: toWorkItemId("bug.5005"), set: { projectId: null } },
       "test"
@@ -110,7 +119,9 @@ describe("DoltgresWorkItemAdapter.patch — bug.5005 allowlist", () => {
 
   it("emits parent_id and blocked_by columns", async () => {
     const { sql, queries } = makeFakeSql();
-    const adapter = new DoltgresWorkItemAdapter(sql);
+    const adapter = new DoltgresWorkItemAdapter(sql, {
+      readClient: independentReadPool(sql),
+    });
     await adapter.patch(
       {
         id: toWorkItemId("bug.5005"),
@@ -126,7 +137,9 @@ describe("DoltgresWorkItemAdapter.patch — bug.5005 allowlist", () => {
 
   it("still emits the existing whitelisted columns (title)", async () => {
     const { sql, queries } = makeFakeSql();
-    const adapter = new DoltgresWorkItemAdapter(sql);
+    const adapter = new DoltgresWorkItemAdapter(sql, {
+      readClient: independentReadPool(sql),
+    });
     await adapter.patch(
       { id: toWorkItemId("bug.5005"), set: { title: "renamed" } },
       "test"
@@ -197,6 +210,20 @@ const casSeed = {
 };
 
 /**
+ * jsonb does not keep object key order: it stores shorter keys first, then
+ * bytewise. Model that so the fake hands back `scores` the way a real jsonb
+ * column does, not in the order the adapter wrote it.
+ */
+function asJsonb(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .sort(([a], [b]) => a.length - b.length || (a < b ? -1 : a > b ? 1 : 0))
+      .map(([key, inner]) => [key, asJsonb(inner)])
+  );
+}
+
+/**
  * One in-memory row behind the stateful Dolt fake. The UPDATE arm honours the
  * statement's own `revision = N` and creator predicates, so the CAS and the
  * authz are exercised as SQL, not assumed. `concurrentBumpBeforeUpdate` models
@@ -217,7 +244,10 @@ function casHarness(options: { concurrentBumpBeforeUpdate?: boolean } = {}) {
       }
       if (!current) return [];
       const expected = /AND revision = (\d+)/.exec(query)?.[1];
-      if (expected !== undefined && Number(current.revision) !== Number(expected))
+      if (
+        expected !== undefined &&
+        Number(current.revision) !== Number(expected)
+      )
         return [];
       const owner = /created_by_principal_id = '([^']+)'\)/.exec(query)?.[1];
       if (owner !== undefined && current.created_by_principal_id !== owner)
@@ -235,6 +265,11 @@ function casHarness(options: { concurrentBumpBeforeUpdate?: boolean } = {}) {
       if (labels !== undefined) next.labels = JSON.parse(labels);
       const title = /\btitle = '([^']*)'/.exec(query)?.[1];
       if (title !== undefined) next.title = title;
+      const scores = /\bscores = '(.*?)'::jsonb/.exec(query)?.[1];
+      if (scores !== undefined) {
+        next.scores = asJsonb(JSON.parse(scores.replace(/''/g, "'")));
+      }
+      if (/\bscores = NULL\b/.test(query)) next.scores = null;
       store.set(id, next);
       return [next];
     }
@@ -247,7 +282,7 @@ function casHarness(options: { concurrentBumpBeforeUpdate?: boolean } = {}) {
   };
   const sql = makeFakeDoltgresSql(respond, queries);
   const adapter = new DoltgresWorkItemAdapter(sql, {
-    readClient: sql,
+    readClient: independentReadPool(sql),
     recreateClient: () => sql,
   });
   return { adapter, queries, store };
@@ -324,7 +359,10 @@ describe("DoltgresWorkItemAdapter.patch — expectedRevision CAS (task.5284)", (
     const { adapter, queries } = casHarness();
 
     await expect(
-      adapter.patch({ id: toWorkItemId(CAS_ID), set: { title: "plain" } }, CREATOR)
+      adapter.patch(
+        { id: toWorkItemId(CAS_ID), set: { title: "plain" } },
+        CREATOR
+      )
     ).resolves.toMatchObject({ title: "plain", revision: 4 });
     expect(updateOf(queries)).not.toContain("AND revision =");
     expect(updateOf(queries)).toContain(
@@ -337,7 +375,11 @@ describe("DoltgresWorkItemAdapter.patch — expectedRevision CAS (task.5284)", (
 
     await expect(
       adapter.patch(
-        { id: toWorkItemId(CAS_ID), expectedRevision: "abc", set: { priority: 1 } },
+        {
+          id: toWorkItemId(CAS_ID),
+          expectedRevision: "abc",
+          set: { priority: 1 },
+        },
         CREATOR
       )
     ).rejects.toThrow(/expectedRevision/);
@@ -389,6 +431,35 @@ describe("DoltgresWorkItemAdapter.patch — collaborator triage fields (task.528
     });
   });
 
+  it("lets a non-creator write scores, proven despite jsonb key reordering (story.5111)", async () => {
+    const { adapter, queries, store } = casHarness();
+    const scores = {
+      unblocks: { v: 4, ev: "https://cognidao.org/work/items/story.5108" },
+      goal: {
+        v: 5,
+        ev: "https://cognidao.org/knowledge/goal-fleet-pays-itself",
+      },
+      ease: { v: 3 },
+    };
+
+    const result = await adapter.patch(
+      { id: toWorkItemId(CAS_ID), expectedRevision: 3, set: { scores } },
+      COLLABORATOR
+    );
+
+    expect(result.scores).toEqual(scores);
+    expect(result.revision).toBe(4);
+    expect(updateOf(queries)).toContain("scores = '");
+    expect(updateOf(queries)).not.toContain("created_by_principal_id");
+    expect(committed(queries)).toBe(true);
+    // Stored in jsonb order, not write order — the proof must still pass.
+    expect(Object.keys(store.get(CAS_ID)?.scores as object)).toEqual([
+      "ease",
+      "goal",
+      "unblocks",
+    ]);
+  });
+
   it("still refuses a blank principal for triage fields", async () => {
     const { adapter, queries } = casHarness();
 
@@ -396,5 +467,150 @@ describe("DoltgresWorkItemAdapter.patch — collaborator triage fields (task.528
       adapter.patch({ id: toWorkItemId(CAS_ID), set: { priority: 0 } }, "  ")
     ).rejects.toBeInstanceOf(WorkItemAuthorizationError);
     expect(queries).toHaveLength(0);
+  });
+});
+
+describe("DoltgresWorkItemAdapter — scores (story.5111)", () => {
+  const scores = {
+    goal: { v: 5, ev: "https://cognidao.org/knowledge/goal-fleet-pays-itself" },
+    ease: { v: 3 },
+  };
+
+  it("creates an item with scores and round-trips them", async () => {
+    const queries: string[] = [];
+    const sql = makeFakeDoltgresSql((query) => {
+      if (!query.startsWith("INSERT INTO work_items")) return [];
+      const id = /VALUES \('([^']+)'/.exec(query)?.[1] ?? "";
+      const written = /'(\{.*?\}\})'::jsonb/.exec(query)?.[1];
+      return [
+        {
+          ...casSeed,
+          id,
+          revision: 0,
+          scores: written ? asJsonb(JSON.parse(written)) : null,
+        },
+      ];
+    }, queries);
+
+    const created = await new DoltgresWorkItemAdapter(sql, {
+      readClient: independentReadPool(sql),
+    }).create({ type: "task", title: "scored", scores }, CREATOR);
+
+    const insert = queries.find((q) => q.startsWith("INSERT INTO work_items"));
+    expect(insert).toMatch(
+      /^INSERT INTO work_items \([^)]*\bscores\b[^)]*\) VALUES/
+    );
+    expect(insert).toContain(`'${JSON.stringify(scores)}'::jsonb`);
+    expect(created.scores).toEqual(scores);
+    expect(committed(queries)).toBe(true);
+  });
+
+  it("reads a NULL scores column as absent", async () => {
+    const { adapter, store } = casHarness();
+    store.set(CAS_ID, { ...casSeed, scores: null });
+
+    const item = await adapter.get(toWorkItemId(CAS_ID));
+
+    expect(item).not.toBeNull();
+    expect(item && "scores" in item).toBe(false);
+  });
+
+  it("drops entries whose v is not an integer instead of coercing them", async () => {
+    const { adapter, store } = casHarness();
+    store.set(CAS_ID, {
+      ...casSeed,
+      scores: {
+        goal: { v: 4 },
+        time: { v: null },
+        ease: { v: true },
+        agent: { v: "3" },
+        unblocks: { v: 2.5 },
+      },
+    });
+
+    const item = await adapter.get(toWorkItemId(CAS_ID));
+
+    expect(item?.scores).toEqual({ goal: { v: 4 } });
+  });
+
+  it("clears scores to SQL NULL with scores:null, and the proof passes", async () => {
+    const { adapter, queries, store } = casHarness();
+    store.set(CAS_ID, { ...casSeed, scores: asJsonb(scores) });
+
+    const result = await adapter.patch(
+      { id: toWorkItemId(CAS_ID), expectedRevision: 3, set: { scores: null } },
+      COLLABORATOR
+    );
+
+    expect(updateOf(queries)).toContain("scores = NULL");
+    expect(committed(queries)).toBe(true);
+    expect(result.revision).toBe(4);
+    expect("scores" in result).toBe(false);
+    expect(store.get(CAS_ID)?.scores).toBeNull();
+  });
+
+  it("runs parseWorkItemScores on create: invalid scores throw before any query", async () => {
+    const queries: string[] = [];
+    const sql = makeFakeDoltgresSql(() => [], queries);
+
+    await expect(
+      new DoltgresWorkItemAdapter(sql, {
+        readClient: independentReadPool(sql),
+      }).create(
+        { type: "task", title: "unevidenced", scores: { goal: { v: 5 } } },
+        CREATOR
+      )
+    ).rejects.toBeInstanceOf(WorkItemScoresInvalidError);
+    expect(queries).toHaveLength(0);
+  });
+
+  it("runs parseWorkItemScores on patch: invalid scores throw before any query", async () => {
+    const { adapter, queries, store } = casHarness();
+
+    await expect(
+      adapter.patch(
+        {
+          id: toWorkItemId(CAS_ID),
+          expectedRevision: 3,
+          set: { scores: { goal: { v: 4, ev: "http://external.example/x" } } },
+        },
+        COLLABORATOR
+      )
+    ).rejects.toMatchObject({
+      name: "WorkItemScoresInvalidError",
+      issues: [expect.objectContaining({ code: "evidence_not_https" })],
+    });
+    expect(queries).toHaveLength(0);
+    expect(store.get(CAS_ID)?.scores).toBeUndefined();
+  });
+
+  it("round-trips an external HTTPS justification without node hostname configuration", async () => {
+    const queries: string[] = [];
+    const sql = makeFakeDoltgresSql((query) => {
+      if (!query.startsWith("INSERT INTO work_items")) return [];
+      const id = /VALUES \('([^']+)'/.exec(query)?.[1] ?? "";
+      const written = /'(\{.*?\}\})'::jsonb/.exec(query)?.[1];
+      return [
+        {
+          ...casSeed,
+          id,
+          revision: 0,
+          scores: written ? asJsonb(JSON.parse(written)) : null,
+        },
+      ];
+    }, queries);
+    const options = { readClient: independentReadPool(sql) };
+    const input = {
+      type: "task" as const,
+      title: "own domain",
+      scores: { goal: { v: 4, ev: "https://mynode.org/goals/1" } },
+    };
+
+    const created = await new DoltgresWorkItemAdapter(sql, options).create(
+      input,
+      CREATOR
+    );
+    expect(created.scores).toEqual(input.scores);
+    expect(committed(queries)).toBe(true);
   });
 });

@@ -34,13 +34,14 @@ import {
 } from "../domain/gates/index.js";
 import {
   ContributionForbiddenError,
+  ContributionConflictError,
   ContributionNotFoundError,
   ContributionQuotaError,
   ContributionStateError,
   type CreateEdoDecisionInput,
   type CreateEdoHypothesisInput,
   type CreateEdoOutcomeInput,
-  type KnowledgeContributionPort,
+  type KnowledgeContributionPort
 } from "../port/contribution.port.js";
 
 export interface CreateBody {
@@ -347,9 +348,36 @@ export function createContributionService(
       if (!deps.canMergeKnowledge(principal)) {
         throw new ContributionForbiddenError("merge requires admin session");
       }
+      // A terminal receipt is readback of an already-authorized durable write.
+      // Its branch may be reaped and its node-admin authority unavailable now.
+      const record = await deps.port.getById(contributionId);
+      if (record?.state === "merged" && record.mergedCommit) {
+        return deps.port.merge({ contributionId, principal, confidencePct });
+      }
       // MERGE_GATE_ON_RAW_DIFF + MERGE_EXPECTED_HEAD: gate on the raw ids at
       // the current head, then merge only if that head is still the branch head.
       const touched = await deps.port.touchedIds(contributionId);
+      if (
+        !touched ||
+        typeof touched.headCommit !== "string" ||
+        !touched.headCommit.trim() ||
+        !Array.isArray(touched.knowledgeIds) ||
+        !Array.isArray(touched.citations) ||
+        touched.knowledgeIds.some(
+          (id) => typeof id !== "string" || !id.trim()
+        ) ||
+        touched.citations.some(
+          (edge) =>
+            !edge ||
+            [edge.citingId, edge.citedId, edge.citationType].some(
+              (value) => typeof value !== "string" || !value.trim()
+            )
+        )
+      ) {
+        throw new ContributionConflictError(
+          "Contribution authorization diff is unproven"
+        );
+      }
       if (touchesGoalLayer(touched)) {
         const decision = await checkNodeAdmin(
           deps.nodeAdmin,
@@ -388,7 +416,7 @@ export function createContributionService(
         throw new ContributionForbiddenError("close requires admin session");
       }
       return deps.port.close({ contributionId, principal, reason });
-    },
+    }
   };
 }
 

@@ -215,15 +215,19 @@ describe("FakeKnowledgeStoreAdapter — goal parity", () => {
     id: string,
     entryType = "goal"
   ) {
-    return store.addKnowledge({
-      id,
-      domain: "strategy",
-      title: `Goal: ${id}`,
-      content: "statement",
-      entryType,
-      evaluateAt: new Date("2026-12-31T00:00:00.000Z"),
-      sourceType: "human",
-    });
+    return store.withWrite(
+      { operationId: "goal-policy-test-1", message: "goal policy test" },
+      async (write) =>
+        write.addKnowledge({
+          id,
+          domain: "strategy",
+          title: `Goal: ${id}`,
+          content: "statement",
+          entryType,
+          evaluateAt: new Date("2026-12-31T00:00:00.000Z"),
+          sourceType: "human"
+        })
+    );
   }
 
   async function freshStore(): Promise<FakeKnowledgeStoreAdapter> {
@@ -250,11 +254,15 @@ describe("FakeKnowledgeStoreAdapter — goal parity", () => {
     const store = await freshStore();
     await seed(store, "goal-old");
     await seed(store, "goal-new");
-    await store.addCitation({
-      citingId: "goal-new",
-      citedId: "goal-old",
-      citationType: "supersedes",
-    });
+    await store.withWrite(
+      { operationId: "goal-policy-test-2", message: "goal policy test" },
+      async (write) =>
+        write.addCitation({
+          citingId: "goal-new",
+          citedId: "goal-old",
+          citationType: "supersedes"
+        })
+    );
     expect((await store.listActiveGoals()).map((g) => g.id)).toEqual([
       "goal-new",
     ]);
@@ -263,14 +271,18 @@ describe("FakeKnowledgeStoreAdapter — goal parity", () => {
   it("rejects a goal without evaluateAt (its By: deadline)", async () => {
     const store = await freshStore();
     await expect(
-      store.addKnowledge({
-        id: "goal-undated",
-        domain: "strategy",
-        title: "Goal: undated",
-        content: "statement",
-        entryType: "goal",
-        sourceType: "human",
-      })
+      store.withWrite(
+        { operationId: "goal-policy-test-3", message: "goal policy test" },
+        async (write) =>
+          write.addKnowledge({
+            id: "goal-undated",
+            domain: "strategy",
+            title: "Goal: undated",
+            content: "statement",
+            entryType: "goal",
+            sourceType: "human"
+          })
+      )
     ).rejects.toBeInstanceOf(HypothesisMissingEvaluateAtError);
   });
 
@@ -278,19 +290,27 @@ describe("FakeKnowledgeStoreAdapter — goal parity", () => {
     const store = await freshStore();
     const goal = await seed(store, "goal-a");
     // A supporting edge would bump any non-exempt row's confidence.
-    await store.addKnowledge({
-      id: "evidence-a",
-      domain: "strategy",
-      title: "Evidence a",
-      content: "supports the goal",
-      entryType: "finding",
-      sourceType: "agent",
-    });
-    await store.addCitation({
-      citingId: "evidence-a",
-      citedId: "goal-a",
-      citationType: "supports",
-    });
+    await store.withWrite(
+      { operationId: "goal-policy-test-4", message: "goal policy test" },
+      async (write) =>
+        write.addKnowledge({
+          id: "evidence-a",
+          domain: "strategy",
+          title: "Evidence a",
+          content: "supports the goal",
+          entryType: "finding",
+          sourceType: "agent"
+        })
+    );
+    await store.withWrite(
+      { operationId: "goal-policy-test-5", message: "goal policy test" },
+      async (write) =>
+        write.addCitation({
+          citingId: "evidence-a",
+          citedId: "goal-a",
+          citationType: "supports"
+        })
+    );
     const resolver = new FakeEdoResolverAdapter(store);
     await expect(resolver.recomputeConfidence("goal-a")).resolves.toBe(
       goal.confidencePct

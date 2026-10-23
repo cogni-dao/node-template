@@ -16,6 +16,7 @@ import { defineConfig } from "tsup";
 export const tsupConfig = defineConfig({
   entry: [
     "src/index.ts",
+    "src/migrations.ts",
     "src/domain/contribution-schemas.ts",
     "src/adapters/doltgres/index.ts",
     "src/adapters/fake/index.ts",
@@ -25,6 +26,7 @@ export const tsupConfig = defineConfig({
   clean: false,
   sourcemap: true,
   platform: "node",
+  noExternal: ["@cogni-dao/doltgres-admission"],
   external: ["@cogni/ai-tools", "drizzle-orm", "postgres", "zod"],
 });
 

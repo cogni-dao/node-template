@@ -30,17 +30,21 @@ export function makeFakeDoltgresSql(
   let merged = false;
   let provingMergedRow = false;
 
-  const unquote = (value: string | undefined) =>
-    value?.replace(/''/g, "'");
+  const unquote = (value: string | undefined) => value?.replace(/''/g, "'");
   const prefixed = (
     prefix: "from_" | "to_",
     row: Record<string, unknown> | undefined
   ) =>
     Object.fromEntries(
-      Object.entries(row ?? {}).map(([key, value]) => [`${prefix}${key}`, value])
+      Object.entries(row ?? {}).map(([key, value]) => [
+        `${prefix}${key}`,
+        value,
+      ])
     );
   const nextCommitDate = (row: Record<string, unknown> | undefined) => {
-    const created = new Date(String(row?.created_at ?? "2026-10-03T00:00:00.000Z"));
+    const created = new Date(
+      String(row?.created_at ?? "2026-10-03T00:00:00.000Z")
+    );
     const base = Number.isFinite(created.getTime())
       ? created.getTime()
       : Date.parse("2026-10-03T00:00:00.000Z");
@@ -49,6 +53,8 @@ export function makeFakeDoltgresSql(
 
   const unsafe = async (query: string): Promise<Rows> => {
     queries.push(query);
+    if (query === "SELECT current_database() AS dolt_writer_database")
+      return [{ dolt_writer_database: "knowledge_test" }];
     if (query === "SELECT 1 AS work_items_ready") {
       return [{ work_items_ready: 1 }];
     }
@@ -159,7 +165,10 @@ export function makeFakeDoltgresSql(
       beforeRow = undefined;
       return [{ dolt_branch: [0, ""] }];
     }
-    if (provingMergedRow && query.startsWith("SELECT * FROM work_items WHERE id")) {
+    if (
+      provingMergedRow &&
+      query.startsWith("SELECT * FROM work_items WHERE id")
+    ) {
       provingMergedRow = false;
       return currentTableRow ? [currentTableRow] : [];
     }
@@ -192,7 +201,9 @@ export function makeFakeDoltgresSql(
         const previousRevision = Number(beforeRow?.revision ?? 0);
         afterRow.revision = previousRevision + 1;
         afterRow.updated_at = new Date(
-          Date.parse(String(beforeRow?.created_at ?? "2026-10-03T00:00:00.000Z")) +
+          Date.parse(
+            String(beforeRow?.created_at ?? "2026-10-03T00:00:00.000Z")
+          ) +
             (operation + 1) * 60_000
         ).toISOString();
         if (query.includes("SET claimed_by_run =")) {
@@ -217,8 +228,9 @@ export function makeFakeDoltgresSql(
           );
         } else if (query.includes("SET claim_expires_at = NOW()")) {
           afterRow.claim_expires_at = new Date(
-            Date.parse(String(beforeRow?.claim_expires_at ?? afterRow.updated_at)) +
-              300_000
+            Date.parse(
+              String(beforeRow?.claim_expires_at ?? afterRow.updated_at)
+            ) + 300_000
           ).toISOString();
           const command = /last_command = '([^']*)'/.exec(query)?.[1];
           if (command !== undefined) afterRow.last_command = unquote(command);
@@ -254,4 +266,11 @@ export function makeFakeDoltgresSql(
     reserve: async () => reserved,
     end: async () => undefined,
   } as unknown as Sql;
+}
+
+export function independentReadPool(sql: Sql): Sql {
+  return Object.assign(async () => [], {
+    unsafe: sql.unsafe.bind(sql),
+    end: sql.end?.bind(sql),
+  }) as unknown as Sql;
 }

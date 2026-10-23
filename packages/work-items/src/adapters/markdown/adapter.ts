@@ -12,6 +12,7 @@
  * - BODY_PRESERVED: Markdown body never modified by adapter writes.
  * - ASSIGNEE_COMPAT: Plain string assignees map to { kind: "user", userId }.
  * - ID_ALLOC_ATOMIC: create() scans files for max numeric suffix, allocates next.
+ * - NO_SILENT_DROP: `scores` (Doltgres-only, story.5111) throws UnsupportedWorkItemFieldError; nothing is written.
  * Side-effects: IO (filesystem read/write)
  * Links: docs/spec/development-lifecycle.md
  * @public
@@ -28,13 +29,18 @@ import type {
   SubjectRef,
   WorkItem,
   WorkItemId,
+  WorkItemScores,
   WorkItemStatus,
   WorkItemType,
   WorkQuery,
   WorkRelation,
 } from "../../types.js";
 import { toWorkItemId } from "../../types.js";
-import { InvalidTransitionError, StaleRevisionError } from "./errors.js";
+import {
+  InvalidTransitionError,
+  StaleRevisionError,
+  UnsupportedWorkItemFieldError,
+} from "./errors.js";
 import {
   assigneesToRaw,
   parseFrontmatter,
@@ -350,7 +356,11 @@ export class MarkdownWorkItemAdapter
     labels?: string[];
     assignees?: SubjectRef[];
     node?: string;
+    scores?: WorkItemScores;
   }): Promise<WorkItem> {
+    if (input.scores !== undefined) {
+      throw new UnsupportedWorkItemFieldError("scores");
+    }
     const { id, numStr } = await allocateNextId(this.workDir, input.type);
     const slug = slugify(input.title);
     const filename = `${input.type}.${numStr}.${slug}.md`;
@@ -420,8 +430,11 @@ export class MarkdownWorkItemAdapter
         | "reviewer"
         | "node"
       >
-    >;
+    > & { scores?: WorkItemScores | null };
   }): Promise<WorkItem> {
+    if (input.set?.scores !== undefined) {
+      throw new UnsupportedWorkItemFieldError("scores");
+    }
     const entry = await findById(this.workDir, input.id);
     if (!entry) throw new Error(`Work item not found: ${input.id as string}`);
 

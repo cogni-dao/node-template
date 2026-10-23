@@ -30,6 +30,7 @@ import {
   listWorkItems,
   NodeAdminRequiredError,
   patchWorkItem,
+  WorkItemWriteOutcomeUnknownError,
 } from "@/app/_facades/work/items.server";
 import { getContainer } from "@/bootstrap/container";
 
@@ -104,6 +105,40 @@ describe("app/_facades/work/items.server", () => {
       workItemQuery: mockPort,
       doltgresWorkItems: mockDoltgres,
     } as never);
+  });
+
+  it("preserves the current write uncertainty receipt instead of converting it to backend busy", async () => {
+    const error = Object.assign(new Error("inspect current branch"), {
+      name: "WorkItemWriteOutcomeUnknownError",
+      operationId: "operation-1",
+      branch: "work-item-op/one",
+      commitHash: "hash-1",
+      itemId: "task.0001",
+    });
+    mockDoltgres.create.mockRejectedValue(error);
+    await expect(
+      createWorkItem(
+        { type: "task", title: "unknown result" },
+        { id: "principal-1" }
+      )
+    ).rejects.toMatchObject({
+      name: "WorkItemWriteOutcomeUnknownError",
+      code: "work_item_write_outcome_unknown",
+      retryable: false,
+      receipt: {
+        lookup: {
+          operationId: "operation-1",
+          branch: "work-item-op/one",
+          commitHash: "hash-1",
+          itemId: "task.0001",
+        },
+      },
+    });
+    const receipt = new WorkItemWriteOutcomeUnknownError(
+      "operation-1",
+      "work-item-op/one"
+    );
+    expect(receipt.receipt.lookup.commitHash).toBeNull();
   });
 
   describe("listWorkItems", () => {
@@ -244,6 +279,30 @@ describe("app/_facades/work/items.server", () => {
       expect(result).not.toBeNull();
       expect(result?.id).toBe("task.0001");
       expect(result?.title).toBe("Sample task");
+      expect(() => WorkItemDtoSchema.parse(result)).not.toThrow();
+    });
+
+    it("omits scores when the item has none (story.5111)", async () => {
+      vi.mocked(mockPort.get).mockResolvedValue(SAMPLE_WORK_ITEM);
+
+      const result = await getWorkItem("task.0001");
+
+      expect(result && "scores" in result).toBe(false);
+    });
+
+    it("passes scores through to the DTO (story.5111)", async () => {
+      const scores = {
+        goal: { v: 5, ev: "https://cognidao.org/work/items/story.5108" },
+        ease: { v: 3 },
+      };
+      vi.mocked(mockPort.get).mockResolvedValue({
+        ...SAMPLE_WORK_ITEM,
+        scores,
+      });
+
+      const result = await getWorkItem("task.0001");
+
+      expect(result?.scores).toEqual(scores);
       expect(() => WorkItemDtoSchema.parse(result)).not.toThrow();
     });
 

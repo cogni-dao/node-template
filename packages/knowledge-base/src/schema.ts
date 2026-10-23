@@ -15,6 +15,7 @@
  *   - ENTRY_HAS_DOMAIN: every `knowledge` row's `domain` matches a registered row in `domains`.
  *   - DELETE_IS_CLEAN: dead/retired knowledge is DELETEd (Dolt history preserves content + commits + attribution); supersession is refine-in-place. `status='deprecated'` retained only for the EDO temporal hypothesis lifecycle.
  *   - CONFIDENCE_EVERYWHERE: every row in every knowledge table has `confidence_pct` (integer 0-100). New rows default to 40 — start low, raise as evidence accumulates. 100 is reserved for "factual and works" (objectively verifiable + currently functioning). See seed `cogni-meta-confidence-convention`.
+ *   - EVALUATION_SCORES: work_items.scores stores bounded evaluation JSON; work-items owns validation.
  *   - No FK references to Postgres tables (different database server).
  *   - No RLS — access control via Doltgres roles (knowledge_reader / knowledge_writer).
  * Side-effects: none
@@ -275,6 +276,9 @@ export const workItems = pgTable(
     priority: integer("priority"),
     rank: integer("rank"),
     estimate: integer("estimate"),
+    // Evaluation scores (story.5111): { "<axis id>": { v: 0–5, ev?: url } }.
+    // Axis ids are config (hub `work-item-scores-design`), so no column per axis.
+    scores: jsonb("scores"),
 
     // Free-text
     summary: text("summary"),
