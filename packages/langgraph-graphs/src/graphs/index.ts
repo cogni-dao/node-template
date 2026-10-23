@@ -25,6 +25,17 @@ export {
 export { BRAIN_GRAPH_NAME, createBrainGraph } from "./brain/graph";
 // Browser graph (web browsing via Playwright MCP)
 export { BROWSER_GRAPH_NAME, createBrowserGraph } from "./browser/graph";
+export type {
+  EvidenceLimits,
+  EvidenceProgram,
+  EvidenceReceipt,
+  EvidenceResult,
+  GuidanceReceipt,
+} from "./evidence-verification/graph";
+export {
+  createEvidenceVerificationGraph,
+  DEFAULT_EVIDENCE_LIMITS,
+} from "./evidence-verification/graph";
 // Frontend tester graph (QA agent via Playwright MCP)
 export {
   createFrontendTesterGraph,

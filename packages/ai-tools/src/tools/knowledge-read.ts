@@ -49,6 +49,8 @@ export const KnowledgeReadInputSchema = z
 export type KnowledgeReadInput = z.infer<typeof KnowledgeReadInputSchema>;
 
 export const KnowledgeReadEntrySchema = z.object({
+  entryType: z.string().nullable().optional(),
+  useWhen: z.string().nullable().optional(),
   id: z.string(),
   domain: z.string(),
   entityId: z.string().nullable(),
@@ -108,6 +110,8 @@ export function createKnowledgeReadImplementation(
           entries: entry
             ? [
                 {
+                  entryType: entry.entryType ?? null,
+                  useWhen: entry.useWhen ?? null,
                   id: entry.id,
                   domain: entry.domain,
                   entityId: entry.entityId,
@@ -134,6 +138,8 @@ export function createKnowledgeReadImplementation(
       return {
         mode: "list" as const,
         entries: entries.map((e) => ({
+          entryType: e.entryType ?? null,
+          useWhen: e.useWhen ?? null,
           id: e.id,
           domain: e.domain,
           entityId: e.entityId,
