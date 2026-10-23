@@ -48,14 +48,16 @@ Work item port interfaces, domain types, and storage adapters for structured wor
   - `toWorkItemId(raw: string): WorkItemId` — boundary constructor
   - `WorkItemQueryPort`, `WorkItemCommandPort` — read/write interfaces
   - `VALID_TRANSITIONS`, `isValidTransition(from, to): boolean` — transition table
+  - `WorkItemScore(s)`, `parseWorkItemScores(input)`, `rankScore(scores)`, `WorkItemScoresInvalidError` — the only `scores` bounds and WSJF rank (story.5111); every write path calls the parser, nobody re-states the rules
 - **Exports (adapter `@cogni/work-items/markdown`):**
   - `MarkdownWorkItemAdapter` — implements QueryPort + CommandPort against markdown files
   - `StaleRevisionError` — thrown on optimistic concurrency conflict
   - `InvalidTransitionError` — thrown on invalid status transition
+  - `UnsupportedWorkItemFieldError` — thrown when create/patch names `scores` (Doltgres-only); nothing is written
 - **Exports (adapter `@cogni/work-items/adapters/doltgres`):**
   - `DoltgresWorkItemAdapter` — node-local content query/create/patch; hard delete fails with a typed retirement error
   - `WorkItemRevisionConflictError` — `patch` with a stale `expectedRevision`; nothing committed
-  - `DoltgresWorkItemAdapterOptions` — per-store allocator configuration (`idFloor`)
+  - `DoltgresWorkItemAdapterOptions` — per-store allocator configuration (`idFloor`) (create/patch reject invalid `scores` with `WorkItemScoresInvalidError` before any SQL)
   - cursor codec + Doltgres port/error types
 - **Files considered API:** `src/index.ts`, `src/adapters/markdown/index.ts`, `src/adapters/doltgres/index.ts`
 
@@ -110,4 +112,4 @@ Work-item leases live in PostgreSQL `work_item_leases`; shared package `@cogni-d
 A read has its own deadline and never enters writer admission. Reader timeout retires only the captured generation, gracefully drains siblings and permits at most one replacement; maximum two generations. Runtime factories must budget the overlap. Explicit `readConnectionBudget` fails closed on unknown or invalid public pool widths. The template uses max 1 per reader generation, at most two reader connections plus one writer. See [README](README.md) for cutover and fault proof limits.
 
 - PATCH_CAS (task.5284): Doltgres `patch` with `expectedRevision` adds `AND revision = <expected>` to its UPDATE; a mismatch throws `WorkItemRevisionConflictError` and drops the empty op branch with no commit. Omitted = unconditioned, as before.
-- COLLABORATOR_TRIAGE (task.5284): any non-blank principal may `patch` only `priority`, `rank`, `labels` on items it did not create. A `set` naming any other field is creator-bound as a whole (`created_by_principal_id IS NULL OR = principal`); the patch transition proof admits a non-creator only when the row diff touches nothing beyond those columns + `revision`/`updated_at`.
+- COLLABORATOR_TRIAGE (task.5284): any non-blank principal may `patch` only `priority`, `rank`, `labels`, `scores` on items it did not create. A `set` naming any other field is creator-bound as a whole (`created_by_principal_id IS NULL OR = principal`); the patch transition proof admits a non-creator only when the row diff touches nothing beyond those columns + `revision`/`updated_at`.

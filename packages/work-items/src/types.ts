@@ -80,6 +80,19 @@ export type WorkRelation = {
   readonly type: RelationType;
 };
 
+// ── Evaluation scores (story.5111) ─────────────────────
+// Axis ids are config (hub entry `work-item-scores-design`), never a closed enum:
+// adding or renaming an axis must not need a code change or a migration.
+
+/** One axis score: an integer 0–5, optionally backed by a Justification URL. */
+export type WorkItemScore = {
+  readonly v: number;
+  readonly ev?: string | undefined;
+};
+
+/** Axis id (e.g. `goal`, `time`, `unblocks`, `ease`, `confidence`, `agent`) → score. */
+export type WorkItemScores = Readonly<Record<string, WorkItemScore>>;
+
 // ── Work item ─────────────────────────────────────────
 
 export type WorkItem = {
@@ -90,6 +103,8 @@ export type WorkItem = {
   readonly priority?: number;
   readonly rank?: number;
   readonly estimate?: number;
+  /** Missing axes are absent, not zero. */
+  readonly scores?: WorkItemScores;
   readonly summary?: string;
   readonly outcome?: string;
   readonly projectId?: WorkItemId;
