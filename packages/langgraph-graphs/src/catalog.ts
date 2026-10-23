@@ -88,6 +88,8 @@ export interface CatalogEntry {
   /** MCP server names whose tools this graph may use. Empty = no MCP tools. */
   readonly mcpServerIds?: readonly string[];
   readonly graphFactory: CreateGraphFn;
+  /** Stream only the final validated assistant result; preserve tool/usage events. */
+  readonly finalOnly?: boolean;
   /** Optional system prompt for operator graphs (catalog-driven, not hardcoded). */
   readonly systemPrompt?: string;
   /**
@@ -259,18 +261,14 @@ export const NODE_LANGGRAPH_CATALOG = {
     graphFactory: createFrontendTesterGraph,
   },
 
-  /**
-   * Mission loop (story.5108) — brain-style ReAct agent on the hourly governance schedule: reads the DAO
-   * goals and makes at most ~5 goal-cited work-item changes; p0/p1 writes are server-denied and reported
-   * as proposals for the node admin. Every node runs it: a node schedules `langgraph:work-prioritizer` in
-   * its own repo-spec, and a node with no approved goals changes nothing.
-   */
+  /** Mission compatibility ID: read-only proposal qualification through the shared harness. */
   [WORK_PRIORITIZER_GRAPH_NAME]: {
     displayName: "Mission Loop",
     description:
-      "Reads the node's DAO goals and makes a few goal-cited work-item changes; lists p0/p1 as proposals",
+      "Read-only mission evidence with independent proposal verification; applies no work-item changes",
     toolIds: WORK_PRIORITIZER_TOOL_IDS as readonly string[],
     graphFactory: createWorkPrioritizerGraph,
+    finalOnly: true,
     report: { event: "ai.work_prioritizer.cycle" },
   },
 } as const;

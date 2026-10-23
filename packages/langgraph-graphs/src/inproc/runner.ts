@@ -129,6 +129,7 @@ export function createInProcGraphRunner<TTool = unknown>(
 } {
   const {
     createGraph,
+    finalOnly,
     completionFn,
     createToolExecFn,
     toolContracts,
@@ -149,6 +150,7 @@ export function createInProcGraphRunner<TTool = unknown>(
   } | null = null;
 
   const emit = (e: AiEvent): void => {
+    if (finalOnly && e.type === "text_delta") return;
     // Aggregate usage from usage_report events (per USAGE_AGGREGATION_PER_RUN)
     if (e.type === "usage_report" && e.fact?.inputTokens !== undefined) {
       if (collectedUsage === null) {
@@ -182,6 +184,9 @@ export function createInProcGraphRunner<TTool = unknown>(
 
   // Use factory from catalog instead of hardcoded graph
   const graph = createGraph({
+    ...(request.nodeId
+      ? { hostContext: { nodeId: request.nodeId, runId: request.runId } }
+      : {}),
     llm,
     tools,
     ...(responseFormat !== undefined && { responseFormat }),
@@ -218,6 +223,10 @@ export function createInProcGraphRunner<TTool = unknown>(
         result.structuredResponse !== undefined
           ? (result.structuredResponse as Record<string, unknown>)
           : undefined;
+
+      // Composed graphs expose only their validated envelope, never role drafts.
+      if (finalOnly)
+        queue.push({ type: "text_delta", delta: assistantContent });
 
       // ASSISTANT_FINAL_REQUIRED: exactly one per run
       emit({ type: "assistant_final", content: assistantContent });

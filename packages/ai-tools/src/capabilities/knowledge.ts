@@ -27,6 +27,8 @@ export const CONFIDENCE = {
 } as const;
 
 export interface KnowledgeEntry {
+  entryType?: string | null;
+  useWhen?: string | null;
   id: string;
   domain: string;
   entityId: string | null;
