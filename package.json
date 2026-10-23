@@ -45,6 +45,6 @@
     "yaml": "^2.8.3"
   },
   "dependencies": {
-    "@cogni-dao/doltgres-admission": "workspace:*"
+    "@cogni-dao/knowledge-store": "workspace:*"
   }
 }

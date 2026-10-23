@@ -55,6 +55,10 @@ Shared ports, contribution workflow, and adapters for versioned domain knowledge
 - `createDoltgresPusher`, `DoltgresPusher`, `DoltgresPushConfig` (post-merge mirror to a Dolt remote; lazy `dolt_remote add` + `dolt_push`)
 - `wrapPushSafe`, `PushOutcomeListener` (fire-and-forget wrapper with injectable success/failure callbacks — keeps logging out of the adapter)
 
+**Subpath** (`@cogni-dao/knowledge-store/migrations`):
+
+- `createDoltgresMigrationRunner`, `isDoltgresMigrationOutcomeUncertain`: bounded owned-session execution for the node-owned migrator; bundles the private engine with its guard. Journals, DDL, schema checks, identity and process lifecycle stay node-owned.
+
 **Service** (`@cogni/knowledge-store/service/contribution-service`):
 
 - `createContributionService`, `ContributionService`, `ContributionServiceDeps`

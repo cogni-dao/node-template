@@ -14,9 +14,9 @@ importers:
 
   .:
     dependencies:
-      '@cogni-dao/doltgres-admission':
+      '@cogni-dao/knowledge-store':
         specifier: workspace:*
-        version: link:packages/doltgres-admission
+        version: link:packages/knowledge-store
     devDependencies:
       '@playwright/test':
         specifier: ^1.56.1

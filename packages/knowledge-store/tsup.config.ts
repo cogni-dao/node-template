@@ -16,6 +16,7 @@ import { defineConfig } from "tsup";
 export const tsupConfig = defineConfig({
   entry: [
     "src/index.ts",
+    "src/migrations.ts",
     "src/domain/contribution-schemas.ts",
     "src/adapters/doltgres/index.ts",
     "src/adapters/fake/index.ts",
