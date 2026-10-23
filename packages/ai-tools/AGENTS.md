@@ -66,6 +66,7 @@ Pure tool definitions for AI agent execution. Defines `ToolContract`, `ToolImple
   - `knowledgeReadBoundTool`, `KNOWLEDGE_READ_NAME`, `createKnowledgeReadImplementation` - Knowledge read tool (read_only: get by id or list by domain+tags)
   - `knowledgeSearchBoundTool`, `KNOWLEDGE_SEARCH_NAME`, `createKnowledgeSearchImplementation` - Knowledge search tool (read_only: text search by domain+query)
   - `knowledgeWriteBoundTool`, `KNOWLEDGE_WRITE_NAME`, `createKnowledgeWriteImplementation` - Knowledge write tool (state_change: upsert + auto dolt_commit)
+  - `goalListBoundTool`, `GOAL_LIST_NAME`, `createGoalListImplementation` - DAO goal list tool (read_only: the node's approved `goal-*` atoms via `KnowledgeCapability.listActiveGoals`; never counted or truncated)
   - `KnowledgeCapability`, `KnowledgeEntry`, `KnowledgeWriteParams`, `CONFIDENCE` - Knowledge capability types (see `@cogni/knowledge-store` for port + adapter)
   - `TOOL_CATALOG` - Singleton catalog of all core tool definitions (Record<string, CatalogBoundTool>)
   - `CORE_TOOL_BUNDLE` - Cross-node core tool array (all non-Polymarket tools); pass to createBoundToolSource. Poly node additionally imports POLY_TOOL_BUNDLE from `@cogni/poly-ai-tools`.
@@ -87,8 +88,8 @@ Pure tool definitions for AI agent execution. Defines `ToolContract`, `ToolImple
 ## Usage
 
 ```bash
-pnpm --filter @cogni/ai-tools typecheck
-pnpm --filter @cogni/ai-tools build
+pnpm --filter @cogni-dao/ai-tools typecheck
+pnpm --filter @cogni-dao/ai-tools build
 ```
 
 ## Standards

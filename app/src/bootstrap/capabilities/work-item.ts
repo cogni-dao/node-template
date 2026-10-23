@@ -8,15 +8,25 @@
  * Invariants:
  *   - PORTS_ARE_AUTHORITY: All operations delegate to WorkItemQueryPort/WorkItemCommandPort
  *   - TRANSITION_TABLE_ENFORCED: CommandPort validates transitions
+ *   - PATCH_ON_THE_LIVE_BACKLOG (story.5096, mirrors cogni): when `backlogWriter` is wired, `patch`
+ *     goes through the Doltgres `patch` attributed to `backlogWriter.principalId`; the store's own
+ *     authority applies unchanged. Without it, `patch` stays on the markdown ports.
+ *   - PATCH_CAS_PASSTHROUGH: a caller `expectedRevision` is forwarded as the Doltgres store's
+ *     compare-and-set (absent => that store's unconditioned patch); its `WorkItemRevisionConflictError`
+ *     becomes the ai-tools `WorkItemPatchConflictError`, nothing written. The markdown ports CAS on the
+ *     revision they re-read (`current.revision`, a content hash, not the integer the tool exposes),
+ *     so a caller `expectedRevision` there is refused, never silently dropped.
  * Side-effects: none (factory only)
  * Links: docs/spec/development-lifecycle.md
  * @internal
  */
 
-import type {
-  WorkItemCapability,
-  WorkItemInfo,
-  WorkItemTransitionResult,
+import {
+  type WorkItemCapability,
+  type WorkItemInfo,
+  WorkItemPatchConflictError,
+  type WorkItemQueryParams,
+  type WorkItemTransitionResult,
 } from "@cogni/ai-tools";
 import type {
   ActorKind,
@@ -28,6 +38,10 @@ import type {
   WorkItemType,
 } from "@cogni/work-items";
 import { toWorkItemId } from "@cogni/work-items";
+import {
+  WorkItemRevisionConflictError,
+  type WorkItemsDoltgresPort,
+} from "@cogni/work-items/adapters/doltgres";
 
 import { isPrivilegedPriority } from "@cogni/knowledge-store";
 
@@ -44,6 +58,14 @@ export interface WorkItemCapabilityDeps {
    * saw an empty backlog. Writes are unchanged.
    */
   readonly backlogReader?: Pick<WorkItemQueryPort, "list">;
+  /**
+   * PATCH_ON_THE_LIVE_BACKLOG: the node's Doltgres work-item store. When set, `patch`
+   * writes there as `principalId` (with caller compare-and-set) instead of the markdown ports.
+   */
+  readonly backlogWriter?: {
+    readonly store: Pick<WorkItemsDoltgresPort, "patch">;
+    readonly principalId: string;
+  };
 }
 
 function assigneeId(a: SubjectRef): string {
@@ -74,6 +96,11 @@ function toWorkItemInfo(item: WorkItem): WorkItemInfo {
     ...(item.branch !== undefined && { branch: item.branch }),
     ...(item.pr !== undefined && { pr: item.pr }),
     ...(item.blockedBy !== undefined && { blockedBy: item.blockedBy }),
+    ...(typeof item.revision === "number" && { revision: item.revision }),
+    ...(item.outcome !== undefined && { outcome: item.outcome }),
+    ...(item.estimate !== undefined && { estimate: item.estimate }),
+    ...(item.parentId !== undefined && { parentId: item.parentId }),
+    ...(item.specRefs !== undefined && { specRefs: [...item.specRefs] }),
   };
 }
 
@@ -85,23 +112,40 @@ export function createWorkItemCapability(
 ): WorkItemCapability {
   const { workItemQuery, workItemCommand } = deps;
 
+  function list(params: WorkItemQueryParams) {
+    return (deps.backlogReader ?? workItemQuery).list({
+      ...(params.statuses && {
+        statuses: params.statuses as readonly WorkItemStatus[],
+      }),
+      ...(params.types && {
+        types: params.types as readonly WorkItemType[],
+      }),
+      ...(params.text && { text: params.text }),
+      ...(params.actor && { actor: params.actor as ActorKind }),
+      ...(params.projectId && {
+        projectId: toWorkItemId(params.projectId),
+      }),
+      ...(params.ids && { ids: params.ids.map((id) => toWorkItemId(id)) }),
+      ...(params.cursor && { cursor: params.cursor }),
+      ...(params.limit && { limit: params.limit }),
+    });
+  }
+
   return {
     async query(params): Promise<readonly WorkItemInfo[]> {
-      const result = await (deps.backlogReader ?? workItemQuery).list({
-        ...(params.statuses && {
-          statuses: params.statuses as readonly WorkItemStatus[],
-        }),
-        ...(params.types && {
-          types: params.types as readonly WorkItemType[],
-        }),
-        ...(params.text && { text: params.text }),
-        ...(params.actor && { actor: params.actor as ActorKind }),
-        ...(params.projectId && {
-          projectId: toWorkItemId(params.projectId),
-        }),
-        ...(params.limit && { limit: params.limit }),
-      });
+      const result = await list(params);
       return result.items.map(toWorkItemInfo);
+    },
+
+    /** Paginated read: a complete backlog snapshot follows `nextCursor` to the end. */
+    async queryPage(params) {
+      const result = await list(params);
+      return {
+        items: result.items.map(toWorkItemInfo),
+        ...(result.nextCursor !== undefined && {
+          nextCursor: result.nextCursor,
+        }),
+      };
     },
 
     async transitionStatus(input): Promise<WorkItemTransitionResult> {
@@ -133,6 +177,37 @@ export function createWorkItemCapability(
       if (priority != null && isPrivilegedPriority(priority)) {
         throw new Error(
           `authz_denied: priority ${priority} requires node admin — propose it instead`
+        );
+      }
+      const writer = deps.backlogWriter;
+      if (writer) {
+        try {
+          const updated = await writer.store.patch(
+            {
+              id: toWorkItemId(input.id),
+              ...(input.expectedRevision !== undefined && {
+                expectedRevision: input.expectedRevision,
+              }),
+              set: input.set,
+            },
+            writer.principalId
+          );
+          return toWorkItemInfo(updated);
+        } catch (e) {
+          if (e instanceof WorkItemRevisionConflictError) {
+            throw new WorkItemPatchConflictError(
+              e.id,
+              e.expectedRevision,
+              e.currentRevision
+            );
+          }
+          throw e;
+        }
+      }
+
+      if (input.expectedRevision !== undefined) {
+        throw new Error(
+          "expectedRevision requires the Doltgres backlog writer (not wired)"
         );
       }
       const current = await workItemQuery.get(toWorkItemId(input.id));

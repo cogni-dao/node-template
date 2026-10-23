@@ -12,6 +12,7 @@
  */
 
 export type {
+  ActiveGoalInfo,
   AuthCapability,
   ChainDirection,
   ChainNodeEntry,
@@ -64,6 +65,7 @@ export type {
   WorkItemAssignee,
   WorkItemCapability,
   WorkItemInfo,
+  WorkItemQueryPage,
   WorkItemQueryParams,
   WorkItemTransitionResult,
 } from "./capabilities";
@@ -75,6 +77,7 @@ export {
   REPO_CITATION_REGEX,
   stubAuthCapability,
   systemClock,
+  WorkItemPatchConflictError,
 } from "./capabilities";
 // Tool catalog
 export {
@@ -85,6 +88,7 @@ export {
   getToolIds,
   hasToolId,
   TOOL_CATALOG,
+  VCS_TOOL_BUNDLE,
   type ToolCatalog,
 } from "./catalog";
 // Runtime adapter
@@ -148,6 +152,18 @@ export {
   getCurrentTimeImplementation,
 } from "./tools/get-current-time";
 export {
+  createGoalListImplementation,
+  GOAL_LIST_NAME,
+  type GoalListDeps,
+  type GoalListInput,
+  GoalListInputSchema,
+  type GoalListOutput,
+  GoalListOutputSchema,
+  goalListBoundTool,
+  goalListContract,
+  goalListStubImplementation,
+} from "./tools/goal-list";
+export {
   createKnowledgeReadImplementation,
   KNOWLEDGE_READ_NAME,
   type KnowledgeReadDeps,
@@ -162,6 +178,7 @@ export {
 } from "./tools/knowledge-read";
 export {
   createKnowledgeSearchImplementation,
+  KNOWLEDGE_SEARCH_CONTENT_MAX_CHARS,
   KNOWLEDGE_SEARCH_NAME,
   type KnowledgeSearchDeps,
   type KnowledgeSearchInput,
