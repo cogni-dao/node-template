@@ -37,26 +37,33 @@ Shared ports, contribution workflow, and adapters for versioned domain knowledge
 }
 ```
 
-**External deps:** `zod` (schema validation), `postgres` (Doltgres wire protocol — adapter subpath only).
+**External deps:** `@cogni-dao/doltgres-admission` (bundled engine protocol), `zod` (schema validation), `postgres` (Doltgres wire protocol — adapter subpath only).
 
 ## Public Surface
 
 **Root barrel** (`@cogni/knowledge-store`):
 
-- Types: `KnowledgeStorePort`, `Knowledge`, `NewKnowledge`, `DoltCommit`, `DoltDiffEntry`, `SourceType`
+- Types: `KnowledgeStorePort`, `KnowledgeWriteSession` (closed callback scope), `Knowledge`, `NewKnowledge`, `DoltCommit`, `DoltDiffEntry`, `SourceType`
 - Schemas: `KnowledgeSchema`, `NewKnowledgeSchema`, `DoltCommitSchema`, `DoltDiffEntrySchema`, `SourceTypeSchema`
+- Goal layer (story.5101): `KnowledgeStorePort.listActiveGoals()` (required port method, NO_GOAL_CAP), `ActiveGoal`, `GOAL_ENTRY_TYPE`, `GOAL_ID_PREFIX`, `GOAL_RETIRING_EDGE`, `isGoalRowId`, `selectActiveGoals`, `resolveGoals`, `renderGoalsLines`, `GOALS_BOOTSTRAP_INSTRUCTION`, `GoalsSection`, `GoalRequiresContributionError` (direct writes never touch goals), `createKnowledgeCapability(...).listActiveGoals` (for `core__goal_list`)
+- Node-admin seam: `NodeAdminAuthority`, `NodeAdminActor`, `NodeAdminDecision`, `checkNodeAdmin`, `isPrivilegedPriority` (priority <= 1), `NodeAdminRequiredError`, `touchesGoalLayer`, `TouchedCitation`
 
 **Subpath** (`@cogni/knowledge-store/adapters/doltgres`):
 
-- `DoltgresKnowledgeStoreAdapter`, `DoltgresAdapterConfig`, `buildDoltgresClient`, `DoltgresClientConfig`
+- `DoltgresKnowledgeStoreAdapter` (`withWrite` required for mutations), `DoltgresAdapterConfig` (injected shared writer session), `buildDoltgresClient`, `DoltgresClientConfig`
 - `DoltgresKnowledgeContributionAdapter`, `DoltgresKnowledgeContributionAdapterConfig` (contribution-branch lifecycle)
 - `createDoltgresPusher`, `DoltgresPusher`, `DoltgresPushConfig` (post-merge mirror to a Dolt remote; lazy `dolt_remote add` + `dolt_push`)
 - `wrapPushSafe`, `PushOutcomeListener` (fire-and-forget wrapper with injectable success/failure callbacks — keeps logging out of the adapter)
+
+**Subpath** (`@cogni-dao/knowledge-store/migrations`):
+
+- `createDoltgresMigrationRunner`, `isDoltgresMigrationOutcomeUncertain`: bounded owned-session execution for the node-owned migrator; bundles the private engine with its guard. Journals, DDL, schema checks, identity and process lifecycle stay node-owned.
 
 **Service** (`@cogni/knowledge-store/service/contribution-service`):
 
 - `createContributionService`, `ContributionService`, `ContributionServiceDeps`
 - `ContributionServiceDeps.pushMainOnMerge?: () => Promise<void>` — optional post-merge mirror hook; caller owns error handling (service does not await + does not catch)
+- `ContributionServiceDeps.nodeAdmin?: NodeAdminAuthority` — goal-layer merge gate (raw diff ids via the required port method `KnowledgeContributionPort.touchedIds`, merge pinned with `expectedHeadCommit`); absent ⇒ goal-layer merges fail closed 503
 
 ## Ports
 
@@ -66,7 +73,7 @@ Shared ports, contribution workflow, and adapters for versioned domain knowledge
 ## Responsibilities
 
 - This directory **does**: define port interface, Zod domain schemas, Doltgres adapter (CRUD + commit/log/diff), connection factory with Doltgres-compatible settings.
-- This directory **does not**: define schema (node packages own that), load env vars, own database provisioning, handle branching/remotes.
+- This directory **does not**: define schema (node packages own that), load env vars, own database provisioning or process lifecycle. Shared engine admission/branch mutation is delegated to `@cogni-dao/doltgres-admission`.
 
 ## Notes
 
@@ -77,3 +84,5 @@ Shared ports, contribution workflow, and adapters for versioned domain knowledge
 - **`fetch_types: false` required** on all postgres.js connections (pg_type grants missing).
 - Schema lives in node packages (`nodes/{node}/packages/doltgres-schema/`) because nodes may add companion tables and fork takes schema with it.
 - `core__knowledge_search` / `core__knowledge_read` / `core__knowledge_write` BoundTools shipped in `@cogni/ai-tools`; brain graph uses them via tool runtime.
+
+Contribution adapters require an explicit independent `writerSession` or `branchSql`; no write path falls back to its read client. The existing session runner registers each reader and rejects both initial and replacement writer aliases before SQL; rejected replacement factories never destroy a reader. Pure read-only store construction remains supported.

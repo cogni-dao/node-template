@@ -20,6 +20,7 @@ export {
   WorkItemLeaseConflictError,
   WorkItemRevisionConflictError,
   WorkItemsBusyError,
+  WorkItemsCapacityError,
 } from "./adapter.js";
 export {
   decodeCursor,
@@ -33,3 +34,9 @@ export type {
   WorkItemsPatchInput,
   WorkItemsPatchSet,
 } from "./ports.js";
+
+export type { WorkItemsContentPort } from "./ports.js";
+
+export { WorkItemDeletionRetiredError } from "../../errors.js";
+
+export { WorkItemWriteOutcomeUnknownError } from "../../errors.js";

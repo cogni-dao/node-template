@@ -24,7 +24,14 @@ vi.mock("@/bootstrap/container", () => ({
   getContainer: vi.fn(),
 }));
 
-import { getWorkItem, listWorkItems } from "@/app/_facades/work/items.server";
+import {
+  getWorkItem,
+  listWorkItems,
+  createWorkItem,
+  WorkItemWriteOutcomeUnknownError,
+  NodeAdminRequiredError,
+  patchWorkItem
+} from "@/app/_facades/work/items.server";
 import { getContainer } from "@/bootstrap/container";
 
 const mockGetContainer = vi.mocked(getContainer);
@@ -98,6 +105,40 @@ describe("app/_facades/work/items.server", () => {
       workItemQuery: mockPort,
       doltgresWorkItems: mockDoltgres,
     } as never);
+  });
+
+  it("preserves the current write uncertainty receipt instead of converting it to backend busy", async () => {
+    const error = Object.assign(new Error("inspect current branch"), {
+      name: "WorkItemWriteOutcomeUnknownError",
+      operationId: "operation-1",
+      branch: "work-item-op/one",
+      commitHash: "hash-1",
+      itemId: "task.0001",
+    });
+    mockDoltgres.create.mockRejectedValue(error);
+    await expect(
+      createWorkItem(
+        { type: "task", title: "unknown result" },
+        { id: "principal-1" }
+      )
+    ).rejects.toMatchObject({
+      name: "WorkItemWriteOutcomeUnknownError",
+      code: "work_item_write_outcome_unknown",
+      retryable: false,
+      receipt: {
+        lookup: {
+          operationId: "operation-1",
+          branch: "work-item-op/one",
+          commitHash: "hash-1",
+          itemId: "task.0001",
+        },
+      },
+    });
+    const receipt = new WorkItemWriteOutcomeUnknownError(
+      "operation-1",
+      "work-item-op/one"
+    );
+    expect(receipt.receipt.lookup.commitHash).toBeNull();
   });
 
   describe("listWorkItems", () => {
@@ -256,5 +297,60 @@ describe("app/_facades/work/items.server", () => {
 
       expect(mockPort.get).toHaveBeenCalledWith(toWorkItemId("task.0001"));
     });
+  });
+});
+
+describe("P0P1_IS_NODE_ADMIN — priority <= 1 needs node admin (story.5101)", () => {
+  const doltgres = () => ({
+    create: vi.fn().mockResolvedValue(SAMPLE_WORK_ITEM),
+    patch: vi.fn().mockResolvedValue(SAMPLE_WORK_ITEM),
+  });
+  const withAuthority = (ok: boolean) => {
+    const store = doltgres();
+    mockGetContainer.mockReturnValue({
+      doltgresWorkItems: store,
+      log: { warn: vi.fn() },
+      nodeAdmin: {
+        check: async () =>
+          ok ? { ok: true } : { ok: false, errorCode: "authz_denied" },
+      },
+    } as never);
+    return store;
+  };
+
+  it("a non-admin patch to p0 (or p1) is refused 403 before the store write", async () => {
+    for (const priority of [0, 1]) {
+      const store = withAuthority(false);
+      const err = await patchWorkItem(
+        { id: "task.5001", set: { priority } } as never,
+        { id: "agent-1", walletAddress: null }
+      ).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(NodeAdminRequiredError);
+      expect((err as NodeAdminRequiredError).status).toBe(403);
+      expect(store.patch).not.toHaveBeenCalled();
+    }
+  });
+
+  it("a non-admin create at p1 is refused; p2 is open", async () => {
+    const store = withAuthority(false);
+    await expect(
+      createWorkItem({ type: "task", title: "t", priority: 1 } as never, {
+        id: "agent-1",
+      })
+    ).rejects.toBeInstanceOf(NodeAdminRequiredError);
+    expect(store.create).not.toHaveBeenCalled();
+    await createWorkItem({ type: "task", title: "t", priority: 2 } as never, {
+      id: "agent-1",
+    });
+    expect(store.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("the node admin may set p0", async () => {
+    const store = withAuthority(true);
+    await patchWorkItem({ id: "task.5001", set: { priority: 0 } } as never, {
+      id: "u1",
+      walletAddress: "0xabc",
+    });
+    expect(store.patch).toHaveBeenCalledTimes(1);
   });
 });

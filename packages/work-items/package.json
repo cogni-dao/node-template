@@ -1,6 +1,6 @@
 {
   "name": "@cogni-dao/work-items",
-  "version": "0.1.10",
+  "version": "0.2.2",
   "license": "LicenseRef-PolyForm-Shield-1.0.0",
   "repository": {
     "type": "git",
@@ -24,6 +24,11 @@
       "types": "./dist/adapters/doltgres/index.d.ts",
       "import": "./dist/adapters/doltgres/index.js",
       "default": "./dist/adapters/doltgres/index.js"
+    },
+    "./adapters/postgres": {
+      "types": "./dist/adapters/postgres/index.d.ts",
+      "import": "./dist/adapters/postgres/index.js",
+      "default": "./dist/adapters/postgres/index.js"
     }
   },
   "types": "./dist/index.d.ts",
@@ -45,6 +50,7 @@
     "tsup": "^8.5.1",
     "typescript": "^5",
     "vite-tsconfig-paths": "^5.1.4",
-    "vitest": "^3.1.4"
+    "vitest": "^3.1.4",
+    "@cogni-dao/doltgres-admission": "workspace:*"
   }
 }
