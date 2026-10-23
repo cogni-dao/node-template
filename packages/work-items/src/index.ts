@@ -41,3 +41,24 @@ export { withWorkItemLeases } from "./with-leases.js";
 
 export { WorkItemWriteOutcomeUnknownError } from "./errors.js";
 export { WorkItemsCapacityError } from "./errors.js";
+export { WorkItemScoresInvalidError } from "./errors.js";
+
+export {
+  DEFAULT_SCORE_EVIDENCE_HOSTS,
+  EASE_ITERATIONS,
+  parseWorkItemScores,
+  rankScore,
+  WORK_ITEM_SCORE_AXIS_ID,
+  WORK_ITEM_SCORE_EV_MAX_CHARS,
+  WORK_ITEM_SCORE_EVIDENCE_FROM,
+  WORK_ITEM_SCORE_MAX,
+  WORK_ITEM_SCORE_MIN,
+  WORK_ITEM_SCORES_MAX_AXES,
+  WORK_ITEM_SCORES_MAX_BYTES,
+} from "./scores.js";
+export type {
+  ParseWorkItemScoresOptions,
+  WorkItemScoresIssue,
+  WorkItemScoresIssueCode,
+  WorkItemScoresParseResult,
+} from "./scores.js";

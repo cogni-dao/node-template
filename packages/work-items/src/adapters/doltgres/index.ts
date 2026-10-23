@@ -40,3 +40,5 @@ export type { WorkItemsContentPort } from "./ports.js";
 export { WorkItemDeletionRetiredError } from "../../errors.js";
 
 export { WorkItemWriteOutcomeUnknownError } from "../../errors.js";
+
+export { WorkItemScoresInvalidError } from "../../errors.js";

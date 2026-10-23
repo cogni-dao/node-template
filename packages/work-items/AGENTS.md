@@ -48,6 +48,7 @@ Work item port interfaces, domain types, and storage adapters for structured wor
   - `toWorkItemId(raw: string): WorkItemId` — boundary constructor
   - `WorkItemQueryPort`, `WorkItemCommandPort` — read/write interfaces
   - `VALID_TRANSITIONS`, `isValidTransition(from, to): boolean` — transition table
+  - `WorkItemScore(s)`, `parseWorkItemScores(input, { evidenceHosts? })`, `DEFAULT_SCORE_EVIDENCE_HOSTS`, `rankScore(scores)`, `WorkItemScoresInvalidError` — the only `scores` bounds and WSJF rank (story.5111); every write path calls the parser, nobody re-states the rules
 - **Exports (adapter `@cogni/work-items/markdown`):**
   - `MarkdownWorkItemAdapter` — implements QueryPort + CommandPort against markdown files
   - `StaleRevisionError` — thrown on optimistic concurrency conflict
@@ -55,7 +56,7 @@ Work item port interfaces, domain types, and storage adapters for structured wor
 - **Exports (adapter `@cogni/work-items/adapters/doltgres`):**
   - `DoltgresWorkItemAdapter` — node-local content query/create/patch; hard delete fails with a typed retirement error
   - `WorkItemRevisionConflictError` — `patch` with a stale `expectedRevision`; nothing committed
-  - `DoltgresWorkItemAdapterOptions` — per-store allocator configuration (`idFloor`)
+  - `DoltgresWorkItemAdapterOptions` — per-store allocator configuration (`idFloor`) and `scoreEvidenceHosts` (create/patch reject invalid `scores` with `WorkItemScoresInvalidError` before any SQL)
   - cursor codec + Doltgres port/error types
 - **Files considered API:** `src/index.ts`, `src/adapters/markdown/index.ts`, `src/adapters/doltgres/index.ts`
 

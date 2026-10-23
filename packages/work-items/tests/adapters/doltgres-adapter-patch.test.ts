@@ -12,6 +12,7 @@
  *   - PATCH_CAS (task.5284): expectedRevision is in the UPDATE predicate; a stale one throws WorkItemRevisionConflictError with nothing committed.
  *   - COLLABORATOR_TRIAGE (task.5284): a non-creator may patch only priority/rank/labels/scores; any other field keeps the whole patch creator-bound.
  *   - SCORES_JSONB_ORDER (story.5111): a scores patch is proven even when jsonb reorders its keys.
+ *   - SCORES_BOUNDS_IN_PACKAGE (story.5111): create/patch run parseWorkItemScores; invalid scores never reach SQL.
  * Side-effects: none
  * Links: bug.5005, task.5284,
  *   packages/work-items/src/adapters/doltgres/adapter.ts
@@ -27,6 +28,8 @@ import {
   WorkItemAuthorizationError,
   WorkItemRevisionConflictError,
 } from "../../src/adapters/doltgres/adapter.js";
+import { WorkItemScoresInvalidError } from "../../src/errors.js";
+import { DEFAULT_SCORE_EVIDENCE_HOSTS } from "../../src/scores.js";
 import {
   independentReadPool,
   makeFakeDoltgresSql,
@@ -477,7 +480,9 @@ describe("DoltgresWorkItemAdapter — scores (story.5111)", () => {
       ];
     }, queries);
 
-    const created = await new DoltgresWorkItemAdapter(sql).create(
+    const created = await new DoltgresWorkItemAdapter(sql, {
+      readClient: independentReadPool(sql),
+    }).create(
       { type: "task", title: "scored", scores },
       CREATOR
     );
@@ -531,5 +536,75 @@ describe("DoltgresWorkItemAdapter — scores (story.5111)", () => {
     expect(result.revision).toBe(4);
     expect("scores" in result).toBe(false);
     expect(store.get(CAS_ID)?.scores).toBeNull();
+  });
+
+  it("runs parseWorkItemScores on create: invalid scores throw before any query", async () => {
+    const queries: string[] = [];
+    const sql = makeFakeDoltgresSql(() => [], queries);
+
+    await expect(
+      new DoltgresWorkItemAdapter(sql, {
+        readClient: independentReadPool(sql),
+      }).create(
+        { type: "task", title: "unevidenced", scores: { goal: { v: 5 } } },
+        CREATOR
+      )
+    ).rejects.toBeInstanceOf(WorkItemScoresInvalidError);
+    expect(queries).toHaveLength(0);
+  });
+
+  it("runs parseWorkItemScores on patch: invalid scores throw before any query", async () => {
+    const { adapter, queries, store } = casHarness();
+
+    await expect(
+      adapter.patch(
+        {
+          id: toWorkItemId(CAS_ID),
+          expectedRevision: 3,
+          set: { scores: { goal: { v: 4, ev: "https://evil.example/x" } } },
+        },
+        COLLABORATOR
+      )
+    ).rejects.toMatchObject({
+      name: "WorkItemScoresInvalidError",
+      issues: [expect.objectContaining({ code: "evidence_host_not_allowed" })],
+    });
+    expect(queries).toHaveLength(0);
+    expect(store.get(CAS_ID)?.scores).toBeUndefined();
+  });
+
+  it("honours a node-extended evidence allow-list (scoreEvidenceHosts)", async () => {
+    const queries: string[] = [];
+    const sql = makeFakeDoltgresSql((query) => {
+      if (!query.startsWith("INSERT INTO work_items")) return [];
+      const id = /VALUES \('([^']+)'/.exec(query)?.[1] ?? "";
+      const written = /'(\{.*?\}\})'::jsonb/.exec(query)?.[1];
+      return [
+        {
+          ...casSeed,
+          id,
+          revision: 0,
+          scores: written ? asJsonb(JSON.parse(written)) : null,
+        },
+      ];
+    }, queries);
+    const options = { readClient: independentReadPool(sql) };
+    const input = {
+      type: "task" as const,
+      title: "own domain",
+      scores: { goal: { v: 4, ev: "https://mynode.org/goals/1" } },
+    };
+
+    await expect(
+      new DoltgresWorkItemAdapter(sql, options).create(input, CREATOR)
+    ).rejects.toBeInstanceOf(WorkItemScoresInvalidError);
+    expect(queries).toHaveLength(0);
+
+    const created = await new DoltgresWorkItemAdapter(sql, {
+      ...options,
+      scoreEvidenceHosts: [...DEFAULT_SCORE_EVIDENCE_HOSTS, "mynode.org"],
+    }).create(input, CREATOR);
+    expect(created.scores).toEqual(input.scores);
+    expect(committed(queries)).toBe(true);
   });
 });

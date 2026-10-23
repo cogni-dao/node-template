@@ -8,10 +8,12 @@
  * Invariants:
  *   - SCORE_IS_INT_0_TO_5: v must be an integer in [0, 5].
  *   - AXES_ARE_CONFIG: any axis id matching /^[a-z][a-z0-9_]{0,31}$/ is accepted; at most 12 axes.
- *   - EV_IS_HTTP: ev must be an http(s) URL; javascript:/data: are rejected.
+ *   - SCORES_BOUNDS_IN_PACKAGE: every bound comes from `parseWorkItemScores` (@cogni-dao/work-items);
+ *     these cases prove the contract wires it in, the package tests own the full matrix.
+ *   - SCORE_NEEDS_EVIDENCE: v ≥ 4 needs an https, allow-listed `ev`.
  *   - PATCH_NULL_CLEARS: patch accepts scores:null; create does not.
  * Side-effects: none
- * Links: packages/node-contracts/src/work.items.list.v1.contract.ts, hub work-item-scores-design
+ * Links: packages/node-contracts/src/work.items.list.v1.contract.ts, packages/work-items/src/scores.ts, hub work-item-scores-design
  * @internal
  */
 
@@ -30,7 +32,7 @@ describe("WorkItemScoresInputSchema", () => {
       ok({
         goal: { v: 5, ev: "https://cognidao.org/knowledge/goal-fleet-pays-itself" },
         time: { v: 0 },
-        unblocks: { v: 4, ev: "http://example.com/x" },
+        unblocks: { v: 4, ev: "https://github.com/cogni-dao/node-template/pull/198" },
         ease: { v: 3 },
         confidence: { v: 2 },
         agent: { v: 1 },
@@ -52,6 +54,10 @@ describe("WorkItemScoresInputSchema", () => {
     ["key starting with a digit", { "1goal": { v: 1 } }],
     ["over-long key", { [`a${"b".repeat(32)}`]: { v: 1 } }],
     ["extra property", { goal: { v: 1, note: "x" } }],
+    ["v ≥ 4 without ev", { goal: { v: 4 } }],
+    ["http: ev", { goal: { v: 4, ev: "http://cognidao.org/x" } }],
+    ["non-allow-listed ev host", { goal: { v: 4, ev: "https://example.com/x" } }],
+    ["ev over 300 chars", { goal: { v: 1, ev: `https://cognidao.org/${"a".repeat(300)}` } }],
     ["javascript: ev", { goal: { v: 4, ev: "javascript:alert(1)" } }],
     ["data: ev", { goal: { v: 4, ev: "data:text/html,<script>1</script>" } }],
     ["ftp: ev", { goal: { v: 4, ev: "ftp://example.com/x" } }],
@@ -71,7 +77,9 @@ describe("WorkItemScoresInputSchema", () => {
 });
 
 describe("scores on create and patch", () => {
-  const scores = { goal: { v: 5 } };
+  const scores = {
+    goal: { v: 5, ev: "https://cognidao.org/knowledge/goal-fleet-pays-itself" },
+  };
 
   it("create accepts scores and rejects scores:null", () => {
     const base = { type: "task", title: "t" };
@@ -92,5 +100,22 @@ describe("scores on create and patch", () => {
     expect(cleared.success).toBe(true);
     expect(cleared.data?.set.scores).toBeNull();
     expect(patch({ scores: { goal: { v: 6 } } }).success).toBe(false);
+  });
+
+  it("surfaces the package issue path and code", () => {
+    const result = WorkItemScoresInputSchema.safeParse({ goal: { v: 5 } });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.path).toEqual(["goal", "ev"]);
+    expect(result.error?.issues[0]).toMatchObject({
+      params: { scoresIssue: "evidence_required" },
+    });
+  });
+
+  it("rejects a scores object over 1 KB", () => {
+    const ev = `https://cognidao.org/x?q=${"a".repeat(250)}`;
+    const big = Object.fromEntries(
+      ["goal", "time", "unblocks", "ease"].map((axis) => [axis, { v: 4, ev }])
+    );
+    expect(ok(big)).toBe(false);
   });
 });

@@ -81,3 +81,26 @@ export class WorkItemRevisionConflictError extends Error {
     this.name = "WorkItemRevisionConflictError";
   }
 }
+
+/** A `scores` write broke the package bounds (`parseWorkItemScores`); nothing was written. */
+export class WorkItemScoresInvalidError extends Error {
+  readonly code = "work_item_scores_invalid" as const;
+  constructor(
+    readonly issues: ReadonlyArray<{
+      readonly code: string;
+      readonly path: readonly string[];
+      readonly message: string;
+    }>
+  ) {
+    super(
+      `Invalid work-item scores: ${issues
+        .map((issue) =>
+          issue.path.length
+            ? `${issue.path.join(".")}: ${issue.message}`
+            : issue.message
+        )
+        .join("; ")}`
+    );
+    this.name = "WorkItemScoresInvalidError";
+  }
+}

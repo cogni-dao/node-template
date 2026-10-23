@@ -13,6 +13,7 @@
  * @internal
  */
 
+import { parseWorkItemScores } from "@cogni/work-items";
 import { z } from "zod";
 
 const SubjectRefSchema = z.discriminatedUnion("kind", [
@@ -33,21 +34,29 @@ const ExternalRefSchema = z.object({
  * Do-it-now scores (story.5111): axis id → { v: int 0–5, ev?: evidence URL }.
  * Axis ids are config (hub `work-item-scores-design`), so keys are an open,
  * bounded string set rather than an enum. Writes replace the whole object.
- * `ev` is http(s) only: it is rendered as a link (javascript:/data: rejected).
+ *
+ * The zod shape is only the OpenAPI-visible outline. Every bound (axis-id
+ * pattern, ≤12 axes, integer 0–5, SCORE_NEEDS_EVIDENCE, https allow-listed
+ * `ev` ≤300 chars, ≤1 KB) comes from `parseWorkItemScores` in
+ * `@cogni-dao/work-items`, the same function the Doltgres adapter enforces.
+ * `looseObject` keeps unknown entry keys so the package validator rejects them.
  */
 export const WorkItemScoresInputSchema = z
   .record(
-    z.string().regex(/^[a-z][a-z0-9_]{0,31}$/),
-    z.strictObject({
-      v: z.number().int().min(0).max(5),
-      ev: z
-        .url({ protocol: /^https?$/ })
-        .max(500)
-        .optional(),
-    })
+    z.string(),
+    z.looseObject({ v: z.number(), ev: z.string().optional() })
   )
-  .refine((scores) => Object.keys(scores).length <= 12, {
-    message: "scores may carry at most 12 axes",
+  .superRefine((scores, ctx) => {
+    const result = parseWorkItemScores(scores);
+    if (result.ok) return;
+    for (const issue of result.issues) {
+      ctx.addIssue({
+        code: "custom",
+        path: [...issue.path],
+        message: issue.message,
+        params: { scoresIssue: issue.code },
+      });
+    }
   });
 
 const WorkItemScoresDtoSchema = z.record(

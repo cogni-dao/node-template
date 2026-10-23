@@ -31,6 +31,7 @@ import type { ReservedSql, Sql } from "postgres";
 import {
   WorkItemRevisionConflictError,
   WorkItemDeletionRetiredError,
+  WorkItemScoresInvalidError,
   WorkItemWriteOutcomeUnknownError,
   WorkItemsBusyError,
   WorkItemsCapacityError,
@@ -50,6 +51,7 @@ import type {
 } from "./ports.js";
 
 import { decodeCursor, encodeCursor, type WorkItemCursor } from "./cursor.js";
+import { parseWorkItemScores } from "../../scores.js";
 
 export const OPERATOR_ID_FLOOR = 5000;
 const AUTO_ID_RETRIES = 5;
@@ -149,6 +151,12 @@ export interface DoltgresWorkItemAdapterOptions {
    * reads a WIDER pool than the write factory builds.
    */
   readonly readClient?: Sql;
+  /**
+   * Evidence-URL allow-list for `scores` writes (story.5111). Defaults to
+   * `DEFAULT_SCORE_EVIDENCE_HOSTS`; a node on its own domain spreads the
+   * default and adds its host. Every create/patch runs `parseWorkItemScores`.
+   */
+  readonly scoreEvidenceHosts?: readonly string[];
 }
 
 interface OperationContext {
@@ -402,6 +410,23 @@ function requirePrincipal(principalId: string): string {
   const value = principalId.trim();
   if (!value) throw new WorkItemAuthorizationError("unknown");
   return value;
+}
+
+/**
+ * SCORES_BOUNDS_IN_PACKAGE (story.5111): every adapter write runs the package
+ * validator, so a caller that skips the HTTP contract cannot store an
+ * unbounded or unevidenced `scores` blob. Throws before any write.
+ */
+function validScores(
+  value: unknown,
+  evidenceHosts: readonly string[] | undefined
+): WorkItemScores | null {
+  const result = parseWorkItemScores(
+    value,
+    evidenceHosts ? { evidenceHosts } : {}
+  );
+  if (!result.ok) throw new WorkItemScoresInvalidError(result.issues);
+  return result.value;
 }
 
 function actorOf(value: unknown): ActorKind {
@@ -1074,6 +1099,7 @@ export class DoltgresWorkItemAdapter
   private readonly readPending = new Map<Sql, number>();
   private readonly readWaiters = new Map<Sql, ReadWaiter[]>();
   private readonly unknownReadPools = new WeakSet<object>();
+  private readonly scoreEvidenceHosts: readonly string[] | undefined;
 
   constructor(
     private sql: Sql,
@@ -1091,6 +1117,7 @@ export class DoltgresWorkItemAdapter
     this.recreateClient = options.recreateClient;
     this.readClient = options.readClient;
     this.readConnectionBudget = options.readConnectionBudget;
+    this.scoreEvidenceHosts = options.scoreEvidenceHosts;
     if (
       this.readConnectionBudget !== undefined &&
       (!Number.isInteger(this.readConnectionBudget) ||
@@ -2816,6 +2843,10 @@ export class DoltgresWorkItemAdapter
     principalId: string
   ): Promise<WorkItem> {
     const principal = requirePrincipal(principalId);
+    const scores =
+      input.scores === undefined
+        ? undefined
+        : (validScores(input.scores, this.scoreEvidenceHosts) ?? undefined);
     const createOnce = (allocatedId?: string) =>
       this.mutate(
         "create work item",
@@ -2850,7 +2881,7 @@ export class DoltgresWorkItemAdapter
             add("priority", input.priority);
             add("rank", input.rank);
             add("estimate", input.estimate);
-            add("scores", input.scores);
+            add("scores", scores);
             add("assignees", input.assignees);
             add("labels", input.labels);
             add("spec_refs", input.specRefs);
@@ -2928,13 +2959,20 @@ export class DoltgresWorkItemAdapter
     const principal = requirePrincipal(principalId);
     const id = input.id as string;
     const expectedRevision = parseExpectedRevision(input.expectedRevision);
+    const set: WorkItemsPatchSet =
+      input.set.scores === undefined
+        ? input.set
+        : {
+            ...input.set,
+            scores: validScores(input.set.scores, this.scoreEvidenceHosts),
+          };
     const clauses: string[] = [];
     const setKeys: (keyof WorkItemsPatchSet)[] = [];
     for (const [key, column] of Object.entries(PATCH_COLUMNS) as [
       keyof WorkItemsPatchSet,
       string,
     ][]) {
-      const value = input.set[key];
+      const value = set[key];
       if (value !== undefined) {
         clauses.push(`${column} = ${escapeValue(value)}`);
         setKeys.push(key);
@@ -3006,7 +3044,7 @@ export class DoltgresWorkItemAdapter
           itemId: id,
           expectedRevision,
           patchValues: Object.fromEntries(
-            setKeys.map((key) => [PATCH_COLUMNS[key], input.set[key]])
+            setKeys.map((key) => [PATCH_COLUMNS[key], set[key]])
           ),
         },
         preflight: async (conn, proof) => {

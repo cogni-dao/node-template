@@ -918,6 +918,9 @@ importers:
       '@cogni/node-core':
         specifier: workspace:*
         version: link:../node-core
+      '@cogni/work-items':
+        specifier: workspace:@cogni-dao/work-items@*
+        version: link:../work-items
       '@ts-rest/core':
         specifier: ^3.52.1
         version: 3.52.1(@types/node@22.19.19)(zod@4.4.3)
