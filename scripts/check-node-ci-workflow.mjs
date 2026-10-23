@@ -228,8 +228,14 @@ if (!staticJob) fail(CI_WORKFLOW_PATH, "jobs must include static");
 const staticSteps = Array.isArray(staticJob?.steps) ? staticJob.steps : [];
 expectStep(CI_WORKFLOW_PATH, staticSteps, "Install dependencies");
 expectStep(CI_WORKFLOW_PATH, staticSteps, "Build workspace packages");
-expectStep(CI_WORKFLOW_PATH, staticSteps, "Type check");
-expectStep(CI_WORKFLOW_PATH, staticSteps, "Workflow contract check");
+for (const [name, command] of [
+  ["Database schema checks", "pnpm db:check"],
+  ["Type check", "pnpm typecheck"],
+  ["Workflow contract check", "pnpm check:workflow"],
+]) {
+  const step = expectStep(CI_WORKFLOW_PATH, staticSteps, name);
+  expectEqual(CI_WORKFLOW_PATH, step?.run, command, `static ${name} command`);
+}
 
 const unitJob = ciWorkflow?.jobs?.unit;
 if (!unitJob) fail(CI_WORKFLOW_PATH, "jobs must include unit");
@@ -245,7 +251,17 @@ if (Object.hasOwn(unitJob, "needs")) {
 const unitSteps = Array.isArray(unitJob?.steps) ? unitJob.steps : [];
 expectStep(CI_WORKFLOW_PATH, unitSteps, "Install dependencies");
 expectStep(CI_WORKFLOW_PATH, unitSteps, "Build workspace packages");
-expectStep(CI_WORKFLOW_PATH, unitSteps, "Unit + contract coverage tests");
+const unitTestStep = expectStep(
+  CI_WORKFLOW_PATH,
+  unitSteps,
+  "Unit + contract coverage tests"
+);
+expectEqual(
+  CI_WORKFLOW_PATH,
+  unitTestStep?.run,
+  "pnpm test:ci",
+  "unit test command"
+);
 
 expectEqual(PR_BUILD_WORKFLOW_PATH, prBuildWorkflow?.name, "PR Build", "workflow name");
 expectTrigger(PR_BUILD_WORKFLOW_PATH, prBuildWorkflow, "pull_request");
@@ -294,7 +310,31 @@ const detectJob = prBuildWorkflow?.jobs?.detect;
 if (!detectJob) fail(PR_BUILD_WORKFLOW_PATH, "jobs must include detect");
 expectEqual(PR_BUILD_WORKFLOW_PATH, detectJob?.needs, "resolve", "jobs.detect.needs");
 const detectSteps = Array.isArray(detectJob?.steps) ? detectJob.steps : [];
-expectStep(PR_BUILD_WORKFLOW_PATH, detectSteps, "Typecheck package closure");
+const detectBuildStep = expectStep(
+  PR_BUILD_WORKFLOW_PATH,
+  detectSteps,
+  "Build repo-spec contract"
+);
+expectEqual(
+  PR_BUILD_WORKFLOW_PATH,
+  detectBuildStep?.run,
+  "pnpm --filter @cogni/repo-spec build",
+  "detect dependency build"
+);
+// The image path consumes a build contract; ci.yaml owns verification. Catch
+// reintroducing the duplicated full check/test gate under a different step name.
+for (const step of detectSteps) {
+  if (
+    /\bpnpm\s+(?:run\s+)?(?:check(?::[\w:-]+)?|test(?::[\w:-]+)?|typecheck|db:check)(?=\s|$|[;&|])/.test(
+      String(step?.run ?? "")
+    )
+  ) {
+    fail(
+      PR_BUILD_WORKFLOW_PATH,
+      "jobs.detect must not duplicate CI checks or tests"
+    );
+  }
+}
 expectStep(PR_BUILD_WORKFLOW_PATH, detectSteps, "Detect node image targets");
 
 const buildJob = prBuildWorkflow?.jobs?.build;
