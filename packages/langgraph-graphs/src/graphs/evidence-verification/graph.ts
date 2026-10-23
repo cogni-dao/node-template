@@ -1,7 +1,15 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
-/** Pure read-only graph composition. All effects use injected model/tools; task.5333. */
+/**
+ * Module: `@cogni/langgraph-graphs/graphs/evidence-verification`
+ * Purpose: Compose exact guidance, isolated investigation and independent verification.
+ * Scope: Trusted read-only programs on injected models/tools; no business mutations.
+ * Invariants: Host-owned authority; shared call/byte ledger; bounded read waits, cooperative model cancellation.
+ * Side-effects: Injected read tools and billed completions. Aborted providers may finish late.
+ * Links: task.5333, expertise-role-contract, inproc/runner.ts
+ * @public
+ */
 import { createHash } from "node:crypto";
 import {
   GET_CURRENT_TIME_NAME,
@@ -183,6 +191,27 @@ export function createEvidenceVerificationGraph(
           if (controller.signal.aborted || Date.now() >= deadline)
             throw new Incomplete("deadline_or_cancelled");
         };
+        // Race the wait, not the underlying work: read adapters may ignore abort.
+        // Both fulfillment/rejection remain observed; late output cannot resume a role.
+        const bounded = <T>(pending: Promise<T>): Promise<T> =>
+          new Promise<T>((resolve, reject) => {
+            const onAbort = () =>
+              reject(new Incomplete("deadline_or_cancelled"));
+            controller.signal.addEventListener("abort", onAbort, {
+              once: true,
+            });
+            void pending.then(
+              (value) => {
+                controller.signal.removeEventListener("abort", onAbort);
+                resolve(value);
+              },
+              (error: unknown) => {
+                controller.signal.removeEventListener("abort", onAbort);
+                reject(error);
+              }
+            );
+            if (controller.signal.aborted) onAbort();
+          });
         const read = async (
           name: string,
           args: Record<string, unknown>
@@ -196,7 +225,7 @@ export function createEvidenceVerificationGraph(
           budget.inputBytes += bytes(JSON.stringify(args));
           if (budget.inputBytes > limits.inputBytes)
             throw new Incomplete("input_byte_limit");
-          const raw = await tool.invoke(args, invokeConfig);
+          const raw = await bounded(tool.invoke(args, invokeConfig));
           check();
           if (typeof raw !== "string")
             throw new Incomplete("invalid_tool_result");
@@ -264,6 +293,8 @@ export function createEvidenceVerificationGraph(
               ): Promise<AIMessage>;
             };
           };
+          // Preserve the existing full usage drain. The model deadline is cooperative:
+          // a provider ignoring cancellation may finish this one call, never a next role.
           const response = await (withTools
             ? model.bindTools(tools)
             : model
@@ -418,11 +449,12 @@ export function createEvidenceVerificationGraph(
               .strict();
             const outputContract = `Return only strict JSON {kind:"proposal"|"no_change",summary:string,evidenceIds:string[],payload:${program.payloadDescription}}. Cite only primary evidence IDs you used. No markdown.`;
             let feedback = "";
+            let rejectedProposal: z.infer<typeof Proposal> | undefined;
             for (let attempt = 0; attempt < 2; attempt++) {
               revisions = attempt;
               const authored = await call(attempt ? "revision" : "author", [
                 new SystemMessage(
-                  `${instructions}\nROLE: author. ${outputContract}`
+                  `${instructions}\nROLE: ${attempt ? "revision. Apply verifier feedback to rejectedProposal, preserving supported assessments." : "author."} ${outputContract}`
                 ),
                 new HumanMessage(
                   JSON.stringify({
@@ -430,6 +462,7 @@ export function createEvidenceVerificationGraph(
                     evidence,
                     findings: childResult.findings,
                     feedback,
+                    ...(rejectedProposal ? { rejectedProposal } : {}),
                   })
                 ),
               ]);
@@ -468,6 +501,7 @@ export function createEvidenceVerificationGraph(
                 break;
               }
               feedback = verdict.data.reason;
+              rejectedProposal = proposal.data;
             }
             result ??= finish("incomplete", "verification_rejected");
           }

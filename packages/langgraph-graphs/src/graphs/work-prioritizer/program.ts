@@ -1,6 +1,15 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
+/**
+ * Module: `@cogni/langgraph-graphs/graphs/work-prioritizer/program`
+ * Purpose: Configure the shared evidence factory for read-only mission proposals.
+ * Scope: Guidance IDs, schemas and evidence validation; no work-item writes.
+ * Invariants: Approved goals and observed revisions; unchanged scores yield no proposal.
+ * Side-effects: none
+ * Links: task.5333, expertise-role-contract, evidence-verification/graph.ts
+ * @internal
+ */
 import { GOAL_LIST_NAME, WORK_ITEM_QUERY_NAME } from "@cogni/ai-tools";
 import { z } from "zod";
 import type { EvidenceProgram } from "../evidence-verification/graph";
