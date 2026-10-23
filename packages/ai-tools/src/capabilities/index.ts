@@ -95,6 +95,7 @@ export type {
   WorkItemAssignee,
   WorkItemCapability,
   WorkItemInfo,
+  WorkItemPatchScores,
   WorkItemQueryPage,
   WorkItemQueryParams,
   WorkItemTransitionResult,

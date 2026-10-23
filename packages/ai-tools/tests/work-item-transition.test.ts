@@ -200,6 +200,120 @@ describe("core__work_item_transition patch", () => {
     });
     expect(rankOnly).toMatchObject({ success: true, revision: 10 });
     expect(row).toMatchObject({ rank: 1, revision: 10 });
-    expect(WorkItemTransitionOutputSchema.safeParse(rankOnly).success).toBe(true);
+    expect(WorkItemTransitionOutputSchema.safeParse(rankOnly).success).toBe(
+      true
+    );
+  });
+  it("forwards scores unchanged to the capability (validation is the store's)", async () => {
+    const cap = capability(async () => PATCHED);
+    const tool = createWorkItemTransitionImplementation({
+      workItemCapability: cap,
+    });
+    const scores = {
+      goal: { v: 5, ev: "https://cognidao.org/work/items/story.5111" },
+      time: { v: 2 },
+      ease: { v: 9 },
+    };
+
+    const out = await tool.execute({
+      action: "patch",
+      id: "task.5001",
+      scores,
+      expectedRevision: 7,
+    });
+
+    expect(cap.patch).toHaveBeenCalledWith({
+      id: "task.5001",
+      expectedRevision: 7,
+      set: { scores },
+    });
+    expect(out.success).toBe(true);
+    expect(out.message).toContain("scores");
+  });
+
+  it("sends no priority field on a scores-only patch (p0/p1 priority stays a proposal)", async () => {
+    const cap = capability(async () => PATCHED);
+    const tool = createWorkItemTransitionImplementation({
+      workItemCapability: cap,
+    });
+
+    await tool.execute({
+      action: "patch",
+      id: "task.5001",
+      scores: { goal: { v: 3 }, agent: { v: 2 } },
+      expectedRevision: 8,
+    });
+
+    const call = vi.mocked(cap.patch).mock.calls[0]?.[0];
+    expect(call?.set).not.toHaveProperty("priority");
+    expect(Object.keys(call?.set ?? {})).toEqual(["scores"]);
+  });
+
+  it("forwards scores: null so the store clears them", async () => {
+    const cap = capability(async () => PATCHED);
+    const tool = createWorkItemTransitionImplementation({
+      workItemCapability: cap,
+    });
+
+    await tool.execute({ action: "patch", id: "task.5001", scores: null });
+
+    expect(cap.patch).toHaveBeenCalledWith({
+      id: "task.5001",
+      set: { scores: null },
+    });
+  });
+
+  it("checks scores shape only: v must be an integer, bounds are the store's", () => {
+    const parse = (scores: unknown) =>
+      WorkItemTransitionInputSchema.safeParse({
+        action: "patch",
+        id: "task.5001",
+        scores,
+      }).success;
+    expect(parse({ goal: { v: 7 } })).toBe(true);
+    expect(parse({ goal: { v: 4.5 } })).toBe(false);
+    expect(parse({ goal: { ev: "https://cognidao.org" } })).toBe(false);
+  });
+
+  it("surfaces a store scores rejection (HTTP 400 class) as a tool error naming the axis", async () => {
+    // Mirrors @cogni/work-items WorkItemScoresInvalidError, thrown by the adapter's
+    // parseWorkItemScores before any SQL (ai-tools does not import the store package).
+    class WorkItemScoresInvalidError extends Error {
+      readonly code = "work_item_scores_invalid" as const;
+      constructor(
+        readonly issues: readonly {
+          code: string;
+          path: readonly string[];
+          message: string;
+        }[]
+      ) {
+        super(
+          `Invalid work-item scores: ${issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`
+        );
+        this.name = "WorkItemScoresInvalidError";
+      }
+    }
+    const cap = capability(async () => {
+      throw new WorkItemScoresInvalidError([
+        {
+          code: "evidence_required",
+          path: ["goal"],
+          message: "a score of 4 or 5 needs ev",
+        },
+      ]);
+    });
+    const tool = createWorkItemTransitionImplementation({
+      workItemCapability: cap,
+    });
+
+    await expect(
+      tool.execute({
+        action: "patch",
+        id: "task.5001",
+        scores: { goal: { v: 5 } },
+      })
+    ).rejects.toThrow(
+      "Invalid work-item scores: goal: a score of 4 or 5 needs ev"
+    );
   });
 });

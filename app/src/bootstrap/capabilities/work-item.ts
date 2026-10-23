@@ -10,7 +10,8 @@
  *   - TRANSITION_TABLE_ENFORCED: CommandPort validates transitions
  *   - PATCH_ON_THE_LIVE_BACKLOG (story.5096, mirrors cogni): when `backlogWriter` is wired, `patch`
  *     goes through the Doltgres `patch` attributed to `backlogWriter.principalId`; the store's own
- *     authority applies unchanged. Without it, `patch` stays on the markdown ports.
+ *     authority applies unchanged. A principal callback resolves the authenticated run actor at invocation
+ *     time, never at singleton construction. Without it, `patch` stays on the markdown ports.
  *   - PATCH_CAS_PASSTHROUGH: a caller `expectedRevision` is forwarded as the Doltgres store's
  *     compare-and-set (absent => that store's unconditioned patch); its `WorkItemRevisionConflictError`
  *     becomes the ai-tools `WorkItemPatchConflictError`, nothing written. The markdown ports CAS on the
@@ -64,7 +65,7 @@ export interface WorkItemCapabilityDeps {
    */
   readonly backlogWriter?: {
     readonly store: Pick<WorkItemsDoltgresPort, "patch">;
-    readonly principalId: string;
+    readonly principalId: string | (() => string);
   };
 }
 
@@ -99,6 +100,7 @@ function toWorkItemInfo(item: WorkItem): WorkItemInfo {
     ...(typeof item.revision === "number" && { revision: item.revision }),
     ...(item.outcome !== undefined && { outcome: item.outcome }),
     ...(item.estimate !== undefined && { estimate: item.estimate }),
+    ...(item.scores !== undefined && { scores: item.scores }),
     ...(item.parentId !== undefined && { parentId: item.parentId }),
     ...(item.specRefs !== undefined && { specRefs: [...item.specRefs] }),
   };
@@ -190,7 +192,9 @@ export function createWorkItemCapability(
               }),
               set: input.set,
             },
-            writer.principalId
+            typeof writer.principalId === "function"
+              ? writer.principalId()
+              : writer.principalId
           );
           return toWorkItemInfo(updated);
         } catch (e) {

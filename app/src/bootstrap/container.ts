@@ -97,6 +97,7 @@ import {
 	GITHUB_ADAPTER_VERSION,
 	GitHubWebhookNormalizer,
 	getAppDb,
+	getExecutionScope,
 	LangfuseAdapter,
 	LiteLlmAdapter,
 	type MimirAdapterConfig,
@@ -681,7 +682,8 @@ function createContainer(): Container {
 	// RepoCapability for AI tools (requires COGNI_REPO_PATH)
 	const repoCapability = createRepoCapability(env);
 
-	// WorkItemCapability for AI tools: query → Doltgres (backlogReader); transition/patch → markdown ports
+	// WorkItemCapability: query and metadata patches use the live Doltgres backlog.
+	// The authenticated run actor is resolved per invocation, preserving interactive/scheduled attribution.
 	const workItemAdapter = new MarkdownWorkItemAdapter(
 		env.COGNI_REPO_ROOT ?? "/nonexistent",
 	);
@@ -692,6 +694,20 @@ function createContainer(): Container {
 		// this node's Doltgres work items; `doltgresWorkItems` is assigned below and
 		// read only at call time.
 		backlogReader: { list: (query) => doltgresWorkItems.list(query) },
+		backlogWriter: {
+			store: {
+				patch: (input, principal) => doltgresWorkItems.patch(input, principal),
+			},
+			principalId: () => {
+				const actor = getExecutionScope().actorUserId;
+				if (!actor) {
+					throw new Error(
+						"WorkItemCapability: authenticated run actorUserId is required",
+					);
+				}
+				return actor;
+			},
+		},
 	});
 
 	// ScheduleCapability for AI tools (reads actorUserId from ALS at invocation time)

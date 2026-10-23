@@ -1,6 +1,6 @@
 {
   "name": "@cogni-dao/langgraph-graphs",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "LicenseRef-PolyForm-Shield-1.0.0",
   "repository": {
     "type": "git",
@@ -54,7 +54,7 @@
   },
   "peerDependencies": {
     "@cogni/ai-core": "*",
-    "@cogni/ai-tools": ">=0.1.0"
+    "@cogni/ai-tools": ">=0.1.1"
   },
   "devDependencies": {
     "@cogni/ai-core": "workspace:*",
