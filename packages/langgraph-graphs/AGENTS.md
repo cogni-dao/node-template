@@ -69,7 +69,7 @@ LangGraph graph definitions and runtime utilities for agentic AI execution. Cont
     - `POET_GRAPH_NAME`, `PONDERER_GRAPH_NAME`, `BRAIN_GRAPH_NAME`, `RESEARCH_GRAPH_NAME`, `PR_REVIEW_GRAPH_NAME`, `BROWSER_GRAPH_NAME`, `FRONTEND_TESTER_GRAPH_NAME` — Graph name constants
     - `InvokableGraph<I,O>`, `MessageGraphInput`, `MessageGraphOutput` — Type firewall
     - `GraphInvokeOptions`, `CreateReactAgentGraphOptions` — Factory types
-  - `createEvidenceVerificationGraph(opts, program)` — sequential read-only evidence child, author, independent verifier and one revision; trusted host identity/full guidance receipts and calls/bytes/deadline bounds. Two configured schemas share the factory; in-process children are not durable runs.
+  - `createEvidenceVerificationGraph(opts, program)` — sequential read-only evidence child, author, independent verifier and one revision; trusted host identity/full guidance receipts and call/byte limits, hard read-wait deadline and cooperative model cancellation (usage drains before terminal). Two configured schemas share the factory; in-process children are not durable runs.
   - Catalog `finalOnly` keeps internal role text out of the client stream while preserving tool and usage events; the authoritative assistant envelope still persists normally.
   - `EvidenceProgram`, `EvidenceResult`, `EvidenceLimits`, `EvidenceReceipt`, `GuidanceReceipt`, `DEFAULT_EVIDENCE_LIMITS` — exported from `/graphs`.
   - **Per-graph tools:** `src/graphs/*/tools.ts` exports `*_TOOL_IDS` constants (e.g., `BRAIN_TOOL_IDS`, `BrainToolId`)

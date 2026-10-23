@@ -54,7 +54,7 @@ const toolCall = (name: string): CompletionResult => ({
   ],
 });
 
-export async function exercise(
+function startExercise(
   options: {
     program?: EvidenceProgram;
     replies?: CompletionResult[];
@@ -64,6 +64,8 @@ export async function exercise(
     complete?: (messages: string, call: number) => CompletionResult;
     slow?: boolean;
     usage?: boolean;
+    beforeTool?: (name: string, index: number) => Promise<void>;
+    completionGate?: Promise<void>;
   } = {}
 ) {
   const calls: { messages: string; tools: string; model: string }[] = [];
@@ -86,6 +88,7 @@ export async function exercise(
     if (!response) throw new Error("unexpected model call");
     return {
       stream: (async function* () {
+        await options.completionGate;
         yield {
           type: "text_delta" as const,
           delta: response.content ?? "draft",
@@ -122,6 +125,7 @@ export async function exercise(
     ],
     createToolExecFn: () => async (name) => {
       executions.push(name);
+      await options.beforeTool?.(name, executions.length - 1);
       if (name === KNOWLEDGE_READ_NAME)
         return {
           ok: true,
@@ -165,8 +169,39 @@ export async function exercise(
       },
     },
   });
+  return { runner, calls, executions, events };
+}
+
+export async function exercise(
+  options: Parameters<typeof startExercise>[0] = {}
+) {
+  const { runner, calls, executions, events } = startExercise(options);
   for await (const event of runner.stream) events.push(event);
   return { result: await runner.final, calls, executions, events };
+}
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+async function boundedResult<T>(
+  promise: Promise<T>
+): Promise<T | "still pending"> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<"still pending">((resolve) => {
+        timer = setTimeout(() => resolve("still pending"), 150);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 describe("evidence verification through the injected runner", () => {
@@ -289,11 +324,13 @@ describe("evidence verification through the injected runner", () => {
     expect(calls[0]?.tools).not.toContain(WORK_ITEM_TRANSITION_NAME);
   });
 
-  it("required principle changes a held-out verdict and permits one targeted revision", async () => {
+  it("passes the exact rejected artifact to a targeted revision with principle feedback", async () => {
+    const rejected = JSON.parse(proposal("approve"));
+    rejected.summary = "Preserve this supported assessment";
     const { result, calls } = await exercise({
       complete(messages, call) {
         if (call === 0) return text("A human gate exists.");
-        if (call === 1) return text(proposal("approve"));
+        if (call === 1) return text(JSON.stringify(rejected));
         if (call === 2)
           return text(
             messages.includes(body) &&
@@ -301,14 +338,24 @@ describe("evidence verification through the injected runner", () => {
               ? revise
               : accept
           );
-        if (call === 3) return text(proposal("defer"));
+        if (call === 3) {
+          const input = JSON.parse(JSON.parse(messages).at(-1).content);
+          expect(input.rejectedProposal).toEqual(rejected);
+          expect(input.feedback).toBe(JSON.parse(revise).reason);
+          return text(
+            JSON.stringify({
+              ...input.rejectedProposal,
+              payload: { ...input.rejectedProposal.payload, decision: "defer" },
+            })
+          );
+        }
         return text(accept);
       },
     });
     expect(result.structuredOutput).toMatchObject({
       status: "accepted",
       revisions: 1,
-      proposal: { payload: { decision: "defer" } },
+      proposal: { summary: rejected.summary, payload: { decision: "defer" } },
     });
     expect(calls).toHaveLength(5);
     expect(calls[3]?.messages).toContain("forbids approving");
@@ -354,6 +401,82 @@ describe("evidence verification through the injected runner", () => {
       reason: "deadline_or_cancelled",
     });
     expect(calls).toHaveLength(1);
+  });
+
+  it.each([
+    "guidance",
+    "initial",
+    "child",
+  ] as const)("settles an unresolved %s read at deadline and ignores its late result", async (stage) => {
+    const stalled = deferred();
+    const target = stage === "guidance" ? 0 : stage === "initial" ? 1 : 2;
+    const { runner, calls, executions, events } = startExercise({
+      program: { ...program, limits: { deadlineMs: 15 } },
+      replies: [toolCall(GOAL_LIST_NAME)],
+      beforeTool: async (_name, index) => {
+        if (index === target) await stalled.promise;
+      },
+    });
+    const draining = (async () => {
+      for await (const event of runner.stream) events.push(event);
+    })();
+    try {
+      const result = await boundedResult(runner.final);
+      expect(result).not.toBe("still pending");
+      if (result === "still pending") return;
+      expect(result.structuredOutput).toMatchObject({
+        status: "incomplete",
+        reason: "deadline_or_cancelled",
+      });
+      await draining;
+      const terminal = JSON.stringify(events);
+      stalled.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(JSON.stringify(events)).toBe(terminal);
+      expect(calls).toHaveLength(stage === "child" ? 1 : 0);
+      expect(executions).toHaveLength(target + 1);
+      expect(result.structuredOutput?.evidence).toHaveLength(
+        stage === "child" ? 1 : 0
+      );
+    } finally {
+      stalled.resolve();
+    }
+  });
+
+  it("drains a cancellation-ignoring model's late usage before terminal without continuation", async () => {
+    const stalled = deferred();
+    const { runner, calls, executions, events } = startExercise({
+      program: { ...program, limits: { deadlineMs: 15 } },
+      completionGate: stalled.promise,
+      usage: true,
+      replies: [toolCall(WORK_ITEM_TRANSITION_NAME)],
+    });
+    const draining = (async () => {
+      for await (const event of runner.stream) events.push(event);
+    })();
+    try {
+      // Unlike read waits, model cancellation is cooperative: keep billing custody.
+      expect(await boundedResult(runner.final)).toBe("still pending");
+      stalled.resolve();
+      await draining;
+      const result = await runner.final;
+      expect(result.structuredOutput).toMatchObject({
+        status: "incomplete",
+        reason: "deadline_or_cancelled",
+      });
+      expect(result.usage).toEqual({ promptTokens: 10, completionTokens: 5 });
+      expect(calls).toHaveLength(1);
+      expect(executions).toEqual([KNOWLEDGE_READ_NAME, GOAL_LIST_NAME]);
+      const types = events.map((event) => (event as { type: string }).type);
+      expect(types).toEqual([
+        "usage_report",
+        "text_delta",
+        "assistant_final",
+        "done",
+      ]);
+    } finally {
+      stalled.resolve();
+    }
   });
 
   it("rejects invented evidence references before a verifier call", async () => {
