@@ -88,9 +88,9 @@ LangGraph graph definitions and runtime utilities for agentic AI execution. Cont
 ## Usage
 
 ```bash
-pnpm --filter @cogni/langgraph-graphs typecheck
-pnpm --filter @cogni/langgraph-graphs build
-pnpm --filter @cogni/langgraph-graphs test
+pnpm --filter @cogni-dao/langgraph-graphs typecheck
+pnpm --filter @cogni-dao/langgraph-graphs build
+pnpm --filter @cogni-dao/langgraph-graphs test
 ```
 
 ## Standards

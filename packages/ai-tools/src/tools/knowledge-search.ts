@@ -9,6 +9,8 @@
  *   - TOOL_ID_NAMESPACED: ID is `core__knowledge_search`
  *   - EFFECT_TYPED: effect is `read_only`
  *   - HARD_BOUNDS: max 20 results
+ *   - BOUNDED_RESULTS: each result's `content` is truncated to KNOWLEDGE_SEARCH_CONTENT_MAX_CHARS (≤20 hits ×
+ *     1500 chars), so one call can never return a multi-MB entry (bug.5518)
  * Side-effects: IO (database read via capability)
  * Links: docs/spec/knowledge-data-plane.md
  * @public
@@ -18,6 +20,7 @@ import { z } from "zod";
 
 import type { KnowledgeCapability } from "../capabilities/knowledge";
 import type { BoundTool, ToolContract, ToolImplementation } from "../types";
+import { readSourceProvenance } from "../source-url";
 
 // ─── Schemas ─────────────────────────────────────────────────────────────────
 
@@ -53,6 +56,8 @@ export const KnowledgeSearchResultSchema = z.object({
   confidencePct: z.number().nullable(),
   sourceType: z.string(),
   tags: z.array(z.string()).nullable(),
+  sourceUrl: z.string().url().optional(),
+  sourceUrlUnavailable: z.literal(true).optional(),
 });
 
 export const KnowledgeSearchOutputSchema = z.object({
@@ -77,7 +82,7 @@ export const knowledgeSearchContract: ToolContract<
   name: KNOWLEDGE_SEARCH_NAME,
   description:
     "Search the node's knowledge store for domain-specific facts, claims, and curated assertions. " +
-    "Returns entries with confidence scores and provenance. Search BEFORE using web search — " +
+    "Returns entries with confidence scores and canonical sourceUrl provenance for the content read. Search BEFORE using web search — " +
     "the knowledge store contains verified, curated information relevant to this node's domain.",
   effect: "read_only",
   inputSchema: KnowledgeSearchInputSchema,
@@ -88,8 +93,17 @@ export const knowledgeSearchContract: ToolContract<
 
 // ─── Implementation ──────────────────────────────────────────────────────────
 
+/** BOUNDED_RESULTS: max chars of each result's `content` (bug.5518). */
+export const KNOWLEDGE_SEARCH_CONTENT_MAX_CHARS = 1500;
+
+function truncate(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
 export interface KnowledgeSearchDeps {
   knowledgeCapability: KnowledgeCapability;
+  /** Trusted node public origin supplied by server composition, never tool input. */
+  readonly nodePublicOrigin?: string | undefined;
 }
 
 export function createKnowledgeSearchImplementation(
@@ -109,10 +123,11 @@ export function createKnowledgeSearchImplementation(
           id: r.id,
           domain: r.domain,
           title: r.title,
-          content: r.content,
+          content: truncate(r.content, KNOWLEDGE_SEARCH_CONTENT_MAX_CHARS),
           confidencePct: r.confidencePct,
           sourceType: r.sourceType,
           tags: r.tags,
+          ...readSourceProvenance(deps.nodePublicOrigin, "knowledge", r.id),
         })),
         totalFound: results.length,
       };

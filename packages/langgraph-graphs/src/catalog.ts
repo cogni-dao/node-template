@@ -4,7 +4,7 @@
 /**
  * Module: `@cogni/langgraph-graphs/catalog`
  * Purpose: Single source of truth for LangGraph graph definitions.
- * Scope: Exports LANGGRAPH_CATALOG with all available graphs. Does NOT import from src/.
+ * Scope: Exports the node-runtime catalog (LANGGRAPH_CATALOG) and the operator opt-in catalog. Does NOT import from src/.
  * Invariants:
  *   - CATALOG_SINGLE_SOURCE_OF_TRUTH: Graph definitions live here, not in bootstrap
  *   - PACKAGES_NO_SRC_IMPORTS: No imports from src/**
@@ -67,6 +67,11 @@ import {
   RESEARCH_GRAPH_NAME,
 } from "./graphs/research/graph";
 import { RESEARCH_TOOL_IDS } from "./graphs/research/tools";
+import {
+  createWorkPrioritizerGraph,
+  WORK_PRIORITIZER_GRAPH_NAME,
+} from "./graphs/work-prioritizer/graph";
+import { WORK_PRIORITIZER_TOOL_IDS } from "./graphs/work-prioritizer/tools";
 import type { CreateGraphFn } from "./inproc/types";
 
 /**
@@ -75,7 +80,7 @@ import type { CreateGraphFn } from "./inproc/types";
  * Per TOOL_CATALOG_IS_CANONICAL: graphs reference tools by ID, not by BoundTool.
  * Providers resolve tools from TOOL_CATALOG using these IDs.
  */
-interface CatalogEntry {
+export interface CatalogEntry {
   readonly displayName: string;
   readonly description: string;
   /** Native tool IDs this graph may use. Providers resolve from TOOL_CATALOG. */
@@ -85,6 +90,47 @@ interface CatalogEntry {
   readonly graphFactory: CreateGraphFn;
   /** Optional system prompt for operator graphs (catalog-driven, not hardcoded). */
   readonly systemPrompt?: string;
+  /**
+   * Graph-owned run report (PURE_GRAPH_FACTORY): the graph returns `structuredResponse.telemetry` (flat,
+   * safe to log). The provider logs it as `event` (a registered event name) and echoes it onto the run
+   * stream as one GRAPH_REPORT_OPEN…GRAPH_REPORT_CLOSE text delta.
+   */
+  readonly report?: GraphReportDecl;
+}
+
+/** CatalogEntry.report: the registered event name for the graph's telemetry. */
+export interface GraphReportDecl {
+  readonly event: string;
+}
+
+/** Delimiters of a catalog-declared run report on the run stream (CatalogEntry.report). */
+export const GRAPH_REPORT_OPEN = "<graph_report>";
+export const GRAPH_REPORT_CLOSE = "</graph_report>";
+
+/**
+ * Log lines for a catalog-declared report: one `report.event` from `structuredOutput.telemetry`. Empty when
+ * the output carries none.
+ * Pure: the provider owns the logger and only calls this (CATALOG_REPORT_SEAM).
+ */
+export function graphReportLogFields(
+  report: GraphReportDecl,
+  runId: string,
+  structuredOutput: Record<string, unknown> | undefined
+): Record<string, unknown>[] {
+  const telemetry = structuredOutput?.telemetry;
+  return telemetry && typeof telemetry === "object"
+    ? [{ event: report.event, runId, ...telemetry }]
+    : [];
+}
+
+/** The stream echo of a catalog-declared report (`<graph_report>{telemetry}</graph_report>`), or null. */
+export function graphReportDelta(
+  structuredOutput: Record<string, unknown> | undefined
+): string | null {
+  const telemetry = structuredOutput?.telemetry;
+  return telemetry && typeof telemetry === "object"
+    ? `\n${GRAPH_REPORT_OPEN}${JSON.stringify(telemetry)}${GRAPH_REPORT_CLOSE}\n`
+    : null;
 }
 
 const createAutoresearchCatalogEntry = (
@@ -99,8 +145,10 @@ const createAutoresearchCatalogEntry = (
   systemPrompt,
 });
 
+export type LangGraphCatalog = Readonly<Record<string, CatalogEntry>>;
+
 /**
- * LangGraph catalog - single source of truth for graph definitions.
+ * Node runtime LangGraph catalog — the graphs every sovereign node runs.
  *
  * To add a new graph:
  * 1. Create graph factory in graphs/<name>/graph.ts
@@ -108,8 +156,10 @@ const createAutoresearchCatalogEntry = (
  * 3. Bootstrap automatically picks it up (no changes needed there)
  *
  * Per CATALOG_SINGLE_SOURCE_OF_TRUTH: graphs are defined here, not in bootstrap.
+ * Per RUNTIME_CATALOG_ISOLATION: operator lifecycle graphs (operating-review, pr-manager,
+ * git-reviewer) are not advertised through the node-runtime catalog.
  */
-export const LANGGRAPH_CATALOG: Readonly<Record<string, CatalogEntry>> = {
+export const NODE_LANGGRAPH_CATALOG = {
   [AUTORESEARCH_SINGLE_LANE_GRAPH_NAME]: createAutoresearchCatalogEntry(
     "Autoresearch Single Lane",
     "Karpathy-style single-lane experiment loop with Thinker, Flasher, Eval, and Judge",
@@ -210,6 +260,29 @@ export const LANGGRAPH_CATALOG: Readonly<Record<string, CatalogEntry>> = {
   },
 
   /**
+   * Mission loop (story.5108) — brain-style ReAct agent on the hourly governance schedule: reads the DAO
+   * goals and makes at most ~5 goal-cited work-item changes; p0/p1 writes are server-denied and reported
+   * as proposals for the node admin. Every node runs it: a node schedules `langgraph:work-prioritizer` in
+   * its own repo-spec, and a node with no approved goals changes nothing.
+   */
+  [WORK_PRIORITIZER_GRAPH_NAME]: {
+    displayName: "Mission Loop",
+    description:
+      "Reads the node's DAO goals and makes a few goal-cited work-item changes; lists p0/p1 as proposals",
+    toolIds: WORK_PRIORITIZER_TOOL_IDS as readonly string[],
+    graphFactory: createWorkPrioritizerGraph,
+    report: { event: "ai.work_prioritizer.cycle" },
+  },
+} as const;
+
+/**
+ * Operator runtime catalog: the node catalog plus the operator lifecycle graphs, which drive
+ * the operator's VCS control plane (VCS_TOOL_BUNDLE). Only an operator runtime opts in to it.
+ */
+export const OPERATOR_LANGGRAPH_CATALOG = {
+  ...NODE_LANGGRAPH_CATALOG,
+
+  /**
    * Operating Review — periodic planner-of-record for backlog health.
    * Runs every 12h to triage, flag stuck items, and produce structured briefs.
    */
@@ -251,9 +324,16 @@ export const LANGGRAPH_CATALOG: Readonly<Record<string, CatalogEntry>> = {
 } as const;
 
 /**
+ * Node-runtime catalog. Operator runtimes must opt in to OPERATOR_LANGGRAPH_CATALOG.
+ */
+export const LANGGRAPH_CATALOG: LangGraphCatalog = NODE_LANGGRAPH_CATALOG;
+
+/**
  * Type helper for catalog entry lookup (short names).
  */
-export type LangGraphCatalogKeys = keyof typeof LANGGRAPH_CATALOG;
+export type LangGraphCatalogKeys = keyof typeof NODE_LANGGRAPH_CATALOG;
+export type OperatorLangGraphCatalogKeys =
+  keyof typeof OPERATOR_LANGGRAPH_CATALOG;
 
 /**
  * LangGraph provider ID for namespacing.
@@ -264,7 +344,7 @@ export const LANGGRAPH_PROVIDER_ID = "langgraph" as const;
  * Fully-qualified graph IDs satisfying GraphId from @cogni/ai-core.
  * Per GRAPH_ID_NAMESPACED: format is ${providerId}:${graphName}
  */
-export const LANGGRAPH_GRAPH_IDS = {
+export const NODE_LANGGRAPH_GRAPH_IDS = {
   "autoresearch-single-lane": `${LANGGRAPH_PROVIDER_ID}:${AUTORESEARCH_SINGLE_LANE_GRAPH_NAME}`,
   "autoresearch-syntropy-loop": `${LANGGRAPH_PROVIDER_ID}:${AUTORESEARCH_SYNTROPY_LOOP_GRAPH_NAME}`,
   "autoresearch-registry-swarm": `${LANGGRAPH_PROVIDER_ID}:${AUTORESEARCH_REGISTRY_SWARM_GRAPH_NAME}`,
@@ -275,16 +355,28 @@ export const LANGGRAPH_GRAPH_IDS = {
   "pr-review": `${LANGGRAPH_PROVIDER_ID}:${PR_REVIEW_GRAPH_NAME}`,
   browser: `${LANGGRAPH_PROVIDER_ID}:${BROWSER_GRAPH_NAME}`,
   "frontend-tester": `${LANGGRAPH_PROVIDER_ID}:${FRONTEND_TESTER_GRAPH_NAME}`,
+  "work-prioritizer": `${LANGGRAPH_PROVIDER_ID}:${WORK_PRIORITIZER_GRAPH_NAME}`,
+} as const;
+
+export const OPERATOR_LANGGRAPH_GRAPH_IDS = {
+  ...NODE_LANGGRAPH_GRAPH_IDS,
   "operating-review": `${LANGGRAPH_PROVIDER_ID}:${OPERATING_REVIEW_GRAPH_NAME}`,
   "pr-manager": `${LANGGRAPH_PROVIDER_ID}:${PR_MANAGER_GRAPH_NAME}`,
   "git-reviewer": `${LANGGRAPH_PROVIDER_ID}:${GIT_REVIEWER_GRAPH_NAME}`,
 } as const;
 
 /**
+ * Node-runtime graph IDs. Operator runtimes must opt in to OPERATOR_LANGGRAPH_GRAPH_IDS.
+ */
+export const LANGGRAPH_GRAPH_IDS = NODE_LANGGRAPH_GRAPH_IDS;
+
+/**
  * Union type of all valid LangGraph graph IDs.
  */
 export type LangGraphGraphId =
   (typeof LANGGRAPH_GRAPH_IDS)[keyof typeof LANGGRAPH_GRAPH_IDS];
+export type OperatorLangGraphGraphId =
+  (typeof OPERATOR_LANGGRAPH_GRAPH_IDS)[keyof typeof OPERATOR_LANGGRAPH_GRAPH_IDS];
 
 /**
  * Default graph ID.

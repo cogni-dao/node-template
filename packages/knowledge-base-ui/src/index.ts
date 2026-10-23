@@ -20,3 +20,10 @@ export {
   KnowledgeUseWhen,
   type KnowledgeUseWhenProps,
 } from "./knowledge-use-when.js";
+
+export {
+  hasScores,
+  scoreQueue,
+  WorkItemScoresRadar,
+  type WorkItemScoresRadarProps,
+} from "./work-item-scores-radar.js";

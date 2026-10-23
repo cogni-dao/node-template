@@ -54,7 +54,7 @@
     "@cogni/ai-tools": "*"
   },
   "devDependencies": {
-    "@cogni/ai-tools": "workspace:*",
+    "@cogni/ai-tools": "workspace:@cogni-dao/ai-tools@*",
     "tsup": "^8.5.1",
     "typescript": "^5",
     "vite-tsconfig-paths": "^5.1.4",

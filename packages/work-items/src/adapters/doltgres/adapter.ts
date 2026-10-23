@@ -7,10 +7,19 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import {
   acquireDoltWriterLocks,
-  reconcileAbandonedDoltOperation,
   DoltWriterAdmissionError,
   type DoltWriterLock,
+  reconcileAbandonedDoltOperation,
 } from "@cogni-dao/doltgres-admission";
+import type { ReservedSql, Sql } from "postgres";
+import {
+  WorkItemDeletionRetiredError,
+  WorkItemRevisionConflictError,
+  WorkItemScoresInvalidError,
+  WorkItemsBusyError,
+  WorkItemsCapacityError,
+  WorkItemWriteOutcomeUnknownError,
+} from "../../errors.js";
 import type {
   ActorKind,
   ExternalRef,
@@ -18,36 +27,31 @@ import type {
   WorkItem,
   WorkItemId,
   WorkItemQueryPort,
+  WorkItemScore,
+  WorkItemScores,
   WorkItemStatus,
   WorkItemType,
   WorkQuery,
   WorkRelation,
 } from "../../index.js";
 import { toWorkItemId } from "../../index.js";
-import type { ReservedSql, Sql } from "postgres";
 
-import {
-  WorkItemRevisionConflictError,
-  WorkItemDeletionRetiredError,
-  WorkItemWriteOutcomeUnknownError,
-  WorkItemsBusyError,
-  WorkItemsCapacityError,
-} from "../../errors.js";
 export {
-  WorkItemRevisionConflictError,
   WorkItemLeaseConflictError,
+  WorkItemRevisionConflictError,
   WorkItemsBusyError,
   WorkItemsCapacityError,
 } from "../../errors.js";
 
+import { parseWorkItemScores } from "../../scores.js";
+
+import { decodeCursor, encodeCursor, type WorkItemCursor } from "./cursor.js";
 import type {
-  WorkItemsCreateInput,
   WorkItemsContentPort,
+  WorkItemsCreateInput,
   WorkItemsPatchInput,
   WorkItemsPatchSet,
 } from "./ports.js";
-
-import { decodeCursor, encodeCursor, type WorkItemCursor } from "./cursor.js";
 
 export const OPERATOR_ID_FLOOR = 5000;
 const AUTO_ID_RETRIES = 5;
@@ -402,6 +406,17 @@ function requirePrincipal(principalId: string): string {
   return value;
 }
 
+/**
+ * SCORES_BOUNDS_IN_PACKAGE (story.5111): every adapter write runs the package
+ * validator, so a caller that skips the HTTP contract cannot store an
+ * unbounded or unevidenced `scores` blob. Throws before any write.
+ */
+function validScores(value: unknown): WorkItemScores | null {
+  const result = parseWorkItemScores(value);
+  if (!result.ok) throw new WorkItemScoresInvalidError(result.issues);
+  return result.value;
+}
+
 function actorOf(value: unknown): ActorKind {
   return value === "human" || value === "ai" ? value : "either";
 }
@@ -430,6 +445,53 @@ function optionalNumber(value: unknown): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+/**
+ * `scores` (story.5111) is a jsonb object keyed by axis id. Axis ids are config,
+ * so any key is kept; only the shape of each entry is checked. A non-object
+ * value reads as absent rather than failing the whole row.
+ */
+function optionalScores(value: unknown): WorkItemScores | undefined {
+  if (value === null || value === undefined) return undefined;
+  let parsed: unknown = value;
+  if (typeof value === "string") {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return undefined;
+    }
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return undefined;
+  }
+  const scores: Record<string, WorkItemScore> = {};
+  for (const [axis, entry] of Object.entries(parsed)) {
+    if (!entry || typeof entry !== "object") continue;
+    const { v, ev } = entry as { v?: unknown; ev?: unknown };
+    // Never coerce: a null/boolean/string/fractional `v` is not a score, and a
+    // missing axis must read as absent, not zero.
+    if (typeof v !== "number" || !Number.isInteger(v)) continue;
+    scores[axis] = typeof ev === "string" ? { v, ev } : { v };
+  }
+  return scores;
+}
+
+/**
+ * Key-order-insensitive JSON for comparing persisted values. jsonb does not
+ * preserve object key order, so a `scores` object read back from the row can
+ * legitimately differ in key order from the value that was written.
+ */
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, inner: unknown) =>
+    inner && typeof inner === "object" && !Array.isArray(inner)
+      ? Object.fromEntries(
+          Object.entries(inner as Record<string, unknown>).sort(([a], [b]) =>
+            a < b ? -1 : a > b ? 1 : 0
+          )
+        )
+      : inner
+  );
+}
+
 function optionalWorkItemId(value: unknown): WorkItemId | undefined {
   return value ? toWorkItemId(String(value)) : undefined;
 }
@@ -456,6 +518,7 @@ function rowToWorkItem(row: Record<string, unknown>): WorkItem {
     priority: optionalNumber(row.priority),
     rank: optionalNumber(row.rank),
     estimate: optionalNumber(row.estimate),
+    scores: optionalScores(row.scores),
     summary: optionalString(row.summary),
     outcome: optionalString(row.outcome),
     projectId: optionalWorkItemId(row.project_id),
@@ -540,6 +603,7 @@ const PATCH_COLUMNS: Record<keyof WorkItemsPatchSet, string> = {
   priority: "priority",
   rank: "rank",
   estimate: "estimate",
+  scores: "scores",
   labels: "labels",
   specRefs: "spec_refs",
   branch: "branch",
@@ -563,6 +627,7 @@ const PERSISTED_WORK_ITEM_COLUMNS = [
   "priority",
   "rank",
   "estimate",
+  "scores",
   "summary",
   "outcome",
   "branch",
@@ -592,18 +657,21 @@ const PATCH_DB_COLUMNS = new Set<string>(Object.values(PATCH_COLUMNS));
 /**
  * COLLABORATOR_TRIAGE (story.5096): the only fields any authenticated principal
  * may patch on an item it did not create. A `set` naming ANY other field stays
- * creator-bound as a whole.
+ * creator-bound as a whole. `scores` (story.5111) is ranking input, written by
+ * the prioritizer on items it did not create, so it is a triage field too.
  */
 const TRIAGE_PATCH_KEYS = new Set<keyof WorkItemsPatchSet>([
   "priority",
   "rank",
   "labels",
+  "scores",
 ]);
 /** The full row-diff surface a non-creator patch may prove. */
 const TRIAGE_COLUMNS = new Set<string>([
   "priority",
   "rank",
   "labels",
+  "scores",
   "revision",
   "updated_at",
 ]);
@@ -666,15 +734,14 @@ function snapshotRow(row: Record<string, unknown>, prefix = ""): RowSnapshot {
 
 function snapshotsEqual(left: RowSnapshot, right: RowSnapshot): boolean {
   return PERSISTED_WORK_ITEM_COLUMNS.every(
-    (column) => JSON.stringify(left[column]) === JSON.stringify(right[column])
+    (column) => canonicalJson(left[column]) === canonicalJson(right[column])
   );
 }
 
 function changedColumns(before: RowSnapshot, after: RowSnapshot): Set<string> {
   return new Set(
     PERSISTED_WORK_ITEM_COLUMNS.filter(
-      (column) =>
-        JSON.stringify(before[column]) !== JSON.stringify(after[column])
+      (column) => canonicalJson(before[column]) !== canonicalJson(after[column])
     )
   );
 }
@@ -828,8 +895,8 @@ function validateTransitionMatrix(
           beforeRevision === proof.expectedRevision) &&
         [...IMMUTABLE_COLUMNS].every(
           (column) =>
-            JSON.stringify(before[column as PersistedColumn]) ===
-            JSON.stringify(after[column as PersistedColumn])
+            canonicalJson(before[column as PersistedColumn]) ===
+            canonicalJson(after[column as PersistedColumn])
         ) &&
         changed.size > 0 &&
         changed.has("revision") &&
@@ -839,8 +906,8 @@ function validateTransitionMatrix(
         Object.entries(proof.patchValues ?? {}).every(
           ([column, value]) =>
             PATCH_DB_COLUMNS.has(column) &&
-            JSON.stringify(after[column as PersistedColumn]) ===
-              JSON.stringify(normalizedPersistedValue(value))
+            canonicalJson(after[column as PersistedColumn]) ===
+              canonicalJson(normalizedPersistedValue(value))
         )
       );
     }
@@ -2094,7 +2161,6 @@ export class DoltgresWorkItemAdapter
         // not.
         await this.quarantineOperationBranch(conn, branch, error);
         tolerated = true;
-        continue;
       }
     }
     // Each iteration re-proves `main` itself, so one pass at the end is enough
@@ -2760,6 +2826,10 @@ export class DoltgresWorkItemAdapter
     principalId: string
   ): Promise<WorkItem> {
     const principal = requirePrincipal(principalId);
+    const scores =
+      input.scores === undefined
+        ? undefined
+        : (validScores(input.scores) ?? undefined);
     const createOnce = (allocatedId?: string) =>
       this.mutate(
         "create work item",
@@ -2794,6 +2864,7 @@ export class DoltgresWorkItemAdapter
             add("priority", input.priority);
             add("rank", input.rank);
             add("estimate", input.estimate);
+            add("scores", scores);
             add("assignees", input.assignees);
             add("labels", input.labels);
             add("spec_refs", input.specRefs);
@@ -2871,13 +2942,20 @@ export class DoltgresWorkItemAdapter
     const principal = requirePrincipal(principalId);
     const id = input.id as string;
     const expectedRevision = parseExpectedRevision(input.expectedRevision);
+    const set: WorkItemsPatchSet =
+      input.set.scores === undefined
+        ? input.set
+        : {
+            ...input.set,
+            scores: validScores(input.set.scores),
+          };
     const clauses: string[] = [];
     const setKeys: (keyof WorkItemsPatchSet)[] = [];
     for (const [key, column] of Object.entries(PATCH_COLUMNS) as [
       keyof WorkItemsPatchSet,
       string,
     ][]) {
-      const value = input.set[key];
+      const value = set[key];
       if (value !== undefined) {
         clauses.push(`${column} = ${escapeValue(value)}`);
         setKeys.push(key);
@@ -2949,7 +3027,7 @@ export class DoltgresWorkItemAdapter
           itemId: id,
           expectedRevision,
           patchValues: Object.fromEntries(
-            setKeys.map((key) => [PATCH_COLUMNS[key], input.set[key]])
+            setKeys.map((key) => [PATCH_COLUMNS[key], set[key]])
           ),
         },
         preflight: async (conn, proof) => {
@@ -2962,7 +3040,8 @@ export class DoltgresWorkItemAdapter
           if (conflict) throw conflict;
           proof.beforeRow = current;
         },
-        shouldCommit: (value) => !(value instanceof WorkItemRevisionConflictError),
+        shouldCommit: (value) =>
+          !(value instanceof WorkItemRevisionConflictError),
       }
     );
     if (result instanceof WorkItemRevisionConflictError) throw result;
