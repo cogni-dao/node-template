@@ -25,11 +25,12 @@ vi.mock("@/bootstrap/container", () => ({
 }));
 
 import {
-  createWorkItem,
   getWorkItem,
   listWorkItems,
+  createWorkItem,
+  WorkItemWriteOutcomeUnknownError,
   NodeAdminRequiredError,
-  patchWorkItem,
+  patchWorkItem
 } from "@/app/_facades/work/items.server";
 import { getContainer } from "@/bootstrap/container";
 
@@ -104,6 +105,40 @@ describe("app/_facades/work/items.server", () => {
       workItemQuery: mockPort,
       doltgresWorkItems: mockDoltgres,
     } as never);
+  });
+
+  it("preserves the current write uncertainty receipt instead of converting it to backend busy", async () => {
+    const error = Object.assign(new Error("inspect current branch"), {
+      name: "WorkItemWriteOutcomeUnknownError",
+      operationId: "operation-1",
+      branch: "work-item-op/one",
+      commitHash: "hash-1",
+      itemId: "task.0001",
+    });
+    mockDoltgres.create.mockRejectedValue(error);
+    await expect(
+      createWorkItem(
+        { type: "task", title: "unknown result" },
+        { id: "principal-1" }
+      )
+    ).rejects.toMatchObject({
+      name: "WorkItemWriteOutcomeUnknownError",
+      code: "work_item_write_outcome_unknown",
+      retryable: false,
+      receipt: {
+        lookup: {
+          operationId: "operation-1",
+          branch: "work-item-op/one",
+          commitHash: "hash-1",
+          itemId: "task.0001",
+        },
+      },
+    });
+    const receipt = new WorkItemWriteOutcomeUnknownError(
+      "operation-1",
+      "work-item-op/one"
+    );
+    expect(receipt.receipt.lookup.commitHash).toBeNull();
   });
 
   describe("listWorkItems", () => {

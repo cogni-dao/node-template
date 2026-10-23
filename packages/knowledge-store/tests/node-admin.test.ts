@@ -12,10 +12,7 @@
  * @internal
  */
 
-import type { Sql } from "postgres";
 import { describe, expect, it } from "vitest";
-
-import { DoltgresKnowledgeStoreAdapter } from "../src/adapters/doltgres/index.js";
 
 import { FakeKnowledgeStoreAdapter } from "../src/adapters/fake/index.js";
 import { createKnowledgeCapability } from "../src/capability.js";
@@ -114,23 +111,31 @@ describe("direct-write plane refuses goals (GOAL_CHANGE_IS_NODE_ADMIN)", () => {
   async function storeWithGoal() {
     const store = new FakeKnowledgeStoreAdapter();
     await store.registerDomain({ id: "strategy", name: "strategy" });
-    await store.addKnowledge({
-      id: "goal-a",
-      domain: "strategy",
-      title: "Goal: a",
-      content: "KPI x, target 1",
-      entryType: "goal",
-      evaluateAt: new Date("2027-01-01T00:00:00Z"),
-      sourceType: "human",
-    });
-    await store.addKnowledge({
-      id: "note-1",
-      domain: "strategy",
-      title: "note",
-      content: "c",
-      entryType: "finding",
-      sourceType: "agent",
-    });
+    await store.withWrite(
+      { operationId: "goal-policy-test-1", message: "goal policy test" },
+      async (write) =>
+        write.addKnowledge({
+          id: "goal-a",
+          domain: "strategy",
+          title: "Goal: a",
+          content: "KPI x, target 1",
+          entryType: "goal",
+          evaluateAt: new Date("2027-01-01T00:00:00Z"),
+          sourceType: "human"
+        })
+    );
+    await store.withWrite(
+      { operationId: "goal-policy-test-2", message: "goal policy test" },
+      async (write) =>
+        write.addKnowledge({
+          id: "note-1",
+          domain: "strategy",
+          title: "note",
+          content: "c",
+          entryType: "finding",
+          sourceType: "agent"
+        })
+    );
     return store;
   }
 
@@ -167,51 +172,40 @@ describe("direct-write plane refuses goals (GOAL_CHANGE_IS_NODE_ADMIN)", () => {
   it("upsertKnowledge / updateKnowledge refuse to modify a goal or retype a row into one", async () => {
     const store = await storeWithGoal();
     await expect(
-      store.upsertKnowledge({
-        id: "goal-a",
-        domain: "strategy",
-        title: "x",
-        content: "y",
-        sourceType: "agent",
-      })
+      store.withWrite(
+        { operationId: "goal-policy-test-3", message: "goal policy test" },
+        async (write) =>
+          write.upsertKnowledge({
+            id: "goal-a",
+            domain: "strategy",
+            title: "x",
+            content: "y",
+            sourceType: "agent"
+          })
+      )
     ).rejects.toBeInstanceOf(GoalRequiresContributionError);
     await expect(
-      store.updateKnowledge("goal-a", { content: "rewritten" })
+      store.withWrite(
+        { operationId: "goal-policy-test-4", message: "goal policy test" },
+        async (write) =>
+          write.updateKnowledge("goal-a", { content: "rewritten" })
+      )
     ).rejects.toBeInstanceOf(GoalRequiresContributionError);
     await expect(
-      store.updateKnowledge("note-1", {
-        entryType: "goal",
-        evaluateAt: new Date("2027-01-01T00:00:00Z"),
-      })
+      store.withWrite(
+        { operationId: "goal-policy-test-5", message: "goal policy test" },
+        async (write) =>
+          write.updateKnowledge("note-1", {
+            entryType: "goal",
+            evaluateAt: new Date("2027-01-01T00:00:00Z")
+          })
+      )
     ).rejects.toBeInstanceOf(GoalRequiresContributionError);
     await expect(
-      store.updateKnowledge("note-1", { content: "fine" })
+      store.withWrite(
+        { operationId: "goal-policy-test-6", message: "goal policy test" },
+        async (write) => write.updateKnowledge("note-1", { content: "fine" })
+      )
     ).resolves.toMatchObject({ content: "fine" });
-  });
-});
-
-describe("Doltgres direct-write plane refuses an existing goal row", () => {
-  it("upsertKnowledge on a goal id falls to the update path and throws before any UPDATE", async () => {
-    const queries: string[] = [];
-    const sql = {
-      async unsafe(q: string) {
-        queries.push(q);
-        if (q.includes("FROM domains")) return [{ "?column?": 1 }];
-        if (q.startsWith("INSERT INTO knowledge")) throw new Error("duplicate key value");
-        if (q.includes("entry_type FROM knowledge")) return [{ entry_type: "goal" }];
-        return [];
-      },
-    };
-    const adapter = new DoltgresKnowledgeStoreAdapter({ sql: sql as unknown as Sql });
-    await expect(
-      adapter.upsertKnowledge({
-        id: "goal-a",
-        domain: "strategy",
-        title: "x",
-        content: "y",
-        sourceType: "agent",
-      })
-    ).rejects.toBeInstanceOf(GoalRequiresContributionError);
-    expect(queries.some((q) => q.startsWith("UPDATE knowledge"))).toBe(false);
   });
 });

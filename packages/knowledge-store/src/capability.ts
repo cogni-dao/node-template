@@ -164,20 +164,27 @@ export function createKnowledgeCapability(
       // the original enum-typed value is the safe carrier.
       const c = gateResult.candidate;
       const confidence = params.confidencePct ?? CONFIDENCE_DRAFT;
-      const entry = await port.upsertKnowledge({
-        id: c.id ?? params.id,
-        domain: c.domain,
-        title: c.title,
-        content: c.content,
-        sourceType: params.sourceType,
-        entityId: c.entityId ?? null,
-        confidencePct: confidence,
-        sourceRef: c.sourceRef ?? null,
-        tags: c.tags ?? null,
-      });
+      return port.withWrite(
+        {
+          operationId: `knowledge.write:${c.id ?? params.id}`,
+          message: `knowledge: ${params.sourceType} — ${c.title}`,
+        },
+        async (write) => {
+          const entry = await write.upsertKnowledge({
+            id: c.id ?? params.id,
+            domain: c.domain,
+            title: c.title,
+            content: c.content,
+            sourceType: params.sourceType,
+            entityId: c.entityId ?? null,
+            confidencePct: confidence,
+            sourceRef: c.sourceRef ?? null,
+            tags: c.tags ?? null,
+          });
 
-      await port.commit(`knowledge: ${entry.sourceType} — ${entry.title}`);
-      return toEntry(entry);
+          return toEntry(entry);
+        }
+      );
     },
   };
 }

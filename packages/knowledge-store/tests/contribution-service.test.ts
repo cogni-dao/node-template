@@ -26,10 +26,11 @@ import {
 } from "../src/domain/node-admin.js";
 import {
   ContributionForbiddenError,
+  ContributionConflictError,
   type CreateEdoDecisionInput,
   type CreateEdoHypothesisInput,
   type CreateEdoOutcomeInput,
-  type KnowledgeContributionPort,
+  type KnowledgeContributionPort
 } from "../src/port/contribution.port.js";
 import {
   createContributionService,
@@ -920,6 +921,59 @@ describe("createContributionService", () => {
       check: async () => ({ ok: false, errorCode: "authz_denied" }),
     };
     const goalRow = { headCommit: "h1", knowledgeIds: ["goal-x"], citations: [] };
+
+    it("returns an authorized terminal goal receipt after authority loss and branch reaping", async () => {
+      const { port, service } = make(goalRow);
+      port.records = [
+        contribution({ state: "merged", mergedCommit: "durable-merge" })
+      ];
+      port.touchedIds = async () => {
+        throw new Error("reaped branch must not be inspected");
+      };
+      let acknowledgements = 0;
+      port.merge = async (input) => {
+        acknowledgements++;
+        port.lastMerge = input;
+        return { commitHash: "durable-merge" };
+      };
+      await expect(
+        service.merge({
+          principal: adminUser,
+          contributionId: "contrib-agent-1-abc123"
+        })
+      ).resolves.toEqual({ commitHash: "durable-merge" });
+      expect(acknowledgements).toBe(1);
+      expect(port.lastMerge?.expectedHeadCommit).toBeUndefined();
+
+      await expect(
+        service.merge({
+          principal: agent,
+          contributionId: "contrib-agent-1-abc123"
+        })
+      ).rejects.toBeInstanceOf(ContributionForbiddenError);
+      expect(acknowledgements).toBe(1);
+    });
+
+    it("refuses missing authorization diff evidence instead of treating it as ordinary knowledge", async () => {
+      for (const touched of [
+        { ...goalRow, headCommit: "" },
+        { ...goalRow, knowledgeIds: undefined },
+        { ...goalRow, citations: undefined },
+        { ...goalRow, knowledgeIds: [""] }
+      ]) {
+        const { port, service } = make(
+          touched as FakeContributionPort["touched"],
+          allow
+        );
+        await expect(
+          service.merge({
+            principal: adminUser,
+            contributionId: "contrib-agent-1-abc123"
+          })
+        ).rejects.toBeInstanceOf(ContributionConflictError);
+        expect(port.lastMerge).toBeNull();
+      }
+    });
 
     it("a non-admin merge touching a goal row is refused 403 before the port merges", async () => {
       const { port, service } = make(goalRow, deny);

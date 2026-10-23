@@ -21,7 +21,10 @@ import {
   DoltgresWorkItemAdapter,
   OPERATOR_ID_FLOOR,
 } from "../../src/adapters/doltgres/adapter.js";
-import { makeFakeDoltgresSql } from "./fake-doltgres-sql.js";
+import {
+  independentReadPool,
+  makeFakeDoltgresSql,
+} from "./fake-doltgres-sql.js";
 
 /** Fake `Sql` whose `work_items` table contains exactly `existingIds`. */
 function makeFakeSql(existingIds: string[]): { sql: Sql; queries: string[] } {
@@ -61,7 +64,9 @@ function makeFakeSql(existingIds: string[]): { sql: Sql; queries: string[] } {
 describe("DoltgresWorkItemAdapter.create — ID_FLOOR_IS_PER_STORE", () => {
   it("starts a fresh node's empty store at 0001", async () => {
     const { sql } = makeFakeSql([]);
-    const created = await new DoltgresWorkItemAdapter(sql).create(
+    const created = await new DoltgresWorkItemAdapter(sql, {
+      readClient: independentReadPool(sql),
+    }).create(
       { type: "bug", title: "first bug on a brand-new node" },
       "actor:test"
     );
@@ -74,6 +79,7 @@ describe("DoltgresWorkItemAdapter.create — ID_FLOOR_IS_PER_STORE", () => {
   it("keeps operator clear of its imported pre-API corpus at 5000", async () => {
     const { sql } = makeFakeSql([]);
     const created = await new DoltgresWorkItemAdapter(sql, {
+      readClient: independentReadPool(sql),
       idFloor: OPERATOR_ID_FLOOR,
     }).create({ type: "task", title: "operator task" }, "actor:test");
 
@@ -83,7 +89,9 @@ describe("DoltgresWorkItemAdapter.create — ID_FLOOR_IS_PER_STORE", () => {
   it("advances MAX(suffix)+1 within the store, scoped per type", async () => {
     // A poly-shaped store: bugs already present, no tasks yet.
     const { sql } = makeFakeSql(["bug.0001", "bug.0007", "bug.0003"]);
-    const adapter = new DoltgresWorkItemAdapter(sql);
+    const adapter = new DoltgresWorkItemAdapter(sql, {
+      readClient: independentReadPool(sql),
+    });
 
     expect((await adapter.create({ type: "bug", title: "b" }, "a")).id).toBe(
       "bug.0008"
@@ -93,10 +101,9 @@ describe("DoltgresWorkItemAdapter.create — ID_FLOOR_IS_PER_STORE", () => {
   it("ignores ids of other types when allocating", async () => {
     // Only the requested type is scanned, so a high bug id must not push tasks.
     const { sql, queries } = makeFakeSql([]);
-    const created = await new DoltgresWorkItemAdapter(sql).create(
-      { type: "task", title: "t" },
-      "a"
-    );
+    const created = await new DoltgresWorkItemAdapter(sql, {
+      readClient: independentReadPool(sql),
+    }).create({ type: "task", title: "t" }, "a");
 
     expect(created.id).toBe("task.0001");
     expect(
