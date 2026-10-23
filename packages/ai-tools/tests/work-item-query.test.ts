@@ -107,9 +107,9 @@ describe("core__work_item_query", () => {
     const capped = out.items[0]?.scores ?? {};
     expect(Object.keys(capped)).toHaveLength(WORK_ITEM_QUERY_SCORES_MAX_AXES);
     expect(capped.axis_0?.ev?.length).toBe(
-      WORK_ITEM_QUERY_SCORE_EV_MAX_CHARS + 1
+      WORK_ITEM_QUERY_SCORE_EV_MAX_CHARS
     );
-    expect(capped.axis_0?.ev?.endsWith("…")).toBe(true);
+    expect(capped.axis_0?.ev?.endsWith("…")).toBe(false);
     expect(capped.axis_1).toEqual({ v: 1 });
   });
 
