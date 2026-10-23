@@ -17,6 +17,9 @@
 // ============================================================================
 
 export const EVENT_NAMES = {
+	// Knowledge analytics - Server
+	KNOWLEDGE_ANALYTICS_COMPLETE: "feature.knowledge_analytics.complete",
+
 	// AI Domain - Server
 	AI_COMPLETION: "ai.completion",
 	AI_LLM_CALL: "ai.llm_call",

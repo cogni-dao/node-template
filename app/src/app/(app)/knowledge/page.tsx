@@ -69,6 +69,7 @@ export default async function KnowledgePage({
 
   return (
     <KnowledgeDashboardView
+      nodeId={getContainer().nodeId}
       initialList={initialList}
       initialDomains={initialDomains}
       initialGraph={initialGraph}

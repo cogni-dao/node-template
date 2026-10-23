@@ -12,7 +12,11 @@
  * @public
  */
 import { escapeRef, escapeValue } from "../adapters/doltgres/util.js";
-import { ANALYTICS_BUDGET, type AnalyticsReadSources } from "../analytics.js";
+import {
+  ANALYTICS_BUDGET,
+  type AnalyticsReadSources,
+  DOLTGRES_ANALYTICS_VERSION,
+} from "../analytics.js";
 
 /** Structural seam accepts postgres.js without owning a pool or dependency lifecycle. */
 export interface AnalyticsSqlReader {
@@ -52,6 +56,35 @@ export function createDoltgresAnalyticsSources(input: {
   const knowledge = input.knowledgeSql;
   const contributions = input.contributionSql ?? knowledge;
   return {
+    provenance: {
+      inventory: {
+        adapterVersion: DOLTGRES_ANALYTICS_VERSION,
+        scanWindow: null,
+        caps: {
+          domains: ANALYTICS_BUDGET.domains,
+          atoms: ANALYTICS_BUDGET.atoms,
+          rowsPerCall: ANALYTICS_BUDGET.atoms + 1,
+        },
+      },
+      backlog: {
+        adapterVersion: DOLTGRES_ANALYTICS_VERSION,
+        scanWindow: null,
+        caps: {
+          contributions: ANALYTICS_BUDGET.contributions,
+          rowsPerCall: ANALYTICS_BUDGET.contributions + 1,
+        },
+      },
+      changes: {
+        adapterVersion: DOLTGRES_ANALYTICS_VERSION,
+        scanWindow: null,
+        caps: {
+          contributions: ANALYTICS_BUDGET.contributions,
+          diffs: ANALYTICS_BUDGET.diffs,
+          changes: ANALYTICS_BUDGET.changes,
+          rowsPerCall: ANALYTICS_BUDGET.changes + 1,
+        },
+      },
+    },
     async domains() {
       const rows = await knowledge.unsafe(
         `SELECT DISTINCT domain FROM knowledge ORDER BY domain LIMIT ${ANALYTICS_BUDGET.domains + 1}`

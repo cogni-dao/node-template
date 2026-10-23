@@ -211,6 +211,7 @@ describe("node-template knowledge selection", () => {
     render(
       <QueryClientProvider client={client}>
         <KnowledgeDashboardView
+          nodeId="node-a"
           initialList={{ items: [selected], domains: [selected.domain] }}
           initialDomains={{ domains: [] }}
           initialGraph={{

@@ -147,3 +147,110 @@ it("admits one collection without a queue and authenticates every request", asyn
     },
   });
 });
+
+it("records degraded source completion without private database errors", async () => {
+  state.log.child.mockReturnValue(state.log);
+  state.user.mockResolvedValue(TEST_SESSION_USER_1);
+  state.domains.mockRejectedValueOnce(new Error("private database diagnostic"));
+  state.list.mockResolvedValue([]);
+  await testApiHandler({
+    appHandler: handler,
+    url: "/api/v1/knowledge/analytics",
+    async test({ fetch }) {
+      const response = await fetch();
+      expect(response.status).toBe(200);
+      expect((await response.json()).coverage.inventory.reason).toBe(
+        "source_error"
+      );
+      const completion = state.log.info.mock.calls
+        .map(([fields]) => fields)
+        .find(
+          (fields) =>
+            fields.event === "feature.knowledge_analytics.complete" &&
+            fields.coverage?.inventory?.reason === "source_error"
+        );
+      expect(completion).toMatchObject({
+        status: "partial",
+        queryVersion: "knowledge-analytics.v1",
+        coverage: {
+          inventory: { status: "unavailable", reason: "source_error" },
+        },
+      });
+      expect(completion.reqId).toBeTruthy();
+      expect(completion.durationMs).toBeGreaterThanOrEqual(0);
+      expect(JSON.stringify(completion)).not.toContain(
+        "private database diagnostic"
+      );
+    },
+  });
+});
+
+it("never renders another identity's cached analytics", async () => {
+  const { createElement } = await import("react");
+  const { renderToStaticMarkup } = await import("react-dom/server");
+  const { QueryClient, QueryClientProvider } = await import(
+    "@tanstack/react-query"
+  );
+  const { SessionProvider } = await import("next-auth/react");
+  const { AnalyticsPanel } = await import(
+    "@/app/(app)/knowledge/_components/AnalyticsPanel"
+  );
+  const {
+    buildKnowledgeAnalytics,
+    KNOWLEDGE_ANALYTICS_VERSION,
+    DOLTGRES_ANALYTICS_VERSION,
+  } = await import("@cogni/knowledge-store/analytics");
+  const client = new QueryClient();
+  const principal = TEST_SESSION_USER_1;
+  const report = buildKnowledgeAnalytics({
+    nodeId: "node-a",
+    window: {
+      start: "2026-10-22T00:00:00Z",
+      endExclusive: "2026-10-23T00:00:00Z",
+    },
+    generatedAt: "2026-10-23T00:00:00Z",
+    inventory: {
+      status: "complete",
+      reason: null,
+      value: [
+        { id: "private-a", title: "Only principal A evidence", domain: "meta" },
+      ],
+    },
+    changes: { status: "complete", reason: null, value: [] },
+    backlog: { status: "complete", reason: null, value: 0 },
+    lookups: { status: "unavailable", reason: "source_not_bound", value: null },
+  });
+  client.setQueryData(
+    [
+      "knowledge",
+      "analytics",
+      KNOWLEDGE_ANALYTICS_VERSION,
+      DOLTGRES_ANALYTICS_VERSION,
+      "node-a",
+      principal.id,
+      "168",
+    ],
+    report
+  );
+  const render = (user: typeof principal | null) =>
+    renderToStaticMarkup(
+      createElement(
+        SessionProvider,
+        { session: user ? { user, expires: "2999-01-01T00:00:00Z" } : null },
+        createElement(
+          QueryClientProvider,
+          { client },
+          createElement(AnalyticsPanel, { nodeId: "node-a" })
+        )
+      )
+    );
+  try {
+    expect(render(principal)).toContain("Only principal A evidence");
+    expect(render({ ...principal, id: "different-principal" })).not.toContain(
+      "Only principal A evidence"
+    );
+    expect(render(null)).not.toContain("Only principal A evidence");
+  } finally {
+    client.clear();
+  }
+});

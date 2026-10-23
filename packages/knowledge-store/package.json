@@ -70,5 +70,10 @@
     "vite-tsconfig-paths": "^5.1.4",
     "vitest": "^3.1.4",
     "@cogni-dao/doltgres-admission": "workspace:*"
+  },
+  "peerDependenciesMeta": {
+    "@cogni/ai-tools": {
+      "optional": true
+    }
   }
 }

@@ -13,6 +13,7 @@
 import { z } from "zod";
 
 export const KNOWLEDGE_ANALYTICS_VERSION = "knowledge-analytics.v1";
+export const DOLTGRES_ANALYTICS_VERSION = "doltgres-projection.v1";
 export const ANALYTICS_BUDGET = {
   calls: 64,
   domains: 32,
@@ -28,9 +29,48 @@ export const KnowledgeAnalyticsQuerySchema = z.object({
   hours: z.coerce.number().int().min(1).max(720).default(168),
   end: z.iso.datetime({ offset: true }).optional(),
 });
+const SourceProvenanceSchema = z.object({
+  adapterVersion: z
+    .string()
+    .max(80)
+    .regex(/^[a-zA-Z0-9_.:-]+$/)
+    .nullable(),
+  scanWindow: z
+    .object({
+      start: z.iso.datetime({ offset: true }),
+      endExclusive: z.iso.datetime({ offset: true }),
+    })
+    .nullable(),
+  caps: z.partialRecord(
+    z.enum([
+      "calls",
+      "rowsPerCall",
+      "chunkHours",
+      "domains",
+      "atoms",
+      "contributions",
+      "diffs",
+      "changes",
+      "events",
+      "deadlineMs",
+    ]),
+    z.number().int().nonnegative()
+  ),
+});
+const CollectionLimitsSchema = z.object({
+  calls: z.number().int().positive(),
+  domains: z.number().int().positive(),
+  atoms: z.number().int().positive(),
+  contributions: z.number().int().positive(),
+  diffs: z.number().int().positive(),
+  changes: z.number().int().positive(),
+  lookupEvents: z.number().int().positive(),
+  deadlineMs: z.number().int().min(1).max(40_000),
+});
 const CoverageSchema = z.object({
   status: z.enum(["complete", "partial", "unavailable"]),
   reason: z.string().nullable(),
+  provenance: SourceProvenanceSchema,
 });
 const RowSchema = z.object({
   id: z.string(),
@@ -51,6 +91,7 @@ export const KnowledgeAnalyticsSchema = z.object({
   generatedAt: z.string(),
   inventoryAsOf: z.string(),
   window: z.object({ start: z.string(), endExclusive: z.string() }),
+  collectionLimits: CollectionLimitsSchema,
   coverage: z.object({
     inventory: CoverageSchema,
     changes: CoverageSchema,
@@ -76,10 +117,31 @@ export const KnowledgeAnalyticsSchema = z.object({
 });
 export type KnowledgeAnalytics = z.infer<typeof KnowledgeAnalyticsSchema>;
 export type AnalyticsWindow = KnowledgeAnalytics["window"];
+/** Adapter-owned provenance; scanWindow is the actual ingestion interval queried, not the event window. */
+export interface AnalyticsSourceProvenance {
+  adapterVersion: string | null;
+  scanWindow: AnalyticsWindow | null;
+  caps: Partial<
+    Record<
+      | "calls"
+      | "rowsPerCall"
+      | "chunkHours"
+      | "domains"
+      | "atoms"
+      | "contributions"
+      | "diffs"
+      | "changes"
+      | "events"
+      | "deadlineMs",
+      number
+    >
+  >;
+}
 export interface AnalyticsSource<T> {
   status: "complete" | "partial" | "unavailable";
   reason: string | null;
   value: T | null;
+  provenance?: AnalyticsSourceProvenance;
 }
 export interface AnalyticsAtom {
   id: string;
@@ -171,6 +233,7 @@ export function buildKnowledgeAnalytics(input: {
   changes: AnalyticsSource<readonly ContentChange[]>;
   backlog: AnalyticsSource<number>;
   lookups: AnalyticsSource<readonly LookupEvent[]>;
+  deadlineMs?: number;
 }): KnowledgeAnalytics {
   const atoms = new Map(
     (input.inventory.status === "unavailable"
@@ -211,6 +274,11 @@ export function buildKnowledgeAnalytics(input: {
   const coverage = (source: AnalyticsSource<unknown>) => ({
     status: source.status,
     reason: source.reason,
+    provenance: source.provenance ?? {
+      adapterVersion: null,
+      scanWindow: null,
+      caps: {},
+    },
   });
   const lookupCoverage = coverage(input.lookups);
   if (normalized.invalidTimestamps && lookupCoverage.status !== "unavailable") {
@@ -261,6 +329,10 @@ export function buildKnowledgeAnalytics(input: {
     nodeId: input.nodeId,
     generatedAt: input.generatedAt,
     inventoryAsOf: input.generatedAt,
+    collectionLimits: {
+      ...ANALYTICS_BUDGET,
+      deadlineMs: input.deadlineMs ?? ANALYTICS_BUDGET.deadlineMs,
+    },
     window: input.window,
     coverage: {
       inventory: coverage(input.inventory),
@@ -313,6 +385,13 @@ export interface AnalyticsContribution {
 
 /** Sources return at most limit+1 metadata rows; the extra row signals incomplete coverage. */
 export interface AnalyticsReadSources {
+  /** Static source version/caps survive a failed read; actual scan bounds come from the adapter result. */
+  provenance?: Partial<
+    Record<
+      "inventory" | "changes" | "backlog" | "lookups",
+      AnalyticsSourceProvenance
+    >
+  >;
   domains(): Promise<string[]>;
   atoms(domain: string, limit: number): Promise<AnalyticsAtom[]>;
   contributions(
@@ -494,20 +573,28 @@ export async function collectKnowledgeAnalytics(input: {
     };
   });
   const lookupSource = input.sources.lookups;
-  const lookups = lookupSource
+  const lookups: AnalyticsSource<readonly LookupEvent[]> = lookupSource
     ? await source(() => read(() => lookupSource(window, input.signal)))
     : {
         status: "unavailable" as const,
         reason: "source_not_bound",
         value: null,
       };
+  function withProvenance<T>(
+    value: AnalyticsSource<T>,
+    name: "inventory" | "backlog" | "changes" | "lookups"
+  ): AnalyticsSource<T> {
+    const provenance = value.provenance ?? input.sources.provenance?.[name];
+    return provenance ? { ...value, provenance } : value;
+  }
   return buildKnowledgeAnalytics({
     nodeId: input.nodeId,
     window,
     generatedAt: new Date(now()).toISOString(),
-    inventory,
-    backlog,
-    changes,
-    lookups,
+    inventory: withProvenance(inventory, "inventory"),
+    backlog: withProvenance(backlog, "backlog"),
+    changes: withProvenance(changes, "changes"),
+    lookups: withProvenance(lookups, "lookups"),
+    deadlineMs,
   });
 }

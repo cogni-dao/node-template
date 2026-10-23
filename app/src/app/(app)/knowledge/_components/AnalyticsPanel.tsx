@@ -11,33 +11,63 @@
  * @internal
  */
 "use client";
-import { KnowledgeAnalyticsSchema } from "@cogni/knowledge-store/analytics";
+import {
+  DOLTGRES_ANALYTICS_VERSION,
+  KNOWLEDGE_ANALYTICS_VERSION,
+  KnowledgeAnalyticsSchema,
+} from "@cogni/knowledge-store/analytics";
 import { useQuery } from "@tanstack/react-query";
+import { useSession } from "next-auth/react";
 import { useMemo, useState } from "react";
 import { Button, Input } from "@/components";
 
-export function AnalyticsPanel() {
+class AnalyticsRequestError extends Error {
+  constructor(readonly status: number) {
+    super(`Analytics could not refresh (${status}).`);
+  }
+}
+
+export function AnalyticsPanel({ nodeId }: { nodeId: string }) {
+  const { data: session, status } = useSession();
+  const principalId =
+    status === "authenticated" ? session?.user?.id : undefined;
   const [hours, setHours] = useState("168");
   const [search, setSearch] = useState("");
   const [domain, setDomain] = useState("");
   const [rank, setRank] = useState("changes");
   const query = useQuery({
-    queryKey: ["knowledge", "analytics", hours],
+    queryKey: [
+      "knowledge",
+      "analytics",
+      KNOWLEDGE_ANALYTICS_VERSION,
+      DOLTGRES_ANALYTICS_VERSION,
+      nodeId,
+      principalId,
+      hours,
+    ],
+    enabled: !!principalId,
+    gcTime: 0,
+    refetchOnMount: "always",
     queryFn: async ({ signal }) => {
       const response = await fetch(
         `/api/v1/knowledge/analytics?hours=${hours}`,
         { signal, cache: "no-store" }
       );
-      if (!response.ok)
-        throw new Error(`Analytics could not refresh (${response.status}).`);
-      return KnowledgeAnalyticsSchema.parse(await response.json());
+      if (!response.ok) throw new AnalyticsRequestError(response.status);
+      const report = KnowledgeAnalyticsSchema.parse(await response.json());
+      if (report.nodeId !== nodeId)
+        throw new Error("Analytics source scope changed.");
+      return report;
     },
-    staleTime: 60_000,
+    staleTime: 0,
     refetchInterval: 1_200_000,
     refetchIntervalInBackground: false,
     retry: false,
   });
-  const report = query.data;
+  const denied =
+    query.error instanceof AnalyticsRequestError &&
+    [401, 403].includes(query.error.status);
+  const report = principalId && !denied ? query.data : undefined;
   const domains = useMemo(
     () =>
       [
@@ -159,10 +189,11 @@ export function AnalyticsPanel() {
       {report && (
         <>
           <p className="text-muted-foreground text-xs">
-            {report.window.start.slice(0, 10)} to{" "}
-            {report.window.endExclusive.replace("T", " ").slice(0, 19)} UTC ·
-            Generated {report.generatedAt.replace("T", " ").slice(0, 19)} UTC ·
-            Refreshes every 20 minutes while open
+            {report.window.start.replace("T", " ").slice(0, 19)} UTC to{" "}
+            {report.window.endExclusive.replace("T", " ").slice(0, 19)} UTC (end
+            exclusive) · Generated{" "}
+            {report.generatedAt.replace("T", " ").slice(0, 19)} UTC · Refreshes
+            every 20 minutes while open
           </p>
           <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm">
             <p>

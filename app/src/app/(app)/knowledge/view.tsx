@@ -108,6 +108,7 @@ function errorMessage(error: unknown): string {
 }
 
 interface KnowledgeDashboardViewProps {
+  readonly nodeId: string;
   /** SSR-seeded browse list — makes the entry count correct on first paint. */
   readonly initialList?: KnowledgeListResponse | undefined;
   /** SSR-seeded domain registry. */
@@ -117,10 +118,11 @@ interface KnowledgeDashboardViewProps {
 }
 
 export function KnowledgeDashboardView({
+  nodeId,
   initialList,
   initialDomains,
   initialGraph,
-}: KnowledgeDashboardViewProps = {}) {
+}: KnowledgeDashboardViewProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
@@ -271,7 +273,7 @@ export function KnowledgeDashboardView({
         </div>
       </div>
 
-      {mode === "analytics" && <AnalyticsPanel />}
+      {mode === "analytics" && <AnalyticsPanel nodeId={nodeId} />}
       {mode === "browse" && (
         <BrowsePanel
           rows={knowledgeQuery.data?.items ?? []}

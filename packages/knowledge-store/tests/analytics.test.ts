@@ -182,7 +182,7 @@ describe("bounded collection", () => {
         },
       });
       expect(calls).toBe(cancelled ? 0 : 1);
-      expect(report.coverage.inventory).toEqual({
+      expect(report.coverage.inventory).toMatchObject({
         status: "unavailable",
         reason: cancelled ? "cancelled" : "deadline",
       });
@@ -207,7 +207,7 @@ it("retains known inventory as partial when a later domain fails", async () => {
       changeIds: async () => [],
     },
   });
-  expect(report.coverage.inventory).toEqual({
+  expect(report.coverage.inventory).toMatchObject({
     status: "partial",
     reason: "source_error",
   });
@@ -302,7 +302,7 @@ it("preserves completed lookup evidence returned after cancellation", async () =
     },
   });
   expect(report.summary.lookupEvents).toBe(1);
-  expect(report.coverage.lookups).toEqual({
+  expect(report.coverage.lookups).toMatchObject({
     status: "partial",
     reason: "cancelled",
   });
@@ -372,4 +372,60 @@ it("projects bounded metadata and changed IDs without hydrating bodies or accept
     "invalid_analytics_limit"
   );
   expect(queries).toHaveLength(4);
+});
+
+it("preserves adapter provenance through failures, partial normalization and a host deadline override", async () => {
+  const sources = createDoltgresAnalyticsSources({
+    knowledgeSql: {
+      unsafe: async () => {
+        throw new Error("private database diagnostic");
+      },
+    },
+  });
+  const scanWindow = {
+    start: "2026-10-21T23:00:00.000Z",
+    endExclusive: "2026-10-23T01:00:00.000Z",
+  };
+  const report = await collectKnowledgeAnalytics({
+    nodeId: "node-a",
+    hours: 24,
+    now: () => Date.parse(window.endExclusive),
+    signal: new AbortController().signal,
+    deadlineMs: 40_000,
+    sources: {
+      ...sources,
+      lookups: async () => ({
+        status: "partial",
+        reason: "request_budget",
+        value: [{ requestId: "a", atomId: "rare", eventAt: "bad" }],
+        provenance: {
+          adapterVersion: "loki-lookup.v1",
+          scanWindow,
+          caps: { calls: 40, rowsPerCall: 1000, chunkHours: 24 },
+        },
+      }),
+    },
+  });
+  expect(report.coverage.inventory).toMatchObject({
+    status: "unavailable",
+    reason: "source_error",
+    provenance: {
+      adapterVersion: "doltgres-projection.v1",
+      scanWindow: null,
+      caps: { atoms: 500, rowsPerCall: 501 },
+    },
+  });
+  expect(report.coverage.lookups.provenance).toEqual({
+    adapterVersion: "loki-lookup.v1",
+    scanWindow,
+    caps: { calls: 40, rowsPerCall: 1000, chunkHours: 24 },
+  });
+  expect(report.lookupNormalization.invalidTimestamps).toBe(1);
+  expect(report.collectionLimits).toMatchObject({
+    calls: 64,
+    atoms: 500,
+    changes: 1000,
+    deadlineMs: 40_000,
+  });
+  expect(JSON.stringify(report)).not.toContain("private database diagnostic");
 });
