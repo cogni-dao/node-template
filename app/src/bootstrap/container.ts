@@ -4,7 +4,7 @@
 /**
  * Module: `@bootstrap/container`
  * Purpose: Dependency injection container for application composition root with environment-based adapter selection.
- * Scope: Wire adapters to ports for runtime dependency injection. Provides webhookRegistrations for ingestion route, Temporal WorkflowClient singleton. Does not handle request-scoped lifecycle.
+ * Scope: Wire adapters to ports and metadata-only analytics readers for runtime dependency injection. Provides webhookRegistrations for ingestion route, Temporal WorkflowClient singleton. Does not handle request-scoped lifecycle.
  * Invariants: All ports wired; single container instance per process; config.unhandledErrorPolicy set by env; webhookRegistrations lazy-initialized; Temporal connection singleton with race-safe init.
  * Side-effects: IO (initializes logger and emits startup log on first access)
  * Notes: LLM always uses LiteLlmAdapter; stack tests route to mock-openai-api. ContainerConfig controls wrapper behavior.
@@ -58,6 +58,8 @@ import {
 	DoltgresKnowledgeStoreAdapter,
 	wrapPushSafe,
 } from "@cogni/knowledge-store/adapters/doltgres";
+import type { AnalyticsReadSources } from "@cogni/knowledge-store/analytics";
+import { createDoltgresAnalyticsSources } from "@cogni/knowledge-store/analytics/doltgres";
 import { parseMcpConfigFromEnv } from "@cogni/langgraph-graphs";
 import {
 	COGNI_SYSTEM_PRINCIPAL_USER_ID,
@@ -250,6 +252,8 @@ export interface Container {
 	nodeAdmin: NodeAdminAuthority;
 	/** Direct knowledge store port — exposed for the cookie-only browse endpoint. Undefined when DOLTGRES_URL is unset. */
 	knowledgeStorePort: KnowledgeStorePort | undefined;
+	/** Node-local metadata readers; route owns authentication and request admission. */
+	knowledgeAnalyticsSources: AnalyticsReadSources | undefined;
 	/** EDO hypothesis-loop capability for the langgraph tool bindings AND the bearer-auth REST routes under /api/v1/edo. Always present (stubs throw when DOLTGRES_URL is unset). */
 	edoCapability: EdoCapability;
 	/** Thread persistence scoped to a user (RLS enforced) */
@@ -718,6 +722,7 @@ function createContainer(): Container {
 	let knowledgeContributionService: ContributionService | undefined;
 	const nodeAdmin = createApproversNodeAdminAuthority();
 	let knowledgeStorePort: KnowledgeStorePort | undefined;
+	let knowledgeAnalyticsSources: AnalyticsReadSources | undefined;
 	let doltgresWorkItems: WorkItemsDoltgresPort;
 	if (env.DOLTGRES_URL) {
 		const doltClient = buildDoltgresClient({
@@ -771,6 +776,9 @@ function createContainer(): Container {
 			writerSession: knowledgeWriter,
 		});
 		knowledgeStorePort = knowledgePort;
+		knowledgeAnalyticsSources = createDoltgresAnalyticsSources({
+			knowledgeSql: doltClient,
+		});
 		knowledgeCapability = createKnowledgeCapability(knowledgePort);
 		const edoResolver = new DoltgresEdoResolverAdapter({
 			sql: doltClient,
@@ -1023,6 +1031,7 @@ function createContainer(): Container {
 		knowledgeContributionService,
 		nodeAdmin,
 		knowledgeStorePort,
+		knowledgeAnalyticsSources,
 		edoCapability,
 		threadPersistenceForUser: (userId: UserId) =>
 			new DrizzleThreadPersistenceAdapter(db, userActor(userId)),

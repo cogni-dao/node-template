@@ -3,8 +3,8 @@
 
 /**
  * Module: `@app/(app)/knowledge/view`
- * Purpose: Client knowledge dashboard. Single ReUI DataGrid that switches between
- *   Browse mode (knowledge entries on `main`) and Inbox mode (open external-agent
+ * Purpose: Client knowledge dashboard with an activity panel and ReUI grids for
+ *   Browse, Analytics (bounded shared activity), and Inbox mode (open external-agent
  *   contributions). One segmented toggle, URL-driven filters/sort/mode.
  * Scope: Presentation. Fetches data via React Query; mutates via direct fetch.
  * Invariants:
@@ -12,7 +12,7 @@
  *   - SINGLE_COLUMNS_TOGGLE (toolbar, not per-column).
  *   - URL_DRIVEN_STATE (mode + filters persist in URL).
  *   - Cookie-session merges only — no Bearer header is ever sent from this page.
- * Side-effects: IO (GET /knowledge, GET /knowledge/contributions, POST .../merge, POST .../close).
+ * Side-effects: IO (GET /knowledge, /knowledge/analytics, /knowledge/contributions; POST .../merge, .../close).
  * Links: docs/spec/knowledge-syntropy.md, [/work view](../work/view.tsx)
  * @public
  */
@@ -48,6 +48,7 @@ import {
   type VisibilityState,
 } from "@tanstack/react-table";
 import {
+  BarChart3,
   GitBranch,
   GitMerge,
   Library,
@@ -68,6 +69,7 @@ import type { KnowledgeGraphResponse } from "./_api/fetchGraph";
 import { fetchKnowledge } from "./_api/fetchKnowledge";
 import { mergeContribution } from "./_api/mergeContribution";
 import { AddDomainSheet } from "./_components/AddDomainSheet";
+import { AnalyticsPanel } from "./_components/AnalyticsPanel";
 import { ContributionDetail } from "./_components/ContributionDetail";
 import { knowledgeColumns } from "./_components/columns";
 import { buildContributionColumns } from "./_components/contribution-columns";
@@ -75,7 +77,13 @@ import { domainColumns } from "./_components/domain-columns";
 import { GraphView } from "./_components/GraphView";
 import { KnowledgeDetail } from "./_components/KnowledgeDetail";
 
-type ViewMode = "browse" | "domains" | "inbox" | "chains" | "graph";
+type ViewMode =
+  | "browse"
+  | "domains"
+  | "inbox"
+  | "chains"
+  | "graph"
+  | "analytics";
 
 const EDO_ENTRY_TYPES: ReadonlySet<string> = new Set([
   "hypothesis",
@@ -86,6 +94,7 @@ const EDO_ENTRY_TYPES: ReadonlySet<string> = new Set([
 
 function isMode(v: string | null): v is ViewMode {
   return (
+    v === "analytics" ||
     v === "browse" ||
     v === "domains" ||
     v === "inbox" ||
@@ -136,6 +145,7 @@ export function KnowledgeDashboardView({
   const knowledgeQuery = useQuery({
     queryKey: ["knowledge", "list"],
     queryFn: fetchKnowledge,
+    enabled: mode !== "analytics",
     staleTime: 30_000,
     initialData: initialList,
   });
@@ -143,6 +153,7 @@ export function KnowledgeDashboardView({
   const domainsQuery = useQuery({
     queryKey: ["knowledge", "domains"],
     queryFn: fetchDomains,
+    enabled: mode !== "analytics",
     staleTime: 30_000,
     initialData: initialDomains,
   });
@@ -150,6 +161,7 @@ export function KnowledgeDashboardView({
   const contributionsQuery = useQuery({
     queryKey: ["knowledge", "contributions", "open"],
     queryFn: () => fetchContributions("open"),
+    enabled: mode !== "analytics",
     staleTime: 15_000,
   });
 
@@ -192,7 +204,9 @@ export function KnowledgeDashboardView({
           </h1>
           <span className="text-muted-foreground text-xs">
             What this node has learned ·{" "}
-            {knowledgeQuery.data ? (
+            {mode === "analytics" ? (
+              "Activity and evidence coverage"
+            ) : knowledgeQuery.data ? (
               <>
                 {knowledgeQuery.data.items.length} entries on{" "}
                 <code className="font-mono">main</code>
@@ -215,7 +229,7 @@ export function KnowledgeDashboardView({
               Add domain
             </Button>
           )}
-          <div className="inline-flex items-center rounded-lg border border-border/60 bg-muted/40 p-0.5">
+          <div className="inline-flex flex-wrap items-center rounded-lg border border-border/60 bg-muted/40 p-0.5">
             <ModeButton
               active={mode === "browse"}
               onClick={() => setModeUrl("browse")}
@@ -235,6 +249,12 @@ export function KnowledgeDashboardView({
               icon={<GitBranch className="size-3.5" />}
             />
             <ModeButton
+              active={mode === "analytics"}
+              onClick={() => setModeUrl("analytics")}
+              label="Analytics"
+              icon={<BarChart3 className="size-3.5" />}
+            />
+            <ModeButton
               active={mode === "domains"}
               onClick={() => setModeUrl("domains")}
               label="Domains"
@@ -251,6 +271,7 @@ export function KnowledgeDashboardView({
         </div>
       </div>
 
+      {mode === "analytics" && <AnalyticsPanel />}
       {mode === "browse" && (
         <BrowsePanel
           rows={knowledgeQuery.data?.items ?? []}

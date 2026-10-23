@@ -65,6 +65,10 @@ Shared ports, contribution workflow, and adapters for versioned domain knowledge
 - `ContributionServiceDeps.pushMainOnMerge?: () => Promise<void>` — optional post-merge mirror hook; caller owns error handling (service does not await + does not catch)
 - `ContributionServiceDeps.nodeAdmin?: NodeAdminAuthority` — goal-layer merge gate (raw diff ids via the required port method `KnowledgeContributionPort.touchedIds`, merge pinned with `expectedHeadCommit`); absent ⇒ goal-layer merges fail closed 503
 
+**Analytics subpath** (`@cogni/knowledge-store/analytics`): typed query/report schemas, deterministic event normalization and semantic change reduction, and bounded serial collection through injected readers. No credentials, auth, routing or cache; unknown sources remain null.
+
+**Analytics Doltgres subpath** (`@cogni-dao/knowledge-store/analytics/doltgres`): `createDoltgresAnalyticsSources({knowledgeSql, contributionSql?})` binds existing read executors to capped metadata and semantic changed-ID projections. No body hydration, new pool, branch checkout, auth or cache. Returned row limits do not bound TEXT bytes or engine computation.
+
 ## Ports
 
 - **Implements:** `KnowledgeStorePort`

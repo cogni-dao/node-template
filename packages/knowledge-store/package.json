@@ -1,6 +1,6 @@
 {
   "name": "@cogni-dao/knowledge-store",
-  "version": "0.4.4",
+  "version": "0.5.0",
   "license": "LicenseRef-PolyForm-Shield-1.0.0",
   "repository": {
     "type": "git",
@@ -34,6 +34,16 @@
       "types": "./dist/migrations.d.ts",
       "import": "./dist/migrations.js",
       "default": "./dist/migrations.js"
+    },
+    "./analytics": {
+      "types": "./dist/analytics.d.ts",
+      "import": "./dist/analytics.js",
+      "default": "./dist/analytics.js"
+    },
+    "./analytics/doltgres": {
+      "types": "./dist/analytics/doltgres.d.ts",
+      "import": "./dist/analytics/doltgres.js",
+      "default": "./dist/analytics/doltgres.js"
     }
   },
   "types": "./dist/index.d.ts",
