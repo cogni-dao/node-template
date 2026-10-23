@@ -2,19 +2,9 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@cogni/langgraph-graphs/graphs/work-prioritizer/graph`
- * Purpose: Mission-loop agent: a ReAct agent that reads the DAO goals and makes a few goal-cited work-item changes.
- * Scope: Pure graph factory (createReactAgent + one report node). Does NOT read env, log, or enforce authz.
- * Invariants:
- *   - LLM and tools are injected, not instantiated (brain-style)
- *   - PURE_GRAPH_FACTORY: the run report is `structuredResponse.telemetry`; the provider logs it (catalog `report`)
- *   - REPORT_ON_TURN_LIMIT: only a GraphRecursionError (turn limit) reaches the report node with the partial
- *     transcript, `aborted: true` and `abortReason`; every other error (model, transport, cancel) is rethrown so
- *     the run fails and the provider's error log fires
- *   - TYPE_TRANSPARENT_RETURN: No explicit return type annotation
- * Side-effects: none
- * Links: story.5108, prompts.ts, tools.ts
- * @public
+ * Read-only mission adapter for the shared evidence/verification factory.
+ * Retains cycleTelemetry as a compatibility helper for existing consumers.
+ * Host LLM/tools are injected; business writes are not exposed. task.5333.
  */
 
 import {
@@ -23,17 +13,9 @@ import {
   WORK_ITEM_TRANSITION_NAME,
 } from "@cogni/ai-tools";
 import { type BaseMessage, isToolMessage } from "@langchain/core/messages";
-import type { RunnableConfig } from "@langchain/core/runnables";
-import {
-  Annotation,
-  GraphRecursionError,
-  MessagesAnnotation,
-  StateGraph,
-} from "@langchain/langgraph";
-import { createReactAgent } from "@langchain/langgraph/prebuilt";
-
+import { createEvidenceVerificationGraph } from "../evidence-verification/graph";
 import type { CreateReactAgentGraphOptions } from "../types";
-import { WORK_PRIORITIZER_SYSTEM_PROMPT } from "./prompts";
+import { MISSION_EVIDENCE_PROGRAM } from "./program";
 
 export const WORK_PRIORITIZER_GRAPH_NAME = "work-prioritizer" as const;
 
@@ -102,45 +84,7 @@ export function cycleTelemetry(
 
 export type MissionLoopTelemetry = ReturnType<typeof cycleTelemetry>;
 
-const State = Annotation.Root({
-  ...MessagesAnnotation.spec,
-  abortReason: Annotation<string | undefined>(),
-  structuredResponse: Annotation<{ telemetry: MissionLoopTelemetry }>(),
-});
-
-/** Brain-style ReAct agent, then one node that turns the transcript into the run report. */
+/** Compatibility graph ID; mission policy configures the shared read-only factory. */
 export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
-  const agent = createReactAgent({
-    llm: opts.llm,
-    tools: [...opts.tools],
-    messageModifier: WORK_PRIORITIZER_SYSTEM_PROMPT,
-    stateSchema: MessagesAnnotation,
-  });
-  type S = typeof State.State;
-  return new StateGraph(State)
-    .addNode("agent", async (s: S, config: RunnableConfig) => {
-      // REPORT_ON_TURN_LIMIT: keep the latest transcript so a turn-limit abort still reports what landed.
-      let last: { messages: BaseMessage[] } = { messages: s.messages };
-      try {
-        const values = await agent.stream(
-          { messages: s.messages },
-          { ...config, streamMode: "values" }
-        );
-        for await (const v of values) last = v;
-        return last;
-      } catch (error) {
-        if (!(error instanceof GraphRecursionError)) throw error;
-        return { ...last, abortReason: "recursion_limit" };
-      }
-    })
-    .addNode("report", (s: S) => ({
-      structuredResponse: {
-        telemetry: cycleTelemetry(s.messages, s.abortReason),
-      },
-    }))
-    .addEdge("__start__", "agent")
-    .addEdge("agent", "report")
-    .addEdge("report", "__end__")
-    .compile()
-    .withConfig({ recursionLimit: 50 });
+  return createEvidenceVerificationGraph(opts, MISSION_EVIDENCE_PROGRAM);
 }
