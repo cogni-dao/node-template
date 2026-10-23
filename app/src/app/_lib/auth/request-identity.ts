@@ -35,7 +35,7 @@
 
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { isAgentCredentialLive } from "@cogni-dao/agent-grants";
-import type { SessionUser } from "@cogni/node-shared";
+import { EVENT_NAMES, type SessionUser } from "@cogni/node-shared";
 import { headers } from "next/headers";
 import { getServerSessionUser } from "@/lib/auth/server";
 import { serverEnv } from "@/shared/env/server";
@@ -124,12 +124,29 @@ export async function verifyAgentApiKey(
   const payload = parseAgentToken(token);
   if (!payload) return null;
   if (payload.cred !== true) return payload; // legacy key: transition window
-  const { resolveServiceDb } = await import("@/bootstrap/container");
-  const live = await isAgentCredentialLive(resolveServiceDb(), {
-    userId: payload.sub,
-    key: token,
-  });
-  return live ? payload : null;
+  const { getContainer, resolveServiceDb } = await import(
+    "@/bootstrap/container"
+  );
+  try {
+    const live = await isAgentCredentialLive(resolveServiceDb(), {
+      userId: payload.sub,
+      key: token,
+    });
+    return live ? payload : null;
+  } catch {
+    // FAIL_CLOSED: a credential-store failure is a 401, never an unlogged 500.
+    // No key material, no raw error message.
+    getContainer().log.error(
+      {
+        event: EVENT_NAMES.AGENT_CREDENTIALS_LOOKUP_ERROR,
+        dep: "postgres",
+        reasonCode: "credential_lookup_failed",
+        principalId: payload.sub,
+      },
+      EVENT_NAMES.AGENT_CREDENTIALS_LOOKUP_ERROR
+    );
+    return null;
+  }
 }
 
 /** The raw bearer key on the current request, if any. */

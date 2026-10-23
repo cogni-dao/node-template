@@ -2,21 +2,22 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 /**
- * Module: `@app/api/v1/agent/access-requests/[token]`
- * Purpose: The signed-in account owner previews (GET) and decides (POST) an
- *   agent access request selected by its one-time approval token. Approval
- *   writes the grant in the same transaction.
- * Scope: Thin route — human browser session only (any bearer is refused),
- *   params/body parse, delegate to `@cogni-dao/agent-grants`, response.
- *   The token is never logged. Unknown, used, or expired tokens are 404.
+ * Module: `@app/api/v1/agent/access-requests/decide`
+ * Purpose: The signed-in account owner approves or denies an agent access
+ *   request selected by its one-time approval token. Approval writes the
+ *   grant in the same transaction.
+ * Scope: Thin route — human browser session only (any Authorization header is
+ *   refused; same-origin enforced), body parse, delegate, response.
+ * Invariants:
+ *   - TOKEN_NEVER_IN_URL: the token travels only in the JSON body and is
+ *     never logged.
+ *   - NON_DISCLOSING_DENIAL: unknown, used, or expired tokens, and accounts
+ *     the approver does not own, are one 404.
  * Links: story.5115, packages/agent-grants
  * @public
  */
 
-import {
-  decideAccessRequest,
-  previewAccessRequest,
-} from "@cogni-dao/agent-grants";
+import { decideAccessRequest } from "@cogni-dao/agent-grants";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import {
@@ -31,52 +32,27 @@ import { EVENT_NAMES, logEvent } from "@/shared/observability";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type Params = { params: Promise<{ token: string }> };
-
-const decisionSchema = z.object({
+const bodySchema = z.object({
+  token: z.string().min(16).max(256),
   decision: z.enum(["approve", "deny"]),
   accountId: z.string().min(1).max(128).optional(),
 });
 
-export const GET = wrapRouteHandlerWithLogging<Params>(
-  {
-    routeId: "agent.access_requests.preview",
-    auth: { mode: "required", getSessionUser: resolveHumanSessionIdentity },
-  },
-  async (_ctx, _request, sessionUser, context) => {
-    if (!sessionUser || !context) return notFoundResponse();
-    const { token } = await context.params;
-    const preview = await withPrincipalTx(sessionUser.id, (tx) =>
-      previewAccessRequest(tx, { token })
-    );
-    if (!preview) return notFoundResponse();
-    return NextResponse.json({
-      id: preview.id,
-      requesterDisplayName: preview.requesterDisplayName,
-      requestedScopes: preview.requestedScopes,
-      grantExpiresAt: preview.grantExpiresAt.toISOString(),
-    });
-  }
-);
-
-export const POST = wrapRouteHandlerWithLogging<Params>(
+export const POST = wrapRouteHandlerWithLogging(
   {
     routeId: "agent.access_requests.decide",
     auth: { mode: "required", getSessionUser: resolveHumanSessionIdentity },
   },
-  async (ctx, request, sessionUser, context) => {
-    if (!sessionUser || !context) return notFoundResponse();
-    const { token } = await context.params;
-    const parsed = decisionSchema.safeParse(
-      await request.json().catch(() => null)
-    );
+  async (ctx, request, sessionUser) => {
+    if (!sessionUser) return notFoundResponse();
+    const parsed = bodySchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) {
       return NextResponse.json({ error: "Invalid request" }, { status: 400 });
     }
 
     const decided = await withPrincipalTx(sessionUser.id, (tx) =>
       decideAccessRequest(tx, {
-        token,
+        token: parsed.data.token,
         ownerId: sessionUser.id,
         accountId: parsed.data.accountId,
         decision: parsed.data.decision,

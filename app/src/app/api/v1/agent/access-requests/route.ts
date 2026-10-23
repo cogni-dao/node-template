@@ -4,7 +4,8 @@
 /**
  * Module: `@app/api/v1/agent/access-requests`
  * Purpose: An authenticated agent requests node-declared scopes for itself and
- *   receives a one-time approval URL to hand to the account-owning human.
+ *   receives a one-time approval token (JSON body only, never a URL) plus the
+ *   preview/decide endpoints to hand to the account-owning human.
  * Scope: Thin route — bearer auth, body parse, delegate to
  *   `@cogni-dao/agent-grants`, response. The raw token is returned once and
  *   never logged or stored (only its sha256).
@@ -73,10 +74,15 @@ export const POST = wrapRouteHandlerWithLogging(
         scopeCount: parsed.data.scopes.length,
         outcome: "success",
       });
+      const origin = publicOrigin(request);
       return NextResponse.json(
         {
           id: created.id,
-          approvalUrl: `${publicOrigin(request)}/api/v1/agent/access-requests/${created.token}`,
+          // TOKEN_NEVER_IN_URL: hand the token to the owner out of band; they
+          // POST it in the body of preview/decide (session-only routes).
+          approvalToken: created.token,
+          previewUrl: `${origin}/api/v1/agent/access-requests/preview`,
+          decideUrl: `${origin}/api/v1/agent/access-requests/decide`,
           tokenExpiresAt: created.tokenExpiresAt.toISOString(),
         },
         { status: 201 }

@@ -194,6 +194,7 @@ export const EVENT_NAMES = {
 	AGENT_GRANTS_DECIDED: "agent_grants.decided",
 	AGENT_GRANTS_REVOKED: "agent_grants.revoked",
 	AGENT_CREDENTIALS_REVOKED: "agent_credentials.revoked",
+	AGENT_CREDENTIALS_LOOKUP_ERROR: "agent_credentials.lookup_error",
 	ACCOUNT_READ_ALLOWED: "account_read.allowed",
 	ACCOUNT_READ_DENIED: "account_read.denied",
 } as const;
