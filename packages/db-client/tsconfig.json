@@ -20,6 +20,7 @@
     { "path": "../ids" },
     { "path": "../attribution-ledger" },
     { "path": "../scheduler-core" },
-    { "path": "../scheduling" }
+    { "path": "../scheduling" },
+    { "path": "../graph-execution-host" }
   ]
 }

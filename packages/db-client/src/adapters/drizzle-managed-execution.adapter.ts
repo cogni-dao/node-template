@@ -32,7 +32,7 @@ type Tx = Parameters<Parameters<Database["transaction"]>[0]>[0];
 type RunRow = typeof graphRuns.$inferSelect;
 async function serverNow(tx: Tx): Promise<Date> {
   const rows = await tx.execute<{ now: string }>(
-    sql`SELECT clock_timestamp() AS now`
+    sql`SELECT clock_timestamp() AS now`,
   );
   const row = rows[0];
   if (!row) throw new Error("database_clock_unavailable");
@@ -46,7 +46,7 @@ function leaseDuration(ms: number): number {
 async function ownerMatches(
   tx: Tx,
   run: RunRow,
-  actorUserId: string
+  actorUserId: string,
 ): Promise<boolean> {
   if (run.requestedBy !== null) return run.requestedBy === actorUserId;
   if (!run.scheduleId) return false;
@@ -58,7 +58,7 @@ async function ownerMatches(
 }
 function replay(
   run: RunRow,
-  binding: ManagedExecutionBinding
+  binding: ManagedExecutionBinding,
 ): ManagedAcquireResult {
   if (!run.terminalResult) return { status: "unavailable" };
   const result = readCanonicalResult(run.terminalResult);
@@ -74,7 +74,7 @@ export class DrizzleManagedExecutionAdapter implements ManagedExecutionPort {
 
   async acquire(
     binding: ManagedExecutionBinding,
-    leaseMs: number
+    leaseMs: number,
   ): Promise<ManagedAcquireResult> {
     leaseDuration(leaseMs);
     return this.db.transaction(async (tx) => {
@@ -126,7 +126,7 @@ export class DrizzleManagedExecutionAdapter implements ManagedExecutionPort {
       if (request.claimToken !== null && request.graphRunId === null)
         return { status: "unavailable" };
       if (run.terminalResult) return replay(run, binding);
-      if (!["pending", "running", "timeout"].includes(run.status))
+      if (!["pending", "running"].includes(run.status))
         return { status: "unavailable" };
       const now = await serverNow(tx);
       if (request.leaseExpiresAt && request.leaseExpiresAt > now)
@@ -150,7 +150,7 @@ export class DrizzleManagedExecutionAdapter implements ManagedExecutionPort {
 
   async heartbeat(
     claim: ManagedExecutionClaim,
-    leaseMs: number
+    leaseMs: number,
   ): Promise<boolean> {
     leaseDuration(leaseMs);
     return this.db.transaction(async (tx) => {
@@ -164,7 +164,7 @@ export class DrizzleManagedExecutionAdapter implements ManagedExecutionPort {
         .select()
         .from(executionRequests)
         .where(
-          eq(executionRequests.idempotencyKey, claim.binding.idempotencyKey)
+          eq(executionRequests.idempotencyKey, claim.binding.idempotencyKey),
         )
         .for("update");
       const now = await serverNow(tx);
@@ -194,7 +194,7 @@ export class DrizzleManagedExecutionAdapter implements ManagedExecutionPort {
     input: {
       acceptedInputKey?: string;
       resolve: (prior?: CanonicalRunResult) => CanonicalRunResult;
-    }
+    },
   ): Promise<ManagedCommitResult> {
     if (
       input.acceptedInputKey &&
@@ -204,7 +204,7 @@ export class DrizzleManagedExecutionAdapter implements ManagedExecutionPort {
     return this.db.transaction(async (tx) => {
       if (input.acceptedInputKey)
         await tx.execute(
-          sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.acceptedInputKey}, 0))`
+          sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.acceptedInputKey}, 0))`,
         );
       const [run] = await tx
         .select()
@@ -216,7 +216,7 @@ export class DrizzleManagedExecutionAdapter implements ManagedExecutionPort {
         .select()
         .from(executionRequests)
         .where(
-          eq(executionRequests.idempotencyKey, claim.binding.idempotencyKey)
+          eq(executionRequests.idempotencyKey, claim.binding.idempotencyKey),
         )
         .for("update");
       if (
@@ -226,11 +226,12 @@ export class DrizzleManagedExecutionAdapter implements ManagedExecutionPort {
         request.claimToken !== claim.token
       )
         return { status: "stale" };
-      if (run.terminalResult)
-        return {
-          status: "cached",
-          result: readCanonicalResult(run.terminalResult),
-        };
+      if (run.terminalResult) {
+        const cached = replay(run, claim.binding);
+        if (cached.status !== "cached")
+          throw new Error("result_binding_mismatch");
+        return cached;
+      }
       const now = await serverNow(tx);
       if (
         request.ok !== null ||
@@ -289,7 +290,7 @@ export class DrizzleManagedExecutionAdapter implements ManagedExecutionPort {
 
   async readOwnedResult(
     runId: string,
-    actorUserId: string
+    actorUserId: string,
   ): Promise<CanonicalRunResult | null> {
     return this.db.transaction(async (tx) => {
       const rows = await tx
@@ -298,12 +299,16 @@ export class DrizzleManagedExecutionAdapter implements ManagedExecutionPort {
         .where(
           and(
             eq(graphRuns.runId, runId),
-            eq(graphRuns.requestedBy, actorUserId)
-          )
+            eq(graphRuns.requestedBy, actorUserId),
+          ),
         );
       if (rows.length !== 1 || !rows[0]?.terminalResult) return null;
       const result = readCanonicalResult(rows[0].terminalResult);
-      return result.audience.actorUserId === actorUserId ? result : null;
+      return result.runId === runId &&
+        result.audience.graphId === rows[0].graphId &&
+        result.audience.actorUserId === actorUserId
+        ? result
+        : null;
     });
   }
 }
