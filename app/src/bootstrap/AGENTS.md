@@ -51,7 +51,7 @@ System setup installers were moved to `scripts/bootstrap/` and are out of scope 
   - `runGovernanceSchedulesSyncJob()` - Job: advisory lock + governance schedule sync via container
   - `getContainer()` - Singleton DI container with logger and config
   - `resetContainer()` - Reset singleton (tests only)
-  - `Container` interface - Ports + logger + config (includes accountsForUser(userId), serviceAccountService, metricsQuery, metricsCapability, repoCapability, toolSource, threadPersistenceForUser(userId), modelCatalog, providerResolver; no usageService)
+  - `Container` interface - Ports + logger + config (includes scheduleRunReader (appDb), accountsForUser(userId), serviceAccountService, metricsQuery, metricsCapability, repoCapability, toolSource, threadPersistenceForUser(userId), modelCatalog, providerResolver; no usageService)
   - `ContainerConfig` interface - Runtime config (unhandledErrorPolicy, rateLimitBypass, DEPLOY_ENVIRONMENT)
   - `resolveIdentityBindingDependencies()` - Identity binding adapter/clock/randomness composition; policy remains in the feature service
   - `UnhandledErrorPolicy` type - `"rethrow" | "respond_500"`

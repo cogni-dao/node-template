@@ -45,6 +45,7 @@ Database client factory and Drizzle adapter implementations for scheduling and l
   - `withTenantScope(db, actorId, fn)` — transaction wrapper setting RLS context
   - `setTenantContext(tx, actorId)` — sets RLS context in existing transaction
   - `Database`, `LoggerLike` — Drizzle client type (includes `$client: Sql` for pool control) and logger interface
+  - `DrizzleScheduleRunReader` — app-role owned schedule metadata reads with immutable-slot pagination
   - `DrizzleScheduleUserAdapter`, `DrizzleScheduleWorkerAdapter` — schedule adapters (split by trust boundary)
   - `DrizzleExecutionGrantUserAdapter`, `DrizzleExecutionGrantWorkerAdapter` — grant adapters (split by trust boundary)
   - `DrizzleExecutionRequestAdapter`, `DrizzleGraphRunAdapter` (canonical), `DrizzleScheduleRunAdapter` (deprecated alias)

@@ -102,6 +102,9 @@ export const EVENT_NAMES = {
 	ADAPTER_OPENAI_DEVICE_AUTH_ERROR: "adapter.openai_device_auth.error",
 
 	// Scheduling Domain
+	SCHEDULE_DETAIL_READ: "schedules.detail_read",
+	SCHEDULE_HISTORY_READ: "schedules.history_read",
+	SCHEDULE_OUTPUT_READ: "schedules.output_read",
 	SCHEDULE_CREDIT_GATE_REJECTED: "schedules.credit_gate_rejected",
 
 	// Governance Domain

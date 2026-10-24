@@ -39,6 +39,7 @@ Pure TypeScript types, port interfaces, and orchestration services for the sched
 ## Public Surface
 
 - **Exports:**
+  - `ScheduleRunReader`, `InvalidScheduleRunCursorError` — caller-owned read-only schedule history and strict cursor validation
   - `ScheduleControlPort` - Vendor-agnostic schedule lifecycle control (create/update/pause/resume/delete/list/describe)
   - `ScheduleUserPort` - User-facing schedule CRUD (callerUserId: UserId)
   - `ExecutionGrantUserPort.ensureGrant` - Idempotent find-or-create grant
