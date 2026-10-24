@@ -588,7 +588,14 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
             publishTerminal: async () => {},
           });
         },
-        publish: (event) => container.runStream.publish(canonical.runId, event),
+        publish: async (event) => {
+          await container.runStream.publish(canonical.runId, event);
+          if (event.type === "done")
+            await container.runStream.expire(
+              canonical.runId,
+              RUN_STREAM_DEFAULT_TTL_SECONDS
+            );
+        },
       });
     };
     const managedResponse = (canonical: CanonicalRunResult) =>
@@ -856,7 +863,14 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
               publishTerminal: async () => {},
             });
           },
-          publish: (event) => container.runStream.publish(runId, event),
+          publish: async (event) => {
+            await container.runStream.publish(runId, event);
+            if (event.type === "done")
+              await container.runStream.expire(
+                runId,
+                RUN_STREAM_DEFAULT_TTL_SECONDS
+              );
+          },
           onDeliveryError: (error) =>
             log.warn({ runId, error }, "Canonical result delivery degraded"),
         });

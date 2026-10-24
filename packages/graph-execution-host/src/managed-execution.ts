@@ -50,7 +50,7 @@ export type ManagedCommitResult =
 export interface ManagedExecutionPort {
   acquire(
     binding: ManagedExecutionBinding,
-    leaseMs: number,
+    leaseMs: number
   ): Promise<ManagedAcquireResult>;
   heartbeat(claim: ManagedExecutionClaim, leaseMs: number): Promise<boolean>;
   commit(
@@ -58,11 +58,11 @@ export interface ManagedExecutionPort {
     input: {
       readonly acceptedInputKey?: string;
       readonly resolve: (prior?: CanonicalRunResult) => CanonicalRunResult;
-    },
+    }
   ): Promise<ManagedCommitResult>;
   readOwnedResult(
     runId: string,
-    actorUserId: string,
+    actorUserId: string
   ): Promise<CanonicalRunResult | null>;
 }
 /** Canonical JSON avoids JSONB key-order differences during replay and presentation checks. */
@@ -70,9 +70,9 @@ export function canonicalJson(value: unknown): string {
   const text = JSON.stringify(value, (_key, v) =>
     v && typeof v === "object" && !Array.isArray(v)
       ? Object.fromEntries(
-          Object.entries(v).sort(([a], [b]) => a.localeCompare(b)),
+          Object.entries(v).sort(([a], [b]) => a.localeCompare(b))
         )
-      : v,
+      : v
   );
   if (text === undefined) throw new Error("result_unavailable");
   return text;
@@ -80,7 +80,7 @@ export function canonicalJson(value: unknown): string {
 export const MAX_CANONICAL_RESULT_BYTES = 32_768;
 export function sameExecutionAudience(
   a: ExecutionAudience,
-  b: ExecutionAudience,
+  b: ExecutionAudience
 ): boolean {
   return (
     a.actorUserId === b.actorUserId &&
@@ -118,7 +118,7 @@ export function readCanonicalResult(value: unknown): CanonicalRunResult {
 export function canonicalTerminal(
   candidate: CanonicalRunResult,
   prior: CanonicalRunResult | undefined,
-  hash: (text: string) => string,
+  hash: (text: string) => string
 ): CanonicalRunResult {
   let result = readCanonicalResult(candidate);
   if (prior) {
@@ -169,9 +169,9 @@ export async function publishCanonicalTerminal(
       event:
         | { type: "text_delta"; delta: string }
         | { type: "assistant_final"; content: string }
-        | { type: "done" },
+        | { type: "done" }
     ) => Promise<void>;
-  },
+  }
 ): Promise<void> {
   if (!result.ok) return;
   const text = canonicalJson(result.structuredOutput);
@@ -239,7 +239,7 @@ export async function completeManagedGraph(input: {
               scope: input.scope,
               audience: input.claim.binding.audience,
               inputIdentity: identity,
-            }),
+            })
           );
         }
       }

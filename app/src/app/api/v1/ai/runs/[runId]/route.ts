@@ -32,12 +32,12 @@ export const GET = wrapRouteHandlerWithLogging<RouteParams>(
     }
     const result = await getContainer().managedExecution.readOwnedResult(
       params.data.runId,
-      user.id,
+      user.id
     );
     if (!result) {
       return NextResponse.json(
         { error: "result_unavailable" },
-        { status: 404 },
+        { status: 404 }
       );
     }
     if (result.ok) {
@@ -48,7 +48,7 @@ export const GET = wrapRouteHandlerWithLogging<RouteParams>(
       if (!parser) {
         return NextResponse.json(
           { error: "result_parser_missing" },
-          { status: 503 },
+          { status: 503 }
         );
       }
       try {
@@ -56,12 +56,12 @@ export const GET = wrapRouteHandlerWithLogging<RouteParams>(
       } catch {
         return NextResponse.json(
           { error: "result_unavailable" },
-          { status: 409 },
+          { status: 409 }
         );
       }
     }
     return NextResponse.json(result, {
       headers: { "Cache-Control": "no-store" },
     });
-  },
+  }
 );
