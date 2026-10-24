@@ -10,7 +10,10 @@
  * @public
  */
 
-import { GOALS_BOOTSTRAP_INSTRUCTION } from "@cogni/knowledge-store";
+import {
+	GOALS_BOOTSTRAP_INSTRUCTION,
+	selectGoverningIndex,
+} from "@cogni/knowledge-store";
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
@@ -100,7 +103,7 @@ describe("knowledge base seeds", () => {
 		).toBe("5b31d2166c819002120bb1c3b88ab1c9fd299510c5a160b1bf7fa3a20a91a914");
 	});
 
-	it("renders the complete starter bundle whole, with no serve-side ceiling (story.5070)", () => {
+	it("preserves complete starter orientation and contract beside canonical governing discovery", () => {
 		const orientation = BASE_KNOWLEDGE_SEEDS.find(
 			({ id }) => id === "cogni-agent-orientation",
 		);
@@ -114,6 +117,7 @@ describe("knowledge base seeds", () => {
 			buildSha: "0".repeat(40),
 			toolingInvariants: SESSION_BOOTSTRAP_INVARIANTS,
 			skillsIndex: [],
+			governingIndex: selectGoverningIndex(BASE_KNOWLEDGE_SEEDS, []),
 			domainPointers: BASE_DOMAIN_SEEDS.map((domain) => ({
 				domain: domain.id,
 				entryCount: 0,

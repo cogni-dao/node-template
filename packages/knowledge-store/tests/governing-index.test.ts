@@ -12,65 +12,53 @@
  */
 import { afterEach, expect, it, vi } from "vitest";
 import { FakeKnowledgeStoreAdapter } from "../src/adapters/fake/index.js";
+import {
+  governingFixture,
+  GOVERNING_FIXTURE_DOMAIN,
+} from "./fixtures/governing-index.js";
+import { selectGoverningIndex } from "../src/domain/governing.js";
 
 afterEach(() => vi.useRealTimers());
 
-it("returns an old rule beyond fifty same-domain rows and excludes evidence, blank triggers and superseded rows", async () => {
-  vi.useFakeTimers();
-  vi.setSystemTime(new Date("2026-10-01T00:00:00Z"));
+it("returns the oldest governing rule beyond 1,000 newer same-shelf rows with exact shared selection and read-only parity", async () => {
+  const { rows, edges } = governingFixture();
   const store = new FakeKnowledgeStoreAdapter();
+  await store.registerDomain({ id: GOVERNING_FIXTURE_DOMAIN, name: "Fixture" });
   await store.registerDomain({ id: "method", name: "Method" });
+  vi.useFakeTimers();
   await store.withWrite(
-    { operationId: "governing-fixture", message: "fixture" },
+    { operationId: "governing-complete", message: "fixture" },
     async (write) => {
-      const add = (id: string, entryType: string, useWhen: string | null) =>
-        write.addKnowledge({
-          id,
-          domain: "method",
-          title: "title",
-          content: "PRIVATE BODY",
-          entryType,
-          useWhen,
-          sourceType: "human",
-        });
-      await add("old-rule", "rule", "  review infrastructure  ");
-      vi.setSystemTime(new Date("2026-10-02T00:00:00Z"));
-      for (let i = 0; i < 55; i++)
-        await add(`evidence-${i}`, "finding", "evidence");
-      await add("blank-guide", "guide", "   ");
-      await add("retired-guide", "guide", "old guidance");
-      await add("new-reference", "reference", "new guidance");
-      await write.addCitation({
-        citingId: "new-reference",
-        citedId: "retired-guide",
-        citationType: "supersedes",
-      });
+      for (const row of rows) {
+        vi.setSystemTime(row.createdAt);
+        await write.addKnowledge(row);
+      }
+      for (const edge of edges) await write.addCitation(edge);
     }
   );
-  const before = store.commitLog.length;
+  const before = JSON.stringify(
+    await Promise.all(rows.map((r) => store.getKnowledge(r.id)))
+  );
+  const commits = store.commitLog.length;
   expect(
-    (await store.listKnowledge("method", { limit: 50 })).some(
-      (r) => r.id === "old-rule"
+    (await store.listKnowledge(GOVERNING_FIXTURE_DOMAIN, { limit: 1000 })).some(
+      (r) => r.id === "gov-old-rule"
     )
   ).toBe(false);
-  expect(await store.listGoverningIndex()).toEqual([
-    {
-      id: "new-reference",
-      domain: "method",
-      entryType: "reference",
-      useWhen: "new guidance",
-    },
-    {
-      id: "old-rule",
-      domain: "method",
-      entryType: "rule",
-      useWhen: "review infrastructure",
-    },
-  ]);
-  expect(store.commitLog).toHaveLength(before);
-  expect(JSON.stringify(await store.listGoverningIndex())).not.toContain(
-    "PRIVATE BODY"
-  );
+  const actual = await store.listGoverningIndex();
+  expect(actual).toEqual(selectGoverningIndex(rows, edges));
+  expect(new Set(actual.map((r) => r.entryType)).size).toBe(7);
+  expect(actual.some((r) => r.id === "gov-old-rule")).toBe(true);
+  expect(
+    actual.some((r) =>
+      ["gov-blank", "gov-null", "gov-retired", "gov-evidence"].includes(r.id)
+    )
+  ).toBe(false);
+  expect(JSON.stringify(actual)).not.toContain("PRIVATE BODY");
+  expect(
+    JSON.stringify(await Promise.all(rows.map((r) => store.getKnowledge(r.id))))
+  ).toBe(before);
+  expect(store.commitLog).toHaveLength(commits);
 });
 
 it.each([

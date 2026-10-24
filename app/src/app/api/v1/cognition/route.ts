@@ -27,9 +27,9 @@
 import {
 	CognitionBundleResponseSchema,
 	type CognitionDomainPointer,
-	type CognitionSkillPointer,
 } from "@cogni/node-contracts";
 import { resolveGoals } from "@cogni/knowledge-store";
+import { loadGoverningCognition } from "@/features/cognition";
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { getContainer } from "@/bootstrap/container";
@@ -81,7 +81,6 @@ export const GET = wrapRouteHandlerWithLogging(
 		const buildSha = serverEnv().APP_BUILD_SHA ?? "unknown";
 		const generatedAt = new Date().toISOString();
 
-		const skillsIndex: CognitionSkillPointer[] = [];
 		const domainPointers: CognitionDomainPointer[] = [];
 		// The current node's orientation entry id, by `<slug>-agent-orientation`
 		// convention — captured during the scan, its excerpt fetched below. A
@@ -117,16 +116,7 @@ export const GET = wrapRouteHandlerWithLogging(
 			}
 		}
 
-		// The canonical cross-domain query owns membership, never the capped orientation scan.
-		const governingIndex = port ? await port.listGoverningIndex() : [];
-		skillsIndex.push(
-			...governingIndex.map((r) => ({
-				id: r.id,
-				domain: r.domain,
-				entryType: r.entryType,
-				title: r.useWhen,
-			})),
-		);
+		const { governingIndex, skillsIndex } = await loadGoverningCognition(port);
 
 		// Direct lookup, not scan-dependent: the scan above is capped at
 		// PER_DOMAIN_LIMIT rows per domain and misses older entries (bug.5280).

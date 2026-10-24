@@ -21,6 +21,11 @@
  * Links: packages/knowledge-store/src/domain/contribution-schemas.ts, packages/knowledge-store/src/adapters/doltgres/contribution-adapter.ts
  */
 
+import { createHash } from "node:crypto";
+import {
+  governingFixture,
+  GOVERNING_FIXTURE_DOMAIN,
+} from "../../../../packages/knowledge-store/tests/fixtures/governing-index.js";
 import { execSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,6 +37,7 @@ import {
   HypothesisMissingEvaluateAtError,
   KnowledgeContributionEditSchema,
   NodeAdminRequiredError,
+  selectGoverningIndex,
 } from "@cogni/knowledge-store";
 import {
   buildDoltgresClient,
@@ -218,54 +224,104 @@ describe("knowledge useWhen patch + q filter (task.5204)", () => {
     if (container) await container.stop();
   });
 
-  it("reads the complete governing index with real-Doltgres/fake parity beyond fifty same-shelf rows", async () => {
-    const domain = "governingproof";
-    const fake = new FakeKnowledgeStoreAdapter();
-    await store.registerDomain({ id: domain, name: "Governing proof" });
-    await fake.registerDomain({ id: domain, name: "Governing proof" });
-    const rows = [
-      {
-        id: "gov-old-rule",
-        entryType: "rule",
-        useWhen: "  review infrastructure  ",
-      },
-      ...Array.from({ length: 55 }, (_, i) => ({
-        id: `gov-evidence-${i}`,
-        entryType: "finding",
-        useWhen: "evidence",
-      })),
-      { id: "gov-blank", entryType: "guide", useWhen: "  " },
-      { id: "gov-retired", entryType: "guide", useWhen: "old situation" },
-      { id: "gov-new", entryType: "reference", useWhen: "new situation" },
-    ];
-    for (const target of [store, fake])
-      await target.withWrite(
-        {
-          operationId: "fixture:governing-parity",
-          message: "governing parity fixture",
+  it("qualifies the oldest rule beyond 1,000 newer same-shelf rows with real-Doltgres/shared/fake parity in an isolated database", async () => {
+    const { rows, edges } = governingFixture();
+    const isolatedDb = "knowledge_governing_qualification";
+    const proofUrl = new URL(dbUrl);
+    proofUrl.pathname = `/${isolatedDb}`;
+    const adminUrl = new URL(dbUrl);
+    adminUrl.pathname = "/postgres";
+    const admin = postgres(adminUrl.toString(), { max: 1 });
+    let proof: Sql | undefined;
+    const digest = (value: unknown) =>
+      createHash("sha256").update(JSON.stringify(value)).digest("hex");
+    try {
+      await admin.unsafe(`CREATE DATABASE ${isolatedDb}`);
+      execSync(`node ${MIGRATE_SCRIPT} ${MIGRATIONS_DIR}`, {
+        env: {
+          ...process.env,
+          DATABASE_URL: proofUrl.toString(),
+          NODE_NAME: "operator",
         },
+        encoding: "utf8",
+        stdio: "pipe",
+      });
+      const proofClient = buildDoltgresClient({
+        connectionString: proofUrl.toString(),
+        max: 1,
+      });
+      proof = proofClient;
+      const quote = (value: string | null | undefined) =>
+        value == null ? "NULL" : `'${value.replace(/'/g, "''")}'`;
+      // Three bounded bulk fixture writes in this disposable DB, never the shared EDO test DB.
+      await proofClient.unsafe(
+        "INSERT INTO domains (id,name) VALUES ('governingproof','Governing proof'),('method','Method')"
+      );
+      await proofClient.unsafe(
+        `INSERT INTO knowledge (id,domain,title,content,entry_type,use_when,source_type,created_at) VALUES ${rows.map((r) => `(${[r.id, r.domain, r.title, r.content, r.entryType, r.useWhen, r.sourceType, r.createdAt.toISOString()].map(quote).join(",")})`).join(",")}`
+      );
+      await proofClient.unsafe(
+        `INSERT INTO citations (id,citing_id,cited_id,citation_type) VALUES ${edges.map((e) => `(${[`${e.citingId}->${e.citedId}:${e.citationType}`, e.citingId, e.citedId, e.citationType].map(quote).join(",")})`).join(",")}`
+      );
+      const qualified = new DoltgresKnowledgeStoreAdapter({ sql: proofClient });
+      const snapshot = () =>
+        proofClient.unsafe("SELECT id,content FROM knowledge ORDER BY id");
+      const before = digest(await snapshot());
+      const mandatoryBefore = digest(
+        await proofClient.unsafe(
+          "SELECT id,content FROM knowledge WHERE id IN ('gov-mission','fresh-node-agent-orientation') ORDER BY id"
+        )
+      );
+      expect(
+        rows.filter((r) => r.id.startsWith("gov-newer-")).length
+      ).toBeGreaterThan(1000);
+      expect(
+        (
+          await qualified.listKnowledge(GOVERNING_FIXTURE_DOMAIN, {
+            limit: 1000,
+          })
+        ).some((r) => r.id === "gov-old-rule")
+      ).toBe(false);
+      const fake = new FakeKnowledgeStoreAdapter();
+      await fake.registerDomain({
+        id: GOVERNING_FIXTURE_DOMAIN,
+        name: "Fixture",
+      });
+      await fake.registerDomain({ id: "method", name: "Method" });
+      await fake.withWrite(
+        { operationId: "fixture:governing-parity", message: "fixture" },
         async (write) => {
-          for (const r of rows)
-            await write.addKnowledge({
-              ...r,
-              domain,
-              title: "not a trigger",
-              content: "PRIVATE BODY",
-              sourceType: "human",
-            });
-          await write.addCitation({
-            citingId: "gov-new",
-            citedId: "gov-retired",
-            citationType: "supersedes",
-          });
+          for (const row of rows) await write.addKnowledge(row);
+          for (const edge of edges) await write.addCitation(edge);
         }
       );
-    const actual = (await store.listGoverningIndex()).filter(
-      (r) => r.domain === domain
-    );
-    expect(actual).toEqual(await fake.listGoverningIndex());
-    expect(actual.map((r) => r.id)).toEqual(["gov-new", "gov-old-rule"]);
-    expect(JSON.stringify(actual)).not.toContain("PRIVATE BODY");
+      const actual = await qualified.listGoverningIndex();
+      const expected = selectGoverningIndex(rows, edges);
+      expect(actual).toEqual(expected);
+      expect(actual).toEqual(await fake.listGoverningIndex());
+      expect(digest(actual)).toBe(digest(expected));
+      expect(actual.some((r) => r.id === "gov-old-rule")).toBe(true);
+      expect(new Set(actual.map((r) => r.entryType)).size).toBe(7);
+      expect(
+        actual.some((r) =>
+          ["gov-blank", "gov-null", "gov-retired", "gov-evidence"].includes(
+            r.id
+          )
+        )
+      ).toBe(false);
+      expect(digest(await snapshot())).toBe(before);
+      expect(
+        digest(
+          await proofClient.unsafe(
+            "SELECT id,content FROM knowledge WHERE id IN ('gov-mission','fresh-node-agent-orientation') ORDER BY id"
+          )
+        )
+      ).toBe(mandatoryBefore);
+    } finally {
+      await proof?.end({ timeout: 5 }).catch(() => undefined);
+      await admin.unsafe(`DROP DATABASE ${isolatedDb}`).catch(() => undefined);
+      await admin.end({ timeout: 5 });
+    }
   });
 
   it("preserves goal admin gates, rejects a changed reviewed head and acknowledges a reaped merged branch", async () => {

@@ -27,7 +27,6 @@ import {
 	type GoalsSection,
 	renderGoalsLines,
 	isGoverningEntryType,
-	GOVERNING_ENTRY_TYPES,
 } from "@cogni/knowledge-store";
 import {
 	OPERATOR_KNOWLEDGE_ORIGIN,
@@ -113,7 +112,7 @@ function governingLines(
 		"",
 		mode === "whole"
 			? `Read chosen entries with \`GET ${origin}/api/v1/knowledge/{id}\` before acting.`
-			: `The governing index exceeds the 64 KiB Markdown budget. ${mode === "method" ? "Only the method shelf is inline. " : ""}Retrieve the complete \`governingIndex\` from this same node: \`GET ${origin}/api/v1/cognition\`. Select shelves with \`GET ${origin}/api/v1/knowledge/index?domain=<shelf>\`; keep ${GOVERNING_ENTRY_TYPES.join(", ")} with nonblank useWhen and no inbound supersedes edge, then read chosen entries.`,
+			: `The governing index exceeds the 64 KiB Markdown budget. ${mode === "method" ? "Only the method shelf is inline. " : ""}Retrieve the complete \`governingIndex\` from this same node: \`GET ${origin}/api/v1/cognition\`. Select the required shelf locally by filtering that already governed array on \`domain\`, then read chosen entries with \`GET ${origin}/api/v1/knowledge/{id}\`. Do not rebuild membership through another endpoint or selector.`,
 		"",
 		"| entry | type | domain | use when |",
 		"| --- | --- | --- | --- |",

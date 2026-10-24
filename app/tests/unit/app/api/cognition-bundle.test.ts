@@ -16,6 +16,12 @@ import {
 	resolveGoals,
 } from "@cogni/knowledge-store";
 import { describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
+import { FakeKnowledgeStoreAdapter } from "@cogni/knowledge-store/adapters/fake";
+import {
+	governingFixture,
+	GOVERNING_FIXTURE_DOMAIN,
+} from "../../../../../packages/knowledge-store/tests/fixtures/governing-index.js";
 import {
 	renderBundleMarkdown,
 	resolveOrientation,
@@ -427,23 +433,52 @@ vi.mock("@/shared/env", () => ({
 	serverEnv: () => ({ APP_BUILD_SHA: "fixture-sha" }),
 }));
 
-it("composes the complete local governing response beyond the capped orientation scan without remote fetch or writes", async () => {
-	const rows = Array.from({ length: 60 }, (_, i) => ({
-		id: `rule-${i}`,
-		domain: "method",
-		entryType: "rule",
-		useWhen: `when ${i}`,
-	}));
-	const list = vi.fn(async () => rows);
-	const read = vi.fn(async () => null);
+it("follows the served oversized same-cognition index beyond 1,000 newer rows with exact trigger hashes and preserved mandatory bytes", async () => {
+	const { rows, edges } = governingFixture();
+	const store = new FakeKnowledgeStoreAdapter();
+	await store.registerDomain({ id: GOVERNING_FIXTURE_DOMAIN, name: "Fixture" });
+	await store.registerDomain({ id: "method", name: "Method" });
+	vi.useFakeTimers();
+	try {
+		await store.withWrite(
+			{ operationId: "governing-cognition", message: "fixture" },
+			async (write) => {
+				for (const row of rows) {
+					vi.setSystemTime(row.createdAt);
+					await write.addKnowledge(row);
+				}
+				for (const edge of edges) await write.addCitation(edge);
+			},
+		);
+	} finally {
+		vi.useRealTimers();
+	}
+	const digest = (value: unknown) =>
+		createHash("sha256").update(JSON.stringify(value)).digest("hex");
+	const bodySnapshot = async () =>
+		Promise.all(rows.map((r) => store.getKnowledge(r.id)));
+	const before = digest(await bodySnapshot());
+	const commits = store.commitLog.length;
+	const orientationRow = await store.getKnowledge(
+		"fresh-node-agent-orientation",
+	);
+	if (!orientationRow) throw new Error("Missing fixture orientation");
+	const orientation = orientationRow.content;
+	const goal = {
+		id: "goal-local",
+		title: "Approved local goal",
+		content: "LOCAL GOAL BYTES",
+		evaluateAt: null,
+	};
+	const expected = await store.listGoverningIndex();
+	const list = vi.fn(() => store.listGoverningIndex());
 	composition.port = {
-		listDomainsFull: async () => [
-			{ id: "method", entryCount: 100, description: null },
-		],
-		listKnowledge: async () => [],
+		listDomainsFull: () => store.listDomainsFull(),
+		listKnowledge: (...args: Parameters<typeof store.listKnowledge>) =>
+			store.listKnowledge(...args),
 		listGoverningIndex: list,
-		getKnowledge: read,
-		listActiveGoals: async () => [],
+		getKnowledge: (id: string) => store.getKnowledge(id),
+		listActiveGoals: async () => [goal],
 	};
 	const fetcher = vi.fn(() => {
 		throw new Error("operator boot fetch forbidden");
@@ -454,25 +489,80 @@ it("composes the complete local governing response beyond the capped orientation
 	try {
 		const { GET } = await import("@/app/api/v1/cognition/route");
 		const handler = GET as unknown as (...args: unknown[]) => Promise<Response>;
-		const response = await handler(
-			{ log: { info: vi.fn(), warn: vi.fn() } },
-			new Request("https://fresh-node.cognidao.org/api/v1/cognition"),
-			{ id: "own-agent" },
+		const request = async (url: string) => {
+			const response = await handler(
+				{ log: { info: vi.fn(), warn: vi.fn() } },
+				new Request(url),
+				{ id: "own-agent" },
+			);
+			expect(response.headers.get("cache-control")).toContain("private");
+			return response.json();
+		};
+		const first = await request(
+			"https://fresh-node.cognidao.org/api/v1/cognition",
 		);
-		const body = await response.json();
-		expect(body.governingIndex).toEqual(rows);
-		expect(body.skillsIndex).toHaveLength(60);
-		expect(body.skillsIndex[59]).toMatchObject({
-			id: "rule-59",
-			title: "when 59",
-		});
-		expect(body.markdown).toContain("rule-59");
-		expect(body.markdown).toContain("node-ai-traces-read");
-		expect(JSON.stringify(body)).not.toContain("private-canonical-sentinel");
-		expect(JSON.stringify(body)).not.toContain("private-legacy-sentinel");
+		expect(first.governingRender.mode).toBe("shelf-pointer");
+		expect(first.governingRender.wholeBytes).toBeGreaterThan(64 * 1024);
+		expect(first.markdown).not.toContain(
+			"https://fresh-node.cognidao.org/api/v1/knowledge/index",
+		);
+		const governingSection = first.markdown
+			.split("## Governing index")[1]
+			.split("## Knowledge domains")[0];
+		const fallback =
+			/GET (https:\/\/fresh-node\.cognidao\.org\/api\/v1\/cognition)/.exec(
+				governingSection,
+			);
+		expect(fallback).not.toBeNull();
+		if (!fallback?.[1])
+			throw new Error("Missing served same-cognition fallback");
+		const followed = await request(fallback[1]);
+		// Follow only the delivered complete array; the shared query has already selected membership.
+		const selected = followed.governingIndex.filter(
+			(r: { domain: string }) => r.domain === GOVERNING_FIXTURE_DOMAIN,
+		);
+		const expectedShelf = expected.filter(
+			(r) => r.domain === GOVERNING_FIXTURE_DOMAIN,
+		);
+		expect(selected).toEqual(expectedShelf);
+		expect(digest(selected)).toBe(digest(expectedShelf));
+		expect(digest(followed.governingIndex)).toBe(digest(expected));
+		expect(selected.some((r: { id: string }) => r.id === "gov-old-rule")).toBe(
+			true,
+		);
+		expect(
+			new Set(selected.map((r: { entryType: string }) => r.entryType)).size,
+		).toBe(7);
+		expect(
+			selected.some((r: { id: string }) =>
+				["gov-blank", "gov-null", "gov-retired", "gov-evidence"].includes(r.id),
+			),
+		).toBe(false);
+		expect(first.skillsIndex).toHaveLength(expected.length);
+		expect(first.skillsIndex[0]).toHaveProperty("title");
+		for (const mandatory of [
+			orientation,
+			goal.content,
+			"Node-owned mission",
+			...SESSION_BOOTSTRAP_INVARIANTS,
+		]) {
+			for (const served of [first, followed]) {
+				const start = served.markdown.indexOf(mandatory);
+				expect(start).toBeGreaterThanOrEqual(0);
+				expect(
+					digest(served.markdown.slice(start, start + mandatory.length)),
+				).toBe(digest(mandatory));
+			}
+		}
+		expect(first.markdown).toContain("node-ai-traces-read");
+		expect(first.markdown).toContain("agent-evaluation-loop");
+		expect(first.markdown).toContain("langfuse-eval-expert");
+		expect(digest(await bodySnapshot())).toBe(before);
+		expect(store.commitLog).toHaveLength(commits);
+		expect(JSON.stringify(first)).not.toContain("private-canonical-sentinel");
+		expect(JSON.stringify(first)).not.toContain("private-legacy-sentinel");
 		expect(fetcher).not.toHaveBeenCalled();
-		expect(list).toHaveBeenCalledOnce();
-		expect(response.headers.get("cache-control")).toContain("private");
+		expect(list).toHaveBeenCalledTimes(2);
 	} finally {
 		vi.unstubAllGlobals();
 		vi.unstubAllEnvs();
