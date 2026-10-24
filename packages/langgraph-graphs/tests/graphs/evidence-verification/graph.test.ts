@@ -344,6 +344,145 @@ describe("evidence verification through the injected runner", () => {
     expect(calls[3]?.messages).toContain("forbids approving");
   });
 
+  it("repairs the exact invalid artifact once and then verifies fresh primary evidence", async () => {
+    const invalid = {
+      ...JSON.parse(proposal()),
+      payload: { decision: "invented", extra: "retain invalid fields" },
+    };
+    const raw = JSON.stringify(invalid, null, 2);
+    const { result, calls, executions } = await exercise({
+      complete(messages, index) {
+        if (index === 0) return text("facts");
+        if (index === 1) return text(raw);
+        const input = JSON.parse(JSON.parse(messages).at(-1).content);
+        if (index === 2) {
+          expect(input.rejectedArtifact).toBe(raw);
+          expect(input.rejectedProposal).toEqual(invalid);
+          expect(input.feedback).toContain("payload");
+          expect(input.feedback).toContain("decision");
+          return text(proposal());
+        }
+        expect(input).not.toHaveProperty("findings");
+        expect(input.evidence[0].value.goals[0].content).toBe(
+          "human approval unresolved"
+        );
+        return text(accept);
+      },
+    });
+    expect(result.structuredOutput).toMatchObject({
+      status: "accepted",
+      revisions: 1,
+    });
+    expect(calls).toHaveLength(4);
+    expect(
+      calls.slice(1).every((c) => c.tools === undefined || c.tools === "[]")
+    ).toBe(true);
+    expect(executions).toEqual([KNOWLEDGE_READ_NAME, GOAL_LIST_NAME]);
+  });
+
+  it.each([
+    "invalid",
+    "verifier",
+  ])("never spends a second revision after schema repair: %s", async (failure) => {
+    const invalid = proposal("invented");
+    const { result, calls } = await exercise({
+      replies: [
+        text("facts"),
+        text(invalid),
+        text(failure === "invalid" ? invalid : proposal()),
+        text(revise),
+      ],
+    });
+    expect(result.structuredOutput).toMatchObject({
+      status: "incomplete",
+      revisions: 1,
+      reason:
+        failure === "invalid"
+          ? "invalid_proposal_schema"
+          : "verification_rejected",
+    });
+    expect(result.structuredOutput).not.toHaveProperty("proposal");
+    expect(calls).toHaveLength(failure === "invalid" ? 3 : 4);
+  });
+
+  it("does not count a revision denied before invocation by the shared budget", async () => {
+    const { result, calls } = await exercise({
+      program: { ...program, limits: { modelCalls: 2 } },
+      replies: [text("facts"), text(proposal("invented"))],
+    });
+    expect(result.structuredOutput).toMatchObject({
+      reason: "model_call_limit",
+      revisions: 0,
+    });
+    expect(calls).toHaveLength(2);
+  });
+
+  it("bounds validation feedback independently of the exact rejected artifact", async () => {
+    const verbose = {
+      ...program,
+      payloadSchema: z.unknown().superRefine((_value, ctx) => {
+        for (let i = 0; i < 30; i++)
+          ctx.addIssue({
+            code: "custom",
+            path: ["field".repeat(100), i],
+            message: "✓".repeat(1000),
+          });
+      }),
+    };
+    const { result, calls } = await exercise({
+      program: verbose,
+      complete(messages, index) {
+        if (index === 0) return text("facts");
+        if (index === 2) {
+          const input = JSON.parse(JSON.parse(messages).at(-1).content);
+          expect(Buffer.byteLength(input.feedback)).toBeLessThanOrEqual(2048);
+          expect(JSON.parse(input.feedback).issues.length).toBeLessThanOrEqual(
+            8
+          );
+          expect(input.rejectedArtifact).toBe(proposal());
+        }
+        return text(proposal());
+      },
+    });
+    expect(result.structuredOutput?.reason).toBe("invalid_proposal_schema");
+    expect(calls).toHaveLength(3);
+  });
+
+  it("deadline after malformed author output prevents a revision without counting one", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    try {
+      const { result, calls } = await exercise({
+        program: { ...program, limits: { deadlineMs: 5 } },
+        complete(_input, index) {
+          if (index === 0) return text("facts");
+          vi.setSystemTime(Date.now() + 5);
+          return text(proposal("invented"));
+        },
+      });
+      expect(result.structuredOutput).toMatchObject({
+        reason: "deadline_or_cancelled",
+        revisions: 0,
+      });
+      expect(calls).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not repair unlisted evidence failures from a program", async () => {
+    const { result, calls } = await exercise({
+      program: {
+        ...program,
+        validate: () => "current_scores_incomplete_or_invalid",
+      },
+    });
+    expect(result.structuredOutput).toMatchObject({
+      reason: "current_scores_incomplete_or_invalid",
+      revisions: 0,
+    });
+    expect(calls).toHaveLength(2);
+  });
+
   it("second rejection remains incomplete and never emits the rejected proposal", async () => {
     const { result, calls } = await exercise({
       replies: [
@@ -493,12 +632,16 @@ describe("evidence verification through the injected runner", () => {
 
   it("rejects invented evidence references before a verifier call", async () => {
     const { result, calls } = await exercise({
-      replies: [text("facts"), text(proposal().replace("e1", "invented"))],
+      replies: [
+        text("facts"),
+        text(proposal().replace("e1", "invented")),
+        text(proposal().replace("e1", "invented")),
+      ],
     });
     expect(result.structuredOutput?.reason).toBe(
       "unsupported_evidence_reference"
     );
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(3);
   });
 
   it("supports a materially different output schema without another factory", async () => {

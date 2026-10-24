@@ -21,14 +21,28 @@ import type { EvidenceProgram } from "../evidence-verification/graph";
 import { MISSION_SCORE_AXES, MISSION_SCORE_RUBRIC } from "./rubric";
 import { WORK_PRIORITIZER_TOOL_IDS } from "./tools";
 
-const Scores = z.custom<WorkItemScores>((value) => {
+const Scores = z.custom<WorkItemScores>().superRefine((value, ctx) => {
   const parsed = parseWorkItemScores(value);
-  return (
-    parsed.ok &&
-    parsed.value !== null &&
-    MISSION_SCORE_AXES.every((axis) => parsed.value?.[axis] !== undefined)
-  );
-}, "Expected canonical scores with all six mission axes");
+  if (!parsed.ok) {
+    for (const issue of parsed.issues)
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [...issue.path],
+        message: issue.message,
+        params: { canonicalCode: issue.code },
+      });
+    return;
+  }
+  for (const axis of MISSION_SCORE_AXES) {
+    if (parsed.value?.[axis] === undefined)
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [axis],
+        message: "Required mission axis; represent unknown as {v:0}",
+        params: { canonicalCode: "required_mission_axis" },
+      });
+  }
+});
 const AxisSupport = z
   .object({
     rationale: z.string().min(1).max(1000),
@@ -73,7 +87,7 @@ const Payload = z
 /** Program policy is code-owned, not an instruction found in a backlog item. */
 export const MISSION_EVIDENCE_PROGRAM: EvidenceProgram = {
   id: "mission-prioritization",
-  version: "2",
+  version: "3",
   requiredSources: [
     { id: "mission-loop-expert", kind: "skill" },
     { id: "dao-goals-design", kind: "reference" },
@@ -83,8 +97,18 @@ export const MISSION_EVIDENCE_PROGRAM: EvidenceProgram = {
   assignment: `Read approved goals and current work items. Propose at most five justified six-axis Evaluation assessments, or a supported no-change result. Evaluate every explicitly requested candidate when there are at most five, including poor goal fits; do not silently skip unsupported candidates. This pilot is strictly read-only. Never write work items, priority, rank, goals or EDO. Host write authorization remains separate from this pilot policy. Investigate the current backlog with core__work_item_query. Preserve every existing extra score axis unchanged in the proposed complete scores object; do not invent axes. Put explanations and receipt IDs in support, never inside scores. Work query summaries/outcomes are bounded excerpts, not full evidence of their claims. ${MISSION_SCORE_RUBRIC}`,
   criteria: `Check every item and revision against primary work-item reads, goal against approved goal IDs, each score against specific support. Check every requested candidate was assessed or explicitly identified as unsupported. URL membership only proves a read, not meaningful support: a generic goal does not establish urgency, dependencies, effort, confidence or autonomy. Missing source contents remain unknown or lower confidence. Reject unsupported high scores, invented urgency, stale revisions and unchanged score/evidence proposals. No-change must follow actual reads. This result is a proposal, never an effect receipt. ${MISSION_SCORE_RUBRIC}`,
   payloadSchema: Payload,
+  repairableValidationErrors: [
+    "no_change_has_proposals",
+    "empty_proposal",
+    "unknown_goal",
+    "item_or_revision_unread",
+    "extra_axes_not_preserved",
+    "unsupported_axis_evidence",
+    "justification_not_independently_read",
+    "unchanged_score_proposal",
+  ],
   payloadDescription:
-    '{items:[{id:string,expectedRevision:number,goalId:string,rationale:string,scores:{goal:{v:0..5,ev?:"https URL"},time:{v,ev?},unblocks:{v,ev?},ease:{v,ev?},confidence:{v,ev?},agent:{v,ev?},...unchanged existing extra axes},support:{goal:{rationale:string,evidenceIds:string[]},time:{rationale,evidenceIds},unblocks:{rationale,evidenceIds},ease:{rationale,evidenceIds},confidence:{rationale,evidenceIds},agent:{rationale,evidenceIds}}}]} (empty items for no_change; scores must satisfy shared canonical validator)',
+    '{items:[{id:string,expectedRevision:number,goalId:string,rationale:string,scores:{goal:{v:0..5,ev?:"https URL"},time:{v,ev?},unblocks:{v,ev?},ease:{v,ev?},confidence:{v,ev?},agent:{v,ev?},...unchanged existing extra axes},support:{goal:{rationale:string,evidenceIds:string[]},time:{rationale,evidenceIds},unblocks:{rationale,evidenceIds},ease:{rationale,evidenceIds},confidence:{rationale,evidenceIds},agent:{rationale,evidenceIds}}}]} (empty items for no_change; scores must satisfy shared canonical validator; all six axes required, unknown is {v:0}, never {}; each support.evidenceIds is nonempty and cites actual inspected receipts even when explaining uncertainty; omit ev when no qualifying independent source was read, never use the scored item URL)',
   initialEvidenceError(evidence) {
     const value = evidence.find((e) => e.tool === GOAL_LIST_NAME)?.value as
       | { goals?: unknown }
