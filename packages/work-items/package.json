@@ -52,8 +52,5 @@
     "vite-tsconfig-paths": "^5.1.4",
     "vitest": "^3.1.4",
     "@cogni-dao/doltgres-admission": "workspace:*"
-  },
-  "bin": {
-    "cogni-workflow": "./bin/cogni-workflow.mjs"
   }
 }

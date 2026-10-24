@@ -15,5 +15,3 @@ next-env.d.ts
 .turbo
 .context
 .cogni/.cognition-cache.md
-
-.cogni/.workflow-session/
