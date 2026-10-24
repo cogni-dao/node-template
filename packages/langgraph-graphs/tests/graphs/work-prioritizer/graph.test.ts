@@ -10,6 +10,7 @@ import {
   WORK_ITEM_QUERY_NAME,
   WORK_ITEM_TRANSITION_NAME,
   workItemQueryContract,
+  workItemSemanticIdentity,
 } from "@cogni/ai-tools";
 import { parseWorkItemScores, type WorkItemScores } from "@cogni/work-items";
 import { describe, expect, it } from "vitest";
@@ -194,13 +195,16 @@ describe("read-only mission program", () => {
       ])
     ),
     { goal: { v: 0 } },
-  ])("delegates malformed canonical score objects and six-axis completeness to schema rejection", (invalid) => {
-    expect(
-      MISSION_EVIDENCE_PROGRAM.payloadSchema.safeParse(
-        proposed({ scores: invalid })
-      ).success
-    ).toBe(false);
-  });
+  ])(
+    "delegates malformed canonical score objects and six-axis completeness to schema rejection",
+    (invalid) => {
+      expect(
+        MISSION_EVIDENCE_PROGRAM.payloadSchema.safeParse(
+          proposed({ scores: invalid })
+        ).success
+      ).toBe(false);
+    }
+  );
 
   it("accepts unknown zero and rejects mutation fields in proposals", () => {
     const p = proposed({ scores: { ...scores, goal: { v: 0 } } });
@@ -250,18 +254,18 @@ describe("read-only mission program", () => {
     ).toBe("unchanged_score_proposal");
   });
 
-  it.each([
-    "https://unread.example/facts",
-    self,
-  ])("rejects unread or self justification %s", (ev) => {
-    expect(
-      MISSION_EVIDENCE_PROGRAM.validate?.(
-        proposed({ scores: { ...scores, goal: { v: 4, ev } } }),
-        evidence,
-        "proposal"
-      )
-    ).toBe("justification_not_independently_read");
-  });
+  it.each(["https://unread.example/facts", self])(
+    "rejects unread or self justification %s",
+    (ev) => {
+      expect(
+        MISSION_EVIDENCE_PROGRAM.validate?.(
+          proposed({ scores: { ...scores, goal: { v: 4, ev } } }),
+          evidence,
+          "proposal"
+        )
+      ).toBe("justification_not_independently_read");
+    }
+  );
 
   it("rejects missing per-axis receipts and unavailable source provenance", () => {
     expect(
@@ -356,7 +360,18 @@ describe("read-only mission program", () => {
     reason: "Observed uncertainty represented honestly",
   });
   async function assess(
-    complete: (input: string, index: number) => string,
+    complete: (
+      input: string,
+      index: number
+    ) =>
+      | string
+      | {
+          toolCalls: {
+            id: string;
+            type: "function";
+            function: { name: string; arguments: string };
+          }[];
+        },
     work = evidence[1].value
   ) {
     const calls: string[] = [];
@@ -365,10 +380,7 @@ describe("read-only mission program", () => {
       createGraph: (opts) =>
         createEvidenceVerificationGraph(opts, {
           ...MISSION_EVIDENCE_PROGRAM,
-          initialReads: [
-            { tool: GOAL_LIST_NAME, args: {} },
-            { tool: WORK_ITEM_QUERY_NAME, args: { ids: ["task.1"] } },
-          ],
+          initialReads: MISSION_EVIDENCE_PROGRAM.initialReads,
         }),
       completionFn: (req) => {
         const input = JSON.stringify(req.messages);
@@ -376,7 +388,10 @@ describe("read-only mission program", () => {
         calls.push(input);
         return {
           stream: (async function* () {})(),
-          final: Promise.resolve({ ok: true as const, content }),
+          final: Promise.resolve({
+            ok: true as const,
+            ...(typeof content === "string" ? { content } : content),
+          }),
         };
       },
       toolContracts: [
@@ -388,7 +403,36 @@ describe("read-only mission program", () => {
         reads.push(name);
         if (name === GOAL_LIST_NAME)
           return { ok: true, value: evidence[0].value };
-        if (name === WORK_ITEM_QUERY_NAME) return { ok: true, value: work };
+        if (name === WORK_ITEM_QUERY_NAME) {
+          const page = work as { items: Record<string, unknown>[] };
+          return {
+            ok: true,
+            value: {
+              ...page,
+              paginationKnown: true,
+              items: await Promise.all(
+                page.items.map(async (row) => {
+                  const full = {
+                    type: "task",
+                    title: "target",
+                    status: "needs_implement",
+                    labels: [],
+                    assignees: [],
+                    updatedAt: "fixture",
+                    ...row,
+                  };
+                  return {
+                    ...full,
+                    semanticIdentity: await workItemSemanticIdentity(
+                      full as Parameters<typeof workItemSemanticIdentity>[0],
+                      { sourceUrl: self }
+                    ),
+                  };
+                })
+              ),
+            },
+          };
+        }
         const id = (args as { id: string }).id;
         return {
           ok: true,
@@ -422,6 +466,58 @@ describe("read-only mission program", () => {
     }
     return { result: await runner.final, calls, reads };
   }
+
+  it("actual factory rereads frozen items without a second capability call", async () => {
+    const { result, calls, reads } = await assess((_input, index) => {
+      if (index === 0)
+        return {
+          toolCalls: [
+            {
+              id: "reread",
+              type: "function",
+              function: {
+                name: WORK_ITEM_QUERY_NAME,
+                arguments: JSON.stringify({ ids: ["task.1"] }),
+              },
+            },
+          ],
+        };
+      if (index === 1) return "Captured facts only";
+      if (index === 2) return unknownProposal(unknownPayload);
+      return verdict;
+    });
+    expect(result.structuredOutput?.status).toBe("accepted");
+    expect(result.inputIdentity?.digest).toMatch(/^[a-f0-9]{64}$/);
+    expect(reads.filter((name) => name === WORK_ITEM_QUERY_NAME)).toHaveLength(
+      1
+    );
+    expect(calls[0]).not.toContain('\\"revision\\"');
+    expect(result.structuredOutput).toMatchObject({
+      proposal: { payload: { items: [{ expectedRevision: 4 }] } },
+    });
+  });
+  it("actual factory refuses a new knowledge dependency before authoring", async () => {
+    const { result, calls, reads } = await assess(() => ({
+      toolCalls: [
+        {
+          id: "outside",
+          type: "function",
+          function: {
+            name: KNOWLEDGE_READ_NAME,
+            arguments: JSON.stringify({ id: "new-source" }),
+          },
+        },
+      ],
+    }));
+    expect(result.structuredOutput).toMatchObject({
+      status: "incomplete",
+      reason: "outside_snapshot",
+    });
+    expect(calls).toHaveLength(1);
+    expect(reads.filter((name) => name === KNOWLEDGE_READ_NAME)).toHaveLength(
+      2
+    );
+  });
 
   it("repairs unknown representation using canonical issue paths and actual inspected receipts", async () => {
     const invalid = proposed({
@@ -463,7 +559,7 @@ describe("read-only mission program", () => {
       return verdict;
     });
     expect(result.structuredOutput).toMatchObject({
-      program: { version: "3" },
+      program: { version: "4" },
       status: "accepted",
       revisions: 1,
       proposal: { payload: unknownPayload },
@@ -478,32 +574,32 @@ describe("read-only mission program", () => {
     ).toBe(true);
   });
 
-  it.each([
-    false,
-    true,
-  ])("self citations require a newly compliant model artifact (leftInvalid=%s)", async (leftInvalid) => {
-    const selfCited = proposed({
-      scores: { ...scores, goal: { v: 4, ev: self } },
-    });
-    const { result, calls } = await assess((input, index) => {
-      if (index === 0) return "facts";
-      if (index === 1) return unknownProposal(selfCited);
-      if (index === 2) {
-        const repair = JSON.parse(JSON.parse(input).at(-1).content);
-        expect(repair.rejectedProposal.payload).toEqual(selfCited);
-        expect(repair.feedback).toContain(
-          "justification_not_independently_read"
-        );
-        return unknownProposal(leftInvalid ? selfCited : unknownPayload);
-      }
-      return verdict;
-    });
-    expect(result.structuredOutput?.status).toBe(
-      leftInvalid ? "incomplete" : "accepted"
-    );
-    expect(result.structuredOutput?.revisions).toBe(1);
-    expect(calls).toHaveLength(leftInvalid ? 3 : 4);
-  });
+  it.each([false, true])(
+    "self citations require a newly compliant model artifact (leftInvalid=%s)",
+    async (leftInvalid) => {
+      const selfCited = proposed({
+        scores: { ...scores, goal: { v: 4, ev: self } },
+      });
+      const { result, calls } = await assess((input, index) => {
+        if (index === 0) return "facts";
+        if (index === 1) return unknownProposal(selfCited);
+        if (index === 2) {
+          const repair = JSON.parse(JSON.parse(input).at(-1).content);
+          expect(repair.rejectedProposal.payload).toEqual(selfCited);
+          expect(repair.feedback).toContain(
+            "justification_not_independently_read"
+          );
+          return unknownProposal(leftInvalid ? selfCited : unknownPayload);
+        }
+        return verdict;
+      });
+      expect(result.structuredOutput?.status).toBe(
+        leftInvalid ? "incomplete" : "accepted"
+      );
+      expect(result.structuredOutput?.revisions).toBe(1);
+      expect(calls).toHaveLength(leftInvalid ? 3 : 4);
+    }
+  );
 
   it("stops when shape repair leaves a self citation, without a second repair or verifier", async () => {
     const invalid = proposed({
@@ -526,33 +622,33 @@ describe("read-only mission program", () => {
     expect(calls).toHaveLength(3);
   });
 
-  it.each([
-    true,
-    false,
-  ])("never repairs incomplete or invalid stored score evidence (truncated=%s)", async (truncated) => {
-    const work = {
-      items: [
-        {
-          id: "task.1",
-          revision: 4,
-          sourceUrl: self,
-          scores: truncated ? scores : { broken: {} },
-          ...(truncated ? { scoresTruncated: true } : {}),
-        },
-      ],
-    };
-    const { result, calls } = await assess(
-      (_input, index) =>
-        index === 0 ? "facts" : unknownProposal(unknownPayload),
-      work
-    );
-    expect(result.structuredOutput).toMatchObject({
-      status: "incomplete",
-      reason: "current_scores_incomplete_or_invalid",
-      revisions: 0,
-    });
-    expect(calls).toHaveLength(2);
-  });
+  it.each([true, false])(
+    "never repairs incomplete or invalid stored score evidence (truncated=%s)",
+    async (truncated) => {
+      const work = {
+        items: [
+          {
+            id: "task.1",
+            revision: 4,
+            sourceUrl: self,
+            scores: truncated ? scores : { broken: {} },
+            ...(truncated ? { scoresTruncated: true } : {}),
+          },
+        ],
+      };
+      const { result, calls } = await assess(
+        (_input, index) =>
+          index === 0 ? "facts" : unknownProposal(unknownPayload),
+        work
+      );
+      expect(result.structuredOutput).toMatchObject({
+        status: "incomplete",
+        reason: "current_scores_incomplete_or_invalid",
+        revisions: 0,
+      });
+      expect(calls).toHaveLength(2);
+    }
+  );
 
   async function queried(stored: WorkItemScores) {
     const tool = createWorkItemQueryImplementation({

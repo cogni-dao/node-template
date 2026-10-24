@@ -47,7 +47,7 @@ Database client factory and Drizzle adapter implementations for scheduling and l
   - `Database`, `LoggerLike` — Drizzle client type (includes `$client: Sql` for pool control) and logger interface
   - `DrizzleScheduleUserAdapter`, `DrizzleScheduleWorkerAdapter` — schedule adapters (split by trust boundary)
   - `DrizzleExecutionGrantUserAdapter`, `DrizzleExecutionGrantWorkerAdapter` — grant adapters (split by trust boundary)
-  - `DrizzleExecutionRequestAdapter`, `DrizzleGraphRunAdapter` (canonical), `DrizzleScheduleRunAdapter` (deprecated alias)
+  - `DrizzleManagedExecutionAdapter` (fenced receiver/result transaction), `DrizzleExecutionRequestAdapter`, `DrizzleGraphRunAdapter` (canonical), `DrizzleScheduleRunAdapter` (deprecated alias)
   - `DrizzleAttributionAdapter` — ledger adapter (shared by app + worker, uses serviceDb/BYPASSRLS). Constructor takes `scopeId`; all epochId-based methods enforce scope via `resolveEpochScoped()`, and settlement lifecycle reads require matching node + scope (SCOPE_GATED_QUERIES).
   - Re-exports from `@cogni/db-schema` (tables, types)
 - **Exports (sub-path `@cogni/db-client/service`):**
@@ -97,3 +97,5 @@ pnpm --filter @cogni/db-client build
 - `createServiceDbClient` is isolated in `./service` sub-path; root barrel does NOT re-export it
 - `Database` type is `ReturnType<typeof buildClient>` — preserves drizzle's `$client` accessor for `reserve()`, `begin()`, etc.
 - `Database` type lives in root only — not exported from `./service`
+
+Managed execution receives serviceDb for receiver transactions and appDb for owner readback through withTenantScope/userActor. It validates persisted schedule/grant/billing/thread binding before acquisition and recognizes only the deployed api:<runId> alias for a verified facade triggerRef reservation. Public readback retains requestedBy equality in addition to RLS.

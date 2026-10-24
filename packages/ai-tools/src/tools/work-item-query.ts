@@ -25,6 +25,62 @@ import type {
 import { readSourceProvenance } from "../source-url";
 import type { BoundTool, ToolContract, ToolImplementation } from "../types";
 
+export const WORK_ITEM_SEMANTIC_VERSION = "work-item-semantic-v1";
+export function semanticJson(value: unknown): string {
+  return JSON.stringify(value, (_key, entry) =>
+    entry && typeof entry === "object" && !Array.isArray(entry)
+      ? Object.fromEntries(
+          Object.entries(entry).sort(([a], [b]) => a.localeCompare(b))
+        )
+      : entry
+  );
+}
+export async function workItemSemanticIdentity(
+  item: WorkItemInfo,
+  provenance: { sourceUrl?: string; sourceUrlUnavailable?: true }
+): Promise<{
+  policyVersion: typeof WORK_ITEM_SEMANTIC_VERSION;
+  digest: string;
+}> {
+  // Enumerate the capability contract; absent values have one representation.
+  const projection = {
+    id: item.id,
+    type: item.type,
+    title: item.title,
+    status: item.status,
+    actor: item.actor ?? null,
+    priority: item.priority ?? null,
+    rank: item.rank ?? null,
+    rankScore: item.rankScore ?? null,
+    summary: item.summary ?? null,
+    outcome: item.outcome ?? null,
+    projectId: item.projectId ?? null,
+    parentId: item.parentId ?? null,
+    estimate: item.estimate ?? null,
+    branch: item.branch ?? null,
+    pr: item.pr ?? null,
+    blockedBy: item.blockedBy ?? null,
+    scores: item.scores ?? null,
+    labels: [...new Set(item.labels)].sort(),
+    assignees: [...item.assignees]
+      .map(({ kind, id }) => ({ kind, id }))
+      .sort((a, b) => semanticJson(a).localeCompare(semanticJson(b))),
+    specRefs: [...new Set(item.specRefs ?? [])].sort(),
+    sourceUrl: provenance.sourceUrl ?? null,
+    sourceUrlUnavailable: provenance.sourceUrlUnavailable === true,
+  };
+  const digest = await globalThis.crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(semanticJson(projection))
+  );
+  return {
+    policyVersion: WORK_ITEM_SEMANTIC_VERSION,
+    digest: Array.from(new Uint8Array(digest), (b) =>
+      b.toString(16).padStart(2, "0")
+    ).join(""),
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Schemas
 // ─────────────────────────────────────────────────────────────────────────────
@@ -88,6 +144,12 @@ export const WorkItemQueryInputSchema = z.object({
 export type WorkItemQueryInput = z.infer<typeof WorkItemQueryInputSchema>;
 
 const WorkItemOutputSchema = z.object({
+  semanticIdentity: z
+    .object({
+      policyVersion: z.literal("work-item-semantic-v1"),
+      digest: z.string().regex(/^[a-f0-9]{64}$/),
+    })
+    .optional(),
   id: z.string(),
   type: z.string(),
   title: z.string(),
@@ -188,6 +250,7 @@ function capScores(scores: NonNullable<WorkItemInfo["scores"]>): {
 export const WorkItemQueryOutputSchema = z.object({
   items: z.array(WorkItemOutputSchema),
   count: z.number(),
+  paginationKnown: z.boolean().optional(),
   /** Present when more results exist; pass back as `cursor`. */
   nextCursor: z.string().optional(),
 });
@@ -220,7 +283,7 @@ export const workItemQueryContract: ToolContract<
   outputSchema: WorkItemQueryOutputSchema,
 
   redact: (output: WorkItemQueryOutput): WorkItemQueryRedacted => output,
-  allowlist: ["items", "count", "nextCursor"] as const,
+  allowlist: ["items", "count", "nextCursor", "paginationKnown"] as const,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -256,39 +319,54 @@ export function createWorkItemQueryImplementation(
       const items = page.items;
 
       return {
-        items: items.map((item) => ({
-          id: item.id,
-          type: item.type,
-          title: item.title,
-          status: item.status,
-          actor: item.actor,
-          priority: item.priority,
-          rank: item.rank,
-          ...(item.rankScore !== undefined && { rankScore: item.rankScore }),
-          summary: truncate(item.summary, WORK_ITEM_QUERY_SUMMARY_MAX_CHARS),
-          projectId: item.projectId,
-          labels: [...item.labels],
-          assignees: item.assignees.map((a) => ({
-            kind: a.kind,
-            id: a.id,
-          })),
-          branch: item.branch,
-          pr: item.pr,
-          blockedBy: item.blockedBy,
-          updatedAt: item.updatedAt,
-          ...readSourceProvenance(deps.nodePublicOrigin, "work/items", item.id),
-          ...(item.revision !== undefined && { revision: item.revision }),
-          ...(item.outcome !== undefined && {
-            outcome: truncate(item.outcome, WORK_ITEM_QUERY_OUTCOME_MAX_CHARS),
-          }),
-          ...(item.estimate !== undefined && { estimate: item.estimate }),
-          ...(item.scores !== undefined && capScores(item.scores)),
-          ...(item.parentId !== undefined && { parentId: item.parentId }),
-          ...(item.specRefs !== undefined && {
-            specRefs: [...item.specRefs],
-          }),
-        })),
+        items: await Promise.all(
+          items.map(async (item) => ({
+            semanticIdentity: await workItemSemanticIdentity(
+              item,
+              readSourceProvenance(deps.nodePublicOrigin, "work/items", item.id)
+            ),
+            id: item.id,
+            type: item.type,
+            title: item.title,
+            status: item.status,
+            actor: item.actor,
+            priority: item.priority,
+            rank: item.rank,
+            ...(item.rankScore !== undefined && { rankScore: item.rankScore }),
+            summary: truncate(item.summary, WORK_ITEM_QUERY_SUMMARY_MAX_CHARS),
+            projectId: item.projectId,
+            labels: [...item.labels],
+            assignees: item.assignees.map((a) => ({
+              kind: a.kind,
+              id: a.id,
+            })),
+            branch: item.branch,
+            pr: item.pr,
+            blockedBy: item.blockedBy,
+            updatedAt: item.updatedAt,
+            ...readSourceProvenance(
+              deps.nodePublicOrigin,
+              "work/items",
+              item.id
+            ),
+            ...(item.revision !== undefined && { revision: item.revision }),
+            ...(item.outcome !== undefined && {
+              outcome: truncate(
+                item.outcome,
+                WORK_ITEM_QUERY_OUTCOME_MAX_CHARS
+              ),
+            }),
+            ...(item.estimate !== undefined && { estimate: item.estimate }),
+            ...(item.scores !== undefined && capScores(item.scores)),
+            ...(item.parentId !== undefined && { parentId: item.parentId }),
+            ...(item.specRefs !== undefined && {
+              specRefs: [...item.specRefs],
+            }),
+          }))
+        ),
         count: items.length,
+        paginationKnown:
+          typeof deps.workItemCapability.queryPage === "function",
         ...(page.nextCursor !== undefined && { nextCursor: page.nextCursor }),
       };
     },

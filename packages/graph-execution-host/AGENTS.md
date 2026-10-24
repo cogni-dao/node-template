@@ -40,6 +40,7 @@ PURE_LIBRARY package providing graph execution decorator infrastructure — bill
 ## Public Surface
 
 - **Exports:** BillingEnrichmentGraphExecutorDecorator, UsageCommitDecorator, ObservabilityGraphExecutorDecorator, PreflightCreditCheckDecorator, NamespaceGraphRouter
+- **Canonical execution:** `ManagedExecutionPort`, bounded `CanonicalRunResult`, `canonicalTerminal` admission and `publishCanonicalTerminal` presentation. SQL, identity and migrations remain node-owned; provisional text never reaches terminal presentation.
 - **Port types:** LoggerPort, TracingPort, BillingIdentity, CommitUsageFactFn, PreflightCreditCheckFn, PlatformCreditChecker, GetTraceIdFn, CreateTraceWithIOParams, ObservabilityDecoratorConfig
 
 ## Responsibilities

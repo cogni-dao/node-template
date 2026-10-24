@@ -88,6 +88,7 @@ pnpm --filter @cogni/db-schema build
 
 - Subpath exports enable tree-shaking: consumers import only needed slices
 - `refs.ts` defines FK target tables shared across all slices
+- Graph runs retain bounded canonical terminal results and unique accepted-input identities. Execution requests bind one run row and a per-acquisition claim token; deleting a run nulls its request binding without enabling terminal replay execution.
 - Schedule tables support Temporal migration (execution_requests for idempotency)
 - `billing.ts` includes `llmChargeDetails` (1:1 with charge_receipts, PK/FK cascade) for model/tokens/provider/latency/graphId
 - `charge_receipts.receipt_kind` distinguishes receipt types (e.g. "llm")

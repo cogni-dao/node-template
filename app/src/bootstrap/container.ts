@@ -12,6 +12,7 @@
  * @public
  */
 
+import type { ManagedExecutionPort } from "@cogni/graph-execution-host";
 import type { ToolSourcePort } from "@cogni/ai-core";
 import type {
 	EdoCapability,
@@ -91,6 +92,7 @@ import {
 	DrizzleExecutionGrantUserAdapter,
 	DrizzleExecutionGrantWorkerAdapter,
 	DrizzleExecutionRequestAdapter,
+	DrizzleManagedExecutionAdapter,
 	DrizzleGovernanceStatusAdapter,
 	DrizzleGraphRunAdapter,
 	DrizzleScheduleUserAdapter,
@@ -235,6 +237,7 @@ export interface Container {
 	executionGrantPort: ExecutionGrantUserPort;
 	executionGrantWorkerPort: ExecutionGrantWorkerPort;
 	executionRequestPort: ExecutionRequestPort;
+	managedExecution: ManagedExecutionPort;
 	graphRunRepository: GraphRunRepository;
 	scheduleManager: ScheduleUserPort;
 	/** Metrics capability for AI tools - requires PROMETHEUS_URL to be configured */
@@ -1031,6 +1034,7 @@ function createContainer(): Container {
 		executionGrantPort,
 		executionGrantWorkerPort,
 		executionRequestPort,
+		managedExecution: new DrizzleManagedExecutionAdapter(serviceDb, db),
 		graphRunRepository,
 		scheduleManager,
 		metricsCapability,

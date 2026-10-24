@@ -89,8 +89,8 @@ export {
   getToolIds,
   hasToolId,
   TOOL_CATALOG,
-  VCS_TOOL_BUNDLE,
   type ToolCatalog,
+  VCS_TOOL_BUNDLE,
 } from "./catalog";
 // Runtime adapter
 export { contractToRuntime, toBoundToolRuntime } from "./runtime-adapter";
@@ -370,7 +370,9 @@ export {
 } from "./tools/web-search";
 export {
   createWorkItemQueryImplementation,
+  semanticJson,
   WORK_ITEM_QUERY_NAME,
+  WORK_ITEM_SEMANTIC_VERSION,
   type WorkItemQueryDeps,
   type WorkItemQueryInput,
   WorkItemQueryInputSchema,
@@ -380,6 +382,7 @@ export {
   workItemQueryBoundTool,
   workItemQueryContract,
   workItemQueryStubImplementation,
+  workItemSemanticIdentity,
 } from "./tools/work-item-query";
 export {
   createWorkItemTransitionImplementation,

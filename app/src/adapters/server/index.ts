@@ -19,6 +19,7 @@ export {
   DrizzleExecutionGrantWorkerAdapter,
   DrizzleExecutionRequestAdapter,
   DrizzleGraphRunAdapter,
+  DrizzleManagedExecutionAdapter,
   DrizzleScheduleUserAdapter,
   DrizzleScheduleWorkerAdapter,
   type LoggerLike,
