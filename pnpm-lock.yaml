@@ -105,6 +105,9 @@ importers:
       '@cogni/ingestion-core':
         specifier: workspace:*
         version: link:../packages/ingestion-core
+      '@cogni/knowledge-base':
+        specifier: workspace:@cogni-dao/knowledge-base@*
+        version: link:../packages/knowledge-base
       '@cogni/knowledge-base-ui':
         specifier: workspace:@cogni-dao/knowledge-base-ui@*
         version: link:../packages/knowledge-base-ui

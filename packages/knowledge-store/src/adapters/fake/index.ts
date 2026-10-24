@@ -12,6 +12,11 @@
  */
 
 import {
+  type GoverningIndexRow,
+  selectGoverningIndex,
+} from "../../domain/governing.js";
+
+import {
   initializeConfidence,
   isConfidenceExempt,
   recomputeConfidence as recomputeConfidenceByPolicy,
@@ -60,7 +65,7 @@ import {
   type KnowledgeStorePort,
   KnowledgeWriteScopeRequiredError,
   type KnowledgeWriteSession,
-  type NewDomain
+  type NewDomain,
 } from "../../port/knowledge-store.port.js";
 
 // ---------------------------------------------------------------------------
@@ -176,6 +181,14 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
       (a, b) => (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0)
     );
     return opts?.limit ? out.slice(0, opts.limit) : out;
+  }
+
+  async listGoverningIndex(): Promise<GoverningIndexRow[]> {
+    // Same selector as the Doltgres adapter (GOVERNING_SET_DEFINED_ONCE).
+    return selectGoverningIndex(
+      Array.from(this.rows.values()),
+      Array.from(this.edges.values())
+    );
   }
 
   async listActiveGoals(): Promise<ActiveGoal[]> {
