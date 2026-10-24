@@ -18,6 +18,9 @@ export const EVENT_NAMES = {
   DB_POOL_CONFIGURED: "adapter.db_pool.configured",
   // Auth perimeter (proxy): request rejected before reaching any route handler,
   // so the request-scoped logger never sees it — emitted directly from the proxy.
+  AI_RESULT_COMMITTED: "ai.result.committed",
+  AI_RESULT_REPLAYED: "ai.result.replayed",
+  AI_RESULT_CLAIM_LOST: "ai.result.claim_lost",
   AUTH_PERIMETER_DENIED: "auth.perimeter.denied",
 } as const;
 

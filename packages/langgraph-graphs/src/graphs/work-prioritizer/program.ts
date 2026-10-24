@@ -17,7 +17,11 @@ import {
   type WorkItemScores,
 } from "@cogni/work-items";
 import { z } from "zod";
-import type { EvidenceProgram } from "../evidence-verification/graph";
+import {
+  createEvidenceResultParser,
+  type EvidenceProgram,
+} from "../evidence-verification/graph";
+import { freezeMissionEvidence, MISSION_SELECTION } from "./frozen-evidence";
 import { MISSION_SCORE_AXES, MISSION_SCORE_RUBRIC } from "./rubric";
 import { WORK_PRIORITIZER_TOOL_IDS } from "./tools";
 
@@ -72,7 +76,7 @@ const Payload = z
         z
           .object({
             id: z.string(),
-            expectedRevision: z.number().int().nonnegative(),
+            expectedRevision: z.number().int().nonnegative().optional(),
             goalId: z.string(),
             rationale: z.string().min(1).max(2000),
             scores: Scores,
@@ -87,16 +91,31 @@ const Payload = z
 /** Program policy is code-owned, not an instruction found in a backlog item. */
 export const MISSION_EVIDENCE_PROGRAM: EvidenceProgram = {
   id: "mission-prioritization",
-  version: "3.2",
+  version: "4.2",
+  freezeEvidence: freezeMissionEvidence,
   requiredSources: [
     { id: "mission-loop-expert", kind: "skill" },
     { id: "dao-goals-design", kind: "reference" },
   ],
   readToolIds: WORK_PRIORITIZER_TOOL_IDS,
-  initialReads: [{ tool: GOAL_LIST_NAME, args: {} }],
-  assignment: `Read approved goals and current work items. Propose at most five justified six-axis Evaluation assessments, or a supported no-change result. Evaluate every explicitly requested candidate when there are at most five, including poor goal fits; do not silently skip unsupported candidates. This pilot is strictly read-only. Never write work items, priority, rank, goals or EDO. Host write authorization remains separate from this pilot policy. Investigate the current backlog with core__work_item_query. Preserve every existing extra score axis unchanged in the proposed complete scores object; do not invent axes. Put explanations and receipt IDs in support, never inside scores. Work query summaries/outcomes are bounded excerpts, not full evidence of their claims. ${MISSION_SCORE_RUBRIC}`,
-  criteria: `Check every item and revision against primary work-item reads, goal against approved goal IDs, each score against specific support. Check every explicitly requested candidate was assessed when there are at most five, including poor goal fits, or explicitly identified as unsupported. Preserve every existing extra score axis unchanged; no invented axes. Explanations and receipt IDs belong in support, not scores. Read summaries/outcomes are bounded excerpts, not proof of unseen contents. For every axis, identify the cited primary fact and check that it entails the chosen rubric anchor; valid schema and URL membership alone are insufficient. A goal deadline alone does not establish current cost of delay, and the ban on self URLs as ev does not invalidate directly read item requirements supporting low scores. Revise proposals that confuse either distinction, even when every field and URL is valid. A generic goal does not establish urgency, dependencies, effort, confidence or autonomy. Missing source contents remain unknown or lower confidence. Reject unsupported scores at every nonzero level, including 1–3, invented urgency or effort, stale revisions and unchanged score/evidence proposals. No-change must follow actual reads. This result is a proposal, never an effect receipt. ${MISSION_SCORE_RUBRIC}`,
+  initialReads: [
+    { tool: GOAL_LIST_NAME, args: {} },
+    { tool: WORK_ITEM_QUERY_NAME, args: MISSION_SELECTION },
+  ],
+  assignment: `Read approved goals and current work items. Propose at most five justified six-axis Evaluation assessments, or a supported no-change result. Evaluate every explicitly requested candidate when there are at most five, including poor goal fits; do not silently skip unsupported candidates. This pilot is strictly read-only. Never write work items, priority, rank, goals or EDO. Host write authorization remains separate from this pilot policy. The host already captured the first five work items in priority/rank/created/id order. Scope is only this bounded selection, not the full backlog. You may reread exactly core__work_item_query {"limit":5}, or selected IDs with {"ids":[...]}; other queries, pagination, new knowledge and current-time reads are forbidden and terminate the run. Required guidance and goals are frozen too. deadlineState is the sole current-time evidence. Do not invent revisions: the host attaches expectedRevision after verification. Preserve every existing extra score axis unchanged in the proposed complete scores object; do not invent axes. Put explanations and receipt IDs in support, never inside scores. Work query summaries/outcomes are bounded excerpts, not full evidence of their claims. ${MISSION_SCORE_RUBRIC}`,
+  criteria: `Scope is only the host-captured selection, not the full backlog; do not require outside candidates or facts. Required guidance and goals are frozen, deadlineState is the sole current-time evidence, and the host attaches expectedRevision after verification. Check every item against captured primary work-item reads, goal against approved goal IDs, each score against specific support. Check every explicitly requested candidate was assessed when there are at most five, including poor goal fits, or explicitly identified as unsupported. Preserve every existing extra score axis unchanged; no invented axes. Explanations and receipt IDs belong in support, not scores. Read summaries/outcomes are bounded excerpts, not proof of unseen contents. For every axis, identify the cited primary fact and check that it entails the chosen rubric anchor; valid schema and URL membership alone are insufficient. A goal deadline alone does not establish current cost of delay, and the ban on self URLs as ev does not invalidate directly read item requirements supporting low scores. Revise proposals that confuse either distinction, even when every field and URL is valid. A generic goal does not establish urgency, dependencies, effort, confidence or autonomy. Missing source contents remain unknown or lower confidence. Reject unsupported scores at every nonzero level, including 1–3, invented urgency or effort, uncaptured facts and unchanged score/evidence proposals. No-change must follow actual reads. This result is a proposal, never an effect receipt. ${MISSION_SCORE_RUBRIC}`,
   payloadSchema: Payload,
+  resultPayloadSchema: z
+    .object({
+      items: z
+        .array(
+          Payload.shape.items.element.extend({
+            expectedRevision: z.number().int().nonnegative(),
+          })
+        )
+        .max(5),
+    })
+    .strict(),
   repairableValidationErrors: [
     "no_change_has_proposals",
     "empty_proposal",
@@ -109,7 +128,7 @@ export const MISSION_EVIDENCE_PROGRAM: EvidenceProgram = {
     "unchanged_score_proposal",
   ],
   payloadDescription:
-    '{items:[{id:string,expectedRevision:number,goalId:string,rationale:string,scores:{goal:{v:0..5,ev?:"https URL"},time:{v,ev?},unblocks:{v,ev?},ease:{v,ev?},confidence:{v,ev?},agent:{v,ev?},...unchanged existing extra axes},support:{goal:{rationale:string,evidenceIds:string[]},time:{rationale,evidenceIds},unblocks:{rationale,evidenceIds},ease:{rationale,evidenceIds},confidence:{rationale,evidenceIds},agent:{rationale,evidenceIds}}}]} (empty items for no_change; scores must satisfy shared canonical validator; all six axes required, unknown is {v:0}, never {}; each support.evidenceIds is nonempty and cites actual inspected receipts even when explaining uncertainty; omit ev when no qualifying independent source was read, never use the scored item URL)',
+    '{items:[{id:string,goalId:string,rationale:string,scores:{goal:{v:0..5,ev?:"https URL"},time:{v,ev?},unblocks:{v,ev?},ease:{v,ev?},confidence:{v,ev?},agent:{v,ev?},...unchanged existing extra axes},support:{goal:{rationale:string,evidenceIds:string[]},time:{rationale,evidenceIds},unblocks:{rationale,evidenceIds},ease:{rationale,evidenceIds},confidence:{rationale,evidenceIds},agent:{rationale,evidenceIds}}}]} (empty items for no_change; scores must satisfy shared canonical validator; all six axes required, unknown is {v:0}, never {}; each support.evidenceIds is nonempty and cites actual inspected receipts even when explaining uncertainty; omit ev when no qualifying independent source was read, never use the scored item URL)',
   initialEvidenceError(evidence) {
     const value = evidence.find((e) => e.tool === GOAL_LIST_NAME)?.value as
       | { goals?: unknown }
@@ -144,7 +163,11 @@ export const MISSION_EVIDENCE_PROGRAM: EvidenceProgram = {
       if (!goals.goals.some((g) => g.id === proposed.goalId))
         return "unknown_goal";
       const current = items.find(
-        (i) => i.id === proposed.id && i.revision === proposed.expectedRevision
+        (i) =>
+          i.id === proposed.id &&
+          (i.revision === undefined ||
+            proposed.expectedRevision === undefined ||
+            i.revision === proposed.expectedRevision)
       );
       if (!current) return "item_or_revision_unread";
       const oldParsed = parseWorkItemScores(current.scores ?? null);
@@ -208,3 +231,7 @@ export const MISSION_EVIDENCE_PROGRAM: EvidenceProgram = {
       return "work_items_unread";
   },
 };
+
+export const parseMissionEvidenceResult = createEvidenceResultParser(
+  MISSION_EVIDENCE_PROGRAM
+);

@@ -14,6 +14,7 @@
  * @public
  */
 
+import { parseMissionEvidenceResult } from "./graphs/work-prioritizer/program";
 import {
   AUTORESEARCH_REGISTRY_SWARM_GRAPH_NAME,
   AUTORESEARCH_SINGLE_LANE_GRAPH_NAME,
@@ -274,6 +275,7 @@ export const NODE_LANGGRAPH_CATALOG = {
     graphFactory: createWorkPrioritizerGraph,
     finalOnly: true,
     resultRequired: true,
+    parseResult: parseMissionEvidenceResult,
     report: { event: "ai.work_prioritizer.cycle" },
   },
 } as const;

@@ -102,3 +102,4 @@ pnpm --filter @cogni/db-client build
 Pool options inject a positive integer `max` and optional `applicationName`. Generic defaults remain 10; owning runtimes choose their aggregate role budgets.
 
 Last reviewed: 2026-10-24 (bug.5529).
+Managed execution receives serviceDb for receiver transactions and appDb for owner readback through withTenantScope/userActor. It validates persisted schedule/grant/billing/thread binding before acquisition and recognizes only the deployed api:<runId> alias for a verified facade triggerRef reservation. Public readback retains requestedBy equality in addition to RLS.

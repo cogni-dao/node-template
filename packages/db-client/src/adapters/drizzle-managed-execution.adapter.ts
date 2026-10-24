@@ -9,12 +9,15 @@
  * Links: https://cognidao.org/work/items/task.5340
  * @public
  */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { billingAccounts } from "@cogni/db-schema/refs";
 import {
+  executionGrants,
   executionRequests,
   graphRuns,
   schedules,
 } from "@cogni/db-schema/scheduling";
+import { toUserId, userActor } from "@cogni/ids";
 import {
   type CanonicalRunResult,
   type ManagedAcquireResult,
@@ -27,6 +30,7 @@ import {
 } from "@cogni-dao/graph-execution";
 import { and, eq, sql } from "drizzle-orm";
 import type { Database } from "../client";
+import { withTenantScope } from "../tenant-scope";
 
 type Tx = Parameters<Parameters<Database["transaction"]>[0]>[0];
 type RunRow = typeof graphRuns.$inferSelect;
@@ -46,16 +50,60 @@ function leaseDuration(ms: number): number {
 async function ownerMatches(
   tx: Tx,
   run: RunRow,
-  actorUserId: string
+  binding: ManagedExecutionBinding
 ): Promise<boolean> {
-  if (run.requestedBy !== null) return run.requestedBy === actorUserId;
-  if (!run.scheduleId) return false;
-  const [schedule] = await tx
-    .select({ owner: schedules.ownerUserId })
-    .from(schedules)
-    .where(eq(schedules.id, run.scheduleId));
-  return schedule?.owner === actorUserId;
+  const { audience } = binding;
+  if (run.requestedBy !== null && run.requestedBy !== audience.actorUserId)
+    return false;
+  if (run.scheduleId) {
+    const [bound] = await tx
+      .select({ schedule: schedules, grant: executionGrants })
+      .from(schedules)
+      .innerJoin(
+        executionGrants,
+        eq(schedules.executionGrantId, executionGrants.id)
+      )
+      .where(eq(schedules.id, run.scheduleId));
+    if (
+      !bound ||
+      bound.schedule.executionGrantId !== audience.executionGrantId ||
+      bound.schedule.graphId !== audience.graphId ||
+      bound.schedule.ownerUserId !== audience.actorUserId ||
+      bound.grant.userId !== audience.actorUserId ||
+      bound.grant.billingAccountId !== audience.billingAccountId
+    )
+      return false;
+    const stableId = bound.schedule.temporalScheduleId ?? bound.schedule.id;
+    const prefix = `${stableId}:`;
+    if (
+      !binding.idempotencyKey.startsWith(prefix) ||
+      !run.scheduledFor ||
+      Date.parse(binding.idempotencyKey.slice(prefix.length)) !==
+        run.scheduledFor.getTime()
+    )
+      return false;
+    const stateKey = createHash("sha256")
+      .update(binding.idempotencyKey)
+      .digest("hex");
+    return (
+      binding.stateKey === stateKey &&
+      (run.stateKey === null || run.stateKey === stateKey)
+    );
+  }
+  if (
+    audience.executionGrantId !== null ||
+    run.requestedBy !== audience.actorUserId ||
+    (run.triggerRef !== null && run.triggerRef !== binding.idempotencyKey) ||
+    run.stateKey !== (binding.stateKey ?? null)
+  )
+    return false;
+  const [account] = await tx
+    .select({ owner: billingAccounts.ownerUserId })
+    .from(billingAccounts)
+    .where(eq(billingAccounts.id, audience.billingAccountId));
+  return account?.owner === audience.actorUserId;
 }
+
 function replay(
   run: RunRow,
   binding: ManagedExecutionBinding
@@ -75,7 +123,10 @@ function replay(
   return { status: "cached", result };
 }
 export class DrizzleManagedExecutionAdapter implements ManagedExecutionPort {
-  constructor(private readonly db: Database) {}
+  constructor(
+    private readonly db: Database,
+    private readonly readDb: Database
+  ) {}
 
   async acquire(
     binding: ManagedExecutionBinding,
@@ -90,9 +141,29 @@ export class DrizzleManagedExecutionAdapter implements ManagedExecutionPort {
         .for("update");
       const run = runs[0];
       if (runs.length !== 1 || !run) return { status: "unavailable" };
+      // Deployed Temporal transport uses api:<runId>; facade custody is triggerRef.
+      // Recognize only that exact alias and converge on the persisted reservation.
+      if (!run.scheduleId && run.triggerRef) {
+        if (
+          binding.idempotencyKey !== run.triggerRef &&
+          binding.idempotencyKey !== `api:${run.runId}`
+        )
+          return { status: "mismatch" };
+        const [reservation] = await tx
+          .select()
+          .from(executionRequests)
+          .where(eq(executionRequests.idempotencyKey, run.triggerRef));
+        if (
+          !reservation ||
+          reservation.runId !== binding.runId ||
+          reservation.requestHash !== binding.requestHash
+        )
+          return { status: "unavailable" };
+        binding = { ...binding, idempotencyKey: run.triggerRef };
+      }
       if (
         run.graphId !== binding.audience.graphId ||
-        !(await ownerMatches(tx, run, binding.audience.actorUserId))
+        !(await ownerMatches(tx, run, binding))
       )
         return { status: "denied" };
       const [bound] = await tx
@@ -136,6 +207,12 @@ export class DrizzleManagedExecutionAdapter implements ManagedExecutionPort {
       const now = await serverNow(tx);
       if (request.leaseExpiresAt && request.leaseExpiresAt > now)
         return { status: "pending" };
+      if (run.scheduleId && run.stateKey === null && binding.stateKey) {
+        await tx
+          .update(graphRuns)
+          .set({ stateKey: binding.stateKey })
+          .where(eq(graphRuns.id, run.id));
+      }
       const token = randomUUID();
       await tx
         .update(executionRequests)
@@ -237,6 +314,8 @@ export class DrizzleManagedExecutionAdapter implements ManagedExecutionPort {
           throw new Error("result_binding_mismatch");
         return cached;
       }
+      if (!(await ownerMatches(tx, run, claim.binding)))
+        return { status: "stale" };
       const now = await serverNow(tx);
       if (
         request.ok !== null ||
@@ -254,6 +333,7 @@ export class DrizzleManagedExecutionAdapter implements ManagedExecutionPort {
       }
       const result = readCanonicalResult(input.resolve(prior));
       if (
+        (result.stateKey ?? null) !== (claim.binding.stateKey ?? null) ||
         result.runId !== run.runId ||
         result.audience.graphId !== run.graphId ||
         !sameExecutionAudience(result.audience, claim.binding.audience)
@@ -297,28 +377,32 @@ export class DrizzleManagedExecutionAdapter implements ManagedExecutionPort {
     runId: string,
     actorUserId: string
   ): Promise<CanonicalRunResult | null> {
-    return this.db.transaction(async (tx) => {
-      const rows = await tx
-        .select()
-        .from(graphRuns)
-        .where(
-          and(
-            eq(graphRuns.runId, runId),
-            eq(graphRuns.requestedBy, actorUserId)
-          )
-        );
-      if (rows.length !== 1 || !rows[0]?.terminalResult) return null;
-      let result: CanonicalRunResult;
-      try {
-        result = readCanonicalResult(rows[0].terminalResult);
-      } catch {
-        return null;
+    return withTenantScope(
+      this.readDb,
+      userActor(toUserId(actorUserId)),
+      async (tx) => {
+        const rows = await tx
+          .select()
+          .from(graphRuns)
+          .where(
+            and(
+              eq(graphRuns.runId, runId),
+              eq(graphRuns.requestedBy, actorUserId)
+            )
+          );
+        if (rows.length !== 1 || !rows[0]?.terminalResult) return null;
+        let result: CanonicalRunResult;
+        try {
+          result = readCanonicalResult(rows[0].terminalResult);
+        } catch {
+          return null;
+        }
+        return result.runId === runId &&
+          result.audience.graphId === rows[0].graphId &&
+          result.audience.actorUserId === actorUserId
+          ? result
+          : null;
       }
-      return result.runId === runId &&
-        result.audience.graphId === rows[0].graphId &&
-        result.audience.actorUserId === actorUserId
-        ? result
-        : null;
-    });
+    );
   }
 }

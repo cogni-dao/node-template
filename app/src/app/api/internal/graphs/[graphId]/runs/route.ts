@@ -41,6 +41,7 @@ import {
 import { AnalyticsEvents, capture } from "@cogni/node-shared";
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { completionRequestHash } from "@/app/_lib/ai/completion-identity";
 import {
   persistAssistantThenPublishTerminal,
   TerminalPublicationError,
@@ -67,6 +68,7 @@ import {
   aiChatPersistenceFailuresTotal,
   aiChatPhaseDurationMs,
   aiChatTerminalPublishFailuresTotal,
+  EVENT_NAMES,
 } from "@/shared/observability";
 
 export const dynamic = "force-dynamic";
@@ -494,7 +496,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     // stateKey is derived here (internal API) but graph_runs was created by
     // createGraphRunActivity before this route is called. Patch it so dashboard
     // can link runs to their threads.
-    if (stateKey && executionGrantId) {
+    if (!resultRequired && stateKey && executionGrantId) {
       try {
         await container.graphRunRepository.patchRunStateKey(
           SYSTEM_ACTOR,
@@ -572,6 +574,23 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       "Parsed modelRef for graph execution"
     );
 
+    if (resultRequired && !executionGrantId) {
+      const deliveredHash = completionRequestHash(
+        {
+          graphId,
+          messages: messageDtos,
+          modelRef,
+          ...(stateKey ? { stateKey } : {}),
+        },
+        serverEnv().AUTH_SECRET
+      );
+      if (!suppliedRequestHash || deliveredHash !== suppliedRequestHash)
+        return NextResponse.json(
+          { error: "execution_payload_mismatch" },
+          { status: 422 }
+        );
+    }
+
     const presentManaged = async (canonical: CanonicalRunResult) => {
       if (canonical.ok && parseManagedResult)
         parseManagedResult(canonical.structuredOutput);
@@ -616,6 +635,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
           idempotencyKey,
           requestHash,
           runId,
+          ...(stateKey ? { stateKey } : {}),
           audience: {
             actorUserId,
             billingAccountId,
@@ -645,7 +665,16 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
           );
         }
         log.info(
-          { runId, graphId, reason: "canonical_replay" },
+          {
+            event: EVENT_NAMES.AI_RESULT_REPLAYED,
+            runId,
+            graphId,
+            traceId: acquired.result.traceId,
+            reason: "canonical_replay",
+            resultSha256: createHash("sha256")
+              .update(canonicalJson(acquired.result))
+              .digest("hex"),
+          },
           "Canonical graph result replayed"
         );
         return managedResponse(acquired.result);
@@ -876,7 +905,12 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         });
         if (committed.status === "stale") {
           log.warn(
-            { runId, graphId, reason: "claim_lost" },
+            {
+              event: EVENT_NAMES.AI_RESULT_CLAIM_LOST,
+              runId,
+              graphId,
+              reason: "claim_lost",
+            },
             "Stale graph receiver cannot publish terminal result"
           );
           return NextResponse.json(
@@ -888,7 +922,13 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
           {
             runId,
             graphId,
+            event: EVENT_NAMES.AI_RESULT_COMMITTED,
             reason: committed.status,
+            priorRunId: (
+              committed.result.structuredOutput as
+                | { priorResult?: { runId?: string } }
+                | undefined
+            )?.priorResult?.runId,
             resultSha256: createHash("sha256")
               .update(canonicalJson(committed.result), "utf8")
               .digest("hex"),
