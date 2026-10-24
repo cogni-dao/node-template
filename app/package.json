@@ -37,6 +37,7 @@
     "@cogni/knowledge-base-ui": "workspace:@cogni-dao/knowledge-base-ui@*",
     "@cogni/knowledge-store": "workspace:@cogni-dao/knowledge-store@*",
     "@cogni/langgraph-graphs": "workspace:@cogni-dao/langgraph-graphs@*",
+    "@cogni/money-plane": "workspace:@cogni-dao/money-plane@*",
     "@cogni/node-app": "workspace:*",
     "@cogni/node-contracts": "workspace:*",
     "@cogni/node-core": "workspace:*",
