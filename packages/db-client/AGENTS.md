@@ -41,7 +41,7 @@ Database client factory and Drizzle adapter implementations for scheduling and l
 ## Public Surface
 
 - **Exports (root `@cogni/db-client`):**
-  - `createAppDbClient(url)` — client factory for `app_user` role (RLS enforced)
+  - `createAppDbClient(url, options?)` — client factory for `app_user` role (RLS enforced)
   - `withTenantScope(db, actorId, fn)` — transaction wrapper setting RLS context
   - `setTenantContext(tx, actorId)` — sets RLS context in existing transaction
   - `Database`, `LoggerLike` — Drizzle client type (includes `$client: Sql` for pool control) and logger interface
@@ -51,7 +51,7 @@ Database client factory and Drizzle adapter implementations for scheduling and l
   - `DrizzleAttributionAdapter` — ledger adapter (shared by app + worker, uses serviceDb/BYPASSRLS). Constructor takes `scopeId`; all epochId-based methods enforce scope via `resolveEpochScoped()`, and settlement lifecycle reads require matching node + scope (SCOPE_GATED_QUERIES).
   - Re-exports from `@cogni/db-schema` (tables, types)
 - **Exports (sub-path `@cogni/db-client/service`):**
-  - `createServiceDbClient(url)` — client factory for `app_service` role (BYPASSRLS)
+  - `createServiceDbClient(url, options?)` — client factory for `app_service` role (BYPASSRLS)
 - **Env/Config keys:** none (accepts DATABASE_URL via factory parameter)
 - **Files considered API:** `index.ts` (root), `service.ts` (sub-path)
 
@@ -97,3 +97,7 @@ pnpm --filter @cogni/db-client build
 - `createServiceDbClient` is isolated in `./service` sub-path; root barrel does NOT re-export it
 - `Database` type is `ReturnType<typeof buildClient>` — preserves drizzle's `$client` accessor for `reserve()`, `begin()`, etc.
 - `Database` type lives in root only — not exported from `./service`
+
+Pool options inject a positive integer `max` and optional `applicationName`. Generic defaults remain 10; owning runtimes choose their aggregate role budgets.
+
+Last reviewed: 2026-10-24 (bug.5529).
