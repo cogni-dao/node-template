@@ -1,5 +1,5 @@
 {
-  "id": "ccc9c239-13d2-4020-9743-92443a01422d",
+  "id": "13c1f7a0-045f-4053-9b95-39aaeabf15bd",
   "prevId": "d535996e-aa8d-45ef-b37e-f092593b67a5",
   "version": "7",
   "dialect": "postgresql",
@@ -771,6 +771,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "scores": {
+          "name": "scores",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
         "summary": {
           "name": "summary",
           "type": "text",
@@ -780,6 +786,12 @@
         "outcome": {
           "name": "outcome",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "workflow_run": {
+          "name": "workflow_run",
+          "type": "jsonb",
           "primaryKey": false,
           "notNull": false
         },

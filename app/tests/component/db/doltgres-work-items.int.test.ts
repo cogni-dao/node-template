@@ -104,10 +104,16 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 	});
 
   it("round-trips nested workflow JSONB under creator authorization and revision CAS", async () => {
+    let workflowWriter = postgres(dbUrl, { max: 1, fetch_types: false });
     const readSql = postgres(dbUrl, { max: 1, fetch_types: false });
-    const adapter = new DoltgresWorkItemAdapter(sql, {
+    const adapter = new DoltgresWorkItemAdapter(workflowWriter, {
       logger: stageLogger,
       readClient: readSql,
+      recreateReadClient: () => postgres(dbUrl, { max: 1, fetch_types: false }),
+      recreateClient: () => {
+        workflowWriter = postgres(dbUrl, { max: 1, fetch_types: false });
+        return workflowWriter;
+      },
     });
     const id = toWorkItemId("task.9530");
     const creator = "workflow-creator",
@@ -208,6 +214,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
     } finally {
       // Container-owned fixture is retained; content deletion is retired.
       await readSql.end({ timeout: 0 });
+      await workflowWriter.end({ timeout: 0 });
     }
   }, 120_000);
 

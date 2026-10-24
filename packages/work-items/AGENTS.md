@@ -41,7 +41,6 @@ Work item port interfaces, domain types, and storage adapters for structured wor
 
 ## Public Surface
 
-- **CLI:** `cogni-workflow next|record ITEM --node-url ORIGIN`; NODE key/origin pairs stay in one source; a partial saved file never borrows inherited values. `session-start` reads an advisory native-session projection; server responses own guidance and progress.
 - **Exports (root `@cogni/work-items`):**
   - `WorkItemId`, `Revision`, `WorkItemType`, `WorkItemStatus`, `ActorKind` — identity and enum types
   - `SubjectRef`, `ExternalRef`, `RelationType`, `WorkRelation` — structured domain types

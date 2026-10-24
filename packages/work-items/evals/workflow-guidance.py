@@ -24,22 +24,57 @@ def fingerprint(value):
 def trajectory(sse):
     events = []
     for line in sse.splitlines():
-        if line.startswith('data: ') and line[6:] != '[DONE]':
+        if not line.startswith('data: ') or line[6:] == '[DONE]':
+            continue
+        try:
+            event = json.loads(line[6:])
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(event, dict):
+            return None
+        events.append(event)
+    finishes = [e for e in events if e.get('type') == 'finish']
+    if (len(finishes) != 1 or finishes[0].get('finishReason') != 'stop'
+            or not events or events[-1].get('type') != 'finish'
+            or any(e.get('type') in ('error', 'abort', 'tool-output-error') for e in events)):
+        return None
+    calls = {}
+    for event in events:
+        kind = event.get('type')
+        if kind not in ('tool-input-start', 'tool-input-available', 'tool-output-available'):
+            continue
+        call_id = event.get('toolCallId')
+        if not isinstance(call_id, str) or not call_id:
+            return None
+        call = calls.setdefault(call_id, {'inputs': [], 'outputs': []})
+        if event.get('toolName'):
+            if call.get('name') and call['name'] != event['toolName']:
+                return None
+            call['name'] = event['toolName']
+        if kind == 'tool-input-available':
+            call['inputs'].append(event.get('input'))
+        elif kind == 'tool-output-available':
+            call['outputs'].append(event.get('output'))
+    reads = []
+    for call in calls.values():
+        # Announced but missing/failed IO is incomplete evidence, never a missing-tool failure.
+        if (call.get('name') != 'core__work_item_query'
+                or len(call['inputs']) != 1 or len(call['outputs']) != 1):
+            return None
+        inp, output = call['inputs'][0], call['outputs'][0]
+        if isinstance(output, str):
             try:
-                events.append(json.loads(line[6:]))
+                output = json.loads(output)
             except json.JSONDecodeError:
                 return None
-    if any(e.get('type') in ('error', 'abort', 'tool-output-error') for e in events):
-        return None
-    if not any(e.get('type') == 'finish' for e in events):
-        return None
-    names = {e.get('toolCallId'): e.get('toolName') for e in events
-             if e.get('type') in ('tool-input-start', 'tool-input-available')}
-    inputs = {e.get('toolCallId'): e.get('input') for e in events if e.get('type') == 'tool-input-available'}
-    reads = [(e.get('output'), inputs.get(e.get('toolCallId'))) for e in events
-             if e.get('type') == 'tool-output-available'
-             and names.get(e.get('toolCallId')) == 'core__work_item_query']
-    # Score only final user-visible text, never reasoning or serialized tool IO.
+        if (not isinstance(inp, dict) or not isinstance(output, dict)
+                or output.get('success') is False or 'error' in output
+                or output.get('partial') is True or output.get('truncated') is True):
+            return None
+        meta = output.get('meta', {}).get('cogni', {}) if isinstance(output.get('meta'), dict) else {}
+        if isinstance(meta, dict) and (meta.get('partial') is True or meta.get('truncated') is True):
+            return None
+        reads.append((output, inp))
     text = ''.join(e.get('delta', '') for e in events if e.get('type') == 'text-delta')
     try:
         final = json.loads(text.strip())
@@ -51,51 +86,66 @@ def trajectory(sse):
 def grade(sse, item_id, expected):
     parsed = trajectory(sse)
     if parsed is None:
-        return {'verdict': 'unscorable', 'reason': 'incomplete_or_error_trajectory'}
+        return {'verdict': 'unscorable', 'reason': 'incomplete_error_or_partial_trajectory'}
     reads, final = parsed
     if not reads:
         return {'verdict': 'fail', 'reason': 'no_observed_query'}
-    if any(not isinstance(inp,dict) for _,inp in reads):
-        return {'verdict':'unscorable','reason':'query_input_unavailable'}
-    if not any(inp.get('ids') == [item_id] and inp.get('limit') == 1 for _,inp in reads):
-        return {'verdict':'fail','reason':'wrong_query_scope'}
-    packets = [i.get('nextCheckpoint') for read,inp in reads if isinstance(read, dict) and inp.get('ids') == [item_id]
-               for i in read.get('items', []) if i.get('id') == item_id and i.get('nextCheckpoint')]
-    if not packets:
-        return {'verdict': 'unscorable', 'reason': 'checkpoint_packet_unavailable'}
-    packet = packets[-1]
-    if not isinstance(final, dict):
-        return {'verdict': 'fail', 'reason': 'final_answer_not_json'}
+    if any(inp.get('ids') != [item_id] or inp.get('limit') != 1 for _, inp in reads):
+        return {'verdict': 'fail', 'reason': 'wrong_query_scope'}
+    # The most recent completed query is authoritative. Never fall back to an older packet.
+    items = reads[-1][0].get('items')
+    if not isinstance(items, list) or len(items) != 1 or items[0].get('id') != item_id:
+        return {'verdict': 'unscorable', 'reason': 'current_item_unavailable'}
+    packet = items[0].get('nextCheckpoint')
+    if not isinstance(packet, dict):
+        return {'verdict': 'unscorable', 'reason': 'current_checkpoint_unavailable'}
+    if not isinstance(final, dict) or not isinstance(final.get('evidence'), dict):
+        return {'verdict': 'fail', 'reason': 'final_answer_not_proposal'}
     same = (final.get('itemId') == item_id
             and final.get('checkpointId') == packet.get('checkpointId')
             and final.get('definitionHash') == packet.get('definitionHash')
+            and type(final.get('expectedRevision')) is int
             and final.get('expectedRevision') == packet.get('expectedRevision'))
     matched = (same and final.get('decision') == expected['decision']
                and final.get('evidence') == expected.get('evidence', {}))
     return {'verdict': 'pass' if matched else 'fail', 'reason': 'exact_choice' if matched else 'wrong_choice_or_stale_packet',
             'checkpointId': packet.get('checkpointId'), 'definitionHash': packet.get('definitionHash'),
             'packetFingerprint': fingerprint(packet), 'answerFingerprint': fingerprint(final),
-            'observedQueryCount': len(reads)}
+            'observedQueryCount': len(reads), 'proposal': final}
 
 
 def controls():
     packet = {'workflowId':'cicd-v1','checkpointId':'review_ci','definitionHash':'a'*64,'expectedRevision':2}
     answer = {'itemId':'task.1','checkpointId':'review_ci','definitionHash':'a'*64,'expectedRevision':2,
               'decision':'HOLD','evidence':{},'reason':'missing CI'}
-    def stream(content, output=True, terminal=True):
-        events = [{'type':'tool-input-start','toolCallId':'q','toolName':'core__work_item_query'}, {'type':'tool-input-available','toolCallId':'q','toolName':'core__work_item_query','input':{'ids':['task.1'],'limit':1}}]
-        if output: events.append({'type':'tool-output-available','toolCallId':'q','output':{'items':[{'id':'task.1','nextCheckpoint':packet}]}})
-        events.extend([{'type':'reasoning-delta','delta':json.dumps(answer)}, {'type':'text-delta','delta':content}])
-        if terminal: events.append({'type':'finish'})
+    def query(call_id='q', output=True, value=None):
+        events=[{'type':'tool-input-start','toolCallId':call_id,'toolName':'core__work_item_query'},
+                {'type':'tool-input-available','toolCallId':call_id,'toolName':'core__work_item_query','input':{'ids':['task.1'],'limit':1}}]
+        if output: events.append({'type':'tool-output-available','toolCallId':call_id,'output':value or {'items':[{'id':'task.1','nextCheckpoint':packet}]}})
+        return events
+    def stream(content, reads=None, finish='stop', terminal=True):
+        events=query() if reads is None else reads
+        events=events+[{'type':'reasoning-delta','delta':json.dumps(answer)}, {'type':'text-delta','delta':content}]
+        if terminal: events.append({'type':'finish','finishReason':finish})
         return '\n'.join('data: '+json.dumps(e) for e in events)
-    expected={'decision':'HOLD'}
-    assert grade(stream(json.dumps(answer)), 'task.1', expected)['verdict']=='pass'
-    assert grade(stream('unsupported prose'), 'task.1', expected)['verdict']=='fail'
-    assert grade(stream(json.dumps(answer),output=False), 'task.1', expected)['verdict']=='fail'
-    assert grade(stream(json.dumps(answer),terminal=False), 'task.1', expected)['verdict']=='unscorable'
-    wrong={**answer,'decision':'COMPLETE'}
-    assert grade(stream(json.dumps(wrong)), 'task.1', expected)['verdict']=='fail'
-    return 5
+    expected={'decision':'HOLD'}; count=0
+    def check(sse, verdict):
+        nonlocal count
+        assert grade(sse,'task.1',expected)['verdict']==verdict
+        count+=1
+    check(stream(json.dumps(answer)), 'pass')
+    check(stream('unsupported prose'), 'fail')
+    check(stream(json.dumps(answer),reads=[]), 'fail')
+    check(stream(json.dumps(answer),reads=query(output=False)), 'unscorable')
+    check(stream(json.dumps(answer),terminal=False), 'unscorable')
+    check(stream(json.dumps({**answer,'decision':'COMPLETE'})), 'fail')
+    for reason in ['length','content-filter','error','tool-calls','other',None]:
+        check(stream(json.dumps(answer),finish=reason), 'unscorable')
+    check(stream(json.dumps(answer),reads=query()+query('late',output=False)), 'unscorable')
+    check(stream(json.dumps(answer),reads=query()+query('late',value={'error':'unavailable'})), 'unscorable')
+    check(stream(json.dumps(answer),reads=query(value={'items':[{'id':'task.1','nextCheckpoint':packet}],'partial':True})), 'unscorable')
+    check(stream(json.dumps(answer),reads=query()+query('late',value={'items':[{'id':'task.1','nextCheckpoint':{**packet,'expectedRevision':3}}]})), 'fail')
+    return count
 
 
 class NoRedirect(U.HTTPRedirectHandler):
@@ -157,7 +207,7 @@ def main():
         result['latencySeconds']=round(time.monotonic()-began,2)
         card['cases'].append(result)
         Path(args.out).write_text(json.dumps(card,indent=2)+'\n')
-        print(json.dumps(result),flush=True)
+        print(json.dumps({k:v for k,v in result.items() if k != "proposal"}),flush=True)
     after=json.loads(request('/version')[0]).get('buildSha')
     card['buildStable']=after==card['buildSha'];Path(args.out).write_text(json.dumps(card,indent=2)+'\n')
     if not card['buildStable'] or any(x['verdict']=='unscorable' for x in card['cases']):return 2

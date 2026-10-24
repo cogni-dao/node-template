@@ -1,1 +1,1 @@
-ALTER TABLE "work_items" DROP COLUMN "scores";
+ALTER TABLE "work_items" ADD COLUMN "workflow_run" jsonb;

@@ -20,6 +20,7 @@ import {
   WorkItemLeaseConflictError,
   WorkItemNotFoundError,
   WorkItemsBackendNotReadyError,
+  WorkItemWriteOutcomeUnknownError,
 } from "@/app/_facades/work/items.server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
@@ -119,6 +120,11 @@ export const POST = wrapRouteHandlerWithLogging<{
       checkpointId = result.item.workflowRun?.checkpointId ?? "complete";
       return respond(result, 200);
     } catch (error) {
+      if (error instanceof WorkItemWriteOutcomeUnknownError) {
+        return respond({ error: error.code, retryable: false,
+          lookup: error.receipt.lookup, message: error.message }, 409,
+          EVENT_NAMES.WORKFLOW_CONFLICT);
+      }
       if (error instanceof WorkflowConflictError)
         return respond(
           { error: error.code },
