@@ -56,6 +56,12 @@ export const GET = wrapRouteHandlerWithLogging<{
           ...(query.data.cursor ? { cursor: query.data.cursor } : {}),
         }
       );
+      const response = NextResponse.json(
+        schedulesHistoryOperation.output.parse(result),
+        {
+          headers: scheduleReadHeaders,
+        }
+      );
       logEvent(ctx.log, EVENT_NAMES.SCHEDULE_HISTORY_READ, {
         reqId: ctx.reqId,
         status: 200,
@@ -65,9 +71,7 @@ export const GET = wrapRouteHandlerWithLogging<{
         scheduleId: params.data.scheduleId,
         count: result.runs.length,
       });
-      return NextResponse.json(schedulesHistoryOperation.output.parse(result), {
-        headers: scheduleReadHeaders,
-      });
+      return response;
     } catch (error) {
       return scheduleReadError(
         error,

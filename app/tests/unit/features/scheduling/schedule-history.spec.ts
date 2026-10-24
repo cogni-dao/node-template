@@ -15,6 +15,7 @@ import type { GraphRun, ScheduleSpec } from "@cogni/scheduler-core";
 import { testApiHandler } from "next-test-api-route-handler";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createScheduleHistoryService } from "@/features/scheduling/services/schedule-history";
+import { EVENT_NAMES } from "@/shared/observability";
 
 const caller = toUserId("11111111-1111-4111-8111-111111111111");
 const schedule: ScheduleSpec = {
@@ -151,16 +152,17 @@ describe("owned schedule history", () => {
 });
 
 const session = vi.hoisted(() => vi.fn());
+const logger = vi.hoisted(() => ({
+  child: vi.fn().mockReturnThis(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
 vi.mock("@/app/_lib/auth/session", () => ({ getSessionUser: session }));
 vi.mock("@/bootstrap/container", () => ({
   getContainer: () => ({
-    log: {
-      child: vi.fn().mockReturnThis(),
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-    },
-    config: { unhandledErrorPolicy: "rethrow" },
+    log: logger,
+    config: { unhandledErrorPolicy: "respond_500" },
     scheduleManager: { getSchedule },
     scheduleRunReader: { listRuns, getRun },
     threadPersistenceForUser,
@@ -220,6 +222,113 @@ describe("schedule history HTTP boundary", () => {
         expect(response.headers.get("cache-control")).toBe("no-store");
         expect(await response.json()).toEqual({ runs: [], nextCursor: null });
         expect(loadThread).not.toHaveBeenCalled();
+      },
+    });
+  });
+  it.each([
+    "history",
+    "detail",
+  ] as const)("rejects invalid %s output without a false success event", async (kind) => {
+    listRuns.mockResolvedValue([run]); // Invalid persisted row UUID.
+    getSchedule.mockResolvedValue({ ...schedule, graphId: null });
+    const appHandler =
+      kind === "history"
+        ? await import("@/app/api/v1/schedules/[scheduleId]/runs/route")
+        : await import("@/app/api/v1/schedules/[scheduleId]/route");
+    await testApiHandler({
+      appHandler,
+      params: { scheduleId: schedule.id },
+      test: async ({ fetch }) => {
+        const response = await fetch();
+        expect(response.status).toBe(500);
+        expect(await response.json()).toEqual({
+          error: "Internal server error",
+        });
+        expect(logger.info).not.toHaveBeenCalledWith(
+          expect.objectContaining({ outcome: "success" }),
+          expect.anything()
+        );
+        expect(logger.error).toHaveBeenCalledWith(
+          expect.objectContaining({ errorCode: "INTERNAL_SERVER_ERROR" }),
+          "request failed"
+        );
+        expect(
+          logger.info.mock.calls.length +
+            logger.warn.mock.calls.length +
+            logger.error.mock.calls.length
+        ).toBe(3);
+      },
+    });
+  });
+  it.each([
+    "history",
+    "output",
+  ] as const)("reports %s storage failure as an error instead of an empty result", async (kind) => {
+    listRuns.mockRejectedValue(new Error("Storage unavailable"));
+    loadThread.mockRejectedValue(new Error("Storage unavailable"));
+    const appHandler =
+      kind === "history"
+        ? await import("@/app/api/v1/schedules/[scheduleId]/runs/route")
+        : await import(
+            "@/app/api/v1/schedules/[scheduleId]/runs/[runId]/route"
+          );
+    await testApiHandler({
+      appHandler,
+      params: { scheduleId: schedule.id, runId: run.runId },
+      test: async ({ fetch }) => {
+        const response = await fetch();
+        expect(response.status).toBe(500);
+        expect(await response.json()).toEqual({
+          error: "Internal server error",
+        });
+        expect(logger.info).not.toHaveBeenCalledWith(
+          expect.objectContaining({ outcome: "success" }),
+          expect.anything()
+        );
+        expect(logger.error).toHaveBeenCalledWith(
+          expect.objectContaining({ errorCode: "INTERNAL_SERVER_ERROR" }),
+          "request failed"
+        );
+        expect(
+          logger.info.mock.calls.length +
+            logger.warn.mock.calls.length +
+            logger.error.mock.calls.length
+        ).toBe(3);
+      },
+    });
+  });
+  it("logs a validated saved output response once", async () => {
+    loadThread.mockResolvedValue([
+      {
+        id: "assistant-run-a",
+        role: "assistant",
+        parts: [{ type: "text", text: "Saved result" }],
+      },
+    ]);
+    const appHandler = await import(
+      "@/app/api/v1/schedules/[scheduleId]/runs/[runId]/route"
+    );
+    await testApiHandler({
+      appHandler,
+      params: { scheduleId: schedule.id, runId: run.runId },
+      test: async ({ fetch }) => {
+        const response = await fetch();
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual({
+          availability: "available",
+          text: "Saved result",
+        });
+        expect(logger.info).toHaveBeenCalledWith(
+          expect.objectContaining({
+            event: EVENT_NAMES.SCHEDULE_OUTPUT_READ,
+            availability: "available",
+            outcome: "success",
+            status: 200,
+          }),
+          EVENT_NAMES.SCHEDULE_OUTPUT_READ
+        );
+        expect(logger.info).toHaveBeenCalledTimes(3);
+        expect(logger.error).not.toHaveBeenCalled();
       },
     });
   });

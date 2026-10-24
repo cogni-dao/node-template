@@ -30,7 +30,13 @@ import {
   fetchScheduleOutput,
 } from "../_api/readHistory";
 import { updateSchedule } from "../_api/updateSchedule";
-import { agentLabel, cadence, runTime, schedulePrompt } from "../presentation";
+import {
+  agentLabel,
+  cadence,
+  runTime,
+  scheduleModel,
+  schedulePrompt,
+} from "../presentation";
 
 const STATUS_LABELS = {
   pending: "Waiting",
@@ -68,11 +74,12 @@ function RunRow({
             <Badge intent={failed ? "destructive" : "secondary"} size="sm">
               {STATUS_LABELS[run.status]}
             </Badge>
-            {run.completedAt ? (
-              <span>Finished {runTime(run.completedAt, timezone)}</span>
-            ) : run.startedAt ? (
+            {run.startedAt && (
               <span>Started {runTime(run.startedAt, timezone)}</span>
-            ) : null}
+            )}
+            {run.completedAt && (
+              <span>Finished {runTime(run.completedAt, timezone)}</span>
+            )}
           </div>
         </div>
         <Button
@@ -147,9 +154,9 @@ export function ScheduleDetailView({ scheduleId }: { scheduleId: string }) {
   });
   const toggle = useMutation({
     mutationFn: updateSchedule,
-    onSuccess: () => {
+    onSuccess: (updated) => {
+      client.setQueryData(["schedule", updated.id], updated);
       void client.invalidateQueries({ queryKey: ["schedules"] });
-      void client.invalidateQueries({ queryKey: ["schedule", scheduleId] });
     },
   });
   const remove = useMutation({
@@ -238,6 +245,9 @@ export function ScheduleDetailView({ scheduleId }: { scheduleId: string }) {
             <summary className="cursor-pointer font-medium text-sm">
               Scheduled instructions
             </summary>
+            <p className="mt-3 break-words text-muted-foreground text-sm">
+              Model: {scheduleModel(current.input)}
+            </p>
             <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-7">
               {schedulePrompt(current.input) ||
                 "No prompt was provided for this schedule."}

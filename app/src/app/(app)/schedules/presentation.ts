@@ -44,6 +44,25 @@ export function schedulePrompt(input: Record<string, unknown>): string {
   );
   return typeof message?.content === "string" ? message.content : "";
 }
+export function scheduleModel(input: Record<string, unknown>): string {
+  const ref = input.modelRef;
+  if (
+    ref &&
+    typeof ref === "object" &&
+    "modelId" in ref &&
+    typeof ref.modelId === "string" &&
+    ref.modelId
+  ) {
+    const provider =
+      "providerKey" in ref && typeof ref.providerKey === "string"
+        ? ref.providerKey
+        : "";
+    return provider ? `${ref.modelId} · ${provider}` : ref.modelId;
+  }
+  return typeof input.model === "string" && input.model
+    ? input.model
+    : "Not specified";
+}
 export function agentLabel(graphId: string) {
   return graphId.split(":").at(-1) ?? graphId;
 }

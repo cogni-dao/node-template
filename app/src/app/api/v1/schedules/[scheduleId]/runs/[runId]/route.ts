@@ -48,6 +48,12 @@ export const GET = wrapRouteHandlerWithLogging<{
         scheduleId,
         runId
       );
+      const response = NextResponse.json(
+        schedulesOutputOperation.output.parse(result),
+        {
+          headers: scheduleReadHeaders,
+        }
+      );
       logEvent(ctx.log, EVENT_NAMES.SCHEDULE_OUTPUT_READ, {
         reqId: ctx.reqId,
         status: 200,
@@ -58,9 +64,7 @@ export const GET = wrapRouteHandlerWithLogging<{
         runId,
         availability: result.availability,
       });
-      return NextResponse.json(schedulesOutputOperation.output.parse(result), {
-        headers: scheduleReadHeaders,
-      });
+      return response;
     } catch (error) {
       return scheduleReadError(
         error,

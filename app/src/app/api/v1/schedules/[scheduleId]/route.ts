@@ -240,6 +240,10 @@ export const GET = wrapRouteHandlerWithLogging<{
         toUserId(sessionUser.id),
         params.data.scheduleId
       );
+      const response = NextResponse.json(
+        schedulesGetOperation.output.parse(toResponse(schedule)),
+        { headers: scheduleReadHeaders }
+      );
       logEvent(ctx.log, EVENT_NAMES.SCHEDULE_DETAIL_READ, {
         reqId: ctx.reqId,
         status: 200,
@@ -248,10 +252,7 @@ export const GET = wrapRouteHandlerWithLogging<{
         routeId: "schedules.detail",
         scheduleId: schedule.id,
       });
-      return NextResponse.json(
-        schedulesGetOperation.output.parse(toResponse(schedule)),
-        { headers: scheduleReadHeaders }
-      );
+      return response;
     } catch (error) {
       return scheduleReadError(
         error,

@@ -32,7 +32,8 @@ export function SchedulesView() {
   });
   const toggle = useMutation({
     mutationFn: updateSchedule,
-    onSuccess: () => {
+    onSuccess: (updated) => {
+      client.setQueryData(["schedule", updated.id], updated);
       void client.invalidateQueries({ queryKey: ["schedules"] });
     },
   });
