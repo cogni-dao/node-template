@@ -53,6 +53,7 @@ import type {
   LlmToolDefinition,
   Message,
 } from "@/ports";
+import { getNodeId } from "@/shared/config/repoSpec.server";
 import { EVENT_NAMES, makeLogger } from "@/shared/observability";
 
 import type { CompletionUnitParams } from "../inproc-completion-unit.adapter";
@@ -85,6 +86,7 @@ interface ProviderCatalogEntry {
   readonly toolIds: readonly string[];
   readonly mcpServerIds?: readonly string[];
   readonly graphFactory: CreateGraphFn;
+  readonly finalOnly?: boolean;
   readonly systemPrompt?: string;
   /** Graph-owned run report to log + echo on the stream (CatalogEntry.report). */
   readonly report?: GraphReportDecl;
@@ -276,6 +278,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
         "00000000000000000000000000000000";
       const runnerRequest: InProcGraphRequest = {
         runId,
+        nodeId: getNodeId(),
         messages: messages as InProcGraphRequest["messages"],
         ...(scope.abortSignal !== undefined && {
           abortSignal: scope.abortSignal,
@@ -287,6 +290,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
 
       const runner = createInProcGraphRunner({
         createGraph: entry.graphFactory,
+        ...(entry.finalOnly ? { finalOnly: true } : {}),
         completionFn,
         createToolExecFn,
         toolContracts,
@@ -339,7 +343,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
       }
       for await (const event of inner.stream) {
         // CatalogEntry.report: echo the telemetry as one text delta just before `done`.
-        if (event.type === "done" && report) {
+        if (event.type === "done" && report && !entry.finalOnly) {
           const delta = graphReportDelta((await inner.final).structuredOutput);
           if (delta) yield { type: "text_delta" as const, delta };
         }

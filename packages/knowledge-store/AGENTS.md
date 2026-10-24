@@ -43,6 +43,7 @@ Shared ports, contribution workflow, and adapters for versioned domain knowledge
 
 **Root barrel** (`@cogni/knowledge-store`):
 
+- `createKnowledgeCapability` preserves entryType/useWhen in read DTOs alongside exact content and provenance; consumers compute their own source receipts.
 - Types: `KnowledgeStorePort`, `KnowledgeWriteSession` (closed callback scope), `Knowledge`, `NewKnowledge`, `DoltCommit`, `DoltDiffEntry`, `SourceType`
 - Schemas: `KnowledgeSchema`, `NewKnowledgeSchema`, `DoltCommitSchema`, `DoltDiffEntrySchema`, `SourceTypeSchema`
 - Goal layer (story.5101): `KnowledgeStorePort.listActiveGoals()` (required port method, NO_GOAL_CAP), `ActiveGoal`, `GOAL_ENTRY_TYPE`, `GOAL_ID_PREFIX`, `GOAL_RETIRING_EDGE`, `isGoalRowId`, `selectActiveGoals`, `resolveGoals`, `renderGoalsLines`, `GOALS_BOOTSTRAP_INSTRUCTION`, `GoalsSection`, `GoalRequiresContributionError` (direct writes never touch goals), `createKnowledgeCapability(...).listActiveGoals` (for `core__goal_list`)

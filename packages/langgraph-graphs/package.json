@@ -1,6 +1,6 @@
 {
   "name": "@cogni-dao/langgraph-graphs",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "license": "LicenseRef-PolyForm-Shield-1.0.0",
   "repository": {
     "type": "git",
@@ -54,7 +54,8 @@
   },
   "peerDependencies": {
     "@cogni/ai-core": "*",
-    "@cogni/ai-tools": ">=0.1.1"
+    "@cogni/ai-tools": ">=0.1.2",
+    "@cogni/work-items": ">=0.2.4"
   },
   "devDependencies": {
     "@cogni/ai-core": "workspace:*",
@@ -63,6 +64,7 @@
     "tsup": "^8.5.1",
     "typescript": "^5",
     "vite-tsconfig-paths": "^5.1.4",
-    "vitest": "^3.1.4"
+    "vitest": "^3.1.4",
+    "@cogni/work-items": "workspace:@cogni-dao/work-items@*"
   }
 }

@@ -22,7 +22,13 @@ import { runInScope } from "@/adapters/server/ai/execution-scope";
 import type { CompletionUnitAdapter } from "@/adapters/server/ai/langgraph/inproc.provider";
 import { LangGraphInProcProvider } from "@/adapters/server/ai/langgraph/inproc.provider";
 import type { GraphRunRequest } from "@/ports";
+import { getNodeId } from "@/shared/config/repoSpec.server";
 import { EVENT_NAMES } from "@/shared/observability";
+
+// Unit wiring uses host-owned identity without reading deployment env or repo files.
+vi.mock("@/shared/config/repoSpec.server", () => ({
+  getNodeId: vi.fn(() => "11111111-1111-4111-8111-111111111111"),
+}));
 
 const TEST_SCOPE = {
   billing: {
@@ -150,6 +156,8 @@ describe("LangGraphInProcProvider", () => {
         const events = await collectEvents(stream);
         const result = await final;
 
+        // Identity comes from the trusted host config before model invocation.
+        expect(getNodeId).toHaveBeenCalledOnce();
         // Adapter should be called
         expect(mockAdapter.executeCompletionUnit).toHaveBeenCalled();
 
