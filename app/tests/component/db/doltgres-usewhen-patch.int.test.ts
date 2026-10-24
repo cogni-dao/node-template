@@ -39,6 +39,7 @@ import {
   DoltgresKnowledgeContributionAdapter,
   DoltgresKnowledgeStoreAdapter,
 } from "@cogni/knowledge-store/adapters/doltgres";
+import { FakeKnowledgeStoreAdapter } from "@cogni/knowledge-store/adapters/fake";
 import postgres, { type Sql } from "postgres";
 import {
   GenericContainer,
@@ -215,6 +216,56 @@ describe("knowledge useWhen patch + q filter (task.5204)", () => {
     await readClient?.end({ timeout: 5 }).catch(() => undefined);
     await branchClient?.end({ timeout: 5 }).catch(() => undefined);
     if (container) await container.stop();
+  });
+
+  it("reads the complete governing index with real-Doltgres/fake parity beyond fifty same-shelf rows", async () => {
+    const domain = "governingproof";
+    const fake = new FakeKnowledgeStoreAdapter();
+    await store.registerDomain({ id: domain, name: "Governing proof" });
+    await fake.registerDomain({ id: domain, name: "Governing proof" });
+    const rows = [
+      {
+        id: "gov-old-rule",
+        entryType: "rule",
+        useWhen: "  review infrastructure  ",
+      },
+      ...Array.from({ length: 55 }, (_, i) => ({
+        id: `gov-evidence-${i}`,
+        entryType: "finding",
+        useWhen: "evidence",
+      })),
+      { id: "gov-blank", entryType: "guide", useWhen: "  " },
+      { id: "gov-retired", entryType: "guide", useWhen: "old situation" },
+      { id: "gov-new", entryType: "reference", useWhen: "new situation" },
+    ];
+    for (const target of [store, fake])
+      await target.withWrite(
+        {
+          operationId: "fixture:governing-parity",
+          message: "governing parity fixture",
+        },
+        async (write) => {
+          for (const r of rows)
+            await write.addKnowledge({
+              ...r,
+              domain,
+              title: "not a trigger",
+              content: "PRIVATE BODY",
+              sourceType: "human",
+            });
+          await write.addCitation({
+            citingId: "gov-new",
+            citedId: "gov-retired",
+            citationType: "supersedes",
+          });
+        }
+      );
+    const actual = (await store.listGoverningIndex()).filter(
+      (r) => r.domain === domain
+    );
+    expect(actual).toEqual(await fake.listGoverningIndex());
+    expect(actual.map((r) => r.id)).toEqual(["gov-new", "gov-old-rule"]);
+    expect(JSON.stringify(actual)).not.toContain("PRIVATE BODY");
   });
 
   it("preserves goal admin gates, rejects a changed reviewed head and acknowledges a reaped merged branch", async () => {

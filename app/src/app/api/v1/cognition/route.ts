@@ -37,9 +37,8 @@ import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { getNodeMission, getNodeName } from "@/shared/config";
 import { serverEnv } from "@/shared/env";
 import {
-	isCognitionEntry,
 	type OrientationEntry,
-	renderBundleMarkdown,
+	renderBundle,
 	resolveOrientation,
 	SESSION_BOOTSTRAP_INVARIANTS,
 } from "./_bundle";
@@ -114,16 +113,20 @@ export const GET = wrapRouteHandlerWithLogging(
 					} else if (!orientationId && r.id.endsWith("-agent-orientation")) {
 						orientationId = r.id;
 					}
-					if (!isCognitionEntry(r.entryType)) continue;
-					skillsIndex.push({
-						id: r.id,
-						title: r.title,
-						entryType: r.entryType ?? "guide",
-						domain: r.domain,
-					});
 				}
 			}
 		}
+
+		// The canonical cross-domain query owns membership, never the capped orientation scan.
+		const governingIndex = port ? await port.listGoverningIndex() : [];
+		skillsIndex.push(
+			...governingIndex.map((r) => ({
+				id: r.id,
+				domain: r.domain,
+				entryType: r.entryType,
+				title: r.useWhen,
+			})),
+		);
 
 		// Direct lookup, not scan-dependent: the scan above is capped at
 		// PER_DOMAIN_LIMIT rows per domain and misses older entries (bug.5280).
@@ -144,7 +147,7 @@ export const GET = wrapRouteHandlerWithLogging(
 			`and your open contribution branch via GET ${origin}/api/v1/knowledge/contributions/{id}/diff. ` +
 			"Refine in place over writing new (REFINE_OVER_EXTEND).";
 
-		const markdown = renderBundleMarkdown({
+		const { markdown, governingRender } = renderBundle({
 			node,
 			name,
 			mission,
@@ -153,6 +156,7 @@ export const GET = wrapRouteHandlerWithLogging(
 			buildSha,
 			toolingInvariants,
 			skillsIndex,
+			governingIndex,
 			domainPointers,
 			orientation,
 			goals,
@@ -163,6 +167,8 @@ export const GET = wrapRouteHandlerWithLogging(
 				node,
 				name,
 				skills: skillsIndex.length,
+				governingMode: governingRender.mode,
+				governingOverBudget: governingRender.overBudget,
 				domains: domainPointers.length,
 				orientation: orientation?.id ?? null,
 				goalsStatus: goals.status,
@@ -182,6 +188,8 @@ export const GET = wrapRouteHandlerWithLogging(
 				generatedAt,
 				toolingInvariants,
 				skillsIndex,
+				governingIndex,
+				governingRender,
 				domainPointers,
 				recallProtocol,
 				markdown,

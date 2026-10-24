@@ -11,8 +11,11 @@
  * @public
  */
 
-import { GOALS_BOOTSTRAP_INSTRUCTION, resolveGoals } from "@cogni/knowledge-store";
-import { describe, expect, it } from "vitest";
+import {
+	GOALS_BOOTSTRAP_INSTRUCTION,
+	resolveGoals,
+} from "@cogni/knowledge-store";
+import { describe, expect, it, vi } from "vitest";
 import {
 	renderBundleMarkdown,
 	resolveOrientation,
@@ -36,6 +39,14 @@ const baseInput = {
 			domain: "infrastructure",
 		},
 	],
+	governingIndex: [
+		{
+			id: "node-launch-handoff",
+			domain: "infrastructure",
+			entryType: "guide",
+			useWhen: "launch a node",
+		},
+	],
 	domainPointers: [
 		{
 			domain: "infrastructure",
@@ -56,12 +67,12 @@ describe("renderBundleMarkdown", () => {
 		expect(heading).toBe("# operator — Cogni Session Cognition");
 		expect(blank).toBe("");
 		expect(subtitle).toBe(
-			"> Coordinate code, deploys, and validation for Cogni nodes. · 1 skills · 1 domains · loaded 2026-06-16 19:31"
+			"> Coordinate code, deploys, and validation for Cogni nodes. · 1 skills · 1 domains · loaded 2026-06-16 19:31",
 		);
 		expect(spacer).toBe(">");
 		expect(delivered).toContain("node `4ff8eac1-4eba-4ed0-931b-b1fe4f64713d`");
 		expect(delivered).toContain(
-			"build `f52036b33ffecdf5244662e673a0d6d174c50150`"
+			"build `f52036b33ffecdf5244662e673a0d6d174c50150`",
 		);
 		expect(heading).not.toContain("f52036b3");
 	});
@@ -69,11 +80,11 @@ describe("renderBundleMarkdown", () => {
 	it("surfaces the derived candidate (flight + validate) URL for the node", () => {
 		// operator is the primary test apex...
 		expect(renderBundleMarkdown(baseInput)).toContain(
-			"https://test.cognidao.org"
+			"https://test.cognidao.org",
 		);
 		// ...every other node is a slugged test host.
 		expect(renderBundleMarkdown({ ...baseInput, name: "poly" })).toContain(
-			"https://poly-test.cognidao.org"
+			"https://poly-test.cognidao.org",
 		);
 	});
 
@@ -126,7 +137,7 @@ describe("renderBundleMarkdown", () => {
 		expect(markdown).not.toContain("for the full context");
 		// Map comes before the constitution.
 		expect(markdown.indexOf("## Orientation — recall this first")).toBeLessThan(
-			markdown.indexOf("## Tooling invariants")
+			markdown.indexOf("## Tooling invariants"),
 		);
 	});
 
@@ -176,7 +187,7 @@ describe("renderBundleMarkdown", () => {
 
 	it("keeps the CICD-sequence invariant free of the watch mechanics it delegates", () => {
 		const cicd = SESSION_BOOTSTRAP_INVARIANTS.find((line) =>
-			line.startsWith("Ship via PR")
+			line.startsWith("Ship via PR"),
 		);
 		// The step order lives in the invariant; the *how to watch* lives in the
 		// <watch-gate> block. The invariant points at it, never duplicates the cmd.
@@ -193,18 +204,15 @@ describe("renderBundleMarkdown", () => {
 	});
 });
 
-describe("bundle growth — large indexes render whole, no serve-side ceiling (story.5070)", () => {
-	// The hub is designed to accumulate: every new skill/guide/playbook adds a row.
-	// Delivery is now uncapped on both runtimes (Codex raw stdout with spill off;
-	// Claude Code structured additionalContext), so the producer no longer enforces
-	// a byte ceiling. The former 16 KB cap (bug.5284) would have rejected this shape
-	// at the source and 500'd /api/v1/cognition; growth must now render whole.
+describe("bundle growth — whole indexes below the Markdown budget (task.5309)", () => {
+	// A realistic index past the former 16 KiB ceiling still fits the reviewed
+	// 64 KiB Markdown budget. Larger indexes use the same-node complete-index
+	// fallback covered below; native harness delivery remains unchanged.
 	function indexOf(rows: number, titleLen: number) {
 		return Array.from({ length: rows }, (_, i) => ({
 			id: `build-compute-entry-${i}`,
-			// A realistic worst-case row: the title carries the bulk of the bytes,
-			// the one field this node's render inlines per skill.
-			title: `Build/compute runtime knowledge entry ${i} — ${"detail ".repeat(titleLen)}`,
+			// Trigger text carries the bulk of each content-free governing row.
+			useWhen: `Build/compute runtime knowledge entry ${i} — ${"detail ".repeat(titleLen)}`,
 			entryType: "guide",
 			domain: "infrastructure",
 		}));
@@ -213,10 +221,10 @@ describe("bundle growth — large indexes render whole, no serve-side ceiling (s
 	it("renders a bundle well past the former 16 KB cap, whole and untruncated", () => {
 		const md = renderBundleMarkdown({
 			...baseInput,
-			skillsIndex: indexOf(80, 40),
+			governingIndex: indexOf(80, 40),
 		});
 		const bytes = new TextEncoder().encode(
-			`${md.replace(/\n+$/, "")}\n`
+			`${md.replace(/\n+$/, "")}\n`,
 		).byteLength;
 		// Past the old ceiling — which would have thrown here.
 		expect(bytes).toBeGreaterThan(16 * 1024);
@@ -238,7 +246,7 @@ describe("resolveOrientation", () => {
 		const result = await resolveOrientation(
 			port({ "operator-agent-orientation": "the map" }),
 			"operator-agent-orientation",
-			null
+			null,
 		);
 		expect(result).toEqual({
 			id: "operator-agent-orientation",
@@ -250,7 +258,7 @@ describe("resolveOrientation", () => {
 		const result = await resolveOrientation(
 			port({ "legacy-agent-orientation": "older map" }),
 			"operator-agent-orientation",
-			"legacy-agent-orientation"
+			"legacy-agent-orientation",
 		);
 		expect(result?.id).toBe("legacy-agent-orientation");
 	});
@@ -259,14 +267,14 @@ describe("resolveOrientation", () => {
 		const seeded = await resolveOrientation(
 			port({ "cogni-agent-orientation": "starter" }),
 			"operator-agent-orientation",
-			null
+			null,
 		);
 		expect(seeded?.id).toBe("cogni-agent-orientation");
 
 		const empty = await resolveOrientation(
 			port({}),
 			"operator-agent-orientation",
-			null
+			null,
 		);
 		expect(empty).toBeNull();
 	});
@@ -274,7 +282,12 @@ describe("resolveOrientation", () => {
 
 describe("Goals section — approved goals right after the orientation (story.5101)", () => {
 	const port = (
-		goals: { id: string; title: string; content: string; evaluateAt: Date | null }[],
+		goals: {
+			id: string;
+			title: string;
+			content: string;
+			evaluateAt: Date | null;
+		}[],
 	) => ({ listActiveGoals: async () => goals });
 
 	it("zero goals renders `no approved goals` plus the bootstrap instruction", async () => {
@@ -309,4 +322,188 @@ describe("Goals section — approved goals right after the orientation (story.51
 		expect(at("the map")).toBeLessThan(at("## Goals"));
 		expect(at("## Goals")).toBeLessThan(at("## Tooling invariants"));
 	});
+});
+
+describe("static platform discovery beside node-owned cognition (task.5309)", () => {
+	it("routes an empty fresh hub to canonical trace/eval authorities without copying bodies", () => {
+		const markdown = renderBundleMarkdown({
+			...baseInput,
+			name: "fresh-node",
+			origin: "https://fresh-node.cognidao.org",
+			skillsIndex: [],
+			domainPointers: [],
+			governingIndex: [],
+		});
+		for (const id of [
+			"node-ai-traces-read",
+			"agent-evaluation-loop",
+			"langfuse-eval-expert",
+		])
+			expect(markdown).toContain(`https://cognidao.org/api/v1/knowledge/${id}`);
+		for (const shelf of [
+			"use-access",
+			"use-ship",
+			"use-operate",
+			"use-govern",
+			"method",
+			"build-agents",
+			"build-health",
+		])
+			expect(markdown).toContain(shelf);
+		expect(markdown).toContain("COGNI_OPERATOR_NODE_API_KEY");
+		expect(markdown).toContain("COGNI_OPERATOR_API_KEY");
+		expect(markdown).toContain("COGNI_NODE_API_KEY");
+		expect(markdown).toContain("/api/v1/agent/me");
+		expect(markdown).toContain("node.flight");
+		expect(markdown).toContain("fresh-node");
+		expect(markdown).not.toContain("Basic ");
+	});
+
+	it("falls back to the same node's complete cognition index while preserving mandatory local bytes", () => {
+		const orientation = `CUSTOM LOCAL MISSION AND OPERATING RULES ${"orientation ".repeat(200)}`;
+		const rows = Array.from({ length: 100 }, (_, i) => ({
+			id: `old-rule-${i}`,
+			domain: "strategy",
+			entryType: "rule",
+			useWhen: `trigger ${i} ${"detail ".repeat(150)}`,
+		}));
+		rows.push({
+			id: "method-rule",
+			domain: "method",
+			entryType: "rule",
+			useWhen: "review a design",
+		});
+		const markdown = renderBundleMarkdown({
+			...baseInput,
+			name: "fresh-node",
+			origin: "https://fresh-node.cognidao.org",
+			governingIndex: rows,
+			orientation: { id: "fresh-node-agent-orientation", content: orientation },
+			goals: {
+				status: "ok",
+				goals: [
+					{
+						id: "goal-local",
+						title: "Local approved goal",
+						content: "LOCAL GOAL BYTES",
+						evaluateAt: null,
+					},
+				],
+			},
+		});
+		expect(markdown).toContain(
+			"GET https://fresh-node.cognidao.org/api/v1/cognition",
+		);
+		expect(markdown).toContain("governingIndex");
+		expect(markdown).toContain("method-rule");
+		expect(markdown).not.toContain("old-rule-99");
+		expect(markdown).toContain(orientation);
+		expect(markdown).toContain("LOCAL GOAL BYTES");
+		expect(markdown).toContain(baseInput.mission);
+		expect(markdown).toContain(baseInput.toolingInvariants[0]);
+		expect(markdown).toContain("node-ai-traces-read");
+		expect(new TextEncoder().encode(markdown).byteLength).toBeLessThanOrEqual(
+			64 * 1024,
+		);
+	});
+});
+
+const composition = vi.hoisted(() => ({ port: undefined as unknown }));
+vi.mock("@/bootstrap/container", () => ({
+	getContainer: () => ({
+		nodeId: "fresh-uuid",
+		knowledgeStorePort: composition.port,
+	}),
+}));
+vi.mock("@/bootstrap/http", () => ({
+	wrapRouteHandlerWithLogging: (_options: unknown, handler: unknown) => handler,
+}));
+vi.mock("@/app/_lib/auth/session", () => ({ getSessionUser: vi.fn() }));
+vi.mock("@/shared/config", () => ({
+	getNodeName: () => "fresh-node",
+	getNodeMission: () => "Node-owned mission",
+}));
+vi.mock("@/shared/env", () => ({
+	serverEnv: () => ({ APP_BUILD_SHA: "fixture-sha" }),
+}));
+
+it("composes the complete local governing response beyond the capped orientation scan without remote fetch or writes", async () => {
+	const rows = Array.from({ length: 60 }, (_, i) => ({
+		id: `rule-${i}`,
+		domain: "method",
+		entryType: "rule",
+		useWhen: `when ${i}`,
+	}));
+	const list = vi.fn(async () => rows);
+	const read = vi.fn(async () => null);
+	composition.port = {
+		listDomainsFull: async () => [
+			{ id: "method", entryCount: 100, description: null },
+		],
+		listKnowledge: async () => [],
+		listGoverningIndex: list,
+		getKnowledge: read,
+		listActiveGoals: async () => [],
+	};
+	const fetcher = vi.fn(() => {
+		throw new Error("operator boot fetch forbidden");
+	});
+	vi.stubGlobal("fetch", fetcher);
+	vi.stubEnv("COGNI_OPERATOR_NODE_API_KEY", "private-canonical-sentinel");
+	vi.stubEnv("COGNI_OPERATOR_API_KEY", "private-legacy-sentinel");
+	try {
+		const { GET } = await import("@/app/api/v1/cognition/route");
+		const handler = GET as unknown as (...args: unknown[]) => Promise<Response>;
+		const response = await handler(
+			{ log: { info: vi.fn(), warn: vi.fn() } },
+			new Request("https://fresh-node.cognidao.org/api/v1/cognition"),
+			{ id: "own-agent" },
+		);
+		const body = await response.json();
+		expect(body.governingIndex).toEqual(rows);
+		expect(body.skillsIndex).toHaveLength(60);
+		expect(body.skillsIndex[59]).toMatchObject({
+			id: "rule-59",
+			title: "when 59",
+		});
+		expect(body.markdown).toContain("rule-59");
+		expect(body.markdown).toContain("node-ai-traces-read");
+		expect(JSON.stringify(body)).not.toContain("private-canonical-sentinel");
+		expect(JSON.stringify(body)).not.toContain("private-legacy-sentinel");
+		expect(fetcher).not.toHaveBeenCalled();
+		expect(list).toHaveBeenCalledOnce();
+		expect(response.headers.get("cache-control")).toContain("private");
+	} finally {
+		vi.unstubAllGlobals();
+		vi.unstubAllEnvs();
+	}
+});
+
+it("serves mandatory local cognition intact with an explicit over-budget condition", async () => {
+	const content = "MANDATORY ".repeat(8000);
+	const { renderBundle } = await import("@/app/api/v1/cognition/_bundle");
+	const result = renderBundle({
+		...baseInput,
+		orientation: { id: "custom", content },
+	});
+	expect(result.markdown).toContain(content);
+	expect(result.markdown).toContain("node-ai-traces-read");
+	expect(result.governingRender.overBudget).toBe(true);
+	expect(result.markdown).toContain("preserved whole");
+});
+
+it("falls back again when the method shelf itself is too large, without losing mandatory guidance", () => {
+	const rows = Array.from({ length: 100 }, (_, i) => ({
+		id: `method-${i}`,
+		domain: "method",
+		entryType: "rule",
+		useWhen: "trigger ".repeat(150),
+	}));
+	const markdown = renderBundleMarkdown({ ...baseInput, governingIndex: rows });
+	expect(new TextEncoder().encode(markdown).byteLength).toBeLessThanOrEqual(
+		64 * 1024,
+	);
+	expect(markdown).not.toContain("method-99");
+	expect(markdown).toContain("governingIndex");
+	expect(markdown).toContain("node-ai-traces-read");
 });

@@ -17,6 +17,12 @@
  */
 
 import {
+  GOVERNING_ENTRY_TYPES,
+  type GoverningIndexRow,
+  selectGoverningIndex,
+} from "../../domain/governing.js";
+
+import {
   DoltBranchMutationUncertainError,
   runDoltBranchMutation,
 } from "@cogni-dao/doltgres-admission";
@@ -59,7 +65,7 @@ import {
   KnowledgeWriteOutcomeUnknownError,
   KnowledgeWriteScopeRequiredError,
   type KnowledgeWriteSession,
-  type NewDomain
+  type NewDomain,
 } from "../../port/knowledge-store.port.js";
 import type {
   DoltBranchSessionRunner,
@@ -364,6 +370,42 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
       }
     }
     return matched;
+  }
+
+  async listGoverningIndex(): Promise<GoverningIndexRow[]> {
+    // Two narrow main-plane reads, no per-domain page (INDEX_BUILT_BY_OWN_QUERY,
+    // bug.5350): the governing-type rows with routing columns only (never
+    // `content`), and the `supersedes` edges. The predicate itself — blank
+    // useWhen, superseded targets — runs once in `selectGoverningIndex`
+    // (GOVERNING_SET_DEFINED_ONCE), the same Doltgres-safe plain-equality idiom
+    // as `listActiveGoals`.
+    const types = GOVERNING_ENTRY_TYPES.map((t) => escapeValue(t)).join(", ");
+    const [rows, edges] = await Promise.all([
+      this.sql.unsafe(
+        `SELECT id, domain, entry_type, use_when FROM knowledge WHERE entry_type IN (${types})`
+      ),
+      this.sql.unsafe(
+        `SELECT cited_id, citation_type FROM citations WHERE citation_type = ${escapeValue("supersedes")}`
+      ),
+    ]);
+    return selectGoverningIndex(
+      rows.map((r) => {
+        const row = r as Record<string, unknown>;
+        return {
+          id: row.id as string,
+          domain: row.domain as string,
+          entryType: row.entry_type as string,
+          useWhen: (row.use_when as string | null) ?? null,
+        };
+      }),
+      edges.map((e) => {
+        const edge = e as Record<string, unknown>;
+        return {
+          citedId: edge.cited_id as string,
+          citationType: edge.citation_type as string,
+        };
+      })
+    );
   }
 
   async listActiveGoals(): Promise<ActiveGoal[]> {
