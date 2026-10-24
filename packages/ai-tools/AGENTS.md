@@ -114,3 +114,5 @@ pnpm --filter @cogni-dao/ai-tools build
 - Per LANGGRAPH_AI.md: tool contracts live here, LangChain `tool()` wrappers in langgraph-graphs
 - Per PACKAGES_NO_SRC_IMPORTS: This package cannot import from `src/**`
 - Package isolation enables LangGraph Server to import tools without Next.js deps
+
+- Exact single-id work_item_query reads may return one bounded nextCheckpoint; backlog pages omit it. Packet fields are preserved, never silently truncated.

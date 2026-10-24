@@ -64,10 +64,10 @@ export * from "./grants.validate.internal.v1.contract";
 export * from "./graph-runs.create.internal.v1.contract";
 export * from "./graph-runs.update.internal.v1.contract";
 export * from "./graphs.run.internal.v1.contract";
-export * from "./identity.attestation.v1.contract";
 // ── HTTP (ts-rest router + OpenAPI) ─────────────────────────────────────────
 export * from "./http/openapi.v1";
 export * from "./http/router.v1";
+export * from "./identity.attestation.v1.contract";
 // ── Knowledge ───────────────────────────────────────────────────────────────
 export * from "./knowledge.contributions.v1.contract";
 export * from "./knowledge.domains.v1.contract";
@@ -103,9 +103,12 @@ export * from "./users.ownership.v1.contract";
 export * from "./users.profile.v1.contract";
 // ── VCS ─────────────────────────────────────────────────────────────────────
 export * from "./vcs.flight.v1.contract";
-export * from "./work.items.create.v1.contract";
 export * from "./work.items.coordination.v1.contract";
+export * from "./work.items.create.v1.contract";
 export * from "./work.items.delete.v1.contract";
 export * from "./work.items.get.v1.contract";
 export * from "./work.items.list.v1.contract";
 export * from "./work.items.patch.v1.contract";
+
+export * from "./work.items.workflow.schema";
+export * from "./work.items.workflow.v1.contract";

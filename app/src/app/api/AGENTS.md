@@ -64,6 +64,7 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
   - `/api/v1/work/items/[id]` [GET, PATCH, DELETE] - read/update a node-local Dolt work item; DELETE returns 410 (use status=cancelled) (SIWE or agent bearer auth)
   - `/api/v1/work/items/[id]/claims` [POST, DELETE] - acquire or release an authenticated principal+run lease
   - `/api/v1/work/items/[id]/heartbeat` [POST] - refresh an authenticated principal+run lease
+  - `/api/v1/work/items/[id]/workflow` [POST] - creator-authorized checkpoint start/completion/head reconciliation; returns one nextCheckpoint
   - `/api/v1/work/items/[id]/coordination` [GET] - read lease and next-action coordination state
   - `/api/v1/knowledge/index` [GET] - content-free retrieval-trigger projection with optional `useWhen` substring filter
   - `/api/v1/agent/register` [POST] - unauthenticated machine actor registration (returns Bearer API key)

@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 /** HTTP parsing, facade delegation, and conflict mapping must preserve revision CAS. */
+import { WorkItemWriteOutcomeUnknownError } from "@cogni/work-items";
 import { WorkItemRevisionConflictError } from "@cogni/work-items/adapters/doltgres";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -11,6 +12,7 @@ vi.mock("@/bootstrap/http", () => ({
 vi.mock("@/app/_lib/auth/session", () => ({ getSessionUser: vi.fn() }));
 vi.mock("@/bootstrap/container", () => ({ getContainer: vi.fn() }));
 
+import { POST as workflowPost } from "@/app/api/v1/work/items/[id]/workflow/route";
 import { PATCH } from "@/app/api/v1/work/items/[id]/route";
 import { getContainer } from "@/bootstrap/container";
 
@@ -124,5 +126,32 @@ describe("work-item revision HTTP boundary", () => {
       set: { summary: "updated" },
     });
     expect(response.status).toBe(503);
+  });
+});
+
+
+describe("workflow HTTP recovery boundary", () => {
+  it("preserves the non-retryable lookup receipt after an uncertain content write", async () => {
+    const uncertain = new WorkItemWriteOutcomeUnknownError("op-uncertain", "work-item-op/uncertain", undefined, item.id);
+    const write = vi.fn().mockRejectedValue(uncertain);
+    vi.mocked(getContainer).mockReturnValue({ doltgresWorkItems: {
+      get: vi.fn().mockResolvedValue({ ...item, revision: 7 }), patch: write,
+    } } as never);
+    const response = await (workflowPost as unknown as Handler)(
+      { log: { info: vi.fn() }, reqId: "workflow-recovery" },
+      new Request("http://localhost/api/v1/work/items/task.0001/workflow", {
+        method: "POST", body: JSON.stringify({ expectedRevision: 7, event: { op: "start", workflowId: "cicd-v1" } }),
+      }), { id: "principal-1" }, { params: Promise.resolve({ id: item.id }) },
+    );
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: uncertain.code, retryable: false, lookup: uncertain.receipt.lookup });
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses workflow state through general PATCH before the content writer", async () => {
+    patch.mockClear();
+    const response = await request({ expectedRevision: 7, set: { workflowRun: {} } });
+    expect(response.status).toBe(400);
+    expect(patch).not.toHaveBeenCalled();
   });
 });

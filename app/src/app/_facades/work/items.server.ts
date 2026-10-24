@@ -13,6 +13,11 @@
  * @internal
  */
 
+import {
+  checkNodeAdmin,
+  isPrivilegedPriority,
+  NodeAdminRequiredError,
+} from "@cogni/knowledge-store";
 import type {
   WorkItemsCreateInput as ContractCreateInput,
   WorkItemsPatchInput as ContractPatchInput,
@@ -20,25 +25,24 @@ import type {
   WorkItemDto,
   WorkItemsListInput,
   WorkItemsListOutput,
+  WorkItemsWorkflowInput,
 } from "@cogni/node-contracts";
+import { WorkflowRunSchema } from "@cogni/node-contracts";
 import type { WorkItem, WorkItemId, WorkItemLease } from "@cogni/work-items";
 import {
+  canonicalJson,
+  WorkItemRevisionConflictError,
+  WorkItemScoresInvalidError,
+  WorkItemWriteOutcomeUnknownError,
   toWorkItemId,
-  WorkItemRevisionConflictError,
-  WorkItemScoresInvalidError,
-  WorkItemWriteOutcomeUnknownError,
+  transitionWorkflow,
+  WorkflowConflictError,
 } from "@cogni/work-items";
-export {
-  WorkItemRevisionConflictError,
-  WorkItemScoresInvalidError,
-  WorkItemWriteOutcomeUnknownError,
-};
-
 import {
-  checkNodeAdmin,
-  isPrivilegedPriority,
-  NodeAdminRequiredError,
-} from "@cogni/knowledge-store";
+  checkpointFor,
+  workflowProfile,
+  sha256,
+} from "@/bootstrap/workflow-guidance";
 import { getContainer } from "@/bootstrap/container";
 
 /**
@@ -56,7 +60,12 @@ export class InvalidCursorError extends Error {
   }
 }
 
-export { NodeAdminRequiredError };
+export {
+  NodeAdminRequiredError,
+  WorkItemRevisionConflictError,
+  WorkItemScoresInvalidError,
+  WorkItemWriteOutcomeUnknownError,
+};
 
 export class WorkItemNotFoundError extends Error {
   constructor(id: string) {
@@ -124,6 +133,8 @@ export class WorkItemsBackendNotReadyError extends Error {
   }
 }
 
+export { WorkflowConflictError };
+
 function toDto(item: WorkItem): WorkItemDto {
   return {
     id: item.id as string,
@@ -137,6 +148,12 @@ function toDto(item: WorkItem): WorkItemDto {
     ...(item.scores !== undefined && { scores: item.scores }),
     summary: item.summary,
     outcome: item.outcome,
+    ...(item.workflowRun
+      ? {
+          workflowRun: WorkflowRunSchema.parse(item.workflowRun),
+          nextCheckpoint: checkpointFor(item),
+        }
+      : {}),
     projectId: item.projectId as string | undefined,
     parentId: item.parentId as string | undefined,
     node: item.node,
@@ -160,6 +177,10 @@ function toDto(item: WorkItem): WorkItemDto {
 
 function nextActionForWorkItem(item: WorkItem): string | null {
   if (item.blockedBy) return "blocked";
+  if (item.workflowRun)
+    return item.workflowRun.checkpointId
+      ? `workflow:${item.workflowRun.checkpointId}`
+      : null;
   switch (item.status) {
     case "needs_triage":
       return "/triage";
@@ -485,6 +506,9 @@ export async function getWorkItemCoordination(
     if (!current) throw new WorkItemNotFoundError(id);
     return {
       nextAction: nextActionForWorkItem(current),
+      ...(current.workflowRun
+        ? { nextCheckpoint: checkpointFor(current) }
+        : {}),
       session: {
         status: current.claimedByRun ? "active" : "none",
         claimedByRun: current.claimedByRun ?? null,
@@ -495,6 +519,53 @@ export async function getWorkItemCoordination(
     };
   } catch (error) {
     if (error instanceof WorkItemNotFoundError) throw error;
+    rethrowBackendError(error);
+  }
+}
+
+/** Compose the pure transition with the existing node-local, claim-fenced CAS write. */
+export async function recordWorkItemWorkflow(
+  input: WorkItemsWorkflowInput,
+  principalId: string
+) {
+  const store = getContainer().doltgresWorkItems;
+  const id = toWorkItemId(input.id);
+  try {
+    const current = await store.get(id);
+    if (!current) throw new WorkItemNotFoundError(input.id);
+    const profile = workflowProfile(input.event.workflowId);
+    if (!profile) throw new WorkflowConflictError("workflow_not_found");
+    const canonical = canonicalJson(input.event);
+    const result = transitionWorkflow(
+      current.workflowRun,
+      input.event,
+      profile.definition,
+      profile.identity,
+      sha256(canonical),
+      new Date().toISOString()
+    );
+    // A matching receipt is a readback, including after the lease/session changed.
+    if (result.replayed) return { item: toDto(current), replayed: true };
+    if (current.revision !== input.expectedRevision)
+      throw new WorkflowConflictError("stale_revision");
+    const item = await store.patch(
+      {
+        id,
+        expectedRevision: input.expectedRevision,
+        set: {
+          workflowRun: result.run,
+          ...(result.status ? { status: result.status } : {}),
+        },
+      },
+      principalId
+    );
+    return { item: toDto(item), replayed: false };
+  } catch (error) {
+    if (
+      error instanceof WorkflowConflictError ||
+      error instanceof WorkItemNotFoundError
+    )
+      throw error;
     rethrowBackendError(error);
   }
 }

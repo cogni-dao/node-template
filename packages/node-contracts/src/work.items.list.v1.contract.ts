@@ -14,6 +14,10 @@
  */
 
 import { z } from "zod";
+import {
+  NextCheckpointSchema,
+  WorkflowRunSchema,
+} from "./work.items.workflow.schema";
 
 const SubjectRefSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("user"), userId: z.string() }),
@@ -56,6 +60,8 @@ export const WorkItemDtoSchema = z.object({
   scores: WorkItemScoresDtoSchema.optional(),
   summary: z.string().optional(),
   outcome: z.string().optional(),
+  workflowRun: WorkflowRunSchema.optional(),
+  nextCheckpoint: NextCheckpointSchema.optional(),
   projectId: z.string().optional(),
   parentId: z.string().optional(),
   node: z.string().optional(),

@@ -54,3 +54,9 @@ export {
   type MissionLoopTelemetry,
   WORK_PRIORITIZER_GRAPH_NAME,
 } from "./work-prioritizer/graph";
+
+export {
+  createWorkflowGuideGraph,
+  WORKFLOW_GUIDE_NAME,
+  WORKFLOW_GUIDE_TOOL_IDS,
+} from "./workflow-guide/graph";

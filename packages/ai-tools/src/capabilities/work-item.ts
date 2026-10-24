@@ -18,6 +18,13 @@
  * Subset of full WorkItem — enough for agent decision-making.
  */
 export interface WorkItemInfo {
+  /** One current packet on an exact-id read, never an entire workflow. */
+  readonly nextCheckpoint?: {
+    readonly workflowId: string;
+    readonly checkpointId: string | null;
+    readonly expectedRevision: number;
+    readonly [field: string]: unknown;
+  };
   readonly id: string;
   readonly type: string;
   readonly title: string;

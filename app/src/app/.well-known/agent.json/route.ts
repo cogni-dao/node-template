@@ -20,6 +20,7 @@
 
 import {
 	workItemsClaimOperation,
+  workItemsWorkflowOperation,
 	workItemsCoordinationOperation,
 	workItemsCreateOperation,
 	workItemsGetOperation,
@@ -30,6 +31,7 @@ import {
 } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { CICD_WORKFLOWS } from "@cogni/work-items";
 import {
 	getNodeBrandColor,
 	getNodeBrandIcon,
@@ -93,6 +95,7 @@ export async function GET(request: Request) {
 			cognition: `${origin}/api/v1/cognition`,
 			workItems: `${origin}/api/v1/work/items`,
 			workItemClaims: `${origin}/api/v1/work/items/{id}/claims`,
+      workItemWorkflow: `${origin}/api/v1/work/items/{id}/workflow`,
 			workItemHeartbeat: `${origin}/api/v1/work/items/{id}/heartbeat`,
 			workItemCoordination: `${origin}/api/v1/work/items/{id}/coordination`,
 		},
@@ -125,6 +128,14 @@ export async function GET(request: Request) {
 				inputSchema: z.toJSONSchema(workItemsPatchOperation.input),
 				outputSchema: z.toJSONSchema(workItemsPatchOperation.output),
 			},
+      advanceWorkItemWorkflow: {
+        workflowIds: CICD_WORKFLOWS.map((definition) => definition.id),
+        method: "POST",
+        endpoint: `${origin}/api/v1/work/items/{id}/workflow`,
+        auth: { type: "bearer" },
+        inputSchema: z.toJSONSchema(workItemsWorkflowOperation.input),
+        outputSchema: z.toJSONSchema(workItemsWorkflowOperation.output),
+      },
 			claimWorkItem: {
 				method: "POST",
 				endpoint: `${origin}/api/v1/work/items/{id}/claims`,

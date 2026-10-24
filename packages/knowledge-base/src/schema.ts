@@ -283,6 +283,8 @@ export const workItems = pgTable(
     // Free-text
     summary: text("summary"),
     outcome: text("outcome"),
+    // Durable workflow cursor; operational claims remain in PostgreSQL.
+    workflowRun: jsonb("workflow_run"),
 
     // Lifecycle bag
     branch: text("branch"),

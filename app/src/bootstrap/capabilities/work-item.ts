@@ -44,6 +44,8 @@ import {
   type WorkItemsDoltgresPort,
 } from "@cogni/work-items/adapters/doltgres";
 
+import { checkpointFor } from "@/bootstrap/workflow-guidance";
+
 import { isPrivilegedPriority } from "@cogni/knowledge-store";
 
 /**
@@ -135,20 +137,23 @@ export function createWorkItemCapability(
     });
   }
 
+  function queryInfo(item: WorkItem, params: WorkItemQueryParams): WorkItemInfo {
+    const packet = params.ids?.length === 1 && item.id === params.ids[0]
+      ? checkpointFor(item) : undefined;
+    return { ...toWorkItemInfo(item), ...(packet ? { nextCheckpoint: packet } : {}) };
+  }
+
   return {
     async query(params): Promise<readonly WorkItemInfo[]> {
       const result = await list(params);
-      return result.items.map(toWorkItemInfo);
+      return result.items.map((item) => queryInfo(item, params));
     },
 
-    /** Paginated read: a complete backlog snapshot follows `nextCursor` to the end. */
     async queryPage(params) {
       const result = await list(params);
       return {
-        items: result.items.map(toWorkItemInfo),
-        ...(result.nextCursor !== undefined && {
-          nextCursor: result.nextCursor,
-        }),
+        items: result.items.map((item) => queryInfo(item, params)),
+        ...(result.nextCursor !== undefined && { nextCursor: result.nextCursor }),
       };
     },
 
