@@ -1,0 +1,166 @@
+// SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
+
+/**
+ * Module: `@cogni-dao/money-plane/tests/snapshot`
+ * Purpose: Prove takeSnapshot settles every reader, never throws, and applies the grading floor.
+ * Scope: takeSnapshot with in-memory readers; no network.
+ * Invariants: READERS_NEVER_THROW, UNREADABLE_IS_UNKNOWN, ONE_ROW_MODEL
+ * Side-effects: none
+ * Links: src/snapshot.ts
+ * @internal
+ */
+
+import { describe, expect, it } from "vitest";
+
+import {
+  type MoneyPlaneRow,
+  type PlaneReader,
+  takeSnapshot,
+} from "../src/index";
+
+const NOW = new Date("2026-10-24T00:00:00.000Z");
+const now = () => NOW;
+
+function row(
+  over: Partial<MoneyPlaneRow> & Pick<MoneyPlaneRow, "plane">
+): MoneyPlaneRow {
+  return {
+    label: over.plane,
+    kind: "prepaid",
+    balance: 100,
+    currency: "USD",
+    burnPerDay: 1,
+    runwayDays: 100,
+    grade: "GREEN",
+    observedAt: NOW.toISOString(),
+    ...over,
+  };
+}
+
+function reader(plane: string, read: PlaneReader["read"]): PlaneReader {
+  return { plane, label: `label ${plane}`, kind: "prepaid", read };
+}
+
+describe("takeSnapshot", () => {
+  it("returns rows in reader order with the worst grade", async () => {
+    const snap = await takeSnapshot(
+      [
+        reader("a", async () => row({ plane: "a" })),
+        reader("b", async () =>
+          row({ plane: "b", runwayDays: 3, grade: "RED" })
+        ),
+      ],
+      { timeoutMs: 1000, now }
+    );
+    expect(snap.rows.map((r) => r.plane)).toEqual(["a", "b"]);
+    expect(snap.worst).toBe("RED");
+    expect(snap.takenAt).toBe(NOW.toISOString());
+  });
+
+  it("turns a throwing reader into an UNKNOWN unreadable row instead of throwing", async () => {
+    const snap = await takeSnapshot(
+      [
+        reader("boom", async () => {
+          throw new Error(
+            "fetch failed for https://rpc.example/secret-key-123"
+          );
+        }),
+      ],
+      { timeoutMs: 1000, now }
+    );
+    const [r] = snap.rows;
+    expect(r?.grade).toBe("UNKNOWN");
+    expect(r?.reasonCode).toBe("unreadable");
+    expect(r?.label).toBe("label boom");
+    expect(r?.balance).toBeNull();
+    expect(r?.detail).not.toContain("secret-key-123");
+    expect(r?.detail?.length ?? 0).toBeLessThanOrEqual(60);
+    expect(snap.worst).toBe("UNKNOWN");
+  });
+
+  it("turns a reader that outlives the timeout into UNKNOWN timeout and aborts its signal", async () => {
+    let aborted = false;
+    const snap = await takeSnapshot(
+      [
+        reader(
+          "slow",
+          (signal) =>
+            new Promise((resolve) => {
+              signal.addEventListener("abort", () => {
+                aborted = true;
+              });
+              setTimeout(() => resolve(row({ plane: "slow" })), 500);
+            })
+        ),
+        reader("fast", async () => row({ plane: "fast" })),
+      ],
+      { timeoutMs: 20, now }
+    );
+    expect(snap.rows[0]?.grade).toBe("UNKNOWN");
+    expect(snap.rows[0]?.reasonCode).toBe("timeout");
+    expect(snap.rows[1]?.grade).toBe("GREEN");
+    expect(aborted).toBe(true);
+  });
+
+  it("never lets a prepaid plane with unmeasured burn grade GREEN", async () => {
+    const snap = await takeSnapshot(
+      [
+        reader("p", async () =>
+          row({
+            plane: "p",
+            burnPerDay: null,
+            runwayDays: null,
+            grade: "GREEN",
+          })
+        ),
+      ],
+      { timeoutMs: 1000, now }
+    );
+    expect(snap.rows[0]?.grade).toBe("UNKNOWN");
+    expect(snap.rows[0]?.reasonCode).toBe("burn_unmeasured");
+  });
+
+  it("never lets a row carrying a failure reason grade GREEN", async () => {
+    for (const reasonCode of [
+      "unconfigured",
+      "unreadable",
+      "timeout",
+      "stale",
+    ] as const) {
+      const snap = await takeSnapshot(
+        [
+          reader("x", async () =>
+            row({ plane: "x", grade: "GREEN", reasonCode })
+          ),
+        ],
+        { timeoutMs: 1000, now }
+      );
+      expect(snap.rows[0]?.grade).toBe("UNKNOWN");
+    }
+  });
+
+  it("keeps a RED prepaid row RED even when burn is unmeasured", async () => {
+    const snap = await takeSnapshot(
+      [
+        reader("dry", async () =>
+          row({
+            plane: "dry",
+            balance: 0,
+            burnPerDay: null,
+            runwayDays: 0,
+            grade: "RED",
+          })
+        ),
+      ],
+      { timeoutMs: 1000, now }
+    );
+    expect(snap.rows[0]?.grade).toBe("RED");
+  });
+
+  it("is UNKNOWN overall when given no readers", async () => {
+    const snap = await takeSnapshot([], { timeoutMs: 1000, now });
+    expect(snap.rows).toEqual([]);
+    expect(snap.worst).toBe("UNKNOWN");
+  });
+});
