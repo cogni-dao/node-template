@@ -28,8 +28,11 @@ function shortHash(h: string): string {
 
 export function FundStewardAction({
   disabled,
+  hint,
 }: {
   disabled: boolean;
+  /** Why the action is disabled, shown under the button. */
+  hint?: string;
 }): ReactElement {
   const amountId = useId();
   const [amount, setAmount] = useState("1");
@@ -101,6 +104,11 @@ export function FundStewardAction({
           )}
         </Button>
       </div>
+      {hint ? (
+        <p className="max-w-56 text-right text-muted-foreground text-xs">
+          {hint}
+        </p>
+      ) : null}
       {phase === "success" && txHash ? (
         <a
           href={`https://basescan.org/tx/${txHash}`}

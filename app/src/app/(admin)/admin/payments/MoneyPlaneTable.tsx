@@ -54,15 +54,28 @@ function fmtRunway(row: MoneyPlaneRow): string {
 }
 
 function fmtTime(iso: string): string {
-  return `${iso.slice(11, 16)} UTC`;
+  return `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
 }
 
-function Action({ row }: { row: MoneyPlaneRow }): ReactElement | null {
+function Action({
+  row,
+  canFundSteward,
+}: {
+  row: MoneyPlaneRow;
+  canFundSteward: boolean;
+}): ReactElement | null {
   const action: PayAction | undefined = row.payAction;
   if (!action) return null;
   switch (action.kind) {
     case "fund-steward":
-      return <FundStewardAction disabled={row.reasonCode === "unconfigured"} />;
+      return (
+        <FundStewardAction
+          disabled={!canFundSteward || row.reasonCode === "unconfigured"}
+          {...(canFundSteward
+            ? {}
+            : { hint: "Only the steward wallet can fund itself" })}
+        />
+      );
     case "external":
     case "steward-checkout": {
       const href = action.kind === "external" ? action.url : action.checkoutUrl;
@@ -85,8 +98,11 @@ function Action({ row }: { row: MoneyPlaneRow }): ReactElement | null {
 
 export function MoneyPlaneTable({
   rows,
+  canFundSteward,
 }: {
   rows: readonly MoneyPlaneRow[];
+  /** True only when the session wallet is the configured steward (STEWARD_SELF_AUTHORIZED). */
+  canFundSteward: boolean;
 }): ReactElement {
   return (
     <Table>
@@ -149,7 +165,7 @@ export function MoneyPlaneTable({
               {fmtTime(row.observedAt)}
             </TableCell>
             <TableCell className="text-right">
-              <Action row={row} />
+              <Action row={row} canFundSteward={canFundSteward} />
             </TableCell>
           </TableRow>
         ))}

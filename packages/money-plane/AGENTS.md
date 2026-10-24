@@ -38,6 +38,7 @@ No runtime dependencies, no env reads, no React, no viem. `fetch` is injected (`
 - READERS_NEVER_THROW — readers return UNKNOWN rows; `takeSnapshot` additionally converts throws and timeouts and never rejects.
 - ONE_ROW_MODEL — a Pay button is a `payAction` value, never a new row shape.
 - `detail` never carries a URL, key, or address.
+- OpenRouter burn is not measured here: `openRouterReader` exposes `usageTotal` and grades only from a caller-supplied `burnPerDay`. A fork without a scheduled sentinel that differences `usageTotal` between runs therefore shows its OpenRouter row as UNKNOWN `burn_unmeasured` (RED once the balance is exhausted). That is the honest grade, not a bug.
 
 ## Not here
 

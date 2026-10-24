@@ -19,6 +19,9 @@ export const EVENT_NAMES = {
   // Auth perimeter (proxy): request rejected before reaching any route handler,
   // so the request-scoped logger never sees it — emitted directly from the proxy.
   AUTH_PERIMETER_DENIED: "auth.perimeter.denied",
+  // /admin/payments money-plane snapshot: one terminal event per page read
+  // (outcome success|error, durationMs, worst grade, per-plane grade enums).
+  MONEY_PLANE_SNAPSHOT: "money_plane.snapshot",
 } as const;
 
 export type EventName = (typeof EVENT_NAMES)[keyof typeof EVENT_NAMES];

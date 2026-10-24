@@ -5,7 +5,7 @@
  * Module: `@cogni-dao/money-plane/row`
  * Purpose: Row helpers shared by readers and the snapshot runner: the UNKNOWN row, the grading floor, and safe detail text.
  * Scope: Pure functions. Does not perform IO.
- * Invariants: UNREADABLE_IS_UNKNOWN — `applyGradingFloor` demotes any GREEN/YELLOW row that carries a failure reason, and any prepaid row with unmeasured burn, to UNKNOWN. Detail text never carries a URL and is ≤60 chars.
+ * Invariants: UNREADABLE_IS_UNKNOWN — `applyGradingFloor` demotes any GREEN/YELLOW row that carries a failure reason, any prepaid row with unmeasured burn, and any non-wallet INFO row, to UNKNOWN. Detail text never carries a URL and is ≤60 chars.
  * Side-effects: none
  * Links: src/snapshot.ts, src/readers/
  * @public
@@ -60,6 +60,11 @@ export function unknownRow(input: UnknownRowInput): MoneyPlaneRow {
 
 /** A reader can over-grade; this floor makes an unmeasured plane UNKNOWN regardless of what it claimed. */
 export function applyGradingFloor(row: MoneyPlaneRow): MoneyPlaneRow {
+  // INFO means "holdings, no runway semantics" and is reserved for wallets; on any
+  // other kind it would hide an ungraded plane from worstGrade.
+  if (row.grade === "INFO" && row.kind !== "wallet") {
+    return { ...row, grade: "UNKNOWN" };
+  }
   if (row.grade !== "GREEN" && row.grade !== "YELLOW") return row;
   if (row.reasonCode !== undefined && FAILURE_REASONS.has(row.reasonCode)) {
     return { ...row, grade: "UNKNOWN" };

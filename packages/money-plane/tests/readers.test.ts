@@ -203,6 +203,29 @@ describe("baseWalletReader", () => {
     expect(r.payAction).toEqual({ kind: "fund-steward" });
   });
 
+  it("is UNKNOWN unreadable when eth_call returns an empty 0x result, not a zero balance", async () => {
+    const { fetch } = fakeFetch(({ init }) => {
+      const req = JSON.parse(String(init?.body)) as {
+        id: number;
+        method: string;
+      };
+      const result = req.method === "eth_call" ? "0x" : "0x1";
+      return { body: { jsonrpc: "2.0", id: req.id, result } };
+    });
+    const r = await baseWalletReader({
+      name: "operator-wallet",
+      label: "Operator wallet",
+      address: ADDRESS,
+      rpcUrl: RPC,
+      fetch,
+      now,
+    }).read(signal);
+    expect(r.grade).toBe("UNKNOWN");
+    expect(r.reasonCode).toBe("unreadable");
+    expect(r.balance).toBeNull();
+    expect(r.detail).toBe("eth_call returned empty");
+  });
+
   it("is UNKNOWN unreadable on a JSON-RPC error and never leaks the RPC URL", async () => {
     const { fetch } = fakeFetch(() => ({
       body: {

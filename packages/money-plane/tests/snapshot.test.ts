@@ -140,6 +140,22 @@ describe("takeSnapshot", () => {
     }
   });
 
+  it("demotes INFO to UNKNOWN on any plane that is not a wallet", async () => {
+    const snap = await takeSnapshot(
+      [
+        reader("usage", async () =>
+          row({ plane: "usage", kind: "usage", grade: "INFO" })
+        ),
+        reader("w", async () =>
+          row({ plane: "w", kind: "wallet", burnPerDay: null, grade: "INFO" })
+        ),
+      ],
+      { timeoutMs: 1000, now }
+    );
+    expect(snap.rows[0]?.grade).toBe("UNKNOWN");
+    expect(snap.rows[1]?.grade).toBe("INFO");
+  });
+
   it("keeps a RED prepaid row RED even when burn is unmeasured", async () => {
     const snap = await takeSnapshot(
       [

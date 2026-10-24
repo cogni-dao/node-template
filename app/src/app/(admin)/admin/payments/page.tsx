@@ -8,7 +8,7 @@
  * Scope: Server component. Access gating handled upstream by `(admin)/layout.tsx`.
  * Invariants: Read-only here; the only write is the steward row's Fund-steward POST. Addresses from repo-spec.
  *   NO_FUNDS_MOVED by the read path.
- * Side-effects: IO (snapshot reads via getMoneyPlaneSnapshot)
+ * Side-effects: IO (snapshot reads via getMoneyPlaneSnapshot, session read for the steward check)
  * Links: money-plane.server.ts, MoneyPlaneTable.tsx, https://cognidao.org/knowledge/money-plane-snapshot-design
  * @public
  */
@@ -17,6 +17,8 @@ import { Badge } from "@cogni/node-ui-kit/reui/badge";
 import type { ReactElement } from "react";
 
 import { PageContainer } from "@/components";
+import { getServerSessionUser } from "@/lib/auth/server";
+import { getStewardWalletConfig } from "@/shared/config";
 
 import { MoneyPlaneTable } from "./MoneyPlaneTable";
 import { getMoneyPlaneSnapshot } from "./money-plane.server";
@@ -25,7 +27,15 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export default async function MoneyPlanesPage(): Promise<ReactElement> {
-  const snapshot = await getMoneyPlaneSnapshot();
+  const [snapshot, user] = await Promise.all([
+    getMoneyPlaneSnapshot(),
+    getServerSessionUser(),
+  ]);
+  // The withdrawal route is STEWARD_SELF_AUTHORIZED: an approver that is not the
+  // steward would get a 403, so the action is disabled for them up front.
+  const steward = getStewardWalletConfig()?.address?.toLowerCase();
+  const wallet = user?.walletAddress?.toLowerCase();
+  const canFundSteward = !!steward && !!wallet && steward === wallet;
 
   return (
     <PageContainer maxWidth="2xl">
@@ -44,7 +54,7 @@ export default async function MoneyPlanesPage(): Promise<ReactElement> {
           {snapshot.worst}
         </Badge>
       </p>
-      <MoneyPlaneTable rows={snapshot.rows} />
+      <MoneyPlaneTable rows={snapshot.rows} canFundSteward={canFundSteward} />
     </PageContainer>
   );
 }

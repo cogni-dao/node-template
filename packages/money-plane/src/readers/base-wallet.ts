@@ -93,7 +93,10 @@ export function baseWalletReader(
     if (typeof body?.result !== "string" || !body.result.startsWith("0x")) {
       throw new RpcError(`${method} returned no result`);
     }
-    return BigInt(body.result === "0x" ? "0x0" : body.result);
+    // "0x" is an empty return (e.g. no contract at `usdcAddress` on this chain),
+    // not a zero balance — reading it as 0 would show a false empty wallet.
+    if (body.result === "0x") throw new RpcError(`${method} returned empty`);
+    return BigInt(body.result);
   }
 
   return {
