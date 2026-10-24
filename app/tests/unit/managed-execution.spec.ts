@@ -93,6 +93,21 @@ describe("canonical result admission", () => {
       )
     ).toThrow("result_audience_mismatch");
   });
+  it("refuses a prior reference to an incomplete artifact", () => {
+    expect(() =>
+      canonicalTerminal(
+        candidate,
+        {
+          ...candidate,
+          structuredOutput: {
+            status: "incomplete",
+            reason: "missing_evidence",
+          },
+        },
+        hash
+      )
+    ).toThrow("invalid_prior_result");
+  });
   it("rejects a same-ID presentation that disagrees with canonical content", async () => {
     const publish = vi.fn();
     await expect(

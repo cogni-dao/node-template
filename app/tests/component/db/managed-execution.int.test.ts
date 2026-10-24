@@ -54,7 +54,7 @@ async function seed(): Promise<ManagedExecutionBinding> {
   return binding;
 }
 async function claim(
-  binding: ManagedExecutionBinding,
+  binding: ManagedExecutionBinding
 ): Promise<ManagedExecutionClaim> {
   const result = await owner.acquire(binding, 60_000);
   expect(result.status).toBe("claimed");
@@ -92,7 +92,7 @@ describe("managed graph execution transaction", () => {
   it("simultaneous receiver delivery of one facade reservation executes one claimant", async () => {
     const binding = await seed();
     const outcomes = await Promise.all(
-      Array.from({ length: 8 }, () => owner.acquire(binding, 60_000)),
+      Array.from({ length: 8 }, () => owner.acquire(binding, 60_000))
     );
     expect(outcomes.filter((x) => x.status === "claimed")).toHaveLength(1);
     expect(outcomes.filter((x) => x.status === "pending")).toHaveLength(7);
@@ -112,14 +112,14 @@ describe("managed graph execution transaction", () => {
         SYSTEM_ACTOR,
         binding.runId,
         "error",
-        "late worker",
-      ),
+        "late worker"
+      )
     ).toEqual({ applied: false, reason: "receiver_owned" });
     await expect(
       legacy.finalizeRequest(binding.idempotencyKey, {
         ok: false,
         errorCode: "internal",
-      }),
+      })
     ).rejects.toThrow("execution_claim_required");
     const [pending] = await db
       .select()
@@ -130,17 +130,54 @@ describe("managed graph execution transaction", () => {
       status: "stale",
     });
     expect(
-      (await owner.commit(b, { resolve: () => resultFor(b) })).status,
+      (await owner.commit(b, { resolve: () => resultFor(b) })).status
     ).toBe("committed");
     expect(
       await owner.commit(a, {
         resolve: () => {
           throw new Error("must not execute");
         },
-      }),
+      })
     ).toEqual({ status: "stale" });
     const replay = await owner.acquire(binding, 60_000);
     expect(replay).toEqual({ status: "cached", result: resultFor(b) });
+  });
+  it("checks lease expiry after waiting for the run lock", async () => {
+    const binding = await seed();
+    const c = await claim(binding);
+    let completion: ReturnType<typeof owner.commit> | undefined;
+    await db.transaction(async (tx) => {
+      await tx
+        .select()
+        .from(graphRuns)
+        .where(eq(graphRuns.id, c.graphRunId))
+        .for("update");
+      completion = owner.commit(c, { resolve: () => resultFor(c) });
+      // Change lease while completion is barred from the run row; no wall-clock sleep.
+      await db
+        .update(executionRequests)
+        .set({
+          leaseExpiresAt: sql`clock_timestamp() - interval '1 second'`,
+        })
+        .where(eq(executionRequests.idempotencyKey, binding.idempotencyKey));
+    });
+    expect(await completion).toEqual({ status: "stale" });
+  });
+  it("refuses terminal legacy runs and ambiguous run IDs before claiming", async () => {
+    const terminal = await seed();
+    await ledger.markRunCompleted(SYSTEM_ACTOR, terminal.runId, "cancelled");
+    expect(await owner.acquire(terminal, 60_000)).toEqual({
+      status: "unavailable",
+    });
+    const ambiguous = await seed();
+    await db.insert(graphRuns).values({
+      runId: ambiguous.runId,
+      graphId: ambiguous.audience.graphId,
+      requestedBy: actor,
+    });
+    expect(await owner.acquire(ambiguous, 60_000)).toEqual({
+      status: "unavailable",
+    });
   });
   it("concurrent equal semantic inputs have one accepted result and one prior reference", async () => {
     const a = await claim(await seed());
@@ -151,8 +188,8 @@ describe("managed graph execution transaction", () => {
         owner.commit(c, {
           acceptedInputKey: inputKey,
           resolve: (prior) => canonicalTerminal(resultFor(c), prior, hash),
-        }),
-      ),
+        })
+      )
     );
     const envelopes = results.map((r) =>
       r.status === "stale"
@@ -160,7 +197,7 @@ describe("managed graph execution transaction", () => {
         : (r.result.structuredOutput as {
             status: string;
             priorResult?: { runId: string };
-          }),
+          })
     );
     expect(envelopes.map((x) => x?.status).sort()).toEqual([
       "accepted",
@@ -182,7 +219,7 @@ describe("managed graph execution transaction", () => {
         resolve: () => {
           throw new Error("failed validation");
         },
-      }),
+      })
     ).rejects.toThrow("failed validation");
     const [pending] = await db
       .select()
@@ -191,10 +228,10 @@ describe("managed graph execution transaction", () => {
     expect(pending?.ok).toBeNull();
     await owner.commit(c, { resolve: () => resultFor(c) });
     expect(
-      await new DrizzleManagedExecutionAdapter(db).acquire(binding, 60_000),
+      await new DrizzleManagedExecutionAdapter(db).acquire(binding, 60_000)
     ).toEqual({ status: "cached", result: resultFor(c) });
     expect(await owner.readOwnedResult(binding.runId, actor)).toEqual(
-      resultFor(c),
+      resultFor(c)
     );
     expect(await owner.readOwnedResult(binding.runId, "other")).toBeNull();
     await expect(
@@ -206,14 +243,14 @@ describe("managed graph execution transaction", () => {
             audience: { ...binding.audience, executionGrantId: "other" },
           },
         },
-        { resolve: () => resultFor(c) },
-      ),
+        { resolve: () => resultFor(c) }
+      )
     ).rejects.toThrow("result_binding_mismatch");
     expect(
       await owner.acquire(
         { ...binding, audience: { ...binding.audience, actorUserId: "other" } },
-        60_000,
-      ),
+        60_000
+      )
     ).toEqual({ status: "denied" });
     expect(
       await owner.acquire(
@@ -221,8 +258,8 @@ describe("managed graph execution transaction", () => {
           ...binding,
           audience: { ...binding.audience, executionGrantId: randomUUID() },
         },
-        60_000,
-      ),
+        60_000
+      )
     ).toEqual({ status: "denied" });
     expect(await owner.readOwnedResult(binding.runId, "other")).toBeNull();
   });
@@ -233,8 +270,8 @@ describe("managed graph execution transaction", () => {
     expect(
       await owner.acquire(
         { ...binding, idempotencyKey: `other:${binding.idempotencyKey}` },
-        60_000,
-      ),
+        60_000
+      )
     ).toEqual({ status: "mismatch" });
     await db.delete(graphRuns).where(eq(graphRuns.runId, binding.runId));
     expect(await owner.acquire(binding, 60_000)).toEqual({
