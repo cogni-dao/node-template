@@ -114,3 +114,5 @@ pnpm --filter @cogni-dao/ai-tools build
 - Per LANGGRAPH_AI.md: tool contracts live here, LangChain `tool()` wrappers in langgraph-graphs
 - Per PACKAGES_NO_SRC_IMPORTS: This package cannot import from `src/**`
 - Package isolation enables LangGraph Server to import tools without Next.js deps
+
+Work-item query emits `scoresTruncated: true` only when its bounded projection loses stored score data. Consumers must not use such a row as a complete score replacement source.

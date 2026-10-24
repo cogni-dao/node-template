@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 import {
+  createWorkItemQueryImplementation,
   EDO_DECIDE_NAME,
   GOAL_LIST_NAME,
   goalListContract,
@@ -10,6 +11,7 @@ import {
   WORK_ITEM_TRANSITION_NAME,
   workItemQueryContract,
 } from "@cogni/ai-tools";
+import { parseWorkItemScores, type WorkItemScores } from "@cogni/work-items";
 import { describe, expect, it } from "vitest";
 import { LANGGRAPH_CATALOG } from "../../../src/catalog";
 import type { EvidenceReceipt } from "../../../src/graphs/evidence-verification/graph";
@@ -90,23 +92,44 @@ describe("read-only mission program", () => {
   const scores = Object.fromEntries(
     ["goal", "time", "unblocks", "ease", "confidence", "agent"].map((key) => [
       key,
-      { v: 3, evidence: "observed" },
+      { v: 3 },
     ])
   );
-  const evidence: EvidenceReceipt[] = [
+  const support = Object.fromEntries(
+    Object.keys(scores).map((axis) => [
+      axis,
+      {
+        rationale: "Observed independent facts",
+        evidenceIds: ["e1"],
+      },
+    ])
+  );
+  const source = "https://independent.example/evidence";
+  const self = "https://node.example/work/items/task.1";
+  const evidence: [EvidenceReceipt, EvidenceReceipt] = [
     {
       id: "e1",
       tool: GOAL_LIST_NAME,
       args: {},
       sha256: "hash",
-      value: { goals: [{ id: "goal-1" }] },
+      value: {
+        goals: [
+          {
+            id: "goal-1",
+            sourceUrl: source,
+            content: "Independent measurement",
+          },
+        ],
+      },
     },
     {
       id: "e2",
       tool: WORK_ITEM_QUERY_NAME,
       args: {},
       sha256: "hash",
-      value: { items: [{ id: "task.1", revision: 4, scores }] },
+      value: {
+        items: [{ id: "task.1", revision: 4, scores, sourceUrl: self }],
+      },
     },
   ];
   const payload = {
@@ -117,6 +140,7 @@ describe("read-only mission program", () => {
         goalId: "goal-1",
         rationale: "facts",
         scores,
+        support,
       },
     ],
   };
@@ -128,6 +152,294 @@ describe("read-only mission program", () => {
     expect(
       MISSION_EVIDENCE_PROGRAM.validate?.({ items: [] }, evidence, "no_change")
     ).toBeUndefined();
+  });
+
+  const proposed = (changes: Record<string, unknown>) => ({
+    items: [{ ...payload.items[0], ...changes }],
+  });
+  const current = (
+    stored: unknown,
+    extras: Record<string, unknown> = {}
+  ): EvidenceReceipt[] => [
+    evidence[0],
+    {
+      ...evidence[1],
+      value: {
+        items: [
+          {
+            id: "task.1",
+            revision: 4,
+            scores: stored,
+            sourceUrl: self,
+            ...extras,
+          },
+        ],
+      },
+    },
+  ];
+
+  it.each([
+    { ...scores, goal: { v: 4 } },
+    { ...scores, goal: { v: 4, evidence: "not the canonical wire contract" } },
+    { ...scores, goal: { v: 4, ev: "http://unsafe.example" } },
+    { ...scores, goal: { v: 4, ev: "https://user:password@example.org" } },
+    { ...scores, goal: { v: 6 } },
+    Object.fromEntries(
+      Object.keys(scores).map((axis) => [
+        axis,
+        { v: 4, ev: `https://example.org/${"x".repeat(200)}` },
+      ])
+    ),
+    { goal: { v: 0 } },
+  ])("delegates malformed canonical score objects and six-axis completeness to schema rejection", (invalid) => {
+    expect(
+      MISSION_EVIDENCE_PROGRAM.payloadSchema.safeParse(
+        proposed({ scores: invalid })
+      ).success
+    ).toBe(false);
+  });
+
+  it("accepts unknown zero and rejects mutation fields in proposals", () => {
+    const p = proposed({ scores: { ...scores, goal: { v: 0 } } });
+    expect(MISSION_EVIDENCE_PROGRAM.payloadSchema.safeParse(p).success).toBe(
+      true
+    );
+    expect(
+      MISSION_EVIDENCE_PROGRAM.validate?.(p, evidence, "proposal")
+    ).toBeUndefined();
+    expect(
+      MISSION_EVIDENCE_PROGRAM.payloadSchema.safeParse(
+        proposed({ priority: 0 })
+      ).success
+    ).toBe(false);
+    expect(
+      MISSION_EVIDENCE_PROGRAM.payloadSchema.safeParse(proposed({ rank: 1 }))
+        .success
+    ).toBe(false);
+  });
+
+  it("allows evidence-only refresh from an actually-read external source, while unchanged v+ev is no-op", () => {
+    const next = { ...scores, goal: { v: 3, ev: source } };
+    expect(
+      MISSION_EVIDENCE_PROGRAM.validate?.(
+        proposed({ scores: next }),
+        evidence,
+        "proposal"
+      )
+    ).toBeUndefined();
+    expect(
+      MISSION_EVIDENCE_PROGRAM.validate?.(
+        proposed({ scores: next }),
+        current(next),
+        "proposal"
+      )
+    ).toBe("unchanged_score_proposal");
+    expect(
+      MISSION_EVIDENCE_PROGRAM.validate?.(
+        proposed({
+          expectedRevision: 5,
+          scores: Object.fromEntries(Object.entries(next).reverse()),
+          rationale: "Different prose",
+        }),
+        current(next, { revision: 5 }),
+        "proposal"
+      )
+    ).toBe("unchanged_score_proposal");
+  });
+
+  it.each([
+    "https://unread.example/facts",
+    self,
+  ])("rejects unread or self justification %s", (ev) => {
+    expect(
+      MISSION_EVIDENCE_PROGRAM.validate?.(
+        proposed({ scores: { ...scores, goal: { v: 4, ev } } }),
+        evidence,
+        "proposal"
+      )
+    ).toBe("justification_not_independently_read");
+  });
+
+  it("rejects missing per-axis receipts and unavailable source provenance", () => {
+    expect(
+      MISSION_EVIDENCE_PROGRAM.validate?.(
+        proposed({
+          support: {
+            ...support,
+            goal: { rationale: "claim", evidenceIds: ["invented"] },
+          },
+        }),
+        evidence,
+        "proposal"
+      )
+    ).toBe("unsupported_axis_evidence");
+    const unavailable = [
+      {
+        ...evidence[0],
+        value: {
+          goals: [
+            { id: "goal-1", sourceUrl: source, sourceUrlUnavailable: true },
+          ],
+        },
+      },
+      evidence[1],
+    ];
+    expect(
+      MISSION_EVIDENCE_PROGRAM.validate?.(
+        proposed({ scores: { ...scores, goal: { v: 4, ev: source } } }),
+        unavailable,
+        "proposal"
+      )
+    ).toBe("justification_not_independently_read");
+  });
+
+  it("preserves extra stored axes exactly and rejects deletion, edits or invention", () => {
+    const stored = {
+      ...scores,
+      risk: { v: 4, ev: "https://historical.example/unchanged" },
+    };
+    const changed = { ...stored, goal: { v: 0 } };
+    expect(
+      MISSION_EVIDENCE_PROGRAM.validate?.(
+        proposed({ scores: changed }),
+        current(stored),
+        "proposal"
+      )
+    ).toBeUndefined();
+    for (const next of [
+      { ...scores, goal: { v: 0 } },
+      { ...changed, risk: { v: 3 } },
+      { ...changed, risk: { v: 4, ev: "https://historical.example/changed" } },
+      { ...changed, invented: { v: 0 } },
+    ]) {
+      expect(
+        MISSION_EVIDENCE_PROGRAM.validate?.(
+          proposed({ scores: next }),
+          current(stored),
+          "proposal"
+        )
+      ).toBe("extra_axes_not_preserved");
+    }
+    expect(
+      MISSION_EVIDENCE_PROGRAM.validate?.(
+        proposed({ scores: changed }),
+        current(stored, { scoresTruncated: true }),
+        "proposal"
+      )
+    ).toBe("current_scores_incomplete_or_invalid");
+  });
+
+  async function queried(stored: WorkItemScores) {
+    const tool = createWorkItemQueryImplementation({
+      nodePublicOrigin: "https://node.example",
+      workItemCapability: {
+        query: async () => [
+          {
+            id: "task.1",
+            type: "task",
+            title: "target",
+            status: "needs_implement",
+            revision: 4,
+            scores: stored,
+            labels: [],
+            assignees: [],
+            updatedAt: "2026-10-23T00:00:00Z",
+          },
+        ],
+        transitionStatus: async () => {
+          throw new Error("write forbidden");
+        },
+        patch: async () => {
+          throw new Error("write forbidden");
+        },
+      },
+    });
+    // Exercise real projection AND validator: unknown metadata must not be stripped.
+    return workItemQueryContract.outputSchema.parse(await tool.execute({}));
+  }
+
+  it("rejects a legacy score object capped by the actual read tool, even when the result looks canonical", async () => {
+    const stored = {
+      ...scores,
+      ...Object.fromEntries(
+        Array.from({ length: 7 }, (_, i) => [`extra_${i}`, { v: 2 }])
+      ),
+    };
+    const output = await queried(stored);
+    expect(output.items[0]?.scoresTruncated).toBe(true);
+    expect(parseWorkItemScores(output.items[0]?.scores).ok).toBe(true);
+    const fromRead: EvidenceReceipt[] = [
+      evidence[0],
+      { ...evidence[1], value: output },
+    ];
+    expect(
+      MISSION_EVIDENCE_PROGRAM.validate?.(
+        proposed({ scores: { ...output.items[0]?.scores, goal: { v: 0 } } }),
+        fromRead,
+        "proposal"
+      )
+    ).toBe("current_scores_incomplete_or_invalid");
+  });
+
+  it("preserves a canonical exact1024-byte complete score object through the actual read tool", async () => {
+    const stored: WorkItemScores = {
+      ...scores,
+      risk: { v: 3, ev: `https://source.example/${"a".repeat(270)}` },
+      cost: { v: 3, ev: `https://source.example/${"b".repeat(270)}` },
+      quality: { v: 3, ev: "https://source.example/" },
+    };
+    const remaining = 1024 - Buffer.byteLength(JSON.stringify(stored), "utf8");
+    const exact = {
+      ...stored,
+      quality: { v: 3, ev: `https://source.example/${"c".repeat(remaining)}` },
+    };
+    expect(Buffer.byteLength(JSON.stringify(exact), "utf8")).toBe(1024);
+    expect(parseWorkItemScores(exact).ok).toBe(true);
+    const output = await queried(exact);
+    expect(output.items[0]?.scoresTruncated).toBeUndefined();
+    expect(output.items[0]?.scores).toEqual(exact);
+    const fromRead: EvidenceReceipt[] = [
+      evidence[0],
+      { ...evidence[1], value: output },
+    ];
+    expect(
+      MISSION_EVIDENCE_PROGRAM.validate?.(
+        proposed({ scores: { ...exact, goal: { v: 0 } } }),
+        fromRead,
+        "proposal"
+      )
+    ).toBeUndefined();
+  });
+
+  it("accepts supported high scores but a stored link alone does not establish a current read", () => {
+    const high = { ...scores, goal: { v: 4, ev: source } };
+    expect(
+      MISSION_EVIDENCE_PROGRAM.validate?.(
+        proposed({ scores: high }),
+        evidence,
+        "proposal"
+      )
+    ).toBeUndefined();
+    const oldLink = "https://historical.example/unread";
+    expect(
+      MISSION_EVIDENCE_PROGRAM.validate?.(
+        proposed({ scores: { ...scores, goal: { v: 4, ev: oldLink } } }),
+        current({ ...scores, risk: { v: 3, ev: oldLink } }),
+        "proposal"
+      )
+    ).toBe("extra_axes_not_preserved");
+    const carried = {
+      ...scores,
+      risk: { v: 3, ev: oldLink },
+      goal: { v: 4, ev: oldLink },
+    };
+    expect(
+      MISSION_EVIDENCE_PROGRAM.validate?.(
+        proposed({ scores: carried }),
+        current({ ...scores, risk: { v: 3, ev: oldLink } }),
+        "proposal"
+      )
+    ).toBe("justification_not_independently_read");
   });
 
   it("rejects invented goals and unread/stale item revisions", () => {
