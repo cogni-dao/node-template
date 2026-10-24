@@ -25,6 +25,7 @@ export {
   DrizzleExecutionGrantUserAdapter,
   DrizzleExecutionGrantWorkerAdapter,
 } from "./adapters/drizzle-grant.adapter";
+export { DrizzleManagedExecutionAdapter } from "./adapters/drizzle-managed-execution.adapter";
 export { DrizzleGraphRunAdapter } from "./adapters/drizzle-run.adapter";
 export {
   DrizzleScheduleUserAdapter,

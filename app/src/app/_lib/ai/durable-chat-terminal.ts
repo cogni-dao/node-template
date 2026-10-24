@@ -45,6 +45,7 @@ interface DurableChatTerminalInput {
     attempt: number;
   }) => void;
   readonly maxAttempts?: number;
+  readonly verifyExistingContent?: boolean;
 }
 
 /**
@@ -59,6 +60,7 @@ export async function persistAssistantThenPublishTerminal(
   return persistThenPublish<AiEvent, AssistantMessage>(
     {
       runId: input.runId,
+      ...(input.verifyExistingContent ? { verifyExistingContent: true } : {}),
       ...(input.stateKey !== undefined && { stateKey: input.stateKey }),
       ...(input.actorUserId !== undefined && {
         actorUserId: input.actorUserId,
@@ -67,7 +69,9 @@ export async function persistAssistantThenPublishTerminal(
       threadPersistenceForUser: (actorUserId: string) =>
         input.threadPersistenceForUser(toUserId(actorUserId)),
       publishTerminal: input.publishTerminal,
-      ...(input.onPersisted !== undefined && { onPersisted: input.onPersisted }),
+      ...(input.onPersisted !== undefined && {
+        onPersisted: input.onPersisted,
+      }),
       ...(input.maxAttempts !== undefined && {
         maxAttempts: input.maxAttempts,
       }),

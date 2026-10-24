@@ -70,6 +70,12 @@ export const PATCH = wrapRouteHandlerWithLogging<RouteParams>(
     const { status, traceId, errorMessage, errorCode } = parsed.data;
     const container = getContainer();
 
+    let completion:
+      | {
+          applied: boolean;
+          reason: "applied" | "receiver_owned" | "canonical";
+        }
+      | undefined;
     try {
       if (status === "running") {
         await container.graphRunRepository.markRunStarted(
@@ -78,20 +84,25 @@ export const PATCH = wrapRouteHandlerWithLogging<RouteParams>(
           traceId ?? undefined
         );
       } else {
-        await container.graphRunRepository.markRunCompleted(
+        const bookkeeping = await container.graphRunRepository.markRunCompleted(
           SYSTEM_ACTOR,
           runId,
           status,
           errorMessage,
           errorCode
         );
+        if (bookkeeping) completion = bookkeeping;
       }
     } catch (err) {
       log.error({ runId, status, err }, "Failed to update graph run");
       return NextResponse.json({ error: "Internal error" }, { status: 500 });
     }
 
-    const response: InternalUpdateGraphRunOutput = { ok: true, runId };
+    const response: InternalUpdateGraphRunOutput = {
+      ok: true,
+      runId,
+      ...(completion ? completion : {}),
+    };
     return NextResponse.json(response, { status: 200 });
   }
 );

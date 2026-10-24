@@ -3,6 +3,7 @@
 
 /**
  * Module: `@adapters/server/scheduling/drizzle-run`
+ * Invariant: tokenless terminal bookkeeping locks the graph row and defers to acquired receiver/canonical result.
  * Purpose: DrizzleGraphRunAdapter for the canonical graph run ledger.
  * Scope: Implements GraphRunRepository with Drizzle ORM. Does not contain scheduling logic.
  * Invariants:
@@ -15,7 +16,7 @@
  * @public
  */
 
-import { graphRuns } from "@cogni/db-schema/scheduling";
+import { executionRequests, graphRuns } from "@cogni/db-schema/scheduling";
 import type { ActorId } from "@cogni/ids";
 import type {
   GraphRun,
@@ -171,8 +172,29 @@ export class DrizzleGraphRunAdapter implements GraphRunRepository {
     status: "success" | "error" | "timeout" | "skipped" | "cancelled",
     errorMessage?: string,
     errorCode?: string
-  ): Promise<void> {
-    await withTenantScope(this.db, actorId, async (tx) => {
+  ): Promise<{
+    applied: boolean;
+    reason: "applied" | "receiver_owned" | "canonical";
+  }> {
+    const outcome = await withTenantScope(this.db, actorId, async (tx) => {
+      // Serialize with receiver acquisition. A tokenless worker may report transport
+      // state, but it cannot finalize an acquired receiver or replace its result.
+      const rows = await tx
+        .select()
+        .from(graphRuns)
+        .where(eq(graphRuns.runId, runId))
+        .for("update");
+      const run = rows[0];
+      if (rows.length !== 1 || !run)
+        throw new Error("graph_run_identity_ambiguous");
+      if (run.terminalResult)
+        return { applied: false, reason: "canonical" as const };
+      const [request] = await tx
+        .select()
+        .from(executionRequests)
+        .where(eq(executionRequests.graphRunId, run.id));
+      if (request?.claimToken)
+        return { applied: false, reason: "receiver_owned" as const };
       // Timeout is transport-incomplete, so a later node-owned outcome may
       // reconcile it. Definitive success/error remain monotonic terminals.
       await tx
@@ -189,9 +211,14 @@ export class DrizzleGraphRunAdapter implements GraphRunRepository {
             inArray(graphRuns.status, ["pending", "running", "timeout"])
           )
         );
+      return { applied: true, reason: "applied" as const };
     });
 
-    this.logger.info({ runId, status }, "Marked run as completed");
+    this.logger.info(
+      { runId, status, ...outcome },
+      "Graph run completion bookkeeping"
+    );
+    return outcome;
   }
 
   async getRunByRunId(

@@ -88,6 +88,11 @@ export interface GraphFinal {
   readonly content?: string;
   /** Parsed structured output (when graph uses responseFormat) */
   readonly structuredOutput?: Record<string, unknown>;
+  /** Trusted code-owned semantic input digest, never parsed from model output. */
+  readonly inputIdentity?: {
+    readonly policyVersion: string;
+    readonly digest: string;
+  };
 }
 
 /**

@@ -620,6 +620,9 @@ importers:
 
   packages/db-client:
     dependencies:
+      '@cogni-dao/graph-execution':
+        specifier: workspace:*
+        version: link:../graph-execution-host
       '@cogni/ai-core':
         specifier: workspace:*
         version: link:../ai-core

@@ -10,6 +10,7 @@
  *   - Lifecycle: pending (ok=null) → finalized (ok=true/false)
  *   - Stores BOTH success and error outcomes - retries return cached outcome
  *   - idempotencyKey uniqueness enforced at DB level (primary key)
+ *   - Legacy mutation predicates exclude receiver-token/bound rows; fenced completion requires ManagedExecutionPort
  *   - requestHash mismatch detection returns 'mismatch' status
  * Side-effects: IO (database operations)
  * Links: ports/scheduling/execution-request.port.ts, docs/spec/scheduler.md
@@ -186,6 +187,8 @@ export class DrizzleExecutionRequestAdapter implements ExecutionRequestPort {
           eq(executionRequests.idempotencyKey, idempotencyKey),
           eq(executionRequests.requestHash, requestHash),
           isNull(executionRequests.ok),
+          isNull(executionRequests.claimToken),
+          isNull(executionRequests.graphRunId),
           or(
             isNull(executionRequests.leaseExpiresAt),
             lte(executionRequests.leaseExpiresAt, now)
@@ -221,7 +224,9 @@ export class DrizzleExecutionRequestAdapter implements ExecutionRequestPort {
       .where(
         and(
           eq(executionRequests.idempotencyKey, idempotencyKey),
-          isNull(executionRequests.ok)
+          isNull(executionRequests.ok),
+          isNull(executionRequests.claimToken),
+          isNull(executionRequests.graphRunId)
         )
       );
   }
@@ -230,7 +235,7 @@ export class DrizzleExecutionRequestAdapter implements ExecutionRequestPort {
     idempotencyKey: string,
     outcome: ExecutionOutcome
   ): Promise<void> {
-    await this.db
+    const updated = await this.db
       .update(executionRequests)
       .set({
         ok: outcome.ok,
@@ -241,9 +246,21 @@ export class DrizzleExecutionRequestAdapter implements ExecutionRequestPort {
       .where(
         and(
           eq(executionRequests.idempotencyKey, idempotencyKey),
-          isNull(executionRequests.ok)
+          isNull(executionRequests.ok),
+          isNull(executionRequests.claimToken),
+          isNull(executionRequests.graphRunId)
         )
-      );
+      )
+      .returning({ key: executionRequests.idempotencyKey });
+    if (updated.length === 0) {
+      const [request] = await this.db
+        .select()
+        .from(executionRequests)
+        .where(eq(executionRequests.idempotencyKey, idempotencyKey));
+      if (request?.claimToken || request?.graphRunId)
+        throw new Error("execution_claim_required");
+      return;
+    }
 
     this.logger.info(
       { idempotencyKey, ok: outcome.ok, errorCode: outcome.errorCode },
