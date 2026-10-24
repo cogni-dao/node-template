@@ -241,7 +241,7 @@ describe("knowledge useWhen patch + q filter (task.5204)", () => {
         env: {
           ...process.env,
           DATABASE_URL: proofUrl.toString(),
-          NODE_NAME: "operator",
+          NODE_NAME: "governing-qualification",
         },
         encoding: "utf8",
         stdio: "pipe",
