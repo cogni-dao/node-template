@@ -677,13 +677,9 @@ describe("read-only mission program", () => {
       1
     );
     expect(calls[0]).not.toContain('\\"revision\\"');
-    expect(
-      (
-        result.structuredOutput?.proposal as {
-          payload: { items: { expectedRevision: number }[] };
-        }
-      ).payload.items[0]?.expectedRevision
-    ).toBe(4);
+    expect(result.structuredOutput).toMatchObject({
+      proposal: { payload: { items: [{ expectedRevision: 4 }] } },
+    });
   });
   it("actual factory refuses a new knowledge dependency before authoring", async () => {
     const { result, calls, reads } = await assess(() => ({

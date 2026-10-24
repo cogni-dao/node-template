@@ -379,7 +379,9 @@ describe("closed recurring mission evidence", () => {
   it("rereads frozen versions and refuses uncaptured dependencies", async () => {
     const input = await captureInput();
     const captured = freezeMissionEvidence(input);
-    input.evidence[1]!.value.items![0]!.title = "changed live";
+    const liveItem = input.evidence[1]?.value.items?.[0];
+    if (!liveItem) throw new Error("missing fixture");
+    liveItem.title = "changed live";
     const reread = captured.read("core__work_item_query", {
       ids: ["task.1"],
     }) as { items: Record<string, unknown>[] };
@@ -413,10 +415,12 @@ describe("closed recurring mission evidence", () => {
     expect(
       freezeMissionEvidence({
         ...input,
-        sources: [{ ...input.sources[0]!, content: "Changed mission" }],
+        sources: [{ ...input.sources[0], content: "Changed mission" }],
       }).inputIdentity
     ).not.toEqual(original);
-    input.evidence[1]!.value.paginationKnown = false;
+    const livePage = input.evidence[1]?.value;
+    if (!livePage) throw new Error("missing fixture");
+    livePage.paginationKnown = false;
     expect(() => freezeMissionEvidence(input)).toThrow(
       "snapshot_coverage_unknown"
     );
