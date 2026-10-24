@@ -39,7 +39,7 @@ def trajectory(sse):
             or any(e.get('type') in ('error', 'abort', 'tool-output-error') for e in events)):
         return None
     calls = {}
-    for event in events:
+    for event_index, event in enumerate(events):
         kind = event.get('type')
         if kind not in ('tool-input-start', 'tool-input-available', 'tool-output-available'):
             continue
@@ -55,8 +55,9 @@ def trajectory(sse):
             call['inputs'].append(event.get('input'))
         elif kind == 'tool-output-available':
             call['outputs'].append(event.get('output'))
+            call['outputIndex'] = event_index
     reads = []
-    for call in calls.values():
+    for call in sorted(calls.values(), key=lambda call: call.get('outputIndex', len(events))):
         # Announced but missing/failed IO is incomplete evidence, never a missing-tool failure.
         if (call.get('name') != 'core__work_item_query'
                 or len(call['inputs']) != 1 or len(call['outputs']) != 1):
@@ -72,7 +73,7 @@ def trajectory(sse):
                 or output.get('partial') is True or output.get('truncated') is True):
             return None
         meta = output.get('meta', {}).get('cogni', {}) if isinstance(output.get('meta'), dict) else {}
-        if isinstance(meta, dict) and (meta.get('partial') is True or meta.get('truncated') is True):
+        if isinstance(meta, dict) and (meta.get('partial') is True or meta.get('truncated') is True or meta.get('attributionUnavailable', 0) != 0):
             return None
         reads.append((output, inp))
     text = ''.join(e.get('delta', '') for e in events if e.get('type') == 'text-delta')
@@ -94,13 +95,18 @@ def grade(sse, item_id, expected):
         return {'verdict': 'fail', 'reason': 'wrong_query_scope'}
     # The most recent completed query is authoritative. Never fall back to an older packet.
     items = reads[-1][0].get('items')
-    if not isinstance(items, list) or len(items) != 1 or items[0].get('id') != item_id:
+    if not isinstance(items, list) or len(items) != 1 or not isinstance(items[0], dict) or items[0].get('id') != item_id:
         return {'verdict': 'unscorable', 'reason': 'current_item_unavailable'}
     packet = items[0].get('nextCheckpoint')
-    if not isinstance(packet, dict):
+    if (not isinstance(packet, dict) or type(packet.get('expectedRevision')) is not int
+            or packet['expectedRevision'] < 0 or 'checkpointId' not in packet
+            or not isinstance(packet.get('workflowId'), str)):
         return {'verdict': 'unscorable', 'reason': 'current_checkpoint_unavailable'}
     if not isinstance(final, dict) or not isinstance(final.get('evidence'), dict):
         return {'verdict': 'fail', 'reason': 'final_answer_not_proposal'}
+    revisions = [i.get('nextCheckpoint', {}).get('expectedRevision') for read, _ in reads for i in read.get('items', []) if isinstance(i, dict) and i.get('id') == item_id and isinstance(i.get('nextCheckpoint'), dict)]
+    if any(type(revision) is int and revision > packet.get('expectedRevision', -1) for revision in revisions):
+        return {'verdict': 'fail', 'reason': 'superseded_packet'}
     same = (final.get('itemId') == item_id
             and final.get('checkpointId') == packet.get('checkpointId')
             and final.get('definitionHash') == packet.get('definitionHash')
@@ -145,6 +151,8 @@ def controls():
     check(stream(json.dumps(answer),reads=query()+query('late',value={'error':'unavailable'})), 'unscorable')
     check(stream(json.dumps(answer),reads=query(value={'items':[{'id':'task.1','nextCheckpoint':packet}],'partial':True})), 'unscorable')
     check(stream(json.dumps(answer),reads=query()+query('late',value={'items':[{'id':'task.1','nextCheckpoint':{**packet,'expectedRevision':3}}]})), 'fail')
+    for malformed in [{'items':[None]}, {'items':[]}, {'items':[{'id':'task.1'}]}, {'items':[{'id':'task.1','nextCheckpoint':{}}]}]:
+        check(stream(json.dumps(answer),reads=query(value=malformed)), 'unscorable')
     return count
 
 
@@ -208,8 +216,13 @@ def main():
         card['cases'].append(result)
         Path(args.out).write_text(json.dumps(card,indent=2)+'\n')
         print(json.dumps({k:v for k,v in result.items() if k != "proposal"}),flush=True)
-    after=json.loads(request('/version')[0]).get('buildSha')
-    card['buildStable']=after==card['buildSha'];Path(args.out).write_text(json.dumps(card,indent=2)+'\n')
+    try:
+        after=json.loads(request('/version')[0]).get('buildSha')
+        card['buildStable']=after==card['buildSha']
+    except (urllib.error.URLError,TimeoutError,ValueError) as error:
+        card['buildStable']=False;card['finalVersionError']=type(error).__name__
+    card['counts']={verdict:sum(case['verdict']==verdict for case in card['cases']) for verdict in ['pass','fail','unscorable']}
+    Path(args.out).write_text(json.dumps(card,indent=2)+'\n')
     if not card['buildStable'] or any(x['verdict']=='unscorable' for x in card['cases']):return 2
     return 0 if all(x['verdict']=='pass' for x in card['cases']) else 1
 
