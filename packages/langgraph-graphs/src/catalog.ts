@@ -72,6 +72,11 @@ import {
   WORK_PRIORITIZER_GRAPH_NAME,
 } from "./graphs/work-prioritizer/graph";
 import { WORK_PRIORITIZER_TOOL_IDS } from "./graphs/work-prioritizer/tools";
+import {
+  createWorkflowGuideGraph,
+  WORKFLOW_GUIDE_NAME,
+  WORKFLOW_GUIDE_TOOL_IDS,
+} from "./graphs/workflow-guide/graph";
 import type { CreateGraphFn } from "./inproc/types";
 
 /**
@@ -160,6 +165,13 @@ export type LangGraphCatalog = Readonly<Record<string, CatalogEntry>>;
  * git-reviewer) are not advertised through the node-runtime catalog.
  */
 export const NODE_LANGGRAPH_CATALOG = {
+  [WORKFLOW_GUIDE_NAME]: {
+    displayName: "Workflow Guide",
+    description:
+      "Read the current work-item checkpoint and propose one evidence-backed next action",
+    toolIds: WORKFLOW_GUIDE_TOOL_IDS,
+    graphFactory: createWorkflowGuideGraph,
+  },
   [AUTORESEARCH_SINGLE_LANE_GRAPH_NAME]: createAutoresearchCatalogEntry(
     "Autoresearch Single Lane",
     "Karpathy-style single-lane experiment loop with Thinker, Flasher, Eval, and Judge",

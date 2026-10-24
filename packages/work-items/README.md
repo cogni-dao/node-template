@@ -15,3 +15,12 @@ A settled explicit-ID duplicate currently takes the work-item adapter's session-
 Writer `bridge` mode holds both legacy advisory keys and a common native-database key across the complete mutation/recovery scope. It protects same-database work/knowledge callers while legacy clients are drained. Explicit `database` mode removes the process-global legacy keys only after that database has no old callers, including previously unguarded raw knowledge writers. Package installation alone does not prove that cutover or fleet adoption.
 
 A current write whose commit or recovery outcome cannot be proved raises `WorkItemWriteOutcomeUnknownError` with `retryable: false` and a lookup receipt containing its operation ID, branch, optional commit hash and item ID. HTTP create/patch return 409 with that receipt; callers must inspect it before replaying. A failure while reconciling an older orphan before the current intent runs remains a busy admission failure. A canonical, positively proven lost acknowledgement still returns the committed result.
+
+
+## Executable checkpoints
+
+`cicd-v1` and the explicitly selected `cicd-no-preview-v1` define ordered guidance and typed attestation requirements. A nullable work-item `workflowRun` retains the cursor/receipts; the owning node's validated workflow command uses existing creator authorization and mandatory revision CAS. PostgreSQL claims coordinate agents separately. Receipt replay does not repeat external actions, certify submitted URLs, or create exactly-once model execution.
+
+HTTP item/coordination responses and exact single-item AI queries project the same current checkpoint. The read-only `workflow-guide` graph queries it afresh and proposes one completion or HOLD. It cannot dispatch shipping actions or write state; the caller verifies facts and records only the actual accepted proposal through the normal API. The offline native hook is advisory and cannot force agent check-ins.
+
+`evals/workflow-guidance.py --controls-only` checks the narrow grader without model calls. Live runs require an explicit HTTPS node origin, saved credential file, model, private cases and output path. At most eight graph invocations run without retries. Inputs contain facts, not expected labels. The grader checks actual scoped tool IO and final selected fields; incomplete/error telemetry is unscorable. These results measure current-guidance/action selection, not autonomous internal writes, general quality, full CI/CD completion or fleet adoption.

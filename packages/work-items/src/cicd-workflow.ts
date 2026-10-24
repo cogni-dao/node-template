@@ -258,7 +258,7 @@ export const CICD_NO_PREVIEW_WORKFLOW = {
               "https://cognidao.org/knowledge/operator-node-catalog",
             ],
           }
-        : checkpoint,
+        : checkpoint
     ),
 } as const satisfies WorkflowDefinition;
 

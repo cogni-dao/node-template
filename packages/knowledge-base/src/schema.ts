@@ -283,8 +283,7 @@ export const workItems = pgTable(
     // Free-text
     summary: text("summary"),
     outcome: text("outcome"),
-
-    // Explicit checkpoint progress; absent preserves existing work-item behavior.
+    // Durable workflow cursor; operational claims remain in PostgreSQL.
     workflowRun: jsonb("workflow_run"),
 
     // Lifecycle bag

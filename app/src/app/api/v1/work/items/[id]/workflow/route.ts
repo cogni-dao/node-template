@@ -55,13 +55,13 @@ export const POST = wrapRouteHandlerWithLogging<{
         return respond(
           { error: "unauthorized" },
           401,
-          EVENT_NAMES.WORKFLOW_INVALID,
+          EVENT_NAMES.WORKFLOW_INVALID
         );
       if (!context)
         return respond(
           { error: "invalid route" },
           400,
-          EVENT_NAMES.WORKFLOW_INVALID,
+          EVENT_NAMES.WORKFLOW_INVALID
         );
       const { id } = await context.params;
       let body: unknown;
@@ -71,7 +71,7 @@ export const POST = wrapRouteHandlerWithLogging<{
         return respond(
           { error: "invalid JSON" },
           400,
-          EVENT_NAMES.WORKFLOW_INVALID,
+          EVENT_NAMES.WORKFLOW_INVALID
         );
       }
       if (
@@ -83,7 +83,7 @@ export const POST = wrapRouteHandlerWithLogging<{
         return respond(
           { error: "invalid input" },
           400,
-          EVENT_NAMES.WORKFLOW_INVALID,
+          EVENT_NAMES.WORKFLOW_INVALID
         );
       const parsed = workItemsWorkflowOperation.input.safeParse({
         ...body,
@@ -93,11 +93,11 @@ export const POST = wrapRouteHandlerWithLogging<{
         return respond(
           { error: "invalid input" },
           400,
-          EVENT_NAMES.WORKFLOW_INVALID,
+          EVENT_NAMES.WORKFLOW_INVALID
         );
       workItemId = parsed.data.id.length <= 48 ? parsed.data.id : undefined;
       const definition = CICD_WORKFLOWS.find(
-        (entry) => entry.id === parsed.data.event.workflowId,
+        (entry) => entry.id === parsed.data.event.workflowId
       );
       workflowId = definition?.id ?? "unknown";
       revision = parsed.data.expectedRevision;
@@ -112,7 +112,7 @@ export const POST = wrapRouteHandlerWithLogging<{
       )
         checkpointId = event.checkpointId;
       const result = workItemsWorkflowOperation.output.parse(
-        await recordWorkItemWorkflow(parsed.data, sessionUser.id),
+        await recordWorkItemWorkflow(parsed.data, sessionUser.id)
       );
       revision = result.item.revision;
       replayed = result.replayed;
@@ -123,7 +123,7 @@ export const POST = wrapRouteHandlerWithLogging<{
         return respond(
           { error: error.code },
           409,
-          EVENT_NAMES.WORKFLOW_CONFLICT,
+          EVENT_NAMES.WORKFLOW_CONFLICT
         );
       if (
         error instanceof WorkItemLeaseConflictError ||
@@ -132,30 +132,30 @@ export const POST = wrapRouteHandlerWithLogging<{
         return respond(
           { error: "stale_revision_or_claim", reconcile: true },
           409,
-          EVENT_NAMES.WORKFLOW_CONFLICT,
+          EVENT_NAMES.WORKFLOW_CONFLICT
         );
       if (error instanceof WorkItemForbiddenError)
         return respond(
           { error: "forbidden" },
           403,
-          EVENT_NAMES.WORKFLOW_INVALID,
+          EVENT_NAMES.WORKFLOW_INVALID
         );
       if (error instanceof WorkItemNotFoundError)
         return respond(
           { error: "not_found" },
           404,
-          EVENT_NAMES.WORKFLOW_INVALID,
+          EVENT_NAMES.WORKFLOW_INVALID
         );
       if (error instanceof WorkItemsBackendNotReadyError)
         return respond(
           { error: "workflow_unavailable", reconcile: true },
           503,
-          EVENT_NAMES.WORKFLOW_UNAVAILABLE,
+          EVENT_NAMES.WORKFLOW_UNAVAILABLE
         );
       return respond(
         { error: "workflow_internal", reconcile: true },
         500,
-        EVENT_NAMES.WORKFLOW_INTERNAL,
+        EVENT_NAMES.WORKFLOW_INTERNAL
       );
     } finally {
       logEvent(ctx.log, EVENT_NAMES.WORK_ITEMS_WORKFLOW_COMPLETE, {
@@ -173,5 +173,5 @@ export const POST = wrapRouteHandlerWithLogging<{
         ...(errorCode ? { errorCode } : {}),
       });
     }
-  },
+  }
 );

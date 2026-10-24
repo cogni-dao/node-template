@@ -41,7 +41,7 @@ All contract files re-exported via `src/index.ts`. Selective re-export for `ai.c
 - `work.items.{list,create,patch}.v1.contract` — evaluation scores outline (`scores.<axis>.v/ev`); shared work-items adapter validates bounds, PATCH null clears scores
 - `identity.attestation.v1.contract` — frozen operator↔node identity protocol, canonical HTTPS-origin schema, and cross-repository protocol fingerprint
 
-- `work.items.workflow.v1.contract` — claim-fenced start/complete/reconcile-head; work-item and coordination responses carry one current nextCheckpoint
+- `work.items.workflow.v1.contract` — creator-authorized start/complete/reconcile-head; work-item and coordination responses carry one current nextCheckpoint
 
 **Attribution lifecycle contracts:**
 

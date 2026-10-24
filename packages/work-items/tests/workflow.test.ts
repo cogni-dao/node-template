@@ -40,7 +40,7 @@ function identity(definition: WorkflowDefinition = CICD_WORKFLOW) {
 function apply(
   run: WorkflowRun | undefined,
   event: WorkflowEvent,
-  definition: WorkflowDefinition = CICD_WORKFLOW,
+  definition: WorkflowDefinition = CICD_WORKFLOW
 ) {
   return transitionWorkflow(
     run,
@@ -48,7 +48,7 @@ function apply(
     definition,
     identity(definition),
     digest(event),
-    "2026-10-23T00:00:00Z",
+    "2026-10-23T00:00:00Z"
   );
 }
 function start() {
@@ -78,7 +78,7 @@ function evidence(id: string, headSha = A): Record<string, string> {
 function complete(
   run: WorkflowRun,
   fields = evidence(run.checkpointId ?? ""),
-  key = run.checkpointId ?? "",
+  key = run.checkpointId ?? ""
 ) {
   return apply(run, {
     op: "complete",
@@ -105,7 +105,7 @@ describe("executable checkpoint workflow", () => {
         run = complete(run).run;
       }
       expect(
-        nextWorkflowCheckpoint(run, CICD_WORKFLOW, identity()),
+        nextWorkflowCheckpoint(run, CICD_WORKFLOW, identity())
       ).toMatchObject({ done: true });
       expect(run.receipts).toHaveLength(7);
     }
@@ -114,10 +114,10 @@ describe("executable checkpoint workflow", () => {
     const run = complete(complete(start()).run).run;
     const recovered = JSON.parse(JSON.stringify(run));
     expect(
-      nextWorkflowCheckpoint(recovered, CICD_WORKFLOW, identity()).checkpointId,
+      nextWorkflowCheckpoint(recovered, CICD_WORKFLOW, identity()).checkpointId
     ).toBe("flight");
     expect(
-      apply(recovered, { op: "start", workflowId: run.workflowId }).run,
+      apply(recovered, { op: "start", workflowId: run.workflowId }).run
     ).toEqual(recovered);
   });
   it("does not advance or mutate state on next", () => {
@@ -136,7 +136,7 @@ describe("executable checkpoint workflow", () => {
         definitionHash: identity().definitionHash,
         receiptKey: "skip",
         evidence: evidence("merge"),
-      }),
+      })
     ).toThrow("wrong_checkpoint");
   });
   it("refuses missing or failed evidence", () => {
@@ -144,10 +144,10 @@ describe("executable checkpoint workflow", () => {
     const missing = evidence("review_ci");
     delete missing.ciUrl;
     expect(() => complete(run, missing)).toThrow(
-      "missing_or_invalid_evidence:ciUrl",
+      "missing_or_invalid_evidence:ciUrl"
     );
     expect(() =>
-      complete(run, { ...evidence("review_ci"), ciVerdict: "PENDING" }),
+      complete(run, { ...evidence("review_ci"), ciVerdict: "PENDING" })
     ).toThrow("invalid_verdict:ciVerdict");
   });
   it("requires an independent reviewer attestation and labels its authority", () => {
@@ -157,23 +157,23 @@ describe("executable checkpoint workflow", () => {
       complete(run, {
         ...evidence("review_ci"),
         reviewerSession: first.implementerSession ?? "",
-      }),
+      })
     ).toThrow("evidence_mismatch:reviewerSession");
     expect(
-      nextWorkflowCheckpoint(run, CICD_WORKFLOW, identity()),
+      nextWorkflowCheckpoint(run, CICD_WORKFLOW, identity())
     ).toHaveProperty(
       "evidenceAuthority",
-      expect.stringContaining("agent-attested"),
+      expect.stringContaining("agent-attested")
     );
   });
   it("refuses stale-head review and deployment evidence", () => {
     const run = complete(start()).run;
     expect(() => complete(run, evidence("review_ci", B))).toThrow(
-      "evidence_mismatch:headSha",
+      "evidence_mismatch:headSha"
     );
     const flight = complete(run).run;
     expect(() =>
-      complete(flight, { ...evidence("flight"), candidateBuildSha: B }),
+      complete(flight, { ...evidence("flight"), candidateBuildSha: B })
     ).toThrow("evidence_mismatch:candidateBuildSha");
   });
   it("does not advance twice after a lost completion response", () => {
@@ -194,23 +194,23 @@ describe("executable checkpoint workflow", () => {
       apply(stored, {
         ...event,
         evidence: { ...event.evidence, branch: "different" },
-      }),
+      })
     ).toThrow("receipt_key_conflict");
   });
   it("applies guidance edits on next and refuses completion using the old guidance", () => {
     const edited = structuredClone(
-      CICD_WORKFLOW,
+      CICD_WORKFLOW
     ) as unknown as WorkflowDefinition;
     const changed: WorkflowDefinition = {
       ...edited,
       checkpoints: edited.checkpoints.map((step, index) =>
-        index ? step : { ...step, instruction: "Reviewed revised instruction" },
+        index ? step : { ...step, instruction: "Reviewed revised instruction" }
       ),
     };
     const run = start();
     expect(identity(changed).structureHash).toBe(identity().structureHash);
     expect(
-      nextWorkflowCheckpoint(run, changed, identity(changed)),
+      nextWorkflowCheckpoint(run, changed, identity(changed))
     ).toHaveProperty("instruction", "Reviewed revised instruction");
     expect(() =>
       apply(
@@ -223,8 +223,8 @@ describe("executable checkpoint workflow", () => {
           receiptKey: "old-guidance",
           evidence: evidence("implementation"),
         },
-        changed,
-      ),
+        changed
+      )
     ).toThrow("guidance_changed_refresh_required");
   });
   it("holds structurally incompatible runs instead of silently migrating them", () => {
@@ -233,7 +233,7 @@ describe("executable checkpoint workflow", () => {
       checkpoints: CICD_WORKFLOW.checkpoints.slice(1),
     };
     expect(
-      nextWorkflowCheckpoint(start(), changed, identity(changed)),
+      nextWorkflowCheckpoint(start(), changed, identity(changed))
     ).toHaveProperty("blocked", "workflow_definition_changed");
   });
   it("records head reconciliation, rewinds and refuses changes after merge", () => {
@@ -249,24 +249,24 @@ describe("executable checkpoint workflow", () => {
     expect(run.checkpointId).toBe("review_ci");
     expect(run.bindings.headSha).toBe(B);
     expect(() =>
-      complete(run, evidence("review_ci", A), "stale-review"),
+      complete(run, evidence("review_ci", A), "stale-review")
     ).toThrow("evidence_mismatch:headSha");
     expect(apply(run, event).replayed).toBe(true);
     for (const id of ["review_ci", "flight", "candidate_validation", "merge"])
       run = complete(run, evidence(id, B), `B-${id}`).run;
     expect(() =>
-      apply(run, { ...event, receiptKey: "head-A", headSha: A }),
+      apply(run, { ...event, receiptKey: "head-A", headSha: A })
     ).toThrow("subject_sealed_after_merge");
   });
   it("requires preview and production to match the recorded merged build", () => {
     let run = start();
     for (let i = 0; i < 5; i++) run = complete(run).run;
     expect(() =>
-      complete(run, { ...evidence("preview"), previewBuildSha: A }),
+      complete(run, { ...evidence("preview"), previewBuildSha: A })
     ).toThrow("evidence_mismatch:previewBuildSha");
     run = complete(run).run;
     expect(() =>
-      complete(run, { ...evidence("production"), promotedSourceSha: A }),
+      complete(run, { ...evidence("production"), promotedSourceSha: A })
     ).toThrow("evidence_mismatch:promotedSourceSha");
   });
 });
@@ -280,24 +280,24 @@ it("canonicalizes nested database JSON object order while retaining array semant
         ? Object.fromEntries(
             Object.entries(value)
               .reverse()
-              .map(([key, child]) => [key, reverseObjects(child)]),
+              .map(([key, child]) => [key, reverseObjects(child)])
           )
         : value;
   expect(canonicalJson(reverseObjects(run))).toBe(canonicalJson(run));
   expect(canonicalJson({ receipts: ["a", "b"] })).not.toBe(
-    canonicalJson({ receipts: ["b", "a"] }),
+    canonicalJson({ receipts: ["b", "a"] })
   );
 });
 it("returns bounded last receipt on recovery and completion", () => {
   let run = start();
   expect(
-    nextWorkflowCheckpoint(run, CICD_WORKFLOW, identity()).lastReceipt,
+    nextWorkflowCheckpoint(run, CICD_WORKFLOW, identity()).lastReceipt
   ).toBeNull();
   run = complete(run).run;
   let packet = nextWorkflowCheckpoint(
     JSON.parse(JSON.stringify(run)),
     CICD_WORKFLOW,
-    identity(),
+    identity()
   );
   expect(packet.lastReceipt).toMatchObject({
     key: "implementation",
@@ -318,7 +318,7 @@ it("requires explicit no-preview policy attestation and preserves the standard w
   const run = apply(
     undefined,
     { op: "start", workflowId: definition.id },
-    definition,
+    definition
   ).run;
   expect(CICD_WORKFLOW.checkpoints.map((step) => step.id)).toContain("preview");
   expect(definition.checkpoints.map((step) => step.id)).toEqual([
@@ -338,7 +338,7 @@ it("requires explicit no-preview policy attestation and preserves the standard w
     evidence: evidence("implementation"),
   };
   expect(() => apply(run, event, definition)).toThrow(
-    "missing_or_invalid_evidence:previewPolicy",
+    "missing_or_invalid_evidence:previewPolicy"
   );
   expect(() =>
     apply(
@@ -351,11 +351,11 @@ it("requires explicit no-preview policy attestation and preserves the standard w
           environmentPolicyEvidence: "https://example.test/policy",
         },
       },
-      definition,
-    ),
+      definition
+    )
   ).toThrow("invalid_verdict:previewPolicy");
   expect(() =>
-    apply(run, { op: "start", workflowId: CICD_WORKFLOW.id }),
+    apply(run, { op: "start", workflowId: CICD_WORKFLOW.id })
   ).toThrow("workflow_definition_changed");
 });
 it("completes the explicitly selected six-stage variant with the same receipt protocol", () => {
@@ -363,7 +363,7 @@ it("completes the explicitly selected six-stage variant with the same receipt pr
   let run = apply(
     undefined,
     { op: "start", workflowId: definition.id },
-    definition,
+    definition
   ).run;
   for (const step of definition.checkpoints) {
     const fields = evidence(step.id);
@@ -382,7 +382,7 @@ it("completes the explicitly selected six-stage variant with the same receipt pr
         receiptKey: step.id,
         evidence: fields,
       },
-      definition,
+      definition
     ).run;
   }
   expect(run.checkpointId).toBeNull();

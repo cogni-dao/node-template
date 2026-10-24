@@ -99,7 +99,7 @@ pnpm vitest run packages/work-items/tests/
 
 ## Notes
 
-- `workflow.ts` owns pure checkpoint/receipt transitions; `cicd-workflow.ts` registers reviewed CI/CD definitions; the no-preview variant requires explicit declared-policy evidence. `workflowRun` is optional; generic HTTP PATCH cannot write it. Workflow persistence requires revision + active principal/run lease in one UPDATE.
+- `workflow.ts` owns pure checkpoint/receipt transitions; `cicd-workflow.ts` registers reviewed CI/CD definitions; the no-preview variant requires explicit declared-policy evidence. `workflowRun` is optional; generic HTTP PATCH cannot write it. Workflow persistence uses ordinary creator authorization plus required revision CAS; PostgreSQL leases remain separate coordination.
 - `toWorkItemId()` does no format validation — WorkItemIds include both numeric (`task.0149`) and slug-based (`proj.agentic-project-management`) formats
 - `MarkdownWorkItemAdapter` constructor takes `workDir` (repo root) — scans `work/items/` and `work/projects/`
 - `blocked` can transition to any `needs_*` status — adapters may enforce stricter return-to-previous-status logic
@@ -115,3 +115,5 @@ A read has its own deadline and never enters writer admission. Reader timeout re
 
 - PATCH_CAS (task.5284): Doltgres `patch` with `expectedRevision` adds `AND revision = <expected>` to its UPDATE; a mismatch throws `WorkItemRevisionConflictError` and drops the empty op branch with no commit. Omitted = unconditioned, as before.
 - COLLABORATOR_TRIAGE (task.5284): any non-blank principal may `patch` only `priority`, `rank`, `labels`, `scores` on items it did not create. A `set` naming any other field is creator-bound as a whole (`created_by_principal_id IS NULL OR = principal`); the patch transition proof admits a non-creator only when the row diff touches nothing beyond those columns + `revision`/`updated_at`.
+
+- Workflow content uses the same creator authorization and expectedRevision CAS as other content; PostgreSQL claims remain coordination, not an atomic cross-database write fence. The workflow command validates ordered evidence; generic HTTP PATCH cannot write workflowRun.

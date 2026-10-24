@@ -4,16 +4,22 @@
 /** Shared HTTP/tool projection; no container, IO, authorization or progression. */
 import { createHash } from "node:crypto";
 import { NextCheckpointSchema } from "@cogni/node-contracts";
-import { CICD_WORKFLOW, CICD_WORKFLOWS, nextWorkflowCheckpoint, workflowFingerprintInputs, type WorkItem } from "@cogni/work-items";
+import {
+  CICD_WORKFLOW,
+  CICD_WORKFLOWS,
+  nextWorkflowCheckpoint,
+  workflowFingerprintInputs,
+  type WorkItem,
+} from "@cogni/work-items";
 
 const fingerprint = workflowFingerprintInputs(CICD_WORKFLOW);
-const sha256 = (text: string) =>
+export const sha256 = (text: string) =>
   createHash("sha256").update(text).digest("hex");
 const workflowIdentity = {
   definitionHash: sha256(fingerprint.definition),
   structureHash: sha256(fingerprint.structure),
 };
-function workflowProfile(id: string) {
+export function workflowProfile(id: string) {
   const definition = CICD_WORKFLOWS.find((entry) => entry.id === id);
   if (!definition) return undefined;
   const inputs = workflowFingerprintInputs(definition);
@@ -31,25 +37,26 @@ export function checkpointFor(item: WorkItem) {
   const packet = nextWorkflowCheckpoint(
     item.workflowRun,
     profile?.definition ?? CICD_WORKFLOW,
-    profile?.identity ?? workflowIdentity,
+    profile?.identity ?? workflowIdentity
   );
   const path = `/api/v1/work/items/${item.id}`;
-  const nextOperation = "instruction" in packet
-    ? {
-        method: "POST" as const,
-        path: `${path}/workflow`,
-        body: {
-          expectedRevision: item.revision,
-          event: {
-            op: "complete" as const,
-            workflowId: packet.workflowId,
-            checkpointId: packet.checkpointId,
-            definitionHash: packet.definitionHash,
+  const nextOperation =
+    "instruction" in packet
+      ? {
+          method: "POST" as const,
+          path: `${path}/workflow`,
+          body: {
+            expectedRevision: item.revision,
+            event: {
+              op: "complete" as const,
+              workflowId: packet.workflowId,
+              checkpointId: packet.checkpointId,
+              definitionHash: packet.definitionHash,
+            },
           },
-        },
-        requires: ["event.receiptKey", "event.evidence"],
-      }
-    : { method: "GET" as const, path: `${path}/coordination`, requires: [] };
+          requires: ["event.receiptKey", "event.evidence"],
+        }
+      : { method: "GET" as const, path: `${path}/coordination`, requires: [] };
   return NextCheckpointSchema.parse({
     ...packet,
     expectedRevision: item.revision,

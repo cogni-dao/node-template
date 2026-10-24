@@ -18,7 +18,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
 
 const cli = fileURLToPath(
-  new URL("../bin/cogni-workflow.mjs", import.meta.url),
+  new URL("../bin/cogni-workflow.mjs", import.meta.url)
 );
 const cleanups: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -89,15 +89,15 @@ async function fixture() {
   cleanups.push(
     () =>
       new Promise<void>((done, reject) =>
-        server.close((error) => (error ? reject(error) : done())),
-      ),
+        server.close((error) => (error ? reject(error) : done()))
+      )
   );
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("address");
   const origin = `http://127.0.0.1:${address.port}`;
   await writeFile(
     join(cwd, ".env.cogni"),
-    `COGNI_NODE_API_KEY=child-key\nCOGNI_NODE_URL=${origin}\n`,
+    `COGNI_NODE_API_KEY=child-key\nCOGNI_NODE_URL=${origin}\n`
   );
   return { cwd, origin, state, packet };
 }
@@ -105,7 +105,7 @@ function invoke(
   cwd: string,
   args: string[],
   env: Record<string, string> = {},
-  input = "",
+  input = ""
 ) {
   return new Promise<{ code: number | null; out: string; err: string }>(
     (done, reject) => {
@@ -131,7 +131,7 @@ function invoke(
       child.on("error", reject);
       child.on("close", (code) => done({ code, out, err }));
       child.stdin.end(input);
-    },
+    }
   );
 }
 const body = JSON.stringify({
@@ -155,7 +155,7 @@ it("presents one server checkpoint and resumes using native hook input identity"
     cwd,
     ["session-start"],
     { CODEX_THREAD_ID: "" },
-    JSON.stringify({ session_id: "native-a" }),
+    JSON.stringify({ session_id: "native-a" })
   );
   expect(resumed.code).toBe(0);
   const context = JSON.parse(resumed.out).hookSpecificOutput.additionalContext;
@@ -198,7 +198,7 @@ it("preserves successful mutation output when the advisory cache cannot be writt
   await mkdir(join(cwd, ".cogni"));
   await writeFile(
     join(cwd, ".cogni", ".workflow-session"),
-    "file instead of directory",
+    "file instead of directory"
   );
   const result = await invoke(cwd, [
     "record",
@@ -210,10 +210,10 @@ it("preserves successful mutation output when the advisory cache cannot be writt
   ]);
   expect(result.code).toBe(0);
   expect(JSON.parse(result.out).item.nextCheckpoint.checkpointId).toBe(
-    "review_ci",
+    "review_ci"
   );
   expect(JSON.parse(result.out).item.workflowRun.receipts[0].key).toBe(
-    "implementation-proof",
+    "implementation-proof"
   );
   expect(result.err).toContain("keep the API result");
   expect(state.writes).toBe(1);
@@ -231,7 +231,7 @@ it("refuses discovery drift and another native session before any write", async 
         "--body",
         body,
       ])
-    ).code,
+    ).code
   ).toBe(1);
   expect(state.writes).toBe(0);
   state.wrongDiscovery = false;
@@ -240,9 +240,9 @@ it("refuses discovery drift and another native session before any write", async 
       await invoke(
         cwd,
         ["record", "task.1000", "--env-file", ".env.cogni", "--body", body],
-        { CODEX_THREAD_ID: "native-b" },
+        { CODEX_THREAD_ID: "native-b" }
       )
-    ).code,
+    ).code
   ).toBe(1);
   expect(state.writes).toBe(0);
 });
@@ -277,31 +277,31 @@ it("reconciles a committed write with a truncated JSON acknowledgement through r
   ]);
   expect(recovery.code).toBe(0);
   expect(JSON.parse(recovery.out).nextCheckpoint.lastReceipt.key).toBe(
-    "implementation-proof",
+    "implementation-proof"
   );
   expect(state.writes).toBe(1);
 });
 
-it.each([
-  "key-only",
-  "url-only",
-])("refuses a partial default file (%s) before sending inherited credentials", async (kind) => {
-  const { cwd, origin, state } = await fixture();
-  await writeFile(
-    join(cwd, ".env.cogni"),
-    kind === "key-only"
-      ? "COGNI_NODE_API_KEY=child-key\n"
-      : `COGNI_NODE_URL=${origin}\n`,
-  );
-  const result = await invoke(cwd, ["next", "task.1000"], {
-    COGNI_NODE_URL: origin,
-  });
-  expect(result.code).toBe(1);
-  expect(state.auth).toHaveLength(0);
-  expect(result.err).toContain("credential pair");
-  expect(result.out + result.err).not.toContain("child-key");
-  expect(result.out + result.err).not.toContain("parent-key");
-});
+it.each(["key-only", "url-only"])(
+  "refuses a partial default file (%s) before sending inherited credentials",
+  async (kind) => {
+    const { cwd, origin, state } = await fixture();
+    await writeFile(
+      join(cwd, ".env.cogni"),
+      kind === "key-only"
+        ? "COGNI_NODE_API_KEY=child-key\n"
+        : `COGNI_NODE_URL=${origin}\n`
+    );
+    const result = await invoke(cwd, ["next", "task.1000"], {
+      COGNI_NODE_URL: origin,
+    });
+    expect(result.code).toBe(1);
+    expect(state.auth).toHaveLength(0);
+    expect(result.err).toContain("credential pair");
+    expect(result.out + result.err).not.toContain("child-key");
+    expect(result.out + result.err).not.toContain("parent-key");
+  }
+);
 it("uses an explicit origin with a key-only local file without inheriting the parent key", async () => {
   const { cwd, origin, state } = await fixture();
   await writeFile(join(cwd, ".env.cogni"), "COGNI_NODE_API_KEY=child-key\n");

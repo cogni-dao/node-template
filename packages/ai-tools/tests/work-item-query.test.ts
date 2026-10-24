@@ -106,9 +106,7 @@ describe("core__work_item_query", () => {
     expect(WorkItemQueryOutputSchema.parse(out)).toEqual(out);
     const capped = out.items[0]?.scores ?? {};
     expect(Object.keys(capped)).toHaveLength(WORK_ITEM_QUERY_SCORES_MAX_AXES);
-    expect(capped.axis_0?.ev?.length).toBe(
-      WORK_ITEM_QUERY_SCORE_EV_MAX_CHARS
-    );
+    expect(capped.axis_0?.ev?.length).toBe(WORK_ITEM_QUERY_SCORE_EV_MAX_CHARS);
     expect(capped.axis_0?.ev?.endsWith("…")).toBe(false);
     expect(capped.axis_1).toEqual({ v: 1 });
   });
@@ -176,5 +174,39 @@ describe("core__work_item_query", () => {
     expect(cap.query).toHaveBeenCalledWith(
       expect.objectContaining({ actor: undefined, limit: 5 })
     );
+  });
+});
+
+describe("workflow guidance projection", () => {
+  const packet = {
+    workflowId: "cicd-v1",
+    checkpointId: "review_ci",
+    expectedRevision: 7,
+    instruction: "Read the current exact-head CI",
+    requiredEvidence: { ciVerdict: "PASS" },
+  };
+  it("preserves one exact item's packet, including executable fields", async () => {
+    const impl = createWorkItemQueryImplementation({
+      workItemCapability: capabilityReturning([
+        { ...BASE, nextCheckpoint: packet },
+      ]),
+    });
+    const output = await impl.execute({ ids: [BASE.id], limit: 1 });
+    expect(
+      WorkItemQueryOutputSchema.parse(output).items[0]?.nextCheckpoint
+    ).toEqual(packet);
+  });
+  it("omits guidance from backlog and multiple-id pages", async () => {
+    const impl = createWorkItemQueryImplementation({
+      workItemCapability: capabilityReturning([
+        { ...BASE, nextCheckpoint: packet },
+      ]),
+    });
+    expect((await impl.execute({})).items[0]).not.toHaveProperty(
+      "nextCheckpoint"
+    );
+    expect(
+      (await impl.execute({ ids: [BASE.id, "task.2"] })).items[0]
+    ).not.toHaveProperty("nextCheckpoint");
   });
 });

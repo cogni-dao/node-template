@@ -15,7 +15,7 @@ export const WorkflowEvidenceSchema = z
   .record(z.string().min(1).max(80), z.string().min(1).max(2048))
   .refine(
     (value) => Object.keys(value).length <= 32,
-    "Too many evidence fields",
+    "Too many evidence fields"
   );
 export const WorkflowReceiptSchema = z.object({
   key: z.string().min(1).max(160),

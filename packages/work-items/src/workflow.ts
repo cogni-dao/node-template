@@ -102,7 +102,7 @@ export function workflowFingerprintInputs(definition: WorkflowDefinition) {
           nextLifecycleStatus,
           capture,
           checks,
-        }),
+        })
       ),
     }),
   };
@@ -112,7 +112,7 @@ export function workflowFingerprintInputs(definition: WorkflowDefinition) {
 export function nextWorkflowCheckpoint(
   run: WorkflowRun,
   definition: WorkflowDefinition,
-  identity: WorkflowIdentity,
+  identity: WorkflowIdentity
 ) {
   const receipt = run.receipts.at(-1);
   const lastReceipt = receipt
@@ -144,7 +144,7 @@ export function nextWorkflowCheckpoint(
       done: true,
     } as const;
   const checkpoint = definition.checkpoints.find(
-    (value) => value.id === run.checkpointId,
+    (value) => value.id === run.checkpointId
   );
   if (!checkpoint)
     return {
@@ -172,7 +172,7 @@ export function nextWorkflowCheckpoint(
 function validateEvidence(
   checkpoint: WorkflowCheckpoint,
   evidence: Readonly<Record<string, string>>,
-  bindings: Readonly<Record<string, string>>,
+  bindings: Readonly<Record<string, string>>
 ) {
   if (
     Object.keys(evidence).some((key) => !(key in checkpoint.requiredEvidence))
@@ -202,14 +202,14 @@ function validateEvidence(
   }
 }
 
-/** Caller atomically persists this result with item revision AND principal/run lease fences. */
+/** Caller persists this result with ordinary content authorization and item revision CAS. */
 export function transitionWorkflow(
   current: WorkflowRun | undefined,
   event: WorkflowEvent,
   definition: WorkflowDefinition,
   identity: WorkflowIdentity,
   receiptDigest: string,
-  recordedAt: string,
+  recordedAt: string
 ): { run: WorkflowRun; replayed: boolean; status?: WorkItemStatus } {
   if (event.workflowId !== definition.id) refuse("workflow_not_found");
   if (event.op === "start") {
@@ -237,7 +237,7 @@ export function transitionWorkflow(
   if (!current) refuse("workflow_not_started");
   if (current.workflowId !== definition.id) refuse("workflow_already_bound");
   const old = current.receipts.find(
-    (receipt) => receipt.key === event.receiptKey,
+    (receipt) => receipt.key === event.receiptKey
   );
   if (old) {
     if (old.digest !== receiptDigest) refuse("receipt_key_conflict");
@@ -252,7 +252,7 @@ export function transitionWorkflow(
   if (current.receipts.length >= 64) refuse("workflow_receipt_limit");
   if (current.checkpointId === null) refuse("workflow_already_complete");
   const index = definition.checkpoints.findIndex(
-    (checkpoint) => checkpoint.id === current.checkpointId,
+    (checkpoint) => checkpoint.id === current.checkpointId
   );
   if (index < 0) refuse("workflow_definition_changed");
   const checkpoint = definition.checkpoints[index];
@@ -269,7 +269,7 @@ export function transitionWorkflow(
     if (event.headSha === bindings[definition.subject.field])
       refuse("subject_unchanged");
     const rewind = definition.checkpoints.findIndex(
-      (step) => step.id === definition.subject.rewindTo,
+      (step) => step.id === definition.subject.rewindTo
     );
     if (rewind < 0) refuse("workflow_definition_changed");
     for (const step of definition.checkpoints.slice(rewind))

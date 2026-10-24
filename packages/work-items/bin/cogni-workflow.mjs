@@ -58,7 +58,7 @@ const cache = sessionId
       root,
       ".cogni",
       ".workflow-session",
-      `${createHash("sha256").update(sessionId).digest("hex")}.json`,
+      `${createHash("sha256").update(sessionId).digest("hex")}.json`
     )
   : undefined;
 const readCache = async () => {
@@ -80,7 +80,7 @@ async function main() {
             hookEventName: "SessionStart",
             additionalContext: `Cached workflow checkpoint (advisory, not a current claim): ${JSON.stringify(value)}\nBefore dependent action, call cogni-workflow next for this node/item. Claim/reclaim through the node API before writes. Never replay a prior action merely to recover context.`,
           },
-        }),
+        })
       );
     return;
   }
@@ -89,7 +89,7 @@ async function main() {
     !/^(task|bug|story|spike|subtask)\.\d+$/.test(itemId ?? "")
   )
     throw new Error(
-      "Usage: cogni-workflow next|record ITEM --node-url ORIGIN [--env-file FILE] [--body JSON]",
+      "Usage: cogni-workflow next|record ITEM --node-url ORIGIN [--env-file FILE] [--body JSON]"
     );
   const options = {};
   for (let i = 0; i < args.length; i += 2) {
@@ -107,14 +107,14 @@ async function main() {
     ).split(/\r?\n/)) {
       const match =
         /^(?:export\s+)?(COGNI_NODE_API_KEY|COGNI_NODE_URL)\s*=\s*(.*?)\s*$/.exec(
-          line,
+          line
         );
       if (match) local[match[1]] = match[2].replace(/^(['"])(.*)\1$/, "$2");
     }
   } catch (error) {
     if (options["env-file"] || error.code !== "ENOENT")
       throw new Error(
-        "Saved node credential pair cannot be read; no request attempted",
+        "Saved node credential pair cannot be read; no request attempted"
       );
   }
   // A saved key/origin is one compartment, including the default file.
@@ -130,7 +130,7 @@ async function main() {
     (fromFile ? local.COGNI_NODE_URL : process.env.COGNI_NODE_URL);
   if (!key || !nodeUrl)
     throw new Error(
-      "Complete node credential pair required; inherited values cannot fill a saved pair",
+      "Complete node credential pair required; inherited values cannot fill a saved pair"
     );
   const node = new URL(nodeUrl);
   if (
@@ -147,7 +147,7 @@ async function main() {
     !key
   )
     throw new Error(
-      "Explicit HTTPS node origin and its saved NODE key required",
+      "Explicit HTTPS node origin and its saved NODE key required"
     );
   const origin = node.origin;
   async function request(path, method = "GET", body) {
@@ -171,7 +171,7 @@ async function main() {
       throw new Error(
         method === "GET"
           ? "Workflow read unavailable; pause dependent action"
-          : "Write outcome unknown: read next/item receipts; do not replay the action or mutation blindly",
+          : "Write outcome unknown: read next/item receipts; do not replay the action or mutation blindly"
       );
     }
     if (!response.ok) {
@@ -181,7 +181,7 @@ async function main() {
           ? value.error
           : "request_failed";
       throw new Error(
-        `Workflow HTTP ${response.status}: ${code}; reconcile via read-only next before another write`,
+        `Workflow HTTP ${response.status}: ${code}; reconcile via read-only next before another write`
       );
     }
     return value;
@@ -193,7 +193,7 @@ async function main() {
     action.endpoint !== `${origin}/api/v1/work/items/{id}/workflow`
   )
     throw new Error(
-      "Node does not advertise the checkpoint protocol; no write attempted",
+      "Node does not advertise the checkpoint protocol; no write attempted"
     );
   const path = `/api/v1/work/items/${itemId}`;
   let value;
@@ -213,12 +213,12 @@ async function main() {
       (sessionId && body.runId !== sessionId)
     )
       throw new Error(
-        "record requires explicit expectedRevision, event and this native session's runId",
+        "record requires explicit expectedRevision, event and this native session's runId"
       );
     value = await request(`${path}/workflow`, "POST", body);
     if (!value?.item?.nextCheckpoint)
       throw new Error(
-        "Write acknowledged without a checkpoint packet: read next/item receipts before another write",
+        "Write acknowledged without a checkpoint packet: read next/item receipts before another write"
       );
   } else {
     value = await request(`${path}/coordination`);
@@ -249,7 +249,7 @@ async function main() {
       await rename(temporary, cache);
     } catch {
       console.error(
-        "Advisory cache unavailable; keep the API result and refresh with read-only next.",
+        "Advisory cache unavailable; keep the API result and refresh with read-only next."
       );
     }
   }

@@ -16,9 +16,9 @@ export function canonicalJson(value: unknown): string {
         ? Object.fromEntries(
             Object.keys(entry)
               .sort()
-              .map((key) => [key, entry[key]]),
+              .map((key) => [key, entry[key]])
           )
-        : entry,
+        : entry
     ) ?? "null"
   );
 }

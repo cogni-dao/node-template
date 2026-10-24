@@ -522,7 +522,10 @@ function rowToWorkItem(row: Record<string, unknown>): WorkItem {
     scores: optionalScores(row.scores),
     summary: optionalString(row.summary),
     outcome: optionalString(row.outcome),
-    workflowRun: row.workflow_run == null ? undefined : normalizedPersistedValue(row.workflow_run) as WorkflowRun,
+    workflowRun:
+      row.workflow_run == null
+        ? undefined
+        : (normalizedPersistedValue(row.workflow_run) as WorkflowRun),
     projectId: optionalWorkItemId(row.project_id),
     parentId: optionalWorkItemId(row.parent_id),
     branch: optionalString(row.branch),
