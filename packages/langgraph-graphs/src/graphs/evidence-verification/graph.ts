@@ -83,6 +83,8 @@ export interface EvidenceProgram {
   criteria: string;
   payloadSchema: z.ZodTypeAny;
   payloadDescription: string;
+  /** Only proposal errors explicitly opted in by trusted program code may use the revision. */
+  repairableValidationErrors?: readonly string[];
   limits?: Partial<EvidenceLimits>;
   initialEvidenceError?: (
     evidence: readonly EvidenceReceipt[]
@@ -138,6 +140,37 @@ const Source = z
   })
   .passthrough();
 class Incomplete extends Error {}
+/** Diagnostic context is bounded separately from the exact rejected artifact. */
+function validationFeedback(
+  reason: string,
+  issues: readonly z.ZodIssue[] = []
+): string {
+  const selected: {
+    code: string;
+    path: (string | number)[];
+    message: string;
+  }[] = [];
+  for (const issue of issues.slice(0, 8)) {
+    const diagnostic = {
+      code: String(
+        issue.code === "custom"
+          ? (issue.params?.canonicalCode ?? issue.code)
+          : issue.code
+      ).slice(0, 64),
+      path: issue.path
+        .slice(0, 8)
+        .map((part) => (typeof part === "number" ? part : part.slice(0, 64))),
+      message: issue.message.slice(0, 160),
+    };
+    if (
+      bytes(JSON.stringify({ reason, issues: [...selected, diagnostic] })) >
+      2048
+    )
+      break;
+    selected.push(diagnostic);
+  }
+  return JSON.stringify({ reason: reason.slice(0, 128), issues: selected });
+}
 function json(message: AIMessage): unknown {
   if (typeof message.content !== "string")
     throw new Incomplete("invalid_model_output");
@@ -277,6 +310,7 @@ export function createEvidenceVerificationGraph(
           if (budget.inputBytes > limits.inputBytes)
             throw new Incomplete("input_byte_limit");
           budget.modelCalls++;
+          if (role === "revision") revisions++;
           const r = roles.find((r) => r.role === role);
           if (r) r.calls++;
           else roles.push({ role, calls: 1 });
@@ -449,12 +483,12 @@ export function createEvidenceVerificationGraph(
               .strict();
             const outputContract = `Return only strict JSON {kind:"proposal"|"no_change",summary:string,evidenceIds:string[],payload:${program.payloadDescription}}. Cite only primary evidence IDs you used. No markdown.`;
             let feedback = "";
-            let rejectedProposal: z.infer<typeof Proposal> | undefined;
+            let rejectedProposal: unknown;
+            let rejectedArtifact: string | undefined;
             for (let attempt = 0; attempt < 2; attempt++) {
-              revisions = attempt;
               const authored = await call(attempt ? "revision" : "author", [
                 new SystemMessage(
-                  `${instructions}\nROLE: ${attempt ? "revision. Apply verifier feedback to rejectedProposal, preserving supported assessments." : "author."} ${outputContract}`
+                  `${instructions}\nROLE: ${attempt ? "revision. Correct rejectedArtifact using local validation or verifier feedback, preserving supported assessments. Recheck every output invariant; never invent evidence to make validation pass." : "author."} ${outputContract}`
                 ),
                 new HumanMessage(
                   JSON.stringify({
@@ -462,25 +496,47 @@ export function createEvidenceVerificationGraph(
                     evidence,
                     findings: childResult.findings,
                     feedback,
-                    ...(rejectedProposal ? { rejectedProposal } : {}),
+                    ...(rejectedArtifact !== undefined
+                      ? { rejectedProposal, rejectedArtifact }
+                      : {}),
                   })
                 ),
               ]);
-              const proposal = Proposal.safeParse(json(authored));
-              if (!proposal.success)
-                throw new Incomplete("invalid_proposal_schema");
-              if (
-                proposal.data.evidenceIds.some(
-                  (id) => !evidence.some((e) => e.id === id)
-                )
-              )
-                throw new Incomplete("unsupported_evidence_reference");
-              const invalid = program.validate?.(
-                proposal.data.payload,
-                evidence,
-                proposal.data.kind
+              const parsed = json(authored);
+              const proposal = Proposal.safeParse(parsed);
+              // Retain raw text AND the exact parsed value; never normalize invalid fields.
+              rejectedArtifact = String(authored.content);
+              rejectedProposal = parsed;
+              if (!proposal.success) {
+                if (attempt) throw new Incomplete("invalid_proposal_schema");
+                feedback = validationFeedback(
+                  "invalid_proposal_schema",
+                  proposal.error.issues
+                );
+                continue;
+              }
+              const referenceInvalid = proposal.data.evidenceIds.some(
+                (id) => !evidence.some((e) => e.id === id)
               );
-              if (invalid) throw new Incomplete(invalid);
+              const invalid = referenceInvalid
+                ? "unsupported_evidence_reference"
+                : program.validate?.(
+                    proposal.data.payload,
+                    evidence,
+                    proposal.data.kind
+                  );
+              if (invalid) {
+                if (
+                  attempt ||
+                  !(
+                    referenceInvalid ||
+                    program.repairableValidationErrors?.includes(invalid)
+                  )
+                )
+                  throw new Incomplete(invalid);
+                feedback = validationFeedback(invalid);
+                continue;
+              }
               const verdictMessage = await call("verifier", [
                 new SystemMessage(
                   `${instructions}\nROLE: independent verifier. Check primary evidence, not author assertions. ${program.criteria}\nReturn only strict JSON {"verdict":"accept"|"revise","reason":string}. Reject unsupported claims and no-change claims lacking evidence.`
@@ -501,7 +557,6 @@ export function createEvidenceVerificationGraph(
                 break;
               }
               feedback = verdict.data.reason;
-              rejectedProposal = proposal.data;
             }
             result ??= finish("incomplete", "verification_rejected");
           }

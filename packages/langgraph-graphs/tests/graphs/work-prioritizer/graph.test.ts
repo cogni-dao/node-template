@@ -14,7 +14,10 @@ import {
 import { parseWorkItemScores, type WorkItemScores } from "@cogni/work-items";
 import { describe, expect, it } from "vitest";
 import { LANGGRAPH_CATALOG } from "../../../src/catalog";
-import type { EvidenceReceipt } from "../../../src/graphs/evidence-verification/graph";
+import {
+  createEvidenceVerificationGraph,
+  type EvidenceReceipt,
+} from "../../../src/graphs/evidence-verification/graph";
 import { createWorkPrioritizerGraph } from "../../../src/graphs/work-prioritizer/graph";
 import { MISSION_EVIDENCE_PROGRAM } from "../../../src/graphs/work-prioritizer/program";
 import { WORK_PRIORITIZER_TOOL_IDS } from "../../../src/graphs/work-prioritizer/tools";
@@ -327,6 +330,228 @@ describe("read-only mission program", () => {
         "proposal"
       )
     ).toBe("current_scores_incomplete_or_invalid");
+  });
+
+  // Synthetic replay of the returned v2 author defect; no model-quality claim.
+  const unknownPayload = proposed({
+    scores: { ...scores, confidence: { v: 0 } },
+    support: {
+      ...support,
+      confidence: {
+        rationale:
+          "Inspected e2; no live validation proof supplied, so confidence is unknown",
+        evidenceIds: ["e2"],
+      },
+    },
+  });
+  const unknownProposal = (p: unknown) =>
+    JSON.stringify({
+      kind: "proposal",
+      summary: "Uncertainty is explicit",
+      evidenceIds: ["e1", "e2"],
+      payload: p,
+    });
+  const verdict = JSON.stringify({
+    verdict: "accept",
+    reason: "Observed uncertainty represented honestly",
+  });
+  async function assess(
+    complete: (input: string, index: number) => string,
+    work = evidence[1].value
+  ) {
+    const calls: string[] = [];
+    const reads: string[] = [];
+    const runner = createInProcGraphRunner({
+      createGraph: (opts) =>
+        createEvidenceVerificationGraph(opts, {
+          ...MISSION_EVIDENCE_PROGRAM,
+          initialReads: [
+            { tool: GOAL_LIST_NAME, args: {} },
+            { tool: WORK_ITEM_QUERY_NAME, args: { ids: ["task.1"] } },
+          ],
+        }),
+      completionFn: (req) => {
+        const input = JSON.stringify(req.messages);
+        const content = complete(input, calls.length);
+        calls.push(input);
+        return {
+          stream: (async function* () {})(),
+          final: Promise.resolve({ ok: true as const, content }),
+        };
+      },
+      toolContracts: [
+        knowledgeReadContract,
+        goalListContract,
+        workItemQueryContract,
+      ],
+      createToolExecFn: () => async (name, args) => {
+        reads.push(name);
+        if (name === GOAL_LIST_NAME)
+          return { ok: true, value: evidence[0].value };
+        if (name === WORK_ITEM_QUERY_NAME) return { ok: true, value: work };
+        const id = (args as { id: string }).id;
+        return {
+          ok: true,
+          value: {
+            mode: "get",
+            totalFound: 1,
+            entries: [
+              {
+                id,
+                content: "Unknown is zero. Sources must support the claim.",
+                sourceRef: "test:1",
+                entryType: id === "mission-loop-expert" ? "skill" : "reference",
+                tags: ["expertise-role"],
+              },
+            ],
+          },
+        };
+      },
+      request: {
+        runId: "schema-repair",
+        nodeId: "node-1",
+        messages: [{ role: "user", content: "Assess task.1" }],
+        configurable: {
+          model: "existing-model",
+          toolIds: [...WORK_PRIORITIZER_TOOL_IDS],
+        },
+      },
+    });
+    for await (const _ of runner.stream) {
+      /* preserve usage drain */
+    }
+    return { result: await runner.final, calls, reads };
+  }
+
+  it("repairs unknown representation using canonical issue paths and actual inspected receipts", async () => {
+    const invalid = proposed({
+      scores: { ...scores, confidence: {} },
+      support: {
+        ...support,
+        confidence: { rationale: "Unknown", evidenceIds: [] },
+      },
+    });
+    const raw = unknownProposal(invalid);
+    const { result, calls, reads } = await assess((input, index) => {
+      if (index === 0) return "facts";
+      if (index === 1) return raw;
+      if (index === 2) {
+        const repair = JSON.parse(JSON.parse(input).at(-1).content);
+        expect(repair.rejectedArtifact).toBe(raw);
+        const issues = JSON.parse(repair.feedback).issues;
+        expect(issues).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              code: "invalid_value",
+              path: ["payload", "items", 0, "scores", "confidence", "v"],
+            }),
+            expect.objectContaining({
+              path: [
+                "payload",
+                "items",
+                0,
+                "support",
+                "confidence",
+                "evidenceIds",
+              ],
+            }),
+          ])
+        );
+        return unknownProposal(unknownPayload);
+      }
+      expect(input).toContain("independent verifier");
+      return verdict;
+    });
+    expect(result.structuredOutput).toMatchObject({
+      program: { version: "3" },
+      status: "accepted",
+      revisions: 1,
+      proposal: { payload: unknownPayload },
+    });
+    expect(calls).toHaveLength(4);
+    expect(reads).toHaveLength(4);
+    expect(
+      MISSION_EVIDENCE_PROGRAM.payloadSchema.safeParse(invalid).success
+    ).toBe(false);
+    expect(
+      MISSION_EVIDENCE_PROGRAM.payloadSchema.safeParse(unknownPayload).success
+    ).toBe(true);
+  });
+
+  it.each([
+    false,
+    true,
+  ])("self citations require a newly compliant model artifact (leftInvalid=%s)", async (leftInvalid) => {
+    const selfCited = proposed({
+      scores: { ...scores, goal: { v: 4, ev: self } },
+    });
+    const { result, calls } = await assess((input, index) => {
+      if (index === 0) return "facts";
+      if (index === 1) return unknownProposal(selfCited);
+      if (index === 2) {
+        const repair = JSON.parse(JSON.parse(input).at(-1).content);
+        expect(repair.rejectedProposal.payload).toEqual(selfCited);
+        expect(repair.feedback).toContain(
+          "justification_not_independently_read"
+        );
+        return unknownProposal(leftInvalid ? selfCited : unknownPayload);
+      }
+      return verdict;
+    });
+    expect(result.structuredOutput?.status).toBe(
+      leftInvalid ? "incomplete" : "accepted"
+    );
+    expect(result.structuredOutput?.revisions).toBe(1);
+    expect(calls).toHaveLength(leftInvalid ? 3 : 4);
+  });
+
+  it("stops when shape repair leaves a self citation, without a second repair or verifier", async () => {
+    const invalid = proposed({
+      scores: { ...scores, confidence: {}, goal: { v: 4, ev: self } },
+    });
+    const fixedShape = proposed({
+      scores: { ...scores, confidence: { v: 0 }, goal: { v: 4, ev: self } },
+    });
+    const { result, calls } = await assess(
+      (_input, index) =>
+        ["facts", unknownProposal(invalid), unknownProposal(fixedShape)][
+          index
+        ] ?? verdict
+    );
+    expect(result.structuredOutput).toMatchObject({
+      status: "incomplete",
+      reason: "justification_not_independently_read",
+      revisions: 1,
+    });
+    expect(calls).toHaveLength(3);
+  });
+
+  it.each([
+    true,
+    false,
+  ])("never repairs incomplete or invalid stored score evidence (truncated=%s)", async (truncated) => {
+    const work = {
+      items: [
+        {
+          id: "task.1",
+          revision: 4,
+          sourceUrl: self,
+          scores: truncated ? scores : { broken: {} },
+          ...(truncated ? { scoresTruncated: true } : {}),
+        },
+      ],
+    };
+    const { result, calls } = await assess(
+      (_input, index) =>
+        index === 0 ? "facts" : unknownProposal(unknownPayload),
+      work
+    );
+    expect(result.structuredOutput).toMatchObject({
+      status: "incomplete",
+      reason: "current_scores_incomplete_or_invalid",
+      revisions: 0,
+    });
+    expect(calls).toHaveLength(2);
   });
 
   async function queried(stored: WorkItemScores) {
