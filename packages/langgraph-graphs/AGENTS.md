@@ -36,7 +36,7 @@ LangGraph graph definitions and runtime utilities for agentic AI execution. Cont
 }
 ```
 
-**External deps:** `@langchain/core`, `@langchain/langgraph`, `@langchain/mcp-adapters`, `zod`. Imports `@cogni/ai-core`, `@cogni/ai-tools`.
+**External deps:** `@langchain/core`, `@langchain/langgraph`, `@langchain/mcp-adapters`, `zod`. Imports `@cogni/ai-core`, `@cogni/ai-tools`, and the canonical score parser from `@cogni/work-items` (>=0.2.4).
 
 ## Public Surface
 
@@ -125,3 +125,5 @@ pnpm --filter @cogni-dao/langgraph-graphs test
 - `LangGraphInProcProvider` in `src/adapters/server/ai/langgraph/` wires this package
 - Package isolation enables LangGraph Server to import graphs without Next.js deps
 - **Dual tsconfig:** LangGraph CLI generates runtime `.ts` files (`__langgraph__*.ts`) that break `composite` mode. This package uses `tsconfig.json` (noEmit, for CLI) + `tsconfig.build.json` (composite, for `tsc -b`). Root tsconfig.json references the build config explicitly. This is not proper form, but a valid workaround.
+
+Mission program v2 delegates score validation to work-items; separate per-axis support binds read provenance. Query score truncation fails closed, extra axes are preserved, and no-op compares v+ev.
