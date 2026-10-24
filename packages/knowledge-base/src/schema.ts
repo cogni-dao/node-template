@@ -284,6 +284,9 @@ export const workItems = pgTable(
     summary: text("summary"),
     outcome: text("outcome"),
 
+    // Explicit checkpoint progress; absent preserves existing work-item behavior.
+    workflowRun: jsonb("workflow_run"),
+
     // Lifecycle bag
     branch: text("branch"),
     pr: text("pr"),

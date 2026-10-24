@@ -10,10 +10,11 @@
  */
 
 import { execFileSync, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { toWorkItemId } from "@cogni/work-items";
+import { canonicalJson, CICD_WORKFLOW, transitionWorkflow, workflowFingerprintInputs, toWorkItemId } from "@cogni/work-items";
 import { acquireDoltWriterLocks } from "@cogni-dao/doltgres-admission";
 import postgres, { type Sql } from "postgres";
 import {
@@ -101,6 +102,111 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 		if (sql) await sql.end({ timeout: 5 });
 		if (container) await container.stop();
 	});
+
+	it("round-trips nested workflow JSONB under creator authorization and revision CAS", async () => {
+		const readSql = postgres(dbUrl, { max: 1, fetch_types: false });
+		const adapter = new DoltgresWorkItemAdapter(sql, {
+			logger: stageLogger,
+			readClient: readSql,
+		});
+		const id = toWorkItemId("task.9530");
+		const creator = "workflow-creator",
+			principalId = creator,
+			runId = "native-workflow-a";
+		const hash = (text: string) =>
+			createHash("sha256").update(text).digest("hex");
+		const fingerprints = workflowFingerprintInputs(CICD_WORKFLOW);
+		const identity = {
+			definitionHash: hash(fingerprints.definition),
+			structureHash: hash(fingerprints.structure),
+		};
+		try {
+			await adapter.create(
+				{ id, type: "task", title: "Workflow JSONB boundary" },
+				creator,
+			);
+			const started = transitionWorkflow(
+				undefined,
+				{ op: "start", workflowId: CICD_WORKFLOW.id },
+				CICD_WORKFLOW,
+				identity,
+				"start",
+				new Date().toISOString(),
+			);
+			const startItem = await adapter.patch(
+				{
+					id,
+					expectedRevision: 0,
+					set: { workflowRun: started.run },
+				},
+				principalId,
+			);
+			expect(startItem.workflowRun).toEqual(started.run);
+			const event = {
+				op: "complete" as const,
+				workflowId: CICD_WORKFLOW.id,
+				checkpointId: "implementation",
+				definitionHash: identity.definitionHash,
+				receiptKey: "pr-199-head",
+				evidence: {
+					prUrl: "https://github.com/cogni-dao/node-template/pull/199",
+					branch: "feat/workflow",
+					headSha: "a".repeat(40),
+					changeEvidence: "https://github.com/cogni-dao/node-template/pull/199",
+					implementerSession: runId,
+				},
+			};
+			const completed = transitionWorkflow(
+				startItem.workflowRun,
+				event,
+				CICD_WORKFLOW,
+				identity,
+				hash(canonicalJson(event)),
+				new Date().toISOString(),
+			);
+			const nextItem = await adapter.patch(
+				{
+					id,
+					expectedRevision: startItem.revision,
+					set: {
+						workflowRun: completed.run,
+						...(completed.status ? { status: completed.status } : {}),
+					},
+				},
+				principalId,
+			);
+			expect(nextItem.workflowRun).toEqual(completed.run);
+			expect((await adapter.get(id))?.workflowRun?.receipts[0]?.key).toBe(
+				"pr-199-head",
+			);
+			await expect(
+				adapter.patch(
+					{
+						id,
+						expectedRevision: startItem.revision,
+						set: { workflowRun: started.run },
+					},
+					principalId,
+				),
+			).rejects.toBeInstanceOf(WorkItemRevisionConflictError);
+			const resumed = await adapter.get(id);
+			expect(resumed?.workflowRun).toEqual(completed.run);
+			expect(resumed?.workflowRun?.checkpointId).toBe("review_ci");
+			expect(
+				transitionWorkflow(
+					resumed?.workflowRun,
+					event,
+					CICD_WORKFLOW,
+					identity,
+					hash(canonicalJson(event)),
+					new Date().toISOString(),
+				).replayed,
+			).toBe(true);
+		} finally {
+			// Container-owned fixture is retained; content deletion is retired.
+			await readSql.end({ timeout: 0 });
+		}
+	}, 120_000);
 
 	it("creates, lists, patches, and retains versioned content through Dolt branches", async () => {
 		const createWorkItemClient = () =>

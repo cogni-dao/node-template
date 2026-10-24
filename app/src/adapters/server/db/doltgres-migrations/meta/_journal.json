@@ -29,6 +29,13 @@
       "when": 1792746015011,
       "tag": "0003_work_item_scores",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1792800199955,
+      "tag": "0004_workflow_checkpoints",
+      "breakpoints": true
     }
   ]
 }

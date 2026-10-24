@@ -17,6 +17,11 @@
 // ============================================================================
 
 export const EVENT_NAMES = {
+	WORK_ITEMS_WORKFLOW_COMPLETE: "work.items.workflow.complete",
+	WORKFLOW_INVALID: "workflow_invalid",
+	WORKFLOW_CONFLICT: "workflow_conflict",
+	WORKFLOW_UNAVAILABLE: "workflow_unavailable",
+	WORKFLOW_INTERNAL: "workflow_internal",
 	// AI Domain - Server
 	AI_COMPLETION: "ai.completion",
 	AI_LLM_CALL: "ai.llm_call",

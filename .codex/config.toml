@@ -26,3 +26,10 @@ statusMessage = "Loading Cogni cognition substrate"
 # Codex and structured hookSpecificOutput.additionalContext under Claude Code;
 # both are uncapped, so the whole bundle auto-surfaces at any size (no ceiling).
 additionalContextLimit = 0
+
+# Workflow progress remains on this node; this hook only restores an advisory packet.
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = 'node "$(git rev-parse --show-toplevel)/packages/work-items/bin/cogni-workflow.mjs" session-start'
+statusMessage = "Restoring current workflow checkpoint"
+additionalContextLimit = 12000

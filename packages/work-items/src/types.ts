@@ -15,6 +15,7 @@
  */
 
 import type { Tagged } from "type-fest";
+import type { WorkflowRun } from "./workflow.js";
 
 // ── Identity ──────────────────────────────────────────
 
@@ -107,6 +108,7 @@ export type WorkItem = {
   readonly scores?: WorkItemScores;
   readonly summary?: string;
   readonly outcome?: string;
+  readonly workflowRun?: WorkflowRun;
   readonly projectId?: WorkItemId;
   readonly parentId?: WorkItemId;
   readonly node: string;

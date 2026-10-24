@@ -24,6 +24,12 @@ export type {
   WorkItemLeaseOwner,
   WorkItemLeasePort,
 } from "./leases.js";
+export {
+  CICD_NO_PREVIEW_WORKFLOW,
+  CICD_WORKFLOW,
+  CICD_WORKFLOWS,
+} from "./cicd-workflow.js";
+export { canonicalJson } from "./json.js";
 export type { WorkItemCommandPort, WorkItemQueryPort } from "./ports.js";
 export type {
   WorkItemScoresIssue,
@@ -60,3 +66,17 @@ export type {
 } from "./types.js";
 export { toWorkItemId } from "./types.js";
 export { withWorkItemLeases } from "./with-leases.js";
+export type {
+  WorkflowCheckpoint,
+  WorkflowDefinition,
+  WorkflowEvent,
+  WorkflowIdentity,
+  WorkflowReceipt,
+  WorkflowRun,
+} from "./workflow.js";
+export {
+  nextWorkflowCheckpoint,
+  transitionWorkflow,
+  WorkflowConflictError,
+  workflowFingerprintInputs,
+} from "./workflow.js";

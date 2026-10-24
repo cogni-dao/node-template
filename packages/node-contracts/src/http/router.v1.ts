@@ -13,21 +13,21 @@
  */
 
 import { initContract } from "@ts-rest/core";
-
 import { metaLivezOutputSchema } from "../meta.livez.read.v1.contract";
 import { metaReadyzOutputSchema } from "../meta.readyz.read.v1.contract";
 import { metaRoutesOutputSchema } from "../meta.route-manifest.read.v1.contract";
-import { workItemsCreateOperation } from "../work.items.create.v1.contract";
-import { workItemsDeleteOperation } from "../work.items.delete.v1.contract";
-import { workItemsGetOperation } from "../work.items.get.v1.contract";
 import {
   workItemsClaimOperation,
   workItemsCoordinationOperation,
   workItemsHeartbeatOperation,
   workItemsReleaseOperation,
 } from "../work.items.coordination.v1.contract";
+import { workItemsCreateOperation } from "../work.items.create.v1.contract";
+import { workItemsDeleteOperation } from "../work.items.delete.v1.contract";
+import { workItemsGetOperation } from "../work.items.get.v1.contract";
 import { workItemsListOperation } from "../work.items.list.v1.contract";
 import { workItemsPatchOperation } from "../work.items.patch.v1.contract";
+import { workItemsWorkflowOperation } from "../work.items.workflow.v1.contract";
 
 const c = initContract();
 
@@ -150,6 +150,14 @@ export const ApiContractV1 = c.router({
     responses: {
       200: workItemsCoordinationOperation.output,
     },
+  },
+  workItemsWorkflow: {
+    method: "POST",
+    path: "/work/items/:id/workflow",
+    summary: workItemsWorkflowOperation.summary,
+    description: workItemsWorkflowOperation.description,
+    body: workItemsWorkflowOperation.input.omit({ id: true }),
+    responses: { 200: workItemsWorkflowOperation.output },
   },
   // Future endpoints: metaOpenapi, etc.
 });

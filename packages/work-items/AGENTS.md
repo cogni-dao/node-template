@@ -41,6 +41,7 @@ Work item port interfaces, domain types, and storage adapters for structured wor
 
 ## Public Surface
 
+- **CLI:** `cogni-workflow next|record ITEM --node-url ORIGIN`; NODE key/origin pairs stay in one source; a partial saved file never borrows inherited values. `session-start` reads an advisory native-session projection; server responses own guidance and progress.
 - **Exports (root `@cogni/work-items`):**
   - `WorkItemId`, `Revision`, `WorkItemType`, `WorkItemStatus`, `ActorKind` — identity and enum types
   - `SubjectRef`, `ExternalRef`, `RelationType`, `WorkRelation` — structured domain types
@@ -98,6 +99,7 @@ pnpm vitest run packages/work-items/tests/
 
 ## Notes
 
+- `workflow.ts` owns pure checkpoint/receipt transitions; `cicd-workflow.ts` registers reviewed CI/CD definitions; the no-preview variant requires explicit declared-policy evidence. `workflowRun` is optional; generic HTTP PATCH cannot write it. Workflow persistence requires revision + active principal/run lease in one UPDATE.
 - `toWorkItemId()` does no format validation — WorkItemIds include both numeric (`task.0149`) and slug-based (`proj.agentic-project-management`) formats
 - `MarkdownWorkItemAdapter` constructor takes `workDir` (repo root) — scans `work/items/` and `work/projects/`
 - `blocked` can transition to any `needs_*` status — adapters may enforce stricter return-to-previous-status logic

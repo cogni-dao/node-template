@@ -16,6 +16,7 @@
 import type { WorkItemLeasePort } from "./leases.js";
 
 import type {
+  WorkflowRun,
   WorkItem,
   WorkItemCommandPort,
   WorkItemId,
@@ -27,6 +28,7 @@ export type WorkItemsCreateInput = Parameters<WorkItemCommandPort["create"]>[0];
 export type WorkItemsPatchSet = NonNullable<
   Parameters<WorkItemCommandPort["patch"]>[0]["set"]
 > & {
+  readonly workflowRun?: WorkflowRun;
   readonly deployVerified?: boolean;
   readonly projectId?: string | null;
   readonly parentId?: string | null;

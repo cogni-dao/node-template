@@ -13,6 +13,12 @@
  * @internal
  */
 
+import { createHash } from "node:crypto";
+import {
+  checkNodeAdmin,
+  isPrivilegedPriority,
+  NodeAdminRequiredError,
+} from "@cogni/knowledge-store";
 import type {
   WorkItemsCreateInput as ContractCreateInput,
   WorkItemsPatchInput as ContractPatchInput,
@@ -20,25 +26,21 @@ import type {
   WorkItemDto,
   WorkItemsListInput,
   WorkItemsListOutput,
+  WorkItemsWorkflowInput,
 } from "@cogni/node-contracts";
+import { WorkflowRunSchema } from "@cogni/node-contracts";
 import type { WorkItem, WorkItemId, WorkItemLease } from "@cogni/work-items";
 import {
+  canonicalJson,
+  CICD_WORKFLOWS,
+  WorkItemRevisionConflictError,
+  WorkItemScoresInvalidError,
+  WorkItemWriteOutcomeUnknownError,
   toWorkItemId,
-  WorkItemRevisionConflictError,
-  WorkItemScoresInvalidError,
-  WorkItemWriteOutcomeUnknownError,
+  transitionWorkflow,
+  WorkflowConflictError,
 } from "@cogni/work-items";
-export {
-  WorkItemRevisionConflictError,
-  WorkItemScoresInvalidError,
-  WorkItemWriteOutcomeUnknownError,
-};
-
-import {
-  checkNodeAdmin,
-  isPrivilegedPriority,
-  NodeAdminRequiredError,
-} from "@cogni/knowledge-store";
+import { checkpointFor } from "@/bootstrap/workflow-guidance";
 import { getContainer } from "@/bootstrap/container";
 
 /**
@@ -56,7 +58,7 @@ export class InvalidCursorError extends Error {
   }
 }
 
-export { NodeAdminRequiredError };
+export { NodeAdminRequiredError, WorkItemRevisionConflictError, WorkItemScoresInvalidError, WorkItemWriteOutcomeUnknownError };
 
 export class WorkItemNotFoundError extends Error {
   constructor(id: string) {
@@ -79,7 +81,7 @@ export class WorkItemForbiddenError extends Error {
  */
 async function assertPriorityAuthority(
   priority: number | null | undefined,
-  actor: WorkItemActor
+  actor: WorkItemActor,
 ): Promise<void> {
   if (!isPrivilegedPriority(priority)) return;
   const decision = await checkNodeAdmin(getContainer().nodeAdmin, {
@@ -89,7 +91,7 @@ async function assertPriorityAuthority(
   if (!decision.ok) {
     const err = new NodeAdminRequiredError(
       decision,
-      `work.items.priority.p${priority}`
+      `work.items.priority.p${priority}`,
     );
     getContainer().log.warn(
       {
@@ -98,7 +100,7 @@ async function assertPriorityAuthority(
         action: err.action,
         userId: actor.id,
       },
-      "work.items.priority_node_admin_refused"
+      "work.items.priority_node_admin_refused",
     );
     throw err;
   }
@@ -124,6 +126,8 @@ export class WorkItemsBackendNotReadyError extends Error {
   }
 }
 
+export { WorkflowConflictError };
+
 function toDto(item: WorkItem): WorkItemDto {
   return {
     id: item.id as string,
@@ -137,6 +141,12 @@ function toDto(item: WorkItem): WorkItemDto {
     ...(item.scores !== undefined && { scores: item.scores }),
     summary: item.summary,
     outcome: item.outcome,
+    ...(item.workflowRun
+      ? {
+          workflowRun: WorkflowRunSchema.parse(item.workflowRun),
+          nextCheckpoint: checkpointFor(item),
+        }
+      : {}),
     projectId: item.projectId as string | undefined,
     parentId: item.parentId as string | undefined,
     node: item.node,
@@ -160,6 +170,10 @@ function toDto(item: WorkItem): WorkItemDto {
 
 function nextActionForWorkItem(item: WorkItem): string | null {
   if (item.blockedBy) return "blocked";
+  if (item.workflowRun)
+    return item.workflowRun.checkpointId
+      ? `workflow:${item.workflowRun.checkpointId}`
+      : null;
   switch (item.status) {
     case "needs_triage":
       return "/triage";
@@ -186,7 +200,7 @@ type StripUndefined<T> = {
 };
 
 function dropUndefined<T extends Record<string, unknown>>(
-  obj: T
+  obj: T,
 ): StripUndefined<T> {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(obj)) {
@@ -257,7 +271,7 @@ function rethrowBackendError(error: unknown): never {
 }
 
 export async function listWorkItems(
-  input: WorkItemsListInput
+  input: WorkItemsListInput,
 ): Promise<WorkItemsListOutput> {
   const container = getContainer();
   const queryShared = {
@@ -339,7 +353,7 @@ export async function getWorkItem(id: string): Promise<WorkItemDto | null> {
 
 export async function createWorkItem(
   input: ContractCreateInput,
-  sessionUser: WorkItemActor
+  sessionUser: WorkItemActor,
 ): Promise<WorkItemDto> {
   await assertPriorityAuthority(input.priority, sessionUser);
   const container = getContainer();
@@ -367,7 +381,7 @@ export async function createWorkItem(
         ...(input.estimate !== undefined && { estimate: input.estimate }),
         ...(input.scores !== undefined && { scores: input.scores }),
       },
-      sessionUser.id
+      sessionUser.id,
     );
     return toDto(created);
   } catch (e) {
@@ -377,7 +391,7 @@ export async function createWorkItem(
 
 export async function patchWorkItem(
   input: ContractPatchInput,
-  sessionUser: WorkItemActor
+  sessionUser: WorkItemActor,
 ): Promise<WorkItemDto> {
   await assertPriorityAuthority(input.set.priority, sessionUser);
   const container = getContainer();
@@ -390,7 +404,7 @@ export async function patchWorkItem(
         }),
         set: dropUndefined(input.set),
       },
-      sessionUser.id
+      sessionUser.id,
     );
     if (!patched) throw new WorkItemNotFoundError(input.id);
     return toDto(patched);
@@ -401,13 +415,13 @@ export async function patchWorkItem(
 
 export async function deleteWorkItem(
   id: string,
-  sessionUser: { id: string }
+  sessionUser: { id: string },
 ): Promise<boolean> {
   const container = getContainer();
   try {
     return await container.doltgresWorkItems.delete(
       toWorkItemId(id),
-      sessionUser.id
+      sessionUser.id,
     );
   } catch (e) {
     rethrowBackendError(e);
@@ -477,7 +491,7 @@ export async function heartbeatWorkItem(input: {
 }
 
 export async function getWorkItemCoordination(
-  id: string
+  id: string,
 ): Promise<WorkItemCoordinationOutput> {
   const container = getContainer();
   try {
@@ -485,6 +499,9 @@ export async function getWorkItemCoordination(
     if (!current) throw new WorkItemNotFoundError(id);
     return {
       nextAction: nextActionForWorkItem(current),
+      ...(current.workflowRun
+        ? { nextCheckpoint: checkpointFor(current) }
+        : {}),
       session: {
         status: current.claimedByRun ? "active" : "none",
         claimedByRun: current.claimedByRun ?? null,
@@ -495,6 +512,53 @@ export async function getWorkItemCoordination(
     };
   } catch (error) {
     if (error instanceof WorkItemNotFoundError) throw error;
+    rethrowBackendError(error);
+  }
+}
+
+/** Compose the pure transition with the existing node-local, claim-fenced CAS write. */
+export async function recordWorkItemWorkflow(
+  input: WorkItemsWorkflowInput,
+  principalId: string,
+) {
+  const store = getContainer().doltgresWorkItems;
+  const id = toWorkItemId(input.id);
+  try {
+    const current = await store.get(id);
+    if (!current) throw new WorkItemNotFoundError(input.id);
+    const profile = workflowProfile(input.event.workflowId);
+    if (!profile) throw new WorkflowConflictError("workflow_not_found");
+    const canonical = canonicalJson(input.event);
+    const result = transitionWorkflow(
+      current.workflowRun,
+      input.event,
+      profile.definition,
+      profile.identity,
+      sha256(canonical),
+      new Date().toISOString(),
+    );
+    // A matching receipt is a readback, including after the lease/session changed.
+    if (result.replayed) return { item: toDto(current), replayed: true };
+    if (current.revision !== input.expectedRevision)
+      throw new WorkflowConflictError("stale_revision");
+    const item = await store.patch(
+      {
+        id,
+        expectedRevision: input.expectedRevision,
+        set: {
+          workflowRun: result.run,
+          ...(result.status ? { status: result.status } : {}),
+        },
+      },
+      principalId,
+    );
+    return { item: toDto(item), replayed: false };
+  } catch (error) {
+    if (
+      error instanceof WorkflowConflictError ||
+      error instanceof WorkItemNotFoundError
+    )
+      throw error;
     rethrowBackendError(error);
   }
 }

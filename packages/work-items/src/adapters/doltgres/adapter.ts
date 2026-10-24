@@ -30,6 +30,7 @@ import type {
   WorkItemScore,
   WorkItemScores,
   WorkItemStatus,
+  WorkflowRun,
   WorkItemType,
   WorkQuery,
   WorkRelation,
@@ -521,6 +522,7 @@ function rowToWorkItem(row: Record<string, unknown>): WorkItem {
     scores: optionalScores(row.scores),
     summary: optionalString(row.summary),
     outcome: optionalString(row.outcome),
+    workflowRun: row.workflow_run == null ? undefined : normalizedPersistedValue(row.workflow_run) as WorkflowRun,
     projectId: optionalWorkItemId(row.project_id),
     parentId: optionalWorkItemId(row.parent_id),
     branch: optionalString(row.branch),
@@ -599,6 +601,7 @@ const PATCH_COLUMNS: Record<keyof WorkItemsPatchSet, string> = {
   title: "title",
   summary: "summary",
   outcome: "outcome",
+  workflowRun: "workflow_run",
   status: "status",
   priority: "priority",
   rank: "rank",
@@ -630,6 +633,7 @@ const PERSISTED_WORK_ITEM_COLUMNS = [
   "scores",
   "summary",
   "outcome",
+  "workflow_run",
   "branch",
   "pr",
   "reviewer",
@@ -2942,6 +2946,9 @@ export class DoltgresWorkItemAdapter
     const principal = requirePrincipal(principalId);
     const id = input.id as string;
     const expectedRevision = parseExpectedRevision(input.expectedRevision);
+    if (input.set.workflowRun !== undefined && expectedRevision === undefined) {
+      throw new WorkItemAuthorizationError(id);
+    }
     const set: WorkItemsPatchSet =
       input.set.scores === undefined
         ? input.set

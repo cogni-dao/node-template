@@ -21,6 +21,7 @@ export const WorkItemLeaseSchema = z.object({
   lastCommand: z.string(),
   active: z.boolean(),
 });
+import { NextCheckpointSchema } from "./work.items.workflow.schema";
 
 const WorkItemIdSchema = z
   .string()
@@ -67,6 +68,7 @@ export const workItemsReleaseOperation = {
 
 export const WorkItemCoordinationSchema = z.object({
   nextAction: z.string().nullable(),
+  nextCheckpoint: NextCheckpointSchema.optional(),
   session: z.object({
     status: z.enum(["active", "none"]),
     claimedByRun: z.string().nullable(),
