@@ -13,6 +13,8 @@
  * @public
  */
 
+import { canonicalJson } from "./managed-execution";
+
 import type {
   AssembleAssistantMessageFn,
   IsThreadConflictErrorFn,
@@ -48,7 +50,10 @@ export interface DurableChatTerminalResult {
   readonly attempt?: number;
 }
 
-export interface DurableChatTerminalInput<TEvent, TMessage extends PersistedThreadMessage> {
+export interface DurableChatTerminalInput<
+  TEvent,
+  TMessage extends PersistedThreadMessage,
+> {
   readonly runId: string;
   /** Absent for a headless run, which skips persistence and publishes directly. */
   readonly stateKey?: string;
@@ -64,11 +69,19 @@ export interface DurableChatTerminalInput<TEvent, TMessage extends PersistedThre
   }) => void;
   /** Optimistic-concurrency retry budget. Defaults to 3. */
   readonly maxAttempts?: number;
+  /** Canonical managed runs must not accept a same-ID different presentation. */
+  readonly verifyExistingContent?: boolean;
 }
 
 /** Node-owned collaborators the policy cannot own without importing app code. */
-export interface DurableChatTerminalDeps<TEvent, TMessage extends PersistedThreadMessage> {
-  readonly assembleAssistantMessage: AssembleAssistantMessageFn<TEvent, TMessage>;
+export interface DurableChatTerminalDeps<
+  TEvent,
+  TMessage extends PersistedThreadMessage,
+> {
+  readonly assembleAssistantMessage: AssembleAssistantMessageFn<
+    TEvent,
+    TMessage
+  >;
   readonly redactSecretsInMessages: RedactMessagesFn<TMessage>;
   readonly isThreadConflictError: IsThreadConflictErrorFn;
 }
@@ -118,7 +131,15 @@ export async function persistAssistantThenPublishTerminal<
         input.actorUserId,
         input.stateKey
       );
-      if (existing.some((message) => message.id === assistant.id)) {
+      const savedAssistant = existing.find(
+        (message) => message.id === assistant.id
+      );
+      if (savedAssistant) {
+        if (input.verifyExistingContent) {
+          const expected = deps.redactSecretsInMessages([assistant])[0];
+          if (canonicalJson(savedAssistant) !== canonicalJson(expected))
+            throw new Error("canonical_presentation_mismatch");
+        }
         result = { persisted: true, messageCount: existing.length, attempt };
         break;
       }

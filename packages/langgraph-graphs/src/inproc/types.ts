@@ -55,7 +55,10 @@ export type CreateGraphOptions = CreateReactAgentGraphOptions;
  */
 export type CompiledGraph = InvokableGraph<
   MessageGraphInput,
-  MessageGraphOutput & { structuredResponse?: unknown }
+  MessageGraphOutput & {
+    structuredResponse?: unknown;
+    inputIdentity?: { readonly policyVersion: string; readonly digest: string };
+  }
 >;
 
 /**
@@ -167,4 +170,9 @@ export interface GraphResult {
   readonly content?: string;
   /** Parsed structured output (when graph uses responseFormat) */
   readonly structuredOutput?: Record<string, unknown>;
+  /** Trusted factory side-channel; not part of its model-authored payload. */
+  readonly inputIdentity?: {
+    readonly policyVersion: string;
+    readonly digest: string;
+  };
 }

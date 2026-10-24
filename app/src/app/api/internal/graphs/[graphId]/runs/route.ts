@@ -24,8 +24,16 @@
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import type { AiEvent } from "@cogni/ai-core";
 import { RUN_STREAM_DEFAULT_TTL_SECONDS } from "@cogni/graph-execution-core";
+import {
+  type CanonicalRunResult,
+  canonicalJson,
+  completeManagedGraph,
+  type ManagedExecutionClaim,
+  publishCanonicalTerminal,
+} from "@cogni/graph-execution-host";
 import { toUserId } from "@cogni/ids";
 import { SYSTEM_ACTOR } from "@cogni/ids/system";
+import { LANGGRAPH_CATALOG } from "@cogni/langgraph-graphs";
 import {
   InternalGraphRunInputSchema,
   type InternalGraphRunOutput,
@@ -33,23 +41,21 @@ import {
 import { AnalyticsEvents, capture } from "@cogni/node-shared";
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import {
+  persistAssistantThenPublishTerminal,
+  TerminalPublicationError,
+} from "@/app/_lib/ai/durable-chat-terminal";
 import { getContainer } from "@/bootstrap/container";
 import {
   createGraphExecutor,
   createScopedGraphExecutor,
 } from "@/bootstrap/graph-executor.factory";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
-import {
-  executeStream,
-} from "@/features/ai/public.server";
+import { executeStream } from "@/features/ai/public.server";
 import { commitUsageFact } from "@/features/ai/services/billing";
 import { preflightCreditCheck } from "@/features/ai/services/preflight-credit-check";
 import type { PreflightCreditCheckFn } from "@/ports";
 import { isInsufficientCreditsPortError } from "@/ports";
-import {
-  persistAssistantThenPublishTerminal,
-  TerminalPublicationError,
-} from "@/app/_lib/ai/durable-chat-terminal";
 import {
   isGrantExpiredError,
   isGrantNotFoundError,
@@ -224,6 +230,23 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     } = parseResult.data;
     let runId = providedRunId ?? randomUUID();
 
+    const catalogEntry = graphId.startsWith("langgraph:")
+      ? LANGGRAPH_CATALOG[graphId.slice("langgraph:".length)]
+      : undefined;
+    const resultRequired = catalogEntry?.resultRequired === true;
+    const parseManagedResult = catalogEntry?.parseResult;
+    if (resultRequired && typeof parseManagedResult !== "function") {
+      log.error(
+        { runId, graphId, reason: "result_parser_missing" },
+        "Managed graph configuration rejected before execution"
+      );
+      return NextResponse.json(
+        { error: "result_parser_missing" },
+        { status: 503 }
+      );
+    }
+    let managedClaim: ManagedExecutionClaim | undefined;
+
     // --- 5. Compute request hash for idempotency ---
     // API completions preclaim the slot before Temporal start and pass the
     // authenticated hash through the workflow. Scheduled runs hash the exact
@@ -243,7 +266,21 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         requestHash
       );
 
-    if (idempotencyResult.status === "cached") {
+    if (
+      resultRequired &&
+      (idempotencyResult.status === "cached" ||
+        idempotencyResult.status === "pending" ||
+        idempotencyResult.status === "stale")
+    ) {
+      if (providedRunId && providedRunId !== idempotencyResult.request.runId)
+        return NextResponse.json(
+          { error: "run_identity_mismatch" },
+          { status: 422 }
+        );
+      runId = idempotencyResult.request.runId;
+    }
+
+    if (!resultRequired && idempotencyResult.status === "cached") {
       // Already processed - return cached result with original outcome
       const cached = idempotencyResult.request;
       // The node execution path is the outcome truth-holder. Reconcile the run
@@ -280,7 +317,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     }
 
     let requestAlreadyClaimed = false;
-    if (idempotencyResult.status === "pending") {
+    if (!resultRequired && idempotencyResult.status === "pending") {
       // Execution in progress - return 409 Conflict to signal retry later
       const pending = idempotencyResult.request;
       if (suppliedRequestHash && pending.runId === runId) {
@@ -535,16 +572,108 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       "Parsed modelRef for graph execution"
     );
 
+    const presentManaged = async (canonical: CanonicalRunResult) => {
+      if (canonical.ok && parseManagedResult)
+        parseManagedResult(canonical.structuredOutput);
+      await publishCanonicalTerminal(canonical, {
+        persist: async (text) => {
+          await persistAssistantThenPublishTerminal({
+            runId: canonical.runId,
+            ...(canonical.stateKey ? { stateKey: canonical.stateKey } : {}),
+            actorUserId: canonical.audience.actorUserId,
+            accumulatedEvents: [{ type: "assistant_final", content: text }],
+            verifyExistingContent: true,
+            threadPersistenceForUser: (userId) =>
+              container.threadPersistenceForUser(userId),
+            publishTerminal: async () => {},
+          });
+        },
+        publish: (event) => container.runStream.publish(canonical.runId, event),
+      });
+    };
+    const managedResponse = (canonical: CanonicalRunResult) =>
+      NextResponse.json(
+        {
+          ok: canonical.ok,
+          runId: canonical.runId,
+          traceId: canonical.traceId,
+          ...(canonical.ok
+            ? { structuredOutput: canonical.structuredOutput }
+            : { error: canonical.errorCode ?? "internal" }),
+        },
+        { status: 200 }
+      );
+    if (resultRequired) {
+      const acquired = await container.managedExecution.acquire(
+        {
+          idempotencyKey,
+          requestHash,
+          runId,
+          audience: {
+            actorUserId,
+            billingAccountId,
+            graphId,
+            executionGrantId,
+          },
+        },
+        EXECUTION_LEASE_MS
+      );
+      if (acquired.status === "cached") {
+        if (acquired.result.ok) {
+          try {
+            parseManagedResult?.(acquired.result.structuredOutput);
+          } catch {
+            return NextResponse.json(
+              { error: "result_unavailable", runId },
+              { status: 409 }
+            );
+          }
+        }
+        try {
+          await presentManaged(acquired.result);
+        } catch (error) {
+          log.warn(
+            { runId, error },
+            "Canonical result replay presentation failed"
+          );
+        }
+        log.info(
+          { runId, graphId, reason: "canonical_replay" },
+          "Canonical graph result replayed"
+        );
+        return managedResponse(acquired.result);
+      }
+      if (acquired.status !== "claimed")
+        return NextResponse.json(
+          {
+            error:
+              acquired.status === "unavailable"
+                ? "result_unavailable"
+                : acquired.status,
+            runId,
+          },
+          {
+            status:
+              acquired.status === "denied"
+                ? 403
+                : acquired.status === "mismatch"
+                  ? 422
+                  : 409,
+          }
+        );
+      managedClaim = acquired.claim;
+    }
+
     // Claim only after permanent request validation. INSERT races are resolved
     // by ON CONFLICT + re-read; expired pending leases are reclaimed atomically.
-    if (requestAlreadyClaimed) {
+    if (!resultRequired && requestAlreadyClaimed) {
       // The completion facade created this exact slot before Temporal start.
       // Adopt it by starting the same lease heartbeat used by scheduled runs.
       await container.executionRequestPort.heartbeatRequest(
         idempotencyKey,
         new Date(Date.now() + EXECUTION_LEASE_MS).toISOString()
       );
-    } else {
+    } else if (!resultRequired) {
       const claimResult =
         await container.executionRequestPort.createPendingRequest(
           idempotencyKey,
@@ -614,8 +743,10 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
 
     // Create graph executor and run
     const executor = createGraphExecutor(executeStream, toUserId(actorUserId));
+    const receiverAbort = new AbortController();
     const scopedExecutor = createScopedGraphExecutor({
       executor,
+      ...(resultRequired ? { abortSignal: receiverAbort.signal } : {}),
       preflightCheckFn,
       commitByoUsage: async (fact, log) => {
         await commitUsageFact(
@@ -672,6 +803,18 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     );
 
     const heartbeat = setInterval(() => {
+      if (managedClaim) {
+        void container.managedExecution
+          .heartbeat(managedClaim, EXECUTION_LEASE_MS)
+          .then((owned) => {
+            if (!owned) receiverAbort.abort();
+          })
+          .catch((error) => {
+            receiverAbort.abort();
+            log.warn({ runId, error }, "Managed execution heartbeat failed");
+          });
+        return;
+      }
       void container.executionRequestPort
         .heartbeatRequest(
           idempotencyKey,
@@ -682,6 +825,72 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         );
     }, EXECUTION_HEARTBEAT_MS);
     heartbeat.unref();
+
+    if (managedClaim && parseManagedResult) {
+      try {
+        const committed = await completeManagedGraph({
+          run: result,
+          claim: managedClaim,
+          port: container.managedExecution,
+          traceId,
+          ...(stateKey ? { stateKey } : {}),
+          scope: {
+            nodeId: container.nodeId,
+            environment: container.config.DEPLOY_ENVIRONMENT,
+            scheduleId: executionGrantId
+              ? extractScheduleId(idempotencyKey)
+              : null,
+          },
+          parseResult: parseManagedResult,
+          hash: (text) =>
+            createHash("sha256").update(text, "utf8").digest("hex"),
+          persist: async (text) => {
+            await persistAssistantThenPublishTerminal({
+              runId,
+              ...(stateKey ? { stateKey } : {}),
+              actorUserId,
+              accumulatedEvents: [{ type: "assistant_final", content: text }],
+              verifyExistingContent: true,
+              threadPersistenceForUser: (userId) =>
+                container.threadPersistenceForUser(userId),
+              publishTerminal: async () => {},
+            });
+          },
+          publish: (event) => container.runStream.publish(runId, event),
+          onDeliveryError: (error) =>
+            log.warn({ runId, error }, "Canonical result delivery degraded"),
+        });
+        if (committed.status === "stale") {
+          log.warn(
+            { runId, graphId, reason: "claim_lost" },
+            "Stale graph receiver cannot publish terminal result"
+          );
+          return NextResponse.json(
+            { error: "execution_claim_lost", runId },
+            { status: 409 }
+          );
+        }
+        log.info(
+          {
+            runId,
+            graphId,
+            reason: committed.status,
+            resultSha256: createHash("sha256")
+              .update(canonicalJson(committed.result), "utf8")
+              .digest("hex"),
+            resultStatus: (
+              committed.result.structuredOutput as
+                | { status?: string }
+                | undefined
+            )?.status,
+          },
+          "Canonical graph result committed"
+        );
+        return managedResponse(committed.result);
+      } finally {
+        clearInterval(heartbeat);
+      }
+    }
 
     // Consume stream, publish events to Redis, and wait for final result.
     // Per PUMP_TO_COMPLETION_VIA_REDIS: events reach Redis regardless of SSE subscribers.
@@ -770,10 +979,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
             publishTerminal: async () => {
               await runStream.publish(runId, enriched);
               try {
-                await runStream.expire(
-                  runId,
-                  RUN_STREAM_DEFAULT_TTL_SECONDS
-                );
+                await runStream.expire(runId, RUN_STREAM_DEFAULT_TTL_SECONDS);
               } catch (expireErr) {
                 log.warn(
                   { runId, err: expireErr },

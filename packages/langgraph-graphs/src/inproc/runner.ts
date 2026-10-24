@@ -224,6 +224,15 @@ export function createInProcGraphRunner<TTool = unknown>(
           ? (result.structuredResponse as Record<string, unknown>)
           : undefined;
 
+      const inputIdentity = result.inputIdentity;
+      if (
+        inputIdentity &&
+        (!/^[a-f0-9]{64}$/.test(inputIdentity.digest) ||
+          !inputIdentity.policyVersion ||
+          inputIdentity.policyVersion.length > 128)
+      )
+        throw new Error("invalid_input_identity");
+
       // Composed graphs expose only their validated envelope, never role drafts.
       if (finalOnly)
         queue.push({ type: "text_delta", delta: assistantContent });
@@ -240,6 +249,7 @@ export function createInProcGraphRunner<TTool = unknown>(
         content: assistantContent,
         ...(collectedUsage !== null && { usage: collectedUsage }),
         ...(structuredOutput !== undefined && { structuredOutput }),
+        ...(inputIdentity ? { inputIdentity } : {}),
       };
     } catch (error) {
       // Normalize error using duck-typed LlmError detection (kind/status properties)

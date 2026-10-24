@@ -35,6 +35,8 @@ export const InternalUpdateGraphRunInputSchema = z.object({
 export const InternalUpdateGraphRunOutputSchema = z.object({
   ok: z.literal(true),
   runId: z.string().uuid(),
+  applied: z.boolean().optional(),
+  reason: z.enum(["applied", "receiver_owned", "canonical"]).optional(),
 });
 
 export const internalUpdateGraphRunOperation = {
