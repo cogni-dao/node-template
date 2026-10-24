@@ -5,7 +5,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { completionRequestHash } from "@/app/_lib/ai/completion-identity";
-import { workItemSemanticIdentity } from "../../../packages/ai-tools/src/work-item-semantic";
+import { workItemSemanticIdentity } from "../../../packages/ai-tools/src/tools/work-item-query";
 import { persistAssistantThenPublishTerminal } from "../../../packages/graph-execution-host/src/durable-chat-terminal";
 import {
   canonicalTerminal,
@@ -13,8 +13,10 @@ import {
   publishCanonicalTerminal,
   shouldWithholdResultEvent,
 } from "../../../packages/graph-execution-host/src/managed-execution";
-import { freezeMissionEvidence } from "../../../packages/langgraph-graphs/src/graphs/work-prioritizer/frozen-evidence";
-import { parseMissionEvidenceResult } from "../../../packages/langgraph-graphs/src/graphs/work-prioritizer/program";
+import {
+  freezeMissionEvidence,
+  parseMissionEvidenceResult,
+} from "../../../packages/langgraph-graphs/src/graphs/work-prioritizer/program";
 
 const hash = (s: string) => createHash("sha256").update(s).digest("hex");
 const audience = {
