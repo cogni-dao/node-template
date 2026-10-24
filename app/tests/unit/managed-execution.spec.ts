@@ -4,6 +4,8 @@
 
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
+import { completionRequestHash } from "@/app/_lib/ai/completion-identity";
+import { workItemSemanticIdentity } from "../../../packages/ai-tools/src/work-item-semantic";
 import { persistAssistantThenPublishTerminal } from "../../../packages/graph-execution-host/src/durable-chat-terminal";
 import {
   canonicalTerminal,
@@ -11,6 +13,8 @@ import {
   publishCanonicalTerminal,
   shouldWithholdResultEvent,
 } from "../../../packages/graph-execution-host/src/managed-execution";
+import { freezeMissionEvidence } from "../../../packages/langgraph-graphs/src/graphs/work-prioritizer/frozen-evidence";
+import { parseMissionEvidenceResult } from "../../../packages/langgraph-graphs/src/graphs/work-prioritizer/program";
 
 const hash = (s: string) => createHash("sha256").update(s).digest("hex");
 const audience = {
@@ -255,5 +259,224 @@ describe("canonical result admission", () => {
       "provisional accepted"
     );
     expect(JSON.stringify(publish.mock.calls)).not.toContain('"proposal"');
+  });
+});
+
+const itemSource = "https://node.example/work/items/task.1";
+const fullItem = {
+  id: "task.1",
+  type: "task",
+  title: "Build mission",
+  status: "needs_implement",
+  actor: "ai",
+  summary: "a".repeat(620),
+  outcome: "Useful outcome",
+  revision: 7,
+  updatedAt: "2026-01-01",
+  labels: ["b", "a"],
+  assignees: [{ kind: "agent" as const, id: "builder" }],
+  scores: { goal: { v: 1, ev: "https://node.example/knowledge/goal-1" } },
+};
+async function captureInput(item = fullItem) {
+  return {
+    evidence: [
+      {
+        id: "e1",
+        tool: "core__goal_list",
+        args: {},
+        sha256: "a".repeat(64),
+        value: {
+          goals: [
+            {
+              id: "goal-1",
+              title: "Mission",
+              content: "KPI: ship",
+              evaluateAt: "2030-01-01",
+              sourceUrl: "https://node.example/knowledge/goal-1",
+            },
+          ],
+        },
+      },
+      {
+        id: "e2",
+        tool: "core__work_item_query",
+        args: { limit: 5 },
+        sha256: "b".repeat(64),
+        value: {
+          items: [
+            {
+              ...item,
+              summary: item.summary.slice(0, 600),
+              sourceUrl: itemSource,
+              semanticIdentity: await workItemSemanticIdentity(item, {
+                sourceUrl: itemSource,
+              }),
+            },
+          ],
+          count: 1,
+          paginationKnown: true,
+          nextCursor: "opaque-cursor",
+        },
+      },
+    ],
+    sources: [
+      {
+        id: "mission-loop-expert",
+        content: "Serve mission",
+        entryType: "skill",
+        tags: ["expertise-role"],
+        sourceRef: "commit-a",
+      },
+    ],
+    task: "Review the mission backlog",
+    now: Date.parse("2029-01-01"),
+  };
+}
+describe("closed recurring mission evidence", () => {
+  it("ignores counters/order but detects complete hidden tails and substantive fields", async () => {
+    const original = await workItemSemanticIdentity(fullItem, {
+      sourceUrl: itemSource,
+    });
+    expect(
+      await workItemSemanticIdentity(
+        { ...fullItem, revision: 9, updatedAt: "later", labels: ["a", "b"] },
+        { sourceUrl: itemSource }
+      )
+    ).toEqual(original);
+    for (const delta of [
+      { summary: `${fullItem.summary}changed beyond excerpt` },
+      { actor: "human" },
+      { assignees: [{ kind: "agent" as const, id: "other" }] },
+      { pr: "https://github.com/example/repo/pull/2" },
+      { scores: { goal: { v: 2 } } },
+    ]) {
+      expect(
+        await workItemSemanticIdentity(
+          { ...fullItem, ...delta },
+          { sourceUrl: itemSource }
+        )
+      ).not.toEqual(original);
+    }
+    const a = freezeMissionEvidence(await captureInput());
+    const b = freezeMissionEvidence(
+      await captureInput({
+        ...fullItem,
+        revision: 8,
+        updatedAt: "later",
+        labels: ["a", "b"],
+      })
+    );
+    expect(a.inputIdentity).toEqual(b.inputIdentity);
+    expect(
+      freezeMissionEvidence(
+        await captureInput({
+          ...fullItem,
+          summary: `${fullItem.summary}hidden`,
+        })
+      ).inputIdentity
+    ).not.toEqual(a.inputIdentity);
+  });
+  it("rereads frozen versions and refuses uncaptured dependencies", async () => {
+    const input = await captureInput();
+    const captured = freezeMissionEvidence(input);
+    input.evidence[1]!.value.items![0]!.title = "changed live";
+    const reread = captured.read("core__work_item_query", {
+      ids: ["task.1"],
+    }) as { items: Record<string, unknown>[] };
+    expect(reread.items[0]?.title).toBe("Build mission");
+    expect(reread.items[0]).not.toHaveProperty("revision");
+    expect(reread.items[0]).not.toHaveProperty("updatedAt");
+    for (const [tool, args] of [
+      ["core__knowledge_read", { id: "new-source" }],
+      ["core__work_item_query", { ids: ["task.other"] }],
+      ["core__work_item_query", { limit: 20 }],
+      ["core__get_current_time", {}],
+    ] as const) {
+      expect(() => captured.read(tool, args)).toThrow("outside_snapshot");
+    }
+    const proposal = captured.finalizeProposal({
+      payload: { items: [{ id: "task.1", expectedRevision: 999 }] },
+    }) as { payload: { items: { expectedRevision: number }[] } };
+    expect(proposal.payload.items[0]?.expectedRevision).toBe(7);
+    expect(JSON.stringify(captured.sources)).not.toContain("commit-a");
+  });
+  it("binds task/guidance/deadline state and rejects unknown coverage", async () => {
+    const input = await captureInput();
+    const original = freezeMissionEvidence(input).inputIdentity;
+    expect(
+      freezeMissionEvidence({ ...input, task: "Different task" }).inputIdentity
+    ).not.toEqual(original);
+    expect(
+      freezeMissionEvidence({ ...input, now: Date.parse("2031-01-01") })
+        .inputIdentity
+    ).not.toEqual(original);
+    expect(
+      freezeMissionEvidence({
+        ...input,
+        sources: [{ ...input.sources[0]!, content: "Changed mission" }],
+      }).inputIdentity
+    ).not.toEqual(original);
+    input.evidence[1]!.value.paginationKnown = false;
+    expect(() => freezeMissionEvidence(input)).toThrow(
+      "snapshot_coverage_unknown"
+    );
+  });
+  it("canonical parser accepts host prior-result no-op and rejects invented acceptance", () => {
+    const output = {
+      version: 1,
+      program: { id: "mission-prioritization", version: "4" },
+      runId: "run-b",
+      status: "no_op",
+      reason: "unchanged_input",
+      priorResult: { runId: "run-a", sha256: "a".repeat(64) },
+      guidance: [],
+      evidence: [],
+      roles: [],
+      revisions: 0,
+      budget: { modelCalls: 1, toolCalls: 1, inputBytes: 1, toolBytes: 1 },
+      telemetry: {
+        changeCount: 0,
+        changedItemIds: [],
+        aborted: false,
+        report: "unchanged_input",
+      },
+    };
+    expect(parseMissionEvidenceResult(output)).toEqual(output);
+    expect(() =>
+      parseMissionEvidenceResult({ ...output, status: "accepted" })
+    ).toThrow();
+  });
+  it("receiver request fingerprint rejects altered content, model and thread", () => {
+    const payload = {
+      graphId: "langgraph:work-prioritizer",
+      messages: [{ role: "user" as const, content: "Review mission" }],
+      modelRef: { providerKey: "openrouter", modelId: "model" },
+      stateKey: "thread-a",
+    };
+    const signed = completionRequestHash(payload, "test-key");
+    expect(
+      completionRequestHash(
+        {
+          ...payload,
+          modelRef: { modelId: "model", providerKey: "openrouter" },
+        },
+        "test-key"
+      )
+    ).toBe(signed);
+    expect(
+      completionRequestHash({ ...payload, stateKey: "thread-b" }, "test-key")
+    ).not.toBe(signed);
+    expect(
+      completionRequestHash(
+        { ...payload, messages: [{ role: "user", content: "Changed" }] },
+        "test-key"
+      )
+    ).not.toBe(signed);
+    expect(
+      completionRequestHash(
+        { ...payload, modelRef: { ...payload.modelRef, modelId: "different" } },
+        "test-key"
+      )
+    ).not.toBe(signed);
   });
 });

@@ -26,6 +26,7 @@ export { BRAIN_GRAPH_NAME, createBrainGraph } from "./brain/graph";
 // Browser graph (web browsing via Playwright MCP)
 export { BROWSER_GRAPH_NAME, createBrowserGraph } from "./browser/graph";
 export type {
+  FrozenEvidence,
   EvidenceLimits,
   EvidenceProgram,
   EvidenceReceipt,
@@ -33,6 +34,7 @@ export type {
   GuidanceReceipt,
 } from "./evidence-verification/graph";
 export {
+  createEvidenceResultParser,
   createEvidenceVerificationGraph,
   DEFAULT_EVIDENCE_LIMITS,
 } from "./evidence-verification/graph";

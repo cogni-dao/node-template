@@ -26,6 +26,7 @@ export interface CanonicalRunResult {
   readonly structuredOutput?: unknown;
 }
 export interface ManagedExecutionBinding {
+  readonly stateKey?: string;
   readonly idempotencyKey: string;
   readonly requestHash: string;
   readonly runId: string;

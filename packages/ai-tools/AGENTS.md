@@ -116,3 +116,5 @@ pnpm --filter @cogni-dao/ai-tools build
 - Package isolation enables LangGraph Server to import tools without Next.js deps
 
 Work-item query emits `scoresTruncated: true` only when its bounded projection loses stored score data. Consumers must not use such a row as a complete score replacement source.
+
+`work_item_query` adds optional versioned semanticIdentity computed from full substantive WorkItemInfo before summary/outcome/score caps; paginationKnown distinguishes complete pagination capability from legacy query-only readers. Identity excludes revision/updatedAt, normalizes sets, and includes provenance. Digests detect hidden changes; they never make unseen full text decision evidence.

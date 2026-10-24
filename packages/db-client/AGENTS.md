@@ -97,3 +97,5 @@ pnpm --filter @cogni/db-client build
 - `createServiceDbClient` is isolated in `./service` sub-path; root barrel does NOT re-export it
 - `Database` type is `ReturnType<typeof buildClient>` — preserves drizzle's `$client` accessor for `reserve()`, `begin()`, etc.
 - `Database` type lives in root only — not exported from `./service`
+
+Managed execution receives serviceDb for receiver transactions and appDb for owner readback through withTenantScope/userActor. It validates persisted schedule/grant/billing/thread binding before acquisition and recognizes only the deployed api:<runId> alias for a verified facade triggerRef reservation. Public readback retains requestedBy equality in addition to RLS.

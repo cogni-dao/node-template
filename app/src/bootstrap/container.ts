@@ -1034,7 +1034,7 @@ function createContainer(): Container {
 		executionGrantPort,
 		executionGrantWorkerPort,
 		executionRequestPort,
-		managedExecution: new DrizzleManagedExecutionAdapter(serviceDb),
+		managedExecution: new DrizzleManagedExecutionAdapter(serviceDb, db),
 		graphRunRepository,
 		scheduleManager,
 		metricsCapability,

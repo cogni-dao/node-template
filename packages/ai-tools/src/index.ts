@@ -402,3 +402,5 @@ export type {
   ToolImplementation,
   ToolResult,
 } from "./types";
+
+export { WORK_ITEM_SEMANTIC_VERSION, semanticJson, workItemSemanticIdentity } from "./work-item-semantic";
