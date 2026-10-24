@@ -16,6 +16,11 @@
       "import": "./dist/refs.js",
       "default": "./dist/refs.js"
     },
+    "./agent-grants": {
+      "types": "./dist/agent-grants.d.ts",
+      "import": "./dist/agent-grants.js",
+      "default": "./dist/agent-grants.js"
+    },
     "./scheduling": {
       "types": "./dist/scheduling.d.ts",
       "import": "./dist/scheduling.js",

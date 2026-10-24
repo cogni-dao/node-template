@@ -5,7 +5,8 @@
  * Module: `@app/api/v1/agent/register`
  * Purpose: Machine-actor registration endpoint — mints a user row, a billing
  *   account, and a 30-day HMAC-signed API key for agents that can reach the
- *   node without a browser session.
+ *   node without a browser session. The key's sha256 is recorded in
+ *   agent_credentials so it can be revoked (story.5115).
  * Scope: Instrumented via wrapRouteHandlerWithLogging so every attempt hits
  *   the structured log envelope (request received / request complete) and
  *   the http_requests_total / http_request_duration_ms metrics like every
@@ -17,6 +18,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { recordAgentCredential } from "@cogni-dao/agent-grants";
 import { users } from "@cogni/db-schema";
 import { registerAgentOperation } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
@@ -55,6 +57,8 @@ export const POST = wrapRouteHandlerWithLogging(
       userId: id,
       displayName: input.name,
     });
+    // REVOCABLE_CREDENTIALS: the key verifies only while this row is unrevoked.
+    await recordAgentCredential(db, { userId: id, key: apiKey });
 
     return NextResponse.json(
       registerAgentOperation.output.parse({

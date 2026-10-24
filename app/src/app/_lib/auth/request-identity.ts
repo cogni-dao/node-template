@@ -8,8 +8,9 @@
  *   or a browser session cookie. One entry point for both auth surfaces.
  * Scope: Bearer parser + HMAC signer/verifier (issueAgentApiKey exported to
  *   the register route only), and resolveRequestIdentity which
- *   wrapRouteHandlerWithLogging consumes via `auth.getSessionUser`. Does NOT
- *   read from the database — all session IO happens via getServerSessionUser.
+ *   wrapRouteHandlerWithLogging consumes via `auth.getSessionUser`. Session IO
+ *   happens via getServerSessionUser; the only DB read is the revocable
+ *   credential lookup for keys that carry the signed `cred` claim.
  * Invariants:
  *   - NO_AUTH_CYCLE: imports getServerSessionUser DIRECTLY from @/lib/auth/server.
  *     Must NOT import getSessionUser from @/app/_lib/auth/session (that module
@@ -18,15 +19,23 @@
  *   - BEARER_CLAIMS_EXCLUSIVE: when a bearer token is present but invalid,
  *     returns null (does not fall back to session cookies). Prevents a stolen
  *     cookie from winning when the client claimed machine identity.
+ *   - REVOCABLE_CREDENTIALS (story.5115): every key issued now carries a signed
+ *     `cred: true` claim and verifies only while a non-revoked agent_credentials
+ *     row matches sha256(key) (service-role read via a lazy container import,
+ *     so cookie-only requests never load the container). Legacy keys without
+ *     the claim keep HMAC + exp semantics until they expire (≤30d, never
+ *     renewed) — the transition window from node-capability-grants-standard.
  *   - NO_REDOS: extractBearerToken uses startsWith/slice (O(n)), not regex
  *     backtracking. Flagged by SonarQube on the original /^Bearer\s+(.+)$/i.
- * Side-effects: IO (next/headers read, NextAuth session fetch via server.ts).
+ * Side-effects: IO (next/headers read, NextAuth session fetch via server.ts,
+ *   agent_credentials lookup for credentialed bearers).
  * Links: docs/spec/security-auth.md, docs/spec/identity-model.md
  * @public
  */
 
 import { createHmac, timingSafeEqual } from "node:crypto";
-import type { SessionUser } from "@cogni/node-shared";
+import { isAgentCredentialLive } from "@cogni-dao/agent-grants";
+import { EVENT_NAMES, type SessionUser } from "@cogni/node-shared";
 import { headers } from "next/headers";
 import { getServerSessionUser } from "@/lib/auth/server";
 import { serverEnv } from "@/shared/env/server";
@@ -36,6 +45,8 @@ type AgentTokenPayload = {
   displayName: string | null;
   iat: number;
   exp: number;
+  /** Present on keys issued with a revocable agent_credentials row. */
+  cred?: true;
 };
 
 const TOKEN_PREFIX = "cogni_ag_sk_v1_";
@@ -97,9 +108,54 @@ export function issueAgentApiKey(input: {
     displayName: input.displayName,
     iat: Math.floor(Date.now() / 1000),
     exp: Math.floor(Date.now() / 1000) + AGENT_KEY_TTL_SECONDS,
+    cred: true,
   };
   const payloadB64 = base64UrlEncode(JSON.stringify(payload));
   return `${TOKEN_PREFIX}${payloadB64}.${signPayload(payloadB64)}`;
+}
+
+/**
+ * Verify a bearer key: HMAC + exp, and — for credentialed keys — a live
+ * agent_credentials row. Returns the signed payload or null.
+ */
+export async function verifyAgentApiKey(
+  token: string
+): Promise<AgentTokenPayload | null> {
+  const payload = parseAgentToken(token);
+  if (!payload) return null;
+  if (payload.cred !== true) return payload; // legacy key: transition window
+  const { getContainer, resolveServiceDb } = await import(
+    "@/bootstrap/container"
+  );
+  try {
+    const live = await isAgentCredentialLive(resolveServiceDb(), {
+      userId: payload.sub,
+      key: token,
+    });
+    return live ? payload : null;
+  } catch {
+    // FAIL_CLOSED: a credential-store failure is a 401, never an unlogged 500.
+    // No key material, no raw error message.
+    getContainer().log.error(
+      {
+        event: EVENT_NAMES.AGENT_CREDENTIALS_LOOKUP_ERROR,
+        dep: "postgres",
+        reasonCode: "credential_lookup_failed",
+        principalId: payload.sub,
+      },
+      EVENT_NAMES.AGENT_CREDENTIALS_LOOKUP_ERROR
+    );
+    return null;
+  }
+}
+
+/** The raw bearer key on the current request, if any. */
+export async function getRequestBearerToken(): Promise<string | null> {
+  try {
+    return extractBearerToken((await headers()).get("authorization"));
+  } catch {
+    return null;
+  }
 }
 
 function isSameOrigin(origin: string | null, host: string | null): boolean {
@@ -120,7 +176,7 @@ export async function resolveRequestIdentity(): Promise<SessionUser | null> {
   }
   const bearer = extractBearerToken(h.get("authorization"));
   if (bearer) {
-    const payload = parseAgentToken(bearer);
+    const payload = await verifyAgentApiKey(bearer);
     if (!payload) return null;
     return {
       id: payload.sub,
@@ -134,5 +190,21 @@ export async function resolveRequestIdentity(): Promise<SessionUser | null> {
     return null;
   }
 
+  return getServerSessionUser();
+}
+
+/**
+ * Browser-session identity only: any bearer (even a valid agent key) is
+ * rejected. For human decisions such as approving an agent access request.
+ */
+export async function resolveHumanSessionIdentity(): Promise<SessionUser | null> {
+  let h: Awaited<ReturnType<typeof headers>>;
+  try {
+    h = await headers();
+  } catch {
+    return null;
+  }
+  if (h.get("authorization")) return null;
+  if (!isSameOrigin(h.get("origin"), h.get("host"))) return null;
   return getServerSessionUser();
 }

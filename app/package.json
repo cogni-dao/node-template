@@ -20,6 +20,7 @@
     "@assistant-ui/react-data-stream": "0.12.4",
     "@assistant-ui/react-markdown": "0.12.3",
     "@auth/drizzle-adapter": "^1.7.0",
+    "@cogni-dao/agent-grants": "workspace:*",
     "@cogni/ai-core": "workspace:*",
     "@cogni/ai-tools": "workspace:@cogni-dao/ai-tools@*",
     "@cogni/aragon-osx": "workspace:*",
