@@ -46,11 +46,66 @@ const edit = (file, from, to) => ({ read, write }) => {
   write(file, before.replace(from, to));
 };
 
+const contractInstall =
+  "pnpm --filter @cogni/repo-spec... install --frozen-lockfile --ignore-scripts --config.dedupe-peer-dependents=false";
+const mainCacheExport =
+  "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && format('type=gha,mode=max,scope=node-template-{0}', matrix.target.artifact) || '' }}";
+const editPrBuildJob = (job, from, to) => ({ read, write }) => {
+  const path = ".github/workflows/pr-build.yml";
+  const before = read(path);
+  const marker = `\n  ${job}:\n`;
+  const index = before.indexOf(marker);
+  if (index < 0 || !before.slice(index).includes(from)) throw new Error(`missing ${job} fixture`);
+  write(path, before.slice(0, index) + before.slice(index).replace(from, to));
+};
+
 const CASES = [
   {
     name: "baseline tree passes",
     mutate: () => {},
     expectExit: 0,
+  },
+  ...["detect", "manifest"].map((job) => ({
+    name: `${job} must not restore the full workspace install`,
+    mutate: editPrBuildJob(job, contractInstall, "pnpm install --frozen-lockfile"),
+    expectExit: 1,
+    expectMatch: /frozen contract install/,
+  })),
+  {
+    name: "contract installs must retain frozen lock enforcement",
+    mutate: editPrBuildJob("detect", contractInstall, contractInstall.replace(" --frozen-lockfile", "")),
+    expectExit: 1,
+    expectMatch: /frozen contract install/,
+  },
+  {
+    name: "contract jobs must not hydrate the broad workspace cache",
+    mutate: editPrBuildJob("manifest", "          node-version: 22", "          node-version: 22\n          cache: pnpm"),
+    expectExit: 1,
+    expectMatch: /must not hydrate a broad Node cache/,
+  },
+  {
+    name: "PRs must not export the trusted main image cache",
+    mutate: edit(".github/workflows/pr-build.yml", mainCacheExport, "type=gha,mode=max,scope=node-template-${{ matrix.target.artifact }}"),
+    expectExit: 1,
+    expectMatch: /trusted main cache export/,
+  },
+  {
+    name: "workflow dispatch must not become a main cache writer",
+    mutate: edit(".github/workflows/pr-build.yml", mainCacheExport, mainCacheExport.replace("github.event_name == 'push' && ", "")),
+    expectExit: 1,
+    expectMatch: /trusted main cache export/,
+  },
+  {
+    name: "the disposable image job must not restore slow Buildx teardown",
+    mutate: edit(".github/workflows/pr-build.yml", "          cleanup: false", "          cleanup: true"),
+    expectExit: 1,
+    expectMatch: /ephemeral Buildx cleanup/,
+  },
+  {
+    name: "omitting teardown must not silently move to a persistent runner",
+    mutate: editPrBuildJob("build", "    runs-on: ubuntu-latest", "    runs-on: self-hosted"),
+    expectExit: 1,
+    expectMatch: /ephemeral image runner/,
   },
   {
     name: "detection must build the contract its target reader imports",
