@@ -90,14 +90,14 @@ env:
   # in either direction, so neither an unselectable tag nor an untaggable
   # package can ship.
   PACKAGES: >-
-    [{"name":"@cogni-dao/scheduling","dir":"packages/scheduling","tagPrefix":"scheduling-v"},
-     {"name":"@cogni-dao/work-items","dir":"packages/work-items","tagPrefix":"work-items-v"},
+    [{"name":"@cogni-dao/work-items","dir":"packages/work-items","tagPrefix":"work-items-v"},
      {"name":"@cogni-dao/knowledge-store","dir":"packages/knowledge-store","tagPrefix":"knowledge-store-v"},
      {"name":"@cogni-dao/knowledge-base","dir":"packages/knowledge-base","tagPrefix":"knowledge-base-v"},
      {"name":"@cogni-dao/knowledge-base-ui","dir":"packages/knowledge-base-ui","tagPrefix":"knowledge-base-ui-v"},
      {"name":"@cogni-dao/graph-execution","dir":"packages/graph-execution-host","tagPrefix":"graph-execution-v"},
      {"name":"@cogni-dao/ai-tools","dir":"packages/ai-tools","tagPrefix":"ai-tools-v"},
-     {"name":"@cogni-dao/langgraph-graphs","dir":"packages/langgraph-graphs","tagPrefix":"langgraph-graphs-v"}]
+     {"name":"@cogni-dao/langgraph-graphs","dir":"packages/langgraph-graphs","tagPrefix":"langgraph-graphs-v"},
+     {"name":"@cogni-dao/scheduling","dir":"packages/scheduling","tagPrefix":"scheduling-v"}]
 
 jobs:
   # Resolve WHICH packages this run acts on, before anything is built. A push
