@@ -41,6 +41,8 @@ All contract files re-exported via `src/index.ts`. Selective re-export for `ai.c
 - `work.items.{list,create,patch}.v1.contract` — evaluation scores outline (`scores.<axis>.v/ev`); shared work-items adapter validates bounds, PATCH null clears scores
 - `identity.attestation.v1.contract` — frozen operator↔node identity protocol, canonical HTTPS-origin schema, and cross-repository protocol fingerprint
 
+**Schedule read contracts:** `schedules.history.v1.contract` exports owned detail and paginated run metadata with nullable thread correlation.
+
 **Attribution lifecycle contracts:**
 
 - `attribution.settlement-lifecycle.v1.contract` — authenticated read of live/latest settlement revisions and per-epoch publication coverage
