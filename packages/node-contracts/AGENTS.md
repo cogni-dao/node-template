@@ -41,7 +41,7 @@ All contract files re-exported via `src/index.ts`. Selective re-export for `ai.c
 - `work.items.{list,create,patch}.v1.contract` — evaluation scores outline (`scores.<axis>.v/ev`); shared work-items adapter validates bounds, PATCH null clears scores
 - `identity.attestation.v1.contract` — frozen operator↔node identity protocol, canonical HTTPS-origin schema, and cross-repository protocol fingerprint
 
-**Schedule read contracts:** `schedules.history.v1.contract` exports owned detail and paginated run metadata with nullable thread correlation.
+**Schedule contracts:** create/update/list/history files reexport the published scheduling package. Owned detail and paginated metadata retain nullable thread correlation and existing wire shapes.
 
 **Attribution lifecycle contracts:**
 
@@ -65,7 +65,7 @@ All require `Authorization: Bearer ${SCHEDULER_API_TOKEN}`.
 
 ## Dependencies
 
-- **Internal:** `@cogni/ai-core`, `@cogni/aragon-osx`, `@cogni/node-core`
+- **Internal:** `@cogni/ai-core`, `@cogni/aragon-osx`, `@cogni/node-core`, `@cogni/scheduling` (published readback/contracts alias).
 - **External:** `zod`, `@ts-rest/core`
 
 ## Notes

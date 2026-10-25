@@ -11,7 +11,7 @@
  * @internal
  */
 import { toUserId } from "@cogni/ids";
-import type { GraphRun, ScheduleSpec } from "@cogni/scheduler-core";
+import type { ScheduleSpec } from "@cogni/scheduler-core";
 import { testApiHandler } from "next-test-api-route-handler";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createScheduleHistoryService } from "@/features/scheduling/services/schedule-history";
@@ -39,11 +39,11 @@ const run = {
   stateKey: "slot-a",
   requestedBy: null,
   status: "success",
-  scheduledFor: new Date("2026-10-24T01:00:00Z"),
+  scheduledFor: "2026-10-24T01:00:00.000Z",
   startedAt: null,
   completedAt: null,
   errorCode: null,
-} as GraphRun;
+} as const;
 const getSchedule = vi.fn();
 const listRuns = vi.fn();
 const loadThread = vi.fn();
