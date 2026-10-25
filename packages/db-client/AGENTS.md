@@ -36,7 +36,7 @@ Database client factory and Drizzle adapter implementations for scheduling and l
 }
 ```
 
-**External deps:** `drizzle-orm`, `postgres`, `type-fest`. Internal deps: `@cogni/db-schema` (ledger + identity tables), `@cogni/attribution-ledger`, `@cogni/scheduler-core`, `@cogni/ai-core`, `@cogni/ids`.
+**External deps:** `drizzle-orm`, `postgres`, `type-fest`. Internal deps: `@cogni/db-schema` (ledger + identity tables), `@cogni/attribution-ledger`, `@cogni/scheduler-core`, `@cogni/ai-core`, `@cogni/ids`, `@cogni/scheduling` (published readback/contracts alias).
 
 ## Public Surface
 
@@ -45,6 +45,7 @@ Database client factory and Drizzle adapter implementations for scheduling and l
   - `withTenantScope(db, actorId, fn)` — transaction wrapper setting RLS context
   - `setTenantContext(tx, actorId)` — sets RLS context in existing transaction
   - `Database`, `LoggerLike` — Drizzle client type (includes `$client: Sql` for pool control) and logger interface
+  - `DrizzleScheduleRunReader` — compatibility binding from app-role `db.$client` to published scheduling readback
   - `DrizzleScheduleUserAdapter`, `DrizzleScheduleWorkerAdapter` — schedule adapters (split by trust boundary)
   - `DrizzleExecutionGrantUserAdapter`, `DrizzleExecutionGrantWorkerAdapter` — grant adapters (split by trust boundary)
   - `DrizzleExecutionRequestAdapter`, `DrizzleGraphRunAdapter` (canonical), `DrizzleScheduleRunAdapter` (deprecated alias)
@@ -81,7 +82,7 @@ pnpm --filter @cogni/db-client build
 
 ## Dependencies
 
-- **Internal:** `@cogni/db-schema`, `@cogni/attribution-ledger`, `@cogni/scheduler-core`, `@cogni/ai-core`, `@cogni/ids`
+- **Internal:** `@cogni/db-schema`, `@cogni/attribution-ledger`, `@cogni/scheduler-core`, `@cogni/ai-core`, `@cogni/ids`, `@cogni/scheduling` (published readback/contracts alias).
 - **External:** `drizzle-orm`, `postgres`, `type-fest`
 
 ## Change Protocol

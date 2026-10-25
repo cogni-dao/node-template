@@ -262,3 +262,14 @@ export {
   type SessionUserLike,
   sessionUserToPrincipal,
 } from "./util/session-to-principal.js";
+
+// Canonical governing discovery shared by all adapters.
+export {
+  GOVERNING_ENTRY_TYPES,
+  type GoverningEntryType,
+  type GoverningIndexRow,
+  type GoverningCandidateRow,
+  type GoverningCandidateEdge,
+  isGoverningEntryType,
+  selectGoverningIndex,
+} from "./domain/governing.js";

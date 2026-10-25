@@ -4,7 +4,7 @@ name: Publish Packages
 # `@cogni-dao/knowledge-store`, `@cogni-dao/knowledge-base`,
 # `@cogni-dao/knowledge-base-ui`, `@cogni-dao/graph-execution`,
 # `@cogni-dao/ai-tools`, `@cogni-dao/langgraph-graphs`, and
-# `@cogni-dao/money-plane` — so node repos can
+# `@cogni-dao/money-plane`, `@cogni-dao/scheduling` — so node repos can
 # DEPEND on them instead of vendoring their source. Four divergent copies of the
 # work-items adapter existed across the fleet when bug.5358 was audited, and a
 # single availability fix then cost nine PRs across six repositories (story.5069).
@@ -52,6 +52,7 @@ on:
       - "knowledge-base-v*"
       - "knowledge-base-ui-v*"
       - "graph-execution-v*"
+      - "scheduling-v*"
       - "ai-tools-v*"
       - "langgraph-graphs-v*"
       - "money-plane-v*"
@@ -98,7 +99,8 @@ env:
      {"name":"@cogni-dao/graph-execution","dir":"packages/graph-execution-host","tagPrefix":"graph-execution-v"},
      {"name":"@cogni-dao/ai-tools","dir":"packages/ai-tools","tagPrefix":"ai-tools-v"},
      {"name":"@cogni-dao/langgraph-graphs","dir":"packages/langgraph-graphs","tagPrefix":"langgraph-graphs-v"},
-     {"name":"@cogni-dao/money-plane","dir":"packages/money-plane","tagPrefix":"money-plane-v"}]
+     {"name":"@cogni-dao/money-plane","dir":"packages/money-plane","tagPrefix":"money-plane-v"},
+     {"name":"@cogni-dao/scheduling","dir":"packages/scheduling","tagPrefix":"scheduling-v"}]
 
 jobs:
   # Resolve WHICH packages this run acts on, before anything is built. A push

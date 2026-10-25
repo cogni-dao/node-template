@@ -18,6 +18,7 @@
  */
 
 import type { ActiveGoal } from "../domain/dao-goals.js";
+import type { GoverningIndexRow } from "../domain/governing.js";
 import type {
   Citation,
   CitationType,
@@ -278,6 +279,8 @@ export interface KnowledgeStorePort {
    * Contribution-branch rows are never visible here.
    */
   listActiveGoals(): Promise<ActiveGoal[]>;
+  /** Content-free governing rows across all shelves; no scan cap, blank trigger or superseded target. */
+  listGoverningIndex(): Promise<GoverningIndexRow[]>;
   /** List distinct domain values present in the `knowledge` table (legacy / back-compat). */
   listDomains(): Promise<string[]>;
 

@@ -34,6 +34,7 @@
     "@cogni/graph-execution-host": "workspace:@cogni-dao/graph-execution@*",
     "@cogni/ids": "workspace:*",
     "@cogni/ingestion-core": "workspace:*",
+    "@cogni/knowledge-base": "workspace:@cogni-dao/knowledge-base@*",
     "@cogni/knowledge-base-ui": "workspace:@cogni-dao/knowledge-base-ui@*",
     "@cogni/knowledge-store": "workspace:@cogni-dao/knowledge-store@*",
     "@cogni/langgraph-graphs": "workspace:@cogni-dao/langgraph-graphs@*",
@@ -126,7 +127,8 @@
     "viem": "2.39.3",
     "wagmi": "2.19.5",
     "zod": "^4.1.12",
-    "zustand": "^5.0.9"
+    "zustand": "^5.0.9",
+    "@cogni/scheduling": "workspace:@cogni-dao/scheduling@*"
   },
   "devDependencies": {
     "@testcontainers/postgresql": "^11.8.1",

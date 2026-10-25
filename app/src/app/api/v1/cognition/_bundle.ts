@@ -5,7 +5,7 @@
  * Module: `@app/api/v1/cognition/_bundle`
  * Purpose: Pure composition of the session-start kickstart bundle — the
  *   irreducible tooling invariants (code-owned) plus the markdown renderer
- *   that frames hub-delivered skills + domain pointers for a SessionStart hook.
+ *   that frames local governing triggers and static operator navigation.
  * Scope: Pure functions + the invariants constant. No I/O, no env, no container.
  * Invariants:
  *   - IRREDUCIBLE_INVARIANTS_ALWAYS_PRESENT: the constant is the one piece of
@@ -23,24 +23,28 @@
  * @internal
  */
 
-import { type GoalsSection, renderGoalsLines } from "@cogni/knowledge-store";
+import {
+	type GoalsSection,
+	renderGoalsLines,
+	isGoverningEntryType,
+} from "@cogni/knowledge-store";
+import {
+	OPERATOR_KNOWLEDGE_ORIGIN,
+	OPERATOR_GUIDANCE_POINTERS,
+	OPERATOR_KNOWLEDGE_SHELVES,
+	COGNITION_CREDENTIAL_NAMES,
+} from "@cogni/knowledge-base/cognition-navigation";
 import type {
+	CognitionGoverningPointer,
 	CognitionDomainPointer,
 	CognitionSkillPointer,
 } from "@cogni/node-contracts";
 
 /**
- * No producer-side byte ceiling (story.5070).
- *
- * The loader writes `.cogni/.cognition-cache.md`, then each harness uses its
- * native full-context path: Claude Code `@import` (up to 4 MiB), Codex hook
- * stdout with `additionalContextLimit = 0`, and OpenCode `opencode.json`
- * instructions. Claude Code's SessionStart stdout/`additionalContext` is NOT a
- * safe delivery surface — it caps large output with no override — so no
- * universal hook-injection path or serve-side ceiling is assumed. The former
- * 16 KB cap (bug.5284) capped the SSoT itself and blocked realistic growth; the
- * bundle is human-curated in Dolt, not user-generated. See the canonical
- * Cognition Substrate design and the `cognition-expert` skill.
+ * The Markdown projection budgets 64 KiB before falling back to method/shelf
+ * pointers. The native response retains the complete governingIndex, and
+ * mandatory local orientation, goals and bootstrap are never truncated.
+ * Harness delivery channels and the node-local loader remain unchanged.
  */
 
 /**
@@ -70,15 +74,56 @@ export const SESSION_WATCH_GATE = `<watch-gate rule="ONE blocking command; its e
   <truth>/version.buildSha is the only ground truth — CI and workflow "success" can lie.</truth>
 </watch-gate>`;
 
-const COGNITION_ENTRY_TYPES: ReadonlySet<string> = new Set([
-	"skill",
-	"guide",
-	"playbook",
-]);
+/** Compatibility name; the shared store remains the sole membership-policy owner. */
+export const isCognitionEntry = isGoverningEntryType;
+export const WHOLE_BUNDLE_BUDGET_BYTES = 64 * 1024;
 
-/** True for hub entries that belong in an agent's actionable skills index. */
-export function isCognitionEntry(entryType: string | undefined): boolean {
-	return COGNITION_ENTRY_TYPES.has(entryType ?? "");
+function operatorNavigationLines(): string[] {
+	const { node, operator, legacyOperator } = COGNITION_CREDENTIAL_NAMES;
+	return [
+		"## Operator guidance — explicit reads after local boot",
+		"",
+		...OPERATOR_GUIDANCE_POINTERS.map(
+			(p) =>
+				`- ${p.intent}: \`GET ${OPERATOR_KNOWLEDGE_ORIGIN}/api/v1/knowledge/${p.id}\` (${p.domain}).`,
+		),
+		`- Operator shelves: ${OPERATOR_KNOWLEDGE_SHELVES.join(", ")} — \`GET ${OPERATOR_KNOWLEDGE_ORIGIN}/api/v1/knowledge/index?domain=<shelf>\`. Keep governing rows with a nonblank useWhen and current supersedes semantics; read chosen bodies before acting.`,
+		`- Your local hub uses \`${node}\`. Explicit operator reads use your own operator-issued \`${operator}\`; only if absent, use saved compatibility alias \`${legacyOperator}\`. Canonical wins when both exist. Never retry another key or host on 401/403. These are agent Bearers, not vendor or workload-service keys.`,
+		"- Verify GET /api/v1/agent/me on the operator host you address. grantsAvailable:false means unknown. Request the normal owner-approved developer grant (node.flight); do not self-approve or borrow credentials.",
+		"- Sovereign logical lanes use the production operator reader; own operator preview/candidate use their own serving credential/receipt realm. Follow node-ai-traces-read for exact hosts and query contracts.",
+		"- This navigation never fetches the operator during local boot, copies guide bodies, or seeds your hub. Local mission, goals and orientation remain node-owned.",
+		"",
+	];
+}
+
+function governingLines(
+	rows: readonly CognitionGoverningPointer[],
+	mode: "whole" | "method" | "pointer",
+	origin: string,
+): string[] {
+	const inline =
+		mode === "whole"
+			? rows
+			: mode === "method"
+				? rows.filter((r) => r.domain === "method")
+				: [];
+	return [
+		"## Governing index — pick by use-when, read before acting",
+		"",
+		mode === "whole"
+			? `Read chosen entries with \`GET ${origin}/api/v1/knowledge/{id}\` before acting.`
+			: `The governing index exceeds the 64 KiB Markdown budget. ${mode === "method" ? "Only the method shelf is inline. " : ""}Retrieve the complete \`governingIndex\` from this same node: \`GET ${origin}/api/v1/cognition\`. Select the required shelf locally by filtering that already governed array on \`domain\`, then read chosen entries with \`GET ${origin}/api/v1/knowledge/{id}\`. Do not rebuild membership through another endpoint or selector.`,
+		"",
+		"| entry | type | domain | use when |",
+		"| --- | --- | --- | --- |",
+		...(inline.length
+			? inline.map(
+					(r) =>
+						`| \`${r.id}\` | ${r.entryType} | ${r.domain} | ${escapeCell(r.useWhen)} |`,
+				)
+			: ["| _(none inline)_ | | | |"]),
+		"",
+	];
 }
 
 /** Make a string safe to drop into a GFM table cell (no `|`, no line breaks). */
@@ -105,7 +150,7 @@ export interface OrientationLookupPort {
 /**
  * Resolve the current-node orientation entry by direct id lookup.
  *
- * The domain scan that feeds the skills index only reads the newest
+ * The legacy orientation fallback scan only reads the newest
  * PER_DOMAIN_LIMIT rows per domain, so once a domain outgrows the limit an
  * older `<slug>-agent-orientation` entry silently drops out of the scan and
  * the bundle reports it as unseeded (bug.5280). Direct lookup by exact id is
@@ -133,6 +178,7 @@ export async function resolveOrientation(
 }
 
 export interface RenderBundleInput {
+	governingIndex: readonly CognitionGoverningPointer[];
 	node: string;
 	name: string;
 	mission: string | null;
@@ -153,7 +199,43 @@ export interface RenderBundleInput {
  * verbatim to stdout; Claude Code and Codex both inject SessionStart stdout
  * into the model's context.
  */
+export function renderBundle(input: RenderBundleInput) {
+	const whole = renderWith(input, "whole");
+	const wholeBytes = new TextEncoder().encode(whole).byteLength;
+	let markdown = whole;
+	let mode: "whole-index" | "shelf-pointer" = "whole-index";
+	if (wholeBytes > WHOLE_BUNDLE_BUDGET_BYTES) {
+		mode = "shelf-pointer";
+		markdown = renderWith(input, "method");
+		if (
+			new TextEncoder().encode(markdown).byteLength > WHOLE_BUNDLE_BUDGET_BYTES
+		)
+			markdown = renderWith(input, "pointer");
+	}
+	const overBudget =
+		new TextEncoder().encode(markdown).byteLength > WHOLE_BUNDLE_BUDGET_BYTES;
+	if (overBudget)
+		markdown +=
+			"\n_Local cognition still exceeds the 64 KiB budget; preserved whole. The complete governingIndex remains in this response._\n";
+	return {
+		markdown,
+		governingRender: {
+			mode,
+			wholeBytes,
+			servedBytes: new TextEncoder().encode(markdown).byteLength,
+			overBudget,
+		},
+	};
+}
+
 export function renderBundleMarkdown(input: RenderBundleInput): string {
+	return renderBundle(input).markdown;
+}
+
+function renderWith(
+	input: RenderBundleInput,
+	mode: "whole" | "method" | "pointer",
+): string {
 	const {
 		node,
 		name,
@@ -186,15 +268,6 @@ export function renderBundleMarkdown(input: RenderBundleInput): string {
 	// a slugged test host. Concrete so agents stop guessing the hostname.
 	const candidateHost =
 		name === "operator" ? "test.cognidao.org" : `${name}-test.cognidao.org`;
-
-	const skillRows =
-		skillsIndex.length > 0
-			? skillsIndex
-					.map(
-						(s) => `| \`${s.id}\` | ${s.entryType} | ${escapeCell(s.title)} |`,
-					)
-					.join("\n")
-			: "| _(none merged yet)_ | | |";
 
 	const domainRows =
 		domainPointers.length > 0
@@ -238,12 +311,8 @@ export function renderBundleMarkdown(input: RenderBundleInput): string {
 		"",
 		SESSION_WATCH_GATE,
 		"",
-		"## Skills index (recall full content from the hub before acting)",
-		"",
-		"| entry | type | use when |",
-		"| --- | --- | --- |",
-		skillRows,
-		"",
+		...operatorNavigationLines(),
+		...governingLines(input.governingIndex, mode, origin),
 		"## Knowledge domains — RECALL_BEFORE_WRITE",
 		"",
 		"| domain | entries | about |",

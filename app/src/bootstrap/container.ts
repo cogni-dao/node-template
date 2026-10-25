@@ -93,6 +93,7 @@ import {
 	DrizzleExecutionRequestAdapter,
 	DrizzleGovernanceStatusAdapter,
 	DrizzleGraphRunAdapter,
+	DrizzleScheduleRunReader,
 	DrizzleScheduleUserAdapter,
 	DrizzleThreadPersistenceAdapter,
 	EvmRpcOnChainVerifierAdapter,
@@ -236,6 +237,7 @@ export interface Container {
 	executionGrantWorkerPort: ExecutionGrantWorkerPort;
 	executionRequestPort: ExecutionRequestPort;
 	graphRunRepository: GraphRunRepository;
+	scheduleRunReader: import("@cogni/scheduler-core").ScheduleRunReader;
 	scheduleManager: ScheduleUserPort;
 	/** Metrics capability for AI tools - requires PROMETHEUS_URL to be configured */
 	metricsCapability: MetricsCapability;
@@ -1032,6 +1034,7 @@ function createContainer(): Container {
 		executionGrantWorkerPort,
 		executionRequestPort,
 		graphRunRepository,
+		scheduleRunReader: new DrizzleScheduleRunReader(db),
 		scheduleManager,
 		metricsCapability,
 		webSearchCapability,

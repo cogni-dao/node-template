@@ -27,9 +27,9 @@
 import {
 	CognitionBundleResponseSchema,
 	type CognitionDomainPointer,
-	type CognitionSkillPointer,
 } from "@cogni/node-contracts";
 import { resolveGoals } from "@cogni/knowledge-store";
+import { loadGoverningCognition } from "@/features/cognition";
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { getContainer } from "@/bootstrap/container";
@@ -37,9 +37,8 @@ import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { getNodeMission, getNodeName } from "@/shared/config";
 import { serverEnv } from "@/shared/env";
 import {
-	isCognitionEntry,
 	type OrientationEntry,
-	renderBundleMarkdown,
+	renderBundle,
 	resolveOrientation,
 	SESSION_BOOTSTRAP_INVARIANTS,
 } from "./_bundle";
@@ -82,7 +81,6 @@ export const GET = wrapRouteHandlerWithLogging(
 		const buildSha = serverEnv().APP_BUILD_SHA ?? "unknown";
 		const generatedAt = new Date().toISOString();
 
-		const skillsIndex: CognitionSkillPointer[] = [];
 		const domainPointers: CognitionDomainPointer[] = [];
 		// The current node's orientation entry id, by `<slug>-agent-orientation`
 		// convention — captured during the scan, its excerpt fetched below. A
@@ -114,16 +112,11 @@ export const GET = wrapRouteHandlerWithLogging(
 					} else if (!orientationId && r.id.endsWith("-agent-orientation")) {
 						orientationId = r.id;
 					}
-					if (!isCognitionEntry(r.entryType)) continue;
-					skillsIndex.push({
-						id: r.id,
-						title: r.title,
-						entryType: r.entryType ?? "guide",
-						domain: r.domain,
-					});
 				}
 			}
 		}
+
+		const { governingIndex, skillsIndex } = await loadGoverningCognition(port);
 
 		// Direct lookup, not scan-dependent: the scan above is capped at
 		// PER_DOMAIN_LIMIT rows per domain and misses older entries (bug.5280).
@@ -144,7 +137,7 @@ export const GET = wrapRouteHandlerWithLogging(
 			`and your open contribution branch via GET ${origin}/api/v1/knowledge/contributions/{id}/diff. ` +
 			"Refine in place over writing new (REFINE_OVER_EXTEND).";
 
-		const markdown = renderBundleMarkdown({
+		const { markdown, governingRender } = renderBundle({
 			node,
 			name,
 			mission,
@@ -153,6 +146,7 @@ export const GET = wrapRouteHandlerWithLogging(
 			buildSha,
 			toolingInvariants,
 			skillsIndex,
+			governingIndex,
 			domainPointers,
 			orientation,
 			goals,
@@ -163,6 +157,8 @@ export const GET = wrapRouteHandlerWithLogging(
 				node,
 				name,
 				skills: skillsIndex.length,
+				governingMode: governingRender.mode,
+				governingOverBudget: governingRender.overBudget,
 				domains: domainPointers.length,
 				orientation: orientation?.id ?? null,
 				goalsStatus: goals.status,
@@ -182,6 +178,8 @@ export const GET = wrapRouteHandlerWithLogging(
 				generatedAt,
 				toolingInvariants,
 				skillsIndex,
+				governingIndex,
+				governingRender,
 				domainPointers,
 				recallProtocol,
 				markdown,
