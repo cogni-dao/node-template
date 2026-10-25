@@ -163,8 +163,8 @@ export function ScheduleDetailView({ scheduleId }: { scheduleId: string }) {
         </div>
       ) : (
         <>
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div className="min-w-0 flex-1">
+          <div className="flex flex-col items-start justify-between gap-4 sm:flex-row">
+            <div className="w-full min-w-0 sm:w-auto sm:flex-1">
               <div className="mb-2 flex flex-wrap items-center gap-2">
                 <h1 className="line-clamp-2 break-words font-semibold text-2xl tracking-tight">
                   {schedulePrompt(current.input) || agentLabel(current.graphId)}
@@ -298,7 +298,7 @@ export function ScheduleDetailView({ scheduleId }: { scheduleId: string }) {
                       </div>
                     )}
                     {runs.length > 0 ? (
-                      <Table>
+                      <Table className="min-w-[540px]">
                         <TableHeader>
                           <TableRow>
                             <TableHead className="w-8">
@@ -365,11 +365,11 @@ export function ScheduleDetailView({ scheduleId }: { scheduleId: string }) {
                                   {STATUS_LABELS[run.status]}
                                 </Badge>
                               </TableCell>
-                              <TableCell className="text-right text-muted-foreground text-sm tabular-nums">
+                              <TableCell className="whitespace-nowrap text-right text-muted-foreground text-sm tabular-nums">
                                 {duration(run)}
                               </TableCell>
                               <TableCell
-                                className="text-right text-muted-foreground text-sm"
+                                className="whitespace-nowrap text-right text-muted-foreground text-sm"
                                 title={run.scheduledFor ?? undefined}
                               >
                                 {runTime(run.scheduledFor, current.timezone)}
