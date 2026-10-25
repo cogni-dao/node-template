@@ -72,6 +72,7 @@ vi.mock("@cogni/money-plane", () => ({
 }));
 
 import {
+  createMoneyPlaneColumns,
   MoneyPlaneTable,
   moneyPlaneColumns,
 } from "@/app/(admin)/admin/payments/MoneyPlaneTable";
@@ -197,7 +198,22 @@ describe("account deduplication and the actual financial grid", () => {
       for (const desc of [false, true]) {
         const table = createTable({
           data,
-          columns: moneyPlaneColumns,
+          columns: createMoneyPlaneColumns(
+            data.map((row) => ({
+              sourceId: row.plane,
+              ownerId: "dao",
+              scopeId: "node",
+              instrumentId: "provider-credit",
+              basis: { kind: "contract", active: true },
+              rate: {
+                amount: String(row.balance),
+                currency: "USD",
+                per: "day",
+              },
+              sourceObservedAt: null,
+              partial: false,
+            }))
+          ),
           state: { sorting: [{ id, desc }] },
           onStateChange: () => {},
           renderFallbackValue: null,
@@ -210,6 +226,73 @@ describe("account deduplication and the actual financial grid", () => {
       }
     }
   });
+  it("groups explicit instruments before numeric rate and balance sorts, with source fallback and missing last", () => {
+    const data: MoneyPlaneRow[] = [
+      ["a-high", 100],
+      ["b-low", 2],
+      ["a-low", 3],
+      ["missing", null],
+    ].map(([plane, value]) => ({
+      plane: String(plane),
+      label: String(plane),
+      kind: "usage",
+      balance: value as number | null,
+      currency: "USD",
+      burnPerDay: value as number | null,
+      runwayDays: null,
+      grade: "UNKNOWN",
+      observedAt: report.takenAt,
+    }));
+    const evidence = data
+      .filter((r) => r.balance !== null)
+      .map((r) => ({
+        sourceId: r.plane,
+        ownerId: "dao",
+        scopeId: "node",
+        instrumentId: r.plane.startsWith("a") ? "a-credit" : "b-credit",
+        basis: { kind: "contract" as const, active: true },
+        rate: {
+          amount: String(r.balance),
+          currency: "USD",
+          per: "day" as const,
+        },
+        sourceObservedAt: null,
+        partial: false,
+      }));
+    for (const id of ["balance", "rate"])
+      for (const desc of [false, true]) {
+        const table = createTable({
+          data,
+          columns: createMoneyPlaneColumns(evidence),
+          state: { sorting: [{ id, desc }] },
+          onStateChange: () => {},
+          renderFallbackValue: null,
+          getCoreRowModel: getCoreRowModel(),
+          getSortedRowModel: getSortedRowModel(),
+        });
+        expect(table.getRowModel().rows.map((r) => r.original.plane)).toEqual(
+          desc
+            ? ["b-low", "a-high", "a-low", "missing"]
+            : ["a-low", "a-high", "b-low", "missing"]
+        );
+      }
+    const fallback = createTable({
+      data,
+      columns: createMoneyPlaneColumns(),
+      state: { sorting: [{ id: "balance", desc: false }] },
+      onStateChange: () => {},
+      renderFallbackValue: null,
+      getCoreRowModel: getCoreRowModel(),
+      getSortedRowModel: getSortedRowModel(),
+    });
+    expect(fallback.getRowModel().rows.map((r) => r.original.plane)).toEqual([
+      "a-high",
+      "a-low",
+      "b-low",
+      "missing",
+    ]);
+  });
+
   it("keeps unrounded values, distinct timestamps and raw reasons inside closed Details", () => {
     const data: MoneyPlaneRow[] = [
       {
@@ -264,7 +347,7 @@ describe("account deduplication and the actual financial grid", () => {
     const rows: MoneyPlaneRow[] = [
       {
         plane: "dao",
-        label: "DAO treasury / Steward wallet",
+        label: "Operator wallet / Steward wallet / DAO treasury",
         kind: "wallet",
         balance: 10,
         currency: "USDC",
@@ -318,6 +401,8 @@ describe("account deduplication and the actual financial grid", () => {
     );
     expect(html).toContain("Financials");
     expect(html).toContain("<strong>10 USDC</strong>");
+    expect(html).toContain("<dd>Operator wallet / Steward wallet / DAO treasury</dd>");
+    expect(html).toContain("Payment history unavailable");
     expect(html).toContain("<summary>Funding accounts</summary>");
     expect(html).toContain("20 USDC");
     expect(html).toContain("30 USDC");

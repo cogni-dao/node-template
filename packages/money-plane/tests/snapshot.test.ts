@@ -15,8 +15,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   baseWalletReader,
-  openRouterReader,
   type MoneyPlaneRow,
+  openRouterReader,
   type PlaneReader,
   takeSnapshot,
 } from "../src/index";
@@ -297,6 +297,93 @@ describe("takeSnapshot", () => {
         );
       }
     }
+  });
+
+  it("normalizes invalid measurements from arbitrary injected readers at the shared boundary", async () => {
+    for (const invalid of [NaN, Infinity, -Infinity, -1]) {
+      const snapshot = await takeSnapshot(
+        [
+          reader("prepaid", async () =>
+            row({ plane: "prepaid", burnPerDay: invalid })
+          ),
+          reader("wallet", async () =>
+            row({
+              plane: "wallet",
+              kind: "wallet",
+              balance: invalid,
+              grade: "INFO",
+            })
+          ),
+          reader("proven-red", async () =>
+            row({
+              plane: "proven-red",
+              balance: 0,
+              burnPerDay: invalid,
+              runwayDays: 0,
+              grade: "RED",
+            })
+          ),
+          reader("red-unknown-forecast", async () =>
+            row({
+              plane: "red-unknown-forecast",
+              burnPerDay: invalid,
+              grade: "RED",
+            })
+          ),
+        ],
+        { timeoutMs: 1000, now }
+      );
+      expect(snapshot.rows[0]).toMatchObject({
+        grade: "UNKNOWN",
+        burnPerDay: null,
+        runwayDays: null,
+        reasonCode: "burn_unmeasured",
+      });
+      expect(snapshot.rows[1]).toMatchObject({
+        grade: "UNKNOWN",
+        balance: null,
+        runwayDays: null,
+      });
+      expect(snapshot.rows[2]).toMatchObject({
+        grade: "RED",
+        burnPerDay: null,
+        runwayDays: 0,
+      });
+      expect(snapshot.rows[3]).toMatchObject({
+        grade: "RED",
+        burnPerDay: null,
+        runwayDays: null,
+      });
+    }
+    const zero = await takeSnapshot(
+      [
+        reader("zero", async () =>
+          row({
+            plane: "zero",
+            burnPerDay: 0,
+            runwayDays: null,
+            grade: "UNKNOWN",
+          })
+        ),
+      ],
+      { timeoutMs: 1000, now }
+    );
+    expect(zero.rows[0]?.burnPerDay).toBe(0);
+    const snapshot = await takeSnapshot(
+      [
+        reader("bad-balance", async () =>
+          row({ plane: "bad-balance", balance: NaN })
+        ),
+        reader("bad-runway", async () =>
+          row({ plane: "bad-runway", runwayDays: Infinity })
+        ),
+      ],
+      { timeoutMs: 1000, now }
+    );
+    expect(
+      snapshot.rows.every((r) => r.grade === "UNKNOWN" && r.runwayDays === null)
+    ).toBe(true);
+    expect(snapshot.rows[0]?.balance).toBeNull();
   });
 
   it("is UNKNOWN overall when given no readers", async () => {

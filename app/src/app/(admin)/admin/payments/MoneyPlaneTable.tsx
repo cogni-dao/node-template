@@ -88,12 +88,18 @@ function burn(row: MoneyPlaneRow) {
 function nativeSort(
   a: Row<MoneyPlaneRow>,
   b: Row<MoneyPlaneRow>,
-  id: string
+  id: string,
+  instruments: ReadonlyMap<string, string | null>
 ): number {
-  const group = (row: MoneyPlaneRow) =>
-    id === "rate"
-      ? `${burn(row)?.currency ?? ""}/${burn(row)?.per ?? ""}`
-      : (row.currency ?? "");
+  const group = (row: MoneyPlaneRow) => {
+    const instrument = instruments.get(row.plane);
+    return JSON.stringify([
+      instrument ? "instrument" : "source",
+      instrument ?? row.plane,
+      id === "rate" ? (burn(row)?.currency ?? "") : (row.currency ?? ""),
+      id === "rate" ? (burn(row)?.per ?? "") : "",
+    ]);
+  };
   return (
     group(a.original).localeCompare(group(b.original)) ||
     a.getValue<number>(id) - b.getValue<number>(id)
@@ -104,6 +110,9 @@ const column = createColumnHelper<MoneyPlaneRow>();
 export function createMoneyPlaneColumns(
   rateEvidence: readonly CostRateEvidence[] = []
 ) {
+  const instrumentBySource = new Map(
+    rateEvidence.map((item) => [item.sourceId, item.instrumentId])
+  );
   const basisBySource = new Map(
     rateEvidence.map((item) => [item.sourceId, item.basis])
   );
@@ -134,7 +143,7 @@ export function createMoneyPlaneColumns(
         <DataGridColumnHeader column={column} title="Balance / credit" />
       ),
       sortUndefined: "last",
-      sortingFn: nativeSort,
+      sortingFn: (a, b, id) => nativeSort(a, b, id, instrumentBySource),
       cell: ({ row }) => amount(row.original.balance, row.original.currency),
     }),
     column.accessor((row) => burn(row)?.value, {
@@ -143,7 +152,7 @@ export function createMoneyPlaneColumns(
         <DataGridColumnHeader column={column} title="Rate" />
       ),
       sortUndefined: "last",
-      sortingFn: nativeSort,
+      sortingFn: (a, b, id) => nativeSort(a, b, id, instrumentBySource),
       cell: ({ row }) => {
         const rate = burn(row.original);
         return rate?.value === undefined ? (
@@ -203,6 +212,12 @@ function EvidenceDetails({ row }: { row: MoneyPlaneRow }) {
     <details>
       <summary aria-label={`Details for ${row.label}`}>Details</summary>
       <dl className="grid gap-1 py-2">
+        {row.kind === "wallet" ? (
+          <>
+            <dt>Configured account roles</dt>
+            <dd>{row.label}</dd>
+          </>
+        ) : null}
         <dt>Source</dt>
         <dd>{row.source ?? "Unavailable"}</dd>
         <dt>Evidence</dt>
@@ -354,6 +369,9 @@ export function MoneyPlaneTable({
           <DataGridTable />
         </DataGridContainer>
       </DataGrid>
+      <p className="text-muted-foreground text-sm">
+        Payment history unavailable
+      </p>
       <dl className="space-y-2">
         {summary.cohorts.map((cohort) => (
           <div

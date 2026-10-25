@@ -61,7 +61,56 @@ export function unknownRow(input: UnknownRowInput): MoneyPlaneRow {
 }
 
 /** A reader can over-grade; this floor makes an unmeasured plane UNKNOWN regardless of what it claimed. */
-export function applyGradingFloor(row: MoneyPlaneRow): MoneyPlaneRow {
+export function applyGradingFloor(input: MoneyPlaneRow): MoneyPlaneRow {
+  const invalidBalance =
+    input.balance !== null &&
+    (!Number.isFinite(input.balance) ||
+      (input.kind === "wallet" && input.balance < 0));
+  const invalidBurn =
+    input.burnPerDay !== null &&
+    (!Number.isFinite(input.burnPerDay) || input.burnPerDay < 0);
+  const invalidRunway =
+    input.runwayDays !== null &&
+    (!Number.isFinite(input.runwayDays) || input.runwayDays < 0);
+  const missingPrepaidBurn =
+    input.kind === "prepaid" && (input.burnPerDay === null || invalidBurn);
+  const missingPrepaidBalance =
+    input.kind === "prepaid" && (input.balance === null || invalidBalance);
+  const exhausted =
+    input.kind === "prepaid" &&
+    input.grade === "RED" &&
+    input.balance !== null &&
+    Number.isFinite(input.balance) &&
+    input.balance <= 0;
+  const invalidForecast =
+    invalidBalance ||
+    invalidBurn ||
+    invalidRunway ||
+    missingPrepaidBurn ||
+    missingPrepaidBalance;
+  const row: MoneyPlaneRow = {
+    ...input,
+    balance: invalidBalance ? null : input.balance,
+    burnPerDay: invalidBurn ? null : input.burnPerDay,
+    runwayDays:
+      input.kind === "wallet"
+        ? null
+        : invalidForecast
+          ? exhausted
+            ? 0
+            : null
+          : input.runwayDays,
+  };
+  // Normalize first even for proven RED; bad auxiliary data must not survive serialization.
+  if (invalidForecast && (row.grade === "GREEN" || row.grade === "YELLOW")) {
+    return {
+      ...row,
+      grade: "UNKNOWN",
+      reasonCode:
+        missingPrepaidBurn || invalidBurn ? "burn_unmeasured" : "unreadable",
+    };
+  }
+
   // INFO means "holdings, no runway semantics" and is reserved for wallets; on any
   // other kind it would hide an ungraded plane from worstGrade.
   if (row.grade === "INFO" && row.kind !== "wallet") {
