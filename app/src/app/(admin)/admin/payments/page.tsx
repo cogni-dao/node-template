@@ -26,7 +26,12 @@ export default async function MoneyPlanesPage(): Promise<ReactElement> {
 
   return (
     <PageContainer maxWidth="2xl">
-      <MoneyPlaneTable rows={snapshot.rows} takenAt={snapshot.takenAt} />
+      <MoneyPlaneTable
+        rows={snapshot.rows}
+        takenAt={snapshot.takenAt}
+        treasuryPlane={snapshot.treasuryPlane}
+        costRateEvidence={snapshot.costRateEvidence}
+      />
     </PageContainer>
   );
 }

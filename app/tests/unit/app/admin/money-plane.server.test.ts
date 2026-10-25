@@ -11,16 +11,16 @@
  * @internal
  */
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createElement, Fragment } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
+import type { MoneyPlaneRow } from "@cogni/money-plane";
 import {
   createTable,
   flexRender,
   getCoreRowModel,
   getSortedRowModel,
 } from "@tanstack/react-table";
-import type { MoneyPlaneRow } from "@cogni/money-plane";
+import { createElement, Fragment } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   session: vi.fn(),
@@ -33,6 +33,8 @@ const mocks = vi.hoisted(() => ({
   redirect: vi.fn(),
   info: vi.fn(),
   error: vi.fn(),
+  grid: vi.fn(),
+  summary: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -41,7 +43,7 @@ vi.mock("next/navigation", () => ({
 }));
 vi.mock("@/components", () => ({
   Button: vi.fn(),
-  DataGrid: vi.fn(),
+  DataGrid: mocks.grid,
   DataGridColumnHeader: vi.fn(),
   DataGridContainer: vi.fn(),
   DataGridTable: vi.fn(),
@@ -66,10 +68,13 @@ vi.mock("@cogni/money-plane", () => ({
   openRouterReader: mocks.creditReader,
   takeSnapshot: mocks.snapshot,
   unknownRow: vi.fn(),
-  summarizeRows: vi.fn(),
+  summarizeCostRates: mocks.summary,
 }));
 
-import { moneyPlaneColumns } from "@/app/(admin)/admin/payments/MoneyPlaneTable";
+import {
+  MoneyPlaneTable,
+  moneyPlaneColumns,
+} from "@/app/(admin)/admin/payments/MoneyPlaneTable";
 
 import { getMoneyPlaneSnapshot } from "@/app/(admin)/admin/payments/money-plane.server";
 
@@ -117,11 +122,15 @@ describe("finance authorization at the read boundary", () => {
       id: "admin",
       walletAddress: "approved-wallet",
     });
-    await expect(getMoneyPlaneSnapshot()).resolves.toEqual(report);
+    await expect(getMoneyPlaneSnapshot()).resolves.toEqual({
+      ...report,
+      treasuryPlane: null,
+      costRateEvidence: [],
+    });
     expect(mocks.approver).toHaveBeenCalledWith("approved-wallet");
     expect(mocks.redirect).not.toHaveBeenCalled();
     expect(mocks.env).toHaveBeenCalledTimes(1);
-    expect(mocks.creditReader).toHaveBeenCalledTimes(1);
+    expect(mocks.creditReader).not.toHaveBeenCalled();
     expect(mocks.walletReader).toHaveBeenCalledTimes(3);
     expect(mocks.snapshot).toHaveBeenCalledTimes(1);
   });
@@ -146,7 +155,9 @@ describe("account deduplication and the actual financial grid", () => {
         address: address.toUpperCase().replace("0X", "0x"),
       })
       .mockReturnValueOnce(address);
-    await getMoneyPlaneSnapshot();
+    const result = await getMoneyPlaneSnapshot();
+    expect(result.treasuryPlane).toBe("base:operator-wallet");
+    expect(mocks.creditReader).not.toHaveBeenCalled();
     expect(mocks.walletReader).toHaveBeenCalledTimes(1);
     expect(mocks.walletReader).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -182,7 +193,7 @@ describe("account deduplication and the actual financial grid", () => {
             },
           }),
     }));
-    for (const id of ["balance", "burn", "runway", "paid"]) {
+    for (const id of ["balance", "rate", "runway"]) {
       for (const desc of [false, true]) {
         const table = createTable({
           data,
@@ -248,5 +259,76 @@ describe("account deduplication and the actual financial grid", () => {
       "Provider unavailable",
     ])
       expect(html).toContain(evidence);
+  });
+  it("renders DAO-only treasury and secondary custody while sending only costs to the actual grid", () => {
+    const rows: MoneyPlaneRow[] = [
+      {
+        plane: "dao",
+        label: "DAO treasury / Steward wallet",
+        kind: "wallet",
+        balance: 10,
+        currency: "USDC",
+        burnPerDay: null,
+        runwayDays: null,
+        grade: "INFO",
+        observedAt: report.takenAt,
+      },
+      {
+        plane: "operator",
+        label: "Operator funds",
+        kind: "wallet",
+        balance: 20,
+        currency: "USDC",
+        burnPerDay: null,
+        runwayDays: null,
+        grade: "INFO",
+        observedAt: report.takenAt,
+      },
+      {
+        plane: "human",
+        label: "Human custody",
+        kind: "wallet",
+        balance: 30,
+        currency: "USDC",
+        burnPerDay: null,
+        runwayDays: null,
+        grade: "INFO",
+        observedAt: report.takenAt,
+      },
+      {
+        plane: "cost",
+        label: "Node hosting share",
+        kind: "usage",
+        balance: null,
+        currency: null,
+        burnPerDay: null,
+        runwayDays: null,
+        grade: "UNKNOWN",
+        observedAt: report.takenAt,
+      },
+    ];
+    mocks.summary.mockReturnValue({ cohorts: [], unattributedCount: 0 });
+    const html = renderToStaticMarkup(
+      createElement(MoneyPlaneTable, {
+        rows,
+        takenAt: report.takenAt,
+        treasuryPlane: "dao",
+        costRateEvidence: [],
+      })
+    );
+    expect(html).toContain("Financials");
+    expect(html).toContain("<strong>10 USDC</strong>");
+    expect(html).toContain("<summary>Funding accounts</summary>");
+    expect(html).toContain("20 USDC");
+    expect(html).toContain("30 USDC");
+    expect(html).not.toContain("60 USDC");
+    expect(html).not.toContain("<details open");
+    expect(html).not.toContain("Paid (cumulative)");
+    expect(
+      mocks.grid.mock.calls[0]?.[0].table.options.data.map(
+        (row: MoneyPlaneRow) => row.plane
+      )
+    ).toEqual(["cost"]);
+    expect(mocks.summary).toHaveBeenCalledWith([]);
   });
 });

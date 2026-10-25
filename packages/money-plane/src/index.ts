@@ -42,6 +42,13 @@ export {
   unknownRow,
 } from "./row";
 export { type SnapshotOptions, takeSnapshot } from "./snapshot";
+export {
+  type CostRateBasis,
+  type CostRateCohort,
+  type CostRateEvidence,
+  type CostRateSummary,
+  summarizeCostRates,
+} from "./summarize";
 export type {
   FetchLike,
   FetchResponseLike,
@@ -55,10 +62,3 @@ export type {
   PlaneReader,
   ReasonCode,
 } from "./types";
-
-export {
-  summarizeRows,
-  type AmountSummary,
-  type RateSummary,
-  type MoneyPlaneSummary,
-} from "./summarize";

@@ -3,7 +3,7 @@
 
 /**
  * Module: `admin/payments/MoneyPlaneTable`
- * Purpose: Compact node-owned Payments grid with native summaries and sortable evidence.
+ * Purpose: Node-owned Financials with separate treasury/custody and scoped cost-rate cohorts.
  * Scope: Client presentation of an authorized server report; no provider reads or payments.
  * Invariants: Native units/custody remain separate; missing last; no inferred payment history.
  * Side-effects: local sort state, route refresh
@@ -13,10 +13,10 @@
 "use client";
 
 import {
+  type CostRateEvidence,
   type Grade,
   type MoneyPlaneRow,
-  type NativeAmount,
-  summarizeRows,
+  summarizeCostRates,
 } from "@cogni/money-plane";
 import {
   createColumnHelper,
@@ -62,12 +62,14 @@ function amount(value: number | null, currency: string | null): string {
     ? "—"
     : `${numberText(value ?? 0)} ${currency ?? ""}`.trim();
 }
-function totals(values: readonly NativeAmount[]): string {
-  return (
-    values
-      .map((value) => `${numberText(value.amount)} ${value.currency}`)
-      .join(" · ") || "—"
-  );
+function rateText(
+  value: string | number,
+  currency: string,
+  per: string
+): string {
+  return currency === "uact"
+    ? `${numberText(Number(value) / 1_000_000)} USD credit/${per}`
+    : `${numberText(value)} ${currency}/${per}`;
 }
 function burn(row: MoneyPlaneRow) {
   if (row.kind === "wallet" || row.kind === "expiry") return undefined;
@@ -89,11 +91,9 @@ function nativeSort(
   id: string
 ): number {
   const group = (row: MoneyPlaneRow) =>
-    id === "burn"
+    id === "rate"
       ? `${burn(row)?.currency ?? ""}/${burn(row)?.per ?? ""}`
-      : id === "paid"
-        ? (row.cumulativeVendorTransfer?.currency ?? "")
-        : (row.currency ?? "");
+      : (row.currency ?? "");
   return (
     group(a.original).localeCompare(group(b.original)) ||
     a.getValue<number>(id) - b.getValue<number>(id)
@@ -101,158 +101,175 @@ function nativeSort(
 }
 
 const column = createColumnHelper<MoneyPlaneRow>();
-export const moneyPlaneColumns = [
-  column.accessor("label", {
-    id: "service",
-    header: ({ column }) => (
-      <DataGridColumnHeader column={column} title="Service" />
-    ),
-    cell: ({ row }) => (
-      <div className="flex flex-wrap items-center gap-2">
-        <span>{row.original.label}</span>
-        {row.original.kind !== "wallet" &&
-        row.original.coverage === "operator-covered" ? (
-          <StatusBadge variant="outline">Sponsored</StatusBadge>
-        ) : null}
-      </div>
-    ),
-  }),
-  column.accessor((row) => measured(row.balance), {
-    id: "balance",
-    header: ({ column }) => (
-      <DataGridColumnHeader column={column} title="Balance" />
-    ),
-    sortUndefined: "last",
-    sortingFn: nativeSort,
-    cell: ({ row }) => amount(row.original.balance, row.original.currency),
-  }),
-  column.accessor((row) => burn(row)?.value, {
-    id: "burn",
-    header: ({ column }) => (
-      <DataGridColumnHeader column={column} title="Burn" />
-    ),
-    sortUndefined: "last",
-    sortingFn: nativeSort,
-    cell: ({ row }) => {
-      const rate = burn(row.original);
-      return rate?.value === undefined
-        ? "—"
-        : `${numberText(rate.value)} ${rate.currency}/${rate.per}`;
-    },
-  }),
-  column.accessor((row) => measured(row.runwayDays), {
-    id: "runway",
-    header: ({ column }) => (
-      <DataGridColumnHeader column={column} title="Runway" />
-    ),
-    sortUndefined: "last",
-    cell: ({ getValue }) =>
-      getValue() === undefined ? "—" : `${numberText(getValue() ?? 0)} d`,
-  }),
-  column.accessor(
-    (row) =>
-      row.cumulativeVendorTransfer
-        ? measured(Number(row.cumulativeVendorTransfer.amount))
-        : undefined,
-    {
-      id: "paid",
+export function createMoneyPlaneColumns(
+  rateEvidence: readonly CostRateEvidence[] = []
+) {
+  const basisBySource = new Map(
+    rateEvidence.map((item) => [item.sourceId, item.basis])
+  );
+  return [
+    column.accessor("label", {
+      id: "service",
       header: ({ column }) => (
-        <DataGridColumnHeader column={column} title="Paid (cumulative)" />
+        <DataGridColumnHeader column={column} title="Service" />
+      ),
+      cell: ({ row }) => (
+        <div className="flex flex-wrap items-center gap-2">
+          <div>
+            <span>{row.original.label}</span>
+            <div className="text-muted-foreground text-xs">
+              {row.original.beneficiary ?? "Scope unknown"}
+            </div>
+          </div>
+          {row.original.kind !== "wallet" &&
+          row.original.coverage === "operator-covered" ? (
+            <StatusBadge variant="outline">Sponsored</StatusBadge>
+          ) : null}
+        </div>
+      ),
+    }),
+    column.accessor((row) => measured(row.balance), {
+      id: "balance",
+      header: ({ column }) => (
+        <DataGridColumnHeader column={column} title="Balance / credit" />
       ),
       sortUndefined: "last",
       sortingFn: nativeSort,
-      cell: ({ row }) =>
-        row.original.cumulativeVendorTransfer
-          ? totals([row.original.cumulativeVendorTransfer])
-          : "—",
-    }
-  ),
-  column.accessor((row) => STATUS[row.grade].rank, {
-    id: "status",
-    header: ({ column }) => (
-      <DataGridColumnHeader column={column} title="Status" />
-    ),
-    cell: ({ row }) => (
-      <StatusBadge variant={STATUS[row.original.grade].variant}>
-        {STATUS[row.original.grade].label}
-      </StatusBadge>
-    ),
-  }),
-  column.display({
-    id: "details",
-    header: "",
-    cell: ({ row }) => (
-      <details>
-        <summary aria-label={`Details for ${row.original.label}`}>
-          Details
-        </summary>
-        <dl className="grid gap-1 py-2">
-          <dt>Source</dt>
-          <dd>{row.original.source ?? "Unavailable"}</dd>
-          <dt>Evidence</dt>
-          <dd>
-            {row.original.freshness ?? "unknown"} ·{" "}
-            {row.original.sourceObservedAt ?? "undated"}
-          </dd>
-          <dt>Read at</dt>
-          <dd>{row.original.observedAt}</dd>
-          <dt>Balance (source)</dt>
-          <dd>
-            {measured(row.original.balance) === undefined
-              ? "—"
-              : `${String(row.original.balance)} ${row.original.currency ?? ""}`.trim()}
-          </dd>
-          <dt>Burn/day (source)</dt>
-          <dd>
-            {measured(row.original.burnPerDay) === undefined
-              ? "—"
-              : `${String(row.original.burnPerDay)} ${row.original.currency ?? ""}/day`}
-          </dd>
-          <dt>Payer / beneficiary</dt>
-          <dd>
-            {row.original.payer ?? "Unknown"} /{" "}
-            {row.original.beneficiary ?? "Unknown"}
-          </dd>
-          <dt>Reason code</dt>
-          <dd>{row.original.reasonCode ?? "—"}</dd>
-          <dt>Detail</dt>
-          <dd>{row.original.detail ?? "—"}</dd>
-          {row.original.nativeRate ? (
-            <>
-              <dt>Exact rate</dt>
-              <dd>
-                {row.original.nativeRate.amount}{" "}
-                {row.original.nativeRate.currency}/{row.original.nativeRate.per}
-              </dd>
-            </>
-          ) : null}
-          {row.original.cumulativeVendorTransfer ? (
-            <>
-              <dt>Cumulative vendor transfer</dt>
-              <dd>
-                {row.original.cumulativeVendorTransfer.amount}{" "}
-                {row.original.cumulativeVendorTransfer.currency}
-              </dd>
-            </>
-          ) : null}
-          {row.original.kind === "wallet" ? (
-            <>
-              <dt>Custody</dt>
-              <dd>Observed holdings; not available DAO cash.</dd>
-            </>
-          ) : null}
-        </dl>
-      </details>
-    ),
-  }),
-];
+      cell: ({ row }) => amount(row.original.balance, row.original.currency),
+    }),
+    column.accessor((row) => burn(row)?.value, {
+      id: "rate",
+      header: ({ column }) => (
+        <DataGridColumnHeader column={column} title="Rate" />
+      ),
+      sortUndefined: "last",
+      sortingFn: nativeSort,
+      cell: ({ row }) => {
+        const rate = burn(row.original);
+        return rate?.value === undefined ? (
+          "—"
+        ) : (
+          <div>
+            {rateText(rate.value, rate.currency, rate.per)}
+            <div className="text-muted-foreground text-xs">
+              {basisBySource.get(row.original.plane)?.kind === "contract"
+                ? "Contract rate"
+                : basisBySource.get(row.original.plane)?.kind === "measured"
+                  ? "Measured burn"
+                  : "Basis unknown"}
+            </div>
+          </div>
+        );
+      },
+    }),
+    column.accessor((row) => measured(row.runwayDays), {
+      id: "runway",
+      header: ({ column }) => (
+        <DataGridColumnHeader column={column} title="Runway" />
+      ),
+      sortUndefined: "last",
+      cell: ({ getValue }) =>
+        getValue() === undefined ? "—" : `${numberText(getValue() ?? 0)} d`,
+    }),
+    column.accessor("payer", {
+      id: "payer",
+      header: ({ column }) => (
+        <DataGridColumnHeader column={column} title="Funded by" />
+      ),
+      cell: ({ row }) => row.original.payer ?? "Unknown",
+    }),
+    column.accessor((row) => STATUS[row.grade].rank, {
+      id: "status",
+      header: ({ column }) => (
+        <DataGridColumnHeader column={column} title="Status" />
+      ),
+      cell: ({ row }) => (
+        <StatusBadge variant={STATUS[row.original.grade].variant}>
+          {STATUS[row.original.grade].label}
+        </StatusBadge>
+      ),
+    }),
+    column.display({
+      id: "details",
+      header: "",
+      cell: ({ row }) => <EvidenceDetails row={row.original} />,
+    }),
+  ];
+}
+export const moneyPlaneColumns = createMoneyPlaneColumns();
+
+function EvidenceDetails({ row }: { row: MoneyPlaneRow }) {
+  return (
+    <details>
+      <summary aria-label={`Details for ${row.label}`}>Details</summary>
+      <dl className="grid gap-1 py-2">
+        <dt>Source</dt>
+        <dd>{row.source ?? "Unavailable"}</dd>
+        <dt>Evidence</dt>
+        <dd>
+          {row.freshness ?? "unknown"} · {row.sourceObservedAt ?? "undated"}
+        </dd>
+        <dt>Read at</dt>
+        <dd>{row.observedAt}</dd>
+        <dt>Balance (source)</dt>
+        <dd>
+          {measured(row.balance) === undefined
+            ? "—"
+            : `${String(row.balance)} ${row.currency ?? ""}`.trim()}
+        </dd>
+        <dt>Burn/day (source)</dt>
+        <dd>
+          {measured(row.burnPerDay) === undefined
+            ? "—"
+            : `${String(row.burnPerDay)} ${row.currency ?? ""}/day`}
+        </dd>
+        <dt>Payer / beneficiary</dt>
+        <dd>
+          {row.payer ?? "Unknown"} / {row.beneficiary ?? "Unknown"}
+        </dd>
+        <dt>Reason code</dt>
+        <dd>{row.reasonCode ?? "—"}</dd>
+        <dt>Detail</dt>
+        <dd>{row.detail ?? "—"}</dd>
+        {row.nativeRate ? (
+          <>
+            <dt>Exact rate</dt>
+            <dd>
+              {row.nativeRate.amount} {row.nativeRate.currency}/
+              {row.nativeRate.per}
+            </dd>
+          </>
+        ) : null}
+        {row.cumulativeVendorTransfer ? (
+          <>
+            <dt>Provider transfers · cumulative</dt>
+            <dd>
+              {row.cumulativeVendorTransfer.amount}{" "}
+              {row.cumulativeVendorTransfer.currency}
+            </dd>
+          </>
+        ) : null}
+        {row.kind === "wallet" ? (
+          <>
+            <dt>Custody</dt>
+            <dd>Observed holdings; not available DAO cash.</dd>
+          </>
+        ) : null}
+      </dl>
+    </details>
+  );
+}
 
 export function MoneyPlaneTable({
   rows,
   takenAt,
+  treasuryPlane,
+  costRateEvidence,
 }: {
   rows: readonly MoneyPlaneRow[];
   takenAt: string;
+  treasuryPlane: string | null;
+  costRateEvidence: readonly CostRateEvidence[];
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -260,25 +277,37 @@ export function MoneyPlaneTable({
     { id: "status", desc: false },
     { id: "runway", desc: false },
   ]);
-  const data = useMemo(() => [...rows], [rows]);
-  const summary = useMemo(() => summarizeRows(rows), [rows]);
+  const data = useMemo(
+    () => rows.filter((row) => row.kind !== "wallet"),
+    [rows]
+  );
+  const treasury = rows.find(
+    (row) => row.kind === "wallet" && row.plane === treasuryPlane
+  );
+  const custody = rows.filter(
+    (row) => row.kind === "wallet" && row.plane !== treasuryPlane
+  );
+  const summary = useMemo(
+    () => summarizeCostRates(costRateEvidence),
+    [costRateEvidence]
+  );
+  const columns = useMemo(
+    () => createMoneyPlaneColumns(costRateEvidence),
+    [costRateEvidence]
+  );
   const table = useReactTable({
     data,
-    columns: moneyPlaneColumns,
+    columns,
     state: { sorting },
     onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getRowId: (row) => row.plane,
   });
-  const burnTotal =
-    summary.burn.rates
-      .map((rate) => `${numberText(rate.amount)} ${rate.currency}/${rate.per}`)
-      .join(" · ") || "—";
   return (
     <div className="min-w-0 space-y-4 tabular-nums">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h1>Payments</h1>
+        <h1>Financials</h1>
         <div className="flex items-center gap-2">
           <time dateTime={takenAt}>{takenAt.slice(11, 16)} UTC</time>
           <Button
@@ -291,54 +320,97 @@ export function MoneyPlaneTable({
           </Button>
         </div>
       </div>
-      <div className="flex flex-wrap gap-6">
-        <div>
-          <span>Wallets · </span>
-          <strong>{totals(summary.wallets.amounts)}</strong>
-          {summary.wallets.partial ? (
-            <StatusBadge variant="outline">Partial</StatusBadge>
-          ) : null}
-        </div>
-        <div>
-          <span>Prepaid · </span>
-          <strong>{totals(summary.prepaid.amounts)}</strong>
-          {summary.prepaid.partial ? (
-            <StatusBadge variant="outline">Partial</StatusBadge>
-          ) : null}
-        </div>
+      <div>
+        <span>DAO treasury · </span>
+        <strong>
+          {treasury ? amount(treasury.balance, treasury.currency) : "—"}
+        </strong>
+        {treasury ? <EvidenceDetails row={treasury} /> : null}
       </div>
+      {custody.length ? (
+        <details>
+          <summary>Funding accounts</summary>
+          <dl className="space-y-2 py-2">
+            {custody.map((row) => (
+              <div key={row.plane}>
+                <dt>{row.label}</dt>
+                <dd>
+                  {amount(row.balance, row.currency)}
+                  <EvidenceDetails row={row} />
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </details>
+      ) : null}
+      <h2>Costs</h2>
       <DataGrid
         table={table}
         recordCount={data.length}
         tableLayout={{ dense: true, rowBorder: true, headerBackground: true }}
-        emptyMessage="No sources configured."
+        emptyMessage="No cost sources configured."
       >
         <DataGridContainer className="max-w-full overflow-x-auto">
-          <DataGridTable
-            footerContent={
-              <tr>
-                <th scope="row">Known totals</th>
-                <td>
-                  Wallets: {totals(summary.wallets.amounts)}
-                  <br />
-                  Prepaid: {totals(summary.prepaid.amounts)}
-                </td>
-                <td>
-                  {burnTotal}
-                  {summary.burn.partial ? " · Partial" : ""}
-                </td>
-                <td>—</td>
-                <td>
-                  {totals(summary.paid.amounts)}
-                  {summary.paid.partial ? " · Partial" : ""}
-                </td>
-                <td />
-                <td />
-              </tr>
-            }
-          />
+          <DataGridTable />
         </DataGridContainer>
       </DataGrid>
+      <dl className="space-y-2">
+        {summary.cohorts.map((cohort) => (
+          <div
+            key={JSON.stringify([
+              cohort.ownerId,
+              cohort.scopeId,
+              cohort.instrumentId,
+              cohort.rate.currency,
+              cohort.rate.per,
+              cohort.basis,
+            ])}
+          >
+            <dt>
+              {cohort.basis.kind === "contract"
+                ? "Known contract rate"
+                : "Measured burn"}{" "}
+              · {cohort.scopeId}
+            </dt>
+            <dd>
+              <strong>
+                {cohort.rate.amount === null
+                  ? "—"
+                  : rateText(
+                      cohort.rate.amount,
+                      cohort.rate.currency,
+                      cohort.rate.per
+                    )}
+              </strong>
+              {cohort.partial ? " · Partial" : ""}
+              {cohort.basis.kind === "contract" ? " · Last known" : ""}
+              {cohort.ageUnknown
+                ? " · Age unknown"
+                : ` · ${cohort.oldestObservedAt}`}
+              <details>
+                <summary>Rate evidence</summary>
+                <p>
+                  Oldest source observation:{" "}
+                  {cohort.oldestObservedAt ?? "Unknown"}
+                </p>
+                <p>
+                  {cohort.ownerId} · {cohort.instrumentId} ·{" "}
+                  {cohort.rate.amount ?? "Unknown"} {cohort.rate.currency}/
+                  {cohort.rate.per}
+                </p>
+                {cohort.basis.kind === "measured" ? (
+                  <p>
+                    {cohort.basis.start} – {cohort.basis.end}
+                  </p>
+                ) : null}
+              </details>
+            </dd>
+          </div>
+        ))}
+      </dl>
+      {summary.unattributedCount ? (
+        <p>{summary.unattributedCount} rates have unknown attribution.</p>
+      ) : null}
     </div>
   );
 }

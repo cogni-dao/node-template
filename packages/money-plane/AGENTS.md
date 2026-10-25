@@ -18,7 +18,16 @@ Published leaf package (`@cogni-dao/money-plane`, consumed as `@cogni/money-plan
 {
   "layer": "packages",
   "may_import": [],
-  "must_not_import": ["app", "features", "ports", "core", "adapters", "shared", "services", "packages"]
+  "must_not_import": [
+    "app",
+    "features",
+    "ports",
+    "core",
+    "adapters",
+    "shared",
+    "services",
+    "packages"
+  ]
 }
 ```
 
@@ -29,7 +38,7 @@ No runtime dependencies, no env reads, no React, no viem. `fetch` is injected (`
 - Types: `MoneyPlaneRow`, `NativeAmount`, `NativeRate`, `PayAction`, `Grade`, `PlaneKind`, `ReasonCode`, `PlaneReader`, `MoneyPlaneSnapshot`, `FetchLike`
 - Policy: `RUNWAY_DAYS`, `SPEND_USD_PER_MONTH`, `EXPIRY_DAYS`, `ESCROW_DAYS`, `ESCROW_CALIBRATED`
 - Grading: `gradeRunway`, `gradeSpend`, `gradeExpiry`, `worstGrade`, `applyGradingFloor`
-- Reporting: `summarizeRows`, `MoneyPlaneSummary`, `AmountSummary`, `RateSummary` — native currency/period-separated known subtotals with partial coverage. Consuming runtimes deduplicate account aliases before reads; wallet holdings never imply DAO spendable cash.
+- Reporting: `summarizeCostRates`, `CostRateBasis`, `CostRateEvidence`, `CostRateCohort`, `CostRateSummary` — exact rate cohorts separated by economic owner, scope, instrument, unit and contract/measured basis. Measured windows must match; unknown age and partial coverage remain explicit. No custody totals, FX, authorization or ledger.
 - Runner: `takeSnapshot(readers, { timeoutMs, now? })`
 - Readers: `openRouterReader`, `baseWalletReader`; helpers `unknownRow`, `safeDetail`
 
@@ -42,7 +51,7 @@ No runtime dependencies, no env reads, no React, no viem. `fetch` is injected (`
 - REPORTING_ONLY_UI — consuming finance tables do not render money-moving controls in this wave.
 - ONE_ROW_MODEL — a Pay button is a `payAction` value, never a new row shape.
 - `detail` never carries a URL, key, or address.
-- OpenRouter burn is not measured here: `openRouterReader` exposes `usageTotal` and grades only from a caller-supplied `burnPerDay`. A fork without a scheduled sentinel that differences `usageTotal` between runs therefore shows its OpenRouter row as UNKNOWN `burn_unmeasured` (RED once the balance is exhausted). That is the honest grade, not a bug.
+- OpenRouter burn is not measured here: `openRouterReader` exposes `usageTotal` and grades only from a caller-supplied `burnPerDay`. Current finance UIs do not compose this account reader: inherited provider credentials do not establish node account ownership or read-only privileges. Provider least privilege is separate task.5361.
 
 ## Not here
 

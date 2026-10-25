@@ -2,130 +2,155 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 /**
- * Module: `money-plane/tests/summarize`
- * Purpose: Prove native subtotal precision, separation and partial evidence.
- * Scope: Pure reporting projection; no IO.
- * Invariants: No FX, custody mixing, fabricated zero, or runway totals.
+ * Module: money-plane/tests/summarize
+ * Purpose: Prove native contract and measured cost cohorts without custody or period mixing.
+ * Scope: Public pure summary API; no IO.
+ * Invariants: Exact addition, explicit attribution, partial evidence and conservative age.
  * Side-effects: none
  * Links: src/summarize.ts
  * @internal
  */
 import { describe, expect, it } from "vitest";
-import { type MoneyPlaneRow, summarizeRows } from "../src/index";
+import { type CostRateEvidence, summarizeCostRates } from "../src/index";
 
-const row = (over: Partial<MoneyPlaneRow>): MoneyPlaneRow => ({
-  plane: "source",
-  label: "Source",
-  kind: "prepaid",
-  balance: null,
-  currency: "USD",
-  burnPerDay: null,
-  runwayDays: null,
-  grade: "UNKNOWN",
-  observedAt: "2026-10-25T00:00:00Z",
-  sourceObservedAt: "2026-10-25T00:00:00Z",
-  freshness: "current",
+const evidence = (
+  sourceId: string,
+  amount: string | null,
+  over: Partial<CostRateEvidence> = {}
+): CostRateEvidence => ({
+  sourceId,
+  ownerId: "operator",
+  scopeId: "operator-fleet",
+  instrumentId: "akash:uact",
+  basis: { kind: "contract", active: true },
+  rate: { amount, currency: "uact", per: "block" },
+  sourceObservedAt: null,
+  partial: false,
   ...over,
 });
 
-describe("summarizeRows", () => {
-  it("adds decimal source values without floating point accumulation and preserves signed tiny balances", () => {
-    const result = summarizeRows([
-      row({ balance: 0.1 }),
-      row({ balance: 0.2 }),
-      row({ balance: -0.4 }),
-      row({ balance: 1e-7 }),
+describe("summarizeCostRates", () => {
+  it("adds existing active contract aggregates exactly despite unknown age; excludes closed and identical duplicates", () => {
+    const a = evidence("node-a", "2");
+    const summary = summarizeCostRates([
+      a,
+      evidence("node-b", "3"),
+      a,
+      evidence("closed", "90", { basis: { kind: "contract", active: false } }),
     ]);
-    expect(result.prepaid).toEqual({
-      amounts: [{ amount: "-0.0999999", currency: "USD" }],
-      partial: false,
+    expect(summary).toEqual({
+      unattributedCount: 0,
+      cohorts: [
+        {
+          ownerId: "operator",
+          scopeId: "operator-fleet",
+          instrumentId: "akash:uact",
+          basis: { kind: "contract" },
+          rate: { amount: "5", currency: "uact", per: "block" },
+          partial: false,
+          oldestObservedAt: null,
+          ageUnknown: true,
+        },
+      ],
     });
   });
-  it("keeps wallets, credits, native currencies and rate periods separate", () => {
-    const result = summarizeRows([
-      row({ kind: "wallet", balance: 20, currency: "USDC" }),
-      row({ balance: 12, currency: "USD", burnPerDay: 0.2 }),
-      row({
-        balance: 4,
-        currency: "EUR",
-        nativeRate: {
-          amount: "0.000000000000000123",
-          currency: "AKT",
-          per: "block",
-        },
-        burnPerDay: 99,
+  it("separates owner, scope, instrument, currency, unit, basis and measured window", () => {
+    const window = {
+      kind: "measured" as const,
+      start: "2026-10-01T00:00:00Z",
+      end: "2026-10-02T00:00:00Z",
+    };
+    const rows = [
+      evidence("a", "2"),
+      evidence("b", "3"),
+      evidence("owner", "7", { ownerId: "other" }),
+      evidence("scope", "7", { scopeId: "other" }),
+      evidence("asset", "7", { instrumentId: "other-credit" }),
+      evidence("currency", "7", {
+        rate: { amount: "7", currency: "EUR", per: "block" },
       }),
-      row({
-        kind: "fixed",
-        nativeRate: { amount: "5", currency: "USD", per: "month" },
-        cumulativeVendorTransfer: {
-          amount: "100000000000000000000.001",
-          currency: "uact",
-        },
+      evidence("unit", "7", {
+        rate: { amount: "7", currency: "uact", per: "day" },
       }),
-      row({
-        kind: "usage",
-        nativeRate: {
-          amount: "0.000000000000000001",
-          currency: "AKT",
-          per: "block",
-        },
-        cumulativeVendorTransfer: { amount: "0.009", currency: "uact" },
+      evidence("measured-a", "2", {
+        basis: window,
+        rate: { amount: "2", currency: "USD", per: "day" },
       }),
-    ]);
-    expect(result.wallets.amounts).toEqual([
-      { amount: "20", currency: "USDC" },
-    ]);
-    expect(result.prepaid.amounts).toEqual([
-      { amount: "4", currency: "EUR" },
-      { amount: "12", currency: "USD" },
-    ]);
-    expect(result.burn.rates).toEqual([
-      { amount: "0.000000000000000124", currency: "AKT", per: "block" },
-      { amount: "0.2", currency: "USD", per: "day" },
-      { amount: "5", currency: "USD", per: "month" },
-    ]);
-    expect(result.paid.amounts).toEqual([
-      { amount: "100000000000000000000.01", currency: "uact" },
-    ]);
+      evidence("measured-b", "3", {
+        basis: window,
+        rate: { amount: "3", currency: "USD", per: "day" },
+      }),
+      evidence("window", "7", {
+        basis: { ...window, end: "2026-10-03T00:00:00Z" },
+      }),
+    ];
+    const result = summarizeCostRates(rows);
+    expect(result.cohorts).toHaveLength(8);
+    expect(result.cohorts.filter((c) => c.rate.amount === "5")).toHaveLength(2);
+    expect(result).not.toHaveProperty("runway");
   });
-  it("keeps missing evidence empty and marks known subtotals partial", () => {
+  it("retains oldest age and known partial sum; missing does not become zero", () => {
+    const result = summarizeCostRates([
+      evidence("old", "0.1", { sourceObservedAt: "2026-10-01T00:00:00Z" }),
+      evidence("fresh", "0.2", { sourceObservedAt: "2026-10-25T00:00:00Z" }),
+      evidence("missing", null),
+    ]).cohorts[0];
+    expect(result).toMatchObject({
+      rate: { amount: "0.3" },
+      partial: true,
+      oldestObservedAt: "2026-10-01T00:00:00.000Z",
+      ageUnknown: true,
+    });
     expect(
-      summarizeRows([row({ kind: "wallet", currency: null })]).wallets
-    ).toEqual({ amounts: [], partial: true });
-    const result = summarizeRows([
-      row({ balance: 3 }),
-      row({ balance: null }),
-      row({ balance: 2, freshness: "stale" }),
+      summarizeCostRates([evidence("missing", null)]).cohorts[0]?.rate.amount
+    ).toBeNull();
+    expect(
+      summarizeCostRates([evidence("zero", "0")]).cohorts[0]?.rate.amount
+    ).toBe("0");
+  });
+  it("rejects unbounded, invalid, negative and conflicting source evidence without erasing known members", () => {
+    const invalid = ["NaN", "Infinity", "-1", "1e401", "1".repeat(257), "bad"];
+    const result = summarizeCostRates([
+      evidence("good", "0.000000000000000123"),
+      evidence("tiny", "1e-18"),
+      ...invalid.map((value, i) => evidence(`bad-${i}`, value)),
+      evidence("conflict", "100"),
+      evidence("conflict", "200"),
+      evidence("missing-owner", "999", { ownerId: null }),
+      evidence("invalid-window", "999", {
+        basis: { kind: "measured", start: "bad", end: "bad" },
+      }),
     ]);
-    expect(result.prepaid).toEqual({
-      amounts: [{ amount: "5", currency: "USD" }],
+    expect(result.unattributedCount).toBe(2);
+    expect(result.cohorts[0]).toMatchObject({
+      rate: { amount: "0.000000000000000124" },
       partial: true,
     });
-    expect(result.burn).toEqual({ rates: [], partial: true });
-    expect(result.paid).toEqual({ amounts: [], partial: true });
   });
-  it("rejects malformed/nonfinite measurements without treating them as zero", () => {
-    const result = summarizeRows([
-      row({
-        balance: Infinity,
-        burnPerDay: NaN,
-        cumulativeVendorTransfer: { amount: "bad", currency: "USD" },
+  it("normalizes equal measured instants and does not freshen old or missing evidence", () => {
+    const base = {
+      kind: "measured" as const,
+      start: "2026-10-01T00:00:00Z",
+      end: "2026-10-02T00:00:00Z",
+    };
+    const result = summarizeCostRates([
+      evidence("a", "2", {
+        basis: base,
+        sourceObservedAt: "2026-10-02T00:00:00Z",
+      }),
+      evidence("b", "3", {
+        basis: { ...base, start: "2026-10-01T00:00:00.000Z" },
+        sourceObservedAt: "invalid",
       }),
     ]);
-    expect(result.prepaid).toEqual({ amounts: [], partial: true });
-    expect(result.paid).toEqual({ amounts: [], partial: true });
-  });
-  it("preserves measured zero and does not invent a total runway", () => {
-    const result = summarizeRows([row({ balance: 0, burnPerDay: 0 })]);
-    expect(result.prepaid).toEqual({
-      amounts: [{ amount: "0", currency: "USD" }],
-      partial: false,
+    expect(result.cohorts).toHaveLength(1);
+    expect(result.cohorts[0]).toMatchObject({
+      rate: { amount: "5" },
+      ageUnknown: true,
     });
-    expect(result.burn).toEqual({
-      rates: [{ amount: "0", currency: "USD", per: "day" }],
-      partial: false,
+    expect(summarizeCostRates([])).toEqual({
+      cohorts: [],
+      unattributedCount: 0,
     });
-    expect(result).not.toHaveProperty("runway");
   });
 });

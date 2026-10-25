@@ -2,29 +2,44 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 /**
- * Module: `money-plane/summarize`
- * Purpose: Native reporting subtotals shared by node-owned financial tables.
- * Scope: Pure projection of already deduplicated account rows; no conversion or ledger writes.
- * Invariants: Currency, custody kind and rate period stay separate; missing data is partial, never zero.
+ * Module: money-plane/summarize
+ * Purpose: Exact cost-rate cohorts with explicit economic attribution and evidence basis.
+ * Scope: Pure projection; no conversion, custody aggregation, authorization or ledger writes.
+ * Invariants: Contract rates never become measured burn; unknown age never freshens a cohort.
  * Side-effects: none
- * Links: https://cognidao.org/knowledge/money-plane-snapshot-design
+ * Links: https://cognidao.org/knowledge/inbox/contrib-flock-leader-conductor-1ab1f013
  * @public
  */
-import type { MoneyPlaneRow, NativeAmount, NativeRate } from "./types";
+import type { NativeRate } from "./types";
 
-export interface AmountSummary {
-  amounts: NativeAmount[];
+export type CostRateBasis =
+  | { kind: "contract"; active: boolean }
+  | { kind: "measured"; start: string; end: string };
+export interface CostRateEvidence {
+  sourceId: string;
+  ownerId: string | null;
+  scopeId: string | null;
+  instrumentId: string | null;
+  basis: CostRateBasis;
+  rate: { amount: string | null; currency: string; per: NativeRate["per"] };
+  sourceObservedAt: string | null;
   partial: boolean;
 }
-export interface RateSummary {
-  rates: NativeRate[];
+export interface CostRateCohort {
+  ownerId: string;
+  scopeId: string;
+  instrumentId: string;
+  basis:
+    | { kind: "contract" }
+    | { kind: "measured"; start: string; end: string };
+  rate: { amount: string | null; currency: string; per: NativeRate["per"] };
   partial: boolean;
+  oldestObservedAt: string | null;
+  ageUnknown: boolean;
 }
-export interface MoneyPlaneSummary {
-  wallets: AmountSummary;
-  prepaid: AmountSummary;
-  burn: RateSummary;
-  paid: AmountSummary;
+export interface CostRateSummary {
+  cohorts: CostRateCohort[];
+  unattributedCount: number;
 }
 
 interface Decimal {
@@ -71,84 +86,122 @@ function display(value: Decimal): string {
   return `${sign}${digits.slice(0, -value.scale)}${fraction ? `.${fraction}` : ""}`;
 }
 
-export function summarizeRows(
-  rows: readonly MoneyPlaneRow[]
-): MoneyPlaneSummary {
-  const result: MoneyPlaneSummary = {
-    wallets: { amounts: [], partial: false },
-    prepaid: { amounts: [], partial: false },
-    burn: { rates: [], partial: false },
-    paid: { amounts: [], partial: false },
+/** Source instants must be explicit timestamps, never date-only observation windows. */
+function instant(value: string | null): string | null {
+  if (!value || !/^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:\d{2})$/.test(value))
+    return null;
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? new Date(time).toISOString() : null;
+}
+
+function cohortFor(evidence: CostRateEvidence): CostRateCohort | null {
+  const { ownerId, scopeId, instrumentId, rate } = evidence;
+  if (
+    !ownerId?.trim() ||
+    !scopeId?.trim() ||
+    !instrumentId?.trim() ||
+    !rate.currency.trim() ||
+    !["day", "month", "block"].includes(rate.per)
+  )
+    return null;
+  let basis: CostRateCohort["basis"];
+  if (evidence.basis.kind === "contract") basis = { kind: "contract" };
+  else {
+    const start = instant(evidence.basis.start);
+    const end = instant(evidence.basis.end);
+    if (!start || !end || start >= end) return null;
+    basis = { kind: "measured", start, end };
+  }
+  return {
+    ownerId,
+    scopeId,
+    instrumentId,
+    basis,
+    rate: { ...rate, amount: null },
+    partial: false,
+    oldestObservedAt: null,
+    ageUnknown: false,
   };
-  const totals = {
-    wallets: new Map<string, Decimal>(),
-    prepaid: new Map<string, Decimal>(),
-    burn: new Map<string, Decimal>(),
-    paid: new Map<string, Decimal>(),
-  };
-  const rateKeys = new Map<
-    string,
-    { currency: string; per: NativeRate["per"] }
-  >();
-  function include(
-    bucket: keyof typeof totals,
-    row: MoneyPlaneRow,
-    amount: string | number | null | undefined,
-    currency: string | null | undefined,
-    per?: NativeRate["per"]
-  ) {
-    const value = amount == null ? null : decimal(amount);
-    if (
-      !value ||
-      !currency ||
-      (bucket !== "prepaid" && value.coefficient < 0n)
-    ) {
-      result[bucket].partial = true;
-      return;
+}
+
+/** One source granularity per report; identical repeats count once, conflicting repeats contribute no value. */
+export function summarizeCostRates(
+  evidence: readonly CostRateEvidence[]
+): CostRateSummary {
+  const result: CostRateSummary = { cohorts: [], unattributedCount: 0 };
+  const sources = new Map<string, Map<string, CostRateEvidence>>();
+  for (const item of evidence) {
+    if (!item.sourceId.trim()) {
+      result.unattributedCount += 1;
+      continue;
     }
-    const key = per ? JSON.stringify([currency, per]) : currency;
-    const map = totals[bucket];
-    map.set(key, add(map.get(key) ?? { coefficient: 0n, scale: 0 }, value));
-    if (per) rateKeys.set(key, { currency, per });
-    if (
-      row.freshness !== "current" ||
-      !row.sourceObservedAt ||
-      !Number.isFinite(Date.parse(row.sourceObservedAt))
-    )
-      result[bucket].partial = true;
+    const group =
+      sources.get(item.sourceId) ?? new Map<string, CostRateEvidence>();
+    // Fixed field order makes equality independent of caller object property order.
+    const fingerprint = JSON.stringify([
+      item.ownerId,
+      item.scopeId,
+      item.instrumentId,
+      item.basis.kind,
+      item.basis.kind === "contract"
+        ? item.basis.active
+        : [item.basis.start, item.basis.end],
+      item.rate.amount,
+      item.rate.currency,
+      item.rate.per,
+      item.sourceObservedAt,
+      item.partial,
+    ]);
+    group.set(fingerprint, item);
+    sources.set(item.sourceId, group);
   }
-  for (const row of rows) {
-    if (row.kind === "wallet")
-      include("wallets", row, row.balance, row.currency);
-    if (row.kind === "prepaid")
-      include("prepaid", row, row.balance, row.currency);
-    if (row.kind === "wallet" || row.kind === "expiry") continue;
-    if (row.nativeRate)
-      include(
-        "burn",
-        row,
-        row.nativeRate.amount,
-        row.nativeRate.currency,
-        row.nativeRate.per
-      );
-    else include("burn", row, row.burnPerDay, row.currency, "day");
-    include(
-      "paid",
-      row,
-      row.cumulativeVendorTransfer?.amount,
-      row.cumulativeVendorTransfer?.currency
-    );
+  const cohorts = new Map<
+    string,
+    { value: Decimal | null; cohort: CostRateCohort }
+  >();
+  for (const source of sources.values()) {
+    const conflict = source.size > 1;
+    for (const item of source.values()) {
+      if (item.basis.kind === "contract" && !item.basis.active) continue;
+      const candidate = cohortFor(item);
+      if (!candidate) {
+        result.unattributedCount += 1;
+        continue;
+      }
+      const key = JSON.stringify([
+        candidate.ownerId,
+        candidate.scopeId,
+        candidate.instrumentId,
+        candidate.rate.currency,
+        candidate.rate.per,
+        candidate.basis,
+      ]);
+      const entry = cohorts.get(key) ?? { value: null, cohort: candidate };
+      cohorts.set(key, entry);
+      const value = item.rate.amount == null ? null : decimal(item.rate.amount);
+      if (conflict || !value || value.coefficient < 0n)
+        entry.cohort.partial = true;
+      else
+        entry.value = add(entry.value ?? { coefficient: 0n, scale: 0 }, value);
+      entry.cohort.partial ||= item.partial;
+      const observed = instant(item.sourceObservedAt);
+      entry.cohort.ageUnknown ||= observed === null || conflict;
+      if (
+        observed &&
+        (!entry.cohort.oldestObservedAt ||
+          observed < entry.cohort.oldestObservedAt)
+      )
+        entry.cohort.oldestObservedAt = observed;
+    }
   }
-  for (const bucket of ["wallets", "prepaid", "paid"] as const) {
-    result[bucket].amounts = [...totals[bucket]]
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([currency, value]) => ({ currency, amount: display(value) }));
-  }
-  result.burn.rates = [...totals.burn]
+  result.cohorts = [...cohorts]
     .sort(([a], [b]) => a.localeCompare(b))
-    .flatMap(([key, value]) => {
-      const rate = rateKeys.get(key);
-      return rate ? [{ ...rate, amount: display(value) }] : [];
-    });
+    .map(([, entry]) => ({
+      ...entry.cohort,
+      rate: {
+        ...entry.cohort.rate,
+        amount: entry.value ? display(entry.value) : null,
+      },
+    }));
   return result;
 }

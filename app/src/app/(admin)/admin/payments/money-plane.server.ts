@@ -3,30 +3,30 @@
 
 /**
  * Module: `@app/(admin)/admin/payments/money-plane.server`
- * Purpose: This node's money-plane composition: which planes it reads (repo-spec wallets + its own OpenRouter key),
+ * Purpose: This node's money-plane composition: configured wallet custody and explicitly unavailable operator-funded node cost shares,
  *   one read-only report through `@cogni/money-plane`.
  * Scope: Server-only. Reads repo-spec + server env and hands them to the package readers. Does not move funds,
  *   decide alerts, or render.
  * Invariants: Repo-spec approver authorization precedes credentials and provider reads. READERS_NEVER_THROW. Wallet custody never proves DAO spendable cash. Operator coverage is separate from measured node share.
- * Side-effects: IO (OpenRouter HTTPS GET, Base JSON-RPC reads), one terminal MONEY_PLANE_SNAPSHOT log event.
+ * Side-effects: IO (Base JSON-RPC reads), one terminal MONEY_PLANE_SNAPSHOT log event.
  * Links: packages/money-plane, https://cognidao.org/knowledge/money-plane-snapshot-design
  * @public
  */
 
 import "server-only";
 
-import { redirect } from "next/navigation";
 
 import {
   BASE_PUBLIC_RPC_URL,
   baseWalletReader,
+  type CostRateEvidence,
   type FetchLike,
   type MoneyPlaneSnapshot,
   type PlaneReader,
-  unknownRow,
-  openRouterReader,
   takeSnapshot,
+  unknownRow,
 } from "@cogni/money-plane";
+import { redirect } from "next/navigation";
 
 import { getServerSessionUser } from "@/lib/auth/server";
 import {
@@ -46,7 +46,12 @@ const SNAPSHOT_TIMEOUT_MS = 8_000;
 const noStoreFetch: FetchLike = (url, init) =>
   fetch(url, { ...init, cache: "no-store" });
 
-function readers(): PlaneReader[] {
+export interface NodeFinanceSnapshot extends MoneyPlaneSnapshot {
+  treasuryPlane: string | null;
+  costRateEvidence: CostRateEvidence[];
+}
+
+function readers(): { readers: PlaneReader[]; treasuryPlane: string | null } {
   const env = serverEnv();
   const wallet = {
     rpcUrl: env.EVM_RPC_URL ?? BASE_PUBLIC_RPC_URL,
@@ -70,6 +75,7 @@ function readers(): PlaneReader[] {
       address: getDaoTreasuryAddress(),
     },
   ];
+  let treasuryPlane: string | null = null;
   const accounts = new Map<string, (typeof configured)[number]>();
   for (const account of configured) {
     const address = account.address;
@@ -78,47 +84,78 @@ function readers(): PlaneReader[] {
         ? `base:${wallet.usdcAddress.toLowerCase()}:${address.toLowerCase()}`
         : account.name;
     const prior = accounts.get(key);
+    if (
+      account.name === "dao-treasury" &&
+      address &&
+      /^0x[0-9a-fA-F]{40}$/.test(address)
+    )
+      treasuryPlane = `base:${prior?.name ?? account.name}`;
     if (prior) prior.label = `${prior.label} / ${account.label}`;
     else accounts.set(key, { ...account });
   }
-  return [
-    openRouterReader({ apiKey: env.OPENROUTER_API_KEY, fetch: noStoreFetch }),
-    ...[...accounts.values()].map((account) =>
-      baseWalletReader({ ...wallet, ...account })
-    ),
-    {
-      plane: "hosting:operator-covered",
-      label: "Node hosting share",
-      kind: "usage",
-      async read() {
-        return {
-          ...unknownRow({
-            plane: "hosting:operator-covered",
-            label: "Node hosting share",
-            kind: "usage",
-            reasonCode: "unconfigured",
-            observedAt: new Date().toISOString(),
-            detail: "Node cost share unavailable",
-          }),
-          source: "Operator sponsorship",
-          payer: "Operator",
-          beneficiary: "This node",
-          coverage: "operator-covered",
-        };
+  return {
+    treasuryPlane,
+    readers: [
+      ...[...accounts.values()].map((account) =>
+        baseWalletReader({ ...wallet, ...account })
+      ),
+      {
+        plane: "ai:operator-covered",
+        label: "Node AI share",
+        kind: "usage",
+        async read() {
+          return {
+            ...unknownRow({
+              plane: "ai:operator-covered",
+              label: "Node AI share",
+              kind: "usage",
+              reasonCode: "unconfigured",
+              observedAt: new Date().toISOString(),
+              detail:
+                "Scoped node cost unavailable; shared provider account is not a node balance",
+            }),
+            source: "Operator sponsorship",
+            payer: "Operator",
+            beneficiary: "This node",
+            coverage: "operator-covered",
+          };
+        },
       },
-    },
-  ];
+      {
+        plane: "hosting:operator-covered",
+        label: "Node hosting share",
+        kind: "usage",
+        async read() {
+          return {
+            ...unknownRow({
+              plane: "hosting:operator-covered",
+              label: "Node hosting share",
+              kind: "usage",
+              reasonCode: "unconfigured",
+              observedAt: new Date().toISOString(),
+              detail: "Node cost share unavailable",
+            }),
+            source: "Operator sponsorship",
+            payer: "Operator",
+            beneficiary: "This node",
+            coverage: "operator-covered",
+          };
+        },
+      },
+    ],
+  };
 }
 
 /** Authorize at the data boundary, then emit one terminal event per admitted report read. */
-export async function getMoneyPlaneSnapshot(): Promise<MoneyPlaneSnapshot> {
+export async function getMoneyPlaneSnapshot(): Promise<NodeFinanceSnapshot> {
   // Layouts may render concurrently with their children; gate before credentials or IO.
   const user = await getServerSessionUser();
   if (!isLedgerApprover(user?.walletAddress ?? null)) redirect("/dashboard");
 
   const started = Date.now();
   try {
-    const snapshot = await takeSnapshot(readers(), {
+    const composition = readers();
+    const snapshot = await takeSnapshot(composition.readers, {
       timeoutMs: SNAPSHOT_TIMEOUT_MS,
     });
     log.info(
@@ -135,7 +172,11 @@ export async function getMoneyPlaneSnapshot(): Promise<MoneyPlaneSnapshot> {
       },
       EVENT_NAMES.MONEY_PLANE_SNAPSHOT
     );
-    return snapshot;
+    return {
+      ...snapshot,
+      treasuryPlane: composition.treasuryPlane,
+      costRateEvidence: [],
+    };
   } catch (error) {
     // takeSnapshot never rejects; this is the composition failing (env or
     // repo-spec unreadable). Log the enum, never the raw message.
