@@ -12,7 +12,7 @@
  */
 
 import { gradeRunway } from "../grade";
-import { safeDetail, unknownRow } from "../row";
+import { unknownRow } from "../row";
 import type {
   FetchLike,
   MoneyPlaneRow,
@@ -74,7 +74,12 @@ export function openRouterReader(
         } | null;
         const credits = body?.data?.total_credits;
         const usage = body?.data?.total_usage;
-        if (typeof credits !== "number" || typeof usage !== "number") {
+        if (
+          typeof credits !== "number" ||
+          !Number.isFinite(credits) ||
+          typeof usage !== "number" ||
+          !Number.isFinite(usage)
+        ) {
           return unknown("unreadable", "credits response missing totals");
         }
         const balance = credits - usage;
@@ -82,6 +87,7 @@ export function openRouterReader(
           typeof options.burnPerDay === "number" && options.burnPerDay >= 0
             ? options.burnPerDay
             : null;
+        const observedAt = now().toISOString();
         const base = {
           plane: OPENROUTER_PLANE,
           label,
@@ -89,7 +95,10 @@ export function openRouterReader(
           balance,
           currency: "USD",
           burnPerDay: burn,
-          observedAt: now().toISOString(),
+          observedAt,
+          source: "OpenRouter credits API",
+          sourceObservedAt: observedAt,
+          freshness: "current" as const,
           usageTotal: usage,
           ...withAction,
         };
@@ -119,11 +128,8 @@ export function openRouterReader(
         }
         const runwayDays = balance / burn;
         return { ...base, runwayDays, grade: gradeRunway(runwayDays) };
-      } catch (error) {
-        return unknown(
-          "unreadable",
-          safeDetail(error instanceof Error ? error.message : String(error))
-        );
+      } catch {
+        return unknown("unreadable", "credits read failed");
       }
     },
   };

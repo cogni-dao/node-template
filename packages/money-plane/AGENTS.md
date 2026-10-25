@@ -10,7 +10,7 @@
 
 ## Purpose
 
-Published leaf package (`@cogni-dao/money-plane`, consumed as `@cogni/money-plane`) that owns the money-plane row model, grading policy, the never-throwing snapshot runner, and the generic readers every fork pays for: Base wallets and the OpenRouter account. Design: [money-plane-snapshot-design](https://cognidao.org/knowledge/money-plane-snapshot-design).
+Published leaf package (`@cogni-dao/money-plane`, consumed as `@cogni/money-plane`) that owns the money-plane row model, grading policy, the never-throwing snapshot runner, and the generic injected readers for: Base wallets and the OpenRouter account. Design: [money-plane-snapshot-design](https://cognidao.org/knowledge/money-plane-snapshot-design).
 
 ## Boundaries
 
@@ -26,7 +26,7 @@ No runtime dependencies, no env reads, no React, no viem. `fetch` is injected (`
 
 ## Public Surface
 
-- Types: `MoneyPlaneRow`, `PayAction`, `Grade`, `PlaneKind`, `ReasonCode`, `PlaneReader`, `MoneyPlaneSnapshot`, `FetchLike`
+- Types: `MoneyPlaneRow`, `NativeAmount`, `NativeRate`, `PayAction`, `Grade`, `PlaneKind`, `ReasonCode`, `PlaneReader`, `MoneyPlaneSnapshot`, `FetchLike`
 - Policy: `RUNWAY_DAYS`, `SPEND_USD_PER_MONTH`, `EXPIRY_DAYS`, `ESCROW_DAYS`, `ESCROW_CALIBRATED`
 - Grading: `gradeRunway`, `gradeSpend`, `gradeExpiry`, `worstGrade`, `applyGradingFloor`
 - Runner: `takeSnapshot(readers, { timeoutMs, now? })`
@@ -36,6 +36,9 @@ No runtime dependencies, no env reads, no React, no viem. `fetch` is injected (`
 
 - UNREADABLE_IS_UNKNOWN — unreadable, unconfigured, timed-out, stale, or prepaid-with-unmeasured-burn is UNKNOWN, never GREEN. Wallets are INFO.
 - READERS_NEVER_THROW — readers return UNKNOWN rows; `takeSnapshot` additionally converts throws and timeouts and never rejects.
+- EVIDENCE_IS_EXPLICIT — sourceObservedAt differs from read-at observedAt; absent/stale freshness cannot grade GREEN/YELLOW. Native rates/transfer aggregates retain exact decimal strings and denomination; no FX or custody aggregation.
+- SPEND_POLICY_IS_EXPLICIT — gradeSpend without caller thresholds is UNKNOWN.
+- REPORTING_ONLY_UI — consuming finance tables do not render money-moving controls in this wave.
 - ONE_ROW_MODEL — a Pay button is a `payAction` value, never a new row shape.
 - `detail` never carries a URL, key, or address.
 - OpenRouter burn is not measured here: `openRouterReader` exposes `usageTotal` and grades only from a caller-supplied `burnPerDay`. A fork without a scheduled sentinel that differences `usageTotal` between runs therefore shows its OpenRouter row as UNKNOWN `burn_unmeasured` (RED once the balance is exhausted). That is the honest grade, not a bug.

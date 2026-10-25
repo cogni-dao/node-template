@@ -4,11 +4,10 @@
 /**
  * Module: `@app/(admin)/admin/payments/money-plane.server`
  * Purpose: This node's money-plane composition: which planes it reads (repo-spec wallets + its own OpenRouter key),
- *   which row carries which action, and one snapshot through `@cogni/money-plane`.
+ *   one read-only report through `@cogni/money-plane`.
  * Scope: Server-only. Reads repo-spec + server env and hands them to the package readers. Does not move funds,
  *   decide alerts, or render.
- * Invariants: READERS_NEVER_THROW (takeSnapshot never rejects, so the page always renders). Fund steward stays reachable
- *   as the steward-wallet row's `payAction: fund-steward`. Forks read only planes they pay for (wallets + OpenRouter).
+ * Invariants: READERS_NEVER_THROW. Wallet custody never proves DAO spendable cash. Operator coverage is separate from measured node share.
  * Side-effects: IO (OpenRouter HTTPS GET, Base JSON-RPC reads), one terminal MONEY_PLANE_SNAPSHOT log event.
  * Links: packages/money-plane, https://cognidao.org/knowledge/money-plane-snapshot-design
  * @public
@@ -21,6 +20,8 @@ import {
   baseWalletReader,
   type FetchLike,
   type MoneyPlaneSnapshot,
+  type PlaneReader,
+  unknownRow,
   openRouterReader,
   takeSnapshot,
 } from "@cogni/money-plane";
@@ -37,12 +38,11 @@ import { USDC_TOKEN_ADDRESS } from "@/shared/web3";
 const log = makeLogger({ route: "admin.payments" });
 
 const SNAPSHOT_TIMEOUT_MS = 8_000;
-const OPENROUTER_TOP_UP_URL = "https://openrouter.ai/settings/credits";
 
 const noStoreFetch: FetchLike = (url, init) =>
   fetch(url, { ...init, cache: "no-store" });
 
-function readers() {
+function readers(): PlaneReader[] {
   const env = serverEnv();
   const wallet = {
     rpcUrl: env.EVM_RPC_URL ?? BASE_PUBLIC_RPC_URL,
@@ -53,11 +53,6 @@ function readers() {
     openRouterReader({
       apiKey: env.OPENROUTER_API_KEY,
       fetch: noStoreFetch,
-      payAction: {
-        kind: "external",
-        url: OPENROUTER_TOP_UP_URL,
-        label: "Top up OpenRouter",
-      },
     }),
     baseWalletReader({
       ...wallet,
@@ -70,7 +65,6 @@ function readers() {
       name: "steward-wallet",
       label: "Steward wallet",
       address: getStewardWalletConfig()?.address,
-      payAction: { kind: "fund-steward" },
     }),
     baseWalletReader({
       ...wallet,
@@ -78,6 +72,27 @@ function readers() {
       label: "DAO treasury",
       address: getDaoTreasuryAddress(),
     }),
+    {
+      plane: "hosting:operator-covered",
+      label: "Node hosting share",
+      kind: "usage",
+      async read() {
+        return {
+          ...unknownRow({
+            plane: "hosting:operator-covered",
+            label: "Node hosting share",
+            kind: "usage",
+            reasonCode: "unconfigured",
+            observedAt: new Date().toISOString(),
+            detail: "Node cost share unavailable",
+          }),
+          source: "Operator sponsorship",
+          payer: "Operator",
+          beneficiary: "This node",
+          coverage: "operator-covered",
+        };
+      },
+    },
   ];
 }
 

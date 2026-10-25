@@ -11,7 +11,7 @@
  * @public
  */
 
-import { safeDetail, unknownRow } from "../row";
+import { unknownRow } from "../row";
 import type {
   FetchLike,
   MoneyPlaneRow,
@@ -88,7 +88,7 @@ export function baseWalletReader(
     } | null;
     if (body?.error)
       throw new RpcError(
-        `${method} rpc error ${String(body.error.code ?? "")}`
+        `${method} rpc error${typeof body.error.code === "number" ? ` ${body.error.code}` : ""}`
       );
     if (typeof body?.result !== "string" || !body.result.startsWith("0x")) {
       throw new RpcError(`${method} returned no result`);
@@ -115,6 +115,7 @@ export function baseWalletReader(
           rpc(1, "eth_call", [{ to: usdc, data }, "latest"], signal),
           rpc(2, "eth_getBalance", [address, "latest"], signal),
         ]);
+        const observedAt = now().toISOString();
         return {
           plane,
           label: options.label,
@@ -124,18 +125,17 @@ export function baseWalletReader(
           burnPerDay: null,
           runwayDays: null,
           grade: "INFO",
-          observedAt: now().toISOString(),
+          observedAt,
+          source: "Base JSON-RPC",
+          sourceObservedAt: observedAt,
+          freshness: "current",
           detail: formatEth(toUnits(wei, 18)),
           ...withAction,
         };
       } catch (error) {
         // Only our own RpcError text is trusted verbatim; anything else may echo the RPC URL.
         const detail =
-          error instanceof RpcError
-            ? error.message
-            : safeDetail(
-                error instanceof Error ? error.message : String(error)
-              );
+          error instanceof RpcError ? error.message : "wallet read failed";
         return unknown("unreadable", detail);
       }
     },

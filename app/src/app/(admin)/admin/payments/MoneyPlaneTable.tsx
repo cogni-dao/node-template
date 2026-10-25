@@ -3,19 +3,17 @@
 
 /**
  * Module: `@app/(admin)/admin/payments/MoneyPlaneTable`
- * Purpose: One table, one row per money plane: balance, burn/day, runway, grade, last read, action.
- * Scope: Server component rendering `@cogni/money-plane` rows. The only interactive cell is the
- *   `fund-steward` action (client island); external actions are plain links. Does not fetch.
- * Invariants: ONE_ROW_MODEL — renders MoneyPlaneRow as-is; a new action is one `payAction` case here, not a new row shape.
+ * Purpose: One table, one row per money plane: balance, native burn/rate, runway, grade, funding coverage and evidence.
+ * Scope: Read-only server component rendering shared finance rows. Does not fetch or move funds.
+ * Invariants: ONE_ROW_MODEL — renders MoneyPlaneRow evidence without payment controls.
  *   UNKNOWN shows its reason, never a GREEN badge. Product UI stays local to this node (not node-ui-kit).
  * Side-effects: none
- * Links: packages/money-plane/src/types.ts, FundStewardAction.client.tsx
+ * Links: packages/money-plane/src/types.ts
  * @public
  */
 
-import type { Grade, MoneyPlaneRow, PayAction } from "@cogni/money-plane";
+import type { Grade, MoneyPlaneRow } from "@cogni/money-plane";
 import { Badge } from "@cogni/node-ui-kit/reui/badge";
-import { ExternalLink } from "lucide-react";
 import type { ReactElement } from "react";
 
 import {
@@ -26,8 +24,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components";
-
-import { FundStewardAction } from "./FundStewardAction.client";
 
 const GRADE_VARIANT = {
   GREEN: "success-light",
@@ -57,64 +53,22 @@ function fmtTime(iso: string): string {
   return `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
 }
 
-function Action({
-  row,
-  canFundSteward,
-}: {
-  row: MoneyPlaneRow;
-  canFundSteward: boolean;
-}): ReactElement | null {
-  const action: PayAction | undefined = row.payAction;
-  if (!action) return null;
-  switch (action.kind) {
-    case "fund-steward":
-      return (
-        <FundStewardAction
-          disabled={!canFundSteward || row.reasonCode === "unconfigured"}
-          {...(canFundSteward
-            ? {}
-            : { hint: "Only the steward wallet can fund itself" })}
-        />
-      );
-    case "external":
-    case "steward-checkout": {
-      const href = action.kind === "external" ? action.url : action.checkoutUrl;
-      const label =
-        action.kind === "external" ? action.label : `Pay ${action.vendor}`;
-      return (
-        <a
-          href={href}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-1 text-primary text-sm hover:underline"
-        >
-          {label}
-          <ExternalLink className="h-3.5 w-3.5" />
-        </a>
-      );
-    }
-  }
-}
-
 export function MoneyPlaneTable({
   rows,
-  canFundSteward,
 }: {
   rows: readonly MoneyPlaneRow[];
-  /** True only when the session wallet is the configured steward (STEWARD_SELF_AUTHORIZED). */
-  canFundSteward: boolean;
 }): ReactElement {
   return (
     <Table>
       <TableHeader>
         <TableRow>
-          <TableHead>Plane</TableHead>
+          <TableHead>Account / cost</TableHead>
+          <TableHead>Who pays / benefits</TableHead>
           <TableHead className="text-right">Balance</TableHead>
-          <TableHead className="text-right">Burn/day</TableHead>
+          <TableHead className="text-right">Burn / native rate</TableHead>
           <TableHead className="text-right">Runway</TableHead>
           <TableHead>Grade</TableHead>
-          <TableHead>Last read</TableHead>
-          <TableHead className="text-right">Action</TableHead>
+          <TableHead>Evidence</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -126,8 +80,19 @@ export function MoneyPlaneTable({
           >
             <TableCell>
               <div className="font-medium">{row.label}</div>
-              <div className="font-mono text-muted-foreground text-xs">
+              <div className="text-muted-foreground font-mono text-xs">
                 {row.plane}
+              </div>
+            </TableCell>
+            <TableCell>
+              <div>{row.payer ?? "Unknown payer"}</div>
+              <div className="text-muted-foreground text-xs">
+                {row.coverage === "operator-covered"
+                  ? "Operator covered"
+                  : row.coverage === "direct"
+                    ? "Direct"
+                    : "Coverage unknown"}
+                {row.beneficiary ? ` · ${row.beneficiary}` : ""}
               </div>
             </TableCell>
             <TableCell className="text-right tabular-nums">
@@ -139,9 +104,13 @@ export function MoneyPlaneTable({
               ) : null}
             </TableCell>
             <TableCell className="text-right tabular-nums">
-              {row.kind === "wallet"
-                ? "n/a"
-                : fmtAmount(row.burnPerDay, row.currency)}
+              {row.nativeRate
+                ? `${row.nativeRate.amount} ${row.nativeRate.currency}/${row.nativeRate.per}`
+                : row.kind === "wallet"
+                  ? "n/a"
+                  : row.burnPerDay === null
+                    ? "Unknown"
+                    : `${fmtAmount(row.burnPerDay, row.currency)}/day`}
             </TableCell>
             <TableCell className="text-right tabular-nums">
               {fmtRunway(row)}
@@ -161,11 +130,15 @@ export function MoneyPlaneTable({
                 </div>
               ) : null}
             </TableCell>
-            <TableCell className="font-mono text-muted-foreground text-xs">
-              {fmtTime(row.observedAt)}
-            </TableCell>
-            <TableCell className="text-right">
-              <Action row={row} canFundSteward={canFundSteward} />
+            <TableCell className="text-muted-foreground font-mono text-xs">
+              <div>{row.source ?? "Source unavailable"}</div>
+              <div>
+                {row.freshness ?? "unknown"} ·{" "}
+                {row.sourceObservedAt
+                  ? fmtTime(row.sourceObservedAt)
+                  : "source age unknown"}
+              </div>
+              <div>Read {fmtTime(row.observedAt)}</div>
             </TableCell>
           </TableRow>
         ))}

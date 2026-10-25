@@ -15,7 +15,7 @@
 export type Grade = "GREEN" | "YELLOW" | "RED" | "UNKNOWN" | "INFO";
 
 /** prepaid: balance ÷ burn = runway · usage: billed after the fact · expiry: dated · wallet: holdings. */
-export type PlaneKind = "prepaid" | "usage" | "expiry" | "wallet";
+export type PlaneKind = "prepaid" | "usage" | "fixed" | "expiry" | "wallet";
 
 export type ReasonCode =
   | "unconfigured"
@@ -37,12 +37,22 @@ export type PayAction =
     }
   | { kind: "external"; url: string; label: string };
 
+/** Exact source-native decimal text for reporting; no conversion or settlement arithmetic. */
+export interface NativeAmount {
+  amount: string;
+  currency: string;
+}
+
+export interface NativeRate extends NativeAmount {
+  per: "day" | "month" | "block";
+}
+
 export interface MoneyPlaneRow {
   /** Stable id, e.g. "openrouter:account", "base:steward-wallet". */
   plane: string;
   label: string;
   kind: PlaneKind;
-  /** Native units (USD, USDC, ACT, EUR …); null when unread. */
+  /** Display-only native units (USD, USDC, ACT, EUR …); null when unread. Never settlement arithmetic. */
   balance: number | null;
   currency: string | null;
   /** Native units per day; usage-billed planes report their spend rate. */
@@ -50,8 +60,19 @@ export interface MoneyPlaneRow {
   /** prepaid: balance ÷ burn; expiry: days left; usage and wallet: null. */
   runwayDays: number | null;
   grade: Grade;
-  /** ISO time of this plane's read. */
+  /** ISO read-at time; not a persisted source observation timestamp. */
   observedAt: string;
+  /** Safe human source label, never a URL or credential. */
+  source?: string;
+  sourceObservedAt?: string | null;
+  freshness?: "current" | "stale" | "unknown";
+  /** Economic payer and beneficiary; wallet custody alone proves neither. */
+  payer?: string;
+  beneficiary?: string;
+  coverage?: "direct" | "operator-covered" | "unknown";
+  nativeRate?: NativeRate;
+  /** Aggregate vendor-transfer evidence, not an individual payment timeline. */
+  cumulativeVendorTransfer?: NativeAmount;
   reasonCode?: ReasonCode;
   /** ≤60 chars; never carries a URL, key or address. */
   detail?: string;

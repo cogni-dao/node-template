@@ -3,12 +3,10 @@
 
 /**
  * Module: `@app/(admin)/admin/payments/page`
- * Purpose: The node's money planes on one page: a `@cogni/money-plane` snapshot of every plane this node pays for
- *   (its OpenRouter account and its repo-spec wallets), rendered as one table.
+ * Purpose: Shared financial evidence in a node-owned read-only table, with unavailable node cost share explicit.
  * Scope: Server component. Access gating handled upstream by `(admin)/layout.tsx`.
- * Invariants: Read-only here; the only write is the steward row's Fund-steward POST. Addresses from repo-spec.
- *   NO_FUNDS_MOVED by the read path.
- * Side-effects: IO (snapshot reads via getMoneyPlaneSnapshot, session read for the steward check)
+ * Invariants: Reporting only, no payment controls. Custody is not DAO available cash.
+ * Side-effects: IO (snapshot reads via getMoneyPlaneSnapshot)
  * Links: money-plane.server.ts, MoneyPlaneTable.tsx, https://cognidao.org/knowledge/money-plane-snapshot-design
  * @public
  */
@@ -17,8 +15,6 @@ import { Badge } from "@cogni/node-ui-kit/reui/badge";
 import type { ReactElement } from "react";
 
 import { PageContainer } from "@/components";
-import { getServerSessionUser } from "@/lib/auth/server";
-import { getStewardWalletConfig } from "@/shared/config";
 
 import { MoneyPlaneTable } from "./MoneyPlaneTable";
 import { getMoneyPlaneSnapshot } from "./money-plane.server";
@@ -27,25 +23,17 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export default async function MoneyPlanesPage(): Promise<ReactElement> {
-  const [snapshot, user] = await Promise.all([
-    getMoneyPlaneSnapshot(),
-    getServerSessionUser(),
-  ]);
-  // The withdrawal route is STEWARD_SELF_AUTHORIZED: an approver that is not the
-  // steward would get a 403, so the action is disabled for them up front.
-  const steward = getStewardWalletConfig()?.address?.toLowerCase();
-  const wallet = user?.walletAddress?.toLowerCase();
-  const canFundSteward = !!steward && !!wallet && steward === wallet;
+  const snapshot = await getMoneyPlaneSnapshot();
 
   return (
     <PageContainer maxWidth="2xl">
       <div className="space-y-1">
-        <h1 className="font-bold text-2xl tracking-tight">Money planes</h1>
+        <h1 className="text-2xl font-bold tracking-tight">DAO finances</h1>
         <p className="text-muted-foreground text-sm">
-          Every account this node pays from or holds: balance, burn, runway and
-          grade. A plane that cannot be read shows UNKNOWN with its reason,
-          never GREEN. Fund the steward wallet from the operator wallet on its
-          row; top up OpenRouter from the steward wallet.
+          Configured balances and cost evidence, with missing burn and runway
+          shown explicitly. The operator currently covers node expenses; the
+          measured node share is not yet available here. Treasury, operator
+          float and steward custody remain separate holdings.
         </p>
       </div>
       <p className="text-muted-foreground text-xs">
@@ -54,7 +42,15 @@ export default async function MoneyPlanesPage(): Promise<ReactElement> {
           {snapshot.worst}
         </Badge>
       </p>
-      <MoneyPlaneTable rows={snapshot.rows} canFundSteward={canFundSteward} />
+      <MoneyPlaneTable rows={snapshot.rows} />
+      <section className="space-y-1">
+        <h2 className="text-lg font-semibold">Payment evidence</h2>
+        <p className="text-muted-foreground text-sm">
+          Individual vendor payment history is unavailable from these sources.
+          Wallet balances and changes in prepaid credit are not payment
+          receipts.
+        </p>
+      </section>
     </PageContainer>
   );
 }

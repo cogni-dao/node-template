@@ -20,7 +20,7 @@ export interface Thresholds {
 
 /** Runway policy: warn under 21 days, page under 7 (finances-expert). */
 export const RUNWAY_DAYS: Thresholds = Object.freeze({ yellow: 21, red: 7 });
-/** Usage-billed spend policy in USD per month (vendor-cost-review-trigger). */
+/** @deprecated Historical advisory values; consumers must explicitly choose an approved policy. */
 export const SPEND_USD_PER_MONTH: Thresholds = Object.freeze({
   yellow: 100,
   red: 300,
@@ -53,9 +53,9 @@ export function gradeRunway(
 /** Spend rate, higher is worse. */
 export function gradeSpend(
   usdPerMonth: number | null | undefined,
-  thresholds: Thresholds = SPEND_USD_PER_MONTH
+  thresholds?: Thresholds
 ): Grade {
-  if (!measurable(usdPerMonth)) return "UNKNOWN";
+  if (thresholds === undefined || !measurable(usdPerMonth)) return "UNKNOWN";
   if (usdPerMonth >= thresholds.red) return "RED";
   if (usdPerMonth >= thresholds.yellow) return "YELLOW";
   return "GREEN";

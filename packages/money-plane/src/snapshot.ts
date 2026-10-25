@@ -67,9 +67,8 @@ async function settle(
       );
     }
     return applyGradingFloor(result);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return fallback(reader, "unreadable", now().toISOString(), message);
+  } catch {
+    return fallback(reader, "unreadable", now().toISOString(), "reader failed");
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }

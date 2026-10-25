@@ -48,6 +48,8 @@ export type {
   Grade,
   MoneyPlaneRow,
   MoneyPlaneSnapshot,
+  NativeAmount,
+  NativeRate,
   PayAction,
   PlaneKind,
   PlaneReader,

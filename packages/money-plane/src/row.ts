@@ -51,6 +51,8 @@ export function unknownRow(input: UnknownRowInput): MoneyPlaneRow {
     burnPerDay: null,
     runwayDays: null,
     grade: "UNKNOWN",
+    freshness: "unknown",
+    sourceObservedAt: null,
     observedAt: input.observedAt,
     reasonCode: input.reasonCode,
     ...(input.detail === undefined ? {} : { detail: safeDetail(input.detail) }),
@@ -65,7 +67,20 @@ export function applyGradingFloor(row: MoneyPlaneRow): MoneyPlaneRow {
   if (row.grade === "INFO" && row.kind !== "wallet") {
     return { ...row, grade: "UNKNOWN" };
   }
+  if (row.kind === "wallet" && row.grade === "INFO" && row.balance === null) {
+    return { ...row, grade: "UNKNOWN" };
+  }
   if (row.grade !== "GREEN" && row.grade !== "YELLOW") return row;
+  if (row.freshness === "stale") {
+    return { ...row, grade: "UNKNOWN", reasonCode: "stale" };
+  }
+  if (
+    row.freshness !== "current" ||
+    !row.sourceObservedAt ||
+    !Number.isFinite(Date.parse(row.sourceObservedAt))
+  ) {
+    return { ...row, grade: "UNKNOWN", freshness: "unknown" };
+  }
   if (row.reasonCode !== undefined && FAILURE_REASONS.has(row.reasonCode)) {
     return { ...row, grade: "UNKNOWN" };
   }

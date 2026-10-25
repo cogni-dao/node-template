@@ -54,11 +54,16 @@ describe("gradeRunway", () => {
 });
 
 describe("gradeSpend", () => {
+  it("does not imply approval from an ungoverned spend threshold", () => {
+    expect(gradeSpend(0)).toBe("UNKNOWN");
+    expect(gradeSpend(50)).toBe("UNKNOWN");
+    expect(gradeSpend(300)).toBe("UNKNOWN");
+  });
   it("grades a monthly spend rate, higher is worse", () => {
-    expect(gradeSpend(50)).toBe("GREEN");
-    expect(gradeSpend(100)).toBe("YELLOW");
-    expect(gradeSpend(299)).toBe("YELLOW");
-    expect(gradeSpend(300)).toBe("RED");
+    expect(gradeSpend(50, SPEND_USD_PER_MONTH)).toBe("GREEN");
+    expect(gradeSpend(100, SPEND_USD_PER_MONTH)).toBe("YELLOW");
+    expect(gradeSpend(299, SPEND_USD_PER_MONTH)).toBe("YELLOW");
+    expect(gradeSpend(300, SPEND_USD_PER_MONTH)).toBe("RED");
     expect(gradeSpend(null)).toBe("UNKNOWN");
     expect(gradeSpend(-5)).toBe("UNKNOWN");
   });

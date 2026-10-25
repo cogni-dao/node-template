@@ -34,6 +34,8 @@ function row(
     runwayDays: 100,
     grade: "GREEN",
     observedAt: NOW.toISOString(),
+    freshness: "current",
+    sourceObservedAt: NOW.toISOString(),
     ...over,
   };
 }
@@ -172,6 +174,65 @@ describe("takeSnapshot", () => {
       { timeoutMs: 1000, now }
     );
     expect(snap.rows[0]?.grade).toBe("RED");
+  });
+
+  it("rejects healthy claims without current dated evidence and preserves exact native facts", async () => {
+    for (const evidence of [
+      { freshness: "unknown" as const, sourceObservedAt: null },
+      { freshness: "stale" as const, sourceObservedAt: NOW.toISOString() },
+      { freshness: "current" as const, sourceObservedAt: "invalid" },
+    ]) {
+      const nativeRate = {
+        amount: "0.000000000123456789",
+        currency: "AKT",
+        per: "block" as const,
+      };
+      const cumulativeVendorTransfer = {
+        amount: "123.456789",
+        currency: "AKT",
+      };
+      const snap = await takeSnapshot(
+        [
+          reader("fixed", async () =>
+            row({
+              plane: "fixed",
+              kind: "fixed",
+              ...evidence,
+              nativeRate,
+              cumulativeVendorTransfer,
+              payer: "Operator",
+              coverage: "operator-covered",
+            })
+          ),
+          reader("red", async () =>
+            row({ plane: "red", ...evidence, grade: "RED" })
+          ),
+        ],
+        { timeoutMs: 1000, now }
+      );
+      expect(snap.rows[0]?.grade).toBe("UNKNOWN");
+      expect(snap.rows[0]?.nativeRate).toEqual(nativeRate);
+      expect(snap.rows[0]?.cumulativeVendorTransfer).toEqual(
+        cumulativeVendorTransfer
+      );
+      expect(snap.rows[1]?.grade).toBe("RED");
+    }
+  });
+
+  it("does not echo arbitrary thrown secrets or show unreadable holdings as INFO", async () => {
+    const snap = await takeSnapshot(
+      [
+        reader("secret", async () => {
+          throw new Error("Authorization: private-token-no-url");
+        }),
+        reader("wallet", async () =>
+          row({ plane: "wallet", kind: "wallet", balance: null, grade: "INFO" })
+        ),
+      ],
+      { timeoutMs: 1000, now }
+    );
+    expect(snap.rows[0]?.detail).toBe("reader failed");
+    expect(snap.rows[1]?.grade).toBe("UNKNOWN");
   });
 
   it("is UNKNOWN overall when given no readers", async () => {
