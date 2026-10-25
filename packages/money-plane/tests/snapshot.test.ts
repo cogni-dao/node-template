@@ -14,6 +14,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  baseWalletReader,
+  openRouterReader,
   type MoneyPlaneRow,
   type PlaneReader,
   takeSnapshot,
@@ -233,6 +235,68 @@ describe("takeSnapshot", () => {
     );
     expect(snap.rows[0]?.detail).toBe("reader failed");
     expect(snap.rows[1]?.grade).toBe("UNKNOWN");
+  });
+
+  it("aborts a wallet's unfinished RPC when its sibling fails before the deadline", async () => {
+    let hangingRequestAborted = false;
+    const wallet = baseWalletReader({
+      name: "partial-failure",
+      label: "Wallet",
+      address: "0x1111111111111111111111111111111111111111",
+      rpcUrl: "https://rpc.example",
+      now,
+      fetch: async (_url, init) => {
+        const request = JSON.parse(init?.body ?? "{}");
+        if (request.method === "eth_call") {
+          return { ok: false, status: 503, json: async () => ({}) };
+        }
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => {
+              hangingRequestAborted = true;
+              reject(new Error("aborted"));
+            },
+            { once: true }
+          );
+        });
+      },
+    });
+    const snapshot = await takeSnapshot([wallet], { timeoutMs: 1000, now });
+    expect(snapshot.rows[0]?.grade).toBe("UNKNOWN");
+    expect(snapshot.rows[0]?.reasonCode).toBe("unreadable");
+    expect(hangingRequestAborted).toBe(true);
+  });
+
+  it("does not derive runway from invalid burn but keeps independently exhausted credit RED", async () => {
+    for (const burnPerDay of [Infinity, -Infinity, NaN, -1]) {
+      for (const totalUsage of [10, 100]) {
+        const snapshot = await takeSnapshot(
+          [
+            openRouterReader({
+              apiKey: "test-key",
+              burnPerDay,
+              now,
+              fetch: async () => ({
+                ok: true,
+                status: 200,
+                json: async () => ({
+                  data: { total_credits: 100, total_usage: totalUsage },
+                }),
+              }),
+            }),
+          ],
+          { timeoutMs: 1000, now }
+        );
+        expect(snapshot.rows[0]?.burnPerDay).toBeNull();
+        expect(snapshot.rows[0]?.grade).toBe(
+          totalUsage === 100 ? "RED" : "UNKNOWN"
+        );
+        expect(snapshot.rows[0]?.runwayDays).toBe(
+          totalUsage === 100 ? 0 : null
+        );
+      }
+    }
   });
 
   it("is UNKNOWN overall when given no readers", async () => {

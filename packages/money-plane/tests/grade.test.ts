@@ -66,6 +66,9 @@ describe("gradeSpend", () => {
     expect(gradeSpend(300, SPEND_USD_PER_MONTH)).toBe("RED");
     expect(gradeSpend(null)).toBe("UNKNOWN");
     expect(gradeSpend(-5)).toBe("UNKNOWN");
+    expect(gradeSpend(Number.POSITIVE_INFINITY, SPEND_USD_PER_MONTH)).toBe(
+      "UNKNOWN"
+    );
   });
 });
 

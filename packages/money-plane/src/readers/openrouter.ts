@@ -84,7 +84,9 @@ export function openRouterReader(
         }
         const balance = credits - usage;
         const burn =
-          typeof options.burnPerDay === "number" && options.burnPerDay >= 0
+          typeof options.burnPerDay === "number" &&
+          Number.isFinite(options.burnPerDay) &&
+          options.burnPerDay >= 0
             ? options.burnPerDay
             : null;
         const observedAt = now().toISOString();

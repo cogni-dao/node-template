@@ -55,7 +55,12 @@ export function gradeSpend(
   usdPerMonth: number | null | undefined,
   thresholds?: Thresholds
 ): Grade {
-  if (thresholds === undefined || !measurable(usdPerMonth)) return "UNKNOWN";
+  if (
+    thresholds === undefined ||
+    !measurable(usdPerMonth) ||
+    !Number.isFinite(usdPerMonth)
+  )
+    return "UNKNOWN";
   if (usdPerMonth >= thresholds.red) return "RED";
   if (usdPerMonth >= thresholds.yellow) return "YELLOW";
   return "GREEN";

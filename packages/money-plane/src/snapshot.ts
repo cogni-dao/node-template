@@ -70,6 +70,9 @@ async function settle(
   } catch {
     return fallback(reader, "unreadable", now().toISOString(), "reader failed");
   } finally {
+    // A reader can settle before all of its parallel child requests finish.
+    // Release those requests as well as the deadline on every exit path.
+    controller.abort();
     if (timer !== undefined) clearTimeout(timer);
   }
 }
