@@ -124,10 +124,7 @@ export {
   PhaseList,
   type PhaseState,
 } from "./kit/data-display/PhaseList";
-export {
-  PieChart,
-  type PieChartDatum,
-} from "./kit/data-display/PieChart";
+export { PieChart, type PieChartDatum } from "./kit/data-display/PieChart";
 export type { ProviderIconProps } from "./kit/data-display/ProviderIcons";
 export {
   DiscordIcon,
@@ -178,3 +175,11 @@ export { HeroActionWords } from "./kit/typography/HeroActionWords";
 export { Prompt } from "./kit/typography/Prompt";
 
 export { Markdown } from "./markdown";
+
+export { Badge as StatusBadge } from "@cogni/node-ui-kit/reui/badge";
+export {
+  DataGrid,
+  DataGridContainer,
+} from "@cogni/node-ui-kit/reui/data-grid/data-grid";
+export { DataGridColumnHeader } from "@cogni/node-ui-kit/reui/data-grid/data-grid-column-header";
+export { DataGridTable } from "@cogni/node-ui-kit/reui/data-grid/data-grid-table";

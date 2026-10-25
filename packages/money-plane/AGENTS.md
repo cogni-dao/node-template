@@ -29,6 +29,7 @@ No runtime dependencies, no env reads, no React, no viem. `fetch` is injected (`
 - Types: `MoneyPlaneRow`, `NativeAmount`, `NativeRate`, `PayAction`, `Grade`, `PlaneKind`, `ReasonCode`, `PlaneReader`, `MoneyPlaneSnapshot`, `FetchLike`
 - Policy: `RUNWAY_DAYS`, `SPEND_USD_PER_MONTH`, `EXPIRY_DAYS`, `ESCROW_DAYS`, `ESCROW_CALIBRATED`
 - Grading: `gradeRunway`, `gradeSpend`, `gradeExpiry`, `worstGrade`, `applyGradingFloor`
+- Reporting: `summarizeRows`, `MoneyPlaneSummary`, `AmountSummary`, `RateSummary` — native currency/period-separated known subtotals with partial coverage. Consuming runtimes deduplicate account aliases before reads; wallet holdings never imply DAO spendable cash.
 - Runner: `takeSnapshot(readers, { timeoutMs, now? })`
 - Readers: `openRouterReader`, `baseWalletReader`; helpers `unknownRow`, `safeDetail`
 

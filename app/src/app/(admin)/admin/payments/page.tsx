@@ -11,7 +11,6 @@
  * @public
  */
 
-import { Badge } from "@cogni/node-ui-kit/reui/badge";
 import type { ReactElement } from "react";
 
 import { PageContainer } from "@/components";
@@ -27,30 +26,7 @@ export default async function MoneyPlanesPage(): Promise<ReactElement> {
 
   return (
     <PageContainer maxWidth="2xl">
-      <div className="space-y-1">
-        <h1 className="text-2xl font-bold tracking-tight">DAO finances</h1>
-        <p className="text-muted-foreground text-sm">
-          Configured balances and cost evidence, with missing burn and runway
-          shown explicitly. The operator currently covers node expenses; the
-          measured node share is not yet available here. Treasury, operator
-          float and steward custody remain separate holdings.
-        </p>
-      </div>
-      <p className="text-muted-foreground text-xs">
-        Snapshot {snapshot.takenAt.replace("T", " ").slice(0, 19)} UTC · worst{" "}
-        <Badge variant="outline" size="sm">
-          {snapshot.worst}
-        </Badge>
-      </p>
-      <MoneyPlaneTable rows={snapshot.rows} />
-      <section className="space-y-1">
-        <h2 className="text-lg font-semibold">Payment evidence</h2>
-        <p className="text-muted-foreground text-sm">
-          Individual vendor payment history is unavailable from these sources.
-          Wallet balances and changes in prepaid credit are not payment
-          receipts.
-        </p>
-      </section>
+      <MoneyPlaneTable rows={snapshot.rows} takenAt={snapshot.takenAt} />
     </PageContainer>
   );
 }

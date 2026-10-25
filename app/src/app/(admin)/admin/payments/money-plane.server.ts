@@ -53,29 +53,39 @@ function readers(): PlaneReader[] {
     fetch: noStoreFetch,
     usdcAddress: USDC_TOKEN_ADDRESS,
   };
-  return [
-    openRouterReader({
-      apiKey: env.OPENROUTER_API_KEY,
-      fetch: noStoreFetch,
-    }),
-    baseWalletReader({
-      ...wallet,
+  const configured = [
+    {
       name: "operator-wallet",
       label: "Operator wallet",
       address: getOperatorWalletConfig()?.address,
-    }),
-    baseWalletReader({
-      ...wallet,
+    },
+    {
       name: "steward-wallet",
       label: "Steward wallet",
       address: getStewardWalletConfig()?.address,
-    }),
-    baseWalletReader({
-      ...wallet,
+    },
+    {
       name: "dao-treasury",
       label: "DAO treasury",
       address: getDaoTreasuryAddress(),
-    }),
+    },
+  ];
+  const accounts = new Map<string, (typeof configured)[number]>();
+  for (const account of configured) {
+    const address = account.address;
+    const key =
+      address && /^0x[0-9a-fA-F]{40}$/.test(address)
+        ? `base:${wallet.usdcAddress.toLowerCase()}:${address.toLowerCase()}`
+        : account.name;
+    const prior = accounts.get(key);
+    if (prior) prior.label = `${prior.label} / ${account.label}`;
+    else accounts.set(key, { ...account });
+  }
+  return [
+    openRouterReader({ apiKey: env.OPENROUTER_API_KEY, fetch: noStoreFetch }),
+    ...[...accounts.values()].map((account) =>
+      baseWalletReader({ ...wallet, ...account })
+    ),
     {
       plane: "hosting:operator-covered",
       label: "Node hosting share",

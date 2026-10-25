@@ -55,3 +55,10 @@ export type {
   PlaneReader,
   ReasonCode,
 } from "./types";
+
+export {
+  summarizeRows,
+  type AmountSummary,
+  type RateSummary,
+  type MoneyPlaneSummary,
+} from "./summarize";
