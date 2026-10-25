@@ -11,13 +11,16 @@
  * @public
  */
 "use client";
-import type { ScheduleRunSummary } from "@cogni/node-contracts";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@cogni/node-ui-kit/shadcn/dropdown-menu";
+import {
+  formatRunDuration as duration,
+  runStatusLabel,
+} from "@cogni/scheduling/presentation";
 import {
   useInfiniteQuery,
   useMutation,
@@ -67,15 +70,6 @@ import {
   schedulePrompt,
 } from "../presentation";
 
-const STATUS_LABELS = {
-  pending: "Waiting",
-  running: "Running",
-  success: "Completed",
-  error: "Failed",
-  timeout: "Timed out",
-  skipped: "Skipped",
-  cancelled: "Cancelled",
-} as const;
 const STATUS_DOT = {
   pending: "bg-muted-foreground",
   running: "bg-success",
@@ -85,18 +79,6 @@ const STATUS_DOT = {
   skipped: "bg-muted-foreground",
   cancelled: "bg-muted-foreground",
 } as const;
-
-function duration(run: ScheduleRunSummary) {
-  if (!run.startedAt || !run.completedAt)
-    return run.status === "running" ? "…" : "—";
-  const seconds = Math.max(
-    0,
-    Math.floor((Date.parse(run.completedAt) - Date.parse(run.startedAt)) / 1000)
-  );
-  return seconds < 60
-    ? `${seconds}s`
-    : `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
-}
 
 export function ScheduleDetailView({ scheduleId }: { scheduleId: string }) {
   const client = useQueryClient();
@@ -245,7 +227,7 @@ export function ScheduleDetailView({ scheduleId }: { scheduleId: string }) {
               <p className="mb-4 text-muted-foreground text-sm">
                 Latest run:{" "}
                 <span className="font-medium text-foreground">
-                  {STATUS_LABELS[latestRun.status]}
+                  {runStatusLabel(latestRun.status)}
                 </span>
                 {" · "}
                 {runTime(latestRun.scheduledFor, current.timezone)}
@@ -362,7 +344,7 @@ export function ScheduleDetailView({ scheduleId }: { scheduleId: string }) {
                                   }
                                   size="sm"
                                 >
-                                  {STATUS_LABELS[run.status]}
+                                  {runStatusLabel(run.status)}
                                 </Badge>
                               </TableCell>
                               <TableCell className="whitespace-nowrap text-right text-muted-foreground text-sm tabular-nums">

@@ -78,6 +78,12 @@ describe("schedule history reader (real RLS)", () => {
         scheduleId: scheduleA,
         requestedBy: i === 0 ? null : ownerB,
         status: "pending",
+        stateKey:
+          i < 2
+            ? "shared-conversation"
+            : i === 2
+              ? "distinct-conversation"
+              : null,
         scheduledFor: i < 4 ? new Date(`2026-10-24T00:00:0${4 - i}Z`) : null,
       });
     }
@@ -112,6 +118,12 @@ describe("schedule history reader (real RLS)", () => {
     const rows = await reader.listRuns(ownerA, scheduleA, { limit: 50 });
     expect(rows).toHaveLength(6);
     expect(rows.every((run) => run.startedAt === null)).toBe(true);
+    expect(rows.slice(0, 3).map((run) => run.stateKey)).toEqual([
+      "shared-conversation",
+      "shared-conversation",
+      "distinct-conversation",
+    ]);
+    expect(rows.slice(3).every((run) => run.stateKey === null)).toBe(true);
     expect(await reader.listRuns(ownerB, scheduleA, { limit: 50 })).toEqual([]);
     // requestedBy=caller alone cannot grant access through another owner's schedule.
     expect(await reader.listRuns(ownerA, scheduleB, { limit: 50 })).toEqual([]);

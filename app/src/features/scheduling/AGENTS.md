@@ -9,11 +9,11 @@
 
 ## Purpose
 
-Read-only orchestration for caller-owned schedule configuration, run history and existing thread correlation.
+Node identity binding for the published scheduling package's owned configuration, run history and existing thread correlation.
 
 ## Boundaries
 
-Features depend on injected ports and shared contracts. No bootstrap, adapter, or app imports.
+Features inject local branded-ID schedule lookup into shared readback. No bootstrap, adapter, or app imports.
 
 ## Public Surface
 

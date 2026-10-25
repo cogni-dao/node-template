@@ -51,6 +51,7 @@ on:
       - "knowledge-base-v*"
       - "knowledge-base-ui-v*"
       - "graph-execution-v*"
+      - "scheduling-v*"
       - "ai-tools-v*"
       - "langgraph-graphs-v*"
   # Rehearsal only. Every publishing step below is gated on `push`, so a
@@ -95,7 +96,8 @@ env:
      {"name":"@cogni-dao/knowledge-base-ui","dir":"packages/knowledge-base-ui","tagPrefix":"knowledge-base-ui-v"},
      {"name":"@cogni-dao/graph-execution","dir":"packages/graph-execution-host","tagPrefix":"graph-execution-v"},
      {"name":"@cogni-dao/ai-tools","dir":"packages/ai-tools","tagPrefix":"ai-tools-v"},
-     {"name":"@cogni-dao/langgraph-graphs","dir":"packages/langgraph-graphs","tagPrefix":"langgraph-graphs-v"}]
+     {"name":"@cogni-dao/langgraph-graphs","dir":"packages/langgraph-graphs","tagPrefix":"langgraph-graphs-v"},
+     {"name":"@cogni-dao/scheduling","dir":"packages/scheduling","tagPrefix":"scheduling-v"}]
 
 jobs:
   # Resolve WHICH packages this run acts on, before anything is built. A push

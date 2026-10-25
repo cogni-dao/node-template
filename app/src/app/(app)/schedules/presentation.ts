@@ -66,11 +66,4 @@ export function scheduleModel(input: Record<string, unknown>): string {
 export function agentLabel(graphId: string) {
   return graphId.split(":").at(-1) ?? graphId;
 }
-export function runTime(value: string | null, timezone: string) {
-  if (!value) return "Time unavailable";
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-    timeZone: timezone,
-  }).format(new Date(value));
-}
+export { formatRunTime as runTime } from "@cogni/scheduling/presentation";
