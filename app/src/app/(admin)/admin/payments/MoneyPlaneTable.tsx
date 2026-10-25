@@ -194,17 +194,29 @@ export const moneyPlaneColumns = [
             {row.original.freshness ?? "unknown"} ·{" "}
             {row.original.sourceObservedAt ?? "undated"}
           </dd>
+          <dt>Read at</dt>
+          <dd>{row.original.observedAt}</dd>
+          <dt>Balance (source)</dt>
+          <dd>
+            {measured(row.original.balance) === undefined
+              ? "—"
+              : `${String(row.original.balance)} ${row.original.currency ?? ""}`.trim()}
+          </dd>
+          <dt>Burn/day (source)</dt>
+          <dd>
+            {measured(row.original.burnPerDay) === undefined
+              ? "—"
+              : `${String(row.original.burnPerDay)} ${row.original.currency ?? ""}/day`}
+          </dd>
           <dt>Payer / beneficiary</dt>
           <dd>
             {row.original.payer ?? "Unknown"} /{" "}
             {row.original.beneficiary ?? "Unknown"}
           </dd>
-          <dt>Reason</dt>
-          <dd>
-            {row.original.detail ??
-              row.original.reasonCode?.replaceAll("_", " ") ??
-              "—"}
-          </dd>
+          <dt>Reason code</dt>
+          <dd>{row.original.reasonCode ?? "—"}</dd>
+          <dt>Detail</dt>
+          <dd>{row.original.detail ?? "—"}</dd>
           {row.original.nativeRate ? (
             <>
               <dt>Exact rate</dt>
@@ -264,7 +276,7 @@ export function MoneyPlaneTable({
       .map((rate) => `${numberText(rate.amount)} ${rate.currency}/${rate.per}`)
       .join(" · ") || "—";
   return (
-    <div className="min-w-0 space-y-4">
+    <div className="min-w-0 space-y-4 tabular-nums">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h1>Payments</h1>
         <div className="flex items-center gap-2">

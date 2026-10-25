@@ -12,8 +12,11 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createElement, Fragment } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import {
   createTable,
+  flexRender,
   getCoreRowModel,
   getSortedRowModel,
 } from "@tanstack/react-table";
@@ -195,5 +198,55 @@ describe("account deduplication and the actual financial grid", () => {
         ).toEqual(desc ? [10, 2, null] : [2, 10, null]);
       }
     }
+  });
+  it("keeps unrounded values, distinct timestamps and raw reasons inside closed Details", () => {
+    const data: MoneyPlaneRow[] = [
+      {
+        plane: "test-wallet",
+        label: "Wallet",
+        kind: "wallet",
+        balance: 7.071234,
+        currency: "USDC",
+        burnPerDay: 0.00123456,
+        runwayDays: null,
+        grade: "UNKNOWN",
+        observedAt: "2026-10-25T02:10:00Z",
+        sourceObservedAt: "2026-10-25T01:30:00Z",
+        freshness: "stale",
+        reasonCode: "unreadable",
+        detail: "Provider unavailable",
+      },
+    ];
+    const table = createTable({
+      data,
+      columns: moneyPlaneColumns,
+      state: { sorting: [] },
+      onStateChange: () => {},
+      renderFallbackValue: null,
+      getCoreRowModel: getCoreRowModel(),
+    });
+    const cell = table
+      .getRowModel()
+      .rows[0]?.getAllCells()
+      .find((cell) => cell.column.id === "details");
+    if (!cell) throw new Error("Missing actual Details cell");
+    const html = renderToStaticMarkup(
+      createElement(
+        Fragment,
+        null,
+        flexRender(cell.column.columnDef.cell, cell.getContext())
+      )
+    );
+    expect(html).toContain("<details>");
+    expect(html).not.toContain("<details open");
+    for (const evidence of [
+      "7.071234 USDC",
+      "0.00123456 USDC/day",
+      "2026-10-25T02:10:00Z",
+      "2026-10-25T01:30:00Z",
+      "unreadable",
+      "Provider unavailable",
+    ])
+      expect(html).toContain(evidence);
   });
 });
