@@ -27,9 +27,4 @@ export interface ScheduleRunReader {
     scheduleId: string,
     options: { limit: number; cursor?: string }
   ) => Promise<GraphRun[]>;
-  getRun: (
-    caller: UserId,
-    scheduleId: string,
-    runId: string
-  ) => Promise<GraphRun | null>;
 }

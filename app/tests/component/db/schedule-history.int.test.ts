@@ -114,12 +114,7 @@ describe("schedule history reader (real RLS)", () => {
     expect(rows.every((run) => run.startedAt === null)).toBe(true);
     expect(await reader.listRuns(ownerB, scheduleA, { limit: 50 })).toEqual([]);
     // requestedBy=caller alone cannot grant access through another owner's schedule.
-    expect(
-      await reader.getRun(ownerA, scheduleB, "foreign-schedule-run")
-    ).toBeNull();
-    expect(
-      await reader.getRun(ownerA, scheduleA, "other-owned-schedule-run")
-    ).toBeNull();
+    expect(await reader.listRuns(ownerA, scheduleB, { limit: 50 })).toEqual([]);
   });
 
   it("seeks complete pages through microsecond slots and NULL-slot UUID ties", async () => {
@@ -151,15 +146,6 @@ describe("schedule history reader (real RLS)", () => {
         reader.listRuns(ownerA, scheduleA, { limit: 1, cursor })
       ).rejects.toThrow("Invalid history cursor");
     }
-  });
-
-  it("fails closed when run correlation is ambiguous within one schedule", async () => {
-    const runId = `duplicate-${randomUUID()}`;
-    await seed.insert(graphRuns).values([
-      { scheduleId: scheduleA2, runId },
-      { scheduleId: scheduleA2, runId },
-    ]);
-    expect(await reader.getRun(ownerA, scheduleA2, runId)).toBeNull();
   });
 
   it("rejects a deleted cursor instead of silently returning an incomplete page", async () => {

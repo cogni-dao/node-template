@@ -9,7 +9,7 @@
 
 ## Purpose
 
-Read-only orchestration for caller-owned schedule configuration, run history and saved assistant responses.
+Read-only orchestration for caller-owned schedule configuration, run history and existing thread correlation.
 
 ## Boundaries
 
@@ -17,12 +17,12 @@ Features depend on injected ports and shared contracts. No bootstrap, adapter, o
 
 ## Public Surface
 
-- `createScheduleHistoryService` — schedule, history and output reads
-- `ScheduleHistoryNotFoundError` — missing or foreign schedule/run
+- `createScheduleHistoryService` — schedule and history reads
+- `ScheduleHistoryNotFoundError` — missing or foreign schedule
 
 ## Invariants
 
 - Schedule ownership is required independently of run requester identity.
-- Output uses the caller-owned nondeleted thread and exact assistant run ID.
-- Metadata never loads threads; chosen output returns complete saved text only.
+- Metadata projects nullable stateKey without loading any thread content.
+- Existing chat routes authorize and display linked conversations.
 - Runtime status is not task success. No execution or persistence side effects.

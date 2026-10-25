@@ -71,23 +71,4 @@ export class DrizzleScheduleRunReader implements ScheduleRunReader {
       return rows.map(({ run }) => run);
     });
   }
-
-  async getRun(caller: UserId, scheduleId: string, runId: string) {
-    return withTenantScope(this.db, userActor(caller), async (tx) => {
-      const rows = await tx
-        .select({ run: graphRuns })
-        .from(graphRuns)
-        .innerJoin(schedules, eq(schedules.id, graphRuns.scheduleId))
-        .where(
-          and(
-            eq(schedules.ownerUserId, caller),
-            eq(graphRuns.scheduleId, scheduleId),
-            eq(graphRuns.runId, runId)
-          )
-        )
-        .limit(2);
-      // run_id is indexed but not unique. Ambiguous correlation fails closed.
-      return rows.length === 1 ? (rows[0]?.run ?? null) : null;
-    });
-  }
 }

@@ -3,9 +3,9 @@
 
 /**
  * Module: tests/unit/features/scheduling/schedule-history
- * Purpose: Verify owned schedule readback and exact saved response selection.
+ * Purpose: Verify owned schedule history and nullable thread correlation.
  * Scope: Public service seams with injected ports; database isolation has component coverage.
- * Invariants: No cross-owner reads, no latest-message substitution, no text truncation.
+ * Invariants: No cross-owner reads; no thread content in metadata.
  * Side-effects: none
  * Links: https://cognidao.org/work/items/task.5353
  * @internal
@@ -46,100 +46,41 @@ const run = {
 } as GraphRun;
 const getSchedule = vi.fn();
 const listRuns = vi.fn();
-const getRun = vi.fn();
 const loadThread = vi.fn();
-const threadPersistenceForUser = vi.fn(() => ({ loadThread }));
 const service = createScheduleHistoryService({
   schedules: { getSchedule },
-  reader: { listRuns, getRun },
-  threadPersistenceForUser,
+  reader: { listRuns },
 });
 
 describe("owned schedule history", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getSchedule.mockResolvedValue(schedule);
-    getRun.mockResolvedValue(run);
     listRuns.mockResolvedValue([run]);
-    loadThread.mockResolvedValue([]);
   });
 
-  it("denies a foreign schedule before querying runs or threads", async () => {
+  it("denies a foreign schedule before querying runs", async () => {
     getSchedule.mockResolvedValue({ ...schedule, ownerUserId: "other" });
     await expect(
-      service.output(caller, schedule.id, run.runId)
+      service.history(caller, schedule.id, { limit: 20 })
     ).rejects.toThrow("Schedule not found");
-    expect(getRun).not.toHaveBeenCalled();
-    expect(loadThread).not.toHaveBeenCalled();
+    expect(listRuns).not.toHaveBeenCalled();
   });
 
-  it("denies same-owner run addressed through the wrong schedule", async () => {
-    getRun.mockResolvedValue({ ...run, scheduleId: "another" });
-    await expect(
-      service.output(caller, schedule.id, run.runId)
-    ).rejects.toThrow("Run not found");
-    expect(loadThread).not.toHaveBeenCalled();
-  });
-
-  it("preserves schedule-owner history when requester is null", async () => {
+  it("preserves nullable thread correlation without returning private run data", async () => {
+    listRuns.mockResolvedValue([run, { ...run, id: "row-b", stateKey: null }]);
     const result = await service.history(caller, schedule.id, { limit: 20 });
-    expect(result.runs[0]?.runId).toBe(run.runId);
-    expect(result.runs[0]).not.toHaveProperty("stateKey");
+    expect(result.runs.map((item) => item.stateKey)).toEqual(["slot-a", null]);
     expect(result.runs[0]).not.toHaveProperty("requestedBy");
+    expect(result.runs[0]).not.toHaveProperty("errorCode");
     expect(loadThread).not.toHaveBeenCalled();
   });
 
-  it("returns all exact saved assistant text, not a later assistant or tools", async () => {
-    const text = "A useful complete result. ".repeat(3000);
-    loadThread.mockResolvedValue([
-      {
-        id: "assistant-run-a",
-        role: "user",
-        parts: [{ type: "text", text: "wrong role" }],
-      },
-      {
-        id: "assistant-run-a",
-        role: "assistant",
-        parts: [
-          { type: "text", text },
-          { type: "dynamic-tool", output: "private tool payload" },
-          { type: "text", text: "Conclusion." },
-        ],
-      },
-      {
-        id: "assistant-later-run",
-        role: "assistant",
-        parts: [{ type: "text", text: "wrong run" }],
-      },
-    ]);
-    expect(await service.output(caller, schedule.id, run.runId)).toEqual({
-      availability: "available",
-      text: `${text}\n\nConclusion.`,
-    });
-    expect(threadPersistenceForUser).toHaveBeenCalledWith(caller);
-    expect(loadThread).toHaveBeenCalledWith(caller, "slot-a");
-  });
-
-  it("distinguishes absent output from a saved empty assistant", async () => {
-    expect(await service.output(caller, schedule.id, run.runId)).toEqual({
-      availability: "unavailable",
-      text: null,
-    });
-    loadThread.mockResolvedValue([
-      { id: "assistant-run-a", role: "assistant", parts: [] },
-    ]);
-    expect(await service.output(caller, schedule.id, run.runId)).toEqual({
-      availability: "empty",
-      text: "",
-    });
-  });
-
-  it("does not read a thread without saved correlation", async () => {
-    getRun.mockResolvedValue({ ...run, stateKey: null });
-    expect(
-      (await service.output(caller, schedule.id, run.runId)).availability
-    ).toBe("unavailable");
-    expect(loadThread).not.toHaveBeenCalled();
+  it("keeps every run even when multiple runs share a thread", async () => {
+    listRuns.mockResolvedValue([run, { ...run, id: "row-b", runId: "run-b" }]);
+    const result = await service.history(caller, schedule.id, { limit: 20 });
+    expect(result.runs.map((item) => item.runId)).toEqual(["run-a", "run-b"]);
+    expect(result.nextCursor).toBeNull();
   });
 
   it("paginates metadata with an extra row and leaves output unloaded", async () => {
@@ -164,8 +105,8 @@ vi.mock("@/bootstrap/container", () => ({
     log: logger,
     config: { unhandledErrorPolicy: "respond_500" },
     scheduleManager: { getSchedule },
-    scheduleRunReader: { listRuns, getRun },
-    threadPersistenceForUser,
+    scheduleRunReader: { listRuns },
+    threadPersistenceForUser: () => ({ loadThread }),
   }),
 }));
 
@@ -178,8 +119,6 @@ describe("schedule history HTTP boundary", () => {
     });
     getSchedule.mockResolvedValue(schedule);
     listRuns.mockResolvedValue([]);
-    getRun.mockResolvedValue(run);
-    loadThread.mockResolvedValue([]);
   });
   it("requires authentication", async () => {
     session.mockResolvedValue(null);
@@ -210,6 +149,9 @@ describe("schedule history HTTP boundary", () => {
     });
   });
   it("returns no-store metadata without fanout to output", async () => {
+    listRuns.mockResolvedValue([
+      { ...run, id: "44444444-4444-4444-8444-444444444444" },
+    ]);
     const appHandler = await import(
       "@/app/api/v1/schedules/[scheduleId]/runs/route"
     );
@@ -220,7 +162,14 @@ describe("schedule history HTTP boundary", () => {
         const response = await fetch();
         expect(response.status).toBe(200);
         expect(response.headers.get("cache-control")).toBe("no-store");
-        expect(await response.json()).toEqual({ runs: [], nextCursor: null });
+        const body = await response.json();
+        expect(body.nextCursor).toBeNull();
+        expect(body.runs).toHaveLength(1);
+        expect(body.runs[0]).toMatchObject({
+          runId: run.runId,
+          stateKey: "slot-a",
+        });
+        expect(body.runs[0]).not.toHaveProperty("messages");
         expect(loadThread).not.toHaveBeenCalled();
       },
     });
@@ -260,18 +209,11 @@ describe("schedule history HTTP boundary", () => {
       },
     });
   });
-  it.each([
-    "history",
-    "output",
-  ] as const)("reports %s storage failure as an error instead of an empty result", async (kind) => {
+  it("reports history storage failure as an error instead of an empty result", async () => {
     listRuns.mockRejectedValue(new Error("Storage unavailable"));
-    loadThread.mockRejectedValue(new Error("Storage unavailable"));
-    const appHandler =
-      kind === "history"
-        ? await import("@/app/api/v1/schedules/[scheduleId]/runs/route")
-        : await import(
-            "@/app/api/v1/schedules/[scheduleId]/runs/[runId]/route"
-          );
+    const appHandler = await import(
+      "@/app/api/v1/schedules/[scheduleId]/runs/route"
+    );
     await testApiHandler({
       appHandler,
       params: { scheduleId: schedule.id, runId: run.runId },
@@ -297,52 +239,58 @@ describe("schedule history HTTP boundary", () => {
       },
     });
   });
-  it("logs a validated saved output response once", async () => {
-    loadThread.mockResolvedValue([
-      {
-        id: "assistant-run-a",
-        role: "assistant",
-        parts: [{ type: "text", text: "Saved result" }],
-      },
-    ]);
+  it("returns the same 404 for unknown and foreign history", async () => {
+    getSchedule.mockResolvedValue(null);
     const appHandler = await import(
-      "@/app/api/v1/schedules/[scheduleId]/runs/[runId]/route"
+      "@/app/api/v1/schedules/[scheduleId]/runs/route"
     );
     await testApiHandler({
       appHandler,
-      params: { scheduleId: schedule.id, runId: run.runId },
+      params: { scheduleId: schedule.id },
       test: async ({ fetch }) => {
-        const response = await fetch();
-        expect(response.status).toBe(200);
-        expect(await response.json()).toEqual({
-          availability: "available",
-          text: "Saved result",
-        });
-        expect(logger.info).toHaveBeenCalledWith(
-          expect.objectContaining({
-            event: EVENT_NAMES.SCHEDULE_OUTPUT_READ,
-            availability: "available",
-            outcome: "success",
-            status: 200,
-          }),
-          EVENT_NAMES.SCHEDULE_OUTPUT_READ
-        );
-        expect(logger.info).toHaveBeenCalledTimes(3);
-        expect(logger.error).not.toHaveBeenCalled();
+        expect((await fetch()).status).toBe(404);
+        expect(listRuns).not.toHaveBeenCalled();
       },
     });
   });
-  it("returns the same 404 for unknown and foreign output", async () => {
-    getSchedule.mockResolvedValue(null);
-    const appHandler = await import(
-      "@/app/api/v1/schedules/[scheduleId]/runs/[runId]/route"
-    );
+
+  it.each([
+    { messages: [] },
+    {
+      messages: [
+        {
+          id: "assistant-run-a",
+          role: "assistant",
+          parts: [{ type: "text", text: "Saved result" }],
+        },
+      ],
+    },
+  ])("logs validated linked-conversation reads without content", async ({
+    messages,
+  }) => {
+    loadThread.mockResolvedValue(messages);
+    const appHandler = await import("@/app/api/v1/ai/threads/[stateKey]/route");
     await testApiHandler({
       appHandler,
-      params: { scheduleId: schedule.id, runId: run.runId },
+      params: { stateKey: "slot-a" },
       test: async ({ fetch }) => {
-        expect((await fetch()).status).toBe(404);
-        expect(loadThread).not.toHaveBeenCalled();
+        const response = await fetch();
+        expect(response.status).toBe(200);
+        expect(response.headers.get("cache-control")).toBe("no-store");
+        expect(await response.json()).toEqual({ stateKey: "slot-a", messages });
+        expect(loadThread).toHaveBeenCalledWith(caller, "slot-a");
+        expect(logger.info).toHaveBeenCalledWith(
+          expect.objectContaining({
+            event: EVENT_NAMES.AI_THREAD_READ,
+            messageCount: messages.length,
+            outcome: "success",
+            stateKey: "slot-a",
+          }),
+          EVENT_NAMES.AI_THREAD_READ
+        );
+        expect(JSON.stringify(logger.info.mock.calls)).not.toContain(
+          "Saved result"
+        );
       },
     });
   });

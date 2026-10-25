@@ -25,7 +25,6 @@ export function scheduleReadback() {
   return createScheduleHistoryService({
     schedules: container.scheduleManager,
     reader: container.scheduleRunReader,
-    threadPersistenceForUser: container.threadPersistenceForUser,
   });
 }
 export const scheduleReadHeaders = { "Cache-Control": "no-store" };

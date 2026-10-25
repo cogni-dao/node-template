@@ -3,7 +3,7 @@
 
 /**
  * Module: app/schedules/_api/readHistory
- * Purpose: Contract-validated schedule and saved response reads.
+ * Purpose: Contract-validated schedule and run history reads.
  * Scope: Browser transport only; no persistence or execution.
  * Invariants: Same-origin credentials; no-store; error responses are not empty results.
  * Side-effects: IO
@@ -13,7 +13,6 @@
 import {
   schedulesGetOperation,
   schedulesHistoryOperation,
-  schedulesOutputOperation,
 } from "@cogni/node-contracts";
 
 async function read(path: string): Promise<unknown> {
@@ -37,12 +36,5 @@ export async function fetchScheduleHistory(id: string, cursor: string | null) {
   const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
   return schedulesHistoryOperation.output.parse(
     await read(`/api/v1/schedules/${encodeURIComponent(id)}/runs${query}`)
-  );
-}
-export async function fetchScheduleOutput(id: string, runId: string) {
-  return schedulesOutputOperation.output.parse(
-    await read(
-      `/api/v1/schedules/${encodeURIComponent(id)}/runs/${encodeURIComponent(runId)}`
-    )
   );
 }
