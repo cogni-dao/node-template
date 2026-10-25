@@ -7,13 +7,15 @@
  *   one read-only report through `@cogni/money-plane`.
  * Scope: Server-only. Reads repo-spec + server env and hands them to the package readers. Does not move funds,
  *   decide alerts, or render.
- * Invariants: READERS_NEVER_THROW. Wallet custody never proves DAO spendable cash. Operator coverage is separate from measured node share.
+ * Invariants: Repo-spec approver authorization precedes credentials and provider reads. READERS_NEVER_THROW. Wallet custody never proves DAO spendable cash. Operator coverage is separate from measured node share.
  * Side-effects: IO (OpenRouter HTTPS GET, Base JSON-RPC reads), one terminal MONEY_PLANE_SNAPSHOT log event.
  * Links: packages/money-plane, https://cognidao.org/knowledge/money-plane-snapshot-design
  * @public
  */
 
 import "server-only";
+
+import { redirect } from "next/navigation";
 
 import {
   BASE_PUBLIC_RPC_URL,
@@ -26,10 +28,12 @@ import {
   takeSnapshot,
 } from "@cogni/money-plane";
 
+import { getServerSessionUser } from "@/lib/auth/server";
 import {
   getDaoTreasuryAddress,
   getOperatorWalletConfig,
   getStewardWalletConfig,
+  isLedgerApprover,
 } from "@/shared/config";
 import { serverEnv } from "@/shared/env";
 import { EVENT_NAMES, makeLogger } from "@/shared/observability";
@@ -96,8 +100,12 @@ function readers(): PlaneReader[] {
   ];
 }
 
-/** Exactly one terminal MONEY_PLANE_SNAPSHOT event per call: success, or error with a stable errorCode. */
+/** Authorize at the data boundary, then emit one terminal event per admitted report read. */
 export async function getMoneyPlaneSnapshot(): Promise<MoneyPlaneSnapshot> {
+  // Layouts may render concurrently with their children; gate before credentials or IO.
+  const user = await getServerSessionUser();
+  if (!isLedgerApprover(user?.walletAddress ?? null)) redirect("/dashboard");
+
   const started = Date.now();
   try {
     const snapshot = await takeSnapshot(readers(), {

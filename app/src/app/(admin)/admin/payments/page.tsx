@@ -4,7 +4,7 @@
 /**
  * Module: `@app/(admin)/admin/payments/page`
  * Purpose: Shared financial evidence in a node-owned read-only table, with unavailable node cost share explicit.
- * Scope: Server component. Access gating handled upstream by `(admin)/layout.tsx`.
+ * Scope: Server component. The snapshot helper authorizes the repo-spec approver before reading data; the admin layout also gates the shell.
  * Invariants: Reporting only, no payment controls. Custody is not DAO available cash.
  * Side-effects: IO (snapshot reads via getMoneyPlaneSnapshot)
  * Links: money-plane.server.ts, MoneyPlaneTable.tsx, https://cognidao.org/knowledge/money-plane-snapshot-design
