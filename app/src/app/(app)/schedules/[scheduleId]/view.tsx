@@ -254,7 +254,7 @@ export function ScheduleDetailView({ scheduleId }: { scheduleId: string }) {
               </p>
             )}
             <Card>
-              <CardHeader className="flex-row items-center justify-between gap-3 px-5 py-3">
+              <CardHeader className="flex flex-row items-center justify-between gap-3 px-5 py-3">
                 <div>
                   <CardTitle
                     id="run-history-heading"
