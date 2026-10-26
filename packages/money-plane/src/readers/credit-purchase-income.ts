@@ -6,6 +6,7 @@
  * Purpose: Income from credit purchases: successful payment_attempts in the trailing window ÷ window days → USD per day.
  * Scope: Node-generic. The query is injected (the node owns its database); this reader only sums and labels.
  * Invariants: READERS_NEVER_THROW — a failing query is UNKNOWN `unreadable`. Zero purchases is a measured $0/day, not UNKNOWN.
+ *   The window is measured on the credited time; a node that can only supply intent time says so (`basis: "intent"`).
  *   kind `income`, rail `split-inflow` supported (the 95/5 Split lands purchases automatically). `burnPerDay` holds inflow per day.
  * Side-effects: IO through the injected query only
  * Links: https://cognidao.org/knowledge/node-service-usdc-northstar
@@ -23,11 +24,13 @@ export interface CreditPurchase {
 }
 
 export interface CreditPurchaseIncomeReaderOptions {
-  /** Successful purchases created at or after `since`; the node scopes it to its own ledger. */
+  /** Successful purchases whose `createdAt` is the credited time (or the intent time when `basis` is "intent"), at or after `since`. */
   query: (since: Date) => Promise<readonly CreditPurchase[]>;
   windowDays?: number;
   label?: string;
   now?: () => Date;
+  /** Which timestamp the query returns; the dialog names it. Default "credited". */
+  basis?: "credited" | "intent";
 }
 
 export function creditPurchaseIncomeReader(
@@ -38,6 +41,7 @@ export function creditPurchaseIncomeReader(
   const windowDays = options.windowDays ?? 30;
   const now = options.now ?? (() => new Date());
   const rail = { kind: "split-inflow" as const, status: "supported" as const };
+  const basis = options.basis ?? "credited";
   return {
     plane,
     label,
@@ -66,7 +70,10 @@ export function creditPurchaseIncomeReader(
           runwayDays: null,
           grade: "INFO",
           observedAt,
-          source: `payment_attempts · CREDITED · trailing ${windowDays} days`,
+          source:
+            basis === "credited"
+              ? `payment_events · CREDITED · trailing ${windowDays} days`
+              : `payment_attempts · CREDITED · by intent time · trailing ${windowDays} days`,
           sourceObservedAt: observedAt,
           freshness: "current",
           detail: `${purchases.length} purchases · ${totalUsd.toFixed(2)} USD in ${windowDays}d`,

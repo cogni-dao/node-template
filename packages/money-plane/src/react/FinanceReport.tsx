@@ -66,8 +66,16 @@ export interface FinanceKit {
   DialogTrigger: AnyComponent;
 }
 
+/** The server answered and refused the withdrawal; nothing was sent, so the user may retry. */
+export class StewardWithdrawalRejected extends Error {
+  override readonly name = "StewardWithdrawalRejected";
+}
+
 export interface FinanceActions {
-  /** The amount-only steward withdrawal; resolves with the tx hash or throws an Error whose message is shown. */
+  /**
+   * The amount-only steward withdrawal; resolves with the tx hash. Throw `StewardWithdrawalRejected` for an explicit
+   * server refusal (retry allowed); any other throw means the outcome is unknown and the control locks until checked.
+   */
   fundSteward: (amountUsd: number) => Promise<{ txHash: string | null }>;
   /** Re-read the report (e.g. router.refresh). Omit to hide the button. */
   refresh?: () => void | Promise<void>;
@@ -77,6 +85,8 @@ export interface FinanceReportData {
   takenAt: string;
   rows: MoneyPlaneRow[];
   treasuryPlane?: string | null;
+  /** Explorer page of the steward wallet, shown when a transfer's result is unknown. */
+  stewardWalletUrl?: string | null;
 }
 
 export interface FinanceReportProps {
@@ -266,14 +276,16 @@ function LineDialog({
   );
 }
 
-type Phase = "idle" | "submitting" | "success" | "error";
+type Phase = "idle" | "submitting" | "success" | "rejected" | "unknown";
 
 function FundSteward({
   kit,
   fundSteward,
+  stewardWalletUrl,
 }: {
   kit: FinanceKit;
   fundSteward: FinanceActions["fundSteward"];
+  stewardWalletUrl?: string | null | undefined;
 }) {
   const id = useId();
   const [amount, setAmount] = useState("1");
@@ -290,10 +302,16 @@ function FundSteward({
       setTxHash(result.txHash);
       setPhase("success");
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-      setPhase("error");
+      if (err instanceof StewardWithdrawalRejected) {
+        setError(err.message);
+        setPhase("rejected");
+      } else {
+        // The request may have been accepted before the response was lost; never allow a blind second send.
+        setPhase("unknown");
+      }
     }
   }
+  const locked = phase === "submitting" || phase === "unknown";
   return (
     <div className="flex min-w-0 flex-col gap-1">
       <div className="flex items-center gap-2">
@@ -312,13 +330,13 @@ function FundSteward({
           onChange={(e: { target: { value: string } }) =>
             setAmount(e.target.value)
           }
-          disabled={phase === "submitting"}
+          disabled={locked}
         />
         <kit.Button
           size="sm"
           className="h-9 whitespace-nowrap"
           onClick={submit}
-          disabled={phase === "submitting" || !valid}
+          disabled={locked || !valid}
         >
           {phase === "submitting" ? "Funding…" : "Fund steward"}
         </kit.Button>
@@ -334,10 +352,42 @@ function FundSteward({
           <ExternalIcon />
         </a>
       ) : null}
-      {phase === "error" && error ? (
+      {phase === "rejected" && error ? (
         <span role="alert" className="text-destructive text-xs">
           {error}
         </span>
+      ) : null}
+      {phase === "unknown" ? (
+        <div role="alert" className="flex flex-wrap items-center gap-2 text-warning text-xs">
+          <span>
+            Result unknown — check the steward wallet
+            {stewardWalletUrl ? (
+              <>
+                {" "}
+                <a
+                  href={stewardWalletUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 underline"
+                >
+                  on BaseScan
+                  <ExternalIcon />
+                </a>
+              </>
+            ) : (
+              " on BaseScan"
+            )}{" "}
+            before sending again
+          </span>
+          <kit.Button
+            size="sm"
+            variant="outline"
+            className="h-7"
+            onClick={() => setPhase("idle")}
+          >
+            I checked
+          </kit.Button>
+        </div>
       ) : null}
     </div>
   );
@@ -367,10 +417,12 @@ function RowAction({
   row,
   kit,
   actions,
+  stewardWalletUrl,
 }: {
   row: MoneyPlaneRow;
   kit: FinanceKit;
   actions: FinanceActions;
+  stewardWalletUrl?: string | null | undefined;
 }) {
   const rail: Rail | undefined = row.rail;
   const action: PayAction | undefined = row.payAction;
@@ -383,7 +435,13 @@ function RowAction({
     );
   }
   if (action?.kind === "fund-steward")
-    return <FundSteward kit={kit} fundSteward={actions.fundSteward} />;
+    return (
+      <FundSteward
+        kit={kit}
+        fundSteward={actions.fundSteward}
+        stewardWalletUrl={stewardWalletUrl}
+      />
+    );
   if (action?.kind === "steward-checkout")
     return <TopUp kit={kit} href={action.checkoutUrl} label="Top up" />;
   if (action?.kind === "external")
@@ -471,16 +529,23 @@ function StatCards({
   rows: MoneyPlaneRow[];
   kit: FinanceKit;
 }) {
-  const runwayRow = summary.shortestRunway
+  const deadlineRow = summary.nextDeadline
     ? rows
         .flatMap((row) => [row, ...(row.children ?? [])])
-        .find((row) => row.label === summary.shortestRunway?.label)
+        .find((row) => row.label === summary.nextDeadline?.label)
     : undefined;
+  const runwayValue =
+    summary.runwayDays === null
+      ? DASH
+      : Number.isFinite(summary.runwayDays)
+        ? days(summary.runwayDays)
+        : "∞";
   const stats: {
     label: string;
     value: string;
     sub: string;
     className?: string;
+    extra?: { text: string; className?: string };
   }[] = [
     {
       label: "Treasury",
@@ -488,10 +553,10 @@ function StatCards({
       sub: "USDC on Base",
     },
     {
-      label: "Income",
+      label: "Cash received",
       value:
         summary.incomePerDay === null ? DASH : `${usd(summary.incomePerDay)}/day`,
-      sub: "trailing 30d",
+      sub: "credit purchases · 30d",
     },
     {
       label: "Burn",
@@ -500,9 +565,16 @@ function StatCards({
     },
     {
       label: "Runway",
-      value: summary.shortestRunway ? days(summary.shortestRunway.days) : DASH,
-      sub: summary.shortestRunway ? summary.shortestRunway.label : "no graded line",
-      ...(runwayRow ? { className: runwayClass(runwayRow.grade) } : {}),
+      value: runwayValue,
+      sub: "treasury ÷ net burn",
+      ...(summary.nextDeadline
+        ? {
+            extra: {
+              text: `Next deadline ${days(summary.nextDeadline.days)} · ${summary.nextDeadline.label}`,
+              ...(deadlineRow ? { className: runwayClass(deadlineRow.grade) } : {}),
+            },
+          }
+        : {}),
     },
   ];
   return (
@@ -524,6 +596,14 @@ function StatCards({
               {stat.value}
             </p>
             <p className="text-muted-foreground text-xs">{stat.sub}</p>
+            {stat.extra ? (
+              <p
+                className={cx("text-xs", stat.extra.className ?? "text-muted-foreground")}
+                data-finance-deadline
+              >
+                {stat.extra.text}
+              </p>
+            ) : null}
           </kit.CardContent>
         </kit.Card>
       ))}
@@ -687,6 +767,7 @@ export function FinanceReport({
                   timeZone={timeZone}
                   formatTime={formatTime}
                   thisNode={thisNode}
+                  stewardWalletUrl={report.stewardWalletUrl}
                 />
               ))}
               {groups.length === 0 && (
@@ -782,6 +863,7 @@ function GroupRows({
   timeZone,
   formatTime,
   thisNode,
+  stewardWalletUrl,
 }: {
   group: Group;
   rows: MoneyPlaneRow[];
@@ -797,6 +879,7 @@ function GroupRows({
   timeZone: string | undefined;
   formatTime: FinanceReportProps["formatTime"];
   thisNode: string;
+  stewardWalletUrl?: string | null | undefined;
 }) {
   return (
     <>
@@ -835,7 +918,12 @@ function GroupRows({
               {hasRunway && <td className="whitespace-nowrap px-3 py-2">{runwayCell(row)}</td>}
               <td className="px-3 py-2 text-right">
                 <div className="flex justify-end">
-                  <RowAction row={row} kit={kit} actions={actions} />
+                  <RowAction
+                    row={row}
+                    kit={kit}
+                    actions={actions}
+                    stewardWalletUrl={stewardWalletUrl}
+                  />
                 </div>
               </td>
             </tr>

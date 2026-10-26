@@ -3,7 +3,7 @@
 
 /**
  * Module: `@cogni-dao/money-plane/report`
- * Purpose: The one summary every node shows above its Financials table: treasury, income/day, burn/day and the shortest runway, in USD.
+ * Purpose: The one summary every node shows above its Financials table: treasury, cash received/day, burn/day, DAO runway (treasury ÷ net burn) and the next constrained deadline, in USD.
  * Scope: Pure aggregation over a snapshot already projected with `toUsd`. Does not read, grade, or render.
  * Invariants: USD only — a row without a USD projection does not count and is listed in `unconverted`. A parent that
  *   carries burn is the rollup; its children are never added again. Income = Σ income rows; burn = Σ everything else.
@@ -22,8 +22,10 @@ export interface ReportSummary {
   incomePerDay: number | null;
   /** Σ cost rows' USD per day (children not double counted); null when nothing is measured. */
   burnPerDay: number | null;
-  /** The graded row that runs out first. */
-  shortestRunway: { days: number; label: string } | null;
+  /** DAO runway: treasury ÷ max(burn − income, 0) in days; null when the treasury is unknown or burn is unmeasured; Infinity when net burn ≤ 0. */
+  runwayDays: number | null;
+  /** The graded line that runs out or expires first (a vendor credit, a lease escrow, a domain). */
+  nextDeadline: { days: number; label: string } | null;
   /** Rates that were applied to at least one row, for the "EUR→USD 1.1188 · ECB date" line. */
   ratesUsed: UsdRate[];
   /** Labels of rows carrying a non-USD amount that could not be projected. */
@@ -91,11 +93,23 @@ export function summarize(
         (row.balance !== null || row.burnPerDay !== null)
     )
     .map((row) => row.label);
+  const treasuryUsd = treasury ? (usdBalance(treasury) ?? null) : null;
+  const incomePerDay = sumOrNull(income.map(usdBurn));
+  const burnPerDay = sumOrNull(costs.map(usdBurn));
+  const netBurn =
+    burnPerDay === null ? null : Math.max(burnPerDay - (incomePerDay ?? 0), 0);
+  const runwayDays =
+    treasuryUsd === null || netBurn === null
+      ? null
+      : netBurn === 0
+        ? Number.POSITIVE_INFINITY
+        : treasuryUsd / netBurn;
   return {
-    treasuryUsd: treasury ? (usdBalance(treasury) ?? null) : null,
-    incomePerDay: sumOrNull(income.map(usdBurn)),
-    burnPerDay: sumOrNull(costs.map(usdBurn)),
-    shortestRunway:
+    treasuryUsd,
+    incomePerDay,
+    burnPerDay,
+    runwayDays,
+    nextDeadline:
       shortest && shortest.runwayDays !== null
         ? { days: shortest.runwayDays, label: shortest.label }
         : null,

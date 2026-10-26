@@ -38,7 +38,14 @@ describe("creditPurchaseIncomeReader", () => {
       grade: "INFO",
       rail: { kind: "split-inflow", status: "supported" },
       detail: "3 purchases · 45.00 USD in 30d",
+      source: "payment_events · CREDITED · trailing 30 days",
     });
+    const byIntent = await creditPurchaseIncomeReader({
+      now: () => NOW,
+      basis: "intent",
+      query: async () => [],
+    }).read(new AbortController().signal);
+    expect(byIntent.source).toContain("by intent time");
     expect(row?.burnPerDay).toBeCloseTo(1.5, 9);
   });
   it("reports a measured zero when there are no purchases and UNKNOWN when the query fails", async () => {

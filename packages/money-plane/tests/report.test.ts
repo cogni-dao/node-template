@@ -37,7 +37,11 @@ describe("summarize", () => {
     expect(summary.treasuryUsd).toBe(74.52);
     expect(summary.incomePerDay).toBe(1.5);
     expect(summary.burnPerDay).toBeCloseTo(3.13 + 0.3432 * 1.1188 + 9.7173, 9);
-    expect(summary.shortestRunway).toEqual({ days: 2.52, label: "Akash" });
+    expect(summary.nextDeadline).toEqual({ days: 2.52, label: "Akash" });
+    expect(summary.runwayDays).toBeCloseTo(
+      74.52 / (3.13 + 0.3432 * 1.1188 + 9.7173 - 1.5),
+      9
+    );
     expect(summary.ratesUsed).toEqual([RATE]);
     expect(summary.unconverted).toEqual([]);
   });
@@ -67,14 +71,42 @@ describe("summarize", () => {
     });
     expect(summary.burnPerDay).toBeNull();
     expect(summary.unconverted).toEqual(["Cherry credit"]);
-    expect(summary.shortestRunway).toBeNull();
+    expect(summary.nextDeadline).toBeNull();
+    expect(summary.runwayDays).toBeNull();
     expect(summarize({ rows: [] })).toEqual({
       treasuryUsd: null,
       incomePerDay: null,
       burnPerDay: null,
-      shortestRunway: null,
+      runwayDays: null,
+      nextDeadline: null,
       ratesUsed: [],
       unconverted: [],
     });
+  });
+  it("keeps DAO runway and the next deadline apart: a soon-expiring domain moves the deadline, not the runway", () => {
+    const base = [
+      row({ plane: "treasury", label: "DAO treasury", kind: "wallet", currency: "USDC", balance: 100 }),
+      row({ plane: "income", kind: "income", burnPerDay: 2 }),
+      row({ plane: "hosting", burnPerDay: 12 }),
+    ].map((r) => toUsd(r, []));
+    const calm = summarize({ rows: base }, { treasuryPlane: "treasury" });
+    expect(calm.runwayDays).toBe(10);
+    expect(calm.nextDeadline).toBeNull();
+    const expiring = summarize(
+      {
+        rows: [
+          ...base,
+          row({ plane: "domain", label: "Domain cognidao.org", kind: "expiry", currency: null, runwayDays: 3, grade: "RED" }),
+        ],
+      },
+      { treasuryPlane: "treasury" }
+    );
+    expect(expiring.runwayDays).toBe(10);
+    expect(expiring.nextDeadline).toEqual({ days: 3, label: "Domain cognidao.org" });
+    const surplus = summarize(
+      { rows: [base[0]!, toUsd(row({ plane: "income", kind: "income", burnPerDay: 20 }), []), base[2]!] },
+      { treasuryPlane: "treasury" }
+    );
+    expect(surplus.runwayDays).toBe(Number.POSITIVE_INFINITY);
   });
 });

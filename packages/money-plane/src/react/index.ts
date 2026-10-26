@@ -16,6 +16,7 @@ export {
   type FinanceReportData,
   type FinanceReportProps,
   FinanceReport,
+  StewardWithdrawalRejected,
 } from "./FinanceReport";
 export {
   balanceLabel,
