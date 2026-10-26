@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
+import { createHash } from "node:crypto";
 import {
   createWorkItemQueryImplementation,
   EDO_DECIDE_NAME,
@@ -10,12 +11,14 @@ import {
   WORK_ITEM_QUERY_NAME,
   WORK_ITEM_TRANSITION_NAME,
   workItemQueryContract,
+  workItemSemanticIdentity,
 } from "@cogni/ai-tools";
 import { parseWorkItemScores, type WorkItemScores } from "@cogni/work-items";
 import { describe, expect, it } from "vitest";
 import { LANGGRAPH_CATALOG } from "../../../src/catalog";
 import {
   createEvidenceVerificationGraph,
+  type EvidenceProgram,
   type EvidenceReceipt,
 } from "../../../src/graphs/evidence-verification/graph";
 import { createWorkPrioritizerGraph } from "../../../src/graphs/work-prioritizer/graph";
@@ -357,20 +360,32 @@ describe("read-only mission program", () => {
     reason: "Observed uncertainty represented honestly",
   });
   async function assess(
-    complete: (input: string, index: number) => string,
+    complete: (
+      input: string,
+      index: number
+    ) =>
+      | string
+      | {
+          toolCalls: {
+            id: string;
+            type: "function";
+            function: { name: string; arguments: string };
+          }[];
+        },
     work = evidence[1].value,
-    noHumanTask = false
+    noHumanTask = false,
+    identityOptions: {
+      program?: EvidenceProgram;
+      runId?: string;
+      threadId?: string;
+    } = {}
   ) {
     const calls: string[] = [];
     const reads: string[] = [];
     const runner = createInProcGraphRunner({
       createGraph: (opts) =>
         createEvidenceVerificationGraph(opts, {
-          ...MISSION_EVIDENCE_PROGRAM,
-          initialReads: [
-            { tool: GOAL_LIST_NAME, args: {} },
-            { tool: WORK_ITEM_QUERY_NAME, args: { ids: ["task.1"] } },
-          ],
+          ...(identityOptions.program ?? MISSION_EVIDENCE_PROGRAM),
         }),
       completionFn: (req) => {
         const input = JSON.stringify(req.messages);
@@ -378,7 +393,10 @@ describe("read-only mission program", () => {
         calls.push(input);
         return {
           stream: (async function* () {})(),
-          final: Promise.resolve({ ok: true as const, content }),
+          final: Promise.resolve({
+            ok: true as const,
+            ...(typeof content === "string" ? { content } : content),
+          }),
         };
       },
       toolContracts: [
@@ -390,7 +408,36 @@ describe("read-only mission program", () => {
         reads.push(name);
         if (name === GOAL_LIST_NAME)
           return { ok: true, value: evidence[0].value };
-        if (name === WORK_ITEM_QUERY_NAME) return { ok: true, value: work };
+        if (name === WORK_ITEM_QUERY_NAME) {
+          const page = work as { items: Record<string, unknown>[] };
+          return {
+            ok: true,
+            value: {
+              ...page,
+              paginationKnown: true,
+              items: await Promise.all(
+                page.items.map(async (row) => {
+                  const full = {
+                    type: "task",
+                    title: "target",
+                    status: "needs_implement",
+                    labels: [],
+                    assignees: [],
+                    updatedAt: "fixture",
+                    ...row,
+                  };
+                  return {
+                    ...full,
+                    semanticIdentity: await workItemSemanticIdentity(
+                      full as Parameters<typeof workItemSemanticIdentity>[0],
+                      { sourceUrl: self }
+                    ),
+                  };
+                })
+              ),
+            },
+          };
+        }
         const id = (args as { id: string }).id;
         return {
           ok: true,
@@ -410,13 +457,16 @@ describe("read-only mission program", () => {
         };
       },
       request: {
-        runId: "schema-repair",
+        runId: identityOptions.runId ?? "schema-repair",
         nodeId: "node-1",
         messages: noHumanTask
           ? []
           : [{ role: "user", content: "Assess task.1" }],
         configurable: {
           model: "existing-model",
+          ...(identityOptions.threadId
+            ? { thread_id: identityOptions.threadId }
+            : {}),
           toolIds: [...WORK_PRIORITIZER_TOOL_IDS],
         },
       },
@@ -426,6 +476,66 @@ describe("read-only mission program", () => {
     }
     return { result: await runner.final, calls, reads };
   }
+
+  it("binds actual frozen mission input to generic policy across independent runs", async () => {
+    const digest = (value: unknown) =>
+      createHash("sha256").update(JSON.stringify(value)).digest("hex");
+    let capture: { policyVersion: string; digest: string } | undefined;
+    const configured: EvidenceProgram = {
+      ...MISSION_EVIDENCE_PROGRAM,
+      freezeEvidence: (input) => {
+        const frozen = MISSION_EVIDENCE_PROGRAM.freezeEvidence?.(input);
+        if (!frozen) throw new Error("Expected mission capture policy");
+        capture = frozen.inputIdentity;
+        return frozen;
+      },
+    };
+    const run = (program: EvidenceProgram, id: string) =>
+      assess(
+        (_input, index) =>
+          ["facts", unknownProposal(unknownPayload), verdict][index] ?? verdict,
+        evidence[1].value,
+        false,
+        { program, runId: `run-${id}`, threadId: `thread-${id}` }
+      );
+    const first = await run(configured, "a");
+    expect(first.result.structuredOutput?.status).toBe("accepted");
+    expect(capture).toBeDefined();
+    const priorPolicy = {
+      program: { id: configured.id, version: configured.version },
+      assignment: configured.assignment,
+      criteria: configured.criteria,
+      payloadDescription: configured.payloadDescription,
+      capture,
+    };
+    expect(first.result.inputIdentity?.digest).not.toBe(digest(priorPolicy));
+    expect(first.result.inputIdentity?.digest).toBe(
+      digest({
+        factoryPromptVersion: "evidence-verification-stage-roles-v2",
+        ...priorPolicy,
+      })
+    );
+    const repeated = await run(configured, "b");
+    expect(repeated.result.inputIdentity).toEqual(first.result.inputIdentity);
+    expect(repeated.result.structuredOutput?.runId).not.toBe(
+      first.result.structuredOutput?.runId
+    );
+    for (const field of [
+      "version",
+      "assignment",
+      "criteria",
+      "payloadDescription",
+    ] as const) {
+      const changed = await run(
+        { ...configured, [field]: `${configured[field]} amended` },
+        field
+      );
+      expect(changed.result.structuredOutput?.status).toBe("accepted");
+      expect(changed.result.inputIdentity?.digest).not.toBe(
+        first.result.inputIdentity?.digest
+      );
+    }
+  });
 
   it.each([
     { rejectAgain: false, noHumanTask: false },
@@ -515,9 +625,24 @@ describe("read-only mission program", () => {
       expect(stage[0]?.content).toContain(
         "Unknown is zero. Sources must support the claim."
       );
-      expect(JSON.parse(stage[1]?.content ?? "{}").evidence[1].value).toEqual(
-        work
-      );
+      expect(JSON.parse(stage[1]?.content ?? "{}").evidence[1].value).toEqual({
+        count: 1,
+        coverage: "first-five-priority-rank-created-id-v1",
+        hasMore: false,
+        items: [
+          {
+            id: "task.1",
+            type: "task",
+            title: "target",
+            status: "needs_implement",
+            labels: [],
+            assignees: [],
+            scores,
+            sourceUrl: self,
+            summary: work.items[0]?.summary,
+          },
+        ],
+      });
     }
     expect(messages[0]?.[0]?.content).not.toContain(
       MISSION_EVIDENCE_PROGRAM.assignment
@@ -608,6 +733,58 @@ describe("read-only mission program", () => {
     expect(calls).toHaveLength(4);
   });
 
+  it("actual factory rereads frozen items without a second capability call", async () => {
+    const { result, calls, reads } = await assess((_input, index) => {
+      if (index === 0)
+        return {
+          toolCalls: [
+            {
+              id: "reread",
+              type: "function",
+              function: {
+                name: WORK_ITEM_QUERY_NAME,
+                arguments: JSON.stringify({ ids: ["task.1"] }),
+              },
+            },
+          ],
+        };
+      if (index === 1) return "Captured facts only";
+      if (index === 2) return unknownProposal(unknownPayload);
+      return verdict;
+    });
+    expect(result.structuredOutput?.status).toBe("accepted");
+    expect(result.inputIdentity?.digest).toMatch(/^[a-f0-9]{64}$/);
+    expect(reads.filter((name) => name === WORK_ITEM_QUERY_NAME)).toHaveLength(
+      1
+    );
+    expect(calls[0]).not.toContain('\\"revision\\"');
+    expect(result.structuredOutput).toMatchObject({
+      proposal: { payload: { items: [{ expectedRevision: 4 }] } },
+    });
+  });
+  it("actual factory refuses a new knowledge dependency before authoring", async () => {
+    const { result, calls, reads } = await assess(() => ({
+      toolCalls: [
+        {
+          id: "outside",
+          type: "function",
+          function: {
+            name: KNOWLEDGE_READ_NAME,
+            arguments: JSON.stringify({ id: "new-source" }),
+          },
+        },
+      ],
+    }));
+    expect(result.structuredOutput).toMatchObject({
+      status: "incomplete",
+      reason: "outside_snapshot",
+    });
+    expect(calls).toHaveLength(1);
+    expect(reads.filter((name) => name === KNOWLEDGE_READ_NAME)).toHaveLength(
+      2
+    );
+  });
+
   it("repairs unknown representation using canonical issue paths and actual inspected receipts", async () => {
     const invalid = proposed({
       scores: { ...scores, confidence: {} },
@@ -648,7 +825,7 @@ describe("read-only mission program", () => {
       return verdict;
     });
     expect(result.structuredOutput).toMatchObject({
-      program: { version: "3.2" },
+      program: { version: "4.2" },
       status: "accepted",
       revisions: 1,
       proposal: { payload: unknownPayload },

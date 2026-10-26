@@ -12,6 +12,7 @@
  * @public
  */
 
+import type { ManagedExecutionPort } from "@cogni/graph-execution-host";
 import type { ToolSourcePort } from "@cogni/ai-core";
 import type {
 	EdoCapability,
@@ -91,6 +92,7 @@ import {
 	DrizzleExecutionGrantUserAdapter,
 	DrizzleExecutionGrantWorkerAdapter,
 	DrizzleExecutionRequestAdapter,
+	DrizzleManagedExecutionAdapter,
 	DrizzleGovernanceStatusAdapter,
 	DrizzleGraphRunAdapter,
 	DrizzleScheduleRunReader,
@@ -236,6 +238,7 @@ export interface Container {
 	executionGrantPort: ExecutionGrantUserPort;
 	executionGrantWorkerPort: ExecutionGrantWorkerPort;
 	executionRequestPort: ExecutionRequestPort;
+	managedExecution: ManagedExecutionPort;
 	graphRunRepository: GraphRunRepository;
 	scheduleRunReader: import("@cogni/scheduler-core").ScheduleRunReader;
 	scheduleManager: ScheduleUserPort;
@@ -1033,6 +1036,7 @@ function createContainer(): Container {
 		executionGrantPort,
 		executionGrantWorkerPort,
 		executionRequestPort,
+		managedExecution: new DrizzleManagedExecutionAdapter(serviceDb, db),
 		graphRunRepository,
 		scheduleRunReader: new DrizzleScheduleRunReader(db),
 		scheduleManager,

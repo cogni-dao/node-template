@@ -9,6 +9,7 @@
  * - execution_grants: Durable authorization for scheduled runs (not user sessions)
  * - schedules: Cron-based graph execution definitions
  * - graph_runs: Single canonical run ledger for all execution types (SINGLE_RUN_LEDGER)
+ * - Canonical terminal results are run-owned; accepted inputs and request-to-run bindings are unique
  * - Per SCHEDULER_SPEC.md: job_key = scheduleId:scheduledFor for Graphile Worker
  * - UNIQUE(schedule_id, scheduled_for) WHERE schedule_id IS NOT NULL on graph_runs prevents duplicate run records per slot
  * Side-effects: none (schema definitions only)
@@ -198,8 +199,15 @@ export const graphRuns = pgTable(
     errorMessage: text("error_message"),
     /** Thread state key for conversation correlation — nullable (headless runs have none) */
     stateKey: text("state_key"),
+    /** Immutable receiver-owned terminal result; chat is its presentation. */
+    terminalResult: jsonb("terminal_result"),
+    /** Accepted semantic input identity; no_op/incomplete leave this null. */
+    acceptedInputKey: text("accepted_input_key"),
   },
   (table) => ({
+    acceptedInputUnique: uniqueIndex("graph_runs_accepted_input_unique")
+      .on(table.acceptedInputKey)
+      .where(sql`accepted_input_key IS NOT NULL`),
     scheduleIdx: index("graph_runs_schedule_idx").on(table.scheduleId),
     scheduledForIdx: index("graph_runs_scheduled_for_idx").on(
       table.scheduledFor
@@ -234,30 +242,44 @@ export const graphRuns = pgTable(
  * - On retry: if ok=null, execution in progress; if ok!=null, return cached outcome
  * If idempotency_key exists but request_hash differs, reject with 422 (payload mismatch).
  */
-export const executionRequests = pgTable("execution_requests", {
-  /** Primary key: idempotency key (e.g., `scheduleId:TemporalScheduledStartTime`) */
-  idempotencyKey: text("idempotency_key").primaryKey(),
-  /** SHA256 hash of graph identity plus exact request bytes */
-  requestHash: text("request_hash").notNull(),
-  /** GraphExecutorPort runId for correlation */
-  runId: text("run_id").notNull(),
-  /** Langfuse trace ID (optional, set when Langfuse is configured) */
-  traceId: text("trace_id"),
-  /**
-   * Execution outcome: true = success, false = error, null = pending.
-   * Pending state indicates execution in progress (not yet finalized).
-   */
-  ok: boolean("ok"),
-  /** AiExecutionErrorCode if ok=false, null if ok=true or pending */
-  errorCode: text("error_code"),
-  /** When request was first received */
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-  /** Last lease heartbeat or terminal update */
-  updatedAt: timestamp("updated_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-  /** Graph claim lease; null after finalization or for non-leased generic jobs */
-  leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
-});
+export const executionRequests = pgTable(
+  "execution_requests",
+  {
+    /** Primary key: idempotency key (e.g., `scheduleId:TemporalScheduledStartTime`) */
+    idempotencyKey: text("idempotency_key").primaryKey(),
+    /** SHA256 hash of graph identity plus exact request bytes */
+    requestHash: text("request_hash").notNull(),
+    /** GraphExecutorPort runId for correlation */
+    runId: text("run_id").notNull(),
+    /** Langfuse trace ID (optional, set when Langfuse is configured) */
+    traceId: text("trace_id"),
+    /**
+     * Execution outcome: true = success, false = error, null = pending.
+     * Pending state indicates execution in progress (not yet finalized).
+     */
+    ok: boolean("ok"),
+    /** AiExecutionErrorCode if ok=false, null if ok=true or pending */
+    errorCode: text("error_code"),
+    /** When request was first received */
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    /** Last lease heartbeat or terminal update */
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    /** Graph claim lease; null after finalization or for non-leased generic jobs */
+    leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+    /** Per receiver acquisition; never a public/model credential. */
+    claimToken: uuid("claim_token"),
+    /** One receiver request per canonical graph row; deletion preserves tombstone. */
+    graphRunId: uuid("graph_run_id").references(() => graphRuns.id, {
+      onDelete: "set null",
+    }),
+  },
+  (table) => ({
+    graphRunUnique: uniqueIndex("execution_requests_graph_run_unique")
+      .on(table.graphRunId)
+      .where(sql`graph_run_id IS NOT NULL`),
+  })
+);

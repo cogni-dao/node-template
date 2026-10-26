@@ -32,6 +32,17 @@ const program: EvidenceProgram = {
   payloadSchema: z.object({ decision: z.enum(["approve", "defer"]) }).strict(),
   payloadDescription: '{decision:"approve"|"defer"}',
 };
+const knowledgeProgram: EvidenceProgram = {
+  ...program,
+  id: "knowledge-review",
+  assignment:
+    "Compare the supplied knowledge sources and propose any contradictions.",
+  criteria:
+    "Check each claimed contradiction against the actual source contents. Accept no_change only when actual reads support the absence of contradictions and the contradictions array is empty. Never infer unread contents from a title.",
+  payloadSchema: z.object({ contradictions: z.array(z.string()) }).strict(),
+  payloadDescription: "{contradictions:string[]}",
+};
+
 const proposal = (decision = "defer") =>
   JSON.stringify({
     kind: "proposal",
@@ -62,6 +73,8 @@ function startExercise(
     source?: unknown;
     missingHost?: boolean;
     noHumanTask?: boolean;
+    runId?: string;
+    threadId?: string;
     toolIds?: string[];
     complete?: (messages: string, call: number) => CompletionResult;
     onCompletionStart?: () => void;
@@ -154,7 +167,7 @@ function startExercise(
       throw new Error("a forbidden effect reached the runner");
     },
     request: {
-      runId: "root-1",
+      runId: options.runId ?? "root-1",
       ...(options.missingHost ? {} : { nodeId: "node-1" }),
       messages: options.noHumanTask
         ? []
@@ -165,6 +178,7 @@ function startExercise(
           ],
       configurable: {
         model: "unchanged-model",
+        ...(options.threadId ? { thread_id: options.threadId } : {}),
         toolIds: options.toolIds ?? [
           ...p.readToolIds,
           WORK_ITEM_TRANSITION_NAME,
@@ -646,20 +660,85 @@ describe("evidence verification through the injected runner", () => {
     expect(calls).toHaveLength(3);
   });
 
+  it("binds generic policy for knowledge review across independent run and thread IDs", async () => {
+    const digest = (value: unknown) =>
+      createHash("sha256").update(JSON.stringify(value)).digest("hex");
+    let capture: { policyVersion: string; digest: string } | undefined;
+    const configured: EvidenceProgram = {
+      ...knowledgeProgram,
+      freezeEvidence: ({ evidence, sources, task }) => {
+        capture = {
+          policyVersion: "knowledge-test-v1",
+          digest: digest({ evidence, sources, task }),
+        };
+        return {
+          evidence: [...evidence],
+          sources: [...sources],
+          inputIdentity: capture,
+          read: () => {
+            throw new Error("No additional reads expected");
+          },
+          finalizeProposal: (value) => value,
+        };
+      },
+    };
+    const content = JSON.stringify({
+      kind: "no_change",
+      summary: "Compared source",
+      evidenceIds: ["e1"],
+      payload: { contradictions: [] },
+    });
+    const run = (p: EvidenceProgram, id: string) =>
+      exercise({
+        program: p,
+        runId: `run-${id}`,
+        threadId: `thread-${id}`,
+        replies: [text("source facts"), text(content), text(accept)],
+      });
+    const first = await run(configured, "a");
+    expect(first.result.structuredOutput?.status).toBe("no_op");
+    expect(capture).toBeDefined();
+    const priorPolicy = {
+      program: { id: configured.id, version: configured.version },
+      assignment: configured.assignment,
+      criteria: configured.criteria,
+      payloadDescription: configured.payloadDescription,
+      capture,
+    };
+    expect(first.result.inputIdentity?.digest).not.toBe(digest(priorPolicy));
+    expect(first.result.inputIdentity?.digest).toBe(
+      digest({
+        factoryPromptVersion: "evidence-verification-stage-roles-v2",
+        ...priorPolicy,
+      })
+    );
+    const repeated = await run(configured, "b");
+    expect(repeated.result.inputIdentity).toEqual(first.result.inputIdentity);
+    expect(repeated.result.structuredOutput?.runId).not.toBe(
+      first.result.structuredOutput?.runId
+    );
+    for (const field of [
+      "version",
+      "assignment",
+      "criteria",
+      "payloadDescription",
+    ] as const) {
+      const changed = await run(
+        { ...configured, [field]: `${configured[field]} amended` },
+        field
+      );
+      expect(changed.result.structuredOutput?.status).toBe("no_op");
+      expect(changed.result.inputIdentity?.digest).not.toBe(
+        first.result.inputIdentity?.digest
+      );
+    }
+  });
+
   it.each([
     false,
     true,
   ])("isolates a different program with and without a human task (noHumanTask=%s)", async (noHumanTask) => {
-    const second = {
-      ...program,
-      id: "knowledge-review",
-      assignment:
-        "Compare the supplied knowledge sources and propose any contradictions.",
-      criteria:
-        "Check each claimed contradiction against the actual source contents. Accept no_change only when actual reads support the absence of contradictions and the contradictions array is empty. Never infer unread contents from a title.",
-      payloadSchema: z.object({ contradictions: z.array(z.string()) }).strict(),
-      payloadDescription: "{contradictions:string[]}",
-    };
+    const second = knowledgeProgram;
     const content = JSON.stringify({
       kind: "no_change",
       summary: "No contradiction in supplied source",

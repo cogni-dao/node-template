@@ -36,7 +36,8 @@
     "drizzle-orm": "^0.44.7",
     "postgres": "^3.4.5",
     "type-fest": "^5.4.1",
-    "@cogni/scheduling": "workspace:@cogni-dao/scheduling@*"
+    "@cogni/scheduling": "workspace:@cogni-dao/scheduling@*",
+    "@cogni-dao/graph-execution": "workspace:*"
   },
   "devDependencies": {
     "tsup": "^8.5.1",

@@ -51,7 +51,7 @@ All contract files re-exported via `src/index.ts`. Selective re-export for `ai.c
 
 - `graphs.run.internal.v1.contract` — `POST /api/internal/graphs/{graphId}/runs` (executeGraphActivity)
 - `graph-runs.create.internal.v1.contract` — `POST /api/internal/graph-runs` (createGraphRunActivity)
-- `graph-runs.update.internal.v1.contract` — `PATCH /api/internal/graph-runs/{runId}` (updateGraphRunActivity)
+- `graph-runs.update.internal.v1.contract` — `PATCH /api/internal/graph-runs/{runId}` (updateGraphRunActivity); optional applied/reason reports receiver-owned completion deferral
 - `grants.validate.internal.v1.contract` — `POST /api/internal/grants/{grantId}/validate` (validateGrantActivity)
 
 All require `Authorization: Bearer ${SCHEDULER_API_TOKEN}`.

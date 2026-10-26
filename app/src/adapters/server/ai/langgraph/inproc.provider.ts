@@ -460,6 +460,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
       finishReason: "stop",
       ...(result.usage !== undefined && { usage: result.usage }),
       ...(result.content !== undefined && { content: result.content }),
+      ...(result.inputIdentity ? { inputIdentity: result.inputIdentity } : {}),
       ...(result.structuredOutput !== undefined && {
         structuredOutput: result.structuredOutput,
       }),

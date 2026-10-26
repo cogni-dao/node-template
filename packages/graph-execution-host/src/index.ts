@@ -37,17 +37,47 @@ export type {
 
 // --- Routing ---
 export { NamespaceGraphRouter } from "./routing/namespace-graph-router";
-// --- Durable chat terminal (TERMINAL_AFTER_PERSIST) ---
 
+// --- Completion request identity and reservation ---
 export {
-  persistAssistantThenPublishTerminal,
-  TerminalPublicationError,
-} from "./durable-chat-terminal";
+  CompletionIdempotencyConflictError,
+  type CompletionRequestPayload,
+  type CompletionReservationCheck,
+  type CompletionReservationPort,
+  completionRequestHash,
+  reserveCompletionRequest,
+  scopeExecutionIdempotencyKey,
+} from "./completion-request";
+
+// --- Durable chat terminal (TERMINAL_AFTER_PERSIST) ---
 export type {
   DurableChatTerminalDeps,
   DurableChatTerminalInput,
   DurableChatTerminalResult,
 } from "./durable-chat-terminal";
+export {
+  persistAssistantThenPublishTerminal,
+  TerminalPublicationError,
+} from "./durable-chat-terminal";
+export type {
+  CanonicalRunResult,
+  ExecutionAudience,
+  ManagedAcquireResult,
+  ManagedCommitResult,
+  ManagedExecutionBinding,
+  ManagedExecutionClaim,
+  ManagedExecutionPort,
+} from "./managed-execution";
+export {
+  canonicalJson,
+  canonicalTerminal,
+  completeManagedGraph,
+  MAX_CANONICAL_RESULT_BYTES,
+  publishCanonicalTerminal,
+  readCanonicalResult,
+  sameExecutionAudience,
+  shouldWithholdResultEvent,
+} from "./managed-execution";
 export type {
   AssembleAssistantMessageFn,
   IsThreadConflictErrorFn,
@@ -55,4 +85,3 @@ export type {
   RedactMessagesFn,
   ThreadPersistenceLike,
 } from "./ports/thread-persistence.port";
-

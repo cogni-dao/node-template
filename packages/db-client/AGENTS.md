@@ -48,7 +48,7 @@ Database client factory and Drizzle adapter implementations for scheduling and l
   - `DrizzleScheduleRunReader` — compatibility binding from app-role `db.$client` to published scheduling readback
   - `DrizzleScheduleUserAdapter`, `DrizzleScheduleWorkerAdapter` — schedule adapters (split by trust boundary)
   - `DrizzleExecutionGrantUserAdapter`, `DrizzleExecutionGrantWorkerAdapter` — grant adapters (split by trust boundary)
-  - `DrizzleExecutionRequestAdapter`, `DrizzleGraphRunAdapter` (canonical), `DrizzleScheduleRunAdapter` (deprecated alias)
+  - `DrizzleManagedExecutionAdapter` (fenced receiver/result transaction), `DrizzleExecutionRequestAdapter`, `DrizzleGraphRunAdapter` (canonical), `DrizzleScheduleRunAdapter` (deprecated alias)
   - `DrizzleAttributionAdapter` — ledger adapter (shared by app + worker, uses serviceDb/BYPASSRLS). Constructor takes `scopeId`; all epochId-based methods enforce scope via `resolveEpochScoped()`, and settlement lifecycle reads require matching node + scope (SCOPE_GATED_QUERIES).
   - Re-exports from `@cogni/db-schema` (tables, types)
 - **Exports (sub-path `@cogni/db-client/service`):**
@@ -102,3 +102,4 @@ pnpm --filter @cogni/db-client build
 Pool options inject a positive integer `max` and optional `applicationName`. Generic defaults remain 10; owning runtimes choose their aggregate role budgets.
 
 Last reviewed: 2026-10-24 (bug.5529).
+Managed execution receives serviceDb for receiver transactions and appDb for owner readback through withTenantScope/userActor. It validates persisted schedule/grant/billing/thread binding before acquisition and recognizes only the deployed api:<runId> alias for a verified facade triggerRef reservation. Public readback retains requestedBy equality in addition to RLS.

@@ -73,7 +73,10 @@ export interface GraphRunRepository {
     status: "success" | "error" | "timeout" | "skipped" | "cancelled",
     errorMessage?: string,
     errorCode?: string
-  ) => Promise<void>;
+  ) => Promise<void | {
+    applied: boolean;
+    reason: "applied" | "receiver_owned" | "canonical";
+  }>;
 
   /**
    * Retrieves a run by its runId (correlation ID, not PK).

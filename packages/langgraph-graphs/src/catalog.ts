@@ -14,6 +14,7 @@
  * @public
  */
 
+import { parseMissionEvidenceResult } from "./graphs/work-prioritizer/program";
 import {
   AUTORESEARCH_REGISTRY_SWARM_GRAPH_NAME,
   AUTORESEARCH_SINGLE_LANE_GRAPH_NAME,
@@ -90,6 +91,10 @@ export interface CatalogEntry {
   readonly graphFactory: CreateGraphFn;
   /** Stream only the final validated assistant result; preserve tool/usage events. */
   readonly finalOnly?: boolean;
+  /** Receiver commits canonical typed output before presentation. */
+  readonly resultRequired?: boolean;
+  /** Internal trusted schema callback; never part of the public discovery DTO. */
+  readonly parseResult?: (output: unknown) => Record<string, unknown>;
   /** Optional system prompt for operator graphs (catalog-driven, not hardcoded). */
   readonly systemPrompt?: string;
   /**
@@ -269,6 +274,8 @@ export const NODE_LANGGRAPH_CATALOG = {
     toolIds: WORK_PRIORITIZER_TOOL_IDS as readonly string[],
     graphFactory: createWorkPrioritizerGraph,
     finalOnly: true,
+    resultRequired: true,
+    parseResult: parseMissionEvidenceResult,
     report: { event: "ai.work_prioritizer.cycle" },
   },
 } as const;
