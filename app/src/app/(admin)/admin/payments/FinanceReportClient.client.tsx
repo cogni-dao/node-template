@@ -18,6 +18,8 @@ import { useRouter } from "next/navigation";
 
 import {
 	Button,
+	Card,
+	CardContent,
 	Dialog,
 	DialogContent,
 	DialogDescription,
@@ -54,6 +56,8 @@ export async function fundSteward(
 const kit = {
 	Button,
 	Input,
+	Card,
+	CardContent,
 	Dialog,
 	DialogContent,
 	DialogHeader,

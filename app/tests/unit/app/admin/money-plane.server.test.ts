@@ -52,6 +52,8 @@ vi.mock("@/components", async () => {
 		Button: ({ children, asChild, variant: _v, size: _s, ...props }: Props) =>
 			asChild ? children : createElement("button", { type: "button", ...props }, children),
 		Input: (props: Record<string, unknown>) => createElement("input", props),
+		Card: ({ children, className }: Props) => createElement("div", { className }, children),
+		CardContent: ({ children, className }: Props) => createElement("div", { className }, children),
 		PageContainer: ({ children }: Props) => createElement("div", null, children),
 	};
 });
@@ -404,7 +406,10 @@ describe("the Financials page and its package binding", () => {
 	it("binds this node's kit: groups, rails, Top up link and the inline fund-steward control", () => {
 		render(createElement(FinanceReportClient, { report: liveShapedPreview as NodeFinanceSnapshot }));
 		expect(screen.getByRole("heading", { level: 1, name: "Financials" })).toBeTruthy();
-		expect(screen.getByText("Treasury $74.52 · Income $0.00/day")).toBeTruthy();
+		expect(document.querySelector("[data-finance-stat='Treasury']")?.textContent).toBe("$74.52");
+		expect(document.querySelector("[data-finance-stat='Income']")?.textContent).toBe("$0.00/day");
+		expect(document.querySelector("[data-finance-stat='Burn']")?.textContent).toBe("—");
+		expect(screen.getByText("trailing 30d")).toBeTruthy();
 		const table = screen.getByRole("table");
 		expect(Array.from(table.querySelectorAll("tr[data-finance-group]")).map((tr) => tr.getAttribute("data-finance-group"))).toEqual([
 			"Income",
