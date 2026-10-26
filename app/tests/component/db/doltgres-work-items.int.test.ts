@@ -139,6 +139,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 									),
 								});
 							}
+		try {
 		// Bounded seed batches, not 15625 version-control branch mutations.
 		for (let offset = 0; offset < fixtures.length; offset += 250) {
 			const batch = fixtures.slice(offset, offset + 250);
@@ -162,7 +163,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			"true",
 			"{}",
 			'{"goal":{"v":"5"}}',
-			'{"goal":{"v":1e1000},"agent":{"v":5}}',
+			'{"goal":{"v":1e100},"agent":{"v":5}}',
 		];
 		const valid = fixtures[fixtures.length - 1]?.scores;
 		if (!valid) throw new Error("valid fixture missing");
@@ -174,6 +175,10 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			);
 			expect(rows[0]?.native_rank, `invalid fixture ${i}`).toBeNull();
 		}
+		// 1e1000 cannot exist in this engine's JSONB storage. Check that input
+		// boundary separately rather than attributing its rejection to rank SQL.
+		await expect(sql.unsafe(`SELECT '{"goal":{"v":1e1000},"agent":{"v":5}}'::JSONB`)).rejects.toThrow(/invalid input syntax for type json/);
+		console.info("rank_query_native_parity", JSON.stringify({image:DOLTGRES_IMAGE,validCombinations:values.length,invalidFixtures:invalids.length,unrepresentableJsonRejected:true}));
 		const queries: string[] = [];
 		const readSql = postgres(dbUrl, { max: 1, fetch_types: false });
 		const tracedRead = new Proxy(readSql, {
@@ -326,9 +331,10 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 		} finally {
 			await readSql.end({ timeout: 5 });
 		}
-		await sql.unsafe(
-			"DELETE FROM work_items WHERE node IN ('rank-native','text-native')",
-		);
+		} finally {
+			// Cleanup also runs when seed/JSON qualification fails before reader setup.
+			await sql.unsafe("DELETE FROM work_items WHERE node IN ('rank-native','text-native')");
+		}
 	});
 
 	it.each([
