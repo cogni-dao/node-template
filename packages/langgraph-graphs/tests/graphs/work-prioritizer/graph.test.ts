@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
+import { createHash } from "node:crypto";
 import {
   createWorkItemQueryImplementation,
   EDO_DECIDE_NAME,
@@ -17,6 +18,7 @@ import { describe, expect, it } from "vitest";
 import { LANGGRAPH_CATALOG } from "../../../src/catalog";
 import {
   createEvidenceVerificationGraph,
+  type EvidenceProgram,
   type EvidenceReceipt,
 } from "../../../src/graphs/evidence-verification/graph";
 import { createWorkPrioritizerGraph } from "../../../src/graphs/work-prioritizer/graph";
@@ -196,16 +198,13 @@ describe("read-only mission program", () => {
       ])
     ),
     { goal: { v: 0 } },
-  ])(
-    "delegates malformed canonical score objects and six-axis completeness to schema rejection",
-    (invalid) => {
-      expect(
-        MISSION_EVIDENCE_PROGRAM.payloadSchema.safeParse(
-          proposed({ scores: invalid })
-        ).success
-      ).toBe(false);
-    }
-  );
+  ])("delegates malformed canonical score objects and six-axis completeness to schema rejection", (invalid) => {
+    expect(
+      MISSION_EVIDENCE_PROGRAM.payloadSchema.safeParse(
+        proposed({ scores: invalid })
+      ).success
+    ).toBe(false);
+  });
 
   it("accepts unknown zero and rejects mutation fields in proposals", () => {
     const p = proposed({ scores: { ...scores, goal: { v: 0 } } });
@@ -255,18 +254,18 @@ describe("read-only mission program", () => {
     ).toBe("unchanged_score_proposal");
   });
 
-  it.each(["https://unread.example/facts", self])(
-    "rejects unread or self justification %s",
-    (ev) => {
-      expect(
-        MISSION_EVIDENCE_PROGRAM.validate?.(
-          proposed({ scores: { ...scores, goal: { v: 4, ev } } }),
-          evidence,
-          "proposal"
-        )
-      ).toBe("justification_not_independently_read");
-    }
-  );
+  it.each([
+    "https://unread.example/facts",
+    self,
+  ])("rejects unread or self justification %s", (ev) => {
+    expect(
+      MISSION_EVIDENCE_PROGRAM.validate?.(
+        proposed({ scores: { ...scores, goal: { v: 4, ev } } }),
+        evidence,
+        "proposal"
+      )
+    ).toBe("justification_not_independently_read");
+  });
 
   it("rejects missing per-axis receipts and unavailable source provenance", () => {
     expect(
@@ -374,15 +373,19 @@ describe("read-only mission program", () => {
           }[];
         },
     work = evidence[1].value,
-    noHumanTask = false
+    noHumanTask = false,
+    identityOptions: {
+      program?: EvidenceProgram;
+      runId?: string;
+      threadId?: string;
+    } = {}
   ) {
     const calls: string[] = [];
     const reads: string[] = [];
     const runner = createInProcGraphRunner({
       createGraph: (opts) =>
         createEvidenceVerificationGraph(opts, {
-          ...MISSION_EVIDENCE_PROGRAM,
-          initialReads: MISSION_EVIDENCE_PROGRAM.initialReads,
+          ...(identityOptions.program ?? MISSION_EVIDENCE_PROGRAM),
         }),
       completionFn: (req) => {
         const input = JSON.stringify(req.messages);
@@ -454,13 +457,16 @@ describe("read-only mission program", () => {
         };
       },
       request: {
-        runId: "schema-repair",
+        runId: identityOptions.runId ?? "schema-repair",
         nodeId: "node-1",
         messages: noHumanTask
           ? []
           : [{ role: "user", content: "Assess task.1" }],
         configurable: {
           model: "existing-model",
+          ...(identityOptions.threadId
+            ? { thread_id: identityOptions.threadId }
+            : {}),
           toolIds: [...WORK_PRIORITIZER_TOOL_IDS],
         },
       },
@@ -470,6 +476,66 @@ describe("read-only mission program", () => {
     }
     return { result: await runner.final, calls, reads };
   }
+
+  it("binds actual frozen mission input to generic policy across independent runs", async () => {
+    const digest = (value: unknown) =>
+      createHash("sha256").update(JSON.stringify(value)).digest("hex");
+    let capture: { policyVersion: string; digest: string } | undefined;
+    const configured: EvidenceProgram = {
+      ...MISSION_EVIDENCE_PROGRAM,
+      freezeEvidence: (input) => {
+        const frozen = MISSION_EVIDENCE_PROGRAM.freezeEvidence?.(input);
+        if (!frozen) throw new Error("Expected mission capture policy");
+        capture = frozen.inputIdentity;
+        return frozen;
+      },
+    };
+    const run = (program: EvidenceProgram, id: string) =>
+      assess(
+        (_input, index) =>
+          ["facts", unknownProposal(unknownPayload), verdict][index] ?? verdict,
+        evidence[1].value,
+        false,
+        { program, runId: `run-${id}`, threadId: `thread-${id}` }
+      );
+    const first = await run(configured, "a");
+    expect(first.result.structuredOutput?.status).toBe("accepted");
+    expect(capture).toBeDefined();
+    const priorPolicy = {
+      program: { id: configured.id, version: configured.version },
+      assignment: configured.assignment,
+      criteria: configured.criteria,
+      payloadDescription: configured.payloadDescription,
+      capture,
+    };
+    expect(first.result.inputIdentity?.digest).not.toBe(digest(priorPolicy));
+    expect(first.result.inputIdentity?.digest).toBe(
+      digest({
+        factoryPromptVersion: "evidence-verification-stage-roles-v2",
+        ...priorPolicy,
+      })
+    );
+    const repeated = await run(configured, "b");
+    expect(repeated.result.inputIdentity).toEqual(first.result.inputIdentity);
+    expect(repeated.result.structuredOutput?.runId).not.toBe(
+      first.result.structuredOutput?.runId
+    );
+    for (const field of [
+      "version",
+      "assignment",
+      "criteria",
+      "payloadDescription",
+    ] as const) {
+      const changed = await run(
+        { ...configured, [field]: `${configured[field]} amended` },
+        field
+      );
+      expect(changed.result.structuredOutput?.status).toBe("accepted");
+      expect(changed.result.inputIdentity?.digest).not.toBe(
+        first.result.inputIdentity?.digest
+      );
+    }
+  });
 
   it.each([
     { rejectAgain: false, noHumanTask: false },
@@ -559,9 +625,24 @@ describe("read-only mission program", () => {
       expect(stage[0]?.content).toContain(
         "Unknown is zero. Sources must support the claim."
       );
-      expect(JSON.parse(stage[1]?.content ?? "{}").evidence[1].value).toEqual(
-        work
-      );
+      expect(JSON.parse(stage[1]?.content ?? "{}").evidence[1].value).toEqual({
+        count: 1,
+        coverage: "first-five-priority-rank-created-id-v1",
+        hasMore: false,
+        items: [
+          {
+            id: "task.1",
+            type: "task",
+            title: "target",
+            status: "needs_implement",
+            labels: [],
+            assignees: [],
+            scores,
+            sourceUrl: self,
+            summary: work.items[0]?.summary,
+          },
+        ],
+      });
     }
     expect(messages[0]?.[0]?.content).not.toContain(
       MISSION_EVIDENCE_PROGRAM.assignment
@@ -759,32 +840,32 @@ describe("read-only mission program", () => {
     ).toBe(true);
   });
 
-  it.each([false, true])(
-    "self citations require a newly compliant model artifact (leftInvalid=%s)",
-    async (leftInvalid) => {
-      const selfCited = proposed({
-        scores: { ...scores, goal: { v: 4, ev: self } },
-      });
-      const { result, calls } = await assess((input, index) => {
-        if (index === 0) return "facts";
-        if (index === 1) return unknownProposal(selfCited);
-        if (index === 2) {
-          const repair = JSON.parse(JSON.parse(input).at(-1).content);
-          expect(repair.rejectedProposal.payload).toEqual(selfCited);
-          expect(repair.feedback).toContain(
-            "justification_not_independently_read"
-          );
-          return unknownProposal(leftInvalid ? selfCited : unknownPayload);
-        }
-        return verdict;
-      });
-      expect(result.structuredOutput?.status).toBe(
-        leftInvalid ? "incomplete" : "accepted"
-      );
-      expect(result.structuredOutput?.revisions).toBe(1);
-      expect(calls).toHaveLength(leftInvalid ? 3 : 4);
-    }
-  );
+  it.each([
+    false,
+    true,
+  ])("self citations require a newly compliant model artifact (leftInvalid=%s)", async (leftInvalid) => {
+    const selfCited = proposed({
+      scores: { ...scores, goal: { v: 4, ev: self } },
+    });
+    const { result, calls } = await assess((input, index) => {
+      if (index === 0) return "facts";
+      if (index === 1) return unknownProposal(selfCited);
+      if (index === 2) {
+        const repair = JSON.parse(JSON.parse(input).at(-1).content);
+        expect(repair.rejectedProposal.payload).toEqual(selfCited);
+        expect(repair.feedback).toContain(
+          "justification_not_independently_read"
+        );
+        return unknownProposal(leftInvalid ? selfCited : unknownPayload);
+      }
+      return verdict;
+    });
+    expect(result.structuredOutput?.status).toBe(
+      leftInvalid ? "incomplete" : "accepted"
+    );
+    expect(result.structuredOutput?.revisions).toBe(1);
+    expect(calls).toHaveLength(leftInvalid ? 3 : 4);
+  });
 
   it("stops when shape repair leaves a self citation, without a second repair or verifier", async () => {
     const invalid = proposed({
@@ -807,33 +888,33 @@ describe("read-only mission program", () => {
     expect(calls).toHaveLength(3);
   });
 
-  it.each([true, false])(
-    "never repairs incomplete or invalid stored score evidence (truncated=%s)",
-    async (truncated) => {
-      const work = {
-        items: [
-          {
-            id: "task.1",
-            revision: 4,
-            sourceUrl: self,
-            scores: truncated ? scores : { broken: {} },
-            ...(truncated ? { scoresTruncated: true } : {}),
-          },
-        ],
-      };
-      const { result, calls } = await assess(
-        (_input, index) =>
-          index === 0 ? "facts" : unknownProposal(unknownPayload),
-        work
-      );
-      expect(result.structuredOutput).toMatchObject({
-        status: "incomplete",
-        reason: "current_scores_incomplete_or_invalid",
-        revisions: 0,
-      });
-      expect(calls).toHaveLength(2);
-    }
-  );
+  it.each([
+    true,
+    false,
+  ])("never repairs incomplete or invalid stored score evidence (truncated=%s)", async (truncated) => {
+    const work = {
+      items: [
+        {
+          id: "task.1",
+          revision: 4,
+          sourceUrl: self,
+          scores: truncated ? scores : { broken: {} },
+          ...(truncated ? { scoresTruncated: true } : {}),
+        },
+      ],
+    };
+    const { result, calls } = await assess(
+      (_input, index) =>
+        index === 0 ? "facts" : unknownProposal(unknownPayload),
+      work
+    );
+    expect(result.structuredOutput).toMatchObject({
+      status: "incomplete",
+      reason: "current_scores_incomplete_or_invalid",
+      revisions: 0,
+    });
+    expect(calls).toHaveLength(2);
+  });
 
   async function queried(stored: WorkItemScores) {
     const tool = createWorkItemQueryImplementation({

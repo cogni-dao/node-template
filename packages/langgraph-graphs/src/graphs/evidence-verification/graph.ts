@@ -34,6 +34,10 @@ import {
 import { z } from "zod";
 import type { CreateReactAgentGraphOptions } from "../types";
 
+// Bump when factory role, authority or output-policy prompts change.
+// Program versions alone cannot invalidate every configured program.
+const FACTORY_PROMPT_VERSION = "evidence-verification-stage-roles-v2";
+
 const READ_TOOLS = new Set<string>([
   KNOWLEDGE_READ_NAME,
   GOAL_LIST_NAME,
@@ -659,6 +663,7 @@ export function createEvidenceVerificationGraph(
                   policyVersion: frozen.inputIdentity.policyVersion,
                   digest: hash(
                     JSON.stringify({
+                      factoryPromptVersion: FACTORY_PROMPT_VERSION,
                       program: { id: program.id, version: program.version },
                       assignment: program.assignment,
                       criteria: program.criteria,
