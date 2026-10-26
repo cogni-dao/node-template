@@ -202,21 +202,3 @@ export const brandText = cva("tracking-tight", {
 export type HeadingLevel = VariantProps<typeof heading>["level"];
 export type BrandTextSize = VariantProps<typeof brandText>["size"];
 export type BrandTextTone = VariantProps<typeof brandText>["tone"];
-
-/** Compact administrative typography using the existing semantic theme. */
-export const adminText = cva("min-w-0 wrap-anywhere", {
-  variants: {
-    variant: {
-      title: "font-semibold text-2xl tracking-tight text-foreground",
-      section: "font-semibold text-lg text-foreground",
-      value:
-        "font-semibold text-2xl tracking-tight tabular-nums text-foreground",
-      label: "font-medium text-sm text-foreground",
-      body: "text-sm text-foreground",
-      muted: "text-sm text-muted-foreground",
-      detail: "text-xs text-muted-foreground",
-      numeric: "text-sm tabular-nums text-foreground",
-    },
-  },
-  defaultVariants: { variant: "body" },
-});

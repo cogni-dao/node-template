@@ -6,6 +6,7 @@
  * Purpose: Read the OpenRouter account's remaining credit (total_credits − total_usage) as a prepaid money-plane row.
  * Scope: One GET /api/v1/credits through an injected fetch. Does not derive burn: the consumer supplies a measured `burnPerDay` (e.g. a scheduler differencing `usageTotal` between runs) or the row stays UNKNOWN `burn_unmeasured`.
  * Invariants: READERS_NEVER_THROW. UNREADABLE_IS_UNKNOWN — no key ⇒ `unconfigured`, HTTP/body failure ⇒ `unreadable`, unmeasured burn ⇒ UNKNOWN unless the balance is already exhausted (RED). PACKAGE_LEAF_NO_ENV — the key arrives as an argument. Per-key usage is not used as burn (it undercounts account-wide spend).
+ *   MANAGEMENT_KEY_ONLY — `/credits` is account-wide and OpenRouter requires a management key for it; never pass an inference key (task.5361). Node compositions leave the row UNKNOWN until a scoped read exists.
  * Side-effects: IO (HTTPS GET via injected fetch)
  * Links: https://openrouter.ai/docs/api-reference/get-credits, https://cognidao.org/knowledge/money-plane-snapshot-design
  * @public

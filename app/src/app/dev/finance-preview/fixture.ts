@@ -122,7 +122,7 @@ function income(perDay: number, purchases: number, totalUsd: number): MoneyPlane
 		runwayDays: null,
 		grade: "INFO",
 		observedAt,
-		source: "payment_attempts · CREDITED · trailing 30 days",
+		source: "payment_events · CREDITED · trailing 30 days",
 		sourceObservedAt: observedAt,
 		freshness: "current",
 		detail: `${purchases} purchases · ${totalUsd.toFixed(2)} USD in 30d`,
@@ -173,7 +173,7 @@ function model(rows: MoneyPlaneRow[], worst: MoneyPlaneRow["grade"]): NodeFinanc
 		worst,
 		treasuryPlane: "base:dao-treasury",
 		rows: projected,
-		summary: summarize({ rows: projected }, { treasuryPlane: "base:dao-treasury" }),
+		summary: summarize({ rows: projected }, { treasuryPlane: "base:dao-treasury", windowDays: 30 }),
 		stewardWalletUrl: "https://basescan.org/address/0x3333333333333333333333333333333333333333",
 	};
 }

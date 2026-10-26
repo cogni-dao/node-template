@@ -39,8 +39,8 @@ export {
 } from "./readers/base-wallet";
 export {
   CREDIT_PURCHASE_INCOME_PLANE,
-  type CreditPurchase,
   type CreditPurchaseIncomeReaderOptions,
+  type CreditPurchaseTotals,
   creditPurchaseIncomeReader,
 } from "./readers/credit-purchase-income";
 export {
@@ -61,6 +61,10 @@ export {
   summarize,
 } from "./report";
 export { type SnapshotOptions, takeSnapshot } from "./snapshot";
+export {
+  isStewardWithdrawalRejected,
+  StewardWithdrawalRejected,
+} from "./steward";
 export type {
   FetchLike,
   FetchResponseLike,

@@ -12,12 +12,12 @@
  * Links: src/adapters/server/finance/credit-purchase-income.query.ts, @cogni/money-plane creditPurchaseIncomeReader
  * @internal
  */
-import type { CreditPurchase } from "@cogni/money-plane";
+import type { CreditPurchaseTotals } from "@cogni/money-plane";
 
 import { getServiceDb } from "@/adapters/server/db/drizzle.service-client";
 import { creditedPurchasesQuery } from "@/adapters/server/finance/credit-purchase-income.query";
 
-export type CreditPurchasesQuery = (since: Date) => Promise<readonly CreditPurchase[]>;
+export type CreditPurchasesQuery = (since: Date, signal: AbortSignal) => Promise<CreditPurchaseTotals>;
 
 /** The query the package income reader runs, or null when no service database is reachable. */
 export function creditPurchasesQuery(): CreditPurchasesQuery | null {

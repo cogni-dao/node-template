@@ -26,6 +26,7 @@ import {
 
 import { usdBalance, usdBurn } from "../fx";
 import type { ReportSummary } from "../report";
+import { isStewardWithdrawalRejected } from "../steward";
 import type { MoneyPlaneRow, PayAction, Rail } from "../types";
 import {
   balanceLabel,
@@ -66,17 +67,14 @@ export interface FinanceKit {
   DialogTrigger: AnyComponent;
 }
 
-/** The server answered and refused the withdrawal; nothing was sent, so the user may retry. */
-export class StewardWithdrawalRejected extends Error {
-  override readonly name = "StewardWithdrawalRejected";
-}
-
 export interface FinanceActions {
   /**
    * The amount-only steward withdrawal; resolves with the tx hash. Throw `StewardWithdrawalRejected` for an explicit
    * server refusal (retry allowed); any other throw means the outcome is unknown and the control locks until checked.
    */
-  fundSteward: (amountUsd: number) => Promise<{ txHash: string | null }>;
+  fundSteward: (
+    amountUsd: number
+  ) => Promise<{ txHash: string | null; confirmed?: boolean }>;
   /** Re-read the report (e.g. router.refresh). Omit to hide the button. */
   refresh?: () => void | Promise<void>;
 }
@@ -195,7 +193,6 @@ function LineDialog({
             "h-auto min-w-0 flex-col items-start whitespace-normal p-0 text-left text-foreground no-underline hover:underline",
             child && "font-normal"
           )}
-          aria-label={row.label}
         >
           <span className="block font-medium text-sm">{row.label}</span>
           {payer && (
@@ -291,6 +288,7 @@ function FundSteward({
   const [amount, setAmount] = useState("1");
   const [phase, setPhase] = useState<Phase>("idle");
   const [txHash, setTxHash] = useState<string | null>(null);
+  const [confirmed, setConfirmed] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const valid = Number(amount) > 0 && Number.isFinite(Number(amount));
   async function submit() {
@@ -300,18 +298,23 @@ function FundSteward({
     try {
       const result = await fundSteward(Number(amount));
       setTxHash(result.txHash);
+      setConfirmed(result.confirmed !== false);
       setPhase("success");
     } catch (err) {
-      if (err instanceof StewardWithdrawalRejected) {
-        setError(err.message);
+      if (isStewardWithdrawalRejected(err)) {
+        setError(err instanceof Error ? err.message : String(err));
         setPhase("rejected");
       } else {
         // The request may have been accepted before the response was lost; never allow a blind second send.
+        setError(err instanceof Error && err.message ? err.message : null);
         setPhase("unknown");
       }
     }
   }
   const locked = phase === "submitting" || phase === "unknown";
+  const alertId = `${id}-alert`;
+  const describedBy =
+    phase === "unknown" || phase === "rejected" ? alertId : undefined;
   return (
     <div className="flex min-w-0 flex-col gap-1">
       <div className="flex items-center gap-2">
@@ -321,10 +324,11 @@ function FundSteward({
         <kit.Input
           id={id}
           type="number"
-          min="0"
+          min="0.01"
           step="0.01"
           inputMode="decimal"
           aria-label="Fund steward (USD)"
+          aria-describedby={describedBy}
           className="h-9 w-20 text-sm tabular-nums"
           value={amount}
           onChange={(e: { target: { value: string } }) =>
@@ -337,30 +341,38 @@ function FundSteward({
           className="h-9 whitespace-nowrap"
           onClick={submit}
           disabled={locked || !valid}
+          aria-describedby={describedBy}
         >
           {phase === "submitting" ? "Funding…" : "Fund steward"}
         </kit.Button>
       </div>
       {phase === "success" && txHash ? (
-        <a
-          href={`https://basescan.org/tx/${txHash}`}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-1 font-mono text-success text-xs hover:underline"
-        >
-          Sent {txHash.slice(0, 6)}…{txHash.slice(-4)}
-          <ExternalIcon />
-        </a>
+        <output aria-live="polite" className="block">
+          <a
+            href={`https://basescan.org/tx/${txHash}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 font-mono text-success text-xs hover:underline"
+          >
+            Sent {txHash.slice(0, 6)}…{txHash.slice(-4)}
+            <ExternalIcon />
+          </a>
+          {!confirmed ? (
+            <span className="ml-2 text-muted-foreground text-xs">
+              Confirming…
+            </span>
+          ) : null}
+        </output>
       ) : null}
       {phase === "rejected" && error ? (
-        <span role="alert" className="text-destructive text-xs">
+        <span id={alertId} role="alert" className="text-destructive text-xs">
           {error}
         </span>
       ) : null}
       {phase === "unknown" ? (
-        <div role="alert" className="flex flex-wrap items-center gap-2 text-warning text-xs">
-          <span>
-            Result unknown — check the steward wallet
+        <div className="flex flex-wrap items-center gap-2">
+          <span id={alertId} role="alert" className="text-warning text-xs">
+            Result unknown{error ? ` (${error})` : ""} — check the steward wallet
             {stewardWalletUrl ? (
               <>
                 {" "}
@@ -556,7 +568,7 @@ function StatCards({
       label: "Cash received",
       value:
         summary.incomePerDay === null ? DASH : `${usd(summary.incomePerDay)}/day`,
-      sub: "credit purchases · 30d",
+      sub: `credit purchases · ${summary.windowDays}d`,
     },
     {
       label: "Burn",

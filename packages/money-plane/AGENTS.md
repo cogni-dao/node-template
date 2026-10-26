@@ -39,10 +39,11 @@ No runtime dependencies, no env reads, no viem. `fetch` is injected (`FetchLike`
 - Policy: `RUNWAY_DAYS`, `SPEND_USD_PER_MONTH`, `EXPIRY_DAYS`, `ESCROW_DAYS`, `ESCROW_CALIBRATED`
 - Grading: `gradeRunway`, `gradeSpend`, `gradeExpiry`, `worstGrade`, `applyGradingFloor`
 - Runner: `takeSnapshot(readers, { timeoutMs, now? })`
-- Readers: `openRouterReader`, `baseWalletReader`, `creditPurchaseIncomeReader({ query })`; helpers `unknownRow`, `safeDetail`
-- FX + summary: `fetchEcbRate(fetch, pair)`, `toUsd(row, rates)`, `usdBalance`, `usdBurn`, `summarize(snapshot, { treasuryPlane })` → `{ treasuryUsd, incomePerDay, burnPerDay, shortestRunway, ratesUsed, unconverted }`
+- Readers: `openRouterReader`, `baseWalletReader`, `creditPurchaseIncomeReader({ query: (since, signal) => { totalUsdCents, count }, windowDays?, basis?: "credited" | "intent" })`; helpers `unknownRow`, `safeDetail`
+- Steward: `StewardWithdrawalRejected` (core, no React) + `isStewardWithdrawalRejected` — an explicit server refusal; any other failure after a POST is an unknown outcome
+- FX + summary: `fetchEcbRate(fetch, pair)`, `toUsd(row, rates)`, `usdBalance`, `usdBurn`, `summarize(snapshot, { treasuryPlane, windowDays? })` → `{ treasuryUsd, incomePerDay, burnPerDay, runwayDays (treasury ÷ net burn), nextDeadline, windowDays, ratesUsed, unconverted }`
 - Row model additions (v6): `kind: "income"`, `usd`, `rail`, `children` (one level), `parts`, `note`
-- React (`./react`): `FinanceReport({ report, summary, kit, actions, formatTime?, thisNode? })`; `kit` = Button, Input, Card, CardContent, Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogTrigger; `actions` = fundSteward(amountUsd), refresh?. Ship `tailwind-source.css` so consumers scan its classes.
+- React (`./react`): `FinanceReport({ report: { takenAt, rows, treasuryPlane?, stewardWalletUrl? }, summary, kit, actions, formatTime?, thisNode? })`; `kit` = Button, Input, Card, CardContent, Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogTrigger; `actions` = fundSteward(amountUsd), refresh?. Ship `tailwind-source.css` so consumers scan its classes.
 
 ## Invariants
 
@@ -50,12 +51,12 @@ No runtime dependencies, no env reads, no viem. `fetch` is injected (`FetchLike`
 - READERS_NEVER_THROW — readers return UNKNOWN rows; `takeSnapshot` additionally converts throws and timeouts and never rejects.
 - EVIDENCE_IS_EXPLICIT — sourceObservedAt differs from read-at observedAt; absent/stale freshness cannot grade GREEN/YELLOW. Native rates/transfer aggregates retain exact decimal strings and denomination; no FX or custody aggregation.
 - SPEND_POLICY_IS_EXPLICIT — gradeSpend without caller thresholds is UNKNOWN.
-- ACTIONS_ON_ROWS — the only money-moving control is the node's existing steward-withdrawal POST, rendered from `payAction` on the row; agents prepare, humans click.
+- ACTIONS_ON_ROWS — the only money-moving control is the node's existing steward-withdrawal POST, rendered from `payAction` on the row; agents prepare, humans click. NO_BLIND_RETRY — after a POST, only a `StewardWithdrawalRejected` (the server refused before broadcasting) re-enables the control; every other outcome (5xx, 422, timeout, unreadable body, lost socket) locks it until a human confirms the wallet on the explorer.
 - ONE_ROW_MODEL — a Pay button is a `payAction` value, never a new row shape; how a line gets paid is a `rail`. A rail that is not `supported` renders a greyed label, never a clickable control.
 - ONE_UI — nodes render `FinanceReport` from `./react`; they keep readers, composition and auth only.
 - USD_IS_DERIVED — `usd` is a projection (`toUsd`); native amounts stay exact in dialogs; a parent carrying burn is the rollup and its children are never summed again.
 - `detail` never carries a URL, key, or address.
-- OpenRouter burn is not measured here: `openRouterReader` exposes `usageTotal` and grades only from a caller-supplied `burnPerDay`. Nodes compose `openRouterReader` with their own key; an inherited key reads the inheritor's account, not the node's balance, so it is never composed as a node plane. Provider least privilege is separate task.5361.
+- OpenRouter burn is not measured here: `openRouterReader` exposes `usageTotal` and grades only from a caller-supplied `burnPerDay`. `/credits` needs an OpenRouter management key; an inference key must never carry it, so node compositions leave the OpenRouter balance UNKNOWN ("needs a management key · task.5361") with the Top up action still reachable. An inherited key reads the inheritor's account, not the node's balance. Provider least privilege is task.5361.
 
 ## Not here
 

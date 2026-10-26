@@ -10,23 +10,20 @@ const day = (n: number) => new Date(NOW.getTime() - n * 86_400_000);
 describe("creditPurchaseIncomeReader", () => {
   it("sums credited purchases in the trailing 30 days into USD per day and survives the grading floor", async () => {
     const since: Date[] = [];
+    const signals: AbortSignal[] = [];
     const reader = creditPurchaseIncomeReader({
       now: () => NOW,
-      query: async (s) => {
+      query: async (s, signal) => {
         since.push(s);
-        return [
-          { amountUsdCents: 2000, createdAt: day(1) },
-          { amountUsdCents: 1500, createdAt: day(10) },
-          { amountUsdCents: 1000, createdAt: day(29) },
-          { amountUsdCents: 999, createdAt: day(31) },
-          { amountUsdCents: 0, createdAt: day(2) },
-        ];
+        signals.push(signal);
+        return { totalUsdCents: 4500, count: 3 };
       },
     });
     expect(reader.kind).toBe("income");
     expect(since[0]).toBeUndefined();
     const snap = await takeSnapshot([reader], { timeoutMs: 1000, now: () => NOW });
     expect(since[0]?.toISOString()).toBe(day(30).toISOString());
+    expect(signals[0]).toBeInstanceOf(AbortSignal);
     const row = snap.rows[0];
     expect(row).toMatchObject({
       plane: "income:credit-purchases",
@@ -43,15 +40,16 @@ describe("creditPurchaseIncomeReader", () => {
     const byIntent = await creditPurchaseIncomeReader({
       now: () => NOW,
       basis: "intent",
-      query: async () => [],
+      query: async () => ({ totalUsdCents: 0, count: 0 }),
     }).read(new AbortController().signal);
     expect(byIntent.source).toContain("by intent time");
     expect(row?.burnPerDay).toBeCloseTo(1.5, 9);
   });
   it("reports a measured zero when there are no purchases and UNKNOWN when the query fails", async () => {
-    const zero = await creditPurchaseIncomeReader({ now: () => NOW, query: async () => [] }).read(
-      new AbortController().signal
-    );
+    const zero = await creditPurchaseIncomeReader({
+      now: () => NOW,
+      query: async () => ({ totalUsdCents: 0, count: 0 }),
+    }).read(new AbortController().signal);
     expect(zero).toMatchObject({ grade: "INFO", burnPerDay: 0, detail: "0 purchases · 0.00 USD in 30d" });
     const failed = await creditPurchaseIncomeReader({
       now: () => NOW,
@@ -66,5 +64,10 @@ describe("creditPurchaseIncomeReader", () => {
       rail: { kind: "split-inflow" },
     });
     expect(JSON.stringify(failed)).not.toContain("sensitive-dsn");
+    const malformed = await creditPurchaseIncomeReader({
+      now: () => NOW,
+      query: async () => ({ totalUsdCents: Number.NaN, count: -1 }),
+    }).read(new AbortController().signal);
+    expect(malformed).toMatchObject({ grade: "UNKNOWN", reasonCode: "unreadable" });
   });
 });

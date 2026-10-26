@@ -163,6 +163,7 @@ describe("fixture scenarios", () => {
 			burnPerDay: null,
 			runwayDays: null,
 			nextDeadline: null,
+			windowDays: 30,
 			ratesUsed: [],
 		});
 		expect(liveShapedPreview.stewardWalletUrl).toContain("basescan.org/address/");

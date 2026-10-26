@@ -157,6 +157,8 @@ export interface PlaneReader {
   readonly kind?: PlaneKind;
   /** Carried onto the fallback row so an action stays reachable while its plane is unreadable. */
   readonly payAction?: PayAction;
+  /** Carried onto the fallback row so the Action cell still says how the line gets paid. */
+  readonly rail?: Rail;
   read(signal: AbortSignal): Promise<MoneyPlaneRow>;
 }
 

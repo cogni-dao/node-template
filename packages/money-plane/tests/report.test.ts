@@ -79,9 +79,11 @@ describe("summarize", () => {
       burnPerDay: null,
       runwayDays: null,
       nextDeadline: null,
+      windowDays: 30,
       ratesUsed: [],
       unconverted: [],
     });
+    expect(summarize({ rows: [] }, { windowDays: 7 }).windowDays).toBe(7);
   });
   it("keeps DAO runway and the next deadline apart: a soon-expiring domain moves the deadline, not the runway", () => {
     const base = [

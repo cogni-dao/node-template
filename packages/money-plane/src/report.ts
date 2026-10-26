@@ -26,6 +26,8 @@ export interface ReportSummary {
   runwayDays: number | null;
   /** The graded line that runs out or expires first (a vendor credit, a lease escrow, a domain). */
   nextDeadline: { days: number; label: string } | null;
+  /** The income window in days the Cash received card names; from `SummarizeOptions.windowDays` (default 30). */
+  windowDays: number;
   /** Rates that were applied to at least one row, for the "EUR→USD 1.1188 · ECB date" line. */
   ratesUsed: UsdRate[];
   /** Labels of rows carrying a non-USD amount that could not be projected. */
@@ -34,6 +36,8 @@ export interface ReportSummary {
 
 export interface SummarizeOptions {
   treasuryPlane?: string | null;
+  /** The income reader's window, so the card label matches the math. */
+  windowDays?: number;
 }
 
 function flows(rows: readonly MoneyPlaneRow[]): MoneyPlaneRow[] {
@@ -113,6 +117,7 @@ export function summarize(
       shortest && shortest.runwayDays !== null
         ? { days: shortest.runwayDays, label: shortest.label }
         : null,
+    windowDays: options.windowDays ?? 30,
     ratesUsed: [...ratesUsed.values()],
     unconverted,
   };

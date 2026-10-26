@@ -78,7 +78,7 @@ vi.mock("@cogni/money-plane", async (importOriginal) => ({
 	fetchEcbRate: mocks.fx,
 }));
 
-import { StewardWithdrawalRejected } from "@cogni/money-plane/react";
+import { StewardWithdrawalRejected, summarize } from "@cogni/money-plane";
 
 import {
 	FinanceReportClient,
@@ -139,7 +139,7 @@ function admit() {
 	);
 	mocks.snapshot.mockResolvedValue(report);
 	mocks.fx.mockResolvedValue(null);
-	mocks.query.mockReturnValue(async () => []);
+	mocks.query.mockReturnValue(async () => ({ totalUsdCents: 0, count: 0 }));
 }
 
 describe("finance authorization at the read boundary", () => {
@@ -186,6 +186,7 @@ describe("finance authorization at the read boundary", () => {
 				burnPerDay: null,
 				runwayDays: null,
 				nextDeadline: null,
+				windowDays: 30,
 				ratesUsed: [],
 				unconverted: [],
 			},
@@ -341,7 +342,7 @@ describe("node composition", () => {
 	});
 
 	it("reads income from the ledger seam, and reports it UNKNOWN when no ledger is reachable", async () => {
-		mocks.query.mockReturnValue(async () => [{ amountUsdCents: 4500, createdAt: new Date() }]);
+		mocks.query.mockReturnValue(async () => ({ totalUsdCents: 4500, count: 3 }));
 		await getMoneyPlaneSnapshot();
 		const income = (await rowsOf()).find((row) => row.plane === "income:credit-purchases");
 		expect(income?.burnPerDay).toBeCloseTo(1.5, 9);
@@ -356,8 +357,9 @@ describe("node composition", () => {
 		});
 	});
 
-	it("bounds the FX read with the snapshot timeout so a hanging rate service never hangs the report", async () => {
-		vi.useFakeTimers();
+	it("bounds the FX read within the remaining page budget so a hanging rate service never hangs the report", async () => {
+		const controller = new AbortController();
+		const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
 		mocks.snapshot.mockResolvedValue({
 			...report,
 			rows: [
@@ -384,14 +386,17 @@ describe("node composition", () => {
 		pending.then(() => {
 			settled = true;
 		});
-		await vi.advanceTimersByTimeAsync(7_999);
+		await vi.waitFor(() => expect(mocks.fx).toHaveBeenCalled());
 		expect(settled).toBe(false);
-		await vi.advanceTimersByTimeAsync(2);
+		const budget = timeoutSpy.mock.calls[0]?.[0] as number;
+		expect(budget).toBeGreaterThanOrEqual(1_000);
+		expect(budget).toBeLessThanOrEqual(8_000);
+		controller.abort();
 		const result = await pending;
-		expect(mocks.fx.mock.calls[0]?.[2]).toBeInstanceOf(AbortSignal);
+		expect(mocks.fx.mock.calls[0]?.[2]).toBe(controller.signal);
 		expect(result.rows[0]?.usd).toBeUndefined();
 		expect(result.summary.unconverted).toEqual(["EUR credit"]);
-		vi.useRealTimers();
+		timeoutSpy.mockRestore();
 	});
 
 	it("projects rows to USD, fetching the ECB rate only when a non-dollar row exists, and summarizes once", async () => {
@@ -483,13 +488,17 @@ describe("the Financials page and its package binding", () => {
 
 	it("fundSteward POSTs the amount-only withdrawal and surfaces the server's text on failure", async () => {
 		const ok = vi.fn(async () => ({ ok: true, json: async () => ({ txHash: "0xabc" }) }));
-		await expect(fundSteward(2.5, ok as unknown as typeof fetch)).resolves.toEqual({ txHash: "0xabc" });
+		await expect(fundSteward(2.5, ok as unknown as typeof fetch)).resolves.toEqual({ txHash: "0xabc", confirmed: true });
 		expect(ok).toHaveBeenCalledWith(
 			STEWARD_WITHDRAWAL_PATH,
 			expect.objectContaining({ method: "POST", body: JSON.stringify({ amountUsd: 2.5 }) }),
 		);
+		expect((ok.mock.calls[0] as unknown[])[1]).toMatchObject({ signal: expect.any(AbortSignal) });
 		const bad = vi.fn(async () => ({ ok: false, status: 400, json: async () => ({ detail: "amount too large" }) }));
 		await expect(fundSteward(999, bad as unknown as typeof fetch)).rejects.toThrow(StewardWithdrawalRejected);
+		const bareRefusal = vi.fn(async () => ({ ok: false, status: 403, json: async () => ({}) }));
+		await expect(fundSteward(1, bareRefusal as unknown as typeof fetch)).rejects.toThrow("HTTP 403");
+		await expect(fundSteward(1, bareRefusal as unknown as typeof fetch)).rejects.toThrow(StewardWithdrawalRejected);
 		const lost = vi.fn(async () => ({
 			ok: true,
 			status: 200,
@@ -500,6 +509,131 @@ describe("the Financials page and its package binding", () => {
 		await expect(fundSteward(1, lost as unknown as typeof fetch)).rejects.not.toBeInstanceOf(
 			StewardWithdrawalRejected,
 		);
+		// A 5xx may arrive after the transfer was broadcast: unknown outcome, never a refusal.
+		const serverError = vi.fn(async () => ({
+			ok: false,
+			status: 500,
+			json: async () => ({ error: "Internal server error" }),
+		}));
+		await expect(fundSteward(1, serverError as unknown as typeof fetch)).rejects.not.toBeInstanceOf(
+			StewardWithdrawalRejected,
+		);
+		await expect(fundSteward(1, serverError as unknown as typeof fetch)).rejects.toThrow("HTTP 500");
+		// 422 is produced by the route's single catch, which may fire after the broadcast: unknown, never a refusal.
+		const unprocessable = vi.fn(async () => ({
+			ok: false,
+			status: 422,
+			json: async () => ({ error: "Steward withdrawal rejected", detail: "receipt wait timed out" }),
+		}));
+		await expect(fundSteward(1, unprocessable as unknown as typeof fetch)).rejects.not.toBeInstanceOf(
+			StewardWithdrawalRejected,
+		);
+		await expect(fundSteward(1, unprocessable as unknown as typeof fetch)).rejects.toThrow("receipt wait timed out");
+		const unconfigured = vi.fn(async () => ({
+			ok: false,
+			status: 503,
+			json: async () => ({ error: "Steward wallet not configured", code: "STEWARD_UNCONFIGURED" }),
+		}));
+		await expect(fundSteward(1, unconfigured as unknown as typeof fetch)).rejects.toThrow(StewardWithdrawalRejected);
+	});
+
+	it("a 422 refusal after a recorded broadcast locks the control (no second POST) and shows the detail", async () => {
+		let posts = 0;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => {
+				posts += 1; // the server broadcast before failing its receipt wait
+				return {
+					ok: false,
+					status: 422,
+					json: async () => ({ error: "Steward withdrawal rejected", detail: "receipt wait timed out" }),
+				};
+			}),
+		);
+		render(createElement(FinanceReportClient, { report: liveShapedPreview as NodeFinanceSnapshot }));
+		const operator = screen.getByRole("table").querySelector<HTMLElement>("tr[data-finance-row='base:operator-wallet']");
+		if (!operator) throw new Error("missing operator row");
+		const button = () => within(operator).getByRole("button", { name: "Fund steward" });
+		await userEvent.click(button());
+		const alert = await within(operator).findByRole("alert");
+		expect(alert.textContent).toContain("Result unknown");
+		expect(alert.textContent).toContain("receipt wait timed out");
+		expect((button() as HTMLButtonElement).disabled).toBe(true);
+		await userEvent.click(button());
+		expect(posts).toBe(1);
+		vi.unstubAllGlobals();
+	});
+
+	it("a broadcast without a receipt renders the tx link in a Confirming state", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => ({
+				ok: true,
+				status: 200,
+				json: async () => ({ txHash: "0xabcdef1234567890", confirmed: false }),
+			})),
+		);
+		render(createElement(FinanceReportClient, { report: liveShapedPreview as NodeFinanceSnapshot }));
+		const operator = screen.getByRole("table").querySelector<HTMLElement>("tr[data-finance-row='base:operator-wallet']");
+		if (!operator) throw new Error("missing operator row");
+		await userEvent.click(within(operator).getByRole("button", { name: "Fund steward" }));
+		expect((await within(operator).findByRole("link", { name: /Sent 0xabcd…7890/ })).getAttribute("href")).toBe(
+			"https://basescan.org/tx/0xabcdef1234567890",
+		);
+		expect(within(operator).getByText("Confirming…")).toBeTruthy();
+		vi.unstubAllGlobals();
+	});
+
+	it("renders the Next deadline line from the earliest graded row, apart from DAO runway", () => {
+		const graded: MoneyPlaneRow = {
+			plane: "vendor:demo",
+			label: "Demo credit",
+			kind: "prepaid",
+			balance: 3,
+			currency: "USD",
+			burnPerDay: 1,
+			runwayDays: 3,
+			grade: "RED",
+			observedAt: takenAt,
+			sourceObservedAt: takenAt,
+			freshness: "current",
+			usd: { amount: 3 },
+		};
+		const rows = [...liveShapedPreview.rows, graded];
+		const report = {
+			...liveShapedPreview,
+			rows,
+			summary: summarize({ rows }, { treasuryPlane: "base:dao-treasury", windowDays: 30 }),
+		} as NodeFinanceSnapshot;
+		render(createElement(FinanceReportClient, { report }));
+		const deadline = document.querySelector("[data-finance-deadline]");
+		expect(deadline?.textContent).toBe("Next deadline 3d · Demo credit");
+		expect(deadline?.className).toContain("text-destructive");
+		// Runway = treasury ÷ net burn (74.52 ÷ 1) is a separate figure.
+		expect(document.querySelector("[data-finance-stat='Runway']")?.textContent).toBe("74d");
+	});
+
+	it("a 500 with an error body locks the control like a lost response", async () => {
+		let posts = 0;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => {
+				posts += 1;
+				return { ok: false, status: 500, json: async () => ({ error: "Internal server error" }) };
+			}),
+		);
+		render(createElement(FinanceReportClient, { report: liveShapedPreview as NodeFinanceSnapshot }));
+		const operator = screen.getByRole("table").querySelector<HTMLElement>("tr[data-finance-row='base:operator-wallet']");
+		if (!operator) throw new Error("missing operator row");
+		const button = () => within(operator).getByRole("button", { name: "Fund steward" });
+		await userEvent.click(button());
+		const alert = await within(operator).findByRole("alert");
+		expect(alert.textContent).toContain("Result unknown");
+		expect((button() as HTMLButtonElement).disabled).toBe(true);
+		expect(button().getAttribute("aria-describedby")).toBe(alert.id);
+		await userEvent.click(button());
+		expect(posts).toBe(1);
+		vi.unstubAllGlobals();
 	});
 
 	it("an accepted transfer with a lost response locks the control: no second POST until the user confirms the check", async () => {
@@ -520,7 +654,8 @@ describe("the Financials page and its package binding", () => {
 		if (!operator) throw new Error("missing operator row");
 		const button = () => within(operator).getByRole("button", { name: "Fund steward" });
 		await userEvent.click(button());
-		expect(await within(operator).findByText(/Result unknown — check the steward wallet/)).toBeTruthy();
+		const alert = await within(operator).findByRole("alert");
+		expect(alert.textContent).toMatch(/^Result unknown \(Response unreadable \(HTTP 200\)\) — check the steward wallet/);
 		expect(within(operator).getByRole("link", { name: /on BaseScan/ }).getAttribute("href")).toBe(
 			liveShapedPreview.stewardWalletUrl,
 		);

@@ -82,7 +82,6 @@ export {
 } from "./payments";
 // Typography components
 export {
-  adminText,
   brandText,
   heading,
   paragraph,

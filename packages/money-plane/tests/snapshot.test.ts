@@ -144,6 +144,28 @@ describe("takeSnapshot", () => {
     }
   });
 
+  it("carries the reader's rail and payAction onto timeout and throw fallback rows", async () => {
+    const rail = { kind: "steward-manual" as const, status: "supported" as const };
+    const payAction = { kind: "fund-steward" as const };
+    const snap = await takeSnapshot(
+      [
+        { plane: "slow", label: "Slow", kind: "prepaid", rail, payAction, read: () => new Promise<never>(() => {}) },
+        {
+          plane: "boom",
+          label: "Boom",
+          kind: "prepaid",
+          rail,
+          async read() {
+            throw new Error("boom");
+          },
+        },
+      ],
+      { timeoutMs: 10, now }
+    );
+    expect(snap.rows[0]).toMatchObject({ grade: "UNKNOWN", reasonCode: "timeout", rail, payAction });
+    expect(snap.rows[1]).toMatchObject({ grade: "UNKNOWN", reasonCode: "unreadable", rail });
+  });
+
   it("demotes INFO to UNKNOWN on any plane that is not a wallet", async () => {
     const snap = await takeSnapshot(
       [

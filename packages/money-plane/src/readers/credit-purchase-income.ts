@@ -4,7 +4,7 @@
 /**
  * Module: `@cogni-dao/money-plane/readers/credit-purchase-income`
  * Purpose: Income from credit purchases: successful payment_attempts in the trailing window ÷ window days → USD per day.
- * Scope: Node-generic. The query is injected (the node owns its database); this reader only sums and labels.
+ * Scope: Node-generic. The query is injected and aggregates in the database (Σ, count); this reader only divides and labels.
  * Invariants: READERS_NEVER_THROW — a failing query is UNKNOWN `unreadable`. Zero purchases is a measured $0/day, not UNKNOWN.
  *   The window is measured on the credited time; a node that can only supply intent time says so (`basis: "intent"`).
  *   kind `income`, rail `split-inflow` supported (the 95/5 Split lands purchases automatically). `burnPerDay` holds inflow per day.
@@ -18,14 +18,18 @@ import type { MoneyPlaneRow, PlaneReader } from "../types";
 
 export const CREDIT_PURCHASE_INCOME_PLANE = "income:credit-purchases";
 
-export interface CreditPurchase {
-  amountUsdCents: number;
-  createdAt: Date;
+/** Aggregated in the database: Σ amount and count of credited purchases since the window start. */
+export interface CreditPurchaseTotals {
+  totalUsdCents: number;
+  count: number;
 }
 
 export interface CreditPurchaseIncomeReaderOptions {
-  /** Successful purchases whose `createdAt` is the credited time (or the intent time when `basis` is "intent"), at or after `since`. */
-  query: (since: Date) => Promise<readonly CreditPurchase[]>;
+  /**
+   * Σ credited purchases at or after `since`, dated by the credited time (or the intent time when `basis` is "intent").
+   * The signal is the reader's budget; honour it (statement timeout or at least an abort check).
+   */
+  query: (since: Date, signal: AbortSignal) => Promise<CreditPurchaseTotals>;
   windowDays?: number;
   label?: string;
   now?: () => Date;
@@ -46,19 +50,21 @@ export function creditPurchaseIncomeReader(
     plane,
     label,
     kind: "income",
-    async read(): Promise<MoneyPlaneRow> {
+    async read(signal): Promise<MoneyPlaneRow> {
       const at = now();
       const since = new Date(at.getTime() - windowDays * 86_400_000);
       try {
-        const purchases = (await options.query(since)).filter(
-          (p) =>
-            Number.isFinite(p.amountUsdCents) &&
-            p.amountUsdCents > 0 &&
-            p.createdAt.getTime() >= since.getTime() &&
-            p.createdAt.getTime() <= at.getTime()
-        );
-        const totalUsd =
-          purchases.reduce((sum, p) => sum + p.amountUsdCents, 0) / 100;
+        const totals = await options.query(since, signal);
+        const totalUsdCents = Number(totals?.totalUsdCents);
+        const count = Number(totals?.count);
+        if (
+          !Number.isFinite(totalUsdCents) ||
+          totalUsdCents < 0 ||
+          !Number.isInteger(count) ||
+          count < 0
+        )
+          throw new Error("totals invalid");
+        const totalUsd = totalUsdCents / 100;
         const observedAt = at.toISOString();
         return {
           plane,
@@ -76,7 +82,7 @@ export function creditPurchaseIncomeReader(
               : `payment_attempts · CREDITED · by intent time · trailing ${windowDays} days`,
           sourceObservedAt: observedAt,
           freshness: "current",
-          detail: `${purchases.length} purchases · ${totalUsd.toFixed(2)} USD in ${windowDays}d`,
+          detail: `${count} purchases · ${totalUsd.toFixed(2)} USD in ${windowDays}d`,
           rail,
         };
       } catch {

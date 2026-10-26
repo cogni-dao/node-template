@@ -56,6 +56,8 @@ const SNAPSHOT_TIMEOUT_MS = 8_000;
 /** The human checkout the steward wallet pays into; the row's Action opens it. */
 export const OPENROUTER_CHECKOUT_URL = "https://openrouter.ai/settings/credits";
 const DOLLAR = new Set(["USD", "USDC"]);
+/** Trailing window for credited purchases; the Cash received card names it. */
+const INCOME_WINDOW_DAYS = 30;
 const STEWARD_RAIL: Rail = { kind: "steward-manual", status: "supported" };
 const NO_RAIL: Rail = { kind: "none", status: "unsupported" };
 /** Paid by the operator on this node's behalf until task.5354 shares the scoped cost. */
@@ -165,7 +167,7 @@ function plannedIncomeReader(): PlaneReader {
 
 function incomeReader(): PlaneReader {
 	const query = creditPurchasesQuery();
-	if (query) return creditPurchaseIncomeReader({ query });
+	if (query) return creditPurchaseIncomeReader({ query, windowDays: INCOME_WINDOW_DAYS });
 	const plane = "income:credit-purchases";
 	const label = "Credit purchases";
 	return {
@@ -283,15 +285,18 @@ export async function getMoneyPlaneSnapshot(): Promise<NodeFinanceSnapshot> {
 				.map((row) => row.currency)
 				.filter((c): c is string => Boolean(c) && !DOLLAR.has(c as string)),
 		);
-		// The FX read is bounded like every reader: a hanging rate service must not hang the report.
-		const fxSignal = AbortSignal.timeout(SNAPSHOT_TIMEOUT_MS);
+		// The FX read shares the page budget: whatever the snapshot left, never a second full budget.
+		const fxSignal = AbortSignal.timeout(Math.max(SNAPSHOT_TIMEOUT_MS - (Date.now() - started), 1_000));
 		const rates = (
 			await Promise.all(
 				[...foreign].map((currency) => fetchEcbRate(noStoreFetch, `${currency}USD`, fxSignal)),
 			)
 		).filter((rate): rate is UsdRate => rate !== null);
 		const rows = snapshot.rows.map((row) => toUsd(row, rates));
-		const summary = summarize({ rows }, { treasuryPlane: composition.treasuryPlane });
+		const summary = summarize(
+			{ rows },
+			{ treasuryPlane: composition.treasuryPlane, windowDays: INCOME_WINDOW_DAYS },
+		);
 		log.info(
 			{
 				event: EVENT_NAMES.MONEY_PLANE_SNAPSHOT,

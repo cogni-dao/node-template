@@ -29,15 +29,18 @@ function fallback(
   observedAt: string,
   detail?: string
 ): MoneyPlaneRow {
-  return unknownRow({
-    plane: reader.plane,
-    label: reader.label ?? reader.plane,
-    kind: reader.kind ?? "prepaid",
-    reasonCode,
-    observedAt,
-    ...(detail === undefined ? {} : { detail }),
-    ...(reader.payAction === undefined ? {} : { payAction: reader.payAction }),
-  });
+  return {
+    ...unknownRow({
+      plane: reader.plane,
+      label: reader.label ?? reader.plane,
+      kind: reader.kind ?? "prepaid",
+      reasonCode,
+      observedAt,
+      ...(detail === undefined ? {} : { detail }),
+      ...(reader.payAction === undefined ? {} : { payAction: reader.payAction }),
+    }),
+    ...(reader.rail === undefined ? {} : { rail: reader.rail }),
+  };
 }
 
 async function settle(
