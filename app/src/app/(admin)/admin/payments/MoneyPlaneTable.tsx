@@ -45,14 +45,15 @@ import {
   DialogTrigger,
 } from "@/components";
 
-/** Default row order: RED, YELLOW, UNKNOWN, GREEN, INFO, then label. */
+/** Default row order: RED, YELLOW; then rows with a known number (GREEN, INFO, UNKNOWN); placeholders last. */
 const RISK: Record<Grade, number> = {
   RED: 0,
   YELLOW: 1,
-  UNKNOWN: 2,
-  GREEN: 3,
-  INFO: 4,
+  GREEN: 2,
+  INFO: 3,
+  UNKNOWN: 4,
 };
+const PLACEHOLDER_RANK = 5;
 const RUNWAY_TONE: Partial<Record<Grade, string>> = {
   RED: "text-danger",
   YELLOW: "text-warning",
@@ -120,8 +121,36 @@ export function unavailableReason(row: MoneyPlaneRow): string | null {
       return "not measured";
   }
 }
+/** A placeholder carries no number at all; a known number (including zero) outranks it. */
+function hasNumber(row: MoneyPlaneRow): boolean {
+  return row.balance !== null || row.burnPerDay !== null;
+}
+export function riskRank(row: MoneyPlaneRow): number {
+  if (row.grade === "RED" || row.grade === "YELLOW") return RISK[row.grade];
+  return hasNumber(row) ? RISK[row.grade] : PLACEHOLDER_RANK;
+}
 export function riskCompare(a: MoneyPlaneRow, b: MoneyPlaneRow): number {
-  return RISK[a.grade] - RISK[b.grade] || a.label.localeCompare(b.label);
+  return riskRank(a) - riskRank(b) || a.label.localeCompare(b.label);
+}
+/** Which numeric columns carry any value; a column of nothing but dashes is replaced by one note. */
+export function reportedColumns(rows: readonly MoneyPlaneRow[]): {
+  burn: boolean;
+  runway: boolean;
+} {
+  return {
+    burn: rows.some((row) => row.burnPerDay !== null),
+    runway: rows.some((row) => row.runwayDays !== null),
+  };
+}
+export function unreportedNote(columns: {
+  burn: boolean;
+  runway: boolean;
+}): string | null {
+  if (!columns.burn && !columns.runway)
+    return "Burn and runway are not yet reported for this node.";
+  if (!columns.runway) return "Runway is not yet reported for this node.";
+  if (!columns.burn) return "Burn is not yet reported for this node.";
+  return null;
 }
 
 const subscribeNever = () => () => {};
@@ -326,10 +355,15 @@ export function MoneyPlaneTable({
     { id: "line", desc: false },
   ]);
   const data = useMemo(() => [...rows], [rows]);
+  const reported = reportedColumns(rows);
+  const note = unreportedNote(reported);
   const table = useReactTable({
     data,
     columns: moneyPlaneColumns,
-    state: { sorting },
+    state: {
+      sorting,
+      columnVisibility: { burn: reported.burn, runway: reported.runway },
+    },
     onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
@@ -419,14 +453,19 @@ export function MoneyPlaneTable({
               <LineCell row={row} />
               <SourceDialog row={row} />
             </div>
-            <dl className="grid min-w-0 grid-cols-3 gap-3">
+            <dl className="flex min-w-0 flex-wrap gap-x-8 gap-y-3">
               <Field label="Balance" value={<Muted text={balanceText(row)} />} />
-              <Field label="Burn/day" value={<Muted text={burnText(row)} />} />
-              <Field label="Runway" value={<RunwayCell row={row} />} />
+              {reported.burn ? (
+                <Field label="Burn/day" value={<Muted text={burnText(row)} />} />
+              ) : null}
+              {reported.runway ? (
+                <Field label="Runway" value={<RunwayCell row={row} />} />
+              ) : null}
             </dl>
           </li>
         ))}
       </ul>
+      {note ? <AdminText variant="muted">{note}</AdminText> : null}
       <AdminText variant="muted">
         Payment history is not included in this report.
       </AdminText>

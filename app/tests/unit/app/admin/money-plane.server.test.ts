@@ -105,7 +105,9 @@ import {
   createMoneyPlaneColumns,
   MoneyPlaneEvidence,
   MoneyPlaneTable,
+  reportedColumns,
   unavailableReason,
+  unreportedNote,
 } from "@/app/(admin)/admin/payments/MoneyPlaneTable";
 import { getMoneyPlaneSnapshot } from "@/app/(admin)/admin/payments/money-plane.server";
 import FinancialsPage from "@/app/(admin)/admin/payments/page";
@@ -347,7 +349,7 @@ describe("the Financials table", () => {
     }),
   ];
 
-  it("has exactly five columns and sorts RED, YELLOW, UNKNOWN, GREEN, INFO then label by default", () => {
+  it("has exactly five columns and sorts RED, YELLOW, then known numbers (GREEN, INFO, UNKNOWN), placeholders last", () => {
     const columns = createMoneyPlaneColumns();
     expect(columns.map((c) => c.id)).toEqual([
       "line",
@@ -368,11 +370,11 @@ describe("the Financials table", () => {
     expect(table.getRowModel().rows.map((r) => r.original.plane)).toEqual([
       "demo:red",
       "demo:yellow",
-      "hosting:operator-covered",
-      "openrouter:account",
       "demo:green",
       "base:dao-treasury",
       "base:operator-wallet",
+      "openrouter:account",
+      "hosting:operator-covered",
     ]);
   });
 
@@ -439,12 +441,62 @@ describe("the Financials table", () => {
     ).toEqual([
       "demo:red",
       "demo:yellow",
-      "hosting:operator-covered",
-      "openrouter:account",
       "demo:green",
       "base:dao-treasury",
       "base:operator-wallet",
+      "openrouter:account",
+      "hosting:operator-covered",
     ]);
+  });
+
+  it("omits all-dash Burn/day and Runway columns and says so once under the table", () => {
+    const walletsOnly = rows.filter((r) => r.kind === "wallet" || r.kind === "usage");
+    expect(reportedColumns(walletsOnly)).toEqual({ burn: false, runway: false });
+    expect(unreportedNote({ burn: false, runway: false })).toBe(
+      "Burn and runway are not yet reported for this node."
+    );
+    expect(unreportedNote({ burn: true, runway: false })).toBe(
+      "Runway is not yet reported for this node."
+    );
+    expect(unreportedNote({ burn: true, runway: true })).toBeNull();
+    const html = renderToStaticMarkup(
+      createElement(MoneyPlaneTable, {
+        rows: walletsOnly,
+        takenAt,
+        treasuryPlane: "base:dao-treasury",
+      })
+    );
+    expect(html).toContain("Burn and runway are not yet reported for this node.");
+    expect(html).not.toContain(">Burn/day<");
+    expect(html).not.toContain(">Runway<");
+    expect(html).toContain(">Balance<");
+    const table = mocks.grid.mock.calls[0]?.[0].table;
+    expect(table.getAllColumns()).toHaveLength(5);
+    expect(
+      table.getVisibleLeafColumns().map((c: { id: string }) => c.id)
+    ).toEqual(["line", "balance", "source"]);
+  });
+
+  it("keeps a column for a known zero burn and only drops the all-null one", () => {
+    const zeroBurn = [
+      row("x", "GREEN", { balance: 5, currency: "USD", burnPerDay: 0 }),
+      row("y", "UNKNOWN", { kind: "wallet", reasonCode: "unreadable" }),
+    ];
+    expect(reportedColumns(zeroBurn)).toEqual({ burn: true, runway: false });
+    const html = renderToStaticMarkup(
+      createElement(MoneyPlaneTable, {
+        rows: zeroBurn,
+        takenAt,
+        treasuryPlane: null,
+      })
+    );
+    expect(html).toContain("$0.00 / day");
+    expect(html).toContain("Runway is not yet reported for this node.");
+    expect(html).not.toContain(">Runway<");
+    const table = mocks.grid.mock.calls[0]?.[0].table;
+    expect(
+      table.getVisibleLeafColumns().map((c: { id: string }) => c.id)
+    ).toEqual(["line", "balance", "burn", "source"]);
   });
 
   it("explains an unavailable treasury balance in one line", () => {
