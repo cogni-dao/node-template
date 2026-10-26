@@ -171,9 +171,7 @@ function startExercise(
   return { runner, calls, executions, events };
 }
 
-export async function exercise(
-  options: Parameters<typeof startExercise>[0] = {}
-) {
+async function exercise(options: Parameters<typeof startExercise>[0] = {}) {
   const { runner, calls, executions, events } = startExercise(options);
   for await (const event of runner.stream) events.push(event);
   return { result: await runner.final, calls, executions, events };
