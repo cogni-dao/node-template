@@ -69,7 +69,7 @@ function evidenceIssue(
     return {
       code: "evidence_too_long",
       path,
-      message: `ev must be at most ${WORK_ITEM_SCORE_EV_MAX_CHARS} characters`
+      message: `ev must be at most ${WORK_ITEM_SCORE_EV_MAX_CHARS} characters`,
     };
   }
   let url: URL;
@@ -90,7 +90,7 @@ function evidenceIssue(
     return {
       code: "evidence_invalid_url",
       path,
-      message: "ev must be an absolute HTTPS URL without credentials"
+      message: "ev must be an absolute HTTPS URL without credentials",
     };
   }
   return undefined;
@@ -109,9 +109,9 @@ export function parseWorkItemScores(input: unknown): WorkItemScoresParseResult {
         {
           code: "not_object",
           path: [],
-          message: "scores must be an object or null"
-        }
-      ]
+          message: "scores must be an object or null",
+        },
+      ],
     };
   }
   const issues: WorkItemScoresIssue[] = [];
@@ -120,7 +120,7 @@ export function parseWorkItemScores(input: unknown): WorkItemScoresParseResult {
     issues.push({
       code: "too_many_axes",
       path: [],
-      message: `scores may carry at most ${WORK_ITEM_SCORES_MAX_AXES} axes`
+      message: `scores may carry at most ${WORK_ITEM_SCORES_MAX_AXES} axes`,
     });
   }
   const value: Record<string, WorkItemScore> = {};
@@ -129,7 +129,7 @@ export function parseWorkItemScores(input: unknown): WorkItemScoresParseResult {
       issues.push({
         code: "invalid_axis_id",
         path: [axis],
-        message: `axis id must match ${WORK_ITEM_SCORE_AXIS_ID.source}`
+        message: `axis id must match ${WORK_ITEM_SCORE_AXIS_ID.source}`,
       });
       continue;
     }
@@ -137,7 +137,7 @@ export function parseWorkItemScores(input: unknown): WorkItemScoresParseResult {
       issues.push({
         code: "invalid_entry",
         path: [axis],
-        message: "each axis must be an object { v, ev? }"
+        message: "each axis must be an object { v, ev? }",
       });
       continue;
     }
@@ -146,7 +146,7 @@ export function parseWorkItemScores(input: unknown): WorkItemScoresParseResult {
         issues.push({
           code: "unknown_property",
           path: [axis, key],
-          message: `unknown property '${key}'; an axis holds only v and ev`
+          message: `unknown property '${key}'; an axis holds only v and ev`,
         });
       }
     }
@@ -160,7 +160,7 @@ export function parseWorkItemScores(input: unknown): WorkItemScoresParseResult {
       issues.push({
         code: "invalid_value",
         path: [axis, "v"],
-        message: `v must be an integer ${WORK_ITEM_SCORE_MIN}–${WORK_ITEM_SCORE_MAX}`
+        message: `v must be an integer ${WORK_ITEM_SCORE_MIN}–${WORK_ITEM_SCORE_MAX}`,
       });
       continue;
     }
@@ -169,7 +169,7 @@ export function parseWorkItemScores(input: unknown): WorkItemScoresParseResult {
         issues.push({
           code: "evidence_required",
           path: [axis, "ev"],
-          message: `a score of ${WORK_ITEM_SCORE_EVIDENCE_FROM} or more needs an evidence URL (SCORE_NEEDS_EVIDENCE)`
+          message: `a score of ${WORK_ITEM_SCORE_EVIDENCE_FROM} or more needs an evidence URL (SCORE_NEEDS_EVIDENCE)`,
         });
         continue;
       }
@@ -180,7 +180,7 @@ export function parseWorkItemScores(input: unknown): WorkItemScoresParseResult {
       issues.push({
         code: "evidence_not_string",
         path: [axis, "ev"],
-        message: "ev must be a URL string"
+        message: "ev must be a URL string",
       });
       continue;
     }
@@ -200,9 +200,9 @@ export function parseWorkItemScores(input: unknown): WorkItemScoresParseResult {
         {
           code: "too_large",
           path: [],
-          message: `scores serialize to ${bytes} bytes; the limit is ${WORK_ITEM_SCORES_MAX_BYTES}`
-        }
-      ]
+          message: `scores serialize to ${bytes} bytes; the limit is ${WORK_ITEM_SCORES_MAX_BYTES}`,
+        },
+      ],
     };
   }
   return { ok: true, value };
