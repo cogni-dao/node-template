@@ -524,7 +524,7 @@ describe("read-only mission program", () => {
       return verdict;
     });
     expect(result.structuredOutput).toMatchObject({
-      program: { version: "3" },
+      program: { version: "3.1" },
       status: "accepted",
       revisions: 1,
       proposal: { payload: unknownPayload },
