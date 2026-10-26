@@ -3,7 +3,7 @@
 
 /**
  * Module: `@cogni-dao/money-plane/react/FinanceReport`
- * Purpose: The one Financials UI every node renders: header + USD summary, one table (Line · Balance · Burn/day · Runway · Action)
+ * Purpose: The one Financials UI every node renders: header + four USD stat cards (Treasury · Income · Burn · Runway), one table (Line · Balance · Burn/day · Runway · Action)
  *   grouped Income / Costs / Reserves, expandable children, the Line dialog, and rail-driven actions.
  * Scope: Presentation only. The kit (Dialog, Button, Input) and the actions (fundSteward, refresh) are injected by the node;
  *   no env, no fetch, no routing here. Container query (@2xl) switches to stacked cards; no horizontal scroll.
@@ -56,6 +56,8 @@ type AnyComponent = ComponentType<any>;
 export interface FinanceKit {
   Button: AnyComponent;
   Input: AnyComponent;
+  Card: AnyComponent;
+  CardContent: AnyComponent;
   Dialog: AnyComponent;
   DialogContent: AnyComponent;
   DialogHeader: AnyComponent;
@@ -455,23 +457,78 @@ function SortHeader({
   );
 }
 
-function summaryLine(summary: ReportSummary): string {
-  return [
-    summary.treasuryUsd !== null ? `Treasury ${usd(summary.treasuryUsd)}` : "",
-    summary.incomePerDay !== null
-      ? `Income ${usd(summary.incomePerDay)}/day`
-      : "",
-    summary.burnPerDay !== null ? `Burn ${usd(summary.burnPerDay)}/day` : "",
-    summary.shortestRunway
-      ? `Runway ${
-          summary.shortestRunway.days < 1
-            ? "<1d"
-            : `${Math.floor(summary.shortestRunway.days)}d`
-        } (${summary.shortestRunway.label})`
-      : "",
-  ]
-    .filter(Boolean)
-    .join(" · ");
+function days(value: number): string {
+  return value < 1 ? "<1d" : `${Math.floor(value)}d`;
+}
+
+/** The four stat cards above the table; a missing figure is a muted dash, never a guess. */
+function StatCards({
+  summary,
+  rows,
+  kit,
+}: {
+  summary: ReportSummary;
+  rows: MoneyPlaneRow[];
+  kit: FinanceKit;
+}) {
+  const runwayRow = summary.shortestRunway
+    ? rows
+        .flatMap((row) => [row, ...(row.children ?? [])])
+        .find((row) => row.label === summary.shortestRunway?.label)
+    : undefined;
+  const stats: {
+    label: string;
+    value: string;
+    sub: string;
+    className?: string;
+  }[] = [
+    {
+      label: "Treasury",
+      value: summary.treasuryUsd === null ? DASH : usd(summary.treasuryUsd),
+      sub: "USDC on Base",
+    },
+    {
+      label: "Income",
+      value:
+        summary.incomePerDay === null ? DASH : `${usd(summary.incomePerDay)}/day`,
+      sub: "trailing 30d",
+    },
+    {
+      label: "Burn",
+      value: summary.burnPerDay === null ? DASH : `${usd(summary.burnPerDay)}/day`,
+      sub: "all known lines",
+    },
+    {
+      label: "Runway",
+      value: summary.shortestRunway ? days(summary.shortestRunway.days) : DASH,
+      sub: summary.shortestRunway ? summary.shortestRunway.label : "no graded line",
+      ...(runwayRow ? { className: runwayClass(runwayRow.grade) } : {}),
+    },
+  ];
+  return (
+    <div
+      className="@2xl:grid-cols-4 grid grid-cols-2 gap-3"
+      data-finance-summary
+    >
+      {stats.map((stat) => (
+        <kit.Card key={stat.label} className="py-0">
+          <kit.CardContent className="space-y-1 p-4">
+            <p className="text-muted-foreground text-xs">{stat.label}</p>
+            <p
+              className={cx(
+                "font-semibold text-2xl tabular-nums tracking-tight",
+                stat.value === DASH ? "text-muted-foreground" : stat.className
+              )}
+              data-finance-stat={stat.label}
+            >
+              {stat.value}
+            </p>
+            <p className="text-muted-foreground text-xs">{stat.sub}</p>
+          </kit.CardContent>
+        </kit.Card>
+      ))}
+    </div>
+  );
 }
 
 function fxLine(summary: ReportSummary): string {
@@ -514,7 +571,6 @@ export function FinanceReport({
   const refreshed = formatTime
     ? formatTime(report.takenAt, "refreshed")
     : refreshedLabel(report.takenAt, timeZone);
-  const line = summaryLine(summary);
   const fx = fxLine(summary);
   const columns = 2 + (hasBurn ? 1 : 0) + (hasRunway ? 1 : 0) + 1;
 
@@ -588,11 +644,7 @@ export function FinanceReport({
               : ""}
         </output>
       </header>
-      {line && (
-        <p className="font-medium text-sm" data-finance-summary>
-          {line}
-        </p>
-      )}
+      <StatCards summary={summary} rows={report.rows} kit={kit} />
       {fx && (
         <p className="text-muted-foreground text-xs" data-finance-fx>
           {fx}

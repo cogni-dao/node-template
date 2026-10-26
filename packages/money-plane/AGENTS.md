@@ -43,7 +43,7 @@ No runtime dependencies, no env reads, no viem. `fetch` is injected (`FetchLike`
 - Readers: `openRouterReader`, `baseWalletReader`, `creditPurchaseIncomeReader({ query })`; helpers `unknownRow`, `safeDetail`
 - FX + summary: `fetchEcbRate(fetch, pair)`, `toUsd(row, rates)`, `usdBalance`, `usdBurn`, `summarize(snapshot, { treasuryPlane })` → `{ treasuryUsd, incomePerDay, burnPerDay, shortestRunway, ratesUsed, unconverted }`
 - Row model additions (v6): `kind: "income"`, `usd`, `rail`, `children` (one level), `parts`, `note`
-- React (`./react`): `FinanceReport({ report, summary, kit, actions, formatTime?, thisNode? })`; `kit` = Button, Input, Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogTrigger; `actions` = fundSteward(amountUsd), refresh?. Ship `tailwind-source.css` so consumers scan its classes.
+- React (`./react`): `FinanceReport({ report, summary, kit, actions, formatTime?, thisNode? })`; `kit` = Button, Input, Card, CardContent, Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogTrigger; `actions` = fundSteward(amountUsd), refresh?. Ship `tailwind-source.css` so consumers scan its classes.
 
 ## Invariants
 
