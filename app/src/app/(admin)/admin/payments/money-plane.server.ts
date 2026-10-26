@@ -3,13 +3,14 @@
 
 /**
  * Module: `@app/(admin)/admin/payments/money-plane.server`
- * Purpose: This node's money-plane composition: configured wallet custody and explicitly unavailable operator-funded node cost shares,
- *   one read-only report through `@cogni/money-plane`.
+ * Purpose: This node's money-plane composition: the repo-spec wallets, the OpenRouter credit this node's key can read,
+ *   and the operator-funded Hosting and AI lines, as one read-only report through `@cogni/money-plane`.
  * Scope: Server-only. Reads repo-spec + server env and hands them to the package readers. Does not move funds,
  *   decide alerts, or render.
- * Invariants: Repo-spec approver authorization precedes credentials and provider reads. READERS_NEVER_THROW. Wallet custody never proves DAO spendable cash. Operator coverage is separate from measured node share.
- * Side-effects: IO (Base JSON-RPC reads), one terminal MONEY_PLANE_SNAPSHOT log event.
- * Links: packages/money-plane, https://cognidao.org/knowledge/money-plane-snapshot-design
+ * Invariants: Repo-spec approver authorization precedes credentials and provider reads. READERS_NEVER_THROW.
+ *   Unreadable is UNKNOWN, never GREEN. Treasury is identified only from configuration.
+ * Side-effects: IO (Base JSON-RPC + OpenRouter reads), one terminal MONEY_PLANE_SNAPSHOT log event.
+ * Links: packages/money-plane, https://cognidao.org/knowledge/finances-expert
  * @public
  */
 
@@ -18,12 +19,12 @@ import "server-only";
 import {
   BASE_PUBLIC_RPC_URL,
   baseWalletReader,
-  type CostRateEvidence,
   type FetchLike,
+  type MoneyPlaneRow,
   type MoneyPlaneSnapshot,
+  openRouterReader,
   type PlaneReader,
   takeSnapshot,
-  unknownRow,
 } from "@cogni/money-plane";
 import { redirect } from "next/navigation";
 
@@ -46,16 +47,49 @@ const noStoreFetch: FetchLike = (url, init) =>
   fetch(url, { ...init, cache: "no-store" });
 
 export interface NodeFinanceSnapshot extends MoneyPlaneSnapshot {
+  /** Plane id of the configured DAO treasury row, or null when repo-spec names none. */
   treasuryPlane: string | null;
-  costRateEvidence: CostRateEvidence[];
-  configuredWalletPlanes: string[];
 }
 
-function readers(): {
-  readers: PlaneReader[];
-  treasuryPlane: string | null;
-  configuredWalletPlanes: string[];
-} {
+/**
+ * A cost the operator pays on this node's behalf. The node holds no credential for it,
+ * so balance and burn stay null until the operator shares the scoped cost (task.5354).
+ * Note: the package grading floor normalizes a non-wallet INFO row to UNKNOWN.
+ */
+function operatorCoveredReader(
+  plane: string,
+  label: string,
+  detail: string
+): PlaneReader {
+  return {
+    plane,
+    label,
+    kind: "usage",
+    async read(): Promise<MoneyPlaneRow> {
+      return {
+        plane,
+        label,
+        kind: "usage",
+        balance: null,
+        currency: null,
+        burnPerDay: null,
+        runwayDays: null,
+        grade: "INFO",
+        observedAt: new Date().toISOString(),
+        source: "Operator sponsorship",
+        sourceObservedAt: null,
+        freshness: "unknown",
+        payer: "Operator",
+        beneficiary: "This node",
+        coverage: "operator-covered",
+        reasonCode: "unconfigured",
+        detail,
+      };
+    },
+  };
+}
+
+function readers(): { readers: PlaneReader[]; treasuryPlane: string | null } {
   const env = serverEnv();
   const wallet = {
     rpcUrl: env.EVM_RPC_URL ?? BASE_PUBLIC_RPC_URL,
@@ -64,21 +98,22 @@ function readers(): {
   };
   const configured = [
     {
-      name: "operator-wallet",
-      label: "Operator wallet",
-      address: getOperatorWalletConfig()?.address,
-    },
-    {
-      name: "steward-wallet",
-      label: "Steward wallet",
-      address: getStewardWalletConfig()?.address,
-    },
-    {
       name: "dao-treasury",
       label: "DAO treasury",
       address: getDaoTreasuryAddress(),
     },
+    {
+      name: "operator-wallet",
+      label: "Operator wallet · working capital",
+      address: getOperatorWalletConfig()?.address,
+    },
+    {
+      name: "steward-wallet",
+      label: "Steward wallet · human custody",
+      address: getStewardWalletConfig()?.address,
+    },
   ];
+  // One reader per distinct address: two roles on the same account are one balance, not two.
   let treasuryPlane: string | null = null;
   const accounts = new Map<string, (typeof configured)[number]>();
   for (const account of configured) {
@@ -95,56 +130,25 @@ function readers(): {
   }
   return {
     treasuryPlane,
-    configuredWalletPlanes: [...accounts.values()]
-      .filter((account) => Boolean(account.address))
-      .map((account) => `base:${account.name}`),
     readers: [
       ...[...accounts.values()].map((account) =>
         baseWalletReader({ ...wallet, ...account })
       ),
-      {
-        plane: "ai:operator-covered",
-        label: "Node AI share",
-        kind: "usage",
-        async read() {
-          return {
-            ...unknownRow({
-              plane: "ai:operator-covered",
-              label: "Node AI share",
-              kind: "usage",
-              reasonCode: "unconfigured",
-              observedAt: new Date().toISOString(),
-              detail:
-                "Scoped node cost unavailable; shared provider account is not a node balance",
-            }),
-            source: "Operator sponsorship",
-            payer: "Operator",
-            beneficiary: "This node",
-            coverage: "operator-covered",
-          };
-        },
-      },
-      {
-        plane: "hosting:operator-covered",
-        label: "Node hosting share",
-        kind: "usage",
-        async read() {
-          return {
-            ...unknownRow({
-              plane: "hosting:operator-covered",
-              label: "Node hosting share",
-              kind: "usage",
-              reasonCode: "unconfigured",
-              observedAt: new Date().toISOString(),
-              detail: "Node cost share unavailable",
-            }),
-            source: "Operator sponsorship",
-            payer: "Operator",
-            beneficiary: "This node",
-            coverage: "operator-covered",
-          };
-        },
-      },
+      openRouterReader({
+        apiKey: env.OPENROUTER_API_KEY,
+        fetch: noStoreFetch,
+        label: "OpenRouter credit",
+      }),
+      operatorCoveredReader(
+        "hosting:operator-covered",
+        "Hosting",
+        "Funded by operator · cost not yet shared"
+      ),
+      operatorCoveredReader(
+        "ai:operator-covered",
+        "AI",
+        "Funded by operator · usage not yet shared"
+      ),
     ],
   };
 }
@@ -175,12 +179,7 @@ export async function getMoneyPlaneSnapshot(): Promise<NodeFinanceSnapshot> {
       },
       EVENT_NAMES.MONEY_PLANE_SNAPSHOT
     );
-    return {
-      ...snapshot,
-      treasuryPlane: composition.treasuryPlane,
-      costRateEvidence: [],
-      configuredWalletPlanes: composition.configuredWalletPlanes,
-    };
+    return { ...snapshot, treasuryPlane: composition.treasuryPlane };
   } catch (error) {
     // takeSnapshot never rejects; this is the composition failing (env or
     // repo-spec unreadable). Log the enum, never the raw message.

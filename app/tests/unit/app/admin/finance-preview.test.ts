@@ -2,36 +2,61 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 /**
  * Module: `tests/unit/app/admin/finance-preview`
- * Purpose: Prove preview-only query isolation and production route denial.
+ * Purpose: Prove preview-only query isolation, production route denial, and that both fixture scenarios
+ *   are shaped like the real node composition.
  * Scope: Real QueryObserver/client and server page guard; no network or database.
  * Invariants: Stale/invalidation never reads live money; no fixture cache reuse.
  * Side-effects: local test query cache
- * Links: app/dev/finance-preview/FixtureBoundary.tsx
+ * Links: app/dev/finance-preview/{FixtureBoundary,fixture,page}.tsx
  * @internal
  */
 import { QueryObserver } from "@tanstack/react-query";
+import type { ReactNode } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   env: vi.fn(),
+  table: vi.fn(),
+  funding: vi.fn(),
   notFound: vi.fn(() => {
     throw new Error("NOT_FOUND");
   }),
 }));
 vi.mock("next/navigation", () => ({ notFound: mocks.notFound }));
 vi.mock("@/shared/env", () => ({ getEnv: mocks.env }));
-vi.mock("@/app/(admin)/AdminShell", () => ({ AdminShell: vi.fn() }));
+vi.mock("@/app/(admin)/AdminShell", () => ({
+  AdminShell: ({ children }: { children?: ReactNode }) => children,
+}));
 vi.mock("@/app/(admin)/admin/payments/MoneyPlaneTable", () => ({
-  MoneyPlaneTable: vi.fn(),
+  MoneyPlaneTable: mocks.table,
 }));
-vi.mock("@/components", () => ({
-  AdminText: vi.fn(),
-  Button: vi.fn(),
-  PageContainer: vi.fn(),
+vi.mock("@/app/(admin)/admin/payments/ProviderFundingSection", () => ({
+  ProviderFundingSection: mocks.funding,
 }));
+vi.mock("@/components", async () => {
+  const { createElement } = await import("react");
+  const box = ({ children }: { children?: ReactNode }) =>
+    createElement("div", null, children);
+  return { AdminText: box, Button: box, PageContainer: box };
+});
 
 import { createFinancePreviewQueryClient } from "@/app/dev/finance-preview/FixtureBoundary";
+import {
+  liveShapedPreview,
+  previewFor,
+  sparsePreview,
+} from "@/app/dev/finance-preview/fixture";
 import FinancePreviewPage from "@/app/dev/finance-preview/page";
+
+const PLANES = [
+  "base:dao-treasury",
+  "base:operator-wallet",
+  "base:steward-wallet",
+  "openrouter:account",
+  "hosting:operator-covered",
+  "ai:operator-covered",
+];
 
 describe("fixture shell treasury isolation", () => {
   it("never fetches an unseeded or stale fixture treasury, even after invalidation", async () => {
@@ -76,10 +101,11 @@ describe("fixture shell treasury isolation", () => {
       createFinancePreviewQueryClient().getQueryData(["treasury", "snapshot"])
     ).toBeUndefined();
   });
+
   it.each([
     "production",
     "test",
-  ])("returns404 in %s before evaluating fixture selection", async (env) => {
+  ])("returns 404 in %s before evaluating fixture selection", async (env) => {
     mocks.env.mockReturnValue(env);
     const then = vi.fn();
     await expect(
@@ -88,5 +114,89 @@ describe("fixture shell treasury isolation", () => {
       })
     ).rejects.toThrow("NOT_FOUND");
     expect(then).not.toHaveBeenCalled();
+  });
+});
+
+describe("fixture scenarios", () => {
+  it("live-shaped carries every node plane with the design's balances and no burn", () => {
+    expect(liveShapedPreview.rows.map((r) => r.plane)).toEqual(PLANES);
+    expect(liveShapedPreview.treasuryPlane).toBe("base:dao-treasury");
+    const by = Object.fromEntries(
+      liveShapedPreview.rows.map((r) => [r.plane, r])
+    );
+    expect(by["base:dao-treasury"]).toMatchObject({
+      balance: 74.52,
+      currency: "USDC",
+      grade: "INFO",
+    });
+    expect(by["base:operator-wallet"]?.balance).toBe(10.77);
+    expect(by["base:steward-wallet"]?.balance).toBe(7.07);
+    expect(by["openrouter:account"]).toMatchObject({
+      balance: 3.1,
+      currency: "USD",
+      burnPerDay: null,
+      runwayDays: null,
+      grade: "UNKNOWN",
+      reasonCode: "burn_unmeasured",
+    });
+    for (const plane of ["hosting:operator-covered", "ai:operator-covered"])
+      expect(by[plane]).toMatchObject({
+        balance: null,
+        burnPerDay: null,
+        coverage: "operator-covered",
+        payer: "Operator",
+      });
+  });
+
+  it("sparse keeps every plane but reads nothing: RPC unavailable, no OpenRouter key", () => {
+    expect(sparsePreview.rows.map((r) => r.plane)).toEqual(PLANES);
+    expect(sparsePreview.rows.every((r) => r.balance === null)).toBe(true);
+    expect(
+      sparsePreview.rows
+        .filter((r) => r.kind === "wallet")
+        .every((r) => r.reasonCode === "unreadable")
+    ).toBe(true);
+    expect(
+      sparsePreview.rows.find((r) => r.plane === "openrouter:account")
+    ).toMatchObject({ reasonCode: "unconfigured" });
+  });
+
+  it("selects sparse by query and defaults to live-shaped", () => {
+    expect(previewFor("sparse")).toMatchObject({
+      scenario: "sparse",
+      report: sparsePreview,
+    });
+    expect(previewFor(undefined).scenario).toBe("live-shaped");
+    expect(previewFor("rich").scenario).toBe("live-shaped");
+  });
+
+  it("renders the real table with the selected fixture in development", async () => {
+    mocks.env.mockReturnValue("development");
+    renderToStaticMarkup(
+      await FinancePreviewPage({
+        searchParams: Promise.resolve({ scenario: "sparse" }),
+      })
+    );
+    expect(mocks.table).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rows: sparsePreview.rows,
+        treasuryPlane: "base:dao-treasury",
+      }),
+      undefined
+    );
+    expect(mocks.funding).toHaveBeenCalledWith(
+      expect.objectContaining({
+        funding: expect.objectContaining({
+          openRouterRemainingUsd: null,
+          operatorWalletUsdc: null,
+        }),
+      }),
+      undefined
+    );
+    expect(previewFor("live-shaped").funding).toMatchObject({
+      openRouterRemainingUsd: 3.1,
+      operatorWalletUsdc: 10.77,
+      stewardWalletUsdc: 7.07,
+    });
   });
 });

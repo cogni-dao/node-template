@@ -3,11 +3,14 @@
 
 /**
  * Module: `@app/(admin)/admin/payments/page`
- * Purpose: Shared financial evidence in a node-owned read-only table, with unavailable node cost share explicit.
- * Scope: Server component. The snapshot helper authorizes the repo-spec approver before reading data; the admin layout also gates the shell.
- * Invariants: Reporting only, no payment controls. Custody is not DAO available cash.
- * Side-effects: IO (snapshot reads via getMoneyPlaneSnapshot)
- * Links: money-plane.server.ts, MoneyPlaneTable.tsx, https://cognidao.org/knowledge/money-plane-snapshot-design
+ * Purpose: Financials — the read-only money-plane report, then the existing Provider Funding rail
+ *   (Fund steward, Top up OpenRouter) that moves money along user USDC → operator wallet → steward → OpenRouter.
+ * Scope: Server component. The snapshot helper authorizes the repo-spec approver before any read; the admin layout
+ *   also gates the shell. Funding balances are read only after that authorization.
+ * Invariants: The table is read-only; the only write on the page is the panel's Fund-steward POST. Addresses from repo-spec.
+ * Side-effects: IO (snapshot reads via getMoneyPlaneSnapshot, OpenRouter + on-chain reads via getAiFunding)
+ * Links: money-plane.server.ts, MoneyPlaneTable.tsx, funding.server.ts, AiFundingPanel.client.tsx,
+ *   https://cognidao.org/knowledge/fund-cogni-vendors
  * @public
  */
 
@@ -15,24 +18,27 @@ import type { ReactElement } from "react";
 
 import { PageContainer } from "@/components";
 
+import { getAiFunding } from "./funding.server";
 import { MoneyPlaneTable } from "./MoneyPlaneTable";
 import { getMoneyPlaneSnapshot } from "./money-plane.server";
+import { ProviderFundingSection } from "./ProviderFundingSection";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-export default async function MoneyPlanesPage(): Promise<ReactElement> {
+export default async function FinancialsPage(): Promise<ReactElement> {
+  // Authorization lives in getMoneyPlaneSnapshot; funding balances read only after it admits the session.
   const snapshot = await getMoneyPlaneSnapshot();
+  const funding = await getAiFunding();
 
   return (
     <PageContainer maxWidth="full">
       <MoneyPlaneTable
-        configuredWalletPlanes={snapshot.configuredWalletPlanes}
         rows={snapshot.rows}
         takenAt={snapshot.takenAt}
         treasuryPlane={snapshot.treasuryPlane}
-        costRateEvidence={snapshot.costRateEvidence}
       />
+      <ProviderFundingSection funding={funding} />
     </PageContainer>
   );
 }
