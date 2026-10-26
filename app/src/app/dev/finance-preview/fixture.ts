@@ -9,8 +9,7 @@
  * Links: admin/payments/money-plane.server.ts, admin/payments/MoneyPlaneTable.tsx
  * @internal
  */
-import type { MoneyPlaneRow } from "@cogni/money-plane";
-import type { AiFunding } from "@/app/(admin)/admin/payments/funding.server";
+import type { MoneyPlaneRow, PayAction } from "@cogni/money-plane";
 import type { MoneyPlaneTableProps } from "@/app/(admin)/admin/payments/MoneyPlaneTable";
 
 export const PREVIEW_SCENARIOS = ["live-shaped", "sparse"] as const;
@@ -18,12 +17,20 @@ export type PreviewScenario = (typeof PREVIEW_SCENARIOS)[number];
 
 const takenAt = "2026-10-26T19:42:00.000Z";
 const observedAt = "2026-10-26T19:41:58.000Z";
+/** The same actions the server composition attaches (ONE_ROW_MODEL). */
+const FUND_STEWARD: PayAction = { kind: "fund-steward" };
+const OPENROUTER_CHECKOUT: PayAction = {
+  kind: "steward-checkout",
+  vendor: "openrouter",
+  checkoutUrl: "https://openrouter.ai/settings/credits",
+};
 
 function wallet(
   plane: string,
   label: string,
   balance: number,
-  eth: string
+  eth: string,
+  payAction?: PayAction
 ): MoneyPlaneRow {
   return {
     plane,
@@ -39,9 +46,14 @@ function wallet(
     sourceObservedAt: observedAt,
     freshness: "current",
     detail: eth,
+    ...(payAction ? { payAction } : {}),
   };
 }
-function unreadableWallet(plane: string, label: string): MoneyPlaneRow {
+function unreadableWallet(
+  plane: string,
+  label: string,
+  payAction?: PayAction
+): MoneyPlaneRow {
   return {
     plane,
     label,
@@ -56,6 +68,7 @@ function unreadableWallet(plane: string, label: string): MoneyPlaneRow {
     sourceObservedAt: null,
     reasonCode: "unreadable",
     detail: "eth_call HTTP 503",
+    ...(payAction ? { payAction } : {}),
   };
 }
 function operatorCovered(
@@ -102,16 +115,12 @@ export const liveShapedPreview: MoneyPlaneTableProps = {
     wallet("base:dao-treasury", "DAO treasury", 74.52, "0.0021 ETH"),
     wallet(
       "base:operator-wallet",
-      "Operator wallet · working capital",
+      "Operator wallet",
       10.77,
-      "0.0008 ETH"
+      "0.0008 ETH",
+      FUND_STEWARD
     ),
-    wallet(
-      "base:steward-wallet",
-      "Steward wallet · human custody",
-      7.07,
-      "0.0003 ETH"
-    ),
+    wallet("base:steward-wallet", "Steward wallet", 7.07, "0.0003 ETH"),
     {
       plane: "openrouter:account",
       label: "OpenRouter credit",
@@ -127,6 +136,7 @@ export const liveShapedPreview: MoneyPlaneTableProps = {
       freshness: "current",
       reasonCode: "burn_unmeasured",
       usageTotal: 41.9,
+      payAction: OPENROUTER_CHECKOUT,
     },
     hosting,
     ai,
@@ -139,11 +149,8 @@ export const sparsePreview: MoneyPlaneTableProps = {
   treasuryPlane: "base:dao-treasury",
   rows: [
     unreadableWallet("base:dao-treasury", "DAO treasury"),
-    unreadableWallet(
-      "base:operator-wallet",
-      "Operator wallet · working capital"
-    ),
-    unreadableWallet("base:steward-wallet", "Steward wallet · human custody"),
+    unreadableWallet("base:operator-wallet", "Operator wallet", FUND_STEWARD),
+    unreadableWallet("base:steward-wallet", "Steward wallet"),
     {
       plane: "openrouter:account",
       label: "OpenRouter credit",
@@ -158,42 +165,18 @@ export const sparsePreview: MoneyPlaneTableProps = {
       sourceObservedAt: null,
       reasonCode: "unconfigured",
       detail: "no OpenRouter key in this environment",
+      payAction: OPENROUTER_CHECKOUT,
     },
     hosting,
     ai,
   ],
 };
 
-const PREVIEW_ADDRESS = "0x1111111111111111111111111111111111111111";
-
-/** Provider Funding rail balances matching each report scenario. */
-export const previewFunding: Record<PreviewScenario, AiFunding> = {
-  "live-shaped": {
-    openRouterRemainingUsd: 3.1,
-    operatorWalletUsdc: 10.77,
-    stewardWalletUsdc: 7.07,
-    operatorWalletAddress: PREVIEW_ADDRESS,
-    stewardWalletAddress: PREVIEW_ADDRESS,
-  },
-  sparse: {
-    openRouterRemainingUsd: null,
-    operatorWalletUsdc: null,
-    stewardWalletUsdc: null,
-    operatorWalletAddress: PREVIEW_ADDRESS,
-    stewardWalletAddress: PREVIEW_ADDRESS,
-  },
-};
-
 export function previewFor(scenario: string | undefined): {
   scenario: PreviewScenario;
   report: MoneyPlaneTableProps;
-  funding: AiFunding;
 } {
-  const selected: PreviewScenario =
-    scenario === "sparse" ? "sparse" : "live-shaped";
-  return {
-    scenario: selected,
-    report: selected === "sparse" ? sparsePreview : liveShapedPreview,
-    funding: previewFunding[selected],
-  };
+  return scenario === "sparse"
+    ? { scenario: "sparse", report: sparsePreview }
+    : { scenario: "live-shaped", report: liveShapedPreview };
 }

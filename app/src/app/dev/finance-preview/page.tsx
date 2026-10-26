@@ -13,7 +13,6 @@ import type { TreasurySnapshotResponseV1 } from "@cogni/node-contracts";
 import { notFound } from "next/navigation";
 import { AdminShell } from "@/app/(admin)/AdminShell";
 import { MoneyPlaneTable } from "@/app/(admin)/admin/payments/MoneyPlaneTable";
-import { ProviderFundingSection } from "@/app/(admin)/admin/payments/ProviderFundingSection";
 import { AdminText, Button, PageContainer } from "@/components";
 import { getEnv } from "@/shared/env";
 import { FixtureBoundary } from "./FixtureBoundary";
@@ -25,9 +24,7 @@ export default async function FinancePreviewPage({
   searchParams: Promise<{ scenario?: string }>;
 }) {
   if (getEnv("NODE_ENV") !== "development") notFound();
-  const { scenario, report, funding } = previewFor(
-    (await searchParams).scenario
-  );
+  const { scenario, report } = previewFor((await searchParams).scenario);
   const treasury = report.rows.find(
     (row) => row.plane === report.treasuryPlane
   );
@@ -65,7 +62,6 @@ export default async function FinancePreviewPage({
             </Button>
           </div>
           <MoneyPlaneTable {...report} />
-          <ProviderFundingSection funding={funding} />
         </PageContainer>
       </AdminShell>
     </FixtureBoundary>

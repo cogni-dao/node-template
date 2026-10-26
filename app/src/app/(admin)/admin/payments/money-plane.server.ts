@@ -23,6 +23,7 @@ import {
   type MoneyPlaneRow,
   type MoneyPlaneSnapshot,
   openRouterReader,
+  type PayAction,
   type PlaneReader,
   takeSnapshot,
 } from "@cogni/money-plane";
@@ -42,6 +43,8 @@ import { USDC_TOKEN_ADDRESS } from "@/shared/web3";
 const log = makeLogger({ route: "admin.payments" });
 
 const SNAPSHOT_TIMEOUT_MS = 8_000;
+/** The human checkout the steward wallet pays into; the row's Action opens it. */
+export const OPENROUTER_CHECKOUT_URL = "https://openrouter.ai/settings/credits";
 
 const noStoreFetch: FetchLike = (url, init) =>
   fetch(url, { ...init, cache: "no-store" });
@@ -96,22 +99,23 @@ function readers(): { readers: PlaneReader[]; treasuryPlane: string | null } {
     fetch: noStoreFetch,
     usdcAddress: USDC_TOKEN_ADDRESS,
   };
-  const configured = [
-    {
-      name: "dao-treasury",
-      label: "DAO treasury",
-      address: getDaoTreasuryAddress(),
-    },
+  const operator = getOperatorWalletConfig()?.address;
+  const steward = getStewardWalletConfig()?.address;
+  const configured: {
+    name: string;
+    label: string;
+    address: string | null | undefined;
+    payAction?: PayAction;
+  }[] = [
+    { name: "dao-treasury", label: "DAO treasury", address: getDaoTreasuryAddress() },
     {
       name: "operator-wallet",
-      label: "Operator wallet · working capital",
-      address: getOperatorWalletConfig()?.address,
+      label: "Operator wallet",
+      address: operator,
+      // Fund-steward moves operator USDC to the steward; without a steward there is nowhere to send it.
+      ...(steward ? { payAction: { kind: "fund-steward" as const } } : {}),
     },
-    {
-      name: "steward-wallet",
-      label: "Steward wallet · human custody",
-      address: getStewardWalletConfig()?.address,
-    },
+    { name: "steward-wallet", label: "Steward wallet", address: steward },
   ];
   // One reader per distinct address: two roles on the same account are one balance, not two.
   let treasuryPlane: string | null = null;
@@ -125,8 +129,11 @@ function readers(): { readers: PlaneReader[]; treasuryPlane: string | null } {
     const prior = accounts.get(key);
     if (account.name === "dao-treasury" && address)
       treasuryPlane = `base:${prior?.name ?? account.name}`;
-    if (prior) prior.label = `${prior.label} / ${account.label}`;
-    else accounts.set(key, { ...account });
+    if (prior) {
+      prior.label = `${prior.label} / ${account.label}`;
+      if (prior.payAction === undefined && account.payAction !== undefined)
+        prior.payAction = account.payAction;
+    } else accounts.set(key, { ...account });
   }
   return {
     treasuryPlane,
@@ -138,6 +145,11 @@ function readers(): { readers: PlaneReader[]; treasuryPlane: string | null } {
         apiKey: env.OPENROUTER_API_KEY,
         fetch: noStoreFetch,
         label: "OpenRouter credit",
+        payAction: {
+          kind: "steward-checkout",
+          vendor: "openrouter",
+          checkoutUrl: OPENROUTER_CHECKOUT_URL,
+        },
       }),
       operatorCoveredReader(
         "hosting:operator-covered",

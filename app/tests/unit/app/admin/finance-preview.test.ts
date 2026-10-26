@@ -18,7 +18,6 @@ import { describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   env: vi.fn(),
   table: vi.fn(),
-  funding: vi.fn(),
   notFound: vi.fn(() => {
     throw new Error("NOT_FOUND");
   }),
@@ -30,9 +29,6 @@ vi.mock("@/app/(admin)/AdminShell", () => ({
 }));
 vi.mock("@/app/(admin)/admin/payments/MoneyPlaneTable", () => ({
   MoneyPlaneTable: mocks.table,
-}));
-vi.mock("@/app/(admin)/admin/payments/ProviderFundingSection", () => ({
-  ProviderFundingSection: mocks.funding,
 }));
 vi.mock("@/components", async () => {
   const { createElement } = await import("react");
@@ -129,8 +125,16 @@ describe("fixture scenarios", () => {
       currency: "USDC",
       grade: "INFO",
     });
-    expect(by["base:operator-wallet"]?.balance).toBe(10.77);
-    expect(by["base:steward-wallet"]?.balance).toBe(7.07);
+    expect(by["base:operator-wallet"]).toMatchObject({
+      label: "Operator wallet",
+      balance: 10.77,
+      payAction: { kind: "fund-steward" },
+    });
+    expect(by["base:steward-wallet"]).toMatchObject({
+      label: "Steward wallet",
+      balance: 7.07,
+    });
+    expect(by["base:steward-wallet"]).not.toHaveProperty("payAction");
     expect(by["openrouter:account"]).toMatchObject({
       balance: 3.1,
       currency: "USD",
@@ -138,6 +142,11 @@ describe("fixture scenarios", () => {
       runwayDays: null,
       grade: "UNKNOWN",
       reasonCode: "burn_unmeasured",
+      payAction: {
+        kind: "steward-checkout",
+        vendor: "openrouter",
+        checkoutUrl: "https://openrouter.ai/settings/credits",
+      },
     });
     for (const plane of ["hosting:operator-covered", "ai:operator-covered"])
       expect(by[plane]).toMatchObject({
@@ -158,11 +167,18 @@ describe("fixture scenarios", () => {
     ).toBe(true);
     expect(
       sparsePreview.rows.find((r) => r.plane === "openrouter:account")
-    ).toMatchObject({ reasonCode: "unconfigured" });
+    ).toMatchObject({
+      reasonCode: "unconfigured",
+      payAction: { kind: "steward-checkout" },
+    });
+    // Actions stay reachable while a plane is unreadable.
+    expect(
+      sparsePreview.rows.find((r) => r.plane === "base:operator-wallet")
+    ).toMatchObject({ payAction: { kind: "fund-steward" } });
   });
 
   it("selects sparse by query and defaults to live-shaped", () => {
-    expect(previewFor("sparse")).toMatchObject({
+    expect(previewFor("sparse")).toEqual({
       scenario: "sparse",
       report: sparsePreview,
     });
@@ -184,19 +200,5 @@ describe("fixture scenarios", () => {
       }),
       undefined
     );
-    expect(mocks.funding).toHaveBeenCalledWith(
-      expect.objectContaining({
-        funding: expect.objectContaining({
-          openRouterRemainingUsd: null,
-          operatorWalletUsdc: null,
-        }),
-      }),
-      undefined
-    );
-    expect(previewFor("live-shaped").funding).toMatchObject({
-      openRouterRemainingUsd: 3.1,
-      operatorWalletUsdc: 10.77,
-      stewardWalletUsdc: 7.07,
-    });
   });
 });

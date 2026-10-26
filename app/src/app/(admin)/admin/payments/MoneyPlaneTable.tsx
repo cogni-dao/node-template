@@ -3,12 +3,15 @@
 
 /**
  * Module: `admin/payments/MoneyPlaneTable`
- * Purpose: Financials — one table of this node's money planes: balance, burn/day, runway and source, in risk order.
- * Scope: Client presentation of an authorized server report; no provider reads or payments.
- * Invariants: Unknown renders as a muted dash with a one-line human reason behind Source; native units only, no FX or
- *   pooled totals; no per-row status pills; the same sorted rows stack below 42rem (@2xl) of container width, so a 1024px viewport beside the sidebar still gets the table.
+ * Purpose: Financials — one table of this node's money planes: Line · Balance · Burn/day · Runway · Action, in risk order.
+ *   The Line label opens the row's Source dialog; the Action cell renders the row's `payAction`.
+ * Scope: Client presentation of an authorized server report; no provider reads. Money moves only through RowAction.
+ * Invariants: The table is the page (no second rendering of any balance). Unknown renders as a muted dash with a
+ *   one-line reason in the dialog; native units only, no FX or pooled totals; no per-row status pills; an all-null
+ *   Burn/day or Runway column is omitted; the same sorted rows stack below 42rem (@2xl) of container width, so a
+ *   1024px viewport beside the sidebar still gets the table.
  * Side-effects: local sort state, route refresh
- * Links: money-plane.server.ts, https://cognidao.org/knowledge/finances-expert
+ * Links: money-plane.server.ts, RowAction.client.tsx, https://cognidao.org/knowledge/finances-expert
  * @public
  */
 "use client";
@@ -45,6 +48,8 @@ import {
   DialogTrigger,
 } from "@/components";
 
+import { RowAction } from "./RowAction.client";
+
 /** Default row order: RED, YELLOW; then rows with a known number (GREEN, INFO, UNKNOWN); placeholders last. */
 const RISK: Record<Grade, number> = {
   RED: 0,
@@ -61,6 +66,8 @@ const RUNWAY_TONE: Partial<Record<Grade, string>> = {
 };
 const DOLLAR_CURRENCIES = new Set(["USD", "USDC"]);
 const DASH = "—";
+const MONEY_CHAIN =
+  "User payments → operator wallet → steward wallet → OpenRouter. Fund steward moves USDC to the wallet a human pays from.";
 
 function measured(value: number | null | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
@@ -78,20 +85,20 @@ export function balanceText(row: MoneyPlaneRow): string {
     ? DASH
     : `${money(value)} ${row.currency ?? ""}`.trim();
 }
-/** "$0.42 / day" or a dash. */
+/** "$0.19/day" or a dash. */
 export function burnText(row: MoneyPlaneRow): string {
   const value = measured(row.burnPerDay);
   if (value === undefined) return DASH;
   return DOLLAR_CURRENCIES.has(row.currency ?? "")
-    ? `$${money(value)} / day`
-    : `${money(value)} ${row.currency ?? ""} / day`.trim();
+    ? `$${money(value)}/day`
+    : `${money(value)} ${row.currency ?? ""}/day`.trim();
 }
-/** "12 d" for a graded runway; a dash for unknown or holdings. */
+/** "161d" for a graded runway; a dash for unknown or holdings. */
 export function runwayText(row: MoneyPlaneRow): string {
   const value = measured(row.runwayDays);
   if (value === undefined || row.grade === "UNKNOWN" || row.grade === "INFO")
     return DASH;
-  return `${Math.round(value)} d`;
+  return `${Math.round(value)}d`;
 }
 /** One human line explaining a missing number; null when nothing is missing. */
 export function unavailableReason(row: MoneyPlaneRow): string | null {
@@ -132,7 +139,7 @@ export function riskRank(row: MoneyPlaneRow): number {
 export function riskCompare(a: MoneyPlaneRow, b: MoneyPlaneRow): number {
   return riskRank(a) - riskRank(b) || a.label.localeCompare(b.label);
 }
-/** Which numeric columns carry any value; a column of nothing but dashes is replaced by one note. */
+/** Which numeric columns carry any value; a column of nothing but dashes is omitted. */
 export function reportedColumns(rows: readonly MoneyPlaneRow[]): {
   burn: boolean;
   runway: boolean;
@@ -141,16 +148,6 @@ export function reportedColumns(rows: readonly MoneyPlaneRow[]): {
     burn: rows.some((row) => row.burnPerDay !== null),
     runway: rows.some((row) => row.runwayDays !== null),
   };
-}
-export function unreportedNote(columns: {
-  burn: boolean;
-  runway: boolean;
-}): string | null {
-  if (!columns.burn && !columns.runway)
-    return "Burn and runway are not yet reported for this node.";
-  if (!columns.runway) return "Runway is not yet reported for this node.";
-  if (!columns.burn) return "Burn is not yet reported for this node.";
-  return null;
 }
 
 const subscribeNever = () => () => {};
@@ -177,6 +174,33 @@ function readableTime(
     timeZoneName: "short",
   }).format(new Date(value));
 }
+/** "Refreshed 12:42 PM" today, "Refreshed Oct 25, 12:00 AM" otherwise. */
+export function refreshedText(
+  value: string,
+  timeZone: string,
+  now: Date = new Date()
+): string {
+  if (!Number.isFinite(Date.parse(value))) return "Refreshed time unknown";
+  const date = new Date(value);
+  const day = new Intl.DateTimeFormat("en-CA", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    timeZone,
+  });
+  const time = new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone,
+  }).format(date);
+  if (day.format(date) === day.format(now)) return `Refreshed ${time}`;
+  const month = new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    timeZone,
+  }).format(date);
+  return `Refreshed ${month}, ${time}`;
+}
 
 function numericSort(a: Row<MoneyPlaneRow>, b: Row<MoneyPlaneRow>, id: string) {
   return a.getValue<number>(id) - b.getValue<number>(id);
@@ -195,7 +219,7 @@ function Field({ label, value }: { label: string; value: ReactNode }) {
   );
 }
 
-/** Dialog body: readable source, exact native amounts, observed time, and the reason when unavailable. */
+/** Dialog body, at most six short rows: source, exact amounts, observed time, reason, money chain. */
 export function MoneyPlaneEvidence({ row }: { row: MoneyPlaneRow }) {
   const timeZone = useTimeZone();
   const observed = readableTime(row.sourceObservedAt, timeZone);
@@ -212,50 +236,42 @@ export function MoneyPlaneEvidence({ row }: { row: MoneyPlaneRow }) {
       {measured(row.burnPerDay) !== undefined ? (
         <Field
           label="Exact burn"
-          value={`${row.burnPerDay} ${row.currency ?? ""} / day`.trim()}
+          value={`${row.burnPerDay} ${row.currency ?? ""}/day`.trim()}
         />
-      ) : null}
-      {row.coverage === "operator-covered" ? (
-        <Field label="Funded by" value={row.payer ?? "Operator"} />
       ) : null}
       <Field label="Observed" value={observed ?? "Not observed"} />
       {reason ? <Field label="Unavailable" value={reason} /> : null}
+      {row.payAction?.kind === "fund-steward" ? (
+        <Field label="Money chain" value={MONEY_CHAIN} />
+      ) : null}
     </dl>
   );
 }
 
-function SourceDialog({ row }: { row: MoneyPlaneRow }) {
-  return (
-    <Dialog>
-      <DialogTrigger asChild>
-        <Button
-          variant="link"
-          size="sm"
-          className="h-auto min-h-11 px-0 text-sm"
-          aria-label={`Source for ${row.label}`}
-        >
-          Source
-        </Button>
-      </DialogTrigger>
-      <DialogContent className="max-h-dvh min-w-0 overflow-y-auto break-words">
-        <DialogHeader className="min-w-0 pr-8">
-          <DialogTitle>{row.label}</DialogTitle>
-          <DialogDescription>
-            Exact native amounts as read; nothing is converted or pooled.
-          </DialogDescription>
-        </DialogHeader>
-        <MoneyPlaneEvidence row={row} />
-      </DialogContent>
-    </Dialog>
-  );
-}
-
+/** The Line cell: the label is the Source dialog trigger; "Operator-funded" beneath it when the operator pays. */
 function LineCell({ row }: { row: MoneyPlaneRow }) {
   return (
     <div className="min-w-0 space-y-0.5">
-      <AdminText variant="label">{row.label}</AdminText>
+      <Dialog>
+        <DialogTrigger asChild>
+          <button
+            type="button"
+            className="min-w-0 rounded-sm text-left font-medium text-foreground text-sm wrap-anywhere underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            aria-label={`${row.label} source`}
+          >
+            {row.label}
+          </button>
+        </DialogTrigger>
+        <DialogContent className="max-h-dvh min-w-0 overflow-y-auto break-words">
+          <DialogHeader className="min-w-0 pr-8">
+            <DialogTitle>{row.label}</DialogTitle>
+            <DialogDescription>Exact native amounts as read.</DialogDescription>
+          </DialogHeader>
+          <MoneyPlaneEvidence row={row} />
+        </DialogContent>
+      </Dialog>
       {row.coverage === "operator-covered" ? (
-        <AdminText variant="detail">Funded by operator</AdminText>
+        <AdminText variant="detail">Operator-funded</AdminText>
       ) : null}
     </div>
   );
@@ -327,9 +343,11 @@ export function createMoneyPlaneColumns() {
       }
     ),
     column.display({
-      id: "source",
-      header: "Source",
-      cell: ({ row }) => <SourceDialog row={row.original} />,
+      id: "action",
+      header: "Action",
+      cell: ({ row }) => (
+        <RowAction action={row.original.payAction} label={row.original.label} />
+      ),
     }),
   ];
 }
@@ -356,7 +374,6 @@ export function MoneyPlaneTable({
   ]);
   const data = useMemo(() => [...rows], [rows]);
   const reported = reportedColumns(rows);
-  const note = unreportedNote(reported);
   const table = useReactTable({
     data,
     columns: moneyPlaneColumns,
@@ -379,7 +396,6 @@ export function MoneyPlaneTable({
             ? (unavailableReason(treasury) ?? "not read")
             : "no treasury configured"
         }`;
-  const refreshed = readableTime(takenAt, timeZone) ?? "time unknown";
 
   return (
     <div className="@container min-w-0 space-y-5" data-financials-report>
@@ -388,7 +404,7 @@ export function MoneyPlaneTable({
           <AdminText as="h1" variant="title">
             Financials
           </AdminText>
-          <AdminText variant="muted">Report refreshed {refreshed}</AdminText>
+          <AdminText variant="muted">{refreshedText(takenAt, timeZone)}</AdminText>
         </div>
         <Button
           variant="outline"
@@ -449,10 +465,7 @@ export function MoneyPlaneTable({
             key={row.plane}
             className="min-w-0 space-y-3 rounded-lg border border-border p-4"
           >
-            <div className="flex min-w-0 items-start justify-between gap-3">
-              <LineCell row={row} />
-              <SourceDialog row={row} />
-            </div>
+            <LineCell row={row} />
             <dl className="flex min-w-0 flex-wrap gap-x-8 gap-y-3">
               <Field label="Balance" value={<Muted text={balanceText(row)} />} />
               {reported.burn ? (
@@ -462,13 +475,12 @@ export function MoneyPlaneTable({
                 <Field label="Runway" value={<RunwayCell row={row} />} />
               ) : null}
             </dl>
+            {row.payAction ? (
+              <RowAction action={row.payAction} label={row.label} />
+            ) : null}
           </li>
         ))}
       </ul>
-      {note ? <AdminText variant="muted">{note}</AdminText> : null}
-      <AdminText variant="muted">
-        Payment history is not included in this report.
-      </AdminText>
     </div>
   );
 }
