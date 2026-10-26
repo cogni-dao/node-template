@@ -101,7 +101,10 @@ export const GET = wrapRouteHandlerWithLogging(
     ctx.log.info(
       {
         count: result.items.length,
-        ...normalizeWorkItemOrder(input),
+        ...normalizeWorkItemOrder({
+          ...(input.sortBy !== undefined && { sortBy: input.sortBy }),
+          ...(input.sortDirection !== undefined && { sortDirection: input.sortDirection })
+        }),
         limit: input.limit ?? 100,
         hasMore: result.pageInfo?.hasMore ?? false
       },

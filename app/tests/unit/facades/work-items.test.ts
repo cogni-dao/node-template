@@ -153,7 +153,8 @@ describe("app/_facades/work/items.server", () => {
       expect(mockPort.list).not.toHaveBeenCalled();
       expect(mockDoltgres.list).toHaveBeenCalledWith({
         sortBy: "rankScore",
-        sortDirection: "desc"
+        sortDirection: "desc",
+        limit: 100
       });
     });
     it("never masks configured outages with markdown", async () => {
@@ -246,7 +247,22 @@ describe("app/_facades/work/items.server", () => {
 
       await listWorkItems({});
 
-      expect(mockPort.list).toHaveBeenCalledWith({});
+      expect(mockPort.list).toHaveBeenCalledWith({ limit: 100 });
+    });
+
+    it("keeps the default 100-row Markdown page and its continuation", async () => {
+      const rows = Array.from({length: 101}, (_, i) => ({...SAMPLE_WORK_ITEM, id: toWorkItemId(`task.${i}`)}));
+      vi.mocked(mockPort.list).mockImplementation(async query => {
+        const offset = query?.cursor === "md-next" ? 100 : 0;
+        const limit = query?.limit ?? rows.length;
+        return {items: rows.slice(offset, offset + limit), ...(offset + limit < rows.length && {nextCursor: "md-next"})};
+      });
+      const first = await listWorkItems({});
+      expect(first.items).toHaveLength(100);
+      expect(first.pageInfo).toEqual({endCursor: "md-next", hasMore: true});
+      const second = await listWorkItems({cursor: first.nextCursor});
+      expect(second.items).toHaveLength(1);
+      expect(second.pageInfo).toEqual({endCursor: null, hasMore: false});
     });
 
     it("returns empty items for empty result", async () => {

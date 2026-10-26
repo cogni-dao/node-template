@@ -138,8 +138,8 @@ jobs:
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
+          username: ${{ secrets.GHCR_DEPLOY_USERNAME }}
+          password: ${{ secrets.GHCR_DEPLOY_TOKEN }}
 
       - name: Doltgres 0.57.3 work-item acceptance
         run: pnpm --filter @cogni/node-template-app test:doltgres

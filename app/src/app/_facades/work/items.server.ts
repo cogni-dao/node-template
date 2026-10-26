@@ -273,7 +273,7 @@ export async function listWorkItems(
     ...(input.actor && { actor: input.actor as WorkItem["actor"] }),
     ...(input.projectId && { projectId: toWorkItemId(input.projectId) }),
     ...(input.node && { node: input.node }),
-    ...(input.limit && { limit: input.limit }),
+    limit: input.limit ?? 100,
     ...(input.cursor && { cursor: input.cursor })
   };
 

@@ -211,15 +211,15 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 				expect(elapsedMs).toBeLessThan(5000);
 				return page;
 			};
-			const cold = await measured("cold", 5);
-			expect(cold.items.map((item) => rankScore(item.scores))).toEqual([
+			const firstAdapterRead = await measured("first-adapter-read-after-parity", 5);
+			expect(firstAdapterRead.items.map((item) => rankScore(item.scores))).toEqual([
 				15, 15, 15, 15, 15,
 			]);
 			const legacy = await sql.unsafe(
 				"SELECT id FROM work_items WHERE node='rank-native' ORDER BY priority ASC,rank ASC LIMIT 500",
 			);
-			expect(legacy.map((row) => row.id)).not.toContain(cold.items[0]?.id);
-			await measured("warm", 5);
+			expect(legacy.map((row) => row.id)).not.toContain(firstAdapterRead.items[0]?.id);
+			await measured("repeat-adapter-read", 5);
 			const query = queries[0];
 			if (!query) throw new Error("query missing");
 			const plan = await sql.unsafe(`EXPLAIN ${query}`);
@@ -329,6 +329,92 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 		await sql.unsafe(
 			"DELETE FROM work_items WHERE node IN ('rank-native','text-native')",
 		);
+	});
+
+	it.each([
+		"native",
+		"admission",
+	] as const)("expires a sparse text list across batches including %s waiting without partial success", async (mode) => {
+		const writer = postgres(dbUrl, { max: 1, fetch_types: false });
+		const reader = postgres(dbUrl, { max: 1, fetch_types: false });
+		const unsafe = reader.unsafe.bind(reader);
+		const end = reader.end.bind(reader);
+		const native: Promise<unknown>[] = [];
+		let batches = 0,
+			ended = 0,
+			settled = 0;
+		let signalFirst!: () => void;
+		const firstStarted = new Promise<void>((resolve) => {
+			signalFirst = resolve;
+		});
+		reader.unsafe = ((query: string) => {
+			const isList = query.includes("node IN ('deadline-native')");
+			if (isList) {
+				batches++;
+				signalFirst();
+			}
+			const delay = isList ? (batches === 1 ? 0.15 : 0.7) : 0.7;
+			// Execute the actual adapter query; real native pg_sleep delays its settlement.
+			// The result includes a match on batch 1, so a timeout must discard it.
+			const pending = (async () => {
+				const rows = await unsafe(query);
+				await unsafe(`SELECT pg_sleep(${delay}) /* rank_text_deadline_probe */`);
+				return rows;
+			})().finally(() => {
+				settled++;
+			});
+			native.push(pending);
+			return pending;
+		}) as typeof reader.unsafe;
+		reader.end = (async (options) => {
+			ended++;
+			await end(options);
+		}) as typeof reader.end;
+		try {
+			await sql.unsafe(
+				`INSERT INTO work_items (id,type,title,status,node) VALUES ${Array.from({ length: 6 }, (_, i) => `('task.${300000 + i}','task','${i === 0 || i === 5 ? "needle" : "absent"}','needs_design','deadline-native')`).join(",")}`,
+			);
+			const adapter = new DoltgresWorkItemAdapter(writer, {
+				readClient: reader,
+				readConnectionBudget: 2,
+				queryTimeoutMs: 500,
+			});
+			const list = adapter.list({
+				node: "deadline-native",
+				text: "needle",
+				limit: 1,
+			});
+			const rejected = expect(list).rejects.toBeInstanceOf(WorkItemsBusyError);
+			await firstStarted;
+			const queued =
+				mode === "admission"
+					? adapter.get(toWorkItemId("task.300000")).catch((error) => error)
+					: undefined;
+			await rejected;
+			expect(batches).toBe(mode === "native" ? 2 : 1);
+			expect(ended).toBe(0); // A pending native operation retains its generation.
+			const captured = batches;
+			await Promise.allSettled(native);
+			await queued;
+			expect(settled).toBe(native.length);
+			expect(batches).toBe(captured); // No later text batch dispatch after expiry.
+			await expect.poll(() => ended).toBe(1);
+			console.info(
+				"rank_query_text_deadline",
+				JSON.stringify({
+					image: DOLTGRES_IMAGE,
+					mode,
+					batches,
+					settled,
+					ended,
+					queryTimeoutMs: 500,
+				}),
+			);
+		} finally {
+			await Promise.allSettled(native);
+			await Promise.allSettled([writer.end({ timeout: 5 }), end({ timeout: 5 })]);
+			await sql.unsafe("DELETE FROM work_items WHERE node='deadline-native'");
+		}
 	});
 
 	it("creates, lists, patches, and retains versioned content through Dolt branches", async () => {
