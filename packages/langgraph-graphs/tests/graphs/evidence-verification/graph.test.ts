@@ -27,7 +27,8 @@ const program: EvidenceProgram = {
   readToolIds: [KNOWLEDGE_READ_NAME, GOAL_LIST_NAME],
   initialReads: [{ tool: GOAL_LIST_NAME, args: {} }],
   assignment: "Review current evidence.",
-  criteria: "Follow the exact principle and primary evidence.",
+  criteria:
+    "Check the decision against primary evidence and the exact required principle: unresolved human gates require defer. Accept approve only when the evidence establishes the gate is resolved. A no-change claim requires actual read evidence, not an author assertion.",
   payloadSchema: z.object({ decision: z.enum(["approve", "defer"]) }).strict(),
   payloadDescription: '{decision:"approve"|"defer"}',
 };
@@ -646,6 +647,10 @@ describe("evidence verification through the injected runner", () => {
     const second = {
       ...program,
       id: "knowledge-review",
+      assignment:
+        "Compare the supplied knowledge sources and propose any contradictions.",
+      criteria:
+        "Check each claimed contradiction against the actual source contents. Accept no_change only when actual reads support the absence of contradictions and the contradictions array is empty. Never infer unread contents from a title.",
       payloadSchema: z.object({ contradictions: z.array(z.string()) }).strict(),
       payloadDescription: "{contradictions:string[]}",
     };
@@ -655,10 +660,45 @@ describe("evidence verification through the injected runner", () => {
       evidenceIds: ["e1"],
       payload: { contradictions: [] },
     });
-    const { result } = await exercise({
+    const { result, calls } = await exercise({
       program: second,
       replies: [text("compared exact sources"), text(content), text(accept)],
     });
+    const [child, author, verifier] = calls.map(
+      (call) => JSON.parse(call.messages) as { role: string; content: string }[]
+    );
+    for (const messages of [child, author, verifier]) {
+      expect(messages?.[0]?.content).toContain(body);
+      expect(messages?.[0]?.content).toContain("Read-only; never claim writes");
+      expect(messages?.[0]?.content).not.toMatch(
+        /six-axis|goalId|work.item|rankScore/
+      );
+      expect(JSON.parse(messages?.[1]?.content ?? "{}").evidence).toEqual([
+        expect.objectContaining({
+          id: "e1",
+          value: {
+            goals: [{ id: "goal-1", content: "human approval unresolved" }],
+          },
+        }),
+      ]);
+    }
+    expect(child?.[0]?.content).not.toContain(second.assignment);
+    expect(JSON.parse(child?.[1]?.content ?? "{}").programContext).toBe(
+      second.assignment
+    );
+    expect(
+      child
+        ?.map((m) => m.content)
+        .join("\n")
+        .split(second.assignment)
+    ).toHaveLength(2);
+    expect(child?.[0]?.content).toContain("never author the final proposal");
+    expect(author?.[0]?.content).toContain(second.assignment);
+    expect(verifier?.[0]?.content).toContain(second.criteria);
+    expect(verifier?.[0]?.content).not.toContain(second.assignment);
+    expect(JSON.parse(verifier?.[1]?.content ?? "{}")).not.toHaveProperty(
+      "findings"
+    );
     expect(result.structuredOutput).toMatchObject({
       status: "no_op",
       program: { id: "knowledge-review" },

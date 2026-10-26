@@ -20,6 +20,7 @@ import {
 } from "../../../src/graphs/evidence-verification/graph";
 import { createWorkPrioritizerGraph } from "../../../src/graphs/work-prioritizer/graph";
 import { MISSION_EVIDENCE_PROGRAM } from "../../../src/graphs/work-prioritizer/program";
+import { MISSION_SCORE_RUBRIC } from "../../../src/graphs/work-prioritizer/rubric";
 import { WORK_PRIORITIZER_TOOL_IDS } from "../../../src/graphs/work-prioritizer/tools";
 import { createInProcGraphRunner } from "../../../src/inproc/runner";
 
@@ -426,6 +427,114 @@ describe("read-only mission program", () => {
   it.each([
     false,
     true,
+  ])("keeps unsupported low-score repair in independent verification (rejectAgain=%s)", async (rejectAgain) => {
+    const unsupported = proposed({
+      scores: { ...scores, confidence: { v: 0 } },
+      support: {
+        ...support,
+        ease: {
+          rationale:
+            "The status implies two to three implementation iterations",
+          evidenceIds: ["e2"],
+        },
+      },
+    });
+    const corrected = proposed({
+      scores: { ...scores, ease: { v: 0 }, confidence: { v: 0 } },
+      support: {
+        ...support,
+        ease: {
+          rationale:
+            "Inspected e2: a human check remains, but its effort is unspecified",
+          evidenceIds: ["e2"],
+        },
+      },
+    });
+    const feedback =
+      "task.1 ease: e2 requires human review but supplies no iteration count; status does not entail ease=3";
+    const raw = unknownProposal(unsupported);
+    const work = {
+      items: [
+        {
+          id: "task.1",
+          revision: 4,
+          scores,
+          sourceUrl: self,
+          status: "needs_implement",
+          summary:
+            "A signed-in human must review the completed display; remaining effort is unspecified",
+        },
+      ],
+    };
+    const { result, calls } = await assess((input, index) => {
+      if (index === 0) return "e2: human review remains; effort unspecified";
+      if (index === 1) return raw;
+      if (index === 2)
+        return JSON.stringify({ verdict: "revise", reason: feedback });
+      if (index === 3) {
+        const request = JSON.parse(JSON.parse(input).at(-1).content);
+        expect(request.feedback).toBe(feedback);
+        expect(request.rejectedArtifact).toBe(raw);
+        expect(request.rejectedProposal.payload).toEqual(unsupported);
+        return unknownProposal(rejectAgain ? unsupported : corrected);
+      }
+      return rejectAgain
+        ? JSON.stringify({ verdict: "revise", reason: feedback })
+        : verdict;
+    }, work);
+    expect(calls).toHaveLength(5);
+    expect(result.structuredOutput).toMatchObject({
+      status: rejectAgain ? "incomplete" : "accepted",
+      revisions: 1,
+    });
+    if (rejectAgain)
+      expect(result.structuredOutput).not.toHaveProperty("proposal");
+    else
+      expect(result.structuredOutput?.proposal).toMatchObject({
+        payload: corrected,
+      });
+    const messages = calls.map(
+      (call) => JSON.parse(call) as { role: string; content: string }[]
+    );
+    for (const stage of messages) {
+      expect(stage[0]?.content).toContain(
+        "Unknown is zero. Sources must support the claim."
+      );
+      expect(JSON.parse(stage[1]?.content ?? "{}").evidence[1].value).toEqual(
+        work
+      );
+    }
+    expect(messages[0]?.[0]?.content).not.toContain(
+      MISSION_EVIDENCE_PROGRAM.assignment
+    );
+    expect(JSON.parse(messages[0]?.[1]?.content ?? "{}").programContext).toBe(
+      MISSION_EVIDENCE_PROGRAM.assignment
+    );
+    expect(messages[1]?.[0]?.content).toContain(
+      MISSION_EVIDENCE_PROGRAM.assignment
+    );
+    expect(messages[0]?.[0]?.content).not.toContain(MISSION_SCORE_RUBRIC);
+    for (const index of [1, 2, 3, 4]) {
+      expect(
+        messages[index]?.[0]?.content.split(MISSION_SCORE_RUBRIC)
+      ).toHaveLength(2);
+    }
+    for (const index of [2, 4]) {
+      expect(messages[index]?.[0]?.content).toContain(
+        MISSION_EVIDENCE_PROGRAM.criteria
+      );
+      expect(messages[index]?.[0]?.content).not.toContain(
+        MISSION_EVIDENCE_PROGRAM.assignment
+      );
+      expect(
+        JSON.parse(messages[index]?.[1]?.content ?? "{}")
+      ).not.toHaveProperty("findings");
+    }
+  });
+
+  it.each([
+    false,
+    true,
   ])("rejects duplicate proposal IDs before semantic verification (conflicting=%s)", async (conflicting) => {
     const item = {
       ...payload.items[0],
@@ -524,7 +633,7 @@ describe("read-only mission program", () => {
       return verdict;
     });
     expect(result.structuredOutput).toMatchObject({
-      program: { version: "3.1" },
+      program: { version: "3.2" },
       status: "accepted",
       revisions: 1,
       proposal: { payload: unknownPayload },
