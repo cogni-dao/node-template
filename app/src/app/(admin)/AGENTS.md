@@ -35,7 +35,7 @@ admin-only surfaces in one role-gated shell.
 ## Public Surface
 
 - **Exports:** none
-- **Routes:** `/admin` (index linking to admin-only surfaces such as `/gov/review`)
+- **Routes:** `/admin` (index), `/admin/payments` (Financials, reporting-only; authorization also enforced before snapshot reads)
 - **Files considered API:** `layout.tsx`, `admin/page.tsx`
 
 ## Auth contract

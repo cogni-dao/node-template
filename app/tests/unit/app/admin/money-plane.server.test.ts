@@ -41,14 +41,40 @@ vi.mock("next/navigation", () => ({
   redirect: mocks.redirect,
   useRouter: vi.fn(),
 }));
-vi.mock("@/components", () => ({
-  Button: vi.fn(),
-  DataGrid: mocks.grid,
-  DataGridColumnHeader: vi.fn(),
-  DataGridContainer: vi.fn(),
-  DataGridTable: vi.fn(),
-  StatusBadge: vi.fn(),
-}));
+vi.mock("@/components", async () => {
+  const { createElement } = await import("react");
+  const box = ({ children }: { children?: import("react").ReactNode }) =>
+    createElement("div", null, children);
+  return {
+    AdminText: ({
+      as = "p",
+      children,
+    }: {
+      as?: string;
+      children?: import("react").ReactNode;
+    }) => createElement(as, null, children),
+    Card: box,
+    CardContent: box,
+    CardHeader: box,
+    Dialog: box,
+    DialogContent: vi.fn(),
+    DialogHeader: box,
+    DialogTitle: box,
+    DialogDescription: box,
+    DialogTrigger: box,
+    Select: vi.fn(),
+    SelectContent: vi.fn(),
+    SelectItem: vi.fn(),
+    SelectTrigger: vi.fn(),
+    SelectValue: vi.fn(),
+    Button: vi.fn(),
+    DataGrid: mocks.grid,
+    DataGridColumnHeader: vi.fn(),
+    DataGridContainer: vi.fn(),
+    DataGridTable: vi.fn(),
+    StatusBadge: vi.fn(),
+  };
+});
 vi.mock("@/lib/auth/server", () => ({ getServerSessionUser: mocks.session }));
 vi.mock("@/shared/config", () => ({
   isLedgerApprover: mocks.approver,
@@ -73,8 +99,8 @@ vi.mock("@cogni/money-plane", () => ({
 
 import {
   createMoneyPlaneColumns,
+  MoneyPlaneEvidence,
   MoneyPlaneTable,
-  moneyPlaneColumns,
 } from "@/app/(admin)/admin/payments/MoneyPlaneTable";
 
 import { getMoneyPlaneSnapshot } from "@/app/(admin)/admin/payments/money-plane.server";
@@ -127,6 +153,7 @@ describe("finance authorization at the read boundary", () => {
       ...report,
       treasuryPlane: null,
       costRateEvidence: [],
+      configuredWalletPlanes: [],
     });
     expect(mocks.approver).toHaveBeenCalledWith("approved-wallet");
     expect(mocks.redirect).not.toHaveBeenCalled();
@@ -158,6 +185,7 @@ describe("account deduplication and the actual financial grid", () => {
       .mockReturnValueOnce(address);
     const result = await getMoneyPlaneSnapshot();
     expect(result.treasuryPlane).toBe("base:operator-wallet");
+    expect(result.configuredWalletPlanes).toEqual(["base:operator-wallet"]);
     expect(mocks.creditReader).not.toHaveBeenCalled();
     expect(mocks.walletReader).toHaveBeenCalledTimes(1);
     expect(mocks.walletReader).toHaveBeenCalledWith(
@@ -173,6 +201,15 @@ describe("account deduplication and the actual financial grid", () => {
       .mockReturnValueOnce(null);
     await getMoneyPlaneSnapshot();
     expect(mocks.walletReader).toHaveBeenCalledTimes(3);
+  });
+  it("keeps a configured invalid treasury identifiable without a successful read", async () => {
+    mocks.walletConfig
+      .mockReturnValueOnce(null)
+      .mockReturnValueOnce(null)
+      .mockReturnValueOnce("invalid");
+    const result = await getMoneyPlaneSnapshot();
+    expect(result.treasuryPlane).toBe("base:dao-treasury");
+    expect(result.configuredWalletPlanes).toEqual(["base:dao-treasury"]);
   });
   it("sorts actual grid columns numerically with missing last in both directions", () => {
     const data: MoneyPlaneRow[] = [2, null, 10].map((balance, index) => ({
@@ -293,55 +330,39 @@ describe("account deduplication and the actual financial grid", () => {
     ]);
   });
 
-  it("keeps unrounded values, distinct timestamps and raw reasons inside closed Details", () => {
-    const data: MoneyPlaneRow[] = [
-      {
-        plane: "test-wallet",
-        label: "Wallet",
-        kind: "wallet",
-        balance: 7.071234,
-        currency: "USDC",
-        burnPerDay: 0.00123456,
-        runwayDays: null,
-        grade: "UNKNOWN",
-        observedAt: "2026-10-25T02:10:00Z",
-        sourceObservedAt: "2026-10-25T01:30:00Z",
-        freshness: "stale",
-        reasonCode: "unreadable",
-        detail: "Provider unavailable",
-      },
-    ];
-    const table = createTable({
-      data,
-      columns: moneyPlaneColumns,
-      state: { sorting: [] },
-      onStateChange: () => {},
-      renderFallbackValue: null,
-      getCoreRowModel: getCoreRowModel(),
-    });
-    const cell = table
-      .getRowModel()
-      .rows[0]?.getAllCells()
-      .find((cell) => cell.column.id === "details");
-    if (!cell) throw new Error("Missing actual Details cell");
+  it("keeps exact relevant source evidence without schema codes or null field dumps", () => {
+    const row: MoneyPlaneRow = {
+      plane: "private-source-id",
+      label: "DAO treasury / Steward wallet",
+      kind: "wallet",
+      balance: 7.071234,
+      currency: "USDC",
+      burnPerDay: null,
+      runwayDays: null,
+      grade: "INFO",
+      observedAt: "2026-10-25T02:10:00Z",
+      sourceObservedAt: "2026-10-25T01:30:00Z",
+      freshness: "stale",
+      reasonCode: "unreadable",
+      detail: "Raw provider implementation detail",
+    };
     const html = renderToStaticMarkup(
-      createElement(
-        Fragment,
-        null,
-        flexRender(cell.column.columnDef.cell, cell.getContext())
-      )
+      createElement(MoneyPlaneEvidence, { row })
     );
-    expect(html).toContain("<details>");
-    expect(html).not.toContain("<details open");
-    for (const evidence of [
-      "7.071234 USDC",
-      "0.00123456 USDC/day",
-      "2026-10-25T02:10:00Z",
-      "2026-10-25T01:30:00Z",
+    expect(html).toContain("7.071234 USDC");
+    expect(html).toContain("DAO treasury / Steward wallet");
+    expect(html).toContain("Balance observed");
+    expect(html).toContain("UTC");
+    for (const hidden of [
+      "private-source-id",
+      "reasonCode",
       "unreadable",
-      "Provider unavailable",
+      "Raw provider",
+      "2026-10-25T01:30:00Z",
+      "Burn/day",
+      "<details",
     ])
-      expect(html).toContain(evidence);
+      expect(html).not.toContain(hidden);
   });
   it("renders DAO-only treasury and secondary custody while sending only costs to the actual grid", () => {
     const rows: MoneyPlaneRow[] = [
@@ -397,13 +418,15 @@ describe("account deduplication and the actual financial grid", () => {
         takenAt: report.takenAt,
         treasuryPlane: "dao",
         costRateEvidence: [],
+        configuredWalletPlanes: ["dao", "operator", "human"],
       })
     );
     expect(html).toContain("Financials");
-    expect(html).toContain("<strong>10 USDC</strong>");
-    expect(html).toContain("<dd>Operator wallet / Steward wallet / DAO treasury</dd>");
-    expect(html).toContain("Payment history unavailable");
-    expect(html).toContain("<summary>Funding accounts</summary>");
+    expect(html).toContain("10 USDC");
+    expect(html).toContain("Operator wallet / Steward wallet / DAO treasury");
+    expect(html).toContain("Payment history is not available in this report.");
+    expect(html).toContain("Other accounts");
+    expect(html).not.toContain("<details");
     expect(html).toContain("20 USDC");
     expect(html).toContain("30 USDC");
     expect(html).not.toContain("60 USDC");

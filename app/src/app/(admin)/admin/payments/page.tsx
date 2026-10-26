@@ -25,8 +25,9 @@ export default async function MoneyPlanesPage(): Promise<ReactElement> {
   const snapshot = await getMoneyPlaneSnapshot();
 
   return (
-    <PageContainer maxWidth="2xl">
+    <PageContainer maxWidth="full">
       <MoneyPlaneTable
+        configuredWalletPlanes={snapshot.configuredWalletPlanes}
         rows={snapshot.rows}
         takenAt={snapshot.takenAt}
         treasuryPlane={snapshot.treasuryPlane}

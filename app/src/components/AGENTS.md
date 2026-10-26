@@ -38,7 +38,7 @@ Shared presentational UI. No business logic, no data fetching. Design tokens and
 
 ## Public Surface
 
-- **Exports:** UI components and widgets via `components/index.ts`, including the existing shared DataGrid primitives and StatusBadge alias
+- **Exports:** UI components and widgets via `components/index.ts`, including the existing shared DataGrid primitives StatusBadge alias and node-local AdminText typography
 - **Files considered API:** `index.ts`, `kit/*/index.tsx`
 
 ## Responsibilities

@@ -15,7 +15,6 @@
 
 import "server-only";
 
-
 import {
   BASE_PUBLIC_RPC_URL,
   baseWalletReader,
@@ -49,9 +48,14 @@ const noStoreFetch: FetchLike = (url, init) =>
 export interface NodeFinanceSnapshot extends MoneyPlaneSnapshot {
   treasuryPlane: string | null;
   costRateEvidence: CostRateEvidence[];
+  configuredWalletPlanes: string[];
 }
 
-function readers(): { readers: PlaneReader[]; treasuryPlane: string | null } {
+function readers(): {
+  readers: PlaneReader[];
+  treasuryPlane: string | null;
+  configuredWalletPlanes: string[];
+} {
   const env = serverEnv();
   const wallet = {
     rpcUrl: env.EVM_RPC_URL ?? BASE_PUBLIC_RPC_URL,
@@ -84,17 +88,16 @@ function readers(): { readers: PlaneReader[]; treasuryPlane: string | null } {
         ? `base:${wallet.usdcAddress.toLowerCase()}:${address.toLowerCase()}`
         : account.name;
     const prior = accounts.get(key);
-    if (
-      account.name === "dao-treasury" &&
-      address &&
-      /^0x[0-9a-fA-F]{40}$/.test(address)
-    )
+    if (account.name === "dao-treasury" && address)
       treasuryPlane = `base:${prior?.name ?? account.name}`;
     if (prior) prior.label = `${prior.label} / ${account.label}`;
     else accounts.set(key, { ...account });
   }
   return {
     treasuryPlane,
+    configuredWalletPlanes: [...accounts.values()]
+      .filter((account) => Boolean(account.address))
+      .map((account) => `base:${account.name}`),
     readers: [
       ...[...accounts.values()].map((account) =>
         baseWalletReader({ ...wallet, ...account })
@@ -176,6 +179,7 @@ export async function getMoneyPlaneSnapshot(): Promise<NodeFinanceSnapshot> {
       ...snapshot,
       treasuryPlane: composition.treasuryPlane,
       costRateEvidence: [],
+      configuredWalletPlanes: composition.configuredWalletPlanes,
     };
   } catch (error) {
     // takeSnapshot never rejects; this is the composition failing (env or
