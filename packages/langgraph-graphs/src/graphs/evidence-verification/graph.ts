@@ -350,9 +350,9 @@ export function createEvidenceVerificationGraph(
           return response;
         };
         let result: EvidenceResult | undefined;
-        const task =
-          state.messages.filter((m) => m.getType() === "human").at(-1)
-            ?.content ?? program.assignment;
+        const task = state.messages
+          .filter((m) => m.getType() === "human")
+          .at(-1)?.content;
         const finish = (
           status: EvidenceResult["status"],
           reason: string,

@@ -358,7 +358,8 @@ describe("read-only mission program", () => {
   });
   async function assess(
     complete: (input: string, index: number) => string,
-    work = evidence[1].value
+    work = evidence[1].value,
+    noHumanTask = false
   ) {
     const calls: string[] = [];
     const reads: string[] = [];
@@ -411,7 +412,9 @@ describe("read-only mission program", () => {
       request: {
         runId: "schema-repair",
         nodeId: "node-1",
-        messages: [{ role: "user", content: "Assess task.1" }],
+        messages: noHumanTask
+          ? []
+          : [{ role: "user", content: "Assess task.1" }],
         configurable: {
           model: "existing-model",
           toolIds: [...WORK_PRIORITIZER_TOOL_IDS],
@@ -425,9 +428,14 @@ describe("read-only mission program", () => {
   }
 
   it.each([
-    false,
-    true,
-  ])("keeps unsupported low-score repair in independent verification (rejectAgain=%s)", async (rejectAgain) => {
+    { rejectAgain: false, noHumanTask: false },
+    { rejectAgain: true, noHumanTask: false },
+    { rejectAgain: false, noHumanTask: true },
+    { rejectAgain: true, noHumanTask: true },
+  ])("keeps independent verification (rejectAgain=$rejectAgain, noHumanTask=$noHumanTask)", async ({
+    rejectAgain,
+    noHumanTask,
+  }) => {
     const unsupported = proposed({
       scores: { ...scores, confidence: { v: 0 } },
       support: {
@@ -466,22 +474,26 @@ describe("read-only mission program", () => {
         },
       ],
     };
-    const { result, calls } = await assess((input, index) => {
-      if (index === 0) return "e2: human review remains; effort unspecified";
-      if (index === 1) return raw;
-      if (index === 2)
-        return JSON.stringify({ verdict: "revise", reason: feedback });
-      if (index === 3) {
-        const request = JSON.parse(JSON.parse(input).at(-1).content);
-        expect(request.feedback).toBe(feedback);
-        expect(request.rejectedArtifact).toBe(raw);
-        expect(request.rejectedProposal.payload).toEqual(unsupported);
-        return unknownProposal(rejectAgain ? unsupported : corrected);
-      }
-      return rejectAgain
-        ? JSON.stringify({ verdict: "revise", reason: feedback })
-        : verdict;
-    }, work);
+    const { result, calls } = await assess(
+      (input, index) => {
+        if (index === 0) return "e2: human review remains; effort unspecified";
+        if (index === 1) return raw;
+        if (index === 2)
+          return JSON.stringify({ verdict: "revise", reason: feedback });
+        if (index === 3) {
+          const request = JSON.parse(JSON.parse(input).at(-1).content);
+          expect(request.feedback).toBe(feedback);
+          expect(request.rejectedArtifact).toBe(raw);
+          expect(request.rejectedProposal.payload).toEqual(unsupported);
+          return unknownProposal(rejectAgain ? unsupported : corrected);
+        }
+        return rejectAgain
+          ? JSON.stringify({ verdict: "revise", reason: feedback })
+          : verdict;
+      },
+      work,
+      noHumanTask
+    );
     expect(calls).toHaveLength(5);
     expect(result.structuredOutput).toMatchObject({
       status: rejectAgain ? "incomplete" : "accepted",
@@ -497,6 +509,9 @@ describe("read-only mission program", () => {
       (call) => JSON.parse(call) as { role: string; content: string }[]
     );
     for (const stage of messages) {
+      const input = JSON.parse(stage[1]?.content ?? "{}");
+      if (noHumanTask) expect(input).not.toHaveProperty("task");
+      else expect(input.task).toBe("Assess task.1");
       expect(stage[0]?.content).toContain(
         "Unknown is zero. Sources must support the claim."
       );

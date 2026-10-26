@@ -61,6 +61,7 @@ function startExercise(
     replies?: CompletionResult[];
     source?: unknown;
     missingHost?: boolean;
+    noHumanTask?: boolean;
     toolIds?: string[];
     complete?: (messages: string, call: number) => CompletionResult;
     onCompletionStart?: () => void;
@@ -155,11 +156,13 @@ function startExercise(
     request: {
       runId: "root-1",
       ...(options.missingHost ? {} : { nodeId: "node-1" }),
-      messages: [
-        { role: "user", content: "PRIVATE HISTORY" },
-        { role: "assistant", content: "untrusted old claim" },
-        { role: "user", content: "Review the open gate" },
-      ],
+      messages: options.noHumanTask
+        ? []
+        : [
+            { role: "user", content: "PRIVATE HISTORY" },
+            { role: "assistant", content: "untrusted old claim" },
+            { role: "user", content: "Review the open gate" },
+          ],
       configurable: {
         model: "unchanged-model",
         toolIds: options.toolIds ?? [
@@ -643,7 +646,10 @@ describe("evidence verification through the injected runner", () => {
     expect(calls).toHaveLength(3);
   });
 
-  it("supports a materially different output schema without another factory", async () => {
+  it.each([
+    false,
+    true,
+  ])("isolates a different program with and without a human task (noHumanTask=%s)", async (noHumanTask) => {
     const second = {
       ...program,
       id: "knowledge-review",
@@ -662,12 +668,16 @@ describe("evidence verification through the injected runner", () => {
     });
     const { result, calls } = await exercise({
       program: second,
+      noHumanTask,
       replies: [text("compared exact sources"), text(content), text(accept)],
     });
     const [child, author, verifier] = calls.map(
       (call) => JSON.parse(call.messages) as { role: string; content: string }[]
     );
     for (const messages of [child, author, verifier]) {
+      const input = JSON.parse(messages?.[1]?.content ?? "{}");
+      if (noHumanTask) expect(input).not.toHaveProperty("task");
+      else expect(input.task).toBe("Review the open gate");
       expect(messages?.[0]?.content).toContain(body);
       expect(messages?.[0]?.content).toContain("Read-only; never claim writes");
       expect(messages?.[0]?.content).not.toMatch(
