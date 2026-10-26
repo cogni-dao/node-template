@@ -18,6 +18,7 @@ import {
 import {
   type CanonicalRunResult,
   canonicalTerminal,
+  completeManagedGraph,
   CompletionIdempotencyConflictError,
   reserveCompletionRequest,
   type ManagedExecutionBinding,
@@ -26,7 +27,7 @@ import {
 import { SYSTEM_ACTOR } from "@cogni/ids/system";
 import { getSeedDb } from "@tests/_fixtures/db/seed-client";
 import { eq, inArray, sql } from "drizzle-orm";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { getAppDb } from "@/adapters/server/db/client";
 
 const hash = (text: string) => createHash("sha256").update(text).digest("hex");
@@ -165,6 +166,40 @@ describe("managed graph execution transaction", () => {
       .from(executionRequests)
       .where(eq(executionRequests.idempotencyKey, transport.idempotencyKey));
     expect(alias).toHaveLength(0);
+  });
+  it("persists a thread-bound parser failure and replays without another execution", async () => {
+    const seeded = await seed();
+    const stateKey = `failed-thread:${seeded.runId}`;
+    await db.update(graphRuns).set({ stateKey }).where(eq(graphRuns.runId, seeded.runId));
+    const binding = { ...seeded, stateKey };
+    const execute = vi.fn(async () => {
+      const acquired = await owner.acquire(binding, 60_000);
+      if (acquired.status !== "claimed") throw new Error("expected first claim");
+      return completeManagedGraph({
+        run: {
+          stream: (async function* () { yield { type: "done" as const }; })(),
+          final: Promise.resolve({ ok: true, runId: binding.runId, requestId: binding.runId, structuredOutput: { malformed: true } }),
+        },
+        claim: acquired.claim, port: owner, traceId: "failure-trace", stateKey,
+        scope: { nodeId: "node", environment: "candidate-a", scheduleId: null },
+        parseResult: () => { throw new Error("malformed result"); },
+        hash, persist: async () => { throw new Error("failed result must not persist an assistant"); },
+        publish: async () => {}, onDeliveryError: (error) => { throw error; },
+      });
+    });
+    const first = await execute();
+    expect(first.status).toBe("committed");
+    if (first.status !== "committed") throw new Error("expected committed failure");
+    expect(first.result).toMatchObject({ ok: false, stateKey, runId: binding.runId, errorCode: "internal" });
+    const [savedRun] = await db.select().from(graphRuns).where(eq(graphRuns.runId, binding.runId));
+    const [savedRequest] = await db.select().from(executionRequests).where(eq(executionRequests.idempotencyKey, binding.idempotencyKey));
+    expect(savedRun).toMatchObject({ status: "error", stateKey, terminalResult: first.result, acceptedInputKey: null });
+    expect(savedRequest).toMatchObject({ ok: false, errorCode: "internal", leaseExpiresAt: null });
+    expect(await owner.readOwnedResult(binding.runId, actor)).toEqual(first.result);
+    const replay = await owner.acquire(binding, 60_000);
+    if (replay.status === "claimed") await execute();
+    expect(replay).toEqual({ status: "cached", result: first.result });
+    expect(execute).toHaveBeenCalledTimes(1);
   });
   it("stale A cannot heartbeat/finalize B; tokenless worker PATCH cannot bypass B", async () => {
     const binding = await seed();

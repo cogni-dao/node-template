@@ -212,6 +212,52 @@ describe("canonical result admission", () => {
     expect(persist).not.toHaveBeenCalled();
     expect(publish).not.toHaveBeenCalled();
   });
+  it.each(["parse", "oversized", "stream"] as const)("commits a thread-bound canonical failure after %s failure", async (failure) => {
+    const stateKey = "bound-thread";
+    const persist = vi.fn();
+    const publish = vi.fn();
+    const commit = vi.fn(async (claim, input) => {
+      const result = input.resolve();
+      // The real adapter enforces this immutable binding before its transaction commits.
+      if ((result.stateKey ?? null) !== (claim.binding.stateKey ?? null))
+        throw new Error("result_binding_mismatch");
+      expect(input.acceptedInputKey).toBeUndefined();
+      return { status: "committed" as const, result };
+    });
+    const result = await completeManagedGraph({
+      run: {
+        stream: (async function* () {
+          yield { type: "text_delta" as const, delta: "uncommitted draft" };
+          if (failure === "stream") throw new Error("stream failed");
+          yield { type: "done" as const };
+        })(),
+        final: Promise.resolve({
+          ok: true, runId: "run-a", requestId: "run-a",
+          structuredOutput: { status: "incomplete", details: "x".repeat(failure === "oversized" ? 33_000 : 1) },
+        }),
+      },
+      claim: {
+        token: "token", graphRunId: "row",
+        binding: { idempotencyKey: "key", requestHash: "hash", runId: "run-a", stateKey, audience },
+      },
+      port: { commit }, stateKey, traceId: "trace-a",
+      scope: { nodeId: "node", environment: "candidate-a", scheduleId: null },
+      parseResult: (output) => {
+        if (failure === "parse") throw new Error("malformed result");
+        return output as Record<string, unknown>;
+      },
+      hash, persist, publish, onDeliveryError: vi.fn(),
+    });
+    expect(result).toEqual({ status: "committed", result: {
+      version: 1, audience, runId: "run-a", traceId: "trace-a", stateKey,
+      ok: false, errorCode: "internal",
+    } });
+    expect(commit).toHaveBeenCalledTimes(1);
+    expect(persist).not.toHaveBeenCalled();
+    expect(publish.mock.calls.map(([event]) => event)).toEqual([
+      { type: "error", error: "internal" }, { type: "done" },
+    ]);
+  });
   it("missing trusted input identity persists named incomplete, never accepted", async () => {
     const publish = vi.fn();
     const commit = vi.fn(async (_claim, input) => {

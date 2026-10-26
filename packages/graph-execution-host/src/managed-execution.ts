@@ -264,6 +264,7 @@ export async function completeManagedGraph(input: {
       audience: input.claim.binding.audience,
       runId: input.claim.binding.runId,
       traceId: input.traceId,
+      ...(input.stateKey ? { stateKey: input.stateKey } : {}),
       ok: false,
       errorCode: "internal",
     };
