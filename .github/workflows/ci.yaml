@@ -134,12 +134,18 @@ jobs:
       # node-template owns `@cogni/work-items`' Doltgres adapter, so the real
       # engine must gate it here and not only in a fork (task.5199). Dolt branch
       # semantics are invisible to the fake-SQL unit tests.
+      # Comparison evidence only. This must not replace qualification below.
+      - name: Upstream Doltgres 0.57.3 comparison control
+        env:
+          DOLTGRES_TEST_IMAGE: dolthub/doltgresql:0.57.3
+        run: pnpm --filter @cogni/node-template-app test:doltgres
+
       - name: Authenticate qualified Doltgres image pull
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
-          username: ${{ secrets.GHCR_DEPLOY_USERNAME }}
-          password: ${{ secrets.GHCR_DEPLOY_TOKEN }}
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
 
-      - name: Doltgres 0.57.3 work-item acceptance
+      - name: Qualified Doltgres work-item acceptance (mandatory)
         run: pnpm --filter @cogni/node-template-app test:doltgres
