@@ -55,7 +55,7 @@ const MIGRATIONS_DIR = path.resolve(
 	REPO_ROOT,
 	"app/src/adapters/server/db/doltgres-migrations",
 );
-const DOLTGRES_IMAGE = process.env.DOLTGRES_TEST_IMAGE ?? "ghcr.io/cogni-dao/cogni-template@sha256:f892b365ad6fc6c683da839260f20c4015615c105176a3c21c015ca90d2b70a3";
+const DOLTGRES_IMAGE = "dolthub/doltgresql:0.57.3";
 const DB_NAME = "knowledge_node_template_work_items";
 const PASSWORD = "doltgres";
 
