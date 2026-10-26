@@ -6,7 +6,7 @@
  * Purpose: Financials — one table of this node's money planes: balance, burn/day, runway and source, in risk order.
  * Scope: Client presentation of an authorized server report; no provider reads or payments.
  * Invariants: Unknown renders as a muted dash with a one-line human reason behind Source; native units only, no FX or
- *   pooled totals; no per-row status pills; the same sorted rows stack below 48rem of container width.
+ *   pooled totals; no per-row status pills; the same sorted rows stack below 42rem (@2xl) of container width, so a 1024px viewport beside the sidebar still gets the table.
  * Side-effects: local sort state, route refresh
  * Links: money-plane.server.ts, https://cognidao.org/knowledge/finances-expert
  * @public
@@ -426,7 +426,7 @@ export function MoneyPlaneTable({
       <AdminText variant="section" className="tabular-nums">
         {summary}
       </AdminText>
-      <div className="hidden min-w-0 @3xl:block">
+      <div className="hidden min-w-0 @2xl:block">
         <DataGrid
           table={table}
           recordCount={data.length}
@@ -443,7 +443,7 @@ export function MoneyPlaneTable({
           </DataGridContainer>
         </DataGrid>
       </div>
-      <ul className="m-0 list-none space-y-3 p-0 @3xl:hidden" aria-label="Lines">
+      <ul className="m-0 list-none space-y-3 p-0 @2xl:hidden" aria-label="Lines">
         {table.getRowModel().rows.map(({ original: row }) => (
           <li
             key={row.plane}
