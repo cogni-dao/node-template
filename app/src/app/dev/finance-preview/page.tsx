@@ -13,7 +13,7 @@ import type { TreasurySnapshotResponseV1 } from "@cogni/node-contracts";
 import { notFound } from "next/navigation";
 import { AdminShell } from "@/app/(admin)/AdminShell";
 import { FinanceReportClient } from "@/app/(admin)/admin/payments/FinanceReportClient.client";
-import { AdminText, Button, PageContainer } from "@/components";
+import { Button, HintText, PageContainer } from "@/components";
 import { getEnv } from "@/shared/env";
 import { FixtureBoundary } from "./FixtureBoundary";
 import { previewFor } from "./fixture";
@@ -52,9 +52,7 @@ export default async function FinancePreviewPage({
       <AdminShell>
         <PageContainer maxWidth="full">
           <div className="mb-6 flex flex-wrap items-center justify-between gap-2">
-            <AdminText variant="detail">
-              Demo data · {scenario} scenario · synthetic values
-            </AdminText>
+            <HintText>Demo data · {scenario} scenario · synthetic values</HintText>
             <Button variant="outline" size="sm" asChild>
               <a href={`/dev/finance-preview?scenario=${other}`}>
                 {other} scenario

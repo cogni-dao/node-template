@@ -376,11 +376,9 @@ function RowAction({
   const action: PayAction | undefined = row.payAction;
   if (rail && rail.status !== "supported") {
     return (
-      <span
-        className="text-muted-foreground text-xs"
-        aria-label={`${railLabel(rail)} · ${rail.status}`}
-      >
+      <span className="text-muted-foreground text-xs">
         {railLabel(rail)}
+        <span className="sr-only"> · {rail.status}</span>
       </span>
     );
   }
@@ -440,13 +438,15 @@ function SortHeader({
 }) {
   const active = sort?.key === column;
   return (
-    <th scope="col" className={cx("px-3 py-2 text-left font-medium", className)}>
+    <th
+      scope="col"
+      className={cx("px-3 py-2 text-left font-medium", className)}
+      aria-sort={active ? (sort.desc ? "descending" : "ascending") : "none"}
+    >
       <button
         type="button"
         className="inline-flex items-center gap-1 rounded-sm text-muted-foreground text-xs hover:text-foreground"
         onClick={() => onSort(column)}
-        aria-sort={active ? (sort.desc ? "descending" : "ascending") : "none"}
-        aria-label={title}
       >
         {title}
         <span aria-hidden="true" className="text-[10px]">
@@ -701,7 +701,7 @@ export function FinanceReport({
         </div>
       </section>
 
-      <div className="@2xl:hidden min-w-0 space-y-4" aria-label="Financials list">
+      <section className="@2xl:hidden min-w-0 space-y-4" aria-label="Financials list">
         {groups.map(({ group, rows }) => (
           <section key={group} className="space-y-2" aria-label={group}>
             <h2 className="text-muted-foreground text-xs uppercase tracking-wide">{group}</h2>
@@ -762,7 +762,7 @@ export function FinanceReport({
             </ul>
           </section>
         ))}
-      </div>
+      </section>
     </div>
   );
 }

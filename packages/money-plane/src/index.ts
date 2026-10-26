@@ -61,13 +61,6 @@ export {
   summarize,
 } from "./report";
 export { type SnapshotOptions, takeSnapshot } from "./snapshot";
-export {
-  type CostRateBasis,
-  type CostRateCohort,
-  type CostRateEvidence,
-  type CostRateSummary,
-  summarizeCostRates,
-} from "./summarize";
 export type {
   FetchLike,
   FetchResponseLike,

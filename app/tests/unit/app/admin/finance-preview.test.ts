@@ -33,7 +33,7 @@ vi.mock("@/app/(admin)/admin/payments/FinanceReportClient.client", () => ({
 vi.mock("@/components", async () => {
 	const { createElement } = await import("react");
 	const box = ({ children }: { children?: ReactNode }) => createElement("div", null, children);
-	return { AdminText: box, Button: box, PageContainer: box };
+	return { HintText: box, Button: box, PageContainer: box };
 });
 
 import { createFinancePreviewQueryClient } from "@/app/dev/finance-preview/FixtureBoundary";

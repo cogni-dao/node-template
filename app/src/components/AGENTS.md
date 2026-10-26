@@ -5,7 +5,7 @@
 ## Metadata
 
 - **Owners:** @derekg1729
-- **Last reviewed:** 2026-10-25
+- **Last reviewed:** 2026-10-26
 - **Status:** draft
 
 ## Purpose
@@ -38,7 +38,7 @@ Shared presentational UI. No business logic, no data fetching. Design tokens and
 
 ## Public Surface
 
-- **Exports:** UI components and widgets via `components/index.ts`, including the existing shared DataGrid primitives StatusBadge alias and node-local AdminText typography
+- **Exports:** UI components and widgets via `components/index.ts`
 - **Files considered API:** `index.ts`, `kit/*/index.tsx`
 
 ## Responsibilities

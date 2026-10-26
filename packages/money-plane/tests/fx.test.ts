@@ -44,6 +44,16 @@ describe("fetchEcbRate", () => {
     expect(await fetchEcbRate(async () => ({ ok: true, status: 200, json: async () => ({}) }))).toBeNull();
     expect(await fetchEcbRate(async () => ({ ok: true, status: 200, json: async () => ({}) }), "EURGBP")).toBeNull();
   });
+  it("passes the caller's signal to fetch and resolves null when it aborts instead of hanging", async () => {
+    const controller = new AbortController();
+    const hanging = (_url: string, init?: { signal?: AbortSignal }) =>
+      new Promise<never>((_, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new Error("AbortError")));
+      });
+    const pending = fetchEcbRate(hanging, "EURUSD", controller.signal);
+    controller.abort();
+    expect(await pending).toBeNull();
+  });
 });
 
 describe("toUsd", () => {

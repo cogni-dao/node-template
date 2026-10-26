@@ -12,13 +12,6 @@
  * @public
  */
 
-export { Badge as StatusBadge } from "@cogni/node-ui-kit/reui/badge";
-export {
-  DataGrid,
-  DataGridContainer,
-} from "@cogni/node-ui-kit/reui/data-grid/data-grid";
-export { DataGridColumnHeader } from "@cogni/node-ui-kit/reui/data-grid/data-grid-column-header";
-export { DataGridTable } from "@cogni/node-ui-kit/reui/data-grid/data-grid-table";
 export { Checkbox } from "@cogni/node-ui-kit/shadcn/checkbox";
 export {
   Dialog,
@@ -172,7 +165,6 @@ export { MobileNav } from "./kit/navigation/MobileNav";
 export { NavigationLink } from "./kit/navigation/NavigationLink";
 export { UsdcPaymentFlow } from "./kit/payments/UsdcPaymentFlow";
 export { Hero } from "./kit/sections";
-export { AdminText } from "./kit/typography/AdminText";
 export {
   type CodeToken,
   CodeTokenLine,

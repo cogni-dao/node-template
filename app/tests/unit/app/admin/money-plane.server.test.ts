@@ -344,6 +344,44 @@ describe("node composition", () => {
 		});
 	});
 
+	it("bounds the FX read with the snapshot timeout so a hanging rate service never hangs the report", async () => {
+		vi.useFakeTimers();
+		mocks.snapshot.mockResolvedValue({
+			...report,
+			rows: [
+				{
+					plane: "vendor:eur",
+					label: "EUR credit",
+					kind: "prepaid",
+					balance: 10,
+					currency: "EUR",
+					burnPerDay: 1,
+					runwayDays: 10,
+					grade: "YELLOW",
+					observedAt: takenAt,
+				},
+			],
+		});
+		// Behaves like the real fetchEcbRate over a fetch that only ends when its signal aborts.
+		mocks.fx.mockImplementation(
+			(_fetch: unknown, _pair: string, signal?: AbortSignal) =>
+				new Promise((resolve) => signal?.addEventListener("abort", () => resolve(null))),
+		);
+		const pending = getMoneyPlaneSnapshot();
+		let settled = false;
+		pending.then(() => {
+			settled = true;
+		});
+		await vi.advanceTimersByTimeAsync(7_999);
+		expect(settled).toBe(false);
+		await vi.advanceTimersByTimeAsync(2);
+		const result = await pending;
+		expect(mocks.fx.mock.calls[0]?.[2]).toBeInstanceOf(AbortSignal);
+		expect(result.rows[0]?.usd).toBeUndefined();
+		expect(result.summary.unconverted).toEqual(["EUR credit"]);
+		vi.useRealTimers();
+	});
+
 	it("projects rows to USD, fetching the ECB rate only when a non-dollar row exists, and summarizes once", async () => {
 		mocks.snapshot.mockResolvedValue({
 			...report,

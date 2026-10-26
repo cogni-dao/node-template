@@ -258,8 +258,12 @@ export async function getMoneyPlaneSnapshot(): Promise<NodeFinanceSnapshot> {
 				.map((row) => row.currency)
 				.filter((c): c is string => Boolean(c) && !DOLLAR.has(c as string)),
 		);
+		// The FX read is bounded like every reader: a hanging rate service must not hang the report.
+		const fxSignal = AbortSignal.timeout(SNAPSHOT_TIMEOUT_MS);
 		const rates = (
-			await Promise.all([...foreign].map((currency) => fetchEcbRate(noStoreFetch, `${currency}USD`)))
+			await Promise.all(
+				[...foreign].map((currency) => fetchEcbRate(noStoreFetch, `${currency}USD`, fxSignal)),
+			)
 		).filter((rate): rate is UsdRate => rate !== null);
 		const rows = snapshot.rows.map((row) => toUsd(row, rates));
 		const summary = summarize({ rows }, { treasuryPlane: composition.treasuryPlane });

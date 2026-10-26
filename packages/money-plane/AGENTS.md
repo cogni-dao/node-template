@@ -6,7 +6,7 @@
 
 - **Owners:** @cogni-dao
 - **Status:** draft
-- **Last reviewed:** 2026-10-24
+- **Last reviewed:** 2026-10-26
 
 ## Purpose
 
@@ -38,7 +38,6 @@ No runtime dependencies, no env reads, no viem. `fetch` is injected (`FetchLike`
 - Types: `MoneyPlaneRow`, `NativeAmount`, `NativeRate`, `PayAction`, `Grade`, `PlaneKind`, `ReasonCode`, `PlaneReader`, `MoneyPlaneSnapshot`, `FetchLike`
 - Policy: `RUNWAY_DAYS`, `SPEND_USD_PER_MONTH`, `EXPIRY_DAYS`, `ESCROW_DAYS`, `ESCROW_CALIBRATED`
 - Grading: `gradeRunway`, `gradeSpend`, `gradeExpiry`, `worstGrade`, `applyGradingFloor`
-- Reporting: `summarizeCostRates`, `CostRateBasis`, `CostRateEvidence`, `CostRateCohort`, `CostRateSummary` — exact rate cohorts separated by economic owner, scope, instrument, unit and contract/measured basis. Measured windows must match; unknown age and partial coverage remain explicit. No custody totals, FX, authorization or ledger.
 - Runner: `takeSnapshot(readers, { timeoutMs, now? })`
 - Readers: `openRouterReader`, `baseWalletReader`, `creditPurchaseIncomeReader({ query })`; helpers `unknownRow`, `safeDetail`
 - FX + summary: `fetchEcbRate(fetch, pair)`, `toUsd(row, rates)`, `usdBalance`, `usdBurn`, `summarize(snapshot, { treasuryPlane })` → `{ treasuryUsd, incomePerDay, burnPerDay, shortestRunway, ratesUsed, unconverted }`
@@ -51,12 +50,12 @@ No runtime dependencies, no env reads, no viem. `fetch` is injected (`FetchLike`
 - READERS_NEVER_THROW — readers return UNKNOWN rows; `takeSnapshot` additionally converts throws and timeouts and never rejects.
 - EVIDENCE_IS_EXPLICIT — sourceObservedAt differs from read-at observedAt; absent/stale freshness cannot grade GREEN/YELLOW. Native rates/transfer aggregates retain exact decimal strings and denomination; no FX or custody aggregation.
 - SPEND_POLICY_IS_EXPLICIT — gradeSpend without caller thresholds is UNKNOWN.
-- REPORTING_ONLY_UI — consuming finance tables do not render money-moving controls in this wave.
+- ACTIONS_ON_ROWS — the only money-moving control is the node's existing steward-withdrawal POST, rendered from `payAction` on the row; agents prepare, humans click.
 - ONE_ROW_MODEL — a Pay button is a `payAction` value, never a new row shape; how a line gets paid is a `rail`. A rail that is not `supported` renders a greyed label, never a clickable control.
 - ONE_UI — nodes render `FinanceReport` from `./react`; they keep readers, composition and auth only.
 - USD_IS_DERIVED — `usd` is a projection (`toUsd`); native amounts stay exact in dialogs; a parent carrying burn is the rollup and its children are never summed again.
 - `detail` never carries a URL, key, or address.
-- OpenRouter burn is not measured here: `openRouterReader` exposes `usageTotal` and grades only from a caller-supplied `burnPerDay`. Current finance UIs do not compose this account reader: inherited provider credentials do not establish node account ownership or read-only privileges. Provider least privilege is separate task.5361.
+- OpenRouter burn is not measured here: `openRouterReader` exposes `usageTotal` and grades only from a caller-supplied `burnPerDay`. Nodes compose `openRouterReader` with their own key; an inherited key reads the inheritor's account, not the node's balance, so it is never composed as a node plane. Provider least privilege is separate task.5361.
 
 ## Not here
 
