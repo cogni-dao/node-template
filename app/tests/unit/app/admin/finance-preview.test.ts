@@ -138,11 +138,10 @@ describe("fixture scenarios", () => {
 		expect(by["base:steward-wallet"]).toMatchObject({ label: "Steward wallet", balance: 7.07, rail: { kind: "none" } });
 		expect(by["base:steward-wallet"]).not.toHaveProperty("payAction");
 		expect(by["openrouter:account"]).toMatchObject({
-			balance: 3.1,
-			currency: "USD",
-			burnPerDay: null,
+			balance: null,
 			grade: "UNKNOWN",
-			reasonCode: "burn_unmeasured",
+			reasonCode: "unconfigured",
+			detail: "needs a management key · task.5361",
 			rail: { kind: "steward-manual", status: "supported" },
 			payAction: {
 				kind: "steward-checkout",
@@ -162,12 +161,14 @@ describe("fixture scenarios", () => {
 			treasuryUsd: 74.52,
 			incomePerDay: 0,
 			burnPerDay: null,
-			shortestRunway: null,
+			runwayDays: null,
+			nextDeadline: null,
 			ratesUsed: [],
 		});
+		expect(liveShapedPreview.stewardWalletUrl).toContain("basescan.org/address/");
 	});
 
-	it("sparse keeps every plane but reads nothing: RPC unavailable, no OpenRouter key, no ledger", () => {
+	it("sparse keeps every plane but reads nothing: RPC unavailable, no OpenRouter read, no ledger", () => {
 		expect(sparsePreview.rows.map((r) => r.plane)).toEqual(PLANES);
 		expect(sparsePreview.rows.every((r) => r.balance === null)).toBe(true);
 		expect(

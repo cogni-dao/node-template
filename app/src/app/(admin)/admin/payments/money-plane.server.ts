@@ -4,13 +4,14 @@
 /**
  * Module: `@app/(admin)/admin/payments/money-plane.server`
  * Purpose: This node's money-plane composition — income (credited purchases; node services planned), the repo-spec wallets,
- *   the OpenRouter credit this node's key can read, and the operator-funded Hosting and AI lines — as one snapshot projected
+ *   the OpenRouter line (balance unknown until a management-scoped read exists, Top up still reachable), and the operator-funded
+ *   Hosting and AI lines — as one snapshot projected
  *   to USD (ECB rate, fetched only when a non-dollar row exists) with the one summary the package UI renders.
  * Scope: Server-only. Reads repo-spec + server env and hands them to the package readers. Does not move funds,
  *   decide alerts, or render.
  * Invariants: Repo-spec approver authorization precedes credentials and provider reads. READERS_NEVER_THROW.
  *   Unreadable is UNKNOWN, never GREEN. Treasury is identified only from configuration. Every row carries its rail.
- * Side-effects: IO (Base JSON-RPC, OpenRouter, ledger read, at most one FX read), one terminal MONEY_PLANE_SNAPSHOT log event.
+ * Side-effects: IO (Base JSON-RPC, ledger read, at most one FX read), one terminal MONEY_PLANE_SNAPSHOT log event.
  * Links: packages/money-plane, https://cognidao.org/knowledge/finances-expert
  * @public
  */
@@ -25,7 +26,6 @@ import {
 	type FetchLike,
 	type MoneyPlaneRow,
 	type MoneyPlaneSnapshot,
-	openRouterReader,
 	type PayAction,
 	type PlaneReader,
 	type Rail,
@@ -68,6 +68,42 @@ export interface NodeFinanceSnapshot extends MoneyPlaneSnapshot {
 	/** Plane id of the configured DAO treasury row, or null when repo-spec names none. */
 	treasuryPlane: string | null;
 	summary: ReportSummary;
+	/** Explorer page of the steward wallet, for the "result unknown" check after a withdrawal. */
+	stewardWalletUrl: string | null;
+}
+
+/**
+ * OpenRouter `/credits` needs a management key; the inference key must not carry that authority, so the
+ * balance stays unknown until task.5361 lands a scoped read. The Top up action stays reachable.
+ */
+function openRouterUnavailableReader(): PlaneReader {
+	const plane = "openrouter:account";
+	const label = "OpenRouter credit";
+	const payAction: PayAction = {
+		kind: "steward-checkout",
+		vendor: "openrouter",
+		checkoutUrl: OPENROUTER_CHECKOUT_URL,
+	};
+	return {
+		plane,
+		label,
+		kind: "prepaid",
+		payAction,
+		async read(): Promise<MoneyPlaneRow> {
+			return {
+				...unknownRow({
+					plane,
+					label,
+					kind: "prepaid",
+					reasonCode: "unconfigured",
+					observedAt: new Date().toISOString(),
+					detail: "needs a management key · task.5361",
+				}),
+				rail: STEWARD_RAIL,
+				payAction,
+			};
+		},
+	};
 }
 
 /**
@@ -152,7 +188,7 @@ function incomeReader(): PlaneReader {
 	};
 }
 
-function readers(): { readers: PlaneReader[]; treasuryPlane: string | null } {
+function readers(): { readers: PlaneReader[]; treasuryPlane: string | null; stewardWalletUrl: string | null } {
 	const env = serverEnv();
 	const wallet = {
 		rpcUrl: env.EVM_RPC_URL ?? BASE_PUBLIC_RPC_URL,
@@ -215,25 +251,14 @@ function readers(): { readers: PlaneReader[]; treasuryPlane: string | null } {
 	}
 	return {
 		treasuryPlane,
+		stewardWalletUrl: steward ? `https://basescan.org/address/${steward}` : null,
 		readers: [
 			incomeReader(),
 			plannedIncomeReader(),
 			...[...accounts.values()].map(({ rail, note, ...account }) =>
 				withRow(baseWalletReader({ ...wallet, ...account }), { rail, ...(note ? { note } : {}) }),
 			),
-			withRow(
-				openRouterReader({
-					apiKey: env.OPENROUTER_API_KEY,
-					fetch: noStoreFetch,
-					label: "OpenRouter credit",
-					payAction: {
-						kind: "steward-checkout",
-						vendor: "openrouter",
-						checkoutUrl: OPENROUTER_CHECKOUT_URL,
-					},
-				}),
-				{ rail: STEWARD_RAIL },
-			),
+			openRouterUnavailableReader(),
 			operatorCoveredReader("hosting:operator-covered", "Hosting", "Funded by operator · cost not yet shared"),
 			operatorCoveredReader("ai:operator-covered", "AI", "Funded by operator · usage not yet shared"),
 		],
@@ -281,7 +306,13 @@ export async function getMoneyPlaneSnapshot(): Promise<NodeFinanceSnapshot> {
 			},
 			EVENT_NAMES.MONEY_PLANE_SNAPSHOT,
 		);
-		return { ...snapshot, rows, treasuryPlane: composition.treasuryPlane, summary };
+		return {
+			...snapshot,
+			rows,
+			treasuryPlane: composition.treasuryPlane,
+			summary,
+			stewardWalletUrl: composition.stewardWalletUrl,
+		};
 	} catch (error) {
 		// takeSnapshot never rejects; this is the composition failing (env or
 		// repo-spec unreadable). Log the enum, never the raw message.

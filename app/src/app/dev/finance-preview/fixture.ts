@@ -145,6 +145,24 @@ const nodeServices: MoneyPlaneRow = {
 	detail: "no USDC service income yet",
 	rail: { kind: "x402-auto", status: "planned", guide: "node-service-usdc-northstar" },
 };
+/** OpenRouter /credits needs a management key; the inference key never reads it (task.5361). */
+const openRouterUnknown: MoneyPlaneRow = {
+	plane: "openrouter:account",
+	label: "OpenRouter credit",
+	kind: "prepaid",
+	balance: null,
+	currency: null,
+	burnPerDay: null,
+	runwayDays: null,
+	grade: "UNKNOWN",
+	observedAt,
+	freshness: "unknown",
+	sourceObservedAt: null,
+	reasonCode: "unconfigured",
+	detail: "needs a management key · task.5361",
+	payAction: OPENROUTER_CHECKOUT,
+	rail: STEWARD_RAIL,
+};
 const hosting = operatorCovered("hosting:operator-covered", "Hosting", "Funded by operator · cost not yet shared");
 const ai = operatorCovered("ai:operator-covered", "AI", "Funded by operator · usage not yet shared");
 
@@ -156,10 +174,11 @@ function model(rows: MoneyPlaneRow[], worst: MoneyPlaneRow["grade"]): NodeFinanc
 		treasuryPlane: "base:dao-treasury",
 		rows: projected,
 		summary: summarize({ rows: projected }, { treasuryPlane: "base:dao-treasury" }),
+		stewardWalletUrl: "https://basescan.org/address/0x3333333333333333333333333333333333333333",
 	};
 }
 
-/** Every reader answered: no purchases yet, three wallets, OpenRouter credit without a burn measurement, operator-funded lines. */
+/** Every reader answered: no purchases yet, three wallets, OpenRouter unknown (management key), operator-funded lines. */
 export const liveShapedPreview: NodeFinanceSnapshot = model(
 	[
 		income(0, 0, 0),
@@ -172,24 +191,7 @@ export const liveShapedPreview: NodeFinanceSnapshot = model(
 		wallet("base:steward-wallet", "Steward wallet", 7.07, "0.0003 ETH", NO_RAIL, {
 			note: "Human-custodied; pays OpenRouter in USDC",
 		}),
-		{
-			plane: "openrouter:account",
-			label: "OpenRouter credit",
-			kind: "prepaid",
-			balance: 3.1,
-			currency: "USD",
-			burnPerDay: null,
-			runwayDays: null,
-			grade: "UNKNOWN",
-			observedAt,
-			source: "OpenRouter credits API",
-			sourceObservedAt: observedAt,
-			freshness: "current",
-			reasonCode: "burn_unmeasured",
-			usageTotal: 41.9,
-			payAction: OPENROUTER_CHECKOUT,
-			rail: STEWARD_RAIL,
-		},
+		openRouterUnknown,
 		hosting,
 		ai,
 	],
@@ -230,7 +232,7 @@ export const sparsePreview: NodeFinanceSnapshot = model(
 			freshness: "unknown",
 			sourceObservedAt: null,
 			reasonCode: "unconfigured",
-			detail: "no OpenRouter key in this environment",
+			detail: "needs a management key · task.5361",
 			payAction: OPENROUTER_CHECKOUT,
 			rail: STEWARD_RAIL,
 		},

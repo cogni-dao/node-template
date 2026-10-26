@@ -29,7 +29,6 @@ const mocks = vi.hoisted(() => ({
 	operator: vi.fn(),
 	steward: vi.fn(),
 	walletReader: vi.fn(),
-	creditReader: vi.fn(),
 	snapshot: vi.fn(),
 	fx: vi.fn(),
 	query: vi.fn(),
@@ -75,10 +74,11 @@ vi.mock("@cogni/money-plane", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@cogni/money-plane")>()),
 	BASE_PUBLIC_RPC_URL: "https://rpc.example",
 	baseWalletReader: mocks.walletReader,
-	openRouterReader: mocks.creditReader,
 	takeSnapshot: mocks.snapshot,
 	fetchEcbRate: mocks.fx,
 }));
+
+import { StewardWithdrawalRejected } from "@cogni/money-plane/react";
 
 import {
 	FinanceReportClient,
@@ -137,7 +137,6 @@ function admit() {
 	mocks.walletReader.mockImplementation(({ name, payAction }: { name: string; payAction?: unknown }) =>
 		stubReader(`base:${name}`, payAction ? { payAction: payAction as MoneyPlaneRow["payAction"] } : {}),
 	);
-	mocks.creditReader.mockReturnValue(stubReader("openrouter:account"));
 	mocks.snapshot.mockResolvedValue(report);
 	mocks.fx.mockResolvedValue(null);
 	mocks.query.mockReturnValue(async () => []);
@@ -167,7 +166,6 @@ describe("finance authorization at the read boundary", () => {
 			mocks.operator,
 			mocks.steward,
 			mocks.walletReader,
-			mocks.creditReader,
 			mocks.snapshot,
 			mocks.query,
 			mocks.fx,
@@ -181,11 +179,13 @@ describe("finance authorization at the read boundary", () => {
 		await expect(getMoneyPlaneSnapshot()).resolves.toEqual({
 			...report,
 			treasuryPlane: null,
+			stewardWalletUrl: null,
 			summary: {
 				treasuryUsd: null,
 				incomePerDay: null,
 				burnPerDay: null,
-				shortestRunway: null,
+				runwayDays: null,
+				nextDeadline: null,
 				ratesUsed: [],
 				unconverted: [],
 			},
@@ -194,9 +194,6 @@ describe("finance authorization at the read boundary", () => {
 		expect(mocks.redirect).not.toHaveBeenCalled();
 		expect(mocks.env).toHaveBeenCalledTimes(1);
 		expect(mocks.walletReader).toHaveBeenCalledTimes(3);
-		expect(mocks.creditReader).toHaveBeenCalledWith(
-			expect.objectContaining({ apiKey: "sk-or-test", label: "OpenRouter credit", payAction: OPENROUTER_CHECKOUT }),
-		);
 		expect(mocks.snapshot).toHaveBeenCalledTimes(1);
 		expect(mocks.fx).not.toHaveBeenCalled();
 		expect(mocks.info).toHaveBeenCalledWith(
@@ -262,7 +259,13 @@ describe("node composition", () => {
 			note: "User payments → operator wallet → steward wallet → OpenRouter",
 		});
 		expect(by["base:steward-wallet"]?.rail).toEqual({ kind: "none", status: "unsupported" });
-		expect(by["openrouter:account"]?.rail).toEqual({ kind: "steward-manual", status: "supported" });
+		expect(by["openrouter:account"]).toMatchObject({
+			grade: "UNKNOWN",
+			reasonCode: "unconfigured",
+			detail: "needs a management key · task.5361",
+			rail: { kind: "steward-manual", status: "supported" },
+			payAction: OPENROUTER_CHECKOUT,
+		});
 		for (const plane of ["hosting:operator-covered", "ai:operator-covered"])
 			expect(by[plane]).toMatchObject({
 				kind: "usage",
@@ -320,12 +323,21 @@ describe("node composition", () => {
 		expect(mocks.walletReader).toHaveBeenCalledTimes(3);
 	});
 
-	it("still registers OpenRouter without a key so the row is explicit, not absent", async () => {
-		mocks.env.mockReturnValue({});
+	it("never calls OpenRouter /credits with the inference key; the row stays UNKNOWN with Top up reachable", async () => {
+		mocks.env.mockReturnValue({ OPENROUTER_API_KEY: "sk-or-test" });
+		const fetchSpy = vi.fn();
+		vi.stubGlobal("fetch", fetchSpy);
 		await getMoneyPlaneSnapshot();
-		expect(mocks.creditReader).toHaveBeenCalledWith(
-			expect.objectContaining({ apiKey: undefined, payAction: OPENROUTER_CHECKOUT }),
-		);
+		const row = (await rowsOf()).find((r) => r.plane === "openrouter:account");
+		expect(row).toMatchObject({ balance: null, grade: "UNKNOWN", detail: "needs a management key · task.5361" });
+		expect(fetchSpy.mock.calls.some((call) => String(call[0]).includes("openrouter.ai"))).toBe(false);
+		vi.unstubAllGlobals();
+	});
+
+	it("exposes the steward wallet explorer link for the result-unknown check", async () => {
+		mocks.steward.mockReturnValue({ address: other("5678") });
+		const result = await getMoneyPlaneSnapshot();
+		expect(result.stewardWalletUrl).toBe(`https://basescan.org/address/${other("5678")}`);
 	});
 
 	it("reads income from the ledger seam, and reports it UNKNOWN when no ledger is reachable", async () => {
@@ -424,9 +436,10 @@ describe("node composition", () => {
 		expect(result.summary).toMatchObject({
 			treasuryUsd: 74.52,
 			burnPerDay: 1.1188,
-			shortestRunway: { days: 10, label: "EUR credit" },
+			nextDeadline: { days: 10, label: "EUR credit" },
 			ratesUsed: [{ pair: "EURUSD" }],
 		});
+		expect(result.summary.runwayDays).toBeCloseTo(74.52 / 1.1188, 9);
 	});
 });
 
@@ -445,9 +458,11 @@ describe("the Financials page and its package binding", () => {
 		render(createElement(FinanceReportClient, { report: liveShapedPreview as NodeFinanceSnapshot }));
 		expect(screen.getByRole("heading", { level: 1, name: "Financials" })).toBeTruthy();
 		expect(document.querySelector("[data-finance-stat='Treasury']")?.textContent).toBe("$74.52");
-		expect(document.querySelector("[data-finance-stat='Income']")?.textContent).toBe("$0.00/day");
+		expect(document.querySelector("[data-finance-stat='Cash received']")?.textContent).toBe("$0.00/day");
 		expect(document.querySelector("[data-finance-stat='Burn']")?.textContent).toBe("—");
-		expect(screen.getByText("trailing 30d")).toBeTruthy();
+		expect(document.querySelector("[data-finance-stat='Runway']")?.textContent).toBe("—");
+		expect(screen.getByText("credit purchases · 30d")).toBeTruthy();
+		expect(screen.getByText("treasury ÷ net burn")).toBeTruthy();
 		const table = screen.getByRole("table");
 		expect(Array.from(table.querySelectorAll("tr[data-finance-group]")).map((tr) => tr.getAttribute("data-finance-group"))).toEqual([
 			"Income",
@@ -460,6 +475,7 @@ describe("the Financials page and its package binding", () => {
 		expect(openrouter && within(openrouter).getByRole("link", { name: /Top up/ }).getAttribute("href")).toBe(
 			OPENROUTER_CHECKOUT_URL,
 		);
+		expect(openrouter?.textContent).toContain("—");
 		const hosting = table.querySelector<HTMLElement>("tr[data-finance-row='hosting:operator-covered']");
 		expect(hosting && within(hosting).getByText("No rail")).toBeTruthy();
 		expect(hosting && within(hosting).queryByRole("link")).toBeNull();
@@ -473,7 +489,47 @@ describe("the Financials page and its package binding", () => {
 			expect.objectContaining({ method: "POST", body: JSON.stringify({ amountUsd: 2.5 }) }),
 		);
 		const bad = vi.fn(async () => ({ ok: false, status: 400, json: async () => ({ detail: "amount too large" }) }));
-		await expect(fundSteward(999, bad as unknown as typeof fetch)).rejects.toThrow("amount too large");
+		await expect(fundSteward(999, bad as unknown as typeof fetch)).rejects.toThrow(StewardWithdrawalRejected);
+		const lost = vi.fn(async () => ({
+			ok: true,
+			status: 200,
+			json: async () => {
+				throw new Error("lost");
+			},
+		}));
+		await expect(fundSteward(1, lost as unknown as typeof fetch)).rejects.not.toBeInstanceOf(
+			StewardWithdrawalRejected,
+		);
+	});
+
+	it("an accepted transfer with a lost response locks the control: no second POST until the user confirms the check", async () => {
+		let posts = 0;
+		const fetchSpy = vi.fn(async () => {
+			posts += 1;
+			return {
+				ok: true,
+				status: 200,
+				json: async () => {
+					throw new Error("lost");
+				},
+			};
+		});
+		vi.stubGlobal("fetch", fetchSpy);
+		render(createElement(FinanceReportClient, { report: liveShapedPreview as NodeFinanceSnapshot }));
+		const operator = screen.getByRole("table").querySelector<HTMLElement>("tr[data-finance-row='base:operator-wallet']");
+		if (!operator) throw new Error("missing operator row");
+		const button = () => within(operator).getByRole("button", { name: "Fund steward" });
+		await userEvent.click(button());
+		expect(await within(operator).findByText(/Result unknown — check the steward wallet/)).toBeTruthy();
+		expect(within(operator).getByRole("link", { name: /on BaseScan/ }).getAttribute("href")).toBe(
+			liveShapedPreview.stewardWalletUrl,
+		);
+		expect((button() as HTMLButtonElement).disabled).toBe(true);
+		await userEvent.click(button());
+		expect(posts).toBe(1);
+		await userEvent.click(within(operator).getByRole("button", { name: "I checked" }));
+		expect((button() as HTMLButtonElement).disabled).toBe(false);
+		vi.unstubAllGlobals();
 	});
 
 	it("the inline control posts the typed amount and links the broadcast tx", async () => {
