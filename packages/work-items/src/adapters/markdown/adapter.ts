@@ -18,6 +18,13 @@
  * @public
  */
 
+import {
+  compareWorkItems,
+  normalizeWorkItemOrder,
+  type WorkItemOrder
+} from "../../query-order.js";
+import { InvalidCursorError } from "../doltgres/cursor.js";
+
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { WorkItemCommandPort, WorkItemQueryPort } from "../../ports.js";
@@ -33,13 +40,13 @@ import type {
   WorkItemStatus,
   WorkItemType,
   WorkQuery,
-  WorkRelation,
+  WorkRelation
 } from "../../types.js";
 import { toWorkItemId } from "../../types.js";
 import {
   InvalidTransitionError,
   StaleRevisionError,
-  UnsupportedWorkItemFieldError,
+  UnsupportedWorkItemFieldError
 } from "./errors.js";
 import {
   assigneesToRaw,
@@ -47,7 +54,7 @@ import {
   rawToWorkItem,
   serializeFrontmatter,
   workItemFieldsToRaw,
-  workItemIdToRaw,
+  workItemIdToRaw
 } from "./frontmatter.js";
 
 // ── Internals ────────────────────────────────────────
@@ -97,7 +104,7 @@ async function readEntry(filePath: string): Promise<FileEntry | null> {
 async function scanAllEntries(workDir: string): Promise<FileEntry[]> {
   const dirs = [
     path.join(workDir, "work", "items"),
-    path.join(workDir, "work", "projects"),
+    path.join(workDir, "work", "projects")
   ];
 
   const entries: FileEntry[] = [];
@@ -147,7 +154,7 @@ async function atomicWrite(
     raw: updated.raw,
     body: updated.body,
     revision: updated.revision,
-    item: rawToWorkItem(updated.raw),
+    item: rawToWorkItem(updated.raw)
   };
 }
 
@@ -244,25 +251,38 @@ function matchesQuery(item: WorkItem, query: WorkQuery): boolean {
 
 // ── Pagination cursor ────────────────────────────────
 
-const MARKDOWN_CURSOR_PREFIX = "md:";
-
-/** Opaque offset cursor over the adapter's total sort order. */
-function encodeMarkdownCursor(offset: number): string {
-  return `${MARKDOWN_CURSOR_PREFIX}${offset}`;
+const MARKDOWN_CURSOR_PREFIX = "md1:";
+function encodeMarkdownCursor(offset: number, order: WorkItemOrder): string {
+  return (
+    MARKDOWN_CURSOR_PREFIX +
+    Buffer.from(JSON.stringify({ offset, ...order })).toString("base64url")
+  );
 }
-
-/** Absent ⇒ 0. A cursor this adapter did not issue is a caller error, never page 1. */
-function decodeMarkdownCursor(cursor: string | undefined): number {
+function decodeMarkdownCursor(
+  cursor: string | undefined,
+  order: WorkItemOrder
+): number {
   if (cursor === undefined) return 0;
-  const offset = Number(cursor.slice(MARKDOWN_CURSOR_PREFIX.length));
-  if (
-    !cursor.startsWith(MARKDOWN_CURSOR_PREFIX) ||
-    !Number.isSafeInteger(offset) ||
-    offset < 0
-  ) {
-    throw new Error(`invalid markdown work-item cursor: ${cursor}`);
+  try {
+    if (!cursor.startsWith(MARKDOWN_CURSOR_PREFIX) || cursor.length > 2048)
+      throw new Error();
+    const parsed = JSON.parse(
+      Buffer.from(
+        cursor.slice(MARKDOWN_CURSOR_PREFIX.length),
+        "base64url"
+      ).toString()
+    );
+    if (
+      !Number.isSafeInteger(parsed.offset) ||
+      parsed.offset < 0 ||
+      parsed.sortBy !== order.sortBy ||
+      parsed.sortDirection !== order.sortDirection
+    )
+      throw new Error();
+    return parsed.offset;
+  } catch {
+    throw new InvalidCursorError();
   }
-  return offset;
 }
 
 // ── Adapter class ────────────────────────────────────
@@ -289,26 +309,18 @@ export class MarkdownWorkItemAdapter
       items = items.filter((item) => matchesQuery(item, query));
     }
 
-    // Sort by priority ASC, then rank ASC, then id (a total order, so offset pages are stable)
-    items.sort((a, b) => {
-      const pa = a.priority ?? 99;
-      const pb = b.priority ?? 99;
-      if (pa !== pb) return pa - pb;
-      const ra = a.rank ?? 99;
-      const rb = b.rank ?? 99;
-      if (ra !== rb) return ra - rb;
-      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-    });
+    const order = normalizeWorkItemOrder(query);
+    items.sort((a, b) => compareWorkItems(a, b, order));
 
     // NO_SILENT_TRUNCATION: a page cut short by `limit` returns `nextCursor`, so a
     // caller that walks pages (e.g. a complete backlog snapshot) never mistakes the
     // first page for the whole backlog.
-    const offset = decodeMarkdownCursor(query?.cursor);
+    const offset = decodeMarkdownCursor(query?.cursor, order);
     const rest = items.slice(offset);
     if (query?.limit && rest.length > query.limit) {
       return {
         items: rest.slice(0, query.limit),
-        nextCursor: encodeMarkdownCursor(offset + query.limit),
+        nextCursor: encodeMarkdownCursor(offset + query.limit, order)
       };
     }
     return { items: rest };
@@ -334,7 +346,7 @@ export class MarkdownWorkItemAdapter
           relations.push({
             fromId,
             toId: toWorkItemId(toStr),
-            type: relType,
+            type: relType
           });
         }
       }
@@ -391,7 +403,7 @@ export class MarkdownWorkItemAdapter
       updated: today,
       labels: input.labels ?? [],
       external_refs: null,
-      node: input.node ?? "shared",
+      node: input.node ?? "shared"
     };
 
     if (input.parentId) {

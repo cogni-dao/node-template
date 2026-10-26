@@ -45,6 +45,8 @@ Work item port interfaces, domain types, and storage adapters for structured wor
   - `WorkItemId`, `Revision`, `WorkItemType`, `WorkItemStatus`, `ActorKind` — identity and enum types
   - `SubjectRef`, `ExternalRef`, `RelationType`, `WorkRelation` — structured domain types
   - `WorkItem`, `WorkQuery` — full work item type and query filter
+  - `WORK_ITEM_SORT_FIELDS`, `WORK_ITEM_SORT_DIRECTIONS`, `normalizeWorkItemOrder`, `compareWorkItems` — canonical ordering; default rankScore DESC, unknown last, id ASC
+  - `WorkItemSortBy`, `WorkItemSortDirection`, `WorkItemOrder` — shared order types
   - `toWorkItemId(raw: string): WorkItemId` — boundary constructor
   - `WorkItemQueryPort`, `WorkItemCommandPort` — read/write interfaces
   - `VALID_TRANSITIONS`, `isValidTransition(from, to): boolean` — transition table
@@ -113,3 +115,5 @@ A read has its own deadline and never enters writer admission. Reader timeout re
 
 - PATCH_CAS (task.5284): Doltgres `patch` with `expectedRevision` adds `AND revision = <expected>` to its UPDATE; a mismatch throws `WorkItemRevisionConflictError` and drops the empty op branch with no commit. Omitted = unconditioned, as before.
 - COLLABORATOR_TRIAGE (task.5284): any non-blank principal may `patch` only `priority`, `rank`, `labels`, `scores` on items it did not create. A `set` naming any other field is creator-bound as a whole (`created_by_principal_id IS NULL OR = principal`); the patch transition proof admits a non-creator only when the row diff touches nothing beyond those columns + `revision`/`updated_at`.
+
+- Query cursors bind version and normalized sort; old/order-mismatched cursors require restart. Native SQL owns exact cursor keys. Text uses bounded ordered batches sharing one read deadline.

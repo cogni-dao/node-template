@@ -1,74 +1,73 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2025 Cogni-DAO
+// SPDX-FileCopyrightText: 2026 Cogni-DAO
 
-/**
- * Opaque keyset cursor for the Doltgres work-items read model.
- */
+/** Versioned order-bound keyset. The native SQL projection owns the exact key. */
+import {
+  normalizeWorkItemOrder,
+  type WorkItemOrder
+} from "../../query-order.js";
 
 export class InvalidCursorError extends Error {
-  constructor(message = "invalid cursor") {
+  constructor(message = "invalid_cursor: restart pagination without a cursor") {
     super(message);
     this.name = "InvalidCursorError";
   }
 }
-export type WorkItemCursor = {
-  p: number | null;
-  r: number | null;
-  ts: string;
+export type WorkItemCursor = WorkItemOrder & {
+  v: 1;
+  key: string | null;
   id: string;
 };
-
 export function encodeCursor(cursor: WorkItemCursor): string {
   return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
 }
-
-export function decodeCursor(raw: string): WorkItemCursor {
-  let parsed: unknown;
+export function decodeCursor(
+  raw: string,
+  order?: WorkItemOrder
+): WorkItemCursor {
   try {
-    parsed = JSON.parse(Buffer.from(raw, "base64url").toString("utf8"));
+    if (!raw || raw.length > 2048 || !/^[A-Za-z0-9_-]+$/.test(raw))
+      throw new Error();
+    const value = JSON.parse(Buffer.from(raw, "base64url").toString("utf8"));
+    if (
+      !value ||
+      value.v !== 1 ||
+      typeof value.id !== "string" ||
+      !value.id ||
+      value.id.length > 200 ||
+      !(value.key === null || typeof value.key === "string") ||
+      value.key?.length > 100
+    )
+      throw new Error();
+    const normalized = normalizeWorkItemOrder(value);
+    if (
+      normalized.sortBy !== value.sortBy ||
+      normalized.sortDirection !== value.sortDirection
+    )
+      throw new Error();
+    if (
+      order &&
+      (order.sortBy !== value.sortBy ||
+        order.sortDirection !== value.sortDirection)
+    )
+      throw new Error();
+    if (value.key !== null) {
+      if (value.sortBy === "createdAt" || value.sortBy === "updatedAt") {
+        if (
+          !/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}(:\d{2})?)?$/.test(
+            value.key
+          ) ||
+          !Number.isFinite(Date.parse(value.key))
+        )
+          throw new Error();
+      } else if (
+        !/^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(value.key) ||
+        !Number.isFinite(Number(value.key))
+      )
+        throw new Error();
+    }
+    return { v: 1, ...normalized, key: value.key, id: value.id };
   } catch {
     throw new InvalidCursorError();
   }
-
-  if (
-    !parsed ||
-    typeof parsed !== "object" ||
-    !("p" in parsed) ||
-    !("r" in parsed) ||
-    !("ts" in parsed) ||
-    !("id" in parsed)
-  ) {
-    throw new InvalidCursorError();
-  }
-
-  const value = parsed as Record<string, unknown>;
-  const p = value.p === null ? null : value.p;
-  const r = value.r === null ? null : value.r;
-  if (p !== null && (!Number.isInteger(p) || Number(p) < 0)) {
-    throw new InvalidCursorError();
-  }
-  if (r !== null && (!Number.isInteger(r) || Number(r) < 0)) {
-    throw new InvalidCursorError();
-  }
-  if (typeof value.ts !== "string") throw new InvalidCursorError();
-  const timestamp = new Date(value.ts);
-  if (
-    !Number.isFinite(timestamp.getTime()) ||
-    timestamp.toISOString() !== value.ts
-  ) {
-    throw new InvalidCursorError();
-  }
-  if (
-    typeof value.id !== "string" ||
-    !/^(task|bug|story|spike|subtask)\.\d+$/.test(value.id)
-  ) {
-    throw new InvalidCursorError();
-  }
-
-  return {
-    p: p as number | null,
-    r: r as number | null,
-    ts: value.ts,
-    id: value.id,
-  };
 }

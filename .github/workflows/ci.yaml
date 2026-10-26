@@ -94,6 +94,9 @@ jobs:
         run: pnpm test:ci
 
   component:
+    permissions:
+      contents: read
+      packages: read
     # Required by .cogni/repo-policy.json on both pull_request and merge_group.
     # A required job must never disappear from a merge-queue candidate.
     runs-on: ubuntu-latest # GitHub-hosted runners provide Docker for testcontainers
@@ -131,5 +134,12 @@ jobs:
       # node-template owns `@cogni/work-items`' Doltgres adapter, so the real
       # engine must gate it here and not only in a fork (task.5199). Dolt branch
       # semantics are invisible to the fake-SQL unit tests.
+      - name: Authenticate qualified Doltgres image pull
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
       - name: Doltgres 0.57.3 work-item acceptance
         run: pnpm --filter @cogni/node-template-app test:doltgres

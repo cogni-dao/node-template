@@ -14,11 +14,15 @@
  */
 
 import { z } from "zod";
+import {
+  WORK_ITEM_SORT_FIELDS,
+  WORK_ITEM_SORT_DIRECTIONS
+} from "@cogni/work-items";
 
 const SubjectRefSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("user"), userId: z.string() }),
   z.object({ kind: z.literal("agent"), agentId: z.string() }),
-  z.object({ kind: z.literal("system"), serviceId: z.string() }),
+  z.object({ kind: z.literal("system"), serviceId: z.string() })
 ]);
 
 const ExternalRefSchema = z.object({
@@ -26,7 +30,7 @@ const ExternalRefSchema = z.object({
   kind: z.string(),
   externalId: z.string().optional(),
   url: z.string().optional(),
-  title: z.string().optional(),
+  title: z.string().optional()
 });
 
 /**
@@ -52,6 +56,7 @@ export const WorkItemDtoSchema = z.object({
   status: z.string(),
   priority: z.number().optional(),
   rank: z.number().optional(),
+  rankScore: z.number().optional(),
   estimate: z.number().optional(),
   scores: WorkItemScoresDtoSchema.optional(),
   summary: z.string().optional(),
@@ -74,7 +79,7 @@ export const WorkItemDtoSchema = z.object({
   claimedAt: z.string().optional(),
   lastCommand: z.string().optional(),
   createdAt: z.string(),
-  updatedAt: z.string(),
+  updatedAt: z.string()
 });
 
 export const workItemsListOperation = {
@@ -83,6 +88,8 @@ export const workItemsListOperation = {
   description:
     "Returns work items matching optional type, status, text, and project filters.",
   input: z.object({
+    sortBy: z.enum(WORK_ITEM_SORT_FIELDS).optional(),
+    sortDirection: z.enum(WORK_ITEM_SORT_DIRECTIONS).optional(),
     types: z.array(z.string()).optional(),
     statuses: z.array(z.string()).optional(),
     text: z.string().optional(),
@@ -90,7 +97,7 @@ export const workItemsListOperation = {
     projectId: z.string().optional(),
     node: z.union([z.string(), z.array(z.string())]).optional(),
     limit: z.number().int().positive().max(500).optional(),
-    cursor: z.string().optional(),
+    cursor: z.string().optional()
   }),
   output: z.object({
     items: z.array(WorkItemDtoSchema),
@@ -99,10 +106,10 @@ export const workItemsListOperation = {
     pageInfo: z
       .object({
         endCursor: z.string().nullable(),
-        hasMore: z.boolean(),
+        hasMore: z.boolean()
       })
-      .optional(),
-  }),
+      .optional()
+  })
 } as const;
 
 // Export inferred types

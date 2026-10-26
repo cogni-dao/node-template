@@ -4,7 +4,7 @@
 /**
  * Module: `@app/_facades/work/items.server`
  * Purpose: Server-side facade for work item read/write operations across the markdown + Doltgres surfaces.
- * Scope: Maps port results to contract DTOs and merges node-local Doltgres rows with legacy markdown rows.
+ * Scope: Maps one authoritative backend to contract DTOs; Markdown only when Doltgres is unconfigured.
  * Invariants: P0P1_IS_NODE_ADMIN (story.5101: priority <= 1 on create/patch requires node admin,
  *   checked before the store write), PORT_VIA_CONTAINER (no direct adapter imports), CONTRACTS_ARE_TRUTH, NODE_STORE_IS_LOCAL.
  * Evaluation: preserves scores in DTOs and normalizes package validation failures for HTTP400.
@@ -19,25 +19,26 @@ import type {
   WorkItemCoordinationOutput,
   WorkItemDto,
   WorkItemsListInput,
-  WorkItemsListOutput,
+  WorkItemsListOutput
 } from "@cogni/node-contracts";
 import type { WorkItem, WorkItemId, WorkItemLease } from "@cogni/work-items";
 import {
   toWorkItemId,
+  rankScore,
   WorkItemRevisionConflictError,
   WorkItemScoresInvalidError,
-  WorkItemWriteOutcomeUnknownError,
+  WorkItemWriteOutcomeUnknownError
 } from "@cogni/work-items";
 export {
   WorkItemRevisionConflictError,
   WorkItemScoresInvalidError,
-  WorkItemWriteOutcomeUnknownError,
+  WorkItemWriteOutcomeUnknownError
 };
 
 import {
   checkNodeAdmin,
   isPrivilegedPriority,
-  NodeAdminRequiredError,
+  NodeAdminRequiredError
 } from "@cogni/knowledge-store";
 import { getContainer } from "@/bootstrap/container";
 
@@ -84,7 +85,7 @@ async function assertPriorityAuthority(
   if (!isPrivilegedPriority(priority)) return;
   const decision = await checkNodeAdmin(getContainer().nodeAdmin, {
     userId: actor.id,
-    walletAddress: actor.walletAddress ?? null,
+    walletAddress: actor.walletAddress ?? null
   });
   if (!decision.ok) {
     const err = new NodeAdminRequiredError(
@@ -96,7 +97,7 @@ async function assertPriorityAuthority(
         errorCode: err.errorCode,
         reason: err.reason,
         action: err.action,
-        userId: actor.id,
+        userId: actor.id
       },
       "work.items.priority_node_admin_refused"
     );
@@ -133,6 +134,7 @@ function toDto(item: WorkItem): WorkItemDto {
     ...(item.actor !== "either" && { actor: item.actor }),
     priority: item.priority,
     rank: item.rank,
+    rankScore: rankScore(item.scores),
     estimate: item.estimate,
     ...(item.scores !== undefined && { scores: item.scores }),
     summary: item.summary,
@@ -154,7 +156,7 @@ function toDto(item: WorkItem): WorkItemDto {
     claimedAt: item.claimedAt,
     lastCommand: item.lastCommand,
     createdAt: item.createdAt,
-    updatedAt: item.updatedAt,
+    updatedAt: item.updatedAt
   };
 }
 
@@ -261,6 +263,10 @@ export async function listWorkItems(
 ): Promise<WorkItemsListOutput> {
   const container = getContainer();
   const queryShared = {
+    ...(input.sortBy !== undefined && { sortBy: input.sortBy }),
+    ...(input.sortDirection !== undefined && {
+      sortDirection: input.sortDirection
+    }),
     ...(input.types && { types: input.types as WorkItem["type"][] }),
     ...(input.statuses && { statuses: input.statuses as WorkItem["status"][] }),
     ...(input.text && { text: input.text }),
@@ -268,56 +274,41 @@ export async function listWorkItems(
     ...(input.projectId && { projectId: toWorkItemId(input.projectId) }),
     ...(input.node && { node: input.node }),
     ...(input.limit && { limit: input.limit }),
-    ...(input.cursor && { cursor: input.cursor }),
+    ...(input.cursor && { cursor: input.cursor })
   };
 
-  // Pagination strategy:
-  //   - Doltgres is the cursor-paginated source of truth (post-#1144 importer
-  //     back-fills markdown items into Doltgres at their original IDs).
-  //   - On the first page (no cursor) we ALSO query the markdown adapter so
-  //     any items that haven't been imported yet still appear. Doltgres rows
-  //     win on id conflict (single-source dedup).
-  //   - Merged page is truncated to `limit` so the response never overflows.
-  //   - hasMore tracks Doltgres only — markdown is finite/small and only
-  //     contributes to page 1; once Doltgres exhausts pagination ends.
-  //   - Markdown-only items that overflow page 1 are dropped from the response;
-  //     this is acceptable because markdown is being deprecated and the
-  //     importer back-fill closes the gap.
-  let dgItems: WorkItem[] = [];
-  let endCursor: string | null = null;
-  let hasMore = false;
-
+  // Exactly one backend owns the total order and its cursor. Configured Dolt
+  // failures stay errors; only genuinely absent configuration selects Markdown.
   try {
-    const dgResult = await container.doltgresWorkItems.list(queryShared);
-    dgItems = [...dgResult.items];
-    endCursor = dgResult.pageInfo.endCursor;
-    hasMore = dgResult.pageInfo.hasMore;
-  } catch (e) {
-    const name = (e as Error)?.name;
-    if (name === "InvalidCursorError") {
-      throw new InvalidCursorError((e as Error).message);
-    }
-    if (name !== "DoltgresNotConfiguredError") rethrowBackendError(e);
+    const result = await container.doltgresWorkItems.list(queryShared);
+    return {
+      items: result.items.map(toDto),
+      pageInfo: result.pageInfo,
+      ...(result.pageInfo.endCursor !== null && {
+        nextCursor: result.pageInfo.endCursor
+      })
+    };
+  } catch (error) {
+    if ((error as Error)?.name === "InvalidCursorError")
+      throw new InvalidCursorError((error as Error).message);
+    if ((error as Error)?.name !== "DoltgresNotConfiguredError")
+      rethrowBackendError(error);
   }
-
-  let merged: WorkItem[] = dgItems;
-  if (!input.cursor) {
-    const mdResult = await container.workItemQuery.list(queryShared);
-    const dgIds = new Set(dgItems.map((i) => i.id as string));
-    const mdOnly = mdResult.items.filter((i) => !dgIds.has(i.id as string));
-    merged = [...dgItems, ...mdOnly];
+  try {
+    const result = await container.workItemQuery.list(queryShared);
+    return {
+      items: result.items.map(toDto),
+      pageInfo: {
+        endCursor: result.nextCursor ?? null,
+        hasMore: result.nextCursor !== undefined
+      },
+      ...(result.nextCursor !== undefined && { nextCursor: result.nextCursor })
+    };
+  } catch (error) {
+    if ((error as Error)?.name === "InvalidCursorError")
+      throw new InvalidCursorError((error as Error).message);
+    throw error;
   }
-
-  const requestedLimit = input.limit ?? 100;
-  if (merged.length > requestedLimit) {
-    merged = merged.slice(0, requestedLimit);
-  }
-
-  return {
-    items: merged.map(toDto),
-    pageInfo: { endCursor, hasMore },
-    ...(endCursor !== null && { nextCursor: endCursor }),
-  };
 }
 
 export async function getWorkItem(id: string): Promise<WorkItemDto | null> {
@@ -353,10 +344,10 @@ export async function createWorkItem(
         ...(input.outcome !== undefined && { outcome: input.outcome }),
         ...(input.specRefs !== undefined && { specRefs: input.specRefs }),
         ...(input.projectId !== undefined && {
-          projectId: toWorkItemId(input.projectId),
+          projectId: toWorkItemId(input.projectId)
         }),
         ...(input.parentId !== undefined && {
-          parentId: toWorkItemId(input.parentId),
+          parentId: toWorkItemId(input.parentId)
         }),
         ...(input.labels !== undefined && { labels: input.labels }),
         ...(input.assignees !== undefined && { assignees: input.assignees }),
@@ -365,7 +356,7 @@ export async function createWorkItem(
         ...(input.priority !== undefined && { priority: input.priority }),
         ...(input.rank !== undefined && { rank: input.rank }),
         ...(input.estimate !== undefined && { estimate: input.estimate }),
-        ...(input.scores !== undefined && { scores: input.scores }),
+        ...(input.scores !== undefined && { scores: input.scores })
       },
       sessionUser.id
     );
@@ -386,9 +377,9 @@ export async function patchWorkItem(
       {
         id: toWorkItemId(input.id),
         ...(input.expectedRevision !== undefined && {
-          expectedRevision: input.expectedRevision,
+          expectedRevision: input.expectedRevision
         }),
-        set: dropUndefined(input.set),
+        set: dropUndefined(input.set)
       },
       sessionUser.id
     );
@@ -426,7 +417,7 @@ export async function claimWorkItem(input: {
       id: toWorkItemId(input.id),
       runId: input.runId,
       command: input.command,
-      principalId: input.principalId,
+      principalId: input.principalId
     });
     return item;
   } catch (error) {
@@ -446,7 +437,7 @@ export async function releaseWorkItem(input: {
       id: toWorkItemId(input.id),
       runId: input.runId,
       leaseToken: input.leaseToken,
-      principalId: input.principalId,
+      principalId: input.principalId
     });
     return item;
   } catch (error) {
@@ -468,7 +459,7 @@ export async function heartbeatWorkItem(input: {
       runId: input.runId,
       leaseToken: input.leaseToken,
       ...(input.command !== undefined && { command: input.command }),
-      principalId: input.principalId,
+      principalId: input.principalId
     });
     return item;
   } catch (error) {
@@ -490,8 +481,8 @@ export async function getWorkItemCoordination(
         claimedByRun: current.claimedByRun ?? null,
         claimedByDisplayName: current.claimedByRun ?? null,
         claimedAt: current.claimedAt ?? null,
-        lastCommand: current.lastCommand ?? null,
-      },
+        lastCommand: current.lastCommand ?? null
+      }
     };
   } catch (error) {
     if (error instanceof WorkItemNotFoundError) throw error;

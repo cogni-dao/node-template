@@ -9,7 +9,7 @@ import {
   acquireDoltWriterLocks,
   DoltWriterAdmissionError,
   type DoltWriterLock,
-  reconcileAbandonedDoltOperation,
+  reconcileAbandonedDoltOperation
 } from "@cogni-dao/doltgres-admission";
 import type { ReservedSql, Sql } from "postgres";
 import {
@@ -18,7 +18,7 @@ import {
   WorkItemScoresInvalidError,
   WorkItemsBusyError,
   WorkItemsCapacityError,
-  WorkItemWriteOutcomeUnknownError,
+  WorkItemWriteOutcomeUnknownError
 } from "../../errors.js";
 import type {
   ActorKind,
@@ -32,7 +32,7 @@ import type {
   WorkItemStatus,
   WorkItemType,
   WorkQuery,
-  WorkRelation,
+  WorkRelation
 } from "../../index.js";
 import { toWorkItemId } from "../../index.js";
 
@@ -40,17 +40,19 @@ export {
   WorkItemLeaseConflictError,
   WorkItemRevisionConflictError,
   WorkItemsBusyError,
-  WorkItemsCapacityError,
+  WorkItemsCapacityError
 } from "../../errors.js";
 
 import { parseWorkItemScores } from "../../scores.js";
+import { normalizeWorkItemOrder } from "../../query-order.js";
+import { rankScoreSql } from "../../rank-policy.js";
 
 import { decodeCursor, encodeCursor, type WorkItemCursor } from "./cursor.js";
 import type {
   WorkItemsContentPort,
   WorkItemsCreateInput,
   WorkItemsPatchInput,
-  WorkItemsPatchSet,
+  WorkItemsPatchSet
 } from "./ports.js";
 
 export const OPERATOR_ID_FLOOR = 5000;
@@ -105,7 +107,7 @@ const BRANCH_TIMEOUT_MS = 30_000;
 const BRANCH_HOUSEKEEPING_STAGES = new Set([
   "branch.create",
   "branch.delete",
-  "main.checkout",
+  "main.checkout"
 ]);
 const RESERVE_TIMEOUT_MS = 5_000;
 
@@ -247,7 +249,7 @@ class PendingBranchRecoveryError<T = unknown> extends Error {
 const noopLogger: WorkItemLogger = {
   info: () => undefined,
   warn: () => undefined,
-  error: () => undefined,
+  error: () => undefined
 };
 
 export class WorkItemAlreadyExistsError extends Error {
@@ -511,7 +513,7 @@ function rowToWorkItem(row: Record<string, unknown>): WorkItem {
     revision: Number(row.revision ?? 0),
     deployVerified: Boolean(row.deploy_verified ?? false),
     createdAt: row.created_at ? String(row.created_at) : "",
-    updatedAt: row.updated_at ? String(row.updated_at) : "",
+    updatedAt: row.updated_at ? String(row.updated_at) : ""
   };
 
   const optional = {
@@ -526,7 +528,7 @@ function rowToWorkItem(row: Record<string, unknown>): WorkItem {
     branch: optionalString(row.branch),
     pr: optionalString(row.pr),
     reviewer: optionalString(row.reviewer),
-    blockedBy: optionalWorkItemId(row.blocked_by),
+    blockedBy: optionalWorkItemId(row.blocked_by)
   };
   for (const [key, value] of Object.entries(optional)) {
     if (value !== undefined) item[key] = value;
@@ -613,7 +615,7 @@ const PATCH_COLUMNS: Record<keyof WorkItemsPatchSet, string> = {
   deployVerified: "deploy_verified",
   projectId: "project_id",
   parentId: "parent_id",
-  blockedBy: "blocked_by",
+  blockedBy: "blocked_by"
 };
 
 const PERSISTED_WORK_ITEM_COLUMNS = [
@@ -647,7 +649,7 @@ const PERSISTED_WORK_ITEM_COLUMNS = [
   "updated_at",
   "created_by_principal_id",
   "claim_owner_principal_id",
-  "claim_expires_at",
+  "claim_expires_at"
 ] as const;
 
 type PersistedColumn = (typeof PERSISTED_WORK_ITEM_COLUMNS)[number];
@@ -664,7 +666,7 @@ const TRIAGE_PATCH_KEYS = new Set<keyof WorkItemsPatchSet>([
   "priority",
   "rank",
   "labels",
-  "scores",
+  "scores"
 ]);
 /** The full row-diff surface a non-creator patch may prove. */
 const TRIAGE_COLUMNS = new Set<string>([
@@ -673,13 +675,13 @@ const TRIAGE_COLUMNS = new Set<string>([
   "labels",
   "scores",
   "revision",
-  "updated_at",
+  "updated_at"
 ]);
 const IMMUTABLE_COLUMNS = new Set<string>([
   "id",
   "type",
   "created_at",
-  "created_by_principal_id",
+  "created_by_principal_id"
 ]);
 const CLAIM_COLUMNS = new Set<string>([
   "claimed_by_run",
@@ -688,13 +690,13 @@ const CLAIM_COLUMNS = new Set<string>([
   "claim_expires_at",
   "last_command",
   "revision",
-  "updated_at",
+  "updated_at"
 ]);
 const HEARTBEAT_COLUMNS = new Set<string>([
   "claim_expires_at",
   "last_command",
   "revision",
-  "updated_at",
+  "updated_at"
 ]);
 const RELEASE_COLUMNS = new Set<string>([
   "claimed_by_run",
@@ -702,7 +704,7 @@ const RELEASE_COLUMNS = new Set<string>([
   "claimed_at",
   "claim_expires_at",
   "revision",
-  "updated_at",
+  "updated_at"
 ]);
 
 function normalizedPersistedValue(value: unknown): unknown {
@@ -727,7 +729,7 @@ function snapshotRow(row: Record<string, unknown>, prefix = ""): RowSnapshot {
   return Object.fromEntries(
     PERSISTED_WORK_ITEM_COLUMNS.map((column) => [
       column,
-      normalizedPersistedValue(row[`${prefix}${column}`]),
+      normalizedPersistedValue(row[`${prefix}${column}`])
     ])
   ) as RowSnapshot;
 }
@@ -805,7 +807,7 @@ function legacyProofFromMessage(
     principal,
     itemId: diffId,
     beforeRow: before,
-    afterRow: after,
+    afterRow: after
   };
 }
 
@@ -859,7 +861,7 @@ function validateTransitionMatrix(
         after.status,
         after.node,
         after.created_at,
-        after.updated_at,
+        after.updated_at
       ];
       return (
         isNullSnapshot(before) &&
@@ -880,7 +882,7 @@ function validateTransitionMatrix(
       const allowed = new Set<string>([
         ...requestedColumns,
         "revision",
-        "updated_at",
+        "updated_at"
       ]);
       return (
         String(before.id) === itemId &&
@@ -1137,7 +1139,7 @@ export class DoltgresWorkItemAdapter
         operationId: context.operationId,
         operation: context.operation,
         stage,
-        ...fields,
+        ...fields
       },
       `work_items ${stage} ${state}`
     );
@@ -1161,7 +1163,7 @@ export class DoltgresWorkItemAdapter
       if (this.sql === pool) this.poisoned = true;
       this.logStage("error", context, "connection.terminate", "error", {
         failedStage: stage,
-        reason,
+        reason
       });
       try {
         await pool.end({ timeout: 0 });
@@ -1169,7 +1171,7 @@ export class DoltgresWorkItemAdapter
         this.logStage("error", context, "connection.terminate", "error", {
           failedStage: stage,
           reason: "terminate_failed",
-          ...errorFields(error),
+          ...errorFields(error)
         });
         return;
       }
@@ -1179,12 +1181,12 @@ export class DoltgresWorkItemAdapter
         this.sql = this.recreateClient();
         this.poisoned = false;
         this.logStage("info", context, "connection.recreate", "complete", {
-          failedStage: stage,
+          failedStage: stage
         });
       } catch (error) {
         this.logStage("error", context, "connection.recreate", "error", {
           failedStage: stage,
-          ...errorFields(error),
+          ...errorFields(error)
         });
       }
     })();
@@ -1205,7 +1207,7 @@ export class DoltgresWorkItemAdapter
     if (context.abandoned && !cleanup && !unlock) {
       if (context.admitting && !context.nativeUnknown)
         throw new DoltWriterAdmissionError("lock_contended", false, {
-          cause: context.abandoned,
+          cause: context.abandoned
         });
       throw context.abandoned;
     }
@@ -1250,7 +1252,7 @@ export class DoltgresWorkItemAdapter
       }
       this.logStage("info", context, stage, "complete", {
         ...queryFields,
-        durationMs: Date.now() - startedAt,
+        durationMs: Date.now() - startedAt
       });
       return rows;
     } catch (error) {
@@ -1263,7 +1265,7 @@ export class DoltgresWorkItemAdapter
         ...queryFields,
         durationMs: Date.now() - startedAt,
         timedOut,
-        ...errorFields(error),
+        ...errorFields(error)
       });
       if (timedOut && !cleanup) {
         throw context.abandoned;
@@ -1295,7 +1297,7 @@ export class DoltgresWorkItemAdapter
     this.heldWriter = context;
     for (const reject of this.queueWaiters) reject();
     this.logStage("warn", context, stage, "error", {
-      reason: "caller_abandoned_native_retained",
+      reason: "caller_abandoned_native_retained"
     });
     context.rejectCaller?.(context.abandoned);
   }
@@ -1308,7 +1310,7 @@ export class DoltgresWorkItemAdapter
     return {
       context,
       pool,
-      unsafe: (query) => this.executeQuery(pool, conn, context, query),
+      unsafe: (query) => this.executeQuery(pool, conn, context, query)
     };
   }
 
@@ -1347,7 +1349,7 @@ export class DoltgresWorkItemAdapter
               ),
             this.queueWaitMs
           );
-        }),
+        })
       ]);
     } catch (error) {
       // Keep the FIFO chain live even though this caller abandoned its turn.
@@ -1355,7 +1357,7 @@ export class DoltgresWorkItemAdapter
       releaseTurn();
       this.logStage("warn", context, "operation.queue", "error", {
         durationMs: Date.now() - startedAt,
-        reason: "wait_timeout",
+        reason: "wait_timeout"
       });
       throw error;
     } finally {
@@ -1365,7 +1367,7 @@ export class DoltgresWorkItemAdapter
     }
 
     this.logStage("info", context, "operation.queue", "complete", {
-      durationMs: Date.now() - startedAt,
+      durationMs: Date.now() - startedAt
     });
     let released = false;
     return () => {
@@ -1425,19 +1427,19 @@ export class DoltgresWorkItemAdapter
       }
       if (reserveTimer) clearTimeout(reserveTimer);
       this.logStage("info", context, "connection.reserve", "complete", {
-        durationMs: Date.now() - reserveStartedAt,
+        durationMs: Date.now() - reserveStartedAt
       });
       const conn = this.instrumentConnection(operationPool, rawConn, context);
       connection = conn;
       this.logStage("info", context, "lock.acquire", "start", {
-        protocol: this.writerLockProtocol,
+        protocol: this.writerLockProtocol
       });
       context.admitting = true;
       try {
         writerLock = await acquireDoltWriterLocks(conn, {
           protocol: this.writerLockProtocol,
           lockWaitMs: this.lockWaitMs,
-          lockRetryMs: this.lockRetryMs,
+          lockRetryMs: this.lockRetryMs
         });
       } finally {
         context.admitting = false;
@@ -1445,7 +1447,7 @@ export class DoltgresWorkItemAdapter
       if (context.abandoned) throw context.abandoned;
       this.logStage("info", context, "lock.acquire", "complete", {
         protocol: writerLock.protocol,
-        baseDatabase: writerLock.baseDatabase,
+        baseDatabase: writerLock.baseDatabase
       });
       const reconciliation = options.reconcile ?? "required";
       if (reconciliation !== "skipped") await this.reconcileUnderLock(conn);
@@ -1468,7 +1470,7 @@ export class DoltgresWorkItemAdapter
       pendingRecovery = error instanceof PendingBranchRecoveryError;
       this.logStage("error", context, "operation", "error", {
         durationMs: Date.now() - reserveStartedAt,
-        ...errorFields(error),
+        ...errorFields(error)
       });
       throw error;
     } finally {
@@ -1492,7 +1494,7 @@ export class DoltgresWorkItemAdapter
               ...(state?.baseHash ? { baseHash: state.baseHash } : {}),
               creationProven: state?.creationProven === true,
               commitAttempted: state?.commitAttempted === true,
-              mergeAttempted: state?.mergeAttempted === true,
+              mergeAttempted: state?.mergeAttempted === true
             })
           );
         } catch (error) {
@@ -1598,7 +1600,7 @@ export class DoltgresWorkItemAdapter
         event: "adapter.work_items.reconcile",
         component: "doltgres-work-items",
         operationId: conn.context.operationId,
-        ...fields,
+        ...fields
       },
       "work_items operation branch reconciled"
     );
@@ -1652,7 +1654,7 @@ export class DoltgresWorkItemAdapter
         verb: transition.proof.verb,
         itemId: transition.proof.itemId,
         durationMs: Date.now() - startedAt,
-        ...errorFields(error),
+        ...errorFields(error)
       };
       if (await this.deleteLanded(conn, transition.branch)) {
         // No `classification` key: the caller records the cleaned verdict, and
@@ -1660,7 +1662,7 @@ export class DoltgresWorkItemAdapter
         // incomplete. `deleteAckLost` is the queryable substrate signal.
         this.logReconciliation("info", conn, {
           ...fields,
-          deleteAckLost: true,
+          deleteAckLost: true
         });
         return true;
       }
@@ -1669,7 +1671,7 @@ export class DoltgresWorkItemAdapter
       // would invite callers to replay an already-durable PATCH/CREATE.
       this.logReconciliation("warn", conn, {
         ...fields,
-        classification: "cleanup_pending",
+        classification: "cleanup_pending"
       });
       return false;
     }
@@ -1823,7 +1825,7 @@ export class DoltgresWorkItemAdapter
         branch,
         classification: "preserved_unsafe",
         durationMs: Date.now() - startedAt,
-        ...errorFields(error),
+        ...errorFields(error)
       });
       throw this.preservedBranchError(branch, error);
     }
@@ -1837,7 +1839,7 @@ export class DoltgresWorkItemAdapter
         branch,
         classification: "preserved_unsafe",
         durationMs: Date.now() - startedAt,
-        ...errorFields(error),
+        ...errorFields(error)
       });
       throw this.preservedBranchError(branch, error);
     }
@@ -1856,7 +1858,7 @@ export class DoltgresWorkItemAdapter
         branch,
         classification: "preserved_unsafe",
         durationMs: Date.now() - startedAt,
-        ...errorFields(error),
+        ...errorFields(error)
       });
       throw this.preservedBranchError(branch, error);
     }
@@ -1873,7 +1875,7 @@ export class DoltgresWorkItemAdapter
           tip,
           classification: "preserved_unsafe",
           durationMs: Date.now() - startedAt,
-          ...errorFields(error),
+          ...errorFields(error)
         });
         throw this.preservedBranchError(branch, error);
       }
@@ -1884,7 +1886,7 @@ export class DoltgresWorkItemAdapter
         verb: pending.proof.verb,
         itemId: pending.proof.itemId,
         classification: "empty_deleted",
-        durationMs: Date.now() - startedAt,
+        durationMs: Date.now() - startedAt
       });
       throw originalError;
     }
@@ -1902,7 +1904,7 @@ export class DoltgresWorkItemAdapter
           tip,
           classification: "preserved_unsafe",
           durationMs: Date.now() - startedAt,
-          ...errorFields(error),
+          ...errorFields(error)
         });
         throw this.preservedBranchError(branch, error);
       }
@@ -1917,7 +1919,7 @@ export class DoltgresWorkItemAdapter
             tip,
             classification: "preserved_unsafe",
             durationMs: Date.now() - startedAt,
-            ...errorFields(error),
+            ...errorFields(error)
           });
           throw this.preservedBranchError(branch, error);
         }
@@ -1926,7 +1928,7 @@ export class DoltgresWorkItemAdapter
           baseHash: currentMain,
           tip,
           classification: "empty_deleted",
-          durationMs: Date.now() - startedAt,
+          durationMs: Date.now() - startedAt
         });
         return undefined;
       }
@@ -1942,7 +1944,7 @@ export class DoltgresWorkItemAdapter
         tip,
         classification: "preserved_unsafe",
         durationMs: Date.now() - startedAt,
-        ...errorFields(error),
+        ...errorFields(error)
       });
       throw this.preservedBranchError(branch, error);
     }
@@ -1967,7 +1969,7 @@ export class DoltgresWorkItemAdapter
             ? { deleteAckLost: true }
             : { classification: "reachable_redundant_cleanup_pending" }),
           durationMs: Date.now() - startedAt,
-          ...errorFields(error),
+          ...errorFields(error)
         });
       }
       this.logReconciliation("info", conn, {
@@ -1976,7 +1978,7 @@ export class DoltgresWorkItemAdapter
         classification: cleaned
           ? "reachable_redundant_cleaned"
           : "reachable_redundant_cleanup_pending",
-        durationMs: Date.now() - startedAt,
+        durationMs: Date.now() - startedAt
       });
       return undefined;
     }
@@ -1996,7 +1998,7 @@ export class DoltgresWorkItemAdapter
         tip,
         classification: "preserved_unsafe",
         durationMs: Date.now() - startedAt,
-        ...errorFields(error),
+        ...errorFields(error)
       });
       throw this.preservedBranchError(branch, error);
     }
@@ -2015,7 +2017,7 @@ export class DoltgresWorkItemAdapter
             itemId: transition.proof.itemId,
             classification: "preserved_unsafe",
             durationMs: Date.now() - startedAt,
-            ...errorFields(error),
+            ...errorFields(error)
           });
           throw this.preservedBranchError(branch, error);
         }
@@ -2034,7 +2036,7 @@ export class DoltgresWorkItemAdapter
         classification: cleaned
           ? "reachable_cleaned"
           : "reachable_cleanup_pending",
-        durationMs: Date.now() - startedAt,
+        durationMs: Date.now() - startedAt
       });
       return pending?.result;
     }
@@ -2056,7 +2058,7 @@ export class DoltgresWorkItemAdapter
         itemId: transition.proof.itemId,
         classification: "preserved_conflict",
         durationMs: Date.now() - startedAt,
-        ...errorFields(error),
+        ...errorFields(error)
       });
       throw this.preservedBranchError(branch, error);
     }
@@ -2072,7 +2074,7 @@ export class DoltgresWorkItemAdapter
         itemId: transition.proof.itemId,
         classification: "preserved_unsafe",
         durationMs: Date.now() - startedAt,
-        ...errorFields(error),
+        ...errorFields(error)
       });
       throw this.preservedBranchError(branch, error);
     }
@@ -2092,7 +2094,7 @@ export class DoltgresWorkItemAdapter
       mergeHash: merge.hash,
       classification: "merged_verified",
       cleanupPending: !cleaned,
-      durationMs: Date.now() - startedAt,
+      durationMs: Date.now() - startedAt
     });
     return pending?.result;
   }
@@ -2294,7 +2296,7 @@ export class DoltgresWorkItemAdapter
       operationId: conn.context.operationId,
       branch,
       baseHash: doltScalar(baseRows, "dolt_hashof"),
-      proof,
+      proof
     };
     conn.context.mutationState = state as PendingBranchState<unknown>;
     // Arm recovery before branch-create: the ref can be durable even when the
@@ -2378,7 +2380,7 @@ export class DoltgresWorkItemAdapter
       branch,
       quarantinedAs: target,
       classification: "quarantined_unprovable",
-      ...errorFields(error),
+      ...errorFields(error)
     });
   }
 
@@ -2444,7 +2446,7 @@ export class DoltgresWorkItemAdapter
     }
     const knownWidths = [
       ...this.readPools,
-      ...(this.readPools.has(pool) ? [] : [pool]),
+      ...(this.readPools.has(pool) ? [] : [pool])
     ].map((client) => client.options?.max);
     if (
       this.readConnectionBudget !== undefined &&
@@ -2488,14 +2490,14 @@ export class DoltgresWorkItemAdapter
         this.readPools.delete(pool);
         this.readPending.delete(pool);
         this.logStage("info", context, "read_pool.drain", "complete", {
-          failedStage: stage,
+          failedStage: stage
         });
       })
       .catch((error) => {
         // Unknown shutdown retains its generation slot; never grow without bound.
         this.logStage("error", context, "read_pool.drain", "error", {
           ...errorFields(error),
-          failedStage: stage,
+          failedStage: stage
         });
       });
     this.drainingReadPools.set(pool as object, draining);
@@ -2530,7 +2532,7 @@ export class DoltgresWorkItemAdapter
         reject: (error) => {
           clearTimeout(timer);
           reject(error);
-        },
+        }
       };
       waiters.push(waiter);
       timer = setTimeout(
@@ -2585,11 +2587,15 @@ export class DoltgresWorkItemAdapter
   private async executeReadQuery(
     pool: Sql,
     context: OperationContext,
-    query: string
+    query: string,
+    deadline: number = Date.now() + this.queryTimeoutMs
   ): Promise<ReadonlyArray<Record<string, unknown>>> {
     const stage = queryStage(query);
     const startedAt = Date.now();
-    const deadline = startedAt + this.queryTimeoutMs;
+    if (startedAt >= deadline)
+      throw new WorkItemsBusyError(
+        "Work-item read deadline elapsed before native dispatch"
+      );
     this.logStage("info", context, stage, "start");
     let timer: ReturnType<typeof setTimeout> | undefined;
     let expired = false;
@@ -2618,7 +2624,7 @@ export class DoltgresWorkItemAdapter
         settled.then((rows) => {
           if (!expired)
             this.logStage("info", context, stage, "complete", {
-              durationMs: Date.now() - startedAt,
+              durationMs: Date.now() - startedAt
             });
           return rows as ReadonlyArray<Record<string, unknown>>;
         }),
@@ -2635,14 +2641,14 @@ export class DoltgresWorkItemAdapter
             },
             Math.max(1, deadline - Date.now())
           );
-        }),
+        })
       ]);
     } catch (error) {
       if (this.unknownReadPools.has(pool as object))
         this.retireReadPool(pool, context, stage);
       this.logStage("error", context, stage, "error", {
         ...errorFields(error),
-        durationMs: Date.now() - startedAt,
+        durationMs: Date.now() - startedAt
       });
       if (isConnectionTerminal(error))
         throw new WorkItemsBusyError(
@@ -2692,7 +2698,7 @@ export class DoltgresWorkItemAdapter
       this.logger.warn(
         {
           event: "adapter.work_items.read_pool_derive_failed",
-          ...errorFields(error),
+          ...errorFields(error)
         },
         "work_items could not rebuild its dedicated read pool"
       );
@@ -2712,11 +2718,13 @@ export class DoltgresWorkItemAdapter
   ): Promise<T> {
     const readPool = this.resolveReadPool();
     const context = { operationId: randomUUID(), operation: "read work items" };
+    const deadline = Date.now() + this.queryTimeoutMs;
     // No reserve, checkout, advisory lock, reconciliation or writer-pool call.
     return fn({
       pool: readPool,
       context,
-      unsafe: (query) => this.executeReadQuery(readPool, context, query),
+      unsafe: (query) =>
+        this.executeReadQuery(readPool, context, query, deadline)
     });
   }
 
@@ -2762,62 +2770,76 @@ export class DoltgresWorkItemAdapter
       conditions.push(`node IN (${nodes.map(escapeValue).join(", ")})`);
     }
     const textNeedle = query.text?.toLowerCase();
-    if (query.cursor) {
-      const cursor = decodeCursor(query.cursor);
-      const priority = cursor.p ?? 999;
-      const rank = cursor.r ?? 999;
-      conditions.push(
-        `(COALESCE(priority,999) > ${priority}` +
-          ` OR (COALESCE(priority,999) = ${priority} AND COALESCE(rank,999) > ${rank})` +
-          ` OR (COALESCE(priority,999) = ${priority} AND COALESCE(rank,999) = ${rank} AND created_at < ${escapeValue(cursor.ts)})` +
-          ` OR (COALESCE(priority,999) = ${priority} AND COALESCE(rank,999) = ${rank} AND created_at = ${escapeValue(cursor.ts)} AND id > ${escapeValue(cursor.id)}))`
-      );
-    }
-
+    const order = normalizeWorkItemOrder(query);
+    const initialCursor = query.cursor
+      ? decodeCursor(query.cursor, order)
+      : undefined;
+    const keyExpression =
+      order.sortBy === "rankScore"
+        ? rankScoreSql()
+        : {
+            priority: "priority",
+            rank: "rank",
+            createdAt: "created_at",
+            updatedAt: "updated_at"
+          }[order.sortBy];
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
     const limit = Math.min(Math.max(query.limit ?? 100, 1), 500);
-    const rows = await this.readOnCleanMain(
-      async (conn) =>
-        (await conn.unsafe(
-          `SELECT * FROM work_items ${where} ORDER BY COALESCE(priority, 999) ASC, COALESCE(rank, 999) ASC, created_at DESC, id ASC${textNeedle ? "" : ` LIMIT ${limit + 1}`}`
-        )) as ReadonlyArray<Record<string, unknown>>
-    );
-    // Doltgres 0.57.3 panics when LOWER() receives an out-of-line TEXT value
-    // (`*val.TextStorage`). It also has no ILIKE. Keep every structural filter
-    // and the keyset in SQL, then case-fold the remaining ordered shelf here.
-    // The SQL LIMIT must be absent on this path or a match beyond the first N
-    // rows would be silently lost.
-    const matchedRows = textNeedle
-      ? rows.filter((row) =>
-          [row.title, row.summary].some((value) =>
-            String(value ?? "")
-              .toLowerCase()
-              .includes(textNeedle)
+    const nativeCursor = (row: Record<string, unknown>): WorkItemCursor => ({
+      v: 1,
+      ...order,
+      key: row.__sort_key === null ? null : String(row.__sort_key),
+      id: String(row.id)
+    });
+    const seek = (cursor: WorkItemCursor | undefined) => {
+      if (!cursor) return "";
+      const afterId = `id > ${escapeValue(cursor.id)}`;
+      if (cursor.key === null)
+        return `WHERE __sort_value IS NULL AND ${afterId}`;
+      const nativeType =
+        order.sortBy === "createdAt" || order.sortBy === "updatedAt"
+          ? "TIMESTAMP WITH TIME ZONE"
+          : "DOUBLE PRECISION";
+      const key = `CAST(${escapeValue(cursor.key)} AS ${nativeType})`;
+      return `WHERE (__sort_value IS NULL OR __sort_value ${order.sortDirection === "asc" ? ">" : "<"} ${key} OR (__sort_value = ${key} AND ${afterId}))`;
+    };
+    // Structural filters → derived native key → seek/order → bounded batch.
+    // Text folding stays in JS because native LOWER on cold TEXT can panic.
+    // Every batch shares readOnCleanMain's ONE deadline and captured pool.
+    const matchedRows = await this.readOnCleanMain(async (conn) => {
+      const matches: Record<string, unknown>[] = [];
+      let cursor = initialCursor;
+      while (true) {
+        const rows = await conn.unsafe(
+          `SELECT ordered.*, CAST(__sort_value AS TEXT) AS __sort_key FROM (SELECT work_items.*, ${keyExpression} AS __sort_value FROM work_items ${where}) AS ordered ${seek(cursor)} ORDER BY CASE WHEN __sort_value IS NULL THEN 1 ELSE 0 END ASC, __sort_value ${order.sortDirection.toUpperCase()}, id ASC LIMIT ${limit + 1}`
+        );
+        for (const row of rows) {
+          if (
+            !textNeedle ||
+            [row.title, row.summary].some((value) =>
+              String(value ?? "")
+                .toLowerCase()
+                .includes(textNeedle)
+            )
           )
-        )
-      : rows;
+            matches.push(row);
+          if (matches.length > limit) return matches;
+        }
+        if (!textNeedle || rows.length < limit + 1) return matches;
+        const last = rows[rows.length - 1];
+        if (!last) return matches;
+        cursor = nativeCursor(last);
+      }
+    });
     const hasMore = matchedRows.length > limit;
-    const pageRows = hasMore ? matchedRows.slice(0, limit) : matchedRows;
+    const pageRows = matchedRows.slice(0, limit);
     const items = pageRows.map(rowToWorkItem);
-    let endCursor: string | null = null;
-    if (hasMore && pageRows.length) {
-      const last = pageRows[pageRows.length - 1];
-      if (!last) throw new Error("cursor row missing");
-      const cursor: WorkItemCursor = {
-        p: optionalNumber(last.priority) ?? null,
-        r: optionalNumber(last.rank) ?? null,
-        ts:
-          last.created_at instanceof Date
-            ? last.created_at.toISOString()
-            : String(last.created_at ?? ""),
-        id: String(last.id),
-      };
-      endCursor = encodeCursor(cursor);
-    }
+    const last = pageRows[pageRows.length - 1];
+    const endCursor = hasMore && last ? encodeCursor(nativeCursor(last)) : null;
     return {
       items,
       pageInfo: { endCursor, hasMore },
-      ...(endCursor && { nextCursor: endCursor }),
+      ...(endCursor && { nextCursor: endCursor })
     };
   }
 
@@ -2842,7 +2864,7 @@ export class DoltgresWorkItemAdapter
               "title",
               "status",
               "node",
-              "created_by_principal_id",
+              "created_by_principal_id"
             ];
             const values = [
               escapeValue(allocatedId),
@@ -2850,7 +2872,7 @@ export class DoltgresWorkItemAdapter
               escapeValue(input.title),
               escapeValue(input.status ?? "needs_triage"),
               escapeValue(input.node ?? "shared"),
-              escapeValue(principal),
+              escapeValue(principal)
             ];
             const add = (column: string, value: unknown) => {
               if (value === undefined) return;
@@ -2899,7 +2921,7 @@ export class DoltgresWorkItemAdapter
           }
         },
         {
-          proof: { verb: "create", principal },
+          proof: { verb: "create", principal }
         }
       );
 
@@ -2947,13 +2969,13 @@ export class DoltgresWorkItemAdapter
         ? input.set
         : {
             ...input.set,
-            scores: validScores(input.set.scores),
+            scores: validScores(input.set.scores)
           };
     const clauses: string[] = [];
     const setKeys: (keyof WorkItemsPatchSet)[] = [];
     for (const [key, column] of Object.entries(PATCH_COLUMNS) as [
       keyof WorkItemsPatchSet,
-      string,
+      string
     ][]) {
       const value = set[key];
       if (value !== undefined) {
@@ -3028,7 +3050,7 @@ export class DoltgresWorkItemAdapter
           expectedRevision,
           patchValues: Object.fromEntries(
             setKeys.map((key) => [PATCH_COLUMNS[key], set[key]])
-          ),
+          )
         },
         preflight: async (conn, proof) => {
           const current = await this.getWith(conn, input.id);
@@ -3041,7 +3063,7 @@ export class DoltgresWorkItemAdapter
           proof.beforeRow = current;
         },
         shouldCommit: (value) =>
-          !(value instanceof WorkItemRevisionConflictError),
+          !(value instanceof WorkItemRevisionConflictError)
       }
     );
     if (result instanceof WorkItemRevisionConflictError) throw result;
@@ -3076,14 +3098,14 @@ export class DoltgresWorkItemAdapter
         relations.push({
           fromId: toWorkItemId(String(row.parent_id)),
           toId: rowId,
-          type: "parent_of",
+          type: "parent_of"
         });
       }
       if (row.blocked_by) {
         relations.push({
           fromId: toWorkItemId(String(row.blocked_by)),
           toId: rowId,
-          type: "blocks",
+          type: "blocks"
         });
       }
     }

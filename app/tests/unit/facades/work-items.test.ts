@@ -13,7 +13,7 @@
 
 import {
   WorkItemDtoSchema,
-  workItemsListOperation,
+  workItemsListOperation
 } from "@cogni/node-contracts";
 import type { WorkItem, WorkItemQueryPort } from "@cogni/work-items";
 import { toWorkItemId } from "@cogni/work-items";
@@ -21,7 +21,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock the container
 vi.mock("@/bootstrap/container", () => ({
-  getContainer: vi.fn(),
+  getContainer: vi.fn()
 }));
 
 import {
@@ -30,7 +30,7 @@ import {
   listWorkItems,
   NodeAdminRequiredError,
   patchWorkItem,
-  WorkItemWriteOutcomeUnknownError,
+  WorkItemWriteOutcomeUnknownError
 } from "@/app/_facades/work/items.server";
 import { getContainer } from "@/bootstrap/container";
 
@@ -62,13 +62,13 @@ const SAMPLE_WORK_ITEM: WorkItem = {
   claimedAt: undefined,
   lastCommand: undefined,
   createdAt: "2026-01-01",
-  updatedAt: "2026-01-02",
+  updatedAt: "2026-01-02"
 };
 
 function createMockPort(): WorkItemQueryPort {
   return {
     list: vi.fn(),
-    get: vi.fn(),
+    get: vi.fn()
   };
 }
 
@@ -80,16 +80,16 @@ type DoltgresMock = {
 };
 
 function createDoltgresMock(): DoltgresMock {
-  // Default behavior: doltgres returns empty so the facade tests focus on
-  // markdown path + DTO mapping.
+  // Default is genuinely unconfigured, so Markdown owns this fixture.
   return {
-    list: vi.fn().mockResolvedValue({
-      items: [],
-      pageInfo: { endCursor: null, hasMore: false },
-    }),
+    list: vi.fn().mockRejectedValue(
+      Object.assign(new Error("unconfigured"), {
+        name: "DoltgresNotConfiguredError"
+      })
+    ),
     get: vi.fn(),
     create: vi.fn(),
-    patch: vi.fn(),
+    patch: vi.fn()
   };
 }
 
@@ -103,7 +103,7 @@ describe("app/_facades/work/items.server", () => {
     mockDoltgres = createDoltgresMock();
     mockGetContainer.mockReturnValue({
       workItemQuery: mockPort,
-      doltgresWorkItems: mockDoltgres,
+      doltgresWorkItems: mockDoltgres
     } as never);
   });
 
@@ -113,7 +113,7 @@ describe("app/_facades/work/items.server", () => {
       operationId: "operation-1",
       branch: "work-item-op/one",
       commitHash: "hash-1",
-      itemId: "task.0001",
+      itemId: "task.0001"
     });
     mockDoltgres.create.mockRejectedValue(error);
     await expect(
@@ -130,9 +130,9 @@ describe("app/_facades/work/items.server", () => {
           operationId: "operation-1",
           branch: "work-item-op/one",
           commitHash: "hash-1",
-          itemId: "task.0001",
-        },
-      },
+          itemId: "task.0001"
+        }
+      }
     });
     const receipt = new WorkItemWriteOutcomeUnknownError(
       "operation-1",
@@ -142,10 +142,32 @@ describe("app/_facades/work/items.server", () => {
   });
 
   describe("listWorkItems", () => {
+    it("uses configured Dolt alone, including an empty result", async () => {
+      mockDoltgres.list.mockResolvedValue({
+        items: [],
+        pageInfo: { endCursor: null, hasMore: false }
+      });
+      await expect(
+        listWorkItems({ sortBy: "rankScore", sortDirection: "desc" })
+      ).resolves.toMatchObject({ items: [] });
+      expect(mockPort.list).not.toHaveBeenCalled();
+      expect(mockDoltgres.list).toHaveBeenCalledWith({
+        sortBy: "rankScore",
+        sortDirection: "desc"
+      });
+    });
+    it("never masks configured outages with markdown", async () => {
+      mockDoltgres.list.mockRejectedValue(
+        Object.assign(new Error("busy"), { name: "WorkItemsBusyError" })
+      );
+      await expect(listWorkItems({})).rejects.toThrow("busy");
+      expect(mockPort.list).not.toHaveBeenCalled();
+    });
+
     it("returns items mapped to contract-compliant DTOs", async () => {
       vi.mocked(mockPort.list).mockResolvedValue({
         items: [SAMPLE_WORK_ITEM],
-        nextCursor: undefined,
+        nextCursor: undefined
       });
 
       const result = await listWorkItems({});
@@ -158,7 +180,7 @@ describe("app/_facades/work/items.server", () => {
     it("maps WorkItem fields to DTO fields correctly", async () => {
       vi.mocked(mockPort.list).mockResolvedValue({
         items: [SAMPLE_WORK_ITEM],
-        nextCursor: undefined,
+        nextCursor: undefined
       });
 
       const result = await listWorkItems({});
@@ -184,7 +206,7 @@ describe("app/_facades/work/items.server", () => {
     it("DTO passes schema validation", async () => {
       vi.mocked(mockPort.list).mockResolvedValue({
         items: [SAMPLE_WORK_ITEM],
-        nextCursor: undefined,
+        nextCursor: undefined
       });
 
       const result = await listWorkItems({});
@@ -196,7 +218,7 @@ describe("app/_facades/work/items.server", () => {
     it("passes filter params to port", async () => {
       vi.mocked(mockPort.list).mockResolvedValue({
         items: [],
-        nextCursor: undefined,
+        nextCursor: undefined
       });
 
       await listWorkItems({
@@ -204,7 +226,7 @@ describe("app/_facades/work/items.server", () => {
         statuses: ["needs_implement"],
         text: "search",
         projectId: "proj.test",
-        limit: 50,
+        limit: 50
       });
 
       expect(mockPort.list).toHaveBeenCalledWith({
@@ -212,14 +234,14 @@ describe("app/_facades/work/items.server", () => {
         statuses: ["needs_implement"],
         text: "search",
         projectId: toWorkItemId("proj.test"),
-        limit: 50,
+        limit: 50
       });
     });
 
     it("omits undefined filter params from port query", async () => {
       vi.mocked(mockPort.list).mockResolvedValue({
         items: [],
-        nextCursor: undefined,
+        nextCursor: undefined
       });
 
       await listWorkItems({});
@@ -230,7 +252,7 @@ describe("app/_facades/work/items.server", () => {
     it("returns empty items for empty result", async () => {
       vi.mocked(mockPort.list).mockResolvedValue({
         items: [],
-        nextCursor: undefined,
+        nextCursor: undefined
       });
 
       const result = await listWorkItems({});
@@ -240,17 +262,17 @@ describe("app/_facades/work/items.server", () => {
     it("passes through nextCursor and pageInfo from doltgres", async () => {
       vi.mocked(mockPort.list).mockResolvedValue({
         items: [],
-        nextCursor: undefined,
+        nextCursor: undefined
       });
       mockDoltgres.list.mockResolvedValue({
         items: [],
-        pageInfo: { endCursor: "cursor-xyz", hasMore: true },
+        pageInfo: { endCursor: "cursor-xyz", hasMore: true }
       });
 
       const result = await listWorkItems({});
       expect(result.pageInfo).toEqual({
         endCursor: "cursor-xyz",
-        hasMore: true,
+        hasMore: true
       });
       expect(result.nextCursor).toBe("cursor-xyz");
     });
@@ -258,7 +280,7 @@ describe("app/_facades/work/items.server", () => {
     it("forwards cursor to doltgres and skips markdown source", async () => {
       mockDoltgres.list.mockResolvedValue({
         items: [],
-        pageInfo: { endCursor: null, hasMore: false },
+        pageInfo: { endCursor: null, hasMore: false }
       });
 
       await listWorkItems({ cursor: "encoded-cursor" });
@@ -293,11 +315,11 @@ describe("app/_facades/work/items.server", () => {
     it("passes scores through to the DTO (story.5111)", async () => {
       const scores = {
         goal: { v: 5, ev: "https://cognidao.org/work/items/story.5108" },
-        ease: { v: 3 },
+        ease: { v: 3 }
       };
       vi.mocked(mockPort.get).mockResolvedValue({
         ...SAMPLE_WORK_ITEM,
-        scores,
+        scores
       });
 
       const result = await getWorkItem("task.0001");
@@ -327,7 +349,7 @@ describe("app/_facades/work/items.server", () => {
 describe("P0P1_IS_NODE_ADMIN — priority <= 1 needs node admin (story.5101)", () => {
   const doltgres = () => ({
     create: vi.fn().mockResolvedValue(SAMPLE_WORK_ITEM),
-    patch: vi.fn().mockResolvedValue(SAMPLE_WORK_ITEM),
+    patch: vi.fn().mockResolvedValue(SAMPLE_WORK_ITEM)
   });
   const withAuthority = (ok: boolean) => {
     const store = doltgres();
@@ -336,8 +358,8 @@ describe("P0P1_IS_NODE_ADMIN — priority <= 1 needs node admin (story.5101)", (
       log: { warn: vi.fn() },
       nodeAdmin: {
         check: async () =>
-          ok ? { ok: true } : { ok: false, errorCode: "authz_denied" },
-      },
+          ok ? { ok: true } : { ok: false, errorCode: "authz_denied" }
+      }
     } as never);
     return store;
   };
@@ -359,12 +381,12 @@ describe("P0P1_IS_NODE_ADMIN — priority <= 1 needs node admin (story.5101)", (
     const store = withAuthority(false);
     await expect(
       createWorkItem({ type: "task", title: "t", priority: 1 } as never, {
-        id: "agent-1",
+        id: "agent-1"
       })
     ).rejects.toBeInstanceOf(NodeAdminRequiredError);
     expect(store.create).not.toHaveBeenCalled();
     await createWorkItem({ type: "task", title: "t", priority: 2 } as never, {
-      id: "agent-1",
+      id: "agent-1"
     });
     expect(store.create).toHaveBeenCalledTimes(1);
   });
@@ -373,7 +395,7 @@ describe("P0P1_IS_NODE_ADMIN — priority <= 1 needs node admin (story.5101)", (
     const store = withAuthority(true);
     await patchWorkItem({ id: "task.5001", set: { priority: 0 } } as never, {
       id: "u1",
-      walletAddress: "0xabc",
+      walletAddress: "0xabc"
     });
     expect(store.patch).toHaveBeenCalledTimes(1);
   });

@@ -4,7 +4,7 @@
 /**
  * Module: `@app/api/v1/work/items/route`
  * Purpose: HTTP endpoints for listing and creating work items.
- * Scope: Auth-protected GET (list — markdown ∪ node-local Doltgres) and POST (create — node-local Doltgres only).
+ * Scope: Auth-protected GET (list — one authoritative backend) and POST (create — node-local Doltgres only).
  * Invariants: VALIDATE_IO, CONTRACTS_ARE_TRUTH, AUTH_VIA_GETSESSIONUSER, NODE_STORE_IS_LOCAL.
  * Evaluation: shared score validation failures return HTTP400 with typed issues.
  * Side-effects: IO (HTTP response, filesystem read via port, Doltgres read/write)
@@ -14,9 +14,10 @@
 
 import {
   workItemsCreateOperation,
-  workItemsListOperation,
+  workItemsListOperation
 } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
+import { normalizeWorkItemOrder } from "@cogni/work-items";
 
 import {
   createWorkItem,
@@ -25,7 +26,7 @@ import {
   NodeAdminRequiredError,
   WorkItemScoresInvalidError,
   WorkItemsBackendNotReadyError,
-  WorkItemWriteOutcomeUnknownError,
+  WorkItemWriteOutcomeUnknownError
 } from "@/app/_facades/work/items.server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
@@ -37,8 +38,8 @@ export const runtime = "nodejs";
  * GET /api/v1/work/items — List work items with optional query filters.
  *
  * Query params: types, statuses (comma-separated), text, projectId, node (single
- * or comma-separated), limit. Lists span both legacy markdown items and
- * Doltgres-allocated items (≥5000) — their ID ranges are disjoint.
+ * or comma-separated), limit, cursor, sortBy, sortDirection. Configured Dolt is
+ * authoritative; genuinely unconfigured nodes use Markdown alone.
  */
 export const GET = wrapRouteHandlerWithLogging(
   { routeId: "work.items.list", auth: { mode: "required", getSessionUser } },
@@ -54,7 +55,9 @@ export const GET = wrapRouteHandlerWithLogging(
     const limitParam = url.searchParams.get("limit");
     const cursorParam = url.searchParams.get("cursor");
 
-    const input = workItemsListOperation.input.parse({
+    const parsed = workItemsListOperation.input.safeParse({
+      sortBy: url.searchParams.get("sortBy") ?? undefined,
+      sortDirection: url.searchParams.get("sortDirection") ?? undefined,
       types: typesParam ? typesParam.split(",") : undefined,
       statuses: statusesParam ? statusesParam.split(",") : undefined,
       text: textParam ?? undefined,
@@ -66,15 +69,28 @@ export const GET = wrapRouteHandlerWithLogging(
           : nodeParam
         : undefined,
       limit: limitParam ? Number(limitParam) : undefined,
-      cursor: cursorParam ?? undefined,
+      cursor: cursorParam ?? undefined
     });
 
+    if (!parsed.success)
+      return NextResponse.json(
+        { error: "invalid input", issues: parsed.error.issues },
+        { status: 400 }
+      );
+    const input = parsed.data;
     let result: Awaited<ReturnType<typeof listWorkItems>>;
     try {
       result = await listWorkItems(input);
     } catch (e) {
       if (e instanceof InvalidCursorError) {
-        return NextResponse.json({ error: "invalid cursor" }, { status: 400 });
+        return NextResponse.json(
+          {
+            error: "invalid cursor",
+            code: "invalid_cursor",
+            message: e.message
+          },
+          { status: 400 }
+        );
       }
       if (e instanceof WorkItemsBackendNotReadyError) {
         return NextResponse.json({ error: e.message }, { status: 503 });
@@ -82,7 +98,15 @@ export const GET = wrapRouteHandlerWithLogging(
       throw e;
     }
 
-    ctx.log.info({ count: result.items.length }, "work.items.list_success");
+    ctx.log.info(
+      {
+        count: result.items.length,
+        ...normalizeWorkItemOrder(input),
+        limit: input.limit ?? 100,
+        hasMore: result.pageInfo?.hasMore ?? false
+      },
+      "work.items.list_success"
+    );
 
     return NextResponse.json(workItemsListOperation.output.parse(result));
   }
@@ -120,14 +144,14 @@ export const POST = wrapRouteHandlerWithLogging(
     try {
       const created = await createWorkItem(parseResult.data, {
         id: sessionUser.id,
-        walletAddress: sessionUser.walletAddress,
+        walletAddress: sessionUser.walletAddress
       });
       ctx.log.info(
         { workItemId: created.id, node: created.node },
         "work.items.create_success"
       );
       return NextResponse.json(workItemsCreateOperation.output.parse(created), {
-        status: 201,
+        status: 201
       });
     } catch (e) {
       if (e instanceof WorkItemScoresInvalidError) {
@@ -142,7 +166,7 @@ export const POST = wrapRouteHandlerWithLogging(
             error: e.code,
             retryable: false,
             lookup: e.receipt.lookup,
-            message: e.message,
+            message: e.message
           },
           { status: 409 }
         );
