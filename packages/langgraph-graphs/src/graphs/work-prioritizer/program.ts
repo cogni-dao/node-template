@@ -100,6 +100,7 @@ export const MISSION_EVIDENCE_PROGRAM: EvidenceProgram = {
   repairableValidationErrors: [
     "no_change_has_proposals",
     "empty_proposal",
+    "duplicate_proposal_id",
     "unknown_goal",
     "item_or_revision_unread",
     "extra_axes_not_preserved",
@@ -124,6 +125,8 @@ export const MISSION_EVIDENCE_PROGRAM: EvidenceProgram = {
   },
   validate(payload, evidence, kind) {
     const p = Payload.parse(payload);
+    if (new Set(p.items.map((item) => item.id)).size !== p.items.length)
+      return "duplicate_proposal_id";
     if (kind === "no_change" && p.items.length)
       return "no_change_has_proposals";
     if (kind === "proposal" && !p.items.length) return "empty_proposal";

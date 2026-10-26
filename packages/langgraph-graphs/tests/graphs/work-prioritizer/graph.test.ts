@@ -423,6 +423,67 @@ describe("read-only mission program", () => {
     return { result: await runner.final, calls, reads };
   }
 
+  it.each([
+    false,
+    true,
+  ])("rejects duplicate proposal IDs before semantic verification (conflicting=%s)", async (conflicting) => {
+    const item = {
+      ...payload.items[0],
+      scores: { ...scores, confidence: { v: 0 } },
+    };
+    const duplicate = {
+      items: [
+        item,
+        conflicting
+          ? { ...item, scores: { ...item.scores, goal: { v: 0 } } }
+          : item,
+      ],
+    };
+    // Both entries are individually valid; ambiguity is the cross-item defect.
+    expect(
+      MISSION_EVIDENCE_PROGRAM.payloadSchema.safeParse(duplicate).success
+    ).toBe(true);
+    expect(
+      MISSION_EVIDENCE_PROGRAM.validate?.(duplicate, evidence, "proposal")
+    ).toBe("duplicate_proposal_id");
+    const { result, calls } = await assess((input, index) => {
+      if (index === 0) return "facts";
+      if (input.includes("independent verifier")) return verdict;
+      return unknownProposal(duplicate);
+    });
+    expect(result.structuredOutput).toMatchObject({
+      status: "incomplete",
+      reason: "duplicate_proposal_id",
+      revisions: 1,
+    });
+    expect(calls).toHaveLength(3);
+    expect(calls.some((input) => input.includes("independent verifier"))).toBe(
+      false
+    );
+  });
+
+  it("allows one duplicate-ID correction only after fresh semantic verification", async () => {
+    const duplicate = {
+      items: [unknownPayload.items[0], unknownPayload.items[0]],
+    };
+    const { result, calls } = await assess((input, index) => {
+      if (index === 0) return "facts";
+      if (index === 1) return unknownProposal(duplicate);
+      if (index === 2) {
+        expect(input).toContain("duplicate_proposal_id");
+        return unknownProposal(unknownPayload);
+      }
+      expect(input).toContain("independent verifier");
+      return verdict;
+    });
+    expect(result.structuredOutput).toMatchObject({
+      status: "accepted",
+      revisions: 1,
+      proposal: { payload: unknownPayload },
+    });
+    expect(calls).toHaveLength(4);
+  });
+
   it("repairs unknown representation using canonical issue paths and actual inspected receipts", async () => {
     const invalid = proposed({
       scores: { ...scores, confidence: {} },
