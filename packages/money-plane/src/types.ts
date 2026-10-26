@@ -5,7 +5,7 @@
  * Module: `@cogni-dao/money-plane/types`
  * Purpose: The one row model every money-plane reader returns and every node renders, plus the reader port.
  * Scope: Types only. Does not read, grade, or render anything.
- * Invariants: ONE_ROW_MODEL — a per-row Pay button is added by setting `payAction`, never by reshaping the row. PACKAGE_LEAF_NO_ENV — fetch is injected through FetchLike.
+ * Invariants: ONE_ROW_MODEL — a per-row Pay button is added by setting `payAction`, never by reshaping the row; how a line gets paid is a `rail` value. PACKAGE_LEAF_NO_ENV — fetch is injected through FetchLike. USD_IS_DERIVED — `usd` is a normalized projection for columns and sums; native amounts stay exact.
  * Side-effects: none
  * Links: https://cognidao.org/knowledge/money-plane-snapshot-design
  * @public
@@ -14,8 +14,52 @@
 /** UNKNOWN = could not be measured (never GREEN). INFO = holdings with no runway semantics (wallets). */
 export type Grade = "GREEN" | "YELLOW" | "RED" | "UNKNOWN" | "INFO";
 
-/** prepaid: balance ÷ burn = runway · usage: billed after the fact · expiry: dated · wallet: holdings. */
-export type PlaneKind = "prepaid" | "usage" | "fixed" | "expiry" | "wallet";
+/** income: money in · prepaid: balance ÷ burn = runway · usage: billed after the fact · fixed: declared fee · expiry: dated · wallet: holdings. */
+export type PlaneKind =
+  | "income"
+  | "prepaid"
+  | "usage"
+  | "fixed"
+  | "expiry"
+  | "wallet";
+
+/** A daily reference rate used to project a native currency into USD. */
+export interface UsdRate {
+  /** e.g. "EURUSD": one unit of the first currency in USD. */
+  pair: string;
+  value: number;
+  source: "ECB";
+  /** Reference date of the rate, YYYY-MM-DD. */
+  date: string;
+}
+
+/** Normalized USD view of a row: `amount` is the balance in USD (0 when the row has no balance; check `balance`), `rate` converts burn too. */
+export interface UsdAmount {
+  amount: number;
+  rate?: UsdRate;
+}
+
+export type RailKind =
+  | "steward-manual"
+  | "card-manual"
+  | "dao-vote"
+  | "split-inflow"
+  | "x402-auto"
+  | "none";
+export type RailStatus = "supported" | "planned" | "unsupported";
+
+/** How a line gets paid. `supported` renders a live control; `planned`/`unsupported` render a greyed label whose dialog names the gap. */
+export interface Rail {
+  kind: RailKind;
+  status: RailStatus;
+  /** Hub guide id or short title explaining the rail, never a URL. */
+  guide?: string;
+}
+
+/** One named exact component of a balance (e.g. Console credit and escrow in uact) for the row dialog. */
+export interface NativePart extends NativeAmount {
+  label: string;
+}
 
 export type ReasonCode =
   | "unconfigured"
@@ -79,6 +123,15 @@ export interface MoneyPlaneRow {
   /** Cumulative spend counter (e.g. OpenRouter total_usage) a scheduler can difference into burn. */
   usageTotal?: number;
   payAction?: PayAction;
+  /** Normalized USD projection set by `toUsd`; columns and sums read this, dialogs read native fields. */
+  usd?: UsdAmount;
+  rail?: Rail;
+  /** One level of sub-rows, e.g. Akash per node or Grafana per product. A parent carrying burn is the rollup; children are detail. */
+  children?: MoneyPlaneRow[];
+  /** Exact named parts of the balance for the dialog. */
+  parts?: NativePart[];
+  /** One short dialog line of context (≤80 chars, no URL), e.g. how money moves through a wallet. */
+  note?: string;
 }
 
 /** The subset of `fetch` the readers use; the global `fetch` satisfies it. */

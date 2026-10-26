@@ -24,11 +24,25 @@ export {
   worstGrade,
 } from "./grade";
 export {
+  FRANKFURTER_URL,
+  fetchEcbRate,
+  rateFor,
+  toUsd,
+  usdBalance,
+  usdBurn,
+} from "./fx";
+export {
   BASE_PUBLIC_RPC_URL,
   BASE_USDC_ADDRESS,
   type BaseWalletReaderOptions,
   baseWalletReader,
 } from "./readers/base-wallet";
+export {
+  CREDIT_PURCHASE_INCOME_PLANE,
+  type CreditPurchase,
+  type CreditPurchaseIncomeReaderOptions,
+  creditPurchaseIncomeReader,
+} from "./readers/credit-purchase-income";
 export {
   OPENROUTER_CREDITS_URL,
   OPENROUTER_PLANE,
@@ -41,6 +55,11 @@ export {
   type UnknownRowInput,
   unknownRow,
 } from "./row";
+export {
+  type ReportSummary,
+  type SummarizeOptions,
+  summarize,
+} from "./report";
 export { type SnapshotOptions, takeSnapshot } from "./snapshot";
 export {
   type CostRateBasis,
@@ -56,9 +75,15 @@ export type {
   MoneyPlaneRow,
   MoneyPlaneSnapshot,
   NativeAmount,
+  NativePart,
   NativeRate,
   PayAction,
   PlaneKind,
   PlaneReader,
+  Rail,
+  RailKind,
+  RailStatus,
   ReasonCode,
+  UsdAmount,
+  UsdRate,
 } from "./types";

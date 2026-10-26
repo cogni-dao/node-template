@@ -5,7 +5,7 @@
  * Module: `@cogni-dao/money-plane/row`
  * Purpose: Row helpers shared by readers and the snapshot runner: the UNKNOWN row, the grading floor, and safe detail text.
  * Scope: Pure functions. Does not perform IO.
- * Invariants: UNREADABLE_IS_UNKNOWN — `applyGradingFloor` demotes any GREEN/YELLOW row that carries a failure reason, any prepaid row with unmeasured burn, and any non-wallet INFO row, to UNKNOWN. Detail text never carries a URL and is ≤60 chars.
+ * Invariants: UNREADABLE_IS_UNKNOWN — `applyGradingFloor` demotes any GREEN/YELLOW row that carries a failure reason, any prepaid row with unmeasured burn, and any INFO row that is not a holding (wallet), an income flow, or a cost line with a measured rate and no balance, to UNKNOWN. Detail text never carries a URL and is ≤60 chars.
  * Side-effects: none
  * Links: src/snapshot.ts, src/readers/
  * @public
@@ -111,13 +111,18 @@ export function applyGradingFloor(input: MoneyPlaneRow): MoneyPlaneRow {
     };
   }
 
-  // INFO means "holdings, no runway semantics" and is reserved for wallets; on any
-  // other kind it would hide an ungraded plane from worstGrade.
-  if (row.grade === "INFO" && row.kind !== "wallet") {
-    return { ...row, grade: "UNKNOWN" };
-  }
-  if (row.kind === "wallet" && row.grade === "INFO" && row.balance === null) {
-    return { ...row, grade: "UNKNOWN" };
+  // INFO means "no runway semantics": a holding (wallet), an income flow, or a cost
+  // line whose rate is measured and which has no balance to divide. Anywhere else it
+  // would hide an ungraded plane from worstGrade.
+  if (row.grade === "INFO") {
+    const holding = row.kind === "wallet" && row.balance !== null;
+    const flow =
+      (row.kind === "income" ||
+        row.kind === "usage" ||
+        row.kind === "fixed") &&
+      row.balance === null &&
+      row.burnPerDay !== null;
+    if (!holding && !flow) return { ...row, grade: "UNKNOWN" };
   }
   if (row.grade !== "GREEN" && row.grade !== "YELLOW") return row;
   if (row.freshness === "stale") {
