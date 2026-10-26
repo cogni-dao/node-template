@@ -28,6 +28,7 @@ import {
   type CanonicalRunResult,
   canonicalJson,
   completeManagedGraph,
+  completionRequestHash,
   type ManagedExecutionClaim,
   publishCanonicalTerminal,
 } from "@cogni/graph-execution-host";
@@ -41,7 +42,6 @@ import {
 import { AnalyticsEvents, capture } from "@cogni/node-shared";
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { completionRequestHash } from "@/app/_lib/ai/completion-identity";
 import {
   persistAssistantThenPublishTerminal,
   TerminalPublicationError,

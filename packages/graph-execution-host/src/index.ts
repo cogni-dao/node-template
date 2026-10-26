@@ -38,8 +38,18 @@ export type {
 // --- Routing ---
 export { NamespaceGraphRouter } from "./routing/namespace-graph-router";
 
-// --- Durable chat terminal (TERMINAL_AFTER_PERSIST) ---
+// --- Completion request identity and reservation ---
+export {
+  CompletionIdempotencyConflictError,
+  type CompletionRequestPayload,
+  type CompletionReservationCheck,
+  type CompletionReservationPort,
+  completionRequestHash,
+  reserveCompletionRequest,
+  scopeExecutionIdempotencyKey,
+} from "./completion-request";
 
+// --- Durable chat terminal (TERMINAL_AFTER_PERSIST) ---
 export type {
   DurableChatTerminalDeps,
   DurableChatTerminalInput,
@@ -58,7 +68,6 @@ export type {
   ManagedExecutionClaim,
   ManagedExecutionPort,
 } from "./managed-execution";
-
 export {
   canonicalJson,
   canonicalTerminal,

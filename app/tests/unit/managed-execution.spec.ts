@@ -4,7 +4,13 @@
 
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
-import { completionRequestHash } from "@/app/_lib/ai/completion-identity";
+import {
+  type CompletionReservationPort,
+  CompletionIdempotencyConflictError,
+  completionRequestHash,
+  reserveCompletionRequest,
+  scopeExecutionIdempotencyKey,
+} from "../../../packages/graph-execution-host/src/index";
 import { workItemSemanticIdentity } from "../../../packages/ai-tools/src/tools/work-item-query";
 import { persistAssistantThenPublishTerminal } from "../../../packages/graph-execution-host/src/durable-chat-terminal";
 import {
@@ -430,7 +436,7 @@ describe("closed recurring mission evidence", () => {
   it("canonical parser accepts host prior-result no-op and rejects invented acceptance", () => {
     const output = {
       version: 1,
-      program: { id: "mission-prioritization", version: "4" },
+      program: { id: "mission-prioritization", version: "4.1" },
       runId: "run-b",
       status: "no_op",
       reason: "unchanged_input",
@@ -484,5 +490,108 @@ describe("closed recurring mission evidence", () => {
         "test-key"
       )
     ).not.toBe(signed);
+  });
+});
+
+
+describe("shared completion identity and reservation", () => {
+  // Fixed vectors captured from daf4e0f's original caller BEFORE extraction.
+  const payload = {
+    graphId: "langgraph:work-prioritizer",
+    messages: [{ role: "user", content: "Review mission", meta: { z: 2, a: 1, é: 3, _: 4 } }],
+    modelRef: { providerKey: "platform", modelId: "gpt-oss-120b" },
+  };
+  it("preserves versioned HMAC bytes, nested locale order and absent stateKey", () => {
+    const expected = "26186703b8defb0c3879c2ee93603c13f5507add44de47515fcd82c87616f277";
+    expect(completionRequestHash(payload, "vector-key")).toBe(expected);
+    expect(completionRequestHash({ ...payload, stateKey: undefined,
+      messages: [{ meta: { _: 4, é: 3, a: 1, z: 2 }, content: "Review mission", role: "user" }],
+      modelRef: { modelId: "gpt-oss-120b", providerKey: "platform" },
+    }, "vector-key")).toBe(expected);
+    expect(completionRequestHash({ ...payload, stateKey: "thread-a" }, "vector-key"))
+      .toBe("35a52207ed1005ba8826ed67c8a9b2507f95d6d0f2c9279695b9932933f46ef3");
+    expect(completionRequestHash({ ...payload, messages: [...payload.messages, { role: "user", content: "second" }] }, "vector-key"))
+      .toBe("d5139893f07c7ba61da599c691070c2bb24bff0d7df873f3751efa56b9a36440");
+    expect(completionRequestHash({ ...payload, messages: [{ role: "user", content: "second" }, ...payload.messages] }, "vector-key"))
+      .toBe("4b3159311602c36bf9e771c73ceb1eb39f47f0a0ce479634768ae85a70b795e4");
+    expect(completionRequestHash({ ...payload, modelRef: { providerKey: "platform", modelId: "other" } }, "vector-key"))
+      .toBe("00745c427756d37425e3e1b56b151686de40b0a82ec9e8553b40d761c3f00c59");
+    expect(completionRequestHash({ ...payload, graphId: "langgraph:poet" }, "vector-key"))
+      .toBe("c2a0d38c80fb83a2a82410604cfd1aa797555ee87c3cd2cffdf8fad985d50478");
+  });
+  it("preserves the scoped key bytes across each trusted identity axis", () => {
+    expect(scopeExecutionIdempotencyKey("node-a", "billing-a", "actor-a", "caller:key"))
+      .toBe("ai:9df1f72ec1906fa535be555039ec09b11c866418f96305c778dd3d75a828d2f0");
+    expect(scopeExecutionIdempotencyKey("node-b", "billing-a", "actor-a", "caller:key"))
+      .toBe("ai:80998d24cbc54bfc2be74bac743c96b31776a7f200a189a775b39ba4c1b92b99");
+    expect(scopeExecutionIdempotencyKey("node-a", "billing-b", "actor-a", "caller:key"))
+      .toBe("ai:a99be742febb02a3b80758e30cdf9803f4619a2ba2d34c04cdc3f96bdb848607");
+    expect(scopeExecutionIdempotencyKey("node-a", "billing-a", "actor-b", "caller:key"))
+      .toBe("ai:114ddd4d1ea808470084d6b68571bc18a449e8262b183b16359d018a00fd3757");
+  });
+  const input = { idempotencyKey: "key", requestHash: "hash-a", runId: "run-a", traceId: null };
+  it.each(["pending", "stale", "cached"] as const)("keeps a compatible %s reservation without writes", async (status) => {
+    const port: CompletionReservationPort = {
+      checkIdempotency: vi.fn().mockResolvedValue({ status, request: { runId: input.runId } }),
+      createPendingRequest: vi.fn(),
+    };
+    await reserveCompletionRequest(input, port);
+    expect(port.createPendingRequest).not.toHaveBeenCalled();
+  });
+  it("rejects changed payload or stored run identity without writing", async () => {
+    for (const result of [{ status: "mismatch" }, { status: "pending", request: { runId: "other" } }]) {
+      const port = { checkIdempotency: vi.fn().mockResolvedValue(result), createPendingRequest: vi.fn() };
+      await expect(reserveCompletionRequest(input, port)).rejects.toBeInstanceOf(CompletionIdempotencyConflictError);
+      expect(port.createPendingRequest).not.toHaveBeenCalled();
+    }
+  });
+  it.each([false, true])("concurrent initial-new reservations converge (same payload: %s)", async (samePayload) => {
+    // Unit port interleaving; actual SQL uniqueness remains a component/CI gate.
+    let arrivals = 0;
+    let release: () => void = () => {};
+    const bothRead = new Promise<void>((resolve) => { release = resolve; });
+    let stored: { requestHash: string; runId: string } | undefined;
+    const port: CompletionReservationPort = {
+      checkIdempotency: vi.fn(async (_key, requestHash) => {
+        if (++arrivals <= 2) {
+          if (arrivals === 2) release();
+          await bothRead;
+          return { status: "new" };
+        }
+        if (!stored) return { status: "new" };
+        return stored.requestHash === requestHash
+          ? { status: "pending", request: { runId: stored.runId } }
+          : { status: "mismatch" };
+      }),
+      createPendingRequest: vi.fn(async (_key, requestHash, runId) => {
+        if (stored) throw new Error("unique conflict");
+        stored = { requestHash, runId };
+      }),
+    };
+    const results = await Promise.allSettled([
+      reserveCompletionRequest(input, port),
+      reserveCompletionRequest({ ...input, requestHash: samePayload ? input.requestHash : "hash-b" }, port),
+    ]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(samePayload ? 2 : 1);
+    if (!samePayload) {
+      const failed = results.find((result) => result.status === "rejected");
+      expect(failed?.status === "rejected" && failed.reason).toBeInstanceOf(CompletionIdempotencyConflictError);
+    }
+    expect(stored).toEqual({ requestHash: input.requestHash, runId: input.runId });
+    expect(port.createPendingRequest).toHaveBeenCalledWith("key", "hash-a", "run-a", null);
+    expect(vi.mocked(port.createPendingRequest).mock.calls.every((args) => args.length === 4)).toBe(true);
+  });
+  it("preserves read/insert errors and refuses an unpersisted reservation", async () => {
+    const unavailable = new Error("database unavailable");
+    const create = vi.fn().mockRejectedValue(unavailable);
+    const check = vi.fn().mockRejectedValue(unavailable);
+    const port = { checkIdempotency: check, createPendingRequest: create };
+    await expect(reserveCompletionRequest(input, port)).rejects.toBe(unavailable);
+    expect(create).not.toHaveBeenCalled();
+    check.mockResolvedValue({ status: "new" });
+    await expect(reserveCompletionRequest(input, port)).rejects.toBe(unavailable);
+    create.mockResolvedValue(undefined);
+    await expect(reserveCompletionRequest(input, port)).rejects.toThrow("Execution idempotency claim was not persisted");
+    expect(check).toHaveBeenCalledTimes(5);
   });
 });

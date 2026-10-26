@@ -40,7 +40,8 @@ PURE_LIBRARY package providing graph execution decorator infrastructure — bill
 ## Public Surface
 
 - **Exports:** BillingEnrichmentGraphExecutorDecorator, UsageCommitDecorator, ObservabilityGraphExecutorDecorator, PreflightCreditCheckDecorator, NamespaceGraphRouter
-- **Canonical execution:** `ManagedExecutionPort`, bounded `CanonicalRunResult`, `canonicalTerminal` admission and `publishCanonicalTerminal` presentation. SQL, identity and migrations remain node-owned; provisional text never reaches terminal presentation.
+- **Canonical execution:** `ManagedExecutionPort`, bounded `CanonicalRunResult`, `canonicalTerminal` admission and `publishCanonicalTerminal` presentation. SQL, authorization and migrations remain node-owned; provisional text never reaches terminal presentation.
+- **Completion requests:** `scopeExecutionIdempotencyKey`, `completionRequestHash`, `reserveCompletionRequest`, `CompletionIdempotencyConflictError` and structural payload/reservation port types. Hosts inject the HMAC key and persistence port; the package never authenticates or starts workflows.
 - **Port types:** LoggerPort, TracingPort, BillingIdentity, CommitUsageFactFn, PreflightCreditCheckFn, PlatformCreditChecker, GetTraceIdFn, CreateTraceWithIOParams, ObservabilityDecoratorConfig
 
 ## Responsibilities
@@ -53,12 +54,12 @@ PURE_LIBRARY package providing graph execution decorator infrastructure — bill
 - PURE_LIBRARY: No env vars, no process lifecycle, no @/ imports
 - NO_SRC_IMPORTS: Never imports @/ or src/ paths
 - Port interfaces are minimal projections of app-local ports (structural typing, not inheritance)
-- No pino, @opentelemetry/api, or node:crypto runtime dependencies
+- No pino or @opentelemetry/api runtime dependencies; node:crypto is used only for deterministic request identity/HMAC with a host-injected key (graph-execution-package-design D9).
 
 ## Dependencies
 
 - **Internal:** @cogni/ai-core, @cogni/graph-execution-core, @cogni/node-shared
-- **External:** none (all injected via port interfaces)
+- **External:** Node built-in crypto; all persistence/context dependencies injected via ports
 
 ## Notes
 

@@ -18,6 +18,8 @@ import {
 import {
   type CanonicalRunResult,
   canonicalTerminal,
+  CompletionIdempotencyConflictError,
+  reserveCompletionRequest,
   type ManagedExecutionBinding,
   type ManagedExecutionClaim,
 } from "@cogni/graph-execution-host";
@@ -111,6 +113,26 @@ describe("managed graph execution transaction", () => {
         .where(inArray(executionGrants.id, grantIds));
     await db.delete(billingAccounts).where(eq(billingAccounts.id, accountId));
     await db.delete(users).where(inArray(users.id, [actor, otherActor]));
+  });
+  it.each([false, true])("reserves concurrent facade payloads atomically (identical: %s)", async (identical) => {
+    const idempotencyKey = `facade-reservation:${randomUUID()}`;
+    keys.push(idempotencyKey);
+    const runId = randomUUID();
+    const first = { idempotencyKey, requestHash: hash("first"), runId, traceId: null };
+    const second = { ...first, requestHash: identical ? first.requestHash : hash("second") };
+    const results = await Promise.allSettled([
+      reserveCompletionRequest(first, legacy),
+      reserveCompletionRequest(second, legacy),
+    ]);
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(identical ? 2 : 1);
+    if (!identical) {
+      const rejected = results.find((r) => r.status === "rejected");
+      expect(rejected?.status === "rejected" && rejected.reason).toBeInstanceOf(CompletionIdempotencyConflictError);
+    }
+    const rows = await db.select().from(executionRequests).where(eq(executionRequests.idempotencyKey, idempotencyKey));
+    expect(rows).toHaveLength(1);
+    const winner = results[0]?.status === "fulfilled" ? first : second;
+    expect(rows[0]).toMatchObject({ requestHash: winner.requestHash, runId, ok: null, claimToken: null, graphRunId: null, leaseExpiresAt: null });
   });
   it("simultaneous receiver delivery of one facade reservation executes one claimant", async () => {
     const binding = await seed();

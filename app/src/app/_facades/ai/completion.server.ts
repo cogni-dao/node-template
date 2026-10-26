@@ -22,7 +22,11 @@
  */
 
 import { createHash } from "node:crypto";
-import { completionRequestHash } from "@/app/_lib/ai/completion-identity";
+import {
+  completionRequestHash,
+  reserveCompletionRequest,
+  scopeExecutionIdempotencyKey,
+} from "@cogni/graph-execution-host";
 import { AiExecutionError } from "@cogni/ai-core";
 import { toUserId } from "@cogni/ids";
 import type { ChatCompletionOutput, ChatMessage } from "@cogni/node-contracts";
@@ -125,13 +129,6 @@ export interface CompletionInput {
   acceptanceMode?: "first-event" | "workflow-start";
 }
 
-export class CompletionIdempotencyConflictError extends Error {
-  constructor() {
-    super("Idempotency key was already used for a different completion request");
-    this.name = "CompletionIdempotencyConflictError";
-  }
-}
-
 function toDeterministicRunId(seed: string): string {
   const hex = createHash("sha256").update(seed).digest("hex");
   const p1 = hex.slice(0, 8);
@@ -146,20 +143,11 @@ function toDeterministicRunId(seed: string): string {
   return `${p1}-${p2}-${p3}-${p4}-${p5}`;
 }
 
-/** Scope the global execution_requests key before Temporal/internal execution. */
-export function scopeExecutionIdempotencyKey(
-  nodeId: string,
-  billingAccountId: string,
-  actorUserId: string,
-  callerKey: string
-): string {
-  const digest = createHash("sha256")
-    .update(`${nodeId}:${billingAccountId}:${actorUserId}:${callerKey}`, "utf8")
-    .digest("hex");
-  return `ai:${digest}`;
-}
-
-export { completionRequestHash } from "@/app/_lib/ai/completion-identity";
+export {
+  CompletionIdempotencyConflictError,
+  completionRequestHash,
+  scopeExecutionIdempotencyKey,
+} from "@cogni/graph-execution-host";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Finish reason mapping
@@ -402,41 +390,10 @@ export async function completionStream(
     serverEnv().AUTH_SECRET
   );
 
-  // Claim the global execution_requests slot before Temporal starts. Recheck
-  // after INSERT so concurrent different-payload callers cannot both proceed.
-  const executionRequests = getContainer().executionRequestPort;
-  let idempotency = await executionRequests.checkIdempotency(
-    idempotencyKey,
-    requestHash
+  await reserveCompletionRequest(
+    { idempotencyKey, requestHash, runId, traceId: ctx.traceId },
+    getContainer().executionRequestPort
   );
-  if (idempotency.status === "new") {
-    let createError: unknown;
-    try {
-      await executionRequests.createPendingRequest(
-        idempotencyKey,
-        requestHash,
-        runId,
-        ctx.traceId
-      );
-    } catch (error) {
-      createError = error;
-    }
-    idempotency = await executionRequests.checkIdempotency(
-      idempotencyKey,
-      requestHash
-    );
-    if (idempotency.status === "new") {
-      throw (
-        createError ?? new Error("Execution idempotency claim was not persisted")
-      );
-    }
-  }
-  if (
-    idempotency.status === "mismatch" ||
-    idempotency.request.runId !== runId
-  ) {
-    throw new CompletionIdempotencyConflictError();
-  }
 
   const { client: workflowClient, taskQueue } =
     await getTemporalWorkflowClient();
