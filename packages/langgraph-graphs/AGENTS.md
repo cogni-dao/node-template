@@ -36,7 +36,7 @@ LangGraph graph definitions and runtime utilities for agentic AI execution. Cont
 }
 ```
 
-**External deps:** `@langchain/core`, `@langchain/langgraph`, `@langchain/mcp-adapters`, `zod`. Imports `@cogni/ai-core`, `@cogni/ai-tools`.
+**External deps:** `@langchain/core`, `@langchain/langgraph`, `@langchain/mcp-adapters`, `zod`. Imports `@cogni/ai-core`, `@cogni/ai-tools`, and the canonical score parser from `@cogni/work-items` (>=0.2.4).
 
 ## Public Surface
 
@@ -69,6 +69,9 @@ LangGraph graph definitions and runtime utilities for agentic AI execution. Cont
     - `POET_GRAPH_NAME`, `PONDERER_GRAPH_NAME`, `BRAIN_GRAPH_NAME`, `RESEARCH_GRAPH_NAME`, `PR_REVIEW_GRAPH_NAME`, `BROWSER_GRAPH_NAME`, `FRONTEND_TESTER_GRAPH_NAME` — Graph name constants
     - `InvokableGraph<I,O>`, `MessageGraphInput`, `MessageGraphOutput` — Type firewall
     - `GraphInvokeOptions`, `CreateReactAgentGraphOptions` — Factory types
+  - `createEvidenceVerificationGraph(opts, program)` — sequential read-only evidence child, author, independent verifier and one revision; trusted host identity/full guidance receipts and call/byte limits, hard read-wait deadline and cooperative model cancellation (usage drains before terminal). Two configured schemas share the factory; in-process children are not durable runs.
+  - Catalog `finalOnly` keeps internal role text out of the client stream while preserving tool and usage events; the authoritative assistant envelope still persists normally.
+  - `EvidenceProgram`, `EvidenceResult`, `EvidenceLimits`, `EvidenceReceipt`, `GuidanceReceipt`, `DEFAULT_EVIDENCE_LIMITS` — exported from `/graphs`.
   - **Per-graph tools:** `src/graphs/*/tools.ts` exports `*_TOOL_IDS` constants (e.g., `BRAIN_TOOL_IDS`, `BrainToolId`)
 - **Env/Config keys:** none (all deps injected)
 - **Files considered API:** `index.ts`, `inproc/index.ts`, `runtime/index.ts`, `graphs/index.ts`, `langgraph.json`
@@ -122,3 +125,5 @@ pnpm --filter @cogni-dao/langgraph-graphs test
 - `LangGraphInProcProvider` in `src/adapters/server/ai/langgraph/` wires this package
 - Package isolation enables LangGraph Server to import graphs without Next.js deps
 - **Dual tsconfig:** LangGraph CLI generates runtime `.ts` files (`__langgraph__*.ts`) that break `composite` mode. This package uses `tsconfig.json` (noEmit, for CLI) + `tsconfig.build.json` (composite, for `tsc -b`). Root tsconfig.json references the build config explicitly. This is not proper form, but a valid workaround.
+
+Mission program v2 delegates score validation to work-items; separate per-axis support binds read provenance. Query score truncation fails closed, extra axes are preserved, and no-op compares v+ev.

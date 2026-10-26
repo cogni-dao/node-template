@@ -20,14 +20,13 @@ import type {
   KnowledgeSearchParams,
   KnowledgeWriteParams,
 } from "@cogni/ai-tools";
-
+import { isGoalRowId } from "./domain/dao-goals.js";
 import {
   type KnowledgeGate,
   KnowledgeGateError,
   runGateChain,
   V0_DETERMINISTIC_GATES,
 } from "./domain/gates/index.js";
-import { isGoalRowId } from "./domain/dao-goals.js";
 import { RAW_WRITE_REJECTS_TYPES } from "./domain/schemas.js";
 import {
   EdoEntryTypeRequiresAtomicToolError,
@@ -38,6 +37,8 @@ import {
 const CONFIDENCE_DRAFT = 30;
 
 function toEntry(k: {
+  entryType?: string | null;
+  useWhen?: string | null;
   id: string;
   domain: string;
   entityId?: string | null;
@@ -49,6 +50,8 @@ function toEntry(k: {
   tags?: string[] | null;
 }): KnowledgeEntry {
   return {
+    entryType: k.entryType ?? null,
+    useWhen: k.useWhen ?? null,
     id: k.id,
     domain: k.domain,
     entityId: k.entityId ?? null,
@@ -138,8 +141,12 @@ export function createKnowledgeCapability(
         throw new GoalRequiresContributionError(params.id);
       }
       const rawType = (params as { entryType?: string }).entryType;
-      if (rawType === "goal") throw new GoalRequiresContributionError(params.id);
-      if (rawType && (RAW_WRITE_REJECTS_TYPES as readonly string[]).includes(rawType)) {
+      if (rawType === "goal")
+        throw new GoalRequiresContributionError(params.id);
+      if (
+        rawType &&
+        (RAW_WRITE_REJECTS_TYPES as readonly string[]).includes(rawType)
+      ) {
         throw new EdoEntryTypeRequiresAtomicToolError(rawType);
       }
       const gateResult = await runGateChain(

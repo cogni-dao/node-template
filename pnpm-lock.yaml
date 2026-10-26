@@ -887,6 +887,9 @@ importers:
       '@cogni/ai-tools':
         specifier: workspace:@cogni-dao/ai-tools@*
         version: link:../ai-tools
+      '@cogni/work-items':
+        specifier: workspace:@cogni-dao/work-items@*
+        version: link:../work-items
       '@langchain/langgraph-cli':
         specifier: ^1.1.11
         version: 1.2.4(xd6vyu7lk7ylrvmtxrvph4j3wu)

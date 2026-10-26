@@ -51,6 +51,8 @@ export type MessageGraphOutput = { messages: BaseMessage[] };
  * Extend per-graph when additional dependencies are needed.
  */
 export interface CreateReactAgentGraphOptions {
+  /** Trusted host identity, never populated from graph input or model text. */
+  readonly hostContext?: { readonly nodeId: string; readonly runId: string };
   /** LLM instance - LanguageModelLike to match createReactAgent expectation */
   readonly llm: LanguageModelLike;
   /** Tools wrapped via toLangChainTools() */

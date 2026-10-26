@@ -76,6 +76,8 @@ export type { ToolExecFn, ToolExecResult } from "@cogni/ai-core";
  */
 export interface InProcGraphRequest {
   readonly runId: string;
+  /** Host-resolved node identity for source receipts. */
+  readonly nodeId?: string;
   readonly messages: readonly Message[];
   readonly abortSignal?: AbortSignal;
   readonly traceId?: string;
@@ -101,6 +103,8 @@ export interface InProcGraphRequest {
 export interface InProcRunnerOptions<TTool = unknown> {
   /** Graph factory from catalog - creates compiled graph with LLM and tools */
   readonly createGraph: CreateGraphFn;
+  /** Trusted catalog policy for multi-role graphs; never suppress usage/tool events. */
+  readonly finalOnly?: boolean;
 
   /** Per-LLM-call completion function (called N times in agentic loop) */
   readonly completionFn: CompletionFn<TTool>;
