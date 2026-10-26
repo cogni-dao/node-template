@@ -6,13 +6,13 @@
  * Scope: Fixture-only development route; protected report auth is unchanged.
  * Invariants: Production/test return 404; shell treasury reads are locally disabled.
  * Side-effects: none
- * Links: admin/payments/MoneyPlaneTable.tsx, fixture.ts
+ * Links: admin/payments/FinanceReportClient.client.tsx, fixture.ts
  * @internal
  */
 import type { TreasurySnapshotResponseV1 } from "@cogni/node-contracts";
 import { notFound } from "next/navigation";
 import { AdminShell } from "@/app/(admin)/AdminShell";
-import { MoneyPlaneTable } from "@/app/(admin)/admin/payments/MoneyPlaneTable";
+import { FinanceReportClient } from "@/app/(admin)/admin/payments/FinanceReportClient.client";
 import { AdminText, Button, PageContainer } from "@/components";
 import { getEnv } from "@/shared/env";
 import { FixtureBoundary } from "./FixtureBoundary";
@@ -61,7 +61,7 @@ export default async function FinancePreviewPage({
               </a>
             </Button>
           </div>
-          <MoneyPlaneTable {...report} />
+          <FinanceReportClient report={report} />
         </PageContainer>
       </AdminShell>
     </FixtureBoundary>

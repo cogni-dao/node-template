@@ -5,696 +5,451 @@
 /**
  * Module: `@tests/unit/app/admin/money-plane.server`
  * Purpose: Prove finance authorization runs before credentials or reader construction, the node composition
- *   (wallets → OpenRouter → operator-funded lines, with row payActions), and the Financials table shape:
- *   Line · Balance · Burn/day · Runway · Action, risk order, dashes with reasons, the fund-steward control
- *   POSTing the amount-only withdrawal, and no second rendering of any balance.
- * Scope: Real report helper and components, mocked session/config/provider seams; no network or database.
+ *   (income → wallets → OpenRouter → operator-funded lines, each with its rail and payAction), the USD projection and
+ *   summary, and that the page binds the package FinanceReport (ONE_UI) with this node's kit and the fund-steward POST.
+ * Scope: Real report helper, real package summary/projection, mocked session/config/provider/ledger seams; no network or database.
  * Invariants: Non-approvers never reach financial data, independently of layout rendering.
  * Side-effects: none
- * Links: src/app/(admin)/admin/payments/{money-plane.server,MoneyPlaneTable,RowAction.client,page}.tsx
+ * Links: src/app/(admin)/admin/payments/{money-plane.server,FinanceReportClient.client,page}.tsx
  * @internal
  */
 
 import type { MoneyPlaneRow, PlaneReader } from "@cogni/money-plane";
-import {
-  createTable,
-  getCoreRowModel,
-  getSortedRowModel,
-} from "@tanstack/react-table";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  session: vi.fn(),
-  approver: vi.fn(),
-  env: vi.fn(),
-  treasury: vi.fn(),
-  operator: vi.fn(),
-  steward: vi.fn(),
-  walletReader: vi.fn(),
-  creditReader: vi.fn(),
-  snapshot: vi.fn(),
-  redirect: vi.fn(),
-  info: vi.fn(),
-  error: vi.fn(),
-  grid: vi.fn(),
+	session: vi.fn(),
+	approver: vi.fn(),
+	env: vi.fn(),
+	treasury: vi.fn(),
+	operator: vi.fn(),
+	steward: vi.fn(),
+	walletReader: vi.fn(),
+	creditReader: vi.fn(),
+	snapshot: vi.fn(),
+	fx: vi.fn(),
+	query: vi.fn(),
+	redirect: vi.fn(),
+	refresh: vi.fn(),
+	info: vi.fn(),
+	error: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({
-  redirect: mocks.redirect,
-  useRouter: vi.fn(),
+	redirect: mocks.redirect,
+	useRouter: () => ({ refresh: mocks.refresh }),
 }));
 vi.mock("@/components", async () => {
-  const { createElement } = await import("react");
-  type Props = { children?: ReactNode; asChild?: boolean } & Record<
-    string,
-    unknown
-  >;
-  const tag =
-    (name: string) =>
-    ({ children, asChild: _asChild, ...props }: Props) =>
-      createElement(name, props, children);
-  const box = tag("div");
-  return {
-    AdminText: ({
-      as = "p",
-      children,
-      className,
-    }: {
-      as?: string;
-      children?: ReactNode;
-      className?: string;
-    }) => createElement(as, { className }, children),
-    Button: ({ children, asChild, ...props }: Props) =>
-      asChild ? children : createElement("button", props, children),
-    Input: (props: Record<string, unknown>) => createElement("input", props),
-    Dialog: box,
-    DialogContent: vi.fn(),
-    DialogHeader: box,
-    DialogTitle: box,
-    DialogDescription: box,
-    DialogTrigger: ({ children }: Props) => children,
-    DataGrid: mocks.grid,
-    DataGridColumnHeader: vi.fn(),
-    DataGridContainer: vi.fn(),
-    DataGridTable: vi.fn(),
-    PageContainer: box,
-  };
+	const dialog = await import("@cogni/node-ui-kit/shadcn/dialog");
+	const { createElement } = await import("react");
+	type Props = { children?: ReactNode; asChild?: boolean } & Record<string, unknown>;
+	return {
+		...dialog,
+		Button: ({ children, asChild, variant: _v, size: _s, ...props }: Props) =>
+			asChild ? children : createElement("button", { type: "button", ...props }, children),
+		Input: (props: Record<string, unknown>) => createElement("input", props),
+		PageContainer: ({ children }: Props) => createElement("div", null, children),
+	};
 });
 vi.mock("@/lib/auth/server", () => ({ getServerSessionUser: mocks.session }));
 vi.mock("@/shared/config", () => ({
-  isLedgerApprover: mocks.approver,
-  getDaoTreasuryAddress: mocks.treasury,
-  getOperatorWalletConfig: mocks.operator,
-  getStewardWalletConfig: mocks.steward,
+	isLedgerApprover: mocks.approver,
+	getDaoTreasuryAddress: mocks.treasury,
+	getOperatorWalletConfig: mocks.operator,
+	getStewardWalletConfig: mocks.steward,
 }));
 vi.mock("@/shared/env", () => ({ serverEnv: mocks.env }));
 vi.mock("@/shared/observability", () => ({
-  EVENT_NAMES: { MONEY_PLANE_SNAPSHOT: "money_plane.snapshot" },
-  makeLogger: () => ({ info: mocks.info, error: mocks.error }),
+	EVENT_NAMES: { MONEY_PLANE_SNAPSHOT: "money_plane.snapshot" },
+	makeLogger: () => ({ info: mocks.info, error: mocks.error }),
 }));
 vi.mock("@/shared/web3", () => ({ USDC_TOKEN_ADDRESS: "test-usdc" }));
-vi.mock("@cogni/money-plane", () => ({
-  BASE_PUBLIC_RPC_URL: "https://rpc.example",
-  baseWalletReader: mocks.walletReader,
-  openRouterReader: mocks.creditReader,
-  takeSnapshot: mocks.snapshot,
+vi.mock("@/bootstrap/capabilities/finance", () => ({ creditPurchasesQuery: mocks.query }));
+vi.mock("@cogni/money-plane", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@cogni/money-plane")>()),
+	BASE_PUBLIC_RPC_URL: "https://rpc.example",
+	baseWalletReader: mocks.walletReader,
+	openRouterReader: mocks.creditReader,
+	takeSnapshot: mocks.snapshot,
+	fetchEcbRate: mocks.fx,
 }));
 
 import {
-  createMoneyPlaneColumns,
-  MoneyPlaneEvidence,
-  MoneyPlaneTable,
-  refreshedText,
-  reportedColumns,
-  unavailableReason,
-} from "@/app/(admin)/admin/payments/MoneyPlaneTable";
+	FinanceReportClient,
+	fundSteward,
+	STEWARD_WITHDRAWAL_PATH,
+} from "@/app/(admin)/admin/payments/FinanceReportClient.client";
 import {
-  getMoneyPlaneSnapshot,
-  OPENROUTER_CHECKOUT_URL,
+	getMoneyPlaneSnapshot,
+	type NodeFinanceSnapshot,
+	OPENROUTER_CHECKOUT_URL,
 } from "@/app/(admin)/admin/payments/money-plane.server";
 import FinancialsPage from "@/app/(admin)/admin/payments/page";
-import {
-  fundSteward,
-  RowAction,
-  STEWARD_WITHDRAWAL_PATH,
-} from "@/app/(admin)/admin/payments/RowAction.client";
+import { liveShapedPreview } from "@/app/dev/finance-preview/fixture";
 
 const takenAt = "2026-10-25T00:00:00.000Z";
-const report = { takenAt, rows: [], worst: "UNKNOWN" };
+const report = { takenAt, rows: [] as MoneyPlaneRow[], worst: "UNKNOWN" as const };
 const address = "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd";
 const other = (n: string) => address.replace("abcd", n);
 const FUND_STEWARD = { kind: "fund-steward" as const };
 const OPENROUTER_CHECKOUT = {
-  kind: "steward-checkout" as const,
-  vendor: "openrouter" as const,
-  checkoutUrl: OPENROUTER_CHECKOUT_URL,
+	kind: "steward-checkout" as const,
+	vendor: "openrouter" as const,
+	checkoutUrl: OPENROUTER_CHECKOUT_URL,
 };
 
-function row(
-  plane: string,
-  grade: MoneyPlaneRow["grade"],
-  extra: Partial<MoneyPlaneRow> = {}
-): MoneyPlaneRow {
-  return {
-    plane,
-    label: plane,
-    kind: "prepaid",
-    balance: null,
-    currency: null,
-    burnPerDay: null,
-    runwayDays: null,
-    grade,
-    observedAt: takenAt,
-    ...extra,
-  };
+function stubReader(plane: string, row: Partial<MoneyPlaneRow> = {}): PlaneReader {
+	return {
+		plane,
+		label: plane,
+		kind: "wallet",
+		async read() {
+			return {
+				plane,
+				label: plane,
+				kind: "wallet",
+				balance: null,
+				currency: null,
+				burnPerDay: null,
+				runwayDays: null,
+				grade: "UNKNOWN",
+				observedAt: takenAt,
+				...row,
+			};
+		},
+	};
 }
 
 function admit() {
-  vi.resetAllMocks();
-  mocks.session.mockResolvedValue({
-    id: "admin",
-    walletAddress: "approved-wallet",
-  });
-  mocks.approver.mockReturnValue(true);
-  mocks.env.mockReturnValue({ OPENROUTER_API_KEY: "sk-or-test" });
-  mocks.treasury.mockReturnValue(null);
-  mocks.operator.mockReturnValue(null);
-  mocks.steward.mockReturnValue(null);
-  mocks.walletReader.mockImplementation(({ name }: { name: string }) => ({
-    plane: `base:${name}`,
-  }));
-  mocks.creditReader.mockReturnValue({ plane: "openrouter:account" });
-  mocks.snapshot.mockResolvedValue(report);
+	vi.resetAllMocks();
+	mocks.session.mockResolvedValue({ id: "admin", walletAddress: "approved-wallet" });
+	mocks.approver.mockReturnValue(true);
+	mocks.env.mockReturnValue({ OPENROUTER_API_KEY: "sk-or-test" });
+	mocks.treasury.mockReturnValue(null);
+	mocks.operator.mockReturnValue(null);
+	mocks.steward.mockReturnValue(null);
+	mocks.walletReader.mockImplementation(({ name, payAction }: { name: string; payAction?: unknown }) =>
+		stubReader(`base:${name}`, payAction ? { payAction: payAction as MoneyPlaneRow["payAction"] } : {}),
+	);
+	mocks.creditReader.mockReturnValue(stubReader("openrouter:account"));
+	mocks.snapshot.mockResolvedValue(report);
+	mocks.fx.mockResolvedValue(null);
+	mocks.query.mockReturnValue(async () => []);
 }
 
 describe("finance authorization at the read boundary", () => {
-  beforeEach(() => {
-    admit();
-    mocks.approver.mockImplementation((wallet) => wallet === "approved-wallet");
-    mocks.redirect.mockImplementation(() => {
-      throw new Error("NEXT_REDIRECT");
-    });
-  });
+	beforeEach(() => {
+		admit();
+		mocks.approver.mockImplementation((wallet) => wallet === "approved-wallet");
+		mocks.redirect.mockImplementation(() => {
+			throw new Error("NEXT_REDIRECT");
+		});
+	});
 
-  it.each([
-    ["anonymous", null],
-    ["walletless OAuth", { id: "oauth-user", walletAddress: null }],
-    ["non-approver", { id: "other-user", walletAddress: "other-wallet" }],
-  ] as const)("denies %s before any financial reads", async (_label, user) => {
-    mocks.session.mockResolvedValue(user);
-    await expect(getMoneyPlaneSnapshot()).rejects.toThrow("NEXT_REDIRECT");
-    expect(mocks.redirect).toHaveBeenCalledWith("/dashboard");
-    expect(mocks.approver).toHaveBeenCalledWith(user?.walletAddress ?? null);
-    for (const read of [
-      mocks.env,
-      mocks.treasury,
-      mocks.operator,
-      mocks.steward,
-      mocks.walletReader,
-      mocks.creditReader,
-      mocks.snapshot,
-    ]) {
-      expect(read).not.toHaveBeenCalled();
-    }
-    expect(mocks.error).not.toHaveBeenCalled();
-  });
+	it.each([
+		["anonymous", null],
+		["walletless OAuth", { id: "oauth-user", walletAddress: null }],
+		["non-approver", { id: "other-user", walletAddress: "other-wallet" }],
+	] as const)("denies %s before any financial reads", async (_label, user) => {
+		mocks.session.mockResolvedValue(user);
+		await expect(getMoneyPlaneSnapshot()).rejects.toThrow("NEXT_REDIRECT");
+		expect(mocks.redirect).toHaveBeenCalledWith("/dashboard");
+		expect(mocks.approver).toHaveBeenCalledWith(user?.walletAddress ?? null);
+		for (const read of [
+			mocks.env,
+			mocks.treasury,
+			mocks.operator,
+			mocks.steward,
+			mocks.walletReader,
+			mocks.creditReader,
+			mocks.snapshot,
+			mocks.query,
+			mocks.fx,
+		]) {
+			expect(read).not.toHaveBeenCalled();
+		}
+		expect(mocks.error).not.toHaveBeenCalled();
+	});
 
-  it("reads the report after the same repo-spec approver predicate allows the session", async () => {
-    await expect(getMoneyPlaneSnapshot()).resolves.toEqual({
-      ...report,
-      treasuryPlane: null,
-    });
-    expect(mocks.approver).toHaveBeenCalledWith("approved-wallet");
-    expect(mocks.redirect).not.toHaveBeenCalled();
-    expect(mocks.env).toHaveBeenCalledTimes(1);
-    expect(mocks.walletReader).toHaveBeenCalledTimes(3);
-    expect(mocks.creditReader).toHaveBeenCalledWith(
-      expect.objectContaining({
-        apiKey: "sk-or-test",
-        label: "OpenRouter credit",
-        payAction: OPENROUTER_CHECKOUT,
-      })
-    );
-    expect(mocks.snapshot).toHaveBeenCalledTimes(1);
-    expect(mocks.info).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: "money_plane.snapshot",
-        outcome: "success",
-      }),
-      "money_plane.snapshot"
-    );
-  });
+	it("reads the report after the same repo-spec approver predicate allows the session", async () => {
+		await expect(getMoneyPlaneSnapshot()).resolves.toEqual({
+			...report,
+			treasuryPlane: null,
+			summary: {
+				treasuryUsd: null,
+				incomePerDay: null,
+				burnPerDay: null,
+				shortestRunway: null,
+				ratesUsed: [],
+				unconverted: [],
+			},
+		});
+		expect(mocks.approver).toHaveBeenCalledWith("approved-wallet");
+		expect(mocks.redirect).not.toHaveBeenCalled();
+		expect(mocks.env).toHaveBeenCalledTimes(1);
+		expect(mocks.walletReader).toHaveBeenCalledTimes(3);
+		expect(mocks.creditReader).toHaveBeenCalledWith(
+			expect.objectContaining({ apiKey: "sk-or-test", label: "OpenRouter credit", payAction: OPENROUTER_CHECKOUT }),
+		);
+		expect(mocks.snapshot).toHaveBeenCalledTimes(1);
+		expect(mocks.fx).not.toHaveBeenCalled();
+		expect(mocks.info).toHaveBeenCalledWith(
+			expect.objectContaining({ event: "money_plane.snapshot", outcome: "success" }),
+			"money_plane.snapshot",
+		);
+	});
 });
 
 describe("node composition", () => {
-  beforeEach(admit);
+	beforeEach(admit);
 
-  it("runs treasury, operator, steward, OpenRouter, Hosting and AI in that order with short labels", async () => {
-    mocks.treasury.mockReturnValue(address);
-    mocks.operator.mockReturnValue({ address: other("1234") });
-    mocks.steward.mockReturnValue({ address: other("5678") });
-    const result = await getMoneyPlaneSnapshot();
-    expect(result.treasuryPlane).toBe("base:dao-treasury");
-    const readers = mocks.snapshot.mock.calls[0]?.[0] as PlaneReader[];
-    expect(readers.map((reader) => reader.plane)).toEqual([
-      "base:dao-treasury",
-      "base:operator-wallet",
-      "base:steward-wallet",
-      "openrouter:account",
-      "hosting:operator-covered",
-      "ai:operator-covered",
-    ]);
-    expect(mocks.walletReader.mock.calls.map((call) => call[0].label)).toEqual([
-      "DAO treasury",
-      "Operator wallet",
-      "Steward wallet",
-    ]);
-  });
+	async function rowsOf(): Promise<MoneyPlaneRow[]> {
+		const readers = mocks.snapshot.mock.calls[0]?.[0] as PlaneReader[];
+		return Promise.all(readers.map((reader) => reader.read(new AbortController().signal)));
+	}
 
-  it("puts fund-steward on the operator wallet only when a steward wallet exists", async () => {
-    mocks.operator.mockReturnValue({ address: other("1234") });
-    mocks.steward.mockReturnValue({ address: other("5678") });
-    await getMoneyPlaneSnapshot();
-    const byName = Object.fromEntries(
-      mocks.walletReader.mock.calls.map((call) => [call[0].name, call[0]])
-    );
-    expect(byName["operator-wallet"].payAction).toEqual(FUND_STEWARD);
-    expect(byName["steward-wallet"]).not.toHaveProperty("payAction");
-    expect(byName["dao-treasury"]).not.toHaveProperty("payAction");
+	it("runs income, treasury, operator, steward, OpenRouter, Hosting and AI in that order with short labels", async () => {
+		mocks.treasury.mockReturnValue(address);
+		mocks.operator.mockReturnValue({ address: other("1234") });
+		mocks.steward.mockReturnValue({ address: other("5678") });
+		const result = await getMoneyPlaneSnapshot();
+		expect(result.treasuryPlane).toBe("base:dao-treasury");
+		const readers = mocks.snapshot.mock.calls[0]?.[0] as PlaneReader[];
+		expect(readers.map((reader) => reader.plane)).toEqual([
+			"income:credit-purchases",
+			"income:node-services",
+			"base:dao-treasury",
+			"base:operator-wallet",
+			"base:steward-wallet",
+			"openrouter:account",
+			"hosting:operator-covered",
+			"ai:operator-covered",
+		]);
+		expect(mocks.walletReader.mock.calls.map((call) => call[0].label)).toEqual([
+			"DAO treasury",
+			"Operator wallet",
+			"Steward wallet",
+		]);
+	});
 
-    admit();
-    mocks.operator.mockReturnValue({ address: other("1234") });
-    await getMoneyPlaneSnapshot();
-    const operatorOnly = mocks.walletReader.mock.calls.find(
-      (call) => call[0].name === "operator-wallet"
-    )?.[0];
-    expect(operatorOnly).not.toHaveProperty("payAction");
-  });
+	it("attaches a rail to every row and the money chain to the operator wallet", async () => {
+		mocks.treasury.mockReturnValue(address);
+		mocks.operator.mockReturnValue({ address: other("1234") });
+		mocks.steward.mockReturnValue({ address: other("5678") });
+		await getMoneyPlaneSnapshot();
+		const by = Object.fromEntries((await rowsOf()).map((row) => [row.plane, row]));
+		expect(by["income:credit-purchases"]).toMatchObject({
+			kind: "income",
+			burnPerDay: 0,
+			grade: "INFO",
+			rail: { kind: "split-inflow", status: "supported" },
+		});
+		expect(by["income:node-services"]).toMatchObject({
+			kind: "income",
+			grade: "UNKNOWN",
+			rail: { kind: "x402-auto", status: "planned", guide: "node-service-usdc-northstar" },
+		});
+		expect(by["base:dao-treasury"]?.rail).toEqual({ kind: "dao-vote", status: "planned", guide: "governance" });
+		expect(by["base:operator-wallet"]).toMatchObject({
+			payAction: FUND_STEWARD,
+			rail: { kind: "steward-manual", status: "supported" },
+			note: "User payments → operator wallet → steward wallet → OpenRouter",
+		});
+		expect(by["base:steward-wallet"]?.rail).toEqual({ kind: "none", status: "unsupported" });
+		expect(by["openrouter:account"]?.rail).toEqual({ kind: "steward-manual", status: "supported" });
+		for (const plane of ["hosting:operator-covered", "ai:operator-covered"])
+			expect(by[plane]).toMatchObject({
+				kind: "usage",
+				balance: null,
+				burnPerDay: null,
+				payer: "Operator",
+				beneficiary: "This node",
+				coverage: "operator-covered",
+				source: "Operator sponsorship",
+				rail: { kind: "none", status: "planned", guide: "Operator-funded" },
+			});
+		expect(by["hosting:operator-covered"]?.detail).toBe("Funded by operator · cost not yet shared");
+	});
 
-  it("constructs one reader for aliased Base accounts, keeping the treasury id and the action", async () => {
-    mocks.treasury.mockReturnValue(address);
-    mocks.operator.mockReturnValue({
-      address: address.toUpperCase().replace("0X", "0x"),
-    });
-    mocks.steward.mockReturnValue({ address });
-    const result = await getMoneyPlaneSnapshot();
-    expect(result.treasuryPlane).toBe("base:dao-treasury");
-    expect(mocks.walletReader).toHaveBeenCalledTimes(1);
-    expect(mocks.walletReader).toHaveBeenCalledWith(
-      expect.objectContaining({
-        label: "DAO treasury / Operator wallet / Steward wallet",
-        payAction: FUND_STEWARD,
-      })
-    );
-  });
+	it("puts fund-steward on the operator wallet only when a steward wallet exists, else marks the rail unsupported", async () => {
+		mocks.operator.mockReturnValue({ address: other("1234") });
+		mocks.steward.mockReturnValue({ address: other("5678") });
+		await getMoneyPlaneSnapshot();
+		const byName = Object.fromEntries(mocks.walletReader.mock.calls.map((call) => [call[0].name, call[0]]));
+		expect(byName["operator-wallet"].payAction).toEqual(FUND_STEWARD);
+		expect(byName["steward-wallet"]).not.toHaveProperty("payAction");
+		expect(byName["dao-treasury"]).not.toHaveProperty("payAction");
 
-  it("does not deduplicate unconfigured or invalid role addresses", async () => {
-    mocks.treasury.mockReturnValue("invalid");
-    mocks.operator.mockReturnValue({ address: "invalid" });
-    const result = await getMoneyPlaneSnapshot();
-    expect(result.treasuryPlane).toBe("base:dao-treasury");
-    expect(mocks.walletReader).toHaveBeenCalledTimes(3);
-  });
+		admit();
+		mocks.operator.mockReturnValue({ address: other("1234") });
+		await getMoneyPlaneSnapshot();
+		const operatorOnly = mocks.walletReader.mock.calls.find((call) => call[0].name === "operator-wallet")?.[0];
+		expect(operatorOnly).not.toHaveProperty("payAction");
+		const operatorRow = (await rowsOf()).find((row) => row.plane === "base:operator-wallet");
+		expect(operatorRow?.rail).toEqual({ kind: "steward-manual", status: "unsupported" });
+	});
 
-  it("still registers OpenRouter without a key so the row is explicit, not absent", async () => {
-    mocks.env.mockReturnValue({});
-    await getMoneyPlaneSnapshot();
-    expect(mocks.creditReader).toHaveBeenCalledWith(
-      expect.objectContaining({ apiKey: undefined, payAction: OPENROUTER_CHECKOUT })
-    );
-  });
+	it("constructs one reader for aliased Base accounts, keeping the treasury id, the action and its rail", async () => {
+		mocks.treasury.mockReturnValue(address);
+		mocks.operator.mockReturnValue({ address: address.toUpperCase().replace("0X", "0x") });
+		mocks.steward.mockReturnValue({ address });
+		const result = await getMoneyPlaneSnapshot();
+		expect(result.treasuryPlane).toBe("base:dao-treasury");
+		expect(mocks.walletReader).toHaveBeenCalledTimes(1);
+		expect(mocks.walletReader).toHaveBeenCalledWith(
+			expect.objectContaining({ label: "DAO treasury / Operator wallet / Steward wallet", payAction: FUND_STEWARD }),
+		);
+		const merged = (await rowsOf()).find((row) => row.plane === "base:dao-treasury");
+		expect(merged).toMatchObject({
+			rail: { kind: "steward-manual", status: "supported" },
+			note: "User payments → operator wallet → steward wallet → OpenRouter",
+		});
+	});
 
-  it("reports Hosting and AI as operator-funded lines with no numbers", async () => {
-    await getMoneyPlaneSnapshot();
-    const readers = mocks.snapshot.mock.calls[0]?.[0] as PlaneReader[];
-    const [hosting, ai] = await Promise.all(
-      readers.slice(4).map((reader) => reader.read(new AbortController().signal))
-    );
-    expect(hosting).toMatchObject({
-      label: "Hosting",
-      kind: "usage",
-      balance: null,
-      burnPerDay: null,
-      payer: "Operator",
-      beneficiary: "This node",
-      coverage: "operator-covered",
-      source: "Operator sponsorship",
-      detail: "Funded by operator · cost not yet shared",
-    });
-    expect(ai).toMatchObject({
-      label: "AI",
-      coverage: "operator-covered",
-      detail: "Funded by operator · usage not yet shared",
-    });
-  });
+	it("does not deduplicate unconfigured or invalid role addresses", async () => {
+		mocks.treasury.mockReturnValue("invalid");
+		mocks.operator.mockReturnValue({ address: "invalid" });
+		const result = await getMoneyPlaneSnapshot();
+		expect(result.treasuryPlane).toBe("base:dao-treasury");
+		expect(mocks.walletReader).toHaveBeenCalledTimes(3);
+	});
+
+	it("still registers OpenRouter without a key so the row is explicit, not absent", async () => {
+		mocks.env.mockReturnValue({});
+		await getMoneyPlaneSnapshot();
+		expect(mocks.creditReader).toHaveBeenCalledWith(
+			expect.objectContaining({ apiKey: undefined, payAction: OPENROUTER_CHECKOUT }),
+		);
+	});
+
+	it("reads income from the ledger seam, and reports it UNKNOWN when no ledger is reachable", async () => {
+		mocks.query.mockReturnValue(async () => [{ amountUsdCents: 4500, createdAt: new Date() }]);
+		await getMoneyPlaneSnapshot();
+		const income = (await rowsOf()).find((row) => row.plane === "income:credit-purchases");
+		expect(income?.burnPerDay).toBeCloseTo(1.5, 9);
+		admit();
+		mocks.query.mockReturnValue(null);
+		await getMoneyPlaneSnapshot();
+		expect((await rowsOf()).find((row) => row.plane === "income:credit-purchases")).toMatchObject({
+			grade: "UNKNOWN",
+			reasonCode: "unreadable",
+			detail: "ledger unavailable",
+			rail: { kind: "split-inflow" },
+		});
+	});
+
+	it("projects rows to USD, fetching the ECB rate only when a non-dollar row exists, and summarizes once", async () => {
+		mocks.snapshot.mockResolvedValue({
+			...report,
+			rows: [
+				{
+					plane: "base:dao-treasury",
+					label: "DAO treasury",
+					kind: "wallet",
+					balance: 74.52,
+					currency: "USDC",
+					burnPerDay: null,
+					runwayDays: null,
+					grade: "INFO",
+					observedAt: takenAt,
+				},
+				{
+					plane: "vendor:eur",
+					label: "EUR credit",
+					kind: "prepaid",
+					balance: 10,
+					currency: "EUR",
+					burnPerDay: 1,
+					runwayDays: 10,
+					grade: "YELLOW",
+					observedAt: takenAt,
+					sourceObservedAt: takenAt,
+					freshness: "current",
+				},
+			],
+		});
+		mocks.treasury.mockReturnValue(address);
+		mocks.fx.mockResolvedValue({ pair: "EURUSD", value: 1.1188, source: "ECB", date: "2026-10-26" });
+		const result = await getMoneyPlaneSnapshot();
+		expect(mocks.fx).toHaveBeenCalledTimes(1);
+		expect(mocks.fx.mock.calls[0]?.[1]).toBe("EURUSD");
+		expect(result.rows[1]?.usd).toEqual({
+			amount: 11.188,
+			rate: { pair: "EURUSD", value: 1.1188, source: "ECB", date: "2026-10-26" },
+		});
+		expect(result.summary).toMatchObject({
+			treasuryUsd: 74.52,
+			burnPerDay: 1.1188,
+			shortestRunway: { days: 10, label: "EUR credit" },
+			ratesUsed: [{ pair: "EURUSD" }],
+		});
+	});
 });
 
-const rows: MoneyPlaneRow[] = [
-  row("base:dao-treasury", "INFO", {
-    label: "DAO treasury",
-    kind: "wallet",
-    balance: 74.52,
-    currency: "USDC",
-    source: "Base JSON-RPC",
-    sourceObservedAt: takenAt,
-    freshness: "current",
-  }),
-  row("base:operator-wallet", "INFO", {
-    label: "Operator wallet",
-    kind: "wallet",
-    balance: 10.77,
-    currency: "USDC",
-    payAction: FUND_STEWARD,
-  }),
-  row("openrouter:account", "UNKNOWN", {
-    label: "OpenRouter credit",
-    balance: 3.1,
-    currency: "USD",
-    reasonCode: "burn_unmeasured",
-    payAction: OPENROUTER_CHECKOUT,
-  }),
-  row("hosting:operator-covered", "UNKNOWN", {
-    label: "Hosting",
-    kind: "usage",
-    payer: "Operator",
-    coverage: "operator-covered",
-    reasonCode: "unconfigured",
-  }),
-  row("demo:red", "RED", {
-    label: "Zebra credit",
-    balance: 2,
-    currency: "USD",
-    burnPerDay: 0.5,
-    runwayDays: 4,
-  }),
-  row("demo:green", "GREEN", {
-    label: "Alpha credit",
-    balance: 90,
-    currency: "USD",
-    burnPerDay: 1,
-    runwayDays: 90,
-  }),
-  row("demo:yellow", "YELLOW", {
-    label: "Mid credit",
-    balance: 10,
-    currency: "USD",
-    burnPerDay: 1,
-    runwayDays: 10,
-  }),
-];
-const riskOrder = [
-  "demo:red",
-  "demo:yellow",
-  "demo:green",
-  "base:dao-treasury",
-  "base:operator-wallet",
-  "openrouter:account",
-  "hosting:operator-covered",
-];
+describe("the Financials page and its package binding", () => {
+	beforeEach(admit);
 
-describe("the Financials table", () => {
-  beforeEach(admit);
+	it("renders only the package report; no funding panel, no node-local table", async () => {
+		const html = renderToStaticMarkup(await FinancialsPage());
+		expect(html).toContain(">Financials</h1>");
+		expect(html).not.toContain("Provider funding");
+		expect(html).not.toContain("OpenRouter Funding");
+		expect(mocks.snapshot).toHaveBeenCalledTimes(1);
+	});
 
-  it("has exactly Line · Balance · Burn/day · Runway · Action and sorts RED, YELLOW, known numbers, placeholders last", () => {
-    const columns = createMoneyPlaneColumns();
-    expect(columns.map((c) => c.id)).toEqual([
-      "line",
-      "balance",
-      "burn",
-      "runway",
-      "action",
-    ]);
-    const table = createTable({
-      data: rows,
-      columns,
-      state: { sorting: [{ id: "line", desc: false }] },
-      onStateChange: () => {},
-      renderFallbackValue: null,
-      getCoreRowModel: getCoreRowModel(),
-      getSortedRowModel: getSortedRowModel(),
-    });
-    expect(table.getRowModel().rows.map((r) => r.original.plane)).toEqual(
-      riskOrder
-    );
-  });
+	it("binds this node's kit: groups, rails, Top up link and the inline fund-steward control", () => {
+		render(createElement(FinanceReportClient, { report: liveShapedPreview as NodeFinanceSnapshot }));
+		expect(screen.getByRole("heading", { level: 1, name: "Financials" })).toBeTruthy();
+		expect(screen.getByText("Treasury $74.52 · Income $0.00/day")).toBeTruthy();
+		const table = screen.getByRole("table");
+		expect(Array.from(table.querySelectorAll("tr[data-finance-group]")).map((tr) => tr.getAttribute("data-finance-group"))).toEqual([
+			"Income",
+			"Costs",
+			"Reserves",
+		]);
+		const operator = table.querySelector<HTMLElement>("tr[data-finance-row='base:operator-wallet']");
+		expect(operator && within(operator).getByRole("button", { name: "Fund steward" })).toBeTruthy();
+		const openrouter = table.querySelector<HTMLElement>("tr[data-finance-row='openrouter:account']");
+		expect(openrouter && within(openrouter).getByRole("link", { name: /Top up/ }).getAttribute("href")).toBe(
+			OPENROUTER_CHECKOUT_URL,
+		);
+		const hosting = table.querySelector<HTMLElement>("tr[data-finance-row='hosting:operator-covered']");
+		expect(hosting && within(hosting).getByText("No rail")).toBeTruthy();
+		expect(hosting && within(hosting).queryByRole("link")).toBeNull();
+	});
 
-  it("sorts numeric columns with missing values last in both directions", () => {
-    for (const id of ["balance", "burn", "runway"]) {
-      for (const desc of [false, true]) {
-        const table = createTable({
-          data: rows,
-          columns: createMoneyPlaneColumns(),
-          state: { sorting: [{ id, desc }] },
-          onStateChange: () => {},
-          renderFallbackValue: null,
-          getCoreRowModel: getCoreRowModel(),
-          getSortedRowModel: getSortedRowModel(),
-        });
-        const values = table
-          .getRowModel()
-          .rows.map((r) => r.getValue<number | undefined>(id));
-        const known = values.filter((v) => v !== undefined) as number[];
-        expect(values.slice(known.length).every((v) => v === undefined)).toBe(
-          true
-        );
-        expect(known).toEqual(
-          [...known].sort((a, b) => (desc ? b - a : a - b))
-        );
-      }
-    }
-  });
+	it("fundSteward POSTs the amount-only withdrawal and surfaces the server's text on failure", async () => {
+		const ok = vi.fn(async () => ({ ok: true, json: async () => ({ txHash: "0xabc" }) }));
+		await expect(fundSteward(2.5, ok as unknown as typeof fetch)).resolves.toEqual({ txHash: "0xabc" });
+		expect(ok).toHaveBeenCalledWith(
+			STEWARD_WITHDRAWAL_PATH,
+			expect.objectContaining({ method: "POST", body: JSON.stringify({ amountUsd: 2.5 }) }),
+		);
+		const bad = vi.fn(async () => ({ ok: false, status: 400, json: async () => ({ detail: "amount too large" }) }));
+		await expect(fundSteward(999, bad as unknown as typeof fetch)).rejects.toThrow("amount too large");
+	});
 
-  it("renders header, treasury line, short numbers, row actions, and nothing else", () => {
-    const html = renderToStaticMarkup(
-      createElement(MoneyPlaneTable, {
-        rows,
-        takenAt,
-        treasuryPlane: "base:dao-treasury",
-      })
-    );
-    expect(html).toContain("<h1");
-    expect(html).toContain(">Financials</h1>");
-    expect(html).toContain("Refreshed Oct 25, 12:00 AM");
-    expect(html).toContain("Treasury 74.52 USDC");
-    expect(html).toContain("10.77 USDC");
-    expect(html).toContain("3.10 USD");
-    expect(html).toContain("$0.50/day");
-    expect(html).toContain(">4d<");
-    expect(html).toContain("Operator-funded");
-    expect(html).toContain("Fund steward");
-    expect(html).toContain("Top up");
-    expect(html).toContain(`href="${OPENROUTER_CHECKOUT_URL}"`);
-    expect(html).toContain('aria-label="Operator wallet source"');
-    for (const banned of [
-      "Payment history",
-      "not yet reported",
-      "Provider funding",
-      ">Source<",
-      "Funded by operator",
-      "Other accounts",
-      "Not reported",
-    ])
-      expect(html).not.toContain(banned);
-    // One rendering per balance: the stacked list and the (mocked) grid share rows; no card repeats them.
-    expect(html.split("74.52 USDC").length - 1).toBe(2);
-    const table = mocks.grid.mock.calls[0]?.[0].table;
-    expect(
-      table.getVisibleLeafColumns().map((c: { id: string }) => c.id)
-    ).toEqual(["line", "balance", "burn", "runway", "action"]);
-    expect(
-      table.getRowModel().rows.map((r: { original: MoneyPlaneRow }) =>
-        r.original.plane
-      )
-    ).toEqual(riskOrder);
-  });
-
-  it("omits all-dash Burn/day and Runway columns without adding a note", () => {
-    const walletsOnly = rows.filter((r) => r.kind !== "prepaid");
-    expect(reportedColumns(walletsOnly)).toEqual({ burn: false, runway: false });
-    const html = renderToStaticMarkup(
-      createElement(MoneyPlaneTable, {
-        rows: walletsOnly,
-        takenAt,
-        treasuryPlane: "base:dao-treasury",
-      })
-    );
-    expect(html).not.toContain(">Burn/day<");
-    expect(html).not.toContain(">Runway<");
-    expect(html).not.toContain("not yet reported");
-    expect(html).toContain(">Balance<");
-    const table = mocks.grid.mock.calls[0]?.[0].table;
-    expect(table.getAllColumns()).toHaveLength(5);
-    expect(
-      table.getVisibleLeafColumns().map((c: { id: string }) => c.id)
-    ).toEqual(["line", "balance", "action"]);
-  });
-
-  it("keeps a column for a known zero burn and only drops the all-null one", () => {
-    const zeroBurn = [
-      row("x", "GREEN", { balance: 5, currency: "USD", burnPerDay: 0 }),
-      row("y", "UNKNOWN", { kind: "wallet", reasonCode: "unreadable" }),
-    ];
-    expect(reportedColumns(zeroBurn)).toEqual({ burn: true, runway: false });
-    const html = renderToStaticMarkup(
-      createElement(MoneyPlaneTable, { rows: zeroBurn, takenAt, treasuryPlane: null })
-    );
-    expect(html).toContain("$0.00/day");
-    expect(html).not.toContain(">Runway<");
-    const table = mocks.grid.mock.calls[0]?.[0].table;
-    expect(
-      table.getVisibleLeafColumns().map((c: { id: string }) => c.id)
-    ).toEqual(["line", "balance", "burn", "action"]);
-  });
-
-  it("explains an unavailable treasury balance in one line", () => {
-    const html = renderToStaticMarkup(
-      createElement(MoneyPlaneTable, {
-        rows: [
-          row("base:dao-treasury", "UNKNOWN", {
-            label: "DAO treasury",
-            kind: "wallet",
-            reasonCode: "unreadable",
-          }),
-        ],
-        takenAt,
-        treasuryPlane: "base:dao-treasury",
-      })
-    );
-    expect(html).toContain("Treasury balance unavailable · RPC unavailable");
-    expect(html).toContain(">—<");
-  });
-
-  it("shows the date only when the report is not from today", () => {
-    const now = new Date("2026-10-26T20:00:00Z");
-    expect(refreshedText("2026-10-26T19:42:00Z", "UTC", now)).toBe(
-      "Refreshed 7:42 PM"
-    );
-    expect(refreshedText("2026-10-25T19:42:00Z", "UTC", now)).toBe(
-      "Refreshed Oct 25, 7:42 PM"
-    );
-    expect(refreshedText("nope", "UTC", now)).toBe("Refreshed time unknown");
-  });
-
-  it("maps reason codes to one human line each", () => {
-    expect(unavailableReason(rows[0] as MoneyPlaneRow)).toBeNull();
-    expect(unavailableReason(rows[2] as MoneyPlaneRow)).toBe(
-      "burn not measured"
-    );
-    expect(unavailableReason(rows[3] as MoneyPlaneRow)).toBe(
-      "cost reported by operator, not yet shared"
-    );
-    expect(
-      unavailableReason(
-        row("openrouter:account", "UNKNOWN", { reasonCode: "unconfigured" })
-      )
-    ).toBe("no key configured");
-    expect(
-      unavailableReason(
-        row("base:x", "UNKNOWN", { kind: "wallet", reasonCode: "unconfigured" })
-      )
-    ).toBe("no address configured");
-  });
-
-  it("keeps the dialog to six short rows: exact amount, time, reason, money chain", () => {
-    const html = renderToStaticMarkup(
-      createElement(MoneyPlaneEvidence, {
-        row: row("private-source-id", "INFO", {
-          label: "Operator wallet",
-          kind: "wallet",
-          balance: 10.771234,
-          currency: "USDC",
-          source: "Base JSON-RPC",
-          sourceObservedAt: "2026-10-25T01:30:00Z",
-          freshness: "current",
-          detail: "0.0003 ETH",
-          payAction: FUND_STEWARD,
-        }),
-      })
-    );
-    expect(html).toContain("Base JSON-RPC");
-    expect(html).toContain("10.771234 USDC");
-    expect(html).toContain("Oct 25, 2026, 1:30 AM UTC");
-    expect(html).toContain("User payments → operator wallet → steward wallet");
-    expect(html.split("<dt").length - 1).toBeLessThanOrEqual(6);
-    for (const hidden of ["private-source-id", "reasonCode", "2026-10-25T01:30:00Z", "Unavailable"])
-      expect(html).not.toContain(hidden);
-    const steward = renderToStaticMarkup(
-      createElement(MoneyPlaneEvidence, { row: rows[0] as MoneyPlaneRow })
-    );
-    expect(steward).not.toContain("Money chain");
-  });
-});
-
-describe("row actions", () => {
-  beforeEach(() => {
-    vi.resetAllMocks();
-    vi.unstubAllGlobals();
-  });
-
-  it("fundSteward POSTs the amount-only withdrawal and reports tx or error", async () => {
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ txHash: "0xabc123def456" }) })
-      .mockResolvedValueOnce({ ok: false, status: 402, json: async () => ({ detail: "insufficient funds" }) })
-      .mockRejectedValueOnce(new Error("offline"));
-    await expect(fundSteward(2, fetchImpl as unknown as typeof fetch)).resolves.toEqual({
-      ok: true,
-      txHash: "0xabc123def456",
-    });
-    expect(fetchImpl).toHaveBeenCalledWith(STEWARD_WITHDRAWAL_PATH, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ amountUsd: 2 }),
-    });
-    await expect(fundSteward(2, fetchImpl as unknown as typeof fetch)).resolves.toEqual({
-      ok: false,
-      error: "insufficient funds",
-    });
-    await expect(fundSteward(2, fetchImpl as unknown as typeof fetch)).resolves.toEqual({
-      ok: false,
-      error: "offline",
-    });
-  });
-
-  it("the inline control posts the typed amount and links the broadcast tx", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ txHash: "0x1234567890abcdef" }),
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    render(createElement(RowAction, { action: FUND_STEWARD, label: "Operator wallet" }));
-    const input = screen.getByLabelText(/Fund steward from Operator wallet/);
-    expect(input).toHaveValue(1);
-    fireEvent.change(input, { target: { value: "2.5" } });
-    fireEvent.click(screen.getByRole("button", { name: "Fund steward" }));
-    await waitFor(() =>
-      expect(screen.getByRole("link", { name: /Sent 0x1234…cdef/ })).toHaveAttribute(
-        "href",
-        "https://basescan.org/tx/0x1234567890abcdef"
-      )
-    );
-    expect(fetchMock).toHaveBeenCalledWith(
-      STEWARD_WITHDRAWAL_PATH,
-      expect.objectContaining({ method: "POST", body: JSON.stringify({ amountUsd: 2.5 }) })
-    );
-  });
-
-  it("the inline control shows the server's error text and disables an invalid amount", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({ ok: false, status: 500, json: async () => ({ error: "rpc down" }) })
-    );
-    render(createElement(RowAction, { action: FUND_STEWARD, label: "Operator wallet" }));
-    fireEvent.click(screen.getByRole("button", { name: "Fund steward" }));
-    await waitFor(() => expect(screen.getByText("rpc down")).toBeInTheDocument());
-    fireEvent.change(screen.getByLabelText(/amount in USD/), { target: { value: "0" } });
-    expect(screen.getByRole("button", { name: "Fund steward" })).toBeDisabled();
-  });
-
-  it("renders a checkout link for steward-checkout and nothing without an action", () => {
-    const html = renderToStaticMarkup(
-      createElement(RowAction, { action: OPENROUTER_CHECKOUT, label: "OpenRouter credit" })
-    );
-    expect(html).toContain(`href="${OPENROUTER_CHECKOUT_URL}"`);
-    expect(html).toContain('target="_blank"');
-    expect(html).toContain("Top up");
-    expect(
-      renderToStaticMarkup(createElement(RowAction, { action: undefined, label: "x" }))
-    ).toBe("");
-  });
-});
-
-describe("the Financials page", () => {
-  beforeEach(admit);
-
-  it("renders only the table; the funding panel is gone", async () => {
-    const html = renderToStaticMarkup(await FinancialsPage());
-    expect(html).toContain(">Financials</h1>");
-    expect(html).not.toContain("Provider funding");
-    expect(html).not.toContain("OpenRouter Funding");
-    expect(mocks.snapshot).toHaveBeenCalledTimes(1);
-  });
+	it("the inline control posts the typed amount and links the broadcast tx", async () => {
+		const fetchSpy = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ txHash: "0xabcdef1234567890" }) }));
+		vi.stubGlobal("fetch", fetchSpy);
+		render(createElement(FinanceReportClient, { report: liveShapedPreview as NodeFinanceSnapshot }));
+		const operator = screen.getByRole("table").querySelector<HTMLElement>("tr[data-finance-row='base:operator-wallet']");
+		if (!operator) throw new Error("missing operator row");
+		const amount = within(operator).getByRole("spinbutton", { name: "Fund steward (USD)" });
+		await userEvent.clear(amount);
+		await userEvent.type(amount, "2.5");
+		await userEvent.click(within(operator).getByRole("button", { name: "Fund steward" }));
+		expect(fetchSpy).toHaveBeenCalledWith(
+			STEWARD_WITHDRAWAL_PATH,
+			expect.objectContaining({ method: "POST", body: JSON.stringify({ amountUsd: 2.5 }) }),
+		);
+		expect((await within(operator).findByRole("link", { name: /Sent 0xabcd…7890/ })).getAttribute("href")).toBe(
+			"https://basescan.org/tx/0xabcdef1234567890",
+		);
+		vi.unstubAllGlobals();
+	});
 });

@@ -3,180 +3,248 @@
 /**
  * Module: `app/dev/finance-preview/fixture`
  * Purpose: Explicitly synthetic Financials preview scenarios shaped like this node's real composition.
- * Scope: Static data only; no config, secrets, adapters or provider reads.
- * Invariants: Rows carry the same planes, labels and reason codes the server composition produces.
+ * Scope: Static data only; no config, secrets, adapters or provider reads. Rows are projected to USD and summarized
+ *   through the same package functions the server helper uses.
+ * Invariants: Rows carry the same planes, labels, rails and reason codes the server composition produces.
  * Side-effects: none
- * Links: admin/payments/money-plane.server.ts, admin/payments/MoneyPlaneTable.tsx
+ * Links: admin/payments/money-plane.server.ts, @cogni/money-plane/react
  * @internal
  */
-import type { MoneyPlaneRow, PayAction } from "@cogni/money-plane";
-import type { MoneyPlaneTableProps } from "@/app/(admin)/admin/payments/MoneyPlaneTable";
+import {
+	type MoneyPlaneRow,
+	type PayAction,
+	type Rail,
+	summarize,
+	toUsd,
+} from "@cogni/money-plane";
+
+import type { NodeFinanceSnapshot } from "@/app/(admin)/admin/payments/money-plane.server";
 
 export const PREVIEW_SCENARIOS = ["live-shaped", "sparse"] as const;
 export type PreviewScenario = (typeof PREVIEW_SCENARIOS)[number];
 
 const takenAt = "2026-10-26T19:42:00.000Z";
 const observedAt = "2026-10-26T19:41:58.000Z";
-/** The same actions the server composition attaches (ONE_ROW_MODEL). */
+/** The same actions and rails the server composition attaches (ONE_ROW_MODEL). */
 const FUND_STEWARD: PayAction = { kind: "fund-steward" };
 const OPENROUTER_CHECKOUT: PayAction = {
-  kind: "steward-checkout",
-  vendor: "openrouter",
-  checkoutUrl: "https://openrouter.ai/settings/credits",
+	kind: "steward-checkout",
+	vendor: "openrouter",
+	checkoutUrl: "https://openrouter.ai/settings/credits",
 };
+const STEWARD_RAIL: Rail = { kind: "steward-manual", status: "supported" };
+const NO_RAIL: Rail = { kind: "none", status: "unsupported" };
+const DAO_VOTE: Rail = { kind: "dao-vote", status: "planned", guide: "governance" };
+const OPERATOR_FUNDED: Rail = { kind: "none", status: "planned", guide: "Operator-funded" };
+const SPLIT: Rail = { kind: "split-inflow", status: "supported" };
+const MONEY_CHAIN = "User payments → operator wallet → steward wallet → OpenRouter";
 
 function wallet(
-  plane: string,
-  label: string,
-  balance: number,
-  eth: string,
-  payAction?: PayAction
+	plane: string,
+	label: string,
+	balance: number,
+	eth: string,
+	rail: Rail,
+	extra: Partial<MoneyPlaneRow> = {},
 ): MoneyPlaneRow {
-  return {
-    plane,
-    label,
-    kind: "wallet",
-    balance,
-    currency: "USDC",
-    burnPerDay: null,
-    runwayDays: null,
-    grade: "INFO",
-    observedAt,
-    source: "Base JSON-RPC",
-    sourceObservedAt: observedAt,
-    freshness: "current",
-    detail: eth,
-    ...(payAction ? { payAction } : {}),
-  };
+	return {
+		plane,
+		label,
+		kind: "wallet",
+		balance,
+		currency: "USDC",
+		burnPerDay: null,
+		runwayDays: null,
+		grade: "INFO",
+		observedAt,
+		source: "Base JSON-RPC",
+		sourceObservedAt: observedAt,
+		freshness: "current",
+		detail: eth,
+		rail,
+		...extra,
+	};
 }
 function unreadableWallet(
-  plane: string,
-  label: string,
-  payAction?: PayAction
+	plane: string,
+	label: string,
+	rail: Rail,
+	extra: Partial<MoneyPlaneRow> = {},
 ): MoneyPlaneRow {
-  return {
-    plane,
-    label,
-    kind: "wallet",
-    balance: null,
-    currency: null,
-    burnPerDay: null,
-    runwayDays: null,
-    grade: "UNKNOWN",
-    observedAt,
-    freshness: "unknown",
-    sourceObservedAt: null,
-    reasonCode: "unreadable",
-    detail: "eth_call HTTP 503",
-    ...(payAction ? { payAction } : {}),
-  };
+	return {
+		plane,
+		label,
+		kind: "wallet",
+		balance: null,
+		currency: null,
+		burnPerDay: null,
+		runwayDays: null,
+		grade: "UNKNOWN",
+		observedAt,
+		freshness: "unknown",
+		sourceObservedAt: null,
+		reasonCode: "unreadable",
+		detail: "eth_call HTTP 503",
+		rail,
+		...extra,
+	};
 }
-function operatorCovered(
-  plane: string,
-  label: string,
-  detail: string
-): MoneyPlaneRow {
-  return {
-    plane,
-    label,
-    kind: "usage",
-    balance: null,
-    currency: null,
-    burnPerDay: null,
-    runwayDays: null,
-    grade: "UNKNOWN",
-    observedAt,
-    source: "Operator sponsorship",
-    sourceObservedAt: null,
-    freshness: "unknown",
-    payer: "Operator",
-    beneficiary: "This node",
-    coverage: "operator-covered",
-    reasonCode: "unconfigured",
-    detail,
-  };
+function operatorCovered(plane: string, label: string, detail: string): MoneyPlaneRow {
+	return {
+		plane,
+		label,
+		kind: "usage",
+		balance: null,
+		currency: null,
+		burnPerDay: null,
+		runwayDays: null,
+		grade: "UNKNOWN",
+		observedAt,
+		source: "Operator sponsorship",
+		sourceObservedAt: null,
+		freshness: "unknown",
+		payer: "Operator",
+		beneficiary: "This node",
+		coverage: "operator-covered",
+		reasonCode: "unconfigured",
+		detail,
+		rail: OPERATOR_FUNDED,
+	};
 }
-const hosting = operatorCovered(
-  "hosting:operator-covered",
-  "Hosting",
-  "Funded by operator · cost not yet shared"
-);
-const ai = operatorCovered(
-  "ai:operator-covered",
-  "AI",
-  "Funded by operator · usage not yet shared"
+function income(perDay: number, purchases: number, totalUsd: number): MoneyPlaneRow {
+	return {
+		plane: "income:credit-purchases",
+		label: "Credit purchases",
+		kind: "income",
+		balance: null,
+		currency: "USD",
+		burnPerDay: perDay,
+		runwayDays: null,
+		grade: "INFO",
+		observedAt,
+		source: "payment_attempts · CREDITED · trailing 30 days",
+		sourceObservedAt: observedAt,
+		freshness: "current",
+		detail: `${purchases} purchases · ${totalUsd.toFixed(2)} USD in 30d`,
+		rail: SPLIT,
+	};
+}
+const nodeServices: MoneyPlaneRow = {
+	plane: "income:node-services",
+	label: "Node services",
+	kind: "income",
+	balance: null,
+	currency: null,
+	burnPerDay: null,
+	runwayDays: null,
+	grade: "UNKNOWN",
+	observedAt,
+	sourceObservedAt: null,
+	freshness: "unknown",
+	reasonCode: "unconfigured",
+	detail: "no USDC service income yet",
+	rail: { kind: "x402-auto", status: "planned", guide: "node-service-usdc-northstar" },
+};
+const hosting = operatorCovered("hosting:operator-covered", "Hosting", "Funded by operator · cost not yet shared");
+const ai = operatorCovered("ai:operator-covered", "AI", "Funded by operator · usage not yet shared");
+
+function model(rows: MoneyPlaneRow[], worst: MoneyPlaneRow["grade"]): NodeFinanceSnapshot {
+	const projected = rows.map((row) => toUsd(row, []));
+	return {
+		takenAt,
+		worst,
+		treasuryPlane: "base:dao-treasury",
+		rows: projected,
+		summary: summarize({ rows: projected }, { treasuryPlane: "base:dao-treasury" }),
+	};
+}
+
+/** Every reader answered: no purchases yet, three wallets, OpenRouter credit without a burn measurement, operator-funded lines. */
+export const liveShapedPreview: NodeFinanceSnapshot = model(
+	[
+		income(0, 0, 0),
+		nodeServices,
+		wallet("base:dao-treasury", "DAO treasury", 74.52, "0.0021 ETH", DAO_VOTE),
+		wallet("base:operator-wallet", "Operator wallet", 10.77, "0.0008 ETH", STEWARD_RAIL, {
+			payAction: FUND_STEWARD,
+			note: MONEY_CHAIN,
+		}),
+		wallet("base:steward-wallet", "Steward wallet", 7.07, "0.0003 ETH", NO_RAIL, {
+			note: "Human-custodied; pays OpenRouter in USDC",
+		}),
+		{
+			plane: "openrouter:account",
+			label: "OpenRouter credit",
+			kind: "prepaid",
+			balance: 3.1,
+			currency: "USD",
+			burnPerDay: null,
+			runwayDays: null,
+			grade: "UNKNOWN",
+			observedAt,
+			source: "OpenRouter credits API",
+			sourceObservedAt: observedAt,
+			freshness: "current",
+			reasonCode: "burn_unmeasured",
+			usageTotal: 41.9,
+			payAction: OPENROUTER_CHECKOUT,
+			rail: STEWARD_RAIL,
+		},
+		hosting,
+		ai,
+	],
+	"UNKNOWN",
 );
 
-/** Every reader answered: three wallets, OpenRouter credit without a burn measurement, operator-funded lines. */
-export const liveShapedPreview: MoneyPlaneTableProps = {
-  takenAt,
-  treasuryPlane: "base:dao-treasury",
-  rows: [
-    wallet("base:dao-treasury", "DAO treasury", 74.52, "0.0021 ETH"),
-    wallet(
-      "base:operator-wallet",
-      "Operator wallet",
-      10.77,
-      "0.0008 ETH",
-      FUND_STEWARD
-    ),
-    wallet("base:steward-wallet", "Steward wallet", 7.07, "0.0003 ETH"),
-    {
-      plane: "openrouter:account",
-      label: "OpenRouter credit",
-      kind: "prepaid",
-      balance: 3.1,
-      currency: "USD",
-      burnPerDay: null,
-      runwayDays: null,
-      grade: "UNKNOWN",
-      observedAt,
-      source: "OpenRouter credits API",
-      sourceObservedAt: observedAt,
-      freshness: "current",
-      reasonCode: "burn_unmeasured",
-      usageTotal: 41.9,
-      payAction: OPENROUTER_CHECKOUT,
-    },
-    hosting,
-    ai,
-  ],
-};
-
-/** Wallets configured but the RPC is down, and no OpenRouter key in this environment. */
-export const sparsePreview: MoneyPlaneTableProps = {
-  takenAt,
-  treasuryPlane: "base:dao-treasury",
-  rows: [
-    unreadableWallet("base:dao-treasury", "DAO treasury"),
-    unreadableWallet("base:operator-wallet", "Operator wallet", FUND_STEWARD),
-    unreadableWallet("base:steward-wallet", "Steward wallet"),
-    {
-      plane: "openrouter:account",
-      label: "OpenRouter credit",
-      kind: "prepaid",
-      balance: null,
-      currency: null,
-      burnPerDay: null,
-      runwayDays: null,
-      grade: "UNKNOWN",
-      observedAt,
-      freshness: "unknown",
-      sourceObservedAt: null,
-      reasonCode: "unconfigured",
-      detail: "no OpenRouter key in this environment",
-      payAction: OPENROUTER_CHECKOUT,
-    },
-    hosting,
-    ai,
-  ],
-};
+/** Wallets configured but the RPC is down, no OpenRouter key, and no ledger in this environment. */
+export const sparsePreview: NodeFinanceSnapshot = model(
+	[
+		{
+			...income(0, 0, 0),
+			balance: null,
+			currency: null,
+			burnPerDay: null,
+			grade: "UNKNOWN",
+			reasonCode: "unreadable",
+			detail: "ledger unavailable",
+			sourceObservedAt: null,
+			freshness: "unknown",
+		},
+		nodeServices,
+		unreadableWallet("base:dao-treasury", "DAO treasury", DAO_VOTE),
+		unreadableWallet("base:operator-wallet", "Operator wallet", STEWARD_RAIL, {
+			payAction: FUND_STEWARD,
+			note: MONEY_CHAIN,
+		}),
+		unreadableWallet("base:steward-wallet", "Steward wallet", NO_RAIL),
+		{
+			plane: "openrouter:account",
+			label: "OpenRouter credit",
+			kind: "prepaid",
+			balance: null,
+			currency: null,
+			burnPerDay: null,
+			runwayDays: null,
+			grade: "UNKNOWN",
+			observedAt,
+			freshness: "unknown",
+			sourceObservedAt: null,
+			reasonCode: "unconfigured",
+			detail: "no OpenRouter key in this environment",
+			payAction: OPENROUTER_CHECKOUT,
+			rail: STEWARD_RAIL,
+		},
+		hosting,
+		ai,
+	],
+	"UNKNOWN",
+);
 
 export function previewFor(scenario: string | undefined): {
-  scenario: PreviewScenario;
-  report: MoneyPlaneTableProps;
+	scenario: PreviewScenario;
+	report: NodeFinanceSnapshot;
 } {
-  return scenario === "sparse"
-    ? { scenario: "sparse", report: sparsePreview }
-    : { scenario: "live-shaped", report: liveShapedPreview };
+	return scenario === "sparse"
+		? { scenario: "sparse", report: sparsePreview }
+		: { scenario: "live-shaped", report: liveShapedPreview };
 }

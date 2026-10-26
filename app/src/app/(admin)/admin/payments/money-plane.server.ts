@@ -3,13 +3,14 @@
 
 /**
  * Module: `@app/(admin)/admin/payments/money-plane.server`
- * Purpose: This node's money-plane composition: the repo-spec wallets, the OpenRouter credit this node's key can read,
- *   and the operator-funded Hosting and AI lines, as one read-only report through `@cogni/money-plane`.
+ * Purpose: This node's money-plane composition — income (credited purchases; node services planned), the repo-spec wallets,
+ *   the OpenRouter credit this node's key can read, and the operator-funded Hosting and AI lines — as one snapshot projected
+ *   to USD (ECB rate, fetched only when a non-dollar row exists) with the one summary the package UI renders.
  * Scope: Server-only. Reads repo-spec + server env and hands them to the package readers. Does not move funds,
  *   decide alerts, or render.
  * Invariants: Repo-spec approver authorization precedes credentials and provider reads. READERS_NEVER_THROW.
- *   Unreadable is UNKNOWN, never GREEN. Treasury is identified only from configuration.
- * Side-effects: IO (Base JSON-RPC + OpenRouter reads), one terminal MONEY_PLANE_SNAPSHOT log event.
+ *   Unreadable is UNKNOWN, never GREEN. Treasury is identified only from configuration. Every row carries its rail.
+ * Side-effects: IO (Base JSON-RPC, OpenRouter, ledger read, at most one FX read), one terminal MONEY_PLANE_SNAPSHOT log event.
  * Links: packages/money-plane, https://cognidao.org/knowledge/finances-expert
  * @public
  */
@@ -17,24 +18,33 @@
 import "server-only";
 
 import {
-  BASE_PUBLIC_RPC_URL,
-  baseWalletReader,
-  type FetchLike,
-  type MoneyPlaneRow,
-  type MoneyPlaneSnapshot,
-  openRouterReader,
-  type PayAction,
-  type PlaneReader,
-  takeSnapshot,
+	BASE_PUBLIC_RPC_URL,
+	baseWalletReader,
+	creditPurchaseIncomeReader,
+	fetchEcbRate,
+	type FetchLike,
+	type MoneyPlaneRow,
+	type MoneyPlaneSnapshot,
+	openRouterReader,
+	type PayAction,
+	type PlaneReader,
+	type Rail,
+	type ReportSummary,
+	summarize,
+	takeSnapshot,
+	toUsd,
+	type UsdRate,
+	unknownRow,
 } from "@cogni/money-plane";
 import { redirect } from "next/navigation";
 
+import { creditPurchasesQuery } from "@/bootstrap/capabilities/finance";
 import { getServerSessionUser } from "@/lib/auth/server";
 import {
-  getDaoTreasuryAddress,
-  getOperatorWalletConfig,
-  getStewardWalletConfig,
-  isLedgerApprover,
+	getDaoTreasuryAddress,
+	getOperatorWalletConfig,
+	getStewardWalletConfig,
+	isLedgerApprover,
 } from "@/shared/config";
 import { serverEnv } from "@/shared/env";
 import { EVENT_NAMES, makeLogger } from "@/shared/observability";
@@ -45,167 +55,243 @@ const log = makeLogger({ route: "admin.payments" });
 const SNAPSHOT_TIMEOUT_MS = 8_000;
 /** The human checkout the steward wallet pays into; the row's Action opens it. */
 export const OPENROUTER_CHECKOUT_URL = "https://openrouter.ai/settings/credits";
+const DOLLAR = new Set(["USD", "USDC"]);
+const STEWARD_RAIL: Rail = { kind: "steward-manual", status: "supported" };
+const NO_RAIL: Rail = { kind: "none", status: "unsupported" };
+/** Paid by the operator on this node's behalf until task.5354 shares the scoped cost. */
+const OPERATOR_FUNDED: Rail = { kind: "none", status: "planned", guide: "Operator-funded" };
+const MONEY_CHAIN = "User payments → operator wallet → steward wallet → OpenRouter";
 
-const noStoreFetch: FetchLike = (url, init) =>
-  fetch(url, { ...init, cache: "no-store" });
+const noStoreFetch: FetchLike = (url, init) => fetch(url, { ...init, cache: "no-store" });
 
 export interface NodeFinanceSnapshot extends MoneyPlaneSnapshot {
-  /** Plane id of the configured DAO treasury row, or null when repo-spec names none. */
-  treasuryPlane: string | null;
+	/** Plane id of the configured DAO treasury row, or null when repo-spec names none. */
+	treasuryPlane: string | null;
+	summary: ReportSummary;
 }
 
 /**
  * A cost the operator pays on this node's behalf. The node holds no credential for it,
  * so balance and burn stay null until the operator shares the scoped cost (task.5354).
- * Note: the package grading floor normalizes a non-wallet INFO row to UNKNOWN.
  */
-function operatorCoveredReader(
-  plane: string,
-  label: string,
-  detail: string
-): PlaneReader {
-  return {
-    plane,
-    label,
-    kind: "usage",
-    async read(): Promise<MoneyPlaneRow> {
-      return {
-        plane,
-        label,
-        kind: "usage",
-        balance: null,
-        currency: null,
-        burnPerDay: null,
-        runwayDays: null,
-        grade: "INFO",
-        observedAt: new Date().toISOString(),
-        source: "Operator sponsorship",
-        sourceObservedAt: null,
-        freshness: "unknown",
-        payer: "Operator",
-        beneficiary: "This node",
-        coverage: "operator-covered",
-        reasonCode: "unconfigured",
-        detail,
-      };
-    },
-  };
+function operatorCoveredReader(plane: string, label: string, detail: string): PlaneReader {
+	return {
+		plane,
+		label,
+		kind: "usage",
+		async read(): Promise<MoneyPlaneRow> {
+			return {
+				...unknownRow({
+					plane,
+					label,
+					kind: "usage",
+					reasonCode: "unconfigured",
+					observedAt: new Date().toISOString(),
+					detail,
+				}),
+				source: "Operator sponsorship",
+				payer: "Operator",
+				beneficiary: "This node",
+				coverage: "operator-covered",
+				rail: OPERATOR_FUNDED,
+			};
+		},
+	};
+}
+
+/** Attach the fields the package readers do not know about (rail, note). */
+function withRow(reader: PlaneReader, extra: Partial<MoneyPlaneRow>): PlaneReader {
+	return { ...reader, read: async (signal) => ({ ...(await reader.read(signal)), ...extra }) };
+}
+
+function plannedIncomeReader(): PlaneReader {
+	const plane = "income:node-services";
+	const label = "Node services";
+	return {
+		plane,
+		label,
+		kind: "income",
+		async read(): Promise<MoneyPlaneRow> {
+			return {
+				...unknownRow({
+					plane,
+					label,
+					kind: "income",
+					reasonCode: "unconfigured",
+					observedAt: new Date().toISOString(),
+					detail: "no USDC service income yet",
+				}),
+				rail: { kind: "x402-auto", status: "planned", guide: "node-service-usdc-northstar" },
+			};
+		},
+	};
+}
+
+function incomeReader(): PlaneReader {
+	const query = creditPurchasesQuery();
+	if (query) return creditPurchaseIncomeReader({ query });
+	const plane = "income:credit-purchases";
+	const label = "Credit purchases";
+	return {
+		plane,
+		label,
+		kind: "income",
+		async read(): Promise<MoneyPlaneRow> {
+			return {
+				...unknownRow({
+					plane,
+					label,
+					kind: "income",
+					reasonCode: "unreadable",
+					observedAt: new Date().toISOString(),
+					detail: "ledger unavailable",
+				}),
+				rail: { kind: "split-inflow", status: "supported" },
+			};
+		},
+	};
 }
 
 function readers(): { readers: PlaneReader[]; treasuryPlane: string | null } {
-  const env = serverEnv();
-  const wallet = {
-    rpcUrl: env.EVM_RPC_URL ?? BASE_PUBLIC_RPC_URL,
-    fetch: noStoreFetch,
-    usdcAddress: USDC_TOKEN_ADDRESS,
-  };
-  const operator = getOperatorWalletConfig()?.address;
-  const steward = getStewardWalletConfig()?.address;
-  const configured: {
-    name: string;
-    label: string;
-    address: string | null | undefined;
-    payAction?: PayAction;
-  }[] = [
-    { name: "dao-treasury", label: "DAO treasury", address: getDaoTreasuryAddress() },
-    {
-      name: "operator-wallet",
-      label: "Operator wallet",
-      address: operator,
-      // Fund-steward moves operator USDC to the steward; without a steward there is nowhere to send it.
-      ...(steward ? { payAction: { kind: "fund-steward" as const } } : {}),
-    },
-    { name: "steward-wallet", label: "Steward wallet", address: steward },
-  ];
-  // One reader per distinct address: two roles on the same account are one balance, not two.
-  let treasuryPlane: string | null = null;
-  const accounts = new Map<string, (typeof configured)[number]>();
-  for (const account of configured) {
-    const address = account.address;
-    const key =
-      address && /^0x[0-9a-fA-F]{40}$/.test(address)
-        ? `base:${wallet.usdcAddress.toLowerCase()}:${address.toLowerCase()}`
-        : account.name;
-    const prior = accounts.get(key);
-    if (account.name === "dao-treasury" && address)
-      treasuryPlane = `base:${prior?.name ?? account.name}`;
-    if (prior) {
-      prior.label = `${prior.label} / ${account.label}`;
-      if (prior.payAction === undefined && account.payAction !== undefined)
-        prior.payAction = account.payAction;
-    } else accounts.set(key, { ...account });
-  }
-  return {
-    treasuryPlane,
-    readers: [
-      ...[...accounts.values()].map((account) =>
-        baseWalletReader({ ...wallet, ...account })
-      ),
-      openRouterReader({
-        apiKey: env.OPENROUTER_API_KEY,
-        fetch: noStoreFetch,
-        label: "OpenRouter credit",
-        payAction: {
-          kind: "steward-checkout",
-          vendor: "openrouter",
-          checkoutUrl: OPENROUTER_CHECKOUT_URL,
-        },
-      }),
-      operatorCoveredReader(
-        "hosting:operator-covered",
-        "Hosting",
-        "Funded by operator · cost not yet shared"
-      ),
-      operatorCoveredReader(
-        "ai:operator-covered",
-        "AI",
-        "Funded by operator · usage not yet shared"
-      ),
-    ],
-  };
+	const env = serverEnv();
+	const wallet = {
+		rpcUrl: env.EVM_RPC_URL ?? BASE_PUBLIC_RPC_URL,
+		fetch: noStoreFetch,
+		usdcAddress: USDC_TOKEN_ADDRESS,
+	};
+	const operator = getOperatorWalletConfig()?.address;
+	const steward = getStewardWalletConfig()?.address;
+	const configured: {
+		name: string;
+		label: string;
+		address: string | null | undefined;
+		payAction?: PayAction;
+		rail: Rail;
+		note?: string;
+	}[] = [
+		{
+			name: "dao-treasury",
+			label: "DAO treasury",
+			address: getDaoTreasuryAddress(),
+			rail: { kind: "dao-vote", status: "planned", guide: "governance" },
+		},
+		{
+			name: "operator-wallet",
+			label: "Operator wallet",
+			address: operator,
+			// Fund-steward moves operator USDC to the steward; without a steward there is nowhere to send it.
+			...(steward
+				? { payAction: { kind: "fund-steward" as const }, rail: STEWARD_RAIL }
+				: { rail: { kind: "steward-manual" as const, status: "unsupported" as const } }),
+			note: MONEY_CHAIN,
+		},
+		{
+			name: "steward-wallet",
+			label: "Steward wallet",
+			address: steward,
+			rail: NO_RAIL,
+			note: "Human-custodied; pays OpenRouter in USDC",
+		},
+	];
+	// One reader per distinct address: two roles on the same account are one balance, not two.
+	let treasuryPlane: string | null = null;
+	const accounts = new Map<string, (typeof configured)[number]>();
+	for (const account of configured) {
+		const address = account.address;
+		const key =
+			address && /^0x[0-9a-fA-F]{40}$/.test(address)
+				? `base:${wallet.usdcAddress.toLowerCase()}:${address.toLowerCase()}`
+				: account.name;
+		const prior = accounts.get(key);
+		if (account.name === "dao-treasury" && address) treasuryPlane = `base:${prior?.name ?? account.name}`;
+		if (prior) {
+			prior.label = `${prior.label} / ${account.label}`;
+			if (prior.payAction === undefined && account.payAction !== undefined) {
+				prior.payAction = account.payAction;
+				prior.rail = account.rail;
+			}
+			if (prior.note === undefined && account.note !== undefined) prior.note = account.note;
+		} else accounts.set(key, { ...account });
+	}
+	return {
+		treasuryPlane,
+		readers: [
+			incomeReader(),
+			plannedIncomeReader(),
+			...[...accounts.values()].map(({ rail, note, ...account }) =>
+				withRow(baseWalletReader({ ...wallet, ...account }), { rail, ...(note ? { note } : {}) }),
+			),
+			withRow(
+				openRouterReader({
+					apiKey: env.OPENROUTER_API_KEY,
+					fetch: noStoreFetch,
+					label: "OpenRouter credit",
+					payAction: {
+						kind: "steward-checkout",
+						vendor: "openrouter",
+						checkoutUrl: OPENROUTER_CHECKOUT_URL,
+					},
+				}),
+				{ rail: STEWARD_RAIL },
+			),
+			operatorCoveredReader("hosting:operator-covered", "Hosting", "Funded by operator · cost not yet shared"),
+			operatorCoveredReader("ai:operator-covered", "AI", "Funded by operator · usage not yet shared"),
+		],
+	};
 }
 
 /** Authorize at the data boundary, then emit one terminal event per admitted report read. */
 export async function getMoneyPlaneSnapshot(): Promise<NodeFinanceSnapshot> {
-  // Layouts may render concurrently with their children; gate before credentials or IO.
-  const user = await getServerSessionUser();
-  if (!isLedgerApprover(user?.walletAddress ?? null)) redirect("/dashboard");
+	// Layouts may render concurrently with their children; gate before credentials or IO.
+	const user = await getServerSessionUser();
+	if (!isLedgerApprover(user?.walletAddress ?? null)) redirect("/dashboard");
 
-  const started = Date.now();
-  try {
-    const composition = readers();
-    const snapshot = await takeSnapshot(composition.readers, {
-      timeoutMs: SNAPSHOT_TIMEOUT_MS,
-    });
-    log.info(
-      {
-        event: EVENT_NAMES.MONEY_PLANE_SNAPSHOT,
-        outcome: "success",
-        durationMs: Date.now() - started,
-        worst: snapshot.worst,
-        planes: snapshot.rows.map((r) => ({
-          plane: r.plane,
-          grade: r.grade,
-          reasonCode: r.reasonCode ?? null,
-        })),
-      },
-      EVENT_NAMES.MONEY_PLANE_SNAPSHOT
-    );
-    return { ...snapshot, treasuryPlane: composition.treasuryPlane };
-  } catch (error) {
-    // takeSnapshot never rejects; this is the composition failing (env or
-    // repo-spec unreadable). Log the enum, never the raw message.
-    log.error(
-      {
-        event: EVENT_NAMES.MONEY_PLANE_SNAPSHOT,
-        outcome: "error",
-        errorCode: "composition_failed",
-        durationMs: Date.now() - started,
-        worst: "UNKNOWN",
-        planes: [],
-      },
-      EVENT_NAMES.MONEY_PLANE_SNAPSHOT
-    );
-    throw error;
-  }
+	const started = Date.now();
+	try {
+		const composition = readers();
+		const snapshot = await takeSnapshot(composition.readers, {
+			timeoutMs: SNAPSHOT_TIMEOUT_MS,
+		});
+		const foreign = new Set(
+			snapshot.rows
+				.flatMap((row) => [row, ...(row.children ?? [])])
+				.map((row) => row.currency)
+				.filter((c): c is string => Boolean(c) && !DOLLAR.has(c as string)),
+		);
+		const rates = (
+			await Promise.all([...foreign].map((currency) => fetchEcbRate(noStoreFetch, `${currency}USD`)))
+		).filter((rate): rate is UsdRate => rate !== null);
+		const rows = snapshot.rows.map((row) => toUsd(row, rates));
+		const summary = summarize({ rows }, { treasuryPlane: composition.treasuryPlane });
+		log.info(
+			{
+				event: EVENT_NAMES.MONEY_PLANE_SNAPSHOT,
+				outcome: "success",
+				durationMs: Date.now() - started,
+				worst: snapshot.worst,
+				planes: rows.map((r) => ({
+					plane: r.plane,
+					grade: r.grade,
+					reasonCode: r.reasonCode ?? null,
+				})),
+			},
+			EVENT_NAMES.MONEY_PLANE_SNAPSHOT,
+		);
+		return { ...snapshot, rows, treasuryPlane: composition.treasuryPlane, summary };
+	} catch (error) {
+		// takeSnapshot never rejects; this is the composition failing (env or
+		// repo-spec unreadable). Log the enum, never the raw message.
+		log.error(
+			{
+				event: EVENT_NAMES.MONEY_PLANE_SNAPSHOT,
+				outcome: "error",
+				errorCode: "composition_failed",
+				durationMs: Date.now() - started,
+				worst: "UNKNOWN",
+				planes: [],
+			},
+			EVENT_NAMES.MONEY_PLANE_SNAPSHOT,
+		);
+		throw error;
+	}
 }
