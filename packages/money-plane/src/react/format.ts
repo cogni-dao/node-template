@@ -111,7 +111,7 @@ export function nativeLabel(amount: string, currency: string): string {
     return `${(value / 1e6).toLocaleString("en-US", {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
-    })} USD credit (${value.toLocaleString("en-US")} uact)`;
+    })} USD credit (${amount} uact)`;
   }
   return `${amount} ${currency}`;
 }

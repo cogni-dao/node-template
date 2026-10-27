@@ -588,7 +588,7 @@ describe("the Financials page and its package binding", () => {
 		vi.unstubAllGlobals();
 	});
 
-	it.each([{}, { txHash: transactionHash }, { txHash: null, receiptStatus: "success" }, { txHash: "0xabc", receiptStatus: "success" }, { txHash: transactionHash, receiptStatus: "unknown-status" }])("treats malformed success as unknown: %j", async (body) => {
+	it.each([{}, { txHash: null, receiptStatus: "success" }, { txHash: "0xabc", receiptStatus: "success" }])("treats malformed success as unknown: %j", async (body) => {
 		const post = vi.fn(async () => ({ ok: true, status: 200, json: async () => body }));
 		await expect(fundSteward(1, post as unknown as typeof fetch)).rejects.toThrow();
 	});
@@ -776,4 +776,42 @@ it("does not display unknown-denomination burn as dollars", () => {
   expect(screen.queryAllByText("$1.00/day")).toHaveLength(0);
   expect(document.querySelector("[data-finance-stat='Burn']")?.textContent).toBe("—");
   expect(summary.costCoverageGaps).toEqual(["Unconverted cost"]);
+});
+
+
+it.each([200, 400, 403, 422, 503, 502])("preserves known broadcast evidence and locks despite HTTP %s", async (status) => {
+  const post = vi.fn(async () => ({ ok: status === 200, status, json: async () => ({ txHash: transactionHash, code: "OPERATOR_WALLET_UNCONFIGURED" }) }));
+  vi.stubGlobal("fetch", post);
+  try {
+    render(createElement(FinanceReportClient, { report: liveShapedPreview as NodeFinanceSnapshot }));
+    await userEvent.click(screen.getAllByRole("button", { name: "Fund steward" })[0]!);
+    expect(screen.getAllByRole("link", { name: /Sent 0xaaaa/ })).toHaveLength(2);
+    for (const button of screen.getAllByRole("button", { name: "Fund steward" })) expect((button as HTMLButtonElement).disabled).toBe(true);
+    expect(post).toHaveBeenCalledTimes(1);
+  } finally { vi.unstubAllGlobals(); }
+});
+it.each(["returned", "thrown", "rejected"])("shared report retains a valid hash from a %s incomplete action outcome", async (mode) => {
+  const action = vi.fn(async () => {
+    const evidence = { txHash: transactionHash, receiptStatus: "unrecognized" };
+    if (mode === "rejected") throw Object.assign(new StewardWithdrawalRejected("refused"), evidence);
+    if (mode === "thrown") throw Object.assign(new Error("response incomplete"), evidence);
+    return evidence as unknown as Awaited<ReturnType<typeof fundSteward>>;
+  });
+  render(createElement(FinanceReportClient, { report: liveShapedPreview as NodeFinanceSnapshot, actions: { fundSteward: action } }));
+  await userEvent.click(screen.getAllByRole("button", { name: "Fund steward" })[0]!);
+  expect(screen.getAllByRole("link", { name: /Sent 0xaaaa/ })).toHaveLength(2);
+  for (const button of screen.getAllByRole("button", { name: "Fund steward" })) expect((button as HTMLButtonElement).disabled).toBe(true);
+});
+it("preserves exact long and fractional uact source strings", async () => {
+  const exact = "9007199254740993.123456789";
+  const rows: MoneyPlaneRow[] = [{ plane: "native", label: "Exact source", kind: "wallet", currency: "USD", balance: 1, burnPerDay: null, runwayDays: null, grade: "INFO", observedAt: takenAt, parts: [{ label: "Escrow", amount: exact, currency: "uact" }], cumulativeVendorTransfer: { amount: "0.000000001", currency: "uact" } }];
+  render(createElement(FinanceReportClient, { report: { ...liveShapedPreview, rows, summary: summarize({ rows }) } as NodeFinanceSnapshot }));
+  await userEvent.click(screen.getAllByRole("button", { name: "Exact source" })[0]!);
+  expect(screen.getByRole("dialog").textContent).toContain(`${exact} uact`);
+  expect(screen.getByRole("dialog").textContent).toContain("0.000000001 uact");
+});
+
+it("does not accept success claimed by an error HTTP response with a known hash", async () => {
+  const post = vi.fn(async () => ({ ok: false, status: 503, json: async () => ({ txHash: transactionHash, receiptStatus: "success", code: "OPERATOR_WALLET_UNCONFIGURED" }) }));
+  await expect(fundSteward(1, post as unknown as typeof fetch)).resolves.toEqual({ txHash: transactionHash, receiptStatus: "pending" });
 });

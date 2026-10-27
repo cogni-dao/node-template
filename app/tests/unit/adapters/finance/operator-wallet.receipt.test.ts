@@ -17,9 +17,25 @@ describe("steward receipt outcomes", () => {
  beforeEach(() => { vi.resetAllMocks(); vi.stubGlobal("fetch", network); fake.send.mockResolvedValue({ hash: fake.hash }); });
  afterEach(() => { expect(network).not.toHaveBeenCalled(); vi.unstubAllGlobals(); });
  it.each(["success", "reverted"] as const)("preserves %s rather than treating any mined receipt as funding", async (status) => {
-  fake.receipt.mockResolvedValue({ status });
+  fake.receipt.mockResolvedValue({ status, transactionHash: fake.hash });
   await expect(adapter().withdrawToSteward(1_000_000n)).resolves.toEqual({ txHash: fake.hash, receiptStatus: status });
   expect(fake.send).toHaveBeenCalledTimes(1);
+ });
+ it.each([
+  ["cancellation", { status: "success", transactionHash: `0x${"b".repeat(64)}` }],
+  ["unrelated replacement", { status: "success", transactionHash: `0x${"c".repeat(64)}` }],
+  ["repricing", { status: "success", transactionHash: `0x${"d".repeat(64)}` }],
+  ["reverted replacement", { status: "reverted", transactionHash: `0x${"b".repeat(64)}` }],
+  ["missing identity", { status: "success" }],
+  ["invalid identity", { status: "success", transactionHash: "0xabc" }],
+  ["unsupported status", { status: "unknown", transactionHash: fake.hash }],
+ ])("keeps original broadcast pending for %s", async (_reason, receipt) => {
+  fake.receipt.mockResolvedValue(receipt);
+  await expect(adapter().withdrawToSteward(1_000_000n)).resolves.toEqual({ txHash: fake.hash, receiptStatus: "pending" });
+ });
+ it("compares receipt identity without hex-letter case sensitivity", async () => {
+  fake.receipt.mockResolvedValue({ status: "success", transactionHash: `0x${"A".repeat(64)}` });
+  await expect(adapter().withdrawToSteward(1_000_000n)).resolves.toEqual({ txHash: fake.hash, receiptStatus: "success" });
  });
  it("keeps a pending broadcast hash when receipt reading fails", async () => {
   fake.receipt.mockRejectedValue(new Error("RPC timeout"));

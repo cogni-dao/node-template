@@ -90,6 +90,7 @@ export function applyGradingFloor(input: MoneyPlaneRow): MoneyPlaneRow {
     missingPrepaidBalance;
   const row: MoneyPlaneRow = {
     ...input,
+    ...(input.children ? { children: input.children.map(applyGradingFloor) } : {}),
     balance: invalidBalance ? null : input.balance,
     burnPerDay: invalidBurn ? null : input.burnPerDay,
     ...(invalidBurn ? { reasonCode: "burn_unmeasured" as const } : {}),
@@ -125,7 +126,7 @@ export function applyGradingFloor(input: MoneyPlaneRow): MoneyPlaneRow {
       row.burnPerDay !== null;
     if (!holding && !flow) return { ...row, grade: "UNKNOWN" };
   }
-  if (row.grade !== "GREEN" && row.grade !== "YELLOW") return row;
+  if (row.grade !== "GREEN" && row.grade !== "YELLOW" && row.grade !== "INFO") return row;
   if (row.freshness === "stale") {
     return { ...row, grade: "UNKNOWN", reasonCode: "stale" };
   }

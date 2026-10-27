@@ -414,3 +414,29 @@ describe("takeSnapshot", () => {
     expect(snap.worst).toBe("UNKNOWN");
   });
 });
+
+
+it.each([
+  ["stale", { freshness: "stale" as const }],
+  ["invalid burn", { burnPerDay: Number.NaN }],
+  ["unreadable", { reasonCode: "unreadable" as const }],
+])("normalizes nested %s children and includes their grade in snapshot worst", async (_label, evidence) => {
+  const snap = await takeSnapshot([reader("parent", async () => row({ plane: "parent", children: [row({ plane: "child", children: [row({ plane: "grandchild", ...evidence })] })] }))], { timeoutMs: 1000, now });
+  const child = snap.rows[0]?.children?.[0]?.children?.[0];
+  expect(child?.grade).toBe("UNKNOWN");
+  expect(snap.worst).toBe("UNKNOWN");
+  expect(JSON.stringify(snap)).not.toContain('"burnPerDay":null,"runwayDays":100');
+});
+it("includes a red descendant in snapshot worst without replacing its parent total", async () => {
+  const snap = await takeSnapshot([reader("parent", async () => row({ plane: "parent", children: [row({ plane: "empty", grade: "RED", balance: 0, runwayDays: 0 })] }))], { timeoutMs: 1000, now });
+  expect(snap.worst).toBe("RED");
+  expect(snap.rows[0]?.burnPerDay).toBe(1);
+});
+
+it.each(["wallet", "income", "usage", "fixed"] as const)("demotes stale or failed INFO %s descendants", async (kind) => {
+  for (const evidence of [{ freshness: "stale" as const }, { reasonCode: "unreadable" as const }, { sourceObservedAt: null }]) {
+    const snap = await takeSnapshot([reader("parent", async () => row({ plane: "parent", children: [row({ plane: "child", kind, grade: "INFO", balance: kind === "wallet" ? 5 : null, ...evidence })] }))], { timeoutMs: 1000, now });
+    expect(snap.rows[0]?.children?.[0]?.grade).toBe("UNKNOWN");
+    expect(snap.worst).toBe("UNKNOWN");
+  }
+});

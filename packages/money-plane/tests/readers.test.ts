@@ -186,6 +186,15 @@ describe("baseWalletReader", () => {
     expect(r.payAction).toEqual({ kind: "fund-steward" });
   });
 
+  it("retains exact native USDC and ETH evidence beyond floating-point precision", async () => {
+    const { fetch } = rpc(9999999999999999n, 9007199254740993123456789n);
+    const r = await baseWalletReader({ name: "large", label: "Large wallet", address: ADDRESS, rpcUrl: RPC, fetch, now }).read(signal);
+    expect(r.parts).toEqual([
+      { label: "USDC · exact", amount: "9999999999.999999", currency: "USDC" },
+      { label: "Gas · exact", amount: "9007199.254740993123456789", currency: "ETH" },
+    ]);
+  });
+
   it("is UNKNOWN unconfigured with no address and keeps its payAction", async () => {
     const { fetch, calls } = rpc(0n, 0n);
     const r = await baseWalletReader({

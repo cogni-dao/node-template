@@ -276,7 +276,19 @@ export class PrivyOperatorWalletAdapter implements OperatorWalletPort {
 				hash: result.hash as Hex,
 				confirmations: 1,
 			});
-			return { txHash: result.hash, receiptStatus: receipt.status === "success" ? "success" : receipt.status === "reverted" ? "reverted" : "pending" };
+			// Viem follows replacements, including cancellations. A different mined transaction
+			// cannot prove this steward transfer; retain the original hash and uncertainty.
+			const sameTransaction =
+				typeof receipt.transactionHash === "string" &&
+				/^0x[0-9a-fA-F]{64}$/.test(receipt.transactionHash) &&
+				/^0x[0-9a-fA-F]{64}$/.test(result.hash) &&
+				receipt.transactionHash.toLowerCase() === result.hash.toLowerCase();
+			return {
+				txHash: result.hash,
+				receiptStatus: sameTransaction && (receipt.status === "success" || receipt.status === "reverted")
+					? receipt.status
+					: "pending",
+			};
 		} catch {
 			return { txHash: result.hash, receiptStatus: "pending" };
 		}

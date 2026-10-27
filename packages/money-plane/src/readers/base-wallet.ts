@@ -41,9 +41,14 @@ export interface BaseWalletReaderOptions {
 
 class RpcError extends Error {}
 
+/** Format unsigned RPC quantities without rounding their exact source evidence. */
+function exactUnits(raw: bigint, decimals: number): string {
+  const digits = raw.toString().padStart(decimals + 1, "0");
+  const fraction = digits.slice(-decimals).replace(/0+$/, "");
+  return `${digits.slice(0, -decimals)}${fraction ? `.${fraction}` : ""}`;
+}
 function toUnits(raw: bigint, decimals: number): number {
-  const scale = 10n ** BigInt(decimals);
-  return Number(raw / scale) + Number(raw % scale) / Number(scale);
+  return Number(exactUnits(raw, decimals));
 }
 
 function formatEth(eth: number): string {
@@ -130,6 +135,10 @@ export function baseWalletReader(
           sourceObservedAt: observedAt,
           freshness: "current",
           detail: formatEth(toUnits(wei, 18)),
+          parts: [
+            { label: "USDC · exact", amount: exactUnits(usdcRaw, 6), currency: "USDC" },
+            { label: "Gas · exact", amount: exactUnits(wei, 18), currency: "ETH" },
+          ],
           ...withAction,
         };
       } catch (error) {

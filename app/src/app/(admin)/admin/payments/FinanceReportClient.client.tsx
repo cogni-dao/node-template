@@ -13,7 +13,7 @@
  */
 "use client";
 
-import { StewardWithdrawalRejected } from "@cogni/money-plane";
+import { readStewardWithdrawal, StewardWithdrawalRejected } from "@cogni/money-plane";
 import { type FinanceActions, FinanceReport } from "@cogni/money-plane/react";
 import { useRouter } from "next/navigation";
 
@@ -59,15 +59,13 @@ export async function fundSteward(
 	} catch {
 		throw new Error(`Response unreadable (HTTP ${res.status})`);
 	}
-	if (res.ok) {
-		if (typeof data?.txHash !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(data.txHash) || (data.receiptStatus !== "success" && data.receiptStatus !== "reverted" && data.receiptStatus !== "pending")) {
-			throw new Error("Withdrawal response missing valid transaction evidence");
-		}
-		return { txHash: data.txHash, receiptStatus: data.receiptStatus };
-	}
-	const reason = data.detail ?? data.error ?? data.code ?? `HTTP ${res.status}`;
+	// Broadcast evidence outranks HTTP refusal labels; it must remain locked and inspectable.
+	const outcome = readStewardWithdrawal(data);
+	if (outcome) return res.ok ? outcome : { ...outcome, receiptStatus: "pending" };
+	if (res.ok) throw new Error("Withdrawal response missing valid transaction evidence");
+	const reason = data?.detail ?? data?.error ?? data?.code ?? `HTTP ${res.status}`;
 	const preBroadcast =
-		res.status === 400 || res.status === 403 || (res.status === 503 && /_UNCONFIGURED$/.test(data.code ?? ""));
+		res.status === 400 || res.status === 403 || (res.status === 503 && /_UNCONFIGURED$/.test(data?.code ?? ""));
 	if (preBroadcast) throw new StewardWithdrawalRejected(reason);
 	throw new Error(`${reason} (HTTP ${res.status})`);
 }

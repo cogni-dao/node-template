@@ -27,7 +27,7 @@ import {
 
 import { usdBalance, usdBurn } from "../fx";
 import type { ReportSummary } from "../report";
-import { isStewardWithdrawalRejected } from "../steward";
+import { isStewardWithdrawalRejected, readStewardWithdrawal } from "../steward";
 import type { MoneyPlaneRow, PayAction, Rail } from "../types";
 import {
   balanceLabel,
@@ -292,15 +292,17 @@ function useStewardWithdrawal(fundSteward: FinanceActions["fundSteward"]) {
     setError(null);
     setTxHash(null);
     try {
-      const result = await fundSteward(Number(amount));
-      if (!result || typeof result.txHash !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(result.txHash) || (result.receiptStatus !== "success" && result.receiptStatus !== "reverted" && result.receiptStatus !== "pending")) {
-        throw new Error("Withdrawal response missing valid transaction evidence");
-      }
+      const result = readStewardWithdrawal(await fundSteward(Number(amount)));
+      if (!result) throw new Error("Withdrawal response missing valid transaction evidence");
       setTxHash(result.txHash);
       setPhase(result.receiptStatus);
       if (result.receiptStatus === "success") inFlight.current = false;
     } catch (err) {
-      if (isStewardWithdrawalRejected(err)) {
+      const broadcast = readStewardWithdrawal(err);
+      if (broadcast) {
+        setTxHash(broadcast.txHash);
+        setPhase("pending");
+      } else if (isStewardWithdrawalRejected(err)) {
         setError(err instanceof Error ? err.message : String(err));
         setPhase("rejected");
         inFlight.current = false;

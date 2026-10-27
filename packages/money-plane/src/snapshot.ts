@@ -89,5 +89,7 @@ export async function takeSnapshot(
   const rows = await Promise.all(
     readers.map((r) => settle(r, options.timeoutMs, now))
   );
-  return { takenAt, rows, worst: worstGrade(rows.map((r) => r.grade)) };
+  const treeGrade = (row: MoneyPlaneRow): MoneyPlaneRow["grade"] =>
+    worstGrade([row.grade, ...(row.children ?? []).map(treeGrade)]);
+  return { takenAt, rows, worst: worstGrade(rows.map(treeGrade)) };
 }
