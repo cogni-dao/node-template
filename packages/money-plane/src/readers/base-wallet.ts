@@ -17,6 +17,7 @@ import type {
   MoneyPlaneRow,
   PayAction,
   PlaneReader,
+  WalletIdentity,
 } from "../types";
 
 /** Native USDC on Base mainnet (6 decimals). */
@@ -61,10 +62,20 @@ export function baseWalletReader(
   const plane = `base:${options.name}`;
   const now = options.now ?? (() => new Date());
   const usdc = options.usdcAddress ?? BASE_USDC_ADDRESS;
+  const address = options.address;
+  const wallet: WalletIdentity | undefined =
+    address && ADDRESS_PATTERN.test(address)
+      ? {
+          address,
+          network: "Base",
+          explorerUrl: `https://basescan.org/address/${address}`,
+        }
+      : undefined;
+  const withWallet = wallet === undefined ? {} : { wallet };
   const withAction =
     options.payAction === undefined ? {} : { payAction: options.payAction };
-  const unknown = (reasonCode: "unconfigured" | "unreadable", detail: string) =>
-    unknownRow({
+  const unknown = (reasonCode: "unconfigured" | "unreadable", detail: string) => ({
+    ...unknownRow({
       plane,
       label: options.label,
       kind: "wallet",
@@ -72,7 +83,9 @@ export function baseWalletReader(
       observedAt: now().toISOString(),
       detail,
       ...withAction,
-    });
+    }),
+    ...withWallet,
+  });
 
   async function rpc(
     id: number,
@@ -109,8 +122,8 @@ export function baseWalletReader(
     label: options.label,
     kind: "wallet",
     ...withAction,
+    ...withWallet,
     async read(signal): Promise<MoneyPlaneRow> {
-      const address = options.address;
       if (!address) return unknown("unconfigured", "no address in repo-spec");
       if (!ADDRESS_PATTERN.test(address))
         return unknown("unconfigured", "address is not 0x + 40 hex");
@@ -140,6 +153,7 @@ export function baseWalletReader(
             { label: "Gas · exact", amount: exactUnits(wei, 18), currency: "ETH" },
           ],
           ...withAction,
+          ...withWallet,
         };
       } catch (error) {
         // Only our own RpcError text is trusted verbatim; anything else may echo the RPC URL.

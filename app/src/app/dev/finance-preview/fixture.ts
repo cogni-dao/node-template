@@ -39,6 +39,16 @@ const OPERATOR_FUNDED: Rail = { kind: "none", status: "planned", guide: "Operato
 const SPLIT: Rail = { kind: "split-inflow", status: "supported" };
 const MONEY_CHAIN = "User payments → operator wallet → steward wallet → OpenRouter";
 
+const PREVIEW_WALLETS: Record<string, string> = {
+	"base:dao-treasury": `0x${"1".repeat(40)}`,
+	"base:operator-wallet": `0x${"2".repeat(40)}`,
+	"base:steward-wallet": `0x${"3".repeat(40)}`,
+};
+function walletIdentity(plane: string) {
+	const address = PREVIEW_WALLETS[plane];
+	return address ? { wallet: { address, network: "Base", explorerUrl: `https://basescan.org/address/${address}` } } : {};
+}
+
 function wallet(
 	plane: string,
 	label: string,
@@ -51,6 +61,7 @@ function wallet(
 		plane,
 		label,
 		kind: "wallet",
+		...walletIdentity(plane),
 		balance,
 		currency: "USDC",
 		burnPerDay: null,
@@ -75,6 +86,7 @@ function unreadableWallet(
 		plane,
 		label,
 		kind: "wallet",
+		...walletIdentity(plane),
 		balance: null,
 		currency: null,
 		burnPerDay: null,

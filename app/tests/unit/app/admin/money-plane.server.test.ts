@@ -847,3 +847,50 @@ it("labels partial Cash received coverage without counting stale income", () => 
   expect(value?.textContent).toBe("$1.00/day");
   expect(value?.parentElement?.textContent).toContain("partial receipts · 1 gap · 30d");
 });
+
+
+describe("wallet source identity", () => {
+  const wallet = { address, network: "Base", explorerUrl: `https://basescan.org/address/${address}` };
+  async function openWallet(explorerUrl = wallet.explorerUrl) {
+    const row: MoneyPlaneRow = { plane: "base:test", label: "Test wallet", kind: "wallet", balance: 7, currency: "USDC", burnPerDay: null, runwayDays: null, grade: "INFO", observedAt: takenAt, wallet: { ...wallet, explorerUrl } };
+    render(createElement(FinanceReportClient, { report: { ...liveShapedPreview, rows: [row], summary: summarize({ rows: [row] }) } as NodeFinanceSnapshot }));
+    await userEvent.click(within(screen.getByRole("table")).getByRole("button", { name: "Test wallet" }));
+    return within(screen.getByRole("dialog"));
+  }
+  it("shows full public identity and copies exactly that address", async () => {
+    const user = userEvent.setup();
+    const copy = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
+    try {
+      const dialog = await openWallet();
+      expect(dialog.getByText("Wallet · Base")).toBeTruthy();
+      expect(dialog.getByText(address)).toBeTruthy();
+      expect(dialog.getByRole("link", { name: /Explorer/ }).getAttribute("href")).toBe(wallet.explorerUrl);
+      expect(dialog.getByRole("link", { name: /Explorer/ }).getAttribute("rel")).toBe("noopener noreferrer");
+      await user.click(dialog.getByRole("button", { name: "Copy address" }));
+      expect(copy).toHaveBeenCalledWith(address);
+      expect(dialog.getByRole("status").textContent).toBe("Copied");
+    } finally { copy.mockRestore(); }
+  });
+  it("does not claim copied when clipboard rejects", async () => {
+    const user = userEvent.setup();
+    const copy = vi.spyOn(navigator.clipboard, "writeText").mockRejectedValue(new Error("denied"));
+    try {
+      const dialog = await openWallet();
+      await user.click(dialog.getByRole("button", { name: "Copy address" }));
+      expect(dialog.getByRole("status").textContent).toBe("Copy failed");
+      expect(dialog.getByText(address)).toBeTruthy();
+    } finally { copy.mockRestore(); }
+  });
+  it.each(["javascript:alert(1)", "https://user:secret@explorer.example/address/test", "http://explorer.example/address/test"])("hides unsafe explorer URL %s", async (url) => {
+    const dialog = await openWallet(url);
+    expect(dialog.getByText(address)).toBeTruthy();
+    expect(dialog.queryByRole("link", { name: /Explorer/ })).toBeNull();
+  });
+  it("adds no wallet controls to a row with no wallet identity", async () => {
+    render(createElement(FinanceReportClient, { report: liveShapedPreview as NodeFinanceSnapshot }));
+    await userEvent.click(within(screen.getByRole("table")).getByRole("button", { name: "Credit purchases" }));
+    const dialog = within(screen.getByRole("dialog"));
+    expect(dialog.queryByRole("button", { name: "Copy address" })).toBeNull();
+    expect(dialog.queryByRole("link", { name: /Explorer/ })).toBeNull();
+  });
+});

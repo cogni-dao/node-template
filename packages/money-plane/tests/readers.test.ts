@@ -18,6 +18,7 @@ import {
   baseWalletReader,
   type FetchLike,
   openRouterReader,
+  takeSnapshot,
 } from "../src/index";
 
 const NOW = new Date("2026-10-24T00:00:00.000Z");
@@ -184,6 +185,7 @@ describe("baseWalletReader", () => {
     expect(r.grade).toBe("INFO");
     expect(r.detail).toBe("1.5 ETH");
     expect(r.payAction).toEqual({ kind: "fund-steward" });
+    expect(r.wallet).toEqual({ address: ADDRESS, network: "Base", explorerUrl: `https://basescan.org/address/${ADDRESS}` });
   });
 
   it("retains exact native USDC and ETH evidence beyond floating-point precision", async () => {
@@ -254,5 +256,24 @@ describe("baseWalletReader", () => {
     expect(r.grade).toBe("UNKNOWN");
     expect(r.reasonCode).toBe("unreadable");
     expect(r.detail ?? "").not.toContain("key-abc");
+    expect(r.wallet?.address).toBe(ADDRESS);
+    expect(JSON.stringify(r)).not.toContain(RPC);
   });
+  it.each([undefined, "", "not-a-wallet", "https://rpc.example/key-abc"])("omits wallet identity for invalid input %s", async (address) => {
+    const { fetch, calls } = rpc(0n, 0n);
+    const reader = baseWalletReader({ name: "invalid", label: "Wallet", address, rpcUrl: RPC, fetch, now });
+    const row = await reader.read(signal);
+    expect(reader.wallet).toBeUndefined();
+    expect(row.wallet).toBeUndefined();
+    expect(calls).toHaveLength(0);
+  });
+
+  it.each(["timeout", "throw"])("keeps configured identity on snapshot %s without inventing a balance", async (failure) => {
+    const reader = baseWalletReader({ name: "steward", label: "Steward wallet", address: ADDRESS, rpcUrl: RPC, fetch: async () => new Promise(() => {}), now });
+    const result = await takeSnapshot([failure === "throw" ? { ...reader, read: async () => { throw new Error(RPC); } } : reader], { timeoutMs: 1, now });
+    expect(result.rows[0]).toMatchObject({ balance: null, grade: "UNKNOWN", wallet: { address: ADDRESS, network: "Base", explorerUrl: `https://basescan.org/address/${ADDRESS}` } });
+    expect(result.rows[0]?.reasonCode).toBe(failure === "throw" ? "unreadable" : "timeout");
+    expect(JSON.stringify(result)).not.toContain(RPC);
+  });
+
 });

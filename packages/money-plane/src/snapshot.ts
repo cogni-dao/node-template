@@ -40,6 +40,7 @@ function fallback(
       ...(reader.payAction === undefined ? {} : { payAction: reader.payAction }),
     }),
     ...(reader.rail === undefined ? {} : { rail: reader.rail }),
+    ...(reader.wallet === undefined ? {} : { wallet: reader.wallet }),
   };
 }
 

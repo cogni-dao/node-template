@@ -28,7 +28,7 @@ import {
 import { usdBalance, usdBurn } from "../fx";
 import type { ReportSummary } from "../report";
 import { isStewardWithdrawalRejected, readStewardWithdrawal } from "../steward";
-import type { MoneyPlaneRow, PayAction, Rail } from "../types";
+import type { MoneyPlaneRow, PayAction, Rail, WalletIdentity } from "../types";
 import {
   balanceLabel,
   basisLabel,
@@ -155,6 +155,50 @@ function Fact({ term, children }: { term: string; children: ReactNode }) {
   );
 }
 
+function WalletFact({ wallet, kit }: { wallet: WalletIdentity; kit: FinanceKit }) {
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  let explorerUrl: string | undefined;
+  try {
+    const url = new URL(wallet.explorerUrl);
+    if (url.protocol === "https:" && !url.username && !url.password) {
+      explorerUrl = url.href;
+    }
+  } catch {
+    // A malformed explorer link must not hide the public account itself.
+  }
+  async function copy() {
+    setCopyState("idle");
+    try {
+      await navigator.clipboard.writeText(wallet.address);
+      setCopyState("copied");
+    } catch {
+      setCopyState("failed");
+    }
+  }
+  return (
+    <Fact term={`Wallet · ${wallet.network}`}>
+      <span className="block min-w-0 select-text break-all font-mono">
+        {wallet.address}
+      </span>
+      <span className="mt-1 flex flex-wrap items-center gap-3">
+        <kit.Button variant="outline" size="sm" aria-label="Copy address" onClick={copy}>
+          Copy
+        </kit.Button>
+        {explorerUrl && (
+          <kit.Button variant="link" size="sm" asChild>
+            <a href={explorerUrl} target="_blank" rel="noopener noreferrer">
+              Explorer <ExternalIcon />
+            </a>
+          </kit.Button>
+        )}
+        <span role="status" aria-live="polite" className="text-muted-foreground text-xs">
+          {copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy failed" : ""}
+        </span>
+      </span>
+    </Fact>
+  );
+}
+
 function LineDialog({
   row,
   kit,
@@ -211,6 +255,7 @@ function LineDialog({
           </kit.DialogDescription>
         </kit.DialogHeader>
         <dl className="grid min-w-0 gap-3">
+          {row.wallet && <WalletFact wallet={row.wallet} kit={kit} />}
           {reason && (
             <Fact term="Unavailable">
               {reason}

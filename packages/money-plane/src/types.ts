@@ -91,11 +91,21 @@ export interface NativeRate extends NativeAmount {
   per: "day" | "month" | "block";
 }
 
+/** Public account identity only; never an RPC endpoint or credential. */
+export interface WalletIdentity {
+  address: string;
+  network: string;
+  /** Public HTTPS explorer address page, without URL credentials. */
+  explorerUrl: string;
+}
+
 export interface MoneyPlaneRow {
   /** Stable id, e.g. "openrouter:account", "base:steward-wallet". */
   plane: string;
   label: string;
   kind: PlaneKind;
+  /** Configured public account, retained even when its balance is unreadable. */
+  wallet?: WalletIdentity;
   /** Display-only native units (USD, USDC, ACT, EUR …); null when unread. Never settlement arithmetic. */
   balance: number | null;
   currency: string | null;
@@ -159,6 +169,8 @@ export interface PlaneReader {
   readonly payAction?: PayAction;
   /** Carried onto the fallback row so the Action cell still says how the line gets paid. */
   readonly rail?: Rail;
+  /** Configured public identity carried onto unreadable/timeout fallback rows. */
+  readonly wallet?: WalletIdentity;
   read(signal: AbortSignal): Promise<MoneyPlaneRow>;
 }
 

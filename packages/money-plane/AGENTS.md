@@ -56,7 +56,7 @@ No runtime dependencies, no env reads, no viem. `fetch` is injected (`FetchLike`
 - ONE_UI — nodes render `FinanceReport` from `./react`; they keep readers, composition and auth only.
 - RUNWAY_NEEDS_COVERAGE — past credit receipts never offset forecast burn. Missing, stale or invalid registered costs (including rollup children) prevent a runway estimate. Known subtotals remain visible; wallets and date-only expiry rows are not costs. Treasury must be current and readable. Zero burn and invalid derived results never render infinity.
 - USD_IS_DERIVED — `usd` is a projection (`toUsd`); native amounts stay exact in dialogs; a parent carrying burn is the rollup and its children are never summed again.
-- `detail` never carries a URL, key, or address.
+- `detail` never carries a URL, key, or address. Optional `wallet: WalletIdentity` holds only public address/network/explorer evidence, retained on read failure and timeout. Base readers expose only valid configured addresses. Source dialogs show the full wrapping address, copy with honest success/failure feedback, and only credential-free HTTPS explorer links.
 - OpenRouter burn is not measured here: `openRouterReader` exposes `usageTotal` and grades only from a caller-supplied `burnPerDay`. `/credits` needs an OpenRouter management key; an inference key must never carry it, so node compositions leave the OpenRouter balance UNKNOWN ("needs a management key · task.5361") with the Top up action still reachable. An inherited key reads the inheritor's account, not the node's balance. Provider least privilege is task.5361.
 
 ## Not here

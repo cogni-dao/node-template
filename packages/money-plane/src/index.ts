@@ -84,4 +84,5 @@ export type {
   ReasonCode,
   UsdAmount,
   UsdRate,
+  WalletIdentity,
 } from "./types";
