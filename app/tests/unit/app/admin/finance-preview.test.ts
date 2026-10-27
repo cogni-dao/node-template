@@ -27,8 +27,8 @@ vi.mock("@/shared/env", () => ({ getEnv: mocks.env }));
 vi.mock("@/app/(admin)/AdminShell", () => ({
 	AdminShell: ({ children }: { children?: ReactNode }) => children,
 }));
-vi.mock("@/app/(admin)/admin/payments/FinanceReportClient.client", () => ({
-	FinanceReportClient: mocks.report,
+vi.mock("@/app/dev/finance-preview/FinancePreviewClient.client", () => ({
+	FinancePreviewClient: mocks.report,
 }));
 vi.mock("@/components", async () => {
 	const { createElement } = await import("react");

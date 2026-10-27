@@ -52,7 +52,7 @@ export interface SummarizeOptions {
 function flows(rows: readonly MoneyPlaneRow[]): MoneyPlaneRow[] {
   // A native measured parent owns the total, even if its USD projection is missing.
   return rows.flatMap((row) =>
-    row.burnPerDay !== null || !row.children?.length
+    row.burnPerDay !== null || row.nativeRate !== undefined || !row.children?.length
       ? [row]
       : flows(row.children)
   );
@@ -112,7 +112,7 @@ function missingCost(row: MoneyPlaneRow): boolean {
   if (!costRow(row)) return false;
   if (!currentEvidence(row)) return true;
   // A rate-less parent may group child costs, but cannot hide its own failed read.
-  if (row.burnPerDay === null && row.children?.some(costRow)) return false;
+  if (row.burnPerDay === null && row.nativeRate === undefined && row.children?.some(costRow)) return false;
   return measuredCost(row) === undefined;
 }
 

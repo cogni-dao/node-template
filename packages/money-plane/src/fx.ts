@@ -83,8 +83,10 @@ export function usdBalance(row: MoneyPlaneRow): number | undefined {
 
 /** Burn (or income) per day in USD, or undefined when unmeasured or not projectable. */
 export function usdBurn(row: MoneyPlaneRow): number | undefined {
-  if (row.burnPerDay === null || !Number.isFinite(row.burnPerDay)) return undefined;
-  if (!row.currency || DOLLAR.has(row.currency)) return row.burnPerDay;
+  if (row.burnPerDay === null || !Number.isFinite(row.burnPerDay) || row.burnPerDay < 0 || !row.currency) return undefined;
+  if (DOLLAR.has(row.currency)) return row.burnPerDay;
   const rate = row.usd?.rate;
-  return rate ? row.burnPerDay * rate.value : undefined;
+  if (!rate || rate.pair !== `${row.currency}USD` || !Number.isFinite(rate.value) || rate.value <= 0) return undefined;
+  const value = row.burnPerDay * rate.value;
+  return Number.isFinite(value) ? value : undefined;
 }

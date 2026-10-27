@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 import { describe, expect, it } from "vitest";
 
-import { type MoneyPlaneRow, summarize, takeSnapshot, toUsd } from "../src/index";
+import { type MoneyPlaneRow, summarize, takeSnapshot, toUsd, usdBurn } from "../src/index";
 
 const NOW = "2026-10-26T13:40:00.000Z";
 const RATE = {
@@ -340,4 +340,13 @@ it.each([-1, Number.NaN, Number.POSITIVE_INFINITY])("retains invalid expiry cost
   const summary = summarize({ rows: snapshot.rows.map((r) => toUsd(r, [])) }, { treasuryPlane: "treasury" });
   expect(summary.runwayDays).toBeNull();
   expect(summary.costCoverageGaps).toContain("renewal");
+});
+
+
+it("does not treat a parent with its own unconverted native rate as a grouping container", () => {
+  const rows = [row({ plane: "treasury", kind: "wallet", balance: 100 }), row({ plane: "vendor", currency: "EUR", nativeRate: { amount: "10", currency: "EUR", per: "day" }, children: [row({ plane: "child", burnPerDay: 1 })] })].map((r) => toUsd(r, []));
+  expect(summarize({ rows }, { treasuryPlane: "treasury" })).toMatchObject({ runwayDays: null, costCoverageGaps: ["vendor"] });
+});
+it("never projects an absent denomination into dollars", () => {
+  expect(usdBurn(row({ plane: "unknown", currency: null, burnPerDay: 1 }))).toBeUndefined();
 });

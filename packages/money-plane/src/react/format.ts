@@ -66,8 +66,12 @@ export function balanceLabel(row: MoneyPlaneRow): string {
 
 /** "$0.19/day", "<$0.01/day" or "—". */
 export function burnLabel(row: MoneyPlaneRow): string {
-  const value = usdBurn(row);
-  if (value === undefined) return DASH;
+  return dailyUsd(usdBurn(row));
+}
+
+/** Shared summary/row formatter: small positive flows never look like zero. */
+export function dailyUsd(value: number | null | undefined): string {
+  if (value === undefined || value === null || !Number.isFinite(value) || value < 0) return DASH;
   if (value > 0 && value < 0.005) return "<$0.01/day";
   return `${usd(value)}/day`;
 }

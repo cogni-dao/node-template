@@ -14,7 +14,7 @@
 "use client";
 
 import { StewardWithdrawalRejected } from "@cogni/money-plane";
-import { FinanceReport } from "@cogni/money-plane/react";
+import { type FinanceActions, FinanceReport } from "@cogni/money-plane/react";
 import { useRouter } from "next/navigation";
 
 import {
@@ -46,24 +46,24 @@ export const STEWARD_WITHDRAWAL_TIMEOUT_MS = 20_000;
 export async function fundSteward(
 	amountUsd: number,
 	fetchImpl: typeof fetch = fetch,
-): Promise<{ txHash: string; confirmed: boolean }> {
+): Promise<{ txHash: string; receiptStatus: "success" | "reverted" | "pending" }> {
 	const res = await fetchImpl(STEWARD_WITHDRAWAL_PATH, {
 		method: "POST",
 		headers: { "content-type": "application/json" },
 		body: JSON.stringify({ amountUsd }),
 		signal: AbortSignal.timeout(STEWARD_WITHDRAWAL_TIMEOUT_MS),
 	});
-	let data: { txHash?: string; confirmed?: boolean; error?: string; detail?: string; code?: string };
+	let data: { txHash?: string; receiptStatus?: "success" | "reverted" | "pending"; error?: string; detail?: string; code?: string };
 	try {
 		data = (await res.json()) as typeof data;
 	} catch {
 		throw new Error(`Response unreadable (HTTP ${res.status})`);
 	}
 	if (res.ok) {
-		if (typeof data?.txHash !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(data.txHash) || typeof data.confirmed !== "boolean") {
+		if (typeof data?.txHash !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(data.txHash) || (data.receiptStatus !== "success" && data.receiptStatus !== "reverted" && data.receiptStatus !== "pending")) {
 			throw new Error("Withdrawal response missing valid transaction evidence");
 		}
-		return { txHash: data.txHash, confirmed: data.confirmed };
+		return { txHash: data.txHash, receiptStatus: data.receiptStatus };
 	}
 	const reason = data.detail ?? data.error ?? data.code ?? `HTTP ${res.status}`;
 	const preBroadcast =
@@ -85,14 +85,18 @@ const kit = {
 	DialogTrigger,
 };
 
-export function FinanceReportClient({ report }: { report: NodeFinanceSnapshot }) {
+export function FinanceReportClient({ report, actions }: {
+	report: NodeFinanceSnapshot;
+	/** Development fixtures inject inert actions; the live page uses the defaults. */
+	actions?: FinanceActions;
+}) {
 	const router = useRouter();
 	return (
 		<FinanceReport
 			report={report}
 			summary={report.summary}
 			kit={kit}
-			actions={{
+			actions={actions ?? {
 				fundSteward: (amount) => fundSteward(amount),
 				refresh: () => router.refresh(),
 			}}

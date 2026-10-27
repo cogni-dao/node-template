@@ -4,7 +4,7 @@
  * Module: `app/dev/finance-preview/page`
  * Purpose: Preview the actual Financials component inside its real node shell with synthetic rows.
  * Scope: Fixture-only development route; protected report auth is unchanged.
- * Invariants: Production/test return 404; shell treasury reads are locally disabled.
+ * Invariants: Production/test return 404; shell treasury reads and report payment actions are isolated.
  * Side-effects: none
  * Links: admin/payments/FinanceReportClient.client.tsx, fixture.ts
  * @internal
@@ -12,9 +12,9 @@
 import type { TreasurySnapshotResponseV1 } from "@cogni/node-contracts";
 import { notFound } from "next/navigation";
 import { AdminShell } from "@/app/(admin)/AdminShell";
-import { FinanceReportClient } from "@/app/(admin)/admin/payments/FinanceReportClient.client";
 import { Button, HintText, PageContainer } from "@/components";
 import { getEnv } from "@/shared/env";
+import { FinancePreviewClient } from "./FinancePreviewClient.client";
 import { FixtureBoundary } from "./FixtureBoundary";
 import { previewFor } from "./fixture";
 
@@ -59,7 +59,7 @@ export default async function FinancePreviewPage({
               </a>
             </Button>
           </div>
-          <FinanceReportClient report={report} />
+          <FinancePreviewClient report={report} />
         </PageContainer>
       </AdminShell>
     </FixtureBoundary>

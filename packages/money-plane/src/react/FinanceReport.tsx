@@ -36,6 +36,7 @@ import {
   byRisk,
   cx,
   DASH,
+  dailyUsd,
   GROUPS,
   type Group,
   groupOf,
@@ -75,7 +76,7 @@ export interface FinanceActions {
    */
   fundSteward: (
     amountUsd: number
-  ) => Promise<{ txHash: string; confirmed: boolean }>;
+  ) => Promise<{ txHash: string; receiptStatus: "success" | "reverted" | "pending" }>;
   /** Re-read the report (e.g. router.refresh). Omit to hide the button. */
   refresh?: () => void | Promise<void>;
 }
@@ -274,7 +275,7 @@ function LineDialog({
   );
 }
 
-type Phase = "idle" | "submitting" | "pending" | "success" | "rejected" | "unknown";
+type Phase = "idle" | "submitting" | "pending" | "success" | "reverted" | "rejected" | "unknown";
 
 /** One withdrawal state per report/account, shared by every responsive control. */
 function useStewardWithdrawal(fundSteward: FinanceActions["fundSteward"]) {
@@ -282,7 +283,6 @@ function useStewardWithdrawal(fundSteward: FinanceActions["fundSteward"]) {
   const [amount, setAmount] = useState("1");
   const [phase, setPhase] = useState<Phase>("idle");
   const [txHash, setTxHash] = useState<string | null>(null);
-  const [confirmed, setConfirmed] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const valid = Number(amount) > 0 && Number.isFinite(Number(amount));
   async function submit() {
@@ -293,13 +293,12 @@ function useStewardWithdrawal(fundSteward: FinanceActions["fundSteward"]) {
     setTxHash(null);
     try {
       const result = await fundSteward(Number(amount));
-      if (!result || typeof result.txHash !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(result.txHash) || typeof result.confirmed !== "boolean") {
+      if (!result || typeof result.txHash !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(result.txHash) || (result.receiptStatus !== "success" && result.receiptStatus !== "reverted" && result.receiptStatus !== "pending")) {
         throw new Error("Withdrawal response missing valid transaction evidence");
       }
       setTxHash(result.txHash);
-      setConfirmed(result.confirmed);
-      setPhase(result.confirmed ? "success" : "pending");
-      if (result.confirmed) inFlight.current = false;
+      setPhase(result.receiptStatus);
+      if (result.receiptStatus === "success") inFlight.current = false;
     } catch (err) {
       if (isStewardWithdrawalRejected(err)) {
         setError(err instanceof Error ? err.message : String(err));
@@ -312,12 +311,12 @@ function useStewardWithdrawal(fundSteward: FinanceActions["fundSteward"]) {
       }
     }
   }
-  const locked = phase === "submitting" || phase === "pending" || phase === "unknown";
+  const locked = phase === "submitting" || phase === "pending" || phase === "unknown" || phase === "reverted";
   function acknowledge() {
     inFlight.current = false;
     setPhase("idle");
   }
-  return { amount, setAmount, phase, txHash, confirmed, error, valid, submit, locked, acknowledge };
+  return { amount, setAmount, phase, txHash, error, valid, submit, locked, acknowledge };
 }
 
 type WithdrawalState = ReturnType<typeof useStewardWithdrawal>;
@@ -328,10 +327,10 @@ function FundSteward({ kit, withdrawal, stewardWalletUrl }: {
   stewardWalletUrl?: string | null | undefined;
 }) {
   const id = useId();
-  const { amount, setAmount, phase, txHash, confirmed, error, valid, submit, locked, acknowledge } = withdrawal;
+  const { amount, setAmount, phase, txHash, error, valid, submit, locked, acknowledge } = withdrawal;
   const alertId = `${id}-alert`;
   const describedBy =
-    phase === "unknown" || phase === "pending" || phase === "rejected" ? alertId : undefined;
+    phase === "unknown" || phase === "pending" || phase === "reverted" || phase === "rejected" ? alertId : undefined;
   return (
     <div className="flex min-w-0 flex-col gap-1">
       <div className="flex items-center gap-2">
@@ -363,18 +362,18 @@ function FundSteward({ kit, withdrawal, stewardWalletUrl }: {
           {phase === "submitting" ? "Funding…" : "Fund steward"}
         </kit.Button>
       </div>
-      {(phase === "success" || phase === "pending") && txHash ? (
+      {(phase === "success" || phase === "pending" || phase === "reverted") && txHash ? (
         <output aria-live="polite" className="block">
           <a
             href={`https://basescan.org/tx/${txHash}`}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 font-mono text-success text-xs hover:underline"
+            className={cx("inline-flex items-center gap-1 font-mono text-xs hover:underline", phase === "success" ? "text-success" : "text-muted-foreground")}
           >
-            Sent {txHash.slice(0, 6)}…{txHash.slice(-4)}
+            {phase === "reverted" ? "Transaction" : "Sent"} {txHash.slice(0, 6)}…{txHash.slice(-4)}
             <ExternalIcon />
           </a>
-          {!confirmed ? (
+          {phase === "pending" ? (
             <span className="ml-2 text-muted-foreground text-xs">
               Confirming…
             </span>
@@ -386,10 +385,10 @@ function FundSteward({ kit, withdrawal, stewardWalletUrl }: {
           {error}
         </span>
       ) : null}
-      {phase === "unknown" || phase === "pending" ? (
+      {phase === "unknown" || phase === "pending" || phase === "reverted" ? (
         <div className="flex flex-wrap items-center gap-2">
           <span id={alertId} role="alert" className="text-warning text-xs">
-            {phase === "pending" ? "Confirmation pending" : "Result unknown"}{error ? ` (${error})` : ""} — check the steward wallet
+            {phase === "pending" ? "Confirmation pending" : phase === "reverted" ? "Transfer reverted" : "Result unknown"}{error ? ` (${error})` : ""} — check the steward wallet
             {stewardWalletUrl ? (
               <>
                 {" "}
@@ -582,12 +581,12 @@ function StatCards({
     {
       label: "Cash received",
       value:
-        summary.incomePerDay === null ? DASH : `${usd(summary.incomePerDay)}/day`,
+        dailyUsd(summary.incomePerDay),
       sub: `credit purchases · ${summary.windowDays}d`,
     },
     {
       label: "Burn",
-      value: summary.burnPerDay === null ? DASH : `${usd(summary.burnPerDay)}/day`,
+      value: dailyUsd(summary.burnPerDay),
       sub: summary.costCoverageGaps.length
         ? `known subtotal · ${summary.costCoverageGaps.length} gaps`
         : "all known lines",

@@ -91,6 +91,7 @@ import {
 	OPENROUTER_CHECKOUT_URL,
 } from "@/app/(admin)/admin/payments/money-plane.server";
 import FinancialsPage from "@/app/(admin)/admin/payments/page";
+import { FinancePreviewClient } from "@/app/dev/finance-preview/FinancePreviewClient.client";
 import { liveShapedPreview } from "@/app/dev/finance-preview/fixture";
 
 const takenAt = "2026-10-25T00:00:00.000Z";
@@ -492,8 +493,8 @@ describe("the Financials page and its package binding", () => {
 	});
 
 	it("fundSteward POSTs the amount-only withdrawal and surfaces the server's text on failure", async () => {
-		const ok = vi.fn(async () => ({ ok: true, json: async () => ({ txHash: transactionHash, confirmed: true }) }));
-		await expect(fundSteward(2.5, ok as unknown as typeof fetch)).resolves.toEqual({ txHash: transactionHash, confirmed: true });
+		const ok = vi.fn(async () => ({ ok: true, json: async () => ({ txHash: transactionHash, receiptStatus: "success" }) }));
+		await expect(fundSteward(2.5, ok as unknown as typeof fetch)).resolves.toEqual({ txHash: transactionHash, receiptStatus: "success" });
 		expect(ok).toHaveBeenCalledWith(
 			STEWARD_WITHDRAWAL_PATH,
 			expect.objectContaining({ method: "POST", body: JSON.stringify({ amountUsd: 2.5 }) }),
@@ -587,7 +588,7 @@ describe("the Financials page and its package binding", () => {
 		vi.unstubAllGlobals();
 	});
 
-	it.each([{}, { txHash: transactionHash }, { txHash: null, confirmed: true }, { txHash: "0xabc", confirmed: true }, { txHash: transactionHash, confirmed: "true" }])("treats malformed success as unknown: %j", async (body) => {
+	it.each([{}, { txHash: transactionHash }, { txHash: null, receiptStatus: "success" }, { txHash: "0xabc", receiptStatus: "success" }, { txHash: transactionHash, receiptStatus: "unknown-status" }])("treats malformed success as unknown: %j", async (body) => {
 		const post = vi.fn(async () => ({ ok: true, status: 200, json: async () => body }));
 		await expect(fundSteward(1, post as unknown as typeof fetch)).rejects.toThrow();
 	});
@@ -598,7 +599,7 @@ describe("the Financials page and its package binding", () => {
 			vi.fn(async () => ({
 				ok: true,
 				status: 200,
-				json: async () => ({ txHash: transactionHash, confirmed: false }),
+				json: async () => ({ txHash: transactionHash, receiptStatus: "pending" }),
 			})),
 		);
 		render(createElement(FinanceReportClient, { report: liveShapedPreview as NodeFinanceSnapshot }));
@@ -706,7 +707,7 @@ describe("the Financials page and its package binding", () => {
 	});
 
 	it("the inline control posts the typed amount and links the broadcast tx", async () => {
-		const fetchSpy = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ txHash: transactionHash, confirmed: true }) }));
+		const fetchSpy = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ txHash: transactionHash, receiptStatus: "success" }) }));
 		vi.stubGlobal("fetch", fetchSpy);
 		render(createElement(FinanceReportClient, { report: liveShapedPreview as NodeFinanceSnapshot }));
 		const operator = screen.getByRole("table").querySelector<HTMLElement>("tr[data-finance-row='base:operator-wallet']");
@@ -724,4 +725,55 @@ describe("the Financials page and its package binding", () => {
 		);
 		vi.unstubAllGlobals();
 	});
+});
+
+
+describe("demo payment isolation", () => {
+  it("clicks the real funding UI without any POST, refresh request or vendor checkout", async () => {
+    const fetchSpy = vi.fn(async () => { throw new Error("LIVE_FINANCIAL_IO"); });
+    vi.stubGlobal("fetch", fetchSpy);
+    try {
+      render(createElement(FinancePreviewClient, { report: liveShapedPreview as NodeFinanceSnapshot }));
+      await userEvent.click(screen.getAllByRole("button", { name: "Fund steward" })[0]!);
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(screen.getAllByRole("alert").some((alert) => alert.textContent?.includes("Demo only · no payments"))).toBe(true);
+      await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(mocks.refresh).not.toHaveBeenCalled();
+      expect(screen.queryAllByRole("link", { name: /Top up/ })).toHaveLength(0);
+      expect(screen.queryAllByText(/^Sent /)).toHaveLength(0);
+    } finally { vi.unstubAllGlobals(); }
+  });
+});
+
+
+it("uses the same nonzero tiny-rate label in summary cards and rows", () => {
+  const rows: MoneyPlaneRow[] = [{ plane: "tiny", label: "Tiny cost", kind: "usage", balance: null, currency: "USD", burnPerDay: 0.001, runwayDays: null, grade: "INFO", observedAt: takenAt, sourceObservedAt: takenAt, freshness: "current" }, { plane: "tiny-income", label: "Tiny inflow", kind: "income", balance: null, currency: "USD", burnPerDay: 0.001, runwayDays: null, grade: "INFO", observedAt: takenAt, sourceObservedAt: takenAt, freshness: "current" }];
+  const demo = { ...liveShapedPreview, rows, summary: summarize({ rows }) } as NodeFinanceSnapshot;
+  render(createElement(FinanceReportClient, { report: demo }));
+  expect(document.querySelector("[data-finance-stat='Burn']")?.textContent).toBe("<$0.01/day");
+  expect(document.querySelector("[data-finance-stat='Cash received']")?.textContent).toBe("<$0.01/day");
+});
+
+it("retains a reverted transaction hash without claiming successful funding", async () => {
+  const post = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ txHash: transactionHash, receiptStatus: "reverted" }) }));
+  vi.stubGlobal("fetch", post);
+  try {
+    render(createElement(FinanceReportClient, { report: liveShapedPreview as NodeFinanceSnapshot }));
+    await userEvent.click(screen.getAllByRole("button", { name: "Fund steward" })[0]!);
+    expect(screen.getAllByText(/Transfer reverted/)).toHaveLength(2);
+    expect(screen.getAllByRole("link", { name: /Transaction 0xaaaa/ })).toHaveLength(2);
+    for (const button of screen.getAllByRole("button", { name: "Fund steward" })) expect((button as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryAllByText(/^Sent /)).toHaveLength(0);
+  } finally { vi.unstubAllGlobals(); }
+});
+
+
+it("does not display unknown-denomination burn as dollars", () => {
+  const rows: MoneyPlaneRow[] = [{ plane: "unknown-currency", label: "Unconverted cost", kind: "usage", balance: null, currency: null, burnPerDay: 1, runwayDays: null, grade: "INFO", observedAt: takenAt, sourceObservedAt: takenAt, freshness: "current" }];
+  const summary = summarize({ rows });
+  render(createElement(FinanceReportClient, { report: { ...liveShapedPreview, rows, summary } as NodeFinanceSnapshot }));
+  expect(screen.queryAllByText("$1.00/day")).toHaveLength(0);
+  expect(document.querySelector("[data-finance-stat='Burn']")?.textContent).toBe("—");
+  expect(summary.costCoverageGaps).toEqual(["Unconverted cost"]);
 });
