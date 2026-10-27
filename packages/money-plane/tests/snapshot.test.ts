@@ -440,3 +440,24 @@ it.each(["wallet", "income", "usage", "fixed"] as const)("demotes stale or faile
     expect(snap.worst).toBe("UNKNOWN");
   }
 });
+
+
+it.each([0, 96])("preserves verified zero-burn prepaid INFO with balance %s", async (balance) => {
+  const snap = await takeSnapshot([reader("idle", async () => row({ plane: "idle", grade: "INFO", balance, burnPerDay: 0, runwayDays: null, reasonCode: "no_leases" }))], { timeoutMs: 100, now });
+  expect(snap.rows[0]).toMatchObject({ grade: "INFO", burnPerDay: 0, runwayDays: null, balance });
+  expect(snap.worst).toBe("INFO");
+});
+it.each([
+  { freshness: "stale" as const },
+  { sourceObservedAt: null },
+  { reasonCode: "unreadable" as const },
+  { balance: null },
+  { balance: Number.NaN },
+  { balance: -1 },
+  { burnPerDay: null },
+  { burnPerDay: Number.NaN },
+  { runwayDays: Infinity },
+])("does not preserve idle prepaid INFO without valid evidence: %j", async (evidence) => {
+  const snap = await takeSnapshot([reader("idle", async () => row({ plane: "idle", grade: "INFO", balance: 96, burnPerDay: 0, runwayDays: null, reasonCode: "no_leases", ...evidence }))], { timeoutMs: 100, now });
+  expect(snap.rows[0]?.grade).toBe("UNKNOWN");
+});

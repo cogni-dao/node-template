@@ -114,7 +114,8 @@ export function applyGradingFloor(input: MoneyPlaneRow): MoneyPlaneRow {
   }
 
   // INFO means "no runway semantics": a holding (wallet), an income flow, or a cost
-  // line whose rate is measured and which has no balance to divide. Anywhere else it
+  // line whose rate is measured and which has no balance to divide, or verified idle
+  // prepaid credit with zero burn. Anywhere else it
   // would hide an ungraded plane from worstGrade.
   if (row.grade === "INFO") {
     const holding = row.kind === "wallet" && row.balance !== null;
@@ -124,7 +125,10 @@ export function applyGradingFloor(input: MoneyPlaneRow): MoneyPlaneRow {
         row.kind === "fixed") &&
       row.balance === null &&
       row.burnPerDay !== null;
-    if (!holding && !flow) return { ...row, grade: "UNKNOWN" };
+    const idlePrepaid = row.kind === "prepaid" && !invalidForecast &&
+      row.balance !== null && row.balance >= 0 && row.burnPerDay === 0 &&
+      row.runwayDays === null;
+    if (!holding && !flow && !idlePrepaid) return { ...row, grade: "UNKNOWN" };
   }
   if (row.grade !== "GREEN" && row.grade !== "YELLOW" && row.grade !== "INFO") return row;
   if (row.freshness === "stale") {
