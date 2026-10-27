@@ -20,6 +20,8 @@ export interface ReportSummary {
   treasuryUsd: number | null;
   /** Σ income rows' USD per day; null when no income row is measured. */
   incomePerDay: number | null;
+  /** Registered income lines without current, dated, valid USD evidence. */
+  incomeCoverageGaps: string[];
   /** Σ cost rows' USD per day (children not double counted); null when nothing is measured. */
   burnPerDay: number | null;
   /** Current treasury ÷ known daily costs; null for any coverage gap, unreadable treasury, zero burn or invalid result. */
@@ -101,7 +103,7 @@ function costRow(row: MoneyPlaneRow): boolean {
   );
 }
 
-function measuredCost(row: MoneyPlaneRow): number | undefined {
+function measuredFlow(row: MoneyPlaneRow): number | undefined {
   const value = usdBurn(row);
   return row.currency && currentEvidence(row) && finiteAmount(value)
     ? value
@@ -113,7 +115,7 @@ function missingCost(row: MoneyPlaneRow): boolean {
   if (!currentEvidence(row)) return true;
   // A rate-less parent may group child costs, but cannot hide its own failed read.
   if (row.burnPerDay === null && row.nativeRate === undefined && row.children?.some(costRow)) return false;
-  return measuredCost(row) === undefined;
+  return measuredFlow(row) === undefined;
 }
 
 function graded(row: MoneyPlaneRow): boolean {
@@ -137,7 +139,16 @@ export function summarize(
   const treasury = options.treasuryPlane
     ? snapshot.rows.find((row) => row.plane === options.treasuryPlane)
     : undefined;
-  const income = flows(snapshot.rows.filter((row) => row.kind === "income"));
+  const income = flows(
+    snapshot.rows.filter((row) => row.kind === "income")
+  ).filter((row) => row.kind === "income");
+  const incomeCoverageGaps = [...new Set(all.filter((row) => {
+    if (row.kind !== "income") return false;
+    if (!currentEvidence(row)) return true;
+    const grouping = row.burnPerDay === null && row.nativeRate === undefined &&
+      row.children?.some((child) => child.kind === "income");
+    return !grouping && measuredFlow(row) === undefined;
+  }).map((row) => row.label))];
   const costs = flows(snapshot.rows.filter(costRow)).filter(costRow);
   const costCoverageGaps = [
     ...new Set(all.filter(missingCost).map((row) => row.label)),
@@ -172,8 +183,8 @@ export function summarize(
     finiteAmount(treasuryBalance)
       ? treasuryBalance
       : null;
-  const incomePerDay = sumOrNull(income.map(usdBurn));
-  const costValues = costs.map(measuredCost);
+  const incomePerDay = sumOrNull(income.map(measuredFlow));
+  const costValues = costs.map(measuredFlow);
   const burnPerDay = sumOrNull(costValues);
   const totalOverflow = burnPerDay === null && costValues.some(finiteAmount);
   const estimate =
@@ -196,6 +207,7 @@ export function summarize(
   return {
     treasuryUsd,
     incomePerDay,
+    incomeCoverageGaps,
     burnPerDay,
     runwayDays,
     runwayReason,

@@ -584,7 +584,9 @@ function StatCards({
       label: "Cash received",
       value:
         dailyUsd(summary.incomePerDay),
-      sub: `credit purchases · ${summary.windowDays}d`,
+      sub: summary.incomeCoverageGaps.length
+        ? `partial receipts · ${summary.incomeCoverageGaps.length} ${summary.incomeCoverageGaps.length === 1 ? "gap" : "gaps"} · ${summary.windowDays}d`
+        : `credit purchases · ${summary.windowDays}d`,
     },
     {
       label: "Burn",
@@ -818,6 +820,29 @@ export function FinanceReport({
       </section>
 
       <section className="@2xl:hidden min-w-0 space-y-4" aria-label="Financials list">
+        <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Sort financials">
+          {([
+            { key: "balance", label: "Balance", show: true },
+            { key: "burn", label: "Burn/day", show: hasBurn },
+            { key: "runway", label: "Runway", show: hasRunway },
+          ] as const).filter((option) => option.show).map(({ key, label }) => (
+            <kit.Button
+              key={key}
+              type="button"
+              variant={sort?.key === key ? "secondary" : "outline"}
+              size="sm"
+              className="min-h-11"
+              aria-label={`Sort by ${label}`}
+              aria-pressed={sort?.key === key}
+              onClick={() => onSort(key)}
+            >
+              {label}{sort?.key === key ? (sort.desc ? " ↓" : " ↑") : ""}
+            </kit.Button>
+          ))}
+          <output className="sr-only" aria-live="polite">
+            {sort ? `Sorted by ${sort.key}, ${sort.desc ? "descending" : "ascending"}` : "Sorted by risk"}
+          </output>
+        </div>
         {groups.map(({ group, rows }) => (
           <section key={group} className="space-y-2" aria-label={group}>
             <h2 className="text-muted-foreground text-xs uppercase tracking-wide">{group}</h2>

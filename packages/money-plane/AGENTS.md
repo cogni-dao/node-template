@@ -68,3 +68,5 @@ The alert decision, routes, DI wiring, env loading and UI stay in each consuming
 Bump `version`, merge, then push tag `money-plane-v<version>` at the merged main SHA; `.github/workflows/publish-packages.yml` publishes the Release asset.
 
 - EVIDENCE_AT_EVERY_DEPTH — grading normalization and snapshot worst include descendants; stale or failed INFO is UNKNOWN while proven RED remains visible. Exact native wallet amounts are retained as decimal-string parts; numeric balances are display projections.
+
+- INCOME_COVERAGE — cash received sums only current, dated, valid USD income, with partial coverage explicit when registered income lines are unavailable. Past receipts never offset forecast costs. Desktop and stacked mobile views share useful sorting controls and state. This file ships in the package whitelist.

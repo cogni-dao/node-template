@@ -126,6 +126,7 @@ describe("summarize", () => {
     expect(summarize({ rows: [] })).toEqual({
       treasuryUsd: null,
       incomePerDay: null,
+      incomeCoverageGaps: [],
       burnPerDay: null,
       runwayDays: null,
       runwayReason: "treasury_unreadable",
@@ -349,4 +350,25 @@ it("does not treat a parent with its own unconverted native rate as a grouping c
 });
 it("never projects an absent denomination into dollars", () => {
   expect(usdBurn(row({ plane: "unknown", currency: null, burnPerDay: 1 }))).toBeUndefined();
+});
+
+
+it.each([
+  ["stale", { freshness: "stale" as const }],
+  ["failed", { reasonCode: "unreadable" as const }],
+  ["undated", { sourceObservedAt: null }],
+  ["invalid currency", { currency: null }],
+])("excludes %s income from current receipts and reports partial coverage", async (_label, evidence) => {
+  const source = row({ plane: "missing income", kind: "income", burnPerDay: 2, ...evidence });
+  const snap = await takeSnapshot([{ plane: source.plane, read: async () => source }], { timeoutMs: 100 });
+  expect(summarize(snap)).toMatchObject({ incomePerDay: null, incomeCoverageGaps: ["missing income"] });
+  const partial = summarize({ rows: [...snap.rows, row({ plane: "known income", kind: "income", burnPerDay: 1 })] });
+  expect(partial).toMatchObject({ incomePerDay: 1, incomeCoverageGaps: ["missing income"] });
+});
+it("keeps income rollups single-counted while exposing unavailable child coverage", () => {
+  const good = row({ plane: "known", kind: "income", burnPerDay: 1 });
+  const missing = row({ plane: "missing", kind: "income", burnPerDay: 3, freshness: "stale" });
+  const parent = row({ plane: "rollup", kind: "income", burnPerDay: 1, children: [good, missing] });
+  expect(summarize({ rows: [parent] })).toMatchObject({ incomePerDay: 1, incomeCoverageGaps: ["missing"] });
+  expect(summarize({ rows: [{ ...parent, burnPerDay: null, children: [good] }] })).toMatchObject({ incomePerDay: 1, incomeCoverageGaps: [] });
 });

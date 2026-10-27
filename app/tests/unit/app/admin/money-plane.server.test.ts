@@ -185,6 +185,7 @@ describe("finance authorization at the read boundary", () => {
 			summary: {
 				treasuryUsd: null,
 				incomePerDay: null,
+				incomeCoverageGaps: [],
 				burnPerDay: null,
 				runwayDays: null,
 				runwayReason: "treasury_unreadable",
@@ -472,7 +473,7 @@ describe("the Financials page and its package binding", () => {
 		expect(document.querySelector("[data-finance-stat='Cash received']")?.textContent).toBe("$0.00/day");
 		expect(document.querySelector("[data-finance-stat='Burn']")?.textContent).toBe("—");
 		expect(document.querySelector("[data-finance-stat='Runway']")?.textContent).toBe("—");
-		expect(screen.getByText("credit purchases · 30d")).toBeTruthy();
+		expect(screen.getByText("partial receipts · 1 gap · 30d")).toBeTruthy();
 		expect(screen.getByText("Costs incomplete")).toBeTruthy();
 		const table = screen.getByRole("table");
 		expect(Array.from(table.querySelectorAll("tr[data-finance-group]")).map((tr) => tr.getAttribute("data-finance-group"))).toEqual([
@@ -814,4 +815,35 @@ it("preserves exact long and fractional uact source strings", async () => {
 it("does not accept success claimed by an error HTTP response with a known hash", async () => {
   const post = vi.fn(async () => ({ ok: false, status: 503, json: async () => ({ txHash: transactionHash, receiptStatus: "success", code: "OPERATOR_WALLET_UNCONFIGURED" }) }));
   await expect(fundSteward(1, post as unknown as typeof fetch)).resolves.toEqual({ txHash: transactionHash, receiptStatus: "pending" });
+});
+
+
+it("offers mobile sorting through the same state as the desktop table", async () => {
+  const rows: MoneyPlaneRow[] = [
+    { plane: "low", label: "Low balance", kind: "prepaid", currency: "USD", balance: 1, usd: { amount: 1 }, burnPerDay: 4, runwayDays: 9, grade: "GREEN", freshness: "current", sourceObservedAt: takenAt, observedAt: takenAt },
+    { plane: "high", label: "High balance", kind: "prepaid", currency: "USD", balance: 10, usd: { amount: 10 }, burnPerDay: 2, runwayDays: 3, grade: "GREEN", freshness: "current", sourceObservedAt: takenAt, observedAt: takenAt },
+  ];
+  render(createElement(FinanceReportClient, { report: { ...liveShapedPreview, rows, summary: summarize({ rows }) } as NodeFinanceSnapshot }));
+  const mobile = screen.getByRole("region", { name: "Financials list" });
+  const mobileOrder = () => within(mobile).getAllByRole("listitem").map((item) => item.textContent?.startsWith("Low") ? "low" : "high");
+  const desktopOrder = () => Array.from(screen.getByRole("table").querySelectorAll("tr[data-finance-row]")).map((row) => row.getAttribute("data-finance-row"));
+  const balance = within(mobile).getByRole("button", { name: "Sort by Balance" });
+  await userEvent.click(balance);
+  expect(mobileOrder()).toEqual(["low", "high"]);
+  expect(desktopOrder()).toEqual(["low", "high"]);
+  expect(balance.getAttribute("aria-pressed")).toBe("true");
+  await userEvent.click(balance);
+  expect(mobileOrder()).toEqual(["high", "low"]);
+  for (const label of ["Burn/day", "Runway"]) {
+    await userEvent.click(within(mobile).getByRole("button", { name: `Sort by ${label}` }));
+    expect(mobileOrder()).toEqual(["high", "low"]);
+    expect(desktopOrder()).toEqual(["high", "low"]);
+  }
+});
+it("labels partial Cash received coverage without counting stale income", () => {
+  const rows: MoneyPlaneRow[] = [{ plane: "known", label: "Known receipts", kind: "income", currency: "USD", balance: null, burnPerDay: 1, runwayDays: null, grade: "INFO", freshness: "current", sourceObservedAt: takenAt, observedAt: takenAt }, { plane: "stale", label: "Stale receipts", kind: "income", currency: "USD", balance: null, burnPerDay: 2, runwayDays: null, grade: "UNKNOWN", freshness: "stale", sourceObservedAt: takenAt, observedAt: takenAt }];
+  render(createElement(FinanceReportClient, { report: { ...liveShapedPreview, rows, summary: summarize({ rows }) } as NodeFinanceSnapshot }));
+  const value = document.querySelector("[data-finance-stat='Cash received']");
+  expect(value?.textContent).toBe("$1.00/day");
+  expect(value?.parentElement?.textContent).toContain("partial receipts · 1 gap · 30d");
 });
