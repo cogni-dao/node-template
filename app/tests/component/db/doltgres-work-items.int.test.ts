@@ -111,6 +111,104 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 		if (container) await container.stop();
 	});
 
+	it("walks NOW-backed timestamp pages once in both directions", async () => {
+		// NOW() stores nanoseconds on this engine, while its text I/O exposes
+		// microseconds. Literal six-digit fixtures cannot catch that mismatch.
+		const expected = [
+			"task.290005",
+			"task.290006",
+			"task.290003",
+			"task.290004",
+			"task.290001",
+			"task.290002",
+		];
+		const reader = postgres(dbUrl, { max: 1, fetch_types: false });
+		const adapter = new DoltgresWorkItemAdapter(sql, {
+			readClient: reader,
+			readConnectionBudget: 2,
+			queryTimeoutMs: 5000,
+			logger: stageLogger,
+		});
+		try {
+			for (let i = 0; i < expected.length; i += 2) {
+				// Each statement has one NOW value. IDs deliberately oppose time;
+				// each timestamp tie must still use id ASC in either direction.
+				await sql.unsafe(
+					`INSERT INTO work_items (id,type,title,status,node,created_at,updated_at) VALUES ('${expected[i]}','task','${i === 4 ? "needle" : "absent"}','needs_design','timestamp-native',NOW(),NOW()),('${expected[i + 1]}','task','${i === 4 ? "needle" : "absent"}','needs_design','timestamp-native',NOW(),NOW())`
+				);
+			}
+			const precision = await sql.unsafe(
+				"SELECT id, created_at > CAST(CAST(created_at AS TEXT) AS TIMESTAMP WITH TIME ZONE) AS hidden_created_nanoseconds, updated_at > CAST(CAST(updated_at AS TEXT) AS TIMESTAMP WITH TIME ZONE) AS hidden_updated_nanoseconds FROM work_items WHERE node='timestamp-native'"
+			);
+			expect(
+				precision.some((row) => row.hidden_created_nanoseconds === true)
+			).toBe(true);
+			expect(
+				precision.some((row) => row.hidden_updated_nanoseconds === true)
+			).toBe(true);
+			for (const sortBy of ["createdAt", "updatedAt"] as const) {
+				for (const sortDirection of WORK_ITEM_SORT_DIRECTIONS) {
+					const ordered =
+						sortDirection === "asc"
+							? expected
+							: [
+									...expected.slice(4, 6),
+									...expected.slice(2, 4),
+									...expected.slice(0, 2),
+								];
+					const seen: string[] = [];
+					let cursor: string | undefined;
+					do {
+						const page = await adapter.list({
+							node: "timestamp-native",
+							sortBy,
+							sortDirection,
+							limit: 1,
+							...(cursor ? { cursor } : {}),
+						});
+						for (const item of page.items) {
+							expect(
+								seen,
+								`${sortBy} ${sortDirection}: repeated boundary`
+							).not.toContain(item.id);
+							seen.push(item.id);
+						}
+						expect(seen.length).toBeLessThanOrEqual(expected.length);
+						cursor = page.nextCursor;
+					} while (cursor);
+					expect(seen, `${sortBy} ${sortDirection}`).toEqual(ordered);
+					const textFirst = await adapter.list({
+						node: "timestamp-native",
+						sortBy,
+						sortDirection,
+						text: "needle",
+						limit: 1,
+					});
+					expect(textFirst.items.map((item) => item.id)).toEqual([
+						"task.290001",
+					]);
+					expect(textFirst.pageInfo.hasMore).toBe(true);
+					if (!textFirst.nextCursor) throw new Error("missing text cursor");
+					const textLast = await adapter.list({
+						node: "timestamp-native",
+						sortBy,
+						sortDirection,
+						text: "needle",
+						limit: 1,
+						cursor: textFirst.nextCursor,
+					});
+					expect(textLast.items.map((item) => item.id)).toEqual([
+						"task.290002",
+					]);
+					expect(textLast.pageInfo.hasMore).toBe(false);
+				}
+			}
+		} finally {
+			await reader.end({ timeout: 5 });
+			await sql.unsafe("DELETE FROM work_items WHERE node='timestamp-native'");
+		}
+	});
+
 	it("globally ranks native JSON before limiting, roundtrips every order, and measures plans at 15625 rows", async () => {
 		const fixtures: {
 			id: string;

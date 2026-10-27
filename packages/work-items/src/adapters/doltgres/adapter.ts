@@ -2780,8 +2780,11 @@ export class DoltgresWorkItemAdapter
         : {
             priority: "priority",
             rank: "rank",
-            createdAt: "created_at",
-            updatedAt: "updated_at"
+            // NOW() retains hidden nanoseconds, but native timestamp text I/O
+            // exposes microseconds. Use that same precision for ordering and
+            // seeking, so the projected cursor can roundtrip the boundary.
+            createdAt: "date_trunc('microseconds', created_at)",
+            updatedAt: "date_trunc('microseconds', updated_at)"
           }[order.sortBy];
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
     const limit = Math.min(Math.max(query.limit ?? 100, 1), 500);
