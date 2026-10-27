@@ -78,3 +78,12 @@ the closest file wins for code-local rules.
 Pointers: [contributor contract](.agents/skills/contribute-to-cogni/SKILL.md) ·
 [Node BaaS product model](https://cognidao.org/knowledge/node-baas-substrate-model) ·
 [discovery](https://cognidao.org/.well-known/agent.json)
+
+## Local agent development
+
+Read [.env.local.example](.env.local.example) and the
+[local agent development guide draft](https://cognidao.org/knowledge/inbox/contrib-flock-leader-conductor-469da024).
+The guide is awaiting review; [agent infrastructure](https://cognidao.org/knowledge/agent-infrastructure-expert)
+remains the governing contract. Use this repository's `pnpm dev:stack` for app plus LangGraph dev. Shared local
+substrate bindings are explicit prerequisites. Keep node identity, credentials and
+databases local; never use a deployed hub as a local development database.
