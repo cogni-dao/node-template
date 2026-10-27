@@ -2596,9 +2596,7 @@ export class DoltgresWorkItemAdapter
       throw new WorkItemsBusyError(
         "Work-item read deadline elapsed before native dispatch"
       );
-    this.logStage("info", context, stage, "start");
     let timer: ReturnType<typeof setTimeout> | undefined;
-    let expired = false;
     await this.enterReaderQueue(pool, deadline);
     let nativeStarted = false;
     const native = Promise.resolve().then(() => {
@@ -2621,17 +2619,12 @@ export class DoltgresWorkItemAdapter
       });
     try {
       return await Promise.race([
-        settled.then((rows) => {
-          if (!expired)
-            this.logStage("info", context, stage, "complete", {
-              durationMs: Date.now() - startedAt
-            });
-          return rows as ReadonlyArray<Record<string, unknown>>;
-        }),
+        settled.then(
+          (rows) => rows as ReadonlyArray<Record<string, unknown>>
+        ),
         new Promise<never>((_, reject) => {
           timer = setTimeout(
             () => {
-              expired = true;
               this.retireReadPool(pool, context, stage);
               reject(
                 new WorkItemsBusyError(
