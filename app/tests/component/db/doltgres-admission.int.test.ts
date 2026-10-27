@@ -6,6 +6,7 @@ import {
 	runDoltBranchMutation,
 	acquireDoltWriterLocks,
 	doltWriterLockKey,
+	DoltNativeSessionExecutor,
 	type DoltWriterLock,
 } from "@cogni-dao/doltgres-admission";
 import { execFile, spawn } from "node:child_process";
@@ -221,6 +222,98 @@ describe("Doltgres 0.57.3 common per-database writer protocol", () => {
 			await guard.release();
 		}
 	});
+
+	it("bug.5544: an interrupted executor write frees the advisory lock and the next op serves (no wedge)", async () => {
+		// Drive the REAL DoltNativeSessionExecutor against real Doltgres. An
+		// interrupted write must evict + release the server-global advisory lock so
+		// a PEER connection (standing in for the separate work-items writer) can
+		// re-acquire the scoped key, and the SAME executor must admit the next op.
+		// Old code quarantined the connection and held the lock until pod restart.
+		const errors = {
+			busy: (message: string) => new Error(message),
+			outcomeUnknown: (operationId: string, branch: string, hash?: string) =>
+				Object.assign(new Error(`outcome-unknown ${operationId}`), {
+					name: "OutcomeUnknown",
+					operationId,
+					branch,
+					hash,
+				}),
+			fault: (message: string) => new Error(message),
+		};
+		const writerPool = postgres(`${origin}/${DATABASE_A}`, {
+			max: 1,
+			fetch_types: false,
+		});
+		await writerPool.unsafe("SELECT 1");
+		const executor = new DoltNativeSessionExecutor(writerPool, {
+			errors,
+			writerProtocol: "database",
+			lockWaitMs: 2_000,
+			lockRetryMs: 50,
+		});
+		const scopedKey = doltWriterLockKey(DATABASE_A);
+		try {
+			await a.unsafe(
+				"CREATE TABLE IF NOT EXISTS wedge_probe (id text PRIMARY KEY)",
+			);
+			await a.unsafe("SELECT dolt_commit('-Am', 'wedge fixture')");
+
+			// 1) Interrupted write: the callback throws AFTER a DML.
+			await expect(
+				executor.run(
+					"wedge.interrupt",
+					async (conn, guard, owner) =>
+						runDoltBranchMutation(conn, {
+							guard,
+							operationId: "wedge.interrupt",
+							message: "interrupted after DML",
+							onSessionUncertain: (error) => executor.retire(conn, error),
+							onReconcile: owner.registerReconciliation,
+							onCommitted: owner.committed,
+							run: async (scoped) => {
+								await scoped.unsafe(
+									"INSERT INTO wedge_probe VALUES ('interrupted')",
+								);
+								throw new Error("interrupted after DML");
+							},
+						}),
+					{ operationId: "wedge.interrupt", awaitSettlement: true },
+				),
+			).rejects.toThrow();
+
+			// 2) PROOF the lock is FREE: a peer connection acquires the scoped key.
+			//    Old code held it here -> this would be false (wedge).
+			const got = await aPeer.unsafe(
+				`SELECT pg_try_advisory_lock(${scopedKey})`,
+			);
+			expect(got[0]?.pg_try_advisory_lock).toBe(true);
+			await aPeer.unsafe(`SELECT pg_advisory_unlock(${scopedKey})`);
+
+			// 3) PROOF no wedge: the SAME executor admits and completes the next op.
+			const served = await executor.run(
+				"wedge.after",
+				async (conn, guard, owner) =>
+					runDoltBranchMutation(conn, {
+						guard,
+						operationId: "wedge.after",
+						message: "serves after interruption",
+						onSessionUncertain: (error) => executor.retire(conn, error),
+						onReconcile: owner.registerReconciliation,
+						onCommitted: owner.committed,
+						run: async (scoped) => {
+							await scoped.unsafe(
+								"INSERT INTO wedge_probe VALUES ('after') ON CONFLICT DO NOTHING",
+							);
+							return "served";
+						},
+					}),
+				{ operationId: "wedge.after" },
+			);
+			expect(served).toBe("served");
+		} finally {
+			await writerPool.end({ timeout: 0 });
+		}
+	}, 30_000);
 
 	it("callback failure after DML never carries dirty operation changes into main", async () => {
 		const guard = await acquireDoltWriterLocks(a);
