@@ -46,6 +46,9 @@ interface NativeOperation {
   abandoned?: Error;
   rejectCaller?: (error: Error) => void;
   transportUnknown?: boolean;
+  /** This operation's outcome is uncertain (quarantine path), independent of the
+   * now-evicted pool flag — the caller must still receive `outcomeUnknown`. */
+  outcomeUncertain?: boolean;
   admitting?: boolean;
   closed?: boolean;
   reconciliationRequired?: boolean;
@@ -243,7 +246,7 @@ export class DoltNativeSessionExecutor<TPool extends DoltNativeWriterPool> {
         if (this.heldOperation || this.retiredPools.has(this.sql))
           throw this.errors.busy("Dolt native writer capacity is retained");
         const value = await this.withSession(operation, fn, context, succeed);
-        if (options.awaitSettlement && (context.transportUnknown || this.retiredPools.has(this.sql)))
+        if (options.awaitSettlement && (context.transportUnknown || context.outcomeUncertain))
           throw this.errors.outcomeUnknown(context.operationId, context.branch, context.commitHash);
         return value;
       } finally {
@@ -413,8 +416,10 @@ export class DoltNativeSessionExecutor<TPool extends DoltNativeWriterPool> {
     const context = this.connectionOperations.get(connection);
     this.quarantine(pool, "dolt.write", "session", "outcome_uncertain");
     if (context) {
+      // Mark the op uncertain for the caller, but never latch the shared writer
+      // (bug.5544): the `withSession` finally evicts the connection and keeps serving.
       context.reconciliationRequired = true;
-      this.heldOperation = context;
+      context.outcomeUncertain = true;
     }
   }
 
@@ -587,13 +592,16 @@ export class DoltNativeSessionExecutor<TPool extends DoltNativeWriterPool> {
       // neither add another native query nor inherit private cleanup authority.
       await Promise.allSettled([...context.pending]);
       if (context.transportUnknown) {
+        // Dead socket: an unlock cannot be sent. Record the uncertainty for the
+        // caller; the server session frees the lock when the abandoned op settles.
+        // The tail evicts the connection — the writer is never retained (bug.5544).
         this.quarantine(
           pool,
           operation,
           "settlement",
           "native_transport_unknown"
         );
-        this.heldOperation = context;
+        context.outcomeUncertain = true;
       } else if (guard && connection) {
         const ownedGuard = guard;
         const ownedConnection = connection;
@@ -607,7 +615,10 @@ export class DoltNativeSessionExecutor<TPool extends DoltNativeWriterPool> {
               context.reconciliationRequired = true;
             }
           }
-          if (context.transportUnknown) return;
+          if (context.transportUnknown) {
+            context.outcomeUncertain = true;
+            return;
+          }
           let safe = false;
           if (context.reconcile) {
             try {
@@ -629,18 +640,37 @@ export class DoltNativeSessionExecutor<TPool extends DoltNativeWriterPool> {
               });
           }
           if (!safe || context.transportUnknown) {
+            // Uncertain outcome (bug.5544): record it for the caller, but DO NOT
+            // retain the shared writer. On a still-live session release the
+            // advisory lock here (inside the authorized cleanup scope) so other
+            // writers and a fresh connection re-acquire it. Data-uncertainty is
+            // owned by idempotent reconcile-on-replay, not by holding the lock.
             this.quarantine(
               pool,
               operation,
               "reconciliation",
               "operation_receipt_requires_recovery"
             );
-            this.heldOperation = context;
+            context.outcomeUncertain = true;
             this.log("error", operation, "recovery", "error", {
               operationId: context.operationId,
               branch: context.branch,
               commitHash: context.commitHash ?? null,
             });
+            if (!context.transportUnknown) {
+              try {
+                await ownedGuard.release();
+                this.retiredPools.delete(pool);
+              } catch (error) {
+                this.log(
+                  "error",
+                  operation,
+                  "lock.release",
+                  "error",
+                  errorFields(error)
+                );
+              }
+            }
             return;
           }
           try {
@@ -661,11 +691,20 @@ export class DoltNativeSessionExecutor<TPool extends DoltNativeWriterPool> {
               "lock.release",
               "unlock_uncertain"
             );
-            this.heldOperation = context;
+            context.outcomeUncertain = true;
           }
         });
       }
-      if (native && !this.retiredPools.has(pool)) native.release();
+      // EVICT-AND-REPLACE (bug.5544): an uncertain outcome must NEVER retain the
+      // single shared writer. The old code latched `heldOperation` + `retiredPools`
+      // and skipped `native.release()`, so the reserved session kept the shared
+      // advisory lock forever and both writers wedged until a pod restart. The
+      // lock is now released inside the authorized cleanup scope above; here we
+      // only evict the connection and clear the retirement/latch so the next
+      // operation is admitted. The caller already holds `outcomeUnknown`.
+      this.heldOperation = undefined;
+      this.retiredPools.delete(pool);
+      if (native) native.release();
     }
   }
 
@@ -702,7 +741,12 @@ export class DoltNativeSessionExecutor<TPool extends DoltNativeWriterPool> {
     return reserved;
   }
 
-  /** Quarantine transportUnknown native work without abandoning its socket or replacing capacity. */
+  /**
+   * Mark the in-flight connection dead so its remaining queries short-circuit.
+   * Capacity is NOT retained permanently: the `withSession` finally tail evicts
+   * the connection and clears this flag at settlement (bug.5544), so the shared
+   * writer never wedges on an uncertain outcome.
+   */
   private quarantine(
     pool: TPool,
     operation: string,
