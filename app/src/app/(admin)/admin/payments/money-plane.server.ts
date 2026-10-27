@@ -137,9 +137,13 @@ function operatorCoveredReader(plane: string, label: string, detail: string): Pl
 	};
 }
 
-/** Attach the fields the package readers do not know about (rail, note). */
+/** Attach node metadata; expose the rail on the reader for the existing timeout fallback. */
 function withRow(reader: PlaneReader, extra: Partial<MoneyPlaneRow>): PlaneReader {
-	return { ...reader, read: async (signal) => ({ ...(await reader.read(signal)), ...extra }) };
+	return {
+		...reader,
+		...(extra.rail === undefined ? {} : { rail: extra.rail }),
+		read: async (signal) => ({ ...(await reader.read(signal)), ...extra }),
+	};
 }
 
 function plannedIncomeReader(): PlaneReader {

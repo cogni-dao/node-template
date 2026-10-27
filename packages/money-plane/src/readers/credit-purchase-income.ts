@@ -50,6 +50,7 @@ export function creditPurchaseIncomeReader(
     plane,
     label,
     kind: "income",
+    rail,
     async read(signal): Promise<MoneyPlaneRow> {
       const at = now();
       const since = new Date(at.getTime() - windowDays * 86_400_000);

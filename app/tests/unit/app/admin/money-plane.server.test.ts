@@ -286,6 +286,46 @@ describe("node composition", () => {
 		expect(by["hosting:operator-covered"]?.detail).toBe("Funded by operator · cost not yet shared");
 	});
 
+	it("preserves configured wallet rails, identity and actions when RPC reads time out", async () => {
+		const actual = await vi.importActual<typeof import("@cogni/money-plane")>("@cogni/money-plane");
+		const hungFetch = vi.fn(() => new Promise<Response>(() => {}));
+		mocks.walletReader.mockImplementation((options) => actual.baseWalletReader({ ...options, fetch: hungFetch }));
+		mocks.snapshot.mockImplementation((readers) => actual.takeSnapshot(readers, { timeoutMs: 1 }));
+		mocks.treasury.mockReturnValue(address);
+		mocks.operator.mockReturnValue({ address: other("1234") });
+		mocks.steward.mockReturnValue({ address: other("5678") });
+
+		const result = await getMoneyPlaneSnapshot();
+		const expected = [
+			["dao-treasury", address, { kind: "dao-vote", status: "planned", guide: "governance" }],
+			["operator-wallet", other("1234"), { kind: "steward-manual", status: "supported" }],
+			["steward-wallet", other("5678"), { kind: "none", status: "unsupported" }],
+		] as const;
+		for (const [name, walletAddress, rail] of expected) {
+			expect(result.rows.find((row) => row.plane === `base:${name}`)).toMatchObject({
+				grade: "UNKNOWN", reasonCode: "timeout", balance: null, rail,
+				wallet: { address: walletAddress, network: "Base", explorerUrl: `https://basescan.org/address/${walletAddress}` },
+			});
+		}
+		expect(result.rows.find((row) => row.plane === "base:operator-wallet")?.payAction).toEqual(FUND_STEWARD);
+		expect(result.treasuryPlane).toBe("base:dao-treasury");
+		expect(hungFetch).toHaveBeenCalled();
+	});
+
+	it("preserves the income rail when the ledger query times out", async () => {
+		const actual = await vi.importActual<typeof import("@cogni/money-plane")>("@cogni/money-plane");
+		const hungQuery = vi.fn(() => new Promise<never>(() => {}));
+		mocks.query.mockReturnValue(hungQuery);
+		mocks.snapshot.mockImplementation((readers) => actual.takeSnapshot(readers, { timeoutMs: 1 }));
+
+		const result = await getMoneyPlaneSnapshot();
+		expect(result.rows.find((row) => row.plane === "income:credit-purchases")).toMatchObject({
+			kind: "income", grade: "UNKNOWN", reasonCode: "timeout", burnPerDay: null,
+			rail: { kind: "split-inflow", status: "supported" },
+		});
+		expect(hungQuery).toHaveBeenCalledOnce();
+	});
+
 	it("puts fund-steward on the operator wallet only when a steward wallet exists, else marks the rail unsupported", async () => {
 		mocks.operator.mockReturnValue({ address: other("1234") });
 		mocks.steward.mockReturnValue({ address: other("5678") });
