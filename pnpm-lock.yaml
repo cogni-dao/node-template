@@ -496,6 +496,9 @@ importers:
         specifier: ^3.24.1
         version: 3.25.2(zod@3.25.76)
     devDependencies:
+      '@cogni-dao/work-items':
+        specifier: workspace:*
+        version: link:../work-items
       '@cogni/ai-core':
         specifier: workspace:*
         version: link:../ai-core
@@ -945,6 +948,9 @@ importers:
       '@cogni/scheduling':
         specifier: workspace:@cogni-dao/scheduling@*
         version: link:../scheduling
+      '@cogni/work-items':
+        specifier: workspace:@cogni-dao/work-items@*
+        version: link:../work-items
       '@ts-rest/core':
         specifier: ^3.52.1
         version: 3.52.1(@types/node@22.19.19)(zod@4.4.3)

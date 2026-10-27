@@ -38,6 +38,7 @@ Shared Zod route contracts and HTTP router definitions for all node apps. PURE_L
 
 All contract files re-exported via `src/index.ts`. Selective re-export for `ai.chat.v1.contract` to avoid `ChatMessage` name collision with `ai.completions.v1.contract`.
 
+- `work.items.list.v1.contract` — optional sortBy/sortDirection use work-items canonical allowlists; DTO exposes derived read-only rankScore
 - `work.items.{list,create,patch}.v1.contract` — evaluation scores outline (`scores.<axis>.v/ev`); shared work-items adapter validates bounds, PATCH null clears scores
 - `identity.attestation.v1.contract` — frozen operator↔node identity protocol, canonical HTTPS-origin schema, and cross-repository protocol fingerprint
 
@@ -65,7 +66,7 @@ All require `Authorization: Bearer ${SCHEDULER_API_TOKEN}`.
 
 ## Dependencies
 
-- **Internal:** `@cogni/ai-core`, `@cogni/aragon-osx`, `@cogni/node-core`, `@cogni/scheduling` (published readback/contracts alias).
+- **Internal:** `@cogni/ai-core`, `@cogni/aragon-osx`, `@cogni/node-core`, `@cogni/scheduling` (published readback/contracts alias), `@cogni/work-items` (sort allowlists).
 - **External:** `zod`, `@ts-rest/core`
 
 ## Notes

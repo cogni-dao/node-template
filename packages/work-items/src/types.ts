@@ -15,6 +15,7 @@
  */
 
 import type { Tagged } from "type-fest";
+import type { WorkItemSortBy, WorkItemSortDirection } from "./query-order.js";
 
 // ── Identity ──────────────────────────────────────────
 
@@ -131,6 +132,8 @@ export type WorkItem = {
 // ── Query ─────────────────────────────────────────────
 
 export type WorkQuery = {
+  readonly sortBy?: WorkItemSortBy;
+  readonly sortDirection?: WorkItemSortDirection;
   readonly ids?: readonly WorkItemId[];
   readonly types?: readonly WorkItemType[];
   readonly statuses?: readonly WorkItemStatus[];

@@ -13,7 +13,16 @@ import { execFileSync, spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { toWorkItemId } from "@cogni/work-items";
+import {
+	toWorkItemId,
+	rankScore,
+	compareWorkItems,
+	normalizeWorkItemOrder,
+	WORK_ITEM_SORT_FIELDS,
+	WORK_ITEM_SORT_DIRECTIONS,
+	type WorkItem,
+} from "@cogni/work-items";
+import { rankScoreSql } from "../../../../packages/work-items/src/rank-policy";
 import { acquireDoltWriterLocks } from "@cogni-dao/doltgres-admission";
 import postgres, { type Sql } from "postgres";
 import {
@@ -100,6 +109,416 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 	afterAll(async () => {
 		if (sql) await sql.end({ timeout: 5 });
 		if (container) await container.stop();
+	});
+
+	it("walks NOW-backed timestamp pages once in both directions", async () => {
+		// NOW() stores nanoseconds on this engine, while its text I/O exposes
+		// microseconds. Literal six-digit fixtures cannot catch that mismatch.
+		const expected = [
+			"task.290005",
+			"task.290006",
+			"task.290003",
+			"task.290004",
+			"task.290001",
+			"task.290002",
+		];
+		const reader = postgres(dbUrl, { max: 1, fetch_types: false });
+		const adapter = new DoltgresWorkItemAdapter(sql, {
+			readClient: reader,
+			readConnectionBudget: 2,
+			queryTimeoutMs: 5000,
+			logger: stageLogger,
+		});
+		try {
+			for (let i = 0; i < expected.length; i += 2) {
+				// Each statement has one NOW value. IDs deliberately oppose time;
+				// each timestamp tie must still use id ASC in either direction.
+				await sql.unsafe(
+					`INSERT INTO work_items (id,type,title,status,node,created_at,updated_at) VALUES ('${expected[i]}','task','${i === 4 ? "needle" : "absent"}','needs_design','timestamp-native',NOW(),NOW()),('${expected[i + 1]}','task','${i === 4 ? "needle" : "absent"}','needs_design','timestamp-native',NOW(),NOW())`
+				);
+			}
+			const precision = await sql.unsafe(
+				"SELECT id, created_at > CAST(CAST(created_at AS TEXT) AS TIMESTAMP WITH TIME ZONE) AS hidden_created_nanoseconds, updated_at > CAST(CAST(updated_at AS TEXT) AS TIMESTAMP WITH TIME ZONE) AS hidden_updated_nanoseconds FROM work_items WHERE node='timestamp-native'"
+			);
+			expect(
+				precision.some((row) => row.hidden_created_nanoseconds === true)
+			).toBe(true);
+			expect(
+				precision.some((row) => row.hidden_updated_nanoseconds === true)
+			).toBe(true);
+			for (const sortBy of ["createdAt", "updatedAt"] as const) {
+				for (const sortDirection of WORK_ITEM_SORT_DIRECTIONS) {
+					const ordered =
+						sortDirection === "asc"
+							? expected
+							: [
+									...expected.slice(4, 6),
+									...expected.slice(2, 4),
+									...expected.slice(0, 2),
+								];
+					const seen: string[] = [];
+					let cursor: string | undefined;
+					do {
+						const page = await adapter.list({
+							node: "timestamp-native",
+							sortBy,
+							sortDirection,
+							limit: 1,
+							...(cursor ? { cursor } : {}),
+						});
+						for (const item of page.items) {
+							expect(
+								seen,
+								`${sortBy} ${sortDirection}: repeated boundary`
+							).not.toContain(item.id);
+							seen.push(item.id);
+						}
+						expect(seen.length).toBeLessThanOrEqual(expected.length);
+						cursor = page.nextCursor;
+					} while (cursor);
+					expect(seen, `${sortBy} ${sortDirection}`).toEqual(ordered);
+					const textFirst = await adapter.list({
+						node: "timestamp-native",
+						sortBy,
+						sortDirection,
+						text: "needle",
+						limit: 1,
+					});
+					expect(textFirst.items.map((item) => item.id)).toEqual([
+						"task.290001",
+					]);
+					expect(textFirst.pageInfo.hasMore).toBe(true);
+					if (!textFirst.nextCursor) throw new Error("missing text cursor");
+					const textLast = await adapter.list({
+						node: "timestamp-native",
+						sortBy,
+						sortDirection,
+						text: "needle",
+						limit: 1,
+						cursor: textFirst.nextCursor,
+					});
+					expect(textLast.items.map((item) => item.id)).toEqual([
+						"task.290002",
+					]);
+					expect(textLast.pageInfo.hasMore).toBe(false);
+				}
+			}
+		} finally {
+			await reader.end({ timeout: 5 });
+			await sql.unsafe("DELETE FROM work_items WHERE node='timestamp-native'");
+		}
+	});
+
+	it("globally ranks native JSON before limiting, roundtrips every order, and measures plans at 15625 rows", async () => {
+		const fixtures: {
+			id: string;
+			scores: Record<string, { v: number; ev?: string }> | null;
+		}[] = [];
+		for (let goal = 1; goal <= 5; goal++)
+			for (let time = 1; time <= 5; time++)
+				for (let unblocks = 1; unblocks <= 5; unblocks++)
+					for (let ease = 1; ease <= 5; ease++)
+						for (let confidence = 1; confidence <= 5; confidence++)
+							for (let agent = 1; agent <= 5; agent++) {
+								fixtures.push({
+									id: `task.${100000 + fixtures.length}`,
+									scores: Object.fromEntries(
+										Object.entries({
+											goal,
+											time,
+											unblocks,
+											ease,
+											confidence,
+											agent,
+										}).map(([axis, v]) => [
+											axis,
+											{ v, ev: "https://example.org/native-fixture" },
+										]),
+									),
+								});
+							}
+		try {
+		// Bounded seed batches, not 15625 version-control branch mutations.
+		for (let offset = 0; offset < fixtures.length; offset += 250) {
+			const batch = fixtures.slice(offset, offset + 250);
+			await sql.unsafe(
+				`INSERT INTO work_items (id,type,title,status,node,priority,rank,scores,created_at,updated_at) VALUES ${batch.map((f, i) => `('${f.id}','task','native rank ${f.id}','needs_implement','rank-native',${offset + i < 500 ? 0 : 4},${offset + i},'${JSON.stringify(f.scores)}'::JSONB,'2026-10-26 00:00:00.123456+00','2026-10-26 00:00:00.123456+00')`).join(",")}`,
+			);
+		}
+		// Test the ACTUAL private policy emitter against native JSON, including every valid 5^6 combination.
+		const values = await sql.unsafe(
+			`SELECT id, ${rankScoreSql()} AS native_rank FROM work_items WHERE node='rank-native'`,
+		);
+		const expected = new Map(fixtures.map((f) => [f.id, rankScore(f.scores)]));
+		for (const row of values)
+			expect(Number(row.native_rank), String(row.id)).toBe(
+				expected.get(String(row.id)),
+			);
+		expect(values).toHaveLength(15625);
+		const invalids = [
+			"null",
+			"[]",
+			"true",
+			"{}",
+			'{"goal":{"v":"5"}}',
+			'{"goal":{"v":1e100},"agent":{"v":5}}',
+		];
+		const valid = fixtures[fixtures.length - 1]?.scores;
+		if (!valid) throw new Error("valid fixture missing");
+		for (const invalid of [0, 6, 1.5, "5", true, null, {}, []])
+			invalids.push(JSON.stringify({ ...valid, goal: { v: invalid } }));
+		for (const [i, json] of invalids.entries()) {
+			const rows = await sql.unsafe(
+				`SELECT ${rankScoreSql()} AS native_rank FROM (SELECT '${json}'::JSONB AS scores) AS historical`,
+			);
+			expect(rows[0]?.native_rank, `invalid fixture ${i}`).toBeNull();
+		}
+		// 1e1000 cannot exist in this engine's JSONB storage. Check that input
+		// boundary separately rather than attributing its rejection to rank SQL.
+		await expect(sql.unsafe(`SELECT '{"goal":{"v":1e1000},"agent":{"v":5}}'::JSONB`)).rejects.toThrow(/invalid input syntax for type json/);
+		console.info("rank_query_native_parity", JSON.stringify({image:DOLTGRES_IMAGE,validCombinations:values.length,invalidFixtures:invalids.length,unrepresentableJsonRejected:true}));
+		const queries: string[] = [];
+		const readSql = postgres(dbUrl, { max: 1, fetch_types: false });
+		const tracedRead = new Proxy(readSql, {
+			get(target, key) {
+				if (key === "unsafe")
+					return (query: string) => {
+						queries.push(query);
+						return target.unsafe(query);
+					};
+				return Reflect.get(target, key);
+			},
+		});
+		const adapter = new DoltgresWorkItemAdapter(sql, {
+			readClient: tracedRead,
+			readConnectionBudget: 2,
+			queryTimeoutMs: 5000,
+			logger: stageLogger,
+		});
+		try {
+			const measured = async (mode: string, limit: number) => {
+				const start = performance.now();
+				const page = await adapter.list({ node: "rank-native", limit });
+				const elapsedMs = performance.now() - start;
+				console.info(
+					"rank_query_native_measurement",
+					JSON.stringify({
+						image: DOLTGRES_IMAGE,
+						datasetN: fixtures.length,
+						mode,
+						limit,
+						elapsedMs,
+						queryCount: queries.length,
+					}),
+				);
+				expect(elapsedMs).toBeLessThan(5000);
+				return page;
+			};
+			const firstAdapterRead = await measured("first-adapter-read-after-parity", 5);
+			expect(firstAdapterRead.items.map((item) => rankScore(item.scores))).toEqual([
+				15, 15, 15, 15, 15,
+			]);
+			const legacy = await sql.unsafe(
+				"SELECT id FROM work_items WHERE node='rank-native' ORDER BY priority ASC,rank ASC LIMIT 500",
+			);
+			expect(legacy.map((row) => row.id)).not.toContain(firstAdapterRead.items[0]?.id);
+			await measured("repeat-adapter-read", 5);
+			const query = queries[0];
+			if (!query) throw new Error("query missing");
+			const plan = await sql.unsafe(`EXPLAIN ${query}`);
+			console.info(
+				"rank_query_native_explain",
+				JSON.stringify({ image: DOLTGRES_IMAGE, rows: fixtures.length, plan }),
+			);
+			expect(plan.length).toBeGreaterThan(0);
+			const all: WorkItem[] = [];
+			let cursor: string | undefined;
+			do {
+				const page = await adapter.list({
+					node: "rank-native",
+					limit: 500,
+					...(cursor ? { cursor } : {}),
+				});
+				all.push(...page.items);
+				cursor = page.nextCursor;
+			} while (cursor);
+			expect(all).toHaveLength(15625);
+			expect(new Set(all.map((item) => item.id)).size).toBe(15625);
+			expect(all.map((item) => item.id)).toEqual(
+				[...all]
+					.sort((a, b) => compareWorkItems(a, b, normalizeWorkItemOrder()))
+					.map((item) => item.id),
+			);
+			// Small tied/unknown shelf exercises every override and both directions without 10 full large scans.
+			const ids = all
+				.slice(0, 3)
+				.concat(all.slice(-3))
+				.map((item) => item.id);
+			await sql.unsafe(
+				`UPDATE work_items SET scores=NULL,priority=NULL,rank=NULL WHERE id='${ids[0]}'`,
+			);
+			const shelf = (await adapter.list({ ids, limit: 50 })).items;
+			for (const sortBy of WORK_ITEM_SORT_FIELDS)
+				for (const sortDirection of WORK_ITEM_SORT_DIRECTIONS) {
+					const order = { sortBy, sortDirection };
+					const seen: WorkItem[] = [];
+					let next: string | undefined;
+					do {
+						const page = await adapter.list({
+							ids,
+							limit: 2,
+							...order,
+							...(next ? { cursor: next } : {}),
+						});
+						seen.push(...page.items);
+						next = page.nextCursor;
+					} while (next);
+					expect(
+						seen.map((item) => item.id),
+						JSON.stringify(order),
+					).toEqual(
+						[...shelf]
+							.sort((a, b) => compareWorkItems(a, b, order))
+							.map((item) => item.id),
+					);
+				}
+			const first = await adapter.list({ ids, limit: 1 });
+			await expect(
+				adapter.list({
+					ids,
+					limit: 1,
+					sortBy: "priority",
+					cursor: first.nextCursor,
+				}),
+			).rejects.toMatchObject({ name: "InvalidCursorError" });
+			// Sparse text matches straddle multiple bounded batches, including out-of-line TEXT.
+			for (let i = 0; i < 12; i++)
+				await sql.unsafe(
+					`INSERT INTO work_items (id,type,title,status,node,summary) VALUES ('task.${200000 + i}','task','text ${i}','needs_design','text-native','${"x".repeat(8000)} ${i === 8 || i === 11 ? "needle" : "absent"}')`,
+				);
+			const textStart = performance.now();
+			const before = queries.length;
+			const textPage = await adapter.list({
+				node: "text-native",
+				text: "NEEDLE",
+				limit: 1,
+			});
+			expect(textPage.items.map((item) => item.id)).toEqual(["task.200008"]);
+			expect(textPage.pageInfo.hasMore).toBe(true);
+			const textNext = await adapter.list({
+				node: "text-native",
+				text: "needle",
+				limit: 1,
+				cursor: textPage.nextCursor,
+			});
+			expect(textNext.items.map((item) => item.id)).toEqual(["task.200011"]);
+			expect(textNext.pageInfo.hasMore).toBe(false);
+			expect(queries.slice(before).length).toBeGreaterThan(2);
+			console.info(
+				"rank_query_sparse_text",
+				JSON.stringify({
+					image: DOLTGRES_IMAGE,
+					datasetN: 12,
+					limit: 1,
+					elapsedMs: performance.now() - textStart,
+					batches: queries.length - before,
+				}),
+			);
+			for (const issued of queries)
+				expect(issued).toMatch(/ LIMIT (2|3|6|51|501)$/);
+		} finally {
+			await readSql.end({ timeout: 5 });
+		}
+		} finally {
+			// Cleanup also runs when seed/JSON qualification fails before reader setup.
+			await sql.unsafe("DELETE FROM work_items WHERE node IN ('rank-native','text-native')");
+		}
+	});
+
+	it.each([
+		"native",
+		"admission",
+	] as const)("expires a sparse text list across batches including %s waiting without partial success", async (mode) => {
+		const writer = postgres(dbUrl, { max: 1, fetch_types: false });
+		const reader = postgres(dbUrl, { max: 1, fetch_types: false });
+		const unsafe = reader.unsafe.bind(reader);
+		const end = reader.end.bind(reader);
+		const native: Promise<unknown>[] = [];
+		let batches = 0,
+			ended = 0,
+			settled = 0;
+		let signalFirst!: () => void;
+		const firstStarted = new Promise<void>((resolve) => {
+			signalFirst = resolve;
+		});
+		reader.unsafe = ((query: string) => {
+			const isList = query.includes("node IN ('deadline-native')");
+			if (isList) {
+				batches++;
+				signalFirst();
+			}
+			const delay = isList ? (batches === 1 ? 0.15 : 0.7) : 0.7;
+			// Execute the actual adapter query; real native pg_sleep delays its settlement.
+			// The result includes a match on batch 1, so a timeout must discard it.
+			const pending = (async () => {
+				const rows = await unsafe(query);
+				await unsafe(`SELECT pg_sleep(${delay}) /* rank_text_deadline_probe */`);
+				return rows;
+			})().finally(() => {
+				settled++;
+			});
+			native.push(pending);
+			return pending;
+		}) as typeof reader.unsafe;
+		reader.end = (async (options) => {
+			ended++;
+			await end(options);
+		}) as typeof reader.end;
+		try {
+			await sql.unsafe(
+				`INSERT INTO work_items (id,type,title,status,node) VALUES ${Array.from({ length: 6 }, (_, i) => `('task.${300000 + i}','task','${i === 0 || i === 5 ? "needle" : "absent"}','needs_design','deadline-native')`).join(",")}`,
+			);
+			const adapter = new DoltgresWorkItemAdapter(writer, {
+				readClient: reader,
+				readConnectionBudget: 2,
+				queryTimeoutMs: 500,
+			});
+			const list = adapter.list({
+				node: "deadline-native",
+				text: "needle",
+				limit: 1,
+			});
+			const rejected = expect(list).rejects.toBeInstanceOf(WorkItemsBusyError);
+			await firstStarted;
+			const queued =
+				mode === "admission"
+					? adapter.get(toWorkItemId("task.300000")).catch((error) => error)
+					: undefined;
+			await rejected;
+			expect(batches).toBe(mode === "native" ? 2 : 1);
+			expect(ended).toBe(0); // A pending native operation retains its generation.
+			const captured = batches;
+			await Promise.allSettled(native);
+			await queued;
+			expect(settled).toBe(native.length);
+			expect(batches).toBe(captured); // No later text batch dispatch after expiry.
+			await expect.poll(() => ended).toBe(1);
+			console.info(
+				"rank_query_text_deadline",
+				JSON.stringify({
+					image: DOLTGRES_IMAGE,
+					mode,
+					batches,
+					settled,
+					ended,
+					queryTimeoutMs: 500,
+				}),
+			);
+		} finally {
+			await Promise.allSettled(native);
+			await Promise.allSettled([writer.end({ timeout: 5 }), end({ timeout: 5 })]);
+			await sql.unsafe("DELETE FROM work_items WHERE node='deadline-native'");
+		}
 	});
 
 	it("creates, lists, patches, and retains versioned content through Dolt branches", async () => {

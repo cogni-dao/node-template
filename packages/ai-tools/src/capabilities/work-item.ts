@@ -13,6 +13,8 @@
  * @public
  */
 
+import type { WorkItemQueryInput } from "../tools/work-item-query";
+
 /**
  * Work item summary returned by the capability.
  * Subset of full WorkItem — enough for agent decision-making.
@@ -63,6 +65,8 @@ export interface WorkItemAssignee {
  * Parameters for querying work items.
  */
 export interface WorkItemQueryParams {
+  readonly sortBy?: WorkItemQueryInput["sortBy"];
+  readonly sortDirection?: WorkItemQueryInput["sortDirection"];
   readonly statuses?: readonly string[];
   readonly types?: readonly string[];
   readonly text?: string;

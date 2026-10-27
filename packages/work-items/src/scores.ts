@@ -208,51 +208,5 @@ export function parseWorkItemScores(input: unknown): WorkItemScoresParseResult {
   return { ok: true, value };
 }
 
-/** Ease → estimated agent iterations: the midpoint of each ease band. */
-export const EASE_ITERATIONS: Readonly<Record<number, number>> = Object.freeze({
-  5: 1,
-  4: 1.5,
-  3: 2.5,
-  2: 5,
-  1: 8,
-});
-
-/**
- * WSJF rank, iteration-based:
- * `(goal + time + unblocks) / iterations(ease) × confidence / 5`.
- * Returns undefined when any of the six evaluation axes is missing or 0 (unknown);
- * such items sort after scored ones. Computed by code, never stored.
- */
-export function rankScore(
-  scores: WorkItemScores | null | undefined
-): number | undefined {
-  if (!scores) return undefined;
-  const axis = (id: string): number | undefined => {
-    const v = scores[id]?.v;
-    return typeof v === "number" &&
-      Number.isInteger(v) &&
-      v >= 1 &&
-      v <= WORK_ITEM_SCORE_MAX
-      ? v
-      : undefined;
-  };
-  const goal = axis("goal");
-  const time = axis("time");
-  const unblocks = axis("unblocks");
-  const ease = axis("ease");
-  const confidence = axis("confidence");
-  const agent = axis("agent");
-  if (
-    goal === undefined ||
-    time === undefined ||
-    unblocks === undefined ||
-    ease === undefined ||
-    confidence === undefined ||
-    agent === undefined
-  ) {
-    return undefined;
-  }
-  const iterations = EASE_ITERATIONS[ease];
-  if (iterations === undefined) return undefined;
-  return (((goal + time + unblocks) / iterations) * confidence) / 5;
-}
+export { EASE_ITERATIONS } from "./rank-policy.js";
+export { evaluateRank as rankScore } from "./rank-policy.js";

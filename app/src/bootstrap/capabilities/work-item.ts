@@ -27,7 +27,7 @@ import {
   type WorkItemInfo,
   WorkItemPatchConflictError,
   type WorkItemQueryParams,
-  type WorkItemTransitionResult,
+  type WorkItemTransitionResult
 } from "@cogni/ai-tools";
 import type {
   ActorKind,
@@ -36,12 +36,12 @@ import type {
   WorkItemCommandPort,
   WorkItemQueryPort,
   WorkItemStatus,
-  WorkItemType,
+  WorkItemType
 } from "@cogni/work-items";
 import { rankScore, toWorkItemId } from "@cogni/work-items";
 import {
   WorkItemRevisionConflictError,
-  type WorkItemsDoltgresPort,
+  type WorkItemsDoltgresPort
 } from "@cogni/work-items/adapters/doltgres";
 
 import { isPrivilegedPriority } from "@cogni/knowledge-store";
@@ -104,7 +104,7 @@ function toWorkItemInfo(item: WorkItem): WorkItemInfo {
     ...(item.estimate !== undefined && { estimate: item.estimate }),
     ...(item.scores !== undefined && { scores: item.scores }),
     ...(item.parentId !== undefined && { parentId: item.parentId }),
-    ...(item.specRefs !== undefined && { specRefs: [...item.specRefs] }),
+    ...(item.specRefs !== undefined && { specRefs: [...item.specRefs] })
   };
 }
 
@@ -118,20 +118,24 @@ export function createWorkItemCapability(
 
   function list(params: WorkItemQueryParams) {
     return (deps.backlogReader ?? workItemQuery).list({
+      ...(params.sortBy !== undefined && { sortBy: params.sortBy }),
+      ...(params.sortDirection !== undefined && {
+        sortDirection: params.sortDirection
+      }),
       ...(params.statuses && {
-        statuses: params.statuses as readonly WorkItemStatus[],
+        statuses: params.statuses as readonly WorkItemStatus[]
       }),
       ...(params.types && {
-        types: params.types as readonly WorkItemType[],
+        types: params.types as readonly WorkItemType[]
       }),
       ...(params.text && { text: params.text }),
       ...(params.actor && { actor: params.actor as ActorKind }),
       ...(params.projectId && {
-        projectId: toWorkItemId(params.projectId),
+        projectId: toWorkItemId(params.projectId)
       }),
       ...(params.ids && { ids: params.ids.map((id) => toWorkItemId(id)) }),
       ...(params.cursor && { cursor: params.cursor }),
-      ...(params.limit && { limit: params.limit }),
+      ...(params.limit && { limit: params.limit })
     });
   }
 
@@ -147,8 +151,8 @@ export function createWorkItemCapability(
       return {
         items: result.items.map(toWorkItemInfo),
         ...(result.nextCursor !== undefined && {
-          nextCursor: result.nextCursor,
-        }),
+          nextCursor: result.nextCursor
+        })
       };
     },
 
@@ -162,14 +166,14 @@ export function createWorkItemCapability(
         id: toWorkItemId(input.id),
         expectedRevision: String(current.revision),
         toStatus: input.toStatus as WorkItemStatus,
-        ...(input.reason && { reason: input.reason }),
+        ...(input.reason && { reason: input.reason })
       });
 
       return {
         id: updated.id,
         previousStatus: current.status,
         newStatus: updated.status,
-        revision: updated.revision as number,
+        revision: updated.revision as number
       };
     },
 
@@ -190,9 +194,9 @@ export function createWorkItemCapability(
             {
               id: toWorkItemId(input.id),
               ...(input.expectedRevision !== undefined && {
-                expectedRevision: input.expectedRevision,
+                expectedRevision: input.expectedRevision
               }),
-              set: input.set,
+              set: input.set
             },
             typeof writer.principalId === "function"
               ? writer.principalId()
@@ -224,10 +228,10 @@ export function createWorkItemCapability(
       const updated = await workItemCommand.patch({
         id: toWorkItemId(input.id),
         expectedRevision: String(current.revision),
-        set: input.set,
+        set: input.set
       });
 
       return toWorkItemInfo(updated);
-    },
+    }
   };
 }

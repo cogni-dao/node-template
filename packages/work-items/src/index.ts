@@ -16,19 +16,19 @@ export {
   WorkItemRevisionConflictError,
   WorkItemScoresInvalidError,
   WorkItemsCapacityError,
-  WorkItemWriteOutcomeUnknownError,
+  WorkItemWriteOutcomeUnknownError
 } from "./errors.js";
 
 export type {
   WorkItemLease,
   WorkItemLeaseOwner,
-  WorkItemLeasePort,
+  WorkItemLeasePort
 } from "./leases.js";
 export type { WorkItemCommandPort, WorkItemQueryPort } from "./ports.js";
 export type {
   WorkItemScoresIssue,
   WorkItemScoresIssueCode,
-  WorkItemScoresParseResult,
+  WorkItemScoresParseResult
 } from "./scores.js";
 export {
   EASE_ITERATIONS,
@@ -40,7 +40,7 @@ export {
   WORK_ITEM_SCORE_MAX,
   WORK_ITEM_SCORE_MIN,
   WORK_ITEM_SCORES_MAX_AXES,
-  WORK_ITEM_SCORES_MAX_BYTES,
+  WORK_ITEM_SCORES_MAX_BYTES
 } from "./scores.js";
 export { isValidTransition, VALID_TRANSITIONS } from "./transitions.js";
 export type {
@@ -56,7 +56,19 @@ export type {
   WorkItemStatus,
   WorkItemType,
   WorkQuery,
-  WorkRelation,
+  WorkRelation
 } from "./types.js";
 export { toWorkItemId } from "./types.js";
 export { withWorkItemLeases } from "./with-leases.js";
+
+export {
+  WORK_ITEM_SORT_FIELDS,
+  WORK_ITEM_SORT_DIRECTIONS,
+  normalizeWorkItemOrder,
+  compareWorkItems
+} from "./query-order.js";
+export type {
+  WorkItemSortBy,
+  WorkItemSortDirection,
+  WorkItemOrder
+} from "./query-order.js";

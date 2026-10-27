@@ -48,7 +48,7 @@ describe("MarkdownWorkItemAdapter", () => {
       },
       cleanup: async () => {
         await rm(tmpDir, { recursive: true, force: true });
-      },
+      }
     };
   });
 
@@ -75,7 +75,10 @@ describe("MarkdownWorkItemAdapter", () => {
       let cursor: string | undefined;
       let pages = 0;
       do {
-        const page = await adapter.list({ limit: 2, ...(cursor && { cursor }) });
+        const page = await adapter.list({
+          limit: 2,
+          ...(cursor && { cursor })
+        });
         seen.push(...page.items.map((i) => String(i.id)));
         cursor = page.nextCursor;
         pages++;
@@ -96,7 +99,7 @@ describe("MarkdownWorkItemAdapter", () => {
 
     it("rejects a cursor it did not issue", async () => {
       await expect(adapter.list({ limit: 2, cursor: "bogus" })).rejects.toThrow(
-        /invalid markdown work-item cursor/
+        /invalid_cursor/
       );
     });
   });
@@ -121,7 +124,7 @@ describe("MarkdownWorkItemAdapter — scores are Doltgres-only (story.5111)", ()
       ).rejects.toMatchObject({
         name: "UnsupportedWorkItemFieldError",
         code: "work_item_field_unsupported",
-        field: "scores",
+        field: "scores"
       });
       await expect(
         adapter.create({ type: "task", title: "scored", scores })
@@ -134,7 +137,7 @@ describe("MarkdownWorkItemAdapter — scores are Doltgres-only (story.5111)", ()
 
   it.each([
     ["an object", scores],
-    ["null", null],
+    ["null", null]
   ])("patch with scores = %s throws and leaves the file untouched", async (_label, value) => {
     const { tmpDir, itemsDir, adapter } = await harness();
     try {
@@ -148,7 +151,7 @@ describe("MarkdownWorkItemAdapter — scores are Doltgres-only (story.5111)", ()
         adapter.patch({
           id: created.id,
           expectedRevision: revision,
-          set: { title: "renamed", scores: value },
+          set: { title: "renamed", scores: value }
         })
       ).rejects.toBeInstanceOf(UnsupportedWorkItemFieldError);
       expect(await readFile(filePath, "utf8")).toBe(before);

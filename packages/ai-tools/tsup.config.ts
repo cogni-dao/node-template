@@ -17,9 +17,10 @@ export const tsupConfig = defineConfig({
   entry: ["src/index.ts"],
   format: ["esm"],
   dts: false, // tsc -b emits per-file declarations; tsup handles JS only
+  noExternal: ["@cogni-dao/work-items"],
   clean: false, // preserve .d.ts files from tsc -b (incremental builds)
   sourcemap: true,
-  platform: "neutral",
+  platform: "neutral"
 });
 
 export default tsupConfig;

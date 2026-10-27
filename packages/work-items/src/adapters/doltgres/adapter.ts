@@ -44,6 +44,8 @@ export {
 } from "../../errors.js";
 
 import { parseWorkItemScores } from "../../scores.js";
+import { normalizeWorkItemOrder } from "../../query-order.js";
+import { rankScoreSql } from "../../rank-policy.js";
 
 import { decodeCursor, encodeCursor, type WorkItemCursor } from "./cursor.js";
 import type {
@@ -2585,14 +2587,16 @@ export class DoltgresWorkItemAdapter
   private async executeReadQuery(
     pool: Sql,
     context: OperationContext,
-    query: string
+    query: string,
+    deadline: number = Date.now() + this.queryTimeoutMs
   ): Promise<ReadonlyArray<Record<string, unknown>>> {
     const stage = queryStage(query);
     const startedAt = Date.now();
-    const deadline = startedAt + this.queryTimeoutMs;
-    this.logStage("info", context, stage, "start");
+    if (startedAt >= deadline)
+      throw new WorkItemsBusyError(
+        "Work-item read deadline elapsed before native dispatch"
+      );
     let timer: ReturnType<typeof setTimeout> | undefined;
-    let expired = false;
     await this.enterReaderQueue(pool, deadline);
     let nativeStarted = false;
     const native = Promise.resolve().then(() => {
@@ -2615,17 +2619,12 @@ export class DoltgresWorkItemAdapter
       });
     try {
       return await Promise.race([
-        settled.then((rows) => {
-          if (!expired)
-            this.logStage("info", context, stage, "complete", {
-              durationMs: Date.now() - startedAt,
-            });
-          return rows as ReadonlyArray<Record<string, unknown>>;
-        }),
+        settled.then(
+          (rows) => rows as ReadonlyArray<Record<string, unknown>>
+        ),
         new Promise<never>((_, reject) => {
           timer = setTimeout(
             () => {
-              expired = true;
               this.retireReadPool(pool, context, stage);
               reject(
                 new WorkItemsBusyError(
@@ -2635,14 +2634,14 @@ export class DoltgresWorkItemAdapter
             },
             Math.max(1, deadline - Date.now())
           );
-        }),
+        })
       ]);
     } catch (error) {
       if (this.unknownReadPools.has(pool as object))
         this.retireReadPool(pool, context, stage);
       this.logStage("error", context, stage, "error", {
         ...errorFields(error),
-        durationMs: Date.now() - startedAt,
+        durationMs: Date.now() - startedAt
       });
       if (isConnectionTerminal(error))
         throw new WorkItemsBusyError(
@@ -2712,11 +2711,13 @@ export class DoltgresWorkItemAdapter
   ): Promise<T> {
     const readPool = this.resolveReadPool();
     const context = { operationId: randomUUID(), operation: "read work items" };
+    const deadline = Date.now() + this.queryTimeoutMs;
     // No reserve, checkout, advisory lock, reconciliation or writer-pool call.
     return fn({
       pool: readPool,
       context,
-      unsafe: (query) => this.executeReadQuery(readPool, context, query),
+      unsafe: (query) =>
+        this.executeReadQuery(readPool, context, query, deadline)
     });
   }
 
@@ -2762,62 +2763,79 @@ export class DoltgresWorkItemAdapter
       conditions.push(`node IN (${nodes.map(escapeValue).join(", ")})`);
     }
     const textNeedle = query.text?.toLowerCase();
-    if (query.cursor) {
-      const cursor = decodeCursor(query.cursor);
-      const priority = cursor.p ?? 999;
-      const rank = cursor.r ?? 999;
-      conditions.push(
-        `(COALESCE(priority,999) > ${priority}` +
-          ` OR (COALESCE(priority,999) = ${priority} AND COALESCE(rank,999) > ${rank})` +
-          ` OR (COALESCE(priority,999) = ${priority} AND COALESCE(rank,999) = ${rank} AND created_at < ${escapeValue(cursor.ts)})` +
-          ` OR (COALESCE(priority,999) = ${priority} AND COALESCE(rank,999) = ${rank} AND created_at = ${escapeValue(cursor.ts)} AND id > ${escapeValue(cursor.id)}))`
-      );
-    }
-
+    const order = normalizeWorkItemOrder(query);
+    const initialCursor = query.cursor
+      ? decodeCursor(query.cursor, order)
+      : undefined;
+    const keyExpression =
+      order.sortBy === "rankScore"
+        ? rankScoreSql()
+        : {
+            priority: "priority",
+            rank: "rank",
+            // NOW() retains hidden nanoseconds, but native timestamp text I/O
+            // exposes microseconds. Use that same precision for ordering and
+            // seeking, so the projected cursor can roundtrip the boundary.
+            createdAt: "date_trunc('microseconds', created_at)",
+            updatedAt: "date_trunc('microseconds', updated_at)"
+          }[order.sortBy];
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
     const limit = Math.min(Math.max(query.limit ?? 100, 1), 500);
-    const rows = await this.readOnCleanMain(
-      async (conn) =>
-        (await conn.unsafe(
-          `SELECT * FROM work_items ${where} ORDER BY COALESCE(priority, 999) ASC, COALESCE(rank, 999) ASC, created_at DESC, id ASC${textNeedle ? "" : ` LIMIT ${limit + 1}`}`
-        )) as ReadonlyArray<Record<string, unknown>>
-    );
-    // Doltgres 0.57.3 panics when LOWER() receives an out-of-line TEXT value
-    // (`*val.TextStorage`). It also has no ILIKE. Keep every structural filter
-    // and the keyset in SQL, then case-fold the remaining ordered shelf here.
-    // The SQL LIMIT must be absent on this path or a match beyond the first N
-    // rows would be silently lost.
-    const matchedRows = textNeedle
-      ? rows.filter((row) =>
-          [row.title, row.summary].some((value) =>
-            String(value ?? "")
-              .toLowerCase()
-              .includes(textNeedle)
+    const nativeCursor = (row: Record<string, unknown>): WorkItemCursor => ({
+      v: 1,
+      ...order,
+      key: row.__sort_key === null ? null : String(row.__sort_key),
+      id: String(row.id)
+    });
+    const seek = (cursor: WorkItemCursor | undefined) => {
+      if (!cursor) return "";
+      const afterId = `id > ${escapeValue(cursor.id)}`;
+      if (cursor.key === null)
+        return `WHERE __sort_value IS NULL AND ${afterId}`;
+      const nativeType =
+        order.sortBy === "createdAt" || order.sortBy === "updatedAt"
+          ? "TIMESTAMP WITH TIME ZONE"
+          : "DOUBLE PRECISION";
+      const key = `CAST(${escapeValue(cursor.key)} AS ${nativeType})`;
+      return `WHERE (__sort_value IS NULL OR __sort_value ${order.sortDirection === "asc" ? ">" : "<"} ${key} OR (__sort_value = ${key} AND ${afterId}))`;
+    };
+    // Structural filters → derived native key → seek/order → bounded batch.
+    // Text folding stays in JS because native LOWER on cold TEXT can panic.
+    // Every batch shares readOnCleanMain's ONE deadline and captured pool.
+    const matchedRows = await this.readOnCleanMain(async (conn) => {
+      const matches: Record<string, unknown>[] = [];
+      let cursor = initialCursor;
+      while (true) {
+        const rows = await conn.unsafe(
+          `SELECT ordered.*, CAST(__sort_value AS TEXT) AS __sort_key FROM (SELECT work_items.*, ${keyExpression} AS __sort_value FROM work_items ${where}) AS ordered ${seek(cursor)} ORDER BY CASE WHEN __sort_value IS NULL THEN 1 ELSE 0 END ASC, __sort_value ${order.sortDirection.toUpperCase()}, id ASC LIMIT ${limit + 1}`
+        );
+        for (const row of rows) {
+          if (
+            !textNeedle ||
+            [row.title, row.summary].some((value) =>
+              String(value ?? "")
+                .toLowerCase()
+                .includes(textNeedle)
+            )
           )
-        )
-      : rows;
+            matches.push(row);
+          if (matches.length > limit) return matches;
+        }
+        if (!textNeedle || rows.length < limit + 1) return matches;
+        const last = rows[rows.length - 1];
+        if (!last) return matches;
+        cursor = nativeCursor(last);
+      }
+    });
     const hasMore = matchedRows.length > limit;
-    const pageRows = hasMore ? matchedRows.slice(0, limit) : matchedRows;
+    const pageRows = matchedRows.slice(0, limit);
     const items = pageRows.map(rowToWorkItem);
-    let endCursor: string | null = null;
-    if (hasMore && pageRows.length) {
-      const last = pageRows[pageRows.length - 1];
-      if (!last) throw new Error("cursor row missing");
-      const cursor: WorkItemCursor = {
-        p: optionalNumber(last.priority) ?? null,
-        r: optionalNumber(last.rank) ?? null,
-        ts:
-          last.created_at instanceof Date
-            ? last.created_at.toISOString()
-            : String(last.created_at ?? ""),
-        id: String(last.id),
-      };
-      endCursor = encodeCursor(cursor);
-    }
+    const last = pageRows[pageRows.length - 1];
+    const endCursor = hasMore && last ? encodeCursor(nativeCursor(last)) : null;
     return {
       items,
       pageInfo: { endCursor, hasMore },
-      ...(endCursor && { nextCursor: endCursor }),
+      ...(endCursor && { nextCursor: endCursor })
     };
   }
 
