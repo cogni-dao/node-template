@@ -34,12 +34,15 @@ import {
   KnowledgeWriteScopeRequiredError,
   NodeAdminRequiredError,
   type PrincipalAuthSource,
-  sessionUserToPrincipal
+  sessionUserToPrincipal,
 } from "@cogni/knowledge-store";
 import {
   ContributionAppendCommitRequestSchema,
   ContributionCloseRequestSchema,
   ContributionMergeRequestSchema,
+  ContributionMergeCheckRequestSchema,
+  ContributionMergeCheckIdSchema,
+  ContributionMergeCheckResponseSchema,
   ContributionsCreateRequestSchema,
   ContributionsListQuerySchema,
 } from "@cogni/node-contracts";
@@ -346,6 +349,53 @@ export async function handleDiff(
     contributionId,
     branch: record.branch,
     entries,
+  });
+}
+
+/** Explicit admitted diagnostic; displayed diffs cannot establish native mergeability. */
+export async function handleMergeCheck(
+  request: Request,
+  contributionId: string,
+  sessionUser: SessionUser | null
+): Promise<NextResponse> {
+  const headers = { "Cache-Control": "no-store" };
+  if (!sessionUser)
+    return NextResponse.json(
+      { error: "unauthorized" },
+      { status: 401, headers }
+    );
+  if (!ContributionMergeCheckIdSchema.safeParse(contributionId).success)
+    return NextResponse.json(
+      { error: "invalid contribution id" },
+      { status: 400, headers }
+    );
+  const svc = service();
+  if (!svc)
+    return NextResponse.json(
+      { error: "knowledge contribution service not configured" },
+      { status: 503, headers }
+    );
+  let body: unknown;
+  try {
+    const text = await request.text();
+    body = text ? JSON.parse(text) : {};
+  } catch {
+    return NextResponse.json(
+      { error: "invalid JSON body" },
+      { status: 400, headers }
+    );
+  }
+  if (!ContributionMergeCheckRequestSchema.safeParse(body).success)
+    return NextResponse.json(
+      { error: "merge check accepts only an empty object" },
+      { status: 400, headers }
+    );
+  const result = ContributionMergeCheckResponseSchema.parse(
+    await svc.previewMerge(contributionId)
+  );
+  return NextResponse.json(result, {
+    status: result.status === "unavailable" ? 503 : 200,
+    headers,
   });
 }
 

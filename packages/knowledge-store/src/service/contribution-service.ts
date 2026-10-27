@@ -11,6 +11,7 @@
  * @public
  */
 
+import { unavailableContributionMergePreview } from "../domain/contribution-schemas.js";
 import {
   checkNodeAdmin,
   type NodeAdminActor,
@@ -19,6 +20,7 @@ import {
   touchesGoalLayer,
 } from "../domain/node-admin.js";
 import type {
+  ContributionMergePreview,
   ContributionCommitRecord,
   ContributionDiffEntry,
   ContributionRecord,
@@ -41,7 +43,7 @@ import {
   type CreateEdoDecisionInput,
   type CreateEdoHypothesisInput,
   type CreateEdoOutcomeInput,
-  type KnowledgeContributionPort
+  type KnowledgeContributionPort,
 } from "../port/contribution.port.js";
 
 export interface CreateBody {
@@ -108,6 +110,7 @@ export interface ContributionServiceDeps {
 }
 
 export interface ContributionService {
+  previewMerge(contributionId: string): Promise<ContributionMergePreview>;
   create(args: {
     principal: Principal;
     body: CreateBody;
@@ -231,6 +234,11 @@ export function createContributionService(
   }
 
   return {
+    async previewMerge(contributionId) {
+      return deps.port.previewMerge
+        ? deps.port.previewMerge(contributionId)
+        : unavailableContributionMergePreview(contributionId);
+    },
     async create({ principal, body }) {
       const replayed = await idempotencyReplay(principal, body.idempotencyKey);
       if (replayed) return replayed;
@@ -416,7 +424,7 @@ export function createContributionService(
         throw new ContributionForbiddenError("close requires admin session");
       }
       return deps.port.close({ contributionId, principal, reason });
-    }
+    },
   };
 }
 

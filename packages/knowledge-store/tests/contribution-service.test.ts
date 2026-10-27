@@ -1039,3 +1039,19 @@ describe("createContributionService", () => {
     });
   });
 });
+
+it("keeps unsupported native preview capability unavailable for existing ports", async () => {
+  const service = createContributionService({
+    port: new FakeContributionPort(),
+    canMergeKnowledge: defaultCanMergeKnowledge,
+    rateLimit: { maxOpenPerPrincipal: 1 },
+  });
+  expect(await service.previewMerge("contrib-existing-port")).toMatchObject({
+    contributionId: "contrib-existing-port",
+    status: "unavailable",
+    reason: "native_unavailable",
+    mainCommit: null,
+    contributionCommit: null,
+    conflicts: [],
+  });
+});
