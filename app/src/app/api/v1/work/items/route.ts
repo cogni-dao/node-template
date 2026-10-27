@@ -14,10 +14,10 @@
 
 import {
   workItemsCreateOperation,
-  workItemsListOperation
+  workItemsListOperation,
 } from "@cogni/node-contracts";
+import { normalizeWorkItemOrder, type WorkItemOrder } from "@cogni/work-items";
 import { NextResponse } from "next/server";
-import { normalizeWorkItemOrder } from "@cogni/work-items";
 
 import {
   createWorkItem,
@@ -26,10 +26,15 @@ import {
   NodeAdminRequiredError,
   WorkItemScoresInvalidError,
   WorkItemsBackendNotReadyError,
-  WorkItemWriteOutcomeUnknownError
+  WorkItemWriteOutcomeUnknownError,
 } from "@/app/_facades/work/items.server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import {
+  EVENT_NAMES,
+  logEvent,
+  WORK_ITEMS_LIST_ERROR_CODES,
+} from "@/shared/observability";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -44,74 +49,108 @@ export const runtime = "nodejs";
 export const GET = wrapRouteHandlerWithLogging(
   { routeId: "work.items.list", auth: { mode: "required", getSessionUser } },
   async (ctx, request) => {
-    const url = new URL(request.url);
-
-    const typesParam = url.searchParams.get("types");
-    const statusesParam = url.searchParams.get("statuses");
-    const textParam = url.searchParams.get("text");
-    const actorParam = url.searchParams.get("actor");
-    const projectIdParam = url.searchParams.get("projectId");
-    const nodeParam = url.searchParams.get("node");
-    const limitParam = url.searchParams.get("limit");
-    const cursorParam = url.searchParams.get("cursor");
-
-    const parsed = workItemsListOperation.input.safeParse({
-      sortBy: url.searchParams.get("sortBy") ?? undefined,
-      sortDirection: url.searchParams.get("sortDirection") ?? undefined,
-      types: typesParam ? typesParam.split(",") : undefined,
-      statuses: statusesParam ? statusesParam.split(",") : undefined,
-      text: textParam ?? undefined,
-      actor: actorParam ?? undefined,
-      projectId: projectIdParam ?? undefined,
-      node: nodeParam
-        ? nodeParam.includes(",")
-          ? nodeParam.split(",")
-          : nodeParam
-        : undefined,
-      limit: limitParam ? Number(limitParam) : undefined,
-      cursor: cursorParam ?? undefined
-    });
-
-    if (!parsed.success)
-      return NextResponse.json(
-        { error: "invalid input", issues: parsed.error.issues },
-        { status: 400 }
-      );
-    const input = parsed.data;
-    let result: Awaited<ReturnType<typeof listWorkItems>>;
+    const startedAt = performance.now();
+    let status = 500;
+    let count = 0;
+    let hasMore = false;
+    let order: WorkItemOrder | undefined;
+    let errorCode:
+      | (typeof WORK_ITEMS_LIST_ERROR_CODES)[keyof typeof WORK_ITEMS_LIST_ERROR_CODES]
+      | undefined = WORK_ITEMS_LIST_ERROR_CODES.INTERNAL_ERROR;
     try {
-      result = await listWorkItems(input);
-    } catch (e) {
-      if (e instanceof InvalidCursorError) {
+      const url = new URL(request.url);
+
+      const typesParam = url.searchParams.get("types");
+      const statusesParam = url.searchParams.get("statuses");
+      const textParam = url.searchParams.get("text");
+      const actorParam = url.searchParams.get("actor");
+      const projectIdParam = url.searchParams.get("projectId");
+      const nodeParam = url.searchParams.get("node");
+      const limitParam = url.searchParams.get("limit");
+      const cursorParam = url.searchParams.get("cursor");
+
+      const parsed = workItemsListOperation.input.safeParse({
+        sortBy: url.searchParams.get("sortBy") ?? undefined,
+        sortDirection: url.searchParams.get("sortDirection") ?? undefined,
+        types: typesParam ? typesParam.split(",") : undefined,
+        statuses: statusesParam ? statusesParam.split(",") : undefined,
+        text: textParam ?? undefined,
+        actor: actorParam ?? undefined,
+        projectId: projectIdParam ?? undefined,
+        node: nodeParam
+          ? nodeParam.includes(",")
+            ? nodeParam.split(",")
+            : nodeParam
+          : undefined,
+        limit: limitParam ? Number(limitParam) : undefined,
+        cursor: cursorParam ?? undefined,
+      });
+
+      if (!parsed.success) {
+        status = 400;
+        errorCode = WORK_ITEMS_LIST_ERROR_CODES.INVALID_INPUT;
         return NextResponse.json(
-          {
-            error: "invalid cursor",
-            code: "invalid_cursor",
-            message: e.message
-          },
-          { status: 400 }
+          { error: "invalid input", issues: parsed.error.issues },
+          { status }
         );
       }
-      if (e instanceof WorkItemsBackendNotReadyError) {
-        return NextResponse.json({ error: e.message }, { status: 503 });
-      }
-      throw e;
-    }
-
-    ctx.log.info(
-      {
-        count: result.items.length,
-        ...normalizeWorkItemOrder({
-          ...(input.sortBy !== undefined && { sortBy: input.sortBy }),
-          ...(input.sortDirection !== undefined && { sortDirection: input.sortDirection })
+      const input = parsed.data;
+      order = normalizeWorkItemOrder({
+        ...(input.sortBy !== undefined && { sortBy: input.sortBy }),
+        ...(input.sortDirection !== undefined && {
+          sortDirection: input.sortDirection,
         }),
-        limit: input.limit ?? 100,
-        hasMore: result.pageInfo?.hasMore ?? false
-      },
-      "work.items.list_success"
-    );
+      });
+      let result: Awaited<ReturnType<typeof listWorkItems>>;
+      try {
+        result = await listWorkItems(input);
+      } catch (e) {
+        if (e instanceof InvalidCursorError) {
+          status = 400;
+          errorCode = WORK_ITEMS_LIST_ERROR_CODES.INVALID_CURSOR;
+          return NextResponse.json(
+            {
+              error: "invalid cursor",
+              code: "invalid_cursor",
+              message: e.message,
+            },
+            { status: 400 }
+          );
+        }
+        if (e instanceof WorkItemsBackendNotReadyError) {
+          status = 503;
+          errorCode = WORK_ITEMS_LIST_ERROR_CODES.BACKEND_UNAVAILABLE;
+          return NextResponse.json({ error: e.message }, { status });
+        }
+        throw e;
+      }
 
-    return NextResponse.json(workItemsListOperation.output.parse(result));
+      const response = NextResponse.json(
+        workItemsListOperation.output.parse(result)
+      );
+      status = 200;
+      errorCode = undefined;
+      count = result.items.length;
+      hasMore = result.pageInfo?.hasMore ?? false;
+      return response;
+    } catch {
+      status = 500;
+      errorCode = WORK_ITEMS_LIST_ERROR_CODES.INTERNAL_ERROR;
+      // Keep one safe terminal event instead of duplicating wrapper errors.
+      return NextResponse.json({ error: "Internal server error" }, { status });
+    } finally {
+      logEvent(ctx.log, EVENT_NAMES.WORK_ITEMS_LIST_COMPLETE, {
+        reqId: ctx.reqId,
+        routeId: ctx.routeId,
+        status,
+        durationMs: performance.now() - startedAt,
+        outcome: errorCode ? "error" : "success",
+        count,
+        hasMore,
+        ...order,
+        ...(errorCode && { errorCode }),
+      });
+    }
   }
 );
 
@@ -147,14 +186,14 @@ export const POST = wrapRouteHandlerWithLogging(
     try {
       const created = await createWorkItem(parseResult.data, {
         id: sessionUser.id,
-        walletAddress: sessionUser.walletAddress
+        walletAddress: sessionUser.walletAddress,
       });
       ctx.log.info(
         { workItemId: created.id, node: created.node },
         "work.items.create_success"
       );
       return NextResponse.json(workItemsCreateOperation.output.parse(created), {
-        status: 201
+        status: 201,
       });
     } catch (e) {
       if (e instanceof WorkItemScoresInvalidError) {
@@ -169,7 +208,7 @@ export const POST = wrapRouteHandlerWithLogging(
             error: e.code,
             retryable: false,
             lookup: e.receipt.lookup,
-            message: e.message
+            message: e.message,
           },
           { status: 409 }
         );
