@@ -20,6 +20,7 @@ import {
   type ReactNode,
   useId,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
 } from "react";
@@ -69,12 +70,12 @@ export interface FinanceKit {
 
 export interface FinanceActions {
   /**
-   * The amount-only steward withdrawal; resolves with the tx hash. Throw `StewardWithdrawalRejected` for an explicit
+   * The amount-only steward withdrawal; requires a 32-byte tx hash and explicit receipt status. Throw `StewardWithdrawalRejected` for an explicit
    * server refusal (retry allowed); any other throw means the outcome is unknown and the control locks until checked.
    */
   fundSteward: (
     amountUsd: number
-  ) => Promise<{ txHash: string | null; confirmed?: boolean }>;
+  ) => Promise<{ txHash: string; confirmed: boolean }>;
   /** Re-read the report (e.g. router.refresh). Omit to hide the button. */
   refresh?: () => void | Promise<void>;
 }
@@ -273,18 +274,11 @@ function LineDialog({
   );
 }
 
-type Phase = "idle" | "submitting" | "success" | "rejected" | "unknown";
+type Phase = "idle" | "submitting" | "pending" | "success" | "rejected" | "unknown";
 
-function FundSteward({
-  kit,
-  fundSteward,
-  stewardWalletUrl,
-}: {
-  kit: FinanceKit;
-  fundSteward: FinanceActions["fundSteward"];
-  stewardWalletUrl?: string | null | undefined;
-}) {
-  const id = useId();
+/** One withdrawal state per report/account, shared by every responsive control. */
+function useStewardWithdrawal(fundSteward: FinanceActions["fundSteward"]) {
+  const inFlight = useRef(false);
   const [amount, setAmount] = useState("1");
   const [phase, setPhase] = useState<Phase>("idle");
   const [txHash, setTxHash] = useState<string | null>(null);
@@ -292,18 +286,25 @@ function FundSteward({
   const [error, setError] = useState<string | null>(null);
   const valid = Number(amount) > 0 && Number.isFinite(Number(amount));
   async function submit() {
+    if (inFlight.current || !valid) return;
+    inFlight.current = true;
     setPhase("submitting");
     setError(null);
     setTxHash(null);
     try {
       const result = await fundSteward(Number(amount));
+      if (!result || typeof result.txHash !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(result.txHash) || typeof result.confirmed !== "boolean") {
+        throw new Error("Withdrawal response missing valid transaction evidence");
+      }
       setTxHash(result.txHash);
-      setConfirmed(result.confirmed !== false);
-      setPhase("success");
+      setConfirmed(result.confirmed);
+      setPhase(result.confirmed ? "success" : "pending");
+      if (result.confirmed) inFlight.current = false;
     } catch (err) {
       if (isStewardWithdrawalRejected(err)) {
         setError(err instanceof Error ? err.message : String(err));
         setPhase("rejected");
+        inFlight.current = false;
       } else {
         // The request may have been accepted before the response was lost; never allow a blind second send.
         setError(err instanceof Error && err.message ? err.message : null);
@@ -311,10 +312,26 @@ function FundSteward({
       }
     }
   }
-  const locked = phase === "submitting" || phase === "unknown";
+  const locked = phase === "submitting" || phase === "pending" || phase === "unknown";
+  function acknowledge() {
+    inFlight.current = false;
+    setPhase("idle");
+  }
+  return { amount, setAmount, phase, txHash, confirmed, error, valid, submit, locked, acknowledge };
+}
+
+type WithdrawalState = ReturnType<typeof useStewardWithdrawal>;
+
+function FundSteward({ kit, withdrawal, stewardWalletUrl }: {
+  kit: FinanceKit;
+  withdrawal: WithdrawalState;
+  stewardWalletUrl?: string | null | undefined;
+}) {
+  const id = useId();
+  const { amount, setAmount, phase, txHash, confirmed, error, valid, submit, locked, acknowledge } = withdrawal;
   const alertId = `${id}-alert`;
   const describedBy =
-    phase === "unknown" || phase === "rejected" ? alertId : undefined;
+    phase === "unknown" || phase === "pending" || phase === "rejected" ? alertId : undefined;
   return (
     <div className="flex min-w-0 flex-col gap-1">
       <div className="flex items-center gap-2">
@@ -346,7 +363,7 @@ function FundSteward({
           {phase === "submitting" ? "Funding…" : "Fund steward"}
         </kit.Button>
       </div>
-      {phase === "success" && txHash ? (
+      {(phase === "success" || phase === "pending") && txHash ? (
         <output aria-live="polite" className="block">
           <a
             href={`https://basescan.org/tx/${txHash}`}
@@ -369,10 +386,10 @@ function FundSteward({
           {error}
         </span>
       ) : null}
-      {phase === "unknown" ? (
+      {phase === "unknown" || phase === "pending" ? (
         <div className="flex flex-wrap items-center gap-2">
           <span id={alertId} role="alert" className="text-warning text-xs">
-            Result unknown{error ? ` (${error})` : ""} — check the steward wallet
+            {phase === "pending" ? "Confirmation pending" : "Result unknown"}{error ? ` (${error})` : ""} — check the steward wallet
             {stewardWalletUrl ? (
               <>
                 {" "}
@@ -395,7 +412,7 @@ function FundSteward({
             size="sm"
             variant="outline"
             className="h-7"
-            onClick={() => setPhase("idle")}
+            onClick={acknowledge}
           >
             I checked
           </kit.Button>
@@ -428,12 +445,12 @@ function TopUp({
 function RowAction({
   row,
   kit,
-  actions,
+  withdrawal,
   stewardWalletUrl,
 }: {
   row: MoneyPlaneRow;
   kit: FinanceKit;
-  actions: FinanceActions;
+  withdrawal: WithdrawalState;
   stewardWalletUrl?: string | null | undefined;
 }) {
   const rail: Rail | undefined = row.rail;
@@ -450,7 +467,7 @@ function RowAction({
     return (
       <FundSteward
         kit={kit}
-        fundSteward={actions.fundSteward}
+        withdrawal={withdrawal}
         stewardWalletUrl={stewardWalletUrl}
       />
     );
@@ -646,6 +663,7 @@ export function FinanceReport({
   thisNode = "Operator",
 }: FinanceReportProps) {
   const timeZone = useViewerTimeZone();
+  const withdrawal = useStewardWithdrawal(actions.fundSteward);
   const [sort, setSort] = useState<Sort>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [refreshing, setRefreshing] = useState(false);
@@ -779,7 +797,7 @@ export function FinanceReport({
                   cell={cell}
                   runwayCell={runwayCell}
                   kit={kit}
-                  actions={actions}
+                  withdrawal={withdrawal}
                   timeZone={timeZone}
                   formatTime={formatTime}
                   thisNode={thisNode}
@@ -850,7 +868,7 @@ export function FinanceReport({
                     ) : null}
                     {(row.rail || row.payAction) && (
                       <div className="border-border border-t pt-3">
-                        <RowAction row={row} kit={kit} actions={actions} />
+                        <RowAction row={row} kit={kit} withdrawal={withdrawal} stewardWalletUrl={report.stewardWalletUrl} />
                       </div>
                     )}
                   </div>
@@ -875,7 +893,7 @@ function GroupRows({
   cell,
   runwayCell,
   kit,
-  actions,
+  withdrawal,
   timeZone,
   formatTime,
   thisNode,
@@ -891,7 +909,7 @@ function GroupRows({
   cell: (text: string, className?: string) => ReactNode;
   runwayCell: (row: MoneyPlaneRow) => ReactNode;
   kit: FinanceKit;
-  actions: FinanceActions;
+  withdrawal: WithdrawalState;
   timeZone: string | undefined;
   formatTime: FinanceReportProps["formatTime"];
   thisNode: string;
@@ -937,7 +955,7 @@ function GroupRows({
                   <RowAction
                     row={row}
                     kit={kit}
-                    actions={actions}
+                    withdrawal={withdrawal}
                     stewardWalletUrl={stewardWalletUrl}
                   />
                 </div>

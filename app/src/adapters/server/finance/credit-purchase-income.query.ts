@@ -5,8 +5,9 @@
  * Module: `@adapters/server/finance/credit-purchase-income.query`
  * Purpose: This node's query for the package income reader: Σ and count of credited purchases, dated by the CREDITED event.
  * Scope: One aggregate SELECT through the injected Drizzle database (service role: payment tables are RLS-protected and
- *   income is a node-wide total). Drives from `payment_attempts` on its `(status, created_at)` index and joins
- *   `payment_events` only to take the CREDITED timestamp (exactly one per attempt: CREDITED is terminal). Returns numbers only.
+ *   income is a node-wide total). Filters credited payment attempts and joins
+ *   one grouped first STATUS_CHANGED transition to CREDITED per attempt. Duplicate transitions and later
+ *   verification events cannot inflate or re-date purchases. Returns numbers only.
  * Invariants: Window measured on the credited time, never intent creation. Honours the reader's signal: aborted before
  *   the query ⇒ no query; aborted after ⇒ the result is discarded (the reader already reported UNKNOWN).
  * Side-effects: IO (one SELECT)
@@ -14,7 +15,7 @@
  * @public
  */
 import type { CreditPurchaseTotals } from "@cogni/money-plane";
-import { and, eq, gte, sql } from "drizzle-orm";
+import { and, eq, gte, ne, sql } from "drizzle-orm";
 
 import type { Database } from "@/adapters/server/db/client";
 import { paymentAttempts, paymentEvents } from "@/shared/db";
@@ -29,17 +30,27 @@ function throwIfAborted(signal: AbortSignal): void {
 export function creditedPurchasesQuery(db: Database) {
 	return async (since: Date, signal: AbortSignal): Promise<CreditPurchaseTotals> => {
 		throwIfAborted(signal);
+		const credited = db
+			.select({
+				attemptId: paymentEvents.attemptId,
+				creditedAt: sql<string>`min(${paymentEvents.createdAt})`.as("credited_at"),
+			})
+			.from(paymentEvents)
+			.where(and(
+				eq(paymentEvents.eventType, "STATUS_CHANGED"),
+				eq(paymentEvents.toStatus, CREDITED_STATUS),
+				ne(paymentEvents.fromStatus, CREDITED_STATUS),
+			))
+			.groupBy(paymentEvents.attemptId)
+			.as("credited");
 		const rows = await db
 			.select({
 				totalUsdCents: sql<string | number>`coalesce(sum(${paymentAttempts.amountUsdCents}), 0)`,
 				count: sql<string | number>`count(*)`,
 			})
 			.from(paymentAttempts)
-			.innerJoin(
-				paymentEvents,
-				and(eq(paymentEvents.attemptId, paymentAttempts.id), eq(paymentEvents.toStatus, CREDITED_STATUS)),
-			)
-			.where(and(eq(paymentAttempts.status, CREDITED_STATUS), gte(paymentEvents.createdAt, since)));
+			.innerJoin(credited, eq(credited.attemptId, paymentAttempts.id))
+			.where(and(eq(paymentAttempts.status, CREDITED_STATUS), gte(credited.creditedAt, since.toISOString())));
 		throwIfAborted(signal);
 		const first = rows[0];
 		return {

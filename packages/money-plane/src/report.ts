@@ -94,7 +94,10 @@ function costRow(row: MoneyPlaneRow): boolean {
     row.kind === "prepaid" ||
     row.kind === "usage" ||
     row.kind === "fixed" ||
-    (row.kind === "expiry" && row.burnPerDay !== null)
+    (row.kind === "expiry" &&
+      (row.burnPerDay !== null ||
+        row.nativeRate !== undefined ||
+        row.reasonCode === "burn_unmeasured"))
   );
 }
 

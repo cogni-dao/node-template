@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 import { describe, expect, it } from "vitest";
 
-import { type MoneyPlaneRow, summarize, toUsd } from "../src/index";
+import { type MoneyPlaneRow, summarize, takeSnapshot, toUsd } from "../src/index";
 
 const NOW = "2026-10-26T13:40:00.000Z";
 const RATE = {
@@ -331,4 +331,13 @@ describe("honest runway coverage", () => {
       summaryOf(row({ plane: "tiny", burnPerDay: Number.MIN_VALUE })).runwayDays
     ).toBeNull();
   });
+});
+
+
+it.each([-1, Number.NaN, Number.POSITIVE_INFINITY])("retains invalid expiry cost evidence through the snapshot pipeline: %s", async (burnPerDay) => {
+  const rows = [row({ plane: "treasury", kind: "wallet", balance: 100 }), row({ plane: "hosting", burnPerDay: 1 }), row({ plane: "renewal", kind: "expiry", burnPerDay, runwayDays: 20, grade: "GREEN" })];
+  const snapshot = await takeSnapshot(rows.map((r) => ({ plane: r.plane, read: async () => r })), { timeoutMs: 1000 });
+  const summary = summarize({ rows: snapshot.rows.map((r) => toUsd(r, [])) }, { treasuryPlane: "treasury" });
+  expect(summary.runwayDays).toBeNull();
+  expect(summary.costCoverageGaps).toContain("renewal");
 });

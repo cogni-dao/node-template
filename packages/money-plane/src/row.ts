@@ -92,6 +92,7 @@ export function applyGradingFloor(input: MoneyPlaneRow): MoneyPlaneRow {
     ...input,
     balance: invalidBalance ? null : input.balance,
     burnPerDay: invalidBurn ? null : input.burnPerDay,
+    ...(invalidBurn ? { reasonCode: "burn_unmeasured" as const } : {}),
     runwayDays:
       input.kind === "wallet"
         ? null

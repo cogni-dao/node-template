@@ -95,6 +95,7 @@ import { liveShapedPreview } from "@/app/dev/finance-preview/fixture";
 
 const takenAt = "2026-10-25T00:00:00.000Z";
 const report = { takenAt, rows: [] as MoneyPlaneRow[], worst: "UNKNOWN" as const };
+const transactionHash = `0x${"a".repeat(60)}7890`;
 const address = "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd";
 const other = (n: string) => address.replace("abcd", n);
 const FUND_STEWARD = { kind: "fund-steward" as const };
@@ -491,8 +492,8 @@ describe("the Financials page and its package binding", () => {
 	});
 
 	it("fundSteward POSTs the amount-only withdrawal and surfaces the server's text on failure", async () => {
-		const ok = vi.fn(async () => ({ ok: true, json: async () => ({ txHash: "0xabc" }) }));
-		await expect(fundSteward(2.5, ok as unknown as typeof fetch)).resolves.toEqual({ txHash: "0xabc", confirmed: true });
+		const ok = vi.fn(async () => ({ ok: true, json: async () => ({ txHash: transactionHash, confirmed: true }) }));
+		await expect(fundSteward(2.5, ok as unknown as typeof fetch)).resolves.toEqual({ txHash: transactionHash, confirmed: true });
 		expect(ok).toHaveBeenCalledWith(
 			STEWARD_WITHDRAWAL_PATH,
 			expect.objectContaining({ method: "POST", body: JSON.stringify({ amountUsd: 2.5 }) }),
@@ -568,23 +569,53 @@ describe("the Financials page and its package binding", () => {
 		vi.unstubAllGlobals();
 	});
 
+	it("shares an unknown outcome and explorer link across desktop and mobile", async () => {
+		const post = vi.fn(async () => { throw new Error("lost response"); });
+		vi.stubGlobal("fetch", post);
+		render(createElement(FinanceReportClient, { report: liveShapedPreview as NodeFinanceSnapshot }));
+		const buttons = screen.getAllByRole("button", { name: "Fund steward" });
+		await userEvent.click(buttons[0]!);
+		for (const button of buttons) {
+			expect((button as HTMLButtonElement).disabled).toBe(true);
+			await userEvent.click(button);
+		}
+		expect(post).toHaveBeenCalledTimes(1);
+		const mobile = screen.getByRole("region", { name: "Financials list" });
+		expect(within(mobile).getByRole("link", { name: "on BaseScan" }).getAttribute("href")).toBe(liveShapedPreview.stewardWalletUrl);
+		await userEvent.click(within(mobile).getByRole("button", { name: "I checked" }));
+		for (const button of buttons) expect((button as HTMLButtonElement).disabled).toBe(false);
+		vi.unstubAllGlobals();
+	});
+
+	it.each([{}, { txHash: transactionHash }, { txHash: null, confirmed: true }, { txHash: "0xabc", confirmed: true }, { txHash: transactionHash, confirmed: "true" }])("treats malformed success as unknown: %j", async (body) => {
+		const post = vi.fn(async () => ({ ok: true, status: 200, json: async () => body }));
+		await expect(fundSteward(1, post as unknown as typeof fetch)).rejects.toThrow();
+	});
+
 	it("a broadcast without a receipt renders the tx link in a Confirming state", async () => {
 		vi.stubGlobal(
 			"fetch",
 			vi.fn(async () => ({
 				ok: true,
 				status: 200,
-				json: async () => ({ txHash: "0xabcdef1234567890", confirmed: false }),
+				json: async () => ({ txHash: transactionHash, confirmed: false }),
 			})),
 		);
 		render(createElement(FinanceReportClient, { report: liveShapedPreview as NodeFinanceSnapshot }));
 		const operator = screen.getByRole("table").querySelector<HTMLElement>("tr[data-finance-row='base:operator-wallet']");
 		if (!operator) throw new Error("missing operator row");
 		await userEvent.click(within(operator).getByRole("button", { name: "Fund steward" }));
-		expect((await within(operator).findByRole("link", { name: /Sent 0xabcd…7890/ })).getAttribute("href")).toBe(
-			"https://basescan.org/tx/0xabcdef1234567890",
+		expect((await within(operator).findByRole("link", { name: /Sent 0xaaaa…7890/ })).getAttribute("href")).toBe(
+			`https://basescan.org/tx/${transactionHash}`,
 		);
 		expect(within(operator).getByText("Confirming…")).toBeTruthy();
+		const sendButtons = screen.getAllByRole("button", { name: "Fund steward" });
+		expect(sendButtons).toHaveLength(2);
+		for (const send of sendButtons) {
+			expect((send as HTMLButtonElement).disabled).toBe(true);
+			await userEvent.click(send);
+		}
+		expect(fetch).toHaveBeenCalledTimes(1);
 		vi.unstubAllGlobals();
 	});
 
@@ -675,7 +706,7 @@ describe("the Financials page and its package binding", () => {
 	});
 
 	it("the inline control posts the typed amount and links the broadcast tx", async () => {
-		const fetchSpy = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ txHash: "0xabcdef1234567890" }) }));
+		const fetchSpy = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ txHash: transactionHash, confirmed: true }) }));
 		vi.stubGlobal("fetch", fetchSpy);
 		render(createElement(FinanceReportClient, { report: liveShapedPreview as NodeFinanceSnapshot }));
 		const operator = screen.getByRole("table").querySelector<HTMLElement>("tr[data-finance-row='base:operator-wallet']");
@@ -688,8 +719,8 @@ describe("the Financials page and its package binding", () => {
 			STEWARD_WITHDRAWAL_PATH,
 			expect.objectContaining({ method: "POST", body: JSON.stringify({ amountUsd: 2.5 }) }),
 		);
-		expect((await within(operator).findByRole("link", { name: /Sent 0xabcd…7890/ })).getAttribute("href")).toBe(
-			"https://basescan.org/tx/0xabcdef1234567890",
+		expect((await within(operator).findByRole("link", { name: /Sent 0xaaaa…7890/ })).getAttribute("href")).toBe(
+			`https://basescan.org/tx/${transactionHash}`,
 		);
 		vi.unstubAllGlobals();
 	});
