@@ -18,19 +18,24 @@ owns the existing execution contract.
 
 ```bash
 pnpm install --offline --frozen-lockfile || pnpm install --frozen-lockfile
-# Configure .env.local and provision this node's local databases first.
-pnpm dev:preflight
-pnpm dev:stack
-pnpm dev:verify   # confirm the whole stack: { "ok": true }
+cp .env.local.example .env.local   # then fill local secrets + create this node's databases
+pnpm dev:preflight                 # validate env fail-closed (starts nothing)
+pnpm dev:stack                     # build packages, migrate, run app + LangGraph dev (stays running)
+
+# In a second terminal: mint a local identity, then verify the whole stack.
+mkdir -p .context
+curl -sX POST http://localhost:3200/api/v1/agent/register \
+  -H 'content-type: application/json' -d '{"name":"local"}' > .context/local-dev-identity.json
+pnpm dev:verify --identity .context/local-dev-identity.json   # → { "ok": true }
 ```
 
-`dev:stack` builds this repo's workspace packages, applies this node's existing
-migrations, then starts this checkout's app and LangGraph dev together. The package
-build removes the stale-`dist` resolution footgun, so the app and its tools load
-cleanly. It does not seed knowledge. It refuses remote storage and occupied ports.
-Ctrl-C stops both processes. `pnpm langgraph:dev` starts only the graph server.
-Validate through the node's authenticated API with `pnpm dev:verify`; a green
-readiness check or a Studio graph listing alone does not prove a working agent run.
+`dev:stack` builds this repo's workspace packages first (so dist-importing steps resolve),
+applies this node's existing migrations, then runs this checkout's app and LangGraph dev
+together until Ctrl-C. It does not seed knowledge, and refuses remote storage or occupied
+ports. `pnpm langgraph:dev` starts only the graph server. `dev:verify`'s authenticated
+checks need the minted identity above; its knowledge/work-item body reads are skipped on a
+fresh empty node, while deep readiness and authenticated graph discovery still prove the
+stack. A green readiness check or Studio graph listing alone does not prove a working run.
 
 ## Continue with your AI agent
 

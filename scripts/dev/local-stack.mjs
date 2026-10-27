@@ -159,6 +159,11 @@ console.log(
 );
 if (mode === "check") process.exit(0);
 
+// Build workspace packages before migrations or the app so steps that statically
+// import built dist (e.g. the Doltgres migrator importing @cogni-dao/knowledge-store)
+// resolve on a fresh checkout, and the stale/unbuilt "./types.js" footgun cannot occur.
+execFileSync("pnpm", ["packages:build"], { cwd: root, env, stdio: "inherit" });
+
 // Refuse occupied ports before starting either process. Never kill a sibling.
 async function assertFree(value) {
   await new Promise((accept, reject) => {
@@ -171,8 +176,9 @@ async function assertFree(value) {
     server.listen(value, "127.0.0.1", () => server.close(accept));
   });
 }
-for (const value of mode === "graph" ? [graphPort] : [appPort, graphPort])
-  await assertFree(value);
+if (mode !== "migrate")
+  for (const value of mode === "graph" ? [graphPort] : [appPort, graphPort])
+    await assertFree(value);
 if (mode === "stack" || mode === "migrate") {
   for (const [script, folder, databaseUrl] of [
     ["migrate.mjs", "migrations", migrationUrl],
@@ -196,11 +202,6 @@ if (mode === "stack" || mode === "migrate") {
     );
   }
   if (mode === "migrate") process.exit(0);
-}
-// Build workspace packages before the app starts so it resolves fresh dist.
-// This removes the stale/unbuilt "./types.js" dev-resolution footgun.
-if (mode === "stack") {
-  execFileSync("pnpm", ["packages:build"], { cwd: root, env, stdio: "inherit" });
 }
 const logDir = resolve(root, ".context/dev-logs");
 mkdirSync(logDir, { recursive: true, mode: 0o700 });

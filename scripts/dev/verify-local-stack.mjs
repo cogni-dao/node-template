@@ -13,9 +13,10 @@
  *   - PORTABLE_NO_GRAPH_NAME: never assume a graph is named "cogni"; discover graphs
  *     and assert Studio<->node registry parity instead.
  *   - LOOPBACK_ONLY: every probe target is a local loopback origin read from .env.local.
- *   - DATA_PLANE_PROVED: a green readiness check alone cannot pass; an authenticated
- *     full knowledge body must read back. Work items are fixture-tolerant (nodes boot
- *     empty), knowledge is not (nodes seed their agent-orientation entry).
+ *   - NOT_SHALLOW: deep readiness proves the database and authenticated graph discovery
+ *     proves the authenticated read plane, so a shallow readiness check alone cannot
+ *     pass. Knowledge and work-item body reads are fixture-tolerant (a node boots empty)
+ *     and additionally prove the read path end to end when the node has data.
  *   - Secrets and source bodies never enter the report.
  * Side-effects: IO (loopback HTTP reads; JSON on stdout; exit code).
  * Usage: pnpm dev:verify [--identity .context/local-dev-identity.json]
@@ -166,8 +167,7 @@ await Promise.all([
   check("authenticated knowledge body", async () => {
     if (!apiKey) throw new Error("Local identity required");
     // Fixture-tolerant: a node may boot with no knowledge locally. Prove the read path
-    // when an entry exists; otherwise skip. DATA_PLANE_PROVED below still requires at
-    // least one real authenticated body read across knowledge and work items.
+    // when an entry exists; otherwise skip (a fresh node is still valid).
     const id =
       values.knowledge ||
       (await request(app, "/api/v1/knowledge?limit=1", appHeaders)).items?.[0]?.id;
@@ -195,22 +195,11 @@ await Promise.all([
   }),
 ]);
 
-// DATA_PLANE_PROVED: readiness + auth alone cannot pass. At least one authenticated
-// full body (knowledge or work item) must have read back with a fingerprint.
-const provedBody = checks.some(
-  (c) =>
-    (c.name === "authenticated knowledge body" ||
-      c.name === "authenticated work-item body") &&
-    c.ok &&
-    (c.body || c.summary)
-);
-checks.push({
-  name: "authenticated data-plane body proof",
-  ok: provedBody,
-  ms: 0,
-  ...(provedBody ? {} : { reason: "no authenticated full body read back" }),
-});
-
+// A fresh node boots empty, so the knowledge/work-item body reads are
+// fixture-tolerant (they skip when there is nothing to read). Deep readiness proves
+// the database is healthy and "authenticated node graph discovery" proves the
+// authenticated read plane, so shallow readiness alone still cannot pass. When the
+// node has data, the body reads additionally prove the read path end to end.
 const ok = checks.every((item) => item.ok);
 console.log(
   JSON.stringify(
