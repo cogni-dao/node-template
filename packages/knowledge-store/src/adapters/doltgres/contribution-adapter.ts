@@ -54,6 +54,7 @@ import {
   recomputeConfidence as recomputeConfidenceByPolicy,
 } from "../../domain/confidence-policy.js";
 import type {
+  ContributionMergePreview,
   ContributionCommitRecord,
   ContributionDiffEntry,
   ContributionRecord,
@@ -63,6 +64,7 @@ import type {
   Principal,
 } from "../../domain/contribution-schemas.js";
 import {
+  unavailableContributionMergePreview,
   KNOWLEDGE_ENTRY_PATCH_FIELDS,
   knowledgeEntryPatchIsEmpty,
 } from "../../domain/contribution-schemas.js";
@@ -103,6 +105,11 @@ import {
   type SqlColumnValue,
   updateSetSql,
 } from "./util.js";
+
+import {
+  previewContributionMerge,
+  previewMainIsClean,
+} from "./merge-preview.js";
 
 function principalSlug(p: Principal): string {
   return (p.name ?? p.id)
@@ -768,7 +775,9 @@ async function applyEdit(input: {
     assertResultingEvaluateAt(
       edit.targetRowId,
       edit.entry.entryType ?? current.entryType,
-      edit.entry.evaluateAt ? new Date(edit.entry.evaluateAt) : current.evaluateAt
+      edit.entry.evaluateAt
+        ? new Date(edit.entry.evaluateAt)
+        : current.evaluateAt
     );
     const setClauses = updateSetSql(
       knowledgePatchColumns(edit.entry, { sourceRef: ref, sourceNode })
@@ -853,7 +862,10 @@ export interface DoltgresKnowledgeContributionAdapterConfig {
    */
   branchSql?: Sql;
   /** Shared process admission for all logical knowledge writers. */
-  writerSession?: DoltBranchSessionRunner;
+  writerSession?: Pick<
+    DoltBranchSessionRunner,
+    "run" | "assertIndependentReadClient" | "retire"
+  >;
   /** Rebuilds `branchSql` after a wedged session is terminated. */
   recreateBranchClient?: () => Sql;
   logger?: BranchSessionLogger;
@@ -865,7 +877,10 @@ export class DoltgresKnowledgeContributionAdapter
   implements KnowledgeContributionPort
 {
   private readonly sql: Sql;
-  private readonly session: DoltBranchSessionRunner;
+  private readonly session: Pick<
+    DoltBranchSessionRunner,
+    "run" | "assertIndependentReadClient" | "retire"
+  >;
 
   constructor(config: DoltgresKnowledgeContributionAdapterConfig) {
     this.sql = config.sql;
@@ -1786,7 +1801,11 @@ export class DoltgresKnowledgeContributionAdapter
       }
       for (const id of ids) knowledgeIds.add(id as string);
     }
-    const citations: { citingId: string; citedId: string; citationType: string }[] = [];
+    const citations: {
+      citingId: string;
+      citedId: string;
+      citationType: string;
+    }[] = [];
     for (const r of citationRows) {
       const row = r as Record<string, unknown>;
       const before = citations.length;
@@ -1817,6 +1836,27 @@ export class DoltgresKnowledgeContributionAdapter
       }
     }
     return { headCommit, knowledgeIds: [...knowledgeIds], citations };
+  }
+
+  async previewMerge(
+    contributionId: string
+  ): Promise<ContributionMergePreview> {
+    try {
+      return await this.session.run(
+        "contribution.merge_check",
+        async (conn, _guard, owner) => {
+          // Register before the first SQL. No mutation reconciliation is needed:
+          // uncertain or dirty state is retained by the existing native owner.
+          owner.registerReconciliation(() => previewMainIsClean(conn));
+          return await previewContributionMerge(conn, contributionId);
+        },
+        { awaitSettlement: true }
+      );
+    } catch {
+      // Unsupported engine, timeout, admission and uncertain cleanup are all
+      // unknown; SQL details and native credentials never reach this surface.
+      return unavailableContributionMergePreview(contributionId);
+    }
   }
 
   async merge(input: {

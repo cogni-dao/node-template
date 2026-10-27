@@ -66,6 +66,8 @@ Shared ports, contribution workflow, and adapters for versioned domain knowledge
 - `ContributionServiceDeps.pushMainOnMerge?: () => Promise<void>` — optional post-merge mirror hook; caller owns error handling (service does not await + does not catch)
 - `ContributionServiceDeps.nodeAdmin?: NodeAdminAuthority` — goal-layer merge gate (raw diff ids via the required port method `KnowledgeContributionPort.touchedIds`, merge pinned with `expectedHeadCommit`); absent ⇒ goal-layer merges fail closed 503
 
+Native merge checks: `ContributionMergePreviewSchema`, `ContributionMergePreview`, and `unavailableContributionMergePreview` are exported from root and `contribution-schemas`. The optional contribution port method and service/adapter `previewMerge(id)` share one native implementation. `writerSession` accepts the existing structural `run`/`assertIndependentReadClient`/`retire` binding; no new executor is created when supplied. Preview registers read-only reconciliation before SQL and requires native settlement before success.
+
 ## Ports
 
 - **Implements:** `KnowledgeStorePort`

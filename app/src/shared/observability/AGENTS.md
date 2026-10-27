@@ -33,6 +33,7 @@ Cross-cutting observability concerns: structured logging, request context, and e
 
 - **Exports:**
   - `EVENT_NAMES` - Event name registry as const (prevents ad-hoc strings)
+  - Node-local `KNOWLEDGE_MERGE_CHECK_COMPLETE` marks native preview status, reason, bounded table count and request identity.
   - `EventName`, `EventBase` - Registry-derived types
   - `makeLogger(bindings?)` - Pino logger factory (sync mode, zero buffering)
   - `makeNoopLogger()` - Silent logger for tests

@@ -16,6 +16,7 @@
  */
 
 import type {
+  ContributionMergePreview,
   ContributionCommitRecord,
   ContributionDiffEntry,
   ContributionRecord,
@@ -178,6 +179,9 @@ export interface KnowledgeContributionPort {
    * its expected-head check.
    */
   touchedIds(contributionId: string): Promise<ContributionTouchedIds>;
+
+  /** Native committed-pair diagnostic; absent capability is unavailable. */
+  previewMerge?(contributionId: string): Promise<ContributionMergePreview>;
 
   merge(input: {
     contributionId: string;

@@ -273,3 +273,9 @@ export {
   isGoverningEntryType,
   selectGoverningIndex,
 } from "./domain/governing.js";
+
+export {
+  ContributionMergePreviewSchema,
+  type ContributionMergePreview,
+  unavailableContributionMergePreview,
+} from "./domain/contribution-schemas.js";

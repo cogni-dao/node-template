@@ -20,6 +20,7 @@ import {
   ContributionCommitRecordSchema,
   ContributionDiffEntrySchema,
   ContributionRecordSchema,
+  ContributionMergePreviewSchema,
   KnowledgeContributionEditSchema,
 } from "@cogni/knowledge-store/contribution-schemas";
 import { z } from "zod";
@@ -103,3 +104,12 @@ export const ContributionMergeResponseSchema = z.object({
 export type ContributionMergeResponse = z.infer<
   typeof ContributionMergeResponseSchema
 >;
+
+/** The node binds authentication and transport; domain schema stays shared. */
+export const ContributionMergeCheckRequestSchema = z.object({}).strict();
+export const ContributionMergeCheckIdSchema = z
+  .string()
+  .max(256)
+  .regex(/^contrib-[a-zA-Z0-9_-]+$/);
+export const ContributionMergeCheckResponseSchema =
+  ContributionMergePreviewSchema;
