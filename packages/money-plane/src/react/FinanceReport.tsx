@@ -547,11 +547,9 @@ function StatCards({
         .find((row) => row.label === summary.nextDeadline?.label)
     : undefined;
   const runwayValue =
-    summary.runwayDays === null
-      ? DASH
-      : Number.isFinite(summary.runwayDays)
-        ? days(summary.runwayDays)
-        : "∞";
+    summary.runwayDays !== null && Number.isFinite(summary.runwayDays)
+      ? days(summary.runwayDays)
+      : DASH;
   const stats: {
     label: string;
     value: string;
@@ -573,12 +571,18 @@ function StatCards({
     {
       label: "Burn",
       value: summary.burnPerDay === null ? DASH : `${usd(summary.burnPerDay)}/day`,
-      sub: "all known lines",
+      sub: summary.costCoverageGaps.length
+        ? `known subtotal · ${summary.costCoverageGaps.length} gaps`
+        : "all known lines",
     },
     {
       label: "Runway",
       value: runwayValue,
-      sub: "treasury ÷ net burn",
+      sub: summary.runwayReason === "costs_incomplete" ? "Costs incomplete"
+        : summary.runwayReason === "treasury_unreadable" ? "Treasury unreadable"
+        : summary.runwayReason === "no_measured_burn" ? "No measured burn"
+        : summary.runwayReason === "estimate_unavailable" ? "Estimate unavailable"
+        : "known-cost estimate",
       ...(summary.nextDeadline
         ? {
             extra: {

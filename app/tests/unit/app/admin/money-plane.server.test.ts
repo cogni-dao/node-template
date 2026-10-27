@@ -185,6 +185,8 @@ describe("finance authorization at the read boundary", () => {
 				incomePerDay: null,
 				burnPerDay: null,
 				runwayDays: null,
+				runwayReason: "treasury_unreadable",
+				costCoverageGaps: [],
 				nextDeadline: null,
 				windowDays: 30,
 				ratesUsed: [],
@@ -413,6 +415,8 @@ describe("node composition", () => {
 					runwayDays: null,
 					grade: "INFO",
 					observedAt: takenAt,
+					sourceObservedAt: takenAt,
+					freshness: "current",
 				},
 				{
 					plane: "vendor:eur",
@@ -467,7 +471,7 @@ describe("the Financials page and its package binding", () => {
 		expect(document.querySelector("[data-finance-stat='Burn']")?.textContent).toBe("—");
 		expect(document.querySelector("[data-finance-stat='Runway']")?.textContent).toBe("—");
 		expect(screen.getByText("credit purchases · 30d")).toBeTruthy();
-		expect(screen.getByText("treasury ÷ net burn")).toBeTruthy();
+		expect(screen.getByText("Costs incomplete")).toBeTruthy();
 		const table = screen.getByRole("table");
 		expect(Array.from(table.querySelectorAll("tr[data-finance-group]")).map((tr) => tr.getAttribute("data-finance-group"))).toEqual([
 			"Income",
@@ -609,8 +613,11 @@ describe("the Financials page and its package binding", () => {
 		const deadline = document.querySelector("[data-finance-deadline]");
 		expect(deadline?.textContent).toBe("Next deadline 3d · Demo credit");
 		expect(deadline?.className).toContain("text-destructive");
-		// Runway = treasury ÷ net burn (74.52 ÷ 1) is a separate figure.
-		expect(document.querySelector("[data-finance-stat='Runway']")?.textContent).toBe("74d");
+		// Known hosting/AI gaps prevent a whole-DAO estimate, while the measured deadline stays visible.
+		expect(document.querySelector("[data-finance-stat='Runway']")?.textContent).toBe("—");
+		expect(screen.getByText("Costs incomplete")).toBeTruthy();
+		expect(screen.getByText(/known subtotal · \d+ gaps/)).toBeTruthy();
+		expect(document.querySelector("[data-finance-summary]")?.textContent).not.toContain("∞");
 	});
 
 	it("a 500 with an error body locks the control like a lost response", async () => {
