@@ -760,7 +760,7 @@ describe("writer runner native ownership", () => {
     await expect(runner.run("after", async () => "ok")).resolves.toBe("ok");
   });
 
-  it("quarantines transport uncertainty without closing or replacing native capacity", async () => {
+  it("bug.5544: transport uncertainty evicts native capacity and does NOT wedge the next op", async () => {
     const first = pool({
       query: (query) =>
         query === "BROKEN"
@@ -779,15 +779,20 @@ describe("writer runner native ownership", () => {
         await connection.unsafe("BROKEN");
       })
     ).rejects.toBeInstanceOf(KnowledgeWriteOutcomeUnknownError);
+    // A dead socket cannot be unlocked here; its server session frees the lock
+    // when the abandoned op settles. But the connection IS evicted (released) and
+    // the writer is NOT retained: the old code kept the socket + latched the
+    // writer, which 503'd both writers until a pod restart (bug.5544).
     expect(first.ended()).toBe(0);
-    expect(first.released()).toBe(0);
+    expect(first.released()).toBe(1);
     expect(created).toBe(0);
     expect(first.queries.some((q) => q.includes("pg_advisory_unlock"))).toBe(
       false
     );
-    await expect(
-      runner.run("retry", async () => "unsafe")
-    ).rejects.toBeInstanceOf(KnowledgeBusyError);
+    // No wedge: the next operation is admitted and serves (was KnowledgeBusyError).
+    await expect(runner.run("retry", async () => "unsafe")).resolves.toBe(
+      "unsafe"
+    );
   });
 
   it.each([

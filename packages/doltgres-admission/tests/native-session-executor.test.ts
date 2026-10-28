@@ -220,8 +220,41 @@ describe("native executor module identity", () => {
       return result.value;
     }, { operationId: "settlement.failed", awaitSettlement: true })).rejects.toThrow("Uncertain settlement.failed");
     expect(errors.outcomeUnknown).toHaveBeenLastCalledWith("settlement.failed", expect.stringMatching(/^dolt-op\/[a-f0-9]{64}$/), HASH);
-    expect(f.release).not.toHaveBeenCalled();
+    // bug.5544: the uncertain outcome must EVICT the connection, not retain it.
+    await expect.poll(() => f.release.mock.calls.length).toBe(1);
     expect(f.queries.filter((query) => query === "INSERT domain row")).toHaveLength(1);
+  });
+
+  it("bug.5544: an uncertain outcome evicts the writer and the NEXT operation still serves (no wedge)", async () => {
+    // First op's private cleanup fails -> old code latched heldOperation + the
+    // shared advisory lock forever. The writer must instead evict and keep serving.
+    const f = session({ cleanupFails: true });
+    await expect(
+      f.executor.run("wedge.first", async (connection, guard, owner) => {
+        const result = await runDoltBranchMutation(connection, {
+          guard, operationId: "wedge.first", message: "first op cleanup fails",
+          onSessionUncertain: (error) => f.executor.retire(connection, error),
+          onReconcile: owner.registerReconciliation, onCommitted: owner.committed,
+          run: async (sql) => { await sql.unsafe("INSERT domain row"); return "committed"; },
+        });
+        return result.value;
+      }, { operationId: "wedge.first", awaitSettlement: true })
+    ).rejects.toThrow("Uncertain wedge.first");
+    // The connection was evicted (released), not retained.
+    await expect.poll(() => f.release.mock.calls.length).toBe(1);
+
+    // THE PROOF: a subsequent operation is admitted and succeeds — the writer is
+    // not wedged. Under the old code this threw "capacity is retained".
+    const second = await f.executor.run("wedge.second", async (connection, guard, owner) => {
+      const result = await runDoltBranchMutation(connection, {
+        guard, operationId: "wedge.second", message: "second op after eviction",
+        onSessionUncertain: (error) => f.executor.retire(connection, error),
+        onReconcile: owner.registerReconciliation, onCommitted: owner.committed,
+        run: async (sql) => { await sql.unsafe("INSERT domain row"); return "committed"; },
+      });
+      return result.value;
+    }, { operationId: "wedge.second" });
+    expect(second).toBe("committed");
   });
 
   it("a precommit deadline never attributes historical MAIN HEAD to the operation", async () => {
