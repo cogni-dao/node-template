@@ -18,8 +18,6 @@ import {
   EDO_DECIDE_NAME,
   EDO_HYPOTHESIZE_NAME,
   EDO_RECORD_OUTCOME_NAME,
-  GET_CURRENT_TIME_NAME,
-  GOAL_LIST_NAME,
   KNOWLEDGE_READ_NAME,
   KNOWLEDGE_SEARCH_NAME,
   KNOWLEDGE_WRITE_NAME,
@@ -27,8 +25,6 @@ import {
   REPO_SEARCH_NAME,
   VCS_TOOL_BUNDLE,
   WEB_SEARCH_NAME,
-  WORK_ITEM_QUERY_NAME,
-  WORK_ITEM_TRANSITION_NAME,
 } from "@cogni/ai-tools";
 import { describe, expect, it } from "vitest";
 import {
@@ -38,8 +34,8 @@ import {
   OPERATOR_LANGGRAPH_GRAPH_IDS,
 } from "../../../src/catalog";
 import { createAutoresearchGraph } from "../../../src/graphs/autoresearch/graph";
+import { COGNI_TOOL_IDS } from "../../../src/graphs/operator/cogni";
 import { createOperatorGraph } from "../../../src/graphs/operator/graph";
-import { createWorkPrioritizerGraph } from "../../../src/graphs/work-prioritizer/graph";
 
 describe("operator catalog entries", () => {
   it("operating-review entry exists with systemPrompt and graphFactory", () => {
@@ -82,20 +78,15 @@ describe("operator catalog entries", () => {
     );
   });
 
-  it("work-prioritizer (mission loop) runs on every node with the exact six-tool allowlist", () => {
+  it("work-prioritizer (mission loop) runs on every node, now bound to the common Cogni factory (reads + edo_decide)", () => {
     const entry = LANGGRAPH_CATALOG["work-prioritizer"];
     expect(entry).toBeDefined();
-    expect(entry?.graphFactory).toBe(createWorkPrioritizerGraph);
-    expect([...(entry?.toolIds ?? [])].sort()).toEqual(
-      [
-        GOAL_LIST_NAME,
-        WORK_ITEM_QUERY_NAME,
-        WORK_ITEM_TRANSITION_NAME,
-        KNOWLEDGE_SEARCH_NAME,
-        EDO_DECIDE_NAME,
-        GET_CURRENT_TIME_NAME,
-      ].sort()
-    );
+    // Still in the node catalog (every node runs the mission loop), now powered by the shared
+    // Cogni engine (program "work-review" via createOperatorGraph), not the legacy ReAct factory.
+    expect(entry?.graphFactory).toBe(createOperatorGraph);
+    expect(entry?.program).toBe("work-review");
+    expect(entry?.systemPrompt).toBeDefined();
+    expect(entry?.toolIds).toEqual(COGNI_TOOL_IDS);
     expect(entry?.report).toEqual({ event: "ai.work_prioritizer.cycle" });
     expect(LANGGRAPH_GRAPH_IDS["work-prioritizer"]).toBe(
       "langgraph:work-prioritizer"

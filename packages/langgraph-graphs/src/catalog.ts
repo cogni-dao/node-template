@@ -33,6 +33,7 @@ import {
   createFrontendTesterGraph,
   FRONTEND_TESTER_GRAPH_NAME,
 } from "./graphs/frontend-tester/graph";
+import { COGNI_PROMPT, COGNI_TOOL_IDS } from "./graphs/operator/cogni";
 import {
   createOperatorGraph,
   GIT_REVIEWER_GRAPH_NAME,
@@ -67,11 +68,7 @@ import {
   RESEARCH_GRAPH_NAME,
 } from "./graphs/research/graph";
 import { RESEARCH_TOOL_IDS } from "./graphs/research/tools";
-import {
-  createWorkPrioritizerGraph,
-  WORK_PRIORITIZER_GRAPH_NAME,
-} from "./graphs/work-prioritizer/graph";
-import { WORK_PRIORITIZER_TOOL_IDS } from "./graphs/work-prioritizer/tools";
+import { WORK_PRIORITIZER_GRAPH_NAME } from "./graphs/work-prioritizer/graph";
 import type { CreateGraphFn } from "./inproc/types";
 
 /**
@@ -81,6 +78,8 @@ import type { CreateGraphFn } from "./inproc/types";
  * Providers resolve tools from TOOL_CATALOG using these IDs.
  */
 export interface CatalogEntry {
+  /** Trusted catalog program assignment; routes operator graphs to the cogni engine. */
+  readonly program?: "cogni" | "work-review";
   readonly displayName: string;
   readonly description: string;
   /** Native tool IDs this graph may use. Providers resolve from TOOL_CATALOG. */
@@ -260,17 +259,19 @@ export const NODE_LANGGRAPH_CATALOG = {
   },
 
   /**
-   * Mission loop (story.5108) — brain-style ReAct agent on the hourly governance schedule: reads the DAO
-   * goals and makes at most ~5 goal-cited work-item changes; p0/p1 writes are server-denied and reported
-   * as proposals for the node admin. Every node runs it: a node schedules `langgraph:work-prioritizer` in
-   * its own repo-spec, and a node with no approved goals changes nothing.
+   * Mission loop (story.5108 / story.5116) — every node runs it: a node schedules
+   * `langgraph:work-prioritizer` in its own repo-spec, and a node with no approved goals changes
+   * nothing. Now powered by the shared Cogni engine (program "work-review" via createOperatorGraph):
+   * it gathers across the read planes, then files exactly one core__edo_decide decision.
    */
   [WORK_PRIORITIZER_GRAPH_NAME]: {
     displayName: "Mission Loop",
     description:
-      "Reads the node's DAO goals and makes a few goal-cited work-item changes; lists p0/p1 as proposals",
-    toolIds: WORK_PRIORITIZER_TOOL_IDS as readonly string[],
-    graphFactory: createWorkPrioritizerGraph,
+      "Source-grounded mission loop from the Cogni factory; files one goal-cited EDO decision",
+    toolIds: COGNI_TOOL_IDS,
+    graphFactory: createOperatorGraph,
+    systemPrompt: COGNI_PROMPT,
+    program: "work-review",
     report: { event: "ai.work_prioritizer.cycle" },
   },
 } as const;
@@ -321,6 +322,19 @@ export const OPERATOR_LANGGRAPH_CATALOG = {
     graphFactory: createOperatorGraph,
     systemPrompt: GIT_REVIEWER_PROMPT,
   },
+
+  /**
+   * Cogni mission agent (story.5116). The same factory used by chat. It gathers across the read
+   * planes, then files exactly one core__edo_decide decision — the run's only write.
+   */
+  cogni: {
+    displayName: "Cogni",
+    description: "Hub-grounded mission agent; files one EDO decision",
+    toolIds: COGNI_TOOL_IDS,
+    graphFactory: createOperatorGraph,
+    systemPrompt: COGNI_PROMPT,
+    program: "cogni",
+  },
 } as const;
 
 /**
@@ -359,6 +373,7 @@ export const NODE_LANGGRAPH_GRAPH_IDS = {
 } as const;
 
 export const OPERATOR_LANGGRAPH_GRAPH_IDS = {
+  cogni: `${LANGGRAPH_PROVIDER_ID}:cogni`,
   ...NODE_LANGGRAPH_GRAPH_IDS,
   "operating-review": `${LANGGRAPH_PROVIDER_ID}:${OPERATING_REVIEW_GRAPH_NAME}`,
   "pr-manager": `${LANGGRAPH_PROVIDER_ID}:${PR_MANAGER_GRAPH_NAME}`,
