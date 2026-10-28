@@ -21,6 +21,7 @@ import type {
   ToolSpec,
 } from "@cogni/ai-core";
 import type { ToolContract } from "@cogni/ai-tools";
+import type { BaseCheckpointSaver, BaseStore } from "@langchain/langgraph";
 // Import shared graph types from graphs/types.ts (single source of truth)
 import type {
   CreateReactAgentGraphOptions,
@@ -90,6 +91,15 @@ export interface InProcGraphRequest {
   readonly configurable: {
     readonly model: string;
     readonly toolIds?: readonly string[];
+    readonly actorId?: string;
+    readonly tenantId?: string;
+    readonly subjectId?: string;
+    readonly graphId?: string;
+    /**
+     * Execution grant of a scheduled (grant-backed) run. Absent for API/chat runs; threaded into
+     * tool authz audit.
+     */
+    readonly grantId?: string;
   };
 }
 
@@ -99,6 +109,8 @@ export interface InProcGraphRequest {
  * Generic TTool allows src/ to specify LlmToolDefinition while package defaults to unknown.
  */
 export interface InProcRunnerOptions<TTool = unknown> {
+  readonly program?: CreateReactAgentGraphOptions["program"];
+  readonly sourceContext?: CreateReactAgentGraphOptions["sourceContext"];
   /** Graph factory from catalog - creates compiled graph with LLM and tools */
   readonly createGraph: CreateGraphFn;
 
@@ -141,6 +153,17 @@ export interface InProcRunnerOptions<TTool = unknown> {
    * Used by operator graphs where the prompt is catalog-driven, not hardcoded.
    */
   readonly systemPrompt?: string;
+
+  /**
+   * Optional persistence foundation (langgraph-persistence). Injected by the host so the engine
+   * compiles with a checkpointer (per-run/thread state) and a Store (cross-thread working memory).
+   * Absent ⇒ the runner uses an in-process dev `MemorySaver`/`InMemoryStore` (lost on restart).
+   * Prod injects a `PostgresSaver`-backed pair through this same seam (`.setup()` at deploy).
+   */
+  readonly persistence?: {
+    readonly checkpointer?: BaseCheckpointSaver;
+    readonly store?: BaseStore;
+  };
 }
 
 /**
