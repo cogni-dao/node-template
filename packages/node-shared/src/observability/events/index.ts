@@ -32,6 +32,8 @@ export const EVENT_NAMES = {
 	AI_TOOL_CALL_ERROR: "ai.tool_call.error",
 	/** One structured summary per mission-loop cycle on the work-prioritizer slot (story.5108; CatalogEntry.report). */
 	AI_WORK_PRIORITIZER_CYCLE: "ai.work_prioritizer.cycle",
+	/** One structured summary per scheduled DECIDE tick (task.5377; CatalogEntry.report): scoresWritten, writeAttempts, skipped(reason), revisionConflicts, guardRejected. */
+	AI_COGNI_DECIDE_CYCLE: "ai.cogni_decide.cycle",
 	AI_CHAT_RECEIVED: "ai.chat_received",
 	AI_CHAT_RESPONSE_STARTED: "ai.chat_response_started",
 	AI_CHAT_STREAM_CLOSED: "ai.chat_stream_closed",

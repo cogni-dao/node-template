@@ -2,12 +2,12 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@cogni/langgraph-graphs/tests/graphs/operator/operator-catalog`
- * Purpose: Validate operator catalog entries and createOperatorGraph factory.
+ * Module: `@cogni/langgraph-graphs/tests/graphs/mission/operator-catalog`
+ * Purpose: Validate operator catalog entries and createMissionGraph factory.
  * Scope: Catalog structure + factory validation. Does NOT invoke graphs with LLM.
  * Invariants:
  *   - CATALOG_SINGLE_SOURCE_OF_TRUTH: entries exist in catalog
- *   - FACTORY_SEAM: createOperatorGraph requires systemPrompt
+ *   - FACTORY_SEAM: createMissionGraph requires systemPrompt
  *   - EXISTING_FACTORIES_UNCHANGED: other entries unaffected
  * Side-effects: none
  * Links: agent-roles spec, catalog.ts
@@ -34,8 +34,9 @@ import {
   OPERATOR_LANGGRAPH_GRAPH_IDS,
 } from "../../../src/catalog";
 import { createAutoresearchGraph } from "../../../src/graphs/autoresearch/graph";
-import { COGNI_TOOL_IDS } from "../../../src/graphs/operator/cogni";
-import { createOperatorGraph } from "../../../src/graphs/operator/graph";
+import { COGNI_TOOL_IDS } from "../../../src/graphs/mission/cogni";
+import { COGNI_READ_TOOL_IDS } from "../../../src/graphs/mission/cogni-read";
+import { createMissionGraph } from "../../../src/graphs/mission/graph";
 
 describe("operator catalog entries", () => {
   it("operating-review entry exists with systemPrompt and graphFactory", () => {
@@ -46,7 +47,7 @@ describe("operator catalog entries", () => {
     expect(typeof entry.systemPrompt).toBe("string");
     expect((entry.systemPrompt ?? "").length).toBeGreaterThan(100);
     expect(entry.toolIds.length).toBeGreaterThan(0);
-    expect(entry.graphFactory).toBe(createOperatorGraph);
+    expect(entry.graphFactory).toBe(createMissionGraph);
   });
 
   it("git-reviewer entry exists with systemPrompt and graphFactory", () => {
@@ -56,7 +57,7 @@ describe("operator catalog entries", () => {
     expect(entry.systemPrompt).toBeDefined();
     expect(typeof entry.systemPrompt).toBe("string");
     expect((entry.systemPrompt ?? "").length).toBeGreaterThan(100);
-    expect(entry.graphFactory).toBe(createOperatorGraph);
+    expect(entry.graphFactory).toBe(createMissionGraph);
   });
 
   it("pr-manager entry exists only in the operator catalog", () => {
@@ -65,7 +66,7 @@ describe("operator catalog entries", () => {
     expect(entry).toBeDefined();
     expect(entry.displayName).toBe("PR Manager");
     expect(entry.systemPrompt).toBeDefined();
-    expect(entry.graphFactory).toBe(createOperatorGraph);
+    expect(entry.graphFactory).toBe(createMissionGraph);
     expect(LANGGRAPH_CATALOG["pr-manager"]).toBeUndefined();
   });
 
@@ -82,14 +83,33 @@ describe("operator catalog entries", () => {
     const entry = LANGGRAPH_CATALOG["work-prioritizer"];
     expect(entry).toBeDefined();
     // Still in the node catalog (every node runs the mission loop), now powered by the shared
-    // Cogni engine (program "work-review" via createOperatorGraph), not the legacy ReAct factory.
-    expect(entry?.graphFactory).toBe(createOperatorGraph);
+    // Cogni engine (program "work-review" via createMissionGraph), not the legacy ReAct factory.
+    expect(entry?.graphFactory).toBe(createMissionGraph);
     expect(entry?.program).toBe("work-review");
     expect(entry?.systemPrompt).toBeDefined();
     expect(entry?.toolIds).toEqual(COGNI_TOOL_IDS);
     expect(entry?.report).toEqual({ event: "ai.work_prioritizer.cycle" });
     expect(LANGGRAPH_GRAPH_IDS["work-prioritizer"]).toBe(
       "langgraph:work-prioritizer"
+    );
+  });
+
+  it("cogni-chat (READ mode) is in the node catalog, uses the read-only allowlist and binds no write tool", () => {
+    // task.5377: cogni-chat moved into NODE_LANGGRAPH_CATALOG so every node (including
+    // node-template) can resolve `langgraph:cogni-chat` at runtime and surface it in chat.
+    const entry = LANGGRAPH_CATALOG["cogni-chat"];
+    expect(entry).toBeDefined();
+    expect(entry?.graphFactory).toBe(createMissionGraph);
+    expect(entry?.program).toBe("cogni-chat");
+    expect([...(entry?.toolIds ?? [])].sort()).toEqual(
+      [...COGNI_READ_TOOL_IDS].sort()
+    );
+    // Zero-write guarantee unchanged: the READ allowlist never binds the EDO decide tool.
+    expect(entry?.toolIds).not.toContain(EDO_DECIDE_NAME);
+    // Operator still inherits the same entry through the `...NODE_LANGGRAPH_CATALOG` spread.
+    expect(OPERATOR_LANGGRAPH_CATALOG["cogni-chat"]).toBe(entry);
+    expect(OPERATOR_LANGGRAPH_GRAPH_IDS["cogni-chat"]).toBe(
+      "langgraph:cogni-chat"
     );
   });
 
@@ -161,14 +181,14 @@ describe("operator catalog entries", () => {
   });
 });
 
-describe("createOperatorGraph", () => {
+describe("createMissionGraph", () => {
   it("throws when systemPrompt is not provided", () => {
     const fakeOpts = {
       llm: {} as never,
       tools: [],
     };
-    expect(() => createOperatorGraph(fakeOpts)).toThrow(
-      "createOperatorGraph requires systemPrompt"
+    expect(() => createMissionGraph(fakeOpts)).toThrow(
+      "createMissionGraph requires systemPrompt"
     );
   });
 });

@@ -33,20 +33,28 @@ import {
   createFrontendTesterGraph,
   FRONTEND_TESTER_GRAPH_NAME,
 } from "./graphs/frontend-tester/graph";
-import { COGNI_PROMPT, COGNI_TOOL_IDS } from "./graphs/operator/cogni";
+import { COGNI_PROMPT, COGNI_TOOL_IDS } from "./graphs/mission/cogni";
 import {
-  createOperatorGraph,
+  COGNI_DECIDE_PROMPT,
+  COGNI_DECIDE_TOOL_IDS,
+} from "./graphs/mission/cogni-decide";
+import {
+  COGNI_READ_PROMPT,
+  COGNI_READ_TOOL_IDS,
+} from "./graphs/mission/cogni-read";
+import {
+  createMissionGraph,
   GIT_REVIEWER_GRAPH_NAME,
   OPERATING_REVIEW_GRAPH_NAME,
-} from "./graphs/operator/graph";
+} from "./graphs/mission/graph";
 import {
   GIT_REVIEWER_PROMPT,
   OPERATING_REVIEW_PROMPT,
-} from "./graphs/operator/prompts";
+} from "./graphs/mission/prompts";
 import {
   GIT_REVIEWER_TOOL_IDS,
   OPERATING_REVIEW_TOOL_IDS,
-} from "./graphs/operator/tools";
+} from "./graphs/mission/tools";
 import { createPoetGraph, POET_GRAPH_NAME } from "./graphs/poet/graph";
 import { POET_TOOL_IDS } from "./graphs/poet/tools";
 import {
@@ -78,8 +86,8 @@ import type { CreateGraphFn } from "./inproc/types";
  * Providers resolve tools from TOOL_CATALOG using these IDs.
  */
 export interface CatalogEntry {
-  /** Trusted catalog program assignment; routes operator graphs to the cogni engine. */
-  readonly program?: "cogni" | "work-review";
+  /** Trusted catalog program assignment; routes mission-engine graphs to the cogni engine. */
+  readonly program?: "cogni" | "work-review" | "cogni-chat" | "cogni-decide";
   readonly displayName: string;
   readonly description: string;
   /** Native tool IDs this graph may use. Providers resolve from TOOL_CATALOG. */
@@ -87,7 +95,7 @@ export interface CatalogEntry {
   /** MCP server names whose tools this graph may use. Empty = no MCP tools. */
   readonly mcpServerIds?: readonly string[];
   readonly graphFactory: CreateGraphFn;
-  /** Optional system prompt for operator graphs (catalog-driven, not hardcoded). */
+  /** Optional system prompt for mission-engine graphs (catalog-driven, not hardcoded). */
   readonly systemPrompt?: string;
   /**
    * Graph-owned run report (PURE_GRAPH_FACTORY): the graph returns `structuredResponse.telemetry` (flat,
@@ -261,7 +269,7 @@ export const NODE_LANGGRAPH_CATALOG = {
   /**
    * Mission loop (story.5108 / story.5116) — every node runs it: a node schedules
    * `langgraph:work-prioritizer` in its own repo-spec, and a node with no approved goals changes
-   * nothing. Now powered by the shared Cogni engine (program "work-review" via createOperatorGraph):
+   * nothing. Now powered by the shared Cogni engine (program "work-review" via createMissionGraph):
    * it gathers across the read planes, then files exactly one core__edo_decide decision.
    */
   [WORK_PRIORITIZER_GRAPH_NAME]: {
@@ -269,10 +277,44 @@ export const NODE_LANGGRAPH_CATALOG = {
     description:
       "Source-grounded mission loop from the Cogni factory; files one goal-cited EDO decision",
     toolIds: COGNI_TOOL_IDS,
-    graphFactory: createOperatorGraph,
+    graphFactory: createMissionGraph,
     systemPrompt: COGNI_PROMPT,
     program: "work-review",
     report: { event: "ai.work_prioritizer.cycle" },
+  },
+
+  /**
+   * Scheduled mission DECIDE deep agent (task.5377). A SEPARATE program that coexists with
+   * `work-prioritizer`: plan -> Flash subagent reads goals + ledger -> actuate 0-5 axis SCORES via the
+   * story.5108 narrow writer, or no-op when nothing materially changed. Files zero EDO: the tool list
+   * omits core__edo_decide, and the graph never exposes the host transition tool to a model.
+   */
+  "cogni-decide": {
+    displayName: "Mission Loop (decide)",
+    description:
+      "Scheduled deep agent: plans, delegates the goal and ledger read to a cheap subagent, then writes evidence-backed axis scores or does nothing; files zero EDO",
+    toolIds: COGNI_DECIDE_TOOL_IDS as readonly string[],
+    graphFactory: createMissionGraph,
+    systemPrompt: COGNI_DECIDE_PROMPT,
+    program: "cogni-decide",
+    report: { event: "ai.cogni_decide.cycle" },
+  },
+
+  /**
+   * Cogni chat, READ mode (task.5377). Same factory, trusted `program: "cogni-chat"` selects the
+   * plan -> Flash-subagent -> answer topology. The read-only toolIds omit core__edo_decide, so a
+   * READ request cannot file a decision. It lives in the node-runtime catalog so every node
+   * (including node-template) can resolve it at runtime; chat reaches it by graph id
+   * `langgraph:cogni-chat`. The operator still gets it via the `...NODE_LANGGRAPH_CATALOG` spread.
+   */
+  "cogni-chat": {
+    displayName: "Cogni (read)",
+    description:
+      "Hub-grounded read-only chat: plans, delegates goal and work-item reading to a cheap subagent, answers; files nothing",
+    toolIds: COGNI_READ_TOOL_IDS as readonly string[],
+    graphFactory: createMissionGraph,
+    systemPrompt: COGNI_READ_PROMPT,
+    program: "cogni-chat",
   },
 } as const;
 
@@ -292,7 +334,7 @@ export const OPERATOR_LANGGRAPH_CATALOG = {
     description:
       "Periodic review — triages backlog, flags risks, produces structured briefs",
     toolIds: OPERATING_REVIEW_TOOL_IDS as readonly string[],
-    graphFactory: createOperatorGraph,
+    graphFactory: createMissionGraph,
     systemPrompt: OPERATING_REVIEW_PROMPT,
   },
 
@@ -306,7 +348,7 @@ export const OPERATOR_LANGGRAPH_CATALOG = {
     description:
       "Merge bot — auto-merges green PRs, flags blockers, tracks PR throughput",
     toolIds: PR_MANAGER_TOOL_IDS as readonly string[],
-    graphFactory: createOperatorGraph,
+    graphFactory: createMissionGraph,
     systemPrompt: PR_MANAGER_PROMPT,
   },
 
@@ -319,7 +361,7 @@ export const OPERATOR_LANGGRAPH_CATALOG = {
     description:
       "Queue observer — reports merge-ready item status from metadata",
     toolIds: GIT_REVIEWER_TOOL_IDS as readonly string[],
-    graphFactory: createOperatorGraph,
+    graphFactory: createMissionGraph,
     systemPrompt: GIT_REVIEWER_PROMPT,
   },
 
@@ -331,10 +373,13 @@ export const OPERATOR_LANGGRAPH_CATALOG = {
     displayName: "Cogni",
     description: "Hub-grounded mission agent; files one EDO decision",
     toolIds: COGNI_TOOL_IDS,
-    graphFactory: createOperatorGraph,
+    graphFactory: createMissionGraph,
     systemPrompt: COGNI_PROMPT,
     program: "cogni",
   },
+
+  // `cogni-chat` (READ mode) now lives in NODE_LANGGRAPH_CATALOG so every node can resolve it at
+  // runtime; the operator inherits it through the `...NODE_LANGGRAPH_CATALOG` spread above.
 } as const;
 
 /**
@@ -370,6 +415,10 @@ export const NODE_LANGGRAPH_GRAPH_IDS = {
   browser: `${LANGGRAPH_PROVIDER_ID}:${BROWSER_GRAPH_NAME}`,
   "frontend-tester": `${LANGGRAPH_PROVIDER_ID}:${FRONTEND_TESTER_GRAPH_NAME}`,
   "work-prioritizer": `${LANGGRAPH_PROVIDER_ID}:${WORK_PRIORITIZER_GRAPH_NAME}`,
+  "cogni-decide": `${LANGGRAPH_PROVIDER_ID}:cogni-decide`,
+  // READ deep agent — in the NODE graph-id map so the completions `graph_name`
+  // path resolves it, matching its NODE_LANGGRAPH_CATALOG entry (task.5377).
+  "cogni-chat": `${LANGGRAPH_PROVIDER_ID}:cogni-chat`,
 } as const;
 
 export const OPERATOR_LANGGRAPH_GRAPH_IDS = {
