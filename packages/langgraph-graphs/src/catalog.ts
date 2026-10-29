@@ -33,20 +33,20 @@ import {
   createFrontendTesterGraph,
   FRONTEND_TESTER_GRAPH_NAME,
 } from "./graphs/frontend-tester/graph";
-import { COGNI_PROMPT, COGNI_TOOL_IDS } from "./graphs/operator/cogni";
+import { COGNI_PROMPT, COGNI_TOOL_IDS } from "./graphs/mission/cogni";
 import {
-  createOperatorGraph,
+  createMissionGraph,
   GIT_REVIEWER_GRAPH_NAME,
   OPERATING_REVIEW_GRAPH_NAME,
-} from "./graphs/operator/graph";
+} from "./graphs/mission/graph";
 import {
   GIT_REVIEWER_PROMPT,
   OPERATING_REVIEW_PROMPT,
-} from "./graphs/operator/prompts";
+} from "./graphs/mission/prompts";
 import {
   GIT_REVIEWER_TOOL_IDS,
   OPERATING_REVIEW_TOOL_IDS,
-} from "./graphs/operator/tools";
+} from "./graphs/mission/tools";
 import { createPoetGraph, POET_GRAPH_NAME } from "./graphs/poet/graph";
 import { POET_TOOL_IDS } from "./graphs/poet/tools";
 import {
@@ -78,7 +78,7 @@ import type { CreateGraphFn } from "./inproc/types";
  * Providers resolve tools from TOOL_CATALOG using these IDs.
  */
 export interface CatalogEntry {
-  /** Trusted catalog program assignment; routes operator graphs to the cogni engine. */
+  /** Trusted catalog program assignment; routes mission-engine graphs to the cogni engine. */
   readonly program?: "cogni" | "work-review";
   readonly displayName: string;
   readonly description: string;
@@ -87,7 +87,7 @@ export interface CatalogEntry {
   /** MCP server names whose tools this graph may use. Empty = no MCP tools. */
   readonly mcpServerIds?: readonly string[];
   readonly graphFactory: CreateGraphFn;
-  /** Optional system prompt for operator graphs (catalog-driven, not hardcoded). */
+  /** Optional system prompt for mission-engine graphs (catalog-driven, not hardcoded). */
   readonly systemPrompt?: string;
   /**
    * Graph-owned run report (PURE_GRAPH_FACTORY): the graph returns `structuredResponse.telemetry` (flat,
@@ -261,7 +261,7 @@ export const NODE_LANGGRAPH_CATALOG = {
   /**
    * Mission loop (story.5108 / story.5116) — every node runs it: a node schedules
    * `langgraph:work-prioritizer` in its own repo-spec, and a node with no approved goals changes
-   * nothing. Now powered by the shared Cogni engine (program "work-review" via createOperatorGraph):
+   * nothing. Now powered by the shared Cogni engine (program "work-review" via createMissionGraph):
    * it gathers across the read planes, then files exactly one core__edo_decide decision.
    */
   [WORK_PRIORITIZER_GRAPH_NAME]: {
@@ -269,7 +269,7 @@ export const NODE_LANGGRAPH_CATALOG = {
     description:
       "Source-grounded mission loop from the Cogni factory; files one goal-cited EDO decision",
     toolIds: COGNI_TOOL_IDS,
-    graphFactory: createOperatorGraph,
+    graphFactory: createMissionGraph,
     systemPrompt: COGNI_PROMPT,
     program: "work-review",
     report: { event: "ai.work_prioritizer.cycle" },
@@ -292,7 +292,7 @@ export const OPERATOR_LANGGRAPH_CATALOG = {
     description:
       "Periodic review — triages backlog, flags risks, produces structured briefs",
     toolIds: OPERATING_REVIEW_TOOL_IDS as readonly string[],
-    graphFactory: createOperatorGraph,
+    graphFactory: createMissionGraph,
     systemPrompt: OPERATING_REVIEW_PROMPT,
   },
 
@@ -306,7 +306,7 @@ export const OPERATOR_LANGGRAPH_CATALOG = {
     description:
       "Merge bot — auto-merges green PRs, flags blockers, tracks PR throughput",
     toolIds: PR_MANAGER_TOOL_IDS as readonly string[],
-    graphFactory: createOperatorGraph,
+    graphFactory: createMissionGraph,
     systemPrompt: PR_MANAGER_PROMPT,
   },
 
@@ -319,7 +319,7 @@ export const OPERATOR_LANGGRAPH_CATALOG = {
     description:
       "Queue observer — reports merge-ready item status from metadata",
     toolIds: GIT_REVIEWER_TOOL_IDS as readonly string[],
-    graphFactory: createOperatorGraph,
+    graphFactory: createMissionGraph,
     systemPrompt: GIT_REVIEWER_PROMPT,
   },
 
@@ -331,7 +331,7 @@ export const OPERATOR_LANGGRAPH_CATALOG = {
     displayName: "Cogni",
     description: "Hub-grounded mission agent; files one EDO decision",
     toolIds: COGNI_TOOL_IDS,
-    graphFactory: createOperatorGraph,
+    graphFactory: createMissionGraph,
     systemPrompt: COGNI_PROMPT,
     program: "cogni",
   },
