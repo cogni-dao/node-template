@@ -95,6 +95,25 @@ export async function runGovernanceSchedulesSyncJob(): Promise<GovernanceSchedul
         });
         return grant.id;
       },
+      // GRAPH_CHARTER (task.5282): a charter that declares `graph` runs on its own
+      // `graph:execute:{graphId}` grant, so the sandbox governance grant (and the
+      // LEDGER_INGEST schedule that shares it) is untouched.
+      ensureGraphGrant: async (graphId: string) => {
+        const grant = await container.executionGrantPort.ensureGrant({
+          userId: systemUserId,
+          billingAccountId: COGNI_SYSTEM_BILLING_ACCOUNT_ID,
+          scopes: [`graph:execute:${graphId}`],
+        });
+        return grant.id;
+      },
+      // GRAPH_CRON_DRIFT: next fire time of a cron, minute precision, for drift detection.
+      nextCronRun: (cron: string, timezone: string) => {
+        try {
+          return computeNextRun(cron, timezone).toISOString();
+        } catch {
+          return null;
+        }
+      },
       upsertGovernanceScheduleRow: async (params) => {
         const nextRunAt = computeNextRun(params.cron, params.timezone);
 

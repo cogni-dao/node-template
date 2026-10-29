@@ -464,6 +464,220 @@ describe("syncGovernanceSchedules", () => {
   });
 });
 
+const LEDGER: NonNullable<GovernanceConfig["ledger"]> = {
+  scopeId: "scope-uuid-001",
+  scopeKey: "default",
+  epochLengthDays: 7,
+  activitySources: {
+    github: {
+      attributionPipeline: "cogni-v0.0",
+      sourceRefs: ["cogni-dao/cogni"],
+    },
+  },
+  poolConfig: { baseIssuanceCredits: 10000n },
+  baseIssuanceCredits: "10000",
+  approvers: ["0x070075F1389Ae1182aBac722B36CA12285d0c949"],
+};
+
+describe("GRAPH_CHARTER — governance schedule `graph:` (task.5282)", () => {
+  const GRAPH_GRANT_ID = "test-graph-grant-id-001";
+  const DECIDE = {
+    charter: "COGNI_DECIDE",
+    cron: "*/30 * * * *",
+    timezone: "UTC",
+    entrypoint: "DECIDE",
+    graph: "langgraph:cogni-decide",
+    model: "gpt-oss-120b",
+  };
+  const created = (deps: GovernanceScheduleSyncDeps) =>
+    vi
+      .mocked(deps.scheduleControl.createSchedule)
+      .mock.calls.map(([params]) => params);
+
+  it("runs the declared langgraph graph via GraphRunWorkflow with a messages + platform modelRef input", async () => {
+    const deps = makeMockDeps({
+      ensureGraphGrant: vi.fn().mockResolvedValue(GRAPH_GRANT_ID),
+    });
+
+    const result = await syncGovernanceSchedules({ schedules: [DECIDE] }, deps);
+
+    expect(result.created).toEqual(["governance:cogni_decide"]);
+    const [params] = created(deps);
+    expect(params).toMatchObject({
+      scheduleId: "governance:cogni_decide",
+      graphId: "langgraph:cogni-decide",
+      executionGrantId: GRAPH_GRANT_ID,
+      cron: "*/30 * * * *",
+      timezone: "UTC",
+      input: {
+        messages: [{ role: "user", content: "DECIDE" }],
+        modelRef: { providerKey: "platform", modelId: "gpt-oss-120b" },
+      },
+    });
+    // undefined workflowType ⇒ adapter default GraphRunWorkflow; default queue.
+    expect(params?.workflowType).toBeUndefined();
+    expect(params?.taskQueueOverride).toBeUndefined();
+    expect(deps.ensureGraphGrant).toHaveBeenCalledWith(
+      "langgraph:cogni-decide",
+    );
+    expect(deps.upsertGovernanceScheduleRow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        graphId: "langgraph:cogni-decide",
+        executionGrantId: GRAPH_GRANT_ID,
+      }),
+    );
+  });
+
+  it("GRAPH_CRON_DRIFT: a cron change (*/15 → */5) on a graph charter updates the Temporal schedule", async () => {
+    const existing = (nextRunAtIso: string): ScheduleDescription => ({
+      scheduleId: "governance:cogni_decide",
+      nextRunAtIso,
+      lastRunAtIso: null,
+      isPaused: false,
+      cron: null, // Temporal never returns the cron
+      timezone: "UTC",
+      input: {
+        messages: [{ role: "user", content: "DECIDE" }],
+        modelRef: { providerKey: "platform", modelId: DECIDE.model },
+      },
+      dbScheduleId: `${MOCK_DB_SCHEDULE_ID}-1`,
+    });
+    const make = (nextCronRun: string) => {
+      const deps = makeMockDeps({
+        ensureGraphGrant: vi.fn().mockResolvedValue(GRAPH_GRANT_ID),
+        nextCronRun: vi.fn().mockReturnValue(nextCronRun),
+      });
+      deps.scheduleControl.createSchedule = vi
+        .fn()
+        .mockRejectedValue(
+          new ScheduleControlConflictError("governance:cogni_decide"),
+        );
+      // The live schedule still fires on the old */15 calendar.
+      deps.scheduleControl.describeSchedule = vi
+        .fn()
+        .mockResolvedValue(existing("2026-10-21T03:00:00.000Z"));
+      return deps;
+    };
+
+    const changed = make("2026-10-21T02:55:00.000Z"); // */5 fires sooner
+    const r1 = await syncGovernanceSchedules(
+      { schedules: [{ ...DECIDE, cron: "*/5 * * * *" }] },
+      changed,
+    );
+    expect(r1.updated).toEqual(["governance:cogni_decide"]);
+    expect(changed.scheduleControl.updateSchedule).toHaveBeenCalledWith(
+      "governance:cogni_decide",
+      expect.objectContaining({ cron: "*/5 * * * *" }),
+    );
+
+    const same = make("2026-10-21T03:00:00.000Z"); // cron unchanged → same next fire
+    const r2 = await syncGovernanceSchedules(
+      { schedules: [{ ...DECIDE, cron: "*/15 * * * *" }] },
+      same,
+    );
+    expect(r2.skipped).toEqual(["governance:cogni_decide"]);
+    expect(same.scheduleControl.updateSchedule).not.toHaveBeenCalled();
+  });
+
+  it("keeps a charter WITHOUT graph on sandbox:openclaw byte-for-byte (governance grant, message+model input)", async () => {
+    const deps = makeMockDeps({
+      ensureGraphGrant: vi.fn().mockResolvedValue(GRAPH_GRANT_ID),
+    });
+
+    await syncGovernanceSchedules(
+      makeConfig([
+        { charter: "HEARTBEAT", cron: "0 * * * *", entrypoint: "HEARTBEAT" },
+      ]),
+      deps,
+    );
+
+    const [params] = created(deps);
+    expect(params?.graphId).toBe("sandbox:openclaw");
+    expect(params?.executionGrantId).toBe(GRANT_ID);
+    expect(params?.input).toEqual({ message: "HEARTBEAT", model: "kimi-k2.5" });
+    expect(params?.workflowType).toBeUndefined();
+    expect(deps.ensureGraphGrant).not.toHaveBeenCalled();
+  });
+
+  it("LEDGER_PRESERVED: adding a graph charter leaves the ledger schedule exactly as before", async () => {
+    const ledgerCharter = {
+      charter: "LEDGER_INGEST",
+      cron: "0 0 * * *",
+      timezone: "UTC",
+      entrypoint: "LEDGER_INGEST",
+    };
+    const ledgerOnly = makeMockDeps();
+    await syncGovernanceSchedules(
+      { schedules: [ledgerCharter], ledger: LEDGER },
+      ledgerOnly,
+    );
+    const [ledgerBefore] = created(ledgerOnly);
+
+    const withGraph = makeMockDeps({
+      ensureGraphGrant: vi.fn().mockResolvedValue(GRAPH_GRANT_ID),
+    });
+    const result = await syncGovernanceSchedules(
+      { schedules: [DECIDE, ledgerCharter], ledger: LEDGER },
+      withGraph,
+    );
+    const ledgerAfter = created(withGraph).find(
+      (p) => p.scheduleId === "governance:ledger_ingest",
+    );
+
+    expect(result.created).toEqual([
+      "governance:cogni_decide",
+      "governance:ledger_ingest",
+    ]);
+    expect(ledgerAfter).toBeDefined();
+    // Same schedule id, workflow, queue, grant, input — only the per-call dbScheduleId differs.
+    const strip = (p: typeof ledgerAfter) => ({ ...p, dbScheduleId: "x" });
+    expect(strip(ledgerAfter)).toEqual(strip(ledgerBefore));
+    expect(ledgerAfter?.workflowType).toBe("CollectEpochWorkflow");
+    expect(ledgerAfter?.executionGrantId).toBe(GRANT_ID);
+    expect(result.paused).toEqual([]);
+  });
+
+  it("ignores `graph` on LEDGER_INGEST (always the epoch-collect workflow)", async () => {
+    const deps = makeMockDeps({
+      ensureGraphGrant: vi.fn().mockResolvedValue(GRAPH_GRANT_ID),
+    });
+    await syncGovernanceSchedules(
+      {
+        schedules: [
+          {
+            charter: "LEDGER_INGEST",
+            cron: "0 0 * * *",
+            timezone: "UTC",
+            entrypoint: "LEDGER_INGEST",
+            graph: "langgraph:cogni-decide",
+            model: "gpt-oss-120b",
+          },
+        ],
+        ledger: LEDGER,
+      },
+      deps,
+    );
+    const [params] = created(deps);
+    expect(params?.workflowType).toBe("CollectEpochWorkflow");
+    expect(params?.graphId).toBe("ledger:ingest");
+    expect(deps.ensureGraphGrant).not.toHaveBeenCalled();
+  });
+
+  it("skips (and lets prune pause) a graph charter when no graph grant dep is wired", async () => {
+    const deps = makeMockDeps({
+      listGovernanceScheduleIds: vi
+        .fn()
+        .mockResolvedValue(["governance:cogni_decide"]),
+    });
+
+    const result = await syncGovernanceSchedules({ schedules: [DECIDE] }, deps);
+
+    expect(deps.scheduleControl.createSchedule).not.toHaveBeenCalled();
+    expect(result.skipped).toEqual(["governance:cogni_decide"]);
+    expect(result.paused).toEqual(["governance:cogni_decide"]);
+  });
+});
+
 describe("governanceScheduleId", () => {
   it("lowercases charter name", () => {
     expect(governanceScheduleId("COMMUNITY")).toBe("governance:community");
