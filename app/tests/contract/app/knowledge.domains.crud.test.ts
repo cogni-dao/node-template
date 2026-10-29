@@ -5,7 +5,7 @@
  * Module: `@tests/contract/app/knowledge.domains.crud`
  * Purpose: Prove the item-scoped domain routes (GET / PATCH / DELETE /api/v1/knowledge/domains/[domain]) accept any
  *   authenticated principal like POST register, validate input against the contract, and map store failures to typed error bodies.
- * Scope: Real route handlers against the in-memory fake store. Does not test Doltgres SQL (see tests/component/db/doltgres-domains.int.test.ts).
+ * Scope: Real route handlers and shared perimeter against the in-memory fake store. Does not test Doltgres SQL (see tests/component/db/doltgres-domains.int.test.ts).
  * Invariants: DOMAIN_READ_REQUIRES_PRINCIPAL, DOMAIN_MUTATION_BEARER_OR_SESSION (a bearer agent can update and delete;
  *   no principal gets 401), DOMAIN_ID_IS_IMMUTABLE, DOMAIN_DELETE_REFUSES_NONEMPTY, DOMAIN_BASELINE_IS_PROTECTED,
  *   DOMAIN_ERRORS_ARE_TYPED.
@@ -22,7 +22,14 @@ import {
   KnowledgeWriteOutcomeUnknownError,
 } from "@cogni/knowledge-store";
 import { testApiHandler } from "next-test-api-route-handler";
+import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("next-auth/jwt", () => ({ getToken: vi.fn(async () => null) }));
+vi.mock("@/auth", () => ({
+  authSecret: "test-secret",
+  authOptions: { secret: "test-secret" },
+}));
 
 // resolveRequestIdentity() returns exactly this shape for a valid bearer token.
 const BEARER_AGENT: SessionUser = {
@@ -53,6 +60,7 @@ vi.mock("@/bootstrap/container", () => ({
   })),
 }));
 
+import { proxy } from "@/proxy";
 import * as collectionRoute from "@/app/api/v1/knowledge/domains/route";
 import * as itemRoute from "@/app/api/v1/knowledge/domains/[domain]/route";
 
@@ -114,7 +122,9 @@ async function call(
 function expectTypedError(body: unknown, errorCode: string) {
   const parsed = DomainsErrorResponseSchema.safeParse(body);
   expect(parsed.success).toBe(true);
-  expect(parsed.success && parsed.data.errorCode).toBe(errorCode);
+  expect(
+    parsed.success && "errorCode" in parsed.data && parsed.data.errorCode
+  ).toBe(errorCode);
 }
 
 beforeEach(async () => {
@@ -156,8 +166,28 @@ describe("GET /knowledge/domains/[domain] — DOMAIN_READ_REQUIRES_PRINCIPAL", (
         method === "GET" ? undefined : {}
       );
       expect(res.status).toBe(401);
+      expect(res.body).toEqual({ error: "Session required" });
+      expect(DomainsErrorResponseSchema.parse(res.body)).toEqual(res.body);
     }
   });
+});
+
+describe("domain item shared perimeter", () => {
+  it.each(["GET", "PATCH", "DELETE"])(
+    "validates the middleware-owned %s 401",
+    async (method) => {
+      const response = await proxy(
+        new NextRequest(
+          "http://localhost/api/v1/knowledge/domains/build-evals",
+          { method }
+        )
+      );
+      expect(response.status).toBe(401);
+      const body = await response.json();
+      expect(body).toEqual({ error: "Unauthorized" });
+      expect(DomainsErrorResponseSchema.parse(body)).toEqual(body);
+    }
+  );
 });
 
 describe("PATCH /knowledge/domains/[domain] — DOMAIN_MUTATION_BEARER_OR_SESSION", () => {

@@ -14,7 +14,7 @@
  *   - DOMAIN_ID_IS_IMMUTABLE: the update input has no `id` change; rename is `name` only.
  *   - DOMAIN_DELETE_REFUSES_NONEMPTY: delete returns 409 `domain_not_empty`; never cascades.
  *   - DOMAIN_BASELINE_IS_PROTECTED: delete of a baseline domain (meta, mission, strategy) returns 409 `domain_protected`.
- *   - DOMAIN_ERRORS_ARE_TYPED: every item-route error body parses as `DomainsErrorResponseSchema`.
+ *   - DOMAIN_ERRORS_ARE_TYPED: domain errors and middleware-owned 401 bodies parse as `DomainsErrorResponseSchema`.
  *   - CONTRACTS_ARE_TRUTH: every type here is `z.infer`; tools that surface a domain derive from `DomainSchema`.
  *   - id is short, slug-shaped (alnum, dash, underscore).
  * Side-effects: none
@@ -62,7 +62,7 @@ export type DomainsCreateResponse = z.infer<typeof DomainsCreateResponseSchema>;
 // ---------------------------------------------------------------------------
 
 /**
- * Every `errorCode` an item-scoped domain route can emit. Item routes build
+ * Every `errorCode` an item-scoped domain handler can emit. Handlers build
  * their error bodies through `DomainsErrorResponseSchema`, so a code not listed
  * here cannot reach the wire. The write-failure codes mirror the typed
  * knowledge-store errors (`KnowledgeWriteOutcomeUnknownError`,
@@ -84,7 +84,7 @@ export const DomainsErrorCodeSchema = z.enum([
 ]);
 export type DomainsErrorCode = z.infer<typeof DomainsErrorCodeSchema>;
 
-export const DomainsErrorResponseSchema = z.object({
+const DomainHandlerErrorResponseSchema = z.object({
   error: z.string(),
   errorCode: DomainsErrorCodeSchema,
   retryable: z.boolean().optional(),
@@ -99,6 +99,16 @@ export const DomainsErrorResponseSchema = z.object({
   /** `knowledge_write_conflict`: the conflicting entry. */
   entryId: z.string().optional(),
 });
+/**
+ * Shared authentication middleware owns these 401 responses before the typed
+ * domain handler runs: proxy.ts emits Unauthorized; the logging wrapper emits
+ * Session required. Preserve those wire bodies and existing endpoint permissions.
+ * Only these known auth messages may omit errorCode; domain errors still require it.
+ */
+export const DomainsErrorResponseSchema = z.union([
+  DomainHandlerErrorResponseSchema,
+  z.strictObject({ error: z.enum(["Unauthorized", "Session required"]) }),
+]);
 export type DomainsErrorResponse = z.infer<typeof DomainsErrorResponseSchema>;
 
 export const domainsGetOperation = {

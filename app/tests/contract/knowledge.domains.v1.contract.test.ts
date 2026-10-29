@@ -143,6 +143,16 @@ describe("DomainsErrorResponseSchema", () => {
     );
   });
 
+  it("requires codes for domain errors and rejects unrecognized auth shapes", () => {
+    for (const body of [
+      { error: "domain not found" },
+      { error: "unauthorized" },
+      { error: "Unauthorized", errorCode: "nope" },
+      { error: "Session required", retryable: true },
+    ])
+      expect(DomainsErrorResponseSchema.safeParse(body).success).toBe(false);
+  });
+
   it("rejects an unknown code", () => {
     expect(
       DomainsErrorResponseSchema.safeParse({ error: "x", errorCode: "nope" })
