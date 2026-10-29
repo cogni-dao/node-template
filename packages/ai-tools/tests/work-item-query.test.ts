@@ -45,9 +45,12 @@ const BASE: WorkItemInfo = {
   status: "needs_implement",
   labels: [],
   assignees: [],
+  externalRefs: [],
+  specRefs: [],
   updatedAt: "2026-10-19T00:00:00.000Z",
   createdAt: "2026-10-18T00:00:00.000Z",
   deployVerified: false,
+  revision: 3,
 };
 
 describe("core__work_item_query", () => {
@@ -159,13 +162,13 @@ describe("core__work_item_query", () => {
     expect(out.items[0]).not.toHaveProperty("scores");
   });
 
-  it("is backward compatible when the store has no enrichment fields", async () => {
+  it("preserves actual revision when optional enrichment is absent", async () => {
     const cap = capabilityReturning([BASE]);
     const impl = createWorkItemQueryImplementation({ workItemCapability: cap });
     const out = await impl.execute({});
 
     expect(WorkItemQueryOutputSchema.parse(out)).toEqual(out);
-    expect(out.items[0]).not.toHaveProperty("revision");
+    expect(out.items[0]?.revision).toBe(BASE.revision);
     expect(out.items[0]).not.toHaveProperty("outcome");
     expect(out.count).toBe(1);
   });

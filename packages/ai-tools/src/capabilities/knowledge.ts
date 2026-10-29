@@ -13,6 +13,8 @@
  * @public
  */
 
+import type { KnowledgeRow } from "@cogni-dao/read-contracts/knowledge";
+
 /**
  * Confidence score defaults for knowledge entries.
  *
@@ -26,17 +28,7 @@ export const CONFIDENCE = {
   HARDENED: 95,
 } as const;
 
-export interface KnowledgeEntry {
-  id: string;
-  domain: string;
-  entityId: string | null;
-  title: string;
-  content: string;
-  confidencePct: number | null;
-  sourceType: string;
-  sourceRef: string | null;
-  tags: string[] | null;
-}
+export type KnowledgeEntry = KnowledgeRow;
 
 export interface KnowledgeSearchParams {
   domain: string;

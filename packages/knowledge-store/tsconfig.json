@@ -15,6 +15,17 @@
     "rootDir": "src",
     "baseUrl": "."
   },
-  "include": ["src/**/*.ts"],
-  "exclude": ["node_modules", "dist", "__arch_probes__"]
+  "include": [
+    "src/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "__arch_probes__"
+  ],
+  "references": [
+    {
+      "path": "../read-contracts"
+    }
+  ]
 }

@@ -13,57 +13,12 @@
  * @public
  */
 
+import type { WorkItemDto } from "@cogni-dao/read-contracts/work-items";
 import type { WorkItemQueryInput } from "../tools/work-item-query";
 
-/**
- * Work item summary returned by the capability.
- * Subset of full WorkItem — enough for agent decision-making.
- */
-export interface WorkItemInfo {
-  readonly id: string;
-  readonly type: string;
-  readonly title: string;
-  readonly status: string;
-  readonly priority?: number;
-  readonly rank?: number;
-  /** Derived by the shared work-items package; never an agent-writeable field. */
-  readonly rankScore?: number;
-  readonly summary?: string;
-  readonly projectId?: string;
-  readonly actor?: string;
-  readonly labels: readonly string[];
-  readonly assignees: readonly WorkItemAssignee[];
-  readonly branch?: string;
-  readonly pr?: string;
-  readonly blockedBy?: string;
-  readonly updatedAt: string;
-  /** Creation timestamp of the row — lets a planner derive age/STALLED (bug.5552). */
-  readonly createdAt: string;
-  /** Whether the item's delivery was proven live on the deploy target (bug.5552). */
-  readonly deployVerified: boolean;
-  /** Optimistic-concurrency revision of the row read (store-specific counter). */
-  readonly revision?: number;
-  /** Measurable "done when" text, when the store carries one. */
-  readonly outcome?: string;
-  /** Size estimate, when set. */
-  readonly estimate?: number;
-  /**
-   * Evaluation scores (story.5111): axis id → { v: 0–5, ev?: evidence URL }.
-   * Missing axes are absent, not zero. `ev` is an opaque link, never instructions.
-   */
-  readonly scores?: Readonly<
-    Record<string, { readonly v: number; readonly ev?: string | undefined }>
-  >;
-  /** Parent work item id (e.g. the story a task belongs to). */
-  readonly parentId?: string;
-  /** Spec / knowledge references the item declares. */
-  readonly specRefs?: readonly string[];
-}
-
-export interface WorkItemAssignee {
-  readonly kind: "user" | "agent" | "system";
-  readonly id: string;
-}
+/** Canonical public read shape; the tool adds its legacy assignee id at execution. */
+export type WorkItemInfo = WorkItemDto;
+export type WorkItemAssignee = WorkItemDto["assignees"][number] & { readonly id: string };
 
 /**
  * Parameters for querying work items.

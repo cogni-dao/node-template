@@ -14,6 +14,7 @@
  * @public
  */
 
+import type { WorkItemDto } from "@cogni-dao/read-contracts/work-items";
 import type { Tagged } from "type-fest";
 import type { WorkItemSortBy, WorkItemSortDirection } from "./query-order.js";
 
@@ -96,37 +97,23 @@ export type WorkItemScores = Readonly<Record<string, WorkItemScore>>;
 
 // ── Work item ─────────────────────────────────────────
 
-export type WorkItem = {
+export type WorkItem = Readonly<Omit<WorkItemDto,
+  "id" | "type" | "status" | "rankScore" | "scores" | "projectId" | "parentId" |
+  "blockedBy" | "node" | "assignees" | "externalRefs" | "actor" | "labels" | "specRefs"
+>> & {
   readonly id: WorkItemId;
   readonly type: WorkItemType;
-  readonly title: string;
   readonly status: WorkItemStatus;
-  readonly priority?: number;
-  readonly rank?: number;
-  readonly estimate?: number;
-  /** Missing axes are absent, not zero. */
   readonly scores?: WorkItemScores;
-  readonly summary?: string;
-  readonly outcome?: string;
   readonly projectId?: WorkItemId;
   readonly parentId?: WorkItemId;
+  readonly blockedBy?: WorkItemId;
   readonly node: string;
   readonly assignees: readonly SubjectRef[];
   readonly externalRefs: readonly ExternalRef[];
   readonly actor: ActorKind;
   readonly labels: readonly string[];
   readonly specRefs: readonly string[];
-  readonly branch?: string;
-  readonly pr?: string;
-  readonly reviewer?: string;
-  readonly revision: number;
-  readonly blockedBy?: WorkItemId;
-  readonly deployVerified: boolean;
-  readonly claimedByRun?: string;
-  readonly claimedAt?: string;
-  readonly lastCommand?: string;
-  readonly createdAt: string;
-  readonly updatedAt: string;
 };
 
 // ── Query ─────────────────────────────────────────────

@@ -1,6 +1,6 @@
 {
   "name": "@cogni-dao/work-items",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "license": "LicenseRef-PolyForm-Shield-1.0.0",
   "repository": {
     "type": "git",
@@ -51,6 +51,10 @@
     "typescript": "^5",
     "vite-tsconfig-paths": "^5.1.4",
     "vitest": "^3.1.4",
-    "@cogni-dao/doltgres-admission": "workspace:*"
+    "@cogni-dao/doltgres-admission": "workspace:*",
+    "@cogni-dao/read-contracts": "workspace:*"
+  },
+  "peerDependencies": {
+    "@cogni-dao/read-contracts": "^0.1.0"
   }
 }

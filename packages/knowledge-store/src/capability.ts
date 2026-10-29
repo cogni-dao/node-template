@@ -37,29 +37,7 @@ import {
 
 const CONFIDENCE_DRAFT = 30;
 
-function toEntry(k: {
-  id: string;
-  domain: string;
-  entityId?: string | null;
-  title: string;
-  content: string;
-  confidencePct?: number | null;
-  sourceType: string;
-  sourceRef?: string | null;
-  tags?: string[] | null;
-}): KnowledgeEntry {
-  return {
-    id: k.id,
-    domain: k.domain,
-    entityId: k.entityId ?? null,
-    title: k.title,
-    content: k.content,
-    confidencePct: k.confidencePct ?? null,
-    sourceType: k.sourceType,
-    sourceRef: k.sourceRef ?? null,
-    tags: k.tags ?? null,
-  };
-}
+import { toKnowledgeRow as toEntry } from "./readback.js";
 
 export interface KnowledgeCapabilityOptions {
   /**

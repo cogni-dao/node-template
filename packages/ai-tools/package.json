@@ -1,6 +1,6 @@
 {
   "name": "@cogni-dao/ai-tools",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "license": "LicenseRef-PolyForm-Shield-1.0.0",
   "repository": {
     "type": "git",
@@ -26,15 +26,15 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --config vitest.config.ts",
     "test:watch": "vitest --config vitest.config.ts",
-    "test:ci": "vitest run --config vitest.config.ts"
+    "test:ci": "vitest run --config vitest.config.ts",
+    "build:declarations": "tsup --config tsup.dts.config.ts"
   },
   "dependencies": {
     "@types/json-schema": "^7.0.15",
-    "zod": "^3.24.1",
-    "zod-to-json-schema": "^3.24.1"
+    "zod": "^4.1.12"
   },
   "peerDependencies": {
-    "@cogni/ai-core": "*"
+    "@cogni-dao/read-contracts": "^0.1.0"
   },
   "devDependencies": {
     "@cogni/ai-core": "workspace:*",
@@ -42,6 +42,7 @@
     "typescript": "^5",
     "vite-tsconfig-paths": "^5.1.4",
     "vitest": "^3.1.4",
-    "@cogni-dao/work-items": "workspace:*"
+    "@cogni-dao/work-items": "workspace:*",
+    "@cogni-dao/read-contracts": "workspace:*"
   }
 }

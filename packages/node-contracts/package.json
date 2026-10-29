@@ -28,7 +28,8 @@
     "@ts-rest/open-api": "^3.52.1",
     "zod": "^4.1.12",
     "@cogni/scheduling": "workspace:@cogni-dao/scheduling@*",
-    "@cogni/work-items": "workspace:@cogni-dao/work-items@*"
+    "@cogni/work-items": "workspace:@cogni-dao/work-items@*",
+    "@cogni-dao/read-contracts": "workspace:*"
   },
   "devDependencies": {
     "tsup": "^8.5.1",

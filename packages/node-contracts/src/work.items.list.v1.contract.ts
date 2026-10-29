@@ -19,19 +19,8 @@ import {
   WORK_ITEM_SORT_DIRECTIONS
 } from "@cogni/work-items";
 
-const SubjectRefSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("user"), userId: z.string() }),
-  z.object({ kind: z.literal("agent"), agentId: z.string() }),
-  z.object({ kind: z.literal("system"), serviceId: z.string() })
-]);
-
-const ExternalRefSchema = z.object({
-  system: z.string(),
-  kind: z.string(),
-  externalId: z.string().optional(),
-  url: z.string().optional(),
-  title: z.string().optional()
-});
+import { WorkItemDtoSchema } from "@cogni-dao/read-contracts/work-items";
+export { WorkItemDtoSchema } from "@cogni-dao/read-contracts/work-items";
 
 /**
  * Evaluation scores: configurable axis id → { v, ev? }. Writes replace the whole object.
@@ -43,44 +32,6 @@ export const WorkItemScoresInputSchema = z.record(
   z.string(),
   z.looseObject({ v: z.number(), ev: z.string().optional() })
 );
-
-const WorkItemScoresDtoSchema = z.record(
-  z.string(),
-  z.object({ v: z.number(), ev: z.string().optional() })
-);
-
-export const WorkItemDtoSchema = z.object({
-  id: z.string(),
-  type: z.string(),
-  title: z.string(),
-  status: z.string(),
-  priority: z.number().optional(),
-  rank: z.number().optional(),
-  rankScore: z.number().optional(),
-  estimate: z.number().optional(),
-  scores: WorkItemScoresDtoSchema.optional(),
-  summary: z.string().optional(),
-  outcome: z.string().optional(),
-  projectId: z.string().optional(),
-  parentId: z.string().optional(),
-  node: z.string().optional(),
-  assignees: z.array(SubjectRefSchema),
-  externalRefs: z.array(ExternalRefSchema),
-  actor: z.string().optional(),
-  labels: z.array(z.string()),
-  specRefs: z.array(z.string()),
-  branch: z.string().optional(),
-  pr: z.string().optional(),
-  reviewer: z.string().optional(),
-  revision: z.number(),
-  blockedBy: z.string().optional(),
-  deployVerified: z.boolean(),
-  claimedByRun: z.string().optional(),
-  claimedAt: z.string().optional(),
-  lastCommand: z.string().optional(),
-  createdAt: z.string(),
-  updatedAt: z.string()
-});
 
 export const workItemsListOperation = {
   id: "work.items.list.v1",

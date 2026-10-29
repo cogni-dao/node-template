@@ -12,6 +12,7 @@
  */
 
 import { z } from "zod";
+import { KnowledgeRowSchema } from "@cogni-dao/read-contracts/knowledge";
 
 // ---------------------------------------------------------------------------
 // Source types
@@ -164,7 +165,7 @@ export type ResolutionStrategy = z.infer<typeof ResolutionStrategySchema>;
 // Knowledge
 // ---------------------------------------------------------------------------
 
-export const KnowledgeSchema = z.object({
+export const KnowledgeSchema = KnowledgeRowSchema.extend({
   id: z.string().min(1),
   domain: z.string().min(1),
   entityId: z.string().nullable().optional(),

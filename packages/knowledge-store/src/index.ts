@@ -275,3 +275,5 @@ export {
   isGoverningEntryType,
   selectGoverningIndex,
 } from "./domain/governing.js";
+
+export { toKnowledgeRow } from "./readback.js";

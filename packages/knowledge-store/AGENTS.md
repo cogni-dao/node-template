@@ -37,12 +37,13 @@ Shared ports, contribution workflow, and adapters for versioned domain knowledge
 }
 ```
 
-**External deps:** `@cogni-dao/doltgres-admission` (bundled engine protocol), `zod` (schema validation), `postgres` (Doltgres wire protocol — adapter subpath only).
+**External deps:** `@cogni-dao/doltgres-admission` (bundled engine protocol), `zod` (schema validation), `@cogni-dao/read-contracts` (public schema peer), `postgres` (Doltgres wire protocol — adapter subpath only).
 
 ## Public Surface
 
 **Root barrel** (`@cogni/knowledge-store`):
 
+- Read serialization: `toKnowledgeRow` — canonical wire fields with Date/null/default normalization
 - Types: `KnowledgeStorePort`, `KnowledgeWriteSession` (closed callback scope), `Knowledge`, `NewKnowledge`, `DoltCommit`, `DoltDiffEntry`, `SourceType`
 - Schemas: `KnowledgeSchema`, `NewKnowledgeSchema`, `DoltCommitSchema`, `DoltDiffEntrySchema`, `SourceTypeSchema`
 - Goal layer (story.5101): `KnowledgeStorePort.listActiveGoals()` (required port method, NO_GOAL_CAP), `ActiveGoal`, `GOAL_ENTRY_TYPE`, `GOAL_ID_PREFIX`, `GOAL_RETIRING_EDGE`, `isGoalRowId`, `selectActiveGoals`, `resolveGoals`, `renderGoalsLines`, `GOALS_BOOTSTRAP_INSTRUCTION`, `GoalsSection`, `GoalRequiresContributionError` (direct writes never touch goals), `createKnowledgeCapability(...).listActiveGoals` (for `core__goal_list`)

@@ -90,6 +90,17 @@ jobs:
       - name: Build workspace packages
         run: pnpm packages:build
 
+      - name: Installed read-envelope inheritance
+        run: node scripts/proof/read-envelope-inheritance.mjs
+
+      - name: Preserve read-envelope proof receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: read-envelope-proof-${{ github.sha }}
+          path: .context/read-envelope-proof.json
+          if-no-files-found: ignore
+
       - name: Unit + contract coverage tests
         run: pnpm test:ci
 
