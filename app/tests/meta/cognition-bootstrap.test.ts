@@ -121,6 +121,20 @@ describe("session cognition hook", () => {
 		expect(claude).toContain("@AGENTS.md");
 		expect(claude).toContain("@.cogni/.cognition-cache.md");
 		expect(opencode.instructions).toContain(CACHE_PATH);
+		// A declared instruction path is not a channel: the cache is gitignored,
+		// so a cold worktree needs a producer that runs inside OpenCode's own
+		// startup, before it assembles the system prompt. Claude and Codex get
+		// theirs from SessionStart hooks; OpenCode 1.x has no hook, so its
+		// producer is a project plugin.
+		const opencodePlugin = readFileSync(
+			path.join(REPO_ROOT, ".opencode/plugins/cogni-cognition.js"),
+			"utf8",
+		);
+		expect(opencodePlugin).toContain("scripts/agent/session-cognition.sh");
+		// One loader, one authority: the plugin triggers acquisition and never
+		// re-authors the contract.
+		expect(opencodePlugin).not.toContain("status-contract");
+		expect(opencodePlugin).not.toContain("Done when");
 		// No producer-side byte ceiling survives on either channel.
 		expect(loader).not.toContain("SESSION_COGNITION_MAX_BYTES");
 		expect(loader).not.toContain("bundle_fits_budget");
