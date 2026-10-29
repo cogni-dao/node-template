@@ -20,8 +20,9 @@ import {
   createWorkItemQueryImplementation,
   type WorkItemCapability,
   type WorkItemInfo,
+  type WorkItemQueryOutput,
 } from "@cogni/ai-tools";
-import { WorkItemDtoSchema } from "@cogni/node-contracts";
+import { WorkItemDtoSchema, type WorkItemDto } from "@cogni/node-contracts";
 import { describe, expect, it, vi } from "vitest";
 
 /**
@@ -50,6 +51,30 @@ const ENVELOPE_FIELDS = {
 // validates exactly the pinned fields, so it passes when correct and throws when
 // any pinned field is dropped or mistyped.
 const EnvelopeSchema = WorkItemDtoSchema.pick(ENVELOPE_FIELDS);
+
+// Compile-time envelope parity (bug.5552 acceptance #2): tsc fails if the tool
+// output drops or retypes any pinned field — including the OPTIONAL ones the
+// runtime .pick().parse() oracle cannot catch. Each `item.<field>` read errors if
+// the field is absent from the tool type; each property errors if the type is
+// incompatible with Pick<WorkItemDto, …>. Never called; existence type-checks it.
+type ToolEnvelope = WorkItemQueryOutput["items"][number];
+type PinnedDto = Pick<WorkItemDto, keyof typeof ENVELOPE_FIELDS>;
+export const _envelopeTypeParity = (item: ToolEnvelope): PinnedDto => ({
+  id: item.id,
+  type: item.type,
+  status: item.status,
+  priority: item.priority,
+  rank: item.rank,
+  rankScore: item.rankScore,
+  scores: item.scores,
+  labels: item.labels,
+  blockedBy: item.blockedBy,
+  branch: item.branch,
+  pr: item.pr,
+  createdAt: item.createdAt,
+  updatedAt: item.updatedAt,
+  deployVerified: item.deployVerified,
+});
 
 const ITEM: WorkItemInfo = {
   id: "task.0007",
