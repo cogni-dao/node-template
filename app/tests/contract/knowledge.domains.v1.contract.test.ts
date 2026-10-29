@@ -153,6 +153,35 @@ describe("DomainsErrorResponseSchema", () => {
       expect(DomainsErrorResponseSchema.safeParse(body).success).toBe(false);
   });
 
+  it("accepts only exact shared infrastructure error shapes", () => {
+    for (const body of [
+      {
+        status: "error",
+        reason: "CONTAINER_INIT_FAILED",
+        message: "unavailable",
+      },
+      { error: "Internal server error" },
+    ]) {
+      expect(DomainsErrorResponseSchema.parse(body)).toEqual(body);
+    }
+    for (const body of [
+      { status: "error", reason: "OTHER", message: "unavailable" },
+      { status: "error", reason: "CONTAINER_INIT_FAILED" },
+      { status: "error", reason: "CONTAINER_INIT_FAILED", message: 123 },
+      {
+        status: "error",
+        reason: "CONTAINER_INIT_FAILED",
+        message: "x",
+        extra: true,
+      },
+      { error: "Internal server error", errorCode: "nope" },
+      { error: "Internal server error", retryable: true },
+      { error: "internal server error" },
+    ]) {
+      expect(DomainsErrorResponseSchema.safeParse(body).success).toBe(false);
+    }
+  });
+
   it("rejects an unknown code", () => {
     expect(
       DomainsErrorResponseSchema.safeParse({ error: "x", errorCode: "nope" })

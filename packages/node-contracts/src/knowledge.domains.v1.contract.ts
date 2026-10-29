@@ -14,7 +14,7 @@
  *   - DOMAIN_ID_IS_IMMUTABLE: the update input has no `id` change; rename is `name` only.
  *   - DOMAIN_DELETE_REFUSES_NONEMPTY: delete returns 409 `domain_not_empty`; never cascades.
  *   - DOMAIN_BASELINE_IS_PROTECTED: delete of a baseline domain (meta, mission, strategy) returns 409 `domain_protected`.
- *   - DOMAIN_ERRORS_ARE_TYPED: domain errors and middleware-owned 401 bodies parse as `DomainsErrorResponseSchema`.
+ *   - DOMAIN_ERRORS_ARE_TYPED: domain errors and shared middleware/wrapper error bodies parse as `DomainsErrorResponseSchema`.
  *   - CONTRACTS_ARE_TRUTH: every type here is `z.infer`; tools that surface a domain derive from `DomainSchema`.
  *   - id is short, slug-shaped (alnum, dash, underscore).
  * Side-effects: none
@@ -100,14 +100,19 @@ const DomainHandlerErrorResponseSchema = z.object({
   entryId: z.string().optional(),
 });
 /**
- * Shared authentication middleware owns these 401 responses before the typed
- * domain handler runs: proxy.ts emits Unauthorized; the logging wrapper emits
- * Session required. Preserve those wire bodies and existing endpoint permissions.
- * Only these known auth messages may omit errorCode; domain errors still require it.
+ * Shared perimeter responses: proxy Unauthorized, wrapper Session required,
+ * bootstrap 503, and production-converted 500. Keep these exact wire shapes;
+ * domain handler errors still require errorCode. Runtime/auth policy is unchanged.
  */
 export const DomainsErrorResponseSchema = z.union([
   DomainHandlerErrorResponseSchema,
   z.strictObject({ error: z.enum(["Unauthorized", "Session required"]) }),
+  z.strictObject({
+    status: z.literal("error"),
+    reason: z.literal("CONTAINER_INIT_FAILED"),
+    message: z.string(),
+  }),
+  z.strictObject({ error: z.literal("Internal server error") }),
 ]);
 export type DomainsErrorResponse = z.infer<typeof DomainsErrorResponseSchema>;
 

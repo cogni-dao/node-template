@@ -44,6 +44,7 @@ vi.mock("@/app/_lib/auth/session", () => ({
 }));
 
 let mockStore: FakeKnowledgeStoreAdapter;
+let unhandledErrorPolicy: "rethrow" | "respond_500" = "rethrow";
 const log = vi.hoisted(() => ({
   info: vi.fn(),
   warn: vi.fn(),
@@ -55,14 +56,15 @@ vi.mock("@/bootstrap/container", () => ({
   getContainer: vi.fn(() => ({
     log,
     clock: { now: vi.fn(() => new Date("2026-01-01T00:00:00Z")) },
-    config: { unhandledErrorPolicy: "rethrow" },
+    config: { unhandledErrorPolicy },
     knowledgeStorePort: mockStore,
   })),
 }));
 
-import { proxy } from "@/proxy";
-import * as collectionRoute from "@/app/api/v1/knowledge/domains/route";
 import * as itemRoute from "@/app/api/v1/knowledge/domains/[domain]/route";
+import * as collectionRoute from "@/app/api/v1/knowledge/domains/route";
+import { getContainer } from "@/bootstrap/container";
+import { proxy } from "@/proxy";
 
 const JSON_HEADERS = {
   "content-type": "application/json",
@@ -131,6 +133,7 @@ beforeEach(async () => {
   vi.clearAllMocks();
   log.child.mockImplementation(() => log);
   currentUser = BEARER_AGENT;
+  unhandledErrorPolicy = "rethrow";
   await seed();
 });
 
@@ -173,6 +176,59 @@ describe("GET /knowledge/domains/[domain] — DOMAIN_READ_REQUIRES_PRINCIPAL", (
 });
 
 describe("domain item shared perimeter", () => {
+  it.each(["GET", "PATCH", "DELETE"] as const)(
+    "validates the real wrapper %s bootstrap 503",
+    async (method) => {
+      vi.mocked(getContainer).mockImplementationOnce(() => {
+        throw new Error("container unavailable");
+      });
+      const response = await call(
+        "empty-shelf",
+        method,
+        method === "PATCH" ? { name: "Updated" } : undefined
+      );
+      expect(response.status).toBe(503);
+      expect(response.body).toEqual({
+        status: "error",
+        reason: "CONTAINER_INIT_FAILED",
+        message: "container unavailable",
+      });
+      expect(DomainsErrorResponseSchema.parse(response.body)).toEqual(
+        response.body
+      );
+      expect(await mockStore.getDomain("empty-shelf")).toMatchObject({
+        name: "Empty",
+      });
+    }
+  );
+
+  it.each(["GET", "PATCH", "DELETE"] as const)(
+    "validates the real wrapper %s production error conversion",
+    async (method) => {
+      unhandledErrorPolicy = "respond_500";
+      // Params are awaited inside each real route handler, within the wrapper.
+      const route = {
+        GET: itemRoute.GET,
+        PATCH: itemRoute.PATCH,
+        DELETE: itemRoute.DELETE,
+      }[method];
+      const response = await route(
+        new NextRequest(
+          "http://localhost/api/v1/knowledge/domains/empty-shelf",
+          { method }
+        ),
+        { params: Promise.reject(new Error("private handler failure")) }
+      );
+      expect(response.status).toBe(500);
+      const body = await response.json();
+      expect(body).toEqual({ error: "Internal server error" });
+      expect(DomainsErrorResponseSchema.parse(body)).toEqual(body);
+      expect(await mockStore.getDomain("empty-shelf")).toMatchObject({
+        name: "Empty",
+      });
+    }
+  );
+
   it.each(["GET", "PATCH", "DELETE"])(
     "validates the middleware-owned %s 401",
     async (method) => {
@@ -211,7 +267,9 @@ describe("PATCH /knowledge/domains/[domain] — DOMAIN_MUTATION_BEARER_OR_SESSIO
       "knowledge.domains.update_success"
     );
 
-    const renamed = await call("build-evals", "PATCH", { name: "Build: Evals" });
+    const renamed = await call("build-evals", "PATCH", {
+      name: "Build: Evals",
+    });
     expect(renamed.status).toBe(200);
     expect(renamed.body.name).toBe("Build: Evals");
     // The list route (the other reader) sees the same row.
