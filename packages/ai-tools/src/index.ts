@@ -171,6 +171,7 @@ export {
   type KnowledgeReadInput,
   KnowledgeReadInputSchema,
   type KnowledgeReadOutput,
+  KnowledgeReadEntrySchema,
   KnowledgeReadOutputSchema,
   type KnowledgeReadRedacted,
   knowledgeReadBoundTool,
@@ -403,3 +404,12 @@ export type {
   ToolImplementation,
   ToolResult,
 } from "./types";
+
+export {
+  auditToolEnvelopes,
+  isEnvelopeAuditClean,
+  type ToolEnvelopeSpec,
+  type ToolEnvelopeAudit,
+  type EnvelopeViolation,
+  type StaleKnownMissing,
+} from "./tool-envelope";
