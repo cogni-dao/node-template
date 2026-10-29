@@ -11,11 +11,16 @@
  * Scope: Pure, schema-agnostic key-set logic. No zod, no I/O. Callers extract the
  *   tool's output-item key-set and the wire DTO key-set (they live in different
  *   packages / zod majors) and pass them in as data — the comparison never needs
- *   a live schema instance, so it is major-agnostic.
+ *   a live schema instance, so it is major-agnostic. This audit checks field
+ *   PRESENCE only; per-field TYPE parity (a retyped field) is a complementary
+ *   per-surface compile check the caller adds (e.g. `satisfies Pick<WireDto, …>`).
  * Invariants:
  *   - TOTAL_CLASSIFICATION: every catalog tool is either env-mapped or allowlisted.
  *   - NO_NEW_DRIFT: a wire field a mapped tool neither carries nor excludes fails.
- *   - LEDGER_SHRINKS: a `knownMissing` field the tool now carries fails as stale.
+ *   - LEDGER_FORCED_OUT: a `knownMissing` field the tool now carries fails as stale,
+ *     so the ledger cannot silently retain settled debt. (It does NOT prevent a new
+ *     `knownMissing` entry being added — that is gated by human diff review.)
+ *   - CLEAN_SPEC: `excluded`/`knownMissing` must name real wire fields (typos fail).
  * Side-effects: none (pure)
  * Links: knowledge entry `agent-tool-context-envelope`
  * @public
@@ -63,15 +68,18 @@ export interface ToolEnvelopeAudit {
   readonly violations: readonly EnvelopeViolation[];
   /** Tracked-missing fields a tool now carries (ledger must shrink). */
   readonly staleKnownMissing: readonly StaleKnownMissing[];
+  /** `excluded`/`knownMissing` entries that are not real wire fields (typos/rot). */
+  readonly unknownSpecKeys: readonly { toolId: string; keys: readonly string[] }[];
 }
 
-/** True when nothing is unclassified, unknown, drifting, or stale. */
+/** True when nothing is unclassified, unknown, drifting, stale, or mis-keyed. */
 export function isEnvelopeAuditClean(audit: ToolEnvelopeAudit): boolean {
   return (
     audit.unclassified.length === 0 &&
     audit.unknownIds.length === 0 &&
     audit.violations.length === 0 &&
-    audit.staleKnownMissing.length === 0
+    audit.staleKnownMissing.length === 0 &&
+    audit.unknownSpecKeys.length === 0
   );
 }
 
@@ -99,9 +107,11 @@ export function auditToolEnvelopes(args: {
 
   const violations: EnvelopeViolation[] = [];
   const staleKnownMissing: StaleKnownMissing[] = [];
+  const unknownSpecKeys: { toolId: string; keys: readonly string[] }[] = [];
 
   for (const spec of specs) {
     const carried = new Set(spec.toolItemKeys);
+    const wire = new Set(spec.wireKeys);
     const excluded = new Set(spec.excluded ?? []);
     const known = new Set(spec.knownMissing ?? []);
 
@@ -116,7 +126,14 @@ export function auditToolEnvelopes(args: {
     if (stale.length > 0) {
       staleKnownMissing.push({ toolId: spec.toolId, fields: stale });
     }
+
+    // An excluded/known-missing key that is not a real wire field is a typo or a
+    // field that left the DTO — surface it so the spec cannot rot unnoticed.
+    const badKeys = [...excluded, ...known].filter((k) => !wire.has(k)).sort();
+    if (badKeys.length > 0) {
+      unknownSpecKeys.push({ toolId: spec.toolId, keys: badKeys });
+    }
   }
 
-  return { unclassified, unknownIds, violations, staleKnownMissing };
+  return { unclassified, unknownIds, violations, staleKnownMissing, unknownSpecKeys };
 }
