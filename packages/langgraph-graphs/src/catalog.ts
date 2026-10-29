@@ -299,6 +299,23 @@ export const NODE_LANGGRAPH_CATALOG = {
     program: "cogni-decide",
     report: { event: "ai.cogni_decide.cycle" },
   },
+
+  /**
+   * Cogni chat, READ mode (task.5377). Same factory, trusted `program: "cogni-chat"` selects the
+   * plan -> Flash-subagent -> answer topology. The read-only toolIds omit core__edo_decide, so a
+   * READ request cannot file a decision. It lives in the node-runtime catalog so every node
+   * (including node-template) can resolve it at runtime; chat reaches it by graph id
+   * `langgraph:cogni-chat`. The operator still gets it via the `...NODE_LANGGRAPH_CATALOG` spread.
+   */
+  "cogni-chat": {
+    displayName: "Cogni (read)",
+    description:
+      "Hub-grounded read-only chat: plans, delegates goal and work-item reading to a cheap subagent, answers; files nothing",
+    toolIds: COGNI_READ_TOOL_IDS as readonly string[],
+    graphFactory: createMissionGraph,
+    systemPrompt: COGNI_READ_PROMPT,
+    program: "cogni-chat",
+  },
 } as const;
 
 /**
@@ -361,20 +378,8 @@ export const OPERATOR_LANGGRAPH_CATALOG = {
     program: "cogni",
   },
 
-  /**
-   * Cogni chat, READ mode (task.5377). Same factory, trusted `program: "cogni-chat"` selects the
-   * plan -> Flash-subagent -> answer topology. The read-only toolIds omit core__edo_decide, so a
-   * READ request cannot file a decision. Chat reaches it by graph id `langgraph:cogni-chat`.
-   */
-  "cogni-chat": {
-    displayName: "Cogni (read)",
-    description:
-      "Hub-grounded read-only chat: plans, delegates goal and work-item reading to a cheap subagent, answers; files nothing",
-    toolIds: COGNI_READ_TOOL_IDS as readonly string[],
-    graphFactory: createMissionGraph,
-    systemPrompt: COGNI_READ_PROMPT,
-    program: "cogni-chat",
-  },
+  // `cogni-chat` (READ mode) now lives in NODE_LANGGRAPH_CATALOG so every node can resolve it at
+  // runtime; the operator inherits it through the `...NODE_LANGGRAPH_CATALOG` spread above.
 } as const;
 
 /**

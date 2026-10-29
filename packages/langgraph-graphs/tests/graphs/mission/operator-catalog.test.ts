@@ -94,17 +94,23 @@ describe("operator catalog entries", () => {
     );
   });
 
-  it("cogni-chat (READ mode) is operator-only, uses the read-only allowlist and binds no write tool", () => {
-    const entry = OPERATOR_LANGGRAPH_CATALOG["cogni-chat"];
-    expect(entry.graphFactory).toBe(createMissionGraph);
-    expect(entry.program).toBe("cogni-chat");
-    expect([...entry.toolIds].sort()).toEqual([...COGNI_READ_TOOL_IDS].sort());
-    expect(entry.toolIds).not.toContain(EDO_DECIDE_NAME);
+  it("cogni-chat (READ mode) is in the node catalog, uses the read-only allowlist and binds no write tool", () => {
+    // task.5377: cogni-chat moved into NODE_LANGGRAPH_CATALOG so every node (including
+    // node-template) can resolve `langgraph:cogni-chat` at runtime and surface it in chat.
+    const entry = LANGGRAPH_CATALOG["cogni-chat"];
+    expect(entry).toBeDefined();
+    expect(entry?.graphFactory).toBe(createMissionGraph);
+    expect(entry?.program).toBe("cogni-chat");
+    expect([...(entry?.toolIds ?? [])].sort()).toEqual(
+      [...COGNI_READ_TOOL_IDS].sort()
+    );
+    // Zero-write guarantee unchanged: the READ allowlist never binds the EDO decide tool.
+    expect(entry?.toolIds).not.toContain(EDO_DECIDE_NAME);
+    // Operator still inherits the same entry through the `...NODE_LANGGRAPH_CATALOG` spread.
+    expect(OPERATOR_LANGGRAPH_CATALOG["cogni-chat"]).toBe(entry);
     expect(OPERATOR_LANGGRAPH_GRAPH_IDS["cogni-chat"]).toBe(
       "langgraph:cogni-chat"
     );
-    expect(LANGGRAPH_CATALOG["cogni-chat"]).toBeUndefined();
-    expect("cogni-chat" in LANGGRAPH_GRAPH_IDS).toBe(false);
   });
 
   it("no node-runtime graph needs an operator-only VCS tool", () => {
