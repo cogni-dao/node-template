@@ -80,7 +80,7 @@ export interface CreateReactAgentGraphOptions {
     }>;
   };
   /** Trusted catalog assignment; never supplied by model/tool content. */
-  readonly program?: "cogni" | "work-review";
+  readonly program?: "cogni" | "work-review" | "cogni-chat";
   /** LLM instance - LanguageModelLike to match createReactAgent expectation */
   readonly llm: LanguageModelLike;
   /** Tools wrapped via toLangChainTools() */
@@ -90,7 +90,7 @@ export interface CreateReactAgentGraphOptions {
     readonly prompt?: string;
     readonly schema: unknown;
   };
-  /** Optional system prompt override. Used by operator graphs that are configured via catalog. */
+  /** Optional system prompt override. Used by mission-engine graphs that are configured via catalog. */
   readonly systemPrompt?: string;
   /**
    * LangGraph persistence foundation (langgraph-persistence). When present, the engine compiles

@@ -91,6 +91,8 @@ export interface InProcGraphRequest {
   readonly configurable: {
     readonly model: string;
     readonly toolIds?: readonly string[];
+    /** Optional override of the cheap model id the READ-mode subagent runs on (default: deepseek-v4-flash). */
+    readonly subagentModel?: string;
     readonly actorId?: string;
     readonly tenantId?: string;
     readonly subjectId?: string;
@@ -150,7 +152,7 @@ export interface InProcRunnerOptions<TTool = unknown> {
 
   /**
    * Optional system prompt passed to graph factory.
-   * Used by operator graphs where the prompt is catalog-driven, not hardcoded.
+   * Used by mission-engine graphs where the prompt is catalog-driven, not hardcoded.
    */
   readonly systemPrompt?: string;
 
