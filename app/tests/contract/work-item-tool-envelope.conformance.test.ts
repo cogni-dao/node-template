@@ -21,7 +21,7 @@ import {
   type WorkItemCapability,
   type WorkItemInfo,
   type WorkItemQueryOutput,
-  WorkItemQueryOutputSchema,
+  WorkItemOutputSchema,
 } from "@cogni/ai-tools";
 import { WorkItemDtoSchema, type WorkItemDto } from "@cogni/node-contracts";
 import { describe, expect, it, vi } from "vitest";
@@ -59,16 +59,12 @@ function dtoFieldsMissingFromTool(
 }
 
 const WIRE_DTO_KEYS = Object.keys(WorkItemDtoSchema.shape);
-// Tool output item schema: WorkItemQueryOutputSchema.shape.items is a ZodArray.
-const TOOL_ITEM_KEYS = new Set(
-  Object.keys(
-    (
-      WorkItemQueryOutputSchema.shape.items as unknown as {
-        element: { shape: Record<string, unknown> };
-      }
-    ).element.shape
-  )
-);
+const TOOL_ITEM_KEYS = new Set(Object.keys(WorkItemOutputSchema.shape));
+
+// NOTE (bug.0003): this guard enforces field PRESENCE across all DTO fields. Full
+// runtime+compile TYPE parity is enforced only for the pinned ENVELOPE_FIELDS
+// (below). A new field added to both the DTO and the tool with incompatible types
+// passes this guard — to also type-check it, add it to ENVELOPE_FIELDS.
 
 /**
  * The pinned context envelope (bug.5552): the state a prioritizer reasons over.
