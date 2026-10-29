@@ -150,7 +150,7 @@ export interface InProcRunnerOptions<TTool = unknown> {
 
   /**
    * Optional system prompt passed to graph factory.
-   * Used by operator graphs where the prompt is catalog-driven, not hardcoded.
+   * Used by mission-engine graphs where the prompt is catalog-driven, not hardcoded.
    */
   readonly systemPrompt?: string;
 

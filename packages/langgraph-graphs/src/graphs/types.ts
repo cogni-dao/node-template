@@ -90,7 +90,7 @@ export interface CreateReactAgentGraphOptions {
     readonly prompt?: string;
     readonly schema: unknown;
   };
-  /** Optional system prompt override. Used by operator graphs that are configured via catalog. */
+  /** Optional system prompt override. Used by mission-engine graphs that are configured via catalog. */
   readonly systemPrompt?: string;
   /**
    * LangGraph persistence foundation (langgraph-persistence). When present, the engine compiles
