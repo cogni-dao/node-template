@@ -21,9 +21,50 @@ import {
   type WorkItemCapability,
   type WorkItemInfo,
   type WorkItemQueryOutput,
+  WorkItemOutputSchema,
 } from "@cogni/ai-tools";
 import { WorkItemDtoSchema, type WorkItemDto } from "@cogni/node-contracts";
 import { describe, expect, it, vi } from "vitest";
+
+/**
+ * Field-drift guard (bug.0003). The tool and the wire DTO are hand-written in
+ * different packages/zod majors, so a new `WorkItem` field does NOT propagate by
+ * construction. This guard makes that failure LOUD instead of silent: every field
+ * on the wire `WorkItemDtoSchema` must be carried by the tool envelope, EXCEPT a
+ * small, reviewed, named exclusion set. Add a field to the DTO and this test fails
+ * until the tool carries it or it is consciously excluded here — killing the exact
+ * silent-drift class that bug.5552 was (createdAt/deployVerified had been dropped).
+ *
+ * This is the enforceable half of the `agent-tool-context-envelope` standard rule 3
+ * (exhaustion-minus-exclusion, never a static allowlist).
+ */
+const DTO_FIELDS_OMITTED_BY_TOOL = new Set<string>([
+  // Routing/attribution/lifecycle fields a planner does not reason over. Each
+  // addition here is a conscious decision, reviewed in the diff.
+  "node",
+  "externalRefs",
+  "reviewer",
+  "claimedByRun",
+  "claimedAt",
+  "lastCommand",
+]);
+
+/** Wire DTO fields the tool must carry = all DTO fields minus the exclusion set. */
+function dtoFieldsMissingFromTool(
+  dtoKeys: readonly string[],
+  toolKeys: ReadonlySet<string>,
+  excluded: ReadonlySet<string>
+): string[] {
+  return dtoKeys.filter((k) => !excluded.has(k) && !toolKeys.has(k)).sort();
+}
+
+const WIRE_DTO_KEYS = Object.keys(WorkItemDtoSchema.shape);
+const TOOL_ITEM_KEYS = new Set(Object.keys(WorkItemOutputSchema.shape));
+
+// NOTE (bug.0003): this guard enforces field PRESENCE across all DTO fields. Full
+// runtime+compile TYPE parity is enforced only for the pinned ENVELOPE_FIELDS
+// (below). A new field added to both the DTO and the tool with incompatible types
+// passes this guard — to also type-check it, add it to ENVELOPE_FIELDS.
 
 /**
  * The pinned context envelope (bug.5552): the state a prioritizer reasons over.
@@ -139,5 +180,40 @@ describe("work-item tool envelope conformance (bug.5552)", () => {
     expect(() =>
       EnvelopeSchema.parse({ ...ITEM, deployVerified: "yes" })
     ).toThrow();
+  });
+});
+
+describe("work-item envelope field-drift guard (bug.0003)", () => {
+  it("the tool carries every wire-DTO field except the reviewed exclusion set", () => {
+    const missing = dtoFieldsMissingFromTool(
+      WIRE_DTO_KEYS,
+      TOOL_ITEM_KEYS,
+      DTO_FIELDS_OMITTED_BY_TOOL
+    );
+    // If this fails, a WorkItemDtoSchema field is neither carried by
+    // core__work_item_query nor listed in DTO_FIELDS_OMITTED_BY_TOOL. Add it to
+    // the tool envelope (capabilities/work-item.ts + work-item-query.ts) or, if a
+    // planner genuinely should not see it, add it to the exclusion set above.
+    expect(missing).toEqual([]);
+  });
+
+  it("every exclusion is a real wire-DTO field (no stale entries)", () => {
+    const stale = [...DTO_FIELDS_OMITTED_BY_TOOL].filter(
+      (k) => !WIRE_DTO_KEYS.includes(k)
+    );
+    expect(stale).toEqual([]);
+  });
+
+  it("FAILS LOUD when a new wire-DTO field is added and not handled (proof)", () => {
+    // Simulate a future field on the DTO; the guard must flag it so CI blocks a
+    // silent drift. This is the property bug.5552 lacked.
+    const withNewField = [...WIRE_DTO_KEYS, "severity"];
+    expect(
+      dtoFieldsMissingFromTool(
+        withNewField,
+        TOOL_ITEM_KEYS,
+        DTO_FIELDS_OMITTED_BY_TOOL
+      )
+    ).toEqual(["severity"]);
   });
 });

@@ -375,6 +375,7 @@ export {
   type WorkItemQueryInput,
   WorkItemQueryInputSchema,
   type WorkItemQueryOutput,
+  WorkItemOutputSchema,
   WorkItemQueryOutputSchema,
   type WorkItemQueryRedacted,
   workItemQueryBoundTool,
