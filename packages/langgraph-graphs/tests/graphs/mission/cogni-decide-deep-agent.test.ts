@@ -31,6 +31,7 @@ import { LANGGRAPH_CATALOG } from "../../../src/catalog";
 import {
   COGNI_DECIDE_TOOL_IDS,
   MAX_SCORE_WRITES_PER_TICK,
+  OPEN_STATUSES,
   SCORES_WRITE_NAME,
 } from "../../../src/graphs/mission/cogni-decide";
 import { FLASH_SUBAGENT_MODEL } from "../../../src/graphs/mission/cogni-read";
@@ -267,7 +268,7 @@ describe("cogni scheduled DECIDE deep agent (task.5377)", () => {
           expectedRevision: 7,
           scores: { goal: { v: 3 }, time: { v: 3 } },
           change: "now blocks goal-prod-deploys-land",
-          confidence: "high",
+          confidence: 0.9,
         },
       ],
     }));
@@ -322,7 +323,7 @@ describe("cogni scheduled DECIDE deep agent (task.5377)", () => {
       expectedRevision: rev,
       scores: { goal: { v: 5, ev: EV } },
       change: "stale",
-      confidence: "high",
+      confidence: 0.9,
     });
     const r = await runTick(() => ({
       proposals: [
@@ -332,21 +333,21 @@ describe("cogni scheduled DECIDE deep agent (task.5377)", () => {
           expectedRevision: 3,
           scores: { goal: { v: 3 } },
           change: "x",
-          confidence: "high",
+          confidence: 0.9,
         },
         // wrong revision (hallucinated) -> no write
         { ...material("story.9003", 99) },
         // not read this tick -> no write
         { ...material("task.404", 1) },
         // low confidence -> no write
-        { ...material("task.9004", 5), confidence: "low" },
+        { ...material("task.9004", 5), confidence: 0.2 },
         // v>=4 without evidence -> no write
         {
           id: "task.9004",
           expectedRevision: 5,
           scores: { goal: { v: 4 } },
           change: "x",
-          confidence: "high",
+          confidence: 0.9,
         },
         // the one valid proposal
         material("bug.9001", 7),
@@ -354,9 +355,9 @@ describe("cogni scheduled DECIDE deep agent (task.5377)", () => {
         {
           id: "story.9003",
           expectedRevision: 12,
-          scores: { goal: { v: 2 } },
+          scores: { goal: { v: 3 } },
           change: "x",
-          confidence: "high",
+          confidence: 0.9,
           priority: 0,
           status: "done",
         },
@@ -366,7 +367,7 @@ describe("cogni scheduled DECIDE deep agent (task.5377)", () => {
           expectedRevision: 7,
           scores: { goal: { v: 5, ev: EV } },
           change: n,
-          confidence: "high",
+          confidence: 0.9,
         })),
       ],
     }));
@@ -378,7 +379,7 @@ describe("cogni scheduled DECIDE deep agent (task.5377)", () => {
       action: "patch",
       id: "story.9003",
       expectedRevision: 12,
-      scores: { goal: { v: 2 } },
+      scores: { goal: { v: 3 } },
     });
     const reasons = (r.telemetry.skipped as Array<{ id: string; reason: string }>).map(
       (s) => `${s.id}:${s.reason}`
@@ -388,7 +389,7 @@ describe("cogni scheduled DECIDE deep agent (task.5377)", () => {
         "task.9002:no_material_change",
         "story.9003:revision_not_the_live_read",
         "task.404:item_not_read_this_tick",
-        "task.9004:confidence_low",
+        "task.9004:confidence_below_floor",
         "task.9004:evidence_required_for_v4_plus",
         "bug.9001:duplicate_item",
       ])
@@ -406,9 +407,9 @@ describe("cogni scheduled DECIDE deep agent (task.5377)", () => {
     const proposals = many.items.map((it) => ({
       id: it.id,
       expectedRevision: it.revision,
-      scores: { goal: { v: 2 } },
+      scores: { goal: { v: 3 } },
       change: "stale",
-      confidence: "high",
+      confidence: 0.9,
     }));
     const r = await runTick(() => ({ proposals }), GOALS, many);
     expect(r.writes).toHaveLength(MAX_SCORE_WRITES_PER_TICK);
@@ -444,6 +445,189 @@ describe("cogni scheduled DECIDE deep agent (task.5377)", () => {
     expect(entry?.program).toBe("cogni-decide");
     expect(entry?.toolIds).toEqual(COGNI_DECIDE_TOOL_IDS);
     expect(entry?.toolIds).not.toContain(EDO_DECIDE_NAME);
+    expect(entry?.report).toEqual({ event: "ai.cogni_decide.cycle" });
     expect(LANGGRAPH_CATALOG["work-prioritizer"]).toBeDefined();
+  });
+
+  describe("write-gating: open statuses, hysteresis, constraint edges, telemetry", () => {
+    const OLD = "2026-01-01T00:00:00Z";
+    type Item = ReturnType<typeof wi> & Record<string, unknown>;
+    const ledgerOf = (...items: Item[]) => ({ count: items.length, items });
+    const prop = (
+      it: { id: string; revision: number },
+      scores: Record<string, { v: number; ev?: string }>,
+      confidence = 0.9
+    ) => ({
+      id: it.id,
+      expectedRevision: it.revision,
+      scores,
+      change: "re-derived",
+      confidence,
+    });
+    /** The ledger as the store would hold it after a successful write (revision bumped to 8). */
+    const afterWrite = (it: Item, written: Record<string, unknown>): Item => ({
+      ...it,
+      revision: 8,
+      scores: written as Item["scores"],
+    });
+
+    it("forces the work-item query to open statuses and never scores a done/cancelled item", async () => {
+      const done = wi("task.9100", "done", 4, { goal: { v: 1 } });
+      const r = await runTick(
+        () => ({ proposals: [prop(done, { goal: { v: 4, ev: EV } })] }),
+        GOALS,
+        ledgerOf(done, wi("task.9101", "needs_implement", 2, { goal: { v: 1 } }))
+      );
+      const q = r.executed.find((e) => e.name === WORK_ITEM_QUERY_NAME);
+      expect(q?.args.statuses).toEqual([...OPEN_STATUSES]);
+      expect(q?.args.statuses).not.toContain("done");
+      expect(q?.args.statuses).not.toContain("cancelled");
+      expect(r.writes).toHaveLength(0);
+      expect(r.telemetry.itemsRead).toBe(1);
+      expect(r.telemetry.skipped).toEqual([
+        { id: "task.9100", reason: "item_not_read_this_tick" },
+      ]);
+      expectNeverEdoNeverBroadWrite(r);
+    });
+
+    it("TWO-TICK convergence: tick 2 over the post-tick-1 ledger with a +-1 jitter writes ZERO", async () => {
+      const it0 = wi("bug.9200", "needs_implement", 7, {
+        goal: { v: 1 },
+        time: { v: 1 },
+      });
+      const t1 = await runTick(
+        () => ({ proposals: [prop(it0, { goal: { v: 3 }, time: { v: 3 } })] }),
+        GOALS,
+        ledgerOf(it0)
+      );
+      expect(t1.writes).toHaveLength(1);
+      expect(t1.telemetry).toMatchObject({
+        scoresWritten: 1,
+        writeAttempts: 1,
+        revisionConflicts: 0,
+        guardRejected: 0,
+      });
+      const it1 = afterWrite(it0, t1.writes[0]?.args.scores as Record<string, unknown>);
+
+      // The model flip-flops every axis by +-1 on each following tick: never a write.
+      for (const jitter of [-1, 1]) {
+        const t2 = await runTick(
+          () => ({
+            proposals: [
+              prop(it1, {
+                goal: { v: 3 + jitter },
+                time: { v: 3 - jitter },
+              }),
+            ],
+          }),
+          GOALS,
+          ledgerOf(it1)
+        );
+        expect(t2.result.ok).toBe(true);
+        expect(t2.writes).toHaveLength(0);
+        expect(t2.telemetry).toMatchObject({
+          noop: true,
+          scoresWritten: 0,
+          writeAttempts: 0,
+          guardRejected: 1,
+          skippedByReason: { within_hysteresis: 1 },
+        });
+        expectNeverEdoNeverBroadWrite(t2);
+      }
+    });
+
+    it("STALLED edge: stored confidence 3 (cap 2) writes ONCE, even at low model confidence, then never again", async () => {
+      const stalled = {
+        ...wi("task.9300", "needs_implement", 4, {
+          goal: { v: 3 },
+          confidence: { v: 3 },
+        }),
+        createdAt: OLD,
+      };
+      const t1 = await runTick(
+        () => ({ proposals: [prop(stalled, { confidence: { v: 3 } }, 0.2)] }),
+        GOALS,
+        ledgerOf(stalled)
+      );
+      expect(t1.writes).toHaveLength(1);
+      expect(t1.writes[0]?.args.scores).toEqual({
+        goal: { v: 3 },
+        confidence: { v: 2 },
+      });
+
+      const settled = afterWrite(stalled, t1.writes[0]?.args.scores as Record<string, unknown>);
+      const t2 = await runTick(
+        () => ({ proposals: [prop(settled, { confidence: { v: 3 } })] }),
+        GOALS,
+        ledgerOf(settled)
+      );
+      expect(t2.writes).toHaveLength(0);
+      expectNeverEdoNeverBroadWrite(t1);
+      expectNeverEdoNeverBroadWrite(t2);
+    });
+
+    it("STALLED does not fire when a branch/PR exists or createdAt is unknown (fail safe)", async () => {
+      const withPr = {
+        ...wi("task.9310", "needs_implement", 4, { confidence: { v: 3 } }),
+        createdAt: OLD,
+        pr: "https://github.com/x/y/pull/1",
+      };
+      const noCreated = wi("task.9311", "needs_implement", 4, {
+        confidence: { v: 3 },
+      });
+      const r = await runTick(
+        () => ({
+          proposals: [
+            prop(withPr, { confidence: { v: 3 } }),
+            prop(noCreated, { confidence: { v: 3 } }),
+          ],
+        }),
+        GOALS,
+        ledgerOf(withPr, noCreated)
+      );
+      expect(r.writes).toHaveLength(0);
+    });
+
+    it("BLOCKED edge forces agent=1; DELIVERING edge raises ease (5 at needs_merge); both settle", async () => {
+      const blocked = wi("task.9400", "blocked", 2, { agent: { v: 4, ev: EV } });
+      const merging = {
+        ...wi("task.9401", "needs_merge", 3, { ease: { v: 2 } }),
+        pr: "https://github.com/x/y/pull/2",
+      };
+      const t1 = await runTick(
+        () => ({
+          proposals: [
+            prop(blocked, { agent: { v: 4 } }),
+            prop(merging, { ease: { v: 2 } }, 0.1),
+          ],
+        }),
+        GOALS,
+        ledgerOf(blocked, merging)
+      );
+      // ease=5 needs an https evidence link and none exists: the DELIVERING write is refused, BLOCKED lands.
+      expect(t1.writes.map((w) => [w.args.id, w.args.scores])).toEqual([
+        ["task.9400", { agent: { v: 1 } }],
+      ]);
+      expect(t1.telemetry.skipped).toEqual([
+        { id: "task.9401", reason: "evidence_required_for_v4_plus" },
+      ]);
+
+      const merging2 = { ...merging, scores: { ease: { v: 2, ev: EV } } };
+      const t2 = await runTick(
+        () => ({ proposals: [prop(merging2, { ease: { v: 2, ev: EV } })] }),
+        GOALS,
+        ledgerOf(merging2)
+      );
+      expect(t2.writes.map((w) => w.args.scores)).toEqual([
+        { ease: { v: 5, ev: EV } },
+      ]);
+      const settled = afterWrite(merging2, t2.writes[0]?.args.scores as Record<string, unknown>);
+      const t3 = await runTick(
+        () => ({ proposals: [prop(settled, { ease: { v: 4, ev: EV } })] }),
+        GOALS,
+        ledgerOf(settled)
+      );
+      expect(t3.writes).toHaveLength(0);
+    });
   });
 });

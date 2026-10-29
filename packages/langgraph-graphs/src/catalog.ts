@@ -297,6 +297,7 @@ export const NODE_LANGGRAPH_CATALOG = {
     graphFactory: createMissionGraph,
     systemPrompt: COGNI_DECIDE_PROMPT,
     program: "cogni-decide",
+    report: { event: "ai.cogni_decide.cycle" },
   },
 } as const;
 
