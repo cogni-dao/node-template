@@ -105,6 +105,26 @@ describe("auditToolEnvelopes", () => {
     ]);
   });
 
+  it("flags a spec whose excluded/known-missing key is not a real wire field", () => {
+    const audit = auditToolEnvelopes({
+      allToolIds: ["t.query"],
+      specs: [
+        {
+          toolId: "t.query",
+          toolItemKeys: wire,
+          wireKeys: wire,
+          excluded: ["typo_field"], // not in wireKeys
+          knownMissing: ["also_bogus"], // not in wireKeys
+        },
+      ],
+      noEnvelopeTools: [],
+    });
+    expect(audit.unknownSpecKeys).toEqual([
+      { toolId: "t.query", keys: ["also_bogus", "typo_field"] },
+    ]);
+    expect(isEnvelopeAuditClean(audit)).toBe(false);
+  });
+
   it("flags stale spec/allowlist ids absent from the catalog", () => {
     const audit = auditToolEnvelopes({
       allToolIds: ["t.query"],
