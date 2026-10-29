@@ -23,6 +23,7 @@
  * Links: https://cognidao.org/work/items/task.5377 · https://cognidao.org/knowledge/deep-agents-planning
  * @public
  */
+import { isAiExecutionError } from "@cogni/ai-core";
 import {
   GET_CURRENT_TIME_NAME,
   GOAL_LIST_NAME,
@@ -70,9 +71,10 @@ export const COGNI_READ_TOOL_IDS = [
 ] as const;
 
 /**
- * Cheap tier for the context-heavy read subagent. The id must be served by the host's gateway
- * (it is live in the operator's LiteLLM gateway; node-template ships no gateway config of its own,
- * so a node host must allow it in its model catalog or the subagent call fails the billed path).
+ * DEFAULT cheap tier for the context-heavy read subagent; a host overrides it per run with
+ * `configurable.subagentModel`. The id must be served by the host's gateway (it is live in the
+ * operator's LiteLLM gateway; node-template ships no gateway config of its own). If the gateway
+ * rejects it, the subagent falls back once to the parent model (SUBAGENT_TIER_FALLBACK).
  */
 export const FLASH_SUBAGENT_MODEL = "deepseek-v4-flash";
 
@@ -81,6 +83,22 @@ const TodoSchema = z.object({
   status: z.enum(["pending", "in_progress", "completed"]),
 });
 type Todo = z.infer<typeof TodoSchema>;
+
+/** Telemetry event name recorded when the tiered subagent call is rejected and the parent model takes over. */
+export const SUBAGENT_FALLBACK_EVENT = "cogni_read.subagent_tier_fallback";
+
+/**
+ * Gateway rejection of the tiered model (model not served / provider error). Empty completions,
+ * aborts, timeouts, rate limits and credit errors are NOT tier problems and keep their own handling.
+ */
+const TIER_REJECT_CODES = new Set([
+  "not_found",
+  "invalid_request",
+  "provider_unavailable",
+  "internal",
+]);
+const isTierRejection = (error: unknown): boolean =>
+  isAiExecutionError(error) && TIER_REJECT_CODES.has(error.code);
 
 const WRITE_TODOS_NAME = "write_todos";
 /** State-only plan tool: bound so the model emits a structured plan; the plan node records it. */
@@ -118,6 +136,11 @@ const ReadState = Annotation.Root({
   }),
   /** Billed model id the subagent actually ran on. */
   subagentModel: Annotation<string | undefined>(),
+  /** Set when the tiered subagent call was gateway-rejected and the parent model took over. */
+  subagentFallback: Annotation<
+    | { readonly event: string; readonly from: string; readonly code: string }
+    | undefined
+  >(),
   abortReason: Annotation<string | undefined>(),
   structuredResponse: Annotation<{
     readonly telemetry: Record<string, unknown>;
@@ -229,15 +252,18 @@ export function createCogniReadProgram(opts: CreateReactAgentGraphOptions) {
     s: S,
     config?: RunnableConfig
   ): Promise<Partial<S>> => {
-    // MODEL_TIER_SEAM: a Flash-bound sibling of the billed adapter. If this llm cannot tier, run the
+    // MODEL_TIER_SEAM: a tier-bound sibling of the billed adapter. If this llm cannot tier, run the
     // subagent on the parent's model (pattern intact, cost not yet optimized).
-    // TODO(task.5377): confirm the host CompletionFn accepts a model different from
-    // configurable.model (billing/catalog allowlist) before relying on the Flash tier in prod.
+    // The host CompletionFn passes the model through (operator in-proc provider); the gateway is the
+    // only gate on the tier id, and a rejection falls back once to the parent (SUBAGENT_TIER_FALLBACK).
+    const configured = config?.configurable?.subagentModel;
+    const tierModel =
+      typeof configured === "string" && configured.trim()
+        ? configured.trim()
+        : FLASH_SUBAGENT_MODEL;
     const tiered = (opts.llm as unknown as TierableModel).withModel?.(
-      FLASH_SUBAGENT_MODEL
+      tierModel
     );
-    const subLlm = (tiered ?? opts.llm) as CreateReactAgentGraphOptions["llm"];
-    const subModel = tiered ? FLASH_SUBAGENT_MODEL : undefined;
 
     const userQuestion = [...s.messages]
       .reverse()
@@ -246,29 +272,52 @@ export function createCogniReadProgram(opts: CreateReactAgentGraphOptions) {
       .map((t) => `- [${t.status}] ${t.content}`)
       .join("\n")}\n\nGather the evidence now and return the digest.`;
 
-    const subagent = createReactAgent({
-      llm: subLlm,
-      tools: [...readTools],
-      prompt: new SystemMessage(SUBAGENT_PROMPT),
-    });
-    const subConfig: RunnableConfig = {
-      ...config,
-      recursionLimit: 30,
-      streamMode: "values",
-      ...(subModel
-        ? { configurable: { ...config?.configurable, model: subModel } }
-        : {}),
-    } as RunnableConfig;
-
     // ISOLATED_CONTEXT: the subagent starts from its task only, never the parent transcript.
-    let last: { messages: BaseMessage[] } = { messages: [] };
-    let aborted: string | undefined;
-    try {
+    const runSubagent = async (
+      llm: CreateReactAgentGraphOptions["llm"],
+      model: string | undefined
+    ): Promise<{ messages: BaseMessage[] }> => {
+      const subagent = createReactAgent({
+        llm,
+        tools: [...readTools],
+        prompt: new SystemMessage(SUBAGENT_PROMPT),
+      });
+      const subConfig: RunnableConfig = {
+        ...config,
+        recursionLimit: 30,
+        streamMode: "values",
+        ...(model ? { configurable: { ...config?.configurable, model } } : {}),
+      } as RunnableConfig;
+      let latest: { messages: BaseMessage[] } = { messages: [] };
       const values = await subagent.stream(
         { messages: [new HumanMessage(task)] },
         subConfig
       );
-      for await (const v of values) last = v as { messages: BaseMessage[] };
+      for await (const v of values) latest = v as { messages: BaseMessage[] };
+      return latest;
+    };
+
+    let last: { messages: BaseMessage[] } = { messages: [] };
+    let aborted: string | undefined;
+    let subModel: string | undefined = tiered ? tierModel : undefined;
+    let fallback: S["subagentFallback"];
+    try {
+      try {
+        last = await runSubagent(
+          (tiered ?? opts.llm) as CreateReactAgentGraphOptions["llm"],
+          subModel
+        );
+      } catch (error) {
+        // SUBAGENT_TIER_FALLBACK: a gateway reject of the tier id retries ONCE on the parent model.
+        if (!tiered || !isTierRejection(error)) throw error;
+        fallback = {
+          event: SUBAGENT_FALLBACK_EVENT,
+          from: tierModel,
+          code: isAiExecutionError(error) ? error.code : "unknown",
+        };
+        subModel = undefined;
+        last = await runSubagent(opts.llm, undefined);
+      }
     } catch (error) {
       if (error instanceof GraphRecursionError) aborted = "recursion_limit";
       else if (!isEmptyCompletion(error)) throw error;
@@ -285,6 +334,7 @@ export function createCogniReadProgram(opts: CreateReactAgentGraphOptions) {
     return {
       subagentToolCalls: toolCalls,
       ...(subModel ? { subagentModel: subModel } : {}),
+      ...(fallback ? { subagentFallback: fallback } : {}),
       ...(aborted ? { abortReason: aborted } : {}),
       messages: [
         new AIMessage({
@@ -349,7 +399,11 @@ export function createCogniReadProgram(opts: CreateReactAgentGraphOptions) {
           todoCount: s.todos.length,
           subagentModel: s.subagentModel ?? null,
           subagentToolCalls: s.subagentToolCalls,
-          writes: 0,
+          // Derived, not a literal: any executed call outside the read allowlist counts as a write.
+          writes: s.subagentToolCalls.filter((n) => !allowed.has(n)).length,
+          ...(s.subagentFallback
+            ? { subagentFallback: s.subagentFallback }
+            : {}),
           aborted: s.abortReason !== undefined,
           ...(s.abortReason ? { abortReason: s.abortReason } : {}),
           report: text(s.messages.at(-1)).slice(0, 2048),
