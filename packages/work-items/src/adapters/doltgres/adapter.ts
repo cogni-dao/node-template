@@ -2763,18 +2763,22 @@ export class DoltgresWorkItemAdapter
       conditions.push(`node IN (${nodes.map(escapeValue).join(", ")})`);
     }
     if (query.labels?.length) {
-      // Any-of: keep rows whose labels jsonb array shares at least one element.
+      // Doltgres has no `jsonb_array_elements_text`, so match against the
+      // serialized array text. A label is a JSON element `"<label>"`; the quotes
+      // delimit elements, so `%"<label>"%` is an exact any-of element match.
       conditions.push(
-        `EXISTS (SELECT 1 FROM jsonb_array_elements_text(labels) AS l WHERE l IN (${query.labels
-          .map(escapeValue)
-          .join(", ")}))`
+        `(${query.labels
+          .map(
+            (label) => `CAST(labels AS TEXT) LIKE ${escapeValue(`%"${label}"%`)}`
+          )
+          .join(" OR ")})`
       );
     }
     if (query.labelPrefix) {
-      // LEFT(..) match avoids LIKE metacharacter handling on caller text.
-      const prefix = query.labelPrefix;
+      // `"<prefix>` (opening quote, no closing) matches only elements whose text
+      // starts with the prefix — elements are quote-delimited in the array text.
       conditions.push(
-        `EXISTS (SELECT 1 FROM jsonb_array_elements_text(labels) AS l WHERE LEFT(l, ${prefix.length}) = ${escapeValue(prefix)})`
+        `CAST(labels AS TEXT) LIKE ${escapeValue(`%"${query.labelPrefix}%`)}`
       );
     }
     if (query.scored !== undefined) {

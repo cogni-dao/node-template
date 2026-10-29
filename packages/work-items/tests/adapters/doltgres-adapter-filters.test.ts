@@ -31,19 +31,21 @@ async function capturedListSql(query: WorkQuery): Promise<string> {
 }
 
 describe("DoltgresWorkItemAdapter list filters (bug.5552)", () => {
-  it("labels emits an any-of jsonb membership EXISTS clause", async () => {
+  it("labels emits a doltgres-safe any-of CAST(labels AS TEXT) LIKE match", async () => {
     const sql = await capturedListSql({ labels: ["goal", "roadmap"] });
-    expect(sql).toContain("jsonb_array_elements_text(labels)");
-    expect(sql).toContain("EXISTS");
-    expect(sql).toContain("'goal'");
-    expect(sql).toContain("'roadmap'");
+    // Doltgres has no jsonb_array_elements_text (candidate-proven, bug.5552).
+    expect(sql).not.toContain("jsonb_array_elements_text");
+    expect(sql).toContain("CAST(labels AS TEXT) LIKE");
+    expect(sql).toContain(`'%"goal"%'`);
+    expect(sql).toContain(`'%"roadmap"%'`);
+    expect(sql).toContain(" OR ");
   });
 
-  it("labelPrefix emits a LEFT() prefix match on label elements", async () => {
+  it("labelPrefix emits an opening-quote CAST(labels AS TEXT) LIKE prefix match", async () => {
     const sql = await capturedListSql({ labelPrefix: "area:" });
-    expect(sql).toContain("jsonb_array_elements_text(labels)");
-    expect(sql).toContain("LEFT(l, 5)");
-    expect(sql).toContain("'area:'");
+    expect(sql).not.toContain("jsonb_array_elements_text");
+    expect(sql).toContain("CAST(labels AS TEXT) LIKE");
+    expect(sql).toContain(`'%"area:%'`);
   });
 
   it("scored:true emits rankScore IS NOT NULL", async () => {
