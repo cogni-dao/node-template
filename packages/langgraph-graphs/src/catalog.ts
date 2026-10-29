@@ -35,6 +35,10 @@ import {
 } from "./graphs/frontend-tester/graph";
 import { COGNI_PROMPT, COGNI_TOOL_IDS } from "./graphs/mission/cogni";
 import {
+  COGNI_READ_PROMPT,
+  COGNI_READ_TOOL_IDS,
+} from "./graphs/mission/cogni-read";
+import {
   createMissionGraph,
   GIT_REVIEWER_GRAPH_NAME,
   OPERATING_REVIEW_GRAPH_NAME,
@@ -79,7 +83,7 @@ import type { CreateGraphFn } from "./inproc/types";
  */
 export interface CatalogEntry {
   /** Trusted catalog program assignment; routes mission-engine graphs to the cogni engine. */
-  readonly program?: "cogni" | "work-review";
+  readonly program?: "cogni" | "work-review" | "cogni-chat";
   readonly displayName: string;
   readonly description: string;
   /** Native tool IDs this graph may use. Providers resolve from TOOL_CATALOG. */
@@ -335,6 +339,21 @@ export const OPERATOR_LANGGRAPH_CATALOG = {
     systemPrompt: COGNI_PROMPT,
     program: "cogni",
   },
+
+  /**
+   * Cogni chat, READ mode (task.5377). Same factory, trusted `program: "cogni-chat"` selects the
+   * plan -> Flash-subagent -> answer topology. The read-only toolIds omit core__edo_decide, so a
+   * READ request cannot file a decision. Chat reaches it by graph id `langgraph:cogni-chat`.
+   */
+  "cogni-chat": {
+    displayName: "Cogni (read)",
+    description:
+      "Hub-grounded read-only chat: plans, delegates goal and work-item reading to a cheap subagent, answers; files nothing",
+    toolIds: COGNI_READ_TOOL_IDS as readonly string[],
+    graphFactory: createMissionGraph,
+    systemPrompt: COGNI_READ_PROMPT,
+    program: "cogni-chat",
+  },
 } as const;
 
 /**
@@ -374,6 +393,7 @@ export const NODE_LANGGRAPH_GRAPH_IDS = {
 
 export const OPERATOR_LANGGRAPH_GRAPH_IDS = {
   cogni: `${LANGGRAPH_PROVIDER_ID}:cogni`,
+  "cogni-chat": `${LANGGRAPH_PROVIDER_ID}:cogni-chat`,
   ...NODE_LANGGRAPH_GRAPH_IDS,
   "operating-review": `${LANGGRAPH_PROVIDER_ID}:${OPERATING_REVIEW_GRAPH_NAME}`,
   "pr-manager": `${LANGGRAPH_PROVIDER_ID}:${PR_MANAGER_GRAPH_NAME}`,
