@@ -49,6 +49,15 @@ export interface NewDomain {
   description?: string;
 }
 
+/**
+ * Partial update of a registered domain. `id` is immutable
+ * (DOMAIN_ID_IS_IMMUTABLE). `description: null` clears the description.
+ */
+export interface DomainPatch {
+  name?: string;
+  description?: string | null;
+}
+
 /** Direct-edge read model: no knowledge bodies or work-item outcomes. */
 export interface CitationLinkSummary {
   id: string;
@@ -97,6 +106,21 @@ export class DomainAlreadyRegisteredError extends Error {
     super(`domain '${domain}' already registered`);
     this.name = "DomainAlreadyRegisteredError";
     this.domain = domain;
+  }
+}
+
+/**
+ * Thrown by `deleteDomain` when entries still use the domain
+ * (DOMAIN_DELETE_REFUSES_NONEMPTY). Delete never cascades.
+ */
+export class DomainNotEmptyError extends Error {
+  readonly domain: string;
+  readonly entryCount: number;
+  constructor(domain: string, entryCount: number) {
+    super(`domain '${domain}' still has ${entryCount} entries`);
+    this.name = "DomainNotEmptyError";
+    this.domain = domain;
+    this.entryCount = entryCount;
   }
 }
 
@@ -203,7 +227,7 @@ export class EdoEntryTypeRequiresAtomicToolError extends Error {
 /** Scoped row/edge API. It expires when withWrite returns; commit belongs to the adapter. */
 export type KnowledgeWriteSession = Omit<
   KnowledgeStorePort,
-  "withWrite" | "registerDomain" | "commit"
+  "withWrite" | "registerDomain" | "updateDomain" | "deleteDomain" | "commit"
 >;
 
 export class KnowledgeWriteOutcomeUnknownError extends Error {
@@ -304,6 +328,20 @@ export interface KnowledgeStorePort {
    * `DomainAlreadyRegisteredError` on duplicate id.
    */
   registerDomain(input: NewDomain): Promise<Domain>;
+  /** One `domains` row + `entry_count`, or null when `id` is not registered. */
+  getDomain(id: string): Promise<Domain | null>;
+  /**
+   * Change a domain's `name` and/or `description` and auto-commit (one Dolt
+   * commit; a patch that changes nothing makes none). Throws
+   * `DomainNotRegisteredError` for an unknown id.
+   */
+  updateDomain(id: string, patch: DomainPatch): Promise<Domain>;
+  /**
+   * Delete a domain with zero entries and auto-commit. Throws
+   * `DomainNotRegisteredError` for an unknown id and `DomainNotEmptyError` when
+   * entries remain; the count and the delete share one write scope.
+   */
+  deleteDomain(id: string): Promise<void>;
 
   // --- Write — rows (root adapters fail closed; use the withWrite scoped handle) ---
   /** Insert or return an identical existing request; differing payload requires explicit update. */

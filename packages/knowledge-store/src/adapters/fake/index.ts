@@ -60,7 +60,9 @@ import {
   CitationTypeMismatchError,
   type Domain,
   DomainAlreadyRegisteredError,
+  DomainNotEmptyError,
   DomainNotRegisteredError,
+  type DomainPatch,
   GoalRequiresContributionError,
   HypothesisMissingEvaluateAtError,
   type KnowledgeStorePort,
@@ -251,13 +253,64 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
     return this.domainsMap.has(id);
   }
 
-  async listDomainsFull(): Promise<Domain[]> {
-    return Array.from(this.domainsMap.values()).map((d) => ({
+  private withEntryCount(d: Domain): Domain {
+    return {
       ...d,
       entryCount: Array.from(this.rows.values()).filter(
         (r) => r.domain === d.id
       ).length,
-    }));
+    };
+  }
+
+  async listDomainsFull(): Promise<Domain[]> {
+    return Array.from(this.domainsMap.values()).map((d) =>
+      this.withEntryCount(d)
+    );
+  }
+
+  async getDomain(id: string): Promise<Domain | null> {
+    const d = this.domainsMap.get(id);
+    return d ? this.withEntryCount(d) : null;
+  }
+
+  async updateDomain(id: string, patch: DomainPatch): Promise<Domain> {
+    return this.withWrite(
+      {
+        operationId: `domain.update:${id}`,
+        message: `update domain ${id}`,
+      },
+      async (write) => {
+        const scoped = write as FakeKnowledgeStoreAdapter;
+        const existing = scoped.domainsMap.get(id);
+        if (!existing) throw new DomainNotRegisteredError(id);
+        const next: Domain = {
+          ...existing,
+          ...(patch.name !== undefined ? { name: patch.name } : {}),
+          ...(patch.description !== undefined
+            ? { description: patch.description }
+            : {}),
+        };
+        scoped.domainsMap.set(id, next);
+        return scoped.withEntryCount(next);
+      }
+    );
+  }
+
+  async deleteDomain(id: string): Promise<void> {
+    return this.withWrite(
+      {
+        operationId: `domain.delete:${id}`,
+        message: `delete domain ${id}`,
+      },
+      async (write) => {
+        const scoped = write as FakeKnowledgeStoreAdapter;
+        const existing = scoped.domainsMap.get(id);
+        if (!existing) throw new DomainNotRegisteredError(id);
+        const { entryCount } = scoped.withEntryCount(existing);
+        if (entryCount > 0) throw new DomainNotEmptyError(id, entryCount);
+        scoped.domainsMap.delete(id);
+      }
+    );
   }
 
   async registerDomain(input: NewDomain): Promise<Domain> {

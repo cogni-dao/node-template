@@ -60,6 +60,9 @@ import {
   CitationTypeMismatchError,
   type Domain,
   DomainAlreadyRegisteredError,
+  DomainNotEmptyError,
+  DomainNotRegisteredError,
+  type DomainPatch,
   GoalRequiresContributionError,
   HypothesisMissingEvaluateAtError,
   type KnowledgeStorePort,
@@ -103,6 +106,32 @@ function rowToKnowledge(row: Record<string, unknown>): Knowledge {
     resolutionStrategy: (row.resolution_strategy as string) ?? null,
     createdAt: row.created_at ? new Date(row.created_at as string) : undefined,
   };
+}
+
+function rowToDomain(row: Record<string, unknown>): Domain {
+  const created = row.created_at;
+  return {
+    id: row.id as string,
+    name: row.name as string,
+    description: (row.description as string) ?? null,
+    confidencePct: Number(row.confidence_pct ?? 40),
+    entryCount: Number(row.entry_count ?? 0),
+    createdAt:
+      created instanceof Date ? created.toISOString() : String(created ?? ""),
+  };
+}
+
+/** One `domains` row + live `entry_count`; null when the id is not registered. */
+async function selectDomain(
+  sql: Pick<DoltWriteConnection, "unsafe">,
+  id: string
+): Promise<Domain | null> {
+  const rows = await sql.unsafe(
+    `SELECT d.id, d.name, d.description, d.confidence_pct, d.created_at, COUNT(k.id) AS entry_count FROM domains d LEFT JOIN knowledge k ON k.domain = d.id WHERE d.id = ${escapeValue(id)} GROUP BY d.id, d.name, d.description, d.confidence_pct, d.created_at LIMIT 1`
+  );
+  return rows.length === 0
+    ? null
+    : rowToDomain(rows[0] as Record<string, unknown>);
 }
 
 function rowToCitation(row: Record<string, unknown>): Citation {
@@ -488,21 +517,11 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
     const rows = await this.sql.unsafe(
       `SELECT d.id, d.name, d.description, d.confidence_pct, d.created_at, COUNT(k.id) AS entry_count FROM domains d LEFT JOIN knowledge k ON k.domain = d.id GROUP BY d.id, d.name, d.description, d.confidence_pct, d.created_at ORDER BY d.id`
     );
-    return rows.map((r) => {
-      const row = r as Record<string, unknown>;
-      const created = row.created_at;
-      return {
-        id: row.id as string,
-        name: row.name as string,
-        description: (row.description as string) ?? null,
-        confidencePct: Number(row.confidence_pct ?? 40),
-        entryCount: Number(row.entry_count ?? 0),
-        createdAt:
-          created instanceof Date
-            ? created.toISOString()
-            : String(created ?? ""),
-      };
-    });
+    return rows.map((r) => rowToDomain(r as Record<string, unknown>));
+  }
+
+  async getDomain(id: string): Promise<Domain | null> {
+    return selectDomain(this.sql, id);
   }
 
   async registerDomain(input: NewDomain): Promise<Domain> {
@@ -518,25 +537,60 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
         await scoped.sql.unsafe(
           `INSERT INTO domains (id, name, description) VALUES (${escapeValue(input.id)}, ${escapeValue(input.name)}, ${escapeValue(input.description ?? null)})`
         );
-        const rows = await scoped.sql.unsafe(
-          `SELECT d.id, d.name, d.description, d.confidence_pct, d.created_at, COUNT(k.id) AS entry_count FROM domains d LEFT JOIN knowledge k ON k.domain = d.id WHERE d.id = ${escapeValue(input.id)} GROUP BY d.id, d.name, d.description, d.confidence_pct, d.created_at LIMIT 1`
-        );
-        if (rows.length === 0) {
+        const domain = await selectDomain(scoped.sql, input.id);
+        if (!domain) {
           throw new Error(`domain ${input.id} not found after register`);
         }
-        const row = rows[0] as Record<string, unknown>;
-        const created = row.created_at;
-        return {
-          id: row.id as string,
-          name: row.name as string,
-          description: (row.description as string) ?? null,
-          confidencePct: Number(row.confidence_pct ?? 40),
-          entryCount: Number(row.entry_count ?? 0),
-          createdAt:
-            created instanceof Date
-              ? created.toISOString()
-              : String(created ?? ""),
-        };
+        return domain;
+      }
+    );
+  }
+
+  async updateDomain(id: string, patch: DomainPatch): Promise<Domain> {
+    return this.withWrite(
+      {
+        operationId: `domain.update:${id}`,
+        message: `update domain ${id}`,
+      },
+      async (write) => {
+        const scoped = write as DoltgresKnowledgeStoreAdapter;
+        const existing = await selectDomain(scoped.sql, id);
+        if (!existing) throw new DomainNotRegisteredError(id);
+        const sets: string[] = [];
+        if (patch.name !== undefined && patch.name !== existing.name)
+          sets.push(`name = ${escapeValue(patch.name)}`);
+        if (
+          patch.description !== undefined &&
+          patch.description !== existing.description
+        )
+          sets.push(`description = ${escapeValue(patch.description)}`);
+        // A patch that changes nothing writes nothing: no DML, so no Dolt commit.
+        if (sets.length === 0) return existing;
+        await scoped.sql.unsafe(
+          `UPDATE domains SET ${sets.join(", ")} WHERE id = ${escapeValue(id)}`
+        );
+        const updated = await selectDomain(scoped.sql, id);
+        if (!updated) throw new Error(`domain ${id} not found after update`);
+        return updated;
+      }
+    );
+  }
+
+  async deleteDomain(id: string): Promise<void> {
+    return this.withWrite(
+      {
+        operationId: `domain.delete:${id}`,
+        message: `delete domain ${id}`,
+      },
+      async (write) => {
+        const scoped = write as DoltgresKnowledgeStoreAdapter;
+        const existing = await selectDomain(scoped.sql, id);
+        if (!existing) throw new DomainNotRegisteredError(id);
+        if (existing.entryCount > 0)
+          throw new DomainNotEmptyError(id, existing.entryCount);
+        await scoped.sql.unsafe(
+          `DELETE FROM domains WHERE id = ${escapeValue(id)}`
+        );
       }
     );
   }
