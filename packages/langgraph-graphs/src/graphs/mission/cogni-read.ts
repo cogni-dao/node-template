@@ -57,7 +57,7 @@ import type { CreateReactAgentGraphOptions } from "../types";
  * node-template's @cogni/ai-tools does not export a WORK_ITEM_READ_NAME constant (operator's does),
  * so the id is a literal here, matching COGNI_TOOL_IDS in ./cogni.
  */
-const WORK_ITEM_READ_NAME = "core__work_item_read";
+export const WORK_ITEM_READ_NAME = "core__work_item_read";
 
 /** Read-only tool set for READ mode. Deliberately contains NO write tool (READ_MODE_FILES_NOTHING). */
 export const COGNI_READ_TOOL_IDS = [
@@ -76,15 +76,15 @@ export const COGNI_READ_TOOL_IDS = [
  */
 export const FLASH_SUBAGENT_MODEL = "deepseek-v4-flash";
 
-const TodoSchema = z.object({
+export const TodoSchema = z.object({
   content: z.string().min(1).max(200),
   status: z.enum(["pending", "in_progress", "completed"]),
 });
-type Todo = z.infer<typeof TodoSchema>;
+export type Todo = z.infer<typeof TodoSchema>;
 
-const WRITE_TODOS_NAME = "write_todos";
+export const WRITE_TODOS_NAME = "write_todos";
 /** State-only plan tool: bound so the model emits a structured plan; the plan node records it. */
-const writeTodosTool = new DynamicStructuredTool({
+export const writeTodosTool = new DynamicStructuredTool({
   name: WRITE_TODOS_NAME,
   description:
     "Write your short plan (2-4 todos) before acting. Each todo is one concrete step; mark statuses honestly.",
@@ -128,7 +128,7 @@ const ReadState = Annotation.Root({
 });
 type S = typeof ReadState.State;
 
-const text = (m: BaseMessage | undefined): string => {
+export const text = (m: BaseMessage | undefined): string => {
   const c = m?.content;
   return Array.isArray(c)
     ? c
@@ -137,11 +137,11 @@ const text = (m: BaseMessage | undefined): string => {
     : String(c ?? "");
 };
 
-const isEmptyCompletion = (error: unknown): boolean =>
+export const isEmptyCompletion = (error: unknown): boolean =>
   error instanceof Error && error.message.includes("empty_model_completion");
 
 /** Minimal view of the bindable model (matches CogniCompletionAdapter / any chat model). */
-type ToolBindableModel = {
+export type ToolBindableModel = {
   bindTools: (tools: StructuredToolInterface[]) => {
     invoke: (
       messages: BaseMessage[],
@@ -150,7 +150,7 @@ type ToolBindableModel = {
   };
 };
 /** The cheap-tier seam CogniCompletionAdapter exposes; absent on other llms. */
-type TierableModel = { withModel?: (model: string) => unknown };
+export type TierableModel = { withModel?: (model: string) => unknown };
 
 /** Fallback plan when the model returns no usable write_todos call (empty free-model turns). */
 const DEFAULT_TODOS: Todo[] = [

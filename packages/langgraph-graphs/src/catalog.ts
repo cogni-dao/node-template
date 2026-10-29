@@ -35,6 +35,10 @@ import {
 } from "./graphs/frontend-tester/graph";
 import { COGNI_PROMPT, COGNI_TOOL_IDS } from "./graphs/mission/cogni";
 import {
+  COGNI_DECIDE_PROMPT,
+  COGNI_DECIDE_TOOL_IDS,
+} from "./graphs/mission/cogni-decide";
+import {
   COGNI_READ_PROMPT,
   COGNI_READ_TOOL_IDS,
 } from "./graphs/mission/cogni-read";
@@ -83,7 +87,7 @@ import type { CreateGraphFn } from "./inproc/types";
  */
 export interface CatalogEntry {
   /** Trusted catalog program assignment; routes mission-engine graphs to the cogni engine. */
-  readonly program?: "cogni" | "work-review" | "cogni-chat";
+  readonly program?: "cogni" | "work-review" | "cogni-chat" | "cogni-decide";
   readonly displayName: string;
   readonly description: string;
   /** Native tool IDs this graph may use. Providers resolve from TOOL_CATALOG. */
@@ -278,6 +282,22 @@ export const NODE_LANGGRAPH_CATALOG = {
     program: "work-review",
     report: { event: "ai.work_prioritizer.cycle" },
   },
+
+  /**
+   * Scheduled mission DECIDE deep agent (task.5377). A SEPARATE program that coexists with
+   * `work-prioritizer`: plan -> Flash subagent reads goals + ledger -> actuate 0-5 axis SCORES via the
+   * story.5108 narrow writer, or no-op when nothing materially changed. Files zero EDO: the tool list
+   * omits core__edo_decide, and the graph never exposes the host transition tool to a model.
+   */
+  "cogni-decide": {
+    displayName: "Mission Loop (decide)",
+    description:
+      "Scheduled deep agent: plans, delegates the goal and ledger read to a cheap subagent, then writes evidence-backed axis scores or does nothing; files zero EDO",
+    toolIds: COGNI_DECIDE_TOOL_IDS as readonly string[],
+    graphFactory: createMissionGraph,
+    systemPrompt: COGNI_DECIDE_PROMPT,
+    program: "cogni-decide",
+  },
 } as const;
 
 /**
@@ -389,6 +409,7 @@ export const NODE_LANGGRAPH_GRAPH_IDS = {
   browser: `${LANGGRAPH_PROVIDER_ID}:${BROWSER_GRAPH_NAME}`,
   "frontend-tester": `${LANGGRAPH_PROVIDER_ID}:${FRONTEND_TESTER_GRAPH_NAME}`,
   "work-prioritizer": `${LANGGRAPH_PROVIDER_ID}:${WORK_PRIORITIZER_GRAPH_NAME}`,
+  "cogni-decide": `${LANGGRAPH_PROVIDER_ID}:cogni-decide`,
 } as const;
 
 export const OPERATOR_LANGGRAPH_GRAPH_IDS = {
