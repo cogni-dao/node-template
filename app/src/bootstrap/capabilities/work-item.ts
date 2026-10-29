@@ -90,6 +90,8 @@ function toWorkItemInfo(item: WorkItem): WorkItemInfo {
     labels: [...item.labels],
     assignees: item.assignees.map((a) => ({ kind: a.kind, id: assigneeId(a) })),
     updatedAt: item.updatedAt,
+    createdAt: item.createdAt,
+    deployVerified: item.deployVerified,
     ...(item.actor !== "either" && { actor: item.actor }),
     ...(item.priority !== undefined && { priority: item.priority }),
     ...(item.rank !== undefined && { rank: item.rank }),
@@ -133,6 +135,11 @@ export function createWorkItemCapability(
       ...(params.projectId && {
         projectId: toWorkItemId(params.projectId)
       }),
+      ...(params.labels && { labels: params.labels }),
+      ...(params.labelPrefix !== undefined && {
+        labelPrefix: params.labelPrefix
+      }),
+      ...(params.scored !== undefined && { scored: params.scored }),
       ...(params.ids && { ids: params.ids.map((id) => toWorkItemId(id)) }),
       ...(params.cursor && { cursor: params.cursor }),
       ...(params.limit && { limit: params.limit })

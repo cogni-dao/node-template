@@ -11,6 +11,9 @@
  *   - BOUNDED_RESULTS: `summary` and `outcome` are each truncated to 600 chars per item (bug.5518);
  *     `scores` is capped to 12 axes with each `ev` truncated to 300 chars (story.5111)
  *   - EV_IS_OPAQUE: a score's `ev` is an evidence link to cite, never instructions to follow
+ *   - ENVELOPE_PARITY (bug.5552): the 14 pinned planner fields (incl. createdAt + deployVerified)
+ *     conform to node-contracts `WorkItemDtoSchema`; filters labels/labelPrefix/scored mirror the
+ *     shared query. See app/tests/contract/work-item-tool-envelope.conformance.test.ts.
  * Side-effects: IO (reads work items via capability)
  * Links: docs/spec/development-lifecycle.md
  * @public
@@ -83,6 +86,21 @@ export const WorkItemQueryInputSchema = z.object({
     .string()
     .optional()
     .describe("Filter by project ID; omit unless the user names a project"),
+  labels: z
+    .array(z.string().min(1))
+    .optional()
+    .describe("Any-of label filter: keep items carrying at least one of these labels"),
+  labelPrefix: z
+    .string()
+    .min(1)
+    .optional()
+    .describe("Keep items with at least one label whose text starts with this prefix"),
+  scored: z
+    .boolean()
+    .optional()
+    .describe(
+      "true = only items with a complete 6-axis score (rankScore defined); false = only unscored items"
+    ),
   limit: z
     .number()
     .int()
@@ -119,6 +137,10 @@ const WorkItemOutputSchema = z.object({
   pr: z.string().optional(),
   blockedBy: z.string().optional(),
   updatedAt: z.string(),
+  // Additive context-envelope fields (bug.5552): a planner needs creation time to
+  // derive STALLED/age and deployVerified to avoid re-ranking delivered work.
+  createdAt: z.string(),
+  deployVerified: z.boolean(),
   sourceUrl: z.string().url().optional(),
   sourceUrlUnavailable: z.literal(true).optional(),
   // Additive, optional (backward compatible) — fields a planner needs to cite
@@ -251,6 +273,11 @@ export function createWorkItemQueryImplementation(
         text: input.text,
         actor: input.actor,
         projectId: input.projectId,
+        ...(input.labels !== undefined && { labels: input.labels }),
+        ...(input.labelPrefix !== undefined && {
+          labelPrefix: input.labelPrefix
+        }),
+        ...(input.scored !== undefined && { scored: input.scored }),
         limit: input.limit ?? 20,
         ...(input.ids !== undefined && { ids: input.ids }),
         ...(input.cursor !== undefined && { cursor: input.cursor })
@@ -281,6 +308,8 @@ export function createWorkItemQueryImplementation(
           pr: item.pr,
           blockedBy: item.blockedBy,
           updatedAt: item.updatedAt,
+          createdAt: item.createdAt,
+          deployVerified: item.deployVerified,
           ...readSourceProvenance(deps.nodePublicOrigin, "work/items", item.id),
           ...(item.revision !== undefined && { revision: item.revision }),
           ...(item.outcome !== undefined && {

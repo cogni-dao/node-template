@@ -86,6 +86,8 @@ describe("evaluation reader provenance", () => {
           labels: [],
           assignees: [],
           updatedAt: "2026-10-23T00:00:00Z",
+          createdAt: "2026-10-22T00:00:00Z",
+          deployVerified: false,
           revision: 7,
           scores,
           rankScore: 6.4,

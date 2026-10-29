@@ -273,6 +273,9 @@ export async function listWorkItems(
     ...(input.actor && { actor: input.actor as WorkItem["actor"] }),
     ...(input.projectId && { projectId: toWorkItemId(input.projectId) }),
     ...(input.node && { node: input.node }),
+    ...(input.labels && { labels: input.labels }),
+    ...(input.labelPrefix !== undefined && { labelPrefix: input.labelPrefix }),
+    ...(input.scored !== undefined && { scored: input.scored }),
     limit: input.limit ?? 100,
     ...(input.cursor && { cursor: input.cursor })
   };

@@ -2762,6 +2762,27 @@ export class DoltgresWorkItemAdapter
       const nodes = Array.isArray(query.node) ? query.node : [query.node];
       conditions.push(`node IN (${nodes.map(escapeValue).join(", ")})`);
     }
+    if (query.labels?.length) {
+      // Any-of: keep rows whose labels jsonb array shares at least one element.
+      conditions.push(
+        `EXISTS (SELECT 1 FROM jsonb_array_elements_text(labels) AS l WHERE l IN (${query.labels
+          .map(escapeValue)
+          .join(", ")}))`
+      );
+    }
+    if (query.labelPrefix) {
+      // LEFT(..) match avoids LIKE metacharacter handling on caller text.
+      const prefix = query.labelPrefix;
+      conditions.push(
+        `EXISTS (SELECT 1 FROM jsonb_array_elements_text(labels) AS l WHERE LEFT(l, ${prefix.length}) = ${escapeValue(prefix)})`
+      );
+    }
+    if (query.scored !== undefined) {
+      // Scored == a complete 6-axis score; rankScoreSql() is NULL otherwise.
+      conditions.push(
+        `(${rankScoreSql()}) IS ${query.scored ? "NOT NULL" : "NULL"}`
+      );
+    }
     const textNeedle = query.text?.toLowerCase();
     const order = normalizeWorkItemOrder(query);
     const initialCursor = query.cursor

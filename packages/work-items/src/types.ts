@@ -143,6 +143,16 @@ export type WorkQuery = {
   readonly text?: string;
   readonly actor?: ActorKind;
   readonly node?: string | readonly string[];
+  /** Any-of label match: keep items carrying at least one of these labels. */
+  readonly labels?: readonly string[];
+  /** Keep items with at least one label whose text starts with this prefix. */
+  readonly labelPrefix?: string;
+  /**
+   * Filter on evaluation completeness (bug.5552): `true` keeps only items with a
+   * complete 6-axis score (`rankScore` defined), `false` keeps only the unscored.
+   * Scores are Doltgres-only, so on the markdown adapter every item is unscored.
+   */
+  readonly scored?: boolean;
   readonly limit?: number;
   readonly cursor?: string;
 };

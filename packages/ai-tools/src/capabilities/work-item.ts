@@ -37,6 +37,10 @@ export interface WorkItemInfo {
   readonly pr?: string;
   readonly blockedBy?: string;
   readonly updatedAt: string;
+  /** Creation timestamp of the row — lets a planner derive age/STALLED (bug.5552). */
+  readonly createdAt: string;
+  /** Whether the item's delivery was proven live on the deploy target (bug.5552). */
+  readonly deployVerified: boolean;
   /** Optimistic-concurrency revision of the row read (store-specific counter). */
   readonly revision?: number;
   /** Measurable "done when" text, when the store carries one. */
@@ -72,6 +76,12 @@ export interface WorkItemQueryParams {
   readonly text?: string;
   readonly actor?: string;
   readonly projectId?: string;
+  /** Any-of label match: items carrying at least one of these labels (bug.5552). */
+  readonly labels?: readonly string[];
+  /** Items with at least one label whose text starts with this prefix (bug.5552). */
+  readonly labelPrefix?: string;
+  /** `true` = only items with a complete 6-axis score; `false` = only unscored (bug.5552). */
+  readonly scored?: boolean;
   readonly limit?: number;
   /** Exact ids to fetch (bounded). */
   readonly ids?: readonly string[];
