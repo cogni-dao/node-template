@@ -26,35 +26,12 @@ import type {
   RecordOutcomeResult,
 } from "@cogni/ai-tools";
 
+import { toKnowledgeEntry } from "./knowledge-entry.js";
 import { assertCitationReplay } from "./domain/write-replay.js";
 import type { EdoResolverPort } from "./port/edo-resolver.port.js";
 import type { KnowledgeStorePort } from "./port/knowledge-store.port.js";
 
 const CONFIDENCE_AGENT_DEFAULT = 30;
-
-function toEntry(k: {
-  id: string;
-  domain: string;
-  entityId?: string | null;
-  title: string;
-  content: string;
-  confidencePct?: number | null;
-  sourceType: string;
-  sourceRef?: string | null;
-  tags?: string[] | null;
-}): KnowledgeEntry {
-  return {
-    id: k.id,
-    domain: k.domain,
-    entityId: k.entityId ?? null,
-    title: k.title,
-    content: k.content,
-    confidencePct: k.confidencePct ?? null,
-    sourceType: k.sourceType,
-    sourceRef: k.sourceRef ?? null,
-    tags: k.tags ?? null,
-  };
-}
 
 /**
  * Create an EdoCapability backed by KnowledgeStorePort + EdoResolverPort.
@@ -111,7 +88,7 @@ export function createEdoCapability(
 
           // 3. One commit per hypothesize call.
 
-          return toEntry(entry);
+          return toKnowledgeEntry(entry);
         }
       );
     },
@@ -153,7 +130,7 @@ export function createEdoCapability(
             citationType: "derives_from",
           });
 
-          return toEntry(entry);
+          return toKnowledgeEntry(entry);
         }
       );
     },
@@ -183,7 +160,7 @@ export function createEdoCapability(
       }
 
       return {
-        outcome: toEntry(outcome),
+        outcome: toKnowledgeEntry(outcome),
         hypothesisId: params.hypothesisId,
         resolvedConfidence: result.resolvedConfidence,
         citationId: result.citationId,
@@ -202,7 +179,7 @@ export function createEdoCapability(
         throw new Error(`getChain: root entry '${params.rootId}' not found`);
       }
       const chain: ChainNodeEntry[] = nodes.map((n) => ({
-        entry: toEntry(n.entry),
+        entry: toKnowledgeEntry(n.entry),
         depth: n.depth,
         edgeFromParent: n.edgeFromParent
           ? {
@@ -211,7 +188,7 @@ export function createEdoCapability(
             }
           : null,
       }));
-      return { root: toEntry(firstNode.entry), chain };
+      return { root: toKnowledgeEntry(firstNode.entry), chain };
     },
   };
 }

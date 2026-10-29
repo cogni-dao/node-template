@@ -18,7 +18,10 @@
 
 import { z } from "zod";
 
-import type { KnowledgeCapability } from "../capabilities/knowledge";
+import {
+  type KnowledgeCapability,
+  KnowledgeEntrySchema,
+} from "../capabilities/knowledge";
 import type { BoundTool, ToolContract, ToolImplementation } from "../types";
 import { readSourceProvenance } from "../source-url";
 
@@ -48,14 +51,8 @@ export const KnowledgeSearchInputSchema = z.object({
 });
 export type KnowledgeSearchInput = z.infer<typeof KnowledgeSearchInputSchema>;
 
-export const KnowledgeSearchResultSchema = z.object({
-  id: z.string(),
-  domain: z.string(),
-  title: z.string(),
-  content: z.string(),
-  confidencePct: z.number().nullable(),
-  sourceType: z.string(),
-  tags: z.array(z.string()).nullable(),
+/** Result item = the shared knowledge envelope + trusted source provenance. */
+export const KnowledgeSearchResultSchema = KnowledgeEntrySchema.extend({
   sourceUrl: z.string().url().optional(),
   sourceUrlUnavailable: z.literal(true).optional(),
 });
@@ -120,13 +117,11 @@ export function createKnowledgeSearchImplementation(
         query: input.query,
         domain: input.domain,
         results: results.map((r) => ({
-          id: r.id,
-          domain: r.domain,
-          title: r.title,
+          // parse() carries every declared envelope field and strips anything
+          // else, so a stray capability-supplied `sourceUrl` can never survive
+          // (NO_MODEL_SELECTED_HOST); provenance is re-derived below.
+          ...KnowledgeEntrySchema.parse(r),
           content: truncate(r.content, KNOWLEDGE_SEARCH_CONTENT_MAX_CHARS),
-          confidencePct: r.confidencePct,
-          sourceType: r.sourceType,
-          tags: r.tags,
           ...readSourceProvenance(deps.nodePublicOrigin, "knowledge", r.id),
         })),
         totalFound: results.length,

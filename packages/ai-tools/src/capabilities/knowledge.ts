@@ -13,6 +13,8 @@
  * @public
  */
 
+import { z } from "zod";
+
 /**
  * Confidence score defaults for knowledge entries.
  *
@@ -26,17 +28,37 @@ export const CONFIDENCE = {
   HARDENED: 95,
 } as const;
 
-export interface KnowledgeEntry {
-  id: string;
-  domain: string;
-  entityId: string | null;
-  title: string;
-  content: string;
-  confidencePct: number | null;
-  sourceType: string;
-  sourceRef: string | null;
-  tags: string[] | null;
-}
+/**
+ * The ONE knowledge-entry envelope. `KnowledgeEntry` is DERIVED from it, and the
+ * read/search tool item schemas are built from it, so a field exists in exactly one
+ * place (agent-tool-context-envelope, rule 1). It mirrors the wire DTO
+ * (`KnowledgeRowSchema` in @cogni/node-contracts): dates are ISO strings, nullable
+ * columns are `null` (never omitted). Packages cannot share a zod instance with
+ * node-contracts (zod3 vs zod4), so the repo-wide envelope audit in the app tier
+ * (`tool-envelope.conformance.test.ts`) enforces key-set parity with the wire DTO.
+ */
+export const KnowledgeEntrySchema = z.object({
+  id: z.string(),
+  domain: z.string(),
+  entityId: z.string().nullable(),
+  title: z.string(),
+  content: z.string(),
+  /** Trigger sentence — when to read this entry (the governing index is keyed on it). */
+  useWhen: z.string().nullable(),
+  entryType: z.string(),
+  confidencePct: z.number().nullable(),
+  sourceType: z.string(),
+  sourceRef: z.string().nullable(),
+  tags: z.array(z.string()).nullable(),
+  /** ISO timestamp — a hypothesis's resolution date or a goal's `By:` deadline. */
+  evaluateAt: z.string().nullable(),
+  /** Namespaced resolver id on hypothesis/goal rows (`manual`, `agent`, `metric:<kpi>`). */
+  resolutionStrategy: z.string().nullable(),
+  /** ISO timestamp. */
+  createdAt: z.string().nullable(),
+});
+
+export type KnowledgeEntry = z.infer<typeof KnowledgeEntrySchema>;
 
 export interface KnowledgeSearchParams {
   domain: string;

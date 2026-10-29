@@ -16,7 +16,10 @@
 
 import { z } from "zod";
 
-import type { KnowledgeCapability } from "../capabilities/knowledge";
+import {
+  type KnowledgeCapability,
+  KnowledgeEntrySchema,
+} from "../capabilities/knowledge";
 import type { BoundTool, ToolContract, ToolImplementation } from "../types";
 
 // ─── Schemas ─────────────────────────────────────────────────────────────────
@@ -48,17 +51,8 @@ export const KnowledgeReadInputSchema = z
   });
 export type KnowledgeReadInput = z.infer<typeof KnowledgeReadInputSchema>;
 
-export const KnowledgeReadEntrySchema = z.object({
-  id: z.string(),
-  domain: z.string(),
-  entityId: z.string().nullable(),
-  title: z.string(),
-  content: z.string(),
-  confidencePct: z.number().nullable(),
-  sourceType: z.string(),
-  sourceRef: z.string().nullable(),
-  tags: z.array(z.string()).nullable(),
-});
+/** Output item = the shared knowledge envelope (all wire-DTO fields; never a fixed pick). */
+export const KnowledgeReadEntrySchema = KnowledgeEntrySchema;
 
 export const KnowledgeReadOutputSchema = z.object({
   mode: z.enum(["get", "list"]),
@@ -105,21 +99,7 @@ export function createKnowledgeReadImplementation(
         const entry = await deps.knowledgeCapability.get(input.id);
         return {
           mode: "get" as const,
-          entries: entry
-            ? [
-                {
-                  id: entry.id,
-                  domain: entry.domain,
-                  entityId: entry.entityId,
-                  title: entry.title,
-                  content: entry.content,
-                  confidencePct: entry.confidencePct,
-                  sourceType: entry.sourceType,
-                  sourceRef: entry.sourceRef,
-                  tags: entry.tags,
-                },
-              ]
-            : [],
+          entries: entry ? [KnowledgeReadEntrySchema.parse(entry)] : [],
           totalFound: entry ? 1 : 0,
         };
       }
@@ -133,17 +113,7 @@ export function createKnowledgeReadImplementation(
       });
       return {
         mode: "list" as const,
-        entries: entries.map((e) => ({
-          id: e.id,
-          domain: e.domain,
-          entityId: e.entityId,
-          title: e.title,
-          content: e.content,
-          confidencePct: e.confidencePct,
-          sourceType: e.sourceType,
-          sourceRef: e.sourceRef,
-          tags: e.tags,
-        })),
+        entries: entries.map((e) => KnowledgeReadEntrySchema.parse(e)),
         totalFound: entries.length,
       };
     },

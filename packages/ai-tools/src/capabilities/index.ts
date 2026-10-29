@@ -36,7 +36,7 @@ export type {
   KnowledgeSearchParams,
   KnowledgeWriteParams,
 } from "./knowledge";
-export { CONFIDENCE } from "./knowledge";
+export { CONFIDENCE, KnowledgeEntrySchema } from "./knowledge";
 // Metrics capability (per GOVERNED_METRICS invariant)
 export type {
   MetricDataPoint,

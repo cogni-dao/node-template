@@ -73,6 +73,7 @@ export type {
 // Capabilities
 export {
   CONFIDENCE,
+  KnowledgeEntrySchema,
   createFixedClock,
   makeRepoCitation,
   REPO_CITATION_REGEX,
@@ -169,6 +170,7 @@ export {
   KNOWLEDGE_READ_NAME,
   type KnowledgeReadDeps,
   type KnowledgeReadInput,
+  KnowledgeReadEntrySchema,
   KnowledgeReadInputSchema,
   type KnowledgeReadOutput,
   KnowledgeReadOutputSchema,
@@ -187,6 +189,7 @@ export {
   type KnowledgeSearchOutput,
   KnowledgeSearchOutputSchema,
   type KnowledgeSearchRedacted,
+  KnowledgeSearchResultSchema,
   knowledgeSearchBoundTool,
   knowledgeSearchContract,
   knowledgeSearchStubImplementation,

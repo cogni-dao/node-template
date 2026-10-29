@@ -29,6 +29,7 @@ import {
 } from "./domain/gates/index.js";
 import { isGoalRowId } from "./domain/dao-goals.js";
 import { RAW_WRITE_REJECTS_TYPES } from "./domain/schemas.js";
+import { toKnowledgeEntry } from "./knowledge-entry.js";
 import {
   EdoEntryTypeRequiresAtomicToolError,
   GoalRequiresContributionError,
@@ -36,30 +37,6 @@ import {
 } from "./port/knowledge-store.port.js";
 
 const CONFIDENCE_DRAFT = 30;
-
-function toEntry(k: {
-  id: string;
-  domain: string;
-  entityId?: string | null;
-  title: string;
-  content: string;
-  confidencePct?: number | null;
-  sourceType: string;
-  sourceRef?: string | null;
-  tags?: string[] | null;
-}): KnowledgeEntry {
-  return {
-    id: k.id,
-    domain: k.domain,
-    entityId: k.entityId ?? null,
-    title: k.title,
-    content: k.content,
-    confidencePct: k.confidencePct ?? null,
-    sourceType: k.sourceType,
-    sourceRef: k.sourceRef ?? null,
-    tags: k.tags ?? null,
-  };
-}
 
 export interface KnowledgeCapabilityOptions {
   /**
@@ -115,7 +92,7 @@ export function createKnowledgeCapability(
       const results = await port.searchKnowledge(params.domain, params.query, {
         limit: params.limit,
       });
-      return results.map(toEntry);
+      return results.map(toKnowledgeEntry);
     },
 
     async list(params: KnowledgeListParams): Promise<KnowledgeEntry[]> {
@@ -123,12 +100,12 @@ export function createKnowledgeCapability(
         tags: params.tags,
         limit: params.limit,
       });
-      return results.map(toEntry);
+      return results.map(toKnowledgeEntry);
     },
 
     async get(id: string): Promise<KnowledgeEntry | null> {
       const result = await port.getKnowledge(id);
-      return result ? toEntry(result) : null;
+      return result ? toKnowledgeEntry(result) : null;
     },
 
     async write(params: KnowledgeWriteParams): Promise<KnowledgeEntry> {
@@ -182,7 +159,7 @@ export function createKnowledgeCapability(
             tags: c.tags ?? null,
           });
 
-          return toEntry(entry);
+          return toKnowledgeEntry(entry);
         }
       );
     },

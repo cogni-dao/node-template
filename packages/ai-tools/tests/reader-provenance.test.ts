@@ -46,7 +46,15 @@ const knowledge: KnowledgeCapability = {
   search: vi
     .fn()
     .mockResolvedValue([
-      { ...entry, sourceUrl: "https://untrusted.example/wrong" },
+      {
+        ...entry,
+        useWhen: null,
+        entryType: "finding",
+        evaluateAt: null,
+        resolutionStrategy: null,
+        createdAt: null,
+        sourceUrl: "https://untrusted.example/wrong",
+      },
     ]),
   list: vi.fn(),
   get: vi.fn(),
