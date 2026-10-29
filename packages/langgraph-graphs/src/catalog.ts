@@ -308,7 +308,7 @@ export const NODE_LANGGRAPH_CATALOG = {
    * `langgraph:cogni-chat`. The operator still gets it via the `...NODE_LANGGRAPH_CATALOG` spread.
    */
   "cogni-chat": {
-    displayName: "Cogni (read)",
+    displayName: "Cogni",
     description:
       "Hub-grounded read-only chat: plans, delegates goal and work-item reading to a cheap subagent, answers; files nothing",
     toolIds: COGNI_READ_TOOL_IDS as readonly string[],
