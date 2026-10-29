@@ -416,11 +416,13 @@ export const NODE_LANGGRAPH_GRAPH_IDS = {
   "frontend-tester": `${LANGGRAPH_PROVIDER_ID}:${FRONTEND_TESTER_GRAPH_NAME}`,
   "work-prioritizer": `${LANGGRAPH_PROVIDER_ID}:${WORK_PRIORITIZER_GRAPH_NAME}`,
   "cogni-decide": `${LANGGRAPH_PROVIDER_ID}:cogni-decide`,
+  // READ deep agent — in the NODE graph-id map so the completions `graph_name`
+  // path resolves it, matching its NODE_LANGGRAPH_CATALOG entry (task.5377).
+  "cogni-chat": `${LANGGRAPH_PROVIDER_ID}:cogni-chat`,
 } as const;
 
 export const OPERATOR_LANGGRAPH_GRAPH_IDS = {
   cogni: `${LANGGRAPH_PROVIDER_ID}:cogni`,
-  "cogni-chat": `${LANGGRAPH_PROVIDER_ID}:cogni-chat`,
   ...NODE_LANGGRAPH_GRAPH_IDS,
   "operating-review": `${LANGGRAPH_PROVIDER_ID}:${OPERATING_REVIEW_GRAPH_NAME}`,
   "pr-manager": `${LANGGRAPH_PROVIDER_ID}:${PR_MANAGER_GRAPH_NAME}`,
