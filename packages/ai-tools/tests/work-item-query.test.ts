@@ -46,6 +46,8 @@ const BASE: WorkItemInfo = {
   labels: [],
   assignees: [],
   updatedAt: "2026-10-19T00:00:00.000Z",
+  createdAt: "2026-10-18T00:00:00.000Z",
+  deployVerified: false,
 };
 
 describe("core__work_item_query", () => {
@@ -176,5 +178,44 @@ describe("core__work_item_query", () => {
     expect(cap.query).toHaveBeenCalledWith(
       expect.objectContaining({ actor: undefined, limit: 5 })
     );
+  });
+
+  it("always returns createdAt + deployVerified in the envelope (bug.5552)", async () => {
+    const cap = capabilityReturning([BASE]);
+    const impl = createWorkItemQueryImplementation({ workItemCapability: cap });
+    const out = await impl.execute({});
+
+    expect(WorkItemQueryOutputSchema.parse(out)).toEqual(out);
+    expect(out.items[0]?.createdAt).toBe("2026-10-18T00:00:00.000Z");
+    expect(out.items[0]?.deployVerified).toBe(false);
+  });
+
+  it("forwards labels / labelPrefix / scored filters to the capability (bug.5552)", async () => {
+    const cap = capabilityReturning([]);
+    const impl = createWorkItemQueryImplementation({ workItemCapability: cap });
+    await impl.execute({
+      labels: ["goal", "roadmap"],
+      labelPrefix: "area:",
+      scored: false,
+    });
+
+    expect(cap.query).toHaveBeenCalledWith(
+      expect.objectContaining({
+        labels: ["goal", "roadmap"],
+        labelPrefix: "area:",
+        scored: false,
+      })
+    );
+  });
+
+  it("omits the scored filter entirely when the caller does not set it", async () => {
+    const cap = capabilityReturning([]);
+    const impl = createWorkItemQueryImplementation({ workItemCapability: cap });
+    await impl.execute({ statuses: ["needs_triage"] });
+
+    const params = (cap.query as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
+    expect(params).not.toHaveProperty("scored");
+    expect(params).not.toHaveProperty("labels");
+    expect(params).not.toHaveProperty("labelPrefix");
   });
 });

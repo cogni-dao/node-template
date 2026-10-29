@@ -66,6 +66,9 @@ export const GET = wrapRouteHandlerWithLogging(
       const actorParam = url.searchParams.get("actor");
       const projectIdParam = url.searchParams.get("projectId");
       const nodeParam = url.searchParams.get("node");
+      const labelsParam = url.searchParams.get("labels");
+      const labelPrefixParam = url.searchParams.get("labelPrefix");
+      const scoredParam = url.searchParams.get("scored");
       const limitParam = url.searchParams.get("limit");
       const cursorParam = url.searchParams.get("cursor");
 
@@ -82,6 +85,16 @@ export const GET = wrapRouteHandlerWithLogging(
             ? nodeParam.split(",")
             : nodeParam
           : undefined,
+        labels: labelsParam ? labelsParam.split(",") : undefined,
+        labelPrefix: labelPrefixParam ?? undefined,
+        scored:
+          scoredParam === null
+            ? undefined
+            : scoredParam === "true"
+              ? true
+              : scoredParam === "false"
+                ? false
+                : scoredParam,
         limit: limitParam ? Number(limitParam) : undefined,
         cursor: cursorParam ?? undefined,
       });

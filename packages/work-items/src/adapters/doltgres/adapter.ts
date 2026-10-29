@@ -2762,6 +2762,31 @@ export class DoltgresWorkItemAdapter
       const nodes = Array.isArray(query.node) ? query.node : [query.node];
       conditions.push(`node IN (${nodes.map(escapeValue).join(", ")})`);
     }
+    if (query.labels?.length) {
+      // Doltgres has no `jsonb_array_elements_text`, so match against the
+      // serialized array text. A label is a JSON element `"<label>"`; the quotes
+      // delimit elements, so `%"<label>"%` is an exact any-of element match.
+      conditions.push(
+        `(${query.labels
+          .map(
+            (label) => `CAST(labels AS TEXT) LIKE ${escapeValue(`%"${label}"%`)}`
+          )
+          .join(" OR ")})`
+      );
+    }
+    if (query.labelPrefix) {
+      // `"<prefix>` (opening quote, no closing) matches only elements whose text
+      // starts with the prefix — elements are quote-delimited in the array text.
+      conditions.push(
+        `CAST(labels AS TEXT) LIKE ${escapeValue(`%"${query.labelPrefix}%`)}`
+      );
+    }
+    if (query.scored !== undefined) {
+      // Scored == a complete 6-axis score; rankScoreSql() is NULL otherwise.
+      conditions.push(
+        `(${rankScoreSql()}) IS ${query.scored ? "NOT NULL" : "NULL"}`
+      );
+    }
     const textNeedle = query.text?.toLowerCase();
     const order = normalizeWorkItemOrder(query);
     const initialCursor = query.cursor

@@ -52,6 +52,50 @@ describe("MarkdownWorkItemAdapter", () => {
     };
   });
 
+  describe("label + scored filters (bug.5552)", () => {
+    let tmpDir: string;
+    let adapter: MarkdownWorkItemAdapter;
+
+    beforeEach(async () => {
+      tmpDir = await mkdtemp(path.join(os.tmpdir(), "work-items-filter-"));
+      await mkdir(path.join(tmpDir, "work", "items"), { recursive: true });
+      await mkdir(path.join(tmpDir, "work", "projects"), { recursive: true });
+      adapter = new MarkdownWorkItemAdapter(tmpDir);
+      await adapter.create({ type: "task", title: "Goal A", labels: ["goal"] });
+      await adapter.create({
+        type: "task",
+        title: "Area web",
+        labels: ["area:web", "roadmap"]
+      });
+      await adapter.create({ type: "task", title: "Unlabeled" });
+    });
+
+    afterEach(async () => {
+      await rm(tmpDir, { recursive: true, force: true });
+    });
+
+    it("labels is an any-of match", async () => {
+      const titles = (await adapter.list({ labels: ["goal", "roadmap"] })).items
+        .map((i) => i.title)
+        .sort();
+      expect(titles).toEqual(["Area web", "Goal A"]);
+    });
+
+    it("labelPrefix keeps items with a label that starts with the prefix", async () => {
+      const titles = (await adapter.list({ labelPrefix: "area:" })).items.map(
+        (i) => i.title
+      );
+      expect(titles).toEqual(["Area web"]);
+    });
+
+    it("scored:false returns every item because markdown items are always unscored", async () => {
+      const unscored = await adapter.list({ scored: false });
+      expect(unscored.items).toHaveLength(3);
+      const scored = await adapter.list({ scored: true });
+      expect(scored.items).toHaveLength(0);
+    });
+  });
+
   describe("pagination (NO_SILENT_TRUNCATION)", () => {
     let tmpDir: string;
     let adapter: MarkdownWorkItemAdapter;

@@ -43,6 +43,7 @@ import type {
   WorkRelation
 } from "../../types.js";
 import { toWorkItemId } from "../../types.js";
+import { rankScore } from "../../scores.js";
 import {
   InvalidTransitionError,
   StaleRevisionError,
@@ -240,6 +241,17 @@ function matchesQuery(item: WorkItem, query: WorkQuery): boolean {
   if (query.node) {
     const want = Array.isArray(query.node) ? query.node : [query.node];
     if (!want.includes(item.node)) return false;
+  }
+  if (query.labels?.length) {
+    if (!query.labels.some((label) => item.labels.includes(label))) return false;
+  }
+  if (query.labelPrefix) {
+    const prefix = query.labelPrefix;
+    if (!item.labels.some((label) => label.startsWith(prefix))) return false;
+  }
+  if (query.scored !== undefined) {
+    // Scores are Doltgres-only, so a markdown item is always unscored.
+    if ((rankScore(item.scores) !== undefined) !== query.scored) return false;
   }
   if (query.text) {
     const t = query.text.toLowerCase();

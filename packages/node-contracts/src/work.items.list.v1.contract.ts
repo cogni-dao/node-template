@@ -96,6 +96,12 @@ export const workItemsListOperation = {
     actor: z.enum(["human", "ai", "either"]).optional(),
     projectId: z.string().optional(),
     node: z.union([z.string(), z.array(z.string())]).optional(),
+    /** Any-of label filter (bug.5552): items carrying at least one of these labels. */
+    labels: z.array(z.string()).optional(),
+    /** Items with at least one label whose text starts with this prefix (bug.5552). */
+    labelPrefix: z.string().optional(),
+    /** true = only items with a complete 6-axis score; false = only unscored (bug.5552). */
+    scored: z.boolean().optional(),
     limit: z.number().int().positive().max(500).optional(),
     cursor: z.string().optional()
   }),
