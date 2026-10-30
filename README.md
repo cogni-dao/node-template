@@ -10,7 +10,7 @@ deployment, observability, durable knowledge, and agent infrastructure included.
 ## Develop locally
 
 Use this node's [local environment example](.env.local.example) and the
-[local agent development guide draft](https://cognidao.org/knowledge/inbox/contrib-flock-leader-conductor-469da024).
+[local agent development guide draft](https://cognidao.org/knowledge/inbox/contrib-flock-leader-conductor-32ab8994).
 The current local proof uses an explicitly configured shared local substrate.
 This repository does not include a cold-machine infrastructure installer. The guide
 is awaiting review; [agent infrastructure](https://cognidao.org/knowledge/agent-infrastructure-expert)
@@ -18,14 +18,18 @@ owns the existing execution contract.
 
 ```bash
 pnpm install --offline --frozen-lockfile || pnpm install --frozen-lockfile
-cp .env.local.example .env.local   # then fill local secrets + create this node's databases
+test -f .env.local || cp .env.local.example .env.local
+# Fill local secrets and provision this node's local databases.
 pnpm dev:preflight                 # validate env fail-closed (starts nothing)
 pnpm dev:stack                     # build packages, migrate, run app + LangGraph dev (stays running)
 
 # In a second terminal: mint a local identity, then verify the whole stack.
+umask 077
 mkdir -p .context
-curl -sX POST http://localhost:3200/api/v1/agent/register \
-  -H 'content-type: application/json' -d '{"name":"local"}' > .context/local-dev-identity.json
+if [ ! -s .context/local-dev-identity.json ]; then
+  curl -fsS -X POST http://localhost:3200/api/v1/agent/register \
+    -H 'content-type: application/json' -d '{"name":"local"}' > .context/local-dev-identity.json
+fi
 pnpm dev:verify --identity .context/local-dev-identity.json   # → { "ok": true }
 ```
 
