@@ -13,10 +13,9 @@
 
 import { defineConfig } from "tsup";
 
-export const tsupConfig = defineConfig({
+export const tsupConfig = defineConfig([{
   entry: [
     "src/index.ts",
-    "src/contracts.ts",
     "src/migrations.ts",
     "src/domain/contribution-schemas.ts",
     "src/adapters/doltgres/index.ts",
@@ -29,7 +28,14 @@ export const tsupConfig = defineConfig({
   platform: "node",
   noExternal: ["@cogni-dao/doltgres-admission"],
   external: ["drizzle-orm", "postgres", "zod"],
-});
+}, {
+  entry: ["src/contracts.ts"],
+  format: ["esm"],
+  dts: { compilerOptions: { composite: false, incremental: false } },
+  clean: false,
+  sourcemap: true,
+  platform: "neutral",
+}]);
 
 // biome-ignore lint/style/noDefaultExport: required by tsup
 export default tsupConfig;
