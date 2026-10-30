@@ -55,7 +55,18 @@ export function SchedulesView() {
   });
   const remove = useMutation({
     mutationFn: deleteSchedule,
-    onSuccess: () => {
+    onSuccess: async (_result, deletedId) => {
+      const detail = { queryKey: ["schedule", deletedId], exact: true };
+      const history = {
+        queryKey: ["schedule-history", deletedId],
+        exact: true,
+      };
+      await Promise.all([
+        client.cancelQueries(detail),
+        client.cancelQueries(history),
+      ]);
+      client.removeQueries(detail);
+      client.removeQueries(history);
       void client.invalidateQueries({ queryKey: ["schedules"] });
     },
   });
@@ -113,9 +124,7 @@ export function SchedulesView() {
           </Button>
         ))}
       </fieldset>
-      {query.isLoading ? (
-        <output>Loading schedules…</output>
-      ) : query.error ? (
+      {query.error && (
         <div role="alert" className="rounded-lg border p-6">
           <p>Unable to load schedules.</p>
           <Button
@@ -126,7 +135,10 @@ export function SchedulesView() {
             Try again
           </Button>
         </div>
-      ) : visible.length === 0 ? (
+      )}
+      {query.isLoading ? (
+        <output>Loading schedules…</output>
+      ) : query.error && !query.data ? null : visible.length === 0 ? (
         <div className="rounded-lg border bg-card p-12 text-center">
           <p className="text-muted-foreground">
             {filter === "All"
