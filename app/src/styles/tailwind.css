@@ -282,36 +282,6 @@
 /* Keep hero animation vars above (isolated to code.ts) */
 
 @layer utilities {
-  /* Match speed at the loop seam: slow down without stopping or resizing the mark. */
-  @keyframes brain-turn {
-    0% {
-      transform: rotate(0deg);
-    }
-    100% {
-      transform: rotate(360deg);
-    }
-  }
-
-  @keyframes brain-breathe {
-    0%,
-    100% {
-      opacity: 0.88;
-    }
-    50% {
-      opacity: 1;
-    }
-  }
-
-  @media (prefers-reduced-motion: no-preference) {
-    .brain-loading-mark {
-      --brain-loading-cycle: 3s;
-      animation:
-        brain-turn var(--brain-loading-cycle)
-          cubic-bezier(0.3, 0.15, 0.7, 0.85) infinite,
-        brain-breathe var(--brain-loading-cycle) ease-in-out infinite;
-    }
-  }
-
   /* Desktop-only wallet button fill - scoped to data-wallet-slot to avoid affecting mobile */
   [data-wallet-slot="desktop"] button {
     width: 100%;

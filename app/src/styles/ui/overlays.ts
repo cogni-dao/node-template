@@ -21,7 +21,15 @@ export const brainLoading = cva(
   "flex min-h-0 w-full flex-1 items-center justify-center"
 );
 
-export const brainLoadingMark = cva("brain-loading-mark size-16");
+export const brainLoadingGraphic = cva(
+  "relative grid size-20 shrink-0 place-items-center"
+);
+
+export const brainLoadingOrbit = cva(
+  "brain-loading-orbit absolute inset-0 size-20 text-foreground/70 motion-safe:animate-spin"
+);
+
+export const brainLoadingMark = cva("brain-loading-mark size-12");
 
 const terminalFrameSurfaceVariants = {
   default: "bg-card text-card-foreground",

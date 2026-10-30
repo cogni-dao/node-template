@@ -6,6 +6,7 @@
 
 - **Owners:** @derekg1729
 - **Status:** stable
+- **Last reviewed:** 2026-10-30
 - **Parent:** [components/kit](../../../AGENTS.md)
 
 ## Purpose
@@ -83,6 +84,7 @@ import { ErrorAlert } from "@/components";
 
 ## Notes
 
+- `BrainLoading` keeps the brain stationary inside one linear SVG activity arc. Use the existing `motion-safe:animate-spin` utility; do not add logo scale, tumbling, or custom loop easing.
 - ErrorAlert deduplicates by code (prevents spam)
 - Supports up to 3 action buttons (retry, switchFree, addCredits)
 - Auto-dismiss timeout configurable via prop
