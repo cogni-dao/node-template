@@ -33,7 +33,7 @@
   "scripts": {
     "build": "tsup src/index.ts --format esm --platform neutral",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --root ../ai-tools --config ../ai-tools/vitest.config.ts tests/work-item-query.test.ts"
+    "test": "vitest run tests/reads.test.ts"
   },
   "dependencies": {
     "zod": "^4.1.12"

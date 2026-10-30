@@ -14,9 +14,9 @@ import { type Knowledge, toKnowledgeRow } from "@cogni/knowledge-store";
 import { toWorkItemDto, type WorkItem } from "@cogni/work-items";
 
 export function toHttpWorkItem(item: WorkItem) {
-  return WorkItemDtoSchema.parse(toWorkItemDto(item));
+	return WorkItemDtoSchema.parse(toWorkItemDto(item));
 }
 
 export function toHttpKnowledgeRow(entry: Knowledge) {
-  return KnowledgeRowSchema.parse(toKnowledgeRow(entry));
+	return KnowledgeRowSchema.parse(toKnowledgeRow(entry));
 }
