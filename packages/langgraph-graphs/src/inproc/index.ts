@@ -11,12 +11,9 @@
  * @public
  */
 
+export { createMemoryPersistence } from "./memory-persistence";
 // Runner
 export { createInProcGraphRunner } from "./runner";
-export {
-  createMemoryPersistence,
-  createPostgresPersistence,
-} from "./postgres-persistence";
 
 // Types
 export type {
