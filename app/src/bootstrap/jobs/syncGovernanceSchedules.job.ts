@@ -179,7 +179,9 @@ export async function runGovernanceSchedulesSyncJob(
           .where(eq(schedules.ownerUserId, COGNI_SYSTEM_PRINCIPAL_USER_ID));
         return rows
           .map((row) => row.temporalScheduleId)
-          .filter((id) => id.startsWith("governance:"));
+          .filter(
+            (id): id is string => id !== null && id.startsWith("governance:")
+          );
       },
       disableSchedule: async (temporalScheduleId: string) => {
         // Direct DB update via serviceDb (same pattern as upsertGovernanceScheduleRow).
