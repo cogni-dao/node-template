@@ -37,15 +37,6 @@ intent:
 
 governance:
   chain_id: "8453" # Base mainnet
-  # task.0020: temporary CANDIDATE ONLY. Remove before merge/promotion.
-  # Parent actively supervises two terminal ticks, then pauses/removes this charter.
-  schedules:
-    - charter: CANDIDATE_DEEPSEEK_MINUTE_PROBE
-      cron: "* * * * *"
-      timezone: UTC
-      graph: "langgraph:poet"
-      model: deepseek-v4-flash
-      entrypoint: "task.0020-minute-probe-OK"
 
 # Activity ledger ingestion + approver allowlist.
 # `approvers` gates the `(admin)/` route group and write routes under
