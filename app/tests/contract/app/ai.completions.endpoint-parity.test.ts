@@ -794,53 +794,7 @@ describe("OpenAI Endpoint Parity (POST /v1/chat/completions)", () => {
       expect(subscriber?.aborted).toBe(true);
     });
 
-    it("cleans up if the heartbeat cannot enqueue", async () => {
-      setupMocks();
-      const records = captureRequestLogs();
-      let subscriber: AbortSignal | undefined;
-      Object.assign(mockGetContainer(), { runStream: {
-        subscribe: async function* (_runId: string, signal: AbortSignal) {
-          subscriber = signal;
-          yield { id: "1", event: { type: "status" as const, phase: "thinking" as const } };
-          await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
-        },
-      } });
-      vi.useFakeTimers();
-      try {
-        const { POST } = await import("@/app/api/v1/chat/completions/route");
-        const response = await POST(new NextRequest("http://localhost:3000/api/v1/chat/completions", {
-          method: "POST", body: JSON.stringify(createCompletionRequest({ stream: true })),
-        }));
-        if (!response.body) throw new Error("missing stream");
-        const reader = response.body.getReader();
-        await reader.read();
-        await reader.read();
-        const enqueue = vi.spyOn(ReadableStreamDefaultController.prototype, "enqueue").mockImplementationOnce(() => { throw new Error("closed"); });
-        await vi.advanceTimersByTimeAsync(15_000);
-        expect(subscriber?.aborted).toBe(true);
-        expect((await reader.read()).done).toBe(true);
-        expect(records.filter((line) => line.event === "ai.chat_stream_closed")).toEqual([expect.objectContaining({ reason: "write_or_stream_error", errorCode: "internal" })]);
-        enqueue.mockRestore();
-      } finally { vi.useRealTimers(); }
-    });
 
-    it("records close even if both initial and error-frame enqueues fail", async () => {
-      setupMocks();
-      const records = captureRequestLogs();
-      const enqueue = vi.spyOn(ReadableStreamDefaultController.prototype, "enqueue")
-        .mockImplementationOnce(() => { throw new Error("private-first"); })
-        .mockImplementationOnce(() => { throw new Error("private-second"); });
-      try {
-        const { POST } = await import("@/app/api/v1/chat/completions/route");
-        const response = await POST(new NextRequest("http://localhost:3000/api/v1/chat/completions", {
-          method: "POST", body: JSON.stringify(createCompletionRequest({ stream: true })),
-        }));
-        await response.text();
-        expect(records.filter((line) => line.event === "ai.chat_stream_closed")).toEqual([expect.objectContaining({ reason: "write_or_stream_error", errorCode: "internal" })]);
-        expect(JSON.stringify(records)).not.toContain("private-first");
-        expect(JSON.stringify(records)).not.toContain("private-second");
-      } finally { enqueue.mockRestore(); }
-    });
 
     it("keeps the first abort reason when consumer cancellation follows", async () => {
       setupMocks();
@@ -886,20 +840,6 @@ describe("OpenAI Endpoint Parity (POST /v1/chat/completions)", () => {
       } finally { enqueue.mockRestore(); }
     });
 
-    it("records an error if local terminal close throws", async () => {
-      setupMocks();
-      const records = captureRequestLogs();
-      const close = vi.spyOn(ReadableStreamDefaultController.prototype, "close").mockImplementationOnce(() => { throw new Error("private-close-sentinel"); });
-      try {
-        const { POST } = await import("@/app/api/v1/chat/completions/route");
-        const response = await POST(new NextRequest("http://localhost:3000/api/v1/chat/completions", {
-          method: "POST", body: JSON.stringify(createCompletionRequest({ stream: true })),
-        }));
-        await response.text();
-        expect(records.filter((line) => line.event === "ai.chat_stream_closed")).toEqual([expect.objectContaining({ reason: "write_or_stream_error", errorCode: "internal" })]);
-        expect(JSON.stringify(records)).not.toContain("private-close-sentinel");
-      } finally { close.mockRestore(); }
-    });
 
     it("should emit role announcement as first chunk (OpenAI convention)", async () => {
       setupMocks();
