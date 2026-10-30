@@ -3,8 +3,8 @@
 
 /**
  * Module: `@cogni/langgraph-graphs/graphs/mission/graph`
- * Purpose: Generic mission-engine graph factory — prompt-driven via catalog config.
- * Scope: Creates LangGraph React agent with systemPrompt from catalog. Does NOT hardcode any prompt.
+ * Purpose: Compatibility entrypoint for legacy mission roles and shared-harness programs.
+ * Scope: Legacy callers retain their injected ReAct prompt; declared programs delegate to the shared harness.
  * Invariants:
  *   - FACTORY_SEAM: Wraps createReactAgent — LangChain v1 migration is a single-file change
  *   - SYSTEM_PROMPT_REQUIRED: Throws if systemPrompt not provided
@@ -17,9 +17,10 @@
 import { MessagesAnnotation } from "@langchain/langgraph";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import type { CreateReactAgentGraphOptions } from "../types";
-import { createCogniProgram } from "./cogni";
-import { createCogniDecideProgram } from "./cogni-decide";
-import { createCogniReadProgram } from "./cogni-read";
+import {
+	createPrioritizerRunHooks,
+	createWorkPrioritizerGraph,
+} from "../work-prioritizer/graph";
 
 /**
  * Graph name constants for mission-engine roles.
@@ -39,22 +40,24 @@ export const GIT_REVIEWER_GRAPH_NAME = "git-reviewer" as const;
  * @throws Error if systemPrompt is not provided
  */
 export function createMissionGraph(opts: CreateReactAgentGraphOptions) {
-  // Behavior mode is the program: READ (chat) answers and files nothing; the scheduled programs
-  // DECIDE. The read topology has no write tool bound at all.
-  if (opts.program === "cogni-chat") return createCogniReadProgram(opts);
-  if (opts.program === "cogni-decide") return createCogniDecideProgram(opts);
-  if (opts.program) return createCogniProgram(opts);
-  if (!opts.systemPrompt) {
-    throw new Error(
-      "createMissionGraph requires systemPrompt — mission graphs are prompt-driven via catalog"
-    );
-  }
+	if (opts.program) return createWorkPrioritizerGraph(opts);
 
-  // Use 'prompt' (not deprecated 'messageModifier') — LangGraph converts string to SystemMessage
-  return createReactAgent({
-    llm: opts.llm,
-    tools: [...opts.tools],
-    prompt: opts.systemPrompt,
-    stateSchema: MessagesAnnotation,
-  });
+	if (!opts.systemPrompt) {
+		throw new Error(
+			"createMissionGraph requires systemPrompt — mission graphs are prompt-driven via catalog",
+		);
+	}
+
+	// Use 'prompt' (not deprecated 'messageModifier') — LangGraph converts string to SystemMessage
+	return createReactAgent({
+		llm: opts.llm,
+		tools: [...opts.tools],
+		prompt: opts.systemPrompt,
+		stateSchema: MessagesAnnotation,
+	});
 }
+
+createMissionGraph.createRunHooks = (
+	context: Parameters<typeof createPrioritizerRunHooks>[0],
+) => (context.program ? createPrioritizerRunHooks(context) : {});
+createMissionGraph.tierModelIds = createWorkPrioritizerGraph.tierModelIds;

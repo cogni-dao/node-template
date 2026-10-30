@@ -67,7 +67,23 @@ export type CompiledGraph = InvokableGraph<
  * - createPoetGraph: Creates React agent for poet
  * - createResearchGraph: Creates research agent (Phase 5)
  */
-export type CreateGraphFn = (opts: CreateGraphOptions) => CompiledGraph;
+export type CreateGraphFn = ((opts: CreateGraphOptions) => CompiledGraph) & {
+  readonly tierModelIds?: Readonly<Record<string, string>>;
+  readonly createRunHooks?: (context: {
+    program?: CreateGraphOptions["program"];
+    origin?: string;
+  }) => {
+    graphOptions?: Pick<CreateGraphOptions, "programState">;
+    observeTool?: (
+      name: string,
+      args: unknown,
+      result: { ok: boolean; value?: unknown; errorCode?: string },
+      toolCallId?: string,
+    ) => void;
+    onSkillReadFailure?: () => void;
+    projectOutput?: (answer: string) => Record<string, unknown> | undefined;
+  };
+};
 
 // Re-export canonical types from ai-core (per TOOL_EXEC_TYPES_IN_AI_CORE)
 export type { ToolExecFn, ToolExecResult } from "@cogni/ai-core";
@@ -110,6 +126,9 @@ export interface InProcGraphRequest {
  */
 export interface InProcRunnerOptions<TTool = unknown> {
   readonly program?: CreateReactAgentGraphOptions["program"];
+  readonly requestIntent?: CreateReactAgentGraphOptions["requestIntent"];
+  readonly trustedActorId?: string;
+  readonly trustedProgramId?: string;
   readonly sourceContext?: CreateReactAgentGraphOptions["sourceContext"];
   /** Graph factory from catalog - creates compiled graph with LLM and tools */
   readonly createGraph: CreateGraphFn;
@@ -158,7 +177,7 @@ export interface InProcRunnerOptions<TTool = unknown> {
    * Optional persistence foundation (langgraph-persistence). Injected by the host so the engine
    * compiles with a checkpointer (per-run/thread state) and a Store (cross-thread working memory).
    * Absent ⇒ the runner uses an in-process dev `MemorySaver`/`InMemoryStore` (lost on restart).
-   * Prod injects a `PostgresSaver`-backed pair through this same seam (`.setup()` at deploy).
+   * A host may inject provisioned Postgres implementations; setup requires separate authorization.
    */
   readonly persistence?: {
     readonly checkpointer?: BaseCheckpointSaver;

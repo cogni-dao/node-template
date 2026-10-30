@@ -32,6 +32,8 @@ export interface ExecutionRequest {
   readonly runId: string;
   /** Langfuse trace ID (null if Langfuse not configured) */
   readonly traceId: string | null;
+  /** Existing lease state: null identifies an unleased facade preclaim. */
+  readonly leaseExpiresAt?: string | null;
   /** Execution outcome: true = success, false = error, null = pending */
   readonly ok: boolean | null;
   /** AiExecutionErrorCode if ok=false, null if ok=true or pending */

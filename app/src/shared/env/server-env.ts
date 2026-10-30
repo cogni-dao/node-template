@@ -190,6 +190,8 @@ export const serverSchema = z.object({
   // When set, graph execution uses langgraph dev server instead of in-process
   // Per LANGGRAPH_SERVER.md MVP: default port 2024 for langgraph dev
   LANGGRAPH_DEV_URL: z.string().url().optional(),
+  // Local stack keeps Studio running while exercising the billed in-process executor.
+  COGNI_LOCAL_INPROC: z.enum(["true", "false"]).optional(),
 
   // Doltgres (Knowledge Data Plane) - Optional
   // Per knowledge-data-plane spec: versioned knowledge store for agent domain expertise.

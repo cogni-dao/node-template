@@ -290,6 +290,7 @@ export class DrizzleExecutionRequestAdapter implements ExecutionRequestPort {
       requestHash: row.requestHash,
       runId: row.runId,
       traceId: row.traceId,
+      leaseExpiresAt: row.leaseExpiresAt?.toISOString() ?? null,
       ok: row.ok,
       errorCode,
     };

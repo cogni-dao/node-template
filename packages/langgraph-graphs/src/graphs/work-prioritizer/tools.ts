@@ -1,34 +1,46 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
-/**
- * Module: `@cogni/langgraph-graphs/graphs/work-prioritizer/tools`
- * Purpose: Tool IDs for the mission-loop agent (single source of truth).
- * Scope: Exports tool capability metadata. Does NOT enforce policy (the toolRunner + work-item store do).
- * Invariants:
- *   - SINGLE_SOURCE_OF_TRUTH: This is THE list of tools the mission loop can use
- *   - CAPABILITY_NOT_POLICY: p0/p1 writes are denied server-side (P0P1_IS_NODE_ADMIN), not here
- * Side-effects: none
- * Links: story.5108, TOOL_USE_SPEC.md
- * @public
- */
-
+/** Read-only and scheduled scores capabilities for the shared-harness node programs. */
 import {
-  EDO_DECIDE_NAME,
   GET_CURRENT_TIME_NAME,
   GOAL_LIST_NAME,
   KNOWLEDGE_READ_NAME,
   KNOWLEDGE_SEARCH_NAME,
   WORK_ITEM_QUERY_NAME,
+  WORK_ITEM_READ_NAME,
   WORK_ITEM_TRANSITION_NAME,
 } from "@cogni/ai-tools";
 
-export const WORK_PRIORITIZER_TOOL_IDS = [
+export { WORK_ITEM_READ_NAME };
+export const COGNI_READ_TOOL_IDS = [
   GOAL_LIST_NAME,
   WORK_ITEM_QUERY_NAME,
-  WORK_ITEM_TRANSITION_NAME,
-  KNOWLEDGE_READ_NAME,
+  WORK_ITEM_READ_NAME,
   KNOWLEDGE_SEARCH_NAME,
-  EDO_DECIDE_NAME,
+  KNOWLEDGE_READ_NAME,
   GET_CURRENT_TIME_NAME,
 ] as const;
+export const FLASH_SUBAGENT_MODEL = "deepseek-v4-flash";
+export const COGNI_DECIDE_TOOL_IDS = [
+  GOAL_LIST_NAME,
+  KNOWLEDGE_READ_NAME,
+  KNOWLEDGE_SEARCH_NAME,
+  WORK_ITEM_QUERY_NAME,
+  WORK_ITEM_READ_NAME,
+  WORK_ITEM_TRANSITION_NAME,
+  GET_CURRENT_TIME_NAME,
+] as const;
+export const MAX_SCORE_WRITES_PER_TICK = 5;
+export const SCORES_WRITE_NAME = "work_item_scores_write";
+export const OPEN_STATUSES = [
+  "needs_triage",
+  "needs_research",
+  "needs_design",
+  "needs_implement",
+  "needs_closeout",
+  "needs_merge",
+  "blocked",
+] as const;
+
+export const WORK_PRIORITIZER_TOOL_IDS = COGNI_DECIDE_TOOL_IDS;

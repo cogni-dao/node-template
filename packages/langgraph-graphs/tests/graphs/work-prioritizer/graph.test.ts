@@ -1,408 +1,24 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
-/**
- * Module: `@cogni/langgraph-graphs/tests/graphs/work-prioritizer/graph`
- * Purpose: The mission-loop ReAct agent runs its tools through the real in-proc runner and returns one flat cycle report.
- * Scope: Scripted completions + fake tool exec; does not call a real LLM or store.
- * Invariants:
- *   - CATALOG_WIRES_FOUR_TOOLS: the catalog entry carries the factory, the four tool ids, and the cycle event
- *   - CYCLE_REPORT: changed ids come only from successful transitions; denials and errors are counted apart
- * Side-effects: none
- * Links: src/graphs/work-prioritizer/graph.ts
- * @internal
- */
-
-import type { AiEvent } from "@cogni/ai-core";
-import {
-  EDO_DECIDE_NAME,
-  edoDecideContract,
-  GET_CURRENT_TIME_NAME,
-  GOAL_LIST_NAME,
-  goalListContract,
-  KNOWLEDGE_READ_NAME,
-  knowledgeReadContract,
-  knowledgeSearchContract,
-  WORK_ITEM_TRANSITION_NAME,
-  workItemQueryContract,
-  workItemTransitionContract,
-} from "@cogni/ai-tools";
+/** Catalog authority and observed cycle-report boundary regressions; no model-quality claims. */
+import { EDO_DECIDE_NAME, GET_CURRENT_TIME_NAME, GOAL_LIST_NAME, KNOWLEDGE_READ_NAME, WORK_ITEM_TRANSITION_NAME } from "@cogni/ai-tools";
 import { AIMessage, ToolMessage } from "@langchain/core/messages";
 import { describe, expect, it } from "vitest";
-
 import { OPERATOR_LANGGRAPH_CATALOG } from "../../../src/catalog";
-import { COGNI_TOOL_IDS } from "../../../src/graphs/mission/cogni";
+import { COGNI_DECIDE_TOOL_IDS } from "../../../src/graphs/mission/cogni-decide";
 import { createMissionGraph } from "../../../src/graphs/mission/graph";
-import {
-  createWorkPrioritizerGraph,
-  cycleScores,
-} from "../../../src/graphs/work-prioritizer/graph";
-import { WORK_PRIORITIZER_SYSTEM_PROMPT } from "../../../src/graphs/work-prioritizer/prompts";
-import { WORK_PRIORITIZER_TOOL_IDS } from "../../../src/graphs/work-prioritizer/tools";
-import { createInProcGraphRunner } from "../../../src/inproc/runner";
-import type {
-  CompletionFn,
-  CompletionResult,
-  ToolExecFn,
-} from "../../../src/inproc/types";
+import { cycleScores } from "../../../src/graphs/work-prioritizer/graph";
 
-const REPORT =
-  "Changed task.1 priority 3→2 (goal-ai-work-converges). Proposal: bug.2 → p1 (goal-fleet-pays-itself).";
-
-type Call = { id: string; name: string; args: Record<string, unknown> };
-
-/**
- * After turn 1 (goals + two patches: one lands, one p0/p1-denied): edo_decide + the report, a model error, or a
- * tool loop. "nochange": turn 1 reads goals only, then edo_decide + the report.
- */
-type Then = "report" | "nochange" | "throw" | "loop";
-function scriptedCompletion(prompts: string[], then: Then): CompletionFn {
-  const turns: Call[][] = [
-    [
-      { id: "c1", name: GOAL_LIST_NAME, args: {} },
-      {
-        id: "c2",
-        name: WORK_ITEM_TRANSITION_NAME,
-        args: {
-          action: "patch",
-          id: "task.1",
-          priority: 2,
-          expectedRevision: 4,
-        },
-      },
-      {
-        id: "c3",
-        name: WORK_ITEM_TRANSITION_NAME,
-        args: {
-          action: "patch",
-          id: "bug.2",
-          priority: 1,
-          expectedRevision: 1,
-        },
-      },
-    ],
-  ];
-  if (then === "nochange") turns[0] = [turns[0][0] as Call];
-  if (then === "report" || then === "nochange") {
-    turns.push([
-      {
-        id: "c4",
-        name: EDO_DECIDE_NAME,
-        args: {
-          id: "mission-loop-20261023T00",
-          domain: "strategy",
-          title: "Mission loop 2026-10-23T00:00Z",
-          content: REPORT,
-          derivesFromHypothesisId: "goal-ai-work-converges",
-          sourceType: "agent",
-        },
-      },
-    ]);
-  }
-  let n = 0;
-  return (req) => {
-    prompts.push(JSON.stringify(req.messages[0]));
-    const loop = then === "loop" && [
-      { id: `l${n}`, name: GOAL_LIST_NAME, args: {} },
-    ];
-    const calls = turns[n++] ?? loop;
-    if (!calls && then === "throw") throw new Error("model down");
-    const final: Promise<CompletionResult> = Promise.resolve(
-      calls
-        ? {
-            ok: true,
-            content: "",
-            finishReason: "tool_calls",
-            toolCalls: calls.map((c) => ({
-              id: c.id,
-              type: "function" as const,
-              function: { name: c.name, arguments: JSON.stringify(c.args) },
-            })),
-          }
-        : { ok: true, content: REPORT, finishReason: "stop" }
-    );
-    return { stream: (async function* () {})(), final };
-  };
-}
-
-const fakeExec: (emit: (e: AiEvent) => void) => ToolExecFn =
-  () => async (name, args) => {
-    if (name === EDO_DECIDE_NAME) {
-      const a = args as { id: string; domain: string; title: string };
-      return {
-        ok: true,
-        value: {
-          entry: {
-            id: a.id,
-            domain: a.domain,
-            title: a.title,
-            confidencePct: null,
-            sourceType: "agent",
-          },
-          derivesFromHypothesisId: "goal-ai-work-converges",
-          committed: true,
-          message: "filed",
-        },
-      };
-    }
-    if (name === GOAL_LIST_NAME) {
-      return {
-        ok: true,
-        value: {
-          goals: [
-            {
-              id: "goal-ai-work-converges",
-              title: "t",
-              evaluateAt: null,
-              content: "c",
-            },
-            {
-              id: "goal-fleet-pays-itself",
-              title: "t",
-              evaluateAt: null,
-              content: "c",
-            },
-          ],
-        },
-      };
-    }
-    const a = args as { id: string; priority: number };
-    return a.priority <= 1
-      ? {
-          ok: false,
-          errorCode: "execution",
-          safeMessage: `authz_denied: priority ${a.priority} requires node admin`,
-        }
-      : {
-          ok: true,
-          value: {
-            success: true,
-            action: "patch",
-            id: a.id,
-            message: "ok",
-            revision: 5,
-          },
-        };
-  };
-
-describe("work-prioritizer mission-loop agent", () => {
-  it("catalog entry binds the common Cogni factory (reads + edo_decide) and cycle event", () => {
+describe("work-prioritizer catalog and cycle report", () => {
+  it("catalog entry binds the common Cogni factory (reads + scores-only writer) and cycle event", () => {
     const entry = OPERATOR_LANGGRAPH_CATALOG["work-prioritizer"];
     expect(entry.graphFactory).toBe(createMissionGraph);
-    expect(entry.toolIds).toEqual(COGNI_TOOL_IDS);
-    expect(entry.toolIds).toContain(EDO_DECIDE_NAME);
+    expect(entry.toolIds).toEqual(COGNI_DECIDE_TOOL_IDS);
+    expect(entry.toolIds).not.toContain(EDO_DECIDE_NAME);
     expect(entry.toolIds).toContain(GET_CURRENT_TIME_NAME);
     expect(entry.toolIds).toContain(KNOWLEDGE_READ_NAME);
     expect(entry.report).toEqual({ event: "ai.work_prioritizer.cycle" });
-  });
-
-  async function run(then: Then, prompts: string[] = []) {
-    const { stream, final } = createInProcGraphRunner({
-      createGraph: createWorkPrioritizerGraph,
-      completionFn: scriptedCompletion(prompts, then),
-      createToolExecFn: fakeExec,
-      toolContracts: [
-        goalListContract,
-        workItemQueryContract,
-        workItemTransitionContract,
-        knowledgeReadContract,
-        knowledgeSearchContract,
-        edoDecideContract,
-      ],
-      request: {
-        runId: "run-1",
-        messages: [{ role: "user", content: "PRIORITIZE" }],
-        configurable: {
-          model: "test-model",
-          toolIds: [...WORK_PRIORITIZER_TOOL_IDS],
-        },
-      },
-    });
-    for await (const _ of stream) {
-      // drain
-    }
-    return final;
-  }
-
-  it("runs the tool loop and returns one flat cycle report", async () => {
-    const prompts: string[] = [];
-    const result = await run("report", prompts);
-
-    expect(result.ok).toBe(true);
-    expect(result.content).toBe(REPORT);
-    expect(prompts[0]).toContain(WORK_PRIORITIZER_SYSTEM_PROMPT.slice(0, 40));
-    expect(result.structuredOutput?.telemetry).toEqual({
-      goalIds: ["goal-ai-work-converges", "goal-fleet-pays-itself"],
-      changedItemIds: ["task.1"],
-      changeCount: 1,
-      deniedCount: 1,
-      toolErrorCount: 0,
-      edoDecisionId: "mission-loop-20261023T00",
-      knowledgeReads: 0,
-      guidanceReceipts: [],
-      itemsRead: 0,
-      identicalPatches: 0,
-      unknownBaselinePatches: 1,
-      topIds: [],
-      scores: {
-        knowledge_read: 0,
-        evidence_read: 0,
-        goal_cited: 0,
-        novel_change: 0,
-        grounded: 0,
-        action: 0,
-      },
-      aborted: false,
-      report: REPORT,
-    });
-  });
-
-  it("a no-change run still records exactly one decision", async () => {
-    const result = await run("nochange");
-
-    expect(result.ok).toBe(true);
-    expect(result.structuredOutput?.telemetry).toMatchObject({
-      changedItemIds: [],
-      changeCount: 0,
-      edoDecisionId: "mission-loop-20261023T00",
-      aborted: false,
-    });
-  });
-
-  it("REPORT_ON_TURN_LIMIT: a turn-limit abort still reports the changes that landed", async () => {
-    const result = await run("loop");
-
-    expect(result.ok).toBe(true);
-    expect(result.structuredOutput?.telemetry).toMatchObject({
-      changedItemIds: ["task.1"],
-      changeCount: 1,
-      deniedCount: 1,
-      aborted: true,
-      abortReason: "recursion_limit",
-      report: "",
-    });
-  });
-
-  it("a model error fails the run (not swallowed as aborted)", async () => {
-    const result = await run("throw");
-
-    expect(result.ok).toBe(false);
-    expect(result.structuredOutput).toBeUndefined();
-  });
-
-  it("reads canonical guidance through the real runner and fingerprints exact returned bodies", async () => {
-    const body = "Apply the owning rule.\nUse evidence before a change. 🧭";
-    const executed: string[] = [];
-    let turn = 0;
-    const completionFn: CompletionFn = () => {
-      const calls =
-        turn++ === 0
-          ? [
-              {
-                id: "guidance",
-                name: KNOWLEDGE_READ_NAME,
-                args: { id: "mission-loop-expert" },
-              },
-            ]
-          : turn === 2
-            ? [
-                {
-                  id: "patch",
-                  name: WORK_ITEM_TRANSITION_NAME,
-                  args: {
-                    action: "patch",
-                    id: "task.1",
-                    rank: 0,
-                    expectedRevision: 1,
-                  },
-                },
-              ]
-            : [];
-      return {
-        stream: (async function* () {})(),
-        final: Promise.resolve(
-          calls.length
-            ? {
-                ok: true,
-                content: "",
-                finishReason: "tool_calls",
-                toolCalls: calls.map((c) => ({
-                  id: c.id,
-                  type: "function" as const,
-                  function: { name: c.name, arguments: JSON.stringify(c.args) },
-                })),
-              }
-            : {
-                ok: true,
-                content: "Read guidance before the patch.",
-                finishReason: "stop",
-              }
-        ),
-      };
-    };
-    const { stream, final } = createInProcGraphRunner({
-      createGraph: createWorkPrioritizerGraph,
-      completionFn,
-      createToolExecFn: () => async (name) => {
-        executed.push(name);
-        return {
-          ok: true,
-          value:
-            name === KNOWLEDGE_READ_NAME
-              ? {
-                  mode: "get",
-                  entries: [
-                    {
-                      id: "mission-loop-expert",
-                      domain: "build-agents",
-                      entityId: null,
-                      title: "Mission",
-                      content: body,
-                      sourceRef: "contribution:reviewed:2",
-                      sourceType: "external",
-                      confidencePct: 80,
-                      tags: ["expertise-role"],
-                    },
-                  ],
-                  totalFound: 1,
-                }
-              : {
-                  success: true,
-                  action: "patch",
-                  id: "task.1",
-                  revision: 2,
-                  message: "ok",
-                },
-        };
-      },
-      toolContracts: [knowledgeReadContract, workItemTransitionContract],
-      request: {
-        runId: "guidance-run",
-        messages: [{ role: "user", content: "Review priorities" }],
-        configurable: {
-          model: "test-model",
-          toolIds: [...WORK_PRIORITIZER_TOOL_IDS],
-        },
-      },
-    });
-    for await (const _ of stream) {
-      /* drain for billing */
-    }
-    const result = await final;
-    expect(result.ok).toBe(true);
-    expect(executed).toEqual([KNOWLEDGE_READ_NAME, WORK_ITEM_TRANSITION_NAME]);
-    expect(result.structuredOutput?.telemetry).toMatchObject({
-      knowledgeReads: 1,
-      guidanceReceipts: [
-        {
-          id: "mission-loop-expert",
-          sourceRef: "contribution:reviewed:2",
-          sha256:
-            "328c762dda41e780657c92f937dfb2b7442a309b6d9f9adc970811b866564a6a",
-        },
-      ],
-      scores: { knowledge_read: 1 },
-    });
   });
 
   it("does not count missing, empty, list-only or uncorrelated guidance as canonical reads", () => {
@@ -481,7 +97,7 @@ describe("work-prioritizer mission-loop agent", () => {
     const content = [
       "Top 5:",
       ...[1, 2, 3, 4, 5].map(
-        (n) => `${n}. task.${n} goal:goal-a — why — next: ...`
+        (n) => `${n}. task.${n} goal:goal-a — why — next: ...`,
       ),
     ].join("\n");
     const decide = [
@@ -532,7 +148,7 @@ describe("work-prioritizer mission-loop agent", () => {
         decide[0],
         ...lateReads.slice(2),
         decide[1],
-      ]).scores
+      ]).scores,
     ).toMatchObject({ knowledge_read: 0, evidence_read: 0, grounded: 0 });
     const reordered = cycleScores([
       ai("core__work_item_query", "q", {}),
@@ -740,7 +356,7 @@ describe("work-prioritizer mission-loop agent", () => {
             content: [
               "Top 5:",
               ...[1, 2, 3, 4, 5].map(
-                (n) => `${n}. task.1 goal:goal-ai-work-converges — why — next:`
+                (n) => `${n}. task.1 goal:goal-ai-work-converges — why — next:`,
               ),
             ].join("\n"),
             derivesFromHypothesisId: "goal-ai-work-converges",

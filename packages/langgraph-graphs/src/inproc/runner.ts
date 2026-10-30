@@ -19,8 +19,10 @@
  * @public
  */
 
+import { createHash } from "node:crypto";
 import {
   type AiEvent,
+  isAiExecutionError,
   normalizeErrorToExecutionCode,
   type ToolSpec,
 } from "@cogni/ai-core";
@@ -30,7 +32,9 @@ import {
   type StructuredToolInterface,
 } from "@langchain/core/tools";
 import { InMemoryStore, MemorySaver } from "@langchain/langgraph";
+import { MiddlewareError } from "langchain";
 import { z } from "zod";
+
 import {
   CogniCompletionAdapter,
   type CompletionFn,
@@ -51,7 +55,7 @@ import type { GraphResult, InProcRunnerOptions } from "./types";
  */
 function mcpSpecsToLangChainTools(
   specs: readonly ToolSpec[],
-  toolExecFn: ToolExecFn
+  toolExecFn: ToolExecFn,
 ): StructuredToolInterface[] {
   return specs.map(
     (spec) =>
@@ -75,7 +79,7 @@ function mcpSpecsToLangChainTools(
             ? result.value
             : JSON.stringify(result.value);
         },
-      }) as StructuredToolInterface
+      }) as StructuredToolInterface,
   );
 }
 
@@ -100,7 +104,7 @@ function extractAssistantContent(messages: BaseMessage[]): string {
           typeof part === "object" &&
           part !== null &&
           "type" in part &&
-          part.type === "text"
+          part.type === "text",
       )
       .map((part) => part.text)
       .join("");
@@ -123,7 +127,7 @@ function extractAssistantContent(messages: BaseMessage[]): string {
  * @returns { stream, final } - AsyncIterable of events and Promise of result
  */
 export function createInProcGraphRunner<TTool = unknown>(
-  opts: InProcRunnerOptions<TTool>
+  opts: InProcRunnerOptions<TTool>,
 ): {
   stream: AsyncIterable<AiEvent>;
   final: Promise<GraphResult>;
@@ -140,12 +144,7 @@ export function createInProcGraphRunner<TTool = unknown>(
     persistence,
   } = opts;
 
-  // Persistence foundation (langgraph-persistence): the host-injected backend, else a fresh
-  // per-run dev pair. Per-run (not a shared singleton) is deliberate: one run = one thread, so a
-  // fresh MemorySaver is GC'd with the run and a long-lived process does not accumulate every
-  // thread's checkpoint. Dev savers are in-process — interrupt-resumable within the run, but NOT
-  // crash-resumable (a crash loses the saver). Prod injects a PostgresSaver-backed pair (shared,
-  // crash-resumable, cross-tick) whose `.setup()` runs at deploy, never at request time.
+  // Host-injected persistence or fresh per-run memory; no restart guarantee.
   const checkpointer = persistence?.checkpointer ?? new MemorySaver();
   const store = persistence?.store ?? new InMemoryStore();
 
@@ -173,16 +172,84 @@ export function createInProcGraphRunner<TTool = unknown>(
 
   const tokenSink = {
     push: (event: AiEvent) => {
-      if (!opts.program || event.type !== "text_delta") emit(event);
+      if (
+        !(opts.program || opts.trustedProgramId) ||
+        event.type !== "text_delta"
+      )
+        emit(event);
     },
   };
-  const toolExecFn = createToolExecFn(emit);
+  const executeTool = createToolExecFn(emit);
+  const hooks = createGraph.createRunHooks?.({
+    program: opts.program,
+    origin: opts.sourceContext?.origin,
+  });
+  const toolExecFn: ToolExecFn = async (name, args, toolCallId) => {
+    const result = await executeTool(name, args, toolCallId);
+    hooks?.observeTool?.(name, args, result, toolCallId);
+    return result;
+  };
+  const hash = (value: string) =>
+    createHash("sha256").update(value).digest("hex");
+  const memoryNamespace =
+    opts.sourceContext?.nodeId && opts.trustedActorId && opts.trustedProgramId
+      ? [
+          "cogni",
+          "v1",
+          hash(opts.sourceContext.nodeId),
+          hash(opts.trustedActorId),
+          hash(opts.trustedProgramId),
+          "working",
+        ]
+      : undefined;
+  const identityParts = [
+    opts.sourceContext?.nodeId,
+    opts.trustedActorId,
+    opts.trustedProgramId,
+    request.runId,
+  ];
+  if (
+    opts.trustedProgramId &&
+    persistence?.checkpointer &&
+    identityParts.some((part) => !part)
+  )
+    throw new Error("cogni_trusted_identity_unavailable");
+  const threadId = opts.trustedProgramId && persistence?.checkpointer
+    ? `h1:${hash(identityParts.map((part) => `${Buffer.byteLength(part ?? "", "utf8")}:${part ?? ""}`).join(""))}`
+    : request.configurable.graphId != null
+      ? `${request.configurable.graphId}:${request.runId}`
+      : request.runId;
+  const readSkill = async (id: string) => {
+    try {
+      const result = await toolExecFn("core__knowledge_read", { id });
+      if (!result.ok) throw new Error("skill_read_denied");
+      const parsed = z
+        .object({
+          mode: z.literal("get"),
+          entries: z.array(z.object({ id: z.string(), content: z.string() })),
+        })
+        .parse(result.value);
+      const entry = parsed.entries.find((row) => row.id === id);
+      if (!entry) throw new Error("skill_not_found");
+      if (!entry.content.trim()) throw new Error("skill_body_empty");
+      if (
+        new TextEncoder().encode(entry.content).length > 65_000 ||
+        entry.content.split("\n").length > 490
+      )
+        throw new Error("skill_body_exceeds_limit");
+      return entry.content;
+    } catch (error) {
+      hooks?.onSkillReadFailure?.();
+      throw error;
+    }
+  };
 
   // Create no-arg CogniCompletionAdapter (reads from ALS + configurable at invoke time)
+  const runSignal = request.abortSignal;
   const llm = new CogniCompletionAdapter().bindRun(
     request.configurable.model,
-    request.abortSignal,
-    !!opts.program
+    runSignal,
+    !!opts.program,
   );
 
   // Use toLangChainToolsCaptured since runner provides toolExecFn directly (not from ALS)
@@ -201,26 +268,28 @@ export function createInProcGraphRunner<TTool = unknown>(
 
   // Use factory from catalog instead of hardcoded graph
   const graph = createGraph({
-    onInternalToolEvent: ({ id, name, status }) => {
-      if (status === "start")
-        emit({
-          type: "tool_call_start",
-          toolCallId: id,
-          toolName: name,
-          args: { stateOnly: true },
-        });
-      else
-        emit({
-          type: "tool_call_result",
-          toolCallId: id,
-          result: { stateOnly: true, operation: name, status },
-          ...(status === "error" ? { isError: true } : {}),
-        });
+    ...hooks?.graphOptions,
+    onSkillReadFailure: hooks?.onSkillReadFailure,
+    readToolIds: toolContracts
+      .filter((contract) => contract.effect === "read_only")
+      .map((contract) => contract.name),
+    tierModels: { main: llm,
+      ...Object.fromEntries(
+        Object.entries(createGraph.tierModelIds ?? {}).map(([tier, model]) => [
+          tier,
+          llm.withModel(model),
+        ]),
+      ),
     },
+    ...(memoryNamespace ? { memoryNamespace } : {}),
+    readSkill,
     ...(opts.sourceContext !== undefined && {
       sourceContext: opts.sourceContext,
     }),
     ...(opts.program !== undefined && { program: opts.program }),
+    ...(opts.requestIntent !== undefined && {
+      requestIntent: opts.requestIntent,
+    }),
     llm,
     tools,
     ...(responseFormat !== undefined && { responseFormat }),
@@ -237,45 +306,59 @@ export function createInProcGraphRunner<TTool = unknown>(
       // Set up ALS context and invoke graph
       // Per #35 NO_MODEL_IN_ALS: model comes from configurable, not ALS
       // Per #36 ALS_ONLY_FOR_NON_SERIALIZABLE_DEPS: ALS holds only completionFn, tokenSink, toolExecFn
-      const result = await runWithCogniExecContext(
-        {
-          completionFn: completionFn as CompletionFn<unknown>,
-          tokenSink,
-          toolExecFn,
-        },
-        () =>
-          graph.invoke(
-            { messages },
-            {
-              signal: request.abortSignal,
-              // STABLE_THREAD_ID: a checkpointer-compiled graph requires a thread_id. One run = one
-              // thread (interrupt-resumable within the run, crash-resumable once Postgres-backed;
-              // isolated per mission tick); cross-tick working memory lives in the Store, not the
-              // checkpointer. graphId scopes it per node+program.
-              configurable: {
-                ...request.configurable,
-                thread_id:
-                  request.configurable.graphId != null
-                    ? `${request.configurable.graphId}:${request.runId}`
-                    : request.runId,
+      const invoke = async () => {
+        if (opts.trustedProgramId && persistence?.checkpointer) {
+          const existing = await checkpointer.get({
+            configurable: { thread_id: threadId },
+          });
+          if (existing) throw new Error("checkpoint_recovery_required");
+        }
+        if (opts.program || opts.trustedProgramId) {
+          runSignal?.throwIfAborted();
+          emit({ type: "status", phase: "thinking" });
+        }
+        return runWithCogniExecContext(
+          {
+            completionFn: completionFn as CompletionFn<unknown>,
+            tokenSink,
+            toolExecFn,
+          },
+          () =>
+            graph.invoke(
+              { messages },
+              {
+                signal: runSignal,
+                metadata: { cogniRunId: request.runId },
+                // STABLE_THREAD_ID: a checkpointer-compiled graph requires a thread_id. One run = one
+                // thread; same-run checkpoints require explicit recovery. Cross-run working
+                // memory lives in the Store, not the checkpointer.
+                configurable: {
+                  ...request.configurable,
+                  thread_id: threadId,
+                },
+                // A BACKSTOP against an infinite graph, never the real work bound — each
+                // graph self-limits (e.g. cogni's MAX_INVESTIGATE_STEPS). Must exceed any
+                // graph's budget: a gather round is 2 node visits, so this clears 2×the
+                // largest step cap with margin. Raise it with the caps, never below them.
+                recursionLimit: 100,
               },
-              // A BACKSTOP against an infinite graph, never the real work bound — each
-              // graph self-limits (e.g. cogni's MAX_INVESTIGATE_STEPS). Must exceed any
-              // graph's budget: a gather round is 2 node visits, so this clears 2×the
-              // largest step cap with margin. Raise it with the caps, never below them.
-              recursionLimit: 100,
-            }
-          )
-      );
+            ),
+        );
+      };
+      const result = await invoke();
 
       const assistantContent = extractAssistantContent(result.messages);
 
       // Extract structured response if present (from responseFormat graphs)
       const structuredOutput =
-        result.structuredResponse !== undefined
+        hooks?.projectOutput?.(assistantContent) ??
+        (result.structuredResponse !== undefined
           ? (result.structuredResponse as Record<string, unknown>)
-          : undefined;
+          : undefined);
 
+      // Harness model calls include internal child and summary text; only emit the final answer.
+      if ((opts.program || opts.trustedProgramId) && assistantContent)
+        emit({ type: "text_delta", delta: assistantContent });
       // ASSISTANT_FINAL_REQUIRED: exactly one per run
       emit({ type: "assistant_final", content: assistantContent });
       emit({ type: "done" });
@@ -292,7 +375,28 @@ export function createInProcGraphRunner<TTool = unknown>(
     } catch (error) {
       // Normalize error using duck-typed LlmError detection (kind/status properties)
       // Per ERROR_NORMALIZATION_ONCE: normalize at catch boundary
-      const code = normalizeErrorToExecutionCode(error);
+      // LangChain 1.4.4 brands the class statically; retain instanceof for local wrappers.
+      // Only middleware wrappers may be unwrapped, never arbitrary application causes.
+      let cause: unknown = error;
+      while (
+        (MiddlewareError.isInstance(cause) || cause instanceof MiddlewareError) &&
+        "cause" in cause &&
+        cause.cause !== undefined &&
+        cause.cause !== cause
+      ) {
+        cause = cause.cause;
+      }
+      const signal = request.abortSignal;
+      const cancelled =
+        cause === signal?.reason ||
+        (cause instanceof Error && cause.name === "AbortError") ||
+        (isAiExecutionError(cause) && cause.code === "aborted");
+      const code =
+        signal?.aborted && cancelled
+          ? isAiExecutionError(signal.reason) && signal.reason.code === "timeout"
+            ? "timeout"
+            : "aborted"
+          : normalizeErrorToExecutionCode(cause);
 
       // Capture error message for logging at adapter boundary (not sent to clients)
       const errorMessage =

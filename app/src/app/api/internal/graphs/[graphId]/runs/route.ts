@@ -22,7 +22,7 @@
  */
 
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
-import type { AiEvent } from "@cogni/ai-core";
+import { AiExecutionError, type AiEvent } from "@cogni/ai-core";
 import { RUN_STREAM_DEFAULT_TTL_SECONDS } from "@cogni/graph-execution-core";
 import { toUserId } from "@cogni/ids";
 import { SYSTEM_ACTOR } from "@cogni/ids/system";
@@ -225,8 +225,8 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     let runId = providedRunId ?? randomUUID();
 
     // --- 5. Compute request hash for idempotency ---
-    // API completions preclaim the slot before Temporal start and pass the
-    // authenticated hash through the workflow. Scheduled runs hash the exact
+    // API completions pass the authenticated hash through the workflow.
+    // Scheduled runs hash the exact
     // bytes delivered by Temporal so retries cannot drift by JSON key order.
     const suppliedRequestHash =
       typeof input.executionRequestHash === "string" &&
@@ -283,7 +283,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     if (idempotencyResult.status === "pending") {
       // Execution in progress - return 409 Conflict to signal retry later
       const pending = idempotencyResult.request;
-      if (suppliedRequestHash && pending.runId === runId) {
+      if (suppliedRequestHash && pending.runId === runId && pending.leaseExpiresAt === null) {
         // The completion facade durably claimed this exact request before
         // starting Temporal. This workflow owns the pending record.
         requestAlreadyClaimed = true;
@@ -538,8 +538,6 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     // Claim only after permanent request validation. INSERT races are resolved
     // by ON CONFLICT + re-read; expired pending leases are reclaimed atomically.
     if (requestAlreadyClaimed) {
-      // The completion facade created this exact slot before Temporal start.
-      // Adopt it by starting the same lease heartbeat used by scheduled runs.
       await container.executionRequestPort.heartbeatRequest(
         idempotencyKey,
         new Date(Date.now() + EXECUTION_LEASE_MS).toISOString()
@@ -593,8 +591,8 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         );
       }
       runId = claimResult.request.runId;
-      if (!stateKey) sessionId = `run:${runId}`;
     }
+    if (!stateKey) sessionId = `run:${runId}`;
 
     const accountService = container.accountsForUser(toUserId(actorUserId));
 
@@ -612,10 +610,17 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         accountService,
       });
 
+    const executionController = new AbortController();
+    const executionTimer = setTimeout(
+      () => executionController.abort(new AiExecutionError("timeout")),
+      15 * 60_000
+    );
+    try {
     // Create graph executor and run
     const executor = createGraphExecutor(executeStream, toUserId(actorUserId));
     const scopedExecutor = createScopedGraphExecutor({
       executor,
+      abortSignal: executionController.signal,
       preflightCheckFn,
       commitByoUsage: async (fact, log) => {
         await commitUsageFact(
@@ -655,6 +660,15 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     // Forward responseFormat if provided (enables structuredOutput in GraphRunResult).
     const responseFormat = resolveResponseFormat(input);
 
+    const ledgerRun = executionGrantId
+      ? await container.graphRunRepository.getRunByRunId(SYSTEM_ACTOR, runId)
+      : null;
+    const scheduled = ledgerRun?.runKind === "system_scheduled" &&
+      ledgerRun.triggerSource === "temporal_schedule" &&
+      ledgerRun.graphId === graphId && ledgerRun.triggerRef !== null &&
+      ledgerRun.scheduledFor !== null &&
+      idempotencyKey === `${ledgerRun.triggerRef}:${ledgerRun.scheduledFor.toISOString()}`;
+
     const result = scopedExecutor.runGraph(
       {
         runId,
@@ -667,6 +681,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       {
         actorUserId,
         requestId: runId,
+        requestIntent: scheduled ? "decide" : "answer",
         ...(sessionId ? { sessionId } : {}),
       }
     );
@@ -951,6 +966,9 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         error: final.error ?? "internal",
       };
       return NextResponse.json(errorResponse, { status: 200 });
+    }
+    } finally {
+      clearTimeout(executionTimer);
     }
   }
 );

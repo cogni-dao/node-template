@@ -33,11 +33,11 @@ import {
   createFrontendTesterGraph,
   FRONTEND_TESTER_GRAPH_NAME,
 } from "./graphs/frontend-tester/graph";
-import { COGNI_PROMPT, COGNI_TOOL_IDS } from "./graphs/mission/cogni";
 import {
   COGNI_DECIDE_PROMPT,
   COGNI_DECIDE_TOOL_IDS,
 } from "./graphs/mission/cogni-decide";
+import { COGNI_CHAT_PROMPT } from "./graphs/work-prioritizer/prompts";
 import {
   COGNI_READ_PROMPT,
   COGNI_READ_TOOL_IDS,
@@ -122,7 +122,7 @@ export const GRAPH_REPORT_CLOSE = "</graph_report>";
 export function graphReportLogFields(
   report: GraphReportDecl,
   runId: string,
-  structuredOutput: Record<string, unknown> | undefined
+  structuredOutput: Record<string, unknown> | undefined,
 ): Record<string, unknown>[] {
   const telemetry = structuredOutput?.telemetry;
   return telemetry && typeof telemetry === "object"
@@ -132,7 +132,7 @@ export function graphReportLogFields(
 
 /** The stream echo of a catalog-declared report (`<graph_report>{telemetry}</graph_report>`), or null. */
 export function graphReportDelta(
-  structuredOutput: Record<string, unknown> | undefined
+  structuredOutput: Record<string, unknown> | undefined,
 ): string | null {
   const telemetry = structuredOutput?.telemetry;
   return telemetry && typeof telemetry === "object"
@@ -143,7 +143,7 @@ export function graphReportDelta(
 const createAutoresearchCatalogEntry = (
   displayName: string,
   description: string,
-  systemPrompt: string
+  systemPrompt: string,
 ): CatalogEntry => ({
   displayName,
   description,
@@ -170,19 +170,19 @@ export const NODE_LANGGRAPH_CATALOG = {
   [AUTORESEARCH_SINGLE_LANE_GRAPH_NAME]: createAutoresearchCatalogEntry(
     "Autoresearch Single Lane",
     "Karpathy-style single-lane experiment loop with Thinker, Flasher, Eval, and Judge",
-    AUTORESEARCH_SINGLE_LANE_PROMPT
+    AUTORESEARCH_SINGLE_LANE_PROMPT,
   ),
 
   [AUTORESEARCH_SYNTROPY_LOOP_GRAPH_NAME]: createAutoresearchCatalogEntry(
     "Autoresearch Syntropy Loop",
     "Knowledge-syntropy autoresearch loop with Librarian, Archivist, Curator, Thinker, Flasher, and Judge",
-    AUTORESEARCH_SYNTROPY_LOOP_PROMPT
+    AUTORESEARCH_SYNTROPY_LOOP_PROMPT,
   ),
 
   [AUTORESEARCH_REGISTRY_SWARM_GRAPH_NAME]: createAutoresearchCatalogEntry(
     "Autoresearch Registry Swarm",
     "Registry-aware autoresearch tournament across conservative, retrieval, and topology lanes",
-    AUTORESEARCH_REGISTRY_SWARM_PROMPT
+    AUTORESEARCH_REGISTRY_SWARM_PROMPT,
   ),
 
   /**
@@ -198,7 +198,7 @@ export const NODE_LANGGRAPH_CATALOG = {
 
   /**
    * Poet graph - poetic AI assistant.
-   * Uses createReactAgent with tool-calling loop.
+   * Uses the shared Cogni agent with a tool-calling loop.
    */
   [POET_GRAPH_NAME]: {
     displayName: "Poet",
@@ -269,16 +269,15 @@ export const NODE_LANGGRAPH_CATALOG = {
   /**
    * Mission loop (story.5108 / story.5116) — every node runs it: a node schedules
    * `langgraph:work-prioritizer` in its own repo-spec, and a node with no approved goals changes
-   * nothing. Now powered by the shared Cogni engine (program "work-review" via createMissionGraph):
-   * it gathers across the read planes, then files exactly one core__edo_decide decision.
+   * nothing. Its legacy program identity is "work-review"; it is being moved to the shared
+   * bounded scoring profile and must not file a reflexive EDO.
    */
   [WORK_PRIORITIZER_GRAPH_NAME]: {
     displayName: "Mission Loop",
-    description:
-      "Source-grounded mission loop from the Cogni factory; files one goal-cited EDO decision",
-    toolIds: COGNI_TOOL_IDS,
+    description: "Source-grounded mission loop with bounded scores or no-op",
+    toolIds: COGNI_DECIDE_TOOL_IDS,
     graphFactory: createMissionGraph,
-    systemPrompt: COGNI_PROMPT,
+    systemPrompt: COGNI_DECIDE_PROMPT,
     program: "work-review",
     report: { event: "ai.work_prioritizer.cycle" },
   },
@@ -313,8 +312,16 @@ export const NODE_LANGGRAPH_CATALOG = {
       "Hub-grounded read-only chat: plans, delegates goal and work-item reading to a cheap subagent, answers; files nothing",
     toolIds: COGNI_READ_TOOL_IDS as readonly string[],
     graphFactory: createMissionGraph,
-    systemPrompt: COGNI_READ_PROMPT,
+    systemPrompt: COGNI_CHAT_PROMPT,
     program: "cogni-chat",
+  },
+  cogni: {
+    displayName: "Cogni",
+    description: "Node-grounded, read-only Cogni assistant",
+    toolIds: COGNI_READ_TOOL_IDS as readonly string[],
+    graphFactory: createMissionGraph,
+    systemPrompt: COGNI_READ_PROMPT,
+    program: "cogni",
   },
 } as const;
 
@@ -365,19 +372,6 @@ export const OPERATOR_LANGGRAPH_CATALOG = {
     systemPrompt: GIT_REVIEWER_PROMPT,
   },
 
-  /**
-   * Cogni mission agent (story.5116). The same factory used by chat. It gathers across the read
-   * planes, then files exactly one core__edo_decide decision — the run's only write.
-   */
-  cogni: {
-    displayName: "Cogni",
-    description: "Hub-grounded mission agent; files one EDO decision",
-    toolIds: COGNI_TOOL_IDS,
-    graphFactory: createMissionGraph,
-    systemPrompt: COGNI_PROMPT,
-    program: "cogni",
-  },
-
   // `cogni-chat` (READ mode) now lives in NODE_LANGGRAPH_CATALOG so every node can resolve it at
   // runtime; the operator inherits it through the `...NODE_LANGGRAPH_CATALOG` spread above.
 } as const;
@@ -409,6 +403,7 @@ export const NODE_LANGGRAPH_GRAPH_IDS = {
   "autoresearch-registry-swarm": `${LANGGRAPH_PROVIDER_ID}:${AUTORESEARCH_REGISTRY_SWARM_GRAPH_NAME}`,
   brain: `${LANGGRAPH_PROVIDER_ID}:${BRAIN_GRAPH_NAME}`,
   poet: `${LANGGRAPH_PROVIDER_ID}:${POET_GRAPH_NAME}`,
+  cogni: `${LANGGRAPH_PROVIDER_ID}:cogni`,
   ponderer: `${LANGGRAPH_PROVIDER_ID}:${PONDERER_GRAPH_NAME}`,
   research: `${LANGGRAPH_PROVIDER_ID}:${RESEARCH_GRAPH_NAME}`,
   "pr-review": `${LANGGRAPH_PROVIDER_ID}:${PR_REVIEW_GRAPH_NAME}`,
@@ -422,7 +417,6 @@ export const NODE_LANGGRAPH_GRAPH_IDS = {
 } as const;
 
 export const OPERATOR_LANGGRAPH_GRAPH_IDS = {
-  cogni: `${LANGGRAPH_PROVIDER_ID}:cogni`,
   ...NODE_LANGGRAPH_GRAPH_IDS,
   "operating-review": `${LANGGRAPH_PROVIDER_ID}:${OPERATING_REVIEW_GRAPH_NAME}`,
   "pr-manager": `${LANGGRAPH_PROVIDER_ID}:${PR_MANAGER_GRAPH_NAME}`,

@@ -52,16 +52,20 @@ export type MessageGraphOutput = { messages: BaseMessage[] };
  * Extend per-graph when additional dependencies are needed.
  */
 export interface CreateReactAgentGraphOptions {
-  /** Sanitized observation of isolated SDK state operations; never arbitrary scratch content. */
-  readonly onInternalToolEvent?: (event: {
-    id: string;
-    name: string;
-    status: "start" | "success" | "error";
-  }) => void;
+  /** Current-run observations created only from successful host tool executions. */
+  readonly programState?: unknown;
+  readonly onSkillReadFailure?: () => void;
+  /** Trusted host graph selection, never model-configurable. */
+  readonly requestIntent?: "answer" | "decide";
+  readonly memoryNamespace?: readonly string[];
+  readonly readSkill?: (id: string) => Promise<string>;
+  readonly tierModels?: Readonly<Record<string, LanguageModelLike>>;
+  /** Read-only tool ids classified by the trusted host's contracts. */
+  readonly readToolIds?: readonly string[];
   /** Host-bound source provenance, never accepted from model/tool arguments. */
   readonly sourceContext?: {
     readonly nodeId: string;
-    readonly origin: string;
+    readonly origin?: string;
     readonly mission?: {
       readonly content: string;
       readonly sourceRef: string;
@@ -92,16 +96,7 @@ export interface CreateReactAgentGraphOptions {
   };
   /** Optional system prompt override. Used by mission-engine graphs that are configured via catalog. */
   readonly systemPrompt?: string;
-  /**
-   * LangGraph persistence foundation (langgraph-persistence). When present, the engine compiles
-   * with a checkpointer — per-run/thread state under a stable `thread_id`, resumable within a run —
-   * and a `Store` for cross-thread working memory. This is the prerequisite for deep-agent depth
-   * (write_todos planning, reflection, SubAgentMiddleware). Absent ⇒ the graph compiles with no
-   * persistence, so the pure structure still renders in langgraph dev. The host injects a stable
-   * `thread_id` at the invoke seam; the checkpointer/store backend is dev `MemorySaver`/`InMemoryStore`
-   * and prod `PostgresSaver`/store (`.setup()` at deploy, never at request time). Durable syntropy
-   * memory remains the hub; the checkpointer/store hold only per-run working state.
-   */
+  /** Host-owned saver and store. In-memory data is process-lifetime only; a checkpoint does not imply safe automatic resume or side-effect replay. */
   readonly checkpointer?: BaseCheckpointSaver;
   readonly store?: BaseStore;
 }
