@@ -204,38 +204,49 @@ function createOpenAiSseStream(
   includeUsage: boolean,
   log: RequestContext["log"],
   cancelSubscription: () => void,
-  requestSignal: AbortSignal
+  requestSignal: AbortSignal,
+  reqId: string
 ): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   const iterator = aiStream[Symbol.asyncIterator]();
   let timer: ReturnType<typeof setInterval> | undefined;
   let closed = false;
+  const startedAt = performance.now();
   let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
-  const cleanup = () => {
+  const cleanup = (reason: "normal_complete" | "backend_error" | "request_abort" | "consumer_cancel" | "write_or_stream_error", errorCode?: string) => {
     if (closed) return;
     closed = true;
     if (timer) clearInterval(timer);
-    requestSignal.removeEventListener("abort", cleanup);
-    cancelSubscription();
+    requestSignal.removeEventListener("abort", onRequestAbort);
+    try { cancelSubscription(); } catch { /* already detached */ }
     try { void iterator.return?.().catch(() => undefined); } catch { /* already closed */ }
     try { streamController?.close(); } catch { /* already closed or cancelled */ }
+    logEvent(log, EVENT_NAMES.AI_CHAT_STREAM_CLOSED, {
+      reqId, routeId: "chat.completions",
+      durationMs: performance.now() - startedAt,
+      reason,
+      status: reason === "normal_complete" || reason === "backend_error" ? "local_closed" : "interrupted",
+      outcome: reason === "normal_complete" ? "success" : "error",
+      ...(errorCode ? { errorCode } : {}),
+    });
   };
+  const onRequestAbort = () => cleanup("request_abort", "aborted");
 
   return new ReadableStream({
     cancel() {
-      cleanup();
+      cleanup("consumer_cancel", "aborted");
     },
     async start(controller) {
       streamController = controller;
       if (requestSignal.aborted) {
-        cleanup();
+        onRequestAbort();
         return;
       }
-      requestSignal.addEventListener("abort", cleanup, { once: true });
+      requestSignal.addEventListener("abort", onRequestAbort, { once: true });
       timer = setInterval(() => {
         if (!closed) {
           try { controller.enqueue(encoder.encode(": keepalive\n\n")); }
-          catch { cleanup(); }
+          catch { cleanup("write_or_stream_error", "internal"); }
         }
       }, 15_000);
       try {
@@ -332,16 +343,7 @@ function createOpenAiSseStream(
         const result = await final;
         if (closed) return;
         if (!result.ok) {
-          log.error({ error: result.error }, "Stream completed with error");
           const mapped = executionErrorToOpenAiError(result.error);
-          logEvent(log, EVENT_NAMES.AI_COMPLETION, {
-            reqId: completionId.replace("chatcmpl-", ""),
-            routeId: "chat.completions",
-            streaming: true,
-            model,
-            outcome: "error",
-            finishReason: "error",
-          });
           controller.enqueue(
             encoder.encode(
               sseEncode(
@@ -357,20 +359,10 @@ function createOpenAiSseStream(
             )
           );
           controller.close();
+          cleanup("backend_error", result.error);
           return;
         }
         const finishReason = toOpenAiFinishReason(result.finishReason);
-
-        logEvent(log, EVENT_NAMES.AI_COMPLETION, {
-          reqId: completionId.replace("chatcmpl-", ""),
-          routeId: "chat.completions",
-          streaming: true,
-          model,
-          outcome: "success",
-          finishReason,
-          promptTokens: result.usage.promptTokens,
-          completionTokens: result.usage.completionTokens,
-        });
 
         // Final chunk with finish_reason
         const finalChunk: ChatCompletionChunk = {
@@ -413,31 +405,22 @@ function createOpenAiSseStream(
         // Terminate with [DONE]
         controller.enqueue(encoder.encode(sseEncode("[DONE]")));
         controller.close();
-      } catch (error) {
+        cleanup("normal_complete");
+      } catch {
         if (closed) return;
-        // On error, emit a final error chunk and close
-        const errorChunk: ChatCompletionChunk = {
-          id: completionId,
-          object: "chat.completion.chunk",
-          created,
-          model,
-          choices: [
-            {
-              index: 0,
-              delta: {},
-              finish_reason: "stop",
-            },
-          ],
-        };
-        controller.enqueue(
-          encoder.encode(sseEncode(JSON.stringify(errorChunk)))
-        );
-        controller.enqueue(encoder.encode(sseEncode("[DONE]")));
-        controller.close();
-        // Log the error — wrapper can't catch errors from inside a ReadableStream
-        log.error({ error }, "SSE stream error");
+        const mapped = executionErrorToOpenAiError("internal");
+        try {
+          controller.enqueue(encoder.encode(sseEncode(JSON.stringify({
+            error: { message: mapped.message, type: mapped.type, param: null, code: "internal" },
+          }))));
+          controller.close();
+        } catch {
+          // The stream may already be unwritable.
+        } finally {
+          cleanup("write_or_stream_error", "internal");
+        }
       } finally {
-        cleanup();
+        if (!closed) cleanup("write_or_stream_error", "internal");
       }
     },
   });
@@ -522,7 +505,8 @@ export const POST = wrapRouteHandlerWithLogging(
           includeUsage,
           ctx.log,
           () => subscriptionController.abort(),
-          request.signal
+          request.signal,
+          ctx.reqId
         );
 
         return new NextResponse(sseStream, {

@@ -31,6 +31,7 @@ import {
   createTemporalClientMock,
 } from "@tests/_fixtures/ai/completion-facade-setup";
 import { NextRequest } from "next/server";
+import pino from "pino";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { LlmError } from "@/ports";
 import { makeNoopLogger } from "@/shared/observability";
@@ -168,6 +169,15 @@ function setupMocks(
   return { executionRequestPort, runStream, temporal };
 }
 
+function captureRequestLogs() {
+  const lines: Array<Record<string, unknown>> = [];
+  const log = pino({ base: { nodeId: "node-sentinel" } }, {
+    write: (line: string) => { lines.push(JSON.parse(line)); },
+  });
+  Object.assign(mockGetContainer(), { log });
+  return lines;
+}
+
 /**
  * Set up mocks where the workflow start throws a specific error.
  */
@@ -251,6 +261,98 @@ describe("OpenAI Endpoint Parity (POST /v1/chat/completions)", () => {
     await expect(accepted.final).resolves.toMatchObject({ ok: false, error: "aborted" });
     await accepted.stream[Symbol.asyncIterator]().return?.();
     expect(returned).toBe(1);
+  });
+
+  describe("stream close evidence", () => {
+    it("preserves the nonstreaming completion event", async () => {
+      setupMocks();
+      const lines = captureRequestLogs();
+      const { POST } = await import("@/app/api/v1/chat/completions/route");
+      const response = await POST(new NextRequest("http://localhost:3000/api/v1/chat/completions", {
+        method: "POST", body: JSON.stringify(createCompletionRequest({ stream: false })),
+      }));
+      expect(response.status).toBe(200);
+      expect(lines.filter((line) => line.event === "ai.completion")).toHaveLength(1);
+      expect(lines.filter((line) => line.event === "ai.chat_stream_closed")).toHaveLength(0);
+    });
+
+    it.each(["throw", "reject"] as const)("does not duplicate close if iterator return %ss", async (failure) => {
+      setupMocks();
+      const lines = captureRequestLogs();
+      let count = 0;
+      Object.assign(mockGetContainer(), { runStream: {
+        subscribe: () => ({ [Symbol.asyncIterator]: () => ({
+          next: async () => {
+            const step = count++;
+            return step === 0
+              ? { done: false, value: { id: "1", event: { type: "status", phase: "thinking" } } }
+              : step === 1
+                ? { done: false, value: { id: "2", event: { type: "done", finishReason: "stop" } } }
+                : { done: true, value: undefined };
+          },
+          return: () => { if (failure === "throw") throw new Error("private-return"); return Promise.reject(new Error("private-return")); },
+        }) }),
+      } });
+      const { POST } = await import("@/app/api/v1/chat/completions/route");
+      const response = await POST(new NextRequest("http://localhost:3000/api/v1/chat/completions", {
+        method: "POST", body: JSON.stringify(createCompletionRequest({ stream: true })),
+      }));
+      await response.text();
+      expect(lines.filter((line) => line.event === "ai.chat_stream_closed")).toEqual([expect.objectContaining({ reason: "normal_complete" })]);
+      expect(JSON.stringify(lines)).not.toContain("private-return");
+    });
+
+    it.each(["success", "backend-error", "relay-end", "relay-throw"] as const)(
+      "records one private close within the real request log budget for %s", async (mode) => {
+        setupMocks();
+        const lines: Array<Record<string, unknown>> = [];
+        const base = pino({ base: { nodeId: "node-sentinel" } }, {
+          write: (line: string) => { lines.push(JSON.parse(line)); },
+        });
+        Object.assign(mockGetContainer(), { log: base, runStream: {
+          subscribe: async function* () {
+            yield { id: "1", event: { type: "status" as const, phase: "thinking" as const } };
+            if (mode === "relay-throw") throw new Error("private-exception-sentinel");
+            if (mode === "relay-end") return;
+            if (mode === "backend-error") {
+              yield { id: "2", event: { type: "error" as const, error: "timeout" as const } };
+              return;
+            }
+            yield { id: "2", event: { type: "text_delta" as const, delta: "private-response-sentinel" } };
+            yield { id: "3", event: { type: "done" as const, usage: { promptTokens: 2, completionTokens: 3 } } };
+          },
+        } });
+        const { POST } = await import("@/app/api/v1/chat/completions/route");
+        const response = await POST(new NextRequest("http://localhost:3000/api/v1/chat/completions", {
+          method: "POST", headers: { "x-request-id": "safe-request-id", "x-private": "private-header-sentinel" },
+          body: JSON.stringify(createCompletionRequest({ stream: true, messages: [{ role: "user", content: "private-prompt-sentinel" }] })),
+        }));
+        const body = await response.text();
+        const closes = lines.filter((line) => line.event === "ai.chat_stream_closed");
+        expect(closes).toHaveLength(1);
+        expect(closes[0]).toMatchObject({
+          reqId: "safe-request-id", routeId: "chat.completions",
+          userId: TEST_SESSION_USER_1.id, nodeId: "node-sentinel",
+          reason: mode === "success" ? "normal_complete" : "backend_error",
+          status: "local_closed", outcome: mode === "success" ? "success" : "error",
+          ...(mode === "success" ? {} : { errorCode: mode === "backend-error" ? "timeout" : "internal" }),
+        });
+        expect(Object.keys(closes[0] ?? {}).sort()).toEqual([
+          "durationMs", "event", "level", "method", "msg", "nodeId", "outcome",
+          "reason", "reqId", "route", "routeId", "status", "time", "traceId", "userId",
+          ...(mode === "success" ? [] : ["errorCode"]),
+        ].sort());
+        expect(closes[0]?.traceId).toEqual(expect.any(String));
+        expect(closes[0]?.durationMs).toEqual(expect.any(Number));
+        expect(lines.length).toBeLessThanOrEqual(4);
+        expect(lines.some((line) => line.event === "ai.completion")).toBe(false);
+        if (mode.startsWith("relay")) expect(lines.some((line) => line.event === "ai.relay.pump_error")).toBe(true);
+        const serialized = JSON.stringify(lines);
+        for (const secret of ["private-prompt-sentinel", "private-response-sentinel", "private-exception-sentinel", "private-header-sentinel"]) expect(serialized).not.toContain(secret);
+        if (mode === "success") expect(body).toContain("data: [DONE]");
+        else expect(body).toContain(`"code":"${mode === "backend-error" ? "timeout" : "internal"}"`);
+      },
+    );
   });
 
   describe("first-event acceptance cleanup", () => {
@@ -551,6 +653,7 @@ describe("OpenAI Endpoint Parity (POST /v1/chat/completions)", () => {
 
     it("sends keepalive comments while the subscriber is quiet and stops on cancel", async () => {
       setupMocks();
+      const records = captureRequestLogs();
       const container = mockGetContainer();
       let subscriberSignal: AbortSignal | undefined;
       Object.assign(container, { runStream: {
@@ -575,12 +678,14 @@ describe("OpenAI Endpoint Parity (POST /v1/chat/completions)", () => {
         expect(new TextDecoder().decode((await heartbeat).value)).toBe(": keepalive\n\n");
         await reader.cancel();
         expect(subscriberSignal?.aborted).toBe(true);
+        expect(records.filter((line) => line.event === "ai.chat_stream_closed")).toEqual([expect.objectContaining({ reason: "consumer_cancel", errorCode: "aborted" })]);
         expect(vi.getTimerCount()).toBe(0);
       } finally { vi.useRealTimers(); }
     });
 
     it("closes on request abort and ignores a late event", async () => {
       setupMocks();
+      const records = captureRequestLogs();
       const container = mockGetContainer();
       let release!: () => void;
       const delayed = new Promise<void>((resolve) => { release = resolve; });
@@ -604,10 +709,12 @@ describe("OpenAI Endpoint Parity (POST /v1/chat/completions)", () => {
       const next = await reader.read();
       expect(next.done).toBe(true);
       release();
+      expect(records.filter((line) => line.event === "ai.chat_stream_closed")).toEqual([expect.objectContaining({ reason: "request_abort", errorCode: "aborted" })]);
     });
 
     it("closes a stream when its request aborts before stream creation", async () => {
       setupMocks();
+      const records = captureRequestLogs();
       const abort = new AbortController();
       let subscriber: AbortSignal | undefined;
       Object.assign(mockGetContainer(), { runStream: {
@@ -623,6 +730,7 @@ describe("OpenAI Endpoint Parity (POST /v1/chat/completions)", () => {
       }));
       expect(await response.text()).toBe("");
       expect(subscriber?.aborted).toBe(true);
+      expect(records.filter((line) => line.event === "ai.chat_stream_closed")).toEqual([expect.objectContaining({ reason: "request_abort", errorCode: "aborted" })]);
     });
 
     it.each(["success", "error"] as const)("cleans the subscriber after terminal %s", async (outcome) => {
@@ -647,6 +755,7 @@ describe("OpenAI Endpoint Parity (POST /v1/chat/completions)", () => {
 
     it("cleans up if the heartbeat cannot enqueue", async () => {
       setupMocks();
+      const records = captureRequestLogs();
       let subscriber: AbortSignal | undefined;
       Object.assign(mockGetContainer(), { runStream: {
         subscribe: async function* (_runId: string, signal: AbortSignal) {
@@ -669,8 +778,86 @@ describe("OpenAI Endpoint Parity (POST /v1/chat/completions)", () => {
         await vi.advanceTimersByTimeAsync(15_000);
         expect(subscriber?.aborted).toBe(true);
         expect((await reader.read()).done).toBe(true);
+        expect(records.filter((line) => line.event === "ai.chat_stream_closed")).toEqual([expect.objectContaining({ reason: "write_or_stream_error", errorCode: "internal" })]);
         enqueue.mockRestore();
       } finally { vi.useRealTimers(); }
+    });
+
+    it("records close even if both initial and error-frame enqueues fail", async () => {
+      setupMocks();
+      const records = captureRequestLogs();
+      const enqueue = vi.spyOn(ReadableStreamDefaultController.prototype, "enqueue")
+        .mockImplementationOnce(() => { throw new Error("private-first"); })
+        .mockImplementationOnce(() => { throw new Error("private-second"); });
+      try {
+        const { POST } = await import("@/app/api/v1/chat/completions/route");
+        const response = await POST(new NextRequest("http://localhost:3000/api/v1/chat/completions", {
+          method: "POST", body: JSON.stringify(createCompletionRequest({ stream: true })),
+        }));
+        await response.text();
+        expect(records.filter((line) => line.event === "ai.chat_stream_closed")).toEqual([expect.objectContaining({ reason: "write_or_stream_error", errorCode: "internal" })]);
+        expect(JSON.stringify(records)).not.toContain("private-first");
+        expect(JSON.stringify(records)).not.toContain("private-second");
+      } finally { enqueue.mockRestore(); }
+    });
+
+    it("keeps the first abort reason when consumer cancellation follows", async () => {
+      setupMocks();
+      const records = captureRequestLogs();
+      let release!: () => void;
+      const delayed = new Promise<void>((resolve) => { release = resolve; });
+      Object.assign(mockGetContainer(), { runStream: {
+        subscribe: async function* () {
+          yield { id: "1", event: { type: "status" as const, phase: "thinking" as const } };
+          await delayed;
+        },
+      } });
+      const abort = new AbortController();
+      const { POST } = await import("@/app/api/v1/chat/completions/route");
+      const response = await POST(new NextRequest("http://localhost:3000/api/v1/chat/completions", {
+        method: "POST", body: JSON.stringify(createCompletionRequest({ stream: true })), signal: abort.signal,
+      }));
+      if (!response.body) throw new Error("missing stream");
+      const reader = response.body.getReader();
+      await reader.read();
+      await reader.read();
+      abort.abort();
+      await reader.cancel();
+      release();
+      expect(records.filter((line) => line.event === "ai.chat_stream_closed")).toEqual([expect.objectContaining({ reason: "request_abort", errorCode: "aborted" })]);
+    });
+
+    it("reports internal error when an initial write throws", async () => {
+      setupMocks();
+      const records = captureRequestLogs();
+      const enqueue = vi.spyOn(ReadableStreamDefaultController.prototype, "enqueue").mockImplementationOnce(() => { throw new Error("private-exception-sentinel"); });
+      try {
+        const { POST } = await import("@/app/api/v1/chat/completions/route");
+        const response = await POST(new NextRequest("http://localhost:3000/api/v1/chat/completions", {
+          method: "POST", body: JSON.stringify(createCompletionRequest({ stream: true })),
+        }));
+        const text = await response.text();
+        expect(text).toContain('"code":"internal"');
+        expect(text).not.toContain("[DONE]");
+        expect(text).not.toContain('"finish_reason":"stop"');
+        expect(records.filter((line) => line.event === "ai.chat_stream_closed")).toEqual([expect.objectContaining({ reason: "write_or_stream_error", errorCode: "internal" })]);
+        expect(JSON.stringify(records)).not.toContain("private-exception-sentinel");
+      } finally { enqueue.mockRestore(); }
+    });
+
+    it("records an error if local terminal close throws", async () => {
+      setupMocks();
+      const records = captureRequestLogs();
+      const close = vi.spyOn(ReadableStreamDefaultController.prototype, "close").mockImplementationOnce(() => { throw new Error("private-close-sentinel"); });
+      try {
+        const { POST } = await import("@/app/api/v1/chat/completions/route");
+        const response = await POST(new NextRequest("http://localhost:3000/api/v1/chat/completions", {
+          method: "POST", body: JSON.stringify(createCompletionRequest({ stream: true })),
+        }));
+        await response.text();
+        expect(records.filter((line) => line.event === "ai.chat_stream_closed")).toEqual([expect.objectContaining({ reason: "write_or_stream_error", errorCode: "internal" })]);
+        expect(JSON.stringify(records)).not.toContain("private-close-sentinel");
+      } finally { close.mockRestore(); }
     });
 
     it("should emit role announcement as first chunk (OpenAI convention)", async () => {
