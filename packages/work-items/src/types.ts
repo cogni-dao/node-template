@@ -56,21 +56,12 @@ export type WorkItemStatus =
 // Aligned with docs/spec/identity-model.md actor kinds: user | agent | system.
 // "org" kind omitted — not applicable to work item assignment.
 
-export type SubjectRef =
-  | { readonly kind: "user"; readonly userId: string }
-  | { readonly kind: "agent"; readonly agentId: string }
-  | { readonly kind: "system"; readonly serviceId: string };
+export type SubjectRef = Readonly<WorkItemDto["assignees"][number]>;
 
 // ── External references ───────────────────────────────
 // Backend-agnostic: works with GitHub, GitLab, Plane, OpenProject.
 
-export type ExternalRef = {
-  readonly system: string;
-  readonly kind: string;
-  readonly externalId?: string;
-  readonly url?: string;
-  readonly title?: string;
-};
+export type ExternalRef = Readonly<WorkItemDto["externalRefs"][number]>;
 
 // ── Relations ─────────────────────────────────────────
 // Canonical direction only — store "blocks", derive "blocked_by" at query time.
