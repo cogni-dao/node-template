@@ -123,7 +123,8 @@ export function fromBaseMessage(msg: BaseMessage | BaseMessageLike): Message {
     case "system":
       return {
         role: "system",
-        content: typeof baseMsg.content === "string" ? baseMsg.content : "",
+        // SDK middleware combines system instructions as text blocks.
+        content: baseMsg.text,
       };
 
     case "ai": {

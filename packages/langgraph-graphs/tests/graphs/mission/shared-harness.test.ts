@@ -11,6 +11,7 @@ import {
 	cogniProfile,
 	createCogniProgram,
 } from "../../../src/graphs/mission/cogni";
+import { createMissionGraph } from "../../../src/graphs/mission/graph";
 import { RunReceipts } from "../../../src/graphs/mission/receipts";
 import { createScoresGuard } from "../../../src/graphs/mission/score-guard";
 import { createPoetGraph } from "../../../src/graphs/poet/graph";
@@ -18,6 +19,49 @@ import { createInProcGraphRunner } from "../../../src/inproc/runner";
 import type { CompletionFn } from "../../../src/inproc/types";
 
 describe("shared cogni harness", () => {
+	it("passes the SDK system instructions and fresh host clock to the billed completion", async () => {
+		const seen: string[] = [];
+		const completionFn: CompletionFn = (request) => {
+			seen.push(
+				...request.messages
+					.filter((message) => message.role === "system")
+					.map((message) => message.content),
+			);
+			return {
+				stream: (async function* () {})(),
+				final: Promise.resolve({ ok: true as const, content: "Done" }),
+			};
+		};
+		const run = createInProcGraphRunner({
+			program: "work-review",
+			sourceContext: {
+				nodeId: "node",
+				origin: "https://node.example",
+				mission: {
+					content: "Mission clock control",
+					sourceRef: "mission",
+					buildSha: null,
+				},
+			},
+			createGraph: createMissionGraph,
+			completionFn,
+			createToolExecFn: () => async () => ({ ok: true, value: {} }),
+			toolContracts: [],
+			request: {
+				runId: "clock-control",
+				messages: [{ role: "user", content: "Hello" }],
+				configurable: { model: "test-model", toolIds: [] },
+			},
+		});
+		for await (const _event of run.stream) {
+			/* drain */
+		}
+		expect((await run.final).ok).toBe(true);
+		expect(seen.join("\n")).toContain("Mission clock control");
+		expect(seen.join("\n")).toContain("Host-owned current UTC time");
+		expect(seen.join("\n")).toContain(new Date().getUTCFullYear().toString());
+	});
+
 	it("uses the SDK task limit before a fifth delegated child", async () => {
 		let turn = 0;
 		let children = 0;
