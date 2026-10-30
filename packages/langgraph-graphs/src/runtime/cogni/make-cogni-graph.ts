@@ -57,7 +57,9 @@ import { toLangChainToolsFromContext } from "./tools";
  * ```
  */
 export function makeCogniGraph<
-  TCreateGraph extends (opts: CreateReactAgentGraphOptions) => unknown,
+  TCreateGraph extends ((opts: CreateReactAgentGraphOptions) => unknown) & {
+    readonly tierModelIds?: Readonly<Record<string, string>>;
+  },
 >(opts: {
   /** Graph name (for error messages) */
   readonly name: string;
@@ -101,6 +103,13 @@ export function makeCogniGraph<
   // Create graph using factory - cast preserves concrete return type
   return createGraph({
     llm,
+    tierModels: {
+      main: llm,
+      ...Object.fromEntries(Object.entries(createGraph.tierModelIds ?? {}).map(([tier, model]) => {
+        if (!model.trim() || tier === "main") throw new Error("invalid_model_tier");
+        return [tier, llm.withModel(model)];
+      })),
+    },
     tools,
     ...(opts.program ? { program: opts.program } : {}),
   }) as ReturnType<TCreateGraph>;

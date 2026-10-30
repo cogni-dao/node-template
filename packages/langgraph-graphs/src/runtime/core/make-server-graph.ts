@@ -18,11 +18,31 @@
 
 import { type CatalogBoundTool, TOOL_CATALOG } from "@cogni/ai-tools";
 import type { StructuredToolInterface } from "@langchain/core/tools";
-import { initChatModel } from "langchain/chat_models/universal";
+import { ensureConfig } from "@langchain/core/runnables";
+import { ConfigurableModel, initChatModel } from "langchain/chat_models/universal";
 
 import type { CreateReactAgentGraphOptions } from "../../graphs/types";
 import { createDevToolExecFn } from "./dev-tool-exec";
 import { toLangChainToolsCaptured } from "./langchain-tools";
+
+/** Resolve implicit LangGraph configuration before the universal model chooses its provider model. */
+class InvocationConfiguredModel extends ConfigurableModel {
+  override _modelParams(config?: Parameters<ConfigurableModel["_modelParams"]>[0]) {
+    const resolved = ensureConfig(config);
+    if (!resolved.configurable?.model) throw new Error("invocation_model_required");
+    return super._modelParams(resolved);
+  }
+
+  override bindTools(...args: Parameters<ConfigurableModel["bindTools"]>) {
+    const bound = super.bindTools(...args);
+    return new InvocationConfiguredModel({
+      defaultConfig: bound._defaultConfig,
+      configurableFields: bound._configurableFields,
+      configPrefix: bound._configPrefix,
+      queuedMethodOperations: bound._queuedMethodOperations,
+    });
+  }
+}
 
 /**
  * Create a compiled graph for langgraph dev server.
@@ -51,7 +71,9 @@ import { toLangChainToolsCaptured } from "./langchain-tools";
  * ```
  */
 export async function makeServerGraph<
-  TCreateGraph extends (opts: CreateReactAgentGraphOptions) => unknown,
+  TCreateGraph extends ((opts: CreateReactAgentGraphOptions) => unknown) & {
+    readonly tierModelIds?: Readonly<Record<string, string>>;
+  },
 >(opts: {
   /** Static dev entry assignment. Source bindings remain unavailable unless supplied by the node host. */
   readonly program?: CreateReactAgentGraphOptions["program"];
@@ -72,12 +94,27 @@ export async function makeServerGraph<
 
   // Initialize configurable LLM (model comes from RunnableConfig.configurable.model)
   // Per CONFIGURABLE_USER_SERVER_SET: include "user" for billing correlation
-  const llm = await initChatModel(undefined, {
+  const llm = new InvocationConfiguredModel({
+    defaultConfig: {
+      modelProvider: "openai",
+      configuration: { baseURL },
+      apiKey,
+    },
     configurableFields: ["model", "user"],
-    modelProvider: "openai",
-    configuration: { baseURL },
-    apiKey,
   });
+
+  const tierModels: NonNullable<CreateReactAgentGraphOptions["tierModels"]> = {
+    main: llm,
+    ...Object.fromEntries(await Promise.all(Object.entries(createGraph.tierModelIds ?? {}).map(async ([tier, model]) => {
+      if (!model.trim() || tier === "main") throw new Error("invalid_model_tier");
+      return [tier, await initChatModel(model, {
+        modelProvider: "openai",
+        configurableFields: ["user"],
+        configuration: { baseURL },
+        apiKey,
+      })];
+    }))),
+  };
 
   // Resolve bound tools from TOOL_CATALOG
   const boundTools: Readonly<Record<string, CatalogBoundTool>> =
@@ -111,6 +148,7 @@ export async function makeServerGraph<
   // Create graph using factory - cast preserves concrete return type
   return createGraph({
     llm,
+    tierModels,
     tools,
     ...(opts.program ? { program: opts.program } : {}),
   }) as ReturnType<TCreateGraph>;

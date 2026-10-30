@@ -10,7 +10,7 @@ import {
 } from "@langchain/core/messages";
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { FakeListChatModel } from "@langchain/core/utils/testing";
-import { InMemoryStore, MemorySaver } from "@langchain/langgraph";
+import { InMemoryStore, MemorySaver, StateGraph, MessagesAnnotation } from "@langchain/langgraph";
 /** Public runner control: poet must expose the same planning and delegation loop. */
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
@@ -25,8 +25,8 @@ import {
 } from "../../../src/graphs/mission/cogni";
 import { HubSkillBackend } from "../../../src/graphs/cogni/skill-backend";
 import { createMissionGraph } from "../../../src/graphs/mission/graph";
-import { RunReceipts } from "../../../src/graphs/mission/receipts";
-import { createScoresGuard } from "../../../src/graphs/mission/score-guard";
+import { RunReceipts } from "../../../src/graphs/work-prioritizer/receipts";
+import { createScoresGuard } from "../../../src/graphs/work-prioritizer/score-guard";
 import { createPoetGraph } from "../../../src/graphs/poet/graph";
 import {
 	createPrioritizerRunHooks,
@@ -38,6 +38,10 @@ import type {
 	CompletionFn,
 	InProcRunnerOptions,
 } from "../../../src/inproc/types";
+import { makeCogniGraph } from "../../../src/runtime/cogni/make-cogni-graph";
+import { makeServerGraph } from "../../../src/runtime/core/make-server-graph";
+import { runWithCogniExecContext } from "../../../src/runtime/cogni/exec-context";
+import type { CreateReactAgentGraphOptions } from "../../../src/graphs/types";
 import { fromBaseMessage } from "../../../src/runtime/core/message-converters";
 
 // Custom test programs explicitly opt into the scoring observer; the generic runner does not.
@@ -52,6 +56,50 @@ function createInProcGraphRunner(opts: InProcRunnerOptions) {
 }
 
 describe("shared cogni harness", () => {
+	it("binds declared billed tiers and configless summaries per concurrent invocation", async () => {
+		const models: string[] = [];
+		const factory = Object.assign((opts: CreateReactAgentGraphOptions) => new StateGraph(MessagesAnnotation)
+			.addNode("summary", async () => {
+				await opts.llm.invoke("root summary");
+				const child = opts.tierModels?.flash;
+				if (!child) throw new Error("missing flash tier");
+				await child.invoke("child summary");
+				return {};
+			}).addEdge("__start__", "summary").addEdge("summary", "__end__").compile(), { tierModelIds: { flash: "deepseek-v4-flash" } });
+		const graph = makeCogniGraph({ name: "control", createGraph: factory, toolIds: [] });
+		await Promise.all(["root-a", "root-b"].map((model) => runWithCogniExecContext({
+			completionFn: (request) => {
+				models.push(request.model);
+				return { stream: (async function* () {})(), final: Promise.resolve({ ok: true, content: "summary" }) };
+			},
+			tokenSink: { push: () => {} },
+			toolExecFn: async () => { throw new Error("unexpected tool"); },
+		}, () => graph.invoke({ messages: [] }, { configurable: { model } }))));
+		expect(models.sort()).toEqual(["deepseek-v4-flash", "deepseek-v4-flash", "root-a", "root-b"]);
+		await expect(graph.invoke({ messages: [] })).rejects.toThrow("config.configurable.model is required");
+	});
+
+	it("resolves server summary configuration before selecting the LiteLLM model", async () => {
+		const factory = Object.assign((opts: CreateReactAgentGraphOptions) => new StateGraph(MessagesAnnotation)
+			.addNode("summary", async () => {
+				const root = opts.llm as import("langchain/chat_models/universal").ConfigurableModel;
+				expect(root._modelParams().model).toBe("trusted-root");
+				expect(root.bindTools([])._modelParams().model).toBe("trusted-root");
+				const child = opts.tierModels?.flash as import("langchain/chat_models/universal").ConfigurableModel;
+				expect(child._defaultConfig?.model).toBe("deepseek-v4-flash");
+				expect(child._modelParams().model).toBeUndefined();
+				return {};
+			}).addEdge("__start__", "summary").addEdge("summary", "__end__").compile(), { tierModelIds: { flash: "deepseek-v4-flash" } });
+		const graph = await makeServerGraph({ name: "control", createGraph: factory, toolIds: [] });
+		await graph.invoke({ messages: [] }, { configurable: { model: "trusted-root" } });
+	});
+
+	it("rejects a missing Flash tier in both thin entrypoint helpers", async () => {
+		const undeclaredPoet = (opts: CreateReactAgentGraphOptions) => createPoetGraph(opts);
+		expect(() => makeCogniGraph({ name: "poet", createGraph: undeclaredPoet, toolIds: [] })).toThrow("cogni_requires_base_language_model");
+		await expect(makeServerGraph({ name: "poet", createGraph: undeclaredPoet, toolIds: [] })).rejects.toThrow("cogni_requires_base_language_model");
+	});
+
 	it("rejects opaque, nested, and guarded child declarations", () => {
 		const llm = new FakeListChatModel({ responses: ["done"] });
 		const profile = cogniProfile({

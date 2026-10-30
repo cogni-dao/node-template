@@ -14,8 +14,8 @@ import { z } from "zod";
 import { LANGGRAPH_CATALOG } from "../../../src/catalog";
 import { COGNI_DECIDE_TOOL_IDS } from "../../../src/graphs/mission/cogni-decide";
 import { createMissionGraph } from "../../../src/graphs/mission/graph";
-import { RunReceipts } from "../../../src/graphs/mission/receipts";
-import { createScoresGuard } from "../../../src/graphs/mission/score-guard";
+import { RunReceipts } from "../../../src/graphs/work-prioritizer/receipts";
+import { createScoresGuard } from "../../../src/graphs/work-prioritizer/score-guard";
 import { createInProcGraphRunner } from "../../../src/inproc/runner";
 import type { CompletionFn, ToolExecFn } from "../../../src/inproc/types";
 

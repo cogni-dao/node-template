@@ -279,13 +279,29 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       }
     }
 
+    let requestAlreadyClaimed = false;
     if (idempotencyResult.status === "pending") {
+      // Execution in progress - return 409 Conflict to signal retry later
       const pending = idempotencyResult.request;
-      log.info({ idempotencyKey, runId: pending.runId }, "Execution already in progress");
-      return NextResponse.json(
-        { error: "Execution in progress", message: "Request with this Idempotency-Key is currently being processed", runId: pending.runId },
-        { status: 409 }
-      );
+      if (suppliedRequestHash && pending.runId === runId && pending.leaseExpiresAt === null) {
+        // The completion facade durably claimed this exact request before
+        // starting Temporal. This workflow owns the pending record.
+        requestAlreadyClaimed = true;
+      } else {
+        log.info(
+          { idempotencyKey, runId: pending.runId },
+          "Execution already in progress"
+        );
+        return NextResponse.json(
+          {
+            error: "Execution in progress",
+            message:
+              "Request with this Idempotency-Key is currently being processed",
+            runId: pending.runId,
+          },
+          { status: 409 }
+        );
+      }
     }
 
     // A stale lease is eligible for atomic re-claim after validation below.
@@ -521,54 +537,61 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
 
     // Claim only after permanent request validation. INSERT races are resolved
     // by ON CONFLICT + re-read; expired pending leases are reclaimed atomically.
-    const claimResult =
-      await container.executionRequestPort.createPendingRequest(
+    if (requestAlreadyClaimed) {
+      await container.executionRequestPort.heartbeatRequest(
         idempotencyKey,
-        requestHash,
-        runId,
-        traceId,
         new Date(Date.now() + EXECUTION_LEASE_MS).toISOString()
       );
-    if (claimResult.status !== "claimed") {
-      if (claimResult.status === "cached") {
-        const cached = claimResult.request;
-        await container.graphRunRepository.markRunCompleted(
-          SYSTEM_ACTOR,
-          cached.runId,
-          cached.ok ? "success" : "error",
-          cached.ok ? undefined : "Graph execution failed",
-          cached.ok ? undefined : (cached.errorCode ?? "internal")
+    } else {
+      const claimResult =
+        await container.executionRequestPort.createPendingRequest(
+          idempotencyKey,
+          requestHash,
+          runId,
+          traceId,
+          new Date(Date.now() + EXECUTION_LEASE_MS).toISOString()
         );
+      if (claimResult.status !== "claimed") {
+        if (claimResult.status === "cached") {
+          const cached = claimResult.request;
+          await container.graphRunRepository.markRunCompleted(
+            SYSTEM_ACTOR,
+            cached.runId,
+            cached.ok ? "success" : "error",
+            cached.ok ? undefined : "Graph execution failed",
+            cached.ok ? undefined : (cached.errorCode ?? "internal")
+          );
+          return NextResponse.json(
+            cached.ok
+              ? { ok: true, runId: cached.runId, traceId: cached.traceId }
+              : {
+                  ok: false,
+                  runId: cached.runId,
+                  traceId: cached.traceId,
+                  error: cached.errorCode ?? "internal",
+                },
+            { status: 200 }
+          );
+        }
+        if (claimResult.status === "mismatch") {
+          return NextResponse.json(
+            { error: "Idempotency conflict" },
+            { status: 422 }
+          );
+        }
+        if (claimResult.status === "new") {
+          return NextResponse.json(
+            { error: "Execution claim changed; retry request" },
+            { status: 503 }
+          );
+        }
         return NextResponse.json(
-          cached.ok
-            ? { ok: true, runId: cached.runId, traceId: cached.traceId }
-            : {
-                ok: false,
-                runId: cached.runId,
-                traceId: cached.traceId,
-                error: cached.errorCode ?? "internal",
-              },
-          { status: 200 }
+          { error: "Execution in progress", runId: claimResult.request.runId },
+          { status: 409 }
         );
       }
-      if (claimResult.status === "mismatch") {
-        return NextResponse.json(
-          { error: "Idempotency conflict" },
-          { status: 422 }
-        );
-      }
-      if (claimResult.status === "new") {
-        return NextResponse.json(
-          { error: "Execution claim changed; retry request" },
-          { status: 503 }
-        );
-      }
-      return NextResponse.json(
-        { error: "Execution in progress", runId: claimResult.request.runId },
-        { status: 409 }
-      );
+      runId = claimResult.request.runId;
     }
-    runId = claimResult.request.runId;
     if (!stateKey) sessionId = `run:${runId}`;
 
     const accountService = container.accountsForUser(toUserId(actorUserId));
