@@ -101,13 +101,14 @@ export function ScheduleDetailView({ scheduleId }: { scheduleId: string }) {
           </Badge>
           <Button
             variant="outline"
-            disabled={toggle.isPending}
-            onClick={() =>
+            disabled={toggle.isPending || schedule.isError}
+            onClick={() => {
+              if (schedule.isError) return;
               toggle.mutate({
                 id: scheduleId,
                 data: { enabled: !current.enabled },
-              })
-            }
+              });
+            }}
           >
             {toggle.isPending
               ? "Saving…"
@@ -117,6 +118,20 @@ export function ScheduleDetailView({ scheduleId }: { scheduleId: string }) {
           </Button>
         </div>
       </div>
+      {schedule.isError && (
+        <div role="alert" className="text-sm">
+          <p>Unable to refresh schedule. Showing previously loaded details.</p>
+          <p className="text-destructive">{schedule.error.message}</p>
+          <Button
+            variant="outline"
+            className="mt-2"
+            disabled={schedule.isFetching}
+            onClick={() => void schedule.refetch()}
+          >
+            Try again
+          </Button>
+        </div>
+      )}
       {toggle.isError && (
         <p role="alert" className="text-destructive text-sm">
           {toggle.error.message}
