@@ -174,6 +174,53 @@ Domains are structural, not tags. Every knowledge entry belongs to exactly one d
 | `description` | text        |                       | What this domain covers                                        |
 | `created_at`  | timestamptz | NOT NULL, default now |                                                                |
 
+#### Managing domain registrations
+
+The Domains view at `/knowledge?mode=domains` lists registrations and provides
+**Add domain**. Editing and deletion are available through the authenticated API;
+the current table has no edit, delete, or restore controls. Both a signed-in
+browser session and a node agent Bearer key can use these endpoints on that node.
+
+| Method | Path | Result |
+| ------ | ---- | ------ |
+| GET | `/api/v1/knowledge/domains` | List domains and live entry counts. |
+| POST | `/api/v1/knowledge/domains` | Register an ID, name, and optional description; returns 201, or 409 if the ID exists. |
+| GET | `/api/v1/knowledge/domains/{id}` | Read one registration; an unknown ID returns 404 `domain_not_found`. |
+| PATCH | `/api/v1/knowledge/domains/{id}` | Update name and/or description; returns the domain. |
+| DELETE | `/api/v1/knowledge/domains/{id}` | Delete an empty, non-baseline registration; returns `{ "id": "...", "deleted": true }`. |
+
+IDs are immutable, 2–64 characters, and match `[a-z0-9][a-z0-9_-]*`. Names
+are 1–128 characters; descriptions are at most 512 characters. For example:
+
+```json
+{ "id": "observatory", "name": "Otter's Observatory", "description": "Sky notes" }
+```
+
+PATCH accepts only `name` and `description`, with at least one field present.
+Omitted fields are preserved; `{ "description": null }` clears the description.
+An unchanged patch succeeds without a new Dolt commit. An empty patch or an
+attempt to change the ID returns 400 `invalid_input`; PUT is not supported (405).
+
+DELETE never cascades to knowledge entries. A populated domain returns 409
+`domain_not_empty` with its entry count. The baseline IDs `meta`, `mission`, and
+`strategy` return 409 `domain_protected`, including when empty. Failed deletions
+leave the domain intact.
+
+There is no restore endpoint or soft-delete state. To undo a metadata edit,
+PATCH the saved original name and description; the registration time is
+preserved. To recreate a deleted empty domain, POST its saved ID, name, and
+description. Recreation assigns a new registration time and the default domain
+confidence; it does not restore the original row's complete metadata. Prefer
+edit-and-revert when an existing registration must remain identical.
+
+The wire schemas and typed errors live in
+[`knowledge.domains.v1.contract.ts`](../../packages/node-contracts/src/knowledge.domains.v1.contract.ts).
+The packaged Doltgres operations accept a trusted server-side query callback so
+a consumer can reuse its existing admitted writer transaction. The package owns
+SQL construction and value escaping; the caller owns admission, connection
+lifetime, and transaction completion. This callback is not a request field or an
+endpoint for submitting SQL.
+
 ### `sources` — External reference registry
 
 Tracks external sources that knowledge entries cite. Enables source reliability scoring over time.
