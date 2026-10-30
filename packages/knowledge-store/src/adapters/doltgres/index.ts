@@ -121,17 +121,60 @@ function rowToDomain(row: Record<string, unknown>): Domain {
   };
 }
 
-/** One `domains` row + live `entry_count`; null when the id is not registered. */
-async function selectDomain(
-  sql: Pick<DoltWriteConnection, "unsafe">,
-  id: string
+/** Caller-owned SQL capability. Mutations require one already-admitted write scope. */
+export type DomainSql = (
+  query: string,
+) => PromiseLike<readonly Record<string, unknown>[]>;
+
+/** Read one domain with its live entry count; null when it is not registered. */
+export async function getDoltgresDomain(
+  query: DomainSql,
+  id: string,
 ): Promise<Domain | null> {
-  const rows = await sql.unsafe(
-    `SELECT d.id, d.name, d.description, d.confidence_pct, d.created_at, COUNT(k.id) AS entry_count FROM domains d LEFT JOIN knowledge k ON k.domain = d.id WHERE d.id = ${escapeValue(id)} GROUP BY d.id, d.name, d.description, d.confidence_pct, d.created_at LIMIT 1`
+  const rows = await query(
+    `SELECT d.id, d.name, d.description, d.confidence_pct, d.created_at, COUNT(k.id) AS entry_count FROM domains d LEFT JOIN knowledge k ON k.domain = d.id WHERE d.id = ${escapeValue(id)} GROUP BY d.id, d.name, d.description, d.confidence_pct, d.created_at LIMIT 1`,
   );
   return rows.length === 0
     ? null
     : rowToDomain(rows[0] as Record<string, unknown>);
+}
+
+/** Update domain metadata within the caller's admitted scope; does not admit or commit. */
+export async function updateDoltgresDomain(
+  query: DomainSql,
+  id: string,
+  patch: DomainPatch,
+): Promise<Domain> {
+  const existing = await getDoltgresDomain(query, id);
+  if (!existing) throw new DomainNotRegisteredError(id);
+  const sets: string[] = [];
+  if (patch.name !== undefined && patch.name !== existing.name)
+    sets.push(`name = ${escapeValue(patch.name)}`);
+  if (
+    patch.description !== undefined &&
+    patch.description !== existing.description
+  )
+    sets.push(`description = ${escapeValue(patch.description)}`);
+  // A patch that changes nothing writes nothing: no DML, so no Dolt commit.
+  if (sets.length === 0) return existing;
+  await query(
+    `UPDATE domains SET ${sets.join(", ")} WHERE id = ${escapeValue(id)}`,
+  );
+  const updated = await getDoltgresDomain(query, id);
+  if (!updated) throw new Error(`domain ${id} not found after update`);
+  return updated;
+}
+
+/** Delete an empty domain within the caller's admitted scope; never cascades or commits. */
+export async function deleteDoltgresDomain(
+  query: DomainSql,
+  id: string,
+): Promise<void> {
+  const existing = await getDoltgresDomain(query, id);
+  if (!existing) throw new DomainNotRegisteredError(id);
+  if (existing.entryCount > 0)
+    throw new DomainNotEmptyError(id, existing.entryCount);
+  await query(`DELETE FROM domains WHERE id = ${escapeValue(id)}`);
 }
 
 function rowToCitation(row: Record<string, unknown>): Citation {
@@ -521,7 +564,7 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
   }
 
   async getDomain(id: string): Promise<Domain | null> {
-    return selectDomain(this.sql, id);
+    return getDoltgresDomain((query) => this.sql.unsafe(query), id);
   }
 
   async registerDomain(input: NewDomain): Promise<Domain> {
@@ -535,14 +578,17 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
         if (await write.domainExists(input.id))
           throw new DomainAlreadyRegisteredError(input.id);
         await scoped.sql.unsafe(
-          `INSERT INTO domains (id, name, description) VALUES (${escapeValue(input.id)}, ${escapeValue(input.name)}, ${escapeValue(input.description ?? null)})`
+          `INSERT INTO domains (id, name, description) VALUES (${escapeValue(input.id)}, ${escapeValue(input.name)}, ${escapeValue(input.description ?? null)})`,
         );
-        const domain = await selectDomain(scoped.sql, input.id);
+        const domain = await getDoltgresDomain(
+          (query) => scoped.sql.unsafe(query),
+          input.id,
+        );
         if (!domain) {
           throw new Error(`domain ${input.id} not found after register`);
         }
         return domain;
-      }
+      },
     );
   }
 
@@ -554,25 +600,12 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
       },
       async (write) => {
         const scoped = write as DoltgresKnowledgeStoreAdapter;
-        const existing = await selectDomain(scoped.sql, id);
-        if (!existing) throw new DomainNotRegisteredError(id);
-        const sets: string[] = [];
-        if (patch.name !== undefined && patch.name !== existing.name)
-          sets.push(`name = ${escapeValue(patch.name)}`);
-        if (
-          patch.description !== undefined &&
-          patch.description !== existing.description
-        )
-          sets.push(`description = ${escapeValue(patch.description)}`);
-        // A patch that changes nothing writes nothing: no DML, so no Dolt commit.
-        if (sets.length === 0) return existing;
-        await scoped.sql.unsafe(
-          `UPDATE domains SET ${sets.join(", ")} WHERE id = ${escapeValue(id)}`
+        return updateDoltgresDomain(
+          (query) => scoped.sql.unsafe(query),
+          id,
+          patch,
         );
-        const updated = await selectDomain(scoped.sql, id);
-        if (!updated) throw new Error(`domain ${id} not found after update`);
-        return updated;
-      }
+      },
     );
   }
 
@@ -584,14 +617,8 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
       },
       async (write) => {
         const scoped = write as DoltgresKnowledgeStoreAdapter;
-        const existing = await selectDomain(scoped.sql, id);
-        if (!existing) throw new DomainNotRegisteredError(id);
-        if (existing.entryCount > 0)
-          throw new DomainNotEmptyError(id, existing.entryCount);
-        await scoped.sql.unsafe(
-          `DELETE FROM domains WHERE id = ${escapeValue(id)}`
-        );
-      }
+        return deleteDoltgresDomain((query) => scoped.sql.unsafe(query), id);
+      },
     );
   }
 

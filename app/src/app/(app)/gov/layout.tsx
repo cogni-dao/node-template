@@ -43,7 +43,7 @@ const GOV_TABS = [
     match: "prefix" as const,
   },
   {
-    href: "/dashboard",
+    href: "/gov/system",
     label: "System",
     icon: LayoutDashboard,
     match: "prefix" as const,
