@@ -384,7 +384,7 @@ export function createInProcGraphRunner<TTool = unknown>(
         ? isAiExecutionError(runSignal.reason) && runSignal.reason.code === "timeout"
           ? "timeout"
           : "aborted"
-        : normalizeErrorToExecutionCode(error);
+        : normalizeErrorToExecutionCode(cause);
 
       // Capture error message for logging at adapter boundary (not sent to clients)
       const errorMessage =

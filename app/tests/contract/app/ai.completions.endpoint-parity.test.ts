@@ -508,6 +508,33 @@ describe("OpenAI Endpoint Parity (POST /v1/chat/completions)", () => {
       } finally { vi.useRealTimers(); }
     });
 
+    it("closes on request abort and ignores a late event", async () => {
+      setupMocks();
+      const container = mockGetContainer();
+      let release!: () => void;
+      const delayed = new Promise<void>((resolve) => { release = resolve; });
+      Object.assign(container, { runStream: {
+        subscribe: async function* () {
+          yield { id: "1-0", event: { type: "status" as const, phase: "thinking" as const } };
+          await delayed;
+          yield { id: "2-0", event: { type: "text_delta" as const, delta: "late" } };
+        },
+      } });
+      const abort = new AbortController();
+      const { POST } = await import("@/app/api/v1/chat/completions/route");
+      const response = await POST(new NextRequest("http://localhost:3000/api/v1/chat/completions", {
+        method: "POST", body: JSON.stringify(createCompletionRequest({ stream: true })), signal: abort.signal,
+      }));
+      if (!response.body) throw new Error("missing response stream");
+      const reader = response.body.getReader();
+      await reader.read();
+      await reader.read();
+      abort.abort();
+      const next = await reader.read();
+      expect(next.done).toBe(true);
+      release();
+    });
+
     it("should emit role announcement as first chunk (OpenAI convention)", async () => {
       setupMocks();
 

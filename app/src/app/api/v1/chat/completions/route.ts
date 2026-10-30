@@ -210,23 +210,25 @@ function createOpenAiSseStream(
   const iterator = aiStream[Symbol.asyncIterator]();
   let timer: ReturnType<typeof setInterval> | undefined;
   let closed = false;
+  let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
   const cleanup = () => {
     if (closed) return;
     closed = true;
     if (timer) clearInterval(timer);
     requestSignal.removeEventListener("abort", cleanup);
     cancelSubscription();
+    try { void iterator.return?.().catch(() => undefined); } catch { /* already closed */ }
+    try { streamController?.close(); } catch { /* already closed or cancelled */ }
   };
 
   return new ReadableStream({
     cancel() {
       cleanup();
-      void iterator.return?.().catch(() => undefined);
     },
     async start(controller) {
+      streamController = controller;
       if (requestSignal.aborted) {
         cleanup();
-        controller.close();
         return;
       }
       requestSignal.addEventListener("abort", cleanup, { once: true });
@@ -258,6 +260,7 @@ function createOpenAiSseStream(
         // Stream content and tool call chunks
         let toolCallIndex = 0;
         for await (const event of { [Symbol.asyncIterator]: () => iterator }) {
+          if (closed) return;
           if (event.type === "text_delta") {
             const chunk: ChatCompletionChunk = {
               id: completionId,
@@ -327,6 +330,7 @@ function createOpenAiSseStream(
 
         // Await final result for finish_reason and usage
         const result = await final;
+        if (closed) return;
         if (!result.ok) {
           log.error({ error: result.error }, "Stream completed with error");
           const mapped = executionErrorToOpenAiError(result.error);

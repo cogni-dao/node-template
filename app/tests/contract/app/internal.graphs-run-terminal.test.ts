@@ -124,6 +124,7 @@ import { POST } from "@/app/api/internal/graphs/[graphId]/runs/route";
 describe("POST /api/internal/graphs/{graphId}/runs terminal publication", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.scopedSignal = undefined;
     mocks.checkIdempotency.mockResolvedValue({ status: "new" });
     mocks.getRunByRunId.mockResolvedValue(null);
   });
@@ -154,6 +155,57 @@ describe("POST /api/internal/graphs/{graphId}/runs terminal publication", () => 
       body: JSON.stringify({ executionGrantId: "40000000-0000-4000-a000-000000000001", runId: RUN_ID, input: { messages: [{ role: "user", content: "decide" }], modelRef: { providerKey: "platform", modelId: "test-model" } } }),
     }), { params: Promise.resolve({ graphId: "langgraph:cogni-decide" }) });
     expect(mocks.runGraph).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ requestIntent: "answer" }));
+  });
+
+  it("aborts cooperative execution at the host deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.runGraph.mockImplementationOnce(() => {
+        const final = new Promise<{ ok: false; error: "timeout"; requestId: string }>((resolve) => {
+          mocks.scopedSignal?.addEventListener("abort", () => resolve({ ok: false, error: "timeout", requestId: RUN_ID }), { once: true });
+        });
+        return {
+          stream: (async function* () { await final; yield { type: "error" as const, error: "timeout" as const }; })(),
+          final,
+        };
+      });
+      const pending = POST(new NextRequest("http://localhost/api/internal/graphs/langgraph:default/runs", {
+        method: "POST",
+        headers: { authorization: "Bearer scheduler-secret-value-1234567890", "content-type": "application/json", "idempotency-key": "api:deadline" },
+        body: JSON.stringify({ executionGrantId: null, runId: RUN_ID, input: {
+          messages: [{ role: "user", content: "hello" }], modelRef: { providerKey: "platform", modelId: "test-model" },
+          actorUserId: USER_ID, billingAccountId: BILLING_ID, virtualKeyId: VIRTUAL_KEY_ID,
+        } }),
+      }), { params: Promise.resolve({ graphId: "langgraph:default" }) });
+      await vi.waitFor(() => expect(mocks.scopedSignal).toBeDefined());
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+      expect(mocks.scopedSignal?.reason).toMatchObject({ name: "AiExecutionError", code: "timeout" });
+      expect(await (await pending).json()).toMatchObject({ ok: false, error: "timeout" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("passes a host deadline and clears its timer after execution", async () => {
+    const setTimer = vi.spyOn(globalThis, "setTimeout");
+    const clearTimer = vi.spyOn(globalThis, "clearTimeout");
+    try {
+      await POST(new NextRequest("http://localhost/api/internal/graphs/langgraph:default/runs", {
+        method: "POST",
+        headers: { authorization: "Bearer scheduler-secret-value-1234567890", "content-type": "application/json", "idempotency-key": "api:timer" },
+        body: JSON.stringify({ executionGrantId: null, runId: RUN_ID, input: {
+          messages: [{ role: "user", content: "hello" }], modelRef: { providerKey: "platform", modelId: "test-model" },
+          actorUserId: USER_ID, billingAccountId: BILLING_ID, virtualKeyId: VIRTUAL_KEY_ID,
+        } }),
+      }), { params: Promise.resolve({ graphId: "langgraph:default" }) });
+      const index = setTimer.mock.calls.findIndex((args) => args[1] === 15 * 60_000);
+      expect(index).toBeGreaterThanOrEqual(0);
+      expect(clearTimer).toHaveBeenCalledWith(setTimer.mock.results[index]?.value);
+      expect(mocks.scopedSignal?.aborted).toBe(false);
+    } finally {
+      setTimer.mockRestore();
+      clearTimer.mockRestore();
+    }
   });
 
   it("finalizes failure when durable done publication rejects", async () => {

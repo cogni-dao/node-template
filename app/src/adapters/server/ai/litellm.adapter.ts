@@ -551,7 +551,8 @@ export class LiteLlmAdapter implements LlmService {
             }
           }
         } catch (error: unknown) {
-          if (error instanceof Error && error.name === "AbortError") {
+          if ((signal.aborted && error === signal.reason) ||
+              (error instanceof Error && error.name === "AbortError")) {
             // Stream aborted - reject with typed LlmError for proper telemetry
             deferred.reject(new LlmError("LiteLLM stream aborted", "aborted"));
             return;

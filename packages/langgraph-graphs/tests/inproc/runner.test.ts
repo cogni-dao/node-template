@@ -16,6 +16,7 @@
 
 import { AiExecutionError, type AiEvent } from "@cogni/ai-core";
 import { AIMessage } from "@langchain/core/messages";
+import { MiddlewareError } from "langchain";
 import { describe, expect, it } from "vitest";
 
 import { createInProcGraphRunner } from "../../src/inproc/runner";
@@ -169,6 +170,35 @@ describe("deadline attribution", () => {
     const { stream, final } = createInProcGraphRunner({ ...opts, request: { ...opts.request, abortSignal: signal } });
     const code = first === "caller" ? "aborted" : "timeout";
     expect(await collectEvents(stream)).toEqual([{ type: "error", error: code }, { type: "done" }]);
+    expect(await final).toMatchObject({ ok: false, error: code });
+  });
+
+  it.each(["timeout", "rate_limit", "provider_unavailable"] as const)(
+    "preserves wrapped %s in terminal event and final", async (code) => {
+      const opts = createTestRunnerOptions({ createGraph: () => ({
+        invoke: async () => { throw MiddlewareError.wrap(new AiExecutionError(code), "test"); },
+      }) });
+      const { stream, final } = createInProcGraphRunner(opts);
+      expect(await collectEvents(stream)).toEqual([{ type: "error", error: code }, { type: "done" }]);
+      expect(await final).toMatchObject({ ok: false, error: code });
+    },
+  );
+
+  it.each(["timeout", "aborted"] as const)("handles in-flight %s cancellation", async (code) => {
+    const ctl = new AbortController();
+    let started!: () => void;
+    const ready = new Promise<void>((resolve) => { started = resolve; });
+    const opts = createTestRunnerOptions({ createGraph: () => ({
+      invoke: async (_input, options) => new Promise((_resolve, reject) => {
+        options?.signal?.addEventListener("abort", () => reject(MiddlewareError.wrap(new AiExecutionError("aborted"), "test")), { once: true });
+        started();
+      }),
+    }) });
+    const { stream, final } = createInProcGraphRunner({ ...opts, request: { ...opts.request, abortSignal: ctl.signal } });
+    const events = collectEvents(stream);
+    await ready;
+    ctl.abort(code === "timeout" ? new AiExecutionError("timeout") : new DOMException("cancelled", "AbortError"));
+    expect(await events).toEqual([{ type: "error", error: code }, { type: "done" }]);
     expect(await final).toMatchObject({ ok: false, error: code });
   });
 
