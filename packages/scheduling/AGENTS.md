@@ -9,3 +9,4 @@ Published `@cogni-dao/scheduling` owns wire contracts, owner-scoped run readback
 - Root and adapter must share the same error constructors in packed ESM.
 - Build declarations only with tsc; tsup owns JavaScript. Verify packed entrypoints and a clean consumer before publication.
 - Design: https://cognidao.org/knowledge/inbox/contrib-flock-leader-conductor-ee9eb314
+- `/routing` is server-only pure convergence through injected ports, ID/ownership/error callbacks and node-owned ledger resolution. No namespace factories or graph/ledger policy selection. Validate IDs before writes; guard prune and update graph actions before resume.

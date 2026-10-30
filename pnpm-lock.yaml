@@ -1226,10 +1226,16 @@ importers:
 
   packages/scheduling:
     dependencies:
+      type-fest:
+        specifier: ^5.4.1
+        version: 5.7.0
       zod:
         specifier: ^4.1.12
         version: 4.4.3
     devDependencies:
+      '@types/node':
+        specifier: ^22
+        version: 22.19.19
       postgres:
         specifier: ^3.4.5
         version: 3.4.9

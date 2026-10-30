@@ -26,3 +26,16 @@ const history = createScheduleHistoryService({
 The PostgreSQL entrypoint requires the consumer's `postgres` peer. It uses the existing `schedules` and `graph_runs` schema, RLS and a parameterized transaction-local caller context. Inject the app-role pool; never a service-role pool. Root and presentation have no framework or driver runtime dependency.
 
 Nodes pin the immutable GitHub Release tarball and keep their local import alias. [Distribution contract](https://cognidao.org/knowledge/publish-shared-runtime-core) · [design](https://cognidao.org/knowledge/inbox/contrib-flock-leader-conductor-ee9eb314).
+
+### Governance routing (server only)
+
+`@cogni-dao/scheduling/routing` exports `syncGovernanceSchedules`, structural
+control/config/result types and `governanceGraphMessage`. Bind `scheduleIdFor`
+and `ownsScheduleId` to the same node prefix and explicit legacy exceptions;
+provide own system-row prune candidates, existing error predicates, grant/upsert
+ports and a node-local `resolveLedgerIngestExecution` callback. The callback
+receives the single governance grant and may return null for ordinary routing.
+The package does not select a node's mission graph/model or own ledger policy.
+Graph actions are fully reapplied before resume; prune pauses and owner-disables.
+Flat legacy identities retain their inherited custody limits, not a global
+ownership guarantee. Root/presentation imports do not load this server entry.

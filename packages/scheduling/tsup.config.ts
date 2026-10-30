@@ -4,9 +4,13 @@
 import { defineConfig } from "tsup";
 
 // Shared chunks preserve error identity between root and adapter imports.
-// biome-ignore lint/style/noDefaultExport: build tool configuration entrypoint
 export default defineConfig({
-  entry: ["src/index.ts", "src/adapters/postgres.ts", "src/presentation.ts"],
+  entry: [
+    "src/index.ts",
+    "src/adapters/postgres.ts",
+    "src/presentation.ts",
+    "src/routing.ts",
+  ],
   format: ["esm"],
   splitting: true,
   dts: false,
