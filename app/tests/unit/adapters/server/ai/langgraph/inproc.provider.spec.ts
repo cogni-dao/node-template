@@ -59,6 +59,7 @@ function createMockAdapter(options?: {
   finalResult?: {
     ok: boolean;
     requestId?: string;
+    content?: string;
     usage?: { promptTokens: number; completionTokens: number };
     finishReason?: string;
     error?: string;
@@ -71,6 +72,10 @@ function createMockAdapter(options?: {
   const finalResult = options?.finalResult ?? {
     ok: true,
     requestId: "test-req",
+    content: events
+      .filter((event) => event.type === "text_delta")
+      .map((event) => event.delta)
+      .join(""),
     usage: { promptTokens: 10, completionTokens: 5 },
     finishReason: "stop",
   };
@@ -153,10 +158,11 @@ describe("LangGraphInProcProvider", () => {
         // Adapter should be called
         expect(mockAdapter.executeCompletionUnit).toHaveBeenCalled();
 
-        // Events should flow from adapter through runner
-        // Note: runner adds assistant_final and done
+        // The harness emits only the final parent answer as public text.
         const textDeltas = events.filter((e) => e.type === "text_delta");
-        expect(textDeltas.length).toBeGreaterThan(0);
+        expect(textDeltas.map((event) => event.delta).join("")).toBe(
+          "Hello World"
+        );
 
         // Terminal events present
         const assistantFinals = events.filter(
