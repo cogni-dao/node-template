@@ -282,22 +282,37 @@
 /* Keep hero animation vars above (isolated to code.ts) */
 
 @layer utilities {
-  /* Animate paint/compositing only; the reserved loading mark never resizes layout. */
+  /* One gesture: turn accelerates/decelerates as the pulse peaks, then rests upright. */
+  @keyframes brain-turn {
+    0% {
+      rotate: 0deg;
+      animation-timing-function: cubic-bezier(0.45, 0, 0.55, 1);
+    }
+    80%,
+    100% {
+      rotate: 360deg;
+    }
+  }
+
   @keyframes brain-breathe {
     0%,
+    80%,
     100% {
-      opacity: 0.55;
-      transform: scale(0.94);
+      opacity: 0.78;
+      transform: scale(0.92);
     }
-    50% {
+    40% {
       opacity: 1;
-      transform: scale(1);
+      transform: scale(1.08);
     }
   }
 
   @media (prefers-reduced-motion: no-preference) {
     .brain-loading-mark {
-      animation: brain-breathe 2.4s ease-in-out infinite;
+      --brain-loading-cycle: 2.6s;
+      animation:
+        brain-turn var(--brain-loading-cycle) linear infinite,
+        brain-breathe var(--brain-loading-cycle) ease-in-out infinite;
     }
   }
 
