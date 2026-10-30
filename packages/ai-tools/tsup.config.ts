@@ -16,11 +16,14 @@ import { defineConfig } from "tsup";
 export const tsupConfig = defineConfig({
   entry: ["src/index.ts"],
   format: ["esm"],
-  dts: false, // tsc -b emits per-file declarations; tsup handles JS only
-  noExternal: ["@cogni-dao/work-items"],
+  dts: {
+    resolve: ["@cogni/ai-core"],
+    compilerOptions: { composite: false, incremental: false },
+  },
+  outDir: "dist/bundled", // tsc owns dist/*.d.ts; preserve these normal bundled declarations.
   clean: false, // preserve .d.ts files from tsc -b (incremental builds)
   sourcemap: true,
-  platform: "neutral"
+  platform: "neutral",
 });
 
 export default tsupConfig;

@@ -34,8 +34,12 @@ const PATCHED: WorkItemInfo = {
   rankScore: 6.4,
   labels: [],
   assignees: [],
+  externalRefs: [],
+  specRefs: [],
   updatedAt: "2026-10-21T00:00:00.000Z",
   revision: 8,
+  createdAt: "2026-10-20T00:00:00.000Z",
+  deployVerified: false,
 };
 
 function capability(patch: WorkItemCapability["patch"]): WorkItemCapability {

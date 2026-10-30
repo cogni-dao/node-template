@@ -37,3 +37,14 @@ export function readSourceProvenance(
   const sourceUrl = readSourceUrl(origin, collection, id);
   return sourceUrl ? { sourceUrl } : { sourceUrlUnavailable: true };
 }
+
+/** Discard untrusted provenance outcomes before trusted server enrichment. */
+export function withoutSourceProvenance<T extends object>(
+  item: T
+): Omit<T, "sourceUrl" | "sourceUrlUnavailable"> {
+  const { sourceUrl: _url, sourceUrlUnavailable: _unavailable, ...fields } = item as T & {
+    sourceUrl?: unknown;
+    sourceUrlUnavailable?: unknown;
+  };
+  return fields;
+}

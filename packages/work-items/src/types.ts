@@ -14,6 +14,8 @@
  * @public
  */
 
+import { rankScore } from "./scores.js";
+import type { WorkItemDto } from "./contracts.js";
 import type { Tagged } from "type-fest";
 import type { WorkItemSortBy, WorkItemSortDirection } from "./query-order.js";
 
@@ -54,21 +56,12 @@ export type WorkItemStatus =
 // Aligned with docs/spec/identity-model.md actor kinds: user | agent | system.
 // "org" kind omitted — not applicable to work item assignment.
 
-export type SubjectRef =
-  | { readonly kind: "user"; readonly userId: string }
-  | { readonly kind: "agent"; readonly agentId: string }
-  | { readonly kind: "system"; readonly serviceId: string };
+export type SubjectRef = Readonly<WorkItemDto["assignees"][number]>;
 
 // ── External references ───────────────────────────────
 // Backend-agnostic: works with GitHub, GitLab, Plane, OpenProject.
 
-export type ExternalRef = {
-  readonly system: string;
-  readonly kind: string;
-  readonly externalId?: string;
-  readonly url?: string;
-  readonly title?: string;
-};
+export type ExternalRef = Readonly<WorkItemDto["externalRefs"][number]>;
 
 // ── Relations ─────────────────────────────────────────
 // Canonical direction only — store "blocks", derive "blocked_by" at query time.
@@ -96,37 +89,23 @@ export type WorkItemScores = Readonly<Record<string, WorkItemScore>>;
 
 // ── Work item ─────────────────────────────────────────
 
-export type WorkItem = {
+export type WorkItem = Readonly<Omit<WorkItemDto,
+  "id" | "type" | "status" | "rankScore" | "scores" | "projectId" | "parentId" |
+  "blockedBy" | "node" | "assignees" | "externalRefs" | "actor" | "labels" | "specRefs"
+>> & {
   readonly id: WorkItemId;
   readonly type: WorkItemType;
-  readonly title: string;
   readonly status: WorkItemStatus;
-  readonly priority?: number;
-  readonly rank?: number;
-  readonly estimate?: number;
-  /** Missing axes are absent, not zero. */
   readonly scores?: WorkItemScores;
-  readonly summary?: string;
-  readonly outcome?: string;
   readonly projectId?: WorkItemId;
   readonly parentId?: WorkItemId;
+  readonly blockedBy?: WorkItemId;
   readonly node: string;
   readonly assignees: readonly SubjectRef[];
   readonly externalRefs: readonly ExternalRef[];
   readonly actor: ActorKind;
   readonly labels: readonly string[];
   readonly specRefs: readonly string[];
-  readonly branch?: string;
-  readonly pr?: string;
-  readonly reviewer?: string;
-  readonly revision: number;
-  readonly blockedBy?: WorkItemId;
-  readonly deployVerified: boolean;
-  readonly claimedByRun?: string;
-  readonly claimedAt?: string;
-  readonly lastCommand?: string;
-  readonly createdAt: string;
-  readonly updatedAt: string;
 };
 
 // ── Query ─────────────────────────────────────────────
@@ -162,4 +141,17 @@ export type WorkQuery = {
 /** Brand a raw string as WorkItemId. Call at system boundaries only. */
 export function toWorkItemId(raw: string): WorkItemId {
   return raw as WorkItemId;
+}
+
+export function toWorkItemDto(item: WorkItem): WorkItemDto {
+  const { actor, ...fields } = item;
+  return {
+    ...fields,
+    ...(actor !== "either" && { actor }),
+    rankScore: rankScore(item.scores),
+    assignees: item.assignees.map(a => ({ ...a })),
+    externalRefs: item.externalRefs.map(r => ({ ...r })),
+    labels: [...item.labels],
+    specRefs: [...item.specRefs],
+  };
 }

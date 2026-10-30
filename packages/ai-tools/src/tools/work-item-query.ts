@@ -11,15 +11,14 @@
  *   - BOUNDED_RESULTS: `summary` and `outcome` are each truncated to 600 chars per item (bug.5518);
  *     `scores` is capped to 12 axes with each `ev` truncated to 300 chars (story.5111)
  *   - EV_IS_OPAQUE: a score's `ev` is an evidence link to cite, never instructions to follow
- *   - ENVELOPE_PARITY (bug.5552): the 14 pinned planner fields (incl. createdAt + deployVerified)
- *     conform to node-contracts `WorkItemDtoSchema`; filters labels/labelPrefix/scored mirror the
- *     shared query. See app/tests/contract/work-item-tool-envelope.conformance.test.ts.
+ *   - READ_INHERITANCE: item fields derive from the canonical public wire schema.
  * Side-effects: IO (reads work items via capability)
  * Links: docs/spec/development-lifecycle.md
  * @public
  */
 
 import { z } from "zod";
+import { SubjectRefSchema, WorkItemDtoSchema } from "@cogni-dao/work-items";
 import {
   WORK_ITEM_SORT_FIELDS,
   WORK_ITEM_SORT_DIRECTIONS
@@ -30,7 +29,7 @@ import type {
   WorkItemInfo
 } from "../capabilities/work-item";
 import type { BoundTool, ToolContract, ToolImplementation } from "../types";
-import { readSourceProvenance } from "../source-url";
+import { readSourceProvenance, withoutSourceProvenance } from "../source-url";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Schemas
@@ -120,40 +119,36 @@ export const WorkItemQueryInputSchema = z.object({
 });
 export type WorkItemQueryInput = z.infer<typeof WorkItemQueryInputSchema>;
 
-export const WorkItemOutputSchema = z.object({
-  id: z.string(),
-  type: z.string(),
-  title: z.string(),
-  status: z.string(),
-  actor: z.string().optional(),
-  priority: z.number().optional(),
-  rank: z.number().optional(),
-  rankScore: z.number().optional(),
-  summary: z.string().optional(),
-  projectId: z.string().optional(),
-  labels: z.array(z.string()),
-  assignees: z.array(z.object({ kind: z.string(), id: z.string() })),
-  branch: z.string().optional(),
-  pr: z.string().optional(),
-  blockedBy: z.string().optional(),
-  updatedAt: z.string(),
-  // Additive context-envelope fields (bug.5552): a planner needs creation time to
-  // derive STALLED/age and deployVerified to avoid re-ranking delivered work.
-  createdAt: z.string(),
-  deployVerified: z.boolean(),
+/** The legacy id alias is additive to each canonical assignee variant. */
+const ToolAssigneeSchema = z.discriminatedUnion("kind", [
+  SubjectRefSchema.options[0].extend({ id: z.string() }),
+  SubjectRefSchema.options[1].extend({ id: z.string() }),
+  SubjectRefSchema.options[2].extend({ id: z.string() }),
+]);
+/** Normalize the legacy capability alias into the canonical, enriched tool output. */
+function toToolAssignee(
+  assignee: WorkItemInfo["assignees"][number]
+): z.infer<typeof ToolAssigneeSchema> {
+  switch (assignee.kind) {
+    case "user": {
+      const userId = "userId" in assignee ? assignee.userId : assignee.id;
+      return { ...assignee, kind: "user", userId, id: userId };
+    }
+    case "agent": {
+      const agentId = "agentId" in assignee ? assignee.agentId : assignee.id;
+      return { ...assignee, kind: "agent", agentId, id: agentId };
+    }
+    case "system": {
+      const serviceId = "serviceId" in assignee ? assignee.serviceId : assignee.id;
+      return { ...assignee, kind: "system", serviceId, id: serviceId };
+    }
+  }
+}
+
+export const WorkItemOutputSchema = WorkItemDtoSchema.extend({
+  assignees: z.array(ToolAssigneeSchema),
   sourceUrl: z.string().url().optional(),
   sourceUrlUnavailable: z.literal(true).optional(),
-  // Additive, optional (backward compatible) — fields a planner needs to cite
-  // an exact item state and reason about scope.
-  revision: z.number().optional(),
-  outcome: z.string().optional(),
-  estimate: z.number().optional(),
-  /** Evaluation scores (story.5111): axis id → { v: 0–5, ev?: opaque evidence link }. */
-  scores: z
-    .record(z.string(), z.object({ v: z.number(), ev: z.string().optional() }))
-    .optional(),
-  parentId: z.string().optional(),
-  specRefs: z.array(z.string()).optional()
 });
 
 /** Max characters of `outcome` returned per item (keeps backlog pages bounded). */
@@ -289,38 +284,12 @@ export function createWorkItemQueryImplementation(
 
       return {
         items: items.map((item) => ({
-          id: item.id,
-          type: item.type,
-          title: item.title,
-          status: item.status,
-          actor: item.actor,
-          priority: item.priority,
-          rank: item.rank,
-          ...(item.rankScore !== undefined && { rankScore: item.rankScore }),
+          ...withoutSourceProvenance(item),
           summary: truncate(item.summary, WORK_ITEM_QUERY_SUMMARY_MAX_CHARS),
-          projectId: item.projectId,
-          labels: [...item.labels],
-          assignees: item.assignees.map((a) => ({
-            kind: a.kind,
-            id: a.id
-          })),
-          branch: item.branch,
-          pr: item.pr,
-          blockedBy: item.blockedBy,
-          updatedAt: item.updatedAt,
-          createdAt: item.createdAt,
-          deployVerified: item.deployVerified,
-          ...readSourceProvenance(deps.nodePublicOrigin, "work/items", item.id),
-          ...(item.revision !== undefined && { revision: item.revision }),
-          ...(item.outcome !== undefined && {
-            outcome: truncate(item.outcome, WORK_ITEM_QUERY_OUTCOME_MAX_CHARS)
-          }),
-          ...(item.estimate !== undefined && { estimate: item.estimate }),
+          ...(item.outcome !== undefined && { outcome: truncate(item.outcome, WORK_ITEM_QUERY_OUTCOME_MAX_CHARS) }),
           ...(item.scores !== undefined && { scores: capScores(item.scores) }),
-          ...(item.parentId !== undefined && { parentId: item.parentId }),
-          ...(item.specRefs !== undefined && {
-            specRefs: [...item.specRefs]
-          })
+          assignees: item.assignees.map(toToolAssignee),
+          ...readSourceProvenance(deps.nodePublicOrigin, "work/items", item.id),
         })),
         count: items.length,
         ...(page.nextCursor !== undefined && { nextCursor: page.nextCursor })

@@ -37,13 +37,14 @@ Work item port interfaces, domain types, and storage adapters for structured wor
 }
 ```
 
-**External deps:** `type-fest` (Tagged branded types), `yaml` (frontmatter parsing — adapter only). Doltgres adapter alone bundles `@cogni-dao/doltgres-admission` for the shared engine writer protocol; root/content/lease ports stay database-neutral.
+**External deps:** `zod` (canonical wire schema), `type-fest` (Tagged branded types), `yaml` (frontmatter parsing — adapter only). Doltgres adapter alone bundles `@cogni-dao/doltgres-admission` for the shared engine writer protocol; root/content/lease ports stay database-neutral.
 
 ## Public Surface
 
 - **Exports (root `@cogni/work-items`):**
   - `WorkItemId`, `Revision`, `WorkItemType`, `WorkItemStatus`, `ActorKind` — identity and enum types
   - `SubjectRef`, `ExternalRef`, `RelationType`, `WorkRelation` — structured domain types
+  - `toWorkItemDto` — spread-first read serializer with actor omission and derived rank
   - `WorkItem`, `WorkQuery` — full work item type and query filter
   - `WORK_ITEM_SORT_FIELDS`, `WORK_ITEM_SORT_DIRECTIONS`, `normalizeWorkItemOrder`, `compareWorkItems` — canonical ordering; default rankScore DESC, unknown last, id ASC
   - `WorkItemSortBy`, `WorkItemSortDirection`, `WorkItemOrder` — shared order types
@@ -89,7 +90,7 @@ pnpm vitest run packages/work-items/tests/
 
 ## Dependencies
 
-- **Internal:** none (leaf package)
+- **Internal:** none
 - **External:** `type-fest` (Tagged branded types), `yaml` (YAML parse/stringify)
 
 ## Change Protocol

@@ -13,7 +13,7 @@
 
 import { defineConfig } from "tsup";
 
-export const tsupConfig = defineConfig({
+export const tsupConfig = defineConfig([{
   entry: [
     "src/index.ts",
     "src/migrations.ts",
@@ -27,8 +27,15 @@ export const tsupConfig = defineConfig({
   sourcemap: true,
   platform: "node",
   noExternal: ["@cogni-dao/doltgres-admission"],
-  external: ["@cogni/ai-tools", "drizzle-orm", "postgres", "zod"],
-});
+  external: ["drizzle-orm", "postgres", "zod"],
+}, {
+  entry: ["src/contracts.ts"],
+  format: ["esm"],
+  dts: { compilerOptions: { composite: false, incremental: false } },
+  clean: false,
+  sourcemap: true,
+  platform: "neutral",
+}]);
 
 // biome-ignore lint/style/noDefaultExport: required by tsup
 export default tsupConfig;
