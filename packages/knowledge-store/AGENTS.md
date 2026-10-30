@@ -57,6 +57,7 @@ Shared ports, contribution workflow, and adapters for versioned domain knowledge
 **Subpath** (`@cogni/knowledge-store/adapters/doltgres`):
 
 - `DoltgresKnowledgeStoreAdapter` (`withWrite` required for mutations), `DoltgresAdapterConfig` (injected shared writer session), `buildDoltgresClient`, `DoltgresClientConfig`
+- `DomainSql`, `getDoltgresDomain`, `updateDoltgresDomain`, `deleteDoltgresDomain`: domain SQL operations for caller-owned query callbacks; mutations require the caller's existing admitted write scope and do not admit or commit.
 - `DoltgresKnowledgeContributionAdapter`, `DoltgresKnowledgeContributionAdapterConfig` (contribution-branch lifecycle)
 - `createDoltgresPusher`, `DoltgresPusher`, `DoltgresPushConfig` (post-merge mirror to a Dolt remote; lazy `dolt_remote add` + `dolt_push`)
 - `wrapPushSafe`, `PushOutcomeListener` (fire-and-forget wrapper with injectable success/failure callbacks — keeps logging out of the adapter)
