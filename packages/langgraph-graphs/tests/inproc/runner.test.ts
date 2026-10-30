@@ -14,7 +14,7 @@
  * @internal
  */
 
-import { AiExecutionError, type AiEvent } from "@cogni/ai-core";
+import { AiExecutionError, type AiEvent, LlmError } from "@cogni/ai-core";
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from "@langchain/core/messages";
 import { MiddlewareError } from "langchain";
 import { describe, expect, it } from "vitest";
@@ -188,7 +188,7 @@ describe("deadline attribution", () => {
   );
 
   it("preserves a wrapped provider failure classification", async () => {
-    const providerError = Object.assign(new Error("upstream failed"), { kind: "provider_5xx", status: 503 });
+    const providerError = new LlmError("upstream failed", "provider_5xx", 503);
     const opts = createTestRunnerOptions({ createGraph: () => ({
       invoke: async () => { throw MiddlewareError.wrap(providerError, "test"); },
     }) });

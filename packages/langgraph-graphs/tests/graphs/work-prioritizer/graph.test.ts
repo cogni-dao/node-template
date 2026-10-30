@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /** Catalog authority and observed cycle-report boundary regressions; no model-quality claims. */
-import { EDO_DECIDE_NAME, GET_CURRENT_TIME_NAME, KNOWLEDGE_READ_NAME, WORK_ITEM_TRANSITION_NAME } from "@cogni/ai-tools";
+import { EDO_DECIDE_NAME, GET_CURRENT_TIME_NAME, GOAL_LIST_NAME, KNOWLEDGE_READ_NAME, WORK_ITEM_TRANSITION_NAME } from "@cogni/ai-tools";
 import { AIMessage, ToolMessage } from "@langchain/core/messages";
 import { describe, expect, it } from "vitest";
 import { OPERATOR_LANGGRAPH_CATALOG } from "../../../src/catalog";
