@@ -19,7 +19,7 @@
 import { type CatalogBoundTool, TOOL_CATALOG } from "@cogni/ai-tools";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { ensureConfig } from "@langchain/core/runnables";
-import { ConfigurableModel, initChatModel } from "langchain/chat_models/universal";
+import { ConfigurableModel } from "langchain/chat_models/universal";
 
 import type { CreateReactAgentGraphOptions } from "../../graphs/types";
 import { createDevToolExecFn } from "./dev-tool-exec";
@@ -27,10 +27,11 @@ import { toLangChainToolsCaptured } from "./langchain-tools";
 
 /** Resolve implicit LangGraph configuration before the universal model chooses its provider model. */
 class InvocationConfiguredModel extends ConfigurableModel {
-  override _modelParams(config?: Parameters<ConfigurableModel["_modelParams"]>[0]) {
+  override _getModelInstance(config?: Parameters<ConfigurableModel["_getModelInstance"]>[0]) {
     const resolved = ensureConfig(config);
-    if (!resolved.configurable?.model) throw new Error("invocation_model_required");
-    return super._modelParams(resolved);
+    if (!this._defaultConfig?.model && !resolved.configurable?.model)
+      throw new Error("invocation_model_required");
+    return super._getModelInstance(resolved);
   }
 
   override bindTools(...args: Parameters<ConfigurableModel["bindTools"]>) {
@@ -105,15 +106,18 @@ export async function makeServerGraph<
 
   const tierModels: NonNullable<CreateReactAgentGraphOptions["tierModels"]> = {
     main: llm,
-    ...Object.fromEntries(await Promise.all(Object.entries(createGraph.tierModelIds ?? {}).map(async ([tier, model]) => {
+    ...Object.fromEntries(Object.entries(createGraph.tierModelIds ?? {}).map(([tier, model]) => {
       if (!model.trim() || tier === "main") throw new Error("invalid_model_tier");
-      return [tier, await initChatModel(model, {
-        modelProvider: "openai",
+      return [tier, new InvocationConfiguredModel({
+        defaultConfig: {
+          model,
+          modelProvider: "openai",
+          configuration: { baseURL },
+          apiKey,
+        },
         configurableFields: ["user"],
-        configuration: { baseURL },
-        apiKey,
       })];
-    }))),
+    })),
   };
 
   // Resolve bound tools from TOOL_CATALOG

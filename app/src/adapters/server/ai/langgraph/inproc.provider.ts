@@ -51,7 +51,6 @@ import type {
   GraphRunRequest,
   GraphRunResult,
   LlmToolDefinition,
-  Message,
 } from "@/ports";
 import { EVENT_NAMES, makeLogger } from "@/shared/observability";
 import { isModelAllowed } from "@/shared/ai/model-catalog.server";
@@ -434,12 +433,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
     const { runId, graphId } = req;
     const attempt = 0; // P0_ATTEMPT_FREEZE
 
-    return (params: {
-      messages: Message[];
-      model: string;
-      tools?: readonly LlmToolDefinition[];
-      abortSignal?: AbortSignal;
-    }) => {
+    return (params: Parameters<CompletionFn<LlmToolDefinition>>[0]) => {
       const result = (async () => {
         if (
           params.model !== req.modelRef.modelId &&
@@ -453,6 +447,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
           runContext: { runId, attempt, graphId },
           ...(params.abortSignal && { abortSignal: params.abortSignal }),
           ...(params.tools?.length && { tools: [...params.tools] }),
+          ...(params.toolChoice !== undefined && { toolChoice: params.toolChoice }),
         });
       })();
 
