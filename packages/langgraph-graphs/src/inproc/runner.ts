@@ -33,6 +33,7 @@ import { InMemoryStore, MemorySaver } from "@langchain/langgraph";
 import { z } from "zod";
 import { createHash } from "node:crypto";
 import { RunReceipts } from "../graphs/mission/receipts";
+import { projectMissionCycleReport } from "../graphs/work-prioritizer/graph";
 import {
   CogniCompletionAdapter,
   type CompletionFn,
@@ -179,6 +180,8 @@ export function createInProcGraphRunner<TTool = unknown>(
     const result = await executeTool(name, args, toolCallId);
     if (result.ok) receipts.observe(name, args, result.value);
     else receipts.denied = true;
+    if (opts.program === "work-review" || opts.program === "cogni-decide")
+      receipts.recordTool(name, args, result.ok ? result.value : { error: result.errorCode ?? "tool_error" }, toolCallId);
     return result;
   };
   const hash = (value: string) =>
@@ -345,9 +348,10 @@ export function createInProcGraphRunner<TTool = unknown>(
 
       // Extract structured response if present (from responseFormat graphs)
       const structuredOutput =
-        result.structuredResponse !== undefined
+        projectMissionCycleReport(opts.program, receipts, assistantContent) ??
+        (result.structuredResponse !== undefined
           ? (result.structuredResponse as Record<string, unknown>)
-          : undefined;
+          : undefined);
 
       // Harness model calls include internal child and summary text; only emit the final answer.
       if ((opts.program || opts.trustedProgramId) && assistantContent)

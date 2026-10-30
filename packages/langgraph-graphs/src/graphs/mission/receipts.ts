@@ -4,6 +4,7 @@
 /** Per-run observations from the authorized ToolRunner, shared by parent and children. */
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { AIMessage, ToolMessage, type BaseMessage } from "@langchain/core/messages";
 
 const Goal = z.object({
   id: z.string(),
@@ -47,9 +48,19 @@ export class RunReceipts {
   readonly items = new Map<string, ObservedItem>();
   readonly sources = new Map<string, ReadReceipt>();
   readonly guidance = new Set<string>();
+  readonly reportMessages: BaseMessage[] = [];
   denied = false;
 
   constructor(private readonly origin: string) {}
+
+  recordTool(name: string, args: unknown, value: unknown, toolCallId?: string) {
+    const id = toolCallId ?? `observed-${this.reportMessages.length}`;
+    const parsedArgs = z.record(z.string(), z.unknown()).safeParse(args);
+    this.reportMessages.push(
+      new AIMessage({ content: "", tool_calls: [{ id, name, args: parsedArgs.success ? parsedArgs.data : {}, type: "tool_call" }] }),
+      new ToolMessage({ name, tool_call_id: id, content: JSON.stringify(value) }),
+    );
+  }
 
   private addSource(id: string, url: string | undefined, content: string) {
     if (!url || new TextEncoder().encode(content).length > 65_536) return;

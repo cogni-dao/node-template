@@ -29,6 +29,7 @@ import {
   WORK_ITEM_TRANSITION_NAME,
 } from "@cogni/ai-tools";
 import {
+  AIMessage,
   type BaseMessage,
   isAIMessage,
   isToolMessage,
@@ -43,6 +44,7 @@ import {
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
 
 import type { CreateReactAgentGraphOptions } from "../types";
+import type { RunReceipts } from "../mission/receipts";
 import { WORK_PRIORITIZER_SYSTEM_PROMPT } from "./prompts";
 
 export const WORK_PRIORITIZER_GRAPH_NAME = "work-prioritizer" as const;
@@ -308,6 +310,20 @@ export function cycleTelemetry(
 }
 
 export type MissionLoopTelemetry = ReturnType<typeof cycleTelemetry>;
+
+/** Project the declared scheduled program report from observed authorized tool results. */
+export function projectMissionCycleReport(program: CreateReactAgentGraphOptions["program"], receipts: RunReceipts, answer: string) {
+  if (program !== "work-review" && program !== "cogni-decide") return undefined;
+  const rankScores = receipts.reportMessages.flatMap((message) => {
+    if (!isToolMessage(message) || message.name !== WORK_ITEM_TRANSITION_NAME) return [];
+    const output = parse(text(message));
+    return output?.success === true && typeof output.id === "string" && typeof output.rankScore === "number" && Number.isFinite(output.rankScore)
+      ? [{ id: output.id, rankScore: output.rankScore }]
+      : [];
+  });
+  return { telemetry: { ...cycleTelemetry([...receipts.reportMessages, new AIMessage(answer)]), decisionFiled: false, ...(rankScores.length ? { rankScores } : {}) } };
+}
+
 
 const State = Annotation.Root({
   ...MessagesAnnotation.spec,

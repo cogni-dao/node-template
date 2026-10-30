@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
+import { goalListContract } from "@cogni/ai-tools";
 import {
 	AIMessage,
 	HumanMessage,
@@ -14,6 +15,11 @@ import { InMemoryStore, MemorySaver } from "@langchain/langgraph";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
+	graphReportDelta,
+	graphReportLogFields,
+	NODE_LANGGRAPH_CATALOG,
+} from "../../../src/catalog";
+import {
 	cogniProfile,
 	createCogniProgram,
 } from "../../../src/graphs/mission/cogni";
@@ -21,6 +27,7 @@ import { createMissionGraph } from "../../../src/graphs/mission/graph";
 import { RunReceipts } from "../../../src/graphs/mission/receipts";
 import { createScoresGuard } from "../../../src/graphs/mission/score-guard";
 import { createPoetGraph } from "../../../src/graphs/poet/graph";
+import { projectMissionCycleReport } from "../../../src/graphs/work-prioritizer/graph";
 import { createMemoryPersistence } from "../../../src/inproc/postgres-persistence";
 import { createInProcGraphRunner } from "../../../src/inproc/runner";
 import type { CompletionFn } from "../../../src/inproc/types";
@@ -68,6 +75,129 @@ describe("shared cogni harness", () => {
 		expect(seen.join("\n")).toContain("Mission clock control");
 		expect(seen.join("\n")).toContain("Host-owned current UTC time");
 		expect(seen.join("\n")).toContain(new Date().getUTCFullYear().toString());
+	});
+
+	it("returns scheduled cycle reports from child reads without streaming child text", async () => {
+		for (const [alias, program] of [
+			["work-prioritizer", "work-review"],
+			["cogni-decide", "cogni-decide"],
+		] as const) {
+			let turn = 0;
+			const completionFn: CompletionFn = () => {
+				const current = turn++;
+				const tool =
+					current === 0
+						? {
+								id: "task",
+								name: "task",
+								args: {
+									subagent_type: "ledger-reader",
+									description: "Read goals",
+								},
+							}
+						: current === 1
+							? { id: "goals", name: "core__goal_list", args: {} }
+							: undefined;
+				const reply = tool
+					? {
+							toolCalls: [
+								{
+									id: tool.id,
+									type: "function" as const,
+									function: {
+										name: tool.name,
+										arguments: JSON.stringify(tool.args),
+									},
+								},
+							],
+						}
+					: { content: current === 2 ? "PRIVATE CHILD" : "Parent report" };
+				return {
+					stream: (async function* () {
+						yield {
+							type: "text_delta" as const,
+							delta: current === 2 ? "PRIVATE CHILD" : "model draft",
+						};
+					})(),
+					final: Promise.resolve({ ok: true as const, ...reply }),
+				};
+			};
+			const run = createInProcGraphRunner({
+				program,
+				requestIntent: "decide",
+				createGraph: createMissionGraph,
+				completionFn,
+				sourceContext: {
+					nodeId: "node",
+					origin: "https://node.example",
+					mission: { content: "Mission", sourceRef: "mission", buildSha: null },
+				},
+				createToolExecFn: () => async () => ({
+					ok: true,
+					value: {
+						goals: [
+							{
+								id: "goal-one",
+								title: "Goal",
+								content: "Goal content",
+								evaluateAt: null,
+							},
+						],
+					},
+				}),
+				toolContracts: [goalListContract],
+				request: {
+					runId: alias,
+					messages: [{ role: "user", content: "Read goals" }],
+					configurable: { model: "test-model", toolIds: ["core__goal_list"] },
+				},
+			});
+			const deltas: string[] = [];
+			for await (const event of run.stream)
+				if (event.type === "text_delta") deltas.push(event.delta);
+			const result = await run.final;
+			expect(result.ok).toBe(true);
+			expect(deltas.join("")).toBe(result.content);
+			expect(deltas.join("")).not.toContain("PRIVATE CHILD");
+			expect(result.structuredOutput?.telemetry).toMatchObject({
+				goalIds: ["goal-one"],
+				changeCount: 0,
+				decisionFiled: false,
+			});
+			const declaration = NODE_LANGGRAPH_CATALOG[alias].report;
+			expect(
+				graphReportLogFields(declaration, alias, result.structuredOutput)[0]
+					?.event,
+			).toBe(declaration.event);
+			expect(graphReportDelta(result.structuredOutput)).toContain('"goal-one"');
+		}
+	});
+
+	it("reports only successful observed score patches and returned rank scores", () => {
+		const receipts = new RunReceipts("https://node.example");
+		receipts.recordTool(
+			"core__work_item_query",
+			{},
+			{ items: [{ id: "task.1", scores: { goal: { v: 1 } } }] },
+		);
+		receipts.recordTool(
+			"core__work_item_transition",
+			{ action: "patch", id: "task.1", scores: { goal: { v: 3 } } },
+			{ success: true, id: "task.1", rankScore: 4.5 },
+		);
+		receipts.recordTool(
+			"core__work_item_transition",
+			{ action: "patch", id: "task.2" },
+			{ success: false, id: "task.2", code: "revision_conflict" },
+		);
+		expect(
+			projectMissionCycleReport("work-review", receipts, "done")?.telemetry,
+		).toMatchObject({
+			changedItemIds: ["task.1"],
+			changeCount: 1,
+			rankScores: [{ id: "task.1", rankScore: 4.5 }],
+			decisionFiled: false,
+		});
 	});
 
 	it("preserves textual blocks across all supported message roles", () => {
