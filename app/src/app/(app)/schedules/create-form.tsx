@@ -13,10 +13,10 @@
 "use client";
 import type { ModelRef } from "@cogni/ai-core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRouter } from "next/navigation";
 import { useState } from "react";
 import {
   Button,
+  Input,
   Select,
   SelectContent,
   SelectItem,
@@ -27,14 +27,19 @@ import { ModelPicker } from "@/features/ai/components/ModelPicker";
 import { useModels } from "@/features/ai/hooks/useModels";
 import { createSchedule } from "./_api/createSchedule";
 import { fetchAgents } from "./_api/fetchAgents";
-import { cadence, SCHEDULE_PRESETS, TIMEZONES } from "./presentation";
+import { SCHEDULE_PRESETS, TIMEZONES } from "./presentation";
 
-export function CreateScheduleForm({ onClose }: { onClose: () => void }) {
-  const router = useRouter();
+export function CreateScheduleForm({
+  onClose,
+  onPendingChange,
+}: {
+  onClose: () => void;
+  onPendingChange: (pending: boolean) => void;
+}) {
   const queryClient = useQueryClient();
   const [prompt, setPrompt] = useState("");
   const [agent, setAgent] = useState("");
-  const [cron, setCron] = useState("0 9 * * *");
+  const [cron, setCron] = useState("");
   const [timezone, setTimezone] = useState("UTC");
   const [modelRef, setModelRef] = useState<ModelRef | null>(null);
   const agents = useQuery({
@@ -46,24 +51,28 @@ export function CreateScheduleForm({ onClose }: { onClose: () => void }) {
   const selectedModel = modelRef ?? models.data?.defaultRef;
   const create = useMutation({
     mutationFn: createSchedule,
-    onSuccess: (schedule) => {
+    onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["schedules"] });
-      router.push(`/schedules/${schedule.id}`);
+      onPendingChange(false);
+      onClose();
     },
+    onSettled: () => onPendingChange(false),
   });
   const catalogError = agents.error ?? models.error;
   const canCreate =
     prompt.trim() &&
     agent &&
+    cron &&
     selectedModel &&
     !catalogError &&
     (models.data?.models.length ?? 0) > 0;
   return (
     <form
-      className="space-y-6 rounded-xl border bg-card p-5 md:p-6"
+      className="rounded-lg border bg-card p-6"
       onSubmit={(event) => {
         event.preventDefault();
-        if (!canCreate || !selectedModel) return;
+        if (create.isPending || !canCreate || !selectedModel) return;
+        onPendingChange(true);
         create.mutate({
           graphId: agent,
           input: {
@@ -75,32 +84,41 @@ export function CreateScheduleForm({ onClose }: { onClose: () => void }) {
         });
       }}
     >
-      <div>
-        <h2 className="font-semibold text-xl">New schedule</h2>
-        <p className="mt-1 text-muted-foreground text-sm">
-          Choose what to run and when it should repeat.
-        </p>
-      </div>
-      {catalogError && (
-        <p role="alert" className="text-destructive text-sm">
-          Unable to load agents or models. Close and try again.
-        </p>
+      <h2 className="mb-4 font-semibold text-lg">New Schedule</h2>
+      {(agents.isLoading || models.isLoading) && (
+        <output className="mb-4 block text-sm">
+          Loading creation options…
+        </output>
       )}
-      <div className="space-y-2">
-        <label htmlFor="schedule-prompt" className="font-medium text-sm">
-          What should the agent do?
-        </label>
-        <textarea
-          id="schedule-prompt"
-          required
-          rows={3}
-          value={prompt}
-          onChange={(event) => setPrompt(event.target.value)}
-          placeholder="Describe the result you want from each run…"
-          className="w-full rounded-md border bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        />
-      </div>
-      <div className="grid gap-5 md:grid-cols-2">
+      {catalogError && (
+        <div role="alert" className="mb-4 text-sm">
+          Creation options are unavailable. Existing schedules remain
+          accessible.{" "}
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => {
+              void agents.refetch();
+              void models.refetch();
+            }}
+          >
+            Try again
+          </Button>
+        </div>
+      )}
+      <div className="grid gap-4 md:grid-cols-2">
+        <div className="space-y-2 md:col-span-2">
+          <label htmlFor="schedule-prompt" className="font-medium text-sm">
+            Prompt
+          </label>
+          <Input
+            id="schedule-prompt"
+            required
+            value={prompt}
+            onChange={(event) => setPrompt(event.target.value)}
+            placeholder="Enter the prompt for this scheduled run..."
+          />
+        </div>
         <div className="space-y-2">
           <label htmlFor="schedule-agent" className="font-medium text-sm">
             Agent
@@ -109,7 +127,7 @@ export function CreateScheduleForm({ onClose }: { onClose: () => void }) {
             <SelectTrigger id="schedule-agent">
               <SelectValue
                 placeholder={
-                  agents.isLoading ? "Loading agents…" : "Choose an agent"
+                  agents.isLoading ? "Loading agents…" : "Select an agent"
                 }
               />
             </SelectTrigger>
@@ -138,11 +156,11 @@ export function CreateScheduleForm({ onClose }: { onClose: () => void }) {
         </div>
         <div className="space-y-2">
           <label htmlFor="schedule-frequency" className="font-medium text-sm">
-            Repeats
+            Frequency
           </label>
           <Select value={cron} onValueChange={setCron}>
             <SelectTrigger id="schedule-frequency">
-              <SelectValue />
+              <SelectValue placeholder="Select frequency" />
             </SelectTrigger>
             <SelectContent>
               {SCHEDULE_PRESETS.map((item) => (
@@ -163,33 +181,22 @@ export function CreateScheduleForm({ onClose }: { onClose: () => void }) {
             </SelectTrigger>
             <SelectContent>
               {TIMEZONES.map((item) => (
-                <SelectItem key={item} value={item}>
-                  {item}
+                <SelectItem key={item.value} value={item.value}>
+                  {item.label}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
         </div>
       </div>
-      <p className="rounded-md bg-muted px-3 py-2 text-sm">
-        {cadence(cron)} · {timezone}
-      </p>
       {create.error && (
         <p role="alert" className="text-destructive text-sm">
           {create.error.message}
         </p>
       )}
-      <div className="flex gap-3">
+      <div className="mt-4 flex items-end">
         <Button type="submit" disabled={!canCreate || create.isPending}>
-          {create.isPending ? "Creating…" : "Create schedule"}
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          onClick={onClose}
-          disabled={create.isPending}
-        >
-          Cancel
+          {create.isPending ? "Creating..." : "Create Schedule"}
         </Button>
       </div>
     </form>
