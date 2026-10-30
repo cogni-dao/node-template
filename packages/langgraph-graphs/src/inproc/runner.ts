@@ -208,23 +208,27 @@ export function createInProcGraphRunner<TTool = unknown>(
       ? `${request.configurable.graphId}:${request.runId}`
       : request.runId;
   const readSkill = async (id: string) => {
-    const result = await executeTool("core__knowledge_read", { id });
-    if (!result.ok) throw new Error("skill_read_denied");
-    const parsed = z
-      .object({
-        mode: z.literal("get"),
-        entries: z.array(z.object({ id: z.string(), content: z.string() })),
-      })
-      .parse(result.value);
-    const entry = parsed.entries.find((row) => row.id === id);
-    if (!entry) throw new Error("skill_not_found");
-    if (
-      new TextEncoder().encode(entry.content).length > 65_000 ||
-      entry.content.split("\n").length > 490
-    )
-      throw new Error("skill_body_exceeds_limit");
-    receipts.observe("core__knowledge_read", { id }, result.value);
-    return entry.content;
+    try {
+      const result = await toolExecFn("core__knowledge_read", { id });
+      if (!result.ok) throw new Error("skill_read_denied");
+      const parsed = z
+        .object({
+          mode: z.literal("get"),
+          entries: z.array(z.object({ id: z.string(), content: z.string() })),
+        })
+        .parse(result.value);
+      const entry = parsed.entries.find((row) => row.id === id);
+      if (!entry) throw new Error("skill_not_found");
+      if (
+        new TextEncoder().encode(entry.content).length > 65_000 ||
+        entry.content.split("\n").length > 490
+      )
+        throw new Error("skill_body_exceeds_limit");
+      return entry.content;
+    } catch (error) {
+      receipts.denied = true;
+      throw error;
+    }
   };
 
   // Create no-arg CogniCompletionAdapter (reads from ALS + configurable at invoke time)

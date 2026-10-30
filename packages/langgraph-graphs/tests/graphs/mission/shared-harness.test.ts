@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
+import { AIMessage } from "@langchain/core/messages";
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { FakeListChatModel } from "@langchain/core/utils/testing";
 import { InMemoryStore, MemorySaver } from "@langchain/langgraph";
@@ -368,6 +369,80 @@ describe("shared cogni harness", () => {
 			},
 		]);
 	});
+	it("denies score writes after a failed or incomplete lazy skill read", async () => {
+		for (const failure of ["denied", "incomplete"]) {
+			let writes = 0;
+			let result = "";
+			const run = createInProcGraphRunner({
+				createGraph: (opts) => ({
+					invoke: async () => {
+						if (!opts.receipts || !opts.readSkill)
+							throw new Error("missing host dependencies");
+						opts.receipts.observe(
+							"core__goal_list",
+							{},
+							{ goals: [{ id: "goal-one", content: "Goal" }] },
+						);
+						opts.receipts.observe(
+							"core__work_item_read",
+							{},
+							{
+								item: {
+									id: "task.1",
+									type: "task",
+									status: "needs_implement",
+									revision: 1,
+									labels: ["goal:one"],
+									createdAt: "2026-10-01T00:00:00Z",
+									scores: { goal: { v: 1 } },
+								},
+							},
+						);
+						try {
+							await opts.readSkill("optional-skill");
+						} catch {
+							/* agent can continue after a backend error */
+						}
+						const writer = new DynamicStructuredTool({
+							name: "writer",
+							description: "test",
+							schema: z.object({}).passthrough(),
+							func: async () => {
+								writes++;
+								return JSON.stringify({ success: true });
+							},
+						});
+						result = await createScoresGuard(opts.receipts, writer, []).invoke({
+							id: "task.1",
+							expectedRevision: 1,
+							scores: { goal: { v: 3 } },
+						});
+						return { messages: [new AIMessage("done")] };
+					},
+				}),
+				completionFn: () => {
+					throw new Error("unexpected model call");
+				},
+				createToolExecFn: () => async () =>
+					failure === "denied"
+						? { ok: false, errorCode: "unavailable", safeMessage: "denied" }
+						: { ok: true, value: { mode: "get", entries: [] } },
+				toolContracts: [],
+				request: {
+					runId: `skill-${failure}`,
+					messages: [{ role: "user", content: "read" }],
+					configurable: { model: "test", toolIds: [] },
+				},
+			});
+			for await (const _event of run.stream) {
+				/* drain */
+			}
+			expect((await run.final).ok).toBe(true);
+			expect(result).toContain("incomplete_guidance_or_read");
+			expect(writes).toBe(0);
+		}
+	});
+
 	it("requires a fresh item read after a conflicted or uncertain write", async () => {
 		const receipts = new RunReceipts("https://node.example");
 		receipts.observe(
