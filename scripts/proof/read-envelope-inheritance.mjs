@@ -70,9 +70,10 @@ try {
     const entry = name === "ai-core" ? join(root, "packages/ai-core/src/index.ts") : join(proofRoot, `${name}.ts`);
     if (nodeEntries[name]) writeFileSync(entry, nodeEntries[name]);
     const dir = join(proofRoot, name); mkdirSync(dir);
-    const pkg = { name: `@cogni/${name}`, version: "0.0.0", type: "module", exports: { ".": { ...(declarations ? { types: "./dist/index.d.ts" } : {}), import: "./dist/index.js" } }, files: ["dist"] };
+    // The root toolchain emits ESM .d.mts declarations for these temporary entries.
+    const pkg = { name: `@cogni/${name}`, version: "0.0.0", type: "module", exports: { ".": { ...(declarations ? { types: "./dist/index.d.mts" } : {}), import: "./dist/index.js" } }, files: ["dist"] };
     writeFileSync(join(dir, "package.json"), JSON.stringify(pkg));
-    await build({ entry: { index: entry }, outDir: join(dir, "dist"), format: ["esm"], platform: "node", splitting: false, clean: true, config: false, outExtension: () => ({ js: ".js", dts: ".d.ts" }), tsconfig: join(root, "packages/ai-tools/tsconfig.json"), external, noExternal: ["@cogni/node-contracts"], dts: declarations ? { compilerOptions: { composite: false, incremental: false, rootDir: "/" }, resolve: ["@cogni/ai-core"] } : false });
+    await build({ entry: { index: entry }, outDir: join(dir, "dist"), format: ["esm"], platform: "node", splitting: false, clean: true, config: false, outExtension: () => ({ js: ".js" }), tsconfig: join(root, "packages/ai-tools/tsconfig.json"), external, noExternal: ["@cogni/node-contracts"], dts: declarations ? { compilerOptions: { composite: false, incremental: false, rootDir: "/" }, resolve: ["@cogni/ai-core"] } : false });
     assertEntrypoints(dir, pkg);
     run("npm", ["pack", "--pack-destination", artifacts], dir);
     const filename = `cogni-${name}-0.0.0.tgz`;
