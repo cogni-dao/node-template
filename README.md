@@ -10,10 +10,10 @@ deployment, observability, durable knowledge, and agent infrastructure included.
 ## Develop locally
 
 Use this node's [local environment example](.env.local.example) and the
-[local agent development guide draft](https://cognidao.org/knowledge/inbox/contrib-flock-leader-conductor-32ab8994).
-The current local proof uses an explicitly configured shared local substrate.
+[local agent development guide](https://cognidao.org/knowledge/local-agent-development).
+Local startup uses an explicitly configured shared local substrate.
 This repository does not include a cold-machine infrastructure installer. The guide
-is awaiting review; [agent infrastructure](https://cognidao.org/knowledge/agent-infrastructure-expert)
+is merged; [agent infrastructure](https://cognidao.org/knowledge/agent-infrastructure-expert)
 owns the existing execution contract.
 
 ```bash
