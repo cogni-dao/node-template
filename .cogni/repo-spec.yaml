@@ -37,13 +37,6 @@ intent:
 
 governance:
   chain_id: "8453" # Base mainnet
-  schedules:
-    - charter: MISSION_DECIDE
-      cron: "0 * * * *"
-      timezone: UTC
-      entrypoint: DECIDE
-      graph: langgraph:cogni-decide
-      model: deepseek-v4-flash
 
 # Activity ledger ingestion + approver allowlist.
 # `approvers` gates the `(admin)/` route group and write routes under
