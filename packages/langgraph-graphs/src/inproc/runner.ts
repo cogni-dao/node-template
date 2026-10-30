@@ -314,6 +314,10 @@ export function createInProcGraphRunner<TTool = unknown>(
           });
           if (existing) throw new Error("checkpoint_recovery_required");
         }
+        if (opts.program || opts.trustedProgramId) {
+          runSignal?.throwIfAborted();
+          emit({ type: "status", phase: "thinking" });
+        }
         return runWithCogniExecContext(
           {
             completionFn: completionFn as CompletionFn<unknown>,

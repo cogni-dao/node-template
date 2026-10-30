@@ -19,6 +19,7 @@ const BILLING_ID = "20000000-0000-4000-a000-000000000001";
 const VIRTUAL_KEY_ID = "30000000-0000-4000-a000-000000000001";
 
 const mocks = vi.hoisted(() => ({
+  runGraph: vi.fn(),
   checkIdempotency: vi.fn().mockResolvedValue({ status: "new" }),
   createPendingRequest: vi.fn().mockResolvedValue({
     status: "claimed",
@@ -62,7 +63,7 @@ vi.mock("@/shared/env", () => ({
 
 vi.mock("@/bootstrap/graph-executor.factory", () => {
   const executor = {
-    runGraph: () => ({
+    runGraph: mocks.runGraph.mockImplementation(() => ({
       stream: (async function* () {
         yield { type: "assistant_final" as const, content: "answer" };
         yield { type: "done" as const };
@@ -73,7 +74,7 @@ vi.mock("@/bootstrap/graph-executor.factory", () => {
         usage: { promptTokens: 1, completionTokens: 1 },
         finishReason: "stop" as const,
       }),
-    }),
+    })),
   };
   return {
     createGraphExecutor: () => executor,
@@ -159,7 +160,7 @@ describe("POST /api/internal/graphs/{graphId}/runs terminal publication", () => 
     });
   });
 
-  it("executes a matching API preclaim without inserting a second pending row", async () => {
+  it("rejects a matching live pending run without executing it", async () => {
     const requestHash = "a".repeat(64);
     mocks.checkIdempotency.mockResolvedValue({
       status: "pending",
@@ -202,15 +203,10 @@ describe("POST /api/internal/graphs/{graphId}/runs terminal publication", () => 
       { params: Promise.resolve({ graphId: "langgraph:default" }) }
     );
 
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(409);
     expect(mocks.createPendingRequest).not.toHaveBeenCalled();
-    expect(mocks.heartbeatRequest).toHaveBeenCalledWith(
-      "ai:scoped-key",
-      expect.any(String)
-    );
-    expect(mocks.finalizeRequest).toHaveBeenCalledWith("ai:scoped-key", {
-      ok: false,
-      errorCode: "internal",
-    });
+    expect(mocks.heartbeatRequest).not.toHaveBeenCalled();
+    expect(mocks.finalizeRequest).not.toHaveBeenCalled();
+    expect(mocks.runGraph).not.toHaveBeenCalled();
   });
 });

@@ -34,6 +34,46 @@ import type { CompletionFn } from "../../../src/inproc/types";
 import { fromBaseMessage } from "../../../src/runtime/core/message-converters";
 
 describe("shared cogni harness", () => {
+	it("emits thinking before deferred completion and only the final answer", async () => {
+		let release!: (value: { ok: true; content: string }) => void;
+		const completion = new Promise<{ ok: true; content: string }>((resolve) => {
+			release = resolve;
+		});
+		const run = createInProcGraphRunner({
+			createGraph: createPoetGraph,
+			trustedProgramId: "poet",
+			completionFn: () => ({
+				stream: (async function* () {
+					yield { type: "text_delta" as const, delta: "PRIVATE DRAFT" };
+				})(),
+				final: completion,
+			}),
+			createToolExecFn: () => async () => ({ ok: true, value: {} }),
+			toolContracts: [],
+			request: {
+				runId: "deferred-status",
+				messages: [{ role: "user", content: "Write a line" }],
+				configurable: { model: "test-model", toolIds: [] },
+			},
+		});
+		const iterator = run.stream[Symbol.asyncIterator]();
+		expect((await iterator.next()).value).toEqual({
+			type: "status",
+			phase: "thinking",
+		});
+		release({ ok: true, content: "Final answer" });
+		const events = [];
+		for await (const event of { [Symbol.asyncIterator]: () => iterator })
+			events.push(event);
+		expect(events.filter((event) => event.type === "text_delta")).toEqual([
+			{ type: "text_delta", delta: "Final answer" },
+		]);
+		expect(
+			events.filter((event) => event.type === "assistant_final"),
+		).toHaveLength(1);
+		expect(events.filter((event) => event.type === "done")).toHaveLength(1);
+		expect((await run.final).content).toBe("Final answer");
+	});
 	it("passes the SDK system instructions and fresh host clock to the billed completion", async () => {
 		const seen: string[] = [];
 		const completionFn: CompletionFn = (request) => {
