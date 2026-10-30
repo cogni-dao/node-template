@@ -37,7 +37,6 @@ import {
   createWorkPrioritizerGraph,
   cycleScores,
 } from "../../../src/graphs/work-prioritizer/graph";
-import { WORK_PRIORITIZER_SYSTEM_PROMPT } from "../../../src/graphs/work-prioritizer/prompts";
 import { WORK_PRIORITIZER_TOOL_IDS } from "../../../src/graphs/work-prioritizer/tools";
 import { createInProcGraphRunner } from "../../../src/inproc/runner";
 import type {
@@ -196,11 +195,21 @@ describe("work-prioritizer mission-loop agent", () => {
     expect(entry.report).toEqual({ event: "ai.work_prioritizer.cycle" });
   });
 
-  async function run(then: Then, prompts: string[] = []) {
+  async function run(
+    then: Then,
+    prompts: string[] = [],
+    executed: string[] = [],
+  ) {
     const { stream, final } = createInProcGraphRunner({
       createGraph: createWorkPrioritizerGraph,
       completionFn: scriptedCompletion(prompts, then),
-      createToolExecFn: fakeExec,
+      createToolExecFn: (emit) => {
+        const execute = fakeExec(emit);
+        return (...args) => {
+          executed.push(args[0]);
+          return execute(...args);
+        };
+      },
       toolContracts: [
         goalListContract,
         workItemQueryContract,
@@ -224,63 +233,37 @@ describe("work-prioritizer mission-loop agent", () => {
     return final;
   }
 
-  it("runs the tool loop and returns one flat cycle report", async () => {
-    const prompts: string[] = [];
-    const result = await run("report", prompts);
-
+  it("public export uses the shared harness and rejects legacy priority and EDO writes", async () => {
+    const executed: string[] = [];
+    const result = await run("report", [], executed);
+    expect(executed).not.toContain(WORK_ITEM_TRANSITION_NAME);
+    expect(executed).not.toContain(EDO_DECIDE_NAME);
     expect(result.ok).toBe(true);
     expect(result.content).toBe(REPORT);
-    expect(prompts[0]).toContain(WORK_PRIORITIZER_SYSTEM_PROMPT.slice(0, 40));
-    expect(result.structuredOutput?.telemetry).toEqual({
-      goalIds: ["goal-ai-work-converges", "goal-fleet-pays-itself"],
-      changedItemIds: ["task.1"],
-      changeCount: 1,
-      deniedCount: 1,
-      toolErrorCount: 0,
-      edoDecisionId: "mission-loop-20261023T00",
-      knowledgeReads: 0,
-      guidanceReceipts: [],
-      itemsRead: 0,
-      identicalPatches: 0,
-      unknownBaselinePatches: 1,
-      topIds: [],
-      scores: {
-        knowledge_read: 0,
-        evidence_read: 0,
-        goal_cited: 0,
-        novel_change: 0,
-        grounded: 0,
-        action: 0,
-      },
-      aborted: false,
-      report: REPORT,
+    expect(result.structuredOutput?.telemetry).toMatchObject({
+      changedItemIds: [],
+      changeCount: 0,
+      decisionFiled: false,
     });
+    expect(result.structuredOutput?.telemetry).not.toHaveProperty(
+      "edoDecisionId",
+    );
   });
 
-  it("a no-change run still records exactly one decision", async () => {
+  it("a no-change public run files no decision", async () => {
     const result = await run("nochange");
-
     expect(result.ok).toBe(true);
     expect(result.structuredOutput?.telemetry).toMatchObject({
       changedItemIds: [],
       changeCount: 0,
-      edoDecisionId: "mission-loop-20261023T00",
-      aborted: false,
+      decisionFiled: false,
     });
   });
 
-  it("REPORT_ON_TURN_LIMIT: a turn-limit abort still reports the changes that landed", async () => {
+  it("an unbounded model loop fails rather than certifying partial success", async () => {
     const result = await run("loop");
-
-    expect(result.ok).toBe(true);
-    expect(result.structuredOutput?.telemetry).toMatchObject({
-      changedItemIds: ["task.1"],
-      changeCount: 1,
-      deniedCount: 1,
-      aborted: true,
-      abortReason: "recursion_limit",
-      report: "",
-    });
+    expect(result.ok).toBe(false);
+    expect(result.structuredOutput).toBeUndefined();
   });
 
   it("a model error fails the run (not swallowed as aborted)", async () => {
@@ -390,7 +373,7 @@ describe("work-prioritizer mission-loop agent", () => {
     }
     const result = await final;
     expect(result.ok).toBe(true);
-    expect(executed).toEqual([KNOWLEDGE_READ_NAME, WORK_ITEM_TRANSITION_NAME]);
+    expect(executed).toEqual([KNOWLEDGE_READ_NAME]);
     expect(result.structuredOutput?.telemetry).toMatchObject({
       knowledgeReads: 1,
       guidanceReceipts: [

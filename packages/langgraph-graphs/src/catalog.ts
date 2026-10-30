@@ -37,6 +37,7 @@ import {
   COGNI_DECIDE_PROMPT,
   COGNI_DECIDE_TOOL_IDS,
 } from "./graphs/mission/cogni-decide";
+import { COGNI_CHAT_PROMPT } from "./graphs/work-prioritizer/prompts";
 import {
   COGNI_READ_PROMPT,
   COGNI_READ_TOOL_IDS,
@@ -121,7 +122,7 @@ export const GRAPH_REPORT_CLOSE = "</graph_report>";
 export function graphReportLogFields(
   report: GraphReportDecl,
   runId: string,
-  structuredOutput: Record<string, unknown> | undefined
+  structuredOutput: Record<string, unknown> | undefined,
 ): Record<string, unknown>[] {
   const telemetry = structuredOutput?.telemetry;
   return telemetry && typeof telemetry === "object"
@@ -131,7 +132,7 @@ export function graphReportLogFields(
 
 /** The stream echo of a catalog-declared report (`<graph_report>{telemetry}</graph_report>`), or null. */
 export function graphReportDelta(
-  structuredOutput: Record<string, unknown> | undefined
+  structuredOutput: Record<string, unknown> | undefined,
 ): string | null {
   const telemetry = structuredOutput?.telemetry;
   return telemetry && typeof telemetry === "object"
@@ -142,7 +143,7 @@ export function graphReportDelta(
 const createAutoresearchCatalogEntry = (
   displayName: string,
   description: string,
-  systemPrompt: string
+  systemPrompt: string,
 ): CatalogEntry => ({
   displayName,
   description,
@@ -169,19 +170,19 @@ export const NODE_LANGGRAPH_CATALOG = {
   [AUTORESEARCH_SINGLE_LANE_GRAPH_NAME]: createAutoresearchCatalogEntry(
     "Autoresearch Single Lane",
     "Karpathy-style single-lane experiment loop with Thinker, Flasher, Eval, and Judge",
-    AUTORESEARCH_SINGLE_LANE_PROMPT
+    AUTORESEARCH_SINGLE_LANE_PROMPT,
   ),
 
   [AUTORESEARCH_SYNTROPY_LOOP_GRAPH_NAME]: createAutoresearchCatalogEntry(
     "Autoresearch Syntropy Loop",
     "Knowledge-syntropy autoresearch loop with Librarian, Archivist, Curator, Thinker, Flasher, and Judge",
-    AUTORESEARCH_SYNTROPY_LOOP_PROMPT
+    AUTORESEARCH_SYNTROPY_LOOP_PROMPT,
   ),
 
   [AUTORESEARCH_REGISTRY_SWARM_GRAPH_NAME]: createAutoresearchCatalogEntry(
     "Autoresearch Registry Swarm",
     "Registry-aware autoresearch tournament across conservative, retrieval, and topology lanes",
-    AUTORESEARCH_REGISTRY_SWARM_PROMPT
+    AUTORESEARCH_REGISTRY_SWARM_PROMPT,
   ),
 
   /**
@@ -311,7 +312,7 @@ export const NODE_LANGGRAPH_CATALOG = {
       "Hub-grounded read-only chat: plans, delegates goal and work-item reading to a cheap subagent, answers; files nothing",
     toolIds: COGNI_READ_TOOL_IDS as readonly string[],
     graphFactory: createMissionGraph,
-    systemPrompt: `${COGNI_READ_PROMPT}\n\nAnswer ordinary general-knowledge questions directly when no node-specific evidence is needed. For node-specific claims, inspect the relevant available source, cite what you actually observed, and acknowledge missing evidence; the virtual filesystem is not the mounted repository. Do not repeatedly search or list the same missing or unsupported path or retry an unchanged failed operation; use an appropriate available source or finish with the limitation.`,
+    systemPrompt: COGNI_CHAT_PROMPT,
     program: "cogni-chat",
   },
   cogni: {

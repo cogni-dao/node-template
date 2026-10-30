@@ -19,10 +19,11 @@
  * @public
  */
 
+import { createHash } from "node:crypto";
 import {
   type AiEvent,
-  normalizeErrorToExecutionCode,
   isAiExecutionError,
+  normalizeErrorToExecutionCode,
   type ToolSpec,
 } from "@cogni/ai-core";
 import type { BaseMessage } from "@langchain/core/messages";
@@ -30,12 +31,10 @@ import {
   DynamicStructuredTool,
   type StructuredToolInterface,
 } from "@langchain/core/tools";
-import { MiddlewareError } from "langchain";
 import { InMemoryStore, MemorySaver } from "@langchain/langgraph";
+import { MiddlewareError } from "langchain";
 import { z } from "zod";
-import { createHash } from "node:crypto";
-import { RunReceipts } from "../graphs/mission/receipts";
-import { projectMissionCycleReport } from "../graphs/work-prioritizer/graph";
+
 import {
   CogniCompletionAdapter,
   type CompletionFn,
@@ -173,17 +172,21 @@ export function createInProcGraphRunner<TTool = unknown>(
 
   const tokenSink = {
     push: (event: AiEvent) => {
-      if (!(opts.program || opts.trustedProgramId) || event.type !== "text_delta") emit(event);
+      if (
+        !(opts.program || opts.trustedProgramId) ||
+        event.type !== "text_delta"
+      )
+        emit(event);
     },
   };
   const executeTool = createToolExecFn(emit);
-  const receipts = new RunReceipts(opts.sourceContext?.origin ?? "");
+  const hooks = createGraph.createRunHooks?.({
+    program: opts.program,
+    origin: opts.sourceContext?.origin,
+  });
   const toolExecFn: ToolExecFn = async (name, args, toolCallId) => {
     const result = await executeTool(name, args, toolCallId);
-    if (result.ok) receipts.observe(name, args, result.value);
-    else receipts.denied = true;
-    if (opts.program === "work-review" || opts.program === "cogni-decide")
-      receipts.recordTool(name, args, result.ok ? result.value : { error: result.errorCode ?? "tool_error" }, toolCallId);
+    hooks?.observeTool?.(name, args, result, toolCallId);
     return result;
   };
   const hash = (value: string) =>
@@ -205,7 +208,11 @@ export function createInProcGraphRunner<TTool = unknown>(
     opts.trustedProgramId,
     request.runId,
   ];
-  if (opts.trustedProgramId && persistence?.checkpointer && identityParts.some((part) => !part))
+  if (
+    opts.trustedProgramId &&
+    persistence?.checkpointer &&
+    identityParts.some((part) => !part)
+  )
     throw new Error("cogni_trusted_identity_unavailable");
   const threadId = opts.trustedProgramId && persistence?.checkpointer
     ? `h1:${hash(identityParts.map((part) => `${Buffer.byteLength(part ?? "", "utf8")}:${part ?? ""}`).join(""))}`
@@ -231,7 +238,7 @@ export function createInProcGraphRunner<TTool = unknown>(
         throw new Error("skill_body_exceeds_limit");
       return entry.content;
     } catch (error) {
-      receipts.denied = true;
+      hooks?.onSkillReadFailure?.();
       throw error;
     }
   };
@@ -260,29 +267,21 @@ export function createInProcGraphRunner<TTool = unknown>(
 
   // Use factory from catalog instead of hardcoded graph
   const graph = createGraph({
-    receipts,
+    ...hooks?.graphOptions,
+    onSkillReadFailure: hooks?.onSkillReadFailure,
     readToolIds: toolContracts
       .filter((contract) => contract.effect === "read_only")
       .map((contract) => contract.name),
-    tierModels: { main: llm, flash: llm.withModel("deepseek-v4-flash") },
+    tierModels: { main: llm,
+      ...Object.fromEntries(
+        Object.entries(createGraph.tierModelIds ?? {}).map(([tier, model]) => [
+          tier,
+          llm.withModel(model),
+        ]),
+      ),
+    },
     ...(memoryNamespace ? { memoryNamespace } : {}),
     readSkill,
-    onInternalToolEvent: ({ id, name, status }) => {
-      if (status === "start")
-        emit({
-          type: "tool_call_start",
-          toolCallId: id,
-          toolName: name,
-          args: { stateOnly: true },
-        });
-      else
-        emit({
-          type: "tool_call_result",
-          toolCallId: id,
-          result: { stateOnly: true, operation: name, status },
-          ...(status === "error" ? { isError: true } : {}),
-        });
-    },
     ...(opts.sourceContext !== undefined && {
       sourceContext: opts.sourceContext,
     }),
@@ -351,7 +350,7 @@ export function createInProcGraphRunner<TTool = unknown>(
 
       // Extract structured response if present (from responseFormat graphs)
       const structuredOutput =
-        projectMissionCycleReport(opts.program, receipts, assistantContent) ??
+        hooks?.projectOutput?.(assistantContent) ??
         (result.structuredResponse !== undefined
           ? (result.structuredResponse as Record<string, unknown>)
           : undefined);

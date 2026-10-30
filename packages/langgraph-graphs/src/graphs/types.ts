@@ -21,7 +21,6 @@ import type {
 } from "@langchain/core/runnables";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import type { BaseCheckpointSaver, BaseStore } from "@langchain/langgraph";
-import type { RunReceipts } from "./mission/receipts";
 
 /**
  * Options for graph invocation.
@@ -54,7 +53,8 @@ export type MessageGraphOutput = { messages: BaseMessage[] };
  */
 export interface CreateReactAgentGraphOptions {
   /** Current-run observations created only from successful host tool executions. */
-  readonly receipts?: RunReceipts;
+  readonly programState?: unknown;
+  readonly onSkillReadFailure?: () => void;
   /** Trusted host graph selection, never model-configurable. */
   readonly requestIntent?: "answer" | "decide";
   readonly memoryNamespace?: readonly string[];
@@ -62,12 +62,6 @@ export interface CreateReactAgentGraphOptions {
   readonly tierModels?: Readonly<Record<string, LanguageModelLike>>;
   /** Read-only tool ids classified by the trusted host's contracts. */
   readonly readToolIds?: readonly string[];
-  /** Sanitized observation of isolated SDK state operations; never arbitrary scratch content. */
-  readonly onInternalToolEvent?: (event: {
-    id: string;
-    name: string;
-    status: "start" | "success" | "error";
-  }) => void;
   /** Host-bound source provenance, never accepted from model/tool arguments. */
   readonly sourceContext?: {
     readonly nodeId: string;

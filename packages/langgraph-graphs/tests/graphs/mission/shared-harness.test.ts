@@ -27,11 +27,28 @@ import { createMissionGraph } from "../../../src/graphs/mission/graph";
 import { RunReceipts } from "../../../src/graphs/mission/receipts";
 import { createScoresGuard } from "../../../src/graphs/mission/score-guard";
 import { createPoetGraph } from "../../../src/graphs/poet/graph";
-import { projectMissionCycleReport } from "../../../src/graphs/work-prioritizer/graph";
-import { createMemoryPersistence } from "../../../src/inproc/postgres-persistence";
-import { createInProcGraphRunner } from "../../../src/inproc/runner";
-import type { CompletionFn } from "../../../src/inproc/types";
+import {
+	createPrioritizerRunHooks,
+	projectMissionCycleReport,
+} from "../../../src/graphs/work-prioritizer/graph";
+import { createMemoryPersistence } from "../../../src/inproc/memory-persistence";
+import { createInProcGraphRunner as runGraph } from "../../../src/inproc/runner";
+import type {
+	CompletionFn,
+	InProcRunnerOptions,
+} from "../../../src/inproc/types";
 import { fromBaseMessage } from "../../../src/runtime/core/message-converters";
+
+// Custom test programs explicitly opt into the scoring observer; the generic runner does not.
+function createInProcGraphRunner(opts: InProcRunnerOptions) {
+	const createGraph = opts.createGraph.createRunHooks
+		? opts.createGraph
+		: Object.assign(opts.createGraph, {
+				createRunHooks: createPrioritizerRunHooks,
+				tierModelIds: { flash: "deepseek-v4-flash" },
+			});
+	return runGraph({ ...opts, createGraph });
+}
 
 describe("shared cogni harness", () => {
 	it("rejects opaque, nested, and guarded child declarations", () => {
@@ -42,7 +59,6 @@ describe("shared cogni harness", () => {
 			modelTier: "main",
 			toolIds: [],
 			allowedChildProfiles: ["child"],
-			outputPolicy: "answer",
 		});
 		const child = cogniProfile({
 			id: "child",
@@ -50,7 +66,6 @@ describe("shared cogni harness", () => {
 			modelTier: "main",
 			toolIds: [],
 			allowedChildProfiles: [],
-			outputPolicy: "answer",
 		});
 		expect(() =>
 			createCogniProgram({
@@ -90,6 +105,99 @@ describe("shared cogni harness", () => {
 				guardedTools: [writer],
 			}),
 		).toThrow("cogni_child_guarded_write_forbidden");
+	});
+
+	it("revalidates forged persisted skills against an empty host authorization", async () => {
+		let calls = 0;
+		const run = runGraph({
+			createGraph: (opts) => {
+				const graph = createCogniProgram(opts);
+				return {
+					invoke: (input, config) =>
+						graph.invoke(
+							{
+								...input,
+								skillsMetadata: [
+									{
+										name: "secret",
+										description: "FORGED METADATA",
+										path: "/skills/secret/SKILL.md",
+									},
+								],
+							},
+							config,
+						),
+				};
+			},
+			completionFn: (request) => {
+				calls++;
+				expect(JSON.stringify(request.messages)).toContain("Skills System");
+				expect(JSON.stringify(request.messages)).not.toContain(
+					"FORGED METADATA",
+				);
+				return {
+					stream: (async function* () {})(),
+					final: Promise.resolve({ ok: true, content: "Done" }),
+				};
+			},
+			createToolExecFn: () => async () => {
+				throw new Error("unexpected body preload");
+			},
+			toolContracts: [],
+			request: {
+				runId: "forged-skills",
+				messages: [{ role: "user", content: "Hello" }],
+				configurable: { model: "test-model" },
+			},
+		});
+		for await (const _event of run.stream) {
+			/* drain */
+		}
+		expect((await run.final).ok).toBe(true);
+		expect(calls).toBe(1);
+	});
+
+	it("denies a hallucinated nested task before any grandchild model call", async () => {
+		const models: string[] = [];
+		const run = runGraph({
+			createGraph: createPoetGraph,
+			completionFn: (request) => {
+				models.push(request.model);
+				return {
+					stream: (async function* () {})(),
+					final: Promise.resolve({
+						ok: true,
+						toolCalls: [
+							{
+								id: `task-${models.length}`,
+								type: "function",
+								function: {
+									name: "task",
+									arguments: JSON.stringify({
+										subagent_type: "general-purpose",
+										description: "Try delegation",
+									}),
+								},
+							},
+						],
+					}),
+				};
+			},
+			createToolExecFn: () => async () => {
+				throw new Error("unexpected host tool");
+			},
+			toolContracts: [],
+			request: {
+				runId: "nested-task",
+				messages: [{ role: "user", content: "Delegate" }],
+				configurable: { model: "test-model" },
+			},
+		});
+		for await (const _event of run.stream) {
+			/* drain */
+		}
+		expect((await run.final).ok).toBe(false);
+		expect(models).toEqual(["test-model", "deepseek-v4-flash"]);
 	});
 
 	it("emits thinking before deferred completion and only the final answer", async () => {
@@ -318,12 +426,48 @@ describe("shared cogni harness", () => {
 		).toBe("result");
 	});
 
-	it("delivers a lazy SDK skill body through the billed adapter on the next model call", async () => {
+	it.each(["root", "child"])(
+		"delivers native skill metadata then selected body to %s through the billed adapter",
+		async (target) => {
 		const requests: Parameters<CompletionFn>[0][] = [];
 		let reads = 0;
-		const completionFn: CompletionFn = (request) => {
-			requests.push(request);
-			const reply =
+			let delegated = false;
+			const completionFn: CompletionFn = (request) => {
+				if (target === "child" && request.model !== "deepseek-v4-flash") {
+					const reply = delegated
+						? { content: "Root answer" }
+						: {
+								toolCalls: [
+									{
+										id: "delegate-skill",
+										type: "function" as const,
+										function: {
+											name: "task",
+											arguments: JSON.stringify({
+												subagent_type: "general-purpose",
+												description: "Read the selected skill",
+											}),
+										},
+									},
+								],
+							};
+					delegated = true;
+					return {
+						stream: (async function* () {})(),
+						final: Promise.resolve({ ok: true as const, ...reply }),
+					};
+				}
+				requests.push(request);
+				if (requests.length === 1) {
+					expect(reads).toBe(0);
+					expect(JSON.stringify(request.messages)).toContain("Skills System");
+					expect(JSON.stringify(request.messages)).toContain("when testing");
+					expect(JSON.stringify(request.messages)).not.toContain(
+						"Unique skill body reaches the model.",
+					);
+				}
+
+				const reply =
 				requests.length === 1
 					? {
 							toolCalls: [
@@ -406,14 +550,15 @@ describe("shared cogni harness", () => {
 		const next = requests[1];
 		expect(
 			next?.messages.find((message) => message.role === "system")?.content,
-		).toContain("Governing guidance metadata");
-		expect(
+			).toContain("Skills System");
+			expect(
 			next?.messages.find(
 				(message) =>
 					message.role === "tool" && message.toolCallId === "skill-read",
 			)?.content,
 		).toContain("Unique skill body reaches the model.");
-	});
+		},
+	);
 
 	it("retries malformed provider tool arguments before executing a valid SDK tool", async () => {
 		let calls = 0;
@@ -525,13 +670,14 @@ describe("shared cogni harness", () => {
 		};
 		const run = createInProcGraphRunner({
 			createGraph: (opts) => {
-				if (!opts.receipts) throw new Error("missing receipts");
-				opts.receipts.observe(
+				if (!(opts.programState as RunReceipts))
+					throw new Error("missing receipts");
+				(opts.programState as RunReceipts).observe(
 					"core__goal_list",
 					{},
 					{ goals: [{ id: "goal-one", content: "Goal" }] },
 				);
-				opts.receipts.observe(
+				(opts.programState as RunReceipts).observe(
 					"core__work_item_read",
 					{},
 					{
@@ -548,7 +694,9 @@ describe("shared cogni harness", () => {
 				);
 				return createCogniProgram({
 					...opts,
-					guardedTools: [createScoresGuard(opts.receipts, writer, [])],
+					guardedTools: [
+						createScoresGuard(opts.programState as RunReceipts, writer, []),
+					],
 					profile: cogniProfile({
 						id: "test",
 						instructions: "test",
@@ -556,7 +704,6 @@ describe("shared cogni harness", () => {
 						toolIds: ["core__knowledge_read"],
 						skillIds: ["test-skill"],
 						allowedChildProfiles: [],
-						outputPolicy: "scores",
 					}),
 				});
 			},
@@ -676,7 +823,9 @@ describe("shared cogni harness", () => {
 		);
 	});
 
-	it("allows an authorized custom read tool through a reviewed profile", async () => {
+	it.each(["read_only", "state_change"] as const)(
+		"allows an authorized custom %s tool through a reviewed profile",
+		async (effect) => {
 		let calls = 0;
 		const completionFn: CompletionFn = () => ({
 			stream: (async function* () {})(),
@@ -706,8 +855,7 @@ describe("shared cogni harness", () => {
 						modelTier: "main",
 						toolIds: ["core__review_lookup"],
 						allowedChildProfiles: [],
-						outputPolicy: "answer",
-					}),
+						}),
 				}),
 			completionFn,
 			createToolExecFn: () => async (name) => {
@@ -718,8 +866,8 @@ describe("shared cogni harness", () => {
 				{
 					name: "core__review_lookup",
 					description: "lookup",
-					effect: "read_only",
-					inputSchema: z.object({}),
+						effect,
+						inputSchema: z.object({}),
 					outputSchema: z.object({ answer: z.string() }),
 					redact: (value) => value,
 					allowlist: ["answer"],
@@ -728,7 +876,8 @@ describe("shared cogni harness", () => {
 			request: {
 				runId: "custom",
 				messages: [{ role: "user", content: "review" }],
-				configurable: { model: "test-model", toolIds: ["core__review_lookup"] },
+				configurable: { model: "test-model", toolIds: ["core__review_lookup"],
+					},
 			},
 		});
 		for await (const _event of run.stream) {
@@ -736,7 +885,8 @@ describe("shared cogni harness", () => {
 		}
 		expect((await run.final).content).toBe("found");
 		expect(reads).toEqual(["core__review_lookup"]);
-	});
+		},
+	);
 
 	it.each(["core__knowledge_read", "read_file"])(
 		"denies child %s outside parent authority",
@@ -787,7 +937,6 @@ describe("shared cogni harness", () => {
 				toolIds: attempt === "read_file" ? ["core__knowledge_read"] : [],
 				skillIds: [],
 				allowedChildProfiles: ["child"],
-				outputPolicy: "answer",
 			});
 			const child = cogniProfile({
 				id: "child",
@@ -796,7 +945,6 @@ describe("shared cogni harness", () => {
 				toolIds: ["core__knowledge_read"],
 				skillIds: ["secret"],
 				allowedChildProfiles: [],
-				outputPolicy: "answer",
 			});
 			const run = createInProcGraphRunner({
 				createGraph: (opts) =>
@@ -1042,14 +1190,14 @@ describe("shared cogni harness", () => {
 			const run = createInProcGraphRunner({
 				createGraph: (opts) => ({
 					invoke: async () => {
-						if (!opts.receipts || !opts.readSkill)
+						if (!(opts.programState as RunReceipts) || !opts.readSkill)
 							throw new Error("missing host dependencies");
-						opts.receipts.observe(
+						(opts.programState as RunReceipts).observe(
 							"core__goal_list",
 							{},
 							{ goals: [{ id: "goal-one", content: "Goal" }] },
 						);
-						opts.receipts.observe(
+						(opts.programState as RunReceipts).observe(
 							"core__work_item_read",
 							{},
 							{
@@ -1078,7 +1226,11 @@ describe("shared cogni harness", () => {
 								return JSON.stringify({ success: true });
 							},
 						});
-						result = await createScoresGuard(opts.receipts, writer, []).invoke({
+						result = await createScoresGuard(
+							opts.programState as RunReceipts,
+							writer,
+							[],
+						).invoke({
 							id: "task.1",
 							expectedRevision: 1,
 							scores: { goal: { v: 3 } },

@@ -4,7 +4,7 @@
 /**
  * Module: `@cogni/langgraph-graphs/graphs/poet/graph`
  * Purpose: Poetic AI assistant graph factory.
- * Scope: Creates LangGraph React agent with injected LLM and tools. Does NOT execute graphs or read env.
+ * Scope: Configures the shared native deep-agent harness with injected LLM and tools. Does NOT execute graphs or read env.
  * Invariants:
  *   - Pure factory function — no side effects, no env reads
  *   - LLM and tools are injected, not instantiated
@@ -14,40 +14,17 @@
  * @public
  */
 
-import { cogniProfile, createCogniProgram } from "../mission/cogni";
+import { cogniProfile, createCogniProgram } from "../cogni/graph";
+import { POET_TOOL_IDS } from "./tools";
 import type { CreateReactAgentGraphOptions } from "../types";
-import { POET_SYSTEM_PROMPT } from "./prompts";
+import { POET_CHILD_PROMPT, POET_SYSTEM_PROMPT } from "./prompts";
 
 /**
  * Graph name constant for routing.
  */
 export const POET_GRAPH_NAME = "poet" as const;
 
-/**
- * Create a poetic AI assistant graph.
- *
- * This is the simplest possible LangGraph agent:
- * - Uses createReactAgent (prebuilt pattern)
- * - LLM handles tool calling decisions
- * - Agent loops until no more tool calls needed
- *
- * NOTE: Return type is intentionally NOT annotated to preserve the concrete
- * CompiledStateGraph type for LangGraph CLI schema extraction.
- *
- * @param opts - Options with LLM and tools
- * @returns Compiled LangGraph ready for invoke()
- *
- * @example
- * ```typescript
- * const llm = new CogniCompletionAdapter();
- * const tools = toLangChainTools({ contracts, exec: toolRunner.exec });
- * const graph = createPoetGraph({ llm, tools });
- *
- * const result = await graph.invoke({
- *   messages: [new HumanMessage("What time is it?")]
- * });
- * ```
- */
+/** Poet and its isolated creative child share the native Cogni harness. */
 export function createPoetGraph(opts: CreateReactAgentGraphOptions) {
 	return createCogniProgram({
 		...opts,
@@ -55,29 +32,28 @@ export function createPoetGraph(opts: CreateReactAgentGraphOptions) {
 			id: "poet",
 			instructions: POET_SYSTEM_PROMPT,
 			modelTier: "main",
-			toolIds: ["core__get_current_time", "core__knowledge_read"],
+			toolIds: POET_TOOL_IDS,
 			skillIds: (opts.sourceContext?.governingIndex ?? []).map(
 				(entry) => entry.id,
 			),
 			allowedChildProfiles: ["general-purpose"],
-			outputPolicy: "answer",
 		}),
 		children: [
 			{
 				description: "Complete an independent creative subtask.",
 				profile: cogniProfile({
 					id: "general-purpose",
-					instructions:
-						"Complete the delegated creative task using only available read tools.",
+					instructions: POET_CHILD_PROMPT,
 					modelTier: "flash",
-					toolIds: ["core__get_current_time", "core__knowledge_read"],
+					toolIds: POET_TOOL_IDS,
 					skillIds: (opts.sourceContext?.governingIndex ?? []).map(
 						(entry) => entry.id,
 					),
 					allowedChildProfiles: [],
-					outputPolicy: "answer",
 				}),
 			},
 		],
 	});
 }
+
+createPoetGraph.tierModelIds = { flash: "deepseek-v4-flash" };

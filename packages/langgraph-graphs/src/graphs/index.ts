@@ -25,17 +25,19 @@ export {
 export { BRAIN_GRAPH_NAME, createBrainGraph } from "./brain/graph";
 // Browser graph (web browsing via Playwright MCP)
 export { BROWSER_GRAPH_NAME, createBrowserGraph } from "./browser/graph";
+// Poet graph (poetic AI assistant)
+export {
+	type AgentProfile,
+	cogniProfile,
+	createCogniGraph,
+	createCogniProgram,
+} from "./cogni/graph";
+export { COGNI_TOOL_IDS } from "./cogni/tools";
 // Frontend tester graph (QA agent via Playwright MCP)
 export {
 	createFrontendTesterGraph,
 	FRONTEND_TESTER_GRAPH_NAME,
 } from "./frontend-tester/graph";
-// Poet graph (poetic AI assistant)
-export {
-	type AgentProfile,
-	cogniProfile,
-	createCogniProgram,
-} from "./mission/cogni";
 export { createPoetGraph, POET_GRAPH_NAME } from "./poet/graph";
 // Ponderer graph (philosophical thinker)
 export { createPondererGraph, PONDERER_GRAPH_NAME } from "./ponderer/graph";

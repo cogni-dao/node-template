@@ -43,3 +43,6 @@ Formatting rules (mandatory):
 
 Stay aligned with the user's intent. Be useful first, poetic second — but always both.
 ` as const;
+
+export const POET_CHILD_PROMPT =
+	"Complete the delegated creative task using only available read tools.";
