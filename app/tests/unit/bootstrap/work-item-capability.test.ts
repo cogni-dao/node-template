@@ -14,11 +14,28 @@
  */
 
 import { WorkItemPatchConflictError } from "@cogni/ai-tools";
-import type { WorkItemCommandPort, WorkItemQueryPort } from "@cogni/work-items";
+import { toWorkItemId, type WorkItem, type WorkItemCommandPort, type WorkItemQueryPort } from "@cogni/work-items";
 import { WorkItemRevisionConflictError } from "@cogni/work-items/adapters/doltgres";
 import { describe, expect, it, vi } from "vitest";
 
 import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
+
+const storedItem: WorkItem = {
+  id: toWorkItemId("task.5001"),
+  type: "task",
+  title: "t",
+  status: "needs_implement",
+  node: "shared",
+  actor: "either",
+  labels: [],
+  assignees: [],
+  externalRefs: [],
+  specRefs: [],
+  revision: 3,
+  createdAt: "2026-10-19T00:00:00.000Z",
+  updatedAt: "2026-10-19T00:00:00.000Z",
+  deployVerified: false,
+};
 
 const empty = { items: [], pageInfo: { endCursor: null, hasMore: false } };
 
@@ -90,7 +107,7 @@ describe("createWorkItemCapability", () => {
   });
 
   it("WRITES_NOT_WIDENED: transitionStatus/patch stay on workItemQuery + workItemCommand, never the backlogReader", async () => {
-    const item = { id: "task.5001", status: "needs_implement", revision: 3 };
+    const item = storedItem;
     const markdown = { list: vi.fn(), get: vi.fn().mockResolvedValue(item) };
     const command = {
       transitionStatus: vi
@@ -120,6 +137,7 @@ describe("createWorkItemCapability", () => {
 
   it("PATCH_CAS_PASSTHROUGH: the backlogWriter gets expectedRevision + rank; its conflict becomes WorkItemPatchConflictError", async () => {
     const row = {
+      ...storedItem,
       id: "task.5001",
       type: "task",
       title: "t",
@@ -191,6 +209,7 @@ describe("createWorkItemCapability", () => {
       )
     );
     const row = {
+      ...storedItem,
       id: "task.5001",
       type: "task",
       title: "t",

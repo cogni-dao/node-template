@@ -17,7 +17,7 @@ export const tsupConfig = defineConfig([
   {
     entry: ["src/index.ts"],
     format: ["esm"],
-    dts: false,
+    dts: { compilerOptions: { composite: false, incremental: false } },
     clean: false,
     sourcemap: true,
     platform: "neutral",

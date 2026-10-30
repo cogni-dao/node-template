@@ -12,6 +12,7 @@
  */
 
 import { z } from "zod";
+import { type KnowledgeRow, KnowledgeRowSchema } from "../contracts.js";
 
 // ---------------------------------------------------------------------------
 // Source types
@@ -164,7 +165,7 @@ export type ResolutionStrategy = z.infer<typeof ResolutionStrategySchema>;
 // Knowledge
 // ---------------------------------------------------------------------------
 
-export const KnowledgeSchema = z.object({
+export const KnowledgeSchema = KnowledgeRowSchema.extend({
   id: z.string().min(1),
   domain: z.string().min(1),
   entityId: z.string().nullable().optional(),
@@ -233,3 +234,18 @@ export const DoltDiffEntrySchema = z.object({
 });
 
 export type DoltDiffEntry = z.infer<typeof DoltDiffEntrySchema>;
+
+export function toKnowledgeRow(entry: Knowledge): KnowledgeRow {
+  return {
+    ...entry,
+    entityId: entry.entityId ?? null,
+    useWhen: entry.useWhen ?? null,
+    entryType: entry.entryType ?? "finding",
+    confidencePct: entry.confidencePct ?? null,
+    sourceRef: entry.sourceRef ?? null,
+    tags: entry.tags ?? null,
+    evaluateAt: entry.evaluateAt ? entry.evaluateAt.toISOString() : null,
+    resolutionStrategy: entry.resolutionStrategy ?? null,
+    createdAt: entry.createdAt ? entry.createdAt.toISOString() : null,
+  };
+}

@@ -6,7 +6,7 @@ import type {
   WorkItemCapability,
   WorkItemInfo,
 } from "../src/capabilities/work-item";
-import { createWorkItemReadImplementation } from "../src/tools/work-item-read";
+import { createWorkItemReadImplementation, workItemReadContract } from "../src/tools/work-item-read";
 
 const item: WorkItemInfo = {
   id: "task.0018",
@@ -14,7 +14,9 @@ const item: WorkItemInfo = {
   title: "Review",
   status: "needs_closeout",
   labels: ["goal:one"],
-  assignees: [],
+  assignees: [{ kind: "agent", id: "agent-1" }],
+  externalRefs: [],
+  specRefs: [],
   createdAt: "2026-01-01T00:00:00Z",
   updatedAt: "2026-01-01T00:00:00Z",
   deployVerified: true,
@@ -43,6 +45,8 @@ describe("full work item read", () => {
     const result = await reader(item).execute({ id: item.id });
     expect(result.item?.outcome).toBe(item.outcome);
     expect(result.item?.revision).toBe(12);
+    expect(workItemReadContract.outputSchema.safeParse(result).success).toBe(true);
+    expect(result.item?.assignees).toEqual([{ kind: "agent", id: "agent-1", agentId: "agent-1" }]);
     expect(result.item?.sourceUrl).toBe(
       "https://node.example/work/items/task.0018",
     );

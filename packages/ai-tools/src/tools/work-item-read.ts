@@ -4,9 +4,9 @@
 /** Complete bounded work-item read through the host-injected capability. */
 import { z } from "zod";
 import type { WorkItemCapability } from "../capabilities/work-item";
-import { readSourceProvenance } from "../source-url";
+import { readSourceProvenance, withoutSourceProvenance } from "../source-url";
 import type { BoundTool, ToolContract, ToolImplementation } from "../types";
-import { WorkItemOutputSchema } from "./work-item-query";
+import { toToolAssignee, WorkItemOutputSchema } from "./work-item-query";
 
 export const WORK_ITEM_READ_NAME = "core__work_item_read" as const;
 const Input = z.object({ id: z.string().min(1).max(200) });
@@ -43,10 +43,10 @@ export function createWorkItemReadImplementation(deps: {
       const item = items.find((entry) => entry.id === id);
       if (!item) return { item: null };
       const result = {
-        ...item,
+        ...withoutSourceProvenance(item),
         labels: [...item.labels],
-        assignees: item.assignees.map((entry) => ({ ...entry })),
-        specRefs: item.specRefs ? [...item.specRefs] : undefined,
+        assignees: item.assignees.map(toToolAssignee),
+        specRefs: [...item.specRefs],
         ...readSourceProvenance(deps.nodePublicOrigin, "work/items", item.id),
       };
       if (new TextEncoder().encode(JSON.stringify(result)).length > 65536)

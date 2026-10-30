@@ -132,6 +132,7 @@ export function createToolBindings(deps: ToolBindingDeps): ToolBindings {
     }) as AnyToolImplementation,
     [KNOWLEDGE_READ_NAME]: createKnowledgeReadImplementation({
       knowledgeCapability: deps.knowledgeCapability,
+      nodePublicOrigin: deps.nodePublicOrigin,
     }) as AnyToolImplementation,
     [KNOWLEDGE_WRITE_NAME]: createKnowledgeWriteImplementation({
       knowledgeCapability: deps.knowledgeCapability,

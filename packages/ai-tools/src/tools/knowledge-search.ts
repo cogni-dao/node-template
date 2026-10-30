@@ -17,10 +17,11 @@
  */
 
 import { z } from "zod";
+import { KnowledgeRowSchema } from "@cogni-dao/knowledge-store/contracts";
 
 import type { KnowledgeCapability } from "../capabilities/knowledge";
 import type { BoundTool, ToolContract, ToolImplementation } from "../types";
-import { readSourceProvenance } from "../source-url";
+import { readSourceProvenance, withoutSourceProvenance } from "../source-url";
 
 // ─── Schemas ─────────────────────────────────────────────────────────────────
 
@@ -48,14 +49,7 @@ export const KnowledgeSearchInputSchema = z.object({
 });
 export type KnowledgeSearchInput = z.infer<typeof KnowledgeSearchInputSchema>;
 
-export const KnowledgeSearchResultSchema = z.object({
-  id: z.string(),
-  domain: z.string(),
-  title: z.string(),
-  content: z.string(),
-  confidencePct: z.number().nullable(),
-  sourceType: z.string(),
-  tags: z.array(z.string()).nullable(),
+export const KnowledgeSearchResultSchema = KnowledgeRowSchema.extend({
   sourceUrl: z.string().url().optional(),
   sourceUrlUnavailable: z.literal(true).optional(),
 });
@@ -120,13 +114,8 @@ export function createKnowledgeSearchImplementation(
         query: input.query,
         domain: input.domain,
         results: results.map((r) => ({
-          id: r.id,
-          domain: r.domain,
-          title: r.title,
+          ...withoutSourceProvenance(r),
           content: truncate(r.content, KNOWLEDGE_SEARCH_CONTENT_MAX_CHARS),
-          confidencePct: r.confidencePct,
-          sourceType: r.sourceType,
-          tags: r.tags,
           ...readSourceProvenance(deps.nodePublicOrigin, "knowledge", r.id),
         })),
         totalFound: results.length,
