@@ -12,8 +12,10 @@
 import {
   createWorkItemQueryImplementation, type WorkItemCapability, type WorkItemInfo,
   WorkItemOutputSchema, WorkItemQueryOutputSchema,
+  KnowledgeReadOutputSchema, KnowledgeSearchOutputSchema,
 } from "@cogni/ai-tools";
-import { WorkItemDtoSchema } from "@cogni/node-contracts";
+import { KnowledgeRowSchema } from "@cogni/knowledge-store/contracts";
+import { WorkItemDtoSchema } from "@cogni/work-items";
 import { describe, expect, it, vi } from "vitest";
 
 const item: WorkItemInfo = {
@@ -26,6 +28,17 @@ const item: WorkItemInfo = {
 const capability: WorkItemCapability = { query: vi.fn().mockResolvedValue([item]), transitionStatus: vi.fn(), patch: vi.fn() };
 
 describe("derived work-item read envelope", () => {
+  it("retains every canonical work-item and knowledge schema key", () => {
+    expect(Object.keys(WorkItemOutputSchema.shape)).toEqual(
+      expect.arrayContaining(Object.keys(WorkItemDtoSchema.shape))
+    );
+    expect(Object.keys(KnowledgeReadOutputSchema.shape.entries.element.shape)).toEqual(
+      expect.arrayContaining(Object.keys(KnowledgeRowSchema.shape))
+    );
+    expect(Object.keys(KnowledgeSearchOutputSchema.shape.results.element.shape)).toEqual(
+      expect.arrayContaining(Object.keys(KnowledgeRowSchema.shape))
+    );
+  });
   it("derives all HTTP item fields and adds only tool provenance", async () => {
     const execute = createWorkItemQueryImplementation({ workItemCapability: capability }).execute;
     for (const params of [{}, { ids: [item.id] }]) {
