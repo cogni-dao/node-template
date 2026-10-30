@@ -56,7 +56,7 @@ export function ScheduleDetailView({ scheduleId }: { scheduleId: string }) {
     },
   });
   const refresh = () => {
-    void client.resetQueries({ queryKey: ["schedule-history", scheduleId] });
+    void history.refetch();
     void schedule.refetch();
   };
   const current = schedule.data;

@@ -206,12 +206,13 @@ export function SchedulesView() {
                           variant="ghost"
                           size="sm"
                           disabled={mutating}
-                          onClick={() =>
+                          onClick={() => {
+                            remove.reset();
                             toggle.mutate({
                               id: schedule.id,
                               data: { enabled: !schedule.enabled },
-                            })
-                          }
+                            });
+                          }}
                         >
                           {schedule.enabled ? "Disable" : "Enable"}
                         </Button>
@@ -221,6 +222,7 @@ export function SchedulesView() {
                           aria-label={`Delete schedule ${agentLabel(schedule.graphId)}`}
                           disabled={mutating}
                           onClick={() => {
+                            toggle.reset();
                             if (
                               window.confirm(
                                 "Delete this schedule? Its configuration will be removed."
