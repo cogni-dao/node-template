@@ -24,6 +24,15 @@ import { LangGraphInProcProvider } from "@/adapters/server/ai/langgraph/inproc.p
 import type { GraphRunRequest } from "@/ports";
 import { EVENT_NAMES } from "@/shared/observability";
 
+const runnerSpy = vi.hoisted(() => vi.fn());
+vi.mock("@cogni/langgraph-graphs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@cogni/langgraph-graphs")>();
+  return { ...actual, createInProcGraphRunner: (...args: Parameters<typeof actual.createInProcGraphRunner>) => {
+    runnerSpy(args[0]);
+    return actual.createInProcGraphRunner(...args);
+  } };
+});
+
 const TEST_SCOPE = {
   billing: {
     billingAccountId: "test-billing",
@@ -135,6 +144,16 @@ function createTestRequest(
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("LangGraphInProcProvider", () => {
+  it.each(["cogni-decide", "work-prioritizer"])("forwards trusted intent for %s", async (graph) => {
+    for (const intent of [undefined, "answer", "decide"] as const) {
+      runnerSpy.mockClear();
+      const provider = new LangGraphInProcProvider(createMockAdapter(), createMockToolSource(), undefined, [], async () => ({ nodeId: "node", origin: "https://node.example" }));
+      const result = runInScope(TEST_SCOPE, () => provider.runGraph(createTestRequest({ graphId: `langgraph:${graph}` }), intent ? { requestIntent: intent } : undefined));
+      await collectEvents(result.stream);
+      await result.final;
+      expect(runnerSpy).toHaveBeenCalledWith(expect.objectContaining({ requestIntent: intent ?? "answer" }));
+    }
+  });
   describe("valid graphId", () => {
     it("calls adapter.executeCompletionUnit and emits events reflecting adapter stream", async () => {
       await runInScope(TEST_SCOPE, async () => {

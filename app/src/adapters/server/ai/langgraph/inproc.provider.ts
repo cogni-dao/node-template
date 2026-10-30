@@ -312,10 +312,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
             persistence: await this.getPersistence(),
           }),
         ...(entry.program !== undefined && { program: entry.program }),
-        requestIntent:
-          graphName === "cogni-decide" || graphName === "work-prioritizer"
-            ? "decide"
-            : "answer",
+        requestIntent: ctx?.requestIntent === "decide" ? "decide" : "answer",
         ...(ctx?.actorUserId ? { trustedActorId: ctx.actorUserId } : {}),
         ...((entry.program || graphName === "poet") && {
           trustedProgramId: entry.program ?? graphName,

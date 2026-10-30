@@ -94,6 +94,8 @@ vi.mock("@/bootstrap/container", () => ({
       markRunCompleted: mocks.markRunCompleted,
     },
     accountsForUser: () => ({}),
+    executionGrantWorkerPort: { validateGrantForGraph: vi.fn().mockResolvedValue({ userId: USER_ID, billingAccountId: BILLING_ID }) },
+    serviceAccountService: { getBillingAccountById: vi.fn().mockResolvedValue({ defaultVirtualKeyId: VIRTUAL_KEY_ID }) },
     providerResolver: {},
     connectionBroker: undefined,
     runStream: {
@@ -117,6 +119,18 @@ describe("POST /api/internal/graphs/{graphId}/runs terminal publication", () => 
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.checkIdempotency.mockResolvedValue({ status: "new" });
+  });
+
+  it.each(["cogni-decide", "work-prioritizer"])("defaults API %s to answer and permits a validated schedule", async (graph) => {
+    for (const scheduled of [false, true]) {
+      mocks.runGraph.mockClear();
+      await POST(new NextRequest(`http://localhost/api/internal/graphs/langgraph:${graph}/runs`, {
+        method: "POST",
+        headers: { authorization: "Bearer scheduler-secret-value-1234567890", "content-type": "application/json", "idempotency-key": "api:test" },
+        body: JSON.stringify({ executionGrantId: scheduled ? "40000000-0000-4000-a000-000000000001" : null, runId: RUN_ID, input: { messages: [{ role: "user", content: "decide" }], modelRef: { providerKey: "platform", modelId: "test-model" }, actorUserId: USER_ID, billingAccountId: BILLING_ID, virtualKeyId: VIRTUAL_KEY_ID } }),
+      }), { params: Promise.resolve({ graphId: `langgraph:${graph}` }) });
+      expect(mocks.runGraph).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ requestIntent: scheduled ? "decide" : "answer" }));
+    }
   });
 
   it("finalizes failure when durable done publication rejects", async () => {

@@ -642,6 +642,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       {
         actorUserId,
         requestId: runId,
+        requestIntent: executionGrantId ? "decide" : "answer",
         ...(sessionId ? { sessionId } : {}),
       }
     );
