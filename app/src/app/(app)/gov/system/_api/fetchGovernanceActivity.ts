@@ -26,7 +26,7 @@ export interface FetchGovernanceActivityParams {
 }
 
 export async function fetchGovernanceActivity(
-  params: FetchGovernanceActivityParams
+  params: FetchGovernanceActivityParams,
 ): Promise<ActivityData> {
   const searchParams = new URLSearchParams({
     range: params.range,
@@ -40,7 +40,7 @@ export async function fetchGovernanceActivity(
       headers: { "Content-Type": "application/json" },
       credentials: "same-origin",
       cache: "no-store",
-    }
+    },
   );
 
   if (!response.ok) {

@@ -236,13 +236,13 @@ export function GovernanceView(): ReactElement {
 
 function Countdown({ target }: { target: Date }) {
   const [secondsLeft, setSecondsLeft] = useState(() =>
-    Math.max(0, Math.floor((target.getTime() - Date.now()) / 1000))
+    Math.max(0, Math.floor((target.getTime() - Date.now()) / 1000)),
   );
 
   useEffect(() => {
     const tick = () => {
       setSecondsLeft(
-        Math.max(0, Math.floor((target.getTime() - Date.now()) / 1000))
+        Math.max(0, Math.floor((target.getTime() - Date.now()) / 1000)),
       );
     };
     const id = setInterval(tick, 1000);
@@ -289,7 +289,7 @@ function ActivityCharts({ activity }: { activity: ActivityData }) {
         chartSeries,
         "spend",
         "Spend ($)",
-        "hsl(var(--chart-1))"
+        "hsl(var(--chart-1))",
       );
 
   const tokens = hasGrouped
@@ -298,7 +298,7 @@ function ActivityCharts({ activity }: { activity: ActivityData }) {
         chartSeries,
         "tokens",
         "Tokens",
-        "hsl(var(--chart-2))"
+        "hsl(var(--chart-2))",
       );
 
   const requests = hasGrouped
@@ -307,7 +307,7 @@ function ActivityCharts({ activity }: { activity: ActivityData }) {
         chartSeries,
         "requests",
         "Requests",
-        "hsl(var(--chart-3))"
+        "hsl(var(--chart-3))",
       );
 
   return (

@@ -47,7 +47,7 @@ function renderView() {
   return render(
     <QueryClientProvider client={client}>
       <GovernanceView />
-    </QueryClientProvider>
+    </QueryClientProvider>,
   );
 }
 
@@ -113,7 +113,9 @@ describe("/gov/system GovernanceView", () => {
       data: undefined,
     };
     renderView();
-    expect(screen.getByText("Error loading governance data")).toBeInTheDocument();
+    expect(
+      screen.getByText("Error loading governance data"),
+    ).toBeInTheDocument();
     expect(screen.queryByText("Recent Runs")).not.toBeInTheDocument();
   });
 });
