@@ -112,7 +112,9 @@ export function createCogniProgram(
 			namespace: [...opts.memoryNamespace],
 		});
 	const index = (opts.sourceContext?.governingIndex ?? []).filter(
-		(entry) => !opts.profile?.skillIds.length || opts.profile.skillIds.includes(entry.id),
+		(entry) =>
+			!opts.profile?.skillIds.length ||
+			opts.profile.skillIds.includes(entry.id),
 	);
 	routes["/skills/"] = new HubSkillBackend(
 		index.map((entry) => entry.id),
@@ -208,12 +210,14 @@ export function createCogniProgram(
 				trigger: { type: "tokens", value: 24_000 },
 				keep: { type: "messages", value: 12 },
 			}),
-			createSubAgentMiddleware({
-				defaultModel: model,
-				defaultTools: [],
-				generalPurposeAgent: false,
-				subagents: opts.children ?? [],
-			}),
+			opts.children?.length
+				? createSubAgentMiddleware({
+						defaultModel: model,
+						defaultTools: [],
+						generalPurposeAgent: false,
+						subagents: opts.children,
+					})
+				: createMiddleware({ name: "subAgentMiddleware" }),
 		],
 	});
 }

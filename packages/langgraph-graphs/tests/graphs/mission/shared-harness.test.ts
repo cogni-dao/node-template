@@ -326,6 +326,7 @@ describe("shared cogni harness", () => {
 	it("revises a real plan after a delegated task in poet", async () => {
 		const offered: string[] = [];
 		const models: string[] = [];
+		const childTools: string[] = [];
 		let turn = 0;
 		const completionFn: CompletionFn = (request) => {
 			models.push(request.model);
@@ -337,8 +338,10 @@ describe("shared cogni harness", () => {
 						fn !== null &&
 						"name" in fn &&
 						typeof fn.name === "string"
-					)
+					) {
 						offered.push(fn.name);
+						if (request.model === "deepseek-v4-flash") childTools.push(fn.name);
+					}
 				}
 			}
 			const toolCall = (id: string, name: string, args: object) => ({
@@ -403,5 +406,7 @@ describe("shared cogni harness", () => {
 		expect(offered).toEqual(expect.arrayContaining(["write_todos", "task"]));
 		expect(turn).toBe(5);
 		expect(models).toContain("deepseek-v4-flash");
+		expect(childTools).toContain("write_todos");
+		expect(childTools).not.toContain("task");
 	});
 });
