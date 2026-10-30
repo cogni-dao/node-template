@@ -27,7 +27,7 @@
     "test": "vitest run --config vitest.config.ts",
     "test:watch": "vitest --config vitest.config.ts",
     "test:ci": "vitest run --config vitest.config.ts",
-    "build:declarations": "tsup --config tsup.dts.config.ts"
+    "build:declarations": "COGNI_DTS_ONLY=1 tsup"
   },
   "dependencies": {
     "@types/json-schema": "^7.0.15",

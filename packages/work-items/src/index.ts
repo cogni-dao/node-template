@@ -73,4 +73,4 @@ export type {
   WorkItemOrder
 } from "./query-order.js";
 
-export { toWorkItemDto } from "./readback.js";
+export { toWorkItemDto } from "./types.js";

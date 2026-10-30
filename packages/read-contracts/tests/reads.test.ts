@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { SubjectRefSchema, WorkItemDtoSchema } from "../src/work-items.js";
-import { KnowledgeRowSchema } from "../src/knowledge.js";
+import { KnowledgeRowSchema } from "../src/index.js";
 
 describe("public read semantics", () => {
   it("requires actual revisions and discriminated identifiers", () => {

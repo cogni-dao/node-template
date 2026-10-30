@@ -276,4 +276,4 @@ export {
   selectGoverningIndex,
 } from "./domain/governing.js";
 
-export { toKnowledgeRow } from "./readback.js";
+export { toKnowledgeRow } from "./domain/schemas.js";

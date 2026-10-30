@@ -32,7 +32,7 @@ import type { KnowledgeStorePort } from "./port/knowledge-store.port.js";
 
 const CONFIDENCE_AGENT_DEFAULT = 30;
 
-import { toKnowledgeRow as toEntry } from "./readback.js";
+import { toKnowledgeRow as toEntry } from "./domain/schemas.js";
 
 /**
  * Create an EdoCapability backed by KnowledgeStorePort + EdoResolverPort.

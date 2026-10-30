@@ -14,6 +14,7 @@
  * @public
  */
 
+import { rankScore } from "./scores.js";
 import type { WorkItemDto } from "@cogni-dao/read-contracts/work-items";
 import type { Tagged } from "type-fest";
 import type { WorkItemSortBy, WorkItemSortDirection } from "./query-order.js";
@@ -149,4 +150,17 @@ export type WorkQuery = {
 /** Brand a raw string as WorkItemId. Call at system boundaries only. */
 export function toWorkItemId(raw: string): WorkItemId {
   return raw as WorkItemId;
+}
+
+export function toWorkItemDto(item: WorkItem): WorkItemDto {
+  const { actor, ...fields } = item;
+  return {
+    ...fields,
+    ...(actor !== "either" && { actor }),
+    rankScore: rankScore(item.scores),
+    assignees: item.assignees.map(a => ({ ...a })),
+    externalRefs: item.externalRefs.map(r => ({ ...r })),
+    labels: [...item.labels],
+    specRefs: [...item.specRefs],
+  };
 }

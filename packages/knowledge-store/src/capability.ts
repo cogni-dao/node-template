@@ -37,7 +37,7 @@ import {
 
 const CONFIDENCE_DRAFT = 30;
 
-import { toKnowledgeRow as toEntry } from "./readback.js";
+import { toKnowledgeRow as toEntry } from "./domain/schemas.js";
 
 export interface KnowledgeCapabilityOptions {
   /**

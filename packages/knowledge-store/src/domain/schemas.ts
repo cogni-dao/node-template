@@ -12,7 +12,7 @@
  */
 
 import { z } from "zod";
-import { KnowledgeRowSchema } from "@cogni-dao/read-contracts/knowledge";
+import { type KnowledgeRow, KnowledgeRowSchema } from "@cogni-dao/read-contracts/knowledge";
 
 // ---------------------------------------------------------------------------
 // Source types
@@ -234,3 +234,18 @@ export const DoltDiffEntrySchema = z.object({
 });
 
 export type DoltDiffEntry = z.infer<typeof DoltDiffEntrySchema>;
+
+export function toKnowledgeRow(entry: Knowledge): KnowledgeRow {
+  return {
+    ...entry,
+    entityId: entry.entityId ?? null,
+    useWhen: entry.useWhen ?? null,
+    entryType: entry.entryType ?? "finding",
+    confidencePct: entry.confidencePct ?? null,
+    sourceRef: entry.sourceRef ?? null,
+    tags: entry.tags ?? null,
+    evaluateAt: entry.evaluateAt ? entry.evaluateAt.toISOString() : null,
+    resolutionStrategy: entry.resolutionStrategy ?? null,
+    createdAt: entry.createdAt ? entry.createdAt.toISOString() : null,
+  };
+}

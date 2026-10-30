@@ -25,9 +25,6 @@
   "references": [
     {
       "path": "../work-items"
-    },
-    {
-      "path": "../read-contracts"
     }
   ]
 }

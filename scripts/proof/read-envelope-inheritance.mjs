@@ -26,7 +26,7 @@ const packageDirs = ["read-contracts", "work-items", "ai-tools", "knowledge-stor
 try {
   for (const [path, pattern] of [
     ["packages/read-contracts/src/work-items.ts", "export const WorkItemDtoSchema = z.object({"],
-    ["packages/read-contracts/src/knowledge.ts", "export const KnowledgeRowSchema = z.object({"],
+    ["packages/read-contracts/src/index.ts", "export const KnowledgeRowSchema = z.object({"],
   ]) {
     const full = join(root, path); const before = readFileSync(full, "utf8");
     if (!before.includes(pattern) || before.includes("futureContextProbe")) throw Error(`Unexpected canonical source: ${path}`);
@@ -35,11 +35,11 @@ try {
     writeFileSync(full, after);
     manifest.sourceOnlyMutation.push({ path, before: sha256(before), after: sha256(after) });
   }
-  const fixturePath = join(root, "scripts/proof/read-envelope-fixtures.mjs");
+  const fixturePath = join(root, "scripts/proof/read-envelope-consumer.mjs");
   const fixtureBefore = readFileSync(fixturePath, "utf8"); originals.set(fixturePath, fixtureBefore);
   const fixtureAfter = fixtureBefore.replace(/export const (workRow|knowledgeRow) = \{/g, '$&\n  futureContextProbe: "canonical-only-probe",');
   writeFileSync(fixturePath, fixtureAfter);
-  manifest.sourceOnlyMutation.push({ path: "scripts/proof/read-envelope-fixtures.mjs", before: sha256(fixtureBefore), after: sha256(fixtureAfter) });
+  manifest.sourceOnlyMutation.push({ path: "scripts/proof/read-envelope-consumer.mjs", before: sha256(fixtureBefore), after: sha256(fixtureAfter) });
   // This is deliberately the real root sequence, including final declaration closure AFTER tsc.
   run("pnpm", ["packages:build"]);
   for (const dir of packageDirs) {
@@ -51,19 +51,19 @@ try {
   // Compile real node-owned seams as explicit test artifacts; public deps remain external.
   const { build } = createRequire(join(root, "packages/ai-tools/package.json"))("tsup");
   const external = ["@cogni/ai-tools", "@cogni-dao/ai-tools", "@cogni/work-items", "@cogni-dao/work-items", "@cogni/knowledge-store", "@cogni-dao/knowledge-store", "@cogni-dao/read-contracts", "@cogni-dao/read-contracts/work-items", "@cogni-dao/read-contracts/knowledge", "zod", "postgres", /^@langchain\//];
-  for (const [name, entry, declarations] of [
-    ["proof-runner", "scripts/proof/read-envelope-runner.ts", true],
-    ["proof-node-binding", "scripts/proof/read-envelope-node-binding.ts", false],
-    // Existing langgraph public peers include the node-owned ai-core. Supply its real
-    // bytes explicitly, after proving ai-tools declarations do not depend on it.
-    ["ai-core", "packages/ai-core/src/index.ts", true],
-  ]) {
+  const nodeEntries = {
+    "proof-runner": 'export { createToolRunner } from "'+join(root, 'packages/ai-core/src/tooling/tool-runner.ts')+'";\nexport { createToolAllowlistPolicy } from "'+join(root, 'packages/ai-core/src/tooling/runtime/tool-policy.ts')+'";\n',
+    "proof-node-binding": 'export { createWorkItemCapability } from "'+join(root, 'app/src/bootstrap/capabilities/work-item.ts')+'";\nexport { toHttpWorkItem, toHttpKnowledgeRow } from "'+join(root, 'app/src/app/_facades/read-envelopes.ts')+'";\nexport { workItemsListOperation } from "'+join(root, 'packages/node-contracts/src/work.items.list.v1.contract.ts')+'";\nexport { KnowledgeListResponseSchema } from "'+join(root, 'packages/node-contracts/src/knowledge.list.v1.contract.ts')+'";\nexport { makeLangChainTool } from "'+join(root, 'packages/langgraph-graphs/src/runtime/core/langchain-tools.ts')+'";\n',
+  };
+  for (const [name, declarations] of [["proof-runner", true], ["proof-node-binding", false], ["ai-core", true]]) {
+    const entry = name === "ai-core" ? join(root, "packages/ai-core/src/index.ts") : join(proofRoot, `${name}.ts`);
+    if (nodeEntries[name]) writeFileSync(entry, nodeEntries[name]);
     const dir = join(proofRoot, name); mkdirSync(dir);
-    await build({ entry: { index: join(root, entry) }, outDir: join(dir, "dist"), format: ["esm"], platform: "node", splitting: false, clean: true, config: false, tsconfig: join(root, "packages/ai-tools/tsconfig.json"), external, noExternal: ["@cogni/node-contracts"], dts: declarations ? { compilerOptions: { composite: false, incremental: false }, resolve: ["@cogni/ai-core"] } : false });
-    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: `@cogni/${name}`, version: "0.0.0-proof", type: "module", exports: { ".": { ...(declarations ? { types: "./dist/index.d.ts" } : {}), import: "./dist/index.js" } }, files: ["dist"] }));
+    await build({ entry: { index: entry }, outDir: join(dir, "dist"), format: ["esm"], platform: "node", splitting: false, clean: true, config: false, tsconfig: join(root, "packages/ai-tools/tsconfig.json"), external, noExternal: ["@cogni/node-contracts"], dts: declarations ? { compilerOptions: { composite: false, incremental: false, rootDir: "/" }, resolve: ["@cogni/ai-core"] } : false });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: `@cogni/${name}`, version: "0.0.0", type: "module", exports: { ".": { ...(declarations ? { types: "./dist/index.d.ts" } : {}), import: "./dist/index.js" } }, files: ["dist"] }));
     run("npm", ["pack", "--pack-destination", artifacts], dir);
-    const filename = `cogni-${name}-0.0.0-proof.tgz`;
-    manifest.artifacts.push({ name: `@cogni/${name}`, version: "0.0.0-proof", filename, sha256: sha256(readFileSync(join(artifacts, filename))), testArtifact: true });
+    const filename = `cogni-${name}-0.0.0.tgz`;
+    manifest.artifacts.push({ name: `@cogni/${name}`, version: "0.0.0", filename, sha256: sha256(readFileSync(join(artifacts, filename))), testArtifact: true });
   }
   const dependencies = { zod: "4.4.3", typescript: "5.9.3", "@types/node": "22.19.19", "@types/json-schema": "7.0.15", "@langchain/core": "1.1.48" };
   for (const artifact of manifest.artifacts) {
@@ -74,8 +74,7 @@ try {
   // Dual public/import identities are explicit artifacts, never workspace aliases.
   dependencies["@cogni-dao/work-items"] = dependencies["@cogni/work-items"];
   writeFileSync(join(consumer, "package.json"), JSON.stringify({ type: "module", dependencies }));
-  run("npm", ["install", "--ignore-scripts", "--legacy-peer-deps", "--no-audit", "--no-fund"], consumer);
-  copyFileSync(fixturePath, join(consumer, "fixtures.mjs"));
+  run("npm", ["install", "--ignore-scripts", "--strict-peer-deps", "--no-audit", "--no-fund"], consumer);
   copyFileSync(join(root, "scripts/proof/read-envelope-consumer.mjs"), join(consumer, "proof.mjs"));
   // Structural compatibility compiles against the actual node-owned ToolRunner artifact.
   writeFileSync(join(consumer, "consumer.ts"), `import { contractToRuntime, workItemQueryContract, createWorkItemQueryImplementation, type WorkItemCapability } from '@cogni/ai-tools';\nimport { createToolRunner, createToolAllowlistPolicy } from '@cogni/proof-runner';\nimport * as reads from '@cogni-dao/read-contracts';\nimport * as work from '@cogni/work-items';\nimport * as markdown from '@cogni/work-items/markdown';\nimport * as dolt from '@cogni/work-items/adapters/doltgres';\nimport * as leases from '@cogni/work-items/adapters/postgres';\nimport * as knowledge from '@cogni/knowledge-store';\nimport * as kd from '@cogni/knowledge-store/adapters/doltgres';\nimport * as kf from '@cogni/knowledge-store/adapters/fake';\nimport * as kc from '@cogni/knowledge-store/contribution-schemas';\nimport * as km from '@cogni/knowledge-store/migrations';\ndeclare const capability: WorkItemCapability;\nconst runtime = contractToRuntime(workItemQueryContract, createWorkItemQueryImplementation({workItemCapability: capability}));\ncreateToolRunner({getBoundTool: () => runtime, listToolSpecs: () => [runtime.spec], hasToolId: () => true}, () => {}, {policy:createToolAllowlistPolicy([runtime.id])});\n`);
@@ -91,7 +90,7 @@ try {
   dependencies["@cogni/ai-core"] = `file:${join(artifacts, core.filename)}`;
   dependencies["@cogni/langgraph-graphs"] = `file:${join(artifacts, graph.filename)}`;
   writeFileSync(join(consumer, "package.json"), JSON.stringify({ type: "module", dependencies }));
-  run("npm", ["install", "--ignore-scripts", "--legacy-peer-deps", "--no-audit", "--no-fund"], consumer);
+  run("npm", ["install", "--ignore-scripts", "--strict-peer-deps", "--no-audit", "--no-fund"], consumer);
   writeFileSync(join(consumer, "imports.mjs"), `import { readFileSync } from 'node:fs';\nfor (const name of ${JSON.stringify(Object.keys(dependencies).filter(name => name.startsWith("@cogni")))}) { const pkg=JSON.parse(readFileSync('node_modules/'+name+'/package.json')); for(const sub of Object.keys(pkg.exports)) { const spec=sub==='.'?name:name+sub.slice(1); await import(spec); console.log('Imported '+spec); } }\n`);
   run("node", ["imports.mjs"], consumer);
   const typesBefore = readFileSync(join(consumer, "consumer.ts"), "utf8");

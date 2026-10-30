@@ -21,9 +21,9 @@
       "default": "./dist/work-items.js"
     },
     "./knowledge": {
-      "types": "./dist/knowledge.d.ts",
-      "import": "./dist/knowledge.js",
-      "default": "./dist/knowledge.js"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
     }
   },
   "types": "./dist/index.d.ts",
@@ -31,9 +31,9 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsup",
+    "build": "tsup src/index.ts src/work-items.ts --format esm --platform neutral",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --config vitest.config.ts"
+    "test": "vitest run tests/reads.test.ts"
   },
   "dependencies": {
     "zod": "^4.1.12"
