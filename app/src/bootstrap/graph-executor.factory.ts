@@ -44,10 +44,7 @@ import {
   parseMcpConfigFromEnv,
 } from "@cogni/langgraph-graphs";
 import { trace } from "@opentelemetry/api";
-import {
-  createMemoryPersistence,
-  createPostgresPersistence,
-} from "@cogni/langgraph-graphs/inproc";
+import { createMemoryPersistence } from "@cogni/langgraph-graphs/inproc";
 import {
   type CompletionStreamFn,
   createLangGraphDevClient,
@@ -74,30 +71,10 @@ import {
   resolveAiAdapterDeps,
 } from "./container";
 
-let persistenceInstance:
-  | Promise<
-      | Awaited<ReturnType<typeof createPostgresPersistence>>
-      | Awaited<ReturnType<typeof createMemoryPersistence>>
-    >
-  | undefined;
+// Shared only for this process; durable storage requires a separately provisioned host.
+let persistenceInstance: ReturnType<typeof createMemoryPersistence> | undefined;
 function getCogniPersistence() {
-  if (!persistenceInstance) {
-    const env = serverEnv();
-    persistenceInstance = (
-      env.DEPLOY_ENVIRONMENT === "local" && env.COGNI_LOCAL_INPROC === "true"
-        ? createMemoryPersistence()
-        : createPostgresPersistence(env.DATABASE_SERVICE_URL)
-    ).catch((error) => {
-      persistenceInstance = undefined;
-      throw error;
-    });
-    const close = () => {
-      void persistenceInstance?.then((runtime) => runtime.close());
-    };
-    process.once("SIGTERM", close);
-    process.once("SIGINT", close);
-  }
-  return persistenceInstance;
+  return (persistenceInstance ??= createMemoryPersistence());
 }
 
 /**

@@ -197,7 +197,7 @@ export const NODE_LANGGRAPH_CATALOG = {
 
   /**
    * Poet graph - poetic AI assistant.
-   * Uses createReactAgent with tool-calling loop.
+   * Uses the shared Cogni agent with a tool-calling loop.
    */
   [POET_GRAPH_NAME]: {
     displayName: "Poet",
@@ -402,6 +402,7 @@ export const NODE_LANGGRAPH_GRAPH_IDS = {
   "autoresearch-registry-swarm": `${LANGGRAPH_PROVIDER_ID}:${AUTORESEARCH_REGISTRY_SWARM_GRAPH_NAME}`,
   brain: `${LANGGRAPH_PROVIDER_ID}:${BRAIN_GRAPH_NAME}`,
   poet: `${LANGGRAPH_PROVIDER_ID}:${POET_GRAPH_NAME}`,
+  cogni: `${LANGGRAPH_PROVIDER_ID}:cogni`,
   ponderer: `${LANGGRAPH_PROVIDER_ID}:${PONDERER_GRAPH_NAME}`,
   research: `${LANGGRAPH_PROVIDER_ID}:${RESEARCH_GRAPH_NAME}`,
   "pr-review": `${LANGGRAPH_PROVIDER_ID}:${PR_REVIEW_GRAPH_NAME}`,
@@ -415,7 +416,6 @@ export const NODE_LANGGRAPH_GRAPH_IDS = {
 } as const;
 
 export const OPERATOR_LANGGRAPH_GRAPH_IDS = {
-  cogni: `${LANGGRAPH_PROVIDER_ID}:cogni`,
   ...NODE_LANGGRAPH_GRAPH_IDS,
   "operating-review": `${LANGGRAPH_PROVIDER_ID}:${OPERATING_REVIEW_GRAPH_NAME}`,
   "pr-manager": `${LANGGRAPH_PROVIDER_ID}:${PR_MANAGER_GRAPH_NAME}`,

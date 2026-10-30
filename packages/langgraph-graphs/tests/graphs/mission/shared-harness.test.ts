@@ -459,7 +459,7 @@ describe("shared cogni harness", () => {
 						}),
 					],
 				},
-				{ content: "Dawn warms the quiet hills." },
+				{ content: "PRIVATE CHILD DRAFT" },
 				{
 					toolCalls: [
 						toolCall("revise", "write_todos", {
@@ -476,12 +476,18 @@ describe("shared cogni harness", () => {
 				content: "Dawn warms the quiet hills.",
 			};
 			return {
-				stream: (async function* () {})(),
+				stream: (async function* () {
+					yield {
+						type: "text_delta" as const,
+						delta: reply.content ?? "internal planning",
+					};
+				})(),
 				final: Promise.resolve({ ok: true, ...reply }),
 			};
 		};
 		const run = createInProcGraphRunner({
 			createGraph: createPoetGraph,
+			trustedProgramId: "poet",
 			completionFn,
 			createToolExecFn: () => async () => ({ ok: false, error: "not_found" }),
 			toolContracts: [],
@@ -491,10 +497,13 @@ describe("shared cogni harness", () => {
 				configurable: { model: "test-model", toolIds: [] },
 			},
 		});
-		for await (const _event of run.stream) {
-			/* consume billing stream */
+		const deltas: string[] = [];
+		for await (const event of run.stream) {
+			if (event.type === "text_delta") deltas.push(event.delta);
 		}
 		const result = await run.final;
+		expect(deltas.join("")).toBe(result.content);
+		expect(deltas.join("")).not.toContain("PRIVATE CHILD DRAFT");
 		expect(result.ok).toBe(true);
 		expect(result.content).toContain("Dawn warms");
 		expect(offered).toEqual(expect.arrayContaining(["write_todos", "task"]));

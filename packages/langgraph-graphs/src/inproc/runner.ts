@@ -170,7 +170,7 @@ export function createInProcGraphRunner<TTool = unknown>(
 
   const tokenSink = {
     push: (event: AiEvent) => {
-      if (!opts.program || event.type !== "text_delta") emit(event);
+      if (!(opts.program || opts.trustedProgramId) || event.type !== "text_delta") emit(event);
     },
   };
   const executeTool = createToolExecFn(emit);
@@ -345,6 +345,9 @@ export function createInProcGraphRunner<TTool = unknown>(
           ? (result.structuredResponse as Record<string, unknown>)
           : undefined;
 
+      // Harness model calls include internal child and summary text; only emit the final answer.
+      if ((opts.program || opts.trustedProgramId) && assistantContent)
+        emit({ type: "text_delta", delta: assistantContent });
       // ASSISTANT_FINAL_REQUIRED: exactly one per run
       emit({ type: "assistant_final", content: assistantContent });
       emit({ type: "done" });
