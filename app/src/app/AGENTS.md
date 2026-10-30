@@ -113,3 +113,5 @@ When adding new protected pages (e.g., `/billing`, `/api-keys`), place them unde
 
 - Uses Next.js App Router patterns
 - API routes are thin adapters that delegate to features
+
+/kpis and /kpis/[id] are authenticated metric/history views. /api/v1/metrics exposes list, detail/history, exact immutable observation reads and live computation; subject projections share goal/hypothesis observation identities.

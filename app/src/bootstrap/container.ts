@@ -1,3 +1,7 @@
+import { createGoalMetricTools } from "@/bootstrap/capabilities/goal-metric-tools";
+import { KpiBindingsSchema } from "@cogni-dao/metrics/contracts";
+import type { MetricService } from "@cogni-dao/metrics";
+import { createGoalMetrics } from "@/bootstrap/capabilities/goal-metrics";
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
@@ -242,6 +246,7 @@ export interface Container {
 	scheduleManager: ScheduleUserPort;
 	/** Metrics capability for AI tools - requires PROMETHEUS_URL to be configured */
 	metricsCapability: MetricsCapability;
+	goalMetrics: MetricService | undefined;
 	/** Web search capability for AI tools - requires TAVILY_API_KEY to be configured */
 	webSearchCapability: WebSearchCapability;
 	/** Repo capability for AI tools - requires COGNI_REPO_PATH */
@@ -733,6 +738,7 @@ function createContainer(): Container {
 	});
 
 	// KnowledgeCapability + EdoCapability for AI tools (require DOLTGRES_URL)
+	let goalMetrics: MetricService | undefined;
 	let knowledgeCapability: KnowledgeCapability;
 	let edoCapability: EdoCapability;
 	let knowledgeContributionService: ContributionService | undefined;
@@ -791,7 +797,18 @@ function createContainer(): Container {
 			writerSession: knowledgeWriter,
 		});
 		knowledgeStorePort = knowledgePort;
+    goalMetrics = createGoalMetrics({ knowledgeSql: doltClient, observationsSql: serviceDb.$client, environment: env.DEPLOY_ENVIRONMENT ?? "unknown", log: event => log.info(event, "metric.computed") });
 		knowledgeCapability = createKnowledgeCapability(knowledgePort);
+    const listGoals = knowledgeCapability.listActiveGoals?.bind(knowledgeCapability);
+    if (listGoals) knowledgeCapability.listActiveGoals = async () => {
+      const goals = await listGoals();
+      return Promise.all(goals.map(async goal => {
+        const row = await knowledgePort.getKnowledge(goal.id);
+        const bindings = KpiBindingsSchema.parse(row?.kpiBindings ?? []);
+        return { ...goal, kpis: bindings.length && goalMetrics ? await goalMetrics.bindings(bindings) : [] };
+      }));
+    }
+
 		const edoResolver = new DoltgresEdoResolverAdapter({
 			sql: doltClient,
 			store: knowledgePort,
@@ -893,7 +910,8 @@ function createContainer(): Container {
 		vcsCapability: stubVcsCapability,
 		workItemCapability,
 	});
-	const toolSource = createBoundToolSource([...CORE_TOOL_BUNDLE], toolBindings);
+	const metricTools = createGoalMetricTools(() => goalMetrics);
+	const toolSource = createBoundToolSource([...CORE_TOOL_BUNDLE], { ...toolBindings, ...metricTools.bindings });
 
 	// Config: rethrow in dev/test for diagnosis, respond_500 in production for safety
 	const config: ContainerConfig = {
@@ -1045,6 +1063,7 @@ function createContainer(): Container {
 		knowledgeContributionService,
 		nodeAdmin,
 		knowledgeStorePort,
+    goalMetrics,
 		edoCapability,
 		threadPersistenceForUser: (userId: UserId) =>
 			new DrizzleThreadPersistenceAdapter(db, userActor(userId)),

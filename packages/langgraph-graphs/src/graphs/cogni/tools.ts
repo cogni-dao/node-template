@@ -1,6 +1,9 @@
 /** Only tools actually exported by this node's core tool catalog. */
 export const COGNI_TOOL_IDS = [
 	"core__goal_list",
+  "core__metric_list",
+  "core__metric_read",
+  "core__metric_compute",
 	"core__knowledge_read",
 	"core__knowledge_search",
 	"core__repo_list",

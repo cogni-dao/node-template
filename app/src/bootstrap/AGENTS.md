@@ -116,3 +116,5 @@ Bootstrap application runtime dependencies.
 
 - System installers moved to scripts/bootstrap/
 - Focus on runtime composition only
+
+goalMetrics composes the published measurement engine, node-owned calculator catalog and injected Postgres observation adapter. Metric tool bindings and DAO goal projections share this service.

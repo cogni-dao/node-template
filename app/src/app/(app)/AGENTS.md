@@ -65,3 +65,5 @@ pnpm build   # build for production
 
 - `SidebarProvider` sets a `sidebar_state` cookie for collapse persistence.
 - Chat thread state bridges to the sidebar via Zustand store (`useChatSidebarStore`), not React context, because the sidebar is a sibling of page content.
+
+/kpis and /kpis/[id] require the existing session guard and proxy coverage. The observation query resolves immutable evidence independently of current-definition history.

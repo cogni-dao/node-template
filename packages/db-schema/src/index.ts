@@ -24,3 +24,5 @@ export * from "./refs";
 export * from "./scheduling";
 
 export * from "./work-item-leases";
+
+export * from "./metric-observations.js";

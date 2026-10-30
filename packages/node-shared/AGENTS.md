@@ -74,3 +74,5 @@ pnpm --filter @cogni/node-shared build
 - Extracted from `apps/operator/src/shared/` (task.0248 Phase 1b)
 - App-local files remain in each app's `src/shared/`: env, db, hooks, config server, model-catalog, wagmi, evm-wagmi, onchain, logger, metrics, redact, cn
 - Mixed barrels (`@/shared/observability`, `@/shared/web3`, `@/shared/util`) re-export from both local files and `@cogni/node-shared`
+
+The /browser subpath exports pure web3, money, event and request-context helpers without Node request storage, scheduler tokens or Node crypto. Browser consumers use this entrypoint.

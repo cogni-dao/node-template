@@ -53,6 +53,7 @@ on:
       - "knowledge-base-ui-v*"
       - "graph-execution-v*"
       - "scheduling-v*"
+      - "metrics-v*"
       - "ai-tools-v*"
       - "langgraph-graphs-v*"
       - "money-plane-v*"
@@ -92,7 +93,8 @@ env:
   # in either direction, so neither an unselectable tag nor an untaggable
   # package can ship.
   PACKAGES: >-
-    [{"name":"@cogni-dao/work-items","dir":"packages/work-items","tagPrefix":"work-items-v"},
+    [{"name":"@cogni-dao/metrics","dir":"packages/metrics","tagPrefix":"metrics-v"},
+    {"name":"@cogni-dao/work-items","dir":"packages/work-items","tagPrefix":"work-items-v"},
      {"name":"@cogni-dao/knowledge-store","dir":"packages/knowledge-store","tagPrefix":"knowledge-store-v"},
      {"name":"@cogni-dao/knowledge-base","dir":"packages/knowledge-base","tagPrefix":"knowledge-base-v"},
      {"name":"@cogni-dao/knowledge-base-ui","dir":"packages/knowledge-base-ui","tagPrefix":"knowledge-base-ui-v"},

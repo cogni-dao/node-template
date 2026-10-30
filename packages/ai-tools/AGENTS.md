@@ -115,3 +115,5 @@ pnpm --filter @cogni-dao/ai-tools build
 - Per LANGGRAPH_AI.md: tool contracts live here, LangChain `tool()` wrappers in langgraph-graphs
 - Per PACKAGES_NO_SRC_IMPORTS: This package cannot import from `src/**`
 - Package isolation enables LangGraph Server to import tools without Next.js deps
+
+Metric list/read/compute tools consume the public @cogni-dao/metrics contracts. createMetricTools binds an injected node service. Completed evidence is read through the same service as HTTP/UI.

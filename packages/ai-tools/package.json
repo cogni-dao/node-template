@@ -39,10 +39,12 @@
     "vite-tsconfig-paths": "^5.1.4",
     "vitest": "^3.1.4",
     "@cogni-dao/work-items": "workspace:*",
-    "@cogni-dao/knowledge-store": "workspace:0.9.0"
+    "@cogni-dao/knowledge-store": "workspace:0.9.0",
+    "@cogni-dao/metrics": "workspace:*"
   },
   "peerDependencies": {
     "@cogni-dao/work-items": "0.4.0",
-    "@cogni-dao/knowledge-store": "0.9.0"
+    "@cogni-dao/knowledge-store": "0.9.0",
+    "@cogni-dao/metrics": "^0.1.0"
   }
 }

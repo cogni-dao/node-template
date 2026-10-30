@@ -128,7 +128,8 @@
     "wagmi": "2.19.5",
     "zod": "^4.1.12",
     "zustand": "^5.0.9",
-    "@cogni/scheduling": "workspace:@cogni-dao/scheduling@*"
+    "@cogni/scheduling": "workspace:@cogni-dao/scheduling@*",
+    "@cogni-dao/metrics": "workspace:*"
   },
   "devDependencies": {
     "@testcontainers/postgresql": "^11.8.1",

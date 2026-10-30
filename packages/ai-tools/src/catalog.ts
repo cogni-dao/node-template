@@ -1,3 +1,4 @@
+import { METRIC_TOOL_BUNDLE } from "./tools/metric";
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
@@ -112,6 +113,7 @@ export function createToolCatalog(
  * VCS_TOOL_BUNDLE instead.
  */
 export const CORE_TOOL_BUNDLE: readonly CatalogBoundTool[] = [
+  ...METRIC_TOOL_BUNDLE,
   edoDecideBoundTool as CatalogBoundTool,
   edoHypothesizeBoundTool as CatalogBoundTool,
   edoRecordOutcomeBoundTool as CatalogBoundTool,

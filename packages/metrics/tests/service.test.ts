@@ -1,0 +1,438 @@
+// SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+import { describe, expect, it } from "vitest";
+import { z } from "zod";
+import {
+	createMetricService,
+	type MetricDefinition,
+	type MetricObservationsPort,
+	MetricRegistry,
+	type MetricSample,
+	type MetricSnapshot,
+} from "../src/index";
+
+function setup() {
+	let time = new Date("2026-10-30T12:00:00Z");
+	let allowed = true;
+	let authorityFailure = false;
+	let deniedRevision: string | null = null;
+	let reads = 0;
+	let sourceFailure = false;
+	const d: MetricDefinition = {
+		id: "open-work",
+		title: "Open work",
+		revision: "1",
+		spec: {
+			calculatorId: "work.count@1",
+			params: {},
+			cadenceSeconds: 60,
+			maxAgeSeconds: 90,
+		},
+	};
+	let sample: MetricSample = {
+		value: 0,
+		unit: "items",
+		complete: true,
+		sourceWatermarks: [{ source: "work", asOf: time.toISOString() }],
+		evidenceRefs: ["node:work"],
+	};
+	const snapshots = new Map<string, MetricSnapshot>();
+	const receipts = new Map<string, { hash: string; id: string }>();
+	let cursor: string | null = null;
+	const port: MetricObservationsPort = {
+		async request(_metricId, key, hash) {
+			const r = receipts.get(key);
+			if (!r) return null;
+			if (r.hash !== hash) throw new Error("idempotency_conflict");
+			return snapshots.get(r.id) ?? null;
+		},
+		async reserve(input) {
+			const old = receipts.get(input.requestKey);
+			if (old && old.hash !== input.requestHash)
+				throw new Error("idempotency_conflict");
+			if (old) {
+				const snapshot = snapshots.get(old.id);
+				if (!snapshot) throw new Error("missing_fixture");
+				return { snapshot, leaseToken: null };
+			}
+			snapshots.set(
+				input.snapshot.observation.id,
+				structuredClone(input.snapshot),
+			);
+			receipts.set(input.requestKey, {
+				hash: input.requestHash,
+				id: input.snapshot.observation.id,
+			});
+			return { snapshot: structuredClone(input.snapshot), leaseToken: "lease" };
+		},
+		async complete(id, _token, r) {
+			const snapshot = snapshots.get(id);
+			if (!snapshot) throw new Error("missing_fixture");
+			snapshot.observation = structuredClone(r);
+			return r;
+		},
+		async history(id, hash) {
+			return [...snapshots.values()]
+				.map((s) => s.observation)
+				.filter((r) => r.metricId === id && r.definitionHash === hash)
+				.sort((a, b) => b.window.end.localeCompare(a.window.end));
+		},
+		async get(id) {
+			return snapshots.get(id)?.observation ?? null;
+		},
+		async lastGood(id, hash) {
+			return (
+				(await this.history(id, hash, 100)).find((r) => r.status === "ok") ??
+				null
+			);
+		},
+		async at(id, hash, at) {
+			return (
+				(await this.history(id, hash, 100)).find((r) => r.window.end <= at) ??
+				null
+			);
+		},
+		async snapshot(id) {
+			return snapshots.get(id) ?? null;
+		},
+		async scheduledAttempts(id, hash, slot) {
+			return (await this.history(id, hash, 100))
+				.filter((r) => r.scheduledFor === slot)
+				.slice(0, 4);
+		},
+		async expireLeases() {},
+		async cursor() {
+			return cursor;
+		},
+		async advanceCursor(id) {
+			cursor = id;
+		},
+	};
+	const registry = new MetricRegistry();
+	registry.register({
+		id: "work.count@1",
+		unit: "items",
+		paramsSchema: z.object({}),
+		budget: {
+			timeoutMs: 50,
+			maxSourceCalls: 1,
+			maxRows: 1,
+			maxResponseBytes: 1000,
+		},
+		compute: async (_p, ctx) =>
+			ctx.read(async () => {
+				reads++;
+				if (sourceFailure) throw new Error("provider_failed");
+				return sample;
+			}),
+	});
+	const service = createMetricService({
+		definitions: {
+			get: async (id) => (id === d.id ? d : null),
+			list: async (_limit, after) => ({
+				items: !after || d.id > after ? [d] : [],
+				nextCursor: null,
+			}),
+		},
+		observations: port,
+		registry,
+		scope: { node: "one", environment: "local", dataScope: "members" },
+		now: () => time,
+		authorize: async (_action, definition) => {
+			if (authorityFailure) throw new Error("offline");
+			return allowed && definition.revision !== deniedRevision;
+		},
+	});
+	return {
+		service,
+		d,
+		snapshots,
+		denyRevision: (revision: string) => {
+			deniedRevision = revision;
+		},
+		reads: () => reads,
+		failSource: (value: boolean) => {
+			sourceFailure = value;
+		},
+		allow: (value: boolean) => {
+			allowed = value;
+		},
+		failAuthority: () => {
+			authorityFailure = true;
+		},
+		sample: (value: Partial<MetricSample>) => {
+			sample = { ...sample, ...value };
+		},
+		advance: (ms: number) => {
+			time = new Date(time.getTime() + ms);
+		},
+	};
+}
+describe("measurement evidence contract", () => {
+	it("keeps genuine zero and values above 100, with stable replay identity", async () => {
+		const s = setup();
+		const zero = await s.service.compute("open-work", { requestKey: "zero" });
+		expect(zero.value).toBe(0);
+		expect(zero.status).toBe("ok");
+		s.d.revision = "2";
+		s.sample({ value: 150 });
+		const replay = await s.service.compute("open-work", { requestKey: "zero" });
+		expect(replay.id).toBe(zero.id);
+		expect(replay.definitionRevision).toBe("1");
+		expect(s.reads()).toBe(1);
+		s.advance(1);
+		expect(
+			(await s.service.compute("open-work", { requestKey: "large" })).value,
+		).toBe(150);
+	});
+	it("does not turn partial data or unknown freshness into zero", async () => {
+		const s = setup();
+		s.sample({ complete: false });
+		const r = await s.service.compute("open-work", { requestKey: "partial" });
+		expect(r.status).toBe("unavailable");
+		expect(r.value).toBeNull();
+		s.advance(1);
+		s.sample({
+			complete: true,
+			sourceWatermarks: [{ source: "work", asOf: null }],
+		});
+		expect(
+			(await s.service.compute("open-work", { requestKey: "unknown" })).value,
+		).toBeNull();
+	});
+	it("keeps stale source evidence visible without certifying a target", async () => {
+		const s = setup();
+		await s.service.compute("open-work", { requestKey: "one" });
+		s.advance(91000);
+		expect((await s.service.read("open-work")).viewState).toBe("stale");
+		expect(
+			(
+				await s.service.bindings([
+					{
+						metricId: "open-work",
+						comparator: "gte",
+						target: { value: 0, unit: "items" },
+					},
+				])
+			)[0]?.met,
+		).toBeNull();
+	});
+	it("checks current authority before every cached/history/binding read", async () => {
+		const s = setup();
+		await s.service.compute("open-work", { requestKey: "one" });
+		s.allow(false);
+		await expect(s.service.read("open-work")).rejects.toMatchObject({
+			status: 404,
+		});
+		await expect(s.service.history("open-work")).rejects.toMatchObject({
+			status: 404,
+		});
+		s.failAuthority();
+		await expect(s.service.read("open-work")).rejects.toMatchObject({
+			status: 503,
+		});
+	});
+	it("preserves latest failure separately from last good", async () => {
+		const s = setup();
+		const good = await s.service.compute("open-work", { requestKey: "one" });
+		s.advance(1);
+		s.sample({ complete: false });
+		const bad = await s.service.compute("open-work", { requestKey: "two" });
+		const view = await s.service.read("open-work");
+		expect(view.viewState).toBe("unavailable");
+		expect(view.latestAttempt?.id).toBe(bad.id);
+		expect(view.lastGood?.id).toBe(good.id);
+	});
+	it("pins hypothesis evidence while rolling measurements change", async () => {
+		const s = setup();
+		const baseline = await s.service.compute("open-work", {
+			requestKey: "one",
+		});
+		s.advance(1);
+		s.sample({ value: 5 });
+		await s.service.compute("open-work", { requestKey: "two" });
+		const [result] = await s.service.bindings([
+			{
+				metricId: "open-work",
+				comparator: "eq",
+				target: { value: 0, unit: "items" },
+				evaluationAt: baseline.window.end,
+			},
+		]);
+		expect(result?.observation?.id).toBe(baseline.id);
+		expect(result?.met).toBe(true);
+	});
+	it("recovers the refresh cursor on the next real tick", async () => {
+		const s = setup();
+		const first = await s.service.refreshDue();
+		expect(first.scanned).toBe(1);
+		s.advance(60000);
+		const second = await s.service.refreshDue();
+		expect(second.scanned).toBe(1);
+		expect(s.reads()).toBe(2);
+	});
+});
+
+describe("review regression cases", () => {
+	it("rejects backdating a current snapshot", async () => {
+		const s = setup();
+		await expect(
+			s.service.compute("open-work", {
+				requestKey: "backdated",
+				evaluationAt: "2026-10-29T12:00:00Z",
+			}),
+		).rejects.toMatchObject({ code: "historical_window_not_supported" });
+		expect(s.reads()).toBe(0);
+	});
+	it("keeps fixed hypothesis evidence after definition edits", async () => {
+		const s = setup();
+		const first = await s.service.compute("open-work", {
+			requestKey: "original",
+		});
+		const binding = {
+			metricId: "open-work",
+			comparator: "eq" as const,
+			target: { value: 0, unit: "items" },
+			evaluationAt: first.window.end,
+			baselineObservationId: first.id,
+		};
+		s.advance(1000);
+		s.d.revision = "2";
+		s.sample({ value: 5 });
+		await s.service.compute("open-work", { requestKey: "new-definition" });
+		const [result] = await s.service.bindings([binding], { hypothesis: true });
+		expect(result?.observation?.id).toBe(first.id);
+		expect(result?.met).toBe(true);
+	});
+	it("preserves unknown for missing metrics and unpinned hypotheses", async () => {
+		const s = setup();
+		const binding = {
+			metricId: "missing",
+			comparator: "gte" as const,
+			target: { value: 0, unit: "items" },
+		};
+		expect((await s.service.bindings([binding]))[0]).toMatchObject({
+			viewState: "unavailable",
+			met: null,
+		});
+		expect(
+			(
+				await s.service.bindings([{ ...binding, metricId: "open-work" }], {
+					hypothesis: true,
+				})
+			)[0],
+		).toMatchObject({
+			reason: "fixed_prediction_and_baseline_required",
+			met: null,
+		});
+	});
+	it("does not certify source data stale at a fixed evaluation", async () => {
+		const s = setup();
+		s.sample({
+			sourceWatermarks: [{ source: "work", asOf: "2026-10-29T12:00:00Z" }],
+		});
+		const r = await s.service.compute("open-work", {
+			requestKey: "stale-fixed",
+		});
+		expect(
+			(
+				await s.service.bindings([
+					{
+						metricId: "open-work",
+						comparator: "gte",
+						target: { value: 0, unit: "items" },
+						evaluationAt: r.window.end,
+					},
+				])
+			)[0],
+		).toMatchObject({ viewState: "stale", met: null });
+	});
+	it("recovers an hourly metric within the same cadence with a new immutable attempt", async () => {
+		const s = setup();
+		s.d.spec.cadenceSeconds = 3600;
+		s.failSource(true);
+		const first = await s.service.refreshDue();
+		expect(first.observations[0]?.status).toBe("error");
+		s.advance(60000);
+		s.failSource(false);
+		const second = await s.service.refreshDue();
+		expect(second.observations[0]?.status).toBe("ok");
+		expect(second.observations[0]?.id).not.toBe(first.observations[0]?.id);
+		s.advance(60000);
+		await s.service.refreshDue();
+		expect(s.reads()).toBe(2);
+	});
+});
+it("replays a completed explicit-time request after the snapshot time passes", async () => {
+	const s = setup();
+	const input = {
+		requestKey: "explicit-replay",
+		evaluationAt: "2026-10-30T12:00:00Z",
+	};
+	const first = await s.service.compute("open-work", input);
+	s.advance(86400000);
+	const replay = await s.service.compute("open-work", input);
+	expect(replay.id).toBe(first.id);
+	expect(s.reads()).toBe(1);
+});
+
+describe("immutable evidence destinations", () => {
+	it("retrieves pinned evidence outside current history after definition edits", async () => {
+		const s = setup();
+		const original = await s.service.compute("open-work", {
+			requestKey: "original",
+		});
+		s.d.revision = "2";
+		expect(await s.service.history("open-work")).toEqual([]);
+		const saved = await s.service.observation("open-work", original.id);
+		expect(saved.observation.id).toBe(original.id);
+		expect(saved.definition.revision).toBe("1");
+		s.denyRevision("1");
+		await expect(
+			s.service.observation("open-work", original.id),
+		).rejects.toMatchObject({ status: 404 });
+	});
+	it("checks current authority and exact metric/scope before serving old evidence", async () => {
+		const s = setup();
+		const original = await s.service.compute("open-work", {
+			requestKey: "original",
+		});
+		s.allow(false);
+		await expect(
+			s.service.observation("open-work", original.id),
+		).rejects.toMatchObject({ status: 404 });
+		s.allow(true);
+		const snapshot = s.snapshots.get(original.id);
+		if (!snapshot) throw new Error("missing fixture snapshot");
+		snapshot.observation.dataScope = "another-audience";
+		await expect(
+			s.service.observation("open-work", original.id),
+		).rejects.toMatchObject({ code: "observation_not_found" });
+		snapshot.observation.dataScope = "members";
+		snapshot.observation.metricId = "another-metric";
+		await expect(
+			s.service.observation("open-work", original.id),
+		).rejects.toMatchObject({ code: "observation_not_found" });
+	});
+});
+
+it("returns pending explicit-time replay without treating it as a new historical request", async () => {
+	const s = setup();
+	const input = {
+		requestKey: "pending-explicit",
+		evaluationAt: "2026-10-30T12:00:00Z",
+	};
+	const original = await s.service.compute("open-work", input);
+	const saved = s.snapshots.get(original.id);
+	if (!saved) throw new Error("missing fixture snapshot");
+	saved.observation = {
+		...original,
+		status: "pending",
+		value: null,
+		observedAt: null,
+	};
+	s.advance(5000);
+	const replay = await s.service.compute("open-work", input);
+	expect(replay.id).toBe(original.id);
+	expect(replay.status).toBe("pending");
+	expect(s.reads()).toBe(1);
+});

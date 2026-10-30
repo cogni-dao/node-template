@@ -1,3 +1,8 @@
+import {
+	MetricComputeInputSchema,
+	MetricObservationSchema,
+	MetricViewSchema,
+} from "@cogni-dao/metrics/contracts";
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
@@ -97,6 +102,52 @@ export async function GET(request: Request) {
 			workItemCoordination: `${origin}/api/v1/work/items/{id}/coordination`,
 		},
 		actions: {
+			listMetrics: {
+				method: "GET",
+				endpoint: `${origin}/api/v1/metrics`,
+				auth: { type: "bearer" },
+				inputSchema: z.toJSONSchema(z.object({})),
+				outputSchema: z.toJSONSchema(
+					z.object({
+						items: z.array(MetricViewSchema),
+						nextCursor: z.string().nullable(),
+					}),
+				),
+			},
+			readMetric: {
+				method: "GET",
+				endpoint: `${origin}/api/v1/metrics/{id}`,
+				auth: { type: "bearer" },
+				inputSchema: z.toJSONSchema(z.object({ id: z.string() })),
+				outputSchema: z.toJSONSchema(
+					MetricViewSchema.extend({
+						history: z.array(MetricObservationSchema),
+					}),
+				),
+			},
+			readMetricObservation: {
+				method: "GET",
+				endpoint: `${origin}/api/v1/metrics/{id}/observations/{observationId}`,
+				auth: { type: "bearer" },
+				inputSchema: z.toJSONSchema(
+					z.object({ id: z.string(), observationId: z.uuid() }),
+				),
+				outputSchema: z.toJSONSchema(
+					z.object({
+						definition: MetricViewSchema.shape.definition,
+						observation: MetricObservationSchema,
+					}),
+				),
+			},
+			computeMetric: {
+				method: "POST",
+				endpoint: `${origin}/api/v1/metrics/{id}/compute`,
+				auth: { type: "bearer" },
+				inputSchema: z.toJSONSchema(
+					MetricComputeInputSchema.extend({ id: z.string() }),
+				),
+				outputSchema: z.toJSONSchema(MetricObservationSchema),
+			},
 			listWorkItems: {
 				method: "GET",
 				endpoint: `${origin}/api/v1/work/items`,

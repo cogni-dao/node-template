@@ -409,3 +409,5 @@ export type {
   ToolImplementation,
   ToolResult,
 } from "./types";
+
+export { createMetricTools, METRIC_TOOL_BUNDLE } from "./tools/metric";
