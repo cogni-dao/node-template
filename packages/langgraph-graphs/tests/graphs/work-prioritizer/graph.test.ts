@@ -31,7 +31,7 @@ import { AIMessage, ToolMessage } from "@langchain/core/messages";
 import { describe, expect, it } from "vitest";
 
 import { OPERATOR_LANGGRAPH_CATALOG } from "../../../src/catalog";
-import { COGNI_TOOL_IDS } from "../../../src/graphs/mission/cogni";
+import { COGNI_DECIDE_TOOL_IDS } from "../../../src/graphs/mission/cogni-decide";
 import { createMissionGraph } from "../../../src/graphs/mission/graph";
 import {
   createWorkPrioritizerGraph,
@@ -119,7 +119,7 @@ function scriptedCompletion(prompts: string[], then: Then): CompletionFn {
               function: { name: c.name, arguments: JSON.stringify(c.args) },
             })),
           }
-        : { ok: true, content: REPORT, finishReason: "stop" }
+        : { ok: true, content: REPORT, finishReason: "stop" },
     );
     return { stream: (async function* () {})(), final };
   };
@@ -186,11 +186,11 @@ const fakeExec: (emit: (e: AiEvent) => void) => ToolExecFn =
   };
 
 describe("work-prioritizer mission-loop agent", () => {
-  it("catalog entry binds the common Cogni factory (reads + edo_decide) and cycle event", () => {
+  it("catalog entry binds the common Cogni factory (reads + scores-only writer) and cycle event", () => {
     const entry = OPERATOR_LANGGRAPH_CATALOG["work-prioritizer"];
     expect(entry.graphFactory).toBe(createMissionGraph);
-    expect(entry.toolIds).toEqual(COGNI_TOOL_IDS);
-    expect(entry.toolIds).toContain(EDO_DECIDE_NAME);
+    expect(entry.toolIds).toEqual(COGNI_DECIDE_TOOL_IDS);
+    expect(entry.toolIds).not.toContain(EDO_DECIDE_NAME);
     expect(entry.toolIds).toContain(GET_CURRENT_TIME_NAME);
     expect(entry.toolIds).toContain(KNOWLEDGE_READ_NAME);
     expect(entry.report).toEqual({ event: "ai.work_prioritizer.cycle" });
@@ -336,7 +336,7 @@ describe("work-prioritizer mission-loop agent", () => {
                 ok: true,
                 content: "Read guidance before the patch.",
                 finishReason: "stop",
-              }
+              },
         ),
       };
     };
@@ -481,7 +481,7 @@ describe("work-prioritizer mission-loop agent", () => {
     const content = [
       "Top 5:",
       ...[1, 2, 3, 4, 5].map(
-        (n) => `${n}. task.${n} goal:goal-a — why — next: ...`
+        (n) => `${n}. task.${n} goal:goal-a — why — next: ...`,
       ),
     ].join("\n");
     const decide = [
@@ -532,7 +532,7 @@ describe("work-prioritizer mission-loop agent", () => {
         decide[0],
         ...lateReads.slice(2),
         decide[1],
-      ]).scores
+      ]).scores,
     ).toMatchObject({ knowledge_read: 0, evidence_read: 0, grounded: 0 });
     const reordered = cycleScores([
       ai("core__work_item_query", "q", {}),
@@ -740,7 +740,7 @@ describe("work-prioritizer mission-loop agent", () => {
             content: [
               "Top 5:",
               ...[1, 2, 3, 4, 5].map(
-                (n) => `${n}. task.1 goal:goal-ai-work-converges — why — next:`
+                (n) => `${n}. task.1 goal:goal-ai-work-converges — why — next:`,
               ),
             ].join("\n"),
             derivesFromHypothesisId: "goal-ai-work-converges",

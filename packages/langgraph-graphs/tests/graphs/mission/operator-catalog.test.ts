@@ -34,7 +34,7 @@ import {
   OPERATOR_LANGGRAPH_GRAPH_IDS,
 } from "../../../src/catalog";
 import { createAutoresearchGraph } from "../../../src/graphs/autoresearch/graph";
-import { COGNI_TOOL_IDS } from "../../../src/graphs/mission/cogni";
+import { COGNI_DECIDE_TOOL_IDS } from "../../../src/graphs/mission/cogni-decide";
 import { COGNI_READ_TOOL_IDS } from "../../../src/graphs/mission/cogni-read";
 import { createMissionGraph } from "../../../src/graphs/mission/graph";
 
@@ -72,14 +72,14 @@ describe("operator catalog entries", () => {
 
   it("graph IDs include operator roles", () => {
     expect(OPERATOR_LANGGRAPH_GRAPH_IDS["operating-review"]).toBe(
-      "langgraph:operating-review"
+      "langgraph:operating-review",
     );
     expect(OPERATOR_LANGGRAPH_GRAPH_IDS["git-reviewer"]).toBe(
-      "langgraph:git-reviewer"
+      "langgraph:git-reviewer",
     );
   });
 
-  it("work-prioritizer (mission loop) runs on every node, now bound to the common Cogni factory (reads + edo_decide)", () => {
+  it("work-prioritizer (mission loop) runs on every node, now bound to the common Cogni factory (reads + scores-only writer)", () => {
     const entry = LANGGRAPH_CATALOG["work-prioritizer"];
     expect(entry).toBeDefined();
     // Still in the node catalog (every node runs the mission loop), now powered by the shared
@@ -87,10 +87,10 @@ describe("operator catalog entries", () => {
     expect(entry?.graphFactory).toBe(createMissionGraph);
     expect(entry?.program).toBe("work-review");
     expect(entry?.systemPrompt).toBeDefined();
-    expect(entry?.toolIds).toEqual(COGNI_TOOL_IDS);
+    expect(entry?.toolIds).toEqual(COGNI_DECIDE_TOOL_IDS);
     expect(entry?.report).toEqual({ event: "ai.work_prioritizer.cycle" });
     expect(LANGGRAPH_GRAPH_IDS["work-prioritizer"]).toBe(
-      "langgraph:work-prioritizer"
+      "langgraph:work-prioritizer",
     );
   });
 
@@ -102,14 +102,14 @@ describe("operator catalog entries", () => {
     expect(entry?.graphFactory).toBe(createMissionGraph);
     expect(entry?.program).toBe("cogni-chat");
     expect([...(entry?.toolIds ?? [])].sort()).toEqual(
-      [...COGNI_READ_TOOL_IDS].sort()
+      [...COGNI_READ_TOOL_IDS].sort(),
     );
     // Zero-write guarantee unchanged: the READ allowlist never binds the EDO decide tool.
     expect(entry?.toolIds).not.toContain(EDO_DECIDE_NAME);
     // Operator still inherits the same entry through the `...NODE_LANGGRAPH_CATALOG` spread.
     expect(OPERATOR_LANGGRAPH_CATALOG["cogni-chat"]).toBe(entry);
     expect(OPERATOR_LANGGRAPH_GRAPH_IDS["cogni-chat"]).toBe(
-      "langgraph:cogni-chat"
+      "langgraph:cogni-chat",
     );
   });
 
@@ -145,7 +145,7 @@ describe("operator catalog entries", () => {
       expect((entry.systemPrompt ?? "").length).toBeGreaterThan(1_000);
       expect(entry.graphFactory).toBe(createAutoresearchGraph);
       expect(OPERATOR_LANGGRAPH_GRAPH_IDS[graphName]).toBe(
-        `langgraph:${graphName}`
+        `langgraph:${graphName}`,
       );
 
       expect(entry.toolIds).toEqual(
@@ -159,7 +159,7 @@ describe("operator catalog entries", () => {
           EDO_HYPOTHESIZE_NAME,
           EDO_DECIDE_NAME,
           EDO_RECORD_OUTCOME_NAME,
-        ])
+        ]),
       );
     }
   });
@@ -188,7 +188,7 @@ describe("createMissionGraph", () => {
       tools: [],
     };
     expect(() => createMissionGraph(fakeOpts)).toThrow(
-      "createMissionGraph requires systemPrompt"
+      "createMissionGraph requires systemPrompt",
     );
   });
 });

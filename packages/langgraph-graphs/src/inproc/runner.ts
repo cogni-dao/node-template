@@ -200,9 +200,9 @@ export function createInProcGraphRunner<TTool = unknown>(
     opts.trustedProgramId,
     request.runId,
   ];
-  if (persistence?.checkpointer && identityParts.some((part) => !part))
+  if (opts.trustedProgramId && persistence?.checkpointer && identityParts.some((part) => !part))
     throw new Error("cogni_trusted_identity_unavailable");
-  const threadId = persistence?.checkpointer
+  const threadId = opts.trustedProgramId && persistence?.checkpointer
     ? `h1:${hash(identityParts.map((part) => `${Buffer.byteLength(part ?? "", "utf8")}:${part ?? ""}`).join(""))}`
     : request.configurable.graphId != null
       ? `${request.configurable.graphId}:${request.runId}`
@@ -228,10 +228,10 @@ export function createInProcGraphRunner<TTool = unknown>(
   };
 
   // Create no-arg CogniCompletionAdapter (reads from ALS + configurable at invoke time)
-  const timeoutSignal = AbortSignal.timeout(120_000);
-  const runSignal = request.abortSignal
+  const timeoutSignal = opts.trustedProgramId ? AbortSignal.timeout(120_000) : undefined;
+  const runSignal = timeoutSignal && request.abortSignal
     ? AbortSignal.any([request.abortSignal, timeoutSignal])
-    : timeoutSignal;
+    : timeoutSignal ?? request.abortSignal;
   const llm = new CogniCompletionAdapter().bindRun(
     request.configurable.model,
     runSignal,
@@ -301,7 +301,7 @@ export function createInProcGraphRunner<TTool = unknown>(
       // Per #35 NO_MODEL_IN_ALS: model comes from configurable, not ALS
       // Per #36 ALS_ONLY_FOR_NON_SERIALIZABLE_DEPS: ALS holds only completionFn, tokenSink, toolExecFn
       const invoke = async () => {
-        if (persistence?.checkpointer) {
+        if (opts.trustedProgramId && persistence?.checkpointer) {
           const existing = await checkpointer.get({
             configurable: { thread_id: threadId },
           });
@@ -320,9 +320,8 @@ export function createInProcGraphRunner<TTool = unknown>(
                 signal: runSignal,
                 metadata: { cogniRunId: request.runId },
                 // STABLE_THREAD_ID: a checkpointer-compiled graph requires a thread_id. One run = one
-                // thread (interrupt-resumable within the run, crash-resumable once Postgres-backed;
-                // isolated per mission tick); cross-tick working memory lives in the Store, not the
-                // checkpointer. graphId scopes it per node+program.
+                // thread; same-run checkpoints require explicit recovery. Cross-run working
+                // memory lives in the Store, not the checkpointer.
                 configurable: {
                   ...request.configurable,
                   thread_id: threadId,

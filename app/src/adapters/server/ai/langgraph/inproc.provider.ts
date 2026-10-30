@@ -317,7 +317,9 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
             ? "decide"
             : "answer",
         ...(ctx?.actorUserId ? { trustedActorId: ctx.actorUserId } : {}),
-        trustedProgramId: entry.program ?? graphName,
+        ...((entry.program || graphName === "poet") && {
+          trustedProgramId: entry.program ?? graphName,
+        }),
         ...((entry.program || graphName === "poet") && this.sourceContext && {
           sourceContext: await this.sourceContext(),
         }),

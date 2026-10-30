@@ -3,7 +3,7 @@
 
 /** The reusable cogni core; models, capabilities and host identity are injected. */
 import { BaseLanguageModel } from "@langchain/core/language_models/base";
-import { ToolMessage } from "@langchain/core/messages";
+import { SystemMessage, ToolMessage } from "@langchain/core/messages";
 import { StructuredTool } from "@langchain/core/tools";
 import { Command } from "@langchain/langgraph";
 import {
@@ -170,6 +170,22 @@ export function createCogniProgram(
 					}
 				},
 			}),
+			...(opts.program
+				? [
+						createMiddleware({
+							name: "CogniHostClock",
+							wrapModelCall: (request, handler) =>
+								handler({
+									...request,
+									systemMessage: request.systemMessage.concat(
+										new SystemMessage({
+											content: `Host-owned current UTC time: ${new Date().toISOString()}`,
+										}),
+									),
+								}),
+						}),
+					]
+				: []),
 			toolCallLimitMiddleware({
 				toolName: "task",
 				runLimit: Math.min(4, opts.profile?.limits.maxTaskCalls ?? 4),

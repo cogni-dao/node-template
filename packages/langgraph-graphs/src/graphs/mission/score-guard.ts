@@ -53,7 +53,9 @@ export function createScoresGuard(
 	requiredGuidance: readonly string[],
 ) {
 	let attempts = 0;
-	const seen = new Set<string>();
+	const completed = new Set<string>();
+	const inFlight = new Set<string>();
+	const retryAfter = new Map<string, ObservedItem>();
 	return new DynamicStructuredTool({
 		name: "work_item_scores_write",
 		description:
@@ -70,7 +72,9 @@ export function createScoresGuard(
 				!item ||
 				item.revision !== input.expectedRevision ||
 				["done", "cancelled"].includes(item.status) ||
-				seen.has(input.id)
+				completed.has(input.id) ||
+				inFlight.has(input.id) ||
+				retryAfter.get(input.id) === item
 			)
 				return "guard_rejected: item_or_revision";
 			const goal = [...receipts.goals.values()].find(
@@ -103,12 +107,14 @@ export function createScoresGuard(
 						return "guard_rejected: invalid_evidence";
 					}
 					const source = receipts.sources.get(ev);
-					const linked = [
-						item.summary,
-						item.outcome,
-						...(item.specRefs ?? []),
-						goal.content,
-					].some((text) => text?.includes(ev));
+					const linked =
+						goal.sourceUrl === ev ||
+						[
+							item.summary,
+							item.outcome,
+							...(item.specRefs ?? []),
+							goal.content,
+						].some((text) => text?.includes(ev));
 					if (
 						url.protocol !== "https:" ||
 						ev === item.sourceUrl ||
@@ -123,17 +129,35 @@ export function createScoresGuard(
 			if (!changed) return "no_change";
 			if (attempts >= 5) return "guard_rejected: write_budget";
 			attempts++;
-			seen.add(item.id);
-			const result = await writer.invoke(
-				{
-					action: "patch",
-					id: item.id,
-					expectedRevision: item.revision,
-					scores: merged,
-				},
-				config,
-			);
-			return typeof result === "string" ? result : JSON.stringify(result);
+			inFlight.add(item.id);
+			retryAfter.set(item.id, item);
+			try {
+				const result = await writer.invoke(
+					{
+						action: "patch",
+						id: item.id,
+						expectedRevision: item.revision,
+						scores: merged,
+					},
+					config,
+				);
+				const text =
+					typeof result === "string" ? result : JSON.stringify(result);
+				try {
+					const parsed: unknown = JSON.parse(text);
+					if (z.object({ success: z.literal(true) }).safeParse(parsed).success)
+						completed.add(item.id);
+				} catch {
+					/* Unknown response requires a fresh read. */
+				}
+				return text;
+			} catch {
+				return "write_result_uncertain: reread before proposing again";
+			} finally {
+				if (!completed.has(item.id))
+					retryAfter.set(item.id, receipts.items.get(item.id) ?? item);
+				inFlight.delete(item.id);
+			}
 		},
 	});
 }

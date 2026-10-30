@@ -266,7 +266,7 @@ describe("shared cogni harness", () => {
 					revision: 9,
 					labels: ["goal:one"],
 					createdAt: "2026-10-01T00:00:00Z",
-					summary: `See ${url}`,
+					summary: "Work toward the goal",
 					scores: { goal: { v: 1 } },
 				},
 			},
@@ -278,7 +278,7 @@ describe("shared cogni harness", () => {
 			schema: z.object({}).passthrough(),
 			func: async (input) => {
 				writes.push(input);
-				return "ok";
+				return JSON.stringify({ success: true });
 			},
 		});
 		const guard = createScoresGuard(receipts, writer, [
@@ -313,7 +313,8 @@ describe("shared cogni harness", () => {
 			}),
 		).toContain("unobserved_or_unlinked");
 		expect(writes).toHaveLength(0);
-		expect(await guard.invoke(input)).toBe("ok");
+		expect(await guard.invoke(input)).toBe('{"success":true}');
+		expect(await guard.invoke(input)).toContain("item_or_revision");
 		expect(writes).toEqual([
 			{
 				action: "patch",
@@ -323,6 +324,55 @@ describe("shared cogni harness", () => {
 			},
 		]);
 	});
+	it("requires a fresh item read after a conflicted or uncertain write", async () => {
+		const receipts = new RunReceipts("https://node.example");
+		receipts.observe(
+			"core__goal_list",
+			{},
+			{ goals: [{ id: "goal-one", content: "Goal" }] },
+		);
+		const item = {
+			id: "task.1",
+			type: "task",
+			status: "needs_implement",
+			revision: 1,
+			labels: ["goal:one"],
+			createdAt: "2026-10-01T00:00:00Z",
+			scores: { goal: { v: 1 } },
+		};
+		const read = () =>
+			receipts.observe("core__work_item_read", { id: item.id }, { item });
+		read();
+		let calls = 0;
+		const writer = new DynamicStructuredTool({
+			name: "writer",
+			description: "test",
+			schema: z.object({}).passthrough(),
+			func: async () => {
+				calls++;
+				if (calls === 1)
+					return JSON.stringify({ success: false, code: "revision_conflict" });
+				if (calls === 2) throw new Error("lost reply");
+				return JSON.stringify({ success: true });
+			},
+		});
+		const guard = createScoresGuard(receipts, writer, []);
+		const input = {
+			id: item.id,
+			expectedRevision: 1,
+			scores: { goal: { v: 3 } },
+		};
+		expect(await guard.invoke(input)).toContain("revision_conflict");
+		expect(await guard.invoke(input)).toContain("item_or_revision");
+		read();
+		expect(await guard.invoke(input)).toContain("write_result_uncertain");
+		expect(await guard.invoke(input)).toContain("item_or_revision");
+		read();
+		expect(await guard.invoke(input)).toContain('"success":true');
+		expect(await guard.invoke(input)).toContain("item_or_revision");
+		expect(calls).toBe(3);
+	});
+
 	it("revises a real plan after a delegated task in poet", async () => {
 		const offered: string[] = [];
 		const models: string[] = [];
