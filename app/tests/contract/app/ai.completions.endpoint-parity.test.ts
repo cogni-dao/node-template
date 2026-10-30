@@ -302,6 +302,29 @@ describe("OpenAI Endpoint Parity (POST /v1/chat/completions)", () => {
       expect(JSON.stringify(lines)).not.toContain("private-return");
     });
 
+    it("maps malformed upstream errors to internal without logging their content", async () => {
+      setupMocks();
+      const lines = captureRequestLogs();
+      const sentinel = "private-upstream-error-sentinel";
+      Object.assign(mockGetContainer(), { runStream: {
+        subscribe: async function* () {
+          yield { id: "1", event: { type: "status" as const, phase: "thinking" as const } };
+          yield { id: "2", event: { type: "error" as const, error: sentinel } };
+        },
+      } });
+      const { POST } = await import("@/app/api/v1/chat/completions/route");
+      const response = await POST(new NextRequest("http://localhost:3000/api/v1/chat/completions", {
+        method: "POST", body: JSON.stringify(createCompletionRequest({ stream: true })),
+      }));
+      const body = await response.text();
+      expect(body).toContain('"code":"internal"');
+      expect(body).not.toContain(sentinel);
+      expect(lines.filter((line) => line.event === "ai.chat_stream_closed")).toEqual([
+        expect.objectContaining({ reason: "backend_error", errorCode: "internal" }),
+      ]);
+      expect(JSON.stringify(lines)).not.toContain(sentinel);
+    });
+
     it.each(["success", "backend-error", "relay-end", "relay-throw"] as const)(
       "records one private close within the real request log budget for %s", async (mode) => {
         setupMocks();

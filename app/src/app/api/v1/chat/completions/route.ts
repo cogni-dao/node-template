@@ -20,6 +20,7 @@ import {
   type ChatCompletionChunk,
   chatCompletionsContract,
 } from "@cogni/node-contracts";
+import { isAiExecutionErrorCode, type AiExecutionErrorCode } from "@cogni/ai-core";
 import { ChatValidationError } from "@cogni/node-shared";
 import { NextResponse } from "next/server";
 import {
@@ -213,7 +214,7 @@ function createOpenAiSseStream(
   let closed = false;
   const startedAt = performance.now();
   let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
-  const cleanup = (reason: "normal_complete" | "backend_error" | "request_abort" | "consumer_cancel" | "write_or_stream_error", errorCode?: string) => {
+  const cleanup = (reason: "normal_complete" | "backend_error" | "request_abort" | "consumer_cancel" | "write_or_stream_error", errorCode?: AiExecutionErrorCode) => {
     if (closed) return;
     closed = true;
     if (timer) clearInterval(timer);
@@ -343,7 +344,8 @@ function createOpenAiSseStream(
         const result = await final;
         if (closed) return;
         if (!result.ok) {
-          const mapped = executionErrorToOpenAiError(result.error);
+          const errorCode = isAiExecutionErrorCode(result.error) ? result.error : "internal";
+          const mapped = executionErrorToOpenAiError(errorCode);
           controller.enqueue(
             encoder.encode(
               sseEncode(
@@ -352,14 +354,14 @@ function createOpenAiSseStream(
                     message: mapped.message,
                     type: mapped.type,
                     param: null,
-                    code: result.error,
+                    code: errorCode,
                   },
                 })
               )
             )
           );
           controller.close();
-          cleanup("backend_error", result.error);
+          cleanup("backend_error", errorCode);
           return;
         }
         const finishReason = toOpenAiFinishReason(result.finishReason);
