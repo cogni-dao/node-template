@@ -97,4 +97,4 @@ pnpm --filter @cogni/scheduler-core build
 - `ScheduleControlPort` replaces the deprecated `JobQueuePort` (Graphile Worker)
 - Per CRUD_IS_TEMPORAL_AUTHORITY: Only CRUD endpoints and governance sync use ScheduleControlPort
 - Per WORKER_NEVER_CONTROLS_SCHEDULES: Worker service must not depend on ScheduleControlPort
-- `services/syncGovernanceSchedules.ts` is pure orchestration — depends only on ports/types within this package
+- `services/syncGovernanceSchedules.ts` is a thin compatibility binding to scheduling/routing; template ledger policy and legacy helper signatures stay local
