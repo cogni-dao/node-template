@@ -12,19 +12,35 @@
  */
 "use client";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUpRight, CalendarClock, Plus } from "lucide-react";
+import { ChevronUp, Plus, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
-import { Badge, Button } from "@/components";
+import {
+  Badge,
+  Button,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components";
+import { deleteSchedule } from "./_api/deleteSchedule";
 import { fetchSchedules } from "./_api/fetchSchedules";
 import { updateSchedule } from "./_api/updateSchedule";
 import { CreateScheduleForm } from "./create-form";
-import { agentLabel, cadence, schedulePrompt } from "./presentation";
+import {
+  agentLabel,
+  cadence,
+  scheduleModel,
+  schedulePreview,
+} from "./presentation";
 
 export function SchedulesView() {
   const client = useQueryClient();
   const [creating, setCreating] = useState(false);
-  const [filter, setFilter] = useState<"Active" | "Paused" | "All">("Active");
+  const [createPending, setCreatePending] = useState(false);
+  const [filter, setFilter] = useState<"Active" | "Paused" | "All">("All");
   const query = useQuery({
     queryKey: ["schedules"],
     queryFn: fetchSchedules,
@@ -37,142 +53,194 @@ export function SchedulesView() {
       void client.invalidateQueries({ queryKey: ["schedules"] });
     },
   });
+  const remove = useMutation({
+    mutationFn: deleteSchedule,
+    onSuccess: async (_result, deletedId) => {
+      const detail = { queryKey: ["schedule", deletedId], exact: true };
+      const history = {
+        queryKey: ["schedule-history", deletedId],
+        exact: true,
+      };
+      await Promise.all([
+        client.cancelQueries(detail),
+        client.cancelQueries(history),
+      ]);
+      client.removeQueries(detail);
+      client.removeQueries(history);
+      void client.invalidateQueries({ queryKey: ["schedules"] });
+    },
+  });
   const schedules = query.data?.schedules ?? [];
   const counts = {
+    All: schedules.length,
     Active: schedules.filter((item) => item.enabled).length,
     Paused: schedules.filter((item) => !item.enabled).length,
-    All: schedules.length,
   };
-  const visible = schedules
-    .filter(
-      (item) =>
-        filter === "All" || (filter === "Active" ? item.enabled : !item.enabled)
-    )
-    .sort(
-      (a, b) =>
-        b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id)
-    );
+  const visible = schedules.filter(
+    (item) => filter === "All" || item.enabled === (filter === "Active")
+  );
+  const mutationError = toggle.error ?? remove.error;
+  const mutating = toggle.isPending || remove.isPending;
   return (
-    <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 p-4 md:p-8">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="font-semibold text-3xl tracking-tight">Schedules</h1>
-          <p className="mt-2 text-muted-foreground text-sm">
-            Set recurring work. Open a schedule to see its results.
-          </p>
-        </div>
-        <Button onClick={() => setCreating(true)} disabled={creating}>
-          <Plus className="mr-2 size-4" />
-          New schedule
+    <div className="mx-auto flex w-full min-w-0 max-w-[var(--max-width-container-screen)] flex-col gap-8 p-4 md:p-8 lg:px-16">
+      <div className="flex items-center justify-between gap-4">
+        <h1 className="font-bold text-3xl tracking-tight">Schedules</h1>
+        <Button
+          size="sm"
+          disabled={createPending}
+          onClick={() => {
+            if (!createPending) setCreating(!creating);
+          }}
+        >
+          {creating ? (
+            <ChevronUp className="mr-2 size-4" />
+          ) : (
+            <Plus className="mr-2 size-4" />
+          )}
+          {creating ? "Close" : "Create Schedule"}
         </Button>
       </div>
-      {creating && <CreateScheduleForm onClose={() => setCreating(false)} />}
+      {mutationError && (
+        <p role="alert" className="text-destructive text-sm">
+          {mutationError.message}
+        </p>
+      )}
+      {creating && (
+        <CreateScheduleForm
+          onClose={() => setCreating(false)}
+          onPendingChange={setCreatePending}
+        />
+      )}
       <fieldset className="flex gap-2" aria-label="Filter schedules">
-        {(["Active", "Paused", "All"] as const).map((item) => (
+        {(["All", "Active", "Paused"] as const).map((item) => (
           <Button
             key={item}
-            variant={filter === item ? "secondary" : "ghost"}
-            onClick={() => setFilter(item)}
+            size="sm"
+            variant={filter === item ? "default" : "outline"}
             aria-pressed={filter === item}
+            onClick={() => setFilter(item)}
           >
-            {item}{" "}
-            <span className="ml-2 text-muted-foreground">{counts[item]}</span>
+            {item} ({counts[item]})
           </Button>
         ))}
       </fieldset>
-      {toggle.error && (
-        <p role="alert" className="text-destructive text-sm">
-          {toggle.error.message}
-        </p>
-      )}
-      {query.isLoading ? (
-        <output className="py-12 text-center text-muted-foreground">
-          Loading schedules…
-        </output>
-      ) : query.error ? (
-        <div role="alert" className="rounded-xl border p-6">
+      {query.error && (
+        <div role="alert" className="rounded-lg border p-6">
           <p>Unable to load schedules.</p>
           <Button
+            variant="outline"
             className="mt-3"
-            variant="secondary"
-            onClick={() => query.refetch()}
+            onClick={() => void query.refetch()}
           >
             Try again
           </Button>
         </div>
-      ) : visible.length === 0 ? (
-        <div className="rounded-xl border border-dashed p-10 text-center">
-          <CalendarClock className="mx-auto mb-4 size-8 text-muted-foreground" />
-          <h2 className="font-semibold">
-            No {filter === "All" ? "" : `${filter.toLowerCase()} `}schedules yet
-          </h2>
-          <p className="mt-2 text-muted-foreground text-sm">
-            {filter === "Active" && counts.Paused > 0
-              ? "Your paused schedules and their past results are still available."
-              : "Create a schedule to give recurring work a regular home."}
+      )}
+      {query.isLoading ? (
+        <output>Loading schedules…</output>
+      ) : query.error && !query.data ? null : visible.length === 0 ? (
+        <div className="rounded-lg border bg-card p-12 text-center">
+          <p className="text-muted-foreground">
+            {filter === "All"
+              ? "No schedules"
+              : `No ${filter.toLowerCase()} schedules`}
           </p>
-          {filter === "Active" && counts.Paused > 0 && (
-            <Button
-              className="mt-4"
-              variant="secondary"
-              onClick={() => setFilter("Paused")}
-            >
-              View paused schedules
-            </Button>
-          )}
+          <p className="mt-2 text-muted-foreground text-sm">
+            Create your first schedule to automate graph runs.
+          </p>
         </div>
       ) : (
-        <ul className="divide-y rounded-xl border bg-card">
-          {visible.map((schedule) => {
-            const prompt = schedulePrompt(schedule.input);
-            return (
-              <li
-                key={schedule.id}
-                className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between"
-              >
-                <div className="min-w-0 flex-1">
-                  <div className="mb-2 flex items-center gap-2">
-                    <Badge intent="secondary" size="sm">
-                      {schedule.enabled ? "Active" : "Paused"}
-                    </Badge>
-                    <span className="truncate text-muted-foreground text-xs">
+        <div className="min-w-0 overflow-x-auto rounded-lg border">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Status</TableHead>
+                <TableHead>Agent</TableHead>
+                <TableHead>Model</TableHead>
+                <TableHead>Prompt</TableHead>
+                <TableHead>Schedule</TableHead>
+                <TableHead>Timezone</TableHead>
+                <TableHead>History</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {visible.map((schedule) => {
+                const prompt = schedulePreview(schedule.input);
+                return (
+                  <TableRow key={schedule.id}>
+                    <TableCell>
+                      <Badge
+                        intent={schedule.enabled ? "default" : "secondary"}
+                        size="sm"
+                      >
+                        {schedule.enabled ? "Enabled" : "Disabled"}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="font-medium">
                       {agentLabel(schedule.graphId)}
-                    </span>
-                  </div>
-                  <Link
-                    href={`/schedules/${schedule.id}`}
-                    className="line-clamp-2 font-medium leading-6 hover:underline"
-                  >
-                    {prompt || agentLabel(schedule.graphId)}
-                  </Link>
-                  <p className="mt-2 text-muted-foreground text-sm">
-                    {cadence(schedule.cron)} · {schedule.timezone}
-                  </p>
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  <Button
-                    variant="ghost"
-                    onClick={() =>
-                      toggle.mutate({
-                        id: schedule.id,
-                        data: { enabled: !schedule.enabled },
-                      })
-                    }
-                    disabled={toggle.isPending}
-                  >
-                    {schedule.enabled ? "Pause" : "Resume"}
-                  </Button>
-                  <Button variant="outline" asChild>
-                    <Link href={`/schedules/${schedule.id}`}>
-                      View history
-                      <ArrowUpRight className="ml-2 size-4" />
-                    </Link>
-                  </Button>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
+                    </TableCell>
+                    <TableCell className="text-muted-foreground text-sm">
+                      {scheduleModel(schedule.input)}
+                    </TableCell>
+                    <TableCell className="max-w-xs truncate">
+                      {prompt.length > 50
+                        ? `${prompt.slice(0, 50)}...`
+                        : prompt}
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap">
+                      {cadence(schedule.cron)}
+                    </TableCell>
+                    <TableCell>{schedule.timezone}</TableCell>
+                    <TableCell className="text-muted-foreground text-sm">
+                      <Link
+                        href={`/schedules/${schedule.id}`}
+                        className="whitespace-nowrap underline"
+                      >
+                        View runs
+                      </Link>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex items-center justify-end gap-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          disabled={mutating}
+                          onClick={() => {
+                            remove.reset();
+                            toggle.mutate({
+                              id: schedule.id,
+                              data: { enabled: !schedule.enabled },
+                            });
+                          }}
+                        >
+                          {schedule.enabled ? "Disable" : "Enable"}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          aria-label={`Delete schedule ${agentLabel(schedule.graphId)}`}
+                          disabled={mutating}
+                          onClick={() => {
+                            toggle.reset();
+                            if (
+                              window.confirm(
+                                "Delete this schedule? Its configuration will be removed."
+                              )
+                            )
+                              remove.mutate(schedule.id);
+                          }}
+                        >
+                          <Trash2 className="size-4 text-destructive" />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </div>
       )}
     </div>
   );
