@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
-import { AIMessage } from "@langchain/core/messages";
+import {
+	AIMessage,
+	HumanMessage,
+	SystemMessage,
+	ToolMessage,
+} from "@langchain/core/messages";
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { FakeListChatModel } from "@langchain/core/utils/testing";
 import { InMemoryStore, MemorySaver } from "@langchain/langgraph";
@@ -18,6 +23,7 @@ import { createScoresGuard } from "../../../src/graphs/mission/score-guard";
 import { createPoetGraph } from "../../../src/graphs/poet/graph";
 import { createInProcGraphRunner } from "../../../src/inproc/runner";
 import type { CompletionFn } from "../../../src/inproc/types";
+import { fromBaseMessage } from "../../../src/runtime/core/message-converters";
 
 describe("shared cogni harness", () => {
 	it("passes the SDK system instructions and fresh host clock to the billed completion", async () => {
@@ -61,6 +67,111 @@ describe("shared cogni harness", () => {
 		expect(seen.join("\n")).toContain("Mission clock control");
 		expect(seen.join("\n")).toContain("Host-owned current UTC time");
 		expect(seen.join("\n")).toContain(new Date().getUTCFullYear().toString());
+	});
+
+	it("preserves textual blocks across all supported message roles", () => {
+		const content = [
+			{ type: "text" as const, text: "first " },
+			{ type: "text" as const, text: "second" },
+		];
+		const messages = [
+			new HumanMessage({ content }),
+			new SystemMessage({ content }),
+			new AIMessage({ content }),
+			new ToolMessage({ content, tool_call_id: "result" }),
+		];
+		expect(messages.map((message) => fromBaseMessage(message).content)).toEqual(
+			["first second", "first second", "first second", "first second"],
+		);
+		expect(
+			fromBaseMessage(new ToolMessage({ content, tool_call_id: "result" }))
+				.toolCallId,
+		).toBe("result");
+	});
+
+	it("delivers a lazy SDK skill body through the billed adapter on the next model call", async () => {
+		const requests: Parameters<CompletionFn>[0][] = [];
+		let reads = 0;
+		const completionFn: CompletionFn = (request) => {
+			requests.push(request);
+			const reply =
+				requests.length === 1
+					? {
+							toolCalls: [
+								{
+									id: "skill-read",
+									type: "function" as const,
+									function: {
+										name: "read_file",
+										arguments: JSON.stringify({
+											file_path: "/skills/test-skill/SKILL.md",
+											limit: 500,
+										}),
+									},
+								},
+							],
+						}
+					: { content: "Read the skill." };
+			return {
+				stream: (async function* () {})(),
+				final: Promise.resolve({ ok: true as const, ...reply }),
+			};
+		};
+		const run = createInProcGraphRunner({
+			createGraph: createPoetGraph,
+			trustedProgramId: "poet",
+			sourceContext: {
+				nodeId: "node",
+				origin: "https://node.example",
+				governingIndex: [
+					{
+						id: "test-skill",
+						domain: "build-agents",
+						entryType: "skill",
+						useWhen: "when testing",
+					},
+				],
+			},
+			completionFn,
+			createToolExecFn: () => async (name) => {
+				reads++;
+				if (name !== "core__knowledge_read") throw new Error("unexpected tool");
+				return {
+					ok: true,
+					value: {
+						mode: "get",
+						entries: [
+							{
+								id: "test-skill",
+								content: "Unique skill body reaches the model.",
+							},
+						],
+					},
+				};
+			},
+			toolContracts: [],
+			request: {
+				runId: "skill-body",
+				messages: [{ role: "user", content: "Read the skill" }],
+				configurable: { model: "test-model", toolIds: [] },
+			},
+		});
+		for await (const _event of run.stream) {
+			/* drain */
+		}
+		expect((await run.final).ok).toBe(true);
+		expect(reads).toBe(1);
+		expect(requests).toHaveLength(2);
+		const next = requests[1];
+		expect(
+			next?.messages.find((message) => message.role === "system")?.content,
+		).toContain("Governing guidance metadata");
+		expect(
+			next?.messages.find(
+				(message) =>
+					message.role === "tool" && message.toolCallId === "skill-read",
+			)?.content,
+		).toContain("Unique skill body reaches the model.");
 	});
 
 	it("uses the SDK task limit before a fifth delegated child", async () => {
