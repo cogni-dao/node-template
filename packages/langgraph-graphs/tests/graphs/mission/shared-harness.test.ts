@@ -34,6 +34,64 @@ import type { CompletionFn } from "../../../src/inproc/types";
 import { fromBaseMessage } from "../../../src/runtime/core/message-converters";
 
 describe("shared cogni harness", () => {
+	it("rejects opaque, nested, and guarded child declarations", () => {
+		const llm = new FakeListChatModel({ responses: ["done"] });
+		const profile = cogniProfile({
+			id: "root",
+			instructions: "root",
+			modelTier: "main",
+			toolIds: [],
+			allowedChildProfiles: ["child"],
+			outputPolicy: "answer",
+		});
+		const child = cogniProfile({
+			id: "child",
+			instructions: "child",
+			modelTier: "main",
+			toolIds: [],
+			allowedChildProfiles: [],
+			outputPolicy: "answer",
+		});
+		expect(() =>
+			createCogniProgram({
+				llm,
+				tools: [],
+				profile,
+				children: [
+					{ profile: child, description: "child", runnable: {} } as never,
+				],
+			}),
+		).toThrow();
+		expect(() =>
+			createCogniProgram({
+				llm,
+				tools: [],
+				profile,
+				children: [
+					{
+						profile: { ...child, allowedChildProfiles: ["nested"] },
+						description: "child",
+					},
+				],
+			}),
+		).toThrow("cogni_child_must_be_leaf");
+		const writer = new DynamicStructuredTool({
+			name: "write",
+			description: "write",
+			schema: z.object({}),
+			func: async () => "written",
+		});
+		expect(() =>
+			createCogniProgram({
+				llm,
+				tools: [],
+				profile: child,
+				disableCheckpointer: true,
+				guardedTools: [writer],
+			}),
+		).toThrow("cogni_child_guarded_write_forbidden");
+	});
+
 	it("emits thinking before deferred completion and only the final answer", async () => {
 		let release!: (value: { ok: true; content: string }) => void;
 		const completion = new Promise<{ ok: true; content: string }>((resolve) => {
@@ -319,11 +377,24 @@ describe("shared cogni harness", () => {
 					},
 				};
 			},
-			toolContracts: [],
+			toolContracts: [
+				{
+					name: "core__knowledge_read",
+					description: "read",
+					effect: "read_only",
+					inputSchema: z.object({ id: z.string() }),
+					outputSchema: z.object({}).passthrough(),
+					redact: (value) => value,
+					allowlist: [],
+				},
+			],
 			request: {
 				runId: "skill-body",
 				messages: [{ role: "user", content: "Read the skill" }],
-				configurable: { model: "test-model", toolIds: [] },
+				configurable: {
+					model: "test-model",
+					toolIds: ["core__knowledge_read"],
+				},
 			},
 		});
 		for await (const _event of run.stream) {
@@ -478,6 +549,15 @@ describe("shared cogni harness", () => {
 				return createCogniProgram({
 					...opts,
 					guardedTools: [createScoresGuard(opts.receipts, writer, [])],
+					profile: cogniProfile({
+						id: "test",
+						instructions: "test",
+						modelTier: "main",
+						toolIds: ["core__knowledge_read"],
+						skillIds: ["test-skill"],
+						allowedChildProfiles: [],
+						outputPolicy: "scores",
+					}),
 				});
 			},
 			sourceContext: {
@@ -500,11 +580,21 @@ describe("shared cogni harness", () => {
 					entries: [{ id: "test-skill", content: "full skill body" }],
 				},
 			}),
-			toolContracts: [],
+			toolContracts: [
+				{
+					name: "core__knowledge_read",
+					description: "read",
+					effect: "read_only",
+					inputSchema: z.object({ id: z.string() }),
+					outputSchema: z.object({}).passthrough(),
+					redact: (value) => value,
+					allowlist: [],
+				},
+			],
 			request: {
 				runId: "partial-skill",
 				messages: [{ role: "user", content: "Read skill and score" }],
-				configurable: { model: "test", toolIds: [] },
+				configurable: { model: "test", toolIds: ["core__knowledge_read"] },
 			},
 		});
 		for await (const _event of run.stream) {
@@ -647,6 +737,121 @@ describe("shared cogni harness", () => {
 		expect((await run.final).content).toBe("found");
 		expect(reads).toEqual(["core__review_lookup"]);
 	});
+
+	it.each(["core__knowledge_read", "read_file"])(
+		"denies child %s outside parent authority",
+		async (attempt) => {
+			let turn = 0;
+			let reads = 0;
+			const call = (id: string, name: string, args: object) => ({
+				id,
+				type: "function" as const,
+				function: { name, arguments: JSON.stringify(args) },
+			});
+			const completionFn: CompletionFn = () => {
+				const replies = [
+					{
+						toolCalls: [
+							call("delegate", "task", {
+								subagent_type: "child",
+								description: "read",
+							}),
+						],
+					},
+					{
+						toolCalls: [
+							call(
+								"read",
+								attempt,
+								attempt === "read_file"
+									? { file_path: "/skills/secret/SKILL.md" }
+									: { id: "secret" },
+							),
+						],
+					},
+					{ content: "unavailable" },
+					{ content: "done" },
+				];
+				return {
+					stream: (async function* () {})(),
+					final: Promise.resolve({
+						ok: true,
+						...(replies[turn++] ?? { content: "done" }),
+					}),
+				};
+			};
+			const root = cogniProfile({
+				id: "root",
+				instructions: "root",
+				modelTier: "main",
+				toolIds: attempt === "read_file" ? ["core__knowledge_read"] : [],
+				skillIds: [],
+				allowedChildProfiles: ["child"],
+				outputPolicy: "answer",
+			});
+			const child = cogniProfile({
+				id: "child",
+				instructions: "child",
+				modelTier: "flash",
+				toolIds: ["core__knowledge_read"],
+				skillIds: ["secret"],
+				allowedChildProfiles: [],
+				outputPolicy: "answer",
+			});
+			const run = createInProcGraphRunner({
+				createGraph: (opts) =>
+					createCogniProgram({
+						...opts,
+						profile: root,
+						children: [{ profile: child, description: "read" }],
+					}),
+				completionFn,
+				sourceContext: {
+					nodeId: "node",
+					origin: "https://node.example",
+					governingIndex: [
+						{
+							id: "secret",
+							domain: "meta",
+							entryType: "skill",
+							useWhen: "test",
+						},
+					],
+				},
+				createToolExecFn: () => async () => {
+					reads++;
+					return {
+						ok: true,
+						value: {
+							mode: "get",
+							entries: [{ id: "secret", content: "secret" }],
+						},
+					};
+				},
+				toolContracts: [
+					{
+						name: "core__knowledge_read",
+						description: "read",
+						effect: "read_only",
+						inputSchema: z.object({ id: z.string() }),
+						outputSchema: z.object({}).passthrough(),
+						redact: (value) => value,
+						allowlist: [],
+					},
+				],
+				request: {
+					runId: "child-denied",
+					messages: [{ role: "user", content: "delegate" }],
+					configurable: { model: "test", toolIds: ["core__knowledge_read"] },
+				},
+			});
+			for await (const _event of run.stream) {
+				/* drain */
+			}
+			expect((await run.final).ok).toBe(true);
+			expect(reads).toBe(0);
+		},
+	);
 
 	it("denies a hallucinated domain writer in a delegated child", async () => {
 		let turn = 0;

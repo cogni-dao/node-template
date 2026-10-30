@@ -49,36 +49,34 @@ export const POET_GRAPH_NAME = "poet" as const;
  * ```
  */
 export function createPoetGraph(opts: CreateReactAgentGraphOptions) {
-	const child = createCogniProgram({
-		...opts,
-		disableCheckpointer: true,
-		profile: cogniProfile({
-			id: "general-purpose",
-			instructions:
-				"Complete the delegated creative task using only available read tools.",
-			modelTier: "flash",
-			toolIds: ["core__get_current_time"],
-			allowedChildProfiles: [],
-			outputPolicy: "answer",
-		}),
-		children: [],
-	}).withConfig({ recursionLimit: 30 });
 	return createCogniProgram({
 		...opts,
 		profile: cogniProfile({
 			id: "poet",
 			instructions: POET_SYSTEM_PROMPT,
 			modelTier: "main",
-			toolIds: ["core__get_current_time"],
+			toolIds: ["core__get_current_time", "core__knowledge_read"],
+			skillIds: (opts.sourceContext?.governingIndex ?? []).map(
+				(entry) => entry.id,
+			),
 			allowedChildProfiles: ["general-purpose"],
 			outputPolicy: "answer",
 		}),
 		children: [
 			{
-				name: "general-purpose",
 				description: "Complete an independent creative subtask.",
-				runnable: child,
-				mode: "isolated",
+				profile: cogniProfile({
+					id: "general-purpose",
+					instructions:
+						"Complete the delegated creative task using only available read tools.",
+					modelTier: "flash",
+					toolIds: ["core__get_current_time", "core__knowledge_read"],
+					skillIds: (opts.sourceContext?.governingIndex ?? []).map(
+						(entry) => entry.id,
+					),
+					allowedChildProfiles: [],
+					outputPolicy: "answer",
+				}),
 			},
 		],
 	});

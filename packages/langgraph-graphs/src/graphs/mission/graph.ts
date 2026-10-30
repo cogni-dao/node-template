@@ -46,40 +46,6 @@ export function createMissionGraph(opts: CreateReactAgentGraphOptions) {
 		const readToolIds = opts.tools
 			.map((tool) => tool.name)
 			.filter((name) => name !== WORK_ITEM_TRANSITION_NAME);
-		const child = createCogniProgram({
-			...opts,
-			disableCheckpointer: true,
-			profile: cogniProfile({
-				id: "general-purpose",
-				instructions:
-					"Read the requested node evidence and return a concise sourced result. Do not write.",
-				modelTier: "flash",
-				toolIds: readToolIds,
-				allowedChildProfiles: [],
-				outputPolicy: "answer",
-			}),
-			children: [],
-		}).withConfig({ recursionLimit: 30 });
-		const ledgerReader = createCogniProgram({
-			...opts,
-			disableCheckpointer: true,
-			profile: cogniProfile({
-				id: "ledger-reader",
-				instructions:
-					"Read the goals and work ledger requested in the task. Cite observed sources; never write.",
-				modelTier: "flash",
-				toolIds: [
-					"core__goal_list",
-					"core__work_item_query",
-					"core__work_item_read",
-					"core__knowledge_read",
-					"core__get_current_time",
-				],
-				allowedChildProfiles: [],
-				outputPolicy: "answer",
-			}),
-			children: [],
-		}).withConfig({ recursionLimit: 30 });
 		const deciding =
 			(opts.program === "cogni-decide" || opts.program === "work-review") &&
 			opts.requestIntent === "decide";
@@ -102,6 +68,9 @@ export function createMissionGraph(opts: CreateReactAgentGraphOptions) {
 			allowedChildProfiles: ["general-purpose", "ledger-reader"],
 			outputPolicy: deciding ? "scores" : "answer",
 			requiredGuidanceIds,
+			skillIds: (opts.sourceContext?.governingIndex ?? []).map(
+				(entry) => entry.id,
+			),
 		});
 		const guardedTools =
 			deciding && opts.receipts && writer
@@ -119,16 +88,36 @@ export function createMissionGraph(opts: CreateReactAgentGraphOptions) {
 			profile,
 			children: [
 				{
-					name: "general-purpose",
 					description: "Read relevant node evidence for the assigned task.",
-					runnable: child,
-					mode: "isolated",
+					profile: cogniProfile({
+						id: "general-purpose",
+						instructions:
+							"Read the requested node evidence and return a concise sourced result. Do not write.",
+						modelTier: "flash",
+						toolIds: readToolIds,
+						skillIds: profile.skillIds,
+						allowedChildProfiles: [],
+						outputPolicy: "answer",
+					}),
 				},
 				{
-					name: "ledger-reader",
 					description: "Read and summarize the goal and work ledger.",
-					runnable: ledgerReader,
-					mode: "isolated",
+					profile: cogniProfile({
+						id: "ledger-reader",
+						instructions:
+							"Read the goals and work ledger requested in the task. Cite observed sources; never write.",
+						modelTier: "flash",
+						toolIds: [
+							"core__goal_list",
+							"core__work_item_query",
+							"core__work_item_read",
+							"core__knowledge_read",
+							"core__get_current_time",
+						],
+						skillIds: profile.skillIds,
+						allowedChildProfiles: [],
+						outputPolicy: "answer",
+					}),
 				},
 			],
 		});

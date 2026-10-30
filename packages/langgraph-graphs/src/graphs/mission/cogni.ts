@@ -74,12 +74,17 @@ export function cogniProfile(
 /** Construct the shared core with a host-selected prompt and an explicit child registry. */
 export function createCogniProgram(
 	opts: CreateReactAgentGraphOptions & {
-		readonly children?: CompiledSubAgent[];
+		readonly children?: readonly {
+			readonly profile: AgentProfile;
+			readonly description: string;
+		}[];
 		readonly disableCheckpointer?: boolean;
 		readonly guardedTools?: readonly StructuredTool[];
 		readonly profile?: AgentProfile;
 	},
-) {
+): ReturnType<typeof createDeepAgent> {
+	if (opts.disableCheckpointer && opts.guardedTools?.length)
+		throw new Error("cogni_child_guarded_write_forbidden");
 	const model = opts.profile
 		? (opts.tierModels?.[opts.profile.modelTier] ??
 			(!opts.tierModels ? opts.llm : undefined))
@@ -97,9 +102,9 @@ export function createCogniProgram(
 			return tool;
 		});
 	if (
-		opts.profile &&
 		opts.children?.some(
-			(child) => !opts.profile?.allowedChildProfiles.includes(child.name),
+			(child) =>
+				!opts.profile?.allowedChildProfiles.includes(child.profile?.id),
 		)
 	)
 		throw new Error("cogni_child_profile_not_allowed");
@@ -108,6 +113,37 @@ export function createCogniProgram(
 		(opts.disableCheckpointer || (opts.profile?.limits.maxDepth ?? 1) < 1)
 	)
 		throw new Error("cogni_child_depth_exceeded");
+	const children: CompiledSubAgent[] = (opts.children ?? []).map((child) => {
+		if (
+			!child.profile ||
+			Object.keys(child).some(
+				(key) => key !== "profile" && key !== "description",
+			) ||
+			child.profile.allowedChildProfiles.length ||
+			child.profile.outputPolicy !== "answer"
+		)
+			throw new Error("cogni_child_must_be_leaf");
+		const profile = {
+			...child.profile,
+			toolIds: child.profile.toolIds.filter((id) => allowedTools.has(id)),
+			skillIds: child.profile.skillIds.filter((id) =>
+				opts.profile?.skillIds.includes(id),
+			),
+			allowedChildProfiles: [],
+		};
+		return {
+			name: profile.id,
+			description: child.description,
+			mode: "isolated" as const,
+			runnable: createCogniProgram({
+				...opts,
+				profile,
+				children: [],
+				guardedTools: [],
+				disableCheckpointer: true,
+			}).withConfig({ recursionLimit: 30 }),
+		};
+	});
 	const routes: Record<string, StoreBackend | HubSkillBackend> = {};
 	if (opts.memoryNamespace && opts.store)
 		routes["/memories/"] = new StoreBackend({
@@ -116,8 +152,9 @@ export function createCogniProgram(
 		});
 	const index = (opts.sourceContext?.governingIndex ?? []).filter(
 		(entry) =>
-			!opts.profile?.skillIds.length ||
-			opts.profile.skillIds.includes(entry.id),
+			allowedTools.has("core__knowledge_read") &&
+			readTools.has("core__knowledge_read") &&
+			(opts.profile?.skillIds.includes(entry.id) ?? false),
 	);
 	routes["/skills/"] = new HubSkillBackend(
 		index.map((entry) => entry.id),
@@ -244,12 +281,12 @@ export function createCogniProgram(
 				trigger: { type: "tokens", value: 24_000 },
 				keep: { type: "messages", value: 12 },
 			}),
-			opts.children?.length
+			children.length
 				? createSubAgentMiddleware({
 						defaultModel: model,
 						defaultTools: [],
 						generalPurposeAgent: false,
-						subagents: opts.children,
+						subagents: children,
 					})
 				: createMiddleware({ name: "subAgentMiddleware" }),
 		],

@@ -630,6 +630,15 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     // Forward responseFormat if provided (enables structuredOutput in GraphRunResult).
     const responseFormat = resolveResponseFormat(input);
 
+    const ledgerRun = executionGrantId
+      ? await container.graphRunRepository.getRunByRunId(SYSTEM_ACTOR, runId)
+      : null;
+    const scheduled = ledgerRun?.runKind === "system_scheduled" &&
+      ledgerRun.triggerSource === "temporal_schedule" &&
+      ledgerRun.graphId === graphId && ledgerRun.triggerRef !== null &&
+      ledgerRun.scheduledFor !== null &&
+      idempotencyKey === `${ledgerRun.triggerRef}:${ledgerRun.scheduledFor.toISOString()}`;
+
     const result = scopedExecutor.runGraph(
       {
         runId,
@@ -642,7 +651,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       {
         actorUserId,
         requestId: runId,
-        requestIntent: executionGrantId ? "decide" : "answer",
+        requestIntent: scheduled ? "decide" : "answer",
         ...(sessionId ? { sessionId } : {}),
       }
     );
