@@ -147,6 +147,7 @@ import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
 import { createApproversNodeAdminAuthority } from "@/bootstrap/node-admin-gate";
 import type { RateLimitBypassConfig } from "@/bootstrap/http/wrapPublicRoute";
 import { startProcessHealthPublisher } from "@/bootstrap/publishers";
+import { startGovernanceSyncOnBoot } from "@/bootstrap/startup-reconcile";
 import type {
 	AccountService,
 	AiTelemetryPort,
@@ -333,6 +334,7 @@ let _workflowClientPromise: Promise<{
 export function getContainer(): Container {
 	if (!_container) {
 		_container = createContainer();
+		startGovernanceSyncOnBoot();
 	}
 	return _container;
 }
