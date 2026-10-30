@@ -34,7 +34,7 @@ Pure tool definitions for AI agent execution. Defines `ToolContract`, `ToolImple
 }
 ```
 
-**External deps:** `zod`, `zod-to-json-schema`. Imports `@cogni/ai-core` (ToolSpec type); bundles work-items pure ordering constants (dev dependency, no registry runtime dependency). NO LangChain.
+**External deps:** `zod` (v4), `@cogni-dao/work-items` and `@cogni-dao/knowledge-store/contracts` (public domain peers). Inlines structural `@cogni/ai-core` types in final declarations; imports canonical domain schemas and ordering constants from public peers. NO LangChain.
 
 ## Public Surface
 
@@ -67,7 +67,7 @@ Pure tool definitions for AI agent execution. Defines `ToolContract`, `ToolImple
   - `knowledgeSearchBoundTool`, `KNOWLEDGE_SEARCH_NAME`, `createKnowledgeSearchImplementation` - Knowledge search tool (read_only: text search by domain+query)
   - `knowledgeWriteBoundTool`, `KNOWLEDGE_WRITE_NAME`, `createKnowledgeWriteImplementation` - Knowledge write tool (state_change: upsert + auto dolt_commit)
   - `goalListBoundTool`, `GOAL_LIST_NAME`, `createGoalListImplementation` - DAO goal list tool (read_only: the node's approved `goal-*` atoms via `KnowledgeCapability.listActiveGoals`; never counted or truncated)
-  - `KnowledgeCapability`, `KnowledgeEntry`, `KnowledgeWriteParams`, `CONFIDENCE` - Knowledge capability types (see `@cogni/knowledge-store` for port + adapter)
+  - `KnowledgeCapability`, `KnowledgeEntry`, `KnowledgeWriteParams`, `CONFIDENCE` - Canonical-derived knowledge read types (see `@cogni/knowledge-store` for port + adapter)
   - `TOOL_CATALOG` - Singleton catalog of all core tool definitions (Record<string, CatalogBoundTool>)
   - `CORE_TOOL_BUNDLE` - Cross-node core tool array (all non-Polymarket tools); pass to createBoundToolSource. Poly node additionally imports POLY_TOOL_BUNDLE from `@cogni/poly-ai-tools`.
   - `createToolCatalog()`, `getToolById()`, `getToolIds()`, `hasToolId()` - Catalog accessors
@@ -100,8 +100,8 @@ pnpm --filter @cogni-dao/ai-tools build
 
 ## Dependencies
 
-- **Internal:** `@cogni/ai-core` (ToolSpec type)
-- **External:** `zod`, `zod-to-json-schema`
+- **Build only:** `@cogni/ai-core` (structural types rolled up after tsc)
+- **External:** `zod` (v4), `@cogni-dao/work-items` and `@cogni-dao/knowledge-store/contracts` (public domain peers)
 
 ## Change Protocol
 

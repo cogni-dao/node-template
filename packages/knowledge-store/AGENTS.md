@@ -43,15 +43,21 @@ Shared ports, contribution workflow, and adapters for versioned domain knowledge
 
 **Root barrel** (`@cogni/knowledge-store`):
 
+- Read serialization: `toKnowledgeRow` — canonical wire fields with Date/null/default normalization
 - Types: `KnowledgeStorePort`, `KnowledgeWriteSession` (closed callback scope), `Knowledge`, `NewKnowledge`, `DoltCommit`, `DoltDiffEntry`, `SourceType`
 - Schemas: `KnowledgeSchema`, `NewKnowledgeSchema`, `DoltCommitSchema`, `DoltDiffEntrySchema`, `SourceTypeSchema`
 - Goal layer (story.5101): `KnowledgeStorePort.listActiveGoals()` (required port method, NO_GOAL_CAP), `ActiveGoal`, `GOAL_ENTRY_TYPE`, `GOAL_ID_PREFIX`, `GOAL_RETIRING_EDGE`, `isGoalRowId`, `selectActiveGoals`, `resolveGoals`, `renderGoalsLines`, `GOALS_BOOTSTRAP_INSTRUCTION`, `GoalsSection`, `GoalRequiresContributionError` (direct writes never touch goals), `createKnowledgeCapability(...).listActiveGoals` (for `core__goal_list`)
 - Governing discovery: `listGoverningIndex()`, `GOVERNING_ENTRY_TYPES`, `isGoverningEntryType`, `selectGoverningIndex`, `GoverningIndexRow` — content-free, uncapped, nonblank triggers, no superseded targets. Doltgres and fake adapters use this same selector.
 - Node-admin seam: `NodeAdminAuthority`, `NodeAdminActor`, `NodeAdminDecision`, `checkNodeAdmin`, `isPrivilegedPriority` (priority <= 1), `NodeAdminRequiredError`, `touchesGoalLayer`, `TouchedCitation`
 
+**Pure subpath** (`@cogni/knowledge-store/contracts`):
+
+- Canonical `KnowledgeRowSchema` / `KnowledgeRow`, knowledge and EDO capability contracts, parameters and results. No adapters or capability implementations.
+
 **Subpath** (`@cogni/knowledge-store/adapters/doltgres`):
 
 - `DoltgresKnowledgeStoreAdapter` (`withWrite` required for mutations), `DoltgresAdapterConfig` (injected shared writer session), `buildDoltgresClient`, `DoltgresClientConfig`
+- `DomainSql`, `getDoltgresDomain`, `updateDoltgresDomain`, `deleteDoltgresDomain`: domain SQL operations for caller-owned query callbacks; mutations require the caller's existing admitted write scope and do not admit or commit.
 - `DoltgresKnowledgeContributionAdapter`, `DoltgresKnowledgeContributionAdapterConfig` (contribution-branch lifecycle)
 - `createDoltgresPusher`, `DoltgresPusher`, `DoltgresPushConfig` (post-merge mirror to a Dolt remote; lazy `dolt_remote add` + `dolt_push`)
 - `wrapPushSafe`, `PushOutcomeListener` (fire-and-forget wrapper with injectable success/failure callbacks — keeps logging out of the adapter)

@@ -14,6 +14,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type {
+  WorkItemAssignee,
   WorkItemCapability,
   WorkItemInfo,
 } from "../src/capabilities/work-item";
@@ -45,12 +46,43 @@ const BASE: WorkItemInfo = {
   status: "needs_implement",
   labels: [],
   assignees: [],
+  externalRefs: [],
+  specRefs: [],
   updatedAt: "2026-10-19T00:00:00.000Z",
   createdAt: "2026-10-18T00:00:00.000Z",
   deployVerified: false,
+  revision: 3,
 };
 
 describe("core__work_item_query", () => {
+  it("normalizes legacy id-only and canonical capability assignees", async () => {
+    const legacy: readonly WorkItemAssignee[] = [
+      { kind: "user", id: "user-1" },
+      { kind: "agent", id: "agent-1" },
+      { kind: "system", id: "service-1" },
+    ];
+    const cap = capabilityReturning([{
+      ...BASE,
+      assignees: [
+        ...legacy,
+        { kind: "user", userId: "user-2" },
+        { kind: "agent", agentId: "agent-2" },
+        { kind: "system", serviceId: "service-2" },
+      ],
+    }]);
+    const out = WorkItemQueryOutputSchema.parse(
+      await createWorkItemQueryImplementation({ workItemCapability: cap }).execute({})
+    );
+    expect(out.items[0]?.assignees).toEqual([
+      { kind: "user", userId: "user-1", id: "user-1" },
+      { kind: "agent", agentId: "agent-1", id: "agent-1" },
+      { kind: "system", serviceId: "service-1", id: "service-1" },
+      { kind: "user", userId: "user-2", id: "user-2" },
+      { kind: "agent", agentId: "agent-2", id: "agent-2" },
+      { kind: "system", serviceId: "service-2", id: "service-2" },
+    ]);
+  });
+
   it("stays read_only", () => {
     expect(workItemQueryContract.effect).toBe("read_only");
   });
@@ -159,13 +191,13 @@ describe("core__work_item_query", () => {
     expect(out.items[0]).not.toHaveProperty("scores");
   });
 
-  it("is backward compatible when the store has no enrichment fields", async () => {
+  it("preserves actual revision when optional enrichment is absent", async () => {
     const cap = capabilityReturning([BASE]);
     const impl = createWorkItemQueryImplementation({ workItemCapability: cap });
     const out = await impl.execute({});
 
     expect(WorkItemQueryOutputSchema.parse(out)).toEqual(out);
-    expect(out.items[0]).not.toHaveProperty("revision");
+    expect(out.items[0]?.revision).toBe(BASE.revision);
     expect(out.items[0]).not.toHaveProperty("outcome");
     expect(out.count).toBe(1);
   });

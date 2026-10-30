@@ -26,14 +26,11 @@ function stubKnowledge(entry: NewKnowledge): Knowledge {
     title: entry.title,
     content: entry.content,
     entryType: entry.entryType ?? "finding",
-    status: entry.status ?? "draft",
     confidencePct: entry.confidencePct ?? 30,
     sourceType: entry.sourceType,
     sourceRef: entry.sourceRef ?? null,
-    sourceNode: entry.sourceNode ?? null,
     tags: entry.tags ?? null,
-    createdAt: "2026-05-27T00:00:00.000Z",
-    updatedAt: "2026-05-27T00:00:00.000Z",
+    createdAt: new Date("2026-05-27T00:00:00.000Z"),
   };
 }
 
@@ -115,6 +112,7 @@ describe("createKnowledgeCapability — write path with v0 gates", () => {
     });
 
     expect(entry.id).toBe("fed-rate-base-rate");
+    expect(entry.createdAt).toBe("2026-05-27T00:00:00.000Z");
     expect(calls.upsert).toHaveLength(1);
     expect(calls.upsert[0]?.id).toBe("fed-rate-base-rate");
     expect(calls.commits).toHaveLength(1);

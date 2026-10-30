@@ -226,7 +226,9 @@ export {
   CitationTypeMismatchError,
   type Domain,
   DomainAlreadyRegisteredError,
+  DomainNotEmptyError,
   DomainNotRegisteredError,
+  type DomainPatch,
   EdoEntryTypeRequiresAtomicToolError,
   HypothesisMissingEvaluateAtError,
   GoalRequiresContributionError,
@@ -273,3 +275,7 @@ export {
   isGoverningEntryType,
   selectGoverningIndex,
 } from "./domain/governing.js";
+
+export { toKnowledgeRow } from "./domain/schemas.js";
+
+export * from "./contracts.js";

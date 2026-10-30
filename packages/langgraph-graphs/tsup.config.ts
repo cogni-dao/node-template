@@ -21,7 +21,11 @@ export const tsupConfig = defineConfig({
     "src/inproc/index.ts",
   ],
   format: ["esm"],
-  dts: false, // tsc -b emits per-file declarations; tsup handles JS only
+  dts: {
+    resolve: ["@cogni/ai-core"],
+    compilerOptions: { composite: false, incremental: false },
+  },
+  outDir: "dist/bundled", // tsc owns dist/*.d.ts; preserve these normal bundled declarations.
   clean: false, // preserve .d.ts files from tsc -b (incremental builds)
   sourcemap: true,
   platform: "node", // LangChain requires Node.js
@@ -29,7 +33,7 @@ export const tsupConfig = defineConfig({
   // RUNTIME_LEAF_ON_AI_CORE: the few ai-core runtime helpers this package calls (error codes,
   // tool-runner) are bundled in. A node's vendored @cogni/ai-core dist is tsc output with
   // extensionless imports, which plain Node ESM (vitest externals, scripts) cannot load from
-  // inside node_modules. @cogni/ai-core stays a peer for the .d.ts types only.
+  // inside node_modules. Its structural types are bundled into public declarations.
   noExternal: [/^@cogni\/ai-core/],
 });
 

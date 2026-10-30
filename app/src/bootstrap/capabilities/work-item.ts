@@ -31,14 +31,12 @@ import {
 } from "@cogni/ai-tools";
 import type {
   ActorKind,
-  SubjectRef,
-  WorkItem,
   WorkItemCommandPort,
   WorkItemQueryPort,
   WorkItemStatus,
   WorkItemType
 } from "@cogni/work-items";
-import { rankScore, toWorkItemId } from "@cogni/work-items";
+import { toWorkItemDto, toWorkItemId } from "@cogni/work-items";
 import {
   WorkItemRevisionConflictError,
   type WorkItemsDoltgresPort
@@ -69,46 +67,7 @@ export interface WorkItemCapabilityDeps {
   };
 }
 
-function assigneeId(a: SubjectRef): string {
-  switch (a.kind) {
-    case "user":
-      return a.userId;
-    case "agent":
-      return a.agentId;
-    case "system":
-      return a.serviceId;
-  }
-}
-
-function toWorkItemInfo(item: WorkItem): WorkItemInfo {
-  const evaluationRank = rankScore(item.scores);
-  return {
-    id: item.id,
-    type: item.type,
-    title: item.title,
-    status: item.status,
-    labels: [...item.labels],
-    assignees: item.assignees.map((a) => ({ kind: a.kind, id: assigneeId(a) })),
-    updatedAt: item.updatedAt,
-    createdAt: item.createdAt,
-    deployVerified: item.deployVerified,
-    ...(item.actor !== "either" && { actor: item.actor }),
-    ...(item.priority !== undefined && { priority: item.priority }),
-    ...(item.rank !== undefined && { rank: item.rank }),
-    ...(evaluationRank !== undefined && { rankScore: evaluationRank }),
-    ...(item.summary !== undefined && { summary: item.summary }),
-    ...(item.projectId !== undefined && { projectId: item.projectId }),
-    ...(item.branch !== undefined && { branch: item.branch }),
-    ...(item.pr !== undefined && { pr: item.pr }),
-    ...(item.blockedBy !== undefined && { blockedBy: item.blockedBy }),
-    ...(typeof item.revision === "number" && { revision: item.revision }),
-    ...(item.outcome !== undefined && { outcome: item.outcome }),
-    ...(item.estimate !== undefined && { estimate: item.estimate }),
-    ...(item.scores !== undefined && { scores: item.scores }),
-    ...(item.parentId !== undefined && { parentId: item.parentId }),
-    ...(item.specRefs !== undefined && { specRefs: [...item.specRefs] })
-  };
-}
+const toWorkItemInfo = toWorkItemDto;
 
 /**
  * Create a WorkItemCapability backed by hexagonal ports.
