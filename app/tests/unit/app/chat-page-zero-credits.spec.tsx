@@ -13,7 +13,7 @@
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { SessionProvider } from "next-auth/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "@testing-library/jest-dom/vitest";
@@ -133,6 +133,7 @@ describe("ChatPage - Zero Credits Invariant", () => {
     // Should show loading state, NOT render chat with any model
     expect(screen.queryByTestId("runtime-provider")).toBeNull();
     expect(screen.queryByTestId("composer-extras")).toBeNull();
+    expect(screen.getByRole("status", { name: "Loading" }).textContent).toBe("");
 
     // Verify no paid model names appear anywhere in DOM
     expect(container.textContent).not.toContain("GPT-5 Nano");
@@ -202,6 +203,63 @@ describe("ChatPage - Zero Credits Invariant", () => {
 
     // Should show error
     expect(screen.getByTestId("error-code").textContent).toBe("NO_FREE_MODELS");
+  });
+
+  it("keeps one indicator while initialization hands off to a pending thread", async () => {
+    threadRequest.key = "requested-thread";
+    mockUseCreditsSummary.mockReturnValue({ data: undefined, isLoading: true });
+    queryClient.setQueryData(["ai-models"], createModelsWithFree());
+    let finishThread!: (response: Response) => void;
+    const pendingThread = new Promise<Response>((resolve) => {
+      finishThread = resolve;
+    });
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (url) => {
+        if (String(url).includes("/ai/threads/requested-thread")) {
+          return pendingThread;
+        }
+        return new Response(JSON.stringify({ threads: [] }), { status: 200 });
+      });
+    const view = () => (
+      <QueryClientProvider client={queryClient}>
+        <ChatPage />
+      </QueryClientProvider>
+    );
+    try {
+      const { rerender } = render(view());
+      const indicator = screen.getByRole("status", { name: "Loading" });
+      mockUseCreditsSummary.mockReturnValue({
+        data: { balanceCredits: 0 },
+        isLoading: false,
+      });
+      await act(async () => rerender(view()));
+      expect(screen.getByRole("status", { name: "Loading" })).toBe(indicator);
+      expect(screen.queryByTestId("runtime-provider")).toBeNull();
+
+      await act(async () => {
+        finishThread(
+          new Response(
+            JSON.stringify({
+              messages: [
+                {
+                  id: "saved-answer",
+                  role: "assistant",
+                  parts: [{ type: "text", text: "Saved answer" }],
+                },
+              ],
+            }),
+            { status: 200 }
+          )
+        );
+      });
+      await waitFor(() => {
+        expect(screen.getByTestId("runtime-provider")).toBeInTheDocument();
+      });
+      expect(screen.queryByRole("status", { name: "Loading" })).toBeNull();
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 
   it.each([

@@ -37,8 +37,8 @@ Provides reusable feedback UI components for error states, loading indicators, a
 
 ## Public Surface
 
-- **Exports (via index.ts and ../index.ts):** ErrorAlert
-- **Files considered API:** ErrorAlert.tsx, index.ts
+- **Exports:** ErrorAlert via the component barrel; BrainLoading for shared route/chat loading
+- **Files considered API:** ErrorAlert.tsx, BrainLoading.tsx
 
 ## Responsibilities
 

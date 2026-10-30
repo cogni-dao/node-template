@@ -16,6 +16,13 @@ import { cva } from "class-variance-authority";
 
 import type { SizeKey } from "@/styles/theme";
 
+/** One stable surface across server fallbacks and client readiness gates. */
+export const brainLoading = cva(
+  "flex min-h-0 w-full flex-1 items-center justify-center"
+);
+
+export const brainLoadingMark = cva("brain-loading-mark size-16");
+
 const terminalFrameSurfaceVariants = {
   default: "bg-card text-card-foreground",
   muted: "bg-muted text-muted-foreground",

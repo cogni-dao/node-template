@@ -282,6 +282,25 @@
 /* Keep hero animation vars above (isolated to code.ts) */
 
 @layer utilities {
+  /* Animate paint/compositing only; the reserved loading mark never resizes layout. */
+  @keyframes brain-breathe {
+    0%,
+    100% {
+      opacity: 0.55;
+      transform: scale(0.94);
+    }
+    50% {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .brain-loading-mark {
+      animation: brain-breathe 2.4s ease-in-out infinite;
+    }
+  }
+
   /* Desktop-only wallet button fill - scoped to data-wallet-slot to avoid affecting mobile */
   [data-wallet-slot="desktop"] button {
     width: 100%;

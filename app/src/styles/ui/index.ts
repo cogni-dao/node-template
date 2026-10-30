@@ -56,6 +56,8 @@ export {
 
 // Overlay components
 export {
+  brainLoading,
+  brainLoadingMark,
   chatContainer,
   chatDivider,
   chatForm,
