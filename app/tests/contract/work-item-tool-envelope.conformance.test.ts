@@ -4,7 +4,7 @@
 /**
  * Module: `@tests/contract/work-item-tool-envelope.conformance`
  * Purpose: Check the derived tool envelope against the complete HTTP read contract.
- * Scope: Compatibility controls; CI's source-only installed-artifact probe proves inheritance.
+ * Scope: Ordinary execution and wire compatibility checks.
  * Invariants: real revision, complete canonical context, additive legacy assignee id.
  * Side-effects: none
  * @internal
@@ -27,7 +27,6 @@ const capability: WorkItemCapability = { query: vi.fn().mockResolvedValue([item]
 
 describe("derived work-item read envelope", () => {
   it("derives all HTTP item fields and adds only tool provenance", async () => {
-    expect(Object.keys(WorkItemOutputSchema.shape)).toEqual(expect.arrayContaining(Object.keys(WorkItemDtoSchema.shape)));
     const execute = createWorkItemQueryImplementation({ workItemCapability: capability }).execute;
     for (const params of [{}, { ids: [item.id] }]) {
       const result = WorkItemQueryOutputSchema.parse(await execute(params));

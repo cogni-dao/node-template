@@ -47,7 +47,6 @@ name: Publish Packages
 on:
   push:
     tags:
-      - "read-contracts-v*"
       - "work-items-v*"
       - "knowledge-store-v*"
       - "knowledge-base-v*"
@@ -101,8 +100,7 @@ env:
      {"name":"@cogni-dao/ai-tools","dir":"packages/ai-tools","tagPrefix":"ai-tools-v"},
      {"name":"@cogni-dao/langgraph-graphs","dir":"packages/langgraph-graphs","tagPrefix":"langgraph-graphs-v"},
      {"name":"@cogni-dao/money-plane","dir":"packages/money-plane","tagPrefix":"money-plane-v"},
-     {"name":"@cogni-dao/scheduling","dir":"packages/scheduling","tagPrefix":"scheduling-v"},
-     {"name":"@cogni-dao/read-contracts","dir":"packages/read-contracts","tagPrefix":"read-contracts-v"}]
+     {"name":"@cogni-dao/scheduling","dir":"packages/scheduling","tagPrefix":"scheduling-v"}]
 
 jobs:
   # Resolve WHICH packages this run acts on, before anything is built. A push

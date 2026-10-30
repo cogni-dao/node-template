@@ -18,7 +18,7 @@
  */
 
 import { z } from "zod";
-import { SubjectRefSchema, WorkItemDtoSchema } from "@cogni-dao/read-contracts/work-items";
+import { SubjectRefSchema, WorkItemDtoSchema } from "@cogni-dao/work-items";
 import {
   WORK_ITEM_SORT_FIELDS,
   WORK_ITEM_SORT_DIRECTIONS

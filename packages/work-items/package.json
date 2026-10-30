@@ -43,7 +43,8 @@
   },
   "dependencies": {
     "type-fest": "^5.4.1",
-    "yaml": "^2.8.3"
+    "yaml": "^2.8.3",
+    "zod": "^4.1.12"
   },
   "devDependencies": {
     "postgres": "^3.4.5",
@@ -51,10 +52,6 @@
     "typescript": "^5",
     "vite-tsconfig-paths": "^5.1.4",
     "vitest": "^3.1.4",
-    "@cogni-dao/doltgres-admission": "workspace:*",
-    "@cogni-dao/read-contracts": "workspace:*"
-  },
-  "peerDependencies": {
-    "@cogni-dao/read-contracts": "^0.1.0"
+    "@cogni-dao/doltgres-admission": "workspace:*"
   }
 }

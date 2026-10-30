@@ -496,9 +496,9 @@ importers:
         specifier: ^4.1.12
         version: 4.4.3
     devDependencies:
-      '@cogni-dao/read-contracts':
+      '@cogni-dao/knowledge-store':
         specifier: workspace:*
-        version: link:../read-contracts
+        version: link:../knowledge-store
       '@cogni-dao/work-items':
         specifier: workspace:*
         version: link:../work-items
@@ -850,12 +850,6 @@ importers:
       '@cogni-dao/doltgres-admission':
         specifier: workspace:*
         version: link:../doltgres-admission
-      '@cogni-dao/read-contracts':
-        specifier: workspace:*
-        version: link:../read-contracts
-      '@cogni/ai-tools':
-        specifier: workspace:@cogni-dao/ai-tools@*
-        version: link:../ai-tools
       tsup:
         specifier: ^8.5.1
         version: 8.5.1(jiti@2.7.0)(postcss@8.5.15)(tsx@4.22.4)(typescript@5.9.3)(yaml@2.9.0)
@@ -957,9 +951,6 @@ importers:
 
   packages/node-contracts:
     dependencies:
-      '@cogni-dao/read-contracts':
-        specifier: workspace:*
-        version: link:../read-contracts
       '@cogni/ai-core':
         specifier: workspace:*
         version: link:../ai-core
@@ -1171,22 +1162,6 @@ importers:
         specifier: ^5
         version: 5.9.3
 
-  packages/read-contracts:
-    dependencies:
-      zod:
-        specifier: ^4.1.12
-        version: 4.4.3
-    devDependencies:
-      tsup:
-        specifier: ^8.5.1
-        version: 8.5.1(jiti@2.7.0)(postcss@8.5.15)(tsx@4.22.4)(typescript@5.9.3)(yaml@2.9.0)
-      typescript:
-        specifier: ^5
-        version: 5.9.3
-      vitest:
-        specifier: ^3.1.4
-        version: 3.2.6(@types/debug@4.1.13)(@types/node@22.19.19)(happy-dom@20.10.2(bufferutil@4.1.0)(utf-8-validate@5.0.10))(jiti@2.7.0)(jsdom@27.4.0(@noble/hashes@1.8.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10))(lightningcss@1.32.0)(tsx@4.22.4)(yaml@2.9.0)
-
   packages/repo-spec:
     dependencies:
       yaml:
@@ -1258,13 +1233,13 @@ importers:
       yaml:
         specifier: ^2.8.3
         version: 2.9.0
+      zod:
+        specifier: ^4.1.12
+        version: 4.4.3
     devDependencies:
       '@cogni-dao/doltgres-admission':
         specifier: workspace:*
         version: link:../doltgres-admission
-      '@cogni-dao/read-contracts':
-        specifier: workspace:*
-        version: link:../read-contracts
       postgres:
         specifier: ^3.4.5
         version: 3.4.9

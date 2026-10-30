@@ -14,26 +14,16 @@
 import { defineConfig } from "tsup";
 
 export const tsupConfig = defineConfig({
-	entry: ["src/index.ts"],
-	format: ["esm"],
-	dts:
-		process.env.COGNI_DTS_ONLY === "1"
-			? {
-					only: true,
-					resolve: ["@cogni/ai-core"],
-					compilerOptions: {
-						composite: false,
-						incremental: false,
-						rootDir: "..",
-						baseUrl: import.meta.dirname,
-						paths: { "@cogni/ai-core": ["../ai-core/src/index.ts"] },
-					},
-				}
-			: false, // the final declaration pass runs AFTER root tsc
-	noExternal: ["@cogni-dao/work-items"],
-	clean: false, // preserve .d.ts files from tsc -b (incremental builds)
-	sourcemap: true,
-	platform: "neutral",
+  entry: ["src/index.ts"],
+  format: ["esm"],
+  dts: {
+    resolve: ["@cogni/ai-core"],
+    compilerOptions: { composite: false, incremental: false },
+  },
+  outDir: "dist/bundled", // tsc owns dist/*.d.ts; preserve these normal bundled declarations.
+  clean: false, // preserve .d.ts files from tsc -b (incremental builds)
+  sourcemap: true,
+  platform: "neutral",
 });
 
 export default tsupConfig;

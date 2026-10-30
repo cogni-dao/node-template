@@ -34,7 +34,7 @@ Pure tool definitions for AI agent execution. Defines `ToolContract`, `ToolImple
 }
 ```
 
-**External deps:** `zod` (v4), `@cogni-dao/read-contracts` (public peer). Inlines structural `@cogni/ai-core` types in final declarations; bundles work-items pure ordering constants (dev dependency, no registry runtime dependency). NO LangChain.
+**External deps:** `zod` (v4), `@cogni-dao/work-items` and `@cogni-dao/knowledge-store/contracts` (public domain peers). Inlines structural `@cogni/ai-core` types in final declarations; imports canonical domain schemas and ordering constants from public peers. NO LangChain.
 
 ## Public Surface
 
@@ -101,7 +101,7 @@ pnpm --filter @cogni-dao/ai-tools build
 ## Dependencies
 
 - **Build only:** `@cogni/ai-core` (structural types rolled up after tsc)
-- **External:** `zod` (v4), `@cogni-dao/read-contracts` (public peer)
+- **External:** `zod` (v4), `@cogni-dao/work-items` and `@cogni-dao/knowledge-store/contracts` (public domain peers)
 
 ## Change Protocol
 

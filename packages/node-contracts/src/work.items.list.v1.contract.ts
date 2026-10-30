@@ -19,8 +19,8 @@ import {
   WORK_ITEM_SORT_DIRECTIONS
 } from "@cogni/work-items";
 
-import { WorkItemDtoSchema } from "@cogni-dao/read-contracts/work-items";
-export { WorkItemDtoSchema } from "@cogni-dao/read-contracts/work-items";
+import { WorkItemDtoSchema } from "@cogni/work-items";
+export { WorkItemDtoSchema } from "@cogni/work-items";
 
 /**
  * Evaluation scores: configurable axis id → { v, ev? }. Writes replace the whole object.

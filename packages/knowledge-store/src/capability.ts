@@ -19,7 +19,7 @@ import type {
   KnowledgeListParams,
   KnowledgeSearchParams,
   KnowledgeWriteParams,
-} from "@cogni/ai-tools";
+} from "./contracts.js";
 
 import {
   type KnowledgeGate,

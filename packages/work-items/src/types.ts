@@ -15,7 +15,7 @@
  */
 
 import { rankScore } from "./scores.js";
-import type { WorkItemDto } from "@cogni-dao/read-contracts/work-items";
+import type { WorkItemDto } from "./contracts.js";
 import type { Tagged } from "type-fest";
 import type { WorkItemSortBy, WorkItemSortDirection } from "./query-order.js";
 

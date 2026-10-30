@@ -24,9 +24,6 @@
   "references": [
     {
       "path": "../doltgres-admission"
-    },
-    {
-      "path": "../read-contracts"
     }
   ]
 }

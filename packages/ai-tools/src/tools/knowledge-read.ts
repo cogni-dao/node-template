@@ -15,7 +15,7 @@
  */
 
 import { z } from "zod";
-import { KnowledgeRowSchema } from "@cogni-dao/read-contracts/knowledge";
+import { KnowledgeRowSchema } from "@cogni-dao/knowledge-store/contracts";
 
 import type { KnowledgeCapability } from "../capabilities/knowledge";
 import { readSourceProvenance, withoutSourceProvenance } from "../source-url";

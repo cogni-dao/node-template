@@ -74,3 +74,5 @@ export type {
 } from "./query-order.js";
 
 export { toWorkItemDto } from "./types.js";
+
+export * from "./contracts.js";

@@ -24,7 +24,7 @@ import type {
   KnowledgeEntry,
   RecordOutcomeParams,
   RecordOutcomeResult,
-} from "@cogni/ai-tools";
+} from "./contracts.js";
 
 import { assertCitationReplay } from "./domain/write-replay.js";
 import type { EdoResolverPort } from "./port/edo-resolver.port.js";

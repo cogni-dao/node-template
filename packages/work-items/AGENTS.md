@@ -37,7 +37,7 @@ Work item port interfaces, domain types, and storage adapters for structured wor
 }
 ```
 
-**External deps:** `@cogni-dao/read-contracts` (public schema peer), `type-fest` (Tagged branded types), `yaml` (frontmatter parsing — adapter only). Doltgres adapter alone bundles `@cogni-dao/doltgres-admission` for the shared engine writer protocol; root/content/lease ports stay database-neutral.
+**External deps:** `zod` (canonical wire schema), `type-fest` (Tagged branded types), `yaml` (frontmatter parsing — adapter only). Doltgres adapter alone bundles `@cogni-dao/doltgres-admission` for the shared engine writer protocol; root/content/lease ports stay database-neutral.
 
 ## Public Surface
 
@@ -90,7 +90,7 @@ pnpm vitest run packages/work-items/tests/
 
 ## Dependencies
 
-- **Internal:** `@cogni-dao/read-contracts` (pure public wire schema peer)
+- **Internal:** none
 - **External:** `type-fest` (Tagged branded types), `yaml` (YAML parse/stringify)
 
 ## Change Protocol

@@ -17,7 +17,7 @@
  */
 
 import { z } from "zod";
-import { KnowledgeRowSchema } from "@cogni-dao/read-contracts/knowledge";
+import { KnowledgeRowSchema } from "@cogni-dao/knowledge-store/contracts";
 
 import type { KnowledgeCapability } from "../capabilities/knowledge";
 import type { BoundTool, ToolContract, ToolImplementation } from "../types";

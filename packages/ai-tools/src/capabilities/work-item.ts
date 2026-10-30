@@ -13,7 +13,7 @@
  * @public
  */
 
-import type { WorkItemDto } from "@cogni-dao/read-contracts/work-items";
+import type { WorkItemDto } from "@cogni-dao/work-items";
 import type { WorkItemQueryInput } from "../tools/work-item-query";
 
 /** Canonical public read shape; the tool adds its legacy assignee id at execution. */

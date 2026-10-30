@@ -34,6 +34,11 @@
       "types": "./dist/migrations.d.ts",
       "import": "./dist/migrations.js",
       "default": "./dist/migrations.js"
+    },
+    "./contracts": {
+      "types": "./dist/contracts.d.ts",
+      "import": "./dist/contracts.js",
+      "default": "./dist/contracts.js"
     }
   },
   "types": "./dist/index.d.ts",
@@ -50,17 +55,11 @@
     "postgres": "^3.4.5",
     "zod": "^4.1.12"
   },
-  "peerDependencies": {
-    "@cogni/ai-tools": ">=0.3.0",
-    "@cogni-dao/read-contracts": "^0.1.0"
-  },
   "devDependencies": {
-    "@cogni/ai-tools": "workspace:@cogni-dao/ai-tools@*",
     "tsup": "^8.5.1",
     "typescript": "^5",
     "vite-tsconfig-paths": "^5.1.4",
     "vitest": "^3.1.4",
-    "@cogni-dao/doltgres-admission": "workspace:*",
-    "@cogni-dao/read-contracts": "workspace:*"
+    "@cogni-dao/doltgres-admission": "workspace:*"
   }
 }

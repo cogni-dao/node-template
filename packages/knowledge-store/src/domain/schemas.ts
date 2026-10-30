@@ -12,7 +12,7 @@
  */
 
 import { z } from "zod";
-import { type KnowledgeRow, KnowledgeRowSchema } from "@cogni-dao/read-contracts/knowledge";
+import { type KnowledgeRow, KnowledgeRowSchema } from "../contracts.js";
 
 // ---------------------------------------------------------------------------
 // Source types

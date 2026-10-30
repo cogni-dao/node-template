@@ -11,30 +11,26 @@
   "sideEffects": false,
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "default": "./dist/index.js"
+      "types": "./dist/bundled/index.d.ts",
+      "import": "./dist/bundled/index.js",
+      "default": "./dist/bundled/index.js"
     }
   },
-  "types": "./dist/index.d.ts",
+  "types": "./dist/bundled/index.d.ts",
   "files": [
     "dist"
   ],
   "scripts": {
     "build": "tsup",
-    "postbuild": "node -e \"const fs=require('fs'); if(!fs.existsSync('dist/index.js')){console.error('ERROR: dist/index.js missing'); process.exit(1)}\"",
+    "postbuild": "node -e \"const fs=require('fs'); if(!fs.existsSync('dist/bundled/index.js')){console.error('ERROR: dist/bundled/index.js missing'); process.exit(1)}\"",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --config vitest.config.ts",
     "test:watch": "vitest --config vitest.config.ts",
-    "test:ci": "vitest run --config vitest.config.ts",
-    "build:declarations": "COGNI_DTS_ONLY=1 tsup"
+    "test:ci": "vitest run --config vitest.config.ts"
   },
   "dependencies": {
     "@types/json-schema": "^7.0.15",
     "zod": "^4.1.12"
-  },
-  "peerDependencies": {
-    "@cogni-dao/read-contracts": "^0.1.0"
   },
   "devDependencies": {
     "@cogni/ai-core": "workspace:*",
@@ -43,6 +39,10 @@
     "vite-tsconfig-paths": "^5.1.4",
     "vitest": "^3.1.4",
     "@cogni-dao/work-items": "workspace:*",
-    "@cogni-dao/read-contracts": "workspace:*"
+    "@cogni-dao/knowledge-store": "workspace:*"
+  },
+  "peerDependencies": {
+    "@cogni-dao/work-items": "0.4.0",
+    "@cogni-dao/knowledge-store": "0.8.0"
   }
 }
