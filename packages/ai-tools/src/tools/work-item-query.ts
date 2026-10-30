@@ -125,6 +125,26 @@ const ToolAssigneeSchema = z.discriminatedUnion("kind", [
   SubjectRefSchema.options[1].extend({ id: z.string() }),
   SubjectRefSchema.options[2].extend({ id: z.string() }),
 ]);
+/** Normalize the legacy capability alias into the canonical, enriched tool output. */
+function toToolAssignee(
+  assignee: WorkItemInfo["assignees"][number]
+): z.infer<typeof ToolAssigneeSchema> {
+  switch (assignee.kind) {
+    case "user": {
+      const userId = "userId" in assignee ? assignee.userId : assignee.id;
+      return { ...assignee, kind: "user", userId, id: userId };
+    }
+    case "agent": {
+      const agentId = "agentId" in assignee ? assignee.agentId : assignee.id;
+      return { ...assignee, kind: "agent", agentId, id: agentId };
+    }
+    case "system": {
+      const serviceId = "serviceId" in assignee ? assignee.serviceId : assignee.id;
+      return { ...assignee, kind: "system", serviceId, id: serviceId };
+    }
+  }
+}
+
 export const WorkItemOutputSchema = WorkItemDtoSchema.extend({
   assignees: z.array(ToolAssigneeSchema),
   sourceUrl: z.string().url().optional(),
@@ -268,10 +288,7 @@ export function createWorkItemQueryImplementation(
           summary: truncate(item.summary, WORK_ITEM_QUERY_SUMMARY_MAX_CHARS),
           ...(item.outcome !== undefined && { outcome: truncate(item.outcome, WORK_ITEM_QUERY_OUTCOME_MAX_CHARS) }),
           ...(item.scores !== undefined && { scores: capScores(item.scores) }),
-          assignees: item.assignees.map(a => ({
-            ...a,
-            id: a.kind === "user" ? a.userId : a.kind === "agent" ? a.agentId : a.serviceId,
-          })),
+          assignees: item.assignees.map(toToolAssignee),
           ...readSourceProvenance(deps.nodePublicOrigin, "work/items", item.id),
         })),
         count: items.length,

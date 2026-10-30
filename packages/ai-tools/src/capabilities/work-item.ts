@@ -16,9 +16,16 @@
 import type { WorkItemDto } from "@cogni-dao/work-items";
 import type { WorkItemQueryInput } from "../tools/work-item-query";
 
-/** Canonical public read shape; the tool adds its legacy assignee id at execution. */
-export type WorkItemInfo = WorkItemDto;
-export type WorkItemAssignee = WorkItemDto["assignees"][number] & { readonly id: string };
+/** Legacy capability assignee input; canonical tool output additionally carries its variant key. */
+export interface WorkItemAssignee {
+  readonly kind: WorkItemDto["assignees"][number]["kind"];
+  readonly id: string;
+}
+
+/** Canonical read fields, accepting both existing and canonical capability assignees. */
+export type WorkItemInfo = Omit<WorkItemDto, "assignees"> & {
+  readonly assignees: readonly (WorkItemDto["assignees"][number] | WorkItemAssignee)[];
+};
 
 /**
  * Parameters for querying work items.

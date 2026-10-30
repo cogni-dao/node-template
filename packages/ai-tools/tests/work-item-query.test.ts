@@ -14,6 +14,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type {
+  WorkItemAssignee,
   WorkItemCapability,
   WorkItemInfo,
 } from "../src/capabilities/work-item";
@@ -54,6 +55,34 @@ const BASE: WorkItemInfo = {
 };
 
 describe("core__work_item_query", () => {
+  it("normalizes legacy id-only and canonical capability assignees", async () => {
+    const legacy: readonly WorkItemAssignee[] = [
+      { kind: "user", id: "user-1" },
+      { kind: "agent", id: "agent-1" },
+      { kind: "system", id: "service-1" },
+    ];
+    const cap = capabilityReturning([{
+      ...BASE,
+      assignees: [
+        ...legacy,
+        { kind: "user", userId: "user-2" },
+        { kind: "agent", agentId: "agent-2" },
+        { kind: "system", serviceId: "service-2" },
+      ],
+    }]);
+    const out = WorkItemQueryOutputSchema.parse(
+      await createWorkItemQueryImplementation({ workItemCapability: cap }).execute({})
+    );
+    expect(out.items[0]?.assignees).toEqual([
+      { kind: "user", userId: "user-1", id: "user-1" },
+      { kind: "agent", agentId: "agent-1", id: "agent-1" },
+      { kind: "system", serviceId: "service-1", id: "service-1" },
+      { kind: "user", userId: "user-2", id: "user-2" },
+      { kind: "agent", agentId: "agent-2", id: "agent-2" },
+      { kind: "system", serviceId: "service-2", id: "service-2" },
+    ]);
+  });
+
   it("stays read_only", () => {
     expect(workItemQueryContract.effect).toBe("read_only");
   });
