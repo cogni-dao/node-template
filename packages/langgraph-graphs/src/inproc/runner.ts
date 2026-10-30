@@ -22,6 +22,7 @@
 import {
   type AiEvent,
   normalizeErrorToExecutionCode,
+  isAiExecutionError,
   type ToolSpec,
 } from "@cogni/ai-core";
 import type { BaseMessage } from "@langchain/core/messages";
@@ -29,6 +30,7 @@ import {
   DynamicStructuredTool,
   type StructuredToolInterface,
 } from "@langchain/core/tools";
+import { MiddlewareError } from "langchain";
 import { InMemoryStore, MemorySaver } from "@langchain/langgraph";
 import { z } from "zod";
 import { createHash } from "node:crypto";
@@ -235,10 +237,7 @@ export function createInProcGraphRunner<TTool = unknown>(
   };
 
   // Create no-arg CogniCompletionAdapter (reads from ALS + configurable at invoke time)
-  const timeoutSignal = opts.trustedProgramId ? AbortSignal.timeout(120_000) : undefined;
-  const runSignal = timeoutSignal && request.abortSignal
-    ? AbortSignal.any([request.abortSignal, timeoutSignal])
-    : timeoutSignal ?? request.abortSignal;
+  const runSignal = request.abortSignal;
   const llm = new CogniCompletionAdapter().bindRun(
     request.configurable.model,
     runSignal,
@@ -376,7 +375,16 @@ export function createInProcGraphRunner<TTool = unknown>(
     } catch (error) {
       // Normalize error using duck-typed LlmError detection (kind/status properties)
       // Per ERROR_NORMALIZATION_ONCE: normalize at catch boundary
-      const code = normalizeErrorToExecutionCode(error);
+      let cause: unknown = error;
+      while (MiddlewareError.isInstance(cause) && "cause" in cause) cause = cause.cause;
+      const cancelled = cause === runSignal?.reason ||
+        (cause instanceof Error && cause.name === "AbortError") ||
+        (isAiExecutionError(cause) && cause.code === "aborted");
+      const code = runSignal?.aborted && cancelled
+        ? isAiExecutionError(runSignal.reason) && runSignal.reason.code === "timeout"
+          ? "timeout"
+          : "aborted"
+        : normalizeErrorToExecutionCode(error);
 
       // Capture error message for logging at adapter boundary (not sent to clients)
       const errorMessage =

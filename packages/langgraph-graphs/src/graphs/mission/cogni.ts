@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /** The reusable cogni core; models, capabilities and host identity are injected. */
+import { isAiExecutionError } from "@cogni/ai-core";
 import { BaseLanguageModel } from "@langchain/core/language_models/base";
 import { SystemMessage, ToolMessage } from "@langchain/core/messages";
 import { StructuredTool } from "@langchain/core/tools";
@@ -207,9 +208,12 @@ export function createCogniProgram(
 					let current: unknown = error;
 					while (MiddlewareError.isInstance(current) && "cause" in current)
 						current = current.cause;
-					return current instanceof InvalidCompletionError;
+					return current instanceof InvalidCompletionError ||
+						(isAiExecutionError(current) &&
+							(current.code === "timeout" || current.code === "rate_limit"));
 				},
-				initialDelayMs: 0,
+				initialDelayMs: 250,
+				maxDelayMs: 1000,
 				onFailure: "error",
 			}),
 			createMiddleware({

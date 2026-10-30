@@ -235,3 +235,35 @@ describe("cogni READ-mode deep agent (task.5377)", () => {
     ).toBe(true);
   });
 });
+
+
+describe("model-only retry", () => {
+  it.each(["timeout", "rate_limit", "provider_unavailable", "aborted"] as const)(
+    "only retries eligible %s failures", async (code) => {
+      let calls = 0;
+      const completionFn: CompletionFn = () => {
+        calls++;
+        return {
+          stream: (async function* () {})(),
+          final: Promise.resolve(calls === 1
+            ? { ok: false as const, error: code }
+            : { ok: true as const, content: "answer", finishReason: "stop" }),
+        };
+      };
+      const { stream, final } = createInProcGraphRunner({
+        program: "cogni-chat",
+        sourceContext: { nodeId: "test", origin: "https://test.example", mission: { content: "mission", sourceRef: "test", buildSha: null } },
+        createGraph: createMissionGraph,
+        completionFn,
+        createToolExecFn: () => async () => ({ ok: true, value: {} }),
+        toolContracts: [],
+        request: { runId: "retry", messages: [{ role: "user", content: "hello" }], configurable: { model: PARENT_MODEL } },
+      });
+      for await (const _ of stream) { /* drain */ }
+      const result = await final;
+      const retryable = code === "timeout" || code === "rate_limit";
+      expect(calls).toBe(retryable ? 2 : 1);
+      expect(result.ok).toBe(retryable);
+    },
+  );
+});

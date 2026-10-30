@@ -478,6 +478,36 @@ describe("OpenAI Endpoint Parity (POST /v1/chat/completions)", () => {
       expect(text).toContain("data: [DONE]");
     });
 
+    it("sends keepalive comments while the subscriber is quiet and stops on cancel", async () => {
+      setupMocks();
+      const container = mockGetContainer();
+      let subscriberSignal: AbortSignal | undefined;
+      Object.assign(container, { runStream: {
+        subscribe: async function* (_runId: string, signal: AbortSignal) {
+          subscriberSignal = signal;
+          yield { id: "1-0", event: { type: "status" as const, phase: "thinking" as const } };
+          await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+        },
+      } });
+      vi.useFakeTimers();
+      try {
+        const { POST } = await import("@/app/api/v1/chat/completions/route");
+        const response = await POST(new NextRequest("http://localhost:3000/api/v1/chat/completions", {
+          method: "POST", body: JSON.stringify(createCompletionRequest({ stream: true })),
+        }));
+        if (!response.body) throw new Error("missing response stream");
+        const reader = response.body.getReader();
+        await reader.read(); // role
+        await reader.read(); // initial status
+        const heartbeat = reader.read();
+        await vi.advanceTimersByTimeAsync(15_000);
+        expect(new TextDecoder().decode((await heartbeat).value)).toBe(": keepalive\n\n");
+        await reader.cancel();
+        expect(subscriberSignal?.aborted).toBe(true);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally { vi.useRealTimers(); }
+    });
+
     it("should emit role announcement as first chunk (OpenAI convention)", async () => {
       setupMocks();
 

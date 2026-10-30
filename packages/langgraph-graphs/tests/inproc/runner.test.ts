@@ -14,7 +14,7 @@
  * @internal
  */
 
-import type { AiEvent } from "@cogni/ai-core";
+import { AiExecutionError, type AiEvent } from "@cogni/ai-core";
 import { AIMessage } from "@langchain/core/messages";
 import { describe, expect, it } from "vitest";
 
@@ -136,6 +136,56 @@ function createTestRunnerOptions(overrides?: {
 // ─────────────────────────────────────────────────────────────────────────────
 // Contract Tests
 // ─────────────────────────────────────────────────────────────────────────────
+
+describe("deadline attribution", () => {
+  it.each([
+    [new AiExecutionError("timeout"), "timeout"],
+    [new DOMException("cancelled", "AbortError"), "aborted"],
+  ])("emits matching error and final for %s", async (reason, code) => {
+    const ctl = new AbortController();
+    ctl.abort(reason);
+    const opts = createTestRunnerOptions();
+    const { stream, final } = createInProcGraphRunner({
+      ...opts, request: { ...opts.request, abortSignal: ctl.signal },
+    });
+    expect(await collectEvents(stream)).toEqual([
+      { type: "error", error: code }, { type: "done" },
+    ]);
+    expect(await final).toMatchObject({ ok: false, error: code });
+  });
+
+  it.each(["caller", "deadline"])('preserves first signal when %s aborts first', async (first) => {
+    const caller = new AbortController();
+    const deadline = new AbortController();
+    const signal = AbortSignal.any([caller.signal, deadline.signal]);
+    if (first === "caller") {
+      caller.abort();
+      deadline.abort(new AiExecutionError("timeout"));
+    } else {
+      deadline.abort(new AiExecutionError("timeout"));
+      caller.abort();
+    }
+    const opts = createTestRunnerOptions();
+    const { stream, final } = createInProcGraphRunner({ ...opts, request: { ...opts.request, abortSignal: signal } });
+    const code = first === "caller" ? "aborted" : "timeout";
+    expect(await collectEvents(stream)).toEqual([{ type: "error", error: code }, { type: "done" }]);
+    expect(await final).toMatchObject({ ok: false, error: code });
+  });
+
+  it("does not mask a programming error racing an abort", async () => {
+    const ctl = new AbortController();
+    const opts = createTestRunnerOptions({ createGraph: () => ({
+      invoke: async () => { ctl.abort(new AiExecutionError("timeout")); throw new Error("bug"); },
+    }) });
+    const { stream, final } = createInProcGraphRunner({
+      ...opts, request: { ...opts.request, abortSignal: ctl.signal },
+    });
+    expect(await collectEvents(stream)).toEqual([
+      { type: "error", error: "internal" }, { type: "done" },
+    ]);
+    expect(await final).toMatchObject({ ok: false, error: "internal" });
+  });
+});
 
 describe("createInProcGraphRunner", () => {
   describe("success path", () => {

@@ -677,6 +677,9 @@ export async function completionStream(
         failStream("stream_subscribe_error");
       }
     } finally {
+      if (!sawTerminal)
+        resolveFinal?.({ ok: false, requestId: runId, error: "aborted" });
+      subscriptionAbort.abort();
       input.abortSignal?.removeEventListener("abort", abortSubscription);
     }
   })();

@@ -22,7 +22,7 @@
  */
 
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
-import type { AiEvent } from "@cogni/ai-core";
+import { AiExecutionError, type AiEvent } from "@cogni/ai-core";
 import { RUN_STREAM_DEFAULT_TTL_SECONDS } from "@cogni/graph-execution-core";
 import { toUserId } from "@cogni/ids";
 import { SYSTEM_ACTOR } from "@cogni/ids/system";
@@ -587,10 +587,17 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         accountService,
       });
 
+    const executionController = new AbortController();
+    const executionTimer = setTimeout(
+      () => executionController.abort(new AiExecutionError("timeout")),
+      15 * 60_000
+    );
+    try {
     // Create graph executor and run
     const executor = createGraphExecutor(executeStream, toUserId(actorUserId));
     const scopedExecutor = createScopedGraphExecutor({
       executor,
+      abortSignal: executionController.signal,
       preflightCheckFn,
       commitByoUsage: async (fact, log) => {
         await commitUsageFact(
@@ -936,6 +943,9 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         error: final.error ?? "internal",
       };
       return NextResponse.json(errorResponse, { status: 200 });
+    }
+    } finally {
+      clearTimeout(executionTimer);
     }
   }
 );

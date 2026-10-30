@@ -20,6 +20,7 @@ const VIRTUAL_KEY_ID = "30000000-0000-4000-a000-000000000001";
 
 const mocks = vi.hoisted(() => ({
   runGraph: vi.fn(),
+  scopedSignal: undefined as AbortSignal | undefined,
   checkIdempotency: vi.fn().mockResolvedValue({ status: "new" }),
   createPendingRequest: vi.fn().mockResolvedValue({
     status: "claimed",
@@ -79,7 +80,10 @@ vi.mock("@/bootstrap/graph-executor.factory", () => {
   };
   return {
     createGraphExecutor: () => executor,
-    createScopedGraphExecutor: () => executor,
+    createScopedGraphExecutor: (params: { abortSignal?: AbortSignal }) => {
+      mocks.scopedSignal = params.abortSignal;
+      return executor;
+    },
   };
 });
 
@@ -134,6 +138,8 @@ describe("POST /api/internal/graphs/{graphId}/runs terminal publication", () => 
         body: JSON.stringify({ executionGrantId: scheduled ? "40000000-0000-4000-a000-000000000001" : null, runId: RUN_ID, input: { messages: [{ role: "user", content: "decide" }], modelRef: { providerKey: "platform", modelId: "test-model" }, actorUserId: USER_ID, billingAccountId: BILLING_ID, virtualKeyId: VIRTUAL_KEY_ID } }),
       }), { params: Promise.resolve({ graphId: `langgraph:${graph}` }) });
       expect(mocks.runGraph).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ requestIntent: scheduled ? "decide" : "answer" }));
+      expect(mocks.scopedSignal).toBeInstanceOf(AbortSignal);
+      expect(mocks.scopedSignal?.aborted).toBe(false);
     }
   });
 

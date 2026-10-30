@@ -202,12 +202,40 @@ function createOpenAiSseStream(
   completionId: string,
   created: number,
   includeUsage: boolean,
-  log: RequestContext["log"]
+  log: RequestContext["log"],
+  cancelSubscription: () => void,
+  requestSignal: AbortSignal
 ): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
+  const iterator = aiStream[Symbol.asyncIterator]();
+  let timer: ReturnType<typeof setInterval> | undefined;
+  let closed = false;
+  const cleanup = () => {
+    if (closed) return;
+    closed = true;
+    if (timer) clearInterval(timer);
+    requestSignal.removeEventListener("abort", cleanup);
+    cancelSubscription();
+  };
 
   return new ReadableStream({
+    cancel() {
+      cleanup();
+      void iterator.return?.().catch(() => undefined);
+    },
     async start(controller) {
+      if (requestSignal.aborted) {
+        cleanup();
+        controller.close();
+        return;
+      }
+      requestSignal.addEventListener("abort", cleanup, { once: true });
+      timer = setInterval(() => {
+        if (!closed) {
+          try { controller.enqueue(encoder.encode(": keepalive\n\n")); }
+          catch { cleanup(); }
+        }
+      }, 15_000);
       try {
         // First chunk: announce role
         const firstChunk: ChatCompletionChunk = {
@@ -229,7 +257,7 @@ function createOpenAiSseStream(
 
         // Stream content and tool call chunks
         let toolCallIndex = 0;
-        for await (const event of aiStream) {
+        for await (const event of { [Symbol.asyncIterator]: () => iterator }) {
           if (event.type === "text_delta") {
             const chunk: ChatCompletionChunk = {
               id: completionId,
@@ -382,6 +410,7 @@ function createOpenAiSseStream(
         controller.enqueue(encoder.encode(sseEncode("[DONE]")));
         controller.close();
       } catch (error) {
+        if (closed) return;
         // On error, emit a final error chunk and close
         const errorChunk: ChatCompletionChunk = {
           id: completionId,
@@ -403,6 +432,8 @@ function createOpenAiSseStream(
         controller.close();
         // Log the error — wrapper can't catch errors from inside a ReadableStream
         log.error({ error }, "SSE stream error");
+      } finally {
+        cleanup();
       }
     },
   });
@@ -461,13 +492,14 @@ export const POST = wrapRouteHandlerWithLogging(
           providerKey: "platform" as const,
           modelId: input.model,
         };
+        const subscriptionController = new AbortController();
         const { stream, final } = await chatCompletionStream(
           {
             messages: input.messages,
             modelRef,
             sessionUser,
             ...(graphName ? { graphName } : {}),
-            abortSignal: request.signal,
+            abortSignal: AbortSignal.any([request.signal, subscriptionController.signal]),
             ...(idempotencyKey ? { idempotencyKey } : {}),
           },
           ctx
@@ -484,7 +516,9 @@ export const POST = wrapRouteHandlerWithLogging(
           completionId,
           created,
           includeUsage,
-          ctx.log
+          ctx.log,
+          () => subscriptionController.abort(),
+          request.signal
         );
 
         return new NextResponse(sseStream, {
