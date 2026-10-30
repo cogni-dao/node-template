@@ -311,7 +311,7 @@ export const NODE_LANGGRAPH_CATALOG = {
       "Hub-grounded read-only chat: plans, delegates goal and work-item reading to a cheap subagent, answers; files nothing",
     toolIds: COGNI_READ_TOOL_IDS as readonly string[],
     graphFactory: createMissionGraph,
-    systemPrompt: COGNI_READ_PROMPT,
+    systemPrompt: `${COGNI_READ_PROMPT}\n\nAnswer ordinary general-knowledge questions directly when no node-specific evidence is needed. For node-specific claims, inspect the relevant available source, cite what you actually observed, and acknowledge missing evidence; the virtual filesystem is not the mounted repository. Do not repeatedly search or list the same missing or unsupported path or retry an unchanged failed operation; use an appropriate available source or finish with the limitation.`,
     program: "cogni-chat",
   },
   cogni: {
