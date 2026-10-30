@@ -7,7 +7,7 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, copyFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,7 +21,16 @@ const capture = (command, args, cwd = root) => execFileSync(command, args, { cwd
 const originals = new Map();
 const sha256 = bytes => createHash("sha256").update(bytes).digest("hex");
 const sourceSha = capture("git", ["rev-parse", "HEAD"]);
-const manifest = { sourceSha, sourceOnlyMutation: [], artifacts: [], assertions: [] };
+const prHeadSha = process.env.PR_HEAD_SHA ?? sourceSha;
+const checkoutTreeSha = capture("git", ["rev-parse", "HEAD^{tree}"]);
+const prHeadTreeSha = capture("git", ["rev-parse", `${prHeadSha}^{tree}`]);
+if (checkoutTreeSha !== prHeadTreeSha) throw Error("CI checkout differs from PR head; rebase before certifying artifacts");
+const manifest = { sourceSha: prHeadSha, prHeadSha, checkoutSha: sourceSha, checkoutTreeSha, prHeadTreeSha, sourceOnlyMutation: [], artifacts: [], assertions: [] };
+function assertEntrypoints(dir, pkg) {
+  for (const map of Object.values(pkg.exports)) {
+    for (const path of Object.values(map)) if (!existsSync(join(dir, path))) throw Error(`Missing declared entrypoint for ${pkg.name}: ${path}`);
+  }
+}
 const packageDirs = ["read-contracts", "work-items", "ai-tools", "knowledge-store", "langgraph-graphs"];
 try {
   for (const [path, pattern] of [
@@ -44,6 +53,7 @@ try {
   run("pnpm", ["packages:build"]);
   for (const dir of packageDirs) {
     const pkg = JSON.parse(readFileSync(join(root, "packages", dir, "package.json")));
+    assertEntrypoints(join(root, "packages", dir), pkg);
     run("npm", ["pack", "--pack-destination", artifacts], join(root, "packages", dir));
     const filename = `${pkg.name.replace(/^@/, "").replaceAll("/", "-")}-${pkg.version}.tgz`;
     manifest.artifacts.push({ name: pkg.name, version: pkg.version, filename, sha256: sha256(readFileSync(join(artifacts, filename))) });
@@ -59,8 +69,10 @@ try {
     const entry = name === "ai-core" ? join(root, "packages/ai-core/src/index.ts") : join(proofRoot, `${name}.ts`);
     if (nodeEntries[name]) writeFileSync(entry, nodeEntries[name]);
     const dir = join(proofRoot, name); mkdirSync(dir);
+    const pkg = { name: `@cogni/${name}`, version: "0.0.0", type: "module", exports: { ".": { ...(declarations ? { types: "./dist/index.d.ts" } : {}), import: "./dist/index.js" } }, files: ["dist"] };
+    writeFileSync(join(dir, "package.json"), JSON.stringify(pkg));
     await build({ entry: { index: entry }, outDir: join(dir, "dist"), format: ["esm"], platform: "node", splitting: false, clean: true, config: false, outExtension: () => ({ js: ".js", dts: ".d.ts" }), tsconfig: join(root, "packages/ai-tools/tsconfig.json"), external, noExternal: ["@cogni/node-contracts"], dts: declarations ? { compilerOptions: { composite: false, incremental: false, rootDir: "/" }, resolve: ["@cogni/ai-core"] } : false });
-    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: `@cogni/${name}`, version: "0.0.0", type: "module", exports: { ".": { ...(declarations ? { types: "./dist/index.d.ts" } : {}), import: "./dist/index.js" } }, files: ["dist"] }));
+    assertEntrypoints(dir, pkg);
     run("npm", ["pack", "--pack-destination", artifacts], dir);
     const filename = `cogni-${name}-0.0.0.tgz`;
     manifest.artifacts.push({ name: `@cogni/${name}`, version: "0.0.0", filename, sha256: sha256(readFileSync(join(artifacts, filename))), testArtifact: true });
@@ -101,6 +113,10 @@ try {
   }
   manifest.installedDependencies = dependencies;
   manifest.result = "PASS";
+} catch (error) {
+  manifest.result = "FAIL";
+  manifest.failure = error instanceof Error ? error.message : String(error);
+  throw error;
 } finally {
   for (const [path, original] of originals) writeFileSync(path, original);
   manifest.restoredTemporarySourceProbe = [...originals].every(([path, original]) => readFileSync(path, "utf8") === original);

@@ -91,6 +91,8 @@ jobs:
         run: pnpm packages:build
 
       - name: Installed read-envelope inheritance
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: node scripts/proof/read-envelope-inheritance.mjs
 
       - name: Preserve read-envelope proof receipt
