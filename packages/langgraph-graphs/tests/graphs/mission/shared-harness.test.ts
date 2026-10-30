@@ -21,6 +21,7 @@ import { createMissionGraph } from "../../../src/graphs/mission/graph";
 import { RunReceipts } from "../../../src/graphs/mission/receipts";
 import { createScoresGuard } from "../../../src/graphs/mission/score-guard";
 import { createPoetGraph } from "../../../src/graphs/poet/graph";
+import { createMemoryPersistence } from "../../../src/inproc/postgres-persistence";
 import { createInProcGraphRunner } from "../../../src/inproc/runner";
 import type { CompletionFn } from "../../../src/inproc/types";
 import { fromBaseMessage } from "../../../src/runtime/core/message-converters";
@@ -218,6 +219,139 @@ describe("shared cogni harness", () => {
 		expect(final.ok).toBe(true);
 		expect(final.content).toBe("Finished.");
 		expect(calls).toBe(3);
+	});
+
+	it("rejects scores after a partial SDK skill read", async () => {
+		let calls = 0,
+			writes = 0;
+		const writer = new DynamicStructuredTool({
+			name: "writer",
+			description: "test",
+			schema: z.object({}).passthrough(),
+			func: async () => {
+				writes++;
+				return JSON.stringify({ success: true });
+			},
+		});
+		const completionFn: CompletionFn = (request) => {
+			const turn = calls++;
+			if (turn === 1)
+				expect(
+					request.messages.find((m) => m.role === "tool")?.content,
+				).toContain("skill_requires_complete_read");
+			if (turn === 2)
+				expect(
+					request.messages.find((m) => m.toolCallId === "write")?.content,
+				).toContain("incomplete_guidance_or_read");
+			const tool =
+				turn === 0
+					? {
+							name: "read_file",
+							args: { file_path: "/skills/test-skill/SKILL.md", limit: 2 },
+							id: "read",
+						}
+					: turn === 1
+						? {
+								name: "work_item_scores_write",
+								args: {
+									id: "task.1",
+									expectedRevision: 1,
+									scores: { goal: { v: 3 } },
+								},
+								id: "write",
+							}
+						: undefined;
+			return {
+				stream: (async function* () {})(),
+				final: Promise.resolve({
+					ok: true as const,
+					...(tool
+						? {
+								toolCalls: [
+									{
+										id: tool.id,
+										type: "function" as const,
+										function: {
+											name: tool.name,
+											arguments: JSON.stringify(tool.args),
+										},
+									},
+								],
+							}
+						: { content: "done" }),
+				}),
+			};
+		};
+		const run = createInProcGraphRunner({
+			createGraph: (opts) => {
+				if (!opts.receipts) throw new Error("missing receipts");
+				opts.receipts.observe(
+					"core__goal_list",
+					{},
+					{ goals: [{ id: "goal-one", content: "Goal" }] },
+				);
+				opts.receipts.observe(
+					"core__work_item_read",
+					{},
+					{
+						item: {
+							id: "task.1",
+							type: "task",
+							status: "needs_implement",
+							revision: 1,
+							labels: ["goal:one"],
+							createdAt: "2026-10-01T00:00:00Z",
+							scores: { goal: { v: 1 } },
+						},
+					},
+				);
+				return createCogniProgram({
+					...opts,
+					guardedTools: [createScoresGuard(opts.receipts, writer, [])],
+				});
+			},
+			sourceContext: {
+				nodeId: "node",
+				origin: "https://node.example",
+				governingIndex: [
+					{
+						id: "test-skill",
+						domain: "build-agents",
+						entryType: "skill",
+						useWhen: "test",
+					},
+				],
+			},
+			completionFn,
+			createToolExecFn: () => async () => ({
+				ok: true,
+				value: {
+					mode: "get",
+					entries: [{ id: "test-skill", content: "full skill body" }],
+				},
+			}),
+			toolContracts: [],
+			request: {
+				runId: "partial-skill",
+				messages: [{ role: "user", content: "Read skill and score" }],
+				configurable: { model: "test", toolIds: [] },
+			},
+		});
+		for await (const _event of run.stream) {
+			/* drain */
+		}
+		expect((await run.final).ok).toBe(true);
+		expect(calls).toBe(3);
+		expect(writes).toBe(0);
+	});
+	it("shares working store but allocates a fresh memory saver per invocation", async () => {
+		const first = await createMemoryPersistence();
+		const second = await createMemoryPersistence(first.store);
+		expect(second.checkpointer).not.toBe(first.checkpointer);
+		await first.store.put(["test"], "key", { value: "shared" });
+		expect((await second.store.get(["test"], "key"))?.value).toEqual({
+			value: "shared",
+		});
 	});
 
 	it("uses the SDK task limit before a fifth delegated child", async () => {

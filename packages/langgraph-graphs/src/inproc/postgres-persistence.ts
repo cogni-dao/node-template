@@ -7,10 +7,10 @@ import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
 import { PostgresStore } from "@langchain/langgraph-checkpoint-postgres/store";
 import { InMemoryStore, MemorySaver } from "@langchain/langgraph";
 
-export async function createMemoryPersistence() {
+export async function createMemoryPersistence(store = new InMemoryStore()) {
   return {
     checkpointer: new MemorySaver(),
-    store: new InMemoryStore(),
+    store,
     async close() {},
   };
 }

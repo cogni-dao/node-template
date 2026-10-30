@@ -9,6 +9,7 @@ export class HubSkillBackend implements BackendProtocolV2 {
   constructor(
     ids: readonly string[],
     private readonly readBody: (id: string) => Promise<string>,
+    private readonly onReadFailure: () => void = () => {},
   ) {
     this.ids = new Set(
       ids.filter((id) => /^[a-z0-9][a-z0-9-]{0,63}$/.test(id)),
@@ -35,11 +36,16 @@ export class HubSkillBackend implements BackendProtocolV2 {
   }
   async read(path: string, offset = 0, limit = 500): Promise<ReadResult> {
     try {
-      if (offset !== 0) return { error: "skill_requires_complete_read" };
+      if (offset !== 0) {
+        this.onReadFailure();
+        return { error: "skill_requires_complete_read" };
+      }
       const body = await this.body(path);
       const lines = body.split("\n");
-      if (lines.length > limit)
+      if (lines.length > limit) {
+        this.onReadFailure();
         return { error: "skill_requires_complete_read" };
+      }
       return {
         content: body,
         mimeType: "text/markdown",
@@ -48,6 +54,7 @@ export class HubSkillBackend implements BackendProtocolV2 {
         endLine: lines.length,
       };
     } catch (error) {
+      this.onReadFailure();
       return {
         error: error instanceof Error ? error.message : "skill_read_failed",
       };
@@ -66,6 +73,7 @@ export class HubSkillBackend implements BackendProtocolV2 {
         },
       };
     } catch (error) {
+      this.onReadFailure();
       return {
         error: error instanceof Error ? error.message : "skill_read_failed",
       };

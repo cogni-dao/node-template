@@ -125,6 +125,9 @@ export function createCogniProgram(
 			(async () => {
 				throw new Error("skill_source_unavailable");
 			}),
+		() => {
+			if (opts.receipts) opts.receipts.denied = true;
+		},
 	);
 	const backend = new CompositeBackend(new StateBackend(), routes);
 	const guidanceIndex = JSON.stringify(index);

@@ -71,10 +71,11 @@ import {
   resolveAiAdapterDeps,
 } from "./container";
 
-// Shared only for this process; durable storage requires a separately provisioned host.
-let persistenceInstance: ReturnType<typeof createMemoryPersistence> | undefined;
-function getCogniPersistence() {
-  return (persistenceInstance ??= createMemoryPersistence());
+// Working memory is process-shared; each invocation owns its checkpoint saver.
+let memoryStore: Promise<Awaited<ReturnType<typeof createMemoryPersistence>>["store"]> | undefined;
+async function getCogniPersistence() {
+  memoryStore ??= createMemoryPersistence().then(({ store }) => store);
+  return createMemoryPersistence(await memoryStore);
 }
 
 /**
