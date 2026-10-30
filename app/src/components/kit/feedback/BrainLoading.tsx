@@ -17,6 +17,8 @@ import {
   brainLoadingGraphic,
   brainLoadingMark,
   brainLoadingOrbit,
+  brainLoadingSpectrum,
+  brainLoadingTrack,
 } from "@/styles/ui";
 
 export function BrainLoading() {
@@ -28,7 +30,7 @@ export function BrainLoading() {
           fill="none"
           aria-hidden="true"
           focusable="false"
-          className={brainLoadingOrbit()}
+          className={brainLoadingTrack()}
         >
           <circle
             cx="40"
@@ -38,17 +40,10 @@ export function BrainLoading() {
             strokeWidth="2"
             strokeOpacity="0.12"
           />
-          <circle
-            cx="40"
-            cy="40"
-            r="36"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            pathLength="100"
-            strokeDasharray="22 78"
-          />
         </svg>
+        <span aria-hidden="true" className={brainLoadingOrbit()}>
+          <span className={brainLoadingSpectrum()} />
+        </span>
         <Image
           src="/brain-loading.webp"
           alt=""

@@ -85,6 +85,7 @@ import { ErrorAlert } from "@/components";
 ## Notes
 
 - `BrainLoading` keeps the brain stationary inside one linear SVG activity arc. Use the existing `motion-safe:animate-spin` utility; do not add logo scale, tumbling, or custom loop easing.
+- The SVG mask turns while its spectrum counter-rotates at the same speed, keeping rainbow hues aligned with the brain. Both transforms stop under reduced motion; the gradient and mask themselves remain static.
 - ErrorAlert deduplicates by code (prevents spam)
 - Supports up to 3 action buttons (retry, switchFree, addCredits)
 - Auto-dismiss timeout configurable via prop

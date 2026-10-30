@@ -26,8 +26,14 @@ export const brainLoadingGraphic = cva(
 );
 
 export const brainLoadingOrbit = cva(
-  "brain-loading-orbit absolute inset-0 size-20 text-foreground/70 motion-safe:animate-spin"
+  "brain-loading-orbit absolute inset-0 size-20 motion-safe:animate-spin"
 );
+
+export const brainLoadingSpectrum = cva(
+  "brain-loading-spectrum block size-full motion-safe:animate-spin"
+);
+
+export const brainLoadingTrack = cva("absolute inset-0 size-20 text-foreground/70");
 
 export const brainLoadingMark = cva("brain-loading-mark size-12");
 

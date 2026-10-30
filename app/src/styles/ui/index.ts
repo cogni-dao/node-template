@@ -60,6 +60,8 @@ export {
   brainLoadingGraphic,
   brainLoadingMark,
   brainLoadingOrbit,
+  brainLoadingSpectrum,
+  brainLoadingTrack,
   chatContainer,
   chatDivider,
   chatForm,
