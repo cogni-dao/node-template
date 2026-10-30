@@ -121,7 +121,10 @@ export class RunReceipts {
         .safeParse(value);
       if (!input.success || !output.success) return;
       const entry = output.data.entries.find((row) => row.id === input.data.id);
-      if (!entry || new TextEncoder().encode(entry.content).length > 65_536) {
+      if (
+        !entry?.content.trim() ||
+        new TextEncoder().encode(entry.content).length > 65_536
+      ) {
         this.denied = true;
         return;
       }

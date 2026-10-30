@@ -10,7 +10,9 @@ import type { CreateReactAgentGraphOptions } from "../types";
 import {
   COGNI_READ_PROMPT,
   COGNI_DECIDE_PROMPT,
+  EVIDENCE_READER_DESCRIPTION,
   EVIDENCE_READER_PROMPT,
+  LEDGER_READER_DESCRIPTION,
   LEDGER_READER_PROMPT,
   REQUIRED_GUIDANCE_IDS,
   prioritizerPrompt,
@@ -72,7 +74,7 @@ export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
     profile,
     children: [
       {
-        description: "Read relevant node evidence for the assigned task.",
+        description: EVIDENCE_READER_DESCRIPTION,
         profile: cogniProfile({
           id: "general-purpose",
           instructions: EVIDENCE_READER_PROMPT,
@@ -83,7 +85,7 @@ export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
         }),
       },
       {
-        description: "Read and summarize the goal and work ledger.",
+        description: LEDGER_READER_DESCRIPTION,
         profile: cogniProfile({
           id: "ledger-reader",
           instructions: LEDGER_READER_PROMPT,

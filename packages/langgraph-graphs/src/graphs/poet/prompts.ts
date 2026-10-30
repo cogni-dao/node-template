@@ -46,3 +46,6 @@ Stay aligned with the user's intent. Be useful first, poetic second — but alwa
 
 export const POET_CHILD_PROMPT =
 	"Complete the delegated creative task using only available read tools.";
+
+export const POET_CHILD_DESCRIPTION =
+  "Complete an independent creative subtask.";

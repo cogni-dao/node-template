@@ -31,3 +31,8 @@ export function prioritizerPrompt(base: string, deciding: boolean) {
   );
 }
 export const WORK_PRIORITIZER_SYSTEM_PROMPT = COGNI_DECIDE_PROMPT;
+
+export const EVIDENCE_READER_DESCRIPTION =
+  "Read relevant node evidence for the assigned task.";
+export const LEDGER_READER_DESCRIPTION =
+  "Read and summarize the goal and work ledger.";

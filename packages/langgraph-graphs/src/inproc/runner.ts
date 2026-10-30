@@ -231,6 +231,7 @@ export function createInProcGraphRunner<TTool = unknown>(
         .parse(result.value);
       const entry = parsed.entries.find((row) => row.id === id);
       if (!entry) throw new Error("skill_not_found");
+      if (!entry.content.trim()) throw new Error("skill_body_empty");
       if (
         new TextEncoder().encode(entry.content).length > 65_000 ||
         entry.content.split("\n").length > 490

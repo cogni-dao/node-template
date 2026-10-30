@@ -23,6 +23,7 @@ import {
 	cogniProfile,
 	createCogniProgram,
 } from "../../../src/graphs/mission/cogni";
+import { HubSkillBackend } from "../../../src/graphs/cogni/skill-backend";
 import { createMissionGraph } from "../../../src/graphs/mission/graph";
 import { RunReceipts } from "../../../src/graphs/mission/receipts";
 import { createScoresGuard } from "../../../src/graphs/mission/score-guard";
@@ -1183,8 +1184,32 @@ describe("shared cogni harness", () => {
 			},
 		]);
 	});
+	it.each(["", " \n\t"])("rejects blank lazy /skills bodies before frontmatter wrapping: %j", async (body) => {
+		let failures = 0;
+		const backend = new HubSkillBackend(["test-skill"], async () => body, () => { failures++; });
+		expect(await backend.read("/test-skill/SKILL.md")).toEqual({ error: "skill_body_empty" });
+		expect(await backend.readRaw("/test-skill/SKILL.md")).toEqual({ error: "skill_body_empty" });
+		expect(failures).toBe(2);
+	});
+
+	it.each(["", " \n\t"])("rejects blank guidance without replacing complete-read provenance: %j", (content) => {
+		const receipts = new RunReceipts("https://node.example");
+		const id = "dao-goals-design";
+		const observe = (body: string) => receipts.observe("core__knowledge_read", { id }, { mode: "get", entries: [{ id, content: body }] });
+		observe(content);
+		expect(receipts.denied).toBe(true);
+		expect(receipts.guidance.has(id)).toBe(false);
+		expect(receipts.sources.size).toBe(0);
+		const complete = new RunReceipts("https://node.example");
+		complete.observe("core__knowledge_read", { id }, { mode: "get", entries: [{ id, content: "Complete policy" }] });
+		const source = [...complete.sources.values()][0];
+		complete.observe("core__knowledge_read", { id }, { mode: "get", entries: [{ id, content }] });
+		expect(complete.denied).toBe(true);
+		expect([...complete.sources.values()]).toEqual([source]);
+	});
+
 	it("denies score writes after a failed or incomplete lazy skill read", async () => {
-		for (const failure of ["denied", "incomplete"]) {
+		for (const failure of ["denied", "incomplete", "empty", "whitespace"]) {
 			let writes = 0;
 			let result = "";
 			const run = createInProcGraphRunner({
@@ -1244,7 +1269,7 @@ describe("shared cogni harness", () => {
 				createToolExecFn: () => async () =>
 					failure === "denied"
 						? { ok: false, errorCode: "unavailable", safeMessage: "denied" }
-						: { ok: true, value: { mode: "get", entries: [] } },
+						: { ok: true, value: { mode: "get", entries: failure === "incomplete" ? [] : [{ id: "optional-skill", content: failure === "empty" ? "" : " \n\t" }] } },
 				toolContracts: [],
 				request: {
 					runId: `skill-${failure}`,

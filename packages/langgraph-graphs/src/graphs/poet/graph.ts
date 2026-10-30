@@ -17,7 +17,7 @@
 import { cogniProfile, createCogniProgram } from "../cogni/graph";
 import { POET_TOOL_IDS } from "./tools";
 import type { CreateReactAgentGraphOptions } from "../types";
-import { POET_CHILD_PROMPT, POET_SYSTEM_PROMPT } from "./prompts";
+import { POET_CHILD_DESCRIPTION, POET_CHILD_PROMPT, POET_SYSTEM_PROMPT } from "./prompts";
 
 /**
  * Graph name constant for routing.
@@ -40,7 +40,7 @@ export function createPoetGraph(opts: CreateReactAgentGraphOptions) {
 		}),
 		children: [
 			{
-				description: "Complete an independent creative subtask.",
+				description: POET_CHILD_DESCRIPTION,
 				profile: cogniProfile({
 					id: "general-purpose",
 					instructions: POET_CHILD_PROMPT,

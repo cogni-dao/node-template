@@ -29,6 +29,7 @@ export class HubSkillBackend implements BackendProtocolV2 {
 			throw new Error("invalid_skill_path");
 		const id = match[1] ?? "";
 		const body = await this.readBody(id);
+		if (!body.trim()) throw new Error("skill_body_empty");
 		const content = `---\nname: ${id}\ndescription: Node guidance ${id}\n---\n\n${body}`;
 		if (new TextEncoder().encode(content).length > 65_536)
 			throw new Error("skill_body_exceeds_limit");
