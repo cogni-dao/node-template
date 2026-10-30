@@ -16,9 +16,9 @@
       "default": "./dist/index.js"
     },
     "./work-items": {
-      "types": "./dist/work-items.d.ts",
-      "import": "./dist/work-items.js",
-      "default": "./dist/work-items.js"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
     },
     "./knowledge": {
       "types": "./dist/index.d.ts",
@@ -31,9 +31,9 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsup src/index.ts src/work-items.ts --format esm --platform neutral",
+    "build": "tsup src/index.ts --format esm --platform neutral",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run tests/reads.test.ts"
+    "test": "vitest run --root ../ai-tools --config ../ai-tools/vitest.config.ts tests/work-item-query.test.ts"
   },
   "dependencies": {
     "zod": "^4.1.12"

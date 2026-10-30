@@ -22,7 +22,7 @@
  * @internal
  */
 
-import { toHttpKnowledgeRow } from "@/app/_facades/read-envelopes";
+import { toHttpKnowledgeRow } from "@/app/_facades/read-envelopes.server";
 import { unstable_cache } from "next/cache";
 import {
   buildKnowledgeGraph,

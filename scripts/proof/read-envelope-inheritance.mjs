@@ -25,12 +25,12 @@ const manifest = { sourceSha, sourceOnlyMutation: [], artifacts: [], assertions:
 const packageDirs = ["read-contracts", "work-items", "ai-tools", "knowledge-store", "langgraph-graphs"];
 try {
   for (const [path, pattern] of [
-    ["packages/read-contracts/src/work-items.ts", "export const WorkItemDtoSchema = z.object({"],
+    ["packages/read-contracts/src/index.ts", "export const WorkItemDtoSchema = z.object({"],
     ["packages/read-contracts/src/index.ts", "export const KnowledgeRowSchema = z.object({"],
   ]) {
     const full = join(root, path); const before = readFileSync(full, "utf8");
-    if (!before.includes(pattern) || before.includes("futureContextProbe")) throw Error(`Unexpected canonical source: ${path}`);
-    originals.set(full, before);
+    if (!before.includes(pattern) || before.slice(before.indexOf(pattern), before.indexOf(pattern) + pattern.length + 80).includes("futureContextProbe")) throw Error(`Unexpected canonical source: ${path}`);
+    if (!originals.has(full)) originals.set(full, before);
     const after = before.replace(pattern, `${pattern}\n  futureContextProbe: z.string().optional(),`);
     writeFileSync(full, after);
     manifest.sourceOnlyMutation.push({ path, before: sha256(before), after: sha256(after) });
@@ -59,7 +59,7 @@ try {
     const entry = name === "ai-core" ? join(root, "packages/ai-core/src/index.ts") : join(proofRoot, `${name}.ts`);
     if (nodeEntries[name]) writeFileSync(entry, nodeEntries[name]);
     const dir = join(proofRoot, name); mkdirSync(dir);
-    await build({ entry: { index: entry }, outDir: join(dir, "dist"), format: ["esm"], platform: "node", splitting: false, clean: true, config: false, tsconfig: join(root, "packages/ai-tools/tsconfig.json"), external, noExternal: ["@cogni/node-contracts"], dts: declarations ? { compilerOptions: { composite: false, incremental: false, rootDir: "/" }, resolve: ["@cogni/ai-core"] } : false });
+    await build({ entry: { index: entry }, outDir: join(dir, "dist"), format: ["esm"], platform: "node", splitting: false, clean: true, config: false, outExtension: () => ({ js: ".js", dts: ".d.ts" }), tsconfig: join(root, "packages/ai-tools/tsconfig.json"), external, noExternal: ["@cogni/node-contracts"], dts: declarations ? { compilerOptions: { composite: false, incremental: false, rootDir: "/" }, resolve: ["@cogni/ai-core"] } : false });
     writeFileSync(join(dir, "package.json"), JSON.stringify({ name: `@cogni/${name}`, version: "0.0.0", type: "module", exports: { ".": { ...(declarations ? { types: "./dist/index.d.ts" } : {}), import: "./dist/index.js" } }, files: ["dist"] }));
     run("npm", ["pack", "--pack-destination", artifacts], dir);
     const filename = `cogni-${name}-0.0.0.tgz`;

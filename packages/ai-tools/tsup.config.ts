@@ -17,7 +17,7 @@ export const tsupConfig = defineConfig({
   entry: ["src/index.ts"],
   format: ["esm"],
   dts: process.env.COGNI_DTS_ONLY === "1"
-    ? { only: true, resolve: ["@cogni/ai-core"], compilerOptions: { composite: false, incremental: false } }
+    ? { only: true, resolve: ["@cogni/ai-core"], compilerOptions: { composite: false, incremental: false, rootDir: "..", baseUrl: import.meta.dirname, paths: { "@cogni/ai-core": ["../ai-core/src/index.ts"] } } }
     : false, // the final declaration pass runs AFTER root tsc
   noExternal: ["@cogni-dao/work-items"],
   clean: false, // preserve .d.ts files from tsc -b (incremental builds)

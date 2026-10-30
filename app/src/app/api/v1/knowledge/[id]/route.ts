@@ -13,7 +13,7 @@
  * @public
  */
 
-import { toHttpKnowledgeRow } from "@/app/_facades/read-envelopes";
+import { toHttpKnowledgeRow } from "@/app/_facades/read-envelopes.server";
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { getContainer } from "@/bootstrap/container";

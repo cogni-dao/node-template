@@ -36,8 +36,8 @@ export interface ToToolSpecResult {
  * @param contract - Tool contract with Zod schemas
  * @returns Result with spec and any warnings
  */
-export function toToolSpec(
-  contract: ToolContract<string, unknown, unknown, unknown>
+export function toToolSpec<TInput, TOutput, TRedacted>(
+  contract: ToolContract<string, TInput, TOutput, TRedacted>
 ): ToToolSpecResult {
   const inputSchema = z.toJSONSchema(contract.inputSchema, {
     io: "input",

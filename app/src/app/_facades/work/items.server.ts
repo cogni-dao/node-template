@@ -40,7 +40,7 @@ import {
   NodeAdminRequiredError
 } from "@cogni/knowledge-store";
 import { getContainer } from "@/bootstrap/container";
-import { toHttpWorkItem } from "../read-envelopes";
+import { toHttpWorkItem } from "../read-envelopes.server";
 
 /**
  * Thrown when the opaque pagination cursor cannot be decoded — translated

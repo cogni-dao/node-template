@@ -11,6 +11,7 @@
  * @internal
  */
 
+import { SubjectRefSchema, WorkItemDtoSchema, KnowledgeRowSchema } from "@cogni-dao/read-contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import type {
@@ -220,5 +221,20 @@ describe("core__work_item_query", () => {
     expect(params).not.toHaveProperty("scored");
     expect(params).not.toHaveProperty("labels");
     expect(params).not.toHaveProperty("labelPrefix");
+  });
+});
+
+describe("public read semantics", () => {
+  it("requires actual revisions and discriminated identifiers", () => {
+    for (const ref of [{ kind: "user", userId: "u" }, { kind: "agent", agentId: "a" }, { kind: "system", serviceId: "s" }]) {
+      expect(SubjectRefSchema.parse(ref)).toEqual(ref);
+    }
+    expect(SubjectRefSchema.safeParse({ kind: "agent", id: "a" }).success).toBe(false);
+    expect(WorkItemDtoSchema.shape.revision.safeParse(undefined).success).toBe(false);
+  });
+  it("retains nullable timestamps and optional nullable triggers", () => {
+    expect(KnowledgeRowSchema.shape.createdAt.parse(null)).toBeNull();
+    expect(KnowledgeRowSchema.shape.useWhen.parse(undefined)).toBeUndefined();
+    expect(KnowledgeRowSchema.shape.useWhen.parse(null)).toBeNull();
   });
 });
