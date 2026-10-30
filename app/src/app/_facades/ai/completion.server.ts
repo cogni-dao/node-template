@@ -527,34 +527,40 @@ export async function completionStream(
   );
   const iterator = rawSubscription[Symbol.asyncIterator]();
   const acceptedAtMs = performance.now();
+  let subscriptionCleaned = false;
+  const cleanupSubscription = () => {
+    if (subscriptionCleaned) return;
+    subscriptionCleaned = true;
+    subscriptionAbort.abort();
+    input.abortSignal?.removeEventListener("abort", abortSubscription);
+    try { void iterator.return?.().catch(() => undefined); } catch { /* already closed */ }
+  };
 
   let prefetchedEntry: Awaited<ReturnType<typeof iterator.next>> | undefined;
   if ((input.acceptanceMode ?? "first-event") === "first-event") {
     let deadline: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<"timeout">((resolve) => {
-      deadline = setTimeout(() => resolve("timeout"), FIRST_EVENT_DEADLINE_MS);
-    });
-    const first = await Promise.race([iterator.next(), timeout]);
-    if (deadline) clearTimeout(deadline);
-    if (first === "timeout") {
-      subscriptionAbort.abort();
-      throw new AiExecutionError("timeout");
-    }
-    if (first.done) {
-      subscriptionAbort.abort();
-      throw new AiExecutionError(
-        input.abortSignal?.aborted ? "aborted" : "internal"
+    try {
+      if (subscriptionAbort.signal.aborted) throw new AiExecutionError("aborted");
+      const timeout = new Promise<"timeout">((resolve) => {
+        deadline = setTimeout(() => resolve("timeout"), FIRST_EVENT_DEADLINE_MS);
+      });
+      const first = await Promise.race([iterator.next(), timeout]);
+      if (first === "timeout") throw new AiExecutionError("timeout");
+      if (first.done)
+        throw new AiExecutionError(input.abortSignal?.aborted ? "aborted" : "internal");
+      aiChatPhaseDurationMs.observe(
+        { phase: "accepted_to_first_event" },
+        performance.now() - acceptedAtMs
       );
+      if (first.value.event.type === "error")
+        throw new AiExecutionError(first.value.event.error);
+      prefetchedEntry = first;
+    } catch (error) {
+      cleanupSubscription();
+      throw error;
+    } finally {
+      if (deadline) clearTimeout(deadline);
     }
-    aiChatPhaseDurationMs.observe(
-      { phase: "accepted_to_first_event" },
-      performance.now() - acceptedAtMs
-    );
-    if (first.value.event.type === "error") {
-      subscriptionAbort.abort();
-      throw new AiExecutionError(first.value.event.error);
-    }
-    prefetchedEntry = first;
   }
 
   let resolveFinal: ((value: StreamFinalResult) => void) | undefined;
@@ -629,8 +635,12 @@ export async function completionStream(
               FIRST_EVENT_DEADLINE_MS
             );
           });
-          const first = await Promise.race([iterator.next(), timeout]);
-          if (deadline) clearTimeout(deadline);
+          let first: Awaited<ReturnType<typeof iterator.next>> | "timeout";
+          try {
+            first = await Promise.race([iterator.next(), timeout]);
+          } finally {
+            if (deadline) clearTimeout(deadline);
+          }
           if (first === "timeout") {
             subscriptionAbort.abort();
             const timeoutEvent: AiEvent = {
@@ -679,8 +689,7 @@ export async function completionStream(
     } finally {
       if (!sawTerminal)
         resolveFinal?.({ ok: false, requestId: runId, error: "aborted" });
-      subscriptionAbort.abort();
-      input.abortSignal?.removeEventListener("abort", abortSubscription);
+      cleanupSubscription();
     }
   })();
 

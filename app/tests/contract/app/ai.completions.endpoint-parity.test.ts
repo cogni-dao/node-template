@@ -33,6 +33,7 @@ import {
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { LlmError } from "@/ports";
+import { makeNoopLogger } from "@/shared/observability";
 
 // Mock auth
 vi.mock("@/app/_lib/auth/session", () => ({
@@ -227,6 +228,53 @@ async function parseSSE(
 describe("OpenAI Endpoint Parity (POST /v1/chat/completions)", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+  });
+
+  describe("first-event acceptance cleanup", () => {
+    it.each(["reject", "timeout", "preabort", "first-error"] as const)(
+      "cleans subscriber and listener on %s", async (mode) => {
+        setupMocks();
+        const inputAbort = new AbortController();
+        const removeListener = vi.spyOn(inputAbort.signal, "removeEventListener");
+        let subscriber: AbortSignal | undefined;
+        let returned = 0;
+        const container = mockGetContainer();
+        Object.assign(container, { runStream: {
+          subscribe: (_runId: string, signal: AbortSignal) => {
+            subscriber = signal;
+            return { [Symbol.asyncIterator]: () => ({
+              next: () => mode === "reject" ? Promise.reject(new Error("redis failure"))
+                : mode === "first-error" ? Promise.resolve({ done: false, value: { id: "1", event: { type: "error", error: "internal" } } })
+                : new Promise(() => {}),
+              return: async () => { returned++; return { done: true, value: undefined }; },
+            }) };
+          },
+        } });
+        if (mode === "timeout") vi.useFakeTimers();
+        if (mode === "preabort") inputAbort.abort();
+        try {
+          const { completionStream } = await import("@/app/_facades/ai/completion.server");
+          const pending = completionStream({
+            messages: [{ role: "user", content: "hello" }],
+            modelRef: { providerKey: "platform", modelId: TEST_MODEL_ID },
+            sessionUser: TEST_SESSION_USER_1, graphName: "langgraph:default", abortSignal: inputAbort.signal,
+          }, { log: makeNoopLogger(), reqId: "request-accept", traceId: "00000000000000000000000000000000", routeId: "chat.completions", clock: { now: () => "2025-01-01T00:00:00.000Z" } });
+          const rejected = expect(pending).rejects.toBeDefined();
+          if (mode === "timeout") {
+            await vi.waitFor(() => expect(subscriber).toBeDefined());
+            await vi.advanceTimersByTimeAsync(20_000);
+          }
+          await rejected;
+          expect(subscriber?.aborted).toBe(true);
+          expect(returned).toBe(1);
+          if (mode !== "preabort") expect(removeListener).toHaveBeenCalledWith("abort", expect.any(Function));
+          if (mode === "timeout") expect(vi.getTimerCount()).toBe(0);
+        } finally {
+          vi.useRealTimers();
+          removeListener.mockRestore();
+        }
+      },
+    );
   });
 
   describe("non-streaming response parity", () => {
@@ -533,6 +581,73 @@ describe("OpenAI Endpoint Parity (POST /v1/chat/completions)", () => {
       const next = await reader.read();
       expect(next.done).toBe(true);
       release();
+    });
+
+    it("closes a stream when its request aborts before stream creation", async () => {
+      setupMocks();
+      const abort = new AbortController();
+      let subscriber: AbortSignal | undefined;
+      Object.assign(mockGetContainer(), { runStream: {
+        subscribe: async function* (_runId: string, signal: AbortSignal) {
+          subscriber = signal;
+          abort.abort();
+          yield { id: "1", event: { type: "status" as const, phase: "thinking" as const } };
+        },
+      } });
+      const { POST } = await import("@/app/api/v1/chat/completions/route");
+      const response = await POST(new NextRequest("http://localhost:3000/api/v1/chat/completions", {
+        method: "POST", body: JSON.stringify(createCompletionRequest({ stream: true })), signal: abort.signal,
+      }));
+      expect(await response.text()).toBe("");
+      expect(subscriber?.aborted).toBe(true);
+    });
+
+    it.each(["success", "error"] as const)("cleans the subscriber after terminal %s", async (outcome) => {
+      const { runStream } = setupMocks({
+        statusEvents: [{ phase: "thinking" }],
+        ...(outcome === "error" ? { errorEvent: "internal" } : {}),
+      });
+      const original = runStream.subscribe;
+      let subscriber: AbortSignal | undefined;
+      Object.assign(runStream, { subscribe: (runId: string, signal: AbortSignal) => {
+        subscriber = signal;
+        void runId;
+        return original();
+      } });
+      const { POST } = await import("@/app/api/v1/chat/completions/route");
+      const response = await POST(new NextRequest("http://localhost:3000/api/v1/chat/completions", {
+        method: "POST", body: JSON.stringify(createCompletionRequest({ stream: true })),
+      }));
+      await response.text();
+      expect(subscriber?.aborted).toBe(true);
+    });
+
+    it("cleans up if the heartbeat cannot enqueue", async () => {
+      setupMocks();
+      let subscriber: AbortSignal | undefined;
+      Object.assign(mockGetContainer(), { runStream: {
+        subscribe: async function* (_runId: string, signal: AbortSignal) {
+          subscriber = signal;
+          yield { id: "1", event: { type: "status" as const, phase: "thinking" as const } };
+          await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+        },
+      } });
+      vi.useFakeTimers();
+      try {
+        const { POST } = await import("@/app/api/v1/chat/completions/route");
+        const response = await POST(new NextRequest("http://localhost:3000/api/v1/chat/completions", {
+          method: "POST", body: JSON.stringify(createCompletionRequest({ stream: true })),
+        }));
+        if (!response.body) throw new Error("missing stream");
+        const reader = response.body.getReader();
+        await reader.read();
+        await reader.read();
+        const enqueue = vi.spyOn(ReadableStreamDefaultController.prototype, "enqueue").mockImplementationOnce(() => { throw new Error("closed"); });
+        await vi.advanceTimersByTimeAsync(15_000);
+        expect(subscriber?.aborted).toBe(true);
+        expect((await reader.read()).done).toBe(true);
+        enqueue.mockRestore();
+      } finally { vi.useRealTimers(); }
     });
 
     it("should emit role announcement as first chunk (OpenAI convention)", async () => {

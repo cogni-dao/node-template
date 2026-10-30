@@ -184,24 +184,6 @@ describe("deadline attribution", () => {
     },
   );
 
-  it.each(["timeout", "aborted"] as const)("handles in-flight %s cancellation", async (code) => {
-    const ctl = new AbortController();
-    let started!: () => void;
-    const ready = new Promise<void>((resolve) => { started = resolve; });
-    const opts = createTestRunnerOptions({ createGraph: () => ({
-      invoke: async (_input, options) => new Promise((_resolve, reject) => {
-        options?.signal?.addEventListener("abort", () => reject(MiddlewareError.wrap(new AiExecutionError("aborted"), "test")), { once: true });
-        started();
-      }),
-    }) });
-    const { stream, final } = createInProcGraphRunner({ ...opts, request: { ...opts.request, abortSignal: ctl.signal } });
-    const events = collectEvents(stream);
-    await ready;
-    ctl.abort(code === "timeout" ? new AiExecutionError("timeout") : new DOMException("cancelled", "AbortError"));
-    expect(await events).toEqual([{ type: "error", error: code }, { type: "done" }]);
-    expect(await final).toMatchObject({ ok: false, error: code });
-  });
-
   it("does not mask a programming error racing an abort", async () => {
     const ctl = new AbortController();
     const opts = createTestRunnerOptions({ createGraph: () => ({

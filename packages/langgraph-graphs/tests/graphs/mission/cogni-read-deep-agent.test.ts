@@ -287,27 +287,34 @@ describe("model-only retry", () => {
     expect(await final).toMatchObject({ ok: false, error: "timeout" });
   });
 
-  it("does not replay a completed planning tool when a later model call retries", async () => {
-    let calls = 0;
+  it("does not replay a completed host tool when the model retries", async () => {
     const seen: Seen[] = [];
+    const executed: string[] = [];
+    let failed = false;
     const delegate = script(seen);
     const { stream, final } = createInProcGraphRunner({
       program: "cogni-chat",
       sourceContext: { nodeId: "test", origin: "https://test.example", mission: { content: "mission", sourceRef: "test", buildSha: null } },
       createGraph: createMissionGraph,
       completionFn: (request) => {
-        calls++;
-        if (calls === 2) return { stream: (async function* () {})(), final: Promise.resolve({ ok: false as const, error: "timeout" as const }) };
+        if (executed.length > 0 && !failed) {
+          failed = true;
+          return { stream: (async function* () {})(), final: Promise.resolve({ ok: false as const, error: "timeout" as const }) };
+        }
         return delegate(request);
       },
-      createToolExecFn: () => async (name) => ({ ok: true, value: name === GOAL_LIST_NAME ? GOALS : ITEMS }),
+      createToolExecFn: () => async (name) => {
+        executed.push(name);
+        return { ok: true, value: name === GOAL_LIST_NAME ? GOALS : ITEMS };
+      },
       toolContracts: [goalListContract, workItemQueryContract],
       request: { runId: "retry-tool", messages: [{ role: "user", content: QUESTION }], configurable: { model: PARENT_MODEL, toolIds: [...COGNI_READ_TOOL_IDS] } },
     });
-    const events: AiEvent[] = [];
-    for await (const event of stream) events.push(event);
+    for await (const _ of stream) { /* drain */ }
     expect((await final).ok).toBe(true);
-    expect(events.filter((event) => event.type === "tool_call_start" && event.toolName === "write_todos")).toHaveLength(1);
+    expect(failed).toBe(true);
+    expect(executed.filter((name) => name === GOAL_LIST_NAME)).toHaveLength(1);
+    expect(executed.filter((name) => name === WORK_ITEM_QUERY_NAME)).toHaveLength(1);
   });
 
   it("does not start another completion after cancellation during retry delay", async () => {
@@ -319,7 +326,7 @@ describe("model-only retry", () => {
       createGraph: createMissionGraph,
       completionFn: () => {
         calls++;
-        queueMicrotask(() => controller.abort());
+        setTimeout(() => controller.abort(), 20);
         return { stream: (async function* () {})(), final: Promise.resolve({ ok: false as const, error: "timeout" as const }) };
       },
       createToolExecFn: () => async () => ({ ok: true, value: {} }),
@@ -329,6 +336,52 @@ describe("model-only retry", () => {
     for await (const _ of stream) { /* drain */ }
     expect(await final).toMatchObject({ ok: false, error: "aborted" });
     expect(calls).toBe(1);
+  });
+
+  it.each(["model", "tool"] as const)("cancels during actual %s execution", async (phase) => {
+    const controller = new AbortController();
+    let entered!: () => void;
+    const ready = new Promise<void>((resolve) => { entered = resolve; });
+    let calls = 0;
+    let toolCalls = 0;
+    const { stream, final } = createInProcGraphRunner({
+      program: "cogni-chat",
+      sourceContext: { nodeId: "test", origin: "https://test.example", mission: { content: "mission", sourceRef: "test", buildSha: null } },
+      createGraph: createMissionGraph,
+      completionFn: (request) => {
+        calls++;
+        if (phase === "model") {
+          const pending = new Promise<{ ok: false; error: "aborted" }>((resolve) => {
+            request.abortSignal?.addEventListener("abort", () => resolve({ ok: false, error: "aborted" }), { once: true });
+            entered();
+          });
+          return { stream: (async function* () { await pending; yield* []; })(), final: pending };
+        }
+        return { stream: (async function* () {})(), final: Promise.resolve({
+          ok: true as const, finishReason: "tool_calls",
+          toolCalls: [{ id: "goal", type: "function" as const, function: { name: GOAL_LIST_NAME, arguments: "{}" } }],
+        }) };
+      },
+      createToolExecFn: () => async () => {
+        toolCalls++;
+        await new Promise<void>((resolve) => {
+          controller.signal.addEventListener("abort", () => resolve(), { once: true });
+          entered();
+        });
+        throw new DOMException("cancelled", "AbortError");
+      },
+      toolContracts: [goalListContract],
+      request: { runId: "inflight", messages: [{ role: "user", content: "hello" }], configurable: { model: PARENT_MODEL, toolIds: [GOAL_LIST_NAME] }, abortSignal: controller.signal },
+    });
+    const events: AiEvent[] = [];
+    const drained = (async () => { for await (const event of stream) events.push(event); })();
+    await ready;
+    controller.abort();
+    await drained;
+    expect(await final).toMatchObject({ ok: false, error: "aborted" });
+    expect(events.slice(-2)).toEqual([{ type: "error", error: "aborted" }, { type: "done" }]);
+    expect(calls).toBe(1);
+    expect(toolCalls).toBe(phase === "tool" ? 1 : 0);
   });
 
 });
