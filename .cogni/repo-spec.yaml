@@ -105,3 +105,18 @@ deployment:
         cpu_units: 2
         memory_mi: 2048
         storage_mi: 4096
+
+# task.0020: temporary CANDIDATE-ONLY experiment; do not promote this spec.
+# Parent story.0002 owns flight, two terminal ticks, pause/delete, and removal.
+# Top-level node schedules test the node-facing ingester, NOT governance charters.
+# There is no max-runs/expiry field in this schema: keep an active cleanup owner.
+schedules:
+  - id: candidate-deepseek-minute-probe
+    cron: "* * * * *"
+    timezone: UTC
+    graph: "langgraph:poet"
+    payload:
+      modelRef:
+        providerKey: platform
+        modelId: deepseek-v4-flash
+      message: "Reply with exactly: task.0020 minute probe OK. Do not call tools."
