@@ -104,6 +104,9 @@ try {
 } finally {
   for (const [path, original] of originals) writeFileSync(path, original);
   manifest.restoredTemporarySourceProbe = [...originals].every(([path, original]) => readFileSync(path, "utf8") === original);
+  const savedArtifacts = join(root, ".context/read-envelope-proof-artifacts");
+  mkdirSync(savedArtifacts, { recursive: true });
+  for (const artifact of manifest.artifacts) copyFileSync(join(artifacts, artifact.filename), join(savedArtifacts, artifact.filename));
   const receipt = join(root, ".context/read-envelope-proof.json");
   mkdirSync(join(root, ".context"), { recursive: true });
   writeFileSync(receipt, JSON.stringify(manifest, null, 2));
