@@ -541,6 +541,24 @@ describe("OpenAI Endpoint Parity (POST /v1/chat/completions)", () => {
   });
 
   describe("streaming response parity", () => {
+    it("keeps facade preclaim identity distinct from original worker callback identity", async () => {
+      const { executionRequestPort } = setupMocks();
+      const { POST } = await import("@/app/api/v1/chat/completions/route");
+      const response = await POST(new NextRequest("http://localhost:3000/api/v1/chat/completions", {
+        method: "POST",
+        body: JSON.stringify(createCompletionRequest({ stream: true })),
+      }));
+      await response.text();
+      expect(executionRequestPort.createPendingRequest).toHaveBeenCalledOnce();
+      const claim = executionRequestPort.createPendingRequest.mock.calls[0];
+      if (!claim) throw new Error("missing facade preclaim");
+      const [facadeKey, , runId] = claim;
+      expect(facadeKey).toMatch(/^ai:/);
+      // Original worker callback uses api:<runId>; no key rewrite or adoption change is implied.
+      const originalWorkerKey = `api:${runId}`;
+      expect(facadeKey).not.toBe(originalWorkerKey);
+    });
+
     it("returns 409 before execution when an idempotency key is reused with changed input", async () => {
       const { temporal } = setupMocks();
       const { POST } = await import("@/app/api/v1/chat/completions/route");

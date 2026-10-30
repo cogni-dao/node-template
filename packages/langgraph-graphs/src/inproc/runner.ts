@@ -375,16 +375,28 @@ export function createInProcGraphRunner<TTool = unknown>(
     } catch (error) {
       // Normalize error using duck-typed LlmError detection (kind/status properties)
       // Per ERROR_NORMALIZATION_ONCE: normalize at catch boundary
+      // LangChain 1.4.4 brands the class statically; retain instanceof for local wrappers.
+      // Only middleware wrappers may be unwrapped, never arbitrary application causes.
       let cause: unknown = error;
-      while (MiddlewareError.isInstance(cause) && "cause" in cause) cause = cause.cause;
-      const cancelled = cause === runSignal?.reason ||
+      while (
+        (MiddlewareError.isInstance(cause) || cause instanceof MiddlewareError) &&
+        "cause" in cause &&
+        cause.cause !== undefined &&
+        cause.cause !== cause
+      ) {
+        cause = cause.cause;
+      }
+      const signal = request.abortSignal;
+      const cancelled =
+        cause === signal?.reason ||
         (cause instanceof Error && cause.name === "AbortError") ||
         (isAiExecutionError(cause) && cause.code === "aborted");
-      const code = runSignal?.aborted && cancelled
-        ? isAiExecutionError(runSignal.reason) && runSignal.reason.code === "timeout"
-          ? "timeout"
-          : "aborted"
-        : normalizeErrorToExecutionCode(cause);
+      const code =
+        signal?.aborted && cancelled
+          ? isAiExecutionError(signal.reason) && signal.reason.code === "timeout"
+            ? "timeout"
+            : "aborted"
+          : normalizeErrorToExecutionCode(cause);
 
       // Capture error message for logging at adapter boundary (not sent to clients)
       const errorMessage =
