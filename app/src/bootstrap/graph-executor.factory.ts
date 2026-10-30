@@ -52,6 +52,7 @@ import {
   LangGraphDevProvider,
   LangGraphInProcProvider,
 } from "@/adapters/server";
+import { resolveNodeSourceContext } from "@/adapters/server/ai/langgraph/inproc.provider";
 import { runInScope } from "@/adapters/server/ai/execution-scope";
 import type {
   AiExecutionErrorCode,
@@ -549,23 +550,14 @@ function createInProcProvider(
     container.toolSource,
     () => cache.getSource(),
     [...CORE_TOOL_BUNDLE],
-    async () => {
-      const mission = getNodeMission();
-      const origin = serverEnv().APP_BASE_URL;
-      if (!mission || !origin || !container.knowledgeStorePort) {
-        throw new Error("node_source_context_unavailable");
-      }
-      return {
-        nodeId: container.nodeId,
-        origin,
-        mission: {
-          content: mission,
-          sourceRef: ".cogni/repo-spec.yaml",
-          buildSha: serverEnv().APP_BUILD_SHA ?? null,
-        },
-        governingIndex: await container.knowledgeStorePort.listGoverningIndex(),
-      };
-    },
+    async (required) => resolveNodeSourceContext(
+      required,
+      container.nodeId,
+      serverEnv().APP_BASE_URL,
+      getNodeMission(),
+      serverEnv().APP_BUILD_SHA,
+      container.knowledgeStorePort,
+    ),
     getCogniPersistence,
   );
 }

@@ -71,7 +71,7 @@ export interface CreateReactAgentGraphOptions {
   /** Host-bound source provenance, never accepted from model/tool arguments. */
   readonly sourceContext?: {
     readonly nodeId: string;
-    readonly origin: string;
+    readonly origin?: string;
     readonly mission?: {
       readonly content: string;
       readonly sourceRef: string;

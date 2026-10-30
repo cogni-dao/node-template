@@ -20,7 +20,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { runInScope } from "@/adapters/server/ai/execution-scope";
 import type { CompletionUnitAdapter } from "@/adapters/server/ai/langgraph/inproc.provider";
-import { LangGraphInProcProvider } from "@/adapters/server/ai/langgraph/inproc.provider";
+import { LangGraphInProcProvider, resolveNodeSourceContext } from "@/adapters/server/ai/langgraph/inproc.provider";
 import type { GraphRunRequest } from "@/ports";
 import { EVENT_NAMES } from "@/shared/observability";
 
@@ -144,6 +144,24 @@ function createTestRequest(
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("LangGraphInProcProvider", () => {
+  it("runs poet with trusted node identity when optional hub and origin are absent, while mission fails closed", async () => {
+    const adapter = createMockAdapter();
+    const source = vi.fn((required: boolean) => resolveNodeSourceContext(required, "real-node", undefined, undefined, undefined, undefined));
+    const provider = new LangGraphInProcProvider(adapter, createMockToolSource(), undefined, [], source);
+    runnerSpy.mockClear();
+    const poet = runInScope(TEST_SCOPE, () => provider.runGraph(createTestRequest()));
+    await collectEvents(poet.stream);
+    expect((await poet.final).ok).toBe(true);
+    expect(adapter.executeCompletionUnit).toHaveBeenCalled();
+    expect(runnerSpy).toHaveBeenCalledWith(expect.objectContaining({ sourceContext: { nodeId: "real-node", governingIndex: [] } }));
+    runnerSpy.mockClear();
+    const mission = runInScope(TEST_SCOPE, () => provider.runGraph(createTestRequest({ graphId: "langgraph:cogni-decide" })));
+    await collectEvents(mission.stream);
+    expect((await mission.final).ok).toBe(false);
+    expect(runnerSpy).not.toHaveBeenCalled();
+    expect(source).toHaveBeenCalledWith(true);
+  });
+
   it.each(["cogni-decide", "work-prioritizer"])("forwards trusted intent for %s", async (graph) => {
     for (const intent of [undefined, "answer", "decide"] as const) {
       runnerSpy.mockClear();
@@ -153,6 +171,13 @@ describe("LangGraphInProcProvider", () => {
       await result.final;
       expect(runnerSpy).toHaveBeenCalledWith(expect.objectContaining({ requestIntent: intent ?? "answer" }));
     }
+  });
+  it("only disables unavailable hub grounding and propagates unexpected hub failures", async () => {
+    const knowledge = { listGoverningIndex: vi.fn().mockRejectedValue(new Error("hub failed")) };
+    await expect(resolveNodeSourceContext(false, "real-node", undefined, undefined, undefined, knowledge)).resolves.toMatchObject({ nodeId: "real-node", governingIndex: [] });
+    expect(knowledge.listGoverningIndex).not.toHaveBeenCalled();
+    await expect(resolveNodeSourceContext(false, "real-node", "https://node.example", undefined, undefined, undefined)).resolves.toMatchObject({ nodeId: "real-node", origin: "https://node.example", governingIndex: [] });
+    await expect(resolveNodeSourceContext(false, "real-node", "https://node.example", undefined, undefined, knowledge)).rejects.toThrow("hub failed");
   });
   describe("valid graphId", () => {
     it("calls adapter.executeCompletionUnit and emits events reflecting adapter stream", async () => {

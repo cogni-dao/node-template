@@ -103,6 +103,25 @@ interface ProviderCatalogEntry {
  *
  * Note: Discovery (listAgents) is in LangGraphInProcAgentCatalogProvider.
  */
+export async function resolveNodeSourceContext(
+  required: boolean,
+  nodeId: string,
+  origin: string | undefined,
+  mission: string | null | undefined,
+  buildSha: string | undefined,
+  knowledge: { listGoverningIndex: () => Promise<NonNullable<NonNullable<import("@cogni/langgraph-graphs/inproc").CreateGraphOptions["sourceContext"]>["governingIndex"]>> } | undefined,
+) {
+  if (required && (!mission || !origin || !knowledge)) {
+    throw new Error("node_source_context_unavailable");
+  }
+  return {
+    nodeId,
+    ...(origin ? { origin } : {}),
+    ...(mission ? { mission: { content: mission, sourceRef: ".cogni/repo-spec.yaml", buildSha: buildSha ?? null } } : {}),
+    governingIndex: origin && knowledge ? await knowledge.listGoverningIndex() : [],
+  };
+}
+
 export class LangGraphInProcProvider implements GraphExecutorPort {
   readonly providerId = LANGGRAPH_PROVIDER_ID;
   private readonly log: Logger;
@@ -115,7 +134,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
     private readonly getMcpToolSource: () => Promise<ToolSourcePort | null> = () =>
       Promise.resolve(null),
     nodeBundle: readonly CatalogBoundTool[] = [],
-    private readonly sourceContext?: () => Promise<
+    private readonly sourceContext?: (required: boolean) => Promise<
       NonNullable<
         import("@cogni/langgraph-graphs/inproc").CreateGraphOptions["sourceContext"]
       >
@@ -318,7 +337,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
           trustedProgramId: entry.program ?? graphName,
         }),
         ...((entry.program || graphName === "poet") && this.sourceContext && {
-          sourceContext: await this.sourceContext(),
+          sourceContext: await this.sourceContext(Boolean(entry.program)),
         }),
         ...(req.responseFormat !== undefined && {
           responseFormat: req.responseFormat,
