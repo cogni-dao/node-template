@@ -71,9 +71,11 @@ export type CompletionToolChoice =
   | { readonly type: "function"; readonly function: { readonly name: string } };
 
 export class InvalidCompletionError extends Error {
-  constructor() {
-    super("empty_model_completion");
+  readonly cause?: unknown;
+  constructor(message = "empty_model_completion", cause?: unknown) {
+    super(message);
     this.name = "InvalidCompletionError";
+    if (cause !== undefined) this.cause = cause;
   }
 }
 
@@ -211,6 +213,7 @@ export class CogniCompletionAdapter extends BaseChatModel {
   ): Promise<ChatResult> {
     const model = this.binding.model;
     if (!model) throw new Error("bound_model_required");
+    (this.binding.signal ?? options.signal)?.throwIfAborted();
     const { completionFn, tokenSink } = getCogniExecContext();
     const { stream, final } = completionFn({
       messages: messages.map(fromBaseMessage),
@@ -262,13 +265,17 @@ export class CogniCompletionAdapter extends BaseChatModel {
       tool_calls: result.toolCalls?.map((tc, i) => {
         if (!tc.function?.name)
           throw new Error(`missing toolCall function.name at index ${i}`);
+        let args: Record<string, unknown>;
+        try {
+          args = JSON.parse(tc.function.arguments || "{}") as Record<string, unknown>;
+        } catch (error) {
+          if (!(error instanceof SyntaxError)) throw error;
+          throw new InvalidCompletionError("malformed_tool_arguments", error);
+        }
         return {
           id: tc.id,
           name: tc.function.name,
-          args: JSON.parse(tc.function.arguments || "{}") as Record<
-            string,
-            unknown
-          >,
+          args,
           type: "tool_call" as const,
         };
       }),

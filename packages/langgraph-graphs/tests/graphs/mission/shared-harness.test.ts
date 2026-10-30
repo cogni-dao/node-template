@@ -174,6 +174,53 @@ describe("shared cogni harness", () => {
 		).toContain("Unique skill body reaches the model.");
 	});
 
+	it("retries malformed provider tool arguments before executing a valid SDK tool", async () => {
+		let calls = 0;
+		const completionFn: CompletionFn = () => {
+			const turn = calls++;
+			const reply =
+				turn < 2
+					? {
+							toolCalls: [
+								{
+									id: "list",
+									type: "function" as const,
+									function: {
+										name: "ls",
+										arguments: turn === 0 ? '{"path":"/","}' : '{"path":"/"}',
+									},
+								},
+							],
+						}
+					: { content: "Finished." };
+			return {
+				stream: (async function* () {})(),
+				final: Promise.resolve({ ok: true as const, ...reply }),
+			};
+		};
+		const run = createInProcGraphRunner({
+			createGraph: createPoetGraph,
+			trustedProgramId: "poet",
+			completionFn,
+			createToolExecFn: () => async () => {
+				throw new Error("unexpected external tool");
+			},
+			toolContracts: [],
+			request: {
+				runId: "retry-json",
+				messages: [{ role: "user", content: "List files" }],
+				configurable: { model: "test-model", toolIds: [] },
+			},
+		});
+		for await (const _event of run.stream) {
+			/* drain */
+		}
+		const final = await run.final;
+		expect(final.ok).toBe(true);
+		expect(final.content).toBe("Finished.");
+		expect(calls).toBe(3);
+	});
+
 	it("uses the SDK task limit before a fifth delegated child", async () => {
 		let turn = 0;
 		let children = 0;

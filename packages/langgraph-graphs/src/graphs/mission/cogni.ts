@@ -17,9 +17,12 @@ import {
 } from "deepagents";
 import {
 	createMiddleware,
+	MiddlewareError,
+	modelRetryMiddleware,
 	todoListMiddleware,
 	toolCallLimitMiddleware,
 } from "langchain";
+import { InvalidCompletionError } from "../../runtime/cogni/completion-adapter";
 import type { CreateReactAgentGraphOptions } from "../types";
 import { HubSkillBackend } from "./skill-backend";
 
@@ -157,6 +160,18 @@ export function createCogniProgram(
 		...(opts.store ? { store: opts.store } : {}),
 		backend,
 		middleware: [
+			modelRetryMiddleware({
+				maxRetries: 2,
+				retryOn: (error) => {
+					// LangChain wraps errors at each middleware boundary.
+					let current: unknown = error;
+					while (MiddlewareError.isInstance(current) && "cause" in current)
+						current = current.cause;
+					return current instanceof InvalidCompletionError;
+				},
+				initialDelayMs: 0,
+				onFailure: "error",
+			}),
 			createMiddleware({
 				name: "CogniSourceContext",
 				beforeAgent: () => {
