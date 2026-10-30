@@ -61,6 +61,7 @@ Pure tool definitions for AI agent execution. Defines `ToolContract`, `ToolImple
   - `vcsFlightCandidateBoundTool`, `VCS_FLIGHT_CANDIDATE_NAME`, `createVcsFlightCandidateImplementation` - VCS dispatch candidate-flight tool (NO_AUTO_FLIGHT)
   - `VcsCapability`, `CiStatusResult`, `MergeResult`, `PrSummary`, `CreateBranchResult`, `CheckInfo`, `DispatchCandidateFlightResult` - VCS capability types
   - `workItemQueryBoundTool`, `WORK_ITEM_QUERY_NAME`, `createWorkItemQueryImplementation` - Work item query tool; sortBy/sortDirection derive from bundled work-items allowlists
+  - `workItemReadBoundTool`, `WORK_ITEM_READ_NAME`, `createWorkItemReadImplementation` - bounded full work-item read
   - `workItemTransitionBoundTool`, `WORK_ITEM_TRANSITION_NAME`, `createWorkItemTransitionImplementation` - Work item transition tool
   - `WorkItemCapability`, `WorkItemInfo`, `WorkItemPatchScores`, `WorkItemQueryParams`, `WorkItemTransitionResult` - Work item capability types
   - `knowledgeReadBoundTool`, `KNOWLEDGE_READ_NAME`, `createKnowledgeReadImplementation` - Knowledge read tool (read_only: get by id or list by domain+tags)

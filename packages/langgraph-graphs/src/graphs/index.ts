@@ -16,10 +16,10 @@
 
 // Autoresearch graphs (Karpathy-style experiment loops)
 export {
-  AUTORESEARCH_REGISTRY_SWARM_GRAPH_NAME,
-  AUTORESEARCH_SINGLE_LANE_GRAPH_NAME,
-  AUTORESEARCH_SYNTROPY_LOOP_GRAPH_NAME,
-  createAutoresearchGraph,
+	AUTORESEARCH_REGISTRY_SWARM_GRAPH_NAME,
+	AUTORESEARCH_SINGLE_LANE_GRAPH_NAME,
+	AUTORESEARCH_SYNTROPY_LOOP_GRAPH_NAME,
+	createAutoresearchGraph,
 } from "./autoresearch/graph";
 // Brain graph (code-aware assistant with repo access)
 export { BRAIN_GRAPH_NAME, createBrainGraph } from "./brain/graph";
@@ -27,10 +27,15 @@ export { BRAIN_GRAPH_NAME, createBrainGraph } from "./brain/graph";
 export { BROWSER_GRAPH_NAME, createBrowserGraph } from "./browser/graph";
 // Frontend tester graph (QA agent via Playwright MCP)
 export {
-  createFrontendTesterGraph,
-  FRONTEND_TESTER_GRAPH_NAME,
+	createFrontendTesterGraph,
+	FRONTEND_TESTER_GRAPH_NAME,
 } from "./frontend-tester/graph";
 // Poet graph (poetic AI assistant)
+export {
+	type AgentProfile,
+	cogniProfile,
+	createCogniProgram,
+} from "./mission/cogni";
 export { createPoetGraph, POET_GRAPH_NAME } from "./poet/graph";
 // Ponderer graph (philosophical thinker)
 export { createPondererGraph, PONDERER_GRAPH_NAME } from "./ponderer/graph";
@@ -41,16 +46,16 @@ export { buildReviewUserMessage } from "./pr-review/prompts";
 export { createResearchGraph, RESEARCH_GRAPH_NAME } from "./research/graph";
 // Shared graph types
 export type {
-  CreateReactAgentGraphOptions,
-  GraphInvokeOptions,
-  InvokableGraph,
-  MessageGraphInput,
-  MessageGraphOutput,
+	CreateReactAgentGraphOptions,
+	GraphInvokeOptions,
+	InvokableGraph,
+	MessageGraphInput,
+	MessageGraphOutput,
 } from "./types";
 // Mission loop (every node, ReAct agent on the work-prioritizer slot, story.5108 / story.5101)
 export {
-  createWorkPrioritizerGraph,
-  cycleTelemetry,
-  type MissionLoopTelemetry,
-  WORK_PRIORITIZER_GRAPH_NAME,
+	createWorkPrioritizerGraph,
+	cycleTelemetry,
+	type MissionLoopTelemetry,
+	WORK_PRIORITIZER_GRAPH_NAME,
 } from "./work-prioritizer/graph";

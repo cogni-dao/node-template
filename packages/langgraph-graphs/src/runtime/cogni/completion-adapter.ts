@@ -137,6 +137,7 @@ interface CogniCompletionAdapterConfig {
   readonly model?: string;
   readonly signal?: AbortSignal;
   readonly rejectEmpty?: boolean;
+  readonly tierSibling?: boolean;
 }
 
 /** A real SDK chat model; all provider work still uses the billed CompletionFn. */
@@ -171,21 +172,31 @@ export class CogniCompletionAdapter extends BaseChatModel {
   /**
    * MODEL_TIER_SEAM: a sibling adapter bound to a DIFFERENT billed model (e.g. a cheap Flash
    * subagent) that still routes through the same ALS CompletionFn / token sink — the only LLM path.
-   * `bindRun` deliberately refuses a model change on a bound adapter; this is the explicit,
-   * named way to tier. The caller must also invoke with `configurable.model` set to `model`.
+   * `bindRun` deliberately refuses a model change on a bound adapter; this explicit sibling
+   * replaces inherited parent model configuration without changing other invocation context.
    */
   withModel(model: string): CogniCompletionAdapter {
-    return new CogniCompletionAdapter({ ...this.binding, model });
+    return new CogniCompletionAdapter({
+      ...this.binding,
+      model,
+      tierSibling: true,
+    });
   }
 
   override async invoke(
     input: BaseLanguageModelInput,
-    config?: CogniCompletionConfig
+    config?: CogniCompletionConfig,
   ): Promise<AIMessageChunk> {
+    if (this.binding.tierSibling && this.binding.model) {
+      return super.invoke(input, {
+        ...config,
+        configurable: { ...config?.configurable, model: this.binding.model },
+      });
+    }
     const model = config?.configurable?.model ?? this.binding.model;
     if (!model)
       throw new Error(
-        "[CogniCompletionAdapter] config.configurable.model is required."
+        "[CogniCompletionAdapter] config.configurable.model is required.",
       );
     if (this.binding.model && model !== this.binding.model)
       throw new Error("bound_model_mismatch");
@@ -196,7 +207,7 @@ export class CogniCompletionAdapter extends BaseChatModel {
 
   async _generate(
     messages: BaseMessage[],
-    options: BaseChatModelCallOptions
+    options: BaseChatModelCallOptions,
   ): Promise<ChatResult> {
     const model = this.binding.model;
     if (!model) throw new Error("bound_model_required");
@@ -294,7 +305,7 @@ export class CogniCompletionAdapter extends BaseChatModel {
       | SerializableSchema<RunOutput>
       | InteropZodType<RunOutput>
       | Record<string, unknown>,
-    options?: StructuredOutputMethodOptions<false>
+    options?: StructuredOutputMethodOptions<false>,
   ): Runnable<BaseLanguageModelInput, RunOutput>;
   override withStructuredOutput<
     RunOutput extends Record<string, unknown> = Record<string, unknown>,
@@ -303,7 +314,7 @@ export class CogniCompletionAdapter extends BaseChatModel {
       | SerializableSchema<RunOutput>
       | InteropZodType<RunOutput>
       | Record<string, unknown>,
-    options?: StructuredOutputMethodOptions<true>
+    options?: StructuredOutputMethodOptions<true>,
   ): Runnable<BaseLanguageModelInput, { raw: BaseMessage; parsed: RunOutput }>;
   override withStructuredOutput<
     RunOutput extends Record<string, unknown> = Record<string, unknown>,
@@ -312,7 +323,7 @@ export class CogniCompletionAdapter extends BaseChatModel {
       | SerializableSchema<RunOutput>
       | InteropZodType<RunOutput>
       | Record<string, unknown>,
-    options?: StructuredOutputMethodOptions<boolean>
+    options?: StructuredOutputMethodOptions<boolean>,
   ): Runnable<
     BaseLanguageModelInput,
     RunOutput | { raw: BaseMessage; parsed: RunOutput }
@@ -344,7 +355,7 @@ export class CogniCompletionAdapter extends BaseChatModel {
                       typeof p === "object" &&
                       p !== null &&
                       "type" in p &&
-                      p.type === "text"
+                      p.type === "text",
                   )
                   .map((p) => p.text)
                   .join("")
@@ -363,7 +374,7 @@ export class CogniCompletionAdapter extends BaseChatModel {
           parsed = JSON.parse(cleaned) as RunOutput;
         } catch {
           throw new Error(
-            `[CogniCompletionAdapter.withStructuredOutput] LLM returned invalid JSON: ${cleaned.slice(0, 200)}`
+            `[CogniCompletionAdapter.withStructuredOutput] LLM returned invalid JSON: ${cleaned.slice(0, 200)}`,
           );
         }
 
@@ -385,7 +396,7 @@ export class CogniCompletionAdapter extends BaseChatModel {
           parsed = validation.value as RunOutput;
         }
         return options?.includeRaw ? { raw: aiMessage, parsed } : parsed;
-      }
+      },
     );
   }
 
@@ -397,7 +408,7 @@ export class CogniCompletionAdapter extends BaseChatModel {
    */
   override bindTools(
     tools: BindToolsInput[],
-    kwargs?: Partial<BaseChatModelCallOptions>
+    kwargs?: Partial<BaseChatModelCallOptions>,
   ): CogniCompletionAdapter {
     const choice = kwargs?.tool_choice;
     let toolChoice: CompletionToolChoice | undefined;

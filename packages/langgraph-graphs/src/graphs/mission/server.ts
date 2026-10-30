@@ -5,7 +5,7 @@
  * Module: `@cogni/langgraph-graphs/graphs/mission/server`
  * Purpose: LangGraph dev server entrypoint for the Cogni mission-loop graph.
  * Scope: Thin dev entrypoint; does NOT import the catalog, read node bindings, or enforce
- *   policy. Renders the compiled phase-node graph (gather → decide → file → report) in
+ *   policy. Renders the native compiled cogni graph in
  *   LangGraph dev/Studio. Node identity (sourceContext) is supplied only by the node host at
  *   runtime, so a dev invocation fails closed when the preamble is built; the graph STRUCTURE
  *   still renders for inspection.
@@ -21,8 +21,8 @@ import { COGNI_TOOL_IDS } from "./cogni";
 import { createMissionGraph } from "./graph";
 
 export const cogni = await makeServerGraph({
-  name: "cogni",
-  createGraph: createMissionGraph,
-  toolIds: COGNI_TOOL_IDS,
-  program: "cogni",
+	name: "cogni",
+	createGraph: createMissionGraph,
+	toolIds: COGNI_TOOL_IDS,
+	program: "cogni",
 });

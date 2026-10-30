@@ -14,9 +14,7 @@
  * @public
  */
 
-import { MessagesAnnotation } from "@langchain/langgraph";
-import { createReactAgent } from "@langchain/langgraph/prebuilt";
-
+import { cogniProfile, createCogniProgram } from "../mission/cogni";
 import type { CreateReactAgentGraphOptions } from "../types";
 import { POET_SYSTEM_PROMPT } from "./prompts";
 
@@ -51,17 +49,37 @@ export const POET_GRAPH_NAME = "poet" as const;
  * ```
  */
 export function createPoetGraph(opts: CreateReactAgentGraphOptions) {
-  const { llm, tools } = opts;
-
-  // Use LangGraph's prebuilt React agent
-  // This handles the standard ReAct loop:
-  // 1. LLM generates response (possibly with tool calls)
-  // 2. If tool calls, execute them and loop back
-  // 3. If no tool calls, return final response
-  return createReactAgent({
-    llm,
-    tools: [...tools], // Spread readonly array to mutable for LangGraph
-    messageModifier: POET_SYSTEM_PROMPT,
-    stateSchema: MessagesAnnotation,
-  });
+	const child = createCogniProgram({
+		...opts,
+		disableCheckpointer: true,
+		profile: cogniProfile({
+			id: "general-purpose",
+			instructions:
+				"Complete the delegated creative task using only available read tools.",
+			modelTier: "flash",
+			toolIds: ["core__get_current_time"],
+			allowedChildProfiles: [],
+			outputPolicy: "answer",
+		}),
+		children: [],
+	}).withConfig({ recursionLimit: 30 });
+	return createCogniProgram({
+		...opts,
+		profile: cogniProfile({
+			id: "poet",
+			instructions: POET_SYSTEM_PROMPT,
+			modelTier: "main",
+			toolIds: ["core__get_current_time"],
+			allowedChildProfiles: ["general-purpose"],
+			outputPolicy: "answer",
+		}),
+		children: [
+			{
+				name: "general-purpose",
+				description: "Complete an independent creative subtask.",
+				runnable: child,
+				mode: "isolated",
+			},
+		],
+	});
 }

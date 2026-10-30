@@ -154,6 +154,7 @@ env.NODE_ENV = "development";
 env.COGNI_REPO_PATH = root;
 env.MCP_CONFIG_PATH = resolve(root, "config/mcp.servers.json");
 env.NEXT_TELEMETRY_DISABLED = "1";
+env.COGNI_LOCAL_INPROC = "true";
 console.log(
   `Local ${identity.intent.name} (${identity.node_id}): app=${appPort}, LangGraph=${graphPort}, Temporal=${env.TEMPORAL_NAMESPACE}`
 );

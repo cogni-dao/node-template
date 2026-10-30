@@ -37,6 +37,7 @@ import { vcsListPrsBoundTool } from "./tools/vcs-list-prs";
 import { vcsMergePrBoundTool } from "./tools/vcs-merge-pr";
 import { webSearchBoundTool } from "./tools/web-search";
 import { workItemQueryBoundTool } from "./tools/work-item-query";
+import { workItemReadBoundTool } from "./tools/work-item-read";
 import { workItemTransitionBoundTool } from "./tools/work-item-transition";
 import type { BoundTool } from "./types";
 
@@ -74,7 +75,7 @@ export type ToolCatalog = Readonly<Record<string, CatalogBoundTool>>;
  * ```
  */
 export function createToolCatalog(
-  tools: readonly CatalogBoundTool[]
+  tools: readonly CatalogBoundTool[],
 ): ToolCatalog {
   const catalog: Record<string, CatalogBoundTool> = {};
 
@@ -85,7 +86,7 @@ export function createToolCatalog(
     if (toolId in catalog) {
       throw new Error(
         `TOOL_ID_STABILITY violation: Duplicate tool ID "${toolId}" in catalog. ` +
-          "Tool IDs must be unique. Check for duplicate registrations."
+          "Tool IDs must be unique. Check for duplicate registrations.",
       );
     }
 
@@ -127,6 +128,7 @@ export const CORE_TOOL_BUNDLE: readonly CatalogBoundTool[] = [
   scheduleManageBoundTool as CatalogBoundTool,
   webSearchBoundTool as CatalogBoundTool,
   workItemQueryBoundTool as CatalogBoundTool,
+  workItemReadBoundTool as CatalogBoundTool,
   workItemTransitionBoundTool as CatalogBoundTool,
 ];
 

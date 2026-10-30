@@ -110,6 +110,9 @@ export interface InProcGraphRequest {
  */
 export interface InProcRunnerOptions<TTool = unknown> {
   readonly program?: CreateReactAgentGraphOptions["program"];
+  readonly requestIntent?: CreateReactAgentGraphOptions["requestIntent"];
+  readonly trustedActorId?: string;
+  readonly trustedProgramId?: string;
   readonly sourceContext?: CreateReactAgentGraphOptions["sourceContext"];
   /** Graph factory from catalog - creates compiled graph with LLM and tools */
   readonly createGraph: CreateGraphFn;
@@ -158,7 +161,7 @@ export interface InProcRunnerOptions<TTool = unknown> {
    * Optional persistence foundation (langgraph-persistence). Injected by the host so the engine
    * compiles with a checkpointer (per-run/thread state) and a Store (cross-thread working memory).
    * Absent ⇒ the runner uses an in-process dev `MemorySaver`/`InMemoryStore` (lost on restart).
-   * Prod injects a `PostgresSaver`-backed pair through this same seam (`.setup()` at deploy).
+   * A host may inject provisioned Postgres implementations; setup requires separate authorization.
    */
   readonly persistence?: {
     readonly checkpointer?: BaseCheckpointSaver;

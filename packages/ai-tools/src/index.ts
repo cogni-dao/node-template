@@ -383,6 +383,12 @@ export {
   workItemQueryStubImplementation,
 } from "./tools/work-item-query";
 export {
+  createWorkItemReadImplementation,
+  WORK_ITEM_READ_NAME,
+  workItemReadBoundTool,
+  workItemReadContract,
+} from "./tools/work-item-read";
+export {
   createWorkItemTransitionImplementation,
   WORK_ITEM_TRANSITION_NAME,
   type WorkItemTransitionDeps,

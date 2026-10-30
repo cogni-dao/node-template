@@ -54,6 +54,7 @@ import type {
   Message,
 } from "@/ports";
 import { EVENT_NAMES, makeLogger } from "@/shared/observability";
+import { isModelAllowed } from "@/shared/ai/model-catalog.server";
 
 import type { CompletionUnitParams } from "../inproc-completion-unit.adapter";
 
@@ -86,6 +87,7 @@ interface ProviderCatalogEntry {
   readonly mcpServerIds?: readonly string[];
   readonly graphFactory: CreateGraphFn;
   readonly systemPrompt?: string;
+  readonly program?: "cogni" | "work-review" | "cogni-chat" | "cogni-decide";
   /** Graph-owned run report to log + echo on the stream (CatalogEntry.report). */
   readonly report?: GraphReportDecl;
 }
@@ -112,7 +114,17 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
     private readonly toolSource: ToolSourcePort,
     private readonly getMcpToolSource: () => Promise<ToolSourcePort | null> = () =>
       Promise.resolve(null),
-    nodeBundle: readonly CatalogBoundTool[] = []
+    nodeBundle: readonly CatalogBoundTool[] = [],
+    private readonly sourceContext?: () => Promise<
+      NonNullable<
+        import("@cogni/langgraph-graphs/inproc").CreateGraphOptions["sourceContext"]
+      >
+    >,
+    private readonly getPersistence?: () => Promise<
+      NonNullable<
+        import("@cogni/langgraph-graphs/inproc").InProcRunnerOptions["persistence"]
+      >
+    >,
   ) {
     this.log = makeLogger({ component: "LangGraphInProcProvider" });
     this.boundToolMap = new Map(nodeBundle.map((bt) => [bt.contract.name, bt]));
@@ -125,7 +137,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
         graphCount: Object.keys(this.catalog).length,
         graphs: Object.keys(this.catalog),
       },
-      "LangGraphInProcProvider initialized"
+      "LangGraphInProcProvider initialized",
     );
   }
 
@@ -152,7 +164,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
 
     this.log.debug(
       { runId, graphName, model, messageCount: messages.length },
-      "LangGraphInProcProvider.runGraph routing to package runner"
+      "LangGraphInProcProvider.runGraph routing to package runner",
     );
 
     // Create completion function wrapping adapter
@@ -164,7 +176,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
     if (req.toolIds === undefined) {
       this.log.debug(
         { runId, graphName, catalogToolIds },
-        "toolIds undefined; using catalog default per P0 contract"
+        "toolIds undefined; using catalog default per P0 contract",
       );
     }
 
@@ -178,7 +190,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
       } else {
         this.log.error(
           { runId, graphName, toolId },
-          "Tool not found in toolSource; graph misconfigured"
+          "Tool not found in toolSource; graph misconfigured",
         );
       }
     }
@@ -216,7 +228,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
                 mcpServerIds,
                 mcpToolCount: mcpToolIds.length,
               },
-              "Resolved MCP tools for graph"
+              "Resolved MCP tools for graph",
             );
           }
         }
@@ -258,7 +270,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
                 errorCode: result.errorCode,
                 safeMessage: result.safeMessage.slice(0, 300),
               },
-              "tool call failed"
+              "tool call failed",
             );
           }
           return result;
@@ -285,6 +297,9 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
         configurable: { model, toolIds },
       };
 
+      if (entry.program && !this.sourceContext) {
+        throw new Error("node_source_context_unavailable");
+      }
       const runner = createInProcGraphRunner({
         createGraph: entry.graphFactory,
         completionFn,
@@ -292,6 +307,20 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
         toolContracts,
         ...(mcpToolSpecs.length > 0 && { mcpToolSpecs }),
         request: runnerRequest,
+        ...((entry.program || graphName === "poet") &&
+          this.getPersistence && {
+            persistence: await this.getPersistence(),
+          }),
+        ...(entry.program !== undefined && { program: entry.program }),
+        requestIntent:
+          graphName === "cogni-decide" || graphName === "work-prioritizer"
+            ? "decide"
+            : "answer",
+        ...(ctx?.actorUserId ? { trustedActorId: ctx.actorUserId } : {}),
+        trustedProgramId: entry.program ?? graphName,
+        ...((entry.program || graphName === "poet") && this.sourceContext && {
+          sourceContext: await this.sourceContext(),
+        }),
         ...(req.responseFormat !== undefined && {
           responseFormat: req.responseFormat,
         }),
@@ -307,7 +336,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
             for (const fields of graphReportLogFields(
               report,
               runId,
-              result.structuredOutput
+              result.structuredOutput,
             )) {
               this.log.info(fields, "graph report");
             }
@@ -355,7 +384,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
           runId,
           requestId,
           error: "internal",
-        }) as const
+        }) as const,
     );
 
     // mapToGraphFinal returns Promise<GraphFinal>, so final is Promise<Promise<GraphFinal> | GraphFinal>
@@ -382,7 +411,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
    * Create completion function wrapping adapter.executeCompletionUnit.
    */
   private createCompletionFn(
-    req: GraphRunRequest
+    req: GraphRunRequest,
   ): CompletionFn<LlmToolDefinition> {
     const { runId, graphId } = req;
     const attempt = 0; // P0_ATTEMPT_FREEZE
@@ -393,26 +422,38 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
       tools?: readonly LlmToolDefinition[];
       abortSignal?: AbortSignal;
     }) => {
-      const result = this.adapter.executeCompletionUnit({
-        messages: params.messages as GraphRunRequest["messages"],
-        model: params.model,
-        runContext: { runId, attempt, graphId },
-        ...(params.abortSignal && { abortSignal: params.abortSignal }),
-        ...(params.tools?.length && { tools: [...params.tools] }),
-      });
+      const result = (async () => {
+        if (
+          params.model !== req.modelRef.modelId &&
+          (params.model !== "deepseek-v4-flash" ||
+            !(await isModelAllowed(params.model)))
+        )
+          throw new Error("cogni_child_model_not_authorized");
+        return this.adapter.executeCompletionUnit({
+          messages: params.messages as GraphRunRequest["messages"],
+          model: params.model,
+          runContext: { runId, attempt, graphId },
+          ...(params.abortSignal && { abortSignal: params.abortSignal }),
+          ...(params.tools?.length && { tools: [...params.tools] }),
+        });
+      })();
 
       return {
-        stream: result.stream,
-        final: result.final.then((r) => {
-          if (!r.ok) return { ok: false as const, error: r.error };
-          return {
-            ok: true as const,
-            content: r.content ?? "",
-            ...(r.toolCalls && { toolCalls: r.toolCalls }),
-            ...(r.usage && { usage: r.usage }),
-            ...(r.finishReason && { finishReason: r.finishReason }),
-          };
-        }),
+        stream: (async function* () {
+          yield* (await result).stream;
+        })(),
+        final: result
+          .then((unit) => unit.final)
+          .then((r) => {
+            if (!r.ok) return { ok: false as const, error: r.error };
+            return {
+              ok: true as const,
+              content: r.content ?? "",
+              ...(r.toolCalls && { toolCalls: r.toolCalls }),
+              ...(r.usage && { usage: r.usage }),
+              ...(r.finishReason && { finishReason: r.finishReason }),
+            };
+          }),
       };
     };
   }
@@ -426,7 +467,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
     final: Promise<GraphResult>,
     runId: string,
     requestId: string,
-    graphName: string
+    graphName: string,
   ): Promise<GraphFinal> {
     const result = await final;
 
@@ -441,7 +482,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
           errorMessage: result.errorMessage,
           event: EVENT_NAMES.ADAPTER_LANGGRAPH_INPROC_ERROR,
         },
-        EVENT_NAMES.ADAPTER_LANGGRAPH_INPROC_ERROR
+        EVENT_NAMES.ADAPTER_LANGGRAPH_INPROC_ERROR,
       );
 
       // Direct passthrough - GraphResult.error is already AiExecutionErrorCode
@@ -469,7 +510,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
   private createErrorResult(
     runId: string,
     requestId: string,
-    code: AiExecutionErrorCode = "internal"
+    code: AiExecutionErrorCode = "internal",
   ): GraphRunResult {
     const errorStream = (async function* () {
       yield { type: "error" as const, error: code };

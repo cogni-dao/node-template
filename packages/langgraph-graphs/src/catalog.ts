@@ -33,7 +33,6 @@ import {
   createFrontendTesterGraph,
   FRONTEND_TESTER_GRAPH_NAME,
 } from "./graphs/frontend-tester/graph";
-import { COGNI_PROMPT, COGNI_TOOL_IDS } from "./graphs/mission/cogni";
 import {
   COGNI_DECIDE_PROMPT,
   COGNI_DECIDE_TOOL_IDS,
@@ -269,16 +268,15 @@ export const NODE_LANGGRAPH_CATALOG = {
   /**
    * Mission loop (story.5108 / story.5116) — every node runs it: a node schedules
    * `langgraph:work-prioritizer` in its own repo-spec, and a node with no approved goals changes
-   * nothing. Now powered by the shared Cogni engine (program "work-review" via createMissionGraph):
-   * it gathers across the read planes, then files exactly one core__edo_decide decision.
+   * nothing. Its legacy program identity is "work-review"; it is being moved to the shared
+   * bounded scoring profile and must not file a reflexive EDO.
    */
   [WORK_PRIORITIZER_GRAPH_NAME]: {
     displayName: "Mission Loop",
-    description:
-      "Source-grounded mission loop from the Cogni factory; files one goal-cited EDO decision",
-    toolIds: COGNI_TOOL_IDS,
+    description: "Source-grounded mission loop with bounded scores or no-op",
+    toolIds: COGNI_DECIDE_TOOL_IDS,
     graphFactory: createMissionGraph,
-    systemPrompt: COGNI_PROMPT,
+    systemPrompt: COGNI_DECIDE_PROMPT,
     program: "work-review",
     report: { event: "ai.work_prioritizer.cycle" },
   },
@@ -315,6 +313,14 @@ export const NODE_LANGGRAPH_CATALOG = {
     graphFactory: createMissionGraph,
     systemPrompt: COGNI_READ_PROMPT,
     program: "cogni-chat",
+  },
+  cogni: {
+    displayName: "Cogni",
+    description: "Node-grounded, read-only Cogni assistant",
+    toolIds: COGNI_READ_TOOL_IDS as readonly string[],
+    graphFactory: createMissionGraph,
+    systemPrompt: COGNI_READ_PROMPT,
+    program: "cogni",
   },
 } as const;
 
@@ -363,19 +369,6 @@ export const OPERATOR_LANGGRAPH_CATALOG = {
     toolIds: GIT_REVIEWER_TOOL_IDS as readonly string[],
     graphFactory: createMissionGraph,
     systemPrompt: GIT_REVIEWER_PROMPT,
-  },
-
-  /**
-   * Cogni mission agent (story.5116). The same factory used by chat. It gathers across the read
-   * planes, then files exactly one core__edo_decide decision — the run's only write.
-   */
-  cogni: {
-    displayName: "Cogni",
-    description: "Hub-grounded mission agent; files one EDO decision",
-    toolIds: COGNI_TOOL_IDS,
-    graphFactory: createMissionGraph,
-    systemPrompt: COGNI_PROMPT,
-    program: "cogni",
   },
 
   // `cogni-chat` (READ mode) now lives in NODE_LANGGRAPH_CATALOG so every node can resolve it at

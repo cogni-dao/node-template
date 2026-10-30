@@ -13,6 +13,10 @@
 
 // Runner
 export { createInProcGraphRunner } from "./runner";
+export {
+  createMemoryPersistence,
+  createPostgresPersistence,
+} from "./postgres-persistence";
 
 // Types
 export type {
