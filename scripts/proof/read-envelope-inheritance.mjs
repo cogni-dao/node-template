@@ -22,6 +22,7 @@ const originals = new Map();
 const sha256 = bytes => createHash("sha256").update(bytes).digest("hex");
 const sourceSha = capture("git", ["rev-parse", "HEAD"]);
 const prHeadSha = process.env.PR_HEAD_SHA ?? sourceSha;
+if (prHeadSha !== sourceSha) run("git", ["fetch", "--no-tags", "--depth=1", "origin", prHeadSha]);
 const checkoutTreeSha = capture("git", ["rev-parse", "HEAD^{tree}"]);
 const prHeadTreeSha = capture("git", ["rev-parse", `${prHeadSha}^{tree}`]);
 if (checkoutTreeSha !== prHeadTreeSha) throw Error("CI checkout differs from PR head; rebase before certifying artifacts");
