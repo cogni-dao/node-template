@@ -13,8 +13,7 @@
  *   - PURE_ORCHESTRATION: No adapters, no Temporal client — only ports/types/callbacks
  *   - SYSTEM_TENANT_IS_TENANT: Governance schedules are first-class DB rows owned by system principal
  *   - UPDATE_ON_DRIFT: Existing schedules are updated in-place when config changes (model, cron, timezone, input)
- *   - GRAPH_CRON_DRIFT: for graph charters, a cron change is drift — detected by comparing the cron's next
- *     fire time (injected `nextCronRun`) with the Temporal schedule's next run, since describe returns no cron.
+ *   - GRAPH_REAPPLY: existing graph charters receive their full desired action on every reconcile.
  *   - GRAPH_CHARTER (task.5282): a non-ledger charter that declares `graph` (+ `model`) runs that
  *     catalog graph via GraphRunWorkflow with `{ messages: [entrypoint], modelRef: platform/model }`
  *     on its own `graph:execute:{graph}` grant. A charter WITHOUT `graph` keeps the sandbox:openclaw
@@ -137,13 +136,6 @@ export interface GovernanceScheduleSyncDeps {
    * on the sandbox-scoped grant would 403 at the graph-run route's scope check).
    */
   ensureGraphGrant?(graphId: string): Promise<string>;
-  /**
-   * GRAPH_CRON_DRIFT: the next fire time (ISO, minute precision) the given cron yields from now in
-   * `timezone`. Temporal compiles crons to calendars (describe returns cron=null), so a cron change on
-   * a graph charter is detected by comparing this to the schedule's own next run. Absent → no cron
-   * drift detection (pre-existing behavior).
-   */
-  nextCronRun?(cron: string, timezone: string): string | null;
   /** Upsert governance schedule row in DB, returns dbScheduleId (UUID) */
   upsertGovernanceScheduleRow(
     params: UpsertGovernanceScheduleRowParams
@@ -377,25 +369,19 @@ export async function syncGovernanceSchedules(
           desiredInput
         );
         const linkDrift = desc.dbScheduleId !== dbScheduleId;
-        // GRAPH_CRON_DRIFT (graph charters only — the ledger schedule stays byte-for-byte): a cron
-        // change must reach Temporal even though describe cannot return the stored cron.
-        const desiredNext =
-          schedule.graph !== undefined && !isLedgerIngest && !desc.isPaused
-            ? (deps.nextCronRun?.(schedule.cron, schedule.timezone) ?? null)
-            : null;
-        const cronDrift =
-          desiredNext !== null &&
-          desc.nextRunAtIso !== null &&
-          desiredNext.slice(0, 16) !== desc.nextRunAtIso.slice(0, 16);
+        // The description omits graph/grant and canonical cron. Reapply graph
+        // charters in full so rotations, graph-only changes and equal-next-tick
+        // cadence changes converge, including while paused.
+        const reapplyGraph = schedule.graph !== undefined && !isLedgerIngest;
 
-        if (configChanged || linkDrift || cronDrift) {
+        if (reapplyGraph || configChanged || linkDrift) {
           await scheduleControl.updateSchedule(scheduleId, desiredParams);
           if (desc.isPaused) {
             await scheduleControl.resumeSchedule(scheduleId);
           }
           result.updated.push(scheduleId);
           log.info(
-            { scheduleId, configChanged, linkDrift, cronDrift },
+            { scheduleId, configChanged, linkDrift, reapplyGraph },
             "Updated governance schedule (drift detected)"
           );
         } else if (desc.isPaused) {

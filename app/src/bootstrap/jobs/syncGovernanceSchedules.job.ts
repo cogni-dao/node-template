@@ -109,14 +109,6 @@ export async function runGovernanceSchedulesSyncJob(
         });
         return grant.id;
       },
-      // GRAPH_CRON_DRIFT: next fire time of a cron, minute precision, for drift detection.
-      nextCronRun: (cron: string, timezone: string) => {
-        try {
-          return computeNextRun(cron, timezone).toISOString();
-        } catch {
-          return null;
-        }
-      },
       upsertGovernanceScheduleRow: async (params) => {
         const nextRunAt = computeNextRun(params.cron, params.timezone);
 

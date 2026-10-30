@@ -528,55 +528,48 @@ describe("GRAPH_CHARTER — governance schedule `graph:` (task.5282)", () => {
     );
   });
 
-  it("GRAPH_CRON_DRIFT: a cron change (*/15 → */5) on a graph charter updates the Temporal schedule", async () => {
-    const existing = (nextRunAtIso: string): ScheduleDescription => ({
+  it.each([
+    { change: "graph only", graph: "langgraph:ponderer", grant: GRAPH_GRANT_ID, cron: DECIDE.cron, paused: false },
+    { change: "rotated grant", graph: DECIDE.graph, grant: "replacement-grant", cron: DECIDE.cron, paused: false },
+    { change: "cadence sharing the next tick", graph: DECIDE.graph, grant: GRAPH_GRANT_ID, cron: "15 * * * *", paused: false },
+    { change: "paused cadence", graph: DECIDE.graph, grant: GRAPH_GRANT_ID, cron: "15 * * * *", paused: true },
+    { change: "unchanged desired state", graph: DECIDE.graph, grant: GRAPH_GRANT_ID, cron: DECIDE.cron, paused: false },
+  ])("reapplies full graph action for $change", async ({ graph, grant, cron, paused }) => {
+    const deps = makeMockDeps({
+      ensureGraphGrant: vi.fn().mockResolvedValue(grant),
+    });
+    deps.scheduleControl.createSchedule = vi.fn().mockRejectedValue(
+      new ScheduleControlConflictError("governance:cogni_decide")
+    );
+    deps.scheduleControl.describeSchedule = vi.fn().mockResolvedValue({
       scheduleId: "governance:cogni_decide",
-      nextRunAtIso,
+      nextRunAtIso: "2026-10-21T12:15:00.000Z",
       lastRunAtIso: null,
-      isPaused: false,
-      cron: null, // Temporal never returns the cron
+      isPaused: paused,
+      cron: null,
       timezone: "UTC",
       input: {
-        messages: [{ role: "user", content: "DECIDE" }],
+        messages: [{ role: "user", content: DECIDE.entrypoint }],
         modelRef: { providerKey: "platform", modelId: DECIDE.model },
       },
       dbScheduleId: `${MOCK_DB_SCHEDULE_ID}-1`,
     });
-    const make = (nextCronRun: string) => {
-      const deps = makeMockDeps({
-        ensureGraphGrant: vi.fn().mockResolvedValue(GRAPH_GRANT_ID),
-        nextCronRun: vi.fn().mockReturnValue(nextCronRun),
-      });
-      deps.scheduleControl.createSchedule = vi
-        .fn()
-        .mockRejectedValue(
-          new ScheduleControlConflictError("governance:cogni_decide"),
-        );
-      // The live schedule still fires on the old */15 calendar.
-      deps.scheduleControl.describeSchedule = vi
-        .fn()
-        .mockResolvedValue(existing("2026-10-21T03:00:00.000Z"));
-      return deps;
-    };
-
-    const changed = make("2026-10-21T02:55:00.000Z"); // */5 fires sooner
-    const r1 = await syncGovernanceSchedules(
-      { schedules: [{ ...DECIDE, cron: "*/5 * * * *" }] },
-      changed,
+    const result = await syncGovernanceSchedules(
+      { schedules: [{ ...DECIDE, graph, cron }] }, deps
     );
-    expect(r1.updated).toEqual(["governance:cogni_decide"]);
-    expect(changed.scheduleControl.updateSchedule).toHaveBeenCalledWith(
+    expect(result.updated).toEqual(["governance:cogni_decide"]);
+    expect(deps.scheduleControl.updateSchedule).toHaveBeenCalledWith(
       "governance:cogni_decide",
-      expect.objectContaining({ cron: "*/5 * * * *" }),
+      expect.objectContaining({ graphId: graph, executionGrantId: grant, cron })
     );
-
-    const same = make("2026-10-21T03:00:00.000Z"); // cron unchanged → same next fire
-    const r2 = await syncGovernanceSchedules(
-      { schedules: [{ ...DECIDE, cron: "*/15 * * * *" }] },
-      same,
-    );
-    expect(r2.skipped).toEqual(["governance:cogni_decide"]);
-    expect(same.scheduleControl.updateSchedule).not.toHaveBeenCalled();
+    if (paused) {
+      expect(deps.scheduleControl.resumeSchedule).toHaveBeenCalledWith("governance:cogni_decide");
+      expect(vi.mocked(deps.scheduleControl.updateSchedule).mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(deps.scheduleControl.resumeSchedule).mock.invocationCallOrder[0]!
+      );
+    } else {
+      expect(deps.scheduleControl.resumeSchedule).not.toHaveBeenCalled();
+    }
   });
 
   it("keeps a charter WITHOUT graph on sandbox:openclaw byte-for-byte (governance grant, message+model input)", async () => {
