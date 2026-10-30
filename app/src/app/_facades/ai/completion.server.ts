@@ -513,21 +513,21 @@ export async function completionStream(
 
   const runStream = getContainer().runStream;
   const subscriptionAbort = new AbortController();
-  const abortSubscription = () => subscriptionAbort.abort();
-  if (input.abortSignal?.aborted) {
-    subscriptionAbort.abort();
-  } else {
-    input.abortSignal?.addEventListener("abort", abortSubscription, {
-      once: true,
-    });
-  }
   const rawSubscription = runStream.subscribe(
     runId,
     subscriptionAbort.signal
   );
   const iterator = rawSubscription[Symbol.asyncIterator]();
   const acceptedAtMs = performance.now();
+  let resolveFinal: ((value: StreamFinalResult) => void) | undefined;
+  const final = new Promise<StreamFinalResult>((resolve) => {
+    resolveFinal = resolve;
+  });
   let subscriptionCleaned = false;
+  const abortSubscription = () => {
+    resolveFinal?.({ ok: false, requestId: runId, error: "aborted" });
+    cleanupSubscription();
+  };
   const cleanupSubscription = () => {
     if (subscriptionCleaned) return;
     subscriptionCleaned = true;
@@ -535,6 +535,11 @@ export async function completionStream(
     input.abortSignal?.removeEventListener("abort", abortSubscription);
     try { void iterator.return?.().catch(() => undefined); } catch { /* already closed */ }
   };
+  if (input.abortSignal?.aborted) {
+    abortSubscription();
+  } else {
+    input.abortSignal?.addEventListener("abort", abortSubscription, { once: true });
+  }
 
   let prefetchedEntry: Awaited<ReturnType<typeof iterator.next>> | undefined;
   if ((input.acceptanceMode ?? "first-event") === "first-event") {
@@ -562,11 +567,6 @@ export async function completionStream(
       if (deadline) clearTimeout(deadline);
     }
   }
-
-  let resolveFinal: ((value: StreamFinalResult) => void) | undefined;
-  const final = new Promise<StreamFinalResult>((resolve) => {
-    resolveFinal = resolve;
-  });
 
   const stream = (async function* (): AsyncIterable<AiEvent> {
     const toolCalls: Array<{

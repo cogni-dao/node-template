@@ -230,6 +230,29 @@ describe("OpenAI Endpoint Parity (POST /v1/chat/completions)", () => {
     vi.resetAllMocks();
   });
 
+  it("returns the prefetched raw iterator and settles final when aborted before first stream read", async () => {
+    setupMocks();
+    let returned = 0;
+    const inputAbort = new AbortController();
+    Object.assign(mockGetContainer(), { runStream: {
+      subscribe: () => ({ [Symbol.asyncIterator]: () => ({
+        next: async () => ({ done: false, value: { id: "1", event: { type: "status", phase: "thinking" } } }),
+        return: async () => { returned++; return { done: true, value: undefined }; },
+      }) }),
+    } });
+    const { completionStream } = await import("@/app/_facades/ai/completion.server");
+    const accepted = await completionStream({
+      messages: [{ role: "user", content: "hello" }],
+      modelRef: { providerKey: "platform", modelId: TEST_MODEL_ID },
+      sessionUser: TEST_SESSION_USER_1, graphName: "langgraph:default", abortSignal: inputAbort.signal,
+    }, { log: makeNoopLogger(), reqId: "prefetch-race", traceId: "00000000000000000000000000000000", routeId: "chat.completions", clock: { now: () => "2025-01-01T00:00:00.000Z" } });
+    inputAbort.abort();
+    expect(returned).toBe(1);
+    await expect(accepted.final).resolves.toMatchObject({ ok: false, error: "aborted" });
+    await accepted.stream[Symbol.asyncIterator]().return?.();
+    expect(returned).toBe(1);
+  });
+
   describe("first-event acceptance cleanup", () => {
     it.each(["reject", "timeout", "preabort", "first-error"] as const)(
       "cleans subscriber and listener on %s", async (mode) => {
