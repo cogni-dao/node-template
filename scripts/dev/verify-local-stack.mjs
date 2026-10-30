@@ -20,7 +20,7 @@
  *   - Secrets and source bodies never enter the report.
  * Side-effects: IO (loopback HTTP reads; JSON on stdout; exit code).
  * Usage: pnpm dev:verify [--identity .context/local-dev-identity.json]
- * Links: https://cognidao.org/knowledge/inbox/contrib-flock-leader-conductor-469da024
+ * Links: https://cognidao.org/knowledge/local-agent-development
  */
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
