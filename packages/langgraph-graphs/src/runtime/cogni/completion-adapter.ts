@@ -71,9 +71,11 @@ export type CompletionToolChoice =
   | { readonly type: "function"; readonly function: { readonly name: string } };
 
 export class InvalidCompletionError extends Error {
-  constructor() {
-    super("empty_model_completion");
+  readonly cause?: unknown;
+  constructor(message = "empty_model_completion", cause?: unknown) {
+    super(message);
     this.name = "InvalidCompletionError";
+    if (cause !== undefined) this.cause = cause;
   }
 }
 
@@ -137,6 +139,7 @@ interface CogniCompletionAdapterConfig {
   readonly model?: string;
   readonly signal?: AbortSignal;
   readonly rejectEmpty?: boolean;
+  readonly tierSibling?: boolean;
 }
 
 /** A real SDK chat model; all provider work still uses the billed CompletionFn. */
@@ -171,17 +174,27 @@ export class CogniCompletionAdapter extends BaseChatModel {
   /**
    * MODEL_TIER_SEAM: a sibling adapter bound to a DIFFERENT billed model (e.g. a cheap Flash
    * subagent) that still routes through the same ALS CompletionFn / token sink — the only LLM path.
-   * `bindRun` deliberately refuses a model change on a bound adapter; this is the explicit,
-   * named way to tier. The caller must also invoke with `configurable.model` set to `model`.
+   * `bindRun` deliberately refuses a model change on a bound adapter; this explicit sibling
+   * replaces inherited parent model configuration without changing other invocation context.
    */
   withModel(model: string): CogniCompletionAdapter {
-    return new CogniCompletionAdapter({ ...this.binding, model });
+    return new CogniCompletionAdapter({
+      ...this.binding,
+      model,
+      tierSibling: true,
+    });
   }
 
   override async invoke(
     input: BaseLanguageModelInput,
     config?: CogniCompletionConfig
   ): Promise<AIMessageChunk> {
+    if (this.binding.tierSibling && this.binding.model) {
+      return super.invoke(input, {
+        ...config,
+        configurable: { ...config?.configurable, model: this.binding.model },
+      });
+    }
     const model = config?.configurable?.model ?? this.binding.model;
     if (!model)
       throw new Error(
@@ -200,6 +213,7 @@ export class CogniCompletionAdapter extends BaseChatModel {
   ): Promise<ChatResult> {
     const model = this.binding.model;
     if (!model) throw new Error("bound_model_required");
+    (this.binding.signal ?? options.signal)?.throwIfAborted();
     const { completionFn, tokenSink } = getCogniExecContext();
     const { stream, final } = completionFn({
       messages: messages.map(fromBaseMessage),
@@ -251,13 +265,17 @@ export class CogniCompletionAdapter extends BaseChatModel {
       tool_calls: result.toolCalls?.map((tc, i) => {
         if (!tc.function?.name)
           throw new Error(`missing toolCall function.name at index ${i}`);
+        let args: Record<string, unknown>;
+        try {
+          args = JSON.parse(tc.function.arguments || "{}") as Record<string, unknown>;
+        } catch (error) {
+          if (!(error instanceof SyntaxError)) throw error;
+          throw new InvalidCompletionError("malformed_tool_arguments", error);
+        }
         return {
           id: tc.id,
           name: tc.function.name,
-          args: JSON.parse(tc.function.arguments || "{}") as Record<
-            string,
-            unknown
-          >,
+          args,
           type: "tool_call" as const,
         };
       }),

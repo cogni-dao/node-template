@@ -126,7 +126,7 @@ const ToolAssigneeSchema = z.discriminatedUnion("kind", [
   SubjectRefSchema.options[2].extend({ id: z.string() }),
 ]);
 /** Normalize the legacy capability alias into the canonical, enriched tool output. */
-function toToolAssignee(
+export function toToolAssignee(
   assignee: WorkItemInfo["assignees"][number]
 ): z.infer<typeof ToolAssigneeSchema> {
   switch (assignee.kind) {

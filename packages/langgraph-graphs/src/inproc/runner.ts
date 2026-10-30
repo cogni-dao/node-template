@@ -21,6 +21,7 @@
 
 import {
   type AiEvent,
+  isAiExecutionError,
   normalizeErrorToExecutionCode,
   type ToolSpec,
 } from "@cogni/ai-core";
@@ -30,6 +31,7 @@ import {
   type StructuredToolInterface,
 } from "@langchain/core/tools";
 import { InMemoryStore, MemorySaver } from "@langchain/langgraph";
+import { MiddlewareError } from "langchain";
 import { z } from "zod";
 import {
   CogniCompletionAdapter,
@@ -292,7 +294,28 @@ export function createInProcGraphRunner<TTool = unknown>(
     } catch (error) {
       // Normalize error using duck-typed LlmError detection (kind/status properties)
       // Per ERROR_NORMALIZATION_ONCE: normalize at catch boundary
-      const code = normalizeErrorToExecutionCode(error);
+      // LangChain 1.4.4 brands the class statically; retain instanceof for local wrappers.
+      // Only middleware wrappers may be unwrapped, never arbitrary application causes.
+      let cause: unknown = error;
+      while (
+        (MiddlewareError.isInstance(cause) || cause instanceof MiddlewareError) &&
+        "cause" in cause &&
+        cause.cause !== undefined &&
+        cause.cause !== cause
+      ) {
+        cause = cause.cause;
+      }
+      const signal = request.abortSignal;
+      const cancelled =
+        cause === signal?.reason ||
+        (cause instanceof Error && cause.name === "AbortError") ||
+        (isAiExecutionError(cause) && cause.code === "aborted");
+      const code =
+        signal?.aborted && cancelled
+          ? isAiExecutionError(signal.reason) && signal.reason.code === "timeout"
+            ? "timeout"
+            : "aborted"
+          : normalizeErrorToExecutionCode(cause);
 
       // Capture error message for logging at adapter boundary (not sent to clients)
       const errorMessage =
