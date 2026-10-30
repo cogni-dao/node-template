@@ -105,7 +105,6 @@ describe("shared cogni harness", () => {
 										name: "read_file",
 										arguments: JSON.stringify({
 											file_path: "/skills/test-skill/SKILL.md",
-											limit: 500,
 										}),
 									},
 								},

@@ -35,11 +35,10 @@ export class HubSkillBackend implements BackendProtocolV2 {
   }
   async read(path: string, offset = 0, limit = 500): Promise<ReadResult> {
     try {
-      if (offset !== 0 || limit < 500)
-        return { error: "skill_requires_complete_read" };
+      if (offset !== 0) return { error: "skill_requires_complete_read" };
       const body = await this.body(path);
       const lines = body.split("\n");
-      if (offset !== 0 || lines.length > limit)
+      if (lines.length > limit)
         return { error: "skill_requires_complete_read" };
       return {
         content: body,
