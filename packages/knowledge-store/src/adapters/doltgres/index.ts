@@ -121,7 +121,12 @@ function rowToDomain(row: Record<string, unknown>): Domain {
   };
 }
 
-/** Caller-owned SQL capability. Mutations require one already-admitted write scope. */
+/**
+ * Trusted server-side database executor; these operations construct and escape SQL.
+ * The caller supplies the connection, not request-provided SQL. For mutations,
+ * supply a callback bound to one already-admitted write scope: admission, scope
+ * lifetime, commit and rollback remain the caller's responsibility.
+ */
 export type DomainSql = (
   query: string,
 ) => PromiseLike<readonly Record<string, unknown>[]>;
