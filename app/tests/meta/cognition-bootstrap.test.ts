@@ -22,7 +22,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -287,5 +287,123 @@ describe("session cognition hook", () => {
 		});
 		expect(output).toBe("live cognition\n");
 		expect(readFileSync(cache, "utf8")).toBe("live cognition\n");
+	});
+});
+
+// OpenCode 1.x has no SessionStart hook, so its instruction path is a declaration
+// with no producer unless a project plugin supplies one. Assert the producer by
+// running it, not by grepping for it: a string match passes on a plugin that is
+// never loaded or never invokes the loader.
+describe("opencode cognition producer", () => {
+	const PLUGIN = path.join(REPO_ROOT, ".opencode/plugins/cogni-cognition.js");
+	const LOADER_ARG = "scripts/agent/session-cognition.sh";
+	const CACHE = path.join(".cogni", ".cognition-cache.md");
+
+	interface ShellCall {
+		argv: string;
+		cwd?: string;
+	}
+
+	// Bun's `$` is a tagged template returning a chainable promise. Mirror just
+	// enough of that surface for the plugin, and record what it asked to run.
+	function fakeShell(calls: ShellCall[], onRun?: (cwd: string) => void) {
+		return (strings: TemplateStringsArray, ...values: unknown[]) => {
+			const call: ShellCall = {
+				argv: strings.reduce(
+					(acc, part, i) =>
+						acc + part + (i < values.length ? String(values[i]) : ""),
+					"",
+				),
+			};
+			calls.push(call);
+			const promise = Promise.resolve({ exitCode: 0 }) as Promise<unknown> & {
+				cwd: (dir: string) => unknown;
+				quiet: () => unknown;
+				nothrow: () => unknown;
+			};
+			promise.cwd = (dir: string) => {
+				call.cwd = dir;
+				// The loader only runs once cwd is known; simulate its effect there
+				// so a successful acquisition and an inert failure stay distinct.
+				onRun?.(dir);
+				return promise;
+			};
+			promise.quiet = () => promise;
+			promise.nothrow = () => promise;
+			return promise;
+		};
+	}
+
+	async function runPlugin(
+		root: string,
+		calls: ShellCall[],
+		logs: { body?: { level?: string } }[],
+		onRun?: (cwd: string) => void,
+	): Promise<void> {
+		const mod = (await import(pathToFileURL(PLUGIN).href)) as {
+			CogniCognition: (ctx: unknown) => Promise<unknown>;
+		};
+		await mod.CogniCognition({
+			directory: root,
+			worktree: root,
+			$: fakeShell(calls, onRun),
+			client: {
+				app: {
+					log: async (input: { body?: { level?: string } }) => {
+						logs.push(input);
+					},
+				},
+			},
+		});
+	}
+
+	// A directory shaped like a Cogni node: the loader and the repo spec both exist.
+	function nodeRepo(): string {
+		const root = fixture();
+		mkdirSync(path.join(root, "scripts/agent"), { recursive: true });
+		mkdirSync(path.join(root, ".cogni"), { recursive: true });
+		writeFileSync(
+			path.join(root, LOADER_ARG),
+			"#!/usr/bin/env bash\nexit 0\n",
+		);
+		writeFileSync(
+			path.join(root, ".cogni/repo-spec.yaml"),
+			"intent:\n  name: fixture\n",
+		);
+		return root;
+	}
+
+	it("runs the shared loader at startup so the cache exists before instructions resolve", async () => {
+		const root = nodeRepo();
+		const calls: ShellCall[] = [];
+		const logs: { body?: { level?: string } }[] = [];
+		await runPlugin(root, calls, logs, (cwd) => {
+			writeFileSync(path.join(cwd, CACHE), "complete contract\n");
+		});
+
+		expect(calls).toHaveLength(1);
+		expect(calls[0]?.argv).toContain(LOADER_ARG);
+		expect(calls[0]?.cwd).toBe(root);
+		// A produced cache is the whole signal; nothing to warn about.
+		expect(logs).toEqual([]);
+	});
+
+	it("is inert outside a Cogni node repository", async () => {
+		const root = fixture();
+		const calls: ShellCall[] = [];
+		const logs: { body?: { level?: string } }[] = [];
+		await runPlugin(root, calls, logs);
+		expect(calls).toEqual([]);
+		expect(logs).toEqual([]);
+	});
+
+	it("warns instead of failing silently when a cold boot still has no cache", async () => {
+		const root = nodeRepo();
+		const calls: ShellCall[] = [];
+		const logs: { body?: { level?: string } }[] = [];
+		await runPlugin(root, calls, logs);
+
+		expect(calls).toHaveLength(1);
+		expect(logs[0]?.body?.level).toBe("warn");
 	});
 });
