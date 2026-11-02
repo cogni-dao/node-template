@@ -182,21 +182,10 @@ export function WorkDashboardView({
   }, [listParams]);
   useEffect(() => {
     try {
-      const saved: unknown = JSON.parse(
-        sessionStorage.getItem(historyKey) ?? "[]",
-      );
-      setHistory(
-        Array.isArray(saved) &&
-          saved.length <= 20 &&
-          saved.every(
-            (value) => typeof value === "string" && value.length <= 2048,
-          )
-          ? saved
-          : [],
-      );
-    } catch {
-      setHistory([]);
-    }
+      const saved: unknown = JSON.parse(sessionStorage.getItem(historyKey) ?? "{}");
+      const stack: unknown = saved && typeof saved === "object" && !Array.isArray(saved) ? (saved as Record<string, unknown>)[cursor] : undefined;
+      setHistory(Array.isArray(stack) && stack.length <= 20 && stack.every(value => typeof value === "string" && value.length <= 2048) ? stack : []);
+    } catch { setHistory([]); }
     const param = searchParams.get("columns");
     setVisibleStatuses(
       param === null
@@ -209,7 +198,7 @@ export function WorkDashboardView({
               )
           : [],
     );
-  }, [historyKey, searchParams]);
+  }, [historyKey, searchParams, cursor]);
   const { data, isLoading, error } = useQuery({
     queryKey: ["work-items", listParams.toString()],
     queryFn: () => fetchWorkItems(listParams),
@@ -219,7 +208,13 @@ export function WorkDashboardView({
   const changePage = (next: string, stack: string[]) => {
     const bounded = stack.slice(-20);
     setHistory(bounded);
-    sessionStorage.setItem(historyKey, JSON.stringify(bounded));
+    try {
+      const value: unknown = JSON.parse(sessionStorage.getItem(historyKey) ?? "{}");
+      const entries = value && typeof value === "object" && !Array.isArray(value) ? Object.entries(value).filter(([key, stack]) => key.length <= 2048 && Array.isArray(stack) && stack.length <= 20 && stack.every(item => typeof item === "string" && item.length <= 2048)) : [];
+      const pages = Object.fromEntries(entries.slice(-20));
+      pages[next] = bounded;
+      sessionStorage.setItem(historyKey, JSON.stringify(pages));
+    } catch { sessionStorage.setItem(historyKey, JSON.stringify({ [next]: bounded })); }
     const params = new URLSearchParams(searchParams.toString());
     if (next) params.set("cursor", next);
     else params.delete("cursor");

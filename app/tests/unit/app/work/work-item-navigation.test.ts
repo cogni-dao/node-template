@@ -39,6 +39,12 @@ describe("work-item permalink navigation", () => {
     expect(router.replace).not.toHaveBeenCalled();
   });
 
+  it("keeps the current page when opening and closing detail", () => {
+    const page = new URLSearchParams("cursor=opaque&view=board&rankMin=4");
+    expect(workItemHref("task.5174", page)).toBe("/work/items/task.5174?cursor=opaque&view=board&rankMin=4");
+    expect(workListHref(page)).toBe("/work?cursor=opaque&view=board&rankMin=4");
+  });
+
   it("encodes the logical id exactly once at the human URL boundary", () => {
     expect(workItemHref("bug.%2F", new URLSearchParams())).toBe(
       "/work/items/bug.%252F",

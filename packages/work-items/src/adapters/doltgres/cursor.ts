@@ -13,7 +13,7 @@ export function queryIdentity(query: WorkQuery = {}): string {
   if ((query.rankMin !== undefined && !Number.isFinite(query.rankMin)) || (query.rankMax !== undefined && !Number.isFinite(query.rankMax)) || (query.rankMin !== undefined && query.rankMax !== undefined && query.rankMin > query.rankMax)) throw new Error("invalid rank range");
   const anyOf = (v: readonly string[] | undefined) =>
     v?.length ? [...new Set(v)].sort() : undefined;
-  const node = typeof query.node === "string" ? [query.node] : query.node;
+  const node = typeof query.node === "string" ? (query.node ? [query.node] : undefined) : query.node;
   const normalized = {
     ids: anyOf(query.ids),
     types: anyOf(query.types),
@@ -28,7 +28,7 @@ export function queryIdentity(query: WorkQuery = {}): string {
     scored: query.scored,
     rankMin: query.rankMin,
     rankMax: query.rankMax,
-    assignee: query.assignee,
+    assignee: query.assignee && (query.assignee.kind === "user" ? { kind: "user", userId: query.assignee.userId } : query.assignee.kind === "agent" ? { kind: "agent", agentId: query.assignee.agentId } : { kind: "system", serviceId: query.assignee.serviceId }),
     relatedTo: query.relatedTo,
   };
   return createHash("sha256").update(JSON.stringify(normalized)).digest("hex");

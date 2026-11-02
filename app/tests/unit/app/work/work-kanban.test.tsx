@@ -169,6 +169,10 @@ describe("Work Kanban", () => {
       "/work?cursor=p2",
       { scroll: false },
     );
+    navigation.params = new URLSearchParams("cursor=p2"); result.rerender(element());
+    await waitFor(() => expect(screen.getByRole("button", { name: "task.0020: Work item 20" })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Previous" }));
+    expect(navigation.router.replace).toHaveBeenLastCalledWith("/work", { scroll: false });
   });
 
   it("does not combine an edited filter with an old cursor", async () => {

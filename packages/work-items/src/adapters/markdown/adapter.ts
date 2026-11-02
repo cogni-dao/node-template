@@ -204,15 +204,15 @@ function assertContained(resolved: string, parent: string): void {
 
 function matchesQuery(item: WorkItem, query: WorkQuery): boolean {
   if (
-    query.ids &&
+    query.ids?.length &&
     !query.ids.some((qid) => (qid as string) === (item.id as string))
   ) {
     return false;
   }
-  if (query.types && !query.types.includes(item.type)) {
+  if (query.types?.length && !query.types.includes(item.type)) {
     return false;
   }
-  if (query.statuses && !query.statuses.includes(item.status)) {
+  if (query.statuses?.length && !query.statuses.includes(item.status)) {
     return false;
   }
   if (
@@ -251,12 +251,12 @@ function matchesQuery(item: WorkItem, query: WorkQuery): boolean {
     });
     if (!found) return false;
   }
-  if (query.actor && item.actor !== query.actor && item.actor !== "either") {
+  if (query.actor && query.actor !== "either" && item.actor !== query.actor && item.actor !== "either") {
     return false;
   }
   if (query.node) {
     const want = Array.isArray(query.node) ? query.node : [query.node];
-    if (!want.includes(item.node)) return false;
+    if (want.length && !want.includes(item.node)) return false;
   }
   if (query.labels?.length) {
     if (!query.labels.some((label) => item.labels.includes(label)))
@@ -272,9 +272,7 @@ function matchesQuery(item: WorkItem, query: WorkQuery): boolean {
   }
   if (query.text) {
     const t = query.text.toLowerCase();
-    const searchable =
-      `${item.id} ${item.title} ${item.summary ?? ""} ${item.labels.join(" ")}`.toLowerCase();
-    if (!searchable.includes(t)) return false;
+    if (![item.id, item.title, item.summary, item.labels].some(value => String(value ?? "").toLowerCase().includes(t))) return false;
   }
   return true;
 }

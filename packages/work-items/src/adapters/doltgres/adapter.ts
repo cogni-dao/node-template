@@ -2776,7 +2776,7 @@ export class DoltgresWorkItemAdapter
       conditions.push(`(${rankScoreSql()}) <= ${Number(query.rankMax)}`);
     if (query.node) {
       const nodes = Array.isArray(query.node) ? query.node : [query.node];
-      conditions.push(`node IN (${nodes.map(escapeValue).join(", ")})`);
+      if (nodes.length) conditions.push(`node IN (${nodes.map(escapeValue).join(", ")})`);
     }
     if (query.labels?.length) {
       // Doltgres has no `jsonb_array_elements_text`, so match against the
