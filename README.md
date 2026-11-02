@@ -10,10 +10,10 @@ deployment, observability, durable knowledge, and agent infrastructure included.
 ## Develop locally
 
 Use this node's [local environment example](.env.local.example) and the
-[local agent development guide draft](https://cognidao.org/knowledge/inbox/contrib-flock-leader-conductor-469da024).
+[local agent development guide](https://cognidao.org/knowledge/local-agent-development).
 The current local proof uses an explicitly configured shared local substrate.
 This repository does not include a cold-machine infrastructure installer. The guide
-is awaiting review; [agent infrastructure](https://cognidao.org/knowledge/agent-infrastructure-expert)
+is described in that guide; [agent infrastructure](https://cognidao.org/knowledge/agent-infrastructure-expert)
 owns the existing execution contract.
 
 ```bash
@@ -36,6 +36,19 @@ ports. `pnpm langgraph:dev` starts only the graph server. `dev:verify`'s authent
 checks need the minted identity above; its knowledge/work-item body reads are skipped on a
 fresh empty node, while deep readiness and authenticated graph discovery still prove the
 stack. A green readiness check or Studio graph listing alone does not prove a working run.
+
+To recover an existing node's local knowledge and goals, download its authenticated
+knowledge, cognition and graph snapshots as described in the guide, then run
+`pnpm hub:restore:local --knowledge <knowledge.json> --cognition <cognition.json> --graph <graph.json>`.
+The command checks node identity and a loopback database, creates a backup branch,
+restores the snapshot rows and citation edges, and preserves other local rows.
+It never copies work items or pushes a remote. A public DoltHub mirror can be stale;
+verify its contents before using it as recovery data.
+
+The standalone launcher uses the billed in-process graph runtime for real node tools;
+Studio runs separately for isolated graph experiments. Rebuild packages after changing
+graph source used by the app. Browser UI compilation is included in `dev:verify`;
+verify wallet sign-in and an actual chat separately before calling development complete.
 
 ## Continue with your AI agent
 
