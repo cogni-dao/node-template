@@ -170,3 +170,31 @@ it("pages by a long project key and rejects a changed boundary", async () => {
   boundary = "changed";
   await expect(adapter.list({ sortBy: "projectId", sortDirection: "asc", limit: 1, cursor: first.nextCursor })).rejects.toThrow(/restart pagination/);
 });
+
+
+it("preserves Markdown phrase search and matches labels separately before paging", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "work-text-"));
+  try {
+    const itemsDir = path.join(dir, "work", "items");
+    await mkdir(itemsDir, { recursive: true });
+    await mkdir(path.join(dir, "work", "projects"), { recursive: true });
+    await writeFile(path.join(itemsDir, "task.0001.md"), `---\nid: task.0001\ntype: task\ntitle: Decoy\nstatus: needs_design\n---\n`);
+    await writeFile(path.join(itemsDir, "task.0002.md"), `---\nid: task.0002\ntype: task\ntitle: Deploy alpha\nsummary: beta service\nstatus: needs_design\nlabels: ["area:web", "goal:work", "part,one"]\n---\n`);
+    const adapter = new MarkdownWorkItemAdapter(dir);
+    expect((await adapter.list({ text: "alpha beta", limit: 1 })).items.map(i => i.id)).toEqual(["task.0002"]);
+    expect((await adapter.list({ text: "web,goal", limit: 1 })).items).toHaveLength(0);
+    expect((await adapter.list({ text: "part,one", limit: 1 })).items.map(i => i.id)).toEqual(["task.0002"]);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+it("matches Dolt labels separately, including literal commas", async () => {
+  const queries: string[] = [];
+  let labels: unknown = ["area:web", "goal:work", "part,one"];
+  const reader = makeFakeDoltgresSql((sql) => sql.includes("AS ordered") ? [{ id: "task.0001", type: "task", status: "needs_design", title: "Example", labels, __sort_key: null }] : [], queries);
+  const adapter = new DoltgresWorkItemAdapter(independentReadPool(reader), { readClient: reader });
+  expect((await adapter.list({ text: "web,goal", limit: 1 })).items).toHaveLength(0);
+  expect((await adapter.list({ text: "part,one", limit: 1 })).items.map(i => i.id)).toEqual(["task.0001"]);
+  labels = JSON.stringify(labels);
+  expect((await adapter.list({ text: "web,goal", limit: 1 })).items).toHaveLength(0);
+  expect((await adapter.list({ text: "part,one", limit: 1 })).items.map(i => i.id)).toEqual(["task.0001"]);
+});

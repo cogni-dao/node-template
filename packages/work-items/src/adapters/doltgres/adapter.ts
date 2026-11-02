@@ -2867,7 +2867,7 @@ export class DoltgresWorkItemAdapter
         for (const row of rows) {
           if (
             !textNeedle ||
-            [row.id, row.title, row.summary, row.labels].some((value) =>
+            [row.id, row.title, row.summary, ...jsonArrayOf<string>(row.labels)].some((value) =>
               String(value ?? "")
                 .toLowerCase()
                 .includes(textNeedle)

@@ -272,7 +272,8 @@ function matchesQuery(item: WorkItem, query: WorkQuery): boolean {
   }
   if (query.text) {
     const t = query.text.toLowerCase();
-    if (![item.id, item.title, item.summary, item.labels].some(value => String(value ?? "").toLowerCase().includes(t))) return false;
+    const titleAndSummary = `${item.title} ${item.summary ?? ""}`.toLowerCase();
+    if (!titleAndSummary.includes(t) && !String(item.id).toLowerCase().includes(t) && !item.labels.some(label => label.toLowerCase().includes(t))) return false;
   }
   return true;
 }
