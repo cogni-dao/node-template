@@ -15,6 +15,7 @@ interface WorkListState {
   readonly project: readonly string[];
   readonly sort: string | null;
   readonly query: string;
+  readonly rankRange?: readonly [number | undefined, number | undefined];
 }
 
 export function workListHref(searchParams: SerializableSearchParams): string {
@@ -24,7 +25,7 @@ export function workListHref(searchParams: SerializableSearchParams): string {
 
 export function workItemHref(
   id: string,
-  searchParams: SerializableSearchParams
+  searchParams: SerializableSearchParams,
 ): string {
   const query = searchParams.toString();
   const path = `/work/items/${encodeURIComponent(id)}`;
@@ -34,7 +35,7 @@ export function workItemHref(
 function setListParam(
   params: URLSearchParams,
   key: string,
-  values: readonly string[]
+  values: readonly string[],
 ): void {
   params.delete(key);
   if (values.length > 0) params.set(key, values.join(","));
@@ -44,16 +45,24 @@ function setListParam(
 export function workViewHref(
   selectedItemId: string | undefined,
   searchParams: SerializableSearchParams,
-  state: WorkListState
+  state: WorkListState,
 ): string {
   const params = new URLSearchParams(searchParams.toString());
+  params.delete("cursor");
   setListParam(params, "type", state.type);
   setListParam(params, "status", state.status);
+  if (state.status.length === 0) params.set("status", "all");
   setListParam(params, "project", state.project);
   params.delete("sort");
   if (state.sort) params.set("sort", state.sort);
   params.delete("q");
   if (state.query) params.set("q", state.query);
+  if (state.rankRange !== undefined) {
+    for (const [index, key] of ["rankMin", "rankMax"].entries()) {
+      const value = state.rankRange[index];
+      params.set(key, value === undefined ? "" : String(value));
+    }
+  }
   return selectedItemId
     ? workItemHref(selectedItemId, params)
     : workListHref(params);
@@ -62,14 +71,14 @@ export function workViewHref(
 export function openWorkItemPermalink(
   router: WorkRouter,
   id: string,
-  searchParams: SerializableSearchParams
+  searchParams: SerializableSearchParams,
 ): void {
   router.push(workItemHref(id, searchParams), { scroll: false });
 }
 
 export function closeWorkItemPermalink(
   router: WorkRouter,
-  searchParams: SerializableSearchParams
+  searchParams: SerializableSearchParams,
 ): void {
   router.replace(workListHref(searchParams), { scroll: false });
 }

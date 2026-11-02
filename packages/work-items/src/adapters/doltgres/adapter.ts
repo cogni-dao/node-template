@@ -47,7 +47,7 @@ import { parseWorkItemScores } from "../../scores.js";
 import { normalizeWorkItemOrder } from "../../query-order.js";
 import { rankScoreSql } from "../../rank-policy.js";
 
-import { decodeCursor, encodeCursor, type WorkItemCursor } from "./cursor.js";
+import { decodeCursor, encodeCursor, queryIdentity, type WorkItemCursor } from "./cursor.js";
 import type {
   WorkItemsContentPort,
   WorkItemsCreateInput,
@@ -2740,6 +2740,14 @@ export class DoltgresWorkItemAdapter
     nextCursor?: string;
     pageInfo: { endCursor: string | null; hasMore: boolean };
   }> {
+    if (
+      (query.rankMin !== undefined && !Number.isFinite(query.rankMin)) ||
+      (query.rankMax !== undefined && !Number.isFinite(query.rankMax)) ||
+      (query.rankMin !== undefined &&
+        query.rankMax !== undefined &&
+        query.rankMin > query.rankMax)
+    )
+      throw new Error("invalid rank range");
     const conditions: string[] = [];
     if (query.ids?.length) {
       conditions.push(
@@ -2758,6 +2766,14 @@ export class DoltgresWorkItemAdapter
     if (query.projectId) {
       conditions.push(`project_id = ${escapeValue(query.projectId as string)}`);
     }
+    if (query.projectIds?.length)
+      conditions.push(
+        `project_id IN (${query.projectIds.map(escapeValue).join(", ")})`
+      );
+    if (query.rankMin !== undefined)
+      conditions.push(`(${rankScoreSql()}) >= ${Number(query.rankMin)}`);
+    if (query.rankMax !== undefined)
+      conditions.push(`(${rankScoreSql()}) <= ${Number(query.rankMax)}`);
     if (query.node) {
       const nodes = Array.isArray(query.node) ? query.node : [query.node];
       conditions.push(`node IN (${nodes.map(escapeValue).join(", ")})`);
@@ -2769,7 +2785,8 @@ export class DoltgresWorkItemAdapter
       conditions.push(
         `(${query.labels
           .map(
-            (label) => `CAST(labels AS TEXT) LIKE ${escapeValue(`%"${label}"%`)}`
+            (label) =>
+              `CAST(labels AS TEXT) LIKE ${escapeValue(`%"${label}"%`)}`
           )
           .join(" OR ")})`
       );
@@ -2790,7 +2807,7 @@ export class DoltgresWorkItemAdapter
     const textNeedle = query.text?.toLowerCase();
     const order = normalizeWorkItemOrder(query);
     const initialCursor = query.cursor
-      ? decodeCursor(query.cursor, order)
+      ? decodeCursor(query.cursor, order, queryIdentity(query))
       : undefined;
     const keyExpression =
       order.sortBy === "rankScore"
@@ -2798,6 +2815,10 @@ export class DoltgresWorkItemAdapter
         : {
             priority: "priority",
             rank: "rank",
+            type: "type",
+            status: "status",
+            projectId: "project_id",
+            estimate: "estimate",
             // NOW() retains hidden nanoseconds, but native timestamp text I/O
             // exposes microseconds. Use that same precision for ordering and
             // seeking, so the projected cursor can roundtrip the boundary.
@@ -2807,7 +2828,8 @@ export class DoltgresWorkItemAdapter
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
     const limit = Math.min(Math.max(query.limit ?? 100, 1), 500);
     const nativeCursor = (row: Record<string, unknown>): WorkItemCursor => ({
-      v: 1,
+      v: 2,
+      filter: queryIdentity(query),
       ...order,
       key: row.__sort_key === null ? null : String(row.__sort_key),
       id: String(row.id)
@@ -2820,7 +2842,9 @@ export class DoltgresWorkItemAdapter
       const nativeType =
         order.sortBy === "createdAt" || order.sortBy === "updatedAt"
           ? "TIMESTAMP WITH TIME ZONE"
-          : "DOUBLE PRECISION";
+          : ["type", "status", "projectId"].includes(order.sortBy)
+            ? "TEXT"
+            : "DOUBLE PRECISION";
       const key = `CAST(${escapeValue(cursor.key)} AS ${nativeType})`;
       return `WHERE (__sort_value IS NULL OR __sort_value ${order.sortDirection === "asc" ? ">" : "<"} ${key} OR (__sort_value = ${key} AND ${afterId}))`;
     };
@@ -2837,7 +2861,7 @@ export class DoltgresWorkItemAdapter
         for (const row of rows) {
           if (
             !textNeedle ||
-            [row.title, row.summary].some((value) =>
+            [row.id, row.title, row.summary, row.labels].some((value) =>
               String(value ?? "")
                 .toLowerCase()
                 .includes(textNeedle)

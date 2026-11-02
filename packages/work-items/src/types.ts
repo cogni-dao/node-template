@@ -14,10 +14,10 @@
  * @public
  */
 
-import { rankScore } from "./scores.js";
-import type { WorkItemDto } from "./contracts.js";
 import type { Tagged } from "type-fest";
+import type { WorkItemDto } from "./contracts.js";
 import type { WorkItemSortBy, WorkItemSortDirection } from "./query-order.js";
+import { rankScore } from "./scores.js";
 
 // ── Identity ──────────────────────────────────────────
 
@@ -89,10 +89,25 @@ export type WorkItemScores = Readonly<Record<string, WorkItemScore>>;
 
 // ── Work item ─────────────────────────────────────────
 
-export type WorkItem = Readonly<Omit<WorkItemDto,
-  "id" | "type" | "status" | "rankScore" | "scores" | "projectId" | "parentId" |
-  "blockedBy" | "node" | "assignees" | "externalRefs" | "actor" | "labels" | "specRefs"
->> & {
+export type WorkItem = Readonly<
+  Omit<
+    WorkItemDto,
+    | "id"
+    | "type"
+    | "status"
+    | "rankScore"
+    | "scores"
+    | "projectId"
+    | "parentId"
+    | "blockedBy"
+    | "node"
+    | "assignees"
+    | "externalRefs"
+    | "actor"
+    | "labels"
+    | "specRefs"
+  >
+> & {
   readonly id: WorkItemId;
   readonly type: WorkItemType;
   readonly status: WorkItemStatus;
@@ -118,6 +133,9 @@ export type WorkQuery = {
   readonly statuses?: readonly WorkItemStatus[];
   readonly assignee?: SubjectRef;
   readonly projectId?: WorkItemId;
+  readonly projectIds?: readonly WorkItemId[];
+  readonly rankMin?: number;
+  readonly rankMax?: number;
   readonly relatedTo?: WorkItemId;
   readonly text?: string;
   readonly actor?: ActorKind;
@@ -149,8 +167,8 @@ export function toWorkItemDto(item: WorkItem): WorkItemDto {
     ...fields,
     ...(actor !== "either" && { actor }),
     rankScore: rankScore(item.scores),
-    assignees: item.assignees.map(a => ({ ...a })),
-    externalRefs: item.externalRefs.map(r => ({ ...r })),
+    assignees: item.assignees.map((a) => ({ ...a })),
+    externalRefs: item.externalRefs.map((r) => ({ ...r })),
     labels: [...item.labels],
     specRefs: [...item.specRefs],
   };

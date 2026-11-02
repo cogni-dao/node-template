@@ -19,25 +19,26 @@ import type {
   WorkItemCoordinationOutput,
   WorkItemDto,
   WorkItemsListInput,
-  WorkItemsListOutput
+  WorkItemsListOutput,
 } from "@cogni/node-contracts";
 import type { WorkItem, WorkItemId, WorkItemLease } from "@cogni/work-items";
 import {
   toWorkItemId,
   WorkItemRevisionConflictError,
   WorkItemScoresInvalidError,
-  WorkItemWriteOutcomeUnknownError
+  WorkItemWriteOutcomeUnknownError,
 } from "@cogni/work-items";
+
 export {
   WorkItemRevisionConflictError,
   WorkItemScoresInvalidError,
-  WorkItemWriteOutcomeUnknownError
+  WorkItemWriteOutcomeUnknownError,
 };
 
 import {
   checkNodeAdmin,
   isPrivilegedPriority,
-  NodeAdminRequiredError
+  NodeAdminRequiredError,
 } from "@cogni/knowledge-store";
 import { getContainer } from "@/bootstrap/container";
 import { toHttpWorkItem } from "../read-envelopes.server";
@@ -80,26 +81,26 @@ export class WorkItemForbiddenError extends Error {
  */
 async function assertPriorityAuthority(
   priority: number | null | undefined,
-  actor: WorkItemActor
+  actor: WorkItemActor,
 ): Promise<void> {
   if (!isPrivilegedPriority(priority)) return;
   const decision = await checkNodeAdmin(getContainer().nodeAdmin, {
     userId: actor.id,
-    walletAddress: actor.walletAddress ?? null
+    walletAddress: actor.walletAddress ?? null,
   });
   if (!decision.ok) {
     const err = new NodeAdminRequiredError(
       decision,
-      `work.items.priority.p${priority}`
+      `work.items.priority.p${priority}`,
     );
     getContainer().log.warn(
       {
         errorCode: err.errorCode,
         reason: err.reason,
         action: err.action,
-        userId: actor.id
+        userId: actor.id,
       },
-      "work.items.priority_node_admin_refused"
+      "work.items.priority_node_admin_refused",
     );
     throw err;
   }
@@ -155,7 +156,7 @@ type StripUndefined<T> = {
 };
 
 function dropUndefined<T extends Record<string, unknown>>(
-  obj: T
+  obj: T,
 ): StripUndefined<T> {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(obj)) {
@@ -184,7 +185,7 @@ function rethrowBackendError(error: unknown): never {
       throw new WorkItemRevisionConflictError(
         conflict.id,
         conflict.expectedRevision,
-        conflict.currentRevision
+        conflict.currentRevision,
       );
     }
   }
@@ -195,7 +196,7 @@ function rethrowBackendError(error: unknown): never {
     throw new WorkItemScoresInvalidError(
       Array.isArray(issues)
         ? (issues as WorkItemScoresInvalidError["issues"])
-        : []
+        : [],
     );
   }
   if ((error as Error)?.name === "WorkItemWriteOutcomeUnknownError") {
@@ -204,7 +205,7 @@ function rethrowBackendError(error: unknown): never {
       receipt.operationId,
       receipt.branch,
       receipt.commitHash,
-      receipt.itemId
+      receipt.itemId,
     );
   }
   if (
@@ -226,25 +227,28 @@ function rethrowBackendError(error: unknown): never {
 }
 
 export async function listWorkItems(
-  input: WorkItemsListInput
+  input: WorkItemsListInput,
 ): Promise<WorkItemsListOutput> {
   const container = getContainer();
   const queryShared = {
     ...(input.sortBy !== undefined && { sortBy: input.sortBy }),
     ...(input.sortDirection !== undefined && {
-      sortDirection: input.sortDirection
+      sortDirection: input.sortDirection,
     }),
     ...(input.types && { types: input.types as WorkItem["type"][] }),
     ...(input.statuses && { statuses: input.statuses as WorkItem["status"][] }),
     ...(input.text && { text: input.text }),
     ...(input.actor && { actor: input.actor as WorkItem["actor"] }),
     ...(input.projectId && { projectId: toWorkItemId(input.projectId) }),
+    ...(input.projectIds && { projectIds: input.projectIds.map(toWorkItemId) }),
+    ...(input.rankMin !== undefined && { rankMin: input.rankMin }),
+    ...(input.rankMax !== undefined && { rankMax: input.rankMax }),
     ...(input.node && { node: input.node }),
     ...(input.labels && { labels: input.labels }),
     ...(input.labelPrefix !== undefined && { labelPrefix: input.labelPrefix }),
     ...(input.scored !== undefined && { scored: input.scored }),
     limit: input.limit ?? 100,
-    ...(input.cursor && { cursor: input.cursor })
+    ...(input.cursor && { cursor: input.cursor }),
   };
 
   // Exactly one backend owns the total order and its cursor. Configured Dolt
@@ -255,8 +259,8 @@ export async function listWorkItems(
       items: result.items.map(toDto),
       pageInfo: result.pageInfo,
       ...(result.pageInfo.endCursor !== null && {
-        nextCursor: result.pageInfo.endCursor
-      })
+        nextCursor: result.pageInfo.endCursor,
+      }),
     };
   } catch (error) {
     if ((error as Error)?.name === "InvalidCursorError")
@@ -270,9 +274,9 @@ export async function listWorkItems(
       items: result.items.map(toDto),
       pageInfo: {
         endCursor: result.nextCursor ?? null,
-        hasMore: result.nextCursor !== undefined
+        hasMore: result.nextCursor !== undefined,
       },
-      ...(result.nextCursor !== undefined && { nextCursor: result.nextCursor })
+      ...(result.nextCursor !== undefined && { nextCursor: result.nextCursor }),
     };
   } catch (error) {
     if ((error as Error)?.name === "InvalidCursorError")
@@ -300,7 +304,7 @@ export async function getWorkItem(id: string): Promise<WorkItemDto | null> {
 
 export async function createWorkItem(
   input: ContractCreateInput,
-  sessionUser: WorkItemActor
+  sessionUser: WorkItemActor,
 ): Promise<WorkItemDto> {
   await assertPriorityAuthority(input.priority, sessionUser);
   const container = getContainer();
@@ -314,10 +318,10 @@ export async function createWorkItem(
         ...(input.outcome !== undefined && { outcome: input.outcome }),
         ...(input.specRefs !== undefined && { specRefs: input.specRefs }),
         ...(input.projectId !== undefined && {
-          projectId: toWorkItemId(input.projectId)
+          projectId: toWorkItemId(input.projectId),
         }),
         ...(input.parentId !== undefined && {
-          parentId: toWorkItemId(input.parentId)
+          parentId: toWorkItemId(input.parentId),
         }),
         ...(input.labels !== undefined && { labels: input.labels }),
         ...(input.assignees !== undefined && { assignees: input.assignees }),
@@ -326,9 +330,9 @@ export async function createWorkItem(
         ...(input.priority !== undefined && { priority: input.priority }),
         ...(input.rank !== undefined && { rank: input.rank }),
         ...(input.estimate !== undefined && { estimate: input.estimate }),
-        ...(input.scores !== undefined && { scores: input.scores })
+        ...(input.scores !== undefined && { scores: input.scores }),
       },
-      sessionUser.id
+      sessionUser.id,
     );
     return toDto(created);
   } catch (e) {
@@ -338,7 +342,7 @@ export async function createWorkItem(
 
 export async function patchWorkItem(
   input: ContractPatchInput,
-  sessionUser: WorkItemActor
+  sessionUser: WorkItemActor,
 ): Promise<WorkItemDto> {
   await assertPriorityAuthority(input.set.priority, sessionUser);
   const container = getContainer();
@@ -347,11 +351,11 @@ export async function patchWorkItem(
       {
         id: toWorkItemId(input.id),
         ...(input.expectedRevision !== undefined && {
-          expectedRevision: input.expectedRevision
+          expectedRevision: input.expectedRevision,
         }),
-        set: dropUndefined(input.set)
+        set: dropUndefined(input.set),
       },
-      sessionUser.id
+      sessionUser.id,
     );
     if (!patched) throw new WorkItemNotFoundError(input.id);
     return toDto(patched);
@@ -362,13 +366,13 @@ export async function patchWorkItem(
 
 export async function deleteWorkItem(
   id: string,
-  sessionUser: { id: string }
+  sessionUser: { id: string },
 ): Promise<boolean> {
   const container = getContainer();
   try {
     return await container.doltgresWorkItems.delete(
       toWorkItemId(id),
-      sessionUser.id
+      sessionUser.id,
     );
   } catch (e) {
     rethrowBackendError(e);
@@ -387,7 +391,7 @@ export async function claimWorkItem(input: {
       id: toWorkItemId(input.id),
       runId: input.runId,
       command: input.command,
-      principalId: input.principalId
+      principalId: input.principalId,
     });
     return item;
   } catch (error) {
@@ -407,7 +411,7 @@ export async function releaseWorkItem(input: {
       id: toWorkItemId(input.id),
       runId: input.runId,
       leaseToken: input.leaseToken,
-      principalId: input.principalId
+      principalId: input.principalId,
     });
     return item;
   } catch (error) {
@@ -429,7 +433,7 @@ export async function heartbeatWorkItem(input: {
       runId: input.runId,
       leaseToken: input.leaseToken,
       ...(input.command !== undefined && { command: input.command }),
-      principalId: input.principalId
+      principalId: input.principalId,
     });
     return item;
   } catch (error) {
@@ -438,7 +442,7 @@ export async function heartbeatWorkItem(input: {
 }
 
 export async function getWorkItemCoordination(
-  id: string
+  id: string,
 ): Promise<WorkItemCoordinationOutput> {
   const container = getContainer();
   try {
@@ -451,8 +455,8 @@ export async function getWorkItemCoordination(
         claimedByRun: current.claimedByRun ?? null,
         claimedByDisplayName: current.claimedByRun ?? null,
         claimedAt: current.claimedAt ?? null,
-        lastCommand: current.lastCommand ?? null
-      }
+        lastCommand: current.lastCommand ?? null,
+      },
     };
   } catch (error) {
     if (error instanceof WorkItemNotFoundError) throw error;

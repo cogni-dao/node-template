@@ -80,6 +80,13 @@ export const GET = wrapRouteHandlerWithLogging(
         text: textParam ?? undefined,
         actor: actorParam ?? undefined,
         projectId: projectIdParam ?? undefined,
+        projectIds: url.searchParams.get("projectIds")?.split(","),
+        rankMin: url.searchParams.has("rankMin")
+          ? Number(url.searchParams.get("rankMin"))
+          : undefined,
+        rankMax: url.searchParams.has("rankMax")
+          ? Number(url.searchParams.get("rankMax"))
+          : undefined,
         node: nodeParam
           ? nodeParam.includes(",")
             ? nodeParam.split(",")
@@ -104,10 +111,19 @@ export const GET = wrapRouteHandlerWithLogging(
         errorCode = WORK_ITEMS_LIST_ERROR_CODES.INVALID_INPUT;
         return NextResponse.json(
           { error: "invalid input", issues: parsed.error.issues },
-          { status }
+          { status },
         );
       }
       const input = parsed.data;
+      if (
+        input.rankMin !== undefined &&
+        input.rankMax !== undefined &&
+        input.rankMin > input.rankMax
+      ) {
+        status = 400;
+        errorCode = WORK_ITEMS_LIST_ERROR_CODES.INVALID_INPUT;
+        return NextResponse.json({ error: "invalid rank range" }, { status });
+      }
       order = normalizeWorkItemOrder({
         ...(input.sortBy !== undefined && { sortBy: input.sortBy }),
         ...(input.sortDirection !== undefined && {
@@ -127,7 +143,7 @@ export const GET = wrapRouteHandlerWithLogging(
               code: "invalid_cursor",
               message: e.message,
             },
-            { status: 400 }
+            { status: 400 },
           );
         }
         if (e instanceof WorkItemsBackendNotReadyError) {
@@ -139,7 +155,7 @@ export const GET = wrapRouteHandlerWithLogging(
       }
 
       const response = NextResponse.json(
-        workItemsListOperation.output.parse(result)
+        workItemsListOperation.output.parse(result),
       );
       status = 200;
       errorCode = undefined;
@@ -164,7 +180,7 @@ export const GET = wrapRouteHandlerWithLogging(
         ...(errorCode && { errorCode }),
       });
     }
-  }
+  },
 );
 
 /**
@@ -192,7 +208,7 @@ export const POST = wrapRouteHandlerWithLogging(
     if (!parseResult.success) {
       return NextResponse.json(
         { error: "invalid input", issues: parseResult.error.issues },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
@@ -203,7 +219,7 @@ export const POST = wrapRouteHandlerWithLogging(
       });
       ctx.log.info(
         { workItemId: created.id, node: created.node },
-        "work.items.create_success"
+        "work.items.create_success",
       );
       return NextResponse.json(workItemsCreateOperation.output.parse(created), {
         status: 201,
@@ -212,7 +228,7 @@ export const POST = wrapRouteHandlerWithLogging(
       if (e instanceof WorkItemScoresInvalidError) {
         return NextResponse.json(
           { error: "invalid input", errorCode: e.code, issues: e.issues },
-          { status: 400 }
+          { status: 400 },
         );
       }
       if (e instanceof WorkItemWriteOutcomeUnknownError) {
@@ -223,13 +239,13 @@ export const POST = wrapRouteHandlerWithLogging(
             lookup: e.receipt.lookup,
             message: e.message,
           },
-          { status: 409 }
+          { status: 409 },
         );
       }
       if (e instanceof NodeAdminRequiredError) {
         return NextResponse.json(
           { error: e.message, errorCode: e.errorCode, action: e.action },
-          { status: e.status }
+          { status: e.status },
         );
       }
       if (e instanceof WorkItemsBackendNotReadyError) {
@@ -238,10 +254,10 @@ export const POST = wrapRouteHandlerWithLogging(
       if ((e as Error)?.name === "WorkItemAlreadyExistsError") {
         return NextResponse.json(
           { error: (e as Error).message },
-          { status: 409 }
+          { status: 409 },
         );
       }
       throw e;
     }
-  }
+  },
 );

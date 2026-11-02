@@ -6,7 +6,7 @@
 
 - **Owners:** @cogni-dao
 - **Status:** stable
-- **Last reviewed:** 2026-10-21
+- **Last reviewed:** 2026-11-02
 
 ## Purpose
 
@@ -45,7 +45,7 @@ Work item port interfaces, domain types, and storage adapters for structured wor
   - `WorkItemId`, `Revision`, `WorkItemType`, `WorkItemStatus`, `ActorKind` — identity and enum types
   - `SubjectRef`, `ExternalRef`, `RelationType`, `WorkRelation` — structured domain types
   - `toWorkItemDto` — spread-first read serializer with actor omission and derived rank
-  - `WorkItem`, `WorkQuery` — full work item type and query filter
+  - `WorkItem`, `WorkQuery` — full work item type and query filter; rank bounds are inclusive and exclude unknown rank when set; projectIds is any-of
   - `WORK_ITEM_SORT_FIELDS`, `WORK_ITEM_SORT_DIRECTIONS`, `normalizeWorkItemOrder`, `compareWorkItems` — canonical ordering; default rankScore DESC, unknown last, id ASC
   - `WorkItemSortBy`, `WorkItemSortDirection`, `WorkItemOrder` — shared order types
   - `toWorkItemId(raw: string): WorkItemId` — boundary constructor
@@ -117,4 +117,4 @@ A read has its own deadline and never enters writer admission. Reader timeout re
 - PATCH_CAS (task.5284): Doltgres `patch` with `expectedRevision` adds `AND revision = <expected>` to its UPDATE; a mismatch throws `WorkItemRevisionConflictError` and drops the empty op branch with no commit. Omitted = unconditioned, as before.
 - COLLABORATOR_TRIAGE (task.5284): any non-blank principal may `patch` only `priority`, `rank`, `labels`, `scores` on items it did not create. A `set` naming any other field is creator-bound as a whole (`created_by_principal_id IS NULL OR = principal`); the patch transition proof admits a non-creator only when the row diff touches nothing beyond those columns + `revision`/`updated_at`.
 
-- Query cursors bind version and normalized sort; old/order-mismatched cursors require restart. Native SQL owns exact cursor keys. Timestamp ordering, projection and seek use the engine's public microsecond precision; hidden NOW() nanoseconds do not survive native text I/O. Text uses bounded ordered batches sharing one read deadline.
+- Query cursors bind version, normalized result filters and sort; unbound old versions require restart; old/order-mismatched cursors require restart. Native SQL owns exact cursor keys. Timestamp ordering, projection and seek use the engine's public microsecond precision; hidden NOW() nanoseconds do not survive native text I/O. Text uses bounded ordered batches sharing one read deadline.

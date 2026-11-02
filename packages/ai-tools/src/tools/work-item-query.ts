@@ -17,19 +17,20 @@
  * @public
  */
 
-import { z } from "zod";
-import { SubjectRefSchema, WorkItemDtoSchema } from "@cogni-dao/work-items";
 import {
+  SubjectRefSchema,
+  WORK_ITEM_SORT_DIRECTIONS,
   WORK_ITEM_SORT_FIELDS,
-  WORK_ITEM_SORT_DIRECTIONS
+  WorkItemDtoSchema,
 } from "@cogni-dao/work-items";
+import { z } from "zod";
 
 import type {
   WorkItemCapability,
-  WorkItemInfo
+  WorkItemInfo,
 } from "../capabilities/work-item";
-import type { BoundTool, ToolContract, ToolImplementation } from "../types";
 import { readSourceProvenance, withoutSourceProvenance } from "../source-url";
+import type { BoundTool, ToolContract, ToolImplementation } from "../types";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Schemas
@@ -40,13 +41,13 @@ export const WorkItemQueryInputSchema = z.object({
     .enum(WORK_ITEM_SORT_FIELDS)
     .optional()
     .describe(
-      "Order by rankScore (default), priority, legacy rank, createdAt or updatedAt"
+      "Order by rankScore (default), priority, legacy rank, createdAt or updatedAt",
     ),
   sortDirection: z
     .enum(WORK_ITEM_SORT_DIRECTIONS)
     .optional()
     .describe(
-      "Default descending for rankScore/dates; ascending for priority/rank. Unknowns always last."
+      "Default descending for rankScore/dates; ascending for priority/rank. Unknowns always last.",
     ),
   statuses: z
     .array(
@@ -59,12 +60,12 @@ export const WorkItemQueryInputSchema = z.object({
         "needs_merge",
         "done",
         "blocked",
-        "cancelled"
-      ])
+        "cancelled",
+      ]),
     )
     .optional()
     .describe(
-      "Filter by status. Omit for all statuses, including done/cancelled. Pass actionable statuses explicitly when finding work."
+      "Filter by status. Omit for all statuses, including done/cancelled. Pass actionable statuses explicitly when finding work.",
     ),
   types: z
     .array(z.enum(["task", "bug", "story", "spike", "subtask"]))
@@ -79,8 +80,11 @@ export const WorkItemQueryInputSchema = z.object({
     .optional()
     .describe(
       "Eligibility filter. Pass 'ai' to see only items safe for autonomous AI handling. " +
-        "Note: the Doltgres-backed store has no actor column — any value other than 'either' returns no items there, so omit it unless you need it."
+        "Note: the Doltgres-backed store has no actor column — any value other than 'either' returns no items there, so omit it unless you need it.",
     ),
+  rankMin: z.number().finite().optional(),
+  rankMax: z.number().finite().optional(),
+  projectIds: z.array(z.string()).optional(),
   projectId: z
     .string()
     .optional()
@@ -88,17 +92,21 @@ export const WorkItemQueryInputSchema = z.object({
   labels: z
     .array(z.string().min(1))
     .optional()
-    .describe("Any-of label filter: keep items carrying at least one of these labels"),
+    .describe(
+      "Any-of label filter: keep items carrying at least one of these labels",
+    ),
   labelPrefix: z
     .string()
     .min(1)
     .optional()
-    .describe("Keep items with at least one label whose text starts with this prefix"),
+    .describe(
+      "Keep items with at least one label whose text starts with this prefix",
+    ),
   scored: z
     .boolean()
     .optional()
     .describe(
-      "true = only items with a complete 6-axis score (rankScore defined); false = only unscored items"
+      "true = only items with a complete 6-axis score (rankScore defined); false = only unscored items",
     ),
   limit: z
     .number()
@@ -115,7 +123,7 @@ export const WorkItemQueryInputSchema = z.object({
   cursor: z
     .string()
     .optional()
-    .describe("Pagination cursor from a previous result's nextCursor")
+    .describe("Pagination cursor from a previous result's nextCursor"),
 });
 export type WorkItemQueryInput = z.infer<typeof WorkItemQueryInputSchema>;
 
@@ -127,7 +135,7 @@ const ToolAssigneeSchema = z.discriminatedUnion("kind", [
 ]);
 /** Normalize the legacy capability alias into the canonical, enriched tool output. */
 export function toToolAssignee(
-  assignee: WorkItemInfo["assignees"][number]
+  assignee: WorkItemInfo["assignees"][number],
 ): z.infer<typeof ToolAssigneeSchema> {
   switch (assignee.kind) {
     case "user": {
@@ -139,7 +147,8 @@ export function toToolAssignee(
       return { ...assignee, kind: "agent", agentId, id: agentId };
     }
     case "system": {
-      const serviceId = "serviceId" in assignee ? assignee.serviceId : assignee.id;
+      const serviceId =
+        "serviceId" in assignee ? assignee.serviceId : assignee.id;
       return { ...assignee, kind: "system", serviceId, id: serviceId };
     }
   }
@@ -186,10 +195,10 @@ function capScores(scores: NonNullable<WorkItemInfo["scores"]>): QueryScores {
         {
           v: score.v,
           ...(score.ev !== undefined && {
-            ev: score.ev.slice(0, WORK_ITEM_QUERY_SCORE_EV_MAX_CHARS)
-          })
-        }
-      ])
+            ev: score.ev.slice(0, WORK_ITEM_QUERY_SCORE_EV_MAX_CHARS),
+          }),
+        },
+      ]),
   );
   // Valid store rows already fit. Preserve their evidence exactly, including the 1024-byte boundary.
   for (const axis of Object.keys(out).reverse()) {
@@ -208,7 +217,7 @@ export const WorkItemQueryOutputSchema = z.object({
   items: z.array(WorkItemOutputSchema),
   count: z.number(),
   /** Present when more results exist; pass back as `cursor`. */
-  nextCursor: z.string().optional()
+  nextCursor: z.string().optional(),
 });
 export type WorkItemQueryOutput = z.infer<typeof WorkItemQueryOutputSchema>;
 
@@ -238,7 +247,7 @@ export const workItemQueryContract: ToolContract<
   outputSchema: WorkItemQueryOutputSchema,
 
   redact: (output: WorkItemQueryOutput): WorkItemQueryRedacted => output,
-  allowlist: ["items", "count", "nextCursor"] as const
+  allowlist: ["items", "count", "nextCursor"] as const,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -252,30 +261,33 @@ export interface WorkItemQueryDeps {
 }
 
 export function createWorkItemQueryImplementation(
-  deps: WorkItemQueryDeps
+  deps: WorkItemQueryDeps,
 ): ToolImplementation<WorkItemQueryInput, WorkItemQueryOutput> {
   return {
     execute: async (
-      input: WorkItemQueryInput
+      input: WorkItemQueryInput,
     ): Promise<WorkItemQueryOutput> => {
       const params = {
         ...(input.sortBy !== undefined && { sortBy: input.sortBy }),
         ...(input.sortDirection !== undefined && {
-          sortDirection: input.sortDirection
+          sortDirection: input.sortDirection,
         }),
         statuses: input.statuses,
+        ...(input.rankMin !== undefined && { rankMin: input.rankMin }),
+        ...(input.rankMax !== undefined && { rankMax: input.rankMax }),
+        ...(input.projectIds !== undefined && { projectIds: input.projectIds }),
         types: input.types,
         text: input.text,
         actor: input.actor,
         projectId: input.projectId,
         ...(input.labels !== undefined && { labels: input.labels }),
         ...(input.labelPrefix !== undefined && {
-          labelPrefix: input.labelPrefix
+          labelPrefix: input.labelPrefix,
         }),
         ...(input.scored !== undefined && { scored: input.scored }),
         limit: input.limit ?? 20,
         ...(input.ids !== undefined && { ids: input.ids }),
-        ...(input.cursor !== undefined && { cursor: input.cursor })
+        ...(input.cursor !== undefined && { cursor: input.cursor }),
       };
       const page = deps.workItemCapability.queryPage
         ? await deps.workItemCapability.queryPage(params)
@@ -286,15 +298,17 @@ export function createWorkItemQueryImplementation(
         items: items.map((item) => ({
           ...withoutSourceProvenance(item),
           summary: truncate(item.summary, WORK_ITEM_QUERY_SUMMARY_MAX_CHARS),
-          ...(item.outcome !== undefined && { outcome: truncate(item.outcome, WORK_ITEM_QUERY_OUTCOME_MAX_CHARS) }),
+          ...(item.outcome !== undefined && {
+            outcome: truncate(item.outcome, WORK_ITEM_QUERY_OUTCOME_MAX_CHARS),
+          }),
           ...(item.scores !== undefined && { scores: capScores(item.scores) }),
           assignees: item.assignees.map(toToolAssignee),
           ...readSourceProvenance(deps.nodePublicOrigin, "work/items", item.id),
         })),
         count: items.length,
-        ...(page.nextCursor !== undefined && { nextCursor: page.nextCursor })
+        ...(page.nextCursor !== undefined && { nextCursor: page.nextCursor }),
       };
-    }
+    },
   };
 }
 
@@ -304,7 +318,7 @@ export const workItemQueryStubImplementation: ToolImplementation<
 > = {
   execute: async (): Promise<WorkItemQueryOutput> => {
     throw new Error("WorkItemCapability not configured.");
-  }
+  },
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -318,5 +332,5 @@ export const workItemQueryBoundTool: BoundTool<
   WorkItemQueryRedacted
 > = {
   contract: workItemQueryContract,
-  implementation: workItemQueryStubImplementation
+  implementation: workItemQueryStubImplementation,
 };

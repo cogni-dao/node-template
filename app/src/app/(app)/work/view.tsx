@@ -3,9 +3,8 @@
 
 /**
  * Module: `@app/(app)/work/view`
- * Purpose: Client-side work dashboard. ReUI DataGrid with per-column header
- *          dropdowns owning sort + filter, single top-right Columns toggle,
- *          search input, URL-driven state, detail panel.
+ * Purpose: Work dashboard with ReUI Kanban and DataGrid sharing one TanStack
+ *          filter, sort, pagination, and detail-navigation model.
  * Scope: Presentation. Fetches data via React Query.
  * Invariants:
  *   - HEADER_OWNS_SORT_AND_FILTER — sort + per-column facet filter live in
@@ -27,22 +26,19 @@ import {
   DataGridContainer,
 } from "@cogni/node-ui-kit/reui/data-grid/data-grid";
 import { DataGridColumnVisibility } from "@cogni/node-ui-kit/reui/data-grid/data-grid-column-visibility";
-import { DataGridPagination } from "@cogni/node-ui-kit/reui/data-grid/data-grid-pagination";
 import { DataGridTable } from "@cogni/node-ui-kit/reui/data-grid/data-grid-table";
 import { useQuery } from "@tanstack/react-query";
 import {
   type ColumnFiltersState,
+  flexRender,
   getCoreRowModel,
   getFacetedRowModel,
   getFacetedUniqueValues,
-  getFilteredRowModel,
-  getPaginationRowModel,
-  getSortedRowModel,
   type SortingState,
   useReactTable,
   type VisibilityState,
 } from "@tanstack/react-table";
-import { Settings2 } from "lucide-react";
+import { Columns3, List, Settings2 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button, Input } from "@/components";
@@ -50,9 +46,12 @@ import { Button, Input } from "@/components";
 import { fetchWorkItem, fetchWorkItems } from "./_api/fetchWorkItems";
 import { columns } from "./_components/columns";
 import { WorkItemDetail } from "./_components/WorkItemDetail";
+import { WorkKanban } from "./_components/WorkKanban";
 import {
   closeWorkItemPermalink,
   openWorkItemPermalink,
+  workItemHref,
+  workListHref,
   workViewHref,
 } from "./_lib/workItemNavigation";
 
@@ -65,6 +64,7 @@ const ACTIVE_STATUSES = [
   "needs_merge",
   "blocked",
 ];
+const EMPTY_ITEMS: WorkItemDto[] = [];
 
 export function WorkDashboardView({
   selectedItemId,
@@ -74,13 +74,7 @@ export function WorkDashboardView({
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const { data, isLoading, error } = useQuery({
-    queryKey: ["work-items"],
-    queryFn: fetchWorkItems,
-    staleTime: 30_000,
-  });
-
-  const items = data?.items ?? [];
+  const boardView = searchParams.get("view") !== "table";
 
   const selectedItemQuery = useQuery({
     queryKey: ["work-item", selectedItemId],
@@ -95,14 +89,27 @@ export function WorkDashboardView({
     const typeParam = searchParams.get("type");
     if (typeParam) filters.push({ id: "type", value: typeParam.split(",") });
     const statusParam = searchParams.get("status");
-    if (statusParam) {
+    if (statusParam && statusParam !== "all") {
       filters.push({ id: "status", value: statusParam.split(",") });
-    } else {
+    } else if (!statusParam) {
       filters.push({ id: "status", value: ACTIVE_STATUSES });
     }
     const projectParam = searchParams.get("project");
     if (projectParam)
       filters.push({ id: "projectId", value: projectParam.split(",") });
+    const numberParam = (key: string) => {
+      const raw = searchParams.get(key);
+      if (!raw?.trim()) return undefined;
+      const value = Number(raw);
+      return Number.isFinite(value) && value >= 0 ? value : undefined;
+    };
+    const rankRange =
+      searchParams.has("rankMin") || searchParams.has("rankMax")
+        ? [numberParam("rankMin"), numberParam("rankMax")]
+        : [4, undefined];
+    if (rankRange.some((value) => value !== undefined)) {
+      filters.push({ id: "rankScore", value: rankRange });
+    }
     return filters;
   }, [searchParams]);
 
@@ -113,7 +120,7 @@ export function WorkDashboardView({
       const id = desc ? sortParam.slice(1) : sortParam;
       return [{ id, desc }];
     }
-    return [{ id: "priority", desc: false }];
+    return [{ id: "rankScore", desc: true }];
   }, [searchParams]);
 
   const [sorting, setSorting] = useState<SortingState>(initialSorting);
@@ -121,18 +128,104 @@ export function WorkDashboardView({
     useState<ColumnFiltersState>(initialFilters);
   const [globalFilter, setGlobalFilter] = useState(searchParams.get("q") ?? "");
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
+  const [history, setHistory] = useState<string[]>([]);
+  const [visibleStatuses, setVisibleStatuses] = useState<string[]>(() => {
+    const param = searchParams.get("columns");
+    return param === null
+      ? [...ACTIVE_STATUSES]
+      : param
+        ? param.split(",")
+        : [];
+  });
+  const pageSize = Number(searchParams.get("pageSize")) || 10;
+  const cursor = searchParams.get("cursor") ?? "";
+  useEffect(() => {
+    try {
+      setHistory(
+        JSON.parse(sessionStorage.getItem("work-page-history") ?? "[]"),
+      );
+    } catch {
+      setHistory([]);
+    }
+    const param = searchParams.get("columns");
+    setVisibleStatuses(
+      param === null ? [...ACTIVE_STATUSES] : param ? param.split(",") : [],
+    );
+  }, [searchParams]);
+  const listParams = useMemo(() => {
+    const params = new URLSearchParams({ limit: String(pageSize) });
+    const values = (id: string) =>
+      columnFilters.find((f) => f.id === id)?.value as string[] | undefined;
+    for (const [id, key] of [
+      ["type", "types"],
+      ["status", "statuses"],
+      ["projectId", "projectIds"],
+    ] as const) {
+      const value = values(id);
+      if (value?.length) params.set(key, value.join(","));
+    }
+    const range = columnFilters.find((f) => f.id === "rankScore")?.value as
+      | [number | undefined, number | undefined]
+      | undefined;
+    if (range?.[0] !== undefined) params.set("rankMin", String(range[0]));
+    if (range?.[1] !== undefined) params.set("rankMax", String(range[1]));
+    const sort = sorting[0];
+    if (sort) {
+      params.set("sortBy", sort.id);
+      params.set("sortDirection", sort.desc ? "desc" : "asc");
+    }
+    if (globalFilter) params.set("text", globalFilter);
+    if (cursor) params.set("cursor", cursor);
+    return params;
+  }, [columnFilters, sorting, globalFilter, pageSize, cursor]);
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["work-items", listParams.toString()],
+    queryFn: () => fetchWorkItems(listParams),
+    staleTime: 30_000,
+  });
+  const items = data?.items ?? EMPTY_ITEMS;
+  const changePage = (next: string, stack: string[]) => {
+    const bounded = stack.slice(-20);
+    setHistory(bounded);
+    sessionStorage.setItem("work-page-history", JSON.stringify(bounded));
+    const params = new URLSearchParams(searchParams.toString());
+    if (next) params.set("cursor", next);
+    else params.delete("cursor");
+    router.replace(
+      selectedItemId
+        ? workItemHref(selectedItemId, params)
+        : workListHref(params),
+      { scroll: false },
+    );
+  };
+
+  useEffect(() => {
+    setSorting((previous) =>
+      JSON.stringify(previous) === JSON.stringify(initialSorting)
+        ? previous
+        : initialSorting,
+    );
+    setColumnFilters((previous) =>
+      JSON.stringify(previous) === JSON.stringify(initialFilters)
+        ? previous
+        : initialFilters,
+    );
+    setGlobalFilter(searchParams.get("q") ?? "");
+  }, [initialFilters, initialSorting, searchParams]);
 
   const syncUrl = useCallback(
     (
       newFilters: ColumnFiltersState,
       newSorting: SortingState,
-      newQuery: string
+      newQuery: string,
     ) => {
       const valuesFor = (id: string): readonly string[] => {
         const value = newFilters.find((filter) => filter.id === id)?.value;
         return Array.isArray(value) ? (value as string[]) : [];
       };
       const sort = newSorting[0];
+      sessionStorage.removeItem("work-page-history");
+      setHistory([]);
       router.replace(
         workViewHref(selectedItemId, searchParams, {
           type: valuesFor("type"),
@@ -140,18 +233,22 @@ export function WorkDashboardView({
           project: valuesFor("projectId"),
           sort: sort ? `${sort.desc ? "-" : ""}${sort.id}` : null,
           query: newQuery,
+          rankRange: (newFilters.find((filter) => filter.id === "rankScore")
+            ?.value as
+            | [number | undefined, number | undefined]
+            | undefined) ?? [undefined, undefined],
         }),
-        { scroll: false }
+        { scroll: false },
       );
     },
-    [router, searchParams, selectedItemId]
+    [router, searchParams, selectedItemId],
   );
 
   const openItem = useCallback(
     (item: WorkItemDto) => {
       openWorkItemPermalink(router, item.id, searchParams);
     },
-    [router, searchParams]
+    [router, searchParams],
   );
 
   const closeItem = useCallback(() => {
@@ -176,9 +273,9 @@ export function WorkDashboardView({
     onGlobalFilterChange: setGlobalFilter,
     onColumnVisibilityChange: setColumnVisibility,
     getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
+    manualSorting: true,
+    manualFiltering: true,
+    manualPagination: true,
     getFacetedRowModel: getFacetedRowModel(),
     getFacetedUniqueValues: getFacetedUniqueValues(),
     globalFilterFn: (row, _columnId, filterValue: string) => {
@@ -200,7 +297,11 @@ export function WorkDashboardView({
     function handleKey(e: KeyboardEvent) {
       if (
         e.target instanceof HTMLInputElement ||
-        e.target instanceof HTMLTextAreaElement
+        e.target instanceof HTMLTextAreaElement ||
+        (e.target instanceof HTMLElement &&
+          e.target.closest(
+            "button, a, [contenteditable=true], [role=menuitem]",
+          ))
       )
         return;
       if (rows.length === 0) return;
@@ -243,6 +344,17 @@ export function WorkDashboardView({
 
   const hasActiveFilters = columnFilters.length > 0;
 
+  const setView = (view: "board" | "table") => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("view", view);
+    router.replace(
+      selectedItemId
+        ? workItemHref(selectedItemId, params)
+        : workListHref(params),
+      { scroll: false },
+    );
+  };
+
   return (
     <div className="flex flex-col gap-4 p-5 md:p-6">
       <h1 className="font-semibold text-xl tracking-tight md:text-2xl">
@@ -272,16 +384,77 @@ export function WorkDashboardView({
             Clear filters
           </button>
         )}
-        <div className="ml-auto">
-          <DataGridColumnVisibility
-            table={table}
-            trigger={
-              <Button variant="outline" size="sm" className="h-9 gap-1.5">
-                <Settings2 className="size-3.5" />
-                Columns
-              </Button>
-            }
-          />
+        {boardView && (
+          <details className="relative">
+            <summary className="cursor-pointer rounded border px-3 py-2 text-sm">
+              Board columns
+            </summary>
+            <div className="absolute z-20 flex w-48 flex-col gap-1 rounded border bg-popover p-3 shadow">
+              {[...ACTIVE_STATUSES, "done", "cancelled"].map((status) => (
+                <label key={status} className="flex gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={visibleStatuses.includes(status)}
+                    onChange={(e) => {
+                      const next = e.target.checked
+                        ? [...visibleStatuses, status]
+                        : visibleStatuses.filter((x) => x !== status);
+                      setVisibleStatuses(next);
+                      const params = new URLSearchParams(
+                        searchParams.toString(),
+                      );
+                      params.set("columns", next.join(","));
+                      router.replace(
+                        selectedItemId
+                          ? workItemHref(selectedItemId, params)
+                          : workListHref(params),
+                        { scroll: false },
+                      );
+                    }}
+                  />
+                  {status.replace("needs_", "").replaceAll("_", " ")}
+                </label>
+              ))}
+            </div>
+          </details>
+        )}
+        <div className="ml-auto flex items-center gap-2">
+          <fieldset
+            className="inline-flex min-w-0 rounded-lg border bg-muted/30 p-1"
+            aria-label="Work view"
+          >
+            <Button
+              variant={boardView ? "secondary" : "ghost"}
+              size="sm"
+              className="h-7 gap-1.5"
+              aria-pressed={boardView}
+              onClick={() => setView("board")}
+            >
+              <Columns3 className="size-3.5" />
+              Board
+            </Button>
+            <Button
+              variant={boardView ? "ghost" : "secondary"}
+              size="sm"
+              className="h-7 gap-1.5"
+              aria-pressed={!boardView}
+              onClick={() => setView("table")}
+            >
+              <List className="size-3.5" />
+              Table
+            </Button>
+          </fieldset>
+          {!boardView && (
+            <DataGridColumnVisibility
+              table={table}
+              trigger={
+                <Button variant="outline" size="sm" className="h-9 gap-1.5">
+                  <Settings2 className="size-3.5" />
+                  Columns
+                </Button>
+              }
+            />
+          )}
         </div>
       </div>
 
@@ -291,10 +464,9 @@ export function WorkDashboardView({
         </p>
       )}
 
-      {!error && (
-        <DataGrid
+      <DataGrid
           table={table}
-          recordCount={items.length}
+          recordCount={table.getFilteredRowModel().rows.length}
           isLoading={isLoading}
           loadingMode="skeleton"
           onRowClick={openItem}
@@ -309,12 +481,112 @@ export function WorkDashboardView({
           }}
           emptyMessage="No work items found."
         >
-          <DataGridContainer className="overflow-x-auto">
-            <DataGridTable />
-          </DataGridContainer>
-          <DataGridPagination sizes={[25, 50, 100]} />
-        </DataGrid>
-      )}
+          {boardView ? (
+            <>
+              <fieldset
+                className="mb-4 flex min-w-0 flex-wrap items-center gap-x-5 gap-y-2 rounded-lg border px-4 py-2"
+                aria-label="Board filters and sorting"
+              >
+                {table
+                  .getFlatHeaders()
+                  .filter((header) =>
+                    [
+                      "priority",
+                      "rankScore",
+                      "type",
+                      "status",
+                      "projectId",
+                    ].includes(header.column.id),
+                  )
+                  .map((header) => (
+                    <div key={header.id}>
+                      {flexRender(
+                        header.column.columnDef.header,
+                        header.getContext(),
+                      )}
+                    </div>
+                  ))}
+              </fieldset>
+              <WorkKanban
+                items={rows.map((row) => row.original)}
+                statuses={visibleStatuses}
+                isLoading={isLoading}
+                onOpenItem={openItem}
+              />
+            </>
+          ) : (
+            <DataGridContainer className="overflow-x-auto">
+              <DataGridTable />
+            </DataGridContainer>
+          )}
+          <div className="flex items-center justify-between gap-3 pt-4 text-sm">
+            <span>
+              {items.length} items on this page
+              {boardView
+                ? ` · ${items.filter((item) => visibleStatuses.includes(item.status)).length} visible cards`
+                : ""}
+            </span>
+            <div className="flex gap-2">
+              <select
+                aria-label="Items per page"
+                value={pageSize}
+                onChange={(e) => {
+                  const params = new URLSearchParams(searchParams.toString());
+                  params.set("pageSize", e.target.value);
+                  params.delete("cursor");
+                  setHistory([]);
+                  sessionStorage.removeItem("work-page-history");
+                  router.replace(
+                    selectedItemId
+                      ? workItemHref(selectedItemId, params)
+                      : workListHref(params),
+                    { scroll: false },
+                  );
+                }}
+              >
+                {[10, 25, 50, 100].map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => changePage("", [])}
+                disabled={!cursor}
+              >
+                Restart
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  changePage(
+                    history[history.length - 1] ?? "",
+                    history.slice(0, -1),
+                  )
+                }
+                disabled={!cursor || history.length === 0}
+              >
+                Previous
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  changePage(
+                    data?.pageInfo?.endCursor ?? data?.nextCursor ?? "",
+                    [...history, cursor],
+                  )
+                }
+                disabled={!(data?.pageInfo?.hasMore ?? Boolean(data?.nextCursor)) || !(data?.pageInfo?.endCursor ?? data?.nextCursor)}
+              >
+                Next
+              </Button>
+            </div>
+          </div>
+      </DataGrid>
 
       <WorkItemDetail
         item={selectedItemQuery.data ?? null}

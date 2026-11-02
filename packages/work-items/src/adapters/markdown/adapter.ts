@@ -23,7 +23,7 @@ import {
   normalizeWorkItemOrder,
   type WorkItemOrder
 } from "../../query-order.js";
-import { InvalidCursorError } from "../doltgres/cursor.js";
+import { InvalidCursorError, queryIdentity } from "../doltgres/cursor.js";
 
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -221,6 +221,22 @@ function matchesQuery(item: WorkItem, query: WorkQuery): boolean {
   ) {
     return false;
   }
+  if (
+    query.projectIds?.length &&
+    (!item.projectId || !query.projectIds.includes(item.projectId))
+  )
+    return false;
+  const score = rankScore(item.scores);
+  if (
+    query.rankMin !== undefined &&
+    (score === undefined || score < query.rankMin)
+  )
+    return false;
+  if (
+    query.rankMax !== undefined &&
+    (score === undefined || score > query.rankMax)
+  )
+    return false;
   if (query.assignee) {
     const a = query.assignee;
     const found = item.assignees.some((ref) => {
@@ -243,7 +259,8 @@ function matchesQuery(item: WorkItem, query: WorkQuery): boolean {
     if (!want.includes(item.node)) return false;
   }
   if (query.labels?.length) {
-    if (!query.labels.some((label) => item.labels.includes(label))) return false;
+    if (!query.labels.some((label) => item.labels.includes(label)))
+      return false;
   }
   if (query.labelPrefix) {
     const prefix = query.labelPrefix;
@@ -255,7 +272,8 @@ function matchesQuery(item: WorkItem, query: WorkQuery): boolean {
   }
   if (query.text) {
     const t = query.text.toLowerCase();
-    const searchable = `${item.title} ${item.summary ?? ""}`.toLowerCase();
+    const searchable =
+      `${item.id} ${item.title} ${item.summary ?? ""} ${item.labels.join(" ")}`.toLowerCase();
     if (!searchable.includes(t)) return false;
   }
   return true;
@@ -263,16 +281,23 @@ function matchesQuery(item: WorkItem, query: WorkQuery): boolean {
 
 // ── Pagination cursor ────────────────────────────────
 
-const MARKDOWN_CURSOR_PREFIX = "md1:";
-function encodeMarkdownCursor(offset: number, order: WorkItemOrder): string {
+const MARKDOWN_CURSOR_PREFIX = "md2:";
+function encodeMarkdownCursor(
+  offset: number,
+  order: WorkItemOrder,
+  query: WorkQuery,
+): string {
   return (
     MARKDOWN_CURSOR_PREFIX +
-    Buffer.from(JSON.stringify({ offset, ...order })).toString("base64url")
+    Buffer.from(
+      JSON.stringify({ offset, ...order, filter: queryIdentity(query) }),
+    ).toString("base64url")
   );
 }
 function decodeMarkdownCursor(
   cursor: string | undefined,
-  order: WorkItemOrder
+  order: WorkItemOrder,
+  query: WorkQuery,
 ): number {
   if (cursor === undefined) return 0;
   try {
@@ -281,12 +306,13 @@ function decodeMarkdownCursor(
     const parsed = JSON.parse(
       Buffer.from(
         cursor.slice(MARKDOWN_CURSOR_PREFIX.length),
-        "base64url"
-      ).toString()
+        "base64url",
+      ).toString(),
     );
     if (
       !Number.isSafeInteger(parsed.offset) ||
       parsed.offset < 0 ||
+      parsed.filter !== queryIdentity(query) ||
       parsed.sortBy !== order.sortBy ||
       parsed.sortDirection !== order.sortDirection
     )
@@ -314,6 +340,7 @@ export class MarkdownWorkItemAdapter
   async list(
     query?: WorkQuery
   ): Promise<{ items: WorkItem[]; nextCursor?: string }> {
+    queryIdentity(query ?? {});
     const entries = await scanAllEntries(this.workDir);
     let items = entries.map((e) => e.item);
 
@@ -327,12 +354,12 @@ export class MarkdownWorkItemAdapter
     // NO_SILENT_TRUNCATION: a page cut short by `limit` returns `nextCursor`, so a
     // caller that walks pages (e.g. a complete backlog snapshot) never mistakes the
     // first page for the whole backlog.
-    const offset = decodeMarkdownCursor(query?.cursor, order);
+    const offset = decodeMarkdownCursor(query?.cursor, order, query ?? {});
     const rest = items.slice(offset);
     if (query?.limit && rest.length > query.limit) {
       return {
         items: rest.slice(0, query.limit),
-        nextCursor: encodeMarkdownCursor(offset + query.limit, order)
+        nextCursor: encodeMarkdownCursor(offset + query.limit, order, query)
       };
     }
     return { items: rest };

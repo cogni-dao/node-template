@@ -14,16 +14,16 @@ import {
 } from "@/app/(app)/work/_lib/workItemNavigation";
 
 const searchParams = new URLSearchParams(
-  "status=needs_implement&sort=priority&q=permalink"
+  "status=needs_implement&sort=priority&q=permalink",
 );
 
 describe("work-item permalink navigation", () => {
   it("builds exact human routes while preserving useful list state", () => {
     expect(workItemHref("subtask.5001", searchParams)).toBe(
-      "/work/items/subtask.5001?status=needs_implement&sort=priority&q=permalink"
+      "/work/items/subtask.5001?status=needs_implement&sort=priority&q=permalink",
     );
     expect(workListHref(searchParams)).toBe(
-      "/work?status=needs_implement&sort=priority&q=permalink"
+      "/work?status=needs_implement&sort=priority&q=permalink",
     );
   });
 
@@ -34,14 +34,14 @@ describe("work-item permalink navigation", () => {
 
     expect(router.push).toHaveBeenCalledWith(
       "/work/items/story.5000?status=needs_implement&sort=priority&q=permalink",
-      { scroll: false }
+      { scroll: false },
     );
     expect(router.replace).not.toHaveBeenCalled();
   });
 
   it("encodes the logical id exactly once at the human URL boundary", () => {
     expect(workItemHref("bug.%2F", new URLSearchParams())).toBe(
-      "/work/items/bug.%252F"
+      "/work/items/bug.%252F",
     );
   });
 
@@ -56,10 +56,10 @@ describe("work-item permalink navigation", () => {
           project: ["proj.work"],
           sort: "-priority",
           query: "permalink",
-        }
-      )
+        },
+      ),
     ).toBe(
-      "/work/items/task.5174?cursor=opaque&type=task&status=needs_implement&project=proj.work&sort=-priority&q=permalink"
+      "/work/items/task.5174?cursor=opaque&type=task&status=needs_implement&project=proj.work&sort=-priority&q=permalink",
     );
   });
 
@@ -70,8 +70,39 @@ describe("work-item permalink navigation", () => {
 
     expect(router.replace).toHaveBeenCalledWith(
       "/work?status=needs_implement&sort=priority&q=permalink",
-      { scroll: false }
+      { scroll: false },
     );
     expect(router.push).not.toHaveBeenCalled();
+  });
+
+  it("preserves the board view and serializes a numeric range", () => {
+    const href = workViewHref(undefined, new URLSearchParams("view=board"), {
+      type: [],
+      status: ["needs_design"],
+      project: [],
+      sort: "-rankScore",
+      query: "",
+      rankRange: [4, 6],
+    });
+    const params = new URL(href, "https://example.com").searchParams;
+    expect(params.get("view")).toBe("board");
+    expect(params.get("rankMin")).toBe("4");
+    expect(params.get("rankMax")).toBe("6");
+  });
+
+  it("distinguishes cleared rank and status filters from initial defaults", () => {
+    const href = workViewHref(undefined, new URLSearchParams("rankMin=4"), {
+      type: [],
+      status: [],
+      project: [],
+      sort: null,
+      query: "",
+      rankRange: [undefined, undefined],
+    });
+    const params = new URL(href, "https://example.com").searchParams;
+    expect(params.get("status")).toBe("all");
+    expect(params.has("rankMin")).toBe(true);
+    expect(params.get("rankMin")).toBe("");
+    expect(params.get("rankMax")).toBe("");
   });
 });

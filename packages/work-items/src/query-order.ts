@@ -10,7 +10,11 @@ export const WORK_ITEM_SORT_FIELDS = [
   "priority",
   "rank",
   "createdAt",
-  "updatedAt"
+  "updatedAt",
+  "type",
+  "status",
+  "projectId",
+  "estimate",
 ] as const;
 export const WORK_ITEM_SORT_DIRECTIONS = ["asc", "desc"] as const;
 export type WorkItemSortBy = (typeof WORK_ITEM_SORT_FIELDS)[number];
@@ -21,7 +25,10 @@ export type WorkItemOrder = {
 };
 
 export function normalizeWorkItemOrder(
-  input: { sortBy?: WorkItemSortBy; sortDirection?: WorkItemSortDirection } = {}
+  input: {
+    sortBy?: WorkItemSortBy;
+    sortDirection?: WorkItemSortDirection;
+  } = {},
 ): WorkItemOrder {
   const sortBy = input.sortBy ?? "rankScore";
   const sortDirection =
@@ -38,7 +45,7 @@ export function normalizeWorkItemOrder(
 export function compareWorkItems(
   a: WorkItem,
   b: WorkItem,
-  order: WorkItemOrder
+  order: WorkItemOrder,
 ): number {
   const value = (item: WorkItem) =>
     order.sortBy === "rankScore" ? rankScore(item.scores) : item[order.sortBy];
