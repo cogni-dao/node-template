@@ -2827,6 +2827,9 @@ export class DoltgresWorkItemAdapter
           }[order.sortBy];
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
     const limit = Math.min(Math.max(query.limit ?? 100, 1), 500);
+    // Text filtering happens after native ordering. Decouple its scan window
+    // from the response size to avoid re-ranking the backlog for every pagelet.
+    const scanLimit = textNeedle ? 501 : limit + 1;
     const nativeCursor = (row: Record<string, unknown>): WorkItemCursor => ({
       v: 2,
       filter: queryIdentity(query),
@@ -2862,7 +2865,7 @@ export class DoltgresWorkItemAdapter
       }
       while (true) {
         const rows = await conn.unsafe(
-          `SELECT ordered.*, CAST(__sort_value AS TEXT) AS __sort_key FROM (SELECT work_items.*, ${keyExpression} AS __sort_value FROM work_items ${where}) AS ordered ${seek(cursor)} ORDER BY CASE WHEN __sort_value IS NULL THEN 1 ELSE 0 END ASC, __sort_value ${order.sortDirection.toUpperCase()}, id ASC LIMIT ${limit + 1}`
+          `SELECT ordered.*, CAST(__sort_value AS TEXT) AS __sort_key FROM (SELECT work_items.*, ${keyExpression} AS __sort_value FROM work_items ${where}) AS ordered ${seek(cursor)} ORDER BY CASE WHEN __sort_value IS NULL THEN 1 ELSE 0 END ASC, __sort_value ${order.sortDirection.toUpperCase()}, id ASC LIMIT ${scanLimit}`
         );
         for (const row of rows) {
           if (
@@ -2876,7 +2879,7 @@ export class DoltgresWorkItemAdapter
             matches.push(row);
           if (matches.length > limit) return matches;
         }
-        if (!textNeedle || rows.length < limit + 1) return matches;
+        if (!textNeedle || rows.length < scanLimit) return matches;
         const last = rows[rows.length - 1];
         if (!last) return matches;
         cursor = nativeCursor(last);

@@ -392,9 +392,9 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 				}),
 			).rejects.toMatchObject({ name: "InvalidCursorError" });
 			// Sparse text matches straddle multiple bounded batches, including out-of-line TEXT.
-			for (let i = 0; i < 12; i++)
+			for (let i = 0; i < 503; i++)
 				await sql.unsafe(
-					`INSERT INTO work_items (id,type,title,status,node,summary) VALUES ('task.${200000 + i}','task','text ${i}','needs_design','text-native','${"x".repeat(8000)} ${i === 8 || i === 11 ? "needle" : "absent"}')`,
+					`INSERT INTO work_items (id,type,title,status,node,summary) VALUES ('task.${200000 + i}','task','text ${i}','needs_design','text-native','${"x".repeat(8000)} ${i === 8 || i === 502 ? "needle" : "absent"}')`,
 				);
 			const textStart = performance.now();
 			const before = queries.length;
@@ -411,14 +411,14 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 				limit: 1,
 				cursor: textPage.nextCursor,
 			});
-			expect(textNext.items.map((item) => item.id)).toEqual(["task.200011"]);
+			expect(textNext.items.map((item) => item.id)).toEqual(["task.200502"]);
 			expect(textNext.pageInfo.hasMore).toBe(false);
-			expect(queries.slice(before).length).toBeGreaterThan(2);
+			expect(queries.slice(before).length).toBeGreaterThanOrEqual(3);
 			console.info(
 				"rank_query_sparse_text",
 				JSON.stringify({
 					image: DOLTGRES_IMAGE,
-					datasetN: 12,
+					datasetN: 503,
 					limit: 1,
 					elapsedMs: performance.now() - textStart,
 					batches: queries.length - before,
@@ -438,6 +438,12 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 
 	it("filters bounded native pages against a 5000-row backlog", async () => {
 		const readSql = postgres(dbUrl, { max: 1, fetch_types: false });
+		const issued: string[] = [];
+		const unsafe = readSql.unsafe.bind(readSql);
+		readSql.unsafe = ((query: string) => {
+			issued.push(query);
+			return unsafe(query);
+		}) as typeof readSql.unsafe;
 		try {
 			// Add a known filtered shelf to the 5,000-row native backlog. Rank 15
 			// and rank 10 sit exactly on the two bounds; decoys isolate each filter.
@@ -475,7 +481,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			);
 			for (let i = 27; i < 5000; i++)
 				rows.push(
-					`('task.${300000 + i}','task','filler','needs_implement','scale-native','proj.other','${high}'::JSONB)`,
+					`('task.${300000 + i}','task','${i === 4999 ? "last-only-needle" : "filler"}','needs_implement','scale-native','proj.other','${high}'::JSONB)`,
 				);
 			for (let offset = 0; offset < rows.length; offset += 250)
 				await sql.unsafe(
@@ -488,6 +494,20 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 				logger: stageLogger,
 			});
 			const broad = { node: "scale-native", statuses: ["needs_implement"] as const, rankMin: 4, limit: 10 };
+			const lateStart = performance.now();
+			const late = await filteredAdapter.list({ ...broad, text: "LAST-ONLY-NEEDLE" });
+			const lateElapsed = performance.now() - lateStart;
+			expect(late.items.map((item) => item.id)).toEqual(["task.304999"]);
+			expect(late.pageInfo.hasMore).toBe(false);
+			expect(late.nextCursor).toBeUndefined();
+			expect(lateElapsed).toBeLessThan(5000);
+			expect(issued.length).toBeGreaterThan(1);
+			for (const query of issued) {
+				const nativeLimit = Number(query.match(/ LIMIT (\d+)$/)?.[1]);
+				expect(nativeLimit).toBeGreaterThan(0);
+				expect(nativeLimit).toBeLessThanOrEqual(501);
+			}
+			console.info("rank_query_late_text", JSON.stringify({ elapsedMs: lateElapsed, datasetN: 5000, queries: issued.length }));
 			const broadFirst = await filteredAdapter.list(broad);
 			expect(broadFirst.items.map((item) => item.id)).toEqual(matchingIds.slice(0, 10));
 			if (!broadFirst.nextCursor) throw new Error("missing broad cursor");
@@ -632,7 +652,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 		}) as typeof reader.end;
 		try {
 			await sql.unsafe(
-				`INSERT INTO work_items (id,type,title,status,node) VALUES ${Array.from({ length: 6 }, (_, i) => `('task.${300000 + i}','task','${i === 0 || i === 5 ? "needle" : "absent"}','needs_design','deadline-native')`).join(",")}`,
+				`INSERT INTO work_items (id,type,title,status,node) VALUES ${Array.from({ length: 503 }, (_, i) => `('task.${300000 + i}','task','${i === 0 || i === 502 ? "needle" : "absent"}','needs_design','deadline-native')`).join(",")}`,
 			);
 			const adapter = new DoltgresWorkItemAdapter(writer, {
 				readClient: reader,
