@@ -512,6 +512,13 @@ export async function completionStream(
   );
 
   const runStream = getContainer().runStream;
+  // Local dispatch can compile the receiver before its first event. The run is
+  // already durable; keep this attachment alive through that bounded cold start.
+  const firstEventDeadlineMs =
+    serverEnv().DEPLOY_ENVIRONMENT === "local" &&
+    serverEnv().COGNI_LOCAL_INPROC === "true"
+      ? 180_000
+      : FIRST_EVENT_DEADLINE_MS;
   const subscriptionAbort = new AbortController();
   const rawSubscription = runStream.subscribe(
     runId,
@@ -547,7 +554,7 @@ export async function completionStream(
     try {
       if (subscriptionAbort.signal.aborted) throw new AiExecutionError("aborted");
       const timeout = new Promise<"timeout">((resolve) => {
-        deadline = setTimeout(() => resolve("timeout"), FIRST_EVENT_DEADLINE_MS);
+        deadline = setTimeout(() => resolve("timeout"), firstEventDeadlineMs);
       });
       const first = await Promise.race([iterator.next(), timeout]);
       if (first === "timeout") throw new AiExecutionError("timeout");
@@ -632,7 +639,7 @@ export async function completionStream(
           const timeout = new Promise<"timeout">((resolve) => {
             deadline = setTimeout(
               () => resolve("timeout"),
-              FIRST_EVENT_DEADLINE_MS
+              firstEventDeadlineMs
             );
           });
           let first: Awaited<ReturnType<typeof iterator.next>> | "timeout";
