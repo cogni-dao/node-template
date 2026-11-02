@@ -98,9 +98,9 @@ async function request(base, path, headers = {}, body) {
 		method: body ? "POST" : "GET",
 		body: body ? JSON.stringify(body) : undefined,
 		redirect: "error",
-		// The first request compiles Next's proxy and route on a cold dev server.
-		// Keep a bounded minute so normal compilation is not a false startup failure.
-		signal: AbortSignal.timeout(60000),
+		// A cold homepage compiles the browser dependency tree as well as the proxy.
+		// Other probes keep their shorter bound; every timeout remains a failure.
+		signal: AbortSignal.timeout(base === app && path === "/" ? 180000 : 60000),
 	});
 	if (!response.ok) throw new Error(`HTTP ${response.status}`);
 	const text = await response.text();

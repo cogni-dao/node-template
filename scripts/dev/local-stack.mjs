@@ -284,9 +284,6 @@ if (mode === "stack")
       "exec",
       "next",
       "dev",
-      // The default Turbopack compiler stalled on knowledge detail in the
-      // local workspace. Use the browser-verified compiler for this launcher.
-      "--webpack",
       "--hostname",
       "127.0.0.1",
       "--port",
