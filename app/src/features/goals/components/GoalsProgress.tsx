@@ -12,13 +12,13 @@ import {
 const number = (value: number) =>
 	new Intl.NumberFormat("en", { maximumFractionDigits: 2 }).format(value);
 const date = (value: string) =>
-	new Intl.DateTimeFormat("en", {
+	`${new Intl.DateTimeFormat("en", {
 		month: "short",
 		day: "numeric",
 		hour: "numeric",
 		minute: "2-digit",
 		timeZone: "UTC",
-	}).format(new Date(value)) + " UTC";
+	}).format(new Date(value))} UTC`;
 const compare = (value: string) =>
 	value === "gte" ? "≥" : value === "lte" ? "≤" : "=";
 function duration(ms: number) {
@@ -128,6 +128,7 @@ export function GoalsProgress({
 								{!!goal.hypotheses.length && (
 									<div
 										className="space-y-2 border-l-2 border-border pl-3"
+										role="group"
 										aria-label="Hypotheses and predictions"
 									>
 										{goal.hypotheses.map((bet) => (
@@ -370,6 +371,7 @@ function Trace({
 		return (
 			<div
 				className="h-12 border-b border-dashed border-border/60"
+				role="img"
 				aria-label={`${title}: no measurements yet`}
 			/>
 		);
