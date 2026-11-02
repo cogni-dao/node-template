@@ -34,12 +34,24 @@ export async function ensureMetricsRefreshSchedule() {
 	const previous = await container.scheduleControl.describeSchedule(scheduleId);
 	if (previous)
 		await container.scheduleControl.updateSchedule(scheduleId, params);
-	else await container.scheduleControl.createSchedule(params);
+	else {
+		try {
+			await container.scheduleControl.createSchedule(params);
+		} catch (error) {
+			// Another replica, or an ambiguous create, may already own this ID.
+			// Reconcile the observed schedule instead of creating another clock.
+			const current =
+				await container.scheduleControl.describeSchedule(scheduleId);
+			if (!current) throw error;
+			await container.scheduleControl.updateSchedule(scheduleId, params);
+		}
+	}
+	const current =
+		await container.scheduleControl.describeSchedule(scheduleId);
 	return {
 		scheduleId,
-		paused: previous?.isPaused ?? false,
-		nextRunAt: (await container.scheduleControl.describeSchedule(scheduleId))
-			?.nextRunAtIso,
+		paused: current?.isPaused ?? false,
+		nextRunAt: current?.nextRunAtIso,
 	};
 }
 export async function runMetricsRefresh(executionGrantId: string) {

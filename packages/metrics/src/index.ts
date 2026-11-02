@@ -315,7 +315,11 @@ export function createMetricService(deps: {
 					if (!(e instanceof MetricError) || e.status !== 404) throw e;
 				}
 			}
-			return { items, nextCursor: page.nextCursor };
+			return {
+				items,
+				nextCursor: page.nextCursor,
+				catalog: registry.describe(),
+			};
 		},
 		async bindings(bindings: KpiBinding[], options?: { hypothesis?: boolean }) {
 			const results = [];
@@ -378,7 +382,8 @@ export function createMetricService(deps: {
 							baseline.definitionHash ===
 								metricDefinitionHash(view.definition) &&
 							baseline.unit === b.target.unit &&
-							(!b.evaluationAt || baseline.window.end <= b.evaluationAt));
+							(!b.evaluationAt ||
+								Date.parse(baseline.window.end) <= Date.parse(b.evaluationAt)));
 					const evaluationTime = b.evaluationAt
 						? Date.parse(b.evaluationAt)
 						: now().getTime();

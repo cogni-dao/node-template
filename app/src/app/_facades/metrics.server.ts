@@ -4,6 +4,8 @@ import {
 	KpiBindingsSchema,
 	MetricComputeInputSchema,
 	MetricError,
+	type MetricListInput,
+	MetricListResponseSchema,
 	MetricObservationSchema,
 	MetricViewSchema,
 } from "@cogni-dao/metrics";
@@ -34,14 +36,11 @@ export function metricHttpError(error: unknown) {
 	);
 	return NextResponse.json({ error: "metrics_unavailable" }, { status: 503 });
 }
-export async function metricList() {
+export async function metricList(input: MetricListInput = {}) {
 	const service = getGoalMetrics();
-	const page = await service.list();
-	return NextResponse.json({
-		items: page.items.map((x) => MetricViewSchema.parse(x)),
-		nextCursor: page.nextCursor,
-		catalog: service.registry.describe(),
-	});
+	return NextResponse.json(
+		MetricListResponseSchema.parse(await service.list(input.limit, input.after)),
+	);
 }
 export async function metricRead(id: string) {
 	const service = getGoalMetrics();

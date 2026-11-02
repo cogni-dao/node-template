@@ -249,7 +249,8 @@ function Metric({
 		Math.max(
 			view?.definition.spec.maxAgeSeconds ?? 0,
 			(view?.definition.spec.cadenceSeconds ?? 60) * 2,
-		) * 1000,
+			) * 1000,
+		(view?.definition.spec.maxAgeSeconds ?? 0) * 1000,
 	);
 	const end = binding.evaluationAt ?? deadline;
 	const needed =

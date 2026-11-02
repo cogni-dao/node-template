@@ -1,5 +1,7 @@
 import {
 	MetricComputeInputSchema,
+	MetricListInputSchema,
+	MetricListResponseSchema,
 	MetricObservationSchema,
 	MetricViewSchema,
 } from "@cogni-dao/metrics/contracts";
@@ -106,13 +108,8 @@ export async function GET(request: Request) {
 				method: "GET",
 				endpoint: `${origin}/api/v1/metrics`,
 				auth: { type: "bearer" },
-				inputSchema: z.toJSONSchema(z.object({})),
-				outputSchema: z.toJSONSchema(
-					z.object({
-						items: z.array(MetricViewSchema),
-						nextCursor: z.string().nullable(),
-					}),
-				),
+				inputSchema: z.toJSONSchema(MetricListInputSchema),
+				outputSchema: z.toJSONSchema(MetricListResponseSchema),
 			},
 			readMetric: {
 				method: "GET",

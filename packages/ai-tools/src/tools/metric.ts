@@ -2,6 +2,8 @@ import type { MetricService } from "@cogni-dao/metrics";
 import {
 	MetricComputeInputSchema,
 	MetricError,
+	MetricListInputSchema,
+	MetricListResponseSchema,
 	MetricObservationSchema,
 	MetricViewSchema,
 } from "@cogni-dao/metrics/contracts";
@@ -20,14 +22,12 @@ export function createMetricTools(resolve: () => MetricService | undefined) {
 		{
 			name: "core__metric_list",
 			description:
-				"List configured metrics with stored observations, freshness and missing evidence. Never invent values.",
+				"List configured metrics and available calculators with stored observations and freshness. Pass nextCursor as after to continue. Never invent values.",
 			effect: "read_only" as const,
-			inputSchema: z.strictObject({}),
-			outputSchema: z.object({
-				items: z.array(MetricViewSchema),
-				nextCursor: z.string().nullable(),
-			}),
-			run: () => service().list(),
+			inputSchema: MetricListInputSchema,
+			outputSchema: MetricListResponseSchema,
+			run: (p: { limit?: number; after?: string }) =>
+				service().list(p.limit, p.after),
 		},
 		{
 			name: "core__metric_read",
@@ -84,6 +84,7 @@ export function createMetricTools(resolve: () => MetricService | undefined) {
 			allowlist: [
 				"items",
 				"nextCursor",
+				"catalog",
 				"definition",
 				"latestAttempt",
 				"lastGood",

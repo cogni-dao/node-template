@@ -3,7 +3,7 @@
 
 /**
  * Module: `@bootstrap/startup-reconcile`
- * Purpose: Activate this node's repo-spec governance schedules on first container use.
+ * Purpose: Activate this node's governance and metric schedules on first container use.
  * Scope: Once-per-process bounded retry of the existing advisory-lock guarded job.
  * Invariants:
  *   - No loopback token or instrumentation → bootstrap import is required.
@@ -15,6 +15,7 @@
  */
 
 let started = false;
+let metricsStarted = false;
 const MAX_ATTEMPTS = 8;
 const RETRY_DELAY_MS = 15_000;
 
@@ -26,21 +27,39 @@ export function startGovernanceSyncOnBoot(): void {
   void reconcile(1);
 }
 
-async function reconcile(attempt: number): Promise<void> {
+export function startMetricsSyncOnBoot(): void {
+  if (metricsStarted) return;
+  // biome-ignore lint/style/noProcessEnv: startup gate before container config
+  if (process.env.APP_ENV === "test" || process.env.VITEST === "true") return;
+  metricsStarted = true;
+  void reconcile(1, "metrics");
+}
+
+async function reconcile(
+  attempt: number,
+  kind: "governance" | "metrics" = "governance",
+): Promise<void> {
   try {
-    const { runGovernanceSchedulesSyncJob } = await import(
-      "./jobs/syncGovernanceSchedules.job"
-    );
-    await runGovernanceSchedulesSyncJob({ throwIfLocked: true });
+    if (kind === "metrics") {
+      const { ensureMetricsRefreshSchedule } = await import(
+        "./jobs/metrics-refresh.job"
+      );
+      await ensureMetricsRefreshSchedule();
+    } else {
+      const { runGovernanceSchedulesSyncJob } = await import(
+        "./jobs/syncGovernanceSchedules.job"
+      );
+      await runGovernanceSchedulesSyncJob({ throwIfLocked: true });
+    }
   } catch (error) {
     // Importing the logger here keeps startup dependencies lazy, like the job.
     const { makeLogger } = await import("@/shared/observability");
     makeLogger({ component: "startup-reconcile" }).warn(
-      { err: error, attempt, exhausted: attempt === MAX_ATTEMPTS },
-      "Governance startup reconcile failed",
+      { err: error, kind, attempt, exhausted: attempt === MAX_ATTEMPTS },
+      "Schedule startup reconcile failed",
     );
     if (attempt < MAX_ATTEMPTS) {
-      setTimeout(() => void reconcile(attempt + 1), RETRY_DELAY_MS);
+      setTimeout(() => void reconcile(attempt + 1, kind), RETRY_DELAY_MS);
     }
   }
 }

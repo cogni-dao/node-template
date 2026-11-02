@@ -17,8 +17,24 @@ const point = (
 		status,
 		value,
 		window: { end: new Date(at + minutes * 60000).toISOString() },
+		observedAt: new Date(at + minutes * 60000).toISOString(),
+		sourceWatermarks: [
+			{ source: "work", asOf: new Date(at + minutes * 60000).toISOString() },
+		],
 	}) as MetricObservation;
 describe("observed goal feedback", () => {
+	it("breaks observed rates at stale source evidence even when status is ok", () => {
+		const stale = point(10, 1);
+		stale.sourceWatermarks = [{ source: "work", asOf: new Date(at).toISOString() }];
+		const recovered = metricTrace(
+			[point(10, 0), stale, point(0, 2)],
+			180000,
+			30000,
+		);
+		expect(recovered.segments).toHaveLength(2);
+		expect(recovered.rate).toBeNull();
+		expect(metricTrace([point(10, 0), stale], 180000, 30000).rate).toBeNull();
+	});
 	it("computes a rate from elapsed observation time, not sample count", () => {
 		const result = metricTrace(
 			[point(4, 10), point(8, 0), point(7, 2)],

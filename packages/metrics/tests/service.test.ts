@@ -6,6 +6,8 @@ import {
 	type MetricDefinition,
 	type MetricObservationsPort,
 	MetricRegistry,
+	MetricListInputSchema,
+	MetricListResponseSchema,
 	type MetricSample,
 	type MetricSnapshot,
 } from "../src/index";
@@ -87,7 +89,9 @@ function setup() {
 		},
 		async at(id, hash, at) {
 			return (
-				(await this.history(id, hash, 100)).find((r) => r.window.end <= at) ??
+				(await this.history(id, hash, 100)).find(
+					(r) => Date.parse(r.window.end) <= Date.parse(at),
+				) ??
 				null
 			);
 		},
@@ -273,6 +277,50 @@ describe("measurement evidence contract", () => {
 });
 
 describe("review regression cases", () => {
+	it("keeps calculator discovery on list pages and accepts bounded continuation", async () => {
+		const s = setup();
+		const input = MetricListInputSchema.parse({ limit: 1, after: "open-work" });
+		const page = MetricListResponseSchema.parse(
+			await s.service.list(input.limit, input.after),
+		);
+		expect(page.items).toEqual([]);
+		expect(page.catalog[0]).toMatchObject({
+			id: "work.count@1",
+			unit: "items",
+			limits: { maxSourceCalls: 1 },
+			paramsSchema: { type: "object" },
+		});
+		expect(MetricListInputSchema.safeParse({ limit: 51 }).success).toBe(false);
+	});
+
+	it("compares baseline and evaluation timestamps as instants across offsets", async () => {
+		const s = setup();
+		const baseline = await s.service.compute("open-work", {
+			requestKey: "timezone-baseline",
+		});
+		s.advance(60000);
+		const binding = {
+			metricId: "open-work",
+			comparator: "eq" as const,
+			target: { value: 0, unit: "items" },
+			baselineObservationId: baseline.id,
+		};
+		const [utc] = await s.service.bindings(
+			[{ ...binding, evaluationAt: "2026-10-30T12:00:00Z" }],
+			{ hypothesis: true },
+		);
+		const [offset] = await s.service.bindings(
+			[{ ...binding, evaluationAt: "2026-10-30T04:00:00-08:00" }],
+			{ hypothesis: true },
+		);
+		expect(offset).toMatchObject({
+			met: true,
+			reason: null,
+			baseline: { id: baseline.id },
+		});
+		expect(offset?.observation?.id).toBe(utc?.observation?.id);
+	});
+
 	it("rejects backdating a current snapshot", async () => {
 		const s = setup();
 		await expect(

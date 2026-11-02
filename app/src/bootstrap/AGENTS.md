@@ -118,3 +118,4 @@ Bootstrap application runtime dependencies.
 - Focus on runtime composition only
 
 goalMetrics composes the published measurement engine, node-owned calculator catalog and injected Postgres observation adapter. Metric tool bindings and DAO goal projections share this service.
+startMetricsSyncOnBoot activates the refresh clock after the configured container is ready, independently of governance reconciliation.

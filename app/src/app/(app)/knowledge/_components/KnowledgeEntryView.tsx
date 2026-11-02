@@ -96,13 +96,12 @@ export function KnowledgeEntryView({ id }: { readonly id: string }) {
 								<h2 className="font-medium">KPI evidence</h2>
 								{(
 									KpiBindingsSchema.safeParse(query.data.kpiBindings).data ?? []
-								).map((binding) => {
-									const reading = query.data.kpis?.find(
-										(kpi) => kpi.metricId === binding.metricId,
-									);
+									).map((binding, index) => {
+										// The service returns one result for each ordered binding.
+										const reading = query.data.kpis?.[index];
 									const observation = reading?.observation;
 									return (
-										<div key={binding.metricId} className="space-y-1">
+											<div key={`${binding.metricId}:${index}`} className="space-y-1">
 											<p>
 												<Link
 													className="underline"

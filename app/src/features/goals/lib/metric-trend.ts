@@ -4,6 +4,7 @@ import type { MetricObservation } from "@cogni-dao/metrics/contracts";
 export function metricTrace(
 	history: readonly MetricObservation[],
 	maxGapMs: number,
+	maxSourceAgeMs = maxGapMs,
 ) {
 	const ordered = [...history].sort(
 		(a, b) => Date.parse(a.window.end) - Date.parse(b.window.end),
@@ -12,8 +13,25 @@ export function metricTrace(
 	let segment: { at: number; value: number; id: string }[] = [];
 	for (const r of ordered) {
 		const at = Date.parse(r.window.end);
+		const measuredAt = Date.parse(r.observedAt ?? r.window.end);
+		const sourceFresh =
+			Number.isFinite(measuredAt) &&
+			!!r.sourceWatermarks?.length &&
+			r.sourceWatermarks.every((w) => {
+				const sourceAt = w.asOf ? Date.parse(w.asOf) : NaN;
+				return (
+					Number.isFinite(sourceAt) &&
+					sourceAt <= measuredAt &&
+					measuredAt - sourceAt <= maxSourceAgeMs
+				);
+			});
 		const previous = segment.at(-1);
-		if (r.status !== "ok" || r.value === null || !Number.isFinite(at)) {
+		if (
+			r.status !== "ok" ||
+			r.value === null ||
+			!Number.isFinite(at) ||
+			!sourceFresh
+		) {
 			if (segment.length) segments.push(segment);
 			segment = [];
 			continue;
@@ -26,7 +44,7 @@ export function metricTrace(
 	}
 	if (segment.length) segments.push(segment);
 	// A failed latest reading cannot borrow an earlier successful trend.
-	const recent = ordered.at(-1)?.status === "ok" ? segments.at(-1) : undefined;
+	const recent = segment.length ? segment : undefined;
 	const first = recent?.[0],
 		last = recent?.at(-1);
 	const span = first && last ? last.at - first.at : 0;
