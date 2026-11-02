@@ -108,6 +108,8 @@ vi.mock("@/app/(app)/knowledge/_components/AddDomainSheet", () => ({
 vi.mock("@/app/(app)/knowledge/_components/ConfidenceBar", () => ({
   ConfidenceBar: () => null,
 }));
+// This suite owns atom selection; automatic goal polling has its own evidence.
+vi.mock("@/features/goals", () => ({ GoalsProgress: () => null }));
 vi.mock("next/link", () => ({
   default: ({ href, children }: { href: string; children: ReactNode }) => (
     <a href={href}>{children}</a>
