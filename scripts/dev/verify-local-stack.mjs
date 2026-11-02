@@ -98,7 +98,9 @@ async function request(base, path, headers = {}, body) {
 		method: body ? "POST" : "GET",
 		body: body ? JSON.stringify(body) : undefined,
 		redirect: "error",
-		signal: AbortSignal.timeout(15000),
+		// The first request compiles Next's proxy and route on a cold dev server.
+		// Keep a bounded minute so normal compilation is not a false startup failure.
+		signal: AbortSignal.timeout(60000),
 	});
 	if (!response.ok) throw new Error(`HTTP ${response.status}`);
 	const text = await response.text();
