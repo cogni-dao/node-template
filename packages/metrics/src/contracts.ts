@@ -65,6 +65,11 @@ export const MetricViewSchema = z.object({
 	viewState: z.enum(["ok", "stale", "pending", "unavailable", "error"]),
 });
 export type MetricView = z.infer<typeof MetricViewSchema>;
+export const MetricSnapshotSchema = z.object({
+	definition: MetricViewSchema.shape.definition,
+	observation: MetricObservationSchema,
+});
+export type MetricSnapshot = z.infer<typeof MetricSnapshotSchema>;
 export const MetricListInputSchema = z.strictObject({
 	limit: z.number().int().min(1).max(50).optional(),
 	after: z.string().min(1).max(160).optional(),
@@ -87,12 +92,7 @@ export const MetricListResponseSchema = z.object({
 		}),
 	),
 });
-export interface MetricDefinition {
-	id: string;
-	title: string;
-	revision: string;
-	spec: MetricSpec;
-}
+export type MetricDefinition = MetricView["definition"];
 export interface MetricScope {
 	node: string;
 	environment: string;
@@ -134,10 +134,6 @@ export interface MetricDefinitionsPort {
 		limit: number,
 		after?: string,
 	): Promise<{ items: MetricDefinition[]; nextCursor: string | null }>;
-}
-export interface MetricSnapshot {
-	definition: MetricDefinition;
-	observation: MetricObservation;
 }
 export interface MetricObservationsPort {
 	request(

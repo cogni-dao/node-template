@@ -237,10 +237,12 @@ function Metric({
 	deadline: string | null;
 	now: number;
 }) {
-	const { view, binding } = metric;
-	const current = view?.latestAttempt;
+	const { view, binding, reading } = metric;
+	const fixedEvaluation = !!binding.evaluationAt;
+	const current = fixedEvaluation ? reading.observation : view?.latestAttempt;
+	const state = fixedEvaluation ? reading.viewState : view?.viewState;
 	const fresh =
-		view?.viewState === "ok" &&
+		state === "ok" &&
 		current?.value !== null &&
 		current?.value !== undefined &&
 		current?.unit === binding.target.unit;
@@ -249,7 +251,7 @@ function Metric({
 		Math.max(
 			view?.definition.spec.maxAgeSeconds ?? 0,
 			(view?.definition.spec.cadenceSeconds ?? 60) * 2,
-			) * 1000,
+		) * 1000,
 		(view?.definition.spec.maxAgeSeconds ?? 0) * 1000,
 	);
 	const end = binding.evaluationAt ?? deadline;
@@ -263,14 +265,15 @@ function Metric({
 					trace.unitMs,
 				)
 			: null;
-	const onTarget =
-		fresh &&
-		current &&
-		(binding.comparator === "gte"
-			? (current.value ?? NaN) >= binding.target.value
-			: binding.comparator === "lte"
-				? (current.value ?? NaN) <= binding.target.value
-				: current.value === binding.target.value);
+	const onTarget = fixedEvaluation
+		? reading.met === true
+		: fresh &&
+			current &&
+			(binding.comparator === "gte"
+				? (current.value ?? NaN) >= binding.target.value
+				: binding.comparator === "lte"
+					? (current.value ?? NaN) <= binding.target.value
+					: current.value === binding.target.value);
 	const slope = trace.rate;
 	const improved =
 		slope !== null &&
@@ -296,6 +299,9 @@ function Metric({
 				</span>
 			</div>
 			<div className="my-1">
+				{fixedEvaluation && (
+					<p className="text-muted-foreground text-xs">Ongoing measurements</p>
+				)}
 				<Trace
 					trace={trace}
 					target={binding.target.value}
@@ -313,14 +319,16 @@ function Metric({
 					}
 				>
 					{!fresh
-						? view?.viewState === "stale"
-							? "Measurement delayed"
-							: view?.viewState === "pending"
-								? "Updating automatically"
-								: "Evidence unavailable"
+						? reading.reason === "evaluation_not_due" && fixedEvaluation
+							? "Evaluation not due"
+							: state === "stale"
+								? "Measurement delayed"
+								: state === "pending"
+									? "Updating automatically"
+									: "Evidence unavailable"
 						: slope === null
 							? "Building trend"
-							: `${slope > 0 ? "+" : ""}${number(slope)} ${current.unit}/${trace.rateUnit} · ${duration(trace.span)} observed`}
+							: `${fixedEvaluation ? "Ongoing: " : ""}${slope > 0 ? "+" : ""}${number(slope)} ${view?.latestAttempt?.unit ?? binding.target.unit}/${trace.rateUnit} · ${duration(trace.span)} observed`}
 				</span>
 			</div>
 			<details className="mt-1.5 text-muted-foreground text-xs">
@@ -346,7 +354,8 @@ function Metric({
 					</p>
 					{current && (
 						<p>
-							Last attempt: {date(current.window.end)} · {view?.viewState}
+							{fixedEvaluation ? "Evaluation reading" : "Last attempt"}:{" "}
+							{date(current.window.end)} · {state}
 						</p>
 					)}
 					{current && (

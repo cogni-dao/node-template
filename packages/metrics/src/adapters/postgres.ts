@@ -148,7 +148,8 @@ export class PostgresMetricObservations implements MetricObservationsPort {
 		await this
 			.sql`UPDATE metric_observations SET status='error',lease_token=NULL,lease_expires_at=NULL,
       observation=observation || jsonb_build_object('status','error','reason','lease_expired','observedAt',to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'))
-      WHERE id IN (SELECT id FROM metric_observations WHERE scope=${this.key} AND status='pending' AND lease_expires_at<clock_timestamp() ORDER BY lease_expires_at LIMIT 20)`;
+      WHERE scope=${this.key} AND status='pending' AND lease_expires_at<clock_timestamp()
+      AND id IN (SELECT id FROM metric_observations WHERE scope=${this.key} AND status='pending' AND lease_expires_at<clock_timestamp() ORDER BY lease_expires_at LIMIT 20 FOR UPDATE SKIP LOCKED)`;
 	}
 	async cursor() {
 		const [row] = await this

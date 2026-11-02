@@ -3,6 +3,7 @@ import {
 	MetricListInputSchema,
 	MetricListResponseSchema,
 	MetricObservationSchema,
+	MetricSnapshotSchema,
 	MetricViewSchema,
 } from "@cogni-dao/metrics/contracts";
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
@@ -129,12 +130,7 @@ export async function GET(request: Request) {
 				inputSchema: z.toJSONSchema(
 					z.object({ id: z.string(), observationId: z.uuid() }),
 				),
-				outputSchema: z.toJSONSchema(
-					z.object({
-						definition: MetricViewSchema.shape.definition,
-						observation: MetricObservationSchema,
-					}),
-				),
+				outputSchema: z.toJSONSchema(MetricSnapshotSchema),
 			},
 			computeMetric: {
 				method: "POST",

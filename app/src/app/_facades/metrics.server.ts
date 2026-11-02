@@ -7,6 +7,7 @@ import {
 	type MetricListInput,
 	MetricListResponseSchema,
 	MetricObservationSchema,
+	MetricSnapshotSchema,
 	MetricViewSchema,
 } from "@cogni-dao/metrics";
 import { NextResponse } from "next/server";
@@ -39,7 +40,9 @@ export function metricHttpError(error: unknown) {
 export async function metricList(input: MetricListInput = {}) {
 	const service = getGoalMetrics();
 	return NextResponse.json(
-		MetricListResponseSchema.parse(await service.list(input.limit, input.after)),
+		MetricListResponseSchema.parse(
+			await service.list(input.limit, input.after),
+		),
 	);
 }
 export async function metricRead(id: string) {
@@ -54,10 +57,7 @@ export async function metricRead(id: string) {
 }
 export async function metricObservation(id: string, observationId: string) {
 	const saved = await getGoalMetrics().observation(id, observationId);
-	return NextResponse.json({
-		definition: saved.definition,
-		observation: MetricObservationSchema.parse(saved.observation),
-	});
+	return NextResponse.json(MetricSnapshotSchema.parse(saved));
 }
 export async function metricCompute(id: string, request: Request) {
 	let body: unknown;

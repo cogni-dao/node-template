@@ -5,6 +5,7 @@ import {
 	MetricListInputSchema,
 	MetricListResponseSchema,
 	MetricObservationSchema,
+	MetricSnapshotSchema,
 	MetricViewSchema,
 } from "@cogni-dao/metrics/contracts";
 import { z } from "zod";
@@ -41,17 +42,20 @@ export function createMetricTools(resolve: () => MetricService | undefined) {
 			outputSchema: MetricViewSchema.extend({
 				history: z.array(MetricObservationSchema),
 				observation: MetricObservationSchema.optional(),
+				snapshot: MetricSnapshotSchema.optional(),
 			}),
-			run: async (p: { id: string; observationId?: string }) => ({
-				...(await service().read(p.id)),
-				history: await service().history(p.id),
-				...(p.observationId
-					? {
-							observation: (await service().observation(p.id, p.observationId))
-								.observation,
-						}
-					: {}),
-			}),
+			run: async (p: { id: string; observationId?: string }) => {
+				const snapshot = p.observationId
+					? MetricSnapshotSchema.parse(
+							await service().observation(p.id, p.observationId),
+						)
+					: undefined;
+				return {
+					...(await service().read(p.id)),
+					history: await service().history(p.id),
+					...(snapshot ? { observation: snapshot.observation, snapshot } : {}),
+				};
+			},
 		},
 		{
 			name: "core__metric_compute",
@@ -81,17 +85,7 @@ export function createMetricTools(resolve: () => MetricService | undefined) {
 			effect: d.effect,
 			inputSchema: d.inputSchema,
 			outputSchema: d.outputSchema,
-			allowlist: [
-				"items",
-				"nextCursor",
-				"catalog",
-				"definition",
-				"latestAttempt",
-				"lastGood",
-				"viewState",
-				"history",
-				"observation",
-			],
+			allowlist: Object.keys(d.outputSchema.shape),
 			redact: (out: Record<string, unknown>) => out,
 		};
 		const implementation: ToolImplementation<unknown, unknown> = {
