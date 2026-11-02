@@ -9,6 +9,7 @@ import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { runMetricsRefresh } from "@/bootstrap/jobs/metrics-refresh.job";
 import { getNodeId } from "@/shared/config";
 import { serverEnv } from "@/shared/env";
+import { EVENT_NAMES, logEvent } from "@/shared/observability";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const POST = wrapRouteHandlerWithLogging(
@@ -74,14 +75,18 @@ export const POST = wrapRouteHandlerWithLogging(
 		try {
 			const result = await runMetricsRefresh(body.data.executionGrantId);
 			await requests.finalizeRequest(key, { ok: true, errorCode: null });
-			ctx.log.info(
-				{
-					dispatchKey: key,
-					scanned: result.scanned,
-					observationIds: result.observations.map((x) => x.id),
-				},
-				"metric.refresh_completed",
+			const failed = result.observations.filter(
+				(x) => x.status === "error" || x.status === "unavailable",
 			);
+			logEvent(ctx.log, EVENT_NAMES.METRIC_REFRESH_COMPLETE, {
+				reqId: ctx.reqId,
+				routeId: ctx.routeId,
+				scanned: result.scanned,
+				measuredCount: result.observations.length,
+				errorCount: failed.length,
+				outcome: failed.length ? "error" : "success",
+				errorCode: failed.length ? "metric_source_unavailable" : null,
+			});
 			return NextResponse.json({ ok: true, ...result });
 		} catch (error) {
 			await requests.finalizeRequest(key, { ok: false, errorCode: "internal" });

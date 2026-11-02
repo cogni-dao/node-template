@@ -797,7 +797,7 @@ function createContainer(): Container {
 			writerSession: knowledgeWriter,
 		});
 		knowledgeStorePort = knowledgePort;
-    goalMetrics = createGoalMetrics({ knowledgeSql: doltClient, observationsSql: serviceDb.$client, environment: env.DEPLOY_ENVIRONMENT ?? "unknown", log: event => log.info(event, "metric.computed") });
+    goalMetrics = createGoalMetrics({ knowledgeSql: doltClient, observationsSql: serviceDb.$client, environment: env.DEPLOY_ENVIRONMENT ?? "unknown", log: () => undefined });
 		knowledgeCapability = createKnowledgeCapability(knowledgePort);
     const listGoals = knowledgeCapability.listActiveGoals?.bind(knowledgeCapability);
     if (listGoals) knowledgeCapability.listActiveGoals = async () => {

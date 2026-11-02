@@ -19,13 +19,13 @@
  */
 
 import { redirect } from "next/navigation";
-
+import { loadGoalsProgress } from "@/app/_facades/metrics.server";
 import { getContainer } from "@/bootstrap/container";
 import { getServerSessionUser } from "@/lib/auth/server";
 import {
-  loadDomains,
-  loadKnowledgeGraphCached,
-  loadKnowledgeListCached,
+	loadDomains,
+	loadKnowledgeGraphCached,
+	loadKnowledgeListCached,
 } from "./_server/loaders";
 import { KnowledgeDashboardView } from "./view";
 
@@ -35,44 +35,46 @@ export const runtime = "nodejs";
 // A failed/unconfigured store must not 500 the page — degrade to a client
 // fetch (which now shows an honest skeleton, never "0 entries").
 async function safe<T>(p: Promise<T>): Promise<T | undefined> {
-  try {
-    return await p;
-  } catch {
-    return undefined;
-  }
+	try {
+		return await p;
+	} catch {
+		return undefined;
+	}
 }
 
 export default async function KnowledgePage({
-  searchParams,
+	searchParams,
 }: {
-  searchParams: Promise<{ mode?: string }>;
+	searchParams: Promise<{ mode?: string }>;
 }) {
-  const user = await getServerSessionUser();
-  if (!user) {
-    redirect("/");
-  }
+	const user = await getServerSessionUser();
+	if (!user) {
+		redirect("/");
+	}
 
-  const port = getContainer().knowledgeStorePort;
-  const { mode } = await searchParams;
+	const port = getContainer().knowledgeStorePort;
+	const initialGoals = await safe(loadGoalsProgress());
+	const { mode } = await searchParams;
 
-  const [initialList, initialDomains, initialGraph] = port
-    ? await Promise.all([
-        // limit=500 matches the browse client fetcher (LIST_LIMIT_PARITY).
-        // Cached reads keyed by store revision (bug.5547): repeat refreshes are
-        // cache hits, not full re-materializations.
-        safe(loadKnowledgeListCached(port, { limit: 500 })),
-        safe(loadDomains(port)),
-        mode === "graph"
-          ? safe(loadKnowledgeGraphCached(port))
-          : Promise.resolve(undefined),
-      ])
-    : [undefined, undefined, undefined];
+	const [initialList, initialDomains, initialGraph] = port
+		? await Promise.all([
+				// limit=500 matches the browse client fetcher (LIST_LIMIT_PARITY).
+				// Cached reads keyed by store revision (bug.5547): repeat refreshes are
+				// cache hits, not full re-materializations.
+				safe(loadKnowledgeListCached(port, { limit: 500 })),
+				safe(loadDomains(port)),
+				mode === "graph"
+					? safe(loadKnowledgeGraphCached(port))
+					: Promise.resolve(undefined),
+			])
+		: [undefined, undefined, undefined];
 
-  return (
-    <KnowledgeDashboardView
-      initialList={initialList}
-      initialDomains={initialDomains}
-      initialGraph={initialGraph}
-    />
-  );
+	return (
+		<KnowledgeDashboardView
+			initialGoals={initialGoals}
+			initialList={initialList}
+			initialDomains={initialDomains}
+			initialGraph={initialGraph}
+		/>
+	);
 }

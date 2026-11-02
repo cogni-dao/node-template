@@ -60,6 +60,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 
 import { Button, Input } from "@/components";
+import { GoalsProgress, type GoalsProgressData } from "@/features/goals";
 
 import { closeContribution } from "./_api/closeContribution";
 import { fetchContributions } from "./_api/fetchContributions";
@@ -99,6 +100,7 @@ function errorMessage(error: unknown): string {
 }
 
 interface KnowledgeDashboardViewProps {
+  readonly initialGoals?: GoalsProgressData | undefined;
   /** SSR-seeded browse list — makes the entry count correct on first paint. */
   readonly initialList?: KnowledgeListResponse | undefined;
   /** SSR-seeded domain registry. */
@@ -108,6 +110,7 @@ interface KnowledgeDashboardViewProps {
 }
 
 export function KnowledgeDashboardView({
+  initialGoals,
   initialList,
   initialDomains,
   initialGraph,
@@ -250,6 +253,8 @@ export function KnowledgeDashboardView({
           </div>
         </div>
       </div>
+
+      <GoalsProgress initialData={initialGoals} />
 
       {mode === "browse" && (
         <BrowsePanel

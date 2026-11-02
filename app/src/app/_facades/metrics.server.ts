@@ -9,6 +9,17 @@ import {
 } from "@cogni-dao/metrics";
 import { NextResponse } from "next/server";
 import { getContainer } from "@/bootstrap/container";
+import { readGoalsProgress } from "@/features/goals/services/progress";
+export async function loadGoalsProgress() {
+	const container = getContainer();
+	if (!container.knowledgeStorePort)
+		throw new MetricError("goals_unavailable", 503);
+	return readGoalsProgress(
+		container.knowledgeStorePort,
+		container.goalMetrics,
+		container.config.DEPLOY_ENVIRONMENT ?? "unknown",
+	);
+}
 export function getGoalMetrics() {
 	const service = getContainer().goalMetrics;
 	if (!service) throw new MetricError("metrics_unavailable", 503);
@@ -17,7 +28,10 @@ export function getGoalMetrics() {
 export function metricHttpError(error: unknown) {
 	if (error instanceof MetricError)
 		return NextResponse.json({ error: error.code }, { status: error.status });
-	getContainer().log.error({ err: error }, "metric.operation_failed");
+	getContainer().log.error(
+		{ errorCode: "metrics_unavailable" },
+		"metric.operation_failed",
+	);
 	return NextResponse.json({ error: "metrics_unavailable" }, { status: 503 });
 }
 export async function metricList() {
