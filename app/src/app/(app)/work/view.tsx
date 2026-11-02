@@ -328,7 +328,7 @@ export function WorkDashboardView({
         e.target instanceof HTMLTextAreaElement ||
         (e.target instanceof HTMLElement &&
           e.target.closest(
-            "button, a, select, summary, [contenteditable=true], [role=menuitem], [role=combobox]",
+            "button, a, select, summary, [contenteditable=true], [role^=menuitem], [role=combobox], [role=checkbox], [role=option], [role=slider], [role=spinbutton]",
           ))
       )
         return;

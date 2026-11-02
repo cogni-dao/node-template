@@ -227,6 +227,11 @@ describe("Work Kanban", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "task.0000: Work item 0" })).toBeInTheDocument());
     fireEvent.keyDown(document, { key: "j" });
     fireEvent.keyDown(screen.getByRole("combobox", { name: "Items per page" }), { key: "Enter" });
+    const menuItem = document.createElement("div");
+    menuItem.setAttribute("role", "menuitemcheckbox");
+    document.body.appendChild(menuItem);
+    fireEvent.keyDown(menuItem, { key: "Enter" });
+    menuItem.remove();
     expect(navigation.router.push).not.toHaveBeenCalled();
   });
 
