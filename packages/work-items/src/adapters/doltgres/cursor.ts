@@ -43,6 +43,7 @@ export type WorkItemCursor = WorkItemOrder & {
   v: 2;
   filter: string;
   key: string | null;
+  keyRef?: string;
   id: string;
 };
 export function encodeCursor(cursor: WorkItemCursor): string {
@@ -50,8 +51,8 @@ export function encodeCursor(cursor: WorkItemCursor): string {
 }
 export function decodeCursor(
   raw: string,
-  order?: WorkItemOrder,
-  filter?: string,
+  order: WorkItemOrder | undefined,
+  filter: string,
 ): WorkItemCursor {
   try {
     if (!raw || raw.length > 2048 || !/^[A-Za-z0-9_-]+$/.test(raw))
@@ -66,7 +67,8 @@ export function decodeCursor(
       !value.id ||
       value.id.length > 200 ||
       !(value.key === null || typeof value.key === "string") ||
-      value.key?.length > 100
+      value.key?.length > 1000 ||
+      (value.keyRef !== undefined && (value.sortBy !== "projectId" || value.key !== null || typeof value.keyRef !== "string" || !/^[a-f0-9]{64}$/.test(value.keyRef)))
     )
       throw new Error();
     const normalized = normalizeWorkItemOrder(value);
@@ -91,7 +93,7 @@ export function decodeCursor(
         )
           throw new Error();
       } else if (["type", "status", "projectId"].includes(value.sortBy)) {
-        if (!value.key || value.key.length > 100) throw new Error();
+        if (!value.key || value.key.length > 1000) throw new Error();
       } else if (
         !/^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(value.key) ||
         !Number.isFinite(Number(value.key))
@@ -103,6 +105,7 @@ export function decodeCursor(
       filter: value.filter,
       ...normalized,
       key: value.key,
+      ...(value.keyRef !== undefined && { keyRef: value.keyRef }),
       id: value.id,
     };
   } catch {

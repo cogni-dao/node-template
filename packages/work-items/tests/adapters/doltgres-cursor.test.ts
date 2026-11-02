@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 /** Native-key roundtrips and order/version mismatch rejection. */
 import { describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -64,6 +65,13 @@ describe("order-bound work cursor", () => {
       ),
     ).toThrow(/restart pagination/);
   });
+  it("roundtrips a bounded reference to an arbitrarily long project key", () => {
+    const key = "proj." + "x".repeat(5000);
+    const cursor: WorkItemCursor = { v: 2, filter: queryIdentity(), sortBy: "projectId", sortDirection: "asc", key: null, keyRef: createHash("sha256").update(key).digest("hex"), id: "task.0001" };
+    const encoded = encodeCursor(cursor);
+    expect(encoded.length).toBeLessThan(2048);
+    expect(decodeCursor(encoded, undefined, queryIdentity())).toEqual(cursor);
+  });
   it("preserves timestamp microseconds rather than a DTO Date", () => {
     const c: WorkItemCursor = {
       v: 2,
@@ -90,7 +98,7 @@ describe("order-bound work cursor", () => {
         }),
       ).toString("base64url"),
     ])
-      expect(() => decodeCursor(raw)).toThrow(/restart pagination/);
+      expect(() => decodeCursor(raw, undefined, queryIdentity())).toThrow(/restart pagination/);
     const raw = encodeCursor({
       v: 2,
       filter: queryIdentity(),
@@ -141,4 +149,24 @@ it("binds cursor filters consistently with Markdown matching", async () => {
     await expect(adapter.list({ limit: 1, cursor: first.nextCursor, statuses: ["done"] })).rejects.toThrow(/restart pagination/);
     expect(queryIdentity({assignee: {kind: "user", userId: "u"}})).toBe(queryIdentity({assignee: {userId: "u", kind: "user"}}));
   } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+
+it("pages by a long project key and rejects a changed boundary", async () => {
+  const key = "proj." + "x".repeat(5000);
+  let boundary = key;
+  const queries: string[] = [];
+  const row = (id: string, project: string) => ({ id, type: "task", title: id, status: "needs_design", project_id: project, __sort_key: project });
+  const reader = makeFakeDoltgresSql((sql) => {
+    if (sql.startsWith("SELECT * FROM work_items WHERE id =")) return [row("task.0001", boundary)];
+    if (sql.includes("AS ordered")) return sql.includes("WHERE (__sort_value") ? [row("task.0002", "z")] : [row("task.0001", key), row("task.0002", "z")];
+    return [];
+  }, queries);
+  const adapter = new DoltgresWorkItemAdapter(independentReadPool(reader), { readClient: reader });
+  const first = await adapter.list({ sortBy: "projectId", sortDirection: "asc", limit: 1 });
+  expect(first.nextCursor?.length).toBeLessThan(2048);
+  const second = await adapter.list({ sortBy: "projectId", sortDirection: "asc", limit: 1, cursor: first.nextCursor });
+  expect(second.items.map(item => item.id)).toEqual(["task.0002"]);
+  boundary = "changed";
+  await expect(adapter.list({ sortBy: "projectId", sortDirection: "asc", limit: 1, cursor: first.nextCursor })).rejects.toThrow(/restart pagination/);
 });

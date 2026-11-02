@@ -323,11 +323,12 @@ export function WorkDashboardView({
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
       if (
+        e.defaultPrevented ||
         e.target instanceof HTMLInputElement ||
         e.target instanceof HTMLTextAreaElement ||
         (e.target instanceof HTMLElement &&
           e.target.closest(
-            "button, a, [contenteditable=true], [role=menuitem]",
+            "button, a, select, summary, [contenteditable=true], [role=menuitem], [role=combobox]",
           ))
       )
         return;

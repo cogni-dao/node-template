@@ -222,4 +222,12 @@ describe("Work Kanban", () => {
     expect(navigation.router.replace).toHaveBeenCalledWith(expect.not.stringContaining("cursor="), { scroll: false });
   });
 
+  it("does not intercept Enter on the page-size control", async () => {
+    mount();
+    await waitFor(() => expect(screen.getByRole("button", { name: "task.0000: Work item 0" })).toBeInTheDocument());
+    fireEvent.keyDown(document, { key: "j" });
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Items per page" }), { key: "Enter" });
+    expect(navigation.router.push).not.toHaveBeenCalled();
+  });
+
 });

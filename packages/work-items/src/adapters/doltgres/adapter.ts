@@ -4,7 +4,7 @@
 /** Doltgres runtime authority for deployed work items. */
 
 import { AsyncLocalStorage } from "node:async_hooks";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   acquireDoltWriterLocks,
   DoltWriterAdmissionError,
@@ -47,7 +47,7 @@ import { parseWorkItemScores } from "../../scores.js";
 import { normalizeWorkItemOrder } from "../../query-order.js";
 import { rankScoreSql } from "../../rank-policy.js";
 
-import { decodeCursor, encodeCursor, queryIdentity, type WorkItemCursor } from "./cursor.js";
+import { decodeCursor, encodeCursor, InvalidCursorError, queryIdentity, type WorkItemCursor } from "./cursor.js";
 import type {
   WorkItemsContentPort,
   WorkItemsCreateInput,
@@ -2854,6 +2854,12 @@ export class DoltgresWorkItemAdapter
     const matchedRows = await this.readOnCleanMain(async (conn) => {
       const matches: Record<string, unknown>[] = [];
       let cursor = initialCursor;
+      if (cursor?.keyRef) {
+        const row = await this.getWith(conn, toWorkItemId(cursor.id));
+        const key = row?.project_id;
+        if (typeof key !== "string" || createHash("sha256").update(key).digest("hex") !== cursor.keyRef) throw new InvalidCursorError();
+        cursor = { ...cursor, key, keyRef: undefined };
+      }
       while (true) {
         const rows = await conn.unsafe(
           `SELECT ordered.*, CAST(__sort_value AS TEXT) AS __sort_key FROM (SELECT work_items.*, ${keyExpression} AS __sort_value FROM work_items ${where}) AS ordered ${seek(cursor)} ORDER BY CASE WHEN __sort_value IS NULL THEN 1 ELSE 0 END ASC, __sort_value ${order.sortDirection.toUpperCase()}, id ASC LIMIT ${limit + 1}`
@@ -2880,7 +2886,9 @@ export class DoltgresWorkItemAdapter
     const pageRows = matchedRows.slice(0, limit);
     const items = pageRows.map(rowToWorkItem);
     const last = pageRows[pageRows.length - 1];
-    const endCursor = hasMore && last ? encodeCursor(nativeCursor(last)) : null;
+    const lastCursor = last ? nativeCursor(last) : undefined;
+    const encodedCursor = lastCursor?.sortBy === "projectId" && lastCursor.key !== null ? { ...lastCursor, key: null, keyRef: createHash("sha256").update(lastCursor.key).digest("hex") } : lastCursor;
+    const endCursor = hasMore && encodedCursor ? encodeCursor(encodedCursor) : null;
     return {
       items,
       pageInfo: { endCursor, hasMore },
