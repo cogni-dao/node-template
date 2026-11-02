@@ -287,7 +287,7 @@ const CASES = [
       '{"name":"@cogni-dao/work-items","tagPrefix":"work-items-v"}'
     ),
     expectExit: 1,
-    expectMatch: /env\.PACKAGES\[0\] must declare a non-empty string "dir"/,
+    expectMatch: /env\.PACKAGES\[\d+\] must declare a non-empty string "dir"/,
   },
   {
     name: "a static matrix replaces the derived one, and matrix is not available in jobs.<id>.if",

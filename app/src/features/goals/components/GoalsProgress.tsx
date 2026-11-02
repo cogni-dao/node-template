@@ -109,9 +109,9 @@ export function GoalsProgress({
 								</div>
 								{goal.metrics.length ? (
 									<div className="grid gap-3 md:grid-cols-2">
-										{goal.metrics.map((metric, i) => (
+										{goal.metrics.map((metric) => (
 											<Metric
-												key={`${metric.binding.metricId}-${i}`}
+												key={JSON.stringify(metric.binding)}
 												metric={metric}
 												deadline={goal.evaluateAt}
 												now={now}
@@ -126,9 +126,8 @@ export function GoalsProgress({
 									</p>
 								)}
 								{!!goal.hypotheses.length && (
-									<div
+									<section
 										className="space-y-2 border-l-2 border-border pl-3"
-										role="group"
 										aria-label="Hypotheses and predictions"
 									>
 										{goal.hypotheses.map((bet) => (
@@ -161,9 +160,15 @@ export function GoalsProgress({
 													</span>
 												</div>
 												{bet.predictions.length ? (
-													bet.predictions.map((p, i) => (
+													bet.predictions.map((p) => (
 														<p
-															key={`${p.metricId}-${i}`}
+															key={JSON.stringify([
+																p.metricId,
+																p.comparator,
+																p.target,
+																p.evaluationAt,
+																p.baselineObservationId,
+															])}
 															className="text-muted-foreground"
 														>
 															Expected {compare(p.comparator)}{" "}
@@ -201,7 +206,7 @@ export function GoalsProgress({
 												)}
 											</div>
 										))}
-									</div>
+									</section>
 								)}
 								{goal.hypothesesUnavailable && (
 									<p className="text-amber-500 text-xs">
