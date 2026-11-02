@@ -66,12 +66,14 @@ if (
 	!new Set(["localhost", "127.0.0.1", "[::1]"]).has(temporal.hostname) ||
 	Number(base.port) !== Number(env.PORT) ||
 	!env.TEMPORAL_NAMESPACE?.startsWith("cogni-local") ||
-	!env.TEMPORAL_TASK_QUEUE ||
 	env.DEPLOY_ENVIRONMENT !== "local"
 )
 	throw new Error(
 		"Configure this node's local app and Temporal bindings first",
 	);
+// A copied environment may name another checkout's queue. Container labels do
+// not isolate Temporal consumers, so bind app and worker to our own queue base.
+const queueBase = `${values.prefix}-${Number(env.PORT)}`;
 for (const key of [
 	"LITELLM_MASTER_KEY",
 	"BILLING_INGEST_TOKEN",
@@ -138,7 +140,7 @@ const plans = [
 		Object.assign(config, {
 			TEMPORAL_ADDRESS: `host.docker.internal:${temporal.port || 7233}`,
 			TEMPORAL_NAMESPACE: env.TEMPORAL_NAMESPACE,
-			TEMPORAL_TASK_QUEUE: env.TEMPORAL_TASK_QUEUE,
+			TEMPORAL_TASK_QUEUE: queueBase,
 			SCHEDULER_API_TOKEN: env.SCHEDULER_API_TOKEN,
 		});
 	const name = `${values.prefix}-${plan.kind}-${plan.port}`;
@@ -219,6 +221,7 @@ try {
 		docker(args);
 	}
 	const replacements = {
+		TEMPORAL_TASK_QUEUE: queueBase,
 		LITELLM_BASE_URL: `http://127.0.0.1:${ports[0]}`,
 		SCHEDULER_WORKER_HEALTH_URL: `http://127.0.0.1:${ports[1]}`,
 	};
@@ -267,7 +270,7 @@ try {
 				node: spec.node_id,
 				app: env.APP_BASE_URL,
 				namespace: env.TEMPORAL_NAMESPACE,
-				queueBase: env.TEMPORAL_TASK_QUEUE,
+				queueBase,
 				containers: plans.map(({ name, port, kind, existing }) => ({
 					name,
 					port,
