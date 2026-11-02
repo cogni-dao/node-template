@@ -22,98 +22,12 @@
 import type { WorkItemDto } from "@cogni/node-contracts";
 import { DataGridColumnHeader } from "@cogni/node-ui-kit/reui/data-grid/data-grid-column-header";
 import { Button } from "@cogni/node-ui-kit/shadcn/button";
-import { Input } from "@cogni/node-ui-kit/shadcn/input";
-import { rankScore } from "@cogni/work-items";
+import { HeaderFilter } from "@cogni/node-ui-kit/header-filter";
+import { rankScore, VALID_TRANSITIONS } from "@cogni/work-items";
 import { type Column, createColumnHelper } from "@tanstack/react-table";
 import { ArrowDownIcon, ArrowUpIcon, ChevronsUpDownIcon } from "lucide-react";
-import { useState } from "react";
 import { NumberRangeFilter } from "./NumberRangeFilter";
 import { StatusPill, TypeIcon } from "./work-item-icons";
-
-function WorkFacet({
-  column,
-  title,
-  options,
-  allowEntry = false,
-}: {
-  readonly column: Column<WorkItemDto, string | undefined>;
-  readonly title: string;
-  readonly options: readonly string[];
-  readonly allowEntry?: boolean;
-}) {
-  const [entry, setEntry] = useState("");
-  const selected = (column.getFilterValue() as string[] | undefined) ?? [];
-  const values = [
-    ...new Set([
-      ...options,
-      ...selected,
-      ...[...column.getFacetedUniqueValues().keys()].filter(
-        (v): v is string => typeof v === "string" && v.length > 0,
-      ),
-    ]),
-  ].sort();
-  const toggle = (v: string) => {
-    const next = selected.includes(v)
-      ? selected.filter((x) => x !== v)
-      : [...selected, v];
-    column.setFilterValue(next.length ? next : undefined);
-  };
-  return (
-    <div className="flex items-center gap-1">
-      <button
-        type="button"
-        className="text-sm"
-        onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
-      >
-        {title}{" "}
-        {column.getIsSorted() === "asc"
-          ? "↑"
-          : column.getIsSorted() === "desc"
-            ? "↓"
-            : ""}
-      </button>
-      <details className="relative">
-        <summary className="cursor-pointer text-xs">Filter</summary>
-        <div className="absolute z-20 flex w-52 flex-col gap-1 rounded border bg-popover p-2 shadow">
-          {values.map((v) => (
-            <label key={v} className="flex gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={selected.includes(v)}
-                onChange={() => toggle(v)}
-              />
-              {v.replace("needs_", "").replaceAll("_", " ")}
-            </label>
-          ))}
-          {allowEntry && (
-            <div className="flex gap-1">
-              <Input
-                aria-label="Project ID"
-                value={entry}
-                onChange={(e) => setEntry(e.target.value)}
-              />
-              <button
-                type="button"
-                onClick={() => {
-                  if (entry && !selected.includes(entry)) toggle(entry);
-                  setEntry("");
-                }}
-              >
-                Add
-              </button>
-            </div>
-          )}
-          <button
-            type="button"
-            onClick={() => column.setFilterValue(undefined)}
-          >
-            Clear
-          </button>
-        </div>
-      </details>
-    </div>
-  );
-}
 
 const col = createColumnHelper<WorkItemDto>();
 
@@ -192,10 +106,17 @@ export const columns = [
 
   col.accessor("type", {
     header: ({ column }) => (
-      <WorkFacet
+      <DataGridColumnHeader
         column={column}
         title="Type"
-        options={["task", "bug", "story", "spike", "subtask"]}
+        allowEmpty
+        filter={
+          <HeaderFilter
+            column={column}
+            options={["task", "bug", "story", "spike", "subtask"]}
+            showCounts={false}
+          />
+        }
       />
     ),
     size: 55,
@@ -224,20 +145,18 @@ export const columns = [
 
   col.accessor("status", {
     header: ({ column }) => (
-      <WorkFacet
+      <DataGridColumnHeader
         column={column}
         title="Status"
-        options={[
-          "needs_triage",
-          "needs_research",
-          "needs_design",
-          "needs_implement",
-          "needs_closeout",
-          "needs_merge",
-          "done",
-          "blocked",
-          "cancelled",
-        ]}
+        allowEmpty
+        filter={
+          <HeaderFilter
+            column={column}
+            options={[...VALID_TRANSITIONS.keys()]}
+            formatLabel={(v) => v.replace("needs_", "").replaceAll("_", " ")}
+            showCounts={false}
+          />
+        }
       />
     ),
     size: 150,
@@ -248,7 +167,19 @@ export const columns = [
 
   col.accessor("projectId", {
     header: ({ column }) => (
-      <WorkFacet column={column} title="Project" options={[]} allowEntry />
+      <DataGridColumnHeader
+        column={column}
+        title="Project"
+        allowEmpty
+        filter={
+          <HeaderFilter
+            column={column}
+            allowEntry
+            formatLabel={formatProject}
+            showCounts={false}
+          />
+        }
+      />
     ),
     size: 140,
     cell: (info) => {

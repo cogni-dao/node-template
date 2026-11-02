@@ -21,6 +21,20 @@
 "use client";
 
 import type { WorkItemDto } from "@cogni/node-contracts";
+import { VALID_TRANSITIONS } from "@cogni/work-items";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuCheckboxItem,
+} from "@cogni/node-ui-kit/shadcn/dropdown-menu";
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "@cogni/node-ui-kit/shadcn/select";
 import {
   DataGrid,
   DataGridContainer,
@@ -55,15 +69,10 @@ import {
   workViewHref,
 } from "./_lib/workItemNavigation";
 
-const ACTIVE_STATUSES = [
-  "needs_triage",
-  "needs_research",
-  "needs_design",
-  "needs_implement",
-  "needs_closeout",
-  "needs_merge",
-  "blocked",
-];
+const ALL_STATUSES = [...VALID_TRANSITIONS.keys()];
+const ACTIVE_STATUSES = ALL_STATUSES.filter(
+  (status) => status !== "done" && status !== "cancelled",
+);
 const EMPTY_ITEMS: WorkItemDto[] = [];
 
 export function WorkDashboardView({
@@ -139,23 +148,10 @@ export function WorkDashboardView({
   });
   const pageSize = Number(searchParams.get("pageSize")) || 10;
   const cursor = searchParams.get("cursor") ?? "";
-  useEffect(() => {
-    try {
-      setHistory(
-        JSON.parse(sessionStorage.getItem("work-page-history") ?? "[]"),
-      );
-    } catch {
-      setHistory([]);
-    }
-    const param = searchParams.get("columns");
-    setVisibleStatuses(
-      param === null ? [...ACTIVE_STATUSES] : param ? param.split(",") : [],
-    );
-  }, [searchParams]);
   const listParams = useMemo(() => {
     const params = new URLSearchParams({ limit: String(pageSize) });
     const values = (id: string) =>
-      columnFilters.find((f) => f.id === id)?.value as string[] | undefined;
+      initialFilters.find((f) => f.id === id)?.value as string[] | undefined;
     for (const [id, key] of [
       ["type", "types"],
       ["status", "statuses"],
@@ -164,20 +160,56 @@ export function WorkDashboardView({
       const value = values(id);
       if (value?.length) params.set(key, value.join(","));
     }
-    const range = columnFilters.find((f) => f.id === "rankScore")?.value as
+    const range = initialFilters.find((f) => f.id === "rankScore")?.value as
       | [number | undefined, number | undefined]
       | undefined;
     if (range?.[0] !== undefined) params.set("rankMin", String(range[0]));
     if (range?.[1] !== undefined) params.set("rankMax", String(range[1]));
-    const sort = sorting[0];
+    const sort = initialSorting[0];
     if (sort) {
       params.set("sortBy", sort.id);
       params.set("sortDirection", sort.desc ? "desc" : "asc");
     }
-    if (globalFilter) params.set("text", globalFilter);
+    const query = searchParams.get("q");
+    if (query) params.set("text", query);
     if (cursor) params.set("cursor", cursor);
     return params;
-  }, [columnFilters, sorting, globalFilter, pageSize, cursor]);
+  }, [initialFilters, initialSorting, searchParams, pageSize, cursor]);
+  const historyKey = useMemo(() => {
+    const p = new URLSearchParams(listParams);
+    p.delete("cursor");
+    return `work-page-history:${p}`;
+  }, [listParams]);
+  useEffect(() => {
+    try {
+      const saved: unknown = JSON.parse(
+        sessionStorage.getItem(historyKey) ?? "[]",
+      );
+      setHistory(
+        Array.isArray(saved) &&
+          saved.length <= 20 &&
+          saved.every(
+            (value) => typeof value === "string" && value.length <= 2048,
+          )
+          ? saved
+          : [],
+      );
+    } catch {
+      setHistory([]);
+    }
+    const param = searchParams.get("columns");
+    setVisibleStatuses(
+      param === null
+        ? [...ACTIVE_STATUSES]
+        : param
+          ? param
+              .split(",")
+              .filter((status) =>
+                ALL_STATUSES.includes(status as (typeof ALL_STATUSES)[number]),
+              )
+          : [],
+    );
+  }, [historyKey, searchParams]);
   const { data, isLoading, error } = useQuery({
     queryKey: ["work-items", listParams.toString()],
     queryFn: () => fetchWorkItems(listParams),
@@ -187,7 +219,7 @@ export function WorkDashboardView({
   const changePage = (next: string, stack: string[]) => {
     const bounded = stack.slice(-20);
     setHistory(bounded);
-    sessionStorage.setItem("work-page-history", JSON.stringify(bounded));
+    sessionStorage.setItem(historyKey, JSON.stringify(bounded));
     const params = new URLSearchParams(searchParams.toString());
     if (next) params.set("cursor", next);
     else params.delete("cursor");
@@ -224,7 +256,7 @@ export function WorkDashboardView({
         return Array.isArray(value) ? (value as string[]) : [];
       };
       const sort = newSorting[0];
-      sessionStorage.removeItem("work-page-history");
+      sessionStorage.removeItem(historyKey);
       setHistory([]);
       router.replace(
         workViewHref(selectedItemId, searchParams, {
@@ -241,7 +273,7 @@ export function WorkDashboardView({
         { scroll: false },
       );
     },
-    [router, searchParams, selectedItemId],
+    [router, searchParams, selectedItemId, historyKey],
   );
 
   const openItem = useCallback(
@@ -385,38 +417,38 @@ export function WorkDashboardView({
           </button>
         )}
         {boardView && (
-          <details className="relative">
-            <summary className="cursor-pointer rounded border px-3 py-2 text-sm">
-              Board columns
-            </summary>
-            <div className="absolute z-20 flex w-48 flex-col gap-1 rounded border bg-popover p-3 shadow">
-              {[...ACTIVE_STATUSES, "done", "cancelled"].map((status) => (
-                <label key={status} className="flex gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={visibleStatuses.includes(status)}
-                    onChange={(e) => {
-                      const next = e.target.checked
-                        ? [...visibleStatuses, status]
-                        : visibleStatuses.filter((x) => x !== status);
-                      setVisibleStatuses(next);
-                      const params = new URLSearchParams(
-                        searchParams.toString(),
-                      );
-                      params.set("columns", next.join(","));
-                      router.replace(
-                        selectedItemId
-                          ? workItemHref(selectedItemId, params)
-                          : workListHref(params),
-                        { scroll: false },
-                      );
-                    }}
-                  />
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm">
+                Board columns
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              {ALL_STATUSES.map((status) => (
+                <DropdownMenuCheckboxItem
+                  key={status}
+                  checked={visibleStatuses.includes(status)}
+                  onSelect={(event) => event.preventDefault()}
+                  onCheckedChange={(checked) => {
+                    const next = checked
+                      ? [...visibleStatuses, status]
+                      : visibleStatuses.filter((value) => value !== status);
+                    setVisibleStatuses(next);
+                    const params = new URLSearchParams(searchParams.toString());
+                    params.set("columns", next.join(","));
+                    router.replace(
+                      selectedItemId
+                        ? workItemHref(selectedItemId, params)
+                        : workListHref(params),
+                      { scroll: false },
+                    );
+                  }}
+                >
                   {status.replace("needs_", "").replaceAll("_", " ")}
-                </label>
+                </DropdownMenuCheckboxItem>
               ))}
-            </div>
-          </details>
+            </DropdownMenuContent>
+          </DropdownMenu>
         )}
         <div className="ml-auto flex items-center gap-2">
           <fieldset
@@ -465,127 +497,134 @@ export function WorkDashboardView({
       )}
 
       <DataGrid
-          table={table}
-          recordCount={table.getFilteredRowModel().rows.length}
-          isLoading={isLoading}
-          loadingMode="skeleton"
-          onRowClick={openItem}
-          tableLayout={{
-            headerSticky: true,
-            headerBackground: true,
-            rowBorder: true,
-            dense: true,
-          }}
-          tableClassNames={{
-            bodyRow: "cursor-pointer",
-          }}
-          emptyMessage="No work items found."
-        >
-          {boardView ? (
-            <>
-              <fieldset
-                className="mb-4 flex min-w-0 flex-wrap items-center gap-x-5 gap-y-2 rounded-lg border px-4 py-2"
-                aria-label="Board filters and sorting"
-              >
-                {table
-                  .getFlatHeaders()
-                  .filter((header) =>
-                    [
-                      "priority",
-                      "rankScore",
-                      "type",
-                      "status",
-                      "projectId",
-                    ].includes(header.column.id),
-                  )
-                  .map((header) => (
-                    <div key={header.id}>
-                      {flexRender(
-                        header.column.columnDef.header,
-                        header.getContext(),
-                      )}
-                    </div>
-                  ))}
-              </fieldset>
-              <WorkKanban
-                items={rows.map((row) => row.original)}
-                statuses={visibleStatuses}
-                isLoading={isLoading}
-                onOpenItem={openItem}
-              />
-            </>
-          ) : (
-            <DataGridContainer className="overflow-x-auto">
-              <DataGridTable />
-            </DataGridContainer>
-          )}
-          <div className="flex items-center justify-between gap-3 pt-4 text-sm">
-            <span>
-              {items.length} items on this page
-              {boardView
-                ? ` · ${items.filter((item) => visibleStatuses.includes(item.status)).length} visible cards`
-                : ""}
-            </span>
-            <div className="flex gap-2">
-              <select
-                aria-label="Items per page"
-                value={pageSize}
-                onChange={(e) => {
-                  const params = new URLSearchParams(searchParams.toString());
-                  params.set("pageSize", e.target.value);
-                  params.delete("cursor");
-                  setHistory([]);
-                  sessionStorage.removeItem("work-page-history");
-                  router.replace(
-                    selectedItemId
-                      ? workItemHref(selectedItemId, params)
-                      : workListHref(params),
-                    { scroll: false },
-                  );
-                }}
-              >
-                {[10, 25, 50, 100].map((n) => (
-                  <option key={n} value={n}>
-                    {n}
-                  </option>
+        table={table}
+        recordCount={table.getFilteredRowModel().rows.length}
+        isLoading={isLoading}
+        loadingMode="skeleton"
+        onRowClick={openItem}
+        tableLayout={{
+          headerSticky: true,
+          headerBackground: true,
+          rowBorder: true,
+          dense: true,
+        }}
+        tableClassNames={{
+          bodyRow: "cursor-pointer",
+        }}
+        emptyMessage="No work items found."
+      >
+        {boardView ? (
+          <>
+            <fieldset
+              className="mb-4 flex min-w-0 flex-wrap items-center gap-x-5 gap-y-2 rounded-lg border px-4 py-2"
+              aria-label="Board filters and sorting"
+            >
+              {table
+                .getFlatHeaders()
+                .filter((header) =>
+                  [
+                    "priority",
+                    "rankScore",
+                    "type",
+                    "status",
+                    "projectId",
+                  ].includes(header.column.id),
+                )
+                .map((header) => (
+                  <div key={header.id}>
+                    {flexRender(
+                      header.column.columnDef.header,
+                      header.getContext(),
+                    )}
+                  </div>
                 ))}
-              </select>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => changePage("", [])}
-                disabled={!cursor}
-              >
-                Restart
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() =>
-                  changePage(
-                    history[history.length - 1] ?? "",
-                    history.slice(0, -1),
-                  )
-                }
-                disabled={!cursor || history.length === 0}
-              >
-                Previous
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() =>
-                  changePage(
-                    data?.pageInfo?.endCursor ?? data?.nextCursor ?? "",
-                    [...history, cursor],
-                  )
-                }
-                disabled={!(data?.pageInfo?.hasMore ?? Boolean(data?.nextCursor)) || !(data?.pageInfo?.endCursor ?? data?.nextCursor)}
-              >
-                Next
-              </Button>
-            </div>
+            </fieldset>
+            <WorkKanban
+              items={rows.map((row) => row.original)}
+              statuses={visibleStatuses}
+              isLoading={isLoading}
+              onOpenItem={openItem}
+            />
+          </>
+        ) : (
+          <DataGridContainer className="overflow-x-auto">
+            <DataGridTable />
+          </DataGridContainer>
+        )}
+        <div className="flex items-center justify-between gap-3 pt-4 text-sm">
+          <span>
+            {items.length} items on this page
+            {boardView
+              ? ` · ${items.filter((item) => visibleStatuses.includes(item.status)).length} visible cards`
+              : ""}
+          </span>
+          <div className="flex gap-2">
+            <Select
+              value={String(pageSize)}
+              onValueChange={(value) => {
+                const params = new URLSearchParams(searchParams.toString());
+                params.set("pageSize", value);
+                params.delete("cursor");
+                setHistory([]);
+                sessionStorage.removeItem(historyKey);
+                router.replace(
+                  selectedItemId
+                    ? workItemHref(selectedItemId, params)
+                    : workListHref(params),
+                  { scroll: false },
+                );
+              }}
+            >
+              <SelectTrigger aria-label="Items per page" className="w-20">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {[10, 25, 50, 100].map((n) => (
+                  <SelectItem key={n} value={String(n)}>
+                    {n}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => changePage("", [])}
+              disabled={!cursor}
+            >
+              Restart
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                changePage(
+                  history[history.length - 1] ?? "",
+                  history.slice(0, -1),
+                )
+              }
+              disabled={!cursor || history.length === 0}
+            >
+              Previous
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                changePage(
+                  data?.pageInfo?.endCursor ?? data?.nextCursor ?? "",
+                  [...history, cursor],
+                )
+              }
+              disabled={
+                !(data?.pageInfo?.hasMore ?? Boolean(data?.nextCursor)) ||
+                !(data?.pageInfo?.endCursor ?? data?.nextCursor)
+              }
+            >
+              Next
+            </Button>
           </div>
+        </div>
       </DataGrid>
 
       <WorkItemDetail

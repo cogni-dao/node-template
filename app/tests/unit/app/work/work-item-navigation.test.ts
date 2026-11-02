@@ -45,7 +45,7 @@ describe("work-item permalink navigation", () => {
     );
   });
 
-  it("updates owned controls without losing unrelated list state", () => {
+  it("updates controls and resets the old page cursor", () => {
     expect(
       workViewHref(
         "task.5174",
@@ -59,7 +59,7 @@ describe("work-item permalink navigation", () => {
         },
       ),
     ).toBe(
-      "/work/items/task.5174?cursor=opaque&type=task&status=needs_implement&project=proj.work&sort=-priority&q=permalink",
+      "/work/items/task.5174?type=task&status=needs_implement&project=proj.work&sort=-priority&q=permalink",
     );
   });
 

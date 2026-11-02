@@ -15,7 +15,8 @@
 
 import type { Column } from "@tanstack/react-table";
 import { Check } from "lucide-react";
-import type { ReactElement } from "react";
+import { useState, type ReactElement } from "react";
+import { Input } from "./shadcn/input";
 
 import { cn } from "./util/cn";
 
@@ -23,15 +24,24 @@ interface HeaderFilterProps<TData, TValue> {
   readonly column: Column<TData, TValue>;
   /** Optional value → display-label mapping. */
   readonly formatLabel?: (value: string) => string;
+  readonly options?: readonly string[];
+  readonly allowEntry?: boolean;
+  readonly showCounts?: boolean;
 }
 
 export function HeaderFilter<TData, TValue>({
   column,
   formatLabel,
+  options,
+  allowEntry = false,
+  showCounts = true,
 }: HeaderFilterProps<TData, TValue>): ReactElement {
+  const [entry, setEntry] = useState("");
   const facets = column.getFacetedUniqueValues();
   const selected = new Set((column.getFilterValue() as string[]) ?? []);
-  const values = [...facets.keys()]
+  const values = [
+    ...new Set([...facets.keys(), ...(options ?? []), ...selected]),
+  ]
     .filter((v): v is string => typeof v === "string" && v.length > 0)
     .sort((a, b) => a.localeCompare(b));
 
@@ -42,7 +52,7 @@ export function HeaderFilter<TData, TValue>({
     column.setFilterValue(next.size === 0 ? undefined : Array.from(next));
   }
 
-  if (values.length === 0) {
+  if (values.length === 0 && !allowEntry) {
     return <span className="text-muted-foreground text-xs">No values</span>;
   }
 
@@ -64,7 +74,9 @@ export function HeaderFilter<TData, TValue>({
             <span
               className={cn(
                 "flex h-4 w-4 items-center justify-center rounded-sm border border-primary",
-                isSelected ? "bg-primary text-primary-foreground" : "opacity-50"
+                isSelected
+                  ? "bg-primary text-primary-foreground"
+                  : "opacity-50",
               )}
             >
               {isSelected && <Check className="h-3 w-3" />}
@@ -72,12 +84,37 @@ export function HeaderFilter<TData, TValue>({
             <span className="flex-1 truncate capitalize">
               {formatLabel ? formatLabel(v) : v}
             </span>
-            <span className="shrink-0 pl-2 font-mono text-muted-foreground text-xs tabular-nums">
-              {facets.get(v)}
-            </span>
+            {showCounts && (
+              <span className="shrink-0 pl-2 font-mono text-muted-foreground text-xs tabular-nums">
+                {facets.get(v)}
+              </span>
+            )}
           </button>
         );
       })}
+      {allowEntry && (
+        <div
+          className="flex gap-1"
+          onKeyDown={(event) => event.stopPropagation()}
+        >
+          <Input
+            aria-label="Project ID"
+            value={entry}
+            onChange={(event) => setEntry(event.target.value)}
+          />
+          <button
+            type="button"
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              if (entry && !selected.has(entry)) toggle(entry);
+              setEntry("");
+            }}
+          >
+            Add
+          </button>
+        </div>
+      )}
       {selected.size > 0 && (
         <button
           type="button"

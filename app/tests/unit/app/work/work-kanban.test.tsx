@@ -125,21 +125,97 @@ describe("Work Kanban", () => {
     vi.mocked(fetchWorkItems).mockImplementation(async (params) => {
       const cursor = params.get("cursor");
       const offset = cursor === "p2" ? 10 : cursor === "p3" ? 20 : 0;
-      return { items: items.slice(offset, offset + 10), pageInfo: { endCursor: offset === 0 ? "p2" : offset === 10 ? "p3" : null, hasMore: offset < 20 } };
+      return {
+        items: items.slice(offset, offset + 10),
+        pageInfo: {
+          endCursor: offset === 0 ? "p2" : offset === 10 ? "p3" : null,
+          hasMore: offset < 20,
+        },
+      };
     });
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const element = () => <QueryClientProvider client={client}><WorkDashboardView /></QueryClientProvider>;
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const element = () => (
+      <QueryClientProvider client={client}>
+        <WorkDashboardView />
+      </QueryClientProvider>
+    );
     const result = render(element());
-    await waitFor(() => expect(screen.getByText("10 items on this page · 10 visible cards")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(
+        screen.getByText("10 items on this page · 10 visible cards"),
+      ).toBeInTheDocument(),
+    );
     expect(fetchWorkItems).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
-    navigation.params = new URLSearchParams("cursor=p2"); result.rerender(element());
-    await waitFor(() => expect(screen.getByRole("button", { name: "task.0020: Work item 20" })).toBeInTheDocument());
+    navigation.params = new URLSearchParams("cursor=p2");
+    result.rerender(element());
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "task.0020: Work item 20" }),
+      ).toBeInTheDocument(),
+    );
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
-    navigation.params = new URLSearchParams("cursor=p3"); result.rerender(element());
-    await waitFor(() => expect(screen.getByText("1 items on this page · 1 visible cards")).toBeInTheDocument());
+    navigation.params = new URLSearchParams("cursor=p3");
+    result.rerender(element());
+    await waitFor(() =>
+      expect(
+        screen.getByText("1 items on this page · 1 visible cards"),
+      ).toBeInTheDocument(),
+    );
     fireEvent.click(screen.getByRole("button", { name: "Previous" }));
-    expect(navigation.router.replace).toHaveBeenLastCalledWith("/work?cursor=p2", { scroll: false });
+    expect(navigation.router.replace).toHaveBeenLastCalledWith(
+      "/work?cursor=p2",
+      { scroll: false },
+    );
+  });
+
+  it("does not combine an edited filter with an old cursor", async () => {
+    navigation.params = new URLSearchParams("cursor=p2");
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const element = () => (
+      <QueryClientProvider client={client}>
+        <WorkDashboardView />
+      </QueryClientProvider>
+    );
+    const result = render(element());
+    await waitFor(() => expect(fetchWorkItems).toHaveBeenCalledTimes(1));
+    fireEvent.change(screen.getByPlaceholderText(/Search id/), {
+      target: { value: "target" },
+    });
+    expect(
+      vi
+        .mocked(fetchWorkItems)
+        .mock.calls.every(
+          ([params]) => !params.get("text") || !params.get("cursor"),
+        ),
+    ).toBe(true);
+    navigation.params = new URLSearchParams(
+      "q=target&rankMin=4&rankMax=&status=all&sort=-rankScore",
+    );
+    result.rerender(element());
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(fetchWorkItems)
+          .mock.calls.some(
+            ([params]) =>
+              params.get("text") === "target" && !params.get("cursor"),
+          ),
+      ).toBe(true),
+    );
+    expect(screen.getByRole("button", { name: "Previous" })).toBeDisabled();
+  });
+  it("does not combine an edited sort with an old cursor", async () => {
+    navigation.params = new URLSearchParams("cursor=p2");
+    mount();
+    await waitFor(() => expect(fetchWorkItems).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: /Rank/ }));
+    expect(vi.mocked(fetchWorkItems).mock.calls.every(([params]) => params.get("sortDirection") !== "asc" || !params.get("cursor"))).toBe(true);
+    expect(navigation.router.replace).toHaveBeenCalledWith(expect.not.stringContaining("cursor="), { scroll: false });
   });
 
 });
