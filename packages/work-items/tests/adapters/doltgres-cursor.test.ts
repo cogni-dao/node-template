@@ -180,10 +180,18 @@ it("preserves Markdown phrase search and matches labels separately before paging
     await mkdir(path.join(dir, "work", "projects"), { recursive: true });
     await writeFile(path.join(itemsDir, "task.0001.md"), `---\nid: task.0001\ntype: task\ntitle: Decoy\nstatus: needs_design\n---\n`);
     await writeFile(path.join(itemsDir, "task.0002.md"), `---\nid: task.0002\ntype: task\ntitle: Deploy alpha\nsummary: beta service\nstatus: needs_design\nlabels: ["area:web", "goal:work", "part,one"]\n---\n`);
+    await writeFile(path.join(itemsDir, "task.0003.md"), `---\nid: task.0003\ntype: task\ntitle: Unrelated\nstatus: needs_design\n---\n`);
+    await writeFile(path.join(itemsDir, "task.0004.md"), `---\nid: task.0004\ntype: task\ntitle: Deploy alpha\nsummary: beta service\nstatus: needs_design\n---\n`);
     const adapter = new MarkdownWorkItemAdapter(dir);
-    expect((await adapter.list({ text: "alpha beta", limit: 1 })).items.map(i => i.id)).toEqual(["task.0002"]);
+    const first = await adapter.list({ text: "alpha beta", limit: 1 });
+    expect(first.items.map(i => i.id)).toEqual(["task.0002"]);
+    expect(first.nextCursor).toBeDefined();
+    const second = await adapter.list({ text: "alpha beta", limit: 1, cursor: first.nextCursor });
+    expect(second.items.map(i => i.id)).toEqual(["task.0004"]);
+    expect(second.nextCursor).toBeUndefined();
     expect((await adapter.list({ text: "web,goal", limit: 1 })).items).toHaveLength(0);
     expect((await adapter.list({ text: "part,one", limit: 1 })).items.map(i => i.id)).toEqual(["task.0002"]);
+    expect((await adapter.list({ text: "task.0002", limit: 1 })).items.map(i => i.id)).toEqual(["task.0002"]);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 

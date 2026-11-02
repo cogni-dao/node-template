@@ -41,7 +41,7 @@ export const WorkItemQueryInputSchema = z.object({
     .enum(WORK_ITEM_SORT_FIELDS)
     .optional()
     .describe(
-      "Order by rankScore (default), priority, legacy rank, createdAt or updatedAt",
+      "Order by rankScore (default), priority, rank, createdAt, updatedAt, type, status, projectId or estimate",
     ),
   sortDirection: z
     .enum(WORK_ITEM_SORT_DIRECTIONS)
@@ -74,7 +74,7 @@ export const WorkItemQueryInputSchema = z.object({
   text: z
     .string()
     .optional()
-    .describe("Free-text search across title and summary"),
+    .describe("Case-insensitive text search across ID, title, summary and individual labels"),
   actor: z
     .enum(["human", "ai", "either"])
     .optional()

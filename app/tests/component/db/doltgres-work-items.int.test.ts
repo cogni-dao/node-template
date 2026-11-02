@@ -487,6 +487,18 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 				queryTimeoutMs: 5000,
 				logger: stageLogger,
 			});
+			const broad = { node: "scale-native", statuses: ["needs_implement"] as const, rankMin: 4, limit: 10 };
+			const broadFirst = await filteredAdapter.list(broad);
+			expect(broadFirst.items.map((item) => item.id)).toEqual(matchingIds.slice(0, 10));
+			if (!broadFirst.nextCursor) throw new Error("missing broad cursor");
+			const broadNext = await filteredAdapter.list({ ...broad, cursor: broadFirst.nextCursor });
+			expect(broadNext.items).toHaveLength(10);
+			expect(broadNext.items.every((item) => !broadFirst.items.some((first) => first.id === item.id))).toBe(true);
+			await sql.unsafe(`UPDATE work_items SET labels='["area:web", "goal:work", "part,one"]'::JSONB WHERE id='task.300000'`);
+			const labelFilter = { node: "scale-native", projectIds: [toWorkItemId("proj.alpha")], limit: 10 };
+			expect((await filteredAdapter.list({ ...labelFilter, text: "part,one" })).items.map((item) => item.id)).toEqual(["task.300000"]);
+			expect((await filteredAdapter.list({ ...labelFilter, text: "web,goal" })).items).toHaveLength(0);
+			expect((await filteredAdapter.list({ ...labelFilter, text: "task.300000" })).items.map((item) => item.id)).toEqual(["task.300000"]);
 			const filter = {
 				node: "scale-native",
 				types: ["task"] as const,
