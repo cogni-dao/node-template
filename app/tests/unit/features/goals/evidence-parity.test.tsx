@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-import { createMetricTools } from "@cogni-dao/ai-tools";
+import { createMetricTools } from "@cogni/ai-tools";
 import type { MetricService } from "@cogni-dao/metrics";
 import type { MetricSnapshot, MetricView } from "@cogni-dao/metrics/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
