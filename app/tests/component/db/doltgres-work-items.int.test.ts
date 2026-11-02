@@ -435,6 +435,150 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 		}
 	});
 
+
+	it("filters bounded native pages against a 5000-row backlog", async () => {
+		const readSql = postgres(dbUrl, { max: 1, fetch_types: false });
+		try {
+			// Add a known filtered shelf to the 5,000-row native backlog. Rank 15
+			// and rank 10 sit exactly on the two bounds; decoys isolate each filter.
+			const scoresFor = (time: number, unblocks: number) =>
+				JSON.stringify(
+					Object.fromEntries(
+						Object.entries({
+							goal: 5,
+							time,
+							unblocks,
+							ease: 5,
+							confidence: 5,
+							agent: 5,
+						}).map(([axis, v]) => [axis, { v }]),
+					),
+				);
+			const high = scoresFor(5, 5); // 15
+			const low = scoresFor(4, 1); // 10
+			const below = scoresFor(3, 1); // 9
+			const matchingIds = Array.from(
+				{ length: 21 },
+				(_, i) => `task.${300000 + i}`,
+			);
+			const rows = matchingIds.map(
+				(id, i) =>
+					`('${id}','task','scale needle','needs_implement','scale-native','proj.${i % 2 ? "beta" : "alpha"}','${i < 10 ? high : low}'::JSONB)`,
+			);
+			rows.push(
+				`('task.300021','task','scale needle','needs_implement','scale-native','proj.alpha','${below}'::JSONB)`,
+				`('task.300022','task','scale needle','needs_implement','scale-native','proj.alpha',NULL)`,
+				`('task.300023','task','scale needle','needs_implement','scale-native','proj.other','${high}'::JSONB)`,
+				`('task.300024','bug','scale needle','needs_implement','scale-native','proj.alpha','${high}'::JSONB)`,
+				`('task.300025','task','scale needle','needs_design','scale-native','proj.alpha','${high}'::JSONB)`,
+				`('task.300026','task','scale absent','needs_implement','scale-native','proj.alpha','${high}'::JSONB)`,
+			);
+			for (let i = 27; i < 5000; i++)
+				rows.push(
+					`('task.${300000 + i}','task','filler','needs_implement','scale-native','proj.other','${high}'::JSONB)`,
+				);
+			for (let offset = 0; offset < rows.length; offset += 250)
+				await sql.unsafe(
+					`INSERT INTO work_items (id,type,title,status,node,project_id,scores) VALUES ${rows.slice(offset, offset + 250).join(",")}`,
+				);
+			const filteredAdapter = new DoltgresWorkItemAdapter(sql, {
+				readClient: readSql,
+				readConnectionBudget: 2,
+				queryTimeoutMs: 5000,
+				logger: stageLogger,
+			});
+			const filter = {
+				node: "scale-native",
+				types: ["task"] as const,
+				statuses: ["needs_implement"] as const,
+				projectIds: [toWorkItemId("proj.alpha"), toWorkItemId("proj.beta")],
+				text: "scale needle",
+				rankMin: 10,
+				rankMax: 15,
+				limit: 10,
+			};
+			const page1 = await filteredAdapter.list(filter);
+			if (!page1.nextCursor) throw new Error("missing first scale cursor");
+			const page2 = await filteredAdapter.list({
+				...filter,
+				cursor: page1.nextCursor,
+			});
+			if (!page2.nextCursor) throw new Error("missing second scale cursor");
+			const page3 = await filteredAdapter.list({
+				...filter,
+				cursor: page2.nextCursor,
+			});
+			expect(page1.items.map((item) => item.id)).toEqual(
+				matchingIds.slice(0, 10),
+			);
+			expect(page2.items.map((item) => item.id)).toEqual(
+				matchingIds.slice(10, 20),
+			);
+			expect(page3.items.map((item) => item.id)).toEqual(matchingIds.slice(20));
+			expect([
+				page1.pageInfo.hasMore,
+				page2.pageInfo.hasMore,
+				page3.pageInfo.hasMore,
+			]).toEqual([true, true, false]);
+			const back = await filteredAdapter.list({
+				...filter,
+				cursor: page1.nextCursor,
+			});
+			expect(back.items.map((item) => item.id)).toEqual(
+				matchingIds.slice(10, 20),
+			);
+			const exactHigh = await filteredAdapter.list({
+				...filter,
+				rankMin: 15,
+				rankMax: 15,
+				limit: 50,
+			});
+			const exactLow = await filteredAdapter.list({
+				...filter,
+				rankMin: 10,
+				rankMax: 10,
+				limit: 50,
+			});
+			expect(exactHigh.items.map((item) => item.id)).toEqual(
+				matchingIds.slice(0, 10),
+			);
+			expect(exactLow.items.map((item) => item.id)).toEqual(
+				matchingIds.slice(10),
+			);
+			const unbounded = await filteredAdapter.list({
+				...filter,
+				rankMin: undefined,
+				rankMax: undefined,
+				limit: 50,
+			});
+			expect(unbounded.items.map((item) => item.id)).toEqual([
+				...matchingIds,
+				"task.300021",
+				"task.300022",
+			]);
+			for (const changed of [
+				{ rankMin: 11 },
+				{ rankMax: 14 },
+				{ projectIds: [toWorkItemId("proj.alpha")] },
+				{ statuses: ["needs_design"] as const },
+				{ text: "scale absent" },
+			])
+				await expect(
+					filteredAdapter.list({
+						...filter,
+						...changed,
+						cursor: page1.nextCursor,
+					}),
+				).rejects.toMatchObject({ name: "InvalidCursorError" });
+		} finally {
+			try {
+				await readSql.end({ timeout: 5 });
+			} finally {
+				await sql.unsafe("DELETE FROM work_items WHERE node='scale-native'");
+			}
+		}
+	});
+
 	it.each([
 		"native",
 		"admission",
