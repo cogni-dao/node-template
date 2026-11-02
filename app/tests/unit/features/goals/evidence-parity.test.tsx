@@ -58,6 +58,61 @@ const binding = {
 };
 
 describe("fixed metric evidence parity", () => {
+	it("keeps the ongoing rate visible before the fixed evaluation is due", () => {
+		const deadline = { ...binding, evaluationAt: "2026-11-03T00:00:00Z" };
+		const latest = {
+			...later,
+			window: { start: "2026-11-02T00:01:00Z", end: "2026-11-02T00:01:00Z" },
+			observedAt: "2026-11-02T00:01:00Z",
+			sourceWatermarks: [{ source: "work", asOf: "2026-11-02T00:01:00Z" }],
+		};
+		const data: GoalsProgressData = {
+			asOf: "2026-11-02T00:01:00Z",
+			environment: "test",
+			goals: [
+				{
+					id: "goal-work",
+					title: "Work",
+					evaluateAt: deadline.evaluationAt,
+					configurationError: false,
+					metrics: [
+						{
+							binding: deadline,
+							reading: {
+								...deadline,
+								baseline: null,
+								observation: null,
+								viewState: "unavailable",
+								met: null,
+								reason: "evaluation_not_due",
+							},
+							view: { ...view, latestAttempt: latest, lastGood: latest },
+							history: [latest, saved.observation],
+						},
+					],
+					hypotheses: [],
+					moreHypotheses: false,
+					hypothesesUnavailable: false,
+				},
+			],
+		};
+		const client = new QueryClient();
+		try {
+			const html = renderToStaticMarkup(
+				<QueryClientProvider client={client}>
+					<GoalsProgress initialData={data} />
+				</QueryClientProvider>,
+			);
+			expect(html).toContain("Ongoing: +15 items/min");
+			expect(html).toContain("Evaluation not due");
+			expect(html).toContain("Needed average pace:");
+			expect(html).not.toContain("At target");
+			expect(html).not.toContain(`?observation=${latest.id}`);
+		} finally {
+			client.clear();
+		}
+	});
+
 	it("renders the deadline value and link despite a later successful rolling value", () => {
 		const data: GoalsProgressData = {
 			asOf: "2026-11-02T01:00:00Z",

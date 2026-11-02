@@ -241,6 +241,12 @@ function Metric({
 	const fixedEvaluation = !!binding.evaluationAt;
 	const current = fixedEvaluation ? reading.observation : view?.latestAttempt;
 	const state = fixedEvaluation ? reading.viewState : view?.viewState;
+	const ongoing = view?.latestAttempt;
+	const ongoingFresh =
+		view?.viewState === "ok" &&
+		ongoing?.value !== null &&
+		ongoing?.value !== undefined &&
+		ongoing.unit === binding.target.unit;
 	const fresh =
 		state === "ok" &&
 		current?.value !== null &&
@@ -256,9 +262,9 @@ function Metric({
 	);
 	const end = binding.evaluationAt ?? deadline;
 	const needed =
-		fresh && current
+		ongoingFresh && ongoing
 			? requiredPace(
-					current.value as number,
+					ongoing.value as number,
 					binding.target.value,
 					end,
 					now,
@@ -298,6 +304,9 @@ function Metric({
 					{fresh ? `${number(current.value as number)} ${current.unit}` : "—"}
 				</span>
 			</div>
+			{fixedEvaluation && reading.reason === "evaluation_not_due" && (
+				<p className="text-muted-foreground text-xs">Evaluation not due</p>
+			)}
 			<div className="my-1">
 				{fixedEvaluation && (
 					<p className="text-muted-foreground text-xs">Ongoing measurements</p>
@@ -315,17 +324,17 @@ function Metric({
 				</span>
 				<span
 					className={
-						fresh && improved ? "text-emerald-500" : "text-muted-foreground"
+						ongoingFresh && improved
+							? "text-emerald-500"
+							: "text-muted-foreground"
 					}
 				>
-					{!fresh
-						? reading.reason === "evaluation_not_due" && fixedEvaluation
-							? "Evaluation not due"
-							: state === "stale"
-								? "Measurement delayed"
-								: state === "pending"
-									? "Updating automatically"
-									: "Evidence unavailable"
+					{!ongoingFresh
+						? view?.viewState === "stale"
+							? "Measurement delayed"
+							: view?.viewState === "pending"
+								? "Updating automatically"
+								: "Evidence unavailable"
 						: slope === null
 							? "Building trend"
 							: `${fixedEvaluation ? "Ongoing: " : ""}${slope > 0 ? "+" : ""}${number(slope)} ${view?.latestAttempt?.unit ?? binding.target.unit}/${trace.rateUnit} · ${duration(trace.span)} observed`}
