@@ -698,14 +698,14 @@ export function WorkDashboardView({
             <DataGridTable />
           </DataGridContainer>
         )}
-        <div className="flex items-center justify-between gap-3 pt-4 text-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-4 text-sm">
           <span>
             {items.length} items on this page
             {boardView
               ? ` · ${items.filter((item) => visibleStatuses.includes(item.status)).length} visible cards`
               : ""}
           </span>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Select
               value={String(Number(desired.params.get("pageSize")) || 10)}
               onValueChange={(value) => {
