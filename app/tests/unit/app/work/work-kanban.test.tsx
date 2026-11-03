@@ -16,12 +16,14 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { createContext, Suspense, useContext, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const navigation = vi.hoisted(() => ({
   params: new URLSearchParams(),
   hold: false,
   pending: false,
+  autoSettle: true,
   origin: "",
   router: { push: vi.fn(), replace: vi.fn() },
 }));
@@ -37,8 +39,9 @@ vi.mock("react", async (importOriginal) => {
 vi.mock("next/navigation", () => ({
   useRouter: () => navigation.router,
   useSearchParams: () => {
-    if (navigation.params.toString() !== navigation.origin) navigation.pending = false;
-    return navigation.params;
+    const routed = useContext(RouteParamsContext);
+    if (navigation.autoSettle && navigation.params.toString() !== navigation.origin) navigation.pending = false;
+    return routed ?? navigation.params;
   },
 }));
 vi.mock("@/components", async () => ({
@@ -46,15 +49,17 @@ vi.mock("@/components", async () => ({
   ...(await import("@cogni/node-ui-kit/shadcn/input")),
 }));
 vi.mock("@/app/(app)/work/_components/WorkItemDetail", () => ({
-  WorkItemDetail: () => null,
+  WorkItemDetail: ({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) => open ? <button type="button" onClick={() => onOpenChange(false)}>Close detail</button> : null,
 }));
 vi.mock("@/app/(app)/work/_api/fetchWorkItems", () => ({
   fetchWorkItems: vi.fn(),
   fetchWorkItem: vi.fn(),
 }));
 
-import { fetchWorkItems } from "@/app/(app)/work/_api/fetchWorkItems";
+import { fetchWorkItem, fetchWorkItems } from "@/app/(app)/work/_api/fetchWorkItems";
 import { WorkDashboardView } from "@/app/(app)/work/view";
+
+const RouteParamsContext = createContext<URLSearchParams | null>(null);
 
 const fixture: WorkItemDto[] = Array.from({ length: 5_000 }, (_, index) => ({
   id: `task.${String(index).padStart(4, "0")}`,
@@ -94,14 +99,62 @@ function mount() {
     </QueryClientProvider>,
   );
 }
+// URL observation and transition settlement are independent router signals.
+function routedMount(initialItemId?: string) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  let itemId = initialItemId;
+  const element = () => (
+    <QueryClientProvider client={client}>
+      <WorkDashboardView {...(itemId && { selectedItemId: itemId })} />
+    </QueryClientProvider>
+  );
+  const result = render(element());
+  return {
+    ...result,
+    redraw: () => result.rerender(element()),
+    commit: (href: string, settle = true) => {
+      const url = new URL(href, "https://example.com");
+      navigation.params = url.searchParams;
+      itemId = url.pathname.startsWith("/work/items/")
+        ? decodeURIComponent(url.pathname.slice("/work/items/".length))
+        : undefined;
+      if (settle) navigation.pending = false;
+      result.rerender(element());
+    },
+    settle: () => {
+      navigation.pending = false;
+      result.rerender(element());
+    },
+  };
+}
+function lastReplacement(): string {
+  return vi.mocked(navigation.router.replace).mock.lastCall?.[0] as string;
+}
+async function choosePageSize(value: string) {
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+    configurable: true,
+    value: vi.fn(),
+  });
+  fireEvent.keyDown(screen.getByRole("combobox", { name: "Items per page" }), {
+    key: "Enter",
+  });
+  await userEvent.click(screen.getByRole("option", { name: value }));
+}
+
 describe("Work Kanban", () => {
   beforeEach(() => {
     navigation.params = new URLSearchParams();
     navigation.hold = true;
     navigation.pending = false;
+    navigation.autoSettle = true;
     navigation.origin = "";
     sessionStorage.clear();
     vi.clearAllMocks();
+    navigation.router.push.mockReset();
+    navigation.router.replace.mockReset();
+    vi.mocked(fetchWorkItem).mockResolvedValue(fixture[0] as WorkItemDto);
     vi.mocked(fetchWorkItems).mockResolvedValue({
       items: fixture.filter((_, i) => i % 2 === 0).slice(0, 10),
       pageInfo: { endCursor: "next", hasMore: true },
@@ -240,16 +293,19 @@ describe("Work Kanban", () => {
       items: [{ ...fixture[0]!, status: "done" }, { ...fixture[1]!, status: "needs_design" }],
       pageInfo: { endCursor: null, hasMore: false },
     });
-    mount();
+    const route = routedMount();
     await screen.findByRole("button", { name: "task.0001: Work item 1" });
     fireEvent.keyDown(document.body, { key: "j" });
     fireEvent.keyDown(document.body, { key: "Enter" });
     expect(navigation.router.push).toHaveBeenCalledWith(expect.stringContaining("task.0001"), expect.anything());
+    route.commit(vi.mocked(navigation.router.push).mock.lastCall?.[0] as string);
     vi.mocked(navigation.router.push).mockClear();
     await userEvent.click(screen.getByRole("button", { name: "Board columns" }));
     await userEvent.click(screen.getByRole("menuitemcheckbox", { name: "design" }));
     await userEvent.click(screen.getByRole("menuitemcheckbox", { name: "done" }));
     await userEvent.keyboard("{Escape}");
+    route.commit(lastReplacement());
+    route.commit(lastReplacement());
     fireEvent.keyDown(document.body, { key: "Enter" });
     expect(navigation.router.push).not.toHaveBeenCalled();
     fireEvent.keyDown(document.body, { key: "j" });
@@ -386,31 +442,36 @@ describe("Work Kanban", () => {
   });
 
   it.each(["filter", "sort", "page size"])("blocks paging during a pending %s replacement", async (change) => {
-    navigation.hold = true;
-    navigation.params = new URLSearchParams("cursor=p2");
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const element = () => <QueryClientProvider client={client}><WorkDashboardView /></QueryClientProvider>;
-    const result = render(element());
+    const route = routedMount();
     await waitFor(() => expect(screen.getByRole("button", { name: "Next" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    route.commit(lastReplacement());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Previous" })).toBeEnabled());
+    const committedRecord = sessionStorage.getItem("work-page-history");
+    expect(JSON.parse(committedRecord as string).history).toEqual([""]);
     if (change === "filter") {
       fireEvent.change(screen.getByPlaceholderText(/Search id/), { target: { value: "target" } });
     } else if (change === "sort") {
       fireEvent.click(screen.getByRole("button", { name: /Rank/ }));
     } else {
-      Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
-      fireEvent.keyDown(screen.getByRole("combobox", { name: "Items per page" }), { key: "Enter" });
-      await userEvent.setup().click(screen.getByRole("option", { name: "25" }));
+      await choosePageSize("25");
     }
-    const destination = vi.mocked(navigation.router.replace).mock.lastCall?.[0] as string;
+    const destination = lastReplacement();
     const calls = vi.mocked(navigation.router.replace).mock.calls.length;
-    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Next" }));
+      fireEvent.click(screen.getByRole("button", { name: "Previous" }));
+      fireEvent.click(screen.getByRole("button", { name: "Restart" }));
+    });
     expect(navigation.router.replace).toHaveBeenCalledTimes(calls);
-    navigation.pending = false;
-    navigation.params = new URL(destination, "https://example.com").searchParams;
-    result.rerender(element());
+    expect(sessionStorage.getItem("work-page-history")).toBe(committedRecord);
+    route.commit(destination);
+    expect(JSON.parse(sessionStorage.getItem("work-page-history") as string).history).toEqual([]);
     await waitFor(() => expect(screen.getByRole("button", { name: "Next" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     expect(vi.mocked(navigation.router.replace).mock.calls.length).toBe(calls + 1);
+    route.commit(lastReplacement());
+    expect(JSON.parse(sessionStorage.getItem("work-page-history") as string).history).toEqual([""]);
   });
 
   it("recovers after an interrupted transition without inventing history", async () => {
@@ -463,6 +524,18 @@ describe("Work Kanban", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Previous" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Previous" }));
     expect(navigation.router.replace).toHaveBeenLastCalledWith("/work?cursor=p43", { scroll: false });
+    navigation.params = new URLSearchParams("cursor=p43");
+    result.rerender(element());
+    for (let page = 42; page >= 25; page--) {
+      await waitFor(() => expect(screen.getByRole("button", { name: "Previous" })).toBeEnabled());
+      fireEvent.click(screen.getByRole("button", { name: "Previous" }));
+      expect(lastReplacement()).toBe(`/work?cursor=p${page}`);
+      navigation.params = new URLSearchParams(`cursor=p${page}`);
+      result.rerender(element());
+    }
+    expect(screen.getByRole("button", { name: "Previous" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Restart" })).toBeEnabled();
+    expect(JSON.parse(sessionStorage.getItem("work-page-history") as string).history).toEqual([]);
     result.unmount();
     navigation.params = new URLSearchParams("cursor=p10");
     mount();
@@ -491,20 +564,30 @@ describe("Work Kanban", () => {
     expect(navigation.router.replace).toHaveBeenLastCalledWith("/work?view=table", { scroll: false });
     fireEvent.click(screen.getByRole("button", { name: "Restart" }));
     expect(navigation.router.replace).toHaveBeenLastCalledWith("/work?view=table", { scroll: false });
+    result.unmount();
+    navigation.pending = false;
+    render(element());
+    expect(screen.getByRole("button", { name: "Previous" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Restart" })).toBeEnabled();
   });
 
   it("navigates on filter and page-size changes when storage removal throws", async () => {
     vi.spyOn(Storage.prototype, "removeItem").mockImplementation(() => { throw new Error("storage unavailable"); });
     navigation.params = new URLSearchParams("cursor=p2");
-    mount();
+    const route = routedMount();
     await waitFor(() => expect(fetchWorkItems).toHaveBeenCalled());
     fireEvent.change(screen.getByPlaceholderText(/Search id/), { target: { value: "target" } });
-    expect(navigation.router.replace).toHaveBeenLastCalledWith(expect.not.stringContaining("cursor="), { scroll: false });
-    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
-    const user = userEvent.setup();
-    fireEvent.keyDown(screen.getByRole("combobox", { name: "Items per page" }), { key: "Enter" });
-    await user.click(screen.getByRole("option", { name: "25" }));
-    expect(navigation.router.replace).toHaveBeenLastCalledWith("/work?pageSize=25", { scroll: false });
+    const first = lastReplacement();
+    expect(first).not.toContain("cursor=");
+    await choosePageSize("25");
+    expect(navigation.router.replace).toHaveBeenCalledTimes(1);
+    route.commit(first);
+    const latest = new URL(lastReplacement(), "https://example.com").searchParams;
+    expect(latest.get("q")).toBe("target");
+    expect(latest.get("pageSize")).toBe("25");
+    expect(latest.has("cursor")).toBe(false);
+    route.commit(lastReplacement());
+    expect(screen.getByPlaceholderText(/Search id/)).toHaveValue("target");
   });
 
   it("offers project entry in a keyboard-dismissible popover", async () => {
@@ -584,4 +667,408 @@ describe("Work Kanban", () => {
     expect(navigation.router.push).not.toHaveBeenCalled();
   });
 
+  it("composes latest controls, metadata and detail across intermediate commits", async () => {
+    navigation.autoSettle = false;
+    navigation.params = new URLSearchParams("cursor=p2");
+    const route = routedMount();
+    await screen.findByRole("button", { name: "task.0000: Work item 0" });
+    fireEvent.change(screen.getByPlaceholderText(/Search id/), {
+      target: { value: "target" },
+    });
+    const first = lastReplacement();
+    act(() => {
+      fireEvent.change(screen.getByPlaceholderText(/Search id/), {
+        target: { value: "latest target" },
+      });
+      fireEvent.click(
+        screen.getByRole("button", { name: "Rank", exact: true }),
+      );
+    });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Filter rank" }));
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Rank minimum" }), {
+      target: { value: "2" },
+    });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Rank maximum" }), {
+      target: { value: "5" },
+    });
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByRole("button", { name: "Filter type" }));
+    await user.click(screen.getByRole("button", { name: "bug", exact: true }));
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByRole("button", { name: "Filter status" }));
+    await user.click(screen.getByRole("button", { name: "done", exact: true }));
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByRole("button", { name: "Filter projects" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Project ID" }), {
+      target: { value: "proj.target" },
+    });
+    await user.click(screen.getByRole("button", { name: "Add", exact: true }));
+    await user.keyboard("{Escape}");
+    await choosePageSize("25");
+    await user.click(screen.getByRole("button", { name: "Board columns" }));
+    await user.click(
+      screen.getByRole("menuitemcheckbox", { name: "done", exact: true }),
+    );
+    await user.keyboard("{Escape}");
+    fireEvent.click(
+      screen.getByRole("button", { name: "task.0000: Work item 0" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Table", exact: true }));
+    expect(navigation.router.replace).toHaveBeenCalledTimes(1);
+    expect(navigation.router.push).not.toHaveBeenCalled();
+    route.commit(first, false);
+    expect(screen.getByPlaceholderText(/Search id/)).toHaveValue(
+      "latest target",
+    );
+    expect(navigation.router.push).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
+    route.settle();
+    expect(navigation.router.push).toHaveBeenCalledTimes(1);
+    const final = vi.mocked(navigation.router.push).mock
+      .lastCall?.[0] as string;
+    const url = new URL(final, "https://example.com");
+    expect(url.pathname).toBe("/work/items/task.0000");
+    expect(Object.fromEntries(url.searchParams)).toMatchObject({
+      q: "latest target",
+      rankMin: "2",
+      rankMax: "5",
+      type: "bug",
+      sort: "rankScore",
+      pageSize: "25",
+      view: "table",
+      project: "proj.target",
+    });
+    expect(url.searchParams.get("columns")?.split(",")).toContain("done");
+    expect(url.searchParams.get("status")?.split(",")).toContain("done");
+    expect(url.searchParams.has("cursor")).toBe(false);
+    route.commit(final);
+    expect(screen.getByPlaceholderText(/Search id/)).toHaveValue(
+      "latest target",
+    );
+    expect(
+      JSON.parse(sessionStorage.getItem("work-page-history") as string).history,
+    ).toEqual([]);
+    fireEvent.click(screen.getByRole("button", { name: "Close detail" }));
+    expect(lastReplacement()).toBe(`/work?${url.searchParams}`);
+    expect(navigation.router.push).toHaveBeenCalledTimes(1);
+    route.commit(lastReplacement());
+    expect(
+      vi
+        .mocked(fetchWorkItems)
+        .mock.calls.every(
+          ([params]) => !params.get("text") || !params.get("cursor"),
+        ),
+    ).toBe(true);
+  });
+
+  it("holds the pager guard across rerenders and mixed same-tick actions", async () => {
+    navigation.autoSettle = false;
+    vi.mocked(fetchWorkItems).mockImplementation(async (params) => ({
+      items: [],
+      pageInfo: {
+        endCursor: params.get("cursor") === "p2" ? "p3" : "p2",
+        hasMore: true,
+      },
+    }));
+    const route = routedMount();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Next" })).toBeEnabled(),
+    );
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Next" }));
+      fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    });
+    route.redraw();
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(navigation.router.replace).toHaveBeenCalledTimes(1);
+    expect(sessionStorage.getItem("work-page-history")).toBeNull();
+    route.commit(lastReplacement(), false);
+    expect(
+      JSON.parse(sessionStorage.getItem("work-page-history") as string).history,
+    ).toEqual([""]);
+    expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
+    route.settle();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Next" })).toBeEnabled(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    route.redraw();
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Previous" }));
+      fireEvent.click(screen.getByRole("button", { name: "Restart" }));
+      fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    });
+    expect(navigation.router.replace).toHaveBeenCalledTimes(2);
+    expect(
+      JSON.parse(sessionStorage.getItem("work-page-history") as string).history,
+    ).toEqual([""]);
+    route.commit(lastReplacement());
+    expect(
+      JSON.parse(sessionStorage.getItem("work-page-history") as string).history,
+    ).toEqual(["", "p2"]);
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Previous" }));
+      fireEvent.click(screen.getByRole("button", { name: "Previous" }));
+    });
+    route.redraw();
+    fireEvent.click(screen.getByRole("button", { name: "Restart" }));
+    expect(navigation.router.replace).toHaveBeenCalledTimes(3);
+    route.commit(lastReplacement());
+    expect(
+      JSON.parse(sessionStorage.getItem("work-page-history") as string).history,
+    ).toEqual([""]);
+  });
+
+  it.each(["pager", "filter"])(
+    "recovers from synchronous %s replace failure with committed history intact",
+    async (kind) => {
+      vi.mocked(fetchWorkItems).mockImplementation(async (params) => ({
+        items: [],
+        pageInfo: {
+          endCursor: params.get("cursor") === "p2" ? "p3" : "p2",
+          hasMore: true,
+        },
+      }));
+      const route = routedMount();
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Next" })).toBeEnabled(),
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Next" }));
+      route.commit(lastReplacement());
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Next" })).toBeEnabled(),
+      );
+      const stored = sessionStorage.getItem("work-page-history");
+      navigation.router.replace.mockImplementationOnce(() => {
+        throw new Error("router refused");
+      });
+      if (kind === "pager")
+        fireEvent.click(screen.getByRole("button", { name: "Next" }));
+      else
+        fireEvent.change(screen.getByPlaceholderText(/Search id/), {
+          target: { value: "uncommitted" },
+        });
+      expect(sessionStorage.getItem("work-page-history")).toBe(stored);
+      route.settle();
+      expect(screen.getByPlaceholderText(/Search id/)).toHaveValue("");
+      expect(screen.getByRole("button", { name: "Previous" })).toBeEnabled();
+      fireEvent.click(screen.getByRole("button", { name: "Previous" }));
+      expect(lastReplacement()).toBe("/work");
+      route.commit(lastReplacement());
+      expect(
+        JSON.parse(sessionStorage.getItem("work-page-history") as string)
+          .history,
+      ).toEqual([]);
+    },
+  );
+
+  it.each(["settled", "external"])(
+    "discards queued drafts when %s navigation wins",
+    async (winner) => {
+      navigation.autoSettle = false;
+      vi.mocked(fetchWorkItems).mockImplementation(async (params) => ({
+        items: [],
+        pageInfo: {
+          endCursor: params.get("cursor") === "p2" ? "p3" : "p2",
+          hasMore: true,
+        },
+      }));
+      const route = routedMount();
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Next" })).toBeEnabled(),
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Next" }));
+      route.commit(lastReplacement());
+      const stored = sessionStorage.getItem("work-page-history");
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Next" })).toBeEnabled(),
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Next" }));
+      fireEvent.change(screen.getByPlaceholderText(/Search id/), {
+        target: { value: "abandoned" },
+      });
+      expect(lastReplacement()).toContain("cursor=p3");
+      if (winner === "external")
+        route.commit("/work?cursor=external&q=winner", false);
+      else route.settle();
+      route.settle();
+      expect(sessionStorage.getItem("work-page-history")).toBe(stored);
+      expect(screen.getByPlaceholderText(/Search id/)).toHaveValue(
+        winner === "external" ? "winner" : "",
+      );
+      expect(navigation.router.replace).toHaveBeenCalledTimes(2);
+      expect(screen.getByRole("button", { name: "Restart" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Previous" }))[
+        winner === "external" ? "toBeDisabled" : "toBeEnabled"
+      ]();
+      fireEvent.click(screen.getByRole("button", { name: "Restart" }));
+      expect(lastReplacement()).toBe(
+        winner === "external" ? "/work?q=winner" : "/work",
+      );
+    },
+  );
+
+  it("retains Previous and Restart after a committed page fetch fails", async () => {
+    const route = routedMount();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Next" })).toBeEnabled(),
+    );
+    vi.mocked(fetchWorkItems).mockRejectedValue(new Error("page fetch failed"));
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    route.commit(lastReplacement());
+    await screen.findByText("Failed to load work items.");
+    expect(
+      JSON.parse(sessionStorage.getItem("work-page-history") as string).history,
+    ).toEqual([""]);
+    expect(screen.getByRole("button", { name: "Previous" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Restart" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Previous" }));
+    expect(lastReplacement()).toBe("/work");
+  });
+
+  it("restores the bounded page through detail remount, view switch and reload", async () => {
+    navigation.params = new URLSearchParams(
+      "q=target&rankMin=2&rankMax=5&pageSize=25&columns=needs_design",
+    );
+    let route = routedMount();
+    await screen.findByRole("button", { name: "task.0000: Work item 0" });
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    route.commit(lastReplacement());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Previous" })).toBeEnabled(),
+    );
+    const stored = sessionStorage.getItem("work-page-history");
+    fireEvent.click(
+      await screen.findByRole("button", { name: "task.0000: Work item 0" }),
+    );
+    const opened = vi.mocked(navigation.router.push).mock
+      .lastCall?.[0] as string;
+    expect(opened).toContain("/work/items/task.0000?");
+    expect(
+      new URL(opened, "https://example.com").searchParams.get("cursor"),
+    ).toBe("next");
+    route.commit(opened);
+    route.unmount();
+    route = routedMount("task.0000");
+    expect(screen.getByRole("button", { name: "Previous" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Table", exact: true }));
+    route.commit(lastReplacement());
+    expect(screen.getByRole("button", { name: "Previous" })).toBeEnabled();
+    expect(sessionStorage.getItem("work-page-history")).toBe(stored);
+    fireEvent.click(screen.getByRole("button", { name: "Close detail" }));
+    route.commit(lastReplacement());
+    route.unmount();
+    route = routedMount();
+    expect(screen.getByRole("button", { name: "Previous" })).toBeEnabled();
+    expect(screen.getByPlaceholderText(/Search id/)).toHaveValue("target");
+    expect(
+      screen.getByRole("button", { name: "Table", exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(fetchWorkItems)
+          .mock.calls.some(
+            ([params]) =>
+              params.get("cursor") === "next" &&
+              params.get("limit") === "25" &&
+              params.get("rankMin") === "2" &&
+              params.get("rankMax") === "5" &&
+              params.get("text") === "target",
+          ),
+      ).toBe(true),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Previous" }));
+    expect(
+      new URL(lastReplacement(), "https://example.com").searchParams.has(
+        "cursor",
+      ),
+    ).toBe(false);
+  });
+
+  it("waits for a real suspended React route transition before releasing the pager", async () => {
+    navigation.hold = false;
+    navigation.autoSettle = false;
+    let permitCommit = false;
+    let release = () => {};
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let requestRoute = (_href: string) => {};
+    navigation.router.replace.mockImplementation((href: string) =>
+      requestRoute(href),
+    );
+    function CommitBarrier({ cursor }: { cursor: string | null }) {
+      if (cursor && !permitCommit) throw barrier;
+      return null;
+    }
+    function Route() {
+      const [params, setParams] = useState(new URLSearchParams());
+      requestRoute = (href) =>
+        setParams(new URL(href, "https://example.com").searchParams);
+      return (
+        <RouteParamsContext.Provider value={params}>
+          <WorkDashboardView />
+          <CommitBarrier cursor={params.get("cursor")} />
+        </RouteParamsContext.Provider>
+      );
+    }
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const element = () => (
+      <QueryClientProvider client={client}>
+        <Suspense fallback={<p>Route loading</p>}>
+          <Route />
+        </Suspense>
+      </QueryClientProvider>
+    );
+    const result = render(element());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Next" })).toBeEnabled(),
+    );
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Next" }));
+      fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    });
+    result.rerender(element());
+    expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
+    expect(sessionStorage.getItem("work-page-history")).toBeNull();
+    expect(navigation.router.replace).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      permitCommit = true;
+      release();
+      await barrier;
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Previous" })).toBeEnabled(),
+    );
+    expect(
+      JSON.parse(sessionStorage.getItem("work-page-history") as string).history,
+    ).toEqual([""]);
+    fireEvent.click(screen.getByRole("button", { name: "Previous" }));
+    await waitFor(() =>
+      expect(
+        JSON.parse(sessionStorage.getItem("work-page-history") as string)
+          .history,
+      ).toEqual([]),
+    );
+    expect(navigation.router.replace).toHaveBeenCalledTimes(2);
+  });
+
+  it("settles a no-op router through the real React transition without locking forever", async () => {
+    navigation.hold = false;
+    mount();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Next" })).toBeEnabled(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Next" })).toBeEnabled(),
+    );
+    expect(sessionStorage.getItem("work-page-history")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(navigation.router.replace).toHaveBeenCalledTimes(2);
+  });
 });

@@ -61,8 +61,6 @@ import { columns, WorkFacetControls, WorkRankControls } from "./_components/colu
 import { WorkItemDetail } from "./_components/WorkItemDetail";
 import { WorkKanban } from "./_components/WorkKanban";
 import {
-  closeWorkItemPermalink,
-  openWorkItemPermalink,
   workItemHref,
   workListHref,
   workViewHref,
@@ -75,6 +73,65 @@ const ACTIVE_STATUSES = ALL_STATUSES.filter(
 const EMPTY_ITEMS: WorkItemDto[] = [];
 const HISTORY_STORAGE_KEY = "work-page-history";
 
+function readFilters(searchParams: URLSearchParams): ColumnFiltersState {
+  const filters: ColumnFiltersState = [];
+  const typeParam = searchParams.get("type");
+  if (typeParam) filters.push({ id: "type", value: typeParam.split(",") });
+  const statusParam = searchParams.get("status");
+  if (statusParam && statusParam !== "all") {
+    filters.push({ id: "status", value: statusParam.split(",") });
+  } else if (!statusParam) {
+    filters.push({ id: "status", value: ACTIVE_STATUSES });
+  }
+  const projectParam = searchParams.get("project");
+  if (projectParam)
+    filters.push({ id: "projectId", value: projectParam.split(",") });
+  const numberParam = (key: string) => {
+    const raw = searchParams.get(key);
+    if (!raw?.trim()) return undefined;
+    const value = Number(raw);
+    return Number.isFinite(value) ? value : undefined;
+  };
+  const rankRange = [numberParam("rankMin"), numberParam("rankMax")];
+  if (rankRange.some((value) => value !== undefined)) {
+    filters.push({ id: "rankScore", value: rankRange });
+  }
+  return filters;
+}
+
+function readSorting(searchParams: URLSearchParams): SortingState {
+  const sortParam = searchParams.get("sort");
+  if (sortParam) {
+    const desc = sortParam.startsWith("-");
+    const id = desc ? sortParam.slice(1) : sortParam;
+    return [{ id, desc }];
+  }
+  return [{ id: "rankScore", desc: true }];
+}
+
+function readColumns(params: URLSearchParams): string[] {
+  const value = params.get("columns");
+  return value === null
+    ? [...ACTIVE_STATUSES]
+    : value
+        .split(",")
+        .filter((status) =>
+          ALL_STATUSES.includes(status as (typeof ALL_STATUSES)[number]),
+        );
+}
+
+type WorkIntent = {
+  params: URLSearchParams;
+  itemId: string | undefined;
+  method: "push" | "replace";
+  resetHistory?: boolean;
+};
+function intentHref(intent: WorkIntent): string {
+  return intent.itemId
+    ? workItemHref(intent.itemId, intent.params)
+    : workListHref(intent.params);
+}
+
 export function WorkDashboardView({
   selectedItemId,
 }: {
@@ -82,9 +139,54 @@ export function WorkDashboardView({
 } = {}) {
   const router = useRouter();
   const searchParams = useSearchParams();
-
-  const boardView = searchParams.get("view") !== "table";
-
+  const committedSearch = searchParams.toString();
+  const actualHref = selectedItemId
+    ? workItemHref(selectedItemId, searchParams)
+    : workListHref(searchParams);
+  const initialFilters = useMemo(
+    () => readFilters(new URLSearchParams(committedSearch)),
+    [committedSearch],
+  );
+  const initialSorting = useMemo(
+    () => readSorting(new URLSearchParams(committedSearch)),
+    [committedSearch],
+  );
+  const [desired, setDesired] = useState<WorkIntent>(() => ({
+    params: new URLSearchParams(committedSearch),
+    itemId: selectedItemId,
+    method: "replace",
+  }));
+  const sorting = useMemo(() => readSorting(desired.params), [desired]);
+  const columnFilters = useMemo(() => readFilters(desired.params), [desired]);
+  const globalFilter = desired.params.get("q") ?? "";
+  const visibleStatuses = readColumns(desired.params);
+  const boardView = desired.params.get("view") !== "table";
+  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
+  const [history, setHistory] = useState<string[]>([]);
+  const [isNavigating, startNavigation] = useTransition();
+  const [settledOperation, setSettledOperation] = useState(0);
+  const [navigationLocked, setNavigationLocked] = useState(false);
+  // One owner: mounted history describes only the observed page. Desired controls
+  // advance synchronously, while at most one router operation is outstanding.
+  const navigation = useRef<{
+    desired: WorkIntent;
+    committed: {
+      href: string;
+      key: string;
+      cursor: string;
+      stack: string[];
+    } | null;
+    sequence: number;
+    flight: {
+      id: number;
+      to: string;
+      stack: string[] | undefined;
+      failed: boolean;
+      committed: boolean;
+    } | null;
+  }>({ desired, committed: null, sequence: 0, flight: null });
+  const pageSize = Number(searchParams.get("pageSize")) || 10;
+  const cursor = searchParams.get("cursor") ?? "";
   const selectedItemQuery = useQuery({
     queryKey: ["work-item", selectedItemId],
     queryFn: () => fetchWorkItem(selectedItemId as string),
@@ -92,69 +194,6 @@ export function WorkDashboardView({
     retry: false,
     staleTime: 30_000,
   });
-
-  const initialFilters = useMemo((): ColumnFiltersState => {
-    const filters: ColumnFiltersState = [];
-    const typeParam = searchParams.get("type");
-    if (typeParam) filters.push({ id: "type", value: typeParam.split(",") });
-    const statusParam = searchParams.get("status");
-    if (statusParam && statusParam !== "all") {
-      filters.push({ id: "status", value: statusParam.split(",") });
-    } else if (!statusParam) {
-      filters.push({ id: "status", value: ACTIVE_STATUSES });
-    }
-    const projectParam = searchParams.get("project");
-    if (projectParam)
-      filters.push({ id: "projectId", value: projectParam.split(",") });
-    const numberParam = (key: string) => {
-      const raw = searchParams.get(key);
-      if (!raw?.trim()) return undefined;
-      const value = Number(raw);
-      return Number.isFinite(value) ? value : undefined;
-    };
-    const rankRange = [numberParam("rankMin"), numberParam("rankMax")];
-    if (rankRange.some((value) => value !== undefined)) {
-      filters.push({ id: "rankScore", value: rankRange });
-    }
-    return filters;
-  }, [searchParams]);
-
-  const initialSorting = useMemo((): SortingState => {
-    const sortParam = searchParams.get("sort");
-    if (sortParam) {
-      const desc = sortParam.startsWith("-");
-      const id = desc ? sortParam.slice(1) : sortParam;
-      return [{ id, desc }];
-    }
-    return [{ id: "rankScore", desc: true }];
-  }, [searchParams]);
-
-  const [sorting, setSorting] = useState<SortingState>(initialSorting);
-  const [columnFilters, setColumnFilters] =
-    useState<ColumnFiltersState>(initialFilters);
-  const [globalFilter, setGlobalFilter] = useState(searchParams.get("q") ?? "");
-  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
-  const [history, setHistory] = useState<string[]>([]);
-  const currentHistory = useRef<{ key: string; cursor: string } | null>(null);
-  const [isNavigating, startNavigation] = useTransition();
-  const pendingNavigation = useRef<{
-    from: string;
-    to: string;
-    history: { key: string; cursor: string; stack: string[] } | undefined;
-    observedPending: boolean;
-  } | null>(null);
-  const [navigationLocked, setNavigationLocked] = useState(false);
-  const committedSearch = searchParams.toString();
-  const [visibleStatuses, setVisibleStatuses] = useState<string[]>(() => {
-    const param = searchParams.get("columns");
-    return param === null
-      ? [...ACTIVE_STATUSES]
-      : param
-        ? param.split(",")
-        : [];
-  });
-  const pageSize = Number(searchParams.get("pageSize")) || 10;
-  const cursor = searchParams.get("cursor") ?? "";
   const listParams = useMemo(() => {
     const params = new URLSearchParams({ limit: String(pageSize) });
     const values = (id: string) =>
@@ -187,158 +226,250 @@ export function WorkDashboardView({
     p.delete("cursor");
     return `work-page-history:${p}`;
   }, [listParams]);
-  useEffect(() => {
-    const pending = pendingNavigation.current;
-    if (pending) {
-      if (isNavigating) pending.observedPending = true;
-      if (committedSearch === pending.to && committedSearch !== pending.from) {
-        if (pending.history) {
-          const { key, cursor: destination, stack } = pending.history;
-          currentHistory.current = { key, cursor: destination };
-          setHistory(stack);
-          try {
-            sessionStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify({ key, cursor: destination, history: stack }));
-          } catch { /* Storage is optional. */ }
-        }
-        pendingNavigation.current = null;
-        setNavigationLocked(false);
-      } else if (!isNavigating && pending.observedPending) {
-        // An interrupted or failed transition must not leave the pager locked.
-        pendingNavigation.current = null;
-        setNavigationLocked(false);
-      }
-    }
-    if (currentHistory.current?.key !== historyKey || currentHistory.current.cursor !== cursor) {
-      let stack: string[] = [];
-      try {
-        // Remove snapshots written by older versions; they can retain evicted cursors.
-        for (const key of Object.keys(sessionStorage)) {
-          if (key.startsWith("work-page-history:")) sessionStorage.removeItem(key);
-        }
-        const saved: unknown = JSON.parse(sessionStorage.getItem(HISTORY_STORAGE_KEY) ?? "{}");
-        if (saved && typeof saved === "object" && !Array.isArray(saved)) {
-          const record = saved as Record<string, unknown>;
-          const value = record.history;
-          if (record.key === historyKey && record.cursor === cursor && Array.isArray(value) && value.length <= 20 && value.every(item => typeof item === "string" && item.length <= 2048)) stack = value;
-        }
-      } catch { /* Storage is optional. */ }
-      currentHistory.current = { key: historyKey, cursor };
-      setHistory(stack);
-    }
-  }, [historyKey, cursor, committedSearch, isNavigating]);
-  useEffect(() => {
-    const param = searchParams.get("columns");
-    setVisibleStatuses(
-      param === null
-        ? [...ACTIVE_STATUSES]
-        : param
-          ? param
-              .split(",")
-              .filter((status) =>
-                ALL_STATUSES.includes(status as (typeof ALL_STATUSES)[number]),
-              )
-          : [],
-    );
-  }, [searchParams]);
   const { data, isLoading, error } = useQuery({
     queryKey: ["work-items", listParams.toString()],
     queryFn: () => fetchWorkItems(listParams),
     staleTime: 30_000,
   });
   const items = data?.items ?? EMPTY_ITEMS;
-  const navigate = useCallback((href: string, history?: { key: string; cursor: string; stack: string[] }) => {
-    const destination = new URL(href, window.location.origin).searchParams.toString();
-    if (destination === committedSearch && !pendingNavigation.current) return;
-    pendingNavigation.current = { from: committedSearch, to: destination, history, observedPending: false };
-    setNavigationLocked(true);
-    try {
-      startNavigation(() => router.replace(href, { scroll: false }));
-    } catch (error) {
-      pendingNavigation.current = null;
-      setNavigationLocked(false);
-      throw error;
+  const dispatchNavigation = useCallback(
+    (intent: WorkIntent, stack?: string[]) => {
+      const owner = navigation.current;
+      const to = intentHref(intent);
+      if (owner.flight || isNavigating || to === owner.committed?.href) return;
+      const flight = {
+        id: ++owner.sequence,
+        to,
+        stack: stack ?? (intent.resetHistory ? [] : undefined),
+        failed: false,
+        committed: false,
+      };
+      owner.flight = flight;
+      // A push belongs to this dispatch; later edits default to replacement.
+      owner.desired = {
+        ...owner.desired,
+        method: "replace",
+        resetHistory: false,
+      };
+      setNavigationLocked(true);
+      startNavigation(() => {
+        // This marker commits in this operation's transition lane. Unlike an old
+        // isPending=false render it can also identify settlement without a URL change.
+        setSettledOperation(flight.id);
+        try {
+          router[intent.method](to, { scroll: false });
+        } catch {
+          flight.failed = true;
+        }
+      });
+    },
+    [isNavigating, router],
+  );
+
+  useEffect(() => {
+    const owner = navigation.current;
+    const flight = owner.flight;
+    const previous = owner.committed;
+    const reached = flight?.to === actualHref && !flight.failed;
+    const external =
+      previous !== null && actualHref !== previous.href && !reached;
+    if (!previous || actualHref !== previous.href) {
+      let stack =
+        previous?.key === historyKey && previous.cursor === cursor
+          ? previous.stack
+          : [];
+      if (reached) {
+        stack =
+          flight.stack ?? (previous?.key === historyKey ? previous.stack : []);
+        flight.committed = true;
+      } else if (stack !== previous?.stack) {
+        try {
+          // Retire older multi-record snapshots without depending on storage.
+          for (const key of Object.keys(sessionStorage)) {
+            if (key.startsWith("work-page-history:"))
+              sessionStorage.removeItem(key);
+          }
+          const record = JSON.parse(
+            sessionStorage.getItem(HISTORY_STORAGE_KEY) ?? "{}",
+          );
+          if (
+            record?.key === historyKey &&
+            record.cursor === cursor &&
+            Array.isArray(record.history) &&
+            record.history.length <= 20 &&
+            record.history.every(
+              (item: unknown) =>
+                typeof item === "string" && item.length <= 2048,
+            )
+          )
+            stack = record.history;
+        } catch {
+          /* Storage is optional. */
+        }
+      }
+      owner.committed = { href: actualHref, key: historyKey, cursor, stack };
+      setHistory(stack);
+      if (reached) {
+        try {
+          sessionStorage.setItem(
+            HISTORY_STORAGE_KEY,
+            JSON.stringify({ key: historyKey, cursor, history: stack }),
+          );
+        } catch {
+          /* Storage is optional. */
+        }
+      }
     }
-  }, [committedSearch, router]);
-  const changePage = (next: string, stack: string[]) => {
-    if (pendingNavigation.current || isNavigating) return;
+    const settled = flight && settledOperation === flight.id && !isNavigating;
+    if (external || flight?.failed || (settled && !flight.committed)) {
+      // An external winner or abandoned request invalidates all its proposals.
+      owner.flight = null;
+      owner.desired = {
+        params: new URLSearchParams(committedSearch),
+        itemId: selectedItemId,
+        method: "replace",
+      };
+      setDesired(owner.desired);
+      setNavigationLocked(false);
+    } else if (settled) {
+      owner.flight = null;
+      setNavigationLocked(false);
+      if (intentHref(owner.desired) !== actualHref)
+        dispatchNavigation(owner.desired);
+    } else if (
+      !owner.flight &&
+      !isNavigating &&
+      intentHref(owner.desired) !== actualHref
+    ) {
+      dispatchNavigation(owner.desired);
+    }
+  }, [
+    actualHref,
+    committedSearch,
+    cursor,
+    historyKey,
+    isNavigating,
+    settledOperation,
+    selectedItemId,
+    dispatchNavigation,
+  ]);
+
+  const editIntent = useCallback(
+    (update: (intent: WorkIntent) => WorkIntent) => {
+      const owner = navigation.current;
+      // Every updater reads the latest draft, including edits made in this tick.
+      owner.desired = update({
+        ...owner.desired,
+        params: new URLSearchParams(owner.desired.params),
+      });
+      setDesired(owner.desired);
+      dispatchNavigation(owner.desired);
+    },
+    [dispatchNavigation],
+  );
+
+  const editList = (
+    update: (state: {
+      filters: ColumnFiltersState;
+      sorting: SortingState;
+      query: string;
+    }) => void,
+  ) => {
+    editIntent((intent) => {
+      const state = {
+        filters: readFilters(intent.params),
+        sorting: readSorting(intent.params),
+        query: intent.params.get("q") ?? "",
+      };
+      update(state);
+      const valuesFor = (id: string): readonly string[] => {
+        const value = state.filters.find((filter) => filter.id === id)?.value;
+        return Array.isArray(value) ? (value as string[]) : [];
+      };
+      const sort = state.sorting[0];
+      const href = workViewHref(intent.itemId, intent.params, {
+        type: valuesFor("type"),
+        status: valuesFor("status"),
+        project: valuesFor("projectId"),
+        sort: sort ? `${sort.desc ? "-" : ""}${sort.id}` : null,
+        query: state.query,
+        rankRange: (state.filters.find((filter) => filter.id === "rankScore")
+          ?.value as [number | undefined, number | undefined] | undefined) ?? [
+          undefined,
+          undefined,
+        ],
+      });
+      return {
+        ...intent,
+        params: new URL(href, window.location.origin).searchParams,
+        resetHistory: true,
+      };
+    });
+  };
+
+  const changePage = (action: "next" | "previous" | "restart") => {
+    const owner = navigation.current;
+    const committed = owner.committed;
+    if (
+      owner.flight ||
+      isNavigating ||
+      !committed ||
+      committed.href !== actualHref ||
+      intentHref(owner.desired) !== actualHref
+    )
+      return;
+    let next = "";
+    let stack: string[] = [];
+    if (action === "next") {
+      if (!(data?.pageInfo?.hasMore ?? Boolean(data?.nextCursor))) return;
+      next = data?.pageInfo?.endCursor ?? data?.nextCursor ?? "";
+      if (!next) return;
+      stack = [...committed.stack, committed.cursor].slice(-20);
+    } else if (action === "previous") {
+      if (!committed.cursor || !committed.stack.length) return;
+      next = committed.stack[committed.stack.length - 1] ?? "";
+      stack = committed.stack.slice(0, -1);
+    } else if (!committed.cursor) return;
     const params = new URLSearchParams(committedSearch);
     if (next) params.set("cursor", next);
     else params.delete("cursor");
-    navigate(
-      selectedItemId ? workItemHref(selectedItemId, params) : workListHref(params),
-      { key: historyKey, cursor: next, stack: stack.slice(-20) },
-    );
+    owner.desired = { params, itemId: selectedItemId, method: "replace" };
+    setDesired(owner.desired);
+    dispatchNavigation(owner.desired, stack);
   };
-
-  useEffect(() => {
-    setSorting((previous) =>
-      JSON.stringify(previous) === JSON.stringify(initialSorting)
-        ? previous
-        : initialSorting,
-    );
-    setColumnFilters((previous) =>
-      JSON.stringify(previous) === JSON.stringify(initialFilters)
-        ? previous
-        : initialFilters,
-    );
-    setGlobalFilter(searchParams.get("q") ?? "");
-  }, [initialFilters, initialSorting, searchParams]);
-
-  const syncUrl = useCallback(
-    (
-      newFilters: ColumnFiltersState,
-      newSorting: SortingState,
-      newQuery: string,
-    ) => {
-      const valuesFor = (id: string): readonly string[] => {
-        const value = newFilters.find((filter) => filter.id === id)?.value;
-        return Array.isArray(value) ? (value as string[]) : [];
-      };
-      const sort = newSorting[0];
-      navigate(
-        workViewHref(selectedItemId, searchParams, {
-          type: valuesFor("type"),
-          status: valuesFor("status"),
-          project: valuesFor("projectId"),
-          sort: sort ? `${sort.desc ? "-" : ""}${sort.id}` : null,
-          query: newQuery,
-          rankRange: (newFilters.find((filter) => filter.id === "rankScore")
-            ?.value as
-            | [number | undefined, number | undefined]
-            | undefined) ?? [undefined, undefined],
-        }),
-      );
-    },
-    [navigate, searchParams, selectedItemId],
-  );
 
   const openItem = useCallback(
     (item: WorkItemDto) => {
-      openWorkItemPermalink(router, item.id, searchParams);
+      editIntent((intent) => ({ ...intent, itemId: item.id, method: "push" }));
     },
-    [router, searchParams],
+    [editIntent],
   );
-
   const closeItem = useCallback(() => {
-    closeWorkItemPermalink(router, searchParams);
-  }, [router, searchParams]);
+    editIntent((intent) => ({
+      ...intent,
+      itemId: undefined,
+      method: "replace",
+    }));
+  }, [editIntent]);
 
   const table = useReactTable({
     data: items,
     columns,
     state: { sorting, columnFilters, globalFilter, columnVisibility },
-    onSortingChange: (updater) => {
-      const next = typeof updater === "function" ? updater(sorting) : updater;
-      setSorting(next);
-      syncUrl(columnFilters, next, globalFilter);
-    },
-    onColumnFiltersChange: (updater) => {
-      const next =
-        typeof updater === "function" ? updater(columnFilters) : updater;
-      setColumnFilters(next);
-      syncUrl(next, sorting, globalFilter);
-    },
-    onGlobalFilterChange: setGlobalFilter,
+    onSortingChange: (updater) =>
+      editList((state) => {
+        state.sorting =
+          typeof updater === "function" ? updater(state.sorting) : updater;
+      }),
+    onColumnFiltersChange: (updater) =>
+      editList((state) => {
+        state.filters =
+          typeof updater === "function" ? updater(state.filters) : updater;
+      }),
+    onGlobalFilterChange: (query) =>
+      editList((state) => {
+        state.query = query;
+      }),
     onColumnVisibilityChange: setColumnVisibility,
     getCoreRowModel: getCoreRowModel(),
     manualSorting: true,
@@ -420,14 +551,10 @@ export function WorkDashboardView({
   const hasActiveFilters = columnFilters.length > 0;
 
   const setView = (view: "board" | "table") => {
-    const params = new URLSearchParams(searchParams.toString());
-    params.set("view", view);
-    router.replace(
-      selectedItemId
-        ? workItemHref(selectedItemId, params)
-        : workListHref(params),
-      { scroll: false },
-    );
+    editIntent((intent) => {
+      intent.params.set("view", view);
+      return intent;
+    });
   };
 
   return (
@@ -443,8 +570,7 @@ export function WorkDashboardView({
           placeholder="Search id, title, labels... ( / )"
           value={globalFilter}
           onChange={(e) => {
-            setGlobalFilter(e.target.value);
-            syncUrl(columnFilters, sorting, e.target.value);
+            editList((state) => { state.query = e.target.value; });
           }}
         />
         {hasActiveFilters && (
@@ -452,8 +578,7 @@ export function WorkDashboardView({
             type="button"
             className="text-muted-foreground text-xs underline hover:text-foreground"
             onClick={() => {
-              setColumnFilters([]);
-              syncUrl([], sorting, globalFilter);
+              editList((state) => { state.filters = []; });
             }}
           >
             Clear filters
@@ -473,18 +598,12 @@ export function WorkDashboardView({
                   checked={visibleStatuses.includes(status)}
                   onSelect={(event) => event.preventDefault()}
                   onCheckedChange={(checked) => {
-                    const next = checked
-                      ? [...visibleStatuses, status]
-                      : visibleStatuses.filter((value) => value !== status);
-                    setVisibleStatuses(next);
-                    const params = new URLSearchParams(searchParams.toString());
-                    params.set("columns", next.join(","));
-                    router.replace(
-                      selectedItemId
-                        ? workItemHref(selectedItemId, params)
-                        : workListHref(params),
-                      { scroll: false },
-                    );
+                    editIntent((intent) => {
+                      const current = readColumns(intent.params);
+                      const next = checked ? [...current, status] : current.filter((value) => value !== status);
+                      intent.params.set("columns", next.join(","));
+                      return intent;
+                    });
                   }}
                 >
                   {status.replace("needs_", "").replaceAll("_", " ")}
@@ -585,8 +704,7 @@ export function WorkDashboardView({
                     className="underline hover:text-foreground"
                     onClick={() => {
                       const next = [{ id: "rankScore", desc: true }];
-                      setSorting(next);
-                      syncUrl(columnFilters, next, globalFilter);
+                      editList((state) => { state.sorting = next; });
                     }}
                   >
                     Reset to rank
@@ -614,16 +732,13 @@ export function WorkDashboardView({
           </span>
           <div className="flex gap-2">
             <Select
-              value={String(pageSize)}
+              value={String(Number(desired.params.get("pageSize")) || 10)}
               onValueChange={(value) => {
-                const params = new URLSearchParams(searchParams.toString());
-                params.set("pageSize", value);
-                params.delete("cursor");
-                navigate(
-                  selectedItemId
-                    ? workItemHref(selectedItemId, params)
-                    : workListHref(params),
-                );
+                editIntent((intent) => {
+                  intent.params.set("pageSize", value);
+                  intent.params.delete("cursor");
+                  return { ...intent, resetHistory: true };
+                });
               }}
             >
               <SelectTrigger aria-label="Items per page" className="w-20">
@@ -640,7 +755,7 @@ export function WorkDashboardView({
             <Button
               variant="outline"
               size="sm"
-              onClick={() => changePage("", [])}
+              onClick={() => changePage("restart")}
               disabled={navigationLocked || isNavigating || !cursor}
             >
               Restart
@@ -648,12 +763,7 @@ export function WorkDashboardView({
             <Button
               variant="outline"
               size="sm"
-              onClick={() =>
-                changePage(
-                  history[history.length - 1] ?? "",
-                  history.slice(0, -1),
-                )
-              }
+              onClick={() => changePage("previous")}
               disabled={navigationLocked || isNavigating || !cursor || history.length === 0}
             >
               Previous
@@ -661,12 +771,7 @@ export function WorkDashboardView({
             <Button
               variant="outline"
               size="sm"
-              onClick={() =>
-                changePage(
-                  data?.pageInfo?.endCursor ?? data?.nextCursor ?? "",
-                  [...history, cursor],
-                )
-              }
+              onClick={() => changePage("next")}
               disabled={
                 navigationLocked || isNavigating ||
                 !(data?.pageInfo?.hasMore ?? Boolean(data?.nextCursor)) ||
