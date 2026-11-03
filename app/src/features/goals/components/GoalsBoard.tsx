@@ -629,11 +629,18 @@ function GoalDetail({
           title={kpi.metric.title}
           assessment={kpi.assessment}
           nowIso={nowIso}
-          bets={openBets.map((h) => ({
-            id: h.id,
-            title: h.title,
-            at: h.evaluateAt as string,
-          }))}
+          bets={openBets.flatMap((h) =>
+            h.predictions
+              .filter((p) => p.binding.metricId === kpi.binding.metricId)
+              .map((p) => ({
+                id: `${h.id}:${p.binding.metricId}`,
+                title: h.title,
+                at: p.binding.evaluationAt ?? (h.evaluateAt as string),
+                baselineAt: p.baselineAt,
+                comparator: p.binding.comparator,
+                predicted: p.binding.target.value,
+              }))
+          )}
         />
       ) : (
         <p className="rounded-md border border-border border-dashed px-4 py-6 text-center text-muted-foreground text-sm">

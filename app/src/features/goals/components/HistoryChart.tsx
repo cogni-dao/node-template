@@ -4,7 +4,8 @@
 /**
  * Module: `@features/goals/components/HistoryChart`
  * Purpose: Dated line chart of one KPI's ranged history with a labeled target,
- *   real gaps, open-bet evaluation markers and a 7d/30d/90d/All range toggle.
+ *   real gaps, open-bet windows (baseline → evaluation, predicted value at the
+ *   evaluation edge) and a 7d/30d/90d/All range toggle.
  * Scope: Client component. Reads GET /api/v1/metrics/{id}/history; never computes.
  * Invariants: GAPS_STAY_GAPS (connectNulls=false; missing buckets are null);
  *   the newest reading after the last closed bucket is plotted as itself, never
@@ -23,6 +24,7 @@ import {
   CartesianGrid,
   Line,
   LineChart,
+  ReferenceArea,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -52,10 +54,16 @@ interface Point {
   readonly latest?: boolean;
 }
 
+/** One open bet's prediction on this chart's metric. */
 export interface BetMarker {
   readonly id: string;
   readonly title: string;
+  /** The bet's evaluation date. */
   readonly at: string;
+  /** The baseline reading's window end; null draws only the evaluation line. */
+  readonly baselineAt: string | null;
+  readonly comparator: "gte" | "lte" | "eq";
+  readonly predicted: number;
 }
 
 function toPoints(history: MetricHistory, latest: KpiAssessment | null): Point[] {
@@ -153,18 +161,29 @@ export function HistoryChart({
   const fromMs = history ? Date.parse(history.from) : nowMs;
   const lastT = points.at(-1)?.t ?? nowMs;
   const span = Math.max(lastT - fromMs, STEP_MS["1d"]);
-  // Show an open bet's evaluation date when it falls inside or just past the window.
-  const visibleBets = bets.filter((b) => {
-    const at = Date.parse(b.at);
-    return at >= fromMs && at <= lastT + span * 0.25;
+  // A bet is drawn when its window overlaps the range. The x axis stretches to
+  // an evaluation date just past the last reading; farther ones are clipped.
+  const betShapes = bets.flatMap((b) => {
+    const atMs = Date.parse(b.at);
+    const startMs = b.baselineAt ? Date.parse(b.baselineAt) : null;
+    if (!Number.isFinite(atMs) || atMs < fromMs) return [];
+    const inReach = atMs <= lastT + span * 0.25;
+    if (!inReach && (startMs === null || startMs > lastT)) return [];
+    return [{ ...b, atMs, startMs, inReach }];
   });
-  const xMax = Math.max(lastT, ...visibleBets.map((b) => Date.parse(b.at)));
+  const xMax = Math.max(
+    lastT,
+    ...betShapes.filter((b) => b.inReach).map((b) => b.atMs)
+  );
+  const betLabel = (b: BetMarker) =>
+    `Bet: ${b.title} · predicts ${COMPARATOR_SYMBOL[b.comparator]} ${formatNumber(b.predicted, assessment.unit)} by ${formatDate(b.at)}`;
 
   const values = points
     .map((p) => p.value)
     .filter((v): v is number => v !== null);
-  const lo = Math.min(target, ...values);
-  const hi = Math.max(target, ...values);
+  const predicted = betShapes.filter((b) => b.inReach).map((b) => b.predicted);
+  const lo = Math.min(target, ...values, ...predicted);
+  const hi = Math.max(target, ...values, ...predicted);
   const pad = (hi - lo) * 0.1 || Math.abs(hi) * 0.2 || 1;
   const yTicks = niceTicks(lo >= 0 && lo - pad < 0 ? 0 : lo - pad, hi + pad);
   const yDomain: [number, number] = [
@@ -216,7 +235,13 @@ export function HistoryChart({
         ) : (
           <div
             role="img"
-            aria-label={summarize(title, history, points, targetText)}
+            aria-label={[
+              summarize(title, history, points, targetText),
+              ...betShapes.map(
+                (b) =>
+                  `${betLabel(b)}${b.baselineAt ? `, window from ${formatDate(b.baselineAt)}` : ""}.`
+              ),
+            ].join(" ")}
             className="h-full"
           >
             <ResponsiveContainer width="100%" height="100%">
@@ -251,20 +276,53 @@ export function HistoryChart({
                   tickLine={false}
                   axisLine={false}
                 />
-                {visibleBets.map((b) => (
-                  <ReferenceLine
-                    key={b.id}
-                    x={Date.parse(b.at)}
-                    stroke="hsl(var(--chart-4))"
-                    strokeDasharray="3 3"
-                    label={{
-                      value: `Bet evaluates ${formatDate(b.at)}`,
-                      position: "insideTopRight",
-                      fontSize: 11,
-                      fill: "hsl(var(--muted-foreground))",
-                    }}
-                  />
-                ))}
+                {betShapes.map((b) =>
+                  b.startMs !== null ? (
+                    <ReferenceArea
+                      key={`area-${b.id}`}
+                      x1={Math.max(b.startMs, fromMs)}
+                      x2={Math.min(b.atMs, xMax)}
+                      ifOverflow="hidden"
+                      fill="hsl(var(--chart-4))"
+                      fillOpacity={0.1}
+                      stroke="hsl(var(--chart-4))"
+                      strokeOpacity={0.5}
+                      strokeDasharray="3 3"
+                      label={{
+                        value: betLabel(b),
+                        position: "insideTopLeft",
+                        fontSize: 11,
+                        fill: "hsl(var(--muted-foreground))",
+                      }}
+                    />
+                  ) : b.inReach ? (
+                    <ReferenceLine
+                      key={`line-${b.id}`}
+                      x={b.atMs}
+                      stroke="hsl(var(--chart-4))"
+                      strokeDasharray="3 3"
+                      label={{
+                        value: betLabel(b),
+                        position: "insideTopRight",
+                        fontSize: 11,
+                        fill: "hsl(var(--muted-foreground))",
+                      }}
+                    />
+                  ) : null
+                )}
+                {betShapes
+                  .filter((b) => b.inReach)
+                  .map((b) => (
+                    <ReferenceLine
+                      key={`predicted-${b.id}`}
+                      segment={[
+                        { x: b.atMs - span * 0.03, y: b.predicted },
+                        { x: b.atMs, y: b.predicted },
+                      ]}
+                      stroke="hsl(var(--chart-4))"
+                      strokeWidth={2.5}
+                    />
+                  ))}
                 <ReferenceLine
                   y={target}
                   stroke="hsl(var(--foreground))"

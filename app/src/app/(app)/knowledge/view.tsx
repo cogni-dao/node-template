@@ -64,6 +64,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -146,21 +147,24 @@ export function KnowledgeDashboardView({
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
 
-  const initialMode: ViewMode = isMode(searchParams.get("mode"))
-    ? (searchParams.get("mode") as ViewMode)
-    : "browse";
-  const [mode, setMode] = useState<ViewMode>(initialMode);
+  // The URL owns the mode. Local state only makes a click feel instant; it is
+  // re-synced whenever the URL changes (back/forward, refresh, deep link).
+  const rawMode = searchParams.get("mode");
+  const urlMode: ViewMode = isMode(rawMode) ? rawMode : "browse";
+  const [mode, setMode] = useState<ViewMode>(urlMode);
+  useEffect(() => setMode(urlMode), [urlMode]);
 
   const setModeUrl = useCallback(
     (next: ViewMode) => {
+      if (next === mode) return; // a no-op click adds no history entry
       setMode(next);
       const params = new URLSearchParams(searchParams.toString());
       if (next === "browse") params.delete("mode");
       else params.set("mode", next);
       const qs = params.toString();
-      router.replace(qs ? `/knowledge?${qs}` : "/knowledge", { scroll: false });
+      router.push(qs ? `/knowledge?${qs}` : "/knowledge", { scroll: false });
     },
-    [router, searchParams]
+    [mode, router, searchParams]
   );
 
   const knowledgeQuery = useQuery({
@@ -193,11 +197,12 @@ export function KnowledgeDashboardView({
     staleTime: 30_000,
     initialData: initialGoals,
     retry: 1,
+    refetchOnWindowFocus: false,
   });
   const goalsAttention = goalsQuery.data
     ? attentionCount(goalsQuery.data.goals)
     : 0;
-  const goalsAllBehind =
+  const noneFailingOrMissed =
     goalsQuery.data?.goals.every((g) =>
       g.kpis.every(
         (k) =>
@@ -333,7 +338,7 @@ export function KnowledgeDashboardView({
               icon={<Target className="size-3.5" />}
               {...(goalsAttention > 0
                 ? {
-                    badge: goalsAllBehind
+                    badge: noneFailingOrMissed
                       ? `${goalsAttention} behind`
                       : `${goalsAttention} at risk`,
                     badgeLabel: `${goalsAttention} ${goalsAttention === 1 ? "goal needs" : "goals need"} attention`,
