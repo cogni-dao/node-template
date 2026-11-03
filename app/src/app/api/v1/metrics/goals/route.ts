@@ -21,7 +21,7 @@ export const GET = wrapRouteHandlerWithLogging(
 				reqId: ctx.reqId,
 				routeId: ctx.routeId,
 				goalCount: data.goals.length,
-				metricCount: data.goals.reduce((n, g) => n + g.metrics.length, 0),
+				metricCount: data.goals.reduce((n, g) => n + g.kpis.length, 0),
 				hypothesisCount: data.goals.reduce(
 					(n, g) => n + g.hypotheses.length,
 					0,

@@ -1,7 +1,10 @@
 import { createGoalMetricTools } from "@/bootstrap/capabilities/goal-metric-tools";
 import { KpiBindingsSchema } from "@cogni-dao/metrics/contracts";
-import type { MetricService } from "@cogni-dao/metrics";
-import { createGoalMetrics } from "@/bootstrap/capabilities/goal-metrics";
+import type { GoalsProgress, MetricService } from "@cogni-dao/metrics";
+import {
+	createGoalMetrics,
+	createGoalProgressReader,
+} from "@/bootstrap/capabilities/goal-metrics";
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
@@ -250,6 +253,8 @@ export interface Container {
 	/** Metrics capability for AI tools - requires PROMETHEUS_URL to be configured */
 	metricsCapability: MetricsCapability;
 	goalMetrics: MetricService | undefined;
+	/** The node's one goal-progress read; HTTP, SSR, cognition and core__goal_progress share it. */
+	goalProgress: () => Promise<GoalsProgress>;
 	/** Web search capability for AI tools - requires TAVILY_API_KEY to be configured */
 	webSearchCapability: WebSearchCapability;
 	/** Repo capability for AI tools - requires COGNI_REPO_PATH */
@@ -809,7 +814,7 @@ function createContainer(): Container {
       return Promise.all(goals.map(async goal => {
         const row = await knowledgePort.getKnowledge(goal.id);
         const bindings = KpiBindingsSchema.parse(row?.kpiBindings ?? []);
-        return { ...goal, kpis: bindings.length && goalMetrics ? await goalMetrics.bindings(bindings) : [] };
+        return { ...goal, kpis: bindings.length && goalMetrics ? await goalMetrics.bindings(bindings, { deadline: goal.evaluateAt }) : [] };
       }));
     }
 
@@ -914,7 +919,15 @@ function createContainer(): Container {
 		vcsCapability: stubVcsCapability,
 		workItemCapability,
 	});
-	const metricTools = createGoalMetricTools(() => goalMetrics);
+	const goalProgress = createGoalProgressReader({
+		metrics: () => goalMetrics,
+		knowledge: () => knowledgeStorePort,
+		environment: env.DEPLOY_ENVIRONMENT ?? "local",
+	});
+	const metricTools = createGoalMetricTools({
+		metrics: () => goalMetrics,
+		goalProgress,
+	});
 	const toolSource = createBoundToolSource([...CORE_TOOL_BUNDLE], { ...toolBindings, ...metricTools.bindings });
 
 	// Config: rethrow in dev/test for diagnosis, respond_500 in production for safety
@@ -1068,6 +1081,7 @@ function createContainer(): Container {
 		nodeAdmin,
 		knowledgeStorePort,
     goalMetrics,
+    goalProgress,
 		edoCapability,
 		threadPersistenceForUser: (userId: UserId) =>
 			new DrizzleThreadPersistenceAdapter(db, userActor(userId)),

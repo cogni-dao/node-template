@@ -1,5 +1,8 @@
 import {
+	GoalsProgressSchema,
 	MetricComputeInputSchema,
+	MetricHistoryInputSchema,
+	MetricHistorySchema,
 	MetricListInputSchema,
 	MetricListResponseSchema,
 	MetricObservationSchema,
@@ -105,6 +108,22 @@ export async function GET(request: Request) {
 			workItemCoordination: `${origin}/api/v1/work/items/{id}/coordination`,
 		},
 		actions: {
+			readGoalsProgress: {
+				method: "GET",
+				endpoint: `${origin}/api/v1/metrics/goals`,
+				auth: { type: "bearer" },
+				inputSchema: z.toJSONSchema(z.strictObject({})),
+				outputSchema: z.toJSONSchema(GoalsProgressSchema),
+			},
+			readMetricHistory: {
+				method: "GET",
+				endpoint: `${origin}/api/v1/metrics/{id}/history?from={from}&to={to}&step={step}`,
+				auth: { type: "bearer" },
+				inputSchema: z.toJSONSchema(
+					MetricHistoryInputSchema.extend({ id: z.string() }),
+				),
+				outputSchema: z.toJSONSchema(MetricHistorySchema),
+			},
 			listMetrics: {
 				method: "GET",
 				endpoint: `${origin}/api/v1/metrics`,

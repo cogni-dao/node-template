@@ -1,7 +1,14 @@
+// SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+/** Thin node tool bindings over shared contracts. No calculator logic. */
 import type { MetricService } from "@cogni-dao/metrics";
 import {
+	type GoalsProgress,
+	GoalsProgressSchema,
 	MetricComputeInputSchema,
 	MetricError,
+	type MetricHistoryInput,
+	MetricHistoryInputSchema,
+	MetricHistorySchema,
 	MetricListInputSchema,
 	MetricListResponseSchema,
 	MetricObservationSchema,
@@ -9,17 +16,45 @@ import {
 	MetricViewSchema,
 } from "@cogni-dao/metrics/contracts";
 import { z } from "zod";
-// SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-/** Thin node tool bindings over shared contracts. No calculator logic. */
 import type { CatalogBoundTool } from "../catalog";
 import type { ToolContract, ToolImplementation } from "../types";
-export function createMetricTools(resolve: () => MetricService | undefined) {
+/**
+ * The node injects its one goal-progress function; history calls the service's
+ * historyRange, the same function the HTTP route calls.
+ */
+export function createMetricTools(
+	resolve: () => MetricService | undefined,
+	reads?: { goalProgress?: () => Promise<GoalsProgress> },
+) {
 	const service = () => {
 		const value = resolve();
 		if (!value) throw new MetricError("metrics_unavailable", 503);
 		return value;
 	};
 	const definitions = [
+		{
+			name: "core__goal_progress",
+			description:
+				"Read every active goal with its KPI bindings, one assessment per KPI (status, enum reason, value, target, deadline, display pace), 30 daily buckets and hypotheses. Call before triage/planning and after acting. Unknown is never zero.",
+			effect: "read_only" as const,
+			inputSchema: z.strictObject({}),
+			outputSchema: GoalsProgressSchema,
+			run: async () => {
+				if (!reads?.goalProgress)
+					throw new MetricError("goals_unavailable", 503);
+				return reads.goalProgress();
+			},
+		},
+		{
+			name: "core__metric_history",
+			description:
+				"Read aligned half-open history buckets for one metric. step is 1h, 1d or 1w; from/to align to the step (1w starts Monday), to <= now, at most 400 buckets. Gaps stay missing; values are never filled.",
+			effect: "read_only" as const,
+			inputSchema: MetricHistoryInputSchema.extend({ id: z.string().min(1) }),
+			outputSchema: MetricHistorySchema,
+			run: ({ id, ...range }: MetricHistoryInput & { id: string }) =>
+				service().historyRange(id, range),
+		},
 		{
 			name: "core__metric_list",
 			description:
@@ -33,14 +68,13 @@ export function createMetricTools(resolve: () => MetricService | undefined) {
 		{
 			name: "core__metric_read",
 			description:
-				"Read one metric and its immutable observation history. Shared with the KPI page and goal evidence.",
+				"Read one metric: latestAttempt, lastGood and viewState together, never a last-good value as current after failure. Pass observationId to inspect one immutable cited observation. Use core__metric_history for ranges.",
 			effect: "read_only" as const,
 			inputSchema: z.strictObject({
 				id: z.string().min(1),
 				observationId: z.uuid().optional(),
 			}),
 			outputSchema: MetricViewSchema.extend({
-				history: z.array(MetricObservationSchema),
 				observation: MetricObservationSchema.optional(),
 				snapshot: MetricSnapshotSchema.optional(),
 			}),
@@ -52,7 +86,6 @@ export function createMetricTools(resolve: () => MetricService | undefined) {
 					: undefined;
 				return {
 					...(await service().read(p.id)),
-					history: await service().history(p.id),
 					...(snapshot ? { observation: snapshot.observation, snapshot } : {}),
 				};
 			},

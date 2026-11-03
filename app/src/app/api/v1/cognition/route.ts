@@ -1,4 +1,3 @@
-import { KpiBindingsSchema } from "@cogni-dao/metrics/contracts";
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
@@ -138,7 +137,7 @@ export const GET = wrapRouteHandlerWithLogging(
 			`and your open contribution branch via GET ${origin}/api/v1/knowledge/contributions/{id}/diff. ` +
 			"Refine in place over writing new (REFINE_OVER_EXTEND).";
 
-		let { markdown, governingRender } = renderBundle({
+		const rendered = renderBundle({
 			node,
 			name,
 			mission,
@@ -152,20 +151,32 @@ export const GET = wrapRouteHandlerWithLogging(
 			orientation,
 			goals,
 		});
+		const { governingRender } = rendered;
+		let { markdown } = rendered;
 
-    if (goals.status === "ok" && port && container.goalMetrics) {
-      const lines: string[] = [];
-      for (const goal of goals.goals) {
-        const row = await port.getKnowledge(goal.id);
-        const bindings = KpiBindingsSchema.parse(row?.kpiBindings ?? []);
-        if (!bindings.length) continue;
-        for (const kpi of await container.goalMetrics.bindings(bindings)) {
-          const r = kpi.observation;
-          lines.push(`- ${goal.id} → ${kpi.metricId}: ${r?.value ?? "unknown"} ${r?.unit ?? kpi.target.unit}; ${kpi.viewState}; observation ${r?.id ?? "none"}; target ${kpi.comparator} ${kpi.target.value} ${kpi.target.unit}.`);
-        }
-      }
-      if (lines.length) markdown += "\n\n## Goal measurements\n\n" + lines.join("\n");
-    }
+		// Same read model and assessment as GET /api/v1/metrics/goals and core__goal_progress.
+		if (goals.status === "ok" && port && container.goalMetrics) {
+			try {
+				const progress = await container.goalProgress();
+				const lines: string[] = [];
+				const symbol = { gte: "≥", lte: "≤", eq: "=" } as const;
+				for (const goal of progress.goals) {
+					for (const kpi of goal.kpis) {
+						const a = kpi.assessment;
+						lines.push(
+							`- ${goal.id} → ${kpi.binding.metricId}: ${a.status}${a.reason ? ` (${a.reason})` : ""}; ${a.value ?? "unknown"} ${a.unit}; target ${symbol[a.comparator]} ${a.target.value} ${a.target.unit}${a.deadline ? ` by ${a.deadline}` : ""}; observation ${a.observationId ?? "none"}.`,
+						);
+					}
+				}
+				if (lines.length)
+					markdown += `\n\n## Goal measurements\n\n${lines.join("\n")}`;
+			} catch {
+				ctx.log.warn(
+					{ reason: "goal_progress_unavailable" },
+					"cognition.goal_measurements_unavailable",
+				);
+			}
+		}
 
 		ctx.log.info(
 			{
@@ -200,7 +211,10 @@ export const GET = wrapRouteHandlerWithLogging(
 				markdown,
 			}),
 		);
-		response.headers.set("Cache-Control", container.goalMetrics ? "no-store" : CACHE_CONTROL);
+		response.headers.set(
+			"Cache-Control",
+			container.goalMetrics ? "no-store" : CACHE_CONTROL,
+		);
 		return response;
 	},
 );

@@ -4,6 +4,8 @@ import {
 	KpiBindingsSchema,
 	MetricComputeInputSchema,
 	MetricError,
+	MetricHistoryInputSchema,
+	MetricHistorySchema,
 	type MetricListInput,
 	MetricListResponseSchema,
 	MetricObservationSchema,
@@ -12,16 +14,9 @@ import {
 } from "@cogni-dao/metrics";
 import { NextResponse } from "next/server";
 import { getContainer } from "@/bootstrap/container";
-import { readGoalsProgress } from "@/features/goals/services/progress";
+/** Same reader instance as core__goal_progress. */
 export async function loadGoalsProgress() {
-	const container = getContainer();
-	if (!container.knowledgeStorePort)
-		throw new MetricError("goals_unavailable", 503);
-	return readGoalsProgress(
-		container.knowledgeStorePort,
-		container.goalMetrics,
-		container.config.DEPLOY_ENVIRONMENT ?? "unknown",
-	);
+	return getContainer().goalProgress();
 }
 export function getGoalMetrics() {
 	const service = getContainer().goalMetrics;
@@ -54,6 +49,25 @@ export async function metricRead(id: string) {
 			MetricObservationSchema.parse(x),
 		),
 	});
+}
+/** Same service function as core__metric_history. */
+export async function metricHistory(id: string, request: Request) {
+	const query = new URL(request.url).searchParams;
+	const input = MetricHistoryInputSchema.safeParse({
+		from: query.get("from") ?? undefined,
+		to: query.get("to") ?? undefined,
+		step: query.get("step") ?? undefined,
+	});
+	if (!input.success)
+		return NextResponse.json(
+			{ error: "invalid_input", issues: input.error.issues },
+			{ status: 400 },
+		);
+	return NextResponse.json(
+		MetricHistorySchema.parse(
+			await getGoalMetrics().historyRange(id, input.data),
+		),
+	);
 }
 export async function metricObservation(id: string, observationId: string) {
 	const saved = await getGoalMetrics().observation(id, observationId);
@@ -90,6 +104,7 @@ export async function metricSubject(id: string) {
 		entryType: row.entryType,
 		kpis: await getGoalMetrics().bindings(bindings, {
 			hypothesis: row.entryType === "hypothesis",
+			deadline: row.evaluateAt?.toISOString() ?? null,
 		}),
 	});
 }

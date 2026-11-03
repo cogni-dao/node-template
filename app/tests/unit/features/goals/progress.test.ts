@@ -1,78 +1,354 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+/** Goal progress parity (route reader == tool), fixed evidence reads and the convergence calculator. */
+import type { KnowledgeStorePort } from "@cogni/knowledge-store";
+import {
+	bucketObservations,
+	createMetricService,
+	GoalsProgressSchema,
+	type MetricDefinition,
+	type MetricObservationsPort,
+	MetricRegistry,
+	type MetricSnapshot,
+	metricHistoryRange,
+	selectEvaluation,
+} from "@cogni-dao/metrics";
+import type { Sql } from "postgres";
+import { describe, expect, it, vi } from "vitest";
+import { z } from "zod";
+import { readWorkConvergence } from "@/adapters/server/metrics/sources";
+import { createGoalMetricTools } from "@/bootstrap/capabilities/goal-metric-tools";
+import {
+	createGoalMetrics,
+	createGoalProgressReader,
+} from "@/bootstrap/capabilities/goal-metrics";
 
-import type { MetricObservation } from "@cogni-dao/metrics/contracts";
-import { describe, expect, it } from "vitest";
-import { metricTrace, requiredPace } from "@/features/goals/lib/metric-trend";
+vi.mock("@/shared/config", () => ({ getNodeId: () => "test-node" }));
 
-const at = Date.parse("2026-11-02T06:00:00Z");
-const point = (
-	value: number | null,
-	minutes: number,
-	status: MetricObservation["status"] = "ok",
-) =>
-	({
-		id: String(minutes),
-		metricId: "work",
-		definitionHash: "same",
-		status,
-		value,
-		window: { end: new Date(at + minutes * 60000).toISOString() },
-		observedAt: new Date(at + minutes * 60000).toISOString(),
-		sourceWatermarks: [
-			{ source: "work", asOf: new Date(at + minutes * 60000).toISOString() },
-		],
-	}) as MetricObservation;
-describe("observed goal feedback", () => {
-	it("breaks observed rates at stale source evidence even when status is ok", () => {
-		const stale = point(10, 1);
-		stale.sourceWatermarks = [{ source: "work", asOf: new Date(at).toISOString() }];
-		const recovered = metricTrace(
-			[point(10, 0), stale, point(0, 2)],
-			180000,
-			30000,
+const NOW = new Date("2026-11-02T12:00:00Z");
+function memoryObservations(): MetricObservationsPort & {
+	saved: Map<string, MetricSnapshot>;
+} {
+	const saved = new Map<string, MetricSnapshot>();
+	const series = (id: string, hash: string) =>
+		[...saved.values()]
+			.map((s) => s.observation)
+			.filter((o) => o.metricId === id && o.definitionHash === hash)
+			.sort((a, b) => b.window.end.localeCompare(a.window.end));
+	return {
+		saved,
+		request: async () => null,
+		async reserve(input) {
+			saved.set(input.snapshot.observation.id, structuredClone(input.snapshot));
+			return { snapshot: input.snapshot, leaseToken: "lease" };
+		},
+		async complete(id, _token, result) {
+			const s = saved.get(id);
+			if (s) s.observation = result;
+			return result;
+		},
+		history: async (id, hash, limit) => series(id, hash).slice(0, limit),
+		get: async (id) => saved.get(id)?.observation ?? null,
+		lastGood: async (id, hash) =>
+			series(id, hash).find((o) => o.status === "ok") ?? null,
+		firstGood: async (id, hash) =>
+			series(id, hash)
+				.filter((o) => o.status === "ok")
+				.at(-1) ?? null,
+		at: async (id, hash, at, maxAge) =>
+			selectEvaluation(series(id, hash), at, maxAge),
+		buckets: async (id, hash, range) =>
+			bucketObservations(
+				series(id, hash),
+				metricHistoryRange(range, new Date(Date.parse(range.to))),
+			),
+		snapshot: async (id) => saved.get(id) ?? null,
+		scheduledAttempts: async () => [],
+		expireLeases: async () => {},
+		cursor: async () => null,
+		advanceCursor: async () => {},
+	};
+}
+
+describe("goal progress parity", () => {
+	it("returns identical assessments and observation IDs from the route reader and core__goal_progress", async () => {
+		let now = new Date(NOW.getTime() - 3 * 3600000);
+		const definition: MetricDefinition = {
+			id: "convergence-ratio-7d",
+			title: "Seven-day convergence ratio",
+			revision: "r1",
+			spec: {
+				calculatorId: "work.convergence@1",
+				params: { output: "ratio", days: 7 },
+				cadenceSeconds: 3600,
+				maxAgeSeconds: 7200,
+			},
+		};
+		const registry = new MetricRegistry();
+		let value = 0.5;
+		registry.register({
+			id: "work.convergence@1",
+			unit: "ratio",
+			historicalWindows: true,
+			paramsSchema: z.object({}).passthrough(),
+			budget: {
+				timeoutMs: 100,
+				maxSourceCalls: 1,
+				maxRows: 1,
+				maxResponseBytes: 100,
+			},
+			compute: async () => ({
+				value,
+				unit: "ratio",
+				complete: true,
+				sourceWatermarks: [{ source: "t", asOf: now.toISOString() }],
+				evidenceRefs: [],
+			}),
+		});
+		const observations = memoryObservations();
+		const metrics = createMetricService({
+			definitions: {
+				get: async (id) => (id === definition.id ? definition : null),
+				list: async () => ({ items: [definition], nextCursor: null }),
+			},
+			observations,
+			registry,
+			scope: { node: "n", environment: "test", dataScope: "members" },
+			now: () => now,
+			authorize: async () => true,
+		});
+		await metrics.compute(definition.id, { requestKey: "a" });
+		now = new Date(NOW.getTime() - 3600000);
+		value = 1.25;
+		const current = await metrics.compute(definition.id, { requestKey: "b" });
+		now = NOW;
+		const goalRow = {
+			id: "goal-ai-work-converges",
+			title: "AI work converges faster than it sprawls",
+			entryType: "goal",
+			evaluateAt: new Date("2027-01-31T00:00:00Z"),
+			kpiBindings: [
+				{
+					metricId: definition.id,
+					comparator: "gte",
+					target: { value: 1, unit: "ratio" },
+				},
+				{
+					metricId: "validated-7d",
+					comparator: "gte",
+					target: { value: 1, unit: "items" },
+				},
+			],
+		};
+		const port = {
+			listActiveGoals: async () => [
+				{
+					id: goalRow.id,
+					title: goalRow.title,
+					evaluateAt: goalRow.evaluateAt,
+				},
+			],
+			getKnowledge: async (id: string) => (id === goalRow.id ? goalRow : null),
+			listCitationsByCitedId: async () => [],
+		} as unknown as KnowledgeStorePort;
+		const read = createGoalProgressReader({
+			metrics: () => metrics,
+			knowledge: () => port,
+			environment: "test",
+		});
+		const { tools, bindings } = createGoalMetricTools({
+			metrics: () => metrics,
+			goalProgress: read,
+		});
+		const tool = tools.find((t) => t.contract.name === "core__goal_progress");
+		if (!tool || !bindings.core__goal_progress) throw new Error("tool missing");
+		const viaRoute = await read();
+		const viaTool = tool.contract.outputSchema.parse(
+			await bindings.core__goal_progress.execute({}),
 		);
-		expect(recovered.segments).toHaveLength(2);
-		expect(recovered.rate).toBeNull();
-		expect(metricTrace([point(10, 0), stale], 180000, 30000).rate).toBeNull();
+		expect(viaTool).toEqual(viaRoute);
+		expect(GoalsProgressSchema.parse(viaRoute)).toEqual(viaRoute);
+		const [ratio, validated] = viaRoute.goals[0]?.kpis ?? [];
+		expect(ratio?.assessment).toMatchObject({
+			status: "on_track",
+			reason: null,
+			value: 1.25,
+			observationId: current.id,
+			deadline: "2027-01-31T00:00:00.000Z",
+		});
+		expect(ratio?.trend?.buckets).toHaveLength(30);
+		expect(validated?.assessment).toMatchObject({
+			status: "not_measured",
+			reason: "metric_unavailable",
+			value: null,
+		});
+		// No raw observation rows anywhere in the goal payload.
+		expect(JSON.stringify(viaRoute)).not.toContain("sourceWatermarks");
+		// The metric_read tool no longer ships 50-row history.
+		const metricRead = tools.find(
+			(t) => t.contract.name === "core__metric_read",
+		);
+		const out = await bindings.core__metric_read?.execute({
+			id: definition.id,
+		});
+		expect(metricRead?.contract.outputSchema.parse(out)).not.toHaveProperty(
+			"history",
+		);
+		const historyTool = bindings.core__metric_history;
+		const range = {
+			from: "2026-11-02T08:00:00Z",
+			to: "2026-11-02T12:00:00Z",
+			step: "1h",
+		};
+		expect(await historyTool?.execute({ id: definition.id, ...range })).toEqual(
+			await metrics.historyRange(definition.id, { ...range, step: "1h" }),
+		);
 	});
-	it("computes a rate from elapsed observation time, not sample count", () => {
-		const result = metricTrace(
-			[point(4, 10), point(8, 0), point(7, 2)],
-			1800000,
+});
+
+type Row = Record<string, unknown>;
+function fakeSql(answer: (text: string) => Row[]) {
+	const queries: string[] = [];
+	const sql = {
+		unsafe(text: string) {
+			queries.push(text);
+			const p = Promise.resolve().then(() => answer(text));
+			return Object.assign(p, { cancel: () => undefined });
+		},
+	} as unknown as Sql;
+	return { sql, queries };
+}
+const window = {
+	start: "2026-10-26T00:00:00.000Z",
+	end: "2026-11-02T00:00:00.000Z",
+};
+const read = <T>(source: (signal: AbortSignal) => Promise<T>) =>
+	source(new AbortController().signal);
+const A = "a".repeat(32);
+const B = "b".repeat(32);
+function answers(
+	over: Partial<{ fromEdge: Row[]; created: Row; validated: string }> = {},
+) {
+	return (text: string): Row[] => {
+		if (text.includes("FROM dolt_log('main')"))
+			return text.includes("2026-10-26 00:00:00.000")
+				? (over.fromEdge ?? [{ commit_hash: A, date: "2026-10-25 23:10:00.5" }])
+				: [{ commit_hash: B, date: "2026-11-01 20:16:32.828" }];
+		if (text.includes("dolt_diff("))
+			return [{ validated: over.validated ?? "3" }];
+		return [
+			{
+				as_of: "2026-11-02T00:00:01.000Z",
+				created_work: "4",
+				created_contributions: "2",
+				merged_contributions: "1",
+				...over.created,
+			},
+		];
+	};
+}
+
+describe("work.convergence@1 over Dolt main history", () => {
+	it("counts validated transitions by main-history row diff, never dolt.commits", async () => {
+		const { sql, queries } = fakeSql(answers());
+		const sample = await readWorkConvergence(sql, "ratio", window, read);
+		expect(sample).toMatchObject({
+			value: 4 / 6,
+			unit: "ratio",
+			complete: true,
+		});
+		expect(sample.evidenceRefs).toContain(
+			"contributions:fixture-exclusion:none",
 		);
-		expect(result.rate).toBe(-0.4);
-		expect(result.span).toBe(600000);
-		expect(result.rateUnit).toBe("min");
-	});
-	it("does not bridge downtime or claim a trend from one current point", () => {
-		const result = metricTrace(
-			[point(8, 0), point(7, 1), point(4, 100)],
-			180000,
+		expect(sample.evidenceRefs).toContain(
+			"window:[2026-10-26T00:00:00.000Z,2026-11-02T00:00:00.000Z)",
 		);
-		expect(result.segments).toHaveLength(2);
-		expect(result.rate).toBeNull();
-	});
-	it("breaks the line at failed measurements and hides an old trend on latest failure", () => {
-		const result = metricTrace(
-			[point(8, 0), point(7, 1), point(null, 2, "error")],
-			180000,
+		expect(sample.evidenceRefs).toContain(
+			`dolt:main:${A}..${B}@2026-11-01T20:16:32.828Z`,
 		);
-		expect(result.rate).toBeNull();
+		expect(sample.sourceWatermarks).toEqual([
+			{ source: "node.doltgres.main", asOf: "2026-11-02T00:00:01.000Z" },
+		]);
+		expect(queries.join("\n")).not.toContain("dolt.commits");
+		expect(queries.find((q) => q.includes("dolt_diff("))).toContain(
+			`dolt_diff('${A}', '${B}', 'work_items')`,
+		);
+		expect(queries.find((q) => q.includes("dolt_diff("))).toContain(
+			"from_status IS DISTINCT FROM 'done'",
+		);
 		expect(
-			metricTrace([point(8, 0), point(null, 1, "error"), point(6, 2)], 180000)
-				.segments,
-		).toHaveLength(2);
-	});
-	it("preserves genuine zero and flat traces", () => {
-		expect(metricTrace([point(0, 0), point(0, 1)], 180000).rate).toBe(0);
-	});
-	it("does not invent an expected rate without a future deadline", () => {
-		expect(requiredPace(5, 0, null, at, 60000)).toBeNull();
+			(
+				await readWorkConvergence(
+					fakeSql(answers()).sql,
+					"validated",
+					window,
+					read,
+				)
+			).value,
+		).toBe(4);
+		const created = fakeSql(answers());
 		expect(
-			requiredPace(5, 0, new Date(at).toISOString(), at, 60000),
-		).toBeNull();
+			(await readWorkConvergence(created.sql, "created", window, read)).value,
+		).toBe(6);
+		expect(created.queries.some((q) => q.includes("dolt_log"))).toBe(false);
+	});
+	it("is unknown, never zero, when history does not cover the window or the ratio has no denominator", async () => {
+		const uncovered = await readWorkConvergence(
+			fakeSql(answers({ fromEdge: [] })).sql,
+			"ratio",
+			window,
+			read,
+		);
+		expect(uncovered).toMatchObject({
+			complete: false,
+			reason: "history_unavailable",
+		});
+		const failing = await readWorkConvergence(
+			fakeSql((t) => {
+				if (t.includes("dolt_diff(")) throw new Error("table not found");
+				return answers()(t);
+			}).sql,
+			"validated",
+			window,
+			read,
+		);
+		expect(failing).toMatchObject({
+			complete: false,
+			reason: "history_unavailable",
+		});
+		const empty = await readWorkConvergence(
+			fakeSql(
+				answers({ created: { created_work: "0", created_contributions: "0" } }),
+			).sql,
+			"ratio",
+			window,
+			read,
+		);
+		expect(empty).toMatchObject({
+			complete: false,
+			reason: "zero_denominator",
+		});
+	});
+	it("registers a strict historical-window calculator with output units", () => {
+		const service = createGoalMetrics({
+			knowledgeSql: fakeSql(() => []).sql,
+			observationsSql: fakeSql(() => []).sql,
+			environment: "test",
+			log: () => undefined,
+		});
+		const calculator = service.registry.get("work.convergence@1");
+		expect(calculator.historicalWindows).toBe(true);
+		expect(calculator.unitFor?.({ output: "validated", days: 7 })).toBe(
+			"items",
+		);
+		expect(calculator.unitFor?.({ output: "ratio", days: 7 })).toBe("ratio");
+		expect(calculator.windowSeconds?.({ output: "ratio", days: 7 })).toBe(
+			604800,
+		);
 		expect(
-			requiredPace(5, 0, new Date(at + 5 * 60000).toISOString(), at, 60000),
-		).toBe(-1);
+			calculator.paramsSchema.safeParse({ output: "ratio", days: 7, extra: 1 })
+				.success,
+		).toBe(false);
+		const snapshot = service.registry.get("github.stars@1");
+		expect(snapshot.historicalWindows).toBeFalsy();
 	});
 });
