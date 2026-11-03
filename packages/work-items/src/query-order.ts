@@ -42,18 +42,21 @@ export function normalizeWorkItemOrder(
   return { sortBy, sortDirection };
 }
 
-export function compareWorkItems(
-  a: WorkItem,
-  b: WorkItem,
-  order: WorkItemOrder,
-): number {
-  const value = (item: WorkItem) =>
-    order.sortBy === "rankScore" ? rankScore(item.scores) : item[order.sortBy];
-  const av = value(a),
-    bv = value(b);
+export type WorkItemOrderKey = { value: string | number | undefined; id: string };
+
+export function workItemOrderKey(item: WorkItem, order: WorkItemOrder): WorkItemOrderKey {
+  return { value: order.sortBy === "rankScore" ? rankScore(item.scores) : item[order.sortBy], id: item.id };
+}
+
+export function compareWorkItemKeys(a: WorkItemOrderKey, b: WorkItemOrderKey, order: WorkItemOrder): number {
+  const av = a.value, bv = b.value;
   if (av === undefined && bv !== undefined) return 1;
   if (av !== undefined && bv === undefined) return -1;
   if (av !== undefined && bv !== undefined && av !== bv)
     return (av < bv ? -1 : 1) * (order.sortDirection === "asc" ? 1 : -1);
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
+export function compareWorkItems(a: WorkItem, b: WorkItem, order: WorkItemOrder): number {
+  return compareWorkItemKeys(workItemOrderKey(a, order), workItemOrderKey(b, order), order);
 }

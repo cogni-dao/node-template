@@ -135,6 +135,49 @@ describe("MarkdownWorkItemAdapter", () => {
       expect(all.nextCursor).toBeUndefined();
     });
 
+    it("seeks after deleted or filtered boundary rows and ignores earlier insertions", async () => {
+      const query = { limit: 2, statuses: ["needs_triage" as const], sortBy: "rankScore" as const };
+      const page = await adapter.list(query);
+      const files = await readdir(path.join(tmpDir, "work", "items"));
+      const first = files.find((file) => file.startsWith(`${page.items[0]!.id}.`))!;
+      await rm(path.join(tmpDir, "work", "items", first));
+      const second = page.items[1]!;
+      const secondFile = files.find((file) => file.startsWith(`${second.id}.`))!;
+      const revision = parseFrontmatter(await readFile(path.join(tmpDir, "work", "items", secondFile), "utf8")).revision;
+      await adapter.patch({ id: second.id, expectedRevision: revision, set: { status: "done" } });
+      const inserted = await adapter.create({ type: "bug", title: "Earlier item" });
+      expect(inserted.id < second.id).toBe(true);
+      const next = await adapter.list({ ...query, cursor: page.nextCursor });
+      expect(next.items.map((item) => String(item.id))).toEqual(["task.0003", "task.0004"]);
+    });
+
+    it("walks every sort and direction with tied and unknown keys", async () => {
+      const fields = ["rankScore", "priority", "rank", "createdAt", "updatedAt", "type", "status", "projectId", "estimate"] as const;
+      for (const sortBy of fields) for (const sortDirection of ["asc", "desc"] as const) {
+        const query = { sortBy, sortDirection };
+        const expected = (await adapter.list(query)).items.map((item) => item.id);
+        const seen = [];
+        let cursor: string | undefined;
+        do {
+          const page = await adapter.list({ ...query, limit: 2, cursor });
+          seen.push(...page.items.map((item) => item.id));
+          cursor = page.nextCursor;
+        } while (cursor);
+        expect(seen).toEqual(expected);
+      }
+    });
+
+    it("rejects old, malformed, wrong-type and mismatched cursors", async () => {
+      const page = await adapter.list({ limit: 2, sortBy: "rank" });
+      const payload = JSON.parse(Buffer.from(page.nextCursor!.slice(4), "base64url").toString());
+      const invalid = `md3:${Buffer.from(JSON.stringify({ ...payload, value: "not a number" })).toString("base64url")}`;
+      for (const cursor of ["md2:eyJvZmZzZXQiOjJ9", invalid, `${page.nextCursor}!`, "md3:" + "a".repeat(2049)]) {
+        await expect(adapter.list({ limit: 2, sortBy: "rank", cursor })).rejects.toThrow(/invalid_cursor/);
+      }
+      await expect(adapter.list({ limit: 2, sortBy: "rank", statuses: ["done"], cursor: page.nextCursor })).rejects.toThrow(/invalid_cursor/);
+      await expect(adapter.list({ limit: 2, sortBy: "rank", sortDirection: "desc", cursor: page.nextCursor })).rejects.toThrow(/invalid_cursor/);
+    });
+
     it("omits nextCursor when the page is not truncated", async () => {
       const page = await adapter.list({ limit: 5 });
       expect(page.items).toHaveLength(5);

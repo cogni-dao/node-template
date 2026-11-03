@@ -14,11 +14,11 @@ import {
 import type { Column } from "@tanstack/react-table";
 import { ListFilter } from "lucide-react";
 
-export function NumberRangeFilter<TData>({
+export function NumberRangeFilter<TData, TValue>({
   column,
   label,
 }: {
-  readonly column: Column<TData, number | undefined>;
+  readonly column: Column<TData, TValue>;
   readonly label: string;
 }) {
   const range = (column.getFilterValue() as
@@ -61,7 +61,6 @@ export function NumberRangeFilter<TData>({
               key={index}
               aria-label={`${label} ${index === 0 ? "minimum" : "maximum"}`}
               type="number"
-              min={0}
               step="any"
               placeholder={index === 0 ? "Min" : "Max"}
               value={range[index] ?? ""}

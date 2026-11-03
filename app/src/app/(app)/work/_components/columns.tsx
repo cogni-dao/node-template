@@ -39,10 +39,10 @@ const col = createColumnHelper<WorkItemDto>();
 const formatProject = (v: string) => v.replace("proj.", "");
 
 /** App binding: the shared generic header otherwise forces ascending first. */
-export function WorkItemRankHeader<TData>({
+export function WorkItemRankHeader<TData, TValue>({
   column,
 }: {
-  readonly column: Column<TData, number | undefined>;
+  readonly column: Column<TData, TValue>;
 }) {
   const direction = column.getIsSorted();
   const Icon =
@@ -61,6 +61,20 @@ export function WorkItemRankHeader<TData>({
       Rank <Icon className="size-3.25 opacity-60" aria-hidden="true" />
     </Button>
   );
+}
+
+export function WorkRankControls<TData, TValue>({ column }: { readonly column: Column<TData, TValue> }) {
+  return <div className="flex items-center gap-1"><WorkItemRankHeader column={column} /><NumberRangeFilter column={column} label="Rank" /></div>;
+}
+
+export function WorkFacetControls<TData, TValue>({ column, facet }: { readonly column: Column<TData, TValue>; readonly facet: "type" | "status" | "projectId" }) {
+  const title = facet === "type" ? "Type" : facet === "status" ? "Status" : "Project";
+  return <div className="flex items-center">
+    <DataGridColumnHeader column={column} title={title} />
+    <Popover><PopoverTrigger asChild><Button variant="ghost" size="icon" className="h-6 min-w-6 px-1.5" aria-label={`Filter ${facet === "projectId" ? "projects" : title.toLowerCase()}`}><ListFilter className={column.getIsFiltered() ? "size-3.5 text-primary" : "size-3.5 text-muted-foreground"} /></Button></PopoverTrigger>
+      <PopoverContent className="w-64" align="start"><HeaderFilter column={column} options={facet === "type" ? ["task", "bug", "story", "spike", "subtask"] : facet === "status" ? [...VALID_TRANSITIONS.keys()] : []} allowEntry={facet === "projectId"} formatLabel={facet === "status" ? (v) => v.replace("needs_", "").replaceAll("_", " ") : facet === "projectId" ? formatProject : (v) => v} showCounts={false} /></PopoverContent>
+    </Popover>
+  </div>;
 }
 
 export const columns = [
@@ -90,12 +104,7 @@ export const columns = [
   // story.5111: WSJF rank from the package; unscored items always sort last.
   col.accessor((row) => rankScore(row.scores), {
     id: "rankScore",
-    header: ({ column }) => (
-      <div className="flex items-center gap-1">
-        <WorkItemRankHeader column={column} />
-        <NumberRangeFilter column={column} label="Rank" />
-      </div>
-    ),
+    header: ({ column }) => <WorkRankControls column={column} />,
     size: 65,
     cell: (info) => {
       const v = info.getValue();
@@ -110,20 +119,7 @@ export const columns = [
   }),
 
   col.accessor("type", {
-    header: ({ column }) => (
-      <DataGridColumnHeader
-        column={column}
-        title="Type"
-        allowEmpty
-        filter={
-          <HeaderFilter
-            column={column}
-            options={["task", "bug", "story", "spike", "subtask"]}
-            showCounts={false}
-          />
-        }
-      />
-    ),
+    header: ({ column }) => <WorkFacetControls column={column} facet="type" />,
     size: 55,
     cell: (info) => <TypeIcon type={info.getValue()} />,
     filterFn: "arrIncludesSome",
@@ -149,21 +145,7 @@ export const columns = [
   }),
 
   col.accessor("status", {
-    header: ({ column }) => (
-      <DataGridColumnHeader
-        column={column}
-        title="Status"
-        allowEmpty
-        filter={
-          <HeaderFilter
-            column={column}
-            options={[...VALID_TRANSITIONS.keys()]}
-            formatLabel={(v) => v.replace("needs_", "").replaceAll("_", " ")}
-            showCounts={false}
-          />
-        }
-      />
-    ),
+    header: ({ column }) => <WorkFacetControls column={column} facet="status" />,
     size: 150,
     cell: (info) => <StatusPill status={info.getValue()} />,
     filterFn: "arrIncludesSome",
@@ -171,33 +153,7 @@ export const columns = [
   }),
 
   col.accessor("projectId", {
-    header: ({ column }) => (
-      <div className="flex items-center">
-        <DataGridColumnHeader column={column} title="Project" />
-        <Popover>
-          <PopoverTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-6 min-w-6 px-1.5"
-              aria-label="Filter projects"
-            >
-              <ListFilter
-                className={column.getIsFiltered() ? "size-3.5 text-primary" : "size-3.5 text-muted-foreground"}
-              />
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent className="w-64" align="start">
-            <HeaderFilter
-              column={column}
-              allowEntry
-              formatLabel={formatProject}
-              showCounts={false}
-            />
-          </PopoverContent>
-        </Popover>
-      </div>
-    ),
+    header: ({ column }) => <WorkFacetControls column={column} facet="projectId" />,
     size: 140,
     cell: (info) => {
       const v = info.getValue();

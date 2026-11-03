@@ -64,6 +64,7 @@ export function HeaderFilter<TData, TValue>({
           <button
             key={v}
             type="button"
+            aria-pressed={isSelected}
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();

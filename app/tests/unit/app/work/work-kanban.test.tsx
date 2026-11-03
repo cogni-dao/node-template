@@ -186,6 +186,35 @@ describe("Work Kanban", () => {
     expect(cleared.get("rankMax")).toBe("");
   });
 
+  it.each(["rankMin", "rankMax"])("passes a negative %s to the API", async (key) => {
+    navigation.params = new URLSearchParams(`${key}=-1&status=all`);
+    mount();
+    await waitFor(() => expect(fetchWorkItems).toHaveBeenCalled());
+    expect(vi.mocked(fetchWorkItems).mock.calls[0]?.[0].get(key)).toBe("-1");
+  });
+
+  it("exposes selected facet values as pressed", async () => {
+    navigation.params = new URLSearchParams("type=bug&status=all");
+    mount();
+    await userEvent.click(screen.getByRole("button", { name: "Filter type" }));
+    expect(screen.getByRole("button", { name: "bug" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "task" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("keeps board controls when their table columns are hidden", async () => {
+    navigation.params = new URLSearchParams("view=table&sort=projectId");
+    const view = mount();
+    await userEvent.click(screen.getByRole("button", { name: "Columns" }));
+    for (const label of ["Rank", "Type", "Status", "Project"]) {
+      await userEvent.click(screen.getByRole("menuitemcheckbox", { name: label }));
+    }
+    await userEvent.keyboard("{Escape}");
+    navigation.params = new URLSearchParams("view=board&sort=projectId");
+    view.rerender(view.container.firstChild ? <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><WorkDashboardView /></QueryClientProvider> : <></>);
+    for (const name of ["Filter rank", "Filter type", "Filter status", "Filter projects"]) expect(screen.getByRole("button", { name })).toBeInTheDocument();
+    expect(screen.queryByText(/Sorted by projectId/)).not.toBeInTheDocument();
+  });
+
   it("discloses hidden legacy sorting and resets only on request", async () => {
     navigation.params = new URLSearchParams("sort=-priority&cursor=p2");
     mount();

@@ -44,7 +44,6 @@ import { DataGridTable } from "@cogni/node-ui-kit/reui/data-grid/data-grid-table
 import { useQuery } from "@tanstack/react-query";
 import {
   type ColumnFiltersState,
-  flexRender,
   getCoreRowModel,
   getFacetedRowModel,
   getFacetedUniqueValues,
@@ -58,7 +57,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Input } from "@/components";
 
 import { fetchWorkItem, fetchWorkItems } from "./_api/fetchWorkItems";
-import { columns } from "./_components/columns";
+import { columns, WorkFacetControls, WorkRankControls } from "./_components/columns";
 import { WorkItemDetail } from "./_components/WorkItemDetail";
 import { WorkKanban } from "./_components/WorkKanban";
 import {
@@ -110,7 +109,7 @@ export function WorkDashboardView({
       const raw = searchParams.get(key);
       if (!raw?.trim()) return undefined;
       const value = Number(raw);
-      return Number.isFinite(value) && value >= 0 ? value : undefined;
+      return Number.isFinite(value) ? value : undefined;
     };
     const rankRange = [numberParam("rankMin"), numberParam("rankMax")];
     if (rankRange.some((value) => value !== undefined)) {
@@ -522,24 +521,14 @@ export function WorkDashboardView({
               className="mb-4 flex min-w-0 flex-wrap items-center gap-x-5 gap-y-2 rounded-lg border px-4 py-2"
               aria-label="Board filters and sorting"
             >
-              {table
-                .getFlatHeaders()
-                .filter((header) =>
-                  [
-                    "rankScore",
-                    "type",
-                    "status",
-                    "projectId",
-                  ].includes(header.column.id),
-                )
-                .map((header) => (
-                  <div key={header.id}>
-                    {flexRender(
-                      header.column.columnDef.header,
-                      header.getContext(),
-                    )}
-                  </div>
-                ))}
+              {(() => {
+                const rank = table.getColumn("rankScore");
+                return rank && <WorkRankControls column={rank} />;
+              })()}
+              {(["type", "status", "projectId"] as const).map((facet) => {
+                const column = table.getColumn(facet);
+                return column && <WorkFacetControls key={facet} column={column} facet={facet} />;
+              })}
             </fieldset>
             {sorting[0] &&
               !["rankScore", "type", "status", "projectId"].includes(

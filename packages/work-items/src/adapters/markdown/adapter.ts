@@ -20,6 +20,9 @@
 
 import {
   compareWorkItems,
+  compareWorkItemKeys,
+  workItemOrderKey,
+  type WorkItemOrderKey,
   normalizeWorkItemOrder,
   type WorkItemOrder
 } from "../../query-order.js";
@@ -280,46 +283,24 @@ function matchesQuery(item: WorkItem, query: WorkQuery): boolean {
 
 // ── Pagination cursor ────────────────────────────────
 
-const MARKDOWN_CURSOR_PREFIX = "md2:";
-function encodeMarkdownCursor(
-  offset: number,
-  order: WorkItemOrder,
-  query: WorkQuery,
-): string {
-  return (
-    MARKDOWN_CURSOR_PREFIX +
-    Buffer.from(
-      JSON.stringify({ offset, ...order, filter: queryIdentity(query) }),
-    ).toString("base64url")
-  );
+const MARKDOWN_CURSOR_PREFIX = "md3:";
+function encodeMarkdownCursor(item: WorkItem, order: WorkItemOrder, query: WorkQuery): string {
+  const key = workItemOrderKey(item, order);
+  return MARKDOWN_CURSOR_PREFIX + Buffer.from(JSON.stringify({ value: key.value ?? null, id: key.id, ...order, filter: queryIdentity(query) })).toString("base64url");
 }
-function decodeMarkdownCursor(
-  cursor: string | undefined,
-  order: WorkItemOrder,
-  query: WorkQuery,
-): number {
-  if (cursor === undefined) return 0;
+function decodeMarkdownCursor(cursor: string | undefined, order: WorkItemOrder, query: WorkQuery): WorkItemOrderKey | undefined {
+  if (cursor === undefined) return undefined;
   try {
-    if (!cursor.startsWith(MARKDOWN_CURSOR_PREFIX) || cursor.length > 2048)
-      throw new Error();
-    const parsed = JSON.parse(
-      Buffer.from(
-        cursor.slice(MARKDOWN_CURSOR_PREFIX.length),
-        "base64url",
-      ).toString(),
-    );
-    if (
-      !Number.isSafeInteger(parsed.offset) ||
-      parsed.offset < 0 ||
-      parsed.filter !== queryIdentity(query) ||
-      parsed.sortBy !== order.sortBy ||
-      parsed.sortDirection !== order.sortDirection
-    )
-      throw new Error();
-    return parsed.offset;
-  } catch {
-    throw new InvalidCursorError();
-  }
+    if (!cursor.startsWith(MARKDOWN_CURSOR_PREFIX) || cursor.length > 2048 || !/^[A-Za-z0-9_-]+$/.test(cursor.slice(MARKDOWN_CURSOR_PREFIX.length))) throw new Error();
+    const parsed: unknown = JSON.parse(Buffer.from(cursor.slice(MARKDOWN_CURSOR_PREFIX.length), "base64url").toString());
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error();
+    const value = parsed as Record<string, unknown>;
+    const numeric = ["rankScore", "priority", "rank", "estimate"].includes(order.sortBy);
+    if (typeof value.id !== "string" || !value.id || value.id.length > 512 ||
+      !(value.value === null || (numeric ? typeof value.value === "number" && Number.isFinite(value.value) : typeof value.value === "string" && value.value.length <= 1024)) ||
+      value.filter !== queryIdentity(query) || value.sortBy !== order.sortBy || value.sortDirection !== order.sortDirection) throw new Error();
+    return { id: value.id, value: value.value === null ? undefined : value.value as string | number };
+  } catch { throw new InvalidCursorError(); }
 }
 
 // ── Adapter class ────────────────────────────────────
@@ -353,12 +334,12 @@ export class MarkdownWorkItemAdapter
     // NO_SILENT_TRUNCATION: a page cut short by `limit` returns `nextCursor`, so a
     // caller that walks pages (e.g. a complete backlog snapshot) never mistakes the
     // first page for the whole backlog.
-    const offset = decodeMarkdownCursor(query?.cursor, order, query ?? {});
-    const rest = items.slice(offset);
+    const boundary = decodeMarkdownCursor(query?.cursor, order, query ?? {});
+    const rest = boundary ? items.filter((item) => compareWorkItemKeys(workItemOrderKey(item, order), boundary, order) > 0) : items;
     if (query?.limit && rest.length > query.limit) {
       return {
         items: rest.slice(0, query.limit),
-        nextCursor: encodeMarkdownCursor(offset + query.limit, order, query)
+        nextCursor: encodeMarkdownCursor(rest[query.limit - 1]!, order, query)
       };
     }
     return { items: rest };
