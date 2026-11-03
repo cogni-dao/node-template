@@ -8,6 +8,7 @@ description: Plan, curate, refine, or debug a Cogni knowledge hub. Use when deci
 This file is only the trigger. The knowledge hub is the authoritative, refinable contract.
 
 Read these entries from this node's authenticated knowledge API, then follow them:
+- `GET /api/v1/knowledge/knowledge-syntropy-expert`
 - `GET /api/v1/knowledge/knowledge-syntropy-protocol`
 - `GET /api/v1/knowledge/cogni-domain-taxonomy`
 
