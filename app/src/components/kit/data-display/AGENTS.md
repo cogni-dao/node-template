@@ -15,7 +15,7 @@ Reusable kit components for displaying data including badges, avatars, scroll ar
 ## Pointers
 
 - [Parent: Kit Components](../../../AGENTS.md)
-- [UI Implementation Guide](../../../../../../docs/spec/ui-implementation.md)
+- [Frontend design guide](https://node-template.cognidao.org/knowledge/frontend-design-guide)
 - **Related:** [../overlays/](../overlays/) (Dialog uses ScrollArea)
 
 ## Boundaries

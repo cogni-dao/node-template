@@ -1,4 +1,4 @@
-Time to evaluate your design. Read docs/spec/architecture.md, docs/guides/feature-development.md, and docs/spec/ui-implementation.md.
+Time to evaluate your design. Read docs/spec/architecture.md, docs/guides/feature-development.md, and https://node-template.cognidao.org/knowledge/frontend-design-guide.
 
 Find every AGENTS.md file that is in the file path tree of the files you were editing/planning to edit. Re-read the agents.md files, starting at root.
 

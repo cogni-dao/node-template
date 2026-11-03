@@ -16,7 +16,7 @@ This is the **baseline** for `nodes/node-template/`. Forks (poly, operator, ai-o
 ## Pointers
 
 - [Packages Architecture › baseline UI primitive packages carve-out](../../docs/spec/packages-architecture.md#non-goals)
-- [UI Implementation › shadcn/Radix Ownership](../../docs/spec/ui-implementation.md#shadcnradix-ownership)
+- [Frontend design guide](https://node-template.cognidao.org/knowledge/frontend-design-guide)
 - [task.0433](../../work/items/task.0433.node-ui-kit-baseline-package.md)
 
 ## Boundaries
