@@ -73,6 +73,7 @@ const ACTIVE_STATUSES = ALL_STATUSES.filter(
   (status) => status !== "done" && status !== "cancelled",
 );
 const EMPTY_ITEMS: WorkItemDto[] = [];
+const HISTORY_STORAGE_KEY = "work-page-history";
 
 export function WorkDashboardView({
   selectedItemId,
@@ -181,9 +182,16 @@ export function WorkDashboardView({
     if (currentHistory.current?.key !== historyKey || currentHistory.current.cursor !== cursor) {
       let stack: string[] = [];
       try {
-        const saved: unknown = JSON.parse(sessionStorage.getItem(historyKey) ?? "{}");
-        const value: unknown = saved && typeof saved === "object" && !Array.isArray(saved) ? (saved as Record<string, unknown>)[cursor] : undefined;
-        if (Array.isArray(value) && value.length <= 20 && value.every(item => typeof item === "string" && item.length <= 2048)) stack = value;
+        // Remove snapshots written by older versions; they can retain evicted cursors.
+        for (const key of Object.keys(sessionStorage)) {
+          if (key.startsWith("work-page-history:")) sessionStorage.removeItem(key);
+        }
+        const saved: unknown = JSON.parse(sessionStorage.getItem(HISTORY_STORAGE_KEY) ?? "{}");
+        if (saved && typeof saved === "object" && !Array.isArray(saved)) {
+          const record = saved as Record<string, unknown>;
+          const value = record.history;
+          if (record.key === historyKey && record.cursor === cursor && Array.isArray(value) && value.length <= 20 && value.every(item => typeof item === "string" && item.length <= 2048)) stack = value;
+        }
       } catch { /* Storage is optional. */ }
       currentHistory.current = { key: historyKey, cursor };
       setHistory(stack);
@@ -214,11 +222,7 @@ export function WorkDashboardView({
     currentHistory.current = { key: historyKey, cursor: next };
     setHistory(bounded);
     try {
-      const value: unknown = JSON.parse(sessionStorage.getItem(historyKey) ?? "{}");
-      const entries = value && typeof value === "object" && !Array.isArray(value) ? Object.entries(value).filter(([key, stack]) => key.length <= 2048 && Array.isArray(stack) && stack.length <= 20 && stack.every(item => typeof item === "string" && item.length <= 2048)) : [];
-      const pages = Object.fromEntries(entries.filter(([key]) => key !== next).slice(-19));
-      pages[next] = bounded;
-      sessionStorage.setItem(historyKey, JSON.stringify(pages));
+      sessionStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify({ key: historyKey, cursor: next, history: bounded }));
     } catch { /* Navigation does not depend on storage. */ }
     const params = new URLSearchParams(searchParams.toString());
     if (next) params.set("cursor", next);
@@ -256,7 +260,7 @@ export function WorkDashboardView({
         return Array.isArray(value) ? (value as string[]) : [];
       };
       const sort = newSorting[0];
-      try { sessionStorage.removeItem(historyKey); } catch { /* Storage is optional. */ }
+      try { sessionStorage.removeItem(HISTORY_STORAGE_KEY); } catch { /* Storage is optional. */ }
       currentHistory.current = null;
       setHistory([]);
       router.replace(
@@ -274,7 +278,7 @@ export function WorkDashboardView({
         { scroll: false },
       );
     },
-    [router, searchParams, selectedItemId, historyKey],
+    [router, searchParams, selectedItemId],
   );
 
   const openItem = useCallback(
@@ -586,7 +590,7 @@ export function WorkDashboardView({
                 params.delete("cursor");
                 currentHistory.current = null;
                 setHistory([]);
-                try { sessionStorage.removeItem(historyKey); } catch { /* Storage is optional. */ }
+                try { sessionStorage.removeItem(HISTORY_STORAGE_KEY); } catch { /* Storage is optional. */ }
                 router.replace(
                   selectedItemId
                     ? workItemHref(selectedItemId, params)

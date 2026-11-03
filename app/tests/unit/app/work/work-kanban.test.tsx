@@ -330,6 +330,47 @@ describe("Work Kanban", () => {
     expect(navigation.router.replace).toHaveBeenLastCalledWith("/work", { scroll: false });
   });
 
+  it("bounds stored predecessors after 45 pages and restores only the current page", async () => {
+    vi.mocked(fetchWorkItems).mockImplementation(async (params) => ({
+      items: [],
+      pageInfo: { endCursor: `p${Number(params.get("cursor")?.slice(1) ?? 1) + 1}`, hasMore: true },
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 0 } } });
+    const element = () => <QueryClientProvider client={client}><WorkDashboardView /></QueryClientProvider>;
+    sessionStorage.setItem("work-page-history:old-filter", JSON.stringify({ p10: ["p1", "p2"] }));
+    let result = render(element());
+    for (let page = 1; page < 45; page++) {
+      await waitFor(() => expect(screen.getByRole("button", { name: "Next" })).toBeEnabled());
+      fireEvent.click(screen.getByRole("button", { name: "Next" }));
+      const url = vi.mocked(navigation.router.replace).mock.lastCall?.[0] as string;
+      expect(new URL(url, "https://example.com").searchParams.get("cursor")).toBe(`p${page + 1}`);
+      navigation.params = new URLSearchParams(`cursor=p${page + 1}`);
+      result.rerender(element());
+      await waitFor(() => expect(vi.mocked(fetchWorkItems).mock.calls.some(([params]) => params.get("cursor") === `p${page + 1}`)).toBe(true));
+    }
+    const stored = Object.keys(sessionStorage).filter((key) => key.startsWith("work-page-history"));
+    expect(stored).toHaveLength(1);
+    const record = JSON.parse(sessionStorage.getItem(stored[0] as string) as string);
+    expect(record.history).toEqual(Array.from({ length: 20 }, (_, i) => `p${i + 25}`));
+    expect(record.cursor).toBe("p45");
+    result.unmount();
+    result = render(element());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Previous" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Previous" }));
+    expect(navigation.router.replace).toHaveBeenLastCalledWith("/work?cursor=p44", { scroll: false });
+    navigation.params = new URLSearchParams("cursor=p44");
+    result.rerender(element());
+    result.unmount();
+    result = render(element());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Previous" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Previous" }));
+    expect(navigation.router.replace).toHaveBeenLastCalledWith("/work?cursor=p43", { scroll: false });
+    result.unmount();
+    navigation.params = new URLSearchParams("cursor=p10");
+    mount();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Previous" })).toBeDisabled());
+  });
+
   it.each(["getItem", "setItem"] as const)("keeps paging when storage %s throws", async (method) => {
     vi.spyOn(Storage.prototype, method).mockImplementation(() => { throw new Error("storage unavailable"); });
     vi.mocked(fetchWorkItems).mockImplementation(async (params) => ({
