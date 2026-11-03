@@ -138,7 +138,7 @@ export const columns = [
       const { id, title } = row.original;
       return (
         <div className="flex flex-col gap-0.5 py-0.5">
-          <span className="line-clamp-1 text-sm">{title}</span>
+          <span className="line-clamp-2 text-sm md:line-clamp-1">{title}</span>
           <span className="font-mono text-muted-foreground text-xs">{id}</span>
         </div>
       );
