@@ -180,6 +180,7 @@ export function visualFixture(): GoalsProgress {
                     evaluationAt: "2026-11-09T00:00:00.000Z",
                   },
                   baselineValue: 0.8,
+                  baselineAt: "2026-10-27T00:00:00.000Z",
                   assessment: assessment("evaluating", {
                     reason: "evaluation_not_due",
                     target: { value: 0.85, unit: "ratio" },

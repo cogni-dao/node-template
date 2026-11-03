@@ -31,17 +31,24 @@ import {
   visualFixture,
 } from "@tests/_fixtures/goals/progress";
 import { KnowledgeDashboardView } from "@/app/(app)/knowledge/view";
-import { GoalsBoard } from "@/features/goals";
+import { GoalsBoard, MetricEvidence } from "@/features/goals";
 import { STATUS_META } from "@/features/goals/lib/presentation";
 
 const navigation = vi.hoisted(() => ({
   mode: "browse",
-  replace: vi.fn(),
+  observation: null as string | null,
+  push: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ replace: navigation.replace }),
-  useSearchParams: () => new URLSearchParams({ mode: navigation.mode }),
+  useRouter: () => ({ push: navigation.push }),
+  useSearchParams: () =>
+    new URLSearchParams({
+      mode: navigation.mode,
+      ...(navigation.observation
+        ? { observation: navigation.observation }
+        : {}),
+    }),
 }));
 vi.mock("next/link", () => ({
   default: ({ href, children }: { href: string; children: ReactNode }) => (
@@ -91,7 +98,8 @@ function client() {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
-  navigation.replace.mockReset();
+  navigation.push.mockReset();
+  navigation.observation = null;
 });
 
 describe("GoalsBoard", () => {
@@ -186,14 +194,16 @@ describe("Knowledge Goals tab", () => {
         return new Promise(() => {});
       })
     );
-    render(
-      <QueryClientProvider client={client()}>
+    const qc = client();
+    const view = () => (
+      <QueryClientProvider client={qc}>
         <KnowledgeDashboardView
           initialList={{ items: [], domains: [] }}
           initialDomains={{ domains: [] }}
         />
       </QueryClientProvider>
     );
+    const { rerender } = render(view());
     const tablist = screen.getByRole("tablist", { name: "Knowledge views" });
     const tabs = within(tablist).getAllByRole("tab");
     expect(tabs.map((t) => t.textContent?.replace(/,.*$/, ""))).toEqual([
@@ -212,10 +222,13 @@ describe("Knowledge Goals tab", () => {
     expect(goals.getAttribute("tabindex")).toBe("-1");
 
     fireEvent.click(goals);
-    expect(navigation.replace).toHaveBeenCalledWith("/knowledge?mode=goals", {
+    expect(navigation.push).toHaveBeenCalledWith("/knowledge?mode=goals", {
       scroll: false,
     });
     expect(goals.getAttribute("aria-selected")).toBe("true");
+    // Re-selecting the current tab adds no history entry.
+    fireEvent.click(goals);
+    expect(navigation.push).toHaveBeenCalledTimes(1);
     const panel = screen.getByRole("tabpanel");
     expect(panel.getAttribute("aria-labelledby")).toBe(goals.id);
     expect(
@@ -227,9 +240,84 @@ describe("Knowledge Goals tab", () => {
     fireEvent.keyDown(goals, { key: "ArrowRight" });
     expect(document.activeElement?.textContent).toMatch(/^Inbox/);
 
+    // Back/forward: the URL changes under the view and the tab follows it.
+    navigation.mode = "goals";
+    rerender(view());
+    navigation.mode = "browse";
+    rerender(view());
+    expect(
+      within(tablist)
+        .getByRole("tab", { name: "Browse" })
+        .getAttribute("aria-selected")
+    ).toBe("true");
+    navigation.mode = "goals";
+    rerender(view());
+    expect(goals.getAttribute("aria-selected")).toBe("true");
+
     fireEvent.click(within(tablist).getByRole("tab", { name: "Browse" }));
-    expect(navigation.replace).toHaveBeenLastCalledWith("/knowledge", {
+    expect(navigation.push).toHaveBeenLastCalledWith("/knowledge", {
       scroll: false,
     });
+  });
+});
+
+describe("MetricEvidence", () => {
+  it("pins the linked immutable reading ahead of newer rolling readings", async () => {
+    const reading = (n: number, value: number) => ({
+      id: `00000000-0000-4000-8000-00000000000${n}`,
+      metricId: "work",
+      definitionRevision: "1",
+      definitionHash: "hash1",
+      calculatorVersion: "work.count@1",
+      paramsHash: "params1",
+      node: "test",
+      environment: "test",
+      dataScope: "test",
+      window: { start: "2026-11-02T00:00:00Z", end: `2026-11-02T0${n}:00:00Z` },
+      sourceWatermarks: [{ source: "work", asOf: "2026-11-02T00:00:00Z" }],
+      observedAt: `2026-11-02T0${n}:00:00Z`,
+      status: "ok",
+      value,
+      unit: "items",
+      reason: null,
+      evidenceRefs: ["node:work"],
+    });
+    const pinned = reading(1, 5);
+    const later = reading(2, 20);
+    const definition = {
+      id: "work",
+      title: "Work",
+      revision: "1",
+      spec: { calculatorId: "work.count@1", params: {}, maxAgeSeconds: 60 },
+    };
+    navigation.observation = pinned.id;
+    const fetchMock = vi.fn(async (url: string) =>
+      url === "/api/v1/metrics/work"
+        ? Response.json({
+            definition,
+            latestAttempt: later,
+            lastGood: later,
+            viewState: "ok",
+            history: [later, pinned],
+          })
+        : url === `/api/v1/metrics/work/observations/${pinned.id}`
+          ? Response.json({ definition, observation: pinned })
+          : new Response("{}", { status: 404 })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { container } = render(
+      <QueryClientProvider client={client()}>
+        <MetricEvidence id="work" />
+      </QueryClientProvider>
+    );
+    await screen.findByText(/Linked immutable evidence/);
+    const articles = container.querySelectorAll("article");
+    expect(articles).toHaveLength(1);
+    expect(articles[0]?.id).toBe(`observation-${pinned.id}`);
+    expect(articles[0]?.textContent).toContain("5 items");
+    expect(fetchMock.mock.calls.map(([u]) => u)).toEqual([
+      "/api/v1/metrics/work",
+      `/api/v1/metrics/work/observations/${pinned.id}`,
+    ]);
   });
 });
