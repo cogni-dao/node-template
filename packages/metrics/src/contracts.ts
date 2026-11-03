@@ -110,6 +110,8 @@ export interface MetricSample {
 	complete: boolean;
 	sourceWatermarks: MetricObservation["sourceWatermarks"];
 	evidenceRefs: string[];
+	/** Why an incomplete sample is unknown, e.g. zero_denominator or history_unavailable. */
+	reason?: KpiReason;
 }
 export interface CalculatorContext {
 	window: MetricObservation["window"];
@@ -124,6 +126,10 @@ export interface MetricCalculator {
 	historicalWindows?: boolean;
 	id: string;
 	unit: string;
+	/** Unit for one parameterization when outputs differ (for example ratio vs items). */
+	unitFor?(params: unknown): string;
+	/** Width of the measured interval [end - windowSeconds, end). Absent means an instant. */
+	windowSeconds?(params: unknown): number;
 	paramsSchema: z.ZodType;
 	budget: Readonly<MetricBudget>;
 	compute(params: unknown, context: CalculatorContext): Promise<MetricSample>;
@@ -162,11 +168,27 @@ export interface MetricObservationsPort {
 		metricId: string,
 		definitionHash: string,
 	): Promise<MetricObservation | null>;
+	/** Earliest ok reading of one series; drives the building rule. */
+	firstGood(
+		metricId: string,
+		definitionHash: string,
+	): Promise<MetricObservation | null>;
+	/**
+	 * Backward-only fixed evaluation: latest ok reading with window.end in
+	 * [evaluationAt - maxAge, evaluationAt] and observedAt <= evaluationAt + maxAge.
+	 */
 	at(
 		metricId: string,
 		definitionHash: string,
 		evaluationAt: string,
+		maxAgeSeconds: number,
 	): Promise<MetricObservation | null>;
+	/** Aligned, validated half-open buckets; never filled or carried forward. */
+	buckets(
+		metricId: string,
+		definitionHash: string,
+		range: MetricHistoryInput,
+	): Promise<MetricHistory["buckets"]>;
 	snapshot(id: string): Promise<MetricSnapshot | null>;
 	scheduledAttempts(
 		metricId: string,

@@ -2,8 +2,10 @@
 /** Scoped injected SQL. Snapshot reservation precedes I/O; completed observations never change. */
 import { randomUUID } from "node:crypto";
 import type { Sql } from "postgres";
+import { HISTORY_ORIGIN_MS, metricHistoryRange } from "../assess.js";
 import {
 	MetricError,
+	type MetricHistoryInput,
 	MetricObservationSchema,
 	type MetricObservationsPort,
 	type MetricScope,
@@ -118,10 +120,72 @@ export class PostgresMetricObservations implements MetricObservationsPort {
 			.sql`SELECT observation FROM metric_observations WHERE scope=${this.key} AND metric_id=${metricId} AND definition_hash=${definitionHash} AND status='ok' ORDER BY evaluation_at DESC,id DESC LIMIT 1`;
 		return row ? MetricObservationSchema.parse(json(row.observation)) : null;
 	}
-	async at(metricId: string, definitionHash: string, evaluationAt: string) {
+	async firstGood(metricId: string, definitionHash: string) {
 		const [row] = await this
-			.sql`SELECT observation FROM metric_observations WHERE scope=${this.key} AND metric_id=${metricId} AND definition_hash=${definitionHash} AND evaluation_at<=${evaluationAt} ORDER BY evaluation_at DESC,id DESC LIMIT 1`;
+			.sql`SELECT observation FROM metric_observations WHERE scope=${this.key} AND metric_id=${metricId} AND definition_hash=${definitionHash} AND status='ok' ORDER BY evaluation_at ASC,id ASC LIMIT 1`;
 		return row ? MetricObservationSchema.parse(json(row.observation)) : null;
+	}
+	/** Backward-only: ok, window.end in [at - maxAge, at], observedAt <= at + maxAge. */
+	async at(
+		metricId: string,
+		definitionHash: string,
+		evaluationAt: string,
+		maxAgeSeconds: number,
+	) {
+		const [row] = await this
+			.sql`SELECT observation FROM metric_observations WHERE scope=${this.key} AND metric_id=${metricId} AND definition_hash=${definitionHash}
+      AND status='ok' AND observation->'value' IS NOT NULL AND jsonb_typeof(observation->'value')='number'
+      AND evaluation_at <= ${evaluationAt}::timestamptz AND evaluation_at >= ${evaluationAt}::timestamptz - (${maxAgeSeconds} * interval '1 second')
+      AND (observation->>'observedAt')::timestamptz <= ${evaluationAt}::timestamptz + (${maxAgeSeconds} * interval '1 second')
+      ORDER BY evaluation_at DESC,(observation->>'observedAt')::timestamptz DESC,id DESC LIMIT 1`;
+		return row ? MetricObservationSchema.parse(json(row.observation)) : null;
+	}
+	/**
+	 * Server-side bucketing: date_bin over evaluation_at (window.end), DISTINCT ON
+	 * the bucket preferring the last ok reading, generate_series for empty buckets.
+	 */
+	async buckets(
+		metricId: string,
+		definitionHash: string,
+		range: MetricHistoryInput,
+	) {
+		const r = metricHistoryRange(range, new Date(Date.parse(range.to)));
+		const origin = new Date(HISTORY_ORIGIN_MS[r.step]).toISOString();
+		const step = `${r.stepMs / 1000} seconds`;
+		const rows = await this.sql`WITH picked AS (
+        SELECT DISTINCT ON (bucket) bucket, status, id, observation->'value' AS value FROM (
+          SELECT date_bin(${step}::interval, evaluation_at, ${origin}::timestamptz) AS bucket, status, id, evaluation_at, observation
+          FROM metric_observations
+          WHERE scope=${this.key} AND metric_id=${metricId} AND definition_hash=${definitionHash}
+            AND evaluation_at >= ${r.from}::timestamptz AND evaluation_at < ${r.to}::timestamptz
+            AND status IN ('ok','error','unavailable')
+        ) attempts
+        ORDER BY bucket, (status='ok' AND jsonb_typeof(observation->'value')='number') DESC, evaluation_at DESC, id DESC
+      )
+      SELECT (extract(epoch FROM g) * 1000)::bigint AS start_ms, picked.status, picked.id, picked.value
+      FROM generate_series(${r.from}::timestamptz, ${r.to}::timestamptz - ${step}::interval, ${step}::interval) AS g
+      LEFT JOIN picked ON picked.bucket = g
+      ORDER BY g`;
+		return rows.map((row) => {
+			const start = Number(row.start_ms);
+			const status = row.status ? String(row.status) : "missing";
+			const raw = json(row.value);
+			const value =
+				status === "ok" && typeof raw === "number" && Number.isFinite(raw)
+					? raw
+					: null;
+			return {
+				start: new Date(start).toISOString(),
+				end: new Date(start + r.stepMs).toISOString(),
+				status: (status === "ok" && value === null ? "missing" : status) as
+					| "ok"
+					| "error"
+					| "unavailable"
+					| "missing",
+				value,
+				observationId: row.id ? String(row.id) : null,
+			};
+		});
 	}
 	async snapshot(id: string) {
 		const [row] = await this

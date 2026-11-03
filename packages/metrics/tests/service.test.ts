@@ -2,18 +2,22 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
+	bucketObservations,
 	createMetricService,
 	type MetricDefinition,
-	type MetricObservationsPort,
-	MetricRegistry,
 	MetricListInputSchema,
 	MetricListResponseSchema,
+	type MetricObservationsPort,
+	MetricRegistry,
 	type MetricSample,
 	type MetricSnapshot,
+	metricHistoryRange,
+	selectEvaluation,
 } from "../src/index";
 
-function setup() {
+function setup(options?: { historical?: boolean }) {
 	let time = new Date("2026-10-30T12:00:00Z");
+	const windows: Array<{ start: string; end: string }> = [];
 	let allowed = true;
 	let authorityFailure = false;
 	let deniedRevision: string | null = null;
@@ -87,12 +91,20 @@ function setup() {
 				null
 			);
 		},
-		async at(id, hash, at) {
+		async firstGood(id, hash) {
 			return (
-				(await this.history(id, hash, 100)).find(
-					(r) => Date.parse(r.window.end) <= Date.parse(at),
-				) ??
-				null
+				(await this.history(id, hash, 100))
+					.filter((r) => r.status === "ok")
+					.at(-1) ?? null
+			);
+		},
+		async at(id, hash, at, maxAge) {
+			return selectEvaluation(await this.history(id, hash, 100), at, maxAge);
+		},
+		async buckets(id, hash, range) {
+			return bucketObservations(
+				await this.history(id, hash, 100),
+				metricHistoryRange(range, new Date(Date.parse(range.to))),
 			);
 		},
 		async snapshot(id) {
@@ -115,6 +127,9 @@ function setup() {
 	registry.register({
 		id: "work.count@1",
 		unit: "items",
+		...(options?.historical
+			? { historicalWindows: true, windowSeconds: () => 7 * 86400 }
+			: {}),
 		paramsSchema: z.object({}),
 		budget: {
 			timeoutMs: 50,
@@ -125,6 +140,7 @@ function setup() {
 		compute: async (_p, ctx) =>
 			ctx.read(async () => {
 				reads++;
+				windows.push(ctx.window);
 				if (sourceFailure) throw new Error("provider_failed");
 				return sample;
 			}),
@@ -150,6 +166,7 @@ function setup() {
 		service,
 		d,
 		snapshots,
+		windows,
 		denyRevision: (revision: string) => {
 			deniedRevision = revision;
 		},
@@ -254,16 +271,26 @@ describe("measurement evidence contract", () => {
 		s.advance(1);
 		s.sample({ value: 5 });
 		await s.service.compute("open-work", { requestKey: "two" });
-		const [result] = await s.service.bindings([
-			{
-				metricId: "open-work",
-				comparator: "eq",
-				target: { value: 0, unit: "items" },
-				evaluationAt: baseline.window.end,
-			},
-		]);
+		const binding = {
+			metricId: "open-work",
+			comparator: "eq" as const,
+			target: { value: 0, unit: "items" },
+			evaluationAt: baseline.window.end,
+		};
+		// Before evaluationAt + maxAge the fixed evaluation is not final.
+		expect((await s.service.bindings([binding]))[0]).toMatchObject({
+			met: null,
+			reason: "evaluation_not_due",
+			assessment: { status: "evaluating" },
+		});
+		s.advance(91000);
+		const [result] = await s.service.bindings([binding]);
 		expect(result?.observation?.id).toBe(baseline.id);
 		expect(result?.met).toBe(true);
+		expect(result?.assessment).toMatchObject({
+			status: "met",
+			observationId: baseline.id,
+		});
 	});
 	it("recovers the refresh cursor on the next real tick", async () => {
 		const s = setup();
@@ -298,7 +325,7 @@ describe("review regression cases", () => {
 		const baseline = await s.service.compute("open-work", {
 			requestKey: "timezone-baseline",
 		});
-		s.advance(60000);
+		s.advance(120000);
 		const binding = {
 			metricId: "open-work",
 			comparator: "eq" as const,
@@ -343,8 +370,9 @@ describe("review regression cases", () => {
 			evaluationAt: first.window.end,
 			baselineObservationId: first.id,
 		};
-		s.advance(1000);
+		s.advance(91000);
 		s.d.revision = "2";
+		s.d.spec = { ...s.d.spec, params: { edited: true } };
 		s.sample({ value: 5 });
 		await s.service.compute("open-work", { requestKey: "new-definition" });
 		const [result] = await s.service.bindings([binding], { hypothesis: true });
@@ -430,6 +458,9 @@ describe("immutable evidence destinations", () => {
 			requestKey: "original",
 		});
 		s.d.revision = "2";
+		// A revision-only edit (title/body) keeps the series.
+		expect(await s.service.history("open-work")).toHaveLength(1);
+		s.d.spec = { ...s.d.spec, params: { edited: true } };
 		expect(await s.service.history("open-work")).toEqual([]);
 		const saved = await s.service.observation("open-work", original.id);
 		expect(saved.observation.id).toBe(original.id);
@@ -483,4 +514,102 @@ it("returns pending explicit-time replay without treating it as a new historical
 	expect(replay.id).toBe(original.id);
 	expect(replay.status).toBe("pending");
 	expect(s.reads()).toBe(1);
+});
+
+describe("scheduled windows, ranged history and assessment", () => {
+	it("measures the slot only for historical-window calculators", async () => {
+		const snapshot = setup();
+		snapshot.d.spec.cadenceSeconds = 3600;
+		snapshot.advance(125000);
+		await snapshot.service.refreshDue();
+		expect(snapshot.windows[0]).toEqual({
+			start: "2026-10-30T12:02:05.000Z",
+			end: "2026-10-30T12:02:05.000Z",
+		});
+		const historical = setup({ historical: true });
+		historical.d.spec.cadenceSeconds = 3600;
+		historical.advance(125000);
+		const run = await historical.service.refreshDue();
+		expect(run.observations[0]?.status).toBe("ok");
+		expect(historical.windows[0]).toEqual({
+			start: "2026-10-23T12:00:00.000Z",
+			end: "2026-10-30T12:00:00.000Z",
+		});
+	});
+	it("serves aligned ranged history with real gaps and the same authorization as read", async () => {
+		const s = setup();
+		await s.service.compute("open-work", { requestKey: "a" });
+		s.advance(3 * 3600000);
+		s.failSource(true);
+		await s.service.compute("open-work", { requestKey: "b" });
+		s.advance(3600000);
+		const h = await s.service.historyRange("open-work", {
+			from: "2026-10-30T11:00:00Z",
+			to: "2026-10-30T16:00:00Z",
+			step: "1h",
+		});
+		expect(h.buckets.map((b) => b.status)).toEqual([
+			"missing",
+			"ok",
+			"missing",
+			"missing",
+			"error",
+		]);
+		expect(h.buckets[1]).toMatchObject({ value: 0 });
+		expect(h.buckets[4]?.value).toBeNull();
+		await expect(
+			s.service.historyRange("open-work", {
+				from: "2026-10-30T11:30:00Z",
+				to: "2026-10-30T16:00:00Z",
+				step: "1h",
+			}),
+		).rejects.toMatchObject({ code: "misaligned_range", status: 400 });
+		await expect(
+			s.service.historyRange("open-work", {
+				from: "2026-10-30T00:00:00Z",
+				to: "2026-10-31T00:00:00Z",
+				step: "1d",
+			}),
+		).rejects.toMatchObject({ code: "invalid_range", status: 400 });
+		s.allow(false);
+		await expect(
+			s.service.historyRange("open-work", {
+				from: "2026-10-30T11:00:00Z",
+				to: "2026-10-30T12:00:00Z",
+				step: "1h",
+			}),
+		).rejects.toMatchObject({ status: 404 });
+	});
+	it("returns one assessment whose status ignores the chart range", async () => {
+		const s = setup();
+		await s.service.compute("open-work", { requestKey: "a" });
+		const binding = {
+			metricId: "open-work",
+			comparator: "lte" as const,
+			target: { value: 0, unit: "items" },
+		};
+		const first = await s.service.kpi(binding, {
+			deadline: "2027-01-31T00:00:00Z",
+		});
+		await s.service.historyRange("open-work", {
+			from: "2026-10-30T00:00:00Z",
+			to: "2026-10-30T12:00:00Z",
+			step: "1h",
+		});
+		const second = await s.service.kpi(binding, {
+			deadline: "2027-01-31T00:00:00Z",
+		});
+		expect(first.assessment).toEqual(second.assessment);
+		expect(first.assessment).toMatchObject({ status: "on_track", value: 0 });
+		expect(first.trend?.buckets).toHaveLength(30);
+		expect(first.trend?.buckets.at(-1)).toMatchObject({
+			start: "2026-10-30T00:00:00.000Z",
+			status: "ok",
+		});
+		const missing = await s.service.kpi({ ...binding, metricId: "absent" });
+		expect(missing.assessment).toMatchObject({
+			status: "not_measured",
+			reason: "metric_unavailable",
+		});
+	});
 });
