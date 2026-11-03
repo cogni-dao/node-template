@@ -21,6 +21,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const navigation = vi.hoisted(() => ({
   params: new URLSearchParams(),
+  pathname: "/work",
+  itemId: undefined as string | undefined,
   hold: false,
   pending: false,
   autoSettle: true,
@@ -38,6 +40,8 @@ vi.mock("react", async (importOriginal) => {
 });
 vi.mock("next/navigation", () => ({
   useRouter: () => navigation.router,
+  usePathname: () => navigation.pathname,
+  useParams: () => navigation.itemId ? { id: navigation.itemId } : {},
   useSearchParams: () => {
     const routed = useContext(RouteParamsContext);
     if (navigation.autoSettle && navigation.params.toString() !== navigation.origin) navigation.pending = false;
@@ -57,7 +61,14 @@ vi.mock("@/app/(app)/work/_api/fetchWorkItems", () => ({
 }));
 
 import { fetchWorkItem, fetchWorkItems } from "@/app/(app)/work/_api/fetchWorkItems";
-import { WorkDashboardView } from "@/app/(app)/work/view";
+import { WorkDashboardView as Dashboard } from "@/app/(app)/work/view";
+import { WorkNavigationBoundary, useWorkNavigation } from "@/app/(app)/work/WorkNavigationBoundary";
+
+function WorkDashboardView({ selectedItemId }: { selectedItemId?: string } = {}) {
+  navigation.itemId = selectedItemId;
+  navigation.pathname = selectedItemId ? `/work/items/${selectedItemId}` : "/work";
+  return <WorkNavigationBoundary><Dashboard selectedItemId={selectedItemId} /></WorkNavigationBoundary>;
+}
 
 const RouteParamsContext = createContext<URLSearchParams | null>(null);
 
@@ -105,11 +116,17 @@ function routedMount(initialItemId?: string) {
     defaultOptions: { queries: { retry: false } },
   });
   let itemId = initialItemId;
-  const element = () => (
-    <QueryClientProvider client={client}>
-      <WorkDashboardView {...(itemId && { selectedItemId: itemId })} />
-    </QueryClientProvider>
-  );
+  const element = () => {
+    navigation.itemId = itemId;
+    navigation.pathname = itemId ? `/work/items/${itemId}` : "/work";
+    return (
+      <QueryClientProvider client={client}>
+        <WorkNavigationBoundary>
+          <Dashboard key={itemId ?? "list"} {...(itemId && { selectedItemId: itemId })} />
+        </WorkNavigationBoundary>
+      </QueryClientProvider>
+    );
+  };
   const result = render(element());
   return {
     ...result,
@@ -146,6 +163,8 @@ async function choosePageSize(value: string) {
 describe("Work Kanban", () => {
   beforeEach(() => {
     navigation.params = new URLSearchParams();
+    navigation.pathname = "/work";
+    navigation.itemId = undefined;
     navigation.hold = true;
     navigation.pending = false;
     navigation.autoSettle = true;
@@ -760,6 +779,114 @@ describe("Work Kanban", () => {
           ([params]) => !params.get("text") || !params.get("cursor"),
         ),
     ).toBe(true);
+  });
+
+  it.each(["open", "close"] as const)("preserves queued controls when %s replaces the leaf", async (direction) => {
+    navigation.autoSettle = false;
+    const route = routedMount(direction === "close" ? "task.0000" : undefined);
+    await screen.findByRole("button", { name: "task.0000: Work item 0" });
+    if (direction === "open") {
+      fireEvent.click(screen.getByRole("button", { name: "task.0000: Work item 0" }));
+    } else {
+      await screen.findByRole("button", { name: "Close detail" });
+      fireEvent.click(screen.getByRole("button", { name: "Close detail" }));
+    }
+    const first = direction === "open" ? vi.mocked(navigation.router.push).mock.lastCall?.[0] as string : lastReplacement();
+    fireEvent.change(screen.getByPlaceholderText(/Search id/), { target: { value: "queued" } });
+    fireEvent.click(screen.getByRole("button", { name: "Rank", exact: true }));
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Filter type" }));
+    await user.click(screen.getByRole("button", { name: "bug", exact: true }));
+    await user.keyboard("{Escape}");
+    await choosePageSize("25");
+    await user.click(screen.getByRole("button", { name: "Board columns" }));
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "done", exact: true }));
+    await user.keyboard("{Escape}");
+    fireEvent.click(screen.getByRole("button", { name: "Table", exact: true }));
+    await user.click(screen.getByRole("button", { name: "Columns" }));
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Rank" }));
+    await user.keyboard("{Escape}");
+    route.commit(first, false);
+    expect(screen.getByPlaceholderText(/Search id/)).toHaveValue("queued");
+    await user.click(screen.getByRole("button", { name: "Columns" }));
+    expect(screen.getByRole("menuitemcheckbox", { name: "Rank" })).toHaveAttribute("aria-checked", "false");
+    await user.keyboard("{Escape}");
+    route.settle();
+    const final = new URL(lastReplacement(), "https://example.com");
+    expect(final.pathname).toBe(direction === "open" ? "/work/items/task.0000" : "/work");
+    expect(final.searchParams.get("q")).toBe("queued");
+    expect(final.searchParams.get("view")).toBe("table");
+    expect(final.searchParams.get("sort")).toBe("rankScore");
+    expect(final.searchParams.get("type")).toBe("bug");
+    expect(final.searchParams.get("pageSize")).toBe("25");
+    expect(final.searchParams.get("columns")?.split(",")).toContain("done");
+  });
+
+  it.each(["open", "close"] as const)("drains queued selection after %s replaces the leaf", async (direction) => {
+    navigation.autoSettle = false;
+    const route = routedMount(direction === "close" ? "task.0000" : undefined);
+    await screen.findByRole("button", { name: "task.0002: Work item 2" });
+    if (direction === "open") {
+      fireEvent.click(screen.getByRole("button", { name: "task.0000: Work item 0" }));
+    } else {
+      await screen.findByRole("button", { name: "Close detail" });
+      fireEvent.click(screen.getByRole("button", { name: "Close detail" }));
+    }
+    const first = direction === "open" ? vi.mocked(navigation.router.push).mock.lastCall?.[0] as string : lastReplacement();
+    fireEvent.click(screen.getByRole("button", { name: "task.0002: Work item 2" }));
+    route.commit(first, false);
+    route.settle();
+    expect(vi.mocked(navigation.router.push).mock.lastCall?.[0]).toContain("/work/items/task.0002");
+  });
+
+  it("retains denied-storage history across leaf replacement but not owner remount", async () => {
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("denied"); });
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("denied"); });
+    vi.mocked(fetchWorkItems).mockResolvedValue({ items: fixture.slice(0, 1), pageInfo: { endCursor: "p2", hasMore: true } });
+    const route = routedMount();
+    await screen.findByRole("button", { name: "task.0000: Work item 0" });
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    route.commit(lastReplacement());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Previous" })).toBeEnabled());
+    fireEvent.click(await screen.findByRole("button", { name: "task.0000: Work item 0" }));
+    route.commit(vi.mocked(navigation.router.push).mock.lastCall?.[0] as string);
+    expect(screen.getByRole("button", { name: "Previous" })).toBeEnabled();
+    route.unmount();
+    navigation.pending = false;
+    const fresh = routedMount("task.0000");
+    expect(screen.getByRole("button", { name: "Previous" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Restart" })).toBeEnabled();
+    fresh.unmount();
+  });
+
+  it("keeps the owner on supported routes and creates a fresh one after leaving", () => {
+    let owner: ReturnType<typeof useWorkNavigation>["navigation"] | undefined;
+    function Probe() { owner = useWorkNavigation().navigation; return null; }
+    const element = () => <WorkNavigationBoundary><Probe /></WorkNavigationBoundary>;
+    const view = render(element());
+    const original = owner;
+    navigation.pathname = "/work/items/task.0000";
+    navigation.itemId = "task.0000";
+    view.rerender(element());
+    expect(owner).toBe(original);
+    navigation.pathname = "/work/other";
+    view.rerender(<WorkNavigationBoundary><span>Other</span></WorkNavigationBoundary>);
+    navigation.pathname = "/work";
+    navigation.itemId = undefined;
+    view.rerender(element());
+    expect(owner).not.toBe(original);
+  });
+
+  it("composes numeric bounds changed in the same tick", async () => {
+    navigation.autoSettle = false;
+    mount();
+    await userEvent.click(screen.getByRole("button", { name: "Filter rank" }));
+    act(() => {
+      fireEvent.change(screen.getByRole("spinbutton", { name: "Rank minimum" }), { target: { value: "-2" } });
+      fireEvent.change(screen.getByRole("spinbutton", { name: "Rank maximum" }), { target: { value: "5" } });
+    });
+    expect(screen.getByRole("spinbutton", { name: "Rank minimum" })).toHaveValue(-2);
+    expect(screen.getByRole("spinbutton", { name: "Rank maximum" })).toHaveValue(5);
   });
 
   it("holds the pager guard across rerenders and mixed same-tick actions", async () => {

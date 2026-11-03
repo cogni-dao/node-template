@@ -65,12 +65,17 @@ export function NumberRangeFilter<TData, TValue>({
               placeholder={index === 0 ? "Min" : "Max"}
               value={range[index] ?? ""}
               onChange={(event) => {
-                const next = [...range];
-                next[index] =
-                  event.target.value === ""
-                    ? undefined
-                    : event.target.valueAsNumber;
-                column.setFilterValue(next);
+                const value = event.target.valueAsNumber;
+                const bound = event.target.value === "" || !Number.isFinite(value)
+                  ? undefined
+                  : value;
+                column.setFilterValue((previous: [number | undefined, number | undefined] | undefined) => {
+                  const next: [number | undefined, number | undefined] = previous
+                    ? [...previous]
+                    : [undefined, undefined];
+                  next[index] = bound;
+                  return next;
+                });
               }}
             />
           ))}

@@ -49,13 +49,13 @@ import {
   getFacetedUniqueValues,
   type SortingState,
   useReactTable,
-  type VisibilityState,
 } from "@tanstack/react-table";
 import { Columns3, List, Settings2 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button, Input } from "@/components";
 
+import { type WorkIntent, useWorkNavigation } from "./WorkNavigationBoundary";
 import { fetchWorkItem, fetchWorkItems } from "./_api/fetchWorkItems";
 import { columns, WorkFacetControls, WorkRankControls } from "./_components/columns";
 import { WorkItemDetail } from "./_components/WorkItemDetail";
@@ -120,12 +120,6 @@ function readColumns(params: URLSearchParams): string[] {
         );
 }
 
-type WorkIntent = {
-  params: URLSearchParams;
-  itemId: string | undefined;
-  method: "push" | "replace";
-  resetHistory?: boolean;
-};
 function intentHref(intent: WorkIntent): string {
   return intent.itemId
     ? workItemHref(intent.itemId, intent.params)
@@ -151,40 +145,16 @@ export function WorkDashboardView({
     () => readSorting(new URLSearchParams(committedSearch)),
     [committedSearch],
   );
-  const [desired, setDesired] = useState<WorkIntent>(() => ({
-    params: new URLSearchParams(committedSearch),
-    itemId: selectedItemId,
-    method: "replace",
-  }));
+  const {
+    desired, setDesired, columnVisibility, setColumnVisibility, history, setHistory,
+    isNavigating, startNavigation, settledOperation, setSettledOperation,
+    navigationLocked, setNavigationLocked, navigation,
+  } = useWorkNavigation();
   const sorting = useMemo(() => readSorting(desired.params), [desired]);
   const columnFilters = useMemo(() => readFilters(desired.params), [desired]);
   const globalFilter = desired.params.get("q") ?? "";
   const visibleStatuses = readColumns(desired.params);
   const boardView = desired.params.get("view") !== "table";
-  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
-  const [history, setHistory] = useState<string[]>([]);
-  const [isNavigating, startNavigation] = useTransition();
-  const [settledOperation, setSettledOperation] = useState(0);
-  const [navigationLocked, setNavigationLocked] = useState(false);
-  // One owner: mounted history describes only the observed page. Desired controls
-  // advance synchronously, while at most one router operation is outstanding.
-  const navigation = useRef<{
-    desired: WorkIntent;
-    committed: {
-      href: string;
-      key: string;
-      cursor: string;
-      stack: string[];
-    } | null;
-    sequence: number;
-    flight: {
-      id: number;
-      to: string;
-      stack: string[] | undefined;
-      failed: boolean;
-      committed: boolean;
-    } | null;
-  }>({ desired, committed: null, sequence: 0, flight: null });
   const pageSize = Number(searchParams.get("pageSize")) || 10;
   const cursor = searchParams.get("cursor") ?? "";
   const selectedItemQuery = useQuery({
@@ -263,7 +233,7 @@ export function WorkDashboardView({
         }
       });
     },
-    [isNavigating, router],
+    [isNavigating, router, navigation, setNavigationLocked, setSettledOperation, startNavigation],
   );
 
   useEffect(() => {
@@ -352,6 +322,10 @@ export function WorkDashboardView({
     settledOperation,
     selectedItemId,
     dispatchNavigation,
+    navigation,
+    setHistory,
+    setDesired,
+    setNavigationLocked,
   ]);
 
   const editIntent = useCallback(
@@ -365,7 +339,7 @@ export function WorkDashboardView({
       setDesired(owner.desired);
       dispatchNavigation(owner.desired);
     },
-    [dispatchNavigation],
+    [dispatchNavigation, navigation, setDesired],
   );
 
   const editList = (
