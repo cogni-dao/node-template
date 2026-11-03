@@ -298,9 +298,10 @@ describe("work.convergence@1 over Dolt main history", () => {
 			window,
 			read,
 		);
+		// Main history younger than the window is building, not a read failure.
 		expect(uncovered).toMatchObject({
 			complete: false,
-			reason: "history_unavailable",
+			reason: "insufficient_history",
 		});
 		const failing = await readWorkConvergence(
 			fakeSql((t) => {

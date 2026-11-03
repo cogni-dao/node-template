@@ -128,6 +128,32 @@ describe("assessKpi first-match rules", () => {
 		}
 		expect(seen.size).toBe(10);
 	});
+	it("builds, not fails, while source history is younger than the window", () => {
+		const young = {
+			...reading(null, "2026-11-02T11:30:00.000Z", "unavailable"),
+			reason: "insufficient_history",
+		};
+		expect(
+			assessKpi(
+				input({ latestAttempt: young, lastGood: null, firstGood: null }),
+			),
+		).toMatchObject({
+			status: "building",
+			reason: "insufficient_history",
+			value: null,
+			observationId: null,
+		});
+		const broken = { ...young, reason: "history_unavailable" };
+		expect(
+			assessKpi(
+				input({ latestAttempt: broken, lastGood: null, firstGood: null }),
+			),
+		).toMatchObject({
+			status: "failing",
+			reason: "history_unavailable",
+			value: null,
+		});
+	});
 	it("keeps the last good value visible while failing and never reports zero for unknown", () => {
 		const a = assessKpi(
 			input({

@@ -159,7 +159,7 @@ export async function readWorkValidatedHistory(
 			to: string;
 			toAt: string | null;
 	  }
-	| { ok: false }
+	| { ok: false; reason: "insufficient_history" | "history_unavailable" }
 > {
 	try {
 		const [from, to] = await read(async (signal) => {
@@ -175,8 +175,11 @@ export async function readWorkValidatedHistory(
 		});
 		const fromHash = String(from?.commit_hash ?? "");
 		const toHash = String(to?.commit_hash ?? "");
-		// No main commit at or before an edge: history does not cover the window.
-		if (!COMMIT.test(fromHash) || !COMMIT.test(toHash)) return { ok: false };
+		// No main commit at or before an edge: main history starts inside (or
+		// after) the window. A young node is building history, not failing.
+		if (!from || !to) return { ok: false, reason: "insufficient_history" };
+		if (!COMMIT.test(fromHash) || !COMMIT.test(toHash))
+			return { ok: false, reason: "history_unavailable" };
 		const validated =
 			fromHash === toHash
 				? 0
@@ -191,7 +194,8 @@ export async function readWorkValidatedHistory(
 							)
 						)[0]?.validated,
 					);
-		if (!Number.isInteger(validated) || validated < 0) return { ok: false };
+		if (!Number.isInteger(validated) || validated < 0)
+			return { ok: false, reason: "history_unavailable" };
 		return {
 			ok: true,
 			validated,
@@ -209,7 +213,7 @@ export async function readWorkValidatedHistory(
 				error.name === "TimeoutError")
 		)
 			throw error;
-		return { ok: false };
+		return { ok: false, reason: "history_unavailable" };
 	}
 }
 
@@ -267,7 +271,7 @@ export async function readWorkConvergence(
 	);
 	if (output === "created") return sample(created, true);
 	const history = await readWorkValidatedHistory(sql, { start, end }, read);
-	if (!history.ok) return sample(0, false, "history_unavailable");
+	if (!history.ok) return sample(0, false, history.reason);
 	evidenceRefs.push(
 		`dolt:main:${history.from}..${history.to}${history.toAt ? `@${history.toAt}` : ""}`,
 		"node:work_items:validated:dolt_diff:done+deploy_verified",

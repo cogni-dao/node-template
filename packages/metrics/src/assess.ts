@@ -255,15 +255,18 @@ export function assessKpi(input: KpiAssessmentInput): KpiAssessment {
 		input.lastGood?.status === "ok" && input.lastGood.value !== null
 			? input.lastGood
 			: null;
-	// 3. building
+	// 3. building: the series is younger than the KPI window, or the source
+	// itself reports that its history does not yet cover the window.
+	const latest = input.latestAttempt;
 	if (
-		input.firstGood &&
-		now.getTime() - Date.parse(input.firstGood.window.end) <
-			metric.windowSeconds * 1000
+		(input.firstGood &&
+			now.getTime() - Date.parse(input.firstGood.window.end) <
+				metric.windowSeconds * 1000) ||
+		(latest?.status === "unavailable" &&
+			latest.reason === "insufficient_history")
 	)
 		return result("building", "insufficient_history", lastGood);
 	// 4. failing
-	const latest = input.latestAttempt;
 	if (latest && (latest.status === "error" || latest.status === "unavailable"))
 		return result("failing", toKpiReason(latest.reason), lastGood);
 	// 5. delayed: no ok reading, an old one, or stale source evidence.
