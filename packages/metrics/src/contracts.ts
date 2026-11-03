@@ -196,6 +196,7 @@ export const KpiReasonSchema = z.enum([
 	"metric_authority_unavailable",
 	"insufficient_history",
 	"zero_denominator",
+	"history_unavailable",
 	"source_failed",
 	"source_timeout",
 	"incomplete_or_invalid_source",
