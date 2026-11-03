@@ -43,8 +43,8 @@ import {
   McpToolSource,
   parseMcpConfigFromEnv,
 } from "@cogni/langgraph-graphs";
-import { trace } from "@opentelemetry/api";
 import { createMemoryPersistence } from "@cogni/langgraph-graphs/inproc";
+import { trace } from "@opentelemetry/api";
 import {
   type CompletionStreamFn,
   createLangGraphDevClient,
@@ -52,8 +52,8 @@ import {
   LangGraphDevProvider,
   LangGraphInProcProvider,
 } from "@/adapters/server";
-import { resolveNodeSourceContext } from "@/adapters/server/ai/langgraph/inproc.provider";
 import { runInScope } from "@/adapters/server/ai/execution-scope";
+import { resolveNodeSourceContext } from "@/adapters/server/ai/langgraph/inproc.provider";
 import type {
   AiExecutionErrorCode,
   BillingContext,
@@ -73,7 +73,9 @@ import {
 } from "./container";
 
 // Working memory is process-shared; each invocation owns its checkpoint saver.
-let memoryStore: Promise<Awaited<ReturnType<typeof createMemoryPersistence>>["store"]> | undefined;
+let memoryStore:
+  | Promise<Awaited<ReturnType<typeof createMemoryPersistence>>["store"]>
+  | undefined;
 async function getCogniPersistence() {
   memoryStore ??= createMemoryPersistence().then(({ store }) => store);
   return createMemoryPersistence(await memoryStore);
@@ -314,6 +316,7 @@ export function runGraphWithScope(params: {
   return runInScope(
     {
       billing,
+      modelRef: req.modelRef,
       llmService,
       usageSource,
       ...(ctx?.actorUserId ? { actorUserId: ctx.actorUserId } : {}),
@@ -550,14 +553,15 @@ function createInProcProvider(
     container.toolSource,
     () => cache.getSource(),
     [...CORE_TOOL_BUNDLE],
-    async (required) => resolveNodeSourceContext(
-      required,
-      container.nodeId,
-      serverEnv().APP_BASE_URL,
-      getNodeMission(),
-      serverEnv().APP_BUILD_SHA,
-      container.knowledgeStorePort,
-    ),
+    async (required) =>
+      resolveNodeSourceContext(
+        required,
+        container.nodeId,
+        serverEnv().APP_BASE_URL,
+        getNodeMission(),
+        serverEnv().APP_BUILD_SHA,
+        container.knowledgeStorePort,
+      ),
     getCogniPersistence,
   );
 }

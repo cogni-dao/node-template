@@ -21,6 +21,8 @@ import type {
 } from "@cogni/ai-tools";
 import type { UserId } from "@cogni/ids";
 import { toUserId } from "@cogni/ids";
+import { NODE_LANGGRAPH_CATALOG } from "@cogni/langgraph-graphs";
+import { chatCompletionsContract } from "@cogni/node-contracts";
 import type { ScheduleUserPort } from "@cogni/scheduler-core";
 
 import { getExecutionScope } from "@/adapters/server";
@@ -43,7 +45,7 @@ function resolveUserId(): UserId {
   if (!scope.actorUserId) {
     throw new Error(
       "ScheduleCapability: actorUserId not set in ExecutionScope. " +
-        "Schedule tools must run within an authenticated graph execution."
+        "Schedule tools must run within an authenticated graph execution.",
     );
   }
   return toUserId(scope.actorUserId);
@@ -82,7 +84,7 @@ function toScheduleInfo(spec: {
  * not a system principal.
  */
 export function createScheduleCapability(
-  deps: ScheduleCapabilityDeps
+  deps: ScheduleCapabilityDeps,
 ): ScheduleCapability {
   const { scheduleManager, getOrCreateBillingAccountId } = deps;
 
@@ -95,6 +97,23 @@ export function createScheduleCapability(
 
     async create(input: ScheduleCreateParams): Promise<ScheduleInfo> {
       const userId = resolveUserId();
+      const graphName = input.graphId.startsWith("langgraph:")
+        ? input.graphId.slice("langgraph:".length)
+        : "";
+      if (!Object.hasOwn(NODE_LANGGRAPH_CATALOG, graphName)) {
+        throw new Error(
+          "ScheduleCapability: workflow is not registered on this node",
+        );
+      }
+      const messages = chatCompletionsContract.input.shape.messages
+        .min(1)
+        .parse(input.input.messages);
+      const modelRef = getExecutionScope().modelRef;
+      if (!modelRef) {
+        throw new Error(
+          "ScheduleCapability: host model reference is unavailable",
+        );
+      }
       const billingAccountId = await getOrCreateBillingAccountId(userId);
       const spec = await scheduleManager.createSchedule(
         userId,
@@ -102,23 +121,32 @@ export function createScheduleCapability(
         {
           nodeId: getNodeId(),
           graphId: input.graphId,
-          input: input.input,
+          input: { ...input.input, messages, modelRef },
           cron: input.cron,
           timezone: input.timezone,
-        }
+        },
       );
       return toScheduleInfo(spec);
     },
 
     async update(
       scheduleId: string,
-      patch: ScheduleUpdateParams
+      patch: ScheduleUpdateParams,
     ): Promise<ScheduleInfo> {
       const userId = resolveUserId();
+      if (
+        patch.input !== undefined ||
+        patch.cron !== undefined ||
+        patch.timezone !== undefined
+      ) {
+        throw new Error(
+          "ScheduleCapability: configuration updates are unavailable until Temporal propagation is supported",
+        );
+      }
       const spec = await scheduleManager.updateSchedule(
         userId,
         scheduleId,
-        patch
+        patch,
       );
       return toScheduleInfo(spec);
     },
@@ -130,7 +158,7 @@ export function createScheduleCapability(
 
     async setEnabled(
       scheduleId: string,
-      enabled: boolean
+      enabled: boolean,
     ): Promise<ScheduleInfo> {
       const userId = resolveUserId();
       const spec = await scheduleManager.updateSchedule(userId, scheduleId, {
