@@ -646,7 +646,6 @@ export function WorkDashboardView({
           dense: true,
         }}
         tableClassNames={{
-          base: "min-w-[1110px]",
           bodyRow: "cursor-pointer",
         }}
         emptyMessage="No work items found."
