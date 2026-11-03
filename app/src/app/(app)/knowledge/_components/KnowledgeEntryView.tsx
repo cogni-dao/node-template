@@ -17,7 +17,7 @@ import { KpiBindingsSchema } from "@cogni-dao/metrics/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
-import { GoalsProgress, MetricEvidence } from "@/features/goals";
+import { GoalsBoard, MetricEvidence } from "@/features/goals";
 
 import { fetchKnowledgeEntry } from "../_api/fetchKnowledgeEntry";
 import { CopyLinkButton } from "./CopyLinkButton";
@@ -84,7 +84,7 @@ export function KnowledgeEntryView({ id }: { readonly id: string }) {
 					</div>
 
 					{query.data.entryType === "goal" && (
-						<GoalsProgress goalId={query.data.id} />
+						<GoalsBoard goalId={query.data.id} />
 					)}
 					{query.data.metricSpec && <MetricEvidence id={query.data.id} />}
 					{query.data.entryType === "hypothesis" &&

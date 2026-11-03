@@ -12,20 +12,24 @@
  * Invariants: Protected route (server-side auth check); SSR_SEEDS_REACT_QUERY
  *   (loaders return the exact wire shape the client fetchers do, so
  *   initialData === post-hydration refetch — no hydration shift). Graph data is
- *   only pre-read on a `?mode=graph` deep-link; otherwise it stays deferred.
+ *   only pre-read on a `?mode=graph` deep-link; goal progress only on a
+ *   `?mode=goals` deep-link (parsed with the shared GoalsProgressSchema, so a
+ *   shape drift degrades to a client fetch instead of a hydration mismatch).
  * Side-effects: IO (Doltgres reads via container port)
  * Links: [KnowledgeDashboardView](./view.tsx), ./_server/loaders.ts, docs/spec/knowledge-syntropy.md
  * @public
  */
 
+import { GoalsProgressSchema } from "@cogni-dao/metrics/contracts";
 import { redirect } from "next/navigation";
+
 import { loadGoalsProgress } from "@/app/_facades/metrics.server";
 import { getContainer } from "@/bootstrap/container";
 import { getServerSessionUser } from "@/lib/auth/server";
 import {
-	loadDomains,
-	loadKnowledgeGraphCached,
-	loadKnowledgeListCached,
+  loadDomains,
+  loadKnowledgeGraphCached,
+  loadKnowledgeListCached,
 } from "./_server/loaders";
 import { KnowledgeDashboardView } from "./view";
 
@@ -35,46 +39,53 @@ export const runtime = "nodejs";
 // A failed/unconfigured store must not 500 the page — degrade to a client
 // fetch (which now shows an honest skeleton, never "0 entries").
 async function safe<T>(p: Promise<T>): Promise<T | undefined> {
-	try {
-		return await p;
-	} catch {
-		return undefined;
-	}
+  try {
+    return await p;
+  } catch {
+    return undefined;
+  }
 }
 
 export default async function KnowledgePage({
-	searchParams,
+  searchParams,
 }: {
-	searchParams: Promise<{ mode?: string }>;
+  searchParams: Promise<{ mode?: string }>;
 }) {
-	const user = await getServerSessionUser();
-	if (!user) {
-		redirect("/");
-	}
+  const user = await getServerSessionUser();
+  if (!user) {
+    redirect("/");
+  }
 
-	const port = getContainer().knowledgeStorePort;
-	const initialGoals = await safe(loadGoalsProgress());
-	const { mode } = await searchParams;
+  const port = getContainer().knowledgeStorePort;
+  const { mode } = await searchParams;
 
-	const [initialList, initialDomains, initialGraph] = port
-		? await Promise.all([
-				// limit=500 matches the browse client fetcher (LIST_LIMIT_PARITY).
-				// Cached reads keyed by store revision (bug.5547): repeat refreshes are
-				// cache hits, not full re-materializations.
-				safe(loadKnowledgeListCached(port, { limit: 500 })),
-				safe(loadDomains(port)),
-				mode === "graph"
-					? safe(loadKnowledgeGraphCached(port))
-					: Promise.resolve(undefined),
-			])
-		: [undefined, undefined, undefined];
+  const goalsSeed =
+    mode === "goals"
+      ? safe(loadGoalsProgress()).then(
+          (d) => GoalsProgressSchema.safeParse(d).data
+        )
+      : Promise.resolve(undefined);
 
-	return (
-		<KnowledgeDashboardView
-			initialGoals={initialGoals}
-			initialList={initialList}
-			initialDomains={initialDomains}
-			initialGraph={initialGraph}
-		/>
-	);
+  const [initialList, initialDomains, initialGraph] = port
+    ? await Promise.all([
+        // limit=500 matches the browse client fetcher (LIST_LIMIT_PARITY).
+        // Cached reads keyed by store revision (bug.5547): repeat refreshes are
+        // cache hits, not full re-materializations.
+        safe(loadKnowledgeListCached(port, { limit: 500 })),
+        safe(loadDomains(port)),
+        mode === "graph"
+          ? safe(loadKnowledgeGraphCached(port))
+          : Promise.resolve(undefined),
+      ])
+    : [undefined, undefined, undefined];
+  const initialGoals = await goalsSeed;
+
+  return (
+    <KnowledgeDashboardView
+      initialGoals={initialGoals}
+      initialList={initialList}
+      initialDomains={initialDomains}
+      initialGraph={initialGraph}
+    />
+  );
 }
