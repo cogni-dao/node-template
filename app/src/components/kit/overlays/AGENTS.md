@@ -15,7 +15,7 @@ Reusable kit components for overlay UI patterns including dialogs, modals, sheet
 ## Pointers
 
 - [Parent: Kit Components](../../../AGENTS.md)
-- [Frontend design guide](https://node-template.cognidao.org/knowledge/frontend-design-guide)
+- [Frontend development guide](https://node-template.cognidao.org/knowledge/frontend-development)
 - **Related:** [../data-display/](../data-display/) (ScrollArea used in Dialog)
 
 ## Boundaries

@@ -8,7 +8,7 @@
  * Invariants: All variants use design tokens; factories return valid Tailwind class strings.
  * Side-effects: none
  * Notes: Based on reference repo styling with modern focus states.
- * Links: https://node-template.cognidao.org/knowledge/frontend-design-guide
+ * Links: https://node-template.cognidao.org/knowledge/frontend-development
  * @public
  */
 

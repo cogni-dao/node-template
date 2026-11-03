@@ -15,7 +15,7 @@ Presentational UI components for USDC payment flow. Displays payment button, mod
 
 - [Root AGENTS.md](../../../../../../AGENTS.md)
 - [Payments Design](../../../../../../docs/spec/payments-design.md)
-- [Frontend design guide](https://node-template.cognidao.org/knowledge/frontend-design-guide)
+- [Frontend development guide](https://node-template.cognidao.org/knowledge/frontend-development)
 
 ## Boundaries
 

@@ -14,7 +14,7 @@ Domain-split CVA styling factories organized by component type for maintainable 
 ## Pointers
 
 - [Parent styles AGENTS.md](../AGENTS.md)
-- [Frontend design guide](https://node-template.cognidao.org/knowledge/frontend-design-guide)
+- [Frontend development guide](https://node-template.cognidao.org/knowledge/frontend-development)
 
 ## Boundaries
 

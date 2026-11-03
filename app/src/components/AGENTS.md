@@ -15,7 +15,7 @@ Shared presentational UI. No business logic, no data fetching. Design tokens and
 ## Pointers
 
 - [Architecture](../../../../docs/spec/architecture.md)
-- [Frontend design guide](https://node-template.cognidao.org/knowledge/frontend-design-guide)
+- [Frontend development guide](https://node-template.cognidao.org/knowledge/frontend-development)
 
 ## Boundaries
 
@@ -48,7 +48,7 @@ Shared presentational UI. No business logic, no data fetching. Design tokens and
 
 ## Usage
 
-**IMPORTANT: Before changing files in this directory, load the `frontend-design` skill (it reads `GET /api/v1/knowledge/frontend-design-guide`).** Human view: [frontend design guide](https://node-template.cognidao.org/knowledge/frontend-design-guide)
+**IMPORTANT: Before changing files in this directory, load the `frontend-development` skill (it reads `GET /api/v1/knowledge/frontend-development`).** Human view: [frontend development guide](https://node-template.cognidao.org/knowledge/frontend-development)
 
 Minimal local commands:
 
@@ -77,7 +77,7 @@ src/components/
   index.ts               # curated barrel: kit + @cogni/node-ui-kit primitives
 ```
 
-- Placement, styling, mobile-first, and performance rules live in the [frontend design guide](https://node-template.cognidao.org/knowledge/frontend-design-guide). Read it before editing; do not copy its rules here.
+- Placement, styling, mobile-first, and performance rules live in the [frontend development guide](https://node-template.cognidao.org/knowledge/frontend-development). Read it before editing; do not copy its rules here.
 - Shared shadcn/Radix/reui primitives come from `@cogni/node-ui-kit` (baseline, read-only for forks) and are re-exported through `index.ts`.
 - **Testing:** Snapshot widgets and critical primitives. No network. Client-only tests isolate interactivity.
 
@@ -94,4 +94,4 @@ src/components/
 ## Notes
 
 - Each file: short header with Purpose, Scope, Invariants. No inline commentary drift.
-- Implementation workflows live in the [frontend design guide](https://node-template.cognidao.org/knowledge/frontend-design-guide).
+- Implementation workflows live in the [frontend development guide](https://node-template.cognidao.org/knowledge/frontend-development).

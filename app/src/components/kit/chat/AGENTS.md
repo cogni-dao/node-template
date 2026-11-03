@@ -16,7 +16,7 @@ Reusable kit wrappers for chat UI components with vendor isolation and compositi
 
 - [Parent: Kit Components](../../../AGENTS.md)
 - [Chat Feature](../../../features/ai/chat/AGENTS.md)
-- [Frontend design guide](https://node-template.cognidao.org/knowledge/frontend-design-guide)
+- [Frontend development guide](https://node-template.cognidao.org/knowledge/frontend-development)
 - **Related:** [../../vendor/assistant-ui/](../../vendor/assistant-ui/) (vendor primitives)
 
 ## Boundaries
