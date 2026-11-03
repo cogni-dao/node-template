@@ -194,7 +194,8 @@ export const columns = [
     header: ({ column }) => (
       <DataGridColumnHeader column={column} title="Est" />
     ),
-    size: 55,
+    size: 70,
+    minSize: 70,
     cell: (info) => {
       const v = info.getValue();
       return (
