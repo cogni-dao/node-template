@@ -129,6 +129,10 @@ describe("Work Kanban", () => {
       name: "task.0000: Work item 0",
     });
     const card = open.parentElement as HTMLElement;
+    expect(card).toHaveAttribute("data-slot", "kanban-item");
+    expect(card).not.toHaveAttribute("role", "button");
+    expect(card).not.toHaveAttribute("tabindex");
+    expect(card.tabIndex).toBe(-1);
     expect(within(card).getAllByText(/^Rank /)).toHaveLength(1);
     expect(within(card).queryByText("P2")).not.toBeInTheDocument();
     expect(within(card).getByText("example")).toBeInTheDocument();

@@ -15,7 +15,6 @@ import {
   KanbanBoard,
   KanbanColumn,
   KanbanColumnContent,
-  KanbanItem,
 } from "./reui-kanban";
 import { StatusPill, TypeIcon } from "./work-item-icons";
 
@@ -99,9 +98,9 @@ export function WorkKanban({
                       ? updated.toISOString()
                       : undefined;
                   return (
-                    <KanbanItem
+                    <div
                       key={item.id}
-                      value={item.id}
+                      data-slot="kanban-item"
                       className="rounded-lg border bg-card shadow-xs"
                     >
                       <button
@@ -152,7 +151,7 @@ export function WorkKanban({
                           Updated <RelativeTime iso={updatedIso} />
                         </span>
                       </div>
-                    </KanbanItem>
+                    </div>
                   );
                 })
               )}
