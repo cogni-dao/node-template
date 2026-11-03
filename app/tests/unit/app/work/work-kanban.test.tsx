@@ -7,6 +7,7 @@ import "@testing-library/jest-dom/vitest";
 import type { WorkItemDto } from "@cogni/node-contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -19,11 +20,26 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const navigation = vi.hoisted(() => ({
   params: new URLSearchParams(),
+  hold: false,
+  pending: false,
+  origin: "",
   router: { push: vi.fn(), replace: vi.fn() },
 }));
+vi.mock("react", async (importOriginal) => {
+  const react = await importOriginal<typeof import("react")>();
+  return { ...react, useTransition: () => {
+    const actual = react.useTransition();
+    return navigation.hold
+      ? [navigation.pending, (action: () => void) => { navigation.origin = navigation.params.toString(); navigation.pending = true; action(); }] as const
+      : actual;
+  } };
+});
 vi.mock("next/navigation", () => ({
   useRouter: () => navigation.router,
-  useSearchParams: () => navigation.params,
+  useSearchParams: () => {
+    if (navigation.params.toString() !== navigation.origin) navigation.pending = false;
+    return navigation.params;
+  },
 }));
 vi.mock("@/components", async () => ({
   ...(await import("@cogni/node-ui-kit/shadcn/button")),
@@ -81,6 +97,9 @@ function mount() {
 describe("Work Kanban", () => {
   beforeEach(() => {
     navigation.params = new URLSearchParams();
+    navigation.hold = true;
+    navigation.pending = false;
+    navigation.origin = "";
     sessionStorage.clear();
     vi.clearAllMocks();
     vi.mocked(fetchWorkItems).mockResolvedValue({
@@ -328,6 +347,85 @@ describe("Work Kanban", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "task.0020: Work item 20" })).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Previous" }));
     expect(navigation.router.replace).toHaveBeenLastCalledWith("/work", { scroll: false });
+  });
+
+  it("serializes rapid paging and persists only committed predecessors", async () => {
+    navigation.hold = true;
+    vi.mocked(fetchWorkItems).mockImplementation(async (params) => ({
+      items: [], pageInfo: { endCursor: params.get("cursor") === "p2" ? "p3" : "p2", hasMore: true },
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const element = () => <QueryClientProvider client={client}><WorkDashboardView /></QueryClientProvider>;
+    const result = render(element());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Next" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(sessionStorage.getItem("work-page-history")).toBeNull();
+    navigation.pending = false;
+    navigation.params = new URLSearchParams("cursor=p2");
+    result.rerender(element());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Next" })).toBeEnabled());
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Next" }));
+      fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    });
+    expect(navigation.router.replace).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(sessionStorage.getItem("work-page-history") as string).history).toEqual([""]);
+    navigation.pending = false;
+    navigation.params = new URLSearchParams("cursor=p3");
+    result.rerender(element());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Previous" })).toBeEnabled());
+    expect(JSON.parse(sessionStorage.getItem("work-page-history") as string).history).toEqual(["", "p2"]);
+    fireEvent.click(screen.getByRole("button", { name: "Previous" }));
+    expect(navigation.router.replace).toHaveBeenLastCalledWith("/work?cursor=p2", { scroll: false });
+    navigation.pending = false;
+    navigation.params = new URLSearchParams("cursor=p2");
+    result.rerender(element());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Previous" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Previous" }));
+    expect(navigation.router.replace).toHaveBeenLastCalledWith("/work", { scroll: false });
+  });
+
+  it.each(["filter", "sort", "page size"])("blocks paging during a pending %s replacement", async (change) => {
+    navigation.hold = true;
+    navigation.params = new URLSearchParams("cursor=p2");
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const element = () => <QueryClientProvider client={client}><WorkDashboardView /></QueryClientProvider>;
+    const result = render(element());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Next" })).toBeEnabled());
+    if (change === "filter") {
+      fireEvent.change(screen.getByPlaceholderText(/Search id/), { target: { value: "target" } });
+    } else if (change === "sort") {
+      fireEvent.click(screen.getByRole("button", { name: /Rank/ }));
+    } else {
+      Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
+      fireEvent.keyDown(screen.getByRole("combobox", { name: "Items per page" }), { key: "Enter" });
+      await userEvent.setup().click(screen.getByRole("option", { name: "25" }));
+    }
+    const destination = vi.mocked(navigation.router.replace).mock.lastCall?.[0] as string;
+    const calls = vi.mocked(navigation.router.replace).mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(navigation.router.replace).toHaveBeenCalledTimes(calls);
+    navigation.pending = false;
+    navigation.params = new URL(destination, "https://example.com").searchParams;
+    result.rerender(element());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Next" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(vi.mocked(navigation.router.replace).mock.calls.length).toBe(calls + 1);
+  });
+
+  it("recovers after an interrupted transition without inventing history", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const element = () => <QueryClientProvider client={client}><WorkDashboardView /></QueryClientProvider>;
+    const result = render(element());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Next" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
+    navigation.pending = false;
+    result.rerender(element());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Next" })).toBeEnabled());
+    expect(sessionStorage.getItem("work-page-history")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(navigation.router.replace).toHaveBeenCalledTimes(2);
   });
 
   it("bounds stored predecessors after 45 pages and restores only the current page", async () => {

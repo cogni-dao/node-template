@@ -53,7 +53,7 @@ import {
 } from "@tanstack/react-table";
 import { Columns3, List, Settings2 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { Button, Input } from "@/components";
 
 import { fetchWorkItem, fetchWorkItems } from "./_api/fetchWorkItems";
@@ -136,6 +136,15 @@ export function WorkDashboardView({
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
   const [history, setHistory] = useState<string[]>([]);
   const currentHistory = useRef<{ key: string; cursor: string } | null>(null);
+  const [isNavigating, startNavigation] = useTransition();
+  const pendingNavigation = useRef<{
+    from: string;
+    to: string;
+    history: { key: string; cursor: string; stack: string[] } | undefined;
+    observedPending: boolean;
+  } | null>(null);
+  const [navigationLocked, setNavigationLocked] = useState(false);
+  const committedSearch = searchParams.toString();
   const [visibleStatuses, setVisibleStatuses] = useState<string[]>(() => {
     const param = searchParams.get("columns");
     return param === null
@@ -179,6 +188,26 @@ export function WorkDashboardView({
     return `work-page-history:${p}`;
   }, [listParams]);
   useEffect(() => {
+    const pending = pendingNavigation.current;
+    if (pending) {
+      if (isNavigating) pending.observedPending = true;
+      if (committedSearch === pending.to && committedSearch !== pending.from) {
+        if (pending.history) {
+          const { key, cursor: destination, stack } = pending.history;
+          currentHistory.current = { key, cursor: destination };
+          setHistory(stack);
+          try {
+            sessionStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify({ key, cursor: destination, history: stack }));
+          } catch { /* Storage is optional. */ }
+        }
+        pendingNavigation.current = null;
+        setNavigationLocked(false);
+      } else if (!isNavigating && pending.observedPending) {
+        // An interrupted or failed transition must not leave the pager locked.
+        pendingNavigation.current = null;
+        setNavigationLocked(false);
+      }
+    }
     if (currentHistory.current?.key !== historyKey || currentHistory.current.cursor !== cursor) {
       let stack: string[] = [];
       try {
@@ -196,7 +225,7 @@ export function WorkDashboardView({
       currentHistory.current = { key: historyKey, cursor };
       setHistory(stack);
     }
-  }, [historyKey, cursor]);
+  }, [historyKey, cursor, committedSearch, isNavigating]);
   useEffect(() => {
     const param = searchParams.get("columns");
     setVisibleStatuses(
@@ -217,21 +246,27 @@ export function WorkDashboardView({
     staleTime: 30_000,
   });
   const items = data?.items ?? EMPTY_ITEMS;
-  const changePage = (next: string, stack: string[]) => {
-    const bounded = stack.slice(-20);
-    currentHistory.current = { key: historyKey, cursor: next };
-    setHistory(bounded);
+  const navigate = useCallback((href: string, history?: { key: string; cursor: string; stack: string[] }) => {
+    const destination = new URL(href, window.location.origin).searchParams.toString();
+    if (destination === committedSearch && !pendingNavigation.current) return;
+    pendingNavigation.current = { from: committedSearch, to: destination, history, observedPending: false };
+    setNavigationLocked(true);
     try {
-      sessionStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify({ key: historyKey, cursor: next, history: bounded }));
-    } catch { /* Navigation does not depend on storage. */ }
-    const params = new URLSearchParams(searchParams.toString());
+      startNavigation(() => router.replace(href, { scroll: false }));
+    } catch (error) {
+      pendingNavigation.current = null;
+      setNavigationLocked(false);
+      throw error;
+    }
+  }, [committedSearch, router]);
+  const changePage = (next: string, stack: string[]) => {
+    if (pendingNavigation.current || isNavigating) return;
+    const params = new URLSearchParams(committedSearch);
     if (next) params.set("cursor", next);
     else params.delete("cursor");
-    router.replace(
-      selectedItemId
-        ? workItemHref(selectedItemId, params)
-        : workListHref(params),
-      { scroll: false },
+    navigate(
+      selectedItemId ? workItemHref(selectedItemId, params) : workListHref(params),
+      { key: historyKey, cursor: next, stack: stack.slice(-20) },
     );
   };
 
@@ -260,10 +295,7 @@ export function WorkDashboardView({
         return Array.isArray(value) ? (value as string[]) : [];
       };
       const sort = newSorting[0];
-      try { sessionStorage.removeItem(HISTORY_STORAGE_KEY); } catch { /* Storage is optional. */ }
-      currentHistory.current = null;
-      setHistory([]);
-      router.replace(
+      navigate(
         workViewHref(selectedItemId, searchParams, {
           type: valuesFor("type"),
           status: valuesFor("status"),
@@ -275,10 +307,9 @@ export function WorkDashboardView({
             | [number | undefined, number | undefined]
             | undefined) ?? [undefined, undefined],
         }),
-        { scroll: false },
       );
     },
-    [router, searchParams, selectedItemId],
+    [navigate, searchParams, selectedItemId],
   );
 
   const openItem = useCallback(
@@ -588,14 +619,10 @@ export function WorkDashboardView({
                 const params = new URLSearchParams(searchParams.toString());
                 params.set("pageSize", value);
                 params.delete("cursor");
-                currentHistory.current = null;
-                setHistory([]);
-                try { sessionStorage.removeItem(HISTORY_STORAGE_KEY); } catch { /* Storage is optional. */ }
-                router.replace(
+                navigate(
                   selectedItemId
                     ? workItemHref(selectedItemId, params)
                     : workListHref(params),
-                  { scroll: false },
                 );
               }}
             >
@@ -614,7 +641,7 @@ export function WorkDashboardView({
               variant="outline"
               size="sm"
               onClick={() => changePage("", [])}
-              disabled={!cursor}
+              disabled={navigationLocked || isNavigating || !cursor}
             >
               Restart
             </Button>
@@ -627,7 +654,7 @@ export function WorkDashboardView({
                   history.slice(0, -1),
                 )
               }
-              disabled={!cursor || history.length === 0}
+              disabled={navigationLocked || isNavigating || !cursor || history.length === 0}
             >
               Previous
             </Button>
@@ -641,6 +668,7 @@ export function WorkDashboardView({
                 )
               }
               disabled={
+                navigationLocked || isNavigating ||
                 !(data?.pageInfo?.hasMore ?? Boolean(data?.nextCursor)) ||
                 !(data?.pageInfo?.endCursor ?? data?.nextCursor)
               }
