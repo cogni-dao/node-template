@@ -120,11 +120,6 @@ export class PostgresMetricObservations implements MetricObservationsPort {
 			.sql`SELECT observation FROM metric_observations WHERE scope=${this.key} AND metric_id=${metricId} AND definition_hash=${definitionHash} AND status='ok' ORDER BY evaluation_at DESC,id DESC LIMIT 1`;
 		return row ? MetricObservationSchema.parse(json(row.observation)) : null;
 	}
-	async firstGood(metricId: string, definitionHash: string) {
-		const [row] = await this
-			.sql`SELECT observation FROM metric_observations WHERE scope=${this.key} AND metric_id=${metricId} AND definition_hash=${definitionHash} AND status='ok' ORDER BY evaluation_at ASC,id ASC LIMIT 1`;
-		return row ? MetricObservationSchema.parse(json(row.observation)) : null;
-	}
 	/** Backward-only: ok, window.end in [at - maxAge, at], observedAt <= at + maxAge. */
 	async at(
 		metricId: string,

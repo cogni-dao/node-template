@@ -46,13 +46,12 @@ function input(over: Partial<KpiAssessmentInput> = {}): KpiAssessmentInput {
 			comparator: "gte",
 			target: { value: 1, unit: "ratio" },
 		},
-		metric: { unit: "ratio", maxAgeSeconds: 7200, windowSeconds: 7 * 86400 },
+		metric: { unit: "ratio", maxAgeSeconds: 7200 },
 		latestAttempt: fresh,
 		lastGood: fresh,
 		viewState: "ok",
 		deadline: "2027-01-31T00:00:00Z",
 		evaluation: null,
-		firstGood: reading(1, "2026-10-01T00:00:00.000Z"),
 		daily: [],
 		now: NOW,
 		...over,
@@ -87,7 +86,12 @@ describe("assessKpi first-match rules", () => {
 				"no_reading_at_evaluation",
 			],
 			[
-				{ firstGood: reading(1, "2026-10-30T00:00:00.000Z") },
+				{
+					latestAttempt: {
+						...reading(null, "2026-11-02T11:30:00.000Z", "unavailable"),
+						reason: "insufficient_history",
+					},
+				},
 				"building",
 				"insufficient_history",
 			],
@@ -128,15 +132,16 @@ describe("assessKpi first-match rules", () => {
 		}
 		expect(seen.size).toBe(10);
 	});
+	it("does not treat a young series as building: a historical window is complete at its first reading", () => {
+		expect(assessKpi(input()).status).toBe("on_track");
+	});
 	it("builds, not fails, while source history is younger than the window", () => {
 		const young = {
 			...reading(null, "2026-11-02T11:30:00.000Z", "unavailable"),
 			reason: "insufficient_history",
 		};
 		expect(
-			assessKpi(
-				input({ latestAttempt: young, lastGood: null, firstGood: null }),
-			),
+			assessKpi(input({ latestAttempt: young, lastGood: null })),
 		).toMatchObject({
 			status: "building",
 			reason: "insufficient_history",
@@ -145,9 +150,7 @@ describe("assessKpi first-match rules", () => {
 		});
 		const broken = { ...young, reason: "history_unavailable" };
 		expect(
-			assessKpi(
-				input({ latestAttempt: broken, lastGood: null, firstGood: null }),
-			),
+			assessKpi(input({ latestAttempt: broken, lastGood: null })),
 		).toMatchObject({
 			status: "failing",
 			reason: "history_unavailable",
@@ -165,9 +168,7 @@ describe("assessKpi first-match rules", () => {
 			value: 1.2,
 			observationId: fresh.id,
 		});
-		const none = assessKpi(
-			input({ latestAttempt: null, lastGood: null, firstGood: null }),
-		);
+		const none = assessKpi(input({ latestAttempt: null, lastGood: null }));
 		expect(none).toMatchObject({
 			status: "delayed",
 			value: null,
@@ -179,7 +180,7 @@ describe("assessKpi first-match rules", () => {
 		expect(
 			assessKpi(
 				input({
-					metric: { unit: "items", maxAgeSeconds: 60, windowSeconds: 0 },
+					metric: { unit: "items", maxAgeSeconds: 60 },
 				}),
 			),
 		).toMatchObject({ status: "not_measured", reason: "unit_mismatch" });

@@ -67,7 +67,6 @@ export async function readGoalsProgress(deps: {
 			viewState: "unavailable",
 			deadline: binding.evaluationAt ?? deadline,
 			evaluation: null,
-			firstGood: null,
 			daily: [],
 			now: at,
 		});
@@ -110,6 +109,7 @@ export async function readGoalsProgress(deps: {
 						predictions.push({
 							binding,
 							baselineValue: null,
+							baselineAt: null,
 							assessment: unmeasured(
 								binding,
 								bet.evaluateAt,
@@ -126,6 +126,8 @@ export async function readGoalsProgress(deps: {
 						binding,
 						baselineValue:
 							r.baseline?.status === "ok" ? r.baseline.value : null,
+						baselineAt:
+							r.baseline?.status === "ok" ? r.baseline.window.end : null,
 						assessment: r.assessment,
 					});
 				}

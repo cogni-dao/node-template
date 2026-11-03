@@ -1,5 +1,23 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-/** Pure KPI assessment, evaluation selection and history bucketing. No I/O, no clock. */
+/**
+ * Pure KPI assessment, evaluation selection and history bucketing. No I/O, no clock.
+ *
+ * assessKpi rules, first match wins (metric-foundation-design "One assessment"):
+ * 1. not_measured: no binding; calculator/metric absent, denied or unreadable;
+ *    or a unit mismatch between the binding target and the metric/reading (unit_mismatch).
+ * 2. At or after the deadline: evaluating (evaluation_not_due) until deadline + maxAge,
+ *    then met / missed from the backward-final reading, else unresolved (no_reading_at_evaluation).
+ * 3. building (insufficient_history): the latest attempt reports insufficient_history
+ *    (source history does not yet cover the KPI window).
+ * 4. failing: the latest attempt is error or unavailable; reason from that attempt.
+ * 5. delayed: no ok reading yet (metric_unavailable; null while the first attempt is pending),
+ *    the newest ok reading is older than maxAge, or its source evidence is stale.
+ *    A never-measured scheduled metric is late data, not a failure or a young source.
+ * 6. on_track: the fresh value satisfies the comparator.
+ * 7. behind: otherwise.
+ * Pace is display only and never decides status. Value/observationId are the reading
+ * the status speaks about: evaluation reading (2), last good (3-5), fresh (6-7).
+ */
 import {
 	type KpiAssessment,
 	type KpiBinding,
@@ -163,7 +181,7 @@ export function toKpiReason(reason: string | null | undefined): KpiReason {
 export interface KpiAssessmentInput {
 	binding: KpiBinding;
 	/** Null when the calculator or metric is absent, denied or unreadable (rule 1). */
-	metric: { unit: string; maxAgeSeconds: number; windowSeconds: number } | null;
+	metric: { unit: string; maxAgeSeconds: number } | null;
 	unavailable?: KpiReason | undefined;
 	latestAttempt: MetricObservation | null;
 	lastGood: MetricObservation | null;
@@ -172,7 +190,6 @@ export interface KpiAssessmentInput {
 	deadline: string | null;
 	/** Backward-final reading for the deadline (rule 2); ignored before it. */
 	evaluation: MetricObservation | null;
-	firstGood: MetricObservation | null;
 	/** Trailing 28 daily buckets for display pace. Never decides status. */
 	daily: MetricHistory["buckets"];
 	now: Date;
@@ -255,15 +272,11 @@ export function assessKpi(input: KpiAssessmentInput): KpiAssessment {
 		input.lastGood?.status === "ok" && input.lastGood.value !== null
 			? input.lastGood
 			: null;
-	// 3. building: the series is younger than the KPI window, or the source
-	// itself reports that its history does not yet cover the window.
+	// 3. building
 	const latest = input.latestAttempt;
 	if (
-		(input.firstGood &&
-			now.getTime() - Date.parse(input.firstGood.window.end) <
-				metric.windowSeconds * 1000) ||
-		(latest?.status === "unavailable" &&
-			latest.reason === "insufficient_history")
+		latest?.status === "unavailable" &&
+		latest.reason === "insufficient_history"
 	)
 		return result("building", "insufficient_history", lastGood);
 	// 4. failing
@@ -281,8 +294,9 @@ export function assessKpi(input: KpiAssessmentInput): KpiAssessment {
 		(latest?.id === lastGood.id && input.viewState === "stale")
 	)
 		return result("delayed", null, lastGood);
+	// Rule 1 also covers a stored reading whose unit differs from the target.
 	if (lastGood.unit !== binding.target.unit)
-		return result("failing", "unit_mismatch", lastGood);
+		return result("not_measured", "unit_mismatch", null);
 	// 6/7. on_track or behind.
 	return result(
 		satisfies(

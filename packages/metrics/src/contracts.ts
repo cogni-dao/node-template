@@ -168,11 +168,6 @@ export interface MetricObservationsPort {
 		metricId: string,
 		definitionHash: string,
 	): Promise<MetricObservation | null>;
-	/** Earliest ok reading of one series; drives the building rule. */
-	firstGood(
-		metricId: string,
-		definitionHash: string,
-	): Promise<MetricObservation | null>;
 	/**
 	 * Backward-only fixed evaluation: latest ok reading with window.end in
 	 * [evaluationAt - maxAge, evaluationAt] and observedAt <= evaluationAt + maxAge.

@@ -91,13 +91,6 @@ function setup(options?: { historical?: boolean }) {
 				null
 			);
 		},
-		async firstGood(id, hash) {
-			return (
-				(await this.history(id, hash, 100))
-					.filter((r) => r.status === "ok")
-					.at(-1) ?? null
-			);
-		},
 		async at(id, hash, at, maxAge) {
 			return selectEvaluation(await this.history(id, hash, 100), at, maxAge);
 		},

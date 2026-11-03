@@ -406,7 +406,6 @@ export function createMetricService(deps: {
 				viewState: "unavailable",
 				deadline,
 				evaluation: null,
-				firstGood: null,
 				daily: [],
 				now: at,
 			};
@@ -483,7 +482,6 @@ export function createMetricService(deps: {
 			const [latest] = await observations.history(b.metricId, hash, 1);
 			const view = selectMetricView(definition, latest ? [latest] : [], at);
 			const lastGood = await observations.lastGood(b.metricId, hash);
-			const firstGood = await observations.firstGood(b.metricId, hash);
 			const due = deadline !== null && Date.parse(deadline) <= at.getTime();
 			const evaluation = due
 				? await observations.at(
@@ -516,14 +514,12 @@ export function createMetricService(deps: {
 				metric: {
 					unit: shape.unit,
 					maxAgeSeconds: definition.spec.maxAgeSeconds,
-					windowSeconds: shape.windowSeconds,
 				},
 				latestAttempt: view.latestAttempt,
 				lastGood,
 				viewState: view.viewState,
 				deadline,
 				evaluation,
-				firstGood,
 				daily: trend?.buckets.slice(-28) ?? [],
 				now: at,
 			});
@@ -537,7 +533,11 @@ export function createMetricService(deps: {
 				viewState: view.viewState,
 			};
 		},
-		/** Legacy reading projection over kpi(); met is never null without a reason. */
+		/**
+		 * Legacy reading projection over kpi(). With a deadline, `met` comes only
+		 * from the final met/missed verdict and is null (evaluation_not_due) before
+		 * it; without one it is the live comparison. reason is the enum reason.
+		 */
 		async bindings(
 			bindings: KpiBinding[],
 			options?: { hypothesis?: boolean; deadline?: string | null },
@@ -545,11 +545,19 @@ export function createMetricService(deps: {
 			const results = [];
 			for (const b of bindings) {
 				const r = await service.kpi(b, options);
-				const status = r.assessment.status;
-				const met =
-					status === "met" || status === "on_track"
+				const { status } = r.assessment;
+				const deadline = b.evaluationAt ?? options?.deadline ?? null;
+				const due =
+					deadline !== null && Date.parse(deadline) <= now().getTime();
+				const met = deadline
+					? status === "met"
 						? true
-						: status === "missed" || status === "behind"
+						: status === "missed"
+							? false
+							: null
+					: status === "on_track"
+						? true
+						: status === "behind"
 							? false
 							: null;
 				results.push({
@@ -558,7 +566,10 @@ export function createMetricService(deps: {
 					observation: r.observation,
 					viewState: r.viewState,
 					met,
-					reason: r.assessment.reason ?? (met === null ? status : null),
+					reason:
+						deadline && !due && r.assessment.status !== "not_measured"
+							? ("evaluation_not_due" as const)
+							: r.assessment.reason,
 					assessment: r.assessment,
 				});
 			}
