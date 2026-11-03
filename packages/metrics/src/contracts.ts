@@ -187,3 +187,129 @@ export class MetricError extends Error {
 		this.name = "MetricError";
 	}
 }
+
+/** Reason codes are an enum, never free text, so every reader can act on them. */
+export const KpiReasonSchema = z.enum([
+	"no_binding",
+	"calculator_unavailable",
+	"metric_unavailable",
+	"metric_authority_unavailable",
+	"insufficient_history",
+	"zero_denominator",
+	"source_failed",
+	"source_timeout",
+	"incomplete_or_invalid_source",
+	"unit_mismatch",
+	"no_reading_at_evaluation",
+	"evaluation_not_due",
+	"baseline_unavailable_or_incompatible",
+	"fixed_prediction_and_baseline_required",
+]);
+export type KpiReason = z.infer<typeof KpiReasonSchema>;
+/** First matching rule wins; see metric-foundation-design "One assessment". */
+export const KpiStatusSchema = z.enum([
+	"not_measured",
+	"evaluating",
+	"met",
+	"missed",
+	"unresolved",
+	"building",
+	"failing",
+	"delayed",
+	"on_track",
+	"behind",
+]);
+export type KpiStatus = z.infer<typeof KpiStatusSchema>;
+export const KpiAssessmentSchema = z.object({
+	status: KpiStatusSchema,
+	reason: KpiReasonSchema.nullable(),
+	/** Value the status speaks about: fresh, last good (delayed/failing) or the evaluation reading. */
+	value: z.number().finite().nullable(),
+	unit: z.string(),
+	observationId: z.uuid().nullable(),
+	observedAt: z.string().nullable(),
+	comparator: KpiBindingSchema.shape.comparator,
+	target: KpiBindingSchema.shape.target,
+	deadline: z.string().nullable(),
+	/** Display only. Never decides status. Units per week. */
+	pace: z.object({
+		observed: z.number().finite().nullable(),
+		needed: z.number().finite().nullable(),
+	}),
+});
+export type KpiAssessment = z.infer<typeof KpiAssessmentSchema>;
+
+export const MetricHistoryStepSchema = z.enum(["1h", "1d", "1w"]);
+export type MetricHistoryStep = z.infer<typeof MetricHistoryStepSchema>;
+export const MetricHistoryInputSchema = z.strictObject({
+	from: z.iso.datetime({ offset: true }),
+	to: z.iso.datetime({ offset: true }),
+	step: MetricHistoryStepSchema,
+});
+export type MetricHistoryInput = z.infer<typeof MetricHistoryInputSchema>;
+/** Half-open [start, end). Value is the last ok reading; empty buckets are never filled. */
+export const MetricHistoryBucketSchema = z.object({
+	start: z.string(),
+	end: z.string(),
+	status: z.enum(["ok", "error", "unavailable", "missing"]),
+	value: z.number().finite().nullable(),
+	observationId: z.uuid().nullable(),
+});
+export const MetricHistorySchema = z.object({
+	metricId: z.string(),
+	unit: z.string(),
+	step: MetricHistoryStepSchema,
+	from: z.string(),
+	to: z.string(),
+	buckets: z.array(MetricHistoryBucketSchema).max(400),
+});
+export type MetricHistory = z.infer<typeof MetricHistorySchema>;
+
+/** One goal-progress read model shared by the Goals tab, HTTP and agent tools. */
+export const GoalKpiSchema = z.object({
+	binding: KpiBindingSchema,
+	metric: z
+		.object({
+			id: z.string(),
+			title: z.string(),
+			calculatorId: z.string(),
+			cadenceSeconds: z.number().int().nullable(),
+			maxAgeSeconds: z.number().int(),
+		})
+		.nullable(),
+	assessment: KpiAssessmentSchema,
+	/** 30 daily buckets ending at the current UTC day; null when unreadable. */
+	trend: MetricHistorySchema.nullable(),
+});
+export const GoalHypothesisSchema = z.object({
+	id: z.string(),
+	title: z.string(),
+	evaluateAt: z.string().nullable(),
+	predictions: z.array(
+		z.object({
+			binding: KpiBindingSchema,
+			baselineValue: z.number().finite().nullable(),
+			assessment: KpiAssessmentSchema,
+		}),
+	),
+	outcome: z
+		.object({ id: z.string(), title: z.string(), supports: z.boolean() })
+		.nullable(),
+});
+export const GoalProgressSchema = z.object({
+	id: z.string(),
+	title: z.string(),
+	evaluateAt: z.string().nullable(),
+	configurationError: z.boolean(),
+	kpis: z.array(GoalKpiSchema),
+	hypotheses: z.array(GoalHypothesisSchema),
+	moreHypotheses: z.boolean(),
+	hypothesesUnavailable: z.boolean(),
+});
+export type GoalProgress = z.infer<typeof GoalProgressSchema>;
+export const GoalsProgressSchema = z.object({
+	goals: z.array(GoalProgressSchema),
+	asOf: z.string(),
+	environment: z.string(),
+});
+export type GoalsProgress = z.infer<typeof GoalsProgressSchema>;
