@@ -11,18 +11,18 @@
  * @public
  */
 
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { GovernanceConfig } from "@/shared/config";
 import {
   ScheduleControlConflictError,
   ScheduleControlNotFoundError,
   type ScheduleDescription,
 } from "../../../../../../packages/scheduler-core/src/ports/schedule-control.port";
-import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   type GovernanceScheduleSyncDeps,
   governanceScheduleId,
   syncGovernanceSchedules,
 } from "../../../../../../packages/scheduler-core/src/services/syncGovernanceSchedules";
-import type { GovernanceConfig } from "@/shared/config";
 
 const GRANT_ID = "test-grant-id-001";
 const SYSTEM_USER_ID = "00000000-0000-4000-a000-000000000001";
@@ -42,6 +42,7 @@ function makeMockDeps(
       return Promise.resolve(`${MOCK_DB_SCHEDULE_ID}-${upsertCallCount}`);
     }),
     systemUserId: SYSTEM_USER_ID,
+    nodeId: "test-node",
     scheduleControl: {
       createSchedule: vi.fn().mockResolvedValue(undefined),
       updateSchedule: vi.fn().mockResolvedValue(undefined),
@@ -565,7 +566,7 @@ describe("GRAPH_CHARTER — governance schedule `graph:` (task.5282)", () => {
     if (paused) {
       expect(deps.scheduleControl.resumeSchedule).toHaveBeenCalledWith("governance:cogni_decide");
       expect(vi.mocked(deps.scheduleControl.updateSchedule).mock.invocationCallOrder[0]).toBeLessThan(
-        vi.mocked(deps.scheduleControl.resumeSchedule).mock.invocationCallOrder[0]!
+        vi.mocked(deps.scheduleControl.resumeSchedule).mock.invocationCallOrder[0] ?? 0
       );
     } else {
       expect(deps.scheduleControl.resumeSchedule).not.toHaveBeenCalled();
