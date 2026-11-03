@@ -567,9 +567,10 @@ export function createMetricService(deps: {
 					viewState: r.viewState,
 					met,
 					reason:
-						deadline && !due && r.assessment.status !== "not_measured"
+						r.assessment.reason ??
+						(deadline && !due && r.assessment.status !== "not_measured"
 							? ("evaluation_not_due" as const)
-							: r.assessment.reason,
+							: null),
 					assessment: r.assessment,
 				});
 			}
