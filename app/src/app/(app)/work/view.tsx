@@ -41,6 +41,7 @@ import {
 } from "@cogni/node-ui-kit/reui/data-grid/data-grid";
 import { DataGridColumnVisibility } from "@cogni/node-ui-kit/reui/data-grid/data-grid-column-visibility";
 import { DataGridTable } from "@cogni/node-ui-kit/reui/data-grid/data-grid-table";
+import { useIsMobile } from "@cogni/node-ui-kit/util/use-is-mobile";
 import { useQuery } from "@tanstack/react-query";
 import {
   type ColumnFiltersState,
@@ -49,6 +50,7 @@ import {
   getFacetedUniqueValues,
   type SortingState,
   useReactTable,
+  type VisibilityState,
 } from "@tanstack/react-table";
 import { Columns3, List, Settings2 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -109,6 +111,17 @@ function readSorting(searchParams: URLSearchParams): SortingState {
   return [{ id: "rankScore", desc: true }];
 }
 
+// bug.0006: phones show Item (title + id) and Status; the Columns toggle can
+// still reveal the rest. Explicit user choices win over this default.
+const MOBILE_HIDDEN_COLUMNS: VisibilityState = {
+  priority: false,
+  rankScore: false,
+  type: false,
+  projectId: false,
+  updatedAt: false,
+  estimate: false,
+};
+
 function readColumns(params: URLSearchParams): string[] {
   const value = params.get("columns");
   return value === null
@@ -154,6 +167,14 @@ export function WorkDashboardView({
   const columnFilters = useMemo(() => readFilters(desired.params), [desired]);
   const globalFilter = desired.params.get("q") ?? "";
   const visibleStatuses = readColumns(desired.params);
+  const isMobile = useIsMobile();
+  const tableColumnVisibility = useMemo(
+    () =>
+      isMobile
+        ? { ...MOBILE_HIDDEN_COLUMNS, ...columnVisibility }
+        : columnVisibility,
+    [isMobile, columnVisibility],
+  );
   const boardView = desired.params.get("view") !== "table";
   const pageSize = Number(searchParams.get("pageSize")) || 10;
   const cursor = searchParams.get("cursor") ?? "";
@@ -429,7 +450,12 @@ export function WorkDashboardView({
   const table = useReactTable({
     data: items,
     columns,
-    state: { sorting, columnFilters, globalFilter, columnVisibility },
+    state: {
+      sorting,
+      columnFilters,
+      globalFilter,
+      columnVisibility: tableColumnVisibility,
+    },
     onSortingChange: (updater) =>
       editList((state) => {
         state.sorting =
@@ -550,7 +576,7 @@ export function WorkDashboardView({
         {hasActiveFilters && (
           <button
             type="button"
-            className="text-muted-foreground text-xs underline hover:text-foreground"
+            className="inline-flex min-h-6 items-center text-muted-foreground text-xs underline hover:text-foreground"
             onClick={() => {
               editList((state) => { state.filters = []; });
             }}
@@ -639,7 +665,8 @@ export function WorkDashboardView({
         loadingMode="skeleton"
         onRowClick={openItem}
         tableLayout={{
-          width: "fixed",
+          // Auto layout on phones lets the visible columns share the viewport.
+          width: isMobile ? "auto" : "fixed",
           headerSticky: true,
           headerBackground: true,
           rowBorder: true,

@@ -48,6 +48,10 @@ vi.mock("next/navigation", () => ({
     return routed ?? navigation.params;
   },
 }));
+const viewport = vi.hoisted(() => ({ mobile: false }));
+vi.mock("@cogni/node-ui-kit/util/use-is-mobile", () => ({
+  useIsMobile: () => viewport.mobile,
+}));
 vi.mock("@/components", async () => ({
   ...(await import("@cogni/node-ui-kit/shadcn/button")),
   ...(await import("@cogni/node-ui-kit/shadcn/input")),
@@ -290,6 +294,24 @@ describe("Work Kanban", () => {
     await userEvent.click(screen.getByRole("button", { name: "Filter type" }));
     expect(screen.getByRole("button", { name: "bug" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "task" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("shows titles and status without secondary columns in the mobile table", async () => {
+    viewport.mobile = true;
+    try {
+      navigation.params = new URLSearchParams("view=table");
+      mount();
+      expect(await screen.findByText("Work item 0")).toBeInTheDocument();
+      const headers = screen.getAllByRole("columnheader").map((header) => header.textContent ?? "");
+      expect(headers.some((text) => text.includes("Item"))).toBe(true);
+      expect(headers.some((text) => text.includes("Status"))).toBe(true);
+      for (const hidden of ["Pri", "Rank", "Type", "Project", "Updated", "Est"]) {
+        expect(headers.some((text) => text.includes(hidden))).toBe(false);
+      }
+      expect(screen.getByRole("table")).toHaveClass("table-auto");
+    } finally {
+      viewport.mobile = false;
+    }
   });
 
   it("keeps board controls when their table columns are hidden", async () => {
