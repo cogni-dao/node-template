@@ -37,18 +37,19 @@ export function NumberRangeFilter<TData, TValue>({
       <PopoverTrigger asChild>
         <Button
           variant="ghost"
-          size="icon"
-          className="h-6 min-w-6 gap-1 px-1.5"
+          className="h-auto min-h-6 w-auto max-w-[120px] min-w-6 gap-1 whitespace-normal px-1.5"
           aria-label={`Filter ${label.toLowerCase()}`}
         >
           {rangeLabel && (
-            <span className="font-mono text-primary text-xs">{rangeLabel}</span>
+            <span className="break-all text-left font-mono text-primary text-xs">
+              {rangeLabel}
+            </span>
           )}
           <ListFilter
             className={
               column.getIsFiltered()
-                ? "size-3.5 text-primary"
-                : "size-3.5 text-muted-foreground"
+                ? "size-3.5 shrink-0 text-primary"
+                : "size-3.5 shrink-0 text-muted-foreground"
             }
           />
         </Button>

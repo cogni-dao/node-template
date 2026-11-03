@@ -105,7 +105,8 @@ export const columns = [
   col.accessor((row) => rankScore(row.scores), {
     id: "rankScore",
     header: ({ column }) => <WorkRankControls column={column} />,
-    size: 65,
+    size: 220,
+    minSize: 220,
     cell: (info) => {
       const v = info.getValue();
       if (v === undefined)
@@ -120,7 +121,8 @@ export const columns = [
 
   col.accessor("type", {
     header: ({ column }) => <WorkFacetControls column={column} facet="type" />,
-    size: 55,
+    size: 110,
+    minSize: 110,
     cell: (info) => <TypeIcon type={info.getValue()} />,
     filterFn: "arrIncludesSome",
     meta: { headerTitle: "Type" },

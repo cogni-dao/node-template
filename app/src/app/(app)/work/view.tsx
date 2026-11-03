@@ -639,12 +639,14 @@ export function WorkDashboardView({
         loadingMode="skeleton"
         onRowClick={openItem}
         tableLayout={{
+          width: "fixed",
           headerSticky: true,
           headerBackground: true,
           rowBorder: true,
           dense: true,
         }}
         tableClassNames={{
+          base: "min-w-[1095px]",
           bodyRow: "cursor-pointer",
         }}
         emptyMessage="No work items found."
