@@ -107,7 +107,33 @@ export function createScheduleCapability(
       }
       const messages = chatCompletionsContract.input.shape.messages
         .min(1)
-        .parse(input.input.messages);
+        .parse(input.input.messages)
+        .map((message) => {
+          // Scheduled graph execution consumes internal message DTOs.
+          if (message.role === "tool") {
+            return {
+              role: message.role,
+              content: message.content,
+              toolCallId: message.tool_call_id,
+            };
+          }
+          if (message.role === "assistant") {
+            return {
+              role: message.role,
+              content: message.content ?? "",
+              ...(message.tool_calls?.length
+                ? {
+                    toolCalls: message.tool_calls.map((call) => ({
+                      id: call.id,
+                      name: call.function.name,
+                      arguments: call.function.arguments,
+                    })),
+                  }
+                : {}),
+            };
+          }
+          return { role: message.role, content: message.content };
+        });
       const modelRef = getExecutionScope().modelRef;
       if (!modelRef) {
         throw new Error(
