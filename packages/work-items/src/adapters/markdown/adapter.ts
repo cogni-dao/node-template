@@ -29,6 +29,7 @@ import {
 import { InvalidCursorError, queryIdentity } from "../doltgres/cursor.js";
 
 import { readdir, readFile, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import type { WorkItemCommandPort, WorkItemQueryPort } from "../../ports.js";
 import { isValidTransition } from "../../transitions.js";
@@ -286,9 +287,18 @@ function matchesQuery(item: WorkItem, query: WorkQuery): boolean {
 const MARKDOWN_CURSOR_PREFIX = "md3:";
 function encodeMarkdownCursor(item: WorkItem, order: WorkItemOrder, query: WorkQuery): string {
   const key = workItemOrderKey(item, order);
-  return MARKDOWN_CURSOR_PREFIX + Buffer.from(JSON.stringify({ value: key.value ?? null, id: key.id, ...order, filter: queryIdentity(query) })).toString("base64url");
+  const encode = (payload: object) => MARKDOWN_CURSOR_PREFIX + Buffer.from(JSON.stringify(payload)).toString("base64url");
+  const common = { id: key.id, ...order, filter: queryIdentity(query) };
+  if (typeof key.value === "string") {
+    if (key.value.length <= 1024) {
+      const cursor = encode({ value: key.value, ...common });
+      if (cursor.length <= 2048) return cursor;
+    }
+    return encode({ keyRef: createHash("sha256").update(key.value).digest("hex"), ...common });
+  }
+  return encode({ value: key.value ?? null, ...common });
 }
-function decodeMarkdownCursor(cursor: string | undefined, order: WorkItemOrder, query: WorkQuery): WorkItemOrderKey | undefined {
+function decodeMarkdownCursor(cursor: string | undefined, order: WorkItemOrder, query: WorkQuery, entries: FileEntry[]): WorkItemOrderKey | undefined {
   if (cursor === undefined) return undefined;
   try {
     if (!cursor.startsWith(MARKDOWN_CURSOR_PREFIX) || cursor.length > 2048 || !/^[A-Za-z0-9_-]+$/.test(cursor.slice(MARKDOWN_CURSOR_PREFIX.length))) throw new Error();
@@ -297,8 +307,16 @@ function decodeMarkdownCursor(cursor: string | undefined, order: WorkItemOrder, 
     const value = parsed as Record<string, unknown>;
     const numeric = ["rankScore", "priority", "rank", "estimate"].includes(order.sortBy);
     if (typeof value.id !== "string" || !value.id || value.id.length > 512 ||
-      !(value.value === null || (numeric ? typeof value.value === "number" && Number.isFinite(value.value) : typeof value.value === "string" && value.value.length <= 1024)) ||
       value.filter !== queryIdentity(query) || value.sortBy !== order.sortBy || value.sortDirection !== order.sortDirection) throw new Error();
+    if (value.keyRef !== undefined) {
+      if (numeric || value.value !== undefined || typeof value.keyRef !== "string" || !/^[a-f0-9]{64}$/.test(value.keyRef)) throw new Error();
+      const entry = entries.find((candidate) => candidate.item.id === value.id);
+      if (!entry) throw new Error();
+      const key = workItemOrderKey(entry.item, order);
+      if (typeof key.value !== "string" || createHash("sha256").update(key.value).digest("hex") !== value.keyRef) throw new Error();
+      return key;
+    }
+    if (!(value.value === null || (numeric ? typeof value.value === "number" && Number.isFinite(value.value) : typeof value.value === "string" && value.value.length <= 1024))) throw new Error();
     return { id: value.id, value: value.value === null ? undefined : value.value as string | number };
   } catch { throw new InvalidCursorError(); }
 }
@@ -334,7 +352,7 @@ export class MarkdownWorkItemAdapter
     // NO_SILENT_TRUNCATION: a page cut short by `limit` returns `nextCursor`, so a
     // caller that walks pages (e.g. a complete backlog snapshot) never mistakes the
     // first page for the whole backlog.
-    const boundary = decodeMarkdownCursor(query?.cursor, order, query ?? {});
+    const boundary = decodeMarkdownCursor(query?.cursor, order, query ?? {}, entries);
     const rest = boundary ? items.filter((item) => compareWorkItemKeys(workItemOrderKey(item, order), boundary, order) > 0) : items;
     if (query?.limit && rest.length > query.limit) {
       return {

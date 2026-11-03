@@ -3,9 +3,9 @@
 
 /**
  * Module: `@cogni/node-ui-kit/header-filter`
- * Purpose: Inline multi-select facet filter rendered inside a `DataGridColumnHeader` dropdown so per-column filtering, sort, and hide all live in one place.
+ * Purpose: Multi-select facet filter for header-owned Popovers or dropdowns.
  * Scope: Client component reading `column.getFacetedUniqueValues()`; assumes the table has `getFacetedRowModel + getFacetedUniqueValues` enabled and `filterFn: "arrIncludesSome"` on the column. Does not fetch data or own URL state.
- * Invariants: HEADER_OWNS_SORT_AND_FILTER — facet UI lives inside the column header dropdown, never as a parallel toolbar chip.
+ * Invariants: HEADER_OWNS_SORT_AND_FILTER — facet controls belong to the column header, not a parallel toolbar chip.
  * Side-effects: none
  * Links: docs/spec/ui-implementation.md, work/items/task.0432.work-items-table-poly-standard.md
  * @public

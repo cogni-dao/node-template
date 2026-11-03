@@ -215,6 +215,29 @@ describe("Work Kanban", () => {
     expect(screen.queryByText(/Sorted by projectId/)).not.toBeInTheDocument();
   });
 
+  it("navigates only visible board cards and clears selection when columns change", async () => {
+    navigation.params = new URLSearchParams("status=all&columns=needs_design");
+    vi.mocked(fetchWorkItems).mockResolvedValue({
+      items: [{ ...fixture[0]!, status: "done" }, { ...fixture[1]!, status: "needs_design" }],
+      pageInfo: { endCursor: null, hasMore: false },
+    });
+    mount();
+    await screen.findByRole("button", { name: "task.0001: Work item 1" });
+    fireEvent.keyDown(document.body, { key: "j" });
+    fireEvent.keyDown(document.body, { key: "Enter" });
+    expect(navigation.router.push).toHaveBeenCalledWith(expect.stringContaining("task.0001"), expect.anything());
+    vi.mocked(navigation.router.push).mockClear();
+    await userEvent.click(screen.getByRole("button", { name: "Board columns" }));
+    await userEvent.click(screen.getByRole("menuitemcheckbox", { name: "design" }));
+    await userEvent.click(screen.getByRole("menuitemcheckbox", { name: "done" }));
+    await userEvent.keyboard("{Escape}");
+    fireEvent.keyDown(document.body, { key: "Enter" });
+    expect(navigation.router.push).not.toHaveBeenCalled();
+    fireEvent.keyDown(document.body, { key: "j" });
+    fireEvent.keyDown(document.body, { key: "Enter" });
+    expect(navigation.router.push).toHaveBeenCalledWith(expect.stringContaining("task.0000"), expect.anything());
+  });
+
   it("discloses hidden legacy sorting and resets only on request", async () => {
     navigation.params = new URLSearchParams("sort=-priority&cursor=p2");
     mount();

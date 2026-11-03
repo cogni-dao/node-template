@@ -11,7 +11,7 @@
  * @internal
  */
 
-import { mkdir, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -19,6 +19,7 @@ import { MarkdownWorkItemAdapter } from "../../src/adapters/markdown/adapter.js"
 import { UnsupportedWorkItemFieldError } from "../../src/adapters/markdown/errors.js";
 import { parseFrontmatter } from "../../src/adapters/markdown/frontmatter.js";
 import type { WorkItemId } from "../../src/types.js";
+import { toWorkItemId } from "../../src/types.js";
 import { workItemPortContract } from "../contract/work-item-port.contract.js";
 
 describe("MarkdownWorkItemAdapter", () => {
@@ -165,6 +166,44 @@ describe("MarkdownWorkItemAdapter", () => {
         } while (cursor);
         expect(seen).toEqual(expected);
       }
+    });
+
+    it.each(["x".repeat(1100), "界".repeat(800)])("roundtrips long project keys in both directions", async (project) => {
+      for (const suffix of ["a", "b", "b", "c"]) {
+        await adapter.create({ type: "task", title: suffix, projectId: toWorkItemId(project + suffix) });
+      }
+      for (const sortDirection of ["asc", "desc"] as const) {
+        const query = { sortBy: "projectId" as const, sortDirection, limit: 1 };
+        const expected = (await adapter.list({ ...query, limit: 100 })).items.map((item) => item.id);
+        const seen = [];
+        let cursor: string | undefined;
+        do {
+          const page = await adapter.list({ ...query, cursor });
+          seen.push(...page.items.map((item) => item.id));
+          cursor = page.nextCursor;
+          if (cursor) expect(cursor.length).toBeLessThanOrEqual(2048);
+        } while (cursor);
+        expect(seen).toEqual(expected);
+      }
+    });
+
+    it("resolves long boundaries before filtering and rejects changed or missing references", async () => {
+      const project = "界".repeat(800);
+      const boundary = await adapter.create({ type: "task", title: "boundary", projectId: toWorkItemId(project) });
+      await adapter.create({ type: "task", title: "next", projectId: toWorkItemId(`${project}z`) });
+      const query = { sortBy: "projectId" as const, sortDirection: "asc" as const, statuses: ["needs_triage" as const], limit: 1 };
+      const page = await adapter.list(query);
+      expect(page.items[0]?.id).toBe(boundary.id);
+      const dir = path.join(tmpDir, "work", "items");
+      const file = path.join(dir, (await readdir(dir)).find((name) => name.startsWith(`${boundary.id}.`))!);
+      const original = await readFile(file, "utf8");
+      const revision = parseFrontmatter(original).revision;
+      await adapter.patch({ id: boundary.id, expectedRevision: revision, set: { status: "done" } });
+      expect((await adapter.list({ ...query, cursor: page.nextCursor })).items[0]?.title).toBe("next");
+      await writeFile(file, original.replace(project, `${project}changed`));
+      await expect(adapter.list({ ...query, cursor: page.nextCursor })).rejects.toThrow(/invalid_cursor.*restart/);
+      await rm(file);
+      await expect(adapter.list({ ...query, cursor: page.nextCursor })).rejects.toThrow(/invalid_cursor.*restart/);
     });
 
     it("rejects old, malformed, wrong-type and mismatched cursors", async () => {

@@ -323,8 +323,16 @@ export function WorkDashboardView({
   });
 
   const rows = table.getRowModel().rows;
+  const navigationRows = boardView
+    ? rows.filter((row) => visibleStatuses.includes(row.original.status))
+    : rows;
+  const navigationKey = JSON.stringify([boardView, navigationRows.map((row) => row.id)]);
 
-  const [focusedRowIndex, setFocusedRowIndex] = useState(-1);
+  const [focus, setFocus] = useState({ key: "", index: -1 });
+  const focusedRowIndex = focus.key === navigationKey ? focus.index : -1;
+  useEffect(() => {
+    setFocus((previous) => previous.key === navigationKey ? previous : { key: navigationKey, index: -1 });
+  }, [navigationKey]);
 
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
@@ -338,20 +346,18 @@ export function WorkDashboardView({
           ))
       )
         return;
-      if (rows.length === 0) return;
-
       switch (e.key) {
         case "j":
           e.preventDefault();
-          setFocusedRowIndex((prev) => Math.min(prev + 1, rows.length - 1));
+          setFocus({ key: navigationKey, index: Math.min(focusedRowIndex + 1, navigationRows.length - 1) });
           break;
         case "k":
           e.preventDefault();
-          setFocusedRowIndex((prev) => Math.max(prev - 1, 0));
+          setFocus({ key: navigationKey, index: navigationRows.length ? Math.max(focusedRowIndex - 1, 0) : -1 });
           break;
         case "Enter":
-          if (focusedRowIndex >= 0 && focusedRowIndex < rows.length) {
-            const row = rows[focusedRowIndex];
+          if (focusedRowIndex >= 0 && focusedRowIndex < navigationRows.length) {
+            const row = navigationRows[focusedRowIndex];
             if (row) {
               e.preventDefault();
               openItem(row.original);
@@ -374,7 +380,7 @@ export function WorkDashboardView({
 
     document.addEventListener("keydown", handleKey);
     return () => document.removeEventListener("keydown", handleKey);
-  }, [rows, focusedRowIndex, selectedItemId, openItem, closeItem]);
+  }, [navigationRows, navigationKey, focusedRowIndex, selectedItemId, openItem, closeItem]);
 
   const hasActiveFilters = columnFilters.length > 0;
 
