@@ -93,10 +93,7 @@ export function HeaderFilter<TData, TValue>({
         );
       })}
       {allowEntry && (
-        <div
-          className="flex gap-1"
-          onKeyDown={(event) => event.stopPropagation()}
-        >
+        <div className="flex gap-1">
           <Input
             aria-label="Project ID"
             value={entry}

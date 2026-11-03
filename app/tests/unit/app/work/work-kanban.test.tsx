@@ -14,6 +14,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const navigation = vi.hoisted(() => ({
@@ -87,7 +88,7 @@ describe("Work Kanban", () => {
       pageInfo: { endCursor: "next", hasMore: true },
     });
   });
-  afterEach(cleanup);
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
   it("requests one ranked page and renders only that page", async () => {
     mount();
     await waitFor(() =>
@@ -275,6 +276,61 @@ describe("Work Kanban", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "task.0020: Work item 20" })).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Previous" }));
     expect(navigation.router.replace).toHaveBeenLastCalledWith("/work", { scroll: false });
+  });
+
+  it.each(["getItem", "setItem"] as const)("keeps paging when storage %s throws", async (method) => {
+    vi.spyOn(Storage.prototype, method).mockImplementation(() => { throw new Error("storage unavailable"); });
+    vi.mocked(fetchWorkItems).mockImplementation(async (params) => ({
+      items: fixture.slice(0, 1),
+      pageInfo: { endCursor: params.get("cursor") === "p2" ? "p3" : "p2", hasMore: true },
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const element = () => <QueryClientProvider client={client}><WorkDashboardView /></QueryClientProvider>;
+    const result = render(element());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Next" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(navigation.router.replace).toHaveBeenLastCalledWith("/work?cursor=p2", { scroll: false });
+    navigation.params = new URLSearchParams("cursor=p2");
+    result.rerender(element());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Previous" })).toBeEnabled());
+    navigation.params = new URLSearchParams("cursor=p2&view=table");
+    result.rerender(element());
+    expect(screen.getByRole("button", { name: "Previous" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Previous" }));
+    expect(navigation.router.replace).toHaveBeenLastCalledWith("/work?view=table", { scroll: false });
+    fireEvent.click(screen.getByRole("button", { name: "Restart" }));
+    expect(navigation.router.replace).toHaveBeenLastCalledWith("/work?view=table", { scroll: false });
+  });
+
+  it("navigates on filter and page-size changes when storage removal throws", async () => {
+    vi.spyOn(Storage.prototype, "removeItem").mockImplementation(() => { throw new Error("storage unavailable"); });
+    navigation.params = new URLSearchParams("cursor=p2");
+    mount();
+    await waitFor(() => expect(fetchWorkItems).toHaveBeenCalled());
+    fireEvent.change(screen.getByPlaceholderText(/Search id/), { target: { value: "target" } });
+    expect(navigation.router.replace).toHaveBeenLastCalledWith(expect.not.stringContaining("cursor="), { scroll: false });
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
+    const user = userEvent.setup();
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Items per page" }), { key: "Enter" });
+    await user.click(screen.getByRole("option", { name: "25" }));
+    expect(navigation.router.replace).toHaveBeenLastCalledWith("/work?pageSize=25", { scroll: false });
+  });
+
+  it("offers project entry in a keyboard-dismissible popover", async () => {
+    navigation.params = new URLSearchParams("project=proj.offpage");
+    const user = userEvent.setup();
+    mount();
+    await waitFor(() => expect(fetchWorkItems).toHaveBeenCalled());
+    const trigger = screen.getByRole("button", { name: "Filter projects" });
+    await user.click(trigger);
+    expect(screen.getByRole("button", { name: "offpage" })).toBeInTheDocument();
+    await user.type(screen.getByRole("textbox", { name: "Project ID" }), "proj.other");
+    await user.click(screen.getByRole("button", { name: "Add" }));
+    const url = vi.mocked(navigation.router.replace).mock.lastCall?.[0] as string;
+    expect(new URL(url, "https://example.com").searchParams.get("project")).toBe("proj.offpage,proj.other");
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("textbox", { name: "Project ID" })).not.toBeInTheDocument());
+    expect(trigger).toHaveFocus();
   });
 
   it("does not combine an edited filter with an old cursor", async () => {

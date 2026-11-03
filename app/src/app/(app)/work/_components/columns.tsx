@@ -8,8 +8,8 @@
  * Invariants:
  *   - HEADER_OWNS_SORT_AND_FILTER: every header renders via reui
  *     `DataGridColumnHeader` so sort lives there. Discrete-value columns
- *     (type / status / projectId) inline a `HeaderFilter` so per-column
- *     multi-select filtering lives in the same dropdown.
+ *     (type / status) inline a `HeaderFilter`; project entry uses a header
+ *     popover with normal keyboard navigation.
  *   - Column visibility is NOT in the header dropdown — it lives in a single
  *     toolbar `Columns` button at top-right of `view.tsx`.
  *   - filterFn: "arrIncludesSome" on facet columns so HeaderFilter's
@@ -22,10 +22,15 @@
 import type { WorkItemDto } from "@cogni/node-contracts";
 import { DataGridColumnHeader } from "@cogni/node-ui-kit/reui/data-grid/data-grid-column-header";
 import { Button } from "@cogni/node-ui-kit/shadcn/button";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@cogni/node-ui-kit/shadcn/popover";
 import { HeaderFilter } from "@cogni/node-ui-kit/header-filter";
 import { rankScore, VALID_TRANSITIONS } from "@cogni/work-items";
 import { type Column, createColumnHelper } from "@tanstack/react-table";
-import { ArrowDownIcon, ArrowUpIcon, ChevronsUpDownIcon } from "lucide-react";
+import { ArrowDownIcon, ArrowUpIcon, ChevronsUpDownIcon, ListFilter } from "lucide-react";
 import { NumberRangeFilter } from "./NumberRangeFilter";
 import { StatusPill, TypeIcon } from "./work-item-icons";
 
@@ -167,19 +172,31 @@ export const columns = [
 
   col.accessor("projectId", {
     header: ({ column }) => (
-      <DataGridColumnHeader
-        column={column}
-        title="Project"
-        allowEmpty
-        filter={
-          <HeaderFilter
-            column={column}
-            allowEntry
-            formatLabel={formatProject}
-            showCounts={false}
-          />
-        }
-      />
+      <div className="flex items-center">
+        <DataGridColumnHeader column={column} title="Project" />
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 min-w-6 px-1.5"
+              aria-label="Filter projects"
+            >
+              <ListFilter
+                className={column.getIsFiltered() ? "size-3.5 text-primary" : "size-3.5 text-muted-foreground"}
+              />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-64" align="start">
+            <HeaderFilter
+              column={column}
+              allowEntry
+              formatLabel={formatProject}
+              showCounts={false}
+            />
+          </PopoverContent>
+        </Popover>
+      </div>
     ),
     size: 140,
     cell: (info) => {

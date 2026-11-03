@@ -54,7 +54,7 @@ import {
 } from "@tanstack/react-table";
 import { Columns3, List, Settings2 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Input } from "@/components";
 
 import { fetchWorkItem, fetchWorkItems } from "./_api/fetchWorkItems";
@@ -135,6 +135,7 @@ export function WorkDashboardView({
   const [globalFilter, setGlobalFilter] = useState(searchParams.get("q") ?? "");
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
   const [history, setHistory] = useState<string[]>([]);
+  const currentHistory = useRef<{ key: string; cursor: string } | null>(null);
   const [visibleStatuses, setVisibleStatuses] = useState<string[]>(() => {
     const param = searchParams.get("columns");
     return param === null
@@ -178,11 +179,18 @@ export function WorkDashboardView({
     return `work-page-history:${p}`;
   }, [listParams]);
   useEffect(() => {
-    try {
-      const saved: unknown = JSON.parse(sessionStorage.getItem(historyKey) ?? "{}");
-      const stack: unknown = saved && typeof saved === "object" && !Array.isArray(saved) ? (saved as Record<string, unknown>)[cursor] : undefined;
-      setHistory(Array.isArray(stack) && stack.length <= 20 && stack.every(value => typeof value === "string" && value.length <= 2048) ? stack : []);
-    } catch { setHistory([]); }
+    if (currentHistory.current?.key !== historyKey || currentHistory.current.cursor !== cursor) {
+      let stack: string[] = [];
+      try {
+        const saved: unknown = JSON.parse(sessionStorage.getItem(historyKey) ?? "{}");
+        const value: unknown = saved && typeof saved === "object" && !Array.isArray(saved) ? (saved as Record<string, unknown>)[cursor] : undefined;
+        if (Array.isArray(value) && value.length <= 20 && value.every(item => typeof item === "string" && item.length <= 2048)) stack = value;
+      } catch { /* Storage is optional. */ }
+      currentHistory.current = { key: historyKey, cursor };
+      setHistory(stack);
+    }
+  }, [historyKey, cursor]);
+  useEffect(() => {
     const param = searchParams.get("columns");
     setVisibleStatuses(
       param === null
@@ -195,7 +203,7 @@ export function WorkDashboardView({
               )
           : [],
     );
-  }, [historyKey, searchParams, cursor]);
+  }, [searchParams]);
   const { data, isLoading, error } = useQuery({
     queryKey: ["work-items", listParams.toString()],
     queryFn: () => fetchWorkItems(listParams),
@@ -204,14 +212,15 @@ export function WorkDashboardView({
   const items = data?.items ?? EMPTY_ITEMS;
   const changePage = (next: string, stack: string[]) => {
     const bounded = stack.slice(-20);
+    currentHistory.current = { key: historyKey, cursor: next };
     setHistory(bounded);
     try {
       const value: unknown = JSON.parse(sessionStorage.getItem(historyKey) ?? "{}");
       const entries = value && typeof value === "object" && !Array.isArray(value) ? Object.entries(value).filter(([key, stack]) => key.length <= 2048 && Array.isArray(stack) && stack.length <= 20 && stack.every(item => typeof item === "string" && item.length <= 2048)) : [];
-      const pages = Object.fromEntries(entries.slice(-20));
+      const pages = Object.fromEntries(entries.filter(([key]) => key !== next).slice(-19));
       pages[next] = bounded;
       sessionStorage.setItem(historyKey, JSON.stringify(pages));
-    } catch { sessionStorage.setItem(historyKey, JSON.stringify({ [next]: bounded })); }
+    } catch { /* Navigation does not depend on storage. */ }
     const params = new URLSearchParams(searchParams.toString());
     if (next) params.set("cursor", next);
     else params.delete("cursor");
@@ -248,7 +257,8 @@ export function WorkDashboardView({
         return Array.isArray(value) ? (value as string[]) : [];
       };
       const sort = newSorting[0];
-      sessionStorage.removeItem(historyKey);
+      try { sessionStorage.removeItem(historyKey); } catch { /* Storage is optional. */ }
+      currentHistory.current = null;
       setHistory([]);
       router.replace(
         workViewHref(selectedItemId, searchParams, {
@@ -579,8 +589,9 @@ export function WorkDashboardView({
                 const params = new URLSearchParams(searchParams.toString());
                 params.set("pageSize", value);
                 params.delete("cursor");
+                currentHistory.current = null;
                 setHistory([]);
-                sessionStorage.removeItem(historyKey);
+                try { sessionStorage.removeItem(historyKey); } catch { /* Storage is optional. */ }
                 router.replace(
                   selectedItemId
                     ? workItemHref(selectedItemId, params)
