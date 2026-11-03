@@ -2748,7 +2748,10 @@ export class DoltgresWorkItemAdapter
         query.rankMin > query.rankMax)
     )
       throw new Error("invalid rank range");
+    const order = normalizeWorkItemOrder(query);
     const conditions: string[] = [];
+    const rankConditions: string[] = [];
+    const rankExpression = order.sortBy === "rankScore" ? "__sort_value" : `(${rankScoreSql()})`;
     if (query.ids?.length) {
       conditions.push(
         `id IN (${query.ids.map((id) => escapeValue(id as string)).join(", ")})`
@@ -2771,9 +2774,9 @@ export class DoltgresWorkItemAdapter
         `project_id IN (${query.projectIds.map(escapeValue).join(", ")})`
       );
     if (query.rankMin !== undefined)
-      conditions.push(`(${rankScoreSql()}) >= ${Number(query.rankMin)}`);
+      rankConditions.push(`${rankExpression} >= ${Number(query.rankMin)}`);
     if (query.rankMax !== undefined)
-      conditions.push(`(${rankScoreSql()}) <= ${Number(query.rankMax)}`);
+      rankConditions.push(`${rankExpression} <= ${Number(query.rankMax)}`);
     if (query.node) {
       const nodes = Array.isArray(query.node) ? query.node : [query.node];
       if (nodes.length) conditions.push(`node IN (${nodes.map(escapeValue).join(", ")})`);
@@ -2800,12 +2803,12 @@ export class DoltgresWorkItemAdapter
     }
     if (query.scored !== undefined) {
       // Scored == a complete 6-axis score; rankScoreSql() is NULL otherwise.
-      conditions.push(
-        `(${rankScoreSql()}) IS ${query.scored ? "NOT NULL" : "NULL"}`
+      rankConditions.push(
+        `${rankExpression} IS ${query.scored ? "NOT NULL" : "NULL"}`
       );
     }
+    if (order.sortBy !== "rankScore") conditions.push(...rankConditions);
     const textNeedle = query.text?.toLowerCase();
-    const order = normalizeWorkItemOrder(query);
     const initialCursor = query.cursor
       ? decodeCursor(query.cursor, order, queryIdentity(query))
       : undefined;
@@ -2841,7 +2844,7 @@ export class DoltgresWorkItemAdapter
       if (!cursor) return "";
       const afterId = `id > ${escapeValue(cursor.id)}`;
       if (cursor.key === null)
-        return `WHERE __sort_value IS NULL AND ${afterId}`;
+        return `__sort_value IS NULL AND ${afterId}`;
       const nativeType =
         order.sortBy === "createdAt" || order.sortBy === "updatedAt"
           ? "TIMESTAMP WITH TIME ZONE"
@@ -2849,7 +2852,7 @@ export class DoltgresWorkItemAdapter
             ? "TEXT"
             : "DOUBLE PRECISION";
       const key = `CAST(${escapeValue(cursor.key)} AS ${nativeType})`;
-      return `WHERE (__sort_value IS NULL OR __sort_value ${order.sortDirection === "asc" ? ">" : "<"} ${key} OR (__sort_value = ${key} AND ${afterId}))`;
+      return `__sort_value IS NULL OR __sort_value ${order.sortDirection === "asc" ? ">" : "<"} ${key} OR (__sort_value = ${key} AND ${afterId})`;
     };
     // Structural filters → derived native key → seek/order → bounded batch.
     // Text folding stays in JS because native LOWER on cold TEXT can panic.
@@ -2864,8 +2867,14 @@ export class DoltgresWorkItemAdapter
         cursor = { ...cursor, key, keyRef: undefined };
       }
       while (true) {
+        const outerConditions = order.sortBy === "rankScore" ? [...rankConditions] : [];
+        const seekCondition = seek(cursor);
+        if (seekCondition) outerConditions.push(seekCondition);
+        const outerWhere = outerConditions.length
+          ? `WHERE ${outerConditions.map((condition) => `(${condition})`).join(" AND ")}`
+          : "";
         const rows = await conn.unsafe(
-          `SELECT ordered.*, CAST(__sort_value AS TEXT) AS __sort_key FROM (SELECT work_items.*, ${keyExpression} AS __sort_value FROM work_items ${where}) AS ordered ${seek(cursor)} ORDER BY CASE WHEN __sort_value IS NULL THEN 1 ELSE 0 END ASC, __sort_value ${order.sortDirection.toUpperCase()}, id ASC LIMIT ${scanLimit}`
+          `SELECT ordered.*, CAST(__sort_value AS TEXT) AS __sort_key FROM (SELECT work_items.*, ${keyExpression} AS __sort_value FROM work_items ${where}) AS ordered ${outerWhere} ORDER BY CASE WHEN __sort_value IS NULL THEN 1 ELSE 0 END ASC, __sort_value ${order.sortDirection.toUpperCase()}, id ASC LIMIT ${scanLimit}`
         );
         for (const row of rows) {
           if (

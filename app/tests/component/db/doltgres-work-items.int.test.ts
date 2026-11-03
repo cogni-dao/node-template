@@ -439,9 +439,12 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 	it("filters bounded native pages against a 5000-row backlog", async () => {
 		const readSql = postgres(dbUrl, { max: 1, fetch_types: false });
 		const issued: string[] = [];
+		let lateStart: number | undefined;
 		const unsafe = readSql.unsafe.bind(readSql);
 		readSql.unsafe = ((query: string) => {
 			issued.push(query);
+			if (lateStart !== undefined)
+				console.info("rank_query_late_text_batch", JSON.stringify({ batch: issued.length, elapsedMs: performance.now() - lateStart }));
 			return unsafe(query);
 		}) as typeof readSql.unsafe;
 		try {
@@ -494,9 +497,16 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 				logger: stageLogger,
 			});
 			const broad = { node: "scale-native", statuses: ["needs_implement"] as const, rankMin: 4, limit: 10 };
-			const lateStart = performance.now();
-			const late = await filteredAdapter.list({ ...broad, text: "LAST-ONLY-NEEDLE" });
-			const lateElapsed = performance.now() - lateStart;
+			lateStart = performance.now();
+			let late: Awaited<ReturnType<typeof filteredAdapter.list>>;
+			let lateElapsed: number;
+			try {
+				late = await filteredAdapter.list({ ...broad, text: "LAST-ONLY-NEEDLE" });
+			} finally {
+				lateElapsed = performance.now() - lateStart;
+				console.info("rank_query_late_text_phase", JSON.stringify({ elapsedMs: lateElapsed, datasetN: 5000, queriesStarted: issued.length, order: normalizeWorkItemOrder(broad) }));
+				lateStart = undefined;
+			}
 			expect(late.items.map((item) => item.id)).toEqual(["task.304999"]);
 			expect(late.pageInfo.hasMore).toBe(false);
 			expect(late.nextCursor).toBeUndefined();
@@ -507,7 +517,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 				expect(nativeLimit).toBeGreaterThan(0);
 				expect(nativeLimit).toBeLessThanOrEqual(501);
 			}
-			console.info("rank_query_late_text", JSON.stringify({ elapsedMs: lateElapsed, datasetN: 5000, queries: issued.length }));
+			console.info("rank_query_late_text", JSON.stringify({ elapsedMs: lateElapsed, datasetN: 5000, queries: issued.length, resultCount: late.items.length }));
 			const broadFirst = await filteredAdapter.list(broad);
 			expect(broadFirst.items.map((item) => item.id)).toEqual(matchingIds.slice(0, 10));
 			if (!broadFirst.nextCursor) throw new Error("missing broad cursor");
