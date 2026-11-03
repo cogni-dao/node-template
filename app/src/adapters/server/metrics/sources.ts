@@ -140,11 +140,17 @@ const COMMIT = /^[a-z0-9]{32}$/;
 export type ConvergenceOutput = "ratio" | "validated" | "created";
 type Read = <T>(source: (signal: AbortSignal) => Promise<T>) => Promise<T>;
 
+/** Bounded first-parent walk; a window older than this many main commits is unbounded. */
+export const FIRST_PARENT_WALK_CAP = 5000;
+
 /**
- * Edge commit c(T): latest commit in main's history with date <= T, from
- * dolt_log('main') (dolt.commits also holds branch commits). Validated work is
- * the net row diff dolt_diff(c(start), c(end), 'work_items') whose to_ side is
- * done + deploy_verified and whose from_ side is not (added rows included).
+ * Edge commit c(T): the first commit on main's FIRST-PARENT chain (walking back
+ * from dolt_hashof('main')) with date <= T. dolt_log('main') is not used: it
+ * includes commits merged in from contribution branches with their authoring
+ * dates, so a stale branch commit could become an edge (task.0024 probe
+ * dolt-first-parent-probe.json). Validated work is the net row diff
+ * dolt_diff(c(start), c(end), 'work_items') whose to_ side is done +
+ * deploy_verified and whose from_ side is not (added rows included).
  * dolt_diff_summary.data_change is not trusted (work-items adapter, bug.5358).
  */
 export async function readWorkValidatedHistory(
@@ -158,26 +164,45 @@ export async function readWorkValidatedHistory(
 			from: string;
 			to: string;
 			toAt: string | null;
+			depth: number;
 	  }
 	| { ok: false; reason: "insufficient_history" | "history_unavailable" }
 > {
 	try {
-		const [from, to] = await read(async (signal) => {
-			const edge = async (at: string) =>
-				(
-					await run(
-						sql,
-						`SELECT commit_hash, CAST(date AS TEXT) AS date FROM dolt_log('main') WHERE date <= '${doltUtc(at)}' ORDER BY date DESC LIMIT 1`,
-						signal,
-					)
-				)[0];
-			return [await edge(window.start), await edge(window.end)];
-		});
-		const fromHash = String(from?.commit_hash ?? "");
-		const toHash = String(to?.commit_hash ?? "");
-		// No main commit at or before an edge: main history starts inside (or
-		// after) the window. A young node is building history, not failing.
-		if (!from || !to) return { ok: false, reason: "insufficient_history" };
+		const walk = await read((signal) =>
+			run(
+				sql,
+				`WITH RECURSIVE chain(commit_hash, depth, date) AS (
+				SELECT c.commit_hash, 0, c.date FROM dolt.commits c WHERE c.commit_hash = dolt_hashof('main')
+				UNION ALL
+				SELECT p.commit_hash, chain.depth + 1, p.date FROM chain
+				JOIN dolt.commit_ancestors a ON a.commit_hash = chain.commit_hash AND a.parent_index = 0
+				JOIN dolt.commits p ON p.commit_hash = a.parent_hash
+				WHERE chain.depth < ${FIRST_PARENT_WALK_CAP} AND chain.date > '${doltUtc(window.start)}'
+			) SELECT commit_hash, depth, CAST(date AS TEXT) AS date FROM chain ORDER BY depth`,
+				signal,
+			),
+		);
+		const chain = walk.map((r) => ({
+			hash: String(r.commit_hash ?? ""),
+			at: Date.parse(doltInstant(r.date) ?? ""),
+		}));
+		if (!chain.length || chain.some((c) => !Number.isFinite(c.at)))
+			return { ok: false, reason: "history_unavailable" };
+		const edge = (iso: string) =>
+			chain.find((c) => c.at <= Date.parse(iso)) ?? null;
+		const fromEdge = edge(window.start);
+		const toEdge = edge(window.end);
+		if (!fromEdge) {
+			// The walk stopped at the cap: unbounded, not young.
+			if (chain.length > FIRST_PARENT_WALK_CAP)
+				return { ok: false, reason: "history_unavailable" };
+			// Reached the root first: main history starts inside the window.
+			return { ok: false, reason: "insufficient_history" };
+		}
+		if (!toEdge) return { ok: false, reason: "insufficient_history" };
+		const fromHash = fromEdge.hash;
+		const toHash = toEdge.hash;
 		if (!COMMIT.test(fromHash) || !COMMIT.test(toHash))
 			return { ok: false, reason: "history_unavailable" };
 		const validated =
@@ -201,7 +226,8 @@ export async function readWorkValidatedHistory(
 			validated,
 			from: fromHash,
 			to: toHash,
-			toAt: doltInstant(to?.date),
+			toAt: new Date(toEdge.at).toISOString(),
+			depth: chain.length - 1,
 		};
 	} catch (error) {
 		// Timeouts and budget exhaustion keep their own failure; other history
@@ -275,6 +301,7 @@ export async function readWorkConvergence(
 	evidenceRefs.push(
 		`dolt:main:${history.from}..${history.to}${history.toAt ? `@${history.toAt}` : ""}`,
 		"node:work_items:validated:dolt_diff:done+deploy_verified",
+		`dolt:first-parent-walk:cap=${FIRST_PARENT_WALK_CAP};depth=${history.depth}`,
 		`counts:validated_work=${history.validated}`,
 	);
 	const validated = history.validated + mergedContributions;

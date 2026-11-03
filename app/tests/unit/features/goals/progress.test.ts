@@ -50,10 +50,6 @@ function memoryObservations(): MetricObservationsPort & {
 		get: async (id) => saved.get(id)?.observation ?? null,
 		lastGood: async (id, hash) =>
 			series(id, hash).find((o) => o.status === "ok") ?? null,
-		firstGood: async (id, hash) =>
-			series(id, hash)
-				.filter((o) => o.status === "ok")
-				.at(-1) ?? null,
 		at: async (id, hash, at, maxAge) =>
 			selectEvaluation(series(id, hash), at, maxAge),
 		buckets: async (id, hash, range) =>
@@ -225,14 +221,20 @@ const read = <T>(source: (signal: AbortSignal) => Promise<T>) =>
 	source(new AbortController().signal);
 const A = "a".repeat(32);
 const B = "b".repeat(32);
+const C = "c".repeat(32);
+/** First-parent walk rows, newest first (depth 0 = main HEAD). */
 function answers(
-	over: Partial<{ fromEdge: Row[]; created: Row; validated: string }> = {},
+	over: Partial<{ walk: Row[]; created: Row; validated: string }> = {},
 ) {
 	return (text: string): Row[] => {
-		if (text.includes("FROM dolt_log('main')"))
-			return text.includes("2026-10-26 00:00:00.000")
-				? (over.fromEdge ?? [{ commit_hash: A, date: "2026-10-25 23:10:00.5" }])
-				: [{ commit_hash: B, date: "2026-11-01 20:16:32.828" }];
+		if (text.includes("WITH RECURSIVE chain"))
+			return (
+				over.walk ?? [
+					{ commit_hash: B, depth: 0, date: "2026-11-01 20:16:32.828" },
+					{ commit_hash: C, depth: 1, date: "2026-10-28 10:00:00" },
+					{ commit_hash: A, depth: 2, date: "2026-10-25 23:10:00.5" },
+				]
+			);
 		if (text.includes("dolt_diff("))
 			return [{ validated: over.validated ?? "3" }];
 		return [
@@ -248,7 +250,7 @@ function answers(
 }
 
 describe("work.convergence@1 over Dolt main history", () => {
-	it("counts validated transitions by main-history row diff, never dolt.commits", async () => {
+	it("counts validated transitions between first-parent edges of main, never dolt_log", async () => {
 		const { sql, queries } = fakeSql(answers());
 		const sample = await readWorkConvergence(sql, "ratio", window, read);
 		expect(sample).toMatchObject({
@@ -268,7 +270,16 @@ describe("work.convergence@1 over Dolt main history", () => {
 		expect(sample.sourceWatermarks).toEqual([
 			{ source: "node.doltgres.main", asOf: "2026-11-02T00:00:01.000Z" },
 		]);
-		expect(queries.join("\n")).not.toContain("dolt.commits");
+		// Edges come from a bounded first-parent walk; dolt_log('main') includes
+		// back-dated commits merged in from contribution branches.
+		const walk = queries.find((q) => q.includes("WITH RECURSIVE chain"));
+		expect(walk).toContain("dolt_hashof('main')");
+		expect(walk).toContain("a.parent_index = 0");
+		expect(walk).toContain("chain.depth < 5000");
+		expect(queries.join("\n")).not.toContain("dolt_log");
+		expect(sample.evidenceRefs).toContain(
+			"dolt:first-parent-walk:cap=5000;depth=2",
+		);
 		expect(queries.find((q) => q.includes("dolt_diff("))).toContain(
 			`dolt_diff('${A}', '${B}', 'work_items')`,
 		);
@@ -289,11 +300,18 @@ describe("work.convergence@1 over Dolt main history", () => {
 		expect(
 			(await readWorkConvergence(created.sql, "created", window, read)).value,
 		).toBe(6);
-		expect(created.queries.some((q) => q.includes("dolt_log"))).toBe(false);
+		expect(created.queries.some((q) => q.includes("WITH RECURSIVE"))).toBe(
+			false,
+		);
 	});
 	it("is unknown, never zero, when history does not cover the window or the ratio has no denominator", async () => {
+		// The walk reached main's root before the window start: young history.
 		const uncovered = await readWorkConvergence(
-			fakeSql(answers({ fromEdge: [] })).sql,
+			fakeSql(
+				answers({
+					walk: [{ commit_hash: B, depth: 0, date: "2026-11-01 20:16:32.828" }],
+				}),
+			).sql,
 			"ratio",
 			window,
 			read,
@@ -302,6 +320,25 @@ describe("work.convergence@1 over Dolt main history", () => {
 		expect(uncovered).toMatchObject({
 			complete: false,
 			reason: "insufficient_history",
+		});
+		// The walk hit its cap before the window start: unbounded, not young.
+		const capped = await readWorkConvergence(
+			fakeSql(
+				answers({
+					walk: Array.from({ length: 5001 }, (_, depth) => ({
+						commit_hash: B,
+						depth,
+						date: "2026-11-01 20:16:32.828",
+					})),
+				}),
+			).sql,
+			"validated",
+			window,
+			read,
+		);
+		expect(capped).toMatchObject({
+			complete: false,
+			reason: "history_unavailable",
 		});
 		const failing = await readWorkConvergence(
 			fakeSql((t) => {

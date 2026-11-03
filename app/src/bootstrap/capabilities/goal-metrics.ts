@@ -16,6 +16,7 @@ import { PostgresMetricObservations } from "@cogni-dao/metrics/adapters/postgres
 import type { Sql } from "postgres";
 import { z } from "zod";
 import {
+	FIRST_PARENT_WALK_CAP,
 	readGithubStars,
 	readWorkConvergence,
 	readWorkCount,
@@ -63,12 +64,12 @@ export function createGoalMetrics(deps: {
 			convergenceParams.parse(params).output === "ratio" ? "ratio" : "items",
 		windowSeconds: (params) => convergenceParams.parse(params).days * 86400,
 		paramsSchema: convergenceParams,
-		// Counts (1) + main edge commits (1) + one dolt_diff count (1). Each returns <= 2 rows.
+		// Counts (1) + bounded first-parent walk of main (1, <= cap + 1 rows) + one dolt_diff count (1).
 		budget: {
 			timeoutMs: 8000,
 			maxSourceCalls: 3,
-			maxRows: 2,
-			maxResponseBytes: 65536,
+			maxRows: FIRST_PARENT_WALK_CAP + 3,
+			maxResponseBytes: 1048576,
 		},
 		compute: async (params, ctx) =>
 			readWorkConvergence(
