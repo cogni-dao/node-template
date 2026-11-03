@@ -12,6 +12,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -96,13 +97,110 @@ describe("Work Kanban", () => {
     );
     const params = vi.mocked(fetchWorkItems).mock.calls[0]?.[0];
     expect(params?.get("limit")).toBe("10");
-    expect(params?.get("rankMin")).toBe("4");
+    expect(params?.has("rankMin")).toBe(false);
+    expect(params?.get("sortBy")).toBe("rankScore");
+    expect(params?.get("sortDirection")).toBe("desc");
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     expect(navigation.router.replace).toHaveBeenCalledWith(
       "/work?cursor=next",
       { scroll: false },
     );
   });
+  it("renders independent goal links, one rank, project and safe updated times", async () => {
+    const item = {
+      ...(fixture[0] as WorkItemDto),
+      labels: ["goal:alpha", "goal:goal-alpha", "goal:beta", "goal:../unsafe"],
+      projectId: "proj.example",
+      updatedAt:
+        "Mon Nov 02 2026 18:37:35 GMT+0000 (Coordinated Universal Time)",
+    };
+    const invalid = {
+      ...(fixture[1] as WorkItemDto),
+      scores: undefined,
+      updatedAt: "bad date",
+    };
+    const missing = { ...(fixture[2] as WorkItemDto), updatedAt: "" };
+    vi.mocked(fetchWorkItems).mockResolvedValue({
+      items: [item, invalid, missing],
+      pageInfo: { endCursor: null, hasMore: false },
+    });
+    mount();
+    const open = await screen.findByRole("button", {
+      name: "task.0000: Work item 0",
+    });
+    const card = open.parentElement as HTMLElement;
+    expect(within(card).getAllByText(/^Rank /)).toHaveLength(1);
+    expect(within(card).queryByText("P2")).not.toBeInTheDocument();
+    expect(within(card).getByText("example")).toBeInTheDocument();
+    expect(within(card).getAllByRole("link")).toHaveLength(2);
+    const goal = within(card).getByRole("link", { name: "goal:alpha" });
+    expect(goal).toHaveAttribute("href", "/knowledge/goal-alpha");
+    expect(open.contains(goal)).toBe(false);
+    goal.focus();
+    expect(goal).toHaveFocus();
+    fireEvent.keyDown(goal, { key: "Enter" });
+    fireEvent.click(goal);
+    expect(navigation.router.push).not.toHaveBeenCalled();
+    fireEvent.click(open);
+    expect(navigation.router.push).toHaveBeenCalledWith(
+      "/work/items/task.0000",
+      { scroll: false },
+    );
+    expect(card.querySelector("time")).toHaveAttribute(
+      "datetime",
+      "2026-11-02T18:37:35.000Z",
+    );
+    const invalidCard = screen.getByRole("button", {
+      name: "task.0001: Work item 1",
+    }).parentElement as HTMLElement;
+    expect(within(invalidCard).getByText("Unscored")).toBeInTheDocument();
+    expect(within(invalidCard).getByText(/Updated/)).toHaveTextContent(
+      "Updated —",
+    );
+    expect(invalidCard.querySelector("time")).toBeNull();
+    expect(
+      screen
+        .getByRole("button", { name: "task.0002: Work item 2" })
+        .parentElement?.querySelector("time"),
+    ).toBeNull();
+  });
+
+  it("preserves explicit rank bounds and clears them on request", async () => {
+    navigation.params = new URLSearchParams("rankMin=2&rankMax=5&status=all");
+    mount();
+    await waitFor(() => expect(fetchWorkItems).toHaveBeenCalled());
+    const params = vi.mocked(fetchWorkItems).mock.calls[0]?.[0];
+    expect(params?.get("rankMin")).toBe("2");
+    expect(params?.get("rankMax")).toBe("5");
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    const url = vi
+      .mocked(navigation.router.replace)
+      .mock.calls.at(-1)?.[0] as string;
+    const cleared = new URL(url, "https://example.com").searchParams;
+    expect(cleared.get("rankMin")).toBe("");
+    expect(cleared.get("rankMax")).toBe("");
+  });
+
+  it("discloses hidden legacy sorting and resets only on request", async () => {
+    navigation.params = new URLSearchParams("sort=-priority&cursor=p2");
+    mount();
+    await waitFor(() => expect(fetchWorkItems).toHaveBeenCalled());
+    expect(
+      screen.getByText("Sorted by priority (descending)"),
+    ).toBeInTheDocument();
+    expect(navigation.router.replace).not.toHaveBeenCalled();
+    expect(vi.mocked(fetchWorkItems).mock.calls[0]?.[0].get("sortBy")).toBe(
+      "priority",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Reset to rank" }));
+    const url = vi
+      .mocked(navigation.router.replace)
+      .mock.calls.at(-1)?.[0] as string;
+    const reset = new URL(url, "https://example.com").searchParams;
+    expect(reset.get("sort")).toBe("-rankScore");
+    expect(reset.has("cursor")).toBe(false);
+  });
+
   it("retains selected empty columns when no items match", async () => {
     navigation.params = new URLSearchParams("columns=done,needs_design");
     vi.mocked(fetchWorkItems).mockResolvedValue({

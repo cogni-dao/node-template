@@ -112,10 +112,7 @@ export function WorkDashboardView({
       const value = Number(raw);
       return Number.isFinite(value) && value >= 0 ? value : undefined;
     };
-    const rankRange =
-      searchParams.has("rankMin") || searchParams.has("rankMax")
-        ? [numberParam("rankMin"), numberParam("rankMax")]
-        : [4, undefined];
+    const rankRange = [numberParam("rankMin"), numberParam("rankMax")];
     if (rankRange.some((value) => value !== undefined)) {
       filters.push({ id: "rankScore", value: rankRange });
     }
@@ -519,7 +516,6 @@ export function WorkDashboardView({
                 .getFlatHeaders()
                 .filter((header) =>
                   [
-                    "priority",
                     "rankScore",
                     "type",
                     "status",
@@ -535,6 +531,28 @@ export function WorkDashboardView({
                   </div>
                 ))}
             </fieldset>
+            {sorting[0] &&
+              !["rankScore", "type", "status", "projectId"].includes(
+                sorting[0].id,
+              ) && (
+                <div className="mb-4 flex flex-wrap items-center gap-2 text-muted-foreground text-xs">
+                  <span>
+                    Sorted by {sorting[0].id} (
+                    {sorting[0].desc ? "descending" : "ascending"})
+                  </span>
+                  <button
+                    type="button"
+                    className="underline hover:text-foreground"
+                    onClick={() => {
+                      const next = [{ id: "rankScore", desc: true }];
+                      setSorting(next);
+                      syncUrl(columnFilters, next, globalFilter);
+                    }}
+                  >
+                    Reset to rank
+                  </button>
+                </div>
+              )}
             <WorkKanban
               items={rows.map((row) => row.original)}
               statuses={visibleStatuses}

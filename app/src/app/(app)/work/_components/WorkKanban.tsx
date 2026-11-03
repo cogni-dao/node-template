@@ -7,7 +7,9 @@
 import type { WorkItemDto } from "@cogni/node-contracts";
 import { Skeleton } from "@cogni/node-ui-kit/shadcn/skeleton";
 import { rankScore } from "@cogni/work-items";
+import Link from "next/link";
 import { useMemo } from "react";
+import { RelativeTime } from "../../knowledge/_components/RelativeTime";
 import {
   Kanban,
   KanbanBoard,
@@ -82,44 +84,74 @@ export function WorkKanban({
               ) : (
                 cards.map((item) => {
                   const score = rankScore(item.scores);
+                  const goals = new Map<string, string>();
+                  for (const label of item.labels) {
+                    const match =
+                      /^goal:(?:goal-)?([a-z0-9]+(?:-[a-z0-9]+)*)$/.exec(label);
+                    if (match?.[1] && !goals.has(match[1]))
+                      goals.set(match[1], label);
+                  }
+                  const updated = item.updatedAt
+                    ? new Date(item.updatedAt)
+                    : null;
+                  const updatedIso =
+                    updated && Number.isFinite(updated.getTime())
+                      ? updated.toISOString()
+                      : undefined;
                   return (
-                    <KanbanItem key={item.id} value={item.id} asChild>
+                    <KanbanItem
+                      key={item.id}
+                      value={item.id}
+                      className="rounded-lg border bg-card shadow-xs"
+                    >
                       <button
                         type="button"
                         onClick={() => onOpenItem(item)}
-                        className="flex w-full flex-col gap-3 rounded-lg border bg-card p-4 text-left shadow-xs transition-colors hover:border-primary/40 hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        className="flex w-full flex-col gap-3 rounded-lg p-4 text-left transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         aria-label={`${item.id}: ${item.title}`}
                       >
                         <span className="flex w-full items-center justify-between gap-2">
-                          <span className="flex items-center gap-2">
-                            <TypeIcon type={item.type} />
-                            <span className="font-mono text-muted-foreground text-xs">
-                              {item.id}
-                            </span>
-                          </span>
-                          {item.priority != null && (
-                            <span className="rounded bg-muted px-1.5 py-0.5 font-medium text-muted-foreground text-xs">
-                              P{item.priority}
-                            </span>
-                          )}
-                        </span>
-                        <span className="line-clamp-3 font-medium text-sm leading-relaxed">
-                          {item.title}
-                        </span>
-                        <span className="flex w-full items-center justify-between gap-3 text-muted-foreground text-xs">
-                          <span className="truncate">
-                            {item.projectId?.replace("proj.", "") ?? ""}
-                          </span>
                           <span
-                            className="shrink-0 font-mono"
+                            className="shrink-0 font-mono text-muted-foreground text-xs"
                             title="Rank score"
                           >
                             {score === undefined
                               ? "Unscored"
                               : `Rank ${score.toFixed(1)}`}
                           </span>
+                          <span className="flex items-center gap-2">
+                            <TypeIcon type={item.type} />
+                            <span className="font-mono text-muted-foreground text-xs">
+                              {item.id}
+                            </span>
+                          </span>
                         </span>
+                        <span className="line-clamp-3 font-medium text-sm leading-relaxed">
+                          {item.title}
+                        </span>
+                        {item.projectId && (
+                          <span className="truncate text-muted-foreground text-xs">
+                            {item.projectId.replace("proj.", "")}
+                          </span>
+                        )}
                       </button>
+                      <div className="flex items-end justify-between gap-3 px-4 pb-4 text-muted-foreground text-xs">
+                        <span className="flex min-w-0 flex-wrap gap-1">
+                          {[...goals].map(([slug, label]) => (
+                            <Link
+                              key={slug}
+                              href={`/knowledge/${encodeURIComponent(`goal-${slug}`)}`}
+                              prefetch={false}
+                              className="break-all underline hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            >
+                              {label}
+                            </Link>
+                          ))}
+                        </span>
+                        <span className="shrink-0">
+                          Updated <RelativeTime iso={updatedIso} />
+                        </span>
+                      </div>
                     </KanbanItem>
                   );
                 })
