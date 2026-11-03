@@ -312,6 +312,8 @@ export const GoalHypothesisSchema = z.object({
 		z.object({
 			binding: KpiBindingSchema,
 			baselineValue: z.number().finite().nullable(),
+			/** Baseline reading's window.end, for drawing the bet window. */
+			baselineAt: z.string().nullable(),
 			assessment: KpiAssessmentSchema,
 		}),
 	),
