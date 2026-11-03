@@ -114,4 +114,4 @@ When adding new protected pages (e.g., `/billing`, `/api-keys`), place them unde
 - Uses Next.js App Router patterns
 - API routes are thin adapters that delegate to features
 
-/kpis and /kpis/[id] are authenticated metric/history views. /api/v1/metrics exposes list, detail/history, exact immutable observation reads and live computation; subject projections share goal/hypothesis observation identities.
+Goals and KPIs live in the Knowledge `?mode=goals` tab; there is no dedicated KPI page. /api/v1/metrics exposes list, detail/history, ranged `/{id}/history` buckets, goal progress (`/goals`), exact immutable observation reads and live computation; subject projections share goal/hypothesis observation identities.
