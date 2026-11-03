@@ -37,11 +37,7 @@ import {
   COGNI_DECIDE_PROMPT,
   COGNI_DECIDE_TOOL_IDS,
 } from "./graphs/mission/cogni-decide";
-import { COGNI_CHAT_PROMPT } from "./graphs/work-prioritizer/prompts";
-import {
-  COGNI_READ_PROMPT,
-  COGNI_READ_TOOL_IDS,
-} from "./graphs/mission/cogni-read";
+import { COGNI_READ_TOOL_IDS } from "./graphs/mission/cogni-read";
 import {
   createMissionGraph,
   GIT_REVIEWER_GRAPH_NAME,
@@ -55,6 +51,11 @@ import {
   GIT_REVIEWER_TOOL_IDS,
   OPERATING_REVIEW_TOOL_IDS,
 } from "./graphs/mission/tools";
+import {
+  createNodeOperatorGraph,
+  NODE_OPERATOR_TOOL_IDS,
+} from "./graphs/node-operator/graph";
+import { nodeOperatorCatalogPrompt } from "./graphs/node-operator/prompts";
 import { createPoetGraph, POET_GRAPH_NAME } from "./graphs/poet/graph";
 import { POET_TOOL_IDS } from "./graphs/poet/tools";
 import {
@@ -77,6 +78,7 @@ import {
 } from "./graphs/research/graph";
 import { RESEARCH_TOOL_IDS } from "./graphs/research/tools";
 import { WORK_PRIORITIZER_GRAPH_NAME } from "./graphs/work-prioritizer/graph";
+import { COGNI_CHAT_PROMPT } from "./graphs/work-prioritizer/prompts";
 import type { CreateGraphFn } from "./inproc/types";
 
 /**
@@ -317,10 +319,21 @@ export const NODE_LANGGRAPH_CATALOG = {
   },
   cogni: {
     displayName: "Cogni",
-    description: "Node-grounded, read-only Cogni assistant",
-    toolIds: COGNI_READ_TOOL_IDS as readonly string[],
-    graphFactory: createMissionGraph,
-    systemPrompt: COGNI_READ_PROMPT,
+    description:
+      "Node operator: reads goals and work, manages authorized recurring jobs, and verifies effects",
+    toolIds: NODE_OPERATOR_TOOL_IDS,
+    graphFactory: createNodeOperatorGraph,
+    get systemPrompt(): string {
+      return nodeOperatorCatalogPrompt(
+        Object.entries(NODE_LANGGRAPH_CATALOG).map(([id, entry]) => ({
+          id: `langgraph:${id}`,
+          description: entry.description,
+          toolIds: entry.toolIds,
+          mcpServerIds:
+            "mcpServerIds" in entry ? (entry.mcpServerIds ?? []) : [],
+        })),
+      );
+    },
     program: "cogni",
   },
 } as const;
