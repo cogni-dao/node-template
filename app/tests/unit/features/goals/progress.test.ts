@@ -366,6 +366,50 @@ describe("work.convergence@1 over Dolt main history", () => {
 			reason: "zero_denominator",
 		});
 	});
+	it("skips a malformed metric row and keeps listing and refreshing the rest", async () => {
+		const rows: Row[] = [
+			{
+				id: "a-bad",
+				title: "Bad",
+				metric_spec: '{"calculatorId":"nope"}',
+				updated_at: "2026-11-01T00:00:00Z",
+			},
+			{
+				id: "b-good",
+				title: "Good",
+				metric_spec: {
+					calculatorId: "work.count@1",
+					params: { mode: "open" },
+					maxAgeSeconds: 120,
+				},
+				updated_at: "2026-11-01T00:00:00Z",
+			},
+		];
+		const knowledge = fakeSql((text) => {
+			const one = /WHERE id='([^']+)'/.exec(text)?.[1];
+			if (one) return rows.filter((r) => r.id === one);
+			const after = /AND id > '([^']+)'/.exec(text)?.[1];
+			const limit = Number(/LIMIT (\d+)/.exec(text)?.[1] ?? 50);
+			return rows.filter((r) => !after || String(r.id) > after).slice(0, limit);
+		});
+		const empty = Object.assign(async () => [], {
+			unsafe: async () => [],
+		}) as unknown as Sql;
+		const events: object[] = [];
+		const service = createGoalMetrics({
+			knowledgeSql: knowledge.sql,
+			observationsSql: empty,
+			environment: "test",
+			log: (event) => events.push(event),
+		});
+		const page = await service.list(1);
+		expect(page.items.map((v) => v.definition.id)).toEqual(["b-good"]);
+		expect(page.nextCursor).toBeNull();
+		expect(events).toContainEqual({
+			event: "metric.definition_invalid",
+			metricId: "a-bad",
+		});
+	});
 	it("registers a strict historical-window calculator with output units", () => {
 		const service = createGoalMetrics({
 			knowledgeSql: fakeSql(() => []).sql,

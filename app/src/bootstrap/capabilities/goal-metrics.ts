@@ -95,17 +95,26 @@ export function createGoalMetrics(deps: {
 			);
 		},
 	});
-	const parse = (row: Record<string, unknown>): MetricDefinition => {
-		const spec =
-			typeof row.metric_spec === "string"
-				? JSON.parse(row.metric_spec)
-				: row.metric_spec;
-		return {
-			id: String(row.id),
-			title: String(row.title),
-			revision: new Date(row.updated_at as string).toISOString(),
-			spec: MetricSpecSchema.parse(spec),
-		};
+	/** One malformed reviewed row must not stop every other metric: skip it and log. */
+	const parse = (row: Record<string, unknown>): MetricDefinition | null => {
+		try {
+			const spec =
+				typeof row.metric_spec === "string"
+					? JSON.parse(row.metric_spec)
+					: row.metric_spec;
+			return {
+				id: String(row.id),
+				title: String(row.title),
+				revision: new Date(row.updated_at as string).toISOString(),
+				spec: MetricSpecSchema.parse(spec),
+			};
+		} catch {
+			deps.log({
+				event: "metric.definition_invalid",
+				metricId: String(row.id),
+			});
+			return null;
+		}
 	};
 	function literal(id: string) {
 		return `'${id.replace(/'/g, "''")}'`;
@@ -119,14 +128,24 @@ export function createGoalMetrics(deps: {
 		},
 		async list(limit: number, after?: string) {
 			const cap = Math.min(50, Math.max(1, Math.floor(limit)));
-			const rows = await deps.knowledgeSql.unsafe(
-				`SELECT id,title,metric_spec,updated_at FROM knowledge WHERE metric_spec IS NOT NULL AND status <> 'deprecated' ${after ? `AND id > ${literal(after)}` : ""} ORDER BY id LIMIT ${cap + 1}`,
-			);
-			const items = rows.slice(0, cap).map(parse);
-			return {
-				items,
-				nextCursor: rows.length > cap ? (items.at(-1)?.id ?? null) : null,
-			};
+			const items: MetricDefinition[] = [];
+			let cursor = after;
+			let more = true;
+			// Invalid rows are skipped, so keep reading until the page is full; the
+			// cursor advances past every examined row so refresh never stalls on one.
+			for (let pass = 0; pass < 20 && more && items.length < cap; pass++) {
+				const need = cap - items.length;
+				const rows = await deps.knowledgeSql.unsafe(
+					`SELECT id,title,metric_spec,updated_at FROM knowledge WHERE metric_spec IS NOT NULL AND status <> 'deprecated' ${cursor ? `AND id > ${literal(cursor)}` : ""} ORDER BY id LIMIT ${need + 1}`,
+				);
+				more = rows.length > need;
+				for (const row of rows.slice(0, need)) {
+					cursor = String(row.id);
+					const definition = parse(row);
+					if (definition) items.push(definition);
+				}
+			}
+			return { items, nextCursor: more ? (cursor ?? null) : null };
 		},
 	};
 	return createMetricService({
