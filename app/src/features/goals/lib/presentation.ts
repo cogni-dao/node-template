@@ -316,13 +316,20 @@ export function deadlineText(
   total: number,
   nowIso: string
 ): string | null {
-  const first = deadlines[0];
-  if (!first) return null;
+  // A passed deadline is never "next": report it separately as past due.
+  const now = Date.parse(nowIso);
+  const upcoming = deadlines.filter((d) => Date.parse(d) > now);
+  const pastDue = deadlines.length - upcoming.length;
+  const pastText = pastDue ? `${pastDue} past due` : "";
+  const first = upcoming[0];
+  if (!first) return pastText || null;
   const left = daysLeft(first, nowIso);
   const leftText = left === null ? "" : ` (${plural(left, "day")})`;
-  if (deadlines.length === 1)
-    return `${total === 1 ? "due" : "all due"} ${formatDate(first, true)}${leftText}`;
-  return `next due ${formatDate(first, true)}${leftText}`;
+  const dueText =
+    upcoming.length === 1 && !pastDue
+      ? `${total === 1 ? "due" : "all due"} ${formatDate(first, true)}${leftText}`
+      : `next due ${formatDate(first, true)}${leftText}`;
+  return pastText ? `${dueText} · ${pastText}` : dueText;
 }
 
 // ---------------------------------------------------------------- bullet

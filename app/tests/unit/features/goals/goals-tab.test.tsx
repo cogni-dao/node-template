@@ -32,7 +32,7 @@ import {
 } from "@tests/_fixtures/goals/progress";
 import { KnowledgeDashboardView } from "@/app/(app)/knowledge/view";
 import { GoalsBoard, MetricEvidence } from "@/features/goals";
-import { STATUS_META } from "@/features/goals/lib/presentation";
+import { deadlineText, STATUS_META } from "@/features/goals/lib/presentation";
 
 const navigation = vi.hoisted(() => ({
   mode: "browse",
@@ -319,5 +319,15 @@ describe("MetricEvidence", () => {
       "/api/v1/metrics/work",
       `/api/v1/metrics/work/observations/${pinned.id}`,
     ]);
+  });
+});
+
+describe("goal deadline summary", () => {
+  it("never reports a passed deadline as next due", () => {
+    const now = "2026-11-04T06:00:00.000Z";
+    expect(
+      deadlineText(["2026-10-24T23:59:00.000Z", "2027-01-31T00:00:00.000Z"], 3, now)
+    ).toBe("next due Jan 31, 2027 (88 days) · 1 past due");
+    expect(deadlineText(["2026-10-24T23:59:00.000Z"], 1, now)).toBe("1 past due");
   });
 });
