@@ -155,6 +155,10 @@ export function createScheduleManageImplementation(
     execute: async (
       input: ScheduleManageInput
     ): Promise<ScheduleManageOutput> => {
+      if (input.action !== "create" &&
+          (input.instruction !== undefined || input.purpose !== undefined || input.graphId !== undefined)) {
+        throw new Error("graphId, instruction and purpose are create-only fields; configuration changes require a supported update path.");
+      }
       switch (input.action) {
         case "create": {
           const graphId = requireField(input.graphId, "graphId", "create");
@@ -185,6 +189,9 @@ export function createScheduleManageImplementation(
           };
         }
         case "update": {
+          if (input.cron === undefined && input.timezone === undefined && input.input === undefined) {
+            throw new Error("update requires a configuration change; use enable or disable to toggle a schedule.");
+          }
           const scheduleId = requireField(
             input.scheduleId,
             "scheduleId",
