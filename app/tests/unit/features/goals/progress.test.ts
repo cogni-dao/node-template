@@ -15,7 +15,10 @@ import {
 import type { Sql } from "postgres";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { readWorkConvergence } from "@/adapters/server/metrics/sources";
+import {
+	doltInstant,
+	readWorkConvergence,
+} from "@/adapters/server/metrics/sources";
 import { createGoalMetricTools } from "@/bootstrap/capabilities/goal-metric-tools";
 import {
 	createGoalMetrics,
@@ -409,6 +412,20 @@ describe("work.convergence@1 over Dolt main history", () => {
 			event: "metric.definition_invalid",
 			metricId: "a-bad",
 		});
+	});
+	it("reads Dolt commit dates in every UTC text form deployed Doltgres may return", () => {
+		const want = "2026-11-04T21:44:01.123Z";
+		for (const raw of [
+			"2026-11-04 21:44:01.123",
+			"2026-11-04 21:44:01.123Z",
+			"2026-11-04 21:44:01.123+00",
+			"2026-11-04 21:44:01.123 +0000",
+			"2026-11-04 21:44:01.123+00:00",
+			"2026-11-04 21:44:01.123 UTC",
+			new Date(want),
+		])
+			expect(doltInstant(raw), String(raw)).toBe(want);
+		expect(doltInstant("not a date")).toBeNull();
 	});
 	it("registers a strict historical-window calculator with output units", () => {
 		const service = createGoalMetrics({

@@ -130,10 +130,24 @@ function doltUtc(iso: string): string {
 		.replace("T", " ")
 		.replace("Z", "");
 }
-function doltInstant(value: unknown): string | null {
-	const text = typeof value === "string" ? value.trim() : "";
-	const ms = Date.parse(`${text.replace(" ", "T")}Z`);
-	return text && Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+/** Dolt commit dates are UTC; accept zone-less, Z, +00, +0000, +00:00 and " UTC" forms. */
+export function doltInstant(value: unknown): string | null {
+	const text =
+		value instanceof Date
+			? value.toISOString()
+			: typeof value === "string"
+				? value.trim()
+				: "";
+	if (!text) return null;
+	const iso = text
+		.replace(" ", "T")
+		.replace(/\s*UTC$/i, "Z")
+		.replace(/\s+(?=[+-]\d{2})/, "")
+		.replace(/([+-]\d{2})(\d{2})$/, "$1:$2")
+		.replace(/([+-]\d{2})$/, "$1:00");
+	const zoned = /(Z|[+-]\d{2}:\d{2})$/i.test(iso);
+	const ms = Date.parse(zoned ? iso : `${iso}Z`);
+	return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
 }
 const COMMIT = /^[a-z0-9]{32}$/;
 
