@@ -59,7 +59,7 @@ export function createScoresGuard(
   return new DynamicStructuredTool({
     name: "work_item_scores_write",
     description:
-      "Propose only changed scores for one fully read open goal-cited item. Required guidance and exact observed source evidence are checked before the host writes.",
+      "Propose only changed scores for one fully read open goal-cited item. Required guidance and exact observed source evidence are checked before the host writes. Cite observed canonical URLs: HTTPS, or the exact host-bound HTTP loopback app during local development.",
     schema: proposal,
     func: async (input, _manager, config) => {
       if (
@@ -116,7 +116,7 @@ export function createScoresGuard(
               goal.content,
             ].some((text) => text?.includes(ev));
           if (
-            url.protocol !== "https:" ||
+            !receipts.allowsEvidenceUrl(url) ||
             ev === item.sourceUrl ||
             !source ||
             !linked

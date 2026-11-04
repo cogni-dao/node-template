@@ -57,6 +57,23 @@ export class RunReceipts {
 
   constructor(private readonly origin: string) {}
 
+  /** Local development cites its actual app, never a fabricated production URL. */
+  allowsEvidenceUrl(url: URL): boolean {
+    if (url.username || url.password) return false;
+    if (url.protocol === "https:") return true;
+    try {
+      const host = new URL(this.origin);
+      return (
+        host.protocol === "http:" &&
+        ["localhost", "127.0.0.1", "[::1]"].includes(host.hostname) &&
+        url.protocol === "http:" &&
+        url.origin === host.origin
+      );
+    } catch {
+      return false;
+    }
+  }
+
   recordTool(name: string, args: unknown, value: unknown, toolCallId?: string) {
     const id = toolCallId ?? `observed-${this.reportMessages.length}`;
     const parsedArgs = z.record(z.string(), z.unknown()).safeParse(args);

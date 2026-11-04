@@ -115,14 +115,18 @@ describe("evaluation reader provenance", () => {
     });
   });
 
-  it("does not manufacture a source URL without trusted HTTPS configuration", () => {
+  it("admits the configured loopback app while rejecting insecure remote origins", () => {
     for (const configured of [
       undefined,
       "bad origin",
-      "http://localhost:3200",
+      "http://node.example.test:3200",
+      "http://localhost.example.test:3200",
       "https://user:password@example.com",
     ]) {
       expect(readSourceUrl(configured, "knowledge", entry.id)).toBeUndefined();
+    }
+    for (const local of ["http://localhost:3200", "http://127.0.0.1:55080", "http://[::1]:3200"]) {
+      expect(readSourceUrl(local, "knowledge", entry.id)).toBe(`${local}/knowledge/${entry.id}`);
     }
     expect(
       readSourceUrl(
