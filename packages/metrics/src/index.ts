@@ -132,6 +132,7 @@ export function createMetricService(deps: {
 		definition: MetricDefinition,
 	): Promise<boolean>;
 	log?(event: {
+		event: "metric.compute.completed";
 		metricId: string;
 		observationId: string;
 		status: string;
@@ -331,6 +332,7 @@ export function createMetricService(deps: {
 			);
 			if (!saved) throw new MetricError("observation_lease_expired", 409);
 			deps.log?.({
+				event: "metric.compute.completed",
 				metricId,
 				observationId: saved.id,
 				status: saved.status,
