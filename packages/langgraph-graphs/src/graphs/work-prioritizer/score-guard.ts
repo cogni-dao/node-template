@@ -62,11 +62,11 @@ export function createScoresGuard(
       "Propose only changed scores for one fully read open goal-cited item. Required guidance and exact observed source evidence are checked before the host writes. Cite observed canonical URLs: HTTPS, or the exact host-bound HTTP loopback app during local development.",
     schema: proposal,
     func: async (input, _manager, config) => {
-      if (
-        receipts.denied ||
-        requiredGuidance.some((id) => !receipts.guidance.has(id))
-      )
-        return "guard_rejected: incomplete_guidance_or_read";
+      if (receipts.denied)
+        return "guard_rejected: an earlier source read failed; this run cannot write. Report the failure and stop.";
+      const missingGuidance = requiredGuidance.filter((id) => !receipts.guidance.has(id));
+      if (missingGuidance.length)
+        return `guard_rejected: read these exact IDs with core__knowledge_read before retrying: ${missingGuidance.join(", ")}`;
       const item = receipts.items.get(input.id);
       if (
         !item ||
