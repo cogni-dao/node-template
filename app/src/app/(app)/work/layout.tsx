@@ -3,11 +3,17 @@
 
 import type { ReactNode } from "react";
 import { WorkNavigationBoundary } from "./WorkNavigationBoundary";
+import { WorkRouteView } from "./WorkRouteView";
 
 export default function WorkLayout({
 	children,
 }: {
 	readonly children: ReactNode;
 }) {
-	return <WorkNavigationBoundary>{children}</WorkNavigationBoundary>;
+	return (
+		<WorkNavigationBoundary>
+			<WorkRouteView />
+			{children}
+		</WorkNavigationBoundary>
+	);
 }
