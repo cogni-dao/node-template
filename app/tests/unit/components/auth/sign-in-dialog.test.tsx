@@ -176,6 +176,21 @@ describe("SignInDialog — start failures", () => {
     finish({ ok: true, json: async () => ({ authorizeUrl: "https://op.test/identity/attest" }) });
     await waitFor(() => expect(assign).toHaveBeenCalledWith("https://op.test/identity/attest"));
   });
+  it.each(["/identity/attest", "https://", "javascript:alert(1)", "data:text/html,hello"])("rejects invalid redirect %s and permits retry", async (authorizeUrl) => {
+    const button = await brokerButton();
+    const assign = vi.fn();
+    vi.stubGlobal("location", { assign });
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ authorizeUrl }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ authorizeUrl: "https://op.test/identity/attest" }) }));
+    fireEvent.click(button);
+    expect(await screen.findByRole("alert")).toHaveTextContent(/sign in/i);
+    expect(assign).not.toHaveBeenCalled();
+    expect(button).toBeEnabled();
+    fireEvent.click(button);
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("https://op.test/identity/attest"));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
   it("announces ordinary provider promise rejection without exposing its message", async () => {
     mockProviders(["discord"]);
     signIn.mockRejectedValueOnce(new Error("secret internal detail"));

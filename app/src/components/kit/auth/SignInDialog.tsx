@@ -86,6 +86,10 @@ async function startSignIn(providerId: string): Promise<void> {
 	if (typeof authorizeUrl !== "string" || !authorizeUrl.trim()) {
 		throw new Error("invalid start response");
 	}
+	const redirect = new URL(authorizeUrl);
+	if (redirect.protocol !== "https:" && redirect.protocol !== "http:") {
+		throw new Error("invalid start response");
+	}
 	window.location.assign(authorizeUrl);
 }
 
