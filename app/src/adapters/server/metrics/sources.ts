@@ -166,7 +166,12 @@ export async function readWorkValidatedHistory(
 			toAt: string | null;
 			depth: number;
 	  }
-	| { ok: false; reason: "insufficient_history" | "history_unavailable" }
+	| {
+			ok: false;
+			reason: "insufficient_history" | "history_unavailable";
+			/** Which history step failed; safe to publish (no data, no DSN). */
+			step: string;
+	  }
 > {
 	try {
 		const walk = await read((signal) =>
@@ -187,8 +192,14 @@ export async function readWorkValidatedHistory(
 			hash: String(r.commit_hash ?? ""),
 			at: Date.parse(doltInstant(r.date) ?? ""),
 		}));
-		if (!chain.length || chain.some((c) => !Number.isFinite(c.at)))
-			return { ok: false, reason: "history_unavailable" };
+		if (!chain.length)
+			return { ok: false, reason: "history_unavailable", step: "walk_empty" };
+		if (chain.some((c) => !Number.isFinite(c.at)))
+			return {
+				ok: false,
+				reason: "history_unavailable",
+				step: "walk_bad_date",
+			};
 		const edge = (iso: string) =>
 			chain.find((c) => c.at <= Date.parse(iso)) ?? null;
 		const fromEdge = edge(window.start);
@@ -196,15 +207,24 @@ export async function readWorkValidatedHistory(
 		if (!fromEdge) {
 			// The walk stopped at the cap: unbounded, not young.
 			if (chain.length > FIRST_PARENT_WALK_CAP)
-				return { ok: false, reason: "history_unavailable" };
+				return { ok: false, reason: "history_unavailable", step: "walk_cap" };
 			// Reached the root first: main history starts inside the window.
-			return { ok: false, reason: "insufficient_history" };
+			return {
+				ok: false,
+				reason: "insufficient_history",
+				step: `root_at_depth_${chain.length - 1}`,
+			};
 		}
-		if (!toEdge) return { ok: false, reason: "insufficient_history" };
+		if (!toEdge)
+			return { ok: false, reason: "insufficient_history", step: "no_end_edge" };
 		const fromHash = fromEdge.hash;
 		const toHash = toEdge.hash;
 		if (!COMMIT.test(fromHash) || !COMMIT.test(toHash))
-			return { ok: false, reason: "history_unavailable" };
+			return {
+				ok: false,
+				reason: "history_unavailable",
+				step: "bad_commit_hash",
+			};
 		const validated =
 			fromHash === toHash
 				? 0
@@ -220,7 +240,11 @@ export async function readWorkValidatedHistory(
 						)[0]?.validated,
 					);
 		if (!Number.isInteger(validated) || validated < 0)
-			return { ok: false, reason: "history_unavailable" };
+			return {
+				ok: false,
+				reason: "history_unavailable",
+				step: "bad_diff_count",
+			};
 		return {
 			ok: true,
 			validated,
@@ -239,7 +263,23 @@ export async function readWorkValidatedHistory(
 				error.name === "TimeoutError")
 		)
 			throw error;
-		return { ok: false, reason: "history_unavailable" };
+		// Publish only the SQLSTATE / error class, never the message (may echo SQL).
+		const code =
+			error && typeof error === "object" && "code" in error
+				? String((error as { code: unknown }).code).replace(
+						/[^A-Za-z0-9_]/g,
+						"",
+					)
+				: "";
+		const name =
+			error instanceof Error
+				? error.name.replace(/[^A-Za-z0-9_]/g, "")
+				: "unknown";
+		return {
+			ok: false,
+			reason: "history_unavailable",
+			step: `query_failed:${code || name}`.slice(0, 64),
+		};
 	}
 }
 
@@ -297,7 +337,10 @@ export async function readWorkConvergence(
 	);
 	if (output === "created") return sample(created, true);
 	const history = await readWorkValidatedHistory(sql, { start, end }, read);
-	if (!history.ok) return sample(0, false, history.reason);
+	if (!history.ok) {
+		evidenceRefs.push(`dolt:history:${history.step}`);
+		return sample(0, false, history.reason);
+	}
 	evidenceRefs.push(
 		`dolt:main:${history.from}..${history.to}${history.toAt ? `@${history.toAt}` : ""}`,
 		"node:work_items:validated:dolt_diff:done+deploy_verified",
