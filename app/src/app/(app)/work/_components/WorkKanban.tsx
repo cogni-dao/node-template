@@ -101,12 +101,14 @@ export function WorkKanban({
                     <div
                       key={item.id}
                       data-slot="kanban-item"
-                      className="rounded-lg border bg-card shadow-xs"
+                      className="relative flex flex-col gap-3 rounded-lg border bg-card p-4 shadow-xs transition-colors focus-within:ring-2 focus-within:ring-ring hover:bg-accent/40"
                     >
+                      {/* One card, one hover/focus surface: the button stretches over the
+                          whole card; only the goal link sits above it. */}
                       <button
                         type="button"
                         onClick={() => onOpenItem(item)}
-                        className="flex w-full flex-col gap-3 rounded-lg p-4 text-left transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        className="flex w-full flex-col gap-3 text-left after:absolute after:inset-0 after:rounded-lg focus-visible:outline-none"
                         aria-label={`${item.id}: ${item.title}`}
                       >
                         <span className="flex w-full items-center justify-between gap-2">
@@ -128,20 +130,15 @@ export function WorkKanban({
                         <span className="line-clamp-3 font-medium text-sm leading-relaxed">
                           {item.title}
                         </span>
-                        {item.projectId && (
-                          <span className="truncate text-muted-foreground text-xs">
-                            {item.projectId.replace("proj.", "")}
-                          </span>
-                        )}
                       </button>
-                      <div className="flex items-end justify-between gap-3 px-4 pb-4 text-muted-foreground text-xs">
+                      <div className="flex items-center justify-between gap-3 text-muted-foreground text-xs">
                         <span className="flex min-w-0 flex-wrap gap-1">
-                          {[...goals].map(([slug, label]) => (
+                          {[...goals].slice(0, 1).map(([slug, label]) => (
                             <Link
                               key={slug}
                               href={`/knowledge/${encodeURIComponent(`goal-${slug}`)}`}
                               prefetch={false}
-                              className="break-all underline hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                              className="relative z-10 truncate underline hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                             >
                               {label}
                             </Link>

@@ -202,7 +202,7 @@ describe("Work Kanban", () => {
       { scroll: false },
     );
   });
-  it("renders independent goal links, one rank, project and safe updated times", async () => {
+  it("renders one rank, one goal pointer, no project, and safe updated times on one hover surface", async () => {
     const item = {
       ...(fixture[0] as WorkItemDto),
       labels: ["goal:alpha", "goal:goal-alpha", "goal:beta", "goal:../unsafe"],
@@ -231,8 +231,10 @@ describe("Work Kanban", () => {
     expect(card.tabIndex).toBe(-1);
     expect(within(card).getAllByText(/^Rank /)).toHaveLength(1);
     expect(within(card).queryByText("P2")).not.toBeInTheDocument();
-    expect(within(card).getByText("example")).toBeInTheDocument();
-    expect(within(card).getAllByRole("link")).toHaveLength(2);
+    expect(within(card).queryByText("example")).not.toBeInTheDocument();
+    expect(within(card).getAllByRole("link")).toHaveLength(1);
+    expect(card.className).toContain("hover:bg-accent/40");
+    expect(open.className).not.toContain("hover:");
     const goal = within(card).getByRole("link", { name: "goal:alpha" });
     expect(goal).toHaveAttribute("href", "/knowledge/goal-alpha");
     expect(open.contains(goal)).toBe(false);
