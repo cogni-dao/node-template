@@ -15,8 +15,11 @@ cache, so a warm session can work offline.
 
 The contract must already be model-visible before normal work: Claude imports the cache
 through `CLAUDE.md`; Codex receives uncapped SessionStart context; supported OpenCode 1.x
-loads it through `opencode.json.instructions`. Do not manually read the cache merely to
-bootstrap; a missing native import is a delivery failure.
+loads it through `opencode.json.instructions`. Each channel needs a producer, and each
+producer runs inside its own harness's startup: Claude and Codex from a SessionStart hook,
+OpenCode from the `.opencode/plugins` project plugin, because OpenCode 1.x has no hook and
+resolves `instructions` once, before the first token. Do not manually read the cache
+merely to bootstrap; a missing native import is a delivery failure.
 
 ## Recovery when no complete contract is loaded
 
@@ -31,9 +34,10 @@ without it. Recovery ends only when the native instruction path loads a complete
 
 On first setup, register through `/api/v1/agent/register` and save COGNI_NODE_API_KEY in
 the gitignored `.env.cogni`. Operator CI/CD credentials are not cognition credentials.
-Workspace setup warms the cache before the first agent starts. Claude resolves its
-imports before the SessionStart fetch can finish: after recovery warms the cache,
-restart or resume so the native instruction path loads it before normal work begins.
+Conductor setup does not warm the cache, and cannot: it finishes after the agent process
+is already up. Production is per-harness at agent startup. Claude resolves its imports
+before the SessionStart fetch can finish, so after recovery warms the cache, restart or
+resume so the native instruction path loads it before normal work begins.
 The loader may cache a recovery notice for the next import; that notice is never a
 complete contract.
 
