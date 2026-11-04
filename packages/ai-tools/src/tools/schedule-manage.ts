@@ -63,6 +63,10 @@ export const ScheduleManageInputSchema = z.object({
     .record(z.string(), z.unknown())
     .optional()
     .describe("Graph input payload; create requires messages and a stable _meta.purpose"),
+  instruction: z.string().min(1).optional()
+    .describe("Task for the scheduled workflow; prefer this to constructing message history. The host creates its user message."),
+  purpose: z.string().min(1).max(200).optional()
+    .describe("Stable job purpose for create; stored as input._meta.purpose"),
 });
 export type ScheduleManageInput = z.infer<typeof ScheduleManageInputSchema>;
 
@@ -156,11 +160,22 @@ export function createScheduleManageImplementation(
           const graphId = requireField(input.graphId, "graphId", "create");
           const cron = requireField(input.cron, "cron", "create");
           const timezone = requireField(input.timezone, "timezone", "create");
+          const payload = { ...input.input };
+          if (input.instruction !== undefined) {
+            payload.messages = [{ role: "user", content: input.instruction }];
+          }
+          if (input.purpose !== undefined) {
+            const meta = payload._meta;
+            payload._meta = {
+              ...(typeof meta === "object" && meta !== null && !Array.isArray(meta) ? meta : {}),
+              purpose: input.purpose,
+            };
+          }
           const result = await scheduleCapability.create({
             graphId,
             cron,
             timezone,
-            input: input.input ?? {},
+            input: payload,
           });
           return {
             success: true,
