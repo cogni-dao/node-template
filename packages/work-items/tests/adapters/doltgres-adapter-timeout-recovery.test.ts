@@ -958,12 +958,14 @@ describe("DoltgresWorkItemAdapter merge timeout recovery", () => {
     });
 
     expect(state.inserts).toBe(1);
-    await expect(adapter.get(toWorkItemId("task.0001"))).resolves.toMatchObject(
-      {
+    // The mutation receipt can precede native cleanup; readers retry until that
+    // existing capacity settles, without replaying the write under test.
+    await vi.waitFor(async () => {
+      await expect(adapter.get(toWorkItemId("task.0001"))).resolves.toMatchObject({
         title: "later serialized update",
         revision: 1,
-      }
-    );
+      });
+    });
   });
 
   it("retains native capacity and refuses replay after a post-DML caller timeout", async () => {

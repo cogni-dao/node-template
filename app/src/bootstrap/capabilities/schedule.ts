@@ -13,6 +13,7 @@
  * @internal
  */
 
+import { isDeepStrictEqual } from "node:util";
 import type {
   ScheduleCapability,
   ScheduleCreateParams,
@@ -24,6 +25,7 @@ import { toUserId } from "@cogni/ids";
 import { NODE_LANGGRAPH_CATALOG } from "@cogni/langgraph-graphs";
 import { chatCompletionsContract } from "@cogni/node-contracts";
 import type { ScheduleUserPort } from "@cogni/scheduler-core";
+import { z } from "zod";
 
 import { getExecutionScope } from "@/adapters/server";
 import { getNodeId } from "@/shared/config";
@@ -140,6 +142,21 @@ export function createScheduleCapability(
           "ScheduleCapability: host model reference is unavailable",
         );
       }
+      const { purpose } = z.object({ purpose: z.string().min(1).max(200) }).parse(input.input._meta);
+      const boundInput = { ...input.input, messages, modelRef };
+      const matches = (await scheduleManager.listSchedules(userId)).filter((s) => {
+        const meta = (s.input as Record<string, unknown>)?._meta;
+        return typeof meta === "object" && meta !== null && "purpose" in meta && meta.purpose === purpose;
+      });
+      if (matches.length > 1) throw new Error("ScheduleCapability: duplicate purpose requires reconciliation");
+      const existing = matches[0];
+      if (existing) {
+        if (existing.graphId !== input.graphId || existing.cron !== input.cron ||
+            existing.timezone !== input.timezone || !isDeepStrictEqual(existing.input, boundInput)) {
+          throw new Error("ScheduleCapability: purpose already exists with different configuration; read and reconcile it");
+        }
+        return toScheduleInfo(existing);
+      }
       const billingAccountId = await getOrCreateBillingAccountId(userId);
       const spec = await scheduleManager.createSchedule(
         userId,
@@ -147,7 +164,7 @@ export function createScheduleCapability(
         {
           nodeId: getNodeId(),
           graphId: input.graphId,
-          input: { ...input.input, messages, modelRef },
+          input: boundInput,
           cron: input.cron,
           timezone: input.timezone,
         },

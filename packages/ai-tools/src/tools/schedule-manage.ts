@@ -62,7 +62,7 @@ export const ScheduleManageInputSchema = z.object({
   input: z
     .record(z.string(), z.unknown())
     .optional()
-    .describe("Graph input payload"),
+    .describe("Graph input payload; create requires messages and a stable _meta.purpose"),
 });
 export type ScheduleManageInput = z.infer<typeof ScheduleManageInputSchema>;
 
@@ -166,7 +166,7 @@ export function createScheduleManageImplementation(
             success: true,
             action: "create",
             scheduleId: result.id,
-            message: `Created schedule for ${graphId} with cron '${cron}'`,
+            message: `Schedule for ${graphId} uses cron '${cron}'`,
           };
         }
         case "update": {

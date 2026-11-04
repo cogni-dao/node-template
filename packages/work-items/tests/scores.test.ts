@@ -20,6 +20,15 @@ import { describe, expect, it } from "vitest";
 import { parseWorkItemScores, rankScore } from "../src/scores.js";
 
 const EV = "https://cognidao.org/work/items/story.5111";
+
+it("accepts local proof URLs as data while rejecting remote HTTP and credentials", () => {
+  for (const origin of ["http://localhost:3200", "http://127.0.0.1:55080", "http://[::1]:3200"]) {
+    expect(parseWorkItemScores({ goal: { v: 4, ev: `${origin}/knowledge/goal-a` } }).ok).toBe(true);
+  }
+  for (const origin of ["http://localhost.example.com", "http://example.com", "http://user:password@localhost:3200"]) {
+    expect(parseWorkItemScores({ goal: { v: 4, ev: `${origin}/knowledge/goal-a` } }).ok).toBe(false);
+  }
+});
 const codes = (input: unknown) => {
   const result = parseWorkItemScores(input);
   return result.ok ? [] : result.issues.map((issue) => issue.code);

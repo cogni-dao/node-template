@@ -22,7 +22,10 @@ import type { BoundTool, ToolContract, ToolImplementation } from "../types";
 // Schemas
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const ScheduleListInputSchema = z.object({}).strict();
+export const ScheduleListInputSchema = z.object({
+  purpose: z.string().min(1).max(200).optional()
+    .describe("Exact input._meta.purpose to match; excludes coordinating jobs that only mention this purpose in messages"),
+}).strict();
 export type ScheduleListInput = z.infer<typeof ScheduleListInputSchema>;
 
 const ScheduleItemSchema = z.object({
@@ -60,7 +63,7 @@ export const scheduleListContract: ToolContract<
   description:
     "List all scheduled graph executions. Returns schedule IDs, graph assignments, " +
     "cron expressions, timezones, and enabled/disabled status. Use this to see " +
-    "what is currently scheduled before making changes.",
+    "what is currently scheduled before making changes. Supply purpose for an exact metadata match.",
   effect: "read_only",
   inputSchema: ScheduleListInputSchema,
   outputSchema: ScheduleListOutputSchema,
@@ -81,8 +84,12 @@ export function createScheduleListImplementation(
   deps: ScheduleListDeps
 ): ToolImplementation<ScheduleListInput, ScheduleListOutput> {
   return {
-    execute: async (): Promise<ScheduleListOutput> => {
-      const schedules = await deps.scheduleCapability.list();
+    execute: async ({ purpose }): Promise<ScheduleListOutput> => {
+      const owned = await deps.scheduleCapability.list();
+      const schedules = purpose === undefined ? owned : owned.filter((s) => {
+        const meta = s.input._meta;
+        return typeof meta === "object" && meta !== null && "purpose" in meta && meta.purpose === purpose;
+      });
       return {
         schedules: schedules.map((s) => ({
           id: s.id,
