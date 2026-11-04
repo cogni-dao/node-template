@@ -79,6 +79,34 @@ function toScheduleInfo(spec: {
   };
 }
 
+/** Accept listed internal histories and OpenAI wire histories without losing tool calls. */
+function toWireMessage(value: unknown): unknown {
+  const message = z.record(z.string(), z.unknown()).parse(value);
+  const { toolCalls, toolCallId, ...wire } = message;
+  if (Object.hasOwn(message, "toolCalls")) {
+    if (message.role !== "assistant" || Object.hasOwn(message, "tool_calls")) {
+      throw new Error("ScheduleCapability: ambiguous or misplaced toolCalls");
+    }
+    wire.tool_calls = Array.isArray(toolCalls)
+      ? toolCalls.map((value) => {
+          const call = z.record(z.string(), z.unknown()).parse(value);
+          return {
+            id: call.id,
+            type: "function",
+            function: { name: call.name, arguments: call.arguments },
+          };
+        })
+      : toolCalls;
+  }
+  if (Object.hasOwn(message, "toolCallId")) {
+    if (message.role !== "tool" || Object.hasOwn(message, "tool_call_id")) {
+      throw new Error("ScheduleCapability: ambiguous or misplaced toolCallId");
+    }
+    wire.tool_call_id = toolCallId;
+  }
+  return wire;
+}
+
 /**
  * Create a ScheduleCapability that resolves user identity from ALS at call time.
  *
@@ -107,7 +135,13 @@ export function createScheduleCapability(
           "ScheduleCapability: workflow is not registered on this node",
         );
       }
-      const messages = chatCompletionsContract.input.shape.messages
+      const messages = z
+        .array(
+          z.preprocess(
+            toWireMessage,
+            chatCompletionsContract.input.shape.messages.element,
+          ),
+        )
         .min(1)
         .parse(input.input.messages)
         .map((message) => {
@@ -142,18 +176,36 @@ export function createScheduleCapability(
           "ScheduleCapability: host model reference is unavailable",
         );
       }
-      const { purpose } = z.object({ purpose: z.string().min(1).max(200) }).parse(input.input._meta);
+      const { purpose } = z
+        .object({ purpose: z.string().min(1).max(200) })
+        .parse(input.input._meta);
       const boundInput = { ...input.input, messages, modelRef };
-      const matches = (await scheduleManager.listSchedules(userId)).filter((s) => {
-        const meta = (s.input as Record<string, unknown>)?._meta;
-        return typeof meta === "object" && meta !== null && "purpose" in meta && meta.purpose === purpose;
-      });
-      if (matches.length > 1) throw new Error("ScheduleCapability: duplicate purpose requires reconciliation");
+      const matches = (await scheduleManager.listSchedules(userId)).filter(
+        (s) => {
+          const meta = (s.input as Record<string, unknown>)?._meta;
+          return (
+            typeof meta === "object" &&
+            meta !== null &&
+            "purpose" in meta &&
+            meta.purpose === purpose
+          );
+        },
+      );
+      if (matches.length > 1)
+        throw new Error(
+          "ScheduleCapability: duplicate purpose requires reconciliation",
+        );
       const existing = matches[0];
       if (existing) {
-        if (existing.graphId !== input.graphId || existing.cron !== input.cron ||
-            existing.timezone !== input.timezone || !isDeepStrictEqual(existing.input, boundInput)) {
-          throw new Error("ScheduleCapability: purpose already exists with different configuration; read and reconcile it");
+        if (
+          existing.graphId !== input.graphId ||
+          existing.cron !== input.cron ||
+          existing.timezone !== input.timezone ||
+          !isDeepStrictEqual(existing.input, boundInput)
+        ) {
+          throw new Error(
+            "ScheduleCapability: purpose already exists with different configuration; read and reconcile it",
+          );
         }
         return toScheduleInfo(existing);
       }
