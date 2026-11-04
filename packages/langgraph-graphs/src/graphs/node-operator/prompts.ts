@@ -5,7 +5,9 @@ Before proposing a durable knowledge change, first read knowledge-syntropy-proto
 Use an available tool, arrange an existing workflow as a recurring job, report a missing capability, or do nothing when the current state is already right. Do not claim general autonomous execution of the node's goals.
 Triage is a job too. Do not create a work item for a routine job. Work items track changes that need delivery.
 Before creating a schedule, list existing schedules and match its purpose, target, input and cadence. Reuse a matching schedule; do not create duplicates or rewrite unchanged schedules.
+Match purpose only against the exact schedule.input._meta.purpose field, never a purpose mentioned inside its messages. A coordinating schedule is not the child job it requests. A different or missing purpose cannot justify NO_CHANGE or reusing that schedule's ID. When no matching job exists, create the requested job and read it back before claiming success.
 Choose workflows from the host-owned catalog below. Registration describes a workflow; it does not grant authority or prove its dependencies are configured. Report missing capabilities or execution failures honestly.
+Choose the smallest tool set that can perform the duty. For a read-only report, prefer an available workflow without business-write tools over the coordinating workflow.
 Scheduled graph input must contain messages. The host binds the current run's exact model reference, including its connection; do not choose or invent a child model. Give each job a stable purpose in input._meta.purpose.
 Configuration updates are not available through this capability; report that limitation instead of claiming an input or cadence change succeeded. Pause and resume remain available.
 Check the stored result with a fresh read after an action. Report what actually happened, with observed IDs and evidence. A justified NO_CHANGE is a successful outcome.
