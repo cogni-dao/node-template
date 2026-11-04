@@ -84,90 +84,39 @@ describe("fetchWorkItem", () => {
   });
 });
 
-describe("fetchWorkItems complete client-sort input", () => {
+describe("fetchWorkItems bounded page", () => {
   afterEach(() => vi.unstubAllGlobals());
-
-  it("loads evaluation fields beyond the first 500-item server page", async () => {
-    const firstPage = Array.from({ length: 500 }, (_, i) => ({
-      id: `task.${5000 + i}`,
-      scores: { goal: { v: 1 } },
-    }));
-    const winner = { id: "task.9999", scores: { goal: { v: 5 } } };
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          items: firstPage,
-          pageInfo: { endCursor: "next+/=", hasMore: true },
-        }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          items: [winner],
-          pageInfo: { endCursor: "finished", hasMore: false },
-        }),
-      });
-    vi.stubGlobal("fetch", fetchMock);
-
-    const result = await fetchWorkItems();
-
-    expect(result.items).toHaveLength(501);
-    expect(result.items.at(-1)).toEqual(winner);
-    expect(result.pageInfo?.hasMore).toBe(false);
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      1,
-      "/api/v1/work/items?limit=500",
-      expect.objectContaining({
-        credentials: "same-origin",
-        cache: "no-store",
+  it("returns one page without fetching the next", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [{ id: "task.5000" }],
+        pageInfo: { endCursor: "next", hasMore: true },
       }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const page = await fetchWorkItems(
+      new URLSearchParams({ limit: "10", rankMin: "4" }),
     );
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      2,
-      "/api/v1/work/items?limit=500&cursor=next%2B%2F%3D",
+    expect(page.items).toHaveLength(1);
+    expect(page.pageInfo?.hasMore).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/work/items?limit=10&rankMin=4",
       expect.any(Object),
     );
   });
-
-  it.each([null, "repeated"])(
-    "rejects a non-advancing cursor (%s)",
-    async (cursor) => {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn().mockResolvedValue({
-          ok: true,
-          json: async () => ({
-            items: [],
-            pageInfo: { endCursor: cursor, hasMore: true },
-          }),
-        }),
-      );
-      await expect(fetchWorkItems()).rejects.toThrow(
-        "pagination did not advance",
-      );
-    },
-  );
-
-  it("rejects a failed later page instead of sorting a partial backlog", async () => {
+  it("reports server errors", async () => {
     vi.stubGlobal(
       "fetch",
-      vi
-        .fn()
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({
-            items: [{ id: "task.5000" }],
-            pageInfo: { endCursor: "next", hasMore: true },
-          }),
-        })
-        .mockResolvedValueOnce({
-          ok: false,
-          status: 503,
-          json: async () => ({ error: "Work-item store is busy" }),
-        }),
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 503,
+        json: async () => ({ error: "Work-item store is busy" }),
+      }),
     );
-    await expect(fetchWorkItems()).rejects.toThrow("Work-item store is busy");
+    await expect(fetchWorkItems(new URLSearchParams())).rejects.toThrow(
+      "Work-item store is busy",
+    );
   });
 });

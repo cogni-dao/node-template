@@ -27,22 +27,21 @@ import {
   type WorkItemInfo,
   WorkItemPatchConflictError,
   type WorkItemQueryParams,
-  type WorkItemTransitionResult
+  type WorkItemTransitionResult,
 } from "@cogni/ai-tools";
+import { isPrivilegedPriority } from "@cogni/knowledge-store";
 import type {
   ActorKind,
   WorkItemCommandPort,
   WorkItemQueryPort,
   WorkItemStatus,
-  WorkItemType
+  WorkItemType,
 } from "@cogni/work-items";
 import { toWorkItemDto, toWorkItemId } from "@cogni/work-items";
 import {
   WorkItemRevisionConflictError,
-  type WorkItemsDoltgresPort
+  type WorkItemsDoltgresPort,
 } from "@cogni/work-items/adapters/doltgres";
-
-import { isPrivilegedPriority } from "@cogni/knowledge-store";
 
 /**
  * Dependencies for creating the work item capability.
@@ -73,7 +72,7 @@ const toWorkItemInfo = toWorkItemDto;
  * Create a WorkItemCapability backed by hexagonal ports.
  */
 export function createWorkItemCapability(
-  deps: WorkItemCapabilityDeps
+  deps: WorkItemCapabilityDeps,
 ): WorkItemCapability {
   const { workItemQuery, workItemCommand } = deps;
 
@@ -81,27 +80,32 @@ export function createWorkItemCapability(
     return (deps.backlogReader ?? workItemQuery).list({
       ...(params.sortBy !== undefined && { sortBy: params.sortBy }),
       ...(params.sortDirection !== undefined && {
-        sortDirection: params.sortDirection
+        sortDirection: params.sortDirection,
       }),
       ...(params.statuses && {
-        statuses: params.statuses as readonly WorkItemStatus[]
+        statuses: params.statuses as readonly WorkItemStatus[],
       }),
       ...(params.types && {
-        types: params.types as readonly WorkItemType[]
+        types: params.types as readonly WorkItemType[],
       }),
       ...(params.text && { text: params.text }),
       ...(params.actor && { actor: params.actor as ActorKind }),
+      ...(params.rankMin !== undefined && { rankMin: params.rankMin }),
+      ...(params.rankMax !== undefined && { rankMax: params.rankMax }),
+      ...(params.projectIds && {
+        projectIds: params.projectIds.map(toWorkItemId),
+      }),
       ...(params.projectId && {
-        projectId: toWorkItemId(params.projectId)
+        projectId: toWorkItemId(params.projectId),
       }),
       ...(params.labels && { labels: params.labels }),
       ...(params.labelPrefix !== undefined && {
-        labelPrefix: params.labelPrefix
+        labelPrefix: params.labelPrefix,
       }),
       ...(params.scored !== undefined && { scored: params.scored }),
       ...(params.ids && { ids: params.ids.map((id) => toWorkItemId(id)) }),
       ...(params.cursor && { cursor: params.cursor }),
-      ...(params.limit && { limit: params.limit })
+      ...(params.limit && { limit: params.limit }),
     });
   }
 
@@ -117,8 +121,8 @@ export function createWorkItemCapability(
       return {
         items: result.items.map(toWorkItemInfo),
         ...(result.nextCursor !== undefined && {
-          nextCursor: result.nextCursor
-        })
+          nextCursor: result.nextCursor,
+        }),
       };
     },
 
@@ -132,14 +136,14 @@ export function createWorkItemCapability(
         id: toWorkItemId(input.id),
         expectedRevision: String(current.revision),
         toStatus: input.toStatus as WorkItemStatus,
-        ...(input.reason && { reason: input.reason })
+        ...(input.reason && { reason: input.reason }),
       });
 
       return {
         id: updated.id,
         previousStatus: current.status,
         newStatus: updated.status,
-        revision: updated.revision as number
+        revision: updated.revision as number,
       };
     },
 
@@ -150,7 +154,7 @@ export function createWorkItemCapability(
       const priority = input.set.priority;
       if (priority != null && isPrivilegedPriority(priority)) {
         throw new Error(
-          `authz_denied: priority ${priority} requires node admin — propose it instead`
+          `authz_denied: priority ${priority} requires node admin — propose it instead`,
         );
       }
       const writer = deps.backlogWriter;
@@ -160,13 +164,13 @@ export function createWorkItemCapability(
             {
               id: toWorkItemId(input.id),
               ...(input.expectedRevision !== undefined && {
-                expectedRevision: input.expectedRevision
+                expectedRevision: input.expectedRevision,
               }),
-              set: input.set
+              set: input.set,
             },
             typeof writer.principalId === "function"
               ? writer.principalId()
-              : writer.principalId
+              : writer.principalId,
           );
           return toWorkItemInfo(updated);
         } catch (e) {
@@ -174,7 +178,7 @@ export function createWorkItemCapability(
             throw new WorkItemPatchConflictError(
               e.id,
               e.expectedRevision,
-              e.currentRevision
+              e.currentRevision,
             );
           }
           throw e;
@@ -183,7 +187,7 @@ export function createWorkItemCapability(
 
       if (input.expectedRevision !== undefined) {
         throw new Error(
-          "expectedRevision requires the Doltgres backlog writer (not wired)"
+          "expectedRevision requires the Doltgres backlog writer (not wired)",
         );
       }
       const current = await workItemQuery.get(toWorkItemId(input.id));
@@ -194,10 +198,10 @@ export function createWorkItemCapability(
       const updated = await workItemCommand.patch({
         id: toWorkItemId(input.id),
         expectedRevision: String(current.revision),
-        set: input.set
+        set: input.set,
       });
 
       return toWorkItemInfo(updated);
-    }
+    },
   };
 }

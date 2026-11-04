@@ -203,7 +203,7 @@ export function WorkItemScoresRadar({
                     href={href}
                     target="_blank"
                     rel="noopener noreferrer nofollow"
-                    className="text-primary underline underline-offset-2"
+                    className="inline-flex min-h-6 items-center text-primary underline underline-offset-2"
                     title={href}
                     aria-label={`${a.label} justification`}
                   >

@@ -11,7 +11,7 @@
  * @internal
  */
 
-import { mkdir, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -19,6 +19,7 @@ import { MarkdownWorkItemAdapter } from "../../src/adapters/markdown/adapter.js"
 import { UnsupportedWorkItemFieldError } from "../../src/adapters/markdown/errors.js";
 import { parseFrontmatter } from "../../src/adapters/markdown/frontmatter.js";
 import type { WorkItemId } from "../../src/types.js";
+import { toWorkItemId } from "../../src/types.js";
 import { workItemPortContract } from "../contract/work-item-port.contract.js";
 
 describe("MarkdownWorkItemAdapter", () => {
@@ -133,6 +134,87 @@ describe("MarkdownWorkItemAdapter", () => {
       const all = await adapter.list();
       expect(seen).toEqual(all.items.map((i) => String(i.id)));
       expect(all.nextCursor).toBeUndefined();
+    });
+
+    it("seeks after deleted or filtered boundary rows and ignores earlier insertions", async () => {
+      const query = { limit: 2, statuses: ["needs_triage" as const], sortBy: "rankScore" as const };
+      const page = await adapter.list(query);
+      const files = await readdir(path.join(tmpDir, "work", "items"));
+      const first = files.find((file) => file.startsWith(`${page.items[0]!.id}.`))!;
+      await rm(path.join(tmpDir, "work", "items", first));
+      const second = page.items[1]!;
+      const secondFile = files.find((file) => file.startsWith(`${second.id}.`))!;
+      const revision = parseFrontmatter(await readFile(path.join(tmpDir, "work", "items", secondFile), "utf8")).revision;
+      await adapter.patch({ id: second.id, expectedRevision: revision, set: { status: "done" } });
+      const inserted = await adapter.create({ type: "bug", title: "Earlier item" });
+      expect(inserted.id < second.id).toBe(true);
+      const next = await adapter.list({ ...query, cursor: page.nextCursor });
+      expect(next.items.map((item) => String(item.id))).toEqual(["task.0003", "task.0004"]);
+    });
+
+    it("walks every sort and direction with tied and unknown keys", async () => {
+      const fields = ["rankScore", "priority", "rank", "createdAt", "updatedAt", "type", "status", "projectId", "estimate"] as const;
+      for (const sortBy of fields) for (const sortDirection of ["asc", "desc"] as const) {
+        const query = { sortBy, sortDirection };
+        const expected = (await adapter.list(query)).items.map((item) => item.id);
+        const seen = [];
+        let cursor: string | undefined;
+        do {
+          const page = await adapter.list({ ...query, limit: 2, cursor });
+          seen.push(...page.items.map((item) => item.id));
+          cursor = page.nextCursor;
+        } while (cursor);
+        expect(seen).toEqual(expected);
+      }
+    });
+
+    it.each(["x".repeat(1100), "界".repeat(800)])("roundtrips long project keys in both directions", async (project) => {
+      for (const suffix of ["a", "b", "b", "c"]) {
+        await adapter.create({ type: "task", title: suffix, projectId: toWorkItemId(project + suffix) });
+      }
+      for (const sortDirection of ["asc", "desc"] as const) {
+        const query = { sortBy: "projectId" as const, sortDirection, limit: 1 };
+        const expected = (await adapter.list({ ...query, limit: 100 })).items.map((item) => item.id);
+        const seen = [];
+        let cursor: string | undefined;
+        do {
+          const page = await adapter.list({ ...query, cursor });
+          seen.push(...page.items.map((item) => item.id));
+          cursor = page.nextCursor;
+          if (cursor) expect(cursor.length).toBeLessThanOrEqual(2048);
+        } while (cursor);
+        expect(seen).toEqual(expected);
+      }
+    });
+
+    it("resolves long boundaries before filtering and rejects changed or missing references", async () => {
+      const project = "界".repeat(800);
+      const boundary = await adapter.create({ type: "task", title: "boundary", projectId: toWorkItemId(project) });
+      await adapter.create({ type: "task", title: "next", projectId: toWorkItemId(`${project}z`) });
+      const query = { sortBy: "projectId" as const, sortDirection: "asc" as const, statuses: ["needs_triage" as const], limit: 1 };
+      const page = await adapter.list(query);
+      expect(page.items[0]?.id).toBe(boundary.id);
+      const dir = path.join(tmpDir, "work", "items");
+      const file = path.join(dir, (await readdir(dir)).find((name) => name.startsWith(`${boundary.id}.`))!);
+      const original = await readFile(file, "utf8");
+      const revision = parseFrontmatter(original).revision;
+      await adapter.patch({ id: boundary.id, expectedRevision: revision, set: { status: "done" } });
+      expect((await adapter.list({ ...query, cursor: page.nextCursor })).items[0]?.title).toBe("next");
+      await writeFile(file, original.replace(project, `${project}changed`));
+      await expect(adapter.list({ ...query, cursor: page.nextCursor })).rejects.toThrow(/invalid_cursor.*restart/);
+      await rm(file);
+      await expect(adapter.list({ ...query, cursor: page.nextCursor })).rejects.toThrow(/invalid_cursor.*restart/);
+    });
+
+    it("rejects old, malformed, wrong-type and mismatched cursors", async () => {
+      const page = await adapter.list({ limit: 2, sortBy: "rank" });
+      const payload = JSON.parse(Buffer.from(page.nextCursor!.slice(4), "base64url").toString());
+      const invalid = `md3:${Buffer.from(JSON.stringify({ ...payload, value: "not a number" })).toString("base64url")}`;
+      for (const cursor of ["md2:eyJvZmZzZXQiOjJ9", invalid, `${page.nextCursor}!`, "md3:" + "a".repeat(2049)]) {
+        await expect(adapter.list({ limit: 2, sortBy: "rank", cursor })).rejects.toThrow(/invalid_cursor/);
+      }
+      await expect(adapter.list({ limit: 2, sortBy: "rank", statuses: ["done"], cursor: page.nextCursor })).rejects.toThrow(/invalid_cursor/);
+      await expect(adapter.list({ limit: 2, sortBy: "rank", sortDirection: "desc", cursor: page.nextCursor })).rejects.toThrow(/invalid_cursor/);
     });
 
     it("omits nextCursor when the page is not truncated", async () => {

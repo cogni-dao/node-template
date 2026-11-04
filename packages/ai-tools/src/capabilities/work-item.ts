@@ -24,7 +24,10 @@ export interface WorkItemAssignee {
 
 /** Canonical read fields, accepting both existing and canonical capability assignees. */
 export type WorkItemInfo = Omit<WorkItemDto, "assignees"> & {
-  readonly assignees: readonly (WorkItemDto["assignees"][number] | WorkItemAssignee)[];
+  readonly assignees: readonly (
+    | WorkItemDto["assignees"][number]
+    | WorkItemAssignee
+  )[];
 };
 
 /**
@@ -37,6 +40,9 @@ export interface WorkItemQueryParams {
   readonly types?: readonly string[];
   readonly text?: string;
   readonly actor?: string;
+  readonly rankMin?: number;
+  readonly rankMax?: number;
+  readonly projectIds?: readonly string[];
   readonly projectId?: string;
   /** Any-of label match: items carrying at least one of these labels (bug.5552). */
   readonly labels?: readonly string[];
@@ -132,7 +138,7 @@ export class WorkItemPatchConflictError extends Error {
 
   constructor(id: string, expectedRevision: number, currentRevision: number) {
     super(
-      `Work item ${id} is at revision ${currentRevision}, expected ${expectedRevision}; nothing written`
+      `Work item ${id} is at revision ${currentRevision}, expected ${expectedRevision}; nothing written`,
     );
     this.name = "WorkItemPatchConflictError";
     this.id = id;

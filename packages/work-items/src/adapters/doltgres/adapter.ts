@@ -4,7 +4,7 @@
 /** Doltgres runtime authority for deployed work items. */
 
 import { AsyncLocalStorage } from "node:async_hooks";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   acquireDoltWriterLocks,
   DoltWriterAdmissionError,
@@ -47,7 +47,7 @@ import { parseWorkItemScores } from "../../scores.js";
 import { normalizeWorkItemOrder } from "../../query-order.js";
 import { rankScoreSql } from "../../rank-policy.js";
 
-import { decodeCursor, encodeCursor, type WorkItemCursor } from "./cursor.js";
+import { decodeCursor, encodeCursor, InvalidCursorError, queryIdentity, type WorkItemCursor } from "./cursor.js";
 import type {
   WorkItemsContentPort,
   WorkItemsCreateInput,
@@ -2740,7 +2740,18 @@ export class DoltgresWorkItemAdapter
     nextCursor?: string;
     pageInfo: { endCursor: string | null; hasMore: boolean };
   }> {
+    if (
+      (query.rankMin !== undefined && !Number.isFinite(query.rankMin)) ||
+      (query.rankMax !== undefined && !Number.isFinite(query.rankMax)) ||
+      (query.rankMin !== undefined &&
+        query.rankMax !== undefined &&
+        query.rankMin > query.rankMax)
+    )
+      throw new Error("invalid rank range");
+    const order = normalizeWorkItemOrder(query);
     const conditions: string[] = [];
+    const rankConditions: string[] = [];
+    const rankExpression = order.sortBy === "rankScore" ? "__sort_value" : `(${rankScoreSql()})`;
     if (query.ids?.length) {
       conditions.push(
         `id IN (${query.ids.map((id) => escapeValue(id as string)).join(", ")})`
@@ -2758,9 +2769,17 @@ export class DoltgresWorkItemAdapter
     if (query.projectId) {
       conditions.push(`project_id = ${escapeValue(query.projectId as string)}`);
     }
+    if (query.projectIds?.length)
+      conditions.push(
+        `project_id IN (${query.projectIds.map(escapeValue).join(", ")})`
+      );
+    if (query.rankMin !== undefined)
+      rankConditions.push(`${rankExpression} >= ${Number(query.rankMin)}`);
+    if (query.rankMax !== undefined)
+      rankConditions.push(`${rankExpression} <= ${Number(query.rankMax)}`);
     if (query.node) {
       const nodes = Array.isArray(query.node) ? query.node : [query.node];
-      conditions.push(`node IN (${nodes.map(escapeValue).join(", ")})`);
+      if (nodes.length) conditions.push(`node IN (${nodes.map(escapeValue).join(", ")})`);
     }
     if (query.labels?.length) {
       // Doltgres has no `jsonb_array_elements_text`, so match against the
@@ -2769,7 +2788,8 @@ export class DoltgresWorkItemAdapter
       conditions.push(
         `(${query.labels
           .map(
-            (label) => `CAST(labels AS TEXT) LIKE ${escapeValue(`%"${label}"%`)}`
+            (label) =>
+              `CAST(labels AS TEXT) LIKE ${escapeValue(`%"${label}"%`)}`
           )
           .join(" OR ")})`
       );
@@ -2783,14 +2803,14 @@ export class DoltgresWorkItemAdapter
     }
     if (query.scored !== undefined) {
       // Scored == a complete 6-axis score; rankScoreSql() is NULL otherwise.
-      conditions.push(
-        `(${rankScoreSql()}) IS ${query.scored ? "NOT NULL" : "NULL"}`
+      rankConditions.push(
+        `${rankExpression} IS ${query.scored ? "NOT NULL" : "NULL"}`
       );
     }
+    if (order.sortBy !== "rankScore") conditions.push(...rankConditions);
     const textNeedle = query.text?.toLowerCase();
-    const order = normalizeWorkItemOrder(query);
     const initialCursor = query.cursor
-      ? decodeCursor(query.cursor, order)
+      ? decodeCursor(query.cursor, order, queryIdentity(query))
       : undefined;
     const keyExpression =
       order.sortBy === "rankScore"
@@ -2798,6 +2818,10 @@ export class DoltgresWorkItemAdapter
         : {
             priority: "priority",
             rank: "rank",
+            type: "type",
+            status: "status",
+            projectId: "project_id",
+            estimate: "estimate",
             // NOW() retains hidden nanoseconds, but native timestamp text I/O
             // exposes microseconds. Use that same precision for ordering and
             // seeking, so the projected cursor can roundtrip the boundary.
@@ -2806,8 +2830,12 @@ export class DoltgresWorkItemAdapter
           }[order.sortBy];
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
     const limit = Math.min(Math.max(query.limit ?? 100, 1), 500);
+    // Text filtering happens after native ordering. Decouple its scan window
+    // from the response size to avoid re-ranking the backlog for every pagelet.
+    const scanLimit = textNeedle ? 501 : limit + 1;
     const nativeCursor = (row: Record<string, unknown>): WorkItemCursor => ({
-      v: 1,
+      v: 2,
+      filter: queryIdentity(query),
       ...order,
       key: row.__sort_key === null ? null : String(row.__sort_key),
       id: String(row.id)
@@ -2816,13 +2844,15 @@ export class DoltgresWorkItemAdapter
       if (!cursor) return "";
       const afterId = `id > ${escapeValue(cursor.id)}`;
       if (cursor.key === null)
-        return `WHERE __sort_value IS NULL AND ${afterId}`;
+        return `__sort_value IS NULL AND ${afterId}`;
       const nativeType =
         order.sortBy === "createdAt" || order.sortBy === "updatedAt"
           ? "TIMESTAMP WITH TIME ZONE"
-          : "DOUBLE PRECISION";
+          : ["type", "status", "projectId"].includes(order.sortBy)
+            ? "TEXT"
+            : "DOUBLE PRECISION";
       const key = `CAST(${escapeValue(cursor.key)} AS ${nativeType})`;
-      return `WHERE (__sort_value IS NULL OR __sort_value ${order.sortDirection === "asc" ? ">" : "<"} ${key} OR (__sort_value = ${key} AND ${afterId}))`;
+      return `__sort_value IS NULL OR __sort_value ${order.sortDirection === "asc" ? ">" : "<"} ${key} OR (__sort_value = ${key} AND ${afterId})`;
     };
     // Structural filters → derived native key → seek/order → bounded batch.
     // Text folding stays in JS because native LOWER on cold TEXT can panic.
@@ -2830,14 +2860,26 @@ export class DoltgresWorkItemAdapter
     const matchedRows = await this.readOnCleanMain(async (conn) => {
       const matches: Record<string, unknown>[] = [];
       let cursor = initialCursor;
+      if (cursor?.keyRef) {
+        const row = await this.getWith(conn, toWorkItemId(cursor.id));
+        const key = row?.project_id;
+        if (typeof key !== "string" || createHash("sha256").update(key).digest("hex") !== cursor.keyRef) throw new InvalidCursorError();
+        cursor = { ...cursor, key, keyRef: undefined };
+      }
       while (true) {
+        const outerConditions = order.sortBy === "rankScore" ? [...rankConditions] : [];
+        const seekCondition = seek(cursor);
+        if (seekCondition) outerConditions.push(seekCondition);
+        const outerWhere = outerConditions.length
+          ? `WHERE ${outerConditions.map((condition) => `(${condition})`).join(" AND ")}`
+          : "";
         const rows = await conn.unsafe(
-          `SELECT ordered.*, CAST(__sort_value AS TEXT) AS __sort_key FROM (SELECT work_items.*, ${keyExpression} AS __sort_value FROM work_items ${where}) AS ordered ${seek(cursor)} ORDER BY CASE WHEN __sort_value IS NULL THEN 1 ELSE 0 END ASC, __sort_value ${order.sortDirection.toUpperCase()}, id ASC LIMIT ${limit + 1}`
+          `SELECT ordered.*, CAST(__sort_value AS TEXT) AS __sort_key FROM (SELECT work_items.*, ${keyExpression} AS __sort_value FROM work_items ${where}) AS ordered ${outerWhere} ORDER BY CASE WHEN __sort_value IS NULL THEN 1 ELSE 0 END ASC, __sort_value ${order.sortDirection.toUpperCase()}, id ASC LIMIT ${scanLimit}`
         );
         for (const row of rows) {
           if (
             !textNeedle ||
-            [row.title, row.summary].some((value) =>
+            [row.id, row.title, row.summary, ...jsonArrayOf<string>(row.labels)].some((value) =>
               String(value ?? "")
                 .toLowerCase()
                 .includes(textNeedle)
@@ -2846,7 +2888,7 @@ export class DoltgresWorkItemAdapter
             matches.push(row);
           if (matches.length > limit) return matches;
         }
-        if (!textNeedle || rows.length < limit + 1) return matches;
+        if (!textNeedle || rows.length < scanLimit) return matches;
         const last = rows[rows.length - 1];
         if (!last) return matches;
         cursor = nativeCursor(last);
@@ -2856,7 +2898,9 @@ export class DoltgresWorkItemAdapter
     const pageRows = matchedRows.slice(0, limit);
     const items = pageRows.map(rowToWorkItem);
     const last = pageRows[pageRows.length - 1];
-    const endCursor = hasMore && last ? encodeCursor(nativeCursor(last)) : null;
+    const lastCursor = last ? nativeCursor(last) : undefined;
+    const encodedCursor = lastCursor?.sortBy === "projectId" && lastCursor.key !== null ? { ...lastCursor, key: null, keyRef: createHash("sha256").update(lastCursor.key).digest("hex") } : lastCursor;
+    const endCursor = hasMore && encodedCursor ? encodeCursor(encodedCursor) : null;
     return {
       items,
       pageInfo: { endCursor, hasMore },

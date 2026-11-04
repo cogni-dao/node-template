@@ -13,13 +13,13 @@
  * @internal
  */
 
-import { z } from "zod";
 import {
+  WORK_ITEM_SORT_DIRECTIONS,
   WORK_ITEM_SORT_FIELDS,
-  WORK_ITEM_SORT_DIRECTIONS
+  WorkItemDtoSchema,
 } from "@cogni/work-items";
+import { z } from "zod";
 
-import { WorkItemDtoSchema } from "@cogni/work-items";
 export { WorkItemDtoSchema } from "@cogni/work-items";
 
 /**
@@ -30,7 +30,7 @@ export { WorkItemDtoSchema } from "@cogni/work-items";
  */
 export const WorkItemScoresInputSchema = z.record(
   z.string(),
-  z.looseObject({ v: z.number(), ev: z.string().optional() })
+  z.looseObject({ v: z.number(), ev: z.string().optional() }),
 );
 
 export const workItemsListOperation = {
@@ -46,6 +46,9 @@ export const workItemsListOperation = {
     text: z.string().optional(),
     actor: z.enum(["human", "ai", "either"]).optional(),
     projectId: z.string().optional(),
+    projectIds: z.array(z.string()).optional(),
+    rankMin: z.number().finite().optional(),
+    rankMax: z.number().finite().optional(),
     node: z.union([z.string(), z.array(z.string())]).optional(),
     /** Any-of label filter (bug.5552): items carrying at least one of these labels. */
     labels: z.array(z.string()).optional(),
@@ -54,7 +57,7 @@ export const workItemsListOperation = {
     /** true = only items with a complete 6-axis score; false = only unscored (bug.5552). */
     scored: z.boolean().optional(),
     limit: z.number().int().positive().max(500).optional(),
-    cursor: z.string().optional()
+    cursor: z.string().optional(),
   }),
   output: z.object({
     items: z.array(WorkItemDtoSchema),
@@ -63,10 +66,10 @@ export const workItemsListOperation = {
     pageInfo: z
       .object({
         endCursor: z.string().nullable(),
-        hasMore: z.boolean()
+        hasMore: z.boolean(),
       })
-      .optional()
-  })
+      .optional(),
+  }),
 } as const;
 
 // Export inferred types

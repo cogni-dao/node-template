@@ -6,11 +6,8 @@
 import { redirect } from "next/navigation";
 
 import { getServerSessionUser } from "@/lib/auth/server";
-import { WorkDashboardView } from "../../view";
 
-export default async function WorkItemPage({
-  params,
-}: {
+export default async function WorkItemPage(_props: {
   readonly params: Promise<{ id: string }>;
 }) {
   const user = await getServerSessionUser();
@@ -18,6 +15,6 @@ export default async function WorkItemPage({
     redirect("/");
   }
 
-  const { id } = await params;
-  return <WorkDashboardView selectedItemId={id} />;
+  // The work layout renders the persistent dashboard with this item selected.
+  return null;
 }

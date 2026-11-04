@@ -17,10 +17,11 @@ it("shares one deadline across sparse text batches and stops dispatching after f
   const reader = makeFakeDoltgresSql(async () => {
     calls++;
     await new Promise((resolve) => setTimeout(resolve, 20));
-    return [
-      { id: "task." + calls, __sort_key: null, title: "no match" },
-      { id: "task." + calls + "b", __sort_key: null, title: "no match" }
-    ];
+    return Array.from({ length: 501 }, (_, i) => ({
+      id: `task.${calls}.${i}`,
+      __sort_key: null,
+      title: "no match"
+    }));
   }, []);
   const adapter = new DoltgresWorkItemAdapter(independentReadPool(reader), {
     readClient: reader,

@@ -30,6 +30,7 @@ export {
 export {
   decodeCursor,
   encodeCursor,
+  queryIdentity,
   InvalidCursorError,
   type WorkItemCursor,
 } from "./cursor.js";

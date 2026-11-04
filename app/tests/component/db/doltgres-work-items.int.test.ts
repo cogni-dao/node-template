@@ -392,9 +392,9 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 				}),
 			).rejects.toMatchObject({ name: "InvalidCursorError" });
 			// Sparse text matches straddle multiple bounded batches, including out-of-line TEXT.
-			for (let i = 0; i < 12; i++)
+			for (let i = 0; i < 503; i++)
 				await sql.unsafe(
-					`INSERT INTO work_items (id,type,title,status,node,summary) VALUES ('task.${200000 + i}','task','text ${i}','needs_design','text-native','${"x".repeat(8000)} ${i === 8 || i === 11 ? "needle" : "absent"}')`,
+					`INSERT INTO work_items (id,type,title,status,node,summary) VALUES ('task.${200000 + i}','task','text ${i}','needs_design','text-native','${"x".repeat(8000)} ${i === 8 || i === 502 ? "needle" : "absent"}')`,
 				);
 			const textStart = performance.now();
 			const before = queries.length;
@@ -411,14 +411,14 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 				limit: 1,
 				cursor: textPage.nextCursor,
 			});
-			expect(textNext.items.map((item) => item.id)).toEqual(["task.200011"]);
+			expect(textNext.items.map((item) => item.id)).toEqual(["task.200502"]);
 			expect(textNext.pageInfo.hasMore).toBe(false);
-			expect(queries.slice(before).length).toBeGreaterThan(2);
+			expect(queries.slice(before).length).toBeGreaterThanOrEqual(3);
 			console.info(
 				"rank_query_sparse_text",
 				JSON.stringify({
 					image: DOLTGRES_IMAGE,
-					datasetN: 12,
+					datasetN: 503,
 					limit: 1,
 					elapsedMs: performance.now() - textStart,
 					batches: queries.length - before,
@@ -432,6 +432,192 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 		} finally {
 			// Cleanup also runs when seed/JSON qualification fails before reader setup.
 			await sql.unsafe("DELETE FROM work_items WHERE node IN ('rank-native','text-native')");
+		}
+	});
+
+
+	it("filters bounded native pages against a 5000-row backlog", async () => {
+		const readSql = postgres(dbUrl, { max: 1, fetch_types: false });
+		const issued: string[] = [];
+		let lateStart: number | undefined;
+		const unsafe = readSql.unsafe.bind(readSql);
+		readSql.unsafe = ((query: string) => {
+			issued.push(query);
+			if (lateStart !== undefined)
+				console.info("rank_query_late_text_batch", JSON.stringify({ batch: issued.length, elapsedMs: performance.now() - lateStart }));
+			return unsafe(query);
+		}) as typeof readSql.unsafe;
+		try {
+			// Add a known filtered shelf to the 5,000-row native backlog. Rank 15
+			// and rank 10 sit exactly on the two bounds; decoys isolate each filter.
+			const scoresFor = (time: number, unblocks: number) =>
+				JSON.stringify(
+					Object.fromEntries(
+						Object.entries({
+							goal: 5,
+							time,
+							unblocks,
+							ease: 5,
+							confidence: 5,
+							agent: 5,
+						}).map(([axis, v]) => [axis, { v }]),
+					),
+				);
+			const high = scoresFor(5, 5); // 15
+			const low = scoresFor(4, 1); // 10
+			const below = scoresFor(3, 1); // 9
+			const matchingIds = Array.from(
+				{ length: 21 },
+				(_, i) => `task.${300000 + i}`,
+			);
+			const rows = matchingIds.map(
+				(id, i) =>
+					`('${id}','task','scale needle','needs_implement','scale-native','proj.${i % 2 ? "beta" : "alpha"}','${i < 10 ? high : low}'::JSONB)`,
+			);
+			rows.push(
+				`('task.300021','task','scale needle','needs_implement','scale-native','proj.alpha','${below}'::JSONB)`,
+				`('task.300022','task','scale needle','needs_implement','scale-native','proj.alpha',NULL)`,
+				`('task.300023','task','scale needle','needs_implement','scale-native','proj.other','${high}'::JSONB)`,
+				`('task.300024','bug','scale needle','needs_implement','scale-native','proj.alpha','${high}'::JSONB)`,
+				`('task.300025','task','scale needle','needs_design','scale-native','proj.alpha','${high}'::JSONB)`,
+				`('task.300026','task','scale absent','needs_implement','scale-native','proj.alpha','${high}'::JSONB)`,
+			);
+			for (let i = 27; i < 5000; i++)
+				rows.push(
+					`('task.${300000 + i}','task','${i === 4999 ? "last-only-needle" : "filler"}','needs_implement','scale-native','proj.other','${high}'::JSONB)`,
+				);
+			for (let offset = 0; offset < rows.length; offset += 250)
+				await sql.unsafe(
+					`INSERT INTO work_items (id,type,title,status,node,project_id,scores) VALUES ${rows.slice(offset, offset + 250).join(",")}`,
+				);
+			const filteredAdapter = new DoltgresWorkItemAdapter(sql, {
+				readClient: readSql,
+				readConnectionBudget: 2,
+				queryTimeoutMs: 5000,
+				logger: stageLogger,
+			});
+			const broad = { node: "scale-native", statuses: ["needs_implement"] as const, rankMin: 4, limit: 10 };
+			lateStart = performance.now();
+			let late: Awaited<ReturnType<typeof filteredAdapter.list>>;
+			let lateElapsed: number;
+			try {
+				late = await filteredAdapter.list({ ...broad, text: "LAST-ONLY-NEEDLE" });
+			} finally {
+				lateElapsed = performance.now() - lateStart;
+				console.info("rank_query_late_text_phase", JSON.stringify({ elapsedMs: lateElapsed, datasetN: 5000, queriesStarted: issued.length, order: normalizeWorkItemOrder(broad) }));
+				lateStart = undefined;
+			}
+			expect(late.items.map((item) => item.id)).toEqual(["task.304999"]);
+			expect(late.pageInfo.hasMore).toBe(false);
+			expect(late.nextCursor).toBeUndefined();
+			expect(lateElapsed).toBeLessThan(5000);
+			expect(issued.length).toBeGreaterThan(1);
+			for (const query of issued) {
+				const nativeLimit = Number(query.match(/ LIMIT (\d+)$/)?.[1]);
+				expect(nativeLimit).toBeGreaterThan(0);
+				expect(nativeLimit).toBeLessThanOrEqual(501);
+			}
+			console.info("rank_query_late_text", JSON.stringify({ elapsedMs: lateElapsed, datasetN: 5000, queries: issued.length, resultCount: late.items.length }));
+			const broadFirst = await filteredAdapter.list(broad);
+			expect(broadFirst.items.map((item) => item.id)).toEqual(matchingIds.slice(0, 10));
+			if (!broadFirst.nextCursor) throw new Error("missing broad cursor");
+			const broadNext = await filteredAdapter.list({ ...broad, cursor: broadFirst.nextCursor });
+			expect(broadNext.items).toHaveLength(10);
+			expect(broadNext.items.every((item) => !broadFirst.items.some((first) => first.id === item.id))).toBe(true);
+			await sql.unsafe(`UPDATE work_items SET labels='["area:web", "goal:work", "part,one"]'::JSONB WHERE id='task.300000'`);
+			const labelFilter = { node: "scale-native", projectIds: [toWorkItemId("proj.alpha")], limit: 10 };
+			expect((await filteredAdapter.list({ ...labelFilter, text: "part,one" })).items.map((item) => item.id)).toEqual(["task.300000"]);
+			expect((await filteredAdapter.list({ ...labelFilter, text: "web,goal" })).items).toHaveLength(0);
+			expect((await filteredAdapter.list({ ...labelFilter, text: "task.300000" })).items.map((item) => item.id)).toEqual(["task.300000"]);
+			const filter = {
+				node: "scale-native",
+				types: ["task"] as const,
+				statuses: ["needs_implement"] as const,
+				projectIds: [toWorkItemId("proj.alpha"), toWorkItemId("proj.beta")],
+				text: "scale needle",
+				rankMin: 10,
+				rankMax: 15,
+				limit: 10,
+			};
+			const page1 = await filteredAdapter.list(filter);
+			if (!page1.nextCursor) throw new Error("missing first scale cursor");
+			const page2 = await filteredAdapter.list({
+				...filter,
+				cursor: page1.nextCursor,
+			});
+			if (!page2.nextCursor) throw new Error("missing second scale cursor");
+			const page3 = await filteredAdapter.list({
+				...filter,
+				cursor: page2.nextCursor,
+			});
+			expect(page1.items.map((item) => item.id)).toEqual(
+				matchingIds.slice(0, 10),
+			);
+			expect(page2.items.map((item) => item.id)).toEqual(
+				matchingIds.slice(10, 20),
+			);
+			expect(page3.items.map((item) => item.id)).toEqual(matchingIds.slice(20));
+			expect([
+				page1.pageInfo.hasMore,
+				page2.pageInfo.hasMore,
+				page3.pageInfo.hasMore,
+			]).toEqual([true, true, false]);
+			const back = await filteredAdapter.list({
+				...filter,
+				cursor: page1.nextCursor,
+			});
+			expect(back.items.map((item) => item.id)).toEqual(
+				matchingIds.slice(10, 20),
+			);
+			const exactHigh = await filteredAdapter.list({
+				...filter,
+				rankMin: 15,
+				rankMax: 15,
+				limit: 50,
+			});
+			const exactLow = await filteredAdapter.list({
+				...filter,
+				rankMin: 10,
+				rankMax: 10,
+				limit: 50,
+			});
+			expect(exactHigh.items.map((item) => item.id)).toEqual(
+				matchingIds.slice(0, 10),
+			);
+			expect(exactLow.items.map((item) => item.id)).toEqual(
+				matchingIds.slice(10),
+			);
+			const unbounded = await filteredAdapter.list({
+				...filter,
+				rankMin: undefined,
+				rankMax: undefined,
+				limit: 50,
+			});
+			expect(unbounded.items.map((item) => item.id)).toEqual([
+				...matchingIds,
+				"task.300021",
+				"task.300022",
+			]);
+			for (const changed of [
+				{ rankMin: 11 },
+				{ rankMax: 14 },
+				{ projectIds: [toWorkItemId("proj.alpha")] },
+				{ statuses: ["needs_design"] as const },
+				{ text: "scale absent" },
+			])
+				await expect(
+					filteredAdapter.list({
+						...filter,
+						...changed,
+						cursor: page1.nextCursor,
+					}),
+				).rejects.toMatchObject({ name: "InvalidCursorError" });
+		} finally {
+			try {
+				await readSql.end({ timeout: 5 });
+			} finally {
+				await sql.unsafe("DELETE FROM work_items WHERE node='scale-native'");
+			}
 		}
 	});
 
@@ -476,7 +662,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 		}) as typeof reader.end;
 		try {
 			await sql.unsafe(
-				`INSERT INTO work_items (id,type,title,status,node) VALUES ${Array.from({ length: 6 }, (_, i) => `('task.${300000 + i}','task','${i === 0 || i === 5 ? "needle" : "absent"}','needs_design','deadline-native')`).join(",")}`,
+				`INSERT INTO work_items (id,type,title,status,node) VALUES ${Array.from({ length: 503 }, (_, i) => `('task.${300000 + i}','task','${i === 0 || i === 502 ? "needle" : "absent"}','needs_design','deadline-native')`).join(",")}`,
 			);
 			const adapter = new DoltgresWorkItemAdapter(writer, {
 				readClient: reader,
