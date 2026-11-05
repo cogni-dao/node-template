@@ -41,7 +41,7 @@ describe("native Doltgres knowledge browsing", () => {
 			)
 			.start();
 		const base = `postgresql://postgres:doltgres@${container.getHost()}:${container.getMappedPort(5432)}`;
-		const admin = postgres(`${base}/postgres`, { max: 1 });
+		const admin = postgres(`${base}/postgres`, { max: 1, fetch_types: false });
 		try {
 			await admin.unsafe(`CREATE DATABASE ${database}`);
 		} finally {
