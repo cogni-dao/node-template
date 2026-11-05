@@ -12,7 +12,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseArgs, parseEnv } from "node:util";
+import { isDeepStrictEqual, parseArgs, parseEnv } from "node:util";
 import { parse } from "yaml";
 import {
 	acquireDoltWriterLocks,
@@ -100,6 +100,9 @@ const fieldsFor = (row) => ({
 	title: row.title,
 	content: row.content,
 	entry_type: row.entryType,
+	metric_spec: row.metricSpec == null ? null : JSON.stringify(row.metricSpec),
+	kpi_bindings:
+		row.kpiBindings == null ? null : JSON.stringify(row.kpiBindings),
 	confidence_pct: row.confidencePct,
 	source_type: row.sourceType,
 	source_ref: row.sourceRef,
@@ -113,7 +116,14 @@ const equivalentTo = (old, row) =>
 	old &&
 	Object.entries(fieldsFor(row)).every(([key, value]) => {
 		if (key === "tags")
-			return JSON.stringify(old.tags) === JSON.stringify(row.tags);
+			return isDeepStrictEqual(old.tags ?? null, row.tags ?? null);
+		if (key === "metric_spec")
+			return isDeepStrictEqual(old.metric_spec ?? null, row.metricSpec ?? null);
+		if (key === "kpi_bindings")
+			return isDeepStrictEqual(
+				old.kpi_bindings ?? null,
+				row.kpiBindings ?? null,
+			);
 		if (key === "created_at" || key === "evaluate_at") {
 			return (
 				(old[key] == null && value == null) ||
