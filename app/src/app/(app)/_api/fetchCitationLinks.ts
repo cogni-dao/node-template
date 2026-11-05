@@ -33,7 +33,8 @@ export interface CitationLinksResponse {
 
 export async function fetchCitationLinks(
   id: string,
-  cursor?: string
+  cursor?: string,
+  signal?: AbortSignal
 ): Promise<CitationLinksResponse> {
   const params = new URLSearchParams();
   if (cursor !== undefined) params.set("cursor", cursor);
@@ -45,6 +46,7 @@ export async function fetchCitationLinks(
       headers: { "Content-Type": "application/json" },
       credentials: "same-origin",
       cache: "no-store",
+      ...(signal ? { signal } : {}),
     }
   );
   if (!response.ok) {

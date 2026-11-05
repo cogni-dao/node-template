@@ -2,21 +2,9 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@app/(app)/knowledge/page`
- * Purpose: Knowledge dashboard page shell — auth check + server-side data read
- *   that seeds React Query `initialData` so the first HTML paint shows the real
- *   entry count + table (never a false "0 entries"), not a cold client fetch.
- * Scope: Server component. Auth check + parallel port reads via shared loaders
- *   (house SSR idiom, see `(app)/nodes/page.tsx`); the client view owns
- *   interaction, refetch, and mutations.
- * Invariants: Protected route (server-side auth check); SSR_SEEDS_REACT_QUERY
- *   (loaders return the exact wire shape the client fetchers do, so
- *   initialData === post-hydration refetch — no hydration shift). Graph data is
- *   only pre-read on a `?mode=graph` deep-link; goal progress only on a
- *   `?mode=goals` deep-link (parsed with the shared GoalsProgressSchema, so a
- *   shape drift degrades to a client fetch instead of a hydration mismatch).
- * Side-effects: IO (Doltgres reads via container port)
- * Links: [KnowledgeDashboardView](./view.tsx), ./_server/loaders.ts, docs/spec/knowledge-syntropy.md
+ * Authenticated dashboard shell. Seeds only the active tab with its canonical
+ * wire response. Browse/Graph read one bounded metadata window, with no domain,
+ * legacy list, full graph, Goals or Inbox reads. Other tabs retain their loaders.
  * @public
  */
 
@@ -28,8 +16,9 @@ import { getContainer } from "@/bootstrap/container";
 import { getServerSessionUser } from "@/lib/auth/server";
 import {
   loadDomains,
-  loadKnowledgeGraphCached,
+  loadKnowledgeBrowse,
   loadKnowledgeListCached,
+  loadKnowledgeOverview,
 } from "./_server/loaders";
 import { KnowledgeDashboardView } from "./view";
 
@@ -66,18 +55,18 @@ export default async function KnowledgePage({
         )
       : Promise.resolve(undefined);
 
-  const [initialList, initialDomains, initialGraph] = port
+  const [initialBrowse, initialOverview, initialList, initialDomains] = port
     ? await Promise.all([
-        // limit=500 matches the browse client fetcher (LIST_LIMIT_PARITY).
-        // Cached reads keyed by store revision (bug.5547): repeat refreshes are
-        // cache hits, not full re-materializations.
-        safe(loadKnowledgeListCached(port, { limit: 500 })),
-        safe(loadDomains(port)),
-        mode === "graph"
-          ? safe(loadKnowledgeGraphCached(port))
-          : Promise.resolve(undefined),
+        !mode || mode === "browse"
+          ? safe(loadKnowledgeBrowse(port))
+          : undefined,
+        mode === "graph" ? safe(loadKnowledgeOverview(port)) : undefined,
+        mode === "chains"
+          ? safe(loadKnowledgeListCached(port, { limit: 500 }))
+          : undefined,
+        mode === "domains" ? safe(loadDomains(port)) : undefined,
       ])
-    : [undefined, undefined, undefined];
+    : [undefined, undefined, undefined, undefined];
   const initialGoals = await goalsSeed;
 
   return (
@@ -85,7 +74,8 @@ export default async function KnowledgePage({
       initialGoals={initialGoals}
       initialList={initialList}
       initialDomains={initialDomains}
-      initialGraph={initialGraph}
+      initialBrowse={initialBrowse}
+      initialOverview={initialOverview}
     />
   );
 }
