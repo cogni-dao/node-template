@@ -4,7 +4,7 @@
 /**
  * Module: `@tests/unit/app/knowledge-selection-direct-links`
  * Purpose: Prove bounded hydration, explicit search windows, replacement focus and exact-ID selection.
- * Scope: Real node controllers and schemas; grid/WebGL drawing and transport are stubbed.
+ * Scope: Real grid context/headers, node controllers and schemas; row/WebGL drawing and transport are stubbed.
  * Invariants: NO_HIDDEN_READS, FIVE_CURRENT_LINKS, EXPLICIT_CONTINUATION, STALE_INTENT_IGNORED.
  * Side-effects: Stubbed browser fetch; no live services or database.
  * Links: https://github.com/cogni-dao/cogni/issues/2846
@@ -13,8 +13,19 @@
  */
 
 import type { KnowledgeRow } from "@cogni/node-contracts";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { flexRender, type Table } from "@tanstack/react-table";
+import { DataGrid } from "@cogni/node-ui-kit/reui/data-grid/data-grid";
+import {
+  focusManager,
+  onlineManager,
+  QueryClient,
+  QueryClientProvider,
+} from "@tanstack/react-query";
+import {
+  flexRender,
+  getCoreRowModel,
+  type Table,
+  useReactTable,
+} from "@tanstack/react-table";
 import {
   act,
   cleanup,
@@ -24,9 +35,12 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { ComponentProps, ReactNode } from "react";
 import { afterEach, expect, it, vi } from "vitest";
+import { browseKey } from "@/app/(app)/knowledge/_api/fetchBrowse";
 import { BoundedBrowse } from "@/app/(app)/knowledge/_components/BoundedBrowse";
+import { knowledgeColumns } from "@/app/(app)/knowledge/_components/columns";
 import { KnowledgeSelection } from "@/app/(app)/knowledge/_components/KnowledgeSelection";
 import {
   focusGeometry,
@@ -102,39 +116,46 @@ vi.mock("next/dynamic", () => ({
     ),
 }));
 
-vi.mock("@cogni/node-ui-kit/reui/data-grid/data-grid", () => ({
-  DataGrid: ({
-    table,
-    onRowClick,
-  }: {
-    table: Table<KnowledgeRow>;
-    onRowClick: (entry: KnowledgeRow) => void;
-  }) => (
-    <div>
-      {table.getHeaderGroups().map((group) => (
-        <div key={group.id}>
-          {group.headers.map((header) => (
-            <div key={header.id}>
-              {flexRender(header.column.columnDef.header, header.getContext())}
-            </div>
-          ))}
-        </div>
-      ))}
-      {table.getRowModel().rows.map((row) => (
-        <button
-          key={row.id}
-          type="button"
-          onClick={() => onRowClick(row.original)}
-        >
-          Select row {row.original.title}
-        </button>
-      ))}
-    </div>
-  ),
-  DataGridContainer: ({ children }: { children: ReactNode }) => (
-    <div>{children}</div>
-  ),
-}));
+vi.mock(
+  "@cogni/node-ui-kit/reui/data-grid/data-grid",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@cogni/node-ui-kit/reui/data-grid/data-grid")
+      >();
+    return {
+      ...actual,
+      DataGrid: (props: ComponentProps<typeof actual.DataGrid>) => {
+        const table = props.table as Table<KnowledgeRow>;
+        return (
+          <actual.DataGrid {...props}>
+            {table.getHeaderGroups().map((group) => (
+              <div key={group.id}>
+                {group.headers.map((header) => (
+                  <div key={header.id}>
+                    {flexRender(
+                      header.column.columnDef.header,
+                      header.getContext()
+                    )}
+                  </div>
+                ))}
+              </div>
+            ))}
+            {table.getRowModel().rows.map((row) => (
+              <button
+                key={row.id}
+                type="button"
+                onClick={() => props.onRowClick?.(row.original)}
+              >
+                Select row {row.original.title}
+              </button>
+            ))}
+          </actual.DataGrid>
+        );
+      },
+    };
+  }
+);
 vi.mock(
   "@cogni/node-ui-kit/reui/data-grid/data-grid-column-visibility",
   () => ({
@@ -143,20 +164,6 @@ vi.mock(
 );
 vi.mock("@cogni/node-ui-kit/reui/data-grid/data-grid-pagination", () => ({
   DataGridPagination: () => null,
-}));
-vi.mock("@cogni/node-ui-kit/reui/data-grid/data-grid-column-header", () => ({
-  DataGridColumnHeader: ({
-    title,
-    filter,
-  }: {
-    title: string;
-    filter?: ReactNode;
-  }) => (
-    <div>
-      {title}
-      {filter}
-    </div>
-  ),
 }));
 vi.mock("@cogni/node-ui-kit/header-filter", () => ({
   HeaderFilter: () => null,
@@ -382,7 +389,9 @@ it("empty search windows require intent, keep the retry cursor, and retain off-p
     "after-20",
   ]);
   fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
-  const domain = screen.getByRole("textbox", { name: "Exact Domain" });
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "Domain", exact: true }));
+  const domain = await screen.findByRole("textbox", { name: "Exact Domain" });
   fireEvent.change(domain, { target: { value: "missing" } });
   fireEvent.submit(required(domain.closest("form")));
   await waitFor(() =>
@@ -392,6 +401,7 @@ it("empty search windows require intent, keep the retry cursor, and retain off-p
   fireEvent.click(screen.getByRole("button", { name: "Clear Domain" }));
   fireEvent.change(domain, { target: { value: "off-page" } });
   fireEvent.submit(required(domain.closest("form")));
+  await user.keyboard("{Escape}");
   await screen.findByRole("button", { name: `Select row ${selected.title}` });
   expect(reads.at(-1)?.searchParams.get("domains")).toBe("off-page");
 });
@@ -567,3 +577,214 @@ function required<T>(value: T | null | undefined): T {
   if (value == null) throw new Error("Missing required fixture value");
   return value;
 }
+
+it.each([false, true])(
+  "real empty-window headers preserve global controls (search=%s)",
+  async (searching) => {
+    const reads: URL[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        reads.push(new URL(url, "https://node.test"));
+        return Response.json({
+          items: [],
+          nextCursor: searching ? "after-20" : null,
+          scannedRows: searching ? 20 : 0,
+        });
+      })
+    );
+    const user = userEvent.setup();
+    mount(
+      <BoundedBrowse
+        initialData={{ items: [], nextCursor: null, scannedRows: 0 }}
+      />
+    );
+    if (searching) {
+      fireEvent.change(
+        screen.getByRole("textbox", { name: "Search knowledge" }),
+        { target: { value: "body" } }
+      );
+      await screen.findByText(/20 candidates searched/);
+      await user.click(screen.getByRole("button", { name: "Continue search" }));
+      await waitFor(() =>
+        expect(reads.at(-1)?.searchParams.get("cursor")).toBe("after-20")
+      );
+      await waitFor(() =>
+        expect(
+          screen
+            .getByRole("button", { name: "Domain", exact: true })
+            .hasAttribute("disabled")
+        ).toBe(false)
+      );
+    }
+    async function open(label: string) {
+      const trigger = screen.getByRole("button", { name: label, exact: true });
+      expect(trigger.hasAttribute("disabled")).toBe(false);
+      await user.click(trigger);
+      return screen.findByRole("textbox", { name: `Exact ${label}` });
+    }
+    async function add(label: string, value: string) {
+      const input = await open(label);
+      fireEvent.change(input, { target: { value } });
+      fireEvent.submit(required(input.closest("form")));
+      await user.keyboard("{Escape}");
+      await waitFor(() =>
+        expect(
+          screen
+            .getByRole("button", { name: label, exact: true })
+            .hasAttribute("disabled")
+        ).toBe(false)
+      );
+    }
+    await add("Type", "guide");
+    await add("Source", "human");
+    await add("Domain", "missing");
+    await open("Domain");
+    await user.click(screen.getByRole("checkbox", { name: "missing" }));
+    const domain = screen.getByRole("textbox", { name: "Exact Domain" });
+    fireEvent.change(domain, { target: { value: "off-page" } });
+    fireEvent.submit(required(domain.closest("form")));
+    await waitFor(() =>
+      expect(reads.at(-1)?.searchParams.getAll("domains")).toEqual(["off-page"])
+    );
+    await user.click(screen.getByRole("button", { name: "Clear Domain" }));
+    await user.keyboard("{Escape}");
+    await waitFor(() =>
+      expect(reads.at(-1)?.searchParams.getAll("domains")).toEqual([])
+    );
+    for (const [label, sort] of [
+      ["Domain", "domain"],
+      ["Type", "entryType"],
+      ["Source", "sourceType"],
+    ]) {
+      await open(required(label));
+      await user.click(
+        screen.getByRole("menuitem", { name: "Asc", exact: true })
+      );
+      await waitFor(() =>
+        expect(reads.at(-1)?.searchParams.get("sort")).toBe(sort)
+      );
+      expect(reads.at(-1)?.searchParams.get("direction")).toBe("asc");
+    }
+    for (const label of ["Confidence", "Created"]) {
+      const header = screen.getByRole("button", { name: label, exact: true });
+      expect(header.hasAttribute("disabled")).toBe(false);
+      await user.click(header);
+      await waitFor(() =>
+        expect(reads.at(-1)?.searchParams.get("sort")).toBe(
+          label === "Created" ? "createdAt" : "confidencePct"
+        )
+      );
+      await waitFor(() => expect(header.hasAttribute("disabled")).toBe(false));
+    }
+    const last = required(reads.at(-1)).searchParams;
+    expect(last.getAll("entryTypes")).toEqual(["guide"]);
+    expect(last.getAll("sourceTypes")).toEqual(["human"]);
+    expect(last.get("search")).toBe(searching ? "body" : null);
+    expect(last.get("cursor")).toBeNull();
+  }
+);
+
+it("stale body windows ignore focus/reconnect, remount awaits intent, and Continue/Retry/Restart work", async () => {
+  const reads: URL[] = [];
+  let fail = true;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      const parsed = new URL(url, "https://node.test");
+      reads.push(parsed);
+      if (parsed.searchParams.get("cursor") && fail) {
+        fail = false;
+        return Response.json({}, { status: 503 });
+      }
+      return Response.json({
+        items: [],
+        nextCursor: "after-20",
+        scannedRows: 20,
+      });
+    })
+  );
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const ui = () => (
+    <QueryClientProvider client={client}>
+      <BoundedBrowse initialData={page} />
+    </QueryClientProvider>
+  );
+  let mounted = render(ui());
+  const search = () =>
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "Search knowledge" }),
+      { target: { value: "body" } }
+    );
+  search();
+  await screen.findByText(/20 candidates searched/);
+  const key = browseKey({ search: "body" });
+  client.setQueryData(key, client.getQueryData(key), {
+    updatedAt: Date.now() - 60_000,
+  });
+  async function lifecycle() {
+    await act(async () => {
+      focusManager.setFocused(false);
+      onlineManager.setOnline(false);
+      focusManager.setFocused(true);
+      onlineManager.setOnline(true);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+  }
+  try {
+    await lifecycle();
+    expect(reads).toHaveLength(1);
+    mounted.unmount();
+    mounted = render(ui());
+    await act(async () => {});
+    expect(reads).toHaveLength(1);
+    // Remount resets the local text. Re-entering it is a new explicit search.
+    search();
+    await screen.findByText(/20 candidates searched/);
+    await lifecycle();
+    expect(reads).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "Continue search" }));
+    await screen.findByRole("alert");
+    await lifecycle();
+    expect(reads).toHaveLength(3);
+    fireEvent.click(screen.getByRole("button", { name: "Retry window" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    expect(reads.map((url) => url.searchParams.get("cursor"))).toEqual([
+      null,
+      null,
+      "after-20",
+      "after-20",
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: "Restart" }));
+    await waitFor(() => expect(reads).toHaveLength(5));
+    expect(reads.at(-1)?.searchParams.get("cursor")).toBeNull();
+    expect(
+      reads.every((url) => url.searchParams.get("search") === "body")
+    ).toBe(true);
+  } finally {
+    mounted.unmount();
+    client.clear();
+    focusManager.setFocused(undefined);
+    onlineManager.setOnline(true);
+  }
+});
+
+it("legacy columns retain disabled empty headers at the real grid boundary", () => {
+  function LegacyEmpty() {
+    const table = useReactTable({
+      data: [],
+      columns: knowledgeColumns,
+      getCoreRowModel: getCoreRowModel(),
+    });
+    return <DataGrid table={table} recordCount={0} />;
+  }
+  render(<LegacyEmpty />);
+  for (const label of ["Domain", "Type", "Source", "Confidence", "Created"])
+    expect(
+      screen
+        .getByRole("button", { name: label, exact: true })
+        .hasAttribute("disabled")
+    ).toBe(true);
+});

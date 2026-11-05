@@ -246,38 +246,108 @@ it("native lookahead is not consumed and search reads exactly one bounded body w
   expect(queries[2]).not.toMatch(/LOWER|ILIKE/);
 });
 
-it("native date continuation retains sub-millisecond precision and validates malformed positions", async () => {
-  const { DoltgresKnowledgeStoreAdapter } = await import(
-    "../src/adapters/doltgres/index.js"
-  );
-  const queries: string[] = [];
-  const store = new DoltgresKnowledgeStoreAdapter({
-    sql: {
-      unsafe: async (query: string) => {
-        queries.push(query);
-        return Array.from({ length: 21 }, (_, i) => ({
-          id: `date-${i}`,
-          domain: "test",
-          title: "T",
-          entry_type: "finding",
-          source_type: "human",
-          created_at: new Date("2026-01-01T00:00:00.123Z"),
-          browse_created_at: "2026-01-01 00:00:00.123456+00",
-        }));
-      },
-    } as never,
-  });
-  const first = await store.browseKnowledge({});
-  await store.browseKnowledge({ cursor: required(first.nextCursor) });
-  expect(queries[1]).toContain("'2026-01-01T00:00:00.123456+00:00'");
-  const malformed = JSON.parse(decodeURIComponent(required(first.nextCursor)));
-  malformed.value = "not a timestamp";
-  await expect(
-    store.browseKnowledge({
-      cursor: encodeURIComponent(JSON.stringify(malformed)),
-    })
-  ).rejects.toThrow("Invalid browse cursor");
-});
+it.each(["asc", "desc"] as const)(
+  "seek-aware transport traverses microsecond timestamps and >20 ties (%s); not native SQL execution",
+  async (direction) => {
+    const { DoltgresKnowledgeStoreAdapter } = await import(
+      "../src/adapters/doltgres/index.js"
+    );
+    // Fixed fixture and independent complete-ID oracle. Date transport deliberately
+    // loses precision; the native text column is the only exact cursor source.
+    const groups = ["123455", "123456", "123457"];
+    const ids = groups.map((_fraction, group) =>
+      Array.from(
+        { length: 25 },
+        (_, i) => `date-${group}-${String(i).padStart(2, "0")}`
+      )
+    );
+    const rows = groups.flatMap((fraction, group) =>
+      required(ids[group]).map((id) => ({
+        id,
+        domain: "test",
+        title: "T",
+        entry_type: "finding",
+        source_type: "human",
+        created_at: new Date("2026-01-01T00:00:00.123Z"),
+        browse_created_at: `2026-01-01 00:00:00.${fraction}+00`,
+      }))
+    );
+    const expected = (direction === "asc" ? ids : [...ids].reverse()).flat();
+    const queries: string[] = [];
+    const store = new DoltgresKnowledgeStoreAdapter({
+      sql: {
+        unsafe: async (query: string) => {
+          queries.push(query);
+          expect(query).toContain(
+            "CAST(created_at AS TEXT) AS browse_created_at"
+          );
+          expect(query).toContain(
+            `ORDER BY created_at ${direction.toUpperCase()} NULLS ${direction === "asc" ? "FIRST" : "LAST"}, id ASC LIMIT 21`
+          );
+          // Interpret the emitted seek predicate against exact microsecond keys.
+          // This transport fixture tests cursor/control flow, not a SQL engine.
+          const seek = query.match(
+            /WHERE \(created_at ([<>]) '([^']+)' OR \(created_at = '([^']+)' AND id > '([^']+)'\)/
+          );
+          if (query.includes("WHERE")) expect(seek).not.toBeNull();
+          const candidates = rows.filter((row) => {
+            if (!seek) return true;
+            expect(seek[2]).toBe(seek[3]);
+            const key = row.browse_created_at
+              .replace(" ", "T")
+              .replace(/\+00$/, "+00:00");
+            const anchor = required(seek[2]);
+            return (
+              (seek[1] === ">" ? key > anchor : key < anchor) ||
+              (key === anchor && row.id > required(seek[4]))
+            );
+          });
+          return candidates
+            .sort((a, b) => {
+              const primary = a.browse_created_at.localeCompare(
+                b.browse_created_at
+              );
+              return (
+                (direction === "asc" ? primary : -primary) ||
+                a.id.localeCompare(b.id)
+              );
+            })
+            .slice(0, 21);
+        },
+      } as never,
+    });
+    const found: string[] = [];
+    let cursor: string | undefined;
+    let firstCursor: string | undefined;
+    let exhausted = false;
+    for (let window = 0; window < 6; window++) {
+      const result = await store.browseKnowledge({
+        direction,
+        ...(cursor ? { cursor } : {}),
+      });
+      found.push(...result.items.map((row) => row.id));
+      firstCursor ??= result.nextCursor ?? undefined;
+      if (!result.nextCursor) {
+        exhausted = true;
+        break;
+      }
+      cursor = result.nextCursor;
+    }
+    expect(exhausted).toBe(true);
+    expect(queries).toHaveLength(4);
+    expect(new Set(found).size).toBe(75);
+    expect(found).toEqual(expected);
+    expect(queries.slice(1).join(" ")).toContain(".123456+00:00");
+    const malformed = JSON.parse(decodeURIComponent(required(firstCursor)));
+    malformed.value = "not a timestamp";
+    await expect(
+      store.browseKnowledge({
+        direction,
+        cursor: encodeURIComponent(JSON.stringify(malformed)),
+      })
+    ).rejects.toThrow("Invalid browse cursor");
+  }
+);
 
 function required<T>(value: T | null | undefined): T {
   if (value == null) throw new Error("Missing required fixture value");
