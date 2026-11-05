@@ -578,6 +578,56 @@ function required<T>(value: T | null | undefined): T {
   return value;
 }
 
+it("keeps the real Type filter valid at capacity and frees slots on deselection", async () => {
+  const reads: URL[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      reads.push(new URL(url, "https://node.test"));
+      return Response.json({ items: [], nextCursor: null, scannedRows: 0 });
+    }),
+  );
+  const user = userEvent.setup();
+  mount(
+    <BoundedBrowse
+      initialData={{ items: [], nextCursor: null, scannedRows: 0 }}
+    />,
+  );
+  fireEvent.change(screen.getByRole("textbox", { name: "Search knowledge" }), {
+    target: { value: "body" },
+  });
+  await user.click(screen.getByRole("button", { name: "Domain", exact: true }));
+  const domain = await screen.findByRole("textbox", { name: "Exact Domain" });
+  fireEvent.change(domain, { target: { value: "off-page" } });
+  fireEvent.submit(required(domain.closest("form")));
+  await user.keyboard("{Escape}");
+  await user.click(screen.getByRole("button", { name: "Type", exact: true }));
+  const input = await screen.findByRole("textbox", { name: "Exact Type" });
+  for (let i = 0; i < 50; i++) {
+    fireEvent.change(input, { target: { value: `custom-${i}` } });
+    fireEvent.submit(required(input.closest("form")));
+  }
+  const canonical = screen.getByRole("checkbox", {
+    name: "guide",
+  }) as HTMLInputElement;
+  expect(canonical.disabled).toBe(true);
+  expect(screen.getByText(/Maximum 50 values selected/)).toBeTruthy();
+  await user.click(canonical);
+  expect(canonical.checked).toBe(false);
+  await user.click(screen.getByRole("checkbox", { name: "custom-0" }));
+  expect(canonical.disabled).toBe(false);
+  await user.click(canonical);
+  expect(canonical.checked).toBe(true);
+  await waitFor(() => {
+    const params = required(reads.at(-1)).searchParams;
+    expect(params.getAll("entryTypes")).toHaveLength(50);
+    expect(params.getAll("entryTypes")).toContain("guide");
+    expect(params.getAll("entryTypes")).not.toContain("custom-0");
+    expect(params.getAll("domains")).toEqual(["off-page"]);
+    expect(params.get("search")).toBe("body");
+  });
+});
+
 it.each([false, true])(
   "real empty-window headers preserve global controls (search=%s)",
   async (searching) => {

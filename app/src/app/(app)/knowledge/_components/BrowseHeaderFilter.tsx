@@ -7,6 +7,8 @@ import type { KnowledgeSummary } from "@cogni/node-contracts";
 import type { Column } from "@tanstack/react-table";
 import { useState } from "react";
 
+const MAX_FILTER_VALUES = 50;
+
 export function BrowseHeaderFilter({
   column,
   label,
@@ -22,12 +24,14 @@ export function BrowseHeaderFilter({
       : column.id === "sourceType"
         ? SourceTypeSchema.options
         : [];
-  const toggle = (entry: string) =>
-    column.setFilterValue(
-      selected.includes(entry)
-        ? selected.filter((v) => v !== entry)
-        : [...selected, entry]
-    );
+  const atCapacity = selected.length >= MAX_FILTER_VALUES;
+  const toggle = (entry: string) => {
+    if (selected.includes(entry)) {
+      column.setFilterValue(selected.filter((v) => v !== entry));
+    } else if (!atCapacity) {
+      column.setFilterValue([...selected, entry]);
+    }
+  };
   return (
     <div className="flex min-w-52 flex-col gap-2 p-2">
       <p className="text-muted-foreground text-xs">
@@ -39,6 +43,7 @@ export function BrowseHeaderFilter({
             onKeyDown={(e) => e.stopPropagation()}
             type="checkbox"
             checked={selected.includes(entry)}
+            disabled={atCapacity && !selected.includes(entry)}
             onChange={() => toggle(entry)}
           />
           {entry}
@@ -48,8 +53,7 @@ export function BrowseHeaderFilter({
         className="flex gap-1"
         onSubmit={(e) => {
           e.preventDefault();
-          if (value && selected.length < 50 && !selected.includes(value))
-            toggle(value);
+          if (value && !selected.includes(value)) toggle(value);
           setValue("");
         }}
       >
@@ -66,6 +70,11 @@ export function BrowseHeaderFilter({
           Add
         </button>
       </form>
+      {atCapacity && (
+        <p className="text-muted-foreground text-xs">
+          Maximum 50 values selected. Remove one to add another.
+        </p>
+      )}
       <button
         type="button"
         onClick={() => column.setFilterValue([])}
