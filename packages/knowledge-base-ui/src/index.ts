@@ -27,3 +27,37 @@ export {
   WorkItemScoresRadar,
   type WorkItemScoresRadarProps,
 } from "./work-item-scores-radar.js";
+
+export { cn } from "./cn.js";
+export {
+  formatRelativeTime,
+  RelativeTime,
+  type RelativeTimeProps,
+} from "./relative-time.js";
+export {
+  Kanban,
+  KanbanBoard,
+  type KanbanBoardProps,
+  KanbanColumn,
+  KanbanColumnContent,
+  type KanbanColumnContentProps,
+  KanbanColumnHandle,
+  type KanbanColumnHandleProps,
+  type KanbanColumnProps,
+  type KanbanCommitMeta,
+  KanbanItem,
+  KanbanItemHandle,
+  type KanbanItemHandleProps,
+  type KanbanItemProps,
+  type KanbanMoveEvent,
+  KanbanOverlay,
+  type KanbanOverlayProps,
+  type KanbanRootProps,
+} from "./reui-kanban.js";
+export {
+  WorkBoard,
+  type WorkBoardGoalLink,
+  type WorkBoardItem,
+  type WorkBoardProps,
+} from "./work-board.js";
+export { StatusIcon, StatusPill, TypeIcon } from "./work-item-icons.js";
