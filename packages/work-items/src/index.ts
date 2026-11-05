@@ -11,7 +11,12 @@
  * @public
  */
 
-export type { WorkItemsContentPort, WorkItemsPort } from "./content.js";
+export type {
+  WorkItemsContentPort,
+  WorkItemsPort,
+  WorkItemsReassignCreatorInput,
+  WorkItemsReassignCreatorResult,
+} from "./content.js";
 export {
   WorkItemRevisionConflictError,
   WorkItemScoresInvalidError,

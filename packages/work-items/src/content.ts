@@ -39,6 +39,24 @@ export interface WorkItemsPatchInput {
   readonly set: WorkItemsPatchSet;
 }
 
+/**
+ * bug.0013: move every work item created by `fromPrincipalId` to
+ * `toPrincipalId` in ONE durable write (re-keyed agent principals). Callers
+ * MUST authorize `actorPrincipalId` as node admin first; the store records the
+ * actor in the commit. `dryRun` reads the matching ids and writes nothing.
+ */
+export interface WorkItemsReassignCreatorInput {
+  readonly fromPrincipalId: string;
+  readonly toPrincipalId: string;
+  readonly actorPrincipalId: string;
+  readonly dryRun?: boolean;
+}
+
+export interface WorkItemsReassignCreatorResult {
+  /** Ids whose creator moved (or would move, on a dry run), ascending. */
+  readonly ids: string[];
+}
+
 export interface WorkItemsPort {
   get(id: WorkItemId): Promise<WorkItem | null>;
   list(query?: WorkQuery): Promise<{
@@ -49,6 +67,9 @@ export interface WorkItemsPort {
   create(input: WorkItemsCreateInput, principalId: string): Promise<WorkItem>;
   patch(input: WorkItemsPatchInput, principalId: string): Promise<WorkItem>;
   delete(id: WorkItemId, principalId: string): Promise<boolean>;
+  reassignCreator(
+    input: WorkItemsReassignCreatorInput
+  ): Promise<WorkItemsReassignCreatorResult>;
   claim: WorkItemLeasePort["claim"];
   heartbeat: WorkItemLeasePort["heartbeat"];
   release: WorkItemLeasePort["release"];

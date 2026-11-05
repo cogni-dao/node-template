@@ -5,7 +5,7 @@
  * Module: `@app/(admin)/page`
  * Purpose: Index landing for the `(admin)/` route group — entry to existing approver surfaces.
  * Scope: Server component. Access gating handled upstream by `(admin)/layout.tsx`; reads session only to show the connected approver wallet.
- * Invariants: Links ONLY to surfaces that exist today (epoch review/sign + governance views). Does not fabricate metrics or link to unbuilt sections (services, budgets, members).
+ * Invariants: Links ONLY to surfaces that exist today (epoch review/sign + governance views). Hosts the bug.0013 reassign-agent-work panel (route enforces node admin). Does not fabricate metrics or link to unbuilt sections (services, budgets, members).
  * Side-effects: IO (auth session read)
  * Links: src/app/(admin)/layout.tsx, src/app/(app)/gov/review/page.tsx
  * @public
@@ -24,6 +24,8 @@ import type { ReactElement } from "react";
 
 import { Badge, Card, CardContent } from "@/components";
 import { getServerSessionUser } from "@/lib/auth/server";
+
+import { ReassignAgentWorkPanel } from "./ReassignAgentWorkPanel.client";
 
 const PRIMARY_ACTION = {
 	href: "/gov/review",
@@ -156,6 +158,13 @@ export default async function AdminIndexPage(): Promise<ReactElement> {
 						</CardContent>
 					</Card>
 				</Link>
+			</section>
+
+			<section className="space-y-3">
+				<h2 className="font-medium text-muted-foreground text-xs uppercase tracking-wider">
+					Work Items
+				</h2>
+				<ReassignAgentWorkPanel />
 			</section>
 
 			<p className="text-muted-foreground text-xs">
