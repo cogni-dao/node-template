@@ -13,6 +13,9 @@ import {
 } from "../contracts.js";
 
 type Row = Record<string, unknown>;
+/** `dolt:head:<32-char hash>@<toISOString()>`; only matching refs are cast to a time. */
+const HEAD_REF =
+	"^dolt:head:[a-z0-9]{32}@[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$";
 function json(value: unknown) {
 	return typeof value === "string" ? JSON.parse(value) : value;
 }
@@ -181,6 +184,48 @@ export class PostgresMetricObservations implements MetricObservationsPort {
 				observationId: row.id ? String(row.id) : null,
 			};
 		});
+	}
+	/**
+	 * Main's head as recorded by the newest stored ok reading of `calculatorId`
+	 * in this scope (any metric), from its `dolt:head:<hash>@<iso>` evidence,
+	 * with the recorded time in [at - maxGapSeconds, at]. evaluation_at bounds
+	 * the scan to that range; a reading computed long after its evaluation time
+	 * is not a candidate. Null when none.
+	 */
+	async recordedMainHead(
+		calculatorId: string,
+		at: string,
+		maxGapSeconds: number,
+		signal?: AbortSignal,
+	): Promise<{ hash: string; at: string } | null> {
+		signal?.throwIfAborted();
+		const query = this.sql`SELECT h.hash, to_char(h.at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS at FROM (
+        SELECT substring(e.ref FROM 11 FOR 32) AS hash,
+          CASE WHEN e.ref ~ ${HEAD_REF} THEN substring(e.ref FROM 44)::timestamptz END AS at
+        FROM metric_observations o CROSS JOIN LATERAL jsonb_array_elements_text(o.observation->'evidenceRefs') AS e(ref)
+        WHERE o.scope=${this.key} AND o.status='ok' AND o.observation->>'calculatorVersion'=${calculatorId}
+          AND jsonb_typeof(o.observation->'evidenceRefs')='array'
+          AND o.evaluation_at <= ${at}::timestamptz AND o.evaluation_at >= ${at}::timestamptz - (${maxGapSeconds} * interval '1 second')
+          AND e.ref LIKE 'dolt:head:%'
+      ) h
+      WHERE h.at <= ${at}::timestamptz AND h.at >= ${at}::timestamptz - (${maxGapSeconds} * interval '1 second')
+      ORDER BY h.at DESC LIMIT 1`;
+		const abort = () => {
+			void query.cancel();
+		};
+		signal?.addEventListener("abort", abort, { once: true });
+		let rows: Row[];
+		try {
+			rows = (await query) as unknown as Row[];
+		} finally {
+			signal?.removeEventListener("abort", abort);
+		}
+		signal?.throwIfAborted();
+		const row = rows[0];
+		const ms = Date.parse(String(row?.at ?? ""));
+		return row && Number.isFinite(ms)
+			? { hash: String(row.hash), at: new Date(ms).toISOString() }
+			: null;
 	}
 	async snapshot(id: string) {
 		const [row] = await this
