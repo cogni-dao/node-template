@@ -20,7 +20,7 @@ import {
 import { RunReceipts } from "./receipts";
 import { projectMissionCycleReport } from "./report";
 import { createScoresGuard } from "./score-guard";
-import { COGNI_READ_TOOL_IDS } from "./tools";
+import { COGNI_DECIDE_TOOL_IDS, COGNI_READ_TOOL_IDS } from "./tools";
 export {
   cycleScores,
   cycleTelemetry,
@@ -28,6 +28,7 @@ export {
   type MissionLoopTelemetry,
 } from "./report";
 export const WORK_PRIORITIZER_GRAPH_NAME = "work-prioritizer" as const;
+const SCORING_EVIDENCE_TOOL_IDS = new Set<string>(COGNI_DECIDE_TOOL_IDS);
 
 export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
   const receipts = opts.programState as RunReceipts | undefined;
@@ -122,7 +123,9 @@ export function createPrioritizerRunHooks(context: {
     ) => {
       if (result.ok)
         receipts.observe(name, args, result.value);
-      else receipts.denied = true;
+      // Only a failed evidence read or write poisons scoring; an unrelated tool (repo, schedule)
+      // failing in a broader program must not silently disable the guard for the rest of the run.
+      else if (SCORING_EVIDENCE_TOOL_IDS.has(name)) receipts.denied = true;
       if (
         !context.program ||
         context.program === "work-review" ||
