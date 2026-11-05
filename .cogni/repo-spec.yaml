@@ -37,6 +37,22 @@ intent:
 
 governance:
   chain_id: "8453" # Base mainnet
+  # Mission tick (story.5108). Mirrors the operator's work-prioritizer governance schedule shape:
+  # a cron-triggered catalog graph run. `graph` names the deployed scheduled mission agent and
+  # `model` is the platform (LiteLLM) model its run uses. deepseek-v4-flash is free (is_free: true):
+  # the system tenant that bills governance runs holds zero credits, so the model MUST be free or the
+  # preflight gate fails insufficient_credits. Hourly is the prod-safe cadence. `entrypoint` is the
+  # single-token kickoff message sent to the graph. NOTE: `graph`/`model` take effect only once this
+  # node adopts the operator's task.5282 @cogni/repo-spec + @cogni/scheduler-core (see story.5108
+  # STEP 3 report); the template's current scheduler-core routes governance charters to
+  # sandbox:openclaw. This entry is the forward-compatible declaration of the tick.
+  schedules:
+    - charter: MISSION_DECIDE
+      cron: "0 * * * *"
+      timezone: UTC
+      entrypoint: DECIDE
+      graph: langgraph:cogni-decide
+      model: deepseek-v4-flash
 
 # Activity ledger ingestion + approver allowlist.
 # `approvers` gates the `(admin)/` route group and write routes under
