@@ -115,7 +115,8 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 	// A seed/protocol failure must never touch the legacy writer, namespace or
 	// allocator floor. Both fixtures use this container, but separate migrated DBs.
 	async function summaryDatabase(suffix: "precision" | "growth") {
-		const name = `${DB_NAME}_summary_${suffix}`;
+		const slug = `node-template-work-items-summary-${suffix}`;
+		const name = `knowledge_${slug.replaceAll("-", "_")}`;
 		const bootstrap = postgres(dbUrl, { max: 1, fetch_types: false });
 		try {
 			await bootstrap.unsafe(`CREATE DATABASE ${name}`);
@@ -125,7 +126,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 		const url = new URL(dbUrl);
 		url.pathname = `/${name}`;
 		execFileSync(process.execPath, [MIGRATE_SCRIPT, MIGRATIONS_DIR], {
-			env: { ...process.env, DATABASE_URL: url.href, NODE_NAME: name },
+			env: { ...process.env, DATABASE_URL: url.href, NODE_NAME: slug },
 			encoding: "utf8",
 			stdio: "pipe",
 		});
