@@ -23,6 +23,15 @@ const root = path.resolve(
 );
 const database = "knowledge_browse_proof";
 const id = (n: number) => `row-${String(n).padStart(4, "0")}`;
+// Doltgres uses the simple protocol: encode fixture values as SQL literals.
+const literal = (value: string | number) => {
+	if (typeof value === "number") {
+		if (!Number.isFinite(value)) throw new Error("Invalid fixture number");
+		return String(value);
+	}
+	if (value.includes("\0")) throw new Error("NUL in fixture value");
+	return `'${value.replace(/'/g, "''")}'`;
+};
 
 describe("native Doltgres knowledge browsing", () => {
 	let container: StartedTestContainer;
@@ -31,71 +40,90 @@ describe("native Doltgres knowledge browsing", () => {
 	const statements: string[] = [];
 
 	beforeAll(async () => {
-		container = await new GenericContainer("dolthub/doltgresql:0.57.3")
-			.withEnvironment({ DOLTGRES_PASSWORD: "doltgres" })
-			.withExposedPorts(5432)
-			.withWaitStrategy(
-				Wait.forLogMessage(/server (started|listening)/i, 1).withStartupTimeout(
-					60_000,
-				),
-			)
-			.start();
-		const base = `postgresql://postgres:doltgres@${container.getHost()}:${container.getMappedPort(5432)}`;
-		const admin = postgres(`${base}/postgres`, { max: 1, fetch_types: false });
+		let stage = "container";
 		try {
-			await admin.unsafe(`CREATE DATABASE ${database}`);
-		} finally {
-			await admin.end({ timeout: 5 });
-		}
-		const url = `${base}/${database}`;
-		execSync(
-			`node ${path.join(root, "scripts/db/migrate-doltgres.mjs")} ${path.join(root, "app/src/adapters/server/db/doltgres-migrations")}`,
-			{
-				env: { ...process.env, DATABASE_URL: url, NODE_NAME: "browse-proof" },
-				stdio: "pipe",
-			},
-		);
-		sql = buildDoltgresClient({ connectionString: url, max: 1 });
-		// Only observe transport calls: every query still executes on the real engine.
-		const observed = new Proxy(sql, {
-			get(target, key) {
-				if (key !== "unsafe") return Reflect.get(target, key, target);
-				return (...args: Parameters<typeof sql.unsafe>) => {
-					statements.push(args[0]);
-					return Reflect.apply(target.unsafe, target, args);
-				};
-			},
-		});
-		store = new DoltgresKnowledgeStoreAdapter({ sql: observed });
-		await sql.unsafe(
-			"INSERT INTO domains (id,name) VALUES ('a','A'),('z-domainneedle','Z')",
-		);
-		// Parameterized batch fixtures: no schema modifications or live data.
-		for (let start = 0; start < 550; start += 50) {
-			const params: (string | number)[] = [];
-			const tuples = Array.from({ length: 50 }, (_, offset) => {
-				const n = start + offset;
-				const values = [
-					n === 1 ? "idneedle-0001" : id(n),
-					n === 2 ? "z-domainneedle" : "a",
-					n === 3 ? "titleNeedle" : "Ordinary",
-					n === 549
-						? `Body-only %_literal ${"large body ".repeat(3000)}`
-						: "plain",
-					n === 4 ? "typeneedle" : n % 2 ? "guide" : "finding",
-					n % 3 ? "human" : "agent",
-					n === 5 ? "entityneedle" : "",
-					n === 6 ? "legacyTrigger" : "ordinary trigger",
-					(n % 3) * 30,
-					`2026-01-01 00:00:00.${["123455", "123456", "123457"][Math.floor(n / 25) % 3]}+00`,
-				];
-				params.push(...values);
-				return `(${values.map((_, i) => `$${offset * values.length + i + 1}`).join(",")})`;
+			container = await new GenericContainer("dolthub/doltgresql:0.57.3")
+				.withEnvironment({ DOLTGRES_PASSWORD: "doltgres" })
+				.withExposedPorts(5432)
+				.withWaitStrategy(
+					Wait.forLogMessage(
+						/server (started|listening)/i,
+						1,
+					).withStartupTimeout(60_000),
+				)
+				.start();
+			const base = `postgresql://postgres:doltgres@${container.getHost()}:${container.getMappedPort(5432)}`;
+			stage = "create database";
+			const admin = postgres(`${base}/postgres`, {
+				max: 1,
+				fetch_types: false,
 			});
-			await sql.unsafe(
-				`INSERT INTO knowledge (id,domain,title,content,entry_type,source_type,entity_id,use_when,confidence_pct,created_at) VALUES ${tuples.join(",")}`,
-				params,
+			try {
+				await admin.unsafe(`CREATE DATABASE ${database}`);
+			} finally {
+				await admin.end({ timeout: 5 });
+			}
+			const url = `${base}/${database}`;
+			stage = "migrate";
+			execSync(
+				`node ${path.join(root, "scripts/db/migrate-doltgres.mjs")} ${path.join(root, "app/src/adapters/server/db/doltgres-migrations")}`,
+				{
+					env: { ...process.env, DATABASE_URL: url, NODE_NAME: "browse-proof" },
+					stdio: "pipe",
+				},
 			);
+			stage = "connect adapter";
+			sql = buildDoltgresClient({ connectionString: url, max: 1 });
+			// Only observe transport calls: every query still executes on the real engine.
+			const observed = new Proxy(sql, {
+				get(target, key) {
+					if (key !== "unsafe") return Reflect.get(target, key, target);
+					return (...args: Parameters<typeof sql.unsafe>) => {
+						statements.push(args[0]);
+						return Reflect.apply(target.unsafe, target, args);
+					};
+				},
+			});
+			store = new DoltgresKnowledgeStoreAdapter({ sql: observed });
+			stage = "seed domains";
+			await sql.unsafe(
+				"INSERT INTO domains (id,name) VALUES ('a','A'),('z-domainneedle','Z')",
+			);
+			// Simple-protocol batches against the isolated fixture database.
+			for (let start = 0; start < 550; start += 50) {
+				stage = `seed corpus rows ${start + 1}-${start + 50}`;
+				const tuples = Array.from({ length: 50 }, (_, offset) => {
+					const n = start + offset;
+					const values = [
+						n === 1 ? "idneedle-0001" : id(n),
+						n === 2 ? "z-domainneedle" : "a",
+						n === 3 ? "titleNeedle" : "Ordinary",
+						n === 549
+							? `Body-only %_literal ${"large body ".repeat(3000)}`
+							: "plain",
+						n === 4 ? "typeneedle" : n % 2 ? "guide" : "finding",
+						n % 3 ? "human" : "agent",
+						n === 5 ? "entityneedle" : "",
+						n === 6 ? "legacyTrigger" : "ordinary trigger",
+						(n % 3) * 30,
+						`2026-01-01 00:00:00.${["123455", "123456", "123457"][Math.floor(n / 25) % 3]}+00`,
+					];
+					return `(${values.map(literal).join(",")})`;
+				});
+				await sql.unsafe(
+					`INSERT INTO knowledge (id,domain,title,content,entry_type,source_type,entity_id,use_when,confidence_pct,created_at) VALUES ${tuples.join(",")}`,
+				);
+			}
+			stage = "verify corpus count";
+			const rows = await sql.unsafe("SELECT COUNT(*) AS count FROM knowledge");
+			expect(Number(rows[0]?.count)).toBe(550);
+			console.info(
+				"knowledge_native_setup",
+				JSON.stringify({ stage, count: 550 }),
+			);
+		} catch (error) {
+			console.error("knowledge_native_setup_failed", JSON.stringify({ stage }));
+			throw error;
 		}
 	}, 240_000);
 
@@ -124,18 +152,18 @@ describe("native Doltgres knowledge browsing", () => {
 
 	it("observes bounded projected first windows as the native corpus grows", async () => {
 		const domain = "growth-proof";
-		await sql.unsafe("INSERT INTO domains (id,name) VALUES ($1,$2)", [
-			domain,
-			"Growth proof",
-		]);
+		await sql.unsafe(
+			`INSERT INTO domains (id,name) VALUES (${literal(domain)},${literal("Growth proof")})`,
+		);
+		let stage = "growth seed";
 		let seeded = 0;
 		let seedElapsedMs = 0;
 		try {
 			for (const count of [500, 5_000, 50_000]) {
 				const seedStart = performance.now();
 				for (let start = seeded; start < count; start += 100) {
+					stage = `growth seed ${start + 1}-${Math.min(start + 100, count)}`;
 					const size = Math.min(100, count - start);
-					const params: string[] = [];
 					const tuples = Array.from({ length: size }, (_, offset) => {
 						const values = [
 							`growth-${String(start + offset).padStart(6, "0")}`,
@@ -145,22 +173,22 @@ describe("native Doltgres knowledge browsing", () => {
 							"guide",
 							"agent",
 						];
-						params.push(...values);
-						return `(${values.map((_, i) => `$${offset * values.length + i + 1}`).join(",")})`;
+						return `(${values.map(literal).join(",")})`;
 					});
 					await sql.unsafe(
 						`INSERT INTO knowledge (id,domain,title,content,entry_type,source_type) VALUES ${tuples.join(",")}`,
-						params,
 					);
 				}
 				seedElapsedMs += performance.now() - seedStart;
 				seeded = count;
+				stage = `growth count ${count}`;
 				const actual = await sql.unsafe(
-					"SELECT COUNT(*) AS count FROM knowledge WHERE domain = $1",
-					[domain],
+					`SELECT COUNT(*) AS count FROM knowledge WHERE domain = ${literal(domain)}`,
 				);
 				expect(Number(actual[0]?.count)).toBe(count);
+				console.info("knowledge_native_seed", JSON.stringify({ count }));
 				for (const mode of ["browse", "overview"] as const) {
+					stage = `growth ${mode} ${count}`;
 					statements.length = 0;
 					const start = performance.now();
 					const input = {
@@ -213,9 +241,17 @@ describe("native Doltgres knowledge browsing", () => {
 					);
 				}
 			}
+		} catch (error) {
+			console.error(
+				"knowledge_native_growth_failed",
+				JSON.stringify({ stage }),
+			);
+			throw error;
 		} finally {
-			await sql.unsafe("DELETE FROM knowledge WHERE domain = $1", [domain]);
-			await sql.unsafe("DELETE FROM domains WHERE id = $1", [domain]);
+			await sql.unsafe(
+				`DELETE FROM knowledge WHERE domain = ${literal(domain)}`,
+			);
+			await sql.unsafe(`DELETE FROM domains WHERE id = ${literal(domain)}`);
 		}
 	}, 600_000);
 
