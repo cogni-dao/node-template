@@ -31,8 +31,8 @@ export const WORK_PRIORITIZER_GRAPH_NAME = "work-prioritizer" as const;
 
 export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
   const receipts = opts.programState as RunReceipts | undefined;
-  // Behavior mode is the program: READ (chat) answers and files nothing; the scheduled programs
-  // DECIDE. The read topology has no write tool bound at all.
+  // The program, not the input channel, owns capability: scoring programs bind the guarded
+  // writer for chat and scheduled runs alike; cogni-chat has no write tool bound at all.
   const readAuthority = new Set<string>(opts.readToolIds ?? COGNI_READ_TOOL_IDS);
   const readToolIds = opts.tools
     .map((tool) => tool.name)
@@ -42,8 +42,7 @@ export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
         readAuthority.has(name),
     );
   const deciding =
-    (opts.program === "cogni-decide" || opts.program === "work-review") &&
-    opts.requestIntent === "decide";
+    opts.program === "cogni-decide" || opts.program === "work-review";
   const writer = opts.tools.find(
     (tool) => tool.name === WORK_ITEM_TRANSITION_NAME,
   );

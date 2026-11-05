@@ -55,8 +55,6 @@ export interface CreateReactAgentGraphOptions {
   /** Current-run observations created only from successful host tool executions. */
   readonly programState?: unknown;
   readonly onSkillReadFailure?: () => void;
-  /** Trusted host graph selection, never model-configurable. */
-  readonly requestIntent?: "answer" | "decide";
   readonly memoryNamespace?: readonly string[];
   readonly readSkill?: (id: string) => Promise<string>;
   readonly tierModels?: Readonly<Record<string, LanguageModelLike>>;

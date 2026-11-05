@@ -162,16 +162,6 @@ describe("LangGraphInProcProvider", () => {
     expect(source).toHaveBeenCalledWith(true);
   });
 
-  it.each(["cogni-decide", "work-prioritizer"])("forwards trusted intent for %s", async (graph) => {
-    for (const intent of [undefined, "answer", "decide"] as const) {
-      runnerSpy.mockClear();
-      const provider = new LangGraphInProcProvider(createMockAdapter(), createMockToolSource(), undefined, [], async () => ({ nodeId: "node", origin: "https://node.example" }));
-      const result = runInScope(TEST_SCOPE, () => provider.runGraph(createTestRequest({ graphId: `langgraph:${graph}` }), intent ? { requestIntent: intent } : undefined));
-      await collectEvents(result.stream);
-      await result.final;
-      expect(runnerSpy).toHaveBeenCalledWith(expect.objectContaining({ requestIntent: intent ?? "answer" }));
-    }
-  });
   it("only disables unavailable hub grounding and propagates unexpected hub failures", async () => {
     const knowledge = { listGoverningIndex: vi.fn().mockRejectedValue(new Error("hub failed")) };
     await expect(resolveNodeSourceContext(false, "real-node", undefined, undefined, undefined, knowledge)).resolves.toMatchObject({ nodeId: "real-node", governingIndex: [] });

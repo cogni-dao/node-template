@@ -129,7 +129,7 @@ describe("POST /api/internal/graphs/{graphId}/runs terminal publication", () => 
     mocks.getRunByRunId.mockResolvedValue(null);
   });
 
-  it.each(["cogni-decide", "work-prioritizer"])("defaults API %s to answer and permits a validated schedule", async (graph) => {
+  it.each(["cogni-decide", "work-prioritizer"])("runs API and scheduled %s without a channel-derived authority flag", async (graph) => {
     for (const scheduled of [false, true]) {
       mocks.runGraph.mockClear();
       mocks.getRunByRunId.mockResolvedValue(scheduled ? { runKind: "system_scheduled", triggerSource: "temporal_schedule", graphId: `langgraph:${graph}`, triggerRef: "schedule", scheduledFor: new Date("2026-01-01T00:00:00.000Z") } : null);
@@ -138,23 +138,10 @@ describe("POST /api/internal/graphs/{graphId}/runs terminal publication", () => 
         headers: { authorization: "Bearer scheduler-secret-value-1234567890", "content-type": "application/json", "idempotency-key": scheduled ? "schedule:2026-01-01T00:00:00.000Z" : "api:test" },
         body: JSON.stringify({ executionGrantId: scheduled ? "40000000-0000-4000-a000-000000000001" : null, runId: RUN_ID, input: { messages: [{ role: "user", content: "decide" }], modelRef: { providerKey: "platform", modelId: "test-model" }, actorUserId: USER_ID, billingAccountId: BILLING_ID, virtualKeyId: VIRTUAL_KEY_ID } }),
       }), { params: Promise.resolve({ graphId: `langgraph:${graph}` }) });
-      expect(mocks.runGraph).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ requestIntent: scheduled ? "decide" : "answer" }));
+      expect(mocks.runGraph).toHaveBeenCalledWith(expect.anything(), expect.not.objectContaining({ requestIntent: expect.anything() }));
       expect(mocks.scopedSignal).toBeInstanceOf(AbortSignal);
       expect(mocks.scopedSignal?.aborted).toBe(false);
     }
-  });
-
-  it.each([
-    { runKind: "system_webhook", triggerSource: "webhook", graphId: "langgraph:cogni-decide", triggerRef: "schedule", scheduledFor: new Date("2026-01-01T00:00:00.000Z") },
-    { runKind: "system_scheduled", triggerSource: "temporal_schedule", graphId: "langgraph:other", triggerRef: "schedule", scheduledFor: new Date("2026-01-01T00:00:00.000Z") },
-    null,
-  ])("defaults unverified grant-backed runs to answer", async (record) => {
-    mocks.getRunByRunId.mockResolvedValue(record);
-    await POST(new NextRequest("http://localhost/api/internal/graphs/langgraph:cogni-decide/runs", {
-      method: "POST", headers: { authorization: "Bearer scheduler-secret-value-1234567890", "content-type": "application/json", "idempotency-key": "schedule:2026-01-01T00:00:00.000Z" },
-      body: JSON.stringify({ executionGrantId: "40000000-0000-4000-a000-000000000001", runId: RUN_ID, input: { messages: [{ role: "user", content: "decide" }], modelRef: { providerKey: "platform", modelId: "test-model" } } }),
-    }), { params: Promise.resolve({ graphId: "langgraph:cogni-decide" }) });
-    expect(mocks.runGraph).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ requestIntent: "answer" }));
   });
 
   it("aborts cooperative execution at the host deadline", async () => {

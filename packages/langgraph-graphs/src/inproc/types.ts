@@ -126,7 +126,6 @@ export interface InProcGraphRequest {
  */
 export interface InProcRunnerOptions<TTool = unknown> {
   readonly program?: CreateReactAgentGraphOptions["program"];
-  readonly requestIntent?: CreateReactAgentGraphOptions["requestIntent"];
   readonly trustedActorId?: string;
   readonly trustedProgramId?: string;
   readonly sourceContext?: CreateReactAgentGraphOptions["sourceContext"];
