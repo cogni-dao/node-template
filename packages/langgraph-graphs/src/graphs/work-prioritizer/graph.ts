@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /** Pure scoring-program configuration of the shared native harness.
- * Host intent admits bounded scores patches; program-owned receipts preserve the evidence guard.
+ * The scoring program binds bounded scores patches in every channel; program-owned receipts preserve the evidence guard.
  */
 import { WORK_ITEM_TRANSITION_NAME } from "@cogni/ai-tools";
 import { cogniProfile, createCogniProgram } from "../cogni/graph";
