@@ -24,6 +24,8 @@ export const WORK_ITEMS_LIST_ERROR_CODES = {
 } as const;
 
 export const EVENT_NAMES = {
+	METRIC_REFRESH_COMPLETE: "metric.refresh_complete",
+	GOALS_PROGRESS_READ: "goals.progress_read",
 	WORK_ITEMS_LIST_COMPLETE: "work.items.list_complete",
 	// AI Domain - Server
 	AI_COMPLETION: "ai.completion",

@@ -115,6 +115,8 @@ export const knowledge = pgTable(
     // automation (cron skips). v0 non-null value: 'agent'. Future kinds
     // (market:<id>, metric:<query>, http:<url>, deadline) add new values.
     resolutionStrategy: text("resolution_strategy"),
+    metricSpec: jsonb("metric_spec").$type<Record<string, unknown>>(),
+    kpiBindings: jsonb("kpi_bindings").$type<Record<string, unknown>[]>(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

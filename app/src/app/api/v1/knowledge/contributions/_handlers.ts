@@ -1,3 +1,4 @@
+import { KpiBindingsSchema, MetricSpecSchema } from "@cogni-dao/metrics/contracts";
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
@@ -180,6 +181,18 @@ export async function handleCreate(
       { status: 400 }
     );
 
+  for (const edit of parsed.data.edits ?? []) {
+    if (edit.op !== "insert" && edit.op !== "update") continue;
+    const entry = edit.entry;
+    if (entry.metricSpec != null) {
+      const spec = MetricSpecSchema.safeParse(entry.metricSpec);
+      if (!spec.success) return NextResponse.json({ error: "invalid metric definition", issues: spec.error.issues }, { status: 400 });
+      try { getContainer().goalMetrics?.registry.validate({ id: entry.id ?? ("targetRowId" in edit ? edit.targetRowId : "metric"), title: entry.title, revision: "proposed", spec: spec.data }); }
+      catch { return NextResponse.json({ error: "unsupported calculator or parameters" }, { status: 422 }); }
+    }
+    if (entry.kpiBindings != null && !KpiBindingsSchema.safeParse(entry.kpiBindings).success) return NextResponse.json({ error: "invalid KPI bindings" }, { status: 400 });
+    if (entry.entryType === "hypothesis" && Array.isArray(entry.kpiBindings) && entry.kpiBindings.length && !entry.kpiBindings.every(binding => binding.evaluationAt && binding.baselineObservationId)) return NextResponse.json({ error: "hypothesis KPI bindings require a fixed evaluation and baseline observation" }, { status: 422 });
+  }
   const principal = sessionUserToPrincipal(sessionUser, authSource(request));
   const createBody = {
     message: parsed.data.message,
@@ -286,6 +299,18 @@ export async function handleAppendCommit(
       { status: 400 }
     );
 
+  for (const edit of parsed.data.edits ?? []) {
+    if (edit.op !== "insert" && edit.op !== "update") continue;
+    const entry = edit.entry;
+    if (entry.metricSpec != null) {
+      const spec = MetricSpecSchema.safeParse(entry.metricSpec);
+      if (!spec.success) return NextResponse.json({ error: "invalid metric definition", issues: spec.error.issues }, { status: 400 });
+      try { getContainer().goalMetrics?.registry.validate({ id: entry.id ?? ("targetRowId" in edit ? edit.targetRowId : "metric"), title: entry.title, revision: "proposed", spec: spec.data }); }
+      catch { return NextResponse.json({ error: "unsupported calculator or parameters" }, { status: 422 }); }
+    }
+    if (entry.kpiBindings != null && !KpiBindingsSchema.safeParse(entry.kpiBindings).success) return NextResponse.json({ error: "invalid KPI bindings" }, { status: 400 });
+    if (entry.entryType === "hypothesis" && Array.isArray(entry.kpiBindings) && entry.kpiBindings.length && !entry.kpiBindings.every(binding => binding.evaluationAt && binding.baselineObservationId)) return NextResponse.json({ error: "hypothesis KPI bindings require a fixed evaluation and baseline observation" }, { status: 422 });
+  }
   const principal = sessionUserToPrincipal(sessionUser, authSource(request));
   try {
     const commit = await svc.appendCommit({

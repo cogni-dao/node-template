@@ -33,7 +33,7 @@
  */
 
 import { CUMULATIVE_MERKLE_DISTRIBUTOR_ABI } from "@cogni/cogni-contracts";
-import { getTransactionExplorerUrl } from "@cogni/node-shared";
+import { getTransactionExplorerUrl } from "@cogni/node-shared/browser";
 import { useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import {

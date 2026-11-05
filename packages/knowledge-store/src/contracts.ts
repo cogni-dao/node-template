@@ -20,6 +20,8 @@ export const KnowledgeRowSchema = z.object({
 	content: z.string(),
 	useWhen: z.string().nullable().optional(),
 	entryType: z.string(),
+  metricSpec: z.record(z.string(), z.unknown()).nullable().optional(),
+  kpiBindings: z.array(z.record(z.string(), z.unknown())).nullable().optional(),
 	confidencePct: z.number().int().nullable(),
 	sourceType: z.string(),
 	sourceRef: z.string().nullable(),
@@ -100,6 +102,8 @@ export interface ActiveGoalInfo {
   readonly content: string;
   /** ISO `By:` deadline, when set. */
   readonly evaluateAt: string | null;
+  /** Optional node-composed measurements. The storage package does not compute them. */
+  readonly kpis?: readonly Record<string, unknown>[];
 }
 
 /**

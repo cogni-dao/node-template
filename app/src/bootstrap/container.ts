@@ -13,6 +13,13 @@
  */
 
 import type { ToolSourcePort } from "@cogni/ai-core";
+import { KpiBindingsSchema } from "@cogni-dao/metrics/contracts";
+import type { GoalsProgress, MetricService } from "@cogni-dao/metrics";
+import { createGoalMetricTools } from "@/bootstrap/capabilities/goal-metric-tools";
+import {
+	createGoalMetrics,
+	createGoalProgressReader,
+} from "@/bootstrap/capabilities/goal-metrics";
 import type {
 	EdoCapability,
 	KnowledgeCapability,
@@ -147,7 +154,10 @@ import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
 import { createApproversNodeAdminAuthority } from "@/bootstrap/node-admin-gate";
 import type { RateLimitBypassConfig } from "@/bootstrap/http/wrapPublicRoute";
 import { startProcessHealthPublisher } from "@/bootstrap/publishers";
-import { startGovernanceSyncOnBoot } from "@/bootstrap/startup-reconcile";
+import {
+	startGovernanceSyncOnBoot,
+	startMetricsSyncOnBoot,
+} from "@/bootstrap/startup-reconcile";
 import type {
 	AccountService,
 	AiTelemetryPort,
@@ -242,6 +252,9 @@ export interface Container {
 	scheduleManager: ScheduleUserPort;
 	/** Metrics capability for AI tools - requires PROMETHEUS_URL to be configured */
 	metricsCapability: MetricsCapability;
+	goalMetrics: MetricService | undefined;
+	/** The node's one goal-progress read; HTTP, SSR, cognition and core__goal_progress share it. */
+	goalProgress: () => Promise<GoalsProgress>;
 	/** Web search capability for AI tools - requires TAVILY_API_KEY to be configured */
 	webSearchCapability: WebSearchCapability;
 	/** Repo capability for AI tools - requires COGNI_REPO_PATH */
@@ -335,6 +348,7 @@ export function getContainer(): Container {
 	if (!_container) {
 		_container = createContainer();
 		startGovernanceSyncOnBoot();
+		if (_container.goalMetrics) startMetricsSyncOnBoot();
 	}
 	return _container;
 }
@@ -733,6 +747,7 @@ function createContainer(): Container {
 	});
 
 	// KnowledgeCapability + EdoCapability for AI tools (require DOLTGRES_URL)
+	let goalMetrics: MetricService | undefined;
 	let knowledgeCapability: KnowledgeCapability;
 	let edoCapability: EdoCapability;
 	let knowledgeContributionService: ContributionService | undefined;
@@ -791,7 +806,38 @@ function createContainer(): Container {
 			writerSession: knowledgeWriter,
 		});
 		knowledgeStorePort = knowledgePort;
+		goalMetrics = createGoalMetrics({
+			knowledgeSql: doltClient,
+			observationsSql: serviceDb.$client,
+			environment: env.DEPLOY_ENVIRONMENT ?? "unknown",
+			// Compute receipts and skipped invalid definitions must reach Loki.
+			log: (event) => log.info(event, "metric.event"),
+		});
 		knowledgeCapability = createKnowledgeCapability(knowledgePort);
+		const listGoals =
+			knowledgeCapability.listActiveGoals?.bind(knowledgeCapability);
+		if (listGoals)
+			knowledgeCapability.listActiveGoals = async () => {
+				const goals = await listGoals();
+				return Promise.all(
+					goals.map(async (goal) => {
+						const row = await knowledgePort.getKnowledge(goal.id);
+						// Invalid stored bindings never break the goal list.
+						const parsed = KpiBindingsSchema.safeParse(row?.kpiBindings ?? []);
+						const bindings = parsed.success ? parsed.data : [];
+						return {
+							...goal,
+							kpis:
+								bindings.length && goalMetrics
+									? await goalMetrics.bindings(bindings, {
+											deadline: goal.evaluateAt,
+										})
+									: [],
+						};
+					}),
+				);
+			};
+
 		const edoResolver = new DoltgresEdoResolverAdapter({
 			sql: doltClient,
 			store: knowledgePort,
@@ -893,7 +939,17 @@ function createContainer(): Container {
 		vcsCapability: stubVcsCapability,
 		workItemCapability,
 	});
-	const toolSource = createBoundToolSource([...CORE_TOOL_BUNDLE], toolBindings);
+	const goalProgress = createGoalProgressReader({
+		metrics: () => goalMetrics,
+		knowledge: () => knowledgeStorePort,
+		// Same fallback as createGoalMetrics, so payload environment == observation scope.
+		environment: env.DEPLOY_ENVIRONMENT ?? "unknown",
+	});
+	const metricTools = createGoalMetricTools({
+		metrics: () => goalMetrics,
+		goalProgress,
+	});
+	const toolSource = createBoundToolSource([...CORE_TOOL_BUNDLE], { ...toolBindings, ...metricTools.bindings });
 
 	// Config: rethrow in dev/test for diagnosis, respond_500 in production for safety
 	const config: ContainerConfig = {
@@ -1045,6 +1101,8 @@ function createContainer(): Container {
 		knowledgeContributionService,
 		nodeAdmin,
 		knowledgeStorePort,
+		goalMetrics,
+		goalProgress,
 		edoCapability,
 		threadPersistenceForUser: (userId: UserId) =>
 			new DrizzleThreadPersistenceAdapter(db, userActor(userId)),

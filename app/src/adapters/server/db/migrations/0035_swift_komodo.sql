@@ -1,0 +1,2 @@
+ALTER TABLE "metric_observations" ADD COLUMN "scheduled_for" timestamp with time zone;--> statement-breakpoint
+CREATE INDEX "metric_scheduled_slot" ON "metric_observations" USING btree ("scope","metric_id","definition_hash","scheduled_for");

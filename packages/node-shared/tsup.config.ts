@@ -16,6 +16,7 @@ import { defineConfig } from "tsup";
 export default defineConfig({
   entry: [
     "src/index.ts",
+    "src/browser.ts",
     "src/ai/content-scrubbing.ts",
     "src/observability/events/index.ts",
   ],

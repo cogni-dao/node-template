@@ -20,8 +20,8 @@ import { useCumulativeClaim } from "@/features/governance/hooks/useCumulativeCla
 
 const refetchAfterClaim = vi.fn<() => Promise<void>>();
 
-vi.mock("@cogni/node-shared", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@cogni/node-shared")>();
+vi.mock("@cogni/node-shared/browser", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@cogni/node-shared/browser")>();
   return {
     ...actual,
     getTransactionExplorerUrl: () => "https://explorer.test/tx/0xabc",

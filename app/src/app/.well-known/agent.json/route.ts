@@ -1,3 +1,14 @@
+import {
+	GoalsProgressSchema,
+	MetricComputeInputSchema,
+	MetricHistoryInputSchema,
+	MetricHistorySchema,
+	MetricListInputSchema,
+	MetricListResponseSchema,
+	MetricObservationSchema,
+	MetricSnapshotSchema,
+	MetricViewSchema,
+} from "@cogni-dao/metrics/contracts";
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
@@ -97,6 +108,58 @@ export async function GET(request: Request) {
 			workItemCoordination: `${origin}/api/v1/work/items/{id}/coordination`,
 		},
 		actions: {
+			readGoalsProgress: {
+				method: "GET",
+				endpoint: `${origin}/api/v1/metrics/goals`,
+				auth: { type: "bearer" },
+				inputSchema: z.toJSONSchema(z.strictObject({})),
+				outputSchema: z.toJSONSchema(GoalsProgressSchema),
+			},
+			readMetricHistory: {
+				method: "GET",
+				endpoint: `${origin}/api/v1/metrics/{id}/history?from={from}&to={to}&step={step}`,
+				auth: { type: "bearer" },
+				inputSchema: z.toJSONSchema(
+					MetricHistoryInputSchema.extend({ id: z.string() }),
+				),
+				outputSchema: z.toJSONSchema(MetricHistorySchema),
+			},
+			listMetrics: {
+				method: "GET",
+				endpoint: `${origin}/api/v1/metrics`,
+				auth: { type: "bearer" },
+				inputSchema: z.toJSONSchema(MetricListInputSchema),
+				outputSchema: z.toJSONSchema(MetricListResponseSchema),
+			},
+			readMetric: {
+				method: "GET",
+				endpoint: `${origin}/api/v1/metrics/{id}`,
+				auth: { type: "bearer" },
+				inputSchema: z.toJSONSchema(z.object({ id: z.string() })),
+				outputSchema: z.toJSONSchema(
+					MetricViewSchema.extend({
+						history: z.array(MetricObservationSchema),
+					}),
+				),
+			},
+			readMetricObservation: {
+				method: "GET",
+				endpoint: `${origin}/api/v1/metrics/{id}/observations/{observationId}`,
+				auth: { type: "bearer" },
+				inputSchema: z.toJSONSchema(
+					z.object({ id: z.string(), observationId: z.uuid() }),
+				),
+				outputSchema: z.toJSONSchema(MetricSnapshotSchema),
+			},
+			computeMetric: {
+				method: "POST",
+				endpoint: `${origin}/api/v1/metrics/{id}/compute`,
+				auth: { type: "bearer" },
+				inputSchema: z.toJSONSchema(
+					MetricComputeInputSchema.extend({ id: z.string() }),
+				),
+				outputSchema: z.toJSONSchema(MetricObservationSchema),
+			},
 			listWorkItems: {
 				method: "GET",
 				endpoint: `${origin}/api/v1/work/items`,

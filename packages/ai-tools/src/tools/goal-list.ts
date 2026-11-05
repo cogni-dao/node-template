@@ -31,6 +31,7 @@ export const GoalListOutputSchema = z.object({
       title: z.string(),
       evaluateAt: z.string().nullable(),
       content: z.string(),
+      kpis: z.array(z.record(z.string(), z.unknown())).optional(),
       sourceUrl: z.string().url().optional(),
       sourceUrlUnavailable: z.literal(true).optional(),
     })
@@ -72,11 +73,12 @@ export function createGoalListImplementation(
         throw new Error("goals_unavailable: no goal reader on this node");
       const goals = await list.call(deps.knowledgeCapability);
       return {
-        goals: goals.map(({ id, title, evaluateAt, content }) => ({
+        goals: goals.map(({ id, title, evaluateAt, content, kpis }) => ({
           id,
           title,
           evaluateAt,
           content,
+          ...(kpis ? { kpis: [...kpis] } : {}),
           ...readSourceProvenance(deps.nodePublicOrigin, "knowledge", id),
         })),
       };

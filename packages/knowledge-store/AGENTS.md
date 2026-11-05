@@ -93,3 +93,5 @@ Shared ports, contribution workflow, and adapters for versioned domain knowledge
 - `core__knowledge_search` / `core__knowledge_read` / `core__knowledge_write` BoundTools shipped in `@cogni/ai-tools`; brain graph uses them via tool runtime.
 
 Contribution adapters require an explicit independent `writerSession` or `branchSql`; no write path falls back to its read client. The existing session runner registers each reader and rejects both initial and replacement writer aliases before SQL; rejected replacement factories never destroy a reader. Pure read-only store construction remains supported.
+
+metricSpec and kpiBindings are nullable reviewed JSON fields. Omitted updates preserve them; explicit null clears them. The node validates metric semantics; this package never executes calculators.

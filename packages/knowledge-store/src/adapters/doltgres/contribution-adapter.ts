@@ -272,7 +272,7 @@ async function currentHash(conn: ReservedSql, ref: string): Promise<string> {
   return parseDoltResult(rows[0] as Record<string, unknown>, "dolt_hashof");
 }
 
-/** Contribution branches may predate the additive use_when migration. */
+/** Contribution branches may predate additive knowledge-column migrations. */
 async function knowledgeColumnExists(
   conn: ReservedSql,
   columnName: string
@@ -786,6 +786,24 @@ async function applyEdit(input: {
 
   await assertDomainRegistered(conn, edit.entry.domain);
   const hasUseWhen = await knowledgeColumnExists(conn, "use_when");
+  const metricValues: { column: string; value: string }[] = [];
+  for (const [key, column] of [
+    ["metricSpec", "metric_spec"],
+    ["kpiBindings", "kpi_bindings"],
+  ] as const) {
+    const value = edit.entry[key];
+    // Ordinary edits must remain usable on branches created before the migration.
+    if (value === undefined) continue;
+    if (!(await knowledgeColumnExists(conn, column))) {
+      throw new ContributionConflictError(
+        `cannot set ${column}: this contribution predates the metric schema; refresh it onto migrated main before adding metric configuration`,
+      );
+    }
+    metricValues.push({
+      column,
+      value: value === null ? "NULL" : escapeValue(JSON.stringify(value)),
+    });
+  }
   const confidencePct = initializeConfidence(
     {
       sourceType: "external",
@@ -806,11 +824,15 @@ async function applyEdit(input: {
     assertResultingEvaluateAt(edit.targetRowId, entryType, evaluateAt);
     const resolutionStrategy =
       edit.entry.resolutionStrategy ?? current.resolutionStrategy;
+    // Omitted configuration preserves it; explicit null clears it. Domain validation is injected by the node boundary.
+    const metricAssignments = metricValues
+      .map(({ column, value }) => `, ${column} = ${value}`)
+      .join("");
     const useWhenAssignment = hasUseWhen
       ? `, use_when = ${edit.entry.useWhen ? escapeValue(edit.entry.useWhen) : "NULL"}`
       : "";
     const result = await conn.unsafe(
-      `UPDATE knowledge SET domain = ${escapeValue(edit.entry.domain)}, entity_id = ${escapeValue(edit.entry.entityId ?? null)}, title = ${escapeValue(edit.entry.title)}, content = ${escapeValue(edit.entry.content)}${useWhenAssignment}, entry_type = ${escapeValue(entryType)}, confidence_pct = ${escapeValue(confidencePct)}, source_type = ${escapeValue("external")}, source_ref = ${escapeValue(ref)}, source_node = ${escapeValue(sourceNode)}, tags = ${edit.entry.tags ? escapeValue(edit.entry.tags) : "NULL"}, evaluate_at = ${escapeValue(evaluateAt)}, resolution_strategy = ${escapeValue(resolutionStrategy)}, updated_at = now() WHERE id = ${escapeValue(edit.targetRowId)}`
+      `UPDATE knowledge SET domain = ${escapeValue(edit.entry.domain)}, entity_id = ${escapeValue(edit.entry.entityId ?? null)}, title = ${escapeValue(edit.entry.title)}, content = ${escapeValue(edit.entry.content)}${useWhenAssignment}${metricAssignments}, entry_type = ${escapeValue(entryType)}, confidence_pct = ${escapeValue(confidencePct)}, source_type = ${escapeValue("external")}, source_ref = ${escapeValue(ref)}, source_node = ${escapeValue(sourceNode)}, tags = ${edit.entry.tags ? escapeValue(edit.entry.tags) : "NULL"}, evaluate_at = ${escapeValue(evaluateAt)}, resolution_strategy = ${escapeValue(resolutionStrategy)}, updated_at = now() WHERE id = ${escapeValue(edit.targetRowId)}`
     );
     if (result.count === 0) {
       throw new ContributionNotFoundError(
@@ -835,8 +857,10 @@ async function applyEdit(input: {
   const useWhenValue = hasUseWhen
     ? `, ${edit.entry.useWhen ? escapeValue(edit.entry.useWhen) : "NULL"}`
     : "";
+  const metricColumns = metricValues.map(({ column }) => `, ${column}`).join("");
+  const metricLiterals = metricValues.map(({ value }) => `, ${value}`).join("");
   await conn.unsafe(
-    `INSERT INTO knowledge (id, domain, entity_id, title, content${useWhenColumn}, entry_type, confidence_pct, source_type, source_ref, source_node, tags, evaluate_at, resolution_strategy) VALUES (${escapeValue(entryId)}, ${escapeValue(edit.entry.domain)}, ${escapeValue(edit.entry.entityId ?? null)}, ${escapeValue(edit.entry.title)}, ${escapeValue(edit.entry.content)}${useWhenValue}, ${escapeValue(entryType)}, ${escapeValue(confidencePct)}, ${escapeValue("external")}, ${escapeValue(ref)}, ${escapeValue(sourceNode)}, ${edit.entry.tags ? escapeValue(edit.entry.tags) : "NULL"}, ${escapeValue(evaluateAt)}, ${escapeValue(edit.entry.resolutionStrategy ?? null)})`
+    `INSERT INTO knowledge (id, domain, entity_id, title, content${useWhenColumn}${metricColumns}, entry_type, confidence_pct, source_type, source_ref, source_node, tags, evaluate_at, resolution_strategy) VALUES (${escapeValue(entryId)}, ${escapeValue(edit.entry.domain)}, ${escapeValue(edit.entry.entityId ?? null)}, ${escapeValue(edit.entry.title)}, ${escapeValue(edit.entry.content)}${useWhenValue}${metricLiterals}, ${escapeValue(entryType)}, ${escapeValue(confidencePct)}, ${escapeValue("external")}, ${escapeValue(ref)}, ${escapeValue(sourceNode)}, ${edit.entry.tags ? escapeValue(edit.entry.tags) : "NULL"}, ${escapeValue(evaluateAt)}, ${escapeValue(edit.entry.resolutionStrategy ?? null)})`
   );
 }
 
@@ -1733,6 +1757,8 @@ export class DoltgresKnowledgeContributionAdapter
             title: row.from_title ?? null,
             content: row.from_content ?? null,
             useWhen: row.from_use_when ?? null,
+            metricSpec: row.from_metric_spec ?? null,
+            kpiBindings: row.from_kpi_bindings ?? null,
             entryType: row.from_entry_type ?? null,
             domain: row.from_domain ?? null,
           }
@@ -1743,6 +1769,8 @@ export class DoltgresKnowledgeContributionAdapter
             title: row.to_title ?? null,
             content: row.to_content ?? null,
             useWhen: row.to_use_when ?? null,
+            metricSpec: row.to_metric_spec ?? null,
+            kpiBindings: row.to_kpi_bindings ?? null,
             entryType: row.to_entry_type ?? null,
             domain: row.to_domain ?? null,
           }

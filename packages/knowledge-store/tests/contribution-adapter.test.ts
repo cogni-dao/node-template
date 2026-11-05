@@ -1462,3 +1462,59 @@ class CrossPlaneFakeSql {
     return this.conn as unknown as ReservedSql;
   }
 }
+
+describe("reviewed metric configuration", () => {
+  it("keeps ordinary inserts usable on pre-migration contribution branches", async () => {
+    const fake = new FakeSql();
+    const original = fake.conn.unsafe.bind(fake.conn);
+    fake.conn.unsafe = async (query) => {
+      if (query.startsWith("INSERT INTO knowledge (") && /metric_spec|kpi_bindings/.test(query))
+        throw new Error("column does not exist on retained branch");
+      return original(query);
+    };
+    await adapterFor(fake).appendCommit({
+      contributionId: record.id,
+      principal: { id: "agent-1", kind: "agent" },
+      message: "ordinary edit on retained branch",
+      edits: [{ op: "insert", entry: { id: "ordinary", domain: "meta", title: "Ordinary", content: "Existing branch remains editable" } }],
+    });
+    expect(fake.conn.queries.some(q => q.startsWith("INSERT INTO knowledge ("))).toBe(true);
+  });
+  it("gives metric-bearing edits on old branches an explicit schema conflict", async () => {
+    await expect(adapterFor(new FakeSql()).appendCommit({
+      contributionId: record.id,
+      principal: { id: "agent-1", kind: "agent" },
+      message: "metric on retained branch",
+      edits: [{ op: "insert", entry: { id: "metric-old", domain: "meta", title: "Metric", content: "Requires migrated main", metricSpec: { calculatorId: "work.count@1", params: {}, maxAgeSeconds: 90 } } }],
+    })).rejects.toThrow(/predates the metric schema/);
+  });
+  it("persists metric JSON and target bindings on a contribution insert", async () => {
+    const fake = new FakeSql();
+    const original = fake.conn.unsafe.bind(fake.conn);
+    fake.conn.unsafe = async (query) => {
+      if (query.includes("information_schema.columns") && /metric_spec|kpi_bindings/.test(query))
+        return [{ "?column?": 1 }];
+      return original(query);
+    };
+    await adapterFor(fake).appendCommit({ contributionId: "contrib-agent-1-abc123", principal: { id: "agent-1", kind: "agent" }, message: "metric definition", edits: [{ op: "insert", entry: { id: "metric-work", domain: "meta", title: "Work count", content: "Registered measurement", metricSpec: { calculatorId: "work.count@1", params: { mode: "open" }, maxAgeSeconds: 90 }, kpiBindings: [{ metricId: "metric-work", comparator: "lte", target: { value: 10, unit: "items" } }] } }] });
+    const sql = fake.conn.queries.find(q => q.startsWith("INSERT INTO knowledge ("));
+    expect(sql).toContain("metric_spec, kpi_bindings"); expect(sql).toContain('"calculatorId":"work.count@1"'); expect(sql).toContain('"metricId":"metric-work"');
+  });
+  it("shows the reviewed JSON in the contribution before/after diff", async () => {
+    class ConfigDiffSql extends FakeSql {
+      override async unsafe(query: string) {
+        if (query.includes("dolt_diff")) return [{ diff_type: "modified", from_id: "metric-work", to_id: "metric-work", from_metric_spec: { calculatorId: "work.count@1", params: { mode: "open" } }, to_metric_spec: null, from_kpi_bindings: [{ metricId: "metric-work" }], to_kpi_bindings: [] }];
+        return super.unsafe(query);
+      }
+    }
+    const [entry] = await adapterFor(new ConfigDiffSql()).diff("contrib-agent-1-abc123");
+    expect(entry?.before?.metricSpec).toMatchObject({ calculatorId: "work.count@1" }); expect(entry?.after?.metricSpec).toBeNull(); expect(entry?.after?.kpiBindings).toEqual([]);
+  });
+  it("keeps omission distinct from explicit clearing at the wire", () => {
+    const common = { op: "update", targetRowId: "metric-work", entry: { id: "metric-work", domain: "meta", title: "Count", content: "Count items" } };
+    const omitted = KnowledgeContributionEditSchema.parse(common);
+    const cleared = KnowledgeContributionEditSchema.parse({ ...common, entry: { ...common.entry, metricSpec: null, kpiBindings: null } });
+    if (omitted.op !== "update" || cleared.op !== "update") throw new Error("fixture");
+    expect(Object.keys(omitted.entry)).not.toContain("metricSpec"); expect(cleared.entry.metricSpec).toBeNull(); expect(cleared.entry.kpiBindings).toBeNull();
+  });
+});

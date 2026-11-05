@@ -12,7 +12,7 @@
  * @public
  */
 
-import { formatCentsToDollars } from "@cogni/node-shared";
+import { formatCentsToDollars } from "@cogni/node-shared/browser";
 import { Loader2 } from "lucide-react";
 import type { ReactElement } from "react";
 import { Button } from "@/components/kit/inputs/Button";

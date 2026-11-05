@@ -10,7 +10,7 @@
  * @public
  */
 
-import { EVENT_NAMES as NODE_SHARED_EVENT_NAMES } from "@cogni/node-shared";
+import { EVENT_NAMES as NODE_SHARED_EVENT_NAMES } from "@cogni/node-shared/browser";
 
 // App-local event registry: the shared registry plus node-local events.
 export const EVENT_NAMES = {
@@ -45,6 +45,6 @@ export {
   type PaymentsVerifiedEvent,
   type RequestContext,
   WORK_ITEMS_LIST_ERROR_CODES,
-} from "@cogni/node-shared";
+} from "@cogni/node-shared/browser";
 // --- App-local: server logger/metrics/redact (pino + prom-client runtime deps) ---
 export * from "./server";

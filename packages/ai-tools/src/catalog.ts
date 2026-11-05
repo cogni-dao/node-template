@@ -24,6 +24,7 @@ import { goalListBoundTool } from "./tools/goal-list";
 import { knowledgeReadBoundTool } from "./tools/knowledge-read";
 import { knowledgeSearchBoundTool } from "./tools/knowledge-search";
 import { knowledgeWriteBoundTool } from "./tools/knowledge-write";
+import { METRIC_TOOL_BUNDLE } from "./tools/metric";
 import { metricsQueryBoundTool } from "./tools/metrics-query";
 import { repoListBoundTool } from "./tools/repo-list";
 import { repoOpenBoundTool } from "./tools/repo-open";
@@ -112,6 +113,7 @@ export function createToolCatalog(
  * VCS_TOOL_BUNDLE instead.
  */
 export const CORE_TOOL_BUNDLE: readonly CatalogBoundTool[] = [
+  ...METRIC_TOOL_BUNDLE,
   edoDecideBoundTool as CatalogBoundTool,
   edoHypothesizeBoundTool as CatalogBoundTool,
   edoRecordOutcomeBoundTool as CatalogBoundTool,

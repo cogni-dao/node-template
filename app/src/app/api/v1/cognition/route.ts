@@ -137,7 +137,7 @@ export const GET = wrapRouteHandlerWithLogging(
 			`and your open contribution branch via GET ${origin}/api/v1/knowledge/contributions/{id}/diff. ` +
 			"Refine in place over writing new (REFINE_OVER_EXTEND).";
 
-		const { markdown, governingRender } = renderBundle({
+		const rendered = renderBundle({
 			node,
 			name,
 			mission,
@@ -151,6 +151,32 @@ export const GET = wrapRouteHandlerWithLogging(
 			orientation,
 			goals,
 		});
+		const { governingRender } = rendered;
+		let { markdown } = rendered;
+
+		// Same read model and assessment as GET /api/v1/metrics/goals and core__goal_progress.
+		if (goals.status === "ok" && port && container.goalMetrics) {
+			try {
+				const progress = await container.goalProgress();
+				const lines: string[] = [];
+				const symbol = { gte: "≥", lte: "≤", eq: "=" } as const;
+				for (const goal of progress.goals) {
+					for (const kpi of goal.kpis) {
+						const a = kpi.assessment;
+						lines.push(
+							`- ${goal.id} → ${kpi.binding.metricId}: ${a.status}${a.reason ? ` (${a.reason})` : ""}; ${a.value ?? "unknown"} ${a.unit}; target ${symbol[a.comparator]} ${a.target.value} ${a.target.unit}${a.deadline ? ` by ${a.deadline}` : ""}; observation ${a.observationId ?? "none"}.`,
+						);
+					}
+				}
+				if (lines.length)
+					markdown += `\n\n## Goal measurements\n\n${lines.join("\n")}`;
+			} catch {
+				ctx.log.warn(
+					{ reason: "goal_progress_unavailable" },
+					"cognition.goal_measurements_unavailable",
+				);
+			}
+		}
 
 		ctx.log.info(
 			{
@@ -185,7 +211,10 @@ export const GET = wrapRouteHandlerWithLogging(
 				markdown,
 			}),
 		);
-		response.headers.set("Cache-Control", CACHE_CONTROL);
+		response.headers.set(
+			"Cache-Control",
+			container.goalMetrics ? "no-store" : CACHE_CONTROL,
+		);
 		return response;
 	},
 );
