@@ -4,14 +4,14 @@
 /**
  * Module: `@app/(app)/work/_api/fetchWorkItems`
  * Purpose: Client-side fetch wrapper for work items list.
- * Scope: Calls /api/v1/work/items with type-safe contract. Does not implement business logic.
- * Invariants: Returns typed WorkItemsListOutput or throws
+ * Scope: Calls summary and detail endpoints with type-safe contracts. Does not implement business logic.
+ * Invariants: Returns typed summary pages or details, or throws
  * Side-effects: IO
  * Links: [work.items.list.v1.contract](../../../../contracts/work.items.list.v1.contract.ts)
  * @internal
  */
 
-import type { WorkItemDto, WorkItemsListOutput } from "@cogni/node-contracts";
+import type { WorkItemDto, WorkItemSummariesListOutput } from "@cogni/node-contracts";
 
 export class WorkItemFetchError extends Error {
   readonly status: number;
@@ -48,9 +48,11 @@ async function responseErrorMessage(
 /** Fetch one bounded server-filtered page. */
 export async function fetchWorkItems(
   params: URLSearchParams,
-): Promise<WorkItemsListOutput> {
-  const response = await fetch(`/api/v1/work/items?${params}`, {
+  signal?: AbortSignal,
+): Promise<WorkItemSummariesListOutput> {
+  const response = await fetch(`/api/v1/work/summaries?${params}`, {
     method: "GET",
+    ...(signal && { signal }),
     credentials: "same-origin",
     cache: "no-store",
   });
@@ -58,12 +60,13 @@ export async function fetchWorkItems(
     throw new Error(
       await responseErrorMessage(response, `HTTP ${response.status}`),
     );
-  return response.json() as Promise<WorkItemsListOutput>;
+  return response.json() as Promise<WorkItemSummariesListOutput>;
 }
 
-export async function fetchWorkItem(id: string): Promise<WorkItemDto> {
+export async function fetchWorkItem(id: string, signal?: AbortSignal): Promise<WorkItemDto> {
   const response = await fetch(`/api/v1/work/items/${encodeURIComponent(id)}`, {
     method: "GET",
+    ...(signal && { signal }),
     headers: { "Content-Type": "application/json" },
     credentials: "same-origin",
     cache: "no-store",

@@ -3,7 +3,7 @@
 
 /**
  * Module: `@app/(app)/work/_components/WorkKanban`
- * Purpose: Binds the shared `WorkBoard` from `@cogni/knowledge-base-ui` to this node's work DTO and router links (task.0041).
+ * Purpose: Binds the shared `WorkBoard` from `@cogni/knowledge-base-ui` to this node's summary DTO and router links (task.0041).
  * Scope: Adapter only. Board markup and behavior live in the package; this node keeps data loading, URL state and routing.
  * Side-effects: none
  * Links: task.0041, packages/knowledge-base-ui/src/work-board.tsx
@@ -13,14 +13,14 @@
 "use client";
 
 import { WorkBoard, type WorkBoardGoalLink } from "@cogni/knowledge-base-ui";
-import type { WorkItemDto } from "@cogni/node-contracts";
+import type { WorkItemSummary } from "@cogni/node-contracts";
 import Link from "next/link";
 
 interface WorkKanbanProps {
-  readonly items: readonly WorkItemDto[];
+  readonly items: readonly WorkItemSummary[];
   readonly statuses: readonly string[];
   readonly isLoading: boolean;
-  readonly onOpenItem: (item: WorkItemDto) => void;
+  readonly onOpenItem: (item: WorkItemSummary) => void;
 }
 
 function GoalLink({ href, className, label }: WorkBoardGoalLink) {

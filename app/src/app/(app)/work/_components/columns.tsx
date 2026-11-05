@@ -19,7 +19,7 @@
 
 "use client";
 
-import type { WorkItemDto } from "@cogni/node-contracts";
+import type { WorkItemSummary } from "@cogni/node-contracts";
 import { DataGridColumnHeader } from "@cogni/node-ui-kit/reui/data-grid/data-grid-column-header";
 import { Button } from "@cogni/node-ui-kit/shadcn/button";
 import {
@@ -34,7 +34,7 @@ import { ArrowDownIcon, ArrowUpIcon, ChevronsUpDownIcon, ListFilter } from "luci
 import { NumberRangeFilter } from "./NumberRangeFilter";
 import { StatusPill, TypeIcon } from "./work-item-icons";
 
-const col = createColumnHelper<WorkItemDto>();
+const col = createColumnHelper<WorkItemSummary>();
 
 const formatProject = (v: string) => v.replace("proj.", "");
 

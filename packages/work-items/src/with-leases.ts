@@ -44,6 +44,7 @@ export function withWorkItemLeases(
         items: result.items.map((item) => project(item, claims.get(item.id))),
       };
     },
+    listSummaries: (query) => content.listSummaries(query),
     async create(input, principalId) {
       return content.create(input, principalId);
     },

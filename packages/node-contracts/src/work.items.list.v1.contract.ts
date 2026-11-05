@@ -17,10 +17,11 @@ import {
   WORK_ITEM_SORT_DIRECTIONS,
   WORK_ITEM_SORT_FIELDS,
   WorkItemDtoSchema,
+  WorkItemSummarySchema,
 } from "@cogni/work-items";
 import { z } from "zod";
 
-export { WorkItemDtoSchema } from "@cogni/work-items";
+export { WorkItemDtoSchema, WorkItemSummarySchema } from "@cogni/work-items";
 
 /**
  * Evaluation scores: configurable axis id → { v, ev? }. Writes replace the whole object.
@@ -76,3 +77,11 @@ export const workItemsListOperation = {
 export type WorkItemDto = z.infer<typeof WorkItemDtoSchema>;
 export type WorkItemsListInput = z.infer<typeof workItemsListOperation.input>;
 export type WorkItemsListOutput = z.infer<typeof workItemsListOperation.output>;
+
+export const workItemSummariesListOperation = {
+  id: "work.summaries.list.v1",
+  input: workItemsListOperation.input,
+  output: workItemsListOperation.output.extend({ items: z.array(WorkItemSummarySchema) }),
+} as const;
+export type WorkItemSummary = z.infer<typeof WorkItemSummarySchema>;
+export type WorkItemSummariesListOutput = z.infer<typeof workItemSummariesListOperation.output>;

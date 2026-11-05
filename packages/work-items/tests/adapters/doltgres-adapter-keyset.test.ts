@@ -175,3 +175,49 @@ describe("the read lane arms itself from recreateClient", () => {
     expect(queries).toEqual([]);
   });
 });
+
+it("projects summaries and scans beyond the first text batch without reading outcomes", async () => {
+  const queries: string[] = [];
+  let batch = 0;
+  const sql = makeFakeDoltgresSql((query) => {
+    if (!query.includes("FROM (SELECT")) return [];
+    batch++;
+    const makeRow = (i: number, summary: string) => ({ id: `task.${String(i).padStart(4, "0")}`, title: "work", type: "task", status: "needs_implement", labels: [], summary, __sort_key: null });
+    return batch === 1 ? Array.from({ length: 501 }, (_, i) => makeRow(i, "none")) : [makeRow(501, "needle only here")];
+  }, queries);
+  const adapter = new DoltgresWorkItemAdapter(independentReadPool(sql), { readClient: sql });
+  const result = await adapter.listSummaries({ text: "needle", limit: 1 });
+  expect(result.items.map((item) => item.id)).toEqual(["task.0501"]);
+  expect(result.items[0]).not.toHaveProperty("summary");
+  const scans = queries.filter((query) => query.includes("FROM (SELECT"));
+  expect(scans).toHaveLength(2);
+  for (const scan of scans) {
+    expect(scan).not.toContain("work_items.*");
+    expect(scan).not.toMatch(/\boutcome\b/);
+    expect(scan).toContain("summary");
+  }
+});
+
+it("keeps full list fields and resolves long project cursors with a narrow lookup", async () => {
+  const queries: string[] = [];
+  const project = `proj.${"x".repeat(1500)}`;
+  let scans = 0;
+  const sql = makeFakeDoltgresSql((query) => {
+    if (query.startsWith("SELECT project_id FROM")) return [{ project_id: project }];
+    if (!query.includes("FROM (SELECT")) return [];
+    scans++;
+    const row = (id: string) => ({ id, title: id, type: "task", status: "needs_implement", project_id: project, __sort_key: project, labels: [], outcome: "full detail", external_refs: [], spec_refs: [], assignees: [] });
+    return scans === 1 ? [row("task.1"), row("task.2")] : [row("task.2")];
+  }, queries);
+  const adapter = new DoltgresWorkItemAdapter(independentReadPool(sql), { readClient: sql });
+  const first = await adapter.listSummaries({ sortBy: "projectId", limit: 1 });
+  expect(first.nextCursor).toBeTruthy();
+  expect(first.items[0]).not.toHaveProperty("outcome");
+  expect(queries.find((query) => query.includes("FROM (SELECT"))).not.toMatch(/\bsummary\b/);
+  await adapter.listSummaries({ sortBy: "projectId", limit: 1, cursor: first.nextCursor });
+  expect(queries.some((query) => query.startsWith("SELECT project_id FROM work_items"))).toBe(true);
+  expect(queries.some((query) => query.startsWith("SELECT * FROM work_items"))).toBe(false);
+  const full = await adapter.list({ limit: 1 });
+  expect(full.items[0]?.outcome).toBe("full detail");
+  expect(queries.some((query) => query.includes("SELECT work_items.*"))).toBe(true);
+});
