@@ -42,7 +42,9 @@ import {
   type JSX,
   type ReactElement,
   type ReactNode,
+  useEffect,
   useId,
+  useRef,
   useState,
 } from "react";
 import {
@@ -57,12 +59,15 @@ import {
 } from "recharts";
 
 import {
-  floorToStep,
+  axisTickLabel,
+  axisTicks,
   formatDate,
   formatNumber,
   formatReadingTime,
   formatUtcTime,
+  notYetMeasuredLabel,
   plural,
+  sinceText,
   unitLabel,
 } from "../lib/presentation";
 import type { PointState, SeriesModel, SeriesPoint } from "../lib/series";
@@ -75,9 +80,12 @@ const CHART_CONFIG = {
   bet: { label: "Bet", color: "hsl(var(--chart-4))" },
 } satisfies ChartConfig;
 
-/** The kit's outline-none sets --tw-outline-style: none; outline-solid restores it. */
+/**
+ * The kit's outline-none sets --tw-outline-style: none; outline-solid restores
+ * it. Foreground ink keeps the ring at or above 3:1 on both surfaces.
+ */
 const FOCUS_RING =
-  "[&_.recharts-surface:focus-visible]:outline-solid [&_.recharts-surface:focus-visible]:outline-2 [&_.recharts-surface:focus-visible]:outline-ring [&_.recharts-surface:focus-visible]:outline-offset-2";
+  "[&_.recharts-surface:focus-visible]:outline-solid [&_.recharts-surface:focus-visible]:outline-2 [&_.recharts-surface:focus-visible]:outline-foreground [&_.recharts-surface:focus-visible]:outline-offset-2";
 
 const STATE_TEXT: Record<Exclude<PointState, "ok">, string> = {
   missing: "No reading",
@@ -115,8 +123,28 @@ export interface TimeSeriesCardProps {
   };
 }
 
+/** Width of an element in px (ResizeObserver); `fallback` until measured. */
+function useWidth(fallback: number) {
+  const [width, setWidth] = useState(fallback);
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(([entry]) => {
+      if (entry) setWidth(entry.contentRect.width);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, width] as const;
+}
+
+/** Plot width inside the chart: the right Y axis and margins take about 52px. */
+const PLOT_INSET_PX = 52;
+
 export function TimeSeriesCard(props: TimeSeriesCardProps) {
   const { model } = props;
+  const [plotRef, chartWidth] = useWidth(800);
   const ids = chartIds(useId());
   const titleId = `${ids.fill}-title`;
   const summaryId = `${ids.fill}-summary`;
@@ -147,8 +175,8 @@ export function TimeSeriesCard(props: TimeSeriesCardProps) {
           {model && (model.layout === "sparse" || model.firstAttemptAt !== null) && (
             <p className="text-muted-foreground text-xs tabular-nums">
               {plural(model.okCount, "reading")} in range
-              {model.firstAttemptAt !== null
-                ? ` · measured since ${formatReadingTime(new Date(model.firstAttemptAt).toISOString(), props.nowIso)}`
+              {model.measuredSince !== null
+                ? ` · measured since ${sinceText(model.measuredSince, model.step, props.nowIso)}`
                 : ""}
             </p>
           )}
@@ -206,6 +234,7 @@ export function TimeSeriesCard(props: TimeSeriesCardProps) {
             )}
             {/* biome-ignore lint/a11y/noStaticElementInteractions: Enter on the focused chart surface (a Recharts tab stop) bubbles here to inspect the active point */}
             <div
+              ref={plotRef}
               className={cn(
                 "relative transition-opacity motion-reduce:transition-none",
                 props.stale && "opacity-60"
@@ -250,8 +279,14 @@ export function TimeSeriesCard(props: TimeSeriesCardProps) {
                     scale="time"
                     domain={[model.xDomain[0], model.xDomain[1]]}
                     allowDataOverflow
-                    ticks={timeTicks(model)}
-                    tickFormatter={(t: number) => tickText(t, model.step)}
+                    ticks={axisTicks(model.xDomain[0], model.xDomain[1], model.step)}
+                    tickFormatter={(t: number) =>
+                      axisTickLabel(
+                        t,
+                        model.step,
+                        model.xDomain[1] - model.xDomain[0]
+                      )
+                    }
                     tickLine={false}
                     axisLine={false}
                     minTickGap={28}
@@ -267,7 +302,12 @@ export function TimeSeriesCard(props: TimeSeriesCardProps) {
                     tickLine={false}
                     axisLine={false}
                   />
-                  {referenceMarks(model, ids, props.nowIso)}
+                  {referenceMarks(
+                    model,
+                    ids,
+                    props.nowIso,
+                    Math.max(0, chartWidth - PLOT_INSET_PX)
+                  )}
                   <ChartTooltip
                     cursor={false}
                     filterNull={false}
@@ -312,8 +352,11 @@ export function TimeSeriesCard(props: TimeSeriesCardProps) {
                 </AreaChart>
               </ChartContainer>
               {model.empty && (
-                <p className="pointer-events-none absolute inset-0 flex items-center justify-center px-6 text-center text-muted-foreground text-sm">
-                  No readings in this range. This is unknown, not zero.
+                // The pill keeps the target line from striking through the text.
+                <p className="pointer-events-none absolute inset-0 flex items-center justify-center px-6">
+                  <span className="rounded-md bg-background/95 px-2 py-1 text-center text-muted-foreground text-sm">
+                    No readings in this range. This is unknown, not zero.
+                  </span>
                 </p>
               )}
             </div>
@@ -403,7 +446,8 @@ function renderDot(
 function referenceMarks(
   model: SeriesModel,
   ids: ChartIds,
-  nowIso: string
+  nowIso: string,
+  plotWidthPx: number
 ): ReactElement[] {
   const marks: ReactElement[] = [];
   const muted = "hsl(var(--muted-foreground))";
@@ -418,7 +462,17 @@ function referenceMarks(
         ifOverflow="hidden"
       />
     );
-  if (model.notYetMeasured)
+  if (model.notYetMeasured) {
+    const [x0, x1] = model.xDomain;
+    const share =
+      (model.notYetMeasured.x2 - model.notYetMeasured.x1) / (x1 - x0 || 1);
+    // The label is clamped to its shaded span and hidden when it cannot fit.
+    const label = notYetMeasuredLabel(
+      share * plotWidthPx,
+      model.measuredSince !== null
+        ? sinceText(model.measuredSince, model.step, nowIso)
+        : null
+    );
     marks.push(
       <ReferenceArea
         key="not-yet-measured"
@@ -427,17 +481,22 @@ function referenceMarks(
         fill="hsl(var(--muted))"
         fillOpacity={0.6}
         ifOverflow="hidden"
-        label={{
-          value:
-            model.firstAttemptAt !== null
-              ? `Not yet measured · readings since ${formatReadingTime(new Date(model.firstAttemptAt).toISOString(), nowIso)}`
-              : "Not yet measured",
-          position: "insideBottomLeft",
-          fontSize: 11,
-          fill: muted,
-        }}
+        {...(label
+          ? {
+              label: {
+                value: label,
+                // Opposite corner from the target label.
+                position: model.targetNearFloor
+                  ? "insideTopLeft"
+                  : "insideBottomLeft",
+                fontSize: 11,
+                fill: muted,
+              },
+            }
+          : {})}
       />
     );
+  }
   for (const g of model.gaps)
     marks.push(
       <ReferenceArea
@@ -510,7 +569,8 @@ function referenceMarks(
       strokeDasharray="6 4"
       label={{
         value: model.target.label,
-        position: "insideBottomLeft",
+        // Near the floor the left corner holds the not-yet-measured label.
+        position: model.targetNearFloor ? "insideBottomRight" : "insideBottomLeft",
         fontSize: 11,
         fontWeight: 600,
         fill: "hsl(var(--foreground))",
@@ -583,7 +643,7 @@ function ChartLegend({
       ),
       text: paceLabels.needed,
     });
-  if (model.pace.observed && paceLabels.observed)
+  if ((model.pace.observed || model.pace.merged) && paceLabels.observed)
     items.push({
       key: "observed",
       swatch: (
@@ -592,7 +652,9 @@ function ChartLegend({
           style={{ borderColor: "hsl(var(--chart-1))" }}
         />
       ),
-      text: paceLabels.observed,
+      text: model.pace.merged
+        ? `${paceLabels.observed} (close to needed; drawn as one line)`
+        : paceLabels.observed,
     });
   if (model.gapBuckets.missing)
     items.push({
@@ -745,22 +807,4 @@ function pointTime(
   if (step === "1h") return `${formatDate(iso)}, ${formatUtcTime(iso)}`;
   if (step === "1w") return `Week of ${formatDate(iso, true)}`;
   return formatDate(iso, true);
-}
-
-function timeTicks(model: SeriesModel): number[] {
-  const [x0, x1] = model.xDomain;
-  const unit = model.step === "1h" ? "1h" : "1d";
-  const out = new Set<number>();
-  for (let i = 0; i < 5; i++) {
-    const t = floorToStep(x0 + (i * (x1 - x0)) / 4, unit);
-    if (t >= x0 && t <= x1) out.add(t);
-  }
-  return [...out];
-}
-
-function tickText(t: number, step: SeriesModel["step"]): string {
-  const iso = new Date(t).toISOString();
-  if (step === "1h" && !iso.endsWith("T00:00:00.000Z"))
-    return formatUtcTime(iso).replace(" UTC", "");
-  return formatDate(iso);
 }

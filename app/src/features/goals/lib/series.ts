@@ -26,15 +26,16 @@ import type {
 
 import {
   COMPARATOR_SYMBOL,
+  floorToStep,
   formatDate,
   formatNumber,
-  formatReadingTime,
   formatSigned,
   MIN_VISIBLE_STEPS,
   niceTicks,
   plural,
   type SeriesStart,
   STEP_MS,
+  sinceText,
   stepUnit,
   unitLabel,
 } from "./presentation";
@@ -121,7 +122,13 @@ export interface SeriesModel {
   readonly pace: {
     readonly needed: Segment | null;
     readonly observed: Segment | null;
+    /** Observed pace is within ~10% of needed, so only needed is drawn. */
+    readonly merged: boolean;
   };
+  /** The target sits in the bottom fifth: its label moves to the right edge. */
+  readonly targetNearFloor: boolean;
+  /** Earliest reading at the range's resolution; null when not cropped. */
+  readonly measuredSince: number | null;
   readonly bets: readonly BetShape[];
   readonly summary: string;
 }
@@ -247,27 +254,41 @@ export function buildGoalSeries(input: GoalSeriesInput): SeriesModel {
     if (!inReach && (startMs === null || startMs > xData)) return [];
     return [{ b, atMs, startMs, inReach }];
   });
+  // Observed and needed pace within ~10% would draw one line over the other:
+  // draw only needed; the legend still names both.
+  const paceClose =
+    drawNeeded &&
+    drawObserved &&
+    Math.abs((a.pace.observed as number) - (a.pace.needed as number)) <=
+      0.1 *
+        Math.max(
+          Math.abs(a.pace.observed as number),
+          Math.abs(a.pace.needed as number)
+        );
+  // A right margin exists only for a forward mark (pace or an in-reach bet).
   const forward = drawNeeded || drawObserved || betShapes.some((b) => b.inReach);
-  const base = forward ? Math.max(xData, asOfMs) : xData;
   const xRight = Math.max(
-    forward ? base + (base - xStart) * FORWARD_MARGIN : base,
+    forward ? xData + (xData - xStart) * FORWARD_MARGIN : xData,
     ...betShapes.filter((b) => b.inReach).map((b) => b.atMs)
   );
 
+  // Pace starts at the newest dot; its height keeps assessKpi's asOf math, so
+  // the needed line still reaches the target exactly at the deadline.
+  const newestT =
+    [...raw].reverse().find((p) => p.value !== null)?.t ??
+    (a.observedAt ? Date.parse(a.observedAt) : asOfMs);
   const paceSegment = (perWeek: number): Segment => {
+    const at = (x: number) =>
+      (value as number) + (perWeek * (x - asOfMs)) / WEEK_MS;
     const x2 =
-      deadlineMs !== null && deadlineMs > asOfMs && deadlineMs < xRight
+      deadlineMs !== null && deadlineMs > newestT && deadlineMs < xRight
         ? deadlineMs
         : xRight;
-    return {
-      x1: asOfMs,
-      y1: value as number,
-      x2,
-      y2: (value as number) + (perWeek * (x2 - asOfMs)) / WEEK_MS,
-    };
+    return { x1: newestT, y1: at(newestT), x2, y2: at(x2) };
   };
   const needed = drawNeeded ? paceSegment(a.pace.needed as number) : null;
-  const observed = drawObserved ? paceSegment(a.pace.observed as number) : null;
+  const observed =
+    drawObserved && !paceClose ? paceSegment(a.pace.observed as number) : null;
 
   const okValues = points.flatMap((p) => (p.value === null ? [] : [p.value]));
   const target = a.target.value;
@@ -323,7 +344,14 @@ export function buildGoalSeries(input: GoalSeriesInput): SeriesModel {
       deadlineMs !== null && deadlineMs >= xStart && deadlineMs <= xRight
         ? deadlineMs
         : null,
-    pace: { needed, observed },
+    pace: { needed, observed, merged: paceClose },
+    targetNearFloor: (target - yDomain[0]) / (yDomain[1] - yDomain[0] || 1) < 0.2,
+    measuredSince: cropped
+      ? Math.min(
+          firstBucketStart ?? Number.POSITIVE_INFINITY,
+          latest ? floorToStep(latest.t, step) : Number.POSITIVE_INFINITY
+        )
+      : null,
     bets,
   };
   return { ...model, summary: describeSeries(model, input) };
@@ -355,10 +383,8 @@ function describeSeries(
     parts.push(`${plural(m.gapBuckets.missing, word)} without a reading`);
   if (m.gapBuckets.failed)
     parts.push(`${plural(m.gapBuckets.failed, word)} with a failed read`);
-  if (m.firstAttemptAt !== null)
-    parts.push(
-      `measured since ${formatReadingTime(new Date(m.firstAttemptAt).toISOString(), input.asOf)}`
-    );
+  if (m.measuredSince !== null)
+    parts.push(`measured since ${sinceText(m.measuredSince, m.step, input.asOf)}`);
   if (m.pace.needed && a.pace.needed !== null)
     parts.push(`needed pace ${formatSigned(a.pace.needed, unit)} per week`);
   if (a.status === "on_track" || a.status === "behind")

@@ -390,7 +390,7 @@ export interface SparkDatum {
 
 export interface SparkSeries {
   readonly data: readonly SparkDatum[];
-  /** Explicit Y domain: ok values plus the target, never the Recharts [0, auto] default. */
+  /** Explicit Y domain from the ok values, never the Recharts [0, auto] default. */
   readonly domain: readonly [number, number];
   readonly okCount: number;
   readonly gapCount: number;
@@ -399,10 +399,7 @@ export interface SparkSeries {
 }
 
 /** Break the line at every non-ok bucket. A missing bucket is never filled. */
-export function sparkSeries(
-  trend: MetricHistory | null,
-  target: number | null
-): SparkSeries {
+export function sparkSeries(trend: MetricHistory | null): SparkSeries {
   const buckets = trend?.buckets ?? [];
   const values = buckets.map((b) =>
     b.status === "ok" && b.value !== null ? b.value : null
@@ -422,10 +419,9 @@ export function sparkSeries(
       start: b.start,
     };
   });
-  const domainValues = [
-    ...okIdx.map((i) => values[i] as number),
-    ...(target !== null ? [target] : []),
-  ];
+  // The domain follows the readings so the trend has shape; the bullet and
+  // the aria-label carry the target.
+  const domainValues = okIdx.map((i) => values[i] as number);
   let lo = domainValues.length ? Math.min(...domainValues) : 0;
   let hi = domainValues.length ? Math.max(...domainValues) : 1;
   if (hi === lo) {
@@ -689,4 +685,65 @@ export function cadenceText(cadenceSeconds: number | null | undefined): string |
       ? "hourly reading"
       : `every ${plural(cadenceSeconds / 3_600, "hour")}`;
   return `every ${plural(cadenceSeconds / 60, "minute")}`;
+}
+
+// ---------------------------------------------------------------- axis
+
+/** About five time ticks on step boundaries inside [x0, x1]. */
+export function axisTicks(
+  x0: number,
+  x1: number,
+  step: MetricHistoryStep
+): number[] {
+  const unit = step === "1h" ? "1h" : "1d";
+  const out = new Set<number>();
+  for (let i = 0; i < 5; i++) {
+    const t = floorToStep(x0 + (i * (x1 - x0)) / 4, unit);
+    if (t >= x0 && t <= x1) out.add(t);
+  }
+  return [...out];
+}
+
+/**
+ * A tick names its day whenever the axis spans more than one day: "Nov 4" at
+ * midnight and on daily/weekly axes, "Nov 4, 18:00" on a multi-day hourly
+ * axis, and "18:00" only when the whole hourly axis fits inside one day.
+ */
+export function axisTickLabel(
+  t: number,
+  step: MetricHistoryStep,
+  spanMs: number
+): string {
+  const iso = new Date(t).toISOString();
+  if (step !== "1h" || iso.endsWith("T00:00:00.000Z")) return formatDate(iso);
+  const time = formatUtcTime(iso).replace(" UTC", "");
+  return spanMs > DAY_MS ? `${formatDate(iso)}, ${time}` : time;
+}
+
+/** "07:00 UTC" for hourly data; "Nov 5" when the data is daily or weekly. */
+export function sinceText(
+  ms: number,
+  step: MetricHistoryStep,
+  nowIso: string
+): string {
+  const iso = new Date(ms).toISOString();
+  return step === "1h" ? formatReadingTime(iso, nowIso) : formatDate(iso);
+}
+
+/** Average glyph width of the 11px chart label font, in px. */
+const LABEL_CHAR_PX = 6.4;
+
+/**
+ * The "Not yet measured" label that fits inside its shaded span, or null.
+ * `spanPx` is the shaded width in pixels; the label never overflows it.
+ */
+export function notYetMeasuredLabel(
+  spanPx: number,
+  since: string | null
+): string | null {
+  const long = since ? `Not yet measured · readings since ${since}` : null;
+  const fits = (text: string) => text.length * LABEL_CHAR_PX + 16 <= spanPx;
+  if (long && fits(long)) return long;
+  if (fits("Not yet measured")) return "Not yet measured";
+  return null;
 }

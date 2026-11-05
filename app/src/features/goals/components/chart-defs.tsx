@@ -79,3 +79,15 @@ export function chartDefs(ids: ChartIds): ReactElement {
     </defs>
   );
 }
+
+/** The sparkline's area gradient; it sits outside ChartContainer, so no CSS var. */
+export function sparkDefs(ids: ChartIds): ReactElement {
+  return (
+    <defs key="goal-spark-defs">
+      <linearGradient id={ids.fill} x1="0" y1="0" x2="0" y2="1">
+        <stop offset="5%" stopColor="hsl(var(--chart-1))" stopOpacity={0.32} />
+        <stop offset="95%" stopColor="hsl(var(--chart-1))" stopOpacity={0.02} />
+      </linearGradient>
+    </defs>
+  );
+}

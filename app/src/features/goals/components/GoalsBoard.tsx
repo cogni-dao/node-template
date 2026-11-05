@@ -347,15 +347,14 @@ function GoalRow({
         </div>
         <NowVsTarget goal={goal} kpi={primary} status={status} nowIso={nowIso} />
         <div className="hidden @2xl:block">
-          {primary ? (
+          {/* No bound metric: nothing to trend, and "No metric is bound" already shows. */}
+          {primary?.metric ? (
             <Sparkline
               trend={primary.trend}
               target={primary.binding.target.value}
               comparator={primary.binding.comparator}
             />
-          ) : (
-            <Sparkline trend={null} target={null} comparator={null} />
-          )}
+          ) : null}
         </div>
         <StatusCell kpi={primary} status={status} nowIso={nowIso} />
       </div>
@@ -550,12 +549,14 @@ function SubKpiRow({
         )}
       </div>
       <div className="hidden @2xl:block">
-        <Sparkline
-          trend={kpi.trend}
-          target={kpi.binding.target.value}
-          comparator={kpi.binding.comparator}
-          height={28}
-        />
+        {kpi.metric ? (
+          <Sparkline
+            trend={kpi.trend}
+            target={kpi.binding.target.value}
+            comparator={kpi.binding.comparator}
+            height={28}
+          />
+        ) : null}
       </div>
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 @2xl:block">
         <StatusPill status={a.status} />

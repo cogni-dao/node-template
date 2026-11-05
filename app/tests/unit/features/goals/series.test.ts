@@ -27,10 +27,13 @@ import {
 import { describe, expect, it } from "vitest";
 import {
   allWindow,
+  axisTickLabel,
+  axisTicks,
   defaultRange,
   heroLabel,
   historyWindow,
   nextReadingAt,
+  notYetMeasuredLabel,
   probeWindow,
   rangeWindow,
   seriesStartFromProbe,
@@ -105,6 +108,8 @@ describe("crop only before a proven first attempt (B1, N1)", () => {
     ]);
     expect(m.points.at(-1)?.latest).toBe(true);
     expect(m.points.map((p) => p.lastOk)).toEqual([false, false, false, true]);
+    expect(m.measuredSince).toBe(t("2026-11-05T07:00:00.000Z"));
+    expect(m.summary).toContain("measured since 07:00 UTC");
     expect(m.layout).toBe("normal");
   });
 
@@ -118,6 +123,10 @@ describe("crop only before a proven first attempt (B1, N1)", () => {
     expect(m.points).toHaveLength(1);
     expect(m.layout).toBe("sparse");
     expect(m.points[0]?.isolated).toBe(true);
+    // Daily resolution: the open-day point alone never claims a clock time.
+    expect(m.measuredSince).toBe(t("2026-11-05T00:00:00.000Z"));
+    expect(m.summary).toContain("measured since Nov 5;");
+    expect(m.summary).not.toMatch(/measured since \d\d:\d\d/);
   });
 
   it("keeps a leading run as a gap when the series began before the range", () => {
@@ -215,8 +224,13 @@ describe("target band, domain and pace", () => {
         pace: { observed: null, needed },
       },
     });
-    expect(m.pace.needed?.x1).toBe(t(asOf));
-    expect(m.pace.needed?.y1).toBe(value);
+    // The line starts at the newest dot and keeps assessKpi's asOf math.
+    const newest = t("2026-11-05T10:00:03.156Z");
+    expect(m.pace.needed?.x1).toBe(newest);
+    expect(m.pace.needed?.y1).toBeCloseTo(
+      value + (needed * (newest - t(asOf))) / WEEK,
+      12
+    );
     expect(m.pace.needed?.x2).toBe(t(deadline));
     expect(m.pace.needed?.y2).toBeCloseTo(1, 9);
     expect(m.deadlineX).toBe(t(deadline));
@@ -233,13 +247,75 @@ describe("target band, domain and pace", () => {
       },
     });
     expect(onTrack.pace.needed).toBeNull();
-    expect(onTrack.pace.observed?.x1).toBe(t(PROD_AS_OF));
+    expect(onTrack.pace.observed?.x1).toBe(t("2026-11-05T10:00:03.156Z"));
     const delayed = build({
       assessment: { ...productionRatioAssessment(), status: "delayed" },
     });
     expect(delayed.pace.needed).toBeNull();
     expect(build().pace.needed).not.toBeNull();
     expect(build().pace.observed).toBeNull();
+  });
+});
+
+describe("pace overlap and label placement", () => {
+  it("draws only needed pace when observed is within 10%, and flags the merge", () => {
+    const close = build({
+      assessment: {
+        ...productionRatioAssessment(),
+        pace: { observed: 0.059, needed: 0.062 },
+      },
+    });
+    expect(close.pace.needed).not.toBeNull();
+    expect(close.pace.observed).toBeNull();
+    expect(close.pace.merged).toBe(true);
+    expect(close.summary).toContain("observed pace +0.059 per week");
+    const apart = build({
+      assessment: {
+        ...productionRatioAssessment(),
+        pace: { observed: 0.02, needed: 0.062 },
+      },
+    });
+    expect(apart.pace.observed).not.toBeNull();
+    expect(apart.pace.merged).toBe(false);
+  });
+
+  it("moves the target label off the floor when the target sits low", () => {
+    const low = build({
+      history: history("m", "items", "1h", "2026-11-05T10:00:00.000Z", [21, 22, 22]),
+      assessment: {
+        ...productionRatioAssessment(),
+        status: "on_track",
+        value: 22,
+        unit: "items",
+        target: { value: 1, unit: "items" },
+        pace: { observed: null, needed: -1.7 },
+      },
+    });
+    expect(low.targetNearFloor).toBe(true);
+    expect(build().targetNearFloor).toBe(false);
+  });
+
+  it("fits the not-yet-measured label inside its span or hides it", () => {
+    expect(notYetMeasuredLabel(400, "07:00 UTC")).toBe(
+      "Not yet measured · readings since 07:00 UTC"
+    );
+    expect(notYetMeasuredLabel(150, "07:00 UTC")).toBe("Not yet measured");
+    expect(notYetMeasuredLabel(60, "07:00 UTC")).toBeNull();
+  });
+
+  it("names the day on every multi-day axis tick", () => {
+    const at = t("2026-11-04T18:00:00.000Z");
+    expect(axisTickLabel(at, "1h", 7 * DAY)).toBe("Nov 4, 18:00");
+    expect(axisTickLabel(at, "1h", 12 * HOUR)).toBe("18:00");
+    expect(axisTickLabel(t("2026-11-05T00:00:00.000Z"), "1h", 7 * DAY)).toBe(
+      "Nov 5"
+    );
+    expect(axisTickLabel(t("2026-11-04T00:00:00.000Z"), "1d", 30 * DAY)).toBe(
+      "Nov 4"
+    );
+    const ticks = axisTicks(t("2026-10-29T10:00:00.000Z"), t("2026-11-05T10:00:00.000Z"), "1h");
+    expect(ticks.length).toBeGreaterThanOrEqual(4);
+    for (const x of ticks) expect(x % HOUR).toBe(0);
   });
 });
 
@@ -380,11 +456,13 @@ describe("sparkline data", () => {
       "2026-11-06T00:00:00.000Z",
       [...Array.from({ length: 29 }, () => null), 0.23]
     );
-    const s = sparkSeries(trend, 1);
+    const s = sparkSeries(trend);
     expect(s.okCount).toBe(1);
     expect(s.data.at(-1)).toMatchObject({ value: 0.23, isolated: true, last: true });
+    // The domain follows the readings (the target lives in the bullet).
     expect(s.domain[0]).toBeLessThan(0.23);
-    expect(s.domain[1]).toBeGreaterThan(1);
+    expect(s.domain[1]).toBeGreaterThan(0.23);
+    expect(s.domain[1]).toBeLessThan(1);
     expect(s.data.filter((d) => d.value === null)).toHaveLength(29);
   });
 });

@@ -109,7 +109,10 @@ export function HistoryChart({
   });
 
   const history = query.data?.history;
-  const rangeTitle = query.data?.title ?? "";
+  // The title travels with its data; with no data (loading, failed read) it
+  // still names the selected range.
+  const rangeTitle =
+    query.data?.title ?? rangeWindow(range, nowMs, seriesStart).title;
   const model =
     history && probeSettled
       ? buildGoalSeries({

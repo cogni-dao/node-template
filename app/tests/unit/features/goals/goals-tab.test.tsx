@@ -485,6 +485,10 @@ describe("goal history card", () => {
     const { container } = await openChart(board());
     const svg = chartSvg(container);
     expect(svg.getAttribute("tabindex")).toBe("0");
+    // Foreground ink (not the ring token) keeps the outline at 3:1 in dark mode.
+    expect(
+      (svg.closest("[data-chart]") as HTMLElement).className
+    ).toContain("[&_.recharts-surface:focus-visible]:outline-foreground");
     const title = document.getElementById(
       svg.getAttribute("aria-labelledby") as string
     );
@@ -607,6 +611,20 @@ describe("goal history card", () => {
     );
   });
 
+  it("draws one pace line when observed is close to needed, naming both", async () => {
+    const { container } = await openChart(
+      board({ pace: { observed: 0.06, needed: 0.062 } })
+    );
+    expect(container.textContent).toContain("Needed pace +0.062 / wk");
+    expect(container.textContent).toContain(
+      "Observed pace +0.06 / wk (close to needed; drawn as one line)"
+    );
+    // Target line plus one pace segment.
+    expect(
+      container.querySelectorAll("figure .recharts-reference-line")
+    ).toHaveLength(2);
+  });
+
   it("opens a chart with exactly one probe and one range read", async () => {
     const { fetchMock } = await openChart(board());
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
@@ -653,9 +671,11 @@ describe("goal history card", () => {
       ),
       historyServer(() => null)
     );
-    expect(container.textContent).toContain(
+    const overlay = screen.getByText(
       "No readings in this range. This is unknown, not zero."
     );
+    // A background pill keeps the target line from striking through it.
+    expect(overlay.className).toMatch(/bg-background/);
     // The chart rendered (target line present), but no series and no zero line.
     expect(chartSvg(container)).not.toBeNull();
     for (const el of container.querySelectorAll(
@@ -688,6 +708,12 @@ describe("goal history card", () => {
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
     expect(screen.getByRole("radio", { name: "1W", checked: true })).toBeTruthy();
+    // The title keeps its range words even though no data arrived.
+    expect(
+      screen.getByRole("heading", {
+        name: "Seven-day convergence ratio · past week, hourly",
+      })
+    ).toBeTruthy();
   });
 
   it("labels final and at-deadline readings in the hero", async () => {
@@ -721,7 +747,30 @@ describe("goal history card", () => {
       el.getAttribute("aria-label")?.startsWith("Last 30 days")
     ) as HTMLElement;
     expect(spark.getAttribute("aria-label")).toContain("one reading, 0.23");
+    expect(spark.getAttribute("aria-label")).toContain("target ≥ 1.00");
     expect(spark.querySelectorAll(".recharts-dot")).toHaveLength(1);
+    // A gradient area (poly recipe), no dashed placeholder line.
+    expect(spark.querySelector(".recharts-area")).not.toBeNull();
+    expect(spark.querySelector(".recharts-reference-line")).toBeNull();
+    const fill = spark.querySelector(".recharts-area-area")?.getAttribute("fill") ?? "";
+    const id = fill.replace(/^url\(#(.*)\)$/, "$1");
+    expect(id).not.toBe("");
+    expect(spark.querySelector(`[id="${id}"]`)).not.toBeNull();
+  });
+
+  it("shows no trend at all for a goal with no bound metric", () => {
+    vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
+    const { container } = render(
+      <QueryClientProvider client={client()}>
+        <GoalsBoard initialData={visualFixture()} />
+      </QueryClientProvider>
+    );
+    for (const id of ["goal-first-principles", "goal-knowledge-syntropy"]) {
+      const row = container.querySelector(`[data-goal="${id}"]`) as HTMLElement;
+      expect(row.textContent).toContain("unknown, not zero");
+      expect(row.innerHTML).not.toContain("history could not be read");
+      expect(row.querySelector('[aria-label^="Trend unavailable"]')).toBeNull();
+    }
   });
 });
 
@@ -770,7 +819,6 @@ describe("server rendering", () => {
     const second = renderToString(tree());
     expect(first).toContain("recharts-surface");
     expect(first).toContain("recharts-area");
-    expect(first).toContain("recharts-line");
     expect(first).toContain("recharts-bar");
     expect(first).not.toMatch(/recharts\d+-clip|clipPath-recharts-/);
     expect(second).toBe(first);

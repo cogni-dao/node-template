@@ -23,11 +23,11 @@ import { ChartContainer } from "@cogni/node-ui-kit/shadcn/chart";
 import type { KpiStatus, MetricHistory } from "@cogni-dao/metrics/contracts";
 import { Fragment, type JSX, useId } from "react";
 import {
+  Area,
+  AreaChart,
   Bar,
   BarChart,
   Dot,
-  Line,
-  LineChart,
   ReferenceArea,
   ReferenceLine,
   XAxis,
@@ -45,7 +45,7 @@ import {
   sparkSeries,
   unitLabel,
 } from "../lib/presentation";
-import { chartIds } from "./chart-defs";
+import { chartIds, sparkDefs } from "./chart-defs";
 
 const TONE_CLASS: Record<StatusTone, string> = {
   success:
@@ -83,9 +83,10 @@ export function StatusPill({
 const COMPARATOR_WORDS = { gte: "at least", lte: "at most", eq: "exactly" };
 
 /**
- * Bullet graph: track, shaded zone up to the target, value bar, target tick.
- * The value bar is ink, not status color: the pill carries status. The wrapper
- * reserves the height, so the row never shifts while the chart measures.
+ * Bullet graph: rounded track, shaded zone up to the target, a chart-1 value
+ * bar (muted when the value is last good) and a heavy target tick. Series
+ * color, never status color: the pill carries status. The wrapper reserves
+ * the height, so the row never shifts while the chart measures.
  */
 export function BulletGraph({
   value,
@@ -107,8 +108,7 @@ export function BulletGraph({
   const pos = (v: number) =>
     Math.max(0, Math.min(100, ((v - min) / (max - min)) * 100));
   const targetPct = pos(target);
-  const h = compact ? 14 : 22;
-  const inset = Math.round(h * 0.18);
+  const h = compact ? 16 : 24;
   const label = `${
     value === null
       ? "No current value"
@@ -122,7 +122,7 @@ export function BulletGraph({
             id={ids.chart}
             layout="vertical"
             data={[{ k: "value", value }]}
-            margin={{ top: inset, right: 1, bottom: inset, left: 1 }}
+            margin={{ top: 2, right: 2, bottom: 2, left: 2 }}
             barCategoryGap={0}
           >
             <XAxis
@@ -138,30 +138,36 @@ export function BulletGraph({
               x2={max}
               fill="hsl(var(--muted))"
               fillOpacity={1}
+              radius={4}
               ifOverflow="hidden"
             />
             <ReferenceArea
               x1={comparator === "lte" ? Math.max(0, min) : min}
               x2={target}
               fill="hsl(var(--foreground))"
-              fillOpacity={0.1}
+              fillOpacity={0.08}
+              radius={4}
               ifOverflow="hidden"
             />
             {value !== null && (
               <Bar
                 id={ids.series}
                 dataKey="value"
-                barSize={Math.max(3, Math.round(h * 0.24))}
-                fill={current ? "hsl(var(--foreground))" : "hsl(var(--muted-foreground))"}
-                fillOpacity={current ? 1 : 0.7}
-                radius={1}
+                barSize={Math.round(h * 0.5)}
+                fill={
+                  current
+                    ? "hsl(var(--chart-1))"
+                    : "hsl(var(--muted-foreground))"
+                }
+                fillOpacity={current ? 1 : 0.6}
+                radius={3}
                 isAnimationActive={false}
               />
             )}
             <ReferenceLine
               x={target}
               stroke="hsl(var(--foreground))"
-              strokeWidth={2.5}
+              strokeWidth={3}
               ifOverflow="hidden"
             />
           </BarChart>
@@ -207,7 +213,7 @@ function sparkDot(props: SparkDotProps): JSX.Element {
       key={key}
       cx={props.cx}
       cy={props.cy}
-      r={3}
+      r={d.last ? 3.5 : 3}
       fill="hsl(var(--chart-1))"
       stroke="hsl(var(--background))"
       strokeWidth={1.5}
@@ -215,7 +221,11 @@ function sparkDot(props: SparkDotProps): JSX.Element {
   );
 }
 
-/** 30-day trend at a fixed size: breaks at every non-ok bucket; dashed target. */
+/**
+ * 30-day trend at a fixed size, poly-style: a gradient area with an end dot.
+ * Every non-ok bucket breaks the area; a lone reading is a Recharts Dot. The
+ * target is not drawn here (the bullet shows it); the aria-label states it.
+ */
 export function Sparkline({
   trend,
   target,
@@ -230,7 +240,7 @@ export function Sparkline({
   readonly height?: number;
 }) {
   const ids = chartIds(useId());
-  const s = sparkSeries(trend, target);
+  const s = sparkSeries(trend);
   const days = trend?.buckets.length || 30;
   const targetLabel =
     target !== null && comparator
@@ -239,7 +249,6 @@ export function Sparkline({
   const label = trend
     ? sparklineLabel(s, days, targetLabel, trend.unit)
     : "Trend unavailable: history could not be read.";
-  const draw = s.okCount > 0 || target !== null;
   return (
     <div
       role="img"
@@ -247,14 +256,15 @@ export function Sparkline({
       style={{ width, height }}
       className="max-w-full"
     >
-      {draw && (
-        <LineChart
+      {s.okCount > 0 && (
+        <AreaChart
           id={ids.chart}
           width={width}
           height={height}
           data={s.data as SparkDatum[]}
-          margin={{ top: 4, right: 4, bottom: 4, left: 4 }}
+          margin={{ top: 5, right: 5, bottom: 2, left: 2 }}
         >
+          {sparkDefs(ids)}
           <XAxis
             dataKey="i"
             type="number"
@@ -262,29 +272,20 @@ export function Sparkline({
             hide
           />
           <YAxis domain={[s.domain[0], s.domain[1]]} allowDataOverflow hide />
-          {target !== null && (
-            <ReferenceLine
-              y={target}
-              stroke="hsl(var(--muted-foreground))"
-              strokeOpacity={0.7}
-              strokeDasharray="2 3"
-              ifOverflow="hidden"
-            />
-          )}
-          {s.okCount > 0 && (
-            <Line
-              id={ids.series}
-              dataKey="value"
-              type="linear"
-              stroke="hsl(var(--chart-1))"
-              strokeWidth={2}
-              connectNulls={false}
-              isAnimationActive={false}
-              dot={sparkDot}
-              activeDot={false}
-            />
-          )}
-        </LineChart>
+          <Area
+            id={ids.series}
+            dataKey="value"
+            type="linear"
+            stroke="hsl(var(--chart-1))"
+            strokeWidth={2}
+            fill={`url(#${ids.fill})`}
+            baseValue={s.domain[0]}
+            connectNulls={false}
+            isAnimationActive={false}
+            dot={sparkDot}
+            activeDot={false}
+          />
+        </AreaChart>
       )}
     </div>
   );
