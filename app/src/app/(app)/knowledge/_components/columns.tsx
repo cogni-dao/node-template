@@ -31,6 +31,7 @@ function buildColumns(bounded: boolean) {
     col.accessor("domain", {
       header: ({ column }) => (
         <DataGridColumnHeader
+          allowEmpty={bounded}
           column={column}
           title="Domain"
           filter={
@@ -52,38 +53,43 @@ function buildColumns(bounded: boolean) {
       meta: { headerTitle: "Domain" },
     }),
 
-  col.display({
-    id: "entry",
-    header: ({ column }) => (
-      <DataGridColumnHeader column={column} title="Entry" />
-    ),
-    minSize: 280,
-    cell: ({ row }) => {
-      const { id, title, entityId } = row.original;
-      return (
-        <div className="flex items-center gap-2 py-0.5">
-          <CopyLinkButton path={`/knowledge/${id}`} label="Copy block link" />
-          <div className="flex min-w-0 flex-col gap-0.5">
-            <span className="line-clamp-1 text-sm">{title}</span>
-            <div className="flex items-center gap-2 text-muted-foreground text-xs">
-              <span className="font-mono">{id}</span>
-              {entityId && (
-                <>
-                  <span aria-hidden="true">·</span>
-                  <span className="font-mono opacity-70">{entityId}</span>
-                </>
-              )}
+    col.display({
+      id: "entry",
+      header: ({ column }) => (
+        <DataGridColumnHeader
+          allowEmpty={bounded}
+          column={column}
+          title="Entry"
+        />
+      ),
+      minSize: 280,
+      cell: ({ row }) => {
+        const { id, title, entityId } = row.original;
+        return (
+          <div className="flex items-center gap-2 py-0.5">
+            <CopyLinkButton path={`/knowledge/${id}`} label="Copy block link" />
+            <div className="flex min-w-0 flex-col gap-0.5">
+              <span className="line-clamp-1 text-sm">{title}</span>
+              <div className="flex items-center gap-2 text-muted-foreground text-xs">
+                <span className="font-mono">{id}</span>
+                {entityId && (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span className="font-mono opacity-70">{entityId}</span>
+                  </>
+                )}
+              </div>
             </div>
           </div>
-        </div>
-      );
-    },
-    meta: { headerTitle: "Entry" },
-  }),
+        );
+      },
+      meta: { headerTitle: "Entry" },
+    }),
 
     col.accessor("entryType", {
       header: ({ column }) => (
         <DataGridColumnHeader
+          allowEmpty={bounded}
           column={column}
           title="Type"
           filter={
@@ -105,20 +111,25 @@ function buildColumns(bounded: boolean) {
       meta: { headerTitle: "Type" },
     }),
 
-  col.accessor("confidencePct", {
-    header: ({ column }) => (
-      <DataGridColumnHeader column={column} title="Confidence" />
-    ),
-    size: 130,
-    cell: (info) => <ConfidenceBar value={info.getValue() ?? null} />,
-    sortingFn: (a, b) =>
-      (a.original.confidencePct ?? -1) - (b.original.confidencePct ?? -1),
-    meta: { headerTitle: "Confidence" },
-  }),
+    col.accessor("confidencePct", {
+      header: ({ column }) => (
+        <DataGridColumnHeader
+          allowEmpty={bounded}
+          column={column}
+          title="Confidence"
+        />
+      ),
+      size: 130,
+      cell: (info) => <ConfidenceBar value={info.getValue() ?? null} />,
+      sortingFn: (a, b) =>
+        (a.original.confidencePct ?? -1) - (b.original.confidencePct ?? -1),
+      meta: { headerTitle: "Confidence" },
+    }),
 
     col.accessor("sourceType", {
       header: ({ column }) => (
         <DataGridColumnHeader
+          allowEmpty={bounded}
           column={column}
           title="Source"
           filter={
@@ -145,7 +156,11 @@ function buildColumns(bounded: boolean) {
 
     col.accessor("createdAt", {
       header: ({ column }) => (
-        <DataGridColumnHeader column={column} title="Created" />
+        <DataGridColumnHeader
+          allowEmpty={bounded}
+          column={column}
+          title="Created"
+        />
       ),
       size: 110,
       cell: (info) => <RelativeTime iso={info.getValue()} />,

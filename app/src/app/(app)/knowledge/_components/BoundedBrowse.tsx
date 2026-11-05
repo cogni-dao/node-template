@@ -70,6 +70,12 @@ export function BoundedBrowse({
     queryFn: ({ signal }) => fetchBrowse(query, signal),
     staleTime: 30_000,
     retry: false,
+    // Cached body windows resume only through explicit user intent. A remount
+    // may reuse them, but must not silently repeat a stale or failed body read.
+    refetchOnWindowFocus: !search,
+    refetchOnReconnect: !search,
+    refetchOnMount: !search,
+    retryOnMount: !search,
     initialData:
       !cursor &&
       !search &&
@@ -132,7 +138,10 @@ export function BoundedBrowse({
           onClick={() => {
             reset();
             const { cursor: _cursor, ...first } = query;
-            void queryClient.invalidateQueries({ queryKey: browseKey(first) });
+            void queryClient.invalidateQueries({
+              queryKey: browseKey(first),
+              exact: true,
+            });
           }}
         >
           Restart
