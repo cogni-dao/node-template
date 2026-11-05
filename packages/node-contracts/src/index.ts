@@ -110,4 +110,3 @@ export * from "./work.items.delete.v1.contract";
 export * from "./work.items.get.v1.contract";
 export * from "./work.items.list.v1.contract";
 export * from "./work.items.patch.v1.contract";
-export * from "./work.items.reassign.v1.contract";

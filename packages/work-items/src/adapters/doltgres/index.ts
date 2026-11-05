@@ -40,6 +40,4 @@ export type {
   WorkItemsDoltgresPort,
   WorkItemsPatchInput,
   WorkItemsPatchSet,
-  WorkItemsReassignCreatorInput,
-  WorkItemsReassignCreatorResult,
 } from "./ports.js";
