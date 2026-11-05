@@ -26,6 +26,7 @@ import {
   KanbanColumn,
   KanbanColumnContent,
 } from "./reui-kanban.js";
+import { cn } from "./cn.js";
 import { RelativeTime } from "./relative-time.js";
 import { StatusPill, TypeIcon } from "./work-item-icons.js";
 
@@ -96,7 +97,7 @@ function updatedIso(updatedAt: string | null | undefined): string | undefined {
 
 function BoardSkeleton({ className }: { readonly className: string }) {
   return (
-    <div className={`animate-pulse rounded-md bg-primary/10 ${className}`} />
+    <div className={cn("animate-pulse rounded-md bg-primary/10", className)} />
   );
 }
 
