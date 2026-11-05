@@ -1,0 +1,26 @@
+goto /knowledge
+pageerror: Error: Minified React error #418; visit https://react.dev/errors/418?args[]=text&args[]= for the full message or use the non-minified dev environment for full errors and additional helpful warnings.
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/schedules?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/gov?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/credits?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/chat?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge?_rsc=1e3fw
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/gov?_rsc=1bkln
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/credits?_rsc=ujli8
+proxy 200 /api/v1/metrics/goals
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/schedules?_rsc=1e3fw
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/chat?_rsc=4aifu
+proxy 200 /api/v1/metrics/convergence-ratio-7d/history?from=2026-10-29T16%3A00%3A00.000Z&to=2026-11-05T16%3A00%3A00.000Z&step=1h
+proxy 200 /api/v1/metrics/convergence-ratio-7d/history?from=2019-03-04T00%3A00%3A00.000Z&to=2026-11-02T00%3A00%3A00.000Z&step=1w
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge?mode=goals&_rsc=zp9cu
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/convergence-ratio-7d?observation=a7de3ed9-511f-4dee-a4c8-befabde2f763&_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/convergence-ratio-7d?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/convergence-ratio-7d?observation=a7de3ed9-511f-4dee-a4c8-befabde2f763&_rsc=1e3fw
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/validated-7d?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/validated-7d?observation=4280da39-688c-4ef3-9993-68712529e891&_rsc=1e3fw
+proxy 200 /api/v1/metrics/validated-7d/history?from=2026-10-29T16%3A00%3A00.000Z&to=2026-11-05T16%3A00%3A00.000Z&step=1h
+proxy 200 /api/v1/metrics/validated-7d/history?from=2019-03-04T00%3A00%3A00.000Z&to=2026-11-02T00%3A00%3A00.000Z&step=1w
+proxy 200 /api/v1/metrics/goals
+after-detail-validated-dark-desktop: production asOf 2026-11-05T16:52:18.770Z
+saved after-detail-validated-dark-desktop.png
+candidate /version unreachable

@@ -1,0 +1,21 @@
+task.0040 after screenshots. Candidate-a /version buildSha 6d3b6e4d7b27542f6959549de605014a0b5e05c2, checked before every capture batch (2026-11-05, 13:49-17:26 UTC).
+
+after-board-dark-desktop.png            Production readings rendered by candidate build 6d3b6e4 (board, dark, 1440x900)
+after-detail-dark-desktop.png           Production readings rendered by candidate build 6d3b6e4 (convergence ratio, 1W hourly, dark)
+after-detail-light-desktop.png          Production readings rendered by candidate build 6d3b6e4 (convergence ratio, 1W hourly, light)
+after-detail-light-mobile.png           Production readings rendered by candidate build 6d3b6e4 (convergence ratio, 1W hourly, light, 390x844)
+after-detail-1m-dark-desktop.png        Production readings rendered by candidate build 6d3b6e4 (convergence ratio, 1M daily, dark)
+after-detail-validated-dark-desktop.png Production readings rendered by candidate build 6d3b6e4 (validated units, 1W hourly, on track, dark)
+after-keyboard-focus-light.png          Production readings rendered by candidate build 6d3b6e4 (Tab onto chart: focus-visible outline solid 2px, light)
+after-keyboard-focus-dark.png           Production readings rendered by candidate build 6d3b6e4 (Tab onto chart: focus-visible outline solid 2px, dark)
+after-keyboard-tooltip-light.png        Production readings rendered by candidate build 6d3b6e4 (ArrowRight moves the tooltip, light)
+after-keyboard-tooltip-dark.png         Production readings rendered by candidate build 6d3b6e4 (ArrowRight moves the tooltip, dark)
+  keyboard check: focused = svg.recharts-surface, accessible name "Seven-day convergence ratio · past week, hourly", :focus-visible true,
+  outline "solid 2px" (light rgb(2,8,23), dark rgb(30,85,174)); Enter after ArrowRight -> live region "Nov 5, 08:00 UTC · 0.25 ratio · Inspect reading ↗".
+
+SYNTHETIC (fixture data served by the capture script, not production readings), rendered by candidate build 6d3b6e4:
+after-synthetic-board-dark.png          Synthetic fixture: board with four synthetic goals
+after-synthetic-gaps-dark.png           Synthetic fixture: gaps (missing hatch, failed cross-hatch, observed + needed pace)
+after-synthetic-building-dark.png       Synthetic fixture: status building, 2 readings, crop + not yet measured
+after-synthetic-lastgood-dark.png       Synthetic fixture: status delayed, hollow last-good dot, trailing gap
+after-synthetic-error-dark.png          Synthetic fixture: history read fails (unknown, not zero + Try again)

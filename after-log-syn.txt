@@ -1,0 +1,76 @@
+goto /knowledge
+pageerror: Error: Minified React error #418; visit https://react.dev/errors/418?args[]=text&args[]= for the full message or use the non-minified dev environment for full errors and additional helpful warnings.
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/work?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/schedules?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/credits?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/gov?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/credits?_rsc=ujli8
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/chat?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/gov?_rsc=1bkln
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/chat?_rsc=4aifu
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge?mode=goals&_rsc=zp9cu
+saved after-synthetic-board-dark.png
+synthetic syn-gaps 1w 2019-03-04T00:00:00.000Z..2026-11-02T00:00:00.000Z
+synthetic syn-gaps 1h 2026-10-29T17:00:00.000Z..2026-11-05T17:00:00.000Z
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/goal-syn-gaps?_rsc=1e3fw
+saved after-synthetic-gaps-dark.png
+synthetic syn-building 1w 2019-03-04T00:00:00.000Z..2026-11-02T00:00:00.000Z
+synthetic syn-building 1h 2026-10-29T17:00:00.000Z..2026-11-05T17:00:00.000Z
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/goal-syn-building?_rsc=1e3fw
+saved after-synthetic-building-dark.png
+synthetic syn-lastgood 1w 2019-03-04T00:00:00.000Z..2026-11-02T00:00:00.000Z
+synthetic syn-lastgood 1h 2026-10-29T17:00:00.000Z..2026-11-05T17:00:00.000Z
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/syn-lastgood?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/goal-syn-lastgood?_rsc=1e3fw
+saved after-synthetic-lastgood-dark.png
+synthetic syn-error 1w 2019-03-04T00:00:00.000Z..2026-11-02T00:00:00.000Z
+console.error: Failed to load resource: the server responded with a status of 503 (Service Unavailable)
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/goal-syn-error?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/goal-syn-error?_rsc=1e3fw
+console.error: Failed to load resource: the server responded with a status of 503 (Service Unavailable)
+saved after-synthetic-error-dark.png
+goto /knowledge
+synthetic syn-gaps light: FAILED locator.click: Timeout 30000ms exceeded.
+synthetic syn-building light: FAILED locator.click: Timeout 30000ms exceeded.
+slow 95930ms https://node-template-test.cognidao.org/_next/static/chunks/05jo6fjp.p-5e.js
+slow 95947ms https://node-template-test.cognidao.org/_next/static/chunks/0qtx~_o9jxe~n.js
+slow 95946ms https://node-template-test.cognidao.org/_next/static/chunks/128l0_-5xfcqp.js
+slow 95950ms https://node-template-test.cognidao.org/_next/static/chunks/0cgaugu_ayu0l.js
+slow 95948ms https://node-template-test.cognidao.org/_next/static/chunks/0kwzqc4it1x6j.js
+slow 95983ms https://node-template-test.cognidao.org/_next/static/chunks/0uhw3bxdl8kfc.js
+slow 95981ms https://node-template-test.cognidao.org/_next/static/chunks/058p_fz9f4eri.js
+slow 95981ms https://node-template-test.cognidao.org/_next/static/chunks/0ffmmtl-k-uk5.js
+slow 96219ms https://node-template-test.cognidao.org/_next/static/chunks/04y3-h68j-g6a.js
+slow 95999ms https://node-template-test.cognidao.org/_next/static/chunks/0f.4l.gtfuc0q.js
+slow 95995ms https://node-template-test.cognidao.org/_next/static/chunks/0vc6jsg~ivtoz.js
+slow 96027ms https://node-template-test.cognidao.org/_next/static/chunks/09d9ce7n_6dch.js
+slow 96027ms https://node-template-test.cognidao.org/_next/static/chunks/0_0pihmvonvhl.js
+slow 96023ms https://node-template-test.cognidao.org/_next/static/chunks/018gnlg9n4bo9.js
+slow 96031ms https://node-template-test.cognidao.org/_next/static/chunks/14fp673hpgxn1.js
+slow 96029ms https://node-template-test.cognidao.org/_next/static/chunks/0r4mocacla818.js
+slow 96032ms https://node-template-test.cognidao.org/_next/static/chunks/009iqi4_vr6qe.js
+slow 96031ms https://node-template-test.cognidao.org/_next/static/chunks/06xyolxkvsq7b.js
+slow 96037ms https://node-template-test.cognidao.org/_next/static/chunks/04byccucnhino.js
+slow 96039ms https://node-template-test.cognidao.org/_next/static/chunks/0sak1wbvs0f6f.js
+pageerror: Error: Minified React error #418; visit https://react.dev/errors/418?args[]=text&args[]= for the full message or use the non-minified dev environment for full errors and additional helpful warnings.
+slow 97217ms https://node-template-test.cognidao.org/_next/image?url=%2FTransparentBrainOnly.png&w=48&q=75
+synthetic syn-lastgood light: FAILED locator.click: Timeout 30000ms exceeded.
+slow 30752ms https://node-template-test.cognidao.org/api/v1/public/treasury/snapshot
+slow 30802ms https://node-template-test.cognidao.org/api/auth/session
+slow 30779ms https://node-template-test.cognidao.org/work?_rsc=1h9z5
+slow 30798ms https://node-template-test.cognidao.org/api/v1/knowledge/contributions?state=open&limit=100
+slow 30808ms https://node-template-test.cognidao.org/api/v1/ai/threads
+slow 30780ms https://node-template-test.cognidao.org/schedules?_rsc=1h9z5
+slow 30785ms https://node-template-test.cognidao.org/gov?_rsc=1h9z5
+slow 30785ms https://node-template-test.cognidao.org/credits?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/chat?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/dashboard?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/credits?_rsc=ujli8
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/gov?_rsc=1bkln
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/work?_rsc=1e3fw
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge?_rsc=1e3fw
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/dashboard?_rsc=1b8jd
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/schedules?_rsc=1e3fw
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/chat?_rsc=4aifu
+synthetic syn-error light: FAILED locator.click: Timeout 30000ms exceeded.
+candidate /version {"version":"unknown","buildSha":"6d3b6e4d7b27542f6959549de605014a0b5e05c2"}
