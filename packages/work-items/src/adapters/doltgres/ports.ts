@@ -7,5 +7,7 @@ export type {
   WorkItemsContentPort,
   WorkItemsPatchInput,
   WorkItemsPatchSet,
+  WorkItemsReassignCreatorInput,
+  WorkItemsReassignCreatorResult,
   WorkItemsPort as WorkItemsDoltgresPort,
 } from "../../content.js";

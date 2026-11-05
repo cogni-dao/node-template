@@ -53,6 +53,8 @@ import type {
   WorkItemsCreateInput,
   WorkItemsPatchInput,
   WorkItemsPatchSet,
+  WorkItemsReassignCreatorInput,
+  WorkItemsReassignCreatorResult,
 } from "./ports.js";
 
 export const OPERATOR_ID_FLOOR = 5000;
@@ -187,7 +189,19 @@ type MutationVerb =
   | "delete"
   | "claim"
   | "heartbeat"
-  | "release";
+  | "release"
+  | "reassign";
+
+/**
+ * `reassign` only (bug.0013): the creator move a multi-row commit must prove.
+ * `ids` is filled from the UPDATE's RETURNING set before the commit, so the
+ * branch proof requires the diff to touch exactly those rows.
+ */
+interface ReassignProof {
+  readonly from: string;
+  readonly to: string;
+  ids?: readonly string[];
+}
 
 interface MutationProof {
   readonly verb: MutationVerb;
@@ -201,6 +215,7 @@ interface MutationProof {
   readonly commandProvided?: boolean;
   /** `patch` only: the revision the compare-and-set was conditioned on. */
   readonly expectedRevision?: number;
+  readonly reassign?: ReassignProof;
 }
 
 interface MutationOptions<T> {
@@ -234,6 +249,8 @@ interface ValidatedBranchTransition {
   readonly before: RowSnapshot;
   readonly after: RowSnapshot;
   readonly commitAt: number;
+  /** `reassign` only: every proven row; `before`/`after` mirror the first. */
+  readonly rows?: ReadonlyArray<{ before: RowSnapshot; after: RowSnapshot }>;
 }
 
 class PendingBranchRecoveryError<T = unknown> extends Error {
@@ -707,6 +724,13 @@ const RELEASE_COLUMNS = new Set<string>([
   "updated_at",
 ]);
 
+/** bug.0013: a creator reassignment may change only these columns. */
+const REASSIGN_COLUMNS = new Set<string>([
+  "created_by_principal_id",
+  "revision",
+  "updated_at",
+]);
+
 function normalizedPersistedValue(value: unknown): unknown {
   if (value instanceof Date) return value.toISOString();
   if (typeof value === "string") {
@@ -809,6 +833,80 @@ function legacyProofFromMessage(
     beforeRow: before,
     afterRow: after,
   };
+}
+
+const REASSIGN_MESSAGE =
+  /^work-items: reassign-creator ([^ ]+) to ([^ ]+) by actor:([^ ]+)$/;
+
+/** Orphan-sweep proof for a `reassign` branch recovered without its pending state. */
+function legacyReassignProofFromMessage(
+  message: string
+): MutationProof | undefined {
+  const match = REASSIGN_MESSAGE.exec(message);
+  if (!match?.[1] || !match[2] || !match[3]) return undefined;
+  return {
+    verb: "reassign",
+    principal: match[3],
+    reassign: { from: match[1], to: match[2] },
+  };
+}
+
+/**
+ * bug.0013: a creator reassignment is the one multi-row operation. Every diff
+ * row must be a modification that moves `created_by_principal_id` exactly
+ * from→to, advances revision by one, and changes nothing else. When the
+ * pending proof recorded the RETURNING ids, the diff must touch exactly them.
+ */
+function validateReassignDiffs(
+  proof: MutationProof,
+  diffs: ReadonlyArray<Record<string, unknown>>
+): Array<{ before: RowSnapshot; after: RowSnapshot }> | undefined {
+  const reassign = proof.reassign;
+  if (
+    proof.verb !== "reassign" ||
+    !reassign ||
+    !reassign.from ||
+    !reassign.to ||
+    reassign.from === reassign.to ||
+    !proof.principal ||
+    diffs.length === 0
+  ) {
+    return undefined;
+  }
+  const seen = new Set<string>();
+  const rows: Array<{ before: RowSnapshot; after: RowSnapshot }> = [];
+  for (const diff of diffs) {
+    if (String(diff.diff_type ?? "").toLowerCase() !== "modified") {
+      return undefined;
+    }
+    const before = snapshotRow(diff, "from_");
+    const after = snapshotRow(diff, "to_");
+    const id = String(before.id ?? "");
+    if (!id || String(after.id ?? "") !== id || seen.has(id)) return undefined;
+    seen.add(id);
+    const changed = changedColumns(before, after);
+    const beforeRevision = asRevision(before.revision);
+    const afterRevision = asRevision(after.revision);
+    if (
+      String(before.created_by_principal_id ?? "") !== reassign.from ||
+      String(after.created_by_principal_id ?? "") !== reassign.to ||
+      beforeRevision === undefined ||
+      afterRevision !== beforeRevision + 1 ||
+      !changed.has("created_by_principal_id") ||
+      !onlyAllowedChanges(changed, REASSIGN_COLUMNS)
+    ) {
+      return undefined;
+    }
+    rows.push({ before, after });
+  }
+  if (
+    reassign.ids &&
+    (reassign.ids.length !== seen.size ||
+      !reassign.ids.every((id) => seen.has(id)))
+  ) {
+    return undefined;
+  }
+  return rows;
 }
 
 function requireNamedMerge(rows: unknown): {
@@ -975,6 +1073,9 @@ function validateTransitionMatrix(
         revisionAdvanced
       );
     }
+    case "reassign":
+      // Multi-row: proven only by validateReassignDiffs.
+      return false;
     case "release":
       return (
         String(before.id) === itemId &&
@@ -1745,6 +1846,31 @@ export class DoltgresWorkItemAdapter
     const diffs = (await conn.unsafe(
       `SELECT * FROM dolt_diff(${escapeValue(baseHash)}, ${escapeValue(tip)}, 'work_items')`
     )) as ReadonlyArray<Record<string, unknown>>;
+    const reassignProof = pending
+      ? pending.proof.verb === "reassign"
+        ? pending.proof
+        : undefined
+      : legacyReassignProofFromMessage(String(commit.message ?? ""));
+    if (reassignProof) {
+      const reassignCommitAt = asEpoch(commit.date);
+      const rows = validateReassignDiffs(reassignProof, diffs);
+      const first = rows?.[0];
+      if (reassignCommitAt === undefined || !rows || !first) {
+        throw new UnprovableTransitionError(
+          `Work-item branch ${branch} failed its operation proof; preserving evidence`
+        );
+      }
+      return {
+        branch,
+        baseHash,
+        tip,
+        proof: reassignProof,
+        before: first.before,
+        after: first.after,
+        rows,
+        commitAt: reassignCommitAt,
+      };
+    }
     if (diffs.length !== 1 || !diffs[0]) {
       throw new WorkItemsBusyError(
         `Work-item branch ${branch} is not an exact one-row change; preserving evidence`
@@ -1787,6 +1913,20 @@ export class DoltgresWorkItemAdapter
   ): Promise<void> {
     if (!(await this.branchCommitIsOnMain(conn, transition.tip))) {
       throw new DoltMergeOutcomeUnknownError();
+    }
+    if (transition.rows) {
+      const ids = transition.rows.map((row) => String(row.after.id));
+      const current = (await conn.unsafe(
+        `SELECT * FROM work_items WHERE id IN (${ids.map((id) => escapeValue(id)).join(", ")})`
+      )) as ReadonlyArray<Record<string, unknown>>;
+      const byId = new Map(current.map((row) => [String(row.id), row]));
+      for (const row of transition.rows) {
+        const live = byId.get(String(row.after.id));
+        if (!live || !snapshotsEqual(snapshotRow(live), row.after)) {
+          throw new DoltMergeOutcomeUnknownError();
+        }
+      }
+      return;
     }
     const id = String(
       transition.proof.verb === "delete"
@@ -3137,6 +3277,55 @@ export class DoltgresWorkItemAdapter
 
   async delete(_id: WorkItemId, _principalId: string): Promise<boolean> {
     throw new WorkItemDeletionRetiredError();
+  }
+
+  /**
+   * bug.0013: move `created_by_principal_id` from→to for every matching row in
+   * ONE Dolt commit through the standard write protocol (global lock,
+   * operation branch, proven merge). Each row's revision advances by one,
+   * exactly as `patch`, so in-flight compare-and-set writers conflict instead
+   * of silently overwriting. Authorization of the actor is the caller's job.
+   */
+  async reassignCreator(
+    input: WorkItemsReassignCreatorInput
+  ): Promise<WorkItemsReassignCreatorResult> {
+    const from = requirePrincipal(input.fromPrincipalId);
+    const to = requirePrincipal(input.toPrincipalId);
+    const actor = requirePrincipal(input.actorPrincipalId);
+    if (from === to) {
+      throw new Error(
+        "reassignCreator: fromPrincipalId must differ from toPrincipalId"
+      );
+    }
+    const idsOf = (rows: ReadonlyArray<Record<string, unknown>>) =>
+      rows.map((row) => String(row.id)).sort();
+    if (input.dryRun) {
+      return this.readOnCleanMain(async (conn) => ({
+        ids: idsOf(
+          await conn.unsafe(
+            `SELECT id FROM work_items WHERE created_by_principal_id = ${escapeValue(from)}`
+          )
+        ),
+      }));
+    }
+    return this.mutate<WorkItemsReassignCreatorResult>(
+      `reassign-creator ${from} to ${to}`,
+      actor,
+      async (conn, proof) => {
+        const ids = idsOf(
+          await conn.unsafe(
+            `UPDATE work_items SET created_by_principal_id = ${escapeValue(to)}, revision = revision + 1, updated_at = NOW() WHERE created_by_principal_id = ${escapeValue(from)} RETURNING id`
+          )
+        );
+        if (proof.reassign) proof.reassign.ids = ids;
+        return { ids };
+      },
+      {
+        proof: { verb: "reassign", principal: actor, reassign: { from, to } },
+        // Nothing matched: drop the empty op branch, commit nothing.
+        shouldCommit: (result) => result.ids.length > 0,
+      }
+    );
   }
 
   private async throwMissingOrUnauthorized(

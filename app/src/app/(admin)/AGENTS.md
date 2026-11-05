@@ -35,7 +35,7 @@ admin-only surfaces in one role-gated shell.
 ## Public Surface
 
 - **Exports:** none
-- **Routes:** `/admin` (index), `/admin/payments` (Financials: read-only report plus row actions — fund steward, top-up links; authorization also enforced before snapshot reads)
+- **Routes:** `/admin` (index; includes the Reassign agent work panel → `POST /api/v1/work/items/reassign`), `/admin/payments` (Financials: read-only report plus row actions — fund steward, top-up links; authorization also enforced before snapshot reads)
 - **Files considered API:** `layout.tsx`, `admin/page.tsx`
 
 ## Auth contract
