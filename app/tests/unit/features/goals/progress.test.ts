@@ -281,7 +281,7 @@ describe("work.convergence@1 over Dolt main history", () => {
 		expect(walk).toContain("chain.depth < 5000");
 		expect(queries.join("\n")).not.toContain("dolt_log");
 		expect(sample.evidenceRefs).toContain(
-			"dolt:first-parent-walk:cap=5000;depth=2",
+			"dolt:edge:first-parent:2;walk-cap=5000",
 		);
 		expect(queries.find((q) => q.includes("dolt_diff("))).toContain(
 			`dolt_diff('${A}', '${B}', 'work_items')`,
@@ -305,6 +305,23 @@ describe("work.convergence@1 over Dolt main history", () => {
 		).toBe(6);
 		expect(created.queries.some((q) => q.includes("WITH RECURSIVE"))).toBe(
 			false,
+		);
+	});
+	it("prefers main's reflog for edges and skips the walk when the reflog covers the window", async () => {
+		const base = answers();
+		const { sql, queries } = fakeSql((text) => {
+			if (text.includes("dolt_reflog('main')"))
+				return text.includes("2026-10-26 00:00:00.000")
+					? [{ commit_hash: C, at: "2026-10-25 23:59:00" }]
+					: [{ commit_hash: B, at: "2026-11-01 20:16:32.828" }];
+			return base(text);
+		});
+		const sample = await readWorkConvergence(sql, "validated", window, read);
+		expect(sample).toMatchObject({ value: 4, complete: true });
+		expect(sample.evidenceRefs).toContain("dolt:edge:reflog;walk-cap=5000");
+		expect(queries.some((q) => q.includes("WITH RECURSIVE"))).toBe(false);
+		expect(queries.find((q) => q.includes("dolt_diff("))).toContain(
+			`dolt_diff('${C}', '${B}', 'work_items')`,
 		);
 	});
 	it("is unknown, never zero, when history does not cover the window or the ratio has no denominator", async () => {

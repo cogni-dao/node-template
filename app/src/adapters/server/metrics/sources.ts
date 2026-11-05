@@ -158,7 +158,11 @@ type Read = <T>(source: (signal: AbortSignal) => Promise<T>) => Promise<T>;
 export const FIRST_PARENT_WALK_CAP = 5000;
 
 /**
- * Edge commit c(T): the first commit on main's FIRST-PARENT chain (walking back
+ * Edge commit c(T) = what main pointed to at T. Preferred source: main's reflog
+ * (dolt_reflog('main')), which records every move of the main ref with its own
+ * timestamp: O(1) per edge and immune to backdated branch commits. When the
+ * reflog does not reach back to T (fresh server, GC), fall back to the bounded
+ * first-parent walk below. Fallback: the first commit on main's FIRST-PARENT chain (walking back
  * from dolt_hashof('main')) with date <= T. dolt_log('main') is not used: it
  * includes commits merged in from contribution branches with their authoring
  * dates, so a stale branch commit could become an edge (task.0024 probe
@@ -178,7 +182,8 @@ export async function readWorkValidatedHistory(
 			from: string;
 			to: string;
 			toAt: string | null;
-			depth: number;
+			/** "reflog" or "first-parent:<depth>". */
+			via: string;
 	  }
 	| {
 			ok: false;
@@ -188,6 +193,8 @@ export async function readWorkValidatedHistory(
 	  }
 > {
 	try {
+		const reflog = await mainFromReflog(sql, window, read);
+		if (reflog) return await diffValidated(sql, reflog, read);
 		const walk = await read((signal) =>
 			run(
 				sql,
@@ -231,42 +238,16 @@ export async function readWorkValidatedHistory(
 		}
 		if (!toEdge)
 			return { ok: false, reason: "insufficient_history", step: "no_end_edge" };
-		const fromHash = fromEdge.hash;
-		const toHash = toEdge.hash;
-		if (!COMMIT.test(fromHash) || !COMMIT.test(toHash))
-			return {
-				ok: false,
-				reason: "history_unavailable",
-				step: "bad_commit_hash",
-			};
-		const validated =
-			fromHash === toHash
-				? 0
-				: Number(
-						(
-							await read((signal) =>
-								run(
-									sql,
-									`SELECT COUNT(*) AS validated FROM dolt_diff('${fromHash}', '${toHash}', 'work_items') WHERE to_status = 'done' AND to_deploy_verified = true AND (from_id IS NULL OR from_status IS DISTINCT FROM 'done' OR from_deploy_verified IS DISTINCT FROM true) AND ${SYNTHETIC_LABELS("to_labels")}`,
-									signal,
-								),
-							)
-						)[0]?.validated,
-					);
-		if (!Number.isInteger(validated) || validated < 0)
-			return {
-				ok: false,
-				reason: "history_unavailable",
-				step: "bad_diff_count",
-			};
-		return {
-			ok: true,
-			validated,
-			from: fromHash,
-			to: toHash,
-			toAt: new Date(toEdge.at).toISOString(),
-			depth: chain.length - 1,
-		};
+		return await diffValidated(
+			sql,
+			{
+				from: fromEdge.hash,
+				to: toEdge.hash,
+				toAt: new Date(toEdge.at).toISOString(),
+				via: `first-parent:${chain.length - 1}`,
+			},
+			read,
+		);
 	} catch (error) {
 		// Timeouts and budget exhaustion keep their own failure; other history
 		// read failures are an unknown sample, never zero.
@@ -295,6 +276,85 @@ export async function readWorkValidatedHistory(
 			step: `query_failed:${code || name}`.slice(0, 64),
 		};
 	}
+}
+
+type Edges = { from: string; to: string; toAt: string | null; via: string };
+
+/** main at T from the reflog; null when the reflog is unsupported or does not reach back to the window start. */
+async function mainFromReflog(
+	sql: Sql,
+	window: { start: string; end: string },
+	read: Read,
+): Promise<Edges | null> {
+	const at = async (iso: string) => {
+		try {
+			const rows = await read((signal) =>
+				run(
+					sql,
+					`SELECT commit_hash, CAST(ref_timestamp AS TEXT) AS at FROM dolt_reflog('main') WHERE ref_timestamp <= '${doltUtc(iso)}' ORDER BY ref_timestamp DESC LIMIT 1`,
+					signal,
+				),
+			);
+			const row = rows[0];
+			const hash = String(row?.commit_hash ?? "");
+			return COMMIT.test(hash) ? { hash, at: doltInstant(row?.at) } : null;
+		} catch (error) {
+			if (
+				error instanceof Error &&
+				(error.name === "AbortError" ||
+					error.name === "MetricError" ||
+					error.name === "TimeoutError")
+			)
+				throw error;
+			return null;
+		}
+	};
+	const from = await at(window.start);
+	if (!from) return null;
+	const to = await at(window.end);
+	if (!to) return null;
+	return { from: from.hash, to: to.hash, toAt: to.at, via: "reflog" };
+}
+
+/** Net work items that became done + deploy_verified between two main commits. */
+async function diffValidated(
+	sql: Sql,
+	edges: Edges,
+	read: Read,
+): Promise<
+	| {
+			ok: true;
+			validated: number;
+			from: string;
+			to: string;
+			toAt: string | null;
+			via: string;
+	  }
+	| { ok: false; reason: "history_unavailable"; step: string }
+> {
+	if (!COMMIT.test(edges.from) || !COMMIT.test(edges.to))
+		return {
+			ok: false,
+			reason: "history_unavailable",
+			step: "bad_commit_hash",
+		};
+	const validated =
+		edges.from === edges.to
+			? 0
+			: Number(
+					(
+						await read((signal) =>
+							run(
+								sql,
+								`SELECT COUNT(*) AS validated FROM dolt_diff('${edges.from}', '${edges.to}', 'work_items') WHERE to_status = 'done' AND to_deploy_verified = true AND (from_id IS NULL OR from_status IS DISTINCT FROM 'done' OR from_deploy_verified IS DISTINCT FROM true) AND ${SYNTHETIC_LABELS("to_labels")}`,
+								signal,
+							),
+						)
+					)[0]?.validated,
+				);
+	if (!Number.isInteger(validated) || validated < 0)
+		return { ok: false, reason: "history_unavailable", step: "bad_diff_count" };
+	return { ok: true, validated, ...edges };
 }
 
 /** Seven-day convergence: validated units / created units in [start, end). */
@@ -358,7 +418,7 @@ export async function readWorkConvergence(
 	evidenceRefs.push(
 		`dolt:main:${history.from}..${history.to}${history.toAt ? `@${history.toAt}` : ""}`,
 		"node:work_items:validated:dolt_diff:done+deploy_verified",
-		`dolt:first-parent-walk:cap=${FIRST_PARENT_WALK_CAP};depth=${history.depth}`,
+		`dolt:edge:${history.via};walk-cap=${FIRST_PARENT_WALK_CAP}`,
 		`counts:validated_work=${history.validated}`,
 	);
 	const validated = history.validated + mergedContributions;
