@@ -4,7 +4,7 @@
 
 /** Exercises the real ReUI board through the shared TanStack work dashboard. */
 import "@testing-library/jest-dom/vitest";
-import type { WorkItemDto } from "@cogni/node-contracts";
+import type { WorkItemDto, WorkItemSummary } from "@cogni/node-contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
@@ -65,6 +65,7 @@ vi.mock("@/app/(app)/work/_api/fetchWorkItems", () => ({
 }));
 
 import { fetchWorkItem, fetchWorkItems } from "@/app/(app)/work/_api/fetchWorkItems";
+import { WorkKanban } from "@/app/(app)/work/_components/WorkKanban";
 import { WorkDashboardView as Dashboard } from "@/app/(app)/work/view";
 import { WorkNavigationBoundary, useWorkNavigation } from "@/app/(app)/work/WorkNavigationBoundary";
 
@@ -184,6 +185,27 @@ describe("Work Kanban", () => {
     });
   });
   afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+  it("renders a genuine summary through the shared board and opens that same summary", () => {
+    const summary: WorkItemSummary = {
+      id: "task.summary",
+      title: "Projected card",
+      type: "task",
+      status: "needs_implement",
+      labels: ["goal:ai-work-converges"],
+      createdAt: "2026-11-05T00:00:00Z",
+      updatedAt: "2026-11-05T00:00:00Z",
+      scores: { goal: { v: 3 }, time: { v: 3 }, unblocks: { v: 3 }, ease: { v: 3 }, confidence: { v: 3 }, agent: { v: 3 } },
+    };
+    const onOpenItem = vi.fn();
+    render(<WorkKanban items={[summary]} statuses={["needs_implement"]} isLoading={false} onOpenItem={onOpenItem} />);
+    const open = screen.getByRole("button", { name: "task.summary: Projected card" });
+    expect(screen.getByRole("link", { name: "goal:ai-work-converges" })).toHaveAttribute("href", "/knowledge/goal-ai-work-converges");
+    expect(screen.getByText(/^Rank /)).toBeInTheDocument();
+    fireEvent.click(open);
+    expect(onOpenItem.mock.calls[0]?.[0]).toBe(summary);
+    expect(summary).not.toHaveProperty("outcome");
+    expect(summary).not.toHaveProperty("assignees");
+  });
   it("requests one ranked page and renders only that page", async () => {
     mount();
     await waitFor(() =>

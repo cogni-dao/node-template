@@ -177,4 +177,3 @@ export const GET = wrapRouteHandlerWithLogging(
     }
   },
 );
-
