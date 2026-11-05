@@ -560,40 +560,84 @@ export function probeWindow(nowMs: number): HistoryWindow {
 }
 
 /**
- * Proven series start: the start of the first non-missing probe week. When
- * every closed week is missing, no completed attempt exists before the open
- * week, so the start is the probe's `to`.
+ * Series start from the weekly probe. `proven` is false when the oldest probe
+ * week already has an attempt: the series is older than the probe, so no
+ * start is proven and nothing may be cropped or called "measured since".
  */
-export function seriesStartFromProbe(probe: MetricHistory): number {
-  const first = probe.buckets.find((b) => b.status !== "missing");
-  return Date.parse(first ? first.start : probe.to);
+export interface SeriesStart {
+  readonly at: number;
+  readonly proven: boolean;
+}
+
+/**
+ * The start of the first non-missing probe week. When every closed week is
+ * missing, no completed attempt exists before the open week, so the start is
+ * the probe's `to`.
+ */
+export function seriesStartFromProbe(probe: MetricHistory): SeriesStart {
+  const i = probe.buckets.findIndex((b) => b.status !== "missing");
+  if (i === 0) return { at: Date.parse(probe.from), proven: false };
+  const first = probe.buckets[i];
+  return { at: Date.parse(first ? first.start : probe.to), proven: true };
 }
 
 /**
  * "All": from the proven start to the last closed step, with the finest step
- * that fits 400 buckets. `from` is at least 12 steps before `to`, so the read
- * is never empty (from == to is invalid_range), and at most 400 steps.
+ * that fits MAX_BUCKETS. `from` is at least 12 steps before `to`, so the read
+ * is never empty (from == to is invalid_range), and at most MAX_BUCKETS steps.
+ * An unknown start reads MAX_BUCKETS days; an unproven (older) one, weeks.
  */
 export function allWindow(
-  seriesStart: number | null,
+  seriesStart: SeriesStart | null,
   nowMs: number
 ): HistoryWindow {
-  if (seriesStart === null) {
-    const to = floorToStep(nowMs, "1d");
-    return windowOf(to - MAX_BUCKETS * DAY_MS, to, "1d");
+  if (seriesStart === null || !seriesStart.proven) {
+    const step = seriesStart === null ? "1d" : "1w";
+    const to = floorToStep(nowMs, step);
+    return windowOf(to - MAX_BUCKETS * STEP_MS[step], to, step);
   }
+  const start = seriesStart.at;
   const steps: MetricHistoryStep[] = ["1h", "1d", "1w"];
   const step =
     steps.find(
-      (s) => floorToStep(nowMs, s) - seriesStart <= MAX_BUCKETS * STEP_MS[s]
+      (s) => floorToStep(nowMs, s) - start <= MAX_BUCKETS * STEP_MS[s]
     ) ?? "1w";
   const size = STEP_MS[step];
   const to = floorToStep(nowMs, step);
   const from = Math.max(
-    Math.min(floorToStep(seriesStart, step), to - MIN_VISIBLE_STEPS * size),
+    Math.min(floorToStep(start, step), to - MIN_VISIBLE_STEPS * size),
     to - MAX_BUCKETS * size
   );
   return windowOf(from, to, step);
+}
+
+export interface RangeWindow extends HistoryWindow {
+  /** Chart-title words for exactly this window, e.g. "past week, hourly". */
+  readonly title: string;
+}
+
+/** The read window of a range and the title that describes that very window. */
+export function rangeWindow(
+  range: HistoryRange,
+  nowMs: number,
+  seriesStart: SeriesStart | null
+): RangeWindow {
+  if (range !== "all") {
+    const r = FIXED_RANGES.find((x) => x.id === range) as FixedRange;
+    return { ...historyWindow(range, nowMs), title: `${r.title}, ${STEP_WORD[r.step]}` };
+  }
+  const w = allWindow(seriesStart, nowMs);
+  const capped =
+    seriesStart === null ||
+    !seriesStart.proven ||
+    Date.parse(w.from) > seriesStart.at;
+  const span = capped ? `last ${MAX_BUCKETS} ${stepUnit(w.step)}s` : "all time";
+  return { ...w, title: `${span}, ${STEP_WORD[w.step]}` };
+}
+
+/** The evidence route for one observation, pinned by id. */
+export function observationHref(metricId: string, observationId: string): string {
+  return `/knowledge/${encodeURIComponent(metricId)}?observation=${encodeURIComponent(observationId)}`;
 }
 
 // ---------------------------------------------------------------- header

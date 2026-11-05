@@ -125,7 +125,8 @@ vi.mock("@/components", () => ({
 
 function client() {
   return new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    // retryDelay 0: the history queries retry once; tests need not wait 1 s.
+    defaultOptions: { queries: { retry: false, retryDelay: 0, gcTime: 0 } },
   });
 }
 
@@ -477,7 +478,7 @@ describe("goal history card", () => {
     expect(heroes[0]).toContain("0.23");
     expect(heroes[0]).toContain("Latest · 10:00 UTC");
     expect(heroes[0]).toContain("Behind pace");
-    expect(heroes[0]).not.toContain("Past week");
+    expect(heroes[0]).not.toMatch(/past week|past day|all time/i);
   });
 
   it("names the focusable chart surface by its visible title", async () => {
@@ -552,14 +553,24 @@ describe("goal history card", () => {
 
   it("links every reading in the table and selects a clicked point", async () => {
     const { container } = await openChart(board());
-    const table = container.querySelector("details table") as HTMLElement;
+    const details = container.querySelector("figure ~ details, details") as HTMLDetailsElement;
+    // Rows render only while the table is open.
+    expect(details.querySelector("table")).toBeNull();
+    details.open = true;
+    fireEvent(details, new Event("toggle"));
+    const table = await waitFor(() => {
+      const t = details.querySelector("table");
+      expect(t).not.toBeNull();
+      return t as HTMLElement;
+    });
     const hrefs = [...table.querySelectorAll("a")].map((a) => a.getAttribute("href"));
     expect(hrefs).toContain(
       "/knowledge/convergence-ratio-7d?observation=861a7b59-3915-4484-b0c8-0872cbf42a7d"
     );
     expect(table.textContent).toContain("Read failed");
-    // Click the newest reading's dot; the selection panel links its evidence.
-    const dot = container.querySelector("figure .recharts-dot") as SVGElement;
+    // Click the newest reading's dot (the last one); the panel links its evidence.
+    const dots = container.querySelectorAll("figure .recharts-dot");
+    const dot = dots[dots.length - 1] as SVGElement;
     const wrapper = container.querySelector("figure .recharts-wrapper") as HTMLElement;
     fireEvent.click(wrapper, {
       clientX: Number(dot.getAttribute("cx")),
@@ -567,9 +578,66 @@ describe("goal history card", () => {
     });
     const live = container.querySelector('[aria-live="polite"]') as HTMLElement;
     await waitFor(() => expect(within(live).getByRole("link")).toBeTruthy());
-    expect(within(live).getByRole("link").getAttribute("href")).toMatch(
-      /\?observation=/
+    expect(within(live).getByRole("link").getAttribute("href")).toBe(
+      "/knowledge/convergence-ratio-7d?observation=861a7b59-3915-4484-b0c8-0872cbf42a7d"
     );
+  });
+
+  it("inspects the active point with Enter from the keyboard", async () => {
+    const { container } = await openChart(board());
+    const svg = chartSvg(container);
+    // Focus starts the accessibility layer at the first point (07:00).
+    fireEvent.focus(svg);
+    fireEvent.keyDown(svg, { key: "Enter" });
+    const live = container.querySelector('[aria-live="polite"]') as HTMLElement;
+    await waitFor(() => expect(within(live).getByRole("link")).toBeTruthy());
+    expect(live.textContent).toContain("07:00 UTC");
+  });
+
+  it("draws a delayed metric's last good reading as a hollow dot", async () => {
+    const { container } = await openChart(
+      board({ status: "delayed", observedAt: "2026-11-05T09:00:03.000Z" })
+    );
+    const hollow = [...container.querySelectorAll("figure .recharts-dot")].filter(
+      (d) => d.getAttribute("fill") === "hsl(var(--background))"
+    );
+    expect(hollow).toHaveLength(1);
+    expect((container.querySelector("[data-hero]") as HTMLElement).textContent).toContain(
+      "Last good · 09:00 UTC"
+    );
+  });
+
+  it("opens a chart with exactly one probe and one range read", async () => {
+    const { fetchMock } = await openChart(board());
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    const steps = fetchMock.mock.calls.map(([url]) =>
+      new URL(url as string, "http://local").searchParams.get("step")
+    );
+    expect(steps.sort()).toEqual(["1h", "1w"]);
+  });
+
+  it("says it could not refresh and keeps the last read on a failed refetch", async () => {
+    const qc = client();
+    let fail = false;
+    const ok = historyServer();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        fail && !url.includes("step=1w") ? new Response("{}", { status: 503 }) : ok(url)
+      )
+    );
+    const { container } = render(
+      <QueryClientProvider client={qc}>
+        <GoalsBoard initialData={board()} goalId="goal-ai-work-converges" />
+      </QueryClientProvider>
+    );
+    await waitFor(() => expect(chartSvg(container)).not.toBeNull());
+    fail = true;
+    await qc.refetchQueries({ queryKey: ["metrics", "history"] });
+    expect(
+      await screen.findByText(/Could not refresh; showing the last read\./)
+    ).toBeTruthy();
+    expect(chartSvg(container)).not.toBeNull();
   });
 
   it("prints a real 0 and never draws a zero line for a missing reading", async () => {
@@ -588,8 +656,19 @@ describe("goal history card", () => {
     expect(container.textContent).toContain(
       "No readings in this range. This is unknown, not zero."
     );
-    const d = container.querySelector("figure .recharts-area-curve")?.getAttribute("d");
-    expect(d ?? "").toBe("");
+    // The chart rendered (target line present), but no series and no zero line.
+    expect(chartSvg(container)).not.toBeNull();
+    for (const el of container.querySelectorAll(
+      "figure .recharts-area-curve, figure .recharts-area-area"
+    ))
+      expect(el.getAttribute("d") ?? "").toBe("");
+    const lines = container.querySelectorAll("figure .recharts-reference-line");
+    expect(lines).toHaveLength(1); // the target only
+    const zeroTick = [
+      ...container.querySelectorAll("figure .recharts-yAxis .recharts-cartesian-axis-tick-value"),
+    ].find((el) => el.textContent === "0");
+    const targetY = lines[0]?.querySelector("line")?.getAttribute("y1");
+    expect(targetY).not.toBe(zeroTick?.getAttribute("y") ?? "none");
     expect((container.querySelector("[data-hero]") as HTMLElement).textContent).toContain(
       "—"
     );
@@ -602,12 +681,9 @@ describe("goal history card", () => {
         <GoalsBoard initialData={board()} goalId="goal-ai-work-converges" />
       </QueryClientProvider>
     );
-    // The query retries once (about 1 s) before it reports the failure.
     expect(
       await screen.findByText(
-        /History could not be read\. This is unknown, not zero\./,
-        undefined,
-        { timeout: 5000 }
+        /History could not be read\. This is unknown, not zero\./
       )
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
@@ -646,6 +722,58 @@ describe("goal history card", () => {
     ) as HTMLElement;
     expect(spark.getAttribute("aria-label")).toContain("one reading, 0.23");
     expect(spark.querySelectorAll(".recharts-dot")).toHaveLength(1);
+  });
+});
+
+describe("server rendering", () => {
+  it("emits the same chart ids on every request, with no global-counter clip ids", async () => {
+    const { renderToString } = await import("react-dom/server");
+    const { TimeSeriesCard } = await import(
+      "@/features/goals/components/TimeSeriesCard"
+    );
+    const { buildGoalSeries } = await import("@/features/goals/lib/series");
+    const model = buildGoalSeries({
+      history: history("convergence-ratio-7d", "ratio", "1h", "2026-11-05T10:00:00.000Z", [
+        0.24,
+        "error",
+        0.25,
+      ]),
+      assessment: productionRatioAssessment(),
+      asOf: PROD_AS_OF,
+      seriesStart: null,
+      title: "Seven-day convergence ratio",
+      rangeTitle: "past day, hourly",
+    });
+    const tree = () => (
+      <QueryClientProvider client={client()}>
+        <GoalsBoard initialData={board()} />
+        <TimeSeriesCard
+          eyebrow="Seven-day convergence ratio"
+          description="hourly reading"
+          header={null}
+          chartTitle="Seven-day convergence ratio · past day, hourly"
+          ranges={[{ id: "1d", label: "1D" }]}
+          range="1d"
+          onRangeChange={() => {}}
+          model={model}
+          status="ready"
+          stale={false}
+          onRetry={() => {}}
+          inspectHref={(id) => `/x/${id}`}
+          nowIso={PROD_AS_OF}
+          latestIsCurrent
+          paceLabels={{ needed: null, observed: null }}
+        />
+      </QueryClientProvider>
+    );
+    const first = renderToString(tree());
+    const second = renderToString(tree());
+    expect(first).toContain("recharts-surface");
+    expect(first).toContain("recharts-area");
+    expect(first).toContain("recharts-line");
+    expect(first).toContain("recharts-bar");
+    expect(first).not.toMatch(/recharts\d+-clip|clipPath-recharts-/);
+    expect(second).toBe(first);
   });
 });
 

@@ -33,6 +33,7 @@ import {
   MIN_VISIBLE_STEPS,
   niceTicks,
   plural,
+  type SeriesStart,
   STEP_MS,
   stepUnit,
   unitLabel,
@@ -53,6 +54,8 @@ export interface SeriesPoint {
   readonly latest: boolean;
   /** An ok point with no ok neighbour: an Area cannot draw it without a dot. */
   readonly isolated: boolean;
+  /** The last ok point (bucket or latest): hollow when the value is last good. */
+  readonly lastOk: boolean;
 }
 
 export interface GapSpan {
@@ -128,15 +131,11 @@ export interface GoalSeriesInput {
   readonly assessment: KpiAssessment;
   /** The goals read's asOf: assessKpi's `now`, so pace is anchored here. */
   readonly asOf: string;
-  /** Proven series start from the weekly probe; null when unknown. */
-  readonly seriesStart: number | null;
+  /** Series start from the weekly probe; null when the probe failed. */
+  readonly seriesStart: SeriesStart | null;
   readonly title: string;
   readonly rangeTitle: string;
   readonly bets?: readonly BetMarker[];
-}
-
-function bucketState(status: MetricHistory["buckets"][number]["status"]): PointState {
-  return status;
 }
 
 export function buildGoalSeries(input: GoalSeriesInput): SeriesModel {
@@ -169,8 +168,8 @@ export function buildGoalSeries(input: GoalSeriesInput): SeriesModel {
   // starts at or before it, the range holds every attempt, so its first one
   // is the series' first attempt. Otherwise a leading run is a real gap.
   const cropped =
-    seriesStart !== null &&
-    from <= seriesStart &&
+    seriesStart?.proven === true &&
+    from <= seriesStart.at &&
     (firstBucketStart !== null || latest !== null);
   const firstAttemptAt = cropped
     ? Math.min(firstBucketStart ?? Number.POSITIVE_INFINITY, latest?.t ?? Number.POSITIVE_INFINITY)
@@ -185,13 +184,14 @@ export function buildGoalSeries(input: GoalSeriesInput): SeriesModel {
     ...included.map((b) => ({
       t: Date.parse(b.start),
       value: b.status === "ok" ? b.value : null,
-      state: bucketState(b.status),
+      state: b.status as PointState,
       observationId: b.observationId,
       latest: false,
       end: Date.parse(b.end),
     })),
     ...(latest ? [{ ...latest, end: latest.t }] : []),
   ];
+  const lastOkIdx = raw.findLastIndex((p) => p.value !== null);
   const points: SeriesPoint[] = raw.map((p, i) => ({
     t: p.t,
     value: p.value,
@@ -202,6 +202,7 @@ export function buildGoalSeries(input: GoalSeriesInput): SeriesModel {
       p.value !== null &&
       (raw[i - 1]?.value ?? null) === null &&
       (raw[i + 1]?.value ?? null) === null,
+    lastOk: i === lastOkIdx,
   }));
 
   // Gaps: contiguous non-ok buckets of one kind, [first start, last end).
@@ -325,10 +326,10 @@ export function buildGoalSeries(input: GoalSeriesInput): SeriesModel {
     pace: { needed, observed },
     bets,
   };
-  return { ...model, summary: summarize(model, input) };
+  return { ...model, summary: describeSeries(model, input) };
 }
 
-function summarize(
+function describeSeries(
   m: Omit<SeriesModel, "summary">,
   input: GoalSeriesInput
 ): string {

@@ -10,7 +10,8 @@
  * Invariants: HERO_SPEAKS_FOR_ASSESSMENT (hero, its label and the status pill
  *   read only the assessment, so they never change with the range);
  *   CROP_ONLY_BEFORE_PROVEN_START (no model until the probe settles; a failed
- *   probe only turns cropping off); ≤ 2 GETs per view; REFETCH_KEEPS_FRAME.
+ *   probe only turns cropping off); ≤ 2 GETs per view; REFETCH_KEEPS_FRAME
+ *   (week-keyed probe and range reads keep their previous data and title).
  * Side-effects: IO (via fetchSeriesStart, fetchMetricHistory)
  * Links: ../lib/series.ts, ../lib/api.ts, ./TimeSeriesCard.tsx
  * @public
@@ -26,6 +27,7 @@ import { fetchMetricHistory, fetchSeriesStart } from "../lib/api";
 import {
   cadenceText,
   defaultRange,
+  floorToStep,
   formatDate,
   formatNumber,
   formatReadingTime,
@@ -35,8 +37,9 @@ import {
   heroLabel,
   isHistoryRange,
   nextReadingAt,
+  observationHref,
+  rangeWindow,
   STEP_MS,
-  STEP_WORD,
   statusCaption,
   unitLabel,
   valueIsCurrent,
@@ -46,8 +49,6 @@ import { StatusPill } from "./marks";
 import { TimeSeriesCard } from "./TimeSeriesCard";
 
 export type { BetMarker } from "../lib/series";
-
-const FIXED_STEP = { "1d": "1h", "1w": "1h", "1m": "1d", "3m": "1d" } as const;
 
 export function HistoryChart({
   metricId,
@@ -73,11 +74,14 @@ export function HistoryChart({
   const nowMs = Date.parse(asOf);
   // Re-read at most once per hour of server time; the row itself polls.
   const hourKey = Math.floor(nowMs / STEP_MS["1h"]);
+  // The probe window only changes weekly; key it on the week and keep the
+  // last result while a new week's probe loads, so the chart never blanks.
   const probe = useQuery({
-    queryKey: ["metrics", "series-start", metricId, asOf.slice(0, 10)],
+    queryKey: ["metrics", "series-start", metricId, floorToStep(nowMs, "1w")],
     queryFn: () => fetchSeriesStart(metricId, nowMs),
     staleTime: STEP_MS["1h"],
     retry: 1,
+    placeholderData: (previous) => previous,
   });
   const probeSettled = !probe.isPending;
   const seriesStart = probe.data ?? null;
@@ -90,28 +94,22 @@ export function HistoryChart({
       hourKey,
       range === "all" ? seriesStart : null,
     ],
-    queryFn: () => fetchMetricHistory(metricId, range, nowMs, seriesStart),
+    // The title travels with its data, so placeholder data keeps its own title.
+    queryFn: async () => {
+      const window = rangeWindow(range, nowMs, seriesStart);
+      return {
+        history: await fetchMetricHistory(metricId, window),
+        title: window.title,
+      };
+    },
     enabled: range !== "all" || probeSettled,
     staleTime: 60_000,
     retry: 1,
     placeholderData: (previous) => previous,
   });
 
-  const history = query.data;
-  const meta = HISTORY_RANGES.find((r) => r.id === range) ?? HISTORY_RANGES[1];
-  const rangeTitle =
-    range === "all" &&
-    history &&
-    seriesStart !== null &&
-    Date.parse(history.from) > seriesStart
-      ? "last 400 weeks"
-      : (meta?.title ?? "");
-  const step =
-    range === "all"
-      ? query.isPlaceholderData
-        ? null
-        : (history?.step ?? null)
-      : FIXED_STEP[range];
+  const history = query.data?.history;
+  const rangeTitle = query.data?.title ?? "";
   const model =
     history && probeSettled
       ? buildGoalSeries({
@@ -141,7 +139,7 @@ export function HistoryChart({
           maxAgeSeconds={maxAgeSeconds}
         />
       }
-      chartTitle={`${title} · ${rangeTitle}${step ? `, ${STEP_WORD[step]}` : ""}`}
+      chartTitle={rangeTitle ? `${title} · ${rangeTitle}` : title}
       ranges={HISTORY_RANGES}
       range={range}
       onRangeChange={(id) => {
@@ -153,9 +151,7 @@ export function HistoryChart({
       onRetry={() => {
         void query.refetch();
       }}
-      inspectHref={(observationId) =>
-        `/knowledge/${encodeURIComponent(metricId)}?observation=${encodeURIComponent(observationId)}`
-      }
+      inspectHref={(observationId) => observationHref(metricId, observationId)}
       nowIso={asOf}
       latestIsCurrent={valueIsCurrent(a.status)}
       paceLabels={{

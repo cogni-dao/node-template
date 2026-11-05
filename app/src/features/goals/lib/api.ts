@@ -22,11 +22,9 @@ import {
 } from "@cogni-dao/metrics/contracts";
 
 import {
-  allWindow,
-  type HistoryRange,
   type HistoryWindow,
-  historyWindow,
   probeWindow,
+  type SeriesStart,
   seriesStartFromProbe,
 } from "./presentation";
 
@@ -42,7 +40,8 @@ async function readHistory(
   metricId: string,
   window: HistoryWindow
 ): Promise<MetricHistory> {
-  const qs = new URLSearchParams({ ...window }).toString();
+  const { from, to, step } = window;
+  const qs = new URLSearchParams({ from, to, step }).toString();
   const response = await fetch(
     `/api/v1/metrics/${encodeURIComponent(metricId)}/history?${qs}`,
     { cache: "no-store" }
@@ -51,23 +50,18 @@ async function readHistory(
   return MetricHistorySchema.parse(await response.json());
 }
 
-/** One 400 × 1w read: the proven start of the series (see seriesStartFromProbe). */
+/** One 400 × 1w read: the series start (see seriesStartFromProbe). */
 export async function fetchSeriesStart(
   metricId: string,
   nowMs: number
-): Promise<number> {
+): Promise<SeriesStart> {
   return seriesStartFromProbe(await readHistory(metricId, probeWindow(nowMs)));
 }
 
-/** 1D/1W hourly, 1M/3M daily; "All" from the proven start (unknown → 400 days). */
+/** One aligned window (see rangeWindow): 1D/1W hourly, 1M/3M daily, All. */
 export async function fetchMetricHistory(
   metricId: string,
-  range: HistoryRange,
-  nowMs: number,
-  seriesStart: number | null
+  window: HistoryWindow
 ): Promise<MetricHistory> {
-  return readHistory(
-    metricId,
-    range === "all" ? allWindow(seriesStart, nowMs) : historyWindow(range, nowMs)
-  );
+  return readHistory(metricId, window);
 }

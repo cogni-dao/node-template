@@ -10,7 +10,8 @@
  *   div role="img" whose aria-label states values, target and gaps. Explicit
  *   Y/X domains (the Recharts default starts at 0). Sparkline gaps are never
  *   bridged; an isolated point is a Recharts Dot; an empty sparkline draws no
- *   baseline that reads as zero. No animation (it hides dots).
+ *   baseline that reads as zero. No animation (it hides dots). Every chart and
+ *   series has a useId-based id, so SSR and client clip ids match.
  * Side-effects: none
  * Links: ../lib/presentation.ts
  * @public
@@ -20,7 +21,7 @@
 
 import { ChartContainer } from "@cogni/node-ui-kit/shadcn/chart";
 import type { KpiStatus, MetricHistory } from "@cogni-dao/metrics/contracts";
-import { Fragment, type JSX } from "react";
+import { Fragment, type JSX, useId } from "react";
 import {
   Bar,
   BarChart,
@@ -44,6 +45,7 @@ import {
   sparkSeries,
   unitLabel,
 } from "../lib/presentation";
+import { chartIds } from "./chart-defs";
 
 const TONE_CLASS: Record<StatusTone, string> = {
   success:
@@ -100,6 +102,7 @@ export function BulletGraph({
   readonly current: boolean;
   readonly compact?: boolean;
 }) {
+  const ids = chartIds(useId());
   const { min, max } = bulletScale(comparator, target, value);
   const pos = (v: number) =>
     Math.max(0, Math.min(100, ((v - min) / (max - min)) * 100));
@@ -116,6 +119,7 @@ export function BulletGraph({
       <div role="img" aria-label={label} style={{ height: h }} className="w-full">
         <ChartContainer config={{}} className="aspect-auto h-full w-full">
           <BarChart
+            id={ids.chart}
             layout="vertical"
             data={[{ k: "value", value }]}
             margin={{ top: inset, right: 1, bottom: inset, left: 1 }}
@@ -145,6 +149,7 @@ export function BulletGraph({
             />
             {value !== null && (
               <Bar
+                id={ids.series}
                 dataKey="value"
                 barSize={Math.max(3, Math.round(h * 0.24))}
                 fill={current ? "hsl(var(--foreground))" : "hsl(var(--muted-foreground))"}
@@ -224,6 +229,7 @@ export function Sparkline({
   readonly width?: number;
   readonly height?: number;
 }) {
+  const ids = chartIds(useId());
   const s = sparkSeries(trend, target);
   const days = trend?.buckets.length || 30;
   const targetLabel =
@@ -243,6 +249,7 @@ export function Sparkline({
     >
       {draw && (
         <LineChart
+          id={ids.chart}
           width={width}
           height={height}
           data={s.data as SparkDatum[]}
@@ -266,6 +273,7 @@ export function Sparkline({
           )}
           {s.okCount > 0 && (
             <Line
+              id={ids.series}
               dataKey="value"
               type="linear"
               stroke="hsl(var(--chart-1))"

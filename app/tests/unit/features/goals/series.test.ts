@@ -32,6 +32,7 @@ import {
   historyWindow,
   nextReadingAt,
   probeWindow,
+  rangeWindow,
   seriesStartFromProbe,
   sparkSeries,
 } from "@/features/goals/lib/presentation";
@@ -42,13 +43,16 @@ const DAY = 24 * HOUR;
 const WEEK = 7 * DAY;
 const t = (iso: string) => Date.parse(iso);
 const OPEN_WEEK = t("2026-11-02T00:00:00.000Z");
+const proven = (at: number) => ({ at, proven: true });
+const OPEN = proven(OPEN_WEEK);
+const LONG_AGO = proven(t("2026-10-01T00:00:00.000Z"));
 
 function build(over: Partial<Parameters<typeof buildGoalSeries>[0]> = {}) {
   return buildGoalSeries({
     history: productionWeekHourly(),
     assessment: productionRatioAssessment(),
     asOf: PROD_AS_OF,
-    seriesStart: OPEN_WEEK,
+    seriesStart: OPEN,
     title: "Seven-day convergence ratio",
     rangeTitle: "past week",
     ...over,
@@ -57,14 +61,26 @@ function build(over: Partial<Parameters<typeof buildGoalSeries>[0]> = {}) {
 
 describe("series start probe", () => {
   it("is the start of the first non-missing week, else the open week", () => {
-    expect(seriesStartFromProbe(productionProbe())).toBe(OPEN_WEEK);
+    expect(seriesStartFromProbe(productionProbe())).toEqual(OPEN);
     const probe = history("m", "ratio", "1w", "2026-11-02T00:00:00.000Z", [
       null,
       null,
       "error",
       0.5,
     ]);
-    expect(seriesStartFromProbe(probe)).toBe(t("2026-10-19T00:00:00.000Z"));
+    expect(seriesStartFromProbe(probe)).toEqual(
+      proven(t("2026-10-19T00:00:00.000Z"))
+    );
+    // An attempt in the oldest probe week proves no start: older than the probe.
+    const older = history("m", "ratio", "1w", "2026-11-02T00:00:00.000Z", [
+      0.4,
+      null,
+      0.5,
+    ]);
+    expect(seriesStartFromProbe(older)).toEqual({
+      at: t("2026-10-12T00:00:00.000Z"),
+      proven: false,
+    });
     const w = probeWindow(t(PROD_AS_OF));
     expect(w.step).toBe("1w");
     expect(w.to).toBe("2026-11-02T00:00:00.000Z");
@@ -88,6 +104,7 @@ describe("crop only before a proven first attempt (B1, N1)", () => {
       0.23863636363636365, 0.25, 0.25, 0.23157894736842105,
     ]);
     expect(m.points.at(-1)?.latest).toBe(true);
+    expect(m.points.map((p) => p.lastOk)).toEqual([false, false, false, true]);
     expect(m.layout).toBe("normal");
   });
 
@@ -121,6 +138,15 @@ describe("crop only before a proven first attempt (B1, N1)", () => {
     ]);
   });
 
+  it("never crops or claims a start when the series is older than the probe", () => {
+    const m = build({
+      seriesStart: { at: t("2019-03-04T00:00:00.000Z"), proven: false },
+    });
+    expect(m.notYetMeasured).toBeNull();
+    expect(m.firstAttemptAt).toBeNull();
+    expect(m.summary).not.toContain("measured since");
+  });
+
   it("never crops when the probe failed", () => {
     const m = build({ seriesStart: null });
     expect(m.notYetMeasured).toBeNull();
@@ -140,7 +166,7 @@ describe("gaps stay gaps", () => {
         0.3,
         null,
       ]),
-      seriesStart: t("2026-10-01T00:00:00.000Z"),
+      seriesStart: LONG_AGO,
     });
     const at = (h: number) => t("2026-11-05T03:00:00.000Z") + h * HOUR;
     expect(m.gaps).toEqual([
@@ -182,7 +208,7 @@ describe("target band, domain and pace", () => {
         "2026-11-05T10:00:00.000Z",
         Array.from({ length: 24 }, (_, i) => (i > 20 ? 0.25 : null))
       ),
-      seriesStart: t("2026-10-01T00:00:00.000Z"),
+      seriesStart: LONG_AGO,
       assessment: {
         ...productionRatioAssessment(),
         deadline,
@@ -228,7 +254,7 @@ describe("unknown is not zero", () => {
         observedAt: "2026-11-05T09:00:00.000Z",
         target: { value: 1, unit: "items" },
       },
-      seriesStart: t("2026-10-01T00:00:00.000Z"),
+      seriesStart: LONG_AGO,
     });
     expect(zero.summary).toContain("0 items");
     expect(zero.summary).not.toContain("no readings");
@@ -248,7 +274,7 @@ describe("unknown is not zero", () => {
         observedAt: null,
         observationId: null,
       },
-      seriesStart: t("2026-10-01T00:00:00.000Z"),
+      seriesStart: LONG_AGO,
     });
     expect(empty.empty).toBe(true);
     expect(empty.okCount).toBe(0);
@@ -278,22 +304,37 @@ describe("ranges", () => {
   });
 
   it("picks the All step from the proven start (N5 never sends from == to)", () => {
-    const young = allWindow(OPEN_WEEK, now);
+    const young = allWindow(OPEN, now);
     expect(young).toEqual({
       from: "2026-11-02T00:00:00.000Z",
       to: "2026-11-05T10:00:00.000Z",
       step: "1h",
     });
-    expect(allWindow(t("2026-06-01T00:00:00.000Z"), now).step).toBe("1d");
-    const old = allWindow(t("2010-01-04T00:00:00.000Z"), now);
+    expect(allWindow(proven(t("2026-06-01T00:00:00.000Z")), now).step).toBe("1d");
+    const old = allWindow(proven(t("2010-01-04T00:00:00.000Z")), now);
     expect(old.step).toBe("1w");
     expect((t(old.to) - t(old.from)) / WEEK).toBe(400);
     expect(allWindow(null, now).step).toBe("1d");
 
     const mondayNow = t("2026-11-02T00:30:00.000Z");
-    const monday = allWindow(OPEN_WEEK, mondayNow);
+    const monday = allWindow(OPEN, mondayNow);
     expect(t(monday.from)).toBeLessThan(t(monday.to));
     expect((t(monday.to) - t(monday.from)) / HOUR).toBe(12);
+  });
+
+  it("titles each window by what it actually reads", () => {
+    expect(rangeWindow("1w", now, OPEN).title).toBe("past week, hourly");
+    expect(rangeWindow("3m", now, OPEN).title).toBe("past 3 months, daily");
+    expect(rangeWindow("all", now, OPEN).title).toBe("all time, hourly");
+    const older = { at: t("2018-11-05T00:00:00.000Z"), proven: false };
+    expect(rangeWindow("all", now, older)).toMatchObject({
+      step: "1w",
+      title: "last 400 weeks, weekly",
+    });
+    expect(rangeWindow("all", now, null).title).toBe("last 400 days, daily");
+    expect(
+      rangeWindow("all", now, proven(t("2010-01-04T00:00:00.000Z"))).title
+    ).toBe("last 400 weeks, weekly");
   });
 
   it("opens hourly metrics on 1W and others on 1M", () => {

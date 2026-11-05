@@ -15,7 +15,9 @@
  *   plain functions); NAMED_FOCUSABLE_CHART (accessibilityLayer surface is
  *   aria-labelledby the visible title, with a focus-visible outline that needs
  *   outline-solid under Tailwind 4); NO_ANIMATION (animation hides dots);
- *   UNIQUE_IDS (sanitized useId); TABLE_IS_THE_KEYBOARD_PATH.
+ *   UNIQUE_IDS (sanitized useId, passed as the chart and Area id so SSR and
+ *   client clip ids match); KEYBOARD_INSPECT (arrow keys move the active
+ *   point, Enter inspects it; the readings table links every reading).
  * Side-effects: none
  * Links: ../lib/series.ts, ./chart-defs.tsx, ./HistoryChart.tsx
  * @public
@@ -83,8 +85,9 @@ const STATE_TEXT: Record<Exclude<PointState, "ok">, string> = {
   unavailable: "Source unavailable",
 };
 
+/** Same opacities as the SVG patterns in chart-defs.tsx. */
 const MISSING_TEXTURE =
-  "repeating-linear-gradient(45deg, hsl(var(--muted-foreground) / 0.35) 0 1.5px, transparent 1.5px 5px)";
+  "repeating-linear-gradient(45deg, hsl(var(--muted-foreground) / 0.3) 0 1.5px, transparent 1.5px 5px)";
 const FAILED_TEXTURE = `${MISSING_TEXTURE}, repeating-linear-gradient(135deg, hsl(var(--muted-foreground) / 0.55) 0 1.5px, transparent 1.5px 5px)`;
 
 export interface TimeSeriesCardProps {
@@ -117,7 +120,14 @@ export function TimeSeriesCard(props: TimeSeriesCardProps) {
   const ids = chartIds(useId());
   const titleId = `${ids.fill}-title`;
   const summaryId = `${ids.fill}-summary`;
-  const [selected, setSelected] = useState<SeriesPoint | null>(null);
+  // Keep only the point's identity; look it up again after every refetch.
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const selected =
+    model?.points.find((p) => pointKey(p) === selectedKey) ?? null;
+  const select = (p: SeriesPoint | undefined) => {
+    if (p?.observationId) setSelectedKey(pointKey(p));
+  };
 
   return (
     <section className="space-y-4 rounded-xl border border-border/60 bg-muted/10 p-4">
@@ -149,7 +159,8 @@ export function TimeSeriesCard(props: TimeSeriesCardProps) {
           // Radix deselects the active item on a second click (""); keep the range.
           onValueChange={(v) => {
             if (v) {
-              setSelected(null);
+              setSelectedKey(null);
+              setActiveIndex(null);
               props.onRangeChange(v);
             }
           }}
@@ -189,33 +200,47 @@ export function TimeSeriesCard(props: TimeSeriesCardProps) {
                 role="status"
                 className="flex flex-wrap items-center gap-2 text-muted-foreground text-xs"
               >
-                This range could not be read; the chart still shows the
-                previous one. Its readings are unknown, not zero.
+                Could not refresh; showing the last read.
                 <RetryButton onRetry={props.onRetry} />
               </p>
             )}
+            {/* biome-ignore lint/a11y/noStaticElementInteractions: Enter on the focused chart surface (a Recharts tab stop) bubbles here to inspect the active point */}
             <div
               className={cn(
                 "relative transition-opacity motion-reduce:transition-none",
                 props.stale && "opacity-60"
               )}
+              onKeyDown={(e) => {
+                if (e.key !== "Enter" && e.key !== " ") return;
+                if (activeIndex === null) return;
+                e.preventDefault();
+                select(model.points[activeIndex]);
+              }}
             >
               <ChartContainer
                 config={CHART_CONFIG}
                 className={cn("aspect-auto h-48 w-full", FOCUS_RING)}
               >
                 <AreaChart
+                  id={ids.chart}
                   data={model.points as SeriesPoint[]}
                   margin={{ top: 20, right: 4, bottom: 0, left: 4 }}
                   accessibilityLayer
                   aria-labelledby={titleId}
                   aria-describedby={summaryId}
-                  onClick={(state) => {
-                    const p = state?.activePayload?.[0]?.payload as
-                      | SeriesPoint
-                      | undefined;
-                    if (p?.observationId) setSelected(p);
-                  }}
+                  onClick={(state) =>
+                    select(
+                      state?.activePayload?.[0]?.payload as SeriesPoint | undefined
+                    )
+                  }
+                  // Arrow keys on the accessibility layer also land here.
+                  onMouseMove={(state) =>
+                    setActiveIndex(
+                      typeof state?.activeTooltipIndex === "number"
+                        ? state.activeTooltipIndex
+                        : null
+                    )
+                  }
                 >
                   {chartDefs(ids)}
                   <CartesianGrid vertical={false} />
@@ -266,6 +291,7 @@ export function TimeSeriesCard(props: TimeSeriesCardProps) {
                     }
                   />
                   <Area
+                    id={ids.series}
                     dataKey="value"
                     type="linear"
                     stroke="var(--color-value)"
@@ -274,7 +300,7 @@ export function TimeSeriesCard(props: TimeSeriesCardProps) {
                     baseValue={model.yDomain[0]}
                     connectNulls={false}
                     isAnimationActive={false}
-                    dot={(dot: DotProps) =>
+                    dot={(dot: AreaDotProps) =>
                       renderDot(dot, model, props.latestIsCurrent)
                     }
                     activeDot={{
@@ -339,7 +365,7 @@ function RetryButton({ onRetry }: { readonly onRetry: () => void }) {
   );
 }
 
-interface DotProps {
+interface AreaDotProps {
   readonly cx?: number;
   readonly cy?: number;
   readonly index?: number;
@@ -348,7 +374,7 @@ interface DotProps {
 
 /** Recharts calls this per point; a hidden point is a keyed Fragment, never raw SVG. */
 function renderDot(
-  props: DotProps,
+  props: AreaDotProps,
   model: SeriesModel,
   latestIsCurrent: boolean
 ): JSX.Element {
@@ -356,9 +382,10 @@ function renderDot(
   const p = props.payload;
   if (!p || p.value === null || props.cx == null || props.cy == null)
     return <Fragment key={key} />;
-  if (!(model.layout === "sparse" || p.isolated || p.latest))
+  if (!(model.layout === "sparse" || p.isolated || p.lastOk))
     return <Fragment key={key} />;
-  const hollow = p.latest && !latestIsCurrent;
+  // A delayed or failing metric's last good reading is drawn hollow.
+  const hollow = p.lastOk && !latestIsCurrent;
   return (
     <Dot
       key={key}
@@ -469,6 +496,7 @@ function referenceMarks(
           ]}
           stroke="var(--color-bet)"
           strokeWidth={2.5}
+          ifOverflow="hidden"
         />
       );
     }
@@ -618,12 +646,19 @@ function ReadingsTable({
   readonly nowIso: string;
   readonly inspectHref: (observationId: string) => string;
 }) {
-  const rows = [...model.points].reverse();
+  // Rows render only while open: up to 400 rows, rebuilt on every poll.
+  const [open, setOpen] = useState(false);
+  const rows = open ? [...model.points].reverse() : [];
   return (
-    <details className="text-xs">
+    <details
+      className="text-xs"
+      open={open}
+      onToggle={(e) => setOpen(e.currentTarget.open)}
+    >
       <summary className="cursor-pointer text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring">
-        Readings table · {plural(rows.length, "row")}
+        Readings table · {plural(model.points.length, "row")}
       </summary>
+      {open && (
       <table className="mt-2 w-full text-left tabular-nums">
         <thead className="text-muted-foreground">
           <tr>
@@ -634,7 +669,7 @@ function ReadingsTable({
         </thead>
         <tbody>
           {rows.map((p) => (
-            <tr key={`${p.t}-${p.latest}`} className="border-border/60 border-t">
+            <tr key={pointKey(p)} className="border-border/60 border-t">
               <td className="py-1 pr-3">{pointTime(p, model.step, nowIso)}</td>
               <td className="py-1 pr-3">{readingText(p, model.unit)}</td>
               <td className="py-1">
@@ -653,6 +688,7 @@ function ReadingsTable({
           ))}
         </tbody>
       </table>
+      )}
     </details>
   );
 }
@@ -681,11 +717,15 @@ function TooltipValue({
       </span>
       {point.observationId && (
         <span className="ml-auto pl-2 text-muted-foreground">
-          Click to inspect
+          Click or press Enter to inspect
         </span>
       )}
     </div>
   );
+}
+
+function pointKey(p: SeriesPoint): string {
+  return `${p.t}:${p.latest}`;
 }
 
 /** A real 0 prints "0"; a non-ok bucket prints its status, never a number. */

@@ -34,6 +34,7 @@ import {
   formatReadingTime,
   formatSigned,
   type GoalKpi,
+  observationHref,
   reasonText,
   STATUS_META,
   statusCaption,
@@ -662,7 +663,10 @@ function GoalDetail({
           <span className="flex flex-wrap gap-x-3">
             {kpi?.assessment.observationId && (
               <Link
-                href={`/knowledge/${encodeURIComponent(kpi.binding.metricId)}?observation=${encodeURIComponent(kpi.assessment.observationId)}`}
+                href={observationHref(
+                  kpi.binding.metricId,
+                  kpi.assessment.observationId
+                )}
                 className="underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 Inspect reading ↗
