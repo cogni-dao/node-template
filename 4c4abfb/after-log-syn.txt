@@ -1,0 +1,69 @@
+goto /knowledge
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/schedules?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/gov?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/work?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/chat?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/credits?_rsc=ujli8
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge?_rsc=1e3fw
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/schedules?_rsc=1e3fw
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge?mode=goals&_rsc=zp9cu
+saved after-synthetic-board-dark.png
+synthetic syn-gaps 1w 2019-03-04T00:00:00.000Z..2026-11-02T00:00:00.000Z
+synthetic syn-gaps 1h 2026-10-29T19:00:00.000Z..2026-11-05T19:00:00.000Z
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/syn-gaps?observation=00000000-0000-4000-8000-000000000900&_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/syn-gaps?observation=00000000-0000-4000-8000-000000000900&_rsc=1e3fw
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/goal-syn-gaps?_rsc=1e3fw
+saved after-synthetic-gaps-dark.png
+synthetic syn-building 1w 2019-03-04T00:00:00.000Z..2026-11-02T00:00:00.000Z
+synthetic syn-building 1h 2026-10-29T19:00:00.000Z..2026-11-05T19:00:00.000Z
+saved after-synthetic-building-dark.png
+synthetic syn-lastgood 1w 2019-03-04T00:00:00.000Z..2026-11-02T00:00:00.000Z
+synthetic syn-lastgood 1h 2026-10-29T19:00:00.000Z..2026-11-05T19:00:00.000Z
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/goal-syn-lastgood?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/syn-lastgood?observation=00000000-0000-4000-8000-000000000777&_rsc=1e3fw
+saved after-synthetic-lastgood-dark.png
+synthetic syn-error 1w 2019-03-04T00:00:00.000Z..2026-11-02T00:00:00.000Z
+console.error: Failed to load resource: the server responded with a status of 503 (Service Unavailable)
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/syn-error?observation=00000000-0000-4000-8000-000000000903&_rsc=1e3fw
+console.error: Failed to load resource: the server responded with a status of 503 (Service Unavailable)
+saved after-synthetic-error-dark.png
+goto /knowledge
+pageerror: Error: Minified React error #418; visit https://react.dev/errors/418?args[]=text&args[]= for the full message or use the non-minified dev environment for full errors and additional helpful warnings.
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/gov?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/credits?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/schedules?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/work?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/chat?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/credits?_rsc=ujli8
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/dashboard?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/gov?_rsc=1bkln
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/work?_rsc=1e3fw
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/schedules?_rsc=1e3fw
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge?_rsc=1e3fw
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/dashboard?_rsc=1b8jd
+saved after-synthetic-board-light.png
+synthetic syn-gaps 1w 2019-03-04T00:00:00.000Z..2026-11-02T00:00:00.000Z
+synthetic syn-gaps 1h 2026-10-29T19:00:00.000Z..2026-11-05T19:00:00.000Z
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge?mode=goals&_rsc=zp9cu
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/goal-syn-gaps?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/syn-gaps?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/goal-syn-gaps?_rsc=1e3fw
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/syn-gaps?observation=00000000-0000-4000-8000-000000000900&_rsc=1e3fw
+saved after-synthetic-gaps-light.png
+synthetic syn-building 1w 2019-03-04T00:00:00.000Z..2026-11-02T00:00:00.000Z
+synthetic syn-building 1h 2026-10-29T19:00:00.000Z..2026-11-05T19:00:00.000Z
+saved after-synthetic-building-light.png
+synthetic syn-lastgood 1w 2019-03-04T00:00:00.000Z..2026-11-02T00:00:00.000Z
+synthetic syn-lastgood 1h 2026-10-29T19:00:00.000Z..2026-11-05T19:00:00.000Z
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/goal-syn-lastgood?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/goal-syn-lastgood?_rsc=1e3fw
+saved after-synthetic-lastgood-light.png
+synthetic syn-error 1w 2019-03-04T00:00:00.000Z..2026-11-02T00:00:00.000Z
+console.error: Failed to load resource: the server responded with a status of 503 (Service Unavailable)
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/syn-error?observation=00000000-0000-4000-8000-000000000903&_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/syn-error?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/syn-error?observation=00000000-0000-4000-8000-000000000903&_rsc=1e3fw
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/goal-syn-error?_rsc=1e3fw
+console.error: Failed to load resource: the server responded with a status of 503 (Service Unavailable)
+saved after-synthetic-error-light.png
+candidate /version {"version":"unknown","buildSha":"4c4abfbc2350a405e22561a895dc6b8430384ffa"}

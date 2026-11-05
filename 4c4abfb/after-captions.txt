@@ -1,0 +1,21 @@
+task.0040 after screenshots. Candidate-a /version buildSha 4c4abfbc2350a405e22561a895dc6b8430384ffa, checked before every capture batch (2026-11-05, 19:41-19:44 UTC).
+
+after-board-dark-desktop.png            Production readings rendered by candidate build 4c4abfb (board, dark, 1440x900)
+after-detail-dark-desktop.png           Production readings rendered by candidate build 4c4abfb (convergence ratio, 1W hourly, dark)
+after-detail-light-desktop.png          Production readings rendered by candidate build 4c4abfb (convergence ratio, 1W hourly, light)
+after-detail-light-mobile.png           Production readings rendered by candidate build 4c4abfb (convergence ratio, 1W hourly, light, 390x844)
+after-detail-1m-dark-desktop.png        Production readings rendered by candidate build 4c4abfb (convergence ratio, 1M daily, dark)
+after-detail-validated-dark-desktop.png Production readings rendered by candidate build 4c4abfb (validated units, 1W hourly, on track, dark)
+after-keyboard-focus-dark.png           Production readings rendered by candidate build 4c4abfb (Tab onto chart: focus-visible outline solid 2px, dark)
+after-keyboard-tooltip-dark.png         Production readings rendered by candidate build 4c4abfb (ArrowRight moves the tooltip, dark)
+  keyboard check: focused = svg.recharts-surface, accessible name "Seven-day convergence ratio · past week, hourly", :focus-visible true,
+  outline "solid 2px rgb(248,250,252)" (foreground ink, dark); Enter after ArrowRight -> live region "Nov 5, 08:00 UTC · 0.25 ratio · Inspect reading ↗".
+
+SYNTHETIC (fixture data served by the capture script, not production readings), rendered by candidate build 4c4abfb:
+after-synthetic-board-dark.png          Synthetic fixture: board with four synthetic goals
+after-synthetic-gaps-dark.png           Synthetic fixture: gaps (missing hatch, failed cross-hatch, observed + needed pace)
+after-synthetic-building-dark.png       Synthetic fixture: status building, 2 readings, crop + not yet measured
+after-synthetic-lastgood-dark.png       Synthetic fixture: status delayed, hollow last-good dot, trailing gap
+after-synthetic-error-dark.png          Synthetic fixture: history read fails (unknown, not zero + Try again)
+after-board-light-desktop.png           Production readings rendered by candidate build 4c4abfb (board, light, 1440x900)
+after-synthetic-board-light.png / -gaps-light / -building-light / -lastgood-light / -error-light: Synthetic fixture, light theme, candidate build 4c4abfb

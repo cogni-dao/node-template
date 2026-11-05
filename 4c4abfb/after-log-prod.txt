@@ -1,0 +1,121 @@
+goto /knowledge
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/dashboard?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/gov?_rsc=1bkln
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/credits?_rsc=ujli8
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge?_rsc=1e3fw
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/work?_rsc=1e3fw
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/schedules?_rsc=1e3fw
+proxy 200 /api/v1/metrics/goals
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge?mode=goals&_rsc=zp9cu
+proxy 200 /api/v1/metrics/goals
+after-board-dark-desktop: production asOf 2026-11-05T19:41:41.981Z
+saved after-board-dark-desktop.png
+goto /knowledge
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/credits?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/schedules?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/gov?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/work?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/gov?_rsc=1bkln
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/credits?_rsc=ujli8
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge?_rsc=1e3fw
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/work?_rsc=1e3fw
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/dashboard?_rsc=1b8jd
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/schedules?_rsc=1e3fw
+proxy 200 /api/v1/metrics/goals
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge?mode=goals&_rsc=zp9cu
+proxy 200 /api/v1/metrics/goals
+after-board-light-desktop: production asOf 2026-11-05T19:41:50.777Z
+saved after-board-light-desktop.png
+goto /knowledge
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/schedules?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/work?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/credits?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/gov?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/dashboard?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge?_rsc=1e3fw
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/schedules?_rsc=1e3fw
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/dashboard?_rsc=1b8jd
+proxy 200 /api/v1/metrics/goals
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge?mode=goals&_rsc=zp9cu
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/convergence-ratio-7d?observation=183367ca-ec46-422c-98db-5e9839fb01de&_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/convergence-ratio-7d?observation=183367ca-ec46-422c-98db-5e9839fb01de&_rsc=1e3fw
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/goal-ai-work-converges?_rsc=1e3fw
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/convergence-ratio-7d?_rsc=1h9z5
+proxy 200 /api/v1/metrics/convergence-ratio-7d/history?from=2026-10-29T19%3A00%3A00.000Z&to=2026-11-05T19%3A00%3A00.000Z&step=1h
+proxy 200 /api/v1/metrics/convergence-ratio-7d/history?from=2019-03-04T00%3A00%3A00.000Z&to=2026-11-02T00%3A00%3A00.000Z&step=1w
+proxy 200 /api/v1/metrics/goals
+after-detail-dark-desktop: production asOf 2026-11-05T19:42:04.008Z
+saved after-detail-dark-desktop.png
+goto /knowledge
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/schedules?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/gov?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/credits?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/work?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/chat?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/gov?_rsc=1bkln
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/credits?_rsc=ujli8
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge?_rsc=1e3fw
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/work?_rsc=1e3fw
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/schedules?_rsc=1e3fw
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/dashboard?_rsc=1b8jd
+proxy 200 /api/v1/metrics/goals
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge?mode=goals&_rsc=zp9cu
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/goal-ai-work-converges?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/convergence-ratio-7d?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/goal-ai-work-converges?_rsc=1e3fw
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/convergence-ratio-7d?observation=183367ca-ec46-422c-98db-5e9839fb01de&_rsc=1e3fw
+proxy 200 /api/v1/metrics/convergence-ratio-7d/history?from=2026-10-29T19%3A00%3A00.000Z&to=2026-11-05T19%3A00%3A00.000Z&step=1h
+proxy 200 /api/v1/metrics/convergence-ratio-7d/history?from=2019-03-04T00%3A00%3A00.000Z&to=2026-11-02T00%3A00%3A00.000Z&step=1w
+proxy 200 /api/v1/metrics/goals
+after-detail-light-desktop: production asOf 2026-11-05T19:42:17.761Z
+saved after-detail-light-desktop.png
+goto /knowledge
+pageerror: Error: Minified React error #418; visit https://react.dev/errors/418?args[]=text&args[]= for the full message or use the non-minified dev environment for full errors and additional helpful warnings.
+proxy 200 /api/v1/metrics/goals
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge?mode=goals&_rsc=zp9cu
+proxy 200 /api/v1/metrics/convergence-ratio-7d/history?from=2026-10-29T19%3A00%3A00.000Z&to=2026-11-05T19%3A00%3A00.000Z&step=1h
+proxy 200 /api/v1/metrics/convergence-ratio-7d/history?from=2019-03-04T00%3A00%3A00.000Z&to=2026-11-02T00%3A00%3A00.000Z&step=1w
+proxy 200 /api/v1/metrics/goals
+after-detail-light-mobile: production asOf 2026-11-05T19:42:30.477Z
+saved after-detail-light-mobile.png
+goto /knowledge
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/credits?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/gov?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/schedules?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/dashboard?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/chat?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/gov?_rsc=1bkln
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/credits?_rsc=ujli8
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge?_rsc=1e3fw
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/schedules?_rsc=1e3fw
+proxy 200 /api/v1/metrics/goals
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge?mode=goals&_rsc=zp9cu
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/goal-ai-work-converges?_rsc=1e3fw
+proxy 200 /api/v1/metrics/convergence-ratio-7d/history?from=2026-10-29T19%3A00%3A00.000Z&to=2026-11-05T19%3A00%3A00.000Z&step=1h
+proxy 200 /api/v1/metrics/convergence-ratio-7d/history?from=2019-03-04T00%3A00%3A00.000Z&to=2026-11-02T00%3A00%3A00.000Z&step=1w
+proxy 200 /api/v1/metrics/convergence-ratio-7d/history?from=2026-10-06T00%3A00%3A00.000Z&to=2026-11-05T00%3A00%3A00.000Z&step=1d
+proxy 200 /api/v1/metrics/goals
+after-detail-1m-dark-desktop: production asOf 2026-11-05T19:42:45.795Z
+saved after-detail-1m-dark-desktop.png
+goto /knowledge
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/gov?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/work?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/schedules?_rsc=1h9z5
+proxy 200 /api/v1/metrics/goals
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/credits?_rsc=ujli8
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/gov?_rsc=1bkln
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge?_rsc=1e3fw
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge?mode=goals&_rsc=zp9cu
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/goal-ai-work-converges?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/convergence-ratio-7d?observation=183367ca-ec46-422c-98db-5e9839fb01de&_rsc=1e3fw
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/goal-ai-work-converges?_rsc=1e3fw
+proxy 200 /api/v1/metrics/convergence-ratio-7d/history?from=2026-10-29T19%3A00%3A00.000Z&to=2026-11-05T19%3A00%3A00.000Z&step=1h
+proxy 200 /api/v1/metrics/convergence-ratio-7d/history?from=2019-03-04T00%3A00%3A00.000Z&to=2026-11-02T00%3A00%3A00.000Z&step=1w
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/validated-7d?observation=ac3f930e-c866-4520-9355-909b855038ea&_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/validated-7d?observation=ac3f930e-c866-4520-9355-909b855038ea&_rsc=1e3fw
+proxy 200 /api/v1/metrics/validated-7d/history?from=2026-10-29T19%3A00%3A00.000Z&to=2026-11-05T19%3A00%3A00.000Z&step=1h
+proxy 200 /api/v1/metrics/validated-7d/history?from=2019-03-04T00%3A00%3A00.000Z&to=2026-11-02T00%3A00%3A00.000Z&step=1w
+proxy 200 /api/v1/metrics/goals
+after-detail-validated-dark-desktop: production asOf 2026-11-05T19:43:00.584Z
+saved after-detail-validated-dark-desktop.png
+candidate /version {"version":"unknown","buildSha":"4c4abfbc2350a405e22561a895dc6b8430384ffa"}

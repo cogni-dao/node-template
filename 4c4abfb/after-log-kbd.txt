@@ -1,0 +1,24 @@
+goto /knowledge
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/credits?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/gov?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/work?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/schedules?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/chat?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/credits?_rsc=ujli8
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/gov?_rsc=1bkln
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/work?_rsc=1e3fw
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/schedules?_rsc=1e3fw
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/dashboard?_rsc=1b8jd
+proxy 200 /api/v1/metrics/goals
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge?mode=goals&_rsc=zp9cu
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/convergence-ratio-7d?observation=183367ca-ec46-422c-98db-5e9839fb01de&_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/convergence-ratio-7d?_rsc=1h9z5
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/goal-ai-work-converges?_rsc=1e3fw
+reqfailed net::ERR_ABORTED https://node-template-test.cognidao.org/knowledge/convergence-ratio-7d?observation=183367ca-ec46-422c-98db-5e9839fb01de&_rsc=1e3fw
+proxy 200 /api/v1/metrics/convergence-ratio-7d/history?from=2026-10-29T19%3A00%3A00.000Z&to=2026-11-05T19%3A00%3A00.000Z&step=1h
+proxy 200 /api/v1/metrics/convergence-ratio-7d/history?from=2019-03-04T00%3A00%3A00.000Z&to=2026-11-02T00%3A00%3A00.000Z&step=1w
+kbd-dark: focused {"tag":"svg","cls":"recharts-surface","name":"Seven-day convergence ratio · past week, hourly","outline":"solid 2px rgb(248, 250, 252)","fv":true}
+saved after-keyboard-focus-dark.png
+saved after-keyboard-tooltip-dark.png
+kbd-dark: after Enter, live region = "Nov 5, 08:00 UTC · 0.25 ratio · Inspect reading ↗"
+candidate /version {"version":"unknown","buildSha":"4c4abfbc2350a405e22561a895dc6b8430384ffa"}
