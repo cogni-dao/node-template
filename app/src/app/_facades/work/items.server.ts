@@ -6,8 +6,7 @@
  * Purpose: Server-side facade for work item read/write operations across the markdown + Doltgres surfaces.
  * Scope: Maps one authoritative backend to contract DTOs; Markdown only when Doltgres is unconfigured.
  * Invariants: P0P1_IS_NODE_ADMIN (story.5101: priority <= 1 on create/patch requires node admin,
- *   checked before the store write), REASSIGN_IS_NODE_ADMIN (bug.0013: creator reassignment requires
- *   node admin and an existing target user, checked before the store write), PORT_VIA_CONTAINER (no direct adapter imports), CONTRACTS_ARE_TRUTH, NODE_STORE_IS_LOCAL.
+ *   checked before the store write), PORT_VIA_CONTAINER (no direct adapter imports), CONTRACTS_ARE_TRUTH, NODE_STORE_IS_LOCAL.
  * Evaluation: preserves scores in DTOs and normalizes package validation failures for HTTP400.
  * Side-effects: IO (filesystem read via port; database read/write via Doltgres port)
  * Links: contracts/work.items.{list,get,create,patch}.v1.contract
@@ -17,8 +16,6 @@
 import type {
   WorkItemsCreateInput as ContractCreateInput,
   WorkItemsPatchInput as ContractPatchInput,
-  WorkItemsReassignInput,
-  WorkItemsReassignOutput,
   WorkItemCoordinationOutput,
   WorkItemDto,
   WorkItemsListInput,
@@ -43,9 +40,7 @@ import {
   isPrivilegedPriority,
   NodeAdminRequiredError,
 } from "@cogni/knowledge-store";
-import { users } from "@cogni/db-schema";
-import { eq } from "drizzle-orm";
-import { getContainer, resolveServiceDb } from "@/bootstrap/container";
+import { getContainer } from "@/bootstrap/container";
 import { toHttpWorkItem } from "../read-envelopes.server";
 
 /**
@@ -115,14 +110,6 @@ async function assertPriorityAuthority(
 export interface WorkItemActor {
   id: string;
   walletAddress?: string | null;
-}
-
-/** bug.0013: the reassignment target is not a user on this node. */
-export class ReassignTargetNotFoundError extends Error {
-  constructor(readonly principalId: string) {
-    super(`Target principal is not a user on this node: ${principalId}`);
-    this.name = "ReassignTargetNotFoundError";
-  }
 }
 
 export class WorkItemLeaseConflictError extends Error {
@@ -474,60 +461,5 @@ export async function getWorkItemCoordination(
   } catch (error) {
     if (error instanceof WorkItemNotFoundError) throw error;
     rethrowBackendError(error);
-  }
-}
-
-/**
- * bug.0013 REASSIGN_IS_NODE_ADMIN: move every work item created by
- * `fromPrincipalId` to `toPrincipalId` (e.g. an agent re-keyed after an
- * AUTH_SECRET rotation). Node admin is checked BEFORE any read of the target
- * or store write; the target must be an existing users row. `dryRun` returns
- * the matching ids without writing.
- */
-export async function reassignWorkItemCreator(
-  input: WorkItemsReassignInput,
-  actor: WorkItemActor,
-): Promise<WorkItemsReassignOutput> {
-  const container = getContainer();
-  const decision = await checkNodeAdmin(container.nodeAdmin, {
-    userId: actor.id,
-    walletAddress: actor.walletAddress ?? null,
-  });
-  if (!decision.ok) {
-    const err = new NodeAdminRequiredError(decision, "work.items.reassign");
-    container.log.warn(
-      {
-        errorCode: err.errorCode,
-        reason: err.reason,
-        action: err.action,
-        userId: actor.id,
-      },
-      "work.items.reassign_node_admin_refused",
-    );
-    throw err;
-  }
-
-  const fromPrincipalId = input.fromPrincipalId.toLowerCase();
-  const toPrincipalId = input.toPrincipalId.toLowerCase();
-  const dryRun = input.dryRun === true;
-  // users is RLS-scoped to the session's own row; an existence probe of another
-  // principal needs the service role. Admin is already proven above.
-  const [target] = await resolveServiceDb()
-    .select({ id: users.id })
-    .from(users)
-    .where(eq(users.id, toPrincipalId))
-    .limit(1);
-  if (!target) throw new ReassignTargetNotFoundError(toPrincipalId);
-
-  try {
-    const { ids } = await container.doltgresWorkItems.reassignCreator({
-      fromPrincipalId,
-      toPrincipalId,
-      actorPrincipalId: actor.id,
-      dryRun,
-    });
-    return { fromPrincipalId, toPrincipalId, dryRun, count: ids.length, ids };
-  } catch (e) {
-    rethrowBackendError(e);
   }
 }

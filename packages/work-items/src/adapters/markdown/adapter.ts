@@ -394,19 +394,6 @@ export class MarkdownWorkItemAdapter
 
   // ── CommandPort ────────────────────────────────────
 
-  /**
-   * bug.0013: markdown files carry no creator principal, so a creator
-   * reassignment has nothing to move. Refuse rather than report success.
-   */
-  async reassignCreator(_input: {
-    fromPrincipalId: string;
-    toPrincipalId: string;
-    actorPrincipalId: string;
-    dryRun?: boolean;
-  }): Promise<{ ids: string[] }> {
-    throw new UnsupportedWorkItemFieldError("createdByPrincipalId");
-  }
-
   async create(input: {
     type: WorkItemType;
     title: string;

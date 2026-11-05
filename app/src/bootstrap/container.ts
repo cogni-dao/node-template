@@ -920,7 +920,6 @@ function createContainer(): Container {
 			create: notConfiguredWorkItems,
 			patch: notConfiguredWorkItems,
 			delete: notConfiguredWorkItems,
-			reassignCreator: notConfiguredWorkItems,
 			claim: notConfiguredWorkItems,
 			heartbeat: notConfiguredWorkItems,
 			release: notConfiguredWorkItems,
