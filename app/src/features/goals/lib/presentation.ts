@@ -4,8 +4,9 @@
 /**
  * Module: `@features/goals/lib/presentation`
  * Purpose: Pure presentation for the Goals tab: status words and symbols, plain
- *   reason text, number/unit/date formatting, summary counts, sparkline geometry
- *   and history range selection.
+ *   reason text, number/unit/date formatting, summary counts, sparkline data,
+ *   history ranges (hourly 1D/1W, daily 1M/3M, All from the proven series
+ *   start) and the hero label.
  * Scope: Pure functions over `@cogni-dao/metrics/contracts` shapes. Never
  *   decides status (assessKpi does); never fills, bridges or invents readings.
  * Invariants: STATUS_HAS_WORD_AND_SYMBOL (color is never the only signal);
@@ -378,72 +379,73 @@ function niceCeil(n: number): number {
 
 // ---------------------------------------------------------------- sparkline
 
-export interface SparkPoint {
-  readonly x: number;
-  readonly y: number;
-  readonly value: number;
+export interface SparkDatum {
+  readonly i: number;
+  readonly value: number | null;
+  /** An ok point with no ok neighbour: a Line draws nothing for it, so it needs a dot. */
+  readonly isolated: boolean;
+  readonly last: boolean;
   readonly start: string;
 }
 
-export interface Sparkline {
-  readonly segments: SparkPoint[][];
-  readonly targetY: number | null;
+export interface SparkSeries {
+  readonly data: readonly SparkDatum[];
+  /** Explicit Y domain: ok values plus the target, never the Recharts [0, auto] default. */
+  readonly domain: readonly [number, number];
   readonly okCount: number;
   readonly gapCount: number;
-  readonly first: SparkPoint | null;
-  readonly last: SparkPoint | null;
+  readonly first: SparkDatum | null;
+  readonly last: SparkDatum | null;
 }
 
 /** Break the line at every non-ok bucket. A missing bucket is never filled. */
-export function sparkline(
+export function sparkSeries(
   trend: MetricHistory | null,
-  target: number | null,
-  width: number,
-  height: number,
-  pad = 4
-): Sparkline {
+  target: number | null
+): SparkSeries {
   const buckets = trend?.buckets ?? [];
-  const values = buckets
-    .filter((b) => b.status === "ok" && b.value !== null)
-    .map((b) => b.value as number);
-  const domain = [...values, ...(target !== null ? [target] : [])];
-  let lo = domain.length ? Math.min(...domain) : 0;
-  let hi = domain.length ? Math.max(...domain) : 1;
+  const values = buckets.map((b) =>
+    b.status === "ok" && b.value !== null ? b.value : null
+  );
+  const okIdx = values.flatMap((v, i) => (v === null ? [] : [i]));
+  const lastOk = okIdx.at(-1) ?? -1;
+  const data = buckets.map((b, i) => {
+    const value = values[i] ?? null;
+    return {
+      i,
+      value,
+      isolated:
+        value !== null &&
+        (values[i - 1] ?? null) === null &&
+        (values[i + 1] ?? null) === null,
+      last: i === lastOk,
+      start: b.start,
+    };
+  });
+  const domainValues = [
+    ...okIdx.map((i) => values[i] as number),
+    ...(target !== null ? [target] : []),
+  ];
+  let lo = domainValues.length ? Math.min(...domainValues) : 0;
+  let hi = domainValues.length ? Math.max(...domainValues) : 1;
   if (hi === lo) {
     lo -= Math.abs(lo) * 0.1 || 1;
     hi += Math.abs(hi) * 0.1 || 1;
   }
-  const n = Math.max(buckets.length - 1, 1);
-  const xOf = (i: number) =>
-    buckets.length <= 1 ? width / 2 : pad / 2 + (i / n) * (width - pad * 1.5);
-  const yOf = (v: number) =>
-    pad + (1 - (v - lo) / (hi - lo)) * (height - pad * 2);
-  const segments: SparkPoint[][] = [];
-  let current: SparkPoint[] = [];
-  let gapCount = 0;
-  buckets.forEach((b, i) => {
-    if (b.status !== "ok" || b.value === null) {
-      gapCount += 1;
-      if (current.length) segments.push(current);
-      current = [];
-      return;
-    }
-    current.push({ x: xOf(i), y: yOf(b.value), value: b.value, start: b.start });
-  });
-  if (current.length) segments.push(current);
-  const all = segments.flat();
+  const pad = (hi - lo) * 0.08;
+  const ok = data.filter((d) => d.value !== null);
   return {
-    segments,
-    targetY: target !== null ? yOf(target) : null,
-    okCount: all.length,
-    gapCount,
-    first: all[0] ?? null,
-    last: all.at(-1) ?? null,
+    data,
+    domain: [lo - pad, hi + pad],
+    okCount: ok.length,
+    gapCount: buckets.length - ok.length,
+    first: ok[0] ?? null,
+    last: ok.at(-1) ?? null,
   };
 }
 
 export function sparklineLabel(
-  s: Sparkline,
+  s: SparkSeries,
   days: number,
   target: string | null,
   unit?: string
@@ -452,8 +454,8 @@ export function sparklineLabel(
     return `Last ${days} days: no readings${target ? `; target ${target}` : ""}.`;
   const range =
     s.first === s.last
-      ? `one reading, ${formatNumber(s.last.value, unit)} on ${formatDate(s.last.start)}`
-      : `from ${formatNumber(s.first.value, unit)} on ${formatDate(s.first.start)} to ${formatNumber(s.last.value, unit)} on ${formatDate(s.last.start)}`;
+      ? `one reading, ${formatNumber(s.last.value as number, unit)} on ${formatDate(s.last.start)}`
+      : `from ${formatNumber(s.first.value as number, unit)} on ${formatDate(s.first.start)} to ${formatNumber(s.last.value as number, unit)} on ${formatDate(s.last.start)}`;
   const gaps =
     s.gapCount > 0 ? `; ${plural(s.gapCount, "day")} without a reading` : "";
   return `Last ${days} days: ${range}${target ? `; target ${target}` : ""}${gaps}.`;
@@ -461,22 +463,62 @@ export function sparklineLabel(
 
 // ---------------------------------------------------------------- history range
 
-export type HistoryRange = "7d" | "30d" | "90d" | "all";
-export const HISTORY_RANGES: readonly { id: HistoryRange; label: string }[] = [
-  { id: "7d", label: "7d" },
-  { id: "30d", label: "30d" },
-  { id: "90d", label: "90d" },
-  { id: "all", label: "All" },
+export type HistoryRange = "1d" | "1w" | "1m" | "3m" | "all";
+
+interface FixedRange {
+  readonly id: Exclude<HistoryRange, "all">;
+  readonly label: string;
+  readonly title: string;
+  readonly step: MetricHistoryStep;
+  readonly count: number;
+}
+
+const FIXED_RANGES: readonly FixedRange[] = [
+  { id: "1d", label: "1D", title: "past day", step: "1h", count: 24 },
+  { id: "1w", label: "1W", title: "past week", step: "1h", count: 168 },
+  { id: "1m", label: "1M", title: "past month", step: "1d", count: 30 },
+  { id: "3m", label: "3M", title: "past 3 months", step: "1d", count: 90 },
 ];
+
+export const HISTORY_RANGES: readonly {
+  readonly id: HistoryRange;
+  readonly label: string;
+  readonly title: string;
+}[] = [...FIXED_RANGES, { id: "all", label: "All", title: "all time" }];
+
+export function isHistoryRange(v: string): v is HistoryRange {
+  return HISTORY_RANGES.some((r) => r.id === v);
+}
+
+/** Hourly metrics open on the hourly week; everything else on the daily month. */
+export function defaultRange(cadenceSeconds: number | null): HistoryRange {
+  return cadenceSeconds !== null && cadenceSeconds <= 3600 ? "1w" : "1m";
+}
 
 export const STEP_MS: Record<MetricHistoryStep, number> = {
   "1h": 3_600_000,
   "1d": DAY_MS,
   "1w": 7 * DAY_MS,
 };
+export const STEP_WORD: Record<MetricHistoryStep, string> = {
+  "1h": "hourly",
+  "1d": "daily",
+  "1w": "weekly",
+};
+const STEP_UNIT: Record<MetricHistoryStep, string> = {
+  "1h": "hour",
+  "1d": "day",
+  "1w": "week",
+};
+export function stepUnit(step: MetricHistoryStep): string {
+  return STEP_UNIT[step];
+}
 /** Weekly buckets align to Monday 2000-01-03T00:00Z (the server's origin). */
 const WEEK_ORIGIN = Date.UTC(2000, 0, 3);
+/** MAX_HISTORY_BUCKETS in @cogni-dao/metrics: the server rejects more. */
 export const MAX_BUCKETS = 400;
+/** A cropped or very young axis still shows at least this many steps. */
+export const MIN_VISIBLE_STEPS = 12;
 
 export function floorToStep(ms: number, step: MetricHistoryStep): number {
   const size = STEP_MS[step];
@@ -484,36 +526,123 @@ export function floorToStep(ms: number, step: MetricHistoryStep): number {
   return origin + Math.floor((ms - origin) / size) * size;
 }
 
-/** `to` is the last closed step boundary (the server rejects to > now). */
-export function historyWindow(
-  range: Exclude<HistoryRange, "all">,
-  nowMs: number
-): { from: string; to: string; step: MetricHistoryStep } {
-  const days = range === "7d" ? 7 : range === "30d" ? 30 : 90;
-  const to = floorToStep(nowMs, "1d");
-  return {
-    from: new Date(to - days * DAY_MS).toISOString(),
-    to: new Date(to).toISOString(),
-    step: "1d",
-  };
+export interface HistoryWindow {
+  readonly from: string;
+  readonly to: string;
+  readonly step: MetricHistoryStep;
 }
 
-/** "All" probe: 400 daily buckets first; 400 weekly ones if the series is older. */
-export function allWindow(
-  nowMs: number,
-  step: "1d" | "1w"
-): { from: string; to: string; step: MetricHistoryStep } {
-  const to = floorToStep(nowMs, step);
+function windowOf(fromMs: number, toMs: number, step: MetricHistoryStep): HistoryWindow {
   return {
-    from: new Date(to - MAX_BUCKETS * STEP_MS[step]).toISOString(),
-    to: new Date(to).toISOString(),
+    from: new Date(fromMs).toISOString(),
+    to: new Date(toMs).toISOString(),
     step,
   };
 }
 
-/** Leading buckets before the first attempt are "before the series", not gaps. */
-export function trimLeadingMissing(history: MetricHistory): MetricHistory {
-  const first = history.buckets.findIndex((b) => b.status !== "missing");
-  if (first <= 0) return history;
-  return { ...history, buckets: history.buckets.slice(first) };
+/** `to` is the last closed step boundary (the server rejects to > now). */
+export function historyWindow(
+  range: Exclude<HistoryRange, "all">,
+  nowMs: number
+): HistoryWindow {
+  const r = FIXED_RANGES.find((x) => x.id === range) as FixedRange;
+  const to = floorToStep(nowMs, r.step);
+  return windowOf(to - r.count * STEP_MS[r.step], to, r.step);
+}
+
+/**
+ * The series-start probe: 400 weekly buckets ending at the last closed week.
+ * It never includes the open week, because the server rejects to > now.
+ */
+export function probeWindow(nowMs: number): HistoryWindow {
+  const to = floorToStep(nowMs, "1w");
+  return windowOf(to - MAX_BUCKETS * STEP_MS["1w"], to, "1w");
+}
+
+/**
+ * Proven series start: the start of the first non-missing probe week. When
+ * every closed week is missing, no completed attempt exists before the open
+ * week, so the start is the probe's `to`.
+ */
+export function seriesStartFromProbe(probe: MetricHistory): number {
+  const first = probe.buckets.find((b) => b.status !== "missing");
+  return Date.parse(first ? first.start : probe.to);
+}
+
+/**
+ * "All": from the proven start to the last closed step, with the finest step
+ * that fits 400 buckets. `from` is at least 12 steps before `to`, so the read
+ * is never empty (from == to is invalid_range), and at most 400 steps.
+ */
+export function allWindow(
+  seriesStart: number | null,
+  nowMs: number
+): HistoryWindow {
+  if (seriesStart === null) {
+    const to = floorToStep(nowMs, "1d");
+    return windowOf(to - MAX_BUCKETS * DAY_MS, to, "1d");
+  }
+  const steps: MetricHistoryStep[] = ["1h", "1d", "1w"];
+  const step =
+    steps.find(
+      (s) => floorToStep(nowMs, s) - seriesStart <= MAX_BUCKETS * STEP_MS[s]
+    ) ?? "1w";
+  const size = STEP_MS[step];
+  const to = floorToStep(nowMs, step);
+  const from = Math.max(
+    Math.min(floorToStep(seriesStart, step), to - MIN_VISIBLE_STEPS * size),
+    to - MAX_BUCKETS * size
+  );
+  return windowOf(from, to, step);
+}
+
+// ---------------------------------------------------------------- header
+
+/**
+ * The hero speaks for the assessment, never for the chart range. Its label
+ * says which reading it is: final, at the deadline, latest or last good.
+ */
+export function heroLabel(
+  a: Pick<KpiAssessment, "status" | "value" | "observedAt">,
+  nowIso: string
+): string | null {
+  if (a.value === null || !a.observedAt) return null;
+  const time = formatReadingTime(a.observedAt, nowIso);
+  switch (a.status) {
+    case "met":
+    case "missed":
+      return `Final · ${time}`;
+    case "evaluating":
+      return `At deadline · ${time}`;
+    case "on_track":
+    case "behind":
+      return `Latest · ${time}`;
+    default:
+      return `Last good · ${time}`;
+  }
+}
+
+/** Next scheduled reading, only when it is still ahead of `nowIso`. */
+export function nextReadingAt(
+  observedAt: string | null,
+  cadenceSeconds: number | null,
+  nowIso: string
+): string | null {
+  if (!observedAt || cadenceSeconds === null) return null;
+  const next = Date.parse(observedAt) + cadenceSeconds * 1000;
+  return next > Date.parse(nowIso) ? new Date(next).toISOString() : null;
+}
+
+/** "hourly reading", "every 6 hours", "daily reading"; null when unscheduled. */
+export function cadenceText(cadenceSeconds: number | null | undefined): string | null {
+  if (cadenceSeconds == null) return null;
+  if (cadenceSeconds % 86_400 === 0)
+    return cadenceSeconds === 86_400
+      ? "daily reading"
+      : `every ${plural(cadenceSeconds / 86_400, "day")}`;
+  if (cadenceSeconds % 3_600 === 0)
+    return cadenceSeconds === 3_600
+      ? "hourly reading"
+      : `every ${plural(cadenceSeconds / 3_600, "hour")}`;
+  return `every ${plural(cadenceSeconds / 60, "minute")}`;
 }

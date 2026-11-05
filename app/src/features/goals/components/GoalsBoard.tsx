@@ -27,13 +27,13 @@ import { type MouseEvent, type ReactNode, useId, useState } from "react";
 import { fetchGoalsProgress, GOALS_QUERY_KEY } from "../lib/api";
 import {
   COMPARATOR_SYMBOL,
+  cadenceText,
   deadlineText,
   formatDate,
   formatNumber,
   formatReadingTime,
   formatSigned,
   type GoalKpi,
-  plural,
   reasonText,
   STATUS_META,
   statusCaption,
@@ -284,21 +284,9 @@ function EmptyState({ goalId }: { readonly goalId: string | undefined }) {
 function kpiCaption(kpi: GoalKpi | undefined): string {
   if (!kpi) return "No KPI bound yet";
   if (!kpi.metric) return `${kpi.binding.metricId} · not computed yet`;
-  const name = kpi.metric.title;
-  const cadence = kpi.metric?.cadenceSeconds;
-  const every =
-    cadence == null
-      ? null
-      : cadence % 86_400 === 0
-        ? cadence === 86_400
-          ? "daily reading"
-          : `every ${plural(cadence / 86_400, "day")}`
-        : cadence % 3_600 === 0
-          ? cadence === 3_600
-            ? "hourly reading"
-            : `every ${plural(cadence / 3_600, "hour")}`
-          : `every ${plural(cadence / 60, "minute")}`;
-  return [name, every].filter(Boolean).join(" · ");
+  return [kpi.metric.title, cadenceText(kpi.metric.cadenceSeconds)]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 function GoalRow({
@@ -600,7 +588,7 @@ function GoalDetail({
   )[0];
 
   return (
-    <div className="mx-0.5 mb-4 space-y-4 rounded-lg bg-muted/40 p-4">
+    <div className="mx-0.5 mb-4 space-y-4 rounded-lg bg-muted/20 p-3">
       {goal.kpis.length > 1 && (
         <fieldset className="flex flex-wrap gap-1.5 text-xs">
           <legend className="sr-only">KPI to chart</legend>
@@ -628,7 +616,9 @@ function GoalDetail({
           metricId={kpi.binding.metricId}
           title={kpi.metric.title}
           assessment={kpi.assessment}
-          nowIso={nowIso}
+          asOf={nowIso}
+          cadenceSeconds={kpi.metric.cadenceSeconds}
+          maxAgeSeconds={kpi.metric.maxAgeSeconds}
           bets={openBets.flatMap((h) =>
             h.predictions
               .filter((p) => p.binding.metricId === kpi.binding.metricId)
@@ -650,23 +640,7 @@ function GoalDetail({
         </p>
       )}
 
-      <dl className="grid gap-x-6 gap-y-3 text-[13px] sm:grid-cols-2 @3xl:grid-cols-4">
-        {kpi && (
-          <Fact label="Latest reading">
-            {kpi.assessment.value !== null && kpi.assessment.observedAt ? (
-              <span className="tabular-nums">
-                {formatNumber(kpi.assessment.value, kpi.assessment.unit)}{" "}
-                {unitLabel(kpi.assessment.value, kpi.assessment.unit)} ·{" "}
-                {formatReadingTime(kpi.assessment.observedAt, nowIso)}
-                {!valueIsCurrent(kpi.assessment.status) && (
-                  <span className="text-muted-foreground"> (not current)</span>
-                )}
-              </span>
-            ) : (
-              <span className="text-muted-foreground">None yet</span>
-            )}
-          </Fact>
-        )}
+      <dl className="grid gap-x-6 gap-y-3 text-[13px] sm:grid-cols-3">
         {kpi && <PaceFact kpi={kpi} />}
         <Fact label="Bets on this goal">
           {goal.hypothesesUnavailable ? (

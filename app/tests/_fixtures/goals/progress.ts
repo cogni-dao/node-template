@@ -261,3 +261,105 @@ export function everyStatusFixture(): GoalsProgress {
     ),
   });
 }
+
+// ------------------------------------------------- ranged history (task.0040)
+
+export type BucketSpec = number | null | "error" | "unavailable";
+
+/** `specs.length` buckets of `step` ending at `to`; null = missing, never filled. */
+export function history(
+  metricId: string,
+  unit: string,
+  step: MetricHistory["step"],
+  to: string,
+  specs: readonly BucketSpec[],
+  idBase = 5000
+): MetricHistory {
+  const size = { "1h": 3_600_000, "1d": DAY, "1w": 7 * DAY }[step];
+  const end = Date.parse(to);
+  const start = end - specs.length * size;
+  return {
+    metricId,
+    unit,
+    step,
+    from: new Date(start).toISOString(),
+    to,
+    buckets: specs.map((s, i) => ({
+      start: new Date(start + i * size).toISOString(),
+      end: new Date(start + (i + 1) * size).toISOString(),
+      status:
+        s === null
+          ? "missing"
+          : s === "error" || s === "unavailable"
+            ? s
+            : "ok",
+      value: typeof s === "number" ? s : null,
+      observationId: s === null ? null : uuid(idBase + i),
+    })),
+  };
+}
+
+/**
+ * Production readings captured 2026-11-05 (task.0040 design evidence):
+ * convergence-ratio-7d hourly ok at 07, 08 and 09 UTC, newest reading 10:00:03
+ * after the last closed hour, behind with pace.needed from assessKpi.
+ */
+export const PROD_AS_OF = "2026-11-05T10:07:11.020Z";
+export const PROD_DEADLINE = "2027-01-31T00:00:00.000Z";
+const WEEK = 7 * DAY;
+
+export function productionRatioAssessment(): KpiAssessment {
+  const value = 0.23157894736842105;
+  return assessment("behind", {
+    value,
+    observationId: "861a7b59-3915-4484-b0c8-0872cbf42a7d",
+    observedAt: "2026-11-05T10:00:03.156Z",
+    deadline: PROD_DEADLINE,
+    pace: {
+      observed: null,
+      needed:
+        ((1 - value) * WEEK) /
+        (Date.parse(PROD_DEADLINE) - Date.parse(PROD_AS_OF)),
+    },
+  });
+}
+
+/** 1W hourly: 165 missing, then 07/08/09h ok (to = 10:00, the last closed hour). */
+export function productionWeekHourly(): MetricHistory {
+  return history(
+    "convergence-ratio-7d",
+    "ratio",
+    "1h",
+    "2026-11-05T10:00:00.000Z",
+    [
+      ...Array.from({ length: 165 }, () => null),
+      0.23863636363636365,
+      0.25,
+      0.25,
+    ]
+  );
+}
+
+/** 1M daily: 30 missing buckets; the open Nov 5 bucket is not part of the range. */
+export function productionMonthDaily(): MetricHistory {
+  return history(
+    "convergence-ratio-7d",
+    "ratio",
+    "1d",
+    "2026-11-05T00:00:00.000Z",
+    Array.from({ length: 30 }, () => null)
+  );
+}
+
+/** The 400-week probe ending at the open week (Mon Nov 2): every week missing. */
+export function productionProbe(): MetricHistory {
+  return history(
+    "convergence-ratio-7d",
+    "ratio",
+    "1w",
+    "2026-11-02T00:00:00.000Z",
+    Array.from({ length: 400 }, () => null)
+  );
+}
+
+export { assessment as assessmentFixture, goal as goalFixture, kpi as kpiFixture };

@@ -3,25 +3,45 @@
 
 /**
  * Module: `@features/goals/components/marks`
- * Purpose: The three small marks of a goal row: status pill, bullet graph, sparkline.
- * Scope: Stateless SVG/HTML. Inputs are already-assessed contract values.
- * Invariants: Status = symbol + word (+ color). Every SVG has role="img" and an
- *   aria-label stating values, target and gaps. Sparkline gaps are never bridged.
+ * Purpose: The three small marks of a goal row: status pill, bullet graph and
+ *   30-day sparkline. The bullet and sparkline are Recharts charts.
+ * Scope: Stateless. Inputs are already-assessed contract values.
+ * Invariants: Status = symbol + word (+ color). Every chart sits in a
+ *   div role="img" whose aria-label states values, target and gaps. Explicit
+ *   Y/X domains (the Recharts default starts at 0). Sparkline gaps are never
+ *   bridged; an isolated point is a Recharts Dot; an empty sparkline draws no
+ *   baseline that reads as zero. No animation (it hides dots).
  * Side-effects: none
  * Links: ../lib/presentation.ts
  * @public
  */
 
+"use client";
+
+import { ChartContainer } from "@cogni/node-ui-kit/shadcn/chart";
 import type { KpiStatus, MetricHistory } from "@cogni-dao/metrics/contracts";
+import { Fragment, type JSX } from "react";
+import {
+  Bar,
+  BarChart,
+  Dot,
+  Line,
+  LineChart,
+  ReferenceArea,
+  ReferenceLine,
+  XAxis,
+  YAxis,
+} from "recharts";
 
 import {
   bulletScale,
   COMPARATOR_SYMBOL,
   formatNumber,
+  type SparkDatum,
   STATUS_META,
   type StatusTone,
-  sparkline,
   sparklineLabel,
+  sparkSeries,
   unitLabel,
 } from "../lib/presentation";
 
@@ -62,7 +82,8 @@ const COMPARATOR_WORDS = { gte: "at least", lte: "at most", eq: "exactly" };
 
 /**
  * Bullet graph: track, shaded zone up to the target, value bar, target tick.
- * The value bar is ink, not status color: the pill carries status.
+ * The value bar is ink, not status color: the pill carries status. The wrapper
+ * reserves the height, so the row never shifts while the chart measures.
  */
 export function BulletGraph({
   value,
@@ -83,9 +104,8 @@ export function BulletGraph({
   const pos = (v: number) =>
     Math.max(0, Math.min(100, ((v - min) / (max - min)) * 100));
   const targetPct = pos(target);
-  const zero = pos(0);
-  const valuePct = value === null ? null : pos(value);
   const h = compact ? 14 : 22;
+  const inset = Math.round(h * 0.18);
   const label = `${
     value === null
       ? "No current value"
@@ -93,51 +113,55 @@ export function BulletGraph({
   }, target ${COMPARATOR_WORDS[comparator]} ${formatNumber(target, unit)}, scale ${formatNumber(min, unit)} to ${formatNumber(max, unit)}`;
   return (
     <div>
-      <svg
-        role="img"
-        aria-label={label}
-        width="100%"
-        height={h}
-        viewBox={`0 0 100 ${h}`}
-        preserveAspectRatio="none"
-        className="block overflow-visible"
-      >
-        <rect
-          x="0"
-          y={h * 0.18}
-          width="100"
-          height={h * 0.64}
-          rx="1.5"
-          className="fill-muted"
-        />
-        <rect
-          x={comparator === "lte" ? zero : 0}
-          y={h * 0.18}
-          width={Math.max(0, comparator === "lte" ? targetPct - zero : targetPct)}
-          height={h * 0.64}
-          rx="1.5"
-          className="fill-foreground/10"
-        />
-        {valuePct !== null && (
-          <rect
-            x={Math.min(zero, valuePct)}
-            y={h * 0.38}
-            width={Math.max(0.6, Math.abs(valuePct - zero))}
-            height={h * 0.24}
-            rx="1"
-            className={current ? "fill-foreground" : "fill-muted-foreground/70"}
-          />
-        )}
-        <line
-          x1={targetPct}
-          x2={targetPct}
-          y1="0"
-          y2={h}
-          vectorEffect="non-scaling-stroke"
-          strokeWidth="2.5"
-          className="stroke-foreground"
-        />
-      </svg>
+      <div role="img" aria-label={label} style={{ height: h }} className="w-full">
+        <ChartContainer config={{}} className="aspect-auto h-full w-full">
+          <BarChart
+            layout="vertical"
+            data={[{ k: "value", value }]}
+            margin={{ top: inset, right: 1, bottom: inset, left: 1 }}
+            barCategoryGap={0}
+          >
+            <XAxis
+              type="number"
+              dataKey="value"
+              domain={[min, max]}
+              allowDataOverflow
+              hide
+            />
+            <YAxis type="category" dataKey="k" hide />
+            <ReferenceArea
+              x1={min}
+              x2={max}
+              fill="hsl(var(--muted))"
+              fillOpacity={1}
+              ifOverflow="hidden"
+            />
+            <ReferenceArea
+              x1={comparator === "lte" ? Math.max(0, min) : min}
+              x2={target}
+              fill="hsl(var(--foreground))"
+              fillOpacity={0.1}
+              ifOverflow="hidden"
+            />
+            {value !== null && (
+              <Bar
+                dataKey="value"
+                barSize={Math.max(3, Math.round(h * 0.24))}
+                fill={current ? "hsl(var(--foreground))" : "hsl(var(--muted-foreground))"}
+                fillOpacity={current ? 1 : 0.7}
+                radius={1}
+                isAnimationActive={false}
+              />
+            )}
+            <ReferenceLine
+              x={target}
+              stroke="hsl(var(--foreground))"
+              strokeWidth={2.5}
+              ifOverflow="hidden"
+            />
+          </BarChart>
+        </ChartContainer>
+      </div>
       {!compact && (
         <div
           aria-hidden="true"
@@ -159,7 +183,34 @@ export function BulletGraph({
   );
 }
 
-/** 30-day trend: breaks at every non-ok bucket; dashed target; end dot. */
+interface SparkDotProps {
+  readonly cx?: number;
+  readonly cy?: number;
+  readonly index?: number;
+  readonly payload?: SparkDatum;
+}
+
+/** A hidden point is a keyed Fragment; isolated and newest points are Recharts Dots. */
+function sparkDot(props: SparkDotProps): JSX.Element {
+  const key = `spark-dot-${props.index ?? 0}`;
+  const d = props.payload;
+  if (!d || d.value === null || props.cx == null || props.cy == null)
+    return <Fragment key={key} />;
+  if (!(d.isolated || d.last)) return <Fragment key={key} />;
+  return (
+    <Dot
+      key={key}
+      cx={props.cx}
+      cy={props.cy}
+      r={3}
+      fill="hsl(var(--chart-1))"
+      stroke="hsl(var(--background))"
+      strokeWidth={1.5}
+    />
+  );
+}
+
+/** 30-day trend at a fixed size: breaks at every non-ok bucket; dashed target. */
 export function Sparkline({
   trend,
   target,
@@ -173,7 +224,7 @@ export function Sparkline({
   readonly width?: number;
   readonly height?: number;
 }) {
-  const s = sparkline(trend, target, width, height);
+  const s = sparkSeries(trend, target);
   const days = trend?.buckets.length || 30;
   const targetLabel =
     target !== null && comparator
@@ -182,76 +233,51 @@ export function Sparkline({
   const label = trend
     ? sparklineLabel(s, days, targetLabel, trend.unit)
     : "Trend unavailable: history could not be read.";
-  if (!s.last)
-    return (
-      <svg
-        role="img"
-        aria-label={label}
-        width={width}
-        height={height}
-        viewBox={`0 0 ${width} ${height}`}
-        className="block max-w-full"
-      >
-        <line
-          x1="0"
-          x2={width}
-          y1={height / 2}
-          y2={height / 2}
-          strokeDasharray="3 4"
-          strokeWidth="1"
-          className="stroke-border"
-        />
-      </svg>
-    );
+  const draw = s.okCount > 0 || target !== null;
   return (
-    <svg
+    <div
       role="img"
       aria-label={label}
-      width={width}
-      height={height}
-      viewBox={`0 0 ${width} ${height}`}
-      className="block max-w-full overflow-visible"
+      style={{ width, height }}
+      className="max-w-full"
     >
-      {s.targetY !== null && (
-        <line
-          x1="0"
-          x2={width}
-          y1={s.targetY}
-          y2={s.targetY}
-          strokeDasharray="2 3"
-          strokeWidth="1"
-          className="stroke-muted-foreground/70"
-        />
-      )}
-      {s.segments.map((seg) =>
-        seg.length === 1 ? (
-          <circle
-            key={seg[0]?.start}
-            cx={seg[0]?.x}
-            cy={seg[0]?.y}
-            r="1.6"
-            fill="hsl(var(--chart-1))"
+      {draw && (
+        <LineChart
+          width={width}
+          height={height}
+          data={s.data as SparkDatum[]}
+          margin={{ top: 4, right: 4, bottom: 4, left: 4 }}
+        >
+          <XAxis
+            dataKey="i"
+            type="number"
+            domain={[0, Math.max(s.data.length - 1, 1)]}
+            hide
           />
-        ) : (
-          <polyline
-            key={seg[0]?.start}
-            fill="none"
-            stroke="hsl(var(--chart-1))"
-            strokeWidth="1.8"
-            strokeLinejoin="round"
-            strokeLinecap="round"
-            points={seg.map((p) => `${p.x},${p.y}`).join(" ")}
-          />
-        )
+          <YAxis domain={[s.domain[0], s.domain[1]]} allowDataOverflow hide />
+          {target !== null && (
+            <ReferenceLine
+              y={target}
+              stroke="hsl(var(--muted-foreground))"
+              strokeOpacity={0.7}
+              strokeDasharray="2 3"
+              ifOverflow="hidden"
+            />
+          )}
+          {s.okCount > 0 && (
+            <Line
+              dataKey="value"
+              type="linear"
+              stroke="hsl(var(--chart-1))"
+              strokeWidth={2}
+              connectNulls={false}
+              isAnimationActive={false}
+              dot={sparkDot}
+              activeDot={false}
+            />
+          )}
+        </LineChart>
       )}
-      <circle
-        cx={s.last.x}
-        cy={s.last.y}
-        r="2.8"
-        fill="hsl(var(--chart-1))"
-        strokeWidth="1.5"
-        className="stroke-background"
-      />
-    </svg>
+    </div>
   );
 }
