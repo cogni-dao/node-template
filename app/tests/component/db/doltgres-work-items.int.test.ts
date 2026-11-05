@@ -111,6 +111,112 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 		if (container) await container.stop();
 	});
 
+
+	it("proves summary projection and native keyset traversal", async () => {
+		const reader = postgres(dbUrl, { max: 1, fetch_types: false });
+		const observations: { query: string; bytes: number; elapsedMs: number; keys: string[] }[] = [];
+		const originalUnsafe = reader.unsafe.bind(reader);
+		reader.unsafe = ((query: string) => {
+			const start = performance.now();
+			return originalUnsafe(query).then((rows) => {
+				observations.push({ query, bytes: Buffer.byteLength(JSON.stringify(rows)), elapsedMs: performance.now() - start, keys: Object.keys(rows[0] ?? {}) });
+				return rows;
+			});
+		}) as typeof reader.unsafe;
+		const adapter = new DoltgresWorkItemAdapter(sql, { readClient: reader, readConnectionBudget: 2, queryTimeoutMs: 5000, logger: stageLogger });
+		const large = "x".repeat(32000);
+		try {
+			// IDs oppose timestamp order, with ties and adjacent microseconds.
+			const fixtures = [
+				["task.910005", "123456", "needle"], ["task.910006", "123456", "needle"],
+				["task.910003", "123457", "needle"], ["task.910004", "123457", "needle"],
+				["task.910001", "123458", "needle"], ["task.910002", "123458", "needle"],
+			] as const;
+			for (const [id, micros, summary] of fixtures) {
+				await sql`INSERT INTO work_items (id,type,title,status,node,project_id,summary,outcome,external_refs,spec_refs,labels,created_at,updated_at)
+				VALUES (${id},'task','summary fixture','needs_design','summary-native','proj.native',${summary},${large},${sql.json([{ url: `https://example.org/${large}` }])},${sql.json([large])},${sql.json(["native-label"])},${`2026-10-26 00:00:00.${micros}+00`}::timestamptz,${`2026-10-26 00:00:00.${micros}+00`}::timestamptz)`;
+			}
+			await sql`INSERT INTO work_items (id,type,title,status,node,project_id,summary) VALUES ('task.910007','task','decoy','needs_implement','summary-native','proj.other','needle')`;
+			for (const sortBy of ["createdAt", "updatedAt"] as const) {
+				for (const sortDirection of ["asc", "desc"] as const) {
+					const expected = sortDirection === "asc" ? fixtures : [...fixtures.slice(4), ...fixtures.slice(2, 4), ...fixtures.slice(0, 2)];
+					const seen: string[] = [];
+					let cursor: string | undefined;
+					do {
+						const page = await adapter.listSummaries({ node: "summary-native", projectId: toWorkItemId("proj.native"), statuses: ["needs_design"], labels: ["native-label"], text: "needle", sortBy, sortDirection, limit: 1, ...(cursor ? { cursor } : {}) });
+						seen.push(...page.items.map((item) => item.id));
+						expect(seen.length).toBeLessThanOrEqual(fixtures.length);
+						cursor = page.nextCursor;
+					} while (cursor);
+					expect(seen).toEqual(expected.map(([id]) => id));
+				}
+			}
+			const start = observations.length;
+			const page = await adapter.listSummaries({ node: "summary-native", sortBy: "projectId", limit: 1 });
+			expect(page.nextCursor).toBeTruthy();
+			await adapter.listSummaries({ node: "summary-native", sortBy: "projectId", limit: 1, cursor: page.nextCursor });
+			const summaryQueries = observations.slice(start);
+			expect(summaryQueries.some((o) => /^SELECT project_id FROM work_items/.test(o.query))).toBe(true);
+			for (const o of summaryQueries) {
+				expect(o.keys).not.toContain("outcome");
+				expect(o.keys).not.toContain("external_refs");
+				expect(o.keys).not.toContain("spec_refs");
+			}
+			expect(page.items[0]).not.toHaveProperty("outcome");
+			expect(page.items[0]).not.toHaveProperty("externalRefs");
+			const full = await adapter.list({ node: "summary-native", projectId: toWorkItemId("proj.native"), limit: 1 });
+			expect(full.items[0]?.outcome).toBe(large);
+			expect(full.items[0]?.specRefs).toEqual([large]);
+			const query = summaryQueries.find((o) => o.query.includes("FROM (SELECT"))?.query;
+			if (!query) throw new Error("summary query missing");
+			const plan = await sql.unsafe(`EXPLAIN ${query}`);
+			console.info("work_summary_native_plan", JSON.stringify({ image: DOLTGRES_IMAGE, plan }));
+		} finally {
+			await reader.end({ timeout: 5 });
+			await sql.unsafe("DELETE FROM work_items WHERE node='summary-native'");
+		}
+	});
+
+	it("observes summary growth on an isolated bounded-body backlog", async () => {
+		const reader = postgres(dbUrl, { max: 1, fetch_types: false });
+		const observations: { bytes: number; elapsedMs: number }[] = [];
+		const originalUnsafe = reader.unsafe.bind(reader);
+		reader.unsafe = ((query: string) => {
+			const start = performance.now();
+			return originalUnsafe(query).then((rows) => {
+				observations.push({ bytes: Buffer.byteLength(JSON.stringify(rows)), elapsedMs: performance.now() - start });
+				return rows;
+			});
+		}) as typeof reader.unsafe;
+		const adapter = new DoltgresWorkItemAdapter(sql, { readClient: reader, readConnectionBudget: 2, queryTimeoutMs: 5000, logger: stageLogger });
+		let seeded = 0;
+		try {
+			for (const size of [500, 5000, 50000]) {
+				const seedStart = performance.now();
+				while (seeded < size) {
+					const count = Math.min(500, size - seeded);
+					const values = Array.from({ length: count }, (_, i) => `('task.${1000000 + seeded + i}','task','growth fixture','needs_design','summary-growth','small bounded outcome','2026-10-26 00:00:00.123456+00','2026-10-26 00:00:00.123456+00')`).join(",");
+					await sql.unsafe(`INSERT INTO work_items (id,type,title,status,node,outcome,created_at,updated_at) VALUES ${values}`);
+					seeded += count;
+				}
+				const seedElapsedMs = performance.now() - seedStart;
+				const before = observations.length;
+				const start = performance.now();
+				const page = await adapter.listSummaries({ node: "summary-growth", sortBy: "createdAt", limit: 10 });
+				const elapsedMs = performance.now() - start;
+				const reads = observations.slice(before);
+				console.info("work_summary_native_growth", JSON.stringify({ image: DOLTGRES_IMAGE, datasetN: size, seedElapsedMs, elapsedMs, queryCount: reads.length, nativeResultJsonBytes: reads.reduce((sum, read) => sum + read.bytes, 0), nativeQueries: reads, pageJsonBytes: Buffer.byteLength(JSON.stringify(page)) }));
+				expect(page.items).toHaveLength(10);
+				expect(page.pageInfo.hasMore).toBe(true);
+				expect(reads).toHaveLength(1);
+				expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(128 * 1024);
+			}
+		} finally {
+			await reader.end({ timeout: 5 });
+			await sql.unsafe("DELETE FROM work_items WHERE node='summary-growth'");
+		}
+	}, 180_000);
+
 	it("walks NOW-backed timestamp pages once in both directions", async () => {
 		// NOW() stores nanoseconds on this engine, while its text I/O exposes
 		// microseconds. Literal six-digit fixtures cannot catch that mismatch.
