@@ -68,6 +68,7 @@ export * from "./graphs.run.internal.v1.contract";
 export * from "./http/openapi.v1";
 export * from "./http/router.v1";
 export * from "./identity.attestation.v1.contract";
+export * from "./knowledge.browse.v1.contract";
 // ── Knowledge ───────────────────────────────────────────────────────────────
 export * from "./history.v1.contract";
 export * from "./knowledge.contributions.v1.contract";

@@ -18,6 +18,10 @@
  */
 
 import type { KnowledgeHistoryEntry } from "../domain/history.js";
+import type {
+  KnowledgeBrowsePage,
+  KnowledgeBrowseQuery,
+} from "../contracts.js";
 import type { ActiveGoal } from "../domain/dao-goals.js";
 import type { GoverningIndexRow } from "../domain/governing.js";
 import type { KnowledgeGraphNode } from "../domain/knowledge-graph.js";
@@ -278,6 +282,10 @@ export interface KnowledgeStorePort {
   ): Promise<T>;
 
   // --- Read ---
+  browseKnowledge(query: KnowledgeBrowseQuery): Promise<KnowledgeBrowsePage>;
+  overviewKnowledge(
+    query: Omit<KnowledgeBrowseQuery, "search">
+  ): Promise<KnowledgeBrowsePage>;
   getKnowledge(id: string): Promise<Knowledge | null>;
   /**
    * Rows on one shelf, newest first.

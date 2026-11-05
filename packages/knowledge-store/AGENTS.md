@@ -52,6 +52,7 @@ Shared ports, contribution workflow, and adapters for versioned domain knowledge
 
 **Pure subpath** (`@cogni/knowledge-store/contracts`):
 
+- Bounded `KnowledgeSummarySchema`, Browse/Overview query/page schemas and inferred types; `browseKnowledge` / `overviewKnowledge` port methods project metadata globally and bind continuations to query and operation. Search consumes twenty candidate bodies per explicit window.
 - Canonical `KnowledgeRowSchema` / `KnowledgeRow`, knowledge and EDO capability contracts, parameters and results. No adapters or capability implementations.
 - History wire schemas (story.0023): `HistoryEntrySchema`, `HistoryOutputSchema`, `HistoryOutput`, `knowledgeHistoryOperation`. Root also exports `readKnowledgeHistory(port, id)`: a framework-agnostic handler returning `{ status, body, log }` (200, 404, 503; never throws).
 
