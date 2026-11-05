@@ -24,6 +24,11 @@
       "types": "./dist/contracts.d.ts",
       "import": "./dist/contracts.js",
       "default": "./dist/contracts.js"
+    },
+    "./schema": {
+      "types": "./dist/schema.d.ts",
+      "import": "./dist/schema.js",
+      "default": "./dist/schema.js"
     }
   },
   "types": "./dist/index.d.ts",
@@ -40,10 +45,14 @@
     "zod": "^4.1.12"
   },
   "peerDependencies": {
-    "postgres": "^3.4.5"
+    "postgres": "^3.4.5",
+    "drizzle-orm": "^0.44.7"
   },
   "peerDependenciesMeta": {
     "postgres": {
+      "optional": true
+    },
+    "drizzle-orm": {
       "optional": true
     }
   },
@@ -52,6 +61,7 @@
     "tsup": "^8.5.1",
     "typescript": "^5",
     "vitest": "^4.0.9",
-    "@types/node": "^22"
+    "@types/node": "^22",
+    "drizzle-orm": "^0.44.7"
   }
 }

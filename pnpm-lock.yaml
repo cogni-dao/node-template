@@ -500,7 +500,7 @@ importers:
         version: 4.4.3
     devDependencies:
       '@cogni-dao/knowledge-store':
-        specifier: workspace:0.9.0
+        specifier: workspace:0.10.0
         version: link:../knowledge-store
       '@cogni-dao/metrics':
         specifier: workspace:*
@@ -681,6 +681,9 @@ importers:
 
   packages/db-schema:
     dependencies:
+      '@cogni-dao/metrics':
+        specifier: workspace:*
+        version: link:../metrics
       drizzle-orm:
         specifier: ^0.44.7
         version: 0.44.7(@opentelemetry/api@1.9.1)(@types/pg@8.15.5)(pg@8.23.1)(postgres@3.4.9)
@@ -939,6 +942,9 @@ importers:
       '@types/node':
         specifier: ^22
         version: 22.19.19
+      drizzle-orm:
+        specifier: ^0.44.7
+        version: 0.44.7(@opentelemetry/api@1.9.1)(@types/pg@8.15.5)(pg@8.23.1)(postgres@3.4.9)
       postgres:
         specifier: ^3.4.5
         version: 3.4.9
