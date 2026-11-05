@@ -96,4 +96,4 @@ pnpm --filter @cogni/db-schema build
 
 Work-item leases live in PostgreSQL `work_item_leases`; shared package `@cogni-dao/work-items/adapters/postgres` owns atomic principal/run/token predicates. Heartbeat and release return lease-only data and never call Dolt. Runtime uses the service-role pool; RLS denies app-role SQL. Content get/list project this authority via `withWorkItemLeases`. Old Dolt lease columns are historical evidence, never current authority.
 
-Metric observations and refresh cursors store operational evidence under service-role-only RLS. Definitions and target bindings stay in the Dolt knowledge schema.
+Metric observations and refresh cursors store operational evidence under service-role-only RLS. Their tables are defined in `@cogni-dao/metrics/schema` and only re-exported here. Definitions and target bindings stay in the Dolt knowledge schema.
