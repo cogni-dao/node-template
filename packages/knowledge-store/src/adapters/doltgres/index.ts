@@ -396,7 +396,9 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
       entryType: "entry_type",
       confidencePct: "COALESCE(confidence_pct, -1)",
       sourceType: "source_type",
-      createdAt: "created_at",
+      // NOW() retains hidden nanoseconds; native timestamp text exposes only
+      // microseconds. Order, seek and cursor must share that public precision.
+      createdAt: "date_trunc('microseconds', created_at)",
     } as const;
     const column = columns[query.sort];
     const conditions: string[] = [];
@@ -440,7 +442,7 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
         : "";
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
     const search = query.search?.toLowerCase();
-    const fields = `id, domain, entity_id, title, entry_type, confidence_pct, source_type, use_when, created_at, CAST(created_at AS TEXT) AS browse_created_at${search ? ", content" : ""}`;
+    const fields = `id, domain, entity_id, title, entry_type, confidence_pct, source_type, use_when, created_at, CAST(date_trunc('microseconds', created_at) AS TEXT) AS browse_created_at${search ? ", content" : ""}`;
     const rows = await this.sql.unsafe(
       `SELECT ${fields} FROM knowledge ${where} ORDER BY ${column} ${query.direction.toUpperCase()}${nullOrder}, id ASC LIMIT ${search ? 20 : 21}`
     );
@@ -487,7 +489,7 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
               toSummary(last),
               query.sort,
               // The driver Date loses sub-millisecond precision. Keysets must
-              // compare the exact native timestamp, not the display ISO value.
+              // compare the native microsecond key, not the display ISO value.
               query.sort === "createdAt"
                 ? String(last.browse_created_at ?? "")
                     .replace(" ", "T")

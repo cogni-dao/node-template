@@ -95,7 +95,7 @@ it("projects metadata in one global native query without fetching bodies", async
   expect((await store.browseKnowledge({})).items).toEqual([]);
   expect(queries).toHaveLength(1);
   expect(queries[0]).toMatch(
-    /^SELECT id, domain, entity_id, title, entry_type, confidence_pct, source_type, use_when, created_at, CAST\(created_at AS TEXT\) AS browse_created_at FROM knowledge /
+    /^SELECT id, domain, entity_id, title, entry_type, confidence_pct, source_type, use_when, created_at, CAST\(date_trunc\('microseconds', created_at\) AS TEXT\) AS browse_created_at FROM knowledge /
   );
   expect(queries[0]).not.toMatch(/\bcontent\b|SELECT \*/);
   expect(queries[0]).toMatch(/LIMIT 21$/);
@@ -279,15 +279,15 @@ it.each(["asc", "desc"] as const)(
         unsafe: async (query: string) => {
           queries.push(query);
           expect(query).toContain(
-            "CAST(created_at AS TEXT) AS browse_created_at"
+            "CAST(date_trunc('microseconds', created_at) AS TEXT) AS browse_created_at"
           );
           expect(query).toContain(
-            `ORDER BY created_at ${direction.toUpperCase()} NULLS ${direction === "asc" ? "FIRST" : "LAST"}, id ASC LIMIT 21`
+            `ORDER BY date_trunc('microseconds', created_at) ${direction.toUpperCase()} NULLS ${direction === "asc" ? "FIRST" : "LAST"}, id ASC LIMIT 21`
           );
           // Interpret the emitted seek predicate against exact microsecond keys.
           // This transport fixture tests cursor/control flow, not a SQL engine.
           const seek = query.match(
-            /WHERE \(created_at ([<>]) '([^']+)' OR \(created_at = '([^']+)' AND id > '([^']+)'\)/
+            /WHERE \(date_trunc\('microseconds', created_at\) ([<>]) '([^']+)' OR \(date_trunc\('microseconds', created_at\) = '([^']+)' AND id > '([^']+)'\)/
           );
           if (query.includes("WHERE")) expect(seek).not.toBeNull();
           const candidates = rows.filter((row) => {
@@ -382,11 +382,15 @@ it("native date keysets include the null tail in both directions without sentine
       cursor: required(first.nextCursor),
     });
   }
-  expect(queries[0]).toContain("created_at ASC NULLS FIRST, id ASC");
+  expect(queries[0]).toContain(
+    "date_trunc('microseconds', created_at) ASC NULLS FIRST, id ASC"
+  );
   expect(queries[1]).toContain(
     "created_at IS NOT NULL OR (created_at IS NULL AND id > 'null-19')"
   );
-  expect(queries[2]).toContain("created_at DESC NULLS LAST, id ASC");
+  expect(queries[2]).toContain(
+    "date_trunc('microseconds', created_at) DESC NULLS LAST, id ASC"
+  );
   expect(queries[3]).toContain("WHERE (created_at IS NULL AND id > 'null-19')");
   expect(queries.join(" ")).not.toContain("0001-01-01");
 });
