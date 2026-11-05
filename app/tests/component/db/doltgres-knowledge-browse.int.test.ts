@@ -255,6 +255,103 @@ describe("native Doltgres knowledge browsing", () => {
 		}
 	}, 600_000);
 
+	it("walks NOW-backed timestamp pages once in both directions", async () => {
+		// Fixed logical corpus revision, not snapshot isolation. No mutations occur
+		// between the completed seed/readback and the four traversals.
+		const revision = "knowledge-now-microseconds-v1";
+		const domain = "now-precision-proof";
+		const groups = [2, 1, 0].map((group) =>
+			Array.from(
+				{ length: 25 },
+				(_, n) => `now-${group}-${String(n).padStart(2, "0")}`,
+			),
+		);
+		await sql.unsafe(
+			`INSERT INTO domains (id,name) VALUES (${literal(domain)},'NOW precision')`,
+		);
+		try {
+			for (const ids of groups) {
+				// One statement gives 25 tied NOW values, crossing the page boundary.
+				// IDs oppose insertion time; both directions must retain id ASC ties.
+				await sql.unsafe(
+					`INSERT INTO knowledge (id,domain,title,content,entry_type,source_type,created_at) VALUES ${ids.map((id) => `(${literal(id)},${literal(domain)},'NOW fixture','body','guide','agent',NOW())`).join(",")}`,
+				);
+			}
+			const precision = await sql.unsafe(
+				`SELECT id, CAST(created_at AS TEXT) AS ts, created_at > CAST(CAST(created_at AS TEXT) AS TIMESTAMP WITH TIME ZONE) AS hidden_nanoseconds FROM knowledge WHERE domain = ${literal(domain)} ORDER BY created_at ASC, id ASC`,
+			);
+			expect(precision).toHaveLength(75);
+			expect(precision.some((row) => row.hidden_nanoseconds === true)).toBe(
+				true,
+			);
+			expect(new Set(precision.map((row) => String(row.ts))).size).toBe(3);
+			expect(precision.map((row) => row.id)).toEqual(groups.flat());
+			console.info(
+				"knowledge_native_now_revision",
+				JSON.stringify({
+					revision,
+					count: 75,
+					groups: 3,
+					rows: Array.from(precision),
+					snapshotIsolation: false,
+				}),
+			);
+			for (const mode of ["browse", "overview"] as const) {
+				for (const direction of ["asc", "desc"] as const) {
+					const expected = (
+						direction === "asc" ? groups : [...groups].reverse()
+					).flat();
+					const found: string[] = [];
+					let cursor: string | undefined;
+					let exhausted = false;
+					for (let page = 0; page < 6; page++) {
+						const input = {
+							domains: [domain],
+							sort: "createdAt" as const,
+							direction,
+							...(cursor ? { cursor } : {}),
+						};
+						const result =
+							mode === "browse"
+								? await store.browseKnowledge(input)
+								: await store.overviewKnowledge(input);
+						expect(result.items.length).toBeLessThanOrEqual(20);
+						for (const row of result.items) {
+							expect(
+								found,
+								`${mode} ${direction}: repeated boundary`,
+							).not.toContain(row.id);
+							found.push(row.id);
+						}
+						if (!result.nextCursor) {
+							exhausted = true;
+							break;
+						}
+						cursor = result.nextCursor;
+					}
+					expect(exhausted, `${mode} ${direction}`).toBe(true);
+					expect(found, `${mode} ${direction}`).toEqual(expected);
+					expect(new Set(found).size).toBe(75);
+					console.info(
+						"knowledge_native_now_walk",
+						JSON.stringify({
+							revision,
+							mode,
+							direction,
+							count: found.length,
+							exhausted,
+						}),
+					);
+				}
+			}
+		} finally {
+			await sql.unsafe(
+				`DELETE FROM knowledge WHERE domain = ${literal(domain)}`,
+			);
+			await sql.unsafe(`DELETE FROM domains WHERE id = ${literal(domain)}`);
+		}
+	}, 120_000);
+
 	it("traverses all IDs for each global sort and direction, including microsecond ties", async () => {
 		const rows = await sql.unsafe(
 			"SELECT id,domain,entry_type,source_type,confidence_pct,CAST(created_at AS TEXT) AS ts FROM knowledge",
@@ -307,10 +404,18 @@ describe("native Doltgres knowledge browsing", () => {
 			}
 		}
 		expect(
-			statements.some((query) => query.includes("created_at ASC NULLS FIRST")),
+			statements.some((query) =>
+				query.includes(
+					"date_trunc('microseconds', created_at) ASC NULLS FIRST",
+				),
+			),
 		).toBe(true);
 		expect(
-			statements.some((query) => query.includes("created_at DESC NULLS LAST")),
+			statements.some((query) =>
+				query.includes(
+					"date_trunc('microseconds', created_at) DESC NULLS LAST",
+				),
+			),
 		).toBe(true);
 	}, 120_000);
 
