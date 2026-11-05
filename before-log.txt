@@ -1,0 +1,16 @@
+200 /api/v1/metrics/goals
+200 /api/v1/metrics/goals
+board-dark-desktop: asOf 2026-11-05T10:49:48.724Z
+200 /api/v1/metrics/goals
+200 /api/v1/metrics/convergence-ratio-7d/history?from=2026-10-06T00%3A00%3A00.000Z&to=2026-11-05T00%3A00%3A00.000Z&step=1d
+200 /api/v1/metrics/goals
+detail-dark-desktop: asOf 2026-11-05T10:50:00.055Z
+200 /api/v1/metrics/goals
+200 /api/v1/metrics/convergence-ratio-7d/history?from=2026-10-06T00%3A00%3A00.000Z&to=2026-11-05T00%3A00%3A00.000Z&step=1d
+200 /api/v1/metrics/goals
+detail-light-desktop: asOf 2026-11-05T10:50:11.304Z
+200 /api/v1/metrics/goals
+200 /api/v1/metrics/convergence-ratio-7d/history?from=2026-10-06T00%3A00%3A00.000Z&to=2026-11-05T00%3A00%3A00.000Z&step=1d
+200 /api/v1/metrics/goals
+detail-light-mobile: asOf 2026-11-05T10:50:21.648Z
+candidate /version {"version":"unknown","buildSha":"046b548e2349e72404770657c7a4303caf2b7bf6"}
