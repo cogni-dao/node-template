@@ -64,6 +64,16 @@ export function createGoalMetrics(deps: {
 	log(event: object): void;
 }) {
 	const registry = new MetricRegistry();
+	const scope = {
+		node: deps.node,
+		environment: deps.environment,
+		dataScope: "node-members",
+	};
+	// One store: convergence edges read heads recorded by earlier readings in it.
+	const observations = new PostgresMetricObservations(
+		deps.observationsSql,
+		scope,
+	);
 	const budget = {
 		timeoutMs: 8000,
 		maxSourceCalls: 1,
@@ -98,11 +108,13 @@ export function createGoalMetrics(deps: {
 			convergenceParams.parse(params).output === "ratio" ? "ratio" : "items",
 		windowSeconds: (params) => convergenceParams.parse(params).days * 86400,
 		paramsSchema: convergenceParams,
-		// Counts (1) + reflog edges (2) + fallback first-parent walk (1, <= cap + 1 rows) + dolt_diff (1).
+		// Worst case: counts (1) + main head (1) + per edge reflog then recorded
+		// head (2 x 2, 1 row each) + first-parent walk (1, <= cap + 1 rows) +
+		// dolt_diff (1) = 8 calls; the most rows any one path reads is cap + 5.
 		budget: {
 			timeoutMs: 8000,
-			maxSourceCalls: 5,
-			maxRows: FIRST_PARENT_WALK_CAP + 3,
+			maxSourceCalls: 8,
+			maxRows: FIRST_PARENT_WALK_CAP + 5,
 			maxResponseBytes: 1048576,
 		},
 		compute: async (params, ctx) =>
@@ -111,6 +123,13 @@ export function createGoalMetrics(deps: {
 				convergenceParams.parse(params).output,
 				ctx.window,
 				(source) => ctx.read((signal) => source(signal)),
+				(at, maxGapSeconds, signal) =>
+					observations.recordedMainHead(
+						"work.convergence@1",
+						at,
+						maxGapSeconds,
+						signal,
+					),
 			),
 	});
 	const githubParams = z.strictObject({
@@ -185,16 +204,8 @@ export function createGoalMetrics(deps: {
 	return createMetricService({
 		definitions,
 		registry,
-		observations: new PostgresMetricObservations(deps.observationsSql, {
-			node: deps.node,
-			environment: deps.environment,
-			dataScope: "node-members",
-		}),
-		scope: {
-			node: deps.node,
-			environment: deps.environment,
-			dataScope: "node-members",
-		},
+		observations,
+		scope,
 		now: () => new Date(),
 		// These sources contain node-member metadata or public provider data only.
 		// Private connection calculators must supply a current grant check here before registering.

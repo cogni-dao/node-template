@@ -161,16 +161,54 @@ type Read = <T>(source: (signal: AbortSignal) => Promise<T>) => Promise<T>;
 /** Bounded first-parent walk; a window older than this many main commits is unbounded. */
 export const FIRST_PARENT_WALK_CAP = 5000;
 
+/** A recorded head stands in for main at T only when it was read in [T - this, T]. */
+export const RECORDED_HEAD_MAX_GAP_SECONDS = 2 * 3600;
+
+/** Evidence prefix for main's head as read by a convergence compute: `dolt:head:<hash>@<iso>`. */
+export const MAIN_HEAD_EVIDENCE_PREFIX = "dolt:head:";
+
 /**
- * Edge commit c(T) = what main pointed to at T. Preferred source: main's reflog
- * (dolt_reflog('main')), which records every move of the main ref with its own
- * timestamp: O(1) per edge and immune to backdated branch commits. When the
- * reflog does not reach back to T (fresh server, GC), fall back to the bounded
- * first-parent walk below. Fallback: the first commit on main's FIRST-PARENT chain (walking back
- * from dolt_hashof('main')) with date <= T. dolt_log('main') is not used: it
- * includes commits merged in from contribution branches with their authoring
- * dates, so a stale branch commit could become an edge (task.0024 probe
- * dolt-first-parent-probe.json). Validated work is the net row diff
+ * Most recent main head recorded by an earlier stored convergence reading at a
+ * time in [at - maxGapSeconds, at]; null when none. Nodes back it with their
+ * observation store (`PostgresMetricObservations.recordedMainHead`).
+ */
+export type RecordedMainHeads = (
+	at: string,
+	maxGapSeconds: number,
+	signal: AbortSignal,
+) => Promise<{ hash: string; at: string } | null>;
+
+type Edge = { hash: string; at: string | null; via: string };
+
+/** Timeouts and budget exhaustion keep their own failure; every other read error is a miss. */
+function rethrowBudget(error: unknown) {
+	if (
+		error instanceof Error &&
+		(error.name === "AbortError" ||
+			error.name === "MetricError" ||
+			error.name === "TimeoutError")
+	)
+		throw error;
+}
+
+/**
+ * Edge commit c(T) = what main pointed to at T. Each edge tries three sources
+ * in order, and the first that covers T wins:
+ * 1. main's reflog (dolt_reflog('main')): every move of the main ref with its
+ *    own timestamp. Exact and immune to backdated branch commits, but it does
+ *    not reach back past a server restart or GC.
+ * 2. Recorded heads: every convergence reading stores main's head at its own
+ *    compute time as `dolt:head:<hash>@<iso>` evidence. The most recent stored
+ *    ok reading recorded in [T - RECORDED_HEAD_MAX_GAP_SECONDS, T] supplies
+ *    c(T). Durable across restarts; absent when `heads` is not injected.
+ * 3. The bounded first-parent walk from dolt_hashof('main'): the first commit
+ *    on main's FIRST-PARENT chain with date <= T, at most FIRST_PARENT_WALK_CAP
+ *    commits deep. dolt_log('main') is not used: it includes commits merged in
+ *    from contribution branches with their authoring dates, so a stale branch
+ *    commit could become an edge (task.0024 probe dolt-first-parent-probe.json).
+ * When no source covers the start, the walk decides: insufficient_history when
+ * it reached main's root (young history), history_unavailable walk_cap when it
+ * hit the cap. Never a guess. Validated work is the net row diff
  * dolt_diff(c(start), c(end), 'work_items') whose to_ side is done +
  * deploy_verified and whose from_ side is not (added rows included).
  * dolt_diff_summary.data_change is not trusted (work-items adapter, bug.5358).
@@ -179,6 +217,7 @@ export async function readWorkValidatedHistory(
 	sql: Sql,
 	window: { start: string; end: string },
 	read: Read,
+	heads?: RecordedMainHeads,
 ): Promise<
 	| {
 			ok: true;
@@ -186,7 +225,7 @@ export async function readWorkValidatedHistory(
 			from: string;
 			to: string;
 			toAt: string | null;
-			/** "reflog" or "first-parent:<depth>". */
+			/** "reflog", "recorded-head" or "first-parent:<depth>"; "<start>+<end>" when the edges differ. */
 			via: string;
 	  }
 	| {
@@ -197,8 +236,38 @@ export async function readWorkValidatedHistory(
 	  }
 > {
 	try {
-		const reflog = await mainFromReflog(sql, window, read);
-		if (reflog) return await diffValidated(sql, reflog, read);
+		const recorded = async (iso: string): Promise<Edge | null> => {
+			if (!heads) return null;
+			try {
+				const head = await read((signal) =>
+					heads(iso, RECORDED_HEAD_MAX_GAP_SECONDS, signal),
+				);
+				// Re-check the gap here so an injected store cannot widen it.
+				const t = Date.parse(head?.at ?? "");
+				const x = Date.parse(iso);
+				return head &&
+					COMMIT.test(head.hash) &&
+					t <= x &&
+					t >= x - RECORDED_HEAD_MAX_GAP_SECONDS * 1000
+					? {
+							hash: head.hash,
+							at: new Date(t).toISOString(),
+							via: "recorded-head",
+						}
+					: null;
+			} catch (error) {
+				rethrowBudget(error);
+				return null;
+			}
+		};
+		const edgeAt = async (iso: string) =>
+			(await mainFromReflog(sql, iso, read)) ?? (await recorded(iso));
+		// The walk also covers the end, so an uncovered start skips the end lookups.
+		const from = await edgeAt(window.start);
+		const to = from ? await edgeAt(window.end) : null;
+		if (from && to) return await diffValidated(sql, edges(from, to), read);
+		// Walk back only as far as the earliest edge still missing.
+		const target = from ? window.end : window.start;
 		const walk = await read((signal) =>
 			run(
 				sql,
@@ -208,7 +277,7 @@ export async function readWorkValidatedHistory(
 				SELECT p.commit_hash, chain.depth + 1, p.date FROM chain
 				JOIN dolt.commit_ancestors a ON a.commit_hash = chain.commit_hash AND a.parent_index = 0
 				JOIN dolt.commits p ON p.commit_hash = a.parent_hash
-				WHERE chain.depth < ${FIRST_PARENT_WALK_CAP} AND chain.date > '${doltUtc(window.start)}'
+				WHERE chain.depth < ${FIRST_PARENT_WALK_CAP} AND chain.date > '${doltUtc(target)}'
 			) SELECT commit_hash, depth, CAST(date AS TEXT) AS date FROM chain ORDER BY depth`,
 				signal,
 			),
@@ -225,10 +294,18 @@ export async function readWorkValidatedHistory(
 				reason: "history_unavailable",
 				step: "walk_bad_date",
 			};
-		const edge = (iso: string) =>
-			chain.find((c) => c.at <= Date.parse(iso)) ?? null;
-		const fromEdge = edge(window.start);
-		const toEdge = edge(window.end);
+		const walked = (iso: string): Edge | null => {
+			const c = chain.find((c) => c.at <= Date.parse(iso));
+			return c
+				? {
+						hash: c.hash,
+						at: new Date(c.at).toISOString(),
+						via: `first-parent:${chain.length - 1}`,
+					}
+				: null;
+		};
+		const fromEdge = from ?? walked(window.start);
+		const toEdge = walked(window.end);
 		if (!fromEdge) {
 			// The walk stopped at the cap: unbounded, not young.
 			if (chain.length > FIRST_PARENT_WALK_CAP)
@@ -242,26 +319,11 @@ export async function readWorkValidatedHistory(
 		}
 		if (!toEdge)
 			return { ok: false, reason: "insufficient_history", step: "no_end_edge" };
-		return await diffValidated(
-			sql,
-			{
-				from: fromEdge.hash,
-				to: toEdge.hash,
-				toAt: new Date(toEdge.at).toISOString(),
-				via: `first-parent:${chain.length - 1}`,
-			},
-			read,
-		);
+		return await diffValidated(sql, edges(fromEdge, toEdge), read);
 	} catch (error) {
 		// Timeouts and budget exhaustion keep their own failure; other history
 		// read failures are an unknown sample, never zero.
-		if (
-			error instanceof Error &&
-			(error.name === "AbortError" ||
-				error.name === "MetricError" ||
-				error.name === "TimeoutError")
-		)
-			throw error;
+		rethrowBudget(error);
 		// Publish only the SQLSTATE / error class, never the message (may echo SQL).
 		const code =
 			error && typeof error === "object" && "code" in error
@@ -284,40 +346,62 @@ export async function readWorkValidatedHistory(
 
 type Edges = { from: string; to: string; toAt: string | null; via: string };
 
-/** main at T from the reflog; null when the reflog is unsupported or does not reach back to the window start. */
+function edges(from: Edge, to: Edge): Edges {
+	return {
+		from: from.hash,
+		to: to.hash,
+		toAt: to.at,
+		via: from.via === to.via ? from.via : `${from.via}+${to.via}`,
+	};
+}
+
+/** main at T from the reflog; null when the reflog is unsupported or does not reach back to T. */
 async function mainFromReflog(
 	sql: Sql,
-	window: { start: string; end: string },
+	iso: string,
 	read: Read,
-): Promise<Edges | null> {
-	const at = async (iso: string) => {
-		try {
-			const rows = await read((signal) =>
-				run(
-					sql,
-					`SELECT commit_hash, CAST(ref_timestamp AS TEXT) AS at FROM dolt_reflog('main') WHERE ref_timestamp <= '${doltUtc(iso)}' ORDER BY ref_timestamp DESC LIMIT 1`,
-					signal,
-				),
-			);
-			const row = rows[0];
-			const hash = String(row?.commit_hash ?? "");
-			return COMMIT.test(hash) ? { hash, at: doltInstant(row?.at) } : null;
-		} catch (error) {
-			if (
-				error instanceof Error &&
-				(error.name === "AbortError" ||
-					error.name === "MetricError" ||
-					error.name === "TimeoutError")
-			)
-				throw error;
-			return null;
-		}
-	};
-	const from = await at(window.start);
-	if (!from) return null;
-	const to = await at(window.end);
-	if (!to) return null;
-	return { from: from.hash, to: to.hash, toAt: to.at, via: "reflog" };
+): Promise<Edge | null> {
+	try {
+		const rows = await read((signal) =>
+			run(
+				sql,
+				`SELECT commit_hash, CAST(ref_timestamp AS TEXT) AS at FROM dolt_reflog('main') WHERE ref_timestamp <= '${doltUtc(iso)}' ORDER BY ref_timestamp DESC LIMIT 1`,
+				signal,
+			),
+		);
+		const row = rows[0];
+		const hash = String(row?.commit_hash ?? "");
+		return COMMIT.test(hash)
+			? { hash, at: doltInstant(row?.at), via: "reflog" }
+			: null;
+	} catch (error) {
+		rethrowBudget(error);
+		return null;
+	}
+}
+
+/** main's head now, with the server's own clock; null when unreadable. */
+async function readMainHead(
+	sql: Sql,
+	read: Read,
+): Promise<{ hash: string; at: string } | null> {
+	try {
+		const rows = await read((signal) =>
+			run(
+				sql,
+				`SELECT dolt_hashof('main') AS head, to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS head_at`,
+				signal,
+			),
+		);
+		const hash = String(rows[0]?.head ?? "");
+		const ms = Date.parse(String(rows[0]?.head_at ?? ""));
+		return COMMIT.test(hash) && Number.isFinite(ms)
+			? { hash, at: new Date(ms).toISOString() }
+			: null;
+	} catch (error) {
+		rethrowBudget(error);
+		return null;
+	}
 }
 
 /** Net work items that became done + deploy_verified between two main commits. */
@@ -361,12 +445,17 @@ async function diffValidated(
 	return { ok: true, validated, ...edges };
 }
 
-/** Seven-day convergence: validated units / created units in [start, end). */
+/**
+ * Seven-day convergence: validated units / created units in [start, end).
+ * Every output, created included, records main's head at compute time as
+ * `dolt:head:<hash>@<iso>` so later readings can take window edges from it.
+ */
 export async function readWorkConvergence(
 	sql: Sql,
 	output: ConvergenceOutput,
 	window: { start: string; end: string },
 	read: Read,
+	heads?: RecordedMainHeads,
 ): Promise<MetricSample> {
 	const start = new Date(Date.parse(window.start)).toISOString();
 	const end = new Date(Date.parse(window.end)).toISOString();
@@ -413,8 +502,16 @@ export async function readWorkConvergence(
 	evidenceRefs.push(
 		`counts:created_work=${createdWork};created_contributions=${createdContributions};merged_contributions=${mergedContributions}`,
 	);
+	const head = await readMainHead(sql, read);
+	if (head)
+		evidenceRefs.push(`${MAIN_HEAD_EVIDENCE_PREFIX}${head.hash}@${head.at}`);
 	if (output === "created") return sample(created, true);
-	const history = await readWorkValidatedHistory(sql, { start, end }, read);
+	const history = await readWorkValidatedHistory(
+		sql,
+		{ start, end },
+		read,
+		heads,
+	);
 	if (!history.ok) {
 		evidenceRefs.push(`dolt:history:${history.step}`);
 		return sample(0, false, history.reason);
