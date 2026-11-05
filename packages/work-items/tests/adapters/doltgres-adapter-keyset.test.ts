@@ -221,3 +221,18 @@ it("keeps full list fields and resolves long project cursors with a narrow looku
   expect(full.items[0]?.outcome).toBe("full detail");
   expect(queries.some((query) => query.includes("SELECT work_items.*"))).toBe(true);
 });
+
+
+it("serializes native summary dates without changing timestamp strings or cursor precision", async () => {
+  const sql = makeFakeDoltgresSql((query) => query.includes("FROM (SELECT") ? [
+    { id: "task.1", title: "one", type: "task", status: "needs_implement", labels: [], created_at: new Date("2026-11-05T20:00:00.123Z"), updated_at: "2026-11-06T02:03:04.123456Z", __sort_key: "2026-11-05 20:00:00.123456" },
+    { id: "task.2", title: "two", type: "task", status: "needs_implement", labels: [], created_at: "2026-11-06T02:03:04.123456Z", updated_at: new Date("2026-11-07T03:04:05.678Z"), __sort_key: "2026-11-06 02:03:04.123456" }
+  ] : [], []);
+  const adapter = new DoltgresWorkItemAdapter(independentReadPool(sql), { readClient: sql });
+  const page = await adapter.listSummaries({ sortBy: "createdAt", limit: 2 });
+  expect(page.items.map(({ createdAt, updatedAt }) => [createdAt, updatedAt])).toEqual([
+    ["2026-11-05T20:00:00.123Z", "2026-11-06T02:03:04.123456Z"],
+    ["2026-11-06T02:03:04.123456Z", "2026-11-07T03:04:05.678Z"]
+  ]);
+  expect(page.items[0]?.createdAt.slice(0, 10)).toBe("2026-11-05");
+});

@@ -2908,7 +2908,7 @@ export class DoltgresWorkItemAdapter
       ...(optionalNumber(row.estimate) !== undefined && { estimate: optionalNumber(row.estimate) }),
       ...(optionalScores(row.scores) !== undefined && { scores: optionalScores(row.scores) }),
       ...(optionalString(row.project_id) !== undefined && { projectId: optionalString(row.project_id) }),
-      labels: [...jsonArrayOf<string>(row.labels)], createdAt: String(row.created_at ?? ""), updatedAt: String(row.updated_at ?? "")
+      labels: [...jsonArrayOf<string>(row.labels)], createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at ?? ""), updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at ?? "")
     })) : pageRows.map(rowToWorkItem);
     const last = pageRows[pageRows.length - 1];
     const lastCursor = last ? nativeCursor(last) : undefined;
