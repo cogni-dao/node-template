@@ -5,6 +5,10 @@
 import { execSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+	buildDoltgresClient,
+	DoltgresKnowledgeStoreAdapter,
+} from "@cogni/knowledge-store/adapters/doltgres";
 import postgres, { type Sql } from "postgres";
 import {
 	GenericContainer,
@@ -12,10 +16,6 @@ import {
 	Wait,
 } from "testcontainers";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import {
-	buildDoltgresClient,
-	DoltgresKnowledgeStoreAdapter,
-} from "../../../../packages/knowledge-store/src/adapters/doltgres/index.js";
 
 const root = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -121,6 +121,103 @@ describe("native Doltgres knowledge browsing", () => {
 			expect(query).toMatch(/LIMIT 21$/);
 		}
 	});
+
+	it("observes bounded projected first windows as the native corpus grows", async () => {
+		const domain = "growth-proof";
+		await sql.unsafe("INSERT INTO domains (id,name) VALUES ($1,$2)", [
+			domain,
+			"Growth proof",
+		]);
+		let seeded = 0;
+		let seedElapsedMs = 0;
+		try {
+			for (const count of [500, 5_000, 50_000]) {
+				const seedStart = performance.now();
+				for (let start = seeded; start < count; start += 100) {
+					const size = Math.min(100, count - start);
+					const params: string[] = [];
+					const tuples = Array.from({ length: size }, (_, offset) => {
+						const values = [
+							`growth-${String(start + offset).padStart(6, "0")}`,
+							domain,
+							"Growth",
+							"small body",
+							"guide",
+							"agent",
+						];
+						params.push(...values);
+						return `(${values.map((_, i) => `$${offset * values.length + i + 1}`).join(",")})`;
+					});
+					await sql.unsafe(
+						`INSERT INTO knowledge (id,domain,title,content,entry_type,source_type) VALUES ${tuples.join(",")}`,
+						params,
+					);
+				}
+				seedElapsedMs += performance.now() - seedStart;
+				seeded = count;
+				const actual = await sql.unsafe(
+					"SELECT COUNT(*) AS count FROM knowledge WHERE domain = $1",
+					[domain],
+				);
+				expect(Number(actual[0]?.count)).toBe(count);
+				for (const mode of ["browse", "overview"] as const) {
+					statements.length = 0;
+					const start = performance.now();
+					const input = {
+						domains: [domain],
+						sort: "id" as const,
+						direction: "asc" as const,
+					};
+					const page =
+						mode === "browse"
+							? await store.browseKnowledge(input)
+							: await store.overviewKnowledge(input);
+					const queryElapsedMs = performance.now() - start;
+					expect(statements).toHaveLength(1);
+					const query = statements[0];
+					if (!query) throw new Error("projected query missing");
+					expect(query).toMatch(/^SELECT id, domain,/);
+					expect(query).not.toMatch(/\bcontent\b|SELECT \*/i);
+					expect(query).toMatch(/LIMIT 21$/);
+					expect(page.items).toHaveLength(20);
+					expect(page.scannedRows).toBe(20);
+					expect(page.nextCursor).toBeTruthy();
+					for (const row of page.items) {
+						expect(row).not.toHaveProperty("content");
+						expect(Buffer.byteLength(JSON.stringify(row))).toBeLessThan(2048);
+					}
+					const resultJSONbytes = Buffer.byteLength(JSON.stringify(page));
+					expect(resultJSONbytes).toBeLessThan(32_768);
+					let explain: unknown;
+					try {
+						const plan = await sql.unsafe(`EXPLAIN ${query}`);
+						explain = plan.length
+							? { status: "available", plan: Array.from(plan) }
+							: { status: "unknown", reason: "empty EXPLAIN result" };
+					} catch (error) {
+						explain = { status: "unknown", reason: String(error) };
+					}
+					console.info(
+						"knowledge_native_growth",
+						JSON.stringify({
+							count,
+							mode,
+							seedElapsedMs,
+							queryElapsedMs,
+							queryCount: 1,
+							outputCount: page.items.length,
+							scannedRows: page.scannedRows,
+							resultJSONbytes,
+							explain,
+						}),
+					);
+				}
+			}
+		} finally {
+			await sql.unsafe("DELETE FROM knowledge WHERE domain = $1", [domain]);
+			await sql.unsafe("DELETE FROM domains WHERE id = $1", [domain]);
+		}
+	}, 600_000);
 
 	it("traverses all IDs for each global sort and direction, including microsecond ties", async () => {
 		const rows = await sql.unsafe(
