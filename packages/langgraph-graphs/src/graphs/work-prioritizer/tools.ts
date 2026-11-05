@@ -13,8 +13,16 @@ import {
 } from "@cogni/ai-tools";
 
 export { WORK_ITEM_READ_NAME };
+/** Measured goal reads (ai-tools createMetricTools); core__metric_compute writes, so it is not here. */
+export const METRIC_READ_TOOL_IDS = [
+  "core__goal_progress",
+  "core__metric_list",
+  "core__metric_read",
+  "core__metric_history",
+] as const;
 export const COGNI_READ_TOOL_IDS = [
   GOAL_LIST_NAME,
+  ...METRIC_READ_TOOL_IDS,
   WORK_ITEM_QUERY_NAME,
   WORK_ITEM_READ_NAME,
   KNOWLEDGE_SEARCH_NAME,

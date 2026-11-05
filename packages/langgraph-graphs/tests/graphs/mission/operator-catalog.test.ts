@@ -106,6 +106,11 @@ describe("operator catalog entries", () => {
     );
     // Zero-write guarantee unchanged: the READ allowlist never binds the EDO decide tool.
     expect(entry?.toolIds).not.toContain(EDO_DECIDE_NAME);
+    // Chat reads measured goal progress, but never records an observation.
+    expect(entry?.toolIds).toEqual(
+      expect.arrayContaining(["core__goal_progress", "core__metric_history"]),
+    );
+    expect(entry?.toolIds).not.toContain("core__metric_compute");
     // Operator still inherits the same entry through the `...NODE_LANGGRAPH_CATALOG` spread.
     expect(OPERATOR_LANGGRAPH_CATALOG["cogni-chat"]).toBe(entry);
     expect(OPERATOR_LANGGRAPH_GRAPH_IDS["cogni-chat"]).toBe(
