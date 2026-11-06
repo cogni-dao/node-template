@@ -3,8 +3,8 @@
 
 /**
  * Module: `@tests/unit/components/auth/sign-in-dialog`
- * Purpose: Unit tests for SignInDialog provider rendering (bug.5074).
- * Scope: Asserts the dialog renders what /api/auth/providers advertises. Does not exercise the OAuth round trip.
+ * Purpose: Unit tests for SignInDialog provider rendering and sign-in starts.
+ * Scope: Asserts provider discovery and start feedback; does not exercise the OAuth round trip.
  * Invariants: no hardcoded provider allowlist — a configured provider always gets a button, an unconfigured one never does.
  * Side-effects: none (fetch + next-auth mocked)
  * Links: src/components/kit/auth/SignInDialog.tsx
@@ -15,7 +15,14 @@
 
 import "@testing-library/jest-dom/vitest";
 
-import { render, screen } from "@testing-library/react";
+import * as identityClient from "@cogni/identity-client";
+import {
+	act,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const signIn = vi.fn();
@@ -102,6 +109,7 @@ describe("SignInDialog — operator-attested GitHub takes the broker round trip 
 		// Clicking it with signIn() posts an empty credential straight to the callback and
 		// bounces with ?error=CredentialsSignin. Found by clicking the deployed button.
 		const assign = vi.fn();
+		const reader = vi.spyOn(identityClient, "requestAuthorizeUrl");
 		vi.stubGlobal("location", { assign });
 		vi.stubGlobal(
 			"fetch",
@@ -137,7 +145,166 @@ describe("SignInDialog — operator-attested GitHub takes the broker round trip 
 		btn.click();
 		await new Promise((r) => setTimeout(r, 0));
 
+		expect(reader).toHaveBeenCalledTimes(1);
 		expect(signIn).not.toHaveBeenCalled();
 		expect(assign).toHaveBeenCalledWith("https://op.test/identity/attest?x=1");
+	});
+});
+
+describe("SignInDialog — start failures", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+		signIn.mockReset();
+	});
+	async function brokerButton() {
+		mockProviders(["operator-github", "discord"]);
+		renderDialog();
+		return screen.findByRole("button", { name: "Continue with GitHub" });
+	}
+	it.each([
+		"HTTP",
+		"network",
+		"invalid response",
+	])("shows a generic alert on %s failure and allows retry", async (failure) => {
+		const button = await brokerButton();
+		const assign = vi.fn();
+		vi.stubGlobal("location", { assign });
+		const fetchStart = vi.fn();
+		if (failure === "HTTP")
+			fetchStart.mockResolvedValueOnce({
+				ok: false,
+				json: async () => ({ error: "secret internal detail" }),
+			});
+		else if (failure === "network")
+			fetchStart.mockRejectedValueOnce(new Error("secret internal detail"));
+		else
+			fetchStart.mockResolvedValueOnce({
+				ok: true,
+				json: async () => ({ error: "secret internal detail" }),
+			});
+		let finish!: (value: unknown) => void;
+		fetchStart.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					finish = resolve;
+				}),
+		);
+		vi.stubGlobal("fetch", fetchStart);
+		fireEvent.click(button);
+		const alert = await screen.findByRole("alert");
+		expect(alert).toHaveTextContent(/sign in/i);
+		expect(alert).not.toHaveTextContent(/secret|internal/i);
+		expect(button).toBeEnabled();
+		fireEvent.click(button);
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /signing in/i })).toBeDisabled();
+		expect(
+			screen.getByRole("button", { name: "Continue with Discord" }),
+		).toBeDisabled();
+		expect(
+			screen.getByRole("button", { name: "Ethereum Wallet" }),
+		).toBeEnabled();
+		fireEvent.click(button);
+		expect(fetchStart).toHaveBeenCalledTimes(2);
+		finish({
+			ok: true,
+			json: async () => ({ authorizeUrl: "https://op.test/identity/attest" }),
+		});
+		await waitFor(() =>
+			expect(assign).toHaveBeenCalledWith("https://op.test/identity/attest"),
+		);
+	});
+	it.each([
+		"/identity/attest",
+		"https://",
+		"javascript:alert(1)",
+		"data:text/html,hello",
+	])("rejects invalid redirect %s and permits retry", async (authorizeUrl) => {
+		const button = await brokerButton();
+		const assign = vi.fn();
+		vi.stubGlobal("location", { assign });
+		vi.stubGlobal(
+			"fetch",
+			vi
+				.fn()
+				.mockResolvedValueOnce({
+					ok: true,
+					json: async () => ({ authorizeUrl }),
+				})
+				.mockResolvedValueOnce({
+					ok: true,
+					json: async () => ({
+						authorizeUrl: "https://op.test/identity/attest",
+					}),
+				}),
+		);
+		fireEvent.click(button);
+		expect(await screen.findByRole("alert")).toHaveTextContent(/sign in/i);
+		expect(assign).not.toHaveBeenCalled();
+		expect(button).toBeEnabled();
+		fireEvent.click(button);
+		await waitFor(() =>
+			expect(assign).toHaveBeenCalledWith("https://op.test/identity/attest"),
+		);
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+	});
+	it("announces ordinary provider promise rejection without exposing its message", async () => {
+		mockProviders(["discord"]);
+		signIn.mockRejectedValueOnce(new Error("secret internal detail"));
+		renderDialog();
+		fireEvent.click(
+			await screen.findByRole("button", { name: "Continue with Discord" }),
+		);
+		const alert = await screen.findByRole("alert");
+		expect(alert).toHaveTextContent(/sign in/i);
+		expect(alert).not.toHaveTextContent(/secret|internal/i);
+		expect(
+			screen.getByRole("button", { name: "Continue with Discord" }),
+		).toBeEnabled();
+	});
+});
+
+describe("SignInDialog — request and wallet ownership", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+		signIn.mockReset();
+	});
+	it("starts only once for two immediate clicks and navigates to the original URL", async () => {
+		mockProviders(["operator-github"]);
+		renderDialog();
+		const button = await screen.findByRole("button", {
+			name: "Continue with GitHub",
+		});
+		let finish!: (value: unknown) => void;
+		const transport = vi.fn(
+			() =>
+				new Promise((resolve) => {
+					finish = resolve;
+				}),
+		);
+		const assign = vi.fn();
+		vi.stubGlobal("fetch", transport);
+		vi.stubGlobal("location", { assign });
+		act(() => {
+			button.click();
+			button.click();
+		});
+		expect(transport).toHaveBeenCalledTimes(1);
+		expect(transport).toHaveBeenCalledWith(
+			"/api/v1/identity/bindings/import/start",
+			{ method: "POST", headers: { "content-type": "application/json" } },
+		);
+		const original = "  https://op.test/identity/attest?a=b  ";
+		finish({ ok: true, json: async () => ({ authorizeUrl: original }) });
+		await waitFor(() => expect(assign).toHaveBeenCalledWith(original));
+	});
+	it("keeps the wallet action local", async () => {
+		mockProviders([]);
+		const close = vi.fn();
+		const wallet = vi.fn();
+		render(<SignInDialog open onOpenChange={close} onWalletConnect={wallet} />);
+		fireEvent.click(screen.getByRole("button", { name: "Ethereum Wallet" }));
+		expect(close).toHaveBeenCalledWith(false);
+		expect(wallet).toHaveBeenCalledOnce();
 	});
 });

@@ -102,6 +102,9 @@ importers:
       '@cogni/graph-execution-host':
         specifier: workspace:@cogni-dao/graph-execution@*
         version: link:../packages/graph-execution-host
+      '@cogni/identity-client':
+        specifier: workspace:@cogni-dao/identity-client@*
+        version: link:../packages/identity-client
       '@cogni/ids':
         specifier: workspace:*
         version: link:../packages/ids

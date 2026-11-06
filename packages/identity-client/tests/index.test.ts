@@ -27,6 +27,7 @@ async function expectSafeFailure(
     throw new Error("expected failure");
   } catch (error) {
     expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe("Unable to start sign-in.");
     expect(String(error)).not.toContain(secret);
     expect(String(error)).not.toContain("expected failure");
     expect(error).not.toHaveProperty("cause");
@@ -71,6 +72,9 @@ describe("requestAuthorizeUrl", () => {
     const json = vi.fn().mockRejectedValue(new Error(secret));
     await expectSafeFailure(async () => ({ ok: true, json }));
     expect(json).toHaveBeenCalledTimes(1);
+    const syncJson = vi.fn((): Promise<unknown> => { throw new Error(secret); });
+    await expectSafeFailure(async () => ({ ok: true, json: syncJson }));
+    expect(syncJson).toHaveBeenCalledTimes(1);
   });
 
   it.each([
