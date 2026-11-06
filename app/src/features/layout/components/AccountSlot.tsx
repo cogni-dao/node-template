@@ -17,7 +17,7 @@ import Link from "next/link";
 import { useSession } from "next-auth/react";
 import type { ReactElement } from "react";
 
-import { Button } from "@/components";
+import { Button } from "@/components/startup";
 import { WalletConnectButton } from "@/components/kit/auth/WalletConnectButton";
 
 import { UserAvatarMenu } from "./UserAvatarMenu";

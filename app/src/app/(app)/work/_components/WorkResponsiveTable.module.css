@@ -1,0 +1,44 @@
+.table {
+	width: 100%;
+	min-width: 100%;
+	table-layout: fixed;
+	border-collapse: collapse;
+}
+.table col,
+.table th {
+	width: var(--work-column-width);
+}
+.mobileRow {
+	display: none;
+}
+@media (max-width: 767px) {
+	.table {
+		table-layout: auto;
+	}
+	.table col,
+	.table th,
+	.table td {
+		width: auto;
+		min-width: 0;
+	}
+	.table[data-work-presync]
+		[data-work-column="priority"]:not([data-work-override="true"]),
+	.table[data-work-presync]
+		[data-work-column="rankScore"]:not([data-work-override="true"]),
+	.table[data-work-presync]
+		[data-work-column="type"]:not([data-work-override="true"]),
+	.table[data-work-presync]
+		[data-work-column="projectId"]:not([data-work-override="true"]),
+	.table[data-work-presync]
+		[data-work-column="updatedAt"]:not([data-work-override="true"]),
+	.table[data-work-presync]
+		[data-work-column="estimate"]:not([data-work-override="true"]) {
+		display: none;
+	}
+	.desktopRow {
+		display: none;
+	}
+	.mobileRow {
+		display: table-row;
+	}
+}

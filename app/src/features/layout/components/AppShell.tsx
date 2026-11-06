@@ -14,7 +14,7 @@
 
 import type { ReactNode } from "react";
 
-import { SidebarInset, SidebarProvider } from "@/components";
+import { SidebarInset, SidebarProvider } from "@/components/startup";
 
 import { AppSidebar } from "./AppSidebar";
 import { AppTopBar } from "./AppTopBar";

@@ -45,8 +45,6 @@ import {
   DataGridContainer,
 } from "@cogni/node-ui-kit/reui/data-grid/data-grid";
 import { DataGridColumnVisibility } from "@cogni/node-ui-kit/reui/data-grid/data-grid-column-visibility";
-import { DataGridTable } from "@cogni/node-ui-kit/reui/data-grid/data-grid-table";
-import { useIsMobile } from "@cogni/node-ui-kit/util/use-is-mobile";
 import { useQuery } from "@tanstack/react-query";
 import {
   type ColumnFiltersState,
@@ -56,18 +54,18 @@ import {
   getFacetedUniqueValues,
   type SortingState,
   useReactTable,
-  type VisibilityState,
 } from "@tanstack/react-table";
 import { Columns3, List, Settings2 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Button } from "@/components";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Button } from "@/components/startup";
 
 import { type WorkIntent, useWorkNavigation } from "./WorkNavigationBoundary";
 import { fetchWorkItem, fetchWorkItems } from "./_api/fetchWorkItems";
 import { columns } from "./_components/columns";
-import { WorkItemDetail } from "./_components/WorkItemDetail";
+import { WorkDetailSheet } from "./_components/WorkDetailSheet";
 import { WorkGoalLink } from "./_components/WorkKanban";
+import { MOBILE_HIDDEN_COLUMNS, WorkResponsiveTable } from "./_components/WorkResponsiveTable";
 import {
   workItemHref,
   workListHref,
@@ -115,17 +113,6 @@ function readSorting(searchParams: URLSearchParams): SortingState {
   return [{ id: "rankScore", desc: true }];
 }
 
-// bug.0006: phones show Item (title + id) and Status; the Columns toggle can
-// still reveal the rest. Explicit user choices win over this default.
-const MOBILE_HIDDEN_COLUMNS: VisibilityState = {
-  priority: false,
-  rankScore: false,
-  type: false,
-  projectId: false,
-  updatedAt: false,
-  estimate: false,
-};
-
 function readColumns(params: URLSearchParams): string[] {
   const value = params.get("columns");
   return value === null
@@ -169,7 +156,15 @@ export function WorkDashboardView({
   const columnFilters = useMemo(() => readFilters(desired.params), [desired]);
   const globalFilter = desired.params.get("q") ?? "";
   const visibleStatuses = readColumns(desired.params);
-  const isMobile = useIsMobile();
+  const [isMobile, setIsMobile] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!window.matchMedia) { setIsMobile(false); return; }
+    const media = window.matchMedia("(max-width: 767px)");
+    const sync = () => setIsMobile(media.matches);
+    sync();
+    media.addEventListener("change", sync);
+    return () => media.removeEventListener("change", sync);
+  }, []);
   const tableColumnVisibility = useMemo(
     () =>
       isMobile
@@ -435,8 +430,11 @@ export function WorkDashboardView({
     dispatchNavigation(owner.desired, stack);
   };
 
+  const detailOpener = useRef<HTMLElement | null>(null);
+  const workHeading = useRef<HTMLHeadingElement | null>(null);
   const openItem = useCallback(
     (item: WorkItemSummary) => {
+      detailOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       editIntent((intent) => ({ ...intent, itemId: item.id, method: "push" }));
     },
     [editIntent],
@@ -474,7 +472,16 @@ export function WorkDashboardView({
       editList((state) => {
         state.query = functionalUpdate(updater, state.query);
       }),
-    onColumnVisibilityChange: setColumnVisibility,
+    onColumnVisibilityChange: (updater) => {
+      const next = typeof updater === "function" ? updater(tableColumnVisibility) : updater;
+      setColumnVisibility((previous) => {
+        const updated = { ...previous };
+        for (const id of Object.keys(next)) {
+          if ((next[id] ?? true) !== (tableColumnVisibility[id] ?? true)) updated[id] = next[id] ?? true;
+        }
+        return updated;
+      });
+    },
     getCoreRowModel: getCoreRowModel(),
     manualSorting: true,
     manualFiltering: true,
@@ -553,7 +560,7 @@ export function WorkDashboardView({
 
   return (
     <div className="flex flex-col gap-4 p-5 md:p-6">
-      <h1 className="font-semibold text-xl tracking-tight md:text-2xl">
+      <h1 ref={workHeading} tabIndex={-1} className="font-semibold text-xl tracking-tight md:text-2xl">
         Work Dashboard
       </h1>
 
@@ -598,7 +605,7 @@ export function WorkDashboardView({
           <DataGridColumnVisibility
             table={table}
             trigger={
-              <Button variant="outline" size="sm" className="h-9 gap-1.5">
+              <Button disabled={isMobile === null} variant="outline" size="sm" className="h-9 gap-1.5">
                 <Settings2 className="size-3.5" />
                 Columns
               </Button>
@@ -629,8 +636,7 @@ export function WorkDashboardView({
           loadingMode="skeleton"
           onRowClick={openItem}
           tableLayout={{
-            // Auto layout on phones lets the visible columns share the viewport.
-            width: isMobile ? "auto" : "fixed",
+            width: "fixed",
             headerSticky: true,
             headerBackground: true,
             rowBorder: true,
@@ -642,7 +648,7 @@ export function WorkDashboardView({
           emptyMessage="No work items found."
         >
           <DataGridContainer className="overflow-x-auto">
-            <DataGridTable />
+            <WorkResponsiveTable table={table} overrides={columnVisibility} synced={isMobile !== null} isLoading={isLoading} />
           </DataGridContainer>
         </DataGrid>
       )}
@@ -706,7 +712,9 @@ export function WorkDashboardView({
         </div>
       </div>
 
-      <WorkItemDetail
+      <WorkDetailSheet
+        opener={detailOpener}
+        fallback={workHeading}
         item={selectedItemQuery.data ?? null}
         {...(selectedItemId !== undefined && { itemId: selectedItemId })}
         isLoading={selectedItemQuery.isLoading}
