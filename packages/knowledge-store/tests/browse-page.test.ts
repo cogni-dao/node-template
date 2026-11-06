@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { FakeKnowledgeStoreAdapter } from "../src/adapters/fake/index.js";
 
 it("continues through empty search windows to a literal body match beyond 500", async () => {
@@ -87,6 +87,7 @@ it("projects metadata in one global native query without fetching bodies", async
   const queries: string[] = [];
   const sql = {
     unsafe: async (query: string) => {
+      if (query.includes("dolt_hashof")) return [{ hash: "head-a" }];
       queries.push(query);
       return [];
     },
@@ -217,6 +218,7 @@ it("native lookahead is not consumed and search reads exactly one bounded body w
   const queries: string[] = [];
   const sql = {
     unsafe: async (query: string) => {
+      if (query.includes("dolt_hashof")) return [{ hash: "head-a" }];
       queries.push(query);
       return query.includes("id > 'n-19'") ? rows.slice(20) : rows;
     },
@@ -277,6 +279,7 @@ it.each(["asc", "desc"] as const)(
     const store = new DoltgresKnowledgeStoreAdapter({
       sql: {
         unsafe: async (query: string) => {
+          if (query.includes("dolt_hashof")) return [{ hash: "head-a" }];
           queries.push(query);
           expect(query).toContain(
             "CAST(date_trunc('microseconds', created_at) AS TEXT) AS browse_created_at"
@@ -362,6 +365,7 @@ it("native date keysets include the null tail in both directions without sentine
   const store = new DoltgresKnowledgeStoreAdapter({
     sql: {
       unsafe: async (query: string) => {
+        if (query.includes("dolt_hashof")) return [{ hash: "head-a" }];
         queries.push(query);
         return Array.from({ length: 21 }, (_, i) => ({
           id: `null-${i}`,
@@ -393,4 +397,200 @@ it("native date keysets include the null tail in both directions without sentine
   );
   expect(queries[3]).toContain("WHERE (created_at IS NULL AND id > 'null-19')");
   expect(queries.join(" ")).not.toContain("0001-01-01");
+});
+
+it("records observed live revisions in both projections, including empty windows", async () => {
+  const store = new FakeKnowledgeStoreAdapter();
+  const before = await store.browseKnowledge({});
+  await store.registerDomain({ id: "revision", name: "Revision" });
+  await store.withWrite(
+    { operationId: "revision", message: "change" },
+    async (write) => {
+      await write.addKnowledge({
+        id: "changed",
+        domain: "revision",
+        title: "Changed",
+        content: "body",
+        sourceType: "human",
+      });
+    }
+  );
+  const after = await store.overviewKnowledge({});
+  expect(after.revision).not.toBe(before.revision);
+  expect((await store.browseKnowledge({ search: "absent" })).revision).toBe(
+    after.revision
+  );
+});
+
+it("bounds native work after timeout/abort across adapters, preserves unrelated readers and recovers only after settlement", async () => {
+  vi.useFakeTimers();
+  try {
+    const { DoltgresKnowledgeStoreAdapter } = await import(
+      "../src/adapters/doltgres/index.js"
+    );
+    const pending: Array<(rows: Array<Record<string, unknown>>) => void> = [];
+    const sql = {
+      options: { max: 2 },
+      end: vi.fn(),
+      unsafe: vi.fn((query: string) => {
+        if (query === "SELECT unrelated")
+          return Promise.resolve([{ ok: true }]);
+        if (query.includes("dolt_hashof"))
+          return Promise.resolve([{ hash: "head-real" }]);
+        return new Promise<Array<Record<string, unknown>>>((resolve) =>
+          pending.push(resolve)
+        );
+      }),
+    };
+    const store = new DoltgresKnowledgeStoreAdapter({
+      sql: sql as never,
+      browseTimeoutMs: 50,
+    });
+    const sibling = new DoltgresKnowledgeStoreAdapter({
+      sql: sql as never,
+      browseTimeoutMs: 50,
+    });
+    const failed = expect(
+      store.browseKnowledge({ search: "body" })
+    ).rejects.toMatchObject({ code: "KNOWLEDGE_BUSY", retryable: true });
+    await vi.advanceTimersByTimeAsync(50);
+    await failed;
+    expect(pending).toHaveLength(1);
+    for (let i = 0; i < 4; i++) {
+      const controller = new AbortController();
+      const rejected = expect(
+        sibling.overviewKnowledge({}, { signal: controller.signal })
+      ).rejects.toMatchObject({ retryable: true });
+      controller.abort();
+      await rejected;
+    }
+    const queuedFailure = expect(
+      sibling.browseKnowledge({})
+    ).rejects.toMatchObject({ retryable: true });
+    await vi.advanceTimersByTimeAsync(50);
+    await queuedFailure;
+    expect(pending).toHaveLength(1);
+    expect(await sql.unsafe("SELECT unrelated")).toEqual([{ ok: true }]);
+    expect(sql.end).not.toHaveBeenCalled();
+    pending[0]?.([]);
+    await vi.advanceTimersByTimeAsync(0);
+    const recovered = store.overviewKnowledge({});
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pending).toHaveLength(2);
+    pending[1]?.([]);
+    await expect(recovered).resolves.toEqual({
+      revision: "head-real",
+      items: [],
+      nextCursor: null,
+      scannedRows: 0,
+    });
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("retains dispatched abort and unknown transport accounting, including stalled revision lookup", async () => {
+  vi.useFakeTimers();
+  try {
+    const { DoltgresKnowledgeStoreAdapter } = await import(
+      "../src/adapters/doltgres/index.js"
+    );
+    let rejectNative: (error: Error) => void = () => undefined;
+    const sql = {
+      options: { max: 2 },
+      unsafe: vi.fn(
+        () =>
+          new Promise<never>((_, reject) => {
+            rejectNative = reject;
+          })
+      ),
+    };
+    const store = new DoltgresKnowledgeStoreAdapter({
+      sql: sql as never,
+      browseTimeoutMs: 25,
+    });
+    const controller = new AbortController();
+    const rejected = expect(
+      store.browseKnowledge({}, { signal: controller.signal })
+    ).rejects.toMatchObject({ retryable: true });
+    await vi.advanceTimersByTimeAsync(0);
+    controller.abort();
+    await rejected;
+    rejectNative(
+      Object.assign(new Error("connection lost; backend outcome unknown"), {
+        code: "EPIPE",
+      })
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    const deadline = expect(store.overviewKnowledge({})).rejects.toMatchObject({
+      retryable: true,
+    });
+    await vi.advanceTimersByTimeAsync(25);
+    await deadline;
+    expect(sql.unsafe).toHaveBeenCalledTimes(1);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("caps waiting callers and recycles acknowledged SQL errors without poisoning healthy reads", async () => {
+  const { DoltgresKnowledgeStoreAdapter } = await import(
+    "../src/adapters/doltgres/index.js"
+  );
+  let fail = true;
+  const sql = {
+    options: { max: 2 },
+    unsafe: async (text: string) => {
+      if (text.includes("dolt_hashof")) return [{ hash: "head-a" }];
+      if (fail) {
+        fail = false;
+        throw Object.assign(new Error("server rejected query"), {
+          name: "PostgresError",
+          code: "57014",
+        });
+      }
+      return [];
+    },
+  };
+  const store = new DoltgresKnowledgeStoreAdapter({ sql: sql as never });
+  await expect(store.browseKnowledge({})).rejects.toMatchObject({
+    retryable: true,
+  });
+  await expect(store.overviewKnowledge({})).resolves.toMatchObject({
+    revision: "head-a",
+    items: [],
+  });
+  vi.useFakeTimers();
+  try {
+    const stalledSql = {
+      options: { max: 2 },
+      unsafe: vi.fn(() => new Promise<never>(() => undefined)),
+    };
+    const stalled = new DoltgresKnowledgeStoreAdapter({
+      sql: stalledSql as never,
+      browseTimeoutMs: 30,
+    });
+    const first = expect(stalled.browseKnowledge({})).rejects.toMatchObject({
+      retryable: true,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    const controllers = Array.from({ length: 32 }, () => new AbortController());
+    const waiting = controllers.map((controller) =>
+      expect(
+        stalled.overviewKnowledge({}, { signal: controller.signal })
+      ).rejects.toMatchObject({ retryable: true })
+    );
+    await expect(stalled.browseKnowledge({})).rejects.toMatchObject({
+      retryable: true,
+    });
+    controllers.forEach((controller) => {
+      controller.abort();
+    });
+    await Promise.all(waiting);
+    await vi.advanceTimersByTimeAsync(30);
+    await first;
+    expect(stalledSql.unsafe).toHaveBeenCalledTimes(1);
+  } finally {
+    vi.useRealTimers();
+  }
 });

@@ -12,7 +12,7 @@
 "use client";
 
 import type { KnowledgeBrowsePage } from "@cogni/node-contracts";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
 import {
   type ComponentType,
@@ -26,6 +26,7 @@ import {
 import { fetchBrowse, overviewKey } from "../_api/fetchBrowse";
 import { KnowledgeDetail } from "./KnowledgeDetail";
 import { useKnowledgeSelection } from "./KnowledgeSelection";
+import { useBrowseRevision } from "./useBrowseRevision";
 import { focusGeometry, useGraphFocus } from "./useGraphFocus";
 
 interface GraphNodeObject {
@@ -150,6 +151,7 @@ export function GraphView({
 }: {
   readonly initialData?: KnowledgeBrowsePage | undefined;
 }) {
+  const queryClient = useQueryClient();
   const [cursor, setCursor] = useState<string | undefined>();
   const [history, setHistory] = useState<Array<string | undefined>>([]);
   const query = cursor ? { cursor } : {};
@@ -163,6 +165,7 @@ export function GraphView({
   const lastOverview = useRef<KnowledgeBrowsePage | undefined>(initialData);
   if (graphQuery.data) lastOverview.current = graphQuery.data;
   const overview = graphQuery.data ?? lastOverview.current;
+  const revision = useBrowseRevision(overview?.revision);
   const [colorMode, setColorMode] = useState<ColorMode>("confidence");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
@@ -278,6 +281,35 @@ export function GraphView({
         >
           Previous overview
         </button>
+        <button
+          type="button"
+          onClick={() => {
+            setCursor(undefined);
+            setHistory([]);
+            void queryClient
+              .fetchQuery({
+                queryKey: overviewKey(),
+                queryFn: ({ signal }) => fetchBrowse({}, signal, "overview"),
+                staleTime: 0,
+              })
+              .then((firstPage) =>
+                revision.acknowledgeRestart(firstPage.revision)
+              )
+              .catch(() => undefined);
+          }}
+        >
+          Restart overview
+        </button>
+        {revision.restartNeeded && (
+          <span role="status">
+            Knowledge changed. Restart overview to begin a new live traversal.
+          </span>
+        )}
+        {overview && (
+          <span className="text-xs">
+            Observed revision: {overview.revision} · live read
+          </span>
+        )}
         <button
           type="button"
           disabled={

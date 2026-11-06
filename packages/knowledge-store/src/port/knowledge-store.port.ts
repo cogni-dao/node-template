@@ -79,7 +79,7 @@ export interface CitationLinkPage {
 }
 
 /**
- * The knowledge write plane is saturated or recovering; the caller may retry.
+ * Knowledge write admission or bounded Browse/Overview reads are unavailable; retry is safe.
  *
  * Distinct from a state or validation error: nothing was decided about the
  * request, so replaying it is safe. Routes map this to 503, never 409 — a 409
@@ -281,9 +281,13 @@ export interface KnowledgeStorePort {
   ): Promise<T>;
 
   // --- Read ---
-  browseKnowledge(query: KnowledgeBrowseQuery): Promise<KnowledgeBrowsePage>;
+  browseKnowledge(
+    query: KnowledgeBrowseQuery,
+    options?: { signal?: AbortSignal }
+  ): Promise<KnowledgeBrowsePage>;
   overviewKnowledge(
-    query: Omit<KnowledgeBrowseQuery, "search">
+    query: Omit<KnowledgeBrowseQuery, "search">,
+    options?: { signal?: AbortSignal }
   ): Promise<KnowledgeBrowsePage>;
   getKnowledge(id: string): Promise<Knowledge | null>;
   /**
