@@ -72,7 +72,7 @@ pnpm typecheck
 ## Standards
 
 - Each feature isolated with own actions/, services/, components/, hooks/, types/, constants/
-- Features import components via kit/barrel only; vendor and styles are blocked by ESLint
+- Features import components via kit/barrel or the public `@/components/startup` entry; vendor and styles remain blocked
 - Unit tests with mocked ports required
 
 ## Dependencies

@@ -38,7 +38,8 @@ Reusable kit components for overlay UI patterns including dialogs, modals, sheet
 ## Public Surface
 
 - **Exports (via ../index.ts):** Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogTrigger, DialogFooter, DialogClose
-- **Files considered API:** Dialog.tsx
+- **Sheet exports:** `Sheet`, `SheetContent`, `SheetDescription`, `SheetHeader`, `SheetTitle`, `SheetTrigger` via `components/sheet.ts` and `components/index.ts`; both use the same baseline implementation.
+- **Files considered API:** Dialog.tsx, Sheet.ts
 
 ## Responsibilities
 
@@ -89,4 +90,4 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 - Responsive behavior: bottom-sheet on mobile (<sm), centered modal on desktop
 - DialogContent accepts className for layout customization
 - Model selection dialog (features/ai) uses Dialog + ScrollArea composition
-- Future: Sheet, Popover, Tooltip components planned
+- Popover and Tooltip components are planned

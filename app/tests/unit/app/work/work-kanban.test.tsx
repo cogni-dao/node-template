@@ -4,6 +4,8 @@
 
 /** Exercises the real ReUI board through the shared TanStack work dashboard. */
 import "@testing-library/jest-dom/vitest";
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import type { WorkItemDto, WorkItemSummary } from "@cogni/node-contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -17,6 +19,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createContext, Suspense, useContext, useState } from "react";
+import { renderToString } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const navigation = vi.hoisted(() => ({
@@ -48,16 +51,14 @@ vi.mock("next/navigation", () => ({
     return routed ?? navigation.params;
   },
 }));
-const viewport = vi.hoisted(() => ({ mobile: false }));
-vi.mock("@cogni/node-ui-kit/util/use-is-mobile", () => ({
-  useIsMobile: () => viewport.mobile,
-}));
+const viewport = vi.hoisted(() => ({ mobile: false, listeners: new Set<() => void>() }));
+
 vi.mock("@/components", async () => ({
   ...(await import("@cogni/node-ui-kit/shadcn/button")),
   ...(await import("@cogni/node-ui-kit/shadcn/input")),
 }));
-vi.mock("@/app/(app)/work/_components/WorkItemDetail", () => ({
-  WorkItemDetail: ({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) => open ? <button type="button" onClick={() => onOpenChange(false)}>Close detail</button> : null,
+vi.mock("@/app/(app)/work/_components/WorkDetailSheet", () => ({
+  WorkDetailSheet: ({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) => open ? <button type="button" onClick={() => onOpenChange(false)}>Close detail</button> : null,
 }));
 vi.mock("@/app/(app)/work/_api/fetchWorkItems", () => ({
   fetchWorkItems: vi.fn(),
@@ -165,8 +166,36 @@ async function choosePageSize(value: string) {
   await userEvent.click(screen.getByRole("option", { name: value }));
 }
 
+describe("public startup boundary", () => {
+  it("permits the startup entry while feature code stays isolated from vendor components", () => {
+    const sourceRoot = join(process.cwd(), "src/features");
+    const files = (directory: string): string[] => readdirSync(directory, { withFileTypes: true }).flatMap((entry) => entry.isDirectory() ? files(join(directory, entry.name)) : /\.[jt]sx?$/.test(entry.name) ? [join(directory, entry.name)] : []);
+    const featureFiles = files(sourceRoot);
+    const violations = featureFiles.filter((file) => /["']@cogni\/node-ui-kit\/(?:shadcn|reui)\//.test(readFileSync(file, "utf8")));
+    expect(violations).toEqual([]);
+    expect(readFileSync(join(sourceRoot, "layout/components/AppShell.tsx"), "utf8")).toContain('from "@/components/startup"');
+    expect(readFileSync(join(process.cwd(), "src/components/startup.ts"), "utf8")).toContain('from "@cogni/node-ui-kit/shadcn/sidebar"');
+  });
+  it("keeps Work detail Sheet imports on the narrow public component boundary", async () => {
+    const detailRoot = join(process.cwd(), "src/app/(app)/work/_components");
+    for (const name of ["WorkDetailSheet.tsx", "WorkItemDetail.tsx", "WorkItemDetailBody.tsx"]) {
+      const source = readFileSync(join(detailRoot, name), "utf8");
+      expect(source).not.toMatch(/["']@cogni\/node-ui-kit\/shadcn\/sheet["']/);
+      expect(source).toContain('from "@/components/sheet"');
+    }
+    const publicSheet = await import("@/components/sheet");
+    const vendorSheet = await import("@cogni/node-ui-kit/shadcn/sheet");
+    for (const name of ["Sheet", "SheetContent", "SheetDescription", "SheetHeader", "SheetTitle"] as const) {
+      expect(publicSheet[name]).toBe(vendorSheet[name]);
+    }
+  });
+
+});
+
 describe("Work Kanban", () => {
   beforeEach(() => {
+    viewport.listeners.clear();
+    Object.defineProperty(window, "matchMedia", { configurable: true, value: () => ({ get matches() { return viewport.mobile; }, addEventListener: (_: string, listener: () => void) => viewport.listeners.add(listener), removeEventListener: (_: string, listener: () => void) => viewport.listeners.delete(listener) }) });
     navigation.params = new URLSearchParams();
     navigation.pathname = "/work";
     navigation.itemId = undefined;
@@ -320,6 +349,19 @@ describe("Work Kanban", () => {
     expect(screen.getByRole("button", { name: "task" })).toHaveAttribute("aria-pressed", "false");
   });
 
+  it("server-renders matching column identities in headers and loading cells", () => {
+    navigation.params = new URLSearchParams("view=table");
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const markup = renderToString(<QueryClientProvider client={client}><WorkDashboardView /></QueryClientProvider>);
+    const document = new DOMParser().parseFromString(markup, "text/html");
+    const table = document.querySelector("table[data-work-presync]");
+    expect(table).not.toBeNull();
+    const ids = (selector: string) => Array.from(table?.querySelectorAll(selector) ?? [], (node) => node.getAttribute("data-work-column"));
+    expect(ids("colgroup col")).toEqual(["priority", "rankScore", "type", "item", "status", "projectId", "updatedAt", "estimate"]);
+    expect(ids("thead th")).toEqual(ids("colgroup col"));
+    expect(ids("tbody tr:first-child td")).toEqual(ids("colgroup col"));
+  });
+
   it("shows titles and status without secondary columns in the mobile table", async () => {
     viewport.mobile = true;
     try {
@@ -332,10 +374,34 @@ describe("Work Kanban", () => {
       for (const hidden of ["Pri", "Rank", "Type", "Project", "Updated", "Est"]) {
         expect(headers.some((text) => text.includes(hidden))).toBe(false);
       }
-      expect(screen.getByRole("table")).toHaveClass("table-auto");
+      expect(screen.getByRole("table")).not.toHaveAttribute("data-work-presync");
     } finally {
       viewport.mobile = false;
     }
+  });
+
+  it("keeps explicit column choices through both breakpoint changes", async () => {
+    viewport.mobile = true;
+    navigation.params = new URLSearchParams("view=table");
+    mount();
+    await screen.findByText("Work item 0");
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Columns" }));
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Rank" }));
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Status" }));
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("columnheader", { name: /Rank/ })).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: /Status/ })).toBeNull();
+    act(() => { viewport.mobile = false; viewport.listeners.forEach((listener) => { listener(); }); });
+    expect(screen.getByRole("columnheader", { name: /Type/ })).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: /Status/ })).toBeNull();
+    act(() => { viewport.mobile = true; viewport.listeners.forEach((listener) => { listener(); }); });
+    expect(screen.getByRole("columnheader", { name: /Rank/ })).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: /Type/ })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Columns" }));
+    expect(screen.getByRole("menuitemcheckbox", { name: "Rank" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("menuitemcheckbox", { name: "Status" })).toHaveAttribute("aria-checked", "false");
+    viewport.mobile = false;
   });
 
   it("keeps board controls when their table columns are hidden", async () => {
