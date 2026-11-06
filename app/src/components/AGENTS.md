@@ -5,7 +5,7 @@
 ## Metadata
 
 - **Owners:** @derekg1729
-- **Last reviewed:** 2026-10-26
+- **Last reviewed:** 2026-11-03
 - **Status:** draft
 
 ## Purpose
@@ -15,7 +15,7 @@ Shared presentational UI. No business logic, no data fetching. Design tokens and
 ## Pointers
 
 - [Architecture](../../../../docs/spec/architecture.md)
-- [UI Implementation Guide](../../../../docs/spec/ui-implementation.md)
+- [Frontend development guide](https://node-template.cognidao.org/knowledge/frontend-development)
 
 ## Boundaries
 
@@ -48,7 +48,7 @@ Shared presentational UI. No business logic, no data fetching. Design tokens and
 
 ## Usage
 
-**IMPORTANT: If you are making any changes to files in this directory, you must read:** [`docs/spec/ui-implementation.md`](../../../../docs/spec/ui-implementation.md)
+**IMPORTANT: Before changing files in this directory, load the `frontend-development` skill (it reads `GET /api/v1/knowledge/frontend-development`).** Human view: [frontend development guide](https://node-template.cognidao.org/knowledge/frontend-development)
 
 Minimal local commands:
 
@@ -61,30 +61,24 @@ pnpm lint
 
 ```
 src/components/
-  vendor/ui-primitives/  # vendored primitives. do not edit. do not export.
-    shadcn/              # shadcn/ui components (alert, progress)
-  kit/                   # wrappers only. className for layout only.
-    layout/              # Container, Section, Grid
-    inputs/              # Button, Input, Select, Switch
-    data-display/        # Card(+parts), Badge, Avatar(+parts)
-    navigation/          # Tabs, Breadcrumbs, Pagination
-    feedback/            # Alert, Progress, ToastPresenter
-    payments/            # UsdcPaymentFlow (3-state payment UI)
-    typography/          # Heading, Paragraph
-    auth/                # WalletConnectButton
+  vendor/                # owned third-party source (assistant-ui, shadcn-io). Wrap in kit/; never import from features.
+  kit/                   # domain-neutral wrappers. className for layout only.
+    layout/              # Container, PageContainer, Card, SectionCard, skeletons
+    inputs/              # Button, Input, ModeToggle, SplitInput, TimeRangeSelector
+    data-display/        # Badge, Avatar, ScrollArea, RunCard, ActivityTable/Chart, PhaseList
+    navigation/          # NavigationLink, MobileNav
+    feedback/            # Alert, ErrorAlert, Progress, BrainLoading, HintText
+    overlays/            # Dialog
+    payments/            # UsdcPaymentFlow, PaymentButton, PaymentStatusChip
+    auth/                # WalletConnectButton, SignInDialog
+    chat/                # Thread, composer inputs
     animation/           # Reveal
     sections/            # Hero, CtaSection, FeaturesGrid
-    mdx/                 # Prose, mdx components map
-  icons/                 # app SVGs
-  index.ts               # curated exports from kit only
+  index.ts               # curated barrel: kit + @cogni/node-ui-kit primitives
 ```
 
-- **Placement Rules:**
-  - Single-route or one-off → keep colocated with that route or in `features/<slice>/components/`.
-  - Reused by ≥2 slices → promote to `components/kit/`.
-  - Stateless + generic → `components/kit/`.
-  - shadcn-generated files → stay in `vendor/ui-primitives/shadcn/` unmodified; wrap in kit/ to customize.
-- **Styling:** Use tokens from `src/styles/` only. No arbitrary Tailwind values. Prefer CVA for variants. Variant props must be typed. No inline styles except approved CSS vars. Kit components accept typed props from theme.ts and call CVAs; no className.
+- Placement, styling, mobile-first, and performance rules live in the [frontend development guide](https://node-template.cognidao.org/knowledge/frontend-development). Read it before editing; do not copy its rules here.
+- Shared shadcn/Radix/reui primitives come from `@cogni/node-ui-kit` (baseline, read-only for forks) and are re-exported through `index.ts`.
 - **Testing:** Snapshot widgets and critical primitives. No network. Client-only tests isolate interactivity.
 
 ## Dependencies
@@ -99,6 +93,5 @@ src/components/
 
 ## Notes
 
-- Promotion policy: colocate → second consumer → promote. Keep root lean.
 - Each file: short header with Purpose, Scope, Invariants. No inline commentary drift.
-- Implementation workflows live in `docs/spec/ui-implementation.md`.
+- Implementation workflows live in the [frontend development guide](https://node-template.cognidao.org/knowledge/frontend-development).
