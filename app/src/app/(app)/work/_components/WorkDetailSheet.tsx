@@ -28,7 +28,13 @@ const DetailBody = lazy(() =>
 	})),
 );
 
-function DetailMessage({ failed = false }: { readonly failed?: boolean }) {
+function DetailMessage({
+	failed = false,
+	reload = reloadPage,
+}: {
+	readonly failed?: boolean;
+	readonly reload?: () => void;
+}) {
 	return (
 		<SheetHeader className="px-6 py-16 text-center sm:text-center">
 			<SheetTitle>
@@ -43,7 +49,7 @@ function DetailMessage({ failed = false }: { readonly failed?: boolean }) {
 				<button
 					type="button"
 					className="underline"
-					onClick={() => window.location.reload()}
+					onClick={reload}
 				>
 					Reload page
 				</button>
@@ -52,8 +58,12 @@ function DetailMessage({ failed = false }: { readonly failed?: boolean }) {
 	);
 }
 
+function reloadPage() {
+	window.location.reload();
+}
+
 class DetailBoundary extends Component<
-	{ readonly children: ReactNode },
+	{ readonly children: ReactNode; readonly reload: () => void },
 	{ failed: boolean }
 > {
 	override state = { failed: false };
@@ -63,7 +73,7 @@ class DetailBoundary extends Component<
 	override render() {
 		return this.state.failed ? (
 			<div role="alert">
-				<DetailMessage failed />
+				<DetailMessage failed reload={this.props.reload} />
 			</div>
 		) : (
 			this.props.children
@@ -76,12 +86,14 @@ export function WorkDetailSheet({
 	onOpenChange,
 	opener,
 	fallback,
+	reload = reloadPage,
 	...body
 }: WorkItemDetailBodyProps & {
 	readonly open: boolean;
 	readonly onOpenChange: (open: boolean) => void;
 	readonly opener: RefObject<HTMLElement | null>;
 	readonly fallback: RefObject<HTMLElement | null>;
+	readonly reload?: () => void;
 }) {
 	const lastBody = useRef(body);
 	const [everSelected, setEverSelected] = useState(open);
@@ -106,7 +118,7 @@ export function WorkDetailSheet({
 				}}
 			>
 				{(open || everSelected) && (
-					<DetailBoundary>
+					<DetailBoundary reload={reload}>
 						<Suspense fallback={<DetailMessage />}>
 							<DetailBody {...(open ? body : lastBody.current)} />
 						</Suspense>

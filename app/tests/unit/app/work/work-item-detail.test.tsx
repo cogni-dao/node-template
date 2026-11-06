@@ -9,7 +9,7 @@ import "@testing-library/jest-dom/vitest";
 
 import type { WorkItemDto } from "@cogni/node-contracts";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { createRef } from "react";
+import { createRef, useRef, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { WorkItemFetchError } from "@/app/(app)/work/_api/fetchWorkItems";
@@ -185,19 +185,44 @@ describe("deferred Work detail", () => {
 
   it("contains a module failure in the dialog and leaves the list usable", async () => {
     vi.resetModules();
-    vi.doMock("@/app/(app)/work/_components/WorkItemDetailBody", async () => { throw new Error("detail chunk unavailable"); });
+    let attempts = 0;
+    vi.doMock("@/app/(app)/work/_components/WorkItemDetailBody", async () => { attempts += 1; throw new Error("detail chunk unavailable"); });
     const { WorkDetailSheet: BrokenSheet } = await import("@/app/(app)/work/_components/WorkDetailSheet");
-    const opener = createRef<HTMLButtonElement>();
-    const fallback = createRef<HTMLHeadingElement>();
-    const onOpenChange = vi.fn();
+    const reload = vi.fn();
     vi.spyOn(console, "error").mockImplementation(() => {});
-    render(<><h1 ref={fallback} tabIndex={-1}>Work list</h1><BrokenSheet item={null} itemId="task.A" isLoading open onOpenChange={onOpenChange} opener={opener} fallback={fallback} /></>);
+    function Harness() {
+      const [selected, setSelected] = useState<string | null>(null);
+      const [filter, setFilter] = useState("task");
+      const opener = useRef<HTMLButtonElement>(null);
+      const fallback = useRef<HTMLHeadingElement>(null);
+      return <><h1 ref={fallback} tabIndex={-1}>Work list</h1>
+        <label>Filter <input value={filter} onChange={(event) => setFilter(event.target.value)} /></label>
+        <button ref={opener} type="button" onClick={() => setSelected("task.A")}>Open task A</button>
+        <output>Filter: {filter}</output>
+        <BrokenSheet item={null} itemId={selected ?? undefined} isLoading open={selected !== null} onOpenChange={(open) => { if (!open) setSelected(null); }} opener={opener} fallback={fallback} reload={reload} />
+      </>;
+    }
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("button", { name: "Open task A" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Unable to load work item details");
     expect(screen.getAllByRole("dialog")).toHaveLength(1);
-    expect(screen.getByRole("button", { name: "Reload page" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
-    expect(onOpenChange).toHaveBeenCalledWith(false);
-    expect(screen.getByText("Work list")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Open task A" })).toHaveFocus());
+    fireEvent.change(screen.getByRole("textbox", { name: "Filter" }), { target: { value: "selected" } });
+    expect(screen.getByText("Filter: selected")).toBeInTheDocument();
+    expect(reload).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Open task A" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Unable to load work item details");
+    expect(attempts).toBe(1);
+    expect(reload).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Reload page" }));
+    expect(reload).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByRole("textbox", { name: "Filter" })).toHaveValue("selected");
+    expect(attempts).toBe(1);
+    expect(reload).toHaveBeenCalledTimes(1);
     vi.doUnmock("@/app/(app)/work/_components/WorkItemDetailBody");
   });
 });

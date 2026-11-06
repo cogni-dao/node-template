@@ -77,7 +77,7 @@ export function WorkResponsiveTable<TData>({
 										"--work-column-width": `${header.column.getSize()}px`,
 									} as CSSProperties
 								}
-								className="border-b px-3 py-2 text-left font-medium text-muted-foreground text-xs"
+								className="border-b px-2 h-8 text-left font-medium text-muted-foreground text-xs"
 							>
 								{header.isPlaceholder
 									? null
@@ -100,7 +100,7 @@ export function WorkResponsiveTable<TData>({
 									<td
 										key={column.id}
 										{...attrs(column.id)}
-										className="px-3 py-2"
+										className="px-2 py-1.5"
 									>
 										<div className="h-4 animate-pulse rounded bg-muted" />
 									</td>
@@ -114,7 +114,7 @@ export function WorkResponsiveTable<TData>({
 									<td
 										key={cell.id}
 										{...attrs(cell.column.id)}
-										className={`px-3 py-2 align-middle ${cell.column.columnDef.meta?.cellClassName ?? ""}`}
+										className={`px-2 py-1.5 align-middle ${cell.column.columnDef.meta?.cellClassName ?? ""}`}
 									>
 										{flexRender(cell.column.columnDef.cell, cell.getContext())}
 									</td>
