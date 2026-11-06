@@ -3,9 +3,10 @@
 
 /**
  * Module: `@features/goals/components/GoalsBoard`
- * Purpose: The Goals view, read at a glance. A count strip, then each measured
- *   goal as a row of KPI cards (label, number, one hint, status, one mark by
- *   display type). A card opens its chart. Unmeasured goals collapse to one line.
+ * Purpose: The Goals view, read at a glance. A count strip (goals, KPIs, KPIs
+ *   per status), then one collapsible row per goal: its title as the header,
+ *   KPI count and most urgent status, and inside, its KPI cards (label, number,
+ *   one hint, status, one mark by display type). A card opens its chart.
  * Scope: Reusable client component. Reads GET /api/v1/metrics/goals; no
  *   Knowledge-specific imports; no compute or write controls. Every card comes
  *   from the read model, so adding or removing a metric or binding needs no UI change.
@@ -23,6 +24,7 @@
 
 import type { GoalProgress, GoalsProgress } from "@cogni-dao/metrics/contracts";
 import { useQuery } from "@tanstack/react-query";
+import { ChevronRight } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useId, useState } from "react";
 
@@ -36,6 +38,7 @@ import {
   reasonText,
   STATUS_META,
   summarize,
+  worstStatus,
 } from "../lib/presentation";
 import { KpiChart } from "./KpiChart";
 import { AvailabilityStrip, ProgressBar, Sparkline, StatusPill } from "./marks";
@@ -67,8 +70,6 @@ export function GoalsBoard({ initialData, goalId }: GoalsBoardProps) {
   const goals = data ? (goalId ? data.goals.filter((g) => g.id === goalId) : data.goals) : [];
   const signedOut = query.error instanceof GoalsReadError && query.error.status === 401;
   const stale = !!data && (signedOut || failures >= STALE_AFTER_FAILURES);
-  const measured = goals.filter(isMeasured);
-  const unmeasured = goals.filter((g) => !isMeasured(g));
 
   return (
     <section aria-label={goalId ? "Goal progress" : "Goals"} aria-busy={!data && query.isPending} className="space-y-6">
@@ -101,30 +102,13 @@ export function GoalsBoard({ initialData, goalId }: GoalsBoardProps) {
           </Link>
         </p>
       ) : (
-        <div className={stale ? "space-y-6 opacity-70" : "space-y-6"}>
-          {measured.map((goal) => (
-            <GoalSection key={goal.id} goal={goal} nowIso={data.asOf} openFirst={!!goalId} />
+        <ul
+          className={`divide-y divide-border/60 overflow-hidden rounded-xl border border-border/60 ${stale ? "opacity-70" : ""}`}
+        >
+          {goals.map((goal) => (
+            <GoalRow key={goal.id} goal={goal} nowIso={data.asOf} single={!!goalId} />
           ))}
-          {unmeasured.length > 0 &&
-            (goalId ? (
-              <p className="text-muted-foreground text-sm">No KPI yet</p>
-            ) : (
-              <details className="text-sm" data-unmeasured>
-                <summary className="cursor-pointer text-muted-foreground">
-                  {unmeasured.length} {unmeasured.length === 1 ? "goal" : "goals"} without KPIs
-                </summary>
-                <ul className="mt-2 space-y-1 pl-4">
-                  {unmeasured.map((g) => (
-                    <li key={g.id} data-goal={g.id}>
-                      <Link href={`/knowledge/${encodeURIComponent(g.id)}`} className="hover:underline">
-                        {g.title}
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
-              </details>
-            ))}
-        </div>
+        </ul>
       )}
     </section>
   );
@@ -167,11 +151,15 @@ function Strip({
   readonly onRetry: () => void;
 }) {
   const s = summarize(goals);
+  const n = (status: keyof typeof STATUS_META) => s.byStatus[status] ?? 0;
+  // Goals and KPIs are counted once each; every status count is a count of KPIs.
   const cells = [
-    { label: "Goals", value: s.active, tone: "" },
-    { label: STATUS_META.behind.short, value: s.behind, tone: "text-warning" },
-    ...(s.missed ? [{ label: STATUS_META.missed.short, value: s.missed, tone: "text-destructive" }] : []),
-    { label: STATUS_META.failing.short, value: s.failing, tone: "text-destructive" },
+    { label: "Goals", value: s.goals, tone: "" },
+    { label: "KPIs", value: s.kpis, tone: "" },
+    { label: STATUS_META.on_track.short, value: n("on_track") + n("met"), tone: "text-success" },
+    { label: STATUS_META.behind.short, value: n("behind"), tone: "text-warning" },
+    ...(n("missed") ? [{ label: STATUS_META.missed.short, value: n("missed"), tone: "text-destructive" }] : []),
+    { label: STATUS_META.failing.short, value: n("failing"), tone: "text-destructive" },
   ];
   return (
     <div className="flex flex-wrap items-end justify-between gap-3">
@@ -198,51 +186,81 @@ function Strip({
   );
 }
 
-function GoalSection({
+function GoalRow({
   goal,
   nowIso,
-  openFirst,
+  single,
 }: {
   readonly goal: GoalProgress;
   readonly nowIso: string;
-  readonly openFirst: boolean;
+  /** The goal entry page: one row, first KPI open. */
+  readonly single: boolean;
 }) {
+  const measured = isMeasured(goal);
+  const [expanded, setExpanded] = useState(measured);
   // A goal may bind one metric twice (a floor and a ceiling), so a card is its
   // position plus metric: if a refresh shifts the bindings, the chart closes
   // instead of silently showing another KPI.
   const keyOf = (kpi: GoalKpi, i: number) => `${i}:${kpi.binding.metricId}`;
   const first = goal.kpis[0];
-  const [open, setOpen] = useState<string | null>(openFirst && first ? keyOf(first, 0) : null);
+  const [open, setOpen] = useState<string | null>(single && first ? keyOf(first, 0) : null);
+  const bodyId = useId();
   const chartId = useId();
   const openKpi = goal.kpis.find((kpi, i) => keyOf(kpi, i) === open);
+  const worst = worstStatus(goal);
   return (
-    <div data-goal={goal.id} className="space-y-3">
-      <div className="flex items-baseline justify-between gap-3">
-        <h3 className="font-medium text-sm">
-          <Link href={`/knowledge/${encodeURIComponent(goal.id)}`} className="hover:underline">
-            {goal.title}
-          </Link>
-        </h3>
-        {goal.evaluateAt && (
-          <span className="shrink-0 text-muted-foreground text-xs tabular-nums">{formatDate(goal.evaluateAt, true)}</span>
+    <li data-goal={goal.id}>
+      <h3>
+        <button
+          type="button"
+          aria-expanded={expanded}
+          aria-controls={bodyId}
+          onClick={() => setExpanded(!expanded)}
+          className="flex w-full items-center gap-3 px-4 py-3 text-left outline-none hover:bg-muted/30 focus-visible:bg-muted/30"
+        >
+          <ChevronRight
+            aria-hidden="true"
+            className={`size-4 shrink-0 text-muted-foreground transition-transform ${expanded ? "rotate-90" : ""}`}
+          />
+          <span className="min-w-0 flex-1 truncate font-medium text-sm">{goal.title}</span>
+          <span className="shrink-0 text-muted-foreground text-xs tabular-nums">
+            {goal.kpis.length ? `${goal.kpis.length} ${goal.kpis.length === 1 ? "KPI" : "KPIs"}` : "No KPIs"}
+          </span>
+          {measured && worst && <StatusPill status={worst} />}
+          {goal.evaluateAt && (
+            <span className="hidden shrink-0 text-muted-foreground text-xs tabular-nums sm:inline">
+              {formatDate(goal.evaluateAt, true)}
+            </span>
+          )}
+        </button>
+      </h3>
+      <div id={bodyId} hidden={!expanded} className="space-y-3 px-4 pt-1 pb-4">
+        {goal.kpis.length ? (
+          <div className={CARD_GRID}>
+            {goal.kpis.map((kpi, i) => {
+              const key = keyOf(kpi, i);
+              return (
+                <KpiCard
+                  key={key}
+                  kpi={kpi}
+                  open={open === key}
+                  chartId={chartId}
+                  onToggle={() => setOpen(open === key ? null : key)}
+                />
+              );
+            })}
+          </div>
+        ) : (
+          <p className="text-muted-foreground text-sm">
+            No metric bound ·{" "}
+            <Link href={`/knowledge/${encodeURIComponent(goal.id)}`} className="underline underline-offset-2">
+              open goal
+            </Link>
+          </p>
         )}
+        {openKpi && open && <KpiChart key={open} id={chartId} kpi={openKpi} nowIso={nowIso} />}
       </div>
-      <div className={CARD_GRID}>
-        {goal.kpis.map((kpi, i) => {
-          const key = keyOf(kpi, i);
-          return (
-            <KpiCard
-              key={key}
-              kpi={kpi}
-              open={open === key}
-              chartId={chartId}
-              onToggle={() => setOpen(open === key ? null : key)}
-            />
-          );
-        })}
-      </div>
-      {openKpi && open && <KpiChart key={open} id={chartId} kpi={openKpi} nowIso={nowIso} />}
-    </div>
+    </li>
   );
 }
 
