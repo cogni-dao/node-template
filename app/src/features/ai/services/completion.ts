@@ -260,6 +260,8 @@ export interface ExecuteStreamParams {
   toolChoice?: import("@/ports").LlmToolChoice;
   /** Billing correlation metadata forwarded to LiteLLM as x-litellm-spend-logs-metadata header */
   spendLogsMetadata?: { run_id: string; graph_id: string; node_id?: string };
+  /** Output token cap; absent uses the provider adapter default. */
+  maxTokens?: number;
 }
 
 /**
@@ -282,6 +284,7 @@ export async function executeStream({
   tools,
   toolChoice,
   spendLogsMetadata,
+  maxTokens,
 }: ExecuteStreamParams): Promise<{
   stream: AsyncIterable<import("@/ports").ChatDeltaEvent>;
   final: Promise<StreamFinalResult>;
@@ -335,6 +338,7 @@ export async function executeStream({
       ...(tools && tools.length > 0 && { tools }),
       ...(toolChoice && { toolChoice }),
       ...(spendLogsMetadata && { spendLogsMetadata }),
+      ...(maxTokens !== undefined && { maxTokens }),
     });
     stream = result.stream;
     final = result.final;
