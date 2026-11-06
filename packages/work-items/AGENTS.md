@@ -45,6 +45,7 @@ Work item port interfaces, domain types, and storage adapters for structured wor
   - `WorkItemId`, `Revision`, `WorkItemType`, `WorkItemStatus`, `ActorKind` — identity and enum types
   - `SubjectRef`, `ExternalRef`, `RelationType`, `WorkRelation` — structured domain types
   - `toWorkItemDto` — spread-first read serializer with actor omission and derived rank
+  - `WorkItemSummarySchema`, `WorkItemSummary` — projected Work list contract without detail or leases
   - `WorkItem`, `WorkQuery` — full work item type and query filter; rank bounds are inclusive and exclude unknown rank when set; projectIds is any-of
   - `WORK_ITEM_SORT_FIELDS`, `WORK_ITEM_SORT_DIRECTIONS`, `normalizeWorkItemOrder`, `compareWorkItems` — canonical ordering; default rankScore DESC, unknown last, id ASC
   - `WorkItemSortBy`, `WorkItemSortDirection`, `WorkItemOrder` — shared order types

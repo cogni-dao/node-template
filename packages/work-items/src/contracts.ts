@@ -65,3 +65,11 @@ export const WorkItemDtoSchema = z.object({
 });
 
 export type WorkItemDto = z.infer<typeof WorkItemDtoSchema>;
+
+/** Browser list projection; detail and operational fields remain on WorkItemDto. */
+export const WorkItemSummarySchema = WorkItemDtoSchema.pick({
+  id: true, title: true, type: true, status: true, priority: true,
+  scores: true, projectId: true, estimate: true, labels: true,
+  createdAt: true, updatedAt: true,
+});
+export type WorkItemSummary = z.infer<typeof WorkItemSummarySchema>;

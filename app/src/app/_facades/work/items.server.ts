@@ -20,7 +20,9 @@ import type {
   WorkItemDto,
   WorkItemsListInput,
   WorkItemsListOutput,
+  WorkItemSummariesListOutput,
 } from "@cogni/node-contracts";
+import { WorkItemSummarySchema } from "@cogni/node-contracts";
 import type { WorkItem, WorkItemId, WorkItemLease } from "@cogni/work-items";
 import {
   toWorkItemId,
@@ -226,11 +228,8 @@ function rethrowBackendError(error: unknown): never {
   throw error;
 }
 
-export async function listWorkItems(
-  input: WorkItemsListInput,
-): Promise<WorkItemsListOutput> {
-  const container = getContainer();
-  const queryShared = {
+function workQuery(input: WorkItemsListInput) {
+  return {
     ...(input.sortBy !== undefined && { sortBy: input.sortBy }),
     ...(input.sortDirection !== undefined && {
       sortDirection: input.sortDirection,
@@ -250,6 +249,12 @@ export async function listWorkItems(
     limit: input.limit ?? 100,
     ...(input.cursor && { cursor: input.cursor }),
   };
+
+ }
+
+export async function listWorkItems(input: WorkItemsListInput): Promise<WorkItemsListOutput> {
+  const container = getContainer();
+  const queryShared = workQuery(input);
 
   // Exactly one backend owns the total order and its cursor. Configured Dolt
   // failures stay errors; only genuinely absent configuration selects Markdown.
@@ -281,6 +286,26 @@ export async function listWorkItems(
   } catch (error) {
     if ((error as Error)?.name === "InvalidCursorError")
       throw new InvalidCursorError((error as Error).message);
+    throw error;
+  }
+}
+
+export async function listWorkSummaries(input: WorkItemsListInput): Promise<WorkItemSummariesListOutput> {
+  const container = getContainer();
+  const query = workQuery(input);
+  try {
+    return await container.doltgresWorkItems.listSummaries(query);
+  } catch (error) {
+    if ((error as Error)?.name === "InvalidCursorError") throw new InvalidCursorError((error as Error).message);
+    if ((error as Error)?.name !== "DoltgresNotConfiguredError") rethrowBackendError(error);
+  }
+  try {
+    const result = await container.workItemQuery.list(query);
+    return { items: result.items.map((item) => WorkItemSummarySchema.parse(toDto(item))),
+      pageInfo: { endCursor: result.nextCursor ?? null, hasMore: result.nextCursor !== undefined },
+      ...(result.nextCursor !== undefined && { nextCursor: result.nextCursor }) };
+  } catch (error) {
+    if ((error as Error)?.name === "InvalidCursorError") throw new InvalidCursorError((error as Error).message);
     throw error;
   }
 }
