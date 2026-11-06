@@ -165,10 +165,31 @@ describe("GoalsBoard", () => {
       expect(pill?.textContent).toContain(meta.symbol);
       expect(pill?.textContent).toContain(meta.short);
     }
-    // A goal with nothing measured collapses to one line, never a card.
-    const unmeasured = container.querySelector("[data-unmeasured]") as HTMLElement;
-    expect(unmeasured.textContent).toMatch(/1 goal without KPIs/);
-    expect(container.querySelector('[data-goal="goal-not_measured"] [data-kpi]')).toBeNull();
+    // A goal with nothing measured is a collapsed row; its cards stay hidden until opened.
+    const row = container.querySelector('[data-goal="goal-not_measured"]') as HTMLElement;
+    const header = within(row).getAllByRole("button")[0] as HTMLElement;
+    expect(header.getAttribute("aria-expanded")).toBe("false");
+    expect(document.getElementById(header.getAttribute("aria-controls") ?? "")?.hidden).toBe(true);
+  });
+
+  it("counts goals and KPIs once each, and every status as a count of KPIs", () => {
+    vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
+    const data = visualFixture();
+    const kpis = data.goals.reduce((n, g) => n + g.kpis.length, 0);
+    const { container } = renderBoard(data);
+    const cell = (label: string) =>
+      [...container.querySelectorAll("dl > div")].find((d) => d.querySelector("dt")?.textContent === label)
+        ?.querySelector("dd")?.textContent;
+    expect(cell("Goals")).toBe(String(data.goals.length));
+    expect(cell("KPIs")).toBe(String(kpis));
+    const behind = data.goals.flatMap((g) => g.kpis).filter((k) => k.assessment.status === "behind").length;
+    expect(cell("Behind")).toBe(String(behind));
+    const onTrack = data.goals.flatMap((g) => g.kpis).filter((k) => k.assessment.status === "on_track").length;
+    expect(cell("On track")).toBe(String(onTrack));
+    // Each measured goal row links to its goal page beside its toggle.
+    const first = data.goals[0]!;
+    const row = container.querySelector(`[data-goal="${first.id}"]`) as HTMLElement;
+    expect(row.querySelector(`h3 a[href="/knowledge/${first.id}"]`)).not.toBeNull();
   });
 
   it("puts no sentences on a card and never prints unknown as zero", () => {

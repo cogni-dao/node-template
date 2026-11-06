@@ -159,17 +159,41 @@ function formatReadingTime(iso: string, nowIso: string): string {
 
 // ---------------------------------------------------------------- summary
 
-/** Goals with at least one KPI in each attention status. */
+/** Counts across the board: goals, their KPIs, and KPIs per status. */
 export interface GoalsSummary {
-  readonly active: number;
-  readonly behind: number;
-  readonly missed: number;
-  readonly failing: number;
+  readonly goals: number;
+  readonly kpis: number;
+  readonly byStatus: Readonly<Partial<Record<KpiStatus, number>>>;
 }
 
 export function summarize(goals: readonly GoalProgress[]): GoalsSummary {
-  const count = (s: KpiStatus) => goals.filter((g) => g.kpis.some((k) => k.assessment.status === s)).length;
-  return { active: goals.length, behind: count("behind"), missed: count("missed"), failing: count("failing") };
+  const byStatus: Partial<Record<KpiStatus, number>> = {};
+  let kpis = 0;
+  for (const g of goals)
+    for (const k of g.kpis) {
+      kpis++;
+      byStatus[k.assessment.status] = (byStatus[k.assessment.status] ?? 0) + 1;
+    }
+  return { goals: goals.length, kpis, byStatus };
+}
+
+/** Most urgent first: the status a collapsed goal row shows. */
+const STATUS_RANK: readonly KpiStatus[] = [
+  "missed",
+  "failing",
+  "behind",
+  "delayed",
+  "unresolved",
+  "evaluating",
+  "building",
+  "not_measured",
+  "on_track",
+  "met",
+];
+
+export function worstStatus(goal: GoalProgress): KpiStatus | null {
+  const present = new Set(goal.kpis.map((k) => k.assessment.status));
+  return STATUS_RANK.find((s) => present.has(s)) ?? null;
 }
 
 // ---------------------------------------------------------------- history range
