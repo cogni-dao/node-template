@@ -5,7 +5,7 @@
 ## Metadata
 
 - **Owners:** @derek @core-dev
-- **Last reviewed:** 2026-10-02
+- **Last reviewed:** 2026-11-05
 - **Status:** draft
 
 ## Purpose
@@ -38,6 +38,7 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
 
 - **Exports:** none
 - **Routes (if any):**
+  - `/api/v1/knowledge/browse`, `/api/v1/knowledge/overview` [GET] — authenticated bounded metadata pages; Browse body search advances only through explicit continuation. Reads forward request abort and return retryable 503 on deadline/capacity exhaustion.
   - `/api/auth/[...nextauth]` [GET, POST]
   - `/api/setup/verify` [POST] - DAO formation verification
   - `/api/internal/billing/ingest` [POST] - LiteLLM generic_api callback receiver (bearer auth, Docker-internal only)

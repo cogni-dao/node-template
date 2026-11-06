@@ -16,14 +16,12 @@
  *   - PARALLEL_FANOUT: per-domain reads run concurrently (Promise.all), not the
  *     legacy serial `for … await` loop.
  *   - LIST_LIMIT_PARITY: caller passes the same params the client fetcher uses
- *     (the browse UI fetches `?limit=500`).
+ *     (the legacy Chains UI fetches `?limit=500`).
  * Side-effects: IO (Doltgres reads via the injected port)
  * Links: docs/spec/knowledge-syntropy.md
  * @internal
  */
 
-import { toHttpKnowledgeRow } from "@/app/_facades/read-envelopes.server";
-import { unstable_cache } from "next/cache";
 import {
   buildKnowledgeGraph,
   type KnowledgeGraphModel,
@@ -32,10 +30,15 @@ import {
 import {
   type DomainsListResponse,
   DomainsListResponseSchema,
+  KnowledgeBrowsePageSchema,
+  type KnowledgeBrowseQuery,
   type KnowledgeListResponse,
   KnowledgeListResponseSchema,
+  type KnowledgeOverviewQuery,
   type KnowledgeRow,
 } from "@cogni/node-contracts";
+import { unstable_cache } from "next/cache";
+import { toHttpKnowledgeRow } from "@/app/_facades/read-envelopes.server";
 
 export interface KnowledgeListOpts {
   domain?: string | undefined;
@@ -44,7 +47,7 @@ export interface KnowledgeListOpts {
 }
 
 /**
- * Browse list across all (or one) domain. Mirrors GET /api/v1/knowledge exactly:
+ * Legacy full list across all (or one) domain. Mirrors GET /api/v1/knowledge exactly:
  * same field mapping, same cross-domain `limit` cutoff, same `domains` payload —
  * only the per-domain reads are parallelized.
  */
@@ -134,4 +137,18 @@ export async function loadKnowledgeGraphCached(
     ["knowledge-graph", rev],
     { tags: [KNOWLEDGE_CACHE_TAG] }
   )();
+}
+
+/** Bounded initial reads: one observed HEAD plus metadata; no registry, bodies or citations. */
+export async function loadKnowledgeBrowse(
+  port: KnowledgeStorePort,
+  query: KnowledgeBrowseQuery = {}
+) {
+  return KnowledgeBrowsePageSchema.parse(await port.browseKnowledge(query));
+}
+export async function loadKnowledgeOverview(
+  port: KnowledgeStorePort,
+  query: KnowledgeOverviewQuery = {}
+) {
+  return KnowledgeBrowsePageSchema.parse(await port.overviewKnowledge(query));
 }

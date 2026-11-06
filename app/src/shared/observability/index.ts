@@ -11,20 +11,47 @@
  */
 
 import { EVENT_NAMES as NODE_SHARED_EVENT_NAMES } from "@cogni/node-shared/browser";
+import { logEvent as logSharedEvent } from "./server";
 
 // App-local event registry: the shared registry plus node-local events.
 export const EVENT_NAMES = {
   ...NODE_SHARED_EVENT_NAMES,
+  KNOWLEDGE_BROWSE_COMPLETE: "knowledge.browse.complete",
+  KNOWLEDGE_OVERVIEW_COMPLETE: "knowledge.overview.complete",
   DB_POOL_CONFIGURED: "adapter.db_pool.configured",
   // Auth perimeter (proxy): request rejected before reaching any route handler,
   // so the request-scoped logger never sees it — emitted directly from the proxy.
   AUTH_PERIMETER_DENIED: "auth.perimeter.denied",
   // /admin/payments money-plane snapshot: one terminal event per page read
   // (outcome success|error, durationMs, worst grade, per-plane grade enums).
-  MONEY_PLANE_SNAPSHOT: "money_plane.snapshot",
+  MONEY_PLANE_SNAPSHOT: "money_plane.snapshot"
 } as const;
 
 export type EventName = (typeof EVENT_NAMES)[keyof typeof EVENT_NAMES];
+
+export const KNOWLEDGE_READ_ERROR_CODES = {
+  UNAUTHORIZED: "unauthorized",
+  INVALID_QUERY: "invalid_query",
+  INVALID_CURSOR: "invalid_cursor",
+  STORE_UNCONFIGURED: "store_unconfigured",
+  UNAVAILABLE: "unavailable",
+  INTERNAL_ERROR: "internal_error"
+} as const;
+
+// Extend the shared helper's registry boundary for app-local events.
+export function logEvent(
+  logger: Parameters<typeof logSharedEvent>[0],
+  eventName: EventName,
+  fields: Parameters<typeof logSharedEvent>[2],
+  message?: string
+): void {
+  logSharedEvent(
+    logger,
+    eventName as Parameters<typeof logSharedEvent>[1],
+    fields,
+    message
+  );
+}
 
 // --- Extracted: events, context, client (from @cogni/node-shared) ---
 // NOTE: logEvent/logRequestWarn/etc. come through ./server (which re-exports from @cogni/node-shared)
@@ -44,7 +71,7 @@ export {
   type PaymentsStatusReadEvent,
   type PaymentsVerifiedEvent,
   type RequestContext,
-  WORK_ITEMS_LIST_ERROR_CODES,
+  WORK_ITEMS_LIST_ERROR_CODES
 } from "@cogni/node-shared/browser";
 // --- App-local: server logger/metrics/redact (pino + prom-client runtime deps) ---
 export * from "./server";

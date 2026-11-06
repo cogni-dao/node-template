@@ -3,15 +3,15 @@
 
 /**
  * Module: `@app/(app)/knowledge/view`
- * Purpose: Client knowledge dashboard. Single ReUI DataGrid that switches between
+ * Purpose: Client knowledge dashboard. Tab-intent dashboard with bounded Browse/Graph and legacy grids for
  *   Browse mode (knowledge entries on `main`) and Inbox mode (open external-agent
  *   contributions), plus Graph, Chains, Domains and Goals peers. One WAI-ARIA
- *   tablist, URL-driven filters/sort/mode.
+ *   tablist and URL-driven mode.
  * Scope: Presentation. Fetches data via React Query; mutates via direct fetch.
  * Invariants:
  *   - HEADER_OWNS_SORT_AND_FILTER (column dropdowns).
  *   - SINGLE_COLUMNS_TOGGLE (toolbar, not per-column).
- *   - URL_DRIVEN_STATE (mode + filters persist in URL).
+ *   - URL_DRIVEN_MODE; inactive tabs do not start reads.
  *   - Cookie-session merges only — no Bearer header is ever sent from this page.
  * Side-effects: IO (GET /knowledge, GET /knowledge/contributions, GET /metrics/goals, POST .../merge, POST .../close).
  * Links: docs/spec/knowledge-syntropy.md, [/work view](../work/view.tsx)
@@ -20,11 +20,11 @@
 
 "use client";
 
-import type { GoalsProgress } from "@cogni-dao/metrics/contracts";
 import type {
   ContributionRecord,
   DomainRow,
   DomainsListResponse,
+  KnowledgeBrowsePage,
   KnowledgeListResponse,
   KnowledgeRow,
 } from "@cogni/node-contracts";
@@ -35,7 +35,7 @@ import {
 import { DataGridColumnVisibility } from "@cogni/node-ui-kit/reui/data-grid/data-grid-column-visibility";
 import { DataGridPagination } from "@cogni/node-ui-kit/reui/data-grid/data-grid-pagination";
 import { DataGridTable } from "@cogni/node-ui-kit/reui/data-grid/data-grid-table";
-import { Skeleton } from "@cogni/node-ui-kit/shadcn/skeleton";
+import type { GoalsProgress } from "@cogni-dao/metrics/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   type ColumnFiltersState,
@@ -81,10 +81,10 @@ import {
 import { closeContribution } from "./_api/closeContribution";
 import { fetchContributions } from "./_api/fetchContributions";
 import { fetchDomains } from "./_api/fetchDomains";
-import type { KnowledgeGraphResponse } from "./_api/fetchGraph";
 import { fetchKnowledge } from "./_api/fetchKnowledge";
 import { mergeContribution } from "./_api/mergeContribution";
 import { AddDomainSheet } from "./_components/AddDomainSheet";
+import { BoundedBrowse } from "./_components/BoundedBrowse";
 import { ContributionDetail } from "./_components/ContributionDetail";
 import { knowledgeColumns } from "./_components/columns";
 import { buildContributionColumns } from "./_components/contribution-columns";
@@ -129,19 +129,21 @@ function errorMessage(error: unknown): string {
 interface KnowledgeDashboardViewProps {
   /** SSR-seeded goal progress — only present on a `?mode=goals` deep-link. */
   readonly initialGoals?: GoalsProgress | undefined;
-  /** SSR-seeded browse list — makes the entry count correct on first paint. */
+  /** SSR-seeded legacy Chains list; never read for Browse/Graph. */
   readonly initialList?: KnowledgeListResponse | undefined;
   /** SSR-seeded domain registry. */
   readonly initialDomains?: DomainsListResponse | undefined;
-  /** SSR-seeded graph — only present on a `?mode=graph` deep-link. */
-  readonly initialGraph?: KnowledgeGraphResponse | undefined;
+  /** Content-free seeds for their respective active tabs. */
+  readonly initialBrowse?: KnowledgeBrowsePage | undefined;
+  readonly initialOverview?: KnowledgeBrowsePage | undefined;
 }
 
 export function KnowledgeDashboardView({
   initialGoals,
   initialList,
   initialDomains,
-  initialGraph,
+  initialBrowse,
+  initialOverview,
 }: KnowledgeDashboardViewProps = {}) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -170,6 +172,7 @@ export function KnowledgeDashboardView({
   const knowledgeQuery = useQuery({
     queryKey: ["knowledge", "list"],
     queryFn: fetchKnowledge,
+    enabled: mode === "chains",
     staleTime: 30_000,
     initialData: initialList,
   });
@@ -177,6 +180,7 @@ export function KnowledgeDashboardView({
   const domainsQuery = useQuery({
     queryKey: ["knowledge", "domains"],
     queryFn: fetchDomains,
+    enabled: mode === "domains",
     staleTime: 30_000,
     initialData: initialDomains,
   });
@@ -184,16 +188,18 @@ export function KnowledgeDashboardView({
   const contributionsQuery = useQuery({
     queryKey: ["knowledge", "contributions", "open"],
     queryFn: () => fetchContributions("open"),
+    enabled: mode === "inbox",
     staleTime: 15_000,
   });
 
   const openCount = contributionsQuery.data?.contributions.length ?? 0;
 
-  // One read feeds the Goals tab badge. Polling lives in GoalsBoard, which is
+  // On-intent reads feed the Goals tab badge. Polling lives in GoalsBoard, which is
   // mounted only while the Goals tab is selected.
   const goalsQuery = useQuery({
     queryKey: GOALS_QUERY_KEY,
     queryFn: fetchGoalsProgress,
+    enabled: mode === "goals",
     staleTime: 30_000,
     initialData: initialGoals,
     retry: 1,
@@ -282,15 +288,7 @@ export function KnowledgeDashboardView({
             Knowledge
           </h1>
           <span className="text-muted-foreground text-xs">
-            What this node has learned ·{" "}
-            {knowledgeQuery.data ? (
-              <>
-                {knowledgeQuery.data.items.length} entries on{" "}
-                <code className="font-mono">main</code>
-              </>
-            ) : (
-              <Skeleton className="inline-block h-3 w-28 align-middle" />
-            )}
+            What this node has learned · <code className="font-mono">main</code>
           </span>
         </div>
 
@@ -335,6 +333,12 @@ export function KnowledgeDashboardView({
             <ModeButton
               {...tabProps("goals")}
               label="Goals"
+              {...(!goalsQuery.data
+                ? {
+                    badge: "—",
+                    badgeLabel: "Goal status not loaded; open Goals to load",
+                  }
+                : {})}
               icon={<Target className="size-3.5" />}
               {...(goalsAttention > 0
                 ? {
@@ -348,6 +352,12 @@ export function KnowledgeDashboardView({
             <ModeButton
               {...tabProps("inbox")}
               label="Inbox"
+              {...(!contributionsQuery.data
+                ? {
+                    badge: "—",
+                    badgeLabel: "Inbox not loaded; open Inbox to load",
+                  }
+                : {})}
               icon={<GitMerge className="size-3.5" />}
               {...(openCount > 0
                 ? {
@@ -367,14 +377,7 @@ export function KnowledgeDashboardView({
         className="flex min-w-0 flex-col gap-4"
       >
         {mode === "goals" && <GoalsBoard initialData={initialGoals} />}
-        {mode === "browse" && (
-          <BrowsePanel
-            rows={knowledgeQuery.data?.items ?? []}
-            isLoading={knowledgeQuery.isLoading}
-            error={knowledgeQuery.error}
-            mode="browse"
-          />
-        )}
+        {mode === "browse" && <BoundedBrowse initialData={initialBrowse} />}
         {mode === "chains" && (
           <BrowsePanel
             rows={(knowledgeQuery.data?.items ?? []).filter((r) =>
@@ -385,12 +388,7 @@ export function KnowledgeDashboardView({
             mode="chains"
           />
         )}
-        {mode === "graph" && (
-          <GraphView
-            rows={knowledgeQuery.data?.items ?? []}
-            initialData={initialGraph}
-          />
-        )}
+        {mode === "graph" && <GraphView initialData={initialOverview} />}
         {mode === "domains" && (
           <DomainsPanel
             rows={domainsQuery.data?.domains ?? []}
@@ -500,6 +498,11 @@ function BrowsePanel({
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
   const [selected, setSelected] = useState<KnowledgeRow | null>(null);
 
+  const rowsById = useMemo(
+    () => new Map(rows.map((row) => [row.id, row])),
+    [rows]
+  );
+
   const table = useReactTable({
     data: rows,
     columns: knowledgeColumns,
@@ -516,7 +519,8 @@ function BrowsePanel({
     getFacetedUniqueValues: getFacetedUniqueValues(),
     globalFilterFn: (row, _id, filterValue: string) => {
       const q = filterValue.toLowerCase();
-      const d = row.original;
+      const d = rowsById.get(row.original.id);
+      if (!d) return false;
       return (
         d.id.toLowerCase().includes(q) ||
         d.title.toLowerCase().includes(q) ||
@@ -554,7 +558,7 @@ function BrowsePanel({
           recordCount={rows.length}
           isLoading={isLoading}
           loadingMode="skeleton"
-          onRowClick={(row) => setSelected(row)}
+          onRowClick={(row) => setSelected(rowsById.get(row.id) ?? null)}
           tableLayout={{
             headerSticky: true,
             headerBackground: true,

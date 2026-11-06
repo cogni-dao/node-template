@@ -4,6 +4,7 @@
 
 ## Metadata
 
+- **Last reviewed:** 2026-11-05
 - **Owners:** @Cogni-DAO
 - **Status:** draft
 
@@ -38,6 +39,7 @@ Shared Zod route contracts and HTTP router definitions for all node apps. PURE_L
 
 All contract files re-exported via `src/index.ts`. Selective re-export for `ai.chat.v1.contract` to avoid `ChatMessage` name collision with `ai.completions.v1.contract`.
 
+- `knowledge.browse.v1.contract` — reexports canonical knowledge-store Browse/Overview queries, summary rows and bounded live pages with observed revision markers.
 - `work.items.list.v1.contract` — full and summary list contracts share filters; optional sortBy/sortDirection use work-items canonical allowlists; rankMin/rankMax are inclusive; projectIds is any-of; DTO exposes derived read-only rankScore
 - `work.items.{list,create,patch}.v1.contract` — evaluation scores outline (`scores.<axis>.v/ev`); shared work-items adapter validates bounds, PATCH null clears scores
 - `identity.attestation.v1.contract` — frozen operator↔node identity protocol, canonical HTTPS-origin schema, and cross-repository protocol fingerprint

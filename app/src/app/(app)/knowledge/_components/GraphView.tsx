@@ -2,24 +2,17 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
- * Module: `@app/(app)/knowledge/_components/GraphView`
- * Purpose: 3D force-directed view of the knowledge hub — domains as hub nodes,
- *   entries clustered around them, citation edges colored by type. Clicking an
- *   entry opens the shared KnowledgeDetail side-sheet (same panel the table uses).
- * Scope: Client presentation. Fetches GET /api/v1/knowledge/graph via React Query;
- *   resolves clicked node → full KnowledgeRow from the parent-loaded list.
- * Invariants:
- *   - SSR_DISABLED (react-force-graph-3d touches window; dynamic import ssr:false).
- *   - SIDE_SHEET_REUSE (node click → KnowledgeDetail, not a bespoke panel).
- * Side-effects: IO (graph fetch), WebGL render.
- * Links: docs/spec/knowledge-syntropy.md
+ * Bounded metadata overview and five-link replacement focus pages, reusing the
+ * existing WebGL renderer and exact-ID detail sheet. Work endpoints remain links.
+ * No synthetic hubs, full-graph read, body prefetch or accumulated geometry.
+ * Browser cancellation guards intent; native source-byte/latency costs need live proof.
  * @internal
  */
 
 "use client";
 
-import type { KnowledgeRow } from "@cogni/node-contracts";
-import { useQuery } from "@tanstack/react-query";
+import type { KnowledgeBrowsePage } from "@cogni/node-contracts";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
 import {
   type ComponentType,
@@ -30,8 +23,11 @@ import {
   useState,
 } from "react";
 
-import { fetchGraph, type KnowledgeGraphResponse } from "../_api/fetchGraph";
+import { fetchBrowse, overviewKey } from "../_api/fetchBrowse";
 import { KnowledgeDetail } from "./KnowledgeDetail";
+import { useKnowledgeSelection } from "./KnowledgeSelection";
+import { useBrowseRevision } from "./useBrowseRevision";
+import { focusGeometry, useGraphFocus } from "./useGraphFocus";
 
 interface GraphNodeObject {
   id: string;
@@ -151,75 +147,38 @@ function domainColor(domain: string): string {
 }
 
 export function GraphView({
-  rows,
   initialData,
 }: {
-  readonly rows: KnowledgeRow[];
-  /** SSR-seeded graph payload (present on a `?mode=graph` deep-link). */
-  readonly initialData?: KnowledgeGraphResponse | undefined;
+  readonly initialData?: KnowledgeBrowsePage | undefined;
 }) {
+  const queryClient = useQueryClient();
+  const [cursor, setCursor] = useState<string | undefined>();
+  const [history, setHistory] = useState<Array<string | undefined>>([]);
+  const query = cursor ? { cursor } : {};
   const graphQuery = useQuery({
-    queryKey: ["knowledge", "graph"],
-    queryFn: fetchGraph,
+    queryKey: overviewKey(query),
+    queryFn: ({ signal }) => fetchBrowse(query, signal, "overview"),
     staleTime: 30_000,
-    initialData,
+    retry: false,
+    initialData: !cursor ? initialData : undefined,
   });
-
+  const lastOverview = useRef<KnowledgeBrowsePage | undefined>(initialData);
+  if (graphQuery.data) lastOverview.current = graphQuery.data;
+  const overview = graphQuery.data ?? lastOverview.current;
+  const revision = useBrowseRevision(overview?.revision);
   const [colorMode, setColorMode] = useState<ColorMode>("confidence");
-  const [showHubs, setShowHubs] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-
-  const rowsById = useMemo(() => {
-    const m = new Map<string, KnowledgeRow>();
-    for (const r of rows) m.set(r.id, r);
-    return m;
-  }, [rows]);
-
-  const data = useMemo<{
-    nodes: GraphNodeObject[];
-    links: GraphLinkObject[];
-  }>(() => {
-    const g = graphQuery.data;
-    if (!g) return { nodes: [], links: [] };
-    const domains = [...new Set(g.nodes.map((n) => n.domain))];
-    const hubs: GraphNodeObject[] = showHubs
-      ? domains.map((d) => ({
-          id: `domain:${d}`,
-          isHub: true,
-          domain: d,
-          title: d,
-          entryCount: g.nodes.filter((n) => n.domain === d).length,
-        }))
-      : [];
-    const entries: GraphNodeObject[] = g.nodes.map((n) => ({
-      id: n.id,
-      isHub: false,
-      domain: n.domain,
-      title: n.title,
-      entryType: n.entryType,
-      confidencePct: n.confidencePct,
-      sourceType: n.sourceType,
-    }));
-    const links: GraphLinkObject[] = [];
-    if (showHubs) {
-      for (const n of g.nodes) {
-        links.push({
-          source: `domain:${n.domain}`,
-          target: n.id,
-          kind: "member",
-        });
-      }
-    }
-    for (const e of g.edges) {
-      links.push({
-        source: e.source,
-        target: e.target,
-        kind: "cite",
-        citationType: e.citationType,
-      });
-    }
-    return { nodes: [...hubs, ...entries], links };
-  }, [graphQuery.data, showHubs]);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [entryId, setEntryId] = useState("");
+  const focus = useGraphFocus(selectedId);
+  const detail = useKnowledgeSelection(selectedId);
+  const data = useMemo(
+    () =>
+      focusGeometry(overview?.items ?? [], detail.data ?? null, {
+        links: focus.links,
+      }),
+    [overview, detail.data, focus.links]
+  );
 
   const nodeColor = useCallback(
     (node: GraphNodeObject) => {
@@ -251,6 +210,7 @@ export function GraphView({
   const onNodeClick = useCallback((node: GraphNodeObject) => {
     if (node.isHub) return;
     setSelectedId(node.id);
+    setDetailOpen(true);
   }, []);
 
   // Size the WebGL canvas to its container (the lib defaults to window size).
@@ -266,16 +226,6 @@ export function GraphView({
     setSize({ width: el.clientWidth, height: el.clientHeight });
     return () => ro.disconnect();
   }, []);
-
-  const selectedItem = selectedId ? (rowsById.get(selectedId) ?? null) : null;
-
-  if (graphQuery.error) {
-    return (
-      <p className="py-8 text-center text-destructive">
-        Failed to load knowledge graph.
-      </p>
-    );
-  }
 
   return (
     <>
@@ -296,22 +246,91 @@ export function GraphView({
             </button>
           ))}
         </div>
-        <label className="flex cursor-pointer items-center gap-2 text-muted-foreground text-xs">
+        <form
+          className="flex gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (entryId) {
+              setSelectedId(entryId);
+              setDetailOpen(true);
+            }
+          }}
+        >
           <input
-            type="checkbox"
-            checked={showHubs}
-            onChange={(e) => setShowHubs(e.target.checked)}
-            className="size-3.5 accent-primary"
+            aria-label="Knowledge ID"
+            placeholder="Open exact knowledge ID"
+            value={entryId}
+            onChange={(e) => setEntryId(e.target.value)}
+            className="rounded border bg-background px-2 text-xs"
           />
-          Domain hubs
-        </label>
+          <button type="submit" className="text-xs underline">
+            Open entry
+          </button>
+        </form>
+        <span className="text-muted-foreground text-xs">
+          {overview?.items.length ?? "…"} overview nodes · {focus.links.length}{" "}
+          current links · hubs disabled
+        </span>
+        <button
+          type="button"
+          disabled={!history.length || graphQuery.isFetching}
+          onClick={() => {
+            setCursor(history[history.length - 1]);
+            setHistory(history.slice(0, -1));
+          }}
+        >
+          Previous overview
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setCursor(undefined);
+            setHistory([]);
+            void queryClient
+              .fetchQuery({
+                queryKey: overviewKey(),
+                queryFn: ({ signal }) => fetchBrowse({}, signal, "overview"),
+                staleTime: 0,
+              })
+              .then((firstPage) =>
+                revision.acknowledgeRestart(firstPage.revision)
+              )
+              .catch(() => undefined);
+          }}
+        >
+          Restart overview
+        </button>
+        {revision.restartNeeded && (
+          <span role="status">
+            Knowledge changed. Restart overview to begin a new live traversal.
+          </span>
+        )}
+        {overview && (
+          <span className="text-xs">
+            Observed revision: {overview.revision} · live read
+          </span>
+        )}
+        <button
+          type="button"
+          disabled={
+            !overview?.nextCursor || graphQuery.isFetching || !!graphQuery.error
+          }
+          onClick={() => {
+            if (overview?.nextCursor) {
+              setHistory([...history, cursor]);
+              setCursor(overview.nextCursor);
+            }
+          }}
+        >
+          More overview
+        </button>
       </div>
 
       <div
         ref={wrapRef}
         className="relative h-[var(--height-knowledge-graph)] w-full overflow-hidden rounded-lg border border-border/60 bg-background"
       >
-        {graphQuery.data && (
+        {overview && (
           <ForceGraph3D
             graphData={data}
             width={size.width}
@@ -338,17 +357,78 @@ export function GraphView({
         )}
         <GraphLegend
           colorMode={colorMode}
-          edges={graphQuery.data?.edges ?? []}
-          domains={graphQuery.data?.domains ?? []}
+          edges={data.links}
+          domains={[
+            ...new Set(data.nodes.map((n) => n.domain).filter(Boolean)),
+          ]}
         />
       </div>
 
+      {graphQuery.error && (
+        <p role="alert">
+          Could not load overview.{" "}
+          <button type="button" onClick={() => void graphQuery.refetch()}>
+            Retry overview
+          </button>
+        </p>
+      )}
+      {selectedId && (
+        <div className="flex flex-col gap-2 text-xs">
+          <p>
+            Focus: {selectedId} · {focus.links.length} links on this page
+            {focus.pending ? " · loading…" : ""}
+          </p>
+          {focus.error && (
+            <p role="alert">
+              Could not load focus page.{" "}
+              <button type="button" onClick={focus.retry}>
+                Retry focus page
+              </button>
+            </p>
+          )}
+          {focus.links.map((link) => (
+            <div key={link.id}>
+              <span>
+                {link.direction === "in" ? "Incoming" : "Outgoing"} ·{" "}
+                {link.citationType} ·{" "}
+              </span>
+              <a href={link.source.href}>
+                {link.source.title ?? link.source.id}
+              </a>{" "}
+              →{" "}
+              <a href={link.target.href}>
+                {link.target.title ?? link.target.id}
+              </a>
+            </div>
+          ))}
+          <div className="flex gap-3">
+            <button
+              type="button"
+              disabled={!focus.nextCursor || focus.pending || focus.error}
+              onClick={focus.more}
+            >
+              More focus links
+            </button>
+            <button
+              type="button"
+              disabled={focus.pending}
+              onClick={focus.restart}
+            >
+              Restart focus
+            </button>
+            <button type="button" onClick={() => setSelectedId(null)}>
+              Clear focus
+            </button>
+          </div>
+        </div>
+      )}
       <KnowledgeDetail
-        item={selectedItem}
-        open={selectedItem !== null}
-        onOpenChange={(o) => {
-          if (!o) setSelectedId(null);
-        }}
+        item={detail.data ?? null}
+        open={detailOpen && selectedId !== null}
+        loading={detail.isFetching}
+        error={detail.error}
+        onRetry={() => void detail.refetch()}
+        onOpenChange={setDetailOpen}
       />
     </>
   );

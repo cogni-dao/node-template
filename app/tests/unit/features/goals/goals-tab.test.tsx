@@ -24,12 +24,12 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import type { ComponentProps, ReactNode } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   everyStatusFixture,
   visualFixture,
 } from "@tests/_fixtures/goals/progress";
+import type { ComponentProps, ReactNode } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { KnowledgeDashboardView } from "@/app/(app)/knowledge/view";
 import { GoalsBoard, MetricEvidence } from "@/features/goals";
 import { deadlineText, STATUS_META } from "@/features/goals/lib/presentation";
@@ -77,6 +77,9 @@ vi.mock("@/app/(app)/knowledge/_components/AddDomainSheet", () => ({
 vi.mock("@/app/(app)/knowledge/_components/KnowledgeDetail", () => ({
   KnowledgeDetail: () => null,
 }));
+vi.mock("@/app/(app)/knowledge/_components/ContributionDetail", () => ({
+  ContributionDetail: () => null,
+}));
 vi.mock("@/app/(app)/knowledge/_components/GraphView", () => ({
   GraphView: () => null,
 }));
@@ -99,6 +102,7 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   navigation.push.mockReset();
+  navigation.mode = "browse";
   navigation.observation = null;
 });
 
@@ -182,18 +186,16 @@ describe("GoalsBoard", () => {
 });
 
 describe("Knowledge Goals tab", () => {
-  it("is a WAI-ARIA tab that writes ?mode=goals and shows the attention badge", async () => {
+  it("loads tab badges only on activation and preserves Goals URL and ARIA controls", async () => {
     navigation.mode = "browse";
     const data = visualFixture();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string) => {
-        if (url === "/api/v1/metrics/goals") return Response.json(data);
-        if (url.startsWith("/api/v1/knowledge/contributions"))
-          return Response.json({ contributions: [] });
-        return new Promise(() => {});
-      })
-    );
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url === "/api/v1/metrics/goals") return Response.json(data);
+      if (url.startsWith("/api/v1/knowledge/contributions"))
+        return Response.json({ contributions: [] });
+      return new Promise(() => {});
+    });
+    vi.stubGlobal("fetch", fetchMock);
     const qc = client();
     const view = () => (
       <QueryClientProvider client={qc}>
@@ -206,22 +208,59 @@ describe("Knowledge Goals tab", () => {
     const { rerender } = render(view());
     const tablist = screen.getByRole("tablist", { name: "Knowledge views" });
     const tabs = within(tablist).getAllByRole("tab");
-    expect(tabs.map((t) => t.textContent?.replace(/,.*$/, ""))).toEqual([
-      "Browse",
-      "Graph",
-      "Chains",
-      "Domains",
-      expect.stringMatching(/^Goals/),
-      "Inbox",
+    expect(tabs.map((t) => t.id)).toEqual([
+      "knowledge-tab-browse",
+      "knowledge-tab-graph",
+      "knowledge-tab-chains",
+      "knowledge-tab-domains",
+      "knowledge-tab-goals",
+      "knowledge-tab-inbox",
     ]);
     const goals = within(tablist).getByRole("tab", { name: /^Goals/ });
-    await waitFor(() =>
-      expect(goals.textContent).toContain("1 goal needs attention")
+    const inbox = within(tablist).getByRole("tab", { name: /^Inbox/ });
+    expect(goals.textContent).toContain(
+      "Goal status not loaded; open Goals to load"
     );
+    expect(inbox.textContent).toContain("Inbox not loaded; open Inbox to load");
+    const requests = () => fetchMock.mock.calls.map(([url]) => url);
+    await waitFor(() =>
+      expect(
+        requests().some((url) => url.startsWith("/api/v1/knowledge/browse?"))
+      ).toBe(true)
+    );
+    expect(requests()).not.toContain("/api/v1/metrics/goals");
+    expect(
+      requests().some((url) =>
+        url.startsWith("/api/v1/knowledge/contributions")
+      )
+    ).toBe(false);
     expect(goals.getAttribute("aria-selected")).toBe("false");
     expect(goals.getAttribute("tabindex")).toBe("-1");
 
+    // Manual tab focus alone must not activate a background read.
+    goals.focus();
+    fireEvent.keyDown(goals, { key: "ArrowRight" });
+    expect(document.activeElement).toBe(inbox);
+    expect(requests()).not.toContain("/api/v1/metrics/goals");
+    expect(
+      requests().some((url) =>
+        url.startsWith("/api/v1/knowledge/contributions")
+      )
+    ).toBe(false);
+
     fireEvent.click(goals);
+    await waitFor(() =>
+      expect(goals.textContent).toContain("1 goal needs attention")
+    );
+    expect(
+      requests().filter((url) => url === "/api/v1/metrics/goals")
+    ).toHaveLength(1);
+    expect(goals.textContent).not.toContain("not loaded");
+    expect(
+      requests().some((url) =>
+        url.startsWith("/api/v1/knowledge/contributions")
+      )
+    ).toBe(false);
     expect(navigation.push).toHaveBeenCalledWith("/knowledge?mode=goals", {
       scroll: false,
     });
@@ -231,9 +270,7 @@ describe("Knowledge Goals tab", () => {
     expect(navigation.push).toHaveBeenCalledTimes(1);
     const panel = screen.getByRole("tabpanel");
     expect(panel.getAttribute("aria-labelledby")).toBe(goals.id);
-    expect(
-      within(panel).getByRole("region", { name: "Goals" })
-    ).toBeTruthy();
+    expect(within(panel).getByRole("region", { name: "Goals" })).toBeTruthy();
 
     // Arrow keys move focus along the tablist (manual activation).
     goals.focus();
@@ -258,6 +295,15 @@ describe("Knowledge Goals tab", () => {
     expect(navigation.push).toHaveBeenLastCalledWith("/knowledge", {
       scroll: false,
     });
+    expect(goals.textContent).toContain("1 goal needs attention");
+
+    fireEvent.click(inbox);
+    await waitFor(() => expect(inbox.textContent).not.toContain("not loaded"));
+    expect(
+      requests().filter((url) =>
+        url.startsWith("/api/v1/knowledge/contributions")
+      )
+    ).toHaveLength(1);
   });
 });
 

@@ -268,3 +268,59 @@ export interface EdoCapability {
    */
   getChain(params: GetChainParams): Promise<GetChainResult>;
 }
+
+/** Content-free row for browsing and overview. */
+export const KnowledgeSummarySchema = KnowledgeRowSchema.pick({
+  id: true,
+  domain: true,
+  entityId: true,
+  title: true,
+  useWhen: true,
+  entryType: true,
+  confidencePct: true,
+  sourceType: true,
+  createdAt: true,
+});
+export type KnowledgeSummary = z.infer<typeof KnowledgeSummarySchema>;
+const exactValues = z
+  .array(z.string().min(1).max(500))
+  .max(50)
+  .default([])
+  .transform((values) => [...new Set(values)].sort());
+export const KnowledgeBrowseQuerySchema = z
+  .object({
+    sort: z
+      .enum([
+        "id",
+        "domain",
+        "entryType",
+        "confidencePct",
+        "sourceType",
+        "createdAt",
+      ])
+      .default("createdAt"),
+    direction: z.enum(["asc", "desc"]).default("desc"),
+    domains: exactValues,
+    entryTypes: exactValues,
+    sourceTypes: exactValues,
+    search: z.string().max(2000).optional(),
+    cursor: z.string().min(1).max(16000).optional(),
+  })
+  .strict();
+export type KnowledgeBrowseQuery = z.input<typeof KnowledgeBrowseQuerySchema>;
+export const KnowledgeOverviewQuerySchema = KnowledgeBrowseQuerySchema.omit({
+  search: true,
+});
+export type KnowledgeOverviewQuery = z.input<
+  typeof KnowledgeOverviewQuerySchema
+>;
+export const KnowledgeBrowsePageSchema = z.object({
+  /** Observed committed HEAD before this live window; not a snapshot token. */
+  revision: z.string().min(1).max(200),
+  items: z.array(KnowledgeSummarySchema).max(20),
+  nextCursor: z.string().nullable(),
+  scannedRows: z.number().int().min(0).max(20),
+});
+export type KnowledgeBrowsePage = z.infer<typeof KnowledgeBrowsePageSchema>;
+export const KnowledgeOverviewPageSchema = KnowledgeBrowsePageSchema;
+export type KnowledgeOverviewPage = z.infer<typeof KnowledgeOverviewPageSchema>;

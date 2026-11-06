@@ -11,22 +11,24 @@
  *   - Dolt versioning functions (dolt_commit, dolt_log, dolt_diff, dolt_hashof) via sql.unsafe().
  *   - No Drizzle query builder for writes (parameterized queries fail on Doltgres).
  *   - Connection string injected, never from process.env (PACKAGES_NO_ENV).
+ *   - Browse/Overview retain native capacity after caller deadline/abort; no snapshot claim.
  * Side-effects: IO (database reads/writes)
  * Links: docs/spec/knowledge-data-plane.md
  * @public
  */
 
 import {
-  GOVERNING_ENTRY_TYPES,
-  type GoverningIndexRow,
-  selectGoverningIndex,
-} from "../../domain/governing.js";
-
-import {
   DoltBranchMutationUncertainError,
   runDoltBranchMutation,
 } from "@cogni-dao/doltgres-admission";
 import type { Sql } from "postgres";
+import type {
+  KnowledgeBrowsePage,
+  KnowledgeBrowseQuery,
+  KnowledgeSummary,
+} from "../../contracts.js";
+import { readBrowseWithinBudget } from "./browse-budget.js";
+import { browseQuery, nextBrowseCursor } from "../../domain/browse.js";
 import { initializeConfidence } from "../../domain/confidence-policy.js";
 import {
   type ActiveGoal,
@@ -34,6 +36,11 @@ import {
   GOAL_RETIRING_EDGE,
   selectActiveGoals,
 } from "../../domain/dao-goals.js";
+import {
+  GOVERNING_ENTRY_TYPES,
+  type GoverningIndexRow,
+  selectGoverningIndex,
+} from "../../domain/governing.js";
 import type { KnowledgeGraphNode } from "../../domain/knowledge-graph.js";
 import type {
   Citation,
@@ -65,6 +72,7 @@ import {
   type DomainPatch,
   GoalRequiresContributionError,
   HypothesisMissingEvaluateAtError,
+  KnowledgeBusyError,
   type KnowledgeStorePort,
   KnowledgeWriteOutcomeUnknownError,
   KnowledgeWriteScopeRequiredError,
@@ -295,6 +303,8 @@ export interface DoltgresAdapterConfig {
   sql: Sql;
   /** Existing shared branch admission; ordinary reads never use it. */
   writerSession?: DoltBranchSessionRunner;
+  /** One Browse/Overview deadline, including admission and both native reads. */
+  browseTimeoutMs?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -306,8 +316,12 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
   private readonly readSql: Sql;
   private readonly writerSession: DoltBranchSessionRunner | undefined;
   private scopeOpen = false;
+  private readonly browseTimeoutMs: number;
 
   constructor(config: DoltgresAdapterConfig) {
+    this.browseTimeoutMs = config.browseTimeoutMs ?? 15_000;
+    if (!Number.isFinite(this.browseTimeoutMs) || this.browseTimeoutMs <= 0)
+      throw new Error("browseTimeoutMs must be finite and positive");
     this.sql = config.sql;
     this.readSql = config.sql;
     this.writerSession = config.writerSession;
@@ -367,6 +381,151 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
   }
 
   // --- Read ---
+
+  async browseKnowledge(
+    input: KnowledgeBrowseQuery,
+    options?: { signal?: AbortSignal }
+  ): Promise<KnowledgeBrowsePage> {
+    return this.readBrowse(input, "browse", options?.signal);
+  }
+
+  async overviewKnowledge(
+    input: Omit<KnowledgeBrowseQuery, "search">,
+    options?: { signal?: AbortSignal }
+  ): Promise<KnowledgeBrowsePage> {
+    return this.readBrowse(input, "overview", options?.signal);
+  }
+
+  private async readBrowse(
+    input: KnowledgeBrowseQuery,
+    operation: "browse" | "overview",
+    signal?: AbortSignal
+  ): Promise<KnowledgeBrowsePage> {
+    const { query, signature, position } = browseQuery(input, operation);
+    const columns = {
+      id: "id",
+      domain: "domain",
+      entryType: "entry_type",
+      confidencePct: "COALESCE(confidence_pct, -1)",
+      sourceType: "source_type",
+      // NOW() retains hidden nanoseconds; native timestamp text exposes only
+      // microseconds. Order, seek and cursor must share that public precision.
+      createdAt: "date_trunc('microseconds', created_at)",
+    } as const;
+    const column = columns[query.sort];
+    const conditions: string[] = [];
+    for (const [values, field] of [
+      [query.domains, "domain"],
+      [query.entryTypes, "entry_type"],
+      [query.sourceTypes, "source_type"],
+    ] as const) {
+      if (values.length)
+        conditions.push(`${field} IN (${values.map(escapeValue).join(", ")})`);
+    }
+    if (position) {
+      const idAfter = `id > ${escapeValue(position.id)}`;
+      if (query.sort === "createdAt" && position.value === "") {
+        const nullTail = `(created_at IS NULL AND ${idAfter})`;
+        conditions.push(
+          query.direction === "asc"
+            ? `(created_at IS NOT NULL OR ${nullTail})`
+            : nullTail
+        );
+      } else {
+        const literal =
+          typeof position.value === "number"
+            ? String(position.value)
+            : escapeValue(position.value);
+        const operator = query.direction === "asc" ? ">" : "<";
+        const nullTail =
+          query.sort === "createdAt" && query.direction === "desc"
+            ? " OR created_at IS NULL"
+            : "";
+        conditions.push(
+          `(${column} ${operator} ${literal} OR (${column} = ${literal} AND ${idAfter})${nullTail})`
+        );
+      }
+    }
+    const nullOrder =
+      query.sort === "createdAt"
+        ? query.direction === "asc"
+          ? " NULLS FIRST"
+          : " NULLS LAST"
+        : "";
+    const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+    const search = query.search?.toLowerCase();
+    const fields = `id, domain, entity_id, title, entry_type, confidence_pct, source_type, use_when, created_at, CAST(date_trunc('microseconds', created_at) AS TEXT) AS browse_created_at${search ? ", content" : ""}`;
+    const { rows, revision } = await readBrowseWithinBudget(
+      this.readSql,
+      this.browseTimeoutMs,
+      signal,
+      async (read) => {
+        const heads = await read("SELECT dolt_hashof('HEAD') as hash");
+        const revision = heads[0]?.hash;
+        if (typeof revision !== "string" || !revision)
+          throw new KnowledgeBusyError(
+            "Knowledge revision unavailable; retry shortly"
+          );
+        const rows = await read(
+          `SELECT ${fields} FROM knowledge ${where} ORDER BY ${column} ${query.direction.toUpperCase()}${nullOrder}, id ASC LIMIT ${search ? 20 : 21}`
+        );
+        return { rows, revision };
+      }
+    );
+    const window = rows.slice(0, 20);
+    const toSummary = (row: Record<string, unknown>): KnowledgeSummary => ({
+      id: String(row.id),
+      domain: String(row.domain),
+      entityId: row.entity_id == null ? null : String(row.entity_id),
+      title: String(row.title),
+      useWhen: row.use_when == null ? null : String(row.use_when),
+      entryType: String(row.entry_type),
+      confidencePct:
+        row.confidence_pct == null ? null : Number(row.confidence_pct),
+      sourceType: String(row.source_type),
+      createdAt: row.created_at
+        ? new Date(row.created_at as string).toISOString()
+        : null,
+    });
+    const items = window
+      .filter(
+        (row) =>
+          !search ||
+          [
+            row.id,
+            row.title,
+            row.content,
+            row.domain,
+            row.entry_type,
+            row.entity_id,
+          ].some(
+            (v) => typeof v === "string" && v.toLowerCase().includes(search)
+          )
+      )
+      .map(toSummary);
+    const hasMore = search ? window.length === 20 : rows.length > 20;
+    const last = window[window.length - 1];
+    return {
+      revision,
+      items,
+      scannedRows: window.length,
+      nextCursor:
+        hasMore && last
+          ? nextBrowseCursor(
+              signature,
+              toSummary(last),
+              query.sort,
+              // The driver Date loses sub-millisecond precision. Keysets must
+              // compare the native microsecond key, not the display ISO value.
+              query.sort === "createdAt"
+                ? String(last.browse_created_at ?? "")
+                    .replace(" ", "T")
+                    .replace(/([+-]\d{2})$/, "$1:00")
+                : undefined
+            )
+          : null,
+    };
+  }
 
   async getKnowledge(id: string): Promise<Knowledge | null> {
     const rows = await this.sql.unsafe(
@@ -920,7 +1079,6 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
   }
 }
 
-export type { DoltgresAdapterConfig as Config };
 export {
   buildDoltgresClient,
   type DoltgresClientConfig,
@@ -946,3 +1104,4 @@ export {
   DoltBranchSessionRunner,
   KNOWLEDGE_BRANCH_LOCK_KEY,
 } from "./session-admission.js";
+export type { DoltgresAdapterConfig as Config };

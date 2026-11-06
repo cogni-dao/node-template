@@ -4,6 +4,7 @@
 
 ## Metadata
 
+- **Last reviewed:** 2026-11-05
 - **Owners:** @derekg1729
 - **Status:** stable
 
@@ -52,11 +53,12 @@ Shared ports, contribution workflow, and adapters for versioned domain knowledge
 
 **Pure subpath** (`@cogni/knowledge-store/contracts`):
 
+- Bounded `KnowledgeSummarySchema`, Browse/Overview query/page schemas and inferred types; `browseKnowledge` / `overviewKnowledge` port methods project metadata globally and bind continuations to query and operation. Search consumes twenty candidate bodies per explicit window. Both pages carry the observed committed HEAD (not a snapshot token).
 - Canonical `KnowledgeRowSchema` / `KnowledgeRow`, knowledge and EDO capability contracts, parameters and results. No adapters or capability implementations.
 
 **Subpath** (`@cogni/knowledge-store/adapters/doltgres`):
 
-- `DoltgresKnowledgeStoreAdapter` (`withWrite` required for mutations), `DoltgresAdapterConfig` (injected shared writer session), `buildDoltgresClient`, `DoltgresClientConfig`
+- `DoltgresKnowledgeStoreAdapter` (`withWrite` required for mutations), `DoltgresAdapterConfig` (injected shared writer session; optional finite `browseTimeoutMs`, default 15s), `buildDoltgresClient`, `DoltgresClientConfig`
 - `DomainSql`, `getDoltgresDomain`, `updateDoltgresDomain`, `deleteDoltgresDomain`: domain SQL operations for caller-owned query callbacks; mutations require the caller's existing admitted write scope and do not admit or commit.
 - `DoltgresKnowledgeContributionAdapter`, `DoltgresKnowledgeContributionAdapterConfig` (contribution-branch lifecycle)
 - `createDoltgresPusher`, `DoltgresPusher`, `DoltgresPushConfig` (post-merge mirror to a Dolt remote; lazy `dolt_remote add` + `dolt_push`)
@@ -95,3 +97,5 @@ Shared ports, contribution workflow, and adapters for versioned domain knowledge
 Contribution adapters require an explicit independent `writerSession` or `branchSql`; no write path falls back to its read client. The existing session runner registers each reader and rejects both initial and replacement writer aliases before SQL; rejected replacement factories never destroy a reader. Pure read-only store construction remains supported.
 
 metricSpec and kpiBindings are nullable reviewed JSON fields. Omitted updates preserve them; explicit null clears them. The node validates metric semantics; this package never executes calculators.
+
+Browse/Overview accept an optional AbortSignal and share one finite admission + HEAD + metadata/body-window deadline, including SSR. Per borrowed pool, at most max−1 native windows (one on a single-slot pool) and 32 waiting callers are admitted. Deadlines/aborts retain permits until native server settlement; uncertain transport outcomes quarantine capacity until process recovery. No borrowed pool is canceled, closed or replaced; multi-slot pools retain one slot for unrelated readers. The private writer executor exposes no ordinary-read API, so this narrow reader guard follows Work’s retained-settlement accounting without writer admission.
