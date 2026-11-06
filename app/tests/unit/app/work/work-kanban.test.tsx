@@ -176,6 +176,20 @@ describe("public startup boundary", () => {
     expect(readFileSync(join(sourceRoot, "layout/components/AppShell.tsx"), "utf8")).toContain('from "@/components/startup"');
     expect(readFileSync(join(process.cwd(), "src/components/startup.ts"), "utf8")).toContain('from "@cogni/node-ui-kit/shadcn/sidebar"');
   });
+  it("keeps Work detail Sheet imports on the narrow public component boundary", async () => {
+    const detailRoot = join(process.cwd(), "src/app/(app)/work/_components");
+    for (const name of ["WorkDetailSheet.tsx", "WorkItemDetail.tsx", "WorkItemDetailBody.tsx"]) {
+      const source = readFileSync(join(detailRoot, name), "utf8");
+      expect(source).not.toMatch(/["']@cogni\/node-ui-kit\/shadcn\/sheet["']/);
+      expect(source).toContain('from "@/components/sheet"');
+    }
+    const publicSheet = await import("@/components/sheet");
+    const vendorSheet = await import("@cogni/node-ui-kit/shadcn/sheet");
+    for (const name of ["Sheet", "SheetContent", "SheetDescription", "SheetHeader", "SheetTitle"] as const) {
+      expect(publicSheet[name]).toBe(vendorSheet[name]);
+    }
+  });
+
 });
 
 describe("Work Kanban", () => {

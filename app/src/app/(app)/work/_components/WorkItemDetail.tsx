@@ -3,7 +3,7 @@
 
 "use client";
 
-import { Sheet, SheetContent } from "@cogni/node-ui-kit/shadcn/sheet";
+import { Sheet, SheetContent } from "@/components/sheet";
 import type { WorkItemDetailBodyProps } from "./WorkItemDetailBody";
 import { WorkItemDetailBody } from "./WorkItemDetailBody";
 
