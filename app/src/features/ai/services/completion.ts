@@ -297,7 +297,7 @@ export async function executeStream({
     model,
     messages: messages.map((m) => ({ role: m.role, content: m.content })),
     temperature: DEFAULT_TEMPERATURE,
-    maxTokens: DEFAULT_MAX_TOKENS,
+    maxTokens: maxTokens ?? DEFAULT_MAX_TOKENS,
   });
 
   // Per spec: request_id is stable per request entry (from ctx.reqId)

@@ -135,6 +135,8 @@ export type CompletionStreamFn = (
 /**
  * Graph model calls carry agent reasoning plus tool calls; reasoning models exhausted the chat
  * default (4096) before emitting a tool call. This is a cap, not a reservation: billing follows usage.
+ * Only hosted platform models get it; BYO endpoints may have smaller context windows that reject
+ * prompt + requested output, so they keep the provider adapter default.
  */
 export const GRAPH_MAX_OUTPUT_TOKENS = 16_384;
 
@@ -217,7 +219,9 @@ export class InProcCompletionUnitAdapter {
             node_id: this.deps.nodeId,
             graph_id: runContext.graphId,
           },
-          maxTokens: GRAPH_MAX_OUTPUT_TOKENS,
+          ...(scope.modelRef?.providerKey === "platform" && {
+            maxTokens: GRAPH_MAX_OUTPUT_TOKENS,
+          }),
         }).catch((error: unknown) => {
           // Classify at typed boundary: convert InsufficientCreditsPortError to typed result
           if (isInsufficientCreditsPortError(error)) {
