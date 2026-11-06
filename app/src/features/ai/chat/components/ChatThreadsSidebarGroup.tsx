@@ -25,7 +25,7 @@ import {
   SidebarMenuSub,
   SidebarMenuSubButton,
   SidebarMenuSubItem,
-} from "@/components";
+} from "@/components/startup";
 import { useDeleteThread, useThreads } from "../hooks/useThreads";
 import { useChatSidebarStore } from "./ChatSidebarContext";
 
