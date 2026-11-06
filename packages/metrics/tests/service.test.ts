@@ -15,7 +15,11 @@ import {
 	selectEvaluation,
 } from "../src/index";
 
-function setup(options?: { historical?: boolean }) {
+function setup(options?: {
+	historical?: boolean;
+	display?: "volume";
+	override?: "slo";
+}) {
 	let time = new Date("2026-10-30T12:00:00Z");
 	const windows: Array<{ start: string; end: string }> = [];
 	let allowed = true;
@@ -33,6 +37,7 @@ function setup(options?: { historical?: boolean }) {
 			cadenceSeconds: 60,
 			maxAgeSeconds: 90,
 		},
+		...(options?.override ? { display: options.override } : {}),
 	};
 	let sample: MetricSample = {
 		value: 0,
@@ -120,6 +125,7 @@ function setup(options?: { historical?: boolean }) {
 	registry.register({
 		id: "work.count@1",
 		unit: "items",
+		...(options?.display ? { display: options.display } : {}),
 		...(options?.historical
 			? { historicalWindows: true, windowSeconds: () => 7 * 86400 }
 			: {}),
@@ -594,9 +600,11 @@ describe("scheduled windows, ranged history and assessment", () => {
 		});
 		expect(first.assessment).toEqual(second.assessment);
 		expect(first.assessment).toMatchObject({ status: "on_track", value: 0 });
-		expect(first.trend?.buckets).toHaveLength(30);
+		// A young series has no daily shape yet: the trend is its last 24 hours.
+		expect(first.trend?.step).toBe("1h");
+		expect(first.trend?.buckets).toHaveLength(24);
 		expect(first.trend?.buckets.at(-1)).toMatchObject({
-			start: "2026-10-30T00:00:00.000Z",
+			start: "2026-10-30T12:00:00.000Z",
 			status: "ok",
 		});
 		const missing = await s.service.kpi({ ...binding, metricId: "absent" });
@@ -604,5 +612,34 @@ describe("scheduled windows, ranged history and assessment", () => {
 			status: "not_measured",
 			reason: "metric_unavailable",
 		});
+	});
+});
+
+describe("goal KPI read model", () => {
+	const binding = {
+		metricId: "open-work",
+		comparator: "gte" as const,
+		target: { value: 1, unit: "items" },
+	};
+	it("draws 30 daily buckets once three days have a reading", async () => {
+		const s = setup();
+		for (const key of ["d1", "d2", "d3"]) {
+			await s.service.compute("open-work", { requestKey: key });
+			s.advance(86_400_000);
+		}
+		const kpi = await s.service.kpi(binding, {});
+		expect(kpi.trend?.step).toBe("1d");
+		expect(kpi.trend?.buckets).toHaveLength(30);
+	});
+	it("carries the calculator's display unless the definition overrides it", async () => {
+		expect((await setup().service.kpi(binding, {})).metric?.display).toBeUndefined();
+		expect(
+			(await setup({ display: "volume" }).service.kpi(binding, {})).metric
+				?.display,
+		).toBe("volume");
+		expect(
+			(await setup({ display: "volume", override: "slo" }).service.kpi(binding, {}))
+				.metric?.display,
+		).toBe("slo");
 	});
 });

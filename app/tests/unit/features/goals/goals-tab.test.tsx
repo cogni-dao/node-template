@@ -194,7 +194,7 @@ describe("GoalsBoard", () => {
     expect(card.textContent).not.toMatch(/\b0\b(?!\.)/);
   });
 
-  it("renders each card by its display type", () => {
+  it("renders each card by the display type the read model carries", () => {
     vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
     const stars = kpiFixture(
       "github-stars",
@@ -208,8 +208,13 @@ describe("GoalsBoard", () => {
       { ...productionLike(99.95, "%"), comparator: "gte", target: { value: 99.9, unit: "%" } },
       history("uptime", "%", "1d", "2026-11-03T00:00:00.000Z", [99.99, 99.8, 99.95])
     );
-    const explicit = { ...uptime, metric: uptime.metric && { ...uptime.metric, display: "slo" as const } };
-    const { container } = renderBoard(withKpis([visualFixture().goals[0]!.kpis[0]!, stars, explicit]));
+    const as = <K extends typeof stars>(kpi: K, display: "progress" | "slo" | "volume"): K => ({
+      ...kpi,
+      metric: kpi.metric && { ...kpi.metric, display },
+    });
+    const { container } = renderBoard(
+      withKpis([visualFixture().goals[0]!.kpis[0]!, as(stars, "volume"), as(uptime, "slo")])
+    );
     const card = (id: string) => container.querySelector(`[data-kpi="${id}"]`) as HTMLElement;
     expect(card("convergence-ratio-7d").dataset.display).toBe("progress");
     expect(card("github-stars").dataset.display).toBe("volume");

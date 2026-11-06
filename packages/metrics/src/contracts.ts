@@ -15,11 +15,11 @@ export const MetricSpecSchema = z.strictObject({
 });
 export type MetricSpec = z.infer<typeof MetricSpecSchema>;
 /**
- * How a metric reads best, chosen by its author. progress: value against a target
- * (ratios). slo: a percentage near 100 read as availability and error budget.
- * volume: an amount that grows (stars, revenue, counts). Absent: inferred by the UI.
- * Stored beside the spec (`metric_spec.display`), never inside it, so it never
- * changes the series hash.
+ * How a metric reads best. progress: value against a target (ratios). slo: a
+ * percentage near 100 read as availability and error budget. volume: an amount
+ * that grows (stars, revenue, counts). The calculator declares a default; a
+ * metric definition may override it in `metric_spec.display`, stored beside the
+ * spec so it never changes the series hash.
  */
 export const MetricDisplaySchema = z.enum(["progress", "slo", "volume"]);
 export type MetricDisplay = z.infer<typeof MetricDisplaySchema>;
@@ -149,6 +149,10 @@ export interface MetricCalculator {
 	unit: string;
 	/** Unit for one parameterization when outputs differ (for example ratio vs items). */
 	unitFor?(params: unknown): string;
+	/** How this calculator's readings read best; a metric definition may override it. */
+	display?: MetricDisplay;
+	/** Display for one parameterization when outputs differ (ratio → progress, count → volume). */
+	displayFor?(params: unknown): MetricDisplay;
 	/** Width of the measured interval [end - windowSeconds, end). Absent means an instant. */
 	windowSeconds?(params: unknown): number;
 	paramsSchema: z.ZodType;
@@ -318,7 +322,11 @@ export const GoalKpiSchema = z.object({
 		})
 		.nullable(),
 	assessment: KpiAssessmentSchema,
-	/** 30 daily buckets ending at the current UTC day; null when unreadable. */
+	/**
+	 * The series to draw: 30 daily buckets ending at the current UTC day, or the
+	 * last 24 hourly buckets while fewer than 3 days have a reading; null when
+	 * unreadable.
+	 */
 	trend: MetricHistorySchema.nullable(),
 });
 export const GoalHypothesisSchema = z.object({

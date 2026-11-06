@@ -21,26 +21,17 @@
 
 "use client";
 
-import type { GoalProgress, GoalsProgress, MetricHistory } from "@cogni-dao/metrics/contracts";
+import type { GoalProgress, GoalsProgress } from "@cogni-dao/metrics/contracts";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
-import { fetchGoalsProgress, fetchMetricHistory, GOALS_QUERY_KEY } from "../lib/api";
-import {
-  cardHint,
-  cardNumber,
-  displayOf,
-  type MetricDisplay,
-  progressFraction,
-  seriesSpan,
-  trendReadings,
-} from "../lib/display";
+import { fetchGoalsProgress, GOALS_QUERY_KEY } from "../lib/api";
+import { cardHint, cardNumber, displayOf, progressFraction, seriesSpan } from "../lib/display";
 import {
   formatDate,
   formatUtcTime,
   type GoalKpi,
-  historyWindow,
   isMeasured,
   reasonText,
   summarize,
@@ -232,7 +223,6 @@ function GoalSection({
           <KpiCard
             key={kpi.binding.metricId}
             kpi={kpi}
-            nowIso={nowIso}
             open={open === kpi.binding.metricId}
             onToggle={() => setOpen(open === kpi.binding.metricId ? null : kpi.binding.metricId)}
           />
@@ -243,43 +233,19 @@ function GoalSection({
   );
 }
 
-/**
- * The series a card draws: the 30-day trend once it has a shape, else the last
- * 24 hours for a young hourly metric (one extra read, only while young).
- */
-function useCardSeries(kpi: GoalKpi, display: MetricDisplay, nowIso: string): MetricHistory | null {
-  const young =
-    display !== "progress" &&
-    trendReadings(kpi.trend).length < 3 &&
-    (kpi.metric?.cadenceSeconds ?? 86_400) <= 3600 &&
-    !!kpi.metric;
-  const metricId = kpi.metric?.id ?? kpi.binding.metricId;
-  const window = historyWindow("1d", Date.parse(nowIso));
-  const hourly = useQuery({
-    queryKey: ["goals", "history", metricId, window.from, window.step],
-    queryFn: () => fetchMetricHistory(metricId, window),
-    enabled: young,
-    staleTime: 60_000,
-    retry: 1,
-  });
-  return young ? (hourly.data ?? kpi.trend) : kpi.trend;
-}
-
 function KpiCard({
   kpi,
-  nowIso,
   open,
   onToggle,
 }: {
   readonly kpi: GoalKpi;
-  readonly nowIso: string;
   readonly open: boolean;
   readonly onToggle: () => void;
 }) {
   const display = displayOf(kpi);
-  const series = useCardSeries(kpi, display, nowIso);
+  const series = kpi.trend;
   const num = cardNumber(kpi, display);
-  const hint = cardHint(kpi, display, series);
+  const hint = cardHint(kpi, display);
   const a = kpi.assessment;
   const title = kpi.metric?.title ?? kpi.binding.metricId;
   const muted = a.value !== null && (a.status === "delayed" || a.status === "failing");

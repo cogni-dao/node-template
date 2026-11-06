@@ -32,6 +32,7 @@ export * from "./contracts.js";
 export * from "./progress.js";
 
 const DAY_MS = 86_400_000;
+const HOUR_MS = 3_600_000;
 function canonical(value: unknown): string {
 	if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
 	if (value && typeof value === "object")
@@ -455,17 +456,20 @@ export function createMetricService(deps: {
 				calculatorId: definition.spec.calculatorId,
 				cadenceSeconds: definition.spec.cadenceSeconds ?? null,
 				maxAgeSeconds: definition.spec.maxAgeSeconds,
-				...(current.display ? { display: current.display } : {}),
 			};
 			let shape: ReturnType<typeof calculatorShape>;
+			let display: MetricDisplay | undefined;
 			try {
-				shape = calculatorShape(
-					registry.get(definition.spec.calculatorId),
-					definition.spec.params,
-				);
+				const calculator = registry.get(definition.spec.calculatorId);
+				shape = calculatorShape(calculator, definition.spec.params);
+				display =
+					current.display ??
+					calculator.displayFor?.(definition.spec.params) ??
+					calculator.display;
 			} catch {
 				return unmeasured("calculator_unavailable", summary);
 			}
+			const metric = display ? { ...summary, display } : summary;
 			const hash = metricDefinitionHash(definition);
 			const baseline = pinned?.observation ?? null;
 			if (
@@ -496,9 +500,10 @@ export function createMetricService(deps: {
 						definition.spec.maxAgeSeconds,
 					)
 				: null;
+			let daily: MetricHistory | null = null;
 			let trend: MetricHistory | null = null;
 			try {
-				trend = await series(
+				daily = await series(
 					b.metricId,
 					hash,
 					shape.unit,
@@ -511,8 +516,24 @@ export function createMetricService(deps: {
 					},
 					true,
 				);
+				trend = daily;
+				// A young series has no daily shape yet: draw its last day hourly.
+				if (daily.buckets.filter((x) => x.status === "ok").length < 3) {
+					const hour = floorTo(at.getTime(), "1h");
+					trend = await series(
+						b.metricId,
+						hash,
+						shape.unit,
+						{
+							from: new Date(hour - 23 * HOUR_MS).toISOString(),
+							to: new Date(hour + HOUR_MS).toISOString(),
+							step: "1h",
+						},
+						true,
+					);
+				}
 			} catch {
-				trend = null;
+				trend = daily;
 			}
 			const assessment = assessKpi({
 				binding: b,
@@ -525,12 +546,12 @@ export function createMetricService(deps: {
 				viewState: view.viewState,
 				deadline,
 				evaluation,
-				daily: trend?.buckets.slice(-28) ?? [],
+				daily: daily?.buckets.slice(-28) ?? [],
 				now: at,
 			});
 			return {
 				binding: b,
-				metric: summary,
+				metric,
 				assessment,
 				trend,
 				baseline,

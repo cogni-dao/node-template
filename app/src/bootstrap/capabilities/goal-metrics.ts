@@ -41,6 +41,7 @@ export function createGoalMetrics(deps: {
 	registry.register({
 		id: "work.count@1",
 		unit: "items",
+		display: "volume",
 		paramsSchema: countParams,
 		budget,
 		compute: async (params, ctx) =>
@@ -63,6 +64,8 @@ export function createGoalMetrics(deps: {
 		unit: "ratio",
 		unitFor: (params) =>
 			convergenceParams.parse(params).output === "ratio" ? "ratio" : "items",
+		displayFor: (params) =>
+			convergenceParams.parse(params).output === "ratio" ? "progress" : "volume",
 		windowSeconds: (params) => convergenceParams.parse(params).days * 86400,
 		paramsSchema: convergenceParams,
 		// Counts (1) + reflog edges (2) + fallback first-parent walk (1, <= cap + 1 rows) + dolt_diff (1).
@@ -87,6 +90,7 @@ export function createGoalMetrics(deps: {
 	registry.register({
 		id: "github.stars@1",
 		unit: "stars",
+		display: "volume",
 		paramsSchema: githubParams,
 		budget,
 		compute: async (params, ctx) => {

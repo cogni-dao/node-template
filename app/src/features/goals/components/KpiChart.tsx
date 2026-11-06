@@ -28,7 +28,7 @@ import { useId, useMemo, useState } from "react";
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, ReferenceLine, XAxis, YAxis } from "recharts";
 
 import { fetchMetricHistory } from "../lib/api";
-import { cardNumber, compact, displayOf, formatSlo, type MetricDisplay, trendReadings } from "../lib/display";
+import { cardNumber, compact, displayOf, formatSlo, type MetricDisplay } from "../lib/display";
 import {
   COMPARATOR_SYMBOL,
   formatDate,
@@ -51,11 +51,10 @@ const RANGES: readonly { id: Range; label: string }[] = [
   { id: "3m", label: "3M" },
 ];
 
-/** A young hourly series opens on the day it has; a mature one on the week. */
+/** An hourly trend (a young series) opens on its day; a daily one on the month. */
 export function initialRange(kpi: GoalKpi): Range {
-  const hourly = (kpi.metric?.cadenceSeconds ?? 86_400) <= 3600;
-  if (!hourly) return "1m";
-  return trendReadings(kpi.trend).length >= 3 ? "1w" : "1d";
+  if (kpi.trend?.step === "1h") return "1d";
+  return (kpi.metric?.cadenceSeconds ?? 86_400) <= 3600 ? "1w" : "1m";
 }
 
 interface Point {
@@ -99,10 +98,10 @@ export function KpiChart({ kpi, nowIso }: { readonly kpi: GoalKpi; readonly nowI
   const metricId = kpi.metric?.id ?? kpi.binding.metricId;
   const display = displayOf(kpi);
   const [range, setRange] = useState<Range>(() => initialRange(kpi));
-  const window = historyWindow(range, Date.parse(nowIso));
+  const span = historyWindow(range, Date.parse(nowIso));
   const history = useQuery({
-    queryKey: ["goals", "history", metricId, window.from, window.step],
-    queryFn: () => fetchMetricHistory(metricId, window),
+    queryKey: ["goals", "history", metricId, span.from, span.step],
+    queryFn: () => fetchMetricHistory(metricId, span),
     placeholderData: keepPreviousData,
     staleTime: 60_000,
     retry: 1,
@@ -122,8 +121,8 @@ export function KpiChart({ kpi, nowIso }: { readonly kpi: GoalKpi; readonly nowI
     display !== "volume" || (values.length > 0 && target <= Math.max(...values) * 1.5 && target >= Math.min(...values) / 1.5);
   const domain = yDomain(display, showTarget ? [...values, target] : values, target);
   const fmt = (v: number) => (display === "slo" ? `${formatSlo(v)}%` : compact(v, kpi.binding.target.unit));
-  const from = Date.parse(window.from);
-  const to = Math.max(Date.parse(window.to) + STEP_MS[window.step], ...data.map((d) => d.t));
+  const from = Date.parse(span.from);
+  const to = Math.max(Date.parse(span.to) + STEP_MS[span.step], ...data.map((d) => d.t));
 
   // Recharts 2 only renders its own element types as direct children: an array, never a Fragment.
   const axis = [
@@ -165,7 +164,7 @@ export function KpiChart({ kpi, nowIso }: { readonly kpi: GoalKpi; readonly nowI
         return (
           <div className="rounded-md border border-border/60 bg-background px-2 py-1 text-xs shadow-sm">
             <span className="text-muted-foreground">
-              {window.step === "1h" ? `${formatDate(iso)}, ${formatUtcTime(iso)}` : formatDate(iso)}{" "}
+              {span.step === "1h" ? `${formatDate(iso)}, ${formatUtcTime(iso)}` : formatDate(iso)}{" "}
             </span>
             <span className="font-medium tabular-nums">{p.v === null ? "No reading" : fmt(p.v)}</span>
           </div>

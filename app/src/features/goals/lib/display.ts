@@ -5,7 +5,8 @@
  * Module: `@features/goals/lib/display`
  * Purpose: One KPI card's numbers by display type. progress = value against a
  *   target; slo = availability % and error budget; volume = an amount and its
- *   change. The metric author picks the type; absent, it follows the unit.
+ *   change. The type comes from the read model (calculator default or the
+ *   metric author's override); the UI never infers it.
  * Scope: Pure. Reads contract values only; never re-derives status.
  * Invariants: UNKNOWN_IS_NOT_ZERO (no value → null, never 0); a delta needs two
  *   real readings; hints stay ≤ 3 words.
@@ -20,16 +21,9 @@ import { formatNumber, formatSigned, type GoalKpi, targetText } from "./presenta
 
 export type { MetricDisplay };
 
-const PERCENT_UNITS = new Set(["%", "percent", "pct"]);
-
-/** The author's choice wins; otherwise ratios read as progress, percents as SLOs. */
+/** The read model carries the calculator's default or the author's override. */
 export function displayOf(kpi: GoalKpi): MetricDisplay {
-  const chosen = kpi.metric?.display;
-  if (chosen) return chosen;
-  const unit = kpi.assessment.unit ?? kpi.binding.target.unit;
-  if (PERCENT_UNITS.has(unit)) return "slo";
-  if (unit === "ratio") return "progress";
-  return "volume";
+  return kpi.metric?.display ?? "progress";
 }
 
 export interface CardNumber {

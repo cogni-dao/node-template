@@ -3,8 +3,8 @@
 
 /**
  * Module: `@tests/unit/features/goals/display`
- * Purpose: Prove KPI card numbers by display type: the author's choice wins,
- *   units pick a sane default, SLOs read as % with an error budget, volumes
+ * Purpose: Prove KPI card numbers by display type: the type comes from the
+ *   read model only, SLOs read as % with an error budget, volumes
  *   show a change only from two real readings, and unknown is never 0.
  * Scope: Pure functions in lib/display.ts.
  * Invariants: UNKNOWN_IS_NOT_ZERO; HINT_LE_3_WORDS.
@@ -31,12 +31,11 @@ function k(unit: string, value: number | null, target: number, comparator: "gte"
 }
 
 describe("display types", () => {
-  it("lets the author choose and otherwise follows the unit", () => {
-    expect(displayOf(k("ratio", 0.5, 1))).toBe("progress");
-    expect(displayOf(k("%", 99.9, 99.5))).toBe("slo");
-    expect(displayOf(k("stars", 10, 20))).toBe("volume");
-    const chosen = k("items", 3, 5);
-    expect(displayOf({ ...chosen, metric: chosen.metric && { ...chosen.metric, display: "progress" } })).toBe("progress");
+  it("reads the type from the read model and never guesses from units", () => {
+    const kpi = k("%", 99.9, 99.5);
+    expect(displayOf(kpi)).toBe("progress");
+    expect(displayOf({ ...kpi, metric: kpi.metric && { ...kpi.metric, display: "slo" } })).toBe("slo");
+    expect(displayOf({ ...kpi, metric: null })).toBe("progress");
   });
 
   it("reads an SLO as a percentage with an error budget", () => {
