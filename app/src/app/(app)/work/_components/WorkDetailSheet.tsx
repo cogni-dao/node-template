@@ -9,7 +9,7 @@ import {
 	SheetDescription,
 	SheetHeader,
 	SheetTitle,
-} from "@cogni/node-ui-kit/shadcn/sheet";
+} from "@/components/sheet";
 import {
 	Component,
 	lazy,
