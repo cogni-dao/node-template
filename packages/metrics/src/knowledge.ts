@@ -11,7 +11,7 @@ import {
 	type GoalsProgress,
 	type MetricDefinition,
 	MetricError,
-	MetricSpecSchema,
+	parseStoredMetricSpec,
 } from "./contracts.js";
 import {
 	createMetricService,
@@ -84,6 +84,7 @@ export function createGoalMetrics(deps: {
 	registry.register({
 		id: "work.count@1",
 		unit: "items",
+		display: "volume",
 		paramsSchema: countParams,
 		budget,
 		compute: async (params, ctx) =>
@@ -106,6 +107,8 @@ export function createGoalMetrics(deps: {
 		unit: "ratio",
 		unitFor: (params) =>
 			convergenceParams.parse(params).output === "ratio" ? "ratio" : "items",
+		displayFor: (params) =>
+			convergenceParams.parse(params).output === "ratio" ? "progress" : "volume",
 		windowSeconds: (params) => convergenceParams.parse(params).days * 86400,
 		paramsSchema: convergenceParams,
 		// Worst case: counts (1) + main head (1) + per edge reflog then recorded
@@ -139,6 +142,7 @@ export function createGoalMetrics(deps: {
 	registry.register({
 		id: "github.stars@1",
 		unit: "stars",
+		display: "volume",
 		paramsSchema: githubParams,
 		budget,
 		compute: async (params, ctx) => {
@@ -151,15 +155,17 @@ export function createGoalMetrics(deps: {
 	/** One malformed reviewed row must not stop every other metric: skip it and log. */
 	const parse = (row: Record<string, unknown>): MetricDefinition | null => {
 		try {
-			const spec =
+			const { spec, display } = parseStoredMetricSpec(
 				typeof row.metric_spec === "string"
 					? JSON.parse(row.metric_spec)
-					: row.metric_spec;
+					: row.metric_spec,
+			);
 			return {
 				id: String(row.id),
 				title: String(row.title),
 				revision: new Date(row.updated_at as string).toISOString(),
-				spec: MetricSpecSchema.parse(spec),
+				spec,
+				...(display ? { display } : {}),
 			};
 		} catch {
 			deps.log({

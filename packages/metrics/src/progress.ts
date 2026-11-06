@@ -94,6 +94,7 @@ export async function readGoalsProgress(deps: {
 				metric: r.metric,
 				assessment: r.assessment,
 				trend: r.trend,
+				...(r.recent ? { recent: r.recent } : {}),
 			});
 		}
 		const hypotheses: GoalProgress["hypotheses"] = [];

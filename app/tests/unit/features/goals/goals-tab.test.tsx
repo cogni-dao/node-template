@@ -3,18 +3,22 @@
 
 /**
  * Module: `@tests/unit/features/goals/goals-tab`
- * Purpose: Prove the Goals tab shows every KPI status as a symbol plus a word,
- *   says "unknown, not zero" for missing readings, keeps stale data labeled
- *   "not current" after a failed refresh, and is a URL-addressable Knowledge tab.
+ * Purpose: Prove the Goals board reads at a glance: KPI cards carry a label, a
+ *   number, at most one short hint and a symbol+word pill, never sentences;
+ *   unknown is "—", never 0; each card renders by display type; a failed poll
+ *   stays quiet until it repeats; a card opens a named chart that keeps gaps and
+ *   links every reading; the Goals tab is URL-addressable.
  * Scope: React Query plus the browser fetch boundary. No live network.
- * Invariants: STATUS_NEVER_COLOR_ONLY, UNKNOWN_IS_NOT_ZERO, ONE_ALERT_ON_FAILURE,
- *   WAI_ARIA_TABS, URL_DRIVEN_MODE.
+ *   recharts ResponsiveContainer is mocked to a fixed size so jsdom renders SVG.
+ * Invariants: STATUS_NEVER_COLOR_ONLY, UNKNOWN_IS_NOT_ZERO, NO_SENTENCES_ON_CARDS,
+ *   QUIET_REFRESH, GAPS_STAY_GAPS, WAI_ARIA_TABS, URL_DRIVEN_MODE.
  * Side-effects: global (stubbed fetch)
  * Links: app/src/features/goals/components/GoalsBoard.tsx, app/src/app/(app)/knowledge/view.tsx
  * @vitest-environment jsdom
  * @internal
  */
 
+import { type GoalsProgress, GoalsProgressSchema } from "@cogni-dao/metrics/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   cleanup,
@@ -24,15 +28,18 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import type { ComponentProps, ReactNode } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   everyStatusFixture,
+  goalFixture,
+  history,
+  kpiFixture,
   visualFixture,
 } from "@tests/_fixtures/goals/progress";
+import type { ComponentProps, ReactElement, ReactNode } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { KnowledgeDashboardView } from "@/app/(app)/knowledge/view";
 import { GoalsBoard, MetricEvidence } from "@/features/goals";
-import { deadlineText, STATUS_META } from "@/features/goals/lib/presentation";
+import { STATUS_META } from "@/features/goals/lib/presentation";
 
 const navigation = vi.hoisted(() => ({
   mode: "browse",
@@ -50,6 +57,23 @@ vi.mock("next/navigation", () => ({
         : {}),
     }),
 }));
+// jsdom measures 0×0, so a real ResponsiveContainer renders nothing.
+vi.mock("recharts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("recharts")>();
+  const React = await import("react");
+  return {
+    ...actual,
+    ResponsiveContainer: ({ children }: { children: ReactElement }) =>
+      React.createElement(
+        "div",
+        { style: { width: 800, height: 192 } },
+        React.cloneElement(children as ReactElement<Record<string, unknown>>, {
+          width: 800,
+          height: 192,
+        })
+      ),
+  };
+});
 vi.mock("next/link", () => ({
   default: ({ href, children }: { href: string; children: ReactNode }) => (
     <a href={href}>{children}</a>
@@ -91,7 +115,8 @@ vi.mock("@/components", () => ({
 
 function client() {
   return new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    // retryDelay 0: the history queries retry once; tests need not wait 1 s.
+    defaultOptions: { queries: { retry: false, retryDelay: 0, gcTime: 0 } },
   });
 }
 
@@ -102,84 +127,167 @@ afterEach(() => {
   navigation.observation = null;
 });
 
-describe("GoalsBoard", () => {
-  it("renders every KPI status as a symbol plus a word", () => {
-    const data = everyStatusFixture();
-    vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
-    const { container } = render(
-      <QueryClientProvider client={client()}>
+
+function renderBoard(data: GoalsProgress, c = client()) {
+  return {
+    c,
+    ...render(
+      <QueryClientProvider client={c}>
         <GoalsBoard initialData={data} />
       </QueryClientProvider>
-    );
+    ),
+  };
+}
+
+/** Visible words on a card: aria-only text is excluded. */
+function visibleWords(el: Element): string[] {
+  const clone = el.cloneNode(true) as Element;
+  for (const n of clone.querySelectorAll(".sr-only")) n.remove();
+  return (clone.textContent ?? "").split(/\s+/).filter(Boolean);
+}
+
+function withKpis(kpis: GoalsProgress["goals"][number]["kpis"]): GoalsProgress {
+  return GoalsProgressSchema.parse({
+    asOf: "2026-11-02T10:05:00.000Z",
+    environment: "local",
+    goals: [goalFixture("goal-x", "Goal: Ship it", kpis)],
+  });
+}
+
+describe("GoalsBoard", () => {
+  it("renders every measured KPI status as a symbol plus a word", () => {
+    vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
+    const { container } = renderBoard(everyStatusFixture());
     for (const [status, meta] of Object.entries(STATUS_META)) {
-      const pill = container.querySelector(
-        `[data-goal="goal-${status}"] [data-status="${status}"]`
-      );
+      if (status === "not_measured") continue;
+      const pill = container.querySelector(`[data-goal="goal-${status}"] [data-status="${status}"]`);
       expect(pill, status).not.toBeNull();
       expect(pill?.textContent).toContain(meta.symbol);
-      expect(pill?.textContent).toMatch(meta.short);
+      expect(pill?.textContent).toContain(meta.short);
     }
-    // Not measured is unknown, never zero; the reason is plain words.
-    const notMeasured = container.querySelector(
-      '[data-goal="goal-not_measured"]'
-    ) as HTMLElement;
-    expect(notMeasured.textContent).toContain("unknown, not zero");
-    expect(notMeasured.textContent).toContain(
-      "Its calculator is not installed on this node."
-    );
-    // Every chart states its values in words.
-    const charts = container.querySelectorAll('svg:not([aria-hidden="true"])');
-    expect(charts.length).toBeGreaterThan(0);
-    for (const svg of charts) {
-      expect(svg.getAttribute("role")).toBe("img");
-      expect(svg.getAttribute("aria-label")).toMatch(/target/);
-    }
-    expect(screen.queryByText(/\b1 days\b/)).toBeNull();
+    // A goal with nothing measured collapses to one line, never a card.
+    const unmeasured = container.querySelector("[data-unmeasured]") as HTMLElement;
+    expect(unmeasured.textContent).toMatch(/1 goal without KPIs/);
+    expect(container.querySelector('[data-goal="goal-not_measured"] [data-kpi]')).toBeNull();
   });
 
-  it("keeps the last data labeled not current behind one alert when a refresh fails", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("{}", { status: 503 }))
-    );
-    const c = client();
-    render(
-      <QueryClientProvider client={c}>
-        <GoalsBoard initialData={visualFixture()} />
-      </QueryClientProvider>
-    );
-    await c.refetchQueries({ queryKey: ["goals", "progress"] });
-    const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toMatch(/not current/);
-    expect(screen.getAllByRole("alert")).toHaveLength(1);
-    expect(screen.getByText("Not current")).toBeTruthy();
-    expect(
-      screen.getByText("AI work converges faster than it sprawls")
-    ).toBeTruthy();
-  });
-
-  it("expands a row from its title button", () => {
+  it("puts no sentences on a card and never prints unknown as zero", () => {
     vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
-    render(
-      <QueryClientProvider client={client()}>
-        <GoalsBoard initialData={visualFixture()} />
-      </QueryClientProvider>
+    const { container } = renderBoard(everyStatusFixture());
+    const cards = container.querySelectorAll("[data-kpi]");
+    expect(cards.length).toBeGreaterThan(5);
+    for (const card of cards) expect(visibleWords(card).length, card.textContent ?? "").toBeLessThanOrEqual(10);
+    expect(container.textContent).not.toMatch(/unknown, not zero|could not be read/);
+    // The reason is the card's accessible description and hover title, in plain words.
+    const failing = container.querySelector('[data-goal="goal-failing"] [data-kpi]') as HTMLElement;
+    const toggle = within(failing).getByRole("button");
+    expect(toggle.getAttribute("title")).toBe("The data source timed out.");
+    expect(document.getElementById(toggle.getAttribute("aria-describedby") ?? "")?.textContent).toContain(
+      "The data source timed out."
     );
-    const toggle = screen.getByRole("button", {
-      name: "AI work converges faster than it sprawls",
+    cleanup();
+    const empty = kpiFixture(
+      "m",
+      "M",
+      { ...productionLike(0, "ratio"), status: "failing", reason: "source_timeout", value: null, observationId: null, observedAt: null },
+      null
+    );
+    const board = renderBoard(withKpis([empty])).container;
+    const card = board.querySelector("[data-kpi]") as HTMLElement;
+    expect(card.querySelector(".text-3xl")?.textContent).toBe("—");
+    const emptyToggle = within(card).getByRole("button");
+    expect(document.getElementById(emptyToggle.getAttribute("aria-describedby") ?? "")?.textContent).toMatch(/^No reading/);
+    expect(card.textContent).not.toMatch(/\b0\b(?!\.)/);
+  });
+
+  it("renders each card by the display type the read model carries", () => {
+    vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
+    const stars = kpiFixture(
+      "github-stars",
+      "GitHub stars",
+      { ...productionLike(120, "stars"), comparator: "gte", target: { value: 200, unit: "stars" } },
+      history("github-stars", "stars", "1d", "2026-11-03T00:00:00.000Z", [100, null, 110, 120])
+    );
+    const uptime = kpiFixture(
+      "uptime",
+      "Uptime",
+      { ...productionLike(99.95, "%"), comparator: "gte", target: { value: 99.9, unit: "%" } },
+      history("uptime", "%", "1d", "2026-11-03T00:00:00.000Z", [99.99, 99.8, 99.95])
+    );
+    const as = <K extends typeof stars>(kpi: K, display: "progress" | "slo" | "volume"): K => ({
+      ...kpi,
+      metric: kpi.metric && { ...kpi.metric, display },
     });
-    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    const { container } = renderBoard(
+      withKpis([visualFixture().goals[0]!.kpis[0]!, as(stars, "volume"), as(uptime, "slo")])
+    );
+    const card = (id: string) => container.querySelector(`[data-kpi="${id}"]`) as HTMLElement;
+    expect(card("convergence-ratio-7d").dataset.display).toBe("progress");
+    expect(card("github-stars").dataset.display).toBe("volume");
+    expect(card("github-stars").textContent).toContain("+20 since Oct 30");
+    expect(card("uptime").dataset.display).toBe("slo");
+    expect(card("uptime").textContent).toContain("99.95%");
+    expect(card("uptime").textContent).toContain("budget 50%");
+  });
+
+  it("stays quiet on one failed poll, marks stale after repeats, and says signed out on 401", async () => {
+    let status = 503;
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status })));
+    const { c } = renderBoard(visualFixture());
+    await c.refetchQueries({ queryKey: ["goals", "progress"] });
+    await waitFor(() => expect(c.getQueryState(["goals", "progress"])?.status).toBe("error"));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByText(/Stale/)).toBeNull();
+    expect(screen.getByText(/Updated/)).toBeTruthy();
+    await c.refetchQueries({ queryKey: ["goals", "progress"] });
+    await c.refetchQueries({ queryKey: ["goals", "progress"] });
+    expect(await screen.findByText(/Stale ·/)).toBeTruthy();
+    status = 401;
+    await c.refetchQueries({ queryKey: ["goals", "progress"] });
+    expect(await screen.findByText("Signed out · reload")).toBeTruthy();
+  });
+
+  it("opens a card into a named chart that keeps gaps and links every reading", async () => {
+    const data = visualFixture();
+    const kpi = data.goals[0]!.kpis[0]!;
+    const fetchMock = vi.fn(async (url: string) =>
+      url.startsWith("/api/v1/metrics/convergence-ratio-7d/history")
+        ? Response.json(history("convergence-ratio-7d", "ratio", "1h", "2026-11-02T10:00:00.000Z", [0.5, 0.6, null, null, 0.7, 0.8]))
+        : new Promise(() => {})
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { container } = renderBoard(data);
+    const card = container.querySelector(`[data-kpi="${kpi.binding.metricId}"]`) as HTMLElement;
+    const toggle = within(card).getByRole("button", { name: kpi.metric!.title });
     fireEvent.click(toggle);
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
-    const detail = document.getElementById(
-      toggle.getAttribute("aria-controls") as string
-    ) as HTMLElement;
-    expect(within(detail).getByText("Inspect reading ↗")).toBeTruthy();
-    expect(
-      within(detail).getByRole("button", { name: "30d", pressed: true })
-    ).toBeTruthy();
+    expect(document.getElementById(toggle.getAttribute("aria-controls") ?? "")?.tagName).toBe("FIGURE");
+    const figure = await screen.findByRole("figure", { name: kpi.metric!.title });
+    await waitFor(() => expect(figure.querySelector(".recharts-area-curve")).not.toBeNull());
+    // Two runs of readings around the gap: the curve restarts, never bridges.
+    const d = figure.querySelector(".recharts-area-curve")?.getAttribute("d") ?? "";
+    expect(d.match(/M/g)?.length).toBe(2);
+    const links = within(figure).getAllByRole("link");
+    expect(links.length).toBeGreaterThanOrEqual(4);
+    expect(links[0]?.getAttribute("href")).toMatch(/^\/knowledge\/convergence-ratio-7d\?observation=/);
+    expect(fetchMock.mock.calls.filter(([u]) => String(u).includes("/history"))).toHaveLength(1);
   });
 });
+
+function productionLike(value: number, unit: string) {
+  return {
+    status: "on_track" as const,
+    reason: null,
+    value,
+    unit,
+    observationId: "00000000-0000-4000-8000-000000000001",
+    observedAt: "2026-11-02T10:00:00.000Z",
+    comparator: "gte" as const,
+    target: { value: 1, unit },
+    deadline: "2027-01-31T00:00:00.000Z",
+    pace: { observed: null, needed: null },
+  };
+}
 
 describe("Knowledge Goals tab", () => {
   it("is a WAI-ARIA tab that writes ?mode=goals and shows the attention badge", async () => {
@@ -322,12 +430,15 @@ describe("MetricEvidence", () => {
   });
 });
 
-describe("goal deadline summary", () => {
-  it("never reports a passed deadline as next due", () => {
-    const now = "2026-11-04T06:00:00.000Z";
-    expect(
-      deadlineText(["2026-10-24T23:59:00.000Z", "2027-01-31T00:00:00.000Z"], 3, now)
-    ).toBe("next due Jan 31, 2027 (88 days) · 1 past due");
-    expect(deadlineText(["2026-10-24T23:59:00.000Z"], 1, now)).toBe("1 past due");
+describe("server rendering", () => {
+  it("emits the same markup on every request", async () => {
+    const { renderToString } = await import("react-dom/server");
+    const html = () =>
+      renderToString(
+        <QueryClientProvider client={client()}>
+          <GoalsBoard initialData={visualFixture()} />
+        </QueryClientProvider>
+      );
+    expect(html()).toBe(html());
   });
 });
