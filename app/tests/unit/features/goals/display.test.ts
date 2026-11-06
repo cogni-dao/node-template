@@ -103,6 +103,9 @@ describe("volume", () => {
     expect(cardHint(kpi, "volume", kpi.trend)).toBe("+30 since Nov 1");
     const hourly = history("m", "stars", "1h", OBSERVED, [null, 120, 125]);
     expect(cardHint(kpi, "volume", hourly)).toBe("+10 since 08:00");
+    const overnight = history("m", "stars", "1h", OBSERVED, [...Array(12).fill(null), 110, ...Array(10).fill(null), 125]);
+    expect(cardHint(kpi, "volume", overnight)).toBe("+20 since Nov 1");
+    expect(cardHint(k("stars", 120, 200, "gte", [120, 120]), "volume", null)).toBe("≥ 200");
     expect(cardHint(k("stars", 130, 200, "gte", [null, 120]), "volume", null)).toBe("≥ 200");
     expect(formatValue(12_400, "volume", "stars")).toBe("12.4K");
   });

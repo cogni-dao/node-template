@@ -24,13 +24,14 @@ import type { KpiBinding, KpiStatus, MetricHistory } from "@cogni-dao/metrics/co
 import { useId } from "react";
 import { Area, AreaChart, Bar, BarChart, Cell, YAxis } from "recharts";
 
-import { meetsTarget, type Point, seriesPoints, yDomain } from "../lib/display";
+import { fromFirstReading, meetsTarget, type Point, seriesPoints, yDomain } from "../lib/display";
 import { STATUS_META, type StatusTone } from "../lib/presentation";
 
 const TONE_CLASS: Record<StatusTone, string> = {
   success: "border-success/30 bg-success/10 text-success",
   warning: "border-warning/40 bg-warning/15 text-warning",
-  danger: "border-destructive/40 bg-destructive/10 text-destructive",
+  // The dark --destructive token is a fill colour; text needs the lighter red to read on black.
+  danger: "border-destructive/50 bg-destructive/15 text-destructive dark:text-red-400",
   neutral: "border-border bg-muted/60 text-muted-foreground",
 };
 
@@ -92,7 +93,7 @@ export function ProgressBar({ fraction, label }: { readonly fraction: number | n
 /** Volume: gradient area over the series; gaps break the line. */
 export function Sparkline({ series, label }: { readonly series: MetricHistory | null; readonly label: string }) {
   const id = useChartId("spark");
-  const data = series ? seriesPoints(series) : [];
+  const data = series ? fromFirstReading(seriesPoints(series)) : [];
   const values = data.flatMap((d) => (d.v === null ? [] : [d.v]));
   return (
     <div role="img" aria-label={label} className="h-10 w-full">

@@ -91,12 +91,25 @@ export function cardSeries(kpi: GoalKpi): MetricHistory | null {
   return kpi.recent;
 }
 
+/**
+ * A card mark starts at its first reading: the time before a series began is
+ * not a gap, and a glance should not spend its width on it. Later gaps stay.
+ */
+export function fromFirstReading(points: readonly Point[]): Point[] {
+  const first = points.findIndex((p) => p.v !== null);
+  return first < 0 ? [] : points.slice(first);
+}
+
 /** Change from the first reading in `series` to now, labelled by the bucket it was read in. */
 function changeHint(kpi: GoalKpi, display: MetricDisplay, series: MetricHistory | null): string | null {
   const { value } = kpi.assessment;
   const first = series?.buckets.find((b) => b.status === "ok" && b.value !== null);
   if (value === null || !series || !first || first.value === null || readingCount(series) < 2) return null;
-  const since = series.step === "1h" ? formatUtcTime(first.start).replace(" UTC", "") : formatDate(first.start);
+  // No change says nothing at a glance; the target does.
+  if (value === first.value) return null;
+  // An hour reads as a time only on the same UTC day as the value; otherwise as its date.
+  const sameDay = first.start.slice(0, 10) === (kpi.assessment.observedAt ?? "").slice(0, 10);
+  const since = series.step === "1h" && sameDay ? formatUtcTime(first.start).replace(" UTC", "") : formatDate(first.start);
   return `${signed(value - first.value, display, kpi.binding.target.unit)} since ${since}`;
 }
 
