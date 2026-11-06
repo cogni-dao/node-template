@@ -207,10 +207,14 @@ function GoalSection({
   readonly nowIso: string;
   readonly openFirst: boolean;
 }) {
-  // A goal may bind one metric twice (a floor and a ceiling): cards are keyed by position.
-  const [open, setOpen] = useState<number | null>(openFirst && goal.kpis.length ? 0 : null);
+  // A goal may bind one metric twice (a floor and a ceiling), so a card is its
+  // position plus metric: if a refresh shifts the bindings, the chart closes
+  // instead of silently showing another KPI.
+  const keyOf = (kpi: GoalKpi, i: number) => `${i}:${kpi.binding.metricId}`;
+  const first = goal.kpis[0];
+  const [open, setOpen] = useState<string | null>(openFirst && first ? keyOf(first, 0) : null);
   const chartId = useId();
-  const openKpi = open === null ? undefined : goal.kpis[open];
+  const openKpi = goal.kpis.find((kpi, i) => keyOf(kpi, i) === open);
   return (
     <div data-goal={goal.id} className="space-y-3">
       <div className="flex items-baseline justify-between gap-3">
@@ -224,18 +228,20 @@ function GoalSection({
         )}
       </div>
       <div className={CARD_GRID}>
-        {goal.kpis.map((kpi, i) => (
-          <KpiCard
-            // biome-ignore lint/suspicious/noArrayIndexKey: bindings are positional; a metric may repeat
-            key={i}
-            kpi={kpi}
-            open={open === i}
-            chartId={chartId}
-            onToggle={() => setOpen(open === i ? null : i)}
-          />
-        ))}
+        {goal.kpis.map((kpi, i) => {
+          const key = keyOf(kpi, i);
+          return (
+            <KpiCard
+              key={key}
+              kpi={kpi}
+              open={open === key}
+              chartId={chartId}
+              onToggle={() => setOpen(open === key ? null : key)}
+            />
+          );
+        })}
       </div>
-      {openKpi && open !== null && <KpiChart key={open} id={chartId} kpi={openKpi} nowIso={nowIso} />}
+      {openKpi && open && <KpiChart key={open} id={chartId} kpi={openKpi} nowIso={nowIso} />}
     </div>
   );
 }

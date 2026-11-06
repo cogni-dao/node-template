@@ -22,13 +22,12 @@ import type {
   MetricHistory,
 } from "@cogni-dao/metrics/contracts";
 
-import { formatNumber, formatSigned, type GoalKpi, targetText } from "./presentation";
+import { COMPARATOR_SYMBOL, formatDate, formatNumber, formatUtcTime, type GoalKpi } from "./presentation";
 
 export type { MetricDisplay };
 
 /** Daily buckets with a reading before the card prefers the daily trend. */
 export const MIN_DAILY_SHAPE = 3;
-const HOUR_MS = 3_600_000;
 
 export function displayOf(kpi: GoalKpi): MetricDisplay {
   return kpi.metric?.display ?? "progress";
@@ -92,31 +91,28 @@ export function cardSeries(kpi: GoalKpi): MetricHistory | null {
   return kpi.recent;
 }
 
-/** "21h" or "3d". */
-export function formatSpan(ms: number): string {
-  const hours = Math.max(1, Math.round(ms / HOUR_MS));
-  return hours < 48 ? `${hours}h` : `${Math.round(hours / 24)}d`;
+/** Change from the first reading in `series` to now, labelled by the bucket it was read in. */
+function changeHint(kpi: GoalKpi, display: MetricDisplay, series: MetricHistory | null): string | null {
+  const { value } = kpi.assessment;
+  const first = series?.buckets.find((b) => b.status === "ok" && b.value !== null);
+  if (value === null || !series || !first || first.value === null || readingCount(series) < 2) return null;
+  const since = series.step === "1h" ? formatUtcTime(first.start).replace(" UTC", "") : formatDate(first.start);
+  return `${signed(value - first.value, display, kpi.binding.target.unit)} since ${since}`;
 }
 
-/** Change from the first reading in `series` to the current value, over the time between them. */
-function changeHint(kpi: GoalKpi, series: MetricHistory | null): string | null {
-  const { value, observedAt } = kpi.assessment;
-  const first = series?.buckets.find((b) => b.status === "ok" && b.value !== null);
-  if (value === null || !observedAt || !first || first.value === null) return null;
-  const span = Date.parse(observedAt) - Date.parse(first.start);
-  if (span < HOUR_MS || readingCount(series) < 2) return null;
-  return `${formatSigned(value - first.value, kpi.binding.target.unit)} · ${formatSpan(span)}`;
+function signed(delta: number, display: MetricDisplay, unit: string): string {
+  return `${delta > 0 ? "+" : delta < 0 ? "−" : "±"}${formatValue(Math.abs(delta), display, unit)}`;
 }
 
 /** The one muted hint under the number, ≤ 3 words. */
 export function cardHint(kpi: GoalKpi, display: MetricDisplay, series: MetricHistory | null): string {
   const { value } = kpi.assessment;
-  const target = targetText(kpi.binding.comparator, kpi.binding.target);
+  const target = `${COMPARATOR_SYMBOL[kpi.binding.comparator]} ${formatValue(kpi.binding.target.value, display, kpi.binding.target.unit)}`;
   if (display === "slo") {
     const budget = value === null ? null : sloBudget(value, kpi.binding);
     return budget === null ? target : `budget ${Math.round(budget * 100)}%`;
   }
-  if (display === "volume") return changeHint(kpi, series) ?? target;
+  if (display === "volume") return changeHint(kpi, display, series) ?? target;
   return target;
 }
 
@@ -131,7 +127,7 @@ export function progressFraction(kpi: GoalKpi): number | null {
 }
 
 /** Lowest bar still shows: the floor sits below the worst reading and the objective. */
-export function sloFloor(values: readonly number[], target: number): number {
+function sloFloor(values: readonly number[], target: number): number {
   const worst = Math.min(target, ...values);
   return Math.max(0, worst - Math.max(100 - worst, 0.05) * 0.5);
 }
@@ -140,12 +136,15 @@ export function sloFloor(values: readonly number[], target: number): number {
 export function yDomain(
   display: MetricDisplay,
   values: readonly number[],
-  target: number | null
+  target: number | null,
+  comparator: KpiBinding["comparator"] = "gte"
 ): [number, number] {
   const all = target === null ? [...values] : [...values, target];
   const lo = Math.min(...all);
   const hi = Math.max(...all);
-  if (display === "slo") return [sloFloor(values, target ?? lo), 100];
+  if (display === "slo")
+    // A ≥ objective lives near 100; a ≤ objective (an error rate) near 0.
+    return comparator === "lte" ? [0, Math.max(hi * 1.5, 0.01)] : [sloFloor(values, target ?? lo), 100];
   if (display === "progress") return [Math.min(0, lo), hi > 0 ? hi * 1.15 : hi + 1];
   const pad = Math.max(hi - lo, Math.abs(hi) * 0.1, 1) * 0.3;
   return [lo - pad, hi + pad];

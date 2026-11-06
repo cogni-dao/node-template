@@ -35,9 +35,9 @@ const TONE_CLASS: Record<StatusTone, string> = {
 };
 
 /** Series colour; status colours stay on the pill. */
-export const SERIES_COLOR = "hsl(var(--chart-1))";
+const SERIES_COLOR = "hsl(var(--chart-1))";
 /** Below-objective bar. */
-export const MISS_COLOR = "var(--color-destructive)";
+const MISS_COLOR = "var(--color-destructive)";
 
 export function StatusPill({ status }: { readonly status: KpiStatus }) {
   const meta = STATUS_META[status];
@@ -137,7 +137,7 @@ export function AvailabilityStrip({
       {values.length > 0 && (
         <ChartContainer config={CHART_CONFIG} className="aspect-auto h-10 w-full">
           <BarChart id={id} data={data} margin={{ top: 2, right: 0, bottom: 0, left: 0 }} barCategoryGap={1}>
-            <YAxis hide domain={yDomain("slo", values, binding.target.value)} allowDataOverflow />
+            <YAxis hide domain={yDomain("slo", values, binding.target.value, binding.comparator)} allowDataOverflow />
             <Bar id={`${id}-bar`} dataKey="v" isAnimationActive={false} radius={1}>
               {barCells(data, binding)}
             </Bar>

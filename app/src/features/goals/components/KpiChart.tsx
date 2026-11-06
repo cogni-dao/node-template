@@ -95,7 +95,7 @@ export function KpiChart({
   const values = data.flatMap((d) => (d.v === null ? [] : [d.v]));
   const target = kpi.binding.target.value;
   const showTarget = targetInView(display, values, kpi.binding);
-  const domain = yDomain(display, values, showTarget ? target : null);
+  const domain = yDomain(display, values, showTarget ? target : null, kpi.binding.comparator);
   const from = shown ? Date.parse(shown.from) : Date.parse(span.from);
   const to = Math.max(
     (shown ? Date.parse(shown.to) : Date.parse(span.to)) + STEP_MS[shown?.step ?? span.step],

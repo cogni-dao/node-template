@@ -224,7 +224,7 @@ describe("GoalsBoard", () => {
     const card = (id: string) => container.querySelector(`[data-kpi="${id}"]`) as HTMLElement;
     expect(card("convergence-ratio-7d").dataset.display).toBe("progress");
     expect(card("github-stars").dataset.display).toBe("volume");
-    expect(card("github-stars").textContent).toContain("+20 · 3d");
+    expect(card("github-stars").textContent).toContain("+20 since Oct 30");
     expect(card("uptime").dataset.display).toBe("slo");
     expect(card("uptime").textContent).toContain("99.95%");
     expect(card("uptime").textContent).toContain("budget 50%");

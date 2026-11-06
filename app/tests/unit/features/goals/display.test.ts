@@ -29,6 +29,7 @@ import {
   progressFraction,
   sloBudget,
   targetInView,
+  yDomain,
 } from "@/features/goals/lib/display";
 
 const OBSERVED = "2026-11-02T10:00:00.000Z";
@@ -86,13 +87,22 @@ describe("slo", () => {
     expect(meetsTarget(2, ceiling)).toBe(false);
     expect(cardHint(k("%", 99.95, 99.9), "slo", null)).toBe("budget 50%");
   });
+
+  it("scales the axis toward 100 for ≥ and up from 0 for ≤", () => {
+    const [lo, hi] = yDomain("slo", [99.95, 99.8], 99.9, "gte");
+    expect(hi).toBe(100);
+    expect(lo).toBeLessThan(99.8);
+    expect(yDomain("slo", [0.25, 0.6], 1, "lte")).toEqual([0, 1.5]);
+  });
 });
 
 describe("volume", () => {
   it("names the real time since the first reading, skipping leading gaps", () => {
     const kpi = k("stars", 130, 200, "gte", [null, null, 100, 120]);
-    // First reading is the bucket starting Nov 1 00:00; the value is read Nov 2 10:00.
-    expect(cardHint(kpi, "volume", kpi.trend)).toBe("+30 · 34h");
+    // The first reading sits in the Nov 1 bucket: the change is labelled by it, never a guessed duration.
+    expect(cardHint(kpi, "volume", kpi.trend)).toBe("+30 since Nov 1");
+    const hourly = history("m", "stars", "1h", OBSERVED, [null, 120, 125]);
+    expect(cardHint(kpi, "volume", hourly)).toBe("+10 since 08:00");
     expect(cardHint(k("stars", 130, 200, "gte", [null, 120]), "volume", null)).toBe("≥ 200");
     expect(formatValue(12_400, "volume", "stars")).toBe("12.4K");
   });

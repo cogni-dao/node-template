@@ -84,7 +84,7 @@ export function reasonText(reason: KpiReason | null): string | null {
 }
 
 /** Statuses that make a goal need attention (tab badge, summary). */
-export const ATTENTION_STATUSES: ReadonlySet<KpiStatus> = new Set([
+const ATTENTION_STATUSES: ReadonlySet<KpiStatus> = new Set([
   "behind",
   "failing",
   "missed",
@@ -127,23 +127,6 @@ export function formatNumber(value: number, unit?: string): string {
   }).format(value);
 }
 
-/** Signed change; small paces keep two significant digits (+0.014, not +0.01). */
-export function formatSigned(value: number, unit?: string): string {
-  const abs = Math.abs(value);
-  const body =
-    abs > 0 && abs < 0.1
-      ? new Intl.NumberFormat("en", { maximumSignificantDigits: 2 }).format(abs)
-      : formatNumber(abs, unit);
-  return `${value > 0 ? "+" : value < 0 ? "−" : "±"}${body}`;
-}
-
-export function targetText(
-  comparator: keyof typeof COMPARATOR_SYMBOL,
-  target: { value: number; unit: string }
-): string {
-  return `${COMPARATOR_SYMBOL[comparator]} ${formatNumber(target.value, target.unit)}`;
-}
-
 const DAY_MS = 86_400_000;
 
 export function formatDate(iso: string, withYear = false): string {
@@ -165,7 +148,7 @@ export function formatUtcTime(iso: string): string {
 }
 
 /** "10:00 UTC" today; "Oct 30, 10:00 UTC" otherwise. */
-export function formatReadingTime(iso: string, nowIso: string): string {
+function formatReadingTime(iso: string, nowIso: string): string {
   const sameDay =
     new Date(iso).toISOString().slice(0, 10) ===
     new Date(nowIso).toISOString().slice(0, 10);
@@ -214,7 +197,7 @@ export const STEP_MS: Record<MetricHistoryStep, number> = {
 };
 /** Weekly buckets align to Monday 2000-01-03T00:00Z (the server's origin). */
 const WEEK_ORIGIN = Date.UTC(2000, 0, 3);
-export function floorToStep(ms: number, step: MetricHistoryStep): number {
+function floorToStep(ms: number, step: MetricHistoryStep): number {
   const size = STEP_MS[step];
   const origin = step === "1w" ? WEEK_ORIGIN : 0;
   return origin + Math.floor((ms - origin) / size) * size;
