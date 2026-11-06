@@ -24,7 +24,7 @@
 
 import type { GoalProgress, GoalsProgress } from "@cogni-dao/metrics/contracts";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronRight } from "lucide-react";
+import { ArrowUpRight, ChevronRight } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useId, useState } from "react";
 
@@ -156,7 +156,8 @@ function Strip({
   const cells = [
     { label: "Goals", value: s.goals, tone: "" },
     { label: "KPIs", value: s.kpis, tone: "" },
-    { label: STATUS_META.on_track.short, value: n("on_track") + n("met"), tone: "text-success" },
+    { label: STATUS_META.on_track.short, value: n("on_track"), tone: "text-success" },
+    ...(n("met") ? [{ label: STATUS_META.met.short, value: n("met"), tone: "text-success" }] : []),
     { label: STATUS_META.behind.short, value: n("behind"), tone: "text-warning" },
     ...(n("missed") ? [{ label: STATUS_META.missed.short, value: n("missed"), tone: "text-destructive" }] : []),
     { label: STATUS_META.failing.short, value: n("failing"), tone: "text-destructive" },
@@ -197,7 +198,9 @@ function GoalRow({
   readonly single: boolean;
 }) {
   const measured = isMeasured(goal);
-  const [expanded, setExpanded] = useState(measured);
+  // Until the reader toggles it, a row follows the data: open when measured (always on the goal page).
+  const [choice, setChoice] = useState<boolean | null>(null);
+  const expanded = choice ?? (single || measured);
   // A goal may bind one metric twice (a floor and a ceiling), so a card is its
   // position plus metric: if a refresh shifts the bindings, the chart closes
   // instead of silently showing another KPI.
@@ -210,13 +213,13 @@ function GoalRow({
   const worst = worstStatus(goal);
   return (
     <li data-goal={goal.id}>
-      <h3>
+      <h3 className="flex items-center">
         <button
           type="button"
           aria-expanded={expanded}
           aria-controls={bodyId}
-          onClick={() => setExpanded(!expanded)}
-          className="flex w-full items-center gap-3 px-4 py-3 text-left outline-none hover:bg-muted/30 focus-visible:bg-muted/30"
+          onClick={() => setChoice(!expanded)}
+          className="flex min-w-0 flex-1 items-center gap-3 py-3 pr-2 pl-4 text-left outline-none hover:bg-muted/30 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
         >
           <ChevronRight
             aria-hidden="true"
@@ -233,6 +236,15 @@ function GoalRow({
             </span>
           )}
         </button>
+        {!single && (
+          <Link
+            href={`/knowledge/${encodeURIComponent(goal.id)}`}
+            aria-label={`Open ${goal.title}`}
+            className="shrink-0 rounded-md px-3 py-3 text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+          >
+            <ArrowUpRight aria-hidden="true" className="size-4" />
+          </Link>
+        )}
       </h3>
       <div id={bodyId} hidden={!expanded} className="space-y-3 px-4 pt-1 pb-4">
         {goal.kpis.length ? (
@@ -251,12 +263,7 @@ function GoalRow({
             })}
           </div>
         ) : (
-          <p className="text-muted-foreground text-sm">
-            No metric bound ·{" "}
-            <Link href={`/knowledge/${encodeURIComponent(goal.id)}`} className="underline underline-offset-2">
-              open goal
-            </Link>
-          </p>
+          <p className="text-muted-foreground text-sm">No metric bound</p>
         )}
         {openKpi && open && <KpiChart key={open} id={chartId} kpi={openKpi} nowIso={nowIso} />}
       </div>

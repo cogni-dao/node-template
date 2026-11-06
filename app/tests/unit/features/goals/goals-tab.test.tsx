@@ -184,6 +184,12 @@ describe("GoalsBoard", () => {
     expect(cell("KPIs")).toBe(String(kpis));
     const behind = data.goals.flatMap((g) => g.kpis).filter((k) => k.assessment.status === "behind").length;
     expect(cell("Behind")).toBe(String(behind));
+    const onTrack = data.goals.flatMap((g) => g.kpis).filter((k) => k.assessment.status === "on_track").length;
+    expect(cell("On track")).toBe(String(onTrack));
+    // Each measured goal row links to its goal page beside its toggle.
+    const first = data.goals[0]!;
+    const row = container.querySelector(`[data-goal="${first.id}"]`) as HTMLElement;
+    expect(row.querySelector(`h3 a[href="/knowledge/${first.id}"]`)).not.toBeNull();
   });
 
   it("puts no sentences on a card and never prints unknown as zero", () => {
