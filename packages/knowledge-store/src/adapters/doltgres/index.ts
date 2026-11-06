@@ -11,6 +11,7 @@
  *   - Dolt versioning functions (dolt_commit, dolt_log, dolt_diff, dolt_hashof) via sql.unsafe().
  *   - No Drizzle query builder for writes (parameterized queries fail on Doltgres).
  *   - Connection string injected, never from process.env (PACKAGES_NO_ENV).
+ *   - Browse/Overview retain native capacity after caller deadline/abort; no snapshot claim.
  * Side-effects: IO (database reads/writes)
  * Links: docs/spec/knowledge-data-plane.md
  * @public
@@ -32,6 +33,7 @@ import type {
   KnowledgeBrowseQuery,
   KnowledgeSummary,
 } from "../../contracts.js";
+import { readBrowseWithinBudget } from "./browse-budget.js";
 import { browseQuery, nextBrowseCursor } from "../../domain/browse.js";
 import { initializeConfidence } from "../../domain/confidence-policy.js";
 import {
@@ -76,6 +78,7 @@ import {
   type DomainPatch,
   GoalRequiresContributionError,
   HypothesisMissingEvaluateAtError,
+  KnowledgeBusyError,
   type KnowledgeStorePort,
   KnowledgeWriteOutcomeUnknownError,
   KnowledgeWriteScopeRequiredError,
@@ -326,6 +329,8 @@ export interface DoltgresAdapterConfig {
   sql: Sql;
   /** Existing shared branch admission; ordinary reads never use it. */
   writerSession?: DoltBranchSessionRunner;
+  /** One Browse/Overview deadline, including admission and both native reads. */
+  browseTimeoutMs?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -337,8 +342,12 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
   private readonly readSql: Sql;
   private readonly writerSession: DoltBranchSessionRunner | undefined;
   private scopeOpen = false;
+  private readonly browseTimeoutMs: number;
 
   constructor(config: DoltgresAdapterConfig) {
+    this.browseTimeoutMs = config.browseTimeoutMs ?? 15_000;
+    if (!Number.isFinite(this.browseTimeoutMs) || this.browseTimeoutMs <= 0)
+      throw new Error("browseTimeoutMs must be finite and positive");
     this.sql = config.sql;
     this.readSql = config.sql;
     this.writerSession = config.writerSession;
@@ -400,20 +409,23 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
   // --- Read ---
 
   async browseKnowledge(
-    input: KnowledgeBrowseQuery
+    input: KnowledgeBrowseQuery,
+    options?: { signal?: AbortSignal }
   ): Promise<KnowledgeBrowsePage> {
-    return this.readBrowse(input, "browse");
+    return this.readBrowse(input, "browse", options?.signal);
   }
 
   async overviewKnowledge(
-    input: Omit<KnowledgeBrowseQuery, "search">
+    input: Omit<KnowledgeBrowseQuery, "search">,
+    options?: { signal?: AbortSignal }
   ): Promise<KnowledgeBrowsePage> {
-    return this.readBrowse(input, "overview");
+    return this.readBrowse(input, "overview", options?.signal);
   }
 
   private async readBrowse(
     input: KnowledgeBrowseQuery,
-    operation: "browse" | "overview"
+    operation: "browse" | "overview",
+    signal?: AbortSignal
   ): Promise<KnowledgeBrowsePage> {
     const { query, signature, position } = browseQuery(input, operation);
     const columns = {
@@ -469,8 +481,22 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
     const search = query.search?.toLowerCase();
     const fields = `id, domain, entity_id, title, entry_type, confidence_pct, source_type, use_when, created_at, CAST(date_trunc('microseconds', created_at) AS TEXT) AS browse_created_at${search ? ", content" : ""}`;
-    const rows = await this.sql.unsafe(
-      `SELECT ${fields} FROM knowledge ${where} ORDER BY ${column} ${query.direction.toUpperCase()}${nullOrder}, id ASC LIMIT ${search ? 20 : 21}`
+    const { rows, revision } = await readBrowseWithinBudget(
+      this.readSql,
+      this.browseTimeoutMs,
+      signal,
+      async (read) => {
+        const heads = await read("SELECT dolt_hashof('HEAD') as hash");
+        const revision = heads[0]?.hash;
+        if (typeof revision !== "string" || !revision)
+          throw new KnowledgeBusyError(
+            "Knowledge revision unavailable; retry shortly"
+          );
+        const rows = await read(
+          `SELECT ${fields} FROM knowledge ${where} ORDER BY ${column} ${query.direction.toUpperCase()}${nullOrder}, id ASC LIMIT ${search ? 20 : 21}`
+        );
+        return { rows, revision };
+      }
     );
     const window = rows.slice(0, 20);
     const toSummary = (row: Record<string, unknown>): KnowledgeSummary => ({
@@ -506,6 +532,7 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
     const hasMore = search ? window.length === 20 : rows.length > 20;
     const last = window[window.length - 1];
     return {
+      revision,
       items,
       scannedRows: window.length,
       nextCursor:

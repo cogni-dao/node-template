@@ -351,6 +351,8 @@ export type KnowledgeOverviewQuery = z.input<
   typeof KnowledgeOverviewQuerySchema
 >;
 export const KnowledgeBrowsePageSchema = z.object({
+  /** Observed committed HEAD before this live window; not a snapshot token. */
+  revision: z.string().min(1).max(200),
   items: z.array(KnowledgeSummarySchema).max(20),
   nextCursor: z.string().nullable(),
   scannedRows: z.number().int().min(0).max(20),

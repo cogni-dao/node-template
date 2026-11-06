@@ -142,8 +142,8 @@ describe("native Doltgres knowledge browsing", () => {
 			expect(result.nextCursor).toBeTruthy();
 			expect(result.items.every((row) => !("content" in row))).toBe(true);
 		}
-		expect(statements).toHaveLength(2);
-		for (const query of statements) {
+		expect(statements).toHaveLength(4);
+		for (const query of statements.filter((q) => !q.includes("dolt_hashof"))) {
 			expect(query).toMatch(/^SELECT id, domain,/);
 			expect(query).not.toMatch(/\bcontent\b|SELECT \*/i);
 			expect(query).toMatch(/LIMIT 21$/);
@@ -201,8 +201,9 @@ describe("native Doltgres knowledge browsing", () => {
 							? await store.browseKnowledge(input)
 							: await store.overviewKnowledge(input);
 					const queryElapsedMs = performance.now() - start;
-					expect(statements).toHaveLength(1);
-					const query = statements[0];
+					expect(statements).toHaveLength(2);
+					expect(page.revision).toBeTruthy();
+					const query = statements.find((q) => !q.includes("dolt_hashof"));
 					if (!query) throw new Error("projected query missing");
 					expect(query).toMatch(/^SELECT id, domain,/);
 					expect(query).not.toMatch(/\bcontent\b|SELECT \*/i);
@@ -232,7 +233,7 @@ describe("native Doltgres knowledge browsing", () => {
 							mode,
 							seedElapsedMs,
 							queryElapsedMs,
-							queryCount: 1,
+							queryCount: statements.length,
 							outputCount: page.items.length,
 							scannedRows: page.scannedRows,
 							resultJSONbytes,

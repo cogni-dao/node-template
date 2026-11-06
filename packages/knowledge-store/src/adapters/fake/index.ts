@@ -219,6 +219,7 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
     const needle = query.search?.toLowerCase();
     const last = window[window.length - 1];
     return {
+      revision: await this.currentCommit(),
       items: window
         .filter((row) => !needle || matchesBrowse(row, needle))
         .map(summary),

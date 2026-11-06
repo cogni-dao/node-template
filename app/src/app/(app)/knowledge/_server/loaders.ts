@@ -139,7 +139,7 @@ export async function loadKnowledgeGraphCached(
   )();
 }
 
-/** Bounded initial reads: no registry, revision lookup, bodies or citations. */
+/** Bounded initial reads: one observed HEAD plus metadata; no registry, bodies or citations. */
 export async function loadKnowledgeBrowse(
   port: KnowledgeStorePort,
   query: KnowledgeBrowseQuery = {}

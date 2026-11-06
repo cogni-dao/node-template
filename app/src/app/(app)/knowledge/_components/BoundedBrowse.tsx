@@ -20,11 +20,12 @@ import {
   useReactTable,
   type VisibilityState,
 } from "@tanstack/react-table";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button, Input } from "@/components";
 import { browseKey, fetchBrowse } from "../_api/fetchBrowse";
 import { summaryColumns } from "./columns";
 import { KnowledgeSelection } from "./KnowledgeSelection";
+import { useBrowseRevision } from "./useBrowseRevision";
 
 export function BoundedBrowse({
   initialData,
@@ -69,6 +70,8 @@ export function BoundedBrowse({
     queryKey: browseKey(query),
     queryFn: ({ signal }) => fetchBrowse(query, signal),
     staleTime: 30_000,
+    // Cached body windows must not refetch through mutation invalidation.
+    enabled: !search,
     retry: false,
     // Cached body windows resume only through explicit user intent. A remount
     // may reuse them, but must not silently repeat a stale or failed body read.
@@ -85,6 +88,22 @@ export function BoundedBrowse({
         ? initialData
         : undefined,
   });
+  const revision = useBrowseRevision(page.data?.revision);
+  const restartPending = useRef(false);
+  const bodyIntent = search ? JSON.stringify(browseKey(query)) : "";
+  const { refetch } = page;
+  const { acknowledgeRestart } = revision;
+  useEffect(() => {
+    // Only a changed user query/window initiates body work. Cache invalidation,
+    // focus, reconnect and renders cannot replay a body window.
+    if (bodyIntent)
+      void refetch({ cancelRefetch: false }).then((result) => {
+        if (restartPending.current && result.data && !result.error) {
+          acknowledgeRestart(result.data.revision);
+          restartPending.current = false;
+        }
+      });
+  }, [bodyIntent, refetch, acknowledgeRestart]);
   const table = useReactTable({
     data: page.data?.items ?? [],
     columns: summaryColumns,
@@ -136,12 +155,23 @@ export function BoundedBrowse({
           variant="outline"
           size="sm"
           onClick={() => {
+            if (search && cursor) {
+              restartPending.current = true;
+              reset();
+              return;
+            }
             reset();
             const { cursor: _cursor, ...first } = query;
-            void queryClient.invalidateQueries({
-              queryKey: browseKey(first),
-              exact: true,
-            });
+            void queryClient
+              .fetchQuery({
+                queryKey: browseKey(first),
+                queryFn: ({ signal }) => fetchBrowse(first, signal),
+                staleTime: 0,
+              })
+              .then((firstPage) =>
+                revision.acknowledgeRestart(firstPage.revision)
+              )
+              .catch(() => undefined);
           }}
         >
           Restart
@@ -157,6 +187,16 @@ export function BoundedBrowse({
           />
         </div>
       </div>
+      {revision.restartNeeded && (
+        <p role="status">
+          Knowledge changed. Restart to begin a new live traversal.
+        </p>
+      )}
+      {page.data && (
+        <p className="text-muted-foreground text-xs">
+          Observed revision: {page.data.revision} · live read
+        </p>
+      )}
       <p className="text-muted-foreground text-xs" role="status">
         {page.isFetching
           ? "Loading window…"
