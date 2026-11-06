@@ -28,7 +28,7 @@ export function prioritizerPrompt(base: string, deciding: boolean) {
   return (
     base +
     (deciding
-      ? `\nBefore evaluating scores or returning NO_CHANGE, read each exact guidance id: ${REQUIRED_GUIDANCE_IDS.join(", ")}. Read each item completely and cite actual observed source URLs.`
+      ? `\nBefore evaluating scores or returning NO_CHANGE, read each exact guidance id: ${REQUIRED_GUIDANCE_IDS.join(", ")}. If any of them is not found, report the missing ids and stop without scoring; do not search the repository or other entries for a substitute. Read each item completely and cite actual observed source URLs.`
       : "")
   );
 }
