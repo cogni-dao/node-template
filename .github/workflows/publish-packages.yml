@@ -47,6 +47,7 @@ name: Publish Packages
 on:
   push:
     tags:
+      - "identity-client-v*"
       - "work-items-v*"
       - "knowledge-store-v*"
       - "knowledge-base-v*"
@@ -93,7 +94,8 @@ env:
   # in either direction, so neither an unselectable tag nor an untaggable
   # package can ship.
   PACKAGES: >-
-    [{"name":"@cogni-dao/metrics","dir":"packages/metrics","tagPrefix":"metrics-v"},
+    [{"name":"@cogni-dao/identity-client","dir":"packages/identity-client","tagPrefix":"identity-client-v"},
+     {"name":"@cogni-dao/metrics","dir":"packages/metrics","tagPrefix":"metrics-v"},
     {"name":"@cogni-dao/work-items","dir":"packages/work-items","tagPrefix":"work-items-v"},
      {"name":"@cogni-dao/knowledge-store","dir":"packages/knowledge-store","tagPrefix":"knowledge-store-v"},
      {"name":"@cogni-dao/knowledge-base","dir":"packages/knowledge-base","tagPrefix":"knowledge-base-v"},

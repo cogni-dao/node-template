@@ -770,6 +770,18 @@ importers:
         specifier: ^5
         version: 5.9.3
 
+  packages/identity-client:
+    devDependencies:
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(jiti@2.7.0)(postcss@8.5.15)(tsx@4.22.4)(typescript@5.9.3)(yaml@2.9.0)
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+      vitest:
+        specifier: ^3.1.4
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@22.19.19)(happy-dom@20.10.2(bufferutil@4.1.0)(utf-8-validate@5.0.10))(jiti@2.7.0)(jsdom@27.4.0(@noble/hashes@1.8.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10))(lightningcss@1.32.0)(tsx@4.22.4)(yaml@2.9.0)
+
   packages/ids:
     dependencies:
       type-fest:
