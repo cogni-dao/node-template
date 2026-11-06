@@ -35,7 +35,7 @@ export function createMetricTools(
 		{
 			name: "core__goal_progress",
 			description:
-				"Read every active goal with its KPI bindings, one assessment per KPI (status, enum reason, value, target, deadline, display pace), 30 daily buckets and hypotheses. Call before triage/planning and after acting. Unknown is never zero.",
+				"Read every active goal with its KPI bindings, one assessment per KPI (status, enum reason, value, target, deadline, display pace), its display type, 30 daily buckets (plus the last 24 hourly buckets for hourly metrics) and hypotheses. Call before triage/planning and after acting. Unknown is never zero.",
 			effect: "read_only" as const,
 			inputSchema: z.strictObject({}),
 			outputSchema: GoalsProgressSchema,

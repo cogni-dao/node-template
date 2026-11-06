@@ -261,3 +261,42 @@ export function everyStatusFixture(): GoalsProgress {
     ),
   });
 }
+
+// ------------------------------------------------- ranged history (task.0040)
+
+export type BucketSpec = number | null | "error" | "unavailable";
+
+/** `specs.length` buckets of `step` ending at `to`; null = missing, never filled. */
+export function history(
+  metricId: string,
+  unit: string,
+  step: MetricHistory["step"],
+  to: string,
+  specs: readonly BucketSpec[],
+  idBase = 5000
+): MetricHistory {
+  const size = { "1h": 3_600_000, "1d": DAY, "1w": 7 * DAY }[step];
+  const end = Date.parse(to);
+  const start = end - specs.length * size;
+  return {
+    metricId,
+    unit,
+    step,
+    from: new Date(start).toISOString(),
+    to,
+    buckets: specs.map((s, i) => ({
+      start: new Date(start + i * size).toISOString(),
+      end: new Date(start + (i + 1) * size).toISOString(),
+      status:
+        s === null
+          ? "missing"
+          : s === "error" || s === "unavailable"
+            ? s
+            : "ok",
+      value: typeof s === "number" ? s : null,
+      observationId: s === null ? null : uuid(idBase + i),
+    })),
+  };
+}
+
+export { assessment as assessmentFixture, goal as goalFixture, kpi as kpiFixture };

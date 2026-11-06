@@ -14,6 +14,34 @@ export const MetricSpecSchema = z.strictObject({
 	maxAgeSeconds: z.number().int().positive(),
 });
 export type MetricSpec = z.infer<typeof MetricSpecSchema>;
+/**
+ * How a metric reads best. progress: a value against a target. volume: an
+ * amount that grows (stars, revenue, counts). slo: a percentage (unit "%") read
+ * as availability against a ≥ or ≤ objective with an error budget. The
+ * calculator declares a default; a metric definition may override it.
+ */
+export const MetricDisplaySchema = z.enum(["progress", "slo", "volume"]);
+export type MetricDisplay = z.infer<typeof MetricDisplaySchema>;
+/** The only unit an slo display reads correctly. */
+export const SLO_UNIT = "%";
+/**
+ * A stored `metric_spec`: the strict spec plus the author's optional display.
+ * Display sits beside the spec, so it never enters the series hash.
+ */
+export const StoredMetricSpecSchema = MetricSpecSchema.extend({
+	display: MetricDisplaySchema.optional(),
+});
+export function parseStoredMetricSpec(stored: unknown): {
+	spec: MetricSpec;
+	display: MetricDisplay | undefined;
+} {
+	const { display, ...spec } = StoredMetricSpecSchema.parse(stored);
+	return { spec, display };
+}
+/** A display a metric of this unit can honour. */
+export function displayFits(display: MetricDisplay, unit: string): boolean {
+	return display !== "slo" || unit === SLO_UNIT;
+}
 export const KpiBindingSchema = z.strictObject({
 	metricId: z.string().min(1).max(40),
 	comparator: z.enum(["gte", "lte", "eq"]),
@@ -59,6 +87,7 @@ export const MetricViewSchema = z.object({
 		title: z.string(),
 		revision: z.string(),
 		spec: MetricSpecSchema,
+		display: MetricDisplaySchema.optional(),
 	}),
 	latestAttempt: MetricObservationSchema.nullable(),
 	lastGood: MetricObservationSchema.nullable(),
@@ -128,6 +157,10 @@ export interface MetricCalculator {
 	unit: string;
 	/** Unit for one parameterization when outputs differ (for example ratio vs items). */
 	unitFor?(params: unknown): string;
+	/** How this calculator's readings read best; a metric definition may override it. */
+	display?: MetricDisplay;
+	/** Display for one parameterization when outputs differ (ratio → progress, count → volume). */
+	displayFor?(params: unknown): MetricDisplay;
 	/** Width of the measured interval [end - windowSeconds, end). Absent means an instant. */
 	windowSeconds?(params: unknown): number;
 	paramsSchema: z.ZodType;
@@ -293,11 +326,17 @@ export const GoalKpiSchema = z.object({
 			calculatorId: z.string(),
 			cadenceSeconds: z.number().int().nullable(),
 			maxAgeSeconds: z.number().int(),
+			display: MetricDisplaySchema.optional(),
 		})
 		.nullable(),
 	assessment: KpiAssessmentSchema,
 	/** 30 daily buckets ending at the current UTC day; null when unreadable. */
 	trend: MetricHistorySchema.nullable(),
+	/**
+	 * The last 24 hourly buckets for a metric refreshed hourly or faster; absent
+	 * or null otherwise. Lets a young series show its shape before it has days.
+	 */
+	recent: MetricHistorySchema.nullable().optional(),
 });
 export const GoalHypothesisSchema = z.object({
 	id: z.string(),
