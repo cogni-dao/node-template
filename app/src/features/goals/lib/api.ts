@@ -25,9 +25,20 @@ import type { HistoryWindow } from "./presentation";
 
 export const GOALS_QUERY_KEY = ["goals", "progress"] as const;
 
+/** A failed read with its HTTP status, so callers branch on status, not message text. */
+export class GoalsReadError extends Error {
+  constructor(
+    readonly resource: "goals" | "history",
+    readonly status: number
+  ) {
+    super(`${resource}_read_failed:${status}`);
+    this.name = "GoalsReadError";
+  }
+}
+
 export async function fetchGoalsProgress(): Promise<GoalsProgress> {
   const response = await fetch("/api/v1/metrics/goals", { cache: "no-store" });
-  if (!response.ok) throw new Error(`goals_read_failed:${response.status}`);
+  if (!response.ok) throw new GoalsReadError("goals", response.status);
   return GoalsProgressSchema.parse(await response.json());
 }
 
@@ -41,7 +52,7 @@ async function readHistory(
     `/api/v1/metrics/${encodeURIComponent(metricId)}/history?${qs}`,
     { cache: "no-store" }
   );
-  if (!response.ok) throw new Error(`history_read_failed:${response.status}`);
+  if (!response.ok) throw new GoalsReadError("history", response.status);
   return MetricHistorySchema.parse(await response.json());
 }
 

@@ -13,6 +13,7 @@
  * @public
  */
 
+import type { WorkItemSummary } from "./contracts.js";
 import type { WorkItemLeasePort } from "./leases.js";
 
 import type {
@@ -43,6 +44,11 @@ export interface WorkItemsPort {
   get(id: WorkItemId): Promise<WorkItem | null>;
   list(query?: WorkQuery): Promise<{
     items: WorkItem[];
+    nextCursor?: string;
+    pageInfo: { endCursor: string | null; hasMore: boolean };
+  }>;
+  listSummaries(query?: WorkQuery): Promise<{
+    items: WorkItemSummary[];
     nextCursor?: string;
     pageInfo: { endCursor: string | null; hasMore: boolean };
   }>;

@@ -39,7 +39,7 @@ import type { ComponentProps, ReactElement, ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { KnowledgeDashboardView } from "@/app/(app)/knowledge/view";
 import { GoalsBoard, MetricEvidence } from "@/features/goals";
-import { deadlineText, STATUS_META } from "@/features/goals/lib/presentation";
+import { STATUS_META } from "@/features/goals/lib/presentation";
 
 const navigation = vi.hoisted(() => ({
   mode: "browse",
@@ -178,9 +178,13 @@ describe("GoalsBoard", () => {
     expect(cards.length).toBeGreaterThan(5);
     for (const card of cards) expect(visibleWords(card).length, card.textContent ?? "").toBeLessThanOrEqual(10);
     expect(container.textContent).not.toMatch(/unknown, not zero|could not be read/);
-    // The reason stays one hover away, in plain words.
+    // The reason is the card's accessible description and hover title, in plain words.
     const failing = container.querySelector('[data-goal="goal-failing"] [data-kpi]') as HTMLElement;
-    expect(failing.querySelector("[data-status]")?.getAttribute("title")).toBeTruthy();
+    const toggle = within(failing).getByRole("button");
+    expect(toggle.getAttribute("title")).toBe("The data source timed out.");
+    expect(document.getElementById(toggle.getAttribute("aria-describedby") ?? "")?.textContent).toContain(
+      "The data source timed out."
+    );
     cleanup();
     const empty = kpiFixture(
       "m",
@@ -190,7 +194,9 @@ describe("GoalsBoard", () => {
     );
     const board = renderBoard(withKpis([empty])).container;
     const card = board.querySelector("[data-kpi]") as HTMLElement;
-    expect(within(card).getByLabelText("No reading").textContent).toBe("—");
+    expect(card.querySelector(".text-3xl")?.textContent).toBe("—");
+    const emptyToggle = within(card).getByRole("button");
+    expect(document.getElementById(emptyToggle.getAttribute("aria-describedby") ?? "")?.textContent).toMatch(/^No reading/);
     expect(card.textContent).not.toMatch(/\b0\b(?!\.)/);
   });
 
@@ -218,7 +224,7 @@ describe("GoalsBoard", () => {
     const card = (id: string) => container.querySelector(`[data-kpi="${id}"]`) as HTMLElement;
     expect(card("convergence-ratio-7d").dataset.display).toBe("progress");
     expect(card("github-stars").dataset.display).toBe("volume");
-    expect(card("github-stars").textContent).toContain("+20 · 4d");
+    expect(card("github-stars").textContent).toContain("+20 · 3d");
     expect(card("uptime").dataset.display).toBe("slo");
     expect(card("uptime").textContent).toContain("99.95%");
     expect(card("uptime").textContent).toContain("budget 50%");
@@ -252,8 +258,10 @@ describe("GoalsBoard", () => {
     vi.stubGlobal("fetch", fetchMock);
     const { container } = renderBoard(data);
     const card = container.querySelector(`[data-kpi="${kpi.binding.metricId}"]`) as HTMLElement;
-    fireEvent.click(card);
-    expect(card.getAttribute("aria-expanded")).toBe("true");
+    const toggle = within(card).getByRole("button", { name: kpi.metric!.title });
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(document.getElementById(toggle.getAttribute("aria-controls") ?? "")?.tagName).toBe("FIGURE");
     const figure = await screen.findByRole("figure", { name: kpi.metric!.title });
     await waitFor(() => expect(figure.querySelector(".recharts-area-curve")).not.toBeNull());
     // Two runs of readings around the gap: the curve restarts, never bridges.
@@ -421,17 +429,6 @@ describe("MetricEvidence", () => {
     ]);
   });
 });
-
-describe("goal deadline summary", () => {
-  it("never reports a passed deadline as next due", () => {
-    const now = "2026-11-04T06:00:00.000Z";
-    expect(
-      deadlineText(["2026-10-24T23:59:00.000Z", "2027-01-31T00:00:00.000Z"], 3, now)
-    ).toBe("next due Jan 31, 2027 (88 days) · 1 past due");
-    expect(deadlineText(["2026-10-24T23:59:00.000Z"], 1, now)).toBe("1 past due");
-  });
-});
-
 
 describe("server rendering", () => {
   it("emits the same markup on every request", async () => {

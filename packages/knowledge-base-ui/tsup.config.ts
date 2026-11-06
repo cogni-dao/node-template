@@ -10,5 +10,17 @@ export default defineConfig({
   clean: false,
   sourcemap: true,
   platform: "browser",
-  external: ["react", "react/jsx-runtime", "@cogni/work-items"],
+  external: [
+    "react",
+    "react/jsx-runtime",
+    "react-dom",
+    "@cogni/work-items",
+    "@dnd-kit/core",
+    "@dnd-kit/sortable",
+    "@dnd-kit/utilities",
+    "clsx",
+    "lucide-react",
+    "radix-ui",
+    "tailwind-merge",
+  ],
 });

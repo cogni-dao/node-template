@@ -3,91 +3,121 @@
 
 /**
  * Module: `@features/goals/lib/display`
- * Purpose: One KPI card's numbers by display type. progress = value against a
- *   target; slo = availability % and error budget; volume = an amount and its
- *   change. The type comes from the read model (calculator default or the
- *   metric author's override); the UI never infers it.
+ * Purpose: Everything a KPI card or chart shows, by display type. progress = a
+ *   value against a target; volume = an amount and its change; slo = a
+ *   percentage against a ≥/≤ objective with an error budget. The type comes
+ *   from the read model (calculator default or the author's override).
  * Scope: Pure. Reads contract values only; never re-derives status.
- * Invariants: UNKNOWN_IS_NOT_ZERO (no value → null, never 0); a delta needs two
- *   real readings; hints stay ≤ 3 words.
+ * Invariants: UNKNOWN_IS_NOT_ZERO (no value → null, never 0); GAPS_STAY_GAPS
+ *   (non-ok buckets are null points); one formatter per display, so a value
+ *   reads the same on the card, in the tooltip and in the readings list.
  * Side-effects: none
- * Links: packages/metrics/src/contracts.ts (MetricDisplaySchema)
+ * Links: packages/metrics/src/contracts.ts (MetricDisplaySchema, GoalKpiSchema)
  * @public
  */
 
-import type { MetricDisplay, MetricHistory } from "@cogni-dao/metrics/contracts";
+import type {
+  KpiBinding,
+  MetricDisplay,
+  MetricHistory,
+} from "@cogni-dao/metrics/contracts";
 
 import { formatNumber, formatSigned, type GoalKpi, targetText } from "./presentation";
 
 export type { MetricDisplay };
 
-/** The read model carries the calculator's default or the author's override. */
+/** Daily buckets with a reading before the card prefers the daily trend. */
+export const MIN_DAILY_SHAPE = 3;
+const HOUR_MS = 3_600_000;
+
 export function displayOf(kpi: GoalKpi): MetricDisplay {
   return kpi.metric?.display ?? "progress";
 }
 
-export interface CardNumber {
-  /** Formatted value, or null when there is no reading. */
-  readonly value: string | null;
-  /** Short unit beside the value ("%" is glued on for SLOs). */
-  readonly unit: string;
+/** 99.9996 reads 99.999, never a rounded-up 100. */
+export function formatPercent(value: number): string {
+  const digits = value >= 99.99 ? 3 : value >= 99 ? 2 : 1;
+  const f = 10 ** digits;
+  return (Math.trunc(value * f) / f).toFixed(digits).replace(/\.?0+$/, "");
 }
 
-export function cardNumber(kpi: GoalKpi, display: MetricDisplay): CardNumber {
-  const { value, unit } = kpi.assessment;
-  const u = unit ?? kpi.binding.target.unit;
-  if (value === null) return { value: null, unit: display === "slo" ? "" : u };
-  if (display === "slo") return { value: `${formatSlo(value)}%`, unit: "" };
-  return { value: compact(value, u), unit: u === "ratio" ? "" : u };
-}
-
-/** 99.95 keeps its nines; 87.5 reads 87.5. */
-export function formatSlo(value: number): string {
-  if (value >= 99) return value.toFixed(value >= 99.99 ? 3 : 2).replace(/0+$/, "").replace(/\.$/, "");
-  return value.toFixed(1).replace(/\.0$/, "");
-}
-
-/** 12,400 → 12.4k; small and fractional values keep formatNumber. */
-export function compact(value: number, unit?: string): string {
+/** One reading as every surface prints it. */
+export function formatValue(value: number, display: MetricDisplay, unit: string): string {
+  if (display === "slo") return `${formatPercent(value)}%`;
   if (Math.abs(value) >= 10_000)
     return new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(value);
   return formatNumber(value, unit);
 }
 
-/** Real readings from a trend, oldest first. Gaps are skipped, never filled. */
-export function trendReadings(trend: MetricHistory | null): number[] {
-  if (!trend) return [];
-  return trend.buckets
-    .filter((b) => b.status === "ok" && b.value !== null)
-    .map((b) => b.value as number);
+export function meetsTarget(value: number, binding: Pick<KpiBinding, "comparator" | "target">): boolean {
+  const t = binding.target.value;
+  return binding.comparator === "gte" ? value >= t : binding.comparator === "lte" ? value <= t : value === t;
 }
 
-/** "24h" for 24 hourly buckets, "30d" for 30 daily ones. */
-export function seriesSpan(series: MetricHistory): string {
-  const n = series.buckets.length;
-  return series.step === "1h" ? `${n}h` : series.step === "1w" ? `${n}w` : `${n}d`;
+/** Share of the error budget left, −1..1; null when the objective has no budget. */
+export function sloBudget(value: number, binding: Pick<KpiBinding, "comparator" | "target">): number | null {
+  const t = binding.target.value;
+  const room = binding.comparator === "gte" ? 100 - t : binding.comparator === "lte" ? t : 0;
+  if (room <= 0) return null;
+  const left = binding.comparator === "gte" ? value - t : t - value;
+  return Math.max(-1, Math.min(1, left / room));
 }
 
-/** The one muted hint beside the number, ≤ 3 words. `series` is what the mark draws. */
-export function cardHint(
-  kpi: GoalKpi,
-  display: MetricDisplay,
-  series: MetricHistory | null = kpi.trend
-): string | null {
+export interface Point {
+  readonly t: number;
+  readonly v: number | null;
+  readonly observationId: string | null;
+}
+
+/** Buckets as points (gaps null), plus the newest reading when it is past the last bucket. */
+export function seriesPoints(series: MetricHistory, kpi?: GoalKpi): Point[] {
+  const points: Point[] = series.buckets.map((b) => ({
+    t: Date.parse(b.start),
+    v: b.status === "ok" ? b.value : null,
+    observationId: b.status === "ok" ? b.observationId : null,
+  }));
+  const a = kpi?.assessment;
+  if (a?.value != null && a.observedAt && Date.parse(a.observedAt) >= Date.parse(series.to))
+    points.push({ t: Date.parse(a.observedAt), v: a.value, observationId: a.observationId });
+  return points;
+}
+
+function readingCount(series: MetricHistory | null | undefined): number {
+  return series?.buckets.filter((b) => b.status === "ok").length ?? 0;
+}
+
+/** The daily trend once it has a shape; before that, the last day hourly. */
+export function cardSeries(kpi: GoalKpi): MetricHistory | null {
+  if (readingCount(kpi.trend) >= MIN_DAILY_SHAPE || !kpi.recent) return kpi.trend;
+  return kpi.recent;
+}
+
+/** "21h" or "3d". */
+export function formatSpan(ms: number): string {
+  const hours = Math.max(1, Math.round(ms / HOUR_MS));
+  return hours < 48 ? `${hours}h` : `${Math.round(hours / 24)}d`;
+}
+
+/** Change from the first reading in `series` to the current value, over the time between them. */
+function changeHint(kpi: GoalKpi, series: MetricHistory | null): string | null {
+  const { value, observedAt } = kpi.assessment;
+  const first = series?.buckets.find((b) => b.status === "ok" && b.value !== null);
+  if (value === null || !observedAt || !first || first.value === null) return null;
+  const span = Date.parse(observedAt) - Date.parse(first.start);
+  if (span < HOUR_MS || readingCount(series) < 2) return null;
+  return `${formatSigned(value - first.value, kpi.binding.target.unit)} · ${formatSpan(span)}`;
+}
+
+/** The one muted hint under the number, ≤ 3 words. */
+export function cardHint(kpi: GoalKpi, display: MetricDisplay, series: MetricHistory | null): string {
   const { value } = kpi.assessment;
-  const target = kpi.binding.target;
+  const target = targetText(kpi.binding.comparator, kpi.binding.target);
   if (display === "slo") {
-    if (value === null || target.value >= 100) return `target ${formatSlo(target.value)}%`;
-    const budget = (value - target.value) / (100 - target.value);
-    return `budget ${Math.round(Math.max(-1, Math.min(1, budget)) * 100)}%`;
+    const budget = value === null ? null : sloBudget(value, kpi.binding);
+    return budget === null ? target : `budget ${Math.round(budget * 100)}%`;
   }
-  if (display === "volume") {
-    const readings = trendReadings(series);
-    const first = readings[0];
-    if (value !== null && series && first !== undefined && readings.length >= 2)
-      return `${formatSigned(value - first, target.unit)} · ${seriesSpan(series)}`;
-  }
-  return targetText(kpi.binding.comparator, target);
+  if (display === "volume") return changeHint(kpi, series) ?? target;
+  return target;
 }
 
 /** Progress bar fill 0..1 toward the target; null without a value. */
@@ -95,10 +125,48 @@ export function progressFraction(kpi: GoalKpi): number | null {
   const { value } = kpi.assessment;
   const t = kpi.binding.target.value;
   if (value === null) return null;
-  if (kpi.binding.comparator === "lte") {
-    if (value <= t) return 1;
-    return Math.max(0, Math.min(1, t / value));
-  }
-  if (t <= 0) return value >= t ? 1 : 0;
-  return Math.max(0, Math.min(1, value / t));
+  if (meetsTarget(value, kpi.binding)) return 1;
+  if (kpi.binding.comparator === "lte") return value > 0 ? Math.max(0, t / value) : 0;
+  return t > 0 ? Math.max(0, Math.min(1, value / t)) : 0;
+}
+
+/** Lowest bar still shows: the floor sits below the worst reading and the objective. */
+export function sloFloor(values: readonly number[], target: number): number {
+  const worst = Math.min(target, ...values);
+  return Math.max(0, worst - Math.max(100 - worst, 0.05) * 0.5);
+}
+
+/** Y domain by type: progress from 0 (or below), volume padded around the data, slo up to 100. */
+export function yDomain(
+  display: MetricDisplay,
+  values: readonly number[],
+  target: number | null
+): [number, number] {
+  const all = target === null ? [...values] : [...values, target];
+  const lo = Math.min(...all);
+  const hi = Math.max(...all);
+  if (display === "slo") return [sloFloor(values, target ?? lo), 100];
+  if (display === "progress") return [Math.min(0, lo), hi > 0 ? hi * 1.15 : hi + 1];
+  const pad = Math.max(hi - lo, Math.abs(hi) * 0.1, 1) * 0.3;
+  return [lo - pad, hi + pad];
+}
+
+/**
+ * A volume target joins the chart while it is still ahead of the latest
+ * reading; once met, only when it sits within one data span of the readings.
+ */
+export function targetInView(
+  display: MetricDisplay,
+  values: readonly number[],
+  binding: Pick<KpiBinding, "comparator" | "target">
+): boolean {
+  if (display !== "volume") return true;
+  const latest = values.at(-1);
+  if (latest === undefined) return false;
+  if (!meetsTarget(latest, binding)) return true;
+  const lo = Math.min(...values);
+  const hi = Math.max(...values);
+  const span = Math.max(hi - lo, Math.abs(hi) * 0.25, 1);
+  const t = binding.target.value;
+  return t >= lo - span && t <= hi + span;
 }

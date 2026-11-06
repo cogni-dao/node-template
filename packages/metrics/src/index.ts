@@ -16,6 +16,7 @@ import {
 	type MetricCalculator,
 	type MetricDefinition,
 	type MetricDisplay,
+	displayFits,
 	type MetricDefinitionsPort,
 	MetricError,
 	type MetricHistory,
@@ -71,6 +72,7 @@ export interface GoalKpiResult {
 	} | null;
 	assessment: KpiAssessment;
 	trend: MetricHistory | null;
+	recent: MetricHistory | null;
 	baseline: MetricObservation | null;
 	/** Evidence the legacy reading names: evaluation reading after the deadline, else latest attempt. */
 	observation: MetricObservation | null;
@@ -395,8 +397,9 @@ export function createMetricService(deps: {
 			};
 		},
 		/**
-		 * One KPI read: binding → metric summary, assessKpi result and a 30-day
-		 * daily trend. Live goal KPIs never select fixed observations; only a
+		 * One KPI read: binding → metric summary (with its display type),
+		 * assessKpi result, a 30-day daily trend and, for hourly-or-faster
+		 * metrics, the last 24 hourly buckets. Live goal KPIs never select fixed observations; only a
 		 * deadline that has passed selects the backward-final evaluation reading.
 		 */
 		async kpi(
@@ -427,6 +430,7 @@ export function createMetricService(deps: {
 					unavailable: reason,
 				}),
 				trend: null,
+				recent: null,
 				baseline: null,
 				observation: null,
 				viewState: "unavailable",
@@ -462,10 +466,13 @@ export function createMetricService(deps: {
 			try {
 				const calculator = registry.get(definition.spec.calculatorId);
 				shape = calculatorShape(calculator, definition.spec.params);
+				const fallback =
+					calculator.displayFor?.(definition.spec.params) ?? calculator.display;
+				// An override the unit cannot honour (slo needs "%") yields to the default.
 				display =
-					current.display ??
-					calculator.displayFor?.(definition.spec.params) ??
-					calculator.display;
+					current.display && displayFits(current.display, shape.unit)
+						? current.display
+						: fallback;
 			} catch {
 				return unmeasured("calculator_unavailable", summary);
 			}
@@ -487,7 +494,7 @@ export function createMetricService(deps: {
 						Date.parse(baseline.window.end) <= Date.parse(b.evaluationAt))
 				)
 			)
-				return unmeasured("baseline_unavailable_or_incompatible", summary);
+				return unmeasured("baseline_unavailable_or_incompatible", metric);
 			const [latest] = await observations.history(b.metricId, hash, 1);
 			const view = selectMetricView(definition, latest ? [latest] : [], at);
 			const lastGood = await observations.lastGood(b.metricId, hash);
@@ -500,41 +507,34 @@ export function createMetricService(deps: {
 						definition.spec.maxAgeSeconds,
 					)
 				: null;
-			let daily: MetricHistory | null = null;
-			let trend: MetricHistory | null = null;
-			try {
-				daily = await series(
-					b.metricId,
-					hash,
-					shape.unit,
-					{
-						from: new Date(
-							floorTo(at.getTime(), "1d") - 29 * DAY_MS,
-						).toISOString(),
-						to: new Date(floorTo(at.getTime(), "1d") + DAY_MS).toISOString(),
-						step: "1d",
-					},
-					true,
-				);
-				trend = daily;
-				// A young series has no daily shape yet: draw its last day hourly.
-				if (daily.buckets.filter((x) => x.status === "ok").length < 3) {
-					const hour = floorTo(at.getTime(), "1h");
-					trend = await series(
-						b.metricId,
-						hash,
-						shape.unit,
-						{
-							from: new Date(hour - 23 * HOUR_MS).toISOString(),
-							to: new Date(hour + HOUR_MS).toISOString(),
-							step: "1h",
-						},
-						true,
-					);
-				}
-			} catch {
-				trend = daily;
-			}
+			const dayEnd = floorTo(at.getTime(), "1d") + DAY_MS;
+			const trend = await series(
+				b.metricId,
+				hash,
+				shape.unit,
+				{
+					from: new Date(dayEnd - 30 * DAY_MS).toISOString(),
+					to: new Date(dayEnd).toISOString(),
+					step: "1d",
+				},
+				true,
+			).catch(() => null);
+			// Hourly-or-faster metrics also carry their last day, so a young series has a shape.
+			const hourEnd = floorTo(at.getTime(), "1h") + HOUR_MS;
+			const recent =
+				(definition.spec.cadenceSeconds ?? Number.POSITIVE_INFINITY) <= 3600
+					? await series(
+							b.metricId,
+							hash,
+							shape.unit,
+							{
+								from: new Date(hourEnd - 24 * HOUR_MS).toISOString(),
+								to: new Date(hourEnd).toISOString(),
+								step: "1h",
+							},
+							true,
+						).catch(() => null)
+					: null;
 			const assessment = assessKpi({
 				binding: b,
 				metric: {
@@ -546,7 +546,7 @@ export function createMetricService(deps: {
 				viewState: view.viewState,
 				deadline,
 				evaluation,
-				daily: daily?.buckets.slice(-28) ?? [],
+				daily: trend?.buckets.slice(-28) ?? [],
 				now: at,
 			});
 			return {
@@ -554,6 +554,7 @@ export function createMetricService(deps: {
 				metric,
 				assessment,
 				trend,
+				recent,
 				baseline,
 				observation: due ? evaluation : view.latestAttempt,
 				viewState: view.viewState,

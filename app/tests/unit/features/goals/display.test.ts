@@ -3,67 +3,121 @@
 
 /**
  * Module: `@tests/unit/features/goals/display`
- * Purpose: Prove KPI card numbers by display type: the type comes from the
- *   read model only, SLOs read as % with an error budget, volumes
- *   show a change only from two real readings, and unknown is never 0.
- * Scope: Pure functions in lib/display.ts.
- * Invariants: UNKNOWN_IS_NOT_ZERO; HINT_LE_3_WORDS.
+ * Purpose: Prove what a KPI card and chart show by display type: the type comes
+ *   from the read model only; SLOs read as truncated % against ≥ or ≤
+ *   objectives with an error budget; a volume change names the real time since
+ *   its first reading; a young hourly metric draws its last day; unknown is
+ *   never 0; a stored display must be valid and fit the unit.
+ * Scope: Pure functions in lib/display.ts and the metrics stored-spec contract.
+ * Invariants: UNKNOWN_IS_NOT_ZERO; HINT_LE_3_WORDS; ONE_FORMATTER_PER_DISPLAY.
  * Side-effects: none
- * Links: app/src/features/goals/lib/display.ts
+ * Links: app/src/features/goals/lib/display.ts, packages/metrics/src/contracts.ts
  * @internal
  */
 
-import { splitStoredMetricSpec } from "@cogni-dao/metrics/contracts";
+import { displayFits, parseStoredMetricSpec } from "@cogni-dao/metrics/contracts";
 import { assessmentFixture, history, kpiFixture } from "@tests/_fixtures/goals/progress";
 import { describe, expect, it } from "vitest";
 
-import { cardHint, cardNumber, displayOf, formatSlo, progressFraction } from "@/features/goals/lib/display";
+import {
+  cardHint,
+  cardSeries,
+  displayOf,
+  formatPercent,
+  formatValue,
+  meetsTarget,
+  progressFraction,
+  sloBudget,
+  targetInView,
+} from "@/features/goals/lib/display";
 
-const TO = "2026-11-03T00:00:00.000Z";
+const OBSERVED = "2026-11-02T10:00:00.000Z";
 
-function k(unit: string, value: number | null, target: number, comparator: "gte" | "lte" = "gte", buckets = [1, 2]) {
+function k(
+  unit: string,
+  value: number | null,
+  target: number,
+  comparator: "gte" | "lte" = "gte",
+  daily: (number | null)[] = [1, 2]
+) {
   return kpiFixture(
     "m",
     "M",
-    assessmentFixture("on_track", { unit, value, comparator, target: { value: target, unit } }),
-    history("m", unit, "1d", TO, buckets)
+    assessmentFixture("on_track", { unit, value, comparator, target: { value: target, unit }, observedAt: OBSERVED }),
+    history("m", unit, "1d", "2026-11-03T00:00:00.000Z", daily)
   );
 }
 
-describe("display types", () => {
-  it("reads the type from the read model and never guesses from units", () => {
+describe("display type", () => {
+  it("comes from the read model and never from the unit", () => {
     const kpi = k("%", 99.9, 99.5);
     expect(displayOf(kpi)).toBe("progress");
     expect(displayOf({ ...kpi, metric: kpi.metric && { ...kpi.metric, display: "slo" } })).toBe("slo");
     expect(displayOf({ ...kpi, metric: null })).toBe("progress");
   });
 
-  it("reads an SLO as a percentage with an error budget", () => {
-    const kpi = k("%", 99.95, 99.9);
-    expect(cardNumber(kpi, "slo")).toEqual({ value: "99.95%", unit: "" });
-    expect(cardHint(kpi, "slo")).toBe("budget 50%");
-    expect(formatSlo(99.999)).toBe("99.999");
-    expect(formatSlo(87.5)).toBe("87.5");
-  });
-
-  it("shows a volume change only from two real readings, gaps skipped", () => {
-    expect(cardHint(k("stars", 130, 200, "gte", [100, null, 120]), "volume")).toBe("+30 · 3d");
-    expect(cardHint(k("stars", 130, 200, "gte", [null, 120]), "volume")).toBe("≥ 200");
-    expect(cardNumber(k("stars", 12_400, 20_000), "volume").value).toBe("12.4K");
-  });
-
-  it("never turns a missing reading into zero", () => {
-    expect(cardNumber(k("ratio", null, 1), "progress").value).toBeNull();
-    expect(progressFraction(k("ratio", null, 1))).toBeNull();
-    expect(progressFraction(k("items", 50, 40, "lte"))).toBeCloseTo(0.8);
-    expect(progressFraction(k("items", 30, 40, "lte"))).toBe(1);
-  });
-
-  it("keeps display beside the stored spec, outside the series hash", () => {
-    expect(splitStoredMetricSpec({ calculatorId: "x@1", params: {}, maxAgeSeconds: 60, display: "volume" })).toEqual({
+  it("is stored beside the spec, strictly, and must fit the unit", () => {
+    const stored = { calculatorId: "x@1", params: {}, maxAgeSeconds: 60, display: "volume" };
+    expect(parseStoredMetricSpec(stored)).toEqual({
       spec: { calculatorId: "x@1", params: {}, maxAgeSeconds: 60 },
       display: "volume",
     });
-    expect(splitStoredMetricSpec({ calculatorId: "x@1", display: "bogus" }).display).toBeUndefined();
+    expect(() => parseStoredMetricSpec({ ...stored, display: "bogus" })).toThrow();
+    expect(displayFits("slo", "%")).toBe(true);
+    expect(displayFits("slo", "ratio")).toBe(false);
+    expect(displayFits("volume", "stars")).toBe(true);
+  });
+});
+
+describe("slo", () => {
+  it("truncates, never rounds up to 100%", () => {
+    expect(formatPercent(99.9996)).toBe("99.999");
+    expect(formatPercent(99.95)).toBe("99.95");
+    expect(formatPercent(87.56)).toBe("87.5");
+    expect(formatValue(99.95, "slo", "%")).toBe("99.95%");
+  });
+
+  it("reads ≥ and ≤ objectives with their own budget", () => {
+    const floor = { comparator: "gte" as const, target: { value: 99.9, unit: "%" } };
+    const ceiling = { comparator: "lte" as const, target: { value: 1, unit: "%" } };
+    expect(sloBudget(99.95, floor)).toBeCloseTo(0.5);
+    expect(sloBudget(0.25, ceiling)).toBeCloseTo(0.75);
+    expect(meetsTarget(0.25, ceiling)).toBe(true);
+    expect(meetsTarget(2, ceiling)).toBe(false);
+    expect(cardHint(k("%", 99.95, 99.9), "slo", null)).toBe("budget 50%");
+  });
+});
+
+describe("volume", () => {
+  it("names the real time since the first reading, skipping leading gaps", () => {
+    const kpi = k("stars", 130, 200, "gte", [null, null, 100, 120]);
+    // First reading is the bucket starting Nov 1 00:00; the value is read Nov 2 10:00.
+    expect(cardHint(kpi, "volume", kpi.trend)).toBe("+30 · 34h");
+    expect(cardHint(k("stars", 130, 200, "gte", [null, 120]), "volume", null)).toBe("≥ 200");
+    expect(formatValue(12_400, "volume", "stars")).toBe("12.4K");
+  });
+
+  it("draws the last day hourly until the daily trend has a shape", () => {
+    const young = { ...k("items", 5, 9, "gte", [null, 4]), recent: history("m", "items", "1h", OBSERVED, [3, 4, 5]) };
+    expect(cardSeries(young)?.step).toBe("1h");
+    const mature = { ...k("items", 5, 9, "gte", [3, 4, 5]), recent: young.recent };
+    expect(cardSeries(mature)?.step).toBe("1d");
+  });
+
+  it("shows a target while it is ahead, and once met only near the data", () => {
+    const atLeast = (value: number) => ({ comparator: "gte" as const, target: { value, unit: "stars" } });
+    expect(targetInView("volume", [40, 60], atLeast(100))).toBe(true);
+    expect(targetInView("volume", [15, 18], atLeast(1))).toBe(false);
+    expect(targetInView("volume", [15, 18], atLeast(14))).toBe(true);
+    expect(targetInView("progress", [0.2], atLeast(1))).toBe(true);
+  });
+});
+
+describe("unknown", () => {
+  it("is never zero", () => {
+    expect(progressFraction(k("ratio", null, 1))).toBeNull();
+    expect(cardHint(k("ratio", null, 1), "progress", null)).toBe("≥ 1.00");
+    expect(progressFraction(k("items", 50, 40, "lte"))).toBeCloseTo(0.8);
+    expect(progressFraction(k("items", 30, 40, "lte"))).toBe(1);
   });
 });

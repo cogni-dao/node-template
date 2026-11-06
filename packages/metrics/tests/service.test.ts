@@ -18,7 +18,7 @@ import {
 function setup(options?: {
 	historical?: boolean;
 	display?: "volume";
-	override?: "slo";
+	override?: "progress" | "slo";
 }) {
 	let time = new Date("2026-10-30T12:00:00Z");
 	const windows: Array<{ start: string; end: string }> = [];
@@ -600,10 +600,16 @@ describe("scheduled windows, ranged history and assessment", () => {
 		});
 		expect(first.assessment).toEqual(second.assessment);
 		expect(first.assessment).toMatchObject({ status: "on_track", value: 0 });
-		// A young series has no daily shape yet: the trend is its last 24 hours.
-		expect(first.trend?.step).toBe("1h");
-		expect(first.trend?.buckets).toHaveLength(24);
+		expect(first.trend?.step).toBe("1d");
+		expect(first.trend?.buckets).toHaveLength(30);
 		expect(first.trend?.buckets.at(-1)).toMatchObject({
+			start: "2026-10-30T00:00:00.000Z",
+			status: "ok",
+		});
+		// A metric refreshed hourly or faster also carries its last day hourly.
+		expect(first.recent?.step).toBe("1h");
+		expect(first.recent?.buckets).toHaveLength(24);
+		expect(first.recent?.buckets.at(-1)).toMatchObject({
 			start: "2026-10-30T12:00:00.000Z",
 			status: "ok",
 		});
@@ -621,25 +627,13 @@ describe("goal KPI read model", () => {
 		comparator: "gte" as const,
 		target: { value: 1, unit: "items" },
 	};
-	it("draws 30 daily buckets once three days have a reading", async () => {
-		const s = setup();
-		for (const key of ["d1", "d2", "d3"]) {
-			await s.service.compute("open-work", { requestKey: key });
-			s.advance(86_400_000);
-		}
-		const kpi = await s.service.kpi(binding, {});
-		expect(kpi.trend?.step).toBe("1d");
-		expect(kpi.trend?.buckets).toHaveLength(30);
-	});
-	it("carries the calculator's display unless the definition overrides it", async () => {
-		expect((await setup().service.kpi(binding, {})).metric?.display).toBeUndefined();
-		expect(
-			(await setup({ display: "volume" }).service.kpi(binding, {})).metric
-				?.display,
-		).toBe("volume");
-		expect(
-			(await setup({ display: "volume", override: "slo" }).service.kpi(binding, {}))
-				.metric?.display,
-		).toBe("slo");
+	it("carries the calculator's display unless a fitting definition overrides it", async () => {
+		const display = async (o: Parameters<typeof setup>[0]) =>
+			(await setup(o).service.kpi(binding, {})).metric?.display;
+		expect(await display({})).toBeUndefined();
+		expect(await display({ display: "volume" })).toBe("volume");
+		expect(await display({ display: "volume", override: "progress" })).toBe("progress");
+		// slo needs a "%" unit; an override the unit cannot honour yields to the default.
+		expect(await display({ display: "volume", override: "slo" })).toBe("volume");
 	});
 });

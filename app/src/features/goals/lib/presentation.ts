@@ -104,10 +104,6 @@ export function isMeasured(goal: GoalProgress): boolean {
 
 // ---------------------------------------------------------------- formatting
 
-export function plural(n: number, one: string, many = `${one}s`): string {
-  return `${n} ${n === 1 ? one : many}`;
-}
-
 export const COMPARATOR_SYMBOL = { gte: "≥", lte: "≤", eq: "=" } as const;
 
 /** Units read with fixed precision so a value, its target and its axis align. */
@@ -178,95 +174,37 @@ export function formatReadingTime(iso: string, nowIso: string): string {
     : `${formatDate(iso)}, ${formatUtcTime(iso)}`;
 }
 
-export function daysLeft(deadline: string | null, nowIso: string): number | null {
-  if (!deadline) return null;
-  const ms = Date.parse(deadline) - Date.parse(nowIso);
-  return Number.isFinite(ms) && ms > 0 ? Math.ceil(ms / DAY_MS) : null;
-}
-
 // ---------------------------------------------------------------- summary
 
+/** Goals with at least one KPI in each attention status. */
 export interface GoalsSummary {
   readonly active: number;
-  readonly measured: number;
-  readonly notMeasured: number;
   readonly behind: number;
-  readonly failing: number;
   readonly missed: number;
-  readonly deadlines: readonly string[];
-  readonly lastReadingAt: string | null;
+  readonly failing: number;
 }
 
 export function summarize(goals: readonly GoalProgress[]): GoalsSummary {
-  const statuses = goals.map(
-    (g) => new Set(g.kpis.map((k) => k.assessment.status))
-  );
-  const count = (s: KpiStatus) => statuses.filter((set) => set.has(s)).length;
-  const deadlines = [
-    ...new Set(goals.map((g) => g.evaluateAt).filter((d): d is string => !!d)),
-  ].sort();
-  let lastReadingAt: string | null = null;
-  for (const g of goals)
-    for (const k of g.kpis) {
-      const at = k.assessment.observedAt;
-      if (at && (!lastReadingAt || Date.parse(at) > Date.parse(lastReadingAt)))
-        lastReadingAt = at;
-    }
-  const measured = goals.filter(isMeasured).length;
-  return {
-    active: goals.length,
-    measured,
-    notMeasured: goals.length - measured,
-    behind: count("behind"),
-    failing: count("failing"),
-    missed: count("missed"),
-    deadlines,
-    lastReadingAt,
-  };
+  const count = (s: KpiStatus) => goals.filter((g) => g.kpis.some((k) => k.assessment.status === s)).length;
+  return { active: goals.length, behind: count("behind"), missed: count("missed"), failing: count("failing") };
 }
-
-export function deadlineText(
-  deadlines: readonly string[],
-  total: number,
-  nowIso: string
-): string | null {
-  // A passed deadline is never "next": report it separately as past due.
-  const now = Date.parse(nowIso);
-  const upcoming = deadlines.filter((d) => Date.parse(d) > now);
-  const pastDue = deadlines.length - upcoming.length;
-  const pastText = pastDue ? `${pastDue} past due` : "";
-  const first = upcoming[0];
-  if (!first) return pastText || null;
-  const left = daysLeft(first, nowIso);
-  const leftText = left === null ? "" : ` (${plural(left, "day")})`;
-  const dueText =
-    upcoming.length === 1 && !pastDue
-      ? `${total === 1 ? "due" : "all due"} ${formatDate(first, true)}${leftText}`
-      : `next due ${formatDate(first, true)}${leftText}`;
-  return pastText ? `${dueText} · ${pastText}` : dueText;
-}
-
-// ---------------------------------------------------------------- bullet
-
-// ---------------------------------------------------------------- sparkline
 
 // ---------------------------------------------------------------- history range
 
-export type HistoryRange = "1d" | "1w" | "1m" | "3m" | "all";
+export type HistoryRange = "1d" | "1w" | "1m" | "3m";
 
 interface FixedRange {
-  readonly id: Exclude<HistoryRange, "all">;
+  readonly id: HistoryRange;
   readonly label: string;
-  readonly title: string;
   readonly step: MetricHistoryStep;
   readonly count: number;
 }
 
-const FIXED_RANGES: readonly FixedRange[] = [
-  { id: "1d", label: "1D", title: "past day", step: "1h", count: 24 },
-  { id: "1w", label: "1W", title: "past week", step: "1h", count: 168 },
-  { id: "1m", label: "1M", title: "past month", step: "1d", count: 30 },
-  { id: "3m", label: "3M", title: "past 3 months", step: "1d", count: 90 },
+export const HISTORY_RANGES: readonly FixedRange[] = [
+  { id: "1d", label: "1D", step: "1h", count: 24 },
+  { id: "1w", label: "1W", step: "1h", count: 168 },
+  { id: "1m", label: "1M", step: "1d", count: 30 },
+  { id: "3m", label: "3M", step: "1d", count: 90 },
 ];
 
 export const STEP_MS: Record<MetricHistoryStep, number> = {
@@ -298,10 +236,10 @@ function windowOf(fromMs: number, toMs: number, step: MetricHistoryStep): Histor
 
 /** `to` is the last closed step boundary (the server rejects to > now). */
 export function historyWindow(
-  range: Exclude<HistoryRange, "all">,
+  range: HistoryRange,
   nowMs: number
 ): HistoryWindow {
-  const r = FIXED_RANGES.find((x) => x.id === range) as FixedRange;
+  const r = HISTORY_RANGES.find((x) => x.id === range) as FixedRange;
   const to = floorToStep(nowMs, r.step);
   return windowOf(to - r.count * STEP_MS[r.step], to, r.step);
 }
@@ -336,8 +274,3 @@ export function heroLabel(
       return `Last good · ${time}`;
   }
 }
-
-// ---------------------------------------------------------------- axis
-
-/** Average glyph width of the 11px chart label font, in px. */
-const LABEL_CHAR_PX = 6.4;

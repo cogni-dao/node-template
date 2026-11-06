@@ -15,24 +15,32 @@ export const MetricSpecSchema = z.strictObject({
 });
 export type MetricSpec = z.infer<typeof MetricSpecSchema>;
 /**
- * How a metric reads best. progress: value against a target (ratios). slo: a
- * percentage near 100 read as availability and error budget. volume: an amount
- * that grows (stars, revenue, counts). The calculator declares a default; a
- * metric definition may override it in `metric_spec.display`, stored beside the
- * spec so it never changes the series hash.
+ * How a metric reads best. progress: a value against a target. volume: an
+ * amount that grows (stars, revenue, counts). slo: a percentage (unit "%") read
+ * as availability against a ≥ or ≤ objective with an error budget. The
+ * calculator declares a default; a metric definition may override it.
  */
 export const MetricDisplaySchema = z.enum(["progress", "slo", "volume"]);
 export type MetricDisplay = z.infer<typeof MetricDisplaySchema>;
-/** Split a stored `metric_spec` into the strict spec and its optional display. */
-export function splitStoredMetricSpec(stored: unknown): {
-	spec: unknown;
+/** The only unit an slo display reads correctly. */
+export const SLO_UNIT = "%";
+/**
+ * A stored `metric_spec`: the strict spec plus the author's optional display.
+ * Display sits beside the spec, so it never enters the series hash.
+ */
+export const StoredMetricSpecSchema = MetricSpecSchema.extend({
+	display: MetricDisplaySchema.optional(),
+});
+export function parseStoredMetricSpec(stored: unknown): {
+	spec: MetricSpec;
 	display: MetricDisplay | undefined;
 } {
-	if (!stored || typeof stored !== "object" || Array.isArray(stored))
-		return { spec: stored, display: undefined };
-	const { display, ...spec } = stored as Record<string, unknown>;
-	const parsed = MetricDisplaySchema.safeParse(display);
-	return { spec, display: parsed.success ? parsed.data : undefined };
+	const { display, ...spec } = StoredMetricSpecSchema.parse(stored);
+	return { spec, display };
+}
+/** A display a metric of this unit can honour. */
+export function displayFits(display: MetricDisplay, unit: string): boolean {
+	return display !== "slo" || unit === SLO_UNIT;
 }
 export const KpiBindingSchema = z.strictObject({
 	metricId: z.string().min(1).max(40),
@@ -322,12 +330,13 @@ export const GoalKpiSchema = z.object({
 		})
 		.nullable(),
 	assessment: KpiAssessmentSchema,
-	/**
-	 * The series to draw: 30 daily buckets ending at the current UTC day, or the
-	 * last 24 hourly buckets while fewer than 3 days have a reading; null when
-	 * unreadable.
-	 */
+	/** 30 daily buckets ending at the current UTC day; null when unreadable. */
 	trend: MetricHistorySchema.nullable(),
+	/**
+	 * The last 24 hourly buckets for a metric refreshed hourly or faster; absent
+	 * or null otherwise. Lets a young series show its shape before it has days.
+	 */
+	recent: MetricHistorySchema.nullable().optional(),
 });
 export const GoalHypothesisSchema = z.object({
 	id: z.string(),

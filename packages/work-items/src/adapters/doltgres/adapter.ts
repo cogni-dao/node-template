@@ -28,6 +28,7 @@ import type {
   WorkItemId,
   WorkItemQueryPort,
   WorkItemScore,
+  WorkItemSummary,
   WorkItemScores,
   WorkItemStatus,
   WorkItemType,
@@ -2735,11 +2736,15 @@ export class DoltgresWorkItemAdapter
     });
   }
 
-  async list(query: WorkQuery = {}): Promise<{
-    items: WorkItem[];
-    nextCursor?: string;
-    pageInfo: { endCursor: string | null; hasMore: boolean };
-  }> {
+  async list(query: WorkQuery = {}) {
+    return this.listProjected(query, false) as Promise<{ items: WorkItem[]; nextCursor?: string; pageInfo: { endCursor: string | null; hasMore: boolean } }>;
+  }
+
+  async listSummaries(query: WorkQuery = {}) {
+    return this.listProjected(query, true) as Promise<{ items: WorkItemSummary[]; nextCursor?: string; pageInfo: { endCursor: string | null; hasMore: boolean } }>;
+  }
+
+  private async listProjected(query: WorkQuery, summary: boolean) {
     if (
       (query.rankMin !== undefined && !Number.isFinite(query.rankMin)) ||
       (query.rankMax !== undefined && !Number.isFinite(query.rankMax)) ||
@@ -2861,10 +2866,11 @@ export class DoltgresWorkItemAdapter
       const matches: Record<string, unknown>[] = [];
       let cursor = initialCursor;
       if (cursor?.keyRef) {
-        const row = await this.getWith(conn, toWorkItemId(cursor.id));
-        const key = row?.project_id;
+        const rows = await conn.unsafe(`SELECT project_id FROM work_items WHERE id = ${escapeValue(cursor.id)} LIMIT 1`);
+        const key = rows[0]?.project_id;
         if (typeof key !== "string" || createHash("sha256").update(key).digest("hex") !== cursor.keyRef) throw new InvalidCursorError();
-        cursor = { ...cursor, key, keyRef: undefined };
+        const { keyRef: _keyRef, ...resolved } = cursor;
+        cursor = { ...resolved, key };
       }
       while (true) {
         const outerConditions = order.sortBy === "rankScore" ? [...rankConditions] : [];
@@ -2874,7 +2880,7 @@ export class DoltgresWorkItemAdapter
           ? `WHERE ${outerConditions.map((condition) => `(${condition})`).join(" AND ")}`
           : "";
         const rows = await conn.unsafe(
-          `SELECT ordered.*, CAST(__sort_value AS TEXT) AS __sort_key FROM (SELECT work_items.*, ${keyExpression} AS __sort_value FROM work_items ${where}) AS ordered ${outerWhere} ORDER BY CASE WHEN __sort_value IS NULL THEN 1 ELSE 0 END ASC, __sort_value ${order.sortDirection.toUpperCase()}, id ASC LIMIT ${scanLimit}`
+          `SELECT ordered.*, CAST(__sort_value AS TEXT) AS __sort_key FROM (SELECT ${summary ? `id, title, type, status, priority, scores, project_id, estimate, labels, created_at, updated_at${textNeedle ? ", summary" : ""}` : "work_items.*"}, ${keyExpression} AS __sort_value FROM work_items ${where}) AS ordered ${outerWhere} ORDER BY CASE WHEN __sort_value IS NULL THEN 1 ELSE 0 END ASC, __sort_value ${order.sortDirection.toUpperCase()}, id ASC LIMIT ${scanLimit}`
         );
         for (const row of rows) {
           if (
@@ -2896,7 +2902,14 @@ export class DoltgresWorkItemAdapter
     });
     const hasMore = matchedRows.length > limit;
     const pageRows = matchedRows.slice(0, limit);
-    const items = pageRows.map(rowToWorkItem);
+    const items = summary ? pageRows.map((row): WorkItemSummary => ({
+      id: String(row.id), title: String(row.title), type: String(row.type), status: String(row.status),
+      ...(optionalNumber(row.priority) !== undefined && { priority: optionalNumber(row.priority) }),
+      ...(optionalNumber(row.estimate) !== undefined && { estimate: optionalNumber(row.estimate) }),
+      ...(optionalScores(row.scores) !== undefined && { scores: optionalScores(row.scores) }),
+      ...(optionalString(row.project_id) !== undefined && { projectId: optionalString(row.project_id) }),
+      labels: [...jsonArrayOf<string>(row.labels)], createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at ?? ""), updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at ?? "")
+    })) : pageRows.map(rowToWorkItem);
     const last = pageRows[pageRows.length - 1];
     const lastCursor = last ? nativeCursor(last) : undefined;
     const encodedCursor = lastCursor?.sortBy === "projectId" && lastCursor.key !== null ? { ...lastCursor, key: null, keyRef: createHash("sha256").update(lastCursor.key).digest("hex") } : lastCursor;

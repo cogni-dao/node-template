@@ -12,15 +12,15 @@
  *   - SINGLE_COLUMNS_TOGGLE — visibility lives in one toolbar button
  *     (`DataGridColumnVisibility`), not on every column dropdown.
  *   - URL_DRIVEN_STATE — filters / sort / search persist in URL params.
- *   - CONTRACTS_ARE_TRUTH — types derived from `WorkItemDto`.
- * Side-effects: IO (fetches from /api/v1/work/items)
+ *   - CONTRACTS_ARE_TRUTH — types derived from `WorkItemSummary`.
+ * Side-effects: IO (fetches summary pages and full item detail)
  * Links: [WorkPage](./page.tsx), [fetchWorkItems](./_api/fetchWorkItems.ts)
  * @public
  */
 
 "use client";
 
-import type { WorkItemDto } from "@cogni/node-contracts";
+import type { WorkItemSummary } from "@cogni/node-contracts";
 import { VALID_TRANSITIONS } from "@cogni/work-items";
 import {
   DropdownMenu,
@@ -72,7 +72,7 @@ const ALL_STATUSES = [...VALID_TRANSITIONS.keys()];
 const ACTIVE_STATUSES = ALL_STATUSES.filter(
   (status) => status !== "done" && status !== "cancelled",
 );
-const EMPTY_ITEMS: WorkItemDto[] = [];
+const EMPTY_ITEMS: WorkItemSummary[] = [];
 const HISTORY_STORAGE_KEY = "work-page-history";
 
 function readFilters(searchParams: URLSearchParams): ColumnFiltersState {
@@ -180,7 +180,7 @@ export function WorkDashboardView({
   const cursor = searchParams.get("cursor") ?? "";
   const selectedItemQuery = useQuery({
     queryKey: ["work-item", selectedItemId],
-    queryFn: () => fetchWorkItem(selectedItemId as string),
+    queryFn: ({ signal }) => fetchWorkItem(selectedItemId as string, signal),
     enabled: selectedItemId !== undefined,
     retry: false,
     staleTime: 30_000,
@@ -219,7 +219,7 @@ export function WorkDashboardView({
   }, [listParams]);
   const { data, isLoading, error } = useQuery({
     queryKey: ["work-items", listParams.toString()],
-    queryFn: () => fetchWorkItems(listParams),
+    queryFn: ({ signal }) => fetchWorkItems(listParams, signal),
     staleTime: 30_000,
   });
   const items = data?.items ?? EMPTY_ITEMS;
@@ -434,7 +434,7 @@ export function WorkDashboardView({
   };
 
   const openItem = useCallback(
-    (item: WorkItemDto) => {
+    (item: WorkItemSummary) => {
       editIntent((intent) => ({ ...intent, itemId: item.id, method: "push" }));
     },
     [editIntent],
@@ -448,6 +448,7 @@ export function WorkDashboardView({
   }, [editIntent]);
 
   const table = useReactTable({
+    getRowId: (item) => item.id,
     data: items,
     columns,
     state: {

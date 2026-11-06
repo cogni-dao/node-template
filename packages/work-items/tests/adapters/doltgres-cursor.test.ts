@@ -158,7 +158,7 @@ it("pages by a long project key and rejects a changed boundary", async () => {
   const queries: string[] = [];
   const row = (id: string, project: string) => ({ id, type: "task", title: id, status: "needs_design", project_id: project, __sort_key: project });
   const reader = makeFakeDoltgresSql((sql) => {
-    if (sql.startsWith("SELECT * FROM work_items WHERE id =")) return [row("task.0001", boundary)];
+    if (sql.startsWith("SELECT project_id FROM work_items WHERE id =")) return [{ project_id: boundary }];
     if (sql.includes("AS ordered")) return sql.includes("WHERE (__sort_value") ? [row("task.0002", "z")] : [row("task.0001", key), row("task.0002", "z")];
     return [];
   }, queries);
@@ -167,6 +167,8 @@ it("pages by a long project key and rejects a changed boundary", async () => {
   expect(first.nextCursor?.length).toBeLessThan(2048);
   const second = await adapter.list({ sortBy: "projectId", sortDirection: "asc", limit: 1, cursor: first.nextCursor });
   expect(second.items.map(item => item.id)).toEqual(["task.0002"]);
+  expect(queries.some((query) => query.startsWith("SELECT project_id FROM work_items WHERE id ="))).toBe(true);
+  expect(queries.some((query) => query.startsWith("SELECT * FROM work_items WHERE id ="))).toBe(false);
   boundary = "changed";
   await expect(adapter.list({ sortBy: "projectId", sortDirection: "asc", limit: 1, cursor: first.nextCursor })).rejects.toThrow(/restart pagination/);
 });

@@ -52,7 +52,7 @@ Next.js App Router delivery layer. UI pages and API routes that expose features 
   - Development-only: `/dev/finance-preview` — actual Financials/shell fixture preview; production/test → 404; isolated disabled treasury query cache
   - Protected pages: `/chat` (via `(app)/chat/page.tsx`)
   - Infra: `/health`, `/openapi.json`, `/meta/route-manifest` (via `(infra)/*`)
-  - API: `/api/auth/*`, `/api/v1/chat/completions`
+  - API: `/api/auth/*`, `/api/v1/chat/completions`, `/api/v1/work/summaries`
   - Internal ops: `/api/internal/ops/governance/schedules/sync` [POST] (deploy-only trigger)
   - Agent discovery: `/.well-known/agent.json` [GET] — public discovery document for machine clients
 - **Files considered API:** layout.tsx, page.tsx, loading.tsx, error.tsx, api/\*\*/route.ts, (infra)/\*\*/route.ts, .well-known/\*\*/route.ts

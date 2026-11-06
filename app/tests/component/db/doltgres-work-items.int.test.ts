@@ -111,6 +111,168 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 		if (container) await container.stop();
 	});
 
+
+	// A seed/protocol failure must never touch the legacy writer, namespace or
+	// allocator floor. Both fixtures use this container, but separate migrated DBs.
+	async function summaryDatabase(suffix: "precision" | "growth") {
+		const slug = `node-template-work-items-summary-${suffix}`;
+		const name = `knowledge_${slug.replaceAll("-", "_")}`;
+		const bootstrap = postgres(dbUrl, { max: 1, fetch_types: false });
+		try {
+			await bootstrap.unsafe(`CREATE DATABASE ${name}`);
+		} finally {
+			await bootstrap.end({ timeout: 5 });
+		}
+		const url = new URL(dbUrl);
+		url.pathname = `/${name}`;
+		execFileSync(process.execPath, [MIGRATE_SCRIPT, MIGRATIONS_DIR], {
+			env: { ...process.env, DATABASE_URL: url.href, NODE_NAME: slug },
+			encoding: "utf8",
+			stdio: "pipe",
+		});
+		return url.href;
+	}
+
+	const literal = (value: string) => `'${value.replace(/\0/g, "").replace(/'/g, "''")}'`;
+
+	async function commitSummarySeed(writer: Sql) {
+		expect((await writer.unsafe("SELECT active_branch() AS branch"))[0]?.branch).toBe("main");
+		await writer.unsafe("SELECT dolt_add('work_items')");
+		const rows = await writer.unsafe("SELECT dolt_commit('-m', 'native summary fixture')");
+		const hash = rows[0]?.dolt_commit;
+		expect(typeof hash).toBe("string");
+		expect(hash).toBeTruthy();
+		return hash;
+	}
+
+	async function verifySummarySeed(reader: Sql, expected: number, hash: unknown) {
+		// This independent session is opened only AFTER the writer commits main.
+		expect((await reader.unsafe("SELECT active_branch() AS branch"))[0]?.branch).toBe("main");
+		expect((await reader.unsafe("SELECT dolt_hashof('HEAD') AS hash"))[0]?.hash).toBe(hash);
+		const rows = await reader.unsafe("SELECT COUNT(*) AS count FROM work_items");
+		expect(Number(rows[0]?.count)).toBe(expected);
+		console.info("work_summary_native_seed", JSON.stringify({ expected, readerCount: Number(rows[0]?.count), branch: "main", hash }));
+	}
+
+
+	it("proves summary projection and native keyset traversal", async () => {
+		const url = await summaryDatabase("precision");
+		const writer = postgres(url, { max: 1, fetch_types: false });
+		const reader = postgres(url, { max: 1, fetch_types: false });
+		const observations: { query: string; bytes: number; elapsedMs: number; keys: string[] }[] = [];
+		const originalUnsafe = reader.unsafe.bind(reader);
+		reader.unsafe = ((query: string) => {
+			const start = performance.now();
+			return originalUnsafe(query).then((rows) => {
+				observations.push({ query, bytes: Buffer.byteLength(JSON.stringify(rows)), elapsedMs: performance.now() - start, keys: Object.keys(rows[0] ?? {}) });
+				return rows;
+			});
+		}) as typeof reader.unsafe;
+		const adapter = new DoltgresWorkItemAdapter(writer, { readClient: reader, readConnectionBudget: 2, queryTimeoutMs: 5000, logger: stageLogger });
+		const large = "x".repeat(32000);
+		try {
+			// IDs oppose timestamp order, with ties and adjacent microseconds.
+			const fixtures = [
+				["task.910005", "123456", "needle"], ["task.910006", "123456", "needle"],
+				["task.910003", "123457", "needle"], ["task.910004", "123457", "needle"],
+				["task.910001", "123458", "needle"], ["task.910002", "123458", "needle"],
+			] as const;
+			for (const [id, micros, summary] of fixtures) {
+				const stamp = literal(`2026-10-26 00:00:00.${micros}+00`);
+				await writer.unsafe(`INSERT INTO work_items (id,type,title,status,node,project_id,summary,outcome,external_refs,spec_refs,labels,created_at,updated_at)
+				VALUES (${literal(id)},'task','summary fixture','needs_design','summary-native','proj.native',${literal(summary)},${literal(large)},${literal(JSON.stringify([{ url: `https://example.org/${large}` }]))}::jsonb,${literal(JSON.stringify([large]))}::jsonb,'["native-label"]'::jsonb,${stamp}::timestamptz,${stamp}::timestamptz)`);
+			}
+			await writer.unsafe("INSERT INTO work_items (id,type,title,status,node,project_id,summary) VALUES ('task.910007','task','decoy','needs_implement','summary-native','proj.other','needle')");
+			const hash = await commitSummarySeed(writer);
+			await verifySummarySeed(reader, fixtures.length + 1, hash);
+			for (const sortBy of ["createdAt", "updatedAt"] as const) {
+				for (const sortDirection of ["asc", "desc"] as const) {
+					const expected = sortDirection === "asc" ? fixtures : [...fixtures.slice(4), ...fixtures.slice(2, 4), ...fixtures.slice(0, 2)];
+					const seen: string[] = [];
+					let cursor: string | undefined;
+					do {
+						const page = await adapter.listSummaries({ node: "summary-native", projectId: toWorkItemId("proj.native"), statuses: ["needs_design"], labels: ["native-label"], text: "needle", sortBy, sortDirection, limit: 1, ...(cursor ? { cursor } : {}) });
+						seen.push(...page.items.map((item) => item.id));
+						expect(seen.length).toBeLessThanOrEqual(fixtures.length);
+						cursor = page.nextCursor;
+					} while (cursor);
+					expect(seen).toEqual(expected.map(([id]) => id));
+				}
+			}
+			const start = observations.length;
+			const page = await adapter.listSummaries({ node: "summary-native", sortBy: "projectId", limit: 1 });
+			expect(page.nextCursor).toBeTruthy();
+			await adapter.listSummaries({ node: "summary-native", sortBy: "projectId", limit: 1, cursor: page.nextCursor });
+			const summaryQueries = observations.slice(start);
+			expect(summaryQueries.some((o) => /^SELECT project_id FROM work_items/.test(o.query))).toBe(true);
+			for (const o of summaryQueries) {
+				expect(o.keys).not.toContain("outcome");
+				expect(o.keys).not.toContain("external_refs");
+				expect(o.keys).not.toContain("spec_refs");
+			}
+			expect(page.items[0]).not.toHaveProperty("outcome");
+			expect(page.items[0]).not.toHaveProperty("externalRefs");
+			const full = await adapter.list({ node: "summary-native", projectId: toWorkItemId("proj.native"), limit: 1 });
+			expect(full.items[0]?.outcome).toBe(large);
+			expect(full.items[0]?.specRefs).toEqual([large]);
+			const query = summaryQueries.find((o) => o.query.includes("FROM (SELECT"))?.query;
+			if (!query) throw new Error("summary query missing");
+			const plan = await reader.unsafe(`EXPLAIN ${query}`);
+			console.info("work_summary_native_plan", JSON.stringify({ image: DOLTGRES_IMAGE, plan }));
+		} finally {
+			await Promise.all([reader.end({ timeout: 5 }), writer.end({ timeout: 5 })]);
+		}
+	});
+
+	it("observes summary growth on an isolated bounded-body backlog", async () => {
+		const url = await summaryDatabase("growth");
+		const writer = postgres(url, { max: 1, fetch_types: false });
+		let seeded = 0;
+		try {
+			for (const size of [500, 5000, 50000]) {
+				const seedStart = performance.now();
+				while (seeded < size) {
+					const count = Math.min(500, size - seeded);
+					const values = Array.from({ length: count }, (_, i) => `('task.${1000000 + seeded + i}','task','growth fixture','needs_design','summary-growth','small bounded outcome','2026-10-26 00:00:00.123456+00','2026-10-26 00:00:00.123456+00')`).join(",");
+					await writer.unsafe(`INSERT INTO work_items (id,type,title,status,node,outcome,created_at,updated_at) VALUES ${values}`);
+					seeded += count;
+				}
+				const hash = await commitSummarySeed(writer);
+				const seedElapsedMs = performance.now() - seedStart;
+				// Fresh session per tier prevents retaining a pre-seed snapshot.
+				const reader = postgres(url, { max: 1, fetch_types: false });
+				try {
+					await verifySummarySeed(reader, size, hash);
+					const observations: { query: string; bytes: number; elapsedMs: number }[] = [];
+					const originalUnsafe = reader.unsafe.bind(reader);
+					reader.unsafe = ((query: string) => {
+						const start = performance.now();
+						return originalUnsafe(query).then((rows) => {
+							observations.push({ query, bytes: Buffer.byteLength(JSON.stringify(rows)), elapsedMs: performance.now() - start });
+							return rows;
+						});
+					}) as typeof reader.unsafe;
+					const adapter = new DoltgresWorkItemAdapter(writer, { readClient: reader, readConnectionBudget: 2, queryTimeoutMs: 5000, logger: stageLogger });
+					const start = performance.now();
+					const page = await adapter.listSummaries({ node: "summary-growth", sortBy: "createdAt", limit: 10 });
+					const elapsedMs = performance.now() - start;
+					expect(page.items).toHaveLength(10);
+					expect(page.pageInfo.hasMore).toBe(true);
+					expect(observations).toHaveLength(1);
+					expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(128 * 1024);
+					const query = observations[0]?.query;
+					if (!query) throw new Error("summary growth query missing");
+					const plan = await originalUnsafe(`EXPLAIN ${query}`);
+					console.info("work_summary_native_growth", JSON.stringify({ image: DOLTGRES_IMAGE, datasetN: size, seedElapsedMs, elapsedMs, queryCount: observations.length, nativeResultJsonBytes: observations.reduce((sum, read) => sum + read.bytes, 0), nativeQueries: observations, pageJsonBytes: Buffer.byteLength(JSON.stringify(page)), plan }));
+				} finally {
+					await reader.end({ timeout: 5 });
+				}
+			}
+		} finally {
+			await writer.end({ timeout: 5 });
+		}
+	}, 180_000);
+
 	it("walks NOW-backed timestamp pages once in both directions", async () => {
 		// NOW() stores nanoseconds on this engine, while its text I/O exposes
 		// microseconds. Literal six-digit fixtures cannot catch that mismatch.
