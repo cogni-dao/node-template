@@ -11,6 +11,7 @@ import {
 	type MetricService,
 	MetricSpecSchema,
 	readGoalsProgress,
+	splitStoredMetricSpec,
 } from "@cogni-dao/metrics";
 import { PostgresMetricObservations } from "@cogni-dao/metrics/adapters/postgres";
 import type { Sql } from "postgres";
@@ -98,15 +99,18 @@ export function createGoalMetrics(deps: {
 	/** One malformed reviewed row must not stop every other metric: skip it and log. */
 	const parse = (row: Record<string, unknown>): MetricDefinition | null => {
 		try {
-			const spec =
+			const stored =
 				typeof row.metric_spec === "string"
 					? JSON.parse(row.metric_spec)
 					: row.metric_spec;
+			// The author's display choice sits beside the spec, outside the series hash.
+			const { spec, display } = splitStoredMetricSpec(stored);
 			return {
 				id: String(row.id),
 				title: String(row.title),
 				revision: new Date(row.updated_at as string).toISOString(),
 				spec: MetricSpecSchema.parse(spec),
+				...(display ? { display } : {}),
 			};
 		} catch {
 			deps.log({

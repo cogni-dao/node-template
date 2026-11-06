@@ -3,8 +3,8 @@
 
 /**
  * Module: `@features/goals/lib/api`
- * Purpose: Browser reads for the Goals tab: goal progress, the weekly
- *   series-start probe and ranged metric history.
+ * Purpose: Browser reads for the Goals tab: goal progress and ranged metric
+ *   history.
  * Scope: Cookie-session GETs parsed with the shared metrics contracts. Never computes.
  * Invariants: ONE_WIRE_CONTRACT (zod schemas from @cogni-dao/metrics/contracts);
  *   READ_ONLY (no POST from the UI; agents and the clock refresh readings);
@@ -21,12 +21,7 @@ import {
   MetricHistorySchema,
 } from "@cogni-dao/metrics/contracts";
 
-import {
-  type HistoryWindow,
-  probeWindow,
-  type SeriesStart,
-  seriesStartFromProbe,
-} from "./presentation";
+import type { HistoryWindow } from "./presentation";
 
 export const GOALS_QUERY_KEY = ["goals", "progress"] as const;
 
@@ -50,15 +45,7 @@ async function readHistory(
   return MetricHistorySchema.parse(await response.json());
 }
 
-/** One 400 × 1w read: the series start (see seriesStartFromProbe). */
-export async function fetchSeriesStart(
-  metricId: string,
-  nowMs: number
-): Promise<SeriesStart> {
-  return seriesStartFromProbe(await readHistory(metricId, probeWindow(nowMs)));
-}
-
-/** One aligned window (see rangeWindow): 1D/1W hourly, 1M/3M daily, All. */
+/** One aligned window (see historyWindow): 1D/1W hourly, 1M/3M daily. */
 export async function fetchMetricHistory(
   metricId: string,
   window: HistoryWindow

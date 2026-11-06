@@ -1,4 +1,4 @@
-import { KpiBindingsSchema, MetricSpecSchema } from "@cogni-dao/metrics/contracts";
+import { KpiBindingsSchema, MetricSpecSchema, splitStoredMetricSpec } from "@cogni-dao/metrics/contracts";
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
@@ -185,7 +185,7 @@ export async function handleCreate(
     if (edit.op !== "insert" && edit.op !== "update") continue;
     const entry = edit.entry;
     if (entry.metricSpec != null) {
-      const spec = MetricSpecSchema.safeParse(entry.metricSpec);
+      const spec = MetricSpecSchema.safeParse(splitStoredMetricSpec(entry.metricSpec).spec);
       if (!spec.success) return NextResponse.json({ error: "invalid metric definition", issues: spec.error.issues }, { status: 400 });
       try { getContainer().goalMetrics?.registry.validate({ id: entry.id ?? ("targetRowId" in edit ? edit.targetRowId : "metric"), title: entry.title, revision: "proposed", spec: spec.data }); }
       catch { return NextResponse.json({ error: "unsupported calculator or parameters" }, { status: 422 }); }
@@ -303,7 +303,7 @@ export async function handleAppendCommit(
     if (edit.op !== "insert" && edit.op !== "update") continue;
     const entry = edit.entry;
     if (entry.metricSpec != null) {
-      const spec = MetricSpecSchema.safeParse(entry.metricSpec);
+      const spec = MetricSpecSchema.safeParse(splitStoredMetricSpec(entry.metricSpec).spec);
       if (!spec.success) return NextResponse.json({ error: "invalid metric definition", issues: spec.error.issues }, { status: 400 });
       try { getContainer().goalMetrics?.registry.validate({ id: entry.id ?? ("targetRowId" in edit ? edit.targetRowId : "metric"), title: entry.title, revision: "proposed", spec: spec.data }); }
       catch { return NextResponse.json({ error: "unsupported calculator or parameters" }, { status: 422 }); }

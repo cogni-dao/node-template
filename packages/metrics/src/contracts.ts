@@ -14,6 +14,26 @@ export const MetricSpecSchema = z.strictObject({
 	maxAgeSeconds: z.number().int().positive(),
 });
 export type MetricSpec = z.infer<typeof MetricSpecSchema>;
+/**
+ * How a metric reads best, chosen by its author. progress: value against a target
+ * (ratios). slo: a percentage near 100 read as availability and error budget.
+ * volume: an amount that grows (stars, revenue, counts). Absent: inferred by the UI.
+ * Stored beside the spec (`metric_spec.display`), never inside it, so it never
+ * changes the series hash.
+ */
+export const MetricDisplaySchema = z.enum(["progress", "slo", "volume"]);
+export type MetricDisplay = z.infer<typeof MetricDisplaySchema>;
+/** Split a stored `metric_spec` into the strict spec and its optional display. */
+export function splitStoredMetricSpec(stored: unknown): {
+	spec: unknown;
+	display: MetricDisplay | undefined;
+} {
+	if (!stored || typeof stored !== "object" || Array.isArray(stored))
+		return { spec: stored, display: undefined };
+	const { display, ...spec } = stored as Record<string, unknown>;
+	const parsed = MetricDisplaySchema.safeParse(display);
+	return { spec, display: parsed.success ? parsed.data : undefined };
+}
 export const KpiBindingSchema = z.strictObject({
 	metricId: z.string().min(1).max(40),
 	comparator: z.enum(["gte", "lte", "eq"]),
@@ -59,6 +79,7 @@ export const MetricViewSchema = z.object({
 		title: z.string(),
 		revision: z.string(),
 		spec: MetricSpecSchema,
+		display: MetricDisplaySchema.optional(),
 	}),
 	latestAttempt: MetricObservationSchema.nullable(),
 	lastGood: MetricObservationSchema.nullable(),
@@ -293,6 +314,7 @@ export const GoalKpiSchema = z.object({
 			calculatorId: z.string(),
 			cadenceSeconds: z.number().int().nullable(),
 			maxAgeSeconds: z.number().int(),
+			display: MetricDisplaySchema.optional(),
 		})
 		.nullable(),
 	assessment: KpiAssessmentSchema,

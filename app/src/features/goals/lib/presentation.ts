@@ -4,9 +4,8 @@
 /**
  * Module: `@features/goals/lib/presentation`
  * Purpose: Pure presentation for the Goals tab: status words and symbols, plain
- *   reason text, number/unit/date formatting, summary counts, sparkline data,
- *   history ranges (hourly 1D/1W, daily 1M/3M, All from the proven series
- *   start) and the hero label.
+ *   reason text, number/date formatting, summary counts, aligned history
+ *   windows (hourly 1D/1W, daily 1M/3M) and the hero label.
  * Scope: Pure functions over `@cogni-dao/metrics/contracts` shapes. Never
  *   decides status (assessKpi does); never fills, bridges or invents readings.
  * Invariants: STATUS_HAS_WORD_AND_SYMBOL (color is never the only signal);
@@ -21,7 +20,6 @@ import type {
   KpiAssessment,
   KpiReason,
   KpiStatus,
-  MetricHistory,
   MetricHistoryStep,
 } from "@cogni-dao/metrics/contracts";
 
@@ -100,11 +98,6 @@ export function attentionCount(goals: readonly GoalProgress[]): number {
   return goals.filter(goalNeedsAttention).length;
 }
 
-/** The row speaks for its primary KPI (the first binding). */
-export function primaryStatus(goal: GoalProgress): KpiStatus {
-  return goal.kpis[0]?.assessment.status ?? "not_measured";
-}
-
 export function isMeasured(goal: GoalProgress): boolean {
   return goal.kpis.some((k) => k.assessment.status !== "not_measured");
 }
@@ -148,13 +141,6 @@ export function formatSigned(value: number, unit?: string): string {
   return `${value > 0 ? "+" : value < 0 ? "−" : "±"}${body}`;
 }
 
-/** "1 item" / "2 items"; units that are not countable nouns pass through. */
-export function unitLabel(value: number | null, unit: string): string {
-  if (value === 1 && unit.endsWith("s") && unit.length > 2)
-    return unit.slice(0, -1);
-  return unit;
-}
-
 export function targetText(
   comparator: keyof typeof COMPARATOR_SYMBOL,
   target: { value: number; unit: string }
@@ -192,83 +178,10 @@ export function formatReadingTime(iso: string, nowIso: string): string {
     : `${formatDate(iso)}, ${formatUtcTime(iso)}`;
 }
 
-export function formatAge(ms: number): string {
-  const minutes = Math.max(1, Math.round(ms / 60_000));
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 48) return `${hours}h`;
-  return `${Math.round(hours / 24)}d`;
-}
-
 export function daysLeft(deadline: string | null, nowIso: string): number | null {
   if (!deadline) return null;
   const ms = Date.parse(deadline) - Date.parse(nowIso);
   return Number.isFinite(ms) && ms > 0 ? Math.ceil(ms / DAY_MS) : null;
-}
-
-/** The one-line caption under a status pill. Plain words, no IDs. */
-export function statusCaption(
-  a: KpiAssessment,
-  nowIso: string,
-  maxAgeSeconds: number | null
-): string {
-  const left = daysLeft(a.deadline, nowIso);
-  const leftText = left === null ? null : `${plural(left, "day")} left`;
-  const join = (...parts: (string | null)[]) =>
-    parts.filter(Boolean).join(" · ");
-  switch (a.status) {
-    case "on_track":
-      return join(
-        a.pace.observed !== null && a.pace.observed !== 0
-          ? `${formatSigned(a.pace.observed, a.unit)} / wk`
-          : "At target",
-        leftText
-      );
-    case "behind": {
-      const gap =
-        a.value !== null ? a.target.value - a.value : null;
-      const needs =
-        a.pace.needed !== null
-          ? `Needs ${formatSigned(a.pace.needed, a.unit)} / wk`
-          : gap !== null
-            ? `Needs ${formatSigned(gap, a.unit)}`
-            : "Behind target";
-      return join(needs, leftText);
-    }
-    case "met":
-    case "missed":
-      return a.deadline
-        ? `Final · ${formatDate(a.deadline, true)}`
-        : "Final reading";
-    case "delayed":
-      return a.observedAt
-        ? `${formatAge(Date.parse(nowIso) - Date.parse(a.observedAt))} old`
-        : "Reading is late";
-    case "evaluating": {
-      if (!a.deadline || maxAgeSeconds === null) return "Deciding";
-      const by = new Date(Date.parse(a.deadline) + maxAgeSeconds * 1000);
-      return `Deciding · final by ${formatReadingTime(by.toISOString(), nowIso)}`;
-    }
-    case "unresolved":
-      return reasonText(a.reason) ?? "No reading at the deadline.";
-    case "failing":
-      return reasonText(a.reason) ?? "The newest attempt failed.";
-    case "building":
-      return reasonText(a.reason) ?? "Collecting the first window.";
-    case "not_measured":
-      return reasonText(a.reason) ?? "No metric is bound to this goal yet.";
-  }
-}
-
-/** A value is "current" only when the assessment speaks about a fresh reading. */
-export function valueIsCurrent(status: KpiStatus): boolean {
-  return (
-    status === "on_track" ||
-    status === "behind" ||
-    status === "met" ||
-    status === "missed" ||
-    status === "evaluating"
-  );
 }
 
 // ---------------------------------------------------------------- summary
@@ -335,127 +248,7 @@ export function deadlineText(
 
 // ---------------------------------------------------------------- bullet
 
-export interface BulletScale {
-  readonly min: number;
-  readonly max: number;
-}
-
-/** 0..max(target, value)×1.5 for gte/eq; lte keeps headroom above the ceiling. */
-export function bulletScale(
-  comparator: "gte" | "lte" | "eq",
-  target: number,
-  value: number | null
-): BulletScale {
-  const v = value ?? 0;
-  const min = Math.min(0, v, target);
-  const top =
-    comparator === "lte"
-      ? Math.max(target * 2, v * 1.25)
-      : Math.max(target, v) * 1.5;
-  const max = top > min ? niceCeil(top) : min + 1;
-  return { min, max };
-}
-
-/** Round axis ticks: about `count` steps of 1, 2, 2.5 or 5 × 10^k covering [lo, hi]. */
-export function niceTicks(lo: number, hi: number, count = 4): number[] {
-  const raw = (hi - lo) / Math.max(1, count - 1) || Math.abs(hi) || 1;
-  const mag = 10 ** Math.floor(Math.log10(raw));
-  const step =
-    ([1, 2, 2.5, 5, 10].find((m) => m * mag >= raw - 1e-12) ?? 10) * mag;
-  const start = Math.floor(lo / step + 1e-9) * step;
-  const ticks: number[] = [];
-  for (let t = start; t <= hi + step * 0.999; t += step)
-    ticks.push(Math.round(t / step) * step);
-  return ticks;
-}
-
-function niceCeil(n: number): number {
-  if (n <= 0) return 1;
-  const mag = 10 ** Math.floor(Math.log10(n));
-  for (const step of [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10])
-    if (step * mag >= n - 1e-9) return step * mag;
-  return 10 * mag;
-}
-
 // ---------------------------------------------------------------- sparkline
-
-export interface SparkDatum {
-  readonly i: number;
-  readonly value: number | null;
-  /** An ok point with no ok neighbour: a Line draws nothing for it, so it needs a dot. */
-  readonly isolated: boolean;
-  readonly last: boolean;
-  readonly start: string;
-}
-
-export interface SparkSeries {
-  readonly data: readonly SparkDatum[];
-  /** Explicit Y domain from the ok values, never the Recharts [0, auto] default. */
-  readonly domain: readonly [number, number];
-  readonly okCount: number;
-  readonly gapCount: number;
-  readonly first: SparkDatum | null;
-  readonly last: SparkDatum | null;
-}
-
-/** Break the line at every non-ok bucket. A missing bucket is never filled. */
-export function sparkSeries(trend: MetricHistory | null): SparkSeries {
-  const buckets = trend?.buckets ?? [];
-  const values = buckets.map((b) =>
-    b.status === "ok" && b.value !== null ? b.value : null
-  );
-  const okIdx = values.flatMap((v, i) => (v === null ? [] : [i]));
-  const lastOk = okIdx.at(-1) ?? -1;
-  const data = buckets.map((b, i) => {
-    const value = values[i] ?? null;
-    return {
-      i,
-      value,
-      isolated:
-        value !== null &&
-        (values[i - 1] ?? null) === null &&
-        (values[i + 1] ?? null) === null,
-      last: i === lastOk,
-      start: b.start,
-    };
-  });
-  // The domain follows the readings so the trend has shape; the bullet and
-  // the aria-label carry the target.
-  const domainValues = okIdx.map((i) => values[i] as number);
-  let lo = domainValues.length ? Math.min(...domainValues) : 0;
-  let hi = domainValues.length ? Math.max(...domainValues) : 1;
-  if (hi === lo) {
-    lo -= Math.abs(lo) * 0.1 || 1;
-    hi += Math.abs(hi) * 0.1 || 1;
-  }
-  const pad = (hi - lo) * 0.08;
-  const ok = data.filter((d) => d.value !== null);
-  return {
-    data,
-    domain: [lo - pad, hi + pad],
-    okCount: ok.length,
-    gapCount: buckets.length - ok.length,
-    first: ok[0] ?? null,
-    last: ok.at(-1) ?? null,
-  };
-}
-
-export function sparklineLabel(
-  s: SparkSeries,
-  days: number,
-  target: string | null,
-  unit?: string
-): string {
-  if (!s.first || !s.last)
-    return `Last ${days} days: no readings${target ? `; target ${target}` : ""}.`;
-  const range =
-    s.first === s.last
-      ? `one reading, ${formatNumber(s.last.value as number, unit)} on ${formatDate(s.last.start)}`
-      : `from ${formatNumber(s.first.value as number, unit)} on ${formatDate(s.first.start)} to ${formatNumber(s.last.value as number, unit)} on ${formatDate(s.last.start)}`;
-  const gaps =
-    s.gapCount > 0 ? `; ${plural(s.gapCount, "day")} without a reading` : "";
-  return `Last ${days} days: ${range}${target ? `; target ${target}` : ""}${gaps}.`;
-}
 
 // ---------------------------------------------------------------- history range
 
@@ -476,46 +269,13 @@ const FIXED_RANGES: readonly FixedRange[] = [
   { id: "3m", label: "3M", title: "past 3 months", step: "1d", count: 90 },
 ];
 
-export const HISTORY_RANGES: readonly {
-  readonly id: HistoryRange;
-  readonly label: string;
-  readonly title: string;
-}[] = [...FIXED_RANGES, { id: "all", label: "All", title: "all time" }];
-
-export function isHistoryRange(v: string): v is HistoryRange {
-  return HISTORY_RANGES.some((r) => r.id === v);
-}
-
-/** Hourly metrics open on the hourly week; everything else on the daily month. */
-export function defaultRange(cadenceSeconds: number | null): HistoryRange {
-  return cadenceSeconds !== null && cadenceSeconds <= 3600 ? "1w" : "1m";
-}
-
 export const STEP_MS: Record<MetricHistoryStep, number> = {
   "1h": 3_600_000,
   "1d": DAY_MS,
   "1w": 7 * DAY_MS,
 };
-export const STEP_WORD: Record<MetricHistoryStep, string> = {
-  "1h": "hourly",
-  "1d": "daily",
-  "1w": "weekly",
-};
-const STEP_UNIT: Record<MetricHistoryStep, string> = {
-  "1h": "hour",
-  "1d": "day",
-  "1w": "week",
-};
-export function stepUnit(step: MetricHistoryStep): string {
-  return STEP_UNIT[step];
-}
 /** Weekly buckets align to Monday 2000-01-03T00:00Z (the server's origin). */
 const WEEK_ORIGIN = Date.UTC(2000, 0, 3);
-/** MAX_HISTORY_BUCKETS in @cogni-dao/metrics: the server rejects more. */
-export const MAX_BUCKETS = 400;
-/** A cropped or very young axis still shows at least this many steps. */
-export const MIN_VISIBLE_STEPS = 12;
-
 export function floorToStep(ms: number, step: MetricHistoryStep): number {
   const size = STEP_MS[step];
   const origin = step === "1w" ? WEEK_ORIGIN : 0;
@@ -544,91 +304,6 @@ export function historyWindow(
   const r = FIXED_RANGES.find((x) => x.id === range) as FixedRange;
   const to = floorToStep(nowMs, r.step);
   return windowOf(to - r.count * STEP_MS[r.step], to, r.step);
-}
-
-/**
- * The series-start probe: 400 weekly buckets ending at the last closed week.
- * It never includes the open week, because the server rejects to > now.
- */
-export function probeWindow(nowMs: number): HistoryWindow {
-  const to = floorToStep(nowMs, "1w");
-  return windowOf(to - MAX_BUCKETS * STEP_MS["1w"], to, "1w");
-}
-
-/**
- * Series start from the weekly probe. `proven` is false when the oldest probe
- * week already has an attempt: the series is older than the probe, so no
- * start is proven and nothing may be cropped or called "measured since".
- */
-export interface SeriesStart {
-  readonly at: number;
-  readonly proven: boolean;
-}
-
-/**
- * The start of the first non-missing probe week. When every closed week is
- * missing, no completed attempt exists before the open week, so the start is
- * the probe's `to`.
- */
-export function seriesStartFromProbe(probe: MetricHistory): SeriesStart {
-  const i = probe.buckets.findIndex((b) => b.status !== "missing");
-  if (i === 0) return { at: Date.parse(probe.from), proven: false };
-  const first = probe.buckets[i];
-  return { at: Date.parse(first ? first.start : probe.to), proven: true };
-}
-
-/**
- * "All": from the proven start to the last closed step, with the finest step
- * that fits MAX_BUCKETS. `from` is at least 12 steps before `to`, so the read
- * is never empty (from == to is invalid_range), and at most MAX_BUCKETS steps.
- * An unknown start reads MAX_BUCKETS days; an unproven (older) one, weeks.
- */
-export function allWindow(
-  seriesStart: SeriesStart | null,
-  nowMs: number
-): HistoryWindow {
-  if (seriesStart === null || !seriesStart.proven) {
-    const step = seriesStart === null ? "1d" : "1w";
-    const to = floorToStep(nowMs, step);
-    return windowOf(to - MAX_BUCKETS * STEP_MS[step], to, step);
-  }
-  const start = seriesStart.at;
-  const steps: MetricHistoryStep[] = ["1h", "1d", "1w"];
-  const step =
-    steps.find(
-      (s) => floorToStep(nowMs, s) - start <= MAX_BUCKETS * STEP_MS[s]
-    ) ?? "1w";
-  const size = STEP_MS[step];
-  const to = floorToStep(nowMs, step);
-  const from = Math.max(
-    Math.min(floorToStep(start, step), to - MIN_VISIBLE_STEPS * size),
-    to - MAX_BUCKETS * size
-  );
-  return windowOf(from, to, step);
-}
-
-export interface RangeWindow extends HistoryWindow {
-  /** Chart-title words for exactly this window, e.g. "past week, hourly". */
-  readonly title: string;
-}
-
-/** The read window of a range and the title that describes that very window. */
-export function rangeWindow(
-  range: HistoryRange,
-  nowMs: number,
-  seriesStart: SeriesStart | null
-): RangeWindow {
-  if (range !== "all") {
-    const r = FIXED_RANGES.find((x) => x.id === range) as FixedRange;
-    return { ...historyWindow(range, nowMs), title: `${r.title}, ${STEP_WORD[r.step]}` };
-  }
-  const w = allWindow(seriesStart, nowMs);
-  const capped =
-    seriesStart === null ||
-    !seriesStart.proven ||
-    Date.parse(w.from) > seriesStart.at;
-  const span = capped ? `last ${MAX_BUCKETS} ${stepUnit(w.step)}s` : "all time";
-  return { ...w, title: `${span}, ${STEP_WORD[w.step]}` };
 }
 
 /** The evidence route for one observation, pinned by id. */
@@ -662,88 +337,7 @@ export function heroLabel(
   }
 }
 
-/** Next scheduled reading, only when it is still ahead of `nowIso`. */
-export function nextReadingAt(
-  observedAt: string | null,
-  cadenceSeconds: number | null,
-  nowIso: string
-): string | null {
-  if (!observedAt || cadenceSeconds === null) return null;
-  const next = Date.parse(observedAt) + cadenceSeconds * 1000;
-  return next > Date.parse(nowIso) ? new Date(next).toISOString() : null;
-}
-
-/** "hourly reading", "every 6 hours", "daily reading"; null when unscheduled. */
-export function cadenceText(cadenceSeconds: number | null | undefined): string | null {
-  if (cadenceSeconds == null) return null;
-  if (cadenceSeconds % 86_400 === 0)
-    return cadenceSeconds === 86_400
-      ? "daily reading"
-      : `every ${plural(cadenceSeconds / 86_400, "day")}`;
-  if (cadenceSeconds % 3_600 === 0)
-    return cadenceSeconds === 3_600
-      ? "hourly reading"
-      : `every ${plural(cadenceSeconds / 3_600, "hour")}`;
-  return `every ${plural(cadenceSeconds / 60, "minute")}`;
-}
-
 // ---------------------------------------------------------------- axis
-
-/** About five time ticks on step boundaries inside [x0, x1]. */
-export function axisTicks(
-  x0: number,
-  x1: number,
-  step: MetricHistoryStep
-): number[] {
-  const unit = step === "1h" ? "1h" : "1d";
-  const out = new Set<number>();
-  for (let i = 0; i < 5; i++) {
-    const t = floorToStep(x0 + (i * (x1 - x0)) / 4, unit);
-    if (t >= x0 && t <= x1) out.add(t);
-  }
-  return [...out];
-}
-
-/**
- * A tick names its day whenever the axis spans more than one day: "Nov 4" at
- * midnight and on daily/weekly axes, "Nov 4, 18:00" on a multi-day hourly
- * axis, and "18:00" only when the whole hourly axis fits inside one day.
- */
-export function axisTickLabel(
-  t: number,
-  step: MetricHistoryStep,
-  spanMs: number
-): string {
-  const iso = new Date(t).toISOString();
-  if (step !== "1h" || iso.endsWith("T00:00:00.000Z")) return formatDate(iso);
-  const time = formatUtcTime(iso).replace(" UTC", "");
-  return spanMs > DAY_MS ? `${formatDate(iso)}, ${time}` : time;
-}
-
-/** "07:00 UTC" for hourly data; "Nov 5" when the data is daily or weekly. */
-export function sinceText(
-  ms: number,
-  step: MetricHistoryStep,
-  nowIso: string
-): string {
-  const iso = new Date(ms).toISOString();
-  return step === "1h" ? formatReadingTime(iso, nowIso) : formatDate(iso);
-}
 
 /** Average glyph width of the 11px chart label font, in px. */
 const LABEL_CHAR_PX = 6.4;
-
-/**
- * The "Not yet measured" label that fits inside its shaded span, or null.
- * `spanPx` is the shaded width in pixels; the label never overflows it.
- */
-export function notYetMeasuredLabel(
-  spanPx: number,
-  since: string | null
-): string | null {
-  const long = since ? `Not yet measured · readings since ${since}` : null;
-  const fits = (text: string) => text.length * LABEL_CHAR_PX + 16 <= spanPx;
-  if (long && fits(long)) return long;
-  if (fits("Not yet measured")) return "Not yet measured";
-  return null;
-}

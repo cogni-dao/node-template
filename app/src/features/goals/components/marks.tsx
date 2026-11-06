@@ -3,17 +3,15 @@
 
 /**
  * Module: `@features/goals/components/marks`
- * Purpose: The three small marks of a goal row: status pill, bullet graph and
- *   30-day sparkline. The bullet and sparkline are Recharts charts.
+ * Purpose: The small marks on a KPI card: status pill, progress bar (progress),
+ *   gradient sparkline (volume) and availability strip (slo).
  * Scope: Stateless. Inputs are already-assessed contract values.
- * Invariants: Status = symbol + word (+ color). Every chart sits in a
- *   div role="img" whose aria-label states values, target and gaps. Explicit
- *   Y/X domains (the Recharts default starts at 0). Sparkline gaps are never
- *   bridged; an isolated point is a Recharts Dot; an empty sparkline draws no
- *   baseline that reads as zero. No animation (it hides dots). Every chart and
- *   series has a useId-based id, so SSR and client clip ids match.
+ * Invariants: Status = symbol + word (+ color). Every mark sits in a
+ *   div role="img" whose aria-label states the values. Sparkline gaps are never
+ *   bridged; no reading draws nothing (never a zero line). Charts carry a
+ *   useId-based id so SSR and client clip ids match. No animation.
  * Side-effects: none
- * Links: ../lib/presentation.ts
+ * Links: ../lib/display.ts, ../lib/presentation.ts
  * @public
  */
 
@@ -21,31 +19,11 @@
 
 import { ChartContainer } from "@cogni/node-ui-kit/shadcn/chart";
 import type { KpiStatus, MetricHistory } from "@cogni-dao/metrics/contracts";
-import { Fragment, type JSX, useId } from "react";
-import {
-  Area,
-  AreaChart,
-  Bar,
-  BarChart,
-  Dot,
-  ReferenceArea,
-  ReferenceLine,
-  XAxis,
-  YAxis,
-} from "recharts";
+import { useId } from "react";
+import { Area, AreaChart, Bar, BarChart, Cell, YAxis } from "recharts";
 
-import {
-  bulletScale,
-  COMPARATOR_SYMBOL,
-  formatNumber,
-  type SparkDatum,
-  STATUS_META,
-  type StatusTone,
-  sparklineLabel,
-  sparkSeries,
-  unitLabel,
-} from "../lib/presentation";
-import { chartIds, sparkDefs } from "./chart-defs";
+import { formatSlo } from "../lib/display";
+import { STATUS_META, type StatusTone } from "../lib/presentation";
 
 const TONE_CLASS: Record<StatusTone, string> = {
   success:
@@ -59,234 +37,158 @@ const TONE_CLASS: Record<StatusTone, string> = {
 
 export function StatusPill({
   status,
-  short = false,
-  className = "",
+  title,
 }: {
   readonly status: KpiStatus;
-  readonly short?: boolean;
-  readonly className?: string;
+  /** Plain-words reason, shown on hover; never on the card. */
+  readonly title?: string | undefined;
 }) {
   const meta = STATUS_META[status];
   return (
     <span
       data-status={status}
-      className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-0.5 font-medium text-xs leading-5 ${TONE_CLASS[meta.tone]} ${className}`}
+      title={title}
+      className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border px-2 py-0.5 font-medium text-[11px] leading-4 ${TONE_CLASS[meta.tone]}`}
     >
-      <span aria-hidden="true" className="w-3 text-center">
-        {meta.symbol}
-      </span>
-      {short ? meta.short : meta.label}
+      <span aria-hidden="true">{meta.symbol}</span>
+      {meta.short}
     </span>
   );
 }
 
-const COMPARATOR_WORDS = { gte: "at least", lte: "at most", eq: "exactly" };
+/** Stable, selector-safe chart id (React 19 ids contain « » or colons). */
+export function useChartId(prefix: string): string {
+  return `${prefix}-${useId().replace(/[^\w-]/g, "")}`;
+}
 
-/**
- * Bullet graph: rounded track, shaded zone up to the target, a chart-1 value
- * bar (muted when the value is last good) and a heavy target tick. Series
- * color, never status color: the pill carries status. The wrapper reserves
- * the height, so the row never shifts while the chart measures.
- */
-export function BulletGraph({
-  value,
-  unit,
-  comparator,
-  target,
-  current,
-  compact = false,
+/** Fill toward the target. Series colour; the pill carries status. */
+export function ProgressBar({
+  fraction,
+  label,
 }: {
-  readonly value: number | null;
-  readonly unit: string;
-  readonly comparator: "gte" | "lte" | "eq";
-  readonly target: number;
-  readonly current: boolean;
-  readonly compact?: boolean;
+  readonly fraction: number | null;
+  readonly label: string;
 }) {
-  const ids = chartIds(useId());
-  const { min, max } = bulletScale(comparator, target, value);
-  const pos = (v: number) =>
-    Math.max(0, Math.min(100, ((v - min) / (max - min)) * 100));
-  const targetPct = pos(target);
-  const h = compact ? 16 : 24;
-  const label = `${
-    value === null
-      ? "No current value"
-      : `${current ? "Current" : "Last good value"} ${formatNumber(value, unit)} ${unitLabel(value, unit)}`
-  }, target ${COMPARATOR_WORDS[comparator]} ${formatNumber(target, unit)}, scale ${formatNumber(min, unit)} to ${formatNumber(max, unit)}`;
   return (
-    <div>
-      <div role="img" aria-label={label} style={{ height: h }} className="w-full">
-        <ChartContainer config={{}} className="aspect-auto h-full w-full">
-          <BarChart
-            id={ids.chart}
-            layout="vertical"
-            data={[{ k: "value", value }]}
-            margin={{ top: 2, right: 2, bottom: 2, left: 2 }}
-            barCategoryGap={0}
-          >
-            <XAxis
-              type="number"
-              dataKey="value"
-              domain={[min, max]}
-              allowDataOverflow
-              hide
-            />
-            <YAxis type="category" dataKey="k" hide />
-            <ReferenceArea
-              x1={min}
-              x2={max}
-              fill="hsl(var(--muted))"
-              fillOpacity={1}
-              radius={4}
-              ifOverflow="hidden"
-            />
-            <ReferenceArea
-              x1={comparator === "lte" ? Math.max(0, min) : min}
-              x2={target}
-              fill="hsl(var(--foreground))"
-              fillOpacity={0.08}
-              radius={4}
-              ifOverflow="hidden"
-            />
-            {value !== null && (
-              <Bar
-                id={ids.series}
-                dataKey="value"
-                barSize={Math.round(h * 0.5)}
-                fill={
-                  current
-                    ? "hsl(var(--chart-1))"
-                    : "hsl(var(--muted-foreground))"
-                }
-                fillOpacity={current ? 1 : 0.6}
-                radius={3}
-                isAnimationActive={false}
-              />
-            )}
-            <ReferenceLine
-              x={target}
-              stroke="hsl(var(--foreground))"
-              strokeWidth={3}
-              ifOverflow="hidden"
-            />
-          </BarChart>
-        </ChartContainer>
-      </div>
-      {!compact && (
+    <div role="img" aria-label={label} className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+      {fraction !== null && (
         <div
-          aria-hidden="true"
-          className="relative mt-0.5 h-3.5 text-[10px] text-muted-foreground tabular-nums leading-none"
-        >
-          <span className="absolute left-0">{formatNumber(min, unit)}</span>
-          {targetPct > 12 && targetPct < 88 && (
-            <span
-              className="absolute -translate-x-1/2"
-              style={{ left: `${targetPct}%` }}
-            >
-              {formatNumber(target, unit)}
-            </span>
-          )}
-          <span className="absolute right-0">{formatNumber(max, unit)}</span>
-        </div>
+          className="h-full rounded-full bg-[hsl(var(--chart-1))]"
+          style={{ width: `${Math.max(2, fraction * 100)}%` }}
+        />
       )}
     </div>
   );
 }
 
-interface SparkDotProps {
-  readonly cx?: number;
-  readonly cy?: number;
-  readonly index?: number;
-  readonly payload?: SparkDatum;
+interface SparkPoint {
+  readonly t: number;
+  readonly v: number | null;
 }
 
-/** A hidden point is a keyed Fragment; isolated and newest points are Recharts Dots. */
-function sparkDot(props: SparkDotProps): JSX.Element {
-  const key = `spark-dot-${props.index ?? 0}`;
-  const d = props.payload;
-  if (!d || d.value === null || props.cx == null || props.cy == null)
-    return <Fragment key={key} />;
-  if (!(d.isolated || d.last)) return <Fragment key={key} />;
-  return (
-    <Dot
-      key={key}
-      cx={props.cx}
-      cy={props.cy}
-      r={d.last ? 3.5 : 3}
-      fill="hsl(var(--chart-1))"
-      stroke="hsl(var(--background))"
-      strokeWidth={1.5}
-    />
-  );
+function sparkPoints(trend: MetricHistory | null): SparkPoint[] {
+  if (!trend) return [];
+  return trend.buckets.map((b) => ({
+    t: Date.parse(b.start),
+    v: b.status === "ok" ? b.value : null,
+  }));
 }
 
-/**
- * 30-day trend at a fixed size, poly-style: a gradient area with an end dot.
- * Every non-ok bucket breaks the area; a lone reading is a Recharts Dot. The
- * target is not drawn here (the bullet shows it); the aria-label states it.
- */
+export function sparkDomain(values: readonly number[]): [number, number] {
+  const lo = Math.min(...values);
+  const hi = Math.max(...values);
+  const pad = Math.max(hi - lo, Math.abs(hi) * 0.1, 1) * 0.6;
+  return [lo - pad, hi + pad * 0.3];
+}
+
+/** Volume: poly-style gradient area over the trend; gaps break the line. */
 export function Sparkline({
   trend,
-  target,
-  comparator,
-  width = 150,
-  height = 40,
+  label,
 }: {
   readonly trend: MetricHistory | null;
-  readonly target: number | null;
-  readonly comparator: "gte" | "lte" | "eq" | null;
-  readonly width?: number;
-  readonly height?: number;
+  readonly label: string;
 }) {
-  const ids = chartIds(useId());
-  const s = sparkSeries(trend);
-  const days = trend?.buckets.length || 30;
-  const targetLabel =
-    target !== null && comparator
-      ? `${COMPARATOR_SYMBOL[comparator]} ${formatNumber(target, trend?.unit)}`
-      : null;
-  const label = trend
-    ? sparklineLabel(s, days, targetLabel, trend.unit)
-    : "Trend unavailable: history could not be read.";
+  const id = useChartId("spark");
+  const data = sparkPoints(trend);
+  const values = data.flatMap((d) => (d.v === null ? [] : [d.v]));
   return (
-    <div
-      role="img"
-      aria-label={label}
-      style={{ width, height }}
-      className="max-w-full"
-    >
-      {s.okCount > 0 && (
-        <AreaChart
-          id={ids.chart}
-          width={width}
-          height={height}
-          data={s.data as SparkDatum[]}
-          margin={{ top: 5, right: 5, bottom: 2, left: 2 }}
-        >
-          {sparkDefs(ids)}
-          <XAxis
-            dataKey="i"
-            type="number"
-            domain={[0, Math.max(s.data.length - 1, 1)]}
-            hide
-          />
-          <YAxis domain={[s.domain[0], s.domain[1]]} allowDataOverflow hide />
-          <Area
-            id={ids.series}
-            dataKey="value"
-            type="linear"
-            stroke="hsl(var(--chart-1))"
-            strokeWidth={2}
-            fill={`url(#${ids.fill})`}
-            baseValue={s.domain[0]}
-            connectNulls={false}
-            isAnimationActive={false}
-            dot={sparkDot}
-            activeDot={false}
-          />
-        </AreaChart>
+    <div role="img" aria-label={label} className="h-10 w-full">
+      {values.length >= 2 && (
+        <ChartContainer config={{ v: { label, color: "hsl(var(--chart-1))" } }} className="aspect-auto h-10 w-full">
+          <AreaChart id={id} data={data} margin={{ top: 2, right: 0, bottom: 0, left: 0 }}>
+            <defs>
+              <linearGradient id={`${id}-fill`} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="var(--color-v)" stopOpacity={0.3} />
+                <stop offset="100%" stopColor="var(--color-v)" stopOpacity={0.02} />
+              </linearGradient>
+            </defs>
+            {/* Padded so a small change reads small; the area never implies zero. */}
+            <YAxis hide domain={sparkDomain(values)} />
+            <Area
+              id={`${id}-area`}
+              dataKey="v"
+              type="monotone"
+              stroke="var(--color-v)"
+              strokeWidth={2}
+              fill={`url(#${id}-fill)`}
+              connectNulls={false}
+              dot={false}
+              isAnimationActive={false}
+            />
+          </AreaChart>
+        </ChartContainer>
       )}
     </div>
   );
+}
+
+/** SLO: one bar per bucket, red below target, empty where there is no reading. */
+export function AvailabilityStrip({
+  trend,
+  target,
+  label,
+}: {
+  readonly trend: MetricHistory | null;
+  readonly target: number;
+  readonly label: string;
+}) {
+  const id = useChartId("slo");
+  const data = sparkPoints(trend);
+  const values = data.flatMap((d) => (d.v === null ? [] : [d.v]));
+  const floor = sloFloor(values, target);
+  return (
+    <div role="img" aria-label={label} className="h-10 w-full">
+      {values.length > 0 && (
+        <ChartContainer config={{ v: { label, color: "hsl(var(--chart-1))" } }} className="aspect-auto h-10 w-full">
+          <BarChart id={id} data={data} margin={{ top: 2, right: 0, bottom: 0, left: 0 }} barCategoryGap={1}>
+            <YAxis hide domain={[Math.max(0, floor), 100]} allowDataOverflow />
+            <Bar id={`${id}-bar`} dataKey="v" isAnimationActive={false} radius={1}>
+              {data.map((d) => (
+                <Cell
+                  key={d.t}
+                  fill={d.v !== null && d.v < target ? BELOW_TARGET : "var(--color-v)"}
+                />
+              ))}
+            </Bar>
+          </BarChart>
+        </ChartContainer>
+      )}
+    </div>
+  );
+}
+
+/** Red that reads on dark and light; the dark --destructive token is too dim for a 2px bar. */
+export const BELOW_TARGET = "hsl(0 84% 60%)";
+
+/** Lowest bar still shows: the floor sits below the worst reading and the target. */
+export function sloFloor(values: readonly number[], target: number): number {
+  const worst = Math.min(target, ...values);
+  return Math.max(0, worst - Math.max(100 - worst, 0.05) * 0.5);
+}
+
+export function sloLabel(value: number | null, target: number): string {
+  return value === null
+    ? `No reading; target ${formatSlo(target)}%`
+    : `${formatSlo(value)}% available; target ${formatSlo(target)}%`;
 }

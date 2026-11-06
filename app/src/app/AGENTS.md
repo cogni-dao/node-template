@@ -50,6 +50,7 @@ Next.js App Router delivery layer. UI pages and API routes that expose features 
   - Public pages: `/` (homepage via `(public)/page.tsx`)
   - Schedule pages: `/schedules` (active/paused configuration), `/schedules/[scheduleId]` (owned history linking to existing chat threads)
   - Development-only: `/dev/finance-preview` — actual Financials/shell fixture preview; production/test → 404; isolated disabled treasury query cache
+  - Development-only: `/dev/goals-preview` — real GoalsBoard on a production readings snapshot plus labeled fixture KPIs; production/test → 404; seeded, network-disabled goals query cache
   - Protected pages: `/chat` (via `(app)/chat/page.tsx`)
   - Infra: `/health`, `/openapi.json`, `/meta/route-manifest` (via `(infra)/*`)
   - API: `/api/auth/*`, `/api/v1/chat/completions`

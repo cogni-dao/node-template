@@ -15,6 +15,7 @@ import {
 	type MetricAction,
 	type MetricCalculator,
 	type MetricDefinition,
+	type MetricDisplay,
 	type MetricDefinitionsPort,
 	MetricError,
 	type MetricHistory,
@@ -65,6 +66,7 @@ export interface GoalKpiResult {
 		calculatorId: string;
 		cadenceSeconds: number | null;
 		maxAgeSeconds: number;
+		display?: MetricDisplay;
 	} | null;
 	assessment: KpiAssessment;
 	trend: MetricHistory | null;
@@ -453,6 +455,7 @@ export function createMetricService(deps: {
 				calculatorId: definition.spec.calculatorId,
 				cadenceSeconds: definition.spec.cadenceSeconds ?? null,
 				maxAgeSeconds: definition.spec.maxAgeSeconds,
+				...(current.display ? { display: current.display } : {}),
 			};
 			let shape: ReturnType<typeof calculatorShape>;
 			try {
