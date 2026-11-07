@@ -3,13 +3,17 @@
 
 /**
  * Module: `@app/(app)/work/view`
- * Purpose: Work dashboard with ReUI Kanban and DataGrid sharing one TanStack
+ * Purpose: Work dashboard composing the published work board capability
+ *          (`@cogni/knowledge-base-ui`) and the ReUI DataGrid over one TanStack
  *          filter, sort, pagination, and detail-navigation model.
- * Scope: Presentation. Fetches data via React Query.
+ * Scope: Route composition. Fetches data via React Query and maps table state
+ *        to URL params; board controls, columns and cards come from the package.
  * Invariants:
+ *   - BOARD_FROM_PACKAGE — board mode renders only `WorkBoardToolbar` and
+ *     `WorkBoardView` from `@cogni/knowledge-base-ui` (task.0044).
  *   - HEADER_OWNS_SORT_AND_FILTER — sort + per-column facet filter live in
- *     the column header dropdown (see `_components/columns.tsx`).
- *   - SINGLE_COLUMNS_TOGGLE — visibility lives in one toolbar button
+ *     the package column headers (see `_components/columns.tsx`).
+ *   - SINGLE_COLUMNS_TOGGLE — table visibility lives in one toolbar button
  *     (`DataGridColumnVisibility`), not on every column dropdown.
  *   - URL_DRIVEN_STATE — filters / sort / search persist in URL params.
  *   - CONTRACTS_ARE_TRUTH — types derived from `WorkItemSummary`.
@@ -20,14 +24,15 @@
 
 "use client";
 
-import type { WorkItemSummary } from "@cogni/node-contracts";
-import { VALID_TRANSITIONS } from "@cogni/work-items";
 import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-  DropdownMenuCheckboxItem,
-} from "@cogni/node-ui-kit/shadcn/dropdown-menu";
+  ACTIVE_WORK_STATUSES,
+  WORK_STATUSES,
+  WorkBoardToolbar,
+  WorkBoardView,
+  type WorkTableMeta,
+  workItemGlobalFilterFn,
+} from "@cogni/knowledge-base-ui";
+import type { WorkItemSummary } from "@cogni/node-contracts";
 import {
   Select,
   SelectTrigger,
@@ -45,6 +50,7 @@ import { useIsMobile } from "@cogni/node-ui-kit/util/use-is-mobile";
 import { useQuery } from "@tanstack/react-query";
 import {
   type ColumnFiltersState,
+  functionalUpdate,
   getCoreRowModel,
   getFacetedRowModel,
   getFacetedUniqueValues,
@@ -55,23 +61,21 @@ import {
 import { Columns3, List, Settings2 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Button, Input } from "@/components";
+import { Button } from "@/components";
 
 import { type WorkIntent, useWorkNavigation } from "./WorkNavigationBoundary";
 import { fetchWorkItem, fetchWorkItems } from "./_api/fetchWorkItems";
-import { columns, WorkFacetControls, WorkRankControls } from "./_components/columns";
+import { columns } from "./_components/columns";
 import { WorkItemDetail } from "./_components/WorkItemDetail";
-import { WorkKanban } from "./_components/WorkKanban";
+import { WorkGoalLink } from "./_components/WorkKanban";
 import {
   workItemHref,
   workListHref,
   workViewHref,
 } from "./_lib/workItemNavigation";
 
-const ALL_STATUSES = [...VALID_TRANSITIONS.keys()];
-const ACTIVE_STATUSES = ALL_STATUSES.filter(
-  (status) => status !== "done" && status !== "cancelled",
-);
+const ALL_STATUSES = WORK_STATUSES;
+const ACTIVE_STATUSES = ACTIVE_WORK_STATUSES;
 const EMPTY_ITEMS: WorkItemSummary[] = [];
 const HISTORY_STORAGE_KEY = "work-page-history";
 
@@ -83,7 +87,7 @@ function readFilters(searchParams: URLSearchParams): ColumnFiltersState {
   if (statusParam && statusParam !== "all") {
     filters.push({ id: "status", value: statusParam.split(",") });
   } else if (!statusParam) {
-    filters.push({ id: "status", value: ACTIVE_STATUSES });
+    filters.push({ id: "status", value: [...ACTIVE_STATUSES] });
   }
   const projectParam = searchParams.get("project");
   if (projectParam)
@@ -128,9 +132,7 @@ function readColumns(params: URLSearchParams): string[] {
     ? [...ACTIVE_STATUSES]
     : value
         .split(",")
-        .filter((status) =>
-          ALL_STATUSES.includes(status as (typeof ALL_STATUSES)[number]),
-        );
+        .filter((status) => ALL_STATUSES.includes(status));
 }
 
 function intentHref(intent: WorkIntent): string {
@@ -451,6 +453,7 @@ export function WorkDashboardView({
     getRowId: (item) => item.id,
     data: items,
     columns,
+    meta: { isLoading } satisfies WorkTableMeta,
     state: {
       sorting,
       columnFilters,
@@ -467,9 +470,9 @@ export function WorkDashboardView({
         state.filters =
           typeof updater === "function" ? updater(state.filters) : updater;
       }),
-    onGlobalFilterChange: (query) =>
+    onGlobalFilterChange: (updater) =>
       editList((state) => {
-        state.query = query;
+        state.query = functionalUpdate(updater, state.query);
       }),
     onColumnVisibilityChange: setColumnVisibility,
     getCoreRowModel: getCoreRowModel(),
@@ -478,15 +481,7 @@ export function WorkDashboardView({
     manualPagination: true,
     getFacetedRowModel: getFacetedRowModel(),
     getFacetedUniqueValues: getFacetedUniqueValues(),
-    globalFilterFn: (row, _columnId, filterValue: string) => {
-      const q = filterValue.toLowerCase();
-      const d = row.original;
-      return (
-        d.id.toLowerCase().includes(q) ||
-        d.title.toLowerCase().includes(q) ||
-        d.labels.some((l: string) => l.toLowerCase().includes(q))
-      );
-    },
+    globalFilterFn: workItemGlobalFilterFn,
   });
 
   const rows = table.getRowModel().rows;
@@ -549,8 +544,6 @@ export function WorkDashboardView({
     return () => document.removeEventListener("keydown", handleKey);
   }, [navigationRows, navigationKey, focusedRowIndex, selectedItemId, openItem, closeItem]);
 
-  const hasActiveFilters = columnFilters.length > 0;
-
   const setView = (view: "board" | "table") => {
     editIntent((intent) => {
       intent.params.set("view", view);
@@ -564,94 +557,55 @@ export function WorkDashboardView({
         Work Dashboard
       </h1>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <Input
-          data-search-input
-          className="h-9 w-full sm:w-56"
-          placeholder="Search id, title, labels... ( / )"
-          value={globalFilter}
-          onChange={(e) => {
-            editList((state) => { state.query = e.target.value; });
-          }}
-        />
-        {hasActiveFilters && (
-          <button
-            type="button"
-            className="inline-flex min-h-6 items-center text-muted-foreground text-xs underline hover:text-foreground"
-            onClick={() => {
-              editList((state) => { state.filters = []; });
-            }}
+      <WorkBoardToolbar
+        table={table}
+        visibleStatuses={visibleStatuses}
+        onVisibleStatusesChange={(updater) => {
+          editIntent((intent) => {
+            const next = functionalUpdate(updater, readColumns(intent.params));
+            intent.params.set("columns", next.join(","));
+            return intent;
+          });
+        }}
+        showBoardColumns={boardView}
+      >
+        <fieldset
+          className="inline-flex min-w-0 rounded-lg border bg-muted/30 p-1"
+          aria-label="Work view"
+        >
+          <Button
+            variant={boardView ? "secondary" : "ghost"}
+            size="sm"
+            className="h-7 gap-1.5"
+            aria-pressed={boardView}
+            onClick={() => setView("board")}
           >
-            Clear filters
-          </button>
-        )}
-        {boardView && (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm">
-                Board columns
+            <Columns3 className="size-3.5" />
+            Board
+          </Button>
+          <Button
+            variant={boardView ? "ghost" : "secondary"}
+            size="sm"
+            className="h-7 gap-1.5"
+            aria-pressed={!boardView}
+            onClick={() => setView("table")}
+          >
+            <List className="size-3.5" />
+            Table
+          </Button>
+        </fieldset>
+        {!boardView && (
+          <DataGridColumnVisibility
+            table={table}
+            trigger={
+              <Button variant="outline" size="sm" className="h-9 gap-1.5">
+                <Settings2 className="size-3.5" />
+                Columns
               </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start">
-              {ALL_STATUSES.map((status) => (
-                <DropdownMenuCheckboxItem
-                  key={status}
-                  checked={visibleStatuses.includes(status)}
-                  onSelect={(event) => event.preventDefault()}
-                  onCheckedChange={(checked) => {
-                    editIntent((intent) => {
-                      const current = readColumns(intent.params);
-                      const next = checked ? [...current, status] : current.filter((value) => value !== status);
-                      intent.params.set("columns", next.join(","));
-                      return intent;
-                    });
-                  }}
-                >
-                  {status.replace("needs_", "").replaceAll("_", " ")}
-                </DropdownMenuCheckboxItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
+            }
+          />
         )}
-        <div className="ml-auto flex items-center gap-2">
-          <fieldset
-            className="inline-flex min-w-0 rounded-lg border bg-muted/30 p-1"
-            aria-label="Work view"
-          >
-            <Button
-              variant={boardView ? "secondary" : "ghost"}
-              size="sm"
-              className="h-7 gap-1.5"
-              aria-pressed={boardView}
-              onClick={() => setView("board")}
-            >
-              <Columns3 className="size-3.5" />
-              Board
-            </Button>
-            <Button
-              variant={boardView ? "ghost" : "secondary"}
-              size="sm"
-              className="h-7 gap-1.5"
-              aria-pressed={!boardView}
-              onClick={() => setView("table")}
-            >
-              <List className="size-3.5" />
-              Table
-            </Button>
-          </fieldset>
-          {!boardView && (
-            <DataGridColumnVisibility
-              table={table}
-              trigger={
-                <Button variant="outline" size="sm" className="h-9 gap-1.5">
-                  <Settings2 className="size-3.5" />
-                  Columns
-                </Button>
-              }
-            />
-          )}
-        </div>
-      </div>
+      </WorkBoardToolbar>
 
       {error && (
         <p className="py-8 text-center text-destructive">
@@ -659,133 +613,98 @@ export function WorkDashboardView({
         </p>
       )}
 
-      <DataGrid
-        table={table}
-        recordCount={table.getFilteredRowModel().rows.length}
-        isLoading={isLoading}
-        loadingMode="skeleton"
-        onRowClick={openItem}
-        tableLayout={{
-          // Auto layout on phones lets the visible columns share the viewport.
-          width: isMobile ? "auto" : "fixed",
-          headerSticky: true,
-          headerBackground: true,
-          rowBorder: true,
-          dense: true,
-        }}
-        tableClassNames={{
-          bodyRow: "cursor-pointer",
-        }}
-        emptyMessage="No work items found."
-      >
-        {boardView ? (
-          <>
-            <fieldset
-              className="mb-4 flex min-w-0 flex-wrap items-center gap-x-5 gap-y-2 rounded-lg border px-4 py-2"
-              aria-label="Board filters and sorting"
-            >
-              {(() => {
-                const rank = table.getColumn("rankScore");
-                return rank && <WorkRankControls column={rank} />;
-              })()}
-              {(["type", "status", "projectId"] as const).map((facet) => {
-                const column = table.getColumn(facet);
-                return column && <WorkFacetControls key={facet} column={column} facet={facet} />;
-              })}
-            </fieldset>
-            {sorting[0] &&
-              !["rankScore", "type", "status", "projectId"].includes(
-                sorting[0].id,
-              ) && (
-                <div className="mb-4 flex flex-wrap items-center gap-2 text-muted-foreground text-xs">
-                  <span>
-                    Sorted by {sorting[0].id} (
-                    {sorting[0].desc ? "descending" : "ascending"})
-                  </span>
-                  <button
-                    type="button"
-                    className="underline hover:text-foreground"
-                    onClick={() => {
-                      const next = [{ id: "rankScore", desc: true }];
-                      editList((state) => { state.sorting = next; });
-                    }}
-                  >
-                    Reset to rank
-                  </button>
-                </div>
-              )}
-            <WorkKanban
-              items={rows.map((row) => row.original)}
-              statuses={visibleStatuses}
-              isLoading={isLoading}
-              onOpenItem={openItem}
-            />
-          </>
-        ) : (
+      {boardView ? (
+        <WorkBoardView
+          table={table}
+          visibleStatuses={visibleStatuses}
+          isLoading={isLoading}
+          onOpenItem={openItem}
+          renderGoalLink={WorkGoalLink}
+        />
+      ) : (
+        <DataGrid
+          table={table}
+          recordCount={table.getFilteredRowModel().rows.length}
+          isLoading={isLoading}
+          loadingMode="skeleton"
+          onRowClick={openItem}
+          tableLayout={{
+            // Auto layout on phones lets the visible columns share the viewport.
+            width: isMobile ? "auto" : "fixed",
+            headerSticky: true,
+            headerBackground: true,
+            rowBorder: true,
+            dense: true,
+          }}
+          tableClassNames={{
+            bodyRow: "cursor-pointer",
+          }}
+          emptyMessage="No work items found."
+        >
           <DataGridContainer className="overflow-x-auto">
             <DataGridTable />
           </DataGridContainer>
-        )}
-        <div className="flex flex-wrap items-center justify-between gap-3 pt-4 text-sm">
-          <span>
-            {items.length} items on this page
-            {boardView
-              ? ` · ${items.filter((item) => visibleStatuses.includes(item.status)).length} visible cards`
-              : ""}
-          </span>
-          <div className="flex flex-wrap gap-2">
-            <Select
-              value={String(Number(desired.params.get("pageSize")) || 10)}
-              onValueChange={(value) => {
-                editIntent((intent) => {
-                  intent.params.set("pageSize", value);
-                  intent.params.delete("cursor");
-                  return { ...intent, resetHistory: true };
-                });
-              }}
-            >
-              <SelectTrigger aria-label="Items per page" className="w-20">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {[10, 25, 50, 100].map((n) => (
-                  <SelectItem key={n} value={String(n)}>
-                    {n}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => changePage("restart")}
-              disabled={navigationLocked || isNavigating || !cursor}
-            >
-              Restart
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => changePage("previous")}
-              disabled={navigationLocked || isNavigating || !cursor || history.length === 0}
-            >
-              Previous
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => changePage("next")}
-              disabled={
-                navigationLocked || isNavigating ||
-                !(data?.pageInfo?.hasMore ?? Boolean(data?.nextCursor)) ||
-                !(data?.pageInfo?.endCursor ?? data?.nextCursor)
-              }
-            >
-              Next
-            </Button>
-          </div>
+        </DataGrid>
+      )}
+      <div className="flex flex-wrap items-center justify-between gap-3 pt-4 text-sm">
+        <span>
+          {items.length} items on this page
+          {boardView
+            ? ` · ${items.filter((item) => visibleStatuses.includes(item.status)).length} visible cards`
+            : ""}
+        </span>
+        <div className="flex flex-wrap gap-2">
+          <Select
+            value={String(Number(desired.params.get("pageSize")) || 10)}
+            onValueChange={(value) => {
+              editIntent((intent) => {
+                intent.params.set("pageSize", value);
+                intent.params.delete("cursor");
+                return { ...intent, resetHistory: true };
+              });
+            }}
+          >
+            <SelectTrigger aria-label="Items per page" className="w-20">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {[10, 25, 50, 100].map((n) => (
+                <SelectItem key={n} value={String(n)}>
+                  {n}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => changePage("restart")}
+            disabled={navigationLocked || isNavigating || !cursor}
+          >
+            Restart
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => changePage("previous")}
+            disabled={navigationLocked || isNavigating || !cursor || history.length === 0}
+          >
+            Previous
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => changePage("next")}
+            disabled={
+              navigationLocked || isNavigating ||
+              !(data?.pageInfo?.hasMore ?? Boolean(data?.nextCursor)) ||
+              !(data?.pageInfo?.endCursor ?? data?.nextCursor)
+            }
+          >
+            Next
+          </Button>
         </div>
-      </DataGrid>
+      </div>
 
       <WorkItemDetail
         item={selectedItemQuery.data ?? null}
