@@ -9,8 +9,10 @@ import { z } from "zod";
 import { PostgresMetricObservations } from "./adapters/postgres.js";
 import {
 	type GoalsProgress,
+	type MetricCalculator,
 	type MetricDefinition,
 	MetricError,
+	MetricSpecSchema,
 	parseStoredMetricSpec,
 } from "./contracts.js";
 import {
@@ -55,6 +57,13 @@ export interface GoalKnowledgeReader {
 	>;
 }
 
+/** Calculator ids this package publishes; a node calculator can never reuse one. */
+export const PACKAGE_CALCULATOR_IDS = [
+	"work.count@1",
+	"work.convergence@1",
+	"github.stars@1",
+] as const;
+
 export function createGoalMetrics(deps: {
 	knowledgeSql: Sql;
 	observationsSql: Sql;
@@ -62,6 +71,14 @@ export function createGoalMetrics(deps: {
 	node: string;
 	environment: string;
 	log(event: object): void;
+	/**
+	 * Node-local calculators over sources only this node owns (its own tables).
+	 * They register after the package calculators, so a package id cannot be
+	 * shadowed. By injecting one, the node asserts its sources hold node-member
+	 * metadata or public data, the same `node-members` data scope as the package
+	 * calculators. The node owns their ids, budgets, evidenceRefs and versions.
+	 */
+	nodeCalculators?: readonly MetricCalculator[];
 }) {
 	const registry = new MetricRegistry();
 	const scope = {
@@ -152,6 +169,18 @@ export function createGoalMetrics(deps: {
 			);
 		},
 	});
+	const nodeCalculatorIds: string[] = [];
+	for (const calculator of deps.nodeCalculators ?? []) {
+		// A definition can only name an id the spec schema accepts.
+		if (!MetricSpecSchema.shape.calculatorId.safeParse(calculator.id).success)
+			throw new MetricError("invalid_calculator_id", 422);
+		registry.register(calculator);
+		nodeCalculatorIds.push(calculator.id);
+	}
+	const allowed = new Set<string>([
+		...PACKAGE_CALCULATOR_IDS,
+		...nodeCalculatorIds,
+	]);
 	/** One malformed reviewed row must not stop every other metric: skip it and log. */
 	const parse = (row: Record<string, unknown>): MetricDefinition | null => {
 		try {
@@ -216,9 +245,7 @@ export function createGoalMetrics(deps: {
 		// These sources contain node-member metadata or public provider data only.
 		// Private connection calculators must supply a current grant check here before registering.
 		authorize: async (_action, definition) =>
-			["work.count@1", "work.convergence@1", "github.stars@1"].includes(
-				definition.spec.calculatorId,
-			),
+			allowed.has(definition.spec.calculatorId),
 		log: deps.log,
 	});
 }
