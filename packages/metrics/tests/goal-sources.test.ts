@@ -2,11 +2,16 @@
 /** Published goal-metric composition and Dolt-history source readers, without a node app. */
 import type { Sql } from "postgres";
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import { PostgresMetricObservations } from "../src/adapters/postgres.js";
+import type { MetricCalculator } from "../src/contracts.js";
 import {
 	createGoalMetrics,
 	createGoalSource,
+	calculatorFamily,
 	type GoalKnowledgeReader,
+	PACKAGE_CALCULATOR_IDS,
+	RESERVED_CALCULATOR_FAMILIES,
 } from "../src/knowledge.js";
 import {
 	doltInstant,
@@ -329,6 +334,214 @@ describe("@cogni-dao/metrics/knowledge", () => {
 			"work.convergence@1",
 			"github.stars@1",
 		]);
+	});
+	describe("node calculators (task.5442)", () => {
+		const budget = {
+			timeoutMs: 1000,
+			maxSourceCalls: 1,
+			maxRows: 1,
+			maxResponseBytes: 1024,
+		};
+		const releaseSuccess: MetricCalculator = {
+			id: "deploy.release-success@1",
+			unit: "%",
+			display: "slo",
+			historicalWindows: true,
+			windowSeconds: () => 7 * 86400,
+			paramsSchema: z.strictObject({}),
+			budget,
+			compute: async () => ({
+				value: 97,
+				unit: "%",
+				complete: true,
+				sourceWatermarks: [],
+				evidenceRefs: [],
+			}),
+		};
+		const definitionRow = (calculatorId: string) => ({
+			id: "release-success-7d",
+			title: "Release success",
+			updated_at: "2026-11-07T00:00:00.000Z",
+			metric_spec: { calculatorId, params: {}, maxAgeSeconds: 3600 },
+		});
+		// Tagged-template SQL with no stored observations.
+		const emptyObservations = ((..._args: unknown[]) =>
+			Promise.resolve([])) as unknown as Sql;
+		const compose = (
+			calculatorId: string,
+			nodeCalculators?: MetricCalculator[],
+		) =>
+			createGoalMetrics({
+				knowledgeSql: fakeSql(() => [definitionRow(calculatorId)]).sql,
+				observationsSql: emptyObservations,
+				node: "operator",
+				environment: "test",
+				log: () => undefined,
+				...(nodeCalculators ? { nodeCalculators } : {}),
+			});
+
+		it("registers node calculators after the published ones", () => {
+			const service = compose("deploy.release-success@1", [releaseSuccess]);
+			expect(service.registry.describe().map((c) => c.id)).toEqual([
+				...PACKAGE_CALCULATOR_IDS,
+				"deploy.release-success@1",
+			]);
+			expect(service.registry.get("work.convergence@1").budget).toEqual({
+				timeoutMs: 8000,
+				maxSourceCalls: 8,
+				maxRows: FIRST_PARENT_WALK_CAP + 5,
+				maxResponseBytes: 1048576,
+			});
+		});
+		it("admits a definition that names an injected calculator", async () => {
+			const view = await compose("deploy.release-success@1", [
+				releaseSuccess,
+			]).read("release-success-7d");
+			expect(view.definition.spec.calculatorId).toBe(
+				"deploy.release-success@1",
+			);
+			expect(view.viewState).toBe("unavailable");
+		});
+		it("still hides a definition whose calculator nobody registered", async () => {
+			await expect(
+				compose("deploy.release-success@1").read("release-success-7d"),
+			).rejects.toMatchObject({ code: "metric_not_found", status: 404 });
+		});
+		it.each([
+			"work.count@1",
+			"work.count@2",
+			"work.convergence@3",
+			"github.stars@9",
+		])("reserves the published family of %s at every version", (id) => {
+			expect(() => compose(id, [{ ...releaseSuccess, id }])).toThrow(
+				expect.objectContaining({
+					code: "reserved_calculator_family",
+					status: 422,
+				}),
+			);
+			expect(RESERVED_CALCULATOR_FAMILIES.has(calculatorFamily(id))).toBe(
+				true,
+			);
+		});
+		it("never lets two node calculators share one id", () => {
+			expect(() =>
+				compose("deploy.release-success@1", [releaseSuccess, releaseSuccess]),
+			).toThrow(
+				expect.objectContaining({ code: "duplicate_calculator", status: 422 }),
+			);
+		});
+		describe("budgets bind node calculators like built-ins", () => {
+			/**
+			 * In-memory stand-in for the observation adapter's tagged-template SQL:
+			 * no prior request, one reserved pending row, a claimed lease, and the
+			 * completed observation returned as written.
+			 */
+			function memoryObservations() {
+				let row: Row | undefined;
+				const sql = ((strings: TemplateStringsArray, ...values: unknown[]) => {
+					const text = strings.join("?");
+					if (text.startsWith("INSERT INTO execution_requests"))
+						return Promise.resolve([{ run_id: values[2] }]);
+					if (text.startsWith("INSERT INTO metric_observations")) {
+						row = {
+							id: values[0],
+							snapshot: values[6],
+							observation: values[7],
+						};
+						return Promise.resolve([row]);
+					}
+					if (text.startsWith("UPDATE metric_observations SET lease_token"))
+						return Promise.resolve(row ? [row] : []);
+					if (text.startsWith("UPDATE metric_observations SET observation="))
+						return Promise.resolve([{ observation: values[0] }]);
+					return Promise.resolve([]);
+				}) as unknown as Sql & { begin: unknown };
+				Object.assign(sql, {
+					begin: (fn: (tx: Sql) => Promise<unknown>) => fn(sql),
+				});
+				return sql;
+			}
+			const computeWith = (calculator: MetricCalculator) =>
+				createGoalMetrics({
+					knowledgeSql: fakeSql(() => [definitionRow(calculator.id)]).sql,
+					observationsSql: memoryObservations(),
+					node: "operator",
+					environment: "test",
+					log: () => undefined,
+					nodeCalculators: [calculator],
+				}).compute("release-success-7d", { requestKey: "budget-test" });
+			const ok = {
+				value: 97,
+				unit: "%",
+				complete: true,
+				sourceWatermarks: [
+					{ source: "node_workload_releases", asOf: "2026-11-07T00:00:00Z" },
+				],
+				evidenceRefs: [],
+			};
+			const twoReads: MetricCalculator["compute"] = async (_p, ctx) => {
+				await ctx.read(async () => 1);
+				await ctx.read(async () => 2);
+				return ok;
+			};
+
+			it("records ok when the calculator stays inside its budget", async () => {
+				const saved = await computeWith({
+					...releaseSuccess,
+					budget: { ...budget, maxSourceCalls: 2 },
+					compute: twoReads,
+				});
+				expect(saved).toMatchObject({ status: "ok", value: 97, reason: null });
+			});
+			it("ends a calculator that outlives timeoutMs as source_timeout", async () => {
+				let aborted = false;
+				const saved = await computeWith({
+					...releaseSuccess,
+					budget: { ...budget, timeoutMs: 20 },
+					compute: (_p, ctx) =>
+						new Promise(() => {
+							ctx.signal.addEventListener("abort", () => {
+								aborted = true;
+							});
+						}),
+				});
+				expect(saved).toMatchObject({
+					status: "error",
+					value: null,
+					reason: "source_timeout",
+				});
+				expect(aborted).toBe(true);
+			});
+			it("fails a calculator that reads more than maxSourceCalls", async () => {
+				let reads = 0;
+				const saved = await computeWith({
+					...releaseSuccess,
+					budget: { ...budget, maxSourceCalls: 1 },
+					compute: async (_p, ctx) => {
+						await ctx.read(async () => ++reads);
+						await ctx.read(async () => ++reads);
+						return ok;
+					},
+				});
+				expect(saved).toMatchObject({
+					status: "error",
+					value: null,
+					reason: "source_failed",
+				});
+				// The over-budget read never reached its source.
+				expect(reads).toBe(1);
+			});
+		});
+		it("rejects an id no metric definition could name (no underscores)", () => {
+			expect(() =>
+				compose("x", [{ ...releaseSuccess, id: "deploy.release_success@1" }]),
+			).toThrow(
+				expect.objectContaining({
+					code: "invalid_calculator_id",
+					status: 422,
+				}),
+			);
+		});
 	});
 	it("projects goals and their newest hypothesis outcome from a structural knowledge reader", async () => {
 		const at = (iso: string) => new Date(iso);

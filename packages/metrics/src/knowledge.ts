@@ -9,8 +9,10 @@ import { z } from "zod";
 import { PostgresMetricObservations } from "./adapters/postgres.js";
 import {
 	type GoalsProgress,
+	type MetricCalculator,
 	type MetricDefinition,
 	MetricError,
+	MetricSpecSchema,
 	parseStoredMetricSpec,
 } from "./contracts.js";
 import {
@@ -55,6 +57,21 @@ export interface GoalKnowledgeReader {
 	>;
 }
 
+/** Calculator ids this package publishes; a node calculator can never reuse one. */
+export const PACKAGE_CALCULATOR_IDS = [
+	"work.count@1",
+	"work.convergence@1",
+	"github.stars@1",
+] as const;
+/** `work.count@1` → `work.count`: the family every version of a calculator shares. */
+export function calculatorFamily(id: string): string {
+	return id.slice(0, id.lastIndexOf("@"));
+}
+/** Families the package owns at every version; node calculators use their own names. */
+export const RESERVED_CALCULATOR_FAMILIES: ReadonlySet<string> = new Set(
+	PACKAGE_CALCULATOR_IDS.map(calculatorFamily),
+);
+
 export function createGoalMetrics(deps: {
 	knowledgeSql: Sql;
 	observationsSql: Sql;
@@ -62,6 +79,17 @@ export function createGoalMetrics(deps: {
 	node: string;
 	environment: string;
 	log(event: object): void;
+	/**
+	 * Node-local calculators over sources only this node owns (its own tables).
+	 * They register after the package calculators. A node id may not use a
+	 * package family at any version (`reserved_calculator_family`). By injecting
+	 * one, the node asserts its sources hold node-member metadata or public data,
+	 * the same `node-members` data scope as the package calculators. The node
+	 * owns their ids, budgets, evidenceRefs and versions. The service enforces
+	 * `timeoutMs` and `maxSourceCalls`; `maxRows` and `maxResponseBytes` are
+	 * passed to sources, which must honour them.
+	 */
+	nodeCalculators?: readonly MetricCalculator[];
 }) {
 	const registry = new MetricRegistry();
 	const scope = {
@@ -152,6 +180,21 @@ export function createGoalMetrics(deps: {
 			);
 		},
 	});
+	const nodeCalculatorIds: string[] = [];
+	for (const calculator of deps.nodeCalculators ?? []) {
+		// A definition can only name an id the spec schema accepts.
+		if (!MetricSpecSchema.shape.calculatorId.safeParse(calculator.id).success)
+			throw new MetricError("invalid_calculator_id", 422);
+		// Every version of a published family belongs to the package.
+		if (RESERVED_CALCULATOR_FAMILIES.has(calculatorFamily(calculator.id)))
+			throw new MetricError("reserved_calculator_family", 422);
+		registry.register(calculator);
+		nodeCalculatorIds.push(calculator.id);
+	}
+	const allowed = new Set<string>([
+		...PACKAGE_CALCULATOR_IDS,
+		...nodeCalculatorIds,
+	]);
 	/** One malformed reviewed row must not stop every other metric: skip it and log. */
 	const parse = (row: Record<string, unknown>): MetricDefinition | null => {
 		try {
@@ -216,9 +259,7 @@ export function createGoalMetrics(deps: {
 		// These sources contain node-member metadata or public provider data only.
 		// Private connection calculators must supply a current grant check here before registering.
 		authorize: async (_action, definition) =>
-			["work.count@1", "work.convergence@1", "github.stars@1"].includes(
-				definition.spec.calculatorId,
-			),
+			allowed.has(definition.spec.calculatorId),
 		log: deps.log,
 	});
 }
