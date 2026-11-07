@@ -17,6 +17,7 @@
  * @public
  */
 
+import type { KnowledgeHistoryEntry } from "../domain/history.js";
 import type { ActiveGoal } from "../domain/dao-goals.js";
 import type { GoverningIndexRow } from "../domain/governing.js";
 import type { KnowledgeGraphNode } from "../domain/knowledge-graph.js";
@@ -404,4 +405,6 @@ export interface KnowledgeStorePort {
   log(limit?: number): Promise<DoltCommit[]>;
   diff(fromRef: string, toRef: string): Promise<DoltDiffEntry[]>;
   currentCommit(): Promise<string>;
+  /** Versions of one entry, newest first, with their change reasons (task.0052). */
+  history?(id: string): Promise<KnowledgeHistoryEntry[]>;
 }

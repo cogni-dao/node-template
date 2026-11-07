@@ -12,6 +12,21 @@
  */
 
 export type { WorkItemsContentPort, WorkItemsPort } from "./content.js";
+export type {
+  HistoryDiffRow,
+  HistoryEntry,
+  HistoryFieldDiff,
+  ShapeHistoryOptions
+} from "./history.js";
+export {
+  CHANGE_REASON_MAX_CHARS,
+  ChangeReasonInvalidError,
+  HISTORY_MAX_VERSIONS,
+  HISTORY_READ_ROWS,
+  normalizeChangeReason,
+  parseWorkItemCommitMessage,
+  shapeHistory
+} from "./history.js";
 export {
   WorkItemRevisionConflictError,
   WorkItemScoresInvalidError,

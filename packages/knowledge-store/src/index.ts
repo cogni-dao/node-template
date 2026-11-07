@@ -193,6 +193,8 @@ export {
   SourceTypeSchema,
 } from "./domain/schemas.js";
 export { KnowledgeWriteConflictError } from "./domain/write-replay.js";
+export type { KnowledgeHistoryEntry } from "./domain/history.js";
+export { shapeKnowledgeHistory } from "./domain/history.js";
 export { createEdoCapability } from "./edo-capability.js";
 export {
   ContributionConflictError,

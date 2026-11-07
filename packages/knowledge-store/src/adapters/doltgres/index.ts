@@ -27,6 +27,12 @@ import {
   runDoltBranchMutation,
 } from "@cogni-dao/doltgres-admission";
 import type { Sql } from "postgres";
+import {
+  KNOWLEDGE_HISTORY_READ_ROWS,
+  type KnowledgeHistoryEntry,
+  type KnowledgeHistoryRow,
+  shapeKnowledgeHistory,
+} from "../../domain/history.js";
 import { initializeConfidence } from "../../domain/confidence-policy.js";
 import {
   type ActiveGoal,
@@ -879,6 +885,17 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
 
   async commit(_message: string): Promise<string> {
     throw new KnowledgeWriteScopeRequiredError();
+  }
+
+  /**
+   * Versions of one entry, newest first (task.0052). The reason is the
+   * contribution commit message; other writes fall back to the Dolt message.
+   */
+  async history(id: string): Promise<KnowledgeHistoryEntry[]> {
+    const rows = await this.sql.unsafe(
+      `SELECT d.to_commit, d.to_commit_date, d.diff_type, l.message, l.committer, c.message AS contribution_message, c.principal_id AS contribution_principal, d.* FROM dolt_diff_knowledge d JOIN dolt_log l ON l.commit_hash = d.to_commit LEFT JOIN knowledge_contribution_commits c ON c.commit_hash = d.to_commit WHERE d.to_id = ${escapeValue(id)} AND d.to_commit <> 'WORKING' ORDER BY d.to_commit_date DESC LIMIT ${KNOWLEDGE_HISTORY_READ_ROWS}`
+    );
+    return shapeKnowledgeHistory(rows as unknown as KnowledgeHistoryRow[]);
   }
 
   async log(limit?: number): Promise<DoltCommit[]> {

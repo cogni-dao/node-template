@@ -22,6 +22,7 @@ import type {
   WorkItemsListOutput,
   WorkItemSummariesListOutput,
 } from "@cogni/node-contracts";
+import type { HistoryOutput } from "@cogni/node-contracts";
 import { WorkItemSummarySchema } from "@cogni/node-contracts";
 import type { WorkItem, WorkItemId, WorkItemLease } from "@cogni/work-items";
 import {
@@ -327,6 +328,24 @@ export async function getWorkItem(id: string): Promise<WorkItemDto | null> {
   return mdItem ? toDto(mdItem) : null;
 }
 
+/**
+ * Versions of one item, newest first, with change reasons (task.0052).
+ * Returns null when the item does not exist; throws when the store has no history read.
+ */
+export async function getWorkItemHistory(
+  id: string,
+): Promise<HistoryOutput | null> {
+  const container = getContainer();
+  const store = container.doltgresWorkItems;
+  if (!store.history) throw new Error("work-item history is not available");
+  try {
+    if (!(await store.get(toWorkItemId(id)))) return null;
+    return { items: await store.history(toWorkItemId(id)) };
+  } catch (e) {
+    rethrowBackendError(e);
+  }
+}
+
 export async function createWorkItem(
   input: ContractCreateInput,
   sessionUser: WorkItemActor,
@@ -378,6 +397,7 @@ export async function patchWorkItem(
         ...(input.expectedRevision !== undefined && {
           expectedRevision: input.expectedRevision,
         }),
+        ...(input.reason !== undefined && { reason: input.reason }),
         set: dropUndefined(input.set),
       },
       sessionUser.id,

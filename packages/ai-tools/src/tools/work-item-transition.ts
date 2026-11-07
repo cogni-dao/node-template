@@ -69,7 +69,9 @@ export const WorkItemTransitionInputSchema = z
     reason: z
       .string()
       .optional()
-      .describe("Reason for the transition — recorded in audit trail"),
+      .describe(
+        "Why this change happens, one line. For 'patch' it is stored in the item's history (never in the item); for 'transition' it is the audit reason."
+      ),
     priority: z
       .number()
       .int()
@@ -275,6 +277,7 @@ export function createWorkItemTransitionImplementation(
               ...(input.expectedRevision !== undefined && {
                 expectedRevision: input.expectedRevision,
               }),
+              ...(input.reason !== undefined && { reason: input.reason }),
               set: setFields,
             });
           } catch (e) {

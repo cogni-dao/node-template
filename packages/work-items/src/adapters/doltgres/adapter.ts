@@ -45,6 +45,14 @@ export {
 } from "../../errors.js";
 
 import { parseWorkItemScores } from "../../scores.js";
+import {
+  HISTORY_READ_ROWS,
+  type HistoryDiffRow,
+  type HistoryEntry,
+  normalizeChangeReason,
+  parseWorkItemCommitMessage,
+  shapeHistory
+} from "../../history.js";
 import { normalizeWorkItemOrder } from "../../query-order.js";
 import { rankScoreSql } from "../../rank-policy.js";
 
@@ -202,6 +210,8 @@ interface MutationProof {
   readonly commandProvided?: boolean;
   /** `patch` only: the revision the compare-and-set was conditioned on. */
   readonly expectedRevision?: number;
+  /** `patch` only: one-line reason, written as a `Reason:` commit line (task.0052). */
+  readonly reason?: string;
 }
 
 interface MutationOptions<T> {
@@ -654,6 +664,11 @@ const PERSISTED_WORK_ITEM_COLUMNS = [
 ] as const;
 
 type PersistedColumn = (typeof PERSISTED_WORK_ITEM_COLUMNS)[number];
+/** Columns every write bumps; history omits them from `changed` (task.0052). */
+const HISTORY_IGNORED_COLUMNS: ReadonlySet<string> = new Set([
+  "revision",
+  "updated_at",
+]);
 type RowSnapshot = Record<PersistedColumn, unknown>;
 
 const PATCH_DB_COLUMNS = new Set<string>(Object.values(PATCH_COLUMNS));
@@ -780,7 +795,7 @@ function legacyProofFromMessage(
 ): MutationProof | undefined {
   const match =
     /^work-items: (create work item|(?:patch|delete|claim|heartbeat|release) ([^ ]+)) by actor:([^ ]+)$/.exec(
-      message
+      message.split("\n")[0] ?? ""
     );
   if (!match) return undefined;
   const operation = match[1];
@@ -2318,7 +2333,7 @@ export class DoltgresWorkItemAdapter
       assertDoltStatus(addRows, "dolt_add");
       state.commitAttempted = true;
       const commitRows = await conn.unsafe(
-        `SELECT dolt_commit('-m', ${escapeValue(`${COMMIT_TAG}: ${message} by actor:${principalId}`)})`
+        `SELECT dolt_commit('-m', ${escapeValue(`${COMMIT_TAG}: ${message} by actor:${principalId}${proof.reason ? `\nReason: ${proof.reason}` : ""}`)})`
       );
       const branchCommit = doltCommitHash(commitRows);
       state.branchCommit = branchCommit;
@@ -2736,6 +2751,23 @@ export class DoltgresWorkItemAdapter
     });
   }
 
+  /**
+   * Versions of one item, newest first (task.0052). Reads Dolt's per-table diff
+   * history joined to the commit log; the reason is the commit's `Reason:` line.
+   */
+  async history(id: WorkItemId): Promise<HistoryEntry[]> {
+    return this.readOnCleanMain(async (conn) => {
+      const rows = (await conn.unsafe(
+        `SELECT d.to_commit, d.to_commit_date, d.diff_type, l.message, l.committer, d.* FROM dolt_diff_work_items d JOIN dolt_log l ON l.commit_hash = d.to_commit WHERE d.to_id = ${escapeValue(id as string)} AND d.to_commit <> 'WORKING' ORDER BY d.to_commit_date DESC LIMIT ${HISTORY_READ_ROWS}`
+      )) as unknown as HistoryDiffRow[];
+      return shapeHistory(rows, {
+        ignored: HISTORY_IGNORED_COLUMNS,
+        version: (row) => String(row.to_revision ?? ""),
+        reasonAndActor: (row) => parseWorkItemCommitMessage(row.message),
+      });
+    });
+  }
+
   async list(query: WorkQuery = {}) {
     return this.listProjected(query, false) as Promise<{ items: WorkItem[]; nextCursor?: string; pageInfo: { endCursor: string | null; hasMore: boolean } }>;
   }
@@ -3042,6 +3074,7 @@ export class DoltgresWorkItemAdapter
     const principal = requirePrincipal(principalId);
     const id = input.id as string;
     const expectedRevision = parseExpectedRevision(input.expectedRevision);
+    const reason = normalizeChangeReason(input.reason);
     const set: WorkItemsPatchSet =
       input.set.scores === undefined
         ? input.set
@@ -3126,6 +3159,7 @@ export class DoltgresWorkItemAdapter
           principal,
           itemId: id,
           expectedRevision,
+          ...(reason ? { reason } : {}),
           patchValues: Object.fromEntries(
             setKeys.map((key) => [PATCH_COLUMNS[key], set[key]])
           ),
