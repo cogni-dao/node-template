@@ -166,6 +166,7 @@ export function createWorkItemCapability(
               ...(input.expectedRevision !== undefined && {
                 expectedRevision: input.expectedRevision,
               }),
+              ...(input.reason !== undefined && { reason: input.reason }),
               set: input.set,
             },
             typeof writer.principalId === "function"

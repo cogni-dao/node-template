@@ -85,6 +85,7 @@ export function createScoresGuard(
       if (!goal) return "guard_rejected: goal_citation";
       const merged = { ...item.scores };
       let changed = 0;
+      const movements: string[] = [];
       for (const axis of axes) {
         const next = input.scores[axis];
         const previous = item.scores?.[axis];
@@ -124,6 +125,7 @@ export function createScoresGuard(
             return "guard_rejected: unobserved_or_unlinked_evidence";
         }
         merged[axis] = { v: desired, ...(ev ? { ev } : {}) };
+        movements.push(`${axis} ${oldValue}→${desired}`);
         changed++;
       }
       if (!changed) return "no_change";
@@ -138,6 +140,8 @@ export function createScoresGuard(
             id: item.id,
             expectedRevision: item.revision,
             scores: merged,
+            // The guard, not the model, states why (task.0052).
+            reason: `scores: ${movements.join(", ")}`,
           },
           config,
         );

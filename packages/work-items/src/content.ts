@@ -14,6 +14,7 @@
  */
 
 import type { WorkItemSummary } from "./contracts.js";
+import type { HistoryEntry } from "./history.js";
 import type { WorkItemLeasePort } from "./leases.js";
 
 import type {
@@ -38,6 +39,8 @@ export interface WorkItemsPatchInput {
   readonly expectedRevision?: number;
   readonly id: WorkItemId;
   readonly set: WorkItemsPatchSet;
+  /** One-line change reason; stored in the Dolt commit message, never in the item (task.0052). */
+  readonly reason?: string;
 }
 
 export interface WorkItemsPort {
@@ -55,6 +58,8 @@ export interface WorkItemsPort {
   create(input: WorkItemsCreateInput, principalId: string): Promise<WorkItem>;
   patch(input: WorkItemsPatchInput, principalId: string): Promise<WorkItem>;
   delete(id: WorkItemId, principalId: string): Promise<boolean>;
+  /** Versions of one item, newest first, with their change reasons (task.0052). */
+  history?(id: WorkItemId): Promise<HistoryEntry[]>;
   claim: WorkItemLeasePort["claim"];
   heartbeat: WorkItemLeasePort["heartbeat"];
   release: WorkItemLeasePort["release"];

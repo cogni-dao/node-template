@@ -27,6 +27,9 @@ export const EVENT_NAMES = {
 	METRIC_REFRESH_COMPLETE: "metric.refresh_complete",
 	GOALS_PROGRESS_READ: "goals.progress_read",
 	WORK_ITEMS_LIST_COMPLETE: "work.items.list_complete",
+	// Row history reads (task.0052): one terminal event per read, counts only.
+	WORK_ITEMS_HISTORY_READ: "work.items.history_read",
+	KNOWLEDGE_HISTORY_READ: "knowledge.history_read",
 	// AI Domain - Server
 	AI_COMPLETION: "ai.completion",
 	AI_LLM_CALL: "ai.llm_call",

@@ -52,6 +52,9 @@ export function withWorkItemLeases(
       return content.patch(input, principalId);
     },
     delete: (id, principalId) => content.delete(id, principalId),
+    ...(content.history
+      ? { history: (id: WorkItem["id"]) => content.history!(id) }
+      : {}),
     async claim(input) {
       if (!(await content.get(input.id)))
         throw new Error(`Work item not found: ${input.id}`);

@@ -129,6 +129,7 @@ describe("scheduled scores-only decision guard", () => {
       "action",
       "expectedRevision",
       "id",
+      "reason",
       "scores",
     ]);
     expect(a.writes[0]).toMatchObject({
@@ -137,6 +138,8 @@ describe("scheduled scores-only decision guard", () => {
       expectedRevision: 7,
       scores: { goal: { v: 4, ev: source } },
     });
+    // The guard derives the change reason from the axes it moved (task.0052).
+    expect(a.writes[0]?.reason).toMatch(/^scores: goal \d→4$/);
     const b = setup();
     b.observe(item("task.1"));
     expect(

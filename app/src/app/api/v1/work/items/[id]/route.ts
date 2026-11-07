@@ -125,7 +125,10 @@ export const PATCH = wrapRouteHandlerWithLogging<{
         id: sessionUser.id,
         walletAddress: sessionUser.walletAddress,
       });
-      ctx.log.info({ workItemId: id }, "work.items.patch_success");
+      ctx.log.info(
+        { workItemId: id, hasReason: parseResult.data.reason !== undefined },
+        "work.items.patch_success"
+      );
       return NextResponse.json(workItemsPatchOperation.output.parse(patched));
     } catch (e) {
       if (e instanceof WorkItemScoresInvalidError) {

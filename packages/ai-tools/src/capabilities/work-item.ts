@@ -113,6 +113,8 @@ export interface WorkItemCapability {
   patch(input: {
     id: string;
     expectedRevision?: number;
+    /** One-line change reason; stored in history, never in the item (task.0052). */
+    reason?: string;
     set: {
       priority?: number;
       rank?: number;

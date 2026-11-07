@@ -69,6 +69,7 @@ export * from "./http/openapi.v1";
 export * from "./http/router.v1";
 export * from "./identity.attestation.v1.contract";
 // ── Knowledge ───────────────────────────────────────────────────────────────
+export * from "./history.v1.contract";
 export * from "./knowledge.contributions.v1.contract";
 export * from "./knowledge.domains.v1.contract";
 export * from "./knowledge.index.v1.contract";
