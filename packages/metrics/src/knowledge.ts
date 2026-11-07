@@ -63,6 +63,14 @@ export const PACKAGE_CALCULATOR_IDS = [
 	"work.convergence@1",
 	"github.stars@1",
 ] as const;
+/** `work.count@1` → `work.count`: the family every version of a calculator shares. */
+export function calculatorFamily(id: string): string {
+	return id.slice(0, id.lastIndexOf("@"));
+}
+/** Families the package owns at every version; node calculators use their own names. */
+export const RESERVED_CALCULATOR_FAMILIES: ReadonlySet<string> = new Set(
+	PACKAGE_CALCULATOR_IDS.map(calculatorFamily),
+);
 
 export function createGoalMetrics(deps: {
 	knowledgeSql: Sql;
@@ -73,10 +81,13 @@ export function createGoalMetrics(deps: {
 	log(event: object): void;
 	/**
 	 * Node-local calculators over sources only this node owns (its own tables).
-	 * They register after the package calculators, so a package id cannot be
-	 * shadowed. By injecting one, the node asserts its sources hold node-member
-	 * metadata or public data, the same `node-members` data scope as the package
-	 * calculators. The node owns their ids, budgets, evidenceRefs and versions.
+	 * They register after the package calculators. A node id may not use a
+	 * package family at any version (`reserved_calculator_family`). By injecting
+	 * one, the node asserts its sources hold node-member metadata or public data,
+	 * the same `node-members` data scope as the package calculators. The node
+	 * owns their ids, budgets, evidenceRefs and versions. The service enforces
+	 * `timeoutMs` and `maxSourceCalls`; `maxRows` and `maxResponseBytes` are
+	 * passed to sources, which must honour them.
 	 */
 	nodeCalculators?: readonly MetricCalculator[];
 }) {
@@ -174,6 +185,9 @@ export function createGoalMetrics(deps: {
 		// A definition can only name an id the spec schema accepts.
 		if (!MetricSpecSchema.shape.calculatorId.safeParse(calculator.id).success)
 			throw new MetricError("invalid_calculator_id", 422);
+		// Every version of a published family belongs to the package.
+		if (RESERVED_CALCULATOR_FAMILIES.has(calculatorFamily(calculator.id)))
+			throw new MetricError("reserved_calculator_family", 422);
 		registry.register(calculator);
 		nodeCalculatorIds.push(calculator.id);
 	}
