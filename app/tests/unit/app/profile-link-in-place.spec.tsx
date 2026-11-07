@@ -222,4 +222,35 @@ describe("ProfileView — GitHub linking finishes in place (task.5451)", () => {
     );
     expect(locationReplace).not.toHaveBeenCalled();
   });
+  it("says Checking, never Link, while linked accounts are still loading", async () => {
+    window.history.pushState(null, "", "/profile");
+    const me = deferred();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string) => {
+        if (input === "/api/v1/users/me") return me.promise;
+        if (input === "/api/auth/providers")
+          return Promise.resolve(json({ credentials: { id: "credentials" } }));
+        return Promise.resolve(json({ connected: false }));
+      })
+    );
+
+    render(<ProfileView />);
+
+    expect(await screen.findByText("Checking…")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Link" })).not.toBeInTheDocument();
+
+    await act(async () => {
+      me.resolve(
+        json({
+          ...EMPTY_PROFILE,
+          linkedProviders: [{ provider: "github", providerLogin: "octocat" }],
+        })
+      );
+    });
+
+    expect(await screen.findByText("octocat")).toBeInTheDocument();
+    expect(screen.queryByText("Checking…")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Link" })).not.toBeInTheDocument();
+  });
 });

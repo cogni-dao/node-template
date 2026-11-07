@@ -526,12 +526,29 @@ function ChatGptConnectFlow({
 
 /* ─── View ─────────────────────────────────────────────────────────── */
 
+/** Linked state is unknown: say so instead of offering a misleading "Link". */
+function AccountsUnknown({
+  state,
+}: {
+  state: "loading" | "error";
+}): ReactElement {
+  return (
+    <span className="text-muted-foreground text-sm">
+      {state === "error" ? "Couldn't load. Reload the page." : "Checking…"}
+    </span>
+  );
+}
+
 export function ProfileView(): ReactElement {
   const { data: session, update: updateSession } = useSession();
   const { openConnectModal } = useConnectModal();
   const searchParams = useSearchParams();
 
   const [profile, setProfile] = useState<ProfileData | null>(null);
+  // Linked accounts are unknown until /users/me answers; never render "Link" for them before then.
+  const [profileState, setProfileState] = useState<
+    "loading" | "ready" | "error"
+  >("loading");
   const [selectedColor, setSelectedColor] = useState("#6366f1");
   const [configuredProviders, setConfiguredProviders] = useState<Set<string>>(
     new Set()
@@ -568,12 +585,17 @@ export function ProfileView(): ReactElement {
   const refetchProfile = useCallback(async (): Promise<void> => {
     try {
       const res = await fetch("/api/v1/users/me");
-      if (!res.ok) return;
+      if (!res.ok) {
+        setProfileState((prev) => (prev === "ready" ? prev : "error"));
+        return;
+      }
       const data = (await res.json()) as ProfileData;
       setProfile(data);
       setSelectedColor(data.avatarColor ?? "#6366f1");
+      setProfileState("ready");
     } catch {
       // Profile fetch failed — page still renders with session data
+      setProfileState((prev) => (prev === "ready" ? prev : "error"));
     }
   }, []);
 
@@ -804,6 +826,8 @@ export function ProfileView(): ReactElement {
           >
             {feedback?.phase === "pending" ? (
               <LinkPending />
+            ) : !isLinked && !feedback && profileState !== "ready" ? (
+              <AccountsUnknown state={profileState} />
             ) : isLinked ? (
               <div className="flex items-center gap-2">
                 <ConnectedBadge login={login ?? "Connected"} />
@@ -849,6 +873,8 @@ export function ProfileView(): ReactElement {
           >
             {githubFeedback?.phase === "pending" ? (
               <LinkPending />
+            ) : !githubFeedback && profileState !== "ready" ? (
+              <AccountsUnknown state={profileState} />
             ) : (
               <Button
                 variant="outline"
