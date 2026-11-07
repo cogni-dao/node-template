@@ -49,6 +49,7 @@ export const GET = wrapRouteHandlerWithLogging<{
           { status: 404 }
         );
       }
+      const body = workItemsHistoryOperation.output.parse(history);
       logEvent(ctx.log, EVENT_NAMES.WORK_ITEMS_HISTORY_READ, {
         reqId: ctx.reqId,
         routeId: ctx.routeId,
@@ -58,7 +59,7 @@ export const GET = wrapRouteHandlerWithLogging<{
         versionCount: history.items.length,
         reasonCount: history.items.filter((v) => v.reason !== null).length,
       });
-      return NextResponse.json(workItemsHistoryOperation.output.parse(history));
+      return NextResponse.json(body);
     } catch (error) {
       logEvent(ctx.log, EVENT_NAMES.WORK_ITEMS_HISTORY_READ, {
         reqId: ctx.reqId,

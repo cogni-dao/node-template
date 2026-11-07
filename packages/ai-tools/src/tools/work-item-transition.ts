@@ -123,6 +123,16 @@ export const WorkItemTransitionInputSchema = z
       ),
   })
   .superRefine((input, ctx) => {
+    if (input.action === "patch" && input.reason !== undefined) {
+      // Same rule the store applies to a patch reason: one line, 1-512 chars (task.0052).
+      const n = input.reason.replace(/[\r\n]+/g, " ").trim().length;
+      if (n < 1 || n > 512)
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["reason"],
+          message: "reason must be 1-512 characters on one line",
+        });
+    }
     if (input.scores === undefined) return;
     if (input.action !== "patch")
       ctx.addIssue({

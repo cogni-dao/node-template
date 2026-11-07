@@ -52,12 +52,13 @@ export const GET = wrapRouteHandlerWithLogging<{
         return NextResponse.json({ error: "not found" }, { status: 404 });
       }
       const items = await port.history(id);
+      const body = knowledgeHistoryOperation.output.parse({ items });
       done(200, {
         outcome: "success",
         versionCount: items.length,
         reasonCount: items.filter((v) => v.reason !== null).length,
       });
-      return NextResponse.json(knowledgeHistoryOperation.output.parse({ items }));
+      return NextResponse.json(body);
     } catch (error) {
       done(503, { outcome: "error", errorCode: "history_unavailable" });
       ctx.log.warn(
