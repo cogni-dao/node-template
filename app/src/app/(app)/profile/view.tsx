@@ -599,12 +599,13 @@ export function ProfileView(): ReactElement {
     const hash = window.location.hash;
     if (!hash.startsWith("#attestation=")) return;
     attestationHandled.current = true;
-    const token = decodeURIComponent(hash.slice("#attestation=".length));
+    const encoded = hash.slice("#attestation=".length);
     window.history.replaceState(null, "", "/profile");
     setProviderFeedback("github", { phase: "pending" });
 
     void (async () => {
       try {
+        const token = decodeURIComponent(encoded);
         const res = await fetch("/api/v1/identity/bindings/import", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
