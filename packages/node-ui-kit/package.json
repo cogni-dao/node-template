@@ -19,6 +19,7 @@
   },
   "peerDependencies": {
     "@assistant-ui/react": ">=0.12",
+    "@cogni/knowledge-base-ui": "*",
     "@dnd-kit/core": ">=6",
     "@dnd-kit/modifiers": ">=7",
     "@dnd-kit/sortable": ">=7",
@@ -52,6 +53,7 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "react": "19.0.0",
-    "react-dom": "19.0.0"
+    "react-dom": "19.0.0",
+    "@cogni/knowledge-base-ui": "workspace:@cogni-dao/knowledge-base-ui@*"
   }
 }

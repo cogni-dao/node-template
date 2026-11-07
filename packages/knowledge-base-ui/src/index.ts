@@ -60,4 +60,47 @@ export {
   type WorkBoardItem,
   type WorkBoardProps,
 } from "./work-board.js";
+export {
+  WorkBoardView,
+  type WorkBoardViewProps,
+} from "./work-board-view.js";
+export {
+  DEFAULT_WORK_SORT,
+  WorkBoardColumnsPicker,
+  type WorkBoardColumnsPickerProps,
+  WorkBoardFilterBar,
+  type WorkBoardFilterBarProps,
+  WorkBoardToolbar,
+  type WorkBoardToolbarProps,
+} from "./work-board-toolbar.js";
+export {
+  ACTIVE_WORK_STATUSES,
+  formatWorkProject,
+  formatWorkStatus,
+  WORK_STATUSES,
+  WORK_TYPES,
+  type WorkFacet,
+  WorkFacetControls,
+  type WorkFacetControlsProps,
+  WorkRankControls,
+} from "./work-board-controls.js";
+export {
+  WorkColumnHeader,
+  type WorkColumnHeaderProps,
+  WorkItemRankHeader,
+  type WorkTableMeta,
+  workHeaderDisabled,
+} from "./work-column-header.js";
+export {
+  createWorkItemColumns,
+  type WorkItemColumnsOptions,
+  type WorkItemRow,
+  workItemGlobalFilterFn,
+} from "./work-item-columns.js";
+export { HeaderFilter, type HeaderFilterProps } from "./header-filter.js";
+export {
+  type NumberRange,
+  NumberRangeFilter,
+  type NumberRangeFilterProps,
+} from "./number-range-filter.js";
 export { StatusIcon, StatusPill, TypeIcon } from "./work-item-icons.js";

@@ -828,12 +828,18 @@ importers:
       '@dnd-kit/utilities':
         specifier: ^3.2.2
         version: 3.2.2(react@19.0.0)
+      '@tanstack/react-table':
+        specifier: ^8.21.3
+        version: 8.21.3(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
       '@testing-library/jest-dom':
         specifier: ^6.9.1
         version: 6.9.1
       '@testing-library/react':
         specifier: ^16.3.0
         version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.16))(@types/react@19.2.16)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@testing-library/user-event':
+        specifier: ^14.6.1
+        version: 14.6.1(@testing-library/dom@10.4.1)
       '@types/react':
         specifier: ^19.0.0
         version: 19.2.16
@@ -1209,6 +1215,9 @@ importers:
         specifier: '*'
         version: 1.1.2(@types/react-dom@19.2.3(@types/react@19.2.16))(@types/react@19.2.16)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
     devDependencies:
+      '@cogni/knowledge-base-ui':
+        specifier: workspace:@cogni-dao/knowledge-base-ui@*
+        version: link:../knowledge-base-ui
       '@types/react':
         specifier: ^19.0.0
         version: 19.2.16
