@@ -287,9 +287,6 @@ export function createInProcGraphRunner<TTool = unknown>(
       sourceContext: opts.sourceContext,
     }),
     ...(opts.program !== undefined && { program: opts.program }),
-    ...(opts.requestIntent !== undefined && {
-      requestIntent: opts.requestIntent,
-    }),
     llm,
     tools,
     ...(responseFormat !== undefined && { responseFormat }),

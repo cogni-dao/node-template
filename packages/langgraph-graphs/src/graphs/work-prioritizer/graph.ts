@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /** Pure scoring-program configuration of the shared native harness.
- * Host intent admits bounded scores patches; program-owned receipts preserve the evidence guard.
+ * The scoring program binds bounded scores patches in every channel; program-owned receipts preserve the evidence guard.
  */
 import { WORK_ITEM_TRANSITION_NAME } from "@cogni/ai-tools";
 import { cogniProfile, createCogniProgram } from "../cogni/graph";
@@ -20,7 +20,7 @@ import {
 import { RunReceipts } from "./receipts";
 import { projectMissionCycleReport } from "./report";
 import { createScoresGuard } from "./score-guard";
-import { COGNI_READ_TOOL_IDS } from "./tools";
+import { COGNI_DECIDE_TOOL_IDS, COGNI_READ_TOOL_IDS } from "./tools";
 export {
   cycleScores,
   cycleTelemetry,
@@ -28,11 +28,12 @@ export {
   type MissionLoopTelemetry,
 } from "./report";
 export const WORK_PRIORITIZER_GRAPH_NAME = "work-prioritizer" as const;
+const SCORING_EVIDENCE_TOOL_IDS = new Set<string>(COGNI_DECIDE_TOOL_IDS);
 
 export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
   const receipts = opts.programState as RunReceipts | undefined;
-  // Behavior mode is the program: READ (chat) answers and files nothing; the scheduled programs
-  // DECIDE. The read topology has no write tool bound at all.
+  // The program, not the input channel, owns capability: scoring programs bind the guarded
+  // writer for chat and scheduled runs alike; cogni-chat has no write tool bound at all.
   const readAuthority = new Set<string>(opts.readToolIds ?? COGNI_READ_TOOL_IDS);
   const readToolIds = opts.tools
     .map((tool) => tool.name)
@@ -42,8 +43,7 @@ export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
         readAuthority.has(name),
     );
   const deciding =
-    (opts.program === "cogni-decide" || opts.program === "work-review") &&
-    opts.requestIntent === "decide";
+    opts.program === "cogni-decide" || opts.program === "work-review";
   const writer = opts.tools.find(
     (tool) => tool.name === WORK_ITEM_TRANSITION_NAME,
   );
@@ -123,7 +123,9 @@ export function createPrioritizerRunHooks(context: {
     ) => {
       if (result.ok)
         receipts.observe(name, args, result.value);
-      else receipts.denied = true;
+      // Only a failed evidence read or write poisons scoring; an unrelated tool (repo, schedule)
+      // failing in a broader program must not silently disable the guard for the rest of the run.
+      else if (SCORING_EVIDENCE_TOOL_IDS.has(name)) receipts.denied = true;
       if (
         !context.program ||
         context.program === "work-review" ||
