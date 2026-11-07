@@ -253,4 +253,28 @@ describe("ProfileView — GitHub linking finishes in place (task.5451)", () => {
     expect(screen.queryByText("Checking…")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Link" })).not.toBeInTheDocument();
   });
+  it("renders server-read linked accounts on first paint without fetching /users/me", async () => {
+    window.history.pushState(null, "", "/profile");
+    const fetchMock = vi.fn((input: string) =>
+      Promise.resolve(json(input === "/api/auth/providers" ? {} : { connected: false }))
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <ProfileView
+        initialProfile={{
+          ...EMPTY_PROFILE,
+          linkedProviders: [{ provider: "github", providerLogin: "octocat" }],
+        }}
+        initialProviders={[]}
+      />
+    );
+
+    expect(screen.getByText("octocat")).toBeInTheDocument();
+    expect(screen.queryByText("Checking…")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Link" })).not.toBeInTheDocument();
+    await act(async () => {});
+    expect(fetchMock).not.toHaveBeenCalledWith("/api/v1/users/me");
+    expect(fetchMock).not.toHaveBeenCalledWith("/api/auth/providers");
+  });
 });

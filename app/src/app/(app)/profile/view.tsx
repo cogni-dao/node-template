@@ -539,21 +539,33 @@ function AccountsUnknown({
   );
 }
 
-export function ProfileView(): ReactElement {
+export function ProfileView({
+  initialProfile = null,
+  initialProviders = null,
+}: {
+  /** Read on the server for this request, so linked accounts render correct on first paint. */
+  initialProfile?: ProfileData | null;
+  /** Configured OAuth provider ids (excluding SIWE credentials), also server-read. */
+  initialProviders?: readonly string[] | null;
+} = {}): ReactElement {
   const { data: session, update: updateSession } = useSession();
   const { openConnectModal } = useConnectModal();
   const searchParams = useSearchParams();
 
-  const [profile, setProfile] = useState<ProfileData | null>(null);
+  const [profile, setProfile] = useState<ProfileData | null>(initialProfile);
   // Linked accounts are unknown until /users/me answers; never render "Link" for them before then.
   const [profileState, setProfileState] = useState<
     "loading" | "ready" | "error"
-  >("loading");
-  const [selectedColor, setSelectedColor] = useState("#6366f1");
-  const [configuredProviders, setConfiguredProviders] = useState<Set<string>>(
-    new Set()
+  >(initialProfile ? "ready" : "loading");
+  const [selectedColor, setSelectedColor] = useState(
+    initialProfile?.avatarColor ?? "#6366f1"
   );
-  const [providersLoaded, setProvidersLoaded] = useState(false);
+  const [configuredProviders, setConfiguredProviders] = useState<Set<string>>(
+    () => new Set(initialProviders ?? [])
+  );
+  const [providersLoaded, setProvidersLoaded] = useState(
+    initialProviders !== null
+  );
   const [chatGptConnected, setChatGptConnected] = useState(false);
   const [chatGptLoading, setChatGptLoading] = useState(false);
   const [ollamaConnected, setOllamaConnected] = useState(false);
@@ -658,20 +670,23 @@ export function ProfileView(): ReactElement {
 
   // Fetch profile data + configured providers in parallel
   useEffect(() => {
-    void refetchProfile();
+    // Server-read data is authoritative for first paint; fetch only what it lacked.
+    if (!initialProfile) void refetchProfile();
 
-    fetch("/api/auth/providers")
-      .then((res) => res.json())
-      .then((providers: Record<string, { id: string }>) => {
-        const ids = new Set(
-          Object.keys(providers).filter((id) => id !== "credentials")
-        );
-        setConfiguredProviders(ids);
-        setProvidersLoaded(true);
-      })
-      .catch(() => {
-        // Provider fetch failed — show nothing rather than broken links
-      });
+    if (initialProviders === null) {
+      fetch("/api/auth/providers")
+        .then((res) => res.json())
+        .then((providers: Record<string, { id: string }>) => {
+          const ids = new Set(
+            Object.keys(providers).filter((id) => id !== "credentials")
+          );
+          setConfiguredProviders(ids);
+          setProvidersLoaded(true);
+        })
+        .catch(() => {
+          // Provider fetch failed — show nothing rather than broken links
+        });
+    }
 
     // Check BYO-AI ChatGPT connection status
     fetch("/api/v1/auth/openai-codex/status")
@@ -688,7 +703,7 @@ export function ProfileView(): ReactElement {
         if (data) setOllamaConnected(data.connected);
       })
       .catch(() => {});
-  }, [refetchProfile]);
+  }, [refetchProfile, initialProfile, initialProviders]);
 
   const walletAddress = session?.user?.walletAddress ?? null;
   const displayName =
