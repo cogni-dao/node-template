@@ -10,14 +10,20 @@
  *        to URL params; board controls, columns and cards come from the package.
  * Invariants:
  *   - BOARD_FROM_PACKAGE — board mode renders only `WorkBoardToolbar` and
- *     `WorkBoardView` from `@cogni/knowledge-base-ui` (task.0044).
+ *     `WorkBoardView` from `@cogni/knowledge-base-ui` (task.0044), fed by the
+ *     package's `useWorkBoard` (task.0055).
+ *   - BOUNDED_BOARD_READS — the page never downloads the backlog. Board mode
+ *     makes one `/api/v1/work/board` request (≤20 summaries per visible status
+ *     column) and one `/api/v1/work/summaries` request per column "Load more";
+ *     table mode requests one cursor page. No client code walks cursors, and
+ *     board mode ignores `pageSize` and `cursor` (task.0055).
  *   - HEADER_OWNS_SORT_AND_FILTER — sort + per-column facet filter live in
  *     the package column headers (see `_components/columns.tsx`).
  *   - SINGLE_COLUMNS_TOGGLE — table visibility lives in one toolbar button
  *     (`DataGridColumnVisibility`), not on every column dropdown.
  *   - URL_DRIVEN_STATE — filters / sort / search persist in URL params.
  *   - CONTRACTS_ARE_TRUTH — types derived from `WorkItemSummary`.
- * Side-effects: IO (fetches summary pages and full item detail)
+ * Side-effects: IO (fetches the board, summary pages and full item detail)
  * Links: [WorkPage](./page.tsx), [fetchWorkItems](./_api/fetchWorkItems.ts)
  * @public
  */
@@ -26,6 +32,7 @@
 
 import {
   ACTIVE_WORK_STATUSES,
+  useWorkBoard,
   WORK_STATUSES,
   WorkBoardToolbar,
   WorkBoardView,
@@ -45,6 +52,10 @@ import {
   DataGridContainer,
 } from "@cogni/node-ui-kit/reui/data-grid/data-grid";
 import { DataGridColumnVisibility } from "@cogni/node-ui-kit/reui/data-grid/data-grid-column-visibility";
+import {
+  parseWorkSummarySearchParams,
+  type WorkSummaryQuery,
+} from "@cogni/work-items";
 import { useQuery } from "@tanstack/react-query";
 import {
   type ColumnFiltersState,
@@ -61,7 +72,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/startup";
 
 import { type WorkIntent, useWorkNavigation } from "./WorkNavigationBoundary";
-import { fetchWorkItem, fetchWorkItems } from "./_api/fetchWorkItems";
+import {
+  fetchWorkBoard,
+  fetchWorkItem,
+  fetchWorkItems,
+} from "./_api/fetchWorkItems";
 import { columns } from "./_components/columns";
 import { WorkDetailSheet } from "./_components/WorkDetailSheet";
 import { WorkGoalLink } from "./_components/WorkKanban";
@@ -79,6 +94,7 @@ import {
 const ALL_STATUSES = WORK_STATUSES;
 const ACTIVE_STATUSES = ACTIVE_WORK_STATUSES;
 const EMPTY_ITEMS: WorkItemSummary[] = [];
+const EMPTY_QUERY: WorkSummaryQuery = {};
 const HISTORY_STORAGE_KEY = "work-page-history";
 
 function readFilters(searchParams: URLSearchParams): ColumnFiltersState {
@@ -218,12 +234,34 @@ export function WorkDashboardView({
     p.delete("cursor");
     return `work-page-history:${p}`;
   }, [listParams]);
-  const { data, isLoading, error } = useQuery({
+  const tableQuery = useQuery({
     queryKey: ["work-items", listParams.toString()],
     queryFn: ({ signal }) => fetchWorkItems(listParams, signal),
+    enabled: !boardView,
     staleTime: 30_000,
   });
-  const items = data?.items ?? EMPTY_ITEMS;
+  const data = tableQuery.data;
+  // Board reads share the table's filters and sort, never its page window.
+  const boardQuery = useMemo(() => {
+    const params = new URLSearchParams(listParams);
+    params.delete("cursor");
+    params.delete("limit");
+    const parsed = parseWorkSummarySearchParams(params);
+    return parsed.ok ? { ok: true as const, query: parsed.query } : { ok: false as const };
+  }, [listParams]);
+  const board = useWorkBoard({
+    query: boardQuery.ok ? boardQuery.query : EMPTY_QUERY,
+    statuses: boardView && boardQuery.ok ? visibleStatuses : [],
+    fetchBoard: fetchWorkBoard,
+    fetchPage: fetchWorkItems,
+  });
+  const isLoading = boardView ? board.isLoading : tableQuery.isLoading;
+  const error = boardView
+    ? (board.error ?? (boardQuery.ok ? null : new Error("invalid work query")))
+    : tableQuery.error;
+  const items = boardView
+    ? (board.items as WorkItemSummary[])
+    : (data?.items ?? EMPTY_ITEMS);
   const dispatchNavigation = useCallback(
     (intent: WorkIntent, stack?: string[]) => {
       const owner = navigation.current;
@@ -626,13 +664,17 @@ export function WorkDashboardView({
           Failed to load work items.
         </p>
       )}
+      {boardView && board.pageError !== undefined && (
+        <p className="text-destructive text-sm">Failed to load more items.</p>
+      )}
 
       {boardView ? (
         <WorkBoardView
           table={table}
-          visibleStatuses={visibleStatuses}
+          columns={board.columns}
           isLoading={isLoading}
           onOpenItem={openItem}
+          onLoadMore={board.loadMore}
           renderGoalLink={WorkGoalLink}
         />
       ) : (
@@ -660,63 +702,69 @@ export function WorkDashboardView({
         </DataGrid>
       )}
       <div className="flex flex-wrap items-center justify-between gap-3 pt-4 text-sm">
-        <span>
-          {items.length} items on this page
-          {boardView
-            ? ` · ${items.filter((item) => visibleStatuses.includes(item.status)).length} visible cards`
-            : ""}
-        </span>
-        <div className="flex flex-wrap gap-2">
-          <Select
-            value={String(Number(desired.params.get("pageSize")) || 10)}
-            onValueChange={(value) => {
-              editIntent((intent) => {
-                intent.params.set("pageSize", value);
-                intent.params.delete("cursor");
-                return { ...intent, resetHistory: true };
-              });
-            }}
-          >
-            <SelectTrigger aria-label="Items per page" className="w-20">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {[10, 25, 50, 100].map((n) => (
-                <SelectItem key={n} value={String(n)}>
-                  {n}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => changePage("restart")}
-            disabled={navigationLocked || isNavigating || !cursor}
-          >
-            Restart
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => changePage("previous")}
-            disabled={navigationLocked || isNavigating || !cursor || history.length === 0}
-          >
-            Previous
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => changePage("next")}
-            disabled={
-              navigationLocked || isNavigating ||
-              !(data?.pageInfo?.hasMore ?? Boolean(data?.nextCursor)) ||
-              !(data?.pageInfo?.endCursor ?? data?.nextCursor)
-            }
-          >
-            Next
-          </Button>
-        </div>
+        {boardView ? (
+          <span>
+            {items.length} cards loaded
+            {board.columns.some((column) => column.hasMore)
+              ? " · more in columns marked +"
+              : ""}
+          </span>
+        ) : (
+          <>
+            <span>{items.length} items on this page</span>
+            <div className="flex flex-wrap gap-2">
+              <Select
+                value={String(Number(desired.params.get("pageSize")) || 10)}
+                onValueChange={(value) => {
+                  editIntent((intent) => {
+                    intent.params.set("pageSize", value);
+                    intent.params.delete("cursor");
+                    return { ...intent, resetHistory: true };
+                  });
+                }}
+              >
+                <SelectTrigger aria-label="Items per page" className="w-20">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {[10, 25, 50, 100].map((n) => (
+                    <SelectItem key={n} value={String(n)}>
+                      {n}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => changePage("restart")}
+                disabled={navigationLocked || isNavigating || !cursor}
+              >
+                Restart
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => changePage("previous")}
+                disabled={navigationLocked || isNavigating || !cursor || history.length === 0}
+              >
+                Previous
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => changePage("next")}
+                disabled={
+                  navigationLocked || isNavigating ||
+                  !(data?.pageInfo?.hasMore ?? Boolean(data?.nextCursor)) ||
+                  !(data?.pageInfo?.endCursor ?? data?.nextCursor)
+                }
+              >
+                Next
+              </Button>
+            </div>
+          </>
+        )}
       </div>
 
       <WorkDetailSheet

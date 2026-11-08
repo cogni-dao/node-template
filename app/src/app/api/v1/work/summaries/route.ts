@@ -5,17 +5,19 @@
  * Module: `@app/api/v1/work/summaries/route`
  * Purpose: HTTP endpoint for listing projected Work summaries.
  * Scope: Auth-protected GET using one authoritative backend.
- * Invariants: VALIDATE_IO, CONTRACTS_ARE_TRUTH, AUTH_VIA_GETSESSIONUSER, NODE_STORE_IS_LOCAL.
+ * Invariants: VALIDATE_IO, CONTRACTS_ARE_TRUTH, AUTH_VIA_GETSESSIONUSER, NODE_STORE_IS_LOCAL, BOUNDED_PAGE (limit defaults to 25, max 100, parsed by the published `@cogni/work-items` codec the browser also encodes with; task.0055).
  * Evaluation: preserves Work list filters, cursor and error semantics.
  * Side-effects: IO (HTTP response, filesystem read via port, Doltgres read/write)
  * Links: contracts/work.items.{list,create}.v1.contract
  * @public
  */
 
+import { workItemSummariesListOperation } from "@cogni/node-contracts";
 import {
-  workItemSummariesListOperation,
-} from "@cogni/node-contracts";
-import { normalizeWorkItemOrder, type WorkItemOrder } from "@cogni/work-items";
+  normalizeWorkItemOrder,
+  parseWorkSummarySearchParams,
+  type WorkItemOrder,
+} from "@cogni/work-items";
 import { NextResponse } from "next/server";
 
 import {
@@ -37,8 +39,10 @@ export const runtime = "nodejs";
 /**
  * GET /api/v1/work/summaries — List work items with optional query filters.
  *
- * Query params: types, statuses (comma-separated), text, projectId, node (single
- * or comma-separated), limit, cursor, sortBy, sortDirection. Configured Dolt is
+ * Query params (decoded by `parseWorkSummarySearchParams`): types, statuses
+ * (comma-separated), text, projectId, projectIds, node (single or
+ * comma-separated), labels, labelPrefix, scored, actor, rankMin, rankMax, limit
+ * (default 25, max 100), cursor, sortBy, sortDirection. Configured Dolt is
  * authoritative; genuinely unconfigured nodes use Markdown alone.
  */
 export const GET = wrapRouteHandlerWithLogging(
@@ -53,72 +57,18 @@ export const GET = wrapRouteHandlerWithLogging(
       | (typeof WORK_ITEMS_LIST_ERROR_CODES)[keyof typeof WORK_ITEMS_LIST_ERROR_CODES]
       | undefined = WORK_ITEMS_LIST_ERROR_CODES.INTERNAL_ERROR;
     try {
-      const url = new URL(request.url);
-
-      const typesParam = url.searchParams.get("types");
-      const statusesParam = url.searchParams.get("statuses");
-      const textParam = url.searchParams.get("text");
-      const actorParam = url.searchParams.get("actor");
-      const projectIdParam = url.searchParams.get("projectId");
-      const nodeParam = url.searchParams.get("node");
-      const labelsParam = url.searchParams.get("labels");
-      const labelPrefixParam = url.searchParams.get("labelPrefix");
-      const scoredParam = url.searchParams.get("scored");
-      const limitParam = url.searchParams.get("limit");
-      const cursorParam = url.searchParams.get("cursor");
-
-      const parsed = workItemSummariesListOperation.input.safeParse({
-        sortBy: url.searchParams.get("sortBy") ?? undefined,
-        sortDirection: url.searchParams.get("sortDirection") ?? undefined,
-        types: typesParam ? typesParam.split(",") : undefined,
-        statuses: statusesParam ? statusesParam.split(",") : undefined,
-        text: textParam ?? undefined,
-        actor: actorParam ?? undefined,
-        projectId: projectIdParam ?? undefined,
-        projectIds: url.searchParams.get("projectIds")?.split(","),
-        rankMin: url.searchParams.has("rankMin")
-          ? Number(url.searchParams.get("rankMin"))
-          : undefined,
-        rankMax: url.searchParams.has("rankMax")
-          ? Number(url.searchParams.get("rankMax"))
-          : undefined,
-        node: nodeParam
-          ? nodeParam.includes(",")
-            ? nodeParam.split(",")
-            : nodeParam
-          : undefined,
-        labels: labelsParam ? labelsParam.split(",") : undefined,
-        labelPrefix: labelPrefixParam ?? undefined,
-        scored:
-          scoredParam === null
-            ? undefined
-            : scoredParam === "true"
-              ? true
-              : scoredParam === "false"
-                ? false
-                : scoredParam,
-        limit: limitParam ? Number(limitParam) : undefined,
-        cursor: cursorParam ?? undefined,
-      });
-
-      if (!parsed.success) {
+      const parsed = parseWorkSummarySearchParams(
+        new URL(request.url).searchParams,
+      );
+      if (!parsed.ok) {
         status = 400;
         errorCode = WORK_ITEMS_LIST_ERROR_CODES.INVALID_INPUT;
         return NextResponse.json(
-          { error: "invalid input", issues: parsed.error.issues },
+          { error: "invalid input", issues: parsed.issues },
           { status },
         );
       }
-      const input = parsed.data;
-      if (
-        input.rankMin !== undefined &&
-        input.rankMax !== undefined &&
-        input.rankMin > input.rankMax
-      ) {
-        status = 400;
-        errorCode = WORK_ITEMS_LIST_ERROR_CODES.INVALID_INPUT;
-        return NextResponse.json({ error: "invalid rank range" }, { status });
-      }
+      const input = parsed.query;
       order = normalizeWorkItemOrder({
         ...(input.sortBy !== undefined && { sortBy: input.sortBy }),
         ...(input.sortDirection !== undefined && {

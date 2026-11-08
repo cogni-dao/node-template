@@ -18,6 +18,7 @@ import {
   WORK_ITEM_SORT_FIELDS,
   WorkItemDtoSchema,
   WorkItemSummarySchema,
+  WorkSummaryPageInfoSchema,
 } from "@cogni/work-items";
 import { z } from "zod";
 
@@ -81,7 +82,11 @@ export type WorkItemsListOutput = z.infer<typeof workItemsListOperation.output>;
 export const workItemSummariesListOperation = {
   id: "work.summaries.list.v1",
   input: workItemsListOperation.input,
-  output: workItemsListOperation.output.extend({ items: z.array(WorkItemSummarySchema) }),
+  /** `pageInfo` is always present: every summaries read is one bounded keyset page (task.0055). */
+  output: workItemsListOperation.output.extend({
+    items: z.array(WorkItemSummarySchema),
+    pageInfo: WorkSummaryPageInfoSchema,
+  }),
 } as const;
 export type WorkItemSummary = z.infer<typeof WorkItemSummarySchema>;
 export type WorkItemSummariesListOutput = z.infer<typeof workItemSummariesListOperation.output>;

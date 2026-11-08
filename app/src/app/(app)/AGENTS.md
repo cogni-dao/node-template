@@ -50,6 +50,7 @@ pnpm build   # build for production
 - Auth route coverage lives in `proxy.ts`. Add new protected top-level routes there before linking them in the shell.
 - Unauthenticated users are redirected to `/` before the app shell renders. No auto sign-out — sign-out is an explicit user action.
 - Sidebar navigation links stay within `(app)` routes. The sidebar logo links to `/chat`, not `/`.
+- BOUNDED_BOARD_READS (task.0055): `/work` and `/dashboard` never download the backlog. The `/work` board makes one `/api/v1/work/board` request (≤20 summaries per visible status column) plus one `/api/v1/work/summaries` request per column "Load more", through the package `useWorkBoard`; the table requests one cursor page; `/dashboard` requests at most 5 active summaries. No client code walks cursors.
 
 ## Dependencies
 
