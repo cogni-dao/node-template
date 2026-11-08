@@ -11,6 +11,24 @@ import {
 } from "../contracts.js";
 import type { Knowledge } from "./schemas.js";
 
+/** The continuation cursor is malformed or belongs to another query; routes map to 400. */
+export class KnowledgeBrowseCursorError extends Error {
+  readonly code = "KNOWLEDGE_BROWSE_INVALID_CURSOR" as const;
+  constructor(message = "Invalid browse cursor") {
+    super(message);
+    this.name = "KnowledgeBrowseCursorError";
+  }
+}
+
+/** The browse query fails schema validation; routes map to 400. */
+export class KnowledgeBrowseQueryError extends Error {
+  readonly code = "KNOWLEDGE_BROWSE_INVALID_QUERY" as const;
+  constructor(message = "Invalid browse query") {
+    super(message);
+    this.name = "KnowledgeBrowseQueryError";
+  }
+}
+
 const cursorSchema = z
   .object({
     query: z.string(),
@@ -22,7 +40,9 @@ export function browseQuery(
   input: KnowledgeBrowseQuery,
   operation: "browse" | "overview" = "browse"
 ) {
-  const { cursor, ...query } = KnowledgeBrowseQuerySchema.parse(input);
+  const parsedQuery = KnowledgeBrowseQuerySchema.safeParse(input);
+  if (!parsedQuery.success) throw new KnowledgeBrowseQueryError();
+  const { cursor, ...query } = parsedQuery.data;
   const signature = createHash("sha256")
     .update(JSON.stringify({ operation, ...query }))
     .digest("hex");
@@ -31,15 +51,15 @@ export function browseQuery(
     try {
       position = cursorSchema.parse(JSON.parse(decodeURIComponent(cursor)));
     } catch {
-      throw new Error("Invalid browse cursor");
+      throw new KnowledgeBrowseCursorError("Invalid browse cursor");
     }
     if (position.query !== signature)
-      throw new Error("Browse cursor does not match query");
+      throw new KnowledgeBrowseCursorError("Browse cursor does not match query");
     if (
       (query.sort === "confidencePct") !==
       (typeof position.value === "number")
     )
-      throw new Error("Invalid browse cursor");
+      throw new KnowledgeBrowseCursorError("Invalid browse cursor");
   }
   if (
     position &&
@@ -49,13 +69,13 @@ export function browseQuery(
       !z.iso.datetime({ offset: true, local: true }).safeParse(position.value)
         .success)
   )
-    throw new Error("Invalid browse cursor");
+    throw new KnowledgeBrowseCursorError("Invalid browse cursor");
   if (
     position &&
     query.sort === "confidencePct" &&
     (Number(position.value) < -1 || Number(position.value) > 100)
   )
-    throw new Error("Invalid browse cursor");
+    throw new KnowledgeBrowseCursorError("Invalid browse cursor");
 
   return { query, signature, position };
 }

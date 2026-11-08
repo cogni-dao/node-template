@@ -139,16 +139,30 @@ export async function loadKnowledgeGraphCached(
   )();
 }
 
+/**
+ * SSR read deadline. Shorter than the adapter's lane deadline so a slow store
+ * falls back to the client fetch (via `safe()`) instead of blocking render.
+ */
+export const KNOWLEDGE_SSR_READ_TIMEOUT_MS = 3_000;
+
 /** Bounded initial reads: one observed HEAD plus metadata; no registry, bodies or citations. */
 export async function loadKnowledgeBrowse(
   port: KnowledgeStorePort,
   query: KnowledgeBrowseQuery = {}
 ) {
-  return KnowledgeBrowsePageSchema.parse(await port.browseKnowledge(query));
+  return KnowledgeBrowsePageSchema.parse(
+    await port.browseKnowledge(query, {
+      signal: AbortSignal.timeout(KNOWLEDGE_SSR_READ_TIMEOUT_MS),
+    })
+  );
 }
 export async function loadKnowledgeOverview(
   port: KnowledgeStorePort,
   query: KnowledgeOverviewQuery = {}
 ) {
-  return KnowledgeBrowsePageSchema.parse(await port.overviewKnowledge(query));
+  return KnowledgeBrowsePageSchema.parse(
+    await port.overviewKnowledge(query, {
+      signal: AbortSignal.timeout(KNOWLEDGE_SSR_READ_TIMEOUT_MS),
+    })
+  );
 }

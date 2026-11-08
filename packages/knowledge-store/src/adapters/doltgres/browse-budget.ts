@@ -3,8 +3,9 @@
 /** Bounded read admission, following Work's native-settlement accounting.
  * Never reserve, cancel, close or replace a borrowed pool. postgres.js cancel()
  * opens an unbounded auxiliary connection; caller abort is not native settlement.
- * Retain permits after deadlines/aborts until a server result arrives. Unknown
- * transport outcomes retain capacity permanently, rather than multiply work.
+ * Retain permits after deadlines/aborts until a server result arrives. Definitive
+ * closed-connection errors release at once; unknown transport outcomes retain
+ * capacity for a bounded quarantine (4x deadline), so a blip cannot 503 forever.
  */
 import type { Sql } from "postgres";
 import { KnowledgeBusyError } from "../../port/knowledge-store.port.js";
@@ -17,6 +18,29 @@ const unavailable = () =>
   new KnowledgeBusyError(
     "Knowledge read deadline or capacity unavailable; retry shortly"
   );
+
+/** Unknown transport outcomes retain their permit for this many deadlines, then release. */
+const QUARANTINE_DEADLINES = 4;
+const CLOSED_CODES = new Set([
+  "CONNECTION_CLOSED",
+  "CONNECTION_DESTROYED",
+  "CONNECTION_ENDED",
+  "ECONNRESET",
+  "ECONNREFUSED",
+]);
+function isSettled(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  if (error.name === "PostgresError") return true;
+  const code = (error as { code?: unknown }).code;
+  return (
+    (typeof code === "string" && CLOSED_CODES.has(code)) ||
+    /socket.*closed|connection.*closed/i.test(error.message)
+  );
+}
+function release(lane: Lane) {
+  lane.active--;
+  lane.waiting.shift()?.start();
+}
 
 export async function readBrowseWithinBudget<T>(
   pool: Sql,
@@ -78,17 +102,21 @@ export async function readBrowseWithinBudget<T>(
         try {
           return await pool.unsafe(text);
         } catch (error) {
-          // postgres.js PostgresError acknowledges a server error. Transport errors do not prove
-          // the backend stopped; quarantine this permit, as the Work lane does.
-          if (!(error instanceof Error && error.name === "PostgresError"))
-            uncertain = true;
+          // PostgresError acknowledges a server error; a definitive closed-connection
+          // error proves this client connection is gone. Anything else leaves the backend
+          // outcome unknown: quarantine the permit, but only for a bounded time.
+          if (!isSettled(error)) uncertain = true;
           throw unavailable();
         }
       });
     } finally {
-      if (!uncertain) {
-        state.active--;
-        state.waiting.shift()?.start();
+      if (!uncertain) release(state);
+      else {
+        const quarantine = setTimeout(
+          () => release(state),
+          timeoutMs * QUARANTINE_DEADLINES
+        );
+        quarantine.unref?.();
       }
     }
   })();

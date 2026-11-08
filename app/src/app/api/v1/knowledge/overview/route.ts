@@ -3,6 +3,10 @@
 
 /** Authenticated bounded graph overview; no bodies or citation read. */
 import {
+  KnowledgeBrowseCursorError,
+  KnowledgeBrowseQueryError
+} from "@cogni/knowledge-store";
+import {
   KnowledgeOverviewPageSchema,
   KnowledgeOverviewQuerySchema
 } from "@cogni/node-contracts";
@@ -87,14 +91,15 @@ export const GET = wrapRouteHandlerWithLogging(
           { status, headers: { "Retry-After": "1" } }
         );
       }
-      if (
-        error instanceof Error &&
-        (error.message === "Invalid browse cursor" ||
-          error.message === "Browse cursor does not match query")
-      ) {
+      if (error instanceof KnowledgeBrowseCursorError) {
         status = 400;
         errorCode = KNOWLEDGE_READ_ERROR_CODES.INVALID_CURSOR;
         return NextResponse.json({ error: error.message }, { status });
+      }
+      if (error instanceof KnowledgeBrowseQueryError) {
+        status = 400;
+        errorCode = KNOWLEDGE_READ_ERROR_CODES.INVALID_QUERY;
+        return NextResponse.json({ error: "invalid query" }, { status });
       }
       status = 500;
       errorCode = KNOWLEDGE_READ_ERROR_CODES.INTERNAL_ERROR;

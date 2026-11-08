@@ -1,5 +1,9 @@
 import { expect, it, vi } from "vitest";
 import { FakeKnowledgeStoreAdapter } from "../src/adapters/fake/index.js";
+import {
+  KnowledgeBrowseCursorError,
+  KnowledgeBrowseQueryError,
+} from "../src/domain/browse.js";
 
 it("continues through empty search windows to a literal body match beyond 500", async () => {
   const store = new FakeKnowledgeStoreAdapter();
@@ -197,6 +201,18 @@ it("matches an independent fixed-corpus oracle for every exposed order, nulls an
   await expect(store.browseKnowledge({ cursor: "%invalid" })).rejects.toThrow(
     "Invalid browse cursor"
   );
+  await expect(
+    store.browseKnowledge({ cursor: "%invalid" })
+  ).rejects.toBeInstanceOf(KnowledgeBrowseCursorError);
+  await expect(
+    store.browseKnowledge({
+      cursor: required(first.nextCursor),
+      sort: "id",
+    })
+  ).rejects.toBeInstanceOf(KnowledgeBrowseCursorError);
+  await expect(
+    store.browseKnowledge({ sort: "nope" as never })
+  ).rejects.toBeInstanceOf(KnowledgeBrowseQueryError);
 });
 
 it("native lookahead is not consumed and search reads exactly one bounded body window", async () => {
@@ -489,21 +505,23 @@ it("bounds native work after timeout/abort across adapters, preserves unrelated 
   }
 });
 
-it("retains dispatched abort and unknown transport accounting, including stalled revision lookup", async () => {
+it("quarantines unknown transport outcomes for a bounded time, then recovers", async () => {
   vi.useFakeTimers();
   try {
     const { DoltgresKnowledgeStoreAdapter } = await import(
       "../src/adapters/doltgres/index.js"
     );
     let rejectNative: (error: Error) => void = () => undefined;
+    let healthy = false;
     const sql = {
       options: { max: 2 },
-      unsafe: vi.fn(
-        () =>
-          new Promise<never>((_, reject) => {
-            rejectNative = reject;
-          })
-      ),
+      unsafe: vi.fn(async (text: string) => {
+        if (healthy)
+          return text.includes("dolt_hashof") ? [{ hash: "head-ok" }] : [];
+        return new Promise<never>((_, reject) => {
+          rejectNative = reject;
+        });
+      }),
     };
     const store = new DoltgresKnowledgeStoreAdapter({
       sql: sql as never,
@@ -528,8 +546,44 @@ it("retains dispatched abort and unknown transport accounting, including stalled
     await vi.advanceTimersByTimeAsync(25);
     await deadline;
     expect(sql.unsafe).toHaveBeenCalledTimes(1);
+    // Quarantine is 4x the 25ms deadline; 25ms already elapsed in the wait above.
+    healthy = true;
+    await vi.advanceTimersByTimeAsync(75);
+    const recovered = store.overviewKnowledge({});
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(recovered).resolves.toMatchObject({ revision: "head-ok" });
   } finally {
     vi.useRealTimers();
+  }
+});
+
+it("releases the permit at once on definitive closed-connection errors", async () => {
+  const { DoltgresKnowledgeStoreAdapter } = await import(
+    "../src/adapters/doltgres/index.js"
+  );
+  for (const code of [
+    "CONNECTION_CLOSED",
+    "ECONNRESET",
+    "ECONNREFUSED",
+  ] as const) {
+    let fail = true;
+    const sql = {
+      options: { max: 2 },
+      unsafe: async (text: string) => {
+        if (fail) {
+          fail = false;
+          throw Object.assign(new Error("transport closed"), { code });
+        }
+        return text.includes("dolt_hashof") ? [{ hash: "head-b" }] : [];
+      },
+    };
+    const store = new DoltgresKnowledgeStoreAdapter({ sql: sql as never });
+    await expect(store.browseKnowledge({})).rejects.toMatchObject({
+      retryable: true,
+    });
+    await expect(store.overviewKnowledge({})).resolves.toMatchObject({
+      revision: "head-b",
+    });
   }
 });
 

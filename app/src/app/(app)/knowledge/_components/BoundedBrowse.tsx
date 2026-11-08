@@ -38,6 +38,8 @@ export function BoundedBrowse({
   ]);
   const [filters, setFilters] = useState<ColumnFiltersState>([]);
   const [visibility, setVisibility] = useState<VisibilityState>({});
+  // Typing edits only the draft; body search is committed on explicit submit.
+  const [draft, setDraft] = useState("");
   const [search, setSearch] = useState("");
   const [cursor, setCursor] = useState<string | undefined>();
   const [history, setHistory] = useState<Array<string | undefined>>([]);
@@ -104,6 +106,8 @@ export function BoundedBrowse({
         }
       });
   }, [bodyIntent, refetch, acknowledgeRestart]);
+  // Undefined data with no error is "not yet read", never "no matches".
+  const awaitingFirstRead = page.isFetching || (!page.data && !page.error);
   const table = useReactTable({
     data: page.data?.items ?? [],
     columns: summaryColumns,
@@ -129,23 +133,35 @@ export function BoundedBrowse({
   return (
     <>
       <div className="flex flex-wrap items-center gap-2">
-        <Input
-          maxLength={2000}
-          aria-label="Search knowledge"
-          placeholder="Search id, title, content, domain, type…"
-          value={search}
-          onChange={(e) => {
+        <form
+          role="search"
+          className="flex items-center gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (draft === search) return;
             reset();
-            setSearch(e.target.value);
+            setSearch(draft);
           }}
-          className="h-9 w-full sm:w-72"
-        />
+        >
+          <Input
+            maxLength={2000}
+            aria-label="Search knowledge"
+            placeholder="Search id, title, content, domain, type…"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            className="h-9 w-full sm:w-72"
+          />
+          <Button type="submit" variant="outline" size="sm">
+            Search
+          </Button>
+        </form>
         <Button
           variant="outline"
           size="sm"
           onClick={() => {
             reset();
             setFilters([]);
+            setDraft("");
             setSearch("");
           }}
         >
@@ -215,7 +231,7 @@ export function BoundedBrowse({
       <DataGrid
         table={table}
         recordCount={page.data?.items.length ?? 0}
-        isLoading={page.isFetching}
+        isLoading={awaitingFirstRead}
         loadingMode="skeleton"
         onRowClick={(row) => setSelectedId(row.id)}
         tableLayout={{
@@ -226,9 +242,11 @@ export function BoundedBrowse({
         }}
         tableClassNames={{ bodyRow: "cursor-pointer" }}
         emptyMessage={
-          page.data?.nextCursor
-            ? "No matches in this window. Continue search to examine more entries."
-            : "No entries match these filters."
+          awaitingFirstRead
+            ? "Loading window…"
+            : page.data?.nextCursor
+              ? "No matches in this window. Continue search to examine more entries."
+              : "No entries match these filters."
         }
       >
         <DataGridContainer className="overflow-x-auto">

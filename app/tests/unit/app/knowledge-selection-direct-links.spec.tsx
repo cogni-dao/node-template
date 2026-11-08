@@ -12,6 +12,7 @@
  * @internal
  */
 
+import { KnowledgeBrowseCursorError } from "@cogni/knowledge-store";
 import type { KnowledgeRow } from "@cogni/node-contracts";
 import { DataGrid } from "@cogni/node-ui-kit/reui/data-grid/data-grid";
 import {
@@ -195,8 +196,13 @@ vi.mock("next/link", () => ({
 }));
 vi.mock("@/components", () => ({
   Badge: ({ children }: { children: ReactNode }) => <span>{children}</span>,
-  Button: ({ children, disabled, onClick }: ComponentProps<"button">) => (
-    <button type="button" disabled={disabled} onClick={onClick}>
+  Button: ({
+    children,
+    disabled,
+    onClick,
+    type = "button"
+  }: ComponentProps<"button">) => (
+    <button type={type} disabled={disabled} onClick={onClick}>
       {children}
     </button>
   ),
@@ -343,6 +349,10 @@ it("SSR reads only the chosen bounded projection and round-trips the wire page",
   );
   expect(await loadKnowledgeBrowse(port as never)).toEqual(emptyPage);
   expect(browseKnowledge).toHaveBeenCalledTimes(1);
+  // SSR reads carry a short deadline so slow stores fall back to the client fetch.
+  expect(browseKnowledge).toHaveBeenCalledWith(expect.anything(), {
+    signal: expect.any(AbortSignal)
+  });
   expect(overviewKnowledge).not.toHaveBeenCalled();
   expect(await loadKnowledgeOverview(port as never)).toEqual(emptyPage);
   expect(overviewKnowledge).toHaveBeenCalledTimes(1);
@@ -395,9 +405,7 @@ it("empty search windows require intent, keep the retry cursor, and retain off-p
     })
   );
   mount(<BoundedBrowse initialData={page} />);
-  fireEvent.change(screen.getByRole("textbox", { name: "Search knowledge" }), {
-    target: { value: "body" }
-  });
+  submitSearch("body");
   await screen.findByText(/20 candidates searched/);
   expect(reads).toHaveLength(1);
   fireEvent.click(screen.getByRole("button", { name: "Continue search" }));
@@ -426,7 +434,53 @@ it("empty search windows require intent, keep the retry cursor, and retain off-p
   expect(reads.at(-1)?.searchParams.get("domains")).toBe("off-page");
 });
 
-it("focus replaces 5/5/2 geometry, preserves typed edges and Work links, and retries failed expansion", async () => {
+it("typing a body search issues no body request until explicit submit, then exactly one", async () => {
+  const reads: URL[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      const parsed = new URL(url, "https://node.test");
+      reads.push(parsed);
+      return Response.json({
+        items: [],
+        nextCursor: null,
+        revision: "rev-a",
+        scannedRows: 5
+      });
+    })
+  );
+  const user = userEvent.setup();
+  mount(<BoundedBrowse initialData={page} />);
+  const box = screen.getByRole("textbox", { name: "Search knowledge" });
+  await user.type(box, "abcde");
+  await act(async () => {});
+  expect((box as HTMLInputElement).value).toBe("abcde");
+  expect(reads).toHaveLength(0);
+  await user.click(screen.getByRole("button", { name: "Search" }));
+  await screen.findByText(/5 candidates searched/);
+  expect(reads).toHaveLength(1);
+  expect(reads[0]?.searchParams.get("search")).toBe("abcde");
+  // Enter submits the changed draft as well; an unchanged draft is not replayed.
+  await user.type(box, "f{Enter}");
+  await waitFor(() => expect(reads).toHaveLength(2));
+  expect(reads[1]?.searchParams.get("search")).toBe("abcdef");
+  await user.type(box, "{Enter}");
+  await act(async () => {});
+  expect(reads).toHaveLength(2);
+});
+
+it("never shows the empty-results message before the first read settles", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() => new Promise<Response>(() => undefined))
+  );
+  mount(<BoundedBrowse />);
+  expect(screen.queryByText("No entries match these filters.")).toBeNull();
+  await act(async () => {});
+  expect(screen.queryByText("No entries match these filters.")).toBeNull();
+});
+
+it("focus replaces 5/5/2 geometry,preserves typed edges and Work links, and retries failed expansion", async () => {
   let fail = true;
   vi.stubGlobal(
     "fetch",
@@ -567,7 +621,10 @@ it("stale focus and off-list detail responses cannot replace newer selection", a
 
 it("thin routes reject malformed and cross-query cursors and preserve repeated exact filters", async () => {
   const browseKnowledge = vi.fn(async (query: { cursor?: string }) => {
-    if (query.cursor) throw new Error("Browse cursor does not match query");
+    if (query.cursor)
+      throw new KnowledgeBrowseCursorError(
+        "Browse cursor does not match query"
+      );
     return { items: [], nextCursor: null, revision: "rev-a", scannedRows: 0 };
   });
   ssr.port = { browseKnowledge };
@@ -595,6 +652,12 @@ it("thin routes reject malformed and cross-query cursors and preserve repeated e
     { signal: expect.any(AbortSignal) }
   );
 });
+
+function submitSearch(value: string) {
+  const box = screen.getByRole("textbox", { name: "Search knowledge" });
+  fireEvent.change(box, { target: { value } });
+  fireEvent.submit(required(box.closest("form")));
+}
 
 function required<T>(value: T | null | undefined): T {
   if (value == null) throw new Error("Missing required fixture value");
@@ -626,9 +689,7 @@ it("keeps the real Type filter valid at capacity and frees slots on deselection"
       }}
     />
   );
-  fireEvent.change(screen.getByRole("textbox", { name: "Search knowledge" }), {
-    target: { value: "body" }
-  });
+  submitSearch("body");
   await user.click(screen.getByRole("button", { name: "Domain", exact: true }));
   const domain = await screen.findByRole("textbox", { name: "Exact Domain" });
   fireEvent.change(domain, { target: { value: "off-page" } });
@@ -689,10 +750,7 @@ it.each([false, true])(
       />
     );
     if (searching) {
-      fireEvent.change(
-        screen.getByRole("textbox", { name: "Search knowledge" }),
-        { target: { value: "body" } }
-      );
+      submitSearch("body");
       await screen.findByText(/20 candidates searched/);
       await user.click(screen.getByRole("button", { name: "Continue search" }));
       await waitFor(() =>
@@ -803,11 +861,7 @@ it("stale body windows ignore focus/reconnect, remount awaits intent, and Contin
     </QueryClientProvider>
   );
   let mounted = render(ui());
-  const search = () =>
-    fireEvent.change(
-      screen.getByRole("textbox", { name: "Search knowledge" }),
-      { target: { value: "body" } }
-    );
+  const search = () => submitSearch("body");
   search();
   await screen.findByText(/20 candidates searched/);
   const key = browseKey({ search: "body" });
@@ -903,9 +957,7 @@ it("offers restart after revision transitions and known mutations without automa
     </QueryClientProvider>
   );
   expect(screen.getByText(/Observed revision: rev-a/)).toBeTruthy();
-  fireEvent.change(screen.getByRole("textbox", { name: "Search knowledge" }), {
-    target: { value: "body" }
-  });
+  submitSearch("body");
   await screen.findByText(/20 candidates searched/);
   revision = "rev-b";
   fireEvent.click(screen.getByRole("button", { name: "Continue search" }));
@@ -1112,7 +1164,7 @@ it.each(["browse", "overview"] as const)(
     await run(
       "cursor=private-value",
       async () => {
-        throw new Error("Invalid browse cursor");
+        throw new KnowledgeBrowseCursorError("Invalid browse cursor");
       },
       400,
       "invalid_cursor"
