@@ -20,13 +20,13 @@
 
 "use client";
 
-import { ChartContainer, ChartTooltip } from "@cogni/node-ui-kit/shadcn/chart";
-import { ToggleGroup, ToggleGroupItem } from "@cogni/node-ui-kit/shadcn/toggle-group";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useId, useState } from "react";
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ReferenceLine, XAxis, YAxis } from "recharts";
 
+import { ToggleGroup, ToggleGroupItem } from "@/components";
+import { ChartContainer, ChartTooltip } from "@/components/chart";
 import { fetchMetricHistory } from "../lib/api";
 import {
   displayOf,

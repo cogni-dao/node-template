@@ -19,7 +19,7 @@
 
 "use client";
 
-import { ChartContainer } from "@cogni/node-ui-kit/shadcn/chart";
+import { ChartContainer } from "@/components/chart";
 import type { KpiBinding, KpiStatus, MetricHistory } from "@cogni-dao/metrics/contracts";
 import { useId } from "react";
 import { Area, AreaChart, Bar, BarChart, Cell, YAxis } from "recharts";
