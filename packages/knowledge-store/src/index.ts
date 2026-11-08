@@ -195,6 +195,12 @@ export {
 export { KnowledgeWriteConflictError } from "./domain/write-replay.js";
 export type { KnowledgeHistoryEntry } from "./domain/history.js";
 export { shapeKnowledgeHistory } from "./domain/history.js";
+export type {
+  KnowledgeHistoryPort,
+  KnowledgeHistoryReadLog,
+  KnowledgeHistoryResult,
+} from "./domain/history-read.js";
+export { readKnowledgeHistory } from "./domain/history-read.js";
 export { createEdoCapability } from "./edo-capability.js";
 export {
   ContributionConflictError,

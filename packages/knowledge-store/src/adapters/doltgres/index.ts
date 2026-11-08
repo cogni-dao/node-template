@@ -152,6 +152,26 @@ export async function getDoltgresDomain(
     : rowToDomain(rows[0] as Record<string, unknown>);
 }
 
+/** A postgres.js-shaped executor; only `unsafe` is used, with an escaped id. */
+export interface KnowledgeHistorySql {
+  unsafe(query: string): PromiseLike<readonly Record<string, unknown>[]>;
+}
+
+/**
+ * Versions of one knowledge entry, newest first (task.0052, story.0023). The
+ * reason is the contribution commit message; other writes fall back to the
+ * Dolt message. Nodes and the operator call this instead of copying the SQL.
+ */
+export async function queryKnowledgeHistory(
+  sql: KnowledgeHistorySql,
+  id: string,
+): Promise<KnowledgeHistoryEntry[]> {
+  const rows = await sql.unsafe(
+    `SELECT d.to_commit, d.to_commit_date, d.diff_type, l.message, l.committer, c.message AS contribution_message, c.principal_id AS contribution_principal, d.* FROM dolt_diff_knowledge d JOIN dolt_log l ON l.commit_hash = d.to_commit LEFT JOIN knowledge_contribution_commits c ON c.commit_hash = d.to_commit WHERE d.to_id = ${escapeValue(id)} AND d.to_commit <> 'WORKING' ORDER BY d.to_commit_date DESC LIMIT ${KNOWLEDGE_HISTORY_READ_ROWS}`,
+  );
+  return shapeKnowledgeHistory(rows as unknown as KnowledgeHistoryRow[]);
+}
+
 /** Update domain metadata within the caller's admitted scope; does not admit or commit. */
 export async function updateDoltgresDomain(
   query: DomainSql,
@@ -892,10 +912,7 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
    * contribution commit message; other writes fall back to the Dolt message.
    */
   async history(id: string): Promise<KnowledgeHistoryEntry[]> {
-    const rows = await this.sql.unsafe(
-      `SELECT d.to_commit, d.to_commit_date, d.diff_type, l.message, l.committer, c.message AS contribution_message, c.principal_id AS contribution_principal, d.* FROM dolt_diff_knowledge d JOIN dolt_log l ON l.commit_hash = d.to_commit LEFT JOIN knowledge_contribution_commits c ON c.commit_hash = d.to_commit WHERE d.to_id = ${escapeValue(id)} AND d.to_commit <> 'WORKING' ORDER BY d.to_commit_date DESC LIMIT ${KNOWLEDGE_HISTORY_READ_ROWS}`
-    );
-    return shapeKnowledgeHistory(rows as unknown as KnowledgeHistoryRow[]);
+    return queryKnowledgeHistory(this.sql, id);
   }
 
   async log(limit?: number): Promise<DoltCommit[]> {

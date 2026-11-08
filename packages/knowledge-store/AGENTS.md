@@ -53,11 +53,13 @@ Shared ports, contribution workflow, and adapters for versioned domain knowledge
 **Pure subpath** (`@cogni/knowledge-store/contracts`):
 
 - Canonical `KnowledgeRowSchema` / `KnowledgeRow`, knowledge and EDO capability contracts, parameters and results. No adapters or capability implementations.
+- History wire schemas (story.0023): `HistoryEntrySchema`, `HistoryOutputSchema`, `HistoryOutput`, `knowledgeHistoryOperation`. Root also exports `readKnowledgeHistory(port, id)`: a framework-agnostic handler returning `{ status, body, log }` (200, 404, 503; never throws).
 
 **Subpath** (`@cogni/knowledge-store/adapters/doltgres`):
 
 - `DoltgresKnowledgeStoreAdapter` (`withWrite` required for mutations), `DoltgresAdapterConfig` (injected shared writer session), `buildDoltgresClient`, `DoltgresClientConfig`
 - `DomainSql`, `getDoltgresDomain`, `updateDoltgresDomain`, `deleteDoltgresDomain`: domain SQL operations for caller-owned query callbacks; mutations require the caller's existing admitted write scope and do not admit or commit.
+- `queryKnowledgeHistory(sql, id)`, `KnowledgeHistorySql`: the entry-history SQL, shared by the adapter's `history()` and by nodes or the operator that hold their own `sql`.
 - `DoltgresKnowledgeContributionAdapter`, `DoltgresKnowledgeContributionAdapterConfig` (contribution-branch lifecycle)
 - `createDoltgresPusher`, `DoltgresPusher`, `DoltgresPushConfig` (post-merge mirror to a Dolt remote; lazy `dolt_remote add` + `dolt_push`)
 - `wrapPushSafe`, `PushOutcomeListener` (fire-and-forget wrapper with injectable success/failure callbacks — keeps logging out of the adapter)
