@@ -6,7 +6,7 @@
 
 - **Owners:** @derekg1729
 - **Status:** draft
-- **Last reviewed:** 2026-10-30
+- **Last reviewed:** 2026-11-08
 - **Parent:** [features](../AGENTS.md)
 
 ## Purpose

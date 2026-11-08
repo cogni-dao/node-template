@@ -72,7 +72,7 @@ pnpm typecheck
 ## Standards
 
 - Each feature isolated with own actions/, services/, components/, hooks/, types/, constants/
-- Features import components via kit/barrel or the public `@/components/startup` entry; vendor and styles remain blocked
+- Features import components via kit/barrel or the narrow public entries `@/components/startup`, `@/components/sheet` and `@/components/chart`; vendor and styles remain blocked
 - Unit tests with mocked ports required
 
 ## Dependencies

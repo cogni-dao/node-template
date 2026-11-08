@@ -1,6 +1,20 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
+/**
+ * Module: `@app/(app)/work/_components/WorkDetailSheet`
+ * Purpose: One eager, controlled Work detail Sheet whose body loads lazily on first selection.
+ * Scope: Presentation and focus management. The view owns selection and data.
+ * Invariants:
+ *   - ONE_DIALOG: a single Sheet instance serves every selected item.
+ *   - NO_AUTO_RELOAD: a failed body chunk shows Close and Reload page inside the dialog; it never reloads itself.
+ *   - FOCUS_RETURNS: close restores focus to the opener, else the Work heading.
+ *   - BOUNDARY_PER_ITEM: a render failure for one item does not stick to the next.
+ * Side-effects: none
+ * Links: ./WorkItemDetailBody.tsx, ../view.tsx, task.0035
+ * @internal
+ */
+
 "use client";
 
 import {
@@ -118,7 +132,10 @@ export function WorkDetailSheet({
 				}}
 			>
 				{(open || everSelected) && (
-					<DetailBoundary reload={reload}>
+					<DetailBoundary
+						key={(open ? body : lastBody.current).itemId ?? "none"}
+						reload={reload}
+					>
 						<Suspense fallback={<DetailMessage />}>
 							<DetailBody {...(open ? body : lastBody.current)} />
 						</Suspense>

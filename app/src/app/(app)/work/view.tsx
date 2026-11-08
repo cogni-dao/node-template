@@ -65,7 +65,11 @@ import { fetchWorkItem, fetchWorkItems } from "./_api/fetchWorkItems";
 import { columns } from "./_components/columns";
 import { WorkDetailSheet } from "./_components/WorkDetailSheet";
 import { WorkGoalLink } from "./_components/WorkKanban";
-import { MOBILE_HIDDEN_COLUMNS, WorkResponsiveTable } from "./_components/WorkResponsiveTable";
+import {
+  MOBILE_HIDDEN_COLUMNS,
+  WORK_MOBILE_QUERY,
+  WorkResponsiveTable,
+} from "./_components/WorkResponsiveTable";
 import {
   workItemHref,
   workListHref,
@@ -159,7 +163,7 @@ export function WorkDashboardView({
   const [isMobile, setIsMobile] = useState<boolean | null>(null);
   useEffect(() => {
     if (!window.matchMedia) { setIsMobile(false); return; }
-    const media = window.matchMedia("(max-width: 767px)");
+    const media = window.matchMedia(WORK_MOBILE_QUERY);
     const sync = () => setIsMobile(media.matches);
     sync();
     media.addEventListener("change", sync);
@@ -473,11 +477,14 @@ export function WorkDashboardView({
         state.query = functionalUpdate(updater, state.query);
       }),
     onColumnVisibilityChange: (updater) => {
-      const next = typeof updater === "function" ? updater(tableColumnVisibility) : updater;
+      // Diff against the latest effective state so batched toggles compose;
+      // only explicit differences from the viewport default become overrides.
       setColumnVisibility((previous) => {
+        const base = isMobile ? { ...MOBILE_HIDDEN_COLUMNS, ...previous } : previous;
+        const next = functionalUpdate(updater, base);
         const updated = { ...previous };
         for (const id of Object.keys(next)) {
-          if ((next[id] ?? true) !== (tableColumnVisibility[id] ?? true)) updated[id] = next[id] ?? true;
+          if ((next[id] ?? true) !== (base[id] ?? true)) updated[id] = next[id] ?? true;
         }
         return updated;
       });
@@ -648,7 +655,7 @@ export function WorkDashboardView({
           emptyMessage="No work items found."
         >
           <DataGridContainer className="overflow-x-auto">
-            <WorkResponsiveTable table={table} overrides={columnVisibility} synced={isMobile !== null} isLoading={isLoading} />
+            <WorkResponsiveTable table={table} overrides={columnVisibility} synced={isMobile !== null} isLoading={isLoading} skeletonRows={Math.min(pageSize, 100)} />
           </DataGridContainer>
         </DataGrid>
       )}

@@ -1,6 +1,19 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
+/**
+ * Module: `@app/(app)/work/_components/WorkResponsiveTable`
+ * Purpose: Work table renderer whose mobile column set is decided by CSS before hydration and by state after it.
+ * Scope: Presentation over the view's TanStack table. Owns no data or URL state.
+ * Invariants:
+ *   - PRESYNC_MATCHES_SYNC: before viewport sync, CSS hides exactly MOBILE_HIDDEN_COLUMNS
+ *     at WORK_MOBILE_QUERY unless explicitly overridden, so hydration does not shift layout.
+ *   - SKELETON_MATCHES_PAGE: loading rows equal the requested page size.
+ * Side-effects: none
+ * Links: ./WorkResponsiveTable.module.css, ../view.tsx, task.0035
+ * @internal
+ */
+
 "use client";
 
 import {
@@ -14,6 +27,9 @@ import {
 } from "@tanstack/react-table";
 import type { CSSProperties } from "react";
 import styles from "./WorkResponsiveTable.module.css";
+
+/** Keep in sync with the `@media (max-width: 767px)` block in WorkResponsiveTable.module.css. */
+export const WORK_MOBILE_QUERY = "(max-width: 767px)";
 
 export const MOBILE_HIDDEN_COLUMNS: VisibilityState = {
 	priority: false,
@@ -29,11 +45,13 @@ export function WorkResponsiveTable<TData>({
 	overrides,
 	synced,
 	isLoading,
+	skeletonRows,
 }: {
 	readonly table: Table<TData>;
 	readonly overrides: VisibilityState;
 	readonly synced: boolean;
 	readonly isLoading: boolean;
+	readonly skeletonRows: number;
 }) {
 	const visible = table.getVisibleLeafColumns();
 	const mobileCount = table
@@ -48,7 +66,7 @@ export function WorkResponsiveTable<TData>({
 			overrides[id] === undefined ? undefined : String(overrides[id]),
 	});
 	const rows = table.getRowModel().rows;
-	const message = isLoading ? "Loading work items..." : "No work items found.";
+	const message = "No work items found.";
 	return (
 		<DataGridTableViewport>
 			<table className={styles.table} data-work-presync={!synced || undefined}>
@@ -92,7 +110,7 @@ export function WorkResponsiveTable<TData>({
 				<tbody>
 					{isLoading ? (
 						Array.from(
-							{ length: table.getState().pagination.pageSize },
+							{ length: skeletonRows },
 							(_, rowIndex) => `skeleton-${rowIndex}`,
 						).map((rowKey) => (
 							<tr key={rowKey} className="border-b">
