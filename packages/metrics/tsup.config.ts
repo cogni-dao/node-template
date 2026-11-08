@@ -9,6 +9,7 @@ export default defineConfig({
 	entry: [
 		"src/index.ts",
 		"src/adapters/postgres.ts",
+		"src/briefs.ts",
 		"src/contracts.ts",
 		"src/knowledge.ts",
 		"src/schema.ts",

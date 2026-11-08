@@ -333,6 +333,7 @@ describe("@cogni-dao/metrics/knowledge", () => {
 			"work.count@1",
 			"work.convergence@1",
 			"github.stars@1",
+			"brief.conformance@1",
 		]);
 	});
 	describe("node calculators (task.5442)", () => {
@@ -412,6 +413,7 @@ describe("@cogni-dao/metrics/knowledge", () => {
 			"work.count@2",
 			"work.convergence@3",
 			"github.stars@9",
+			"brief.conformance@2",
 		])("reserves the published family of %s at every version", (id) => {
 			expect(() => compose(id, [{ ...releaseSuccess, id }])).toThrow(
 				expect.objectContaining({
