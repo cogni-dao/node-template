@@ -36,7 +36,7 @@ LangGraph graph definitions and runtime utilities for agentic AI execution. Cont
 }
 ```
 
-**External deps:** `@langchain/core`, `@langchain/langgraph`, `@langchain/mcp-adapters`, `zod`. Imports `@cogni/ai-core`, `@cogni/ai-tools`.
+**External deps:** `@langchain/core`, `@langchain/langgraph`, `@langchain/mcp-adapters`, `zod`. Imports `@cogni/ai-core`, `@cogni/ai-tools`, `@cogni-dao/metrics/briefs` (`scoreBrief`, `APPROVED_LINE`; peer).
 
 ## Public Surface
 
@@ -58,6 +58,7 @@ LangGraph graph definitions and runtime utilities for agentic AI execution. Cont
     - `CogniExecContext` — Runtime context type (completionFn, tokenSink, toolExecFn; NO model per #35)
   - `@cogni/langgraph-graphs/graphs` — Graph factories and shared types:
     - `createCogniGraph()` / `createCogniProgram()` — shared native deep-agent composition for roots and bounded compiled children
+    - `createBriefStewardGraph()`, `BRIEF_STEWARD_GRAPH_NAME`, `reconcileCheck()`, `GUARD_CODES` — scheduled `brief-steward` program (task.0054): the model proposes `summary`/`outcome` text, the pure `reconcileCheck` guard (kpi, read, recent, clean, fields, approved, links, progress, retain 80%, fewer, budget 3 per run) decides, the host tool `core__work_item_reconcile` writes with a guard-built reason. `decide` mode only; chat binds no writer. One `ai.brief_steward.cycle` event per run
     - `createAutoresearchGraph()` — prompt-driven Karpathy-style autoresearch factory for `autoresearch-single-lane`, `autoresearch-syntropy-loop`, and `autoresearch-registry-swarm`
     - `createPoetGraph()`, `createPondererGraph()` — React agent factories (TYPE_TRANSPARENT_RETURN)
     - `createBrainGraph()` — Code-aware ReAct agent with repo tools (list, search, open)

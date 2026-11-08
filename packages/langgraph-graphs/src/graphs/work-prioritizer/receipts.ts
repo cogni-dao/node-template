@@ -17,6 +17,7 @@ const Goal = z.object({
 });
 const Item = z.object({
   id: z.string(),
+  title: z.string().optional(),
   status: z.string(),
   revision: z.number().int(),
   labels: z.array(z.string()),

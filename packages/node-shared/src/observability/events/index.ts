@@ -39,6 +39,8 @@ export const EVENT_NAMES = {
 	AI_WORK_PRIORITIZER_CYCLE: "ai.work_prioritizer.cycle",
 	/** One structured summary per scheduled DECIDE tick (task.5377; CatalogEntry.report): scoresWritten, writeAttempts, skipped(reason), revisionConflicts, guardRejected. */
 	AI_COGNI_DECIDE_CYCLE: "ai.cogni_decide.cycle",
+	/** One structured summary per scheduled brief-steward run (task.0054; CatalogEntry.report): outcome, writes, rejected guard codes, kpiStatus; counts only, never brief text. */
+	AI_BRIEF_STEWARD_CYCLE: "ai.brief_steward.cycle",
 	AI_CHAT_RECEIVED: "ai.chat_received",
 	AI_CHAT_RESPONSE_STARTED: "ai.chat_response_started",
 	AI_CHAT_STREAM_CLOSED: "ai.chat_stream_closed",

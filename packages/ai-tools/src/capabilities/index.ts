@@ -94,6 +94,7 @@ export type {
 export type {
   WorkItemAssignee,
   WorkItemCapability,
+  WorkItemHistoryVersion,
   WorkItemInfo,
   WorkItemPatchScores,
   WorkItemQueryPage,

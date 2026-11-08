@@ -100,7 +100,7 @@ export interface WorkItemCapability {
   }): Promise<WorkItemTransitionResult>;
 
   /**
-   * Patch work item fields (priority, rank, labels, summary, scores).
+   * Patch work item fields (priority, rank, labels, summary, scores; `outcome` only behind the brief steward's reconcile tool).
    *
    * `scores` (story.5111) replaces the whole object; `null` clears it. The
    * implementation's store validates it (`parseWorkItemScores`) and throws on a
@@ -121,8 +121,27 @@ export interface WorkItemCapability {
       labels?: string[];
       summary?: string;
       scores?: WorkItemPatchScores | null;
+      /**
+       * Brief steward only (task.0054): `core__work_item_reconcile` is the one caller. The
+       * store's authority applies unchanged; no other tool exposes this field.
+       */
+      outcome?: string;
     };
   }): Promise<WorkItemInfo>;
+
+  /**
+   * Versions of one item, newest first, with their change reasons (task.0052). Absent when the
+   * implementation has no history port; callers treat that as unknown, never as empty.
+   */
+  history?(id: string): Promise<readonly WorkItemHistoryVersion[] | undefined>;
+}
+
+/** One version of a work item: when, by whom and why. It never carries field values. */
+export interface WorkItemHistoryVersion {
+  readonly version: string;
+  readonly at: string;
+  readonly actor: string | null;
+  readonly reason: string | null;
 }
 
 /** A `scores` write: axis id → { v: 0–5, ev?: evidence URL }. Bounds are the store's. */
