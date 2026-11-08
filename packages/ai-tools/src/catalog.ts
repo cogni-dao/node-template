@@ -37,8 +37,10 @@ import { vcsGetCiStatusBoundTool } from "./tools/vcs-get-ci-status";
 import { vcsListPrsBoundTool } from "./tools/vcs-list-prs";
 import { vcsMergePrBoundTool } from "./tools/vcs-merge-pr";
 import { webSearchBoundTool } from "./tools/web-search";
+import { workItemHistoryBoundTool } from "./tools/work-item-history";
 import { workItemQueryBoundTool } from "./tools/work-item-query";
 import { workItemReadBoundTool } from "./tools/work-item-read";
+import { workItemReconcileBoundTool } from "./tools/work-item-reconcile";
 import { workItemTransitionBoundTool } from "./tools/work-item-transition";
 import type { BoundTool } from "./types";
 
@@ -129,8 +131,10 @@ export const CORE_TOOL_BUNDLE: readonly CatalogBoundTool[] = [
   scheduleListBoundTool as CatalogBoundTool,
   scheduleManageBoundTool as CatalogBoundTool,
   webSearchBoundTool as CatalogBoundTool,
+  workItemHistoryBoundTool as CatalogBoundTool,
   workItemQueryBoundTool as CatalogBoundTool,
   workItemReadBoundTool as CatalogBoundTool,
+  workItemReconcileBoundTool as CatalogBoundTool,
   workItemTransitionBoundTool as CatalogBoundTool,
 ];
 

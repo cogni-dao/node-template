@@ -86,7 +86,7 @@ interface ProviderCatalogEntry {
   readonly mcpServerIds?: readonly string[];
   readonly graphFactory: CreateGraphFn;
   readonly systemPrompt?: string;
-  readonly program?: "cogni" | "work-review" | "cogni-chat" | "cogni-decide";
+  readonly program?: "cogni" | "work-review" | "cogni-chat" | "cogni-decide" | "brief-steward";
   /** Graph-owned run report to log + echo on the stream (CatalogEntry.report). */
   readonly report?: GraphReportDecl;
 }

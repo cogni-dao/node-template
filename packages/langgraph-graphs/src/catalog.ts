@@ -27,6 +27,12 @@ import {
 } from "./graphs/autoresearch/prompts";
 import { AUTORESEARCH_TOOL_IDS } from "./graphs/autoresearch/tools";
 import { BRAIN_GRAPH_NAME, createBrainGraph } from "./graphs/brain/graph";
+import {
+  BRIEF_STEWARD_GRAPH_NAME,
+  createBriefStewardGraph,
+} from "./graphs/brief-steward/graph";
+import { BRIEF_STEWARD_PROMPT } from "./graphs/brief-steward/prompts";
+import { BRIEF_STEWARD_TOOL_IDS } from "./graphs/brief-steward/tools";
 import { BRAIN_TOOL_IDS } from "./graphs/brain/tools";
 import { BROWSER_GRAPH_NAME, createBrowserGraph } from "./graphs/browser/graph";
 import {
@@ -87,7 +93,7 @@ import type { CreateGraphFn } from "./inproc/types";
  */
 export interface CatalogEntry {
   /** Trusted catalog program assignment; routes mission-engine graphs to the cogni engine. */
-  readonly program?: "cogni" | "work-review" | "cogni-chat" | "cogni-decide";
+  readonly program?: "cogni" | "work-review" | "cogni-chat" | "cogni-decide" | "brief-steward";
   readonly displayName: string;
   readonly description: string;
   /** Native tool IDs this graph may use. Providers resolve from TOOL_CATALOG. */
@@ -300,6 +306,23 @@ export const NODE_LANGGRAPH_CATALOG = {
   },
 
   /**
+   * Scheduled brief steward (task.0054): reads the `brief-conformance-items` KPI's worst rows and rewrites
+   * the summary and outcome of at most three open work items per run, only through the code guard and the
+   * steward-only host tool. Mode is `decide` only for a validated schedule; chat gets reads and no writer.
+   * The tool list also names two host-only tools (history read, reconcile writer) the model never receives.
+   */
+  [BRIEF_STEWARD_GRAPH_NAME]: {
+    displayName: "Brief Steward",
+    description:
+      "Scheduled steward: rewrites the worst work-item briefs through code guards, at most three per run, or writes nothing",
+    toolIds: BRIEF_STEWARD_TOOL_IDS as readonly string[],
+    graphFactory: createBriefStewardGraph,
+    systemPrompt: BRIEF_STEWARD_PROMPT,
+    program: "brief-steward",
+    report: { event: "ai.brief_steward.cycle" },
+  },
+
+  /**
    * Cogni chat, READ mode (task.5377). Same factory, trusted `program: "cogni-chat"` selects the
    * plan -> Flash-subagent -> answer topology. The read-only toolIds omit core__edo_decide, so a
    * READ request cannot file a decision. It lives in the node-runtime catalog so every node
@@ -411,6 +434,7 @@ export const NODE_LANGGRAPH_GRAPH_IDS = {
   "frontend-tester": `${LANGGRAPH_PROVIDER_ID}:${FRONTEND_TESTER_GRAPH_NAME}`,
   "work-prioritizer": `${LANGGRAPH_PROVIDER_ID}:${WORK_PRIORITIZER_GRAPH_NAME}`,
   "cogni-decide": `${LANGGRAPH_PROVIDER_ID}:cogni-decide`,
+  "brief-steward": `${LANGGRAPH_PROVIDER_ID}:${BRIEF_STEWARD_GRAPH_NAME}`,
   // READ deep agent — in the NODE graph-id map so the completions `graph_name`
   // path resolves it, matching its NODE_LANGGRAPH_CATALOG entry (task.5377).
   "cogni-chat": `${LANGGRAPH_PROVIDER_ID}:cogni-chat`,

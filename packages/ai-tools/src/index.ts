@@ -64,6 +64,7 @@ export type {
   WebSearchTopic,
   WorkItemAssignee,
   WorkItemCapability,
+  WorkItemHistoryVersion,
   WorkItemInfo,
   WorkItemPatchScores,
   WorkItemQueryPage,
@@ -383,11 +384,30 @@ export {
   workItemQueryStubImplementation,
 } from "./tools/work-item-query";
 export {
+  createWorkItemHistoryImplementation,
+  WORK_ITEM_HISTORY_NAME,
+  workItemHistoryBoundTool,
+  workItemHistoryContract,
+} from "./tools/work-item-history";
+export {
   createWorkItemReadImplementation,
   WORK_ITEM_READ_NAME,
   workItemReadBoundTool,
   workItemReadContract,
 } from "./tools/work-item-read";
+export {
+  approvedLinesOf,
+  createWorkItemReconcileImplementation,
+  RECONCILE_FIELD_MAX_CHARS,
+  RECONCILE_REASON,
+  WORK_ITEM_RECONCILE_NAME,
+  type WorkItemReconcileInput,
+  WorkItemReconcileInputSchema,
+  type WorkItemReconcileOutput,
+  WorkItemReconcileOutputSchema,
+  workItemReconcileBoundTool,
+  workItemReconcileContract,
+} from "./tools/work-item-reconcile";
 export {
   createWorkItemTransitionImplementation,
   WORK_ITEM_TRANSITION_NAME,

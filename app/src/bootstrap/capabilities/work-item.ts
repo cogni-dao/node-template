@@ -12,6 +12,9 @@
  *     goes through the Doltgres `patch` attributed to `backlogWriter.principalId`; the store's own
  *     authority applies unchanged. A principal callback resolves the authenticated run actor at invocation
  *     time, never at singleton construction. Without it, `patch` stays on the markdown ports.
+ *   - OUTCOME_ONLY_BEHIND_RECONCILE (task.0054): `patch` forwards `set.outcome` like any field, with the
+ *     same store authority and priority guard; only `core__work_item_reconcile` passes it. `history` reads the
+ *     Doltgres store's row history and is `undefined` when that port is absent.
  *   - PATCH_CAS_PASSTHROUGH: a caller `expectedRevision` is forwarded as the Doltgres store's
  *     compare-and-set (absent => that store's unconditioned patch); its `WorkItemRevisionConflictError`
  *     becomes the ai-tools `WorkItemPatchConflictError`, nothing written. The markdown ports CAS on the
@@ -33,6 +36,7 @@ import { isPrivilegedPriority } from "@cogni/knowledge-store";
 import type {
   ActorKind,
   WorkItemCommandPort,
+  WorkItemId,
   WorkItemQueryPort,
   WorkItemStatus,
   WorkItemType,
@@ -61,7 +65,18 @@ export interface WorkItemCapabilityDeps {
    * writes there as `principalId` (with caller compare-and-set) instead of the markdown ports.
    */
   readonly backlogWriter?: {
-    readonly store: Pick<WorkItemsDoltgresPort, "patch">;
+    readonly store: Pick<WorkItemsDoltgresPort, "patch"> & {
+      /** `undefined` result = this store has no history port (unknown, not empty). */
+      readonly history?: (id: WorkItemId) => Promise<
+        | ReadonlyArray<{
+            readonly version: string;
+            readonly at: string;
+            readonly actor: string | null;
+            readonly reason: string | null;
+          }>
+        | undefined
+      >;
+    };
     readonly principalId: string | (() => string);
   };
 }
@@ -145,6 +160,19 @@ export function createWorkItemCapability(
         newStatus: updated.status,
         revision: updated.revision as number,
       };
+    },
+
+    /** HISTORY_IS_UNKNOWN_WHEN_ABSENT: no history port means `undefined`, never an empty log. */
+    async history(id) {
+      const versions = await deps.backlogWriter?.store.history?.(
+        toWorkItemId(id),
+      );
+      return versions?.map((v) => ({
+        version: v.version,
+        at: v.at,
+        actor: v.actor,
+        reason: v.reason,
+      }));
     },
 
     async patch(input): Promise<WorkItemInfo> {

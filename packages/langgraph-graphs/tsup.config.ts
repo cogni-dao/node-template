@@ -29,7 +29,13 @@ export const tsupConfig = defineConfig({
   clean: false, // preserve .d.ts files from tsc -b (incremental builds)
   sourcemap: true,
   platform: "node", // LangChain requires Node.js
-  external: ["@langchain/core", "@langchain/langgraph", "@cogni/ai-tools", "zod"],
+  external: [
+    "@langchain/core",
+    "@langchain/langgraph",
+    "@cogni/ai-tools",
+    "@cogni-dao/metrics",
+    "zod",
+  ],
   // RUNTIME_LEAF_ON_AI_CORE: the few ai-core runtime helpers this package calls (error codes,
   // tool-runner) are bundled in. A node's vendored @cogni/ai-core dist is tsc output with
   // extensionless imports, which plain Node ESM (vitest externals, scripts) cannot load from

@@ -717,6 +717,8 @@ function createContainer(): Container {
 		backlogWriter: {
 			store: {
 				patch: (input, principal) => doltgresWorkItems.patch(input, principal),
+				// Resolved at call time; `undefined` when the store has no history port.
+				history: async (id) => doltgresWorkItems.history?.(id),
 			},
 			principalId: () => {
 				const actor = getExecutionScope().actorUserId;

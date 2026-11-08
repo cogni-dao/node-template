@@ -92,7 +92,11 @@ const CHECKBOX = /^\[[ xX]\]\s+/;
 const HEADING = /^ {0,3}#{1,6}\s+/;
 const TABLE_ROW = /^ {0,3}\|/;
 const TABLE_SEPARATOR = /^[\s|:-]+$/;
-const APPROVED_LINE = /^(Goal|Done when) = (?=\S)/;
+/**
+ * A human-approved line of an outcome: `Goal = ` or `Done when = ` and text. The scorer,
+ * the brief steward guard and its host tool share this one parser.
+ */
+export const APPROVED_LINE = /^(Goal|Done when) = (?=\S)/;
 const ISO_DATE = /\d{4}-\d{2}-\d{2}/;
 const MONTH_DAY =
 	/^(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.? \d{1,2}(?!\d)/i;

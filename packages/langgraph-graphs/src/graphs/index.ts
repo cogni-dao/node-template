@@ -54,6 +54,19 @@ export type {
 	MessageGraphInput,
 	MessageGraphOutput,
 } from "./types";
+// Brief steward (scheduled; task.0054): pure guard, guarded write tool, program factory
+export {
+	BRIEF_STEWARD_GRAPH_NAME,
+	createBriefStewardGraph,
+} from "./brief-steward/graph";
+export {
+	type BriefItem,
+	type BriefProposal,
+	GUARD_CODES,
+	type GuardCode,
+	reconcileCheck,
+	type ReconcileResult,
+} from "./brief-steward/reconcile-check";
 // Mission loop (every node, ReAct agent on the work-prioritizer slot, story.5108 / story.5101)
 export {
 	createWorkPrioritizerGraph,

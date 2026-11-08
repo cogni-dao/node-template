@@ -63,7 +63,9 @@ Pure tool definitions for AI agent execution. Defines `ToolContract`, `ToolImple
   - `workItemQueryBoundTool`, `WORK_ITEM_QUERY_NAME`, `createWorkItemQueryImplementation` - Work item query tool; sortBy/sortDirection derive from bundled work-items allowlists
   - `workItemReadBoundTool`, `WORK_ITEM_READ_NAME`, `createWorkItemReadImplementation` - bounded full work-item read
   - `workItemTransitionBoundTool`, `WORK_ITEM_TRANSITION_NAME`, `createWorkItemTransitionImplementation` - Work item transition tool
-  - `WorkItemCapability`, `WorkItemInfo`, `WorkItemPatchScores`, `WorkItemQueryParams`, `WorkItemTransitionResult` - Work item capability types
+  - `workItemReconcileBoundTool`, `WORK_ITEM_RECONCILE_NAME`, `createWorkItemReconcileImplementation`, `approvedLinesOf`, `RECONCILE_REASON` - Brief steward only (task.0054): CAS rewrite of `summary` and `outcome`; refuses unless the `Goal =` / `Done when =` lines (`APPROVED_LINE` from `@cogni-dao/metrics/briefs`) are identical; reason must be `reconcile brief: <codes>`. Only the `brief-steward` catalog entry lists it
+  - `workItemHistoryBoundTool`, `WORK_ITEM_HISTORY_NAME`, `createWorkItemHistoryImplementation` - Host read of one item's versions (time, actor, reason; never values) for program guards; absent `WorkItemCapability.history` yields `available: false`, not an empty log. No model tool list names it
+  - `WorkItemCapability`, `WorkItemHistoryVersion`, `WorkItemInfo`, `WorkItemPatchScores`, `WorkItemQueryParams`, `WorkItemTransitionResult` - Work item capability types
   - `knowledgeReadBoundTool`, `KNOWLEDGE_READ_NAME`, `createKnowledgeReadImplementation` - Knowledge read tool (read_only: get by id or list by domain+tags)
   - `knowledgeSearchBoundTool`, `KNOWLEDGE_SEARCH_NAME`, `createKnowledgeSearchImplementation` - Knowledge search tool (read_only: text search by domain+query)
   - `knowledgeWriteBoundTool`, `KNOWLEDGE_WRITE_NAME`, `createKnowledgeWriteImplementation` - Knowledge write tool (state_change: upsert + auto dolt_commit)
