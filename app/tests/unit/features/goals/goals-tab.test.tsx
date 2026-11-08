@@ -104,7 +104,8 @@ vi.mock("@/app/(app)/knowledge/_components/KnowledgeDetail", () => ({
 vi.mock("@/app/(app)/knowledge/_components/GraphView", () => ({
   GraphView: () => null,
 }));
-vi.mock("@/components", () => ({
+vi.mock("@/components", async () => ({
+  ...(await import("@cogni/node-ui-kit/shadcn/toggle-group")),
   Button: ({ children, onClick }: ComponentProps<"button">) => (
     <button type="button" onClick={onClick}>
       {children}
