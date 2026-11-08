@@ -6,7 +6,7 @@
 
 - **Owners:** @cogni-dao
 - **Status:** stable
-- **Last reviewed:** 2026-11-02
+- **Last reviewed:** 2026-11-07
 
 ## Purpose
 
@@ -65,6 +65,8 @@ Work item port interfaces, domain types, and storage adapters for structured wor
   - `WorkItemRevisionConflictError` — `patch` with a stale `expectedRevision`; nothing committed
   - `DoltgresWorkItemAdapterOptions` — per-store allocator configuration (`idFloor`) (create/patch reject invalid `scores` with `WorkItemScoresInvalidError` before any SQL)
   - cursor codec + Doltgres port/error types
+  - `WORK_SUMMARY_PAGE_DEFAULT` (25), `WORK_SUMMARY_PAGE_MAX` (100), `WORK_BOARD_COLUMN_PAGE` (20); `parseWorkSummarySearchParams` / `workSummaryQueryToSearchParams` — the one query codec the browser encodes and the route decodes with; `WorkSummaryPageSchema` (task.0055)
+  - `loadWorkBoardColumns`, `parseWorkBoardSearchParams`, `WorkBoardColumnsSchema`, `WORK_BOARD_STATUSES` — bounded board read: one summary page per visible status, read sequentially (the reader pool is width one, and each call owns its read deadline), column cursors valid for `/summaries?statuses=<status>&…&cursor=`; pure over an injected `listSummaries`
 - **Files considered API:** `src/index.ts`, `src/adapters/markdown/index.ts`, `src/adapters/doltgres/index.ts`
 
 ## Ports

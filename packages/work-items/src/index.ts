@@ -104,3 +104,36 @@ export type {
 export { toWorkItemDto } from "./types.js";
 
 export * from "./contracts.js";
+
+export type {
+  ListWorkSummaries,
+  WorkBoardColumn,
+  WorkBoardColumns,
+  WorkBoardQueryParse
+} from "./board.js";
+export {
+  loadWorkBoardColumns,
+  parseWorkBoardSearchParams,
+  WORK_BOARD_STATUSES,
+  WorkBoardColumnSchema,
+  WorkBoardColumnsSchema,
+  workBoardColumnQuery
+} from "./board.js";
+export type {
+  ParsedWorkSummaryQuery,
+  WorkSummaryIssue,
+  WorkSummaryPage,
+  WorkSummaryPageInfo,
+  WorkSummaryQuery,
+  WorkSummaryQueryParse
+} from "./summary-query.js";
+export {
+  parseWorkSummarySearchParams,
+  WORK_BOARD_COLUMN_PAGE,
+  WORK_SUMMARY_PAGE_DEFAULT,
+  WORK_SUMMARY_PAGE_MAX,
+  WorkSummaryPageInfoSchema,
+  WorkSummaryPageSchema,
+  WorkSummaryQuerySchema,
+  workSummaryQueryToSearchParams
+} from "./summary-query.js";
