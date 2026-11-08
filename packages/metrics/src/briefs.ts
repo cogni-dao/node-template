@@ -95,9 +95,9 @@ const TABLE_SEPARATOR = /^[\s|:-]+$/;
 const APPROVED_LINE = /^(Goal|Done when) = (?=\S)/;
 const ISO_DATE = /\d{4}-\d{2}-\d{2}/;
 const MONTH_DAY =
-	/^(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.? \d{1,2}(?!\d)/;
+	/^(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.? \d{1,2}(?!\d)/i;
 const LOG_LABEL =
-	/^(?:Update|Progress|Changelog|Review verdict|Review transcript|Pivot|Superseded)(?:s|d)?(?![A-Za-z])/;
+	/^(?:Update|Progress|Changelog|Review verdict|Review transcript|Pivot|Superseded)(?:s|d)?(?![A-Za-z])/i;
 /** `e.g.`, `i.e.`, `etc.`, `vs.` and `cf.` never end a sentence. */
 const ABBREVIATION = /(?:^|[\s("'\[])(?:e\.g|i\.e|etc|vs|cf)\.$/i;
 
@@ -137,7 +137,9 @@ function clean(text: string): string {
 	return text
 		.replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
 		.replace(/`+/g, "")
-		.replace(/\*+|__/g, "")
+		.replace(/\*+/g, "")
+		// Paired `__emphasis__` at word boundaries only; `__init__` stays whole.
+		.replace(/(?<!\w)__(?=\S)([^_]*\s[^_]*?)(?<=\S)__(?!\w)/g, "$1")
 		.replace(/\s+/g, " ")
 		.trim();
 }
@@ -240,11 +242,19 @@ export function fieldSentences(
 function hasLogLine(text: string): boolean {
 	for (const line of toLines(text)) {
 		if (line.fenced) continue;
-		// Optional list marker, checkbox, bold mark or bracket come first.
-		const body = line.text
-			.replace(/^\s*(?:(?:[-*+]|\d{1,9}[.)])\s+)?/, "")
-			.replace(CHECKBOX, "")
-			.replace(/^(?:\*\*|__|\*|_)?[[(]?/, "");
+		// Heading marks, blockquote marks, a list marker, a checkbox, a bold mark or
+		// a bracket may come first, in any nesting.
+		let body = line.text.trimStart();
+		for (let pass = 0; pass < 6; pass++) {
+			const next = body
+				.replace(/^(?:>\s?|#{1,6}\s+)/, "")
+				.replace(/^(?:[-*+]|\d{1,9}[.)])\s+/, "")
+				.replace(CHECKBOX, "")
+				.trimStart();
+			if (next === body) break;
+			body = next;
+		}
+		body = body.replace(/^(?:\*\*|__|\*|_)?[[(]?/, "");
 		if (/^\d{4}-\d{2}-\d{2}/.test(body)) return true;
 		if (MONTH_DAY.test(body)) return true;
 		const label = LOG_LABEL.exec(body);

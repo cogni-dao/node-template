@@ -58,6 +58,14 @@ describe("brief-rules@1 sentence units", () => {
 		expect(code?.words).toBe(6);
 	});
 
+	it("strips paired emphasis at word boundaries but keeps __ inside identifiers", () => {
+		expect(fieldSentences("Call __init__ first")[0]?.text).toBe("Call __init__ first");
+		expect(fieldSentences("Open foo__bar__baz now")[0]?.text).toBe("Open foo__bar__baz now");
+		expect(
+			fieldSentences("__An existing package reaches a node.__ Automation may propose it."),
+		).toHaveLength(2);
+	});
+
 	it("splits a sentence that a bold lead-in closes", () => {
 		expect(
 			fieldSentences("**An existing package reaches a node.** Automation may propose it."),
@@ -218,6 +226,31 @@ describe("brief-rules@1 log blocks", () => {
 			"Sept. 9 shipped",
 		])
 			expect(logged(line), line).toBe(true);
+	});
+	it("sees through heading and blockquote marks in any nesting", () => {
+		for (const line of [
+			"### 2026-11-07 shipped",
+			"# Update: fixed",
+			"> 2026-11-07 shipped",
+			">2026-11-07 shipped",
+			"> > Nov 7 shipped",
+			"> - [x] 2026-11-07 shipped",
+			"## **Progress**: 3 of 5",
+		])
+			expect(logged(line), line).toBe(true);
+	});
+	it("reads month names and log labels without case", () => {
+		for (const line of [
+			"update: fixed",
+			"UPDATE: fixed",
+			"progress (3 of 5)",
+			"review VERDICT: approve",
+			"nov 7 shipped",
+			"SEPTEMBER 9 shipped",
+		])
+			expect(logged(line), line).toBe(true);
+		expect(logged("update the claim before you start")).toBe(false);
+		expect(logged("progressive rollout is safe")).toBe(false);
 	});
 	it("does not flag prose that merely mentions a date or month", () => {
 		for (const line of [
