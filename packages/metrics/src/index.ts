@@ -141,6 +141,8 @@ export function createMetricService(deps: {
 		metricId: string;
 		observationId: string;
 		status: string;
+		/** Stable reason code of a failed or unknown reading; null when ok. */
+		reason: string | null;
 		durationMs: number;
 	}): void;
 }) {
@@ -341,6 +343,7 @@ export function createMetricService(deps: {
 				metricId,
 				observationId: saved.id,
 				status: saved.status,
+				reason: saved.reason,
 				durationMs: now().getTime() - start.getTime(),
 			});
 			return saved;

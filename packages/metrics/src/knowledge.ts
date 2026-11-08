@@ -22,7 +22,10 @@ import {
 } from "./index.js";
 import { type GoalSourcePort, readGoalsProgress } from "./progress.js";
 import {
+	BRIEF_MAX_BYTES,
+	BRIEF_MAX_ROWS,
 	FIRST_PARENT_WALK_CAP,
+	readBriefConformance,
 	readGithubStars,
 	readWorkConvergence,
 	readWorkCount,
@@ -62,6 +65,7 @@ export const PACKAGE_CALCULATOR_IDS = [
 	"work.count@1",
 	"work.convergence@1",
 	"github.stars@1",
+	"brief.conformance@1",
 ] as const;
 /** `work.count@1` → `work.count`: the family every version of a calculator shares. */
 export function calculatorFamily(id: string): string {
@@ -71,6 +75,43 @@ export function calculatorFamily(id: string): string {
 export const RESERVED_CALCULATOR_FAMILIES: ReadonlySet<string> = new Set(
 	PACKAGE_CALCULATOR_IDS.map(calculatorFamily),
 );
+
+/** Revision of every package-served definition; it changes only with a rule version bump. */
+export const BUILTIN_METRIC_REVISION = "builtin:brief-rules@1";
+function builtinBrief(
+	id: string,
+	title: string,
+	subject: "items" | "entries",
+): MetricDefinition {
+	return {
+		id,
+		title,
+		revision: BUILTIN_METRIC_REVISION,
+		spec: {
+			calculatorId: "brief.conformance@1",
+			params: { subject, maxLongShare: 0.1 },
+			cadenceSeconds: 3600,
+			maxAgeSeconds: 7200,
+		},
+		display: "progress",
+	};
+}
+/**
+ * Definitions the package serves beside hub rows, so a node reads them before
+ * any hub merge. A hub row with the same id wins. Sorted by id.
+ */
+export const BUILTIN_METRICS: readonly MetricDefinition[] = [
+	builtinBrief(
+		"brief-conformance-entries",
+		"Hub entry brief conformance",
+		"entries",
+	),
+	builtinBrief(
+		"brief-conformance-items",
+		"Open work item brief conformance",
+		"items",
+	),
+];
 
 export function createGoalMetrics(deps: {
 	knowledgeSql: Sql;
@@ -180,6 +221,34 @@ export function createGoalMetrics(deps: {
 			);
 		},
 	});
+	const briefParams = z.strictObject({
+		subject: z.enum(["items", "entries"]),
+		maxLongShare: z.number().min(0).max(0.5),
+	});
+	registry.register({
+		id: "brief.conformance@1",
+		unit: "%",
+		display: "progress",
+		paramsSchema: briefParams,
+		// One statement; it sends at most 5000 rows and 16 MiB or the totals alone.
+		budget: {
+			timeoutMs: 15000,
+			maxSourceCalls: 1,
+			maxRows: BRIEF_MAX_ROWS,
+			maxResponseBytes: BRIEF_MAX_BYTES,
+		},
+		compute: async (params, ctx) => {
+			const p = briefParams.parse(params);
+			return ctx.read((signal) =>
+				readBriefConformance(
+					deps.knowledgeSql,
+					p.subject,
+					p.maxLongShare,
+					signal,
+				),
+			);
+		},
+	});
 	const nodeCalculatorIds: string[] = [];
 	for (const calculator of deps.nodeCalculators ?? []) {
 		// A definition can only name an id the spec schema accepts.
@@ -223,10 +292,25 @@ export function createGoalMetrics(deps: {
 	}
 	const definitions = {
 		async get(id: string) {
+			const builtin = BUILTIN_METRICS.find((b) => b.id === id);
+			if (!builtin) {
+				const rows = await deps.knowledgeSql.unsafe(
+					`SELECT id,title,metric_spec,updated_at FROM knowledge WHERE id=${literal(id)} AND metric_spec IS NOT NULL AND status <> 'deprecated' LIMIT 1`,
+				);
+				return rows[0] ? parse(rows[0]) : null;
+			}
+			// A hub row with a built-in's id wins in any status. A deprecated or
+			// invalid row never falls back to the built-in: the reading fails visibly.
 			const rows = await deps.knowledgeSql.unsafe(
-				`SELECT id,title,metric_spec,updated_at FROM knowledge WHERE id=${literal(id)} AND metric_spec IS NOT NULL AND status <> 'deprecated' LIMIT 1`,
+				`SELECT id,title,metric_spec,updated_at,status FROM knowledge WHERE id=${literal(id)} LIMIT 1`,
 			);
-			return rows[0] ? parse(rows[0]) : null;
+			const row = rows[0];
+			if (!row) return structuredClone(builtin);
+			if (row.status === "deprecated" || row.metric_spec == null) {
+				deps.log({ event: "metric.definition_invalid", metricId: id });
+				return null;
+			}
+			return parse(row);
 		},
 		async list(limit: number, after?: string) {
 			const cap = Math.min(50, Math.max(1, Math.floor(limit)));
@@ -247,7 +331,28 @@ export function createGoalMetrics(deps: {
 					if (definition) items.push(definition);
 				}
 			}
-			return { items, nextCursor: more ? (cursor ?? null) : null };
+			// Built-ins join by id: only those after the caller's cursor, only when no
+			// hub row of any status holds the id, and only up to where the hub page
+			// stopped, so a later page never skips or repeats one.
+			const held = await deps.knowledgeSql.unsafe(
+				`SELECT id FROM knowledge WHERE id IN (${BUILTIN_METRICS.map((b) => literal(b.id)).join(",")})`,
+			);
+			const shadowed = new Set(held.map((r) => String(r.id)));
+			const edge = more ? cursor : undefined;
+			const merged = [
+				...items,
+				...BUILTIN_METRICS.filter(
+					(b) =>
+						!shadowed.has(b.id) &&
+						(after === undefined || b.id > after) &&
+						(edge === undefined || b.id <= edge),
+				).map((b) => structuredClone(b)),
+			].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+			if (merged.length > cap) {
+				const page = merged.slice(0, cap);
+				return { items: page, nextCursor: page[cap - 1]?.id ?? null };
+			}
+			return { items: merged, nextCursor: more ? (cursor ?? null) : null };
 		},
 	};
 	return createMetricService({

@@ -5,6 +5,12 @@
  * client, its credentials and its lifecycle.
  */
 import type { Sql } from "postgres";
+import {
+	type BriefSubject,
+	briefEvidenceRefs,
+	scoreBrief,
+	summarizeBriefs,
+} from "./briefs.js";
 import type { MetricBudget, MetricSample } from "./contracts.js";
 
 export async function readWorkCount(
@@ -526,4 +532,119 @@ export async function readWorkConvergence(
 	if (output === "validated") return sample(validated, true);
 	if (created === 0) return sample(0, false, "zero_denominator");
 	return sample(validated / created, true);
+}
+
+/** Most rows one brief-conformance compute scores. */
+export const BRIEF_MAX_ROWS = 5000;
+/** Most bytes of scored text one brief-conformance compute reads (16 MiB). */
+export const BRIEF_MAX_BYTES = 16_777_216;
+/** A scored field longer than this many characters is sent absent and flagged. */
+const BRIEF_FIELD_CHARS = 100_000;
+
+/**
+ * One statement per subject. It counts the scope's rows (`n`) and the bytes of
+ * its capped scored fields, and joins the rows in only while `n` and the bytes
+ * are inside the caps; otherwise it returns the totals row alone, so the
+ * database never sends a result over a cap. A field over the character cap is
+ * sent as NULL and flagged `oversize`.
+ */
+export function briefConformanceSql(subject: BriefSubject): string {
+	const capped = (column: string) =>
+		`CASE WHEN char_length(${column}) > ${BRIEF_FIELD_CHARS} THEN NULL ELSE ${column} END AS ${column}`;
+	const over = (column: string) =>
+		`COALESCE(char_length(${column}), 0) > ${BRIEF_FIELD_CHARS}`;
+	const fields =
+		subject === "items"
+			? ["title", "summary", "outcome"]
+			: ["title", "use_when", "content"];
+	const from =
+		subject === "items"
+			? `work_items WHERE status NOT IN ('done','cancelled') AND ${SYNTHETIC_LABELS("labels")}`
+			: `knowledge WHERE status <> 'deprecated' AND entry_type <> 'html' AND (tags IS NULL OR CAST(tags AS TEXT) NOT LIKE '%"test-fixture"%') AND title NOT LIKE '%[TEST]%'`;
+	// Doltgres 0.57.3 panics on octet_length over a stored long text unless the
+	// text is first materialized by substr, and compares a bare SUM as text, so
+	// the total is cast to BIGINT. The character cap makes the substr safe.
+	const size = (column: string) =>
+		`COALESCE(CASE WHEN char_length(${column}) > ${BRIEF_FIELD_CHARS} THEN 0 ELSE octet_length(substr(${column}, 1, ${BRIEF_FIELD_CHARS})) END, 0) AS ${column}_bytes`;
+	const bytes = fields.map((f) => `${f}_bytes`).join(" + ");
+	return `WITH scope AS (SELECT id, ${fields.map(capped).join(", ")}, ${fields.map(size).join(", ")}, (${fields.map(over).join(" OR ")}) AS oversize FROM ${from}), totals AS (SELECT COUNT(*) AS n, CAST(COALESCE(SUM(${bytes}), 0) AS BIGINT) AS bytes FROM scope) SELECT NOW() AS as_of, t.n, t.bytes, s.id, ${fields.map((f) => `s.${f}`).join(", ")}, s.oversize FROM totals t LEFT JOIN scope s ON t.n <= ${BRIEF_MAX_ROWS} AND t.bytes <= ${BRIEF_MAX_BYTES} ORDER BY s.id`;
+}
+
+/**
+ * Brief conformance of one subject: the percent of open work items or live
+ * hub entries that pass every agent-fixable `brief-rules@1` rule. One
+ * statement, one source call. A cap hit, an empty scope and a failed read are
+ * unknown, never zero.
+ */
+export async function readBriefConformance(
+	sql: Sql,
+	subject: BriefSubject,
+	maxLongShare: number,
+	signal: AbortSignal,
+): Promise<MetricSample> {
+	const source = subject === "items" ? "node.work_items" : "node.knowledge";
+	const unknown = (
+		reason: NonNullable<MetricSample["reason"]>,
+		asOf: string | null,
+		evidenceRefs: string[] = [],
+	): MetricSample => ({
+		value: 0,
+		unit: "%",
+		complete: false,
+		sourceWatermarks: [{ source, asOf }],
+		evidenceRefs,
+		reason,
+	});
+	let rows: ReadonlyArray<Record<string, unknown>>;
+	try {
+		rows = await run(sql, briefConformanceSql(subject), signal);
+	} catch (error) {
+		// A timeout keeps its own failure; every other read error is source_failed.
+		if (signal.aborted) throw error;
+		return unknown("source_failed", null);
+	}
+	const first = rows[0];
+	if (!first) return unknown("incomplete_or_invalid_source", null);
+	const asOf = first.as_of
+		? new Date(first.as_of as string).toISOString()
+		: null;
+	const n = Number(first.n);
+	const bytes = Number(first.bytes);
+	if (!Number.isFinite(n) || !Number.isFinite(bytes))
+		return unknown("incomplete_or_invalid_source", asOf);
+	if (n === 0) return unknown("zero_denominator", asOf, ["counts:evaluated=0"]);
+	// Over a cap the statement sends the totals row alone.
+	if (
+		n > BRIEF_MAX_ROWS ||
+		bytes > BRIEF_MAX_BYTES ||
+		rows.length !== n ||
+		rows.some((r) => r.id == null)
+	)
+		return unknown("incomplete_or_invalid_source", asOf, [
+			`counts:evaluated=${n};bytes=${bytes};cap_hit`,
+		]);
+	const text = (value: unknown) => (value == null ? null : String(value));
+	const scored = rows.map((row) => ({
+		id: String(row.id),
+		broken: scoreBrief(
+			subject,
+			{
+				title: text(row.title),
+				summary: text(row.summary),
+				outcome: text(row.outcome),
+				use_when: text(row.use_when),
+				content: text(row.content),
+				oversize: row.oversize === true || row.oversize === "t",
+			},
+			maxLongShare,
+		).broken,
+	}));
+	const summary = summarizeBriefs(subject, scored);
+	return {
+		value: summary.percent ?? 0,
+		unit: "%",
+		complete: summary.percent !== null,
+		sourceWatermarks: [{ source, asOf }],
+		evidenceRefs: briefEvidenceRefs(summary),
+	};
 }
