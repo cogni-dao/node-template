@@ -3,9 +3,10 @@
 
 /**
  * Module: `@cogni/knowledge-base-ui/work-board`
- * Purpose: Read-only ReUI board projection of a node's already filtered, sorted page of work items, shared across the fleet (task.0041).
- * Scope: Pure presentation. The consuming node owns data loading, URL state, routing and authentication; it injects navigation through `onOpenItem` and, optionally, `goalHref` / `renderGoalLink`.
+ * Purpose: Read-only ReUI board projection of per-status column pages of work summaries, shared across the fleet (task.0041, task.0055).
+ * Scope: Pure presentation. The consuming node owns data loading, URL state, routing and authentication; it injects navigation through `onOpenItem`, column paging through `onLoadMore` and, optionally, `goalHref` / `renderGoalLink`.
  * Invariants:
+ *   - COLUMN_PAGES_ONLY: the board renders the column pages it is given; there is no rows-from-a-full-array mode, so an adopter that fetches every item cannot compile against it. A column that has more shows `N+` and a Load more button.
  *   - ONE_HOVER_SURFACE: each card has one hover/focus surface; the open button stretches over the card and only the goal link sits above it.
  *   - ONE_GOAL_LINK: at most one goal pointer per card, from a `goal:<slug>` or `goal:goal-<slug>` label with a safe kebab-case slug.
  *   - RANK_FROM_PACKAGE: the rank label comes from `@cogni/work-items` `rankScore`, never re-derived here.
@@ -28,6 +29,7 @@ import {
 } from "./reui-kanban.js";
 import { cn } from "./cn.js";
 import { RelativeTime } from "./relative-time.js";
+import { Button } from "./ui/button.js";
 import { StatusPill, TypeIcon } from "./work-item-icons.js";
 
 /** The structural subset of a work item the board renders. */
@@ -52,11 +54,22 @@ export interface WorkBoardGoalLink {
   readonly className: string;
 }
 
-export interface WorkBoardProps<TItem extends WorkBoardItem> {
+/** One status column: the pages loaded so far and whether the node holds more. */
+export interface WorkBoardColumnState<TItem extends WorkBoardItem> {
+  readonly status: string;
   readonly items: readonly TItem[];
-  readonly statuses: readonly string[];
+  /** True while the node can serve a further page for this column. */
+  readonly hasMore: boolean;
+  /** True while that further page is in flight. */
+  readonly isLoadingMore?: boolean | undefined;
+}
+
+export interface WorkBoardProps<TItem extends WorkBoardItem> {
+  readonly columns: readonly WorkBoardColumnState<TItem>[];
   readonly isLoading: boolean;
   readonly onOpenItem: (item: TItem) => void;
+  /** Requests the next page of one column; the node fetches it and passes it back in `columns`. */
+  readonly onLoadMore: (status: string) => void;
   /** Builds a goal link href from its slug. Defaults to `/knowledge/goal-<slug>`. */
   readonly goalHref?: (slug: string) => string;
   /** Renders the goal link, e.g. with a router link. Defaults to a plain `<a>`. */
@@ -102,26 +115,24 @@ function BoardSkeleton({ className }: { readonly className: string }) {
 }
 
 export function WorkBoard<TItem extends WorkBoardItem>({
-  items,
-  statuses,
+  columns,
   isLoading,
   onOpenItem,
+  onLoadMore,
   goalHref = defaultGoalHref,
   renderGoalLink = defaultGoalLink,
 }: WorkBoardProps<TItem>): ReactElement {
-  const columns = useMemo(() => {
-    const result: Record<string, TItem[]> = Object.fromEntries(
-      statuses.map((status) => [status, []]),
-    );
-    for (const item of items) {
-      result[item.status]?.push(item);
-    }
-    return result;
-  }, [items, statuses]);
+  const byStatus = useMemo(
+    () =>
+      Object.fromEntries(
+        columns.map((column) => [column.status, [...column.items]]),
+      ) as Record<string, TItem[]>,
+    [columns],
+  );
 
   return (
     <Kanban
-      value={columns}
+      value={byStatus}
       onValueChange={() => {}}
       getItemValue={(item) => item.id}
     >
@@ -130,7 +141,7 @@ export function WorkBoard<TItem extends WorkBoardItem>({
         aria-label="Work board"
         role="region"
       >
-        {Object.entries(columns).map(([status, cards]) => (
+        {columns.map(({ status, items: cards, hasMore, isLoadingMore }) => (
           <KanbanColumn
             key={status}
             value={status}
@@ -143,9 +154,13 @@ export function WorkBoard<TItem extends WorkBoardItem>({
               </h2>
               <span
                 className="font-mono text-muted-foreground text-xs"
-                title={`${cards.length} items on this page`}
+                title={
+                  hasMore
+                    ? `${cards.length} loaded, more available`
+                    : `${cards.length} items`
+                }
               >
-                {cards.length}
+                {hasMore ? `${cards.length}+` : cards.length}
               </span>
             </div>
             <KanbanColumnContent value={status} className="min-h-40 gap-3">
@@ -156,7 +171,7 @@ export function WorkBoard<TItem extends WorkBoardItem>({
                 </>
               ) : cards.length === 0 ? (
                 <p className="rounded-lg border border-dashed px-3 py-8 text-center text-muted-foreground text-xs">
-                  No items on this page
+                  No items
                 </p>
               ) : (
                 cards.map((item) => {
@@ -215,6 +230,18 @@ export function WorkBoard<TItem extends WorkBoardItem>({
                   );
                 })
               )}
+              {!isLoading && hasMore ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={isLoadingMore === true}
+                  aria-label={`Load more ${status}`}
+                  onClick={() => onLoadMore(status)}
+                >
+                  {isLoadingMore ? "Loading…" : "Load more"}
+                </Button>
+              ) : null}
             </KanbanColumnContent>
           </KanbanColumn>
         ))}

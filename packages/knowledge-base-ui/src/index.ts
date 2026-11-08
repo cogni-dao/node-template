@@ -56,10 +56,20 @@ export {
 } from "./reui-kanban.js";
 export {
   WorkBoard,
+  type WorkBoardColumnState,
   type WorkBoardGoalLink,
   type WorkBoardItem,
   type WorkBoardProps,
 } from "./work-board.js";
+export {
+  type UseWorkBoardOptions,
+  type UseWorkBoardResult,
+  useWorkBoard,
+} from "./use-work-board.js";
+export {
+  workBoardTableStateToQuery,
+  type WorkBoardTableState,
+} from "./work-board-query.js";
 export {
   WorkBoardView,
   type WorkBoardViewProps,

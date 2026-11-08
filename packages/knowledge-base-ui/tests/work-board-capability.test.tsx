@@ -3,10 +3,14 @@
 
 /**
  * Module: `@cogni/knowledge-base-ui/work-board-capability.test`
- * Purpose: Parity proof for the complete work board capability: a fork that renders only the package's public exports, with its own TanStack table and state, can sort by rank, filter by type, status, project and rank range, search, toggle board columns, and see the cards update.
- * Scope: Package exports + a plain client-side TanStack table + fixture items. No node app code, router or URL state.
+ * Purpose: Parity proof for the complete, bounded work board capability: a fork that renders only the package's public exports, with its own TanStack table, React Query client and two fetchers, can sort, filter, search and toggle columns, and the board never asks for more than its budget (task.0044, task.0055).
+ * Scope: Package exports + a manual-filtering TanStack table + a fixture "server" built from the published codec and board loader. No node app code, router or URL state.
+ * Invariants:
+ *   - ONE_BOARD_REQUEST: first render issues exactly one board request, ≤ 20 cards per column, no page request.
+ *   - ONE_PAGE_PER_CLICK: Load more issues exactly one page request for that column and appends; nothing loops cursors.
+ *   - ABORT_EVERY_REQUEST: a filter change aborts the in-flight board and page requests.
  * Side-effects: DOM rendering in jsdom
- * Links: task.0044, ../src/work-board-toolbar.tsx, ../src/work-board-view.tsx
+ * Links: task.0044, task.0055, ../src/work-board-toolbar.tsx, ../src/work-board-view.tsx, ../src/use-work-board.ts
  */
 
 // @vitest-environment jsdom
@@ -14,12 +18,22 @@
 import "@testing-library/jest-dom/vitest";
 
 import {
+  loadWorkBoardColumns,
+  parseWorkBoardSearchParams,
+  parseWorkSummarySearchParams,
+  rankScore,
+  WORK_BOARD_COLUMN_PAGE,
+  type WorkBoardColumns,
+  type WorkItemSummary,
+  type WorkSummaryPage,
+  type WorkSummaryQuery,
+} from "@cogni/work-items";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
   type ColumnFiltersState,
   getCoreRowModel,
   getFacetedRowModel,
   getFacetedUniqueValues,
-  getFilteredRowModel,
-  getSortedRowModel,
   type SortingState,
   useReactTable,
 } from "@tanstack/react-table";
@@ -28,6 +42,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -38,9 +53,10 @@ import {
   ACTIVE_WORK_STATUSES,
   createWorkItemColumns,
   DEFAULT_WORK_SORT,
+  useWorkBoard,
   WorkBoardToolbar,
   WorkBoardView,
-  type WorkItemRow,
+  workBoardTableStateToQuery,
   workItemGlobalFilterFn,
 } from "../src/index.js";
 
@@ -53,21 +69,109 @@ function scores(goal: number) {
   );
 }
 
-const fixture: WorkItemRow[] = [
-  { id: "task.0001", type: "task", title: "Low task", status: "needs_implement", labels: [], projectId: "proj.alpha", scores: scores(1) },
-  { id: "task.0002", type: "task", title: "High task", status: "needs_implement", labels: [], projectId: "proj.beta", scores: scores(5) },
-  { id: "bug.0003", type: "bug", title: "Middle bug", status: "needs_implement", labels: ["ui"], projectId: "proj.alpha", scores: scores(3) },
-  { id: "story.0004", type: "story", title: "Design story", status: "needs_design", labels: [], projectId: "proj.beta", scores: scores(4) },
-  { id: "task.0005", type: "task", title: "Finished task", status: "done", labels: [], projectId: "proj.alpha", scores: scores(2) },
-  { id: "spike.0006", type: "spike", title: "Unscored spike", status: "needs_implement", labels: [], priority: 1 },
+const STAMP = "2026-11-01T00:00:00Z";
+function row(
+  fields: Pick<WorkItemSummary, "id" | "type" | "title" | "status"> &
+    Partial<WorkItemSummary>,
+): WorkItemSummary {
+  return { labels: [], createdAt: STAMP, updatedAt: STAMP, ...fields };
+}
+
+const fixture: WorkItemSummary[] = [
+  row({ id: "task.0001", type: "task", title: "Low task", status: "needs_implement", projectId: "proj.alpha", scores: scores(1) }),
+  row({ id: "task.0002", type: "task", title: "High task", status: "needs_implement", projectId: "proj.beta", scores: scores(5) }),
+  row({ id: "bug.0003", type: "bug", title: "Middle bug", status: "needs_implement", labels: ["ui"], projectId: "proj.alpha", scores: scores(3) }),
+  row({ id: "story.0004", type: "story", title: "Design story", status: "needs_design", projectId: "proj.beta", scores: scores(4) }),
+  row({ id: "task.0005", type: "task", title: "Finished task", status: "done", projectId: "proj.alpha", scores: scores(2) }),
+  row({ id: "spike.0006", type: "spike", title: "Unscored spike", status: "needs_implement", priority: 1 }),
 ];
 
+/** 45 implement cards, so a 20-row column page has two more pages behind it. */
+const bulk: WorkItemSummary[] = Array.from({ length: 45 }, (_, index) =>
+  row({
+    id: `task.${String(1000 + index)}`,
+    type: "task",
+    title: `Bulk ${index}`,
+    status: "needs_implement",
+    scores: scores(1 + (index % 5)),
+  }),
+);
+
+/** What a node's summaries endpoint does, over fixture rows; cursors are offsets. */
+function servePage(
+  items: readonly WorkItemSummary[],
+  query: WorkSummaryQuery,
+): WorkSummaryPage {
+  const text = query.text?.toLowerCase();
+  const rows = items
+    .filter((item) => !query.types || query.types.includes(item.type))
+    .filter((item) => !query.statuses || query.statuses.includes(item.status))
+    .filter(
+      (item) =>
+        !query.projectIds ||
+        (item.projectId !== undefined && query.projectIds.includes(item.projectId)),
+    )
+    .filter((item) => {
+      if (query.rankMin === undefined && query.rankMax === undefined) return true;
+      const rank = rankScore(item.scores);
+      return (
+        rank !== undefined &&
+        rank >= (query.rankMin ?? Number.NEGATIVE_INFINITY) &&
+        rank <= (query.rankMax ?? Number.POSITIVE_INFINITY)
+      );
+    })
+    .filter(
+      (item) =>
+        !text ||
+        [item.id, item.title, ...item.labels].join(" ").toLowerCase().includes(text),
+    )
+    .sort((a, b) => {
+      const sign = query.sortDirection === "asc" ? 1 : -1;
+      const ra = rankScore(a.scores);
+      const rb = rankScore(b.scores);
+      if (ra === undefined && rb !== undefined) return 1;
+      if (ra !== undefined && rb === undefined) return -1;
+      if (ra !== undefined && rb !== undefined && ra !== rb) return (ra - rb) * sign;
+      return a.id < b.id ? -1 : 1;
+    });
+  const offset = query.cursor ? Number(query.cursor) : 0;
+  const limit = query.limit ?? 25;
+  const hasMore = offset + limit < rows.length;
+  return {
+    items: rows.slice(offset, offset + limit),
+    pageInfo: { hasMore, endCursor: hasMore ? String(offset + limit) : null },
+  };
+}
+
+function fixtureServer(items: readonly WorkItemSummary[]) {
+  const fetchBoard = vi.fn(
+    async (params: URLSearchParams, _signal: AbortSignal): Promise<WorkBoardColumns> => {
+      const parsed = parseWorkBoardSearchParams(params);
+      if (!parsed.ok) throw new Error("bad board request");
+      return loadWorkBoardColumns(
+        async (query) => servePage(items, query),
+        parsed.query,
+        parsed.statuses,
+      );
+    },
+  );
+  const fetchPage = vi.fn(
+    async (params: URLSearchParams, _signal: AbortSignal): Promise<WorkSummaryPage> => {
+      const parsed = parseWorkSummarySearchParams(params);
+      if (!parsed.ok) throw new Error("bad page request");
+      return servePage(items, parsed.query);
+    },
+  );
+  return { fetchBoard, fetchPage };
+}
+type Server = ReturnType<typeof fixtureServer>;
+
 function Fork({
-  items,
+  server,
   onOpenItem,
 }: {
-  readonly items: readonly WorkItemRow[];
-  readonly onOpenItem: (item: WorkItemRow) => void;
+  readonly server: Server;
+  readonly onOpenItem: (item: WorkItemSummary) => void;
 }) {
   const [sorting, setSorting] = useState<SortingState>(
     DEFAULT_WORK_SORT.map((entry) => ({ ...entry })),
@@ -77,10 +181,19 @@ function Fork({
   const [visibleStatuses, setVisibleStatuses] = useState<string[]>([
     ...ACTIVE_WORK_STATUSES,
   ]);
-  const columns = useMemo(() => createWorkItemColumns<WorkItemRow>(), []);
-  const data = useMemo(() => [...items], [items]);
+  const query = useMemo(
+    () => workBoardTableStateToQuery({ sorting, columnFilters, globalFilter }),
+    [sorting, columnFilters, globalFilter],
+  );
+  const board = useWorkBoard({
+    query,
+    statuses: visibleStatuses,
+    fetchBoard: server.fetchBoard,
+    fetchPage: server.fetchPage,
+  });
+  const columns = useMemo(() => createWorkItemColumns<WorkItemSummary>(), []);
   const table = useReactTable({
-    data,
+    data: board.items as WorkItemSummary[],
     columns,
     getRowId: (item) => item.id,
     state: { sorting, columnFilters, globalFilter },
@@ -88,9 +201,9 @@ function Fork({
     onColumnFiltersChange: setColumnFilters,
     onGlobalFilterChange: setGlobalFilter,
     globalFilterFn: workItemGlobalFilterFn,
+    manualSorting: true,
+    manualFiltering: true,
     getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
     getFacetedRowModel: getFacetedRowModel(),
     getFacetedUniqueValues: getFacetedUniqueValues(),
   });
@@ -103,9 +216,10 @@ function Fork({
       />
       <WorkBoardView
         table={table}
-        visibleStatuses={visibleStatuses}
-        isLoading={false}
+        columns={board.columns}
+        isLoading={board.isLoading}
         onOpenItem={onOpenItem}
+        onLoadMore={board.loadMore}
       />
     </>
   );
@@ -122,22 +236,36 @@ const cardRanks = () =>
     .map((card) => within(card).getByTitle("Rank score").textContent);
 const filterBar = () =>
   within(screen.getByRole("group", { name: "Board filters and sorting" }));
+const column = (name: string) =>
+  within(screen.getByRole("heading", { name }).closest("[data-slot]") as HTMLElement);
 
 async function openFilter(name: string) {
   await userEvent.click(filterBar().getByRole("button", { name }));
 }
 
-function mount() {
+function mount(items: readonly WorkItemSummary[] = fixture) {
   const onOpenItem = vi.fn();
-  render(<Fork items={fixture} onOpenItem={onOpenItem} />);
-  return { onOpenItem };
+  const server = fixtureServer(items);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const view = render(
+    <QueryClientProvider client={client}>
+      <Fork server={server} onOpenItem={onOpenItem} />
+    </QueryClientProvider>,
+  );
+  return { onOpenItem, server, ...view };
+}
+
+async function mounted(items?: readonly WorkItemSummary[]) {
+  const result = mount(items);
+  await screen.findAllByRole("button", { name: CARD });
+  return result;
 }
 
 describe("work board capability (package exports only)", () => {
   afterEach(cleanup);
 
-  it("renders the full control surface and active columns by default", () => {
-    mount();
+  it("renders the full control surface and active columns by default", async () => {
+    await mounted();
     expect(screen.getByPlaceholderText(/Search id, title, labels/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Board columns" })).toBeInTheDocument();
     for (const name of ["Rank", "Type", "Status", "Project"]) {
@@ -151,57 +279,44 @@ describe("work board capability (package exports only)", () => {
   });
 
   it("sorts by rank descending first, unscored last, then ascending", async () => {
-    mount();
-    const implementIds = new Set(
-      fixture.filter((item) => item.status === "needs_implement").map((item) => item.id),
-    );
-    const implementRanks = () =>
-      screen
-        .queryAllByRole("button", { name: CARD })
-        .filter((card) => implementIds.has(card.getAttribute("aria-label")?.split(":")[0] ?? ""))
-        .map((card) => within(card).getByTitle("Rank score").textContent);
-    expect(implementRanks().at(-1)).toBe("Unscored");
-    const desc = implementRanks()
-      .filter((v) => v !== "Unscored")
-      .map((v) => Number(v?.replace("Rank ", "")));
-    expect(desc).toEqual([...desc].sort((a, b) => b - a));
-    expect(cardIds().indexOf("task.0002")).toBeLessThan(cardIds().indexOf("bug.0003"));
-    expect(cardIds().indexOf("bug.0003")).toBeLessThan(cardIds().indexOf("task.0001"));
-    expect(cardIds().indexOf("task.0001")).toBeLessThan(cardIds().indexOf("spike.0006"));
+    await mounted();
+    const implement = () => cardIds().filter((id) => id !== "story.0004");
+    expect(implement()).toEqual(["task.0002", "bug.0003", "task.0001", "spike.0006"]);
     await userEvent.click(filterBar().getByRole("button", { name: "Rank" }));
-    expect(cardIds().indexOf("task.0001")).toBeLessThan(cardIds().indexOf("bug.0003"));
-    expect(cardIds().indexOf("bug.0003")).toBeLessThan(cardIds().indexOf("task.0002"));
-    expect(cardIds().indexOf("task.0002")).toBeLessThan(cardIds().indexOf("spike.0006"));
+    await waitFor(() =>
+      expect(implement()).toEqual(["task.0001", "bug.0003", "task.0002", "spike.0006"]),
+    );
+    expect(cardRanks().at(-1)).toBe("Unscored");
   });
 
   it("filters by type, then clears filters", async () => {
-    mount();
+    await mounted();
     await openFilter("Filter type");
     await userEvent.click(screen.getByRole("button", { name: "bug" }));
+    await waitFor(() => expect(cardIds()).toEqual(["bug.0003"]));
     expect(screen.getByRole("button", { name: "bug" })).toHaveAttribute("aria-pressed", "true");
-    expect(cardIds()).toEqual(["bug.0003"]);
     await userEvent.keyboard("{Escape}");
     await userEvent.click(screen.getByRole("button", { name: "Clear filters" }));
-    expect(cardIds()).toHaveLength(5);
+    await waitFor(() => expect(cardIds()).toHaveLength(5));
     expect(screen.queryByRole("button", { name: "Clear filters" })).not.toBeInTheDocument();
   });
 
   it("filters by status", async () => {
-    mount();
+    await mounted();
     await openFilter("Filter status");
     await userEvent.click(screen.getByRole("button", { name: "design" }));
-    expect(cardIds()).toEqual(["story.0004"]);
+    await waitFor(() => expect(cardIds()).toEqual(["story.0004"]));
   });
 
   it("filters by project from facets", async () => {
-    mount();
+    await mounted();
     await openFilter("Filter projects");
     await userEvent.click(screen.getByRole("button", { name: "beta" }));
-    expect(cardIds().sort()).toEqual(["story.0004", "task.0002"]);
+    await waitFor(() => expect(cardIds().sort()).toEqual(["story.0004", "task.0002"]));
   });
 
   it("filters by a rank range", async () => {
-    mount();
+    await mounted();
     await openFilter("Filter rank");
     const before = cardRanks()
       .filter((rank) => rank !== "Unscored")
@@ -211,9 +326,9 @@ describe("work board capability (package exports only)", () => {
     fireEvent.change(screen.getByLabelText("Rank minimum"), {
       target: { value: String(threshold) },
     });
+    await waitFor(() => expect(cardRanks()).toHaveLength(before.length - 1));
     const after = cardRanks();
     expect(after).not.toContain("Unscored");
-    expect(after.length).toBe(before.length - 1);
     for (const rank of after) {
       expect(Number(rank?.replace("Rank ", ""))).toBeGreaterThanOrEqual(threshold);
     }
@@ -221,51 +336,167 @@ describe("work board capability (package exports only)", () => {
   });
 
   it("searches id, title and labels", async () => {
-    mount();
+    await mounted();
     await userEvent.type(screen.getByPlaceholderText(/Search id, title, labels/), "ui");
-    expect(cardIds()).toEqual(["bug.0003"]);
+    await waitFor(() => expect(cardIds()).toEqual(["bug.0003"]));
   });
 
-  it("toggles board columns and the cards follow", async () => {
-    mount();
+  it("toggles board columns and the board follows", async () => {
+    const { server } = await mounted();
     await userEvent.click(screen.getByRole("button", { name: "Board columns" }));
     await userEvent.click(screen.getByRole("menuitemcheckbox", { name: "design" }));
     await userEvent.click(screen.getByRole("menuitemcheckbox", { name: "done" }));
     await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(cardIds()).toContain("task.0005"));
     expect(cardIds()).not.toContain("story.0004");
-    expect(cardIds()).toContain("task.0005");
+    expect(screen.queryByRole("heading", { name: "design" })).not.toBeInTheDocument();
+    const last = server.fetchBoard.mock.lastCall?.[0];
+    expect(last?.get("statuses")).not.toContain("needs_design");
+    expect(last?.get("statuses")).toContain("done");
   });
 
   it("discloses a sort without a board control and resets to rank", async () => {
-    mount();
-    // A fork's table offers more columns than the board; sort one of them through the table.
-    await userEvent.click(filterBar().getByRole("button", { name: /^Type/ }));
-    expect(screen.queryByText(/Sorted by/)).not.toBeInTheDocument();
-    cleanup();
     function Hidden() {
-      const columns = useMemo(() => createWorkItemColumns<WorkItemRow>(), []);
+      const columns = useMemo(() => createWorkItemColumns<WorkItemSummary>(), []);
       const [sorting, setSorting] = useState<SortingState>([{ id: "priority", desc: false }]);
       const table = useReactTable({
-        data: fixture as WorkItemRow[],
+        data: fixture,
         columns,
         state: { sorting },
         onSortingChange: setSorting,
+        manualSorting: true,
         getCoreRowModel: getCoreRowModel(),
-        getSortedRowModel: getSortedRowModel(),
       });
-      return <WorkBoardView table={table} visibleStatuses={["needs_implement"]} isLoading={false} onOpenItem={() => {}} />;
+      return (
+        <WorkBoardView
+          table={table}
+          columns={[{ status: "needs_implement", items: fixture.slice(0, 1), hasMore: false }]}
+          isLoading={false}
+          onOpenItem={() => {}}
+          onLoadMore={() => {}}
+        />
+      );
     }
     render(<Hidden />);
     expect(screen.getByText("Sorted by priority (ascending)")).toBeInTheDocument();
-    expect(cardIds()[0]).toBe("spike.0006");
     await userEvent.click(screen.getByRole("button", { name: "Reset to rank" }));
     expect(screen.queryByText(/Sorted by/)).not.toBeInTheDocument();
-    expect(cardIds()[0]).toBe("task.0002");
   });
 
   it("opens the card's own item", async () => {
-    const { onOpenItem } = mount();
+    const { onOpenItem } = await mounted();
     await userEvent.click(screen.getByRole("button", { name: "story.0004: Design story" }));
     expect(onOpenItem).toHaveBeenCalledWith(fixture[3]);
+  });
+});
+
+describe("work board bounded reads", () => {
+  afterEach(cleanup);
+
+  it("issues one board request, at most one budget page per column, and no page request", async () => {
+    const { server } = await mounted(bulk);
+    await waitFor(() => expect(cardIds()).toHaveLength(WORK_BOARD_COLUMN_PAGE));
+    expect(server.fetchBoard).toHaveBeenCalledTimes(1);
+    expect(server.fetchPage).not.toHaveBeenCalled();
+    const params = server.fetchBoard.mock.calls[0]?.[0];
+    expect(params?.get("statuses")).toBe(ACTIVE_WORK_STATUSES.join(","));
+    expect(params?.get("limit")).toBe(String(WORK_BOARD_COLUMN_PAGE));
+    expect(params?.has("cursor")).toBe(false);
+    const board = await server.fetchBoard.mock.results[0]?.value;
+    for (const col of board.columns) {
+      expect(col.items.length).toBeLessThanOrEqual(WORK_BOARD_COLUMN_PAGE);
+    }
+    // The count says more exist; it never claims to be a total.
+    expect(column("implement").getByText(`${WORK_BOARD_COLUMN_PAGE}+`)).toBeInTheDocument();
+  });
+
+  it("shows N+ while a column has more and appends exactly one page per Load more", async () => {
+    const { server } = await mounted(bulk);
+    const implement = () => column("implement");
+    expect(implement().getByText(`${WORK_BOARD_COLUMN_PAGE}+`)).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /^Load more/ })).toHaveLength(1);
+
+    await userEvent.click(screen.getByRole("button", { name: "Load more needs_implement" }));
+    await waitFor(() => expect(cardIds()).toHaveLength(40));
+    expect(server.fetchPage).toHaveBeenCalledTimes(1);
+    expect(server.fetchBoard).toHaveBeenCalledTimes(1);
+    const page = server.fetchPage.mock.calls[0]?.[0];
+    expect(page?.get("statuses")).toBe("needs_implement");
+    expect(page?.get("cursor")).toBe(String(WORK_BOARD_COLUMN_PAGE));
+    expect(page?.get("limit")).toBe(String(WORK_BOARD_COLUMN_PAGE));
+    expect(new Set(cardIds()).size).toBe(40);
+    expect(implement().getByText("40+")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Load more needs_implement" }));
+    await waitFor(() => expect(cardIds()).toHaveLength(45));
+    expect(server.fetchPage).toHaveBeenCalledTimes(2);
+    expect(implement().getByText("45")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Load more/ })).not.toBeInTheDocument();
+
+    // Nothing keeps walking the cursor on its own.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(server.fetchPage).toHaveBeenCalledTimes(2);
+    expect(server.fetchBoard).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts the in-flight board and page requests when the filter changes", async () => {
+    const { server } = await mounted(bulk);
+    const signals: AbortSignal[] = [];
+    const release: Array<() => void> = [];
+    const original = server.fetchPage.getMockImplementation();
+    server.fetchPage.mockImplementation(async (params, signal) => {
+      signals.push(signal);
+      await new Promise<void>((resolve) => release.push(resolve));
+      return (original as NonNullable<typeof original>)(params, signal);
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Load more needs_implement" }));
+    await waitFor(() => expect(signals).toHaveLength(1));
+    expect(screen.getByRole("button", { name: "Load more needs_implement" })).toBeDisabled();
+    expect(signals[0]?.aborted).toBe(false);
+
+    await userEvent.type(screen.getByPlaceholderText(/Search id, title, labels/), "Bulk 1");
+    await waitFor(() => expect(signals[0]?.aborted).toBe(true));
+    release.forEach((resolve) => resolve());
+
+    // The aborted page never lands: only the new query's first page is shown.
+    await waitFor(() => expect(server.fetchBoard.mock.lastCall?.[0].get("text")).toBe("Bulk 1"));
+    await waitFor(() => expect(cardIds().length).toBeLessThanOrEqual(WORK_BOARD_COLUMN_PAGE));
+    expect(cardIds().every((id) => bulk.some((item) => item.id === id && item.title.startsWith("Bulk 1")))).toBe(true);
+    expect(server.fetchPage).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts an in-flight board request when the filter changes, and refetches once per change", async () => {
+    const signals: AbortSignal[] = [];
+    const server = fixtureServer(bulk);
+    const base = server.fetchBoard.getMockImplementation();
+    server.fetchBoard.mockImplementation(async (params, signal) => {
+      signals.push(signal);
+      if (signals.length === 1) {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+      return (base as NonNullable<typeof base>)(params, signal);
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <Fork server={server} onOpenItem={() => {}} />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(signals).toHaveLength(1));
+    await userEvent.click(screen.getByRole("button", { name: "Rank" }));
+    await waitFor(() => expect(signals[0]?.aborted).toBe(true));
+    await waitFor(() => expect(cardIds()).toHaveLength(WORK_BOARD_COLUMN_PAGE));
+    expect(server.fetchBoard).toHaveBeenCalledTimes(2);
+    expect(server.fetchBoard.mock.lastCall?.[0].get("sortDirection")).toBe("asc");
+    expect(server.fetchPage).not.toHaveBeenCalled();
+  });
+
+  it("drops appended pages when the board changes", async () => {
+    const { server } = await mounted(bulk);
+    await userEvent.click(screen.getByRole("button", { name: "Load more needs_implement" }));
+    await waitFor(() => expect(cardIds()).toHaveLength(40));
+    await userEvent.click(filterBar().getByRole("button", { name: "Rank" }));
+    await waitFor(() => expect(server.fetchBoard).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(cardIds()).toHaveLength(WORK_BOARD_COLUMN_PAGE));
   });
 });
