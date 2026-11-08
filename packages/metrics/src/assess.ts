@@ -14,7 +14,8 @@
  *    the newest ok reading is older than maxAge, or its source evidence is stale.
  *    A never-measured scheduled metric is late data, not a failure or a young source.
  * 6. on_track: the fresh value satisfies the comparator.
- * 7. behind: otherwise.
+ * 7. behind: otherwise. A binding with `breach: "failing"` returns failing / target_breached
+ *    instead, before the deadline only (rule 2 already ended the pre-deadline path).
  * Pace is display only and never decides status. Value/observationId are the reading
  * the status speaks about: evaluation reading (2), last good (3-5), fresh (6-7).
  */
@@ -297,16 +298,12 @@ export function assessKpi(input: KpiAssessmentInput): KpiAssessment {
 	// Rule 1 also covers a stored reading whose unit differs from the target.
 	if (lastGood.unit !== binding.target.unit)
 		return result("not_measured", "unit_mismatch", null);
-	// 6/7. on_track or behind.
-	return result(
-		satisfies(
-			binding.comparator,
-			lastGood.value as number,
-			binding.target.value,
-		)
-			? "on_track"
-			: "behind",
-		null,
-		lastGood,
-	);
+	// 6/7. on_track or behind; an opted-in breach is failing, never behind.
+	if (
+		satisfies(binding.comparator, lastGood.value as number, binding.target.value)
+	)
+		return result("on_track", null, lastGood);
+	return binding.breach === "failing"
+		? result("failing", "target_breached", lastGood)
+		: result("behind", null, lastGood);
 }

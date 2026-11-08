@@ -6,7 +6,8 @@
  * Purpose: HTTP readiness endpoint. The default (k8s probe) path answers only "can this pod serve HTTP?" — local serving readiness: env, runtime secrets, system tenant.
  * Scope: Validates env + runtime secrets + system tenant (fatal). Checks EVM RPC, Temporal, and scheduler-worker connectivity but treats transient failures as NON-FATAL on the default probe (logged, still 200). `?deep=1` restores hard substrate assertion for provisioning / stack-test smoke checks.
  * Invariants: Always returns valid readyz schema; force-dynamic runtime. Every managed non-test node requires and exercises EVM RPC even before payment activation. The default path does not drain the fleet for a transient upstream failure (incident 2026-06-26: scheduler-worker hiccup → fleet-wide 502); `?deep=1` forces a live RPC read and makes EVM RPC, Temporal, and scheduler-worker failures fatal (503).
- *             The default path runs every check concurrently and is bounded (task.5298): non-fatal checks get NON_FATAL_CHECK_BUDGET_MS and are reported degraded on timeout; the system tenant (DB verdict, still fatal → 503) gets SYSTEM_TENANT_BUDGET_MS and only its success is cached for SYSTEM_TENANT_OK_TTL_MS. The first probe after boot always performs the real DB check. `?deep=1` stays serial, uncached, and unbounded beyond each check's own timeout.
+ *             The default path runs every check concurrently and is bounded (task.5298): non-fatal checks get NON_FATAL_CHECK_BUDGET_MS and are reported degraded on timeout; the system tenant (DB verdict, still fatal → 503) gets SYSTEM_TENANT_BUDGET_MS and only its success is cached for SYSTEM_TENANT_OK_TTL_MS. The first probe after boot always performs the real DB check. `?deep=1` is concurrent and uncached; each check gets DEEP_CHECK_BUDGET_MS, not the default budgets.
+ *             `?deep=1` runs its dependency checks concurrently, each under DEEP_CHECK_BUDGET_MS, and a 503 body adds `unreachable`: every failing dependency of postgres, doltgres, temporal, scheduler-worker, evm-rpc (task.5458). Pass/fail is the same as a serial probe: any failing dependency is a 503. `reason` and `message` still come from the first failure in the order evm-rpc, temporal, scheduler-worker, doltgres, postgres. Config errors (env, secrets) return before any check and carry no `unreachable`. The default path never adds the field and does no new IO.
  * Side-effects: IO (HTTP response, structured logging, network calls to RPC and Temporal)
  * Notes: Used by Docker HEALTHCHECK, deployment validation, K8s readiness probes.
  *        HTTP status is primary truth: 200 = ready, 503 = not ready.
@@ -24,6 +25,7 @@ import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { EnvValidationError, serverEnv } from "@/shared/env";
 import {
   assertEvmRpcConfig,
+  assertKnowledgeStoreConnectivity,
   assertRuntimeSecrets,
   assertSchedulerWorkerConnectivity,
   assertTemporalConnectivity,
@@ -97,6 +99,12 @@ const SYSTEM_TENANT_BUDGET_MS = 2000;
 const SYSTEM_TENANT_OK_TTL_MS = 30_000;
 /** An in-flight tenant query older than this is abandoned and a fresh one started. */
 const SYSTEM_TENANT_INFLIGHT_MAX_AGE_MS = 10_000;
+/**
+ * Deep-path budget for each dependency check. The checks run concurrently, so the
+ * whole probe stays under this plus the response; it must stay below the 5 s deadline
+ * of the fleet prober that reads `unreachable`.
+ */
+const DEEP_CHECK_BUDGET_MS = 4500;
 /** Readiness summaries at or above this duration log at info (debug otherwise). */
 const SLOW_READINESS_LOG_MS = 1000;
 
@@ -112,6 +120,57 @@ type CheckStatus = "ok" | "cached" | "degraded" | "timeout" | "failed";
 type CheckTimings = Record<string, { status: CheckStatus; durationMs: number }>;
 
 const CHECK_TIMEOUT = Symbol("readyz.check_timeout");
+
+/** Dependencies a deep 503 can name in `unreachable`. */
+type DeepDependency =
+  | "postgres"
+  | "doltgres"
+  | "temporal"
+  | "scheduler-worker"
+  | "evm-rpc";
+
+/** A deep probe failed: carries the first failure (for reason/message) and every failing dependency. */
+class DeepProbeFailure extends Error {
+  constructor(
+    readonly primary: unknown,
+    readonly unreachable: DeepDependency[]
+  ) {
+    super("deep readiness failed");
+    this.name = "DeepProbeFailure";
+  }
+}
+
+/**
+ * Deep path: run every dependency check at once, each under its own deadline, and
+ * report every failure. Throws DeepProbeFailure when any check fails; the first
+ * failure in `checks` order is `primary`.
+ */
+async function runDeepChecks(
+  checks: ReadonlyArray<readonly [DeepDependency, () => Promise<unknown>]>
+): Promise<void> {
+  const results = await Promise.allSettled(
+    checks.map(async ([dependency, run]) => {
+      const result = await withBudget(
+        Promise.resolve().then(run),
+        DEEP_CHECK_BUDGET_MS
+      );
+      if (result === CHECK_TIMEOUT) {
+        throw new InfraConnectivityError(
+          `${dependency} check exceeded ${DEEP_CHECK_BUDGET_MS}ms budget`
+        );
+      }
+    })
+  );
+  const unreachable: DeepDependency[] = [];
+  let primary: unknown;
+  results.forEach((result, index) => {
+    const entry = checks[index];
+    if (result.status !== "rejected" || !entry) return;
+    if (unreachable.length === 0) primary = result.reason;
+    unreachable.push(entry[0]);
+  });
+  if (unreachable.length > 0) throw new DeepProbeFailure(primary, unreachable);
+}
 
 /**
  * Race `promise` against a budget. The underlying work keeps running (and may
@@ -380,18 +439,34 @@ export const GET = wrapRouteHandlerWithLogging(
       };
 
       if (deep) {
-        // Deep probe: serial, uncached, hard-fail — unchanged semantics.
-        await checkEvmRpc(ctx, container, env, true);
-        await assertSubstrate(
-          () => assertTemporalConnectivity(container.scheduleControl, env),
-          temporalOpts
-        );
-        await assertSubstrate(
-          () => assertSchedulerWorkerConnectivity(env),
-          schedulerWorkerOpts
-        );
-        // Verify system tenant billing account exists (per SYSTEM_TENANT_STARTUP_CHECK)
-        await verifySystemTenant(container.serviceAccountService);
+        // Deep probe: concurrent, uncached, hard-fail. Every failing
+        // dependency is named in the 503 body (`unreachable`).
+        await runDeepChecks([
+          ["evm-rpc", () => checkEvmRpc(ctx, container, env, true)],
+          [
+            "temporal",
+            () =>
+              assertSubstrate(
+                () => assertTemporalConnectivity(container.scheduleControl, env),
+                temporalOpts
+              ),
+          ],
+          [
+            "scheduler-worker",
+            () =>
+              assertSubstrate(
+                () => assertSchedulerWorkerConnectivity(env),
+                schedulerWorkerOpts
+              ),
+          ],
+          [
+            "doltgres",
+            () => assertKnowledgeStoreConnectivity(container.knowledgeStorePort),
+          ],
+          // System tenant billing account (SYSTEM_TENANT_STARTUP_CHECK) is the
+          // Postgres verdict.
+          ["postgres", () => verifySystemTenant(container.serviceAccountService)],
+        ]);
       } else {
         // Default probe: run everything concurrently. Non-fatal checks are
         // bounded and degrade; only the system tenant (DB verdict) can 503.
@@ -443,7 +518,14 @@ export const GET = wrapRouteHandlerWithLogging(
 
       const parsed = metaReadyzOperation.output.parse(payload);
       return NextResponse.json(parsed);
-    } catch (error) {
+    } catch (caught) {
+      // A deep probe wraps its first failure and names every failing dependency.
+      const error =
+        caught instanceof DeepProbeFailure ? (caught.primary as Error) : caught;
+      const unreachable =
+        caught instanceof DeepProbeFailure
+          ? { unreachable: caught.unreachable }
+          : {};
       // HTTP status is primary truth for K8s: 503 = not ready
       // Log failure before returning 503 for deployment debugging
       if (error instanceof EnvValidationError) {
@@ -453,6 +535,7 @@ export const GET = wrapRouteHandlerWithLogging(
             status: "error",
             reason: error.meta.code,
             details: error.meta,
+            ...unreachable,
           }),
           {
             status: 503, // Service Unavailable - not ready
@@ -469,6 +552,7 @@ export const GET = wrapRouteHandlerWithLogging(
             status: "error",
             reason: error.code,
             message: error.message,
+            ...unreachable,
           }),
           {
             status: 503, // Service Unavailable - not ready
@@ -485,6 +569,7 @@ export const GET = wrapRouteHandlerWithLogging(
             status: "error",
             reason: error.code,
             message: error.message,
+            ...unreachable,
           }),
           {
             status: 503, // Service Unavailable - not ready
@@ -499,6 +584,7 @@ export const GET = wrapRouteHandlerWithLogging(
         JSON.stringify({
           status: "error",
           reason: "INTERNAL_ERROR",
+          ...unreachable,
         }),
         {
           status: 503, // Service Unavailable - not ready

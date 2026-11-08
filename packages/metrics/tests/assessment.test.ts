@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	assessKpi,
+	KpiBindingSchema,
 	bucketObservations,
 	type KpiAssessmentInput,
 	type MetricHistory,
@@ -131,6 +132,64 @@ describe("assessKpi first-match rules", () => {
 			seen.add(a.status);
 		}
 		expect(seen.size).toBe(10);
+	});
+	it("breach: failing turns a pre-deadline miss into failing/target_breached", () => {
+		const missed = reading(0.4, "2026-11-02T11:00:00.000Z");
+		const breaching = {
+			latestAttempt: missed,
+			lastGood: missed,
+			binding: {
+				metricId: "ratio",
+				comparator: "gte" as const,
+				target: { value: 1, unit: "ratio" },
+				breach: "failing" as const,
+			},
+		};
+		const a = assessKpi(input(breaching));
+		expect([a.status, a.reason, a.value]).toEqual([
+			"failing",
+			"target_breached",
+			0.4,
+		]);
+		// A met reading stays on_track; a stale one stays delayed; an error keeps its own reason.
+		expect(assessKpi(input({ binding: breaching.binding })).status).toBe(
+			"on_track",
+		);
+		const old = reading(0.4, "2026-11-02T08:00:00.000Z");
+		expect(
+			assessKpi(input({ ...breaching, latestAttempt: old, lastGood: old }))
+				.status,
+		).toBe("delayed");
+		const err = reading(null, "2026-11-02T11:30:00.000Z", "unavailable");
+		expect(
+			assessKpi(input({ ...breaching, latestAttempt: err })).reason,
+		).toBe("zero_denominator");
+		// After the deadline the evaluation verdict is unchanged: missed, not failing.
+		const final = assessKpi(
+			input({
+				...breaching,
+				deadline: "2026-11-02T09:00:00Z",
+				evaluation: reading(0.4, "2026-11-02T08:00:00.000Z"),
+			}),
+		);
+		expect([final.status, final.reason]).toEqual(["missed", null]);
+	});
+	it("without breach a pre-deadline miss is behind, byte-identical to before", () => {
+		const missed = reading(0.4, "2026-11-02T11:00:00.000Z");
+		const a = assessKpi(input({ latestAttempt: missed, lastGood: missed }));
+		expect([a.status, a.reason]).toEqual(["behind", null]);
+		expect(KpiBindingSchema.safeParse({
+			metricId: "ratio",
+			comparator: "gte",
+			target: { value: 1, unit: "ratio" },
+			breach: "failing",
+		}).success).toBe(true);
+		expect(KpiBindingSchema.safeParse({
+			metricId: "ratio",
+			comparator: "gte",
+			target: { value: 1, unit: "ratio" },
+			breach: "behind",
+		}).success).toBe(false);
 	});
 	it("does not treat a young series as building: a historical window is complete at its first reading", () => {
 		expect(assessKpi(input()).status).toBe("on_track");

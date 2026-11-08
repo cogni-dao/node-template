@@ -587,7 +587,7 @@ export function createMetricService(deps: {
 							: null
 					: status === "on_track"
 						? true
-						: status === "behind"
+						: status === "behind" || r.assessment.reason === "target_breached"
 							? false
 							: null;
 				results.push({
