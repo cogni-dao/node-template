@@ -266,9 +266,11 @@ describe("GET /readyz async substrate contract", () => {
       status: "error",
       reason: "INFRA_UNREACHABLE",
       message: "Temporal is unavailable",
+      unreachable: ["temporal"],
     });
-    expect(mocks.assertSchedulerWorkerConnectivity).not.toHaveBeenCalled();
-    expect(mocks.verifySystemTenant).not.toHaveBeenCalled();
+    // Checks are independent: scheduler-worker still ran, and the body names only Temporal.
+    expect(mocks.assertSchedulerWorkerConnectivity).toHaveBeenCalledTimes(1);
+    expect(mocks.verifySystemTenant).toHaveBeenCalledTimes(1);
   });
 
   it("returns 503 from the deep probe when scheduler-worker is unavailable", async () => {
@@ -285,7 +287,7 @@ describe("GET /readyz async substrate contract", () => {
       message: "scheduler-worker is unavailable",
     });
     expect(mocks.assertTemporalConnectivity).toHaveBeenCalledOnce();
-    expect(mocks.verifySystemTenant).not.toHaveBeenCalled();
+    expect(mocks.verifySystemTenant).toHaveBeenCalledTimes(1);
   });
 
   it("does not let a slow non-fatal check block default readiness", async () => {
@@ -381,14 +383,116 @@ describe("GET /readyz async substrate contract", () => {
     expect(mocks.verifySystemTenant).toHaveBeenCalledTimes(3);
   });
 
-  it("keeps the deep probe uncached and unbounded by the default budgets", async () => {
+  it("names every failing dependency in the deep 503, keeping reason and message from the first", async () => {
+    mocks.checkEvmRpcConnectivity.mockResolvedValue({
+      ok: false,
+      source: "live",
+      errorMessage: "upstream 429",
+    });
+    mocks.assertTemporalConnectivity.mockRejectedValue(
+      new InfraConnectivityError("Temporal is unavailable")
+    );
+    mocks.assertSchedulerWorkerConnectivity.mockRejectedValue(
+      new InfraConnectivityError("worker is unavailable")
+    );
+    mocks.verifySystemTenant.mockRejectedValue(new Error("pg down"));
+
+    const response = await GET(request("/readyz?deep=1"));
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({
+      status: "error",
+      reason: "INFRA_UNREACHABLE",
+      message: "EVM RPC connectivity check failed: upstream 429",
+      unreachable: [
+        "evm-rpc",
+        "temporal",
+        "scheduler-worker",
+        "postgres",
+      ],
+    });
+  });
+
+  it("names postgres alone when only the database is down", async () => {
+    mocks.verifySystemTenant.mockRejectedValue(new Error("pg down"));
+
+    const response = await GET(request("/readyz?deep=1"));
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      status: "error",
+      unreachable: ["postgres"],
+    });
+  });
+
+  it("lists a check that exceeds the deep budget in unreachable and answers at the budget", async () => {
     vi.useFakeTimers();
-    mocks.assertTemporalConnectivity.mockReturnValue(
-      new Promise((resolve) => setTimeout(resolve, 4000))
+    mocks.assertSchedulerWorkerConnectivity.mockReturnValue(
+      new Promise(() => {})
     );
 
     const pending = GET(request("/readyz?deep=1"));
-    await vi.advanceTimersByTimeAsync(4000);
+    await vi.advanceTimersByTimeAsync(2999);
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    const response = await pending;
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({
+      status: "error",
+      reason: "INFRA_UNREACHABLE",
+      message: "scheduler-worker check exceeded 3000ms budget",
+      unreachable: ["scheduler-worker"],
+    });
+  });
+
+  it("bounds a hung deep check and still names the others", async () => {
+    vi.useFakeTimers();
+    mocks.assertTemporalConnectivity.mockReturnValue(new Promise(() => {}));
+    mocks.verifySystemTenant.mockRejectedValue(new Error("pg down"));
+
+    const pending = GET(request("/readyz?deep=1"));
+    await vi.advanceTimersByTimeAsync(3000);
+    const response = await pending;
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      unreachable: ["temporal", "postgres"],
+    });
+  });
+
+  it("carries no unreachable field on a healthy deep 200, a config 503, or the default path", async () => {
+    expect(await (await GET(request("/readyz?deep=1"))).json()).not.toHaveProperty(
+      "unreachable"
+    );
+    mocks.verifySystemTenant.mockRejectedValue(new Error("pg down"));
+    const shallow = await GET(request());
+    expect(shallow.status).toBe(503);
+    expect(await shallow.json()).toEqual({
+      status: "error",
+      reason: "INTERNAL_ERROR",
+    });
+    mocks.assertRuntimeSecrets.mockImplementationOnce(() => {
+      throw new RuntimeSecretError("secret missing");
+    });
+    const deepConfig = await GET(request("/readyz?deep=1"));
+    expect(deepConfig.status).toBe(503);
+    expect(await deepConfig.json()).not.toHaveProperty("unreachable");
+  });
+
+  it("keeps the deep probe uncached and unbounded by the default budgets", async () => {
+    vi.useFakeTimers();
+    mocks.assertTemporalConnectivity.mockReturnValue(
+      new Promise((resolve) => setTimeout(resolve, 2500))
+    );
+
+    const pending = GET(request("/readyz?deep=1"));
+    await vi.advanceTimersByTimeAsync(2500);
     expect((await pending).status).toBe(200);
     expect((await GET(request("/readyz?deep=1"))).status).toBe(200);
 

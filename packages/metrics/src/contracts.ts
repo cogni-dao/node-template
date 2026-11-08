@@ -51,6 +51,11 @@ export const KpiBindingSchema = z.strictObject({
 	}),
 	evaluationAt: z.iso.datetime({ offset: true }).optional(),
 	baselineObservationId: z.uuid().optional(),
+	/**
+	 * Opt in to a red breach. Before the deadline a good reading that misses the
+	 * comparator is `failing` / `target_breached` instead of `behind`. Absent: unchanged.
+	 */
+	breach: z.literal("failing").optional(),
 });
 export const KpiBindingsSchema = z.array(KpiBindingSchema).max(20);
 export type KpiBinding = z.infer<typeof KpiBindingSchema>;
@@ -255,6 +260,7 @@ export const KpiReasonSchema = z.enum([
 	"evaluation_not_due",
 	"baseline_unavailable_or_incompatible",
 	"fixed_prediction_and_baseline_required",
+	"target_breached",
 ]);
 export type KpiReason = z.infer<typeof KpiReasonSchema>;
 /** First matching rule wins; see metric-foundation-design "One assessment". */
