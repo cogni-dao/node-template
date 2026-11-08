@@ -5,8 +5,8 @@
  * Module: `@app/(app)/profile/view`
  * Purpose: Client component for user profile settings — display name, avatar color, and linked accounts.
  * Scope: Reads/updates user profile via /api/v1/users/me; does not handle OAuth flow directly or manage session persistence. Also handles the operator attestation return leg (#attestation=<jwt> → POST /api/v1/identity/bindings/import) and the "Verify GitHub via hub" fallback when node-local GitHub OAuth is unconfigured (task.5024).
- * Invariants: Requires authenticated session (enforced by parent layout); avatar color updates reflected in session via update().
- * Side-effects: IO (fetch API, session update, navigation for OAuth linking)
+ * Invariants: Requires authenticated session (enforced by parent layout); avatar color updates reflected in session via update(). Link results finish in place (task.5451): no full reload, the URL is cleaned with history.replaceState, and outcomes stay on the provider row until the next action — never a flashing banner.
+ * Side-effects: IO (fetch API, session update, history.replaceState, navigation to start OAuth linking)
  * Links: src/contracts/users.profile.v1.contract.ts, src/app/api/v1/users/me/route.ts
  * @public
  */
@@ -16,7 +16,7 @@
 import { useConnectModal } from "@rainbow-me/rainbowkit";
 import { ArrowRight, Check, Server as ServerIcon } from "lucide-react";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { signIn, useSession } from "next-auth/react";
 import type { ReactElement, ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -103,11 +103,14 @@ function SettingRow({
   icon,
   label,
   description,
+  note,
   children,
 }: {
   icon?: ReactNode;
   label: string;
   description?: string;
+  /** Row-level outcome (e.g. a link result) rendered under the description. */
+  note?: ReactNode;
   children: ReactNode;
 }): ReactElement {
   return (
@@ -124,6 +127,7 @@ function SettingRow({
             {description && (
               <div className="text-muted-foreground text-sm">{description}</div>
             )}
+            {note}
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">{children}</div>
@@ -144,71 +148,85 @@ function ConnectedBadge({ login }: { login: string }): ReactElement {
   );
 }
 
-/* ─── Feedback banner ──────────────────────────────────────────────── */
+/* ─── Link feedback ────────────────────────────────────────────────── */
 
-const FEEDBACK_MESSAGES: Record<
-  string,
-  { text: string; variant: "success" | "error" }
-> = {
-  already_linked: {
-    text: "That account is already linked to a different user.",
-    variant: "error",
-  },
-  link_failed: {
-    text: "Account linking failed. Please try again.",
-    variant: "error",
-  },
-  invalid_token: {
-    text: "GitHub verification token was invalid or expired. Please try again.",
-    variant: "error",
-  },
-  jwks_unavailable: {
-    text: "Could not reach the verification hub. Please try again later.",
-    variant: "error",
-  },
+const FEEDBACK_MESSAGES: Record<string, string> = {
+  already_linked: "That account is already linked to a different user.",
+  link_failed: "Account linking failed. Please try again.",
+  invalid_token:
+    "GitHub verification token was invalid or expired. Please try again.",
+  jwks_unavailable:
+    "Could not reach the verification hub. Please try again later.",
 };
 
-/** Attestation error codes surfaced verbatim as feedback banners. */
+/** Attestation error codes surfaced verbatim; anything else maps to link_failed. */
 const ATTESTATION_ERROR_CODES = new Set([
   "invalid_token",
   "jwks_unavailable",
   "already_linked",
 ]);
 
-function FeedbackBanner({
-  linkedProvider,
-  linkedLogin,
-  error,
+type OAuthProviderId = "github" | "discord" | "google";
+
+/**
+ * Outcome of a link attempt, shown on that provider's row until the next action.
+ * Never auto-dismissed: an outcome the user cannot read is no outcome at all.
+ */
+type LinkFeedback =
+  | { phase: "pending" }
+  | { phase: "linked" }
+  | { phase: "error"; code: string };
+
+function isOAuthProviderId(value: string): value is OAuthProviderId {
+  return value === "github" || value === "discord" || value === "google";
+}
+
+function LinkFeedbackNote({
+  feedback,
 }: {
-  linkedProvider: string | null;
-  linkedLogin: string | null;
-  error: string | null;
+  feedback: LinkFeedback | undefined;
 }): ReactElement | null {
-  if (linkedProvider) {
+  if (feedback?.phase === "linked") {
+    return <div className="text-primary text-xs">Linked just now</div>;
+  }
+  if (feedback?.phase === "error") {
     return (
-      <div className="rounded-md border border-primary/30 bg-primary/5 px-4 py-3 text-foreground text-sm">
-        {linkedLogin ? (
-          <>
-            Verified <strong>{linkedProvider} @{linkedLogin}</strong> on this
-            node. Contributions by that account can now be claimed here.
-          </>
-        ) : (
-          <>Successfully linked your {linkedProvider} account.</>
-        )}
+      <div role="alert" className="text-destructive text-sm">
+        {FEEDBACK_MESSAGES[feedback.code] ?? FEEDBACK_MESSAGES.link_failed}
       </div>
     );
   }
-  if (error) {
-    const msg = FEEDBACK_MESSAGES[error];
-    if (msg) {
-      return (
-        <div className="rounded-md border border-destructive/30 bg-destructive/5 px-4 py-3 text-foreground text-sm">
-          {msg.text}
-        </div>
-      );
-    }
-  }
   return null;
+}
+
+function LinkPending(): ReactElement {
+  return (
+    <span
+      role="status"
+      className="flex items-center gap-2 text-muted-foreground text-sm"
+    >
+      {/* The row label is the live status; the icon is decoration here. */}
+      <Spinner role="presentation" aria-hidden="true" />
+      Linking…
+    </span>
+  );
+}
+
+/**
+ * Persistent notice for a legacy OAuth link error (auth.ts returns
+ * /profile?error=<code> with no provider, so it cannot sit on a row).
+ */
+function LinkErrorNotice({ code }: { code: string | null }): ReactElement | null {
+  const text = code ? FEEDBACK_MESSAGES[code] : undefined;
+  if (!text) return null;
+  return (
+    <div
+      role="alert"
+      className="rounded-md border border-destructive/30 bg-destructive/5 px-4 py-3 text-foreground text-sm"
+    >
+      {text}
+    </div>
+  );
 }
 
 /* ─── Color picker swatch ─────────────────────────────────────────── */
@@ -508,18 +526,46 @@ function ChatGptConnectFlow({
 
 /* ─── View ─────────────────────────────────────────────────────────── */
 
-export function ProfileView(): ReactElement {
+/** Linked state is unknown: say so instead of offering a misleading "Link". */
+function AccountsUnknown({
+  state,
+}: {
+  state: "loading" | "error";
+}): ReactElement {
+  return (
+    <span className="text-muted-foreground text-sm">
+      {state === "error" ? "Couldn't load. Reload the page." : "Checking…"}
+    </span>
+  );
+}
+
+export function ProfileView({
+  initialProfile = null,
+  initialProviders = null,
+}: {
+  /** Read on the server for this request, so linked accounts render correct on first paint. */
+  initialProfile?: ProfileData | null;
+  /** Configured OAuth provider ids (excluding SIWE credentials), also server-read. */
+  initialProviders?: readonly string[] | null;
+} = {}): ReactElement {
   const { data: session, update: updateSession } = useSession();
   const { openConnectModal } = useConnectModal();
-  const router = useRouter();
   const searchParams = useSearchParams();
 
-  const [profile, setProfile] = useState<ProfileData | null>(null);
-  const [selectedColor, setSelectedColor] = useState("#6366f1");
-  const [configuredProviders, setConfiguredProviders] = useState<Set<string>>(
-    new Set()
+  const [profile, setProfile] = useState<ProfileData | null>(initialProfile);
+  // Linked accounts are unknown until /users/me answers; never render "Link" for them before then.
+  const [profileState, setProfileState] = useState<
+    "loading" | "ready" | "error"
+  >(initialProfile ? "ready" : "loading");
+  const [selectedColor, setSelectedColor] = useState(
+    initialProfile?.avatarColor ?? "#6366f1"
   );
-  const [providersLoaded, setProvidersLoaded] = useState(false);
+  const [configuredProviders, setConfiguredProviders] = useState<Set<string>>(
+    () => new Set(initialProviders ?? [])
+  );
+  const [providersLoaded, setProvidersLoaded] = useState(
+    initialProviders !== null
+  );
   const [chatGptConnected, setChatGptConnected] = useState(false);
   const [chatGptLoading, setChatGptLoading] = useState(false);
   const [ollamaConnected, setOllamaConnected] = useState(false);
@@ -530,96 +576,117 @@ export function ProfileView(): ReactElement {
   const [ollamaError, setOllamaError] = useState("");
   const [attestationStarting, setAttestationStarting] = useState(false);
 
-  // Read feedback query params and strip them to prevent re-display on refresh
-  const linkedProvider = searchParams.get("linked");
-  const linkedLogin = searchParams.get("login");
-  const error = searchParams.get("error");
+  // Legacy OAuth link return (auth.ts): /profile?linked=<provider> or
+  // /profile?error=<code>. Read once into state so the outcome persists after the
+  // URL is cleaned; it is never re-derived from the (now stripped) query string.
+  const [legacyError] = useState(() =>
+    searchParams.get("linked") ? null : searchParams.get("error")
+  );
+  const [linkFeedback, setLinkFeedback] = useState<
+    Partial<Record<OAuthProviderId, LinkFeedback>>
+  >(() => {
+    const linked = searchParams.get("linked")?.toLowerCase() ?? "";
+    return isOAuthProviderId(linked) ? { [linked]: { phase: "linked" } } : {};
+  });
+  const setProviderFeedback = useCallback(
+    (provider: OAuthProviderId, feedback: LinkFeedback | undefined) =>
+      setLinkFeedback((prev) => ({ ...prev, [provider]: feedback })),
+    []
+  );
 
-  useEffect(() => {
-    if (linkedProvider || error) {
-      if (linkedProvider) {
-        // Re-validate session so RainbowKit picks up the still-valid SIWE auth
-        void updateSession();
+  const refetchProfile = useCallback(async (): Promise<void> => {
+    try {
+      const res = await fetch("/api/v1/users/me");
+      if (!res.ok) {
+        setProfileState((prev) => (prev === "ready" ? prev : "error"));
+        return;
       }
-      // Strip query params after reading — prevents re-display on refresh/back
-      router.replace("/profile");
+      const data = (await res.json()) as ProfileData;
+      setProfile(data);
+      setSelectedColor(data.avatarColor ?? "#6366f1");
+      setProfileState("ready");
+    } catch {
+      // Profile fetch failed — page still renders with session data
+      setProfileState((prev) => (prev === "ready" ? prev : "error"));
     }
-  }, [linkedProvider, error, router, updateSession]);
+  }, []);
+
+  const legacyParamsHandled = useRef(false);
+  useEffect(() => {
+    if (legacyParamsHandled.current) return;
+    legacyParamsHandled.current = true;
+    if (!searchParams.has("linked") && !searchParams.has("error")) return;
+    if (searchParams.has("linked")) {
+      // Re-validate session so RainbowKit picks up the still-valid SIWE auth
+      void updateSession();
+    }
+    // Clean the URL in place so a refresh/back does not replay the outcome.
+    window.history.replaceState(null, "", "/profile");
+  }, [searchParams, updateSession]);
 
   // Operator attestation return leg (task.5024): the hub redirects back with
-  // #attestation=<jwt>. Auto-POST it to the import route, then replace the
-  // URL (full navigation) so the token never lingers in history and the
-  // existing ?linked= / ?error= feedback + profile refetch path is reused.
-  const [attestationImporting, setAttestationImporting] = useState(false);
+  // #attestation=<jwt>. Drop the token from the URL immediately, POST it to the
+  // import route, and finish in place on the GitHub row (task.5451) — no reload.
   const attestationHandled = useRef(false);
   useEffect(() => {
     if (attestationHandled.current) return;
     const hash = window.location.hash;
     if (!hash.startsWith("#attestation=")) return;
     attestationHandled.current = true;
-    setAttestationImporting(true);
+    const encoded = hash.slice("#attestation=".length);
+    window.history.replaceState(null, "", "/profile");
+    setProviderFeedback("github", { phase: "pending" });
 
     void (async () => {
       try {
-        const token = decodeURIComponent(hash.slice("#attestation=".length));
+        const token = decodeURIComponent(encoded);
         const res = await fetch("/api/v1/identity/bindings/import", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ token }),
         });
         if (res.ok) {
-          // Name the account that was actually bound — a generic "verified" is
-          // exactly what hid the wrong-account bug on the 2026-08-19 candidate.
-          const bound: { githubLogin?: string | null } | null = await res
-            .json()
-            .catch(() => null);
-          const login = bound?.githubLogin;
-          window.location.replace(
-            login
-              ? `/profile?linked=GitHub&login=${encodeURIComponent(login)}`
-              : "/profile?linked=GitHub"
-          );
+          // The row then names the account that was actually bound (from the
+          // refetched profile) — a generic "verified" is exactly what hid the
+          // wrong-account bug on the 2026-08-19 candidate.
+          await refetchProfile();
+          void updateSession();
+          setProviderFeedback("github", { phase: "linked" });
           return;
         }
         const data: { errorCode?: string } | null = await res
           .json()
           .catch(() => null);
         const code = data?.errorCode ?? "";
-        window.location.replace(
-          `/profile?error=${ATTESTATION_ERROR_CODES.has(code) ? code : "link_failed"}`
-        );
+        setProviderFeedback("github", {
+          phase: "error",
+          code: ATTESTATION_ERROR_CODES.has(code) ? code : "link_failed",
+        });
       } catch {
-        window.location.replace("/profile?error=link_failed");
+        setProviderFeedback("github", { phase: "error", code: "link_failed" });
       }
     })();
-  }, []);
+  }, [refetchProfile, setProviderFeedback, updateSession]);
 
   // Fetch profile data + configured providers in parallel
   useEffect(() => {
-    fetch("/api/v1/users/me")
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data: ProfileData | null) => {
-        if (data) {
-          setProfile(data);
-          setSelectedColor(data.avatarColor ?? "#6366f1");
-        }
-      })
-      .catch(() => {
-        // Profile fetch failed — page still renders with session data
-      });
+    // Server-read data is authoritative for first paint; fetch only what it lacked.
+    if (!initialProfile) void refetchProfile();
 
-    fetch("/api/auth/providers")
-      .then((res) => res.json())
-      .then((providers: Record<string, { id: string }>) => {
-        const ids = new Set(
-          Object.keys(providers).filter((id) => id !== "credentials")
-        );
-        setConfiguredProviders(ids);
-        setProvidersLoaded(true);
-      })
-      .catch(() => {
-        // Provider fetch failed — show nothing rather than broken links
-      });
+    if (initialProviders === null) {
+      fetch("/api/auth/providers")
+        .then((res) => res.json())
+        .then((providers: Record<string, { id: string }>) => {
+          const ids = new Set(
+            Object.keys(providers).filter((id) => id !== "credentials")
+          );
+          setConfiguredProviders(ids);
+          setProvidersLoaded(true);
+        })
+        .catch(() => {
+          // Provider fetch failed — show nothing rather than broken links
+        });
+    }
 
     // Check BYO-AI ChatGPT connection status
     fetch("/api/v1/auth/openai-codex/status")
@@ -636,17 +703,21 @@ export function ProfileView(): ReactElement {
         if (data) setOllamaConnected(data.connected);
       })
       .catch(() => {});
-  }, []);
+  }, [refetchProfile, initialProfile, initialProviders]);
 
   const walletAddress = session?.user?.walletAddress ?? null;
   const displayName =
     profile?.resolvedDisplayName ?? session?.user?.displayName ?? "User";
   const avatarLetter = displayName.charAt(0).toUpperCase();
 
-  // Build set of linked provider IDs for quick lookup
-  const linkedProviderIds = new Set(
+  // Build set of linked provider IDs for quick lookup. A link that just
+  // succeeded counts even if the profile refetch has not reflected it yet.
+  const linkedProviderIds = new Set<string>(
     profile?.linkedProviders.map((p) => p.provider) ?? []
   );
+  for (const [provider, feedback] of Object.entries(linkFeedback)) {
+    if (feedback?.phase === "linked") linkedProviderIds.add(provider);
+  }
 
   // Get provider login by provider ID
   const getProviderLogin = (providerId: string): string | null =>
@@ -663,21 +734,26 @@ export function ProfileView(): ReactElement {
     });
   };
 
-  // Return leg from the operator identity broker: the page would otherwise render
-  // an empty profile for the duration of the import POST and then hard-navigate,
-  // which read as a blank flash. Show the shared Spinner and say what is happening.
-  if (attestationImporting) {
-    return (
-      <PageContainer maxWidth="2xl">
-        <div className="flex min-h-[60vh] flex-col items-center justify-center gap-3">
-          <Spinner className="size-6 text-muted-foreground" />
-          <p className="text-muted-foreground text-sm">
-            Recording your verified GitHub account on this node…
-          </p>
-        </div>
-      </PageContainer>
-    );
-  }
+  // Start (or retry) GitHub linking through the operator hub. A failure to start
+  // stays on the GitHub row — no navigation, no reload.
+  const startHubGithubLink = () => {
+    setAttestationStarting(true);
+    setProviderFeedback("github", undefined);
+    void fetch("/api/v1/identity/bindings/import/start", {
+      method: "POST",
+    })
+      .then(async (res) => {
+        if (!res.ok) throw new Error("start failed");
+        const data = (await res.json()) as { authorizeUrl: string };
+        window.location.assign(data.authorizeUrl);
+      })
+      .catch(() => {
+        setAttestationStarting(false);
+        setProviderFeedback("github", { phase: "error", code: "link_failed" });
+      });
+  };
+
+  const githubFeedback = linkFeedback.github;
 
   return (
     <PageContainer maxWidth="2xl">
@@ -685,12 +761,8 @@ export function ProfileView(): ReactElement {
       <h1 className="font-semibold text-2xl text-foreground">Profile</h1>
       <div className="border-border border-b" />
 
-      {/* Feedback banner for linking results */}
-      <FeedbackBanner
-        error={error}
-        linkedLogin={linkedLogin}
-        linkedProvider={linkedProvider}
-      />
+      {/* Legacy OAuth link error with no provider to attach it to */}
+      <LinkErrorNotice code={legacyError} />
 
       {/* ── Profile section (display name + avatar color, no divider between) ── */}
 
@@ -757,6 +829,7 @@ export function ProfileView(): ReactElement {
       ).map(({ id, label, description, Icon }) => {
         const isLinked = linkedProviderIds.has(id);
         const login = getProviderLogin(id);
+        const feedback = linkFeedback[id];
 
         return (
           <SettingRow
@@ -764,8 +837,13 @@ export function ProfileView(): ReactElement {
             icon={<Icon className="size-5" />}
             label={label}
             description={description}
+            note={<LinkFeedbackNote feedback={feedback} />}
           >
-            {isLinked ? (
+            {feedback?.phase === "pending" ? (
+              <LinkPending />
+            ) : !isLinked && !feedback && profileState !== "ready" ? (
+              <AccountsUnknown state={profileState} />
+            ) : isLinked ? (
               <div className="flex items-center gap-2">
                 <ConnectedBadge login={login ?? "Connected"} />
                 {walletAddress &&
@@ -786,7 +864,7 @@ export function ProfileView(): ReactElement {
                 size="sm"
                 onClick={() => initiateProviderLink(id)}
               >
-                Link
+                {feedback?.phase === "error" ? "Retry" : "Link"}
               </Button>
             )}
           </SettingRow>
@@ -799,43 +877,38 @@ export function ProfileView(): ReactElement {
           "Link your GitHub account." / "Link" — because the operator hop is OUR
           plumbing, not something a contributor should have to understand. Any wording
           that leaks it ("verify via this environment's operator hub") is a bug. */}
-      {providersLoaded &&
+      {(providersLoaded || githubFeedback !== undefined) &&
         !configuredProviders.has("github") &&
         !linkedProviderIds.has("github") && (
           <SettingRow
             icon={<GitHubIcon className="size-5" />}
             label="GitHub"
             description="Link your GitHub account."
+            note={<LinkFeedbackNote feedback={githubFeedback} />}
           >
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={attestationStarting}
-              onClick={() => {
-                setAttestationStarting(true);
-                void fetch("/api/v1/identity/bindings/import/start", {
-                  method: "POST",
-                })
-                  .then(async (res) => {
-                    if (!res.ok) throw new Error("start failed");
-                    const data = (await res.json()) as { authorizeUrl: string };
-                    window.location.assign(data.authorizeUrl);
-                  })
-                  .catch(() => {
-                    setAttestationStarting(false);
-                    window.location.assign("/profile?error=link_failed");
-                  });
-              }}
-            >
-              {attestationStarting ? (
-                <>
-                  <Spinner />
-                  Redirecting to GitHub…
-                </>
-              ) : (
-                "Link"
-              )}
-            </Button>
+            {githubFeedback?.phase === "pending" ? (
+              <LinkPending />
+            ) : !githubFeedback && profileState !== "ready" ? (
+              <AccountsUnknown state={profileState} />
+            ) : (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={attestationStarting}
+                onClick={startHubGithubLink}
+              >
+                {attestationStarting ? (
+                  <>
+                    <Spinner />
+                    Redirecting to GitHub…
+                  </>
+                ) : githubFeedback?.phase === "error" ? (
+                  "Retry"
+                ) : (
+                  "Link"
+                )}
+              </Button>
+            )}
           </SettingRow>
         )}
 
