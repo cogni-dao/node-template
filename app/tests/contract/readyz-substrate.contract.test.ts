@@ -21,7 +21,6 @@ const mocks = vi.hoisted(() => ({
   assertSchedulerWorkerConnectivity: vi.fn(),
   assertTemporalConnectivity: vi.fn(),
   checkEvmRpcConnectivity: vi.fn(),
-  domainExists: vi.fn(),
   error: vi.fn(),
   info: vi.fn(),
   serverEnv: vi.fn(),
@@ -34,9 +33,6 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/bootstrap/container", () => ({
   getContainer: () => ({
     evmOnchainClient: {},
-    knowledgeStorePort: {
-      domainExists: (...args: unknown[]) => mocks.domainExists(...args),
-    },
     paymentRailsActive: false,
     scheduleControl: {},
     serviceAccountService: {},
@@ -135,7 +131,6 @@ describe("GET /readyz async substrate contract", () => {
     mocks.assertSchedulerWorkerConnectivity.mockResolvedValue(undefined);
     mocks.checkEvmRpcConnectivity.mockResolvedValue({ ok: true });
     mocks.verifySystemTenant.mockResolvedValue(undefined);
-    mocks.domainExists.mockResolvedValue(false);
   });
 
   it("checks RPC before payment activation while keeping a transient failure non-draining", async () => {
@@ -400,7 +395,6 @@ describe("GET /readyz async substrate contract", () => {
     mocks.assertSchedulerWorkerConnectivity.mockRejectedValue(
       new InfraConnectivityError("worker is unavailable")
     );
-    mocks.domainExists.mockRejectedValue(new Error("connection refused"));
     mocks.verifySystemTenant.mockRejectedValue(new Error("pg down"));
 
     const response = await GET(request("/readyz?deep=1"));
@@ -414,7 +408,6 @@ describe("GET /readyz async substrate contract", () => {
         "evm-rpc",
         "temporal",
         "scheduler-worker",
-        "doltgres",
         "postgres",
       ],
     });
@@ -432,13 +425,39 @@ describe("GET /readyz async substrate contract", () => {
     });
   });
 
+  it("lists a check that exceeds the deep budget in unreachable and answers at the budget", async () => {
+    vi.useFakeTimers();
+    mocks.assertSchedulerWorkerConnectivity.mockReturnValue(
+      new Promise(() => {})
+    );
+
+    const pending = GET(request("/readyz?deep=1"));
+    await vi.advanceTimersByTimeAsync(2999);
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    const response = await pending;
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({
+      status: "error",
+      reason: "INFRA_UNREACHABLE",
+      message: "scheduler-worker check exceeded 3000ms budget",
+      unreachable: ["scheduler-worker"],
+    });
+  });
+
   it("bounds a hung deep check and still names the others", async () => {
     vi.useFakeTimers();
     mocks.assertTemporalConnectivity.mockReturnValue(new Promise(() => {}));
     mocks.verifySystemTenant.mockRejectedValue(new Error("pg down"));
 
     const pending = GET(request("/readyz?deep=1"));
-    await vi.advanceTimersByTimeAsync(4500);
+    await vi.advanceTimersByTimeAsync(3000);
     const response = await pending;
 
     expect(response.status).toBe(503);
@@ -469,11 +488,11 @@ describe("GET /readyz async substrate contract", () => {
   it("keeps the deep probe uncached and unbounded by the default budgets", async () => {
     vi.useFakeTimers();
     mocks.assertTemporalConnectivity.mockReturnValue(
-      new Promise((resolve) => setTimeout(resolve, 4000))
+      new Promise((resolve) => setTimeout(resolve, 2500))
     );
 
     const pending = GET(request("/readyz?deep=1"));
-    await vi.advanceTimersByTimeAsync(4000);
+    await vi.advanceTimersByTimeAsync(2500);
     expect((await pending).status).toBe(200);
     expect((await GET(request("/readyz?deep=1"))).status).toBe(200);
 

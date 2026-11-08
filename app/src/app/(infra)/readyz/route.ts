@@ -7,7 +7,7 @@
  * Scope: Validates env + runtime secrets + system tenant (fatal). Checks EVM RPC, Temporal, and scheduler-worker connectivity but treats transient failures as NON-FATAL on the default probe (logged, still 200). `?deep=1` restores hard substrate assertion for provisioning / stack-test smoke checks.
  * Invariants: Always returns valid readyz schema; force-dynamic runtime. Every managed non-test node requires and exercises EVM RPC even before payment activation. The default path does not drain the fleet for a transient upstream failure (incident 2026-06-26: scheduler-worker hiccup → fleet-wide 502); `?deep=1` forces a live RPC read and makes EVM RPC, Temporal, and scheduler-worker failures fatal (503).
  *             The default path runs every check concurrently and is bounded (task.5298): non-fatal checks get NON_FATAL_CHECK_BUDGET_MS and are reported degraded on timeout; the system tenant (DB verdict, still fatal → 503) gets SYSTEM_TENANT_BUDGET_MS and only its success is cached for SYSTEM_TENANT_OK_TTL_MS. The first probe after boot always performs the real DB check. `?deep=1` is concurrent and uncached; each check gets DEEP_CHECK_BUDGET_MS, not the default budgets.
- *             `?deep=1` runs its dependency checks concurrently, each under DEEP_CHECK_BUDGET_MS, and a 503 body adds `unreachable`: every failing dependency of postgres, doltgres, temporal, scheduler-worker, evm-rpc (task.5458). Pass/fail is the same as a serial probe: any failing dependency is a 503. `reason` and `message` still come from the first failure in the order evm-rpc, temporal, scheduler-worker, doltgres, postgres. Config errors (env, secrets) return before any check and carry no `unreachable`. The default path never adds the field and does no new IO.
+ *             `?deep=1` runs its dependency checks concurrently, each under DEEP_CHECK_BUDGET_MS, and a 503 body adds `unreachable`: every failing dependency of postgres, temporal, scheduler-worker, evm-rpc (task.5458). Pass/fail is the same as a serial probe: any failing dependency is a 503. `reason` and `message` still come from the first failure in the order evm-rpc, temporal, scheduler-worker, postgres. Config errors (env, secrets) return before any check and carry no `unreachable`. The default path never adds the field and does no new IO.
  * Side-effects: IO (HTTP response, structured logging, network calls to RPC and Temporal)
  * Notes: Used by Docker HEALTHCHECK, deployment validation, K8s readiness probes.
  *        HTTP status is primary truth: 200 = ready, 503 = not ready.
@@ -25,7 +25,6 @@ import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { EnvValidationError, serverEnv } from "@/shared/env";
 import {
   assertEvmRpcConfig,
-  assertKnowledgeStoreConnectivity,
   assertRuntimeSecrets,
   assertSchedulerWorkerConnectivity,
   assertTemporalConnectivity,
@@ -102,9 +101,9 @@ const SYSTEM_TENANT_INFLIGHT_MAX_AGE_MS = 10_000;
 /**
  * Deep-path budget for each dependency check. The checks run concurrently, so the
  * whole probe stays under this plus the response; it must stay below the 5 s deadline
- * of the fleet prober that reads `unreachable`.
+ * of the fleet prober that reads `unreachable`, and above the 2 s system-tenant sub-budget.
  */
-const DEEP_CHECK_BUDGET_MS = 4500;
+const DEEP_CHECK_BUDGET_MS = 3000;
 /** Readiness summaries at or above this duration log at info (debug otherwise). */
 const SLOW_READINESS_LOG_MS = 1000;
 
@@ -124,7 +123,6 @@ const CHECK_TIMEOUT = Symbol("readyz.check_timeout");
 /** Dependencies a deep 503 can name in `unreachable`. */
 type DeepDependency =
   | "postgres"
-  | "doltgres"
   | "temporal"
   | "scheduler-worker"
   | "evm-rpc";
@@ -458,10 +456,6 @@ export const GET = wrapRouteHandlerWithLogging(
                 () => assertSchedulerWorkerConnectivity(env),
                 schedulerWorkerOpts
               ),
-          ],
-          [
-            "doltgres",
-            () => assertKnowledgeStoreConnectivity(container.knowledgeStorePort),
           ],
           // System tenant billing account (SYSTEM_TENANT_STARTUP_CHECK) is the
           // Postgres verdict.
