@@ -6,6 +6,7 @@
  * Purpose: HTTP endpoint for the work board's first page of every visible status column.
  * Scope: Auth-protected GET. Thin: decodes with the published codec, reads through the existing summaries facade, encodes with the published column schema.
  * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, NODE_STORE_IS_LOCAL, BOUNDED_BOARD (one summary page per requested status, at most `WORK_BOARD_COLUMN_PAGE` rows each, read sequentially by `loadWorkBoardColumns`; each column cursor continues through `/api/v1/work/summaries`; task.0055).
+ * Observability: the completion event carries `durationMs` (whole request), `columnCount` and `columnDurationsMs` (one entry per sequential column read, in column order).
  * Side-effects: IO (HTTP response, Doltgres read)
  * Links: task.0055, ../summaries/route.ts
  * @public
@@ -52,6 +53,8 @@ export const GET = wrapRouteHandlerWithLogging(
     let status = 500;
     let count = 0;
     let hasMore = false;
+    let columnCount = 0;
+    const columnDurationsMs: number[] = [];
     let order: WorkItemOrder | undefined;
     let errorCode:
       | (typeof WORK_ITEMS_LIST_ERROR_CODES)[keyof typeof WORK_ITEMS_LIST_ERROR_CODES]
@@ -78,8 +81,19 @@ export const GET = wrapRouteHandlerWithLogging(
       });
       let result: Awaited<ReturnType<typeof loadWorkBoardColumns>>;
       try {
+        // Time each sequential column read so board latency (≈ the sum) is measurable.
+        const timedList: typeof listWorkSummaries = async (input) => {
+          const columnStartedAt = performance.now();
+          try {
+            return await listWorkSummaries(input);
+          } finally {
+            columnDurationsMs.push(
+              Math.round(performance.now() - columnStartedAt),
+            );
+          }
+        };
         result = await loadWorkBoardColumns(
-          listWorkSummaries,
+          timedList,
           parsed.query,
           parsed.statuses,
         );
@@ -107,6 +121,7 @@ export const GET = wrapRouteHandlerWithLogging(
         (total, column) => total + column.items.length,
         0,
       );
+      columnCount = result.columns.length;
       hasMore = result.columns.some((column) => column.pageInfo.hasMore);
       return response;
     } catch {
@@ -122,6 +137,8 @@ export const GET = wrapRouteHandlerWithLogging(
         outcome: errorCode ? "error" : "success",
         count,
         hasMore,
+        columnCount,
+        columnDurationsMs,
         ...order,
         ...(errorCode && { errorCode }),
       });
