@@ -36,15 +36,11 @@ import { afterEach, expect, it, vi } from "vitest";
 import { BoundedBrowse } from "@/app/(app)/knowledge/_components/BoundedBrowse";
 import { knowledgeColumns } from "@/app/(app)/knowledge/_components/columns";
 import { KnowledgeSelection } from "@/app/(app)/knowledge/_components/KnowledgeSelection";
-import {
-  loadKnowledgeBrowse,
-  loadKnowledgeOverview
-} from "@/app/(app)/knowledge/_server/loaders";
+import { loadKnowledgeBrowse } from "@/app/(app)/knowledge/_server/loaders";
 import KnowledgePage from "@/app/(app)/knowledge/page";
 import { KnowledgeDashboardView } from "@/app/(app)/knowledge/view";
 import { GET as browseRoute } from "@/app/api/v1/knowledge/browse/route";
 import { GET as graphRoute } from "@/app/api/v1/knowledge/graph/route";
-import { GET as overviewRoute } from "@/app/api/v1/knowledge/overview/route";
 
 vi.mock(
   "@cogni/node-contracts",
@@ -364,8 +360,6 @@ it("SSR reads only the chosen bounded projection and round-trips the wire page",
     signal: expect.any(AbortSignal)
   });
   expect(overviewKnowledge).not.toHaveBeenCalled();
-  expect(await loadKnowledgeOverview(port as never)).toEqual(emptyPage);
-  expect(overviewKnowledge).toHaveBeenCalledTimes(1);
   ssr.port = port;
   const browse = await KnowledgePage({ searchParams: Promise.resolve({}) });
   expect(browse.props.initialBrowse).toEqual(emptyPage);
@@ -376,7 +370,7 @@ it("SSR reads only the chosen bounded projection and round-trips the wire page",
   expect(graph.props.initialBrowse).toBeUndefined();
   expect(graph.props.initialList).toBeUndefined();
   expect(browseKnowledge).toHaveBeenCalledTimes(2);
-  expect(overviewKnowledge).toHaveBeenCalledTimes(1);
+  expect(overviewKnowledge).not.toHaveBeenCalled();
 });
 
 it("node transport: typing issues no request; submit sends exactly one package-encoded browse window", async () => {
@@ -487,14 +481,13 @@ it("thin routes reject malformed and cross-query cursors and preserve repeated e
   const invoke = (handler: unknown, query: string) =>
     (handler as Handler)(
       routeContext(
-        handler === browseRoute ? "knowledge.browse" : "knowledge.overview"
+        "knowledge.browse"
       ),
       new Request(`https://node.test/api/v1/knowledge/browse?${query}`),
       { id: "fixture" }
     );
   expect((await invoke(browseRoute, "sort=content")).status).toBe(400);
   expect((await invoke(browseRoute, "cursor=cross-query")).status).toBe(400);
-  expect((await invoke(overviewRoute, "search=body")).status).toBe(400);
   expect(
     (await invoke(browseRoute, "domains=late&domains=off-page")).status
   ).toBe(200);
@@ -568,7 +561,7 @@ it("Graph shows the exact whole-corpus counts from one read", async () => {
     citationType: "supports"
   }));
   const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
-    expect(init.cache).toBe("no-cache");
+    expect(init.cache).toBe("no-store");
     return Response.json({ ...graphBody, nodes, edges });
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -577,26 +570,32 @@ it("Graph shows the exact whole-corpus counts from one read", async () => {
   expect(fetchMock).toHaveBeenCalledTimes(1);
 });
 
-it("graph route serves the whole corpus once per revision and answers an unchanged revision with 304", async () => {
-  const listKnowledgeGraphNodes = vi.fn(async () => graphBody.nodes);
-  const listAllCitations = vi.fn(async () => []);
-  ssr.port = {
-    currentCommit: async () => "rev-graph",
-    listDomains: async () => graphBody.domains,
-    listKnowledgeGraphNodes,
-    listAllCitations
-  };
+it("graph route = auth + readKnowledgeGraph: whole corpus once per revision, 304 on an unchanged revision, 401 before any read", async () => {
+  const readKnowledgeGraphSnapshot = vi.fn(async () => ({
+    revision: "rev-graph",
+    domains: graphBody.domains,
+    nodes: graphBody.nodes,
+    citations: []
+  }));
+  ssr.port = { currentCommit: async () => "rev-graph", readKnowledgeGraphSnapshot };
   const handler = graphRoute as unknown as (
     ctx: unknown,
     request: Request,
     user: unknown
   ) => Promise<Response>;
-  const call = (headers: Record<string, string> = {}) =>
+  const call = (
+    headers: Record<string, string> = {},
+    user: unknown = { id: "fixture" }
+  ) =>
     handler(
       routeContext("knowledge.graph"),
       new Request("https://node.test/api/v1/knowledge/graph", { headers }),
-      { id: "fixture" }
+      user
     );
+  const denied = await call({ "If-None-Match": '"rev-graph"' }, null);
+  expect(denied.status).toBe(401);
+  expect(readKnowledgeGraphSnapshot).not.toHaveBeenCalled();
+  routeLog.mockClear();
   const first = await call();
   expect(first.status).toBe(200);
   expect(first.headers.get("ETag")).toBe('"rev-graph"');
@@ -604,15 +603,23 @@ it("graph route serves the whole corpus once per revision and answers an unchang
     "private, no-cache, must-revalidate"
   );
   expect(await first.json()).toEqual({ ...graphBody, revision: "rev-graph" });
-  const second = await call();
-  expect(second.status).toBe(200);
-  // One projected read per revision, shared by later requests.
-  expect(listKnowledgeGraphNodes).toHaveBeenCalledTimes(1);
+  expect(routeLog).toHaveBeenCalledWith(
+    expect.objectContaining({
+      event: "knowledge.graph_read",
+      status: 200,
+      nodes: 1,
+      edges: 0,
+      budgetExceeded: false
+    }),
+    "knowledge.graph_read"
+  );
+  expect((await call()).status).toBe(200);
+  // One pinned projected read per revision, shared by later requests.
+  expect(readKnowledgeGraphSnapshot).toHaveBeenCalledTimes(1);
   const unchanged = await call({ "If-None-Match": '"rev-graph"' });
   expect(unchanged.status).toBe(304);
   expect(await unchanged.text()).toBe("");
-  expect(listKnowledgeGraphNodes).toHaveBeenCalledTimes(1);
-  expect(listAllCitations).toHaveBeenCalledTimes(1);
+  expect(readKnowledgeGraphSnapshot).toHaveBeenCalledTimes(1);
 });
 
 it("SSR deadlines bound connection waiting and never seed a partial page or grow native backlog", async () => {
@@ -648,12 +655,10 @@ it("SSR deadlines bound connection waiting and never seed a partial page or grow
   }
 });
 
-it.each(["browse", "overview"] as const)(
+it.each(["browse"] as const)(
   "%s emits one safe terminal event for each handler outcome",
   async (route) => {
-    const handler = (route === "browse"
-      ? browseRoute
-      : overviewRoute) as unknown as (
+    const handler = browseRoute as unknown as (
       ctx: unknown,
       request: Request,
       user: unknown

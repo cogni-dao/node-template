@@ -38,7 +38,8 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
 
 - **Exports:** none
 - **Routes (if any):**
-  - `/api/v1/knowledge/browse`, `/api/v1/knowledge/overview` [GET] — authenticated bounded metadata pages; Browse body search advances only through explicit continuation. Reads forward request abort and return retryable 503 on deadline/capacity exhaustion.
+  - `/api/v1/knowledge/browse` [GET] — authenticated bounded metadata pages with the exact filtered `total`; body search advances only through explicit continuation. Reads forward request abort and return retryable 503 on deadline/capacity exhaustion.
+  - `/api/v1/knowledge/graph` [GET] — the whole projected graph at one store revision via `readKnowledgeGraph` (`@cogni/knowledge-store`): ETag = revision, 304 on If-None-Match, one pinned read per revision, graph deadline → retryable 503, `knowledge.graph_read` logs bytes and `budgetExceeded`.
   - `/api/auth/[...nextauth]` [GET, POST]
   - `/api/setup/verify` [POST] - DAO formation verification
   - `/api/internal/billing/ingest` [POST] - LiteLLM generic_api callback receiver (bearer auth, Docker-internal only)

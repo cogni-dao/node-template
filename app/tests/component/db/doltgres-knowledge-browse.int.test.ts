@@ -6,12 +6,16 @@ import { execSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
-import { buildKnowledgeGraph } from "@cogni/knowledge-store";
+import { readKnowledgeGraph } from "@cogni/knowledge-store";
 import {
 	buildDoltgresClient,
 	DoltgresKnowledgeStoreAdapter,
 } from "@cogni/knowledge-store/adapters/doltgres";
-import { KnowledgeGraphResponseSchema } from "@cogni/knowledge-store/contracts";
+import {
+	KNOWLEDGE_GRAPH_EDGE_BYTES_BUDGET,
+	KNOWLEDGE_GRAPH_NODE_BYTES_BUDGET,
+	KnowledgeGraphResponseSchema,
+} from "@cogni/knowledge-store/contracts";
 import postgres, { type Sql } from "postgres";
 import {
 	GenericContainer,
@@ -146,11 +150,12 @@ describe("native Doltgres knowledge browsing", () => {
 			expect(result.nextCursor).toBeTruthy();
 			expect(result.items.every((row) => !("content" in row))).toBe(true);
 		}
-		// HEAD, one projected window and one exact COUNT(*) per read.
-		expect(statements).toHaveLength(6);
+		// HEAD + one projected window per read; the exact COUNT(*) runs once per
+		// (revision, filters) and the second read reuses it.
+		expect(statements).toHaveLength(5);
 		expect(
 			statements.filter((q) => q === "SELECT COUNT(*) AS total FROM knowledge"),
-		).toHaveLength(2);
+		).toHaveLength(1);
 		for (const query of statements.filter(
 			(q) => !q.includes("dolt_hashof") && !q.startsWith("SELECT COUNT(*)"),
 		)) {
@@ -189,6 +194,10 @@ describe("native Doltgres knowledge browsing", () => {
 						`INSERT INTO knowledge (id,domain,title,content,entry_type,source_type) VALUES ${tuples.join(",")}`,
 					);
 				}
+				// Production writes always commit (withWrite); totals key on HEAD.
+				await sql.unsafe(
+					`SELECT dolt_commit('-Am', ${literal(`growth fixture ${count}`)})`,
+				);
 				seedElapsedMs += performance.now() - seedStart;
 				seeded = count;
 				stage = `growth count ${count}`;
@@ -211,7 +220,8 @@ describe("native Doltgres knowledge browsing", () => {
 							? await store.browseKnowledge(input)
 							: await store.overviewKnowledge(input);
 					const queryElapsedMs = performance.now() - start;
-					expect(statements).toHaveLength(3);
+					// Browse counts once at this revision; overview reuses the total.
+					expect(statements).toHaveLength(mode === "browse" ? 3 : 2);
 					expect(page.revision).toBeTruthy();
 					expect(page.total).toBe(count);
 					const query = statements.find(
@@ -269,111 +279,145 @@ describe("native Doltgres knowledge browsing", () => {
 		}
 	}, 600_000);
 
-	it("serves the whole 5,000-entry / 10,000-citation graph in one projected read within the payload budget", async () => {
-		// Budget (task.0059): the graph is the whole corpus, never truncated.
-		// Raw JSON ≤ 160 B per node + 110 B per edge for these fixture shapes;
-		// gzip must stay ≤ 25% of raw. Real titles are longer: see the PR budget.
+	it("serves the whole graph through readKnowledgeGraph at 5k/10k and 50k/100k with pinned, projected, budgeted reads", async () => {
+		// Budget (task.0059): ≤ KNOWLEDGE_GRAPH_NODE_BYTES_BUDGET per node and
+		// ≤ KNOWLEDGE_GRAPH_EDGE_BYTES_BUDGET per edge, capped by the whole-response
+		// budget; gzip ≤ 25% of raw. Never truncated: past the whole-response
+		// budget the handler logs budgetExceeded (the LOD follow-up's trigger).
 		const domain = "graph-proof";
-		const nodes = 5_000;
-		const edges = 10_000;
-		const nodeId = (n: number) => `graph-${String(n).padStart(5, "0")}`;
+		const nodeId = (n: number) => `graph-${String(n).padStart(6, "0")}`;
 		await sql.unsafe(
 			`INSERT INTO domains (id,name) VALUES (${literal(domain)},'Graph proof')`,
 		);
 		let stage = "graph seed";
+		let seededNodes = 0;
+		let seededEdges = 0;
 		try {
-			for (let start = 0; start < nodes; start += 500) {
-				stage = `graph seed nodes ${start + 1}`;
-				const tuples = Array.from({ length: 500 }, (_, offset) => {
-					const n = start + offset;
-					const values = [
-						nodeId(n),
-						domain,
-						`Graph proof entry ${n}`,
-						"small body",
-						n % 2 ? "guide" : "finding",
-						"agent",
-					];
-					return `(${values.map(literal).join(",")})`;
-				});
+			for (const [nodes, edges] of [
+				[5_000, 10_000],
+				[50_000, 100_000],
+			] as const) {
+				const seedStart = performance.now();
+				for (let start = seededNodes; start < nodes; start += 1000) {
+					stage = `graph seed nodes ${start + 1}`;
+					const tuples = Array.from(
+						{ length: Math.min(1000, nodes - start) },
+						(_, offset) => {
+							const n = start + offset;
+							const values = [
+								nodeId(n),
+								domain,
+								`Graph proof entry ${n}`,
+								"small body",
+								n % 2 ? "guide" : "finding",
+								"agent",
+							];
+							return `(${values.map(literal).join(",")})`;
+						},
+					);
+					await sql.unsafe(
+						`INSERT INTO knowledge (id,domain,title,content,entry_type,source_type) VALUES ${tuples.join(",")}`,
+					);
+				}
+				for (let start = seededEdges; start < edges; start += 1000) {
+					stage = `graph seed citations ${start + 1}`;
+					const tuples = Array.from(
+						{ length: Math.min(1000, edges - start) },
+						(_, offset) => {
+							const e = start + offset;
+							// Two distinct targets per entry: unique (citing, cited, type).
+							const from = e % nodes;
+							const to = (from + (e < edges / 2 ? 1 : 7)) % nodes;
+							const values = [
+								`graph-cite-${String(e).padStart(6, "0")}`,
+								nodeId(from),
+								nodeId(to),
+								e % 3 ? "supports" : "extends",
+							];
+							return `(${values.map(literal).join(",")})`;
+						},
+					);
+					await sql.unsafe(
+						`INSERT INTO citations (id,citing_id,cited_id,citation_type) VALUES ${tuples.join(",")}`,
+					);
+				}
+				// Production writes always commit (withWrite); the graph keys on HEAD.
 				await sql.unsafe(
-					`INSERT INTO knowledge (id,domain,title,content,entry_type,source_type) VALUES ${tuples.join(",")}`,
+					`SELECT dolt_commit('-Am', ${literal(`graph fixture ${nodes}`)})`,
+				);
+				const seedMs = performance.now() - seedStart;
+				seededNodes = nodes;
+				seededEdges = edges;
+				stage = `graph read ${nodes}`;
+				statements.length = 0;
+				const start = performance.now();
+				const result = await readKnowledgeGraph(store);
+				const readMs = performance.now() - start;
+				expect(result.status).toBe(200);
+				const body = result.body ?? "";
+				const response = KnowledgeGraphResponseSchema.parse(JSON.parse(body));
+				expect(result.headers.ETag).toBe(`"${response.revision}"`);
+				expect(
+					response.nodes.filter((n) => n.domain === domain),
+				).toHaveLength(nodes);
+				expect(
+					response.edges.filter((e) => e.id.startsWith("graph-cite-")),
+				).toHaveLength(edges);
+				// Pinned (HEAD before and after), projected, never bodies.
+				expect(statements).toContain(
+					"SELECT id, domain, title, entry_type, confidence_pct, source_type FROM knowledge",
+				);
+				expect(statements).toContain(
+					"SELECT id, citing_id, cited_id, citation_type FROM citations",
+				);
+				expect(
+					statements.filter((q) => q.includes("dolt_hashof")).length,
+				).toBeGreaterThanOrEqual(2);
+				expect(
+					statements.some((q) => /\bcontent\b|SELECT \*/i.test(q)),
+				).toBe(false);
+				const raw = Buffer.byteLength(body);
+				const gzip = gzipSync(body).byteLength;
+				const nodeBytes = Buffer.byteLength(JSON.stringify(response.nodes));
+				const edgeBytes = Buffer.byteLength(JSON.stringify(response.edges));
+				expect(nodeBytes / response.nodes.length).toBeLessThanOrEqual(
+					KNOWLEDGE_GRAPH_NODE_BYTES_BUDGET,
+				);
+				expect(edgeBytes / response.edges.length).toBeLessThanOrEqual(
+					KNOWLEDGE_GRAPH_EDGE_BYTES_BUDGET,
+				);
+				expect(gzip).toBeLessThanOrEqual(raw / 4);
+				expect(result.log.bytes).toBe(raw);
+				expect(result.log.budgetExceeded).toBe(
+					raw > (result.log.budgetBytes ?? 0),
+				);
+				// A revalidation of the same revision is a 304 with no store read.
+				statements.length = 0;
+				const unchanged = await readKnowledgeGraph(store, {
+					ifNoneMatch: result.headers.ETag ?? null,
+				});
+				expect(unchanged.status).toBe(304);
+				expect(
+					statements.filter((q) => !q.includes("dolt_hashof")),
+				).toHaveLength(0);
+				console.info(
+					"knowledge_native_graph_payload",
+					JSON.stringify({
+						seededNodes: nodes,
+						seededEdges: edges,
+						nodes: response.nodes.length,
+						edges: response.edges.length,
+						rawBytes: raw,
+						gzipBytes: gzip,
+						rawBytesPerNode: Math.round(nodeBytes / response.nodes.length),
+						rawBytesPerEdge: Math.round(edgeBytes / response.edges.length),
+						budgetBytes: result.log.budgetBytes,
+						budgetExceeded: result.log.budgetExceeded,
+						readMs: Math.round(readMs),
+						seedMs: Math.round(seedMs),
+					}),
 				);
 			}
-			for (let start = 0; start < edges; start += 500) {
-				stage = `graph seed citations ${start + 1}`;
-				const tuples = Array.from({ length: 500 }, (_, offset) => {
-					const e = start + offset;
-					const from = e % nodes;
-					// Two distinct targets per entry: unique (citing, cited, type).
-					const to = (from + (e < nodes ? 1 : 7)) % nodes;
-					const values = [
-						`graph-cite-${String(e).padStart(5, "0")}`,
-						nodeId(from),
-						nodeId(to),
-						e % 3 ? "supports" : "extends",
-					];
-					return `(${values.map(literal).join(",")})`;
-				});
-				await sql.unsafe(
-					`INSERT INTO citations (id,citing_id,cited_id,citation_type) VALUES ${tuples.join(",")}`,
-				);
-			}
-			stage = "graph read";
-			statements.length = 0;
-			const start = performance.now();
-			const [domains, graphNodes, citations, revision] = await Promise.all([
-				store.listDomains(),
-				store.listKnowledgeGraphNodes(),
-				store.listAllCitations(),
-				store.currentCommit(),
-			]);
-			const response = KnowledgeGraphResponseSchema.parse({
-				revision,
-				...buildKnowledgeGraph({ domains, nodes: graphNodes, citations }),
-			});
-			const readMs = performance.now() - start;
-			const raw = Buffer.byteLength(JSON.stringify(response));
-			const gzip = gzipSync(JSON.stringify(response)).byteLength;
-			const total = response.nodes.length;
-			const proofNodes = response.nodes.filter((n) => n.domain === domain);
-			const proofEdges = response.edges.filter((e) =>
-				e.id.startsWith("graph-cite-"),
-			);
-			expect(proofNodes).toHaveLength(nodes);
-			expect(proofEdges).toHaveLength(edges);
-			// The projection never reads bodies.
-			expect(statements).toContain(
-				"SELECT id, domain, title, entry_type, confidence_pct, source_type FROM knowledge",
-			);
-			expect(
-				statements.some((q) =>
-					/\bcontent\b|SELECT \* FROM knowledge/i.test(q),
-				),
-			).toBe(false);
-			expect(raw).toBeLessThanOrEqual(
-				160 * response.nodes.length + 110 * response.edges.length,
-			);
-			expect(gzip).toBeLessThanOrEqual(raw / 4);
-			expect(readMs).toBeLessThan(30_000);
-			console.info(
-				"knowledge_native_graph_payload",
-				JSON.stringify({
-					nodes: total,
-					edges: response.edges.length,
-					rawBytes: raw,
-					gzipBytes: gzip,
-					rawBytesPerNode: Math.round(
-						Buffer.byteLength(JSON.stringify(response.nodes)) / total,
-					),
-					rawBytesPerEdge: Math.round(
-						Buffer.byteLength(JSON.stringify(response.edges)) /
-							response.edges.length,
-					),
-					readMs: Math.round(readMs),
-					queries: statements.length,
-				}),
-			);
 		} catch (error) {
 			console.error("knowledge_native_graph_failed", JSON.stringify({ stage }));
 			throw error;
@@ -384,7 +428,7 @@ describe("native Doltgres knowledge browsing", () => {
 			);
 			await sql.unsafe(`DELETE FROM domains WHERE id = ${literal(domain)}`);
 		}
-	}, 600_000);
+	}, 900_000);
 
 	it("walks NOW-backed timestamp pages once in both directions", async () => {
 		// Fixed logical corpus revision, not snapshot isolation. No mutations occur

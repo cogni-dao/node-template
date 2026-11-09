@@ -5,7 +5,7 @@
  * Module: `@app/(app)/knowledge/_server/loaders`
  * Purpose: Server-side data loaders for the knowledge dashboard. ONE source of
  *   truth for shape + query logic, called by BOTH the HTTP route handlers
- *   (/api/v1/knowledge, /graph, /domains) and the server `page.tsx` that seeds
+ *   (/api/v1/knowledge, /domains) and the server `page.tsx` that seeds
  *   React Query `initialData`. Reading here (not via a self-HTTP fetch) is the
  *   house SSR idiom (see `(app)/nodes/page.tsx`) — no cookie forwarding needed.
  * Scope: Server only. Takes an injected KnowledgeStorePort; no env, no lifecycle.
@@ -22,11 +22,7 @@
  * @internal
  */
 
-import {
-  buildKnowledgeGraph,
-  type KnowledgeGraphModel,
-  type KnowledgeStorePort,
-} from "@cogni/knowledge-store";
+import type { KnowledgeStorePort } from "@cogni/knowledge-store";
 import {
   type DomainsListResponse,
   DomainsListResponseSchema,
@@ -34,13 +30,8 @@ import {
   type KnowledgeBrowseQuery,
   type KnowledgeListResponse,
   KnowledgeListResponseSchema,
-  type KnowledgeOverviewQuery,
   type KnowledgeRow,
 } from "@cogni/node-contracts";
-import {
-  type KnowledgeGraphResponse,
-  KnowledgeGraphResponseSchema,
-} from "@cogni/knowledge-store/contracts";
 import { unstable_cache } from "next/cache";
 import { toHttpKnowledgeRow } from "@/app/_facades/read-envelopes.server";
 
@@ -92,27 +83,6 @@ export async function loadDomains(
 }
 
 /**
- * Full graph model. Mirrors GET /api/v1/knowledge/graph but collapses the
- * legacy per-entry citation N+1 into a single `listAllCitations()` read, then
- * assembles nodes/edges via the shared `buildKnowledgeGraph`.
- */
-export async function loadKnowledgeGraph(
-  port: KnowledgeStorePort
-): Promise<KnowledgeGraphModel> {
-  // ONE projected read of all entries (6 graph columns, never `content`) + one
-  // citation read. Memory is bounded by node/edge count, not body bytes — the
-  // old per-domain `limit:10_000` full-body read materialized every body the
-  // graph discards, the heap-OOM driver (bug.5547). This also unifies the graph
-  // with the operator node: EDO chain entries are now included.
-  const [domains, nodes, citations] = await Promise.all([
-    port.listDomains(),
-    port.listKnowledgeGraphNodes(),
-    port.listAllCitations(),
-  ]);
-  return buildKnowledgeGraph({ domains, nodes, citations });
-}
-
-/**
  * Revision-keyed SSR cache (bug.5547). `force-dynamic` stays for the per-request
  * auth check; only the store READ is cached, keyed by the Dolt head commit
  * (`currentCommit()`) so repeat `/knowledge` refreshes are cache hits — zero
@@ -132,56 +102,6 @@ export async function loadKnowledgeListCached(
   )();
 }
 
-export async function loadKnowledgeGraphCached(
-  port: KnowledgeStorePort
-): Promise<KnowledgeGraphModel> {
-  const rev = await port.currentCommit();
-  return unstable_cache(
-    () => loadKnowledgeGraph(port),
-    ["knowledge-graph", rev],
-    { tags: [KNOWLEDGE_CACHE_TAG] }
-  )();
-}
-
-/**
- * The whole graph at the store's current revision, serialized once per
- * revision (task.0059). One projected node read + one citation read per Dolt
- * HEAD; concurrent callers share the in-flight read, and later callers at the
- * same revision reuse the serialized body. An in-process memo, not
- * `unstable_cache`, because the whole-corpus payload outgrows Next's 2 MB
- * data-cache item limit as the corpus grows. The route answers an unchanged
- * revision with 304 before calling this at all.
- */
-export interface KnowledgeGraphBody {
-  readonly revision: string;
-  readonly graph: KnowledgeGraphResponse;
-  readonly body: string;
-}
-
-/** One memo per store port: the latest revision's read only. */
-const graphMemos = new WeakMap<
-  KnowledgeStorePort,
-  { revision: string; read: Promise<KnowledgeGraphBody> }
->();
-
-export function loadKnowledgeGraphBody(
-  port: KnowledgeStorePort,
-  revision: string
-): Promise<KnowledgeGraphBody> {
-  const memo = graphMemos.get(port);
-  if (memo?.revision === revision) return memo.read;
-  const read = loadKnowledgeGraph(port).then((model) => {
-    const graph = KnowledgeGraphResponseSchema.parse({ revision, ...model });
-    return { revision, graph, body: JSON.stringify(graph) };
-  });
-  graphMemos.set(port, { revision, read });
-  // A failed read is not remembered; the next request retries.
-  read.catch(() => {
-    if (graphMemos.get(port)?.read === read) graphMemos.delete(port);
-  });
-  return read;
-}
-
 /**
  * SSR read deadline. Shorter than the adapter's lane deadline so a slow store
  * falls back to the client fetch (via `safe()`) instead of blocking render.
@@ -195,16 +115,6 @@ export async function loadKnowledgeBrowse(
 ) {
   return KnowledgeBrowsePageSchema.parse(
     await port.browseKnowledge(query, {
-      signal: AbortSignal.timeout(KNOWLEDGE_SSR_READ_TIMEOUT_MS),
-    })
-  );
-}
-export async function loadKnowledgeOverview(
-  port: KnowledgeStorePort,
-  query: KnowledgeOverviewQuery = {}
-) {
-  return KnowledgeBrowsePageSchema.parse(
-    await port.overviewKnowledge(query, {
       signal: AbortSignal.timeout(KNOWLEDGE_SSR_READ_TIMEOUT_MS),
     })
   );
