@@ -2,34 +2,33 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 /**
- * Module: `@features/goals/components/GoalsBoard`
+ * Module: `@cogni/knowledge-base-ui/goals (goals-board)`
  * Purpose: The Goals view, read at a glance. A count strip (goals, KPIs, KPIs
  *   per status), then one collapsible row per goal: its title as the header,
  *   KPI count and most urgent status, and inside, its KPI cards (label, number,
  *   one hint, status, one mark by display type). A card opens its chart.
- * Scope: Reusable client component. Reads GET /api/v1/metrics/goals; no
- *   Knowledge-specific imports; no compute or write controls. Every card comes
+ * Scope: Reusable client component. Reads goal progress through the injected GoalsClient (default GET /api/v1/metrics/goals); no router import: links are an injected component, default <a>; no
+ *   Knowledge-page imports; no compute or write controls. Every card comes
  *   from the read model, so adding or removing a metric or binding needs no UI change.
  * Invariants: STATUS_NEVER_COLOR_ONLY (pill = symbol + word); UNKNOWN_IS_NOT_ZERO
  *   ("—", never 0); NO_SENTENCES_ON_CARDS (the reason is the card's accessible
  *   description and hover title); QUIET_REFRESH (a failed poll keeps the data;
  *   repeated failures mark it stale; a 401 says signed out);
  *   POLL_ONLY_WHILE_MOUNTED (30s, never in a background tab); IDS_BEHIND_EVIDENCE.
- * Side-effects: IO (via fetchGoalsProgress)
- * Links: ./KpiChart.tsx, ../lib/display.ts, packages/metrics/src/contracts.ts
+ * Side-effects: IO (via GoalsClient.fetchGoals)
+ * Links: ./kpi-chart.tsx, ./display.ts, packages/metrics/src/contracts.ts
  * @public
  */
 
 "use client";
 
 import type { GoalProgress, GoalsProgress } from "@cogni-dao/metrics/contracts";
-import { useQuery } from "@tanstack/react-query";
 import { ArrowUpRight, ChevronRight } from "lucide-react";
-import Link from "next/link";
 import { useEffect, useId, useState } from "react";
 
-import { fetchGoalsProgress, GOALS_QUERY_KEY, GoalsReadError } from "../lib/api";
-import { cardHint, cardSeries, displayOf, formatValue, progressFraction } from "../lib/display";
+import { goalsErrorStatus } from "./client.js";
+import { type GoalsHostOptions, GoalsProvider, useGoalsHost } from "./context.js";
+import { cardHint, cardSeries, displayOf, formatValue, progressFraction } from "./display.js";
 import {
   formatDate,
   formatUtcTime,
@@ -39,48 +38,66 @@ import {
   STATUS_META,
   summarize,
   worstStatus,
-} from "../lib/presentation";
-import { KpiChart } from "./KpiChart";
-import { AvailabilityStrip, ProgressBar, Sparkline, StatusPill } from "./marks";
+} from "./presentation.js";
+import { KpiChart } from "./kpi-chart.js";
+import { AvailabilityStrip, ProgressBar, Sparkline, StatusPill } from "./marks.js";
+import { GOALS_POLL_MS, useGoalsProgress } from "./use-goals-progress.js";
 
-export const GOALS_POLL_MS = 30_000;
+export { GOALS_POLL_MS };
 /** Consecutive failed polls before the data is marked stale. */
 export const STALE_AFTER_FAILURES = 3;
 const CARD_GRID = "grid grid-cols-[repeat(auto-fill,minmax(15rem,1fr))] gap-3";
 
-export interface GoalsBoardProps {
+export interface GoalsBoardProps extends GoalsHostOptions {
   /** SSR seed with the exact wire shape of GET /api/v1/metrics/goals. */
   readonly initialData?: GoalsProgress | undefined;
   /** Show one goal only (goal entry page): no strip, first KPI open. */
   readonly goalId?: string | undefined;
+  /** Called by "Signed out · reload". Default reloads the page so the session can be restored. */
+  readonly onSignedOut?: (() => void) | undefined;
 }
 
-export function GoalsBoard({ initialData, goalId }: GoalsBoardProps) {
-  const query = useQuery({
-    queryKey: GOALS_QUERY_KEY,
-    queryFn: fetchGoalsProgress,
-    initialData,
-    staleTime: 15_000,
-    refetchInterval: GOALS_POLL_MS,
-    refetchIntervalInBackground: false,
-    retry: 2,
-  });
+/** The Goals view. Node inputs (client, hrefs, link component, key prefix) are injected; see GoalsHostOptions. */
+export function GoalsBoard({ client, queryKeyPrefix, hrefs, LinkComponent, ...rest }: GoalsBoardProps) {
+  return (
+    <GoalsProvider
+      {...(client ? { client } : {})}
+      {...(queryKeyPrefix ? { queryKeyPrefix } : {})}
+      {...(hrefs ? { hrefs } : {})}
+      {...(LinkComponent ? { LinkComponent } : {})}
+    >
+      <GoalsBoardView {...rest} />
+    </GoalsProvider>
+  );
+}
+
+function GoalsBoardView({ initialData, goalId, onSignedOut }: Omit<GoalsBoardProps, keyof GoalsHostOptions>) {
+  const { hrefs, Link } = useGoalsHost();
+  const query = useGoalsProgress({ initialData });
+  const reload = onSignedOut ?? (() => window.location.reload());
   const failures = useFailedPolls(query.errorUpdatedAt, query.dataUpdatedAt);
   const data = query.data;
   const goals = data ? (goalId ? data.goals.filter((g) => g.id === goalId) : data.goals) : [];
-  const signedOut = query.error instanceof GoalsReadError && query.error.status === 401;
+  const signedOut = goalsErrorStatus(query.error) === 401;
   const stale = !!data && (signedOut || failures >= STALE_AFTER_FAILURES);
 
   return (
     <section aria-label={goalId ? "Goal progress" : "Goals"} aria-busy={!data && query.isPending} className="space-y-6">
       {!goalId && (
-        <Strip goals={goals} asOf={data?.asOf ?? null} stale={stale} signedOut={signedOut} onRetry={() => query.refetch()} />
+        <Strip
+          goals={goals}
+          asOf={data?.asOf ?? null}
+          stale={stale}
+          signedOut={signedOut}
+          onRetry={() => query.refetch()}
+          onReload={reload}
+        />
       )}
       {!data ? (
         query.isError ? (
           <p role="alert" className="text-muted-foreground text-sm">
             {signedOut ? (
-              <ReloadLink />
+              <ReloadLink onClick={reload} />
             ) : (
               <button type="button" onClick={() => query.refetch()} className="underline underline-offset-2">
                 Goals unavailable · retry
@@ -97,7 +114,7 @@ export function GoalsBoard({ initialData, goalId }: GoalsBoardProps) {
       ) : goals.length === 0 ? (
         <p className="rounded-xl border border-border/60 border-dashed px-5 py-8 text-center text-muted-foreground text-sm">
           {goalId ? "Not an active goal" : "No goals yet"} ·{" "}
-          <Link href="/knowledge/dao-goals-design" className="underline underline-offset-2">
+          <Link href={hrefs.help} className="underline underline-offset-2">
             how goals work
           </Link>
         </p>
@@ -129,9 +146,9 @@ function useFailedPolls(errorAt: number, dataAt: number): number {
   return state.count;
 }
 
-function ReloadLink() {
+function ReloadLink({ onClick }: { readonly onClick: () => void }) {
   return (
-    <button type="button" onClick={() => window.location.reload()} className="text-warning underline underline-offset-2">
+    <button type="button" onClick={onClick} className="text-warning underline underline-offset-2">
       Signed out · reload
     </button>
   );
@@ -143,12 +160,14 @@ function Strip({
   stale,
   signedOut,
   onRetry,
+  onReload,
 }: {
   readonly goals: readonly GoalProgress[];
   readonly asOf: string | null;
   readonly stale: boolean;
   readonly signedOut: boolean;
   readonly onRetry: () => void;
+  readonly onReload: () => void;
 }) {
   const s = summarize(goals);
   const n = (status: keyof typeof STATUS_META) => s.byStatus[status] ?? 0;
@@ -174,7 +193,7 @@ function Strip({
       </dl>
       <p className="text-muted-foreground text-xs" {...(stale ? { role: "status" } : {})}>
         {signedOut ? (
-          <ReloadLink />
+          <ReloadLink onClick={onReload} />
         ) : stale ? (
           <button type="button" onClick={onRetry} className="text-warning underline underline-offset-2">
             Stale · {asOf ? formatUtcTime(asOf) : "—"}
@@ -197,6 +216,7 @@ function GoalRow({
   /** The goal entry page: one row, first KPI open. */
   readonly single: boolean;
 }) {
+  const { hrefs, Link } = useGoalsHost();
   const measured = isMeasured(goal);
   // Until the reader toggles it, a row follows the data: open when measured (always on the goal page).
   const [choice, setChoice] = useState<boolean | null>(null);
@@ -238,7 +258,7 @@ function GoalRow({
         </button>
         {!single && (
           <Link
-            href={`/knowledge/${encodeURIComponent(goal.id)}`}
+            href={hrefs.goal(goal.id)}
             aria-label={`Open ${goal.title}`}
             className="shrink-0 rounded-md px-3 py-3 text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
           >
