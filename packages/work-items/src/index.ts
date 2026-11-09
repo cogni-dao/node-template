@@ -116,7 +116,6 @@ export {
   loadWorkBoardColumns,
   parseWorkBoardSearchParams,
   WORK_BOARD_COLUMN_STATES,
-  WORK_BOARD_MIN_COLUMN_MS,
   WORK_BOARD_READ_BUDGET_MS,
   WORK_BOARD_STATUSES,
   WorkBoardColumnSchema,

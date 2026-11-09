@@ -152,6 +152,67 @@ describe("text scan is capped per request with a continuation", () => {
     expect(full.items).toHaveLength(500);
   });
 
+  it("uses a caller deadline for admission only: no pool retirement, partial page with continuation", async () => {
+    const queries: string[] = [];
+    let ended = 0;
+    let rebuilt = 0;
+    const sql = makeFakeDoltgresSql(async (query) => {
+      if (!query.includes("FROM (SELECT")) return [];
+      // Slower than the caller's deadline, far inside queryTimeoutMs.
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      const after = /id > '([^']+)'/.exec(query)?.[1];
+      const limit = Number(/LIMIT (\d+)$/.exec(query)?.[1]);
+      const start = after ? corpus.findIndex((row) => row.id > after) : 0;
+      return start < 0 ? [] : corpus.slice(start, start + limit);
+    }, queries);
+    const reader = Object.assign(async () => [], {
+      unsafe: sql.unsafe.bind(sql),
+      end: async () => {
+        ended += 1;
+      }
+    }) as unknown as typeof sql;
+    const adapter = new DoltgresWorkItemAdapter(independentReadPool(sql), {
+      readClient: reader,
+      recreateReadClient: () => {
+        rebuilt += 1;
+        return reader;
+      },
+      queryTimeoutMs: 1_000
+    });
+
+    const page = await adapter.listSummaries(
+      { text: "needle", limit: 25 },
+      { deadline: Date.now() + 20 }
+    );
+    // The in-flight batch finished under its own native timeout; no next batch was admitted.
+    expect(page.items).toEqual([]);
+    expect(page.pageInfo).toMatchObject({ hasMore: true, rowsScanned: 501 });
+    expect(page.pageInfo.endCursor).toEqual(expect.any(String));
+    expect(queries.filter((query) => query.includes("FROM (SELECT"))).toHaveLength(1);
+    expect(ended).toBe(0);
+    expect(rebuilt).toBe(0);
+
+    // The same reader keeps serving, and the continuation resumes after row 500.
+    const next = await adapter.listSummaries({
+      text: "needle",
+      limit: 25,
+      cursor: page.pageInfo.endCursor ?? undefined
+    });
+    expect(next.pageInfo.rowsScanned).toBe(WORK_TEXT_SCAN_MAX_ROWS);
+    expect(next.items.map((item) => item.id)).toEqual([idOf(1200)]);
+    const scans = queries.filter((query) => query.includes("FROM (SELECT"));
+    expect(scans[1]).toContain(`id > '${idOf(500)}'`);
+    expect(ended).toBe(0);
+    expect(rebuilt).toBe(0);
+  });
+
+  it("ignores a non-finite scan budget", async () => {
+    const { adapter, scansPerCall } = corpusReader();
+    scansPerCall.push([]);
+    await adapter.listSummaries({ text: "needle" }, { maxScanRows: Number.NaN });
+    expect(scansPerCall[0]?.reduce((a, b) => a + b, 0)).toBe(WORK_TEXT_SCAN_MAX_ROWS);
+  });
+
   it("stops before the next batch once the signal aborts", async () => {
     const { adapter } = corpusReader();
     const controller = new AbortController();

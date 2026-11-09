@@ -21,6 +21,7 @@ export const WORK_ITEMS_LIST_ERROR_CODES = {
 	INVALID_CURSOR: "invalid_cursor",
 	BACKEND_UNAVAILABLE: "backend_unavailable",
 	INTERNAL_ERROR: "internal_error",
+	CLIENT_ABORTED: "client_aborted",
 } as const;
 
 export const EVENT_NAMES = {

@@ -8,7 +8,8 @@
  * Invariants:
  *   - BOUNDED_BOARD: at most one `listSummaries` call per distinct visible status (≤ the lifecycle status set), each capped at `perColumn` ≤ `WORK_SUMMARY_PAGE_MAX` rows. Nothing walks a cursor.
  *   - COLUMN_CURSOR_IDENTITY: a column page is read with the exact query a later `/summaries?statuses=<status>&…&cursor=` request would build, so its `endCursor` is valid for that request.
- *   - ONE_REQUEST_BUDGET: one deadline (`WORK_BOARD_READ_BUDGET_MS`) and one rows-scanned budget cover the whole board, not each column. A column the budget does not reach returns `state: "not_started"` with no items and no cursor.
+ *   - ONE_REQUEST_BUDGET: one admission deadline (`WORK_BOARD_READ_BUDGET_MS`) and one rows-scanned budget cover the whole board, not each column. A column the budget does not reach returns `state: "not_started"` with no items and no cursor; a text column cut by the deadline returns its matches with a continuation.
+ *   - POOL_SAFETY: the deadline only gates admission (before each column and each text batch). It never shortens a native query timeout, which alone can retire the shared reader pool.
  *   - ABORT_BETWEEN_COLUMNS: an aborted signal stops the board before its next column read; no further reads are issued for a request nobody awaits.
  *   - SEQUENTIAL_READS: columns are read one after another, each passed the request's shared deadline; the template's reader pool is width one, so concurrent calls would only queue and spend the deadline waiting. Sequential reads bound peak reader load to one query.
  * Side-effects: none (the injected reader performs the I/O)
@@ -64,17 +65,19 @@ export type ListWorkSummaries = (
   options?: WorkSummaryReadOptions,
 ) => Promise<WorkSummaryPage>;
 
-/** Wall-clock budget for one whole board request, shared by every column read. */
+/**
+ * Admission budget for one whole board request, shared by every column read:
+ * no column (and no further text batch) starts after it. It never shortens a
+ * native query, whose timeout stays the store's own.
+ */
 export const WORK_BOARD_READ_BUDGET_MS = 5_000;
-/** A column is started only while at least this much of the budget remains. */
-export const WORK_BOARD_MIN_COLUMN_MS = 500;
 
 export interface LoadWorkBoardOptions {
   /** Rows per column page; clamped to 1..`WORK_SUMMARY_PAGE_MAX`. Default `WORK_BOARD_COLUMN_PAGE`. */
   readonly perColumn?: number;
   /** Stops the board before its next column (and each column before its next batch). */
   readonly signal?: AbortSignal;
-  /** One wall-clock budget for the whole request. Default `WORK_BOARD_READ_BUDGET_MS`. */
+  /** One admission budget for the whole request. Default `WORK_BOARD_READ_BUDGET_MS`. */
   readonly budgetMs?: number;
   /** One rows-scanned budget for the whole request (text search). Default `WORK_TEXT_SCAN_MAX_ROWS`. */
   readonly maxScanRows?: number;
@@ -115,9 +118,10 @@ const notStarted = (status: string): WorkBoardColumn => ({
  * caller's filters (types, projects, rank range, text, sort) apply to every
  * column. An unknown status throws a `RangeError` before any read.
  *
- * The whole request shares ONE deadline and ONE rows-scanned budget: each read
- * receives the deadline and the remaining scan rows, and columns the budget
- * does not reach come back `not_started`. An aborted `signal` rejects with its
+ * The whole request shares ONE admission deadline and ONE rows-scanned budget:
+ * each read receives the deadline (admission for its further text batches) and
+ * the remaining scan rows, and columns the budget does not reach come back
+ * `not_started`. Worst case ≈ the budget plus one in-flight native batch. An aborted `signal` rejects with its
  * reason before the next column read.
  */
 export async function loadWorkBoardColumns(
@@ -135,11 +139,14 @@ export async function loadWorkBoardColumns(
   }
   const now = options.now ?? Date.now;
   const deadline = now() + (options.budgetMs ?? WORK_BOARD_READ_BUDGET_MS);
-  let scanRowsLeft = Math.trunc(options.maxScanRows ?? WORK_TEXT_SCAN_MAX_ROWS);
+  const scanBudget = Number(options.maxScanRows);
+  let scanRowsLeft = Number.isFinite(scanBudget)
+    ? Math.min(Math.trunc(scanBudget), WORK_TEXT_SCAN_MAX_ROWS)
+    : WORK_TEXT_SCAN_MAX_ROWS;
   const columns: WorkBoardColumn[] = [];
   for (const status of visible) {
     options.signal?.throwIfAborted();
-    if (deadline - now() < WORK_BOARD_MIN_COLUMN_MS || scanRowsLeft < 1) {
+    if (now() >= deadline || scanRowsLeft < 1) {
       columns.push(notStarted(status));
       continue;
     }

@@ -92,7 +92,11 @@ export type WorkSummaryPageInfo = z.infer<typeof WorkSummaryPageInfoSchema>;
 export interface WorkSummaryReadOptions {
   /** Stops the read before its next query batch. */
   readonly signal?: AbortSignal;
-  /** Epoch ms after which the read fails as busy; the store's own timeout still applies. */
+  /**
+   * Epoch ms after which no further text batch is admitted: the page returns
+   * its matches so far with a continuation. Admission only; it never shortens
+   * the store's native query timeout (which also governs reader-pool health).
+   */
   readonly deadline?: number;
   /** Most rows a text search may scan; clamped to the store's own cap. */
   readonly maxScanRows?: number;

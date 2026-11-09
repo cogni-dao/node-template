@@ -443,6 +443,8 @@ describe("read handlers", () => {
     expect(result.status).toBe(status);
     expect(result.telemetry).toMatchObject({ errorCode: code, columnCount: 1 });
     if (status === 500) expect(result.body).toEqual({ error: "Internal server error" });
+    // Fixed strings: the thrown error's text never reaches the client.
+    expect(JSON.stringify(result.body)).not.toContain("happened");
   });
 
   it("answers an aborted board with 499 and no body", async () => {
@@ -456,6 +458,7 @@ describe("read handlers", () => {
       { signal: controller.signal },
     );
     expect(result).toMatchObject({ status: 499, body: null });
+    expect(result.telemetry.errorCode).toBe("client_aborted");
   });
 
   it("serves board columns with per-column durations and not-started counts", async () => {

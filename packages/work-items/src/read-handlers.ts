@@ -7,7 +7,7 @@
  * Scope: Decode with the shared codec, read through an injected `listSummaries`, validate the output schema, classify errors, and report telemetry. No HTTP framework, auth, logging or environment.
  * Invariants:
  *   - ONE_CODEC: requests decode with `parseWorkSummarySearchParams` / `parseWorkBoardSearchParams`; bodies encode with `WorkSummaryPageSchema` / `WorkBoardColumnsSchema`.
- *   - TYPED_ERRORS: invalid input → 400 `invalid_input`; a cursor error (name `InvalidCursorError`) → 400 `invalid_cursor`; a busy, capacity-held or unconfigured store (names `WorkItemsBusyError`, `WorkItemsCapacityError`, `WorkItemsBackendNotReadyError`, `DoltgresNotConfiguredError`) → 503 `backend_unavailable`; an aborted request → 499 with no body; anything else → 500 `internal_error` with a fixed message.
+ *   - TYPED_ERRORS: invalid input → 400 `invalid_input` (with codec issues); a cursor error (name `InvalidCursorError`) → 400 `invalid_cursor`; a busy, capacity-held or unconfigured store (names `WorkItemsBusyError`, `WorkItemsCapacityError`, `WorkItemsBackendNotReadyError`, `DoltgresNotConfiguredError`) → 503 `backend_unavailable`; an aborted request → 499 `client_aborted` with no body; anything else → 500 `internal_error`. Cursor, 503 and 500 bodies are fixed strings.
  *   - TELEMETRY_IS_SAFE: telemetry carries counts, order, durations and rows scanned only, never item text or filters.
  * Side-effects: none (the injected reader performs the I/O)
  * Links: task.0055, packages/work-items/src/board.ts, packages/work-items/src/summary-query.ts
@@ -40,6 +40,7 @@ export const WORK_READ_ERROR_CODES = {
   INVALID_CURSOR: "invalid_cursor",
   BACKEND_UNAVAILABLE: "backend_unavailable",
   INTERNAL_ERROR: "internal_error",
+  CLIENT_ABORTED: "client_aborted",
 } as const;
 export type WorkReadErrorCode =
   (typeof WORK_READ_ERROR_CODES)[keyof typeof WORK_READ_ERROR_CODES];
@@ -82,6 +83,10 @@ export interface WorkReadResult<TBody> {
   readonly body: TBody | WorkReadErrorBody | null;
   readonly telemetry: WorkReadTelemetry;
 }
+
+/** Fixed response texts: store and error internals never reach the client. */
+const INVALID_CURSOR_MESSAGE = "restart pagination without a cursor";
+const UNAVAILABLE_MESSAGE = "work items are temporarily unavailable; retry shortly";
 
 const UNAVAILABLE_ERRORS = new Set([
   "WorkItemsBusyError",
@@ -137,7 +142,7 @@ function failure<TBody>(
         ...base,
         status: WORK_READ_CLIENT_CLOSED,
         outcome: "error",
-        errorCode: WORK_READ_ERROR_CODES.INTERNAL_ERROR,
+        errorCode: WORK_READ_ERROR_CODES.CLIENT_ABORTED,
       },
     };
   }
@@ -148,7 +153,7 @@ function failure<TBody>(
       body: {
         error: "invalid cursor",
         code: "invalid_cursor",
-        message: error instanceof Error ? error.message : "invalid cursor",
+        message: INVALID_CURSOR_MESSAGE,
       },
       telemetry: {
         ...base,
@@ -161,12 +166,7 @@ function failure<TBody>(
   if (kind === "backend_unavailable") {
     return {
       status: 503,
-      body: {
-        error:
-          error instanceof Error && error.message
-            ? error.message
-            : "work items backend unavailable",
-      },
+      body: { error: UNAVAILABLE_MESSAGE },
       telemetry: {
         ...base,
         status: 503,

@@ -2732,16 +2732,14 @@ export class DoltgresWorkItemAdapter
   }
 
   private async readOnCleanMain<T>(
-    fn: (conn: WorkItemConnection) => Promise<T>,
-    callerDeadline?: number
+    fn: (conn: WorkItemConnection) => Promise<T>
   ): Promise<T> {
     const readPool = this.resolveReadPool();
     const context = { operationId: randomUUID(), operation: "read work items" };
-    // A caller may share one earlier deadline across several reads; never later.
-    const deadline = Math.min(
-      Date.now() + this.queryTimeoutMs,
-      callerDeadline ?? Number.POSITIVE_INFINITY
-    );
+    // POOL_SAFETY: the native timeout (and the pool retirement it triggers) is
+    // always queryTimeoutMs. A caller deadline only gates admission of further
+    // batches (see listProjected); it never shortens a native query.
+    const deadline = Date.now() + this.queryTimeoutMs;
     // No reserve, checkout, advisory lock, reconciliation or writer-pool call.
     return fn({
       pool: readPool,
@@ -2886,10 +2884,14 @@ export class DoltgresWorkItemAdapter
       Math.max(query.limit ?? 100, 1),
       summary ? WORK_SUMMARY_PAGE_MAX : 500
     );
-    const maxScanRows = Math.max(
-      1,
-      Math.min(WORK_TEXT_SCAN_MAX_ROWS, Math.trunc(options.maxScanRows ?? WORK_TEXT_SCAN_MAX_ROWS))
-    );
+    const requestedScan = Number(options.maxScanRows);
+    const maxScanRows = Number.isFinite(requestedScan)
+      ? Math.max(1, Math.min(WORK_TEXT_SCAN_MAX_ROWS, Math.trunc(requestedScan)))
+      : WORK_TEXT_SCAN_MAX_ROWS;
+    // Admission only: once the caller's deadline has passed, no further batch
+    // is issued and the page returns its matches with a continuation.
+    const admissionClosed = () =>
+      options.deadline !== undefined && Date.now() >= options.deadline;
     // Text filtering happens after native ordering. Decouple its scan window
     // from the response size to avoid re-ranking the backlog for every pagelet,
     // and cap the rows one request scans (TEXT_SCAN_BOUNDED).
@@ -2969,12 +2971,14 @@ export class DoltgresWorkItemAdapter
         if (!textNeedle || rows.length < scanLimit) return { matches, scanned };
         const last = rows[rows.length - 1];
         if (!last) return { matches, scanned };
-        // TEXT_SCAN_BOUNDED: at the row budget hand back every match so far
-        // (at most `limit`) and a continuation at the last SCANNED row.
-        if (scanned >= maxScanRows) return { matches, scanned, scannedThrough: last };
+        // TEXT_SCAN_BOUNDED: at the row budget, or once the caller's deadline
+        // closes admission, hand back every match so far (at most `limit`) and
+        // a continuation at the last SCANNED row. Never throw for the budget.
+        if (scanned >= maxScanRows || admissionClosed())
+          return { matches, scanned, scannedThrough: last };
         cursor = nativeCursor(last);
       }
-    }, options.deadline);
+    });
     const matchedRows = scan.matches;
     // A capped scan returns at most `limit` matches, all of them on this page.
     const scanTruncated = scan.scannedThrough !== undefined;
