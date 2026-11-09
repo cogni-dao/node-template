@@ -28,6 +28,10 @@ const mocks = vi.hoisted(() => ({
   debug: vi.fn(),
   verifySystemTenant: vi.fn(),
   warn: vi.fn(),
+  // Deep-probe dependencies added with the declared-dependency registry.
+  streamLength: vi.fn(),
+  getKnowledge: vi.fn(),
+  fetch: vi.fn(),
 }));
 
 vi.mock("@/bootstrap/container", () => ({
@@ -36,6 +40,12 @@ vi.mock("@/bootstrap/container", () => ({
     paymentRailsActive: false,
     scheduleControl: {},
     serviceAccountService: {},
+    runStream: {
+      streamLength: (...args: unknown[]) => mocks.streamLength(...args),
+    },
+    knowledgeStorePort: {
+      getKnowledge: (...args: unknown[]) => mocks.getKnowledge(...args),
+    },
   }),
 }));
 
@@ -126,11 +136,23 @@ describe("GET /readyz async substrate contract", () => {
     mocks.serverEnv.mockReturnValue({
       APP_BUILD_SHA: "readyz-contract-sha",
       APP_ENV: "production",
+      LITELLM_BASE_URL: "http://litellm:4000",
+      LITELLM_MASTER_KEY: "sk-readyz-test",
+      REDIS_URL: "redis://localhost:6379",
     });
     mocks.assertTemporalConnectivity.mockResolvedValue(undefined);
     mocks.assertSchedulerWorkerConnectivity.mockResolvedValue(undefined);
     mocks.checkEvmRpcConnectivity.mockResolvedValue({ ok: true });
     mocks.verifySystemTenant.mockResolvedValue(undefined);
+    // Always-declared deep probes resolve healthy by default.
+    mocks.streamLength.mockResolvedValue(0);
+    mocks.getKnowledge.mockResolvedValue(null);
+    mocks.fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: [{ model_name: "test-model" }] }),
+    });
+    vi.stubGlobal("fetch", (...args: unknown[]) => mocks.fetch(...args));
   });
 
   it("checks RPC before payment activation while keeping a transient failure non-draining", async () => {
@@ -571,5 +593,108 @@ describe("GET /readyz async substrate contract", () => {
     expect((await GET(request())).status).toBe(200);
     expect((await GET(request())).status).toBe(200); // cached
     expect(mocks.verifySystemTenant).toHaveBeenCalledTimes(2);
+  });
+
+  it("names redis in the deep 503 when the run-stream is unreachable", async () => {
+    mocks.streamLength.mockRejectedValue(new Error("Redis connection refused"));
+
+    const response = await GET(request("/readyz?deep=1"));
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      status: "error",
+      reason: "INFRA_UNREACHABLE",
+      unreachable: ["redis"],
+    });
+  });
+
+  it("names litellm-gateway in the deep 503 when the gateway is unreachable", async () => {
+    mocks.fetch.mockResolvedValue({ ok: false, status: 503, json: async () => ({}) });
+
+    const response = await GET(request("/readyz?deep=1"));
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      status: "error",
+      reason: "INFRA_UNREACHABLE",
+      unreachable: ["litellm-gateway"],
+    });
+  });
+
+  it("fails the litellm-gateway probe when the catalog is empty", async () => {
+    mocks.fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: [] }),
+    });
+
+    const response = await GET(request("/readyz?deep=1"));
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      unreachable: ["litellm-gateway"],
+    });
+  });
+
+  it("probes Doltgres only when DOLTGRES_URL is declared, naming it on failure", async () => {
+    mocks.serverEnv.mockReturnValue({
+      APP_BUILD_SHA: "readyz-contract-sha",
+      APP_ENV: "production",
+      LITELLM_BASE_URL: "http://litellm:4000",
+      LITELLM_MASTER_KEY: "sk-readyz-test",
+      REDIS_URL: "redis://localhost:6379",
+      DOLTGRES_URL: "postgresql://doltgres:5432/knowledge",
+    });
+    mocks.getKnowledge.mockRejectedValue(new Error("doltgres connection refused"));
+
+    const response = await GET(request("/readyz?deep=1"));
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      status: "error",
+      unreachable: ["doltgres"],
+    });
+    expect(mocks.getKnowledge).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes the deep probe when declared Doltgres is reachable", async () => {
+    mocks.serverEnv.mockReturnValue({
+      APP_BUILD_SHA: "readyz-contract-sha",
+      APP_ENV: "production",
+      LITELLM_BASE_URL: "http://litellm:4000",
+      LITELLM_MASTER_KEY: "sk-readyz-test",
+      REDIS_URL: "redis://localhost:6379",
+      DOLTGRES_URL: "postgresql://doltgres:5432/knowledge",
+    });
+
+    const response = await GET(request("/readyz?deep=1"));
+
+    expect(response.status).toBe(200);
+    expect(mocks.getKnowledge).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips the Doltgres probe when DOLTGRES_URL is unset", async () => {
+    const response = await GET(request("/readyz?deep=1"));
+
+    expect(response.status).toBe(200);
+    expect(mocks.getKnowledge).not.toHaveBeenCalled();
+  });
+
+  it("never probes Doltgres, Redis or LiteLLM on the default path", async () => {
+    mocks.serverEnv.mockReturnValue({
+      APP_BUILD_SHA: "readyz-contract-sha",
+      APP_ENV: "production",
+      LITELLM_BASE_URL: "http://litellm:4000",
+      LITELLM_MASTER_KEY: "sk-readyz-test",
+      REDIS_URL: "redis://localhost:6379",
+      DOLTGRES_URL: "postgresql://doltgres:5432/knowledge",
+    });
+
+    const response = await GET(request());
+
+    expect(response.status).toBe(200);
+    expect(mocks.getKnowledge).not.toHaveBeenCalled();
+    expect(mocks.streamLength).not.toHaveBeenCalled();
+    expect(mocks.fetch).not.toHaveBeenCalled();
   });
 });
