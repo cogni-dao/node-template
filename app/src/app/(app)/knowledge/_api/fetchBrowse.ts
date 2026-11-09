@@ -3,7 +3,7 @@
 
 /**
  * Module: `@app/(app)/knowledge/_api/fetchBrowse`
- * Purpose: This node's transport for the package Browse and Graph windows: GET /api/v1/knowledge/browse and /overview with the package-encoded parameters.
+ * Purpose: This node's transport for the package Browse windows: GET /api/v1/knowledge/browse with the package-encoded parameters.
  * Scope: Browser fetch only. Request encoding, cache keys and windowing belong to `@cogni/knowledge-base-ui`.
  * Invariants: Same-origin cookie credentials, never a Bearer header. Responses parse through the store's bounded page schema; failures carry the HTTP `status`.
  * Side-effects: IO
@@ -25,26 +25,19 @@ export class KnowledgeReadError extends Error {
   }
 }
 
-async function readWindow(
-  operation: "browse" | "overview",
+export async function fetchBrowse(
   params: URLSearchParams,
   signal: AbortSignal
 ): Promise<KnowledgeBrowsePage> {
-  const response = await fetch(`/api/v1/knowledge/${operation}?${params}`, {
+  const response = await fetch(`/api/v1/knowledge/browse?${params}`, {
     credentials: "same-origin",
     cache: "no-store",
     signal,
   });
   if (!response.ok)
     throw new KnowledgeReadError(
-      `Knowledge ${operation} failed (HTTP ${response.status})`,
+      `Knowledge browse failed (HTTP ${response.status})`,
       response.status
     );
   return KnowledgeBrowsePageSchema.parse(await response.json());
 }
-
-export const fetchBrowse = (params: URLSearchParams, signal: AbortSignal) =>
-  readWindow("browse", params, signal);
-
-export const fetchOverview = (params: URLSearchParams, signal: AbortSignal) =>
-  readWindow("overview", params, signal);

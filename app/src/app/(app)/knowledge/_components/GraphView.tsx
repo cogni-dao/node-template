@@ -3,10 +3,10 @@
 
 /**
  * Module: `@app/(app)/knowledge/_components/GraphView`
- * Purpose: Compose the package Graph capability and its published WebGL renderer with this node's transport and exact-ID detail sheet.
- * Scope: Composition only. Overview windows, focus pages, bounded geometry, palette, legend, controls and the renderer live in `@cogni/knowledge-base-ui` (`/knowledge`, `/graph-3d`; task.0059). The node only lazy-loads the client-only renderer subpath.
- * Invariants: Browser client: same-origin cookie transport only.
- * Side-effects: IO (through the package hooks and node fetchers)
+ * Purpose: Compose the package whole-corpus Graph and its published WebGL renderer with this node's transport and exact-ID detail sheet.
+ * Scope: Composition only. Graph state, exact counts, narrowing, neighbor highlighting and the renderer live in `@cogni/knowledge-base-ui` (`/knowledge`, `/graph-3d`; task.0059). The node lazy-loads the client-only renderer subpath.
+ * Invariants: Browser client: same-origin cookie transport only; the graph route revalidates by store revision (ETag/304).
+ * Side-effects: IO (through the package hook and node fetchers)
  * @internal
  */
 
@@ -16,12 +16,10 @@ import {
   KnowledgeGraph,
   type KnowledgeGraphRendererProps,
 } from "@cogni/knowledge-base-ui/knowledge";
-import type { KnowledgeBrowsePage } from "@cogni/node-contracts";
 import dynamic from "next/dynamic";
 import { type ComponentType, useCallback, useState } from "react";
 
-import { fetchCitationLinks } from "../../_api/fetchCitationLinks";
-import { fetchOverview } from "../_api/fetchBrowse";
+import { fetchGraph } from "../_api/fetchGraph";
 import { KnowledgeDetail } from "./KnowledgeDetail";
 import { useKnowledgeSelection } from "./KnowledgeSelection";
 
@@ -30,11 +28,7 @@ const KnowledgeForceGraph3D = dynamic(
   { ssr: false }
 ) as ComponentType<KnowledgeGraphRendererProps>;
 
-export function GraphView({
-  initialData,
-}: {
-  readonly initialData?: KnowledgeBrowsePage | undefined;
-}) {
+export function GraphView() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const detail = useKnowledgeSelection(selectedId);
@@ -45,13 +39,10 @@ export function GraphView({
   return (
     <>
       <KnowledgeGraph
-        fetchOverview={fetchOverview}
-        fetchCitationLinks={fetchCitationLinks}
+        fetchGraph={fetchGraph}
         renderer={KnowledgeForceGraph3D}
-        initialData={initialData}
         selectedId={selectedId}
         onSelect={onSelect}
-        selected={detail.data ?? null}
         canvasClassName="h-[var(--height-knowledge-graph)]"
       />
       <KnowledgeDetail

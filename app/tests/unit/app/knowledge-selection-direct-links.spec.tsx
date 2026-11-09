@@ -3,7 +3,7 @@
 
 /**
  * Module: `@tests/unit/app/knowledge-selection-direct-links`
- * Purpose: Prove node-template composes the package Browse and Graph over its own transport: bounded SSR hydration, tab-intent reads, submit-only search through the node fetcher, overview revision restart, exact-ID selection and thin routes.
+ * Purpose: Prove node-template composes the package Browse and Graph over its own transport: bounded SSR hydration, tab-intent reads, submit-only search through the node fetcher, the whole-corpus graph with exact counts, graph-route ETag/304 revalidation, exact-ID selection and thin routes.
  * Scope: Real package Browse/Graph (`@cogni/knowledge-base-ui`), node fetchers, schemas and routes; the legacy Chains grid, WebGL drawing and browser fetch are stubbed. Browse/Graph control behavior is proven package-only in packages/knowledge-base-ui/tests (task.0059).
  * Invariants: NO_HIDDEN_READS, EXPLICIT_CONTINUATION, STALE_INTENT_IGNORED.
  * Side-effects: Stubbed browser fetch; no live services or database.
@@ -43,6 +43,7 @@ import {
 import KnowledgePage from "@/app/(app)/knowledge/page";
 import { KnowledgeDashboardView } from "@/app/(app)/knowledge/view";
 import { GET as browseRoute } from "@/app/api/v1/knowledge/browse/route";
+import { GET as graphRoute } from "@/app/api/v1/knowledge/graph/route";
 import { GET as overviewRoute } from "@/app/api/v1/knowledge/overview/route";
 
 vi.mock(
@@ -249,7 +250,24 @@ const page = {
   items: [selected],
   nextCursor: null,
   revision: "rev-a",
-  scannedRows: 1
+  scannedRows: 1,
+  total: 1
+};
+/** The whole-corpus graph the graph route serves. */
+const graphBody = {
+  revision: "rev-a",
+  domains: [selected.domain],
+  nodes: [
+    {
+      id: selected.id,
+      domain: selected.domain,
+      title: selected.title,
+      entryType: selected.entryType,
+      confidencePct: selected.confidencePct,
+      sourceType: selected.sourceType
+    }
+  ],
+  edges: []
 };
 function mount(children: ReactNode) {
   const client = new QueryClient({
@@ -272,6 +290,7 @@ it.each(["browse", "chains", "graph"])(
       }
     );
     const fetchMock = vi.fn(async (url: string) => {
+      if (url === "/api/v1/knowledge/graph") return Response.json(graphBody);
       if (url === `/api/v1/knowledge/${selected.id}`)
         return Response.json(selected);
       if (url.startsWith(`/api/v1/citations/${selected.id}`))
@@ -285,7 +304,6 @@ it.each(["browse", "chains", "graph"])(
     mount(
       <KnowledgeDashboardView
         initialBrowse={page}
-        initialOverview={page}
         initialList={
           mode === "chains"
             ? { items: [selected], domains: [selected.domain] }
@@ -294,11 +312,15 @@ it.each(["browse", "chains", "graph"])(
       />
     );
     await act(async () => {});
-    expect(fetchMock).not.toHaveBeenCalled();
+    // Browse and Chains are seeded; Graph reads the whole corpus once.
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(
+      mode === "graph" ? ["/api/v1/knowledge/graph"] : []
+    );
+    fetchMock.mockClear();
     fireEvent.click(
       mode === "browse"
         ? screen.getByText(selected.title)
-        : screen.getByRole("button", {
+        : await screen.findByRole("button", {
             name: `Select ${mode === "graph" ? "graph" : "row"} ${selected.title}`
           })
     );
@@ -311,7 +333,7 @@ it.each(["browse", "chains", "graph"])(
           url.startsWith(`/api/v1/citations/${selected.id}`)
       )
     ).toBe(true);
-    // Detail's append controller remains separate from replacement graph geometry.
+    // Citation paging lives only in the detail panel's relation list.
     expect(screen.getByRole("button", { name: "More links" })).toBeTruthy();
   }
 );
@@ -321,7 +343,8 @@ it("SSR reads only the chosen bounded projection and round-trips the wire page",
     items: [],
     nextCursor: null,
     revision: "rev-a",
-    scannedRows: 0
+    scannedRows: 0,
+    total: 0
   };
   const browseKnowledge = vi.fn(async () => emptyPage);
   const overviewKnowledge = vi.fn(async () => emptyPage);
@@ -346,14 +369,14 @@ it("SSR reads only the chosen bounded projection and round-trips the wire page",
   ssr.port = port;
   const browse = await KnowledgePage({ searchParams: Promise.resolve({}) });
   expect(browse.props.initialBrowse).toEqual(emptyPage);
-  expect(browse.props.initialOverview).toBeUndefined();
+  // Graph is never SSR-seeded: no store read at all for the graph tab.
   const graph = await KnowledgePage({
     searchParams: Promise.resolve({ mode: "graph" })
   });
-  expect(graph.props.initialOverview).toEqual(emptyPage);
+  expect(graph.props.initialBrowse).toBeUndefined();
   expect(graph.props.initialList).toBeUndefined();
   expect(browseKnowledge).toHaveBeenCalledTimes(2);
-  expect(overviewKnowledge).toHaveBeenCalledTimes(2);
+  expect(overviewKnowledge).toHaveBeenCalledTimes(1);
 });
 
 it("node transport: typing issues no request; submit sends exactly one package-encoded browse window", async () => {
@@ -370,7 +393,8 @@ it("node transport: typing issues no request; submit sends exactly one package-e
         items: [],
         nextCursor: null,
         revision: "rev-a",
-        scannedRows: 5
+        scannedRows: 5,
+        total: 5046
       });
     })
   );
@@ -382,7 +406,7 @@ it("node transport: typing issues no request; submit sends exactly one package-e
   expect((box as HTMLInputElement).value).toBe("abcde");
   expect(reads).toHaveLength(0);
   await user.click(screen.getByRole("button", { name: "Search" }));
-  await screen.findByText(/5 candidates searched/);
+  await screen.findByText(/Searched 1–5 of 5,046 candidates/);
   expect(reads).toHaveLength(1);
   expect(reads[0]?.searchParams.get("search")).toBe("abcde");
   expect(reads[0]?.searchParams.get("sort")).toBe("createdAt");
@@ -446,7 +470,13 @@ it("thin routes reject malformed and cross-query cursors and preserve repeated e
       throw new KnowledgeBrowseCursorError(
         "Browse cursor does not match query"
       );
-    return { items: [], nextCursor: null, revision: "rev-a", scannedRows: 0 };
+    return {
+      items: [],
+      nextCursor: null,
+      revision: "rev-a",
+      scannedRows: 0,
+      total: 0
+    };
   });
   ssr.port = { browseKnowledge };
   type Handler = (
@@ -517,7 +547,7 @@ it("returns retryable 503 and forwards request abort to bounded reads", async ()
   });
 });
 
-it("Graph records SSR revision, signals transitions and explicitly restarts overview", async () => {
+it("Graph shows the exact whole-corpus counts from one read", async () => {
   navigation.mode = "graph";
   vi.stubGlobal(
     "ResizeObserver",
@@ -526,35 +556,63 @@ it("Graph records SSR revision, signals transitions and explicitly restarts over
       disconnect() {}
     }
   );
-  const reads: URL[] = [];
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (url: string) => {
-      reads.push(new URL(url, "https://node.test"));
-      return Response.json({ ...page, revision: "rev-b" });
-    })
+  const nodes = Array.from({ length: 5046 }, (_, i) => ({
+    ...graphBody.nodes[0],
+    id: `k-${i}`,
+    title: `Entry ${i}`
+  }));
+  const edges = Array.from({ length: 12300 }, (_, e) => ({
+    id: `c-${e}`,
+    source: `k-${e % 5046}`,
+    target: `k-${(e + 1) % 5046}`,
+    citationType: "supports"
+  }));
+  const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+    expect(init.cache).toBe("no-cache");
+    return Response.json({ ...graphBody, nodes, edges });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  mount(<KnowledgeDashboardView />);
+  await screen.findByText(/5,046 entries · 12,300 citations/);
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+});
+
+it("graph route serves the whole corpus once per revision and answers an unchanged revision with 304", async () => {
+  const listKnowledgeGraphNodes = vi.fn(async () => graphBody.nodes);
+  const listAllCitations = vi.fn(async () => []);
+  ssr.port = {
+    currentCommit: async () => "rev-graph",
+    listDomains: async () => graphBody.domains,
+    listKnowledgeGraphNodes,
+    listAllCitations
+  };
+  const handler = graphRoute as unknown as (
+    ctx: unknown,
+    request: Request,
+    user: unknown
+  ) => Promise<Response>;
+  const call = (headers: Record<string, string> = {}) =>
+    handler(
+      routeContext("knowledge.graph"),
+      new Request("https://node.test/api/v1/knowledge/graph", { headers }),
+      { id: "fixture" }
+    );
+  const first = await call();
+  expect(first.status).toBe(200);
+  expect(first.headers.get("ETag")).toBe('"rev-graph"');
+  expect(first.headers.get("Cache-Control")).toBe(
+    "private, no-cache, must-revalidate"
   );
-  mount(
-    <KnowledgeDashboardView
-      initialOverview={{ ...page, nextCursor: "graph-next" }}
-    />
-  );
-  expect(screen.getByText(/Observed revision: rev-a/)).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "More overview" }));
-  await screen.findByText(
-    "Knowledge changed. Restart overview to begin a new live traversal."
-  );
-  expect(reads[0]?.searchParams.get("cursor")).toBe("graph-next");
-  fireEvent.click(screen.getByRole("button", { name: "Restart overview" }));
-  await waitFor(() => expect(reads).toHaveLength(2));
-  expect(reads[1]?.searchParams.get("cursor")).toBeNull();
-  await waitFor(() =>
-    expect(
-      screen.queryByText(
-        "Knowledge changed. Restart overview to begin a new live traversal."
-      )
-    ).toBeNull()
-  );
+  expect(await first.json()).toEqual({ ...graphBody, revision: "rev-graph" });
+  const second = await call();
+  expect(second.status).toBe(200);
+  // One projected read per revision, shared by later requests.
+  expect(listKnowledgeGraphNodes).toHaveBeenCalledTimes(1);
+  const unchanged = await call({ "If-None-Match": '"rev-graph"' });
+  expect(unchanged.status).toBe(304);
+  expect(await unchanged.text()).toBe("");
+  expect(listKnowledgeGraphNodes).toHaveBeenCalledTimes(1);
+  expect(listAllCitations).toHaveBeenCalledTimes(1);
 });
 
 it("SSR deadlines bound connection waiting and never seed a partial page or grow native backlog", async () => {
@@ -582,8 +640,8 @@ it("SSR deadlines bound connection waiting and never seed a partial page or grow
     });
     await vi.advanceTimersByTimeAsync(40);
     const shell = await pendingPage;
-    expect(shell.props.initialOverview).toBeUndefined();
     expect(shell.props.initialBrowse).toBeUndefined();
+    // The graph tab performs no SSR store read.
     expect(sql.unsafe).toHaveBeenCalledTimes(1);
   } finally {
     vi.useRealTimers();
@@ -658,7 +716,8 @@ it.each(["browse", "overview"] as const)(
       items: [],
       nextCursor: null,
       revision: "private-value",
-      scannedRows: 0
+      scannedRows: 0,
+      total: 0
     });
     await run("", success, 200);
     await run("sort=private-value", success, 400, "invalid_query");

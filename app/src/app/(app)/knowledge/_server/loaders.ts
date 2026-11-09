@@ -37,6 +37,10 @@ import {
   type KnowledgeOverviewQuery,
   type KnowledgeRow,
 } from "@cogni/node-contracts";
+import {
+  type KnowledgeGraphResponse,
+  KnowledgeGraphResponseSchema,
+} from "@cogni/knowledge-store/contracts";
 import { unstable_cache } from "next/cache";
 import { toHttpKnowledgeRow } from "@/app/_facades/read-envelopes.server";
 
@@ -137,6 +141,45 @@ export async function loadKnowledgeGraphCached(
     ["knowledge-graph", rev],
     { tags: [KNOWLEDGE_CACHE_TAG] }
   )();
+}
+
+/**
+ * The whole graph at the store's current revision, serialized once per
+ * revision (task.0059). One projected node read + one citation read per Dolt
+ * HEAD; concurrent callers share the in-flight read, and later callers at the
+ * same revision reuse the serialized body. An in-process memo, not
+ * `unstable_cache`, because the whole-corpus payload outgrows Next's 2 MB
+ * data-cache item limit as the corpus grows. The route answers an unchanged
+ * revision with 304 before calling this at all.
+ */
+export interface KnowledgeGraphBody {
+  readonly revision: string;
+  readonly graph: KnowledgeGraphResponse;
+  readonly body: string;
+}
+
+/** One memo per store port: the latest revision's read only. */
+const graphMemos = new WeakMap<
+  KnowledgeStorePort,
+  { revision: string; read: Promise<KnowledgeGraphBody> }
+>();
+
+export function loadKnowledgeGraphBody(
+  port: KnowledgeStorePort,
+  revision: string
+): Promise<KnowledgeGraphBody> {
+  const memo = graphMemos.get(port);
+  if (memo?.revision === revision) return memo.read;
+  const read = loadKnowledgeGraph(port).then((model) => {
+    const graph = KnowledgeGraphResponseSchema.parse({ revision, ...model });
+    return { revision, graph, body: JSON.stringify(graph) };
+  });
+  graphMemos.set(port, { revision, read });
+  // A failed read is not remembered; the next request retries.
+  read.catch(() => {
+    if (graphMemos.get(port)?.read === read) graphMemos.delete(port);
+  });
+  return read;
 }
 
 /**

@@ -3,50 +3,32 @@
 
 /**
  * Module: `@app/(app)/knowledge/_api/fetchGraph`
- * Purpose: Client-side fetch wrapper + wire types for the knowledge graph
- *   (nodes + citation edges). Types mirror the in-node route schema at
- *   GET /api/v1/knowledge/graph (kept in-node, not @cogni/node-contracts, so
- *   the graph feature stays single-node-scoped).
- * Scope: Calls GET /api/v1/knowledge/graph with same-origin credentials.
- * Invariants: Browser client — same-origin cookie credentials, never a Bearer header. The endpoint itself accepts any principal (KNOWLEDGE_READ_REQUIRES_PRINCIPAL); this UI path is cookie-only by construction.
+ * Purpose: This node's transport for the package `useKnowledgeGraph`: GET /api/v1/knowledge/graph, the whole projected graph at one store revision.
+ * Scope: Browser fetch only. Graph state, filtering and highlighting live in `@cogni/knowledge-base-ui/knowledge` (task.0059).
+ * Invariants: Same-origin cookie credentials, never a Bearer header. `cache: "no-cache"` makes the browser revalidate its cached copy with If-None-Match, so an unchanged revision is a 304 with no body. Failures carry the HTTP `status`.
  * Side-effects: IO
  * @internal
  */
 
-export interface KnowledgeGraphNode {
-  id: string;
-  domain: string;
-  title: string;
-  entryType: string;
-  confidencePct: number | null;
-  sourceType: string;
-}
+import {
+  type KnowledgeGraphResponse,
+  KnowledgeGraphResponseSchema,
+} from "@cogni/knowledge-store/contracts";
 
-export interface KnowledgeGraphEdge {
-  id: string;
-  source: string;
-  target: string;
-  citationType: string;
-}
+import { KnowledgeReadError } from "./fetchBrowse";
 
-export interface KnowledgeGraphResponse {
-  nodes: KnowledgeGraphNode[];
-  edges: KnowledgeGraphEdge[];
-  domains: string[];
-}
-
-export async function fetchGraph(): Promise<KnowledgeGraphResponse> {
+export async function fetchGraph(
+  signal: AbortSignal
+): Promise<KnowledgeGraphResponse> {
   const response = await fetch("/api/v1/knowledge/graph", {
-    method: "GET",
-    headers: { "Content-Type": "application/json" },
     credentials: "same-origin",
-    cache: "no-store",
+    cache: "no-cache",
+    signal,
   });
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({
-      error: "Failed to fetch knowledge graph",
-    }));
-    throw new Error(error.error || `HTTP ${response.status}`);
-  }
-  return response.json() as Promise<KnowledgeGraphResponse>;
+  if (!response.ok)
+    throw new KnowledgeReadError(
+      `Knowledge graph failed (HTTP ${response.status})`,
+      response.status
+    );
+  return KnowledgeGraphResponseSchema.parse(await response.json());
 }
