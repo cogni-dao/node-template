@@ -107,6 +107,7 @@ export * from "./contracts.js";
 
 export type {
   ListWorkSummaries,
+  LoadWorkBoardOptions,
   WorkBoardColumn,
   WorkBoardColumns,
   WorkBoardQueryParse
@@ -114,6 +115,9 @@ export type {
 export {
   loadWorkBoardColumns,
   parseWorkBoardSearchParams,
+  WORK_BOARD_COLUMN_STATES,
+  WORK_BOARD_MIN_COLUMN_MS,
+  WORK_BOARD_READ_BUDGET_MS,
   WORK_BOARD_STATUSES,
   WorkBoardColumnSchema,
   WorkBoardColumnsSchema,
@@ -125,7 +129,8 @@ export type {
   WorkSummaryPage,
   WorkSummaryPageInfo,
   WorkSummaryQuery,
-  WorkSummaryQueryParse
+  WorkSummaryQueryParse,
+  WorkSummaryReadOptions
 } from "./summary-query.js";
 export {
   parseWorkSummarySearchParams,
@@ -134,8 +139,24 @@ export {
   WORK_SUMMARY_PAGE_DEFAULT,
   WORK_SUMMARY_PAGE_MAX,
   WORK_SUMMARY_TEXT_MAX,
+  WORK_TEXT_SCAN_MAX_ROWS,
   WorkSummaryPageInfoSchema,
   WorkSummaryPageSchema,
   WorkSummaryQuerySchema,
   workSummaryQueryToSearchParams
 } from "./summary-query.js";
+export type {
+  WorkBoardRequestOptions,
+  WorkReadErrorBody,
+  WorkReadErrorCode,
+  WorkReadResult,
+  WorkReadTelemetry,
+  WorkSummariesRequestOptions
+} from "./read-handlers.js";
+export {
+  classifyWorkReadError,
+  handleWorkBoardRequest,
+  handleWorkSummariesRequest,
+  WORK_READ_CLIENT_CLOSED,
+  WORK_READ_ERROR_CODES
+} from "./read-handlers.js";

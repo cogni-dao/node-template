@@ -27,6 +27,13 @@ import {
 export const WORK_SUMMARY_PAGE_DEFAULT = 25;
 /** Largest summary page any request may ask for. */
 export const WORK_SUMMARY_PAGE_MAX = 100;
+/**
+ * TEXT_SCAN_BOUNDED: most rows one summary or list request may scan for a
+ * JS-side text match. At the cap the page returns the matches so far with
+ * `hasMore` and an `endCursor` at the last scanned row; an empty page with a
+ * cursor is progress. A board shares one such budget across its columns.
+ */
+export const WORK_TEXT_SCAN_MAX_ROWS = 1000;
 /** Rows per board column on first load and on each column "Load more". */
 export const WORK_BOARD_COLUMN_PAGE = 20;
 
@@ -73,8 +80,23 @@ export type WorkSummaryQueryParse =
 export const WorkSummaryPageInfoSchema = z.object({
   endCursor: z.string().nullable(),
   hasMore: z.boolean(),
+  /** Rows the store read to build this page (text search scans past non-matches). */
+  rowsScanned: z.number().int().nonnegative().optional(),
 });
 export type WorkSummaryPageInfo = z.infer<typeof WorkSummaryPageInfoSchema>;
+
+/**
+ * Per-request read bounds a caller may tighten (never widen) for one summary
+ * read. Not part of the query identity: a cursor stays valid across budgets.
+ */
+export interface WorkSummaryReadOptions {
+  /** Stops the read before its next query batch. */
+  readonly signal?: AbortSignal;
+  /** Epoch ms after which the read fails as busy; the store's own timeout still applies. */
+  readonly deadline?: number;
+  /** Most rows a text search may scan; clamped to the store's own cap. */
+  readonly maxScanRows?: number;
+}
 
 /** One bounded page of summaries. */
 export const WorkSummaryPageSchema = z.object({

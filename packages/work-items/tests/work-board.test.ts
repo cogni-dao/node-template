@@ -40,6 +40,11 @@ import {
   type WorkSummaryQuery,
   workSummaryQueryToSearchParams,
 } from "../src/summary-query.js";
+import {
+  classifyWorkReadError,
+  handleWorkBoardRequest,
+  handleWorkSummariesRequest,
+} from "../src/read-handlers.js";
 import type { WorkQuery } from "../src/types.js";
 
 const parse = (search: string) =>
@@ -233,7 +238,7 @@ describe("loadWorkBoardColumns", () => {
 
   it("clamps the column budget and never exceeds the status set", async () => {
     const { list } = fixtureReader(500);
-    const board = await loadWorkBoardColumns(list, {}, WORK_BOARD_STATUSES, 5_000);
+    const board = await loadWorkBoardColumns(list, {}, WORK_BOARD_STATUSES, { perColumn: 5_000 });
     expect(list.mock.calls.length).toBe(WORK_BOARD_STATUSES.length);
     expect(
       list.mock.calls.every(([query]) => query.limit === WORK_SUMMARY_PAGE_MAX),
@@ -251,15 +256,68 @@ describe("loadWorkBoardColumns", () => {
       return page;
     };
     await expect(
-      loadWorkBoardColumns(
-        abortingList,
-        {},
-        statuses,
-        WORK_BOARD_COLUMN_PAGE,
-        controller.signal,
-      ),
+      loadWorkBoardColumns(abortingList, {}, statuses, {
+        signal: controller.signal,
+      }),
     ).rejects.toThrow("client went away");
     expect(list).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares one rows-scanned budget across columns and marks unreached columns not_started", async () => {
+    const seen: Array<number | undefined> = [];
+    const list = async (
+      query: WorkSummaryQuery,
+      options?: { maxScanRows?: number; deadline?: number },
+    ): Promise<WorkSummaryPage> => {
+      seen.push(options?.maxScanRows);
+      expect(options?.deadline).toEqual(expect.any(Number));
+      return {
+        items: [],
+        pageInfo: { endCursor: "c", hasMore: true, rowsScanned: 600 },
+      };
+    };
+    const board = await loadWorkBoardColumns(
+      list,
+      { text: "sparse" },
+      statuses,
+      { maxScanRows: 1000 },
+    );
+    expect(seen).toEqual([1000, 400]);
+    expect(board.columns.map((c) => c.state)).toEqual([
+      "loaded",
+      "loaded",
+      "not_started",
+    ]);
+    expect(board.columns[2]).toEqual({
+      status: "done",
+      state: "not_started",
+      items: [],
+      pageInfo: { endCursor: null, hasMore: true, rowsScanned: 0 },
+    });
+    expect(WorkBoardColumnsSchema.safeParse(board).success).toBe(true);
+  });
+
+  it("shares one deadline across columns and starts none after it", async () => {
+    let clock = 0;
+    const deadlines: Array<number | undefined> = [];
+    const list = async (
+      _query: WorkSummaryQuery,
+      options?: { deadline?: number },
+    ): Promise<WorkSummaryPage> => {
+      deadlines.push(options?.deadline);
+      clock += 3_000;
+      return { items: [], pageInfo: { endCursor: null, hasMore: false } };
+    };
+    const board = await loadWorkBoardColumns(list, {}, statuses, {
+      budgetMs: 5_000,
+      now: () => clock,
+    });
+    expect(deadlines).toEqual([5_000, 5_000]);
+    expect(board.columns.map((c) => c.state)).toEqual([
+      "loaded",
+      "loaded",
+      "not_started",
+    ]);
   });
 
   it("reads nothing for no columns and rejects an unknown status before any read", async () => {
@@ -329,5 +387,91 @@ describe("parseWorkBoardSearchParams", () => {
       statuses: ["done", "needs_design"],
       query: { types: ["bug"] },
     });
+  });
+});
+
+describe("read handlers", () => {
+  const page: WorkSummaryPage = {
+    items: [],
+    pageInfo: { endCursor: null, hasMore: false, rowsScanned: 3 },
+  };
+  const named = (name: string) =>
+    Object.assign(new Error(`${name} happened`), { name });
+
+  it("serves a summaries page and reports counts, order and rows scanned", async () => {
+    const list = vi.fn(async () => page);
+    const result = await handleWorkSummariesRequest(
+      new URLSearchParams("limit=5&statuses=done"),
+      list,
+    );
+    expect(result.status).toBe(200);
+    expect(result.body).toEqual(page);
+    expect(list.mock.calls[0]?.[0]).toMatchObject({ limit: 5, statuses: ["done"] });
+    expect(result.telemetry).toMatchObject({
+      status: 200,
+      outcome: "success",
+      count: 0,
+      rowsScanned: 3,
+      sortBy: "rankScore",
+    });
+  });
+
+  it.each([
+    ["limit=101", 400, "invalid_input"],
+    [`cursor=${"a".repeat(2049)}`, 400, "invalid_input"],
+  ])("rejects %s before any read", async (search, status, code) => {
+    const list = vi.fn(async () => page);
+    const result = await handleWorkSummariesRequest(new URLSearchParams(search), list);
+    expect(result.status).toBe(status);
+    expect(result.telemetry.errorCode).toBe(code);
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["InvalidCursorError", 400, "invalid_cursor"],
+    ["WorkItemsBusyError", 503, "backend_unavailable"],
+    ["WorkItemsCapacityError", 503, "backend_unavailable"],
+    ["WorkItemsBackendNotReadyError", 503, "backend_unavailable"],
+    ["TypeError", 500, "internal_error"],
+  ])("maps %s to %i", async (name, status, code) => {
+    const result = await handleWorkBoardRequest(
+      new URLSearchParams("statuses=done"),
+      async () => {
+        throw named(name);
+      },
+    );
+    expect(result.status).toBe(status);
+    expect(result.telemetry).toMatchObject({ errorCode: code, columnCount: 1 });
+    if (status === 500) expect(result.body).toEqual({ error: "Internal server error" });
+  });
+
+  it("answers an aborted board with 499 and no body", async () => {
+    const controller = new AbortController();
+    const result = await handleWorkBoardRequest(
+      new URLSearchParams("statuses=done,needs_design"),
+      async () => {
+        controller.abort();
+        return page;
+      },
+      { signal: controller.signal },
+    );
+    expect(result).toMatchObject({ status: 499, body: null });
+  });
+
+  it("serves board columns with per-column durations and not-started counts", async () => {
+    const result = await handleWorkBoardRequest(
+      new URLSearchParams("statuses=done,needs_design&text=x"),
+      async () => ({ ...page, pageInfo: { ...page.pageInfo, rowsScanned: 1000 } }),
+    );
+    expect(result.status).toBe(200);
+    expect(result.telemetry).toMatchObject({
+      columnCount: 2,
+      notStartedCount: 1,
+      rowsScanned: 1000,
+    });
+    expect(result.telemetry.columnDurationsMs).toHaveLength(1);
+    expect(classifyWorkReadError(named("DoltgresNotConfiguredError"))).toBe(
+      "backend_unavailable",
+    );
   });
 });

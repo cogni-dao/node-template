@@ -55,6 +55,11 @@ import {
 } from "../../history.js";
 import { normalizeWorkItemOrder } from "../../query-order.js";
 import { rankScoreSql } from "../../rank-policy.js";
+import {
+  WORK_SUMMARY_PAGE_MAX,
+  WORK_TEXT_SCAN_MAX_ROWS,
+  type WorkSummaryReadOptions
+} from "../../summary-query.js";
 
 import { decodeCursor, encodeCursor, InvalidCursorError, queryIdentity, type WorkItemCursor } from "./cursor.js";
 import type {
@@ -65,13 +70,8 @@ import type {
 } from "./ports.js";
 
 export const OPERATOR_ID_FLOOR = 5000;
-/**
- * TEXT_SCAN_BOUNDED: most rows one `list`/`listSummaries` request may scan for a
- * JS-side text match. At the cap the page returns the matches so far with
- * `hasMore` and an `endCursor` at the last scanned row, so sparse matches never
- * walk the whole backlog; an empty page with a cursor is progress (task.0055).
- */
-export const WORK_TEXT_SCAN_MAX_ROWS = 1000;
+/** TEXT_SCAN_BOUNDED: the shared per-request text scan cap (task.0055). */
+export { WORK_TEXT_SCAN_MAX_ROWS };
 /** Rows per text-scan batch; the last batch shrinks to stay within the cap. */
 const TEXT_SCAN_BATCH_ROWS = 501;
 const AUTO_ID_RETRIES = 5;
@@ -2732,11 +2732,16 @@ export class DoltgresWorkItemAdapter
   }
 
   private async readOnCleanMain<T>(
-    fn: (conn: WorkItemConnection) => Promise<T>
+    fn: (conn: WorkItemConnection) => Promise<T>,
+    callerDeadline?: number
   ): Promise<T> {
     const readPool = this.resolveReadPool();
     const context = { operationId: randomUUID(), operation: "read work items" };
-    const deadline = Date.now() + this.queryTimeoutMs;
+    // A caller may share one earlier deadline across several reads; never later.
+    const deadline = Math.min(
+      Date.now() + this.queryTimeoutMs,
+      callerDeadline ?? Number.POSITIVE_INFINITY
+    );
     // No reserve, checkout, advisory lock, reconciliation or writer-pool call.
     return fn({
       pool: readPool,
@@ -2781,11 +2786,12 @@ export class DoltgresWorkItemAdapter
     return this.listProjected(query, false) as Promise<{ items: WorkItem[]; nextCursor?: string; pageInfo: { endCursor: string | null; hasMore: boolean } }>;
   }
 
-  async listSummaries(query: WorkQuery = {}) {
-    return this.listProjected(query, true) as Promise<{ items: WorkItemSummary[]; nextCursor?: string; pageInfo: { endCursor: string | null; hasMore: boolean } }>;
+  /** One summary page, clamped to `WORK_SUMMARY_PAGE_MAX` rows (task.0055). */
+  async listSummaries(query: WorkQuery = {}, options: WorkSummaryReadOptions = {}) {
+    return this.listProjected(query, true, options) as Promise<{ items: WorkItemSummary[]; nextCursor?: string; pageInfo: { endCursor: string | null; hasMore: boolean; rowsScanned: number } }>;
   }
 
-  private async listProjected(query: WorkQuery, summary: boolean) {
+  private async listProjected(query: WorkQuery, summary: boolean, options: WorkSummaryReadOptions = {}) {
     if (
       (query.rankMin !== undefined && !Number.isFinite(query.rankMin)) ||
       (query.rankMax !== undefined && !Number.isFinite(query.rankMax)) ||
@@ -2875,13 +2881,21 @@ export class DoltgresWorkItemAdapter
             updatedAt: "date_trunc('microseconds', updated_at)"
           }[order.sortBy];
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
-    const limit = Math.min(Math.max(query.limit ?? 100, 1), 500);
+    // Summary pages are bounded by the shared contract; full items keep the agent API's 500.
+    const limit = Math.min(
+      Math.max(query.limit ?? 100, 1),
+      summary ? WORK_SUMMARY_PAGE_MAX : 500
+    );
+    const maxScanRows = Math.max(
+      1,
+      Math.min(WORK_TEXT_SCAN_MAX_ROWS, Math.trunc(options.maxScanRows ?? WORK_TEXT_SCAN_MAX_ROWS))
+    );
     // Text filtering happens after native ordering. Decouple its scan window
     // from the response size to avoid re-ranking the backlog for every pagelet,
     // and cap the rows one request scans (TEXT_SCAN_BOUNDED).
     const batchLimit = (scanned: number) =>
       textNeedle
-        ? Math.min(TEXT_SCAN_BATCH_ROWS, WORK_TEXT_SCAN_MAX_ROWS - scanned)
+        ? Math.min(TEXT_SCAN_BATCH_ROWS, maxScanRows - scanned)
         : limit + 1;
     const nativeCursor = (row: Record<string, unknown>): WorkItemCursor => ({
       v: 2,
@@ -2910,6 +2924,8 @@ export class DoltgresWorkItemAdapter
     type Row = Record<string, unknown>;
     const scan = await this.readOnCleanMain(async (conn): Promise<{
       matches: Row[];
+      /** Rows read from the store for this page. */
+      scanned: number;
       /** Set when the scan cap stopped the read; the page continues after it. */
       scannedThrough?: Row;
     }> => {
@@ -2924,6 +2940,7 @@ export class DoltgresWorkItemAdapter
         cursor = { ...resolved, key };
       }
       while (true) {
+        options.signal?.throwIfAborted();
         const scanLimit = batchLimit(scanned);
         const outerConditions = order.sortBy === "rankScore" ? [...rankConditions] : [];
         const seekCondition = seek(cursor);
@@ -2934,6 +2951,7 @@ export class DoltgresWorkItemAdapter
         const rows = await conn.unsafe(
           `SELECT ordered.*, CAST(__sort_value AS TEXT) AS __sort_key FROM (SELECT ${summary ? `id, title, type, status, priority, scores, project_id, estimate, labels, created_at, updated_at${textNeedle ? ", summary" : ""}` : "work_items.*"}, ${keyExpression} AS __sort_value FROM work_items ${where}) AS ordered ${outerWhere} ORDER BY CASE WHEN __sort_value IS NULL THEN 1 ELSE 0 END ASC, __sort_value ${order.sortDirection.toUpperCase()}, id ASC LIMIT ${scanLimit}`
         );
+        scanned += rows.length;
         for (const row of rows) {
           if (
             !textNeedle ||
@@ -2944,18 +2962,19 @@ export class DoltgresWorkItemAdapter
             )
           )
             matches.push(row);
-          if (matches.length > limit) return { matches };
+          // A full page continues after its last RETURNED match, never after
+          // the last scanned row, so no unreturned match is skipped.
+          if (matches.length > limit) return { matches, scanned };
         }
-        if (!textNeedle || rows.length < scanLimit) return { matches };
+        if (!textNeedle || rows.length < scanLimit) return { matches, scanned };
         const last = rows[rows.length - 1];
-        if (!last) return { matches };
-        scanned += rows.length;
+        if (!last) return { matches, scanned };
         // TEXT_SCAN_BOUNDED: at the row budget hand back every match so far
-        // (fewer than limit + 1) and a continuation at the last scanned row.
-        if (scanned >= WORK_TEXT_SCAN_MAX_ROWS) return { matches, scannedThrough: last };
+        // (at most `limit`) and a continuation at the last SCANNED row.
+        if (scanned >= maxScanRows) return { matches, scanned, scannedThrough: last };
         cursor = nativeCursor(last);
       }
-    });
+    }, options.deadline);
     const matchedRows = scan.matches;
     // A capped scan returns at most `limit` matches, all of them on this page.
     const scanTruncated = scan.scannedThrough !== undefined;
@@ -2975,7 +2994,7 @@ export class DoltgresWorkItemAdapter
     const endCursor = hasMore && encodedCursor ? encodeCursor(encodedCursor) : null;
     return {
       items,
-      pageInfo: { endCursor, hasMore },
+      pageInfo: { endCursor, hasMore, rowsScanned: scan.scanned },
       ...(endCursor && { nextCursor: endCursor })
     };
   }

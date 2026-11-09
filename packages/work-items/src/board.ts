@@ -8,8 +8,9 @@
  * Invariants:
  *   - BOUNDED_BOARD: at most one `listSummaries` call per distinct visible status (≤ the lifecycle status set), each capped at `perColumn` ≤ `WORK_SUMMARY_PAGE_MAX` rows. Nothing walks a cursor.
  *   - COLUMN_CURSOR_IDENTITY: a column page is read with the exact query a later `/summaries?statuses=<status>&…&cursor=` request would build, so its `endCursor` is valid for that request.
+ *   - ONE_REQUEST_BUDGET: one deadline (`WORK_BOARD_READ_BUDGET_MS`) and one rows-scanned budget cover the whole board, not each column. A column the budget does not reach returns `state: "not_started"` with no items and no cursor.
  *   - ABORT_BETWEEN_COLUMNS: an aborted signal stops the board before its next column read; no further reads are issued for a request nobody awaits.
- *   - SEQUENTIAL_READS: columns are read one after another. Each `listSummaries` call owns its own read deadline that starts when it is issued; the template's reader pool is width one, so concurrent calls would only queue and spend their deadlines waiting. Sequential reads keep every call's deadline honest and bound peak reader load to one query.
+ *   - SEQUENTIAL_READS: columns are read one after another, each passed the request's shared deadline; the template's reader pool is width one, so concurrent calls would only queue and spend the deadline waiting. Sequential reads bound peak reader load to one query.
  * Side-effects: none (the injected reader performs the I/O)
  * Links: task.0055, packages/work-items/src/summary-query.ts
  * @public
@@ -23,10 +24,12 @@ import {
   parseWorkSummarySearchParams,
   WORK_BOARD_COLUMN_PAGE,
   WORK_SUMMARY_PAGE_MAX,
+  WORK_TEXT_SCAN_MAX_ROWS,
   type WorkSummaryIssue,
   type WorkSummaryPage,
   WorkSummaryPageInfoSchema,
   type WorkSummaryQuery,
+  type WorkSummaryReadOptions,
 } from "./summary-query.js";
 import { VALID_TRANSITIONS } from "./transitions.js";
 
@@ -35,8 +38,16 @@ export const WORK_BOARD_STATUSES: readonly string[] = [
   ...VALID_TRANSITIONS.keys(),
 ];
 
+export const WORK_BOARD_COLUMN_STATES = ["loaded", "not_started"] as const;
+
 export const WorkBoardColumnSchema = z.object({
   status: z.string(),
+  /**
+   * `not_started`: the request's shared budget ran out before this column was
+   * read. It has no items and no cursor; its first page comes from
+   * `/summaries?statuses=<status>&…` without a cursor.
+   */
+  state: z.enum(WORK_BOARD_COLUMN_STATES),
   items: z.array(WorkItemSummarySchema),
   pageInfo: WorkSummaryPageInfoSchema,
 });
@@ -50,7 +61,26 @@ export type WorkBoardColumns = z.infer<typeof WorkBoardColumnsSchema>;
 /** The injected reader; in a node this is its facade over the summary store. */
 export type ListWorkSummaries = (
   query: WorkSummaryQuery,
+  options?: WorkSummaryReadOptions,
 ) => Promise<WorkSummaryPage>;
+
+/** Wall-clock budget for one whole board request, shared by every column read. */
+export const WORK_BOARD_READ_BUDGET_MS = 5_000;
+/** A column is started only while at least this much of the budget remains. */
+export const WORK_BOARD_MIN_COLUMN_MS = 500;
+
+export interface LoadWorkBoardOptions {
+  /** Rows per column page; clamped to 1..`WORK_SUMMARY_PAGE_MAX`. Default `WORK_BOARD_COLUMN_PAGE`. */
+  readonly perColumn?: number;
+  /** Stops the board before its next column (and each column before its next batch). */
+  readonly signal?: AbortSignal;
+  /** One wall-clock budget for the whole request. Default `WORK_BOARD_READ_BUDGET_MS`. */
+  readonly budgetMs?: number;
+  /** One rows-scanned budget for the whole request (text search). Default `WORK_TEXT_SCAN_MAX_ROWS`. */
+  readonly maxScanRows?: number;
+  /** Clock for tests. */
+  readonly now?: () => number;
+}
 
 /**
  * The query one column's first page is read with, and the one a later column
@@ -72,20 +102,29 @@ export function workBoardColumnQuery(
   };
 }
 
+const notStarted = (status: string): WorkBoardColumn => ({
+  status,
+  state: "not_started",
+  items: [],
+  pageInfo: { endCursor: null, hasMore: true, rowsScanned: 0 },
+});
+
 /**
  * Read the first page of every visible column. `statuses` is deduplicated and
  * order-preserving; the `statuses` and `cursor` of `query` are ignored, so the
  * caller's filters (types, projects, rank range, text, sort) apply to every
- * column. An unknown status throws a `RangeError` before any read. An aborted
- * `signal` (for example the HTTP request's) stops before the next column read
- * and rejects with the signal's reason.
+ * column. An unknown status throws a `RangeError` before any read.
+ *
+ * The whole request shares ONE deadline and ONE rows-scanned budget: each read
+ * receives the deadline and the remaining scan rows, and columns the budget
+ * does not reach come back `not_started`. An aborted `signal` rejects with its
+ * reason before the next column read.
  */
 export async function loadWorkBoardColumns(
   listSummaries: ListWorkSummaries,
   query: WorkSummaryQuery,
   statuses: readonly string[],
-  perColumn: number = WORK_BOARD_COLUMN_PAGE,
-  signal?: AbortSignal,
+  options: LoadWorkBoardOptions = {},
 ): Promise<WorkBoardColumns> {
   const visible = [...new Set(statuses)];
   const unknown = visible.filter(
@@ -94,14 +133,28 @@ export async function loadWorkBoardColumns(
   if (unknown.length) {
     throw new RangeError(`unknown work status: ${unknown.join(", ")}`);
   }
+  const now = options.now ?? Date.now;
+  const deadline = now() + (options.budgetMs ?? WORK_BOARD_READ_BUDGET_MS);
+  let scanRowsLeft = Math.trunc(options.maxScanRows ?? WORK_TEXT_SCAN_MAX_ROWS);
   const columns: WorkBoardColumn[] = [];
   for (const status of visible) {
-    signal?.throwIfAborted();
+    options.signal?.throwIfAborted();
+    if (deadline - now() < WORK_BOARD_MIN_COLUMN_MS || scanRowsLeft < 1) {
+      columns.push(notStarted(status));
+      continue;
+    }
     const page = await listSummaries(
-      workBoardColumnQuery(query, status, perColumn),
+      workBoardColumnQuery(query, status, options.perColumn),
+      {
+        deadline,
+        maxScanRows: scanRowsLeft,
+        ...(options.signal && { signal: options.signal }),
+      },
     );
+    scanRowsLeft -= page.pageInfo.rowsScanned ?? page.items.length;
     columns.push({
       status,
+      state: "loaded",
       items: page.items,
       pageInfo: page.pageInfo,
     });
