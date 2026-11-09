@@ -325,9 +325,11 @@ describe("native Doltgres knowledge browsing", () => {
 						{ length: Math.min(1000, edges - start) },
 						(_, offset) => {
 							const e = start + offset;
-							// Two distinct targets per entry: unique (citing, cited, type).
-							const from = e % nodes;
-							const to = (from + (e < edges / 2 ? 1 : 7)) % nodes;
+							// Edge e is a pure function of e (stable across stages): entry
+							// ⌊e/2⌋ cites the next entry and the seventh, so (citing, cited)
+							// is unique and later stages never repeat an earlier pair.
+							const from = Math.floor(e / 2);
+							const to = (from + (e % 2 ? 7 : 1)) % nodes;
 							const values = [
 								`graph-cite-${String(e).padStart(6, "0")}`,
 								nodeId(from),
