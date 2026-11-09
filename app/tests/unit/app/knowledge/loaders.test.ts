@@ -16,13 +16,16 @@
  * @internal
  */
 
-import { buildKnowledgeGraph, type Citation } from "@cogni/knowledge-store";
+import {
+  buildKnowledgeGraph,
+  type Citation,
+  readKnowledgeGraph,
+} from "@cogni/knowledge-store";
 import { FakeKnowledgeStoreAdapter } from "@cogni/knowledge-store/adapters/fake";
 import { describe, expect, it } from "vitest";
 
 import {
   loadDomains,
-  loadKnowledgeGraph,
   loadKnowledgeList,
 } from "@/app/(app)/knowledge/_server/loaders";
 
@@ -89,9 +92,9 @@ describe("knowledge SSR loaders", () => {
     expect(d?.entryCount).toBe(2);
   });
 
-  it("loadKnowledgeGraph collapses to nodes + edges via one citation read", async () => {
+  it("readKnowledgeGraph (the graph route's handler) collapses to nodes + edges via one snapshot", async () => {
     const store = await seed();
-    const g = await loadKnowledgeGraph(store);
+    const g = JSON.parse((await readKnowledgeGraph(store)).body ?? "");
     expect(g.nodes.map((n) => n.id).sort()).toEqual(["k1", "k2"]);
     expect(g.edges).toHaveLength(1);
     expect(g.edges[0]).toMatchObject({ source: "k1", target: "k2" });

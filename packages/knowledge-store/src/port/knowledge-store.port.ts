@@ -24,7 +24,10 @@ import type {
 } from "../contracts.js";
 import type { ActiveGoal } from "../domain/dao-goals.js";
 import type { GoverningIndexRow } from "../domain/governing.js";
-import type { KnowledgeGraphNode } from "../domain/knowledge-graph.js";
+import type {
+  KnowledgeGraphNode,
+  KnowledgeGraphSnapshot,
+} from "../domain/knowledge-graph.js";
 import type {
   Citation,
   CitationType,
@@ -328,6 +331,17 @@ export interface KnowledgeStorePort {
    * never materializes full bodies it discards (bug.5547).
    */
   listKnowledgeGraphNodes(): Promise<KnowledgeGraphNode[]>;
+  /**
+   * The whole graph projection pinned to one revision (task.0059): HEAD, the
+   * distinct domains, every entry projected to the graph node shape and every
+   * citation projected to `id, citing_id, cited_id, citation_type`. HEAD is read
+   * before and after; a commit in between retries, so the result is exactly
+   * `revision`. Runs under the read deadline/admission budget and rejects with
+   * a retryable `KnowledgeBusyError` on deadline, abort or capacity.
+   */
+  readKnowledgeGraphSnapshot(options?: {
+    signal?: AbortSignal;
+  }): Promise<KnowledgeGraphSnapshot>;
   /** List distinct domain values present in the `knowledge` table (legacy / back-compat). */
   listDomains(): Promise<string[]>;
 

@@ -28,10 +28,11 @@ import {
   type KnowledgeHistoryRow,
   shapeKnowledgeHistory,
 } from "../../domain/history.js";
-import type {
-  KnowledgeBrowsePage,
-  KnowledgeBrowseQuery,
-  KnowledgeSummary,
+import {
+  KNOWLEDGE_BROWSE_PAGE_SIZE,
+  type KnowledgeBrowsePage,
+  type KnowledgeBrowseQuery,
+  type KnowledgeSummary,
 } from "../../contracts.js";
 import { readBrowseWithinBudget } from "./browse-budget.js";
 import { browseQuery, nextBrowseCursor } from "../../domain/browse.js";
@@ -47,7 +48,10 @@ import {
   type GoverningIndexRow,
   selectGoverningIndex,
 } from "../../domain/governing.js";
-import type { KnowledgeGraphNode } from "../../domain/knowledge-graph.js";
+import type {
+  KnowledgeGraphNode,
+  KnowledgeGraphSnapshot,
+} from "../../domain/knowledge-graph.js";
 import type {
   Citation,
   CitationType,
@@ -331,7 +335,14 @@ export interface DoltgresAdapterConfig {
   writerSession?: DoltBranchSessionRunner;
   /** One Browse/Overview deadline, including admission and both native reads. */
   browseTimeoutMs?: number;
+  /** One whole-graph snapshot deadline, including admission and every native read. Default 30s. */
+  graphTimeoutMs?: number;
 }
+
+/** Exact browse totals remembered per (revision, filters); Next windows never recount. */
+const BROWSE_TOTALS_REMEMBERED = 128;
+/** A commit between the HEAD reads retries the graph snapshot at most this many times. */
+const GRAPH_SNAPSHOT_ATTEMPTS = 3;
 
 // ---------------------------------------------------------------------------
 // Adapter
@@ -343,11 +354,16 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
   private readonly writerSession: DoltBranchSessionRunner | undefined;
   private scopeOpen = false;
   private readonly browseTimeoutMs: number;
+  private readonly graphTimeoutMs: number;
+  private readonly browseTotals = new Map<string, number>();
 
   constructor(config: DoltgresAdapterConfig) {
     this.browseTimeoutMs = config.browseTimeoutMs ?? 15_000;
     if (!Number.isFinite(this.browseTimeoutMs) || this.browseTimeoutMs <= 0)
       throw new Error("browseTimeoutMs must be finite and positive");
+    this.graphTimeoutMs = config.graphTimeoutMs ?? 30_000;
+    if (!Number.isFinite(this.graphTimeoutMs) || this.graphTimeoutMs <= 0)
+      throw new Error("graphTimeoutMs must be finite and positive");
     this.sql = config.sql;
     this.readSql = config.sql;
     this.writerSession = config.writerSession;
@@ -439,24 +455,25 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
       createdAt: "date_trunc('microseconds', created_at)",
     } as const;
     const column = columns[query.sort];
-    const conditions: string[] = [];
+    // Filters (counted for the exact total) and the seek predicate are separate.
+    const filters: string[] = [];
+    let seek: string | undefined;
     for (const [values, field] of [
       [query.domains, "domain"],
       [query.entryTypes, "entry_type"],
       [query.sourceTypes, "source_type"],
     ] as const) {
       if (values.length)
-        conditions.push(`${field} IN (${values.map(escapeValue).join(", ")})`);
+        filters.push(`${field} IN (${values.map(escapeValue).join(", ")})`);
     }
     if (position) {
       const idAfter = `id > ${escapeValue(position.id)}`;
       if (query.sort === "createdAt" && position.value === "") {
         const nullTail = `(created_at IS NULL AND ${idAfter})`;
-        conditions.push(
+        seek =
           query.direction === "asc"
             ? `(created_at IS NOT NULL OR ${nullTail})`
-            : nullTail
-        );
+            : nullTail;
       } else {
         const literal =
           typeof position.value === "number"
@@ -467,9 +484,7 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
           query.sort === "createdAt" && query.direction === "desc"
             ? " OR created_at IS NULL"
             : "";
-        conditions.push(
-          `(${column} ${operator} ${literal} OR (${column} = ${literal} AND ${idAfter})${nullTail})`
-        );
+        seek = `(${column} ${operator} ${literal} OR (${column} = ${literal} AND ${idAfter})${nullTail})`;
       }
     }
     const nullOrder =
@@ -478,10 +493,13 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
           ? " NULLS FIRST"
           : " NULLS LAST"
         : "";
+    const conditions = seek ? [...filters, seek] : filters;
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+    // The exact total counts the filters only, never the cursor position.
+    const filterWhere = filters.length ? ` WHERE ${filters.join(" AND ")}` : "";
     const search = query.search?.toLowerCase();
     const fields = `id, domain, entity_id, title, entry_type, confidence_pct, source_type, use_when, created_at, CAST(date_trunc('microseconds', created_at) AS TEXT) AS browse_created_at${search ? ", content" : ""}`;
-    const { rows, revision } = await readBrowseWithinBudget(
+    const { rows, revision, total } = await readBrowseWithinBudget(
       this.readSql,
       this.browseTimeoutMs,
       signal,
@@ -493,12 +511,25 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
             "Knowledge revision unavailable; retry shortly"
           );
         const rows = await read(
-          `SELECT ${fields} FROM knowledge ${where} ORDER BY ${column} ${query.direction.toUpperCase()}${nullOrder}, id ASC LIMIT ${search ? 20 : 21}`
+          `SELECT ${fields} FROM knowledge ${where} ORDER BY ${column} ${query.direction.toUpperCase()}${nullOrder}, id ASC LIMIT ${search ? KNOWLEDGE_BROWSE_PAGE_SIZE : KNOWLEDGE_BROWSE_PAGE_SIZE + 1}`
         );
-        return { rows, revision };
+        const totalKey = `${revision}\u0000${filterWhere}`;
+        let total = this.browseTotals.get(totalKey);
+        if (total === undefined) {
+          const counted = await read(
+            `SELECT COUNT(*) AS total FROM knowledge${filterWhere}`
+          );
+          total = Number(counted[0]?.total ?? 0);
+          this.browseTotals.set(totalKey, total);
+          if (this.browseTotals.size > BROWSE_TOTALS_REMEMBERED) {
+            const oldest = this.browseTotals.keys().next().value;
+            if (oldest !== undefined) this.browseTotals.delete(oldest);
+          }
+        }
+        return { rows, revision, total };
       }
     );
-    const window = rows.slice(0, 20);
+    const window = rows.slice(0, KNOWLEDGE_BROWSE_PAGE_SIZE);
     const toSummary = (row: Record<string, unknown>): KnowledgeSummary => ({
       id: String(row.id),
       domain: String(row.domain),
@@ -529,12 +560,15 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
           )
       )
       .map(toSummary);
-    const hasMore = search ? window.length === 20 : rows.length > 20;
+    const hasMore = search
+      ? window.length === KNOWLEDGE_BROWSE_PAGE_SIZE
+      : rows.length > KNOWLEDGE_BROWSE_PAGE_SIZE;
     const last = window[window.length - 1];
     return {
       revision,
       items,
       scannedRows: window.length,
+      total,
       nextCursor:
         hasMore && last
           ? nextBrowseCursor(
@@ -734,6 +768,64 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
         sourceType: row.source_type as string,
       };
     });
+  }
+
+  async readKnowledgeGraphSnapshot(options?: {
+    signal?: AbortSignal;
+  }): Promise<KnowledgeGraphSnapshot> {
+    return readBrowseWithinBudget(
+      this.readSql,
+      this.graphTimeoutMs,
+      options?.signal,
+      async (read) => {
+        const head = async () => {
+          const rows = await read("SELECT dolt_hashof('HEAD') as hash");
+          const hash = rows[0]?.hash;
+          if (typeof hash !== "string" || !hash)
+            throw new KnowledgeBusyError(
+              "Knowledge revision unavailable; retry shortly"
+            );
+          return hash;
+        };
+        for (let attempt = 0; attempt < GRAPH_SNAPSHOT_ATTEMPTS; attempt++) {
+          const before = await head();
+          const domainRows = await read(
+            "SELECT DISTINCT domain FROM knowledge ORDER BY domain"
+          );
+          // Projected: the 6 graph columns, never `content`; citations by endpoints.
+          const nodeRows = await read(
+            "SELECT id, domain, title, entry_type, confidence_pct, source_type FROM knowledge"
+          );
+          const citationRows = await read(
+            "SELECT id, citing_id, cited_id, citation_type FROM citations"
+          );
+          // HEAD unchanged across the reads ⇒ the rows are exactly `before`.
+          if ((await head()) !== before) continue;
+          return {
+            revision: before,
+            domains: domainRows.map((row) => String(row.domain)),
+            nodes: nodeRows.map((row) => ({
+              id: String(row.id),
+              domain: String(row.domain),
+              title: String(row.title),
+              entryType: (row.entry_type as string | null) ?? "finding",
+              confidencePct:
+                row.confidence_pct != null ? Number(row.confidence_pct) : null,
+              sourceType: String(row.source_type),
+            })),
+            citations: citationRows.map((row) => ({
+              id: String(row.id),
+              citingId: String(row.citing_id),
+              citedId: String(row.cited_id),
+              citationType: String(row.citation_type),
+            })),
+          };
+        }
+        throw new KnowledgeBusyError(
+          "Knowledge changed during the graph read; retry shortly"
+        );
+      }
+    );
   }
 
   async listDomains(): Promise<string[]> {

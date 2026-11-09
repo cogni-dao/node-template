@@ -11,9 +11,10 @@
  * @public
  */
 
-import type {
-  KnowledgeBrowsePage,
-  KnowledgeBrowseQuery,
+import {
+  KNOWLEDGE_BROWSE_PAGE_SIZE,
+  type KnowledgeBrowsePage,
+  type KnowledgeBrowseQuery,
 } from "../../contracts.js";
 import {
   browseQuery,
@@ -36,7 +37,10 @@ import {
   type GoverningIndexRow,
   selectGoverningIndex,
 } from "../../domain/governing.js";
-import type { KnowledgeGraphNode } from "../../domain/knowledge-graph.js";
+import type {
+  KnowledgeGraphNode,
+  KnowledgeGraphSnapshot,
+} from "../../domain/knowledge-graph.js";
 import type {
   Citation,
   CitationType,
@@ -215,7 +219,7 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
           return cmp > 0 || (cmp === 0 && row.id > position.id);
         })
       : rows;
-    const window = remaining.slice(0, 20);
+    const window = remaining.slice(0, KNOWLEDGE_BROWSE_PAGE_SIZE);
     const needle = query.search?.toLowerCase();
     const last = window[window.length - 1];
     return {
@@ -224,8 +228,12 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
         .filter((row) => !needle || matchesBrowse(row, needle))
         .map(summary),
       scannedRows: window.length,
+      total: rows.length,
       nextCursor:
-        last && (needle ? window.length === 20 : remaining.length > 20)
+        last &&
+        (needle
+          ? window.length === KNOWLEDGE_BROWSE_PAGE_SIZE
+          : remaining.length > KNOWLEDGE_BROWSE_PAGE_SIZE)
           ? nextBrowseCursor(signature, summary(last), query.sort)
           : null,
     };
@@ -262,6 +270,27 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
       Array.from(this.rows.values()),
       Array.from(this.edges.values())
     );
+  }
+
+  async readKnowledgeGraphSnapshot(): Promise<KnowledgeGraphSnapshot> {
+    // In-memory reads are atomic: one revision by construction.
+    const [revision, domains, nodes, citations] = await Promise.all([
+      this.currentCommit(),
+      this.listDomains(),
+      this.listKnowledgeGraphNodes(),
+      this.listAllCitations(),
+    ]);
+    return {
+      revision,
+      domains,
+      nodes,
+      citations: citations.map(({ id, citingId, citedId, citationType }) => ({
+        id,
+        citingId,
+        citedId,
+        citationType,
+      })),
+    };
   }
 
   async listKnowledgeGraphNodes(): Promise<KnowledgeGraphNode[]> {

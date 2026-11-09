@@ -133,9 +133,8 @@ interface KnowledgeDashboardViewProps {
   readonly initialList?: KnowledgeListResponse | undefined;
   /** SSR-seeded domain registry. */
   readonly initialDomains?: DomainsListResponse | undefined;
-  /** Content-free seeds for their respective active tabs. */
+  /** Content-free seed for the Browse tab. Graph reads the whole corpus client-side, revalidated by revision (ETag/304). */
   readonly initialBrowse?: KnowledgeBrowsePage | undefined;
-  readonly initialOverview?: KnowledgeBrowsePage | undefined;
 }
 
 export function KnowledgeDashboardView({
@@ -143,7 +142,6 @@ export function KnowledgeDashboardView({
   initialList,
   initialDomains,
   initialBrowse,
-  initialOverview,
 }: KnowledgeDashboardViewProps = {}) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -388,7 +386,7 @@ export function KnowledgeDashboardView({
             mode="chains"
           />
         )}
-        {mode === "graph" && <GraphView initialData={initialOverview} />}
+        {mode === "graph" && <GraphView />}
         {mode === "domains" && (
           <DomainsPanel
             rows={domainsQuery.data?.domains ?? []}

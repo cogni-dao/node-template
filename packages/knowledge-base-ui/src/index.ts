@@ -132,3 +132,15 @@ export {
   type NumberRangeFilterProps,
 } from "./number-range-filter.js";
 export { StatusIcon, StatusPill, TypeIcon } from "./work-item-icons.js";
+export {
+  DataTable,
+  DataTableColumnsPicker,
+  type DataTableColumnsPickerProps,
+  type DataTableProps,
+} from "./data-table.js";
+export {
+  ConfidenceBar,
+  type ConfidenceBarProps,
+  CopyLinkButton,
+  type CopyLinkButtonProps,
+} from "./knowledge-cells.js";

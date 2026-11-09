@@ -3,8 +3,10 @@
 
 /**
  * Authenticated dashboard shell. Seeds only the active tab with its canonical
- * wire response. Browse/Graph read one bounded metadata window, with no domain,
- * legacy list, full graph, Goals or Inbox reads. Other tabs retain their loaders.
+ * wire response. Browse reads one bounded metadata window (with its exact
+ * total), with no domain, legacy list, graph, Goals or Inbox reads. Graph is not
+ * seeded: the client reads the whole corpus once per revision (ETag/304). Other
+ * tabs retain their loaders.
  * @public
  */
 
@@ -18,7 +20,6 @@ import {
   loadDomains,
   loadKnowledgeBrowse,
   loadKnowledgeListCached,
-  loadKnowledgeOverview,
 } from "./_server/loaders";
 import { KnowledgeDashboardView } from "./view";
 
@@ -55,18 +56,19 @@ export default async function KnowledgePage({
         )
       : Promise.resolve(undefined);
 
-  const [initialBrowse, initialOverview, initialList, initialDomains] = port
+  // Graph is not SSR-seeded: the whole-corpus payload is fetched once per store
+  // revision and revalidated by ETag (304), which an HTML seed cannot do.
+  const [initialBrowse, initialList, initialDomains] = port
     ? await Promise.all([
         !mode || mode === "browse"
           ? safe(loadKnowledgeBrowse(port))
           : undefined,
-        mode === "graph" ? safe(loadKnowledgeOverview(port)) : undefined,
         mode === "chains"
           ? safe(loadKnowledgeListCached(port, { limit: 500 }))
           : undefined,
         mode === "domains" ? safe(loadDomains(port)) : undefined,
       ])
-    : [undefined, undefined, undefined, undefined];
+    : [undefined, undefined, undefined];
   const initialGoals = await goalsSeed;
 
   return (
@@ -75,7 +77,6 @@ export default async function KnowledgePage({
       initialList={initialList}
       initialDomains={initialDomains}
       initialBrowse={initialBrowse}
-      initialOverview={initialOverview}
     />
   );
 }

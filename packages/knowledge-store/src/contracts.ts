@@ -318,9 +318,20 @@ export const KnowledgeSummarySchema = KnowledgeRowSchema.pick({
   createdAt: true,
 });
 export type KnowledgeSummary = z.infer<typeof KnowledgeSummarySchema>;
+/** Rows in one browse or overview window. */
+export const KNOWLEDGE_BROWSE_PAGE_SIZE = 20;
+/** Exact values one browse filter (domains, entry types, source types) may hold. */
+export const KNOWLEDGE_BROWSE_FILTER_VALUES_MAX = 50;
+/** Longest exact browse filter value. */
+export const KNOWLEDGE_BROWSE_FILTER_VALUE_MAX_LENGTH = 500;
+/** Longest browse body search. */
+export const KNOWLEDGE_BROWSE_SEARCH_MAX_LENGTH = 2000;
+/** Longest browse continuation cursor. */
+export const KNOWLEDGE_BROWSE_CURSOR_MAX_LENGTH = 16000;
+
 const exactValues = z
-  .array(z.string().min(1).max(500))
-  .max(50)
+  .array(z.string().min(1).max(KNOWLEDGE_BROWSE_FILTER_VALUE_MAX_LENGTH))
+  .max(KNOWLEDGE_BROWSE_FILTER_VALUES_MAX)
   .default([])
   .transform((values) => [...new Set(values)].sort());
 export const KnowledgeBrowseQuerySchema = z
@@ -339,8 +350,8 @@ export const KnowledgeBrowseQuerySchema = z
     domains: exactValues,
     entryTypes: exactValues,
     sourceTypes: exactValues,
-    search: z.string().max(2000).optional(),
-    cursor: z.string().min(1).max(16000).optional(),
+    search: z.string().max(KNOWLEDGE_BROWSE_SEARCH_MAX_LENGTH).optional(),
+    cursor: z.string().min(1).max(KNOWLEDGE_BROWSE_CURSOR_MAX_LENGTH).optional(),
   })
   .strict();
 export type KnowledgeBrowseQuery = z.input<typeof KnowledgeBrowseQuerySchema>;
@@ -353,10 +364,59 @@ export type KnowledgeOverviewQuery = z.input<
 export const KnowledgeBrowsePageSchema = z.object({
   /** Observed committed HEAD before this live window; not a snapshot token. */
   revision: z.string().min(1).max(200),
-  items: z.array(KnowledgeSummarySchema).max(20),
+  items: z.array(KnowledgeSummarySchema).max(KNOWLEDGE_BROWSE_PAGE_SIZE),
   nextCursor: z.string().nullable(),
-  scannedRows: z.number().int().min(0).max(20),
+  scannedRows: z.number().int().min(0).max(KNOWLEDGE_BROWSE_PAGE_SIZE),
+  /**
+   * Exact number of entries matching the window's filters (domains, entry
+   * types, source types) at `revision`. With `search`, it is the candidate set
+   * the search walks; body matches are found per window, never pre-counted.
+   */
+  total: z.number().int().min(0),
 });
 export type KnowledgeBrowsePage = z.infer<typeof KnowledgeBrowsePageSchema>;
 export const KnowledgeOverviewPageSchema = KnowledgeBrowsePageSchema;
 export type KnowledgeOverviewPage = z.infer<typeof KnowledgeOverviewPageSchema>;
+
+/** One entry in the whole-corpus graph projection (never `content`). */
+export const KnowledgeGraphNodeSchema = z.object({
+  id: z.string(),
+  domain: z.string(),
+  title: z.string(),
+  entryType: z.string(),
+  confidencePct: z.number().int().nullable(),
+  sourceType: z.string(),
+});
+/** One citation between two entries in the graph projection. */
+export const KnowledgeGraphEdgeSchema = z.object({
+  id: z.string(),
+  source: z.string(),
+  target: z.string(),
+  citationType: z.string(),
+});
+/**
+ * The whole knowledge graph at one store revision: every entry (projected) and
+ * every citation whose endpoints are both entries. Served once per revision;
+ * `revision` is the HTTP ETag, so an unchanged graph revalidates with a 304.
+ */
+export const KnowledgeGraphResponseSchema = z.object({
+  revision: z.string().min(1).max(200),
+  nodes: z.array(KnowledgeGraphNodeSchema),
+  edges: z.array(KnowledgeGraphEdgeSchema),
+  domains: z.array(z.string()),
+});
+export type KnowledgeGraphResponse = z.infer<
+  typeof KnowledgeGraphResponseSchema
+>;
+
+/**
+ * Declared graph payload budget (task.0059): raw JSON bytes per projected node
+ * and per edge, and the whole-response size above which a node should serve a
+ * level-of-detail graph instead of one payload. The read handler logs
+ * `budgetExceeded` against these on every 200.
+ */
+export const KNOWLEDGE_GRAPH_NODE_BYTES_BUDGET = 200;
+/** Fixed allowance for the response envelope: revision and the domain list. */
+export const KNOWLEDGE_GRAPH_ENVELOPE_BYTES_BUDGET = 16 * 1024;
+export const KNOWLEDGE_GRAPH_EDGE_BYTES_BUDGET = 110;
+export const KNOWLEDGE_GRAPH_RESPONSE_BYTES_BUDGET = 8 * 1024 * 1024;

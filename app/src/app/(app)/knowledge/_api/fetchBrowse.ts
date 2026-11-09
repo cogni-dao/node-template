@@ -1,44 +1,43 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
-/** Bounded wire schemas and cache identities shared by SSR seeds and client reads. */
+
+/**
+ * Module: `@app/(app)/knowledge/_api/fetchBrowse`
+ * Purpose: This node's transport for the package Browse windows: GET /api/v1/knowledge/browse with the package-encoded parameters.
+ * Scope: Browser fetch only. Request encoding, cache keys and windowing belong to `@cogni/knowledge-base-ui`.
+ * Invariants: Same-origin cookie credentials, never a Bearer header. Responses parse through the store's bounded page schema; failures carry the HTTP `status`.
+ * Side-effects: IO
+ * Links: task.0059
+ * @internal
+ */
+
 import {
+  type KnowledgeBrowsePage,
   KnowledgeBrowsePageSchema,
-  type KnowledgeBrowseQuery,
-  KnowledgeBrowseQuerySchema,
-  type KnowledgeOverviewQuery,
-  KnowledgeOverviewQuerySchema,
 } from "@cogni/node-contracts";
 
-export const browseKey = (query: KnowledgeBrowseQuery = {}) =>
-  [
-    "knowledge",
-    query.search ? "search" : "browse",
-    KnowledgeBrowseQuerySchema.parse(query),
-  ] as const;
-export const overviewKey = (query: KnowledgeOverviewQuery = {}) =>
-  ["knowledge", "overview", KnowledgeOverviewQuerySchema.parse(query)] as const;
+export class KnowledgeReadError extends Error {
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "KnowledgeReadError";
+    this.status = status;
+  }
+}
 
 export async function fetchBrowse(
-  query: KnowledgeBrowseQuery,
-  signal?: AbortSignal,
-  operation: "browse" | "overview" = "browse"
-) {
-  const params = new URLSearchParams();
-  const parsed =
-    operation === "browse"
-      ? KnowledgeBrowseQuerySchema.parse(query)
-      : KnowledgeOverviewQuerySchema.parse(query);
-  for (const [key, value] of Object.entries(parsed)) {
-    if (Array.isArray(value))
-      for (const entry of value) params.append(key, entry);
-    else if (value !== undefined) params.set(key, value);
-  }
-  const response = await fetch(`/api/v1/knowledge/${operation}?${params}`, {
+  params: URLSearchParams,
+  signal: AbortSignal
+): Promise<KnowledgeBrowsePage> {
+  const response = await fetch(`/api/v1/knowledge/browse?${params}`, {
     credentials: "same-origin",
     cache: "no-store",
-    ...(signal ? { signal } : {}),
+    signal,
   });
   if (!response.ok)
-    throw new Error(`Knowledge ${operation} failed (HTTP ${response.status})`);
+    throw new KnowledgeReadError(
+      `Knowledge browse failed (HTTP ${response.status})`,
+      response.status
+    );
   return KnowledgeBrowsePageSchema.parse(await response.json());
 }

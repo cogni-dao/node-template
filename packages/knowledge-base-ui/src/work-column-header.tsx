@@ -3,24 +3,31 @@
 
 /**
  * Module: `@cogni/knowledge-base-ui/work-column-header`
- * Purpose: Sortable column header for work tables and the work board filter bar, plus the rank header that sorts descending first (task.0044).
- * Scope: Context-free: reads only the TanStack `Column` (and, for disabling, the `Table`), so it renders inside any node's grid or none. Markup and classes match the ReUI `DataGridColumnHeader` sort-only path.
+ * Purpose: Sortable column header for work and knowledge tables and the work board filter bar, plus the rank header that sorts descending first (task.0044, task.0059).
+ * Scope: Context-free: reads only the TanStack `Column` (and, for disabling, the `Table`), so it renders inside any node's grid or the package's own tables. Markup and classes match the ReUI `DataGridColumnHeader` sort-only path; the filter popover matches the work board's facet controls.
  * Invariants:
  *   - SORT_CYCLE: a generic header cycles asc → desc → unsorted; the rank header follows the column's own `sortDescFirst`.
- *   - DISABLED_WHILE_EMPTY: a generic header is disabled while the table is loading or has no filtered rows.
+ *   - HEADER_OWNS_SORT_AND_FILTER: with a `filter`, a "Filter <title>" button beside the sort header opens a focus-trapping popover holding that filter, so every value is reachable with Tab and Enter (no menu label or typeahead swallows focus).
+ *   - DISABLED_WHILE_EMPTY: callers decide `disabled`; `workHeaderDisabled` disables while the table is loading or has no filtered rows (a bounded server page passes its loading flag only, so empty windows keep their controls).
  * Side-effects: none
- * Links: task.0044, story.5111
+ * Links: task.0044, task.0059, story.5111
  * @public
  */
 
 "use client";
 
 import type { Column, Table } from "@tanstack/react-table";
-import { ArrowDownIcon, ArrowUpIcon, ChevronsUpDownIcon } from "lucide-react";
+import {
+  ArrowDownIcon,
+  ArrowUpIcon,
+  ChevronsUpDownIcon,
+  ListFilter,
+} from "lucide-react";
 import type { ReactElement, ReactNode } from "react";
 
 import { cn } from "./cn.js";
 import { Button } from "./ui/button.js";
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover.js";
 
 /** Optional `useReactTable({ meta })` a node sets so headers can disable while its page loads. */
 export interface WorkTableMeta {
@@ -52,6 +59,8 @@ export interface WorkColumnHeaderProps<TData, TValue> {
   readonly icon?: ReactNode;
   readonly className?: string;
   readonly disabled?: boolean;
+  /** Filter control opened from a "Filter <title>" popover beside the sort header (e.g. a `HeaderFilter`). */
+  readonly filter?: ReactNode;
 }
 
 export function WorkColumnHeader<TData, TValue>({
@@ -60,48 +69,78 @@ export function WorkColumnHeader<TData, TValue>({
   icon,
   className,
   disabled = false,
+  filter,
 }: WorkColumnHeaderProps<TData, TValue>): ReactElement {
   const resolvedTitle = title ?? headerLabel(column);
   const isSorted = column.getIsSorted();
-  if (!column.getCanSort()) {
-    return (
-      <div
-        className={cn(
-          "text-secondary-foreground/80 inline-flex h-full items-center gap-1.5 font-normal [&_svg]:opacity-60 text-[0.8125rem] leading-[calc(1.125/0.8125)] [&_svg]:size-3.5",
-          className,
-        )}
-      >
-        {icon}
-        {resolvedTitle}
-      </div>
-    );
-  }
   const handleSort = () => {
     if (isSorted === "asc") column.toggleSorting(true);
     else if (isSorted === "desc") column.clearSorting();
     else column.toggleSorting(false);
   };
+  const header = !column.getCanSort() ? (
+    <div
+      className={cn(
+        "text-secondary-foreground/80 inline-flex h-full items-center gap-1.5 font-normal [&_svg]:opacity-60 text-[0.8125rem] leading-[calc(1.125/0.8125)] [&_svg]:size-3.5",
+        className,
+      )}
+    >
+      {icon}
+      {resolvedTitle}
+    </div>
+  ) : (
+    <Button
+      variant="ghost"
+      className={cn(
+        "text-secondary-foreground/80 hover:bg-secondary data-[state=open]:bg-secondary hover:text-foreground data-[state=open]:text-foreground -ms-2 px-2 font-normal h-6 rounded-lg",
+        className,
+      )}
+      disabled={disabled}
+      onClick={handleSort}
+    >
+      {icon}
+      {resolvedTitle}
+      {isSorted === "desc" ? (
+        <ArrowDownIcon className="size-3.25" />
+      ) : isSorted === "asc" ? (
+        <ArrowUpIcon className="size-3.25" />
+      ) : (
+        <ChevronsUpDownIcon className="mt-px size-3.25" />
+      )}
+    </Button>
+  );
+  if (!filter) {
+    return column.getCanSort() ? (
+      <div className="flex h-full items-center">{header}</div>
+    ) : (
+      header
+    );
+  }
   return (
     <div className="flex h-full items-center">
-      <Button
-        variant="ghost"
-        className={cn(
-          "text-secondary-foreground/80 hover:bg-secondary data-[state=open]:bg-secondary hover:text-foreground data-[state=open]:text-foreground -ms-2 px-2 font-normal h-6 rounded-lg",
-          className,
-        )}
-        disabled={disabled}
-        onClick={handleSort}
-      >
-        {icon}
-        {resolvedTitle}
-        {isSorted === "desc" ? (
-          <ArrowDownIcon className="size-3.25" />
-        ) : isSorted === "asc" ? (
-          <ArrowUpIcon className="size-3.25" />
-        ) : (
-          <ChevronsUpDownIcon className="mt-px size-3.25" />
-        )}
-      </Button>
+      {header}
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6 min-w-6 px-1.5"
+            aria-label={`Filter ${resolvedTitle}`}
+            disabled={disabled}
+          >
+            <ListFilter
+              className={
+                column.getIsFiltered()
+                  ? "size-3.5 text-primary"
+                  : "size-3.5 text-muted-foreground"
+              }
+            />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-64" align="start">
+          {filter}
+        </PopoverContent>
+      </Popover>
     </div>
   );
 }

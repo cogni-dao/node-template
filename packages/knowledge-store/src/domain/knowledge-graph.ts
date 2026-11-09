@@ -36,6 +36,26 @@ export interface KnowledgeGraphEdge {
   citationType: string;
 }
 
+/** One citation projected for the graph: endpoints and type only. */
+export interface KnowledgeGraphCitation {
+  id: string;
+  citingId: string;
+  citedId: string;
+  citationType: string;
+}
+
+/**
+ * The whole projected corpus pinned to ONE store revision: HEAD was the same
+ * before and after the node and citation reads, so a body labelled `revision`
+ * is exactly that revision.
+ */
+export interface KnowledgeGraphSnapshot {
+  revision: string;
+  domains: string[];
+  nodes: KnowledgeGraphNode[];
+  citations: KnowledgeGraphCitation[];
+}
+
 export interface KnowledgeGraphModel {
   nodes: KnowledgeGraphNode[];
   edges: KnowledgeGraphEdge[];
@@ -50,7 +70,7 @@ export interface KnowledgeGraphModel {
 export function buildKnowledgeGraph(input: {
   domains: string[];
   nodes: readonly KnowledgeGraphNode[];
-  citations: readonly Citation[];
+  citations: readonly (KnowledgeGraphCitation | Citation)[];
 }): KnowledgeGraphModel {
   const { domains, nodes: inputNodes, citations } = input;
 
