@@ -253,6 +253,20 @@
       "when": 1793402643895,
       "tag": "0035_swift_komodo",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1794096160043,
+      "tag": "0036_agent_authority",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1794096168535,
+      "tag": "0037_seed_agent_principals",
+      "breakpoints": true
     }
   ]
 }

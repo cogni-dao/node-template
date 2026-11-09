@@ -124,3 +124,4 @@ pnpm --filter @cogni-dao/langgraph-graphs test
 - `LangGraphInProcProvider` in `src/adapters/server/ai/langgraph/` wires this package
 - Package isolation enables LangGraph Server to import graphs without Next.js deps
 - **Dual tsconfig:** LangGraph CLI generates runtime `.ts` files (`__langgraph__*.ts`) that break `composite` mode. This package uses `tsconfig.json` (noEmit, for CLI) + `tsconfig.build.json` (composite, for `tsc -b`). Root tsconfig.json references the build config explicitly. This is not proper form, but a valid workaround.
+- `CatalogEntry.principal` names the internal agent principal a graph acts as (`work-prioritizer` → `prioritizer`, `brain` → `node-ai`). A graph with no principal gets no scoped tool; a slug with no seeded `agent_principals` row fails the run before any tool runs. The dev runner (`createDevToolExecFn`) guards its runtimes with `@cogni-dao/agent-grants` and has no run scope, so scoped tools are denied there.

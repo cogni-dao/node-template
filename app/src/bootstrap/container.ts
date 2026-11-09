@@ -108,6 +108,7 @@ import {
 	GitHubWebhookNormalizer,
 	getAppDb,
 	getExecutionScope,
+	scopeUserId,
 	LangfuseAdapter,
 	LiteLlmAdapter,
 	type MimirAdapterConfig,
@@ -151,6 +152,11 @@ import { createScheduleCapability } from "@/bootstrap/capabilities/schedule";
 import { stubVcsCapability } from "@/bootstrap/capabilities/vcs";
 import { createWebSearchCapability } from "@/bootstrap/capabilities/web-search";
 import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
+import {
+	type AgentAuthoritySql,
+	type AgentToolAuthority,
+	createAgentToolAuthority,
+} from "@/bootstrap/agent-authority";
 import { createApproversNodeAdminAuthority } from "@/bootstrap/node-admin-gate";
 import type { RateLimitBypassConfig } from "@/bootstrap/http/wrapPublicRoute";
 import { startProcessHealthPublisher } from "@/bootstrap/publishers";
@@ -265,6 +271,8 @@ export interface Container {
 	knowledgeContributionService: ContributionService | undefined;
 	/** GOAL_CHANGE_IS_NODE_ADMIN / P0P1_IS_NODE_ADMIN: this node's one node-admin authority (repo-spec admin wallets). */
 	nodeAdmin: NodeAdminAuthority;
+	/** Runtime tool authority: principal lookup, guard wiring and role grant/revoke (task.5456). */
+	agentAuthority: AgentToolAuthority;
 	/** Direct knowledge store port — exposed for the cookie-only browse endpoint. Undefined when DOLTGRES_URL is unset. */
 	knowledgeStorePort: KnowledgeStorePort | undefined;
 	/** EDO hypothesis-loop capability for the langgraph tool bindings AND the bearer-auth REST routes under /api/v1/edo. Always present (stubs throw when DOLTGRES_URL is unset). */
@@ -719,10 +727,10 @@ function createContainer(): Container {
 				patch: (input, principal) => doltgresWorkItems.patch(input, principal),
 			},
 			principalId: () => {
-				const actor = getExecutionScope().actorUserId;
+				const actor = scopeUserId(getExecutionScope());
 				if (!actor) {
 					throw new Error(
-						"WorkItemCapability: authenticated run actorUserId is required",
+						"WorkItemCapability: a run subject or agent principal is required",
 					);
 				}
 				return actor;
@@ -1101,6 +1109,13 @@ function createContainer(): Container {
 		toolSource,
 		knowledgeContributionService,
 		nodeAdmin,
+		agentAuthority: createAgentToolAuthority({
+			// Service role: agent_roles / agent_principals are deny-all for the app role.
+			sql: serviceDb.$client as unknown as AgentAuthoritySql,
+			nodeAdmin,
+			log,
+			toolBundle: [...CORE_TOOL_BUNDLE],
+		}),
 		knowledgeStorePort,
 		goalMetrics,
 		goalProgress,

@@ -117,3 +117,5 @@ pnpm --filter @cogni-dao/ai-tools build
 - Package isolation enables LangGraph Server to import tools without Next.js deps
 
 Metric list/read/compute tools consume the public @cogni-dao/metrics contracts. createMetricTools binds an injected node service. Completed evidence is read through the same service as HTTP/UI.
+
+Every non-`read_only` tool contract declares `requires = {scope, kind, subject}` (type `ToolRequires`); `tests/requires-guard.test.ts` fails CI for one without it. A node builds `requiresById` from these contracts and `@cogni-dao/agent-grants` `guardTools` enforces it. `core__metric_compute` is the tenth state-changing tool (story.5147 N3 names it `core__goal_progress`, which is read_only).

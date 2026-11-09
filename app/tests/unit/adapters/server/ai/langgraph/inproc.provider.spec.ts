@@ -165,7 +165,9 @@ describe("LangGraphInProcProvider", () => {
   it.each(["cogni-decide", "work-prioritizer"])("forwards trusted intent for %s", async (graph) => {
     for (const intent of [undefined, "answer", "decide"] as const) {
       runnerSpy.mockClear();
-      const provider = new LangGraphInProcProvider(createMockAdapter(), createMockToolSource(), undefined, [], async () => ({ nodeId: "node", origin: "https://node.example" }));
+      // work-prioritizer names a catalog principal, so the run needs a seeded row to start (task.5456).
+      const authority = { resolvePrincipal: async () => "seeded-principal-user", guardDeps: { withStore: async () => { throw new Error("unused"); }, adminCheck: async () => "unavailable" as const } };
+      const provider = new LangGraphInProcProvider(createMockAdapter(), createMockToolSource(), undefined, [], async () => ({ nodeId: "node", origin: "https://node.example" }), undefined, authority);
       const result = runInScope(TEST_SCOPE, () => provider.runGraph(createTestRequest({ graphId: `langgraph:${graph}` }), intent ? { requestIntent: intent } : undefined));
       await collectEvents(result.stream);
       await result.final;
