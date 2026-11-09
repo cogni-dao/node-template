@@ -27,6 +27,8 @@ import { observationHref } from "./presentation.js";
 export interface GoalsHrefs {
   /** A goal's entry page. Default `/knowledge/{id}`. */
   readonly goal: (goalId: string) => string;
+  /** A metric's entry page. Default `/knowledge/{metricId}`. */
+  readonly metric: (metricId: string) => string;
   /** One immutable reading's evidence. Default `/knowledge/{metricId}?observation={observationId}`. */
   readonly observation: (metricId: string, observationId: string) => string;
   /** "how goals work" under an empty board. Default `/knowledge/dao-goals-design`. */
@@ -63,6 +65,7 @@ const DefaultLink: GoalsLinkComponent = (props) => <a {...props} />;
 
 export const DEFAULT_GOALS_HREFS: GoalsHrefs = {
   goal: (goalId) => `/knowledge/${encodeURIComponent(goalId)}`,
+  metric: (metricId) => `/knowledge/${encodeURIComponent(metricId)}`,
   observation: observationHref,
   help: "/knowledge/dao-goals-design",
 };

@@ -16,6 +16,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
 	createMetricHttpHandlers,
+	METRIC_HTTP_HEADERS,
 	type MetricHttpPorts,
 	type MetricRouteService,
 	metricErrorResult,
@@ -240,6 +241,10 @@ describe("metric HTTP core", () => {
 				status: 503,
 				body: { error: "metrics_unavailable" },
 			});
+	});
+
+	it("publishes the no-store header every metrics response must carry", () => {
+		expect(METRIC_HTTP_HEADERS).toEqual({ "Cache-Control": "no-store" });
 	});
 
 	it("maps errors through metricErrorResult alone", () => {

@@ -20,6 +20,7 @@
 
 "use client";
 
+import { attentionCount } from "@cogni/knowledge-base-ui/goals";
 import type {
   ContributionRecord,
   DomainRow,
@@ -28,7 +29,6 @@ import type {
   KnowledgeListResponse,
   KnowledgeRow,
 } from "@cogni/node-contracts";
-import { attentionCount } from "@cogni/knowledge-base-ui/goals";
 import {
   DataGrid,
   DataGridContainer,
@@ -84,11 +84,12 @@ import { ContributionDetail } from "./_components/ContributionDetail";
 import { knowledgeColumns } from "./_components/columns";
 import { buildContributionColumns } from "./_components/contribution-columns";
 import { domainColumns } from "./_components/domain-columns";
-import { GraphView } from "./_components/GraphView";
 import {
   KnowledgeGoalsBoard,
+  KnowledgeGoalsProvider,
   useKnowledgeGoalsBadge,
 } from "./_components/GoalsMount";
+import { GraphView } from "./_components/GraphView";
 import { KnowledgeDetail } from "./_components/KnowledgeDetail";
 
 type ViewMode = "browse" | "graph" | "chains" | "domains" | "goals" | "inbox";
@@ -136,12 +137,21 @@ interface KnowledgeDashboardViewProps {
   readonly initialBrowse?: KnowledgeBrowsePage | undefined;
 }
 
-export function KnowledgeDashboardView({
+/** One Goals host for the tab badge and the board, so both read one cache entry. */
+export function KnowledgeDashboardView(props: KnowledgeDashboardViewProps = {}) {
+  return (
+    <KnowledgeGoalsProvider>
+      <KnowledgeDashboard {...props} />
+    </KnowledgeGoalsProvider>
+  );
+}
+
+function KnowledgeDashboard({
   initialGoals,
   initialList,
   initialDomains,
   initialBrowse,
-}: KnowledgeDashboardViewProps = {}) {
+}: KnowledgeDashboardViewProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();

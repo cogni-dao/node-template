@@ -39,6 +39,7 @@ import {
   type GoalsLinkProps,
   GoalsProvider,
   KpiChart,
+  KpiEvidence,
   MetricEvidence,
   STATUS_META,
   useGoalsProgress,
@@ -506,6 +507,151 @@ describe("useGoalsProgress", () => {
     rerender(view(true));
     await waitFor(() => expect(screen.getByTestId("n").textContent).toBe("3"));
     expect(fetchGoals).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("one host for the board and the badge", () => {
+  function Badge() {
+    const q = useGoalsProgress({ poll: false });
+    return (
+      <span data-testid="badge">{q.data ? q.data.goals.length : "none"}</span>
+    );
+  }
+
+  it("shares one client, one key prefix and one cache entry under a single GoalsProvider", async () => {
+    const fetchGoals = vi.fn(async () => visualFixture());
+    const host = stubClient({ fetchGoals });
+    const c = client();
+    render(
+      <QueryClientProvider client={c}>
+        <GoalsProvider client={host} queryKeyPrefix={["node-a"]}>
+          <Badge />
+          <GoalsBoard />
+        </GoalsProvider>
+      </QueryClientProvider>
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("badge").textContent).toBe("3")
+    );
+    await screen.findByRole("region", { name: "Goals" });
+    // Board and badge observe the same prefixed entry: one read, no default-key twin.
+    expect(fetchGoals).toHaveBeenCalledTimes(1);
+    expect(c.getQueryState(["node-a", ...GOALS_QUERY_KEY])?.status).toBe(
+      "success"
+    );
+    expect(c.getQueryState([...GOALS_QUERY_KEY])).toBeUndefined();
+  });
+
+  it("a hook outside any provider reads the unprefixed default entry, so a host must wrap both", async () => {
+    const fetchMock = vi.fn(async () => Response.json(visualFixture()));
+    vi.stubGlobal("fetch", fetchMock);
+    const c = client();
+    render(
+      <QueryClientProvider client={c}>
+        <Badge />
+      </QueryClientProvider>
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("badge").textContent).toBe("3")
+    );
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/v1/metrics/goals");
+    expect(c.getQueryState([...GOALS_QUERY_KEY])?.status).toBe("success");
+  });
+});
+
+describe("KpiEvidence", () => {
+  const binding = {
+    metricId: "convergence-ratio-7d",
+    comparator: "gte",
+    target: { value: 0.85, unit: "ratio" },
+    evaluationAt: "2026-11-09T00:00:00.000Z",
+  };
+  const observation = {
+    id: "00000000-0000-4000-8000-000000000001",
+    value: 0.82,
+    unit: "ratio",
+  };
+
+  it("prints each ordered binding with target, reading, state and a pinned observation link", () => {
+    const { container } = render(
+      <KpiEvidence
+        kpiBindings={[
+          binding,
+          {
+            metricId: "validated-7d",
+            comparator: "lte",
+            target: { value: 0.85, unit: "ratio" },
+          },
+          { ...binding, metricId: "third", comparator: "eq" },
+        ]}
+        kpis={[
+          { observation, viewState: "ok" },
+          { observation: null, viewState: "pending" },
+        ]}
+      />
+    );
+    const section = screen.getByRole("region", {
+      name: "Goal KPI measurements",
+    });
+    expect(
+      within(section).getByRole("heading", { name: "KPI evidence" })
+    ).toBeInTheDocument();
+    const text = (section.textContent ?? "").replace(/\s+/g, " ");
+    expect(text).toContain(
+      "convergence-ratio-7d · target ≥ 0.85 ratio · evaluate 2026-11-09T00:00:00.000Z"
+    );
+    expect(text).toContain("0.82 ratio · ok");
+    expect(text).toContain("validated-7d · target ≤ 0.85 ratio");
+    // No reading is Unknown with the target's unit, never 0; a missing result is unavailable.
+    expect(text).toContain("Unknown ratio · pending");
+    expect(text).toContain("third · target = 0.85 ratio");
+    expect(text).toContain("Unknown ratio · unavailable");
+    const links = [...container.querySelectorAll("a")].map((a) =>
+      a.getAttribute("href")
+    );
+    expect(links).toContain("/knowledge/convergence-ratio-7d");
+    expect(links).toContain(
+      `/knowledge/convergence-ratio-7d?observation=${observation.id}#observation-${observation.id}`
+    );
+    expect(links).toHaveLength(4);
+  });
+
+  it("takes its links from the injected hrefs and link component", () => {
+    const Router = (props: GoalsLinkProps) => <a data-router="1" {...props} />;
+    const { container } = render(
+      <GoalsProvider
+        LinkComponent={Router}
+        hrefs={{
+          metric: (id) => `/m/${id}`,
+          observation: (id, o) => `/o/${id}/${o}`,
+        }}
+      >
+        <KpiEvidence
+          kpiBindings={[binding]}
+          kpis={[{ observation, viewState: "ok" }]}
+        />
+      </GoalsProvider>
+    );
+    const links = [...container.querySelectorAll("a[data-router]")].map((a) =>
+      a.getAttribute("href")
+    );
+    expect(links).toEqual([
+      "/m/convergence-ratio-7d",
+      `/o/convergence-ratio-7d/${observation.id}#observation-${observation.id}`,
+    ]);
+  });
+
+  it("renders nothing for no bindings or an invalid binding list", () => {
+    expect(render(<KpiEvidence kpiBindings={[]} />).container.firstChild).toBeNull();
+    cleanup();
+    expect(
+      render(<KpiEvidence kpiBindings={[{ metricId: 7 }]} />).container
+        .firstChild
+    ).toBeNull();
+    cleanup();
+    expect(
+      render(<KpiEvidence kpiBindings={undefined} />).container.firstChild
+    ).toBeNull();
   });
 });
 
