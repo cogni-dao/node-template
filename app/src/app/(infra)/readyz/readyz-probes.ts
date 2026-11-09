@@ -395,10 +395,18 @@ export async function checkLiteLlm(env: Env): Promise<void> {
       `LiteLLM /model/info returned ${response.status}`
     );
   }
-  const body = (await response.json().catch(() => null)) as {
-    data?: unknown;
-  } | null;
-  if (!body || !Array.isArray(body.data) || body.data.length === 0) {
+  const body = await response.json().catch(() => null);
+  // Accept every shape the canonical catalog reader does (raw array,
+  // `{data:[...]}`, or `{models:[...]}`) so a shape the gateway legitimately
+  // returns is not a false 503. Source of truth: `transformModelInfoResponse`
+  // in app/src/shared/ai/model-catalog.server.ts.
+  const modelsList = Array.isArray(body)
+    ? body
+    : body && typeof body === "object"
+      ? ((body as { data?: unknown[]; models?: unknown[] }).data ??
+        (body as { data?: unknown[]; models?: unknown[] }).models)
+      : undefined;
+  if (!Array.isArray(modelsList) || modelsList.length === 0) {
     throw new InfraConnectivityError(
       "LiteLLM /model/info returned no models"
     );
@@ -434,18 +442,34 @@ type ProbeRun = (
   env: Env
 ) => Promise<unknown>;
 
-type SubstrateReadyz =
-  | { kind: "probe"; run: ProbeRun }
-  | { kind: "na"; reason: string };
-
-interface SubstrateDependency {
-  /** Stable name; probe entries MUST use a `DeepDependency` so they can be named in `unreachable`. */
-  dependency: SubstrateName;
+/** Fields every entry carries. */
+interface SubstrateDependencyBase {
   /** Server-env keys that wire this dependency (drives the env-schema parity guard). */
   envKeys: readonly string[];
   /** Whether this node actually depends on it (config-gate). */
   isDeclared: (env: Env) => boolean;
-  readyz: SubstrateReadyz;
+}
+
+/**
+ * A probed dependency. Its `dependency` is typed `DeepDependency` by construction,
+ * so only a name that can appear in `unreachable[]` can be a probe — no cast.
+ */
+interface ProbeDependency extends SubstrateDependencyBase {
+  dependency: DeepDependency;
+  readyz: { kind: "probe"; run: ProbeRun };
+}
+
+/** A declared dependency deliberately NOT probed by deep readyz, with a reason. */
+interface NaDependency extends SubstrateDependencyBase {
+  dependency: SubstrateName;
+  readyz: { kind: "na"; reason: string };
+}
+
+type SubstrateDependency = ProbeDependency | NaDependency;
+
+/** Narrow a registry entry to a probe entry (and thus `dependency: DeepDependency`). */
+function isProbe(dep: SubstrateDependency): dep is ProbeDependency {
+  return dep.readyz.kind === "probe";
 }
 
 const always = (): boolean => true;
@@ -578,12 +602,9 @@ export function buildDeepChecks(
 ): ReadonlyArray<readonly [DeepDependency, () => Promise<unknown>]> {
   const checks: Array<readonly [DeepDependency, () => Promise<unknown>]> = [];
   for (const dep of SUBSTRATE_DEPENDENCIES) {
-    if (dep.readyz.kind !== "probe" || !dep.isDeclared(env)) continue;
+    if (!isProbe(dep) || !dep.isDeclared(env)) continue;
     const run = dep.readyz.run;
-    checks.push([
-      dep.dependency as DeepDependency,
-      () => run(ctx, container, env),
-    ]);
+    checks.push([dep.dependency, () => run(ctx, container, env)]);
   }
   return checks;
 }

@@ -680,6 +680,33 @@ describe("GET /readyz async substrate contract", () => {
     expect(mocks.getKnowledge).not.toHaveBeenCalled();
   });
 
+  it("names redis, litellm-gateway and doltgres in order when all three fail at once", async () => {
+    mocks.serverEnv.mockReturnValue({
+      APP_BUILD_SHA: "readyz-contract-sha",
+      APP_ENV: "production",
+      LITELLM_BASE_URL: "http://litellm:4000",
+      LITELLM_MASTER_KEY: "sk-readyz-test",
+      REDIS_URL: "redis://localhost:6379",
+      DOLTGRES_URL: "postgresql://doltgres:5432/knowledge",
+    });
+    mocks.streamLength.mockRejectedValue(new Error("Redis connection refused"));
+    mocks.fetch.mockResolvedValue({ ok: false, status: 503, json: async () => ({}) });
+    mocks.getKnowledge.mockRejectedValue(new Error("doltgres down"));
+
+    const response = await GET(request("/readyz?deep=1"));
+
+    expect(response.status).toBe(503);
+    const body = await response.json();
+    // Order is fixed by the registry: the existing four pass, then the three new
+    // deps fail in registry order; reason/message come from the first failure (redis).
+    expect(body).toMatchObject({
+      status: "error",
+      reason: "INFRA_UNREACHABLE",
+      unreachable: ["redis", "litellm-gateway", "doltgres"],
+    });
+    expect(body.message).toContain("Redis run-stream unreachable");
+  });
+
   it("never probes Doltgres, Redis or LiteLLM on the default path", async () => {
     mocks.serverEnv.mockReturnValue({
       APP_BUILD_SHA: "readyz-contract-sha",

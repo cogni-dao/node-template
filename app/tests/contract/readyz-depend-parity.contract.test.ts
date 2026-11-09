@@ -13,12 +13,28 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  buildDeepChecks,
   findUnclassifiedSubstrateKeys,
   NON_SUBSTRATE_ALLOWLIST,
   SUBSTRATE_DEPENDENCIES,
   SUBSTRATE_ENV_KEY_PATTERN,
 } from "@/app/(infra)/readyz/readyz-probes";
 import { serverSchema } from "@/shared/env/server-env";
+
+type DeepChecksArgs = Parameters<typeof buildDeepChecks>;
+// buildDeepChecks only reads env (via isDeclared) to build the list; the ctx and
+// container are never touched until a check runs, so stubs are safe here.
+const ctxStub = {} as DeepChecksArgs[0];
+const containerStub = {} as DeepChecksArgs[1];
+const baseEnv = {
+  LITELLM_BASE_URL: "http://litellm:4000",
+  LITELLM_MASTER_KEY: "sk",
+  REDIS_URL: "redis://localhost:6379",
+} as unknown as DeepChecksArgs[2];
+
+function deepDepNames(env: DeepChecksArgs[2]): string[] {
+  return buildDeepChecks(ctxStub, containerStub, env).map(([name]) => name);
+}
 
 describe("deep readyz ⇄ env-schema parity", () => {
   const schemaKeys = Object.keys(serverSchema.shape);
@@ -47,5 +63,33 @@ describe("deep readyz ⇄ env-schema parity", () => {
       expect(owned.has(key)).toBe(false);
       expect(SUBSTRATE_ENV_KEY_PATTERN.test(key)).toBe(true);
     }
+  });
+});
+
+describe("deep readyz registry config-gate (buildDeepChecks filter)", () => {
+  it("omits Doltgres from the deep checks when DOLTGRES_URL is unset", () => {
+    // Proves the registry FILTER drops the probe (not the probe's own early
+    // return): an unset DOLTGRES_URL means no doltgres entry is even built.
+    expect(deepDepNames(baseEnv)).not.toContain("doltgres");
+  });
+
+  it("includes Doltgres only when DOLTGRES_URL is declared", () => {
+    const withDoltgres = {
+      ...baseEnv,
+      DOLTGRES_URL: "postgresql://doltgres:5432/knowledge",
+    } as DeepChecksArgs[2];
+    expect(deepDepNames(withDoltgres)).toContain("doltgres");
+  });
+
+  it("always builds the serving-critical probes in registry order", () => {
+    // Order fixes `reason`/`message` (first failure) and the `unreachable[]` order.
+    expect(deepDepNames(baseEnv)).toEqual([
+      "evm-rpc",
+      "temporal",
+      "scheduler-worker",
+      "postgres",
+      "redis",
+      "litellm-gateway",
+    ]);
   });
 });
