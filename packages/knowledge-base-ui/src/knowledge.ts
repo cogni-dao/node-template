@@ -39,14 +39,15 @@ export {
   KNOWLEDGE_CITATION_COLORS,
   KnowledgeGraph,
   type KnowledgeGraphColorMode,
+  type KnowledgeGraphEntriesSummary,
   type KnowledgeGraphLink,
-  type KnowledgeGraphNarrowing,
   type KnowledgeGraphNode,
   type KnowledgeGraphProps,
+  type KnowledgeGraphRenderOptions,
   type KnowledgeGraphRendererProps,
   knowledgeConfidenceColor,
   knowledgeDomainColor,
-  narrowKnowledgeGraph,
+  knowledgeGraphRenderData,
 } from "./knowledge-graph.js";
 export {
   type KnowledgeGraphFetcher,
