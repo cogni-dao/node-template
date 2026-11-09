@@ -2,21 +2,21 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 /**
- * Module: `@tests/unit/features/goals/display`
+ * Module: `@cogni/knowledge-base-ui/goals-display.test`
  * Purpose: Prove what a KPI card and chart show by display type: the type comes
  *   from the read model only; SLOs read as truncated % against ≥ or ≤
  *   objectives with an error budget; a volume change names the real time since
  *   its first reading; a young hourly metric draws its last day; unknown is
  *   never 0; a stored display must be valid and fit the unit.
- * Scope: Pure functions in lib/display.ts and the metrics stored-spec contract.
+ * Scope: Pure functions in src/goals/display.ts and the metrics stored-spec contract.
  * Invariants: UNKNOWN_IS_NOT_ZERO; HINT_LE_3_WORDS; ONE_FORMATTER_PER_DISPLAY.
  * Side-effects: none
- * Links: app/src/features/goals/lib/display.ts, packages/metrics/src/contracts.ts
+ * Links: ../src/goals/display.ts, packages/metrics/src/contracts.ts
  * @internal
  */
 
 import { displayFits, parseStoredMetricSpec } from "@cogni-dao/metrics/contracts";
-import { assessmentFixture, history, kpiFixture } from "@tests/_fixtures/goals/progress";
+import { assessmentFixture, history, kpiFixture } from "./_fixtures/goals-progress.js";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -30,7 +30,7 @@ import {
   sloBudget,
   targetInView,
   yDomain,
-} from "@/features/goals/lib/display";
+} from "../src/goals/display.js";
 
 const OBSERVED = "2026-11-02T10:00:00.000Z";
 

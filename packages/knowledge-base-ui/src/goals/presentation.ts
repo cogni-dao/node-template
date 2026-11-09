@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 /**
- * Module: `@features/goals/lib/presentation`
+ * Module: `@cogni/knowledge-base-ui/goals (presentation)`
  * Purpose: Pure presentation for the Goals tab: status words and symbols, plain
  *   reason text, number/date formatting, summary counts, aligned history
  *   windows (hourly 1D/1W, daily 1M/3M) and the hero label.
@@ -11,7 +11,7 @@
  * Invariants: STATUS_HAS_WORD_AND_SYMBOL (color is never the only signal);
  *   EVERY_REASON_HAS_PLAIN_TEXT (exhaustive over KpiReason); GAPS_STAY_GAPS.
  * Side-effects: none
- * Links: packages/metrics/src/contracts.ts, .context/design-0024/goals-visual.html
+ * Links: packages/metrics/src/contracts.ts
  * @public
  */
 

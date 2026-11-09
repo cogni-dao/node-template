@@ -11,6 +11,7 @@ export default defineConfig({
 		"src/adapters/postgres.ts",
 		"src/briefs.ts",
 		"src/contracts.ts",
+		"src/http.ts",
 		"src/knowledge.ts",
 		"src/schema.ts",
 		"src/sources.ts",
