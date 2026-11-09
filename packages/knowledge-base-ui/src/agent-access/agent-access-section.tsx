@@ -3,10 +3,14 @@
 
 /**
  * Module: `@cogni/knowledge-base-ui/agent-access/agent-access-section`
- * Purpose: "This node's AI": one compact table where a DAO admin allows or removes each permission of each node AI.
- * Scope: Presentation over `useAgentAccess`. Renders nothing for a non-admin. One row per (AI, permission): AI, permission,
- *   a small switch. Allow asks once, inline in the row; Remove never asks.
+ * Purpose: "AI access": one compact table where a DAO admin says yes or no to what each AI can do.
+ *   Columns: Who · Can do · Until · On. One row = one grant row, in three blocks: asks waiting, this node's AI, outside agents.
+ * Scope: Presentation over `useAgentAccess`. Renders nothing for a non-admin.
  * Invariants:
+ *   - ONE_CONTROL_ONE_DECISION: the switch is the whole decision, both directions. No "are you sure" step. A pending ask also
+ *     has an x that dismisses it.
+ *   - DECLARED_ONCE_SHOWN_EVERYWHERE: "Can do" shows the name and the one-line description the server sends from the
+ *     declaration. This file holds no copy table.
  *   - NON_ADMIN_SEES_NOTHING: renders `null` while loading and for every state except a confirmed admin view (`ready`)
  *     or a confirmed 503 (`unavailable`). No heading or skeleton shows to a non-admin.
  *   - A click in flight replaces that row's switch with a Skeleton. A switch is never shown dimmed.
@@ -19,8 +23,7 @@
 
 "use client";
 
-import type { NodeAiPermissionView } from "@cogni/agent-grants";
-import { useState } from "react";
+import type { AccessSection, NodeAiPermissionView } from "@cogni/agent-grants";
 
 import { cn } from "../cn.js";
 import { Skeleton } from "../ui/skeleton.js";
@@ -35,11 +38,16 @@ export interface AgentAccessSectionProps {
   readonly className?: string;
 }
 
-const keyOf = (row: NodeAiPermissionView) => `${row.principal}|${row.scope}`;
+const keyOf = (row: NodeAiPermissionView) => `${row.principalUserId}|${row.scope}`;
+
+const BLOCKS: ReadonlyArray<{ section: AccessSection; title: string }> = [
+  { section: "pending", title: "Asks waiting" },
+  { section: "node", title: "This node's AI" },
+  { section: "outside", title: "Outside agents" },
+];
 
 export function AgentAccessSection({ endpoints, className }: AgentAccessSectionProps) {
-  const { state, busy, error, allow, remove, reload } = useAgentAccess(endpoints);
-  const [confirming, setConfirming] = useState<string | null>(null);
+  const { state, busy, error, allow, remove, dismiss, reload } = useAgentAccess(endpoints);
 
   // No flash: nothing renders until the server confirms an admin view or a 503.
   if (state.status === "hidden" || state.status === "loading") return null;
@@ -48,7 +56,7 @@ export function AgentAccessSection({ endpoints, className }: AgentAccessSectionP
     <section aria-labelledby="node-ai-heading" className={className}>
       <div className="pt-8 pb-2">
         <h2 id="node-ai-heading" className="font-semibold text-foreground text-lg">
-          This node&apos;s AI
+          AI access
         </h2>
         <div className="mt-2 border-border border-b" />
       </div>
@@ -70,67 +78,92 @@ export function AgentAccessSection({ endpoints, className }: AgentAccessSectionP
             </p>
           )}
           {state.view.permissions.length === 0 ? (
-            <p className="py-2 text-muted-foreground text-sm">No permissions to manage.</p>
+            <p className="py-2 text-muted-foreground text-sm">Nothing to manage.</p>
           ) : (
             <table className="w-full text-left text-sm">
               <thead className="text-muted-foreground text-xs">
                 <tr>
-                  <th scope="col" className="py-1 pr-3 font-medium">AI</th>
-                  <th scope="col" className="py-1 pr-3 font-medium">Permission</th>
-                  <th scope="col" className="w-24 py-1 text-right font-medium">Allowed</th>
+                  <th scope="col" className="py-1 pr-3 font-medium">Who</th>
+                  <th scope="col" className="py-1 pr-3 font-medium">Can do</th>
+                  <th scope="col" className="py-1 pr-3 font-medium">Until</th>
+                  <th scope="col" className="w-20 py-1 text-right font-medium">On</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-border">
-                {state.view.permissions.map((row) => {
-                  const key = keyOf(row);
-                  return (
-                    <tr key={key} aria-busy={busy === key || undefined}>
-                      <td className="py-2 pr-3 text-foreground">{row.ai}</td>
-                      <td className="py-2 pr-3 text-foreground">{row.permission}</td>
-                      <td className="h-10 py-2 text-right">
-                        {busy === key ? (
-                          <>
-                            <Skeleton className="ml-auto h-5 w-9 rounded-full" />
-                            <span className="sr-only" role="status">Saving</span>
-                          </>
-                        ) : confirming === key ? (
-                          <span className="inline-flex items-center gap-2 text-xs">
-                            <span className="text-muted-foreground">Allow?</span>
-                            <button
-                              type="button"
-                              className="font-medium text-foreground underline"
-                              aria-label={`Yes, allow ${row.ai}: ${row.permission}`}
-                              onClick={() => {
-                                setConfirming(null);
-                                void allow(row.principal, row.scope);
-                              }}
-                            >
-                              Yes
-                            </button>
-                            <button
-                              type="button"
-                              className="text-muted-foreground underline"
-                              aria-label={`No, do not allow ${row.ai}: ${row.permission}`}
-                              onClick={() => setConfirming(null)}
-                            >
-                              No
-                            </button>
-                          </span>
-                        ) : (
-                          <Switch
-                            on={row.allowed}
-                            label={`${row.ai}: ${row.permission}`}
-                            locked={busy !== null}
-                            onToggle={() =>
-                              row.allowed ? void remove(row.principal, row.scope) : setConfirming(key)
-                            }
-                          />
-                        )}
-                      </td>
+              {BLOCKS.map(({ section, title }) => {
+                const rows = state.view.permissions.filter((r) => r.section === section);
+                if (rows.length === 0) return null;
+                return (
+                  <tbody key={section} className="divide-y divide-border">
+                    <tr>
+                      <th
+                        scope="rowgroup"
+                        colSpan={4}
+                        className="pt-4 pb-1 font-medium text-muted-foreground text-xs uppercase tracking-wide"
+                      >
+                        {title}
+                      </th>
                     </tr>
-                  );
-                })}
-              </tbody>
+                    {rows.map((row) => {
+                      const key = keyOf(row);
+                      const saving = busy === key;
+                      return (
+                        <tr key={key} aria-busy={saving || undefined}>
+                          <td className="py-2 pr-3 align-top text-foreground">
+                            {row.who}
+                            {row.outside && (
+                              <span className="ml-2 rounded border border-border px-1 text-muted-foreground text-xs">
+                                outside
+                              </span>
+                            )}
+                            {row.hint && <div className="text-muted-foreground text-xs">{row.hint}</div>}
+                          </td>
+                          <td className="py-2 pr-3 align-top">
+                            <div className="text-foreground">{row.label}</div>
+                            <div className="text-muted-foreground text-xs">{row.description}</div>
+                          </td>
+                          <td className="whitespace-nowrap py-2 pr-3 align-top text-muted-foreground">
+                            {row.section === "pending" ? "—" : (row.until ?? "No end")}
+                          </td>
+                          <td className="h-10 py-2 text-right align-top">
+                            {saving ? (
+                              <>
+                                <Skeleton className="ml-auto h-5 w-9 rounded-full" />
+                                <span className="sr-only" role="status">Saving</span>
+                              </>
+                            ) : (
+                              <span className="inline-flex items-center justify-end gap-2">
+                                <Switch
+                                  on={row.on}
+                                  label={`${row.who}: ${row.label}`}
+                                  locked={busy !== null}
+                                  onToggle={() =>
+                                    void (row.on
+                                      ? remove(row.principalUserId, row.scope)
+                                      : allow(row.principalUserId, row.scope))
+                                  }
+                                />
+                                {row.section === "pending" && (
+                                  <button
+                                    type="button"
+                                    aria-label={`Dismiss the ask: ${row.who}: ${row.label}`}
+                                    aria-disabled={busy !== null || undefined}
+                                    className="px-1 text-muted-foreground hover:text-foreground"
+                                    onClick={() => {
+                                      if (busy === null) void dismiss(row.principalUserId, row.scope);
+                                    }}
+                                  >
+                                    ×
+                                  </button>
+                                )}
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                );
+              })}
             </table>
           )}
         </div>

@@ -115,6 +115,7 @@ export const knowledgeWriteContract: ToolContract<
     kind: "node",
     subject: "admin",
     label: "Save notes to this node's knowledge base",
+    description: "Save notes straight into the knowledge base.",
   },
   inputSchema: KnowledgeWriteInputSchema,
   outputSchema: KnowledgeWriteOutputSchema,

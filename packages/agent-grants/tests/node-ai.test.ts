@@ -2,50 +2,75 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 import { describe, expect, it } from "vitest";
-import { buildNodeAiView, NODE_AI_COPY, type ToolRequires } from "../src";
+import { buildNodeAiView } from "../src";
 import { memoryStore } from "./memory-store";
 
-const perm = (scope: string, label: string): ToolRequires => ({
-  scope, kind: "node", subject: "member", label,
-});
+const declarations = {
+  "knowledge:write": { label: "Save notes", description: "Write notes into this node's knowledge base." },
+  "schedule:manage": { label: "Change schedules", description: "Make and change schedules for the person it helps." },
+  "work_item:transition": { label: "Update work items", description: "Change work items and their priority scores." },
+};
+const internal = [
+  { userId: "u1", slug: "node-ai", displayName: "General assistant" },
+  { userId: "u2", slug: "prioritizer", displayName: null },
+];
+const scopesByPrincipal = {
+  "node-ai": ["knowledge:write", "schedule:manage", "knowledge:write"],
+  prioritizer: ["work_item:transition"],
+};
+const build = async (store: ReturnType<typeof memoryStore>) =>
+  buildNodeAiView({ declarations, scopesByPrincipal, internal, rows: await store.listRoleRows() });
 
-describe("buildNodeAiView", () => {
-  const permissionsByPrincipal = {
-    "node-ai": [perm("knowledge:write", "Save notes"), perm("schedule:manage", "Change schedules"), perm("knowledge:write", "Save notes")],
-    prioritizer: [perm("work_item:transition", "Update work items")],
-  };
-
-  it("lists one row per AI and permission, with the AI's plain name", () => {
-    const rows = buildNodeAiView({ permissionsByPrincipal, liveRoles: [] });
-    expect(rows.map((r) => [r.ai, r.permission])).toEqual([
-      [NODE_AI_COPY["node-ai"]?.name, "Change schedules"],
-      [NODE_AI_COPY["node-ai"]?.name, "Save notes"],
-      [NODE_AI_COPY.prioritizer?.name, "Update work items"],
+describe("buildNodeAiView: one row per grant row, in three blocks", () => {
+  it("lists each internal AI by each permission, name and description from the declaration, name from agent_principals", async () => {
+    const rows = await build(memoryStore({ principals: { "node-ai": "u1", prioritizer: "u2" } }));
+    expect(rows.every((r) => r.section === "node" && r.on === false && r.until === null && !r.outside)).toBe(true);
+    expect(rows.map((r) => [r.who, r.label, r.description.length > 0])).toEqual([
+      ["General assistant", "Change schedules", true],
+      ["General assistant", "Save notes", true],
+      ["prioritizer", "Update work items", true], // no display name: the slug
     ]);
-    expect(rows.every((r) => r.allowed === false)).toBe(true);
   });
 
-  it("marks only live (unrevoked) roles as allowed", async () => {
-    const store = memoryStore({
-      principals: { "node-ai": "u1", prioritizer: "u2" },
-      roles: [{ principal: "u1", scope: "knowledge:write" }, { principal: "u2", scope: "work_item:transition", revoked: true }],
-    });
-    const rows = buildNodeAiView({ permissionsByPrincipal, liveRoles: await store.listLiveRoles() });
-    expect(rows.find((r) => r.scope === "knowledge:write")?.allowed).toBe(true);
-    expect(rows.find((r) => r.scope === "schedule:manage")?.allowed).toBe(false);
-    expect(rows.find((r) => r.scope === "work_item:transition")?.allowed).toBe(false);
+  it("marks only live (approved, unrevoked) rows on", async () => {
+    const rows = await build(
+      memoryStore({
+        principals: { "node-ai": "u1", prioritizer: "u2" },
+        roles: [{ principal: "u1", scope: "knowledge:write" }, { principal: "u2", scope: "work_item:transition", revoked: true }],
+      })
+    );
+    expect(rows.find((r) => r.scope === "knowledge:write")?.on).toBe(true);
+    expect(rows.find((r) => r.scope === "work_item:transition")?.on).toBe(false);
   });
 
-  it("never shows the slug as a name, and skips a scope with no label", () => {
-    const rows = buildNodeAiView({
-      permissionsByPrincipal: { "some-new-ai": [perm("x:y", "Do a thing")], ghost: [{ scope: "a:b", kind: "node", subject: "member" }] },
-      liveRoles: [],
-    });
-    expect(rows).toHaveLength(1);
-    expect(rows[0]?.ai).not.toBe("some-new-ai");
+  it("puts a pending ask in the asks block (off), once, for an internal AI or an outside agent", async () => {
+    const rows = await build(
+      memoryStore({
+        principals: { "node-ai": "u1", prioritizer: "u2" },
+        names: { "ext-1": "Helper bot", "node-ai": "General assistant" },
+        roles: [
+          { principal: "u1", scope: "knowledge:write", pending: true },
+          { principal: "ext-1", scope: "work_item:transition", pending: true },
+        ],
+      })
+    );
+    const pending = rows.filter((r) => r.section === "pending");
+    expect(pending.map((r) => [r.who, r.outside, r.on])).toEqual([["General assistant", false, false], ["Helper bot", true, false]]);
+    expect(rows.filter((r) => r.section === "node" && r.scope === "knowledge:write")).toEqual([]); // not shown twice
   });
 
-  it("ships names with no id, token, scope string or path, and never the word job", () => {
-    for (const c of Object.values(NODE_AI_COPY)) expect(c.name).not.toMatch(/[:/_]|http|token|curl|\bjobs?\b|[0-9a-f]{8}-/i);
+  it("lists a live outside agent in its own block, on, with the outside marker", async () => {
+    const rows = await build(memoryStore({ principals: { "node-ai": "u1" }, names: { "ext-1": "Helper bot" }, roles: [{ principal: "ext-1", scope: "work_item:transition" }] }));
+    expect(rows.filter((r) => r.section === "outside")).toEqual([
+      expect.objectContaining({ who: "Helper bot", outside: true, on: true, label: "Update work items" }),
+    ]);
+  });
+
+  it("skips a scope with no declaration, names an unnamed agent neutrally, and never shows a slug-like or scope text", async () => {
+    const rows = await build(memoryStore({ principals: { "node-ai": "u1" }, roles: [{ principal: "ext-2", scope: "made:up", pending: true }, { principal: "ext-2", scope: "knowledge:write", pending: true }] }));
+    expect(rows.some((r) => r.scope === "made:up")).toBe(false);
+    expect(rows.find((r) => r.principalUserId === "ext-2")?.who).toBe("Unnamed agent");
+    const text = JSON.stringify(rows.map((r) => [r.who, r.label, r.description, r.hint]));
+    expect(text).not.toMatch(/:|\/api\/|token|curl|\bjobs?\b/i);
   });
 });

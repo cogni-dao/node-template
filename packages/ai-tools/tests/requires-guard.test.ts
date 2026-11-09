@@ -87,6 +87,18 @@ describe("requires guard", () => {
     }
   });
 
+  it("gives every requires one plain description line, with no scope string, path or the word job, and one per scope", () => {
+    const seen = new Map<string, string>();
+    for (const c of contracts.filter((c) => c.requires)) {
+      const r = c.requires!;
+      expect(r.description.length, c.name).toBeGreaterThan(15);
+      expect(r.description.length, c.name).toBeLessThan(90);
+      expect(r.description, c.name).not.toMatch(/[:/_]|\bcore\b|http|token|curl|\bjobs?\b/i);
+      expect(seen.get(r.scope) ?? r.description, r.scope).toBe(r.description);
+      seen.set(r.scope, r.description);
+    }
+  });
+
   it("uses one label per scope, so the table never shows two names for one permission", () => {
     const seen = new Map<string, string>();
     for (const c of contracts.filter((c) => c.requires)) {

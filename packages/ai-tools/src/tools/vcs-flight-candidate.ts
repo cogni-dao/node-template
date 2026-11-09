@@ -96,6 +96,7 @@ export const vcsFlightCandidateContract: ToolContract<
     kind: "node",
     subject: "admin",
     label: "Start test deployments",
+    description: "Put a code change on the test site.",
   },
   inputSchema: VcsFlightCandidateInputSchema,
   outputSchema: VcsFlightCandidateOutputSchema,

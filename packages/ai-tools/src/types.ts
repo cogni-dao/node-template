@@ -64,6 +64,8 @@ export interface ToolRequires {
   readonly subject: "member" | "admin";
   /** Plain-language permission name an admin reads on the profile page (no scope string, id or path). */
   readonly label: string;
+  /** One plain line on what the permission lets an AI do. Shown beside the label; declared here once and nowhere else. */
+  readonly description: string;
 }
 
 /**

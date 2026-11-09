@@ -45,6 +45,10 @@ export const EVENT_NAMES = {
 	/** A DAO admin granted / revoked an agent role (task.5456): principal, scope, approvedBy. */
 	AGENT_ROLE_GRANTED: "agent_role.granted",
 	AGENT_ROLE_REVOKED: "agent_role.revoked",
+	/** An agent asked for a permission for itself (a pending row): principalUserId, scope. */
+	AGENT_ROLE_REQUESTED: "agent_role.requested",
+	/** A DAO admin dismissed a pending ask: principalUserId, scope, deniedBy. */
+	AGENT_ROLE_DENIED: "agent_role.denied",
 	/** The roles route could not decide or list (store or admin check down), or refused a non-admin write. No secrets. */
 	AGENT_ROLES_UNAVAILABLE: "agent.roles.unavailable",
 	AGENT_ROLES_LIST_FAILED: "agent.roles.list_failed",

@@ -28,7 +28,12 @@ import {
   createPostgresAgentGrantsStore,
   buildNodeAiView,
   type GuardDeps,
+  denyRequest,
   grantRole,
+  listOwnAccess,
+  type PrincipalRef,
+  requestAccess,
+  type RoleState,
   type NodeAiPermissionView,
   resolveInternalPrincipal,
   revokeRole,
@@ -54,17 +59,26 @@ export interface AgentToolAuthority {
   readonly guardDeps: Omit<GuardDeps, "runAs">;
   /** Scopes a role may name. */
   readonly declaredScopes: readonly string[];
-  grantRole(input: {
-    principalSlug: string;
+  /** Turn a row ON: approve a pending ask, or grant one of this node's AI directly. */
+  grantRole(
+    input: PrincipalRef & { scope: string; approvedBy: string }
+  ): Promise<{ principalUserId: string; created: boolean }>;
+  /** Turn a live row OFF. */
+  revokeRole(
+    input: PrincipalRef & { scope: string; revokedBy: string }
+  ): Promise<{ principalUserId: string; revoked: boolean }>;
+  /** Dismiss a pending ask (the agent then sees `denied`). */
+  denyRequest(
+    input: PrincipalRef & { scope: string; deniedBy: string }
+  ): Promise<{ principalUserId: string; denied: boolean }>;
+  /** An agent asks for a scope for itself (a pending row, no approver). Idempotent. Throws AgentRolesError on a bad scope or too many asks. */
+  requestAccess(input: {
+    principalUserId: string;
     scope: string;
-    approvedBy: string;
-  }): Promise<{ principalUserId: string; created: boolean }>;
-  revokeRole(input: {
-    principalSlug: string;
-    scope: string;
-    revokedBy: string;
-  }): Promise<{ principalUserId: string; revoked: boolean }>;
-  /** "This node's AI": one row per catalog principal and permission (from the tool contracts), with the live Allow state. */
+  }): Promise<{ state: "pending" | "granted"; created: boolean }>;
+  /** The agent's own rows by state. */
+  listOwnAccess(principalUserId: string): Promise<Array<{ scope: string; state: RoleState; at: string }>>;
+  /** The admin table: one row per grant row, in three blocks. Name and description come from the declarations only. */
   listNodeAi(): Promise<NodeAiPermissionView[]>;
   /** The same admin check the guard uses, for the role routes. */
   readonly adminCheck: AdminCheck;
@@ -128,9 +142,16 @@ export function createAgentToolAuthority(deps: {
   toolBundle: readonly CatalogBoundTool[];
 }): AgentToolAuthority {
   const requiresById = buildRequiresById(deps.toolBundle);
-  const declaredScopes = [
-    ...new Set(Object.values(requiresById).map((r) => r.scope)),
-  ].sort();
+  // Declared once, shown everywhere: every tool contract's `requires` plus every route-only capability.
+  const declarations: Record<string, { label?: string | undefined; description?: string | undefined }> = {};
+  for (const r of Object.values(requiresById))
+    declarations[r.scope] = { label: r.label, description: r.description };
+  for (const cap of Object.values(ROUTE_ONLY_CAPABILITIES))
+    declarations[cap.requires.scope] = {
+      label: cap.requires.label,
+      description: cap.requires.description,
+    };
+  const declaredScopes = Object.keys(declarations).sort();
   const adminCheck = createAdminCheck(deps.sql, deps.nodeAdmin);
 
   // One transaction per call, so a role read sees one consistent snapshot.
@@ -149,18 +170,21 @@ export function createAgentToolAuthority(deps: {
     resolvePrincipal: (slug) => withStore((store) => resolveInternalPrincipal(store, slug)),
     guardDeps: { withStore, adminCheck, onDecision },
     async listNodeAi() {
-      // Permissions come from the contracts of every tool a principal's graphs list: the contracts are the only input that names scopes.
-      const permissionsByPrincipal: Record<string, ToolRequires[]> = {};
+      // The scopes each AI may use come from the contracts of every tool its graphs list.
+      const scopesByPrincipal: Record<string, string[]> = {};
       for (const entry of Object.values(LANGGRAPH_CATALOG)) {
         if (!entry.principal) continue;
-        const permissions = (permissionsByPrincipal[entry.principal] ??= []);
+        const scopes = (scopesByPrincipal[entry.principal] ??= []);
         for (const toolId of entry.toolIds) {
           const requires = requiresById[toolId];
-          if (requires) permissions.push(requires);
+          if (requires) scopes.push(requires.scope);
         }
       }
-      const liveRoles = await withStore((store) => store.listLiveRoles());
-      return buildNodeAiView({ permissionsByPrincipal, liveRoles });
+      const { internal, rows } = await withStore(async (store) => ({
+        internal: await store.listInternalPrincipals(),
+        rows: await store.listRoleRows(),
+      }));
+      return buildNodeAiView({ declarations, scopesByPrincipal, internal, rows });
     },
     declaredScopes,
     adminCheck,
@@ -199,7 +223,7 @@ export function createAgentToolAuthority(deps: {
         deps.log.info(
           {
             event: EVENT_NAMES.AGENT_ROLE_GRANTED,
-            principal: input.principalSlug,
+            principalUserId: result.principalUserId,
             scope: input.scope,
             approvedBy: input.approvedBy,
           },
@@ -210,7 +234,9 @@ export function createAgentToolAuthority(deps: {
     async revokeRole(input) {
       const result = await withStore((store) =>
         revokeRole(store, {
-          principalSlug: input.principalSlug,
+          ...(input.principalSlug !== undefined
+            ? { principalSlug: input.principalSlug }
+            : { principalUserId: input.principalUserId as string }),
           scope: input.scope,
         })
       );
@@ -218,7 +244,7 @@ export function createAgentToolAuthority(deps: {
         deps.log.info(
           {
             event: EVENT_NAMES.AGENT_ROLE_REVOKED,
-            principal: input.principalSlug,
+            principalUserId: result.principalUserId,
             scope: input.scope,
             revokedBy: input.revokedBy,
           },
@@ -226,5 +252,43 @@ export function createAgentToolAuthority(deps: {
         );
       return result;
     },
+    async denyRequest(input) {
+      const result = await withStore((store) =>
+        denyRequest(store, {
+          ...(input.principalSlug !== undefined
+            ? { principalSlug: input.principalSlug }
+            : { principalUserId: input.principalUserId as string }),
+          scope: input.scope,
+        })
+      );
+      if (result.denied)
+        deps.log.info(
+          {
+            event: EVENT_NAMES.AGENT_ROLE_DENIED,
+            principalUserId: result.principalUserId,
+            scope: input.scope,
+            deniedBy: input.deniedBy,
+          },
+          EVENT_NAMES.AGENT_ROLE_DENIED
+        );
+      return result;
+    },
+    async requestAccess(input) {
+      const result = await withStore((store) =>
+        requestAccess(store, { ...input, declaredScopes })
+      );
+      if (result.created)
+        deps.log.info(
+          {
+            event: EVENT_NAMES.AGENT_ROLE_REQUESTED,
+            principalUserId: input.principalUserId,
+            scope: input.scope,
+          },
+          EVENT_NAMES.AGENT_ROLE_REQUESTED
+        );
+      return result;
+    },
+    listOwnAccess: (principalUserId) =>
+      withStore((store) => listOwnAccess(store, principalUserId)),
   };
 }

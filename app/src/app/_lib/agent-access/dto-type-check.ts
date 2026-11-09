@@ -44,11 +44,16 @@ export function viewIsWire(view: NodeAiAccessView): Wire {
   return {
     canManage: view.canManage,
     permissions: view.permissions.map((row) => ({
-      principal: row.principal,
-      ai: row.ai,
+      section: row.section,
+      principalUserId: row.principalUserId,
+      who: row.who,
+      outside: row.outside,
+      hint: row.hint,
       scope: row.scope,
-      permission: row.permission,
-      allowed: row.allowed,
+      label: row.label,
+      description: row.description,
+      on: row.on,
+      until: row.until,
     })),
   };
 }

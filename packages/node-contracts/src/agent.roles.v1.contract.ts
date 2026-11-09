@@ -16,17 +16,28 @@ import { z } from "zod";
 
 export const agentRolesOperation = {
   id: "agent.roles.v1",
-  input: z.object({
-    /** Internal agent principal slug, e.g. `node-ai` or `prioritizer`. */
-    principal: z.string().min(1).max(64),
-    /** A scope the node's tool contracts declare, e.g. `knowledge:write`. */
-    scope: z.string().min(1).max(100),
-  }),
+  /**
+   * Turn a row ON (POST) or OFF (DELETE). Name the agent by `principalUserId` (the id the table sends back, any agent) or,
+   * for this node's own AI, by `principal` (catalog slug). `deny: true` on DELETE dismisses a pending ask.
+   */
+  input: z
+    .object({
+      /** Internal agent principal slug, e.g. `node-ai` or `prioritizer`. */
+      principal: z.string().min(1).max(64).optional(),
+      /** The agent's id, as the table returned it. Works for outside agents. */
+      principalUserId: z.string().min(1).max(100).optional(),
+      /** A scope the node declares, e.g. `knowledge:write`. */
+      scope: z.string().min(1).max(100),
+      deny: z.boolean().optional(),
+    })
+    .refine((v) => (v.principal === undefined) !== (v.principalUserId === undefined), {
+      message: "send exactly one of principal or principalUserId",
+    }),
   output: z.object({
-    principal: z.string(),
+    principal: z.string().optional(),
     scope: z.string(),
     principalUserId: z.string(),
-    /** false when the grant already existed or the revoke found no live role. */
+    /** false when the grant already existed, the revoke found no live row, or the deny found no pending ask. */
     changed: z.boolean(),
   }),
 } as const;
@@ -34,18 +45,26 @@ export const agentRolesOperation = {
 /** Human-plane refusal body: any `Authorization` header on a human route gets 403 with this code. */
 export const HUMAN_SESSION_REQUIRED = "human_session_required" as const;
 
-/** `GET /api/v1/agent-access/roles`: what the "This node's AI" table renders. A non-admin gets `canManage: false`, `permissions: []`. */
+/**
+ * `GET /api/v1/agent-access/roles`: what the "AI access" table renders. A non-admin gets `canManage: false`, `permissions: []`.
+ * One row = one grant row. Name and description come from the declaration; the agent's name from `agent_principals` or the user.
+ */
 export const agentRolesListOperation = {
   id: "agent.roles.list.v1",
   output: z.object({
     canManage: z.boolean(),
     permissions: z.array(
       z.object({
-        principal: z.string(),
-        ai: z.string(),
+        section: z.enum(["pending", "node", "outside"]),
+        principalUserId: z.string(),
+        who: z.string(),
+        outside: z.boolean(),
+        hint: z.string().nullable(),
         scope: z.string(),
-        permission: z.string(),
-        allowed: z.boolean(),
+        label: z.string(),
+        description: z.string(),
+        on: z.boolean(),
+        until: z.string().nullable(),
       })
     ),
   }),

@@ -3,7 +3,7 @@
 
 /**
  * Module: `@app/api/v1/agent-access/roles`
- * Purpose: HUMAN plane. A DAO admin, signed in, lists this node's AI and allows (POST) or removes (DELETE) a permission by
+ * Purpose: HUMAN plane. A DAO admin, signed in, lists this node's AI and turns a row ON (POST: approve a pending ask, or grant one of this node's AI) or OFF (DELETE: revoke, or `deny: true` to dismiss an ask) by
  *   clicking on the profile page. GET returns `canManage`; a non-admin gets `canManage: false` and no AI.
  * Scope: HTTP validation, the human-plane guard, the node admin gate, and delegation to the agent authority. No authority logic.
  * Invariants:
@@ -18,7 +18,7 @@
  * @public
  */
 
-import { AgentRolesError } from "@cogni/agent-grants";
+import { AgentRolesError, type PrincipalRef } from "@cogni/agent-grants";
 import { agentRolesListOperation, agentRolesOperation } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
 
@@ -34,7 +34,7 @@ export const runtime = "nodejs";
 type Authority = ReturnType<typeof getContainer>["agentAuthority"];
 type Writer = (
   authority: Authority,
-  input: { principalSlug: string; scope: string; adminUserId: string }
+  input: { ref: PrincipalRef; scope: string; adminUserId: string; deny: boolean }
 ) => Promise<{ principalUserId: string; changed: boolean }>;
 
 const NO_STORE = { "cache-control": "no-store" } as const;
@@ -96,18 +96,36 @@ function writeRoute(routeId: string, write: Writer) {
         return json({ error: "invalid input", issues: parsed.error.issues }, 400);
       }
 
+      const ref: PrincipalRef =
+        parsed.data.principalUserId !== undefined
+          ? { principalUserId: parsed.data.principalUserId }
+          : { principalSlug: parsed.data.principal as string };
+
       try {
         const result = await write(authority, {
-          principalSlug: parsed.data.principal,
+          ref,
           scope: parsed.data.scope,
           adminUserId: sessionUser.id,
+          deny: parsed.data.deny === true,
         });
         return json(
-          agentRolesOperation.output.parse({ principal: parsed.data.principal, scope: parsed.data.scope, ...result })
+          agentRolesOperation.output.parse({
+            ...(parsed.data.principal !== undefined ? { principal: parsed.data.principal } : {}),
+            scope: parsed.data.scope,
+            ...result,
+          })
         );
       } catch (error) {
         if (error instanceof AgentRolesError) {
-          return json({ error: error.code }, error.code === "principal_not_found" ? 404 : 400);
+          const status =
+            error.code === "principal_not_found"
+              ? 404
+              : error.code === "not_pending"
+                ? 409
+                : error.code === "self_approval"
+                  ? 403
+                  : 400;
+          return json({ error: error.code }, status);
         }
         throw error;
       }
@@ -115,18 +133,28 @@ function writeRoute(routeId: string, write: Writer) {
   );
 }
 
+/** Flipping a row ON: approves a pending ask, or grants one of this node's own AI directly. */
 export const POST = writeRoute("agent.access.roles.grant", async (authority, input) => {
   const { principalUserId, created } = await authority.grantRole({
-    principalSlug: input.principalSlug,
+    ...input.ref,
     scope: input.scope,
     approvedBy: input.adminUserId,
   });
   return { principalUserId, changed: created };
 });
 
+/** Flipping a row OFF (revoke), or the x on a pending ask (`deny: true`). */
 export const DELETE = writeRoute("agent.access.roles.revoke", async (authority, input) => {
+  if (input.deny) {
+    const { principalUserId, denied } = await authority.denyRequest({
+      ...input.ref,
+      scope: input.scope,
+      deniedBy: input.adminUserId,
+    });
+    return { principalUserId, changed: denied };
+  }
   const { principalUserId, revoked } = await authority.revokeRole({
-    principalSlug: input.principalSlug,
+    ...input.ref,
     scope: input.scope,
     revokedBy: input.adminUserId,
   });

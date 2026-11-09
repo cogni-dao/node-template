@@ -24,8 +24,10 @@ export interface ToolRequires {
   readonly scope: string;
   readonly kind: ScopeKind;
   readonly subject: SubjectRequirement;
-  /** Plain-language permission name for the admin table (from the tool contract). */
+  /** Plain-language short name of the permission (from the declaration). */
   readonly label?: string;
+  /** One plain line saying what the permission lets an AI do (from the declaration). */
+  readonly description?: string;
 }
 
 /** The node's own admin authority, as seen by the guard. */
@@ -48,23 +50,64 @@ export type AuthzDecision =
       readonly reason: string;
     };
 
-/** Persistence port. The Postgres adapter is the only implementation a node needs. */
+/** The state of one grant row, from the asking agent's side. */
+export type RoleState = "pending" | "granted" | "denied" | "revoked";
+
+/** One pending or live grant row, with who it is for. For the admin table. */
+export interface RoleRow {
+  readonly principalUserId: string;
+  /** The catalog slug for an internal AI, else null. */
+  readonly slug: string | null;
+  readonly internal: boolean;
+  /** `agent_principals.display_name` for an internal AI, else the user's name. */
+  readonly name: string | null;
+  /** A plain note that the agent is tied to something outside, such as "GitHub linked". Null when nothing is known. */
+  readonly hint: string | null;
+  readonly scope: string;
+  readonly state: "pending" | "granted";
+  readonly at: string;
+}
+
+/**
+ * Persistence port. The Postgres adapter is the only implementation a node needs.
+ * LIVE_NEEDS_APPROVAL: every read that opens a lock (`hasLiveRole`, `liveScopes`) counts only rows with an approver and no revoke.
+ * A pending row (an ask) never opens a lock.
+ */
 export interface AgentGrantsStore {
-  /** A live (unrevoked) role row for this principal user id and scope. Never cached. */
+  /** A live (approved, unrevoked) role row for this principal user id and scope. Never cached. */
   hasLiveRole(principalId: string, scope: string): Promise<boolean>;
   /** The subset of `scopes` this principal holds a live role for, in ONE read. Never cached. */
   liveScopes(principalId: string, scopes: readonly string[]): Promise<string[]>;
   /** The seeded user id of an internal principal slug, else null. */
   findInternalPrincipal(slug: string): Promise<{ userId: string } | null>;
-  /** Every live role row with its principal's slug, for the admin page. Never cached. */
+  /** Every internal principal with its plain name. */
+  listInternalPrincipals(): Promise<Array<{ userId: string; slug: string; displayName: string | null }>>;
+  /** Every live role row with its principal's slug. Never cached. */
   listLiveRoles(): Promise<Array<{ principalSlug: string; scope: string }>>;
-  /** Inserts a live role row; false when one already exists. */
+  /** Every pending and live row for every principal, internal or outside, for the admin table. Never cached. */
+  listRoleRows(): Promise<RoleRow[]>;
+  /** The caller's own rows, newest state per scope. */
+  listOwnRoles(principalUserId: string): Promise<Array<{ scope: string; state: RoleState; at: string }>>;
+  /**
+   * An agent asks for a scope for itself: inserts a pending row (`approved_by` null, `requested_by` = the agent).
+   * `pending` and `granted` mean a pending or live row already exists (nothing is written). `too_many` caps open asks.
+   */
+  requestRole(input: {
+    principalUserId: string;
+    scope: string;
+    maxPending: number;
+  }): Promise<"created" | "pending" | "granted" | "too_many">;
+  /** Approves the pending row: sets the approver and `granted_at`. False when no pending row exists. */
+  approvePending(input: { principalUserId: string; scope: string; approvedBy: string }): Promise<boolean>;
+  /** Denies the pending row (soft: `revoked_at` set, never approved). False when no pending row exists. */
+  denyPending(input: { principalUserId: string; scope: string }): Promise<boolean>;
+  /** Inserts a live role row an admin writes directly (approved at once); false when a live or pending row exists. */
   insertRole(input: {
     principalUserId: string;
     scope: string;
     approvedBy: string;
   }): Promise<boolean>;
-  /** Revokes the live role row; false when none exists. */
+  /** Revokes the live (approved) role row; false when none exists. A pending row is not touched. */
   revokeRole(input: { principalUserId: string; scope: string }): Promise<boolean>;
 }
 
@@ -85,17 +128,33 @@ export interface AuthzEvent {
   readonly route?: string | null;
 }
 
-/** One row of the admin table: one AI and one permission (a scope) it may have. */
+/** Which block of the one admin table a row belongs to. */
+export type AccessSection = "pending" | "node" | "outside";
+
+/**
+ * One row of the admin table = one grant row: who, what they can do, until when, on or off.
+ * Name and description come from the declaration (`requires`), the who from `agent_principals` or the user's name.
+ */
 export interface NodeAiPermissionView {
+  readonly section: AccessSection;
   /** Opaque to the human; the table sends it back unchanged when the admin clicks. */
-  readonly principal: string;
-  /** The AI's plain name. */
-  readonly ai: string;
+  readonly principalUserId: string;
+  /** Plain name of the agent. */
+  readonly who: string;
+  /** True for an agent that is not one of this node's own AI. */
+  readonly outside: boolean;
+  /** A plain note such as "GitHub linked", or null. */
+  readonly hint: string | null;
   /** Opaque to the human; the table sends it back unchanged when the admin clicks. */
   readonly scope: string;
-  /** The permission's plain name. */
-  readonly permission: string;
-  readonly allowed: boolean;
+  /** The permission's short plain name. */
+  readonly label: string;
+  /** One plain line on what the permission lets the agent do. */
+  readonly description: string;
+  /** On = a live grant. Off = none yet (a pending ask, or an AI with no grant). */
+  readonly on: boolean;
+  /** When the grant ends (ISO), or null for no end. v0 grants have no end. */
+  readonly until: string | null;
 }
 
 /** The `GET /api/v1/agent-access/roles` body. A non-admin gets `canManage: false` and no rows. */
