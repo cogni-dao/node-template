@@ -51,6 +51,7 @@ pnpm build   # build for production
 - Unauthenticated users are redirected to `/` before the app shell renders. No auto sign-out — sign-out is an explicit user action.
 - Sidebar navigation links stay within `(app)` routes. The sidebar logo links to `/chat`, not `/`.
 - BOUNDED_BOARD_READS (task.0055): `/work` and `/dashboard` never download the backlog. The `/work` board makes one `/api/v1/work/board` request (≤20 summaries per visible status column) plus one `/api/v1/work/summaries` request per column "Load more", through the package `useWorkBoard`; the table requests one cursor page through `useWorkTablePage` (the node keeps only URL/history navigation); `/dashboard` uses `useOpenWork` (at most 5 active summaries). No client code walks cursors or hand-builds list params.
+- BOUNDED_KNOWLEDGE_READS (task.0059): `/knowledge` Browse and Graph render only `@cogni/knowledge-base-ui` exports (`KnowledgeBrowse`, `KnowledgeGraph`). The node keeps its fetchers (`knowledge/_api/fetchBrowse.ts`, `_api/fetchCitationLinks.ts`), SSR seeds, the exact-ID detail sheet and the `react-force-graph-3d` renderer adapter.
 
 ## Dependencies
 

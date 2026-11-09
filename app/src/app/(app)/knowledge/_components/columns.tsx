@@ -3,8 +3,8 @@
 
 /**
  * Module: `@app/(app)/knowledge/_components/columns`
- * Purpose: TanStack column definitions for the knowledge browse DataGrid.
- * Scope: Pure column descriptors. Does not fetch or route.
+ * Purpose: TanStack column definitions for the legacy client-filtered knowledge grid (Chains).
+ * Scope: Pure column descriptors. Does not fetch or route. Bounded Browse columns are published by `@cogni/knowledge-base-ui` (task.0059).
  * Invariants: HEADER_OWNS_SORT_AND_FILTER (mirror /work pattern); per-column dropdown owns filter.
  * @internal
  */
@@ -16,31 +16,22 @@ import { HeaderFilter } from "@cogni/node-ui-kit/header-filter";
 import { DataGridColumnHeader } from "@cogni/node-ui-kit/reui/data-grid/data-grid-column-header";
 import { createColumnHelper } from "@tanstack/react-table";
 
-import { BrowseHeaderFilter } from "./BrowseHeaderFilter";
 import { ConfidenceBar } from "./ConfidenceBar";
 import { CopyLinkButton } from "./CopyLinkButton";
 import { RelativeTime } from "./RelativeTime";
 
 const col = createColumnHelper<KnowledgeSummary>();
 
-export const knowledgeColumns = buildColumns(false);
-export const summaryColumns = buildColumns(true);
+export const knowledgeColumns = buildColumns();
 
-function buildColumns(bounded: boolean) {
+function buildColumns() {
   return [
     col.accessor("domain", {
       header: ({ column }) => (
         <DataGridColumnHeader
-          allowEmpty={bounded}
           column={column}
           title="Domain"
-          filter={
-            bounded ? (
-              <BrowseHeaderFilter column={column} label="Domain" />
-            ) : (
-              <HeaderFilter column={column} />
-            )
-          }
+          filter={<HeaderFilter column={column} />}
         />
       ),
       size: 130,
@@ -57,7 +48,6 @@ function buildColumns(bounded: boolean) {
       id: "entry",
       header: ({ column }) => (
         <DataGridColumnHeader
-          allowEmpty={bounded}
           column={column}
           title="Entry"
         />
@@ -89,16 +79,9 @@ function buildColumns(bounded: boolean) {
     col.accessor("entryType", {
       header: ({ column }) => (
         <DataGridColumnHeader
-          allowEmpty={bounded}
           column={column}
           title="Type"
-          filter={
-            bounded ? (
-              <BrowseHeaderFilter column={column} label="Type" />
-            ) : (
-              <HeaderFilter column={column} />
-            )
-          }
+          filter={<HeaderFilter column={column} />}
         />
       ),
       size: 110,
@@ -114,7 +97,6 @@ function buildColumns(bounded: boolean) {
     col.accessor("confidencePct", {
       header: ({ column }) => (
         <DataGridColumnHeader
-          allowEmpty={bounded}
           column={column}
           title="Confidence"
         />
@@ -129,16 +111,9 @@ function buildColumns(bounded: boolean) {
     col.accessor("sourceType", {
       header: ({ column }) => (
         <DataGridColumnHeader
-          allowEmpty={bounded}
           column={column}
           title="Source"
-          filter={
-            bounded ? (
-              <BrowseHeaderFilter column={column} label="Source" />
-            ) : (
-              <HeaderFilter column={column} />
-            )
-          }
+          filter={<HeaderFilter column={column} />}
         />
       ),
       size: 110,
@@ -157,7 +132,6 @@ function buildColumns(bounded: boolean) {
     col.accessor("createdAt", {
       header: ({ column }) => (
         <DataGridColumnHeader
-          allowEmpty={bounded}
           column={column}
           title="Created"
         />

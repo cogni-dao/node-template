@@ -3,9 +3,9 @@
 
 /**
  * Module: `@tests/unit/app/knowledge-selection-direct-links`
- * Purpose: Prove bounded hydration, explicit search windows, replacement focus and exact-ID selection.
- * Scope: Real grid context/headers, node controllers and schemas; row/WebGL drawing and transport are stubbed.
- * Invariants: NO_HIDDEN_READS, FIVE_CURRENT_LINKS, EXPLICIT_CONTINUATION, STALE_INTENT_IGNORED.
+ * Purpose: Prove node-template composes the package Browse and Graph over its own transport: bounded SSR hydration, tab-intent reads, submit-only search through the node fetcher, overview revision restart, exact-ID selection and thin routes.
+ * Scope: Real package Browse/Graph (`@cogni/knowledge-base-ui`), node fetchers, schemas and routes; the legacy Chains grid, WebGL drawing and browser fetch are stubbed. Browse/Graph control behavior is proven package-only in packages/knowledge-base-ui/tests (task.0059).
+ * Invariants: NO_HIDDEN_READS, EXPLICIT_CONTINUATION, STALE_INTENT_IGNORED.
  * Side-effects: Stubbed browser fetch; no live services or database.
  * Links: https://github.com/cogni-dao/cogni/issues/2846
  * @vitest-environment jsdom
@@ -15,12 +15,7 @@
 import { KnowledgeBrowseCursorError } from "@cogni/knowledge-store";
 import type { KnowledgeRow } from "@cogni/node-contracts";
 import { DataGrid } from "@cogni/node-ui-kit/reui/data-grid/data-grid";
-import {
-  focusManager,
-  onlineManager,
-  QueryClient,
-  QueryClientProvider
-} from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   flexRender,
   getCoreRowModel,
@@ -32,21 +27,15 @@ import {
   cleanup,
   fireEvent,
   render,
-  renderHook,
   screen,
   waitFor
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ComponentProps, ReactNode } from "react";
 import { afterEach, expect, it, vi } from "vitest";
-import { browseKey } from "@/app/(app)/knowledge/_api/fetchBrowse";
 import { BoundedBrowse } from "@/app/(app)/knowledge/_components/BoundedBrowse";
 import { knowledgeColumns } from "@/app/(app)/knowledge/_components/columns";
 import { KnowledgeSelection } from "@/app/(app)/knowledge/_components/KnowledgeSelection";
-import {
-  focusGeometry,
-  useGraphFocus
-} from "@/app/(app)/knowledge/_components/useGraphFocus";
 import {
   loadKnowledgeBrowse,
   loadKnowledgeOverview
@@ -91,8 +80,8 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams({ mode: navigation.mode })
 }));
 
-// Only the grid and WebGL presentation are replaced. Their real parent
-// selection callbacks, detail fields and released relation UI remain mounted.
+// Only the legacy Chains grid and WebGL presentation are replaced. The package
+// Browse table, its selection callback, detail fields and relation UI stay real.
 vi.mock("next/dynamic", () => ({
   default:
     () =>
@@ -100,23 +89,19 @@ vi.mock("next/dynamic", () => ({
       graphData,
       onNodeClick
     }: {
-      graphData: {
-        nodes: Array<{ id: string; title: string; isHub: boolean }>;
-      };
-      onNodeClick: (node: { id: string; isHub: boolean }) => void;
+      graphData: { nodes: Array<{ id: string; title: string }> };
+      onNodeClick: (node: { id: string }) => void;
     }) => (
       <div>
-        {graphData.nodes
-          .filter((node) => !node.isHub)
-          .map((node) => (
-            <button
-              key={node.id}
-              type="button"
-              onClick={() => onNodeClick(node)}
-            >
-              Select graph {node.title}
-            </button>
-          ))}
+        {graphData.nodes.map((node) => (
+          <button
+            key={node.id}
+            type="button"
+            onClick={() => onNodeClick(node)}
+          >
+            Select graph {node.title}
+          </button>
+        ))}
       </div>
     )
 }));
@@ -311,9 +296,11 @@ it.each(["browse", "chains", "graph"])(
     await act(async () => {});
     expect(fetchMock).not.toHaveBeenCalled();
     fireEvent.click(
-      screen.getByRole("button", {
-        name: `Select ${mode === "graph" ? "graph" : "row"} ${selected.title}`
-      })
+      mode === "browse"
+        ? screen.getByText(selected.title)
+        : screen.getByRole("button", {
+            name: `Select ${mode === "graph" ? "graph" : "row"} ${selected.title}`
+          })
     );
     await screen.findByText(selected.content);
     await screen.findByRole("link", { name: "supports Direct relation 4" });
@@ -369,78 +356,16 @@ it("SSR reads only the chosen bounded projection and round-trips the wire page",
   expect(overviewKnowledge).toHaveBeenCalledTimes(2);
 });
 
-it("empty search windows require intent, keep the retry cursor, and retain off-page filters", async () => {
-  const reads: URL[] = [];
-  let failed = false;
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (url: string) => {
-      const parsed = new URL(url, "https://node.test");
-      reads.push(parsed);
-      if (parsed.searchParams.get("domains") === "missing")
-        return Response.json({
-          items: [],
-          nextCursor: null,
-          revision: "rev-a",
-          scannedRows: 0
-        });
-      if (parsed.searchParams.get("domains") === "off-page")
-        return Response.json(page);
-      if (parsed.searchParams.get("search")) {
-        if (parsed.searchParams.get("cursor") === "after-20") {
-          if (!failed) {
-            failed = true;
-            return Response.json({ error: "deadline" }, { status: 503 });
-          }
-          return Response.json(page);
-        }
-        return Response.json({
-          items: [],
-          nextCursor: "after-20",
-          revision: "rev-a",
-          scannedRows: 20
-        });
-      }
-      return Response.json(page);
-    })
-  );
-  mount(<BoundedBrowse initialData={page} />);
-  submitSearch("body");
-  await screen.findByText(/20 candidates searched/);
-  expect(reads).toHaveLength(1);
-  fireEvent.click(screen.getByRole("button", { name: "Continue search" }));
-  await screen.findByRole("alert");
-  fireEvent.click(screen.getByRole("button", { name: "Retry window" }));
-  await screen.findByRole("button", { name: `Select row ${selected.title}` });
-  expect(reads.slice(1).map((url) => url.searchParams.get("cursor"))).toEqual([
-    "after-20",
-    "after-20"
-  ]);
-  fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
-  const user = userEvent.setup();
-  await user.click(screen.getByRole("button", { name: "Domain", exact: true }));
-  const domain = await screen.findByRole("textbox", { name: "Exact Domain" });
-  fireEvent.change(domain, { target: { value: "missing" } });
-  fireEvent.submit(required(domain.closest("form")));
-  await waitFor(() =>
-    expect(reads.at(-1)?.searchParams.get("domains")).toBe("missing")
-  );
-  expect(screen.getByLabelText("missing")).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Clear Domain" }));
-  fireEvent.change(domain, { target: { value: "off-page" } });
-  fireEvent.submit(required(domain.closest("form")));
-  await user.keyboard("{Escape}");
-  await screen.findByRole("button", { name: `Select row ${selected.title}` });
-  expect(reads.at(-1)?.searchParams.get("domains")).toBe("off-page");
-});
-
-it("typing a body search issues no body request until explicit submit, then exactly one", async () => {
+it("node transport: typing issues no request; submit sends exactly one package-encoded browse window", async () => {
   const reads: URL[] = [];
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (url: string) => {
+    vi.fn(async (url: string, init: RequestInit) => {
       const parsed = new URL(url, "https://node.test");
       reads.push(parsed);
+      expect(parsed.pathname).toBe("/api/v1/knowledge/browse");
+      expect(init.credentials).toBe("same-origin");
+      expect(init.signal).toBeInstanceOf(AbortSignal);
       return Response.json({
         items: [],
         nextCursor: null,
@@ -460,6 +385,8 @@ it("typing a body search issues no body request until explicit submit, then exac
   await screen.findByText(/5 candidates searched/);
   expect(reads).toHaveLength(1);
   expect(reads[0]?.searchParams.get("search")).toBe("abcde");
+  expect(reads[0]?.searchParams.get("sort")).toBe("createdAt");
+  expect(reads[0]?.searchParams.get("direction")).toBe("desc");
   // Enter submits the changed draft as well; an unchanged draft is not replayed.
   await user.type(box, "f{Enter}");
   await waitFor(() => expect(reads).toHaveLength(2));
@@ -469,121 +396,15 @@ it("typing a body search issues no body request until explicit submit, then exac
   expect(reads).toHaveLength(2);
 });
 
-it("never shows the empty-results message before the first read settles", async () => {
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(() => new Promise<Response>(() => undefined))
-  );
-  mount(<BoundedBrowse />);
-  expect(screen.queryByText("No entries match these filters.")).toBeNull();
-  await act(async () => {});
-  expect(screen.queryByText("No entries match these filters.")).toBeNull();
-});
-
-it("focus replaces 5/5/2 geometry,preserves typed edges and Work links, and retries failed expansion", async () => {
-  let fail = true;
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (url: string) => {
-      if (url.includes("cursor=next-1")) {
-        if (fail) {
-          fail = false;
-          return Response.json({}, { status: 503 });
-        }
-        return Response.json({
-          links: Array.from({ length: 5 }, (_, i) => relation(i + 5)),
-          nextCursor: "next-2"
-        });
-      }
-      if (url.includes("cursor=next-2"))
-        return Response.json({
-          links: [
-            {
-              ...relation(10),
-              direction: "in",
-              source: relation(10).target,
-              target: relation(10).source
-            },
-            {
-              ...relation(11),
-              target: {
-                ...relation(11).target,
-                kind: "work",
-                href: "/work/items/task.1234"
-              }
-            }
-          ],
-          nextCursor: null
-        });
-      return Response.json({
-        links: Array.from({ length: 5 }, (_, i) => relation(i)),
-        nextCursor: "next-1"
-      });
-    })
-  );
-  const { result } = renderHook(() => useGraphFocus(selected.id));
-  await waitFor(() => expect(result.current.links).toHaveLength(5));
-  const overview = Array.from({ length: 20 }, (_, i) => ({
-    ...selected,
-    id: `overview-${i}`
-  }));
-  expect(focusGeometry(overview, selected, result.current).nodes).toHaveLength(
-    26
-  );
-  act(() => result.current.more());
-  await waitFor(() => expect(result.current.error).toBe(true));
-  expect(result.current.links[0]?.id).toBe("direct-0");
-  act(() => result.current.retry());
-  await waitFor(() => expect(result.current.links[0]?.id).toBe("direct-5"));
-  expect(focusGeometry(overview, selected, result.current).links).toHaveLength(
-    5
-  );
-  expect(
-    focusGeometry(overview, selected, result.current).nodes.some(
-      (node) => node.id === "neighbor-0"
-    )
-  ).toBe(false);
-  act(() => result.current.more());
-  await waitFor(() => expect(result.current.links).toHaveLength(2));
-  const geometry = focusGeometry(overview, selected, result.current);
-  expect(geometry.links[0]).toMatchObject({
-    id: "direct-10",
-    source: "neighbor-10",
-    target: selected.id,
-    direction: "in",
-    citationType: "supports"
-  });
-  expect(geometry.nodes.length).toBeLessThanOrEqual(26);
-  expect(geometry.nodes.some((node) => node.id === "neighbor-11")).toBe(false);
-  expect(result.current.links[1]?.target.href).toBe("/work/items/task.1234");
-});
-
-it("stale focus and off-list detail responses cannot replace newer selection", async () => {
+it("off-list detail responses cannot replace newer selection", async () => {
   const delayed = new Map<string, (value: Response) => void>();
-  const signals: AbortSignal[] = [];
   vi.stubGlobal(
     "fetch",
-    vi.fn((url: string, options: RequestInit) => {
-      signals.push(options.signal as AbortSignal);
-      return new Promise<Response>((resolve) => delayed.set(url, resolve));
-    })
-  );
-  const focus = renderHook(({ id }) => useGraphFocus(id), {
-    initialProps: { id: "old" }
-  });
-  focus.rerender({ id: "new" });
-  await act(async () =>
-    delayed.get("/api/v1/citations/new")?.(
-      Response.json({ links: [relation(8)], nextCursor: null })
+    vi.fn(
+      (url: string) =>
+        new Promise<Response>((resolve) => delayed.set(url, resolve))
     )
   );
-  await act(async () =>
-    delayed.get("/api/v1/citations/old")?.(
-      Response.json({ links: [relation(0)], nextCursor: null })
-    )
-  );
-  expect(focus.result.current.links[0]?.id).toBe("direct-8");
-  expect(signals[0]?.aborted).toBe(true);
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } }
   });
@@ -653,268 +474,6 @@ it("thin routes reject malformed and cross-query cursors and preserve repeated e
   );
 });
 
-function submitSearch(value: string) {
-  const box = screen.getByRole("textbox", { name: "Search knowledge" });
-  fireEvent.change(box, { target: { value } });
-  fireEvent.submit(required(box.closest("form")));
-}
-
-function required<T>(value: T | null | undefined): T {
-  if (value == null) throw new Error("Missing required fixture value");
-  return value;
-}
-
-it("keeps the real Type filter valid at capacity and frees slots on deselection", async () => {
-  const reads: URL[] = [];
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (url: string) => {
-      reads.push(new URL(url, "https://node.test"));
-      return Response.json({
-        items: [],
-        nextCursor: null,
-        revision: "rev-a",
-        scannedRows: 0
-      });
-    })
-  );
-  const user = userEvent.setup();
-  mount(
-    <BoundedBrowse
-      initialData={{
-        items: [],
-        nextCursor: null,
-        revision: "rev-a",
-        scannedRows: 0
-      }}
-    />
-  );
-  submitSearch("body");
-  await user.click(screen.getByRole("button", { name: "Domain", exact: true }));
-  const domain = await screen.findByRole("textbox", { name: "Exact Domain" });
-  fireEvent.change(domain, { target: { value: "off-page" } });
-  fireEvent.submit(required(domain.closest("form")));
-  await user.keyboard("{Escape}");
-  await user.click(screen.getByRole("button", { name: "Type", exact: true }));
-  const input = await screen.findByRole("textbox", { name: "Exact Type" });
-  for (let i = 0; i < 50; i++) {
-    fireEvent.change(input, { target: { value: `custom-${i}` } });
-    fireEvent.submit(required(input.closest("form")));
-  }
-  const canonical = screen.getByRole("checkbox", {
-    name: "guide"
-  }) as HTMLInputElement;
-  expect(canonical.disabled).toBe(true);
-  expect(screen.getByText(/Maximum 50 values selected/)).toBeTruthy();
-  await user.click(canonical);
-  expect(canonical.checked).toBe(false);
-  await user.click(screen.getByRole("checkbox", { name: "custom-0" }));
-  expect(canonical.disabled).toBe(false);
-  await user.click(canonical);
-  expect(canonical.checked).toBe(true);
-  await waitFor(() => {
-    const params = required(reads.at(-1)).searchParams;
-    expect(params.getAll("entryTypes")).toHaveLength(50);
-    expect(params.getAll("entryTypes")).toContain("guide");
-    expect(params.getAll("entryTypes")).not.toContain("custom-0");
-    expect(params.getAll("domains")).toEqual(["off-page"]);
-    expect(params.get("search")).toBe("body");
-  });
-});
-
-it.each([false, true])(
-  "real empty-window headers preserve global controls (search=%s)",
-  async (searching) => {
-    const reads: URL[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string) => {
-        reads.push(new URL(url, "https://node.test"));
-        return Response.json({
-          items: [],
-          nextCursor: searching ? "after-20" : null,
-          revision: "rev-a",
-          scannedRows: searching ? 20 : 0
-        });
-      })
-    );
-    const user = userEvent.setup();
-    mount(
-      <BoundedBrowse
-        initialData={{
-          items: [],
-          nextCursor: null,
-          revision: "rev-a",
-          scannedRows: 0
-        }}
-      />
-    );
-    if (searching) {
-      submitSearch("body");
-      await screen.findByText(/20 candidates searched/);
-      await user.click(screen.getByRole("button", { name: "Continue search" }));
-      await waitFor(() =>
-        expect(reads.at(-1)?.searchParams.get("cursor")).toBe("after-20")
-      );
-      await waitFor(() =>
-        expect(
-          screen
-            .getByRole("button", { name: "Domain", exact: true })
-            .hasAttribute("disabled")
-        ).toBe(false)
-      );
-    }
-    async function open(label: string) {
-      const trigger = screen.getByRole("button", { name: label, exact: true });
-      expect(trigger.hasAttribute("disabled")).toBe(false);
-      await user.click(trigger);
-      return screen.findByRole("textbox", { name: `Exact ${label}` });
-    }
-    async function add(label: string, value: string) {
-      const input = await open(label);
-      fireEvent.change(input, { target: { value } });
-      fireEvent.submit(required(input.closest("form")));
-      await user.keyboard("{Escape}");
-      await waitFor(() =>
-        expect(
-          screen
-            .getByRole("button", { name: label, exact: true })
-            .hasAttribute("disabled")
-        ).toBe(false)
-      );
-    }
-    await add("Type", "guide");
-    await add("Source", "human");
-    await add("Domain", "missing");
-    await open("Domain");
-    await user.click(screen.getByRole("checkbox", { name: "missing" }));
-    const domain = screen.getByRole("textbox", { name: "Exact Domain" });
-    fireEvent.change(domain, { target: { value: "off-page" } });
-    fireEvent.submit(required(domain.closest("form")));
-    await waitFor(() =>
-      expect(reads.at(-1)?.searchParams.getAll("domains")).toEqual(["off-page"])
-    );
-    await user.click(screen.getByRole("button", { name: "Clear Domain" }));
-    await user.keyboard("{Escape}");
-    await waitFor(() =>
-      expect(reads.at(-1)?.searchParams.getAll("domains")).toEqual([])
-    );
-    for (const [label, sort] of [
-      ["Domain", "domain"],
-      ["Type", "entryType"],
-      ["Source", "sourceType"]
-    ]) {
-      await open(required(label));
-      await user.click(
-        screen.getByRole("menuitem", { name: "Asc", exact: true })
-      );
-      await waitFor(() =>
-        expect(reads.at(-1)?.searchParams.get("sort")).toBe(sort)
-      );
-      expect(reads.at(-1)?.searchParams.get("direction")).toBe("asc");
-    }
-    for (const label of ["Confidence", "Created"]) {
-      const header = screen.getByRole("button", { name: label, exact: true });
-      expect(header.hasAttribute("disabled")).toBe(false);
-      await user.click(header);
-      await waitFor(() =>
-        expect(reads.at(-1)?.searchParams.get("sort")).toBe(
-          label === "Created" ? "createdAt" : "confidencePct"
-        )
-      );
-      await waitFor(() => expect(header.hasAttribute("disabled")).toBe(false));
-    }
-    const last = required(reads.at(-1)).searchParams;
-    expect(last.getAll("entryTypes")).toEqual(["guide"]);
-    expect(last.getAll("sourceTypes")).toEqual(["human"]);
-    expect(last.get("search")).toBe(searching ? "body" : null);
-    expect(last.get("cursor")).toBeNull();
-  }
-);
-
-it("stale body windows ignore focus/reconnect, remount awaits intent, and Continue/Retry/Restart work", async () => {
-  const reads: URL[] = [];
-  let fail = true;
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (url: string) => {
-      const parsed = new URL(url, "https://node.test");
-      reads.push(parsed);
-      if (parsed.searchParams.get("cursor") && fail) {
-        fail = false;
-        return Response.json({}, { status: 503 });
-      }
-      return Response.json({
-        items: [],
-        nextCursor: "after-20",
-        revision: "rev-a",
-        scannedRows: 20
-      });
-    })
-  );
-  const client = new QueryClient({
-    defaultOptions: { queries: { retry: false } }
-  });
-  const ui = () => (
-    <QueryClientProvider client={client}>
-      <BoundedBrowse initialData={page} />
-    </QueryClientProvider>
-  );
-  let mounted = render(ui());
-  const search = () => submitSearch("body");
-  search();
-  await screen.findByText(/20 candidates searched/);
-  const key = browseKey({ search: "body" });
-  client.setQueryData(key, client.getQueryData(key), {
-    updatedAt: Date.now() - 60_000
-  });
-  async function lifecycle() {
-    await act(async () => {
-      focusManager.setFocused(false);
-      onlineManager.setOnline(false);
-      focusManager.setFocused(true);
-      onlineManager.setOnline(true);
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    });
-  }
-  try {
-    await lifecycle();
-    expect(reads).toHaveLength(1);
-    mounted.unmount();
-    mounted = render(ui());
-    await act(async () => {});
-    expect(reads).toHaveLength(1);
-    // Remount resets the local text. Re-entering it is a new explicit search.
-    search();
-    await screen.findByText(/20 candidates searched/);
-    await lifecycle();
-    expect(reads).toHaveLength(2);
-    fireEvent.click(screen.getByRole("button", { name: "Continue search" }));
-    await screen.findByRole("alert");
-    await lifecycle();
-    expect(reads).toHaveLength(3);
-    fireEvent.click(screen.getByRole("button", { name: "Retry window" }));
-    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
-    expect(reads.map((url) => url.searchParams.get("cursor"))).toEqual([
-      null,
-      null,
-      "after-20",
-      "after-20"
-    ]);
-    fireEvent.click(screen.getByRole("button", { name: "Restart" }));
-    await waitFor(() => expect(reads).toHaveLength(5));
-    expect(reads.at(-1)?.searchParams.get("cursor")).toBeNull();
-    expect(
-      reads.every((url) => url.searchParams.get("search") === "body")
-    ).toBe(true);
-  } finally {
-    mounted.unmount();
-    client.clear();
-    focusManager.setFocused(undefined);
-    onlineManager.setOnline(true);
-  }
-});
-
 it("legacy columns retain disabled empty headers at the real grid boundary", () => {
   function LegacyEmpty() {
     const table = useReactTable({
@@ -931,64 +490,6 @@ it("legacy columns retain disabled empty headers at the real grid boundary", () 
         .getByRole("button", { name: label, exact: true })
         .hasAttribute("disabled")
     ).toBe(true);
-});
-
-it("offers restart after revision transitions and known mutations without automatically rescanning body search", async () => {
-  let revision = "rev-a";
-  const reads: URL[] = [];
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (url: string) => {
-      reads.push(new URL(url, "https://node.test"));
-      return Response.json({
-        items: [],
-        nextCursor: "next-window",
-        scannedRows: 20,
-        revision
-      });
-    })
-  );
-  const client = new QueryClient({
-    defaultOptions: { queries: { retry: false } }
-  });
-  render(
-    <QueryClientProvider client={client}>
-      <BoundedBrowse initialData={page} />
-    </QueryClientProvider>
-  );
-  expect(screen.getByText(/Observed revision: rev-a/)).toBeTruthy();
-  submitSearch("body");
-  await screen.findByText(/20 candidates searched/);
-  revision = "rev-b";
-  fireEvent.click(screen.getByRole("button", { name: "Continue search" }));
-  await screen.findByText(
-    "Knowledge changed. Restart to begin a new live traversal."
-  );
-  expect(reads).toHaveLength(2);
-  await act(async () => {
-    await client.invalidateQueries({ queryKey: ["knowledge"] });
-  });
-  expect(reads).toHaveLength(2);
-  fireEvent.click(screen.getByRole("button", { name: "Restart", exact: true }));
-  await waitFor(() => expect(reads).toHaveLength(3));
-  expect(reads[2]?.searchParams.get("cursor")).toBeNull();
-  await waitFor(() =>
-    expect(
-      screen.queryByText(
-        "Knowledge changed. Restart to begin a new live traversal."
-      )
-    ).toBeNull()
-  );
-  await act(async () => {
-    await client.invalidateQueries({ queryKey: ["knowledge"] });
-  });
-  expect(
-    screen.getByText(
-      "Knowledge changed. Restart to begin a new live traversal."
-    )
-  ).toBeTruthy();
-  expect(reads).toHaveLength(3);
-  client.clear();
 });
 
 it("returns retryable 503 and forwards request abort to bounded reads", async () => {
