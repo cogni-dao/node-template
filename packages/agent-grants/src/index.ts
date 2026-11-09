@@ -29,19 +29,23 @@ export {
   type CallerInput,
   DEFERRED_WRITE_ROUTES,
   NO_ROUTE_TWIN,
+  OPEN_BY_DESIGN_ROUTES,
   ROUTE_ONLY_CAPABILITIES,
   SAME_DOOR_ROUTES,
   type SameDoorRoute,
 } from "./same-door";
-export {
-  buildNodeAiView,
-  NODE_AI_COPY,
-  type NodeAiCopy,
-} from "./node-ai";
+export { agentNameKey, hasHiddenCharacters } from "./names";
+export { buildNodeAiView } from "./node-ai";
 export { createPostgresAgentGrantsStore, type SqlTag } from "./postgres";
 export {
   AgentRolesError,
+  denyRequest,
   grantRole,
+  listOwnAccess,
+  MAX_PENDING_PER_AGENT,
+  MAX_PENDING_TOTAL,
+  type PrincipalRef,
+  requestAccess,
   type RolesErrorCode,
   resolveInternalPrincipal,
   revokeRole,
@@ -54,7 +58,10 @@ export type {
   AuthzEvent,
   DenialCode,
   NodeAiAccessView,
+  AccessSection,
   NodeAiPermissionView,
+  RoleRow,
+  RoleState,
   RunIdentity,
   ScopeKind,
   SubjectRequirement,

@@ -41,13 +41,17 @@ export type AgentAccessState =
 
 export interface UseAgentAccess {
   readonly state: AgentAccessState;
-  /** `principal|scope` of the click in flight, else null. While set, every button is disabled. */
+  /** `principalUserId|scope` of the click in flight, else null. While set, every button is disabled. */
   readonly busy: string | null;
   /** A one-line message after a failed click; cleared by the next click. */
   readonly error: string | null;
   readonly reload: () => Promise<void>;
-  readonly allow: (principal: string, scope: string) => Promise<void>;
-  readonly remove: (principal: string, scope: string) => Promise<void>;
+  /** Turn a row ON: approves a pending ask or grants one of this node's AI. */
+  readonly allow: (principalUserId: string, scope: string) => Promise<void>;
+  /** Turn a row OFF. */
+  readonly remove: (principalUserId: string, scope: string) => Promise<void>;
+  /** The x on a pending ask. */
+  readonly dismiss: (principalUserId: string, scope: string) => Promise<void>;
 }
 
 export const UNAVAILABLE_COPY = "Can't check access right now. Try again.";
@@ -111,7 +115,10 @@ export function useAgentAccess(endpoints: AgentAccessEndpoints): UseAgentAccess 
       if (!alive.current || mine !== seq.current) return;
       if (isAdminView(body)) {
         confirmedNotAdmin.current = false;
-        return commit({ status: "ready", view: body });
+        return commit({
+          status: "ready",
+          view: { ...body, more: typeof (body as { more?: unknown }).more === "number" ? body.more : 0 },
+        });
       }
       if (typeof body === "object" && body !== null && (body as { canManage?: unknown }).canManage === false) {
         confirmedNotAdmin.current = true;
@@ -139,8 +146,8 @@ export function useAgentAccess(endpoints: AgentAccessEndpoints): UseAgentAccess 
   }, [reload]);
 
   const send = useCallback(
-    async (method: "POST" | "DELETE", principal: string, scope: string) => {
-      setBusy(`${principal}|${scope}`);
+    async (method: "POST" | "DELETE", principalUserId: string, scope: string, deny = false) => {
+      setBusy(`${principalUserId}|${scope}`);
       setError(null);
       try {
         const res = await fetch(endpoints.roles, {
@@ -148,7 +155,7 @@ export function useAgentAccess(endpoints: AgentAccessEndpoints): UseAgentAccess 
           cache: "no-store",
           credentials: "same-origin",
           headers: { "content-type": "application/json", accept: "application/json" },
-          body: JSON.stringify({ principal, scope }),
+          body: JSON.stringify({ principalUserId, scope, ...(deny ? { deny: true } : {}) }),
         });
         if (!res.ok) setError(res.status === 503 ? UNAVAILABLE_COPY : SAVE_FAILED_COPY);
       } catch {
@@ -166,7 +173,8 @@ export function useAgentAccess(endpoints: AgentAccessEndpoints): UseAgentAccess 
     busy,
     error,
     reload,
-    allow: (principal, scope) => send("POST", principal, scope),
-    remove: (principal, scope) => send("DELETE", principal, scope),
+    allow: (principalUserId, scope) => send("POST", principalUserId, scope),
+    remove: (principalUserId, scope) => send("DELETE", principalUserId, scope),
+    dismiss: (principalUserId, scope) => send("DELETE", principalUserId, scope, true),
   };
 }

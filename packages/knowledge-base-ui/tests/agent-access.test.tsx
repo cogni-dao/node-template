@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 import "@testing-library/jest-dom/vitest";
-import type { NodeAiAccessView } from "@cogni/agent-grants";
+import type { NodeAiAccessView, NodeAiPermissionView } from "@cogni/agent-grants";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,12 +11,21 @@ import { AgentAccessSection } from "../src/index.js";
 const ENDPOINTS = { roles: "/api/v1/agent-access/roles" };
 
 let allowed = false;
+let asked = true;
+const row = (o: Partial<NodeAiPermissionView> & Pick<NodeAiPermissionView, "section" | "principalUserId" | "who" | "scope" | "label" | "description">): NodeAiPermissionView => ({
+  outside: false, hint: null, on: false, until: null, ...o,
+});
+let extra: NodeAiPermissionView[] = [];
+let more = 0;
 const view = (): NodeAiAccessView => ({
   canManage: true,
+  more,
   permissions: [
-    { principal: "node-ai", ai: "General assistant", scope: "knowledge:write", permission: "Save notes to this node's knowledge base", allowed },
-    { principal: "node-ai", ai: "General assistant", scope: "schedule:manage", permission: "Create and change schedules", allowed: false },
-    { principal: "prioritizer", ai: "Priority scorer", scope: "work_item:transition", permission: "Update work items and their priority scores", allowed: false },
+    ...(asked ? [row({ section: "pending", principalUserId: "ext-1", who: "Helper bot", outside: true, hint: "GitHub linked", scope: "work_item:transition", label: "Update work items", description: "Move work items along and change their scores." })] : []),
+    row({ section: "node", principalUserId: "u-node-ai", who: "node-ai", scope: "knowledge:write", label: "Save notes", description: "Save notes straight into the knowledge base.", on: allowed }),
+    row({ section: "node", principalUserId: "u-node-ai", who: "node-ai", scope: "schedule:manage", label: "Change schedules", description: "Make, change and stop schedules." }),
+    ...extra,
+    row({ section: "outside", principalUserId: "ext-2", who: "Review agent", outside: true, scope: "edo:write", label: "Log decisions", description: "Write down choices and how they turned out.", on: true }),
   ],
 });
 
@@ -32,7 +41,10 @@ const flush = () =>
 
 const fetchMock = vi.fn();
 beforeEach(() => {
+  extra = [];
+  more = 0;
   allowed = false;
+  asked = true;
   fetchMock.mockReset();
   vi.stubGlobal("fetch", fetchMock);
 });
@@ -99,42 +111,49 @@ describe("AgentAccessSection: a non-admin sees nothing", () => {
   });
 });
 
-const SAVE = /^General assistant: Save notes to this node's knowledge base$/;
+const SAVE = /^node-ai: Save notes$/;
+const ASK = /^Helper bot: Update work items$/;
 
 describe("AgentAccessSection: an admin", () => {
   it("shows the unavailable state only on a confirmed 503, and retries from the link", async () => {
     fetchMock.mockImplementationOnce(() => json(503, { error: "authz_unavailable" }));
     render(<AgentAccessSection endpoints={ENDPOINTS} />);
     expect(await screen.findByRole("alert")).toHaveTextContent("Can't check access right now. Try again.");
-    expect(screen.getByText("This node's AI")).toBeInTheDocument();
+    expect(screen.getByText("AI access")).toBeInTheDocument();
     fetchMock.mockImplementationOnce(() => json(200, view()));
     await userEvent.click(screen.getByRole("button", { name: "Try again" }));
-    expect(await screen.findAllByRole("row")).toHaveLength(4);
+    expect(await screen.findByRole("table")).toBeInTheDocument();
   });
 
-  it("shows an empty line when there is nothing to manage", async () => {
+  it("shows one line when there is nothing to manage", async () => {
     fetchMock.mockImplementation(() => json(200, { canManage: true, permissions: [] }));
     render(<AgentAccessSection endpoints={ENDPOINTS} />);
-    expect(await screen.findByText(/No permissions to manage/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Nothing to manage/i)).toBeInTheDocument();
   });
 
-  it("is one compact table: a row per AI and permission, columns AI, Permission and a switch", async () => {
+  it("is one table, columns Who · Can do · Until · On, one row per grant row in three blocks", async () => {
     fetchMock.mockImplementation(() => json(200, view()));
     render(<AgentAccessSection endpoints={ENDPOINTS} />);
     await screen.findByRole("table");
-    expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["AI", "Permission", "Allowed"]);
-    const rows = screen.getAllByRole("row").slice(1);
-    expect(rows).toHaveLength(3);
-    expect(within(rows[0]!).getByText("General assistant")).toBeInTheDocument();
-    expect(within(rows[2]!).getByText("Priority scorer")).toBeInTheDocument();
-    expect(screen.getAllByRole("switch")).toHaveLength(3);
-    // No cards, no risk chips, no full-width buttons, no "job".
+    expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Who", "Can do", "Until", "On"]);
+    expect(screen.getAllByRole("rowgroup").length).toBeGreaterThanOrEqual(3);
+    expect(screen.getAllByRole("table")).toHaveLength(1);
+    expect(screen.getByText("Asks waiting")).toBeInTheDocument();
+    expect(screen.getByText("This node's AI")).toBeInTheDocument();
+    expect(screen.getByText("Outside agents")).toBeInTheDocument();
+    expect(screen.getAllByRole("switch")).toHaveLength(4); // 1 ask + 2 node AI + 1 outside
+    // Name and description come from the server, shown as sent. "Until" says there is no end.
+    expect(screen.getByText("Save notes straight into the knowledge base.")).toBeInTheDocument();
+    expect(screen.getAllByText("No end").length).toBe(3);
+    // Outside agents carry the marker and the hint.
+    expect(screen.getAllByText("outside")).toHaveLength(2);
+    expect(screen.getByText("GitHub linked")).toBeInTheDocument();
     const text = document.body.textContent ?? "";
-    expect(text).not.toMatch(/\bjobs?\b|risk/i);
+    expect(text).not.toMatch(/\bjobs?\b|risk|Confirm|Allow\?/i);
     for (const b of screen.queryAllByRole("button")) expect(b.className).not.toMatch(/w-full/);
   });
 
-  it("allows with one inline question and removes with none, reloading after each click", async () => {
+  it("the switch is the whole decision: ON sends at once, OFF sends at once, no question either way", async () => {
     const calls: Array<{ method: string; body?: unknown; headers?: Record<string, string> }> = [];
     fetchMock.mockImplementation((_url: string, init?: RequestInit) => {
       const method = init?.method ?? "GET";
@@ -148,26 +167,78 @@ describe("AgentAccessSection: an admin", () => {
     const toggle = await screen.findByRole("switch", { name: SAVE });
     expect(toggle).toHaveAttribute("aria-checked", "false");
     await userEvent.click(toggle);
-    expect(screen.getByText("Allow?")).toBeInTheDocument();
-    expect(calls.filter((c) => c.method === "POST")).toHaveLength(0); // asked once, nothing sent yet
-    await userEvent.click(screen.getByRole("button", { name: /^Yes, allow General assistant: Save notes/ }));
-    const on = await screen.findByRole("switch", { name: SAVE });
-    await waitFor(() => expect(on).toHaveAttribute("aria-checked", "true"));
-    expect(calls.find((c) => c.method === "POST")?.body).toEqual({ principal: "node-ai", scope: "knowledge:write" });
+    expect(screen.queryByText(/Allow\?|Yes|Confirm/)).toBeNull();
+    await waitFor(() => expect(screen.getByRole("switch", { name: SAVE })).toHaveAttribute("aria-checked", "true"));
+    expect(calls.find((c) => c.method === "POST")?.body).toEqual({ principalUserId: "u-node-ai", scope: "knowledge:write" });
 
-    await userEvent.click(on); // no question
+    await userEvent.click(screen.getByRole("switch", { name: SAVE }));
     await waitFor(() => expect(screen.getByRole("switch", { name: SAVE })).toHaveAttribute("aria-checked", "false"));
-    expect(calls.find((c) => c.method === "DELETE")?.body).toEqual({ principal: "node-ai", scope: "knowledge:write" });
+    expect(calls.find((c) => c.method === "DELETE")?.body).toEqual({ principalUserId: "u-node-ai", scope: "knowledge:write" });
     expect(calls.every((c) => !c.headers || !("authorization" in Object.fromEntries(Object.entries(c.headers).map(([k, v]) => [k.toLowerCase(), v]))))).toBe(true);
   });
 
-  it("No on the question sends nothing and leaves the switch off", async () => {
+  it("an outside agent named like this node's AI (an identifier) is never mistaken for it: badge first, name quoted, proven binding beside it, while the real one is plain mono", async () => {
+    extra = [
+      row({ section: "pending", principalUserId: "ext-9", who: "node-ai", outside: true, hint: "GitHub id 424242", scope: "edo:write", label: "Log decisions", description: "Write down choices and how they turned out." }),
+      row({ section: "pending", principalUserId: "ext-10", who: "prioritizer", outside: true, hint: null, scope: "metric:compute", label: "Refresh numbers", description: "Update the numbers shown on the dashboards." }),
+    ];
     fetchMock.mockImplementation(() => json(200, view()));
     render(<AgentAccessSection endpoints={ENDPOINTS} />);
-    await userEvent.click(await screen.findByRole("switch", { name: SAVE }));
-    await userEvent.click(screen.getByRole("button", { name: /^No, do not allow/ }));
-    expect(screen.getByRole("switch", { name: SAVE })).toHaveAttribute("aria-checked", "false");
-    expect(fetchMock.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === "POST")).toHaveLength(0);
+    await screen.findByRole("table");
+    const imposter = screen.getByRole("switch", { name: /^node-ai: Log decisions$/ }).closest("tr")!;
+    const who = within(imposter).getAllByRole("cell")[0]!;
+    expect(who.textContent).toBe("outside\u201cnode-ai\u201dGitHub id 424242");
+    expect(who.querySelector("span")?.textContent).toBe("outside"); // the badge is the first thing in the cell
+    // No proof of a binding: say so, still badged and quoted.
+    const noBinding = within(screen.getByRole("switch", { name: /^prioritizer: Refresh numbers$/ }).closest("tr")!).getAllByRole("cell")[0]!;
+    expect(noBinding.textContent).toBe("outside\u201cprioritizer\u201dNo linked account");
+    // This node's own AI of the same name is plain: no badge, no quotes.
+    const mineRow = screen.getAllByRole("switch", { name: /^node-ai: Save notes$/ })[0]!.closest("tr")!;
+    const mineCell = within(mineRow).getAllByRole("cell")[0]!;
+    expect(mineCell.textContent).toBe("node-ai");
+    expect(mineCell.querySelector("span")).toHaveClass("font-mono"); // an identifier, in mono
+  });
+
+  it("says how many outside rows are not shown when the list is cut", async () => {
+    more = 7;
+    fetchMock.mockImplementation(() => json(200, view()));
+    render(<AgentAccessSection endpoints={ENDPOINTS} />);
+    expect(await screen.findByText(/7 more outside rows are not shown/)).toBeInTheDocument();
+  });
+
+  it("flipping a pending ask ON approves it; the x dismisses it", async () => {
+    const calls: Array<{ method: string; body?: unknown }> = [];
+    fetchMock.mockImplementation((_url: string, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      calls.push({ method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+      if (method !== "GET") asked = false; // the ask leaves the asks block either way
+      return json(200, method === "GET" ? view() : { changed: true });
+    });
+    render(<AgentAccessSection endpoints={ENDPOINTS} />);
+    const pendingSwitch = await screen.findByRole("switch", { name: ASK });
+    expect(pendingSwitch).toHaveAttribute("aria-checked", "false");
+    await userEvent.click(pendingSwitch);
+    await waitFor(() => expect(screen.queryByRole("switch", { name: ASK })).toBeNull());
+    expect(calls.find((c) => c.method === "POST")?.body).toEqual({ principalUserId: "ext-1", scope: "work_item:transition" });
+
+    asked = true;
+    window.dispatchEvent(new Event("focus"));
+    await userEvent.click(await screen.findByRole("button", { name: /^Dismiss the ask: Helper bot: Update work items$/ }));
+    await waitFor(() => expect(calls.some((c) => c.method === "DELETE")).toBe(true));
+    expect(calls.find((c) => c.method === "DELETE")?.body).toEqual({ principalUserId: "ext-1", scope: "work_item:transition", deny: true });
+  });
+
+  it("an outside agent's row turns OFF with the same switch", async () => {
+    const calls: Array<{ method: string; body?: unknown }> = [];
+    fetchMock.mockImplementation((_url: string, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      calls.push({ method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+      return json(200, method === "GET" ? view() : { changed: true });
+    });
+    render(<AgentAccessSection endpoints={ENDPOINTS} />);
+    await userEvent.click(await screen.findByRole("switch", { name: /^Review agent: Log decisions$/ }));
+    await waitFor(() => expect(calls.some((c) => c.method === "DELETE")).toBe(true));
+    expect(calls.find((c) => c.method === "DELETE")?.body).toEqual({ principalUserId: "ext-2", scope: "edo:write" });
   });
 
   it("lets an admin whose first load failed transiently see the table on the next focus", async () => {
@@ -178,7 +249,7 @@ describe("AgentAccessSection: an admin", () => {
     expect(container).toBeEmptyDOMElement(); // a transient failure shows nothing
     window.dispatchEvent(new Event("focus"));
     await flush();
-    expect(screen.getAllByRole("switch")).toHaveLength(3); // and recovers
+    expect(screen.getAllByRole("switch")).toHaveLength(4); // and recovers
   });
 
   it("ignores a stale load that finishes after a click's reload", async () => {
@@ -193,11 +264,10 @@ describe("AgentAccessSection: an admin", () => {
     });
     render(<AgentAccessSection endpoints={ENDPOINTS} />);
     await screen.findByRole("switch", { name: SAVE });
-    window.dispatchEvent(new Event("focus")); // GET #2: started before the click, answers late with allowed=false
+    window.dispatchEvent(new Event("focus")); // GET #2: started before the click, answers late with the old state
     await userEvent.click(screen.getByRole("switch", { name: SAVE }));
-    await userEvent.click(screen.getByRole("button", { name: /^Yes, allow/ }));
     await waitFor(() => expect(screen.getByRole("switch", { name: SAVE })).toHaveAttribute("aria-checked", "true"));
-    releaseStale(fake(200, { canManage: true, permissions: view().permissions.map((p) => ({ ...p, allowed: false })) }));
+    releaseStale(fake(200, { canManage: true, permissions: view().permissions.map((p) => ({ ...p, on: false })) }));
     await flush();
     expect(screen.getByRole("switch", { name: SAVE })).toHaveAttribute("aria-checked", "true"); // not overwritten
   });
@@ -209,37 +279,34 @@ describe("AgentAccessSection: an admin", () => {
       return mode === "ok" ? json(200, view()) : mode === "500" ? json(500, {}) : json(403, {});
     });
     const { container } = render(<AgentAccessSection endpoints={ENDPOINTS} />);
-    await userEvent.click(await screen.findByRole("switch", { name: SAVE }));
+    const first = await screen.findByRole("switch", { name: SAVE });
     mode = "500";
-    await userEvent.click(screen.getByRole("button", { name: /^Yes, allow/ }));
+    await userEvent.click(first);
     await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(3));
-    expect(screen.getAllByRole("switch")).toHaveLength(3); // still there
+    expect(screen.getAllByRole("switch")).toHaveLength(4); // still there
     mode = "403";
     window.dispatchEvent(new Event("focus"));
     await waitFor(() => expect(container).toBeEmptyDOMElement());
   });
 
   it("shows a Skeleton in the saving row and ignores clicks on the other switches, never dimming a switch", async () => {
-    let release: (r: Response) => void = () => {};
     fetchMock.mockImplementation((_u: string, init?: RequestInit) =>
-      (init?.method ?? "GET") === "GET" ? json(200, view()) : new Promise<Response>((resolve) => { release = resolve; }));
+      (init?.method ?? "GET") === "GET" ? json(200, view()) : new Promise<Response>(() => {}));
     const { container } = render(<AgentAccessSection endpoints={ENDPOINTS} />);
     await userEvent.click(await screen.findByRole("switch", { name: SAVE }));
-    await userEvent.click(screen.getByRole("button", { name: /^Yes, allow/ }));
     await waitFor(() => expect(container.querySelector(".animate-pulse")).not.toBeNull());
     expect(screen.queryByRole("switch", { name: SAVE })).toBeNull(); // the saving row shows the Skeleton instead
     expect(container.querySelector("tr[aria-busy=true]")).not.toBeNull(); // and says so to a screen reader
     expect(screen.getByRole("status")).toHaveTextContent("Saving");
     const others = screen.getAllByRole("switch");
-    expect(others).toHaveLength(2);
+    expect(others).toHaveLength(3);
     for (const sw of others) {
       expect(sw).not.toBeDisabled();
       expect(sw.className).not.toMatch(/opacity/);
     }
+    const before = fetchMock.mock.calls.length;
     await userEvent.click(others[0]!);
-    expect(screen.queryByText("Allow?")).toBeNull(); // locked: the click does nothing
-    release(fake(200, {}));
-    await flush();
+    expect(fetchMock.mock.calls.length).toBe(before); // locked: the click does nothing
   });
 
   it("uses no-store fetches with the browser session only", async () => {
@@ -256,7 +323,6 @@ describe("AgentAccessSection: an admin", () => {
       (init?.method ?? "GET") === "GET" ? json(200, view()) : json(500, { error: "x" }));
     render(<AgentAccessSection endpoints={ENDPOINTS} />);
     await userEvent.click(await screen.findByRole("switch", { name: SAVE }));
-    await userEvent.click(screen.getByRole("button", { name: /^Yes, allow/ }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't save that change. Try again.");
     expect(screen.getByRole("table")).toBeInTheDocument();
   });
@@ -268,7 +334,7 @@ describe("AgentAccessSection: an admin", () => {
     await screen.findByRole("table");
     const labels = [...container.querySelectorAll("[aria-label]")].map((e) => e.getAttribute("aria-label")).join(" ");
     const text = `${container.textContent ?? ""} ${labels}`;
-    for (const bad of ["knowledge:write", "node-ai", "work_item", "/api/", "token", "curl", "Bearer"]) expect(text).not.toContain(bad);
+    for (const bad of ["knowledge:write", "work_item", "u-node-ai", "ext-1", "/api/", "token", "curl", "Bearer"]) expect(text).not.toContain(bad);
     expect(text).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/i);
   });
 });

@@ -156,28 +156,30 @@ describe("agent roles route (real Postgres, real repo-spec admin)", () => {
     session.user = sessionUser(memberUser, "session");
     const res = await getView();
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ canManage: false, permissions: [] });
+    expect(await res.json()).toEqual({ canManage: false, permissions: [], more: 0 });
     expect((await call(POST, body)).status).toBe(403);
     session.user = null;
     expect((await getView()).status).toBe(401);
   });
 
-  it("GET lists one row per AI and permission with the live Allow state, for an admin", async () => {
+  it("GET lists one row per grant row with name and description from the declaration, and the live state, for an admin", async () => {
     session.user = sessionUser(adminUser, "session");
-    type Row = { principal: string; ai: string; scope: string; permission: string; allowed: boolean };
+    type Row = { section: string; principalUserId: string; who: string; outside: boolean; scope: string; label: string; description: string; on: boolean; until: string | null };
     const before = (await (await getView()).json()) as { canManage: boolean; permissions: Row[] };
     expect(before.canManage).toBe(true);
-    expect([...new Set(before.permissions.map((r) => r.principal))].sort()).toEqual(["node-ai", "prioritizer"]);
-    const scorer = before.permissions.filter((r) => r.principal === "prioritizer");
-    expect(scorer).toEqual([expect.objectContaining({ scope: "work_item:transition", allowed: false })]);
-    expect(scorer[0]?.permission).toMatch(/work items/i);
-    expect(JSON.stringify(before)).not.toMatch(/\bjobs?\b|risk|blurb/i);
+    const mine = before.permissions.filter((r) => r.section === "node");
+    expect([...new Set(mine.map((r) => r.who))].sort()).toEqual(["node-ai", "prioritizer"]);
+    const scorer = mine.filter((r) => r.who === "prioritizer");
+    expect(scorer).toEqual([expect.objectContaining({ scope: "work_item:transition", on: false, until: null, principalUserId: PRIORITIZER_PRINCIPAL_USER_ID })]);
+    expect(scorer[0]?.label).toMatch(/work items/i);
+    expect(scorer[0]?.description.length).toBeGreaterThan(15);
+    expect(JSON.stringify(mine)).not.toMatch(/\bjobs?\b|risk|blurb/i);
     expect((await call(POST, body)).status).toBe(200);
     const after = (await (await getView()).json()) as typeof before;
-    expect(after.permissions.find((r) => r.principal === "prioritizer")?.allowed).toBe(true);
+    expect(after.permissions.find((r) => r.principalUserId === PRIORITIZER_PRINCIPAL_USER_ID)?.on).toBe(true);
     expect((await call(DELETE, body)).status).toBe(200);
     const removed = (await (await getView()).json()) as typeof before;
-    expect(removed.permissions.find((r) => r.principal === "prioritizer")?.allowed).toBe(false);
+    expect(removed.permissions.find((r) => r.principalUserId === PRIORITIZER_PRINCIPAL_USER_ID)?.on).toBe(false);
     expect((await getView()).headers.get("cache-control")).toBe("no-store");
   });
 

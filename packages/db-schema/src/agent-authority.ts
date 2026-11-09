@@ -65,7 +65,11 @@ export const agentPrincipals = pgTable(
   ]
 ).enableRLS();
 
-/** A DAO-admin-approved node role for an agent principal. Revoked softly. */
+/**
+ * One grant row: a permission (scope) for an agent principal.
+ * Pending = `approved_by IS NULL` and not revoked (the agent asked; no admin has said yes). Live = approved and not revoked.
+ * Denied = never approved, revoked. Revoked = approved, then revoked. Only a live row opens a lock.
+ */
 export const agentRoles = pgTable(
   "agent_roles",
   {
@@ -74,9 +78,11 @@ export const agentRoles = pgTable(
       .notNull()
       .references(() => users.id),
     scope: text("scope").notNull(),
-    approvedBy: text("approved_by")
-      .notNull()
-      .references(() => users.id),
+    approvedBy: text("approved_by").references(() => users.id),
+    /** Set when an admin approves. Null while pending or denied. */
+    grantedAt: timestamp("granted_at", { withTimezone: true }),
+    /** The agent that asked, for a row that began as a request. Null for a row an admin wrote directly. */
+    requestedBy: text("requested_by").references(() => users.id),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

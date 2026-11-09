@@ -96,6 +96,7 @@ export const edoRecordOutcomeContract: ToolContract<
     kind: "node",
     subject: "member",
     label: "Log decisions and what happened",
+    description: "Write down guesses, choices and how they turned out.",
   },
   inputSchema: EdoRecordOutcomeInputSchema,
   outputSchema: EdoRecordOutcomeOutputSchema,

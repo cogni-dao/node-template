@@ -66,6 +66,7 @@ export const vcsMergePrContract: ToolContract<
     kind: "node",
     subject: "admin",
     label: "Merge pull requests",
+    description: "Join a finished code change into the main code.",
   },
   inputSchema: VcsMergePrInputSchema,
   outputSchema: VcsMergePrOutputSchema,

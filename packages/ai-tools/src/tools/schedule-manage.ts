@@ -102,6 +102,7 @@ export const scheduleManageContract: ToolContract<
     kind: "own",
     subject: "member",
     label: "Create and change schedules for the person it helps",
+    description: "Make, change and stop schedules for the person it helps.",
   },
   inputSchema: ScheduleManageInputSchema,
   outputSchema: ScheduleManageOutputSchema,

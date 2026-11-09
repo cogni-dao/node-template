@@ -60,7 +60,8 @@ export const ROUTE_ONLY_CAPABILITIES: Readonly<
       scope: "knowledge:contribute",
       kind: "node",
       subject: "member",
-      label: "Propose changes to this node's knowledge base",
+      label: "Propose changes to the knowledge base",
+      description: "Suggest new or changed notes. An admin still decides what is kept.",
     },
     routes: ["knowledge.contributions.create"],
   },
@@ -96,6 +97,16 @@ export const DEFERRED_WRITE_ROUTES: Readonly<Record<string, string>> = {
   "knowledge.domains.create": "domain registry writes; C2 design question (task.5465)",
   "knowledge.domains.update": "domain registry writes; C2 design question (task.5465)",
   "knowledge.domains.delete": "domain registry writes; C2 design question (task.5465)",
+};
+
+/**
+ * Write routes that carry no door by design.
+ * The ask door must be callable by ANY signed-in agent with no prior grant, or nobody could ever ask for one.
+ * NO_SELF_APPROVAL protects activation: the ask writes a pending row with no approver; only an admin session turns it on.
+ */
+export const OPEN_BY_DESIGN_ROUTES: Readonly<Record<string, string>> = {
+  "agent.access.requests.create": "the ask door is open by design; NO_SELF_APPROVAL protects activation (only an admin session approves)",
+  "agent.register": "the anonymous onboarding door that mints an agent identity and key (bug.0297, an invitation token is tracked there); an identity alone opens no route: only an admin's yes does",
 };
 
 export interface CallerInput {

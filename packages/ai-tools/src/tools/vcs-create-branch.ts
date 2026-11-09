@@ -72,6 +72,7 @@ export const vcsCreateBranchContract: ToolContract<
     kind: "node",
     subject: "admin",
     label: "Create code branches",
+    description: "Make a new branch of code.",
   },
   inputSchema: VcsCreateBranchInputSchema,
   outputSchema: VcsCreateBranchOutputSchema,

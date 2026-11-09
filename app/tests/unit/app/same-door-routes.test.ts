@@ -10,7 +10,7 @@
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { DEFERRED_WRITE_ROUTES, NO_ROUTE_TWIN, ROUTE_ONLY_CAPABILITIES, SAME_DOOR_ROUTES } from "@cogni/agent-grants";
+import { DEFERRED_WRITE_ROUTES, NO_ROUTE_TWIN, OPEN_BY_DESIGN_ROUTES, ROUTE_ONLY_CAPABILITIES, SAME_DOOR_ROUTES } from "@cogni/agent-grants";
 import { CORE_TOOL_BUNDLE, VCS_TOOL_BUNDLE } from "@cogni/ai-tools";
 import { describe, expect, it } from "vitest";
 
@@ -57,7 +57,7 @@ describe("same-door routes", () => {
   });
 
   it("S5: every write handler under work, schedules, edo, knowledge and metrics declares sameDoor or is on the deferred list", () => {
-    const dirs = ["work", "schedules", "edo", "knowledge", "metrics"].map((d) => join(API, "v1", d));
+    const dirs = ["work", "schedules", "edo", "knowledge", "metrics", "agent/access-requests", "agent/register"].map((d) => join(API, "v1", d));
     const unaccounted: string[] = [];
     for (const dir of dirs)
       for (const file of routeFiles(dir)) {
@@ -65,11 +65,22 @@ describe("same-door routes", () => {
         for (let i = 1; i < parts.length; i += 2) {
           const chunk = (parts[i + 1] ?? "").slice(0, 600);
           const routeId = /routeId:\s*"([^"]+)"/.exec(chunk)?.[1] ?? `${file}#${parts[i]}`;
-          if (/sameDoor:/.test(chunk) || routeId in DEFERRED_WRITE_ROUTES) continue;
+          if (/sameDoor:/.test(chunk) || routeId in DEFERRED_WRITE_ROUTES || routeId in OPEN_BY_DESIGN_ROUTES) continue;
           unaccounted.push(routeId);
         }
       }
     expect(unaccounted).toEqual([]);
+  });
+
+  it("the ask door is on the open-by-design list, says why, and is not also gated", () => {
+    const gated = new Set(Object.values(DECLARED).flatMap((e) => e.routes));
+    expect(Object.keys(OPEN_BY_DESIGN_ROUTES)).toEqual(["agent.access.requests.create", "agent.register"]);
+    for (const [routeId, reason] of Object.entries(OPEN_BY_DESIGN_ROUTES)) {
+      expect(gated.has(routeId), routeId).toBe(false);
+      expect(reason.length).toBeGreaterThan(30);
+      expect(reason).toMatch(/NO_SELF_APPROVAL|bug\.0297/);
+      expect(sources.join("\n")).toContain(`routeId: "${routeId}"`);
+    }
   });
 
   it("S5: the deferred list names a route that exists and is not also gated, and every entry names its design item", () => {
