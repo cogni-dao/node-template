@@ -37,7 +37,10 @@ import {
   type GoverningIndexRow,
   selectGoverningIndex,
 } from "../../domain/governing.js";
-import type { KnowledgeGraphNode } from "../../domain/knowledge-graph.js";
+import type {
+  KnowledgeGraphNode,
+  KnowledgeGraphSnapshot,
+} from "../../domain/knowledge-graph.js";
 import type {
   Citation,
   CitationType,
@@ -267,6 +270,27 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
       Array.from(this.rows.values()),
       Array.from(this.edges.values())
     );
+  }
+
+  async readKnowledgeGraphSnapshot(): Promise<KnowledgeGraphSnapshot> {
+    // In-memory reads are atomic: one revision by construction.
+    const [revision, domains, nodes, citations] = await Promise.all([
+      this.currentCommit(),
+      this.listDomains(),
+      this.listKnowledgeGraphNodes(),
+      this.listAllCitations(),
+    ]);
+    return {
+      revision,
+      domains,
+      nodes,
+      citations: citations.map(({ id, citingId, citedId, citationType }) => ({
+        id,
+        citingId,
+        citedId,
+        citationType,
+      })),
+    };
   }
 
   async listKnowledgeGraphNodes(): Promise<KnowledgeGraphNode[]> {

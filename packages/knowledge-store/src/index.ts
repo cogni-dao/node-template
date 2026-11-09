@@ -137,10 +137,22 @@ export {
 // Knowledge-graph view model (shared assembly, no N+1)
 export {
   buildKnowledgeGraph,
+  type KnowledgeGraphCitation,
   type KnowledgeGraphEdge,
   type KnowledgeGraphModel,
   type KnowledgeGraphNode,
+  type KnowledgeGraphSnapshot,
 } from "./domain/knowledge-graph.js";
+// Whole-graph route handler (task.0059): ETag/304, one pinned read per revision, budget log
+export {
+  KNOWLEDGE_GRAPH_CACHE_CONTROL,
+  type KnowledgeGraphReadLog,
+  type KnowledgeGraphReadOptions,
+  type KnowledgeGraphReadPort,
+  type KnowledgeGraphReadResult,
+  knowledgeGraphBudgetBytes,
+  readKnowledgeGraph,
+} from "./domain/graph-read.js";
 export {
   createConfidenceSmokeReader,
   createExternalCountReader,

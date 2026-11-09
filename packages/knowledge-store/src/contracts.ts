@@ -408,3 +408,15 @@ export const KnowledgeGraphResponseSchema = z.object({
 export type KnowledgeGraphResponse = z.infer<
   typeof KnowledgeGraphResponseSchema
 >;
+
+/**
+ * Declared graph payload budget (task.0059): raw JSON bytes per projected node
+ * and per edge, and the whole-response size above which a node should serve a
+ * level-of-detail graph instead of one payload. The read handler logs
+ * `budgetExceeded` against these on every 200.
+ */
+export const KNOWLEDGE_GRAPH_NODE_BYTES_BUDGET = 200;
+/** Fixed allowance for the response envelope: revision and the domain list. */
+export const KNOWLEDGE_GRAPH_ENVELOPE_BYTES_BUDGET = 16 * 1024;
+export const KNOWLEDGE_GRAPH_EDGE_BYTES_BUDGET = 110;
+export const KNOWLEDGE_GRAPH_RESPONSE_BYTES_BUDGET = 8 * 1024 * 1024;

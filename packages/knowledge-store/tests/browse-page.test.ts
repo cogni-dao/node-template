@@ -689,7 +689,7 @@ it("reports the exact filtered total on every window, unchanged by the cursor or
   expect((await store.browseKnowledge({ search: "needle" })).total).toBe(45);
 });
 
-it("counts the native total with the filters only, never the seek predicate", async () => {
+it("counts the native total once per revision and filters, never with the seek predicate", async () => {
   const { DoltgresKnowledgeStoreAdapter } = await import(
     "../src/adapters/doltgres/index.js"
   );
@@ -728,8 +728,8 @@ it("counts the native total with the filters only, never the seek predicate", as
     cursor: required(first.nextCursor),
   });
   expect([first.total, next.total]).toEqual([137, 137]);
+  // Counted once per (revision, filters): the Next window does not recount.
   expect(counts).toEqual([
-    "SELECT COUNT(*) AS total FROM knowledge WHERE domain IN ('test')",
     "SELECT COUNT(*) AS total FROM knowledge WHERE domain IN ('test')",
   ]);
 });

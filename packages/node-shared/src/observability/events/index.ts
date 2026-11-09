@@ -31,6 +31,8 @@ export const EVENT_NAMES = {
 	// Row history reads (task.0052): one terminal event per read, counts only.
 	WORK_ITEMS_HISTORY_READ: "work.items.history_read",
 	KNOWLEDGE_HISTORY_READ: "knowledge.history_read",
+	// Whole-graph read (task.0059): one terminal event per read, counts and bytes only.
+	KNOWLEDGE_GRAPH_READ: "knowledge.graph_read",
 	// AI Domain - Server
 	AI_COMPLETION: "ai.completion",
 	AI_LLM_CALL: "ai.llm_call",
