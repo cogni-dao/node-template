@@ -9,25 +9,11 @@ import {
   KnowledgeBrowseQuerySchema,
   type KnowledgeSummary,
 } from "../contracts.js";
+import {
+  KnowledgeBrowseCursorError,
+  KnowledgeBrowseQueryError,
+} from "./browse-errors.js";
 import type { Knowledge } from "./schemas.js";
-
-/** The continuation cursor is malformed or belongs to another query; routes map to 400. */
-export class KnowledgeBrowseCursorError extends Error {
-  readonly code = "KNOWLEDGE_BROWSE_INVALID_CURSOR" as const;
-  constructor(message = "Invalid browse cursor") {
-    super(message);
-    this.name = "KnowledgeBrowseCursorError";
-  }
-}
-
-/** The browse query fails schema validation; routes map to 400. */
-export class KnowledgeBrowseQueryError extends Error {
-  readonly code = "KNOWLEDGE_BROWSE_INVALID_QUERY" as const;
-  constructor(message = "Invalid browse query") {
-    super(message);
-    this.name = "KnowledgeBrowseQueryError";
-  }
-}
 
 const cursorSchema = z
   .object({

@@ -32,10 +32,9 @@ function isSettled(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   if (error.name === "PostgresError") return true;
   const code = (error as { code?: unknown }).code;
-  return (
-    (typeof code === "string" && CLOSED_CODES.has(code)) ||
-    /socket.*closed|connection.*closed/i.test(error.message)
-  );
+  // postgres.js 3.4.9 tags its connection errors with `code` (Errors.connection:
+  // CONNECTION_CLOSED/DESTROYED/ENDED) and passes socket errno codes through.
+  return typeof code === "string" && CLOSED_CODES.has(code);
 }
 function release(lane: Lane) {
   lane.active--;

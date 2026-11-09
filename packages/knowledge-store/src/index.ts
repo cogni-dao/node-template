@@ -196,7 +196,7 @@ export { KnowledgeWriteConflictError } from "./domain/write-replay.js";
 export {
   KnowledgeBrowseCursorError,
   KnowledgeBrowseQueryError,
-} from "./domain/browse.js";
+} from "./domain/browse-errors.js";
 export type { KnowledgeHistoryEntry } from "./domain/history.js";
 export { shapeKnowledgeHistory } from "./domain/history.js";
 export type {

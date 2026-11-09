@@ -3,7 +3,7 @@ import { FakeKnowledgeStoreAdapter } from "../src/adapters/fake/index.js";
 import {
   KnowledgeBrowseCursorError,
   KnowledgeBrowseQueryError,
-} from "../src/domain/browse.js";
+} from "../src/domain/browse-errors.js";
 
 it("continues through empty search windows to a literal body match beyond 500", async () => {
   const store = new FakeKnowledgeStoreAdapter();
