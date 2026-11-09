@@ -26,6 +26,7 @@ import { refuseNonSession } from "@/app/_lib/auth/human-plane";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import { EVENT_NAMES } from "@/shared/observability";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -50,7 +51,7 @@ export const GET = wrapRouteHandlerWithLogging(
     const authority = getContainer().agentAuthority;
     const admin = await authority.adminCheck(sessionUser.id).catch(() => "unavailable" as const);
     if (admin === "unavailable") {
-      ctx.log.warn({ routeId: "agent.access.roles.list" }, "agent.roles.unavailable");
+      ctx.log.warn({ event: EVENT_NAMES.AGENT_ROLES_UNAVAILABLE, routeId: "agent.access.roles.list" }, EVENT_NAMES.AGENT_ROLES_UNAVAILABLE);
       return json({ error: "authz_unavailable" }, 503);
     }
     if (admin !== "allow") {
@@ -59,7 +60,7 @@ export const GET = wrapRouteHandlerWithLogging(
     try {
       return json(agentRolesListOperation.output.parse({ canManage: true, permissions: await authority.listNodeAi() }));
     } catch (error) {
-      ctx.log.error({ routeId: "agent.access.roles.list", errorName: error instanceof Error ? error.name : "unknown" }, "agent.roles.list_failed");
+      ctx.log.error({ event: EVENT_NAMES.AGENT_ROLES_LIST_FAILED, routeId: "agent.access.roles.list", errorName: error instanceof Error ? error.name : "unknown" }, EVENT_NAMES.AGENT_ROLES_LIST_FAILED);
       return json({ error: "authz_unavailable" }, 503);
     }
   }
@@ -76,11 +77,11 @@ function writeRoute(routeId: string, write: Writer) {
 
       const admin = await authority.adminCheck(sessionUser.id).catch(() => "unavailable" as const);
       if (admin === "unavailable") {
-        ctx.log.warn({ routeId }, "agent.roles.unavailable");
+        ctx.log.warn({ event: EVENT_NAMES.AGENT_ROLES_UNAVAILABLE, routeId }, EVENT_NAMES.AGENT_ROLES_UNAVAILABLE);
         return json({ error: "authz_unavailable" }, 503);
       }
       if (admin !== "allow") {
-        ctx.log.warn({ routeId, userId: sessionUser.id }, "agent.roles.refused");
+        ctx.log.warn({ event: EVENT_NAMES.AGENT_ROLES_REFUSED, routeId, userId: sessionUser.id }, EVENT_NAMES.AGENT_ROLES_REFUSED);
         return json({ error: "authz_denied" }, 403);
       }
 

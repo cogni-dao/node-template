@@ -33,6 +33,13 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
         LIMIT 1`;
       return rows.length > 0;
     },
+    async liveScopes(principalId, scopes) {
+      if (scopes.length === 0) return [];
+      const rows = await sql`
+        SELECT DISTINCT scope FROM agent_roles
+        WHERE principal_user_id = ${principalId} AND scope = ANY(${scopes as string[]}) AND revoked_at IS NULL`;
+      return rows.flatMap((row) => (typeof row.scope === "string" ? [row.scope] : []));
+    },
     async findInternalPrincipal(slug) {
       const rows = await sql`
         SELECT user_id FROM agent_principals

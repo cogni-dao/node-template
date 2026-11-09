@@ -78,6 +78,26 @@ export const NO_ROUTE_TWIN: Readonly<Record<string, string>> = {
   core__vcs_flight_candidate: "calls the operator VCS API, not a node route",
 };
 
+/**
+ * Write routes on this node that sit next to a gated capability but are NOT the same capability, so they carry no
+ * door yet. Each names the design item that decides it. The route enumeration test (app/tests/unit/app/same-door-routes.test.ts)
+ * fails when a write handler under the work, schedules, edo, knowledge or metrics routes is in neither this list nor
+ * `SAME_DOOR_ROUTES` / `ROUTE_ONLY_CAPABILITIES`.
+ */
+export const DEFERRED_WRITE_ROUTES: Readonly<Record<string, string>> = {
+  "work.items.create": "creating an item is not work_item:transition; open question for task.5466 (ask-for-access) / task.5465",
+  "work.items.delete": "retired (HTTP 410); no capability to gate",
+  "work.items.claim": "coordination, not work_item:transition; task.5465",
+  "work.items.release": "coordination, not work_item:transition; task.5465",
+  "work.items.heartbeat": "coordination, not work_item:transition; task.5465",
+  "knowledge.contributions.commits.append": "appends to a contribution its author already opened; contribution lifecycle scopes are the C2 design question (task.5465)",
+  "knowledge.contributions.close": "contribution lifecycle; C2 design question (task.5465)",
+  "knowledge.contributions.merge": "already admin-session gated in the service; C2 design question (task.5465)",
+  "knowledge.domains.create": "domain registry writes; C2 design question (task.5465)",
+  "knowledge.domains.update": "domain registry writes; C2 design question (task.5465)",
+  "knowledge.domains.delete": "domain registry writes; C2 design question (task.5465)",
+};
+
 export interface CallerInput {
   readonly userId: string;
   /** How the request authenticated. `bearer` is an AI on the AI plane; `session` is a human. */

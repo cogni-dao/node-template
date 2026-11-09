@@ -84,12 +84,15 @@ export function AgentAccessSection({ endpoints, className }: AgentAccessSectionP
                 {state.view.permissions.map((row) => {
                   const key = keyOf(row);
                   return (
-                    <tr key={key}>
+                    <tr key={key} aria-busy={busy === key || undefined}>
                       <td className="py-2 pr-3 text-foreground">{row.ai}</td>
                       <td className="py-2 pr-3 text-foreground">{row.permission}</td>
                       <td className="h-10 py-2 text-right">
                         {busy === key ? (
-                          <Skeleton className="ml-auto h-5 w-9 rounded-full" />
+                          <>
+                            <Skeleton className="ml-auto h-5 w-9 rounded-full" />
+                            <span className="sr-only" role="status">Saving</span>
+                          </>
                         ) : confirming === key ? (
                           <span className="inline-flex items-center gap-2 text-xs">
                             <span className="text-muted-foreground">Allow?</span>

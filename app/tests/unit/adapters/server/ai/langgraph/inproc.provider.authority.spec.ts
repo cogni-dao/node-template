@@ -37,6 +37,7 @@ const captured = vi.hoisted(() => ({
   options: [] as Array<{
     request: { abortSignal?: AbortSignal; messages: Array<{ role: string; content: string }>; configurable: { toolIds: string[] } };
     toolContracts: Array<{ name: string }>;
+    completionFn: (params: { model: string; messages: unknown[] }) => { final: Promise<unknown> };
     createToolExecFn: (
       emit: (e: AiEvent) => void,
     ) => (
@@ -61,10 +62,12 @@ vi.mock("@cogni/langgraph-graphs", async (importOriginal) => {
         return {
           stream: (async function* () {
             await aborted;
+            // The real graph needs a moment to unwind after the abort; a looping graph may call the model in that window.
+            await new Promise((r) => setTimeout(r, 25));
             yield { type: "error" as const, error: "aborted" };
             yield { type: "done" as const };
           })(),
-          final: aborted.then(() => ({ ok: false as const, error: "aborted" })),
+          final: aborted.then(() => new Promise((r) => setTimeout(r, 25))).then(() => ({ ok: false as const, error: "aborted" })),
         };
       }
       return {
@@ -90,6 +93,7 @@ const AGENT = "bearer-agent"; // an authenticated machine caller: a subject like
 function store(roles: Array<[string, string]>): AgentGrantsStore {
   return {
     hasLiveRole: async (p, s) => roles.some(([rp, rs]) => rp === p && rs === s),
+    liveScopes: async (p, scopes) => scopes.filter((s) => roles.some(([rp, rs]) => rp === p && rs === s)),
     listLiveRoles: async () => [],
     findInternalPrincipal: async () => null,
     insertRole: async () => true,
@@ -370,14 +374,17 @@ describe("V5: principal and subject reach the tool; own scope needs a subject", 
     expect(seen[0]?.scope).toMatchObject({ principalId: NODE_AI_USER, subjectUserId: AGENT });
   });
 
-  it("a run with no caller has no subject, so schedule_manage is denied", async () => {
+  it("a run with no caller has no subject, so schedule_manage is withheld at run start (and a run with nothing left to do makes no model call)", async () => {
     const seen: Array<{ tool: string; scope: unknown }> = [];
-    const run = await start("brain", a(), undefined, seen);
-    expect(await run.exec("core__schedule_manage", SCHEDULE)).toMatchObject({
-      ok: false,
-      receipt: { code: "policy_denied" },
-    });
+    const logged: Array<Record<string, unknown>> = [];
+    const x = a();
+    const run = await start("brain", x, undefined, seen, {}, logged);
+    expect(run.options).toBeUndefined();
+    expect(forTool(x.events, "core__schedule_manage")).toEqual([
+      expect.objectContaining({ decision: "deny", reason: "not_offered:no_subject", runId: "run-brain" }),
+    ]);
     expect(seen).toEqual([]);
+    expect(logged.filter((l) => l.event === "agent_run.denied")).toEqual([expect.objectContaining({ reason: "no_permission", modelCalls: 0 })]);
   });
 });
 
@@ -482,7 +489,7 @@ describe("DENIAL_IS_TERMINAL", () => {
     expect(run.options!.request.messages.map((m) => m.role)).toEqual(["user"]);
   });
 
-  async function terminalRun(roles: Array<[string, string]>, subject: string, adminCheck?: ProviderAgentAuthority["guardDeps"]["adminCheck"]) {
+  async function terminalRun(roles: Array<[string, string]>, subject: string, adminCheck?: ProviderAgentAuthority["guardDeps"]["adminCheck"], modelCalls: { before: number; after: number } = { before: 0, after: 0 }) {
     captured.mode = "abort";
     try {
       captured.options.length = 0;
@@ -510,7 +517,17 @@ describe("DENIAL_IS_TERMINAL", () => {
       const events: AiEvent[] = [];
       const draining = (async () => { for await (const e of result.stream) events.push(e); })();
       while (captured.options.length === 0) await new Promise((r) => setTimeout(r, 1));
+      // The real counting wrapper is `options.completionFn`: drive the model before and after the denial, as a looping graph would.
+      const callModel = async () => {
+        try {
+          await captured.options[0]!.completionFn({ model: "m", messages: [] }).final;
+        } catch {
+          // the stub adapter returns nothing; only the count matters
+        }
+      };
+      for (let i = 0; i < modelCalls.before; i++) await callModel();
       const exec = await runInScope(scope, () => captured.options[0]!.createToolExecFn(() => {})("core__knowledge_write", KNOWLEDGE, "c1"));
+      for (let i = 0; i < modelCalls.after; i++) await callModel();
       await draining;
       return { exec, events, final: await result.final, logged, a };
     } finally {
@@ -526,6 +543,13 @@ describe("DENIAL_IS_TERMINAL", () => {
     expect(run.final).toMatchObject({ ok: true, finishReason: "stop" });
     expect(run.logged.filter((l) => l.event === "agent_run.denied")).toEqual([
       expect.objectContaining({ event: "agent_run.denied", tool: "core__knowledge_write", code: "policy_denied", reason: "subject_not_admin", modelCalls: 0, modelCallsAfterDenial: 0 }),
+    ]);
+  });
+
+  it("counts model calls around the denial: modelCallsAfterDenial reads 1 when the model is called again after it", async () => {
+    const run = await terminalRun([[NODE_AI_USER, "knowledge:write"]], MEMBER, undefined, { before: 1, after: 1 });
+    expect(run.logged.filter((l) => l.event === "agent_run.denied")).toEqual([
+      expect.objectContaining({ modelCalls: 2, modelCallsAfterDenial: 1 }),
     ]);
   });
 

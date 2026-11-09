@@ -91,11 +91,31 @@ describe("DENIAL_IS_TERMINAL", () => {
     expect(down.offered).toEqual(["read_tool"]);
     expect(down.excluded[0]).toMatchObject({ tool: "write_tool", code: "authz_unavailable" });
   });
-  it("logs one not_offered decision per excluded tool", async () => {
+  it("logs one not_offered decision per excluded tool, tied to the run", async () => {
     const onDecision = vi.fn();
-    await offeredToolIds(tools, requiresById, { principalId: "p", subjectUserId: "s", payer: "b" }, deps(memoryStore(), onDecision));
+    await offeredToolIds(tools, requiresById, { principalId: "p", subjectUserId: "s", payer: "b", runId: "run-1" }, deps(memoryStore(), onDecision));
     expect(onDecision).toHaveBeenCalledTimes(3);
-    expect(onDecision.mock.calls[0]![0]).toMatchObject({ principal: "p", subject: "s", payer: "b", tool: "write_tool", decision: "deny", reason: "not_offered:no_role" });
+    expect(onDecision.mock.calls[0]![0]).toMatchObject({ principal: "p", subject: "s", payer: "b", tool: "write_tool", decision: "deny", reason: "not_offered:no_role", runId: "run-1" });
+  });
+  it("reads the store once for the whole run, however many write tools it lists", async () => {
+    const many = Array.from({ length: 10 }, (_, i) => ({ id: `w${i}`, effect: "state_change" }));
+    const byId = Object.fromEntries(many.map((t, i) => [t.id, { scope: `scope:${i % 3}`, kind: "node", subject: "member" } as ToolRequires]));
+    const store = memoryStore({ roles: [{ principal: "p", scope: "scope:1" }] });
+    const withStore = vi.fn(<T,>(fn: (s: typeof store) => Promise<T>) => fn(store));
+    const liveScopes = vi.spyOn(store, "liveScopes");
+    const hasLiveRole = vi.spyOn(store, "hasLiveRole");
+    const { offered } = await offeredToolIds(many, byId, { principalId: "p" }, { withStore });
+    expect(withStore).toHaveBeenCalledTimes(1);
+    expect(liveScopes).toHaveBeenCalledTimes(1);
+    expect(hasLiveRole).not.toHaveBeenCalled();
+    expect(offered).toEqual(["w1", "w4", "w7"]);
+  });
+  it("withholds an own-data tool from a run with no subject, matching authorize()'s no_subject deny", async () => {
+    const ownTools = [{ id: "own_tool", effect: "state_change" }];
+    const byId = { own_tool: { scope: "schedule:manage", kind: "own", subject: "member" } as ToolRequires };
+    const store = memoryStore({ roles: [{ principal: "p", scope: "schedule:manage" }] });
+    expect((await offeredToolIds(ownTools, byId, { principalId: "p" }, deps(store))).excluded[0]).toMatchObject({ tool: "own_tool", reason: "no_subject" });
+    expect((await offeredToolIds(ownTools, byId, { principalId: "p", subjectUserId: "s" }, deps(store))).offered).toEqual(["own_tool"]);
   });
   it("an exec-time denial calls onTerminalDenial once, before it throws", async () => {
     const seen: TerminalDenial[] = [];

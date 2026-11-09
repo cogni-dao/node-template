@@ -19,6 +19,10 @@ export function memoryStore(init?: {
       guard();
       return roles.some((r) => r.principal === principalId && r.scope === scope && !r.revoked);
     },
+    async liveScopes(principalId, scopes) {
+      guard();
+      return [...new Set(roles.filter((r) => r.principal === principalId && !r.revoked && scopes.includes(r.scope)).map((r) => r.scope))];
+    },
     async listLiveRoles() {
       const bySlug = new Map(Object.entries(init?.principals ?? {}).map(([slug, id]) => [id, slug]));
       return roles

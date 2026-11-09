@@ -46,6 +46,18 @@ const unavailable = (reason: string): AuthzDecision => ({
   reason,
 });
 
+/** The contract-only denials of the principal lock (no store read): unknown kind or subject, account scope, no principal. */
+export function principalLockPrecheck(
+  principalId: string | undefined,
+  requires: ToolRequires
+): AuthzDecision | null {
+  if (!KINDS.has(requires.kind) || !SUBJECTS.has(requires.subject))
+    return deny("unknown_contract_value");
+  if (!principalId) return deny("no_principal");
+  if (requires.kind === "account") return deny("account_scope_unsupported");
+  return null;
+}
+
 /**
  * The principal lock alone: no subject, no admin check. It is the first half of `authorize()`, shared with the run-start
  * filter (DENIAL_IS_TERMINAL: the model never sees a tool it cannot use) and the route door (a bearer caller is its own principal).
@@ -57,10 +69,9 @@ export async function authorizePrincipalLock(
   const { principalId, requires } = input;
   // FAIL_CLOSED_ON_UNKNOWN: `requires` comes from a published contract and this package is pinned independently,
   // so an unknown kind or subject (a newer contract) must deny, never run as `node` or `member`.
-  if (!KINDS.has(requires.kind) || !SUBJECTS.has(requires.subject))
-    return deny("unknown_contract_value");
+  const early = principalLockPrecheck(principalId, requires);
+  if (early) return early;
   if (!principalId) return deny("no_principal");
-  if (requires.kind === "account") return deny("account_scope_unsupported");
   try {
     if (!(await store.hasLiveRole(principalId, requires.scope)))
       return deny("no_role");

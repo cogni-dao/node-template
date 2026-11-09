@@ -339,6 +339,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
         if (bound.contract.requires) requiresById[id] = bound.contract.requires;
       }
       const guardScope = {
+        runId,
         principalId,
         subjectUserId: scope.subjectUserId,
         payer: scope.billing.billingAccountId,

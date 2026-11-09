@@ -13,6 +13,7 @@ export {
   type AuthorizeInput,
   authorize,
   authorizePrincipalLock,
+  principalLockPrecheck,
 } from "./authorize";
 export {
   type GuardableRuntime,
@@ -26,6 +27,7 @@ export {
 export {
   authorizeCaller,
   type CallerInput,
+  DEFERRED_WRITE_ROUTES,
   NO_ROUTE_TWIN,
   ROUTE_ONLY_CAPABILITIES,
   SAME_DOOR_ROUTES,

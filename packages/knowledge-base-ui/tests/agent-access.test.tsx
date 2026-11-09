@@ -72,6 +72,23 @@ describe("AgentAccessSection: a non-admin sees nothing", () => {
     expect(screen.queryByText("This node's AI")).toBeNull();
   });
 
+  it("does not re-check on focus after a 404 either (a missing route is permanent), but does after a 500", async () => {
+    fetchMock.mockImplementation(() => json(404, {}));
+    render(<AgentAccessSection endpoints={ENDPOINTS} />);
+    await flush();
+    window.dispatchEvent(new Event("focus"));
+    await flush();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    cleanup();
+    fetchMock.mockReset();
+    fetchMock.mockImplementation(() => json(500, {}));
+    render(<AgentAccessSection endpoints={ENDPOINTS} />);
+    await flush();
+    window.dispatchEvent(new Event("focus"));
+    await flush();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("does not re-check on focus while hidden", async () => {
     fetchMock.mockImplementation(() => json(200, { canManage: false, ai: [] }));
     render(<AgentAccessSection endpoints={ENDPOINTS} />);
@@ -211,6 +228,8 @@ describe("AgentAccessSection: an admin", () => {
     await userEvent.click(screen.getByRole("button", { name: /^Yes, allow/ }));
     await waitFor(() => expect(container.querySelector(".animate-pulse")).not.toBeNull());
     expect(screen.queryByRole("switch", { name: SAVE })).toBeNull(); // the saving row shows the Skeleton instead
+    expect(container.querySelector("tr[aria-busy=true]")).not.toBeNull(); // and says so to a screen reader
+    expect(screen.getByRole("status")).toHaveTextContent("Saving");
     const others = screen.getAllByRole("switch");
     expect(others).toHaveLength(2);
     for (const sw of others) {

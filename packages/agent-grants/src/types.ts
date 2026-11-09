@@ -52,6 +52,8 @@ export type AuthzDecision =
 export interface AgentGrantsStore {
   /** A live (unrevoked) role row for this principal user id and scope. Never cached. */
   hasLiveRole(principalId: string, scope: string): Promise<boolean>;
+  /** The subset of `scopes` this principal holds a live role for, in ONE read. Never cached. */
+  liveScopes(principalId: string, scopes: readonly string[]): Promise<string[]>;
   /** The seeded user id of an internal principal slug, else null. */
   findInternalPrincipal(slug: string): Promise<{ userId: string } | null>;
   /** Every live role row with its principal's slug, for the admin page. Never cached. */

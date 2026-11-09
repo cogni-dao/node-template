@@ -10,7 +10,8 @@
  *   - HUMAN_ROUTES_SESSION_ONLY: requests carry the browser session only; this hook never sets an Authorization header.
  *   - NON_ADMIN_SEES_NOTHING: only a confirmed admin view (`canManage: true` with a well-formed list of permissions) is `ready`, and only
  *     a confirmed 503 is `unavailable`. Loading, 401, 403, 404, 500, any other status, a network error and a malformed body
- *     are all `hidden`. A page cannot tell an admin from anyone else before the server says so.
+ *     are all `hidden`. 401, 403 and 404 are confirmed (focus does not retry them); 500, 429, a network error and a bad body
+ *     are transient (focus retries). A page cannot tell an admin from anyone else before the server says so.
  *   - A later non-503 failure keeps an already-ready view (a click must not make an admin's block vanish); 401 and 403 hide it.
  *   - Window focus re-checks unless the server confirmed "not an admin"; a transient first-load failure therefore recovers.
  *   - STALE_RESPONSE_GUARD: each load takes a sequence number; only the newest response is applied, so a focus load that
@@ -91,7 +92,8 @@ export function useAgentAccess(endpoints: AgentAccessEndpoints): UseAgentAccess 
         headers: { accept: "application/json" },
       });
       if (!alive.current || mine !== seq.current) return;
-      if (res.status === 401 || res.status === 403) {
+      // 404 means this node has no such route: permanent, so it is confirmed like a 401 or 403 and focus does not retry it.
+      if (res.status === 401 || res.status === 403 || res.status === 404) {
         confirmedNotAdmin.current = true;
         return commit({ status: "hidden" });
       }

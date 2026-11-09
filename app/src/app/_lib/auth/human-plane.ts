@@ -19,6 +19,8 @@
 import { HUMAN_SESSION_REQUIRED } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
 
+import { EVENT_NAMES } from "@/shared/observability";
+
 /** The only values a log line may carry for the header: a fixed allowlist, never any part of the credential. */
 export type RefusedScheme = "bearer" | "basic" | "digest" | "negotiate" | "other";
 
@@ -39,8 +41,8 @@ export function refuseNonSession(
   const header = request.headers.get("authorization");
   if (header === null) return null;
   log?.warn(
-    { code: HUMAN_SESSION_REQUIRED, scheme: refusedScheme(header) },
-    "human_plane.refused"
+    { event: EVENT_NAMES.HUMAN_PLANE_REFUSED, code: HUMAN_SESSION_REQUIRED, scheme: refusedScheme(header) },
+    EVENT_NAMES.HUMAN_PLANE_REFUSED
   );
   return NextResponse.json(
     { error: HUMAN_SESSION_REQUIRED, code: HUMAN_SESSION_REQUIRED },

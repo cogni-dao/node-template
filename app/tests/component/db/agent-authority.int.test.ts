@@ -301,4 +301,54 @@ describe("agent authority (real Postgres)", () => {
       await expect(call(PRIORITIZER_PRINCIPAL_USER_ID)).rejects.toMatchObject({ receipt: { code: "policy_denied", retryable: false } });
     });
   });
+
+  describe("the route door and the run-start filter over real Postgres", () => {
+    const bundle = async () => (await import("@cogni/ai-tools")).CORE_TOOL_BUNDLE;
+    const make = async () =>
+      createAgentToolAuthority({
+        sql: service as unknown as AgentAuthoritySql,
+        nodeAdmin: { check: async () => ({ ok: false, errorCode: "authz_denied" }) },
+        log: makeLogger({ component: "agent-authority-test" }),
+        toolBundle: (await bundle()) as never,
+      });
+
+    it("authorizeRoute: a bearer needs a live role row; revoke closes the door; a human session needs none", async () => {
+      const admin = await makeUser();
+      const agent = await makeUser(); // an outside agent: an ordinary users row, not an agent_principals row
+      const a = await make();
+      const route = (via: "bearer" | "session", toolId = "core__work_item_transition") =>
+        a.authorizeRoute({ toolId, routeId: "work.items.patch", userId: agent, via });
+      expect(await route("bearer")).toMatchObject({ decision: "deny", code: "policy_denied", reason: "no_role" });
+      await service`INSERT INTO agent_roles (principal_user_id, scope, approved_by) VALUES (${agent}, 'work_item:transition', ${admin})`;
+      expect(await route("bearer")).toMatchObject({ decision: "allow", basis: "role" });
+      expect(await route("bearer", "core__edo_decide")).toMatchObject({ decision: "deny", reason: "no_role" }); // a role for one scope opens no other
+      await service`UPDATE agent_roles SET revoked_at = now() WHERE principal_user_id = ${agent} AND scope = 'work_item:transition'`;
+      expect(await route("bearer")).toMatchObject({ decision: "deny", reason: "no_role" });
+      expect(await route("session")).toMatchObject({ decision: "allow", basis: "signed_in" }); // a human needs no row
+      expect(await route("bearer", "no.such.tool")).toMatchObject({ decision: "deny", reason: "no_requires" });
+    });
+
+    it("authorizeRoute: the route-only knowledge.contribute scope works the same way", async () => {
+      const admin = await makeUser();
+      const agent = await makeUser();
+      const a = await make();
+      const route = (via: "bearer" | "session") =>
+        a.authorizeRoute({ toolId: "knowledge.contribute", routeId: "knowledge.contributions.create", userId: agent, via });
+      expect(await route("bearer")).toMatchObject({ decision: "deny", reason: "no_role" });
+      await service`INSERT INTO agent_roles (principal_user_id, scope, approved_by) VALUES (${agent}, 'knowledge:contribute', ${admin})`;
+      expect(await route("bearer")).toMatchObject({ decision: "allow" });
+      expect(await route("session")).toMatchObject({ decision: "allow" });
+    });
+
+    it("liveScopes returns only this principal's live scopes in one read", async () => {
+      const admin = await makeUser();
+      const agent = await makeUser();
+      const other = await makeUser();
+      await service`INSERT INTO agent_roles (principal_user_id, scope, approved_by, revoked_at) VALUES (${agent}, 'a:live', ${admin}, NULL), (${agent}, 'b:revoked', ${admin}, now()), (${other}, 'c:other', ${admin}, NULL)`;
+      const { createPostgresAgentGrantsStore } = await import("@cogni/agent-grants");
+      const store = createPostgresAgentGrantsStore(service as never);
+      expect(await store.liveScopes(agent, ["a:live", "b:revoked", "c:other", "d:none"])).toEqual(["a:live"]);
+      expect(await store.liveScopes(agent, [])).toEqual([]);
+    });
+  });
 });

@@ -214,7 +214,8 @@ export function wrapRouteHandlerWithLogging<TContext = unknown>(
               toolId: sameDoor,
               routeId: options.routeId,
               userId: sessionUser.id,
-              via: sessionUser.via === "bearer" ? "bearer" : "session",
+              // Fail closed: only an identity that says `session` takes the human rules; an absent or unknown `via` is strict.
+              via: sessionUser.via === "session" ? "session" : "bearer",
             });
             if (decision.decision === "deny") {
               const unavailable = decision.code === "authz_unavailable";

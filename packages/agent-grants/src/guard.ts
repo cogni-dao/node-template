@@ -19,7 +19,7 @@
  * @public
  */
 
-import { authorize, authorizePrincipalLock } from "./authorize";
+import { authorize, principalLockPrecheck } from "./authorize";
 import type {
   AdminCheck,
   AuthzDecision,
@@ -40,6 +40,8 @@ export interface GuardableRuntime {
 export interface GuardScope extends RunIdentity {
   /** The billing account charged for the run. Logged only; never an authority. */
   readonly payer?: string | undefined;
+  /** The run id, so a `not_offered` decision can be tied to its run. Logged only. */
+  readonly runId?: string | undefined;
 }
 
 export interface GuardDeps {
@@ -172,7 +174,9 @@ export function guardTools<T extends GuardableRuntime>(
  * Run-start filter (DENIAL_IS_TERMINAL). Returns the tool ids the run may offer the model: a read_only tool with no
  * `requires` always; any other tool only when its PRINCIPAL lock opens now. A tool whose principal lock fails, or whose
  * store check is unavailable, or that has no `requires` entry and an effect other than read_only, is excluded and reported.
- * The subject lock is not checked here: it can only narrow, and the exec-time guard still enforces it.
+ * One store read for the whole run (`liveScopes`), filtered in memory. An `own` scope with no run subject is withheld too,
+ * matching `authorize()`'s `no_subject` deny. The rest of the subject lock is not checked here: it can only narrow, and
+ * the exec-time guard still enforces it.
  */
 export async function offeredToolIds(
   tools: ReadonlyArray<{ readonly id: string; readonly effect: string }>,
@@ -183,30 +187,52 @@ export async function offeredToolIds(
   readonly offered: string[];
   readonly excluded: ReadonlyArray<{ tool: string; code: DenialCode; reason: string }>;
 }> {
-  const offered: string[] = [];
-  const excluded: Array<{ tool: string; code: DenialCode; reason: string }> = [];
+  const verdicts = new Map<string, AuthzDecision>();
+  const needStore: Array<{ id: string; scope: string }> = [];
   for (const tool of tools) {
     const requires = requiresById[tool.id];
     if (!requires && tool.effect === "read_only") {
-      offered.push(tool.id);
+      verdicts.set(tool.id, { decision: "allow", basis: "graph_lock" });
       continue;
     }
-    const decision: AuthzDecision = !requires
-      ? { decision: "deny", code: "policy_denied", reason: "no_requires" }
-      : await deps
-          .withStore((store) =>
-            authorizePrincipalLock(store, {
-              principalId: scope.principalId,
-              requires,
-            })
-          )
-          .catch(
-            (): AuthzDecision => ({
-              decision: "deny",
-              code: "authz_unavailable",
-              reason: "store_unavailable",
-            })
-          );
+    if (!requires) {
+      verdicts.set(tool.id, { decision: "deny", code: "policy_denied", reason: "no_requires" });
+      continue;
+    }
+    const early = principalLockPrecheck(scope.principalId, requires);
+    if (early) {
+      verdicts.set(tool.id, early);
+      continue;
+    }
+    if (requires.kind === "own" && !scope.subjectUserId) {
+      verdicts.set(tool.id, { decision: "deny", code: "policy_denied", reason: "no_subject" });
+      continue;
+    }
+    needStore.push({ id: tool.id, scope: requires.scope });
+  }
+  if (needStore.length > 0 && scope.principalId) {
+    const principalId = scope.principalId;
+    const scopes = [...new Set(needStore.map((n) => n.scope))];
+    let held: Set<string> | null = null;
+    try {
+      held = new Set(await deps.withStore((store) => store.liveScopes(principalId, scopes)));
+    } catch {
+      held = null;
+    }
+    for (const n of needStore)
+      verdicts.set(
+        n.id,
+        held === null
+          ? { decision: "deny", code: "authz_unavailable", reason: "store_unavailable" }
+          : held.has(n.scope)
+            ? { decision: "allow", basis: "role" }
+            : { decision: "deny", code: "policy_denied", reason: "no_role" }
+      );
+  }
+  const offered: string[] = [];
+  const excluded: Array<{ tool: string; code: DenialCode; reason: string }> = [];
+  for (const tool of tools) {
+    const decision = verdicts.get(tool.id) as AuthzDecision;
     if (decision.decision === "allow") {
       offered.push(tool.id);
       continue;
@@ -220,7 +246,7 @@ export async function offeredToolIds(
       decision: "deny",
       code: decision.code,
       reason: `not_offered:${decision.reason}`,
-      runId: null,
+      runId: scope.runId ?? null,
     });
   }
   return { offered, excluded };
