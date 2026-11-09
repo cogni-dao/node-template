@@ -81,15 +81,35 @@ export function knowledgeOverviewKey(
   return [...prefix, "overview", parseKnowledgeQuery(query, "overview")];
 }
 
+/** A schema issue in plain words; the bound itself comes from the issue. */
+function plainIssue(issue: {
+  readonly code: string;
+  readonly origin?: unknown;
+  readonly maximum?: unknown;
+  readonly minimum?: unknown;
+}): string {
+  const bound = (value: unknown) => Number(value).toLocaleString("en-US");
+  if (issue.code === "too_big" && issue.origin === "array")
+    return `Choose at most ${bound(issue.maximum)} values.`;
+  if (issue.code === "too_big" && issue.origin === "string")
+    return `Use at most ${bound(issue.maximum)} characters.`;
+  if (issue.code === "too_small" && issue.origin === "string")
+    return Number(issue.minimum) === 1
+      ? "Enter at least one character."
+      : `Enter at least ${bound(issue.minimum)} characters.`;
+  return "This value is not accepted.";
+}
+
 /**
- * The store schema's first issue for a candidate query, or `null` when it
- * parses. Input limits (values per filter, value length, search length) come
- * only from `KnowledgeBrowseQuerySchema`; the package copies none of them.
+ * Why the store schema rejects a candidate query, in plain words, or `null`
+ * when it parses. Input limits (values per filter, value length, search length)
+ * come only from `KnowledgeBrowseQuerySchema`; the package copies none of them.
  */
 export function knowledgeQueryIssue(
   query: KnowledgeBrowseQuery,
 ): string | null {
   const parsed = KnowledgeBrowseQuerySchema.safeParse(query);
   if (parsed.success) return null;
-  return parsed.error.issues[0]?.message ?? "Invalid knowledge query";
+  const issue = parsed.error.issues[0];
+  return issue ? plainIssue(issue) : "This value is not accepted.";
 }

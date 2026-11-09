@@ -187,6 +187,23 @@ describe("KnowledgeGraph", () => {
     expect(renders.at(-1)?.graphData).not.toBe(first);
   });
 
+  it("revalidates with the cached revision; a 304 (null) keeps the parsed graph without a download", async () => {
+    const seen: (string | undefined)[] = [];
+    const fetchGraph = vi.fn<KnowledgeGraphFetcher>(async (_signal, ifNoneMatch) => {
+      seen.push(ifNoneMatch);
+      return ifNoneMatch ? null : corpus(40);
+    });
+    const client = mount(fetchGraph);
+    await screen.findByText(/40 entries/);
+    const first = renders.at(-1)?.graphData;
+    await act(async () => {
+      await client.refetchQueries({ queryKey: ["knowledge", "graph"] });
+    });
+    expect(seen).toEqual([undefined, '"rev-a"']);
+    expect(renders.at(-1)?.graphData).toBe(first);
+    expect(screen.getByText(/40 entries · 80 citations/)).toBeTruthy();
+  });
+
   it("escapes agent-authored labels and offers retry on failure", async () => {
     let fail = true;
     const fetchGraph = vi.fn<KnowledgeGraphFetcher>(async () => {

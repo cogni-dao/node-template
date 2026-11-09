@@ -4,10 +4,10 @@
 /**
  * Module: `@cogni/knowledge-base-ui/use-knowledge-graph`
  * Purpose: The knowledge Graph's data path: the whole projected corpus (every entry and every citation) in one read per store revision, plus the in-memory indexes the view needs (task.0059).
- * Scope: Client hook over a node-supplied fetcher. The node owns its endpoint, auth and HTTP revalidation (ETag = revision, so an unchanged graph is a 304); this hook owns the cache key, revision identity and adjacency.
+ * Scope: Client hook over a node-supplied fetcher. The node owns its endpoint and auth; this hook owns the cache key, revision revalidation, identity and adjacency.
  * Invariants:
  *   - WHOLE_CORPUS: the graph is never truncated or paged; counts are the exact lengths of what the store returned.
- *   - ONE_READ_PER_REVISION: one cache entry under `[...prefix, "graph"]`; a refetch that returns the same `revision` keeps the previous object (and its indexes), so renderers keep their layout.
+ *   - ONE_READ_PER_REVISION: one cache entry under `[...prefix, "graph"]`. A refetch sends the cached revision as `ifNoneMatch`; a fetcher that answers `null` (HTTP 304) keeps the previous parsed object, so nothing is downloaded or re-parsed. A refetch that returns the same `revision` also keeps the previous object (and its indexes), so renderers keep their layout.
  *   - NEIGHBORS_IN_MEMORY: neighbors of any entry come from the loaded edge set; selecting never fetches.
  *   - HOST_QUERY_CLIENT: rendered under the host's `QueryClientProvider`.
  * Side-effects: IO (through the injected fetcher)
@@ -18,15 +18,20 @@
 "use client";
 
 import type { KnowledgeGraphResponse } from "@cogni/knowledge-store/contracts";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
 
 import { KNOWLEDGE_QUERY_PREFIX } from "./knowledge-browse-query.js";
 
-/** The whole graph at one revision. Reject with an error carrying the HTTP `status`. */
+/**
+ * The whole graph at one revision. `ifNoneMatch` is the cached revision's
+ * entity tag (`"<revision>"`) when one is held: send it as `If-None-Match` and
+ * resolve `null` on a 304. Reject with an error carrying the HTTP `status`.
+ */
 export type KnowledgeGraphFetcher = (
   signal: AbortSignal,
-) => Promise<KnowledgeGraphResponse>;
+  ifNoneMatch?: string,
+) => Promise<KnowledgeGraphResponse | null>;
 
 export interface UseKnowledgeGraphOptions {
   readonly fetchGraph: KnowledgeGraphFetcher;
@@ -69,9 +74,20 @@ export function useKnowledgeGraph({
   staleTime = 30_000,
   queryKeyPrefix = KNOWLEDGE_QUERY_PREFIX,
 }: UseKnowledgeGraphOptions): UseKnowledgeGraphResult {
+  const client = useQueryClient();
+  const queryKey = [...queryKeyPrefix, "graph"];
   const result = useQuery({
-    queryKey: [...queryKeyPrefix, "graph"],
-    queryFn: ({ signal }) => fetchGraph(signal),
+    queryKey,
+    queryFn: async ({ signal }) => {
+      const previous = client.getQueryData<KnowledgeGraphResponse>(queryKey);
+      const next = await fetchGraph(
+        signal,
+        previous ? `"${previous.revision}"` : undefined,
+      );
+      if (next) return next;
+      if (previous) return previous;
+      throw new Error("Graph reported not modified, but no graph is cached");
+    },
     staleTime,
     retry: false,
     // Same revision ⇒ same graph: keep the previous object instead of diffing

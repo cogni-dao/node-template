@@ -188,7 +188,7 @@ describe("KnowledgeBrowse", () => {
     mount(fetchBrowse, windowOf());
     // Far beyond the contract's search maximum; the package itself declares none.
     submitSearch("x".repeat(100_000));
-    expect((await screen.findByRole("alert")).textContent).toMatch(/^Search: /);
+    expect((await screen.findByRole("alert")).textContent).toBe("Search: Use at most 2,000 characters.");
     await act(async () => {});
     expect(reads).toHaveLength(0);
     submitSearch("body");
@@ -290,7 +290,7 @@ describe("KnowledgeBrowse", () => {
     // One more typed value than the schema allows is refused with the schema's own issue.
     fireEvent.change(input, { target: { value: "custom-50" } });
     fireEvent.submit(required(input.closest("form")));
-    expect((await screen.findByRole("alert")).textContent).toMatch(/^Type: /);
+    expect((await screen.findByRole("alert")).textContent).toBe("Type: Choose at most 50 values.");
     expect(screen.queryByRole("button", { name: "custom-50" })).toBeNull();
     const canonical = screen.getByRole("button", { name: "guide" });
     expect(canonical.hasAttribute("disabled")).toBe(true);
