@@ -502,7 +502,7 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
           `SELECT ${fields} FROM knowledge ${where} ORDER BY ${column} ${query.direction.toUpperCase()}${nullOrder}, id ASC LIMIT ${search ? KNOWLEDGE_BROWSE_PAGE_SIZE : KNOWLEDGE_BROWSE_PAGE_SIZE + 1}`
         );
         const counted = await read(
-          `SELECT COUNT(*) AS total FROM knowledge ${filterWhere}`
+          `SELECT COUNT(*) AS total FROM knowledge${filterWhere ? ` ${filterWhere}` : ""}`
         );
         return { rows, revision, total: Number(counted[0]?.total ?? 0) };
       }

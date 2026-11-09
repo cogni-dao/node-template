@@ -343,10 +343,14 @@ describe("native Doltgres knowledge browsing", () => {
 			expect(proofNodes).toHaveLength(nodes);
 			expect(proofEdges).toHaveLength(edges);
 			// The projection never reads bodies.
-			const graphQuery = statements.find((q) => q.includes("FROM knowledge"));
-			expect(graphQuery).toBe(
+			expect(statements).toContain(
 				"SELECT id, domain, title, entry_type, confidence_pct, source_type FROM knowledge",
 			);
+			expect(
+				statements.some((q) =>
+					/\bcontent\b|SELECT \* FROM knowledge/i.test(q),
+				),
+			).toBe(false);
 			expect(raw).toBeLessThanOrEqual(
 				160 * response.nodes.length + 110 * response.edges.length,
 			);
