@@ -478,3 +478,15 @@ describe("read handlers", () => {
     );
   });
 });
+
+describe("summary query value bounds", () => {
+  it("rejects oversized single-value filters", async () => {
+    const { parseWorkSummarySearchParams, WORK_SUMMARY_VALUE_MAX } = await import("../src/index.js");
+    const long = "x".repeat(WORK_SUMMARY_VALUE_MAX + 1);
+    for (const key of ["projectId", "labelPrefix", "node"]) {
+      const parsed = parseWorkSummarySearchParams(new URLSearchParams({ [key]: long }));
+      expect(parsed.ok, key).toBe(false);
+    }
+    expect(parseWorkSummarySearchParams(new URLSearchParams({ node: "a,b" })).ok).toBe(true);
+  });
+});

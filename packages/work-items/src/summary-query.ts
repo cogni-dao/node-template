@@ -43,7 +43,11 @@ export const WORK_SUMMARY_LIST_MAX = 50;
 /** Longest free-text search a request may carry. */
 export const WORK_SUMMARY_TEXT_MAX = 200;
 
-const filterList = z.array(z.string()).max(WORK_SUMMARY_LIST_MAX);
+/** Longest single filter value (an id, type, status, project, node or label). */
+export const WORK_SUMMARY_VALUE_MAX = 200;
+
+const filterValue = z.string().max(WORK_SUMMARY_VALUE_MAX);
+const filterList = z.array(filterValue).max(WORK_SUMMARY_LIST_MAX);
 
 /** The filters, order and page window of one summary read. */
 export const WorkSummaryQuerySchema = z.object({
@@ -53,15 +57,15 @@ export const WorkSummaryQuerySchema = z.object({
   statuses: filterList.optional(),
   text: z.string().max(WORK_SUMMARY_TEXT_MAX).optional(),
   actor: z.enum(["human", "ai", "either"]).optional(),
-  projectId: z.string().optional(),
+  projectId: filterValue.optional(),
   projectIds: filterList.optional(),
   rankMin: z.number().finite().optional(),
   rankMax: z.number().finite().optional(),
-  node: z.union([z.string(), z.array(z.string())]).optional(),
+  node: z.union([filterValue, filterList]).optional(),
   /** Any-of label filter: items carrying at least one of these labels. */
   labels: filterList.optional(),
   /** Items with at least one label whose text starts with this prefix. */
-  labelPrefix: z.string().optional(),
+  labelPrefix: filterValue.optional(),
   /** true = only complete 6-axis scores; false = only unscored. */
   scored: z.boolean().optional(),
   limit: z.number().int().positive().max(WORK_SUMMARY_PAGE_MAX).optional(),
