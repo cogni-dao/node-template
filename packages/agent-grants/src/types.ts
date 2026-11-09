@@ -24,13 +24,9 @@ export interface ToolRequires {
   readonly scope: string;
   readonly kind: ScopeKind;
   readonly subject: SubjectRequirement;
-  /** Plain-language job name for the admin page (from the tool contract). */
+  /** Plain-language permission name for the admin table (from the tool contract). */
   readonly label?: string;
-  /** Harm level for the admin page chip (from the tool contract). */
-  readonly risk?: JobRisk;
 }
-
-export type JobRisk = "low" | "medium" | "high";
 
 /** The node's own admin authority, as seen by the guard. */
 export type AdminDecision = "allow" | "denied" | "unavailable";
@@ -87,26 +83,21 @@ export interface AuthzEvent {
   readonly route?: string | null;
 }
 
-/** One job (a scope) a node AI may do, as the admin page shows it. */
-export interface NodeAiJobView {
-  /** Opaque to the human; the page sends it back unchanged when the admin clicks. */
+/** One row of the admin table: one AI and one permission (a scope) it may have. */
+export interface NodeAiPermissionView {
+  /** Opaque to the human; the table sends it back unchanged when the admin clicks. */
+  readonly principal: string;
+  /** The AI's plain name. */
+  readonly ai: string;
+  /** Opaque to the human; the table sends it back unchanged when the admin clicks. */
   readonly scope: string;
-  readonly label: string;
-  readonly risk: JobRisk;
+  /** The permission's plain name. */
+  readonly permission: string;
   readonly allowed: boolean;
 }
 
-/** One node AI (an internal principal) and its jobs. */
-export interface NodeAiView {
-  /** Opaque to the human; the page sends it back unchanged. */
-  readonly principal: string;
-  readonly name: string;
-  readonly blurb: string;
-  readonly jobs: readonly NodeAiJobView[];
-}
-
-/** The `GET /api/v1/agent-access/roles` body. A non-admin gets `canManage: false` and no AI. */
+/** The `GET /api/v1/agent-access/roles` body. A non-admin gets `canManage: false` and no rows. */
 export interface NodeAiAccessView {
   readonly canManage: boolean;
-  readonly ai: readonly NodeAiView[];
+  readonly permissions: readonly NodeAiPermissionView[];
 }

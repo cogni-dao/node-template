@@ -41,15 +41,6 @@ export {
   type UseAgentAccess,
 } from "./agent-access/use-agent-access.js";
 export {
-  APPROVAL_FRAGMENT_PREFIX,
-  ApprovalFragmentScrub,
-  shouldScrubApprovalFragment,
-} from "./approval-fragment-scrub.js";
-export { Alert, type AlertProps } from "./ui/alert.js";
-export { Button, type ButtonProps } from "./ui/button.js";
-export { Chip, type ChipProps } from "./ui/chip.js";
-export { Skeleton } from "./ui/skeleton.js";
-export {
   formatRelativeTime,
   RelativeTime,
   type RelativeTimeProps,

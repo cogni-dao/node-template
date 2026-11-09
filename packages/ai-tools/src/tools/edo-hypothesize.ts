@@ -108,7 +108,6 @@ export const edoHypothesizeContract: ToolContract<
     kind: "node",
     subject: "member",
     label: "Log decisions and what happened",
-    risk: "low",
   },
   inputSchema: EdoHypothesizeInputSchema,
   outputSchema: EdoHypothesizeOutputSchema,

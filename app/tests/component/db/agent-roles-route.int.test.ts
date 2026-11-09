@@ -156,26 +156,28 @@ describe("agent roles route (real Postgres, real repo-spec admin)", () => {
     session.user = sessionUser(memberUser, "session");
     const res = await getView();
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ canManage: false, ai: [] });
+    expect(await res.json()).toEqual({ canManage: false, permissions: [] });
     expect((await call(POST, body)).status).toBe(403);
     session.user = null;
     expect((await getView()).status).toBe(401);
   });
 
-  it("GET lists the node AI with plain-language jobs and the live Allow state, for an admin", async () => {
+  it("GET lists one row per AI and permission with the live Allow state, for an admin", async () => {
     session.user = sessionUser(adminUser, "session");
-    const before = (await (await getView()).json()) as { canManage: boolean; ai: Array<{ principal: string; name: string; jobs: Array<{ scope: string; label: string; allowed: boolean }> }> };
+    type Row = { principal: string; ai: string; scope: string; permission: string; allowed: boolean };
+    const before = (await (await getView()).json()) as { canManage: boolean; permissions: Row[] };
     expect(before.canManage).toBe(true);
-    expect(before.ai.map((a) => a.principal).sort()).toEqual(["node-ai", "prioritizer"]);
-    const scorer = before.ai.find((a) => a.principal === "prioritizer");
-    expect(scorer?.jobs).toEqual([expect.objectContaining({ scope: "work_item:transition", allowed: false })]);
-    expect(scorer?.jobs[0]?.label).toMatch(/work items/i);
+    expect([...new Set(before.permissions.map((r) => r.principal))].sort()).toEqual(["node-ai", "prioritizer"]);
+    const scorer = before.permissions.filter((r) => r.principal === "prioritizer");
+    expect(scorer).toEqual([expect.objectContaining({ scope: "work_item:transition", allowed: false })]);
+    expect(scorer[0]?.permission).toMatch(/work items/i);
+    expect(JSON.stringify(before)).not.toMatch(/\bjobs?\b|risk|blurb/i);
     expect((await call(POST, body)).status).toBe(200);
     const after = (await (await getView()).json()) as typeof before;
-    expect(after.ai.find((a) => a.principal === "prioritizer")?.jobs[0]?.allowed).toBe(true);
+    expect(after.permissions.find((r) => r.principal === "prioritizer")?.allowed).toBe(true);
     expect((await call(DELETE, body)).status).toBe(200);
     const removed = (await (await getView()).json()) as typeof before;
-    expect(removed.ai.find((a) => a.principal === "prioritizer")?.jobs[0]?.allowed).toBe(false);
+    expect(removed.permissions.find((r) => r.principal === "prioritizer")?.allowed).toBe(false);
     expect((await getView()).headers.get("cache-control")).toBe("no-store");
   });
 
@@ -204,10 +206,12 @@ describe("agent roles route (real Postgres, real repo-spec admin)", () => {
 
   it("V8: a signed-in non-admin gets 403 on grant and revoke, and nothing is written", async () => {
     session.user = sessionUser(memberUser, "session");
+    // Other component files share this database, so compare with the state before, not with zero.
+    const live = () => service`SELECT 1 FROM agent_roles WHERE principal_user_id = ${PRIORITIZER_PRINCIPAL_USER_ID} AND revoked_at IS NULL`;
+    const before = await live();
     expect((await call(POST, body)).status).toBe(403);
     expect((await call(DELETE, body)).status).toBe(403);
-    const rows = await service`SELECT 1 FROM agent_roles WHERE principal_user_id = ${PRIORITIZER_PRINCIPAL_USER_ID} AND revoked_at IS NULL`;
-    expect(rows).toHaveLength(0);
+    expect(await live()).toHaveLength(before.length);
   });
 
   it("V8: a bearer agent (a user with no wallet binding) is refused by the same admin check", async () => {

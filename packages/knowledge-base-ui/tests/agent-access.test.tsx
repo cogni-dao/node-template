@@ -3,25 +3,20 @@
 
 import "@testing-library/jest-dom/vitest";
 import type { NodeAiAccessView } from "@cogni/agent-grants";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AgentAccessSection, Button } from "../src/index.js";
+import { AgentAccessSection } from "../src/index.js";
 
 const ENDPOINTS = { roles: "/api/v1/agent-access/roles" };
 
 let allowed = false;
 const view = (): NodeAiAccessView => ({
   canManage: true,
-  ai: [
-    {
-      principal: "node-ai",
-      name: "General assistant",
-      blurb: "Answers questions and works with this node's notes.",
-      jobs: [
-        { scope: "knowledge:write", label: "Save notes to this node's knowledge base", risk: "medium", allowed },
-      ],
-    },
+  permissions: [
+    { principal: "node-ai", ai: "General assistant", scope: "knowledge:write", permission: "Save notes to this node's knowledge base", allowed },
+    { principal: "node-ai", ai: "General assistant", scope: "schedule:manage", permission: "Create and change schedules", allowed: false },
+    { principal: "prioritizer", ai: "Priority scorer", scope: "work_item:transition", permission: "Update work items and their priority scores", allowed: false },
   ],
 });
 
@@ -87,24 +82,42 @@ describe("AgentAccessSection: a non-admin sees nothing", () => {
   });
 });
 
+const SAVE = /^General assistant: Save notes to this node's knowledge base$/;
+
 describe("AgentAccessSection: an admin", () => {
-  it("shows the unavailable state only on a confirmed 503, and retries from the button", async () => {
+  it("shows the unavailable state only on a confirmed 503, and retries from the link", async () => {
     fetchMock.mockImplementationOnce(() => json(503, { error: "authz_unavailable" }));
     render(<AgentAccessSection endpoints={ENDPOINTS} />);
     expect(await screen.findByRole("alert")).toHaveTextContent("Can't check access right now. Try again.");
     expect(screen.getByText("This node's AI")).toBeInTheDocument();
     fetchMock.mockImplementationOnce(() => json(200, view()));
     await userEvent.click(screen.getByRole("button", { name: "Try again" }));
-    expect(await screen.findByText("General assistant")).toBeInTheDocument();
+    expect(await screen.findAllByRole("row")).toHaveLength(4);
   });
 
-  it("shows an empty state when the node has no assistants", async () => {
-    fetchMock.mockImplementation(() => json(200, { canManage: true, ai: [] }));
+  it("shows an empty line when there is nothing to manage", async () => {
+    fetchMock.mockImplementation(() => json(200, { canManage: true, permissions: [] }));
     render(<AgentAccessSection endpoints={ENDPOINTS} />);
-    expect(await screen.findByText(/no assistants to manage/i)).toBeInTheDocument();
+    expect(await screen.findByText(/No permissions to manage/i)).toBeInTheDocument();
   });
 
-  it("names the job in every button, allows with one Confirm, removes with no confirm, and reloads after each click", async () => {
+  it("is one compact table: a row per AI and permission, columns AI, Permission and a switch", async () => {
+    fetchMock.mockImplementation(() => json(200, view()));
+    render(<AgentAccessSection endpoints={ENDPOINTS} />);
+    await screen.findByRole("table");
+    expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["AI", "Permission", "Allowed"]);
+    const rows = screen.getAllByRole("row").slice(1);
+    expect(rows).toHaveLength(3);
+    expect(within(rows[0]!).getByText("General assistant")).toBeInTheDocument();
+    expect(within(rows[2]!).getByText("Priority scorer")).toBeInTheDocument();
+    expect(screen.getAllByRole("switch")).toHaveLength(3);
+    // No cards, no risk chips, no full-width buttons, no "job".
+    const text = document.body.textContent ?? "";
+    expect(text).not.toMatch(/\bjobs?\b|risk/i);
+    for (const b of screen.queryAllByRole("button")) expect(b.className).not.toMatch(/w-full/);
+  });
+
+  it("allows with one inline question and removes with none, reloading after each click", async () => {
     const calls: Array<{ method: string; body?: unknown; headers?: Record<string, string> }> = [];
     fetchMock.mockImplementation((_url: string, init?: RequestInit) => {
       const method = init?.method ?? "GET";
@@ -115,24 +128,32 @@ describe("AgentAccessSection: an admin", () => {
     });
     render(<AgentAccessSection endpoints={ENDPOINTS} />);
 
-    const allow = await screen.findByRole("button", { name: /^Allow General assistant to save notes to this node's knowledge base$/ });
-    await userEvent.click(allow);
-    expect(screen.getByText(/Let General assistant save notes/)).toBeInTheDocument();
+    const toggle = await screen.findByRole("switch", { name: SAVE });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    await userEvent.click(toggle);
+    expect(screen.getByText("Allow?")).toBeInTheDocument();
     expect(calls.filter((c) => c.method === "POST")).toHaveLength(0); // asked once, nothing sent yet
-    const confirm = screen.getByRole("button", { name: /^Confirm: let General assistant save notes/ });
-    expect(confirm).toHaveFocus(); // focus follows the click
-    await userEvent.click(confirm);
-    const remove = await screen.findByRole("button", { name: /^Remove General assistant: Save notes/ });
-    expect(screen.getByText("Allowed")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /^Yes, allow General assistant: Save notes/ }));
+    const on = await screen.findByRole("switch", { name: SAVE });
+    await waitFor(() => expect(on).toHaveAttribute("aria-checked", "true"));
     expect(calls.find((c) => c.method === "POST")?.body).toEqual({ principal: "node-ai", scope: "knowledge:write" });
 
-    await userEvent.click(remove); // no confirm step
-    expect(await screen.findByRole("button", { name: /^Allow General assistant to save notes/ })).toBeInTheDocument();
+    await userEvent.click(on); // no question
+    await waitFor(() => expect(screen.getByRole("switch", { name: SAVE })).toHaveAttribute("aria-checked", "false"));
     expect(calls.find((c) => c.method === "DELETE")?.body).toEqual({ principal: "node-ai", scope: "knowledge:write" });
     expect(calls.every((c) => !c.headers || !("authorization" in Object.fromEntries(Object.entries(c.headers).map(([k, v]) => [k.toLowerCase(), v]))))).toBe(true);
   });
 
-  it("lets an admin whose first load failed transiently see the block on the next focus", async () => {
+  it("No on the question sends nothing and leaves the switch off", async () => {
+    fetchMock.mockImplementation(() => json(200, view()));
+    render(<AgentAccessSection endpoints={ENDPOINTS} />);
+    await userEvent.click(await screen.findByRole("switch", { name: SAVE }));
+    await userEvent.click(screen.getByRole("button", { name: /^No, do not allow/ }));
+    expect(screen.getByRole("switch", { name: SAVE })).toHaveAttribute("aria-checked", "false");
+    expect(fetchMock.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === "POST")).toHaveLength(0);
+  });
+
+  it("lets an admin whose first load failed transiently see the table on the next focus", async () => {
     let attempt = 0;
     fetchMock.mockImplementation(() => (++attempt === 1 ? json(500, { error: "boom" }) : json(200, view())));
     const { container } = render(<AgentAccessSection endpoints={ENDPOINTS} />);
@@ -140,30 +161,7 @@ describe("AgentAccessSection: an admin", () => {
     expect(container).toBeEmptyDOMElement(); // a transient failure shows nothing
     window.dispatchEvent(new Event("focus"));
     await flush();
-    expect(screen.getByText("General assistant")).toBeInTheDocument(); // and recovers
-  });
-
-  it("keeps keyboard focus on the row through Allow, Confirm, Cancel and Remove", async () => {
-    fetchMock.mockImplementation((_u: string, init?: RequestInit) => {
-      const method = init?.method ?? "GET";
-      if (method === "POST") allowed = true;
-      if (method === "DELETE") allowed = false;
-      return json(200, method === "GET" ? view() : { changed: true });
-    });
-    render(<AgentAccessSection endpoints={ENDPOINTS} />);
-    await flush();
-    await userEvent.click(screen.getByRole("button", { name: /^Allow General assistant/ }));
-    expect(screen.getByRole("button", { name: /^Confirm/ })).toHaveFocus();
-    await userEvent.click(screen.getByRole("button", { name: /^Cancel/ }));
-    await flush();
-    expect(screen.getByRole("button", { name: /^Allow General assistant/ })).toHaveFocus();
-    await userEvent.click(screen.getByRole("button", { name: /^Allow General assistant/ }));
-    await userEvent.click(screen.getByRole("button", { name: /^Confirm/ }));
-    await flush();
-    expect(screen.getByRole("button", { name: /^Remove General assistant/ })).toHaveFocus();
-    await userEvent.click(screen.getByRole("button", { name: /^Remove General assistant/ }));
-    await flush();
-    expect(screen.getByRole("button", { name: /^Allow General assistant/ })).toHaveFocus();
+    expect(screen.getAllByRole("switch")).toHaveLength(3); // and recovers
   });
 
   it("ignores a stale load that finishes after a click's reload", async () => {
@@ -177,41 +175,50 @@ describe("AgentAccessSection: an admin", () => {
       return json(200, view());
     });
     render(<AgentAccessSection endpoints={ENDPOINTS} />);
-    await screen.findByRole("button", { name: /^Allow General assistant/ });
+    await screen.findByRole("switch", { name: SAVE });
     window.dispatchEvent(new Event("focus")); // GET #2: started before the click, answers late with allowed=false
-    await userEvent.click(screen.getByRole("button", { name: /^Allow General assistant/ }));
-    await userEvent.click(screen.getByRole("button", { name: /^Confirm/ }));
-    expect(await screen.findByRole("button", { name: /^Remove General assistant/ })).toBeInTheDocument();
-    releaseStale(fake(200, { ...view(), ai: [{ ...view().ai[0], jobs: [{ ...view().ai[0]!.jobs[0]!, allowed: false }] }] }));
+    await userEvent.click(screen.getByRole("switch", { name: SAVE }));
+    await userEvent.click(screen.getByRole("button", { name: /^Yes, allow/ }));
+    await waitFor(() => expect(screen.getByRole("switch", { name: SAVE })).toHaveAttribute("aria-checked", "true"));
+    releaseStale(fake(200, { canManage: true, permissions: view().permissions.map((p) => ({ ...p, allowed: false })) }));
     await flush();
-    expect(screen.getByRole("button", { name: /^Remove General assistant/ })).toBeInTheDocument(); // not overwritten
+    expect(screen.getByRole("switch", { name: SAVE })).toHaveAttribute("aria-checked", "true"); // not overwritten
   });
 
-  it("keeps the admin's view when a reload after a click fails with a 500, and hides it on a 403", async () => {
+  it("keeps the admin's table when a reload after a click fails with a 500, and hides it on a 403", async () => {
     let mode: "ok" | "500" | "403" = "ok";
     fetchMock.mockImplementation((_u: string, init?: RequestInit) => {
       if ((init?.method ?? "GET") !== "GET") return json(200, { changed: true });
       return mode === "ok" ? json(200, view()) : mode === "500" ? json(500, {}) : json(403, {});
     });
     const { container } = render(<AgentAccessSection endpoints={ENDPOINTS} />);
-    await userEvent.click(await screen.findByRole("button", { name: /^Allow General assistant/ }));
+    await userEvent.click(await screen.findByRole("switch", { name: SAVE }));
     mode = "500";
-    await userEvent.click(screen.getByRole("button", { name: /^Confirm/ }));
+    await userEvent.click(screen.getByRole("button", { name: /^Yes, allow/ }));
     await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(3));
-    expect(screen.getByText("General assistant")).toBeInTheDocument(); // still there
+    expect(screen.getAllByRole("switch")).toHaveLength(3); // still there
     mode = "403";
     window.dispatchEvent(new Event("focus"));
     await waitFor(() => expect(container).toBeEmptyDOMElement());
   });
 
-  it("disables every button while a click is in flight, so two jobs cannot clobber each other", async () => {
+  it("shows a Skeleton in the saving row and ignores clicks on the other switches, never dimming a switch", async () => {
     let release: (r: Response) => void = () => {};
     fetchMock.mockImplementation((_u: string, init?: RequestInit) =>
       (init?.method ?? "GET") === "GET" ? json(200, view()) : new Promise<Response>((resolve) => { release = resolve; }));
-    render(<AgentAccessSection endpoints={ENDPOINTS} />);
-    await userEvent.click(await screen.findByRole("button", { name: /^Allow General assistant/ }));
-    await userEvent.click(screen.getByRole("button", { name: /^Confirm/ }));
-    await waitFor(() => expect(screen.getByRole("button", { name: /^Allow General assistant/ })).toBeDisabled());
+    const { container } = render(<AgentAccessSection endpoints={ENDPOINTS} />);
+    await userEvent.click(await screen.findByRole("switch", { name: SAVE }));
+    await userEvent.click(screen.getByRole("button", { name: /^Yes, allow/ }));
+    await waitFor(() => expect(container.querySelector(".animate-pulse")).not.toBeNull());
+    expect(screen.queryByRole("switch", { name: SAVE })).toBeNull(); // the saving row shows the Skeleton instead
+    const others = screen.getAllByRole("switch");
+    expect(others).toHaveLength(2);
+    for (const sw of others) {
+      expect(sw).not.toBeDisabled();
+      expect(sw.className).not.toMatch(/opacity/);
+    }
+    await userEvent.click(others[0]!);
+    expect(screen.queryByText("Allow?")).toBeNull(); // locked: the click does nothing
     release(fake(200, {}));
     await flush();
   });
@@ -219,38 +226,30 @@ describe("AgentAccessSection: an admin", () => {
   it("uses no-store fetches with the browser session only", async () => {
     fetchMock.mockImplementation(() => json(200, view()));
     render(<AgentAccessSection endpoints={ENDPOINTS} />);
-    await screen.findByText("General assistant");
+    await screen.findByRole("table");
     const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
     expect(init.cache).toBe("no-store");
     expect(init.credentials).toBe("same-origin");
   });
 
-  it("shows a save failure as one alert and keeps the list", async () => {
+  it("shows a save failure as one line and keeps the table", async () => {
     fetchMock.mockImplementation((_u: string, init?: RequestInit) =>
       (init?.method ?? "GET") === "GET" ? json(200, view()) : json(500, { error: "x" }));
     render(<AgentAccessSection endpoints={ENDPOINTS} />);
-    await userEvent.click(await screen.findByRole("button", { name: /^Allow General assistant/ }));
-    await userEvent.click(screen.getByRole("button", { name: /^Confirm/ }));
+    await userEvent.click(await screen.findByRole("switch", { name: SAVE }));
+    await userEvent.click(screen.getByRole("button", { name: /^Yes, allow/ }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't save that change. Try again.");
+    expect(screen.getByRole("table")).toBeInTheDocument();
   });
 
   it("prints no token, id, key, scope string or path in the page text, labels included", async () => {
     allowed = true;
     fetchMock.mockImplementation(() => json(200, view()));
     const { container } = render(<AgentAccessSection endpoints={ENDPOINTS} />);
-    await screen.findByText("General assistant");
+    await screen.findByRole("table");
     const labels = [...container.querySelectorAll("[aria-label]")].map((e) => e.getAttribute("aria-label")).join(" ");
     const text = `${container.textContent ?? ""} ${labels}`;
-    for (const bad of ["knowledge:write", "node-ai", "/api/", "token", "curl", "Bearer"]) expect(text).not.toContain(bad);
+    for (const bad of ["knowledge:write", "node-ai", "work_item", "/api/", "token", "curl", "Bearer"]) expect(text).not.toContain(bad);
     expect(text).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/i);
-  });
-
-  it("makes the Allow and Remove buttons at least 40px tall (size lg)", async () => {
-    fetchMock.mockImplementation(() => json(200, view()));
-    render(<AgentAccessSection endpoints={ENDPOINTS} />);
-    expect(await screen.findByRole("button", { name: /^Allow General assistant/ })).toHaveClass("h-10");
-    cleanup();
-    render(<Button size="lg" variant="destructive">Remove</Button>);
-    expect(screen.getByRole("button", { name: "Remove" })).toHaveClass("h-10", "bg-destructive");
   });
 });

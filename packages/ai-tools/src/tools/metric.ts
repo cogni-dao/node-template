@@ -104,7 +104,6 @@ export function createMetricTools(
 				kind: "node",
 				subject: "member",
 				label: "Refresh the numbers on your dashboards",
-				risk: "low",
 			} as ToolRequires,
 			inputSchema: MetricComputeInputSchema.extend({ id: z.string().min(1) }),
 			outputSchema: z.object({ observation: MetricObservationSchema }),

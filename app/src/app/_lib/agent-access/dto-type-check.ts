@@ -29,10 +29,9 @@ type SameKeys<A, B> = [keyof A] extends [keyof B]
   : never;
 
 const topKeys: SameKeys<Wire, NodeAiAccessView> = true;
-const aiKeys: SameKeys<Wire["ai"][number], NodeAiAccessView["ai"][number]> = true;
-const jobKeys: SameKeys<
-  Wire["ai"][number]["jobs"][number],
-  NodeAiAccessView["ai"][number]["jobs"][number]
+const permissionKeys: SameKeys<
+  Wire["permissions"][number],
+  NodeAiAccessView["permissions"][number]
 > = true;
 
 /** Wire -> view: the DTO the route sends is accepted wherever the view type is expected (types only). */
@@ -44,18 +43,14 @@ export function wireIsView(wire: Wire): NodeAiAccessView {
 export function viewIsWire(view: NodeAiAccessView): Wire {
   return {
     canManage: view.canManage,
-    ai: view.ai.map((ai) => ({
-      principal: ai.principal,
-      name: ai.name,
-      blurb: ai.blurb,
-      jobs: ai.jobs.map((job) => ({
-        scope: job.scope,
-        label: job.label,
-        risk: job.risk,
-        allowed: job.allowed,
-      })),
+    permissions: view.permissions.map((row) => ({
+      principal: row.principal,
+      ai: row.ai,
+      scope: row.scope,
+      permission: row.permission,
+      allowed: row.allowed,
     })),
   };
 }
 
-export const DTO_MATCHES_VIEW = [topKeys, aiKeys, jobKeys] as const;
+export const DTO_MATCHES_VIEW = [topKeys, permissionKeys] as const;

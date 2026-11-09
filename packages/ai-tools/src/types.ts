@@ -62,10 +62,8 @@ export interface ToolRequires {
   readonly scope: string;
   readonly kind: "node" | "own" | "account";
   readonly subject: "member" | "admin";
-  /** Plain-language job name an admin reads on the profile page (no scope string, id or path). */
+  /** Plain-language permission name an admin reads on the profile page (no scope string, id or path). */
   readonly label: string;
-  /** How much harm a wrong use could do; shown as a chip beside the job. */
-  readonly risk: "low" | "medium" | "high";
 }
 
 /**

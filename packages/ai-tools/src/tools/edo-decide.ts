@@ -85,7 +85,6 @@ export const edoDecideContract: ToolContract<
     kind: "node",
     subject: "member",
     label: "Log decisions and what happened",
-    risk: "low",
   },
   inputSchema: EdoDecideInputSchema,
   outputSchema: EdoDecideOutputSchema,

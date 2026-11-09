@@ -4,7 +4,7 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-  entry: ["src/index.ts", "src/knowledge.ts", "src/goals.ts", "src/graph-3d.tsx", "src/approval-fragment-scrub.tsx"],
+  entry: ["src/index.ts", "src/knowledge.ts", "src/goals.ts", "src/graph-3d.tsx"],
   format: ["esm"],
   dts: false,
   clean: false,

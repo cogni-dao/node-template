@@ -3,7 +3,7 @@
 
 /**
  * Module: `@app/api/v1/agent-access/roles`
- * Purpose: HUMAN plane. A DAO admin, signed in, lists this node's AI and allows (POST) or removes (DELETE) a job by
+ * Purpose: HUMAN plane. A DAO admin, signed in, lists this node's AI and allows (POST) or removes (DELETE) a permission by
  *   clicking on the profile page. GET returns `canManage`; a non-admin gets `canManage: false` and no AI.
  * Scope: HTTP validation, the human-plane guard, the node admin gate, and delegation to the agent authority. No authority logic.
  * Invariants:
@@ -54,10 +54,10 @@ export const GET = wrapRouteHandlerWithLogging(
       return json({ error: "authz_unavailable" }, 503);
     }
     if (admin !== "allow") {
-      return json(agentRolesListOperation.output.parse({ canManage: false, ai: [] }));
+      return json(agentRolesListOperation.output.parse({ canManage: false, permissions: [] }));
     }
     try {
-      return json(agentRolesListOperation.output.parse({ canManage: true, ai: await authority.listNodeAi() }));
+      return json(agentRolesListOperation.output.parse({ canManage: true, permissions: await authority.listNodeAi() }));
     } catch (error) {
       ctx.log.error({ routeId: "agent.access.roles.list", errorName: error instanceof Error ? error.name : "unknown" }, "agent.roles.list_failed");
       return json({ error: "authz_unavailable" }, 503);

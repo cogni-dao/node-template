@@ -203,7 +203,6 @@ export const workItemTransitionContract: ToolContract<
     kind: "node",
     subject: "member",
     label: "Update work items and their priority scores",
-    risk: "medium",
   },
   inputSchema: WorkItemTransitionInputSchema,
   outputSchema: WorkItemTransitionOutputSchema,

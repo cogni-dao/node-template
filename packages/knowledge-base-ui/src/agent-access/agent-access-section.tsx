@@ -3,16 +3,15 @@
 
 /**
  * Module: `@cogni/knowledge-base-ui/agent-access/agent-access-section`
- * Purpose: "This node's AI": a DAO admin allows or removes each node AI's jobs by clicking.
- * Scope: Presentation over `useAgentAccess`. Renders nothing for a non-admin. One card per AI; each job is a row with
- *   the label above a full-width button, so the layout holds at 360px. Allow asks once (Confirm); Remove never asks.
+ * Purpose: "This node's AI": one compact table where a DAO admin allows or removes each permission of each node AI.
+ * Scope: Presentation over `useAgentAccess`. Renders nothing for a non-admin. One row per (AI, permission): AI, permission,
+ *   a small switch. Allow asks once, inline in the row; Remove never asks.
  * Invariants:
  *   - NON_ADMIN_SEES_NOTHING: renders `null` while loading and for every state except a confirmed admin view (`ready`)
- *     or a confirmed 503 (`unavailable`). No heading, rule or skeleton shows to a non-admin, except the accepted 503 alert
- *     (the page cannot tell who is an admin while the check is down).
- *   - Focus stays on the row: after Allow, Confirm, Cancel or Remove the row's button gets focus again.
+ *     or a confirmed 503 (`unavailable`). No heading or skeleton shows to a non-admin.
+ *   - A click in flight replaces that row's switch with a Skeleton. A switch is never shown dimmed.
  *   - HUMAN_SURFACE_TOKENLESS: the text holds no token, id, key, scope string or API path.
- *   - Buttons are at least 40px tall (Button size "lg").
+ *   - PLAIN_NAMES: a grant gives a permission. No other noun, no risk labels.
  * Side-effects: IO (through the hook)
  * Links: https://cognidao.org/knowledge/ai-access-surface-design
  * @public
@@ -20,41 +19,27 @@
 
 "use client";
 
-import type { JobRisk, NodeAiJobView, NodeAiView } from "@cogni/agent-grants";
-import { useEffect, useRef, useState } from "react";
+import type { NodeAiPermissionView } from "@cogni/agent-grants";
+import { useState } from "react";
 
-import { Alert } from "../ui/alert.js";
-import { Button } from "../ui/button.js";
-import { Chip } from "../ui/chip.js";
+import { cn } from "../cn.js";
+import { Skeleton } from "../ui/skeleton.js";
 import {
   type AgentAccessEndpoints,
   UNAVAILABLE_COPY,
   useAgentAccess,
 } from "./use-agent-access.js";
 
-const RISK_COPY: Record<JobRisk, { text: string; tone: "neutral" | "warning" | "danger" }> = {
-  low: { text: "Low risk", tone: "neutral" },
-  medium: { text: "Medium risk", tone: "warning" },
-  high: { text: "High risk", tone: "danger" },
-};
-
 export interface AgentAccessSectionProps {
   readonly endpoints: AgentAccessEndpoints;
   readonly className?: string;
 }
 
+const keyOf = (row: NodeAiPermissionView) => `${row.principal}|${row.scope}`;
+
 export function AgentAccessSection({ endpoints, className }: AgentAccessSectionProps) {
   const { state, busy, error, allow, remove, reload } = useAgentAccess(endpoints);
   const [confirming, setConfirming] = useState<string | null>(null);
-  // Focus follows the row through Allow -> Confirm -> Remove (the button unmounts each time). Refs, not DOM attributes,
-  // so no scope string or id lands in the page.
-  const rows = useRef(new Map<string, HTMLElement>());
-  const [focusRow, setFocusRow] = useState<string | null>(null);
-  useEffect(() => {
-    if (focusRow === null) return;
-    rows.current.get(focusRow)?.querySelector<HTMLButtonElement>("button:not([disabled])")?.focus();
-    setFocusRow(null);
-  }, [focusRow, state]);
 
   // No flash: nothing renders until the server confirms an admin view or a 503.
   if (state.status === "hidden" || state.status === "loading") return null;
@@ -65,148 +50,116 @@ export function AgentAccessSection({ endpoints, className }: AgentAccessSectionP
         <h2 id="node-ai-heading" className="font-semibold text-foreground text-lg">
           This node&apos;s AI
         </h2>
-        <p className="mt-1 text-muted-foreground text-sm">
-          Choose which jobs each assistant may do for this node.
-        </p>
         <div className="mt-2 border-border border-b" />
       </div>
 
       {state.status === "unavailable" && (
-        <div className="space-y-3 py-4">
-          <Alert variant="destructive">{UNAVAILABLE_COPY}</Alert>
-          <Button size="lg" variant="outline" className="w-full sm:w-auto" onClick={() => void reload()}>
+        <p className="flex items-center gap-3 py-3 text-destructive text-sm" role="alert">
+          {UNAVAILABLE_COPY}
+          <button type="button" className="text-foreground underline" onClick={() => void reload()}>
             Try again
-          </Button>
-        </div>
+          </button>
+        </p>
       )}
 
       {state.status === "ready" && (
-        <div className="space-y-4 py-4">
-          {error && <Alert variant="destructive">{error}</Alert>}
-          {state.view.ai.length === 0 && (
-            <p className="text-muted-foreground text-sm">This node has no assistants to manage yet.</p>
+        <div className="py-2">
+          {error && (
+            <p className="pb-2 text-destructive text-sm" role="alert">
+              {error}
+            </p>
           )}
-          {state.view.ai.map((ai) => (
-            <AiCard
-              key={ai.principal}
-              ai={ai}
-              busy={busy}
-              confirming={confirming}
-              rows={rows.current}
-              onAsk={setConfirming}
-              onCancel={(key) => {
-                setConfirming(null);
-                setFocusRow(key);
-              }}
-              onAllow={async (job) => {
-                setConfirming(null);
-                await allow(ai.principal, job.scope);
-                setFocusRow(`${ai.principal}|${job.scope}`);
-              }}
-              onRemove={async (job) => {
-                await remove(ai.principal, job.scope);
-                setFocusRow(`${ai.principal}|${job.scope}`);
-              }}
-            />
-          ))}
+          {state.view.permissions.length === 0 ? (
+            <p className="py-2 text-muted-foreground text-sm">No permissions to manage.</p>
+          ) : (
+            <table className="w-full text-left text-sm">
+              <thead className="text-muted-foreground text-xs">
+                <tr>
+                  <th scope="col" className="py-1 pr-3 font-medium">AI</th>
+                  <th scope="col" className="py-1 pr-3 font-medium">Permission</th>
+                  <th scope="col" className="w-24 py-1 text-right font-medium">Allowed</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {state.view.permissions.map((row) => {
+                  const key = keyOf(row);
+                  return (
+                    <tr key={key}>
+                      <td className="py-2 pr-3 text-foreground">{row.ai}</td>
+                      <td className="py-2 pr-3 text-foreground">{row.permission}</td>
+                      <td className="h-10 py-2 text-right">
+                        {busy === key ? (
+                          <Skeleton className="ml-auto h-5 w-9 rounded-full" />
+                        ) : confirming === key ? (
+                          <span className="inline-flex items-center gap-2 text-xs">
+                            <span className="text-muted-foreground">Allow?</span>
+                            <button
+                              type="button"
+                              className="font-medium text-foreground underline"
+                              aria-label={`Yes, allow ${row.ai}: ${row.permission}`}
+                              onClick={() => {
+                                setConfirming(null);
+                                void allow(row.principal, row.scope);
+                              }}
+                            >
+                              Yes
+                            </button>
+                            <button
+                              type="button"
+                              className="text-muted-foreground underline"
+                              aria-label={`No, do not allow ${row.ai}: ${row.permission}`}
+                              onClick={() => setConfirming(null)}
+                            >
+                              No
+                            </button>
+                          </span>
+                        ) : (
+                          <Switch
+                            on={row.allowed}
+                            label={`${row.ai}: ${row.permission}`}
+                            locked={busy !== null}
+                            onToggle={() =>
+                              row.allowed ? void remove(row.principal, row.scope) : setConfirming(key)
+                            }
+                          />
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
         </div>
       )}
     </section>
   );
 }
 
-/** "Update work items" -> "update work items": the job label, as it reads after a verb. */
-const afterVerb = (label: string) => `${label.charAt(0).toLowerCase()}${label.slice(1)}`;
-
-function AiCard(props: {
-  ai: NodeAiView;
-  busy: string | null;
-  confirming: string | null;
-  rows: Map<string, HTMLElement>;
-  onAsk: (key: string) => void;
-  onCancel: (key: string) => void;
-  onAllow: (job: NodeAiJobView) => Promise<void>;
-  onRemove: (job: NodeAiJobView) => Promise<void>;
-}) {
-  const { ai, busy, confirming, rows, onAsk, onCancel, onAllow, onRemove } = props;
+/** A small switch. `locked` ignores clicks while another row saves; it never dims the switch. */
+function Switch(props: { on: boolean; label: string; locked: boolean; onToggle: () => void }) {
   return (
-    <div className="rounded-lg border border-border bg-card p-4">
-      <h3 className="font-medium text-foreground">{ai.name}</h3>
-      <p className="text-muted-foreground text-sm">{ai.blurb}</p>
-      <ul className="mt-3 divide-y divide-border">
-        {ai.jobs.map((job) => {
-          const key = `${ai.principal}|${job.scope}`;
-          const anyBusy = busy !== null; // one click at a time: no two jobs clobber each other
-          const risk = RISK_COPY[job.risk];
-          return (
-            <li
-              key={key}
-              ref={(el) => {
-                if (el) rows.set(key, el);
-                else rows.delete(key);
-              }}
-              className="flex flex-col gap-3 py-4 first:pt-0 last:pb-0"
-            >
-              <div className="min-w-0">
-                <div className="font-medium text-foreground text-sm">{job.label}</div>
-                <div className="mt-1 flex flex-wrap gap-2">
-                  <Chip tone={risk.tone}>{risk.text}</Chip>
-                  {job.allowed && <Chip tone="success">Allowed</Chip>}
-                </div>
-              </div>
-              {job.allowed ? (
-                <Button
-                  size="lg"
-                  variant="destructive"
-                  className="w-full"
-                  disabled={anyBusy}
-                  aria-label={`Remove ${ai.name}: ${job.label}`}
-                  onClick={() => void onRemove(job)}
-                >
-                  Remove
-                </Button>
-              ) : confirming === key ? (
-                <div className="space-y-3 rounded-md border border-border bg-muted/40 p-3">
-                  <p className="text-foreground text-sm">
-                    Let {ai.name} {afterVerb(job.label)}?
-                  </p>
-                  <div className="flex flex-col gap-2">
-                    <Button
-                      size="lg"
-                      className="w-full"
-                      autoFocus
-                      disabled={anyBusy}
-                      aria-label={`Confirm: let ${ai.name} ${afterVerb(job.label)}`}
-                      onClick={() => void onAllow(job)}
-                    >
-                      Confirm
-                    </Button>
-                    <Button
-                      size="lg"
-                      variant="ghost"
-                      className="w-full"
-                      aria-label={`Cancel: do not let ${ai.name} ${afterVerb(job.label)}`}
-                      onClick={() => onCancel(key)}
-                    >
-                      Cancel
-                    </Button>
-                  </div>
-                </div>
-              ) : (
-                <Button
-                  size="lg"
-                  className="w-full"
-                  disabled={anyBusy}
-                  aria-label={`Allow ${ai.name} to ${afterVerb(job.label)}`}
-                  onClick={() => onAsk(key)}
-                >
-                  Allow
-                </Button>
-              )}
-            </li>
-          );
-        })}
-      </ul>
-    </div>
+    <button
+      type="button"
+      role="switch"
+      aria-checked={props.on}
+      aria-label={props.label}
+      aria-disabled={props.locked || undefined}
+      onClick={() => {
+        if (!props.locked) props.onToggle();
+      }}
+      className={cn(
+        "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border border-transparent transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+        props.on ? "bg-primary" : "bg-input"
+      )}
+    >
+      <span
+        aria-hidden="true"
+        className={cn(
+          "pointer-events-none block h-4 w-4 rounded-full bg-background shadow transition-transform",
+          props.on ? "translate-x-4" : "translate-x-0.5"
+        )}
+      />
+    </button>
   );
 }

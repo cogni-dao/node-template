@@ -96,7 +96,6 @@ export const vcsFlightCandidateContract: ToolContract<
     kind: "node",
     subject: "admin",
     label: "Start test deployments",
-    risk: "high",
   },
   inputSchema: VcsFlightCandidateInputSchema,
   outputSchema: VcsFlightCandidateOutputSchema,

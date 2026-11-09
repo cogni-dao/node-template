@@ -29,7 +29,7 @@ import {
   buildNodeAiView,
   type GuardDeps,
   grantRole,
-  type NodeAiView,
+  type NodeAiPermissionView,
   resolveInternalPrincipal,
   revokeRole,
   type SqlTag,
@@ -64,8 +64,8 @@ export interface AgentToolAuthority {
     scope: string;
     revokedBy: string;
   }): Promise<{ principalUserId: string; revoked: boolean }>;
-  /** "This node's AI": each catalog principal, its jobs (from the tool contracts) and which are allowed now. */
-  listNodeAi(): Promise<NodeAiView[]>;
+  /** "This node's AI": one row per catalog principal and permission (from the tool contracts), with the live Allow state. */
+  listNodeAi(): Promise<NodeAiPermissionView[]>;
   /** The same admin check the guard uses, for the role routes. */
   readonly adminCheck: AdminCheck;
   /**
@@ -149,18 +149,18 @@ export function createAgentToolAuthority(deps: {
     resolvePrincipal: (slug) => withStore((store) => resolveInternalPrincipal(store, slug)),
     guardDeps: { withStore, adminCheck, onDecision },
     async listNodeAi() {
-      // Jobs come from the contracts of every tool a principal's graphs list: the contracts are the only input that names scopes.
-      const jobsByPrincipal: Record<string, ToolRequires[]> = {};
+      // Permissions come from the contracts of every tool a principal's graphs list: the contracts are the only input that names scopes.
+      const permissionsByPrincipal: Record<string, ToolRequires[]> = {};
       for (const entry of Object.values(LANGGRAPH_CATALOG)) {
         if (!entry.principal) continue;
-        const jobs = (jobsByPrincipal[entry.principal] ??= []);
+        const permissions = (permissionsByPrincipal[entry.principal] ??= []);
         for (const toolId of entry.toolIds) {
           const requires = requiresById[toolId];
-          if (requires) jobs.push(requires);
+          if (requires) permissions.push(requires);
         }
       }
       const liveRoles = await withStore((store) => store.listLiveRoles());
-      return buildNodeAiView({ jobsByPrincipal, liveRoles });
+      return buildNodeAiView({ permissionsByPrincipal, liveRoles });
     },
     declaredScopes,
     adminCheck,

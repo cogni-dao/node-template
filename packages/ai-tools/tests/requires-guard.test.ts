@@ -79,20 +79,19 @@ describe("requires guard", () => {
     expect(by.core__vcs_merge_pr?.subject).toBe("admin");
   });
 
-  it("gives every requires a plain-language label and a risk, with no scope string, id, path or tool name", () => {
+  it("gives every requires a plain-language label, with no scope string, id, path, tool name or the word job", () => {
     for (const c of contracts.filter((c) => c.requires)) {
       const r = c.requires!;
       expect(r.label.length, c.name).toBeGreaterThan(8);
-      expect(r.label, c.name).not.toMatch(/[:/_]|\bcore\b|http|token|curl/i);
-      expect(["low", "medium", "high"], c.name).toContain(r.risk);
+      expect(r.label, c.name).not.toMatch(/[:/_]|\bcore\b|http|token|curl|\bjobs?\b/i);
     }
   });
 
-  it("uses one label and one risk per scope, so the page never shows two names for one job", () => {
+  it("uses one label per scope, so the table never shows two names for one permission", () => {
     const seen = new Map<string, string>();
     for (const c of contracts.filter((c) => c.requires)) {
       const r = c.requires!;
-      const key = `${r.label}|${r.risk}`;
+      const key = r.label;
       expect(seen.get(r.scope) ?? key, r.scope).toBe(key);
       seen.set(r.scope, key);
     }

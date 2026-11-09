@@ -3,12 +3,12 @@
 
 /**
  * Module: `@cogni/knowledge-base-ui/agent-access/use-agent-access`
- * Purpose: The data hook behind "This node's AI": loads the admin view, and allows or removes one job.
+ * Purpose: The data hook behind "This node's AI": loads the admin view, and allows or removes one permission.
  * Scope: Plain `fetch` with `cache: "no-store"`; no react-query and no kept copy beyond component state.
  *   Loads on mount, on window focus (not while hidden) and after every click.
  * Invariants:
  *   - HUMAN_ROUTES_SESSION_ONLY: requests carry the browser session only; this hook never sets an Authorization header.
- *   - NON_ADMIN_SEES_NOTHING: only a confirmed admin view (`canManage: true` with a well-formed list) is `ready`, and only
+ *   - NON_ADMIN_SEES_NOTHING: only a confirmed admin view (`canManage: true` with a well-formed list of permissions) is `ready`, and only
  *     a confirmed 503 is `unavailable`. Loading, 401, 403, 404, 500, any other status, a network error and a malformed body
  *     are all `hidden`. A page cannot tell an admin from anyone else before the server says so.
  *   - A later non-503 failure keeps an already-ready view (a click must not make an admin's block vanish); 401 and 403 hide it.
@@ -57,7 +57,7 @@ function isAdminView(value: unknown): value is NodeAiAccessView {
     typeof value === "object" &&
     value !== null &&
     (value as { canManage?: unknown }).canManage === true &&
-    Array.isArray((value as { ai?: unknown }).ai)
+    Array.isArray((value as { permissions?: unknown }).permissions)
   );
 }
 

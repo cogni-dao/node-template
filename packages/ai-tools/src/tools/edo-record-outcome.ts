@@ -96,7 +96,6 @@ export const edoRecordOutcomeContract: ToolContract<
     kind: "node",
     subject: "member",
     label: "Log decisions and what happened",
-    risk: "low",
   },
   inputSchema: EdoRecordOutcomeInputSchema,
   outputSchema: EdoRecordOutcomeOutputSchema,
