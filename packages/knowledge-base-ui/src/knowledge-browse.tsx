@@ -6,7 +6,7 @@
  * Purpose: The whole bounded knowledge Browse capability: table, header sort and exact filters, column picker, submit-only body search, explicit window navigation (Previous / Next or Continue search / Retry window / Restart) and the revision-changed prompt (task.0059).
  * Scope: Client view over `useKnowledgeBrowse` and a node-supplied fetcher. The node supplies its endpoint, auth, SSR seed, known filter values and what a row selection opens (e.g. its detail sheet).
  * Invariants:
- *   - DRAFT_IS_NOT_SEARCH: typing edits only the draft. Submit (button or Enter) commits a changed draft; an unchanged draft is not replayed.
+ *   - DRAFT_IS_NOT_SEARCH: typing edits only the draft. Submit (button or Enter) commits a changed draft that `KnowledgeBrowseQuerySchema` accepts; a rejected draft shows the schema's issue and sends nothing; an unchanged draft is not replayed.
  *   - ONE_WINDOW_PER_VIEW and INTENT_ONLY_SEARCH (see `useKnowledgeBrowse`); the view mounts with no committed search, so body reads follow only submit.
  *   - CLEAR_RETURNS_TO_FIRST_WINDOW: "Clear filters" empties filters and search and always returns to window 1.
  *   - OPTIONS_FROM_NODE: `entryTypeOptions` / `sourceTypeOptions` are required, because the canonical lists live in the store root (not its browser-safe `/contracts`); nodes pass `EntryTypeSchema.options` / `SourceTypeSchema.options`.
@@ -41,8 +41,8 @@ import {
   knowledgeBrowseTableStateToQuery,
 } from "./knowledge-browse-columns.js";
 import {
-  KNOWLEDGE_SEARCH_LENGTH_MAX,
   type KnowledgeWindowFetcher,
+  knowledgeQueryIssue,
 } from "./knowledge-browse-query.js";
 import { Button } from "./ui/button.js";
 import { Input } from "./ui/input.js";
@@ -93,6 +93,7 @@ export function KnowledgeBrowse({
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
   const [draft, setDraft] = useState("");
   const [search, setSearch] = useState("");
+  const [searchIssue, setSearchIssue] = useState<string | null>(null);
   const query = knowledgeBrowseTableStateToQuery({
     sorting,
     columnFilters,
@@ -143,12 +144,15 @@ export function KnowledgeBrowse({
           className="flex items-center gap-2"
           onSubmit={(event) => {
             event.preventDefault();
-            if (draft !== search) setSearch(draft);
+            // The store's query schema decides what a valid search is.
+            const issue = draft ? knowledgeQueryIssue({ search: draft }) : null;
+            setSearchIssue(issue);
+            if (!issue && draft !== search) setSearch(draft);
           }}
         >
           <Input
-            maxLength={KNOWLEDGE_SEARCH_LENGTH_MAX}
             aria-label="Search knowledge"
+            aria-invalid={searchIssue !== null}
             placeholder="Search id, title, content, domain, type…"
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
@@ -157,6 +161,11 @@ export function KnowledgeBrowse({
           <Button type="submit" variant="outline" size="sm">
             Search
           </Button>
+          {searchIssue && (
+            <span role="alert" className="text-destructive text-xs">
+              Search: {searchIssue}
+            </span>
+          )}
         </form>
         <Button
           variant="outline"
@@ -165,6 +174,7 @@ export function KnowledgeBrowse({
             setColumnFilters([]);
             setDraft("");
             setSearch("");
+            setSearchIssue(null);
             browse.reset();
           }}
         >

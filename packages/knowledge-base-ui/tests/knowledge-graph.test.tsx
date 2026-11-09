@@ -29,7 +29,6 @@ import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
-  KNOWLEDGE_GRAPH_NODES_MAX,
   type KnowledgeCitationFetcher,
   type KnowledgeCitationLink,
   KnowledgeGraph,
@@ -146,7 +145,8 @@ describe("useGraphFocus + knowledgeFocusGeometry", () => {
         citationType: "supports",
       },
     ]);
-    expect(geometry.nodes.length).toBeLessThanOrEqual(KNOWLEDGE_GRAPH_NODES_MAX);
+    // Overview page + the selected atom + the one knowledge endpoint this page adds.
+    expect(geometry.nodes).toHaveLength(overview.length + 1 + 1);
     expect(geometry.nodes.some((node) => node.id === "neighbor-11")).toBe(false);
     expect(result.current.links[1]?.target.href).toBe("/work/items/task.1234");
     expect(fetchCitationLinks.mock.calls.map(([, cursor]) => cursor)).toEqual([
@@ -157,18 +157,21 @@ describe("useGraphFocus + knowledgeFocusGeometry", () => {
     ]);
   });
 
-  it("geometry never exceeds 26 nodes or 5 edges, even when links name foreign endpoints", () => {
-    const foreign = Array.from({ length: 9 }, (_, i) => ({
-      ...relation(i),
-      source: { ...relation(i).target, id: `foreign-${i}` },
-    }));
-    const geometry = knowledgeFocusGeometry(
-      [...overview, ...overview.map((o) => ({ ...o, id: `${o.id}-extra` }))],
-      selected,
-      { links: foreign },
-    );
-    expect(geometry.nodes.length).toBeLessThanOrEqual(KNOWLEDGE_GRAPH_NODES_MAX);
-    expect(geometry.links.length).toBeLessThanOrEqual(5);
+  it("geometry is exactly the overview page, the selected atom and one citations page", () => {
+    const page = Array.from({ length: 3 }, (_, i) => relation(i));
+    const geometry = knowledgeFocusGeometry(overview, selected, { links: page });
+    expect(geometry.nodes.map((node) => node.id)).toEqual([
+      ...overview.map((entry) => entry.id),
+      selected.id,
+      "neighbor-0",
+      "neighbor-1",
+      "neighbor-2",
+    ]);
+    expect(geometry.links.map((link) => link.id)).toEqual([
+      "direct-0",
+      "direct-1",
+      "direct-2",
+    ]);
     // Fresh objects every call: renderers mutate them.
     const again = knowledgeFocusGeometry(overview, selected, { links: [] });
     expect(again.nodes[0]).not.toBe(

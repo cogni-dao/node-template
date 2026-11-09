@@ -7,8 +7,7 @@
  * Scope: Client component reading `column.getFacetedUniqueValues()` (an empty map when the table has no faceted model, e.g. a bounded server page), plus `options` and typed exact entries. Does not fetch data or own URL state.
  * Invariants:
  *   - HEADER_OWNS_SORT_AND_FILTER: facet controls belong to the column header, not a parallel toolbar chip. Deselecting the last value clears the filter.
- *   - SELECTION_CAPPED: with `maxSelected`, unselected values and typed entries are refused at capacity; deselecting frees a slot.
- *   - ENTRY_KEYS_STAY_LOCAL: keystrokes in the entry box never reach an enclosing menu's typeahead.
+ *   - CALLER_VALIDATES: with `validate`, a value whose addition the caller rejects (e.g. by parsing the next filter with the store's query schema) is disabled with that reason as its title, and a rejected typed entry is refused with the reason shown in an alert. The component copies no limits of its own.
  * Side-effects: none
  * Links: task.0044, task.0059, task.0432
  * @public
@@ -32,9 +31,8 @@ export interface HeaderFilterProps<TData, TValue> {
   readonly showCounts?: boolean;
   /** Accessible name and placeholder of the entry box. Default "Project ID". */
   readonly entryLabel?: string;
-  readonly entryMaxLength?: number;
-  /** Most values that may be selected at once; unlimited when absent. */
-  readonly maxSelected?: number;
+  /** Why the next selection would be invalid, or `null` when it is accepted. */
+  readonly validate?: (next: readonly string[]) => string | null;
   /** Caption above the values, e.g. "Domain · any selected exact value". */
   readonly caption?: string;
   /** Label of the clear button. Default "Clear". */
@@ -48,12 +46,12 @@ export function HeaderFilter<TData, TValue>({
   allowEntry = false,
   showCounts = true,
   entryLabel = "Project ID",
-  entryMaxLength,
-  maxSelected,
+  validate,
   caption,
   clearLabel = "Clear",
 }: HeaderFilterProps<TData, TValue>): ReactElement {
   const [entry, setEntry] = useState("");
+  const [refused, setRefused] = useState<string | null>(null);
   const facets = column.getFacetedUniqueValues();
   const selected = new Set((column.getFilterValue() as string[]) ?? []);
   const values = [
@@ -62,14 +60,25 @@ export function HeaderFilter<TData, TValue>({
     .filter((v): v is string => typeof v === "string" && v.length > 0)
     .sort((a, b) => a.localeCompare(b));
 
-  const atCapacity = maxSelected !== undefined && selected.size >= maxSelected;
+  /** The caller's reason adding `value` is invalid, if any. */
+  const refusal = (value: string): string | null =>
+    selected.has(value) || !validate ? null : validate([...selected, value]);
 
-  function toggle(value: string) {
+  /** Toggle `value`; returns false when the caller refused the addition. */
+  function toggle(value: string): boolean {
     const next = new Set(selected);
     if (next.has(value)) next.delete(value);
-    else if (atCapacity) return;
-    else next.add(value);
+    else {
+      const reason = refusal(value);
+      if (reason) {
+        setRefused(reason);
+        return false;
+      }
+      next.add(value);
+    }
+    setRefused(null);
     column.setFilterValue(next.size === 0 ? undefined : Array.from(next));
+    return true;
   }
 
   if (values.length === 0 && !allowEntry) {
@@ -83,12 +92,14 @@ export function HeaderFilter<TData, TValue>({
       )}
       {values.map((v) => {
         const isSelected = selected.has(v);
+        const reason = refusal(v);
         return (
           <button
             key={v}
             type="button"
             aria-pressed={isSelected}
-            disabled={atCapacity && !isSelected}
+            disabled={reason !== null}
+            title={reason ?? undefined}
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
@@ -123,24 +134,22 @@ export function HeaderFilter<TData, TValue>({
           onSubmit={(event) => {
             event.preventDefault();
             event.stopPropagation();
-            if (entry && !selected.has(entry)) toggle(entry);
-            setEntry("");
+            if (!entry) return;
+            if (selected.has(entry) || toggle(entry)) setEntry("");
           }}
         >
           <Input
             aria-label={entryLabel}
             placeholder={entryLabel}
             value={entry}
-            maxLength={entryMaxLength}
-            onKeyDown={(event) => event.stopPropagation()}
             onChange={(event) => setEntry(event.target.value)}
           />
           <button type="submit">Add</button>
         </form>
       )}
-      {atCapacity && (
-        <p className="px-2 pt-1 text-muted-foreground text-xs">
-          Maximum {maxSelected} values selected. Remove one to add another.
+      {refused && (
+        <p role="alert" className="px-2 pt-1 text-destructive text-xs">
+          {refused}
         </p>
       )}
       {selected.size > 0 && (

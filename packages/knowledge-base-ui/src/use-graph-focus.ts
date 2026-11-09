@@ -3,13 +3,13 @@
 
 /**
  * Module: `@cogni/knowledge-base-ui/use-graph-focus`
- * Purpose: The knowledge graph's focus controller and bounded geometry: one replacement page of direct citation links for the selected atom, merged with one overview window into at most 26 nodes (task.0059).
+ * Purpose: The knowledge graph's focus controller and geometry: one replacement page of direct citation links for the selected atom, merged with one overview page (task.0059).
  * Scope: Client hook over a node-supplied citation fetcher, plus a pure geometry function. The node owns its endpoint, auth and the renderer.
  * Invariants:
  *   - REPLACEMENT_FOCUS: More / Retry / Restart each request one page that REPLACES the current links; nothing accumulates or walks cursors.
  *   - FAILED_PAGE_KEEPS_GEOMETRY: a failed page keeps the previous links and remembers its cursor for `retry()`.
  *   - STALE_INTENT_IGNORED: a new selection, a newer page or unmount aborts the in-flight request, and a late response never commits.
- *   - BOUNDED_GEOMETRY: ≤ 20 overview atoms + the selected atom + ≤ 5 focus links, ≤ 26 nodes; only knowledge→knowledge links become typed edges; work endpoints stay links in the focus list.
+ *   - GEOMETRY_IS_THE_DATA: nodes are exactly one overview page (bounded by the store's `KnowledgeOverviewPageSchema`) plus the selected atom plus the knowledge endpoints of one citations page (bounded by the node's citations route); edges are that page's knowledge→knowledge links. No caps or slices are re-declared here; work endpoints stay links in the focus list.
  *   - FRESH_OBJECTS: geometry is rebuilt as new objects on every call, because force renderers mutate node coordinates and link endpoints.
  * Side-effects: IO (through the injected fetcher)
  * Links: task.0059
@@ -22,11 +22,6 @@ import type { KnowledgeSummary } from "@cogni/knowledge-store/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { DirectRelationPage } from "./direct-relation-links.js";
-import {
-  KNOWLEDGE_GRAPH_FOCUS_LINKS_MAX,
-  KNOWLEDGE_GRAPH_NODES_MAX,
-  KNOWLEDGE_GRAPH_OVERVIEW_MAX,
-} from "./knowledge-browse-query.js";
 
 /** One end of a direct citation link, as the node's citations route returns it. */
 export interface KnowledgeCitationEndpoint {
@@ -49,10 +44,10 @@ export interface KnowledgeCitationLink {
 export type KnowledgeCitationPage = DirectRelationPage<KnowledgeCitationLink>;
 
 /**
- * One page of an atom's direct citation links. The node's route returns at
- * most `KNOWLEDGE_GRAPH_FOCUS_LINKS_MAX` (5) links per page with a cursor for
- * the next; a larger page shows in the list but only its first five are drawn.
- * Reject with an error carrying `status`.
+ * One page of an atom's direct citation links, with a cursor for the next.
+ * The page size is the node route's contract (node-template's
+ * `/api/v1/citations/:id` returns at most 5); the graph draws the page as
+ * returned. Reject with an error carrying `status`.
  */
 export type KnowledgeCitationFetcher = (
   id: string,
@@ -207,34 +202,28 @@ function toNode(entry: KnowledgeSummary): KnowledgeGraphNode {
   };
 }
 
-/** Merge one overview window, the selected atom and one focus page into bounded fresh geometry. */
+/** Merge one overview page, the selected atom and one focus page into fresh geometry, exactly as returned. */
 export function knowledgeFocusGeometry(
   overview: readonly KnowledgeSummary[],
   selected: KnowledgeSummary | null,
   focus: { readonly links: readonly KnowledgeCitationLink[] },
 ): KnowledgeGraphGeometry {
   const nodes = new Map<string, KnowledgeGraphNode>(
-    overview
-      .slice(0, KNOWLEDGE_GRAPH_OVERVIEW_MAX)
-      .map((entry) => [entry.id, toNode(entry)]),
+    overview.map((entry) => [entry.id, toNode(entry)]),
   );
   if (selected) nodes.set(selected.id, toNode(selected));
   const links: KnowledgeGraphLink[] = [];
-  for (const link of focus.links.slice(0, KNOWLEDGE_GRAPH_FOCUS_LINKS_MAX)) {
-    const added = [link.source, link.target].filter(
-      (endpoint) => endpoint.kind === "knowledge" && !nodes.has(endpoint.id),
-    );
-    const unique = [...new Map(added.map((e) => [e.id, e])).values()];
-    if (nodes.size + unique.length > KNOWLEDGE_GRAPH_NODES_MAX) continue;
-    for (const endpoint of unique)
-      nodes.set(endpoint.id, {
-        id: endpoint.id,
-        title: endpoint.title ?? endpoint.id,
-        domain: "",
-        entryType: "",
-        sourceType: "",
-        confidencePct: null,
-      });
+  for (const link of focus.links) {
+    for (const endpoint of [link.source, link.target])
+      if (endpoint.kind === "knowledge" && !nodes.has(endpoint.id))
+        nodes.set(endpoint.id, {
+          id: endpoint.id,
+          title: endpoint.title ?? endpoint.id,
+          domain: "",
+          entryType: "",
+          sourceType: "",
+          confidencePct: null,
+        });
     if (link.source.kind === "knowledge" && link.target.kind === "knowledge")
       links.push({
         id: link.id,

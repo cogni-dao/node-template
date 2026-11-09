@@ -12,18 +12,12 @@
  */
 
 export {
-  KNOWLEDGE_FILTER_VALUE_LENGTH_MAX,
-  KNOWLEDGE_FILTER_VALUES_MAX,
-  KNOWLEDGE_GRAPH_FOCUS_LINKS_MAX,
-  KNOWLEDGE_GRAPH_NODES_MAX,
-  KNOWLEDGE_GRAPH_OVERVIEW_MAX,
   KNOWLEDGE_QUERY_PREFIX,
-  KNOWLEDGE_SEARCH_LENGTH_MAX,
-  KNOWLEDGE_WINDOW_MAX,
   type KnowledgeReadOperation,
   type KnowledgeWindowFetcher,
   knowledgeBrowseKey,
   knowledgeOverviewKey,
+  knowledgeQueryIssue,
   knowledgeQueryToSearchParams,
   parseKnowledgeQuery,
 } from "./knowledge-browse-query.js";

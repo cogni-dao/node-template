@@ -8,7 +8,7 @@
  * Invariants:
  *   - ENGINE_CLIENT_ONLY: `react-force-graph-3d` touches `window` when it loads, so it is imported only after mount; server render and plain-Node import render a placeholder.
  *   - DRAWS_PACKAGE_GEOMETRY: draws exactly the bounded `graphData` and callbacks `KnowledgeGraph` passes; link styling assumes typed citation edges only.
- * Side-effects: dynamic import of the optional peer `react-force-graph-3d`
+ * Side-effects: dynamic import of the peer `react-force-graph-3d`, which a host importing this subpath must install (declared optional only so work-board adopters are not auto-installed a WebGL engine). Without it the host's bundler fails to resolve the import at build time; there is no runtime fallback.
  * Links: task.0059, packages/knowledge-base-ui/src/knowledge-graph.tsx
  * @public
  */

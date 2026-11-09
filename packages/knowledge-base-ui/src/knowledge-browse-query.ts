@@ -3,12 +3,12 @@
 
 /**
  * Module: `@cogni/knowledge-base-ui/knowledge-browse-query`
- * Purpose: The bounded knowledge read contract the Browse and Graph hooks share: request encoding, cache keys, budgets and the injected fetcher shapes (task.0059).
- * Scope: Pure functions and types over `@cogni/knowledge-store/contracts` (≥ 0.12.0), which owns the query schemas and the 20-row page. No I/O.
+ * Purpose: The bounded knowledge read contract the Browse and Graph hooks share: request encoding, input validation, cache keys and the injected fetcher shapes (task.0059).
+ * Scope: Pure functions and types over `@cogni/knowledge-store/contracts` (≥ 0.12.0), which owns the query schemas, their limits and the page size. No I/O.
  * Invariants:
  *   - ONE_CODEC: every request is the store schema's parse of the query, encoded with repeated keys for the exact-value arrays (`domains=a&domains=b`), so the node's route parses it back with the same schema. Nodes never hand-build these parameters.
  *   - KEY_IS_QUERY_IDENTITY: the cache key is `[...prefix, "browse" | "search" | "overview", parsedQuery]`, cursor included, so each window is its own cache entry and a new filter, sort or search is a new key.
- *   - BUDGETS_FROM_STORE: window size (20), filter values (50 × 500 chars) and search length (2000) are read from the store schemas when the module loads, never re-declared; the graph shows ≤ 20 overview atoms, ≤ 5 focus links and ≤ 26 nodes.
+ *   - NO_COPIED_LIMITS: the package declares no numeric budgets. Page sizes are whatever the store's page schema admits and the server returns; user input (filter values, search) is validated by parsing it with `KnowledgeBrowseQuerySchema` and surfacing the schema's own issue (`knowledgeQueryIssue`).
  * Side-effects: none
  * Links: task.0059, packages/knowledge-store/src/contracts.ts
  * @public
@@ -16,57 +16,11 @@
 
 import {
   type KnowledgeBrowsePage,
-  KnowledgeBrowsePageSchema,
   type KnowledgeBrowseQuery,
   KnowledgeBrowseQuerySchema,
   type KnowledgeOverviewQuery,
   KnowledgeOverviewQuerySchema,
 } from "@cogni/knowledge-store/contracts";
-
-/** A numeric bound the store schema declares, read through zod's public JSON Schema projection. */
-function declared(
-  schema: { toJSONSchema: () => Record<string, unknown> },
-  pick: (json: Record<string, unknown>) => unknown,
-): number {
-  const value = pick(schema.toJSONSchema());
-  if (typeof value !== "number")
-    throw new Error("@cogni/knowledge-store contract declares no such bound");
-  return value;
-}
-const exactValues = KnowledgeBrowseQuerySchema.shape.domains.in.unwrap();
-
-/** Rows in one Browse or overview window (the store page's `items` maximum). */
-export const KNOWLEDGE_WINDOW_MAX = declared(
-  KnowledgeBrowsePageSchema.shape.items,
-  (json) => json.maxItems,
-);
-/** Overview atoms the graph draws from one window. */
-export const KNOWLEDGE_GRAPH_OVERVIEW_MAX = KNOWLEDGE_WINDOW_MAX;
-/**
- * Citation links one focus page contributes to the graph. A node's citations
- * route returns at most this many links per page (node-template's
- * `/api/v1/citations/:id` schema caps `links` at 5); geometry draws only the
- * first five of a larger page.
- */
-export const KNOWLEDGE_GRAPH_FOCUS_LINKS_MAX = 5;
-/** Graph nodes: the overview, the selected atom and one endpoint per focus link. */
-export const KNOWLEDGE_GRAPH_NODES_MAX =
-  KNOWLEDGE_GRAPH_OVERVIEW_MAX + 1 + KNOWLEDGE_GRAPH_FOCUS_LINKS_MAX;
-/** Exact values one header filter may hold (the store schema's array maximum). */
-export const KNOWLEDGE_FILTER_VALUES_MAX = declared(
-  exactValues,
-  (json) => json.maxItems,
-);
-/** Longest exact filter value (the store schema's value maximum). */
-export const KNOWLEDGE_FILTER_VALUE_LENGTH_MAX = declared(
-  exactValues,
-  (json) => (json.items as { maxLength?: unknown } | undefined)?.maxLength,
-);
-/** Longest body search (the store schema's search maximum). */
-export const KNOWLEDGE_SEARCH_LENGTH_MAX = declared(
-  KnowledgeBrowseQuerySchema.shape.search.unwrap(),
-  (json) => json.maxLength,
-);
 
 /** Default cache key prefix. Node mutations that invalidate it raise the revision prompt. */
 export const KNOWLEDGE_QUERY_PREFIX: readonly unknown[] = ["knowledge"];
@@ -125,4 +79,17 @@ export function knowledgeOverviewKey(
   prefix: readonly unknown[] = KNOWLEDGE_QUERY_PREFIX,
 ): readonly unknown[] {
   return [...prefix, "overview", parseKnowledgeQuery(query, "overview")];
+}
+
+/**
+ * The store schema's first issue for a candidate query, or `null` when it
+ * parses. Input limits (values per filter, value length, search length) come
+ * only from `KnowledgeBrowseQuerySchema`; the package copies none of them.
+ */
+export function knowledgeQueryIssue(
+  query: KnowledgeBrowseQuery,
+): string | null {
+  const parsed = KnowledgeBrowseQuerySchema.safeParse(query);
+  if (parsed.success) return null;
+  return parsed.error.issues[0]?.message ?? "Invalid knowledge query";
 }

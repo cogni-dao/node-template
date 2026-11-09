@@ -6,8 +6,9 @@
  * Purpose: Column definitions of the bounded knowledge Browse table: header-owned sort and exact-value filters over the whole corpus (task.0059).
  * Scope: Pure TanStack column descriptors over `KnowledgeSummary`. Sorting and filtering are manual: the table state becomes the server query (`knowledgeBrowseTableStateToQuery`), never a filter over the loaded window.
  * Invariants:
- *   - HEADER_OWNS_SORT_AND_FILTER: Domain, Type and Source headers hold their exact-value filter and Asc/Desc; Confidence and Created sort on click.
- *   - EXACT_GLOBAL_VALUES: filters list the node's known values plus typed exact entries (≤ 50 values, ≤ 500 chars each), never facets of the loaded window.
+ *   - HEADER_OWNS_SORT_AND_FILTER: every sortable header sorts on click; Domain, Type and Source also open their exact-value filter from a "Filter <title>" popover.
+ *   - EXACT_GLOBAL_VALUES: filters list the node's known values plus typed exact entries, never facets of the loaded window.
+ *   - SCHEMA_VALIDATES_FILTERS: a selection is accepted only if `KnowledgeBrowseQuerySchema` parses the resulting filter; otherwise the schema's own issue is shown. No value-count or length limit is copied here.
  *   - EMPTY_WINDOW_KEEPS_CONTROLS: headers disable only while a window is loading (`meta.isLoading`), so an empty result can still be refiltered.
  * Side-effects: none
  * Links: task.0059
@@ -32,10 +33,7 @@ import type { ReactElement } from "react";
 
 import { HeaderFilter } from "./header-filter.js";
 import { ConfidenceBar, CopyLinkButton } from "./knowledge-cells.js";
-import {
-  KNOWLEDGE_FILTER_VALUE_LENGTH_MAX,
-  KNOWLEDGE_FILTER_VALUES_MAX,
-} from "./knowledge-browse-query.js";
+import { knowledgeQueryIssue } from "./knowledge-browse-query.js";
 import { RelativeTime } from "./relative-time.js";
 import { WorkColumnHeader } from "./work-column-header.js";
 
@@ -76,13 +74,17 @@ function loading(table: Table<KnowledgeSummary>): boolean {
   );
 }
 
+type ExactField = "domains" | "entryTypes" | "sourceTypes";
+
 function ExactFilter({
   column,
   label,
+  field,
   options,
 }: {
   readonly column: Column<KnowledgeSummary, unknown>;
   readonly label: string;
+  readonly field: ExactField;
   readonly options: readonly string[];
 }): ReactElement {
   return (
@@ -93,8 +95,10 @@ function ExactFilter({
       showCounts={false}
       caption={`${label} · any selected exact value`}
       entryLabel={`Exact ${label}`}
-      entryMaxLength={KNOWLEDGE_FILTER_VALUE_LENGTH_MAX}
-      maxSelected={KNOWLEDGE_FILTER_VALUES_MAX}
+      validate={(next) => {
+        const issue = knowledgeQueryIssue({ [field]: [...next] });
+        return issue ? `${label}: ${issue}` : null;
+      }}
       clearLabel={`Clear ${label}`}
     />
   );
@@ -120,7 +124,12 @@ export function createKnowledgeBrowseColumns({
           title="Domain"
           disabled={loading(table)}
           filter={
-            <ExactFilter column={column} label="Domain" options={domainOptions} />
+            <ExactFilter
+              column={column}
+              label="Domain"
+              field="domains"
+              options={domainOptions}
+            />
           }
         />
       ),
@@ -166,7 +175,12 @@ export function createKnowledgeBrowseColumns({
           title="Type"
           disabled={loading(table)}
           filter={
-            <ExactFilter column={column} label="Type" options={entryTypeOptions} />
+            <ExactFilter
+              column={column}
+              label="Type"
+              field="entryTypes"
+              options={entryTypeOptions}
+            />
           }
         />
       ),
@@ -200,6 +214,7 @@ export function createKnowledgeBrowseColumns({
             <ExactFilter
               column={column}
               label="Source"
+              field="sourceTypes"
               options={sourceTypeOptions}
             />
           }
