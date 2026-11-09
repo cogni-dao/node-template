@@ -241,3 +241,74 @@ describe("text scan is capped per request with a continuation", () => {
     expect(next.items[0]?.id).toBe(idOf(3));
   });
 });
+
+describe("listBoardColumns composes every column in one native read", () => {
+  const STATUSES = ["needs_design", "needs_implement", "done"] as const;
+  const rowsFor = (status: string, count: number, column: number) =>
+    Array.from({ length: count }, (_, i) => ({
+      id: `${status}.${String(i).padStart(4, "0")}`,
+      title: `${status} ${i}`,
+      type: "task",
+      status,
+      labels: [],
+      project_id: `proj.${"p".repeat(10)}`,
+      __sort_key: String(100 - i),
+      __board_column: column
+    }));
+
+  it("issues ONE query and returns per-column pages whose cursors equal listSummaries'", async () => {
+    const queries: string[] = [];
+    const sql = makeFakeDoltgresSql((query) => {
+      if (query.startsWith("WITH board AS")) {
+        // 21 rows (more) for design, 3 for implement, none for done.
+        return [...rowsFor("needs_design", 21, 0), ...rowsFor("needs_implement", 3, 1)];
+      }
+      if (query.includes("FROM (SELECT")) {
+        const status = /status IN \('([^']+)'\)/.exec(query)?.[1] ?? "";
+        return rowsFor(status, status === "needs_design" ? 21 : 3, 0);
+      }
+      return [];
+    }, queries);
+    const adapter = new DoltgresWorkItemAdapter(independentReadPool(sql), { readClient: sql });
+    const filters = { types: ["task" as const], rankMin: 1 };
+    const board = await adapter.listBoardColumns(filters, [...STATUSES, "done"], 20);
+
+    const composed = queries.filter((query) => query.startsWith("WITH board AS"));
+    expect(composed).toHaveLength(1);
+    expect(queries.filter((query) => query.includes("FROM (SELECT"))).toHaveLength(1);
+    const sqlText = composed[0] as string;
+    expect(sqlText.match(/UNION ALL/g)).toHaveLength(2);
+    expect(sqlText.match(/LIMIT 21\)/g)).toHaveLength(3);
+    for (const status of STATUSES) expect(sqlText).toContain(`status IN ('${status}')`);
+    expect(sqlText).not.toContain("work_items.*");
+    expect(board.queryCount).toBe(1);
+    expect(board.columns.map((c) => [c.status, c.items.length, c.pageInfo.hasMore])).toEqual([
+      ["needs_design", 20, true],
+      ["needs_implement", 3, false],
+      ["done", 0, false]
+    ]);
+    expect(board.columns[0]?.items[0]).not.toHaveProperty("summary");
+
+    // The per-column path issues the identical cursor for the identical column query.
+    const single = await adapter.listSummaries({ ...filters, statuses: ["needs_design"], limit: 20 });
+    expect(board.columns[0]?.pageInfo.endCursor).toBe(single.pageInfo.endCursor);
+    // ...and that cursor continues the column through listSummaries.
+    await expect(
+      adapter.listSummaries({
+        ...filters,
+        statuses: ["needs_design"],
+        limit: 20,
+        cursor: board.columns[0]?.pageInfo.endCursor ?? undefined
+      })
+    ).resolves.toMatchObject({ items: expect.any(Array) });
+  });
+
+  it("never composes text search and reads nothing for no columns", async () => {
+    const queries: string[] = [];
+    const sql = makeFakeDoltgresSql(() => [], queries);
+    const adapter = new DoltgresWorkItemAdapter(independentReadPool(sql), { readClient: sql });
+    await expect(adapter.listBoardColumns({ text: "x" }, ["done"], 20)).rejects.toThrow(/text/);
+    await expect(adapter.listBoardColumns({}, [], 20)).resolves.toEqual({ columns: [], queryCount: 0 });
+    expect(queries.filter((query) => query.includes("SELECT ordered"))).toHaveLength(0);
+  });
+});

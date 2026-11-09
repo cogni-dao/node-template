@@ -15,6 +15,7 @@
  */
 
 import {
+  type ListWorkBoardColumns,
   type ListWorkSummaries,
   loadWorkBoardColumns,
   type LoadWorkBoardOptions,
@@ -71,8 +72,10 @@ export interface WorkReadTelemetry {
   readonly rowsScanned: number;
   readonly sortBy?: WorkItemOrder["sortBy"];
   readonly sortDirection?: WorkItemOrder["sortDirection"];
-  /** Board only: columns requested, columns the budget did not reach, and each read's duration in order. */
+  /** Board only: columns requested, columns the budget did not reach, each read's duration in order, native reads issued, and whether columns were composed into one read. */
   readonly columnCount?: number;
+  readonly queryCount?: number;
+  readonly readMode?: "composed" | "sequential";
   readonly notStartedCount?: number;
   readonly columnDurationsMs?: readonly number[];
 }
@@ -259,18 +262,46 @@ export async function handleWorkBoardRequest(
   if (!parsed.ok) return invalid(parsed.issues);
   const order = orderOf(parsed.query);
   const columnDurationsMs: number[] = [];
+  let queryCount = 0;
   const timed: ListWorkSummaries = async (query, readOptions) => {
     const startedAt = performance.now();
     try {
       return await listSummaries(query, readOptions);
     } finally {
       columnDurationsMs.push(Math.round(performance.now() - startedAt));
+      queryCount += 1;
     }
   };
-  const board = { columnCount: parsed.statuses.length, columnDurationsMs };
+  const listColumns = options.listColumns;
+  const composed: ListWorkBoardColumns | undefined = listColumns
+    ? async (...args) => {
+        const startedAt = performance.now();
+        let issued: number | undefined;
+        try {
+          const pages = await listColumns(...args);
+          issued = pages.queryCount;
+          return pages;
+        } finally {
+          columnDurationsMs.push(Math.round(performance.now() - startedAt));
+          queryCount += issued ?? 1;
+        }
+      }
+    : undefined;
+  const boardTelemetry = () => ({
+    columnCount: parsed.statuses.length,
+    columnDurationsMs,
+    queryCount,
+    readMode:
+      composed && !parsed.query.text
+        ? ("composed" as const)
+        : ("sequential" as const),
+  });
   try {
     const result = WorkBoardColumnsSchema.parse(
-      await loadWorkBoardColumns(timed, parsed.query, parsed.statuses, options),
+      await loadWorkBoardColumns(timed, parsed.query, parsed.statuses, {
+        ...options,
+        ...(composed && { listColumns: composed }),
+      }),
     );
     return success(
       result,
@@ -284,12 +315,12 @@ export async function handleWorkBoardRequest(
         ),
       },
       {
-        ...board,
+        ...boardTelemetry(),
         notStartedCount: result.columns.filter((c) => c.state === "not_started")
           .length,
       },
     );
   } catch (error) {
-    return failure(error, options.signal, order, board);
+    return failure(error, options.signal, order, boardTelemetry());
   }
 }

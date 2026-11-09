@@ -320,6 +320,32 @@ describe("loadWorkBoardColumns", () => {
     ]);
   });
 
+  it("reads every column in ONE composed call when the store offers it and the query has no text", async () => {
+    const { list } = fixtureReader(45);
+    const listColumns = vi.fn(async (query: WorkSummaryQuery, cols: readonly string[], perColumn: number) => ({
+      queryCount: 1,
+      columns: await Promise.all(
+        cols.map(async (status) => ({ status, ...(await list({ ...query, statuses: [status], limit: perColumn })) })),
+      ),
+    }));
+    list.mockClear();
+    const board = await loadWorkBoardColumns(list, { types: ["task"], cursor: "x" }, statuses, { listColumns });
+    expect(listColumns).toHaveBeenCalledTimes(1);
+    const [query, cols, perColumn] = listColumns.mock.calls[0] ?? [];
+    expect(query).toEqual({ types: ["task"], limit: WORK_BOARD_COLUMN_PAGE });
+    expect(cols).toEqual(statuses);
+    expect(perColumn).toBe(WORK_BOARD_COLUMN_PAGE);
+    expect(board.columns.map((c) => [c.status, c.state, c.items.length])).toEqual(
+      statuses.map((status) => [status, "loaded", WORK_BOARD_COLUMN_PAGE]),
+    );
+
+    // Text keeps the capped per-column path.
+    const perColumnList = vi.fn(list);
+    await loadWorkBoardColumns(perColumnList, { text: "item" }, statuses, { listColumns });
+    expect(listColumns).toHaveBeenCalledTimes(1);
+    expect(perColumnList).toHaveBeenCalledTimes(statuses.length);
+  });
+
   it("reads nothing for no columns and rejects an unknown status before any read", async () => {
     const { list } = fixtureReader(3);
     await expect(loadWorkBoardColumns(list, {}, [])).resolves.toEqual({
@@ -459,6 +485,24 @@ describe("read handlers", () => {
     );
     expect(result).toMatchObject({ status: 499, body: null });
     expect(result.telemetry.errorCode).toBe("client_aborted");
+  });
+
+  it("logs one composed read for a board without text", async () => {
+    const list = vi.fn(async () => page);
+    const result = await handleWorkBoardRequest(
+      new URLSearchParams("statuses=done,needs_design"),
+      list,
+      {
+        listColumns: async (_query, cols) => ({
+          queryCount: 1,
+          columns: cols.map((status) => ({ status, items: [], pageInfo: page.pageInfo })),
+        }),
+      },
+    );
+    expect(result.status).toBe(200);
+    expect(list).not.toHaveBeenCalled();
+    expect(result.telemetry).toMatchObject({ columnCount: 2, queryCount: 1, readMode: "composed" });
+    expect(result.telemetry.columnDurationsMs).toHaveLength(1);
   });
 
   it("serves board columns with per-column durations and not-started counts", async () => {

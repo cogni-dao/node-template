@@ -11,7 +11,8 @@
  *   - ONE_REQUEST_BUDGET: one admission deadline (`WORK_BOARD_READ_BUDGET_MS`) and one rows-scanned budget cover the whole board, not each column. A column the budget does not reach returns `state: "not_started"` with no items and no cursor; a text column cut by the deadline returns its matches with a continuation.
  *   - POOL_SAFETY: the deadline only gates admission (before each column and each text batch). It never shortens a native query timeout, which alone can retire the shared reader pool.
  *   - ABORT_BETWEEN_COLUMNS: an aborted signal stops the board before its next column read; no further reads are issued for a request nobody awaits.
- *   - SEQUENTIAL_READS: columns are read one after another, each passed the request's shared deadline; the template's reader pool is width one, so concurrent calls would only queue and spend the deadline waiting. Sequential reads bound peak reader load to one query.
+ *   - ONE_NATIVE_READ: without text, a supplied `listColumns` reads every column in ONE store call (Doltgres: one UNION ALL query, one reader slot, one native deadline); cursors are identical to the per-column path.
+ *   - SEQUENTIAL_READS: text boards (and stores without `listColumns`) read columns one after another, each passed the request's shared deadline; the template's reader pool is width one, so concurrent calls would only queue and spend the deadline waiting. Sequential reads bound peak reader load to one query.
  * Side-effects: none (the injected reader performs the I/O)
  * Links: task.0055, packages/work-items/src/summary-query.ts
  * @public
@@ -19,7 +20,7 @@
 
 import { z } from "zod";
 
-import { WorkItemSummarySchema } from "./contracts.js";
+import { type WorkItemSummary, WorkItemSummarySchema } from "./contracts.js";
 import {
   type ParsedWorkSummaryQuery,
   parseWorkSummarySearchParams,
@@ -28,6 +29,7 @@ import {
   WORK_TEXT_SCAN_MAX_ROWS,
   type WorkSummaryIssue,
   type WorkSummaryPage,
+  type WorkSummaryPageInfo,
   WorkSummaryPageInfoSchema,
   type WorkSummaryQuery,
   type WorkSummaryReadOptions,
@@ -65,6 +67,30 @@ export type ListWorkSummaries = (
   options?: WorkSummaryReadOptions,
 ) => Promise<WorkSummaryPage>;
 
+/** First pages of several status columns, as one composed read returns them. */
+export interface WorkBoardColumnPages {
+  readonly columns: ReadonlyArray<{
+    readonly status: string;
+    readonly items: WorkItemSummary[];
+    readonly pageInfo: WorkSummaryPageInfo;
+  }>;
+  /** Native queries the read issued (1 for a composed board). */
+  readonly queryCount: number;
+}
+
+/**
+ * Reads the first page of every listed column in one composed store read
+ * (`DoltgresWorkItemAdapter.listBoardColumns`). Each column's `endCursor` must
+ * be the one `listSummaries({ ...query, statuses: [status], limit: perColumn })`
+ * would issue. Not used for text queries.
+ */
+export type ListWorkBoardColumns = (
+  query: WorkSummaryQuery,
+  statuses: readonly string[],
+  perColumn: number,
+  options?: { readonly signal?: AbortSignal },
+) => Promise<WorkBoardColumnPages>;
+
 /**
  * Admission budget for one whole board request, shared by every column read:
  * no column (and no further text batch) starts after it. It never shortens a
@@ -83,6 +109,11 @@ export interface LoadWorkBoardOptions {
   readonly maxScanRows?: number;
   /** Clock for tests. */
   readonly now?: () => number;
+  /**
+   * Composed reader: when present and the query has no text, all columns are
+   * read in ONE call instead of one `listSummaries` per column.
+   */
+  readonly listColumns?: ListWorkBoardColumns;
 }
 
 /**
@@ -136,6 +167,24 @@ export async function loadWorkBoardColumns(
   );
   if (unknown.length) {
     throw new RangeError(`unknown work status: ${unknown.join(", ")}`);
+  }
+  if (options.listColumns && !query.text && visible.length > 0) {
+    options.signal?.throwIfAborted();
+    const base = workBoardColumnQuery(query, visible[0] as string, options.perColumn);
+    const { statuses: _statuses, ...filters } = base;
+    const composed = await options.listColumns(
+      filters,
+      visible,
+      base.limit ?? WORK_BOARD_COLUMN_PAGE,
+      options.signal ? { signal: options.signal } : undefined,
+    );
+    return {
+      columns: visible.map((status): WorkBoardColumn => {
+        const page = composed.columns.find((column) => column.status === status);
+        if (!page) throw new Error(`composed board read omitted column ${status}`);
+        return { status, state: "loaded", items: page.items, pageInfo: page.pageInfo };
+      }),
+    };
   }
   const now = options.now ?? Date.now;
   const deadline = now() + (options.budgetMs ?? WORK_BOARD_READ_BUDGET_MS);

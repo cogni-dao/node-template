@@ -106,8 +106,10 @@ export { toWorkItemDto } from "./types.js";
 export * from "./contracts.js";
 
 export type {
+  ListWorkBoardColumns,
   ListWorkSummaries,
   LoadWorkBoardOptions,
+  WorkBoardColumnPages,
   WorkBoardColumn,
   WorkBoardColumns,
   WorkBoardQueryParse
