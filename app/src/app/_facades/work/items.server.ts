@@ -20,10 +20,16 @@ import type {
   WorkItemDto,
   WorkItemsListInput,
   WorkItemsListOutput,
+  WorkItemSummariesListInput,
   WorkItemSummariesListOutput,
 } from "@cogni/node-contracts";
 import { WorkItemSummarySchema } from "@cogni/node-contracts";
-import type { WorkItem, WorkItemId, WorkItemLease } from "@cogni/work-items";
+import type {
+  WorkItem,
+  WorkItemId,
+  WorkItemLease,
+  WorkSummaryReadOptions,
+} from "@cogni/work-items";
 import {
   toWorkItemId,
   WorkItemRevisionConflictError,
@@ -210,6 +216,8 @@ function rethrowBackendError(error: unknown): never {
       receipt.itemId,
     );
   }
+  // `WorkItemsCapacityError` subclasses `WorkItemsBusyError` and keeps its
+  // name, so held native capacity is also a retryable 503, never a 500.
   if (
     (error as Error)?.name === "DoltgresNotConfiguredError" ||
     (error as Error)?.name === "WorkItemsBusyError" ||
@@ -290,11 +298,15 @@ export async function listWorkItems(input: WorkItemsListInput): Promise<WorkItem
   }
 }
 
-export async function listWorkSummaries(input: WorkItemsListInput): Promise<WorkItemSummariesListOutput> {
+/** One bounded summary page; `options` (signal, shared deadline, scan budget) only tightens the read. */
+export async function listWorkSummaries(
+  input: WorkItemSummariesListInput,
+  options?: WorkSummaryReadOptions,
+): Promise<WorkItemSummariesListOutput> {
   const container = getContainer();
   const query = workQuery(input);
   try {
-    return await container.doltgresWorkItems.listSummaries(query);
+    return await container.doltgresWorkItems.listSummaries(query, options);
   } catch (error) {
     if ((error as Error)?.name === "InvalidCursorError") throw new InvalidCursorError((error as Error).message);
     if ((error as Error)?.name !== "DoltgresNotConfiguredError") rethrowBackendError(error);

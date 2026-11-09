@@ -19,6 +19,7 @@ import {
   WorkItemDtoSchema,
   WorkItemSummarySchema,
   WorkSummaryPageInfoSchema,
+  WorkSummaryQuerySchema,
 } from "@cogni/work-items";
 import { z } from "zod";
 
@@ -79,9 +80,15 @@ export type WorkItemDto = z.infer<typeof WorkItemDtoSchema>;
 export type WorkItemsListInput = z.infer<typeof workItemsListOperation.input>;
 export type WorkItemsListOutput = z.infer<typeof workItemsListOperation.output>;
 
+/**
+ * Bounded summary pages (task.0055). The input is the published
+ * `WorkSummaryQuerySchema` (default 25, max 100 rows, cursor ≤ 2048 chars, list
+ * filters ≤ 50 values, text ≤ 200 chars): the same schema the browser encodes
+ * and the route decodes with, never the 500-row full-item list input.
+ */
 export const workItemSummariesListOperation = {
   id: "work.summaries.list.v1",
-  input: workItemsListOperation.input,
+  input: WorkSummaryQuerySchema,
   /** `pageInfo` is always present: every summaries read is one bounded keyset page (task.0055). */
   output: workItemsListOperation.output.extend({
     items: z.array(WorkItemSummarySchema),
@@ -89,4 +96,7 @@ export const workItemSummariesListOperation = {
   }),
 } as const;
 export type WorkItemSummary = z.infer<typeof WorkItemSummarySchema>;
+export type WorkItemSummariesListInput = z.infer<
+  typeof workItemSummariesListOperation.input
+>;
 export type WorkItemSummariesListOutput = z.infer<typeof workItemSummariesListOperation.output>;

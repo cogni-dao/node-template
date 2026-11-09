@@ -58,9 +58,23 @@ const viewport = vi.hoisted(() => ({ mobile: false, listeners: new Set<() => voi
 vi.mock("@/components", async () => ({
   ...(await import("@cogni/node-ui-kit/shadcn/button")),
   ...(await import("@cogni/node-ui-kit/shadcn/input")),
+  ...(await import("@/components/kit/data-display/Badge")),
+  ...(await import("@cogni/node-ui-kit/shadcn/card")),
+  ...(await import("@cogni/node-ui-kit/shadcn/table")),
+  ...(await import("@cogni/node-ui-kit/shadcn/toggle-group")),
+  TimeRangeSelector: () => null,
 }));
 vi.mock("@/app/(app)/work/_components/WorkDetailSheet", () => ({
   WorkDetailSheet: ({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) => open ? <button type="button" onClick={() => onOpenChange(false)}>Close detail</button> : null,
+}));
+vi.mock("@/app/(app)/dashboard/_api/fetchRuns", () => ({
+  fetchRuns: vi.fn(async () => ({ runs: [] })),
+}));
+vi.mock("@/app/(app)/activity/_api/fetchActivity", () => ({
+  fetchActivity: vi.fn(async () => ({ chartSeries: [], groupedSeries: [], effectiveStep: "1h", totals: { spend: { total: 0 }, tokens: { total: 0 }, requests: { total: 0 } } })),
+}));
+vi.mock("@/components/kit/data-display/ActivityChart", () => ({
+  ActivityChart: () => null,
 }));
 vi.mock("@/app/(app)/work/_api/fetchWorkItems", () => ({
   fetchWorkItems: vi.fn(),
@@ -69,6 +83,7 @@ vi.mock("@/app/(app)/work/_api/fetchWorkItems", () => ({
 }));
 
 import { fetchWorkBoard, fetchWorkItem, fetchWorkItems } from "@/app/(app)/work/_api/fetchWorkItems";
+import { DashboardView } from "@/app/(app)/dashboard/view";
 import { WorkKanban } from "@/app/(app)/work/_components/WorkKanban";
 import { WorkDashboardView as Dashboard } from "@/app/(app)/work/view";
 import { WorkNavigationBoundary, useWorkNavigation } from "@/app/(app)/work/WorkNavigationBoundary";
@@ -114,6 +129,7 @@ function serveBoard(items: readonly WorkItemSummary[], hasMore = false) {
   return async (params: URLSearchParams): Promise<WorkBoardColumns> => ({
     columns: (params.get("statuses")?.split(",") ?? []).map((status) => ({
       status,
+      state: "loaded" as const,
       items: items.filter((item) => item.status === status),
       pageInfo: { endCursor: hasMore ? `${status}-next` : null, hasMore },
     })),
@@ -1195,12 +1211,71 @@ describe("Work Kanban", () => {
     },
   );
 
+  it("builds table requests through the package: page size clamps and unsupported sorts drop", async () => {
+    navigation.params = new URLSearchParams("view=table&pageSize=500&sort=title");
+    mount();
+    await waitFor(() => expect(fetchWorkItems).toHaveBeenCalledTimes(1));
+    const params = vi.mocked(fetchWorkItems).mock.calls[0]?.[0];
+    expect(params?.get("limit")).toBe("100");
+    expect(params?.has("sortBy")).toBe(false);
+    expect(fetchWorkBoard).not.toHaveBeenCalled();
+  });
+
+  it("keeps Next enabled on an empty capped page that carries a cursor", async () => {
+    navigation.params = new URLSearchParams("view=table&q=rare");
+    vi.mocked(fetchWorkItems).mockResolvedValue({
+      items: [],
+      pageInfo: { endCursor: "scan-1", hasMore: true, rowsScanned: 1000 },
+    });
+    mount();
+    await screen.findByText("No matches on this page yet. Next continues the search.");
+    expect(screen.getByRole("button", { name: "Next" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(lastReplacement()).toContain("cursor=scan-1");
+  });
+
+  it("dashboard Active Work sends one summaries request for five open items by rank", async () => {
+    const fetchSpy = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          items: fixture.slice(0, 5),
+          pageInfo: { endCursor: null, hasMore: false },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+    try {
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      render(
+        <QueryClientProvider client={client}>
+          <DashboardView />
+        </QueryClientProvider>,
+      );
+      await screen.findByText("Work item 4");
+      const urls = fetchSpy.mock.calls.map((call) => String((call as unknown[])[0]));
+      const work = urls.filter((url) => url.includes("/api/v1/work/"));
+      expect(work).toHaveLength(1);
+      const query = new URL(work[0] as string, "https://example.com").searchParams;
+      expect(new URL(work[0] as string, "https://example.com").pathname).toBe("/api/v1/work/summaries");
+      expect(query.get("limit")).toBe("5");
+      expect(query.get("statuses")).toBe(ACTIVE_WORK_STATUSES.join(","));
+      expect(query.get("sortBy")).toBe("rankScore");
+      expect(query.get("sortDirection")).toBe("desc");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("retains Previous and Restart after a committed page fetch fails", async () => {
     const route = routedMount();
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Next" })).toBeEnabled(),
     );
-    vi.mocked(fetchWorkItems).mockRejectedValue(new Error("page fetch failed"));
+    // A 4xx is final (the package hook retries only network and 5xx failures).
+    vi.mocked(fetchWorkItems).mockRejectedValue(
+      Object.assign(new Error("page fetch failed"), { status: 400 }),
+    );
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     route.commit(lastReplacement());
     await screen.findByText("Failed to load work items.");
