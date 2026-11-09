@@ -15,6 +15,8 @@ export default defineConfig({
     "react/jsx-runtime",
     "react-dom",
     "@cogni/work-items",
+    "@cogni/knowledge-store",
+    "@cogni/knowledge-store/contracts",
     "@dnd-kit/core",
     "@dnd-kit/sortable",
     "@dnd-kit/utilities",

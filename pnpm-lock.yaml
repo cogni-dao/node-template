@@ -816,6 +816,9 @@ importers:
 
   packages/knowledge-base-ui:
     devDependencies:
+      '@cogni/knowledge-store':
+        specifier: workspace:@cogni-dao/knowledge-store@*
+        version: link:../knowledge-store
       '@cogni/work-items':
         specifier: workspace:@cogni-dao/work-items@*
         version: link:../work-items
