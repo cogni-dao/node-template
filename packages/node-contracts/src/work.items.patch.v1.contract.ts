@@ -19,6 +19,8 @@
 
 import { z } from "zod";
 
+import { ChangeReasonSchema } from "@cogni/work-items";
+
 import {
   WorkItemDtoSchema,
   WorkItemScoresInputSchema,
@@ -45,16 +47,7 @@ export const workItemsPatchOperation = {
     id: z.string(),
     expectedRevision: z.number().int().min(0).optional(),
     // The adapter turns CR/LF into spaces and trims; this checks the result fits.
-    reason: z
-      .string()
-      .refine(
-        (v) => {
-          const n = v.replace(/[\r\n]+/g, " ").trim().length;
-          return n >= 1 && n <= 512;
-        },
-        { message: "reason must be 1-512 characters on one line" }
-      )
-      .optional(),
+    reason: ChangeReasonSchema.optional(),
     set: z
       .strictObject({
         title: z.string().min(1).max(500).optional(),

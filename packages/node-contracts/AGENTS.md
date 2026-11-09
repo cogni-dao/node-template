@@ -40,6 +40,7 @@ All contract files re-exported via `src/index.ts`. Selective re-export for `ai.c
 
 - `work.items.list.v1.contract` — full and summary list contracts share filters; optional sortBy/sortDirection use work-items canonical allowlists; rankMin/rankMax are inclusive; projectIds is any-of; DTO exposes derived read-only rankScore
 - `work.items.{list,create,patch}.v1.contract` — evaluation scores outline (`scores.<axis>.v/ev`); shared work-items adapter validates bounds, PATCH null clears scores
+- `history.v1.contract` — re-exports the history schemas and operations owned by `@cogni-dao/work-items` and `@cogni-dao/knowledge-store/contracts` (story.0023); declares none of its own
 - `identity.attestation.v1.contract` — frozen operator↔node identity protocol, canonical HTTPS-origin schema, and cross-repository protocol fingerprint
 
 **Schedule contracts:** create/update/list/history files reexport the published scheduling package. Owned detail and paginated metadata retain nullable thread correlation and existing wire shapes.

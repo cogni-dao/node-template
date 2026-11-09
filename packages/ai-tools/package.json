@@ -1,6 +1,6 @@
 {
   "name": "@cogni-dao/ai-tools",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "license": "LicenseRef-PolyForm-Shield-1.0.0",
   "repository": {
     "type": "git",
@@ -39,12 +39,12 @@
     "vite-tsconfig-paths": "^5.1.4",
     "vitest": "^3.1.4",
     "@cogni-dao/work-items": "workspace:*",
-    "@cogni-dao/knowledge-store": "workspace:0.10.0",
+    "@cogni-dao/knowledge-store": "workspace:0.11.0",
     "@cogni-dao/metrics": "workspace:*"
   },
   "peerDependencies": {
-    "@cogni-dao/work-items": "0.4.0",
-    "@cogni-dao/knowledge-store": "^0.10.0",
+    "@cogni-dao/work-items": "^0.6.0",
+    "@cogni-dao/knowledge-store": "^0.11.0",
     "@cogni-dao/metrics": "^0.1.0 || ^0.2.0 || ^0.3.0 || ^0.4.0 || ^0.5.0 || ^0.6.0"
   }
 }

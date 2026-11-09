@@ -268,3 +268,39 @@ export interface EdoCapability {
    */
   getChain(params: GetChainParams): Promise<GetChainResult>;
 }
+
+/**
+ * Row history (task.0052, story.0023). ONE_HISTORY_SHAPE: `@cogni-dao/work-items`
+ * declares the same item shape; the reason is the contribution commit message.
+ */
+export const HistoryEntrySchema = z.object({
+  version: z.string(),
+  commit: z.string(),
+  at: z.string(),
+  actor: z.string().nullable(),
+  reason: z.string().nullable(),
+  changed: z.array(z.string()),
+  diff: z.record(
+    z.string(),
+    z.object({
+      before: z.unknown(),
+      after: z.unknown(),
+      truncated: z.boolean(),
+    })
+  ),
+});
+
+export const HistoryOutputSchema = z.object({
+  items: z.array(HistoryEntrySchema),
+});
+
+export type HistoryOutput = z.infer<typeof HistoryOutputSchema>;
+
+export const knowledgeHistoryOperation = {
+  id: "knowledge.history.v1",
+  summary: "Read a knowledge entry's history",
+  description:
+    "Returns the entry's versions, newest first, each with its change reason (the contribution commit message), actor and changed fields.",
+  input: z.object({ id: z.string() }),
+  output: HistoryOutputSchema,
+} as const;

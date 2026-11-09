@@ -18,6 +18,19 @@ export type {
   HistoryFieldDiff,
   ShapeHistoryOptions
 } from "./history.js";
+export type { HistoryOutput } from "./history-contract.js";
+export {
+  ChangeReasonSchema,
+  HistoryEntrySchema,
+  HistoryOutputSchema,
+  workItemsHistoryOperation
+} from "./history-contract.js";
+export type {
+  HistoryReadLog,
+  WorkItemHistoryResult,
+  WorkItemHistoryStore
+} from "./history-read.js";
+export { readWorkItemHistory } from "./history-read.js";
 export {
   CHANGE_REASON_MAX_CHARS,
   ChangeReasonInvalidError,
