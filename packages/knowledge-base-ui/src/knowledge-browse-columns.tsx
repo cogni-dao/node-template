@@ -44,10 +44,14 @@ export interface KnowledgeBrowseTableMeta {
 }
 
 export interface KnowledgeBrowseColumnsOptions {
-  /** Known entry types offered by the Type filter (e.g. the store's `EntryTypeSchema.options`). */
-  readonly entryTypeOptions?: readonly string[];
-  /** Known source types offered by the Source filter. */
-  readonly sourceTypeOptions?: readonly string[];
+  /**
+   * Canonical entry types offered by the Type filter. Required: pass the
+   * store root's `EntryTypeSchema.options` (not exported from the browser-safe
+   * `@cogni/knowledge-store/contracts`).
+   */
+  readonly entryTypeOptions: readonly string[];
+  /** Canonical source types offered by the Source filter: the store root's `SourceTypeSchema.options`. */
+  readonly sourceTypeOptions: readonly string[];
   /** Known domains offered by the Domain filter. Default none: exact entry only. */
   readonly domainOptions?: readonly string[];
   /** Permalink path of an entry for the copy button. Default `/knowledge/<id>`. */
@@ -98,12 +102,16 @@ function ExactFilter({
 
 const col = createColumnHelper<KnowledgeSummary>();
 
+/** A Browse column; value types differ per column, as in TanStack's own `ColumnDef<T, any>[]` convention. */
+// biome-ignore lint/suspicious/noExplicitAny: heterogeneous column value types
+export type KnowledgeBrowseColumnDef = ColumnDef<KnowledgeSummary, any>;
+
 export function createKnowledgeBrowseColumns({
-  entryTypeOptions = [],
-  sourceTypeOptions = [],
+  entryTypeOptions,
+  sourceTypeOptions,
   domainOptions = [],
   entryHref = DEFAULT_HREF,
-}: KnowledgeBrowseColumnsOptions = {}): ColumnDef<KnowledgeSummary, never>[] {
+}: KnowledgeBrowseColumnsOptions): KnowledgeBrowseColumnDef[] {
   const columns = [
     col.accessor("domain", {
       header: ({ column, table }) => (
@@ -218,7 +226,7 @@ export function createKnowledgeBrowseColumns({
       meta: { headerTitle: "Created" },
     }),
   ];
-  return columns as ColumnDef<KnowledgeSummary, never>[];
+  return columns as KnowledgeBrowseColumnDef[];
 }
 
 /** Default Browse order: newest first. */

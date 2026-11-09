@@ -7,7 +7,9 @@
  * Scope: Client view over `useKnowledgeBrowse` and a node-supplied fetcher. The node supplies its endpoint, auth, SSR seed, known filter values and what a row selection opens (e.g. its detail sheet).
  * Invariants:
  *   - DRAFT_IS_NOT_SEARCH: typing edits only the draft. Submit (button or Enter) commits a changed draft; an unchanged draft is not replayed.
- *   - ONE_WINDOW_PER_VIEW and SUBMIT_ONLY_SEARCH (see `useKnowledgeBrowse`).
+ *   - ONE_WINDOW_PER_VIEW and INTENT_ONLY_SEARCH (see `useKnowledgeBrowse`); the view mounts with no committed search, so body reads follow only submit.
+ *   - CLEAR_RETURNS_TO_FIRST_WINDOW: "Clear filters" empties filters and search and always returns to window 1.
+ *   - OPTIONS_FROM_NODE: `entryTypeOptions` / `sourceTypeOptions` are required, because the canonical lists live in the store root (not its browser-safe `/contracts`); nodes pass `EntryTypeSchema.options` / `SourceTypeSchema.options`.
  *   - HONEST_WINDOW_STATUS: the status line says how many entries this window holds, how many candidates a search examined, and whether a continuation exists; a capped empty search window says to continue, not "no matches".
  *   - HOST_QUERY_CLIENT: rendered under the host's `QueryClientProvider`.
  * Side-effects: IO (through the injected fetcher)
@@ -106,8 +108,8 @@ export function KnowledgeBrowse({
   const columns = useMemo(
     () =>
       createKnowledgeBrowseColumns({
-        ...(entryTypeOptions && { entryTypeOptions }),
-        ...(sourceTypeOptions && { sourceTypeOptions }),
+        entryTypeOptions,
+        sourceTypeOptions,
         ...(domainOptions && { domainOptions }),
         ...(entryHref && { entryHref }),
       }),
@@ -163,6 +165,7 @@ export function KnowledgeBrowse({
             setColumnFilters([]);
             setDraft("");
             setSearch("");
+            browse.reset();
           }}
         >
           Clear filters

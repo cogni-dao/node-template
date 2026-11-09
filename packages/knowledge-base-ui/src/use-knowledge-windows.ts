@@ -7,11 +7,11 @@
  * Scope: Client hooks over node-supplied fetchers. The node owns its endpoint, auth and SSR seed; these own the request encoding, cache keys, window cursor/history and the revision prompt. Use the host's React Query client.
  * Invariants:
  *   - ONE_WINDOW_PER_VIEW: opening Browse, or changing its filters or sort, issues at most one metadata request (none when `initialData` seeds the default first window). Nothing walks cursors or prefetches.
- *   - SUBMIT_ONLY_SEARCH: a body search (`query.search`) runs only when its window identity changes through intent (submit, Continue, Previous, Restart, a filter or sort change). Focus, reconnect, remount and cache invalidation never replay a body window.
+ *   - INTENT_ONLY_SEARCH: a body search (`query.search`) is requested once each time a search window identity is rendered: when a hook mounts with a search, or when submit, Continue, Previous, Restart, a filter or a sort change produces a new one. Focus, reconnect and cache invalidation never replay a body window. `KnowledgeBrowse` mounts with no committed search, so there body reads follow only an explicit submit.
  *   - EMPTY_WINDOW_CAN_CONTINUE: `canNext` follows `nextCursor`, so an empty capped search window still offers Continue.
- *   - WINDOW_RESETS_ON_QUERY_CHANGE: a different filter, sort or search starts at the first window with an empty history.
+ *   - WINDOW_RESETS_ON_QUERY_CHANGE: a different filter, sort or search starts at the first window with an empty history, and the reset is kept, so returning to an earlier query also starts at its first window. `reset()` returns to the first window explicitly.
  *   - ABORT_ON_CHANGE: each request gets React Query's `AbortSignal`; leaving a window (new query or unmount) aborts its in-flight request.
- *   - NO_AUTOMATIC_RETRY: a failed window stays failed until `retry()` re-requests the same cursor.
+ *   - NO_AUTOMATIC_RETRY: React Query `retry: false`; a failed window stays failed until `retry()` re-requests the same cursor.
  *   - HOST_QUERY_CLIENT: rendered under the host's `QueryClientProvider`.
  * Side-effects: IO (through the injected fetchers)
  * Links: task.0059, packages/knowledge-base-ui/src/knowledge-browse-query.ts
@@ -53,7 +53,9 @@ export interface UseKnowledgeWindowsResult {
   readonly next: () => void;
   readonly previous: () => void;
   readonly retry: () => void;
-  /** Return to the first window and adopt its revision. */
+  /** Return to the first window of the current query (no forced reread). */
+  readonly reset: () => void;
+  /** Return to the first window, reread it and adopt its revision. */
   readonly restart: () => void;
   readonly restartNeeded: boolean;
 }
@@ -112,11 +114,13 @@ function useKnowledgeWindows(
     cursor: undefined,
     history: [],
   });
-  // A different listing starts over at its first window.
-  const current =
+  // A different listing starts over at its first window, and the reset is
+  // written into state so returning to an earlier listing also starts at 1.
+  const current: WindowState =
     windowState.listing === listing
       ? windowState
       : { listing, cursor: undefined, history: [] };
+  if (current !== windowState) setWindowState(current);
   const query: KnowledgeBrowseQuery = {
     ...listingQuery,
     ...(current.cursor ? { cursor: current.cursor } : {}),
@@ -195,6 +199,10 @@ function useKnowledgeWindows(
       history: window.history.slice(0, -1),
     });
   }, [go, latest]);
+  const reset = useCallback(() => {
+    const { current: window } = latest.current;
+    go({ listing: window.listing, cursor: undefined, history: [] });
+  }, [go, latest]);
   const restart = useCallback(() => {
     const { current: window, query: currentQuery, operation: op } =
       latest.current;
@@ -235,6 +243,7 @@ function useKnowledgeWindows(
     next,
     previous,
     retry: () => void refetch(),
+    reset,
     restart,
     restartNeeded: revision.restartNeeded,
   };

@@ -37,7 +37,7 @@ import {
   type KnowledgeWindowFetcher,
   knowledgeFocusGeometry,
   useGraphFocus,
-} from "../src/index.js";
+} from "../src/knowledge.js";
 
 afterEach(() => cleanup());
 

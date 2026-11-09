@@ -7,7 +7,8 @@
  * Scope: Client components over a node- or package-owned TanStack `Table`. Render only the rows the table holds; no fetching, paging or client filtering.
  * Invariants:
  *   - LOADING_IS_NOT_EMPTY: while `isLoading`, skeleton rows render and the empty message never shows.
- *   - ROWS_ARE_BUTTONS: a row with `onRowClick` is keyboard-activatable (Enter/Space) and clickable; cells that stop propagation (copy buttons) do not select.
+ *   - ROWS_ARE_BUTTONS: a row with `onRowClick` is keyboard-activatable (Enter/Space on the focused row itself, never keys aimed at a control inside it) and clickable; cells that stop propagation (copy buttons) do not select.
+ *   - SORT_IS_ANNOUNCED: sortable header cells carry `aria-sort`.
  *   - PICKER_LISTS_HIDEABLE: the visibility picker lists every column that can hide, labelled by `meta.headerTitle`.
  * Side-effects: none
  * Links: task.0059
@@ -16,7 +17,7 @@
 
 "use client";
 
-import { flexRender, type Table } from "@tanstack/react-table";
+import { type Column, flexRender, type Table } from "@tanstack/react-table";
 import type { ReactElement, ReactNode } from "react";
 
 import { cn } from "./cn.js";
@@ -36,6 +37,14 @@ export interface DataTableProps<TData> {
   /** Skeleton rows while loading. Default 5. */
   readonly skeletonRows?: number;
   readonly className?: string;
+}
+
+function ariaSort<TData>(
+  column: Column<TData, unknown>,
+): "ascending" | "descending" | "none" | undefined {
+  if (!column.getCanSort()) return undefined;
+  const sorted = column.getIsSorted();
+  return sorted === "asc" ? "ascending" : sorted === "desc" ? "descending" : "none";
 }
 
 export function DataTable<TData>({
@@ -58,6 +67,7 @@ export function DataTable<TData>({
                 <th
                   key={header.id}
                   scope="col"
+                  aria-sort={ariaSort(header.column)}
                   className="h-9 px-3 text-left align-middle font-normal"
                   style={{ width: header.getSize() }}
                 >
@@ -103,6 +113,8 @@ export function DataTable<TData>({
                   tabIndex: 0,
                   onClick: () => onRowClick(row.original),
                   onKeyDown: (event) => {
+                    // Keys aimed at a control inside the row (e.g. the copy button) are not row activation.
+                    if (event.target !== event.currentTarget) return;
                     if (event.key === "Enter" || event.key === " ") {
                       event.preventDefault();
                       onRowClick(row.original);

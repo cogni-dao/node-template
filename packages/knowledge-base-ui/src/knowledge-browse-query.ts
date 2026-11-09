@@ -8,7 +8,7 @@
  * Invariants:
  *   - ONE_CODEC: every request is the store schema's parse of the query, encoded with repeated keys for the exact-value arrays (`domains=a&domains=b`), so the node's route parses it back with the same schema. Nodes never hand-build these parameters.
  *   - KEY_IS_QUERY_IDENTITY: the cache key is `[...prefix, "browse" | "search" | "overview", parsedQuery]`, cursor included, so each window is its own cache entry and a new filter, sort or search is a new key.
- *   - BUDGETS_FROM_STORE: a page holds at most 20 summaries (`KnowledgeBrowsePageSchema`); the graph shows ≤ 20 overview atoms, ≤ 5 focus links and ≤ 26 nodes.
+ *   - BUDGETS_FROM_STORE: window size (20), filter values (50 × 500 chars) and search length (2000) are read from the store schemas when the module loads, never re-declared; the graph shows ≤ 20 overview atoms, ≤ 5 focus links and ≤ 26 nodes.
  * Side-effects: none
  * Links: task.0059, packages/knowledge-store/src/contracts.ts
  * @public
@@ -16,27 +16,57 @@
 
 import {
   type KnowledgeBrowsePage,
+  KnowledgeBrowsePageSchema,
   type KnowledgeBrowseQuery,
   KnowledgeBrowseQuerySchema,
   type KnowledgeOverviewQuery,
   KnowledgeOverviewQuerySchema,
 } from "@cogni/knowledge-store/contracts";
 
-/** Rows in one Browse or overview window (the store's page maximum). */
-export const KNOWLEDGE_WINDOW_MAX = 20;
+/** A numeric bound the store schema declares, read through zod's public JSON Schema projection. */
+function declared(
+  schema: { toJSONSchema: () => Record<string, unknown> },
+  pick: (json: Record<string, unknown>) => unknown,
+): number {
+  const value = pick(schema.toJSONSchema());
+  if (typeof value !== "number")
+    throw new Error("@cogni/knowledge-store contract declares no such bound");
+  return value;
+}
+const exactValues = KnowledgeBrowseQuerySchema.shape.domains.in.unwrap();
+
+/** Rows in one Browse or overview window (the store page's `items` maximum). */
+export const KNOWLEDGE_WINDOW_MAX = declared(
+  KnowledgeBrowsePageSchema.shape.items,
+  (json) => json.maxItems,
+);
 /** Overview atoms the graph draws from one window. */
-export const KNOWLEDGE_GRAPH_OVERVIEW_MAX = 20;
-/** Citation links one focus page contributes to the graph. */
+export const KNOWLEDGE_GRAPH_OVERVIEW_MAX = KNOWLEDGE_WINDOW_MAX;
+/**
+ * Citation links one focus page contributes to the graph. A node's citations
+ * route returns at most this many links per page (node-template's
+ * `/api/v1/citations/:id` schema caps `links` at 5); geometry draws only the
+ * first five of a larger page.
+ */
 export const KNOWLEDGE_GRAPH_FOCUS_LINKS_MAX = 5;
 /** Graph nodes: the overview, the selected atom and one endpoint per focus link. */
 export const KNOWLEDGE_GRAPH_NODES_MAX =
   KNOWLEDGE_GRAPH_OVERVIEW_MAX + 1 + KNOWLEDGE_GRAPH_FOCUS_LINKS_MAX;
 /** Exact values one header filter may hold (the store schema's array maximum). */
-export const KNOWLEDGE_FILTER_VALUES_MAX = 50;
+export const KNOWLEDGE_FILTER_VALUES_MAX = declared(
+  exactValues,
+  (json) => json.maxItems,
+);
 /** Longest exact filter value (the store schema's value maximum). */
-export const KNOWLEDGE_FILTER_VALUE_LENGTH_MAX = 500;
+export const KNOWLEDGE_FILTER_VALUE_LENGTH_MAX = declared(
+  exactValues,
+  (json) => (json.items as { maxLength?: unknown } | undefined)?.maxLength,
+);
 /** Longest body search (the store schema's search maximum). */
-export const KNOWLEDGE_SEARCH_LENGTH_MAX = 2000;
+export const KNOWLEDGE_SEARCH_LENGTH_MAX = declared(
+  KnowledgeBrowseQuerySchema.shape.search.unwrap(),
+  (json) => json.maxLength,
+);
 
 /** Default cache key prefix. Node mutations that invalidate it raise the revision prompt. */
 export const KNOWLEDGE_QUERY_PREFIX: readonly unknown[] = ["knowledge"];

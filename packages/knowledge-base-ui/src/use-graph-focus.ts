@@ -48,7 +48,12 @@ export interface KnowledgeCitationLink {
 
 export type KnowledgeCitationPage = DirectRelationPage<KnowledgeCitationLink>;
 
-/** One page of an atom's direct citation links. Reject with an error carrying `status`. */
+/**
+ * One page of an atom's direct citation links. The node's route returns at
+ * most `KNOWLEDGE_GRAPH_FOCUS_LINKS_MAX` (5) links per page with a cursor for
+ * the next; a larger page shows in the list but only its first five are drawn.
+ * Reject with an error carrying `status`.
+ */
 export type KnowledgeCitationFetcher = (
   id: string,
   cursor: string | undefined,
@@ -153,11 +158,13 @@ export function useGraphFocus({
     nextCursor: visible.nextCursor,
     pending: visible.pending,
     error: visible.error,
+    // Read the visible (current-selection) state, never a previous selection's cursor.
     more: () => {
-      if (id && state.nextCursor && !state.pending) load(id, state.nextCursor);
+      if (id && visible.nextCursor && !visible.pending)
+        load(id, visible.nextCursor);
     },
     retry: () => {
-      if (id && !state.pending) load(id, state.retryCursor);
+      if (id && visible.error && !visible.pending) load(id, visible.retryCursor);
     },
     restart: () => {
       if (id) load(id);

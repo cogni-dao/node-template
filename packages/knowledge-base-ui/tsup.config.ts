@@ -4,7 +4,7 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-  entry: ["src/index.ts"],
+  entry: ["src/index.ts", "src/knowledge.ts", "src/graph-3d.tsx"],
   format: ["esm"],
   dts: false,
   clean: false,
@@ -25,6 +25,7 @@ export default defineConfig({
     "clsx",
     "lucide-react",
     "radix-ui",
+    "react-force-graph-3d",
     "tailwind-merge",
   ],
 });

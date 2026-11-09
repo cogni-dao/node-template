@@ -4,7 +4,7 @@
 /**
  * Module: `@cogni/knowledge-base-ui/knowledge-graph`
  * Purpose: The bounded knowledge Graph capability minus the drawing engine: overview windows, color modes, exact-id open, replacement focus pages with their link list, typed-edge palette, legend and revision prompt (task.0059).
- * Scope: Client view over `useKnowledgeOverview`, `useGraphFocus` and `knowledgeFocusGeometry`. The node injects its fetchers, the selected atom's row (from its own detail read) and a `renderer` component that draws `graphData` (e.g. a `next/dynamic` WebGL force graph), so heavy engines stay out of the package.
+ * Scope: Client view over `useKnowledgeOverview`, `useGraphFocus` and `knowledgeFocusGeometry`. The node injects its fetchers, the selected atom's row (from its own detail read) and a `renderer` that draws `graphData`: normally the package's `KnowledgeForceGraph3D` from the client-only `./graph-3d` subpath, lazy-loaded, so this entry never pulls the WebGL engine.
  * Invariants:
  *   - BOUNDED_GEOMETRY: the renderer receives ≤ 26 fresh nodes and ≤ 5 typed edges; no hubs, full-graph read, body prefetch or accumulated geometry.
  *   - SELECTION_IS_NODE_STATE: `selectedId` is controlled; the node decides what selecting opens (its detail sheet).
@@ -205,7 +205,11 @@ export function KnowledgeGraph({
   return (
     <>
       <div className="flex flex-wrap items-center gap-3">
-        <div className="inline-flex items-center rounded-lg border border-border/60 bg-muted/40 p-0.5">
+        <div
+          role="group"
+          aria-label="Graph color mode"
+          className="inline-flex items-center rounded-lg border border-border/60 bg-muted/40 p-0.5"
+        >
           {(["confidence", "domain"] as const).map((mode) => (
             <button
               key={mode}

@@ -40,7 +40,7 @@ import {
   knowledgeBrowseKey,
   knowledgeQueryToSearchParams,
   useKnowledgeBrowse,
-} from "../src/index.js";
+} from "../src/knowledge.js";
 
 const entry: KnowledgeSummary = {
   id: "node-template-selected-decision",
@@ -259,7 +259,7 @@ describe("KnowledgeBrowse", () => {
     mount(fetchBrowse, windowOf({ items: [], scannedRows: 0 }));
     submitSearch("body");
     await waitFor(() => expect(reads).toHaveLength(1));
-    await user.click(screen.getByRole("button", { name: "Domain", exact: true }));
+    await user.click(screen.getByRole("button", { name: "Filter Domain" }));
     const domain = await screen.findByRole("textbox", { name: "Exact Domain" });
     fireEvent.change(domain, { target: { value: "off-page" } });
     fireEvent.submit(required(domain.closest("form")));
@@ -267,7 +267,7 @@ describe("KnowledgeBrowse", () => {
     await waitFor(() =>
       expect(reads.at(-1)?.getAll("domains")).toEqual(["off-page"]),
     );
-    await user.click(screen.getByRole("button", { name: "Type", exact: true }));
+    await user.click(screen.getByRole("button", { name: "Filter Type" }));
     const input = await screen.findByRole("textbox", { name: "Exact Type" });
     for (let i = 0; i < 50; i++) {
       fireEvent.change(input, { target: { value: `custom-${i}` } });
@@ -289,20 +289,25 @@ describe("KnowledgeBrowse", () => {
     });
   });
 
-  it("header sort menus and click-sort headers write the server sort and keep the filters", async () => {
+  it("sort headers write the server sort, announce it with aria-sort, and keep the filters", async () => {
     const { reads, fetchBrowse } = recorder(async () =>
       windowOf({ items: [], scannedRows: 0 }),
     );
     const user = userEvent.setup();
     mount(fetchBrowse, windowOf({ items: [], scannedRows: 0 }));
+    expect(
+      screen.getByRole("columnheader", { name: /Created/ }).getAttribute("aria-sort"),
+    ).toBe("descending");
     for (const [label, sort] of [
       ["Domain", "domain"],
       ["Type", "entryType"],
       ["Source", "sourceType"],
     ] as const) {
       await user.click(screen.getByRole("button", { name: label, exact: true }));
-      await user.click(await screen.findByRole("menuitem", { name: "Asc" }));
       await waitFor(() => expect(reads.at(-1)?.get("sort")).toBe(sort));
+      expect(
+        screen.getByRole("columnheader", { name: new RegExp(label) }).getAttribute("aria-sort"),
+      ).toBe("ascending");
       expect(reads.at(-1)?.get("direction")).toBe("asc");
       await waitFor(() =>
         expect(
@@ -316,6 +321,86 @@ describe("KnowledgeBrowse", () => {
     await user.click(confidence);
     await waitFor(() => expect(reads.at(-1)?.get("sort")).toBe("confidencePct"));
     expect(reads.every((params) => !params.has("cursor"))).toBe(true);
+  });
+
+  it("header filters are reachable and toggled with Tab and Enter alone", async () => {
+    const { reads, fetchBrowse } = recorder(async () =>
+      windowOf({ items: [], scannedRows: 0 }),
+    );
+    const user = userEvent.setup();
+    mount(fetchBrowse, windowOf({ items: [], scannedRows: 0 }));
+    const trigger = screen.getByRole("button", { name: "Filter Type" });
+    for (let i = 0; i < 40 && document.activeElement !== trigger; i++)
+      await user.tab();
+    expect(document.activeElement).toBe(trigger);
+    await user.keyboard("{Enter}");
+    const guide = await screen.findByRole("button", { name: "guide" });
+    for (let i = 0; i < 20 && document.activeElement !== guide; i++)
+      await user.tab();
+    expect(document.activeElement).toBe(guide);
+    await user.keyboard("{Enter}");
+    expect(guide.getAttribute("aria-pressed")).toBe("true");
+    await waitFor(() =>
+      expect(reads.at(-1)?.getAll("entryTypes")).toEqual(["guide"]),
+    );
+  });
+
+  it("row activation ignores keys aimed at a control inside the row", async () => {
+    const onSelect = vi.fn();
+    mount(vi.fn<KnowledgeWindowFetcher>(), windowOf(), newClient(), onSelect);
+    const copy = screen.getByRole("button", { name: "Copy block link" });
+    fireEvent.keyDown(copy, { key: "Enter" });
+    expect(onSelect).not.toHaveBeenCalled();
+    fireEvent.keyDown(required(copy.closest("tr")), { key: "Enter" });
+    expect(onSelect).toHaveBeenCalledWith(entry);
+  });
+
+  it("returning to an earlier query starts at its first window", async () => {
+    const reads: URLSearchParams[] = [];
+    const fetchBrowse = vi.fn<KnowledgeWindowFetcher>(async (params) => {
+      reads.push(params);
+      return windowOf({ nextCursor: params.has("cursor") ? null : "after-20" });
+    });
+    const client = newClient();
+    const { result, rerender } = renderHook(
+      ({ domains }: { domains: string[] }) =>
+        useKnowledgeBrowse({ query: { domains }, fetchBrowse }),
+      {
+        initialProps: { domains: ["a"] },
+        wrapper: ({ children }: { children: ReactNode }) => (
+          <QueryClientProvider client={client}>{children}</QueryClientProvider>
+        ),
+      },
+    );
+    await waitFor(() => expect(result.current.canNext).toBe(true));
+    act(() => result.current.next());
+    await waitFor(() => expect(result.current.query.cursor).toBe("after-20"));
+    rerender({ domains: ["b"] });
+    expect(result.current.query.cursor).toBeUndefined();
+    rerender({ domains: ["a"] });
+    expect(result.current.query.cursor).toBeUndefined();
+    expect(result.current.canPrevious).toBe(false);
+    await waitFor(() => expect(result.current.page?.nextCursor).toBe("after-20"));
+    // gcTime 0 drops A's first window, so returning rereads it: without a cursor.
+    expect(
+      reads.filter((p) => p.getAll("domains").join() === "a").map((p) => p.get("cursor")),
+    ).toEqual([null, "after-20", null]);
+  });
+
+  it("Clear filters always returns to the first window", async () => {
+    const { reads, fetchBrowse } = recorder(async (params) =>
+      windowOf({ nextCursor: params.has("cursor") ? null : "after-20" }),
+    );
+    mount(fetchBrowse);
+    await screen.findByText(/more available/);
+    fireEvent.click(screen.getByRole("button", { name: "Next window" }));
+    await screen.findByText(/end of results/);
+    expect(reads.at(-1)?.get("cursor")).toBe("after-20");
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    await screen.findByText(/more available/);
+    expect(
+      screen.getByRole("button", { name: "Previous window" }).hasAttribute("disabled"),
+    ).toBe(true);
   });
 
   it("selecting a row hands the summary to the node without any read", async () => {

@@ -870,6 +870,9 @@ importers:
       react-dom:
         specifier: 19.0.0
         version: 19.0.0(react@19.0.0)
+      react-force-graph-3d:
+        specifier: ^1.29.1
+        version: 1.29.1(react@19.0.0)
       tailwind-merge:
         specifier: ^3.3.1
         version: 3.6.0
