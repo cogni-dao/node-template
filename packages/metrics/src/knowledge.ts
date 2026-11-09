@@ -27,8 +27,13 @@ import {
 	FIRST_PARENT_WALK_CAP,
 	readBriefConformance,
 	readGithubStars,
+	readTrueNowEdits,
+	readTrueNowScope,
+	readTrueNowState,
 	readWorkConvergence,
 	readWorkCount,
+	TRUE_NOW_MAX_BYTES,
+	TRUE_NOW_MAX_ROWS,
 } from "./sources.js";
 
 /**
@@ -66,6 +71,7 @@ export const PACKAGE_CALCULATOR_IDS = [
 	"work.convergence@1",
 	"github.stars@1",
 	"brief.conformance@1",
+	"true-now@1",
 ] as const;
 /** `work.count@1` → `work.count`: the family every version of a calculator shares. */
 export function calculatorFamily(id: string): string {
@@ -75,43 +81,6 @@ export function calculatorFamily(id: string): string {
 export const RESERVED_CALCULATOR_FAMILIES: ReadonlySet<string> = new Set(
 	PACKAGE_CALCULATOR_IDS.map(calculatorFamily),
 );
-
-/** Revision of every package-served definition; it changes only with a rule version bump. */
-export const BUILTIN_METRIC_REVISION = "builtin:brief-rules@1";
-function builtinBrief(
-	id: string,
-	title: string,
-	subject: "items" | "entries",
-): MetricDefinition {
-	return {
-		id,
-		title,
-		revision: BUILTIN_METRIC_REVISION,
-		spec: {
-			calculatorId: "brief.conformance@1",
-			params: { subject, maxLongShare: 0.1 },
-			cadenceSeconds: 3600,
-			maxAgeSeconds: 7200,
-		},
-		display: "progress",
-	};
-}
-/**
- * Definitions the package serves beside hub rows, so a node reads them before
- * any hub merge. A hub row with the same id wins. Sorted by id.
- */
-export const BUILTIN_METRICS: readonly MetricDefinition[] = [
-	builtinBrief(
-		"brief-conformance-entries",
-		"Hub entry brief conformance",
-		"entries",
-	),
-	builtinBrief(
-		"brief-conformance-items",
-		"Open work item brief conformance",
-		"items",
-	),
-];
 
 export function createGoalMetrics(deps: {
 	knowledgeSql: Sql;
@@ -249,6 +218,67 @@ export function createGoalMetrics(deps: {
 			);
 		},
 	});
+	const trueNowParams = z.discriminatedUnion("measure", [
+		z.strictObject({
+			measure: z.literal("state"),
+			subject: z.enum(["work-items", "atoms"]),
+		}),
+		z.strictObject({
+			measure: z.literal("scope"),
+			subject: z.literal("work-items"),
+		}),
+		z.strictObject({
+			measure: z.literal("edits"),
+			output: z.enum(["share", "count"]),
+			days: z.number().int().min(1).max(28),
+		}),
+	]);
+	registry.register({
+		id: "true-now@1",
+		// State and scope read main now; only the edits interval has a width.
+		unit: "%",
+		unitFor: (params) => {
+			const p = trueNowParams.parse(params);
+			if (p.measure === "state") return "%";
+			if (p.measure === "scope") return "items";
+			return p.output === "share" ? "%" : "edits";
+		},
+		displayFor: (params) => {
+			const p = trueNowParams.parse(params);
+			if (p.measure === "scope") return "volume";
+			return p.measure === "edits" && p.output === "count"
+				? "volume"
+				: "progress";
+		},
+		windowSeconds: (params) => {
+			const p = trueNowParams.parse(params);
+			return p.measure === "edits" ? p.days * 86400 : 0;
+		},
+		paramsSchema: trueNowParams,
+		// State and scope make one call; edits make two (work items, atoms). Rows
+		// and bytes cap each statement; the service enforces the call count.
+		budget: {
+			timeoutMs: 15000,
+			maxSourceCalls: 2,
+			maxRows: TRUE_NOW_MAX_ROWS,
+			maxResponseBytes: TRUE_NOW_MAX_BYTES,
+		},
+		compute: async (params, ctx) => {
+			const p = trueNowParams.parse(params);
+			if (p.measure === "state")
+				return ctx.read((signal) =>
+					readTrueNowState(deps.knowledgeSql, p.subject, signal),
+				);
+			if (p.measure === "scope")
+				return ctx.read((signal) => readTrueNowScope(deps.knowledgeSql, signal));
+			return readTrueNowEdits(
+				deps.knowledgeSql,
+				p.output,
+				ctx.window,
+				(source) => ctx.read((signal) => source(signal)),
+			);
+		},
+	});
 	const nodeCalculatorIds: string[] = [];
 	for (const calculator of deps.nodeCalculators ?? []) {
 		// A definition can only name an id the spec schema accepts.
@@ -292,25 +322,10 @@ export function createGoalMetrics(deps: {
 	}
 	const definitions = {
 		async get(id: string) {
-			const builtin = BUILTIN_METRICS.find((b) => b.id === id);
-			if (!builtin) {
-				const rows = await deps.knowledgeSql.unsafe(
-					`SELECT id,title,metric_spec,updated_at FROM knowledge WHERE id=${literal(id)} AND metric_spec IS NOT NULL AND status <> 'deprecated' LIMIT 1`,
-				);
-				return rows[0] ? parse(rows[0]) : null;
-			}
-			// A hub row with a built-in's id wins in any status. A deprecated or
-			// invalid row never falls back to the built-in: the reading fails visibly.
 			const rows = await deps.knowledgeSql.unsafe(
-				`SELECT id,title,metric_spec,updated_at,status FROM knowledge WHERE id=${literal(id)} LIMIT 1`,
+				`SELECT id,title,metric_spec,updated_at FROM knowledge WHERE id=${literal(id)} AND metric_spec IS NOT NULL AND status <> 'deprecated' LIMIT 1`,
 			);
-			const row = rows[0];
-			if (!row) return structuredClone(builtin);
-			if (row.status === "deprecated" || row.metric_spec == null) {
-				deps.log({ event: "metric.definition_invalid", metricId: id });
-				return null;
-			}
-			return parse(row);
+			return rows[0] ? parse(rows[0]) : null;
 		},
 		async list(limit: number, after?: string) {
 			const cap = Math.min(50, Math.max(1, Math.floor(limit)));
@@ -331,28 +346,7 @@ export function createGoalMetrics(deps: {
 					if (definition) items.push(definition);
 				}
 			}
-			// Built-ins join by id: only those after the caller's cursor, only when no
-			// hub row of any status holds the id, and only up to where the hub page
-			// stopped, so a later page never skips or repeats one.
-			const held = await deps.knowledgeSql.unsafe(
-				`SELECT id FROM knowledge WHERE id IN (${BUILTIN_METRICS.map((b) => literal(b.id)).join(",")})`,
-			);
-			const shadowed = new Set(held.map((r) => String(r.id)));
-			const edge = more ? cursor : undefined;
-			const merged = [
-				...items,
-				...BUILTIN_METRICS.filter(
-					(b) =>
-						!shadowed.has(b.id) &&
-						(after === undefined || b.id > after) &&
-						(edge === undefined || b.id <= edge),
-				).map((b) => structuredClone(b)),
-			].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-			if (merged.length > cap) {
-				const page = merged.slice(0, cap);
-				return { items: page, nextCursor: page[cap - 1]?.id ?? null };
-			}
-			return { items: merged, nextCursor: more ? (cursor ?? null) : null };
+			return { items, nextCursor: more ? (cursor ?? null) : null };
 		},
 	};
 	return createMetricService({

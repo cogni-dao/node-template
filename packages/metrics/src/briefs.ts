@@ -102,12 +102,13 @@ const LOG_LABEL =
 const ABBREVIATION = /(?:^|[\s("'\[])(?:e\.g|i\.e|etc|vs|cf)\.$/i;
 
 /** One line of a field, with whether a fence covers it. */
-interface Line {
+export interface Line {
 	text: string;
 	fenced: boolean;
 }
 
-function toLines(text: string): Line[] {
+/** Split a field into lines and mark the ones a closed code fence covers. */
+export function toLines(text: string): Line[] {
 	const raw = text.replace(LINE_BREAKS, "\n").split("\n");
 	const lines: Line[] = raw.map((t) => ({ text: t, fenced: false }));
 	for (let i = 0; i < raw.length; i++) {
