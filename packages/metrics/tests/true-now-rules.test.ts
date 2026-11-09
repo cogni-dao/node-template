@@ -73,9 +73,17 @@ describe("true-now-rules@1 markers", () => {
 			(label) => {
 				expect(codes(`${label}: shipped`)).toContain("label_line");
 				expect(codes(`${label}(2 of 3)`)).toContain("label_line");
-				expect(codes(`${label}2 shipped`)).toContain("label_line");
+				expect(codes(`${label} 2 shipped`)).toContain("label_line");
+				expect(codes(`${label} : shipped`)).toContain("label_line");
+				expect(codes(`${label}  (note) shipped`)).toContain("label_line");
 			},
 		);
+		it("matches a label followed by spaces and a digit, and not one glued to letters or digits", () => {
+			expect(codes("Update 3")).toEqual(["label_line"]);
+			expect(codes("Progress 40% done")).toEqual(["label_line"]);
+			for (const line of ["Log4j is a library", "Update3 shipped", "Logs: x", "Review2", "Updated 3 files"])
+				expect(codes(line), line).toEqual([]);
+		});
 		it("matches through list, quote, heading and bold marks", () => {
 			for (const line of [
 				"- Update: shipped",

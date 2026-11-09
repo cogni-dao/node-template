@@ -152,12 +152,12 @@ describe("true-now@1 state read", () => {
 
 	it("maps a read error to source_failed and keeps a timeout its own failure", async () => {
 		const failing = fakeSql(() => {
-			throw new Error("relation does not exist");
+			throw new RangeError("relation does not exist SECRET-BODY-TEXT");
 		});
-		expect(await readTrueNowState(failing.sql, "work-items", signal)).toMatchObject({
-			complete: false,
-			reason: "source_failed",
-		});
+		const sample = await readTrueNowState(failing.sql, "work-items", signal);
+		expect(sample).toMatchObject({ complete: false, reason: "source_failed" });
+		// The error class is observable; its message never is.
+		expect(sample.evidenceRefs).toEqual(["error:RangeError"]);
 		const controller = new AbortController();
 		const slow = fakeSql(async () => {
 			controller.abort();
@@ -299,10 +299,13 @@ describe("true-now@1 edits read", () => {
 			expect((await edits([], [merge, branch], "count")).sample.value).toBe(1);
 		});
 
-		it("keeps nothing when the older commit is before the window and only its merge is inside", async () => {
-			const branch = atomEdit("a1", "2026-10-20 09:00:00", { to_content: "Y" });
+		it("collapses among in-window rows only: a merge whose branch commit predates the window is the edit", async () => {
+			// The statement returns only rows dated inside the window, so the older
+			// branch commit never arrives and its merge row stands alone.
 			const merge = atomEdit("a1", "2026-11-06 09:00:00", { to_content: "Y" });
-			expect((await edits([], [branch, merge], "count")).sample.value).toBe(0);
+			const { sample } = await edits([], [merge], "count");
+			expect(sample.value).toBe(1);
+			expect(sample.evidenceRefs).toContain("counts:merge_repeats=0");
 		});
 
 		it("collapses a repeat of a work-item row the same way", async () => {
@@ -477,12 +480,13 @@ describe("true-now@1 edits read", () => {
 
 		it("maps a read error to source_failed and keeps a timeout its own failure", async () => {
 			const failing = fakeSql(() => {
-				throw new Error("table not found: dolt_diff_work_items");
+				throw new TypeError("table not found: dolt_diff_work_items SECRET-BODY-TEXT");
 			});
-			expect(await readTrueNowEdits(failing.sql, "share", window, read)).toMatchObject({
-				complete: false,
-				reason: "source_failed",
-			});
+			const sample = await readTrueNowEdits(failing.sql, "share", window, read);
+			expect(sample).toMatchObject({ complete: false, reason: "source_failed" });
+			// The error class is observable; its message never is.
+			expect(sample.evidenceRefs).toContain("error:TypeError");
+			expect(sample.evidenceRefs.join("\n")).not.toContain("SECRET");
 			expect(failing.queries).toHaveLength(1);
 			const controller = new AbortController();
 			const slow = fakeSql(async () => {
@@ -520,9 +524,17 @@ describe("true-now@1 edits read", () => {
 			expect(text.startsWith("WITH diffs AS")).toBe(true);
 			expect(text).toContain(table === "work-items" ? "FROM dolt_diff_work_items d" : "FROM dolt_diff_knowledge d");
 			expect(text).toContain("d.to_commit <> 'WORKING'");
-			expect(text).toContain("w.to_commit_date >= '2026-11-02 12:00:00.000'");
-			expect(text).toContain("w.to_commit_date < '2026-11-09 12:00:00.000'");
+			expect(text).toContain("d.to_commit_date >= '2026-11-02 12:00:00.000'");
+			expect(text).toContain("d.to_commit_date < '2026-11-09 12:00:00.000'");
+			expect(text).toContain("d.diff_type = 'modified'");
 			expect(text).toContain("IS DISTINCT FROM");
+			// No wider history: no subquery, ordered by id then date, one row past the cap.
+			expect(text).not.toMatch(/\bIN \(\s*SELECT/i);
+			expect(text.match(/FROM dolt_diff_/g)).toHaveLength(1);
+			expect(text).toContain(`ORDER BY d.to_id, d.to_commit_date LIMIT ${TRUE_NOW_MAX_ROWS + 1}`);
+			// A missing commit row never drops a diff row.
+			expect(text).toContain("LEFT JOIN dolt_log l ON l.commit_hash = d.to_commit");
+			expect(text).not.toMatch(/(?<!LEFT )JOIN /);
 			expect(text).toContain(`t.n <= ${TRUE_NOW_MAX_ROWS}`);
 			expect(text).toContain(`t.bytes <= ${TRUE_NOW_MAX_BYTES}`);
 			expect(text).toContain("> 100000 THEN NULL");
@@ -539,7 +551,6 @@ describe("true-now@1 edits read", () => {
 			expect(items).not.toContain("d.to_title");
 			expect(items).toContain('"test-fixture"');
 			expect(items).toContain('"synthetic-fixture"');
-			expect(items).toContain("JOIN dolt_log l ON l.commit_hash = d.to_commit");
 			const atoms = trueNowEditsSql("atoms", window);
 			expect(atoms).toContain("from_content");
 			expect(atoms).not.toContain("d.to_summary");

@@ -38,7 +38,9 @@ export const TRUE_NOW_MAX_FIELD_CHARS = 100_000;
 const DATED_HEADER_MAX_CHARS = 100;
 
 const DATE = /\d{4}-\d{2}-\d{2}/;
-const LABEL = /^(?:Update|Progress|Changelog|Revision|Review|Pivot|Log)(?::|\(|\d)/;
+/** A label is a whole word, then optional spaces, then `:`, `(` or a digit: `Update 3` yes, `Log4j` no. */
+const LABEL =
+	/^(?:Update|Progress|Changelog|Revision|Review|Pivot|Log)\b *(?::|\(|\d)/;
 const REVISION_WORD = /\brev(?:ision)?\s+\d+\b/i;
 /** A bare `r7`: never part of a path, an identifier or a decimal. */
 const REVISION_BARE = /(?<![\w/.#:@-])r\d{1,3}(?![\w/-]|\.\d)/;

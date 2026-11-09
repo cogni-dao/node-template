@@ -709,9 +709,10 @@ export async function readTrueNowState(
 	try {
 		rows = await run(sql, trueNowStateSql(subject), signal);
 	} catch (error) {
-		// A timeout keeps its own failure; every other read error is source_failed.
+		// A timeout keeps its own failure; every other read error is source_failed,
+		// recorded by class only.
 		if (signal.aborted) throw error;
-		return unknown("source_failed", null);
+		return unknown("source_failed", null, [errorClass(error)]);
 	}
 	const first = rows[0];
 	if (!first) return unknown("incomplete_or_invalid_source", null);
@@ -792,14 +793,17 @@ const EDIT_COLUMNS = {
 } as const;
 
 /**
- * One statement per table: every diff row (`dolt_diff_<table>`, one per commit
- * and row id) of each row id that changed an edit column in [start, end), with
- * the changed text and the commit's reason message. A merge commit repeats its
- * branch commit's row, so the whole history of a touched id is read and
- * collapsed by the caller. Scope and fixture exclusions read the row as of that
- * commit. Like the brief statement it counts rows (`n`) and the bytes of its
- * capped text and joins the rows in only while both are inside the caps, so the
- * database never sends a result over a cap.
+ * One statement per table: the diff rows (`dolt_diff_<table>`, one per commit
+ * and row id) whose commit date is in [start, end) and whose edit column
+ * changed, ordered by row id then commit date, with the changed text and the
+ * commit's reason message. A diff row carries its own `from_` and `to_` text,
+ * so no wider history is read. A merge commit repeats its branch commit's row;
+ * the caller collapses repeats among these in-window rows. Scope and fixture
+ * exclusions read the row as of that commit. The log joins are LEFT joins, so a
+ * missing commit row never drops a diff row. The inner LIMIT reads one row past
+ * the row cap; like the brief statement it counts rows (`n`) and the bytes of
+ * its capped text and joins the rows in only while both are inside the caps, so
+ * the database never sends a result over a cap.
  */
 export function trueNowEditsSql(
 	table: EditTable,
@@ -817,21 +821,32 @@ export function trueNowEditsSql(
 	// text is first materialized by substr, and compares a bare SUM as text.
 	const size = (c: string) =>
 		`COALESCE(CASE WHEN char_length(d.${c}) > ${TRUE_NOW_MAX_FIELD_CHARS} THEN 0 ELSE octet_length(substr(d.${c}, 1, ${TRUE_NOW_MAX_FIELD_CHARS})) END, 0) AS ${c}_bytes`;
-	const scope = (alias: string) =>
+	const scope =
 		table === "work-items"
-			? SYNTHETIC_LABELS(`${alias}.to_labels`)
-			: `${alias}.to_entry_type <> 'html' AND (${alias}.to_tags IS NULL OR CAST(${alias}.to_tags AS TEXT) NOT LIKE '%"test-fixture"%') AND ${alias}.to_title NOT LIKE '%[TEST]%'`;
+			? SYNTHETIC_LABELS("d.to_labels")
+			: `d.to_entry_type <> 'html' AND (d.to_tags IS NULL OR CAST(d.to_tags AS TEXT) NOT LIKE '%"test-fixture"%') AND d.to_title NOT LIKE '%[TEST]%'`;
 	const changed = columns
-		.map((c) => `w.from_${c} IS DISTINCT FROM w.to_${c}`)
+		.map((c) => `d.from_${c} IS DISTINCT FROM d.to_${c}`)
 		.join(" OR ");
 	const reason =
-		table === "work-items" ? "l.message AS reason_message" : "c.message AS reason_message";
+		table === "work-items"
+			? "l.message AS reason_message"
+			: "c.message AS reason_message";
 	const join =
 		table === "work-items"
-			? "JOIN dolt_log l ON l.commit_hash = d.to_commit"
-			: "JOIN dolt_log l ON l.commit_hash = d.to_commit LEFT JOIN knowledge_contribution_commits c ON c.commit_hash = d.to_commit";
+			? "LEFT JOIN dolt_log l ON l.commit_hash = d.to_commit"
+			: "LEFT JOIN dolt_log l ON l.commit_hash = d.to_commit LEFT JOIN knowledge_contribution_commits c ON c.commit_hash = d.to_commit";
 	const bytes = text.map((c) => `${c}_bytes`).join(" + ");
-	return `WITH diffs AS (SELECT d.to_id AS id, d.to_commit AS commit_hash, CAST(d.to_commit_date AS TEXT) AS at, d.diff_type, ${reason}, ${text.map(capped).join(", ")}, ${text.map(size).join(", ")}, (${text.map(over).join(" OR ")}) AS oversize FROM ${diff} d ${join} WHERE d.to_commit <> 'WORKING' AND d.to_id IS NOT NULL AND ${scope("d")} AND d.to_id IN (SELECT w.to_id FROM ${diff} w WHERE w.diff_type = 'modified' AND w.to_commit <> 'WORKING' AND w.to_id IS NOT NULL AND w.to_commit_date >= '${doltUtc(window.start)}' AND w.to_commit_date < '${doltUtc(window.end)}' AND (${changed}) AND ${scope("w")})), totals AS (SELECT COUNT(*) AS n, CAST(COALESCE(SUM(${bytes}), 0) AS BIGINT) AS bytes FROM diffs) SELECT NOW() AS as_of, t.n, t.bytes, s.id, s.commit_hash, s.at, s.diff_type, s.reason_message, ${text.map((c) => `s.${c}`).join(", ")}, s.oversize FROM totals t LEFT JOIN diffs s ON t.n <= ${TRUE_NOW_MAX_ROWS} AND t.bytes <= ${TRUE_NOW_MAX_BYTES} ORDER BY s.id, s.at, s.commit_hash`;
+	return `WITH diffs AS (SELECT d.to_id AS id, d.to_commit AS commit_hash, CAST(d.to_commit_date AS TEXT) AS at, d.diff_type, ${reason}, ${text.map(capped).join(", ")}, ${text.map(size).join(", ")}, (${text.map(over).join(" OR ")}) AS oversize FROM ${diff} d ${join} WHERE d.to_commit <> 'WORKING' AND d.to_id IS NOT NULL AND d.diff_type = 'modified' AND d.to_commit_date >= '${doltUtc(window.start)}' AND d.to_commit_date < '${doltUtc(window.end)}' AND (${changed}) AND ${scope} ORDER BY d.to_id, d.to_commit_date LIMIT ${TRUE_NOW_MAX_ROWS + 1}), totals AS (SELECT COUNT(*) AS n, CAST(COALESCE(SUM(${bytes}), 0) AS BIGINT) AS bytes FROM diffs) SELECT NOW() AS as_of, t.n, t.bytes, s.id, s.commit_hash, s.at, s.diff_type, s.reason_message, ${text.map((c) => `s.${c}`).join(", ")}, s.oversize FROM totals t LEFT JOIN diffs s ON t.n <= ${TRUE_NOW_MAX_ROWS} AND t.bytes <= ${TRUE_NOW_MAX_BYTES} ORDER BY s.id, s.at, s.commit_hash`;
+}
+
+/** The class of a thrown value, safe to publish: never its message or any row content. */
+function errorClass(error: unknown): string {
+	const name =
+		error instanceof Error
+			? error.name.replace(/[^A-Za-z0-9_]/g, "")
+			: typeof error;
+	return `error:${(name || "unknown").slice(0, 64)}`;
 }
 
 /** One classified edit, from its kept (older) diff row. */
@@ -871,16 +886,22 @@ async function readEditsOf(
 		asOf: string | null,
 		evidence: string[] = [],
 	): EditRead => ({ ok: false, reason, asOf, evidence });
-	const rows = await read(async (signal) => {
+	const result = await read<
+		| { rows: ReadonlyArray<Record<string, unknown>>; error?: undefined }
+		| { error: string }
+	>(async (signal) => {
 		try {
-			return await run(sql, trueNowEditsSql(table, window), signal);
+			return { rows: await run(sql, trueNowEditsSql(table, window), signal) };
 		} catch (error) {
-			// A timeout keeps its own failure; every other read error is source_failed.
+			// A timeout keeps its own failure; every other read error is
+			// source_failed, recorded by class only.
 			if (signal.aborted) throw error;
-			return null;
+			return { error: errorClass(error) };
 		}
 	});
-	if (!rows) return failed("source_failed", null);
+	if (result.error !== undefined)
+		return failed("source_failed", null, [result.error]);
+	const rows = result.rows;
 	const first = rows[0];
 	if (!first) return failed("incomplete_or_invalid_source", null);
 	const asOf = first.as_of
