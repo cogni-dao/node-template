@@ -28,10 +28,11 @@ import {
   type KnowledgeHistoryRow,
   shapeKnowledgeHistory,
 } from "../../domain/history.js";
-import type {
-  KnowledgeBrowsePage,
-  KnowledgeBrowseQuery,
-  KnowledgeSummary,
+import {
+  KNOWLEDGE_BROWSE_PAGE_SIZE,
+  type KnowledgeBrowsePage,
+  type KnowledgeBrowseQuery,
+  type KnowledgeSummary,
 } from "../../contracts.js";
 import { readBrowseWithinBudget } from "./browse-budget.js";
 import { browseQuery, nextBrowseCursor } from "../../domain/browse.js";
@@ -479,9 +480,14 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
           : " NULLS LAST"
         : "";
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+    // The exact total counts the filters only, never the cursor position.
+    const filterCount = position ? conditions.length - 1 : conditions.length;
+    const filterWhere = filterCount
+      ? `WHERE ${conditions.slice(0, filterCount).join(" AND ")}`
+      : "";
     const search = query.search?.toLowerCase();
     const fields = `id, domain, entity_id, title, entry_type, confidence_pct, source_type, use_when, created_at, CAST(date_trunc('microseconds', created_at) AS TEXT) AS browse_created_at${search ? ", content" : ""}`;
-    const { rows, revision } = await readBrowseWithinBudget(
+    const { rows, revision, total } = await readBrowseWithinBudget(
       this.readSql,
       this.browseTimeoutMs,
       signal,
@@ -493,12 +499,15 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
             "Knowledge revision unavailable; retry shortly"
           );
         const rows = await read(
-          `SELECT ${fields} FROM knowledge ${where} ORDER BY ${column} ${query.direction.toUpperCase()}${nullOrder}, id ASC LIMIT ${search ? 20 : 21}`
+          `SELECT ${fields} FROM knowledge ${where} ORDER BY ${column} ${query.direction.toUpperCase()}${nullOrder}, id ASC LIMIT ${search ? KNOWLEDGE_BROWSE_PAGE_SIZE : KNOWLEDGE_BROWSE_PAGE_SIZE + 1}`
         );
-        return { rows, revision };
+        const counted = await read(
+          `SELECT COUNT(*) AS total FROM knowledge ${filterWhere}`
+        );
+        return { rows, revision, total: Number(counted[0]?.total ?? 0) };
       }
     );
-    const window = rows.slice(0, 20);
+    const window = rows.slice(0, KNOWLEDGE_BROWSE_PAGE_SIZE);
     const toSummary = (row: Record<string, unknown>): KnowledgeSummary => ({
       id: String(row.id),
       domain: String(row.domain),
@@ -529,12 +538,15 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
           )
       )
       .map(toSummary);
-    const hasMore = search ? window.length === 20 : rows.length > 20;
+    const hasMore = search
+      ? window.length === KNOWLEDGE_BROWSE_PAGE_SIZE
+      : rows.length > KNOWLEDGE_BROWSE_PAGE_SIZE;
     const last = window[window.length - 1];
     return {
       revision,
       items,
       scannedRows: window.length,
+      total,
       nextCursor:
         hasMore && last
           ? nextBrowseCursor(

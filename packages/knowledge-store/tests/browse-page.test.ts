@@ -92,6 +92,7 @@ it("projects metadata in one global native query without fetching bodies", async
   const sql = {
     unsafe: async (query: string) => {
       if (query.includes("dolt_hashof")) return [{ hash: "head-a" }];
+      if (query.startsWith("SELECT COUNT(*)")) return [{ total: 0 }];
       queries.push(query);
       return [];
     },
@@ -235,6 +236,7 @@ it("native lookahead is not consumed and search reads exactly one bounded body w
   const sql = {
     unsafe: async (query: string) => {
       if (query.includes("dolt_hashof")) return [{ hash: "head-a" }];
+      if (query.startsWith("SELECT COUNT(*)")) return [{ total: 0 }];
       queries.push(query);
       return query.includes("id > 'n-19'") ? rows.slice(20) : rows;
     },
@@ -296,6 +298,7 @@ it.each(["asc", "desc"] as const)(
       sql: {
         unsafe: async (query: string) => {
           if (query.includes("dolt_hashof")) return [{ hash: "head-a" }];
+          if (query.startsWith("SELECT COUNT(*)")) return [{ total: 0 }];
           queries.push(query);
           expect(query).toContain(
             "CAST(date_trunc('microseconds', created_at) AS TEXT) AS browse_created_at"
@@ -382,6 +385,7 @@ it("native date keysets include the null tail in both directions without sentine
     sql: {
       unsafe: async (query: string) => {
         if (query.includes("dolt_hashof")) return [{ hash: "head-a" }];
+        if (query.startsWith("SELECT COUNT(*)")) return [{ total: 0 }];
         queries.push(query);
         return Array.from({ length: 21 }, (_, i) => ({
           id: `null-${i}`,
@@ -494,11 +498,16 @@ it("bounds native work after timeout/abort across adapters, preserves unrelated 
     await vi.advanceTimersByTimeAsync(0);
     expect(pending).toHaveLength(2);
     pending[1]?.([]);
+    // The exact total is a second bounded read inside the same budget.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pending).toHaveLength(3);
+    pending[2]?.([{ total: 0 }]);
     await expect(recovered).resolves.toEqual({
       revision: "head-real",
       items: [],
       nextCursor: null,
       scannedRows: 0,
+      total: 0,
     });
   } finally {
     vi.useRealTimers();
@@ -647,4 +656,80 @@ it("caps waiting callers and recycles acknowledged SQL errors without poisoning 
   } finally {
     vi.useRealTimers();
   }
+});
+
+it("reports the exact filtered total on every window, unchanged by the cursor or a search", async () => {
+  const store = new FakeKnowledgeStoreAdapter();
+  for (const id of ["a", "b"]) await store.registerDomain({ id, name: id });
+  await store.withWrite(
+    { operationId: "total-fixture", message: "fixture" },
+    async (write) => {
+      for (let i = 0; i < 45; i++)
+        await write.addKnowledge({
+          id: `t-${String(i).padStart(2, "0")}`,
+          domain: i < 30 ? "a" : "b",
+          title: "T",
+          content: i === 44 ? "needle" : "body",
+          sourceType: "human",
+        });
+    }
+  );
+  const all = await store.browseKnowledge({ sort: "id", direction: "asc" });
+  expect(all.total).toBe(45);
+  const next = await store.browseKnowledge({
+    sort: "id",
+    direction: "asc",
+    cursor: required(all.nextCursor),
+  });
+  expect(next.total).toBe(45);
+  expect((await store.browseKnowledge({ domains: ["b"] })).total).toBe(15);
+  expect((await store.overviewKnowledge({ domains: ["a"] })).total).toBe(30);
+  expect((await store.browseKnowledge({ domains: ["missing"] })).total).toBe(0);
+  // With a search, total is the candidate set the search walks.
+  expect((await store.browseKnowledge({ search: "needle" })).total).toBe(45);
+});
+
+it("counts the native total with the filters only, never the seek predicate", async () => {
+  const { DoltgresKnowledgeStoreAdapter } = await import(
+    "../src/adapters/doltgres/index.js"
+  );
+  const counts: string[] = [];
+  const rows = Array.from({ length: 21 }, (_, i) => ({
+    id: `n-${String(i).padStart(2, "0")}`,
+    domain: "test",
+    entity_id: null,
+    title: "T",
+    entry_type: "finding",
+    confidence_pct: null,
+    source_type: "human",
+    created_at: null,
+    use_when: null,
+  }));
+  const sql = {
+    unsafe: async (query: string) => {
+      if (query.includes("dolt_hashof")) return [{ hash: "head-a" }];
+      if (query.startsWith("SELECT COUNT(*)")) {
+        counts.push(query);
+        return [{ total: "137" }];
+      }
+      return rows;
+    },
+  };
+  const store = new DoltgresKnowledgeStoreAdapter({ sql: sql as never });
+  const first = await store.browseKnowledge({
+    sort: "id",
+    direction: "asc",
+    domains: ["test"],
+  });
+  const next = await store.browseKnowledge({
+    sort: "id",
+    direction: "asc",
+    domains: ["test"],
+    cursor: required(first.nextCursor),
+  });
+  expect([first.total, next.total]).toEqual([137, 137]);
+  expect(counts).toEqual([
+    "SELECT COUNT(*) AS total FROM knowledge WHERE domain IN ('test')",
+    "SELECT COUNT(*) AS total FROM knowledge WHERE domain IN ('test')",
+  ]);
 });
