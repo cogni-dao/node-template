@@ -115,6 +115,7 @@ vi.mock("@/components", async () => ({
     </button>
   ),
   Input: (props: ComponentProps<"input">) => <input {...props} />,
+  Skeleton: () => <span>Loading count</span>,
 }));
 
 function client() {

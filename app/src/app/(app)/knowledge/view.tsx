@@ -70,7 +70,12 @@ import {
   useState,
 } from "react";
 
-import { Button, Input } from "@/components";
+import {
+  type KnowledgeGraphEntriesSummary,
+  knowledgeBrowseKey,
+  knowledgeQueryToSearchParams,
+} from "@cogni/knowledge-base-ui/knowledge";
+import { Button, Input, Skeleton } from "@/components";
 import {
   attentionCount,
   fetchGoalsProgress,
@@ -79,6 +84,7 @@ import {
 } from "@/features/goals";
 
 import { closeContribution } from "./_api/closeContribution";
+import { fetchBrowse } from "./_api/fetchBrowse";
 import { fetchContributions } from "./_api/fetchContributions";
 import { fetchDomains } from "./_api/fetchDomains";
 import { fetchKnowledge } from "./_api/fetchKnowledge";
@@ -277,6 +283,22 @@ export function KnowledgeDashboardView({
   });
 
   const [addDomainOpen, setAddDomainOpen] = useState(false);
+  // Subtitle: the exact entry count on main (never the legacy limit=500 list).
+  // Graph reports its own exact counts; every other tab reads the default
+  // Browse window's exact `total` (shared with Browse's cache and SSR seed).
+  const [graphEntries, setGraphEntries] =
+    useState<KnowledgeGraphEntriesSummary | null>(null);
+  const totalQuery = useQuery({
+    queryKey: knowledgeBrowseKey({}),
+    queryFn: ({ signal }) =>
+      fetchBrowse(knowledgeQueryToSearchParams({}), signal),
+    initialData: initialBrowse,
+    staleTime: 30_000,
+    retry: false,
+    enabled: mode !== "graph",
+  });
+  const entryTotal =
+    mode === "graph" ? graphEntries?.total : totalQuery.data?.total;
 
   return (
     <div className="flex flex-col gap-4 p-5 md:p-6">
@@ -286,7 +308,24 @@ export function KnowledgeDashboardView({
             Knowledge
           </h1>
           <span className="text-muted-foreground text-xs">
-            What this node has learned · <code className="font-mono">main</code>
+            {mode === "graph" && graphEntries?.narrowed ? (
+              <>
+                Showing {graphEntries.shown.toLocaleString("en-US")} of{" "}
+                {graphEntries.total.toLocaleString("en-US")} entries
+              </>
+            ) : (
+              <>
+                What this node has learned ·{" "}
+                {entryTotal !== undefined ? (
+                  <>
+                    {entryTotal.toLocaleString("en-US")} entries on{" "}
+                    <code className="font-mono">main</code>
+                  </>
+                ) : (
+                  <Skeleton className="inline-block h-3 w-28 align-middle" />
+                )}
+              </>
+            )}
           </span>
         </div>
 
@@ -386,7 +425,7 @@ export function KnowledgeDashboardView({
             mode="chains"
           />
         )}
-        {mode === "graph" && <GraphView />}
+        {mode === "graph" && <GraphView onEntriesChange={setGraphEntries} />}
         {mode === "domains" && (
           <DomainsPanel
             rows={domainsQuery.data?.domains ?? []}

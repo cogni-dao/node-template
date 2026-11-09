@@ -178,6 +178,7 @@ vi.mock("next/link", () => ({
 }));
 vi.mock("@/components", () => ({
   Badge: ({ children }: { children: ReactNode }) => <span>{children}</span>,
+  Skeleton: () => <span>Loading count</span>,
   Button: ({
     children,
     disabled,
@@ -287,6 +288,8 @@ it.each(["browse", "chains", "graph"])(
     );
     const fetchMock = vi.fn(async (url: string) => {
       if (url === "/api/v1/knowledge/graph") return Response.json(graphBody);
+      if (url.startsWith("/api/v1/knowledge/browse?"))
+        return Response.json({ ...page, total: 5046 });
       if (url === `/api/v1/knowledge/${selected.id}`)
         return Response.json(selected);
       if (url.startsWith(`/api/v1/citations/${selected.id}`))
@@ -308,10 +311,14 @@ it.each(["browse", "chains", "graph"])(
       />
     );
     await act(async () => {});
-    // Browse and Chains are seeded; Graph reads the whole corpus once.
+    if (mode === "graph")
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    // The seeded default Browse window's exact total feeds the subtitle with no
+    // read; Graph reads the whole corpus once and reports its own exact count.
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(
       mode === "graph" ? ["/api/v1/knowledge/graph"] : []
     );
+    await screen.findByText(/What this node has learned · 1 entries on/);
     fetchMock.mockClear();
     fireEvent.click(
       mode === "browse"
@@ -540,7 +547,7 @@ it("returns retryable 503 and forwards request abort to bounded reads", async ()
   });
 });
 
-it("Graph shows the exact whole-corpus counts from one read", async () => {
+it("Graph shows exact counts in the page subtitle and legend from one read, with the final header", async () => {
   navigation.mode = "graph";
   vi.stubGlobal(
     "ResizeObserver",
@@ -566,7 +573,16 @@ it("Graph shows the exact whole-corpus counts from one read", async () => {
   });
   vi.stubGlobal("fetch", fetchMock);
   mount(<KnowledgeDashboardView />);
-  await screen.findByText(/5,046 entries · 12,300 citations/);
+  // Exact counts: the subtitle states every entry on main, the legend every citation.
+  await screen.findByText(/What this node has learned · 5,046 entries on/);
+  expect(screen.getByText("12300 citations · 1 domain")).toBeTruthy();
+  // Final header: Confidence | Domain, Domain hubs, Domain and Type dropdowns; no text inputs.
+  expect(
+    screen.getByRole("checkbox", { name: "Domain hubs" })
+  ).toBeTruthy();
+  expect(screen.getByRole("combobox", { name: "Domain" })).toBeTruthy();
+  expect(screen.getByRole("combobox", { name: "Type" })).toBeTruthy();
+  expect(screen.queryByRole("textbox")).toBeNull();
   expect(fetchMock).toHaveBeenCalledTimes(1);
 });
 
