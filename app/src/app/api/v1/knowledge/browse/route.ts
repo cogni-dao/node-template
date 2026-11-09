@@ -9,7 +9,7 @@ import {
 import {
   KnowledgeBrowsePageSchema,
   KnowledgeBrowseQuerySchema
-} from "@cogni/node-contracts";
+} from "@cogni/knowledge-store/contracts";
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { getContainer } from "@/bootstrap/container";
