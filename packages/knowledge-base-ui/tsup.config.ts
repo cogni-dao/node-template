@@ -4,7 +4,7 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-  entry: ["src/index.ts", "src/knowledge.ts", "src/graph-3d.tsx"],
+  entry: ["src/index.ts", "src/knowledge.ts", "src/goals.ts", "src/graph-3d.tsx"],
   format: ["esm"],
   dts: false,
   clean: false,
@@ -17,6 +17,8 @@ export default defineConfig({
     "@cogni/work-items",
     "@cogni/knowledge-store",
     "@cogni/knowledge-store/contracts",
+    "@cogni-dao/metrics",
+    "@cogni-dao/metrics/contracts",
     "@dnd-kit/core",
     "@dnd-kit/sortable",
     "@dnd-kit/utilities",
@@ -26,6 +28,7 @@ export default defineConfig({
     "lucide-react",
     "radix-ui",
     "react-force-graph-3d",
+    "recharts",
     "tailwind-merge",
   ],
 });

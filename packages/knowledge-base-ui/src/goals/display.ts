@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 /**
- * Module: `@features/goals/lib/display`
+ * Module: `@cogni/knowledge-base-ui/goals (display)`
  * Purpose: Everything a KPI card or chart shows, by display type. progress = a
  *   value against a target; volume = an amount and its change; slo = a
  *   percentage against a ≥/≤ objective with an error budget. The type comes
@@ -22,7 +22,7 @@ import type {
   MetricHistory,
 } from "@cogni-dao/metrics/contracts";
 
-import { COMPARATOR_SYMBOL, formatDate, formatNumber, formatUtcTime, type GoalKpi } from "./presentation";
+import { COMPARATOR_SYMBOL, formatDate, formatNumber, formatUtcTime, type GoalKpi } from "./presentation.js";
 
 export type { MetricDisplay };
 

@@ -20,6 +20,7 @@
 
 "use client";
 
+import { attentionCount } from "@cogni/knowledge-base-ui/goals";
 import type {
   ContributionRecord,
   DomainRow,
@@ -76,12 +77,6 @@ import {
   knowledgeQueryToSearchParams,
 } from "@cogni/knowledge-base-ui/knowledge";
 import { Button, Input, Skeleton } from "@/components";
-import {
-  attentionCount,
-  fetchGoalsProgress,
-  GOALS_QUERY_KEY,
-  GoalsBoard,
-} from "@/features/goals";
 
 import { closeContribution } from "./_api/closeContribution";
 import { fetchBrowse } from "./_api/fetchBrowse";
@@ -95,6 +90,11 @@ import { ContributionDetail } from "./_components/ContributionDetail";
 import { knowledgeColumns } from "./_components/columns";
 import { buildContributionColumns } from "./_components/contribution-columns";
 import { domainColumns } from "./_components/domain-columns";
+import {
+  KnowledgeGoalsBoard,
+  KnowledgeGoalsProvider,
+  useKnowledgeGoalsBadge,
+} from "./_components/GoalsMount";
 import { GraphView } from "./_components/GraphView";
 import { KnowledgeDetail } from "./_components/KnowledgeDetail";
 
@@ -143,12 +143,21 @@ interface KnowledgeDashboardViewProps {
   readonly initialBrowse?: KnowledgeBrowsePage | undefined;
 }
 
-export function KnowledgeDashboardView({
+/** One Goals host for the tab badge and the board, so both read one cache entry. */
+export function KnowledgeDashboardView(props: KnowledgeDashboardViewProps = {}) {
+  return (
+    <KnowledgeGoalsProvider>
+      <KnowledgeDashboard {...props} />
+    </KnowledgeGoalsProvider>
+  );
+}
+
+function KnowledgeDashboard({
   initialGoals,
   initialList,
   initialDomains,
   initialBrowse,
-}: KnowledgeDashboardViewProps = {}) {
+}: KnowledgeDashboardViewProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
@@ -200,14 +209,9 @@ export function KnowledgeDashboardView({
 
   // On-intent reads feed the Goals tab badge. Polling lives in GoalsBoard, which is
   // mounted only while the Goals tab is selected.
-  const goalsQuery = useQuery({
-    queryKey: GOALS_QUERY_KEY,
-    queryFn: fetchGoalsProgress,
+  const goalsQuery = useKnowledgeGoalsBadge({
     enabled: mode === "goals",
-    staleTime: 30_000,
     initialData: initialGoals,
-    retry: 1,
-    refetchOnWindowFocus: false,
   });
   const goalsAttention = goalsQuery.data
     ? attentionCount(goalsQuery.data.goals)
@@ -413,7 +417,7 @@ export function KnowledgeDashboardView({
         aria-labelledby={`knowledge-tab-${mode}`}
         className="flex min-w-0 flex-col gap-4"
       >
-        {mode === "goals" && <GoalsBoard initialData={initialGoals} />}
+        {mode === "goals" && <KnowledgeGoalsBoard initialData={initialGoals} />}
         {mode === "browse" && <BoundedBrowse initialData={initialBrowse} />}
         {mode === "chains" && (
           <BrowsePanel

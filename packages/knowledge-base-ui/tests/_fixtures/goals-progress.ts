@@ -2,8 +2,8 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 /**
- * Module: `@tests/_fixtures/goals/progress`
- * Purpose: Schema-valid GoalsProgress fixtures for Goals tab tests and visual harnesses.
+ * Module: `@cogni/knowledge-base-ui/tests/_fixtures/goals-progress`
+ * Purpose: Schema-valid GoalsProgress fixtures for the Goals capability package tests.
  * Scope: Illustrative data only. Every builder output parses with GoalsProgressSchema.
  * Invariants: Fixed clock (AS_OF); gaps are explicit `missing` buckets, never filled.
  * Side-effects: none

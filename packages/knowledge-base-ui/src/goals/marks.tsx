@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 /**
- * Module: `@features/goals/components/marks`
+ * Module: `@cogni/knowledge-base-ui/goals (marks)`
  * Purpose: The pieces both the KPI card and the open chart draw with: status
  *   pill, progress bar, volume sparkline, SLO availability strip, the shared
  *   area gradient and the SSR-stable chart id.
@@ -13,19 +13,19 @@
  *   own element types as chart children, so shared pieces are functions that
  *   return elements, never components. No animation.
  * Side-effects: none
- * Links: ../lib/display.ts, ../lib/presentation.ts
+ * Links: ./display.ts, ../lib/presentation.ts
  * @public
  */
 
 "use client";
 
-import { ChartContainer } from "@/components/chart";
+import { ChartContainer } from "./chart.js";
 import type { KpiBinding, KpiStatus, MetricHistory } from "@cogni-dao/metrics/contracts";
 import { useId } from "react";
 import { Area, AreaChart, Bar, BarChart, Cell, YAxis } from "recharts";
 
-import { fromFirstReading, meetsTarget, type Point, seriesPoints, yDomain } from "../lib/display";
-import { STATUS_META, type StatusTone } from "../lib/presentation";
+import { fromFirstReading, meetsTarget, type Point, seriesPoints, yDomain } from "./display.js";
+import { STATUS_META, type StatusTone } from "./presentation.js";
 
 const TONE_CLASS: Record<StatusTone, string> = {
   success: "border-success/30 bg-success/10 text-success",

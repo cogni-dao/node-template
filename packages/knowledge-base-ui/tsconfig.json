@@ -18,5 +18,9 @@
   },
   "include": ["src/**/*.ts", "src/**/*.tsx"],
   "exclude": ["node_modules", "dist"],
-  "references": [{ "path": "../work-items" }, { "path": "../knowledge-store" }]
+  "references": [
+    { "path": "../work-items" },
+    { "path": "../knowledge-store" },
+    { "path": "../metrics" }
+  ]
 }

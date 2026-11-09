@@ -2,32 +2,30 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 /**
- * Module: `@features/goals/components/KpiChart`
+ * Module: `@cogni/knowledge-base-ui/goals (kpi-chart)`
  * Purpose: The open KPI: one big number, a range toggle and one chart drawn by
  *   display type (progress/volume = gradient area; slo = availability bars),
  *   with a single target line. Nothing else.
- * Scope: Client component. Reads GET /api/v1/metrics/{id}/history; never computes.
+ * Scope: Client component. Reads {id}/history through the injected GoalsClient; never computes.
  * Invariants: GAPS_STAY_GAPS (missing buckets are null, connectNulls=false);
  *   the newest reading after the last closed bucket is its own point; the
  *   number speaks for the assessment, never for the range; the previous range
  *   stays on screen while the next one loads; the chart surface is named by the
  *   visible metric title; a collapsed readings list is the keyboard path to
  *   each observation.
- * Side-effects: IO (via fetchMetricHistory)
- * Links: ../lib/display.ts, packages/metrics/src/contracts.ts (MetricHistorySchema)
+ * Side-effects: IO (via GoalsClient.fetchHistory)
+ * Links: ./display.ts, packages/metrics/src/contracts.ts (MetricHistorySchema)
  * @public
  */
 
 "use client";
 
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import Link from "next/link";
 import { useId, useState } from "react";
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ReferenceLine, XAxis, YAxis } from "recharts";
 
-import { ToggleGroup, ToggleGroupItem } from "@/components";
-import { ChartContainer, ChartTooltip } from "@/components/chart";
-import { fetchMetricHistory } from "../lib/api";
+import { ChartContainer, ChartTooltip } from "./chart.js";
+import { useGoalsHost } from "./context.js";
 import {
   displayOf,
   formatValue,
@@ -36,20 +34,20 @@ import {
   seriesPoints,
   targetInView,
   yDomain,
-} from "../lib/display";
+} from "./display.js";
 import {
   COMPARATOR_SYMBOL,
   formatDate,
   formatUtcTime,
   type GoalKpi,
-  HISTORY_RANGES,
   type HistoryRange,
   heroLabel,
   historyWindow,
-  observationHref,
   STEP_MS,
-} from "../lib/presentation";
-import { areaGradient, barCells, CHART_CONFIG, useChartId } from "./marks";
+} from "./presentation.js";
+import { areaGradient, barCells, CHART_CONFIG, useChartId } from "./marks.js";
+import { RangeToggle } from "./range-toggle.js";
+import { metricHistoryKey } from "./use-goals-progress.js";
 
 /** Hourly metrics open on the day until they have days of shape, then the week. */
 export function initialRange(kpi: GoalKpi): HistoryRange {
@@ -77,11 +75,12 @@ export function KpiChart({
   const metricId = kpi.metric?.id ?? kpi.binding.metricId;
   const display = displayOf(kpi);
   const unit = kpi.binding.target.unit;
+  const { client, queryKeyPrefix, hrefs, Link } = useGoalsHost();
   const [range, setRange] = useState<HistoryRange>(() => initialRange(kpi));
   const span = historyWindow(range, Date.parse(nowIso));
   const history = useQuery({
-    queryKey: ["goals", "history", metricId, span.from, span.step],
-    queryFn: () => fetchMetricHistory(metricId, span),
+    queryKey: metricHistoryKey(queryKeyPrefix, metricId, span.from, span.step),
+    queryFn: ({ signal }) => client.fetchHistory(metricId, span, signal),
     placeholderData: keepPreviousData,
     staleTime: 60_000,
     retry: 1,
@@ -166,19 +165,7 @@ export function KpiChart({
             {label && <span className="pb-1 text-muted-foreground text-xs">{label}</span>}
           </div>
         </div>
-        <ToggleGroup
-          type="single"
-          value={range}
-          onValueChange={(v) => v && setRange(v as HistoryRange)}
-          aria-label="Chart range"
-          className="rounded-lg border border-border/70 p-1"
-        >
-          {HISTORY_RANGES.map((r) => (
-            <ToggleGroupItem key={r.id} value={r.id} size="sm" className="h-7 px-2.5 text-xs">
-              {r.label}
-            </ToggleGroupItem>
-          ))}
-        </ToggleGroup>
+        <RangeToggle value={range} onChange={setRange} />
       </div>
 
       <div className="relative h-48">
@@ -235,7 +222,7 @@ export function KpiChart({
               : [
                   <li key={d.t} className="flex justify-between gap-3 tabular-nums">
                     <span className="text-muted-foreground">{when(d.t, hourly)}</span>
-                    <Link href={observationHref(metricId, d.observationId)} className="hover:underline">
+                    <Link href={hrefs.observation(metricId, d.observationId)} className="hover:underline">
                       {formatValue(d.v, display, unit)} ↗
                     </Link>
                   </li>,

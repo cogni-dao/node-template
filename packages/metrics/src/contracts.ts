@@ -99,6 +99,11 @@ export const MetricViewSchema = z.object({
 	viewState: z.enum(["ok", "stale", "pending", "unavailable", "error"]),
 });
 export type MetricView = z.infer<typeof MetricViewSchema>;
+/** GET /api/v1/metrics/{id}: the view plus its recent readings. */
+export const MetricReadResponseSchema = MetricViewSchema.extend({
+	history: z.array(MetricObservationSchema),
+});
+export type MetricReadResponse = z.infer<typeof MetricReadResponseSchema>;
 export const MetricSnapshotSchema = z.object({
 	definition: MetricViewSchema.shape.definition,
 	observation: MetricObservationSchema,
