@@ -183,13 +183,15 @@ describe("access requests: an ask is an off row (real Postgres)", () => {
   });
 
   it("AI plane is bearer-only: a browser session gets 404 on POST and GET and nothing is written", async () => {
-    const before = (await service`SELECT count(*)::int AS n FROM agent_roles`)[0]?.n;
+    // Other component files share this database, so count only this test's own principals.
+    const own = () => service`SELECT count(*)::int AS n FROM agent_roles WHERE principal_user_id IN (${admin}, ${agent}) AND revoked_at IS NULL AND scope = ${SCOPE}`;
+    const before = (await own())[0]?.n;
     as(admin, "session");
     expect((await ask(SCOPE)).status).toBe(404);
     expect((await mine()).status).toBe(404);
     session.user = { id: agent, walletAddress: null, displayName: null, avatarColor: null }; // no `via` is not a verified bearer
     expect((await ask(SCOPE)).status).toBe(404);
-    expect((await service`SELECT count(*)::int AS n FROM agent_roles`)[0]?.n).toBe(before);
+    expect((await own())[0]?.n).toBe(before);
   });
 
   it("human plane is session-only: an Authorization header gets 403 human_session_required, and a non-admin cannot approve", async () => {
