@@ -3,33 +3,92 @@
 
 /**
  * Module: `@tests/unit/app/knowledge-selection-direct-links`
- * Purpose: Keep node-template atom selection on direct relations in each knowledge view.
- * Scope: Real selection handlers and shared UI, with an already-loaded entry body.
- * Invariants: NO_IMPLICIT_CHAIN, FIVE_INITIAL_LINKS, MORE_REQUIRES_CLICK.
+ * Purpose: Prove bounded hydration, explicit search windows, replacement focus and exact-ID selection.
+ * Scope: Real grid context/headers, node controllers and schemas; row/WebGL drawing and transport are stubbed.
+ * Invariants: NO_HIDDEN_READS, FIVE_CURRENT_LINKS, EXPLICIT_CONTINUATION, STALE_INTENT_IGNORED.
  * Side-effects: Stubbed browser fetch; no live services or database.
  * Links: https://github.com/cogni-dao/cogni/issues/2846
  * @vitest-environment jsdom
  * @internal
  */
 
+import { KnowledgeBrowseCursorError } from "@cogni/knowledge-store";
 import type { KnowledgeRow } from "@cogni/node-contracts";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { DataGrid } from "@cogni/node-ui-kit/reui/data-grid/data-grid";
 import {
+  focusManager,
+  onlineManager,
+  QueryClient,
+  QueryClientProvider
+} from "@tanstack/react-query";
+import {
+  flexRender,
+  getCoreRowModel,
+  type Table,
+  useReactTable
+} from "@tanstack/react-table";
+import {
+  act,
   cleanup,
   fireEvent,
   render,
+  renderHook,
   screen,
-  waitFor,
+  waitFor
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { ComponentProps, ReactNode } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { browseKey } from "@/app/(app)/knowledge/_api/fetchBrowse";
+import { BoundedBrowse } from "@/app/(app)/knowledge/_components/BoundedBrowse";
+import { knowledgeColumns } from "@/app/(app)/knowledge/_components/columns";
+import { KnowledgeSelection } from "@/app/(app)/knowledge/_components/KnowledgeSelection";
+import {
+  focusGeometry,
+  useGraphFocus
+} from "@/app/(app)/knowledge/_components/useGraphFocus";
+import {
+  loadKnowledgeBrowse,
+  loadKnowledgeOverview
+} from "@/app/(app)/knowledge/_server/loaders";
+import KnowledgePage from "@/app/(app)/knowledge/page";
 import { KnowledgeDashboardView } from "@/app/(app)/knowledge/view";
+import { GET as browseRoute } from "@/app/api/v1/knowledge/browse/route";
+import { GET as overviewRoute } from "@/app/api/v1/knowledge/overview/route";
 
+vi.mock(
+  "@cogni/node-contracts",
+  async () => import("../../../../packages/knowledge-store/src/contracts")
+);
+vi.mock("@/app/_facades/read-envelopes.server", () => ({
+  toHttpKnowledgeRow: vi.fn()
+}));
+vi.mock("next/cache", () => ({ unstable_cache: (fn: unknown) => fn }));
+const ssr = vi.hoisted(() => ({ port: undefined as unknown }));
+vi.mock("@/bootstrap/container", () => ({
+  getContainer: () => ({ knowledgeStorePort: ssr.port })
+}));
+vi.mock("@/lib/auth/server", () => ({
+  getServerSessionUser: async () => ({ id: "fixture" })
+}));
+vi.mock("@/app/_lib/auth/session", () => ({ getSessionUser: vi.fn() }));
+vi.mock("@/app/_facades/metrics.server", () => ({
+  loadGoalsProgress: () => {
+    throw new Error("Hidden Goals read");
+  }
+}));
+vi.mock("@/bootstrap/http", () => ({
+  wrapRouteHandlerWithLogging: (_options: unknown, handler: unknown) => handler
+}));
+const routeLog = vi.fn();
+function routeContext(routeId: string) {
+  return { reqId: "fixture-request", routeId, log: { info: routeLog } };
+}
 const navigation = vi.hoisted(() => ({ mode: "browse" }));
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace: vi.fn() }),
-  useSearchParams: () => new URLSearchParams({ mode: navigation.mode }),
+  useSearchParams: () => new URLSearchParams({ mode: navigation.mode })
 }));
 
 // Only the grid and WebGL presentation are replaced. Their real parent
@@ -39,7 +98,7 @@ vi.mock("next/dynamic", () => ({
     () =>
     ({
       graphData,
-      onNodeClick,
+      onNodeClick
     }: {
       graphData: {
         nodes: Array<{ id: string; title: string; isHub: boolean }>;
@@ -59,71 +118,91 @@ vi.mock("next/dynamic", () => ({
             </button>
           ))}
       </div>
-    ),
+    )
 }));
 
-vi.mock("@cogni/node-ui-kit/reui/data-grid/data-grid", () => ({
-  DataGrid: ({
-    table,
-    onRowClick,
-  }: {
-    table: {
-      getRowModel: () => {
-        rows: Array<{ id: string; original: KnowledgeRow }>;
-      };
+vi.mock(
+  "@cogni/node-ui-kit/reui/data-grid/data-grid",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@cogni/node-ui-kit/reui/data-grid/data-grid")
+      >();
+    return {
+      ...actual,
+      DataGrid: (props: ComponentProps<typeof actual.DataGrid>) => {
+        const table = props.table as Table<KnowledgeRow>;
+        return (
+          <actual.DataGrid {...props}>
+            {table.getHeaderGroups().map((group) => (
+              <div key={group.id}>
+                {group.headers.map((header) => (
+                  <div key={header.id}>
+                    {flexRender(
+                      header.column.columnDef.header,
+                      header.getContext()
+                    )}
+                  </div>
+                ))}
+              </div>
+            ))}
+            {table.getRowModel().rows.map((row) => (
+              <button
+                key={row.id}
+                type="button"
+                onClick={() => props.onRowClick?.(row.original)}
+              >
+                Select row {row.original.title}
+              </button>
+            ))}
+          </actual.DataGrid>
+        );
+      }
     };
-    onRowClick: (entry: KnowledgeRow) => void;
-  }) => (
-    <div>
-      {table.getRowModel().rows.map((row) => (
-        <button
-          key={row.id}
-          type="button"
-          onClick={() => onRowClick(row.original)}
-        >
-          Select row {row.original.title}
-        </button>
-      ))}
-    </div>
-  ),
-  DataGridContainer: ({ children }: { children: ReactNode }) => (
-    <div>{children}</div>
-  ),
-}));
+  }
+);
 vi.mock(
   "@cogni/node-ui-kit/reui/data-grid/data-grid-column-visibility",
   () => ({
-    DataGridColumnVisibility: () => null,
+    DataGridColumnVisibility: () => null
   })
 );
 vi.mock("@cogni/node-ui-kit/reui/data-grid/data-grid-pagination", () => ({
-  DataGridPagination: () => null,
+  DataGridPagination: () => null
+}));
+vi.mock("@cogni/node-ui-kit/header-filter", () => ({
+  HeaderFilter: () => null
 }));
 vi.mock("@cogni/node-ui-kit/reui/data-grid/data-grid-table", () => ({
-  DataGridTable: () => null,
+  DataGridTable: () => null
 }));
 vi.mock("@/app/(app)/knowledge/_components/AddDomainSheet", () => ({
-  AddDomainSheet: () => null,
+  AddDomainSheet: () => null
 }));
 vi.mock("@/app/(app)/knowledge/_components/ConfidenceBar", () => ({
-  ConfidenceBar: () => null,
+  ConfidenceBar: () => null
 }));
 // This suite owns atom selection; automatic goal polling has its own evidence.
 vi.mock("@/features/goals", () => ({
   GoalsBoard: () => null,
   GOALS_QUERY_KEY: ["goals", "progress"],
   fetchGoalsProgress: () => new Promise(() => {}),
-  attentionCount: () => 0,
+  attentionCount: () => 0
 }));
 vi.mock("next/link", () => ({
   default: ({ href, children }: { href: string; children: ReactNode }) => (
     <a href={href}>{children}</a>
-  ),
+  )
 }));
 vi.mock("@/components", () => ({
   Badge: ({ children }: { children: ReactNode }) => <span>{children}</span>,
-  Button: ({ children, disabled, onClick }: ComponentProps<"button">) => (
-    <button type="button" disabled={disabled} onClick={onClick}>
+  Button: ({
+    children,
+    disabled,
+    onClick,
+    type = "button"
+  }: ComponentProps<"button">) => (
+    <button type={type} disabled={disabled} onClick={onClick}>
       {children}
     </button>
   ),
@@ -135,7 +214,7 @@ vi.mock("@/components", () => ({
     <div>{children}</div>
   ),
   SheetHeader: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-  SheetTitle: ({ children }: { children: ReactNode }) => <h2>{children}</h2>,
+  SheetTitle: ({ children }: { children: ReactNode }) => <h2>{children}</h2>
 }));
 
 const selected = {
@@ -151,6 +230,8 @@ const selected = {
   sourceRef: null,
   tags: null,
   createdAt: null,
+  evaluateAt: null,
+  resolutionStrategy: null
 } satisfies KnowledgeRow;
 
 function relation(index: number) {
@@ -162,15 +243,15 @@ function relation(index: number) {
       id: selected.id,
       kind: "knowledge",
       title: selected.title,
-      href: `/knowledge/${selected.id}`,
+      href: `/knowledge/${selected.id}`
     },
     target: {
       id: `neighbor-${index}`,
       kind: "knowledge",
       title: `Direct relation ${index}`,
-      href: `/knowledge/neighbor-${index}`,
+      href: `/knowledge/neighbor-${index}`
     },
-    context: null,
+    context: null
   };
 }
 
@@ -179,12 +260,24 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("node-template knowledge selection", () => {
-  it.each([
-    "browse",
-    "chains",
-    "graph",
-  ])("%s reuses the loaded body and reads direct metadata only on demand", async (mode) => {
+const page = {
+  items: [selected],
+  nextCursor: null,
+  revision: "rev-a",
+  scannedRows: 1
+};
+function mount(children: ReactNode) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } }
+  });
+  return render(
+    <QueryClientProvider client={client}>{children}</QueryClientProvider>
+  );
+}
+
+it.each(["browse", "chains", "graph"])(
+  "%s preserves tab-intent reads and direct-relation selection",
+  async (mode) => {
     navigation.mode = mode;
     vi.stubGlobal(
       "ResizeObserver",
@@ -193,66 +286,907 @@ describe("node-template knowledge selection", () => {
         disconnect() {}
       }
     );
-    const first = `/api/v1/citations/${selected.id}`;
-    const next = `${first}?cursor=direct-4`;
-    const contributions =
-      "/api/v1/knowledge/contributions?state=open&limit=100";
     const fetchMock = vi.fn(async (url: string) => {
-      if (url === contributions) return Response.json({ contributions: [] });
-      if (url === first)
+      if (url === `/api/v1/knowledge/${selected.id}`)
+        return Response.json(selected);
+      if (url.startsWith(`/api/v1/citations/${selected.id}`))
         return Response.json({
-          links: Array.from({ length: 5 }, (_, index) => relation(index)),
-          nextCursor: "direct-4",
+          links: Array.from({ length: 5 }, (_, i) => relation(i)),
+          nextCursor: "next"
         });
-      if (url === next)
-        return Response.json({
-          links: [relation(5)],
-          nextCursor: null,
-        });
-      throw new Error(`Unexpected read after selection: ${url}`);
+      throw new Error(`Unexpected read ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock);
-    const client = new QueryClient({
-      defaultOptions: { queries: { retry: false, gcTime: 0 } },
-    });
-    render(
-      <QueryClientProvider client={client}>
-        <KnowledgeDashboardView
-          initialList={{ items: [selected], domains: [selected.domain] }}
-          initialDomains={{ domains: [] }}
-          initialGraph={{
-            nodes: [selected],
-            edges: [],
-            domains: [selected.domain],
-          }}
-        />
-      </QueryClientProvider>
+    mount(
+      <KnowledgeDashboardView
+        initialBrowse={page}
+        initialOverview={page}
+        initialList={
+          mode === "chains"
+            ? { items: [selected], domains: [selected.domain] }
+            : undefined
+        }
+      />
     );
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    expect(screen.queryByText(selected.content)).toBeNull();
-
+    await act(async () => {});
+    expect(fetchMock).not.toHaveBeenCalled();
     fireEvent.click(
       screen.getByRole("button", {
-        name: `Select ${mode === "graph" ? "graph" : "row"} ${selected.title}`,
+        name: `Select ${mode === "graph" ? "graph" : "row"} ${selected.title}`
       })
     );
     await screen.findByText(selected.content);
     await screen.findByRole("link", { name: "supports Direct relation 4" });
     expect(
-      screen.queryByRole("link", { name: "supports Direct relation 5" })
-    ).toBeNull();
-    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
-      contributions,
-      first,
-    ]);
+      fetchMock.mock.calls.every(
+        ([url]) =>
+          url === `/api/v1/knowledge/${selected.id}` ||
+          url.startsWith(`/api/v1/citations/${selected.id}`)
+      )
+    ).toBe(true);
+    // Detail's append controller remains separate from replacement graph geometry.
+    expect(screen.getByRole("button", { name: "More links" })).toBeTruthy();
+  }
+);
 
-    fireEvent.click(screen.getByRole("button", { name: "More links" }));
-    await screen.findByRole("link", { name: "supports Direct relation 5" });
-    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
-      contributions,
-      first,
-      next,
-    ]);
-    expect(screen.queryByRole("button", { name: "More links" })).toBeNull();
+it("SSR reads only the chosen bounded projection and round-trips the wire page", async () => {
+  const emptyPage = {
+    items: [],
+    nextCursor: null,
+    revision: "rev-a",
+    scannedRows: 0
+  };
+  const browseKnowledge = vi.fn(async () => emptyPage);
+  const overviewKnowledge = vi.fn(async () => emptyPage);
+  const port = new Proxy(
+    { browseKnowledge, overviewKnowledge },
+    {
+      get(target, key) {
+        if (key in target) return target[key as keyof typeof target];
+        throw new Error(`Unexpected initial read ${String(key)}`);
+      }
+    }
+  );
+  expect(await loadKnowledgeBrowse(port as never)).toEqual(emptyPage);
+  expect(browseKnowledge).toHaveBeenCalledTimes(1);
+  // SSR reads carry a short deadline so slow stores fall back to the client fetch.
+  expect(browseKnowledge).toHaveBeenCalledWith(expect.anything(), {
+    signal: expect.any(AbortSignal)
+  });
+  expect(overviewKnowledge).not.toHaveBeenCalled();
+  expect(await loadKnowledgeOverview(port as never)).toEqual(emptyPage);
+  expect(overviewKnowledge).toHaveBeenCalledTimes(1);
+  ssr.port = port;
+  const browse = await KnowledgePage({ searchParams: Promise.resolve({}) });
+  expect(browse.props.initialBrowse).toEqual(emptyPage);
+  expect(browse.props.initialOverview).toBeUndefined();
+  const graph = await KnowledgePage({
+    searchParams: Promise.resolve({ mode: "graph" })
+  });
+  expect(graph.props.initialOverview).toEqual(emptyPage);
+  expect(graph.props.initialList).toBeUndefined();
+  expect(browseKnowledge).toHaveBeenCalledTimes(2);
+  expect(overviewKnowledge).toHaveBeenCalledTimes(2);
+});
+
+it("empty search windows require intent, keep the retry cursor, and retain off-page filters", async () => {
+  const reads: URL[] = [];
+  let failed = false;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      const parsed = new URL(url, "https://node.test");
+      reads.push(parsed);
+      if (parsed.searchParams.get("domains") === "missing")
+        return Response.json({
+          items: [],
+          nextCursor: null,
+          revision: "rev-a",
+          scannedRows: 0
+        });
+      if (parsed.searchParams.get("domains") === "off-page")
+        return Response.json(page);
+      if (parsed.searchParams.get("search")) {
+        if (parsed.searchParams.get("cursor") === "after-20") {
+          if (!failed) {
+            failed = true;
+            return Response.json({ error: "deadline" }, { status: 503 });
+          }
+          return Response.json(page);
+        }
+        return Response.json({
+          items: [],
+          nextCursor: "after-20",
+          revision: "rev-a",
+          scannedRows: 20
+        });
+      }
+      return Response.json(page);
+    })
+  );
+  mount(<BoundedBrowse initialData={page} />);
+  submitSearch("body");
+  await screen.findByText(/20 candidates searched/);
+  expect(reads).toHaveLength(1);
+  fireEvent.click(screen.getByRole("button", { name: "Continue search" }));
+  await screen.findByRole("alert");
+  fireEvent.click(screen.getByRole("button", { name: "Retry window" }));
+  await screen.findByRole("button", { name: `Select row ${selected.title}` });
+  expect(reads.slice(1).map((url) => url.searchParams.get("cursor"))).toEqual([
+    "after-20",
+    "after-20"
+  ]);
+  fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "Domain", exact: true }));
+  const domain = await screen.findByRole("textbox", { name: "Exact Domain" });
+  fireEvent.change(domain, { target: { value: "missing" } });
+  fireEvent.submit(required(domain.closest("form")));
+  await waitFor(() =>
+    expect(reads.at(-1)?.searchParams.get("domains")).toBe("missing")
+  );
+  expect(screen.getByLabelText("missing")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Clear Domain" }));
+  fireEvent.change(domain, { target: { value: "off-page" } });
+  fireEvent.submit(required(domain.closest("form")));
+  await user.keyboard("{Escape}");
+  await screen.findByRole("button", { name: `Select row ${selected.title}` });
+  expect(reads.at(-1)?.searchParams.get("domains")).toBe("off-page");
+});
+
+it("typing a body search issues no body request until explicit submit, then exactly one", async () => {
+  const reads: URL[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      const parsed = new URL(url, "https://node.test");
+      reads.push(parsed);
+      return Response.json({
+        items: [],
+        nextCursor: null,
+        revision: "rev-a",
+        scannedRows: 5
+      });
+    })
+  );
+  const user = userEvent.setup();
+  mount(<BoundedBrowse initialData={page} />);
+  const box = screen.getByRole("textbox", { name: "Search knowledge" });
+  await user.type(box, "abcde");
+  await act(async () => {});
+  expect((box as HTMLInputElement).value).toBe("abcde");
+  expect(reads).toHaveLength(0);
+  await user.click(screen.getByRole("button", { name: "Search" }));
+  await screen.findByText(/5 candidates searched/);
+  expect(reads).toHaveLength(1);
+  expect(reads[0]?.searchParams.get("search")).toBe("abcde");
+  // Enter submits the changed draft as well; an unchanged draft is not replayed.
+  await user.type(box, "f{Enter}");
+  await waitFor(() => expect(reads).toHaveLength(2));
+  expect(reads[1]?.searchParams.get("search")).toBe("abcdef");
+  await user.type(box, "{Enter}");
+  await act(async () => {});
+  expect(reads).toHaveLength(2);
+});
+
+it("never shows the empty-results message before the first read settles", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() => new Promise<Response>(() => undefined))
+  );
+  mount(<BoundedBrowse />);
+  expect(screen.queryByText("No entries match these filters.")).toBeNull();
+  await act(async () => {});
+  expect(screen.queryByText("No entries match these filters.")).toBeNull();
+});
+
+it("focus replaces 5/5/2 geometry,preserves typed edges and Work links, and retries failed expansion", async () => {
+  let fail = true;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (url.includes("cursor=next-1")) {
+        if (fail) {
+          fail = false;
+          return Response.json({}, { status: 503 });
+        }
+        return Response.json({
+          links: Array.from({ length: 5 }, (_, i) => relation(i + 5)),
+          nextCursor: "next-2"
+        });
+      }
+      if (url.includes("cursor=next-2"))
+        return Response.json({
+          links: [
+            {
+              ...relation(10),
+              direction: "in",
+              source: relation(10).target,
+              target: relation(10).source
+            },
+            {
+              ...relation(11),
+              target: {
+                ...relation(11).target,
+                kind: "work",
+                href: "/work/items/task.1234"
+              }
+            }
+          ],
+          nextCursor: null
+        });
+      return Response.json({
+        links: Array.from({ length: 5 }, (_, i) => relation(i)),
+        nextCursor: "next-1"
+      });
+    })
+  );
+  const { result } = renderHook(() => useGraphFocus(selected.id));
+  await waitFor(() => expect(result.current.links).toHaveLength(5));
+  const overview = Array.from({ length: 20 }, (_, i) => ({
+    ...selected,
+    id: `overview-${i}`
+  }));
+  expect(focusGeometry(overview, selected, result.current).nodes).toHaveLength(
+    26
+  );
+  act(() => result.current.more());
+  await waitFor(() => expect(result.current.error).toBe(true));
+  expect(result.current.links[0]?.id).toBe("direct-0");
+  act(() => result.current.retry());
+  await waitFor(() => expect(result.current.links[0]?.id).toBe("direct-5"));
+  expect(focusGeometry(overview, selected, result.current).links).toHaveLength(
+    5
+  );
+  expect(
+    focusGeometry(overview, selected, result.current).nodes.some(
+      (node) => node.id === "neighbor-0"
+    )
+  ).toBe(false);
+  act(() => result.current.more());
+  await waitFor(() => expect(result.current.links).toHaveLength(2));
+  const geometry = focusGeometry(overview, selected, result.current);
+  expect(geometry.links[0]).toMatchObject({
+    id: "direct-10",
+    source: "neighbor-10",
+    target: selected.id,
+    direction: "in",
+    citationType: "supports"
+  });
+  expect(geometry.nodes.length).toBeLessThanOrEqual(26);
+  expect(geometry.nodes.some((node) => node.id === "neighbor-11")).toBe(false);
+  expect(result.current.links[1]?.target.href).toBe("/work/items/task.1234");
+});
+
+it("stale focus and off-list detail responses cannot replace newer selection", async () => {
+  const delayed = new Map<string, (value: Response) => void>();
+  const signals: AbortSignal[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string, options: RequestInit) => {
+      signals.push(options.signal as AbortSignal);
+      return new Promise<Response>((resolve) => delayed.set(url, resolve));
+    })
+  );
+  const focus = renderHook(({ id }) => useGraphFocus(id), {
+    initialProps: { id: "old" }
+  });
+  focus.rerender({ id: "new" });
+  await act(async () =>
+    delayed.get("/api/v1/citations/new")?.(
+      Response.json({ links: [relation(8)], nextCursor: null })
+    )
+  );
+  await act(async () =>
+    delayed.get("/api/v1/citations/old")?.(
+      Response.json({ links: [relation(0)], nextCursor: null })
+    )
+  );
+  expect(focus.result.current.links[0]?.id).toBe("direct-8");
+  expect(signals[0]?.aborted).toBe(true);
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } }
+  });
+  const ui = render(
+    <QueryClientProvider client={client}>
+      <KnowledgeSelection id="off-list-old" onClose={() => {}} />
+    </QueryClientProvider>
+  );
+  ui.rerender(
+    <QueryClientProvider client={client}>
+      <KnowledgeSelection id="off-list-new" onClose={() => {}} />
+    </QueryClientProvider>
+  );
+  await act(async () =>
+    delayed.get("/api/v1/knowledge/off-list-new")?.(
+      Response.json({
+        ...selected,
+        id: "off-list-new",
+        content: "New off-list body"
+      })
+    )
+  );
+  await screen.findByText("New off-list body");
+  await act(async () =>
+    delayed.get("/api/v1/knowledge/off-list-old")?.(
+      Response.json({
+        ...selected,
+        id: "off-list-old",
+        content: "Stale old body"
+      })
+    )
+  );
+  expect(screen.queryByText("Stale old body")).toBeNull();
+});
+
+it("thin routes reject malformed and cross-query cursors and preserve repeated exact filters", async () => {
+  const browseKnowledge = vi.fn(async (query: { cursor?: string }) => {
+    if (query.cursor)
+      throw new KnowledgeBrowseCursorError(
+        "Browse cursor does not match query"
+      );
+    return { items: [], nextCursor: null, revision: "rev-a", scannedRows: 0 };
+  });
+  ssr.port = { browseKnowledge };
+  type Handler = (
+    ctx: unknown,
+    request: Request,
+    user: unknown
+  ) => Promise<Response>;
+  const invoke = (handler: unknown, query: string) =>
+    (handler as Handler)(
+      routeContext(
+        handler === browseRoute ? "knowledge.browse" : "knowledge.overview"
+      ),
+      new Request(`https://node.test/api/v1/knowledge/browse?${query}`),
+      { id: "fixture" }
+    );
+  expect((await invoke(browseRoute, "sort=content")).status).toBe(400);
+  expect((await invoke(browseRoute, "cursor=cross-query")).status).toBe(400);
+  expect((await invoke(overviewRoute, "search=body")).status).toBe(400);
+  expect(
+    (await invoke(browseRoute, "domains=late&domains=off-page")).status
+  ).toBe(200);
+  expect(browseKnowledge).toHaveBeenLastCalledWith(
+    expect.objectContaining({ domains: ["late", "off-page"] }),
+    { signal: expect.any(AbortSignal) }
+  );
+});
+
+function submitSearch(value: string) {
+  const box = screen.getByRole("textbox", { name: "Search knowledge" });
+  fireEvent.change(box, { target: { value } });
+  fireEvent.submit(required(box.closest("form")));
+}
+
+function required<T>(value: T | null | undefined): T {
+  if (value == null) throw new Error("Missing required fixture value");
+  return value;
+}
+
+it("keeps the real Type filter valid at capacity and frees slots on deselection", async () => {
+  const reads: URL[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      reads.push(new URL(url, "https://node.test"));
+      return Response.json({
+        items: [],
+        nextCursor: null,
+        revision: "rev-a",
+        scannedRows: 0
+      });
+    })
+  );
+  const user = userEvent.setup();
+  mount(
+    <BoundedBrowse
+      initialData={{
+        items: [],
+        nextCursor: null,
+        revision: "rev-a",
+        scannedRows: 0
+      }}
+    />
+  );
+  submitSearch("body");
+  await user.click(screen.getByRole("button", { name: "Domain", exact: true }));
+  const domain = await screen.findByRole("textbox", { name: "Exact Domain" });
+  fireEvent.change(domain, { target: { value: "off-page" } });
+  fireEvent.submit(required(domain.closest("form")));
+  await user.keyboard("{Escape}");
+  await user.click(screen.getByRole("button", { name: "Type", exact: true }));
+  const input = await screen.findByRole("textbox", { name: "Exact Type" });
+  for (let i = 0; i < 50; i++) {
+    fireEvent.change(input, { target: { value: `custom-${i}` } });
+    fireEvent.submit(required(input.closest("form")));
+  }
+  const canonical = screen.getByRole("checkbox", {
+    name: "guide"
+  }) as HTMLInputElement;
+  expect(canonical.disabled).toBe(true);
+  expect(screen.getByText(/Maximum 50 values selected/)).toBeTruthy();
+  await user.click(canonical);
+  expect(canonical.checked).toBe(false);
+  await user.click(screen.getByRole("checkbox", { name: "custom-0" }));
+  expect(canonical.disabled).toBe(false);
+  await user.click(canonical);
+  expect(canonical.checked).toBe(true);
+  await waitFor(() => {
+    const params = required(reads.at(-1)).searchParams;
+    expect(params.getAll("entryTypes")).toHaveLength(50);
+    expect(params.getAll("entryTypes")).toContain("guide");
+    expect(params.getAll("entryTypes")).not.toContain("custom-0");
+    expect(params.getAll("domains")).toEqual(["off-page"]);
+    expect(params.get("search")).toBe("body");
   });
 });
+
+it.each([false, true])(
+  "real empty-window headers preserve global controls (search=%s)",
+  async (searching) => {
+    const reads: URL[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        reads.push(new URL(url, "https://node.test"));
+        return Response.json({
+          items: [],
+          nextCursor: searching ? "after-20" : null,
+          revision: "rev-a",
+          scannedRows: searching ? 20 : 0
+        });
+      })
+    );
+    const user = userEvent.setup();
+    mount(
+      <BoundedBrowse
+        initialData={{
+          items: [],
+          nextCursor: null,
+          revision: "rev-a",
+          scannedRows: 0
+        }}
+      />
+    );
+    if (searching) {
+      submitSearch("body");
+      await screen.findByText(/20 candidates searched/);
+      await user.click(screen.getByRole("button", { name: "Continue search" }));
+      await waitFor(() =>
+        expect(reads.at(-1)?.searchParams.get("cursor")).toBe("after-20")
+      );
+      await waitFor(() =>
+        expect(
+          screen
+            .getByRole("button", { name: "Domain", exact: true })
+            .hasAttribute("disabled")
+        ).toBe(false)
+      );
+    }
+    async function open(label: string) {
+      const trigger = screen.getByRole("button", { name: label, exact: true });
+      expect(trigger.hasAttribute("disabled")).toBe(false);
+      await user.click(trigger);
+      return screen.findByRole("textbox", { name: `Exact ${label}` });
+    }
+    async function add(label: string, value: string) {
+      const input = await open(label);
+      fireEvent.change(input, { target: { value } });
+      fireEvent.submit(required(input.closest("form")));
+      await user.keyboard("{Escape}");
+      await waitFor(() =>
+        expect(
+          screen
+            .getByRole("button", { name: label, exact: true })
+            .hasAttribute("disabled")
+        ).toBe(false)
+      );
+    }
+    await add("Type", "guide");
+    await add("Source", "human");
+    await add("Domain", "missing");
+    await open("Domain");
+    await user.click(screen.getByRole("checkbox", { name: "missing" }));
+    const domain = screen.getByRole("textbox", { name: "Exact Domain" });
+    fireEvent.change(domain, { target: { value: "off-page" } });
+    fireEvent.submit(required(domain.closest("form")));
+    await waitFor(() =>
+      expect(reads.at(-1)?.searchParams.getAll("domains")).toEqual(["off-page"])
+    );
+    await user.click(screen.getByRole("button", { name: "Clear Domain" }));
+    await user.keyboard("{Escape}");
+    await waitFor(() =>
+      expect(reads.at(-1)?.searchParams.getAll("domains")).toEqual([])
+    );
+    for (const [label, sort] of [
+      ["Domain", "domain"],
+      ["Type", "entryType"],
+      ["Source", "sourceType"]
+    ]) {
+      await open(required(label));
+      await user.click(
+        screen.getByRole("menuitem", { name: "Asc", exact: true })
+      );
+      await waitFor(() =>
+        expect(reads.at(-1)?.searchParams.get("sort")).toBe(sort)
+      );
+      expect(reads.at(-1)?.searchParams.get("direction")).toBe("asc");
+    }
+    for (const label of ["Confidence", "Created"]) {
+      const header = screen.getByRole("button", { name: label, exact: true });
+      expect(header.hasAttribute("disabled")).toBe(false);
+      await user.click(header);
+      await waitFor(() =>
+        expect(reads.at(-1)?.searchParams.get("sort")).toBe(
+          label === "Created" ? "createdAt" : "confidencePct"
+        )
+      );
+      await waitFor(() => expect(header.hasAttribute("disabled")).toBe(false));
+    }
+    const last = required(reads.at(-1)).searchParams;
+    expect(last.getAll("entryTypes")).toEqual(["guide"]);
+    expect(last.getAll("sourceTypes")).toEqual(["human"]);
+    expect(last.get("search")).toBe(searching ? "body" : null);
+    expect(last.get("cursor")).toBeNull();
+  }
+);
+
+it("stale body windows ignore focus/reconnect, remount awaits intent, and Continue/Retry/Restart work", async () => {
+  const reads: URL[] = [];
+  let fail = true;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      const parsed = new URL(url, "https://node.test");
+      reads.push(parsed);
+      if (parsed.searchParams.get("cursor") && fail) {
+        fail = false;
+        return Response.json({}, { status: 503 });
+      }
+      return Response.json({
+        items: [],
+        nextCursor: "after-20",
+        revision: "rev-a",
+        scannedRows: 20
+      });
+    })
+  );
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } }
+  });
+  const ui = () => (
+    <QueryClientProvider client={client}>
+      <BoundedBrowse initialData={page} />
+    </QueryClientProvider>
+  );
+  let mounted = render(ui());
+  const search = () => submitSearch("body");
+  search();
+  await screen.findByText(/20 candidates searched/);
+  const key = browseKey({ search: "body" });
+  client.setQueryData(key, client.getQueryData(key), {
+    updatedAt: Date.now() - 60_000
+  });
+  async function lifecycle() {
+    await act(async () => {
+      focusManager.setFocused(false);
+      onlineManager.setOnline(false);
+      focusManager.setFocused(true);
+      onlineManager.setOnline(true);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+  }
+  try {
+    await lifecycle();
+    expect(reads).toHaveLength(1);
+    mounted.unmount();
+    mounted = render(ui());
+    await act(async () => {});
+    expect(reads).toHaveLength(1);
+    // Remount resets the local text. Re-entering it is a new explicit search.
+    search();
+    await screen.findByText(/20 candidates searched/);
+    await lifecycle();
+    expect(reads).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "Continue search" }));
+    await screen.findByRole("alert");
+    await lifecycle();
+    expect(reads).toHaveLength(3);
+    fireEvent.click(screen.getByRole("button", { name: "Retry window" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    expect(reads.map((url) => url.searchParams.get("cursor"))).toEqual([
+      null,
+      null,
+      "after-20",
+      "after-20"
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: "Restart" }));
+    await waitFor(() => expect(reads).toHaveLength(5));
+    expect(reads.at(-1)?.searchParams.get("cursor")).toBeNull();
+    expect(
+      reads.every((url) => url.searchParams.get("search") === "body")
+    ).toBe(true);
+  } finally {
+    mounted.unmount();
+    client.clear();
+    focusManager.setFocused(undefined);
+    onlineManager.setOnline(true);
+  }
+});
+
+it("legacy columns retain disabled empty headers at the real grid boundary", () => {
+  function LegacyEmpty() {
+    const table = useReactTable({
+      data: [],
+      columns: knowledgeColumns,
+      getCoreRowModel: getCoreRowModel()
+    });
+    return <DataGrid table={table} recordCount={0} />;
+  }
+  render(<LegacyEmpty />);
+  for (const label of ["Domain", "Type", "Source", "Confidence", "Created"])
+    expect(
+      screen
+        .getByRole("button", { name: label, exact: true })
+        .hasAttribute("disabled")
+    ).toBe(true);
+});
+
+it("offers restart after revision transitions and known mutations without automatically rescanning body search", async () => {
+  let revision = "rev-a";
+  const reads: URL[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      reads.push(new URL(url, "https://node.test"));
+      return Response.json({
+        items: [],
+        nextCursor: "next-window",
+        scannedRows: 20,
+        revision
+      });
+    })
+  );
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } }
+  });
+  render(
+    <QueryClientProvider client={client}>
+      <BoundedBrowse initialData={page} />
+    </QueryClientProvider>
+  );
+  expect(screen.getByText(/Observed revision: rev-a/)).toBeTruthy();
+  submitSearch("body");
+  await screen.findByText(/20 candidates searched/);
+  revision = "rev-b";
+  fireEvent.click(screen.getByRole("button", { name: "Continue search" }));
+  await screen.findByText(
+    "Knowledge changed. Restart to begin a new live traversal."
+  );
+  expect(reads).toHaveLength(2);
+  await act(async () => {
+    await client.invalidateQueries({ queryKey: ["knowledge"] });
+  });
+  expect(reads).toHaveLength(2);
+  fireEvent.click(screen.getByRole("button", { name: "Restart", exact: true }));
+  await waitFor(() => expect(reads).toHaveLength(3));
+  expect(reads[2]?.searchParams.get("cursor")).toBeNull();
+  await waitFor(() =>
+    expect(
+      screen.queryByText(
+        "Knowledge changed. Restart to begin a new live traversal."
+      )
+    ).toBeNull()
+  );
+  await act(async () => {
+    await client.invalidateQueries({ queryKey: ["knowledge"] });
+  });
+  expect(
+    screen.getByText(
+      "Knowledge changed. Restart to begin a new live traversal."
+    )
+  ).toBeTruthy();
+  expect(reads).toHaveLength(3);
+  client.clear();
+});
+
+it("returns retryable 503 and forwards request abort to bounded reads", async () => {
+  const request = new Request("https://node.test/api/v1/knowledge/browse");
+  const browseKnowledge = vi.fn(async () => {
+    throw Object.assign(new Error("deadline"), { code: "KNOWLEDGE_BUSY" });
+  });
+  ssr.port = { browseKnowledge };
+  const handler = browseRoute as unknown as (
+    ctx: unknown,
+    request: Request,
+    user: unknown
+  ) => Promise<Response>;
+  const response = await handler(routeContext("knowledge.browse"), request, {
+    id: "fixture"
+  });
+  expect(response.status).toBe(503);
+  expect(response.headers.get("Retry-After")).toBe("1");
+  expect(await response.json()).toEqual({
+    error: "Knowledge read unavailable",
+    retryable: true
+  });
+  expect(browseKnowledge).toHaveBeenCalledWith(expect.anything(), {
+    signal: request.signal
+  });
+});
+
+it("Graph records SSR revision, signals transitions and explicitly restarts overview", async () => {
+  navigation.mode = "graph";
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      disconnect() {}
+    }
+  );
+  const reads: URL[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      reads.push(new URL(url, "https://node.test"));
+      return Response.json({ ...page, revision: "rev-b" });
+    })
+  );
+  mount(
+    <KnowledgeDashboardView
+      initialOverview={{ ...page, nextCursor: "graph-next" }}
+    />
+  );
+  expect(screen.getByText(/Observed revision: rev-a/)).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "More overview" }));
+  await screen.findByText(
+    "Knowledge changed. Restart overview to begin a new live traversal."
+  );
+  expect(reads[0]?.searchParams.get("cursor")).toBe("graph-next");
+  fireEvent.click(screen.getByRole("button", { name: "Restart overview" }));
+  await waitFor(() => expect(reads).toHaveLength(2));
+  expect(reads[1]?.searchParams.get("cursor")).toBeNull();
+  await waitFor(() =>
+    expect(
+      screen.queryByText(
+        "Knowledge changed. Restart overview to begin a new live traversal."
+      )
+    ).toBeNull()
+  );
+});
+
+it("SSR deadlines bound connection waiting and never seed a partial page or grow native backlog", async () => {
+  const { DoltgresKnowledgeStoreAdapter } = await import(
+    "../../../../packages/knowledge-store/src/adapters/doltgres/index"
+  );
+  vi.useFakeTimers();
+  try {
+    const sql = {
+      options: { max: 2 },
+      unsafe: vi.fn(() => new Promise<never>(() => undefined))
+    };
+    const store = new DoltgresKnowledgeStoreAdapter({
+      sql: sql as never,
+      browseTimeoutMs: 40
+    });
+    const failed = expect(loadKnowledgeBrowse(store)).rejects.toMatchObject({
+      retryable: true
+    });
+    await vi.advanceTimersByTimeAsync(40);
+    await failed;
+    ssr.port = store;
+    const pendingPage = KnowledgePage({
+      searchParams: Promise.resolve({ mode: "graph" })
+    });
+    await vi.advanceTimersByTimeAsync(40);
+    const shell = await pendingPage;
+    expect(shell.props.initialOverview).toBeUndefined();
+    expect(shell.props.initialBrowse).toBeUndefined();
+    expect(sql.unsafe).toHaveBeenCalledTimes(1);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it.each(["browse", "overview"] as const)(
+  "%s emits one safe terminal event for each handler outcome",
+  async (route) => {
+    const handler = (route === "browse"
+      ? browseRoute
+      : overviewRoute) as unknown as (
+      ctx: unknown,
+      request: Request,
+      user: unknown
+    ) => Promise<Response>;
+    const run = async (
+      query: string,
+      operation: (() => Promise<unknown>) | undefined,
+      status: number,
+      errorCode?: string
+    ) => {
+      routeLog.mockClear();
+      ssr.port = operation ? { [`${route}Knowledge`]: operation } : undefined;
+      const response = await handler(
+        routeContext(`knowledge.${route}`),
+        new Request(`https://node.test/api/v1/knowledge/${route}?${query}`),
+        { id: "fixture" }
+      );
+      expect(response.status).toBe(status);
+      expect(routeLog).toHaveBeenCalledTimes(1);
+      const [fields, message] = routeLog.mock.calls[0] as [
+        Record<string, unknown>,
+        string
+      ];
+      expect(message).toBe(`knowledge.${route}.complete`);
+      expect(fields).toMatchObject({
+        event: message,
+        reqId: "fixture-request",
+        routeId: `knowledge.${route}`,
+        status,
+        outcome: status === 200 ? "success" : "error",
+        durationMs: expect.any(Number),
+        ...(errorCode
+          ? { errorCode }
+          : { count: 0, scannedRows: 0, hasMore: false })
+      });
+      expect(
+        Object.keys(fields).every((key) =>
+          [
+            "event",
+            "reqId",
+            "routeId",
+            "status",
+            "durationMs",
+            "outcome",
+            "errorCode",
+            "count",
+            "scannedRows",
+            "hasMore",
+            "searchMode"
+          ].includes(key)
+        )
+      ).toBe(true);
+      expect(JSON.stringify(fields)).not.toContain("private-value");
+      if (status === 500)
+        expect(await response.json()).toEqual({
+          error: "Internal server error"
+        });
+    };
+    const success = async () => ({
+      items: [],
+      nextCursor: null,
+      revision: "private-value",
+      scannedRows: 0
+    });
+    await run("", success, 200);
+    await run("sort=private-value", success, 400, "invalid_query");
+    await run(
+      "cursor=private-value",
+      async () => {
+        throw new KnowledgeBrowseCursorError("Invalid browse cursor");
+      },
+      400,
+      "invalid_cursor"
+    );
+    await run(
+      "",
+      async () => {
+        throw Object.assign(new Error("private-value"), {
+          code: "KNOWLEDGE_BUSY"
+        });
+      },
+      503,
+      "unavailable"
+    );
+    await run(
+      "",
+      async () => {
+        throw new Error("private-value");
+      },
+      500,
+      "internal_error"
+    );
+    await run("", undefined, 503, "store_unconfigured");
+  }
+);

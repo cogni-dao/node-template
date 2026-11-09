@@ -11,11 +11,17 @@
  * @public
  */
 
+import type {
+  KnowledgeBrowsePage,
+  KnowledgeBrowseQuery,
+} from "../../contracts.js";
 import {
-  type GoverningIndexRow,
-  selectGoverningIndex,
-} from "../../domain/governing.js";
-
+  browseQuery,
+  matchesBrowse,
+  nextBrowseCursor,
+  sortValue,
+  summary,
+} from "../../domain/browse.js";
 import {
   initializeConfidence,
   isConfidenceExempt,
@@ -26,6 +32,10 @@ import {
   GOAL_RETIRING_EDGE,
   selectActiveGoals,
 } from "../../domain/dao-goals.js";
+import {
+  type GoverningIndexRow,
+  selectGoverningIndex,
+} from "../../domain/governing.js";
 import type { KnowledgeGraphNode } from "../../domain/knowledge-graph.js";
 import type {
   Citation,
@@ -160,6 +170,66 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
   }
 
   // --- Read ---
+
+  async browseKnowledge(
+    input: KnowledgeBrowseQuery
+  ): Promise<KnowledgeBrowsePage> {
+    return this.readBrowse(input, "browse");
+  }
+
+  async overviewKnowledge(
+    input: Omit<KnowledgeBrowseQuery, "search">
+  ): Promise<KnowledgeBrowsePage> {
+    return this.readBrowse(input, "overview");
+  }
+
+  private async readBrowse(
+    input: KnowledgeBrowseQuery,
+    operation: "browse" | "overview"
+  ): Promise<KnowledgeBrowsePage> {
+    const { query, signature, position } = browseQuery(input, operation);
+    const direction = query.direction === "asc" ? 1 : -1;
+    const compare = (a: string | number, b: string | number) =>
+      a < b ? -1 : a > b ? 1 : 0;
+    const rows = [...this.rows.values()].filter(
+      (row) =>
+        (!query.domains.length || query.domains.includes(row.domain)) &&
+        (!query.entryTypes.length ||
+          query.entryTypes.includes(row.entryType ?? "finding")) &&
+        (!query.sourceTypes.length ||
+          query.sourceTypes.includes(row.sourceType))
+    );
+    rows.sort(
+      (a, b) =>
+        direction *
+          compare(
+            sortValue(summary(a), query.sort),
+            sortValue(summary(b), query.sort)
+          ) || compare(a.id, b.id)
+    );
+    const remaining = position
+      ? rows.filter((row) => {
+          const cmp =
+            direction *
+            compare(sortValue(summary(row), query.sort), position.value);
+          return cmp > 0 || (cmp === 0 && row.id > position.id);
+        })
+      : rows;
+    const window = remaining.slice(0, 20);
+    const needle = query.search?.toLowerCase();
+    const last = window[window.length - 1];
+    return {
+      revision: await this.currentCommit(),
+      items: window
+        .filter((row) => !needle || matchesBrowse(row, needle))
+        .map(summary),
+      scannedRows: window.length,
+      nextCursor:
+        last && (needle ? window.length === 20 : remaining.length > 20)
+          ? nextBrowseCursor(signature, summary(last), query.sort)
+          : null,
+    };
+  }
 
   async getKnowledge(id: string): Promise<Knowledge | null> {
     return this.rows.get(id) ?? null;

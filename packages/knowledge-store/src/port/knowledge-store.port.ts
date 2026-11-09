@@ -18,6 +18,10 @@
  */
 
 import type { KnowledgeHistoryEntry } from "../domain/history.js";
+import type {
+  KnowledgeBrowsePage,
+  KnowledgeBrowseQuery,
+} from "../contracts.js";
 import type { ActiveGoal } from "../domain/dao-goals.js";
 import type { GoverningIndexRow } from "../domain/governing.js";
 import type { KnowledgeGraphNode } from "../domain/knowledge-graph.js";
@@ -76,7 +80,7 @@ export interface CitationLinkPage {
 }
 
 /**
- * The knowledge write plane is saturated or recovering; the caller may retry.
+ * Knowledge write admission or bounded Browse/Overview reads are unavailable; retry is safe.
  *
  * Distinct from a state or validation error: nothing was decided about the
  * request, so replaying it is safe. Routes map this to 503, never 409 — a 409
@@ -278,6 +282,14 @@ export interface KnowledgeStorePort {
   ): Promise<T>;
 
   // --- Read ---
+  browseKnowledge(
+    query: KnowledgeBrowseQuery,
+    options?: { signal?: AbortSignal }
+  ): Promise<KnowledgeBrowsePage>;
+  overviewKnowledge(
+    query: Omit<KnowledgeBrowseQuery, "search">,
+    options?: { signal?: AbortSignal }
+  ): Promise<KnowledgeBrowsePage>;
   getKnowledge(id: string): Promise<Knowledge | null>;
   /**
    * Rows on one shelf, newest first.
