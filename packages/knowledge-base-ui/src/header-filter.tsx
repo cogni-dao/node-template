@@ -3,11 +3,14 @@
 
 /**
  * Module: `@cogni/knowledge-base-ui/header-filter`
- * Purpose: Multi-select facet filter for header-owned popovers or dropdowns, shared by every node's work and knowledge tables (task.0044).
- * Scope: Client component reading `column.getFacetedUniqueValues()`; assumes the table has `getFacetedRowModel + getFacetedUniqueValues` enabled and `filterFn: "arrIncludesSome"` on the column. Does not fetch data or own URL state.
- * Invariants: HEADER_OWNS_SORT_AND_FILTER — facet controls belong to the column header, not a parallel toolbar chip. Selecting the last value clears the filter.
+ * Purpose: Multi-select facet filter for header-owned popovers or dropdowns, shared by every node's work and knowledge tables (task.0044, task.0059).
+ * Scope: Client component reading `column.getFacetedUniqueValues()` (an empty map when the table has no faceted model, e.g. a bounded server page), plus `options` and typed exact entries. Does not fetch data or own URL state.
+ * Invariants:
+ *   - HEADER_OWNS_SORT_AND_FILTER: facet controls belong to the column header, not a parallel toolbar chip. Deselecting the last value clears the filter.
+ *   - SELECTION_CAPPED: with `maxSelected`, unselected values and typed entries are refused at capacity; deselecting frees a slot.
+ *   - ENTRY_KEYS_STAY_LOCAL: keystrokes in the entry box never reach an enclosing menu's typeahead.
  * Side-effects: none
- * Links: task.0044, task.0432
+ * Links: task.0044, task.0059, task.0432
  * @public
  */
 
@@ -27,6 +30,15 @@ export interface HeaderFilterProps<TData, TValue> {
   readonly options?: readonly string[];
   readonly allowEntry?: boolean;
   readonly showCounts?: boolean;
+  /** Accessible name and placeholder of the entry box. Default "Project ID". */
+  readonly entryLabel?: string;
+  readonly entryMaxLength?: number;
+  /** Most values that may be selected at once; unlimited when absent. */
+  readonly maxSelected?: number;
+  /** Caption above the values, e.g. "Domain · any selected exact value". */
+  readonly caption?: string;
+  /** Label of the clear button. Default "Clear". */
+  readonly clearLabel?: string;
 }
 
 export function HeaderFilter<TData, TValue>({
@@ -35,6 +47,11 @@ export function HeaderFilter<TData, TValue>({
   options,
   allowEntry = false,
   showCounts = true,
+  entryLabel = "Project ID",
+  entryMaxLength,
+  maxSelected,
+  caption,
+  clearLabel = "Clear",
 }: HeaderFilterProps<TData, TValue>): ReactElement {
   const [entry, setEntry] = useState("");
   const facets = column.getFacetedUniqueValues();
@@ -45,9 +62,12 @@ export function HeaderFilter<TData, TValue>({
     .filter((v): v is string => typeof v === "string" && v.length > 0)
     .sort((a, b) => a.localeCompare(b));
 
+  const atCapacity = maxSelected !== undefined && selected.size >= maxSelected;
+
   function toggle(value: string) {
     const next = new Set(selected);
     if (next.has(value)) next.delete(value);
+    else if (atCapacity) return;
     else next.add(value);
     column.setFilterValue(next.size === 0 ? undefined : Array.from(next));
   }
@@ -58,6 +78,9 @@ export function HeaderFilter<TData, TValue>({
 
   return (
     <div className="flex max-h-64 min-w-56 flex-col gap-0.5 overflow-y-auto pr-1">
+      {caption && (
+        <p className="px-2 pb-1 text-muted-foreground text-xs">{caption}</p>
+      )}
       {values.map((v) => {
         const isSelected = selected.has(v);
         return (
@@ -65,12 +88,13 @@ export function HeaderFilter<TData, TValue>({
             key={v}
             type="button"
             aria-pressed={isSelected}
+            disabled={atCapacity && !isSelected}
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
               toggle(v);
             }}
-            className="flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1 text-left text-sm hover:bg-accent"
+            className="flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1 text-left text-sm hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
           >
             <span
               className={cn(
@@ -94,24 +118,30 @@ export function HeaderFilter<TData, TValue>({
         );
       })}
       {allowEntry && (
-        <div className="flex gap-1">
+        <form
+          className="flex gap-1"
+          onSubmit={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (entry && !selected.has(entry)) toggle(entry);
+            setEntry("");
+          }}
+        >
           <Input
-            aria-label="Project ID"
+            aria-label={entryLabel}
+            placeholder={entryLabel}
             value={entry}
+            maxLength={entryMaxLength}
+            onKeyDown={(event) => event.stopPropagation()}
             onChange={(event) => setEntry(event.target.value)}
           />
-          <button
-            type="button"
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              if (entry && !selected.has(entry)) toggle(entry);
-              setEntry("");
-            }}
-          >
-            Add
-          </button>
-        </div>
+          <button type="submit">Add</button>
+        </form>
+      )}
+      {atCapacity && (
+        <p className="px-2 pt-1 text-muted-foreground text-xs">
+          Maximum {maxSelected} values selected. Remove one to add another.
+        </p>
       )}
       {selected.size > 0 && (
         <button
@@ -123,7 +153,7 @@ export function HeaderFilter<TData, TValue>({
           }}
           className="mt-1 rounded-sm px-2 py-1 text-center text-muted-foreground text-xs hover:bg-accent"
         >
-          Clear
+          {clearLabel}
         </button>
       )}
     </div>

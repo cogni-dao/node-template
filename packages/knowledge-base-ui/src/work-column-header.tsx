@@ -3,24 +3,39 @@
 
 /**
  * Module: `@cogni/knowledge-base-ui/work-column-header`
- * Purpose: Sortable column header for work tables and the work board filter bar, plus the rank header that sorts descending first (task.0044).
- * Scope: Context-free: reads only the TanStack `Column` (and, for disabling, the `Table`), so it renders inside any node's grid or none. Markup and classes match the ReUI `DataGridColumnHeader` sort-only path.
+ * Purpose: Sortable column header for work and knowledge tables and the work board filter bar, plus the rank header that sorts descending first (task.0044, task.0059).
+ * Scope: Context-free: reads only the TanStack `Column` (and, for disabling, the `Table`), so it renders inside any node's grid or the package's own tables. Markup and classes match the ReUI `DataGridColumnHeader` sort-only and filter-menu paths.
  * Invariants:
  *   - SORT_CYCLE: a generic header cycles asc → desc → unsorted; the rank header follows the column's own `sortDescFirst`.
- *   - DISABLED_WHILE_EMPTY: a generic header is disabled while the table is loading or has no filtered rows.
+ *   - HEADER_OWNS_SORT_AND_FILTER: with a `filter`, the header opens one menu holding that filter and the Asc/Desc sort items; choosing the active direction again clears the sort.
+ *   - DISABLED_WHILE_EMPTY: callers decide `disabled`; `workHeaderDisabled` disables while the table is loading or has no filtered rows (a bounded server page passes its loading flag only, so empty windows keep their controls).
  * Side-effects: none
- * Links: task.0044, story.5111
+ * Links: task.0044, task.0059, story.5111
  * @public
  */
 
 "use client";
 
 import type { Column, Table } from "@tanstack/react-table";
-import { ArrowDownIcon, ArrowUpIcon, ChevronsUpDownIcon } from "lucide-react";
+import {
+  ArrowDownIcon,
+  ArrowUpIcon,
+  CheckIcon,
+  ChevronsUpDownIcon,
+} from "lucide-react";
 import type { ReactElement, ReactNode } from "react";
 
 import { cn } from "./cn.js";
 import { Button } from "./ui/button.js";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "./ui/dropdown-menu.js";
 
 /** Optional `useReactTable({ meta })` a node sets so headers can disable while its page loads. */
 export interface WorkTableMeta {
@@ -52,6 +67,8 @@ export interface WorkColumnHeaderProps<TData, TValue> {
   readonly icon?: ReactNode;
   readonly className?: string;
   readonly disabled?: boolean;
+  /** Filter control shown in the header's menu above Asc/Desc (e.g. a `HeaderFilter`). */
+  readonly filter?: ReactNode;
 }
 
 export function WorkColumnHeader<TData, TValue>({
@@ -60,10 +77,72 @@ export function WorkColumnHeader<TData, TValue>({
   icon,
   className,
   disabled = false,
+  filter,
 }: WorkColumnHeaderProps<TData, TValue>): ReactElement {
   const resolvedTitle = title ?? headerLabel(column);
   const isSorted = column.getIsSorted();
-  if (!column.getCanSort()) {
+  const canSort = column.getCanSort();
+  const sortIcon =
+    canSort &&
+    (isSorted === "desc" ? (
+      <ArrowDownIcon className="size-3.25" />
+    ) : isSorted === "asc" ? (
+      <ArrowUpIcon className="size-3.25" />
+    ) : (
+      <ChevronsUpDownIcon className="mt-px size-3.25" />
+    ));
+  const buttonClassName = cn(
+    "text-secondary-foreground/80 hover:bg-secondary data-[state=open]:bg-secondary hover:text-foreground data-[state=open]:text-foreground -ms-2 px-2 font-normal h-6 rounded-lg",
+    className,
+  );
+  if (filter) {
+    return (
+      <div className="flex h-full items-center">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" className={buttonClassName} disabled={disabled}>
+              {icon}
+              {resolvedTitle}
+              {sortIcon}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent className="min-w-40" align="start">
+            <DropdownMenuGroup>
+              <DropdownMenuLabel>{filter}</DropdownMenuLabel>
+            </DropdownMenuGroup>
+            {canSort && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={() =>
+                    isSorted === "asc"
+                      ? column.clearSorting()
+                      : column.toggleSorting(false)
+                  }
+                >
+                  <ArrowUpIcon className="size-3.5" />
+                  <span className="grow">Asc</span>
+                  {isSorted === "asc" && <CheckIcon className="size-4 text-primary" />}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() =>
+                    isSorted === "desc"
+                      ? column.clearSorting()
+                      : column.toggleSorting(true)
+                  }
+                >
+                  <ArrowDownIcon className="size-3.5" />
+                  <span className="grow">Desc</span>
+                  {isSorted === "desc" && <CheckIcon className="size-4 text-primary" />}
+                </DropdownMenuItem>
+              </>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    );
+  }
+  if (!canSort) {
     return (
       <div
         className={cn(
@@ -85,22 +164,13 @@ export function WorkColumnHeader<TData, TValue>({
     <div className="flex h-full items-center">
       <Button
         variant="ghost"
-        className={cn(
-          "text-secondary-foreground/80 hover:bg-secondary data-[state=open]:bg-secondary hover:text-foreground data-[state=open]:text-foreground -ms-2 px-2 font-normal h-6 rounded-lg",
-          className,
-        )}
+        className={buttonClassName}
         disabled={disabled}
         onClick={handleSort}
       >
         {icon}
         {resolvedTitle}
-        {isSorted === "desc" ? (
-          <ArrowDownIcon className="size-3.25" />
-        ) : isSorted === "asc" ? (
-          <ArrowUpIcon className="size-3.25" />
-        ) : (
-          <ChevronsUpDownIcon className="mt-px size-3.25" />
-        )}
+        {sortIcon}
       </Button>
     </div>
   );

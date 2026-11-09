@@ -3,8 +3,8 @@
 
 /**
  * Module: `@cogni/knowledge-base-ui/ui/dropdown-menu`
- * Purpose: Minimal shadcn dropdown menu (root, trigger, content, checkbox item) on the `radix-ui` peer for the board column picker (task.0044).
- * Scope: Markup and classes match the node kit's shadcn dropdown menu for the parts the board uses.
+ * Purpose: Minimal shadcn dropdown menu (root, trigger, content, item, label, group, separator, checkbox item) on the `radix-ui` peer for the board column picker and the table column header menus (task.0044, task.0059).
+ * Scope: Markup and classes match the node kit's shadcn dropdown menu for the parts the package uses.
  * Invariants: Content renders in a portal; checkbox items are always controlled.
  * Side-effects: none
  * Links: task.0044
@@ -21,6 +21,46 @@ import { cn } from "../cn.js";
 
 export const DropdownMenu = DropdownMenuPrimitive.Root;
 export const DropdownMenuTrigger = DropdownMenuPrimitive.Trigger;
+export const DropdownMenuGroup = DropdownMenuPrimitive.Group;
+
+export const DropdownMenuItem = forwardRef<
+  ComponentRef<typeof DropdownMenuPrimitive.Item>,
+  ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Item>
+>(({ className, ...props }, ref) => (
+  <DropdownMenuPrimitive.Item
+    ref={ref}
+    className={cn(
+      "relative flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none transition-colors focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
+      className,
+    )}
+    {...props}
+  />
+));
+DropdownMenuItem.displayName = "DropdownMenuItem";
+
+export const DropdownMenuLabel = forwardRef<
+  ComponentRef<typeof DropdownMenuPrimitive.Label>,
+  ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Label>
+>(({ className, ...props }, ref) => (
+  <DropdownMenuPrimitive.Label
+    ref={ref}
+    className={cn("px-2 py-1.5 font-normal text-sm", className)}
+    {...props}
+  />
+));
+DropdownMenuLabel.displayName = "DropdownMenuLabel";
+
+export const DropdownMenuSeparator = forwardRef<
+  ComponentRef<typeof DropdownMenuPrimitive.Separator>,
+  ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Separator>
+>(({ className, ...props }, ref) => (
+  <DropdownMenuPrimitive.Separator
+    ref={ref}
+    className={cn("-mx-1 my-1 h-px bg-muted", className)}
+    {...props}
+  />
+));
+DropdownMenuSeparator.displayName = "DropdownMenuSeparator";
 
 export const DropdownMenuContent = forwardRef<
   ComponentRef<typeof DropdownMenuPrimitive.Content>,
