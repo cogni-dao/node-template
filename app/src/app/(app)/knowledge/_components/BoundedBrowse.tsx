@@ -10,7 +10,7 @@
 
 "use client";
 
-import { KnowledgeBrowse } from "@cogni/knowledge-base-ui";
+import { KnowledgeBrowse } from "@cogni/knowledge-base-ui/knowledge";
 import { EntryTypeSchema, SourceTypeSchema } from "@cogni/knowledge-store";
 import type { KnowledgeBrowsePage } from "@cogni/node-contracts";
 import { useState } from "react";
