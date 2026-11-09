@@ -129,7 +129,7 @@ export const GET = wrapRouteHandlerWithLogging(
         // Deep probe: concurrent, uncached, hard-fail. Probe exactly the
         // dependencies this node declares; every failing one is named in the
         // 503 body (`unreachable`). Registry: readyz-probes.ts.
-        await runDeepChecks(buildDeepChecks(ctx, container, env));
+        await runDeepChecks(ctx, buildDeepChecks(ctx, container, env));
       } else {
         // Default probe: run everything concurrently. Non-fatal checks are
         // bounded and degrade; only the system tenant (DB verdict) can 503.

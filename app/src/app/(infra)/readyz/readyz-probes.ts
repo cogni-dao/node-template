@@ -88,35 +88,79 @@ export class DeepProbeFailure extends Error {
   }
 }
 
+/** One deep check's outcome: its name, how long it took, and its error if it failed. */
+type DeepCheckOutcome = {
+  dependency: DeepDependency;
+  durationMs: number;
+  error?: unknown;
+};
+
 /**
- * Deep path: run every dependency check at once, each under its own deadline, and
- * report every failure. Throws DeepProbeFailure when any check fails; the first
- * failure in `checks` order is `primary`.
+ * Deep path: run every declared dependency check at once, each under its own
+ * deadline, and report every failure. Emits ONE structured summary log naming
+ * each probed dependency, its status and its duration — the per-dependency
+ * observability a readiness probe must have (Loki reads which deps were proven).
+ * The summary fires on both the all-pass path and before a 503. Throws
+ * DeepProbeFailure when any check fails; the first failure in `checks` order is
+ * `primary`, and `unreachable[]` preserves that order.
  */
 export async function runDeepChecks(
+  ctx: RequestContext,
   checks: ReadonlyArray<readonly [DeepDependency, () => Promise<unknown>]>
 ): Promise<void> {
-  const results = await Promise.allSettled(
-    checks.map(async ([dependency, run]) => {
-      const result = await withBudget(
-        Promise.resolve().then(run),
-        DEEP_CHECK_BUDGET_MS
-      );
-      if (result === CHECK_TIMEOUT) {
-        throw new InfraConnectivityError(
-          `${dependency} check exceeded ${DEEP_CHECK_BUDGET_MS}ms budget`
+  const startedAt = Date.now();
+  const outcomes = await Promise.all(
+    checks.map(async ([dependency, run]): Promise<DeepCheckOutcome> => {
+      const checkStartedAt = Date.now();
+      try {
+        const result = await withBudget(
+          Promise.resolve().then(run),
+          DEEP_CHECK_BUDGET_MS
         );
+        if (result === CHECK_TIMEOUT) {
+          return {
+            dependency,
+            durationMs: Date.now() - checkStartedAt,
+            error: new InfraConnectivityError(
+              `${dependency} check exceeded ${DEEP_CHECK_BUDGET_MS}ms budget`
+            ),
+          };
+        }
+        return { dependency, durationMs: Date.now() - checkStartedAt };
+      } catch (error) {
+        return { dependency, durationMs: Date.now() - checkStartedAt, error };
       }
     })
   );
+
+  const checksSummary: Record<
+    string,
+    { status: "ok" | "failed"; durationMs: number }
+  > = {};
   const unreachable: DeepDependency[] = [];
   let primary: unknown;
-  results.forEach((result, index) => {
-    const entry = checks[index];
-    if (result.status !== "rejected" || !entry) return;
-    if (unreachable.length === 0) primary = result.reason;
-    unreachable.push(entry[0]);
-  });
+  for (const outcome of outcomes) {
+    const failed = outcome.error !== undefined;
+    checksSummary[outcome.dependency] = {
+      status: failed ? "failed" : "ok",
+      durationMs: outcome.durationMs,
+    };
+    if (failed) {
+      if (unreachable.length === 0) primary = outcome.error;
+      unreachable.push(outcome.dependency);
+    }
+  }
+
+  ctx.log.info(
+    {
+      event: "substrate.deep.complete",
+      checks: checksSummary,
+      durationMs: Date.now() - startedAt,
+      unreachable,
+    },
+    "deep readiness: checks complete"
+  );
+
   if (unreachable.length > 0) throw new DeepProbeFailure(primary, unreachable);
 }
 

@@ -724,4 +724,65 @@ describe("GET /readyz async substrate contract", () => {
     expect(mocks.streamLength).not.toHaveBeenCalled();
     expect(mocks.fetch).not.toHaveBeenCalled();
   });
+
+  it("emits a per-dependency deep-readiness summary naming every probed dependency ok", async () => {
+    mocks.serverEnv.mockReturnValue({
+      APP_BUILD_SHA: "readyz-contract-sha",
+      APP_ENV: "production",
+      LITELLM_BASE_URL: "http://litellm:4000",
+      LITELLM_MASTER_KEY: "sk-readyz-test",
+      REDIS_URL: "redis://localhost:6379",
+      DOLTGRES_URL: "postgresql://doltgres:5432/knowledge",
+    });
+
+    const response = await GET(request("/readyz?deep=1"));
+
+    expect(response.status).toBe(200);
+    // The summary is the per-dependency Loki evidence: which declared deps were
+    // actually probed and proven reachable this request.
+    expect(mocks.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "substrate.deep.complete",
+        unreachable: [],
+        checks: expect.objectContaining({
+          "evm-rpc": { status: "ok", durationMs: expect.any(Number) },
+          temporal: { status: "ok", durationMs: expect.any(Number) },
+          "scheduler-worker": {
+            status: "ok",
+            durationMs: expect.any(Number),
+          },
+          postgres: { status: "ok", durationMs: expect.any(Number) },
+          redis: { status: "ok", durationMs: expect.any(Number) },
+          "litellm-gateway": {
+            status: "ok",
+            durationMs: expect.any(Number),
+          },
+          doltgres: { status: "ok", durationMs: expect.any(Number) },
+        }),
+      }),
+      "deep readiness: checks complete"
+    );
+  });
+
+  it("marks a failing dependency failed in the deep-readiness summary", async () => {
+    mocks.streamLength.mockRejectedValue(new Error("Redis connection refused"));
+
+    const response = await GET(request("/readyz?deep=1"));
+
+    expect(response.status).toBe(503);
+    expect(mocks.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "substrate.deep.complete",
+        unreachable: ["redis"],
+        checks: expect.objectContaining({
+          redis: { status: "failed", durationMs: expect.any(Number) },
+          "litellm-gateway": {
+            status: "ok",
+            durationMs: expect.any(Number),
+          },
+        }),
+      }),
+      "deep readiness: checks complete"
+    );
+  });
 });
