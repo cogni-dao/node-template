@@ -95,4 +95,5 @@ pnpm test tests/component/ai/
 - InProcCompletionUnitAdapter fails the run if LiteLLM response lacks call ID (prevents silent under-billing)
 - All providers thread graphId through to UsageFact for per-agent analytics
 - ExecutionScope (AsyncLocalStorage): carries llmService, usageSource, billing identity, and abortSignal per-request. Set by graph-executor.factory.ts before graph invocation.
+- ExecutionScope also splits the run identity: `subjectUserId` (the authenticated caller, bearer agents included, and a scheduled run's grant owner; absent for the system principal and ownerless runs; set by `runGraphWithScope`) and `principalId` (catalog agent user id; bound per tool call by the `@cogni-dao/agent-grants` guard in `langgraph/inproc.provider.ts`). `scopeUserId(scope)` = subject, else principal. Every `createToolRunner` site passes its runtimes through `guardTools`; no resolvable principal seed row fails the run before any tool runs.
 - UsageCommitDecorator: consumes usage_report events from stream, validates via Zod, commits BYO receipts directly (platform deferred to LiteLLM callback). Events are consumed (not forwarded downstream).

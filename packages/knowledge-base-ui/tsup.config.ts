@@ -4,7 +4,7 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-  entry: ["src/index.ts"],
+  entry: ["src/index.ts", "src/approval-fragment-scrub.tsx"],
   format: ["esm"],
   dts: false,
   clean: false,
@@ -15,6 +15,7 @@ export default defineConfig({
     "react/jsx-runtime",
     "react-dom",
     "@cogni/work-items",
+    "@cogni/agent-grants",
     "@dnd-kit/core",
     "@dnd-kit/sortable",
     "@dnd-kit/utilities",

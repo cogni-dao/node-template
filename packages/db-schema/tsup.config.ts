@@ -26,6 +26,7 @@ export const tsupConfig = defineConfig({
     "src/attribution.ts",
     "src/profile.ts",
     "src/work-item-leases.ts",
+    "src/agent-authority.ts",
   ],
   format: ["esm"],
   dts: false, // tsc -b emits per-file declarations; tsup handles JS only

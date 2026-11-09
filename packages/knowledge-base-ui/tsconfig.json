@@ -18,5 +18,5 @@
   },
   "include": ["src/**/*.ts", "src/**/*.tsx"],
   "exclude": ["node_modules", "dist"],
-  "references": [{ "path": "../work-items" }]
+  "references": [{ "path": "../work-items" }, { "path": "../agent-grants" }]
 }

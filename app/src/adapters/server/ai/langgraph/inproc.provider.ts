@@ -20,6 +20,12 @@
  * @internal
  */
 
+import {
+  type GuardDeps,
+  guardTools,
+  type RunIdentity,
+  type ToolRequires,
+} from "@cogni/agent-grants";
 import type { AiEvent, BoundToolRuntime, ToolSourcePort } from "@cogni/ai-core";
 import {
   createStaticToolSourceFromRecord,
@@ -41,7 +47,10 @@ import {
 } from "@cogni/langgraph-graphs";
 import { trace } from "@opentelemetry/api";
 import type { Logger } from "pino";
-import { getExecutionScope } from "@/adapters/server/ai/execution-scope";
+import {
+  getExecutionScope,
+  runInScope,
+} from "@/adapters/server/ai/execution-scope";
 import type {
   AiExecutionErrorCode,
   CompletionFinalResult,
@@ -84,12 +93,32 @@ interface ProviderCatalogEntry {
   readonly description: string;
   readonly toolIds: readonly string[];
   readonly mcpServerIds?: readonly string[];
+  /** Internal agent principal slug this graph acts as (catalog `principal`). */
+  readonly principal?: string;
   readonly graphFactory: CreateGraphFn;
   readonly systemPrompt?: string;
   readonly program?: "cogni" | "work-review" | "cogni-chat" | "cogni-decide";
   /** Graph-owned run report to log + echo on the stream (CatalogEntry.report). */
   readonly report?: GraphReportDecl;
 }
+
+/**
+ * The node's tool-authority wiring (bootstrap/agent-authority.ts), seen structurally so adapters do not
+ * import bootstrap. Absent means no principal can be resolved and every scoped tool is denied.
+ */
+export interface ProviderAgentAuthority {
+  /** The seeded user id for a catalog principal slug, or null when no row exists. */
+  resolvePrincipal(slug: string): Promise<string | null>;
+  readonly guardDeps: Omit<GuardDeps, "runAs">;
+}
+
+/** With no authority wired, the guard can reach no store and no admin check: scoped tools deny. */
+const DENY_ALL_GUARD_DEPS: Omit<GuardDeps, "runAs"> = {
+  withStore: async () => {
+    throw new Error("agent_authority_not_configured");
+  },
+  adminCheck: async () => "unavailable",
+};
 
 /**
  * LangGraph in-process provider.
@@ -143,6 +172,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
         import("@cogni/langgraph-graphs/inproc").InProcRunnerOptions["persistence"]
       >
     >,
+    private readonly authority?: ProviderAgentAuthority,
   ) {
     this.log = makeLogger({ component: "LangGraphInProcProvider" });
     this.boundToolMap = new Map(nodeBundle.map((bt) => [bt.contract.name, bt]));
@@ -223,6 +253,47 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
       stream: AsyncIterable<AiEvent>;
       final: Promise<GraphResult>;
     }> => {
+      // Principal lock: the catalog names the agent this graph acts as. No seed row denies the run
+      // before any tool runs (SCOPED_TOOL_NEEDS_PRINCIPAL; fail closed).
+      let principalId: string | undefined;
+      if (entry.principal) {
+        try {
+          principalId =
+            (await this.authority?.resolvePrincipal(entry.principal)) ??
+            undefined;
+        } catch (error) {
+          // The principal store is down: fail closed, and say so as `authz_unavailable` (not a generic internal error).
+          this.log.error(
+            {
+              event: EVENT_NAMES.AGENT_TOOL_AUTHZ,
+              runId,
+              graphName,
+              principal: entry.principal,
+              decision: "unavailable",
+              code: "authz_unavailable",
+              reason: "principal_lookup_failed",
+              errorName: error instanceof Error ? error.name : "unknown",
+            },
+            "graph principal lookup failed; run denied",
+          );
+          throw error;
+        }
+        if (!principalId) {
+          this.log.error(
+            {
+              event: EVENT_NAMES.AGENT_TOOL_AUTHZ,
+              runId,
+              graphName,
+              principal: entry.principal,
+              decision: "deny",
+              code: "policy_denied",
+              reason: "principal_not_seeded",
+            },
+            "graph principal has no seed row; run denied",
+          );
+          throw new Error("agent_principal_not_seeded");
+        }
+      }
       const mcpToolIds: string[] = [];
       if (mcpServerIds.length > 0) {
         const mcpToolSource = await this.getMcpToolSource();
@@ -265,7 +336,39 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
       // Policy allowlist includes both native and MCP tool IDs
       const createToolExecFn = (emit: (e: AiEvent) => void): ToolExecFn => {
         const policy = createToolAllowlistPolicy(allToolIds);
-        const source = createStaticToolSourceFromRecord(runtimeTools);
+        // GUARD_COVERS_EVERY_RUNNER_SITE: every runtime (native + MCP) passes through the guard. The
+        // contracts' `requires` are the only input that names scopes; an MCP tool has none yet, so it is
+        // denied (it is external_side_effect) until MCP server scopes merge into requiresById.
+        const requiresById: Record<string, ToolRequires> = {};
+        for (const [id, bound] of this.boundToolMap) {
+          if (bound.contract.requires) requiresById[id] = bound.contract.requires;
+        }
+        const guarded = guardTools(
+          runtimeTools,
+          requiresById,
+          {
+            principalId,
+            subjectUserId: scope.subjectUserId,
+            payer: scope.billing.billingAccountId,
+          },
+          {
+            ...(this.authority?.guardDeps ?? DENY_ALL_GUARD_DEPS),
+            runAs: (identity: RunIdentity, fn) =>
+              runInScope(
+                {
+                  ...scope,
+                  ...(identity.principalId
+                    ? { principalId: identity.principalId }
+                    : {}),
+                  ...(identity.subjectUserId
+                    ? { subjectUserId: identity.subjectUserId }
+                    : {}),
+                },
+                fn,
+              ),
+          },
+        );
+        const source = createStaticToolSourceFromRecord(guarded);
         const toolRunner = createToolRunner(source, emit, {
           policy,
           ctx: { runId },

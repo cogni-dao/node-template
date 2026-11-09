@@ -1,0 +1,428 @@
+// SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+// SPDX-FileCopyrightText: 2026 Cogni-DAO
+
+/**
+ * Module: `@tests/unit/adapters/server/ai/langgraph/inproc.provider.authority`
+ * Purpose: Tool authority at the provider seam (task.5456, V4 V5 V6 V7): the catalog principal, the guard
+ *   around every createToolRunner site, and the principal/subject binding the tools observe.
+ * Scope: Real provider + real guard + real ai-core tool runner over an in-memory role store. The graph runner is
+ *   stubbed: it only hands back `createToolExecFn`. No database, no LLM.
+ * Invariants: SCOPED_TOOL_NEEDS_PRINCIPAL, SUBJECT_ONLY_NARROWS, GUARD_COVERS_EVERY_RUNNER_SITE.
+ * Side-effects: none
+ * Links: inproc.provider.ts, packages/agent-grants
+ */
+
+import type { AgentGrantsStore, GuardDeps } from "@cogni/agent-grants";
+import type { AiEvent, ToolSourcePort } from "@cogni/ai-core";
+import {
+  CORE_TOOL_BUNDLE,
+  type CatalogBoundTool,
+  toBoundToolRuntime,
+} from "@cogni/ai-tools";
+import { describe, expect, it, vi } from "vitest";
+
+import {
+  getExecutionScope,
+  runInScope,
+} from "@/adapters/server/ai/execution-scope";
+import { runGraphWithScope } from "@/bootstrap/graph-executor.factory";
+import {
+  LangGraphInProcProvider,
+  type ProviderAgentAuthority,
+} from "@/adapters/server/ai/langgraph/inproc.provider";
+
+const captured = vi.hoisted(() => ({
+  options: [] as Array<{
+    createToolExecFn: (
+      emit: (e: AiEvent) => void,
+    ) => (
+      name: string,
+      args: unknown,
+      id?: string,
+    ) => Promise<{ ok: boolean; [k: string]: unknown }>;
+  }>,
+}));
+vi.mock("@cogni/langgraph-graphs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@cogni/langgraph-graphs")>();
+  return {
+    ...actual,
+    createInProcGraphRunner: (options: (typeof captured.options)[number]) => {
+      captured.options.push(options);
+      return {
+        stream: (async function* () {
+          yield { type: "done" as const };
+        })(),
+        final: Promise.resolve({ ok: true as const }),
+      };
+    },
+  };
+});
+
+const REACHED = "stub_tool_reached";
+const reached = (r: { ok: boolean; safeMessage?: unknown }) =>
+  !r.ok && r.safeMessage === REACHED;
+
+const PRIORITIZER_USER = "user-prioritizer";
+const NODE_AI_USER = "user-node-ai";
+const ADMIN = "human-admin";
+const MEMBER = "human-member";
+const AGENT = "bearer-agent"; // an authenticated machine caller: a subject like any other, with no wallet
+
+function store(roles: Array<[string, string]>): AgentGrantsStore {
+  return {
+    hasLiveRole: async (p, s) => roles.some(([rp, rs]) => rp === p && rs === s),
+    listLiveRoles: async () => [],
+    findInternalPrincipal: async () => null,
+    insertRole: async () => true,
+    revokeRole: async () => true,
+  };
+}
+
+function authority(opts: {
+  principals: Record<string, string>;
+  roles: Array<[string, string]>;
+}): ProviderAgentAuthority & { events: unknown[] } {
+  const events: unknown[] = [];
+  const s = store(opts.roles);
+  const deps: Omit<GuardDeps, "runAs"> = {
+    withStore: (fn) => fn(s),
+    // Only the DAO admin's wallet passes; humans without one and agents (no wallet) are denied.
+    adminCheck: async (id) => (id === ADMIN ? "allow" : "denied"),
+    onDecision: (e) => events.push(e),
+  };
+  return {
+    events,
+    resolvePrincipal: async (slug) => opts.principals[slug] ?? null,
+    guardDeps: deps,
+  };
+}
+
+/** Real contracts and runtimes, with recording stub implementations that return schema-valid output. */
+function toolSource(seen: Array<{ tool: string; scope: unknown }>): {
+  source: ToolSourcePort;
+  bundle: CatalogBoundTool[];
+} {
+  const bundle = CORE_TOOL_BUNDLE.map((tool) => ({
+    contract: tool.contract,
+    implementation: {
+      execute: async () => {
+        seen.push({ tool: tool.contract.name, scope: { ...getExecutionScope() } });
+        // The tool body is out of scope here: reaching it is the "allowed" signal.
+        throw new Error(REACHED);
+      },
+    },
+  })) as CatalogBoundTool[];
+  const runtimes = new Map(bundle.map((t) => [t.contract.name, toBoundToolRuntime(t)]));
+  return {
+    bundle,
+    source: {
+      getBoundTool: (id) => runtimes.get(id),
+      listToolSpecs: () => [...runtimes.values()].map((r) => r.spec),
+      hasToolId: (id) => runtimes.has(id),
+    },
+  };
+}
+
+const adapter = { executeCompletionUnit: vi.fn() };
+
+async function start(
+  graph: string,
+  auth: ProviderAgentAuthority | undefined,
+  subjectUserId: string | undefined,
+  seen: Array<{ tool: string; scope: unknown }> = [],
+) {
+  captured.options.length = 0;
+  const { source, bundle } = toolSource(seen);
+  const provider = new LangGraphInProcProvider(
+    adapter,
+    source,
+    undefined,
+    bundle,
+    async () => ({ nodeId: "node", origin: "https://node.example" }),
+    async () => ({}) as never,
+    auth,
+  );
+  const scope = {
+    billing: { billingAccountId: "payer-1", virtualKeyId: "vk" },
+    usageSource: "litellm" as const,
+    llmService: {} as never,
+    ...(subjectUserId ? { subjectUserId } : {}),
+  };
+  const events: AiEvent[] = [];
+  const result = runInScope(scope, () =>
+    provider.runGraph(
+      {
+        runId: `run-${graph}`,
+        graphId: `langgraph:${graph}`,
+        messages: [{ role: "user", content: "go" }],
+        modelRef: { providerKey: "platform", modelId: "m" },
+      },
+      { actorUserId: subjectUserId ?? "unused-for-authority" },
+    ),
+  );
+  for await (const event of result.stream) events.push(event);
+  const options = captured.options[0];
+  return {
+    events,
+    options,
+    exec: (name: string, args: unknown) =>
+      runInScope(scope, () => options!.createToolExecFn(() => {})(name, args, "c1")),
+  };
+}
+
+const TRANSITION_ARGS = { action: "patch", id: "task.1", priority: 3 };
+
+describe("V4: a graph whose principal has no seed row is denied before any tool runs", () => {
+  it("fails the run and never builds a tool runner", async () => {
+    const auth = authority({ principals: {}, roles: [] });
+    const run = await start("work-prioritizer", auth, undefined);
+    expect(run.events).toEqual([{ type: "error", error: "internal" }, { type: "done" }]);
+    expect(run.options).toBeUndefined();
+  });
+
+  it("fails the run when no authority is wired at all", async () => {
+    const run = await start("work-prioritizer", undefined, undefined);
+    expect(run.options).toBeUndefined();
+  });
+});
+
+describe("a principal-store outage is authz_unavailable and is logged", () => {
+  it("logs agent_tool.authz (unavailable / principal_lookup_failed), fails the run closed and builds no runner", async () => {
+    captured.options.length = 0;
+    const { source, bundle } = toolSource([]);
+    const down: ProviderAgentAuthority = {
+      resolvePrincipal: async () => {
+        throw new Error("connection refused");
+      },
+      guardDeps: authority({ principals: {}, roles: [] }).guardDeps,
+    };
+    const provider = new LangGraphInProcProvider(
+      adapter, source, undefined, bundle,
+      async () => ({ nodeId: "node", origin: "https://node.example" }),
+      async () => ({}) as never,
+      down,
+    );
+    const logged: Array<Record<string, unknown>> = [];
+    (provider as unknown as { log: unknown }).log = {
+      debug: () => {}, info: () => {}, warn: () => {},
+      error: (fields: Record<string, unknown>) => logged.push(fields),
+    };
+    const scope = { billing: { billingAccountId: "payer-1", virtualKeyId: "vk" }, usageSource: "litellm" as const, llmService: {} as never };
+    const result = runInScope(scope, () =>
+      provider.runGraph(
+        { runId: "run-down", graphId: "langgraph:brain", messages: [{ role: "user", content: "go" }], modelRef: { providerKey: "platform", modelId: "m" } },
+        { actorUserId: MEMBER },
+      ),
+    );
+    const events: AiEvent[] = [];
+    for await (const e of result.stream) events.push(e);
+    expect(events).toEqual([{ type: "error", error: "internal" }, { type: "done" }]);
+    expect(captured.options).toHaveLength(0);
+    expect(logged).toEqual([
+      expect.objectContaining({
+        event: "agent_tool.authz",
+        runId: "run-down",
+        principal: "node-ai",
+        decision: "unavailable",
+        code: "authz_unavailable",
+        reason: "principal_lookup_failed",
+      }),
+    ]);
+    expect(JSON.stringify(logged)).not.toContain("connection refused");
+  });
+});
+
+describe("V6: work-prioritizer writes; cogni-decide, with the same tools and no principal, is denied", () => {
+  const auth = () =>
+    authority({
+      principals: { prioritizer: PRIORITIZER_USER },
+      roles: [[PRIORITIZER_USER, "work_item:transition"]],
+    });
+
+  it("allows work_item_transition for the prioritizer role", async () => {
+    const seen: Array<{ tool: string; scope: unknown }> = [];
+    const a = auth();
+    const run = await start("work-prioritizer", a, undefined, seen);
+    const result = await run.exec("core__work_item_transition", TRANSITION_ARGS);
+    expect(reached(result)).toBe(true);
+    expect(seen).toHaveLength(1);
+    expect(a.events).toEqual([
+      expect.objectContaining({ principal: PRIORITIZER_USER, subject: null, payer: "payer-1", tool: "core__work_item_transition", decision: "allow" }),
+    ]);
+  });
+
+  it("denies the same call from cogni-decide with policy_denied", async () => {
+    const seen: Array<{ tool: string; scope: unknown }> = [];
+    const a = auth();
+    const run = await start("cogni-decide", a, undefined, seen);
+    const result = await run.exec("core__work_item_transition", TRANSITION_ARGS);
+    expect(result).toMatchObject({ ok: false, receipt: { code: "policy_denied", retryable: false } });
+    expect(seen).toEqual([]);
+    expect(a.events).toEqual([
+      expect.objectContaining({ principal: null, tool: "core__work_item_transition", decision: "deny", code: "policy_denied" }),
+    ]);
+  });
+});
+
+describe("V7: brain + node-ai with knowledge:write", () => {
+  const KNOWLEDGE = { id: "k1", domain: "d", title: "t", content: "c", sourceType: "human" };
+  const base = () =>
+    authority({ principals: { "node-ai": NODE_AI_USER }, roles: [[NODE_AI_USER, "knowledge:write"]] });
+
+  it("denies a non-admin subject", async () => {
+    const run = await start("brain", base(), MEMBER);
+    expect(await run.exec("core__knowledge_write", KNOWLEDGE)).toMatchObject({
+      ok: false,
+      receipt: { code: "policy_denied" },
+    });
+  });
+
+  it("allows an admin subject", async () => {
+    const seen: Array<{ tool: string; scope: unknown }> = [];
+    const a = base();
+    const run = await start("brain", a, ADMIN, seen);
+    expect(reached(await run.exec("core__knowledge_write", KNOWLEDGE))).toBe(true);
+    expect(a.events).toEqual([
+      expect.objectContaining({ principal: NODE_AI_USER, subject: ADMIN, payer: "payer-1", decision: "allow" }),
+    ]);
+  });
+
+  it("denies an admin when the graph has no principal", async () => {
+    // autoresearch has knowledge_write in its tools and no catalog principal.
+    const run = await start("autoresearch-single-lane", base(), ADMIN);
+    expect(await run.exec("core__knowledge_write", KNOWLEDGE)).toMatchObject({
+      ok: false,
+      receipt: { code: "policy_denied" },
+    });
+  });
+
+  it("denies the next call after the role row is gone", async () => {
+    const roles: Array<[string, string]> = [[NODE_AI_USER, "knowledge:write"]];
+    const a = authority({ principals: { "node-ai": NODE_AI_USER }, roles });
+    const run = await start("brain", a, ADMIN);
+    expect(reached(await run.exec("core__knowledge_write", KNOWLEDGE))).toBe(true);
+    roles.length = 0;
+    expect(reached(await run.exec("core__knowledge_write", KNOWLEDGE))).toBe(false);
+  });
+
+  it("reports an admin outage as authz_unavailable", async () => {
+    const a = base();
+    const unavailable: ProviderAgentAuthority = {
+      ...a,
+      guardDeps: { ...a.guardDeps, adminCheck: async () => "unavailable" },
+    };
+    const run = await start("brain", unavailable, ADMIN);
+    expect(await run.exec("core__knowledge_write", KNOWLEDGE)).toMatchObject({
+      ok: false,
+      receipt: { code: "authz_unavailable" },
+    });
+  });
+});
+
+describe("V5: principal and subject reach the tool; own scope needs a subject", () => {
+  const SCHEDULE = { action: "delete", scheduleId: "s1" };
+  const a = () =>
+    authority({ principals: { "node-ai": NODE_AI_USER }, roles: [[NODE_AI_USER, "schedule:manage"]] });
+
+  it("a human caller binds subject and principal for the tool call", async () => {
+    const seen: Array<{ tool: string; scope: unknown }> = [];
+    const run = await start("brain", a(), MEMBER, seen);
+    expect(reached(await run.exec("core__schedule_manage", SCHEDULE))).toBe(true);
+    expect(seen[0]?.scope).toMatchObject({ principalId: NODE_AI_USER, subjectUserId: MEMBER });
+  });
+
+  it("a bearer agent is the subject, so its schedule_manage runs as its own user id", async () => {
+    const seen: Array<{ tool: string; scope: unknown }> = [];
+    const run = await start("brain", a(), AGENT, seen);
+    expect(reached(await run.exec("core__schedule_manage", SCHEDULE))).toBe(true);
+    expect(seen[0]?.scope).toMatchObject({ principalId: NODE_AI_USER, subjectUserId: AGENT });
+  });
+
+  it("a run with no caller has no subject, so schedule_manage is denied", async () => {
+    const seen: Array<{ tool: string; scope: unknown }> = [];
+    const run = await start("brain", a(), undefined, seen);
+    expect(await run.exec("core__schedule_manage", SCHEDULE)).toMatchObject({
+      ok: false,
+      receipt: { code: "policy_denied" },
+    });
+    expect(seen).toEqual([]);
+  });
+});
+
+describe("bearer agents (subject with no wallet): admin narrows, member passes", () => {
+  it("brain + node-ai holding knowledge:write: a bearer agent is denied", async () => {
+    const a = authority({ principals: { "node-ai": NODE_AI_USER }, roles: [[NODE_AI_USER, "knowledge:write"]] });
+    const seen: Array<{ tool: string; scope: unknown }> = [];
+    const run = await start("brain", a, AGENT, seen);
+    expect(await run.exec("core__knowledge_write", { id: "k1", domain: "d", title: "t", content: "c", sourceType: "human" })).toMatchObject({
+      ok: false,
+      receipt: { code: "policy_denied", retryable: false },
+    });
+    expect(seen).toEqual([]);
+    expect(a.events).toEqual([expect.objectContaining({ principal: NODE_AI_USER, subject: AGENT, decision: "deny", reason: "subject_not_admin" })]);
+  });
+
+  it("a bearer agent calling a member-level tool is allowed", async () => {
+    const a = authority({ principals: { prioritizer: PRIORITIZER_USER }, roles: [[PRIORITIZER_USER, "work_item:transition"]] });
+    const seen: Array<{ tool: string; scope: unknown }> = [];
+    const run = await start("work-prioritizer", a, AGENT, seen);
+    expect(reached(await run.exec("core__work_item_transition", TRANSITION_ARGS))).toBe(true);
+    expect(a.events).toEqual([expect.objectContaining({ principal: PRIORITIZER_USER, subject: AGENT, decision: "allow" })]);
+  });
+});
+
+describe("a scheduled run's subject is its execution-grant owner", () => {
+  /** What the internal run route does: `actorUserId = grant.userId`, then the single launcher entry. */
+  async function scheduledRun(graph: string, grantOwner: string, auth: ProviderAgentAuthority) {
+    captured.options.length = 0;
+    const { source, bundle } = toolSource([]);
+    const provider = new LangGraphInProcProvider(
+      adapter, source, undefined, bundle,
+      async () => ({ nodeId: "node", origin: "https://node.example" }),
+      async () => ({}) as never,
+      auth,
+    );
+    const result = runGraphWithScope({
+      executor: provider,
+      req: { runId: `sched-${graph}`, graphId: `langgraph:${graph}`, messages: [{ role: "user", content: "go" }], modelRef: { providerKey: "platform", modelId: "m" } },
+      ctx: { actorUserId: grantOwner, requestIntent: "decide" },
+      billing: { billingAccountId: "payer-1", virtualKeyId: "vk" },
+      llmService: {} as never,
+      usageSource: "litellm",
+    });
+    for await (const _ of result.stream) void _;
+    return (name: string, args: unknown) => captured.options[0]!.createToolExecFn(() => {})(name, args, "c1");
+  }
+  const KNOWLEDGE = { id: "k1", domain: "d", title: "t", content: "c", sourceType: "human" };
+
+  it("an agent caller schedules brain to call knowledge_write: the run is denied (the agent owner fails the admin check)", async () => {
+    const a = authority({ principals: { "node-ai": NODE_AI_USER }, roles: [[NODE_AI_USER, "knowledge:write"]] });
+    const exec = await scheduledRun("brain", AGENT, a);
+    expect(await exec("core__knowledge_write", KNOWLEDGE)).toMatchObject({ ok: false, receipt: { code: "policy_denied" } });
+    expect(a.events).toEqual([expect.objectContaining({ principal: NODE_AI_USER, subject: AGENT, decision: "deny", reason: "subject_not_admin" })]);
+  });
+
+  it("an admin owner's scheduled brain run may write", async () => {
+    const a = authority({ principals: { "node-ai": NODE_AI_USER }, roles: [[NODE_AI_USER, "knowledge:write"]] });
+    const exec = await scheduledRun("brain", ADMIN, a);
+    expect(reached(await exec("core__knowledge_write", KNOWLEDGE))).toBe(true);
+  });
+
+  it("the system principal (governance and webhook runs) is no subject, so only the principal lock applies", async () => {
+    const { COGNI_SYSTEM_PRINCIPAL_USER_ID } = await import("@cogni/node-shared");
+    const a = authority({ principals: { prioritizer: PRIORITIZER_USER }, roles: [[PRIORITIZER_USER, "work_item:transition"]] });
+    const exec = await scheduledRun("work-prioritizer", COGNI_SYSTEM_PRINCIPAL_USER_ID, a);
+    expect(reached(await exec("core__work_item_transition", TRANSITION_ARGS))).toBe(true);
+    expect(a.events).toEqual([expect.objectContaining({ subject: null, decision: "allow" })]);
+  });
+});
+
+describe("read_only tools need only the graph lock", () => {
+  it("runs with no principal and no role, and logs no decision", async () => {
+    const a = authority({ principals: { "node-ai": NODE_AI_USER }, roles: [] });
+    const seen: Array<{ tool: string; scope: unknown }> = [];
+    const run = await start("brain", a, MEMBER, seen);
+    expect(reached(await run.exec("core__knowledge_search", { domain: "d", query: "x" }))).toBe(true);
+    expect(a.events).toEqual([]);
+  });
+});
