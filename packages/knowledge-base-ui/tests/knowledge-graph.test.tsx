@@ -3,25 +3,21 @@
 
 /**
  * Module: `@cogni/knowledge-base-ui/knowledge-graph.test`
- * Purpose: Proves the graph's bounded data path against fixture fetchers: focus pages replace geometry (≤ 26 nodes, ≤ 5 typed edges, work endpoints stay links), failed pages keep geometry and retry their cursor, stale selections cannot commit, and the overview pages and restarts explicitly with its revision prompt (task.0059).
- * Scope: Package exports only (`KnowledgeGraph`, `useGraphFocus`, `knowledgeFocusGeometry`) with an injected stub renderer. No node app code or WebGL.
+ * Purpose: Proves the Graph draws the whole corpus with exact counts from one read per revision, highlights neighbors from memory without fetching, narrows client-side over the full set, keeps the renderer's data stable across selection and same-revision revalidation, and escapes labels (task.0059).
+ * Scope: Package exports only (`KnowledgeGraph`, `useKnowledgeGraph`, `narrowKnowledgeGraph`, `knowledgeGraphNeighbors`) with an injected stub renderer and a fixture fetcher. No node app code or WebGL.
  * Side-effects: DOM rendering in jsdom
- * Links: task.0059, ../src/use-graph-focus.ts, ../src/knowledge-graph.tsx
+ * Links: task.0059, ../src/knowledge-graph.tsx, ../src/use-knowledge-graph.ts
  */
 
 // @vitest-environment jsdom
 
-import type {
-  KnowledgeBrowsePage,
-  KnowledgeSummary,
-} from "@cogni/knowledge-store/contracts";
+import type { KnowledgeGraphResponse } from "@cogni/knowledge-store/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
   cleanup,
   fireEvent,
   render,
-  renderHook,
   screen,
   waitFor,
 } from "@testing-library/react";
@@ -29,290 +25,197 @@ import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
-  type KnowledgeCitationFetcher,
-  type KnowledgeCitationLink,
+  type KnowledgeGraphFetcher,
   KnowledgeGraph,
   type KnowledgeGraphRendererProps,
-  type KnowledgeWindowFetcher,
-  knowledgeFocusGeometry,
-  useGraphFocus,
+  knowledgeGraphNeighbors,
+  narrowKnowledgeGraph,
 } from "../src/knowledge.js";
 
 afterEach(() => cleanup());
 
-const selected: KnowledgeSummary = {
-  id: "node-template-selected-decision",
-  domain: "meta",
-  entityId: null,
-  title: "node-template selected decision",
-  useWhen: null,
-  entryType: "decision",
-  confidencePct: 80,
-  sourceType: "human",
-  createdAt: null,
-};
-
-function relation(index: number): KnowledgeCitationLink {
+/** A corpus well past any old "20 atoms" window: every node must be drawn. */
+function corpus(nodes: number, revision = "rev-a"): KnowledgeGraphResponse {
   return {
-    id: `direct-${index}`,
-    direction: "out",
-    citationType: "supports",
-    source: {
-      id: selected.id,
-      kind: "knowledge",
-      title: selected.title,
-      href: `/knowledge/${selected.id}`,
-    },
-    target: {
-      id: `neighbor-${index}`,
-      kind: "knowledge",
-      title: `Direct relation ${index}`,
-      href: `/knowledge/neighbor-${index}`,
-    },
-    context: null,
+    revision,
+    domains: ["meta", "strategy"],
+    nodes: Array.from({ length: nodes }, (_, i) => ({
+      id: `k-${i}`,
+      domain: i % 2 ? "strategy" : "meta",
+      title: i === 1 ? "<img src=x onerror=alert(1)>" : `Entry ${i}`,
+      entryType: i % 3 ? "guide" : "decision",
+      confidencePct: i % 100,
+      sourceType: "agent",
+    })),
+    edges: Array.from({ length: nodes * 2 }, (_, e) => ({
+      id: `c-${e}`,
+      source: `k-${e % nodes}`,
+      target: `k-${((e % nodes) + (e < nodes ? 1 : 7)) % nodes}`,
+      citationType: e % 2 ? "supports" : "extends",
+    })),
   };
 }
 
-const overview = Array.from({ length: 20 }, (_, i) => ({
-  ...selected,
-  id: `overview-${i}`,
-  title: `Overview ${i}`,
-}));
+const renders: KnowledgeGraphRendererProps[] = [];
+function StubRenderer(props: KnowledgeGraphRendererProps) {
+  renders.push(props);
+  const { graphData, onNodeClick, nodeColor, nodeLabel } = props;
+  return (
+    <div
+      data-testid="renderer"
+      data-nodes={graphData.nodes.length}
+      data-links={graphData.links.length}
+    >
+      {graphData.nodes.slice(0, 12).map((node) => (
+        <button
+          key={node.id}
+          type="button"
+          data-color={nodeColor(node)}
+          title={nodeLabel(node)}
+          onClick={() => onNodeClick(node)}
+        >
+          Node {node.id}
+        </button>
+      ))}
+    </div>
+  );
+}
 
-describe("useGraphFocus + knowledgeFocusGeometry", () => {
-  it("focus pages replace geometry, stay bounded, keep typed edges and work links, and retry failed pages", async () => {
-    let fail = true;
-    const fetchCitationLinks = vi.fn<KnowledgeCitationFetcher>(
-      async (_id, cursor) => {
-        if (cursor === "next-1") {
-          if (fail) {
-            fail = false;
-            throw Object.assign(new Error("busy"), { status: 503 });
-          }
-          return {
-            links: Array.from({ length: 5 }, (_, i) => relation(i + 5)),
-            nextCursor: "next-2",
-          };
-        }
-        if (cursor === "next-2")
-          return {
-            links: [
-              {
-                ...relation(10),
-                direction: "in",
-                source: relation(10).target,
-                target: relation(10).source,
-              },
-              {
-                ...relation(11),
-                target: {
-                  ...relation(11).target,
-                  kind: "work",
-                  href: "/work/items/task.1234",
-                },
-              },
-            ],
-            nextCursor: null,
-          };
-        return {
-          links: Array.from({ length: 5 }, (_, i) => relation(i)),
-          nextCursor: "next-1",
-        };
-      },
-    );
-    const { result } = renderHook(() =>
-      useGraphFocus({ id: selected.id, fetchCitationLinks }),
-    );
-    await waitFor(() => expect(result.current.links).toHaveLength(5));
-    expect(knowledgeFocusGeometry(overview, selected, result.current).nodes).toHaveLength(26);
-    act(() => result.current.more());
-    await waitFor(() => expect(result.current.error).toBe(true));
-    expect(result.current.links[0]?.id).toBe("direct-0");
-    act(() => result.current.retry());
-    await waitFor(() => expect(result.current.links[0]?.id).toBe("direct-5"));
-    const replaced = knowledgeFocusGeometry(overview, selected, result.current);
-    expect(replaced.links).toHaveLength(5);
-    expect(replaced.nodes.some((node) => node.id === "neighbor-0")).toBe(false);
-    act(() => result.current.more());
-    await waitFor(() => expect(result.current.links).toHaveLength(2));
-    const geometry = knowledgeFocusGeometry(overview, selected, result.current);
-    expect(geometry.links).toEqual([
-      {
-        id: "direct-10",
-        source: "neighbor-10",
-        target: selected.id,
-        direction: "in",
-        citationType: "supports",
-      },
-    ]);
-    // Overview page + the selected atom + the one knowledge endpoint this page adds.
-    expect(geometry.nodes).toHaveLength(overview.length + 1 + 1);
-    expect(geometry.nodes.some((node) => node.id === "neighbor-11")).toBe(false);
-    expect(result.current.links[1]?.target.href).toBe("/work/items/task.1234");
-    expect(fetchCitationLinks.mock.calls.map(([, cursor]) => cursor)).toEqual([
-      undefined,
-      "next-1",
-      "next-1",
-      "next-2",
-    ]);
-  });
+function Harness({ fetchGraph }: { readonly fetchGraph: KnowledgeGraphFetcher }) {
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  return (
+    <KnowledgeGraph
+      fetchGraph={fetchGraph}
+      renderer={StubRenderer}
+      selectedId={selectedId}
+      onSelect={setSelectedId}
+    />
+  );
+}
 
-  it("geometry is exactly the overview page, the selected atom and one citations page", () => {
-    const page = Array.from({ length: 3 }, (_, i) => relation(i));
-    const geometry = knowledgeFocusGeometry(overview, selected, { links: page });
-    expect(geometry.nodes.map((node) => node.id)).toEqual([
-      ...overview.map((entry) => entry.id),
-      selected.id,
-      "neighbor-0",
-      "neighbor-1",
-      "neighbor-2",
-    ]);
-    expect(geometry.links.map((link) => link.id)).toEqual([
-      "direct-0",
-      "direct-1",
-      "direct-2",
-    ]);
-    // Fresh objects every call: renderers mutate them.
-    const again = knowledgeFocusGeometry(overview, selected, { links: [] });
-    expect(again.nodes[0]).not.toBe(
-      knowledgeFocusGeometry(overview, selected, { links: [] }).nodes[0],
-    );
+function mount(fetchGraph: KnowledgeGraphFetcher) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
   });
-
-  it("a newer selection aborts the older request and its late response never commits", async () => {
-    const delayed = new Map<string, (links: KnowledgeCitationLink[]) => void>();
-    const signals: AbortSignal[] = [];
-    const fetchCitationLinks: KnowledgeCitationFetcher = (id, _cursor, signal) => {
-      signals.push(signal);
-      return new Promise((resolve) =>
-        delayed.set(id, (links) => resolve({ links, nextCursor: null })),
-      );
-    };
-    const focus = renderHook(
-      ({ id }) => useGraphFocus({ id, fetchCitationLinks }),
-      { initialProps: { id: "old" as string | null } },
-    );
-    focus.rerender({ id: "new" });
-    await act(async () => delayed.get("new")?.([relation(8)]));
-    await act(async () => delayed.get("old")?.([relation(0)]));
-    expect(focus.result.current.links[0]?.id).toBe("direct-8");
-    expect(signals[0]?.aborted).toBe(true);
-    focus.rerender({ id: null });
-    expect(focus.result.current.links).toEqual([]);
-    expect(signals[1]?.aborted).toBe(true);
-  });
-});
+  render(
+    <QueryClientProvider client={client}>
+      <Harness fetchGraph={fetchGraph} />
+    </QueryClientProvider>,
+  );
+  return client;
+}
 
 describe("KnowledgeGraph", () => {
-  function StubRenderer({ graphData, onNodeClick, nodeLabel }: KnowledgeGraphRendererProps) {
-    return (
-      <div data-testid="renderer" data-nodes={graphData.nodes.length} data-links={graphData.links.length}>
-        {graphData.nodes.map((node) => (
-          <button key={node.id} type="button" title={nodeLabel(node)} onClick={() => onNodeClick(node)}>
-            Select graph {node.title}
-          </button>
-        ))}
-      </div>
-    );
-  }
-
-  function Harness({
-    fetchOverview,
-    fetchCitationLinks,
-    initialData,
-  }: {
-    readonly fetchOverview: KnowledgeWindowFetcher;
-    readonly fetchCitationLinks: KnowledgeCitationFetcher;
-    readonly initialData?: KnowledgeBrowsePage;
-  }) {
-    const [selectedId, setSelectedId] = useState<string | null>(null);
-    return (
-      <KnowledgeGraph
-        fetchOverview={fetchOverview}
-        fetchCitationLinks={fetchCitationLinks}
-        renderer={StubRenderer}
-        initialData={initialData}
-        selectedId={selectedId}
-        onSelect={setSelectedId}
-        selected={selectedId === selected.id ? selected : null}
-      />
-    );
-  }
-
-  function mount(props: Parameters<typeof Harness>[0]) {
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
-    return render(
-      <QueryClientProvider client={client}>
-        <Harness {...props} />
-      </QueryClientProvider>,
-    );
-  }
-
-  it("draws the seeded overview with no read, then one focus page per selection, bounded", async () => {
-    const fetchOverview = vi.fn<KnowledgeWindowFetcher>(async () => {
-      throw new Error("Hidden overview read");
-    });
-    const fetchCitationLinks = vi.fn<KnowledgeCitationFetcher>(async () => ({
-      links: Array.from({ length: 5 }, (_, i) => relation(i)),
-      nextCursor: "next",
-    }));
-    mount({
-      fetchOverview,
-      fetchCitationLinks,
-      initialData: {
-        items: [selected, ...overview.slice(0, 19)],
-        nextCursor: null,
-        revision: "rev-a",
-        scannedRows: 20,
-      },
-    });
-    expect(screen.getByTestId("renderer").dataset.nodes).toBe("20");
-    expect(fetchOverview).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: `Select graph ${selected.title}` }));
-    await waitFor(() => expect(screen.getByTestId("renderer").dataset.links).toBe("5"));
-    expect(screen.getByTestId("renderer").dataset.nodes).toBe("25");
-    expect(fetchCitationLinks).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole("link", { name: "Direct relation 4" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Clear focus" }));
-    expect(screen.getByTestId("renderer").dataset.links).toBe("0");
+  it("draws every entry and citation from one read and states exact counts", async () => {
+    const fetchGraph = vi.fn<KnowledgeGraphFetcher>(async () => corpus(5046));
+    mount(fetchGraph);
+    await screen.findByText(/5,046 entries · 10,092 citations/);
+    const renderer = screen.getByTestId("renderer");
+    expect(renderer.dataset.nodes).toBe("5046");
+    expect(renderer.dataset.links).toBe("10092");
+    expect(fetchGraph).toHaveBeenCalledTimes(1);
   });
 
-  it("escapes agent-authored labels", () => {
-    mount({
-      fetchOverview: vi.fn<KnowledgeWindowFetcher>(),
-      fetchCitationLinks: vi.fn<KnowledgeCitationFetcher>(),
-      initialData: {
-        items: [{ ...selected, title: "<img src=x onerror=alert(1)>" }],
-        nextCursor: null,
-        revision: "rev-a",
-        scannedRows: 1,
-      },
+  it("selecting highlights neighbors from memory, dims the rest, keeps graph data, and never fetches", async () => {
+    const fetchGraph = vi.fn<KnowledgeGraphFetcher>(async () => corpus(50));
+    mount(fetchGraph);
+    await screen.findByText(/50 entries · 100 citations/);
+    const before = renders.at(-1)?.graphData;
+    fireEvent.click(screen.getByRole("button", { name: "Node k-3" }));
+    await screen.findByText(/Selected: Entry 3 · /);
+    const neighbors = knowledgeGraphNeighbors(corpus(50)).get("k-3");
+    expect(neighbors?.has("k-4")).toBe(true);
+    expect(screen.getByText(new RegExp(`${neighbors?.size} connected entries`))).toBeTruthy();
+    const color = (id: string) =>
+      screen.getByRole("button", { name: `Node ${id}` }).getAttribute("data-color");
+    expect(color("k-3")).not.toMatch(/^rgba\(100,116,139/);
+    expect(color("k-4")).not.toMatch(/^rgba\(100,116,139/);
+    expect(color("k-11")).toMatch(/^rgba\(100,116,139/);
+    expect(renders.at(-1)?.graphData).toBe(before);
+    expect(fetchGraph).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "Clear selection" }));
+    expect(color("k-11")).not.toMatch(/^rgba\(100,116,139/);
+  });
+
+  it("narrows the visible set client-side over the full corpus and says so", async () => {
+    const fetchGraph = vi.fn<KnowledgeGraphFetcher>(async () => corpus(5046));
+    mount(fetchGraph);
+    await screen.findByText(/5,046 entries/);
+    fireEvent.change(screen.getByRole("combobox", { name: "Graph domain" }), {
+      target: { value: "meta" },
     });
-    const label = screen.getByRole("button", { name: /Select graph/ }).getAttribute("title");
+    const expected = narrowKnowledgeGraph(corpus(5046), { text: "", domain: "meta" });
+    await screen.findByText(
+      `Showing 2,523 of 5,046 entries · ${expected.links.length.toLocaleString("en-US")} of 10,092 citations · revision rev-a`,
+    );
+    expect(screen.getByTestId("renderer").dataset.nodes).toBe("2523");
+    fireEvent.change(screen.getByRole("textbox", { name: "Filter graph" }), {
+      target: { value: "Entry 504" },
+    });
+    fireEvent.submit(screen.getByRole("textbox", { name: "Filter graph" }).closest("form") as HTMLFormElement);
+    // "Entry 504", "Entry 5040".."Entry 5045" in meta (even ids only).
+    await waitFor(() =>
+      expect(screen.getByTestId("renderer").dataset.nodes).toBe(
+        String(
+          corpus(5046).nodes.filter(
+            (n) => n.domain === "meta" && n.title.toLowerCase().includes("entry 504"),
+          ).length,
+        ),
+      ),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Show all" }));
+    await screen.findByText(/^5,046 entries · 10,092 citations/);
+    expect(fetchGraph).toHaveBeenCalledTimes(1);
+  });
+
+  it("a same-revision revalidation keeps the graph object; a new revision replaces it", async () => {
+    let revision = "rev-a";
+    const fetchGraph = vi.fn<KnowledgeGraphFetcher>(async () => corpus(30, revision));
+    const client = mount(fetchGraph);
+    await screen.findByText(/30 entries/);
+    const first = renders.at(-1)?.graphData;
+    await act(async () => {
+      await client.refetchQueries({ queryKey: ["knowledge", "graph"] });
+    });
+    expect(fetchGraph).toHaveBeenCalledTimes(2);
+    expect(renders.at(-1)?.graphData).toBe(first);
+    revision = "rev-b";
+    await act(async () => {
+      await client.refetchQueries({ queryKey: ["knowledge", "graph"] });
+    });
+    await screen.findByText(/revision rev-b/);
+    expect(renders.at(-1)?.graphData).not.toBe(first);
+  });
+
+  it("escapes agent-authored labels and offers retry on failure", async () => {
+    let fail = true;
+    const fetchGraph = vi.fn<KnowledgeGraphFetcher>(async () => {
+      if (fail) throw Object.assign(new Error("busy"), { status: 503 });
+      return corpus(3);
+    });
+    mount(fetchGraph);
+    await screen.findByRole("alert");
+    fail = false;
+    fireEvent.click(screen.getByRole("button", { name: "Retry graph" }));
+    const label = (await screen.findByRole("button", { name: "Node k-1" })).getAttribute("title");
     expect(label).toContain("&lt;img");
     expect(label).not.toContain("<img");
   });
+});
 
-  it("pages the overview explicitly, signals revision transitions and restarts", async () => {
-    const reads: URLSearchParams[] = [];
-    const fetchOverview = vi.fn<KnowledgeWindowFetcher>(async (params) => {
-      reads.push(params);
-      return { items: [selected], nextCursor: null, revision: "rev-b", scannedRows: 1 };
-    });
-    mount({
-      fetchOverview,
-      fetchCitationLinks: vi.fn<KnowledgeCitationFetcher>(),
-      initialData: { items: [selected], nextCursor: "graph-next", revision: "rev-a", scannedRows: 1 },
-    });
-    expect(screen.getByText(/Observed revision: rev-a/)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "More overview" }));
-    const prompt = "Knowledge changed. Restart overview to begin a new live traversal.";
-    await screen.findByText(prompt);
-    expect(reads[0]?.get("cursor")).toBe("graph-next");
-    expect(reads[0]?.has("search")).toBe(false);
-    fireEvent.click(screen.getByRole("button", { name: "Restart overview" }));
-    await waitFor(() => expect(reads).toHaveLength(2));
-    expect(reads[1]?.get("cursor")).toBeNull();
-    await waitFor(() => expect(screen.queryByText(prompt)).toBeNull());
+describe("narrowKnowledgeGraph", () => {
+  it("returns fresh objects and only edges between visible entries", () => {
+    const graph = corpus(10);
+    const all = narrowKnowledgeGraph(graph, { text: "", domain: "" });
+    expect(all.nodes).toHaveLength(10);
+    expect(all.links).toHaveLength(20);
+    expect(all.nodes[0]).not.toBe(graph.nodes[0]);
+    const meta = narrowKnowledgeGraph(graph, { text: "", domain: "meta" });
+    const visible = new Set(meta.nodes.map((n) => n.id));
+    expect(
+      meta.links.every(
+        (l) => visible.has(String(l.source)) && visible.has(String(l.target)),
+      ),
+    ).toBe(true);
   });
 });

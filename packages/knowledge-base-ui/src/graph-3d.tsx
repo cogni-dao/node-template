@@ -3,12 +3,12 @@
 
 /**
  * Module: `@cogni/knowledge-base-ui/graph-3d`
- * Purpose: The knowledge Graph's WebGL force-graph renderer, published on its own client-only subpath so every node draws the graph exactly as node-template does (task.0059).
- * Scope: A `KnowledgeGraphRendererProps` component over the optional peer `react-force-graph-3d`. Importing this subpath never loads the engine: it is fetched with a dynamic import after the component mounts in a browser. Hosts typically load the subpath itself lazily too (e.g. `next/dynamic(() => import("@cogni/knowledge-base-ui/graph-3d"), { ssr: false })`).
+ * Purpose: The knowledge Graph's WebGL force-graph renderer, published on its own client-only subpath so every node draws the whole corpus exactly as node-template does (task.0059).
+ * Scope: A `KnowledgeGraphRendererProps` component over the peer `react-force-graph-3d`, which any host importing this subpath must install. The engine touches `window` when it loads, so it is imported after mount; hosts typically lazy-load the subpath too (`next/dynamic(() => import("@cogni/knowledge-base-ui/graph-3d"), { ssr: false })`).
  * Invariants:
- *   - ENGINE_CLIENT_ONLY: `react-force-graph-3d` touches `window` when it loads, so it is imported only after mount; server render and plain-Node import render a placeholder.
- *   - DRAWS_PACKAGE_GEOMETRY: draws exactly the bounded `graphData` and callbacks `KnowledgeGraph` passes; link styling assumes typed citation edges only.
- * Side-effects: dynamic import of the peer `react-force-graph-3d`, which a host importing this subpath must install (declared optional only so work-board adopters are not auto-installed a WebGL engine). Without it the host's bundler fails to resolve the import at build time; there is no runtime fallback.
+ *   - DRAWS_EVERY_NODE: every node and link in `graphData` is drawn; large graphs get cheaper drawing, never fewer entries.
+ *   - RENDER_BUDGET: no warm-up ticks (first frame immediately); the simulation stops after `cooldownTicks` / `cooldownTime`; above `LARGE_GRAPH_NODES` nodes spheres drop to `LARGE_NODE_RESOLUTION`; above `LARGE_GRAPH_LINKS` links there are no particles or arrows; labels render only on hover (`nodeLabel` tooltip).
+ * Side-effects: dynamic import of `react-force-graph-3d`
  * Links: task.0059, packages/knowledge-base-ui/src/knowledge-graph.tsx
  * @public
  */
@@ -24,11 +24,24 @@ import {
   useState,
 } from "react";
 
-import type { KnowledgeGraphRendererProps } from "./knowledge-graph.js";
 import type {
   KnowledgeGraphLink,
   KnowledgeGraphNode,
-} from "./use-graph-focus.js";
+  KnowledgeGraphRendererProps,
+} from "./knowledge-graph.js";
+
+/** Render budget: thresholds where drawing gets cheaper (never sparser). */
+export const KNOWLEDGE_GRAPH_3D_BUDGET = {
+  /** Above this many nodes, spheres use `LARGE_NODE_RESOLUTION` segments. */
+  LARGE_GRAPH_NODES: 1_500,
+  /** Above this many links, no directional particles or arrows. */
+  LARGE_GRAPH_LINKS: 2_000,
+  NODE_RESOLUTION: 12,
+  LARGE_NODE_RESOLUTION: 4,
+  /** The simulation stops after this many ticks or this many ms, whichever first. */
+  COOLDOWN_TICKS: 300,
+  COOLDOWN_TIME_MS: 15_000,
+} as const;
 
 /** The `react-force-graph-3d` props this renderer sets; the library's generics are erased by the lazy import. */
 interface ForceGraph3DProps {
@@ -37,6 +50,9 @@ interface ForceGraph3DProps {
   readonly height: number;
   readonly backgroundColor: string;
   readonly showNavInfo: boolean;
+  readonly warmupTicks: number;
+  readonly cooldownTicks: number;
+  readonly cooldownTime: number;
   readonly nodeColor: (node: KnowledgeGraphNode) => string;
   readonly nodeVal: (node: KnowledgeGraphNode) => number;
   readonly nodeLabel: (node: KnowledgeGraphNode) => string;
@@ -71,18 +87,26 @@ export function KnowledgeForceGraph3D(
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
   if (!mounted) return <Loading />;
+  const budget = KNOWLEDGE_GRAPH_3D_BUDGET;
+  const largeNodes = props.graphData.nodes.length > budget.LARGE_GRAPH_NODES;
+  const largeLinks = props.graphData.links.length > budget.LARGE_GRAPH_LINKS;
   return (
     <Suspense fallback={<Loading />}>
       <ForceGraph3D
         {...props}
         backgroundColor="rgba(0,0,0,0)"
         showNavInfo={false}
+        warmupTicks={0}
+        cooldownTicks={budget.COOLDOWN_TICKS}
+        cooldownTime={budget.COOLDOWN_TIME_MS}
         nodeOpacity={0.92}
-        nodeResolution={12}
-        linkWidth={1.2}
-        linkDirectionalParticles={2}
+        nodeResolution={
+          largeNodes ? budget.LARGE_NODE_RESOLUTION : budget.NODE_RESOLUTION
+        }
+        linkWidth={largeLinks ? 0 : 1.2}
+        linkDirectionalParticles={largeLinks ? 0 : 2}
         linkDirectionalParticleWidth={1.4}
-        linkDirectionalArrowLength={2.5}
+        linkDirectionalArrowLength={largeLinks ? 0 : 2.5}
         linkDirectionalArrowRelPos={1}
       />
     </Suspense>

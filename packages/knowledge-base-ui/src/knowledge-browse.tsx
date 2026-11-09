@@ -10,7 +10,7 @@
  *   - ONE_WINDOW_PER_VIEW and INTENT_ONLY_SEARCH (see `useKnowledgeBrowse`); the view mounts with no committed search, so body reads follow only submit.
  *   - CLEAR_RETURNS_TO_FIRST_WINDOW: "Clear filters" empties filters and search and always returns to window 1.
  *   - OPTIONS_FROM_NODE: `entryTypeOptions` / `sourceTypeOptions` are required, because the canonical lists live in the store root (not its browser-safe `/contracts`); nodes pass `EntryTypeSchema.options` / `SourceTypeSchema.options`.
- *   - HONEST_WINDOW_STATUS: the status line says how many entries this window holds, how many candidates a search examined, and whether a continuation exists; a capped empty search window says to continue, not "no matches".
+ *   - EXACT_TOTAL: the status line states the window's position against the store's exact filtered total ("Showing 1–20 of 5,046"); a search window states the candidates it examined and its matches; a capped empty search window says to continue, not "no matches". The page size comes from `@cogni/knowledge-store/contracts`.
  *   - HOST_QUERY_CLIENT: rendered under the host's `QueryClientProvider`.
  * Side-effects: IO (through the injected fetcher)
  * Links: task.0059, packages/knowledge-base-ui/src/use-knowledge-windows.ts
@@ -19,9 +19,10 @@
 
 "use client";
 
-import type {
-  KnowledgeBrowsePage,
-  KnowledgeSummary,
+import {
+  KNOWLEDGE_BROWSE_PAGE_SIZE,
+  type KnowledgeBrowsePage,
+  type KnowledgeSummary,
 } from "@cogni/knowledge-store/contracts";
 import {
   type ColumnFiltersState,
@@ -60,20 +61,33 @@ export interface KnowledgeBrowseProps extends KnowledgeBrowseColumnsOptions {
   readonly children?: ReactNode;
 }
 
-function windowStatus(
+const count = (n: number) => n.toLocaleString("en-US");
+
+/**
+ * The window's position against the exact filtered total: "Showing 21–40 of
+ * 5,046". A search window states which candidates it examined and how many
+ * matched ("Searched 1–20 of 5,046 candidates · 3 matches").
+ */
+export function knowledgeWindowSummary(
   page: KnowledgeBrowsePage | undefined,
-  isFetching: boolean,
+  windowIndex: number,
   isSearch: boolean,
+  isFetching: boolean,
 ): string {
   if (isFetching) return "Loading window…";
   if (!page) return "Window not loaded";
-  const searched = isSearch ? ` · ${page.scannedRows} candidates searched` : "";
+  const first = windowIndex * KNOWLEDGE_BROWSE_PAGE_SIZE + 1;
+  const covered = isSearch ? page.scannedRows : page.items.length;
+  const range =
+    covered > 0 ? `${count(first)}–${count(first + covered - 1)}` : "0";
   const more = page.nextCursor
     ? isSearch
       ? " · continuation available"
       : " · more available"
     : " · end of results";
-  return `${page.items.length} entries in this window${searched}${more}`;
+  return isSearch
+    ? `Searched ${range} of ${count(page.total)} candidates · ${count(page.items.length)} matches${more}`
+    : `Showing ${range} of ${count(page.total)}${more}`;
 }
 
 export function KnowledgeBrowse({
@@ -198,7 +212,12 @@ export function KnowledgeBrowse({
         </p>
       )}
       <p className="text-muted-foreground text-xs" role="status">
-        {windowStatus(page, browse.isFetching, isSearch)}
+        {knowledgeWindowSummary(
+          page,
+          browse.windowIndex,
+          isSearch,
+          browse.isFetching,
+        )}
       </p>
       {Boolean(browse.error) && (
         <p role="alert">

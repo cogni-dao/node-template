@@ -3,7 +3,7 @@
 
 /**
  * Module: `@cogni/knowledge-base-ui/use-knowledge-windows`
- * Purpose: The bounded data path of knowledge Browse and the graph overview: one metadata window at a time, explicit body-search windows, and explicit Continue / Previous / Retry / Restart (task.0059).
+ * Purpose: The bounded data path of knowledge Browse: one metadata window at a time with the exact filtered total, explicit body-search windows, and explicit Continue / Previous / Retry / Restart (task.0059).
  * Scope: Client hooks over node-supplied fetchers. The node owns its endpoint, auth and SSR seed; these own the request encoding, cache keys, window cursor/history and the revision prompt. Use the host's React Query client.
  * Invariants:
  *   - ONE_WINDOW_PER_VIEW: opening Browse, or changing its filters or sort, issues at most one metadata request (none when `initialData` seeds the default first window). Nothing walks cursors or prefetches.
@@ -39,7 +39,7 @@ import {
 import { useKnowledgeRevision } from "./use-knowledge-revision.js";
 
 export interface UseKnowledgeWindowsResult {
-  /** The current window, or (overview only) the last loaded one while the next loads or fails. */
+  /** The current window (it carries the exact filtered `total`). */
   readonly page: KnowledgeBrowsePage | undefined;
   /** The current window's query, cursor included. */
   readonly query: KnowledgeBrowseQuery;
@@ -49,6 +49,8 @@ export interface UseKnowledgeWindowsResult {
   readonly awaitingFirstRead: boolean;
   readonly isSearch: boolean;
   readonly canPrevious: boolean;
+  /** Zero-based position of the current window in this traversal. */
+  readonly windowIndex: number;
   readonly canNext: boolean;
   readonly next: () => void;
   readonly previous: () => void;
@@ -69,14 +71,6 @@ export interface UseKnowledgeBrowseOptions {
   /** Default 30s. */
   readonly staleTime?: number;
   /** Default `["knowledge"]`. */
-  readonly queryKeyPrefix?: readonly unknown[];
-}
-
-export interface UseKnowledgeOverviewOptions {
-  readonly fetchOverview: KnowledgeWindowFetcher;
-  /** SSR seed for the first overview window. */
-  readonly initialData?: KnowledgeBrowsePage | undefined;
-  readonly staleTime?: number;
   readonly queryKeyPrefix?: readonly unknown[];
 }
 
@@ -166,15 +160,7 @@ function useKnowledgeWindows(
       });
   }, [bodyIntent, refetch, acknowledgeRestart]);
 
-  // Overview keeps drawing the last loaded window while the next one loads or fails.
-  const [lastPage, setLastPage] = useState<KnowledgeBrowsePage | undefined>(
-    seeded ? initialData : undefined,
-  );
-  useEffect(() => {
-    if (result.data) setLastPage(result.data);
-  }, [result.data]);
-  const page =
-    operation === "overview" ? (result.data ?? lastPage) : result.data;
+  const page = result.data;
 
   const latest = useLatest({ current, page: result.data, query, operation });
   const go = useCallback(
@@ -238,6 +224,7 @@ function useKnowledgeWindows(
       result.isFetching || (!result.data && !result.error),
     isSearch,
     canPrevious: current.history.length > 0 && !result.isFetching,
+    windowIndex: current.history.length,
     canNext:
       Boolean(result.data?.nextCursor) && !result.isFetching && !result.error,
     next,
@@ -261,25 +248,6 @@ export function useKnowledgeBrowse({
     "browse",
     query,
     fetchBrowse,
-    initialData,
-    staleTime,
-    queryKeyPrefix,
-  );
-}
-
-const OVERVIEW_QUERY: KnowledgeBrowseQuery = {};
-
-/** Bounded graph overview: one metadata window of at most 20 atoms at a time. */
-export function useKnowledgeOverview({
-  fetchOverview,
-  initialData,
-  staleTime = 30_000,
-  queryKeyPrefix = KNOWLEDGE_QUERY_PREFIX,
-}: UseKnowledgeOverviewOptions): UseKnowledgeWindowsResult {
-  return useKnowledgeWindows(
-    "overview",
-    OVERVIEW_QUERY,
-    fetchOverview,
     initialData,
     staleTime,
     queryKeyPrefix,

@@ -3,8 +3,8 @@
 
 /**
  * Module: `@cogni/knowledge-base-ui/knowledge`
- * Purpose: Subpath entry for the bounded knowledge Browse and Graph capability (task.0059).
- * Scope: Re-exports only. Kept off the root entry so work-board-only adopters never need the optional `@cogni/knowledge-store` peer; everything here imports `@cogni/knowledge-store/contracts` (>= 0.12.0). The WebGL renderer lives on `./graph-3d`.
+ * Purpose: Subpath entry for the knowledge Browse (bounded windows with exact totals) and whole-corpus Graph capability (task.0059).
+ * Scope: Re-exports only. Kept off the root entry so work-board-only adopters never need the `@cogni/knowledge-store` peer; everything here imports `@cogni/knowledge-store/contracts` (>= 0.13.0). The WebGL renderer lives on `./graph-3d`.
  * Invariants: Requires the host's `QueryClientProvider` (react-query 5).
  * Side-effects: none
  * Links: task.0059
@@ -33,37 +33,34 @@ export {
 export {
   KnowledgeBrowse,
   type KnowledgeBrowseProps,
+  knowledgeWindowSummary,
 } from "./knowledge-browse.js";
 export {
   KNOWLEDGE_CITATION_COLORS,
   KnowledgeGraph,
   type KnowledgeGraphColorMode,
+  type KnowledgeGraphLink,
+  type KnowledgeGraphNarrowing,
+  type KnowledgeGraphNode,
   type KnowledgeGraphProps,
   type KnowledgeGraphRendererProps,
   knowledgeConfidenceColor,
   knowledgeDomainColor,
+  narrowKnowledgeGraph,
 } from "./knowledge-graph.js";
+export {
+  type KnowledgeGraphFetcher,
+  knowledgeGraphNeighbors,
+  type UseKnowledgeGraphOptions,
+  type UseKnowledgeGraphResult,
+  useKnowledgeGraph,
+} from "./use-knowledge-graph.js";
 export {
   type UseKnowledgeRevisionResult,
   useKnowledgeRevision,
 } from "./use-knowledge-revision.js";
 export {
   type UseKnowledgeBrowseOptions,
-  type UseKnowledgeOverviewOptions,
   type UseKnowledgeWindowsResult,
   useKnowledgeBrowse,
-  useKnowledgeOverview,
 } from "./use-knowledge-windows.js";
-export {
-  type KnowledgeCitationEndpoint,
-  type KnowledgeCitationFetcher,
-  type KnowledgeCitationLink,
-  type KnowledgeCitationPage,
-  type KnowledgeGraphGeometry,
-  type KnowledgeGraphLink,
-  type KnowledgeGraphNode,
-  knowledgeFocusGeometry,
-  type UseGraphFocusOptions,
-  type UseGraphFocusResult,
-  useGraphFocus,
-} from "./use-graph-focus.js";

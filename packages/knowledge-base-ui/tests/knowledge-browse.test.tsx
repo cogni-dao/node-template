@@ -61,6 +61,7 @@ const windowOf = (
   nextCursor: null,
   revision: "rev-a",
   scannedRows: 1,
+  total: 5046,
   ...over,
 });
 
@@ -140,7 +141,7 @@ describe("KnowledgeBrowse", () => {
     expect(reads).toHaveLength(1);
     expect(reads[0]?.has("search")).toBe(false);
     expect(reads[0]?.has("cursor")).toBe(false);
-    expect(screen.getByText(/1 entries in this window · end of results/)).toBeTruthy();
+    expect(screen.getByText("Showing 1–1 of 5,046 · end of results")).toBeTruthy();
   });
 
   it("an SSR-seeded default window issues no request at all", async () => {
@@ -171,7 +172,7 @@ describe("KnowledgeBrowse", () => {
     await act(async () => {});
     expect(reads).toHaveLength(0);
     await user.click(screen.getByRole("button", { name: "Search" }));
-    await screen.findByText(/5 candidates searched/);
+    await screen.findByText(/Searched 1–5 of 5,046 candidates/);
     expect(reads).toHaveLength(1);
     expect(reads[0]?.get("search")).toBe("abcde");
     await user.type(box, "f{Enter}");
@@ -209,7 +210,7 @@ describe("KnowledgeBrowse", () => {
     });
     mount(fetchBrowse, windowOf());
     submitSearch("body");
-    await screen.findByText(/20 candidates searched · continuation available/);
+    await screen.findByText(/Searched 1–20 of 5,046 candidates · 0 matches · continuation available/);
     expect(
       screen.getByText(
         "No matches in this window. Continue search to examine more entries.",
@@ -225,7 +226,7 @@ describe("KnowledgeBrowse", () => {
       "after-20",
     ]);
     fireEvent.click(screen.getByRole("button", { name: "Previous window" }));
-    await screen.findByText(/20 candidates searched/);
+    await screen.findByText(/Searched 1–20 of 5,046 candidates/);
     fireEvent.click(screen.getByRole("button", { name: "Continue search" }));
     await screen.findByText(entry.title);
     fireEvent.click(screen.getByRole("button", { name: "Restart" }));
@@ -412,7 +413,7 @@ describe("KnowledgeBrowse", () => {
     mount(fetchBrowse);
     await screen.findByText(/more available/);
     fireEvent.click(screen.getByRole("button", { name: "Next window" }));
-    await screen.findByText(/end of results/);
+    await screen.findByText("Showing 21–21 of 5,046 · end of results");
     expect(reads.at(-1)?.get("cursor")).toBe("after-20");
     fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
     await screen.findByText(/more available/);
@@ -437,7 +438,7 @@ describe("KnowledgeBrowse", () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const first = mount(fetchBrowse, windowOf(), client);
     submitSearch("body");
-    await screen.findByText(/20 candidates searched/);
+    await screen.findByText(/Searched 1–20 of 5,046 candidates/);
     const key = knowledgeBrowseKey({ search: "body" });
     client.setQueryData(key, client.getQueryData(key), {
       updatedAt: Date.now() - 60_000,
@@ -470,7 +471,7 @@ describe("KnowledgeBrowse", () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     mount(fetchBrowse, windowOf(), client);
     submitSearch("body");
-    await screen.findByText(/20 candidates searched/);
+    await screen.findByText(/Searched 1–20 of 5,046 candidates/);
     revision = "rev-b";
     fireEvent.click(screen.getByRole("button", { name: "Continue search" }));
     const prompt = "Knowledge changed. Restart to begin a new live traversal.";
