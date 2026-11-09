@@ -153,6 +153,13 @@ export {
   knowledgeGraphBudgetBytes,
   readKnowledgeGraph,
 } from "./domain/graph-read.js";
+// Session cognition hub inputs (bug.0018): one index read per store revision
+export {
+  type CognitionReadPort,
+  type CognitionReadResult,
+  type CognitionSnapshot,
+  readCognitionSnapshot,
+} from "./domain/cognition-read.js";
 export {
   createConfidenceSmokeReader,
   createExternalCountReader,
