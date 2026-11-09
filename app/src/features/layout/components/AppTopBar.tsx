@@ -15,7 +15,7 @@
 
 import { Github } from "lucide-react";
 import type { ReactElement } from "react";
-import { SidebarTrigger } from "@/components";
+import { SidebarTrigger } from "@/components/startup";
 import { TreasuryBadge } from "@/features/treasury/components/TreasuryBadge";
 import { AccountSlot } from "./AccountSlot";
 

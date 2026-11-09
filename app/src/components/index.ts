@@ -50,7 +50,7 @@ export {
   SheetHeader,
   SheetTitle,
   SheetTrigger,
-} from "@cogni/node-ui-kit/shadcn/sheet";
+} from "./kit/overlays/Sheet";
 export {
   Sidebar,
   SidebarContent,

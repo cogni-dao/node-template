@@ -5,7 +5,7 @@
 ## Metadata
 
 - **Owners:** @derekg1729
-- **Last reviewed:** 2026-10-26
+- **Last reviewed:** 2026-11-08
 - **Status:** draft
 
 ## Purpose
@@ -38,8 +38,8 @@ Shared presentational UI. No business logic, no data fetching. Design tokens and
 
 ## Public Surface
 
-- **Exports:** UI components and widgets via `components/index.ts`
-- **Files considered API:** `index.ts`, `kit/*/index.tsx`
+- **Exports:** UI components and widgets via `components/index.ts`; shell primitives via `components/startup.ts`; Sheet primitives via `components/sheet.ts`; chart primitives via `components/chart.ts`
+- **Files considered API:** `index.ts`, `startup.ts`, `sheet.ts`, `chart.ts`, `kit/*/index.tsx`
 
 ## Responsibilities
 
