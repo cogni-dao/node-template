@@ -7,6 +7,8 @@
  * Scope: Pure presentation. The consuming node owns data loading, URL state, routing and authentication; it injects navigation through `onOpenItem`, column paging through `onLoadMore` and, optionally, `goalHref` / `renderGoalLink`.
  * Invariants:
  *   - COLUMN_PAGES_ONLY: the board renders the column pages it is given; there is no rows-from-a-full-array mode, so an adopter that fetches every item cannot compile against it. A column that has more shows `N+` and a Load more button.
+ *   - EMPTY_IS_NOT_END: a column with no cards but `hasMore` (a capped text scan found nothing yet) shows "Search further (N scanned)" and never says "No items".
+ *   - NOT_STARTED_LOADS_FIRST_PAGE: a column the board's budget did not reach shows "Load"; `onLoadMore` then fetches its first page.
  *   - ONE_HOVER_SURFACE: each card has one hover/focus surface; the open button stretches over the card and only the goal link sits above it.
  *   - ONE_GOAL_LINK: at most one goal pointer per card, from a `goal:<slug>` or `goal:goal-<slug>` label with a safe kebab-case slug.
  *   - RANK_FROM_PACKAGE: the rank label comes from `@cogni/work-items` `rankScore`, never re-derived here.
@@ -62,6 +64,10 @@ export interface WorkBoardColumnState<TItem extends WorkBoardItem> {
   readonly hasMore: boolean;
   /** True while that further page is in flight. */
   readonly isLoadingMore?: boolean | undefined;
+  /** True when the board's budget did not reach this column: "Load" fetches its first page. */
+  readonly notStarted?: boolean | undefined;
+  /** Rows the store has scanned for this column so far (text search). */
+  readonly rowsScanned?: number | undefined;
 }
 
 export interface WorkBoardProps<TItem extends WorkBoardItem> {
@@ -108,6 +114,22 @@ function updatedIso(updatedAt: string | null | undefined): string | undefined {
   return Number.isFinite(updated.getTime()) ? updated.toISOString() : undefined;
 }
 
+function loadLabel(
+  loading: boolean,
+  notStarted: boolean,
+  cards: number,
+  rowsScanned: number | undefined,
+): string {
+  if (loading) return "Loading…";
+  if (notStarted) return "Load";
+  if (cards === 0) {
+    return rowsScanned
+      ? `Search further (${rowsScanned.toLocaleString("en-US")} scanned)`
+      : "Search further";
+  }
+  return "Load more";
+}
+
 function BoardSkeleton({ className }: { readonly className: string }) {
   return (
     <div className={cn("animate-pulse rounded-md bg-primary/10", className)} />
@@ -141,7 +163,7 @@ export function WorkBoard<TItem extends WorkBoardItem>({
         aria-label="Work board"
         role="region"
       >
-        {columns.map(({ status, items: cards, hasMore, isLoadingMore }) => (
+        {columns.map(({ status, items: cards, hasMore, isLoadingMore, notStarted, rowsScanned }) => (
           <KanbanColumn
             key={status}
             value={status}
@@ -155,12 +177,18 @@ export function WorkBoard<TItem extends WorkBoardItem>({
               <span
                 className="font-mono text-muted-foreground text-xs"
                 title={
-                  hasMore
-                    ? `${cards.length} loaded, more available`
-                    : `${cards.length} items`
+                  notStarted && cards.length === 0
+                    ? "Not loaded yet"
+                    : hasMore
+                      ? `${cards.length} loaded, more available`
+                      : `${cards.length} items`
                 }
               >
-                {hasMore ? `${cards.length}+` : cards.length}
+                {notStarted && cards.length === 0
+                  ? "–"
+                  : hasMore
+                    ? `${cards.length}+`
+                    : cards.length}
               </span>
             </div>
             <KanbanColumnContent value={status} className="min-h-40 gap-3">
@@ -171,7 +199,11 @@ export function WorkBoard<TItem extends WorkBoardItem>({
                 </>
               ) : cards.length === 0 ? (
                 <p className="rounded-lg border border-dashed px-3 py-8 text-center text-muted-foreground text-xs">
-                  No items
+                  {notStarted
+                    ? "Not loaded yet"
+                    : hasMore
+                      ? "No matches in the rows searched so far"
+                      : "No items"}
                 </p>
               ) : (
                 cards.map((item) => {
@@ -230,16 +262,16 @@ export function WorkBoard<TItem extends WorkBoardItem>({
                   );
                 })
               )}
-              {!isLoading && hasMore ? (
+              {!isLoading && (hasMore || notStarted) ? (
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
                   disabled={isLoadingMore === true}
-                  aria-label={`Load more ${status}`}
+                  aria-label={`${notStarted ? "Load" : cards.length === 0 ? "Search further" : "Load more"} ${status}`}
                   onClick={() => onLoadMore(status)}
                 >
-                  {isLoadingMore ? "Loading…" : "Load more"}
+                  {loadLabel(isLoadingMore === true, notStarted === true, cards.length, rowsScanned)}
                 </Button>
               ) : null}
             </KanbanColumnContent>

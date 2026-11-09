@@ -110,6 +110,31 @@ describe("WorkBoard", () => {
     expect(screen.queryByRole("button", { name: /Load more/ })).toBeNull();
   });
 
+  it("keeps searching an empty capped column and loads a not-started column's first page", () => {
+    const onLoadMore = vi.fn();
+    render(
+      <WorkBoard
+        columns={[
+          { status: "needs_implement", items: [], hasMore: true, rowsScanned: 1000 },
+          { status: "done", items: [], hasMore: true, notStarted: true },
+          { status: "cancelled", items: [], hasMore: false },
+        ]}
+        isLoading={false}
+        onOpenItem={() => {}}
+        onLoadMore={onLoadMore}
+      />,
+    );
+    expect(screen.getAllByText("No items")).toHaveLength(1);
+    expect(screen.getByText("No matches in the rows searched so far")).toBeInTheDocument();
+    const search = screen.getByRole("button", { name: "Search further needs_implement" });
+    expect(search).toHaveTextContent("Search further (1,000 scanned)");
+    expect(screen.getByText("Not loaded yet")).toBeInTheDocument();
+    expect(screen.getByText("–")).toHaveAttribute("title", "Not loaded yet");
+    fireEvent.click(screen.getByRole("button", { name: "Load done" }));
+    fireEvent.click(search);
+    expect(onLoadMore.mock.calls).toEqual([["done"], ["needs_implement"]]);
+  });
+
   it("labels a column with more as N+ and requests that column's next page", () => {
     const onLoadMore = vi.fn();
     const { rerender } = render(

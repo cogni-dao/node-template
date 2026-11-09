@@ -491,6 +491,90 @@ describe("work board bounded reads", () => {
     expect(server.fetchPage).not.toHaveBeenCalled();
   });
 
+  it("loads a not-started column's first page and keeps searching an empty capped column", async () => {
+    const server = fixtureServer(bulk);
+    // The board budget reaches only the first column; the capped scan finds nothing yet.
+    server.fetchBoard.mockImplementation(async (params) => {
+      const parsed = parseWorkBoardSearchParams(params);
+      if (!parsed.ok) throw new Error("bad board request");
+      return loadWorkBoardColumns(
+        async () => ({
+          items: [],
+          pageInfo: { endCursor: "scan-1", hasMore: true, rowsScanned: 1000 },
+        }),
+        parsed.query,
+        parsed.statuses,
+        { maxScanRows: 1000 },
+      );
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <Fork server={server} onOpenItem={() => {}} />
+      </QueryClientProvider>,
+    );
+    const first = ACTIVE_WORK_STATUSES[0] as string;
+    const search = await screen.findByRole("button", { name: `Search further ${first}` });
+    expect(search).toHaveTextContent("Search further (1,000 scanned)");
+    expect(screen.queryByText("No items")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Load needs_implement" }));
+    await waitFor(() => expect(cardIds()).toHaveLength(WORK_BOARD_COLUMN_PAGE));
+    expect(server.fetchPage).toHaveBeenCalledTimes(1);
+    const firstPage = server.fetchPage.mock.calls[0]?.[0];
+    expect(firstPage?.get("statuses")).toBe("needs_implement");
+    expect(firstPage?.has("cursor")).toBe(false);
+    expect(screen.getByRole("button", { name: "Load more needs_implement" })).toBeInTheDocument();
+
+    server.fetchPage.mockResolvedValueOnce({
+      items: [],
+      pageInfo: { endCursor: "scan-2", hasMore: true, rowsScanned: 1000 },
+    });
+    await userEvent.click(search);
+    await waitFor(() => expect(server.fetchPage).toHaveBeenCalledTimes(2));
+    expect(server.fetchPage.mock.calls[1]?.[0].get("cursor")).toBe("scan-1");
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: `Search further ${first}` }),
+      ).toHaveTextContent("Search further (2,000 scanned)"),
+    );
+    expect(server.fetchBoard).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry a 4xx board response", async () => {
+    const server = fixtureServer(bulk);
+    server.fetchBoard.mockRejectedValue(
+      Object.assign(new Error("invalid input"), { status: 400 }),
+    );
+    // The client default would retry; the hook's own policy must win.
+    const client = new QueryClient({ defaultOptions: { queries: { retry: 3, retryDelay: 1 } } });
+    render(
+      <QueryClientProvider client={client}>
+        <Fork server={server} onOpenItem={() => {}} />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(server.fetchBoard).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(server.fetchBoard).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries a 5xx board response", async () => {
+    const server = fixtureServer(bulk);
+    const base = server.fetchBoard.getMockImplementation();
+    server.fetchBoard.mockRejectedValueOnce(
+      Object.assign(new Error("busy"), { status: 503 }),
+    );
+    server.fetchBoard.mockImplementation(base as NonNullable<typeof base>);
+    const client = new QueryClient({ defaultOptions: { queries: { retryDelay: 1 } } });
+    render(
+      <QueryClientProvider client={client}>
+        <Fork server={server} onOpenItem={() => {}} />
+      </QueryClientProvider>,
+    );
+    await screen.findAllByRole("button", { name: CARD });
+    expect(server.fetchBoard).toHaveBeenCalledTimes(2);
+  });
+
   it("drops appended pages when the board changes", async () => {
     const { server } = await mounted(bulk);
     await userEvent.click(screen.getByRole("button", { name: "Load more needs_implement" }));

@@ -64,8 +64,26 @@ export {
 export {
   type UseWorkBoardOptions,
   type UseWorkBoardResult,
+  shouldRetryWorkBoardRequest,
   useWorkBoard,
 } from "./use-work-board.js";
+export {
+  clampWorkPageSize,
+  openWorkSearchParams,
+  type UseOpenWorkOptions,
+  type UseOpenWorkResult,
+  type UseWorkTablePageOptions,
+  type UseWorkTablePageResult,
+  useOpenWork,
+  useWorkTablePage,
+  WORK_OPEN_ITEMS_DEFAULT,
+  WORK_PAGE_HISTORY_MAX,
+  WORK_TABLE_PAGE_DEFAULT,
+  WORK_TABLE_PAGE_SIZES,
+  type WorkPageFetcher,
+  workPageStackNext,
+  workPageStackPrevious,
+} from "./use-work-pages.js";
 export {
   workBoardTableStateToQuery,
   type WorkBoardTableState,
