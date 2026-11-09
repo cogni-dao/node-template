@@ -16,6 +16,8 @@
 import type { WorkItemSummary } from "./contracts.js";
 import type { HistoryEntry } from "./history.js";
 import type { WorkItemLeasePort } from "./leases.js";
+import type { WorkBoardColumnPages } from "./board.js";
+import type { WorkSummaryReadOptions } from "./summary-query.js";
 
 import type {
   WorkItem,
@@ -50,11 +52,25 @@ export interface WorkItemsPort {
     nextCursor?: string;
     pageInfo: { endCursor: string | null; hasMore: boolean };
   }>;
-  listSummaries(query?: WorkQuery): Promise<{
+  /** One bounded summary page (≤ `WORK_SUMMARY_PAGE_MAX` rows); `options` only tightens its read bounds. */
+  listSummaries(
+    query?: WorkQuery,
+    options?: WorkSummaryReadOptions,
+  ): Promise<{
     items: WorkItemSummary[];
     nextCursor?: string;
-    pageInfo: { endCursor: string | null; hasMore: boolean };
+    pageInfo: { endCursor: string | null; hasMore: boolean; rowsScanned?: number };
   }>;
+  /**
+   * Optional composed board read: first page of every listed status column in
+   * one store read (no text). Cursors equal the per-column `listSummaries` ones.
+   */
+  listBoardColumns?(
+    query: WorkQuery,
+    statuses: readonly string[],
+    perColumn: number,
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<WorkBoardColumnPages>;
   create(input: WorkItemsCreateInput, principalId: string): Promise<WorkItem>;
   patch(input: WorkItemsPatchInput, principalId: string): Promise<WorkItem>;
   delete(id: WorkItemId, principalId: string): Promise<boolean>;

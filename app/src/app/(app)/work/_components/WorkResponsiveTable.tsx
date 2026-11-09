@@ -46,12 +46,15 @@ export function WorkResponsiveTable<TData>({
 	synced,
 	isLoading,
 	skeletonRows,
+	emptyMessage = "No work items found.",
 }: {
 	readonly table: Table<TData>;
 	readonly overrides: VisibilityState;
 	readonly synced: boolean;
 	readonly isLoading: boolean;
 	readonly skeletonRows: number;
+	/** Shown when the page holds no rows (an empty capped page says the search continues). */
+	readonly emptyMessage?: string;
 }) {
 	const visible = table.getVisibleLeafColumns();
 	const mobileCount = table
@@ -66,7 +69,7 @@ export function WorkResponsiveTable<TData>({
 			overrides[id] === undefined ? undefined : String(overrides[id]),
 	});
 	const rows = table.getRowModel().rows;
-	const message = "No work items found.";
+	const message = emptyMessage;
 	return (
 		<DataGridTableViewport>
 			<table className={styles.table} data-work-presync={!synced || undefined}>

@@ -44,7 +44,14 @@ export function withWorkItemLeases(
         items: result.items.map((item) => project(item, claims.get(item.id))),
       };
     },
-    listSummaries: (query) => content.listSummaries(query),
+    listSummaries: (query, options) => content.listSummaries(query, options),
+    ...(content.listBoardColumns
+      ? {
+          listBoardColumns: (
+            ...args: Parameters<NonNullable<WorkItemsPort["listBoardColumns"]>>
+          ) => content.listBoardColumns!(...args),
+        }
+      : {}),
     async create(input, principalId) {
       return content.create(input, principalId);
     },

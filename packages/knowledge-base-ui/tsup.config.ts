@@ -18,6 +18,7 @@ export default defineConfig({
     "@dnd-kit/core",
     "@dnd-kit/sortable",
     "@dnd-kit/utilities",
+    "@tanstack/react-query",
     "@tanstack/react-table",
     "clsx",
     "lucide-react",

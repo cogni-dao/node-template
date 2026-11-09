@@ -55,6 +55,12 @@ import {
 } from "../../history.js";
 import { normalizeWorkItemOrder } from "../../query-order.js";
 import { rankScoreSql } from "../../rank-policy.js";
+import {
+  WORK_SUMMARY_PAGE_MAX,
+  WORK_TEXT_SCAN_MAX_ROWS,
+  type WorkSummaryReadOptions
+} from "../../summary-query.js";
+import type { WorkBoardColumnPages } from "../../board.js";
 
 import { decodeCursor, encodeCursor, InvalidCursorError, queryIdentity, type WorkItemCursor } from "./cursor.js";
 import type {
@@ -65,6 +71,10 @@ import type {
 } from "./ports.js";
 
 export const OPERATOR_ID_FLOOR = 5000;
+/** TEXT_SCAN_BOUNDED: the shared per-request text scan cap (task.0055). */
+export { WORK_TEXT_SCAN_MAX_ROWS };
+/** Rows per text-scan batch; the last batch shrinks to stay within the cap. */
+const TEXT_SCAN_BATCH_ROWS = 501;
 const AUTO_ID_RETRIES = 5;
 const COMMIT_TAG = "work-items";
 const OP_BRANCH_PREFIX = "work-item-op/";
@@ -334,6 +344,20 @@ class DoltMergeOutcomeUnknownError extends WorkItemsBusyError {
     );
     this.name = "DoltMergeOutcomeUnknownError";
   }
+}
+
+/** One projected summary row → the shared summary contract. */
+function rowToSummary(row: Record<string, unknown>): WorkItemSummary {
+  return {
+    id: String(row.id), title: String(row.title), type: String(row.type), status: String(row.status),
+    ...(optionalNumber(row.priority) !== undefined && { priority: optionalNumber(row.priority) }),
+    ...(optionalNumber(row.estimate) !== undefined && { estimate: optionalNumber(row.estimate) }),
+    ...(optionalScores(row.scores) !== undefined && { scores: optionalScores(row.scores) }),
+    ...(optionalString(row.project_id) !== undefined && { projectId: optionalString(row.project_id) }),
+    labels: [...jsonArrayOf<string>(row.labels)],
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at ?? ""),
+    updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at ?? "")
+  };
 }
 
 function escapeValue(value: unknown): string {
@@ -2727,6 +2751,9 @@ export class DoltgresWorkItemAdapter
   ): Promise<T> {
     const readPool = this.resolveReadPool();
     const context = { operationId: randomUUID(), operation: "read work items" };
+    // POOL_SAFETY: the native timeout (and the pool retirement it triggers) is
+    // always queryTimeoutMs. A caller deadline only gates admission of further
+    // batches (see listProjected); it never shortens a native query.
     const deadline = Date.now() + this.queryTimeoutMs;
     // No reserve, checkout, advisory lock, reconciliation or writer-pool call.
     return fn({
@@ -2769,14 +2796,21 @@ export class DoltgresWorkItemAdapter
   }
 
   async list(query: WorkQuery = {}) {
-    return this.listProjected(query, false) as Promise<{ items: WorkItem[]; nextCursor?: string; pageInfo: { endCursor: string | null; hasMore: boolean } }>;
+    return this.listProjected(query, false) as Promise<{ items: WorkItem[]; nextCursor?: string; pageInfo: { endCursor: string | null; hasMore: boolean; rowsScanned: number } }>;
   }
 
-  async listSummaries(query: WorkQuery = {}) {
-    return this.listProjected(query, true) as Promise<{ items: WorkItemSummary[]; nextCursor?: string; pageInfo: { endCursor: string | null; hasMore: boolean } }>;
+  /** One summary page, clamped to `WORK_SUMMARY_PAGE_MAX` rows (task.0055). */
+  async listSummaries(query: WorkQuery = {}, options: WorkSummaryReadOptions = {}) {
+    return this.listProjected(query, true, options) as Promise<{ items: WorkItemSummary[]; nextCursor?: string; pageInfo: { endCursor: string | null; hasMore: boolean; rowsScanned: number } }>;
   }
 
-  private async listProjected(query: WorkQuery, summary: boolean) {
+  /**
+   * The native read plan one summary/list page is built from: filters, order,
+   * the derived sort key, the page SQL and the cursor codec. `listProjected`
+   * and `listBoardColumns` share it, so a column read by the composed board
+   * query issues exactly the cursor `/summaries?statuses=<status>` accepts.
+   */
+  private listPlan(query: WorkQuery, summary: boolean) {
     if (
       (query.rankMin !== undefined && !Number.isFinite(query.rankMin)) ||
       (query.rankMax !== undefined && !Number.isFinite(query.rankMax)) ||
@@ -2866,10 +2900,9 @@ export class DoltgresWorkItemAdapter
             updatedAt: "date_trunc('microseconds', updated_at)"
           }[order.sortBy];
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
-    const limit = Math.min(Math.max(query.limit ?? 100, 1), 500);
-    // Text filtering happens after native ordering. Decouple its scan window
-    // from the response size to avoid re-ranking the backlog for every pagelet.
-    const scanLimit = textNeedle ? 501 : limit + 1;
+    const columns = summary
+      ? `id, title, type, status, priority, scores, project_id, estimate, labels, created_at, updated_at${textNeedle ? ", summary" : ""}`
+      : "work_items.*";
     const nativeCursor = (row: Record<string, unknown>): WorkItemCursor => ({
       v: 2,
       filter: queryIdentity(query),
@@ -2891,11 +2924,113 @@ export class DoltgresWorkItemAdapter
       const key = `CAST(${escapeValue(cursor.key)} AS ${nativeType})`;
       return `__sort_value IS NULL OR __sort_value ${order.sortDirection === "asc" ? ">" : "<"} ${key} OR (__sort_value = ${key} AND ${afterId})`;
     };
+    const baseOuter = order.sortBy === "rankScore" ? [...rankConditions] : [];
+    /** One ordered page: derived key, outer rank/seek predicates, NULL-last order, bounded. */
+    const pageSql = (outerConditions: readonly string[], limit: number, extraSelect = "") => {
+      const outerWhere = outerConditions.length
+        ? `WHERE ${outerConditions.map((condition) => `(${condition})`).join(" AND ")}`
+        : "";
+      return `SELECT ordered.*, CAST(__sort_value AS TEXT) AS __sort_key${extraSelect} FROM (SELECT ${columns}, ${keyExpression} AS __sort_value FROM work_items ${where}) AS ordered ${outerWhere} ORDER BY CASE WHEN __sort_value IS NULL THEN 1 ELSE 0 END ASC, __sort_value ${order.sortDirection.toUpperCase()}, id ASC LIMIT ${limit}`;
+    };
+    /** The opaque cursor continuing after `row` (long project keys travel as a hash). */
+    const encodeAfter = (row: Record<string, unknown>) => {
+      const lastCursor = nativeCursor(row);
+      return encodeCursor(
+        lastCursor.sortBy === "projectId" && lastCursor.key !== null
+          ? { ...lastCursor, key: null, keyRef: createHash("sha256").update(lastCursor.key).digest("hex") }
+          : lastCursor
+      );
+    };
+    return { order, textNeedle, initialCursor, nativeCursor, seek, baseOuter, pageSql, encodeAfter };
+  }
+
+  /**
+   * First page of every visible status column in ONE native read (task.0055):
+   * a CTE of bracketed per-status branches, each the exact page SQL its column's
+   * `listSummaries({ ...query, statuses: [status], limit: perColumn })` would
+   * issue, joined by UNION ALL. One reader slot and one native deadline for
+   * the whole board. Text search is not composed (its scan is capped per
+   * request), so a text query throws; callers use the per-column path.
+   */
+  async listBoardColumns(
+    query: WorkQuery,
+    statuses: readonly string[],
+    perColumn: number,
+    options: { readonly signal?: AbortSignal } = {}
+  ): Promise<WorkBoardColumnPages> {
+    if (query.text) throw new Error("listBoardColumns does not compose text search");
+    const visible = [...new Set(statuses)];
+    if (!visible.length) return { columns: [], queryCount: 0 };
+    options.signal?.throwIfAborted();
+    const limit = Math.min(Math.max(Math.trunc(perColumn), 1), WORK_SUMMARY_PAGE_MAX);
+    const { cursor: _cursor, ...rest } = query;
+    const plans = visible.map((status) =>
+      this.listPlan({ ...rest, statuses: [status as WorkItemStatus], limit }, true)
+    );
+    const branches = plans.map(
+      (plan, index) => `(${plan.pageSql(plan.baseOuter, limit + 1, `, ${index} AS __board_column`)})`
+    );
+    const order = plans[0]?.order ?? normalizeWorkItemOrder(query);
+    const rows = await this.readOnCleanMain((conn) =>
+      conn.unsafe(
+        `WITH board AS (${branches.join(" UNION ALL ")}) SELECT * FROM board ORDER BY __board_column ASC, CASE WHEN __sort_value IS NULL THEN 1 ELSE 0 END ASC, __sort_value ${order.sortDirection.toUpperCase()}, id ASC`
+      )
+    );
+    const byColumn = visible.map(() => [] as Record<string, unknown>[]);
+    for (const row of rows) byColumn[Number(row.__board_column)]?.push(row);
+    return {
+      queryCount: 1,
+      columns: visible.map((status, index) => {
+        const columnRows = byColumn[index] ?? [];
+        const pageRows = columnRows.slice(0, limit);
+        const hasMore = columnRows.length > limit;
+        const last = pageRows[pageRows.length - 1];
+        const endCursor = hasMore && last ? (plans[index]?.encodeAfter(last) ?? null) : null;
+        return {
+          status,
+          items: pageRows.map(rowToSummary),
+          pageInfo: { endCursor, hasMore, rowsScanned: columnRows.length }
+        };
+      })
+    };
+  }
+
+  private async listProjected(query: WorkQuery, summary: boolean, options: WorkSummaryReadOptions = {}) {
+    const { order, textNeedle, initialCursor, nativeCursor, seek, baseOuter, pageSql, encodeAfter } =
+      this.listPlan(query, summary);
+    // Summary pages are bounded by the shared contract; full items keep the agent API's 500.
+    const limit = Math.min(
+      Math.max(query.limit ?? 100, 1),
+      summary ? WORK_SUMMARY_PAGE_MAX : 500
+    );
+    const requestedScan = Number(options.maxScanRows);
+    const maxScanRows = Number.isFinite(requestedScan)
+      ? Math.max(1, Math.min(WORK_TEXT_SCAN_MAX_ROWS, Math.trunc(requestedScan)))
+      : WORK_TEXT_SCAN_MAX_ROWS;
+    // Admission only: once the caller's deadline has passed, no further batch
+    // is issued and the page returns its matches with a continuation.
+    const admissionClosed = () =>
+      options.deadline !== undefined && Date.now() >= options.deadline;
+    // Text filtering happens after native ordering. Decouple its scan window
+    // from the response size to avoid re-ranking the backlog for every pagelet,
+    // and cap the rows one request scans (TEXT_SCAN_BOUNDED).
+    const batchLimit = (scanned: number) =>
+      textNeedle
+        ? Math.min(TEXT_SCAN_BATCH_ROWS, maxScanRows - scanned)
+        : limit + 1;
     // Structural filters → derived native key → seek/order → bounded batch.
     // Text folding stays in JS because native LOWER on cold TEXT can panic.
     // Every batch shares readOnCleanMain's ONE deadline and captured pool.
-    const matchedRows = await this.readOnCleanMain(async (conn) => {
-      const matches: Record<string, unknown>[] = [];
+    type Row = Record<string, unknown>;
+    const scan = await this.readOnCleanMain(async (conn): Promise<{
+      matches: Row[];
+      /** Rows read from the store for this page. */
+      scanned: number;
+      /** Set when the scan cap stopped the read; the page continues after it. */
+      scannedThrough?: Row;
+    }> => {
+      const matches: Row[] = [];
+      let scanned = 0;
       let cursor = initialCursor;
       if (cursor?.keyRef) {
         const rows = await conn.unsafe(`SELECT project_id FROM work_items WHERE id = ${escapeValue(cursor.id)} LIMIT 1`);
@@ -2905,15 +3040,13 @@ export class DoltgresWorkItemAdapter
         cursor = { ...resolved, key };
       }
       while (true) {
-        const outerConditions = order.sortBy === "rankScore" ? [...rankConditions] : [];
+        options.signal?.throwIfAborted();
+        const scanLimit = batchLimit(scanned);
+        const outerConditions = [...baseOuter];
         const seekCondition = seek(cursor);
         if (seekCondition) outerConditions.push(seekCondition);
-        const outerWhere = outerConditions.length
-          ? `WHERE ${outerConditions.map((condition) => `(${condition})`).join(" AND ")}`
-          : "";
-        const rows = await conn.unsafe(
-          `SELECT ordered.*, CAST(__sort_value AS TEXT) AS __sort_key FROM (SELECT ${summary ? `id, title, type, status, priority, scores, project_id, estimate, labels, created_at, updated_at${textNeedle ? ", summary" : ""}` : "work_items.*"}, ${keyExpression} AS __sort_value FROM work_items ${where}) AS ordered ${outerWhere} ORDER BY CASE WHEN __sort_value IS NULL THEN 1 ELSE 0 END ASC, __sort_value ${order.sortDirection.toUpperCase()}, id ASC LIMIT ${scanLimit}`
-        );
+        const rows = await conn.unsafe(pageSql(outerConditions, scanLimit));
+        scanned += rows.length;
         for (const row of rows) {
           if (
             !textNeedle ||
@@ -2924,31 +3057,32 @@ export class DoltgresWorkItemAdapter
             )
           )
             matches.push(row);
-          if (matches.length > limit) return matches;
+          // A full page continues after its last RETURNED match, never after
+          // the last scanned row, so no unreturned match is skipped.
+          if (matches.length > limit) return { matches, scanned };
         }
-        if (!textNeedle || rows.length < scanLimit) return matches;
+        if (!textNeedle || rows.length < scanLimit) return { matches, scanned };
         const last = rows[rows.length - 1];
-        if (!last) return matches;
+        if (!last) return { matches, scanned };
+        // TEXT_SCAN_BOUNDED: at the row budget, or once the caller's deadline
+        // closes admission, hand back every match so far (at most `limit`) and
+        // a continuation at the last SCANNED row. Never throw for the budget.
+        if (scanned >= maxScanRows || admissionClosed())
+          return { matches, scanned, scannedThrough: last };
         cursor = nativeCursor(last);
       }
     });
-    const hasMore = matchedRows.length > limit;
+    const matchedRows = scan.matches;
+    // A capped scan returns at most `limit` matches, all of them on this page.
+    const scanTruncated = scan.scannedThrough !== undefined;
+    const hasMore = matchedRows.length > limit || scanTruncated;
     const pageRows = matchedRows.slice(0, limit);
-    const items = summary ? pageRows.map((row): WorkItemSummary => ({
-      id: String(row.id), title: String(row.title), type: String(row.type), status: String(row.status),
-      ...(optionalNumber(row.priority) !== undefined && { priority: optionalNumber(row.priority) }),
-      ...(optionalNumber(row.estimate) !== undefined && { estimate: optionalNumber(row.estimate) }),
-      ...(optionalScores(row.scores) !== undefined && { scores: optionalScores(row.scores) }),
-      ...(optionalString(row.project_id) !== undefined && { projectId: optionalString(row.project_id) }),
-      labels: [...jsonArrayOf<string>(row.labels)], createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at ?? ""), updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at ?? "")
-    })) : pageRows.map(rowToWorkItem);
-    const last = pageRows[pageRows.length - 1];
-    const lastCursor = last ? nativeCursor(last) : undefined;
-    const encodedCursor = lastCursor?.sortBy === "projectId" && lastCursor.key !== null ? { ...lastCursor, key: null, keyRef: createHash("sha256").update(lastCursor.key).digest("hex") } : lastCursor;
-    const endCursor = hasMore && encodedCursor ? encodeCursor(encodedCursor) : null;
+    const items = summary ? pageRows.map(rowToSummary) : pageRows.map(rowToWorkItem);
+    const last = scanTruncated ? scan.scannedThrough : pageRows[pageRows.length - 1];
+    const endCursor = hasMore && last ? encodeAfter(last) : null;
     return {
       items,
-      pageInfo: { endCursor, hasMore },
+      pageInfo: { endCursor, hasMore, rowsScanned: scan.scanned },
       ...(endCursor && { nextCursor: endCursor })
     };
   }

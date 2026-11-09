@@ -3,15 +3,18 @@
 
 /**
  * Module: `@app/(app)/work/_api/fetchWorkItems`
- * Purpose: Client-side fetch wrapper for work items list.
- * Scope: Calls summary and detail endpoints with type-safe contracts. Does not implement business logic.
- * Invariants: Returns typed summary pages or details, or throws
+ * Purpose: Client-side fetch wrappers for bounded work summary pages, the work board, and item detail.
+ * Scope: Calls summary, board and detail endpoints with type-safe contracts. Does not implement business logic.
+ * Invariants:
+ *   - Returns typed summary pages, board columns or details, or throws `WorkItemFetchError` carrying the HTTP status (the package hooks retry only 5xx and network failures)
+ *   - BOUNDED_BOARD_READS: the only list reads are one `/work/summaries` page (table) and one `/work/board` request plus single column pages; nothing here walks cursors (task.0055)
  * Side-effects: IO
  * Links: [work.items.list.v1.contract](../../../../contracts/work.items.list.v1.contract.ts)
  * @internal
  */
 
 import type { WorkItemDto, WorkItemSummariesListOutput } from "@cogni/node-contracts";
+import type { WorkBoardColumns, WorkSummaryPage } from "@cogni/work-items";
 
 export class WorkItemFetchError extends Error {
   readonly status: number;
@@ -57,10 +60,30 @@ export async function fetchWorkItems(
     cache: "no-store",
   });
   if (!response.ok)
-    throw new Error(
+    throw new WorkItemFetchError(
       await responseErrorMessage(response, `HTTP ${response.status}`),
+      response.status,
     );
   return response.json() as Promise<WorkItemSummariesListOutput>;
+}
+
+/** Fetch the first page of every visible board column in one request. */
+export async function fetchWorkBoard(
+  params: URLSearchParams,
+  signal?: AbortSignal,
+): Promise<WorkBoardColumns> {
+  const response = await fetch(`/api/v1/work/board?${params}`, {
+    method: "GET",
+    ...(signal && { signal }),
+    credentials: "same-origin",
+    cache: "no-store",
+  });
+  if (!response.ok)
+    throw new WorkItemFetchError(
+      await responseErrorMessage(response, `HTTP ${response.status}`),
+      response.status,
+    );
+  return response.json() as Promise<WorkBoardColumns>;
 }
 
 export async function fetchWorkItem(id: string, signal?: AbortSignal): Promise<WorkItemDto> {

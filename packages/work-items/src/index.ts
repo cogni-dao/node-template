@@ -104,3 +104,61 @@ export type {
 export { toWorkItemDto } from "./types.js";
 
 export * from "./contracts.js";
+
+export type {
+  ListWorkBoardColumns,
+  ListWorkSummaries,
+  LoadWorkBoardOptions,
+  WorkBoardColumnPages,
+  WorkBoardColumn,
+  WorkBoardColumns,
+  WorkBoardQueryParse
+} from "./board.js";
+export {
+  loadWorkBoardColumns,
+  parseWorkBoardSearchParams,
+  WORK_BOARD_COLUMN_STATES,
+  WORK_BOARD_READ_BUDGET_MS,
+  WORK_BOARD_STATUSES,
+  WorkBoardColumnSchema,
+  WorkBoardColumnsSchema,
+  workBoardColumnQuery
+} from "./board.js";
+export type {
+  ParsedWorkSummaryQuery,
+  WorkSummaryIssue,
+  WorkSummaryPage,
+  WorkSummaryPageInfo,
+  WorkSummaryQuery,
+  WorkSummaryQueryParse,
+  WorkSummaryReadOptions
+} from "./summary-query.js";
+export {
+  parseWorkSummarySearchParams,
+  WORK_BOARD_COLUMN_PAGE,
+  WORK_SUMMARY_LIST_MAX,
+  WORK_SUMMARY_VALUE_MAX,
+  WORK_SUMMARY_PAGE_DEFAULT,
+  WORK_SUMMARY_PAGE_MAX,
+  WORK_SUMMARY_TEXT_MAX,
+  WORK_TEXT_SCAN_MAX_ROWS,
+  WorkSummaryPageInfoSchema,
+  WorkSummaryPageSchema,
+  WorkSummaryQuerySchema,
+  workSummaryQueryToSearchParams
+} from "./summary-query.js";
+export type {
+  WorkBoardRequestOptions,
+  WorkReadErrorBody,
+  WorkReadErrorCode,
+  WorkReadResult,
+  WorkReadTelemetry,
+  WorkSummariesRequestOptions
+} from "./read-handlers.js";
+export {
+  classifyWorkReadError,
+  handleWorkBoardRequest,
+  handleWorkSummariesRequest,
+  WORK_READ_CLIENT_CLOSED,
+  WORK_READ_ERROR_CODES
+} from "./read-handlers.js";

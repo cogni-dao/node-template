@@ -20,10 +20,17 @@ import type {
   WorkItemDto,
   WorkItemsListInput,
   WorkItemsListOutput,
+  WorkItemSummariesListInput,
   WorkItemSummariesListOutput,
 } from "@cogni/node-contracts";
 import { WorkItemSummarySchema } from "@cogni/node-contracts";
-import type { WorkItem, WorkItemId, WorkItemLease } from "@cogni/work-items";
+import type {
+  WorkItem,
+  WorkItemId,
+  WorkBoardColumnPages,
+  WorkItemLease,
+  WorkSummaryReadOptions,
+} from "@cogni/work-items";
 import {
   toWorkItemId,
   WorkItemRevisionConflictError,
@@ -210,6 +217,8 @@ function rethrowBackendError(error: unknown): never {
       receipt.itemId,
     );
   }
+  // `WorkItemsCapacityError` subclasses `WorkItemsBusyError` and keeps its
+  // name, so held native capacity is also a retryable 503, never a 500.
   if (
     (error as Error)?.name === "DoltgresNotConfiguredError" ||
     (error as Error)?.name === "WorkItemsBusyError" ||
@@ -290,11 +299,15 @@ export async function listWorkItems(input: WorkItemsListInput): Promise<WorkItem
   }
 }
 
-export async function listWorkSummaries(input: WorkItemsListInput): Promise<WorkItemSummariesListOutput> {
+/** One bounded summary page; `options` (signal, shared deadline, scan budget) only tightens the read. */
+export async function listWorkSummaries(
+  input: WorkItemSummariesListInput,
+  options?: WorkSummaryReadOptions,
+): Promise<WorkItemSummariesListOutput> {
   const container = getContainer();
   const query = workQuery(input);
   try {
-    return await container.doltgresWorkItems.listSummaries(query);
+    return await container.doltgresWorkItems.listSummaries(query, options);
   } catch (error) {
     if ((error as Error)?.name === "InvalidCursorError") throw new InvalidCursorError((error as Error).message);
     if ((error as Error)?.name !== "DoltgresNotConfiguredError") rethrowBackendError(error);
@@ -308,6 +321,35 @@ export async function listWorkSummaries(input: WorkItemsListInput): Promise<Work
     if ((error as Error)?.name === "InvalidCursorError") throw new InvalidCursorError((error as Error).message);
     throw error;
   }
+}
+
+/**
+ * First page of every listed board column in ONE store read when the Doltgres
+ * port composes it (task.0055); otherwise (Markdown) one summary read per
+ * column. Text queries never reach here (the package keeps them per-column).
+ */
+export async function listWorkBoardColumns(
+  input: WorkItemSummariesListInput,
+  statuses: readonly string[],
+  perColumn: number,
+  options?: { readonly signal?: AbortSignal },
+): Promise<WorkBoardColumnPages> {
+  const container = getContainer();
+  const port = container.doltgresWorkItems;
+  if (port.listBoardColumns) {
+    try {
+      return await port.listBoardColumns(workQuery(input), statuses, perColumn, options);
+    } catch (error) {
+      if ((error as Error)?.name === "InvalidCursorError") throw new InvalidCursorError((error as Error).message);
+      if ((error as Error)?.name !== "DoltgresNotConfiguredError") rethrowBackendError(error);
+    }
+  }
+  const columns = [];
+  for (const status of statuses) {
+    const page = await listWorkSummaries({ ...input, statuses: [status], limit: perColumn }, options);
+    columns.push({ status, items: page.items, pageInfo: page.pageInfo });
+  }
+  return { columns, queryCount: columns.length };
 }
 
 export async function getWorkItem(id: string): Promise<WorkItemDto | null> {

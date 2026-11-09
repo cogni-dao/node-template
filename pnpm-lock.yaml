@@ -828,6 +828,9 @@ importers:
       '@dnd-kit/utilities':
         specifier: ^3.2.2
         version: 3.2.2(react@19.0.0)
+      '@tanstack/react-query':
+        specifier: ^5.90.2
+        version: 5.90.10(react@19.0.0)
       '@tanstack/react-table':
         specifier: ^8.21.3
         version: 8.21.3(react-dom@19.0.0(react@19.0.0))(react@19.0.0)

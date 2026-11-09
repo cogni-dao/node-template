@@ -41,10 +41,13 @@ describe("WorkBoard", () => {
     const onOpenItem = vi.fn();
     render(
       <WorkBoard
-        items={[item]}
-        statuses={["needs_implement", "done"]}
+        columns={[
+          { status: "needs_implement", items: [item], hasMore: false },
+          { status: "done", items: [], hasMore: false },
+        ]}
         isLoading={false}
         onOpenItem={onOpenItem}
+        onLoadMore={() => {}}
       />,
     );
     const open = screen.getByRole("button", {
@@ -63,16 +66,22 @@ describe("WorkBoard", () => {
     );
     fireEvent.click(open);
     expect(onOpenItem).toHaveBeenCalledWith(item);
-    expect(screen.getByText("No items on this page")).toBeInTheDocument();
+    expect(screen.getByText("No items")).toBeInTheDocument();
   });
 
   it("uses injected goal hrefs and renderers, and shows unscored/missing safely", () => {
     render(
       <WorkBoard
-        items={[{ ...item, scores: undefined, updatedAt: "bad date" }]}
-        statuses={["needs_implement"]}
+        columns={[
+          {
+            status: "needs_implement",
+            items: [{ ...item, scores: undefined, updatedAt: "bad date" }],
+            hasMore: false,
+          },
+        ]}
         isLoading={false}
         onOpenItem={() => {}}
+        onLoadMore={() => {}}
         goalHref={(slug) => `/goals/${slug}`}
         renderGoalLink={({ href, label }) => (
           <a href={href} data-testid="goal">
@@ -90,13 +99,68 @@ describe("WorkBoard", () => {
   it("renders skeletons while loading", () => {
     const { container } = render(
       <WorkBoard
-        items={[]}
-        statuses={["done"]}
+        columns={[{ status: "done", items: [], hasMore: true }]}
         isLoading
         onOpenItem={() => {}}
+        onLoadMore={() => {}}
       />,
     );
     expect(container.querySelectorAll(".animate-pulse")).toHaveLength(2);
-    expect(screen.queryByText("No items on this page")).toBeNull();
+    expect(screen.queryByText("No items")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Load more/ })).toBeNull();
+  });
+
+  it("keeps searching an empty capped column and loads a not-started column's first page", () => {
+    const onLoadMore = vi.fn();
+    render(
+      <WorkBoard
+        columns={[
+          { status: "needs_implement", items: [], hasMore: true, rowsScanned: 1000 },
+          { status: "done", items: [], hasMore: true, notStarted: true },
+          { status: "cancelled", items: [], hasMore: false },
+        ]}
+        isLoading={false}
+        onOpenItem={() => {}}
+        onLoadMore={onLoadMore}
+      />,
+    );
+    expect(screen.getAllByText("No items")).toHaveLength(1);
+    expect(screen.getByText("No matches in the rows searched so far")).toBeInTheDocument();
+    const search = screen.getByRole("button", { name: "Search further needs_implement" });
+    expect(search).toHaveTextContent("Search further (1,000 scanned)");
+    expect(screen.getByText("Not loaded yet")).toBeInTheDocument();
+    expect(screen.getByText("–")).toHaveAttribute("title", "Not loaded yet");
+    fireEvent.click(screen.getByRole("button", { name: "Load done" }));
+    fireEvent.click(search);
+    expect(onLoadMore.mock.calls).toEqual([["done"], ["needs_implement"]]);
+  });
+
+  it("labels a column with more as N+ and requests that column's next page", () => {
+    const onLoadMore = vi.fn();
+    const { rerender } = render(
+      <WorkBoard
+        columns={[
+          { status: "needs_implement", items: [item], hasMore: true },
+          { status: "done", items: [{ ...item, id: "task.0002", status: "done" }], hasMore: false },
+        ]}
+        isLoading={false}
+        onOpenItem={() => {}}
+        onLoadMore={onLoadMore}
+      />,
+    );
+    expect(screen.getByText("1+")).toHaveAttribute("title", "1 loaded, more available");
+    expect(screen.getByText("1")).toHaveAttribute("title", "1 items");
+    fireEvent.click(screen.getByRole("button", { name: "Load more needs_implement" }));
+    expect(onLoadMore).toHaveBeenCalledExactlyOnceWith("needs_implement");
+    expect(screen.getAllByRole("button", { name: /^Load more/ })).toHaveLength(1);
+    rerender(
+      <WorkBoard
+        columns={[{ status: "needs_implement", items: [item], hasMore: true, isLoadingMore: true }]}
+        isLoading={false}
+        onOpenItem={() => {}}
+        onLoadMore={onLoadMore}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Load more needs_implement" })).toBeDisabled();
   });
 });
