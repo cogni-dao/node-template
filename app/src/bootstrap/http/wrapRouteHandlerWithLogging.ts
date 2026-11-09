@@ -48,6 +48,12 @@ type AuthOptionalHandler<TContext = unknown> = (
 
 type AuthRequiredOptions = {
   routeId: string;
+  /**
+   * SAME_DOOR: this route twins a guarded tool. Before the handler runs, the caller passes the same `authorize()` check as
+   * the tool guard: a bearer caller needs a live role row for the tool's scope (403 `policy_denied`, 503 `authz_unavailable`);
+   * a signed-in human passes the subject rules. Declared once in `SAME_DOOR_ROUTES` (`@cogni/agent-grants`).
+   */
+  sameDoor?: string;
   auth: {
     mode: "required";
     getSessionUser: () => Promise<SessionUser | null>;
@@ -200,6 +206,24 @@ export function wrapRouteHandlerWithLogging<TContext = unknown>(
               { status: responseStatus }
             );
             return response;
+          }
+
+          const sameDoor = "sameDoor" in options ? options.sameDoor : undefined;
+          if (sameDoor && sessionUser) {
+            const decision = await container.agentAuthority.authorizeRoute({
+              toolId: sameDoor,
+              routeId: options.routeId,
+              userId: sessionUser.id,
+              via: sessionUser.via === "bearer" ? "bearer" : "session",
+            });
+            if (decision.decision === "deny") {
+              const unavailable = decision.code === "authz_unavailable";
+              responseStatus = unavailable ? 503 : 403;
+              return NextResponse.json(
+                { error: decision.code, code: decision.code },
+                { status: responseStatus, headers: { "cache-control": "no-store" } }
+              );
+            }
           }
 
           // Safe cast: for mode "required", the guard above returns 401 if null.

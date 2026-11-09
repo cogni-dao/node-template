@@ -21,6 +21,8 @@
 
 import {
   type AdminCheck,
+  type AuthzDecision,
+  authorizeCaller,
   type AuthzEvent,
   createPostgresAgentGrantsStore,
   buildNodeAiView,
@@ -65,6 +67,16 @@ export interface AgentToolAuthority {
   listNodeAi(): Promise<NodeAiView[]>;
   /** The same admin check the guard uses, for the role routes. */
   readonly adminCheck: AdminCheck;
+  /**
+   * SAME_DOOR: the route twin of a guarded tool. A bearer caller is its own principal and needs a live role row; a human
+   * session passes the subject rules. Logs `agent_tool.authz` with the route id. A tool with no declared `requires` is denied.
+   */
+  authorizeRoute(input: {
+    toolId: string;
+    routeId: string;
+    userId: string;
+    via: "bearer" | "session";
+  }): Promise<AuthzDecision>;
 }
 
 /** `requiresById` from the contracts the node already loads. */
@@ -151,6 +163,32 @@ export function createAgentToolAuthority(deps: {
     },
     declaredScopes,
     adminCheck,
+    async authorizeRoute({ toolId, routeId, userId, via }) {
+      const requires = requiresById[toolId];
+      const decision: AuthzDecision = !requires
+        ? { decision: "deny", code: "policy_denied", reason: "no_requires" }
+        : await withStore((store) =>
+            authorizeCaller(store, adminCheck, { userId, via, requires })
+          ).catch(
+            (): AuthzDecision => ({
+              decision: "deny",
+              code: "authz_unavailable",
+              reason: "store_unavailable",
+            })
+          );
+      onDecision({
+        principal: via === "bearer" ? userId : null,
+        subject: via === "session" ? userId : null,
+        payer: null,
+        tool: toolId,
+        decision: decision.decision,
+        code: decision.decision === "allow" ? "allowed" : decision.code,
+        reason: decision.decision === "allow" ? decision.basis : decision.reason,
+        runId: null,
+        route: routeId,
+      });
+      return decision;
+    },
     async grantRole(input) {
       const result = await withStore((store) =>
         grantRole(store, { ...input, declaredScopes })

@@ -30,7 +30,12 @@
       "import": "./dist/graph-3d.js",
       "default": "./dist/graph-3d.js"
     },
-    "./tailwind-source.css": "./tailwind-source.css"
+    "./tailwind-source.css": "./tailwind-source.css",
+    "./approval-fragment-scrub": {
+      "types": "./dist/approval-fragment-scrub.d.ts",
+      "import": "./dist/approval-fragment-scrub.js",
+      "default": "./dist/approval-fragment-scrub.js"
+    }
   },
   "types": "./dist/index.d.ts",
   "files": [

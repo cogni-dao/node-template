@@ -46,27 +46,39 @@ const unavailable = (reason: string): AuthzDecision => ({
   reason,
 });
 
-export async function authorize(
+/**
+ * The principal lock alone: no subject, no admin check. It is the first half of `authorize()`, shared with the run-start
+ * filter (DENIAL_IS_TERMINAL: the model never sees a tool it cannot use) and the route door (a bearer caller is its own principal).
+ */
+export async function authorizePrincipalLock(
   store: AgentGrantsStore,
-  adminCheck: AdminCheck,
-  input: AuthorizeInput
+  input: { readonly principalId?: string | undefined; readonly requires: ToolRequires }
 ): Promise<AuthzDecision> {
-  const { principalId, subjectUserId, requires } = input;
+  const { principalId, requires } = input;
   // FAIL_CLOSED_ON_UNKNOWN: `requires` comes from a published contract and this package is pinned independently,
   // so an unknown kind or subject (a newer contract) must deny, never run as `node` or `member`.
   if (!KINDS.has(requires.kind) || !SUBJECTS.has(requires.subject))
     return deny("unknown_contract_value");
   if (!principalId) return deny("no_principal");
-  if (requires.kind === "own" && !subjectUserId) return deny("no_subject");
-
   if (requires.kind === "account") return deny("account_scope_unsupported");
-
   try {
     if (!(await store.hasLiveRole(principalId, requires.scope)))
       return deny("no_role");
   } catch {
     return unavailable("store_unavailable");
   }
+  return { decision: "allow", basis: "role" };
+}
+
+export async function authorize(
+  store: AgentGrantsStore,
+  adminCheck: AdminCheck,
+  input: AuthorizeInput
+): Promise<AuthzDecision> {
+  const { principalId, subjectUserId, requires } = input;
+  const lock = await authorizePrincipalLock(store, { principalId, requires });
+  if (lock.decision === "deny") return lock;
+  if (requires.kind === "own" && !subjectUserId) return deny("no_subject");
 
   if (subjectUserId && requires.subject === "admin") {
     let admin: Awaited<ReturnType<AdminCheck>>;

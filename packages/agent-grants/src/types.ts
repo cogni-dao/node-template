@@ -83,6 +83,8 @@ export interface AuthzEvent {
   readonly code: string;
   readonly reason: string;
   readonly runId: string | null;
+  /** The route id when the decision came from a route (SAME_DOOR), else absent. */
+  readonly route?: string | null;
 }
 
 /** One job (a scope) a node AI may do, as the admin page shows it. */

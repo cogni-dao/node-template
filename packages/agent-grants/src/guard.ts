@@ -12,13 +12,17 @@
  *     returns the fixed message plus that receipt (see `failureReceipt` in ai-core tool-runner).
  *   - The fixed message never names a role, scope or reason. `onDecision` carries the reason.
  *   - `runAs` lets the node bind principal and subject for the duration of the tool call.
+ *   - DENIAL_IS_TERMINAL: `offeredToolIds` drops every tool whose principal lock already fails, so the model is never offered
+ *     a tool it cannot use. An exec-time denial (a role revoked mid-run, a failed subject lock) calls `onTerminalDenial`
+ *     once so the node ends the run cleanly. A denied run never loops.
  * Side-effects: IO (store reads through `withStore`)
  * @public
  */
 
-import { authorize } from "./authorize";
+import { authorize, authorizePrincipalLock } from "./authorize";
 import type {
   AdminCheck,
+  AuthzDecision,
   AuthzEvent,
   DenialCode,
   RunIdentity,
@@ -42,8 +46,16 @@ export interface GuardDeps {
   readonly withStore: WithStore;
   readonly adminCheck: AdminCheck;
   readonly onDecision?: (event: AuthzEvent) => void;
+  /** Called once per exec-time denial, before the error is thrown. The node ends the run cleanly (DENIAL_IS_TERMINAL). */
+  readonly onTerminalDenial?: (denial: TerminalDenial) => void;
   /** Runs one tool call with the run identity bound (the node's ExecutionScope). */
   readonly runAs?: <T>(identity: RunIdentity, fn: () => Promise<T>) => Promise<T>;
+}
+
+export interface TerminalDenial {
+  readonly tool: string;
+  readonly code: DenialCode;
+  readonly reason: string;
 }
 
 const FIXED_MESSAGE: Record<DenialCode, string> = {
@@ -137,15 +149,79 @@ export function guardTools<T extends GuardableRuntime>(
           reason: decision.decision === "allow" ? decision.basis : decision.reason,
           runId: runIdOf(ctx),
         });
-        if (decision.decision === "deny")
+        if (decision.decision === "deny") {
+          deps.onTerminalDenial?.({
+            tool: id,
+            code: decision.code,
+            reason: decision.reason,
+          });
           throw new ToolAuthorityError(
             decision.code,
             id,
             requires?.scope ?? null
           );
+        }
         return call();
       },
     } as T;
   }
   return guarded;
+}
+
+/**
+ * Run-start filter (DENIAL_IS_TERMINAL). Returns the tool ids the run may offer the model: a read_only tool with no
+ * `requires` always; any other tool only when its PRINCIPAL lock opens now. A tool whose principal lock fails, or whose
+ * store check is unavailable, or that has no `requires` entry and an effect other than read_only, is excluded and reported.
+ * The subject lock is not checked here: it can only narrow, and the exec-time guard still enforces it.
+ */
+export async function offeredToolIds(
+  tools: ReadonlyArray<{ readonly id: string; readonly effect: string }>,
+  requiresById: Readonly<Record<string, ToolRequires>>,
+  scope: GuardScope,
+  deps: Pick<GuardDeps, "withStore" | "onDecision">
+): Promise<{
+  readonly offered: string[];
+  readonly excluded: ReadonlyArray<{ tool: string; code: DenialCode; reason: string }>;
+}> {
+  const offered: string[] = [];
+  const excluded: Array<{ tool: string; code: DenialCode; reason: string }> = [];
+  for (const tool of tools) {
+    const requires = requiresById[tool.id];
+    if (!requires && tool.effect === "read_only") {
+      offered.push(tool.id);
+      continue;
+    }
+    const decision: AuthzDecision = !requires
+      ? { decision: "deny", code: "policy_denied", reason: "no_requires" }
+      : await deps
+          .withStore((store) =>
+            authorizePrincipalLock(store, {
+              principalId: scope.principalId,
+              requires,
+            })
+          )
+          .catch(
+            (): AuthzDecision => ({
+              decision: "deny",
+              code: "authz_unavailable",
+              reason: "store_unavailable",
+            })
+          );
+    if (decision.decision === "allow") {
+      offered.push(tool.id);
+      continue;
+    }
+    excluded.push({ tool: tool.id, code: decision.code, reason: decision.reason });
+    deps.onDecision?.({
+      principal: scope.principalId ?? null,
+      subject: scope.subjectUserId ?? null,
+      payer: scope.payer ?? null,
+      tool: tool.id,
+      decision: "deny",
+      code: decision.code,
+      reason: `not_offered:${decision.reason}`,
+      runId: null,
+    });
+  }
+  return { offered, excluded };
 }

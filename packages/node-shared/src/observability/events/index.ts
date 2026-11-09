@@ -41,6 +41,8 @@ export const EVENT_NAMES = {
 	/** One decision per scoped tool call (task.5456): principal, subject, payer, tool, decision, code. No tokens. */
 	AGENT_TOOL_AUTHZ: "agent_tool.authz",
 	/** A DAO admin granted / revoked an agent role (task.5456): principal, scope, approvedBy. */
+	/** A run ended cleanly because a tool was denied (DENIAL_IS_TERMINAL): principal, tool, code, modelCalls, modelCallsAfterDenial. */
+	AGENT_RUN_DENIED: "agent_run.denied",
 	AGENT_ROLE_GRANTED: "agent_role.granted",
 	AGENT_ROLE_REVOKED: "agent_role.revoked",
 	/** One structured summary per mission-loop cycle on the work-prioritizer slot (story.5108; CatalogEntry.report). */
