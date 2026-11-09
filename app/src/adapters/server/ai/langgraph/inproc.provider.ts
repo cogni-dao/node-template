@@ -114,6 +114,13 @@ export interface ProviderAgentAuthority {
   readonly guardDeps: Omit<GuardDeps, "runAs">;
 }
 
+/** The one fixed outcome a denied run ends with (DENIAL_IS_TERMINAL). */
+function denialMessage(code: "policy_denied" | "authz_unavailable"): string {
+  return code === "authz_unavailable"
+    ? "I can't check my permissions right now, so I stopped. Try again later."
+    : "I don't have permission to do that on this node, so I stopped. Ask a node admin to allow it.";
+}
+
 /** With no authority wired, the guard can reach no store and no admin check: scoped tools deny. */
 const DENY_ALL_GUARD_DEPS: Omit<GuardDeps, "runAs"> = {
   withStore: async () => {
@@ -349,6 +356,23 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
         guardBase
       );
       const offeredSet = new Set(offered);
+
+      if (entry.program && !this.sourceContext) {
+        throw new Error("node_source_context_unavailable");
+      }
+
+      // A run with no interactive caller (a scheduled "decide" run, or one with no subject such as a webhook) whose
+      // every write tool is withheld has nothing it may do: end it now, with no model call, instead of paying for a
+      // "no permission" answer on every tick. An interactive run keeps the system note below and may answer once.
+      const writeTools = Object.entries(runtimeTools).filter(
+        ([, rt]) => rt.spec.effect !== "read_only"
+      );
+      const noInteractiveCaller =
+        ctx?.requestIntent === "decide" || !scope.subjectUserId;
+      const endWithoutModel =
+        noInteractiveCaller &&
+        writeTools.length > 0 &&
+        writeTools.every(([id]) => !offeredSet.has(id));
       for (const id of Object.keys(runtimeTools)) {
         if (!offeredSet.has(id)) delete runtimeTools[id];
       }
@@ -473,6 +497,43 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
       if (entry.program && !this.sourceContext) {
         throw new Error("node_source_context_unavailable");
       }
+      // Resolve the node source first so a mission graph still fails closed when its hub context is missing.
+      const resolvedSource =
+        (entry.program || graphName === "poet") && this.sourceContext
+          ? await this.sourceContext(Boolean(entry.program))
+          : undefined;
+      if (endWithoutModel) {
+        const code = excluded.every((e) => e.code === "authz_unavailable")
+          ? ("authz_unavailable" as const)
+          : ("policy_denied" as const);
+        this.log.warn(
+          {
+            event: EVENT_NAMES.AGENT_RUN_DENIED,
+            runId,
+            graphName,
+            principal: entry.principal ?? null,
+            tools: writeTools.map(([id]) => id),
+            code,
+            reason: "no_permission",
+            modelCalls: 0,
+            modelCallsAfterDenial: 0,
+          },
+          "run ended without a model call: every write tool is withheld"
+        );
+        const text = denialMessage(code);
+        return {
+          stream: (async function* () {
+            yield { type: "text_delta" as const, delta: text };
+            yield { type: "assistant_final" as const, content: text };
+            yield { type: "done" as const } as AiEvent;
+          })(),
+          final: Promise.resolve({
+            ok: true,
+            finishReason: "stop",
+            content: text,
+          } as GraphResult),
+        };
+      }
       const inner = createInProcGraphRunner({
         createGraph: entry.graphFactory,
         completionFn: countedCompletionFn,
@@ -490,9 +551,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
         ...((entry.program || graphName === "poet") && {
           trustedProgramId: entry.program ?? graphName,
         }),
-        ...((entry.program || graphName === "poet") && this.sourceContext && {
-          sourceContext: await this.sourceContext(Boolean(entry.program)),
-        }),
+        ...(resolvedSource !== undefined && { sourceContext: resolvedSource }),
         ...(req.responseFormat !== undefined && {
           responseFormat: req.responseFormat,
         }),
@@ -589,10 +648,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
     }
   ): { stream: AsyncIterable<AiEvent>; final: Promise<GraphResult> } {
     const log = this.log;
-    const message = (denial: TerminalDenial) =>
-      denial.code === "authz_unavailable"
-        ? "I can't check my permissions right now, so I stopped. Try again later."
-        : "I don't have permission to do that on this node, so I stopped. Ask a node admin to allow it.";
+    const message = (denial: TerminalDenial) => denialMessage(denial.code);
     let logged = false;
     const logOnce = (denial: TerminalDenial) => {
       if (logged) return;

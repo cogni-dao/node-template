@@ -10,7 +10,7 @@
  * Side-effects: none
  */
 
-import { NO_ROUTE_TWIN, SAME_DOOR_ROUTES } from "@cogni/agent-grants";
+import { NO_ROUTE_TWIN, ROUTE_ONLY_CAPABILITIES, SAME_DOOR_ROUTES } from "@cogni/agent-grants";
 import { CORE_TOOL_BUNDLE, VCS_TOOL_BUNDLE } from "@cogni/ai-tools";
 import { describe, expect, it } from "vitest";
 
@@ -65,5 +65,23 @@ describe("same-door parity", () => {
       expect(tool in SAME_DOOR_ROUTES, tool).toBe(false);
     }
     expect(Object.values(NO_ROUTE_TWIN).every((reason) => reason.length > 10)).toBe(true);
+  });
+
+  it("declares each route-only capability once, with a scope no tool already uses and member or admin subject", () => {
+    const toolScopes = new Set(contracts.flatMap((c) => (c.requires ? [c.requires.scope] : [])));
+    for (const [id, cap] of Object.entries(ROUTE_ONLY_CAPABILITIES)) {
+      expect(toolScopes.has(cap.requires.scope), id).toBe(false);
+      expect(cap.routes.length, id).toBeGreaterThan(0);
+      expect(["member", "admin"], id).toContain(cap.requires.subject);
+    }
+    expect(ROUTE_ONLY_CAPABILITIES["knowledge.contribute"]?.requires).toMatchObject({
+      scope: "knowledge:contribute",
+      subject: "member",
+    });
+  });
+
+  it("allowlists knowledge_write (no direct-to-main route) and keeps it out of the route map", () => {
+    expect("core__knowledge_write" in NO_ROUTE_TWIN).toBe(true);
+    expect("core__knowledge_write" in SAME_DOOR_ROUTES).toBe(false);
   });
 });

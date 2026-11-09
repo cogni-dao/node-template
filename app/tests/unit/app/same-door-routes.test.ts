@@ -10,7 +10,7 @@
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { SAME_DOOR_ROUTES } from "@cogni/agent-grants";
+import { ROUTE_ONLY_CAPABILITIES, SAME_DOOR_ROUTES } from "@cogni/agent-grants";
 import { describe, expect, it } from "vitest";
 
 const API = resolve(__dirname, "../../../src/app/api");
@@ -22,8 +22,13 @@ function routeFiles(dir: string): string[] {
 }
 const sources = routeFiles(API).map((f) => readFileSync(f, "utf8"));
 
+const DECLARED: Record<string, { routes: readonly string[] }> = {
+  ...SAME_DOOR_ROUTES,
+  ...ROUTE_ONLY_CAPABILITIES,
+};
+
 describe("same-door routes", () => {
-  for (const [tool, entry] of Object.entries(SAME_DOOR_ROUTES)) {
+  for (const [tool, entry] of Object.entries(DECLARED)) {
     for (const routeId of entry.routes) {
       it(`${routeId} declares sameDoor: ${tool}`, () => {
         const declared = sources.some((s) =>
@@ -36,6 +41,6 @@ describe("same-door routes", () => {
 
   it("no route declares sameDoor for a tool the map does not list", () => {
     const declared = sources.flatMap((s) => [...s.matchAll(/sameDoor:\s*"([^"]+)"/g)].map((m) => m[1]));
-    for (const tool of declared) expect(tool && tool in SAME_DOOR_ROUTES, String(tool)).toBe(true);
+    for (const tool of declared) expect(tool && tool in DECLARED, String(tool)).toBe(true);
   });
 });

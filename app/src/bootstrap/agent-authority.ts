@@ -23,6 +23,7 @@ import {
   type AdminCheck,
   type AuthzDecision,
   authorizeCaller,
+  ROUTE_ONLY_CAPABILITIES,
   type AuthzEvent,
   createPostgresAgentGrantsStore,
   buildNodeAiView,
@@ -164,7 +165,8 @@ export function createAgentToolAuthority(deps: {
     declaredScopes,
     adminCheck,
     async authorizeRoute({ toolId, routeId, userId, via }) {
-      const requires = requiresById[toolId];
+      const requires =
+        requiresById[toolId] ?? ROUTE_ONLY_CAPABILITIES[toolId]?.requires;
       const decision: AuthzDecision = !requires
         ? { decision: "deny", code: "policy_denied", reason: "no_requires" }
         : await withStore((store) =>

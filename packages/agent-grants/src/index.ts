@@ -27,6 +27,7 @@ export {
   authorizeCaller,
   type CallerInput,
   NO_ROUTE_TWIN,
+  ROUTE_ONLY_CAPABILITIES,
   SAME_DOOR_ROUTES,
   type SameDoorRoute,
 } from "./same-door";

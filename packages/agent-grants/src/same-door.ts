@@ -46,10 +46,22 @@ export const SAME_DOOR_ROUTES: Readonly<Record<string, SameDoorRoute>> = {
   core__edo_decide: { scope: "edo:write", routes: ["edo.decide"] },
   core__edo_record_outcome: { scope: "edo:write", routes: ["edo.record_outcome"] },
   core__metric_compute: { scope: "metric:compute", routes: ["metrics.metricCompute"] },
-  // The tool writes an entry to main. Its route twin is the contribution write, the path an outside agent uses (a
-  // contribution is a branch proposal, the narrower power; the merge route keeps its own admin gate).
-  core__knowledge_write: {
-    scope: "knowledge:write",
+};
+
+/**
+ * Write routes an outside agent may call that no tool twins. They declare their own scope here, once, with the same
+ * `requires` shape a tool contract uses. A signed-in human passes `member`; a bearer agent needs a live role row.
+ */
+export const ROUTE_ONLY_CAPABILITIES: Readonly<
+  Record<string, { readonly requires: ToolRequires; readonly routes: readonly string[] }>
+> = {
+  "knowledge.contribute": {
+    requires: {
+      scope: "knowledge:contribute",
+      kind: "node",
+      subject: "member",
+      label: "Propose changes to this node's knowledge base",
+    },
     routes: ["knowledge.contributions.create"],
   },
 };
@@ -57,6 +69,10 @@ export const SAME_DOOR_ROUTES: Readonly<Record<string, SameDoorRoute>> = {
 /** Tools that have no node route, with the reason. A new tool must be added here or to `SAME_DOOR_ROUTES`. */
 export const NO_ROUTE_TWIN: Readonly<Record<string, string>> = {
   // These call the operator's API with the node's identity; the operator's own deploy roles (operator OpenFGA) gate them.
+  // The tool writes straight to main. Its true twin (a direct-to-main knowledge write route) deliberately does not
+  // exist: the node route an outside agent uses is the contribution proposal (`knowledge.contribute`). Whether the tool
+  // should write contributions instead of main is a design question (C2, task.5465).
+  core__knowledge_write: "no direct-to-main write route exists on purpose; outside agents use knowledge.contribute",
   core__vcs_create_branch: "calls the operator VCS API, not a node route",
   core__vcs_merge_pr: "calls the operator VCS API, not a node route",
   core__vcs_flight_candidate: "calls the operator VCS API, not a node route",
