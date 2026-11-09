@@ -9,6 +9,8 @@
  * Invariants:
  *   - ONE_CONTROL_ONE_DECISION: the switch is the whole decision, both directions. No "are you sure" step. A pending ask also
  *     has an x that dismisses it.
+ *   - NAMES_ARE_IDENTIFIERS: "Who" is never a vanity label: this node's AI by its slug (mono), an outside agent by its registered
+ *     name with the outside badge and binding. All the human words are in "Can do".
  *   - DECLARED_ONCE_SHOWN_EVERYWHERE: "Can do" shows the name and the one-line description the server sends from the
  *     declaration. This file holds no copy table.
  *   - NON_ADMIN_SEES_NOTHING: renders `null` while loading and for every state except a confirmed admin view (`ready`)
@@ -128,7 +130,8 @@ export function AgentAccessSection({ endpoints, className }: AgentAccessSectionP
                                 </div>
                               </>
                             ) : (
-                              row.who
+                              // NAMES_ARE_IDENTIFIERS: this node's AI is shown by its slug, in mono. All the human words are in "Can do".
+                              <span className="font-mono">{row.who}</span>
                             )}
                           </td>
                           <td className="py-2 pr-3 align-top">

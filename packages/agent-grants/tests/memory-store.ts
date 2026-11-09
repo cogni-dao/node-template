@@ -48,7 +48,7 @@ export function memoryStore(init?: {
         .map((r) => ({ principalSlug: slugOf(r.principal) as string, scope: r.scope }));
     },
     async listInternalPrincipals() {
-      return Object.entries(init?.principals ?? {}).map(([slug, userId]) => ({ userId, slug, displayName: init?.names?.[slug] ?? null }));
+      return Object.entries(init?.principals ?? {}).map(([slug, userId]) => ({ userId, slug }));
     },
     async listRoleRows(limit) {
       const all = roles

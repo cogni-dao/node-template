@@ -59,7 +59,7 @@ export interface RoleRow {
   /** The catalog slug for an internal AI, else null. */
   readonly slug: string | null;
   readonly internal: boolean;
-  /** `agent_principals.display_name` for an internal AI, else the user's name. */
+  /** The slug for an internal AI (the slug IS its name), else the outside agent's registered name. */
   readonly name: string | null;
   /** A plain note that the agent is tied to something outside, such as "GitHub linked". Null when nothing is known. */
   readonly hint: string | null;
@@ -80,8 +80,8 @@ export interface AgentGrantsStore {
   liveScopes(principalId: string, scopes: readonly string[]): Promise<string[]>;
   /** The seeded user id of an internal principal slug, else null. */
   findInternalPrincipal(slug: string): Promise<{ userId: string } | null>;
-  /** Every internal principal with its plain name. */
-  listInternalPrincipals(): Promise<Array<{ userId: string; slug: string; displayName: string | null }>>;
+  /** Every internal principal (user id and slug). The slug is its name. */
+  listInternalPrincipals(): Promise<Array<{ userId: string; slug: string }>>;
   /** Every live role row with its principal's slug. Never cached. */
   listLiveRoles(): Promise<Array<{ principalSlug: string; scope: string }>>;
   /**
@@ -144,7 +144,7 @@ export interface NodeAiPermissionView {
   readonly section: AccessSection;
   /** Opaque to the human; the table sends it back unchanged when the admin clicks. */
   readonly principalUserId: string;
-  /** Plain name of the agent. */
+  /** The agent's identifier: the slug for this node's AI, the registered name for an outside agent. Never a vanity label. */
   readonly who: string;
   /** True for an agent that is not one of this node's own AI. */
   readonly outside: boolean;

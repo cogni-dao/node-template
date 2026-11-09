@@ -22,8 +22,8 @@ const view = (): NodeAiAccessView => ({
   more,
   permissions: [
     ...(asked ? [row({ section: "pending", principalUserId: "ext-1", who: "Helper bot", outside: true, hint: "GitHub linked", scope: "work_item:transition", label: "Update work items", description: "Move work items along and change their scores." })] : []),
-    row({ section: "node", principalUserId: "u-node-ai", who: "General assistant", scope: "knowledge:write", label: "Save notes", description: "Save notes straight into the knowledge base.", on: allowed }),
-    row({ section: "node", principalUserId: "u-node-ai", who: "General assistant", scope: "schedule:manage", label: "Change schedules", description: "Make, change and stop schedules." }),
+    row({ section: "node", principalUserId: "u-node-ai", who: "node-ai", scope: "knowledge:write", label: "Save notes", description: "Save notes straight into the knowledge base.", on: allowed }),
+    row({ section: "node", principalUserId: "u-node-ai", who: "node-ai", scope: "schedule:manage", label: "Change schedules", description: "Make, change and stop schedules." }),
     ...extra,
     row({ section: "outside", principalUserId: "ext-2", who: "Review agent", outside: true, scope: "edo:write", label: "Log decisions", description: "Write down choices and how they turned out.", on: true }),
   ],
@@ -111,7 +111,7 @@ describe("AgentAccessSection: a non-admin sees nothing", () => {
   });
 });
 
-const SAVE = /^General assistant: Save notes$/;
+const SAVE = /^node-ai: Save notes$/;
 const ASK = /^Helper bot: Update work items$/;
 
 describe("AgentAccessSection: an admin", () => {
@@ -177,24 +177,26 @@ describe("AgentAccessSection: an admin", () => {
     expect(calls.every((c) => !c.headers || !("authorization" in Object.fromEntries(Object.entries(c.headers).map(([k, v]) => [k.toLowerCase(), v]))))).toBe(true);
   });
 
-  it("an outside agent named like this node's AI is never mistaken for it: badge first, name quoted, proven binding beside it", async () => {
+  it("an outside agent named like this node's AI (an identifier) is never mistaken for it: badge first, name quoted, proven binding beside it, while the real one is plain mono", async () => {
     extra = [
-      row({ section: "pending", principalUserId: "ext-9", who: "General assistant", outside: true, hint: "GitHub id 424242", scope: "edo:write", label: "Log decisions", description: "Write down choices and how they turned out." }),
-      row({ section: "pending", principalUserId: "ext-10", who: "Priority scorer", outside: true, hint: null, scope: "metric:compute", label: "Refresh numbers", description: "Update the numbers shown on the dashboards." }),
+      row({ section: "pending", principalUserId: "ext-9", who: "node-ai", outside: true, hint: "GitHub id 424242", scope: "edo:write", label: "Log decisions", description: "Write down choices and how they turned out." }),
+      row({ section: "pending", principalUserId: "ext-10", who: "prioritizer", outside: true, hint: null, scope: "metric:compute", label: "Refresh numbers", description: "Update the numbers shown on the dashboards." }),
     ];
     fetchMock.mockImplementation(() => json(200, view()));
     render(<AgentAccessSection endpoints={ENDPOINTS} />);
     await screen.findByRole("table");
-    const imposter = screen.getByRole("switch", { name: /^General assistant: Log decisions$/ }).closest("tr")!;
+    const imposter = screen.getByRole("switch", { name: /^node-ai: Log decisions$/ }).closest("tr")!;
     const who = within(imposter).getAllByRole("cell")[0]!;
-    expect(who.textContent).toBe("outside\u201cGeneral assistant\u201dGitHub id 424242");
+    expect(who.textContent).toBe("outside\u201cnode-ai\u201dGitHub id 424242");
     expect(who.querySelector("span")?.textContent).toBe("outside"); // the badge is the first thing in the cell
     // No proof of a binding: say so, still badged and quoted.
-    const noBinding = within(screen.getByRole("switch", { name: /^Priority scorer: Refresh numbers$/ }).closest("tr")!).getAllByRole("cell")[0]!;
-    expect(noBinding.textContent).toBe("outside\u201cPriority scorer\u201dNo linked account");
+    const noBinding = within(screen.getByRole("switch", { name: /^prioritizer: Refresh numbers$/ }).closest("tr")!).getAllByRole("cell")[0]!;
+    expect(noBinding.textContent).toBe("outside\u201cprioritizer\u201dNo linked account");
     // This node's own AI of the same name is plain: no badge, no quotes.
-    const mineRow = screen.getAllByRole("switch", { name: /^General assistant: Save notes$/ })[0]!.closest("tr")!;
-    expect(within(mineRow).getAllByRole("cell")[0]!.textContent).toBe("General assistant");
+    const mineRow = screen.getAllByRole("switch", { name: /^node-ai: Save notes$/ })[0]!.closest("tr")!;
+    const mineCell = within(mineRow).getAllByRole("cell")[0]!;
+    expect(mineCell.textContent).toBe("node-ai");
+    expect(mineCell.querySelector("span")).toHaveClass("font-mono"); // an identifier, in mono
   });
 
   it("says how many outside rows are not shown when the list is cut", async () => {
@@ -332,7 +334,7 @@ describe("AgentAccessSection: an admin", () => {
     await screen.findByRole("table");
     const labels = [...container.querySelectorAll("[aria-label]")].map((e) => e.getAttribute("aria-label")).join(" ");
     const text = `${container.textContent ?? ""} ${labels}`;
-    for (const bad of ["knowledge:write", "node-ai", "work_item", "u-node-ai", "ext-1", "/api/", "token", "curl", "Bearer"]) expect(text).not.toContain(bad);
+    for (const bad of ["knowledge:write", "work_item", "u-node-ai", "ext-1", "/api/", "token", "curl", "Bearer"]) expect(text).not.toContain(bad);
     expect(text).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/i);
   });
 });

@@ -41,8 +41,6 @@ export const agentPrincipals = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     kind: text("kind").notNull(),
     slug: text("slug"),
-    /** Plain name the admin table shows for this agent. Falls back to the slug. */
-    displayName: text("display_name"),
     userId: text("user_id")
       .notNull()
       .references(() => users.id),

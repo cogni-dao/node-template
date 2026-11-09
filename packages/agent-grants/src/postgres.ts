@@ -59,10 +59,10 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
     },
     async listInternalPrincipals() {
       const rows = await sql`
-        SELECT user_id, slug, display_name FROM agent_principals WHERE kind = 'internal' ORDER BY slug`;
+        SELECT user_id, slug FROM agent_principals WHERE kind = 'internal' ORDER BY slug`;
       return rows.flatMap((row) =>
         typeof row.user_id === "string" && typeof row.slug === "string"
-          ? [{ userId: row.user_id, slug: row.slug, displayName: str(row.display_name) }]
+          ? [{ userId: row.user_id, slug: row.slug }]
           : []
       );
     },
@@ -89,7 +89,7 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
           principalUserId,
           slug: internal ? str(row.slug) : null,
           internal,
-          name: internal ? str(row.display_name) : str(row.user_name),
+          name: internal ? str(row.slug) : str(row.user_name), // NAMES_ARE_IDENTIFIERS: the slug is the name
           // A proven binding, shown beside the agent's own (unproven) name.
           hint: githubId ? `GitHub id ${githubId}` : null,
           scope,
@@ -100,7 +100,7 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
       // This node's own AI: always all rows (a few principals times a few scopes).
       const own = await sql`
         SELECT r.principal_user_id, r.scope, r.approved_by, r.created_at,
-               p.slug AS slug, p.kind AS kind, p.display_name AS display_name, u.name AS user_name,
+               p.slug AS slug, p.kind AS kind, u.name AS user_name,
                NULL::text AS github_id
         FROM agent_roles r
         JOIN users u ON u.id = r.principal_user_id
@@ -110,7 +110,7 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
       // Outside agents: pending asks first, bounded. `more` says how many are cut.
       const outside = await sql`
         SELECT r.principal_user_id, r.scope, r.approved_by, r.created_at,
-               NULL::text AS slug, 'external' AS kind, NULL::text AS display_name, u.name AS user_name,
+               NULL::text AS slug, 'external' AS kind, u.name AS user_name,
                (SELECT b.external_id FROM user_bindings b WHERE b.user_id = r.principal_user_id AND b.provider = 'github' LIMIT 1) AS github_id
         FROM agent_roles r
         JOIN users u ON u.id = r.principal_user_id

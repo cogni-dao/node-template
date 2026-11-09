@@ -395,9 +395,9 @@ describe("agent authority (real Postgres)", () => {
       const row = (await service`SELECT granted_at, created_at FROM agent_roles WHERE principal_user_id = ${agent}`)[0];
       expect(row?.granted_at).not.toBeNull();
       expect(new Date(row?.granted_at as Date).getTime()).toBe(new Date(row?.created_at as Date).getTime());
-      // The seeded AI names the migration set.
-      const names = await service`SELECT slug, display_name FROM agent_principals WHERE kind = 'internal' ORDER BY slug`;
-      expect(names.map((n) => [n.slug, n.display_name])).toEqual([[NODE_AI_PRINCIPAL_SLUG, "General assistant"], [PRIORITIZER_PRINCIPAL_SLUG, "Priority scorer"]]);
+      // NAMES_ARE_IDENTIFIERS: there is no display-name column; the slug is the name.
+      const columns = await service`SELECT 1 FROM information_schema.columns WHERE table_name = 'agent_principals' AND column_name = 'display_name'`;
+      expect(columns).toHaveLength(0);
     });
 
     it("approved then revoked: live while approved, off after", async () => {
@@ -430,11 +430,12 @@ describe("agent authority (real Postgres)", () => {
         log: makeLogger({ component: "agent-authority-test" }),
         toolBundle: [],
       });
-      expect(await a.nameTaken("General assistant")).toBe(true);
-      expect(await a.nameTaken("  general   ASSISTANT ")).toBe(true);
-      expect(await a.nameTaken("\uFF27eneral assistant")).toBe(true); // fullwidth G
-      expect(await a.nameTaken("Priority scorer")).toBe(true);
-      expect(await a.nameTaken("prioritizer")).toBe(true); // the slug is a name too
+      // This node's AI are identified by slug: that is what an outside agent must not copy.
+      expect(await a.nameTaken("node-ai")).toBe(true);
+      expect(await a.nameTaken("  NODE-AI ")).toBe(true);
+      expect(await a.nameTaken("prioritizer")).toBe(true);
+      expect(await a.nameTaken("\uFF50rioritizer")).toBe(true); // fullwidth p
+      expect(await a.nameTaken("General assistant")).toBe(false); // a vanity label is not an identifier and is free
       const id = await makeUser();
       await service`UPDATE users SET name = 'Zed  The  Agent' WHERE id = ${id}`;
       expect(await a.nameTaken("zed the agent")).toBe(true);

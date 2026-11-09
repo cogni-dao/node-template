@@ -11,8 +11,8 @@ const declarations = {
   "work_item:transition": { label: "Update work items", description: "Change work items and their priority scores." },
 };
 const internal = [
-  { userId: "u1", slug: "node-ai", displayName: "General assistant" },
-  { userId: "u2", slug: "prioritizer", displayName: null },
+  { userId: "u1", slug: "node-ai" },
+  { userId: "u2", slug: "prioritizer" },
 ];
 const scopesByPrincipal = {
   "node-ai": ["knowledge:write", "schedule:manage", "knowledge:write"],
@@ -22,13 +22,13 @@ const build = async (store: ReturnType<typeof memoryStore>) =>
   buildNodeAiView({ declarations, scopesByPrincipal, internal, rows: (await store.listRoleRows(100)).rows });
 
 describe("buildNodeAiView: one row per grant row, in three blocks", () => {
-  it("lists each internal AI by each permission, name and description from the declaration, name from agent_principals", async () => {
+  it("lists each internal AI by each permission: the slug is the name, the words come from the declaration", async () => {
     const rows = await build(memoryStore({ principals: { "node-ai": "u1", prioritizer: "u2" } }));
     expect(rows.every((r) => r.section === "node" && r.on === false && r.until === null && !r.outside)).toBe(true);
     expect(rows.map((r) => [r.who, r.label, r.description.length > 0])).toEqual([
-      ["General assistant", "Change schedules", true],
-      ["General assistant", "Save notes", true],
-      ["Node AI", "Update work items", true], // no display name: a neutral name, never the slug
+      ["node-ai", "Change schedules", true],
+      ["node-ai", "Save notes", true],
+      ["prioritizer", "Update work items", true], // NAMES_ARE_IDENTIFIERS: the slug IS the name, never a vanity label
     ]);
   });
 
@@ -47,7 +47,7 @@ describe("buildNodeAiView: one row per grant row, in three blocks", () => {
     const rows = await build(
       memoryStore({
         principals: { "node-ai": "u1", prioritizer: "u2" },
-        names: { "ext-1": "Helper bot", "node-ai": "General assistant" },
+        names: { "ext-1": "Helper bot" },
         roles: [
           { principal: "u1", scope: "knowledge:write", pending: true },
           { principal: "ext-1", scope: "work_item:transition", pending: true },
@@ -55,7 +55,7 @@ describe("buildNodeAiView: one row per grant row, in three blocks", () => {
       })
     );
     const pending = rows.filter((r) => r.section === "pending");
-    expect(pending.map((r) => [r.who, r.outside, r.on])).toEqual([["General assistant", false, false], ["Helper bot", true, false]]);
+    expect(pending.map((r) => [r.who, r.outside, r.on])).toEqual([["node-ai", false, false], ["Helper bot", true, false]]);
     expect(rows.filter((r) => r.section === "node" && r.scope === "knowledge:write")).toEqual([]); // not shown twice
   });
 

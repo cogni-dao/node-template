@@ -79,7 +79,7 @@ export interface AgentToolAuthority {
     scope: string;
   }): Promise<{ state: "pending" | "granted"; created: boolean }>;
   /**
-   * True when `name` matches (case, spacing and look-alike forms ignored) any user's name or any of this node's AI names. Used at
+   * True when `name` matches (case, spacing and look-alike forms ignored) any user's name or any of this node's AI slugs. Used at
    * registration so an outside agent cannot take a name that looks like this node's AI on the screen where an admin says yes.
    */
   nameTaken(name: string): Promise<boolean>;
@@ -315,13 +315,14 @@ export function createAgentToolAuthority(deps: {
     async nameTaken(name) {
       const key = agentNameKey(name);
       if (!key) return true;
-      // POSIX classes, not \s: a tagged template cooks backslashes away.
+      // POSIX classes, not \s: a tagged template cooks backslashes away. This node's AI are identified by slug (their users row
+      // carries the slug as its name too), so comparing against both covers them.
       const rows = await deps.sql`
         SELECT 1 AS taken FROM users
         WHERE lower(regexp_replace(btrim(name), '[[:space:]]+', ' ', 'g')) = ${key}
         UNION ALL
         SELECT 1 AS taken FROM agent_principals
-        WHERE lower(regexp_replace(btrim(coalesce(display_name, slug)), '[[:space:]]+', ' ', 'g')) = ${key}
+        WHERE lower(regexp_replace(btrim(slug), '[[:space:]]+', ' ', 'g')) = ${key}
         LIMIT 1`;
       return rows.length > 0;
     },

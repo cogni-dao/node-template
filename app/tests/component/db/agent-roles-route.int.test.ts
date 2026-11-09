@@ -168,8 +168,8 @@ describe("agent roles route (real Postgres, real repo-spec admin)", () => {
     const before = (await (await getView()).json()) as { canManage: boolean; permissions: Row[] };
     expect(before.canManage).toBe(true);
     const mine = before.permissions.filter((r) => r.section === "node");
-    expect([...new Set(mine.map((r) => r.who))].sort()).toEqual(["General assistant", "Priority scorer"]);
-    const scorer = mine.filter((r) => r.who === "Priority scorer");
+    expect([...new Set(mine.map((r) => r.who))].sort()).toEqual(["node-ai", "prioritizer"]);
+    const scorer = mine.filter((r) => r.who === "prioritizer");
     expect(scorer).toEqual([expect.objectContaining({ scope: "work_item:transition", on: false, until: null, principalUserId: PRIORITIZER_PRINCIPAL_USER_ID })]);
     expect(scorer[0]?.label).toMatch(/work items/i);
     expect(scorer[0]?.description.length).toBeGreaterThan(15);

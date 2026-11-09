@@ -9,7 +9,8 @@
  * Invariants:
  *   - DECLARED_ONCE_SHOWN_EVERYWHERE: the permission's name and description come only from the declaration
  *     (`requires.label`, `requires.description`). A scope with no declaration is skipped, never shown raw.
- *   - The agent's name comes from `agent_principals` (display name, else slug) or the user's name; there is no copy table.
+ *   - NAMES_ARE_IDENTIFIERS: the Who is an identifier, never a vanity label: the slug for this node's AI, the registered name for
+ *     an outside agent. All the human words are in the declaration (Can do). There is no copy table and no display name.
  *   - TOKENLESS_COPY: names, descriptions and hints hold no token, id, key, scope string or API path.
  *   - PLAIN_NAMES: a grant gives a permission. No other noun.
  * Side-effects: none
@@ -20,15 +21,14 @@
 import type { NodeAiPermissionView, RoleRow } from "./types";
 
 const NEUTRAL_WHO = "Unnamed agent";
-const NEUTRAL_AI = "Node AI";
 
 export function buildNodeAiView(input: {
   /** scope -> the declaration (`requires`) that names it: every tool contract and every route-only capability. */
   readonly declarations: Readonly<Record<string, { readonly label?: string | undefined; readonly description?: string | undefined }>>;
   /** catalog principal slug -> the scopes its graphs may use (duplicates allowed). */
   readonly scopesByPrincipal: Readonly<Record<string, readonly string[]>>;
-  /** Internal AI: user id, slug and plain name. */
-  readonly internal: ReadonlyArray<{ userId: string; slug: string; displayName: string | null }>;
+  /** Internal AI: user id and slug. */
+  readonly internal: ReadonlyArray<{ userId: string; slug: string }>;
   /** Every pending and live row, any principal. */
   readonly rows: readonly RoleRow[];
 }): NodeAiPermissionView[] {
@@ -45,7 +45,7 @@ export function buildNodeAiView(input: {
     out.push({
       section: "pending",
       principalUserId: row.principalUserId,
-      who: row.name ?? (row.internal ? NEUTRAL_AI : NEUTRAL_WHO),
+      who: row.name ?? NEUTRAL_WHO,
       outside: !row.internal,
       hint: row.hint,
       scope: row.scope,
@@ -71,7 +71,7 @@ export function buildNodeAiView(input: {
           {
             section: "node" as const,
             principalUserId: ai.userId,
-            who: ai.displayName ?? NEUTRAL_AI, // never the slug
+            who: ai.slug, // NAMES_ARE_IDENTIFIERS: the slug is the name
             outside: false,
             hint: null,
             scope,

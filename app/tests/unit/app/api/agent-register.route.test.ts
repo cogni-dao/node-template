@@ -62,7 +62,7 @@ describe("agent register: the name is what an admin reads", () => {
 
   it("a name that matches an existing user or this node's AI is 409 name_taken and writes nothing", async () => {
     fake.nameTaken.mockResolvedValue(true);
-    const res = await register("General assistant");
+    const res = await register("node-ai");
     expect(res.status).toBe(409);
     expect(await res.json()).toEqual({ error: "name_taken" });
     expect(fake.insert).not.toHaveBeenCalled();
