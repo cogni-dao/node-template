@@ -115,7 +115,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 
 	// A seed/protocol failure must never touch the legacy writer, namespace or
 	// allocator floor. Both fixtures use this container, but separate migrated DBs.
-	async function summaryDatabase(suffix: "precision" | "growth") {
+	async function summaryDatabase(suffix: "precision" | "growth" | "board") {
 		const slug = `node-template-work-items-summary-${suffix}`;
 		const name = `knowledge_${slug.replaceAll("-", "_")}`;
 		const bootstrap = postgres(dbUrl, { max: 1, fetch_types: false });
@@ -220,6 +220,85 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			if (!query) throw new Error("summary query missing");
 			const plan = await reader.unsafe(`EXPLAIN ${query}`);
 			console.info("work_summary_native_plan", JSON.stringify({ image: DOLTGRES_IMAGE, plan }));
+		} finally {
+			await Promise.all([reader.end({ timeout: 5 }), writer.end({ timeout: 5 })]);
+		}
+	});
+
+	it("composes every board column in ONE native read with per-column cursor continuity", async () => {
+		const url = await summaryDatabase("board");
+		const writer = postgres(url, { max: 1, fetch_types: false });
+		const reader = postgres(url, { max: 1, fetch_types: false });
+		const issued: string[] = [];
+		const originalUnsafe = reader.unsafe.bind(reader);
+		reader.unsafe = ((query: string) => {
+			issued.push(query);
+			return originalUnsafe(query);
+		}) as typeof reader.unsafe;
+		const adapter = new DoltgresWorkItemAdapter(writer, { readClient: reader, readConnectionBudget: 2, queryTimeoutMs: 5000, logger: stageLogger });
+		const statuses = ["needs_design", "needs_implement", "needs_merge", "done"] as const;
+		const perStatus = { needs_design: 47, needs_implement: 23, needs_merge: 3, done: 0 } as const;
+		try {
+			const rows: string[] = [];
+			for (const status of statuses) {
+				for (let i = 0; i < perStatus[status]; i++) {
+					// Ties, unscored (NULL rank) rows and long project ids exercise the
+					// NULL-last order, id tie-break and the keyRef cursor path.
+					const scored = i % 5 !== 0;
+					const scores = scored
+						? `'${JSON.stringify(Object.fromEntries(["goal", "time", "unblocks", "ease", "confidence", "agent"].map((axis) => [axis, { v: axis === "goal" ? 1 + (i % 5) : 3 }])))}'::JSONB`
+						: "NULL";
+					rows.push(`('task.${status.length}${String(i).padStart(4, "0")}${statuses.indexOf(status)}','task','board ${status} ${i}','${status}','board-native','proj.${String(i % 3).repeat(600)}',${scores})`);
+				}
+			}
+			await writer.unsafe(`INSERT INTO work_items (id,type,title,status,node,project_id,scores) VALUES ${rows.join(",")}`);
+			await writer.unsafe("INSERT INTO work_items (id,type,title,status,node) VALUES ('task.990001','task','decoy','needs_design','board-other')");
+			const hash = await commitSummarySeed(writer);
+			await verifySummarySeed(reader, rows.length + 1, hash);
+			for (const order of [{}, { sortBy: "projectId" as const, sortDirection: "asc" as const }, { sortBy: "createdAt" as const, sortDirection: "desc" as const }]) {
+				const filters = { node: "board-native", ...order };
+				const before = issued.length;
+				const startedAt = performance.now();
+				const board = await adapter.listBoardColumns(filters, statuses, 20);
+				const elapsedMs = performance.now() - startedAt;
+				const boardQueries = issued.slice(before);
+				expect(boardQueries).toHaveLength(1);
+				expect(boardQueries[0]).toMatch(/^WITH board AS/);
+				expect(board.queryCount).toBe(1);
+				console.info("work_board_composed_native", JSON.stringify({ image: DOLTGRES_IMAGE, order: normalizeWorkItemOrder(filters), columns: statuses.length, rows: rows.length, elapsedMs, queries: boardQueries.length }));
+				for (const [index, status] of statuses.entries()) {
+					const column = board.columns[index];
+					expect(column?.status).toBe(status);
+					// Identical to the per-column read: items and cursor.
+					const single = await adapter.listSummaries({ ...filters, statuses: [status], limit: 20 });
+					expect(column?.items.map((item) => item.id), `${status} ${JSON.stringify(order)}`).toEqual(single.items.map((item) => item.id));
+					expect(column?.pageInfo.hasMore).toBe(perStatus[status] > 20);
+					expect(column?.pageInfo.endCursor ?? null).toBe(single.pageInfo.endCursor);
+					// Load more through /summaries continues the column exactly once per row.
+					const seen = [...(column?.items.map((item) => item.id) ?? [])];
+					let cursor = column?.pageInfo.endCursor ?? undefined;
+					for (let page = 0; cursor && page < 5; page++) {
+						const next = await adapter.listSummaries({ ...filters, statuses: [status], limit: 20, cursor });
+						seen.push(...next.items.map((item) => item.id));
+						cursor = next.nextCursor;
+					}
+					expect(cursor).toBeUndefined();
+					expect(new Set(seen).size).toBe(seen.length);
+					expect(seen).toHaveLength(perStatus[status]);
+					const full = await adapter.listSummaries({ ...filters, statuses: [status], limit: 100 });
+					expect(seen).toEqual(full.items.map((item) => item.id));
+				}
+			}
+			// Rank filters compose too (outer predicate on the derived key).
+			const ranked = await adapter.listBoardColumns({ node: "board-native", rankMin: 2 }, statuses, 20);
+			for (const [index, status] of statuses.entries()) {
+				const single = await adapter.listSummaries({ node: "board-native", rankMin: 2, statuses: [status], limit: 20 });
+				expect(ranked.columns[index]?.items.map((item) => item.id)).toEqual(single.items.map((item) => item.id));
+				expect(ranked.columns[index]?.pageInfo.endCursor ?? null).toBe(single.pageInfo.endCursor);
+			}
+			// Plan capture is evidence only; an engine without EXPLAIN for CTEs must not fail the proof.
+			const plan = await originalUnsafe(`EXPLAIN ${issued.find((query) => query.startsWith("WITH board AS"))}`).catch((error: unknown) => ({ explainError: String(error) }));
+			console.info("work_board_composed_plan", JSON.stringify({ image: DOLTGRES_IMAGE, plan }));
 		} finally {
 			await Promise.all([reader.end({ timeout: 5 }), writer.end({ timeout: 5 })]);
 		}

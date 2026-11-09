@@ -40,6 +40,7 @@ const summary = (id: string, status: string) => ({
 });
 
 const listSummaries = vi.fn();
+const listBoardColumns = vi.fn();
 const ctx = { log: { info: vi.fn() }, reqId: "req-1", routeId: "test" };
 
 function get(handler: unknown, path: string): Promise<Response> {
@@ -56,12 +57,22 @@ describe("bounded work read routes (task.0055)", () => {
         pageInfo: { endCursor: `${status}-next`, hasMore: true, rowsScanned: 21 },
       };
     });
+    listBoardColumns.mockImplementation(
+      async (_query: unknown, statuses: string[]) => ({
+        queryCount: 1,
+        columns: statuses.map((status) => ({
+          status,
+          items: [summary(`${status}.1`, status)],
+          pageInfo: { endCursor: `${status}-next`, hasMore: true, rowsScanned: 21 },
+        })),
+      }),
+    );
     vi.mocked(getContainer).mockReturnValue({
-      doltgresWorkItems: { listSummaries },
+      doltgresWorkItems: { listSummaries, listBoardColumns },
     } as never);
   });
 
-  it("GET /work/board returns one bounded page per visible status", async () => {
+  it("GET /work/board composes every visible column in ONE store read", async () => {
     const response = await get(
       boardGET,
       "/api/v1/work/board?statuses=needs_design,needs_implement&types=task",
@@ -77,22 +88,40 @@ describe("bounded work read routes (task.0055)", () => {
       items: [{ id: "needs_design.1" }],
       pageInfo: { endCursor: "needs_design-next", hasMore: true, rowsScanned: 21 },
     });
+    expect(listBoardColumns).toHaveBeenCalledTimes(1);
+    expect(listSummaries).not.toHaveBeenCalled();
+    const [query, statuses, perColumn, options] = listBoardColumns.mock.calls[0] ?? [];
+    expect(query).toMatchObject({ types: ["task"], limit: 20 });
+    expect(query).not.toHaveProperty("cursor");
+    expect(statuses).toEqual(["needs_design", "needs_implement"]);
+    expect(perColumn).toBe(20);
+    expect(options).toMatchObject({ signal: expect.any(AbortSignal) });
+    expect(ctx.log.info).toHaveBeenCalledWith(
+      expect.objectContaining({ queryCount: 1, readMode: "composed", columnCount: 2 }),
+      expect.anything(),
+    );
+  });
+
+  it("GET /work/board with text reads columns one by one under one shared deadline", async () => {
+    const response = await get(
+      boardGET,
+      "/api/v1/work/board?statuses=needs_design,needs_implement&text=needle",
+    );
+    expect(response.status).toBe(200);
+    expect(listBoardColumns).not.toHaveBeenCalled();
     expect(listSummaries).toHaveBeenCalledTimes(2);
     for (const [query, options] of listSummaries.mock.calls) {
-      expect(query).toMatchObject({ limit: 20, types: ["task"] });
+      expect(query).toMatchObject({ limit: 20, text: "needle" });
       expect(query.statuses).toHaveLength(1);
-      expect(query).not.toHaveProperty("cursor");
       expect(options).toMatchObject({
         deadline: expect.any(Number),
         maxScanRows: expect.any(Number),
         signal: expect.any(AbortSignal),
       });
     }
-    // One shared deadline for the whole board.
     expect(listSummaries.mock.calls[0]?.[1].deadline).toBe(
       listSummaries.mock.calls[1]?.[1].deadline,
     );
-    expect(ctx.log.info).toHaveBeenCalled();
   });
 
   it.each([
@@ -105,10 +134,11 @@ describe("bounded work read routes (task.0055)", () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({ error: "invalid input" });
     expect(listSummaries).not.toHaveBeenCalled();
+    expect(listBoardColumns).not.toHaveBeenCalled();
   });
 
   it("GET /work/board maps a stale cursor error to 400", async () => {
-    listSummaries.mockRejectedValue(
+    listBoardColumns.mockRejectedValue(
       Object.assign(new Error("invalid_cursor"), { name: "InvalidCursorError" }),
     );
     const response = await get(boardGET, "/api/v1/work/board?statuses=done");
@@ -118,6 +148,7 @@ describe("bounded work read routes (task.0055)", () => {
 
   it("GET /work/board and /work/summaries map held native capacity to 503", async () => {
     listSummaries.mockRejectedValue(new WorkItemsCapacityError("pending"));
+    listBoardColumns.mockRejectedValue(new WorkItemsCapacityError("pending"));
     const board = await get(boardGET, "/api/v1/work/board?statuses=done");
     expect(board.status).toBe(503);
     const page = await get(summariesGET, "/api/v1/work/summaries?statuses=done");

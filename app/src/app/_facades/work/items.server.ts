@@ -27,6 +27,7 @@ import { WorkItemSummarySchema } from "@cogni/node-contracts";
 import type {
   WorkItem,
   WorkItemId,
+  WorkBoardColumnPages,
   WorkItemLease,
   WorkSummaryReadOptions,
 } from "@cogni/work-items";
@@ -320,6 +321,35 @@ export async function listWorkSummaries(
     if ((error as Error)?.name === "InvalidCursorError") throw new InvalidCursorError((error as Error).message);
     throw error;
   }
+}
+
+/**
+ * First page of every listed board column in ONE store read when the Doltgres
+ * port composes it (task.0055); otherwise (Markdown) one summary read per
+ * column. Text queries never reach here (the package keeps them per-column).
+ */
+export async function listWorkBoardColumns(
+  input: WorkItemSummariesListInput,
+  statuses: readonly string[],
+  perColumn: number,
+  options?: { readonly signal?: AbortSignal },
+): Promise<WorkBoardColumnPages> {
+  const container = getContainer();
+  const port = container.doltgresWorkItems;
+  if (port.listBoardColumns) {
+    try {
+      return await port.listBoardColumns(workQuery(input), statuses, perColumn, options);
+    } catch (error) {
+      if ((error as Error)?.name === "InvalidCursorError") throw new InvalidCursorError((error as Error).message);
+      if ((error as Error)?.name !== "DoltgresNotConfiguredError") rethrowBackendError(error);
+    }
+  }
+  const columns = [];
+  for (const status of statuses) {
+    const page = await listWorkSummaries({ ...input, statuses: [status], limit: perColumn }, options);
+    columns.push({ status, items: page.items, pageInfo: page.pageInfo });
+  }
+  return { columns, queryCount: columns.length };
 }
 
 export async function getWorkItem(id: string): Promise<WorkItemDto | null> {

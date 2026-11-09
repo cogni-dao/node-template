@@ -8,10 +8,10 @@
  * Invariants:
  *   - VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, NODE_STORE_IS_LOCAL.
  *   - ONE_CODEC: decoded by `parseWorkBoardSearchParams` (the summary query codec plus required `statuses`), encoded with `WorkBoardColumnsSchema`.
- *   - BOUNDED_BOARD: one summary page per requested status, at most `WORK_BOARD_COLUMN_PAGE` rows each, read sequentially under ONE request deadline and ONE text-scan budget; columns the budget does not reach return `state: "not_started"`. Each column cursor continues through `/api/v1/work/summaries`.
+ *   - BOUNDED_BOARD: one summary page per requested status, at most `WORK_BOARD_COLUMN_PAGE` rows each. Without text, all columns are ONE native read (`listWorkBoardColumns` → Doltgres UNION ALL); with text, columns are read sequentially under ONE admission deadline and ONE text-scan budget, and columns the budget does not reach return `state: "not_started"`. Each column cursor continues through `/api/v1/work/summaries`.
  *   - ABORT_WITH_REQUEST: `request.signal` stops the board before its next column read (499).
  *   - TYPED_ERRORS: invalid input or cursor → 400; backend unavailable or busy, including held native capacity (`WorkItemsCapacityError`) → 503; anything else → 500.
- * Observability: the completion event carries `durationMs` (whole request), `columnCount`, `notStartedCount`, `columnDurationsMs` (one entry per column read, in order) and `rowsScanned`.
+ * Observability: the completion event carries `durationMs` (whole request), `columnCount`, `queryCount` (1 for a composed board), `readMode` (`composed` | `sequential`), `notStartedCount`, `columnDurationsMs` (one entry per read, in order) and `rowsScanned`.
  * Side-effects: IO (HTTP response, Doltgres read via the facade)
  * Links: task.0055, packages/work-items/src/read-handlers.ts, ../summaries/route.ts
  * @public
@@ -20,7 +20,10 @@
 import { handleWorkBoardRequest } from "@cogni/work-items";
 import { NextResponse } from "next/server";
 
-import { listWorkSummaries } from "@/app/_facades/work/items.server";
+import {
+  listWorkBoardColumns,
+  listWorkSummaries,
+} from "@/app/_facades/work/items.server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { EVENT_NAMES, logEvent } from "@/shared/observability";
@@ -44,7 +47,7 @@ export const GET = wrapRouteHandlerWithLogging(
     const result = await handleWorkBoardRequest(
       new URL(request.url).searchParams,
       listWorkSummaries,
-      { signal: request.signal },
+      { signal: request.signal, listColumns: listWorkBoardColumns },
     );
     logEvent(ctx.log, EVENT_NAMES.WORK_ITEMS_LIST_COMPLETE, {
       reqId: ctx.reqId,
