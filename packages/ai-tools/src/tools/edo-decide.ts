@@ -80,6 +80,12 @@ export const edoDecideContract: ToolContract<
     "Decisions without a falsifiable prediction should be filed as 'finding' via core__knowledge_write instead. " +
     "The derivesFromHypothesisId MUST refer to a hypothesis or goal row — the adapter rejects mismatched entry_types.",
   effect: "state_change",
+  requires: {
+    scope: "edo:write",
+    kind: "node",
+    subject: "member",
+    label: "Log decisions and what happened",
+  },
   inputSchema: EdoDecideInputSchema,
   outputSchema: EdoDecideOutputSchema,
   redact: (output) => output,

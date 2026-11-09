@@ -21,6 +21,7 @@
   "references": [
     { "path": "../work-items" },
     { "path": "../knowledge-store" },
-    { "path": "../metrics" }
+    { "path": "../metrics" },
+    { "path": "../agent-grants" }
   ]
 }

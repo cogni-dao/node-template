@@ -1,0 +1,230 @@
+// SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+// SPDX-FileCopyrightText: 2026 Cogni-DAO
+
+/**
+ * Module: `@bootstrap/agent-authority`
+ * Purpose: This node's wiring of `@cogni-dao/agent-grants`: principal lookup, the guard's store and admin check,
+ *   the decision log, and the role grant/revoke the admin route calls.
+ * Scope: Composition only. Takes the service-role (BYPASSRLS) postgres.js client from the container: `agent_roles` and
+ *   `agent_principals` are deny-all for the app role. Does not decide anything itself (ONE_AUTHORIZE_FN lives in the package).
+ * Invariants:
+ *   - ADMIN_FROM_USER_BINDINGS: the human's wallet(s) come from `user_bindings` (provider = wallet), never from the
+ *     request. Any bound admin wallet passes; no wallet is denied; no configured admins is unavailable.
+ *   - AGENTS_HOLD_NO_WALLET (a payout guard, not an authority rule): an agent user has no wallet binding, so today it fails `adminCheck`.
+ *     Admin is any principal the DAO approves (AUTHORITY_IS_NOT_KIND); an approved AI identity is item I2, so none passes yet.
+ *   - DECLARED_SCOPES_FROM_CONTRACTS: the scopes a role may name are exactly those the node's tool contracts declare.
+ *   - NO_SECRETS_IN_LOGS: `agent_tool.authz` carries ids, tool, decision and code only.
+ * Side-effects: IO (service-role database reads and writes)
+ * Links: packages/agent-grants, https://cognidao.org/knowledge/node-capability-grants-standard
+ * @internal
+ */
+
+import {
+  type AdminCheck,
+  type AuthzDecision,
+  authorizeCaller,
+  ROUTE_ONLY_CAPABILITIES,
+  type AuthzEvent,
+  createPostgresAgentGrantsStore,
+  buildNodeAiView,
+  type GuardDeps,
+  grantRole,
+  type NodeAiPermissionView,
+  resolveInternalPrincipal,
+  revokeRole,
+  type SqlTag,
+  type ToolRequires,
+  type WithStore,
+} from "@cogni/agent-grants";
+import type { CatalogBoundTool } from "@cogni/ai-tools";
+import { LANGGRAPH_CATALOG } from "@cogni/langgraph-graphs";
+import type { NodeAdminAuthority } from "@cogni/knowledge-store";
+import type { Logger } from "pino";
+import { EVENT_NAMES } from "@/shared/observability";
+
+/** The service-role postgres.js client (`serviceDb.$client`): a tagged template that can also open a transaction. */
+export interface AgentAuthoritySql extends SqlTag {
+  begin<T>(fn: (tx: SqlTag) => Promise<T>): Promise<T>;
+}
+
+export interface AgentToolAuthority {
+  /** The seeded user id for a catalog principal slug, or null when no row exists (the run is then denied). */
+  resolvePrincipal(slug: string): Promise<string | null>;
+  /** Guard dependencies. `runAs` is supplied by the provider, which owns the ExecutionScope. */
+  readonly guardDeps: Omit<GuardDeps, "runAs">;
+  /** Scopes a role may name. */
+  readonly declaredScopes: readonly string[];
+  grantRole(input: {
+    principalSlug: string;
+    scope: string;
+    approvedBy: string;
+  }): Promise<{ principalUserId: string; created: boolean }>;
+  revokeRole(input: {
+    principalSlug: string;
+    scope: string;
+    revokedBy: string;
+  }): Promise<{ principalUserId: string; revoked: boolean }>;
+  /** "This node's AI": one row per catalog principal and permission (from the tool contracts), with the live Allow state. */
+  listNodeAi(): Promise<NodeAiPermissionView[]>;
+  /** The same admin check the guard uses, for the role routes. */
+  readonly adminCheck: AdminCheck;
+  /**
+   * SAME_DOOR: the route twin of a guarded tool. A bearer caller is its own principal and needs a live role row; a human
+   * session passes the subject rules. Logs `agent_tool.authz` with the route id. A tool with no declared `requires` is denied.
+   */
+  authorizeRoute(input: {
+    toolId: string;
+    routeId: string;
+    userId: string;
+    via: "bearer" | "session";
+  }): Promise<AuthzDecision>;
+}
+
+/** `requiresById` from the contracts the node already loads. */
+export function buildRequiresById(
+  bundle: readonly CatalogBoundTool[]
+): Record<string, ToolRequires> {
+  const byId: Record<string, ToolRequires> = {};
+  for (const tool of bundle) {
+    if (tool.contract.requires) byId[tool.contract.name] = tool.contract.requires;
+  }
+  return byId;
+}
+
+/** Wallet-bound admin check: any bound wallet that is a node admin passes. */
+export function createAdminCheck(
+  sql: SqlTag,
+  nodeAdmin: NodeAdminAuthority
+): AdminCheck {
+  return async (subjectUserId) => {
+    const rows = (await sql`
+      SELECT external_id FROM user_bindings
+      WHERE user_id = ${subjectUserId} AND provider = 'wallet'`) as ReadonlyArray<{
+      external_id: string;
+    }>;
+    if (rows.length === 0) {
+      // No wallet is denied; but report an unconfigured node as unavailable, never as a plain deny.
+      const probe = await nodeAdmin.check({ userId: subjectUserId });
+      return !probe.ok && probe.errorCode === "authz_unavailable"
+        ? "unavailable"
+        : "denied";
+    }
+    for (const row of rows) {
+      const decision = await nodeAdmin.check({
+        userId: subjectUserId,
+        walletAddress: row.external_id,
+      });
+      if (decision.ok) return "allow";
+      if (decision.errorCode === "authz_unavailable") return "unavailable";
+    }
+    return "denied";
+  };
+}
+
+export function createAgentToolAuthority(deps: {
+  sql: AgentAuthoritySql;
+  nodeAdmin: NodeAdminAuthority;
+  log: Logger;
+  toolBundle: readonly CatalogBoundTool[];
+}): AgentToolAuthority {
+  const requiresById = buildRequiresById(deps.toolBundle);
+  const declaredScopes = [
+    ...new Set(Object.values(requiresById).map((r) => r.scope)),
+  ].sort();
+  const adminCheck = createAdminCheck(deps.sql, deps.nodeAdmin);
+
+  // One transaction per call, so a role read sees one consistent snapshot.
+  const withStore: WithStore = (fn) =>
+    deps.sql.begin((tx) => fn(createPostgresAgentGrantsStore(tx)));
+
+  const onDecision = (event: AuthzEvent): void => {
+    const level = event.decision === "allow" ? "info" : "warn";
+    deps.log[level](
+      { event: EVENT_NAMES.AGENT_TOOL_AUTHZ, ...event },
+      EVENT_NAMES.AGENT_TOOL_AUTHZ
+    );
+  };
+
+  return {
+    resolvePrincipal: (slug) => withStore((store) => resolveInternalPrincipal(store, slug)),
+    guardDeps: { withStore, adminCheck, onDecision },
+    async listNodeAi() {
+      // Permissions come from the contracts of every tool a principal's graphs list: the contracts are the only input that names scopes.
+      const permissionsByPrincipal: Record<string, ToolRequires[]> = {};
+      for (const entry of Object.values(LANGGRAPH_CATALOG)) {
+        if (!entry.principal) continue;
+        const permissions = (permissionsByPrincipal[entry.principal] ??= []);
+        for (const toolId of entry.toolIds) {
+          const requires = requiresById[toolId];
+          if (requires) permissions.push(requires);
+        }
+      }
+      const liveRoles = await withStore((store) => store.listLiveRoles());
+      return buildNodeAiView({ permissionsByPrincipal, liveRoles });
+    },
+    declaredScopes,
+    adminCheck,
+    async authorizeRoute({ toolId, routeId, userId, via }) {
+      const requires =
+        requiresById[toolId] ?? ROUTE_ONLY_CAPABILITIES[toolId]?.requires;
+      const decision: AuthzDecision = !requires
+        ? { decision: "deny", code: "policy_denied", reason: "no_requires" }
+        : await withStore((store) =>
+            authorizeCaller(store, adminCheck, { userId, via, requires })
+          ).catch(
+            (): AuthzDecision => ({
+              decision: "deny",
+              code: "authz_unavailable",
+              reason: "store_unavailable",
+            })
+          );
+      onDecision({
+        principal: via === "bearer" ? userId : null,
+        subject: via === "session" ? userId : null,
+        payer: null,
+        tool: toolId,
+        decision: decision.decision,
+        code: decision.decision === "allow" ? "allowed" : decision.code,
+        reason: decision.decision === "allow" ? decision.basis : decision.reason,
+        runId: null,
+        route: routeId,
+      });
+      return decision;
+    },
+    async grantRole(input) {
+      const result = await withStore((store) =>
+        grantRole(store, { ...input, declaredScopes })
+      );
+      if (result.created)
+        deps.log.info(
+          {
+            event: EVENT_NAMES.AGENT_ROLE_GRANTED,
+            principal: input.principalSlug,
+            scope: input.scope,
+            approvedBy: input.approvedBy,
+          },
+          EVENT_NAMES.AGENT_ROLE_GRANTED
+        );
+      return result;
+    },
+    async revokeRole(input) {
+      const result = await withStore((store) =>
+        revokeRole(store, {
+          principalSlug: input.principalSlug,
+          scope: input.scope,
+        })
+      );
+      if (result.revoked)
+        deps.log.info(
+          {
+            event: EVENT_NAMES.AGENT_ROLE_REVOKED,
+            principal: input.principalSlug,
+            scope: input.scope,
+            revokedBy: input.revokedBy,
+          },
+          EVENT_NAMES.AGENT_ROLE_REVOKED
+        );
+      return result;
+    },
+  };
+}

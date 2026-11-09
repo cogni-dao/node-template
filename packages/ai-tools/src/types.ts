@@ -51,6 +51,22 @@ export type ToolErrorCode =
   | "policy_denied";
 
 /**
+ * What a non-read_only tool needs before it may run (enforced by @cogni-dao/agent-grants guardTools).
+ * Structurally identical to agent-grants' `ToolRequires`; ai-tools does not import it.
+ *
+ * - `kind`: `node` = a node-wide role; `own` = the human subject's own data (needs a subject);
+ *   `account` = a billing account the owner granted.
+ * - `subject`: `member` = any signed-in human; `admin` = a DAO admin. A subject only narrows access.
+ */
+export interface ToolRequires {
+  readonly scope: string;
+  readonly kind: "node" | "own" | "account";
+  readonly subject: "member" | "admin";
+  /** Plain-language permission name an admin reads on the profile page (no scope string, id or path). */
+  readonly label: string;
+}
+
+/**
  * Tool contract definition.
  * Defines schema and interface for a tool without implementation.
  *
@@ -72,6 +88,11 @@ export interface ToolContract<
   readonly description: string;
   /** Side-effect level for policy decisions */
   readonly effect: ToolEffect;
+  /**
+   * Authority the tool needs. REQUIRED for every non-read_only contract
+   * (CI: tests/requires-guard.test.ts); a read_only tool needs only the graph lock.
+   */
+  readonly requires?: ToolRequires;
   /**
    * Zod schema for input validation.
    * Source of truth — used by LangChain wrappers and compiled to JSONSchema7.

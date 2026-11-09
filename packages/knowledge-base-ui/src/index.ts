@@ -30,6 +30,17 @@ export {
 
 export { cn } from "./cn.js";
 export {
+  AgentAccessSection,
+  type AgentAccessSectionProps,
+} from "./agent-access/agent-access-section.js";
+export {
+  type AgentAccessEndpoints,
+  type AgentAccessState,
+  UNAVAILABLE_COPY,
+  useAgentAccess,
+  type UseAgentAccess,
+} from "./agent-access/use-agent-access.js";
+export {
   formatRelativeTime,
   RelativeTime,
   type RelativeTimeProps,
