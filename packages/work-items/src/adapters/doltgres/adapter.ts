@@ -65,6 +65,15 @@ import type {
 } from "./ports.js";
 
 export const OPERATOR_ID_FLOOR = 5000;
+/**
+ * TEXT_SCAN_BOUNDED: most rows one `list`/`listSummaries` request may scan for a
+ * JS-side text match. At the cap the page returns the matches so far with
+ * `hasMore` and an `endCursor` at the last scanned row, so sparse matches never
+ * walk the whole backlog; an empty page with a cursor is progress (task.0055).
+ */
+export const WORK_TEXT_SCAN_MAX_ROWS = 1000;
+/** Rows per text-scan batch; the last batch shrinks to stay within the cap. */
+const TEXT_SCAN_BATCH_ROWS = 501;
 const AUTO_ID_RETRIES = 5;
 const COMMIT_TAG = "work-items";
 const OP_BRANCH_PREFIX = "work-item-op/";
@@ -2868,8 +2877,12 @@ export class DoltgresWorkItemAdapter
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
     const limit = Math.min(Math.max(query.limit ?? 100, 1), 500);
     // Text filtering happens after native ordering. Decouple its scan window
-    // from the response size to avoid re-ranking the backlog for every pagelet.
-    const scanLimit = textNeedle ? 501 : limit + 1;
+    // from the response size to avoid re-ranking the backlog for every pagelet,
+    // and cap the rows one request scans (TEXT_SCAN_BOUNDED).
+    const batchLimit = (scanned: number) =>
+      textNeedle
+        ? Math.min(TEXT_SCAN_BATCH_ROWS, WORK_TEXT_SCAN_MAX_ROWS - scanned)
+        : limit + 1;
     const nativeCursor = (row: Record<string, unknown>): WorkItemCursor => ({
       v: 2,
       filter: queryIdentity(query),
@@ -2894,8 +2907,14 @@ export class DoltgresWorkItemAdapter
     // Structural filters → derived native key → seek/order → bounded batch.
     // Text folding stays in JS because native LOWER on cold TEXT can panic.
     // Every batch shares readOnCleanMain's ONE deadline and captured pool.
-    const matchedRows = await this.readOnCleanMain(async (conn) => {
-      const matches: Record<string, unknown>[] = [];
+    type Row = Record<string, unknown>;
+    const scan = await this.readOnCleanMain(async (conn): Promise<{
+      matches: Row[];
+      /** Set when the scan cap stopped the read; the page continues after it. */
+      scannedThrough?: Row;
+    }> => {
+      const matches: Row[] = [];
+      let scanned = 0;
       let cursor = initialCursor;
       if (cursor?.keyRef) {
         const rows = await conn.unsafe(`SELECT project_id FROM work_items WHERE id = ${escapeValue(cursor.id)} LIMIT 1`);
@@ -2905,6 +2924,7 @@ export class DoltgresWorkItemAdapter
         cursor = { ...resolved, key };
       }
       while (true) {
+        const scanLimit = batchLimit(scanned);
         const outerConditions = order.sortBy === "rankScore" ? [...rankConditions] : [];
         const seekCondition = seek(cursor);
         if (seekCondition) outerConditions.push(seekCondition);
@@ -2924,15 +2944,22 @@ export class DoltgresWorkItemAdapter
             )
           )
             matches.push(row);
-          if (matches.length > limit) return matches;
+          if (matches.length > limit) return { matches };
         }
-        if (!textNeedle || rows.length < scanLimit) return matches;
+        if (!textNeedle || rows.length < scanLimit) return { matches };
         const last = rows[rows.length - 1];
-        if (!last) return matches;
+        if (!last) return { matches };
+        scanned += rows.length;
+        // TEXT_SCAN_BOUNDED: at the row budget hand back every match so far
+        // (fewer than limit + 1) and a continuation at the last scanned row.
+        if (scanned >= WORK_TEXT_SCAN_MAX_ROWS) return { matches, scannedThrough: last };
         cursor = nativeCursor(last);
       }
     });
-    const hasMore = matchedRows.length > limit;
+    const matchedRows = scan.matches;
+    // A capped scan returns at most `limit` matches, all of them on this page.
+    const scanTruncated = scan.scannedThrough !== undefined;
+    const hasMore = matchedRows.length > limit || scanTruncated;
     const pageRows = matchedRows.slice(0, limit);
     const items = summary ? pageRows.map((row): WorkItemSummary => ({
       id: String(row.id), title: String(row.title), type: String(row.type), status: String(row.status),
@@ -2942,7 +2969,7 @@ export class DoltgresWorkItemAdapter
       ...(optionalString(row.project_id) !== undefined && { projectId: optionalString(row.project_id) }),
       labels: [...jsonArrayOf<string>(row.labels)], createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at ?? ""), updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at ?? "")
     })) : pageRows.map(rowToWorkItem);
-    const last = pageRows[pageRows.length - 1];
+    const last = scanTruncated ? scan.scannedThrough : pageRows[pageRows.length - 1];
     const lastCursor = last ? nativeCursor(last) : undefined;
     const encodedCursor = lastCursor?.sortBy === "projectId" && lastCursor.key !== null ? { ...lastCursor, key: null, keyRef: createHash("sha256").update(lastCursor.key).digest("hex") } : lastCursor;
     const endCursor = hasMore && encodedCursor ? encodeCursor(encodedCursor) : null;

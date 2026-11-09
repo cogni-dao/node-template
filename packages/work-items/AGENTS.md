@@ -65,8 +65,9 @@ Work item port interfaces, domain types, and storage adapters for structured wor
   - `WorkItemRevisionConflictError` — `patch` with a stale `expectedRevision`; nothing committed
   - `DoltgresWorkItemAdapterOptions` — per-store allocator configuration (`idFloor`) (create/patch reject invalid `scores` with `WorkItemScoresInvalidError` before any SQL)
   - cursor codec + Doltgres port/error types
-  - `WORK_SUMMARY_PAGE_DEFAULT` (25), `WORK_SUMMARY_PAGE_MAX` (100), `WORK_BOARD_COLUMN_PAGE` (20); `parseWorkSummarySearchParams` / `workSummaryQueryToSearchParams` — the one query codec the browser encodes and the route decodes with; `WorkSummaryPageSchema` (task.0055)
-  - `loadWorkBoardColumns`, `parseWorkBoardSearchParams`, `WorkBoardColumnsSchema`, `WORK_BOARD_STATUSES` — bounded board read: one summary page per visible status, read sequentially (the reader pool is width one, and each call owns its read deadline), column cursors valid for `/summaries?statuses=<status>&…&cursor=`; pure over an injected `listSummaries`
+  - `WORK_TEXT_SCAN_MAX_ROWS` (1000) — rows one `list`/`listSummaries` text search may scan; at the cap the page returns its matches with `hasMore` and an `endCursor` at the last scanned row (an empty page with a cursor is progress)
+  - `WORK_SUMMARY_PAGE_DEFAULT` (25), `WORK_SUMMARY_PAGE_MAX` (100), `WORK_BOARD_COLUMN_PAGE` (20), `WORK_SUMMARY_LIST_MAX` (50 values per list filter), `WORK_SUMMARY_TEXT_MAX` (200 chars); `parseWorkSummarySearchParams` / `workSummaryQueryToSearchParams` — the one query codec the browser encodes and the route decodes with; `WorkSummaryPageSchema` (task.0055)
+  - `loadWorkBoardColumns` (optional `AbortSignal`, checked before each column), `parseWorkBoardSearchParams`, `WorkBoardColumnsSchema`, `WORK_BOARD_STATUSES` — bounded board read: one summary page per visible status, read sequentially (the reader pool is width one, and each call owns its read deadline), column cursors valid for `/summaries?statuses=<status>&…&cursor=`; pure over an injected `listSummaries`
 - **Files considered API:** `src/index.ts`, `src/adapters/markdown/index.ts`, `src/adapters/doltgres/index.ts`
 
 ## Ports

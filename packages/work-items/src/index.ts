@@ -130,8 +130,10 @@ export type {
 export {
   parseWorkSummarySearchParams,
   WORK_BOARD_COLUMN_PAGE,
+  WORK_SUMMARY_LIST_MAX,
   WORK_SUMMARY_PAGE_DEFAULT,
   WORK_SUMMARY_PAGE_MAX,
+  WORK_SUMMARY_TEXT_MAX,
   WorkSummaryPageInfoSchema,
   WorkSummaryPageSchema,
   WorkSummaryQuerySchema,

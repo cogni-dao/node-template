@@ -7,6 +7,7 @@
  * Scope: Pure schemas and functions over `URLSearchParams`; no I/O, adapters or environment. A node supplies only its endpoint and auth.
  * Invariants:
  *   - BOUNDED_PAGE: a parsed query always carries a `limit` in 1..`WORK_SUMMARY_PAGE_MAX`; absent means `WORK_SUMMARY_PAGE_DEFAULT`; above max is rejected, never silently widened.
+ *   - BOUNDED_INPUT: each list filter names at most `WORK_SUMMARY_LIST_MAX` values, `text` is at most `WORK_SUMMARY_TEXT_MAX` characters and `cursor` at most 2048.
  *   - ONE_CODEC: the browser encodes and the route decodes with these two functions, so a cursor issued for one request stays valid for the identical request.
  *   - STABLE_ENCODING: `workSummaryQueryToSearchParams` emits keys in a fixed order, so equal queries give equal strings (cache keys).
  * Side-effects: none
@@ -30,22 +31,28 @@ export const WORK_SUMMARY_PAGE_MAX = 100;
 export const WORK_BOARD_COLUMN_PAGE = 20;
 
 const CURSOR_MAX_CHARS = 2048;
+/** Most values one list filter (types, statuses, projectIds, labels) may name. */
+export const WORK_SUMMARY_LIST_MAX = 50;
+/** Longest free-text search a request may carry. */
+export const WORK_SUMMARY_TEXT_MAX = 200;
+
+const filterList = z.array(z.string()).max(WORK_SUMMARY_LIST_MAX);
 
 /** The filters, order and page window of one summary read. */
 export const WorkSummaryQuerySchema = z.object({
   sortBy: z.enum(WORK_ITEM_SORT_FIELDS).optional(),
   sortDirection: z.enum(WORK_ITEM_SORT_DIRECTIONS).optional(),
-  types: z.array(z.string()).optional(),
-  statuses: z.array(z.string()).optional(),
-  text: z.string().optional(),
+  types: filterList.optional(),
+  statuses: filterList.optional(),
+  text: z.string().max(WORK_SUMMARY_TEXT_MAX).optional(),
   actor: z.enum(["human", "ai", "either"]).optional(),
   projectId: z.string().optional(),
-  projectIds: z.array(z.string()).optional(),
+  projectIds: filterList.optional(),
   rankMin: z.number().finite().optional(),
   rankMax: z.number().finite().optional(),
   node: z.union([z.string(), z.array(z.string())]).optional(),
   /** Any-of label filter: items carrying at least one of these labels. */
-  labels: z.array(z.string()).optional(),
+  labels: filterList.optional(),
   /** Items with at least one label whose text starts with this prefix. */
   labelPrefix: z.string().optional(),
   /** true = only complete 6-axis scores; false = only unscored. */

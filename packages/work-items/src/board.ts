@@ -8,6 +8,7 @@
  * Invariants:
  *   - BOUNDED_BOARD: at most one `listSummaries` call per distinct visible status (≤ the lifecycle status set), each capped at `perColumn` ≤ `WORK_SUMMARY_PAGE_MAX` rows. Nothing walks a cursor.
  *   - COLUMN_CURSOR_IDENTITY: a column page is read with the exact query a later `/summaries?statuses=<status>&…&cursor=` request would build, so its `endCursor` is valid for that request.
+ *   - ABORT_BETWEEN_COLUMNS: an aborted signal stops the board before its next column read; no further reads are issued for a request nobody awaits.
  *   - SEQUENTIAL_READS: columns are read one after another. Each `listSummaries` call owns its own read deadline that starts when it is issued; the template's reader pool is width one, so concurrent calls would only queue and spend their deadlines waiting. Sequential reads keep every call's deadline honest and bound peak reader load to one query.
  * Side-effects: none (the injected reader performs the I/O)
  * Links: task.0055, packages/work-items/src/summary-query.ts
@@ -75,13 +76,16 @@ export function workBoardColumnQuery(
  * Read the first page of every visible column. `statuses` is deduplicated and
  * order-preserving; the `statuses` and `cursor` of `query` are ignored, so the
  * caller's filters (types, projects, rank range, text, sort) apply to every
- * column. An unknown status throws a `RangeError` before any read.
+ * column. An unknown status throws a `RangeError` before any read. An aborted
+ * `signal` (for example the HTTP request's) stops before the next column read
+ * and rejects with the signal's reason.
  */
 export async function loadWorkBoardColumns(
   listSummaries: ListWorkSummaries,
   query: WorkSummaryQuery,
   statuses: readonly string[],
   perColumn: number = WORK_BOARD_COLUMN_PAGE,
+  signal?: AbortSignal,
 ): Promise<WorkBoardColumns> {
   const visible = [...new Set(statuses)];
   const unknown = visible.filter(
@@ -92,6 +96,7 @@ export async function loadWorkBoardColumns(
   }
   const columns: WorkBoardColumn[] = [];
   for (const status of visible) {
+    signal?.throwIfAborted();
     const page = await listSummaries(
       workBoardColumnQuery(query, status, perColumn),
     );

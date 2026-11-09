@@ -20,6 +20,7 @@ export {
   DoltgresWorkItemAdapter,
   type DoltgresWorkItemAdapterOptions,
   OPERATOR_ID_FLOOR,
+  WORK_TEXT_SCAN_MAX_ROWS,
   WorkItemAlreadyExistsError,
   WorkItemAuthorizationError,
   WorkItemLeaseConflictError,

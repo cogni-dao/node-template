@@ -31,8 +31,10 @@ import {
 import {
   parseWorkSummarySearchParams,
   WORK_BOARD_COLUMN_PAGE,
+  WORK_SUMMARY_LIST_MAX,
   WORK_SUMMARY_PAGE_DEFAULT,
   WORK_SUMMARY_PAGE_MAX,
+  WORK_SUMMARY_TEXT_MAX,
   WorkSummaryPageSchema,
   type WorkSummaryPage,
   type WorkSummaryQuery,
@@ -120,6 +122,24 @@ describe("work summary query codec", () => {
       expect(parse(search).ok, search).toBe(false);
     }
     expect(parse("rankMin=&rankMax=").ok).toBe(true);
+  });
+
+  it("bounds list filters to 50 values and text to 200 characters", () => {
+    const values = (n: number) =>
+      Array.from({ length: n }, (_, i) => `v${i}`).join(",");
+    for (const key of ["types", "statuses", "projectIds", "labels"]) {
+      expect(parse(`${key}=${values(WORK_SUMMARY_LIST_MAX)}`).ok, key).toBe(
+        true,
+      );
+      expect(
+        parse(`${key}=${values(WORK_SUMMARY_LIST_MAX + 1)}`).ok,
+        key,
+      ).toBe(false);
+    }
+    expect(parse(`text=${"a".repeat(WORK_SUMMARY_TEXT_MAX)}`).ok).toBe(true);
+    expect(parse(`text=${"a".repeat(WORK_SUMMARY_TEXT_MAX + 1)}`).ok).toBe(
+      false,
+    );
   });
 });
 
@@ -220,6 +240,26 @@ describe("loadWorkBoardColumns", () => {
     ).toBe(true);
     expect(board.columns.every((c) => c.items.length === WORK_SUMMARY_PAGE_MAX))
       .toBe(true);
+  });
+
+  it("stops before the next column read once the signal aborts", async () => {
+    const { list } = fixtureReader(3);
+    const controller = new AbortController();
+    const abortingList = async (query: WorkSummaryQuery) => {
+      const page = await list(query);
+      controller.abort(new Error("client went away"));
+      return page;
+    };
+    await expect(
+      loadWorkBoardColumns(
+        abortingList,
+        {},
+        statuses,
+        WORK_BOARD_COLUMN_PAGE,
+        controller.signal,
+      ),
+    ).rejects.toThrow("client went away");
+    expect(list).toHaveBeenCalledTimes(1);
   });
 
   it("reads nothing for no columns and rejects an unknown status before any read", async () => {
