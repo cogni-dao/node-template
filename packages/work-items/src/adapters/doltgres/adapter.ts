@@ -2783,7 +2783,7 @@ export class DoltgresWorkItemAdapter
   }
 
   async list(query: WorkQuery = {}) {
-    return this.listProjected(query, false) as Promise<{ items: WorkItem[]; nextCursor?: string; pageInfo: { endCursor: string | null; hasMore: boolean } }>;
+    return this.listProjected(query, false) as Promise<{ items: WorkItem[]; nextCursor?: string; pageInfo: { endCursor: string | null; hasMore: boolean; rowsScanned: number } }>;
   }
 
   /** One summary page, clamped to `WORK_SUMMARY_PAGE_MAX` rows (task.0055). */

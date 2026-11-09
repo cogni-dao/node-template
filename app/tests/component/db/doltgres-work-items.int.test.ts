@@ -20,6 +20,7 @@ import {
 	normalizeWorkItemOrder,
 	WORK_ITEM_SORT_FIELDS,
 	WORK_ITEM_SORT_DIRECTIONS,
+	WORK_TEXT_SCAN_MAX_ROWS,
 	type WorkItem,
 } from "@cogni/work-items";
 import { rankScoreSql } from "../../../../packages/work-items/src/rank-policy";
@@ -587,7 +588,8 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 				}),
 			);
 			for (const issued of queries)
-				expect(issued).toMatch(/ LIMIT (2|3|6|51|501)$/);
+				// 499 = the second text batch cut short at the 1000-row scan cap (task.0055).
+				expect(issued).toMatch(/ LIMIT (2|3|6|51|499|501)$/);
 		} finally {
 			await readSql.end({ timeout: 5 });
 		}
@@ -659,27 +661,44 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 				logger: stageLogger,
 			});
 			const broad = { node: "scale-native", statuses: ["needs_implement"] as const, rankMin: 4, limit: 10 };
-			lateStart = performance.now();
-			let late: Awaited<ReturnType<typeof filteredAdapter.list>>;
-			let lateElapsed: number;
-			try {
-				late = await filteredAdapter.list({ ...broad, text: "LAST-ONLY-NEEDLE" });
-			} finally {
-				lateElapsed = performance.now() - lateStart;
-				console.info("rank_query_late_text_phase", JSON.stringify({ elapsedMs: lateElapsed, datasetN: 5000, queriesStarted: issued.length, order: normalizeWorkItemOrder(broad) }));
-				lateStart = undefined;
+			// TEXT_SCAN_BOUNDED (task.0055): one request scans at most
+			// WORK_TEXT_SCAN_MAX_ROWS rows; sparse matches arrive through
+			// continuation pages (an empty page with a cursor is progress).
+			const pages: Awaited<ReturnType<typeof filteredAdapter.list>>[] = [];
+			let cursor: string | undefined;
+			let lateElapsed = 0;
+			for (let request = 0; request < 6; request++) {
+				const callStart = issued.length;
+				lateStart = performance.now();
+				let page: Awaited<ReturnType<typeof filteredAdapter.list>>;
+				try {
+					page = await filteredAdapter.list({ ...broad, text: "LAST-ONLY-NEEDLE", ...(cursor && { cursor }) });
+				} finally {
+					const elapsed = performance.now() - lateStart;
+					lateElapsed = Math.max(lateElapsed, elapsed);
+					console.info("rank_query_late_text_phase", JSON.stringify({ request, elapsedMs: elapsed, datasetN: 5000, queriesStarted: issued.length - callStart, order: normalizeWorkItemOrder(broad) }));
+					lateStart = undefined;
+				}
+				pages.push(page);
+				const limits = issued.slice(callStart).map((query) => Number(query.match(/ LIMIT (\d+)$/)?.[1]));
+				for (const nativeLimit of limits) {
+					expect(nativeLimit).toBeGreaterThan(0);
+					expect(nativeLimit).toBeLessThanOrEqual(501);
+				}
+				expect(page.pageInfo.rowsScanned).toBeLessThanOrEqual(WORK_TEXT_SCAN_MAX_ROWS);
+				if (!page.pageInfo.hasMore) break;
+				expect(page.pageInfo.endCursor).toEqual(expect.any(String));
+				cursor = page.pageInfo.endCursor ?? undefined;
 			}
-			expect(late.items.map((item) => item.id)).toEqual(["task.304999"]);
+			expect(pages[0]?.items).toEqual([]);
+			expect(pages[0]?.pageInfo).toMatchObject({ hasMore: true, rowsScanned: WORK_TEXT_SCAN_MAX_ROWS });
+			const late = pages.at(-1) as (typeof pages)[number];
+			expect(pages.flatMap((page) => page.items.map((item) => item.id))).toEqual(["task.304999"]);
 			expect(late.pageInfo.hasMore).toBe(false);
 			expect(late.nextCursor).toBeUndefined();
 			expect(lateElapsed).toBeLessThan(5000);
 			expect(issued.length).toBeGreaterThan(1);
-			for (const query of issued) {
-				const nativeLimit = Number(query.match(/ LIMIT (\d+)$/)?.[1]);
-				expect(nativeLimit).toBeGreaterThan(0);
-				expect(nativeLimit).toBeLessThanOrEqual(501);
-			}
-			console.info("rank_query_late_text", JSON.stringify({ elapsedMs: lateElapsed, datasetN: 5000, queries: issued.length, resultCount: late.items.length }));
+			console.info("rank_query_late_text", JSON.stringify({ maxRequestMs: lateElapsed, datasetN: 5000, queries: issued.length, requests: pages.length, resultCount: 1 }));
 			const broadFirst = await filteredAdapter.list(broad);
 			expect(broadFirst.items.map((item) => item.id)).toEqual(matchingIds.slice(0, 10));
 			if (!broadFirst.nextCursor) throw new Error("missing broad cursor");
