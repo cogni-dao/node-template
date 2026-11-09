@@ -11,6 +11,8 @@
  *   wrapRouteHandlerWithLogging consumes via `auth.getSessionUser`. Does NOT
  *   read from the database — all session IO happens via getServerSessionUser.
  * Invariants:
+ *   - VIA_IS_FOR_LOGGING: the resolved identity carries `via: "bearer" | "session"`. It never decides tool
+ *     authority: every authenticated caller is the run subject, bearer agents included (task.5456).
  *   - NO_AUTH_CYCLE: imports getServerSessionUser DIRECTLY from @/lib/auth/server.
  *     Must NOT import getSessionUser from @/app/_lib/auth/session (that module
  *     re-exports this resolver and would create unbounded async recursion on
@@ -111,12 +113,18 @@ function isSameOrigin(origin: string | null, host: string | null): boolean {
   }
 }
 
+/** A cookie session identity, marked `via: "session"` (logging only). */
+async function resolveSessionIdentity(): Promise<SessionUser | null> {
+  const user = await getServerSessionUser();
+  return user ? { ...user, via: "session" } : null;
+}
+
 export async function resolveRequestIdentity(): Promise<SessionUser | null> {
   let h: Awaited<ReturnType<typeof headers>>;
   try {
     h = await headers();
   } catch {
-    return getServerSessionUser();
+    return resolveSessionIdentity();
   }
   const bearer = extractBearerToken(h.get("authorization"));
   if (bearer) {
@@ -127,6 +135,7 @@ export async function resolveRequestIdentity(): Promise<SessionUser | null> {
       walletAddress: null,
       displayName: payload.displayName,
       avatarColor: null,
+      via: "bearer",
     };
   }
 
@@ -134,5 +143,5 @@ export async function resolveRequestIdentity(): Promise<SessionUser | null> {
     return null;
   }
 
-  return getServerSessionUser();
+  return resolveSessionIdentity();
 }

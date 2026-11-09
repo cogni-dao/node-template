@@ -38,6 +38,11 @@ export const EVENT_NAMES = {
 	AI_LLM_CALL: "ai.llm_call",
 	AI_LLM_CALL_COMPLETED: "ai.llm_call_completed",
 	AI_TOOL_CALL_ERROR: "ai.tool_call.error",
+	/** One decision per scoped tool call (task.5456): principal, subject, payer, tool, decision, code. No tokens. */
+	AGENT_TOOL_AUTHZ: "agent_tool.authz",
+	/** A DAO admin granted / revoked an agent role (task.5456): principal, scope, approvedBy. */
+	AGENT_ROLE_GRANTED: "agent_role.granted",
+	AGENT_ROLE_REVOKED: "agent_role.revoked",
 	/** One structured summary per mission-loop cycle on the work-prioritizer slot (story.5108; CatalogEntry.report). */
 	AI_WORK_PRIORITIZER_CYCLE: "ai.work_prioritizer.cycle",
 	/** One structured summary per scheduled DECIDE tick (task.5377; CatalogEntry.report): scoresWritten, writeAttempts, skipped(reason), revisionConflicts, guardRejected. */

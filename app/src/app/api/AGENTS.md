@@ -109,3 +109,4 @@ curl -X POST http://localhost:3000/api/v1/chat/completions \
 ## Notes
 
 - v1 API prefix for versioned product routes
+- `v1/agent-access/roles` is a HUMAN-plane route (session only): `GET` returns `canManage`, `POST`/`DELETE` allow or remove a node AI job for a DAO admin. Every human route calls `refuseNonSession()` (`_lib/auth/human-plane.ts`) first: any `Authorization` header gets 403 `human_session_required`. A non-`Bearer cogni_ag_sk_v1_` header with no session cookie gets 401 from `proxy.ts` before the route runs; no authority is granted either way.

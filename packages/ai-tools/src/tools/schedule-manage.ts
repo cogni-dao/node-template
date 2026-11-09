@@ -97,6 +97,13 @@ export const scheduleManageContract: ToolContract<
     "'enable'/'disable' (requires scheduleId). " +
     "Use core__schedule_list first to see existing schedules.",
   effect: "state_change",
+  requires: {
+    scope: "schedule:manage",
+    kind: "own",
+    subject: "member",
+    label: "Create and change scheduled jobs for the person it helps",
+    risk: "medium",
+  },
   inputSchema: ScheduleManageInputSchema,
   outputSchema: ScheduleManageOutputSchema,
 

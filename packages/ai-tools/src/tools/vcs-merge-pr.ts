@@ -61,6 +61,13 @@ export const vcsMergePrContract: ToolContract<
     "Never merge PRs targeting main directly — those go through the release workflow. " +
     "Use 'squash' for feature PRs targeting staging.",
   effect: "state_change",
+  requires: {
+    scope: "vcs:merge_pr",
+    kind: "node",
+    subject: "admin",
+    label: "Merge pull requests",
+    risk: "high",
+  },
   inputSchema: VcsMergePrInputSchema,
   outputSchema: VcsMergePrOutputSchema,
   redact: (output: VcsMergePrOutput): VcsMergePrRedacted => output,

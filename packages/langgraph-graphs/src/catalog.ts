@@ -79,6 +79,10 @@ import { RESEARCH_TOOL_IDS } from "./graphs/research/tools";
 import { WORK_PRIORITIZER_GRAPH_NAME } from "./graphs/work-prioritizer/graph";
 import type { CreateGraphFn } from "./inproc/types";
 
+/** Internal agent principal slugs seeded by the node migration (`agent_principals.slug`). */
+export const NODE_AI_PRINCIPAL = "node-ai" as const;
+export const PRIORITIZER_PRINCIPAL = "prioritizer" as const;
+
 /**
  * Catalog entry shape.
  *
@@ -90,6 +94,11 @@ export interface CatalogEntry {
   readonly program?: "cogni" | "work-review" | "cogni-chat" | "cogni-decide";
   readonly displayName: string;
   readonly description: string;
+  /**
+   * Internal agent principal slug this graph acts as (an `agent_principals` row). A graph with no
+   * principal gets no scoped tool; a slug with no seed row denies the run before any tool runs.
+   */
+  readonly principal?: string;
   /** Native tool IDs this graph may use. Providers resolve from TOOL_CATALOG. */
   readonly toolIds: readonly string[];
   /** MCP server names whose tools this graph may use. Empty = no MCP tools. */
@@ -192,6 +201,7 @@ export const NODE_LANGGRAPH_CATALOG = {
   [BRAIN_GRAPH_NAME]: {
     displayName: "Brain",
     description: "Code-aware assistant with repository search and file access",
+    principal: NODE_AI_PRINCIPAL,
     toolIds: BRAIN_TOOL_IDS,
     graphFactory: createBrainGraph,
   },
@@ -275,6 +285,7 @@ export const NODE_LANGGRAPH_CATALOG = {
   [WORK_PRIORITIZER_GRAPH_NAME]: {
     displayName: "Mission Loop",
     description: "Source-grounded mission loop with bounded scores or no-op",
+    principal: PRIORITIZER_PRINCIPAL,
     toolIds: COGNI_DECIDE_TOOL_IDS,
     graphFactory: createMissionGraph,
     systemPrompt: COGNI_DECIDE_PROMPT,

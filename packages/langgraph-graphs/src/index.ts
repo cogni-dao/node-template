@@ -29,12 +29,14 @@ export {
   type LangGraphCatalog,
   type LangGraphCatalogKeys,
   type LangGraphGraphId,
+  NODE_AI_PRINCIPAL,
   NODE_LANGGRAPH_CATALOG,
   NODE_LANGGRAPH_GRAPH_IDS,
   OPERATOR_LANGGRAPH_CATALOG,
   OPERATOR_LANGGRAPH_GRAPH_IDS,
   type OperatorLangGraphCatalogKeys,
   type OperatorLangGraphGraphId,
+  PRIORITIZER_PRINCIPAL,
 } from "./catalog";
 
 // Re-export graph constants and factories

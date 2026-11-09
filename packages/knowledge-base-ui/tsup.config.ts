@@ -17,6 +17,7 @@ export default defineConfig({
     "@cogni/work-items",
     "@cogni/knowledge-store",
     "@cogni/knowledge-store/contracts",
+    "@cogni/agent-grants",
     "@cogni-dao/metrics",
     "@cogni-dao/metrics/contracts",
     "@dnd-kit/core",
