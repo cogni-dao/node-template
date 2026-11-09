@@ -79,6 +79,8 @@ export interface UseWorkTablePageOptions {
   readonly fetchPage: WorkPageFetcher;
   readonly enabled?: boolean;
   readonly staleTime?: number;
+  /** Query key prefix. Default `["work-summaries-page"]`. */
+  readonly queryKeyPrefix?: readonly unknown[];
 }
 
 export interface UseWorkTablePageResult {
@@ -95,6 +97,8 @@ export interface UseWorkTablePageResult {
 }
 
 const NO_ITEMS: readonly WorkItemSummary[] = [];
+const TABLE_PAGE_KEY: readonly unknown[] = ["work-summaries-page"];
+const OPEN_WORK_KEY: readonly unknown[] = ["work-open-items"];
 
 /** One bounded table page for the current cursor. */
 export function useWorkTablePage({
@@ -104,6 +108,7 @@ export function useWorkTablePage({
   fetchPage,
   enabled = true,
   staleTime = 30_000,
+  queryKeyPrefix = TABLE_PAGE_KEY,
 }: UseWorkTablePageOptions): UseWorkTablePageResult {
   const limit = clampWorkPageSize(pageSize);
   const { cursor: _cursor, limit: _limit, ...filters } = query;
@@ -117,7 +122,7 @@ export function useWorkTablePage({
     return params.toString();
   }, [listingKey, cursor]);
   const result = useQuery({
-    queryKey: ["work-summaries-page", requestKey],
+    queryKey: [...queryKeyPrefix, requestKey],
     queryFn: ({ signal }) => fetchPage(new URLSearchParams(requestKey), signal),
     enabled,
     staleTime,
@@ -143,6 +148,8 @@ export interface UseOpenWorkOptions {
   /** Statuses counted as open. Default `ACTIVE_WORK_STATUSES`. */
   readonly statuses?: readonly string[];
   readonly staleTime?: number;
+  /** Query key prefix. Default `["work-open-items"]`. */
+  readonly queryKeyPrefix?: readonly unknown[];
 }
 
 export interface UseOpenWorkResult {
@@ -170,10 +177,11 @@ export function useOpenWork({
   limit = WORK_OPEN_ITEMS_DEFAULT,
   statuses = ACTIVE_WORK_STATUSES,
   staleTime = 30_000,
+  queryKeyPrefix = OPEN_WORK_KEY,
 }: UseOpenWorkOptions): UseOpenWorkResult {
   const key = openWorkSearchParams(limit, statuses).toString();
   const result = useQuery({
-    queryKey: ["work-open-items", key],
+    queryKey: [...queryKeyPrefix, key],
     queryFn: ({ signal }) => fetchPage(new URLSearchParams(key), signal),
     staleTime,
     retry: shouldRetryWorkBoardRequest,

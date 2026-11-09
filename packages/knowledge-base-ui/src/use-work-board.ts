@@ -29,7 +29,14 @@ import {
   type WorkSummaryQuery,
   workSummaryQueryToSearchParams,
 } from "@cogni/work-items";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import type { WorkBoardColumnState } from "./work-board.js";
 
@@ -50,6 +57,8 @@ export interface UseWorkBoardOptions {
   ) => Promise<WorkSummaryPage>;
   /** How long a loaded board stays fresh in the React Query cache. Default 30s. */
   readonly staleTime?: number;
+  /** Query key prefix, e.g. to scope or invalidate per node. Default `["work-board"]`. */
+  readonly queryKeyPrefix?: readonly unknown[];
 }
 
 export interface UseWorkBoardResult {
@@ -66,6 +75,10 @@ export interface UseWorkBoardResult {
 }
 
 const BOARD_RETRIES = 3;
+
+/** Layout effect on the client, plain effect on the server (no SSR warning). */
+const useIsomorphicLayoutEffect =
+  typeof window === "undefined" ? useEffect : useLayoutEffect;
 
 /** The HTTP status a fetcher attached to its error, if any. */
 function httpStatus(error: unknown): number | undefined {
@@ -87,6 +100,8 @@ export function shouldRetryWorkBoardRequest(
   if (status !== undefined && status < 500) return false;
   return failureCount < BOARD_RETRIES;
 }
+
+const DEFAULT_BOARD_KEY: readonly unknown[] = ["work-board"];
 
 interface Appended {
   readonly generation: string;
@@ -118,6 +133,7 @@ export function useWorkBoard({
   fetchBoard,
   fetchPage,
   staleTime = 30_000,
+  queryKeyPrefix = DEFAULT_BOARD_KEY,
 }: UseWorkBoardOptions): UseWorkBoardResult {
   const { cursor: _cursor, limit: _limit, ...filters } = query;
   const visibleKey = [...new Set(statuses)].join(",");
@@ -141,7 +157,7 @@ export function useWorkBoard({
   }).toString();
 
   const board = useQuery({
-    queryKey: ["work-board", boardKey],
+    queryKey: [...queryKeyPrefix, boardKey],
     queryFn: ({ signal }) => fetchBoard(new URLSearchParams(boardKey), signal),
     enabled: fetched.length > 0,
     staleTime,
@@ -156,12 +172,16 @@ export function useWorkBoard({
   const [appended, setAppended] = useState<Appended>(() => fresh(generation));
   const current = appended.generation === generation ? appended : null;
 
-  const latest = useRef({ generation, appended: fresh(generation) });
-  latest.current = { generation, appended: current ?? fresh(generation) };
+  const latest = useRef({ generation, appended: current ?? fresh(generation) });
   const data = useRef(board.data);
-  data.current = board.data;
   const inputs = useRef({ fetchPage, filters });
-  inputs.current = { fetchPage, filters };
+  // Refs mirror the committed render for event handlers; written after commit,
+  // never during render (concurrent renders may be discarded).
+  useIsomorphicLayoutEffect(() => {
+    latest.current = { generation, appended: current ?? fresh(generation) };
+    data.current = board.data;
+    inputs.current = { fetchPage, filters };
+  });
   const controllers = useRef(new Map<string, AbortController>());
 
   // A new board key or result, or unmount, cancels every page still in flight.

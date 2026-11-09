@@ -14,9 +14,9 @@ Published React components and hooks every node renders for knowledge and work s
 
 ## Host requirements
 
-- **QueryClientProvider is required.** `useWorkBoard`, `useWorkTablePage` and `useOpenWork` call `@tanstack/react-query` 5 (`peerDependencies: "^5"`). Render them under the host's `QueryClientProvider`; the hooks set their own retry policy (network/5xx only, never 4xx).
+- **QueryClientProvider is required.** `useWorkBoard`, `useWorkTablePage` and `useOpenWork` call `@tanstack/react-query` 5 (`peerDependencies: "^5"`). Render them under the host's `QueryClientProvider`; the hooks set their own retry policy (network/5xx only, never 4xx) and accept `queryKeyPrefix` to scope their cache keys.
 - Fetchers are node-supplied: `(params: URLSearchParams, signal: AbortSignal) => Promise<…>`. Reject with an error carrying the HTTP `status` so 4xx responses are not retried.
-- Peer `@cogni/work-items` ≥ 0.6.0 supplies the query codec, budgets and schemas; never re-declare limits or parameter names in a node.
+- Peer `@cogni/work-items` ≥ 0.7.0 supplies the query codec, budgets and schemas; never re-declare limits or parameter names in a node.
 
 ## Public Surface (work, task.0055)
 
