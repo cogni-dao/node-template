@@ -562,3 +562,38 @@ it("falls back again when the method shelf itself is too large, without losing m
 	expect(markdown).toContain("governingIndex");
 	expect(markdown).toContain("node-ai-traces-read");
 });
+
+it("serves a degraded bundle visibly with no ETag and no-store, and a hubless bundle the same", async () => {
+	const { GET } = await import("@/app/api/v1/cognition/route");
+	const handler = GET as unknown as (...args: unknown[]) => Promise<Response>;
+	const call = () =>
+		handler(
+			{ log: { info: vi.fn(), warn: vi.fn() } },
+			new Request("https://fresh-node.cognidao.org/api/v1/cognition", {
+				headers: { "if-none-match": "*" },
+			}),
+			{ id: "own-agent" },
+		);
+	composition.port = {
+		currentCommit: async () => "rev-degraded",
+		listDomainsFull: async () => [],
+		listGoverningIndex: async () => [],
+		getKnowledge: async () => null,
+		listActiveGoals: async () => {
+			throw new Error("goals down");
+		},
+	};
+	const degraded = await call();
+	expect(degraded.status).toBe(200);
+	expect(degraded.headers.get("etag")).toBeNull();
+	expect(degraded.headers.get("cache-control")).toBe("no-store");
+	expect((await degraded.json()).markdown).toContain("goals unavailable");
+
+	composition.port = undefined;
+	const hubless = await call();
+	expect(hubless.status).toBe(200);
+	expect(hubless.headers.get("etag")).toBeNull();
+	expect((await hubless.json()).markdown).toContain(
+		SESSION_BOOTSTRAP_INVARIANTS[0],
+	);
+});

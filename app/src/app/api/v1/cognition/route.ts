@@ -20,7 +20,8 @@
  *     when the hub is unconfigured or empty.
  *   - NO_INTERNAL_BIND_ADDR: origin derived from forwarded headers first.
  *   - ONE_READ_PER_REVISION: hub inputs come from `readCognitionSnapshot`
- *     (memoized per store HEAD); a weak ETag over revision+build+origin
+ *     (memoized per store HEAD); a weak ETag over revision, build, origin,
+ *     name and mission
  *     answers a matching If-None-Match with 304 (bug.0018).
  *   - NO_GOAL_PROGRESS: goal KPI readings are not bootstrap; agents read them
  *     live from /api/v1/metrics/goals.
@@ -134,12 +135,17 @@ export const GET = wrapRouteHandlerWithLogging(
 		const etag =
 			revision && goals.status === "ok"
 				? `W/"${createHash("sha256")
-						.update(`${revision}\u0000${buildSha}\u0000${origin}\u0000${name}`)
+						.update(
+							[revision, buildSha, origin, name, mission ?? ""].join("\u0000"),
+						)
 						.digest("base64url")
 						.slice(0, 27)}"`
 				: null;
 		if (etag && matchesEtag(request.headers.get("if-none-match"), etag)) {
-			ctx.log.info({ revision, notModified: true }, "cognition.bundle_not_modified");
+			ctx.log.info(
+				{ revision, notModified: true },
+				"cognition.bundle_not_modified",
+			);
 			return new NextResponse(null, {
 				status: 304,
 				headers: { ETag: etag, "Cache-Control": CACHE_CONTROL },
