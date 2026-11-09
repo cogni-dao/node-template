@@ -14,7 +14,7 @@
  * @public
  */
 
-import type { AgentGrantsStore, RoleState } from "./types";
+import type { AgentGrantsStore, RoleRow, RoleState } from "./types";
 
 /** A postgres.js-compatible tagged template: sql`select ${x}` resolves to rows. */
 export type SqlTag = (
@@ -78,40 +78,62 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
           : []
       );
     },
-    async listRoleRows() {
-      const rows = await sql`
-        SELECT r.principal_user_id, r.scope, r.approved_by, r.created_at,
-               p.slug AS slug, p.kind AS kind, p.display_name AS display_name, u.name AS user_name,
-               EXISTS (SELECT 1 FROM user_bindings b WHERE b.user_id = r.principal_user_id AND b.provider = 'github') AS github
-        FROM agent_roles r
-        JOIN users u ON u.id = r.principal_user_id
-        LEFT JOIN agent_principals p ON p.user_id = r.principal_user_id
-        WHERE r.revoked_at IS NULL
-        ORDER BY r.created_at`;
-      return rows.flatMap((row) => {
+    async listRoleRows(limit) {
+      const toRow = (row: Record<string, unknown>): RoleRow | null => {
         const principalUserId = str(row.principal_user_id);
         const scope = str(row.scope);
-        if (!principalUserId || !scope) return [];
+        if (!principalUserId || !scope) return null;
         const internal = row.kind === "internal";
-        return [
-          {
-            principalUserId,
-            slug: internal ? str(row.slug) : null,
-            internal,
-            name: internal ? (str(row.display_name) ?? str(row.slug)) : str(row.user_name),
-            hint: row.github === true ? "GitHub linked" : null,
-            scope,
-            state: row.approved_by ? ("granted" as const) : ("pending" as const),
-            at: iso(row.created_at),
-          },
-        ];
+        const githubId = str(row.github_id);
+        return {
+          principalUserId,
+          slug: internal ? str(row.slug) : null,
+          internal,
+          name: internal ? str(row.display_name) : str(row.user_name),
+          // A proven binding, shown beside the agent's own (unproven) name.
+          hint: githubId ? `GitHub id ${githubId}` : null,
+          scope,
+          state: row.approved_by ? ("granted" as const) : ("pending" as const),
+          at: iso(row.created_at),
+        };
+      };
+      // This node's own AI: always all rows (a few principals times a few scopes).
+      const own = await sql`
+        SELECT r.principal_user_id, r.scope, r.approved_by, r.created_at,
+               p.slug AS slug, p.kind AS kind, p.display_name AS display_name, u.name AS user_name,
+               NULL::text AS github_id
+        FROM agent_roles r
+        JOIN users u ON u.id = r.principal_user_id
+        JOIN agent_principals p ON p.user_id = r.principal_user_id AND p.kind = 'internal'
+        WHERE r.revoked_at IS NULL
+        ORDER BY r.created_at`;
+      // Outside agents: pending asks first, bounded. `more` says how many are cut.
+      const outside = await sql`
+        SELECT r.principal_user_id, r.scope, r.approved_by, r.created_at,
+               NULL::text AS slug, 'external' AS kind, NULL::text AS display_name, u.name AS user_name,
+               (SELECT b.external_id FROM user_bindings b WHERE b.user_id = r.principal_user_id AND b.provider = 'github' LIMIT 1) AS github_id
+        FROM agent_roles r
+        JOIN users u ON u.id = r.principal_user_id
+        WHERE r.revoked_at IS NULL
+          AND NOT EXISTS (SELECT 1 FROM agent_principals p WHERE p.user_id = r.principal_user_id AND p.kind = 'internal')
+        ORDER BY (r.approved_by IS NULL) DESC, r.created_at DESC
+        LIMIT ${limit}`;
+      const total = await sql`
+        SELECT count(*)::int AS n FROM agent_roles r
+        WHERE r.revoked_at IS NULL
+          AND NOT EXISTS (SELECT 1 FROM agent_principals p WHERE p.user_id = r.principal_user_id AND p.kind = 'internal')`;
+      const rows = [...own, ...outside].flatMap((row) => {
+        const mapped = toRow(row);
+        return mapped ? [mapped] : [];
       });
+      return { rows, more: Math.max(0, Number(total[0]?.n ?? 0) - outside.length) };
     },
     async listOwnRoles(principalUserId) {
       const rows = await sql`
         SELECT scope, approved_by, revoked_at, created_at FROM agent_roles
         WHERE principal_user_id = ${principalUserId}
-        ORDER BY created_at DESC`;
+        ORDER BY created_at DESC
+        LIMIT 200`;
       const seen = new Set<string>();
       const out: Array<{ scope: string; state: RoleState; at: string }> = [];
       for (const row of rows) {
@@ -128,7 +150,7 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
       }
       return out;
     },
-    async requestRole({ principalUserId, scope, maxPending }) {
+    async requestRole({ principalUserId, scope, maxPending, maxPendingTotal }) {
       const open = await sql`
         SELECT approved_by FROM agent_roles
         WHERE principal_user_id = ${principalUserId} AND scope = ${scope} AND revoked_at IS NULL LIMIT 1`;
@@ -137,6 +159,9 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
         SELECT count(*)::int AS n FROM agent_roles
         WHERE principal_user_id = ${principalUserId} AND approved_by IS NULL AND revoked_at IS NULL`;
       if (Number(count[0]?.n ?? 0) >= maxPending) return "too_many";
+      const all = await sql`
+        SELECT count(*)::int AS n FROM agent_roles WHERE approved_by IS NULL AND revoked_at IS NULL`;
+      if (Number(all[0]?.n ?? 0) >= maxPendingTotal) return "node_full";
       const inserted = await sql`
         INSERT INTO agent_roles (principal_user_id, scope, approved_by, requested_by)
         VALUES (${principalUserId}, ${scope}, NULL, ${principalUserId})
@@ -149,6 +174,7 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
         UPDATE agent_roles SET approved_by = ${approvedBy}, granted_at = now()
         WHERE principal_user_id = ${principalUserId} AND scope = ${scope}
           AND approved_by IS NULL AND revoked_at IS NULL
+          AND principal_user_id <> ${approvedBy}
         RETURNING id`;
       return rows.length > 0;
     },

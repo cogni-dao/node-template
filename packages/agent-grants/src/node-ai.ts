@@ -20,6 +20,7 @@
 import type { NodeAiPermissionView, RoleRow } from "./types";
 
 const NEUTRAL_WHO = "Unnamed agent";
+const NEUTRAL_AI = "Node AI";
 
 export function buildNodeAiView(input: {
   /** scope -> the declaration (`requires`) that names it: every tool contract and every route-only capability. */
@@ -44,7 +45,7 @@ export function buildNodeAiView(input: {
     out.push({
       section: "pending",
       principalUserId: row.principalUserId,
-      who: row.name ?? NEUTRAL_WHO,
+      who: row.name ?? (row.internal ? NEUTRAL_AI : NEUTRAL_WHO),
       outside: !row.internal,
       hint: row.hint,
       scope: row.scope,
@@ -70,7 +71,7 @@ export function buildNodeAiView(input: {
           {
             section: "node" as const,
             principalUserId: ai.userId,
-            who: ai.displayName ?? ai.slug,
+            who: ai.displayName ?? NEUTRAL_AI, // never the slug
             outside: false,
             hint: null,
             scope,

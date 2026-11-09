@@ -61,7 +61,7 @@
     "react-force-graph-3d": ">=1.29.1 <2",
     "@cogni-dao/metrics": ">=0.7.0 <1",
     "recharts": "^2.15.4",
-    "@cogni/agent-grants": ">=0.1.0"
+    "@cogni/agent-grants": ">=0.2.0"
   },
   "peerDependenciesMeta": {
     "@cogni/knowledge-store": {

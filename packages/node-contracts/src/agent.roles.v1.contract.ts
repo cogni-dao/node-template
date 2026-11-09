@@ -67,5 +67,7 @@ export const agentRolesListOperation = {
         until: z.string().nullable(),
       })
     ),
+    /** Outside rows left out because the list is bounded. */
+    more: z.number().int().nonnegative(),
   }),
 } as const;

@@ -15,6 +15,7 @@
 
 import { randomUUID } from "node:crypto";
 import { CORE_TOOL_BUNDLE } from "@cogni/ai-tools";
+import { MAX_PENDING_PER_AGENT, MAX_PENDING_TOTAL } from "@cogni/agent-grants";
 import { NextRequest } from "next/server";
 import pino from "pino";
 import postgres, { type Sql } from "postgres";
@@ -34,6 +35,7 @@ import { DELETE as rolesDelete, GET as rolesGet, POST as rolesPost } from "@/app
 import {
   type AgentAuthoritySql,
   createAgentToolAuthority,
+  MAX_ADMIN_OUTSIDE_ROWS,
 } from "@/bootstrap/agent-authority";
 // A wallet of its own, so this file never fights another component file for the repo-spec approver's unique wallet binding.
 const ADMIN_WALLET = `0x${randomUUID().replaceAll("-", "").padEnd(40, "a").slice(0, 40)}`;
@@ -78,6 +80,13 @@ describe("access requests: an ask is an off row (real Postgres)", () => {
       undefined as never
     );
   const door = (userId: string) => authority.authorizeRoute({ toolId: "core__work_item_transition", routeId: "work.items.patch", userId, via: "bearer" });
+  const adminViewFull = async () => {
+    as(admin, "session");
+    return (await (await rolesGet(new NextRequest("http://localhost/api/v1/agent-access/roles"), undefined as never)).json()) as {
+      more: number;
+      permissions: Array<{ section: string }>;
+    };
+  };
   const adminView = async () => {
     as(admin, "session");
     return (await (await rolesGet(new NextRequest("http://localhost/api/v1/agent-access/roles"), undefined as never)).json()) as {
@@ -120,8 +129,8 @@ describe("access requests: an ask is an off row (real Postgres)", () => {
 
     expect(await door(agent)).toMatchObject({ decision: "deny", reason: "no_role" }); // a pending ask opens nothing
 
-    const pending = (await adminView()).permissions.filter((r) => r.section === "pending");
-    expect(pending).toEqual([expect.objectContaining({ who: "Helper bot", outside: true, scope: SCOPE, on: false, hint: "GitHub linked", principalUserId: agent })]);
+    const pending = (await adminView()).permissions.filter((r) => r.section === "pending" && r.principalUserId === agent);
+    expect(pending).toEqual([expect.objectContaining({ who: "Helper bot", outside: true, scope: SCOPE, on: false, hint: expect.stringMatching(/^GitHub id gh-/), principalUserId: agent })]);
 
     const approve = await roles(rolesPost, { principalUserId: agent, scope: SCOPE });
     expect(approve.status).toBe(200);
@@ -130,7 +139,7 @@ describe("access requests: an ask is an off row (real Postgres)", () => {
     expect(live?.approved_by).toBe(admin);
     expect(live?.granted_at).not.toBeNull();
     expect(await door(agent)).toMatchObject({ decision: "allow", basis: "role" });
-    const outside = (await adminView()).permissions.filter((r) => r.section === "outside");
+    const outside = (await adminView()).permissions.filter((r) => r.section === "outside" && r.principalUserId === agent);
     expect(outside).toEqual([expect.objectContaining({ who: "Helper bot", on: true, scope: SCOPE })]);
 
     as(agent, "bearer");
@@ -171,15 +180,71 @@ describe("access requests: an ask is an off row (real Postgres)", () => {
     expect((await ask("knowledge:contribute")).status).toBe(201); // asked again after a deny
   });
 
-  it("opening more than the cap of asks gets 429", async () => {
+  it("the per-agent cap fires through the real route with only declared, askable scopes", async () => {
     const capped = await mkUser("Capped bot");
     as(capped, "bearer");
-    // Only three scopes are declared on this node's contracts plus route-only ones; fill with direct rows up to the cap.
-    for (let i = 0; i < 20; i++)
-      await service`INSERT INTO agent_roles (principal_user_id, scope, approved_by, requested_by) VALUES (${capped}, ${`filler:${i}`}, NULL, ${capped})`;
-    const res = await ask(SCOPE);
+    const askable = ["work_item:transition", "schedule:manage", "edo:write", "metric:compute", "knowledge:contribute"];
+    for (const scope of askable.slice(0, MAX_PENDING_PER_AGENT)) expect((await ask(scope)).status).toBe(201);
+    const res = await ask(askable[MAX_PENDING_PER_AGENT] as string);
     expect(res.status).toBe(429);
     expect(await res.json()).toEqual({ error: "too_many_requests" });
+    expect((await ask(askable[0] as string)).status).toBe(200); // an ask it already holds is still reported, not refused
+  });
+
+  it("the global pending cap stops a flood from throwaway agents, and clearing room lets the next ask in", async () => {
+    const fillers: string[] = [];
+    const [{ n }] = (await service`SELECT count(*)::int AS n FROM agent_roles WHERE approved_by IS NULL AND revoked_at IS NULL`) as unknown as [{ n: number }];
+    try {
+      for (let i = 0; i < MAX_PENDING_TOTAL - n; i++) {
+        const id = await mkUser(`flood-${i}-${randomUUID().slice(0, 4)}`);
+        fillers.push(id);
+        await service`INSERT INTO agent_roles (principal_user_id, scope, approved_by, requested_by) VALUES (${id}, 'edo:write', NULL, ${id})`;
+      }
+      const late = await mkUser("Late bot");
+      as(late, "bearer");
+      const res = await ask("edo:write");
+      expect(res.status).toBe(429);
+      expect(await res.json()).toEqual({ error: "too_many_requests" });
+      expect((await service`SELECT 1 FROM agent_roles WHERE principal_user_id = ${late}`)).toHaveLength(0);
+      // the admin dismisses one ask: there is room again
+      if (fillers[0]) {
+        as(admin, "session");
+        expect((await roles(rolesDelete, { principalUserId: fillers[0], scope: "edo:write", deny: true })).status).toBe(200);
+        as(late, "bearer");
+        expect((await ask("edo:write")).status).toBe(201);
+      }
+    } finally {
+      await service`DELETE FROM agent_roles WHERE principal_user_id = ANY(${fillers})`;
+    }
+  });
+
+  it("an ask for a scope with no door an outside agent can call is 400 no_external_door, and nothing is written", async () => {
+    const quiet = await mkUser("Door bot");
+    as(quiet, "bearer");
+    // knowledge:write is declared (a core tool) but only the tool can use it: no route twin. (The vcs scopes are not declared in this bundle.)
+    for (const scope of ["knowledge:write"]) {
+      const res = await ask(scope);
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: "no_external_door" });
+    }
+    expect((await service`SELECT 1 FROM agent_roles WHERE principal_user_id = ${quiet}`)).toHaveLength(0);
+  });
+
+  it("the admin read is bounded: this node's AI in full, outside rows capped with a count of the rest", async () => {
+    const seeded: string[] = [];
+    try {
+      for (let i = 0; i < MAX_ADMIN_OUTSIDE_ROWS + 3; i++) {
+        const id = await mkUser(`row-${i}-${randomUUID().slice(0, 4)}`);
+        seeded.push(id);
+        await service`INSERT INTO agent_roles (principal_user_id, scope, approved_by, granted_at) VALUES (${id}, 'edo:write', ${admin}, now())`;
+      }
+      const view = await adminViewFull();
+      expect(view.permissions.filter((r) => r.section !== "node")).toHaveLength(MAX_ADMIN_OUTSIDE_ROWS);
+      expect(view.more).toBeGreaterThanOrEqual(3);
+      expect(view.permissions.filter((r) => r.section === "node").length).toBeGreaterThan(0); // this node's AI is never cut
+    } finally {
+      await service`DELETE FROM agent_roles WHERE principal_user_id = ANY(${seeded})`;
+    }
   });
 
   it("AI plane is bearer-only: a browser session gets 404 on POST and GET and nothing is written", async () => {

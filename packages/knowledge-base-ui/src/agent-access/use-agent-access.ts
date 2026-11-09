@@ -115,7 +115,10 @@ export function useAgentAccess(endpoints: AgentAccessEndpoints): UseAgentAccess 
       if (!alive.current || mine !== seq.current) return;
       if (isAdminView(body)) {
         confirmedNotAdmin.current = false;
-        return commit({ status: "ready", view: body });
+        return commit({
+          status: "ready",
+          view: { ...body, more: typeof (body as { more?: unknown }).more === "number" ? body.more : 0 },
+        });
       }
       if (typeof body === "object" && body !== null && (body as { canManage?: unknown }).canManage === false) {
         confirmedNotAdmin.current = true;

@@ -84,19 +84,24 @@ export interface AgentGrantsStore {
   listInternalPrincipals(): Promise<Array<{ userId: string; slug: string; displayName: string | null }>>;
   /** Every live role row with its principal's slug. Never cached. */
   listLiveRoles(): Promise<Array<{ principalSlug: string; scope: string }>>;
-  /** Every pending and live row for every principal, internal or outside, for the admin table. Never cached. */
-  listRoleRows(): Promise<RoleRow[]>;
-  /** The caller's own rows, newest state per scope. */
+  /**
+   * Every pending and live row for the admin table. Never cached. Rows of this node's own AI are always all returned (few);
+   * rows of outside agents are bounded by `limit` (pending first). `more` counts the outside rows not returned.
+   */
+  listRoleRows(limit: number): Promise<{ rows: RoleRow[]; more: number }>;
+  /** The caller's own rows, newest state per scope (bounded). */
   listOwnRoles(principalUserId: string): Promise<Array<{ scope: string; state: RoleState; at: string }>>;
   /**
    * An agent asks for a scope for itself: inserts a pending row (`approved_by` null, `requested_by` = the agent).
-   * `pending` and `granted` mean a pending or live row already exists (nothing is written). `too_many` caps open asks.
+   * `pending` and `granted` mean a pending or live row already exists (nothing is written). `too_many` caps this agent's open
+   * asks; `node_full` caps open asks across all agents (a flood from throwaway identities).
    */
   requestRole(input: {
     principalUserId: string;
     scope: string;
     maxPending: number;
-  }): Promise<"created" | "pending" | "granted" | "too_many">;
+    maxPendingTotal: number;
+  }): Promise<"created" | "pending" | "granted" | "too_many" | "node_full">;
   /** Approves the pending row: sets the approver and `granted_at`. False when no pending row exists. */
   approvePending(input: { principalUserId: string; scope: string; approvedBy: string }): Promise<boolean>;
   /** Denies the pending row (soft: `revoked_at` set, never approved). False when no pending row exists. */
@@ -161,4 +166,6 @@ export interface NodeAiPermissionView {
 export interface NodeAiAccessView {
   readonly canManage: boolean;
   readonly permissions: readonly NodeAiPermissionView[];
+  /** Outside rows left out of `permissions` because the list is bounded. 0 when nothing is cut. */
+  readonly more: number;
 }

@@ -43,6 +43,7 @@ export function wireIsView(wire: Wire): NodeAiAccessView {
 export function viewIsWire(view: NodeAiAccessView): Wire {
   return {
     canManage: view.canManage,
+    more: view.more,
     permissions: view.permissions.map((row) => ({
       section: row.section,
       principalUserId: row.principalUserId,

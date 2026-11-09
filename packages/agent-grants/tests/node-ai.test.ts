@@ -19,7 +19,7 @@ const scopesByPrincipal = {
   prioritizer: ["work_item:transition"],
 };
 const build = async (store: ReturnType<typeof memoryStore>) =>
-  buildNodeAiView({ declarations, scopesByPrincipal, internal, rows: await store.listRoleRows() });
+  buildNodeAiView({ declarations, scopesByPrincipal, internal, rows: (await store.listRoleRows(100)).rows });
 
 describe("buildNodeAiView: one row per grant row, in three blocks", () => {
   it("lists each internal AI by each permission, name and description from the declaration, name from agent_principals", async () => {
@@ -28,7 +28,7 @@ describe("buildNodeAiView: one row per grant row, in three blocks", () => {
     expect(rows.map((r) => [r.who, r.label, r.description.length > 0])).toEqual([
       ["General assistant", "Change schedules", true],
       ["General assistant", "Save notes", true],
-      ["prioritizer", "Update work items", true], // no display name: the slug
+      ["Node AI", "Update work items", true], // no display name: a neutral name, never the slug
     ]);
   });
 

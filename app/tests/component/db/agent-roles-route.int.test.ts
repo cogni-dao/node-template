@@ -156,7 +156,7 @@ describe("agent roles route (real Postgres, real repo-spec admin)", () => {
     session.user = sessionUser(memberUser, "session");
     const res = await getView();
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ canManage: false, permissions: [] });
+    expect(await res.json()).toEqual({ canManage: false, permissions: [], more: 0 });
     expect((await call(POST, body)).status).toBe(403);
     session.user = null;
     expect((await getView()).status).toBe(401);

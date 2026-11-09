@@ -77,6 +77,11 @@ export function AgentAccessSection({ endpoints, className }: AgentAccessSectionP
               {error}
             </p>
           )}
+          {state.view.more > 0 && (
+            <p className="pb-2 text-muted-foreground text-xs" role="status">
+              {state.view.more} more outside {state.view.more === 1 ? "row is" : "rows are"} not shown. Clear some to see them.
+            </p>
+          )}
           {state.view.permissions.length === 0 ? (
             <p className="py-2 text-muted-foreground text-sm">Nothing to manage.</p>
           ) : (
@@ -109,13 +114,22 @@ export function AgentAccessSection({ endpoints, className }: AgentAccessSectionP
                       return (
                         <tr key={key} aria-busy={saving || undefined}>
                           <td className="py-2 pr-3 align-top text-foreground">
-                            {row.who}
-                            {row.outside && (
-                              <span className="ml-2 rounded border border-border px-1 text-muted-foreground text-xs">
-                                outside
-                              </span>
+                            {row.outside ? (
+                              // An outside agent chose its own name. The badge comes first, the name is quoted, and the proven
+                              // binding (when there is one) sits beside it, so an outside "General assistant" is never
+                              // mistaken for this node's AI.
+                              <>
+                                <span className="mr-2 rounded border border-foreground/40 px-1 font-medium text-xs">
+                                  outside
+                                </span>
+                                <span>&ldquo;{row.who}&rdquo;</span>
+                                <div className="text-muted-foreground text-xs">
+                                  {row.hint ?? "No linked account"}
+                                </div>
+                              </>
+                            ) : (
+                              row.who
                             )}
-                            {row.hint && <div className="text-muted-foreground text-xs">{row.hint}</div>}
                           </td>
                           <td className="py-2 pr-3 align-top">
                             <div className="text-foreground">{row.label}</div>

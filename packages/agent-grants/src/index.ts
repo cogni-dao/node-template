@@ -34,6 +34,7 @@ export {
   SAME_DOOR_ROUTES,
   type SameDoorRoute,
 } from "./same-door";
+export { agentNameKey, hasHiddenCharacters } from "./names";
 export { buildNodeAiView } from "./node-ai";
 export { createPostgresAgentGrantsStore, type SqlTag } from "./postgres";
 export {
@@ -42,6 +43,7 @@ export {
   grantRole,
   listOwnAccess,
   MAX_PENDING_PER_AGENT,
+  MAX_PENDING_TOTAL,
   type PrincipalRef,
   requestAccess,
   type RolesErrorCode,

@@ -62,7 +62,7 @@ describe("agent authority (real Postgres)", () => {
   });
 
   afterAll(async () => {
-    await service?.unsafe("DELETE FROM agent_roles WHERE approved_by = ANY($1)", [
+    await service?.unsafe("DELETE FROM agent_roles WHERE approved_by = ANY($1) OR principal_user_id = ANY($1) OR requested_by = ANY($1)", [
       created.users,
     ]);
     await service?.unsafe("DELETE FROM agent_principals WHERE user_id = ANY($1)", [created.users]);
@@ -349,6 +349,97 @@ describe("agent authority (real Postgres)", () => {
       const store = createPostgresAgentGrantsStore(service as never);
       expect(await store.liveScopes(agent, ["a:live", "b:revoked", "c:other", "d:none"])).toEqual(["a:live"]);
       expect(await store.liveScopes(agent, [])).toEqual([]);
+    });
+  });
+
+  describe("pending, denied, backfilled and revoked rows over real Postgres (0038)", () => {
+    const store = async () => (await import("@cogni/agent-grants")).createPostgresAgentGrantsStore(service as never);
+    const SCOPES = ["edo:write", "work_item:transition"];
+    const insert = (principal: string, scope: string, fields: { approvedBy?: string | null; revoked?: boolean; grantedAt?: boolean }) =>
+      service`INSERT INTO agent_roles (principal_user_id, scope, approved_by, requested_by, granted_at, revoked_at)
+        VALUES (${principal}, ${scope}, ${fields.approvedBy ?? null}, ${principal}, ${fields.grantedAt ? new Date() : null}, ${fields.revoked ? new Date() : null})`;
+
+    it("a pending ask opens no lock: hasLiveRole and liveScopes both say no", async () => {
+      const agent = await makeUser();
+      await insert(agent, "edo:write", {});
+      const st = await store();
+      expect(await st.hasLiveRole(agent, "edo:write")).toBe(false);
+      expect(await st.liveScopes(agent, SCOPES)).toEqual([]);
+      expect(await st.listOwnRoles(agent)).toEqual([expect.objectContaining({ scope: "edo:write", state: "pending" })]);
+    });
+
+    it("a denied ask (never approved, revoked) opens no lock and is not pending", async () => {
+      const agent = await makeUser();
+      await insert(agent, "edo:write", { revoked: true });
+      const st = await store();
+      expect(await st.hasLiveRole(agent, "edo:write")).toBe(false);
+      expect(await st.liveScopes(agent, SCOPES)).toEqual([]);
+      expect(await st.listOwnRoles(agent)).toEqual([expect.objectContaining({ scope: "edo:write", state: "denied" })]);
+      expect((await st.listRoleRows(100)).rows.filter((r) => r.principalUserId === agent)).toEqual([]); // not an ask on the admin table
+    });
+
+    it("a row written before 0038 (approved, no granted_at) still authorizes, and the migration backfill sets granted_at", async () => {
+      const admin = await makeUser();
+      const agent = await makeUser();
+      await insert(agent, "edo:write", { approvedBy: admin, grantedAt: false });
+      const st = await store();
+      expect(await st.hasLiveRole(agent, "edo:write")).toBe(true);
+      expect(await st.liveScopes(agent, SCOPES)).toEqual(["edo:write"]);
+      // Run the migration's own backfill statement against this old-shape row.
+      const { readFileSync } = await import("node:fs");
+      const { resolve } = await import("node:path");
+      const sqlText = readFileSync(resolve(__dirname, "../../../src/adapters/server/db/migrations/0038_agent_access_requests.sql"), "utf8");
+      const backfill = /UPDATE "agent_roles" SET "granted_at"[^;]*;/.exec(sqlText)?.[0];
+      expect(backfill).toBeTruthy();
+      await service.unsafe(backfill as string);
+      const row = (await service`SELECT granted_at, created_at FROM agent_roles WHERE principal_user_id = ${agent}`)[0];
+      expect(row?.granted_at).not.toBeNull();
+      expect(new Date(row?.granted_at as Date).getTime()).toBe(new Date(row?.created_at as Date).getTime());
+      // The seeded AI names the migration set.
+      const names = await service`SELECT slug, display_name FROM agent_principals WHERE kind = 'internal' ORDER BY slug`;
+      expect(names.map((n) => [n.slug, n.display_name])).toEqual([[NODE_AI_PRINCIPAL_SLUG, "General assistant"], [PRIORITIZER_PRINCIPAL_SLUG, "Priority scorer"]]);
+    });
+
+    it("approved then revoked: live while approved, off after", async () => {
+      const admin = await makeUser();
+      const agent = await makeUser();
+      const st = await store();
+      expect(await st.requestRole({ principalUserId: agent, scope: "edo:write", maxPending: 3, maxPendingTotal: 1000 })).toBe("created");
+      expect(await st.hasLiveRole(agent, "edo:write")).toBe(false);
+      expect(await st.approvePending({ principalUserId: agent, scope: "edo:write", approvedBy: admin })).toBe(true);
+      expect(await st.hasLiveRole(agent, "edo:write")).toBe(true);
+      expect(await st.liveScopes(agent, SCOPES)).toEqual(["edo:write"]);
+      expect(await st.revokeRole({ principalUserId: agent, scope: "edo:write" })).toBe(true);
+      expect(await st.hasLiveRole(agent, "edo:write")).toBe(false);
+      expect(await st.liveScopes(agent, SCOPES)).toEqual([]);
+      expect(await st.listOwnRoles(agent)).toEqual([expect.objectContaining({ state: "revoked" })]);
+    });
+
+    it("NO_SELF_APPROVAL in SQL: an approver id equal to the principal approves nothing", async () => {
+      const agent = await makeUser();
+      await insert(agent, "edo:write", {});
+      const st = await store();
+      expect(await st.approvePending({ principalUserId: agent, scope: "edo:write", approvedBy: agent })).toBe(false);
+      expect(await st.hasLiveRole(agent, "edo:write")).toBe(false);
+    });
+
+    it("nameTaken: this node's AI names, any user's name, in any case, spacing or look-alike form; a fresh name is free", async () => {
+      const a = createAgentToolAuthority({
+        sql: service as unknown as AgentAuthoritySql,
+        nodeAdmin: { check: async () => ({ ok: false, errorCode: "authz_denied" }) },
+        log: makeLogger({ component: "agent-authority-test" }),
+        toolBundle: [],
+      });
+      expect(await a.nameTaken("General assistant")).toBe(true);
+      expect(await a.nameTaken("  general   ASSISTANT ")).toBe(true);
+      expect(await a.nameTaken("\uFF27eneral assistant")).toBe(true); // fullwidth G
+      expect(await a.nameTaken("Priority scorer")).toBe(true);
+      expect(await a.nameTaken("prioritizer")).toBe(true); // the slug is a name too
+      const id = await makeUser();
+      await service`UPDATE users SET name = 'Zed  The  Agent' WHERE id = ${id}`;
+      expect(await a.nameTaken("zed the agent")).toBe(true);
+      expect(await a.nameTaken(`Brand new ${randomUUID().slice(0, 8)}`)).toBe(false);
+      expect(await a.nameTaken("   ")).toBe(true);
     });
   });
 });

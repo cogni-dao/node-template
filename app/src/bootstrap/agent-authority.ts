@@ -21,9 +21,11 @@
 
 import {
   type AdminCheck,
+  agentNameKey,
   type AuthzDecision,
   authorizeCaller,
   ROUTE_ONLY_CAPABILITIES,
+  SAME_DOOR_ROUTES,
   type AuthzEvent,
   createPostgresAgentGrantsStore,
   buildNodeAiView,
@@ -76,10 +78,18 @@ export interface AgentToolAuthority {
     principalUserId: string;
     scope: string;
   }): Promise<{ state: "pending" | "granted"; created: boolean }>;
+  /**
+   * True when `name` matches (case, spacing and look-alike forms ignored) any user's name or any of this node's AI names. Used at
+   * registration so an outside agent cannot take a name that looks like this node's AI on the screen where an admin says yes.
+   */
+  nameTaken(name: string): Promise<boolean>;
   /** The agent's own rows by state. */
   listOwnAccess(principalUserId: string): Promise<Array<{ scope: string; state: RoleState; at: string }>>;
-  /** The admin table: one row per grant row, in three blocks. Name and description come from the declarations only. */
-  listNodeAi(): Promise<NodeAiPermissionView[]>;
+  /**
+   * The admin table: one row per grant row, in three blocks. Name and description come from the declarations only.
+   * Outside rows are bounded (`MAX_ADMIN_OUTSIDE_ROWS`); `more` counts the ones cut.
+   */
+  listNodeAi(): Promise<{ permissions: NodeAiPermissionView[]; more: number }>;
   /** The same admin check the guard uses, for the role routes. */
   readonly adminCheck: AdminCheck;
   /**
@@ -135,6 +145,9 @@ export function createAdminCheck(
   };
 }
 
+/** Outside-agent rows the admin read returns at most (pending asks first). The rest are counted, not sent. */
+export const MAX_ADMIN_OUTSIDE_ROWS = 100;
+
 export function createAgentToolAuthority(deps: {
   sql: AgentAuthoritySql;
   nodeAdmin: NodeAdminAuthority;
@@ -152,6 +165,14 @@ export function createAgentToolAuthority(deps: {
       description: cap.requires.description,
     };
   const declaredScopes = Object.keys(declarations).sort();
+  // The scopes an outside agent can actually use: a route twin it can call. An ask for any other scope would be an approvable
+  // row that opens nothing, so it is refused up front.
+  const askableScopes = [
+    ...new Set([
+      ...Object.values(SAME_DOOR_ROUTES).map((r) => r.scope),
+      ...Object.values(ROUTE_ONLY_CAPABILITIES).map((c) => c.requires.scope),
+    ]),
+  ].sort();
   const adminCheck = createAdminCheck(deps.sql, deps.nodeAdmin);
 
   // One transaction per call, so a role read sees one consistent snapshot.
@@ -180,11 +201,14 @@ export function createAgentToolAuthority(deps: {
           if (requires) scopes.push(requires.scope);
         }
       }
-      const { internal, rows } = await withStore(async (store) => ({
+      const { internal, listed } = await withStore(async (store) => ({
         internal: await store.listInternalPrincipals(),
-        rows: await store.listRoleRows(),
+        listed: await store.listRoleRows(MAX_ADMIN_OUTSIDE_ROWS),
       }));
-      return buildNodeAiView({ declarations, scopesByPrincipal, internal, rows });
+      return {
+        permissions: buildNodeAiView({ declarations, scopesByPrincipal, internal, rows: listed.rows }),
+        more: listed.more,
+      };
     },
     declaredScopes,
     adminCheck,
@@ -275,7 +299,7 @@ export function createAgentToolAuthority(deps: {
     },
     async requestAccess(input) {
       const result = await withStore((store) =>
-        requestAccess(store, { ...input, declaredScopes })
+        requestAccess(store, { ...input, declaredScopes, askableScopes })
       );
       if (result.created)
         deps.log.info(
@@ -287,6 +311,19 @@ export function createAgentToolAuthority(deps: {
           EVENT_NAMES.AGENT_ROLE_REQUESTED
         );
       return result;
+    },
+    async nameTaken(name) {
+      const key = agentNameKey(name);
+      if (!key) return true;
+      // POSIX classes, not \s: a tagged template cooks backslashes away.
+      const rows = await deps.sql`
+        SELECT 1 AS taken FROM users
+        WHERE lower(regexp_replace(btrim(name), '[[:space:]]+', ' ', 'g')) = ${key}
+        UNION ALL
+        SELECT 1 AS taken FROM agent_principals
+        WHERE lower(regexp_replace(btrim(coalesce(display_name, slug)), '[[:space:]]+', ' ', 'g')) = ${key}
+        LIMIT 1`;
+      return rows.length > 0;
     },
     listOwnAccess: (principalUserId) =>
       withStore((store) => listOwnAccess(store, principalUserId)),

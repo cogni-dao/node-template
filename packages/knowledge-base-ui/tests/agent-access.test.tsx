@@ -15,12 +15,16 @@ let asked = true;
 const row = (o: Partial<NodeAiPermissionView> & Pick<NodeAiPermissionView, "section" | "principalUserId" | "who" | "scope" | "label" | "description">): NodeAiPermissionView => ({
   outside: false, hint: null, on: false, until: null, ...o,
 });
+let extra: NodeAiPermissionView[] = [];
+let more = 0;
 const view = (): NodeAiAccessView => ({
   canManage: true,
+  more,
   permissions: [
     ...(asked ? [row({ section: "pending", principalUserId: "ext-1", who: "Helper bot", outside: true, hint: "GitHub linked", scope: "work_item:transition", label: "Update work items", description: "Move work items along and change their scores." })] : []),
     row({ section: "node", principalUserId: "u-node-ai", who: "General assistant", scope: "knowledge:write", label: "Save notes", description: "Save notes straight into the knowledge base.", on: allowed }),
     row({ section: "node", principalUserId: "u-node-ai", who: "General assistant", scope: "schedule:manage", label: "Change schedules", description: "Make, change and stop schedules." }),
+    ...extra,
     row({ section: "outside", principalUserId: "ext-2", who: "Review agent", outside: true, scope: "edo:write", label: "Log decisions", description: "Write down choices and how they turned out.", on: true }),
   ],
 });
@@ -37,6 +41,8 @@ const flush = () =>
 
 const fetchMock = vi.fn();
 beforeEach(() => {
+  extra = [];
+  more = 0;
   allowed = false;
   asked = true;
   fetchMock.mockReset();
@@ -169,6 +175,33 @@ describe("AgentAccessSection: an admin", () => {
     await waitFor(() => expect(screen.getByRole("switch", { name: SAVE })).toHaveAttribute("aria-checked", "false"));
     expect(calls.find((c) => c.method === "DELETE")?.body).toEqual({ principalUserId: "u-node-ai", scope: "knowledge:write" });
     expect(calls.every((c) => !c.headers || !("authorization" in Object.fromEntries(Object.entries(c.headers).map(([k, v]) => [k.toLowerCase(), v]))))).toBe(true);
+  });
+
+  it("an outside agent named like this node's AI is never mistaken for it: badge first, name quoted, proven binding beside it", async () => {
+    extra = [
+      row({ section: "pending", principalUserId: "ext-9", who: "General assistant", outside: true, hint: "GitHub id 424242", scope: "edo:write", label: "Log decisions", description: "Write down choices and how they turned out." }),
+      row({ section: "pending", principalUserId: "ext-10", who: "Priority scorer", outside: true, hint: null, scope: "metric:compute", label: "Refresh numbers", description: "Update the numbers shown on the dashboards." }),
+    ];
+    fetchMock.mockImplementation(() => json(200, view()));
+    render(<AgentAccessSection endpoints={ENDPOINTS} />);
+    await screen.findByRole("table");
+    const imposter = screen.getByRole("switch", { name: /^General assistant: Log decisions$/ }).closest("tr")!;
+    const who = within(imposter).getAllByRole("cell")[0]!;
+    expect(who.textContent).toBe("outside\u201cGeneral assistant\u201dGitHub id 424242");
+    expect(who.querySelector("span")?.textContent).toBe("outside"); // the badge is the first thing in the cell
+    // No proof of a binding: say so, still badged and quoted.
+    const noBinding = within(screen.getByRole("switch", { name: /^Priority scorer: Refresh numbers$/ }).closest("tr")!).getAllByRole("cell")[0]!;
+    expect(noBinding.textContent).toBe("outside\u201cPriority scorer\u201dNo linked account");
+    // This node's own AI of the same name is plain: no badge, no quotes.
+    const mineRow = screen.getAllByRole("switch", { name: /^General assistant: Save notes$/ })[0]!.closest("tr")!;
+    expect(within(mineRow).getAllByRole("cell")[0]!.textContent).toBe("General assistant");
+  });
+
+  it("says how many outside rows are not shown when the list is cut", async () => {
+    more = 7;
+    fetchMock.mockImplementation(() => json(200, view()));
+    render(<AgentAccessSection endpoints={ENDPOINTS} />);
+    expect(await screen.findByText(/7 more outside rows are not shown/)).toBeInTheDocument();
   });
 
   it("flipping a pending ask ON approves it; the x dismisses it", async () => {

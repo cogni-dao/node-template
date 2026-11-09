@@ -12,7 +12,8 @@
  *   - NO_SELF_APPROVAL: the ask writes a row with no approver. It opens no lock. Only an admin session on the human roles
  *     route sets an approver.
  *   - The ask door is open by design: any authenticated bearer may ask with no prior grant (OPEN_BY_DESIGN_ROUTES).
- *   - NODE_DECLARED_SCOPES: an undeclared scope is 400 `invalid_scope`. Open asks per agent are capped (429).
+ *   - NODE_DECLARED_SCOPES: an undeclared scope is 400 `invalid_scope`; a scope no route an outside agent can call uses is 400
+ *     `no_external_door`. Open asks are capped per agent and across the node (429).
  *   - Idempotent: asking again for a pending or live scope returns 200 with `created: false`.
  * Side-effects: IO (service-role database write and read)
  * Links: packages/agent-grants, https://cognidao.org/knowledge/ai-access-surface-design
@@ -63,6 +64,7 @@ export const POST = wrapRouteHandlerWithLogging(
     } catch (error) {
       if (error instanceof AgentRolesError) {
         if (error.code === "invalid_scope") return json({ error: "invalid_scope" }, 400);
+        if (error.code === "no_external_door") return json({ error: "no_external_door" }, 400);
         if (error.code === "too_many_requests") return json({ error: "too_many_requests" }, 429);
       }
       return json({ error: "authz_unavailable" }, 503);

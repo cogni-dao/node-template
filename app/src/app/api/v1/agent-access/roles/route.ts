@@ -55,10 +55,10 @@ export const GET = wrapRouteHandlerWithLogging(
       return json({ error: "authz_unavailable" }, 503);
     }
     if (admin !== "allow") {
-      return json(agentRolesListOperation.output.parse({ canManage: false, permissions: [] }));
+      return json(agentRolesListOperation.output.parse({ canManage: false, permissions: [], more: 0 }));
     }
     try {
-      return json(agentRolesListOperation.output.parse({ canManage: true, permissions: await authority.listNodeAi() }));
+      return json(agentRolesListOperation.output.parse({ canManage: true, ...(await authority.listNodeAi()) }));
     } catch (error) {
       ctx.log.error({ event: EVENT_NAMES.AGENT_ROLES_LIST_FAILED, routeId: "agent.access.roles.list", errorName: error instanceof Error ? error.name : "unknown" }, EVENT_NAMES.AGENT_ROLES_LIST_FAILED);
       return json({ error: "authz_unavailable" }, 503);

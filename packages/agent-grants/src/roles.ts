@@ -23,7 +23,8 @@ export type RolesErrorCode =
   | "invalid_scope"
   | "not_pending"
   | "self_approval"
-  | "too_many_requests";
+  | "too_many_requests"
+  | "no_external_door";
 
 export class AgentRolesError extends Error {
   readonly code: RolesErrorCode;
@@ -34,8 +35,17 @@ export class AgentRolesError extends Error {
   }
 }
 
-/** Open asks one agent may hold at once. */
-export const MAX_PENDING_PER_AGENT = 20;
+/**
+ * Open asks one agent may hold at once. An agent can ask for at most one row per askable scope, so this must stay below the number
+ * of askable scopes or it can never fire.
+ */
+export const MAX_PENDING_PER_AGENT = 3;
+
+/**
+ * Open asks across ALL agents. Registration is anonymous (bug.0297), so identities are cheap; this bounds what a flood of
+ * throwaway agents can put in front of the admin. Past it, a new ask is refused until an admin clears some.
+ */
+export const MAX_PENDING_TOTAL = 50;
 
 /** A principal named by catalog slug (internal AI) or by user id (any agent). */
 export type PrincipalRef =
@@ -68,17 +78,27 @@ async function resolveRef(
 /** An agent asks for a scope for itself. Idempotent: a pending or live row is reported, not duplicated. */
 export async function requestAccess(
   store: AgentGrantsStore,
-  input: { principalUserId: string; scope: string; declaredScopes: readonly string[] }
+  input: {
+    principalUserId: string;
+    scope: string;
+    declaredScopes: readonly string[];
+    /** Scopes an outside agent can actually use: a route twin it can call. Any other ask is refused (`no_external_door`). */
+    askableScopes: readonly string[];
+  }
 ): Promise<{ state: "pending" | "granted"; created: boolean }> {
   if (!input.declaredScopes.includes(input.scope))
     throw new AgentRolesError("invalid_scope", "scope is not declared");
+  // An ask the admin could approve but that opens nothing is misleading consent: refuse it.
+  if (!input.askableScopes.includes(input.scope))
+    throw new AgentRolesError("no_external_door", "no route an outside agent can call uses this scope");
   const result = await store.requestRole({
     principalUserId: input.principalUserId,
     scope: input.scope,
     maxPending: MAX_PENDING_PER_AGENT,
+    maxPendingTotal: MAX_PENDING_TOTAL,
   });
-  if (result === "too_many")
-    throw new AgentRolesError("too_many_requests", "too many open requests");
+  if (result === "too_many" || result === "node_full")
+    throw new AgentRolesError("too_many_requests", result === "node_full" ? "node has too many open requests" : "too many open requests");
   return { state: result === "granted" ? "granted" : "pending", created: result === "created" };
 }
 

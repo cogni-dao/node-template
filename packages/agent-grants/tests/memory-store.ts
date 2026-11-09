@@ -50,8 +50,8 @@ export function memoryStore(init?: {
     async listInternalPrincipals() {
       return Object.entries(init?.principals ?? {}).map(([slug, userId]) => ({ userId, slug, displayName: init?.names?.[slug] ?? null }));
     },
-    async listRoleRows() {
-      return roles
+    async listRoleRows(limit) {
+      const all = roles
         .filter((r) => !r.revoked)
         .map(
           (r): RoleRow => ({
@@ -65,6 +65,10 @@ export function memoryStore(init?: {
             at: "2026-11-09T00:00:00.000Z",
           })
         );
+      // Same contract as the SQL: this node's own AI always in full; outside rows bounded, pending first.
+      const mine = all.filter((r) => r.internal);
+      const outside = all.filter((r) => !r.internal).sort((a, b) => (a.state === b.state ? 0 : a.state === "pending" ? -1 : 1));
+      return { rows: [...mine, ...outside.slice(0, limit)], more: Math.max(0, outside.length - limit) };
     },
     async listOwnRoles(principalUserId) {
       const seen = new Set<string>();
@@ -76,18 +80,19 @@ export function memoryStore(init?: {
       }
       return out;
     },
-    async requestRole({ principalUserId, scope, maxPending }) {
+    async requestRole({ principalUserId, scope, maxPending, maxPendingTotal }) {
       guard();
       const open = openRow(principalUserId, scope);
       if (open) return open.approvedBy ? "granted" : "pending";
       if (roles.filter((r) => r.principal === principalUserId && !r.revoked && !r.approvedBy).length >= maxPending) return "too_many";
+      if (roles.filter((r) => !r.revoked && !r.approvedBy).length >= maxPendingTotal) return "node_full";
       roles.push({ principal: principalUserId, scope, revoked: false, approvedBy: null });
       return "created";
     },
     async approvePending({ principalUserId, scope, approvedBy }) {
       guard();
       const row = openRow(principalUserId, scope);
-      if (!row || row.approvedBy) return false;
+      if (!row || row.approvedBy || principalUserId === approvedBy) return false;
       row.approvedBy = approvedBy;
       return true;
     },

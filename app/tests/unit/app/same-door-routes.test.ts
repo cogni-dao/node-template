@@ -57,7 +57,7 @@ describe("same-door routes", () => {
   });
 
   it("S5: every write handler under work, schedules, edo, knowledge and metrics declares sameDoor or is on the deferred list", () => {
-    const dirs = ["work", "schedules", "edo", "knowledge", "metrics", "agent/access-requests"].map((d) => join(API, "v1", d));
+    const dirs = ["work", "schedules", "edo", "knowledge", "metrics", "agent/access-requests", "agent/register"].map((d) => join(API, "v1", d));
     const unaccounted: string[] = [];
     for (const dir of dirs)
       for (const file of routeFiles(dir)) {
@@ -74,10 +74,11 @@ describe("same-door routes", () => {
 
   it("the ask door is on the open-by-design list, says why, and is not also gated", () => {
     const gated = new Set(Object.values(DECLARED).flatMap((e) => e.routes));
-    expect(Object.keys(OPEN_BY_DESIGN_ROUTES)).toEqual(["agent.access.requests.create"]);
+    expect(Object.keys(OPEN_BY_DESIGN_ROUTES)).toEqual(["agent.access.requests.create", "agent.register"]);
     for (const [routeId, reason] of Object.entries(OPEN_BY_DESIGN_ROUTES)) {
       expect(gated.has(routeId), routeId).toBe(false);
-      expect(reason).toMatch(/NO_SELF_APPROVAL/);
+      expect(reason.length).toBeGreaterThan(30);
+      expect(reason).toMatch(/NO_SELF_APPROVAL|bug\.0297/);
       expect(sources.join("\n")).toContain(`routeId: "${routeId}"`);
     }
   });
