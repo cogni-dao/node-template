@@ -120,7 +120,7 @@ export const NODE_LANGGRAPH_CATALOG = {
    */
   [WORK_PRIORITIZER_GRAPH_NAME]: {
     displayName: "Work Prioritizer",
-    description: "Source-grounded mission loop with bounded scores or no-op",
+    description: "Scores open work against active goals with cited evidence, or changes nothing",
     principal: PRIORITIZER_PRINCIPAL,
     toolIds: COGNI_DECIDE_TOOL_IDS,
     graphFactory: createMissionGraph,

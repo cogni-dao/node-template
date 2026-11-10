@@ -45,7 +45,7 @@ const AVAILABLE_GRAPHS: readonly GraphOption[] = [
   {
     graphId: "langgraph:work-prioritizer" satisfies GraphId,
     name: "Work Prioritizer",
-    description: "Source-grounded mission loop with bounded scores or no-op",
+    description: "Scores open work against active goals with cited evidence, or changes nothing",
   },
 ];
 
