@@ -71,10 +71,18 @@ export interface CognitionReadOptions {
 
 /** Default bound on the HEAD check once a complete snapshot exists. */
 export const COGNITION_REVISION_DEADLINE_MS = 250;
-/** Default bound on a fresh index read once a complete snapshot exists. */
-export const COGNITION_FRESH_READ_DEADLINE_MS = 1_000;
-/** Default bound on how long an unconfirmed snapshot may be served stale. */
-export const COGNITION_MAX_STALE_MS = 60_000;
+/**
+ * Default bound on a fresh index read once a complete snapshot exists. After
+ * a commit, each Doltgres read takes about 1 s on production; the caller gets
+ * the kept snapshot instead and the read lands behind it.
+ */
+export const COGNITION_FRESH_READ_DEADLINE_MS = 600;
+/**
+ * Default bound on how long an unconfirmed snapshot may be served stale: the
+ * session loader's own refresh TTL (900 s), so a quiet node still answers
+ * fast. Most commits are work-item writes that leave cognition unchanged.
+ */
+export const COGNITION_MAX_STALE_MS = 900_000;
 /** A shared HEAD check older than this is not joined; the next caller issues its own. */
 export const COGNITION_HEAD_SHARE_MS = 2_000;
 
