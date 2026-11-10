@@ -92,8 +92,8 @@ export function createPostgresCredentialStore(client: CredentialSql): Credential
         await tx`INSERT INTO agent_principals (kind, user_id) VALUES ('external', ${userId}) ON CONFLICT (user_id) DO NOTHING`;
         await tx`
           UPDATE agent_credentials SET revoked_at = now(), revoked_reason = 'superseded'
-          WHERE user_id = ${userId} AND created_from = 'legacy_upgrade' AND confirmed_at IS NULL AND revoked_at IS NULL`;
-        return insertPending(tx, { userId, tokenHash, createdFrom: "legacy_upgrade", predecessorId: null, policy });
+          WHERE user_id = ${userId} AND created_from = 'key_upgrade' AND confirmed_at IS NULL AND revoked_at IS NULL`;
+        return insertPending(tx, { userId, tokenHash, createdFrom: "key_upgrade", predecessorId: null, policy });
       }),
 
     issueSuccessor: ({ predecessorId, tokenHash, policy }) =>
@@ -111,7 +111,7 @@ export function createPostgresCredentialStore(client: CredentialSql): Credential
     confirm: ({ credentialId, policy: p }) =>
       client.begin(async (tx): Promise<ConfirmResult> => {
         // Predecessor first (same order as rotate), then the successor row. An upgrade key has no predecessor: it takes the same
-        // per-user advisory lock as `issueUpgrade`, so a confirm cannot interleave with a new upgrade (two live v2 keys).
+        // per-user advisory lock as `issueUpgrade`, so a confirm cannot interleave with a new upgrade (two live revocable keys).
         const link = await tx`SELECT predecessor_id, user_id FROM agent_credentials WHERE id = ${credentialId}`;
         const predecessorId = typeof link[0]?.predecessor_id === "string" ? link[0].predecessor_id : null;
         if (predecessorId) await tx`SELECT 1 FROM agent_credentials WHERE id = ${predecessorId} FOR UPDATE`;

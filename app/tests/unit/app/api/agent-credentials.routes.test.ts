@@ -3,17 +3,18 @@
 
 /**
  * Module: `@tests/unit/app/api/agent-credentials.routes`
- * Purpose: The v2 agent key routes end to end (task.0070): a v1 key upgrades to a v2 key on the same user id, the v2 key authenticates through
+ * Purpose: The revocable agent key routes end to end (task.0070): a signed key upgrades to a revocable key on the same user id, the revocable key authenticates through
  *   the real resolver, rotate + confirm swap keys and the old one dies, revoking one key 401s only it, and a store outage is 503, never 401.
  * Scope: The REAL routes, route wrapper, resolver (request-identity.ts) and credential service. Fakes: the credential store (the package's
  *   memory store, same semantics as the SQL), the header source, the container and the session getter. No network, no database.
- * Invariants: V1_PATH_UNCHANGED (an existing v1 key authenticates before and after), V2_ACTIVE_ONLY, STORE_OUTAGE_IS_NOT_401.
+ * Invariants: V1_PATH_UNCHANGED (an existing signed key authenticates before and after), REVOCABLE_ACTIVE_ONLY, STORE_OUTAGE_IS_NOT_401.
  * Side-effects: none
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { REVOCABLE_KEY_PREFIX } from "@cogni/agent-grants/credentials";
 import { memoryCredentialStore } from "../../../../../packages/agent-grants/tests/credentials-memory-store";
 
 const fake = vi.hoisted(() => ({
@@ -66,8 +67,8 @@ const ordinary = wrapRouteHandlerWithLogging(
 const ping = (key: string | null) => post(ordinary as never, key);
 const v1 = () => issueAgentApiKey({ userId: USER, displayName: "Flock" });
 
-/** v1 -> upgrade -> confirm: an active v2 key. */
-async function activeV2() {
+/** v1 -> upgrade -> confirm: an active revocable key. */
+async function activeKey() {
   const up = await (await post(upgrade as never, v1())).json();
   await post(confirm as never, up.apiKey);
   return up as { apiKey: string; credentialId: string; userId: string };
@@ -80,13 +81,13 @@ beforeEach(() => {
 });
 
 describe("upgrade", () => {
-  it("a v1 key gets a pending v2 key for the SAME user id; pending does not authenticate ordinary routes; confirm activates it", async () => {
+  it("a signed key gets a pending revocable key for the SAME user id; pending does not authenticate ordinary routes; confirm activates it", async () => {
     const res = await post(upgrade as never, v1());
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("no-store");
     const body = await res.json();
     expect(body).toMatchObject({ userId: USER, status: "pending" });
-    expect(body.apiKey).toMatch(/^cogni_ag_sk_v2_/);
+    expect(body.apiKey.startsWith(REVOCABLE_KEY_PREFIX)).toBe(true);
 
     expect((await ping(body.apiKey)).status).toBe(401);
     const confirmed = await post(confirm as never, body.apiKey);
@@ -98,30 +99,30 @@ describe("upgrade", () => {
     expect(await ok.json()).toMatchObject({ id: USER, via: "bearer", name: `name-${USER}` });
   });
 
-  it("v1 coexistence while pending; v1_superseded once the v2 key is confirmed, and still after it is revoked", async () => {
+  it("v1 coexistence while pending; v1_superseded once the revocable key is confirmed, and still after it is revoked", async () => {
     const key = v1();
     expect((await ping(key)).status).toBe(200);
     const pending = await (await post(upgrade as never, key)).json();
-    expect((await ping(key)).status).toBe(200); // the v2 key is only pending: the v1 key keeps working
+    expect((await ping(key)).status).toBe(200); // the revocable key is only pending: the signed key keeps working
     await post(confirm as never, pending.apiKey);
     const superseded = await ping(key);
     expect(superseded.status).toBe(401);
     expect(await superseded.json()).toEqual({ error: "v1_superseded" });
     expect((await ping(pending.apiKey)).status).toBe(200);
-    // Revoking the v2 key must not revive the leaked-or-old v1 key, and the v1 key cannot re-upgrade.
+    // Revoking the revocable key must not revive the leaked-or-old signed key, and the signed key cannot re-upgrade.
     await post(revoke as never, pending.apiKey);
     expect((await ping(pending.apiKey)).status).toBe(401);
     expect((await ping(key)).status).toBe(401);
     expect((await post(upgrade as never, key)).status).toBe(401);
   });
 
-  it("refuses no key, a forged v1 key, and a v2 key (V1_ONLY); a second upgrade with the superseded v1 key is 401", async () => {
+  it("refuses no key, a forged signed key, and a revocable key (V1_ONLY); a second upgrade with the superseded signed key is 401", async () => {
     expect((await post(upgrade as never, null)).status).toBe(401);
     expect((await post(upgrade as never, "cogni_ag_sk_v1_forged.sig")).status).toBe(401);
-    const v2 = await activeV2();
-    const viaV2 = await post(upgrade as never, v2.apiKey);
-    expect(viaV2.status).toBe(403);
-    expect(await viaV2.json()).toEqual({ error: "v1_bearer_required" });
+    const rk = await activeKey();
+    const viaRevocable = await post(upgrade as never, rk.apiKey);
+    expect(viaRevocable.status).toBe(403);
+    expect(await viaRevocable.json()).toEqual({ error: "signed_key_required" });
     const again = await post(upgrade as never, v1());
     expect(again.status).toBe(401);
     expect(await again.json()).toEqual({ error: "v1_superseded" });
@@ -137,7 +138,7 @@ describe("upgrade", () => {
 
 describe("rotate + confirm", () => {
   it("rotate returns a pending successor for the same user; confirm swaps: the old key is dead, the new one works", async () => {
-    const old = await activeV2();
+    const old = await activeKey();
     const rotated = await post(rotate as never, old.apiKey);
     expect(rotated.status).toBe(200);
     const next = await rotated.json();
@@ -150,7 +151,7 @@ describe("rotate + confirm", () => {
   });
 
   it("confirm is idempotent (replay true), and rotate called twice returns a new key and kills the first pending one", async () => {
-    const old = await activeV2();
+    const old = await activeKey();
     const first = await (await post(rotate as never, old.apiKey)).json();
     const second = await (await post(rotate as never, old.apiKey)).json();
     expect(second.apiKey).not.toBe(first.apiKey);
@@ -162,7 +163,7 @@ describe("rotate + confirm", () => {
   });
 
   it("a renew_only key may rotate but is refused on ordinary routes", async () => {
-    const old = await activeV2();
+    const old = await activeKey();
     fake.memory.advance(31 * 24 * 3600);
     expect((await ping(old.apiKey)).status).toBe(401);
     expect((await post(rotate as never, old.apiKey)).status).toBe(200);
@@ -174,13 +175,13 @@ describe("rotate + confirm", () => {
     const res = await post(rotate as never, null);
     expect(res.status).toBe(401);
     expect(res.headers.get("www-authenticate")).toContain("invalid_token");
-    expect((await post(rotate as never, "cogni_ag_sk_v2_junk")).status).toBe(401);
+    expect((await post(rotate as never, `${REVOCABLE_KEY_PREFIX}junk`)).status).toBe(401);
   });
 });
 
 describe("revoke (A7)", () => {
   it("revoking one key 401s only it; another user's key stays 200; a foreign credential id is 404", async () => {
-    const mine = await activeV2();
+    const mine = await activeKey();
     const otherUp = await (await post(upgrade as never, issueAgentApiKey({ userId: OTHER, displayName: "Other" }))).json();
     await post(confirm as never, otherUp.apiKey);
 
@@ -196,7 +197,7 @@ describe("revoke (A7)", () => {
   });
 
   it("revoking an old key also kills its pending successor", async () => {
-    const old = await activeV2();
+    const old = await activeKey();
     const next = await (await post(rotate as never, old.apiKey)).json();
     await post(revoke as never, old.apiKey);
     expect((await post(confirm as never, next.apiKey)).status).toBe(401);
@@ -205,23 +206,23 @@ describe("revoke (A7)", () => {
 
 describe("store outage", () => {
   it("is 503 authz_unavailable on an ordinary route and on a credential route, never 401", async () => {
-    const v2 = await activeV2();
+    const rk = await activeKey();
     fake.memory.outage.failing = true;
-    const ordinaryRes = await ping(v2.apiKey);
+    const ordinaryRes = await ping(rk.apiKey);
     expect(ordinaryRes.status).toBe(503);
     expect(await ordinaryRes.json()).toEqual({ error: "authz_unavailable" });
-    expect((await post(rotate as never, v2.apiKey)).status).toBe(503);
+    expect((await post(rotate as never, rk.apiKey)).status).toBe(503);
     // The v1 gate reads the store too: an outage there is 503, not a false 401.
     expect((await ping(v1())).status).toBe(503);
   });
 
   it("an outage AFTER a successful verify (mid-handler) is 503 on rotate, confirm, revoke and upgrade, never a 500", async () => {
-    const v2 = await activeV2();
+    const rk = await activeKey();
     const v1Key = issueAgentApiKey({ userId: OTHER, displayName: "Other" });
     for (const [method, call] of [
-      ["issueSuccessor", () => post(rotate as never, v2.apiKey)],
-      ["confirm", () => post(confirm as never, v2.apiKey)],
-      ["revoke", () => post(revoke as never, v2.apiKey)],
+      ["issueSuccessor", () => post(rotate as never, rk.apiKey)],
+      ["confirm", () => post(confirm as never, rk.apiKey)],
+      ["revoke", () => post(revoke as never, rk.apiKey)],
       ["issueUpgrade", () => post(upgrade as never, v1Key)],
     ] as const) {
       fake.memory.outage.failOn = method;
@@ -230,13 +231,13 @@ describe("store outage", () => {
       expect(await res.json(), method).toEqual({ error: "authz_unavailable" });
     }
     fake.memory.outage.failOn = null;
-    expect((await ping(v2.apiKey)).status).toBe(200); // nothing was half-applied
+    expect((await ping(rk.apiKey)).status).toBe(200); // nothing was half-applied
   });
 
   it("a perimeter-shaped bad token (wrong charset or length) is 401 and never reads the store", async () => {
     fake.memory.outage.failing = true;
-    expect((await post(rotate as never, `cogni_ag_sk_v2_${"a".repeat(42)}!`)).status).toBe(401);
-    expect((await post(rotate as never, `cogni_ag_sk_v2_${"a".repeat(44)}`)).status).toBe(401);
+    expect((await post(rotate as never, `${REVOCABLE_KEY_PREFIX}${"a".repeat(42)}!`)).status).toBe(401);
+    expect((await post(rotate as never, `${REVOCABLE_KEY_PREFIX}${"a".repeat(44)}`)).status).toBe(401);
   });
 });
 

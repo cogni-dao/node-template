@@ -3,7 +3,7 @@
 
 /**
  * Module: `@app/_lib/auth/agent-credential-route`
- * Purpose: Shared shell of the v2 key routes that authenticate WITH a v2 key (rotate, confirm, revoke): read the bearer, verify it
+ * Purpose: Shared shell of the revocable key routes that authenticate WITH a revocable key (rotate, confirm, revoke): read the bearer, verify it
  *   against the credential store for the states the route accepts, answer 401 or 503, else hand the caller to the handler.
  * Scope: Auth and response plumbing only. The state machine lives in `@cogni-dao/agent-grants/credentials`.
  * Invariants:
@@ -17,7 +17,7 @@
 import { type CredentialState, CredentialStoreUnavailableError } from "@cogni/agent-grants/credentials";
 import { type NextRequest, NextResponse } from "next/server";
 
-import { currentBearerToken, verifyAgentKeyV2 } from "@/app/_lib/auth/request-identity";
+import { currentBearerToken, verifyRevocableKey } from "@/app/_lib/auth/request-identity";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import type { RequestContext } from "@/shared/observability";
 
@@ -42,14 +42,14 @@ export interface CredentialCaller {
 
 export function credentialBearerRoute(options: {
   routeId: string;
-  /** The v2 states this route accepts. */
+  /** The key states this route accepts. */
   allow: readonly CredentialState[];
   handle: (input: { ctx: RequestContext; request: NextRequest; caller: CredentialCaller }) => Promise<NextResponse>;
 }) {
   return wrapRouteHandlerWithLogging({ routeId: options.routeId, auth: { mode: "none" } }, (ctx, request) =>
     answerStoreOutage(async () => {
       const token = await currentBearerToken();
-      const verified = token ? await verifyAgentKeyV2(token, options.allow) : null;
+      const verified = token ? await verifyRevocableKey(token, options.allow) : null;
       if (verified?.ok) {
         return options.handle({ ctx, request, caller: { userId: verified.userId, credentialId: verified.credentialId } });
       }

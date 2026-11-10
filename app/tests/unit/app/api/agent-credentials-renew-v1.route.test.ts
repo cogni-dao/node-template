@@ -3,7 +3,7 @@
 
 /**
  * Module: `@tests/unit/app/api/agent-credentials-renew-v1.route`
- * Purpose: renew-v1 (task.0069 C1-C3): a valid v1 key gets a fresh key for the SAME user id; sessions, wallets, internal
+ * Purpose: renew-v1 (task.0069 C1-C3): a valid signed key gets a fresh key for the SAME user id; sessions, wallets, internal
  *   principals and calls at or after the hard stop are refused; the env can only shorten the hard stop.
  * Scope: The real route, the real resolver (request-identity.ts) and the real key signer; a fake db and a mocked header
  *   source. No network.
@@ -73,7 +73,7 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe("renew-v1", () => {
-  it("a valid v1 key returns a fresh key for the same user, and the new key authenticates with the same sub", async () => {
+  it("a valid signed key returns a fresh key for the same user, and the new key authenticates with the same sub", async () => {
     const res = await renew(`Bearer ${oldKey()}`);
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("no-store");
@@ -86,7 +86,7 @@ describe("renew-v1", () => {
     expect(resolved).toMatchObject({ id: USER_ID, displayName: "Flock", via: "bearer" });
   });
 
-  it("a v1 key whose user already holds a confirmed v2 key cannot renew (v1_superseded)", async () => {
+  it("a signed key whose user already holds a confirmed revocable key cannot renew (v1_superseded)", async () => {
     fake.superseded = true;
     await expect(renew(`Bearer ${oldKey()}`)).rejects.toMatchObject({ code: "v1_superseded" });
   });

@@ -45,13 +45,13 @@ export const EVENT_NAMES = {
 	/** renew-v1 (task.0069): a v1 agent key was renewed (userId, oldExp, newExp; never the key) or refused (userId, reason). */
 	AGENT_CREDENTIAL_V1_RENEWED: "agent.credential.v1_renewed",
 	AGENT_CREDENTIAL_V1_RENEW_REFUSED: "agent.credential.v1_renew_refused",
-	/** v2 agent keys (task.0070): upgraded / rotated (a pending key issued), confirmed, revoked, refused. Carry userId and credentialId, never a key or hash. */
+	/** revocable agent keys (task.0070): upgraded / rotated (a pending key issued), confirmed, revoked, refused. Carry userId and credentialId, never a key or hash. */
 	AGENT_CREDENTIAL_UPGRADED: "agent.credential.upgraded",
 	AGENT_CREDENTIAL_ROTATED: "agent.credential.rotated",
 	AGENT_CREDENTIAL_CONFIRMED: "agent.credential.confirmed",
 	AGENT_CREDENTIAL_REVOKED: "agent.credential.revoked",
 	AGENT_CREDENTIAL_REFUSED: "agent.credential.refused",
-	/** A v2 key could not be verified because the credential store failed; the request got 503, not 401. */
+	/** A revocable key could not be verified because the credential store failed; the request got 503, not 401. */
 	AGENT_CREDENTIAL_STORE_UNAVAILABLE: "agent.credential.store_unavailable",
 	/** A DAO admin granted / revoked an agent role (task.5456): principal, scope, approvedBy. */
 	AGENT_ROLE_GRANTED: "agent_role.granted",

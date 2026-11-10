@@ -3,7 +3,7 @@
 
 /**
  * Module: `@app/api/v1/agent/credentials/rotate`
- * Purpose: A v2 key (active, or renew_only inside its renew window) mints its PENDING successor for the same users.id. The old key keeps
+ * Purpose: A revocable key (active, or renew_only inside its renew window) mints its PENDING successor for the same users.id. The old key keeps
  *   working until the successor is confirmed (`confirm`).
  * Scope: Auth shell and response mapping. Supersede and locking live in `@cogni-dao/agent-grants/credentials`.
  * Invariants:

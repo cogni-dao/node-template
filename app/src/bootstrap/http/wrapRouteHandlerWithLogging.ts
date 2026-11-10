@@ -167,7 +167,7 @@ export function wrapRouteHandlerWithLogging<TContext = unknown>(
       );
     }
 
-    // Fetch session based on auth mode. A v2 key whose store cannot answer is 503, never a false 401 (STORE_OUTAGE_IS_NOT_401).
+    // Fetch session based on auth mode. A revocable key whose store cannot answer is 503, never a false 401 (STORE_OUTAGE_IS_NOT_401).
     let sessionUser: SessionUser | null = null;
     if (options.auth && options.auth.mode !== "none") {
       try {

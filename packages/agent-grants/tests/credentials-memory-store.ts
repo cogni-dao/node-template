@@ -89,8 +89,8 @@ export function memoryCredentialStore(init: { users: Record<string, MemoryUser>;
       if (rows.some((r) => r.userId === userId && ["active", "renew_only"].includes(state(r)))) return { ok: false, reason: "already_upgraded" };
       if (u.roles && !u.github) return { ok: false, reason: "binding_required" };
       for (const r of rows)
-        if (r.userId === userId && r.createdFrom === "legacy_upgrade" && r.confirmedAt === null && r.revokedAt === null) revokeRow(r, "superseded");
-      const row = pending(userId, tokenHash, "legacy_upgrade", null, policy);
+        if (r.userId === userId && r.createdFrom === "key_upgrade" && r.confirmedAt === null && r.revokedAt === null) revokeRow(r, "superseded");
+      const row = pending(userId, tokenHash, "key_upgrade", null, policy);
       return { ok: true, credentialId: row.id, userId, pendingExpiresAt: iso(row.pendingExpiresAt) };
     },
     async issueSuccessor({ predecessorId, tokenHash, policy }): Promise<IssueResult> {

@@ -3,7 +3,7 @@
 
 /**
  * Module: `@cogni-dao/agent-grants/credentials` service
- * Purpose: Mint, verify, upgrade, rotate, confirm and revoke v2 agent keys over a `CredentialStore`.
+ * Purpose: Mint, verify, upgrade, rotate, confirm and revoke revocable agent keys over a `CredentialStore`.
  * Scope: Key format, hashing and the verify decision. No HTTP, no env, no v1 code (the v1 HMAC verify stays in the node).
  * Invariants:
  *   - TOKEN_HASH_ONLY: a key is 32 random bytes from the CSPRNG, shown once, stored only as sha256. It is derivable from nothing.
@@ -27,7 +27,7 @@ import {
   type IssueResult,
 } from "./types";
 
-export const AGENT_KEY_V2_PREFIX = "cogni_ag_sk_v2_";
+export const REVOCABLE_KEY_PREFIX = "cogni_ag_sk_v2_";
 
 /** Thrown by a node's resolver when the store cannot answer, so the HTTP layer maps it to 503 instead of 401. */
 export class CredentialStoreUnavailableError extends Error {
@@ -38,11 +38,11 @@ export class CredentialStoreUnavailableError extends Error {
   }
 }
 
-/** Thrown for a v1 key whose user already holds a confirmed v2 key: the v1 key is superseded (401 `v1_superseded`). */
+/** Thrown for a signed key whose user already holds a confirmed revocable key: the signed key is superseded (401 `v1_superseded`). */
 export class V1SupersededError extends Error {
   readonly code = "v1_superseded";
   constructor() {
-    super("v1 key superseded by a v2 key");
+    super("signed key superseded by a revocable key");
     this.name = "V1SupersededError";
   }
 }
@@ -56,14 +56,14 @@ async function viaStore<T>(call: () => Promise<T>): Promise<T> {
   }
 }
 
-/** Call after a v1 key verified for `userId`. Throws `V1SupersededError` once the user holds a confirmed v2 key. */
+/** Call after a signed key verified for `userId`. Throws `V1SupersededError` once the user holds a confirmed revocable key. */
 export async function assertV1NotSuperseded(store: CredentialStore, userId: string): Promise<void> {
   if (await viaStore(() => store.everConfirmed(userId))) throw new V1SupersededError();
 }
 
 const SECRET_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
-export const isAgentKeyV2 = (token: string): boolean => token.startsWith(AGENT_KEY_V2_PREFIX);
+export const isRevocableKey = (token: string): boolean => token.startsWith(REVOCABLE_KEY_PREFIX);
 
 const toBase64Url = (bytes: Uint8Array): string => {
   let binary = "";
@@ -78,7 +78,7 @@ export async function hashAgentKey(token: string): Promise<string> {
 }
 
 async function mintKey(): Promise<{ token: string; tokenHash: string }> {
-  const token = AGENT_KEY_V2_PREFIX + toBase64Url(crypto.getRandomValues(new Uint8Array(32)));
+  const token = REVOCABLE_KEY_PREFIX + toBase64Url(crypto.getRandomValues(new Uint8Array(32)));
   return { token, tokenHash: await hashAgentKey(token) };
 }
 
@@ -101,7 +101,7 @@ export async function verifyBearer(
   token: string,
   allow: readonly CredentialState[] = ["active"]
 ): Promise<VerifyResult> {
-  if (!isAgentKeyV2(token) || !SECRET_PATTERN.test(token.slice(AGENT_KEY_V2_PREFIX.length))) {
+  if (!isRevocableKey(token) || !SECRET_PATTERN.test(token.slice(REVOCABLE_KEY_PREFIX.length))) {
     return { ok: false, reason: "invalid" };
   }
   try {
@@ -117,8 +117,8 @@ export type MintedKey =
   | { readonly ok: true; readonly credentialId: string; readonly userId: string; readonly apiKey: string; readonly pendingExpiresAt: string }
   | Extract<IssueResult, { ok: false }>;
 
-/** A caller already authenticated with a v1 key for `userId`: mint a pending v2 key for the same user. */
-export async function upgradeFromV1(
+/** A caller already authenticated with a signed key for `userId`: mint a pending revocable key for the same user. */
+export async function upgradeSignedKey(
   store: CredentialStore,
   input: { userId: string; policy?: CredentialPolicy }
 ): Promise<MintedKey> {

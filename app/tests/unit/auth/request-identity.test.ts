@@ -132,7 +132,7 @@ describe("resolveRequestIdentity — via is recorded for logging (task.5456)", (
     expect(mockGetServerSessionUser).not.toHaveBeenCalled();
   });
 
-  it("V1_SUPERSEDED: a valid v1 key whose user holds a confirmed v2 key is refused with v1_superseded", async () => {
+  it("V1_SUPERSEDED: a valid signed key whose user holds a confirmed revocable key is refused with v1_superseded", async () => {
     mockEverConfirmed.mockResolvedValue(true);
     const apiKey = issueAgentApiKey({ userId: "agent-1", displayName: "Agent" });
     mockHeaders.mockResolvedValue(headersFromRecord({ authorization: `Bearer ${apiKey}` }));
@@ -140,7 +140,7 @@ describe("resolveRequestIdentity — via is recorded for logging (task.5456)", (
     expect(mockEverConfirmed).toHaveBeenCalledWith("agent-1");
   });
 
-  it("a forged v1 key never reads the store, and a store failure on the v1 gate is an outage (503), not a 401", async () => {
+  it("a forged signed key never reads the store, and a store failure on the v1 gate is an outage (503), not a 401", async () => {
     mockHeaders.mockResolvedValue(headersFromRecord({ authorization: "Bearer cogni_ag_sk_v1_forged.sig" }));
     expect(await resolveRequestIdentity()).toBeNull();
     expect(mockEverConfirmed).not.toHaveBeenCalled();

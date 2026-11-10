@@ -14,13 +14,13 @@
  */
 
 import {
-  AGENT_KEY_V2_PREFIX,
+  REVOCABLE_KEY_PREFIX,
   confirmCredential,
   hashAgentKey,
   type MintedKey,
   revokeCredential,
   rotateCredential,
-  upgradeFromV1,
+  upgradeSignedKey,
   verifyBearer,
 } from "./service";
 import type { CredentialStore } from "./types";
@@ -67,7 +67,7 @@ export function runCredentialConformance(h: CredentialConformanceHarness): void 
   const { describe, it, expect } = h;
   const alice = { alice: {} };
   const active = async (store: CredentialStore, userId: string) => {
-    const key = okKey(await upgradeFromV1(store, { userId }));
+    const key = okKey(await upgradeSignedKey(store, { userId }));
     await confirmCredential(store, { credentialId: key.credentialId });
     return key;
   };
@@ -75,23 +75,23 @@ export function runCredentialConformance(h: CredentialConformanceHarness): void 
     revokeCredential(store, { credentialId, userId, revokedBy: userId });
 
   describe("credential conformance: key format and storage", () => {
-    it("a key is cogni_ag_sk_v2_ + 43 base64url chars, and only its sha256 is stored", async () => {
+    it("a key is the revocable prefix + 43 base64url chars, and only its sha256 is stored", async () => {
       const { store, ids } = await h.setup(alice);
-      const key = okKey(await upgradeFromV1(store, { userId: ids.alice as string }));
-      expect(key.apiKey).toMatch(/^cogni_ag_sk_v2_[A-Za-z0-9_-]{43}$/);
+      const key = okKey(await upgradeSignedKey(store, { userId: ids.alice as string }));
+      expect(key.apiKey).toMatch(new RegExp(`^${REVOCABLE_KEY_PREFIX}[A-Za-z0-9_-]{43}$`));
       expect(await h.storedHash(key.credentialId)).toBe(await hashAgentKey(key.apiKey));
     });
 
     it("two keys never repeat", async () => {
       const { store, ids } = await h.setup({ alice: {}, bob: {} });
-      const a = okKey(await upgradeFromV1(store, { userId: ids.alice as string }));
-      const b = okKey(await upgradeFromV1(store, { userId: ids.bob as string }));
+      const a = okKey(await upgradeSignedKey(store, { userId: ids.alice as string }));
+      const b = okKey(await upgradeSignedKey(store, { userId: ids.bob as string }));
       expect(a.apiKey).not.toBe(b.apiKey);
     });
   });
 
   describe("credential conformance: verifyBearer", () => {
-    it("valid v2: an active key resolves to its user", async () => {
+    it("a valid revocable key: an active key resolves to its user", async () => {
       const { store, ids } = await h.setup(alice);
       const key = await active(store, ids.alice as string);
       expect(await verifyBearer(store, key.apiKey)).toMatchObject({
@@ -102,19 +102,19 @@ export function runCredentialConformance(h: CredentialConformanceHarness): void 
       });
     });
 
-    it("wrong hash: a one-char change, a v1 key, a bad charset, a bad length and junk are all the same invalid", async () => {
+    it("wrong hash: a one-char change, a signed key, a bad charset, a bad length and junk are all the same invalid", async () => {
       const { store, ids } = await h.setup(alice);
       const key = await active(store, ids.alice as string);
       const flipped = key.apiKey.slice(0, -1) + (key.apiKey.endsWith("A") ? "B" : "A");
-      const badCharset = `${AGENT_KEY_V2_PREFIX}${"a".repeat(42)}!`;
-      for (const token of [flipped, "cogni_ag_sk_v1_abc.def", "cogni_ag_sk_v2_short", "", badCharset, `${key.apiKey}x`, `${AGENT_KEY_V2_PREFIX}${"x".repeat(43)}`]) {
+      const badCharset = `${REVOCABLE_KEY_PREFIX}${"a".repeat(42)}!`;
+      for (const token of [flipped, "cogni_ag_sk_v1_abc.def", `${REVOCABLE_KEY_PREFIX}short`, "", badCharset, `${key.apiKey}x`, `${REVOCABLE_KEY_PREFIX}${"x".repeat(43)}`]) {
         expect(await verifyBearer(store, token)).toEqual(INVALID);
       }
     });
 
     it("a token with the wrong shape never reaches the store", async () => {
-      expect(await verifyBearer(h.broken(), `${AGENT_KEY_V2_PREFIX}${"a".repeat(42)}!`)).toEqual(INVALID);
-      expect(await verifyBearer(h.broken(), `${AGENT_KEY_V2_PREFIX}${"a".repeat(44)}`)).toEqual(INVALID);
+      expect(await verifyBearer(h.broken(), `${REVOCABLE_KEY_PREFIX}${"a".repeat(42)}!`)).toEqual(INVALID);
+      expect(await verifyBearer(h.broken(), `${REVOCABLE_KEY_PREFIX}${"a".repeat(44)}`)).toEqual(INVALID);
     });
 
     it("expiry: past expiry the key is denied on ordinary routes, renew_only inside the window, then dead", async () => {
@@ -152,7 +152,7 @@ export function runCredentialConformance(h: CredentialConformanceHarness): void 
 
     it("pending key: refused on ordinary routes, accepted where the route opts in, dead after its window", async () => {
       const { store, ids } = await h.setup(alice);
-      const key = okKey(await upgradeFromV1(store, { userId: ids.alice as string }));
+      const key = okKey(await upgradeSignedKey(store, { userId: ids.alice as string }));
       expect(await verifyBearer(store, key.apiKey)).toEqual(INVALID);
       expect(await verifyBearer(store, key.apiKey, ["pending"])).toMatchObject({ ok: true, state: "pending" });
       await h.age(key.credentialId, "pending_expired");
@@ -165,7 +165,7 @@ export function runCredentialConformance(h: CredentialConformanceHarness): void 
       const broken = h.broken();
       expect(await verifyBearer(broken, key.apiKey)).toEqual({ ok: false, reason: "unavailable" });
       for (const call of [
-        () => upgradeFromV1(broken, { userId: ids.alice as string }),
+        () => upgradeSignedKey(broken, { userId: ids.alice as string }),
         () => rotateCredential(broken, { credentialId: key.credentialId }),
         () => confirmCredential(broken, { credentialId: key.credentialId }),
         () => revoke(broken, key.credentialId, ids.alice as string),
@@ -175,48 +175,48 @@ export function runCredentialConformance(h: CredentialConformanceHarness): void 
     });
   });
 
-  describe("credential conformance: upgrade (v1 key -> v2 key, same users.id)", () => {
+  describe("credential conformance: upgrade (signed key -> revocable key, same users.id)", () => {
     it("mints a pending key for the same user id; confirm activates it", async () => {
       const { store, ids } = await h.setup(alice);
-      const key = okKey(await upgradeFromV1(store, { userId: ids.alice as string }));
+      const key = okKey(await upgradeSignedKey(store, { userId: ids.alice as string }));
       expect(key.userId).toBe(ids.alice);
       expect(await confirmCredential(store, { credentialId: key.credentialId })).toMatchObject({ ok: true, status: "confirmed", userId: ids.alice });
       expect(await verifyBearer(store, key.apiKey)).toMatchObject({ ok: true, userId: ids.alice });
     });
 
-    it("a second upgrade supersedes the unconfirmed first; a user with a live v2 key is refused", async () => {
+    it("a second upgrade supersedes the unconfirmed first; a user with a live revocable key is refused", async () => {
       const { store, ids } = await h.setup(alice);
-      const first = okKey(await upgradeFromV1(store, { userId: ids.alice as string }));
-      const second = okKey(await upgradeFromV1(store, { userId: ids.alice as string }));
+      const first = okKey(await upgradeSignedKey(store, { userId: ids.alice as string }));
+      const second = okKey(await upgradeSignedKey(store, { userId: ids.alice as string }));
       expect(await verifyBearer(store, first.apiKey, ["pending"])).toEqual(INVALID);
       expect(await verifyBearer(store, second.apiKey, ["pending"])).toMatchObject({ ok: true });
       await confirmCredential(store, { credentialId: second.credentialId });
-      expect(await upgradeFromV1(store, { userId: ids.alice as string })).toEqual({ ok: false, reason: "already_upgraded" });
+      expect(await upgradeSignedKey(store, { userId: ids.alice as string })).toEqual({ ok: false, reason: "already_upgraded" });
     });
 
-    it("v1 supersession: no confirmed credential until confirm, and still one after the v2 key is revoked", async () => {
+    it("v1 supersession: no confirmed credential until confirm, and still one after the revocable key is revoked", async () => {
       const { store, ids } = await h.setup(alice);
       const userId = ids.alice as string;
       expect(await store.everConfirmed(userId)).toBe(false);
-      const key = okKey(await upgradeFromV1(store, { userId }));
-      expect(await store.everConfirmed(userId)).toBe(false); // the v1 key keeps working while the v2 key is only pending
+      const key = okKey(await upgradeSignedKey(store, { userId }));
+      expect(await store.everConfirmed(userId)).toBe(false); // the signed key keeps working while the revocable key is only pending
       await confirmCredential(store, { credentialId: key.credentialId });
       expect(await store.everConfirmed(userId)).toBe(true);
       await revoke(store, key.credentialId, userId);
-      expect(await store.everConfirmed(userId)).toBe(true); // revoking must not bring the v1 key back
+      expect(await store.everConfirmed(userId)).toBe(true); // revoking must not bring the signed key back
     });
 
     it("refuses a wallet user, an internal principal and an unknown user", async () => {
       const { store, ids } = await h.setup({ w: { wallet: true }, i: { internal: true } });
-      expect(await upgradeFromV1(store, { userId: ids.w as string })).toEqual({ ok: false, reason: "wallet_user" });
-      expect(await upgradeFromV1(store, { userId: ids.i as string })).toEqual({ ok: false, reason: "internal_principal" });
-      expect(await upgradeFromV1(store, { userId: crypto.randomUUID() })).toEqual({ ok: false, reason: "unknown_user" });
+      expect(await upgradeSignedKey(store, { userId: ids.w as string })).toEqual({ ok: false, reason: "wallet_user" });
+      expect(await upgradeSignedKey(store, { userId: ids.i as string })).toEqual({ ok: false, reason: "internal_principal" });
+      expect(await upgradeSignedKey(store, { userId: crypto.randomUUID() })).toEqual({ ok: false, reason: "unknown_user" });
     });
 
     it("BINDING_BEFORE_UPGRADE: a principal with roles and no GitHub binding is refused; with a binding it passes", async () => {
       const { store, ids } = await h.setup({ roled: { roles: true }, bound: { roles: true, github: true } });
-      expect(await upgradeFromV1(store, { userId: ids.roled as string })).toEqual({ ok: false, reason: "binding_required" });
-      expect(await upgradeFromV1(store, { userId: ids.bound as string })).toMatchObject({ ok: true });
+      expect(await upgradeSignedKey(store, { userId: ids.roled as string })).toEqual({ ok: false, reason: "binding_required" });
+      expect(await upgradeSignedKey(store, { userId: ids.bound as string })).toMatchObject({ ok: true });
     });
   });
 

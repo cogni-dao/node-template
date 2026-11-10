@@ -16,6 +16,7 @@
 /* eslint-disable boundaries/no-unknown-files */
 
 import { randomUUID } from "node:crypto";
+import { REVOCABLE_KEY_PREFIX } from "@cogni/agent-grants/credentials";
 import { type NextRequest, NextResponse } from "next/server";
 import { getToken } from "next-auth/jwt";
 
@@ -44,7 +45,11 @@ function isAppRoute(pathname: string): boolean {
 	);
 }
 
-const AGENT_BEARER_PREFIXES = ["Bearer cogni_ag_sk_v1_", "Bearer cogni_ag_sk_v2_"];
+// The signed-key prefix is wire format; the revocable-key prefix has ONE definition, in the package.
+const AGENT_BEARER_PREFIXES = [
+	"Bearer cogni_ag_sk_v1_",
+	`Bearer ${REVOCABLE_KEY_PREFIX}`,
+];
 
 function isPublicApiRoute(pathname: string): boolean {
 	// Agent register is the one bootstrap seam left open: register → key →

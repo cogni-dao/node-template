@@ -3,7 +3,7 @@
 
 /**
  * Module: `@cogni-dao/agent-grants/credentials` types
- * Purpose: Boundary types and the store port for revocable, hashed agent credentials (v2 keys).
+ * Purpose: Boundary types and the store port for revocable, hashed agent credentials (revocable keys).
  * Scope: Types only. The store sees the sha256 of a key, never the key (TOKEN_HASH_ONLY).
  * Invariants:
  *   - STATE_IS_DERIVED: a credential's state comes from its timestamps, read against the DATABASE clock. It is never stored.
@@ -20,7 +20,7 @@
  */
 export type CredentialState = "pending" | "pending_expired" | "active" | "renew_only" | "expired" | "revoked";
 
-export type CredentialCreatedFrom = "legacy_upgrade" | "rotation";
+export type CredentialCreatedFrom = "key_upgrade" | "rotation";
 
 /** Lifetimes in seconds. Passed to the store so the database clock does the arithmetic. */
 export interface CredentialPolicy {
@@ -66,8 +66,8 @@ export interface CredentialStore {
   /** The credential whose key hashes to `tokenHash`, with its derived state, else null. Never cached. */
   lookup(tokenHash: string): Promise<CredentialLookup | null>;
   /**
-   * v1 key -> pending v2 key for the SAME `users.id`. Creates the external `agent_principals` row when absent. Refuses a wallet user,
-   * an internal principal, a user that already holds a live v2 key, and a user with live role rows and no GitHub binding
+   * signed key -> pending revocable key for the SAME `users.id`. Creates the external `agent_principals` row when absent. Refuses a wallet user,
+   * an internal principal, a user that already holds a live revocable key, and a user with live role rows and no GitHub binding
    * (BINDING_BEFORE_UPGRADE). A pending upgrade key from an earlier call is superseded.
    */
   issueUpgrade(input: { userId: string; tokenHash: string; policy: CredentialPolicy }): Promise<IssueResult>;
@@ -79,8 +79,8 @@ export interface CredentialStore {
   /** Activates a pending credential and revokes its predecessor (`rotated`) in one transaction. Idempotent for an active credential. */
   confirm(input: { credentialId: string; policy: CredentialPolicy }): Promise<ConfirmResult>;
   /**
-   * True when the user holds, or ever held, a CONFIRMED v2 credential, revoked or not. After an upgrade the user's v1 keys stop working,
-   * and revoking the v2 key must not bring them back (a leaked v1 key could otherwise re-upgrade).
+   * True when the user holds, or ever held, a CONFIRMED revocable credential, revoked or not. After an upgrade the user's signed keys stop working,
+   * and revoking the revocable key must not bring them back (a leaked signed key could otherwise re-upgrade).
    */
   everConfirmed(userId: string): Promise<boolean>;
   /** Revokes the credential (owned by `userId`) and any pending successor. False when none is live. */

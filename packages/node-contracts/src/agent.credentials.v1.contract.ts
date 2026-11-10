@@ -3,8 +3,8 @@
 
 /**
  * Module: `@contracts/agent.credentials.v1`
- * Purpose: Zod contracts for the v2 agent key routes under /api/v1/agent/credentials (task.0070, child of task.5474):
- *   upgrade (v1 key -> pending v2 key), rotate (pending successor), confirm (activate), revoke.
+ * Purpose: Zod contracts for the revocable agent key routes under /api/v1/agent/credentials (task.0070, child of task.5474):
+ *   upgrade (signed key -> pending revocable key), rotate (pending successor), confirm (activate), revoke.
  * Scope: Wire shapes only.
  * Invariants: CONTRACTS_ARE_TRUTH. `apiKey` is returned once by upgrade and rotate and never again. `userId` never changes
  *   across upgrade, rotate and confirm.

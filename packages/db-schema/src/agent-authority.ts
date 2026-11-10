@@ -101,7 +101,7 @@ export const agentRoles = pgTable(
 ).enableRLS();
 
 /**
- * One revocable agent key (v2). `token_hash` is sha256 of the key; the key is never stored.
+ * One revocable agent key. `token_hash` is sha256 of the key; the key is never stored.
  * pending = `confirmed_at IS NULL` inside `pending_expires_at`. A rotation inserts a pending successor (`predecessor_id`); confirm
  * activates it and revokes the predecessor in one transaction. Revoking a row ends only that key.
  */
@@ -132,7 +132,7 @@ export const agentCredentials = pgTable(
     }),
     check(
       "agent_credentials_created_from_canonical",
-      sql`${table.createdFrom} IN ('spawn_grant','rotation','legacy_upgrade','binding_recovery','recovery_grant')`
+      sql`${table.createdFrom} IN ('spawn_grant','rotation','key_upgrade','binding_recovery','recovery_grant')`
     ),
     check(
       "agent_credentials_renew_after_expiry",
@@ -143,7 +143,7 @@ export const agentCredentials = pgTable(
     uniqueIndex("agent_credentials_one_pending_successor")
       .on(table.predecessorId)
       .where(sql`${table.confirmedAt} IS NULL AND ${table.revokedAt} IS NULL`),
-    // Not partial: the v1 gate (`everConfirmed`) reads revoked rows too, on every v1-authenticated request.
+    // Not partial: the v1 gate (`everConfirmed`) reads revoked rows too, on every signed-key-authenticated request.
     index("agent_credentials_user_idx").on(table.userId),
   ]
 ).enableRLS();

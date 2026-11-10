@@ -39,6 +39,7 @@ vi.mock("@/shared/config", () => ({
 }));
 
 // Import after mocks
+import { REVOCABLE_KEY_PREFIX } from "@cogni/agent-grants/credentials";
 import { proxy } from "@/proxy";
 
 // --- Helpers ---
@@ -210,13 +211,13 @@ describe("proxy — API route protection", () => {
 		expect(mockGetToken).not.toHaveBeenCalled();
 	});
 
-	it("allows a v2 agent bearer through the perimeter, and rejects an unknown bearer prefix (task.0070)", async () => {
+	it("allows a revocable bearer through the perimeter, and rejects an unknown bearer prefix (task.0070)", async () => {
 		mockGetToken.mockResolvedValue(null);
 
-		const v2 = await proxy(
-			makeAgentRequest("/api/v1/agent/credentials/rotate", "Bearer cogni_ag_sk_v2_abc"),
+		const revocable = await proxy(
+			makeAgentRequest("/api/v1/agent/credentials/rotate", `Bearer ${REVOCABLE_KEY_PREFIX}abc`),
 		);
-		expect(v2.status).toBe(200);
+		expect(revocable.status).toBe(200);
 		expect(mockGetToken).not.toHaveBeenCalled();
 
 		const v3 = await proxy(

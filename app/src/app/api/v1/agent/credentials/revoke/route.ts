@@ -3,7 +3,7 @@
 
 /**
  * Module: `@app/api/v1/agent/credentials/revoke`
- * Purpose: Revoke one v2 key of the caller's own user: the calling key (no body) or a sibling by `credentialId` (leak response).
+ * Purpose: Revoke one revocable key of the caller's own user: the calling key (no body) or a sibling by `credentialId` (leak response).
  *   The revoked key answers 401 on its next call; every other key stays valid (A7). A pending successor of the revoked key dies with it.
  * Scope: Auth shell, body parse, response mapping. SQL lives in `@cogni-dao/agent-grants/credentials`.
  * Invariants:

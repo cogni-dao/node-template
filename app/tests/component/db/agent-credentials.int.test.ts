@@ -3,7 +3,7 @@
 
 /**
  * Module: `@tests/component/db/agent-credentials.int.test`
- * Purpose: The v2 agent key store against real Postgres with migration 0039 applied (task.0070). Runs the package's OWN conformance suite
+ * Purpose: The revocable agent key store against real Postgres with migration 0039 applied (task.0070). Runs the package's OWN conformance suite
  *   (`runCredentialConformance`, SUITE_GATES_RELEASE) over the real SQL, then the rows only SQL can prove: the RLS wall, the
  *   external-principal trigger, hash uniqueness, the renew check and the same-users.id upgrade.
  * Scope: `@cogni-dao/agent-grants/credentials` + migration 0039. No HTTP.
@@ -25,7 +25,7 @@ import {
   hashAgentKey,
   type MintedKey,
   rotateCredential,
-  upgradeFromV1,
+  upgradeSignedKey,
   verifyBearer,
 } from "@cogni/agent-grants/credentials";
 import { NODE_AI_PRINCIPAL_USER_ID } from "@cogni/node-shared";
@@ -109,7 +109,7 @@ describe("agent credentials (real Postgres)", () => {
   describe("schema (rows only SQL can prove)", () => {
     it("the app role sees no credential row (FORCE RLS, no policy) and cannot write one", async () => {
       const user = await makeUser();
-      ok(await upgradeFromV1(store(), { userId: user }));
+      ok(await upgradeSignedKey(store(), { userId: user }));
       expect(await app`SELECT 1 FROM agent_credentials`).toHaveLength(0);
       await expect(
         app`INSERT INTO agent_credentials (user_id, token_hash, created_from, expires_at, renew_until)
@@ -121,14 +121,14 @@ describe("agent credentials (real Postgres)", () => {
       const plain = await makeUser();
       const insert = (userId: string) =>
         service`INSERT INTO agent_credentials (user_id, token_hash, created_from, expires_at, renew_until)
-          VALUES (${userId}, ${randomUUID()}, 'legacy_upgrade', now() + interval '1 day', now() + interval '2 day')`;
+          VALUES (${userId}, ${randomUUID()}, 'key_upgrade', now() + interval '1 day', now() + interval '2 day')`;
       await expect(insert(plain)).rejects.toThrow(/requires an external agent principal/);
       await expect(insert(NODE_AI_PRINCIPAL_USER_ID)).rejects.toThrow(/requires an external agent principal/);
     });
 
     it("a duplicate hash is refused, and renew_until must pass expires_at", async () => {
       const user = await makeUser();
-      const key = ok(await upgradeFromV1(store(), { userId: user }));
+      const key = ok(await upgradeSignedKey(store(), { userId: user }));
       await expect(
         service`INSERT INTO agent_credentials (user_id, token_hash, created_from, expires_at, renew_until)
           VALUES (${user}, ${await hashAgentKey(key.apiKey)}, 'rotation', now(), now() + interval '1 day')`
@@ -140,7 +140,7 @@ describe("agent credentials (real Postgres)", () => {
     });
 
     it("the state function derives from timestamps alone", async () => {
-      const key = ok(await upgradeFromV1(store(), { userId: await makeUser() }));
+      const key = ok(await upgradeSignedKey(store(), { userId: await makeUser() }));
       expect(await stateOf(key.credentialId)).toBe("pending");
       await confirmCredential(store(), { credentialId: key.credentialId });
       expect(await stateOf(key.credentialId)).toBe("active");
@@ -150,7 +150,7 @@ describe("agent credentials (real Postgres)", () => {
     it("upgrade writes an external principal on the SAME users.id and creates no second user", async () => {
       const user = await makeUser();
       const before = (await service`SELECT count(*)::int AS n FROM users`)[0]?.n;
-      const key = ok(await upgradeFromV1(store(), { userId: user }));
+      const key = ok(await upgradeSignedKey(store(), { userId: user }));
       expect(key.userId).toBe(user);
       expect((await service`SELECT count(*)::int AS n FROM users`)[0]?.n).toBe(before);
       expect(await service`SELECT kind FROM agent_principals WHERE user_id = ${user}`).toEqual([expect.objectContaining({ kind: "external" })]);
@@ -158,7 +158,7 @@ describe("agent credentials (real Postgres)", () => {
 
     it("confirm refuses when the predecessor was revoked meanwhile (409 predecessor_revoked)", async () => {
       const user = await makeUser();
-      const old = ok(await upgradeFromV1(store(), { userId: user }));
+      const old = ok(await upgradeSignedKey(store(), { userId: user }));
       await confirmCredential(store(), { credentialId: old.credentialId });
       const next = ok(await rotateCredential(store(), { credentialId: old.credentialId }));
       await service`UPDATE agent_credentials SET revoked_at = now(), revoked_reason = 'probe' WHERE id = ${old.credentialId}`;
