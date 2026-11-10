@@ -17,7 +17,11 @@ import {
 } from "@cogni-dao/metrics/contracts";
 import { z } from "zod";
 import type { CatalogBoundTool } from "../catalog";
-import type { ToolContract, ToolImplementation } from "../types";
+import type {
+	ToolContract,
+	ToolImplementation,
+	ToolRequires,
+} from "../types";
 /**
  * The node injects its one goal-progress function; history calls the service's
  * historyRange, the same function the HTTP route calls.
@@ -95,6 +99,13 @@ export function createMetricTools(
 			description:
 				"Refresh a registered metric through bounded authorized sources. Preserve requestKey when retrying. Does not alter goals or execute scripts.",
 			effect: "state_change" as const,
+			requires: {
+				scope: "metric:compute",
+				kind: "node",
+				subject: "member",
+				label: "Refresh the numbers on your dashboards",
+				description: "Update the numbers shown on the dashboards.",
+			} as ToolRequires,
 			inputSchema: MetricComputeInputSchema.extend({ id: z.string().min(1) }),
 			outputSchema: z.object({ observation: MetricObservationSchema }),
 			run: async (p: {
@@ -116,6 +127,7 @@ export function createMetricTools(
 			name: d.name,
 			description: d.description,
 			effect: d.effect,
+			...("requires" in d ? { requires: d.requires } : {}),
 			inputSchema: d.inputSchema,
 			outputSchema: d.outputSchema,
 			allowlist: Object.keys(d.outputSchema.shape),
