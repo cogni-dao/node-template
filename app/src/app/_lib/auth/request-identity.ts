@@ -8,8 +8,8 @@
  *   one store lookup), or a browser session cookie. One entry point for all auth surfaces.
  * Scope: Bearer parser + HMAC signer/verifier (issueAgentApiKey exported to
  *   the register and renew-v1 routes only), and resolveRequestIdentity which
- *   wrapRouteHandlerWithLogging consumes via `auth.getSessionUser`. A signed key is verified without the database, then one
- *   credential-store read checks supersession; a revocable key reads the store (`verifyRevocableKey`). Session IO happens via getServerSessionUser.
+ *   wrapRouteHandlerWithLogging consumes via `auth.getSessionUser`. Does NOT
+ *   read from the database for sessions — all session IO happens via getServerSessionUser. Credential-store reads are listed below.
  * Invariants:
  *   - V1_PATH_UNCHANGED (task.0070 C2): `parseAgentToken` and its HMAC/expiry checks are byte-for-byte what they were. A revocable key is routed
  *     BEFORE them by prefix; it never reaches the v1 verifier.

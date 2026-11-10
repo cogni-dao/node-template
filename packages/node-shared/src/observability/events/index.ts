@@ -45,6 +45,13 @@ export const EVENT_NAMES = {
 	/** renew-v1 (task.0069): a v1 agent key was renewed (userId, oldExp, newExp; never the key) or refused (userId, reason). */
 	AGENT_CREDENTIAL_V1_RENEWED: "agent.credential.v1_renewed",
 	AGENT_CREDENTIAL_V1_RENEW_REFUSED: "agent.credential.v1_renew_refused",
+	/** A DAO admin granted / revoked an agent role (task.5456): principal, scope, approvedBy. */
+	AGENT_ROLE_GRANTED: "agent_role.granted",
+	AGENT_ROLE_REVOKED: "agent_role.revoked",
+	/** An agent asked for a permission for itself (a pending row): principalUserId, scope. */
+	AGENT_ROLE_REQUESTED: "agent_role.requested",
+	/** A DAO admin dismissed a pending ask: principalUserId, scope, deniedBy. */
+	AGENT_ROLE_DENIED: "agent_role.denied",
 	/** revocable agent keys (task.0070): upgraded / rotated (a pending key issued), confirmed, revoked, refused. Carry userId and credentialId, never a key or hash. */
 	AGENT_CREDENTIAL_UPGRADED: "agent.credential.upgraded",
 	AGENT_CREDENTIAL_ROTATED: "agent.credential.rotated",
@@ -53,13 +60,6 @@ export const EVENT_NAMES = {
 	AGENT_CREDENTIAL_REFUSED: "agent.credential.refused",
 	/** A revocable key could not be verified because the credential store failed; the request got 503, not 401. */
 	AGENT_CREDENTIAL_STORE_UNAVAILABLE: "agent.credential.store_unavailable",
-	/** A DAO admin granted / revoked an agent role (task.5456): principal, scope, approvedBy. */
-	AGENT_ROLE_GRANTED: "agent_role.granted",
-	AGENT_ROLE_REVOKED: "agent_role.revoked",
-	/** An agent asked for a permission for itself (a pending row): principalUserId, scope. */
-	AGENT_ROLE_REQUESTED: "agent_role.requested",
-	/** A DAO admin dismissed a pending ask: principalUserId, scope, deniedBy. */
-	AGENT_ROLE_DENIED: "agent_role.denied",
 	/** The roles route could not decide or list (store or admin check down), or refused a non-admin write. No secrets. */
 	AGENT_ROLES_UNAVAILABLE: "agent.roles.unavailable",
 	AGENT_ROLES_LIST_FAILED: "agent.roles.list_failed",
