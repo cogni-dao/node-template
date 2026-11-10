@@ -362,14 +362,14 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
         throw new Error("node_source_context_unavailable");
       }
 
-      // A run with no interactive caller (a scheduled "decide" run, or one with no subject such as a webhook) whose
+      // A run with no interactive caller (a validated schedule tick, or one with no subject such as a webhook) whose
       // every write tool is withheld has nothing it may do: end it now, with no model call, instead of paying for a
       // "no permission" answer on every tick. An interactive run keeps the system note below and may answer once.
       const writeTools = Object.entries(runtimeTools).filter(
         ([, rt]) => rt.spec.effect !== "read_only"
       );
       const noInteractiveCaller =
-        ctx?.requestIntent === "decide" || !scope.subjectUserId;
+        ctx?.unattended === true || !scope.subjectUserId;
       const endWithoutModel =
         noInteractiveCaller &&
         writeTools.length > 0 &&
@@ -547,7 +547,6 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
             persistence: await this.getPersistence(),
           }),
         ...(entry.program !== undefined && { program: entry.program }),
-        requestIntent: ctx?.requestIntent === "decide" ? "decide" : "answer",
         ...(ctx?.actorUserId ? { trustedActorId: ctx.actorUserId } : {}),
         ...((entry.program || graphName === "poet") && {
           trustedProgramId: entry.program ?? graphName,

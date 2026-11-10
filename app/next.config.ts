@@ -10,6 +10,11 @@ const nextConfig: NextConfig = {
   // Prevent Turbopack from bundling (and per-route duplicating) heavy server-only
   // packages. These resolve as Node.js requires at runtime instead. (spike.0203)
   serverExternalPackages: [
+    // Local startup already builds this server-only runtime. Keep its LangChain
+    // dependency graph and the OTel SDK out of every cold development bundle.
+    ...(process.env.NODE_ENV === "development"
+      ? ["@cogni/langgraph-graphs", "@opentelemetry/sdk-node"]
+      : []),
     // Native addons / build-tool incompatible
     "dockerode",
     "ssh2",

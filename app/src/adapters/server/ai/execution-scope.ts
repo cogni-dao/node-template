@@ -20,7 +20,7 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 
-import type { SourceSystem } from "@cogni/ai-core";
+import type { ModelRef, SourceSystem } from "@cogni/ai-core";
 import type { BillingContext, LlmService } from "@/ports";
 
 /**
@@ -31,6 +31,8 @@ import type { BillingContext, LlmService } from "@/ports";
  */
 export interface ExecutionScope {
   readonly billing: BillingContext;
+  /** Exact host-selected model, including its connection, for scheduled follow-up work. */
+  readonly modelRef?: ModelRef;
   /** The acting agent principal's user id (agent_principals.user_id). Bound per tool call by the guard. */
   readonly principalId?: string;
   /** The authenticated caller this run serves (human or bearer agent). Absent for a run with no caller; never the system principal. */
@@ -60,7 +62,7 @@ export function getExecutionScope(): ExecutionScope {
   const scope = executionScopeStorage.getStore();
   if (!scope) {
     throw new Error(
-      "getExecutionScope() called outside runInScope — billing context not available"
+      "getExecutionScope() called outside runInScope — billing context not available",
     );
   }
   return scope;

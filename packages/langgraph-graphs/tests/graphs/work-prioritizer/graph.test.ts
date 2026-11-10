@@ -9,8 +9,19 @@ import { OPERATOR_LANGGRAPH_CATALOG } from "../../../src/catalog";
 import { COGNI_DECIDE_TOOL_IDS } from "../../../src/graphs/mission/cogni-decide";
 import { createMissionGraph } from "../../../src/graphs/mission/graph";
 import { cycleScores } from "../../../src/graphs/work-prioritizer/graph";
+import { RunReceipts } from "../../../src/graphs/work-prioritizer/receipts";
 
 describe("work-prioritizer catalog and cycle report", () => {
+  it("admits HTTP evidence only from the exact host-bound loopback origin", () => {
+    const local = new RunReceipts("http://127.0.0.1:55080");
+    expect(local.allowsEvidenceUrl(new URL("http://127.0.0.1:55080/knowledge/goal-a"))).toBe(true);
+    for (const url of ["http://127.0.0.1:55081/knowledge/goal-a", "http://localhost:55080/knowledge/goal-a", "http://example.test/knowledge/goal-a", "http://user:password@127.0.0.1:55080/knowledge/goal-a"]) {
+      expect(local.allowsEvidenceUrl(new URL(url))).toBe(false);
+    }
+    const deployed = new RunReceipts("https://node.example.test");
+    expect(deployed.allowsEvidenceUrl(new URL("http://127.0.0.1:55080/knowledge/goal-a"))).toBe(false);
+    expect(deployed.allowsEvidenceUrl(new URL("https://node.example.test/knowledge/goal-a"))).toBe(true);
+  });
   it("catalog entry binds the common Cogni factory (reads + scores-only writer) and cycle event", () => {
     const entry = OPERATOR_LANGGRAPH_CATALOG["work-prioritizer"];
     expect(entry.graphFactory).toBe(createMissionGraph);

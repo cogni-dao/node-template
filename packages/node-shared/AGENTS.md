@@ -36,6 +36,7 @@ Shared pure utilities, constants, observability helpers, and domain types for al
 
 ## Public Surface
 
+- Browser consumers resolve `src/browser.ts` through the package's `browser` export condition. Keep Node crypto and request-local auth out of that runtime dependency graph; the server entry retains the full API.
 - **Exports (via `src/index.ts`):**
   - **AI:** content scrubbing, prompt hashing, citation guard, tool catalog
   - **Analytics:** PostHog capture helper, event name registry

@@ -63,14 +63,14 @@ describe("WorkItemScoresRadar", () => {
     expect(screen.getByTestId("score-queue")).toHaveTextContent("Human queue");
   });
 
-  it("renders https ev as a nofollow justification link and drops non-https ev", () => {
+  it("renders permitted ev as a nofollow justification link and drops unsafe ev", () => {
     const { container } = render(
       <WorkItemScoresRadar
         scores={{
           goal: { v: 5, ev: "https://example.org/research/evaluation" },
           time: { v: 4, ev: "javascript:alert(1)" },
           unblocks: { v: 4, ev: "<img src=x onerror=alert(1)>" },
-          ease: { v: 5 },
+          ease: { v: 5, ev: "http://127.0.0.1:55080/knowledge/local-proof" },
           confidence: { v: 5 },
           agent: { v: 4 },
           future: { v: 2, ev: "https://example.net/future-axis" },
@@ -79,7 +79,10 @@ describe("WorkItemScoresRadar", () => {
     );
 
     const links = screen.getAllByRole("link", { name: /justification$/ });
-    expect(links).toHaveLength(2);
+    expect(links).toHaveLength(3);
+    expect(screen.getByRole("link", { name: "Ease justification" })).toHaveAttribute(
+      "href", "http://127.0.0.1:55080/knowledge/local-proof"
+    );
     expect(legendRow(container, "future")).toHaveTextContent(
       "futureJustification2"
     );
