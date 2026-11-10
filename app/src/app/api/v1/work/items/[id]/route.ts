@@ -74,8 +74,9 @@ export const GET = wrapRouteHandlerWithLogging<{
 /**
  * PATCH /api/v1/work/items/:id — Patch a work item (Doltgres only).
  *
- * The immutable authenticated principal must match the creator stamped when
- * the row was inserted. The path id remains authoritative over request data.
+ * Authorization is the same-door `authorize()` check (scope `work_item:transition`)
+ * run by the route wrapper; the creator stamped at insert is attribution, never a gate
+ * (bug.0019). The path id remains authoritative over request data.
  */
 export const PATCH = wrapRouteHandlerWithLogging<{
   params: Promise<{ id: string }>;

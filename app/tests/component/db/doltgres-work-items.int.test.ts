@@ -41,7 +41,6 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
 	DoltgresWorkItemAdapter,
 	WorkItemWriteOutcomeUnknownError,
-	WorkItemAuthorizationError,
 	WorkItemRevisionConflictError,
 	WorkItemsBusyError,
 } from "@cogni/work-items/adapters/doltgres";
@@ -1161,10 +1160,10 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 	}, 60_000);
 
 	// task.5284 (story.5096): `patch` honors `expectedRevision` as a real
-	// compare-and-set, and a non-creator may patch ONLY the triage fields
-	// (priority, rank, labels). Any other field keeps the whole patch
-	// creator-bound. Refusals must leave `main` and the op namespace untouched.
-	it("compare-and-sets patch on expectedRevision and admits collaborator triage fields only", async () => {
+	// compare-and-set. Since bug.0019 the adapter does not gate on creator
+	// equality: any principal the door admitted may patch any field, and the
+	// creator column stays unchanged. Refusals leave `main` untouched.
+	it("compare-and-sets patch on expectedRevision and admits a non-creator principal on any field", async () => {
 		const casSql = postgres(dbUrl, { max: 1, fetch_types: false });
 		const casReadSql = postgres(dbUrl, { max: 1, fetch_types: false });
 		const adapter = new DoltgresWorkItemAdapter(casSql, {
@@ -1232,19 +1231,17 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 				),
 			).resolves.toHaveLength(1);
 
-			// ...but naming any other field keeps the whole patch creator-bound.
-			const beforeMixed = await mainHash();
+			// ...and so may a non-creator naming any other field (bug.0019): the
+			// door's authorize() decided; the creator stays attribution.
 			await expect(
 				adapter.patch(
-					{ id, set: { priority: 5, title: "not yours" } },
+					{ id, set: { priority: 5, title: "renamed by collaborator" } },
 					collaborator,
 				),
-			).rejects.toBeInstanceOf(WorkItemAuthorizationError);
-			expect(await mainHash()).toBe(beforeMixed);
-			await expect(adapter.get(id)).resolves.toMatchObject({
-				priority: 0,
-				title: "CAS landed",
-				revision: triaged.revision,
+			).resolves.toMatchObject({
+				priority: 5,
+				title: "renamed by collaborator",
+				revision: triaged.revision + 1,
 			});
 
 			// The creator's unconditioned patch is unchanged.
@@ -1252,7 +1249,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 				adapter.patch({ id, set: { title: "creator unconditioned" } }, creator),
 			).resolves.toMatchObject({
 				title: "creator unconditioned",
-				revision: triaged.revision + 1,
+				revision: triaged.revision + 2,
 			});
 			await expect(
 				casSql.unsafe(

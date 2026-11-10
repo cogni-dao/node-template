@@ -5,7 +5,7 @@
  * Module: `@cogni/knowledge-store/tests/contribution-service`
  * Purpose: Unit coverage for contribution service ownership gates and edit-batch forwarding.
  * Scope: Pure service tests with a fake contribution port. Does not call Doltgres or HTTP.
- * Invariants: CONTRIBUTION_OWNER_CAN_APPEND, CONTRIBUTION_OWNER_CAN_CLOSE.
+ * Invariants: APPEND_AUTHORITY_IS_THE_DOOR (bug.0019), CONTRIBUTION_OWNER_CAN_CLOSE.
  * Side-effects: none
  * Links: docs/design/knowledge-contribution-api.md, packages/knowledge-store/src/service/contribution-service.ts
  * @internal
@@ -27,6 +27,7 @@ import {
 import {
   ContributionForbiddenError,
   ContributionConflictError,
+  ContributionStateError,
   type CreateEdoDecisionInput,
   type CreateEdoHypothesisInput,
   type CreateEdoOutcomeInput,
@@ -542,9 +543,34 @@ describe("createContributionService", () => {
     expect(port.lastAppend?.edits).toEqual([edit]);
   });
 
-  it("rejects append for another principal's contribution", async () => {
+  it("appends to a contribution another principal opened (identity churn is not a lockout; bug.0019)", async () => {
     const port = new FakeContributionPort();
-    port.records = [contribution({ principalId: "agent-2" })];
+    // Opened under an old principal of the same actor; the caller is a new one.
+    port.records = [contribution({ principalId: "agent-old" })];
+    const service = createContributionService({
+      port,
+      canMergeKnowledge: () => false,
+      rateLimit: { maxOpenPerPrincipal: 5 },
+    });
+    const edit: KnowledgeContributionEdit = {
+      op: "delete",
+      targetRowId: "operator:knowledge:stale",
+      reason: "carry on from the old principal's inbox",
+    };
+
+    await service.appendCommit({
+      principal: agent,
+      contributionId: "contrib-agent-1-abc123",
+      body: { message: "continue", edits: [edit] },
+    });
+
+    expect(port.lastAppend?.principal).toEqual(agent);
+    expect(port.lastAppend?.edits).toEqual([edit]);
+  });
+
+  it("still refuses to append to a contribution that is not open", async () => {
+    const port = new FakeContributionPort();
+    port.records = [contribution({ state: "merged" })];
     const service = createContributionService({
       port,
       canMergeKnowledge: () => false,
@@ -556,17 +582,11 @@ describe("createContributionService", () => {
         principal: agent,
         contributionId: "contrib-agent-1-abc123",
         body: {
-          message: "not mine",
-          edits: [
-            {
-              op: "delete",
-              targetRowId: "operator:knowledge:stale",
-              reason: "not mine",
-            },
-          ],
+          message: "too late",
+          edits: [{ op: "delete", targetRowId: "operator:knowledge:stale", reason: "too late" }],
         },
       })
-    ).rejects.toBeInstanceOf(ContributionForbiddenError);
+    ).rejects.toBeInstanceOf(ContributionStateError);
     expect(port.lastAppend).toBeNull();
   });
 
