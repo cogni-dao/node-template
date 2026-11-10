@@ -10,6 +10,9 @@
  *   - NEVER_CACHED: every verify reads the store. A revoke denies the next call.
  *   - STORE_OUTAGE_IS_NOT_401: a store failure is `unavailable`, so a caller answers 503, never a false 401.
  *   - FAIL_CLOSED_NON_DISCLOSING: every bad key is one `invalid` result; the reason is never told apart.
+ *   - EVERY_STORE_FAILURE_IS_UNAVAILABLE: a store that throws at any step (verify, mint, confirm, revoke) surfaces as
+ *     `CredentialStoreUnavailableError`, so a node answers 503 and never a 500 or a false 401.
+ *   - PERIMETER_GUARD: a token with the wrong shape is refused before any store read.
  * Side-effects: none (the store does the IO)
  * Links: https://cognidao.org/knowledge/node-capability-grants-standard
  * @public
@@ -25,8 +28,6 @@ import {
 } from "./types";
 
 export const AGENT_KEY_V2_PREFIX = "cogni_ag_sk_v2_";
-/** 32 bytes, base64url, no padding. */
-const SECRET_CHARS = 43;
 
 /** Thrown by a node's resolver when the store cannot answer, so the HTTP layer maps it to 503 instead of 401. */
 export class CredentialStoreUnavailableError extends Error {
@@ -36,6 +37,31 @@ export class CredentialStoreUnavailableError extends Error {
     this.name = "CredentialStoreUnavailableError";
   }
 }
+
+/** Thrown for a v1 key whose user already holds a confirmed v2 key: the v1 key is superseded (401 `v1_superseded`). */
+export class V1SupersededError extends Error {
+  readonly code = "v1_superseded";
+  constructor() {
+    super("v1 key superseded by a v2 key");
+    this.name = "V1SupersededError";
+  }
+}
+
+/** Run a store call; any failure becomes `CredentialStoreUnavailableError`. */
+async function viaStore<T>(call: () => Promise<T>): Promise<T> {
+  try {
+    return await call();
+  } catch {
+    throw new CredentialStoreUnavailableError();
+  }
+}
+
+/** Call after a v1 key verified for `userId`. Throws `V1SupersededError` once the user holds a confirmed v2 key. */
+export async function assertV1NotSuperseded(store: CredentialStore, userId: string): Promise<void> {
+  if (await viaStore(() => store.everConfirmed(userId))) throw new V1SupersededError();
+}
+
+const SECRET_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
 export const isAgentKeyV2 = (token: string): boolean => token.startsWith(AGENT_KEY_V2_PREFIX);
 
@@ -75,7 +101,7 @@ export async function verifyBearer(
   token: string,
   allow: readonly CredentialState[] = ["active"]
 ): Promise<VerifyResult> {
-  if (!isAgentKeyV2(token) || token.length !== AGENT_KEY_V2_PREFIX.length + SECRET_CHARS) {
+  if (!isAgentKeyV2(token) || !SECRET_PATTERN.test(token.slice(AGENT_KEY_V2_PREFIX.length))) {
     return { ok: false, reason: "invalid" };
   }
   try {
@@ -97,7 +123,9 @@ export async function upgradeFromV1(
   input: { userId: string; policy?: CredentialPolicy }
 ): Promise<MintedKey> {
   const { token, tokenHash } = await mintKey();
-  const result = await store.issueUpgrade({ userId: input.userId, tokenHash, policy: input.policy ?? DEFAULT_CREDENTIAL_POLICY });
+  const result = await viaStore(() =>
+    store.issueUpgrade({ userId: input.userId, tokenHash, policy: input.policy ?? DEFAULT_CREDENTIAL_POLICY })
+  );
   return result.ok ? { ...result, apiKey: token } : result;
 }
 
@@ -107,11 +135,13 @@ export async function rotateCredential(
   input: { credentialId: string; policy?: CredentialPolicy }
 ): Promise<MintedKey> {
   const { token, tokenHash } = await mintKey();
-  const result = await store.issueSuccessor({
-    predecessorId: input.credentialId,
-    tokenHash,
-    policy: input.policy ?? DEFAULT_CREDENTIAL_POLICY,
-  });
+  const result = await viaStore(() =>
+    store.issueSuccessor({
+      predecessorId: input.credentialId,
+      tokenHash,
+      policy: input.policy ?? DEFAULT_CREDENTIAL_POLICY,
+    })
+  );
   return result.ok ? { ...result, apiKey: token } : result;
 }
 
@@ -120,12 +150,12 @@ export function confirmCredential(
   store: CredentialStore,
   input: { credentialId: string; policy?: CredentialPolicy }
 ): Promise<ConfirmResult> {
-  return store.confirm({ credentialId: input.credentialId, policy: input.policy ?? DEFAULT_CREDENTIAL_POLICY });
+  return viaStore(() => store.confirm({ credentialId: input.credentialId, policy: input.policy ?? DEFAULT_CREDENTIAL_POLICY }));
 }
 
 export function revokeCredential(
   store: CredentialStore,
   input: { credentialId: string; userId: string; revokedBy: string }
 ): Promise<boolean> {
-  return store.revoke({ ...input, reason: "revoked" });
+  return viaStore(() => store.revoke({ ...input, reason: "revoked" }));
 }

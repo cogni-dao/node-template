@@ -78,6 +78,11 @@ export interface CredentialStore {
   issueSuccessor(input: { predecessorId: string; tokenHash: string; policy: CredentialPolicy }): Promise<IssueResult>;
   /** Activates a pending credential and revokes its predecessor (`rotated`) in one transaction. Idempotent for an active credential. */
   confirm(input: { credentialId: string; policy: CredentialPolicy }): Promise<ConfirmResult>;
+  /**
+   * True when the user holds, or ever held, a CONFIRMED v2 credential, revoked or not. After an upgrade the user's v1 keys stop working,
+   * and revoking the v2 key must not bring them back (a leaked v1 key could otherwise re-upgrade).
+   */
+  everConfirmed(userId: string): Promise<boolean>;
   /** Revokes the credential (owned by `userId`) and any pending successor. False when none is live. */
   revoke(input: { credentialId: string; userId: string; reason: string; revokedBy: string }): Promise<boolean>;
 }

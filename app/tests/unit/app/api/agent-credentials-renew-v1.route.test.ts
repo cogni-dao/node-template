@@ -20,6 +20,7 @@ const fake = vi.hoisted(() => ({
   headers: new Map<string, string>(),
   session: null as null | Record<string, unknown>,
   rows: new Map<unknown, unknown[]>(),
+  superseded: false,
 }));
 
 vi.mock("next/headers", () => ({
@@ -27,6 +28,9 @@ vi.mock("next/headers", () => ({
 }));
 vi.mock("@/lib/auth/server", () => ({ getServerSessionUser: async () => fake.session }));
 vi.mock("@/shared/env/server", () => ({ serverEnv: () => fake.env }));
+vi.mock("@/bootstrap/agent-credentials", () => ({
+  getAgentCredentialStore: () => ({ everConfirmed: async () => fake.superseded }),
+}));
 vi.mock("@/bootstrap/container", () => ({
   resolveServiceDb: () => ({
     select: () => ({
@@ -63,6 +67,7 @@ beforeEach(() => {
   fake.env = { AUTH_SECRET: "test-secret-for-unit-tests-only-0123456789" };
   fake.session = null;
   fake.rows.clear();
+  fake.superseded = false;
   fake.rows.set(users, [{ walletAddress: null }]);
 });
 afterEach(() => vi.useRealTimers());
@@ -79,6 +84,11 @@ describe("renew-v1", () => {
     fake.headers.set("authorization", `Bearer ${body.apiKey}`);
     const resolved = await getSessionUser();
     expect(resolved).toMatchObject({ id: USER_ID, displayName: "Flock", via: "bearer" });
+  });
+
+  it("a v1 key whose user already holds a confirmed v2 key cannot renew (v1_superseded)", async () => {
+    fake.superseded = true;
+    await expect(renew(`Bearer ${oldKey()}`)).rejects.toMatchObject({ code: "v1_superseded" });
   });
 
   it("a session caller is 403 and mints nothing", async () => {

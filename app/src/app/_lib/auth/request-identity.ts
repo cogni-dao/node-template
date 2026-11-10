@@ -11,8 +11,10 @@
  *   wrapRouteHandlerWithLogging consumes via `auth.getSessionUser`. The v1 path reads no database; only a v2 key
  *   reads the credential store (`verifyAgentKeyV2`). Session IO happens via getServerSessionUser.
  * Invariants:
- *   - V1_PATH_UNCHANGED (task.0070 C2): `parseAgentToken` and the v1 branch are byte-for-byte what they were. A v2 key is routed
+ *   - V1_PATH_UNCHANGED (task.0070 C2): `parseAgentToken` and its HMAC/expiry checks are byte-for-byte what they were. A v2 key is routed
  *     BEFORE them by prefix; it never reaches the v1 verifier.
+ *   - V1_SUPERSEDED: once the verified v1 identity's user holds a CONFIRMED v2 credential (revoked or not), the request is refused with
+ *     `V1SupersededError` (401 `v1_superseded`). Revoking the v2 key therefore cannot revive a leaked v1 key. One store read per v1 request.
  *   - V2_STORE_OUTAGE_IS_503: a store failure throws `CredentialStoreUnavailableError` (the route wrapper answers 503), never null (401).
  *   - V2_ACTIVE_ONLY: the generic resolver admits only an `active` v2 key. A pending or renew_only key reaches only the
  *     credential routes that opt in through `verifyAgentKeyV2`.
@@ -34,6 +36,7 @@
 
 import { createHmac, timingSafeEqual } from "node:crypto";
 import {
+  assertV1NotSuperseded,
   type CredentialState,
   CredentialStoreUnavailableError,
   isAgentKeyV2,
@@ -175,6 +178,8 @@ export async function resolveRequestIdentity(): Promise<SessionUser | null> {
     }
     const payload = parseAgentToken(bearer);
     if (!payload) return null;
+    const { getAgentCredentialStore } = await import("@/bootstrap/agent-credentials");
+    await assertV1NotSuperseded(getAgentCredentialStore(), payload.sub);
     return {
       id: payload.sub,
       walletAddress: null,

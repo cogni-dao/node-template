@@ -11,7 +11,8 @@
  *     here (the resolver answers 401).
  *   - Refuses a wallet user and an internal principal (403 `not_agent_key`), a user that already holds a live v2 key (409 `already_upgraded`),
  *     and a principal with node roles and no GitHub binding (409 `binding_required`, BINDING_BEFORE_UPGRADE).
- *   - The v1 key keeps working until its own expiry (coexistence). Never logs or stores a key.
+ *   - The v1 key keeps working while the v2 key is only pending. Once the v2 key is confirmed the v1 key is superseded (401 `v1_superseded`, resolver).
+ *     Never logs or stores a key. A store failure at any step is 503 `authz_unavailable`.
  * Side-effects: IO (service-role db), log `agent.credential.upgraded`
  * Links: https://cognidao.org/work/items/task.5474, https://cognidao.org/work/items/task.0070
  * @public
@@ -20,7 +21,7 @@
 import { upgradeFromV1 } from "@cogni/agent-grants/credentials";
 import { upgradeAgentCredentialOperation } from "@cogni/node-contracts";
 
-import { credentialJson } from "@/app/_lib/auth/agent-credential-route";
+import { answerStoreOutage, credentialJson } from "@/app/_lib/auth/agent-credential-route";
 import { currentBearerToken } from "@/app/_lib/auth/request-identity";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { getAgentCredentialStore } from "@/bootstrap/agent-credentials";
@@ -52,24 +53,25 @@ export const POST = wrapRouteHandlerWithLogging(
     const bearer = await currentBearerToken();
     if (sessionUser.via !== "bearer" || !bearer?.startsWith("cogni_ag_sk_v1_")) return refuse(403, "v1_bearer_required");
 
-    const minted = await upgradeFromV1(getAgentCredentialStore(), { userId: sessionUser.id });
-    if (!minted.ok) {
-      const [status, error] = REFUSALS[minted.reason];
-      return refuse(status, error);
-    }
-
-    ctx.log.info(
-      { event: EVENT_NAMES.AGENT_CREDENTIAL_UPGRADED, userId: minted.userId, credentialId: minted.credentialId },
-      EVENT_NAMES.AGENT_CREDENTIAL_UPGRADED
-    );
-    return credentialJson(
-      upgradeAgentCredentialOperation.output.parse({
-        userId: minted.userId,
-        credentialId: minted.credentialId,
-        apiKey: minted.apiKey,
-        status: "pending",
-        pendingExpiresAt: minted.pendingExpiresAt,
-      })
-    );
+    return answerStoreOutage(async () => {
+      const minted = await upgradeFromV1(getAgentCredentialStore(), { userId: sessionUser.id });
+      if (!minted.ok) {
+        const [status, error] = REFUSALS[minted.reason];
+        return refuse(status, error);
+      }
+      ctx.log.info(
+        { event: EVENT_NAMES.AGENT_CREDENTIAL_UPGRADED, userId: minted.userId, credentialId: minted.credentialId },
+        EVENT_NAMES.AGENT_CREDENTIAL_UPGRADED
+      );
+      return credentialJson(
+        upgradeAgentCredentialOperation.output.parse({
+          userId: minted.userId,
+          credentialId: minted.credentialId,
+          apiKey: minted.apiKey,
+          status: "pending",
+          pendingExpiresAt: minted.pendingExpiresAt,
+        })
+      );
+    });
   }
 );

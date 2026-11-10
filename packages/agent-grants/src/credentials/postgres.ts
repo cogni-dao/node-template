@@ -63,6 +63,11 @@ export function createPostgresCredentialStore(client: CredentialSql): Credential
       };
     },
 
+    async everConfirmed(userId) {
+      const rows = await client`SELECT 1 AS ok FROM agent_credentials WHERE user_id = ${userId} AND confirmed_at IS NOT NULL LIMIT 1`;
+      return rows.length > 0;
+    },
+
     issueUpgrade: ({ userId, tokenHash, policy }) =>
       client.begin(async (tx): Promise<IssueResult> => {
         // One upgrade at a time per user: the checks below and the insert must see one snapshot.
@@ -105,10 +110,12 @@ export function createPostgresCredentialStore(client: CredentialSql): Credential
 
     confirm: ({ credentialId, policy: p }) =>
       client.begin(async (tx): Promise<ConfirmResult> => {
-        // Predecessor first (same order as rotate), then the successor row.
-        const link = await tx`SELECT predecessor_id FROM agent_credentials WHERE id = ${credentialId}`;
+        // Predecessor first (same order as rotate), then the successor row. An upgrade key has no predecessor: it takes the same
+        // per-user advisory lock as `issueUpgrade`, so a confirm cannot interleave with a new upgrade (two live v2 keys).
+        const link = await tx`SELECT predecessor_id, user_id FROM agent_credentials WHERE id = ${credentialId}`;
         const predecessorId = typeof link[0]?.predecessor_id === "string" ? link[0].predecessor_id : null;
         if (predecessorId) await tx`SELECT 1 FROM agent_credentials WHERE id = ${predecessorId} FOR UPDATE`;
+        else if (typeof link[0]?.user_id === "string") await tx`SELECT pg_advisory_xact_lock(hashtext(${link[0].user_id}))`;
         const rows = await tx`
           SELECT c.user_id, c.expires_at, c.renew_until, agent_credential_state(c) AS state
           FROM agent_credentials c WHERE c.id = ${credentialId} FOR UPDATE`;

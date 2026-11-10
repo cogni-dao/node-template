@@ -31,10 +31,10 @@ export interface MemoryUser {
 export function memoryCredentialStore(init: { users: Record<string, MemoryUser>; failing?: boolean }) {
   const clock = { now: Date.parse("2026-11-10T12:00:00Z") };
   const rows: Row[] = [];
-  const outage = { failing: init.failing ?? false };
+  const outage = { failing: init.failing ?? false, /** Fail only this store method (an outage AFTER a successful verify). */ failOn: null as string | null };
   let seq = 0;
-  const guard = () => {
-    if (outage.failing) throw new Error("db down");
+  const guard = (method: string) => {
+    if (outage.failing || outage.failOn === method) throw new Error("db down");
   };
   const state = (r: Row): CredentialState =>
     r.revokedAt !== null
@@ -74,14 +74,14 @@ export function memoryCredentialStore(init: { users: Record<string, MemoryUser>;
 
   const store: CredentialStore = {
     async lookup(tokenHash): Promise<CredentialLookup | null> {
-      guard();
+      guard("lookup");
       const r = rows.find((x) => x.tokenHash === tokenHash);
       return r
         ? { credentialId: r.id, userId: r.userId, name: `name-${r.userId}`, state: state(r), expiresAt: iso(r.expiresAt), renewUntil: iso(r.renewUntil) }
         : null;
     },
     async issueUpgrade({ userId, tokenHash, policy }): Promise<IssueResult> {
-      guard();
+      guard("issueUpgrade");
       const u = init.users[userId];
       if (!u) return { ok: false, reason: "unknown_user" };
       if (u.wallet) return { ok: false, reason: "wallet_user" };
@@ -94,7 +94,7 @@ export function memoryCredentialStore(init: { users: Record<string, MemoryUser>;
       return { ok: true, credentialId: row.id, userId, pendingExpiresAt: iso(row.pendingExpiresAt) };
     },
     async issueSuccessor({ predecessorId, tokenHash, policy }): Promise<IssueResult> {
-      guard();
+      guard("issueSuccessor");
       const pred = rows.find((r) => r.id === predecessorId);
       if (!pred || !["active", "renew_only"].includes(state(pred))) return { ok: false, reason: "not_rotatable" };
       for (const r of rows) if (r.predecessorId === predecessorId && r.confirmedAt === null && r.revokedAt === null) revokeRow(r, "superseded");
@@ -102,7 +102,7 @@ export function memoryCredentialStore(init: { users: Record<string, MemoryUser>;
       return { ok: true, credentialId: row.id, userId: pred.userId, pendingExpiresAt: iso(row.pendingExpiresAt) };
     },
     async confirm({ credentialId, policy }): Promise<ConfirmResult> {
-      guard();
+      guard("confirm");
       const r = rows.find((x) => x.id === credentialId);
       if (!r) return { ok: false, reason: "not_found" };
       const s = state(r);
@@ -124,8 +124,12 @@ export function memoryCredentialStore(init: { users: Record<string, MemoryUser>;
       if (pred) revokeRow(pred, "rotated");
       return done("confirmed");
     },
+    async everConfirmed(userId) {
+      guard("everConfirmed");
+      return rows.some((r) => r.userId === userId && r.confirmedAt !== null);
+    },
     async revoke({ credentialId, userId, reason }) {
-      guard();
+      guard("revoke");
       const r = rows.find((x) => x.id === credentialId && x.userId === userId && x.revokedAt === null);
       if (!r) return false;
       revokeRow(r, reason);

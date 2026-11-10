@@ -18,7 +18,11 @@ import { memoryCredentialStore } from "../../../../../packages/agent-grants/test
 
 const fake = vi.hoisted(() => ({
   headers: new Map<string, string>(),
-  memory: undefined as unknown as { store: unknown; outage: { failing: boolean }; advance(sec: number): void },
+  memory: undefined as unknown as {
+    store: unknown;
+    outage: { failing: boolean; failOn: string | null };
+    advance(sec: number): void;
+  },
 }));
 const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), child: vi.fn() };
 log.child.mockReturnValue(log);
@@ -94,14 +98,24 @@ describe("upgrade", () => {
     expect(await ok.json()).toMatchObject({ id: USER, via: "bearer", name: `name-${USER}` });
   });
 
-  it("v1 coexistence: the v1 key authenticates before and after the upgrade", async () => {
+  it("v1 coexistence while pending; v1_superseded once the v2 key is confirmed, and still after it is revoked", async () => {
     const key = v1();
     expect((await ping(key)).status).toBe(200);
-    await activeV2();
-    expect((await ping(key)).status).toBe(200);
+    const pending = await (await post(upgrade as never, key)).json();
+    expect((await ping(key)).status).toBe(200); // the v2 key is only pending: the v1 key keeps working
+    await post(confirm as never, pending.apiKey);
+    const superseded = await ping(key);
+    expect(superseded.status).toBe(401);
+    expect(await superseded.json()).toEqual({ error: "v1_superseded" });
+    expect((await ping(pending.apiKey)).status).toBe(200);
+    // Revoking the v2 key must not revive the leaked-or-old v1 key, and the v1 key cannot re-upgrade.
+    await post(revoke as never, pending.apiKey);
+    expect((await ping(pending.apiKey)).status).toBe(401);
+    expect((await ping(key)).status).toBe(401);
+    expect((await post(upgrade as never, key)).status).toBe(401);
   });
 
-  it("refuses no key, a forged v1 key, and a v2 key (V1_ONLY); a second upgrade after a live v2 key is 409", async () => {
+  it("refuses no key, a forged v1 key, and a v2 key (V1_ONLY); a second upgrade with the superseded v1 key is 401", async () => {
     expect((await post(upgrade as never, null)).status).toBe(401);
     expect((await post(upgrade as never, "cogni_ag_sk_v1_forged.sig")).status).toBe(401);
     const v2 = await activeV2();
@@ -109,8 +123,8 @@ describe("upgrade", () => {
     expect(viaV2.status).toBe(403);
     expect(await viaV2.json()).toEqual({ error: "v1_bearer_required" });
     const again = await post(upgrade as never, v1());
-    expect(again.status).toBe(409);
-    expect(await again.json()).toEqual({ error: "already_upgraded" });
+    expect(again.status).toBe(401);
+    expect(await again.json()).toEqual({ error: "v1_superseded" });
   });
 
   it("a user the store refuses (wallet) is 403 not_agent_key", async () => {
@@ -190,14 +204,39 @@ describe("revoke (A7)", () => {
 });
 
 describe("store outage", () => {
-  it("is 503 authz_unavailable on an ordinary route and on a credential route, never 401; v1 keys are unaffected", async () => {
+  it("is 503 authz_unavailable on an ordinary route and on a credential route, never 401", async () => {
     const v2 = await activeV2();
     fake.memory.outage.failing = true;
     const ordinaryRes = await ping(v2.apiKey);
     expect(ordinaryRes.status).toBe(503);
     expect(await ordinaryRes.json()).toEqual({ error: "authz_unavailable" });
     expect((await post(rotate as never, v2.apiKey)).status).toBe(503);
-    expect((await ping(v1())).status).toBe(200);
+    // The v1 gate reads the store too: an outage there is 503, not a false 401.
+    expect((await ping(v1())).status).toBe(503);
+  });
+
+  it("an outage AFTER a successful verify (mid-handler) is 503 on rotate, confirm, revoke and upgrade, never a 500", async () => {
+    const v2 = await activeV2();
+    const v1Key = issueAgentApiKey({ userId: OTHER, displayName: "Other" });
+    for (const [method, call] of [
+      ["issueSuccessor", () => post(rotate as never, v2.apiKey)],
+      ["confirm", () => post(confirm as never, v2.apiKey)],
+      ["revoke", () => post(revoke as never, v2.apiKey)],
+      ["issueUpgrade", () => post(upgrade as never, v1Key)],
+    ] as const) {
+      fake.memory.outage.failOn = method;
+      const res = await call();
+      expect(res.status, method).toBe(503);
+      expect(await res.json(), method).toEqual({ error: "authz_unavailable" });
+    }
+    fake.memory.outage.failOn = null;
+    expect((await ping(v2.apiKey)).status).toBe(200); // nothing was half-applied
+  });
+
+  it("a perimeter-shaped bad token (wrong charset or length) is 401 and never reads the store", async () => {
+    fake.memory.outage.failing = true;
+    expect((await post(rotate as never, `cogni_ag_sk_v2_${"a".repeat(42)}!`)).status).toBe(401);
+    expect((await post(rotate as never, `cogni_ag_sk_v2_${"a".repeat(44)}`)).status).toBe(401);
   });
 });
 

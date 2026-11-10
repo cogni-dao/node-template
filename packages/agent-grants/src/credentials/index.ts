@@ -12,6 +12,7 @@
 export { createPostgresCredentialStore, type CredentialSql } from "./postgres";
 export {
   AGENT_KEY_V2_PREFIX,
+  assertV1NotSuperseded,
   confirmCredential,
   CredentialStoreUnavailableError,
   hashAgentKey,
@@ -20,6 +21,7 @@ export {
   revokeCredential,
   rotateCredential,
   upgradeFromV1,
+  V1SupersededError,
   type VerifyResult,
   verifyBearer,
 } from "./service";

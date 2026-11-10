@@ -16,7 +16,7 @@
  * @public
  */
 
-import { CredentialStoreUnavailableError } from "@cogni/agent-grants/credentials";
+import { CredentialStoreUnavailableError, V1SupersededError } from "@cogni/agent-grants/credentials";
 import type { SessionUser } from "@cogni/node-shared";
 import { type NextRequest, NextResponse } from "next/server";
 import type { Container } from "@/bootstrap/container";
@@ -173,6 +173,12 @@ export function wrapRouteHandlerWithLogging<TContext = unknown>(
       try {
         sessionUser = await options.auth.getSessionUser();
       } catch (error) {
+        if (error instanceof V1SupersededError) {
+          return NextResponse.json(
+            { error: error.code },
+            { status: 401, headers: { "cache-control": "no-store", "www-authenticate": 'Bearer error="invalid_token"' } }
+          );
+        }
         if (!(error instanceof CredentialStoreUnavailableError)) throw error;
         container.log.warn(
           { event: EVENT_NAMES.AGENT_CREDENTIAL_STORE_UNAVAILABLE, routeId: options.routeId },

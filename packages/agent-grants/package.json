@@ -19,6 +19,11 @@
       "types": "./dist/credentials/index.d.ts",
       "import": "./dist/credentials.js",
       "default": "./dist/credentials.js"
+    },
+    "./conformance": {
+      "types": "./dist/credentials/conformance.d.ts",
+      "import": "./dist/conformance.js",
+      "default": "./dist/conformance.js"
     }
   },
   "types": "./dist/index.d.ts",

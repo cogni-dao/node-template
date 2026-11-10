@@ -21,7 +21,7 @@ ALTER TABLE "agent_credentials" ADD CONSTRAINT "agent_credentials_user_id_users_
 ALTER TABLE "agent_credentials" ADD CONSTRAINT "agent_credentials_predecessor_id_fk" FOREIGN KEY ("predecessor_id") REFERENCES "public"."agent_credentials"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE UNIQUE INDEX "agent_credentials_token_hash_unique" ON "agent_credentials" USING btree ("token_hash");--> statement-breakpoint
 CREATE UNIQUE INDEX "agent_credentials_one_pending_successor" ON "agent_credentials" USING btree ("predecessor_id") WHERE "agent_credentials"."confirmed_at" IS NULL AND "agent_credentials"."revoked_at" IS NULL;--> statement-breakpoint
-CREATE INDEX "agent_credentials_user_live_idx" ON "agent_credentials" USING btree ("user_id") WHERE "agent_credentials"."revoked_at" IS NULL;
+CREATE INDEX "agent_credentials_user_idx" ON "agent_credentials" USING btree ("user_id");
 --> statement-breakpoint
 -- Hand-written below: FORCE RLS, a function and a trigger are outside Drizzle's DDL scope (same as 0027 / 0031 / 0036).
 -- agent_credentials has NO policy: ENABLE + FORCE = deny-all for the app role. Only the BYPASSRLS service role reads or writes it.

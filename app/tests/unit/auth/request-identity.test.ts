@@ -33,6 +33,11 @@ vi.mock("next/headers", () => ({
   headers: (...args: unknown[]) => mockHeaders(...args),
 }));
 
+const mockEverConfirmed = vi.fn();
+vi.mock("@/bootstrap/agent-credentials", () => ({
+  getAgentCredentialStore: () => ({ everConfirmed: (...args: unknown[]) => mockEverConfirmed(...args) }),
+}));
+
 vi.mock("@/shared/env/server", () => ({
   serverEnv: () => ({ AUTH_SECRET: "test-secret-for-unit-tests-only" }),
 }));
@@ -108,6 +113,7 @@ describe("resolveRequestIdentity — circular-recursion regression", () => {
 describe("resolveRequestIdentity — via is recorded for logging (task.5456)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockEverConfirmed.mockResolvedValue(false);
   });
 
   it("marks a cookie session as via=session", async () => {
@@ -124,6 +130,24 @@ describe("resolveRequestIdentity — via is recorded for logging (task.5456)", (
     const user = await resolveRequestIdentity();
     expect(user).toMatchObject({ id: "agent-1", via: "bearer" });
     expect(mockGetServerSessionUser).not.toHaveBeenCalled();
+  });
+
+  it("V1_SUPERSEDED: a valid v1 key whose user holds a confirmed v2 key is refused with v1_superseded", async () => {
+    mockEverConfirmed.mockResolvedValue(true);
+    const apiKey = issueAgentApiKey({ userId: "agent-1", displayName: "Agent" });
+    mockHeaders.mockResolvedValue(headersFromRecord({ authorization: `Bearer ${apiKey}` }));
+    await expect(resolveRequestIdentity()).rejects.toMatchObject({ code: "v1_superseded" });
+    expect(mockEverConfirmed).toHaveBeenCalledWith("agent-1");
+  });
+
+  it("a forged v1 key never reads the store, and a store failure on the v1 gate is an outage (503), not a 401", async () => {
+    mockHeaders.mockResolvedValue(headersFromRecord({ authorization: "Bearer cogni_ag_sk_v1_forged.sig" }));
+    expect(await resolveRequestIdentity()).toBeNull();
+    expect(mockEverConfirmed).not.toHaveBeenCalled();
+    mockEverConfirmed.mockRejectedValue(new Error("db down"));
+    const apiKey = issueAgentApiKey({ userId: "agent-1", displayName: "Agent" });
+    mockHeaders.mockResolvedValue(headersFromRecord({ authorization: `Bearer ${apiKey}` }));
+    await expect(resolveRequestIdentity()).rejects.toMatchObject({ code: "authz_unavailable" });
   });
 
   it("returns null for a missing session without inventing a via", async () => {

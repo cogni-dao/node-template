@@ -143,8 +143,7 @@ export const agentCredentials = pgTable(
     uniqueIndex("agent_credentials_one_pending_successor")
       .on(table.predecessorId)
       .where(sql`${table.confirmedAt} IS NULL AND ${table.revokedAt} IS NULL`),
-    index("agent_credentials_user_live_idx")
-      .on(table.userId)
-      .where(sql`${table.revokedAt} IS NULL`),
+    // Not partial: the v1 gate (`everConfirmed`) reads revoked rows too, on every v1-authenticated request.
+    index("agent_credentials_user_idx").on(table.userId),
   ]
 ).enableRLS();

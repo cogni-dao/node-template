@@ -11,12 +11,22 @@
  * @internal
  */
 
-import { type CredentialSql, type CredentialStore, createPostgresCredentialStore } from "@cogni/agent-grants/credentials";
+import {
+  type CredentialSql,
+  CredentialStoreUnavailableError,
+  type CredentialStore,
+  createPostgresCredentialStore,
+} from "@cogni/agent-grants/credentials";
 import { resolveServiceDb } from "@/bootstrap/container";
 
 let store: CredentialStore | undefined;
 
+/** A missing or broken service connection is an outage (503), never a 500 or a 401. */
 export function getAgentCredentialStore(): CredentialStore {
-  store ??= createPostgresCredentialStore(resolveServiceDb().$client as unknown as CredentialSql);
+  try {
+    store ??= createPostgresCredentialStore(resolveServiceDb().$client as unknown as CredentialSql);
+  } catch {
+    throw new CredentialStoreUnavailableError();
+  }
   return store;
 }
