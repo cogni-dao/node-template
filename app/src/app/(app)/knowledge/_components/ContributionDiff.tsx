@@ -56,15 +56,14 @@ function citationHref(id: string): string {
 function confidenceOnlyChange(
 	d: ContributionDiffEntry,
 ): { from: unknown; to: unknown } | null {
-	if (d.changeType !== "modified" || !d.before || !d.after) return null;
-	const { confidencePct: from, ...before } = d.before;
-	const { confidencePct: to, ...after } = d.after;
-	if (from === to) return null;
-	const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
-	for (const key of keys)
-		if (JSON.stringify(before[key]) !== JSON.stringify(after[key]))
-			return null;
-	return { from, to };
+	// The store compares every column; anything besides confidence is an edit.
+	if (
+		d.changeType !== "modified" ||
+		d.changedFields?.length !== 1 ||
+		d.changedFields[0] !== "confidencePct"
+	)
+		return null;
+	return { from: d.before?.confidencePct, to: d.after?.confidencePct };
 }
 
 export function ContributionDiff({
@@ -123,11 +122,23 @@ export function ContributionDiff({
 			<p className="text-muted-foreground text-xs">No changes detected.</p>
 		);
 
-	const recomputed = diff.flatMap((d) => {
+	const recomputed: {
+		rowId: string;
+		title: string;
+		from: unknown;
+		to: unknown;
+	}[] = [];
+	const edited: ContributionDiffEntry[] = [];
+	for (const d of diff) {
 		const change = confidenceOnlyChange(d);
-		return change ? [{ rowId: d.rowId, ...change }] : [];
-	});
-	const edited = diff.filter((d) => !confidenceOnlyChange(d));
+		if (change)
+			recomputed.push({
+				rowId: d.rowId,
+				title: String(d.after?.title ?? d.rowId),
+				...change,
+			});
+		else edited.push(d);
+	}
 
 	return (
 		<div className="flex flex-col gap-2">
@@ -243,6 +254,8 @@ export function ContributionDiff({
 							<li key={r.rowId}>
 								<Link
 									href={citationHref(r.rowId)}
+									title={r.title}
+									aria-label={`${r.rowId} confidence from ${String(r.from ?? "unknown")}% to ${String(r.to ?? "unknown")}%`}
 									className="-mx-1 flex min-h-6 items-center gap-2 rounded-sm px-1 text-xs outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
 								>
 									<span className="min-w-0 break-all font-mono">{r.rowId}</span>

@@ -260,6 +260,13 @@ export const ContributionDiffEntrySchema = z.object({
   rowId: z.string(),
   before: z.record(z.string(), z.unknown()).nullable(),
   after: z.record(z.string(), z.unknown()).nullable(),
+  /**
+   * For a modified row: every knowledge column (camelCase) whose value differs,
+   * read from the full row diff, not only the projected `before`/`after`
+   * fields. `updatedAt` is excluded. `["confidencePct"]` alone means a cite edit
+   * recomputed the row and nothing was authored on it.
+   */
+  changedFields: z.array(z.string()).optional(),
 });
 export type ContributionDiffEntry = z.infer<typeof ContributionDiffEntrySchema>;
 

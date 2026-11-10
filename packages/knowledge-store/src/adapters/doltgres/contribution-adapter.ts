@@ -583,6 +583,26 @@ async function insertCitationRow(input: {
   return { id, citedEndpoint: cited };
 }
 
+/** Dolt diff bookkeeping columns, not knowledge fields. */
+const DIFF_META_FIELDS = new Set(["commit", "commit_date", "updated_at"]);
+
+/**
+ * Every knowledge column a modified diff row changes, camelCased, from the full
+ * `from_*` / `to_*` pair set (so unprojected columns such as tags count).
+ */
+function changedKnowledgeFields(row: Record<string, unknown>): string[] {
+  const fields: string[] = [];
+  for (const key of Object.keys(row)) {
+    if (!key.startsWith("to_")) continue;
+    const column = key.slice(3);
+    if (DIFF_META_FIELDS.has(column)) continue;
+    if (JSON.stringify(row[`from_${column}`]) === JSON.stringify(row[key]))
+      continue;
+    fields.push(column.replace(/_([a-z])/g, (_m, c: string) => c.toUpperCase()));
+  }
+  return fields.sort();
+}
+
 /**
  * Recompute confidence on a single knowledge row using its 1-hop incoming
  * citations, on the branch connection. Mirrors
@@ -1784,6 +1804,9 @@ export class DoltgresKnowledgeContributionAdapter
         rowId,
         before,
         after,
+        ...(diffType === "modified"
+          ? { changedFields: changedKnowledgeFields(row) }
+          : {}),
       };
     });
   }

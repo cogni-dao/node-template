@@ -81,7 +81,7 @@ describe("ContributionDiff citations", () => {
     expect(screen.queryByText(/No changes detected/)).toBeNull();
   });
 
-  it("lists confidence-only rows compactly instead of as edited entries", async () => {
+  it("lists only confidence-only rows compactly; any other change stays a card", async () => {
     const row = {
       id: "agent-development",
       title: "Add an agent graph",
@@ -101,6 +101,14 @@ describe("ContributionDiff citations", () => {
           rowId: "agent-development",
           before: { ...row, confidencePct: 40 },
           after: { ...row, confidencePct: 55 },
+          changedFields: ["confidencePct"],
+        },
+        {
+          changeType: "modified",
+          rowId: "tagged-entry",
+          before: { ...row, id: "tagged-entry", confidencePct: 40 },
+          after: { ...row, id: "tagged-entry", content: "Tagged body", confidencePct: 55 },
+          changedFields: ["confidencePct", "tags"],
         },
       ],
       citations: [
@@ -119,8 +127,11 @@ describe("ContributionDiff citations", () => {
       name: "Confidence recomputed",
     });
     expect(within(recomputed).getByText("40% → 55%")).toBeTruthy();
+    expect(within(recomputed).queryByText("tagged-entry")).toBeNull();
     expect(screen.queryByText("Unchanged body")).toBeNull();
-    expect(screen.queryByText("modified")).toBeNull();
+    // A confidence change plus any authored column stays a full edited card.
+    expect(screen.getAllByText("modified")).toHaveLength(1);
+    expect(screen.getByText("Tagged body")).toBeTruthy();
   });
 
   it("says no changes only when neither rows nor edges changed", async () => {

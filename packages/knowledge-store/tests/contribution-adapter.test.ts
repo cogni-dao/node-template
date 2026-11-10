@@ -1550,7 +1550,17 @@ describe("reviewed metric configuration", () => {
       }
     }
     const [entry] = await adapterFor(new ConfigDiffSql()).diff("contrib-agent-1-abc123");
-    expect(entry?.before?.metricSpec).toMatchObject({ calculatorId: "work.count@1" }); expect(entry?.after?.metricSpec).toBeNull(); expect(entry?.after?.kpiBindings).toEqual([]); expect(entry?.before?.confidencePct).toBe(40); expect(entry?.after?.confidencePct).toBe(55);
+    expect(entry?.before?.metricSpec).toMatchObject({ calculatorId: "work.count@1" }); expect(entry?.after?.metricSpec).toBeNull(); expect(entry?.after?.kpiBindings).toEqual([]); expect(entry?.before?.confidencePct).toBe(40); expect(entry?.after?.confidencePct).toBe(55); expect(entry?.changedFields).toEqual(["confidencePct", "kpiBindings", "metricSpec"]);
+  });
+  it("reports unprojected column changes so a confidence-only row is never assumed", async () => {
+    class TagsDiffSql extends FakeSql {
+      override async unsafe(query: string) {
+        if (query.includes("dolt_diff")) return [{ diff_type: "modified", from_id: "x", to_id: "x", from_confidence_pct: 40, to_confidence_pct: 55, from_tags: ["a"], to_tags: ["a", "b"], from_updated_at: "t1", to_updated_at: "t2", from_commit: "c1", to_commit: "c2" }];
+        return super.unsafe(query);
+      }
+    }
+    const [entry] = await adapterFor(new TagsDiffSql()).diff("contrib-agent-1-abc123");
+    expect(entry?.changedFields).toEqual(["confidencePct", "tags"]);
   });
   it("keeps omission distinct from explicit clearing at the wire", () => {
     const common = { op: "update", targetRowId: "metric-work", entry: { id: "metric-work", domain: "meta", title: "Count", content: "Count items" } };
