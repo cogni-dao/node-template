@@ -1,25 +1,25 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-/** Golden cases for true-now-rules@1: one case per marker and one per false-positive guard. */
+/** Golden cases for diary-free-rules@1: one case per marker and one per false-positive guard. */
 import { describe, expect, it } from "vitest";
 import {
 	appendsHistory,
 	approvedLines,
 	markerLines,
-	passesTrueNow,
-	scoreTrueNow,
-	summarizeTrueNow,
-	TRUE_NOW_RULES,
-	TRUE_NOW_RULES_VERSION,
-	trueNowEvidenceRefs,
-} from "../src/true-now.js";
+	passesDiaryFree,
+	scoreDiaryFree,
+	summarizeDiaryFree,
+	DIARY_FREE_RULES,
+	DIARY_FREE_RULES_VERSION,
+	diaryFreeEvidenceRefs,
+} from "../src/diary-free.js";
 
 const codes = (text: string) => markerLines(text).flatMap((m) => m.codes);
 const lines = (text: string) => markerLines(text).map((m) => m.line);
 
-describe("true-now-rules@1 markers", () => {
+describe("diary-free-rules@1 markers", () => {
 	it("is version 1 with six pinned codes in reporting order", () => {
-		expect(TRUE_NOW_RULES_VERSION).toBe("true-now-rules@1");
-		expect(TRUE_NOW_RULES).toEqual([
+		expect(DIARY_FREE_RULES_VERSION).toBe("diary-free-rules@1");
+		expect(DIARY_FREE_RULES).toEqual([
 			"dated_line",
 			"label_line",
 			"revision_tag",
@@ -53,13 +53,13 @@ describe("true-now-rules@1 markers", () => {
 			expect(codes("We shipped on 2026-11-01 and 2026-11-02 both.\nAnd on 2026-11-03 again.")).toEqual([]);
 		});
 		it("counts per field, not across fields", () => {
-			const score = scoreTrueNow("work-items", {
+			const score = scoreDiaryFree("work-items", {
 				title: "T",
 				summary: "2026-11-01 one",
 				outcome: "2026-11-02 two",
 			});
 			expect(score.broken).toEqual([]);
-			expect(scoreTrueNow("work-items", { outcome: "2026-11-01 a\n2026-11-02 b" }).broken).toEqual(["dated_line"]);
+			expect(scoreDiaryFree("work-items", { outcome: "2026-11-01 a\n2026-11-02 b" }).broken).toEqual(["dated_line"]);
 		});
 		it("keeps a lone dated line that matches another code", () => {
 			expect(codes("2026-11-01 Rev 3 shipped")).toEqual(["revision_tag"]);
@@ -198,7 +198,7 @@ describe("true-now-rules@1 markers", () => {
 	});
 });
 
-describe("true-now-rules@1 false-positive guards", () => {
+describe("diary-free-rules@1 false-positive guards", () => {
 	it("never matches a checklist line", () => {
 		for (const line of [
 			"- [ ] Update: ship it",
@@ -262,9 +262,9 @@ describe("true-now-rules@1 false-positive guards", () => {
 	});
 });
 
-describe("scoreTrueNow", () => {
+describe("scoreDiaryFree", () => {
 	it("scores the fields of each subject and reports codes in reporting order", () => {
-		const items = scoreTrueNow("work-items", {
+		const items = scoreDiaryFree("work-items", {
 			title: "A title",
 			summary: "~~old~~ summary",
 			outcome: "Goal = x\nUpdate: shipped\nRev 3",
@@ -273,8 +273,8 @@ describe("scoreTrueNow", () => {
 		});
 		expect(items.broken).toEqual(["label_line", "revision_tag", "strikethrough"]);
 		expect(items.markerLines).toBe(3);
-		expect(passesTrueNow(items)).toBe(false);
-		const atoms = scoreTrueNow("atoms", {
+		expect(passesDiaryFree(items)).toBe(false);
+		const atoms = scoreDiaryFree("atoms", {
 			title: "T",
 			use_when: "PIVOT",
 			content: "body",
@@ -285,15 +285,15 @@ describe("scoreTrueNow", () => {
 	});
 
 	it("fails a row with a field over the cap, and one the source flagged", () => {
-		const big = scoreTrueNow("atoms", { content: "a".repeat(100_001) });
+		const big = scoreDiaryFree("atoms", { content: "a".repeat(100_001) });
 		expect(big).toMatchObject({ broken: [], oversize: true, markerLines: 0 });
-		expect(passesTrueNow(big)).toBe(false);
-		expect(scoreTrueNow("atoms", { content: "ok", oversize: true }).oversize).toBe(true);
-		expect(passesTrueNow(scoreTrueNow("atoms", { content: "a".repeat(100_000) }))).toBe(true);
+		expect(passesDiaryFree(big)).toBe(false);
+		expect(scoreDiaryFree("atoms", { content: "ok", oversize: true }).oversize).toBe(true);
+		expect(passesDiaryFree(scoreDiaryFree("atoms", { content: "a".repeat(100_000) }))).toBe(true);
 	});
 
 	it("passes a clean row", () => {
-		expect(passesTrueNow(scoreTrueNow("work-items", { title: "T", summary: "S", outcome: "O" }))).toBe(true);
+		expect(passesDiaryFree(scoreDiaryFree("work-items", { title: "T", summary: "S", outcome: "O" }))).toBe(true);
 	});
 });
 
@@ -343,7 +343,7 @@ describe("appendsHistory", () => {
 	});
 });
 
-describe("summarizeTrueNow", () => {
+describe("summarizeDiaryFree", () => {
 	const rows = [
 		{ id: "task.1", broken: [] as const, oversize: false, missingGoal: false, missingDoneWhen: true },
 		{ id: "task.2", broken: ["label_line", "revision_tag"] as const, oversize: false, missingGoal: true, missingDoneWhen: true },
@@ -352,10 +352,10 @@ describe("summarizeTrueNow", () => {
 	];
 
 	it("folds rows into the value and evidence with ids and counts only", () => {
-		const summary = summarizeTrueNow("work-items", rows);
+		const summary = summarizeDiaryFree("work-items", rows);
 		expect(summary).toMatchObject({ evaluated: 4, passing: 1, percent: 25, oversize: 1, missingGoal: 1, missingDoneWhen: 2 });
-		expect(trueNowEvidenceRefs(summary)).toEqual([
-			"rules:true-now-rules@1",
+		expect(diaryFreeEvidenceRefs(summary)).toEqual([
+			"rules:diary-free-rules@1",
 			"counts:evaluated=4;passing=1",
 			"rule:dated_line=0",
 			"rule:label_line=1",
@@ -377,20 +377,20 @@ describe("summarizeTrueNow", () => {
 			broken: ["label_line"] as const,
 			oversize: false,
 		}));
-		const refs = trueNowEvidenceRefs(summarizeTrueNow("atoms", many));
+		const refs = diaryFreeEvidenceRefs(summarizeDiaryFree("atoms", many));
 		expect(refs.some((r) => r.startsWith("missing_goal"))).toBe(false);
 		expect(refs.filter((r) => r.startsWith("worst:"))).toHaveLength(10);
 		expect(refs.filter((r) => r.startsWith("worst:"))[0]).toBe("worst:a00:label_line");
 	});
 
 	it("never depends on input order and reports null for no rows", () => {
-		expect(summarizeTrueNow("work-items", [...rows].reverse())).toEqual(summarizeTrueNow("work-items", rows));
-		expect(summarizeTrueNow("atoms", []).percent).toBeNull();
+		expect(summarizeDiaryFree("work-items", [...rows].reverse())).toEqual(summarizeDiaryFree("work-items", rows));
+		expect(summarizeDiaryFree("atoms", []).percent).toBeNull();
 	});
 
 	it("labels a stored id safely", () => {
-		const refs = trueNowEvidenceRefs(
-			summarizeTrueNow("atoms", [{ id: "weird id;\nwith:chars", broken: ["label_line"], oversize: false }]),
+		const refs = diaryFreeEvidenceRefs(
+			summarizeDiaryFree("atoms", [{ id: "weird id;\nwith:chars", broken: ["label_line"], oversize: false }]),
 		);
 		expect(refs.at(-1)).toBe("worst:weird_id__with_chars:label_line");
 	});

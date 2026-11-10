@@ -15,13 +15,13 @@ import type { MetricBudget, MetricSample } from "./contracts.js";
 import {
 	appendsHistory,
 	approvedLines,
-	scoreTrueNow,
-	summarizeTrueNow,
-	TRUE_NOW_MAX_FIELD_CHARS,
-	TRUE_NOW_RULES_VERSION,
-	type TrueNowSubject,
-	trueNowEvidenceRefs,
-} from "./true-now.js";
+	scoreDiaryFree,
+	summarizeDiaryFree,
+	DIARY_FREE_MAX_FIELD_CHARS,
+	DIARY_FREE_RULES_VERSION,
+	type DiaryFreeSubject,
+	diaryFreeEvidenceRefs,
+} from "./diary-free.js";
 
 export async function readWorkCount(
 	sql: Sql,
@@ -659,16 +659,16 @@ export async function readBriefConformance(
 	};
 }
 
-/** Most rows one true-now statement reads. */
-export const TRUE_NOW_MAX_ROWS = 5000;
-/** Most bytes of text one true-now statement sends (16 MiB). */
-export const TRUE_NOW_MAX_BYTES = 16_777_216;
-/** Most edits one true-now edits compute classifies; more fails closed. */
-export const TRUE_NOW_MAX_EDITS = 2000;
+/** Most rows one diary-free statement reads. */
+export const DIARY_FREE_MAX_ROWS = 5000;
+/** Most bytes of text one diary-free statement sends (16 MiB). */
+export const DIARY_FREE_MAX_BYTES = 16_777_216;
+/** Most edits one diary-free edits compute classifies; more fails closed. */
+export const DIARY_FREE_MAX_EDITS = 2000;
 /** Fewer edits than this in the window is `insufficient_history`, never a share. */
-export const TRUE_NOW_MIN_EDITS = 10;
+export const DIARY_FREE_MIN_EDITS = 10;
 
-const TRUE_NOW_SOURCE = {
+const DIARY_FREE_SOURCE = {
 	"work-items": "node.work_items",
 	atoms: "node.knowledge",
 } as const;
@@ -678,21 +678,21 @@ const TRUE_NOW_SOURCE = {
  * in only while the row and byte caps hold (the same statement the brief
  * calculator sends, so both read one scope).
  */
-export function trueNowStateSql(subject: TrueNowSubject): string {
+export function diaryFreeStateSql(subject: DiaryFreeSubject): string {
 	return briefConformanceSql(subject === "work-items" ? "items" : "entries");
 }
 
 /**
  * State of one subject: the percent of open work items or live atoms with no
- * `true-now-rules@1` marker line. A cap hit, an empty scope and a failed read
+ * `diary-free-rules@1` marker line. A cap hit, an empty scope and a failed read
  * are unknown, never zero.
  */
-export async function readTrueNowState(
+export async function readDiaryFreeState(
 	sql: Sql,
-	subject: TrueNowSubject,
+	subject: DiaryFreeSubject,
 	signal: AbortSignal,
 ): Promise<MetricSample> {
-	const source = TRUE_NOW_SOURCE[subject];
+	const source = DIARY_FREE_SOURCE[subject];
 	const unknown = (
 		reason: NonNullable<MetricSample["reason"]>,
 		asOf: string | null,
@@ -707,7 +707,7 @@ export async function readTrueNowState(
 	});
 	let rows: ReadonlyArray<Record<string, unknown>>;
 	try {
-		rows = await run(sql, trueNowStateSql(subject), signal);
+		rows = await run(sql, diaryFreeStateSql(subject), signal);
 	} catch (error) {
 		// A timeout keeps its own failure; every other read error is source_failed,
 		// recorded by class only.
@@ -726,8 +726,8 @@ export async function readTrueNowState(
 	if (n === 0) return unknown("zero_denominator", asOf, ["counts:evaluated=0"]);
 	// Over a cap the statement sends the totals row alone.
 	if (
-		n > TRUE_NOW_MAX_ROWS ||
-		bytes > TRUE_NOW_MAX_BYTES ||
+		n > DIARY_FREE_MAX_ROWS ||
+		bytes > DIARY_FREE_MAX_BYTES ||
 		rows.length !== n ||
 		rows.some((r) => r.id == null)
 	)
@@ -735,10 +735,10 @@ export async function readTrueNowState(
 			`counts:evaluated=${n};bytes=${bytes};cap_hit`,
 		]);
 	const text = (value: unknown) => (value == null ? null : String(value));
-	const summary = summarizeTrueNow(
+	const summary = summarizeDiaryFree(
 		subject,
 		rows.map((row) => {
-			const score = scoreTrueNow(subject, {
+			const score = scoreDiaryFree(subject, {
 				title: text(row.title),
 				summary: text(row.summary),
 				outcome: text(row.outcome),
@@ -763,12 +763,12 @@ export async function readTrueNowState(
 		unit: "%",
 		complete: summary.percent !== null,
 		sourceWatermarks: [{ source, asOf }],
-		evidenceRefs: trueNowEvidenceRefs(summary),
+		evidenceRefs: diaryFreeEvidenceRefs(summary),
 	};
 }
 
 /** Open work items in scope: the guardrail beside the work-item state KPI. */
-export async function readTrueNowScope(
+export async function readDiaryFreeScope(
 	sql: Sql,
 	signal: AbortSignal,
 ): Promise<MetricSample> {
@@ -778,7 +778,7 @@ export async function readTrueNowScope(
 		...counted,
 		complete: counted.complete && valid,
 		evidenceRefs: [
-			`rules:${TRUE_NOW_RULES_VERSION}`,
+			`rules:${DIARY_FREE_RULES_VERSION}`,
 			...counted.evidenceRefs,
 			...(valid ? [`counts:evaluated=${counted.value}`] : []),
 		],
@@ -805,7 +805,7 @@ const EDIT_COLUMNS = {
  * its capped text and joins the rows in only while both are inside the caps, so
  * the database never sends a result over a cap.
  */
-export function trueNowEditsSql(
+export function diaryFreeEditsSql(
 	table: EditTable,
 	window: { start: string; end: string },
 ): string {
@@ -814,13 +814,13 @@ export function trueNowEditsSql(
 		table === "work-items" ? "dolt_diff_work_items" : "dolt_diff_knowledge";
 	const text = columns.flatMap((c) => [`from_${c}`, `to_${c}`]);
 	const capped = (c: string) =>
-		`CASE WHEN char_length(d.${c}) > ${TRUE_NOW_MAX_FIELD_CHARS} THEN NULL ELSE d.${c} END AS ${c}`;
+		`CASE WHEN char_length(d.${c}) > ${DIARY_FREE_MAX_FIELD_CHARS} THEN NULL ELSE d.${c} END AS ${c}`;
 	const over = (c: string) =>
-		`COALESCE(char_length(d.${c}), 0) > ${TRUE_NOW_MAX_FIELD_CHARS}`;
+		`COALESCE(char_length(d.${c}), 0) > ${DIARY_FREE_MAX_FIELD_CHARS}`;
 	// Doltgres 0.57.3 panics on octet_length over a stored long text unless the
 	// text is first materialized by substr, and compares a bare SUM as text.
 	const size = (c: string) =>
-		`COALESCE(CASE WHEN char_length(d.${c}) > ${TRUE_NOW_MAX_FIELD_CHARS} THEN 0 ELSE octet_length(substr(d.${c}, 1, ${TRUE_NOW_MAX_FIELD_CHARS})) END, 0) AS ${c}_bytes`;
+		`COALESCE(CASE WHEN char_length(d.${c}) > ${DIARY_FREE_MAX_FIELD_CHARS} THEN 0 ELSE octet_length(substr(d.${c}, 1, ${DIARY_FREE_MAX_FIELD_CHARS})) END, 0) AS ${c}_bytes`;
 	const scope =
 		table === "work-items"
 			? SYNTHETIC_LABELS("d.to_labels")
@@ -837,7 +837,7 @@ export function trueNowEditsSql(
 			? "LEFT JOIN dolt_log l ON l.commit_hash = d.to_commit"
 			: "LEFT JOIN dolt_log l ON l.commit_hash = d.to_commit LEFT JOIN knowledge_contribution_commits c ON c.commit_hash = d.to_commit";
 	const bytes = text.map((c) => `${c}_bytes`).join(" + ");
-	return `WITH diffs AS (SELECT d.to_id AS id, d.to_commit AS commit_hash, CAST(d.to_commit_date AS TEXT) AS at, d.diff_type, ${reason}, ${text.map(capped).join(", ")}, ${text.map(size).join(", ")}, (${text.map(over).join(" OR ")}) AS oversize FROM ${diff} d ${join} WHERE d.to_commit <> 'WORKING' AND d.to_id IS NOT NULL AND d.diff_type = 'modified' AND d.to_commit_date >= '${doltUtc(window.start)}' AND d.to_commit_date < '${doltUtc(window.end)}' AND (${changed}) AND ${scope} ORDER BY d.to_id, d.to_commit_date LIMIT ${TRUE_NOW_MAX_ROWS + 1}), totals AS (SELECT COUNT(*) AS n, CAST(COALESCE(SUM(${bytes}), 0) AS BIGINT) AS bytes FROM diffs) SELECT NOW() AS as_of, t.n, t.bytes, s.id, s.commit_hash, s.at, s.diff_type, s.reason_message, ${text.map((c) => `s.${c}`).join(", ")}, s.oversize FROM totals t LEFT JOIN diffs s ON t.n <= ${TRUE_NOW_MAX_ROWS} AND t.bytes <= ${TRUE_NOW_MAX_BYTES} ORDER BY s.id, s.at, s.commit_hash`;
+	return `WITH diffs AS (SELECT d.to_id AS id, d.to_commit AS commit_hash, CAST(d.to_commit_date AS TEXT) AS at, d.diff_type, ${reason}, ${text.map(capped).join(", ")}, ${text.map(size).join(", ")}, (${text.map(over).join(" OR ")}) AS oversize FROM ${diff} d ${join} WHERE d.to_commit <> 'WORKING' AND d.to_id IS NOT NULL AND d.diff_type = 'modified' AND d.to_commit_date >= '${doltUtc(window.start)}' AND d.to_commit_date < '${doltUtc(window.end)}' AND (${changed}) AND ${scope} ORDER BY d.to_id, d.to_commit_date LIMIT ${DIARY_FREE_MAX_ROWS + 1}), totals AS (SELECT COUNT(*) AS n, CAST(COALESCE(SUM(${bytes}), 0) AS BIGINT) AS bytes FROM diffs) SELECT NOW() AS as_of, t.n, t.bytes, s.id, s.commit_hash, s.at, s.diff_type, s.reason_message, ${text.map((c) => `s.${c}`).join(", ")}, s.oversize FROM totals t LEFT JOIN diffs s ON t.n <= ${DIARY_FREE_MAX_ROWS} AND t.bytes <= ${DIARY_FREE_MAX_BYTES} ORDER BY s.id, s.at, s.commit_hash`;
 }
 
 /** The class of a thrown value, safe to publish: never its message or any row content. */
@@ -891,7 +891,7 @@ async function readEditsOf(
 		| { error: string }
 	>(async (signal) => {
 		try {
-			return { rows: await run(sql, trueNowEditsSql(table, window), signal) };
+			return { rows: await run(sql, diaryFreeEditsSql(table, window), signal) };
 		} catch (error) {
 			// A timeout keeps its own failure; every other read error is
 			// source_failed, recorded by class only.
@@ -914,8 +914,8 @@ async function readEditsOf(
 	if (n === 0) return { ok: true, edits: [], mergeRepeats: 0, asOf };
 	// Over a cap the statement sends the totals row alone.
 	if (
-		n > TRUE_NOW_MAX_ROWS ||
-		bytes > TRUE_NOW_MAX_BYTES ||
+		n > DIARY_FREE_MAX_ROWS ||
+		bytes > DIARY_FREE_MAX_BYTES ||
 		rows.length !== n ||
 		rows.some((r) => r.id == null) ||
 		rows.some((r) => r.oversize === true || r.oversize === "t")
@@ -989,10 +989,10 @@ async function readEditsOf(
  * outcome or an atom's content; creation, deletion and fixtures are not edits.
  * `share` is the percent of edits that did not append history (the count of
  * marker lines did not grow); `count` is the raw number of edits. Under
- * `TRUE_NOW_MIN_EDITS` a share is `insufficient_history`; over
- * `TRUE_NOW_MAX_EDITS` either output fails closed.
+ * `DIARY_FREE_MIN_EDITS` a share is `insufficient_history`; over
+ * `DIARY_FREE_MAX_EDITS` either output fails closed.
  */
-export async function readTrueNowEdits(
+export async function readDiaryFreeEdits(
 	sql: Sql,
 	output: "share" | "count",
 	window: { start: string; end: string },
@@ -1003,7 +1003,7 @@ export async function readTrueNowEdits(
 	const end = new Date(Date.parse(window.end)).toISOString();
 	const watermarks: MetricSample["sourceWatermarks"] = [];
 	const evidenceRefs = [
-		`rules:${TRUE_NOW_RULES_VERSION}`,
+		`rules:${DIARY_FREE_RULES_VERSION}`,
 		`window:[${start},${end})`,
 	];
 	const unknown = (
@@ -1020,7 +1020,7 @@ export async function readTrueNowEdits(
 	let mergeRepeats = 0;
 	for (const table of ["work-items", "atoms"] as const) {
 		const part = await readEditsOf(sql, table, { start, end }, read);
-		watermarks.push({ source: TRUE_NOW_SOURCE[table], asOf: part.asOf });
+		watermarks.push({ source: DIARY_FREE_SOURCE[table], asOf: part.asOf });
 		if (!part.ok) {
 			evidenceRefs.push(...part.evidence);
 			return unknown(part.reason);
@@ -1034,7 +1034,7 @@ export async function readTrueNowEdits(
 		`counts:edits=${edits.length};appending=${appending};withReason=${withReason}`,
 		`counts:merge_repeats=${mergeRepeats}`,
 	);
-	if (edits.length > TRUE_NOW_MAX_EDITS) {
+	if (edits.length > DIARY_FREE_MAX_EDITS) {
 		evidenceRefs.push("cap_hit");
 		return unknown("incomplete_or_invalid_source");
 	}
@@ -1047,6 +1047,6 @@ export async function readTrueNowEdits(
 	});
 	if (output === "count") return sample(edits.length);
 	if (edits.length === 0) return unknown("zero_denominator");
-	if (edits.length < TRUE_NOW_MIN_EDITS) return unknown("insufficient_history");
+	if (edits.length < DIARY_FREE_MIN_EDITS) return unknown("insufficient_history");
 	return sample((100 * (edits.length - appending)) / edits.length);
 }

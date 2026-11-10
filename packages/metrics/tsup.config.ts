@@ -15,7 +15,7 @@ export default defineConfig({
 		"src/knowledge.ts",
 		"src/schema.ts",
 		"src/sources.ts",
-		"src/true-now.ts",
+		"src/diary-free.ts",
 	],
 	format: ["esm"],
 	splitting: true,

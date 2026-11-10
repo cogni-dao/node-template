@@ -50,10 +50,10 @@
       "import": "./dist/sources.js",
       "default": "./dist/sources.js"
     },
-    "./true-now": {
-      "types": "./dist/true-now.d.ts",
-      "import": "./dist/true-now.js",
-      "default": "./dist/true-now.js"
+    "./diary-free": {
+      "types": "./dist/diary-free.d.ts",
+      "import": "./dist/diary-free.js",
+      "default": "./dist/diary-free.js"
     }
   },
   "types": "./dist/index.d.ts",

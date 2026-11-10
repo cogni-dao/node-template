@@ -27,13 +27,13 @@ import {
 	FIRST_PARENT_WALK_CAP,
 	readBriefConformance,
 	readGithubStars,
-	readTrueNowEdits,
-	readTrueNowScope,
-	readTrueNowState,
+	readDiaryFreeEdits,
+	readDiaryFreeScope,
+	readDiaryFreeState,
 	readWorkConvergence,
 	readWorkCount,
-	TRUE_NOW_MAX_BYTES,
-	TRUE_NOW_MAX_ROWS,
+	DIARY_FREE_MAX_BYTES,
+	DIARY_FREE_MAX_ROWS,
 } from "./sources.js";
 
 /**
@@ -71,7 +71,7 @@ export const PACKAGE_CALCULATOR_IDS = [
 	"work.convergence@1",
 	"github.stars@1",
 	"brief.conformance@1",
-	"true-now@1",
+	"diary-free@1",
 ] as const;
 /** `work.count@1` → `work.count`: the family every version of a calculator shares. */
 export function calculatorFamily(id: string): string {
@@ -218,7 +218,7 @@ export function createGoalMetrics(deps: {
 			);
 		},
 	});
-	const trueNowParams = z.discriminatedUnion("measure", [
+	const diaryFreeParams = z.discriminatedUnion("measure", [
 		z.strictObject({
 			measure: z.literal("state"),
 			subject: z.enum(["work-items", "atoms"]),
@@ -234,44 +234,44 @@ export function createGoalMetrics(deps: {
 		}),
 	]);
 	registry.register({
-		id: "true-now@1",
+		id: "diary-free@1",
 		// State and scope read main now; only the edits interval has a width.
 		unit: "%",
 		unitFor: (params) => {
-			const p = trueNowParams.parse(params);
+			const p = diaryFreeParams.parse(params);
 			if (p.measure === "state") return "%";
 			if (p.measure === "scope") return "items";
 			return p.output === "share" ? "%" : "edits";
 		},
 		displayFor: (params) => {
-			const p = trueNowParams.parse(params);
+			const p = diaryFreeParams.parse(params);
 			if (p.measure === "scope") return "volume";
 			return p.measure === "edits" && p.output === "count"
 				? "volume"
 				: "progress";
 		},
 		windowSeconds: (params) => {
-			const p = trueNowParams.parse(params);
+			const p = diaryFreeParams.parse(params);
 			return p.measure === "edits" ? p.days * 86400 : 0;
 		},
-		paramsSchema: trueNowParams,
+		paramsSchema: diaryFreeParams,
 		// State and scope make one call; edits make two (work items, atoms). Rows
 		// and bytes cap each statement; the service enforces the call count.
 		budget: {
 			timeoutMs: 15000,
 			maxSourceCalls: 2,
-			maxRows: TRUE_NOW_MAX_ROWS,
-			maxResponseBytes: TRUE_NOW_MAX_BYTES,
+			maxRows: DIARY_FREE_MAX_ROWS,
+			maxResponseBytes: DIARY_FREE_MAX_BYTES,
 		},
 		compute: async (params, ctx) => {
-			const p = trueNowParams.parse(params);
+			const p = diaryFreeParams.parse(params);
 			if (p.measure === "state")
 				return ctx.read((signal) =>
-					readTrueNowState(deps.knowledgeSql, p.subject, signal),
+					readDiaryFreeState(deps.knowledgeSql, p.subject, signal),
 				);
 			if (p.measure === "scope")
-				return ctx.read((signal) => readTrueNowScope(deps.knowledgeSql, signal));
-			return readTrueNowEdits(
+				return ctx.read((signal) => readDiaryFreeScope(deps.knowledgeSql, signal));
+			return readDiaryFreeEdits(
 				deps.knowledgeSql,
 				p.output,
 				ctx.window,

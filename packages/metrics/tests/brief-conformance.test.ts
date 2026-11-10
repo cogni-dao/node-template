@@ -301,7 +301,7 @@ describe("brief.conformance@1 in the goal-metric service", () => {
 			"work.convergence@1",
 			"github.stars@1",
 			"brief.conformance@1",
-			"true-now@1",
+			"diary-free@1",
 		]);
 	});
 

@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 /**
- * `true-now-rules@1`: a pure, deterministic marker scorer. A work item or a
- * knowledge atom says what is true now; the story of how we got here lives in
- * history. A line that carries inline history is a marker line. It reads text
- * only; no SQL, no clock, no NLP library. A change to any marker, list or limit
- * here is a version bump of the rule set and of the `true-now@1` calculator.
+ * `diary-free-rules@1`: a pure, deterministic marker scorer. A work item or a
+ * knowledge atom states the current record; the story of how we got here lives
+ * in history. A line that carries inline history is a marker (diary) line. It
+ * detects diary lines only and cannot tell whether a record is true. It reads
+ * text only; no SQL, no clock, no NLP library. A change to any marker, list or limit
+ * here is a version bump of the rule set and of the `diary-free@1` calculator.
  *
  * Fenced code, checklist lines and link-only lines never match. A `dated_line`
  * counts only when one field holds two or more, so one deadline or approval
@@ -12,11 +13,11 @@
  */
 import { toLines } from "./briefs.js";
 
-export const TRUE_NOW_RULES_VERSION = "true-now-rules@1";
-export type TrueNowSubject = "work-items" | "atoms";
+export const DIARY_FREE_RULES_VERSION = "diary-free-rules@1";
+export type DiaryFreeSubject = "work-items" | "atoms";
 
 /** Marker codes in reporting order. */
-export const TRUE_NOW_RULES = [
+export const DIARY_FREE_RULES = [
 	"dated_line",
 	"label_line",
 	"revision_tag",
@@ -24,16 +25,16 @@ export const TRUE_NOW_RULES = [
 	"review_transcript",
 	"strikethrough",
 ] as const;
-export type TrueNowRule = (typeof TRUE_NOW_RULES)[number];
+export type DiaryFreeRule = (typeof DIARY_FREE_RULES)[number];
 
 /** Scored fields of each subject. */
-export const TRUE_NOW_FIELDS = {
+export const DIARY_FREE_FIELDS = {
 	"work-items": ["title", "summary", "outcome"],
 	atoms: ["title", "use_when", "content"],
 } as const;
 
 /** A scored field longer than this many characters fails its row. */
-export const TRUE_NOW_MAX_FIELD_CHARS = 100_000;
+export const DIARY_FREE_MAX_FIELD_CHARS = 100_000;
 /** A line of 100 characters or fewer that ends with `:` and holds a date is a dated line. */
 const DATED_HEADER_MAX_CHARS = 100;
 
@@ -80,8 +81,8 @@ function bodyOf(text: string): string | null {
 }
 
 /** Codes one line matches before the dated-line count is applied. */
-function codesOf(body: string): TrueNowRule[] {
-	const codes: TrueNowRule[] = [];
+function codesOf(body: string): DiaryFreeRule[] {
+	const codes: DiaryFreeRule[] = [];
 	if (/^\d{4}-\d{2}-\d{2}/.test(body)) codes.push("dated_line");
 	else if (
 		body.length <= DATED_HEADER_MAX_CHARS &&
@@ -110,7 +111,7 @@ function codesOf(body: string): TrueNowRule[] {
 export interface MarkerLine {
 	/** Zero-based line index in the field. */
 	line: number;
-	codes: TrueNowRule[];
+	codes: DiaryFreeRule[];
 }
 
 /** Every marker line of one field. A lone dated line is a date, not a marker. */
@@ -133,7 +134,7 @@ export function markerLines(text: string | null | undefined): MarkerLine[] {
 }
 
 /** Scored text of one row. Absent fields are null or undefined. */
-export interface TrueNowFields {
+export interface DiaryFreeFields {
 	title?: string | null | undefined;
 	/** Work items only. */
 	summary?: string | null | undefined;
@@ -146,9 +147,9 @@ export interface TrueNowFields {
 	/** A source flagged a field over the cap and sent it absent. */
 	oversize?: boolean | undefined;
 }
-export interface TrueNowScore {
+export interface DiaryFreeScore {
 	/** Every marker code the row holds, in reporting order. */
-	broken: TrueNowRule[];
+	broken: DiaryFreeRule[];
 	/** The row holds a field over the cap, which fails it. */
 	oversize: boolean;
 	/** Marker lines across every scored field. */
@@ -156,16 +157,16 @@ export interface TrueNowScore {
 }
 
 /** Score one row: it passes when it has no marker line and no oversize field. */
-export function scoreTrueNow(
-	subject: TrueNowSubject,
-	fields: TrueNowFields,
-): TrueNowScore {
-	const held = new Set<TrueNowRule>();
+export function scoreDiaryFree(
+	subject: DiaryFreeSubject,
+	fields: DiaryFreeFields,
+): DiaryFreeScore {
+	const held = new Set<DiaryFreeRule>();
 	let lines = 0;
 	let oversize = fields.oversize === true;
-	for (const name of TRUE_NOW_FIELDS[subject]) {
+	for (const name of DIARY_FREE_FIELDS[subject]) {
 		const value = fields[name] ?? "";
-		if (value.length > TRUE_NOW_MAX_FIELD_CHARS) {
+		if (value.length > DIARY_FREE_MAX_FIELD_CHARS) {
 			oversize = true;
 			continue;
 		}
@@ -174,14 +175,14 @@ export function scoreTrueNow(
 		for (const m of found) for (const c of m.codes) held.add(c);
 	}
 	return {
-		broken: TRUE_NOW_RULES.filter((r) => held.has(r)),
+		broken: DIARY_FREE_RULES.filter((r) => held.has(r)),
 		oversize,
 		markerLines: lines,
 	};
 }
 
 /** True when the row has no marker line and no oversize field. */
-export function passesTrueNow(score: TrueNowScore): boolean {
+export function passesDiaryFree(score: DiaryFreeScore): boolean {
 	return score.broken.length === 0 && !score.oversize;
 }
 
@@ -222,19 +223,19 @@ export function appendsHistory(
 }
 
 /** A scored row as the summary reads it. */
-export interface TrueNowRow {
+export interface DiaryFreeRow {
 	id: string;
-	broken: readonly TrueNowRule[];
+	broken: readonly DiaryFreeRule[];
 	oversize: boolean;
 	missingGoal?: boolean;
 	missingDoneWhen?: boolean;
 }
-export interface TrueNowSummary {
-	subject: TrueNowSubject;
+export interface DiaryFreeSummary {
+	subject: DiaryFreeSubject;
 	evaluated: number;
 	passing: number;
 	/** Rows holding each marker code. */
-	ruleCounts: Array<{ rule: TrueNowRule; rows: number }>;
+	ruleCounts: Array<{ rule: DiaryFreeRule; rows: number }>;
 	oversize: number;
 	/** Work items only; evidence, never part of the value. */
 	missingGoal: number;
@@ -246,11 +247,11 @@ export interface TrueNowSummary {
 }
 
 /** Fold scored rows into the KPI value and its evidence. Input order never matters. */
-export function summarizeTrueNow(
-	subject: TrueNowSubject,
-	rows: ReadonlyArray<TrueNowRow>,
-): TrueNowSummary {
-	const ruleCounts = TRUE_NOW_RULES.map((rule) => ({ rule, rows: 0 }));
+export function summarizeDiaryFree(
+	subject: DiaryFreeSubject,
+	rows: ReadonlyArray<DiaryFreeRow>,
+): DiaryFreeSummary {
+	const ruleCounts = DIARY_FREE_RULES.map((rule) => ({ rule, rows: 0 }));
 	let passing = 0;
 	let oversize = 0;
 	let missingGoal = 0;
@@ -262,7 +263,7 @@ export function summarizeTrueNow(
 		if (row.oversize) oversize++;
 		if (row.missingGoal) missingGoal++;
 		if (row.missingDoneWhen) missingDoneWhen++;
-		const codes: string[] = TRUE_NOW_RULES.filter((r) => row.broken.includes(r));
+		const codes: string[] = DIARY_FREE_RULES.filter((r) => row.broken.includes(r));
 		if (row.oversize) codes.push("oversize");
 		if (codes.length === 0) passing++;
 		else failing.push({ id: row.id, codes });
@@ -291,9 +292,9 @@ export function evidenceLabel(id: string): string {
 }
 
 /** Evidence strings of one summary. They carry ids and counts, never row text. */
-export function trueNowEvidenceRefs(summary: TrueNowSummary): string[] {
+export function diaryFreeEvidenceRefs(summary: DiaryFreeSummary): string[] {
 	return [
-		`rules:${TRUE_NOW_RULES_VERSION}`,
+		`rules:${DIARY_FREE_RULES_VERSION}`,
 		`counts:evaluated=${summary.evaluated};passing=${summary.passing}`,
 		...summary.ruleCounts.map((r) => `rule:${r.rule}=${r.rows}`),
 		`rule:oversize=${summary.oversize}`,
