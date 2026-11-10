@@ -114,10 +114,6 @@ export const serverSchema = z.object({
   // NextAuth secret (required for JWT signing)
   AUTH_SECRET: z.string().min(32),
 
-  // v1 agent-key hard stop (task.0069). Can only SHORTEN the code default in
-  // agent-v1-hard-stop.ts; a later value is ignored. Unparsable disables renew-v1.
-  AGENT_V1_HARD_STOP: z.string().optional(),
-
   // Optional
   PORT: z.coerce.number().default(3000),
   PINO_LOG_LEVEL: z
