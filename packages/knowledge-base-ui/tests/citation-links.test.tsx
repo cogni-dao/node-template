@@ -143,6 +143,27 @@ describe("ContributionCitationDiff", () => {
     ).toHaveAttribute("href", "/knowledge/b-entry");
   });
 
+  it("marks a re-contexted edge as changed and keeps its context on hover", () => {
+    render(
+      <ContributionCitationDiff
+        citations={[
+          {
+            changeType: "modified",
+            citingId: "a-entry",
+            citedId: "b-entry",
+            citationType: "extends",
+            context: "new why",
+          },
+        ]}
+        hrefFor={hrefFor}
+      />,
+    );
+
+    expect(
+      screen.getByRole("link", { name: "changed outgoing extends b-entry" }),
+    ).toHaveAttribute("title", "new why");
+  });
+
   it("renders nothing when the inbox changes no edges", () => {
     const { container } = render(
       <ContributionCitationDiff citations={[]} hrefFor={hrefFor} />,

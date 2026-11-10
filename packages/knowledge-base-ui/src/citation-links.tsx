@@ -100,7 +100,7 @@ function CitationRow({
       aria-label={[marker?.label, arrow.label, relation, slug]
         .filter(Boolean)
         .join(" ")}
-      className="-mx-1 flex min-h-6 min-w-0 items-center gap-2 rounded-sm px-1 text-xs outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+      className="-mx-1 flex min-h-6 min-w-0 items-center gap-2 rounded-sm px-1 py-0.5 text-xs outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
     >
       {marker && (
         <span className={cn("w-3 shrink-0 text-center", marker.className)}>
@@ -119,7 +119,7 @@ function CitationRow({
         <span className="w-24 shrink-0 truncate text-muted-foreground">
           {relation}
         </span>
-        <span className="min-w-0 truncate font-mono">{slug}</span>
+        <span className="min-w-0 break-all font-mono">{slug}</span>
       </span>
     </Link>
   );
