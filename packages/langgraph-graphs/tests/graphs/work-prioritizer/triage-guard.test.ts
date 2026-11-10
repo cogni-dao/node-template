@@ -427,3 +427,47 @@ describe("partial scores, DTO receipts and conflicts", () => {
     ).toContain("revision_conflict");
   });
 });
+
+describe("a landed update counts as changed in the cycle report", () => {
+  it("counts a successful update of an item whose scores were null", async () => {
+    const a = setup();
+    // The item had no scores (null on the store); the update sets all six axes, a label and a route.
+    a.read(item("task.5", { status: "needs_design", scores: undefined }));
+    const out = await a.call(
+      update(
+        "task.5",
+        {
+          status: "needs_research",
+          labels: ["goal:delivery"],
+          scores: scores(3),
+        },
+        { reason: "triage" },
+      ),
+    );
+    expect(out).toContain('"revision"');
+    // The host's tool result reaches observeTool as the item the route returns (no `success` key).
+    a.hooks.observeTool(
+      WORK_ITEM_UPDATE_NAME,
+      {},
+      {
+        ok: true,
+        value: {
+          id: "task.5",
+          status: "needs_research",
+          revision: 8,
+          rankScore: 4.2,
+          labels: ["goal:delivery"],
+          scores: scores(3),
+        },
+      },
+    );
+    const report = a.hooks.projectOutput("done") as {
+      telemetry: { changedItemIds: string[]; changeCount: number; toolErrorCount: number };
+    };
+    expect(report.telemetry).toMatchObject({
+      changedItemIds: ["task.5"],
+      changeCount: 1,
+      toolErrorCount: 0,
+    });
+  });
+});

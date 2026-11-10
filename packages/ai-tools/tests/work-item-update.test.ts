@@ -74,6 +74,19 @@ describe("core__work_item_update", () => {
     expect(out).not.toHaveProperty("success");
   });
 
+  it("a landed write is never a tool error, even if the item fails the strict DTO parse", async () => {
+    const odd = { ...PATCHED, projectId: null, claimedAt: null } as unknown as WorkItemInfo;
+    const impl = createWorkItemUpdateImplementation({
+      workItemCapability: capability(vi.fn().mockResolvedValue(odd)),
+    });
+    const out = await impl.execute(
+      { id: "task.5001", expectedRevision: 8, set: { status: "needs_design" } },
+      {} as never,
+    );
+    expect(WorkItemUpdateOutputSchema.safeParse(out).success).toBe(true);
+    expect(out).toMatchObject({ id: "task.5001", revision: 9 });
+  });
+
   it("returns a lost compare-and-set as a result, not a throw", async () => {
     const impl = createWorkItemUpdateImplementation({
       workItemCapability: capability(
