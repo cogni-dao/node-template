@@ -84,7 +84,8 @@ describe("agent authority (real Postgres)", () => {
   describe("V2: migration applies to a fresh database and seeds both principals", () => {
     it("has the node-ai and prioritizer internal principals", async () => {
       const rows = await service`
-        SELECT slug, kind, user_id FROM agent_principals ORDER BY slug`;
+        SELECT slug, kind, user_id FROM agent_principals
+        WHERE user_id IN (${NODE_AI_PRINCIPAL_USER_ID}, ${PRIORITIZER_PRINCIPAL_USER_ID}) ORDER BY slug`;
       expect(rows.map((r) => ({ slug: r.slug, kind: r.kind, user_id: r.user_id }))).toEqual([
         { slug: NODE_AI_PRINCIPAL_SLUG, kind: "internal", user_id: NODE_AI_PRINCIPAL_USER_ID },
         { slug: PRIORITIZER_PRINCIPAL_SLUG, kind: "internal", user_id: PRIORITIZER_PRINCIPAL_USER_ID },
@@ -132,7 +133,8 @@ describe("agent authority (real Postgres)", () => {
       await service`INSERT INTO agent_roles (principal_user_id, scope, approved_by)
         VALUES (${NODE_AI_PRINCIPAL_USER_ID}, 'rls:probe', ${u})`;
       expect(await app`SELECT 1 FROM agent_roles`).toHaveLength(0);
-      expect(await app`SELECT slug FROM agent_principals`).toHaveLength(2);
+      // Other files add throwaway principals to this shared database, so count only the seeded ones.
+      expect(await app`SELECT slug FROM agent_principals WHERE user_id IN (${NODE_AI_PRINCIPAL_USER_ID}, ${PRIORITIZER_PRINCIPAL_USER_ID})`).toHaveLength(2);
       await expect(
         app`INSERT INTO agent_roles (principal_user_id, scope, approved_by)
           VALUES (${NODE_AI_PRINCIPAL_USER_ID}, 'rls:write', ${u})`

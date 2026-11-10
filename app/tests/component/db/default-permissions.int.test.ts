@@ -108,11 +108,10 @@ const readSnapshot = (): Snapshot => {
 describe("default permissions are declared (DEFAULT_PERMISSIONS_ARE_DECLARED)", () => {
   it("the declarations and the migration rows agree on a database built from every migration", () => {
     const declared = declarations();
-    // Guard against a vacuous pass: the two defaults this item ships are declared.
-    expect(declared.pairs.map(key).sort()).toEqual([
-      "node-ai schedule:manage",
-      "prioritizer work_item:transition",
-    ]);
+    // Guard against a vacuous pass: the two defaults this item ships stay declared (a later default adds to the list).
+    expect(declared.pairs.map(key)).toEqual(
+      expect.arrayContaining(["node-ai schedule:manage", "prioritizer work_item:transition"])
+    );
     const snapshot = readSnapshot();
     expect(checkDefaultPermissions(declared, snapshot), "default permission drift").toEqual([]);
   });
