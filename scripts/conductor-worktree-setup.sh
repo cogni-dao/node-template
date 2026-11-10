@@ -268,4 +268,7 @@ fi
 
 pnpm install --offline --frozen-lockfile || pnpm install --frozen-lockfile
 pnpm build:packages
+# Enforce repo-owned git hooks (commit-msg strips agent attribution trailers) even
+# if the install step's "prepare" did not fire in this worktree.
+bash scripts/agent/install-git-hooks.sh
 write_setup_proof

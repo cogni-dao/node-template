@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2025 Cogni-DAO
+
+# Module: scripts/agent/git-hooks/commit-msg
+# Purpose: Node commits carry only the signed-in human author. Strip any agent
+#   attribution trailer (Claude co-author / "Generated with Claude Code") that a
+#   model may hand-write, regardless of harness, model, or local settings.
+# Side-effects: rewrites the pending commit message in place; never blocks a commit.
+# Wiring: activated by core.hooksPath=scripts/agent/git-hooks (see root package.json
+#   "prepare" and scripts/conductor-worktree-setup.sh). Author/committer identity is
+#   untouched — this only removes the attribution lines from the message body.
+
+set -euo pipefail
+
+msg_file="${1:?commit message file path required}"
+[[ -f "$msg_file" ]] || exit 0
+
+# Drop co-author lines crediting Claude/Anthropic and the "Generated with Claude Code"
+# tagline. Both are anchored to the line-start trailer form — a Co-authored-by: trailer,
+# or a line that *begins* with "Generated with ... Claude Code" (optionally after the 🤖
+# marker) — so prose that merely mentions the phrase is never touched.
+cleaned="$(grep -viE '^[[:space:]]*(co-authored-by:[[:space:]].*(claude|anthropic)|(🤖[[:space:]]*)?generated with[[:space:]].*claude code)' "$msg_file" || true)"
+
+# Collapse the blank lines a removed trailer leaves behind; preserve everything else.
+printf '%s\n' "$cleaned" \
+  | awk 'BEGIN{blank=0} {if($0==""){blank++}else{blank=0} if(blank<=1)print}' \
+  > "$msg_file.tmp"
+mv "$msg_file.tmp" "$msg_file"
