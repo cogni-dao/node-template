@@ -287,6 +287,7 @@ export function projectMissionCycleReport(
   program: CreateReactAgentGraphOptions["program"],
   receipts: RunReceipts,
   answer: string,
+  abortReason?: string,
 ) {
   if (program !== "work-review") return undefined;
   const rankScores = receipts.reportMessages.flatMap((message) => {
@@ -302,9 +303,35 @@ export function projectMissionCycleReport(
   });
   return {
     telemetry: {
-      ...cycleTelemetry([...receipts.reportMessages, new AIMessage(answer)]),
+      ...cycleTelemetry(
+        [...receipts.reportMessages, new AIMessage(answer)],
+        abortReason,
+      ),
       decisionFiled: false,
       ...(rankScores.length ? { rankScores } : {}),
     },
+  };
+}
+
+/**
+ * The run reached its step budget (langgraph-error-handling: force a final report). Writes already made
+ * stay; the report lists them and says the rest waits for the next run. Built from receipts, never a model call.
+ */
+export function projectStepBudgetReport(
+  program: CreateReactAgentGraphOptions["program"],
+  receipts: RunReceipts,
+) {
+  const projected = projectMissionCycleReport(
+    program,
+    receipts,
+    "",
+    "step_budget",
+  );
+  if (!projected) return undefined;
+  const { changedItemIds } = projected.telemetry;
+  const answer = `STEP_BUDGET: the run reached its step limit. Changed ${changedItemIds.length} item(s)${changedItemIds.length ? `: ${changedItemIds.join(", ")}` : ""}. Items not yet triaged wait for the next run.`;
+  return {
+    answer,
+    output: { telemetry: { ...projected.telemetry, report: answer } },
   };
 }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
-/** Read-only and scheduled scores capabilities for the shared-harness node programs. */
+/** Read-only and triage capabilities for the shared-harness node programs. */
 import {
   GET_CURRENT_TIME_NAME,
   GOAL_LIST_NAME,
@@ -39,8 +39,8 @@ export const COGNI_DECIDE_TOOL_IDS = [
   WORK_ITEM_TRANSITION_NAME,
   GET_CURRENT_TIME_NAME,
 ] as const;
-export const MAX_SCORE_WRITES_PER_TICK = 5;
-export const SCORES_WRITE_NAME = "work_item_scores_write";
+/** Triage guide: a run changes at most this many distinct items. */
+export const MAX_CHANGED_ITEMS_PER_RUN = 5;
 export const OPEN_STATUSES = [
   "needs_triage",
   "needs_research",

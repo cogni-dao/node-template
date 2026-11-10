@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
-/** Pure scoring-program configuration of the shared native harness.
- * The scoring program binds bounded scores patches in every channel; program-owned receipts preserve the evidence guard.
+/** Pure triage-program configuration of the shared native harness.
+ * The program binds core__work_item_transition, the tool an outside agent uses, behind a thin guard.
+ * Program-owned receipts feed the guard and the cycle report.
  */
 import { WORK_ITEM_TRANSITION_NAME } from "@cogni/ai-tools";
 import { cogniProfile, createCogniProgram } from "../cogni/graph";
@@ -15,11 +16,10 @@ import {
   LEDGER_READER_DESCRIPTION,
   LEDGER_READER_PROMPT,
   REQUIRED_GUIDANCE_IDS,
-  prioritizerPrompt,
 } from "./prompts";
 import { RunReceipts } from "./receipts";
-import { projectMissionCycleReport } from "./report";
-import { createScoresGuard } from "./score-guard";
+import { projectMissionCycleReport, projectStepBudgetReport } from "./report";
+import { createTransitionGuard } from "./transition-guard";
 import { COGNI_READ_TOOL_IDS } from "./tools";
 export {
   cycleScores,
@@ -31,7 +31,7 @@ export const WORK_PRIORITIZER_GRAPH_NAME = "work-prioritizer" as const;
 
 export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
   const receipts = opts.programState as RunReceipts | undefined;
-  // The program, not the input channel, owns capability: scoring programs bind the guarded
+  // The program, not the input channel, owns capability: triage programs bind the guarded
   // writer for chat and scheduled runs alike.
   const readAuthority = new Set<string>(opts.readToolIds ?? COGNI_READ_TOOL_IDS);
   const readToolIds = opts.tools
@@ -48,10 +48,8 @@ export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
   const requiredGuidanceIds = deciding ? REQUIRED_GUIDANCE_IDS : [];
   const profile = cogniProfile({
     id: opts.program ?? "work-review",
-    instructions: prioritizerPrompt(
+    instructions:
       opts.systemPrompt ?? (deciding ? COGNI_DECIDE_PROMPT : COGNI_READ_PROMPT),
-      deciding,
-    ),
     modelTier: "main",
     toolIds: readToolIds,
     allowedChildProfiles: ["general-purpose", "ledger-reader"],
@@ -61,13 +59,10 @@ export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
   });
   const guardedTools =
     deciding && receipts && writer
-      ? [createScoresGuard(receipts, writer, requiredGuidanceIds)]
+      ? [createTransitionGuard(receipts, writer, requiredGuidanceIds)]
       : [];
   return createCogniProgram({
     ...opts,
-    onSkillReadFailure: () => {
-      if (receipts) receipts.denied = true;
-    },
     guardedTools,
     profile,
     children: [
@@ -110,18 +105,14 @@ export function createPrioritizerRunHooks(context: {
   const receipts = new RunReceipts(context.origin ?? "");
   return {
     graphOptions: { programState: receipts },
-    onSkillReadFailure: () => {
-      receipts.denied = true;
-    },
     observeTool: (
       name: string,
       args: unknown,
       result: { ok: boolean; value?: unknown; errorCode?: string },
       toolCallId?: string,
     ) => {
-      if (result.ok)
-        receipts.observe(name, args, result.value);
-      else receipts.denied = true;
+      // A failed read records nothing and blocks nothing (no latch); telemetry counts it.
+      if (result.ok) receipts.observe(name, args, result.value);
       if (!context.program || context.program === "work-review")
         receipts.recordTool(
           name,
@@ -138,6 +129,9 @@ export function createPrioritizerRunHooks(context: {
         receipts,
         answer,
       ),
+    /** The step budget ended the run: report what the receipts show, with no further model call. */
+    projectStepBudget: () =>
+      projectStepBudgetReport(context.program ?? "work-review", receipts),
   };
 }
 createWorkPrioritizerGraph.createRunHooks = createPrioritizerRunHooks;
