@@ -73,6 +73,7 @@ Unified serverEnv() provides all vars:
 - LITELLM_MASTER_KEY
 - PORT (default 3000)
 - PINO_LOG_LEVEL (trace|debug|info|warn|error, default info)
+- AGENT_V1_HARD_STOP (optional ISO date; can only shorten the code default 2027-01-31T00:00:00Z for renew-v1, task.0069; unparsable disables the route)
 
 Per DATABASE_RLS_SPEC.md design decision 7:
 
