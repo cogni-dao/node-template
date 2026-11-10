@@ -431,12 +431,6 @@ export interface KnowledgeStorePort {
   log(limit?: number): Promise<DoltCommit[]>;
   diff(fromRef: string, toRef: string): Promise<DoltDiffEntry[]>;
   currentCommit(): Promise<string>;
-  /**
-   * Content revision of the knowledge, domains and citations tables only, so
-   * writes to other tables (work items) never change it (bug.0018). Absent:
-   * callers fall back to `currentCommit`.
-   */
-  knowledgeRevision?(): Promise<string>;
   /** Versions of one entry, newest first, with their change reasons (task.0052). */
   history?(id: string): Promise<KnowledgeHistoryEntry[]>;
 }

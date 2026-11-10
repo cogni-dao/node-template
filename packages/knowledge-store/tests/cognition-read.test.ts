@@ -3,7 +3,7 @@
 
 /**
  * Module: `@cogni/knowledge-store/tests/cognition-read`
- * Purpose: Pins the cognition snapshot: index-only reads, one read per revision shared by concurrent callers, a commit busting the memo, orientation precedence, failed or goal-degraded reads never remembered, the knowledge-table revision key, and bounded revalidation that serves the last complete snapshot (bug.0018).
+ * Purpose: Pins the cognition snapshot: index-only reads, one read per revision shared by concurrent callers, a commit busting the memo, orientation precedence, failed or goal-degraded reads never remembered, and bounded revalidation that serves the last complete snapshot (bug.0018).
  * Scope: `readCognitionSnapshot` over a mocked port. No database.
  * Side-effects: none
  * Links: bug.0018, ../src/domain/cognition-read.ts
@@ -120,25 +120,10 @@ describe("readCognitionSnapshot", () => {
     expect(healed.snapshot.goals.status).toBe("ok");
   });
 
-  it("keys on knowledgeRevision when the port has it, so other commits keep the memo", async () => {
-    const { port, calls, commit } = fixture();
-    let tables = "k1.d1.c1";
-    const keyed = Object.assign(port, { knowledgeRevision: async () => tables });
-    await readCognitionSnapshot(keyed, ORIENTATION_IDS);
-    commit("rev-after-work-item-write");
-    const same = await readCognitionSnapshot(keyed, ORIENTATION_IDS);
-    expect(same.memoHit).toBe(true);
-    expect(same.snapshot.revision).toBe("k1.d1.c1");
-    tables = "k2.d1.c1";
-    const changed = await readCognitionSnapshot(keyed, ORIENTATION_IDS);
-    expect(changed.memoHit).toBe(false);
-    expect(calls.governing).toHaveBeenCalledTimes(2);
-  });
-
   it("serves the last complete snapshot when the revision check is slow, then refreshes behind it", async () => {
     const { port, calls } = fixture();
     let next: Promise<string> = Promise.resolve("k1");
-    const keyed = Object.assign(port, { knowledgeRevision: () => next });
+    const keyed = Object.assign(port, { currentCommit: () => next });
     await readCognitionSnapshot(keyed, ORIENTATION_IDS);
 
     const late = deferred<string>();
@@ -158,7 +143,7 @@ describe("readCognitionSnapshot", () => {
   it("serves the last complete snapshot when the revision check or the fresh read fails", async () => {
     const { port, calls } = fixture();
     let next: () => Promise<string> = async () => "k1";
-    const keyed = Object.assign(port, { knowledgeRevision: () => next() });
+    const keyed = Object.assign(port, { currentCommit: () => next() });
     await readCognitionSnapshot(keyed, ORIENTATION_IDS);
 
     next = async () => {
@@ -176,7 +161,7 @@ describe("readCognitionSnapshot", () => {
   it("makes a first caller wait: there is nothing complete to serve yet", async () => {
     const { port } = fixture();
     const late = deferred<string>();
-    const keyed = Object.assign(port, { knowledgeRevision: () => late.promise });
+    const keyed = Object.assign(port, { currentCommit: () => late.promise });
     const pending = readCognitionSnapshot(keyed, ORIENTATION_IDS, { revisionDeadlineMs: 1 });
     await new Promise((r) => setTimeout(r, 10));
     late.resolve("k1");

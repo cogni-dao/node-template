@@ -20,7 +20,7 @@
  *     when the hub is unconfigured or empty.
  *   - NO_INTERNAL_BIND_ADDR: origin derived from forwarded headers first.
  *   - ONE_READ_PER_REVISION: hub inputs come from `readCognitionSnapshot`
- *     (memoized per knowledge revision; a slow or failed revision check
+ *     (memoized per store HEAD; a slow or failed revision check
  *     serves the last complete snapshot and logs `stale`); a weak ETag
  *     over revision, build, origin, name and mission
  *     answers a matching If-None-Match with 304 (bug.0018).
@@ -56,7 +56,7 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 // Authed but principal-agnostic (index-only, identical for every caller). The
-// hub inputs are memoized per knowledge revision, so a repeat costs one bounded
+// hub inputs are memoized per store revision, so a repeat costs one bounded
 // revision read; clients revalidate every use and a matching ETag returns 304.
 const CACHE_CONTROL = "private, no-cache, must-revalidate";
 

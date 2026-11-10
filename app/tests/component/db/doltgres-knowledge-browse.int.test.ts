@@ -432,35 +432,6 @@ describe("native Doltgres knowledge browsing", () => {
 		}
 	}, 900_000);
 
-	it("keys cognition on knowledge, domains and citations table hashes: a work-item write leaves the key, a knowledge write moves it (bug.0018)", async () => {
-		// Record which native spellings resolve, so an engine change is diagnosable from CI.
-		const forms: Record<string, string> = {};
-		for (const form of [
-			"dolt_hashof_table('knowledge')",
-			"dolt_hashof_table('public.knowledge')",
-			"dolt_hashof_table('public', 'knowledge')",
-		]) {
-			forms[form] = await sql
-				.unsafe(`SELECT ${form} AS h`)
-				.then((r) => `ok ${String(r[0]?.h)}`)
-				.catch((e: Error) => `error ${e.message}`);
-		}
-		console.info("cognition_revision_forms", JSON.stringify(forms));
-		const before = await store.knowledgeRevision();
-		expect(before).toMatch(/^[^.]+\.[^.]+\.[^.]+$/);
-		await sql.unsafe(
-			"INSERT INTO work_items (id,type,title,status) VALUES ('task.9999','task','Revision probe','needs_triage')",
-		);
-		expect(await store.knowledgeRevision()).toBe(before);
-		await sql.unsafe(
-			"INSERT INTO knowledge (id,domain,title,content,source_type) VALUES ('revision-probe','a','Probe','body','agent')",
-		);
-		const after = await store.knowledgeRevision();
-		expect(after).not.toBe(before);
-		await sql.unsafe("DELETE FROM knowledge WHERE id = 'revision-probe'");
-		await sql.unsafe("DELETE FROM work_items WHERE id = 'task.9999'");
-	});
-
 	it("walks NOW-backed timestamp pages once in both directions", async () => {
 		// Fixed logical corpus revision, not snapshot isolation. No mutations occur
 		// between the completed seed/readback and the four traversals.

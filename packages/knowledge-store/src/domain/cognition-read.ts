@@ -3,12 +3,12 @@
 
 /**
  * Module: `@cogni/knowledge-store/domain/cognition-read`
- * Purpose: The hub inputs of a node's session cognition bundle, read once per knowledge revision and served within a bounded revision check (bug.0018).
+ * Purpose: The hub inputs of a node's session cognition bundle, read once per store revision and served within a bounded revision check (bug.0018).
  * Scope: Takes a structural port, returns plain data plus `memoHit` and `stale`. Imports no web framework, auth, container, metrics or logger; the route renders and logs.
  * Invariants:
  *   - INDEX_ONLY: domains with counts, the projected governing index, active goals and ONE orientation body. No per-domain scan, no other body.
  *   - ONE_READ_PER_REVISION: per port, the latest revision's snapshot is remembered; concurrent callers share one in-flight read; a failed read or an unreadable goals section is forgotten.
- *   - KNOWLEDGE_REVISION_KEY: the key is `knowledgeRevision()` (knowledge, domains and citations table hashes) when the port has it, else the store HEAD; it is read before the index reads, so a snapshot is never older than its label. Work-item commits do not move it.
+ *   - NEVER_OLDER_THAN_LABEL: the key is the store HEAD, read before the index reads, so a snapshot is never older than its revision label; a new commit changes the key.
  *   - BOUNDED_REVALIDATION: with a complete snapshot already in memory, a revision check slower than `revisionDeadlineMs`, a failed check, or a failed fresh read serves that snapshot with `stale: true`; a late revision then refreshes the memo behind the response. With no complete snapshot, callers wait.
  *   - NO_GOAL_PROGRESS: goal KPI readings are not part of cognition; they are read live from the metrics API.
  * Side-effects: IO (port reads through the injected port)
@@ -23,7 +23,6 @@ import { type GoalsSection, resolveGoals } from "./dao-goals.js";
 export type CognitionReadPort = Pick<
   KnowledgeStorePort,
   | "currentCommit"
-  | "knowledgeRevision"
   | "listDomainsFull"
   | "listGoverningIndex"
   | "getKnowledge"
@@ -156,7 +155,7 @@ function settleWithin<T>(promise: Promise<T>, ms: number): Promise<Settled<T>> {
 }
 
 /**
- * Read the cognition hub inputs at the current knowledge revision. Costs one
+ * Read the cognition hub inputs at the current store revision. Costs one
  * revision query when it is unchanged, bounded by `revisionDeadlineMs` once a
  * complete snapshot exists. `orientationIds` are tried in order (exact node
  * entry first, generic seed last).
@@ -171,9 +170,7 @@ export async function readCognitionSnapshot(
   const last = lastComplete.get(port);
   const fallback =
     last?.idsKey === orientationIds.join("\u0000") ? last.snapshot : null;
-  const revision = port.knowledgeRevision
-    ? port.knowledgeRevision()
-    : port.currentCommit();
+  const revision = port.currentCommit();
   if (!fallback) {
     const { read, memoHit } = readAt(port, await revision, orientationIds);
     return { snapshot: await read, memoHit, stale: false };
