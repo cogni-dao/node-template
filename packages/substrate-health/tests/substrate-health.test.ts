@@ -190,6 +190,7 @@ describe("readDeepReadiness", () => {
       buildSha: "abc",
     });
     expect(r.buildSha).toBe("abc");
+    expect(r.healthy).toBe(false);
     expect(r.dependencyState("postgres")).toBe("reached");
     expect(r.dependencyState("scheduler-worker")).toBe("unreached");
     expect(r.dependencyState("doltgres")).toBe("na");
@@ -203,6 +204,7 @@ describe("readDeepReadiness", () => {
 
   it("never treats an aggregate 200 without checks as evidence about one dependency", () => {
     const r = readDeepReadiness(200, { status: "healthy", buildSha: "abc" });
+    expect(r.healthy).toBe(true);
     expect(r.dependencyState("postgres")).toBe("unknown");
   });
 

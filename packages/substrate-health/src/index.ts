@@ -172,6 +172,8 @@ export type DependencyState = "reached" | "unreached" | "na" | "unknown";
 export interface DeepReadiness {
   /** The revision the responder reports in its own body, if any. */
   buildSha: string | undefined;
+  /** The aggregate verdict: a 200 with `status: "healthy"` (every declared check passed). */
+  healthy: boolean;
   dependencyState(dependency: string): DependencyState;
 }
 
@@ -224,6 +226,7 @@ export function readDeepReadiness(status: number, body: unknown): DeepReadiness 
 
   return {
     buildSha,
+    healthy: status === 200 && record.status === "healthy",
     dependencyState(dependency) {
       if (!answered) return "unknown";
       if (checks) {
