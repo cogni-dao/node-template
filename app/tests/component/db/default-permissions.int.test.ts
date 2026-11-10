@@ -248,12 +248,17 @@ describe("migration 0039 SQL is once-only (run against throwaway principals)", (
   it("a pending ask or a denied ask is not overridden either", async () => {
     const slug = `t5471-${randomUUID().slice(0, 8)}`;
     const id = await principal(slug);
-    await service`INSERT INTO agent_roles (principal_user_id, scope, approved_by, requested_by) VALUES (${id}, 'dp:pending', NULL, ${id})`;
-    await service`INSERT INTO agent_roles (principal_user_id, scope, approved_by, requested_by, revoked_at) VALUES (${id}, 'dp:denied', NULL, ${id}, now())`;
-    await run(slug, "dp:pending");
-    await run(slug, "dp:denied");
-    expect(await rows(id, "dp:pending")).toEqual([expect.objectContaining({ approved_by: null })]);
-    expect(await rows(id, "dp:denied")).toEqual([expect.objectContaining({ approved_by: null })]);
+    try {
+      await service`INSERT INTO agent_roles (principal_user_id, scope, approved_by, requested_by) VALUES (${id}, 'dp:pending', NULL, ${id})`;
+      await service`INSERT INTO agent_roles (principal_user_id, scope, approved_by, requested_by, revoked_at) VALUES (${id}, 'dp:denied', NULL, ${id}, now())`;
+      await run(slug, "dp:pending");
+      await run(slug, "dp:denied");
+      expect(await rows(id, "dp:pending")).toEqual([expect.objectContaining({ approved_by: null })]);
+      expect(await rows(id, "dp:denied")).toEqual([expect.objectContaining({ approved_by: null })]);
+    } finally {
+      // A live pending row counts toward the global pending cap another file reads; remove it now, not at afterAll.
+      await service`DELETE FROM agent_roles WHERE principal_user_id = ${id}`;
+    }
   });
 
   it("an unseeded principal RAISEs instead of inserting nothing", async () => {
