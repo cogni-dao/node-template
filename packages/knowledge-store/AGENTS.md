@@ -75,7 +75,7 @@ Shared ports, contribution workflow, and adapters for versioned domain knowledge
 **Service** (`@cogni/knowledge-store/service/contribution-service`):
 
 - `createContributionService`, `ContributionService`, `ContributionServiceDeps`
-- `ContributionService.diffCitations(id)` → `ContributionCitationDiffEntry[]` (CITATION_DIFF_FOR_REVIEW, bug.0011): every citation edge the branch adds, removes or re-contexts (`dolt_diff(base, head, 'citations')`), sorted by citing, type, cited. Required port method `KnowledgeContributionPort.diffCitations`. Nodes return it beside `entries` from the contribution diff route so an edge-only inbox is never shown as empty.
+- `ContributionService.diffCitations(id)` → `ContributionCitationDiffEntry[]` (CITATION_DIFF_FOR_REVIEW, bug.0011): every citation edge the branch adds, removes or re-contexts (`dolt_diff(base, head, 'citations')`), sorted by citing, type, cited. Required port method `KnowledgeContributionPort.diffCitations`. Nodes return it beside `entries` from the contribution diff route so an edge-only inbox is never shown as empty. Each modified `ContributionDiffEntry` also carries `changedFields`: every knowledge column (camelCase) that differs in the full row diff, excluding `updatedAt`. `["confidencePct"]` alone means a cite edit recomputed the row and nothing was authored on it.
 - `ContributionServiceDeps.pushMainOnMerge?: () => Promise<void>` — optional post-merge mirror hook; caller owns error handling (service does not await + does not catch)
 - `ContributionServiceDeps.nodeAdmin?: NodeAdminAuthority` — goal-layer merge gate (raw diff ids via the required port method `KnowledgeContributionPort.touchedIds`, merge pinned with `expectedHeadCommit`); absent ⇒ goal-layer merges fail closed 503
 

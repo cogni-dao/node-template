@@ -595,7 +595,7 @@ function changedKnowledgeFields(row: Record<string, unknown>): string[] {
   for (const key of Object.keys(row)) {
     if (!key.startsWith("to_")) continue;
     const column = key.slice(3);
-    if (DIFF_META_FIELDS.has(column)) continue;
+    if (DIFF_META_FIELDS.has(column) || !(`from_${column}` in row)) continue;
     if (JSON.stringify(row[`from_${column}`]) === JSON.stringify(row[key]))
       continue;
     fields.push(column.replace(/_([a-z])/g, (_m, c: string) => c.toUpperCase()));

@@ -255,7 +255,6 @@ export function ContributionDiff({
 								<Link
 									href={citationHref(r.rowId)}
 									title={r.title}
-									aria-label={`${r.rowId} confidence from ${String(r.from ?? "unknown")}% to ${String(r.to ?? "unknown")}%`}
 									className="-mx-1 flex min-h-6 items-center gap-2 rounded-sm px-1 text-xs outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
 								>
 									<span className="min-w-0 break-all font-mono">{r.rowId}</span>
