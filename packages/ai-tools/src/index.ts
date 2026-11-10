@@ -408,7 +408,6 @@ export {
   type WorkItemUpdateInput,
   type WorkItemUpdateOutput,
   WorkItemUpdateConflictSchema,
-  WorkItemUpdateLandedSchema,
   WorkItemUpdateOutputSchema,
   WorkItemUpdateSuccessSchema,
   workItemUpdateBoundTool,

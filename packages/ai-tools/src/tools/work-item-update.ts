@@ -44,18 +44,9 @@ export const WorkItemUpdateConflictSchema = z.object({
   currentRevision: z.number().int(),
   message: z.string(),
 });
-/**
- * A landed write must never read as an error. If the store's item ever fails the strict DTO parse
- * (for example a null where the DTO has an optional), the tool still reports the write: the item as read.
- */
-export const WorkItemUpdateLandedSchema = z.looseObject({
-  id: z.string(),
-  revision: z.number().int(),
-});
 export const WorkItemUpdateOutputSchema = z.union([
   WorkItemUpdateSuccessSchema,
   WorkItemUpdateConflictSchema,
-  WorkItemUpdateLandedSchema,
 ]);
 export type WorkItemUpdateInput = WorkItemPatchInput;
 export type WorkItemUpdateOutput = z.infer<typeof WorkItemUpdateOutputSchema>;
@@ -112,9 +103,7 @@ export function createWorkItemUpdateImplementation(
           ...(input.reason !== undefined && { reason: input.reason }),
           set: input.set,
         });
-        // The write has landed. A strict-parse failure must not turn it into a tool error (task.0065).
-        const dto = WorkItemUpdateSuccessSchema.safeParse(updated);
-        return dto.success ? dto.data : WorkItemUpdateLandedSchema.parse(updated);
+        return WorkItemUpdateSuccessSchema.parse(updated);
       } catch (e) {
         if (!(e instanceof WorkItemPatchConflictError)) throw e;
         return {
