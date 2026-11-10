@@ -5,7 +5,7 @@
  * Module: `@cogni/ai-tools/source-url`
  * Purpose: Attach node-local canonical provenance to content returned by existing readers.
  * Scope: Pure URL construction from a server-injected public origin; does not fetch content or read env.
- * Invariants: ORIGIN_IS_INJECTED, HTTPS_PROVENANCE, NO_MODEL_SELECTED_HOST.
+ * Invariants: ORIGIN_IS_INJECTED, HTTPS_PROVENANCE (HTTP only on loopback), NO_MODEL_SELECTED_HOST.
  * Side-effects: none
  * Links: story.5111, task.5318
  * @internal
@@ -19,7 +19,10 @@ export function readSourceUrl(
   if (!origin) return undefined;
   try {
     const base = new URL(origin);
-    if (base.protocol !== "https:" || base.username || base.password)
+    const localHttp =
+      base.protocol === "http:" &&
+      ["localhost", "127.0.0.1", "[::1]"].includes(base.hostname);
+    if ((!localHttp && base.protocol !== "https:") || base.username || base.password)
       return undefined;
     return new URL(`/${collection}/${encodeURIComponent(id)}`, base.origin)
       .href;

@@ -11,6 +11,7 @@
  */
 
 import { createHash, createHmac } from "node:crypto";
+import type { RunStreamPort } from "@cogni/graph-execution-core";
 import { WorkflowExecutionAlreadyStartedError } from "@temporalio/client";
 import { TEST_SESSION_USER_1 } from "@tests/_fakes";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -19,9 +20,11 @@ import { makeNoopLogger, type RequestContext } from "@/shared/observability";
 const mocks = vi.hoisted(() => {
   const claims = new Map<string, { requestHash: string; runId: string }>();
   return {
+    deployEnvironment: "production",
+    localInproc: undefined as "true" | "false" | undefined,
     claims,
     workflowStart: vi.fn().mockResolvedValue({}),
-    subscribe: vi.fn(() =>
+    subscribe: vi.fn<RunStreamPort["subscribe"]>(() =>
       (async function* () {
         await new Promise<never>(() => undefined);
       })()
@@ -74,7 +77,11 @@ vi.mock("@/lib/auth/mapping", () => ({
 
 vi.mock("@/shared/config", () => ({ getNodeId: () => "node-template" }));
 vi.mock("@/shared/env", () => ({
-  serverEnv: () => ({ AUTH_SECRET: "stable-completion-idempotency-secret" }),
+  serverEnv: () => ({
+    AUTH_SECRET: "stable-completion-idempotency-secret",
+    DEPLOY_ENVIRONMENT: mocks.deployEnvironment,
+    COGNI_LOCAL_INPROC: mocks.localInproc,
+  }),
 }));
 
 const ctx: RequestContext = {
@@ -86,7 +93,11 @@ const ctx: RequestContext = {
 };
 
 describe("completionStream durable acceptance", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.deployEnvironment = "production";
+    mocks.localInproc = undefined;
+  });
   afterEach(() => {
     vi.useRealTimers();
     mocks.claims.clear();
@@ -285,6 +296,70 @@ describe("completionStream durable acceptance", () => {
     await vi.advanceTimersByTimeAsync(20_000);
     await expect(nextEvent).resolves.toEqual({
       done: false,
+      value: { type: "error", error: "timeout" },
+    });
+  });
+
+  it("keeps a local stream attached when cold execution starts after twenty seconds", async () => {
+    vi.useFakeTimers();
+    mocks.deployEnvironment = "local";
+    mocks.localInproc = "true";
+    mocks.subscribe.mockImplementationOnce(() =>
+      (async function* () {
+        await new Promise((resolve) => setTimeout(resolve, 25_000));
+        yield { id: "1-0", event: { type: "done" as const, finishReason: "stop" as const } };
+      })()
+    );
+    const { completionStream } = await import(
+      "@/app/_facades/ai/completion.server"
+    );
+    const accepted = await completionStream(
+      {
+        messages: [{ role: "user", content: "hello" }],
+        modelRef: { providerKey: "platform", modelId: "test-model" },
+        sessionUser: TEST_SESSION_USER_1,
+        graphName: "langgraph:default",
+        acceptanceMode: "workflow-start",
+      },
+      ctx
+    );
+    const nextEvent = accepted.stream[Symbol.asyncIterator]().next();
+    await vi.advanceTimersByTimeAsync(25_000);
+    await expect(nextEvent).resolves.toMatchObject({
+      done: false,
+      value: { type: "done", finishReason: "stop" },
+    });
+    await expect(accepted.final).resolves.toMatchObject({ ok: true });
+  });
+
+  it.each([
+    { environment: "local", flag: "true" as const, deadline: 180_000 },
+    { environment: "production", flag: "true" as const, deadline: 20_000 },
+    { environment: "local", flag: undefined, deadline: 20_000 },
+  ])("bounds first-event waiting at $deadline for $environment/$flag", async ({ environment, flag, deadline }) => {
+    vi.useFakeTimers();
+    mocks.deployEnvironment = environment;
+    mocks.localInproc = flag;
+    const { completionStream } = await import(
+      "@/app/_facades/ai/completion.server"
+    );
+    const accepted = await completionStream(
+      {
+        messages: [{ role: "user", content: "hello" }],
+        modelRef: { providerKey: "platform", modelId: "test-model" },
+        sessionUser: TEST_SESSION_USER_1,
+        graphName: "langgraph:default",
+        acceptanceMode: "workflow-start",
+      },
+      ctx
+    );
+    const nextEvent = accepted.stream[Symbol.asyncIterator]().next();
+    let settled = false;
+    void nextEvent.then(() => { settled = true; });
+    await vi.advanceTimersByTimeAsync(deadline - 1);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(nextEvent).resolves.toMatchObject({
       value: { type: "error", error: "timeout" },
     });
   });

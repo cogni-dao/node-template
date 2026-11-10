@@ -29,6 +29,8 @@ import {
 } from "../src/tools/work-item-query";
 import { workItemTransitionContract } from "../src/tools/work-item-transition";
 import { toToolSpec } from "../src/schema";
+import { createScheduleListImplementation } from "../src/tools/schedule-list";
+import type { ScheduleCapability } from "../src/capabilities/schedule";
 
 const origin = "https://template-test.example";
 const entry = {
@@ -59,6 +61,16 @@ const knowledge: KnowledgeCapability = {
 };
 
 describe("evaluation reader provenance", () => {
+  it("matches a schedule's exact purpose, never a purpose inside coordinator messages", async () => {
+    const schedules = [
+      { id: "root", input: { _meta: { purpose: "coordinator" }, messages: [{ role: "user", content: "arrange triage" }] } },
+      { id: "child", input: { _meta: { purpose: "triage" } } },
+    ];
+    const capability = { list: async () => schedules } as unknown as ScheduleCapability;
+    const list = createScheduleListImplementation({ scheduleCapability: capability });
+    expect((await list.execute({ purpose: "triage" })).schedules.map(s => s.id)).toEqual(["child"]);
+    expect((await list.execute({ purpose: "missing" })).count).toBe(0);
+  });
   it("returns canonical goal and knowledge URLs with the actual content read", async () => {
     const goals = await createGoalListImplementation({
       knowledgeCapability: knowledge,
@@ -115,14 +127,18 @@ describe("evaluation reader provenance", () => {
     });
   });
 
-  it("does not manufacture a source URL without trusted HTTPS configuration", () => {
+  it("admits the configured loopback app while rejecting insecure remote origins", () => {
     for (const configured of [
       undefined,
       "bad origin",
-      "http://localhost:3200",
+      "http://node.example.test:3200",
+      "http://localhost.example.test:3200",
       "https://user:password@example.com",
     ]) {
       expect(readSourceUrl(configured, "knowledge", entry.id)).toBeUndefined();
+    }
+    for (const local of ["http://localhost:3200", "http://127.0.0.1:55080", "http://[::1]:3200"]) {
+      expect(readSourceUrl(local, "knowledge", entry.id)).toBe(`${local}/knowledge/${entry.id}`);
     }
     expect(
       readSourceUrl(

@@ -36,8 +36,9 @@ import { createDevToolExecFn } from "../src/runtime/core/dev-tool-exec";
 const WRITE_ARGS = { action: "patch", id: "task.1", priority: 3 };
 
 describe("catalog principals (N4)", () => {
-  it("names prioritizer for work-prioritizer and node-ai for brain", () => {
+  it("names prioritizer for work-prioritizer and node-ai for cogni and brain", () => {
     expect(LANGGRAPH_CATALOG["work-prioritizer"]?.principal).toBe("prioritizer");
+    expect(LANGGRAPH_CATALOG.cogni?.principal).toBe("node-ai");
     expect(LANGGRAPH_CATALOG.brain?.principal).toBe("node-ai");
     expect(PRIORITIZER_PRINCIPAL).toBe("prioritizer");
     expect(NODE_AI_PRINCIPAL).toBe("node-ai");
@@ -51,12 +52,12 @@ describe("catalog principals (N4)", () => {
     expect(decide?.toolIds).toContain("core__work_item_transition");
   });
 
-  it("keeps principals limited to the two named graphs", () => {
+  it("keeps principals limited to the named graphs", () => {
     const named = Object.entries(OPERATOR_LANGGRAPH_CATALOG)
       .filter(([, entry]) => "principal" in entry && entry.principal)
       .map(([name]) => name)
       .sort();
-    expect(named).toEqual(["brain", "work-prioritizer"]);
+    expect(named).toEqual(["brain", "cogni", "work-prioritizer"]);
   });
 });
 

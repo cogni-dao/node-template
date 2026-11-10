@@ -28,7 +28,9 @@
     "dev:preflight": "node scripts/dev/local-stack.mjs check",
     "dev:verify": "node scripts/dev/verify-local-stack.mjs",
     "langgraph:dev": "node scripts/dev/local-stack.mjs graph",
-    "db:migrate:local": "node scripts/dev/local-stack.mjs migrate"
+    "db:migrate:local": "node scripts/dev/local-stack.mjs migrate",
+    "dev:runtime": "node scripts/dev/prepare-local-runtime.mjs",
+    "hub:restore:local": "node scripts/dev/restore-local-hub.mjs"
   },
   "pnpm": {
     "overrides": {

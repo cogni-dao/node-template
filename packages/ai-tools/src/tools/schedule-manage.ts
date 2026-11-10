@@ -62,7 +62,11 @@ export const ScheduleManageInputSchema = z.object({
   input: z
     .record(z.string(), z.unknown())
     .optional()
-    .describe("Graph input payload"),
+    .describe("Graph input payload; create requires messages and a stable _meta.purpose"),
+  instruction: z.string().min(1).optional()
+    .describe("Task for the scheduled workflow; prefer this to constructing message history. The host creates its user message."),
+  purpose: z.string().min(1).max(200).optional()
+    .describe("Stable job purpose for create; stored as input._meta.purpose"),
 });
 export type ScheduleManageInput = z.infer<typeof ScheduleManageInputSchema>;
 
@@ -158,25 +162,43 @@ export function createScheduleManageImplementation(
     execute: async (
       input: ScheduleManageInput
     ): Promise<ScheduleManageOutput> => {
+      if (input.action !== "create" &&
+          (input.instruction !== undefined || input.purpose !== undefined || input.graphId !== undefined)) {
+        throw new Error("graphId, instruction and purpose are create-only fields; configuration changes require a supported update path.");
+      }
       switch (input.action) {
         case "create": {
           const graphId = requireField(input.graphId, "graphId", "create");
           const cron = requireField(input.cron, "cron", "create");
           const timezone = requireField(input.timezone, "timezone", "create");
+          const payload = { ...input.input };
+          if (input.instruction !== undefined) {
+            payload.messages = [{ role: "user", content: input.instruction }];
+          }
+          if (input.purpose !== undefined) {
+            const meta = payload._meta;
+            payload._meta = {
+              ...(typeof meta === "object" && meta !== null && !Array.isArray(meta) ? meta : {}),
+              purpose: input.purpose,
+            };
+          }
           const result = await scheduleCapability.create({
             graphId,
             cron,
             timezone,
-            input: input.input ?? {},
+            input: payload,
           });
           return {
             success: true,
             action: "create",
             scheduleId: result.id,
-            message: `Created schedule for ${graphId} with cron '${cron}'`,
+            message: `Schedule for ${graphId} uses cron '${cron}'`,
           };
         }
         case "update": {
+          if (input.cron === undefined && input.timezone === undefined && input.input === undefined) {
+            throw new Error("update requires a configuration change; use enable or disable to toggle a schedule.");
+          }
           const scheduleId = requireField(
             input.scheduleId,
             "scheduleId",

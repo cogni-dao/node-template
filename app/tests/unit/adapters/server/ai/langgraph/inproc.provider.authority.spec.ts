@@ -153,7 +153,7 @@ async function start(
   auth: ProviderAgentAuthority | undefined,
   subjectUserId: string | undefined,
   seen: Array<{ tool: string; scope: unknown }> = [],
-  ctxExtra: { requestIntent?: "answer" | "decide" } = {},
+  ctxExtra: { unattended?: boolean } = {},
   logged?: Array<Record<string, unknown>>,
 ) {
   captured.options.length = 0;
@@ -424,7 +424,7 @@ describe("a scheduled run's subject is its execution-grant owner", () => {
     const result = runGraphWithScope({
       executor: provider,
       req: { runId: `sched-${graph}`, graphId: `langgraph:${graph}`, messages: [{ role: "user", content: "go" }], modelRef: { providerKey: "platform", modelId: "m" } },
-      ctx: { actorUserId: grantOwner, requestIntent: "decide" },
+      ctx: { actorUserId: grantOwner, unattended: true },
       billing: { billingAccountId: "payer-1", virtualKeyId: "vk" },
       llmService: {} as never,
       usageSource: "litellm",
@@ -566,10 +566,10 @@ describe("DENIAL_IS_TERMINAL", () => {
 describe("DENIAL_IS_TERMINAL: a run with no interactive caller and nothing it may do makes no model call", () => {
   const denied = (logged: Array<Record<string, unknown>>) => logged.filter((l) => l.event === "agent_run.denied");
 
-  it("a scheduled (decide) run whose every write tool is withheld ends at once: no runner, no model call, one agent_run.denied", async () => {
+  it("a scheduled (unattended) run whose every write tool is withheld ends at once: no runner, no model call, one agent_run.denied", async () => {
     const a = authority({ principals: { prioritizer: PRIORITIZER_USER }, roles: [] });
     const logged: Array<Record<string, unknown>> = [];
-    const run = await start("work-prioritizer", a, ADMIN, [], { requestIntent: "decide" }, logged);
+    const run = await start("work-prioritizer", a, ADMIN, [], { unattended: true }, logged);
     expect(run.options).toBeUndefined(); // the graph runner (and so every model call) is never built
     expect(run.events.map((e) => e.type)).toEqual(["text_delta", "assistant_final", "done"]);
     expect(run.final).toMatchObject({ ok: true, finishReason: "stop" });
@@ -593,7 +593,7 @@ describe("DENIAL_IS_TERMINAL: a run with no interactive caller and nothing it ma
       guardDeps: { ...a.guardDeps, withStore: async () => { throw new Error("db down"); } },
     };
     const logged: Array<Record<string, unknown>> = [];
-    const run = await start("work-prioritizer", down, undefined, [], { requestIntent: "decide" }, logged);
+    const run = await start("work-prioritizer", down, undefined, [], { unattended: true }, logged);
     expect(run.options).toBeUndefined();
     expect(denied(logged)).toEqual([expect.objectContaining({ code: "authz_unavailable", reason: "no_permission" })]);
   });
@@ -609,7 +609,7 @@ describe("DENIAL_IS_TERMINAL: a run with no interactive caller and nothing it ma
 
   it("a scheduled run that may do at least one write still runs", async () => {
     const a = authority({ principals: { prioritizer: PRIORITIZER_USER }, roles: [[PRIORITIZER_USER, "work_item:transition"]] });
-    const run = await start("work-prioritizer", a, ADMIN, [], { requestIntent: "decide" });
+    const run = await start("work-prioritizer", a, ADMIN, [], { unattended: true });
     expect(run.options).toBeDefined();
   });
 });

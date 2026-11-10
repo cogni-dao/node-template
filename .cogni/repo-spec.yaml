@@ -37,6 +37,15 @@ intent:
 
 governance:
   chain_id: "8453" # Base mainnet
+  # The node's own operating tick: the generic Cogni program runs hourly as the system tenant
+  # (visible on /gov/system), reads goals and work, and arranges the registered workflows they need.
+  schedules:
+    - charter: COGNI_OPERATE
+      cron: "5 * * * *"
+      timezone: UTC
+      entrypoint: operate
+      graph: langgraph:cogni
+      model: deepseek-v4-flash
 
 # Activity ledger ingestion + approver allowlist.
 # `approvers` gates the `(admin)/` route group and write routes under

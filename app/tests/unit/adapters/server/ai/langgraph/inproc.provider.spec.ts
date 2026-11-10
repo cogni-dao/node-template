@@ -163,20 +163,6 @@ describe("LangGraphInProcProvider", () => {
     expect(source).toHaveBeenCalledWith(true);
   });
 
-  it.each(["cogni-decide", "work-prioritizer"])("forwards trusted intent for %s", async (graph) => {
-    for (const intent of [undefined, "answer", "decide"] as const) {
-      runnerSpy.mockClear();
-      // work-prioritizer names a catalog principal, so the run needs a seeded row to start (task.5456); the stub store grants every role so the run is not ended early by the no-permission rule.
-      const authority = { resolvePrincipal: async () => "seeded-principal-user", guardDeps: { withStore: async (fn: (store: unknown) => Promise<unknown>) => fn({ hasLiveRole: async () => true, liveScopes: async (_p: string, scopes: string[]) => scopes }) as never, adminCheck: async () => "allow" as const } };
-      const provider = new LangGraphInProcProvider(createMockAdapter(), createMockToolSource(), undefined, CORE_TOOL_BUNDLE as never, async () => ({ nodeId: "node", origin: "https://node.example" }), undefined, authority);
-      const result = runInScope({ ...TEST_SCOPE, subjectUserId: "caller-user" }, () => provider.runGraph(createTestRequest({ graphId: `langgraph:${graph}` }), intent ? { requestIntent: intent } : undefined));
-      await collectEvents(result.stream);
-      await result.final;
-      // cogni-decide names no principal, so a scheduled (decide) run has no write tool it may use and ends with no model call.
-      if (graph === "cogni-decide" && intent === "decide") expect(runnerSpy).not.toHaveBeenCalled();
-      else expect(runnerSpy).toHaveBeenCalledWith(expect.objectContaining({ requestIntent: intent ?? "answer" }));
-    }
-  });
   it("only disables unavailable hub grounding and propagates unexpected hub failures", async () => {
     const knowledge = { listGoverningIndex: vi.fn().mockRejectedValue(new Error("hub failed")) };
     await expect(resolveNodeSourceContext(false, "real-node", undefined, undefined, undefined, knowledge)).resolves.toMatchObject({ nodeId: "real-node", governingIndex: [] });

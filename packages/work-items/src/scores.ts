@@ -9,7 +9,7 @@
  *   - SCORES_BOUNDS_IN_PACKAGE: every write path (adapter, HTTP contract, agent tool)
  *     runs `parseWorkItemScores`; nobody re-states the rules.
  *   - SCORE_NEEDS_EVIDENCE: v ≥ 4 carries an `ev` URL.
- *   - EV_SAFE_HTTPS: `ev` is absolute HTTPS without credentials, on any hostname, ≤ 300 chars.
+ *   - EV_SAFE_HTTPS: `ev` is absolute HTTPS (or HTTP loopback), without credentials, ≤ 300 chars.
  *   - SCORES_MAX_1KB: the serialized object is ≤ 1024 UTF-8 bytes.
  *   - RANK_UNKNOWN_IS_UNDEFINED: a missing or 0 rank axis gives no rank, never 0.
  * Side-effects: none
@@ -78,19 +78,21 @@ function evidenceIssue(
   } catch {
     return { code: "evidence_invalid_url", path, message: "ev must be a URL" };
   }
-  if (url.protocol !== "https:") {
-    return { code: "evidence_not_https", path, message: "ev must be https" };
+  const localHttp = url.protocol === "http:" &&
+    ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+  if (url.protocol !== "https:" && !localHttp) {
+    return { code: "evidence_not_https", path, message: "ev must be HTTPS or HTTP loopback" };
   }
   if (
-    !/^https:\/\//i.test(ev) ||
-    /[\u0000-\u0020\u007f]/.test(ev) ||
+    !/^https?:\/\//i.test(ev) ||
+    [...ev].some((char) => char.charCodeAt(0) <= 0x20 || char.charCodeAt(0) === 0x7f) ||
     url.username ||
     url.password
   ) {
     return {
       code: "evidence_invalid_url",
       path,
-      message: "ev must be an absolute HTTPS URL without credentials",
+      message: "ev must be an absolute HTTPS or HTTP loopback URL without credentials",
     };
   }
   return undefined;

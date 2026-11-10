@@ -8,7 +8,7 @@
  * Invariants:
  *   - OUTWARD_IS_SOONER: every axis points outward; a bigger area means do it sooner.
  *   - ABSENT_IS_NOT_ZERO: a missing axis has no vertex and shows "—"; it is never drawn as 0.
- *   - EV_IS_A_LINK_NOT_HTML: `ev` renders (as the user-facing "Justification" link) only as an https anchor href with rel="noopener noreferrer nofollow"; never as markup.
+ *   - EV_IS_A_LINK_NOT_HTML: `ev` renders only as a package-validated source URL with rel="noopener noreferrer nofollow"; never as markup.
  *   - RANK_FROM_PACKAGE: `rankScore` comes from `@cogni/work-items`, never re-derived here.
  *   - HUMAN_QUEUE_DEFAULT: `agent` < 3 or missing → human queue.
  * Side-effects: none
@@ -16,7 +16,7 @@
  * @public
  */
 
-import { rankScore, type WorkItemScores } from "@cogni/work-items";
+import { parseWorkItemScores, rankScore, type WorkItemScores } from "@cogni/work-items";
 import type { ReactElement } from "react";
 
 type Scores = WorkItemScores;
@@ -50,12 +50,12 @@ export function scoreQueue(
   return agent != null && agent >= 3 ? "agent" : "human";
 }
 
-/** Only an absolute https URL may become an href; anything else is dropped. */
+/** Reuse the persisted-score validator so permitted evidence remains inspectable. */
 export function safeEvidenceHref(ev: string | undefined): string | undefined {
-  if (!ev) return undefined;
+  if (!ev || !parseWorkItemScores({ source: { v: 1, ev } }).ok) return undefined;
   try {
     const url = new URL(ev);
-    return url.protocol === "https:" ? url.toString() : undefined;
+    return url.toString();
   } catch {
     return undefined;
   }
