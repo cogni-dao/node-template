@@ -68,6 +68,10 @@ export interface WorkItemCapabilityDeps {
 
 const toWorkItemInfo = toWorkItemDto;
 
+/** The patch `set` without explicit-undefined keys (the route facade drops them the same way). */
+const definedOnly = (set: object): object =>
+  Object.fromEntries(Object.entries(set).filter(([, v]) => v !== undefined));
+
 /**
  * Create a WorkItemCapability backed by hexagonal ports.
  */
@@ -167,7 +171,9 @@ export function createWorkItemCapability(
                 expectedRevision: input.expectedRevision,
               }),
               ...(input.reason !== undefined && { reason: input.reason }),
-              set: input.set,
+              set: definedOnly(input.set) as Parameters<
+                typeof writer.store.patch
+              >[0]["set"],
             },
             typeof writer.principalId === "function"
               ? writer.principalId()
@@ -199,7 +205,9 @@ export function createWorkItemCapability(
       const updated = await workItemCommand.patch({
         id: toWorkItemId(input.id),
         expectedRevision: String(current.revision),
-        set: input.set,
+        set: definedOnly(input.set) as NonNullable<
+          Parameters<typeof workItemCommand.patch>[0]["set"]
+        >,
       });
 
       return toWorkItemInfo(updated);

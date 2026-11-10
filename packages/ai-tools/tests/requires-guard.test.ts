@@ -32,7 +32,7 @@ describe("requires guard", () => {
     expect(contractsMissingRequires(contracts)).toEqual([]);
   });
 
-  it("covers exactly the ten state-changing tools", () => {
+  it("covers exactly the eleven state-changing tools", () => {
     expect(
       contracts
         .filter((c) => c.effect !== "read_only")
@@ -50,6 +50,7 @@ describe("requires guard", () => {
         "core__vcs_flight_candidate",
         "core__vcs_merge_pr",
         "core__work_item_transition",
+        "core__work_item_update",
       ].sort()
     );
   });

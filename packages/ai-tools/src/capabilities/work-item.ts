@@ -13,7 +13,7 @@
  * @public
  */
 
-import type { WorkItemDto } from "@cogni-dao/work-items";
+import type { WorkItemDto, WorkItemPatchInput } from "@cogni-dao/work-items";
 import type { WorkItemQueryInput } from "../tools/work-item-query";
 
 /** Legacy capability assignee input; canonical tool output additionally carries its variant key. */
@@ -115,13 +115,8 @@ export interface WorkItemCapability {
     expectedRevision?: number;
     /** One-line change reason; stored in history, never in the item (task.0052). */
     reason?: string;
-    set: {
-      priority?: number;
-      rank?: number;
-      labels?: string[];
-      summary?: string;
-      scores?: WorkItemPatchScores | null;
-    };
+    /** The PATCH route's `set` (core__work_item_update); the store enforces what it may change. */
+    set: WorkItemPatchInput["set"];
   }): Promise<WorkItemInfo>;
 }
 

@@ -34,7 +34,7 @@ export interface SameDoorRoute {
 
 /** tool id -> the agent-reachable write routes that carry the same scope. */
 export const SAME_DOOR_ROUTES: Readonly<Record<string, SameDoorRoute>> = {
-  core__work_item_transition: {
+  core__work_item_update: {
     scope: "work_item:transition",
     routes: ["work.items.patch"],
   },
@@ -72,6 +72,8 @@ export const ROUTE_ONLY_CAPABILITIES: Readonly<
 
 /** Tools that have no node route, with the reason. A new tool must be added here or to `SAME_DOOR_ROUTES`. */
 export const NO_ROUTE_TWIN: Readonly<Record<string, string>> = {
+  // Deprecated (task.0065): core__work_item_update twins work.items.patch; this tool keeps its scope but carries no route.
+  core__work_item_transition: "deprecated; core__work_item_update is the twin of work.items.patch",
   // These call the operator's API with the node's identity; the operator's own deploy roles (operator OpenFGA) gate them.
   // The tool writes straight to main. Its true twin (a direct-to-main knowledge write route) deliberately does not
   // exist: the node route an outside agent uses is the contribution proposal (`knowledge.contribute`). Whether the tool
