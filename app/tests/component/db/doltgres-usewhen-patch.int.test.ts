@@ -447,6 +447,58 @@ describe("knowledge useWhen patch + q filter (task.5204)", () => {
     ).toEqual(mergedHead);
   }, 180_000);
 
+  it("CITATION_DIFF_FOR_REVIEW: an edge-only inbox lists removed and added edges", async () => {
+    await seedEntry("cite-diff-a", "when the citation diff reads a removed edge");
+    await seedEntry("cite-diff-b", "when the citation diff reads an added edge");
+    await contributeAndMerge("cite-diff-seed", "seed edge", [
+      {
+        op: "cite",
+        citingId: "cite-diff-a",
+        citedId: "cite-diff-b",
+        citationType: "extends",
+        context: "seeded on main",
+      },
+    ]);
+
+    const rec = await adapter.create({
+      principal: principal("cite-diff-reviewer"),
+      message: "edge-only inbox",
+      edits: [
+        {
+          op: "uncite",
+          citingId: "cite-diff-a",
+          citedId: "cite-diff-b",
+          citationType: "extends",
+          reason: "replaced by the reverse edge",
+        },
+        {
+          op: "cite",
+          citingId: "cite-diff-b",
+          citedId: "cite-diff-a",
+          citationType: "extends",
+          context: "b now extends a",
+        },
+      ],
+    });
+
+    expect(await adapter.diffCitations(rec.contributionId)).toEqual([
+      {
+        changeType: "removed",
+        citingId: "cite-diff-a",
+        citedId: "cite-diff-b",
+        citationType: "extends",
+        context: "seeded on main",
+      },
+      {
+        changeType: "added",
+        citingId: "cite-diff-b",
+        citedId: "cite-diff-a",
+        citationType: "extends",
+        context: "b now extends a",
+      },
+    ]);
+  });
+
   it("RED CONTROL: op:'update' clobbers content when the resend drifts", async () => {
     // This is the defect. `op:'update'` carries a FULL entry, so a caller that
     // only means to sharpen `useWhen` must replay the body — and any drift or

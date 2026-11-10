@@ -39,7 +39,10 @@ export function diffHasHtmlEntry(
 	);
 }
 
-/** Permalink for a citation endpoint: a work item or a knowledge entry. */
+/**
+ * Permalink for a citation endpoint: a work item or a knowledge entry.
+ * Twin of the href rule in `api/v1/citations/[id]/route.ts` (workItemPermalink).
+ */
 function citationHref(id: string): string {
 	return isWorkItemEndpointId(id)
 		? `/work/items/${encodeURIComponent(id)}`

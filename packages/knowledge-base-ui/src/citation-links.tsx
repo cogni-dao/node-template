@@ -103,7 +103,10 @@ function CitationRow({
         <span aria-hidden="true">{arrow.glyph}</span>
         <span className="sr-only">{arrow.label}</span>
       </span>
-      <span className="w-24 shrink-0 truncate text-muted-foreground">
+      <span
+        className="w-24 shrink-0 truncate text-muted-foreground"
+        title={relation}
+      >
         {relation}
       </span>
       <Link
@@ -211,7 +214,7 @@ export function ContributionCitationDiff({
           <ul className="flex flex-col gap-0.5 pl-3">
             {edges.map((edge) => (
               <li
-                key={`${edge.citationType}:${edge.citedId}`}
+                key={`${edge.changeType}:${edge.citationType}:${edge.citedId}`}
                 title={edge.context ?? undefined}
               >
                 <CitationRow
