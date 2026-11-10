@@ -8,6 +8,7 @@ import {
   probeKnowledgePlane,
   probeLiteLlmGateway,
   probeRedisStream,
+  readDeepReadiness,
   runDeepChecks,
 } from "../src/index.ts";
 
@@ -60,6 +61,22 @@ describe("runDeepChecks", () => {
     ).rejects.toMatchObject({ unreachable: ["redis", "doltgres"], primary: boom });
     expect((logs[0]![0].checks as Record<string, { status: string }>).redis.status).toBe("failed");
     expect(logs[0]![0].unreachable).toEqual(["redis", "doltgres"]);
+  });
+
+  it("returns the checks map on pass and carries it on the failure", async () => {
+    const { rt } = runtime();
+    const checks = await runDeepChecks([["postgres", async () => undefined]], rt);
+    expect(checks.postgres?.status).toBe("ok");
+    const failure = await runDeepChecks(
+      [
+        ["postgres", async () => undefined],
+        ["scheduler-worker", async () => Promise.reject(new Error("down"))],
+      ],
+      rt
+    ).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(DeepProbeFailure);
+    expect((failure as DeepProbeFailure).checks.postgres?.status).toBe("ok");
+    expect((failure as DeepProbeFailure).checks["scheduler-worker"]?.status).toBe("failed");
   });
 
   it("counts a check that exceeds the budget as failed via timeoutError", async () => {
@@ -157,5 +174,51 @@ describe("findUnclassifiedSubstrateKeys (drift guard)", () => {
     expect(findUnclassifiedSubstrateKeys(["NEW_SERVICE_URL"], opts)).toEqual([
       "NEW_SERVICE_URL",
     ]);
+  });
+});
+
+describe("readDeepReadiness", () => {
+  const ok = { status: "ok", durationMs: 3 };
+  const failed = { status: "failed", durationMs: 3000 };
+
+  it("reads a 503 per dependency: ok is reached, failed is unreached, absent is na", () => {
+    const r = readDeepReadiness(503, {
+      status: "error",
+      reason: "INFRA_UNREACHABLE",
+      unreachable: ["scheduler-worker"],
+      checks: { postgres: ok, "scheduler-worker": failed },
+      buildSha: "abc",
+    });
+    expect(r.buildSha).toBe("abc");
+    expect(r.dependencyState("postgres")).toBe("reached");
+    expect(r.dependencyState("scheduler-worker")).toBe("unreached");
+    expect(r.dependencyState("doltgres")).toBe("na");
+  });
+
+  it("reads a 200 with checks as reached for probed names and na for the rest", () => {
+    const r = readDeepReadiness(200, { status: "healthy", checks: { postgres: ok }, buildSha: "abc" });
+    expect(r.dependencyState("postgres")).toBe("reached");
+    expect(r.dependencyState("redis")).toBe("na");
+  });
+
+  it("never treats an aggregate 200 without checks as evidence about one dependency", () => {
+    const r = readDeepReadiness(200, { status: "healthy", buildSha: "abc" });
+    expect(r.dependencyState("postgres")).toBe("unknown");
+  });
+
+  it("reads an older 503 by its unreachable list only", () => {
+    const r = readDeepReadiness(503, { status: "error", unreachable: ["redis"] });
+    expect(r.dependencyState("redis")).toBe("unreached");
+    expect(r.dependencyState("postgres")).toBe("unknown");
+    expect(r.buildSha).toBeUndefined();
+  });
+
+  it("reads a config 503, another status, a 200 with a failed check, or junk as unknown", () => {
+    expect(readDeepReadiness(503, { status: "error", reason: "ENV_INVALID" }).dependencyState("postgres")).toBe("unknown");
+    expect(readDeepReadiness(502, { status: "error", checks: { postgres: ok } }).dependencyState("postgres")).toBe("unknown");
+    expect(readDeepReadiness(200, { status: "healthy", checks: { postgres: failed } }).dependencyState("postgres")).toBe("unknown");
+    expect(readDeepReadiness(200, "<html>").dependencyState("postgres")).toBe("unknown");
+    expect(readDeepReadiness(503, { status: "error", checks: { postgres: "ok" } }).dependencyState("postgres")).toBe("unknown");
+    expect(readDeepReadiness(200, { status: "healthy", checks: {} }).dependencyState("toString")).toBe("na");
   });
 });

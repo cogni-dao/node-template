@@ -6,8 +6,9 @@
  * Purpose: The node-neutral deep-readiness mechanism every Cogni node's `/readyz?deep=1` is built from.
  * Scope: Owns the concurrent bounded deep runner (`runDeepChecks`), its failure type (`DeepProbeFailure`),
  *   the three reach-probe factories (Redis stream, knowledge plane, LiteLLM gateway), the declared-dependency
- *   type (`SubstrateDependency`), and the env-schema drift guard (`findUnclassifiedSubstrateKeys`). It owns no
- *   node identity: a node injects its logger, error type, budget, ports and declaration map.
+ *   type (`SubstrateDependency`), the env-schema drift guard (`findUnclassifiedSubstrateKeys`), the deep HTTP
+ *   body contract (`DeepReadyzEvidence`) and its one reader (`readDeepReadiness`). It owns no node identity: a
+ *   node injects its logger, error type, budget, ports and declaration map.
  * Invariants:
  *   - Leaf package: no app, container, env-loader or framework imports. Everything node-specific is injected.
  *   - A probe factory calls its port AS A METHOD (`port.streamLength(key)`), so a class method keeps `this`.
@@ -15,6 +16,10 @@
  *   - `runDeepChecks` runs every check concurrently under one per-check budget, emits ONE per-dependency
  *     summary via the injected `log`, and throws `DeepProbeFailure` when any check fails. The first failure in
  *     `checks` order is `primary`; `unreachable[]` preserves that order.
+ *   - A deep body (200 and 503) carries the `checks` map and the responder's `buildSha`, so a reader judges one
+ *     named dependency at one named revision from the subject itself. `readDeepReadiness` is the only parser:
+ *     a dependency is `reached` only on positive `checks[name].status === "ok"` evidence; a body without
+ *     `checks` is `unknown`, never green.
  * Side-effects: none in this module; injected probes do IO when run.
  * Links: fleet-reliability-substrate-matrix, node-substrate-health-checklist, deep-readyz-design
  * @public
@@ -24,12 +29,22 @@
 export class DeepProbeFailure extends Error {
   constructor(
     readonly primary: unknown,
-    readonly unreachable: readonly string[]
+    readonly unreachable: readonly string[],
+    readonly checks: DeepChecks = {}
   ) {
     super("deep readiness failed");
     this.name = "DeepProbeFailure";
   }
 }
+
+/** One probed dependency's outcome in the deep `checks` map. */
+export interface DeepCheckResult {
+  status: "ok" | "failed";
+  durationMs: number;
+}
+
+/** The deep `checks` map: every probed dependency, keyed by its probe name. */
+export type DeepChecks = Readonly<Record<string, DeepCheckResult>>;
 
 /** A node injects its logger, its error type and the per-check budget. */
 export interface DeepRuntime {
@@ -76,12 +91,13 @@ type DeepCheckOutcome<Name extends string> = {
  * observability a readiness probe must have. The summary fires on both the
  * all-pass path and before a failure. Throws `DeepProbeFailure` when any check
  * fails; the first failure in `checks` order is `primary`, and `unreachable[]`
- * preserves that order.
+ * preserves that order. Resolves with (and the failure carries) the `checks`
+ * map the node puts in its deep HTTP body.
  */
 export async function runDeepChecks<Name extends string>(
   checks: ReadonlyArray<readonly [Name, () => Promise<unknown>]>,
   runtime: DeepRuntime
-): Promise<void> {
+): Promise<DeepChecks> {
   const startedAt = Date.now();
   const outcomes = await Promise.all(
     checks.map(async ([dependency, run]): Promise<DeepCheckOutcome<Name>> => {
@@ -105,10 +121,7 @@ export async function runDeepChecks<Name extends string>(
     })
   );
 
-  const checksSummary: Record<
-    string,
-    { status: "ok" | "failed"; durationMs: number }
-  > = {};
+  const checksSummary: Record<string, DeepCheckResult> = {};
   const unreachable: Name[] = [];
   let primary: unknown;
   for (const outcome of outcomes) {
@@ -133,7 +146,99 @@ export async function runDeepChecks<Name extends string>(
     "deep readiness: checks complete"
   );
 
-  if (unreachable.length > 0) throw new DeepProbeFailure(primary, unreachable);
+  if (unreachable.length > 0)
+    throw new DeepProbeFailure(primary, unreachable, checksSummary);
+  return checksSummary;
+}
+
+/**
+ * The deep-readiness fields a node adds to its `/readyz?deep=1` body. A 200 adds
+ * `checks`; a deep 503 adds `checks`, `unreachable` and `buildSha`. A config 503
+ * (env, secrets) returns before any check and carries none of them.
+ */
+export interface DeepReadyzEvidence {
+  checks: DeepChecks;
+  unreachable?: readonly string[];
+  buildSha?: string;
+}
+
+/**
+ * How one deep body judges one dependency. `na` = the responder attributed its
+ * checks and did not probe that name. `unknown` = no attributable evidence.
+ */
+export type DependencyState = "reached" | "unreached" | "na" | "unknown";
+
+/** One deep response read once: the responder's revision and a per-dependency verdict. */
+export interface DeepReadiness {
+  /** The revision the responder reports in its own body, if any. */
+  buildSha: string | undefined;
+  dependencyState(dependency: string): DependencyState;
+}
+
+function isCheckResult(value: unknown): value is DeepCheckResult {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    ((value as { status?: unknown }).status === "ok" ||
+      (value as { status?: unknown }).status === "failed")
+  );
+}
+
+/**
+ * The one reader of a `/readyz?deep=1` response. Takes the HTTP status and the
+ * parsed JSON body (or anything; malformed input reads as unknown).
+ *
+ * - With a `checks` map (0.2.0+ producers): `ok` → reached, `failed` →
+ *   unreached, absent → na. A 200 that lists a failed check is inconsistent and
+ *   reads as unknown.
+ * - Without `checks` (older producers): a 503 that names a dependency in
+ *   `unreachable[]` → unreached; everything else is unknown. An aggregate 200
+ *   is never positive evidence about any one dependency.
+ * - Any other status → unknown.
+ */
+export function readDeepReadiness(status: number, body: unknown): DeepReadiness {
+  const record =
+    typeof body === "object" && body !== null && !Array.isArray(body)
+      ? (body as Record<string, unknown>)
+      : {};
+  const buildSha =
+    typeof record.buildSha === "string" && record.buildSha.length > 0
+      ? record.buildSha
+      : undefined;
+  const rawChecks = record.checks;
+  const checks =
+    typeof rawChecks === "object" &&
+    rawChecks !== null &&
+    !Array.isArray(rawChecks) &&
+    Object.values(rawChecks).every(isCheckResult)
+      ? (rawChecks as DeepChecks)
+      : undefined;
+  const unreachable =
+    Array.isArray(record.unreachable) &&
+    record.unreachable.every((name) => typeof name === "string")
+      ? (record.unreachable as string[])
+      : undefined;
+  const answered =
+    (status === 200 && record.status === "healthy") ||
+    (status === 503 && record.status === "error");
+
+  return {
+    buildSha,
+    dependencyState(dependency) {
+      if (!answered) return "unknown";
+      if (checks) {
+        const check = Object.hasOwn(checks, dependency)
+          ? checks[dependency]
+          : undefined;
+        if (!check) return "na";
+        if (check.status === "ok") return "reached";
+        return status === 503 ? "unreached" : "unknown";
+      }
+      if (status === 503 && unreachable?.includes(dependency))
+        return "unreached";
+      return "unknown";
+    },
+  };
 }
 
 /** Injected into every probe factory so the node's own connectivity error is thrown. */
