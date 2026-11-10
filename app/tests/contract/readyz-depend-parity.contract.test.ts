@@ -11,9 +11,14 @@
  * @internal
  */
 
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { DeepProbeFailure as PkgDeepProbeFailure } from "@cogni/substrate-health";
 import { describe, expect, it } from "vitest";
 import {
   buildDeepChecks,
+  DeepProbeFailure as LocalDeepProbeFailure,
   findUnclassifiedSubstrateKeys,
   NON_SUBSTRATE_ALLOWLIST,
   SUBSTRATE_DEPENDENCIES,
@@ -91,5 +96,25 @@ describe("deep readyz registry config-gate (buildDeepChecks filter)", () => {
       "redis",
       "litellm-gateway",
     ]);
+  });
+});
+
+describe("deep readyz renders only from @cogni-dao/substrate-health", () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const adapterSrc = readFileSync(
+    resolve(here, "../../src/app/(infra)/readyz/readyz-probes.ts"),
+    "utf8"
+  );
+
+  it("uses the package's DeepProbeFailure by identity (no local copy)", () => {
+    expect(LocalDeepProbeFailure).toBe(PkgDeepProbeFailure);
+  });
+
+  it("defines no runner or probe logic locally — it lives in the package", () => {
+    // The concurrent runner, the catalog fetch and the failure class all moved to
+    // @cogni-dao/substrate-health; the adapter only wires node ports and closures.
+    expect(adapterSrc).not.toMatch(/Promise\.all(Settled)?\b/);
+    expect(adapterSrc).not.toContain("/model/info");
+    expect(adapterSrc).not.toMatch(/class\s+DeepProbeFailure/);
   });
 });
