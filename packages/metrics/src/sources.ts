@@ -12,6 +12,16 @@ import {
 	summarizeBriefs,
 } from "./briefs.js";
 import type { MetricBudget, MetricSample } from "./contracts.js";
+import {
+	appendsHistory,
+	approvedLines,
+	scoreTrueNow,
+	summarizeTrueNow,
+	TRUE_NOW_MAX_FIELD_CHARS,
+	TRUE_NOW_RULES_VERSION,
+	type TrueNowSubject,
+	trueNowEvidenceRefs,
+} from "./true-now.js";
 
 export async function readWorkCount(
 	sql: Sql,
@@ -647,4 +657,396 @@ export async function readBriefConformance(
 		sourceWatermarks: [{ source, asOf }],
 		evidenceRefs: briefEvidenceRefs(summary),
 	};
+}
+
+/** Most rows one true-now statement reads. */
+export const TRUE_NOW_MAX_ROWS = 5000;
+/** Most bytes of text one true-now statement sends (16 MiB). */
+export const TRUE_NOW_MAX_BYTES = 16_777_216;
+/** Most edits one true-now edits compute classifies; more fails closed. */
+export const TRUE_NOW_MAX_EDITS = 2000;
+/** Fewer edits than this in the window is `insufficient_history`, never a share. */
+export const TRUE_NOW_MIN_EDITS = 10;
+
+const TRUE_NOW_SOURCE = {
+	"work-items": "node.work_items",
+	atoms: "node.knowledge",
+} as const;
+
+/**
+ * One statement per subject: the scope's rows with their scored text, joined
+ * in only while the row and byte caps hold (the same statement the brief
+ * calculator sends, so both read one scope).
+ */
+export function trueNowStateSql(subject: TrueNowSubject): string {
+	return briefConformanceSql(subject === "work-items" ? "items" : "entries");
+}
+
+/**
+ * State of one subject: the percent of open work items or live atoms with no
+ * `true-now-rules@1` marker line. A cap hit, an empty scope and a failed read
+ * are unknown, never zero.
+ */
+export async function readTrueNowState(
+	sql: Sql,
+	subject: TrueNowSubject,
+	signal: AbortSignal,
+): Promise<MetricSample> {
+	const source = TRUE_NOW_SOURCE[subject];
+	const unknown = (
+		reason: NonNullable<MetricSample["reason"]>,
+		asOf: string | null,
+		evidenceRefs: string[] = [],
+	): MetricSample => ({
+		value: 0,
+		unit: "%",
+		complete: false,
+		sourceWatermarks: [{ source, asOf }],
+		evidenceRefs,
+		reason,
+	});
+	let rows: ReadonlyArray<Record<string, unknown>>;
+	try {
+		rows = await run(sql, trueNowStateSql(subject), signal);
+	} catch (error) {
+		// A timeout keeps its own failure; every other read error is source_failed,
+		// recorded by class only.
+		if (signal.aborted) throw error;
+		return unknown("source_failed", null, [errorClass(error)]);
+	}
+	const first = rows[0];
+	if (!first) return unknown("incomplete_or_invalid_source", null);
+	const asOf = first.as_of
+		? new Date(first.as_of as string).toISOString()
+		: null;
+	const n = Number(first.n);
+	const bytes = Number(first.bytes);
+	if (!Number.isFinite(n) || !Number.isFinite(bytes))
+		return unknown("incomplete_or_invalid_source", asOf);
+	if (n === 0) return unknown("zero_denominator", asOf, ["counts:evaluated=0"]);
+	// Over a cap the statement sends the totals row alone.
+	if (
+		n > TRUE_NOW_MAX_ROWS ||
+		bytes > TRUE_NOW_MAX_BYTES ||
+		rows.length !== n ||
+		rows.some((r) => r.id == null)
+	)
+		return unknown("incomplete_or_invalid_source", asOf, [
+			`counts:evaluated=${n};bytes=${bytes};cap_hit`,
+		]);
+	const text = (value: unknown) => (value == null ? null : String(value));
+	const summary = summarizeTrueNow(
+		subject,
+		rows.map((row) => {
+			const score = scoreTrueNow(subject, {
+				title: text(row.title),
+				summary: text(row.summary),
+				outcome: text(row.outcome),
+				use_when: text(row.use_when),
+				content: text(row.content),
+				oversize: row.oversize === true || row.oversize === "t",
+			});
+			const approved =
+				subject === "work-items" ? approvedLines(text(row.outcome)) : null;
+			return {
+				id: String(row.id),
+				broken: score.broken,
+				oversize: score.oversize,
+				...(approved
+					? { missingGoal: !approved.goal, missingDoneWhen: !approved.doneWhen }
+					: {}),
+			};
+		}),
+	);
+	return {
+		value: summary.percent ?? 0,
+		unit: "%",
+		complete: summary.percent !== null,
+		sourceWatermarks: [{ source, asOf }],
+		evidenceRefs: trueNowEvidenceRefs(summary),
+	};
+}
+
+/** Open work items in scope: the guardrail beside the work-item state KPI. */
+export async function readTrueNowScope(
+	sql: Sql,
+	signal: AbortSignal,
+): Promise<MetricSample> {
+	const counted = await readWorkCount(sql, "open", signal);
+	const valid = Number.isInteger(counted.value) && counted.value >= 0;
+	return {
+		...counted,
+		complete: counted.complete && valid,
+		evidenceRefs: [
+			`rules:${TRUE_NOW_RULES_VERSION}`,
+			...counted.evidenceRefs,
+			...(valid ? [`counts:evaluated=${counted.value}`] : []),
+		],
+	};
+}
+
+type EditTable = "work-items" | "atoms";
+/** Text columns an edit may change, per table; a change to any other column is not an edit. */
+const EDIT_COLUMNS = {
+	"work-items": ["summary", "outcome"],
+	atoms: ["content"],
+} as const;
+
+/**
+ * One statement per table: the diff rows (`dolt_diff_<table>`, one per commit
+ * and row id) whose commit date is in [start, end) and whose edit column
+ * changed, ordered by row id then commit date, with the changed text and the
+ * commit's reason message. A diff row carries its own `from_` and `to_` text,
+ * so no wider history is read. A merge commit repeats its branch commit's row;
+ * the caller collapses repeats among these in-window rows. Scope and fixture
+ * exclusions read the row as of that commit. The log joins are LEFT joins, so a
+ * missing commit row never drops a diff row. The inner LIMIT reads one row past
+ * the row cap; like the brief statement it counts rows (`n`) and the bytes of
+ * its capped text and joins the rows in only while both are inside the caps, so
+ * the database never sends a result over a cap.
+ */
+export function trueNowEditsSql(
+	table: EditTable,
+	window: { start: string; end: string },
+): string {
+	const columns = EDIT_COLUMNS[table];
+	const diff =
+		table === "work-items" ? "dolt_diff_work_items" : "dolt_diff_knowledge";
+	const text = columns.flatMap((c) => [`from_${c}`, `to_${c}`]);
+	const capped = (c: string) =>
+		`CASE WHEN char_length(d.${c}) > ${TRUE_NOW_MAX_FIELD_CHARS} THEN NULL ELSE d.${c} END AS ${c}`;
+	const over = (c: string) =>
+		`COALESCE(char_length(d.${c}), 0) > ${TRUE_NOW_MAX_FIELD_CHARS}`;
+	// Doltgres 0.57.3 panics on octet_length over a stored long text unless the
+	// text is first materialized by substr, and compares a bare SUM as text.
+	const size = (c: string) =>
+		`COALESCE(CASE WHEN char_length(d.${c}) > ${TRUE_NOW_MAX_FIELD_CHARS} THEN 0 ELSE octet_length(substr(d.${c}, 1, ${TRUE_NOW_MAX_FIELD_CHARS})) END, 0) AS ${c}_bytes`;
+	const scope =
+		table === "work-items"
+			? SYNTHETIC_LABELS("d.to_labels")
+			: `d.to_entry_type <> 'html' AND (d.to_tags IS NULL OR CAST(d.to_tags AS TEXT) NOT LIKE '%"test-fixture"%') AND d.to_title NOT LIKE '%[TEST]%'`;
+	const changed = columns
+		.map((c) => `d.from_${c} IS DISTINCT FROM d.to_${c}`)
+		.join(" OR ");
+	const reason =
+		table === "work-items"
+			? "l.message AS reason_message"
+			: "c.message AS reason_message";
+	const join =
+		table === "work-items"
+			? "LEFT JOIN dolt_log l ON l.commit_hash = d.to_commit"
+			: "LEFT JOIN dolt_log l ON l.commit_hash = d.to_commit LEFT JOIN knowledge_contribution_commits c ON c.commit_hash = d.to_commit";
+	const bytes = text.map((c) => `${c}_bytes`).join(" + ");
+	return `WITH diffs AS (SELECT d.to_id AS id, d.to_commit AS commit_hash, CAST(d.to_commit_date AS TEXT) AS at, d.diff_type, ${reason}, ${text.map(capped).join(", ")}, ${text.map(size).join(", ")}, (${text.map(over).join(" OR ")}) AS oversize FROM ${diff} d ${join} WHERE d.to_commit <> 'WORKING' AND d.to_id IS NOT NULL AND d.diff_type = 'modified' AND d.to_commit_date >= '${doltUtc(window.start)}' AND d.to_commit_date < '${doltUtc(window.end)}' AND (${changed}) AND ${scope} ORDER BY d.to_id, d.to_commit_date LIMIT ${TRUE_NOW_MAX_ROWS + 1}), totals AS (SELECT COUNT(*) AS n, CAST(COALESCE(SUM(${bytes}), 0) AS BIGINT) AS bytes FROM diffs) SELECT NOW() AS as_of, t.n, t.bytes, s.id, s.commit_hash, s.at, s.diff_type, s.reason_message, ${text.map((c) => `s.${c}`).join(", ")}, s.oversize FROM totals t LEFT JOIN diffs s ON t.n <= ${TRUE_NOW_MAX_ROWS} AND t.bytes <= ${TRUE_NOW_MAX_BYTES} ORDER BY s.id, s.at, s.commit_hash`;
+}
+
+/** The class of a thrown value, safe to publish: never its message or any row content. */
+function errorClass(error: unknown): string {
+	const name =
+		error instanceof Error
+			? error.name.replace(/[^A-Za-z0-9_]/g, "")
+			: typeof error;
+	return `error:${(name || "unknown").slice(0, 64)}`;
+}
+
+/** One classified edit, from its kept (older) diff row. */
+interface Edit {
+	appends: boolean;
+	withReason: boolean;
+}
+
+type EditRead =
+	| { ok: true; edits: Edit[]; mergeRepeats: number; asOf: string | null }
+	| {
+			ok: false;
+			reason: NonNullable<MetricSample["reason"]>;
+			asOf: string | null;
+			evidence: string[];
+	  };
+
+const sameText = (a: unknown, b: unknown) =>
+	(a == null ? null : String(a)) === (b == null ? null : String(b));
+
+/** A work-item commit message holds a one-line `Reason: <text>` after its first line. */
+function workItemReason(message: unknown): boolean {
+	return String(message ?? "")
+		.split("\n")
+		.slice(1)
+		.some((line) => line.startsWith("Reason: ") && line.length > 8);
+}
+
+async function readEditsOf(
+	sql: Sql,
+	table: EditTable,
+	window: { start: string; end: string },
+	read: Read,
+): Promise<EditRead> {
+	const failed = (
+		reason: NonNullable<MetricSample["reason"]>,
+		asOf: string | null,
+		evidence: string[] = [],
+	): EditRead => ({ ok: false, reason, asOf, evidence });
+	const result = await read<
+		| { rows: ReadonlyArray<Record<string, unknown>>; error?: undefined }
+		| { error: string }
+	>(async (signal) => {
+		try {
+			return { rows: await run(sql, trueNowEditsSql(table, window), signal) };
+		} catch (error) {
+			// A timeout keeps its own failure; every other read error is
+			// source_failed, recorded by class only.
+			if (signal.aborted) throw error;
+			return { error: errorClass(error) };
+		}
+	});
+	if (result.error !== undefined)
+		return failed("source_failed", null, [result.error]);
+	const rows = result.rows;
+	const first = rows[0];
+	if (!first) return failed("incomplete_or_invalid_source", null);
+	const asOf = first.as_of
+		? new Date(first.as_of as string).toISOString()
+		: null;
+	const n = Number(first.n);
+	const bytes = Number(first.bytes);
+	if (!Number.isFinite(n) || !Number.isFinite(bytes))
+		return failed("incomplete_or_invalid_source", asOf);
+	if (n === 0) return { ok: true, edits: [], mergeRepeats: 0, asOf };
+	// Over a cap the statement sends the totals row alone.
+	if (
+		n > TRUE_NOW_MAX_ROWS ||
+		bytes > TRUE_NOW_MAX_BYTES ||
+		rows.length !== n ||
+		rows.some((r) => r.id == null) ||
+		rows.some((r) => r.oversize === true || r.oversize === "t")
+	)
+		return failed("incomplete_or_invalid_source", asOf, [
+			`counts:${table}_rows=${n};bytes=${bytes};cap_hit`,
+		]);
+	const dated = rows.map((row) => ({
+		row,
+		ms: Date.parse(doltInstant(row.at) ?? ""),
+	}));
+	if (dated.some((d) => !Number.isFinite(d.ms)))
+		return failed("incomplete_or_invalid_source", asOf, [
+			`counts:${table}_rows=${n};bad_commit_date`,
+		]);
+	const order = (a: unknown, b: unknown) =>
+		String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0;
+	// Oldest first within one row id; the commit hash breaks a date tie.
+	dated.sort(
+		(a, b) =>
+			order(a.row.id, b.row.id) ||
+			a.ms - b.ms ||
+			order(a.row.commit_hash, b.row.commit_hash),
+	);
+	const columns = EDIT_COLUMNS[table];
+	const start = Date.parse(window.start);
+	const end = Date.parse(window.end);
+	const edits: Edit[] = [];
+	let mergeRepeats = 0;
+	let previous: (typeof dated)[number] | undefined;
+	const seen = new Set<string>();
+	for (const d of dated) {
+		const { row } = d;
+		const prev = previous;
+		previous = d;
+		// A merge commit repeats its branch commit's row: adjacent diff rows of one
+		// row id with the same value in every read `to_` column are one edit, and
+		// the older (the branch commit) is the one kept.
+		if (
+			prev &&
+			sameText(prev.row.id, row.id) &&
+			columns.every((c) => sameText(prev.row[`to_${c}`], row[`to_${c}`]))
+		) {
+			mergeRepeats++;
+			continue;
+		}
+		const key = `${row.commit_hash}:${row.id}`;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		if (row.diff_type !== "modified" || d.ms < start || d.ms >= end) continue;
+		const pairs = columns.map((c) => ({
+			from: row[`from_${c}`] == null ? null : String(row[`from_${c}`]),
+			to: row[`to_${c}`] == null ? null : String(row[`to_${c}`]),
+		}));
+		// Only a change to an edit column is an edit.
+		if (pairs.every((p) => sameText(p.from, p.to))) continue;
+		edits.push({
+			appends: appendsHistory(pairs),
+			withReason:
+				table === "work-items"
+					? workItemReason(row.reason_message)
+					: String(row.reason_message ?? "").trim() !== "",
+		});
+	}
+	return { ok: true, edits, mergeRepeats, asOf };
+}
+
+/**
+ * Edits in [start, end), work items then atoms, two source calls. An edit is
+ * one (commit, row id) pair on main that changed a work item's summary or
+ * outcome or an atom's content; creation, deletion and fixtures are not edits.
+ * `share` is the percent of edits that did not append history (the count of
+ * marker lines did not grow); `count` is the raw number of edits. Under
+ * `TRUE_NOW_MIN_EDITS` a share is `insufficient_history`; over
+ * `TRUE_NOW_MAX_EDITS` either output fails closed.
+ */
+export async function readTrueNowEdits(
+	sql: Sql,
+	output: "share" | "count",
+	window: { start: string; end: string },
+	read: Read,
+): Promise<MetricSample> {
+	const unit = output === "share" ? "%" : "edits";
+	const start = new Date(Date.parse(window.start)).toISOString();
+	const end = new Date(Date.parse(window.end)).toISOString();
+	const watermarks: MetricSample["sourceWatermarks"] = [];
+	const evidenceRefs = [
+		`rules:${TRUE_NOW_RULES_VERSION}`,
+		`window:[${start},${end})`,
+	];
+	const unknown = (
+		reason: NonNullable<MetricSample["reason"]>,
+	): MetricSample => ({
+		value: 0,
+		unit,
+		complete: false,
+		sourceWatermarks: watermarks,
+		evidenceRefs,
+		reason,
+	});
+	const edits: Edit[] = [];
+	let mergeRepeats = 0;
+	for (const table of ["work-items", "atoms"] as const) {
+		const part = await readEditsOf(sql, table, { start, end }, read);
+		watermarks.push({ source: TRUE_NOW_SOURCE[table], asOf: part.asOf });
+		if (!part.ok) {
+			evidenceRefs.push(...part.evidence);
+			return unknown(part.reason);
+		}
+		edits.push(...part.edits);
+		mergeRepeats += part.mergeRepeats;
+	}
+	const appending = edits.filter((e) => e.appends).length;
+	const withReason = edits.filter((e) => e.withReason).length;
+	evidenceRefs.push(
+		`counts:edits=${edits.length};appending=${appending};withReason=${withReason}`,
+		`counts:merge_repeats=${mergeRepeats}`,
+	);
+	if (edits.length > TRUE_NOW_MAX_EDITS) {
+		evidenceRefs.push("cap_hit");
+		return unknown("incomplete_or_invalid_source");
+	}
+	const sample = (value: number): MetricSample => ({
+		value,
+		unit,
+		complete: true,
+		sourceWatermarks: watermarks,
+		evidenceRefs,
+	});
+	if (output === "count") return sample(edits.length);
+	if (edits.length === 0) return unknown("zero_denominator");
+	if (edits.length < TRUE_NOW_MIN_EDITS) return unknown("insufficient_history");
+	return sample((100 * (edits.length - appending)) / edits.length);
 }

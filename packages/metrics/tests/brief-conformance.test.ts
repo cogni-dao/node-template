@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 /**
- * brief.conformance@1 and its two package-served definitions: the source read
- * and its caps, the failure map, built-in resolution beside hub rows, paging,
- * and one terminal log event per computation.
+ * brief.conformance@1: the source read and its caps, the failure map, and one
+ * terminal log event per computation of a reviewed hub definition. The package
+ * serves no definition of its own (see definitions.test.ts).
  */
 import type { Sql } from "postgres";
 import { describe, expect, it } from "vitest";
 import { briefEvidenceRefs, scoreBrief, summarizeBriefs } from "../src/briefs.js";
 import {
-	BUILTIN_METRIC_REVISION,
-	BUILTIN_METRICS,
 	createGoalMetrics,
 	PACKAGE_CALCULATOR_IDS,
 	RESERVED_CALCULATOR_FAMILIES,
@@ -261,11 +259,6 @@ describe("brief.conformance@1 in the goal-metric service", () => {
 					.filter((r) => r.id === one)
 					// The plain id read keeps its metric and status filters.
 					.filter((r) => !text.includes("AND metric_spec IS NOT NULL") || (r.metric_spec != null && r.status !== "deprecated"));
-			const ids = /WHERE id IN \(([^)]*)\)/.exec(text)?.[1];
-			if (ids !== undefined) {
-				const wanted = ids.split(",").map((x) => x.replace(/'/g, ""));
-				return hubRows.filter((r) => wanted.includes(String(r.id))).map((r) => ({ id: r.id }));
-			}
 			const after = /AND id > '([^']+)'/.exec(text)?.[1];
 			const limit = Number(/LIMIT (\d+)/.exec(text)?.[1] ?? 50);
 			return hubRows
@@ -290,16 +283,6 @@ describe("brief.conformance@1 in the goal-metric service", () => {
 		});
 		return { service, reader, events, queries: knowledge.queries };
 	}
-	const count = (id: string, extra: Row = {}): Row => ({
-		id,
-		title: id,
-		metric_spec: { calculatorId: "work.count@1", params: { mode: "open" }, maxAgeSeconds: 120 },
-		updated_at: "2026-11-01T00:00:00Z",
-		status: "active",
-		...extra,
-	});
-	const ids = (items: Array<{ definition: { id: string } }>) => items.map((v) => v.definition.id);
-
 	it("publishes the calculator in the reserved set with its single-statement budget", () => {
 		expect(PACKAGE_CALCULATOR_IDS).toContain("brief.conformance@1");
 		expect(RESERVED_CALCULATOR_FAMILIES.has("brief.conformance")).toBe(true);
@@ -318,6 +301,7 @@ describe("brief.conformance@1 in the goal-metric service", () => {
 			"work.convergence@1",
 			"github.stars@1",
 			"brief.conformance@1",
+			"true-now@1",
 		]);
 	});
 
@@ -337,40 +321,30 @@ describe("brief.conformance@1 in the goal-metric service", () => {
 			expect(schema.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
 	});
 
-	it("serves both built-in definitions with the designed spec while main holds no metric row", async () => {
-		const { reader } = hub([]);
-		expect(BUILTIN_METRICS.map((b) => b.id)).toEqual(["brief-conformance-entries", "brief-conformance-items"]);
-		for (const [id, subject] of [
-			["brief-conformance-items", "items"],
-			["brief-conformance-entries", "entries"],
-		] as const) {
-			const view = await reader.read(id);
-			expect(view.definition).toMatchObject({
-				id,
-				revision: BUILTIN_METRIC_REVISION,
-				spec: {
-					calculatorId: "brief.conformance@1",
-					params: { subject, maxLongShare: 0.1 },
-					cadenceSeconds: 3600,
-					maxAgeSeconds: 7200,
-				},
-				display: "progress",
-			});
-		}
-		expect(BUILTIN_METRIC_REVISION).toBe("builtin:brief-rules@1");
+	const briefRow = (id: string, subject: "items" | "entries"): Row => ({
+		id,
+		title: id,
+		metric_spec: {
+			calculatorId: "brief.conformance@1",
+			params: { subject, maxLongShare: 0.1 },
+			cadenceSeconds: 3600,
+			maxAgeSeconds: 7200,
+		},
+		updated_at: "2026-11-01T00:00:00Z",
+		status: "active",
 	});
 
-	it("computes a built-in end to end with one terminal log event carrying its reason", async () => {
+	it("computes a reviewed hub definition end to end with one terminal log event carrying its reason", async () => {
 		const briefRows = joined([entryRow("e1"), entryRow("e2", { use_when: "" })]);
-		const { service, events, queries } = hub([], briefRows);
-		const saved = await service.compute("brief-conformance-entries", { requestKey: "k1" });
+		const { service, events, queries } = hub([briefRow("brief-entries", "entries")], briefRows);
+		const saved = await service.compute("brief-entries", { requestKey: "k1" });
 		expect(saved).toMatchObject({ status: "ok", value: 50, unit: "%", reason: null });
 		expect(saved.evidenceRefs).toContain("counts:evaluated=2;passing=1");
 		expect(queries.filter((q) => q.startsWith("WITH scope AS"))).toHaveLength(1);
 		const terminal = events.filter((e) => (e as { event: string }).event === "metric.compute.completed");
 		expect(terminal).toEqual([
 			expect.objectContaining({
-				metricId: "brief-conformance-entries",
+				metricId: "brief-entries",
 				status: "ok",
 				reason: null,
 			}),
@@ -378,114 +352,11 @@ describe("brief.conformance@1 in the goal-metric service", () => {
 	});
 
 	it("records an unknown reading with its reason on the one terminal event", async () => {
-		const { service, events } = hub([], [{ as_of: ASOF, n: "0", bytes: "0", id: null }]);
-		const saved = await service.compute("brief-conformance-items", { requestKey: "k2" });
+		const { service, events } = hub([briefRow("brief-items", "items")], [{ as_of: ASOF, n: "0", bytes: "0", id: null }]);
+		const saved = await service.compute("brief-items", { requestKey: "k2" });
 		expect(saved).toMatchObject({ status: "unavailable", value: null, reason: "zero_denominator" });
 		expect(events.filter((e) => (e as { event: string }).event === "metric.compute.completed")).toEqual([
 			expect.objectContaining({ status: "unavailable", reason: "zero_denominator" }),
 		]);
-	});
-
-	describe("hub row beside a built-in", () => {
-		it("lets a hub row win in get, whatever its params", async () => {
-			const row = count("brief-conformance-items");
-			const { reader } = hub([row]);
-			const view = await reader.read("brief-conformance-items");
-			expect(view.definition.spec.calculatorId).toBe("work.count@1");
-			expect(view.definition.revision).toBe("2026-11-01T00:00:00.000Z");
-		});
-
-		it("never falls back to the built-in for a deprecated hub row, and logs it", async () => {
-			const { reader, events } = hub([count("brief-conformance-items", { status: "deprecated" })]);
-			await expect(reader.read("brief-conformance-items")).rejects.toMatchObject({
-				code: "metric_not_found",
-				status: 404,
-			});
-			expect(events).toContainEqual({ event: "metric.definition_invalid", metricId: "brief-conformance-items" });
-			// The other built-in is untouched.
-			expect((await reader.read("brief-conformance-entries")).definition.id).toBe("brief-conformance-entries");
-		});
-
-		it("never falls back to the built-in for an invalid or non-metric hub row", async () => {
-			const bad = count("brief-conformance-items", { metric_spec: '{"calculatorId":"nope"}' });
-			const plain = count("brief-conformance-entries", { metric_spec: null });
-			const { reader, events } = hub([bad, plain]);
-			for (const id of ["brief-conformance-items", "brief-conformance-entries"])
-				await expect(reader.read(id)).rejects.toMatchObject({ code: "metric_not_found" });
-			expect(events.map((e) => (e as { metricId: string }).metricId).sort()).toEqual([
-				"brief-conformance-entries",
-				"brief-conformance-items",
-			]);
-		});
-
-		it("keeps the old rule for ids that are not built-ins: a deprecated row is simply absent", async () => {
-			const { reader, events } = hub([count("other", { status: "deprecated" })]);
-			await expect(reader.read("other")).rejects.toMatchObject({ code: "metric_not_found" });
-			expect(events).toEqual([]);
-		});
-	});
-
-	describe("list merges one hub page with the built-ins by id", () => {
-		async function walk(service: ReturnType<typeof hub>["reader"], limit: number) {
-			const seen: string[] = [];
-			let after: string | undefined;
-			for (let page = 0; page < 20; page++) {
-				const r = await service.list(limit, after);
-				expect(r.items.length).toBeLessThanOrEqual(limit);
-				seen.push(...ids(r.items));
-				if (!r.nextCursor) return seen;
-				after = r.nextCursor;
-			}
-			throw new Error("paging did not end");
-		}
-
-		it.each([1, 2, 3, 50])("lists every id once, in id order, at page size %i", async (limit) => {
-			const { reader } = hub([count("a-count"), count("m-count"), count("z-count")]);
-			expect(await walk(reader, limit)).toEqual([
-				"a-count",
-				"brief-conformance-entries",
-				"brief-conformance-items",
-				"m-count",
-				"z-count",
-			]);
-		});
-
-		it("lists only the built-ins when the hub has no metric rows, and only those after the cursor", async () => {
-			const { reader } = hub([]);
-			expect(ids((await reader.list(50)).items)).toEqual(["brief-conformance-entries", "brief-conformance-items"]);
-			expect(ids((await reader.list(50, "brief-conformance-entries")).items)).toEqual(["brief-conformance-items"]);
-			expect((await reader.list(50, "brief-conformance-items")).items).toEqual([]);
-			const first = await reader.list(1);
-			expect(ids(first.items)).toEqual(["brief-conformance-entries"]);
-			expect(first.nextCursor).toBe("brief-conformance-entries");
-		});
-
-		it("lists a built-in only when no hub row of any status holds its id", async () => {
-			const hubRows = [
-				count("brief-conformance-items"),
-				count("brief-conformance-entries", { status: "deprecated" }),
-			];
-			const { reader } = hub(hubRows);
-			for (const limit of [1, 50]) {
-				const seen = await walk(reader, limit);
-				// The hub row of the items id is listed once; the deprecated entries row is not, and its built-in stays hidden.
-				expect(seen).toEqual(["brief-conformance-items"]);
-			}
-			const items = (await reader.list(50)).items;
-			expect(items[0]?.definition.spec.calculatorId).toBe("work.count@1");
-		});
-
-		it("hides a built-in whose hub row is invalid, and logs the invalid row", async () => {
-			const { reader, events } = hub([count("brief-conformance-entries", { metric_spec: '{"calculatorId":"nope"}' })]);
-			expect(await walk(reader, 50)).toEqual(["brief-conformance-items"]);
-			expect(events).toContainEqual({ event: "metric.definition_invalid", metricId: "brief-conformance-entries" });
-		});
-
-		it("never advances a page past a hub row the page left out", async () => {
-			// Page of 2 with the built-ins landing between hub rows: nothing skipped or repeated.
-			const { reader } = hub([count("brief-a"), count("brief-conformance-f"), count("brief-z")]);
-			const seen = await walk(reader, 2);
-			expect(seen).toEqual(["brief-a", "brief-conformance-entries", "brief-conformance-f", "brief-conformance-items", "brief-z"]);
-		});
 	});
 });

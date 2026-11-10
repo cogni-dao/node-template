@@ -424,12 +424,10 @@ describe("work.convergence@1 over Dolt main history", () => {
 		});
 		const page = await service.list(1);
 		expect(page.items.map((v) => v.definition.id)).toEqual(["b-good"]);
-		// The package's built-in definitions follow the hub rows on later pages.
-		expect(page.nextCursor).toBe("b-good");
+		// The package serves no definition: nothing follows the hub rows.
+		expect(page.nextCursor).toBeNull();
 		const next = await service.list(1, "b-good");
-		expect(next.items.map((v) => v.definition.id)).toEqual([
-			"brief-conformance-entries",
-		]);
+		expect(next.items).toEqual([]);
 		expect(events).toContainEqual({
 			event: "metric.definition_invalid",
 			metricId: "a-bad",
