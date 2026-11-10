@@ -68,6 +68,36 @@ describe("authorizeCaller (the route door)", () => {
   });
 });
 
+// bug.0019: the door answers by scope, never by who created the row. The caller id below is deliberately a principal
+// that created nothing (a re-registered agent), so these prove authority is the role row, not creator equality.
+describe("creator is not a gate (bug.0019)", () => {
+  const append = ROUTE_ONLY_CAPABILITIES["knowledge.contribute"]!.requires;
+  const patch = node();
+  const cases: Array<[string, ToolRequires, string]> = [
+    ["work.items.patch", patch, "work_item:transition"],
+    ["knowledge.contributions.commits.append", append, "knowledge:contribute"],
+  ];
+  for (const [route, requires, scope] of cases) {
+    it(`${route}: a new principal with the ${scope} role passes; without it, policy_denied; revoked, denied again`, async () => {
+      const store = memoryStore({ roles: [{ principal: "new-principal", scope }] });
+      expect(await authorizeCaller(store, denyAdmin, { userId: "new-principal", via: "bearer", requires })).toMatchObject({ decision: "allow", basis: "role" });
+      expect(await authorizeCaller(store, denyAdmin, { userId: "other-principal", via: "bearer", requires })).toMatchObject({ decision: "deny", code: "policy_denied", reason: "no_role" });
+      store.roles[0]!.revoked = true;
+      expect(await authorizeCaller(store, denyAdmin, { userId: "new-principal", via: "bearer", requires })).toMatchObject({ decision: "deny", code: "policy_denied" });
+    });
+    it(`${route}: a signed-in human (including a node admin) passes without a role row`, async () => {
+      const store = memoryStore();
+      expect(await authorizeCaller(store, denyAdmin, { userId: "h", via: "session", requires })).toMatchObject({ decision: "allow" });
+      expect(await authorizeCaller(store, allowAdmin, { userId: "admin", via: "session", requires })).toMatchObject({ decision: "allow" });
+    });
+  }
+  it("the append route is declared on the knowledge.contribute door and is no longer deferred", async () => {
+    const { DEFERRED_WRITE_ROUTES } = await import("../src");
+    expect(ROUTE_ONLY_CAPABILITIES["knowledge.contribute"]!.routes).toContain("knowledge.contributions.commits.append");
+    expect("knowledge.contributions.commits.append" in DEFERRED_WRITE_ROUTES).toBe(false);
+  });
+});
+
 describe("DENIAL_IS_TERMINAL", () => {
   const tools = [
     { id: "read_tool", effect: "read_only" },

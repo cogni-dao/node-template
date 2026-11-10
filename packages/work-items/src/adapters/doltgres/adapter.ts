@@ -375,49 +375,6 @@ function escapeValue(value: unknown): string {
 }
 
 /**
- * Creator-binding constrains rows that HAVE a recorded creator. A row whose
- * `created_by_principal_id` is NULL predates the column and is unowned, so every
- * authenticated principal may mutate it — which is exactly the behaviour those
- * rows had before the column existed.
- *
- * Getting this wrong is a silent fleet-wide lockout, not a 403 on one row:
- * `String(null) !== principal` is always true, so the moment a node applies the
- * lease-column migration its entire pre-existing corpus becomes immutable while
- * reads keep returning 200. Observed on operator production 2026-10-08 — every
- * item created before the migration rejected every PATCH, every newly created
- * item was fine, so the failure looked like an auth problem rather than a
- * migration one.
- */
-/**
- * Does `creator` (a `created_by_principal_id` rendered as a string, `""` for
- * NULL) permit `principal` to mutate the row?
- *
- * This is the SAME rule `mayMutate` applies to the row it reads, and the two
- * must agree or a write is admitted and then refused. An UNADOPTED row — one
- * created before `created_by_principal_id` existed, so NULL — is mutable by
- * anyone: that is deliberate, because the alternative is that every work item
- * predating the column is frozen forever with no path to adopt it.
- *
- * bug.5358: the transition matrix did NOT share this rule. It demanded
- * `creator === principal` outright, so a NULL-creator row passed `mayMutate`,
- * had its UPDATE committed to the operation branch, then failed its own
- * transition proof — a 500, every time, with the branch left behind as
- * unprovable residue for the next sweep to quarantine. Measured on operator
- * production: every item created on or before 2026-10-08 returned 500 on
- * PATCH while every item created after returned 200, because only the latter
- * carry a creator.
- */
-function creatorPermits(creator: string, principal: string): boolean {
-  return creator === "" || creator === principal;
-}
-
-function mayMutate(row: Record<string, unknown>, principal: string): boolean {
-  const creator = row.created_by_principal_id;
-  if (creator === null || creator === undefined || creator === "") return true;
-  return String(creator) === principal;
-}
-
-/**
  * `expectedRevision` is optional: omitted means an unconditioned patch, exactly
  * as before. When present it must be the row's integer version.
  */
@@ -696,27 +653,6 @@ const HISTORY_IGNORED_COLUMNS: ReadonlySet<string> = new Set([
 type RowSnapshot = Record<PersistedColumn, unknown>;
 
 const PATCH_DB_COLUMNS = new Set<string>(Object.values(PATCH_COLUMNS));
-/**
- * COLLABORATOR_TRIAGE (story.5096): the only fields any authenticated principal
- * may patch on an item it did not create. A `set` naming ANY other field stays
- * creator-bound as a whole. `scores` (story.5111) is ranking input, written by
- * the prioritizer on items it did not create, so it is a triage field too.
- */
-const TRIAGE_PATCH_KEYS = new Set<keyof WorkItemsPatchSet>([
-  "priority",
-  "rank",
-  "labels",
-  "scores",
-]);
-/** The full row-diff surface a non-creator patch may prove. */
-const TRIAGE_COLUMNS = new Set<string>([
-  "priority",
-  "rank",
-  "labels",
-  "scores",
-  "revision",
-  "updated_at",
-]);
 const IMMUTABLE_COLUMNS = new Set<string>([
   "id",
   "type",
@@ -930,9 +866,7 @@ function validateTransitionMatrix(
         // `created_by_principal_id` is immutable, so the equality below also
         // forbids a patch from quietly adopting an unadopted row.
         creatorBefore === creatorAfter &&
-        (creatorPermits(creatorBefore, proof.principal) ||
-          (proof.principal.length > 0 &&
-            onlyAllowedChanges(changed, TRIAGE_COLUMNS))) &&
+        proof.principal.length > 0 &&
         (proof.expectedRevision === undefined ||
           beforeRevision === proof.expectedRevision) &&
         [...IMMUTABLE_COLUMNS].every(
@@ -954,11 +888,7 @@ function validateTransitionMatrix(
       );
     }
     case "delete":
-      return (
-        String(before.id) === itemId &&
-        creatorPermits(creatorBefore, proof.principal) &&
-        isNullSnapshot(after)
-      );
+      return String(before.id) === itemId && isNullSnapshot(after);
     case "claim": {
       const beforeExpiry = asEpoch(before.claim_expires_at);
       const afterClaimedAt = asEpoch(after.claimed_at);
@@ -3201,6 +3131,15 @@ export class DoltgresWorkItemAdapter
     throw new WorkItemAlreadyExistsError(lastCollisionId);
   }
 
+  /**
+   * AUTHORITY_IS_NOT_KIND (bug.0019): `created_by_principal_id` is attribution
+   * data, never a gate. Who may patch is decided once, before the store is
+   * reached, by the one `authorize()` check every door runs (scope
+   * `work_item:transition` on `work.items.patch` and on the guarded tool). A
+   * re-registered agent is a NEW principal for the SAME actor; creator-equality
+   * gating turned that churn into a data lockout (live, 2026-11-10). The column
+   * stays immutable (`IMMUTABLE_COLUMNS`) so attribution is kept.
+   */
   async patch(
     input: WorkItemsPatchInput,
     principalId: string
@@ -3228,10 +3167,6 @@ export class DoltgresWorkItemAdapter
         setKeys.push(key);
       }
     }
-    const triageOnly =
-      setKeys.length > 0 && setKeys.every((key) => TRIAGE_PATCH_KEYS.has(key));
-    const permits = (row: Record<string, unknown>) =>
-      triageOnly || mayMutate(row, principal);
     const revisionConflict = (row: Record<string, unknown>) => {
       const currentRevision = Number(row.revision ?? 0);
       return expectedRevision !== undefined &&
@@ -3247,9 +3182,6 @@ export class DoltgresWorkItemAdapter
       return this.readOnCleanMain(async (conn) => {
         const current = await this.getWith(conn, input.id);
         if (!current) throw new Error(`Work item not found: ${id}`);
-        if (!mayMutate(current, principal)) {
-          throw new WorkItemAuthorizationError(id);
-        }
         const conflict = revisionConflict(current);
         if (conflict) throw conflict;
         return rowToWorkItem(current);
@@ -3257,11 +3189,6 @@ export class DoltgresWorkItemAdapter
     }
 
     const where = [`id = ${escapeValue(id)}`];
-    if (!triageOnly) {
-      where.push(
-        `(created_by_principal_id IS NULL OR created_by_principal_id = ${escapeValue(principal)})`
-      );
-    }
     if (expectedRevision !== undefined) {
       where.push(`revision = ${escapeValue(expectedRevision)}`);
     }
@@ -3279,10 +3206,9 @@ export class DoltgresWorkItemAdapter
           // revision. Returned, not thrown, so `shouldCommit` drops the empty
           // op branch with nothing committed.
           const current = await this.getWith(conn, input.id);
-          const conflict =
-            current && permits(current) ? revisionConflict(current) : undefined;
+          const conflict = current ? revisionConflict(current) : undefined;
           if (conflict) return conflict;
-          await this.throwMissingOrUnauthorized(conn, input.id);
+          await this.throwMissingOrUnmatched(conn, input.id);
         }
         proof.afterRow = row as Record<string, unknown>;
         return rowToWorkItem(row as Record<string, unknown>);
@@ -3301,9 +3227,6 @@ export class DoltgresWorkItemAdapter
         preflight: async (conn, proof) => {
           const current = await this.getWith(conn, input.id);
           if (!current) throw new Error(`Work item not found: ${id}`);
-          if (!permits(current)) {
-            throw new WorkItemAuthorizationError(id);
-          }
           const conflict = revisionConflict(current);
           if (conflict) throw conflict;
           proof.beforeRow = current;
@@ -3320,12 +3243,17 @@ export class DoltgresWorkItemAdapter
     throw new WorkItemDeletionRetiredError();
   }
 
-  private async throwMissingOrUnauthorized(
+  /**
+   * The UPDATE returned no row and no revision conflict explains it. The row is
+   * either gone or the statement matched nothing; neither is an authorization
+   * outcome (authorization is decided at the door, before the store).
+   */
+  private async throwMissingOrUnmatched(
     conn: WorkItemConnection,
     id: WorkItemId
   ): Promise<never> {
     if (await this.getWith(conn, id)) {
-      throw new WorkItemAuthorizationError(id as string);
+      throw new Error(`Work item patch matched no row: ${id as string}`);
     }
     throw new Error(`Work item not found: ${id as string}`);
   }

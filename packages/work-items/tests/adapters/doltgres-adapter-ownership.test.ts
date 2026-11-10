@@ -117,7 +117,7 @@ describe("DoltgresWorkItemAdapter content ownership", () => {
     expect(insert).toContain("'principal-1'");
   });
 
-  it("owner-scopes patch and increments revision", async () => {
+  it("does not scope patch by creator, and increments revision (bug.0019)", async () => {
     const { adapter, queries } = adapterWithQueries();
     await adapter.patch(
       { id: toWorkItemId(row.id), set: { title: "renamed" } },
@@ -128,25 +128,39 @@ describe("DoltgresWorkItemAdapter content ownership", () => {
       query.startsWith("UPDATE work_items SET title")
     );
     expect(update).toContain("revision = revision + 1");
-    expect(update).toContain("created_by_principal_id = 'principal-1'");
+    expect(update).not.toContain("created_by_principal_id");
   });
 
-  it("rejects an unauthorized patch before branch creation and DML", async () => {
+  it("lets a principal that did not create the row patch it, keeping the creator (bug.0019)", async () => {
+    // A re-registered agent is a new principal for the same actor. The door
+    // (authorize(), scope work_item:transition) decides; the adapter must not
+    // re-gate on creator equality.
     const { adapter, queries } = adapterWithQueries();
 
     await expect(
       adapter.patch(
-        { id: toWorkItemId(row.id), set: { title: "not yours" } },
+        { id: toWorkItemId(row.id), set: { title: "renamed by new principal" } },
         "principal-2"
       )
-    ).rejects.toMatchObject({ name: "WorkItemAuthorizationError" });
+    ).resolves.toMatchObject({ id: row.id });
 
+    const update = queries.find((query) =>
+      query.startsWith("UPDATE work_items SET title")
+    );
+    expect(update).toBeDefined();
+    expect(update).not.toContain("created_by_principal_id");
+    expect(update).not.toContain("principal-2");
+  });
+
+  it("still refuses a blank principal before any write", async () => {
+    const { adapter, queries } = adapterWithQueries();
+
+    await expect(
+      adapter.patch({ id: toWorkItemId(row.id), set: { title: "x" } }, "  ")
+    ).rejects.toMatchObject({ name: "WorkItemAuthorizationError" });
     expect(queries.some((query) => query.includes("dolt_checkout('-b'"))).toBe(
       false
     );
-    expect(
-      queries.some((query) => query.startsWith("UPDATE work_items SET title"))
-    ).toBe(false);
   });
 });
 
@@ -177,14 +191,12 @@ describe("unadopted rows (NULL creator) stay mutable", () => {
     ).rejects.toMatchObject({ name: "WorkItemDeletionRetiredError" });
   });
 
-  it("still refuses a row owned by someone else", async () => {
-    // Non-vacuous: the exemption is for NULL only, not for any mismatch.
-    const { adapter } = adapterWithQueries();
-    await expect(
-      adapter.patch(
-        { id: toWorkItemId(row.id), set: { title: "stolen" } },
-        "principal-2"
-      )
-    ).rejects.toThrow();
+  it("an unadopted row stays unadopted: a patch never adopts it", async () => {
+    const { adapter } = adapterWithUnadoptedRow();
+    const patched = await adapter.patch(
+      { id: toWorkItemId(row.id), set: { title: "renamed" } },
+      "principal-2"
+    );
+    expect(patched.title).toBe("renamed");
   });
 });

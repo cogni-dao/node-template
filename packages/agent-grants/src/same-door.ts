@@ -63,7 +63,10 @@ export const ROUTE_ONLY_CAPABILITIES: Readonly<
       label: "Propose changes to the knowledge base",
       description: "Suggest new or changed notes. An admin still decides what is kept.",
     },
-    routes: ["knowledge.contributions.create"],
+    routes: [
+      "knowledge.contributions.create",
+      "knowledge.contributions.commits.append",
+    ],
   },
 };
 
@@ -91,7 +94,6 @@ export const DEFERRED_WRITE_ROUTES: Readonly<Record<string, string>> = {
   "work.items.claim": "coordination, not work_item:transition; task.5465",
   "work.items.release": "coordination, not work_item:transition; task.5465",
   "work.items.heartbeat": "coordination, not work_item:transition; task.5465",
-  "knowledge.contributions.commits.append": "appends to a contribution its author already opened; contribution lifecycle scopes are the C2 design question (task.5465)",
   "knowledge.contributions.close": "contribution lifecycle; C2 design question (task.5465)",
   "knowledge.contributions.merge": "already admin-session gated in the service; C2 design question (task.5465)",
   "knowledge.domains.create": "domain registry writes; C2 design question (task.5465)",

@@ -5,7 +5,7 @@
  * Module: `@cogni/knowledge-store/service/contribution-service`
  * Purpose: Framework-agnostic typed handlers for the knowledge contribution flow.
  * Scope: Pure business logic — quotas, idempotency lookup, role gating, confidence cap. Does not contain HTTP, env, or lifecycle code; per-node `route.ts` files adapt these to Next.
- * Invariants: KNOWLEDGE_MERGE_REQUIRES_ADMIN_SESSION; CONTRIBUTION_OWNER_CAN_APPEND; CONTRIBUTION_OWNER_CAN_CLOSE.
+ * Invariants: KNOWLEDGE_MERGE_REQUIRES_ADMIN_SESSION; APPEND_AUTHORITY_IS_THE_DOOR (bug.0019: append is gated by authorize() at the route, never by author equality); CONTRIBUTION_OWNER_CAN_CLOSE.
  * Side-effects: none (delegates I/O to KnowledgeContributionPort)
  * Links: docs/design/knowledge-contribution-api.md
  * @public
@@ -305,14 +305,11 @@ export function createContributionService(
           `contribution ${contributionId} is ${record.state}`
         );
       }
-      const ownsContribution =
-        record.principalId === principal.id &&
-        record.principalKind === principal.kind;
-      if (!ownsContribution) {
-        throw new ContributionForbiddenError(
-          "append requires contribution owner"
-        );
-      }
+      // AUTHORITY_IS_NOT_KIND (bug.0019): who may append is decided at the route
+      // door by the one `authorize()` check (scope `knowledge:contribute`), not by
+      // comparing the caller to the contribution's author. The author stays as
+      // attribution on the record; a re-registered agent is a new principal for
+      // the same actor and must not lose its open inboxes.
       const gated = await gateEdits(body.edits);
       // gateEdits returns undefined only when input was undefined/empty; for
       // appendCommit the schema requires at least 1 edit, so non-null assert.

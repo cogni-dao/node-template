@@ -10,7 +10,7 @@
  *   - PATCH_NULLABLE_CLEAR: projectId:null emits `project_id = NULL`.
  *   - PATCH_PRESERVES_EXISTING: title still emits `title = '...'`.
  *   - PATCH_CAS (task.5284): expectedRevision is in the UPDATE predicate; a stale one throws WorkItemRevisionConflictError with nothing committed.
- *   - COLLABORATOR_TRIAGE (task.5284): a non-creator may patch only priority/rank/labels/scores; any other field keeps the whole patch creator-bound.
+ *   - AUTHORITY_IS_NOT_KIND (bug.0019): the adapter never gates patch on creator equality; a principal that did not create the row may patch any field (the door's authorize() decided), and the creator column stays immutable.
  *   - SCORES_JSONB_ORDER (story.5111): a scores patch is proven even when jsonb reorders its keys.
  *   - SCORES_BOUNDS_IN_PACKAGE (story.5111): create/patch run parseWorkItemScores; invalid scores never reach SQL.
  * Side-effects: none
@@ -150,37 +150,29 @@ describe("DoltgresWorkItemAdapter.patch — bug.5005 allowlist", () => {
   });
 });
 
-// REGRESSION, operator production 2026-10-08: creator-binding locked out every
-// row that predated the lease-column migration. `String(null) !== principal` is
-// always true, so a node's entire existing corpus became immutable the moment it
-// applied the migration — while reads kept returning 200, which made it read as
-// an auth fault rather than a migration one. An unowned row must stay mutable:
-// that is the behaviour it had before the column existed.
-describe("unowned rows stay mutable", () => {
-  it("treats a NULL created_by_principal_id as unowned, not as someone else's", async () => {
-    const legacy = { id: "task.1", created_by_principal_id: null };
-    const owned = { id: "task.2", created_by_principal_id: "agent-a" };
-    // mayMutate is module-private; assert through the observable SQL contract the
-    // adapter builds, which is what actually gates the UPDATE/DELETE.
+// REGRESSION, operator production 2026-10-08, and bug.0019: creator-binding
+// locked out rows (first every row that predated the lease-column migration,
+// then every row filed under a retired principal). The creator column is
+// attribution only; no UPDATE predicate may mention it.
+describe("patch is never scoped by creator", () => {
+  it("emits no created_by_principal_id predicate for any patched field", async () => {
     const source = await import("node:fs").then((fs) =>
       fs.readFileSync(
         new URL("../../src/adapters/doltgres/adapter.ts", import.meta.url),
         "utf8"
       )
     );
-    expect(source).toContain(
+    expect(source).not.toContain(
       "created_by_principal_id IS NULL OR created_by_principal_id ="
     );
-    expect(source).not.toMatch(
-      /AND created_by_principal_id = \$\{escapeValue\(principal\)\}/
-    );
-    expect(legacy.created_by_principal_id).toBeNull();
-    expect(owned.created_by_principal_id).toBe("agent-a");
+    expect(source).not.toMatch(/created_by_principal_id = \$\{escapeValue/);
+    expect(source).not.toContain("mayMutate");
+    expect(source).not.toContain("creatorPermits");
   });
 });
 
 // task.5284 (story.5096): `patch` honors `expectedRevision` as a real
-// compare-and-set, and a non-creator may patch the triage fields only.
+// compare-and-set, and any principal the door admitted may patch (bug.0019).
 const CAS_ID = "task.0001";
 const CREATOR = "principal-creator";
 const COLLABORATOR = "system-prioritizer";
@@ -225,8 +217,8 @@ function asJsonb(value: unknown): unknown {
 
 /**
  * One in-memory row behind the stateful Dolt fake. The UPDATE arm honours the
- * statement's own `revision = N` and creator predicates, so the CAS and the
- * authz are exercised as SQL, not assumed. `concurrentBumpBeforeUpdate` models
+ * statement's own `revision = N` predicate, so the CAS is exercised as SQL, not
+ * assumed. It deliberately has no creator arm: a creator predicate must fail loudly. `concurrentBumpBeforeUpdate` models
  * a writer outside this adapter's lock landing between preflight and UPDATE.
  */
 function casHarness(options: { concurrentBumpBeforeUpdate?: boolean } = {}) {
@@ -248,9 +240,6 @@ function casHarness(options: { concurrentBumpBeforeUpdate?: boolean } = {}) {
         expected !== undefined &&
         Number(current.revision) !== Number(expected)
       )
-        return [];
-      const owner = /created_by_principal_id = '([^']+)'\)/.exec(query)?.[1];
-      if (owner !== undefined && current.created_by_principal_id !== owner)
         return [];
       const next: Record<string, unknown> = {
         ...current,
@@ -307,7 +296,7 @@ describe("DoltgresWorkItemAdapter.patch — expectedRevision CAS (task.5284)", (
     expect(result).toMatchObject({ id: CAS_ID, title: "cas", revision: 4 });
     // The CAS is in the statement itself, not only in the preflight.
     expect(updateOf(queries)).toContain(
-      `WHERE id = '${CAS_ID}' AND (created_by_principal_id IS NULL OR created_by_principal_id = '${CREATOR}') AND revision = 3 RETURNING`
+      `WHERE id = '${CAS_ID}' AND revision = 3 RETURNING`
     );
     expect(queries).toContain(
       `SELECT dolt_commit('-m', 'work-items: patch ${CAS_ID} by actor:${CREATOR}')`
@@ -366,8 +355,9 @@ describe("DoltgresWorkItemAdapter.patch — expectedRevision CAS (task.5284)", (
     ).resolves.toMatchObject({ title: "plain", revision: 4 });
     expect(updateOf(queries)).not.toContain("AND revision =");
     expect(updateOf(queries)).toContain(
-      `created_by_principal_id = '${CREATOR}'`
+      `WHERE id = '${CAS_ID}' RETURNING`
     );
+    expect(updateOf(queries)).not.toContain("created_by_principal_id");
   });
 
   it("rejects a malformed expectedRevision without touching the store", async () => {
@@ -387,7 +377,7 @@ describe("DoltgresWorkItemAdapter.patch — expectedRevision CAS (task.5284)", (
   });
 });
 
-describe("DoltgresWorkItemAdapter.patch — collaborator triage fields (task.5284)", () => {
+describe("DoltgresWorkItemAdapter.patch — non-creator principals (task.5284, bug.0019)", () => {
   it("lets a non-creator set priority, rank and labels", async () => {
     const { adapter, queries } = casHarness();
 
@@ -413,21 +403,20 @@ describe("DoltgresWorkItemAdapter.patch — collaborator triage fields (task.528
     );
   });
 
-  it("keeps the whole patch creator-bound when it names any other field", async () => {
+  it("lets a non-creator patch a non-triage field too, leaving the creator untouched (bug.0019)", async () => {
     const { adapter, queries, store } = casHarness();
 
     await expect(
       adapter.patch(
-        { id: toWorkItemId(CAS_ID), set: { priority: 0, title: "not yours" } },
+        { id: toWorkItemId(CAS_ID), set: { priority: 0, title: "now yours" } },
         COLLABORATOR
       )
-    ).rejects.toBeInstanceOf(WorkItemAuthorizationError);
-    expect(branchCreated(queries)).toBe(false);
-    expect(committed(queries)).toBe(false);
+    ).resolves.toMatchObject({ priority: 0, title: "now yours", revision: 4 });
+    expect(updateOf(queries)).not.toContain("created_by_principal_id");
+    expect(committed(queries)).toBe(true);
     expect(store.get(CAS_ID)).toMatchObject({
-      priority: 2,
-      title: "triage me",
-      revision: 3,
+      title: "now yours",
+      created_by_principal_id: CREATOR,
     });
   });
 
@@ -460,7 +449,7 @@ describe("DoltgresWorkItemAdapter.patch — collaborator triage fields (task.528
     ]);
   });
 
-  it("still refuses a blank principal for triage fields", async () => {
+  it("still refuses a blank principal", async () => {
     const { adapter, queries } = casHarness();
 
     await expect(
