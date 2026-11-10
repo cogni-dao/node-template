@@ -44,7 +44,7 @@ function isAppRoute(pathname: string): boolean {
 	);
 }
 
-const AGENT_BEARER_PREFIX = "Bearer cogni_ag_sk_v1_";
+const AGENT_BEARER_PREFIXES = ["Bearer cogni_ag_sk_v1_", "Bearer cogni_ag_sk_v2_"];
 
 function isPublicApiRoute(pathname: string): boolean {
 	// Agent register is the one bootstrap seam left open: register → key →
@@ -72,8 +72,10 @@ function isAgentApiRoute(pathname: string): boolean {
 }
 
 function hasAgentBearer(req: NextRequest): boolean {
+	const authorization = req.headers.get("authorization");
 	return (
-		req.headers.get("authorization")?.startsWith(AGENT_BEARER_PREFIX) ?? false
+		authorization !== null &&
+		AGENT_BEARER_PREFIXES.some((prefix) => authorization.startsWith(prefix))
 	);
 }
 

@@ -16,12 +16,14 @@
  * @public
  */
 
+import { CredentialStoreUnavailableError } from "@cogni/agent-grants/credentials";
 import type { SessionUser } from "@cogni/node-shared";
 import { type NextRequest, NextResponse } from "next/server";
 import type { Container } from "@/bootstrap/container";
 import { withRootSpan } from "@/bootstrap/otel";
 import {
   createRequestContext,
+  EVENT_NAMES,
   httpRequestDurationMs,
   httpRequestsTotal,
   logRequestEnd,
@@ -165,11 +167,23 @@ export function wrapRouteHandlerWithLogging<TContext = unknown>(
       );
     }
 
-    // Fetch session based on auth mode
-    const sessionUser =
-      options.auth && options.auth.mode !== "none"
-        ? await options.auth.getSessionUser()
-        : null;
+    // Fetch session based on auth mode. A v2 key whose store cannot answer is 503, never a false 401 (STORE_OUTAGE_IS_NOT_401).
+    let sessionUser: SessionUser | null = null;
+    if (options.auth && options.auth.mode !== "none") {
+      try {
+        sessionUser = await options.auth.getSessionUser();
+      } catch (error) {
+        if (!(error instanceof CredentialStoreUnavailableError)) throw error;
+        container.log.warn(
+          { event: EVENT_NAMES.AGENT_CREDENTIAL_STORE_UNAVAILABLE, routeId: options.routeId },
+          EVENT_NAMES.AGENT_CREDENTIAL_STORE_UNAVAILABLE
+        );
+        return NextResponse.json(
+          { error: "authz_unavailable" },
+          { status: 503, headers: { "cache-control": "no-store", "retry-after": "5" } }
+        );
+      }
+    }
 
     // Wrap entire request in OTel root span for distributed tracing
     // Per AI_SETUP_SPEC.md: root span bound to context via context.with()

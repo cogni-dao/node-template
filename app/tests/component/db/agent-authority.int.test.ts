@@ -82,7 +82,7 @@ describe("agent authority (real Postgres)", () => {
       ]);
     });
 
-    it("seeded users hold no wallet, no binding and no credential table exists", async () => {
+    it("seeded users hold no wallet, no binding and no credential", async () => {
       const users = await service`
         SELECT id, wallet_address FROM users WHERE id IN (${NODE_AI_PRINCIPAL_USER_ID}, ${PRIORITIZER_PRINCIPAL_USER_ID})`;
       expect(users).toHaveLength(2);
@@ -90,9 +90,10 @@ describe("agent authority (real Postgres)", () => {
       const bindings = await service`
         SELECT 1 FROM user_bindings WHERE user_id IN (${NODE_AI_PRINCIPAL_USER_ID}, ${PRIORITIZER_PRINCIPAL_USER_ID})`;
       expect(bindings).toHaveLength(0);
-      const tables = await service`
-        SELECT 1 FROM information_schema.tables WHERE table_name = 'agent_credentials'`;
-      expect(tables).toHaveLength(0);
+      // CREDENTIALS_ONLY_ON_AGENT_PRINCIPALS: agent_credentials exists (0039), and an internal principal holds no key.
+      const keys = await service`
+        SELECT 1 FROM agent_credentials WHERE user_id IN (${NODE_AI_PRINCIPAL_USER_ID}, ${PRIORITIZER_PRINCIPAL_USER_ID})`;
+      expect(keys).toHaveLength(0);
     });
 
     it("seeds no role rows", async () => {

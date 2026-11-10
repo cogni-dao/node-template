@@ -47,11 +47,12 @@ function makeRequest(path: string): NextRequest {
 	return new NextRequest(new URL(path, "http://localhost:3000"));
 }
 
-function makeAgentRequest(path: string): NextRequest {
+function makeAgentRequest(
+	path: string,
+	authorization = "Bearer cogni_ag_sk_v1_test.payload.signature",
+): NextRequest {
 	return new NextRequest(new URL(path, "http://localhost:3000"), {
-		headers: {
-			authorization: "Bearer cogni_ag_sk_v1_test.payload.signature",
-		},
+		headers: { authorization },
 	});
 }
 
@@ -207,6 +208,21 @@ describe("proxy — API route protection", () => {
 
 		expect(res.status).toBe(200);
 		expect(mockGetToken).not.toHaveBeenCalled();
+	});
+
+	it("allows a v2 agent bearer through the perimeter, and rejects an unknown bearer prefix (task.0070)", async () => {
+		mockGetToken.mockResolvedValue(null);
+
+		const v2 = await proxy(
+			makeAgentRequest("/api/v1/agent/credentials/rotate", "Bearer cogni_ag_sk_v2_abc"),
+		);
+		expect(v2.status).toBe(200);
+		expect(mockGetToken).not.toHaveBeenCalled();
+
+		const v3 = await proxy(
+			makeAgentRequest("/api/v1/agent/credentials/rotate", "Bearer cogni_ag_sk_v3_abc"),
+		);
+		expect(v3.status).toBe(401);
 	});
 
 	it("rejects unauthenticated on /api/v1/*", async () => {

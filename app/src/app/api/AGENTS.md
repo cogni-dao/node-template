@@ -71,6 +71,8 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
   - `/api/v1/work/items/[id]/coordination` [GET] - read lease and next-action coordination state
   - `/api/v1/knowledge/index` [GET] - content-free retrieval-trigger projection with optional `useWhen` substring filter
   - `/api/v1/agent/register` [POST] - unauthenticated machine actor registration (returns Bearer API key)
+  - `/api/v1/agent/credentials/renew-v1` [POST] - a valid v1 key mints a fresh v1 key for the same user (task.0069)
+  - `/api/v1/agent/credentials/{upgrade,rotate,confirm,revoke}` [POST] - revocable hashed v2 keys (`cogni_ag_sk_v2_`, task.0070): a v1 key upgrades to a PENDING v2 key for the same user id; rotate mints a pending successor (a repeat supersedes); confirm (called with the pending key) activates it and revokes the predecessor in one transaction, idempotent; revoke ends one key and its pending successor. Logic lives in `@cogni-dao/agent-grants/credentials`; routes are thin. A v2 store outage is 503 `authz_unavailable`, never 401
   - `/api/v1/agent/runs` [GET] - machine-authenticated run list
   - `/api/v1/agent/runs/[runId]/stream` [GET] - machine-authenticated run stream SSE
   - `/api/v1/ai/runs/[runId]/ui-stream` [GET] - session-authenticated AI SDK chat replay stream
@@ -109,4 +111,4 @@ curl -X POST http://localhost:3000/api/v1/chat/completions \
 ## Notes
 
 - v1 API prefix for versioned product routes
-- `v1/agent-access/roles` is a HUMAN-plane route (session only): `GET` returns `canManage`, `POST`/`DELETE` allow or remove a node AI permission for a DAO admin. Every human route calls `refuseNonSession()` (`_lib/auth/human-plane.ts`) first: any `Authorization` header gets 403 `human_session_required`. A non-`Bearer cogni_ag_sk_v1_` header with no session cookie gets 401 from `proxy.ts` before the route runs; no authority is granted either way.
+- `v1/agent-access/roles` is a HUMAN-plane route (session only): `GET` returns `canManage`, `POST`/`DELETE` allow or remove a node AI permission for a DAO admin. Every human route calls `refuseNonSession()` (`_lib/auth/human-plane.ts`) first: any `Authorization` header gets 403 `human_session_required`. A header that is not a `Bearer cogni_ag_sk_v1_` or `Bearer cogni_ag_sk_v2_` bearer, with no session cookie, gets 401 from `proxy.ts` before the route runs; no authority is granted either way.
