@@ -49,6 +49,24 @@ function citationHref(id: string): string {
 		: `/knowledge/${encodeURIComponent(id)}`;
 }
 
+/**
+ * A modified row whose only change is `confidencePct`. Cite edits recompute the
+ * cited entry's confidence, so these rows carry no authored edit.
+ */
+function confidenceOnlyChange(
+	d: ContributionDiffEntry,
+): { from: unknown; to: unknown } | null {
+	if (d.changeType !== "modified" || !d.before || !d.after) return null;
+	const { confidencePct: from, ...before } = d.before;
+	const { confidencePct: to, ...after } = d.after;
+	if (from === to) return null;
+	const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+	for (const key of keys)
+		if (JSON.stringify(before[key]) !== JSON.stringify(after[key]))
+			return null;
+	return { from, to };
+}
+
 export function ContributionDiff({
 	contributionId,
 	onLoaded,
@@ -105,14 +123,15 @@ export function ContributionDiff({
 			<p className="text-muted-foreground text-xs">No changes detected.</p>
 		);
 
+	const recomputed = diff.flatMap((d) => {
+		const change = confidenceOnlyChange(d);
+		return change ? [{ rowId: d.rowId, ...change }] : [];
+	});
+	const edited = diff.filter((d) => !confidenceOnlyChange(d));
+
 	return (
 		<div className="flex flex-col gap-2">
-			<ContributionCitationDiff
-				citations={citations}
-				hrefFor={citationHref}
-				LinkComponent={Link}
-			/>
-			{diff.map((d) => {
+			{edited.map((d) => {
 				const row = (d.after ?? d.before) as {
 					id?: string;
 					title?: string;
@@ -202,6 +221,40 @@ export function ContributionDiff({
 					</div>
 				);
 			})}
+			<ContributionCitationDiff
+				citations={citations}
+				hrefFor={citationHref}
+				LinkComponent={Link}
+			/>
+			{recomputed.length > 0 && (
+				<section
+					aria-label="Confidence recomputed"
+					className="flex flex-col gap-1 rounded-md border border-border/50 bg-muted/30 px-3 py-2"
+				>
+					<span className="font-medium text-muted-foreground text-xs uppercase tracking-wider">
+						Confidence recomputed ({recomputed.length})
+					</span>
+					<p className="text-muted-foreground text-xs">
+						Link changes moved these entries&apos; confidence. Their content is
+						unchanged.
+					</p>
+					<ul className="flex flex-col">
+						{recomputed.map((r) => (
+							<li key={r.rowId}>
+								<Link
+									href={citationHref(r.rowId)}
+									className="-mx-1 flex min-h-6 items-center gap-2 rounded-sm px-1 text-xs outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+								>
+									<span className="min-w-0 break-all font-mono">{r.rowId}</span>
+									<span className="shrink-0 text-muted-foreground tabular-nums">
+										{String(r.from ?? "—")}% → {String(r.to ?? "—")}%
+									</span>
+								</Link>
+							</li>
+						))}
+					</ul>
+				</section>
+			)}
 		</div>
 	);
 }

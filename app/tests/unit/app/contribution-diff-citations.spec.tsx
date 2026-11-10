@@ -81,6 +81,48 @@ describe("ContributionDiff citations", () => {
     expect(screen.queryByText(/No changes detected/)).toBeNull();
   });
 
+  it("lists confidence-only rows compactly instead of as edited entries", async () => {
+    const row = {
+      id: "agent-development",
+      title: "Add an agent graph",
+      content: "Unchanged body",
+      useWhen: null,
+      metricSpec: null,
+      kpiBindings: null,
+      entryType: "guide",
+      domain: "build-agents",
+    };
+    respond({
+      contributionId: "c",
+      branch: "b",
+      entries: [
+        {
+          changeType: "modified",
+          rowId: "agent-development",
+          before: { ...row, confidencePct: 40 },
+          after: { ...row, confidencePct: 55 },
+        },
+      ],
+      citations: [
+        {
+          changeType: "added",
+          citingId: "frontend-development",
+          citedId: "agent-development",
+          citationType: "extends",
+          context: null,
+        },
+      ],
+    });
+    render(<ContributionDiff contributionId="c" />);
+
+    const recomputed = await screen.findByRole("region", {
+      name: "Confidence recomputed",
+    });
+    expect(within(recomputed).getByText("40% → 55%")).toBeTruthy();
+    expect(screen.queryByText("Unchanged body")).toBeNull();
+    expect(screen.queryByText("modified")).toBeNull();
+  });
+
   it("says no changes only when neither rows nor edges changed", async () => {
     respond({ contributionId: "c", branch: "b", entries: [], citations: [] });
     render(<ContributionDiff contributionId="c" />);

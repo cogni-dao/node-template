@@ -1762,6 +1762,7 @@ export class DoltgresKnowledgeContributionAdapter
             kpiBindings: row.from_kpi_bindings ?? null,
             entryType: row.from_entry_type ?? null,
             domain: row.from_domain ?? null,
+            confidencePct: row.from_confidence_pct ?? null,
           }
         : null;
       const after: Record<string, unknown> | null = row.to_id
@@ -1774,6 +1775,7 @@ export class DoltgresKnowledgeContributionAdapter
             kpiBindings: row.to_kpi_bindings ?? null,
             entryType: row.to_entry_type ?? null,
             domain: row.to_domain ?? null,
+            confidencePct: row.to_confidence_pct ?? null,
           }
         : null;
       const rowId = String(row.to_id ?? row.from_id ?? "");

@@ -1545,12 +1545,12 @@ describe("reviewed metric configuration", () => {
   it("shows the reviewed JSON in the contribution before/after diff", async () => {
     class ConfigDiffSql extends FakeSql {
       override async unsafe(query: string) {
-        if (query.includes("dolt_diff")) return [{ diff_type: "modified", from_id: "metric-work", to_id: "metric-work", from_metric_spec: { calculatorId: "work.count@1", params: { mode: "open" } }, to_metric_spec: null, from_kpi_bindings: [{ metricId: "metric-work" }], to_kpi_bindings: [] }];
+        if (query.includes("dolt_diff")) return [{ diff_type: "modified", from_id: "metric-work", to_id: "metric-work", from_metric_spec: { calculatorId: "work.count@1", params: { mode: "open" } }, to_metric_spec: null, from_kpi_bindings: [{ metricId: "metric-work" }], to_kpi_bindings: [], from_confidence_pct: 40, to_confidence_pct: 55 }];
         return super.unsafe(query);
       }
     }
     const [entry] = await adapterFor(new ConfigDiffSql()).diff("contrib-agent-1-abc123");
-    expect(entry?.before?.metricSpec).toMatchObject({ calculatorId: "work.count@1" }); expect(entry?.after?.metricSpec).toBeNull(); expect(entry?.after?.kpiBindings).toEqual([]);
+    expect(entry?.before?.metricSpec).toMatchObject({ calculatorId: "work.count@1" }); expect(entry?.after?.metricSpec).toBeNull(); expect(entry?.after?.kpiBindings).toEqual([]); expect(entry?.before?.confidencePct).toBe(40); expect(entry?.after?.confidencePct).toBe(55);
   });
   it("keeps omission distinct from explicit clearing at the wire", () => {
     const common = { op: "update", targetRowId: "metric-work", entry: { id: "metric-work", domain: "meta", title: "Count", content: "Count items" } };
