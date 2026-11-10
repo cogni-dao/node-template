@@ -35,6 +35,13 @@ const ROUTES = new Set([
   "cancelled",
 ]);
 const CLOSED = new Set(["done", "cancelled"]);
+/** Triage routes only work that has not started delivery. */
+const ROUTABLE_FROM = new Set([
+  "needs_triage",
+  "needs_research",
+  "needs_design",
+  "needs_implement",
+]);
 const EVIDENCE_FROM = 4;
 
 type Scores = NonNullable<ObservedItem["scores"]>;
@@ -81,6 +88,11 @@ export function createTransitionGuard(
     item: ObservedItem,
   ): string | undefined {
     if (input.action === "transition") {
+      if (!ROUTABLE_FROM.has(item.status))
+        return reject(
+          "route_source",
+          `${item.id} is ${item.status}; triage routes only from needs_triage, needs_research, needs_design or needs_implement`,
+        );
       if (!input.toStatus || !ROUTES.has(input.toStatus))
         return reject(
           "route_not_allowed",
@@ -140,6 +152,18 @@ export function createTransitionGuard(
     return undefined;
   }
 
+  /** One-line audit reason for a patch the model sent without one (task.0052). */
+  function patchReason(input: WorkItemTransitionInput, item: ObservedItem) {
+    const parts: string[] = [];
+    const moved = Object.entries(input.scores ?? {})
+      .filter(([axis, score]) => (item.scores?.[axis]?.v ?? 0) !== score.v)
+      .map(([axis, score]) => `${axis} ${item.scores?.[axis]?.v ?? 0}→${score.v}`);
+    if (moved.length) parts.push(`scores ${moved.join(", ")}`);
+    const added = (input.labels ?? []).filter((l) => !item.labels.includes(l));
+    if (added.length) parts.push(added.map((l) => `+${l}`).join(" "));
+    return `triage: ${parts.join("; ") || "update"}`.slice(0, 512);
+  }
+
   /** True when the call would leave the item as it is. */
   function noChange(
     input: WorkItemTransitionInput,
@@ -191,7 +215,11 @@ export function createTransitionGuard(
 
     pending.add(item.id);
     try {
-      const result = await writer.invoke(input, config);
+      const sent =
+        input.action === "patch" && !input.reason?.trim()
+          ? { ...input, reason: patchReason(input, item) }
+          : input;
+      const result = await writer.invoke(sent, config);
       const text =
         typeof result === "string" ? result : JSON.stringify(result);
       let output: { success?: unknown; revision?: unknown } = {};
@@ -218,6 +246,8 @@ export function createTransitionGuard(
       }
       return text;
     } catch {
+      // An uncertain write may have landed: it counts toward the budget and needs a fresh read.
+      changed.add(item.id);
       receipts.items.delete(item.id);
       return "write_result_uncertain: read the item again before proposing again";
     } finally {

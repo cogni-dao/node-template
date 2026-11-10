@@ -42,7 +42,7 @@ describe("catalog principals (N4)", () => {
     expect(NODE_AI_PRINCIPAL).toBe("node-ai");
   });
 
-  it("gives work-prioritizer the scores writer", () => {
+  it("gives work-prioritizer the guarded triage writer", () => {
     expect(LANGGRAPH_CATALOG["work-prioritizer"]?.toolIds).toContain(
       "core__work_item_transition",
     );

@@ -258,7 +258,8 @@ export function cycleTelemetry(
     } else if (m.name === GOAL_LIST_NAME && Array.isArray(v.goals)) {
       goalIds = v.goals.map((g: { id?: unknown }) => String(g?.id));
     } else if (m.name === WORK_ITEM_TRANSITION_NAME && v.success === true) {
-      changedItemIds.push(String(v.id));
+      if (!changedItemIds.includes(String(v.id)))
+        changedItemIds.push(String(v.id));
     } else if (m.name === EDO_DECIDE_NAME) {
       const id = (v.entry as { id?: unknown } | undefined)?.id;
       if (typeof id === "string") edoDecisionId = id;

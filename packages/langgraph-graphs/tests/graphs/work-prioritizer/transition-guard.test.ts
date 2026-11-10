@@ -281,3 +281,101 @@ describe("no read-failure latch", () => {
     expect(a.writes).toHaveLength(1);
   });
 });
+
+describe("audit reason, route source and uncertain writes", () => {
+  it("fills a one-line reason on a patch that has none; keeps the model's own", async () => {
+    const a = setup();
+    a.read(item("task.1", { scores: { agent: { v: 5 } } }));
+    a.read(item("task.2"));
+    await a.call({
+      action: "patch",
+      id: "task.1",
+      expectedRevision: 7,
+      labels: ["goal:delivery"],
+      scores: { ...scores(3), agent: { v: 1 } },
+    });
+    expect(a.writes[0]?.reason).toBe(
+      "triage: scores goal 0→3, time 0→2, unblocks 0→2, ease 0→3, confidence 0→3, agent 5→1; +goal:delivery",
+    );
+    await a.call({
+      action: "patch",
+      id: "task.2",
+      expectedRevision: 7,
+      scores: scores(3),
+      reason: "model reason",
+    });
+    expect(a.writes[1]?.reason).toBe("model reason");
+  });
+
+  it("routes only from needs_triage, needs_research, needs_design and needs_implement", async () => {
+    const a = setup();
+    for (const status of [
+      "needs_merge",
+      "needs_closeout",
+      "blocked",
+      "done",
+      "cancelled",
+    ]) {
+      a.read(item(`task.${status}`, { status }));
+      expect(
+        await a.call({
+          action: "transition",
+          id: `task.${status}`,
+          toStatus: "needs_design",
+        }),
+      ).toContain("guard_rejected");
+    }
+    expect(
+      await a.call({
+        action: "transition",
+        id: "task.needs_merge",
+        toStatus: "needs_design",
+      }),
+    ).toContain("route_source");
+    for (const status of ["needs_research", "needs_design", "needs_implement"]) {
+      a.read(item(`task.${status}`, { status }));
+      expect(
+        await a.call({
+          action: "transition",
+          id: `task.${status}`,
+          toStatus: "cancelled",
+          reason: "Not worth doing",
+        }),
+      ).toContain('"success":true');
+    }
+    expect(a.writes).toHaveLength(3);
+  });
+
+  it("counts an uncertain write toward the five-item budget", async () => {
+    const a = setup();
+    const failing = new DynamicStructuredTool({
+      name: WORK_ITEM_TRANSITION_NAME,
+      description: "Host writer",
+      schema: z.object({}).passthrough(),
+      func: async () => {
+        throw new Error("network");
+      },
+    });
+    const guard = createTransitionGuard(a.receipts, failing, [
+      TRIAGE_GUIDANCE_ID,
+    ]);
+    for (let n = 1; n <= 5; n++) {
+      a.read(item(`task.${n}`));
+      expect(
+        await guard.invoke({
+          action: "transition",
+          id: `task.${n}`,
+          toStatus: "needs_design",
+        } as never),
+      ).toContain("write_result_uncertain");
+    }
+    a.read(item("task.6"));
+    expect(
+      await guard.invoke({
+        action: "transition",
+        id: "task.6",
+        toStatus: "needs_design",
+      } as never),
+    ).toContain("write_budget");
+  });
+});
