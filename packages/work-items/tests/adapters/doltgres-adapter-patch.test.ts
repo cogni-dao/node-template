@@ -217,8 +217,8 @@ function asJsonb(value: unknown): unknown {
 
 /**
  * One in-memory row behind the stateful Dolt fake. The UPDATE arm honours the
- * statement's own `revision = N` and creator predicates, so the CAS and the
- * authz are exercised as SQL, not assumed. `concurrentBumpBeforeUpdate` models
+ * statement's own `revision = N` predicate, so the CAS is exercised as SQL, not
+ * assumed. It deliberately has no creator arm: a creator predicate must fail loudly. `concurrentBumpBeforeUpdate` models
  * a writer outside this adapter's lock landing between preflight and UPDATE.
  */
 function casHarness(options: { concurrentBumpBeforeUpdate?: boolean } = {}) {
@@ -240,9 +240,6 @@ function casHarness(options: { concurrentBumpBeforeUpdate?: boolean } = {}) {
         expected !== undefined &&
         Number(current.revision) !== Number(expected)
       )
-        return [];
-      const owner = /created_by_principal_id = '([^']+)'\)/.exec(query)?.[1];
-      if (owner !== undefined && current.created_by_principal_id !== owner)
         return [];
       const next: Record<string, unknown> = {
         ...current,

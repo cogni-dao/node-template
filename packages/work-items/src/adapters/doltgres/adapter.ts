@@ -375,19 +375,6 @@ function escapeValue(value: unknown): string {
 }
 
 /**
- * AUTHORITY_IS_NOT_KIND (bug.0019): `created_by_principal_id` is attribution
- * data, never a gate. Who may mutate a row is decided once, before the store
- * is reached, by the one `authorize()` check that every door runs
- * (`work_item:transition` on `work.items.patch` and on the guarded tool). The
- * adapter therefore does not compare the writing principal to the row creator.
- *
- * Why: a re-registered agent is a NEW principal for the SAME actor. Gating on
- * creator equality turned that identity churn into a data lockout (live,
- * 2026-11-10: principal 2c4b7be4 -> 86b966ed could not PATCH its own items).
- * The column stays immutable (see `IMMUTABLE_COLUMNS`) so attribution is kept.
- */
-
-/**
  * `expectedRevision` is optional: omitted means an unconditioned patch, exactly
  * as before. When present it must be the row's integer version.
  */
@@ -901,9 +888,7 @@ function validateTransitionMatrix(
       );
     }
     case "delete":
-      return (
-        String(before.id) === itemId && isNullSnapshot(after)
-      );
+      return String(before.id) === itemId && isNullSnapshot(after);
     case "claim": {
       const beforeExpiry = asEpoch(before.claim_expires_at);
       const afterClaimedAt = asEpoch(after.claimed_at);
@@ -3146,6 +3131,15 @@ export class DoltgresWorkItemAdapter
     throw new WorkItemAlreadyExistsError(lastCollisionId);
   }
 
+  /**
+   * AUTHORITY_IS_NOT_KIND (bug.0019): `created_by_principal_id` is attribution
+   * data, never a gate. Who may patch is decided once, before the store is
+   * reached, by the one `authorize()` check every door runs (scope
+   * `work_item:transition` on `work.items.patch` and on the guarded tool). A
+   * re-registered agent is a NEW principal for the SAME actor; creator-equality
+   * gating turned that churn into a data lockout (live, 2026-11-10). The column
+   * stays immutable (`IMMUTABLE_COLUMNS`) so attribution is kept.
+   */
   async patch(
     input: WorkItemsPatchInput,
     principalId: string
