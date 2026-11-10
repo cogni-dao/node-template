@@ -28,7 +28,14 @@ import { EVENT_NAMES } from "@/shared/observability";
 const runnerSpy = vi.hoisted(() => vi.fn());
 vi.mock("@cogni/langgraph-graphs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@cogni/langgraph-graphs")>();
-  return { ...actual, createInProcGraphRunner: (...args: Parameters<typeof actual.createInProcGraphRunner>) => {
+  // A plain harness graph (no program, no principal): the published graphs both carry a program and
+  // principal, so provider wiring that needs neither runs on this test-only entry.
+  return { ...actual, LANGGRAPH_CATALOG: { ...actual.LANGGRAPH_CATALOG, "test-plain": {
+    displayName: "Test plain",
+    description: "plain harness graph without program or principal",
+    toolIds: [],
+    graphFactory: actual.NODE_LANGGRAPH_CATALOG.cogni.graphFactory,
+  } }, createInProcGraphRunner: (...args: Parameters<typeof actual.createInProcGraphRunner>) => {
     runnerSpy(args[0]);
     return actual.createInProcGraphRunner(...args);
   } };
@@ -135,7 +142,7 @@ function createTestRequest(
     runId: "test-run-id",
     messages: [{ role: "user", content: "Hello" }],
     modelRef: { providerKey: "platform", modelId: "test-model" },
-    graphId: "langgraph:poet",
+    graphId: "langgraph:test-plain",
     ...overrides,
   };
 }
@@ -145,18 +152,24 @@ function createTestRequest(
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("LangGraphInProcProvider", () => {
-  it("runs poet with trusted node identity when optional hub and origin are absent, while mission fails closed", async () => {
+  it("runs a plain graph without hub context, while a program graph fails closed without it", async () => {
     const adapter = createMockAdapter();
     const source = vi.fn((required: boolean) => resolveNodeSourceContext(required, "real-node", undefined, undefined, undefined, undefined));
     const provider = new LangGraphInProcProvider(adapter, createMockToolSource(), undefined, [], source);
     runnerSpy.mockClear();
-    const poet = runInScope(TEST_SCOPE, () => provider.runGraph(createTestRequest()));
-    await collectEvents(poet.stream);
-    expect((await poet.final).ok).toBe(true);
+    const plain = runInScope(TEST_SCOPE, () => provider.runGraph(createTestRequest()));
+    await collectEvents(plain.stream);
+    expect((await plain.final).ok).toBe(true);
     expect(adapter.executeCompletionUnit).toHaveBeenCalled();
-    expect(runnerSpy).toHaveBeenCalledWith(expect.objectContaining({ sourceContext: { nodeId: "real-node", governingIndex: [] } }));
+    expect(source).not.toHaveBeenCalled();
     runnerSpy.mockClear();
-    const mission = runInScope(TEST_SCOPE, () => provider.runGraph(createTestRequest({ graphId: "langgraph:cogni-decide" })));
+    // The program graph's principal resolves; only its hub context is missing.
+    const authority = {
+      resolvePrincipal: async () => "principal-user",
+      guardDeps: { withStore: async () => { throw new Error("unused"); }, adminCheck: async () => "denied" },
+    } as never;
+    const programProvider = new LangGraphInProcProvider(adapter, createMockToolSource(), undefined, [], source, undefined, authority);
+    const mission = runInScope(TEST_SCOPE, () => programProvider.runGraph(createTestRequest({ graphId: "langgraph:work-prioritizer" })));
     await collectEvents(mission.stream);
     expect((await mission.final).ok).toBe(false);
     expect(runnerSpy).not.toHaveBeenCalled();
@@ -184,7 +197,7 @@ describe("LangGraphInProcProvider", () => {
           mockToolSource
         );
 
-        const request = createTestRequest({ graphId: "langgraph:poet" });
+        const request = createTestRequest({ graphId: "langgraph:test-plain" });
         const { stream, final } = provider.runGraph(request);
 
         const events = await collectEvents(stream);
@@ -278,7 +291,7 @@ describe("LangGraphInProcProvider", () => {
 
         // Request with wrong provider prefix
         const request = createTestRequest({
-          graphId: "wrong_provider:poet",
+          graphId: "wrong_provider:cogni",
         });
         const { stream, final } = provider.runGraph(request);
 

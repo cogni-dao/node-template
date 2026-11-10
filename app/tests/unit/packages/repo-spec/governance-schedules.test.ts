@@ -32,17 +32,17 @@ describe("governanceScheduleSchema graph/model", () => {
   it("accepts a namespaced graph with a model", () => {
     const parsed = governanceScheduleSchema.parse({
       ...BASE_ENTRY,
-      graph: "langgraph:cogni-decide",
+      graph: "langgraph:work-prioritizer",
       model: "gpt-oss-120b",
     });
-    expect(parsed.graph).toBe("langgraph:cogni-decide");
+    expect(parsed.graph).toBe("langgraph:work-prioritizer");
     expect(parsed.model).toBe("gpt-oss-120b");
   });
 
   it("rejects graph without model", () => {
     const result = governanceScheduleSchema.safeParse({
       ...BASE_ENTRY,
-      graph: "langgraph:cogni-decide",
+      graph: "langgraph:work-prioritizer",
     });
     expect(result.success).toBe(false);
     expect(JSON.stringify(result.error?.issues)).toContain("model");
@@ -51,7 +51,7 @@ describe("governanceScheduleSchema graph/model", () => {
   it("rejects a non-namespaced graph id", () => {
     const result = governanceScheduleSchema.safeParse({
       ...BASE_ENTRY,
-      graph: "cogni-decide",
+      graph: "work-prioritizer",
       model: "gpt-oss-120b",
     });
     expect(result.success).toBe(false);
@@ -71,7 +71,7 @@ describe("extractGovernanceConfig graph/model mapping", () => {
       specWith([
         {
           ...BASE_ENTRY,
-          graph: "langgraph:cogni-decide",
+          graph: "langgraph:work-prioritizer",
           model: "gpt-oss-120b",
         },
       ]),
@@ -79,7 +79,7 @@ describe("extractGovernanceConfig graph/model mapping", () => {
     expect(config.schedules).toEqual([
       {
         ...BASE_ENTRY,
-        graph: "langgraph:cogni-decide",
+        graph: "langgraph:work-prioritizer",
         model: "gpt-oss-120b",
       },
     ]);

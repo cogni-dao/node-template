@@ -32,7 +32,7 @@ export const WORK_PRIORITIZER_GRAPH_NAME = "work-prioritizer" as const;
 export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
   const receipts = opts.programState as RunReceipts | undefined;
   // The program, not the input channel, owns capability: scoring programs bind the guarded
-  // writer for chat and scheduled runs alike; cogni-chat has no write tool bound at all.
+  // writer for chat and scheduled runs alike.
   const readAuthority = new Set<string>(opts.readToolIds ?? COGNI_READ_TOOL_IDS);
   const readToolIds = opts.tools
     .map((tool) => tool.name)
@@ -41,8 +41,7 @@ export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
         name !== WORK_ITEM_TRANSITION_NAME &&
         readAuthority.has(name),
     );
-  const deciding =
-    opts.program === "cogni-decide" || opts.program === "work-review";
+  const deciding = opts.program === "work-review";
   const writer = opts.tools.find(
     (tool) => tool.name === WORK_ITEM_TRANSITION_NAME,
   );
@@ -123,11 +122,7 @@ export function createPrioritizerRunHooks(context: {
       if (result.ok)
         receipts.observe(name, args, result.value);
       else receipts.denied = true;
-      if (
-        !context.program ||
-        context.program === "work-review" ||
-        context.program === "cogni-decide"
-      )
+      if (!context.program || context.program === "work-review")
         receipts.recordTool(
           name,
           args,

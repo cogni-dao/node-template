@@ -61,17 +61,16 @@ Per `SINGLE_DOMAIN_HARD_FAIL` (see [`node-ci-cd-contract.md`](../spec/node-ci-cd
 
 | Question                                                                 | Put implementation in                          | Expose through               | Reference graph |
 | ------------------------------------------------------------------------ | ---------------------------------------------- | ---------------------------- | --------------- |
-| Should every node runtime expose this agent? (e.g. `brain`, `poet`)      | `packages/langgraph-graphs/src/graphs/<name>/` | `NODE_LANGGRAPH_CATALOG`     | `ponderer/`     |
-| Is this operator lifecycle-only? (e.g. `pr-manager`, `operating-review`) | `packages/langgraph-graphs/src/graphs/<name>/` | `OPERATOR_LANGGRAPH_CATALOG` | `pr-manager/`   |
+| Should every node runtime expose this agent? (only `cogni` and `work-prioritizer` today) | `packages/langgraph-graphs/src/graphs/<name>/` | `NODE_LANGGRAPH_CATALOG`     | `work-prioritizer/` |
 | Is this specific to one node fork?                                       | `graphs/src/graphs/<name>/`                    | `graphs/src/index.ts`        | local package   |
 
-Default to the narrowest runtime catalog. Promoting node-local → shared is a deliberate hoist. Adding an operator lifecycle graph to the default node catalog leaks operator-only affordances into node-template forks.
+Default to the narrowest runtime catalog. Promoting node-local → shared is a deliberate hoist. The shared catalog publishes only `cogni` and `work-prioritizer`; operator lifecycle graphs (PR review, PR management) are operator services and do not belong in it.
 
 ## Preconditions
 
 - [ ] `packages/langgraph-graphs` builds cleanly (`pnpm packages:build`)
 - [ ] Agent purpose and required tools identified
-- [ ] Familiar with the `ponderer/` graph as a reference implementation
+- [ ] Familiar with the `work-prioritizer/` graph as a reference implementation
 
 ## Steps
 
@@ -95,19 +94,16 @@ packages/langgraph-graphs/src/graphs/<name>/
 3. Create `tools.ts` — export `*_TOOL_IDS` array referencing tool names from `@cogni/ai-tools`
 4. Create `server.ts` — `export const x = await makeServerGraph({ name, createGraph, toolIds })`
 5. Create `cogni-exec.ts` — `export const xGraph = makeCogniGraph({ name, createGraph, toolIds })`
-6. Add entry to `catalog.ts`:
-   - `NODE_LANGGRAPH_CATALOG` when every node should expose it
-   - `OPERATOR_LANGGRAPH_CATALOG` when only operator should expose it
+6. Add entry to `NODE_LANGGRAPH_CATALOG` in `catalog.ts` (only when every node should expose it)
 7. Add to `langgraph.json` — `"name": "./src/graphs/<name>/server.ts:x"`
 8. Export from `graphs/index.ts`
 9. Ensure each intended node graph package exports it through `LANGGRAPH_CATALOG`:
    - default nodes: `@cogni/node-template-graphs`, `@cogni/canary-graphs`, `@cogni/resy-graphs`
-   - operator: `@cogni/operator-graphs`
 10. **P0 UI workaround:** Add to `AVAILABLE_GRAPHS` in the intended `app/src/features/ai/components/ChatComposerExtras.tsx`
 
 > **Note:** Step 10 is a temporary workaround. The runtime discovery route reads the node-local graph package, but the chat UI picker still uses a hardcoded graph list instead of fetching from `/api/v1/ai/agents`. See [Graph Execution](../spec/graph-execution.md) P1 checklist for the fix.
 
-**Template:** Copy from `ponderer/`
+**Template:** Copy from `work-prioritizer/`
 
 **Verify:** `pnpm packages:build && pnpm langgraph:dev`
 

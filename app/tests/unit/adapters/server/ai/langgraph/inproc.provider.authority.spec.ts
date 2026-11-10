@@ -49,8 +49,27 @@ const captured = vi.hoisted(() => ({
 }));
 vi.mock("@cogni/langgraph-graphs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@cogni/langgraph-graphs")>();
+  // Synthetic catalog entries: the provider-seam authority rules are graph-agnostic, so they are
+  // exercised on test-only graphs that carry the write tools no published graph binds.
+  const noopFactory = actual.NODE_LANGGRAPH_CATALOG.cogni.graphFactory;
   return {
     ...actual,
+    LANGGRAPH_CATALOG: {
+      ...actual.LANGGRAPH_CATALOG,
+      "test-node-ai-writer": {
+        displayName: "Test node-ai writer",
+        description: "node-ai principal with knowledge and schedule write tools",
+        principal: "node-ai",
+        toolIds: ["core__knowledge_search", "core__knowledge_write", "core__schedule_manage"],
+        graphFactory: noopFactory,
+      },
+      "test-no-principal": {
+        displayName: "Test no principal",
+        description: "write tools and no catalog principal",
+        toolIds: ["core__knowledge_write", "core__work_item_transition"],
+        graphFactory: noopFactory,
+      },
+    },
     createInProcGraphRunner: (options: (typeof captured.options)[number]) => {
       captured.options.push(options);
       if (captured.mode === "abort") {
@@ -245,7 +264,7 @@ describe("a principal-store outage is authz_unavailable and is logged", () => {
     const scope = { billing: { billingAccountId: "payer-1", virtualKeyId: "vk" }, usageSource: "litellm" as const, llmService: {} as never };
     const result = runInScope(scope, () =>
       provider.runGraph(
-        { runId: "run-down", graphId: "langgraph:brain", messages: [{ role: "user", content: "go" }], modelRef: { providerKey: "platform", modelId: "m" } },
+        { runId: "run-down", graphId: "langgraph:cogni", messages: [{ role: "user", content: "go" }], modelRef: { providerKey: "platform", modelId: "m" } },
         { actorUserId: MEMBER },
       ),
     );
@@ -267,7 +286,7 @@ describe("a principal-store outage is authz_unavailable and is logged", () => {
   });
 });
 
-describe("V6: work-prioritizer writes; cogni-decide, with the same tools and no principal, is denied", () => {
+describe("V6: work-prioritizer writes; a graph with the same tool and no principal is denied", () => {
   const auth = () =>
     authority({
       principals: { prioritizer: PRIORITIZER_USER },
@@ -286,10 +305,10 @@ describe("V6: work-prioritizer writes; cogni-decide, with the same tools and no 
     ]);
   });
 
-  it("does not offer the same tool to cogni-decide (no principal), and a forced call never reaches the tool", async () => {
+  it("does not offer the same tool to a graph with no principal, and a forced call never reaches the tool", async () => {
     const seen: Array<{ tool: string; scope: unknown }> = [];
     const a = auth();
-    const run = await start("cogni-decide", a, MEMBER, seen);
+    const run = await start("test-no-principal", a, MEMBER, seen);
     // DENIAL_IS_TERMINAL (1/2): the model is never offered the tool.
     expect(run.options!.toolContracts.map((c) => c.name)).not.toContain("core__work_item_transition");
     expect(run.options!.request.configurable.toolIds).not.toContain("core__work_item_transition");
@@ -302,13 +321,13 @@ describe("V6: work-prioritizer writes; cogni-decide, with the same tools and no 
   });
 });
 
-describe("V7: brain + node-ai with knowledge:write", () => {
+describe("V7: a node-ai graph + knowledge:write with knowledge:write", () => {
   const KNOWLEDGE = { id: "k1", domain: "d", title: "t", content: "c", sourceType: "human" };
   const base = () =>
     authority({ principals: { "node-ai": NODE_AI_USER }, roles: [[NODE_AI_USER, "knowledge:write"]] });
 
   it("denies a non-admin subject", async () => {
-    const run = await start("brain", base(), MEMBER);
+    const run = await start("test-node-ai-writer", base(), MEMBER);
     expect(await run.exec("core__knowledge_write", KNOWLEDGE)).toMatchObject({
       ok: false,
       receipt: { code: "policy_denied" },
@@ -318,7 +337,7 @@ describe("V7: brain + node-ai with knowledge:write", () => {
   it("allows an admin subject", async () => {
     const seen: Array<{ tool: string; scope: unknown }> = [];
     const a = base();
-    const run = await start("brain", a, ADMIN, seen);
+    const run = await start("test-node-ai-writer", a, ADMIN, seen);
     expect(reached(await run.exec("core__knowledge_write", KNOWLEDGE))).toBe(true);
     expect(forTool(a.events, "core__knowledge_write")).toEqual([
       expect.objectContaining({ principal: NODE_AI_USER, subject: ADMIN, payer: "payer-1", decision: "allow" }),
@@ -326,8 +345,8 @@ describe("V7: brain + node-ai with knowledge:write", () => {
   });
 
   it("does not offer the tool to an admin when the graph has no principal", async () => {
-    // autoresearch has knowledge_write in its tools and no catalog principal.
-    const run = await start("autoresearch-single-lane", base(), ADMIN);
+    // the graph has knowledge_write in its tools and no catalog principal.
+    const run = await start("test-no-principal", base(), ADMIN);
     expect(run.options!.toolContracts.map((c) => c.name)).not.toContain("core__knowledge_write");
     expect((await run.exec("core__knowledge_write", KNOWLEDGE)).ok).toBe(false);
   });
@@ -335,7 +354,7 @@ describe("V7: brain + node-ai with knowledge:write", () => {
   it("denies the next call after the role row is gone", async () => {
     const roles: Array<[string, string]> = [[NODE_AI_USER, "knowledge:write"]];
     const a = authority({ principals: { "node-ai": NODE_AI_USER }, roles });
-    const run = await start("brain", a, ADMIN);
+    const run = await start("test-node-ai-writer", a, ADMIN);
     expect(reached(await run.exec("core__knowledge_write", KNOWLEDGE))).toBe(true);
     roles.length = 0;
     expect(reached(await run.exec("core__knowledge_write", KNOWLEDGE))).toBe(false);
@@ -347,7 +366,7 @@ describe("V7: brain + node-ai with knowledge:write", () => {
       ...a,
       guardDeps: { ...a.guardDeps, adminCheck: async () => "unavailable" },
     };
-    const run = await start("brain", unavailable, ADMIN);
+    const run = await start("test-node-ai-writer", unavailable, ADMIN);
     expect(await run.exec("core__knowledge_write", KNOWLEDGE)).toMatchObject({
       ok: false,
       receipt: { code: "authz_unavailable" },
@@ -362,14 +381,14 @@ describe("V5: principal and subject reach the tool; own scope needs a subject", 
 
   it("a human caller binds subject and principal for the tool call", async () => {
     const seen: Array<{ tool: string; scope: unknown }> = [];
-    const run = await start("brain", a(), MEMBER, seen);
+    const run = await start("test-node-ai-writer", a(), MEMBER, seen);
     expect(reached(await run.exec("core__schedule_manage", SCHEDULE))).toBe(true);
     expect(seen[0]?.scope).toMatchObject({ principalId: NODE_AI_USER, subjectUserId: MEMBER });
   });
 
   it("a bearer agent is the subject, so its schedule_manage runs as its own user id", async () => {
     const seen: Array<{ tool: string; scope: unknown }> = [];
-    const run = await start("brain", a(), AGENT, seen);
+    const run = await start("test-node-ai-writer", a(), AGENT, seen);
     expect(reached(await run.exec("core__schedule_manage", SCHEDULE))).toBe(true);
     expect(seen[0]?.scope).toMatchObject({ principalId: NODE_AI_USER, subjectUserId: AGENT });
   });
@@ -378,10 +397,10 @@ describe("V5: principal and subject reach the tool; own scope needs a subject", 
     const seen: Array<{ tool: string; scope: unknown }> = [];
     const logged: Array<Record<string, unknown>> = [];
     const x = a();
-    const run = await start("brain", x, undefined, seen, {}, logged);
+    const run = await start("test-node-ai-writer", x, undefined, seen, {}, logged);
     expect(run.options).toBeUndefined();
     expect(forTool(x.events, "core__schedule_manage")).toEqual([
-      expect.objectContaining({ decision: "deny", reason: "not_offered:no_subject", runId: "run-brain" }),
+      expect.objectContaining({ decision: "deny", reason: "not_offered:no_subject", runId: "run-test-node-ai-writer" }),
     ]);
     expect(seen).toEqual([]);
     expect(logged.filter((l) => l.event === "agent_run.denied")).toEqual([expect.objectContaining({ reason: "no_permission", modelCalls: 0 })]);
@@ -389,10 +408,10 @@ describe("V5: principal and subject reach the tool; own scope needs a subject", 
 });
 
 describe("bearer agents (subject with no wallet): admin narrows, member passes", () => {
-  it("brain + node-ai holding knowledge:write: a bearer agent is denied", async () => {
+  it("a node-ai graph holding knowledge:write: a bearer agent is denied", async () => {
     const a = authority({ principals: { "node-ai": NODE_AI_USER }, roles: [[NODE_AI_USER, "knowledge:write"]] });
     const seen: Array<{ tool: string; scope: unknown }> = [];
-    const run = await start("brain", a, AGENT, seen);
+    const run = await start("test-node-ai-writer", a, AGENT, seen);
     expect(await run.exec("core__knowledge_write", { id: "k1", domain: "d", title: "t", content: "c", sourceType: "human" })).toMatchObject({
       ok: false,
       receipt: { code: "policy_denied", retryable: false },
@@ -434,16 +453,16 @@ describe("a scheduled run's subject is its execution-grant owner", () => {
   }
   const KNOWLEDGE = { id: "k1", domain: "d", title: "t", content: "c", sourceType: "human" };
 
-  it("an agent caller schedules brain to call knowledge_write: the run is denied (the agent owner fails the admin check)", async () => {
+  it("an agent caller schedules a node-ai graph to call knowledge_write: the run is denied (the agent owner fails the admin check)", async () => {
     const a = authority({ principals: { "node-ai": NODE_AI_USER }, roles: [[NODE_AI_USER, "knowledge:write"]] });
-    const exec = await scheduledRun("brain", AGENT, a);
+    const exec = await scheduledRun("test-node-ai-writer", AGENT, a);
     expect(await exec("core__knowledge_write", KNOWLEDGE)).toMatchObject({ ok: false, receipt: { code: "policy_denied" } });
     expect(forTool(a.events, "core__knowledge_write")).toEqual([expect.objectContaining({ principal: NODE_AI_USER, subject: AGENT, decision: "deny", reason: "subject_not_admin" })]);
   });
 
-  it("an admin owner's scheduled brain run may write", async () => {
+  it("an admin owner's scheduled node-ai run may write", async () => {
     const a = authority({ principals: { "node-ai": NODE_AI_USER }, roles: [[NODE_AI_USER, "knowledge:write"]] });
-    const exec = await scheduledRun("brain", ADMIN, a);
+    const exec = await scheduledRun("test-node-ai-writer", ADMIN, a);
     expect(reached(await exec("core__knowledge_write", KNOWLEDGE))).toBe(true);
   });
 
@@ -460,7 +479,7 @@ describe("read_only tools need only the graph lock", () => {
   it("runs with no role, and logs no decision for the read tool", async () => {
     const a = authority({ principals: { "node-ai": NODE_AI_USER }, roles: [] });
     const seen: Array<{ tool: string; scope: unknown }> = [];
-    const run = await start("brain", a, MEMBER, seen);
+    const run = await start("test-node-ai-writer", a, MEMBER, seen);
     expect(reached(await run.exec("core__knowledge_search", { domain: "d", query: "x" }))).toBe(true);
     expect(forTool(a.events, "core__knowledge_search")).toEqual([]);
   });
@@ -471,7 +490,7 @@ describe("DENIAL_IS_TERMINAL", () => {
 
   it("offers the model only tools whose principal lock opens, and tells it what it lacks", async () => {
     const a = authority({ principals: { "node-ai": NODE_AI_USER }, roles: [[NODE_AI_USER, "schedule:manage"]] });
-    const run = await start("brain", a, ADMIN);
+    const run = await start("test-node-ai-writer", a, ADMIN);
     const offered = run.options!.toolContracts.map((c) => c.name);
     expect(offered).toContain("core__schedule_manage");
     expect(offered).toContain("core__knowledge_search");
@@ -485,7 +504,7 @@ describe("DENIAL_IS_TERMINAL", () => {
 
   it("adds no note when nothing was dropped", async () => {
     const a = authority({ principals: { "node-ai": NODE_AI_USER }, roles: [[NODE_AI_USER, "schedule:manage"], [NODE_AI_USER, "knowledge:write"]] });
-    const run = await start("brain", a, ADMIN);
+    const run = await start("test-node-ai-writer", a, ADMIN);
     expect(run.options!.request.messages.map((m) => m.role)).toEqual(["user"]);
   });
 
@@ -510,7 +529,7 @@ describe("DENIAL_IS_TERMINAL", () => {
       const scope = { billing: { billingAccountId: "payer-1", virtualKeyId: "vk" }, usageSource: "litellm" as const, llmService: {} as never, subjectUserId: subject };
       const result = runInScope(scope, () =>
         provider.runGraph(
-          { runId: "run-terminal", graphId: "langgraph:brain", messages: [{ role: "user", content: "go" }], modelRef: { providerKey: "platform", modelId: "m" } },
+          { runId: "run-terminal", graphId: "langgraph:test-node-ai-writer", messages: [{ role: "user", content: "go" }], modelRef: { providerKey: "platform", modelId: "m" } },
           { actorUserId: subject },
         ),
       );

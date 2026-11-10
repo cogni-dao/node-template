@@ -130,7 +130,7 @@ Files:
 - `app/src/features/ai/components/ChatComposerExtras.tsx`
 - `graphs/src/index.ts`
 
-Tailor the default graph and graph list to the node's domain. Prediction-market nodes should expose market-analysis prompts and graphs; reservation nodes should expose reservation workflows; general nodes can keep `langgraph:brain`.
+Tailor the default graph and graph list to the node's domain. Prediction-market nodes should expose market-analysis prompts and graphs; reservation nodes should expose reservation workflows; general nodes can keep `langgraph:cogni`.
 
 ## The README is yours
 

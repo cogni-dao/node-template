@@ -114,10 +114,6 @@ export const serverSchema = z.object({
   // NextAuth secret (required for JWT signing)
   AUTH_SECRET: z.string().min(32),
 
-  // v1 agent-key hard stop (task.0069). Can only SHORTEN the code default in
-  // agent-v1-hard-stop.ts; a later value is ignored. Unparsable disables renew-v1.
-  AGENT_V1_HARD_STOP: z.string().optional(),
-
   // Optional
   PORT: z.coerce.number().default(3000),
   PINO_LOG_LEVEL: z
@@ -154,8 +150,8 @@ export const serverSchema = z.object({
   // Required when on-chain governance signal execution is enabled.
   ALCHEMY_WEBHOOK_SECRET: optionalString,
 
-  // GitHub Review App credentials - for PR review Check Runs + comments.
-  // Optional: PR review feature is disabled when not configured.
+  // GitHub App credentials - used by governance signal dispatch (Alchemy webhook).
+  // Optional: signal dispatch is skipped when not configured.
   // These are the same env vars used by scheduler-worker for ingestion.
   GH_REVIEW_APP_ID: optionalString,
   GH_REVIEW_APP_PRIVATE_KEY_BASE64: optionalString,

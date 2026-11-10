@@ -7,7 +7,7 @@
  *   a valid HMAC-signed machine bearer token (`cogni_ag_sk_v1_...`), a revocable hashed key (the `REVOCABLE_KEY_PREFIX` token,
  *   one store lookup), or a browser session cookie. One entry point for all auth surfaces.
  * Scope: Bearer parser + HMAC signer/verifier (issueAgentApiKey exported to
- *   the register and renew-v1 routes only), and resolveRequestIdentity which
+ *   the register route only), and resolveRequestIdentity which
  *   wrapRouteHandlerWithLogging consumes via `auth.getSessionUser`. Does NOT
  *   read from the database for sessions — all session IO happens via getServerSessionUser. Credential-store reads are listed below.
  * Invariants:
@@ -105,19 +105,15 @@ function parseAgentToken(token: string): AgentTokenPayload | null {
   }
 }
 
-/** `expiresAtSec` only lets renew-v1 cap `exp` at the hard stop; omitted, the 30-day default is unchanged. */
 export function issueAgentApiKey(input: {
   userId: string;
   displayName: string | null;
-  expiresAtSec?: number;
 }): string {
   const payload: AgentTokenPayload = {
     sub: input.userId,
     displayName: input.displayName,
     iat: Math.floor(Date.now() / 1000),
-    exp:
-      input.expiresAtSec ??
-      Math.floor(Date.now() / 1000) + AGENT_KEY_TTL_SECONDS,
+    exp: Math.floor(Date.now() / 1000) + AGENT_KEY_TTL_SECONDS,
   };
   const payloadB64 = base64UrlEncode(JSON.stringify(payload));
   return `${TOKEN_PREFIX}${payloadB64}.${signPayload(payloadB64)}`;

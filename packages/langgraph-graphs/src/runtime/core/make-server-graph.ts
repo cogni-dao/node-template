@@ -63,11 +63,11 @@ class InvocationConfiguredModel extends ConfigurableModel {
  *
  * @example
  * ```typescript
- * // graphs/poet/server.ts
- * export const poet = await makeServerGraph({
- *   name: POET_GRAPH_NAME,
- *   createGraph: createPoetGraph,
- *   toolIds: POET_TOOL_IDS,
+ * // graphs/example/server.ts
+ * export const example = await makeServerGraph({
+ *   name: EXAMPLE_GRAPH_NAME,
+ *   createGraph: createExampleGraph,
+ *   toolIds: EXAMPLE_TOOL_IDS,
  * });
  * ```
  */

@@ -129,7 +129,7 @@ describe("POST /api/internal/graphs/{graphId}/runs terminal publication", () => 
     mocks.getRunByRunId.mockResolvedValue(null);
   });
 
-  it.each(["cogni-decide", "work-prioritizer"])("marks only a validated schedule of %s unattended", async (graph) => {
+  it.each(["cogni", "work-prioritizer"])("marks only a validated schedule of %s unattended", async (graph) => {
     for (const scheduled of [false, true]) {
       mocks.runGraph.mockClear();
       mocks.getRunByRunId.mockResolvedValue(scheduled ? { runKind: "system_scheduled", triggerSource: "temporal_schedule", graphId: `langgraph:${graph}`, triggerRef: "schedule", scheduledFor: new Date("2026-01-01T00:00:00.000Z") } : null);
@@ -145,15 +145,15 @@ describe("POST /api/internal/graphs/{graphId}/runs terminal publication", () => 
   });
 
   it.each([
-    { runKind: "system_webhook", triggerSource: "webhook", graphId: "langgraph:cogni-decide", triggerRef: "schedule", scheduledFor: new Date("2026-01-01T00:00:00.000Z") },
+    { runKind: "system_webhook", triggerSource: "webhook", graphId: "langgraph:work-prioritizer", triggerRef: "schedule", scheduledFor: new Date("2026-01-01T00:00:00.000Z") },
     { runKind: "system_scheduled", triggerSource: "temporal_schedule", graphId: "langgraph:other", triggerRef: "schedule", scheduledFor: new Date("2026-01-01T00:00:00.000Z") },
     null,
   ])("does not mark unverified grant-backed runs unattended", async (record) => {
     mocks.getRunByRunId.mockResolvedValue(record);
-    await POST(new NextRequest("http://localhost/api/internal/graphs/langgraph:cogni-decide/runs", {
+    await POST(new NextRequest("http://localhost/api/internal/graphs/langgraph:work-prioritizer/runs", {
       method: "POST", headers: { authorization: "Bearer scheduler-secret-value-1234567890", "content-type": "application/json", "idempotency-key": "schedule:2026-01-01T00:00:00.000Z" },
       body: JSON.stringify({ executionGrantId: "40000000-0000-4000-a000-000000000001", runId: RUN_ID, input: { messages: [{ role: "user", content: "decide" }], modelRef: { providerKey: "platform", modelId: "test-model" } } }),
-    }), { params: Promise.resolve({ graphId: "langgraph:cogni-decide" }) });
+    }), { params: Promise.resolve({ graphId: "langgraph:work-prioritizer" }) });
     expect(mocks.runGraph).toHaveBeenCalledWith(expect.anything(), expect.not.objectContaining({ unattended: expect.anything() }));
   });
 

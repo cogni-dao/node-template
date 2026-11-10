@@ -28,7 +28,6 @@ import { describe, expect, it } from "vitest";
 import {
   LANGGRAPH_CATALOG,
   NODE_AI_PRINCIPAL,
-  OPERATOR_LANGGRAPH_CATALOG,
   PRIORITIZER_PRINCIPAL,
 } from "../src/catalog";
 import { createDevToolExecFn } from "../src/runtime/core/dev-tool-exec";
@@ -36,20 +35,17 @@ import { createDevToolExecFn } from "../src/runtime/core/dev-tool-exec";
 const WRITE_ARGS = { action: "patch", id: "task.1", priority: 3 };
 
 describe("catalog principals (N4)", () => {
-  it("names prioritizer for work-prioritizer and node-ai for cogni and brain", () => {
+  it("names prioritizer for work-prioritizer and node-ai for cogni", () => {
     expect(LANGGRAPH_CATALOG["work-prioritizer"]?.principal).toBe("prioritizer");
     expect(LANGGRAPH_CATALOG.cogni?.principal).toBe("node-ai");
-    expect(LANGGRAPH_CATALOG.brain?.principal).toBe("node-ai");
     expect(PRIORITIZER_PRINCIPAL).toBe("prioritizer");
     expect(NODE_AI_PRINCIPAL).toBe("node-ai");
   });
 
-  it("gives cogni-decide the same write tool and no principal", () => {
-    const decide = LANGGRAPH_CATALOG["cogni-decide"];
-    const prioritizer = LANGGRAPH_CATALOG["work-prioritizer"];
-    expect(decide?.principal).toBeUndefined();
-    expect(decide?.toolIds).toEqual(prioritizer?.toolIds);
-    expect(decide?.toolIds).toContain("core__work_item_transition");
+  it("gives work-prioritizer the scores writer", () => {
+    expect(LANGGRAPH_CATALOG["work-prioritizer"]?.toolIds).toContain(
+      "core__work_item_transition",
+    );
   });
 
   it("gives cogni no domain writer: its only write tool arranges schedules", () => {
@@ -61,11 +57,11 @@ describe("catalog principals (N4)", () => {
   });
 
   it("keeps principals limited to the named graphs", () => {
-    const named = Object.entries(OPERATOR_LANGGRAPH_CATALOG)
+    const named = Object.entries(LANGGRAPH_CATALOG)
       .filter(([, entry]) => "principal" in entry && entry.principal)
       .map(([name]) => name)
       .sort();
-    expect(named).toEqual(["brain", "cogni", "work-prioritizer"]);
+    expect(named).toEqual(["cogni", "work-prioritizer"]);
   });
 });
 

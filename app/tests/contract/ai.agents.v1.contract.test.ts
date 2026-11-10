@@ -21,16 +21,16 @@ import { describe, expect, it } from "vitest";
 describe("ai.agents.v1 contract validation", () => {
   it("accepts null description (LANGGRAPH_SERVER_ALIGNED)", () => {
     const valid = {
-      agentId: "langgraph:poet",
-      graphId: "langgraph:poet",
-      name: "Poet",
+      agentId: "langgraph:cogni",
+      graphId: "langgraph:cogni",
+      name: "Cogni",
       description: null,
     };
     expect(() => AgentDescriptorSchema.parse(valid)).not.toThrow();
   });
 
   it("rejects missing required fields", () => {
-    const missing = { agentId: "langgraph:poet" };
+    const missing = { agentId: "langgraph:cogni" };
     expect(() => AgentDescriptorSchema.parse(missing)).toThrow();
   });
 

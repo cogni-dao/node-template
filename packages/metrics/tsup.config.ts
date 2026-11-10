@@ -15,6 +15,7 @@ export default defineConfig({
 		"src/knowledge.ts",
 		"src/schema.ts",
 		"src/sources.ts",
+		"src/true-now.ts",
 	],
 	format: ["esm"],
 	splitting: true,
