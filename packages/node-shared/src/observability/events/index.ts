@@ -42,9 +42,6 @@ export const EVENT_NAMES = {
 	AGENT_TOOL_AUTHZ: "agent_tool.authz",
 	/** A run ended cleanly because a tool was denied or every write tool was withheld (DENIAL_IS_TERMINAL): principal, tool, code, reason, modelCalls, modelCallsAfterDenial. */
 	AGENT_RUN_DENIED: "agent_run.denied",
-	/** renew-v1 (task.0069): a v1 agent key was renewed (userId, oldExp, newExp; never the key) or refused (userId, reason). */
-	AGENT_CREDENTIAL_V1_RENEWED: "agent.credential.v1_renewed",
-	AGENT_CREDENTIAL_V1_RENEW_REFUSED: "agent.credential.v1_renew_refused",
 	/** A DAO admin granted / revoked an agent role (task.5456): principal, scope, approvedBy. */
 	AGENT_ROLE_GRANTED: "agent_role.granted",
 	AGENT_ROLE_REVOKED: "agent_role.revoked",
