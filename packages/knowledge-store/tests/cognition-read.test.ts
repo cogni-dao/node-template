@@ -13,6 +13,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   type CognitionReadPort,
+  type CognitionReadResult,
+  CognitionUnavailableError,
+  cognitionEtag,
+  cognitionEtagMatches,
+  cognitionServerTiming,
   readCognitionSnapshot,
 } from "../src/domain/cognition-read.js";
 
@@ -59,7 +64,7 @@ function deferred<T>() {
 }
 
 describe("readCognitionSnapshot", () => {
-  it("reads the index, one orientation body and goals; drops empty domains", async () => {
+  it("reads the index, the orientation candidates in parallel and goals; drops empty domains", async () => {
     const { port, calls } = fixture();
     const { snapshot, memoHit } = await readCognitionSnapshot(port, ORIENTATION_IDS);
     expect(memoHit).toBe(false);
@@ -70,8 +75,8 @@ describe("readCognitionSnapshot", () => {
     expect(snapshot.governingIndex.map((r) => r.id)).toEqual(["g-1"]);
     expect(snapshot.orientation).toEqual({ id: "fresh-agent-orientation", content: "the map" });
     expect(snapshot.goals.status).toBe("ok");
-    // Exactly one body read: the orientation. No scan, no other body.
-    expect(calls.body).toHaveBeenCalledTimes(1);
+    // Body reads are only the orientation candidates, looked up in parallel. No scan, no other body.
+    expect(calls.body.mock.calls.map(([id]) => id)).toEqual(ORIENTATION_IDS);
   });
 
   it("serves the same revision from one shared read and re-reads after a commit", async () => {
@@ -105,7 +110,9 @@ describe("readCognitionSnapshot", () => {
   it("forgets a failed read", async () => {
     const { port, calls } = fixture();
     calls.governing.mockRejectedValueOnce(new Error("busy"));
-    await expect(readCognitionSnapshot(port, ORIENTATION_IDS)).rejects.toThrow("busy");
+    await expect(readCognitionSnapshot(port, ORIENTATION_IDS)).rejects.toThrow(
+      CognitionUnavailableError
+    );
     const retry = await readCognitionSnapshot(port, ORIENTATION_IDS);
     expect(retry.memoHit).toBe(false);
     expect(retry.snapshot.governingIndex).toHaveLength(1);
@@ -235,7 +242,7 @@ describe("readCognitionSnapshot", () => {
     };
     await expect(
       readCognitionSnapshot(keyed, ORIENTATION_IDS, { maxStaleMs: -1 })
-    ).rejects.toThrow("dolt down");
+    ).rejects.toThrow(CognitionUnavailableError);
   });
 
   it("bounds a fresh read after a commit: serves the kept snapshot stale, then keeps the fresh one", async () => {
@@ -264,5 +271,94 @@ describe("readCognitionSnapshot", () => {
     await new Promise((r) => setTimeout(r, 10));
     late.resolve("k1");
     expect(await pending).toMatchObject({ stale: false, memoHit: false });
+  });
+
+  it("serves stale within maxStaleMs and names the reason", async () => {
+    const { port, calls } = fixture();
+    let next: () => Promise<string> = async () => "rev-a";
+    const keyed = Object.assign(port, { currentCommit: () => next() });
+    await readCognitionSnapshot(keyed, ORIENTATION_IDS);
+    next = async () => {
+      throw new Error("dolt busy");
+    };
+    expect(
+      await readCognitionSnapshot(keyed, ORIENTATION_IDS, { maxStaleMs: 60_000 })
+    ).toMatchObject({ stale: true, staleReason: "head_failed" });
+    next = async () => "rev-b";
+    calls.governing.mockRejectedValueOnce(new Error("read timeout"));
+    expect(await readCognitionSnapshot(keyed, ORIENTATION_IDS)).toMatchObject({
+      stale: true,
+      staleReason: "read_failed",
+    });
+  });
+
+  it("bounds a cold caller: nothing to serve and a hung HEAD gives CognitionUnavailableError", async () => {
+    const { port } = fixture();
+    const hung = deferred<string>();
+    const keyed = Object.assign(port, { currentCommit: () => hung.promise });
+    const error = await readCognitionSnapshot(keyed, ORIENTATION_IDS, {
+      coldDeadlineMs: 5,
+    }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(CognitionUnavailableError);
+    expect((error as CognitionUnavailableError).reason).toBe("cold_timeout");
+    hung.resolve("rev-a");
+  });
+});
+
+describe("cognition headers", () => {
+  const result = (over: Partial<CognitionReadResult> = {}): CognitionReadResult => ({
+    snapshot: {
+      revision: "rev-a",
+      domains: [],
+      governingIndex: [],
+      orientation: null,
+      goals: { status: "ok", goals: [] },
+      readMs: { domains: 1, governing: 1, orientation: 1, goals: 1 },
+    },
+    memoHit: true,
+    stale: false,
+    ...over,
+  });
+
+  it("never gives a stale, degraded or hubless bundle an ETag", () => {
+    expect(cognitionEtag(result(), ["build", "origin"])).toMatch(/^W\/"[\w-]{27}"$/);
+    expect(cognitionEtag(result({ stale: true, staleReason: "head_slow" }), [])).toBeNull();
+    expect(
+      cognitionEtag(
+        result({
+          snapshot: { ...result().snapshot, goals: { status: "unavailable", reason: "x" } },
+        }),
+        []
+      )
+    ).toBeNull();
+    expect(cognitionEtag(null, [])).toBeNull();
+  });
+
+  it("changes the ETag with the revision or any part", () => {
+    const base = cognitionEtag(result(), ["b1", "o1"]);
+    expect(cognitionEtag(result(), ["b2", "o1"])).not.toBe(base);
+    expect(
+      cognitionEtag(result({ snapshot: { ...result().snapshot, revision: "rev-b" } }), ["b1", "o1"])
+    ).not.toBe(base);
+  });
+
+  it("matches If-None-Match weakly, in lists and by *; never against a null ETag", () => {
+    const etag = cognitionEtag(result(), ["b"]);
+    expect(cognitionEtagMatches(etag, etag)).toBe(true);
+    expect(cognitionEtagMatches(`"x", ${etag?.slice(2)}`, etag)).toBe(true);
+    expect(cognitionEtagMatches("*", etag)).toBe(true);
+    expect(cognitionEtagMatches("*", null)).toBe(false);
+    expect(cognitionEtagMatches(null, etag)).toBe(false);
+  });
+
+  it("describes the hub read in Server-Timing", () => {
+    expect(cognitionServerTiming(result(), 1.234, 5)).toBe(
+      'hub;dur=1.2;desc="memo", total;dur=5.0'
+    );
+    expect(cognitionServerTiming(result({ memoHit: false }), 1, 2)).toContain('desc="read"');
+    expect(
+      cognitionServerTiming(result({ stale: true, staleReason: "read_slow" }), 1, 2)
+    ).toContain('desc="stale read_slow"');
+    expect(cognitionServerTiming(null, 0, 2)).toContain('desc="none"');
   });
 });

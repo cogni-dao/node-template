@@ -600,3 +600,64 @@ it("serves a degraded bundle visibly with no ETag and no-store, and a hubless bu
 		SESSION_BOOTSTRAP_INVARIANTS[0],
 	);
 });
+
+describe("cognition route budgets and revalidation (bug.0018)", () => {
+	const call = async (headers: HeadersInit = {}, user: unknown = { id: "agent" }) => {
+		const { GET } = await import("@/app/api/v1/cognition/route");
+		const handler = GET as unknown as (...args: unknown[]) => Promise<Response>;
+		return handler(
+			{ log: { info: vi.fn(), warn: vi.fn() } },
+			new Request("https://fresh-node.cognidao.org/api/v1/cognition", {
+				headers,
+			}),
+			user,
+		);
+	};
+	const hub = (head: () => Promise<string>) => ({
+		currentCommit: vi.fn(head),
+		listDomainsFull: async () => [],
+		listGoverningIndex: async () => [],
+		getKnowledge: async () => null,
+		listActiveGoals: async () => [],
+	});
+
+	it("answers 401 before touching the hub", async () => {
+		const port = hub(async () => "rev-a");
+		composition.port = port;
+		const response = await call({}, null);
+		expect(response.status).toBe(401);
+		expect(port.currentCommit).not.toHaveBeenCalled();
+	});
+
+	it("never confirms a stale bundle with 304: 200, no ETag, no-store", async () => {
+		let head: () => Promise<string> = async () => "rev-a";
+		composition.port = hub(() => head());
+		const first = await call();
+		const etag = first.headers.get("etag");
+		expect(etag).toMatch(/^W\//);
+		head = async () => {
+			throw new Error("dolt busy");
+		};
+		const stale = await call({ "if-none-match": etag ?? "" });
+		expect(stale.status).toBe(200);
+		expect(stale.headers.get("etag")).toBeNull();
+		expect(stale.headers.get("cache-control")).toBe("no-store");
+		expect(stale.headers.get("server-timing")).toContain(
+			'desc="stale head_failed"',
+		);
+	});
+
+	it("answers a retryable 503 when nothing complete can be read", async () => {
+		composition.port = hub(async () => {
+			throw new Error("dolt down");
+		});
+		const response = await call();
+		expect(response.status).toBe(503);
+		expect(response.headers.get("retry-after")).toBe("1");
+		expect(await response.json()).toEqual({
+			error: "cognition_unavailable",
+			retryable: true,
+		});
+	});
+});
+
