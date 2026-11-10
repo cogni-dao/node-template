@@ -65,7 +65,7 @@ describe("AggregatingAgentCatalog", () => {
 
       const agents = catalog.listAgents();
 
-      expect(agents[0].name).toBe("Poet");
+      expect(agents[0].name).toBe("Cogni");
       expect(agents[0].description).toBe("Test cogni agent");
     });
   });

@@ -23,7 +23,7 @@ describe("ai.agents.v1 contract validation", () => {
     const valid = {
       agentId: "langgraph:cogni",
       graphId: "langgraph:cogni",
-      name: "Poet",
+      name: "Cogni",
       description: null,
     };
     expect(() => AgentDescriptorSchema.parse(valid)).not.toThrow();
