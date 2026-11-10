@@ -204,6 +204,7 @@ export const workItemTransitionContract: ToolContract<
     subject: "member",
     label: "Update work items and their priority scores",
     description: "Move work items along and change their scores.",
+    onByDefaultFor: ["prioritizer"],
   },
   inputSchema: WorkItemTransitionInputSchema,
   outputSchema: WorkItemTransitionOutputSchema,

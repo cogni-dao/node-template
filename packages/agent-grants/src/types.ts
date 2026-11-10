@@ -28,6 +28,8 @@ export interface ToolRequires {
   readonly label?: string;
   /** One plain line saying what the permission lets an AI do (from the declaration). */
   readonly description?: string;
+  /** Internal principal slugs this permission is ON for by default (from the declaration; see DEFAULT_PERMISSIONS_ARE_DECLARED). */
+  readonly onByDefaultFor?: readonly string[];
 }
 
 /** The node's own admin authority, as seen by the guard. */

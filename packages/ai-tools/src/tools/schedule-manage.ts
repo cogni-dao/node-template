@@ -107,6 +107,7 @@ export const scheduleManageContract: ToolContract<
     subject: "member",
     label: "Create and change schedules for the person it helps",
     description: "Make, change and stop schedules for the person it helps.",
+    onByDefaultFor: ["node-ai"],
   },
   inputSchema: ScheduleManageInputSchema,
   outputSchema: ScheduleManageOutputSchema,

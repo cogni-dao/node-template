@@ -118,6 +118,25 @@ export async function setup() {
   // Run migrations as app_user (DB owner, same as production)
   execSync("pnpm -w db:migrate:direct", { stdio: "inherit" });
 
+  // ── Snapshot: default permissions as the migrations left them ───────────
+  // Taken right after migrate and before any test file runs. Parallel files revoke and insert rows for the seeded
+  // principals in this shared database, so the DEFAULT_PERMISSIONS_ARE_DECLARED gate
+  // (tests/component/db/default-permissions.int.test.ts) reads this snapshot, never live rows. Every agent_roles row
+  // here was written by a migration; `bySystem` marks the ones approved by the system principal (0008). No runtime
+  // code writes that approver.
+  const defaultPermissionsSnapshot = await c.exec([
+    "bash",
+    "-c",
+    `PGPASSWORD='${APP_DB_SERVICE_PASSWORD}' psql -h localhost -p 5432 -U ${APP_DB_SERVICE_USER} -d ${APP_DB_NAME} -tAc "SELECT json_build_object('rows', (SELECT coalesce(json_agg(json_build_object('slug', p.slug, 'scope', r.scope, 'revoked', r.revoked_at IS NOT NULL, 'bySystem', coalesce(r.approved_by = '00000000-0000-4000-a000-000000000001', false)) ORDER BY p.slug, r.scope), '[]'::json) FROM agent_roles r LEFT JOIN agent_principals p ON p.user_id = r.principal_user_id), 'principals', (SELECT coalesce(json_agg(slug ORDER BY slug), '[]'::json) FROM agent_principals WHERE kind = 'internal'))"`,
+  ]);
+  if (defaultPermissionsSnapshot.exitCode !== 0) {
+    throw new Error(
+      `Snapshot failed: could not read default permissions after migrate.\n${defaultPermissionsSnapshot.output}`
+    );
+  }
+  process.env.DEFAULT_PERMISSIONS_SNAPSHOT =
+    defaultPermissionsSnapshot.stdout.trim();
+
   // ── Preflight: verify service role can connect (BYPASSRLS) ─────────────
   const serviceCheck = await c.exec([
     "bash",

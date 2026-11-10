@@ -17,7 +17,7 @@
 import { randomUUID } from "node:crypto";
 import { guardTools } from "@cogni/agent-grants";
 import { CORE_TOOL_BUNDLE } from "@cogni/ai-tools";
-import { PRIORITIZER_PRINCIPAL_USER_ID } from "@cogni/node-shared";
+import { NODE_AI_PRINCIPAL_USER_ID, PRIORITIZER_PRINCIPAL_USER_ID } from "@cogni/node-shared";
 import postgres, { type Sql } from "postgres";
 import pino from "pino";
 import { NextRequest } from "next/server";
@@ -71,6 +71,9 @@ describe("agent roles route (real Postgres, real repo-spec admin)", () => {
   let adminUser: string;
   let memberUser: string;
   let agentUser: string;
+  // A throwaway internal principal: default permissions (0039) are ON for the seeded principals in the shared database,
+  // so the tests that start from "no role" and toggle rows use their own.
+  let ai: { id: string; slug: string };
   let authority: ReturnType<typeof createAgentToolAuthority>;
 
   const mkUser = async (wallet?: string) => {
@@ -109,6 +112,10 @@ describe("agent roles route (real Postgres, real repo-spec admin)", () => {
     adminUser = await mkUser(ADMIN_WALLET);
     memberUser = await mkUser(`0x${"5e".repeat(20)}`);
     agentUser = await mkUser();
+    const aiId = await mkUser();
+    ai = { id: aiId, slug: `rt-${aiId.slice(0, 8)}` };
+    await service`INSERT INTO agent_principals (kind, slug, user_id) VALUES ('internal', ${ai.slug}, ${ai.id})`;
+    body.principal = ai.slug;
     authority = createAgentToolAuthority({
       sql: service as unknown as AgentAuthoritySql,
       nodeAdmin: createApproversNodeAdminAuthority(),
@@ -127,13 +134,17 @@ describe("agent roles route (real Postgres, real repo-spec admin)", () => {
   });
 
   afterAll(async () => {
-    await service?.unsafe("DELETE FROM agent_roles WHERE approved_by = ANY($1)", [users]);
+    await service?.unsafe("DELETE FROM agent_roles WHERE approved_by = ANY($1) OR principal_user_id = ANY($1)", [users]);
+    await service?.unsafe("DELETE FROM agent_principals WHERE user_id = ANY($1)", [users]);
     await service?.unsafe("DELETE FROM user_bindings WHERE user_id = ANY($1)", [users]);
     await service?.unsafe("DELETE FROM users WHERE id = ANY($1)", [users]);
     await service?.end({ timeout: 1 });
   });
 
-  const body = { principal: "prioritizer", scope: "work_item:transition" };
+  // The throwaway principal (no default): every grant, revoke and refusal below starts from "no role".
+  const body = { principal: "", scope: "work_item:transition" }; // principal set in beforeAll
+  // A seeded principal's permission with no default, for the GET view toggles.
+  const viewBody = { principal: "node-ai", scope: "knowledge:write" };
 
   it("HEADER-REFUSED: any Authorization header on a human route is 403 human_session_required, even for the admin's own session", async () => {
     for (const user of [sessionUser(agentUser, "bearer"), sessionUser(adminUser, "bearer"), sessionUser(adminUser, "session"), null]) {
@@ -148,7 +159,7 @@ describe("agent roles route (real Postgres, real repo-spec admin)", () => {
         expect(await res.json()).toMatchObject({ code: "human_session_required" });
       }
     }
-    const rows = await service`SELECT 1 FROM agent_roles WHERE principal_user_id = ${PRIORITIZER_PRINCIPAL_USER_ID} AND revoked_at IS NULL`;
+    const rows = await service`SELECT 1 FROM agent_roles WHERE principal_user_id = ${ai.id} AND revoked_at IS NULL`;
     expect(rows).toHaveLength(0);
   });
 
@@ -169,17 +180,22 @@ describe("agent roles route (real Postgres, real repo-spec admin)", () => {
     expect(before.canManage).toBe(true);
     const mine = before.permissions.filter((r) => r.section === "node");
     expect([...new Set(mine.map((r) => r.who))].sort()).toEqual(["node-ai", "prioritizer"]);
+    // The seeded AI's default permissions are already ON before any admin opens the page (0039); the scorer's is shown.
     const scorer = mine.filter((r) => r.who === "prioritizer");
-    expect(scorer).toEqual([expect.objectContaining({ scope: "work_item:transition", on: false, until: null, principalUserId: PRIORITIZER_PRINCIPAL_USER_ID })]);
+    expect(scorer).toEqual([expect.objectContaining({ scope: "work_item:transition", on: true, until: null, principalUserId: PRIORITIZER_PRINCIPAL_USER_ID })]);
     expect(scorer[0]?.label).toMatch(/work items/i);
     expect(scorer[0]?.description.length).toBeGreaterThan(15);
+    expect(mine.find((r) => r.who === "node-ai" && r.scope === "schedule:manage")?.on).toBe(true);
     expect(JSON.stringify(mine)).not.toMatch(/\bjobs?\b|risk|blurb/i);
-    expect((await call(POST, body)).status).toBe(200);
+    // A permission with no default starts off, and the admin's yes and no show up in the next read.
+    const pick = (v: typeof before) => v.permissions.find((r) => r.principalUserId === NODE_AI_PRINCIPAL_USER_ID && r.scope === viewBody.scope);
+    expect(pick(before)?.on).toBe(false);
+    expect((await call(POST, viewBody)).status).toBe(200);
     const after = (await (await getView()).json()) as typeof before;
-    expect(after.permissions.find((r) => r.principalUserId === PRIORITIZER_PRINCIPAL_USER_ID)?.on).toBe(true);
-    expect((await call(DELETE, body)).status).toBe(200);
+    expect(pick(after)?.on).toBe(true);
+    expect((await call(DELETE, viewBody)).status).toBe(200);
     const removed = (await (await getView()).json()) as typeof before;
-    expect(removed.permissions.find((r) => r.principalUserId === PRIORITIZER_PRINCIPAL_USER_ID)?.on).toBe(false);
+    expect(pick(removed)?.on).toBe(false);
     expect((await getView()).headers.get("cache-control")).toBe("no-store");
   });
 
@@ -209,7 +225,7 @@ describe("agent roles route (real Postgres, real repo-spec admin)", () => {
   it("V8: a signed-in non-admin gets 403 on grant and revoke, and nothing is written", async () => {
     session.user = sessionUser(memberUser, "session");
     // Other component files share this database, so compare with the state before, not with zero.
-    const live = () => service`SELECT 1 FROM agent_roles WHERE principal_user_id = ${PRIORITIZER_PRINCIPAL_USER_ID} AND revoked_at IS NULL`;
+    const live = () => service`SELECT 1 FROM agent_roles WHERE principal_user_id = ${ai.id} AND revoked_at IS NULL`;
     const before = await live();
     expect((await call(POST, body)).status).toBe(403);
     expect((await call(DELETE, body)).status).toBe(403);
@@ -220,7 +236,7 @@ describe("agent roles route (real Postgres, real repo-spec admin)", () => {
     session.user = sessionUser(agentUser, "bearer");
     expect((await call(POST, body)).status).toBe(403);
     expect((await call(DELETE, body)).status).toBe(403);
-    const rows = await service`SELECT 1 FROM agent_roles WHERE principal_user_id = ${PRIORITIZER_PRINCIPAL_USER_ID} AND revoked_at IS NULL`;
+    const rows = await service`SELECT 1 FROM agent_roles WHERE principal_user_id = ${ai.id} AND revoked_at IS NULL`;
     expect(rows).toHaveLength(0);
   });
 
@@ -233,23 +249,23 @@ describe("agent roles route (real Postgres, real repo-spec admin)", () => {
 
   it("V8 + V9: admin grant allows the next call; admin revoke denies it; every decision is logged", async () => {
     // Before: no role row, the guarded call is denied.
-    await expect(callTool(PRIORITIZER_PRINCIPAL_USER_ID)).rejects.toMatchObject({ receipt: { code: "policy_denied" } });
+    await expect(callTool(ai.id)).rejects.toMatchObject({ receipt: { code: "policy_denied" } });
 
     session.user = sessionUser(adminUser, "session");
     const granted = await call(POST, body);
     expect(granted.status).toBe(200);
-    expect(await granted.json()).toEqual({ ...body, principalUserId: PRIORITIZER_PRINCIPAL_USER_ID, changed: true });
-    await expect(callTool(PRIORITIZER_PRINCIPAL_USER_ID)).resolves.toBe("ran");
+    expect(await granted.json()).toEqual({ ...body, principalUserId: ai.id, changed: true });
+    await expect(callTool(ai.id)).resolves.toBe("ran");
 
     const revoked = await call(DELETE, body);
     expect(revoked.status).toBe(200);
     expect(await revoked.json()).toMatchObject({ changed: true });
-    await expect(callTool(PRIORITIZER_PRINCIPAL_USER_ID)).rejects.toMatchObject({ receipt: { code: "policy_denied", retryable: false } });
+    await expect(callTool(ai.id)).rejects.toMatchObject({ receipt: { code: "policy_denied", retryable: false } });
 
     // V9: the log lines (real pino JSON from the real code path).
     const authz = logLines.filter((l) => l.event === "agent_tool.authz");
     expect(authz.map((l) => `${l.decision}/${l.code}`)).toEqual(["deny/policy_denied", "allow/allowed", "deny/policy_denied"]);
-    expect(authz[1]).toMatchObject({ principal: PRIORITIZER_PRINCIPAL_USER_ID, subject: null, payer: "payer-route-test", tool: "core__work_item_transition" });
+    expect(authz[1]).toMatchObject({ principal: ai.id, subject: null, payer: "payer-route-test", tool: "core__work_item_transition" });
     expect(logLines.filter((l) => String(l.event).startsWith("agent_role.")).map((l) => l.event)).toEqual(["agent_role.granted", "agent_role.revoked"]);
     const serialized = JSON.stringify(logLines);
     expect(serialized).not.toMatch(/cogni_ag_sk|Bearer |AUTH_SECRET|0x[0-9a-fA-F]{40}/);

@@ -66,6 +66,12 @@ export interface ToolRequires {
   readonly label: string;
   /** One plain line on what the permission lets an AI do. Shown beside the label; declared here once and nowhere else. */
   readonly description: string;
+  /**
+   * Internal principal slugs this permission is ON for by default (DEFAULT_PERMISSIONS_ARE_DECLARED).
+   * Declared here once; a node migration turns each (slug, scope) pair on once at install, and a node CI test fails
+   * when the declaration and the migrations disagree. After install only a DAO admin changes the row.
+   */
+  readonly onByDefaultFor?: readonly string[];
 }
 
 /**

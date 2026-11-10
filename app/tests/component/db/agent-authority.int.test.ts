@@ -54,6 +54,15 @@ describe("agent authority (real Postgres)", () => {
     return id;
   };
 
+  // A throwaway internal principal (users + agent_principals rows). Default permissions (0039) are ON for the seeded
+  // principals in the shared component database, so tests that start from "no role" or toggle a row use their own.
+  const makeInternalPrincipal = async () => {
+    const id = await makeUser();
+    const slug = `t-${id.slice(0, 8)}`;
+    await service`INSERT INTO agent_principals (kind, slug, user_id) VALUES ('internal', ${slug}, ${id})`;
+    return { id, slug };
+  };
+
   beforeAll(() => {
     if (!process.env.DATABASE_SERVICE_URL || !process.env.DATABASE_URL)
       throw new Error("component PostgreSQL required");
@@ -95,10 +104,14 @@ describe("agent authority (real Postgres)", () => {
       expect(tables).toHaveLength(0);
     });
 
-    it("seeds no role rows", async () => {
-      const roles = await service`
-        SELECT 1 FROM agent_roles WHERE principal_user_id IN (${NODE_AI_PRINCIPAL_USER_ID}, ${PRIORITIZER_PRINCIPAL_USER_ID})`;
-      expect(roles).toHaveLength(0);
+    it("seeds only the declared default permissions, approved by the system principal", () => {
+      // The shared database is mutated by parallel files, so read the snapshot the global setup took right after migrate.
+      const snapshot = JSON.parse(process.env.DEFAULT_PERMISSIONS_SNAPSHOT as string) as {
+        rows: Array<{ slug: string; scope: string; revoked: boolean; bySystem: boolean }>;
+      };
+      // Default permissions are the only role rows install writes: each is approved by the system principal.
+      expect(snapshot.rows.length).toBeGreaterThan(0);
+      expect(snapshot.rows.every((r) => r.bySystem)).toBe(true);
     });
 
     it("rejects an internal principal with no slug and a duplicate slug", async () => {
@@ -181,24 +194,25 @@ describe("agent authority (real Postgres)", () => {
 
     it("grants once, is idempotent, and revokes softly", async () => {
       const admin = await makeUser();
+      const ai = await makeInternalPrincipal();
       const a = createAgentToolAuthority({
         sql: service as unknown as AgentAuthoritySql,
         nodeAdmin: { check: async () => ({ ok: true }) },
         log: makeLogger({ component: "agent-authority-test" }),
         toolBundle: (await import("@cogni/ai-tools")).CORE_TOOL_BUNDLE as never,
       });
-      const first = await a.grantRole({ principalSlug: "node-ai", scope: "knowledge:write", approvedBy: admin });
-      expect(first).toEqual({ principalUserId: NODE_AI_PRINCIPAL_USER_ID, created: true });
-      expect((await a.grantRole({ principalSlug: "node-ai", scope: "knowledge:write", approvedBy: admin })).created).toBe(false);
-      const live = await service`SELECT 1 FROM agent_roles WHERE principal_user_id = ${NODE_AI_PRINCIPAL_USER_ID} AND scope = 'knowledge:write' AND revoked_at IS NULL`;
+      const first = await a.grantRole({ principalSlug: ai.slug, scope: "knowledge:write", approvedBy: admin });
+      expect(first).toEqual({ principalUserId: ai.id, created: true });
+      expect((await a.grantRole({ principalSlug: ai.slug, scope: "knowledge:write", approvedBy: admin })).created).toBe(false);
+      const live = await service`SELECT 1 FROM agent_roles WHERE principal_user_id = ${ai.id} AND scope = 'knowledge:write' AND revoked_at IS NULL`;
       expect(live).toHaveLength(1);
-      expect((await a.revokeRole({ principalSlug: "node-ai", scope: "knowledge:write", revokedBy: admin })).revoked).toBe(true);
-      const rows = await service`SELECT revoked_at FROM agent_roles WHERE principal_user_id = ${NODE_AI_PRINCIPAL_USER_ID} AND scope = 'knowledge:write'`;
+      expect((await a.revokeRole({ principalSlug: ai.slug, scope: "knowledge:write", revokedBy: admin })).revoked).toBe(true);
+      const rows = await service`SELECT revoked_at FROM agent_roles WHERE principal_user_id = ${ai.id} AND scope = 'knowledge:write'`;
       expect(rows).toHaveLength(1);
       expect(rows[0]?.revoked_at).not.toBeNull();
       // After a revoke the same role can be granted again as a new live row.
-      expect((await a.grantRole({ principalSlug: "node-ai", scope: "knowledge:write", approvedBy: admin })).created).toBe(true);
-      await a.revokeRole({ principalSlug: "node-ai", scope: "knowledge:write", revokedBy: admin });
+      expect((await a.grantRole({ principalSlug: ai.slug, scope: "knowledge:write", approvedBy: admin })).created).toBe(true);
+      await a.revokeRole({ principalSlug: ai.slug, scope: "knowledge:write", revokedBy: admin });
     });
 
     it("rejects an undeclared scope and an unknown principal", async () => {
@@ -275,6 +289,7 @@ describe("agent authority (real Postgres)", () => {
   describe("guard end to end over a real transaction", () => {
     it("denies, allows after grant, denies after revoke; no principal always denies", async () => {
       const admin = await makeUser();
+      const ai = await makeInternalPrincipal(); // not a seeded principal: its work_item:transition permission is off until granted
       const bundle = (await import("@cogni/ai-tools")).CORE_TOOL_BUNDLE;
       const authority = createAgentToolAuthority({
         sql: service as unknown as AgentAuthoritySql,
@@ -293,12 +308,12 @@ describe("agent authority (real Postgres)", () => {
       const call = (principalId?: string) =>
         (guarded(principalId).exec as (a: unknown, c: unknown, k: unknown) => Promise<unknown>)({}, { runId: "r" }, {});
 
-      await expect(call(PRIORITIZER_PRINCIPAL_USER_ID)).rejects.toBeInstanceOf(ToolAuthorityError);
-      await authority.grantRole({ principalSlug: "prioritizer", scope: "work_item:transition", approvedBy: admin });
-      await expect(call(PRIORITIZER_PRINCIPAL_USER_ID)).resolves.toBe("ran");
+      await expect(call(ai.id)).rejects.toBeInstanceOf(ToolAuthorityError);
+      await authority.grantRole({ principalSlug: ai.slug, scope: "work_item:transition", approvedBy: admin });
+      await expect(call(ai.id)).resolves.toBe("ran");
       await expect(call(undefined)).rejects.toMatchObject({ receipt: { code: "policy_denied" } });
-      await authority.revokeRole({ principalSlug: "prioritizer", scope: "work_item:transition", revokedBy: admin });
-      await expect(call(PRIORITIZER_PRINCIPAL_USER_ID)).rejects.toMatchObject({ receipt: { code: "policy_denied", retryable: false } });
+      await authority.revokeRole({ principalSlug: ai.slug, scope: "work_item:transition", revokedBy: admin });
+      await expect(call(ai.id)).rejects.toMatchObject({ receipt: { code: "policy_denied", retryable: false } });
     });
   });
 
