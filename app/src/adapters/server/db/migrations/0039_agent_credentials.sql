@@ -12,7 +12,7 @@ CREATE TABLE "agent_credentials" (
 	"revoked_at" timestamp with time zone,
 	"revoked_reason" text,
 	"revoked_by" text,
-	CONSTRAINT "agent_credentials_created_from_canonical" CHECK ("agent_credentials"."created_from" IN ('spawn_grant','rotation','key_upgrade','binding_recovery','recovery_grant')),
+	CONSTRAINT "agent_credentials_created_from_canonical" CHECK ("agent_credentials"."created_from" IN ('spawn_grant','rotation','legacy_upgrade','binding_recovery','recovery_grant')),
 	CONSTRAINT "agent_credentials_renew_after_expiry" CHECK ("agent_credentials"."renew_until" > "agent_credentials"."expires_at")
 );
 --> statement-breakpoint
