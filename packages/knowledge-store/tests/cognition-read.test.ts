@@ -14,6 +14,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   type CognitionReadPort,
   type CognitionReadResult,
+  COGNITION_HEAD_ABANDON_MS,
   CognitionUnavailableError,
   cognitionEtag,
   cognitionEtagMatches,
@@ -302,6 +303,70 @@ describe("readCognitionSnapshot", () => {
     expect(error).toBeInstanceOf(CognitionUnavailableError);
     expect((error as CognitionUnavailableError).reason).toBe("cold_timeout");
     hung.resolve("rev-a");
+  });
+});
+
+describe("readCognitionSnapshot under a hung store", () => {
+  it("abandons a hung HEAD, ignores it when it lands late, and never regresses the kept snapshot", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      const { port, calls } = fixture();
+      const heads: Array<ReturnType<typeof deferred<string>>> = [];
+      const keyed = Object.assign(port, {
+        currentCommit: vi.fn(() => {
+          const d = deferred<string>();
+          heads.push(d);
+          return d.promise;
+        }),
+      });
+      // First caller: HEAD 0 hangs; the cold caller gives up at its deadline.
+      const first = readCognitionSnapshot(keyed, ORIENTATION_IDS, { coldDeadlineMs: 100 }).catch(
+        (e: unknown) => e
+      );
+      await vi.advanceTimersByTimeAsync(100);
+      expect(await first).toBeInstanceOf(CognitionUnavailableError);
+      // Still within the abandon window: a new caller joins HEAD 0, no new query.
+      void readCognitionSnapshot(keyed, ORIENTATION_IDS, { coldDeadlineMs: 50 }).catch(() => undefined);
+      expect(keyed.currentCommit).toHaveBeenCalledTimes(1);
+      // Past the window: HEAD 0 is abandoned and HEAD 1 is asked.
+      await vi.advanceTimersByTimeAsync(COGNITION_HEAD_ABANDON_MS);
+      const second = readCognitionSnapshot(keyed, ORIENTATION_IDS, { coldDeadlineMs: 1_000 });
+      expect(keyed.currentCommit).toHaveBeenCalledTimes(2);
+      heads[1]?.resolve("rev-new");
+      expect((await second).snapshot.revision).toBe("rev-new");
+      // HEAD 0 lands late with an older revision: ignored, no read for it.
+      heads[0]?.resolve("rev-old");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls.governing).toHaveBeenCalledTimes(1);
+      const third = readCognitionSnapshot(keyed, ORIENTATION_IDS);
+      heads[2]?.resolve("rev-new");
+      expect(await third).toMatchObject({ memoHit: true, stale: false });
+      expect((await third).snapshot.revision).toBe("rev-new");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("caps unsettled HEAD checks: past the cap a cold caller gets 503 without a new query", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      const { port } = fixture();
+      const keyed = Object.assign(port, {
+        currentCommit: vi.fn(() => new Promise<string>(() => undefined)),
+      });
+      for (let i = 0; i < 2; i++) {
+        void readCognitionSnapshot(keyed, ORIENTATION_IDS, { coldDeadlineMs: 10 }).catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(COGNITION_HEAD_ABANDON_MS + 1);
+      }
+      expect(keyed.currentCommit).toHaveBeenCalledTimes(2);
+      const capped = await readCognitionSnapshot(keyed, ORIENTATION_IDS, { coldDeadlineMs: 10 }).catch(
+        (e: unknown) => e
+      );
+      expect(capped).toBeInstanceOf(CognitionUnavailableError);
+      expect(keyed.currentCommit).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

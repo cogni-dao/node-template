@@ -7,8 +7,9 @@
  * Scope: Takes a structural port, returns plain data plus `memoHit`, `stale` and `staleReason`; exports the ETag, 304 and Server-Timing rules so every node applies them the same way. Imports no web framework, auth, container, metrics or logger; the route renders and logs.
  * Invariants:
  *   - INDEX_ONLY: domains with counts, the projected governing index, active goals and ONE orientation body. No per-domain scan, no other body.
- *   - ONE_HEAD_CHECK: per port and orientation ids, one HEAD query is shared by every caller. Only one that hangs past `COGNITION_HEAD_ABANDON_MS` is abandoned, so at most one new query starts per window. A HEAD result older than one already landed is ignored.
- *   - ONE_READ_PER_REVISION: one index read is in flight per revision and shared by every caller; a snapshot is kept only if complete (goals readable) and started after the kept one.
+ *   - ONE_HEAD_CHECK: per port and orientation ids, one HEAD query is shared by every caller; one that hangs past `COGNITION_HEAD_ABANDON_MS` is abandoned. A HEAD result older than one already landed is ignored.
+ *   - READS_IN_HEAD_ORDER: only an in-order HEAD result starts an index read, shared by every caller; callers never start reads, so a late older HEAD cannot regress the kept snapshot. A snapshot is kept only if complete (goals readable) and started after the kept one. A read that hangs past the abandon window is abandoned.
+ *   - BOUNDED_INFLIGHT: at most `COGNITION_MAX_UNSETTLED` HEAD checks and as many reads are unsettled per port; beyond it callers get the kept snapshot or a 503, never a new query.
  *   - NEVER_OLDER_THAN_LABEL: HEAD is read before the index reads, so a snapshot is never older than its revision label; a new commit changes the key.
  *   - BOUNDED_REVALIDATION: once a complete snapshot exists, a HEAD check slower than `revisionDeadlineMs`, a fresh read slower than `freshReadDeadlineMs`, or a failed or degraded check/read serves it with `stale: true` and a `staleReason`; the shared check and read keep running and refresh it. A snapshot unconfirmed for `maxStaleMs` is never served stale.
  *   - BOUNDED_COLD: a caller with nothing to serve waits at most `coldDeadlineMs`, then gets `CognitionUnavailableError` (the route answers a retryable 503).
@@ -101,8 +102,15 @@ export const COGNITION_FRESH_READ_DEADLINE_MS = 600;
 export const COGNITION_MAX_STALE_MS = 900_000;
 /** Default bound on a caller with nothing to serve; under the session loader's 6 s fetch timeout. */
 export const COGNITION_COLD_DEADLINE_MS = 5_000;
-/** A HEAD query still running after this is abandoned, and the next caller asks again. */
+/** A HEAD check or index read still running after this is abandoned, and the next caller asks again. */
 export const COGNITION_HEAD_ABANDON_MS = 30_000;
+/**
+ * At most this many HEAD checks, and this many index reads, may be unsettled
+ * (running or abandoned) per port. Beyond it nothing new is issued: callers
+ * get the kept snapshot or a 503. The read client has no statement timeout,
+ * so this cap is what keeps a hung store from filling the pool.
+ */
+export const COGNITION_MAX_UNSETTLED = 2;
 /** Browsers and agents revalidate every use; never shared by intermediaries. */
 export const COGNITION_CACHE_CONTROL = "private, no-cache, must-revalidate";
 
@@ -124,6 +132,8 @@ interface Kept {
 interface CognitionState {
   kept: Kept | null;
   head: Promise<string> | null;
+  unsettledHeads: number;
+  unsettledReads: number;
   /** Ask order of the last HEAD result applied; an older one landing later is ignored. */
   headLanded: number;
   nextHeadSeq: number;
@@ -144,6 +154,8 @@ function stateFor(port: CognitionReadPort, idsKey: string): CognitionState {
     state = {
       kept: null,
       head: null,
+      unsettledHeads: 0,
+      unsettledReads: 0,
       headLanded: -1,
       nextHeadSeq: 0,
       read: null,
@@ -207,37 +219,53 @@ async function snapshotAt(
   };
 }
 
-/** The shared index read for `revision`; keeps its result only if complete and newer than the kept one. */
+/**
+ * The shared index read for `revision`. Only `headFor` starts one, for an
+ * in-order HEAD result, so reads start in revision order. A result is kept
+ * only if complete and started after the kept one. A read still running after
+ * `COGNITION_HEAD_ABANDON_MS` is abandoned; at most `COGNITION_MAX_UNSETTLED`
+ * may be unsettled.
+ */
 function readFor(
   state: CognitionState,
   port: CognitionReadPort,
   revision: string,
   orientationIds: readonly string[]
-): Promise<CognitionSnapshot> {
-  if (state.read?.revision === revision) return state.read.promise;
+): void {
+  if (state.read?.revision === revision) return;
+  if (state.unsettledReads >= COGNITION_MAX_UNSETTLED) return;
   const seq = state.nextSeq++;
   const startedAt = Date.now();
   const promise = snapshotAt(port, revision, orientationIds);
   const placed = { revision, promise };
   state.read = placed;
+  state.unsettledReads++;
+  const abandon = setTimeout(() => {
+    if (state.read === placed) state.read = null;
+  }, COGNITION_HEAD_ABANDON_MS);
+  abandon.unref?.();
+  const settle = () => {
+    clearTimeout(abandon);
+    state.unsettledReads--;
+    if (state.read === placed) state.read = null;
+  };
   promise.then(
     (snapshot) => {
-      if (state.read === placed) state.read = null;
+      settle();
       if (snapshot.goals.status === "ok" && (!state.kept || seq > state.kept.seq))
         state.kept = { seq, snapshot, confirmedAt: startedAt };
     },
-    () => {
-      if (state.read === placed) state.read = null;
-    }
+    settle
   );
-  return promise;
 }
 
 /**
  * The shared HEAD check. Callers join it while it runs. It is abandoned only
- * after `COGNITION_HEAD_ABANDON_MS`. A result that lands after a newer one is
- * ignored. A result that lands in order confirms the kept snapshot or starts
- * the read for the new revision.
+ * after `COGNITION_HEAD_ABANDON_MS`, and at most `COGNITION_MAX_UNSETTLED` may
+ * be unsettled. A result that lands after a newer one is ignored. A result
+ * that lands in order confirms the kept snapshot or starts the read for the
+ * new revision. Callers never start reads themselves, so a late older HEAD
+ * cannot start one.
  */
 function headFor(
   state: CognitionState,
@@ -245,30 +273,48 @@ function headFor(
   orientationIds: readonly string[]
 ): Promise<string> {
   if (state.head) return state.head;
+  if (state.unsettledHeads >= COGNITION_MAX_UNSETTLED)
+    return Promise.reject(new Error("cognition HEAD capacity"));
   const seq = state.nextHeadSeq++;
   const askedAt = Date.now();
   const head = port.currentCommit();
   state.head = head;
+  state.unsettledHeads++;
   const abandon = setTimeout(() => {
     if (state.head === head) state.head = null;
   }, COGNITION_HEAD_ABANDON_MS);
   abandon.unref?.();
+  const settle = () => {
+    clearTimeout(abandon);
+    state.unsettledHeads--;
+    if (state.head === head) state.head = null;
+  };
   head.then(
     (revision) => {
-      clearTimeout(abandon);
-      if (state.head === head) state.head = null;
+      settle();
       if (seq < state.headLanded) return;
       state.headLanded = seq;
       if (state.kept?.snapshot.revision === revision)
         state.kept.confirmedAt = Math.max(state.kept.confirmedAt, askedAt);
-      else readFor(state, port, revision, orientationIds).catch(() => undefined);
+      else readFor(state, port, revision, orientationIds);
     },
-    () => {
-      clearTimeout(abandon);
-      if (state.head === head) state.head = null;
-    }
+    settle
   );
   return head;
+}
+
+/**
+ * What a caller gets once its HEAD result landed: the kept snapshot if it
+ * matches, else the read `headFor` started for the newest landed HEAD (this
+ * revision or a newer one), else null.
+ */
+function afterHead(
+  state: CognitionState,
+  revision: string
+): { memo: CognitionSnapshot } | { read: Promise<CognitionSnapshot> } | null {
+  if (state.kept?.snapshot.revision === revision) return { memo: state.kept.snapshot };
+  if (state.read) return { read: state.read.promise };
+  return null;
 }
 
 type Settled<T> =
@@ -295,18 +341,12 @@ function settleWithin<T>(promise: Promise<T>, ms: number): Promise<Settled<T>> {
 
 async function readCold(
   state: CognitionState,
-  port: CognitionReadPort,
-  orientationIds: readonly string[],
   head: Promise<string>
 ): Promise<CognitionReadResult> {
-  const revision = await head;
-  if (state.kept?.snapshot.revision === revision)
-    return { snapshot: state.kept.snapshot, memoHit: true, stale: false };
-  return {
-    snapshot: await readFor(state, port, revision, orientationIds),
-    memoHit: false,
-    stale: false,
-  };
+  const next = afterHead(state, await head);
+  if (!next) throw new CognitionUnavailableError("cold_failed");
+  if ("memo" in next) return { snapshot: next.memo, memoHit: true, stale: false };
+  return { snapshot: await next.read, memoHit: false, stale: false };
 }
 
 /**
@@ -334,7 +374,7 @@ export async function readCognitionSnapshot(
   const head = headFor(state, port, orientationIds);
   if (!fallback) {
     const cold = await settleWithin(
-      readCold(state, port, orientationIds, head),
+      readCold(state, head),
       coldDeadlineMs
     );
     if (cold.kind === "value") return cold.value;
@@ -353,12 +393,10 @@ export async function readCognitionSnapshot(
   const checked = await settleWithin(head, revisionDeadlineMs);
   if (checked.kind === "late") return stale("head_slow");
   if (checked.kind === "error") return stale("head_failed");
-  if (checked.value === kept().revision)
-    return { snapshot: kept(), memoHit: true, stale: false };
-  const fresh = await settleWithin(
-    readFor(state, port, checked.value, orientationIds),
-    freshReadDeadlineMs
-  );
+  const next = afterHead(state, checked.value);
+  if (!next) return stale("read_failed");
+  if ("memo" in next) return { snapshot: next.memo, memoHit: true, stale: false };
+  const fresh = await settleWithin(next.read, freshReadDeadlineMs);
   if (fresh.kind === "late") return stale("read_slow");
   if (fresh.kind === "error") return stale("read_failed");
   const snapshot = fresh.value;
