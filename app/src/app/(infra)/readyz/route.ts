@@ -3,10 +3,10 @@
 
 /**
  * Module: `@app/readyz`
- * Purpose: HTTP readiness endpoint. The default (k8s probe) path answers only "can this pod serve HTTP?" — local serving readiness: env, runtime secrets, system tenant.
- * Scope: Validates env + runtime secrets + system tenant (fatal). Checks EVM RPC, Temporal, and scheduler-worker connectivity but treats transient failures as NON-FATAL on the default probe (logged, still 200). `?deep=1` restores hard substrate assertion for provisioning / stack-test smoke checks.
+ * Purpose: HTTP readiness endpoint. The default (k8s probe) path answers only "can this pod serve HTTP?" — local serving readiness: env and runtime secrets (fatal); remote dependencies are observed, not gated.
+ * Scope: Validates env + runtime secrets (fatal). Checks EVM RPC, Temporal, scheduler-worker, and the Postgres system tenant but treats failures as NON-FATAL on the default probe (logged, still 200). `?deep=1` restores hard substrate assertion for provisioning / stack-test smoke checks.
  * Invariants: Always returns valid readyz schema; force-dynamic runtime. Every managed non-test node requires and exercises EVM RPC even before payment activation. The default path does not drain the fleet for a transient upstream failure (incident 2026-06-26: scheduler-worker hiccup → fleet-wide 502); `?deep=1` forces a live RPC read and makes EVM RPC, Temporal, and scheduler-worker failures fatal (503).
- *             The default path runs every check concurrently and is bounded (task.5298): non-fatal checks get NON_FATAL_CHECK_BUDGET_MS and are reported degraded on timeout; the system tenant (DB verdict, still fatal → 503) gets SYSTEM_TENANT_BUDGET_MS and only its success is cached for SYSTEM_TENANT_OK_TTL_MS. The first probe after boot always performs the real DB check. `?deep=1` is concurrent and uncached; each check gets DEEP_CHECK_BUDGET_MS, not the default budgets.
+ *             The default path runs every check concurrently and is bounded (task.5298): non-fatal checks get NON_FATAL_CHECK_BUDGET_MS and are reported degraded on timeout; the system tenant (DB verdict, NON-FATAL since bug.0022: failure logs critical and reports degraded; provisioning is asserted once at boot by bootstrap/startup-assertions) gets SYSTEM_TENANT_BUDGET_MS and only its success is cached for SYSTEM_TENANT_OK_TTL_MS. The first probe after boot always performs the real DB check. `?deep=1` is concurrent and uncached; each check gets DEEP_CHECK_BUDGET_MS, not the default budgets.
  *             `?deep=1` probes exactly the Depend-class dependencies this node DECLARES, from the `SUBSTRATE_DEPENDENCIES` registry (readyz-probes.ts): evm-rpc, temporal, scheduler-worker, postgres, redis, litellm-gateway, and doltgres (only when DOLTGRES_URL is set). They run concurrently, each under DEEP_CHECK_BUDGET_MS, and a 503 body adds `unreachable`: every failing declared dependency. `reason`/`message` come from the first failure in registry order. Config errors (env, secrets) return before any check and carry no `unreachable`. The default path never adds the field and does no new IO. A CI parity test keeps the registry in sync with the env schema.
  * Side-effects: IO (HTTP response, structured logging, network calls to RPC, Temporal, LiteLLM, Redis, Doltgres)
  * Notes: Used by Docker HEALTHCHECK, deployment validation, K8s readiness probes.
@@ -37,7 +37,7 @@ import {
   buildDeepChecks,
   checkEvmRpc,
   type CheckTimings,
-  checkSystemTenant,
+  checkSystemTenantNonFatal,
   DeepProbeFailure,
   runDeepChecks,
   SLOW_READINESS_LOG_MS,
@@ -131,8 +131,9 @@ export const GET = wrapRouteHandlerWithLogging(
         // 503 body (`unreachable`). Registry: readyz-probes.ts.
         await runDeepChecks(ctx, buildDeepChecks(ctx, container, env));
       } else {
-        // Default probe: run everything concurrently. Non-fatal checks are
-        // bounded and degrade; only the system tenant (DB verdict) can 503.
+        // Default probe: run everything concurrently. Every check is bounded
+        // and degrades (including the system tenant, bug.0022: a shared DB must
+        // not hard-gate readiness; provisioning is asserted at boot).
         // This path is deliberately NOT driven by the registry: it stays the
         // minimal k8s serving check and adds no new IO.
         const temporalOpts = {
@@ -166,7 +167,7 @@ export const GET = wrapRouteHandlerWithLogging(
             )
           ),
           timed(timings, "systemTenant", () =>
-            checkSystemTenant(container.serviceAccountService)
+            checkSystemTenantNonFatal(ctx, container.serviceAccountService)
           ),
         ]);
         const durationMs = Date.now() - startedAt;

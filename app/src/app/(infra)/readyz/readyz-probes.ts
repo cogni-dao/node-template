@@ -53,7 +53,7 @@ type Env = ReturnType<typeof serverEnv>;
 
 /** Default-path budget for each non-fatal remote check (EVM RPC, Temporal, scheduler-worker). */
 export const NON_FATAL_CHECK_BUDGET_MS = 1500;
-/** Default-path budget for the fatal system-tenant DB check; exceeding it is a 503. */
+/** Default-path budget for the system-tenant DB check; exceeding it reports degraded (non-fatal). */
 export const SYSTEM_TENANT_BUDGET_MS = 2000;
 /** Successful system-tenant checks are reused for at most this long. Failures are never cached. */
 export const SYSTEM_TENANT_OK_TTL_MS = 30_000;
@@ -176,8 +176,9 @@ export function logBudgetExceeded(
 }
 
 /**
- * Fatal system-tenant check (per SYSTEM_TENANT_STARTUP_CHECK). Bounded so a
- * wedged service pool fails the probe fast (503) instead of past its timeout;
+ * Bounded system-tenant check (per SYSTEM_TENANT_STARTUP_CHECK). Throws on
+ * failure or budget; the default route wraps it non-fatally via
+ * `checkSystemTenantNonFatal`. Bounded so a wedged service pool fails fast;
  * success is cached briefly so steady-state probes do not hit Postgres.
  * Probes share one in-flight query, and a success that lands after a probe's
  * budget still fills the cache, so a slow-but-healthy DB does not stack
@@ -224,6 +225,47 @@ export async function checkSystemTenant(
     );
   }
   return "ok";
+}
+
+/**
+ * Default-path system-tenant check: NON-FATAL (bug.0022). A k8s readiness probe
+ * must not hard-gate on a shared DB: a Postgres blip would drain every pod from
+ * its Service at once. Provisioning (a missing cogni_system tenant) is asserted
+ * once at process boot instead (`bootstrap/startup-assertions`), so a pod that
+ * is genuinely unprovisioned crash-loops rather than serving.
+ *
+ * Any rejection of `checkSystemTenant` (query error, missing account, budget
+ * exceeded) becomes `"degraded"` plus a stable critical log, never a throw. The
+ * deep probe does not use this: it calls `verifySystemTenant` directly and
+ * still 503s with `postgres` in `unreachable`.
+ */
+export async function checkSystemTenantNonFatal(
+  ctx: RequestContext,
+  serviceAccountService: Parameters<typeof verifySystemTenant>[0]
+): Promise<CheckStatus> {
+  try {
+    return await checkSystemTenant(serviceAccountService);
+  } catch (error) {
+    // pg/drizzle errors wrap the driver error (with its SQLSTATE `code`) in `cause`.
+    const cause = (error as { cause?: { code?: unknown; message?: unknown } })
+      .cause;
+    ctx.log.error(
+      {
+        event: "substrate.postgres.unreachable",
+        severity: "critical",
+        reason:
+          error instanceof InfraConnectivityError
+            ? error.code
+            : "SYSTEM_TENANT_CHECK_FAILED",
+        dependency: "postgres",
+        message: error instanceof Error ? error.message : String(error),
+        causeCode: cause?.code,
+        causeMessage: cause?.message,
+      },
+      "readiness: postgres system-tenant check failed — shared DB down or unprovisioned. Returning ready: probe stays non-fatal so the fleet is not drained; provisioning is asserted at boot and the critical alert covers the outage."
+    );
+    return "degraded";
+  }
 }
 
 /**
