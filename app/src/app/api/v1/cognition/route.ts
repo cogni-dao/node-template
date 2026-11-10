@@ -19,6 +19,12 @@
  *   - IRREDUCIBLE_INVARIANTS_ALWAYS_PRESENT: invariants + markdown render even
  *     when the hub is unconfigured or empty.
  *   - NO_INTERNAL_BIND_ADDR: origin derived from forwarded headers first.
+ *   - ONE_READ_PER_REVISION: hub inputs come from `readCognitionSnapshot`
+ *     (memoized per store HEAD); a weak ETag over revision, build, origin,
+ *     name and mission
+ *     answers a matching If-None-Match with 304 (bug.0018).
+ *   - NO_GOAL_PROGRESS: goal KPI readings are not bootstrap; agents read them
+ *     live from /api/v1/metrics/goals.
  * Side-effects: IO (HTTP response, Doltgres reads via container port)
  * Links: docs/spec/node-baas-architecture.md, docs/spec/knowledge-syntropy.md
  * @public
@@ -28,8 +34,11 @@ import {
 	CognitionBundleResponseSchema,
 	type CognitionDomainPointer,
 } from "@cogni/node-contracts";
-import { resolveGoals } from "@cogni/knowledge-store";
-import { loadGoverningCognition } from "@/features/cognition";
+import {
+	type GoalsSection,
+	readCognitionSnapshot,
+} from "@cogni/knowledge-store";
+import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { getContainer } from "@/bootstrap/container";
@@ -39,18 +48,16 @@ import { serverEnv } from "@/shared/env";
 import {
 	type OrientationEntry,
 	renderBundle,
-	resolveOrientation,
 	SESSION_BOOTSTRAP_INVARIANTS,
 } from "./_bundle";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const PER_DOMAIN_LIMIT = 50;
-// Authed but principal-agnostic (index-only, identical for every caller) + does
-// N+1 Doltgres reads; cache privately so repeated session starts collapse to one
-// DB pass per window instead of hammering the hub.
-const CACHE_CONTROL = "private, max-age=60, stale-while-revalidate=300";
+// Authed but principal-agnostic (index-only, identical for every caller). The
+// hub inputs are memoized per store revision, so a repeat costs one HEAD read;
+// clients revalidate every use and a matching ETag returns 304.
+const CACHE_CONTROL = "private, no-cache, must-revalidate";
 
 /** External origin this request reached us through (forwarded headers first). */
 function publicOrigin(request: Request): string {
@@ -62,6 +69,16 @@ function publicOrigin(request: Request): string {
 	const proto =
 		request.headers.get("x-forwarded-proto") ?? url.protocol.replace(":", "");
 	return `${proto}://${host}`;
+}
+
+/** True when an If-None-Match header names this entity tag (weak compare) or `*`. */
+function matchesEtag(ifNoneMatch: string | null, etag: string): boolean {
+	if (!ifNoneMatch) return false;
+	const bare = etag.replace(/^W\//, "");
+	return ifNoneMatch
+		.split(",")
+		.map((tag) => tag.trim().replace(/^W\//, ""))
+		.some((tag) => tag === bare || tag === "*");
 }
 
 export const GET = wrapRouteHandlerWithLogging(
@@ -81,54 +98,58 @@ export const GET = wrapRouteHandlerWithLogging(
 		const buildSha = serverEnv().APP_BUILD_SHA ?? "unknown";
 		const generatedAt = new Date().toISOString();
 
-		const domainPointers: CognitionDomainPointer[] = [];
-		// The current node's orientation entry id, by `<slug>-agent-orientation`
-		// convention — captured during the scan, its excerpt fetched below. A
-		// node-specific entry (`<name>-agent-orientation`) wins over the generic
-		// `cogni-agent-orientation` starter seed every node inherits.
-		const exactOrientationId = `${name}-agent-orientation`;
-		let orientationId: string | null = null;
-
 		// Cognition is delivered live from the hub; the irreducible invariants below
-		// are the only piece that must survive an unconfigured/empty hub.
+		// are the only piece that must survive an unconfigured/empty hub. A
+		// node-specific `<name>-agent-orientation` wins over the generic
+		// `cogni-agent-orientation` starter seed every node inherits. Goal KPI
+		// readings are not bootstrap: agents read them live (GET /api/v1/metrics/goals).
 		const port = container.knowledgeStorePort;
-		if (port) {
-			const domains = await port.listDomainsFull();
-			for (const d of domains) {
-				// Suppress empty domains (e.g. a placeholder `nodes` with 0 entries):
-				// a bare count is noise in a precious index.
-				if (d.entryCount === 0) continue;
-				domainPointers.push({
-					domain: d.id,
-					description: d.description,
-					entryCount: d.entryCount,
-				});
-				const rows = await port.listKnowledge(d.id, {
-					limit: PER_DOMAIN_LIMIT,
-				});
-				for (const r of rows) {
-					if (r.id === exactOrientationId) {
-						orientationId = r.id;
-					} else if (!orientationId && r.id.endsWith("-agent-orientation")) {
-						orientationId = r.id;
-					}
-				}
-			}
-		}
-
-		const { governingIndex, skillsIndex } = await loadGoverningCognition(port);
-
-		// Direct lookup, not scan-dependent: the scan above is capped at
-		// PER_DOMAIN_LIMIT rows per domain and misses older entries (bug.5280).
-		const orientation: OrientationEntry | null = port
-			? await resolveOrientation(port, exactOrientationId, orientationId)
+		const read = port
+			? await readCognitionSnapshot(port, [
+					`${name}-agent-orientation`,
+					"cogni-agent-orientation",
+				])
 			: null;
-
-		// Approved goals: one direct read, never the domain scan. A failure is
-		// rendered visibly in the bundle and logged, never silently omitted.
-		const goals = await resolveGoals(port);
+		const domainPointers: CognitionDomainPointer[] = [
+			...(read?.snapshot.domains ?? []),
+		];
+		const governingIndex = read?.snapshot.governingIndex ?? [];
+		const skillsIndex = governingIndex.map((r) => ({
+			id: r.id,
+			domain: r.domain,
+			entryType: r.entryType,
+			title: r.useWhen,
+		}));
+		const orientation: OrientationEntry | null =
+			read?.snapshot.orientation ?? null;
+		// A failure is rendered visibly in the bundle and logged, never silently omitted.
+		const goals: GoalsSection = read?.snapshot.goals ?? {
+			status: "unavailable",
+			reason: "knowledge hub not configured",
+		};
 		if (goals.status === "unavailable") {
 			ctx.log.warn({ reason: goals.reason }, "cognition.goals_unavailable");
+		}
+		// Only a complete bundle is revalidatable; a degraded one is never reused.
+		const revision = read?.snapshot.revision ?? null;
+		const etag =
+			revision && goals.status === "ok"
+				? `W/"${createHash("sha256")
+						.update(
+							[revision, buildSha, origin, name, mission ?? ""].join("\u0000"),
+						)
+						.digest("base64url")
+						.slice(0, 27)}"`
+				: null;
+		if (etag && matchesEtag(request.headers.get("if-none-match"), etag)) {
+			ctx.log.info(
+				{ revision, notModified: true },
+				"cognition.bundle_not_modified",
+			);
+			return new NextResponse(null, {
+				status: 304,
+				headers: { ETag: etag, "Cache-Control": CACHE_CONTROL },
+			});
 		}
 
 		const toolingInvariants = [...SESSION_BOOTSTRAP_INVARIANTS];
@@ -151,32 +172,7 @@ export const GET = wrapRouteHandlerWithLogging(
 			orientation,
 			goals,
 		});
-		const { governingRender } = rendered;
-		let { markdown } = rendered;
-
-		// Same read model and assessment as GET /api/v1/metrics/goals and core__goal_progress.
-		if (goals.status === "ok" && port && container.goalMetrics) {
-			try {
-				const progress = await container.goalProgress();
-				const lines: string[] = [];
-				const symbol = { gte: "≥", lte: "≤", eq: "=" } as const;
-				for (const goal of progress.goals) {
-					for (const kpi of goal.kpis) {
-						const a = kpi.assessment;
-						lines.push(
-							`- ${goal.id} → ${kpi.binding.metricId}: ${a.status}${a.reason ? ` (${a.reason})` : ""}; ${a.value ?? "unknown"} ${a.unit}; target ${symbol[a.comparator]} ${a.target.value} ${a.target.unit}${a.deadline ? ` by ${a.deadline}` : ""}; observation ${a.observationId ?? "none"}.`,
-						);
-					}
-				}
-				if (lines.length)
-					markdown += `\n\n## Goal measurements\n\n${lines.join("\n")}`;
-			} catch {
-				ctx.log.warn(
-					{ reason: "goal_progress_unavailable" },
-					"cognition.goal_measurements_unavailable",
-				);
-			}
-		}
+		const { governingRender, markdown } = rendered;
 
 		ctx.log.info(
 			{
@@ -190,6 +186,8 @@ export const GET = wrapRouteHandlerWithLogging(
 				goalsStatus: goals.status,
 				goals: goals.status === "ok" ? goals.goals.map((g) => g.id) : [],
 				hub: Boolean(port),
+				revision,
+				memoHit: read?.memoHit ?? false,
 			},
 			"cognition.bundle_success",
 		);
@@ -211,10 +209,8 @@ export const GET = wrapRouteHandlerWithLogging(
 				markdown,
 			}),
 		);
-		response.headers.set(
-			"Cache-Control",
-			container.goalMetrics ? "no-store" : CACHE_CONTROL,
-		);
+		response.headers.set("Cache-Control", etag ? CACHE_CONTROL : "no-store");
+		if (etag) response.headers.set("ETag", etag);
 		return response;
 	},
 );

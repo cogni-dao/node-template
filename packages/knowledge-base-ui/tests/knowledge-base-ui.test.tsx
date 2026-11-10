@@ -47,6 +47,47 @@ describe("knowledge-base-ui", () => {
     expect(iframe.getAttribute("srcdoc")).toContain('target="_top"');
   });
 
+  it("inserts each iframe with its final srcdoc and never mutates it", () => {
+    const inserted: string[] = [];
+    const srcdocWrites: string[] = [];
+    const collect = (records: MutationRecord[]) => {
+      for (const record of records) {
+        if (record.type === "attributes") srcdocWrites.push(record.oldValue ?? "");
+        record.addedNodes.forEach((node) => {
+          if (!(node instanceof Element)) return;
+          const frames = node.matches("iframe")
+            ? [node]
+            : [...node.querySelectorAll("iframe")];
+          for (const frame of frames) {
+            inserted.push(frame.getAttribute("srcdoc") ?? "");
+          }
+        });
+      }
+    };
+    const observer = new MutationObserver(collect);
+    observer.observe(document.body, {
+      subtree: true,
+      childList: true,
+      attributeFilter: ["srcdoc"],
+    });
+
+    const { rerender } = render(
+      <KnowledgeHtmlFrame documentHtml="<p>light</p>" title="Visual" />
+    );
+    rerender(<KnowledgeHtmlFrame documentHtml="<p>dark</p>" title="Visual" />);
+    rerender(<KnowledgeHtmlFrame documentHtml="" title="Visual" />);
+    rerender(<KnowledgeHtmlFrame documentHtml="<p>again</p>" title="Visual" />);
+    collect(observer.takeRecords());
+    observer.disconnect();
+
+    expect(srcdocWrites).toHaveLength(0);
+    expect(inserted.length).toBeGreaterThan(0);
+    expect(inserted.every((srcdoc) => srcdoc.includes("<p>"))).toBe(true);
+    expect(screen.getByTitle("Visual").getAttribute("srcdoc")).toContain(
+      "again"
+    );
+  });
+
   it("prefers citation titles and falls back to ids", () => {
     expect(
       formatCitationLabel("supports", { id: "entry-slug", title: "Human title" })
