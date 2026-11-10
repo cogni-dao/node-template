@@ -191,6 +191,7 @@ export const GET = wrapRouteHandlerWithLogging(
 				revision,
 				memoHit: read?.memoHit ?? false,
 				stale: read?.stale ?? false,
+				...(read && !read.memoHit ? { readMs: read.snapshot.readMs } : {}),
 			},
 			"cognition.bundle_success",
 		);

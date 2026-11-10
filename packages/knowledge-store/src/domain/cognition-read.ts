@@ -43,6 +43,13 @@ export interface CognitionSnapshot {
   /** The first of `orientationIds` that exists, in full. */
   readonly orientation: { id: string; content: string } | null;
   readonly goals: GoalsSection;
+  /** Wall time of each index read, in ms, so a slow cold read names its cause. */
+  readonly readMs: {
+    readonly domains: number;
+    readonly governing: number;
+    readonly orientation: number;
+    readonly goals: number;
+  };
 }
 
 export interface CognitionReadResult {
@@ -117,11 +124,21 @@ async function snapshotAt(
   revision: string,
   orientationIds: readonly string[]
 ): Promise<CognitionSnapshot> {
-  const [domains, governingIndex, orientation, goals] = await Promise.all([
-    port.listDomainsFull(),
-    port.listGoverningIndex(),
-    firstExisting(port, orientationIds),
-    resolveGoals(port),
+  const timed = async <T>(read: () => Promise<T>): Promise<[T, number]> => {
+    const start = performance.now();
+    const value = await read();
+    return [value, Math.round(performance.now() - start)];
+  };
+  const [
+    [domains, domainsMs],
+    [governingIndex, governingMs],
+    [orientation, orientationMs],
+    [goals, goalsMs],
+  ] = await Promise.all([
+    timed(() => port.listDomainsFull()),
+    timed(() => port.listGoverningIndex()),
+    timed(() => firstExisting(port, orientationIds)),
+    timed(() => resolveGoals(port)),
   ]);
   return {
     revision,
@@ -136,6 +153,12 @@ async function snapshotAt(
     governingIndex,
     orientation,
     goals,
+    readMs: {
+      domains: domainsMs,
+      governing: governingMs,
+      orientation: orientationMs,
+      goals: goalsMs,
+    },
   };
 }
 
