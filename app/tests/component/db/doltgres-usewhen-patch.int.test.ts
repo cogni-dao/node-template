@@ -497,6 +497,11 @@ describe("knowledge useWhen patch + q filter (task.5204)", () => {
         context: "b now extends a",
       },
     ]);
+    // A cite only recomputes the cited row: the full-row diff names confidence alone.
+    for (const entry of await adapter.diff(rec.contributionId)) {
+      expect(entry.changeType).toBe("modified");
+      expect(entry.changedFields).toEqual(["confidencePct"]);
+    }
   });
 
   it("RED CONTROL: op:'update' clobbers content when the resend drifts", async () => {
