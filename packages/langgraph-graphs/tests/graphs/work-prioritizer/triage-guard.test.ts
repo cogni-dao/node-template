@@ -57,7 +57,7 @@ function setup(opts: { guidance?: boolean; goals?: boolean } = {}) {
     func: async (value) => {
       writes.push(value);
       return JSON.stringify({
-        success: true,
+        id: value.id,
         revision:
           typeof value.expectedRevision === "number"
             ? value.expectedRevision + 1
@@ -112,7 +112,7 @@ describe("work-prioritizer binds core__work_item_update behind the guard", () =>
         { reason: "route and score" },
       ),
     );
-    expect(out).toContain('"success":true');
+    expect(out).toContain('"revision"');
     expect(a.writes).toHaveLength(1);
     expect(a.writes[0]).toMatchObject({
       id: "task.1",
@@ -130,7 +130,7 @@ describe("work-prioritizer binds core__work_item_update behind the guard", () =>
         expectedRevision: 8,
         set: { scores: scores(2) },
       }),
-    ).toContain('"success":true');
+    ).toContain('"revision"');
   });
 
   it("routes status and cancels with a reason; never done", async () => {
@@ -138,7 +138,7 @@ describe("work-prioritizer binds core__work_item_update behind the guard", () =>
     for (const n of [1, 2, 3, 4]) a.read(item(`task.${n}`));
     expect(
       await a.call(update("task.1", { status: "needs_implement" })),
-    ).toContain('"success":true');
+    ).toContain('"revision"');
     expect(
       await a.call(update("task.2", { status: "cancelled" })),
     ).toContain("cancel_needs_reason");
@@ -146,7 +146,7 @@ describe("work-prioritizer binds core__work_item_update behind the guard", () =>
       await a.call(
         update("task.2", { status: "cancelled" }, { reason: "Superseded by task.9" }),
       ),
-    ).toContain('"success":true');
+    ).toContain('"revision"');
     expect(await a.call(update("task.3", { status: "done" }))).toContain(
       "route_not_allowed",
     );
@@ -202,7 +202,7 @@ describe("work-prioritizer binds core__work_item_update behind the guard", () =>
     expect(a.writes).toHaveLength(0);
     expect(
       await a.call(update("task.1", { scores: scores(4, source) })),
-    ).toContain('"success":true');
+    ).toContain('"revision"');
     expect(a.writes).toHaveLength(1);
   });
 
@@ -277,7 +277,7 @@ describe("no read-failure latch", () => {
     a.read(item("task.1"));
     expect(
       await a.call(update("task.1", { status: "needs_design" })),
-    ).toContain('"success":true');
+    ).toContain('"revision"');
     // The unread item stays unwritable; only that item is affected.
     expect(
       await a.call(update("task.404", { status: "needs_design" })),
@@ -334,7 +334,7 @@ describe("audit reason, route source and uncertain writes", () => {
             { reason: "Not worth doing" },
           ),
         ),
-      ).toContain('"success":true');
+      ).toContain('"revision"');
     }
     expect(a.writes).toHaveLength(3);
   });

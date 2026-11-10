@@ -36,6 +36,8 @@ const PATCHED = {
   externalRefs: [],
   specRefs: [],
   updatedAt: "2026-10-21T00:00:00.000Z",
+  createdAt: "2026-10-20T00:00:00.000Z",
+  deployVerified: false,
   revision: 9,
 } as unknown as WorkItemInfo;
 
@@ -61,12 +63,15 @@ describe("core__work_item_update", () => {
     };
     const out = await impl.execute(input, {} as never);
     expect(patch).toHaveBeenCalledWith(input);
+    // The tool returns the updated item, the PATCH route's DTO, with no field dropped.
     expect(WorkItemUpdateOutputSchema.parse(out)).toMatchObject({
-      success: true,
       id: "task.5001",
       status: "needs_design",
       revision: 9,
+      rankScore: 6.4,
+      labels: ["goal:x"],
     });
+    expect(out).not.toHaveProperty("success");
   });
 
   it("returns a lost compare-and-set as a result, not a throw", async () => {

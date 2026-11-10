@@ -3,13 +3,15 @@
 
 /**
  * Module: `@cogni/ai-tools/tools/work-item-update`
- * Purpose: AI tool that mirrors `PATCH /api/v1/work/items/{id}` one to one: same input, same backend patch, same scope.
+ * Purpose: AI tool that mirrors `PATCH /api/v1/work/items/{id}` one to one: same input, same backend patch, same scope, same output.
  * Scope: One state-changing work item patch via WorkItemCapability. Does not import LangChain.
  * Invariants:
  *   - TOOL_ID_NAMESPACED: ID is `core__work_item_update`
  *   - ONE_PATCH_SCHEMA: the input schema IS `WorkItemPatchInputSchema` from `@cogni-dao/work-items`, the schema the route parses. Never re-declared.
  *   - SAME_DOOR: requires `work_item:transition`, the scope the route declares through `sameDoor`.
  *   - STORE_AUTHORITY: the node's capability and store authorize and validate the write; this tool adds no authority.
+ *   - OUTPUT_IS_THE_ROUTE_DTO: success returns `WorkItemDtoSchema`, the route's `workItemsPatchOperation.output`, with no field dropped
+ *     and no bound: the write has already landed (agent-tool-context-envelope rules 1 and 4).
  *   - CONFLICT_IS_A_RESULT: a lost compare-and-set returns `{success:false, code:"revision_conflict", currentRevision}`
  *     (the route answers 409 with the same facts), so a graph can re-read and retry.
  * Side-effects: IO (mutates a work item via capability)
@@ -17,7 +19,11 @@
  * @public
  */
 
-import { type WorkItemPatchInput, WorkItemPatchInputSchema } from "@cogni-dao/work-items";
+import {
+  type WorkItemPatchInput,
+  WorkItemDtoSchema,
+  WorkItemPatchInputSchema,
+} from "@cogni-dao/work-items";
 import { z } from "zod";
 
 import {
@@ -28,20 +34,20 @@ import type { BoundTool, ToolContract, ToolImplementation } from "../types";
 
 export const WORK_ITEM_UPDATE_NAME = "core__work_item_update" as const;
 
-export const WorkItemUpdateOutputSchema = z.object({
-  success: z.boolean(),
+/** Success: the same `WorkItemDto` the PATCH route returns (pass-through). */
+export const WorkItemUpdateSuccessSchema = WorkItemDtoSchema;
+/** The tool's version of the route's 409: a lost compare-and-set, nothing written. */
+export const WorkItemUpdateConflictSchema = z.object({
+  success: z.literal(false),
   id: z.string(),
+  code: z.literal("revision_conflict"),
+  currentRevision: z.number().int(),
   message: z.string(),
-  status: z.string().optional(),
-  /** Item revision after a successful patch. */
-  revision: z.number().int().optional(),
-  /** Package-derived rank after the write; absent when evaluation is incomplete. */
-  rankScore: z.number().optional(),
-  /** Set when success=false: `revision_conflict` = the compare-and-set lost, nothing written. */
-  code: z.literal("revision_conflict").optional(),
-  /** On `revision_conflict`: the revision the item is actually at. */
-  currentRevision: z.number().int().optional(),
 });
+export const WorkItemUpdateOutputSchema = z.union([
+  WorkItemUpdateSuccessSchema,
+  WorkItemUpdateConflictSchema,
+]);
 export type WorkItemUpdateInput = WorkItemPatchInput;
 export type WorkItemUpdateOutput = z.infer<typeof WorkItemUpdateOutputSchema>;
 
@@ -53,7 +59,7 @@ export const workItemUpdateContract: ToolContract<
 > = {
   name: WORK_ITEM_UPDATE_NAME,
   description:
-    "Update a work item: the same operation as PATCH /api/v1/work/items/{id}. " +
+    "Update a work item: the same operation as PATCH /api/v1/work/items/{id}; it returns the updated item. " +
     "Input { id, expectedRevision?, reason?, set }. `set` holds the fields to change (status, scores, labels, ...); " +
     "`scores` replaces the whole object. With expectedRevision the write lands only if the item is still at that " +
     "revision; otherwise nothing is written and the result is success=false, code='revision_conflict'. " +
@@ -69,16 +75,14 @@ export const workItemUpdateContract: ToolContract<
   inputSchema: WorkItemPatchInputSchema,
   outputSchema: WorkItemUpdateOutputSchema,
   redact: (output) => output,
+  // Every top-level key of the DTO the route returns, plus the conflict result's keys.
   allowlist: [
+    ...Object.keys(WorkItemDtoSchema.shape),
     "success",
-    "id",
-    "message",
-    "status",
-    "revision",
-    "rankScore",
     "code",
     "currentRevision",
-  ] as const,
+    "message",
+  ] as never,
 };
 
 export interface WorkItemUpdateDeps {
@@ -99,20 +103,13 @@ export function createWorkItemUpdateImplementation(
           ...(input.reason !== undefined && { reason: input.reason }),
           set: input.set,
         });
-        return {
-          success: true,
-          id: updated.id,
-          message: `Updated ${updated.id}: ${Object.keys(input.set).join(", ")}`,
-          status: updated.status,
-          ...(updated.revision !== undefined && { revision: updated.revision }),
-          ...(updated.rankScore !== undefined && { rankScore: updated.rankScore }),
-        };
+        return WorkItemUpdateSuccessSchema.parse(updated);
       } catch (e) {
         if (!(e instanceof WorkItemPatchConflictError)) throw e;
         return {
-          success: false,
+          success: false as const,
           id: input.id,
-          code: "revision_conflict",
+          code: "revision_conflict" as const,
           currentRevision: e.currentRevision,
           message: `Not updated: ${input.id} is at revision ${e.currentRevision}, expected ${e.expectedRevision}. Nothing was written; re-read and retry.`,
         };

@@ -225,15 +225,25 @@ export function createTriageGuard(
       const result = await writer.invoke(sent, config);
       const text =
         typeof result === "string" ? result : JSON.stringify(result);
-      let output: { success?: unknown; revision?: unknown } = {};
+      // Success is the item the PATCH route returns; a failure is { success:false } or { error }.
+      let output: { id?: unknown; success?: unknown; error?: unknown; revision?: unknown } = {};
       try {
         output = z
-          .object({ success: z.unknown(), revision: z.unknown() })
+          .object({
+            id: z.unknown(),
+            success: z.unknown(),
+            error: z.unknown(),
+            revision: z.unknown(),
+          })
           .parse(JSON.parse(text));
       } catch {
         /* An unknown reply is not a success; the model reads the item again. */
       }
-      if (output.success === true) {
+      if (
+        typeof output.id === "string" &&
+        output.success !== false &&
+        output.error === undefined
+      ) {
         changed.add(item.id);
         // The write moved the revision. Keep the new one; without it, force a re-read.
         if (typeof output.revision === "number")

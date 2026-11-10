@@ -6,7 +6,10 @@
  * Its input schema is the very schema the route parses, and it needs the scope the route declares.
  */
 import { workItemsPatchOperation } from "@cogni/node-contracts";
-import { workItemUpdateContract } from "@cogni/ai-tools";
+import {
+  WorkItemUpdateSuccessSchema,
+  workItemUpdateContract,
+} from "@cogni/ai-tools";
 import { SAME_DOOR_ROUTES } from "@cogni/agent-grants";
 import { WorkItemPatchInputSchema } from "@cogni/work-items";
 import { describe, expect, it } from "vitest";
@@ -22,6 +25,23 @@ describe("core__work_item_update mirrors the PATCH route", () => {
     expect(z.toJSONSchema(workItemUpdateContract.inputSchema)).toEqual(
       z.toJSONSchema(workItemsPatchOperation.input),
     );
+  });
+
+  it("returns the route's output: the same WorkItemDto schema on success", () => {
+    expect(WorkItemUpdateSuccessSchema).toBe(workItemsPatchOperation.output);
+    expect(z.toJSONSchema(WorkItemUpdateSuccessSchema)).toEqual(
+      z.toJSONSchema(workItemsPatchOperation.output),
+    );
+    // The full output is that DTO or the typed revision_conflict result (the route's 409).
+    expect(
+      workItemUpdateContract.outputSchema.safeParse({
+        success: false,
+        id: "task.1",
+        code: "revision_conflict",
+        currentRevision: 3,
+        message: "m",
+      }).success,
+    ).toBe(true);
   });
 
   it("requires the scope the route declares through sameDoor", () => {

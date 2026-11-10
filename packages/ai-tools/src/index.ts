@@ -407,7 +407,9 @@ export {
   type WorkItemUpdateDeps,
   type WorkItemUpdateInput,
   type WorkItemUpdateOutput,
+  WorkItemUpdateConflictSchema,
   WorkItemUpdateOutputSchema,
+  WorkItemUpdateSuccessSchema,
   workItemUpdateBoundTool,
   workItemUpdateContract,
 } from "./tools/work-item-update";

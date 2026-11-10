@@ -35,7 +35,7 @@ function run(createGraph: CreateGraphFn) {
     completionFn,
     createToolExecFn: (): ToolExecFn => async () => ({
       ok: true,
-      value: { success: true, id: "task.1", message: "ok", revision: 8 },
+      value: { id: "task.1", status: "needs_design", revision: 8 },
     }),
     toolContracts: [workItemUpdateContract],
     request: {
