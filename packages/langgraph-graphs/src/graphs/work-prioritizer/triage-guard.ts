@@ -49,6 +49,10 @@ const TRIAGE_FIELDS = new Set(["status", "scores", "labels"]);
 const EVIDENCE_FROM = 4;
 
 type Scores = NonNullable<ObservedItem["scores"]>;
+const ObservedScores = z.record(
+  z.string(),
+  z.object({ v: z.number().int(), ev: z.string().optional() }),
+);
 
 const reject = (code: string, hint: string) =>
   `guard_rejected: ${code}: ${hint}`;
@@ -183,10 +187,17 @@ export function createTriageGuard(
   }
 
   const run = async (
-    input: WorkItemUpdateInput,
+    raw: WorkItemUpdateInput,
     _manager?: unknown,
     config?: RunnableConfig,
   ): Promise<string> => {
+    // `scores` replaces the whole object on the store. The guard merges a partial patch over the stored axes
+    // so an unsent axis is kept, and every later check and the write use the merged object.
+    const stored = receipts.items.get(raw.id);
+    const input: WorkItemUpdateInput =
+      stored && raw.set.scores
+        ? { ...raw, set: { ...raw.set, scores: { ...stored.scores, ...raw.set.scores } } }
+        : raw;
     const missing = requiredGuidance.filter((id) => !receipts.guidance.has(id));
     if (missing.length)
       return reject(
@@ -245,16 +256,22 @@ export function createTriageGuard(
         output.error === undefined
       ) {
         changed.add(item.id);
-        // The write moved the revision. Keep the new one; without it, force a re-read.
-        if (typeof output.revision === "number")
+        // Rebuild the receipt from the item the route returned, never from the input. Without a full item, force a re-read.
+        const dto = z
+          .object({
+            revision: z.number().int(),
+            status: z.string(),
+            labels: z.array(z.string()),
+            scores: ObservedScores.optional(),
+          })
+          .safeParse(JSON.parse(text));
+        if (dto.success)
           receipts.items.set(item.id, {
             ...item,
-            revision: output.revision,
-            status: input.set.status ?? item.status,
-            labels: input.set.labels ?? item.labels,
-            ...(input.set.scores !== undefined && {
-              scores: input.set.scores ?? undefined,
-            }),
+            revision: dto.data.revision,
+            status: dto.data.status,
+            labels: dto.data.labels,
+            scores: dto.data.scores,
           });
         else receipts.items.delete(item.id);
       }

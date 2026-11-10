@@ -53,6 +53,7 @@ Work item port interfaces, domain types, and storage adapters for structured wor
   - `WorkItemQueryPort`, `WorkItemCommandPort` — read/write interfaces
   - `VALID_TRANSITIONS`, `isValidTransition(from, to): boolean` — transition table
   - `WorkItemScore(s)`, `parseWorkItemScores(input)`, `rankScore(scores)`, `WorkItemScoresInvalidError` — the only `scores` bounds and WSJF rank (story.5111); every write path calls the parser, nobody re-states the rules
+  - `WorkItemPatchInputSchema`, `WorkItemPatchStatusSchema`, `WorkItemScoresInputSchema`, `WorkItemPatchInput` — the one PATCH input schema: `PATCH /api/v1/work/items/{id}` (node-contracts `workItemsPatchOperation.input`) and the agent tool `core__work_item_update` share it (task.0065)
   - `ChangeReasonSchema`, `HistoryEntrySchema`, `HistoryOutputSchema`, `HistoryOutput`, `workItemsHistoryOperation` — history wire schemas (task.0052, story.0023); node-contracts re-exports them
   - `readWorkItemHistory(store, id)`, `WorkItemHistoryStore`, `WorkItemHistoryResult`, `HistoryReadLog` — framework-agnostic handler returning `{ status, body, log }` (200, 404, 503; never throws); the node route owns auth and logging
 - **Exports (adapter `@cogni/work-items/markdown`):**

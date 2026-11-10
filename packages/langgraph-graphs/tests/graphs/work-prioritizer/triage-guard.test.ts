@@ -56,8 +56,12 @@ function setup(opts: { guidance?: boolean; goals?: boolean } = {}) {
     schema: z.object({}).passthrough(),
     func: async (value) => {
       writes.push(value);
+      const set = (value.set ?? {}) as Record<string, unknown>;
       return JSON.stringify({
         id: value.id,
+        status: set.status ?? "needs_triage",
+        labels: set.labels ?? [],
+        scores: set.scores,
         revision:
           typeof value.expectedRevision === "number"
             ? value.expectedRevision + 1
@@ -299,7 +303,7 @@ describe("audit reason, route source and uncertain writes", () => {
       }),
     );
     expect(a.writes[0]?.reason).toBe(
-      "triage: status needs_triage→needs_design; scores goal 0→3, time 0→2, unblocks 0→2, ease 0→3, confidence 0→3, agent 5→1; +goal:delivery",
+      "triage: status needs_triage→needs_design; scores agent 5→1, goal 0→3, time 0→2, unblocks 0→2, ease 0→3, confidence 0→3; +goal:delivery",
     );
     await a.call(
       update("task.2", { scores: scores(3) }, { reason: "model reason" }),
@@ -360,5 +364,66 @@ describe("audit reason, route source and uncertain writes", () => {
     expect(
       await guard.invoke(update("task.6", { status: "needs_design" }) as never),
     ).toContain("write_budget");
+  });
+});
+
+describe("partial scores, DTO receipts and conflicts", () => {
+  it("a partial score patch keeps the other stored axes", async () => {
+    const a = setup();
+    a.read(item("task.1", { scores: scores(3) }));
+    await a.call(update("task.1", { scores: { agent: { v: 1 } } }));
+    expect(a.writes).toHaveLength(1);
+    expect((a.writes[0]?.set as { scores: object }).scores).toEqual({
+      ...scores(3),
+      agent: { v: 1 },
+    });
+  });
+
+  it("a partial score patch equal to the stored values writes nothing", async () => {
+    const a = setup();
+    a.read(item("task.1", { scores: scores(3) }));
+    expect(
+      await a.call(update("task.1", { scores: { goal: { v: 3 } } })),
+    ).toBe("no_change");
+    expect(a.writes).toHaveLength(0);
+  });
+
+  it("rebuilds the receipt from the returned item, not the input", async () => {
+    const a = setup();
+    a.read(item("task.1", { labels: ["area:ai"], scores: scores(3) }));
+    await a.call(update("task.1", { status: "needs_design" }));
+    const stored = a.receipts.items.get("task.1");
+    // The fake host returns labels [] and no scores: the receipt follows the DTO.
+    expect(stored).toMatchObject({ revision: 8, status: "needs_design", labels: [] });
+    expect(stored?.scores).toBeUndefined();
+  });
+
+  it("a revision_conflict result advances nothing and spends no budget", async () => {
+    const a = setup();
+    const conflict = new DynamicStructuredTool({
+      name: WORK_ITEM_UPDATE_NAME,
+      description: "Host writer",
+      schema: z.object({}).passthrough(),
+      func: async () =>
+        JSON.stringify({
+          success: false,
+          id: "task.1",
+          code: "revision_conflict",
+          currentRevision: 9,
+          message: "moved",
+        }),
+    });
+    const guard = createTriageGuard(a.receipts, conflict, [TRIAGE_GUIDANCE_ID]);
+    for (let n = 1; n <= 6; n++) {
+      a.read(item(`task.${n}`));
+      expect(
+        await guard.invoke(update(`task.${n}`, { status: "needs_design" }) as never),
+      ).toContain("revision_conflict");
+    }
+    // Six conflicts: none counted toward the five-item budget, the receipt is unchanged.
+    expect(a.receipts.items.get("task.1")).toMatchObject({ revision: 7, status: "needs_triage" });
+    expect(
+      await guard.invoke(update("task.6", { status: "needs_design" }) as never),
+    ).toContain("revision_conflict");
   });
 });
