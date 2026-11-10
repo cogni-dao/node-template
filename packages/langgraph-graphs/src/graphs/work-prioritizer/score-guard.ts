@@ -59,7 +59,7 @@ export function createScoresGuard(
   return new DynamicStructuredTool({
     name: "work_item_scores_write",
     description:
-      "Propose only changed scores for one fully read open goal-cited item. Required guidance and exact observed source evidence are checked before the host writes. Cite observed canonical URLs: HTTPS, or the exact host-bound HTTP loopback app during local development.",
+      "Propose only changed scores for one fully read open item. An item without a goal label may score goal at most 3. Required guidance and exact observed source evidence are checked before the host writes. Cite observed canonical URLs: HTTPS, or the exact host-bound HTTP loopback app during local development.",
     schema: proposal,
     func: async (input, _manager, config) => {
       if (receipts.denied)
@@ -82,7 +82,13 @@ export function createScoresGuard(
           item.labels.includes(`goal:${g.id.replace(/^goal-/, "")}`) ||
           item.labels.includes(`goal:${g.id}`),
       );
-      if (!goal) return "guard_rejected: goal_citation";
+      // No active goals: never rank against nothing. An unlabeled item is triaged too, but a
+      // goal fit of 4-5 needs the item's own goal label.
+      if (
+        receipts.goals.size === 0 ||
+        (!goal && (input.scores.goal?.v ?? 0) >= 4)
+      )
+        return "guard_rejected: goal_citation";
       const merged = { ...item.scores };
       let changed = 0;
       const movements: string[] = [];
@@ -109,12 +115,12 @@ export function createScoresGuard(
           }
           const source = receipts.sources.get(ev);
           const linked =
-            goal.sourceUrl === ev ||
+            goal?.sourceUrl === ev ||
             [
               item.summary,
               item.outcome,
               ...(item.specRefs ?? []),
-              goal.content,
+              goal?.content,
             ].some((text) => text?.includes(ev));
           if (
             !receipts.allowsEvidenceUrl(url) ||

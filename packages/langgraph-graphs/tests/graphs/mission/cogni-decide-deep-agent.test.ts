@@ -82,7 +82,7 @@ describe("scheduled scores-only decision guard", () => {
       "guard_rejected",
     );
     a.observe(item("task.1", { labels: [] }));
-    expect(await a.propose("task.1", { goal: { v: 3 } })).toContain(
+    expect(await a.propose("task.1", { goal: { v: 4 } })).toContain(
       "goal_citation",
     );
     a.observe(item("task.1"));
@@ -93,6 +93,14 @@ describe("scheduled scores-only decision guard", () => {
       "guard_rejected",
     );
     expect(a.writes).toHaveLength(0);
+  });
+  it("triages an unlabeled item with a goal fit of at most 3", async () => {
+    const a = setup();
+    a.observe(item("task.1", { labels: [] }));
+    expect(await a.propose("task.1", { goal: { v: 3 } })).not.toContain(
+      "guard_rejected",
+    );
+    expect(a.writes).toHaveLength(1);
   });
   it("no-ops with no goals or unchanged values and rejects unread, closed and stale revisions", async () => {
     const a = setup();
