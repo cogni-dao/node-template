@@ -513,7 +513,7 @@ it("follows the served oversized same-cognition index beyond 1,000 newer rows wi
 		expect(JSON.stringify(first)).not.toContain("private-canonical-sentinel");
 		expect(JSON.stringify(first)).not.toContain("private-legacy-sentinel");
 		expect(fetcher).not.toHaveBeenCalled();
-		const raw = (headers?: HeadersInit) =>
+		const raw = (headers: HeadersInit = {}) =>
 			handler(
 				{ log: { info: vi.fn(), warn: vi.fn() } },
 				new Request("https://fresh-node.cognidao.org/api/v1/cognition", {
