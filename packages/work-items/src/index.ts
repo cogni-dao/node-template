@@ -25,6 +25,12 @@ export {
   HistoryOutputSchema,
   workItemsHistoryOperation
 } from "./history-contract.js";
+export type { WorkItemPatchInput } from "./patch-contract.js";
+export {
+  WorkItemPatchInputSchema,
+  WorkItemPatchStatusSchema,
+  WorkItemScoresInputSchema
+} from "./patch-contract.js";
 export type {
   HistoryReadLog,
   WorkItemHistoryResult,
