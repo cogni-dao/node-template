@@ -23,18 +23,11 @@ import {
 } from "@cogni/work-items";
 import { z } from "zod";
 
-export { WorkItemDtoSchema, WorkItemSummarySchema } from "@cogni/work-items";
-
-/**
- * Evaluation scores: configurable axis id → { v, ev? }. Writes replace the whole object.
- * This transport outline retains unknown entry properties so the shared work-items
- * validator rejects them. The Doltgres adapter owns all bounds, safe HTTPS URL
- * checks and required Justification rules; the HTTP boundary maps its error to400.
- */
-export const WorkItemScoresInputSchema = z.record(
-  z.string(),
-  z.looseObject({ v: z.number(), ev: z.string().optional() }),
-);
+export {
+  WorkItemDtoSchema,
+  WorkItemScoresInputSchema,
+  WorkItemSummarySchema,
+} from "@cogni/work-items";
 
 export const workItemsListOperation = {
   id: "work.items.list.v1",

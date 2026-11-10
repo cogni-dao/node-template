@@ -88,7 +88,7 @@ beforeEach(() => {
 
 describe("the route door (real wrapper, real authorizeRoute)", () => {
   it("a bearer with no role row gets 403 policy_denied and the handler never runs", async () => {
-    const res = await call("core__work_item_transition", user("bearer"));
+    const res = await call("core__work_item_update", user("bearer"));
     expect(res.status).toBe(403);
     expect(await res.json()).toEqual({ error: "policy_denied", code: "policy_denied" });
     expect(handler).not.toHaveBeenCalled();
@@ -96,7 +96,7 @@ describe("the route door (real wrapper, real authorizeRoute)", () => {
 
   it("a bearer with a live role row for the scope reaches the handler", async () => {
     state.roles.add(`${AGENT}|work_item:transition`);
-    const res = await call("core__work_item_transition", user("bearer"));
+    const res = await call("core__work_item_update", user("bearer"));
     expect(res.status).toBe(200);
     expect(handler).toHaveBeenCalledTimes(1);
   });
@@ -109,30 +109,30 @@ describe("the route door (real wrapper, real authorizeRoute)", () => {
 
   it("a store outage is 503 authz_unavailable, never an allow", async () => {
     state.down = true;
-    const res = await call("core__work_item_transition", user("bearer"));
+    const res = await call("core__work_item_update", user("bearer"));
     expect(res.status).toBe(503);
     expect(await res.json()).toEqual({ error: "authz_unavailable", code: "authz_unavailable" });
     expect(handler).not.toHaveBeenCalled();
   });
 
   it("a human session reaches the handler with no role row and no store read (subjects, not principals)", async () => {
-    const res = await call("core__work_item_transition", user("session", "human-1"));
+    const res = await call("core__work_item_update", user("session", "human-1"));
     expect(res.status).toBe(200);
     expect(state.queries).toBe(0);
   });
 
   it("an identity with no `via` takes the strict bearer branch (fail closed)", async () => {
-    const res = await call("core__work_item_transition", user(undefined));
+    const res = await call("core__work_item_update", user(undefined));
     expect(res.status).toBe(403);
     expect(handler).not.toHaveBeenCalled();
     state.roles.add(`${AGENT}|work_item:transition`);
-    expect((await call("core__work_item_transition", user(undefined))).status).toBe(200); // strict means "needs a role", not "denied"
+    expect((await call("core__work_item_update", user(undefined))).status).toBe(200); // strict means "needs a role", not "denied"
   });
 
   it("a route that names an unknown capability is denied for a bearer, and so is a missing door dependency", async () => {
     expect((await call("core__no_such_tool", user("bearer"))).status).toBe(403);
     fake.container = { ...(fake.container as object), agentAuthority: undefined };
-    expect((await call("core__work_item_transition", user("bearer"))).status).toBe(500); // never an allow
+    expect((await call("core__work_item_update", user("bearer"))).status).toBe(500); // never an allow
     expect(handler).not.toHaveBeenCalled();
   });
 
@@ -144,13 +144,13 @@ describe("the route door (real wrapper, real authorizeRoute)", () => {
   });
 
   it("logs agent_tool.authz with the route id, the principal (bearer) or the subject (human), and no secret", async () => {
-    await call("core__work_item_transition", user("bearer"));
-    await call("core__work_item_transition", user("session", "human-1"));
+    await call("core__work_item_update", user("bearer"));
+    await call("core__work_item_update", user("session", "human-1"));
     const lines = [...log.warn.mock.calls, ...log.info.mock.calls]
       .map(([fields]) => fields as Record<string, unknown>)
       .filter((f) => f.event === "agent_tool.authz");
     expect(lines).toEqual([
-      expect.objectContaining({ route: "work.items.patch", tool: "core__work_item_transition", principal: AGENT, subject: null, decision: "deny", code: "policy_denied", reason: "no_role" }),
+      expect.objectContaining({ route: "work.items.patch", tool: "core__work_item_update", principal: AGENT, subject: null, decision: "deny", code: "policy_denied", reason: "no_role" }),
       expect.objectContaining({ route: "work.items.patch", principal: null, subject: "human-1", decision: "allow", reason: "signed_in" }),
     ]);
   });

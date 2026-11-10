@@ -316,7 +316,7 @@ describe("agent authority (real Postgres)", () => {
       const admin = await makeUser();
       const agent = await makeUser(); // an outside agent: an ordinary users row, not an agent_principals row
       const a = await make();
-      const route = (via: "bearer" | "session", toolId = "core__work_item_transition") =>
+      const route = (via: "bearer" | "session", toolId = "core__work_item_update") =>
         a.authorizeRoute({ toolId, routeId: "work.items.patch", userId: agent, via });
       expect(await route("bearer")).toMatchObject({ decision: "deny", code: "policy_denied", reason: "no_role" });
       await service`INSERT INTO agent_roles (principal_user_id, scope, approved_by) VALUES (${agent}, 'work_item:transition', ${admin})`;

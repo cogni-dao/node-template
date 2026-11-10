@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
-/** Per-run observations from the authorized ToolRunner, shared by parent and children. */
+/**
+ * Per-run observations from the authorized ToolRunner, shared by parent and children.
+ * A failed read records nothing. It never blocks a write to another item (no latch).
+ */
 import { createHash } from "node:crypto";
 import {
   AIMessage,
@@ -53,7 +56,6 @@ export class RunReceipts {
   readonly sources = new Map<string, ReadReceipt>();
   readonly guidance = new Set<string>();
   readonly reportMessages: BaseMessage[] = [];
-  denied = false;
 
   constructor(private readonly origin: string) {}
 
@@ -72,6 +74,15 @@ export class RunReceipts {
     } catch {
       return false;
     }
+  }
+
+  /** The scored item's own page, in any common shape; it never counts as evidence for that item. */
+  isItemPage(url: URL, itemId: string): boolean {
+    const path = url.pathname.replace(/\/+$/, "");
+    return (
+      path.endsWith(`/work/items/${encodeURIComponent(itemId)}`) ||
+      path.endsWith(`/work/items/${itemId}`)
+    );
   }
 
   recordTool(name: string, args: unknown, value: unknown, toolCallId?: string) {
@@ -112,10 +123,7 @@ export class RunReceipts {
   observe(name: string, args: unknown, value: unknown) {
     if (name === "core__goal_list") {
       const parsed = z.object({ goals: z.array(Goal) }).safeParse(value);
-      if (!parsed.success) {
-        this.denied = true;
-        return;
-      }
+      if (!parsed.success) return;
       for (const goal of parsed.data.goals) {
         this.goals.set(goal.id, goal);
         this.addSource(goal.id, goal.sourceUrl, goal.content);
@@ -123,10 +131,7 @@ export class RunReceipts {
     }
     if (name === "core__work_item_read") {
       const parsed = z.object({ item: Item.nullable() }).safeParse(value);
-      if (!parsed.success || !parsed.data.item) {
-        this.denied = true;
-        return;
-      }
+      if (!parsed.success || !parsed.data.item) return;
       const item = parsed.data.item;
       this.items.set(item.id, item);
       this.addSource(item.id, item.sourceUrl, JSON.stringify(item));
@@ -141,10 +146,8 @@ export class RunReceipts {
       if (
         !entry?.content.trim() ||
         new TextEncoder().encode(entry.content).length > 65_536
-      ) {
-        this.denied = true;
+      )
         return;
-      }
       this.guidance.add(entry.id);
       this.addSource(
         entry.id,

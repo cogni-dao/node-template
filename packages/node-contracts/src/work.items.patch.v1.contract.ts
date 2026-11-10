@@ -17,63 +17,18 @@
  * @internal
  */
 
-import { z } from "zod";
+import { WorkItemPatchInputSchema } from "@cogni/work-items";
+import type { z } from "zod";
 
-import { ChangeReasonSchema } from "@cogni/work-items";
-
-import {
-  WorkItemDtoSchema,
-  WorkItemScoresInputSchema,
-} from "./work.items.list.v1.contract";
-
-const WorkItemStatusSchema = z.enum([
-  "needs_triage",
-  "needs_research",
-  "needs_design",
-  "needs_implement",
-  "needs_closeout",
-  "needs_merge",
-  "done",
-  "blocked",
-  "cancelled",
-]);
+import { WorkItemDtoSchema } from "./work.items.list.v1.contract";
 
 export const workItemsPatchOperation = {
   id: "work.items.patch.v1",
   summary: "Patch a work item",
   description:
     "Updates whitelisted fields on a work item. Optional expectedRevision makes the patch compare-and-set; a stale revision returns 409 without writing. Optional reason (one line, 1-512 chars) says why; it is stored in history (GET /work/items/{id}/history), not in the item.",
-  input: z.object({
-    id: z.string(),
-    expectedRevision: z.number().int().min(0).optional(),
-    // The adapter turns CR/LF into spaces and trims; this checks the result fits.
-    reason: ChangeReasonSchema.optional(),
-    set: z
-      .strictObject({
-        title: z.string().min(1).max(500).optional(),
-        summary: z.string().optional(),
-        outcome: z.string().optional(),
-        status: WorkItemStatusSchema.optional(),
-        priority: z.number().int().min(0).max(99).optional(),
-        rank: z.number().int().optional(),
-        estimate: z.number().int().optional(),
-        // null clears the column back to SQL NULL (scores read as absent).
-        scores: WorkItemScoresInputSchema.nullable().optional(),
-        labels: z.array(z.string()).optional(),
-        specRefs: z.array(z.string()).optional(),
-        branch: z.string().optional(),
-        pr: z.string().optional(),
-        reviewer: z.string().optional(),
-        node: z.string().optional(),
-        deployVerified: z.boolean().optional(),
-        projectId: z.string().nullable().optional(),
-        parentId: z.string().nullable().optional(),
-        blockedBy: z.string().nullable().optional(),
-      })
-      .refine((v) => Object.keys(v).length > 0, {
-        message: "set must contain at least one field",
-      }),
-  }),
+  // One schema for the route and the agent tool (core__work_item_update); it lives in @cogni-dao/work-items.
+  input: WorkItemPatchInputSchema,
   output: WorkItemDtoSchema,
 } as const;
 

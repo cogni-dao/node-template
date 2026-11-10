@@ -31,7 +31,11 @@ import {
   DynamicStructuredTool,
   type StructuredToolInterface,
 } from "@langchain/core/tools";
-import { InMemoryStore, MemorySaver } from "@langchain/langgraph";
+import {
+  GraphRecursionError,
+  InMemoryStore,
+  MemorySaver,
+} from "@langchain/langgraph";
 import { MiddlewareError } from "langchain";
 import { z } from "zod";
 
@@ -382,6 +386,25 @@ export function createInProcGraphRunner<TTool = unknown>(
         cause.cause !== cause
       ) {
         cause = cause.cause;
+      }
+      // Step budget (langgraph-error-handling): a program that owns a report ends with it, not an error.
+      const budget =
+        cause instanceof GraphRecursionError ||
+        (cause instanceof Error && cause.name === "GraphRecursionError")
+          ? hooks?.projectStepBudget?.()
+          : undefined;
+      if (budget) {
+        if (opts.program || opts.trustedProgramId)
+          emit({ type: "text_delta", delta: budget.answer });
+        emit({ type: "assistant_final", content: budget.answer });
+        emit({ type: "done" });
+        return {
+          ok: true,
+          finishReason: "stop",
+          content: budget.answer,
+          ...(collectedUsage !== null && { usage: collectedUsage }),
+          structuredOutput: budget.output,
+        };
       }
       const signal = request.abortSignal;
       const cancelled =

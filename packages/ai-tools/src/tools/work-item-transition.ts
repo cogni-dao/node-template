@@ -3,7 +3,7 @@
 
 /**
  * Module: `@cogni/ai-tools/tools/work-item-transition`
- * Purpose: AI tool for transitioning work item status and patching fields.
+ * Purpose: DEPRECATED (task.0065): use `core__work_item_update`. AI tool for transitioning work item status and patching fields.
  * Scope: State-changing work item mutations via WorkItemCapability. Does not import LangChain.
  * Invariants:
  *   - TOOL_ID_NAMESPACED: ID is `core__work_item_transition`
@@ -193,6 +193,7 @@ export const workItemTransitionContract: ToolContract<
 > = {
   name: WORK_ITEM_TRANSITION_NAME,
   description:
+    "DEPRECATED: use core__work_item_update, which mirrors PATCH /api/v1/work/items/{id} one to one. " +
     "Modify a work item. Actions: " +
     "'transition' (requires id + toStatus, optional reason) changes the item's lifecycle status, " +
     "'patch' (requires id, optional priority/rank/labels/summary/scores, optional expectedRevision for compare-and-set) updates metadata fields. " +
@@ -202,8 +203,8 @@ export const workItemTransitionContract: ToolContract<
     scope: "work_item:transition",
     kind: "node",
     subject: "member",
-    label: "Update work items and their priority scores",
-    description: "Move work items along and change their scores.",
+    label: "Update work items (status, scores, labels and other PATCH fields)",
+    description: "Change a work item's status, scores, labels and the other fields its PATCH allows.",
   },
   inputSchema: WorkItemTransitionInputSchema,
   outputSchema: WorkItemTransitionOutputSchema,

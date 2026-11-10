@@ -79,7 +79,7 @@ describe("access requests: an ask is an off row (real Postgres)", () => {
       }),
       undefined as never
     );
-  const door = (userId: string) => authority.authorizeRoute({ toolId: "core__work_item_transition", routeId: "work.items.patch", userId, via: "bearer" });
+  const door = (userId: string) => authority.authorizeRoute({ toolId: "core__work_item_update", routeId: "work.items.patch", userId, via: "bearer" });
   const adminViewFull = async () => {
     as(admin, "session");
     return (await (await rolesGet(new NextRequest("http://localhost/api/v1/agent-access/roles"), undefined as never)).json()) as {

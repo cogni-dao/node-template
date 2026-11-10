@@ -115,12 +115,12 @@ export const NODE_LANGGRAPH_CATALOG = {
   /**
    * Work Prioritizer (story.5108 / story.5116) — every node runs it: a node schedules
    * `langgraph:work-prioritizer` in its own repo-spec, and a node with no approved goals changes
-   * nothing. Its program identity is "work-review"; it uses the shared bounded scoring profile
+   * nothing. Its program identity is "work-review"; it uses the shared triage profile
    * and must not file a reflexive EDO.
    */
   [WORK_PRIORITIZER_GRAPH_NAME]: {
     displayName: "Work Prioritizer",
-    description: "Scores open work against active goals with cited evidence, or changes nothing",
+    description: "Triages open work: scores, goal links, status routes and cancels, or changes nothing",
     principal: PRIORITIZER_PRINCIPAL,
     toolIds: COGNI_DECIDE_TOOL_IDS,
     graphFactory: createMissionGraph,

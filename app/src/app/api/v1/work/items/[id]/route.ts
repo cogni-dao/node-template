@@ -83,7 +83,7 @@ export const PATCH = wrapRouteHandlerWithLogging<{
 }>(
   {
     routeId: "work.items.patch",
-    sameDoor: "core__work_item_transition",
+    sameDoor: "core__work_item_update",
     auth: { mode: "required", getSessionUser },
   },
   async (ctx, request, sessionUser, context) => {

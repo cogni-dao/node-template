@@ -401,6 +401,18 @@ export {
   workItemTransitionContract,
   workItemTransitionStubImplementation,
 } from "./tools/work-item-transition";
+export {
+  createWorkItemUpdateImplementation,
+  WORK_ITEM_UPDATE_NAME,
+  type WorkItemUpdateDeps,
+  type WorkItemUpdateInput,
+  type WorkItemUpdateOutput,
+  WorkItemUpdateConflictSchema,
+  WorkItemUpdateOutputSchema,
+  WorkItemUpdateSuccessSchema,
+  workItemUpdateBoundTool,
+  workItemUpdateContract,
+} from "./tools/work-item-update";
 // Tool types
 export type {
   BoundTool,

@@ -10,6 +10,7 @@ import {
   KNOWLEDGE_READ_NAME,
   WORK_ITEM_QUERY_NAME,
   WORK_ITEM_TRANSITION_NAME,
+  WORK_ITEM_UPDATE_NAME,
 } from "@cogni/ai-tools";
 import {
   AIMessage,
@@ -54,6 +55,14 @@ const PATCH_FIELDS = [
 type Snapshot = Partial<Record<(typeof PATCH_FIELDS)[number], unknown>>;
 
 const same = isDeepStrictEqual;
+/** The triage writers: the deprecated transition tool and core__work_item_update (the PATCH route's twin). */
+const isWriter = (name: string | undefined) =>
+  name === WORK_ITEM_TRANSITION_NAME || name === WORK_ITEM_UPDATE_NAME;
+/** A landed write: the transition tool says success=true; the update tool returns the item (the PATCH route's DTO). */
+const landed = (name: string | undefined, v: Record<string, unknown>) =>
+  name === WORK_ITEM_UPDATE_NAME
+    ? typeof v.id === "string" && v.success !== false
+    : v.success === true;
 
 /** Tool-call args keyed by tool_call id, from every AI message in the transcript. */
 function toolCallArgs(
@@ -161,8 +170,12 @@ export function cycleScores(messages: readonly BaseMessage[]) {
         seen.set(it.id, snap);
         queryReadIds.add(it.id);
       }
-    } else if (m.name === WORK_ITEM_TRANSITION_NAME && v.success === true) {
-      const args = call?.args;
+    } else if (isWriter(m.name) && landed(m.name, v)) {
+      // An update call carries its fields in `set`; read it as the flat patch the transition tool takes.
+      const args =
+        call?.name === WORK_ITEM_UPDATE_NAME
+          ? { action: "patch", ...((call.args.set as object | undefined) ?? {}) }
+          : call?.args;
       if (args?.action !== "patch") continue;
       patches++;
       const prior = seen.get(String(v.id));
@@ -257,8 +270,9 @@ export function cycleTelemetry(
       else toolErrorCount++;
     } else if (m.name === GOAL_LIST_NAME && Array.isArray(v.goals)) {
       goalIds = v.goals.map((g: { id?: unknown }) => String(g?.id));
-    } else if (m.name === WORK_ITEM_TRANSITION_NAME && v.success === true) {
-      changedItemIds.push(String(v.id));
+    } else if (isWriter(m.name) && landed(m.name, v)) {
+      if (!changedItemIds.includes(String(v.id)))
+        changedItemIds.push(String(v.id));
     } else if (m.name === EDO_DECIDE_NAME) {
       const id = (v.entry as { id?: unknown } | undefined)?.id;
       if (typeof id === "string") edoDecisionId = id;
@@ -287,13 +301,15 @@ export function projectMissionCycleReport(
   program: CreateReactAgentGraphOptions["program"],
   receipts: RunReceipts,
   answer: string,
+  abortReason?: string,
 ) {
   if (program !== "work-review") return undefined;
   const rankScores = receipts.reportMessages.flatMap((message) => {
-    if (!isToolMessage(message) || message.name !== WORK_ITEM_TRANSITION_NAME)
+    if (!isToolMessage(message) || !isWriter(message.name))
       return [];
     const output = parse(text(message));
-    return output?.success === true &&
+    return output &&
+      landed(message.name, output) &&
       typeof output.id === "string" &&
       typeof output.rankScore === "number" &&
       Number.isFinite(output.rankScore)
@@ -302,9 +318,35 @@ export function projectMissionCycleReport(
   });
   return {
     telemetry: {
-      ...cycleTelemetry([...receipts.reportMessages, new AIMessage(answer)]),
+      ...cycleTelemetry(
+        [...receipts.reportMessages, new AIMessage(answer)],
+        abortReason,
+      ),
       decisionFiled: false,
       ...(rankScores.length ? { rankScores } : {}),
     },
+  };
+}
+
+/**
+ * The run reached its step budget (langgraph-error-handling: force a final report). Writes already made
+ * stay; the report lists them and says the rest waits for the next run. Built from receipts, never a model call.
+ */
+export function projectStepBudgetReport(
+  program: CreateReactAgentGraphOptions["program"],
+  receipts: RunReceipts,
+) {
+  const projected = projectMissionCycleReport(
+    program,
+    receipts,
+    "",
+    "step_budget",
+  );
+  if (!projected) return undefined;
+  const { changedItemIds } = projected.telemetry;
+  const answer = `STEP_BUDGET: the run reached its step limit. Changed ${changedItemIds.length} item(s)${changedItemIds.length ? `: ${changedItemIds.join(", ")}` : ""}. Items not yet triaged wait for the next run.`;
+  return {
+    answer,
+    output: { telemetry: { ...projected.telemetry, report: answer } },
   };
 }

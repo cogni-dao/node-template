@@ -45,7 +45,7 @@ const AVAILABLE_GRAPHS: readonly GraphOption[] = [
   {
     graphId: "langgraph:work-prioritizer" satisfies GraphId,
     name: "Work Prioritizer",
-    description: "Scores open work against active goals with cited evidence, or changes nothing",
+    description: "Triages open work: scores, goal links, status routes and cancels, or changes nothing",
   },
 ];
 

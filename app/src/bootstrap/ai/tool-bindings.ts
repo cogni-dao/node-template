@@ -48,6 +48,7 @@ import {
   createWorkItemQueryImplementation,
   createWorkItemReadImplementation,
   createWorkItemTransitionImplementation,
+  createWorkItemUpdateImplementation,
   EDO_DECIDE_NAME,
   EDO_HYPOTHESIZE_NAME,
   EDO_RECORD_OUTCOME_NAME,
@@ -72,6 +73,7 @@ import {
   WORK_ITEM_QUERY_NAME,
   WORK_ITEM_READ_NAME,
   WORK_ITEM_TRANSITION_NAME,
+  WORK_ITEM_UPDATE_NAME,
 } from "@cogni/ai-tools";
 
 /**
@@ -209,6 +211,9 @@ export function createToolBindings(deps: ToolBindingDeps): ToolBindings {
     }) as AnyToolImplementation,
 
     [WORK_ITEM_TRANSITION_NAME]: createWorkItemTransitionImplementation({
+      workItemCapability: deps.workItemCapability,
+    }) as AnyToolImplementation,
+    [WORK_ITEM_UPDATE_NAME]: createWorkItemUpdateImplementation({
       workItemCapability: deps.workItemCapability,
     }) as AnyToolImplementation,
   };
