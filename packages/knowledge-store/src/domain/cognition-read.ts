@@ -107,8 +107,11 @@ export const COGNITION_HEAD_ABANDON_MS = 30_000;
 /**
  * At most this many HEAD checks, and this many index reads, may be unsettled
  * (running or abandoned) per port. Beyond it nothing new is issued: callers
- * get the kept snapshot or a 503. The read client has no statement timeout,
- * so this cap is what keeps a hung store from filling the pool.
+ * get the kept snapshot or a 503. This bounds how many queries cognition
+ * adds while the store hangs; it does not protect the pool. One read issues
+ * about five queries on a five-connection pool, and the read client has no
+ * statement timeout, so a truly hung query holds its connection until the
+ * pod restarts.
  */
 export const COGNITION_MAX_UNSETTLED = 2;
 /** Browsers and agents revalidate every use; never shared by intermediaries. */
@@ -166,12 +169,25 @@ function stateFor(port: CognitionReadPort, idsKey: string): CognitionState {
   return state;
 }
 
+/**
+ * `Promise.all`, but it settles only after every query settles, so the
+ * unsettled-read count tracks real queries; it rejects with the first failure.
+ */
+async function settledAll<T extends readonly unknown[]>(
+  promises: readonly [...{ [K in keyof T]: Promise<T[K]> }]
+): Promise<T> {
+  const results = await Promise.allSettled(promises);
+  const failed = results.find((r) => r.status === "rejected");
+  if (failed) throw (failed as PromiseRejectedResult).reason;
+  return results.map((r) => (r as PromiseFulfilledResult<unknown>).value) as unknown as T;
+}
+
 /** The first id that exists; the lookups run in parallel on the pooled read client. */
 async function firstExisting(
   port: CognitionReadPort,
   ids: readonly string[]
 ): Promise<{ id: string; content: string } | null> {
-  const entries = await Promise.all(ids.map((id) => port.getKnowledge(id)));
+  const entries = await settledAll(ids.map((id) => port.getKnowledge(id)));
   const entry = entries.find((e) => e != null);
   return entry ? { id: entry.id, content: entry.content } : null;
 }
@@ -191,7 +207,7 @@ async function snapshotAt(
     [governingIndex, governingMs],
     [orientation, orientationMs],
     [goals, goalsMs],
-  ] = await Promise.all([
+  ] = await settledAll([
     timed(() => port.listDomainsFull()),
     timed(() => port.listGoverningIndex()),
     timed(() => firstExisting(port, orientationIds)),
@@ -399,9 +415,9 @@ export async function readCognitionSnapshot(
   const fresh = await settleWithin(next.read, freshReadDeadlineMs);
   if (fresh.kind === "late") return stale("read_slow");
   if (fresh.kind === "error") return stale("read_failed");
-  const snapshot = fresh.value;
-  if (snapshot.goals.status !== "ok") return stale("read_degraded");
-  return { snapshot, memoHit: false, stale: false };
+  if (fresh.value.goals.status !== "ok") return stale("read_degraded");
+  // The read was kept on landing unless a newer one already was; serve the newest.
+  return { snapshot: kept(), memoHit: false, stale: false };
 }
 
 /**

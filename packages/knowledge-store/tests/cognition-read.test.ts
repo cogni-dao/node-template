@@ -212,7 +212,8 @@ describe("readCognitionSnapshot", () => {
     rev = "k3";
     expect((await readCognitionSnapshot(keyed, ORIENTATION_IDS)).snapshot.revision).toBe("k3");
     slow.resolve([]);
-    expect((await older).snapshot.revision).toBe("k2");
+    // The caller that waited on the older read is served the newest kept snapshot.
+    expect((await older).snapshot.revision).toBe("k3");
     // k2 started first, so it never replaces k3 as the stale fallback.
     const bad = Object.assign(keyed, {
       currentCommit: async () => {
@@ -364,6 +365,64 @@ describe("readCognitionSnapshot under a hung store", () => {
       );
       expect(capped).toBeInstanceOf(CognitionUnavailableError);
       expect(keyed.currentCommit).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("readCognitionSnapshot read-side guards", () => {
+  async function harness(revisionOf: () => string) {
+    const { port, calls } = fixture();
+    const keyed = Object.assign(port, { currentCommit: async () => revisionOf() });
+    // Every read: domains fails at once, governing hangs forever.
+    calls.domains.mockImplementation(async () => {
+      throw new Error("domains failed");
+    });
+    calls.governing.mockImplementation(() => new Promise(() => undefined));
+    const cold = async () => {
+      const pending = readCognitionSnapshot(keyed, ORIENTATION_IDS, {
+        coldDeadlineMs: 10,
+      }).catch((e: unknown) => e);
+      await vi.advanceTimersByTimeAsync(10);
+      return pending;
+    };
+    return { calls, cold };
+  }
+
+  it("counts a read until every query settles, so a fast failure beside a hang still holds the cap", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      let rev = 0;
+      const { calls, cold } = await harness(() => `rev-${rev++}`);
+      // Reads 1 and 2 (new revisions) start; each fails fast but stays unsettled.
+      expect(await cold()).toBeInstanceOf(CognitionUnavailableError);
+      expect(await cold()).toBeInstanceOf(CognitionUnavailableError);
+      expect(calls.governing).toHaveBeenCalledTimes(2);
+      // The cap: a third revision starts no read, even after the abandon window.
+      expect(await cold()).toBeInstanceOf(CognitionUnavailableError);
+      await vi.advanceTimersByTimeAsync(COGNITION_HEAD_ABANDON_MS);
+      expect(await cold()).toBeInstanceOf(CognitionUnavailableError);
+      expect(calls.governing).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("abandons a hung read for the same revision after the window, then reads again", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      const { calls, cold } = await harness(() => "rev-same");
+      expect(await cold()).toBeInstanceOf(CognitionUnavailableError);
+      expect(calls.governing).toHaveBeenCalledTimes(1);
+      // Within the window the same revision joins the hung read.
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await cold()).toBeInstanceOf(CognitionUnavailableError);
+      expect(calls.governing).toHaveBeenCalledTimes(1);
+      // Past the window it is abandoned and a new read starts.
+      await vi.advanceTimersByTimeAsync(COGNITION_HEAD_ABANDON_MS);
+      expect(await cold()).toBeInstanceOf(CognitionUnavailableError);
+      expect(calls.governing).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
     }
