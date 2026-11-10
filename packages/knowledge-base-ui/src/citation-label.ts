@@ -6,7 +6,10 @@ export interface CitationLabelEndpoint {
   readonly title?: string | null;
 }
 
-/** Prefer the human title while preserving the stable id as a fallback. */
+/**
+ * Prefer the human title while preserving the stable id as a fallback.
+ * @deprecated Drops edge direction and buries the slug; render `CitationLinks`.
+ */
 export function formatCitationLabel(
   citationType: string,
   endpoint: CitationLabelEndpoint

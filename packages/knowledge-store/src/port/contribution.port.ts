@@ -16,6 +16,7 @@
  */
 
 import type {
+  ContributionCitationDiffEntry,
   ContributionCommitRecord,
   ContributionDiffEntry,
   ContributionRecord,
@@ -170,6 +171,14 @@ export interface KnowledgeContributionPort {
   listCommits(contributionId: string): Promise<ContributionCommitRecord[]>;
 
   diff(contributionId: string): Promise<ContributionDiffEntry[]>;
+
+  /**
+   * CITATION_DIFF_FOR_REVIEW: every citation edge the contribution adds,
+   * removes or re-contexts between its base and current head, ordered by
+   * (citingId, citationType, citedId). The review surface shows these beside
+   * `diff`, so an edge-only inbox is never shown as empty.
+   */
+  diffCitations(contributionId: string): Promise<ContributionCitationDiffEntry[]>;
 
   /**
    * MERGE_GATE_ON_RAW_DIFF: every knowledge row id and citation edge the

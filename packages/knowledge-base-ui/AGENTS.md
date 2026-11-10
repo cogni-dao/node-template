@@ -6,7 +6,7 @@
 
 - **Owners:** @cogni-dao
 - **Status:** stable
-- **Last reviewed:** 2026-11-09
+- **Last reviewed:** 2026-11-10
 
 ## Purpose
 
@@ -65,6 +65,12 @@ Published React components and hooks every node renders for knowledge (Browse, G
 ## Public Surface (html visuals, story.0027)
 
 - `KnowledgeHtmlFrame` — the sandboxed iframe for `entryType=html`. **FINAL_SRCDOC_AT_INSERT:** each iframe is inserted with its final normalized `srcdoc` and never mutated; a new document mounts a new iframe. Before the client can normalize, it renders a same-size `aria-busy` placeholder. (Chrome isolates sandboxed frames in their own process, and a `srcdoc` write during the first navigation committed an empty frame.) Height defaults to `var(--height-artifact-canvas, 720px)`. The node passes the themed document, `title` and `className`; it never keys or remounts the frame itself.
+
+## Public Surface (citation links, bug.0011; root entry)
+
+- `CitationLinks` — an entry's Links section over `DirectRelationLinks` (five per page, explicit More). Each edge is one row: arrow (`→` cites, `←` cited by), relation, the other endpoint's slug. **SLUG_NOT_TITLE:** the title appears only as the link's hover `title`. The node passes `loadPage` (the `GET /api/v1/citations/{id}` page) and `LinkComponent`.
+- `ContributionCitationDiff` — **EVERY_DIFF_EDGE_LISTED:** every edge an inbox adds (`+`), removes (`−`, struck) or re-contexts (`~`), grouped under its citing slug, in the same row form, headed "Links (N)". Renders nothing for no edges. The node passes `citations` from the contribution diff, `hrefFor(id)` and `LinkComponent`.
+- `formatCitationLabel` is deprecated (it drops direction); kept for existing adopters.
 
 ## Boundaries
 

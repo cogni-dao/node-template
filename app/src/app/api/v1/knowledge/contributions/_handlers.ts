@@ -363,11 +363,15 @@ export async function handleDiff(
       { error: `contribution not found: ${contributionId}` },
       { status: 404 }
     );
-  const entries = await svc.diff(contributionId);
+  const [entries, citations] = await Promise.all([
+    svc.diff(contributionId),
+    svc.diffCitations(contributionId),
+  ]);
   return NextResponse.json({
     contributionId,
     branch: record.branch,
     entries,
+    citations,
   });
 }
 

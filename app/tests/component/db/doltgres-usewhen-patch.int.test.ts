@@ -714,6 +714,15 @@ describe("knowledge useWhen patch + q filter (task.5204)", () => {
       })
     );
     expect(diff.some((row) => row.rowId === "edo-rejected-o")).toBe(false);
+    // CITATION_DIFF_FOR_REVIEW: the review read lists the same edge on real Doltgres.
+    expect(await adapter.diffCitations(appended.contributionId)).toContainEqual(
+      expect.objectContaining({
+        changeType: "added",
+        citingId: input.entry.id,
+        citedId: input.hypothesisId,
+        citationType: "validates",
+      })
+    );
     expect((await store.getKnowledge(input.hypothesisId))?.confidencePct).toBe(
       70
     );

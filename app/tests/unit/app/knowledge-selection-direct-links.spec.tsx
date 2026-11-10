@@ -323,7 +323,7 @@ it.each(["browse", "chains", "graph"])(
           })
     );
     await screen.findByText(selected.content);
-    await screen.findByRole("link", { name: "supports Direct relation 4" });
+    await screen.findByRole("link", { name: "neighbor-4" });
     expect(
       fetchMock.mock.calls.every(
         ([url]) =>

@@ -340,6 +340,12 @@ class FakeContributionPort implements KnowledgeContributionPort {
     return [];
   }
 
+  citationDiff: Awaited<ReturnType<KnowledgeContributionPort["diffCitations"]>> =
+    [];
+  async diffCitations() {
+    return this.citationDiff;
+  }
+
   touched: Awaited<ReturnType<KnowledgeContributionPort["touchedIds"]>> = {
     headCommit: "head123",
     knowledgeIds: [],
@@ -371,6 +377,28 @@ class FakeContributionPort implements KnowledgeContributionPort {
 }
 
 describe("createContributionService", () => {
+  it("returns the port's citation edges for review (CITATION_DIFF_FOR_REVIEW)", async () => {
+    const port = new FakeContributionPort();
+    port.citationDiff = [
+      {
+        changeType: "added",
+        citingId: "a-entry",
+        citedId: "b-entry",
+        citationType: "supports",
+        context: null,
+      },
+    ];
+    const service = createContributionService({
+      port,
+      canMergeKnowledge: () => false,
+      rateLimit: { maxOpenPerPrincipal: 5 },
+    });
+
+    await expect(service.diffCitations("contrib-1")).resolves.toEqual(
+      port.citationDiff
+    );
+  });
+
   it("runs configured gates on create insert/update edits and rejects bad slugs", async () => {
     const port = new FakeContributionPort();
     const service = createContributionService({

@@ -3,9 +3,9 @@
 
 /**
  * Module: `@app/(app)/knowledge/_components/ContributionDiff`
- * Purpose: Fetches and renders the dolt_diff for one contribution (the per-row
- *   added/removed/modified entries). Shared by the slide-over `ContributionDetail`
- *   and the routable `/knowledge/inbox/[contributionId]` page.
+ * Purpose: Fetches and renders the dolt_diff for one contribution: the per-row
+ *   added/removed/modified entries and every changed citation edge. Shared by the
+ *   slide-over `ContributionDetail` and the routable `/knowledge/inbox/[contributionId]` page.
  * Scope: Local lazy fetch of the diff; pure render otherwise.
  * Side-effects: IO (GET .../diff).
  * @internal
@@ -13,8 +13,16 @@
 
 "use client";
 
-import { KnowledgeUseWhen } from "@cogni/knowledge-base-ui";
-import type { ContributionDiffEntry } from "@cogni/node-contracts";
+import {
+	ContributionCitationDiff,
+	KnowledgeUseWhen,
+} from "@cogni/knowledge-base-ui";
+import { isWorkItemEndpointId } from "@cogni/knowledge-store";
+import type {
+	ContributionCitationDiffEntry,
+	ContributionDiffEntry,
+} from "@cogni/node-contracts";
+import Link from "next/link";
 import { type ReactElement, useEffect, useRef, useState } from "react";
 
 import { Markdown } from "@/components";
@@ -31,6 +39,13 @@ export function diffHasHtmlEntry(
 	);
 }
 
+/** Permalink for a citation endpoint: a work item or a knowledge entry. */
+function citationHref(id: string): string {
+	return isWorkItemEndpointId(id)
+		? `/work/items/${encodeURIComponent(id)}`
+		: `/knowledge/${encodeURIComponent(id)}`;
+}
+
 export function ContributionDiff({
 	contributionId,
 	onLoaded,
@@ -40,12 +55,16 @@ export function ContributionDiff({
 	readonly onLoaded?: (diff: ContributionDiffEntry[]) => void;
 }): ReactElement {
 	const [diff, setDiff] = useState<ContributionDiffEntry[] | null>(null);
+	const [citations, setCitations] = useState<ContributionCitationDiffEntry[]>(
+		[],
+	);
 	const [diffError, setDiffError] = useState<string | null>(null);
 	const onLoadedRef = useRef(onLoaded);
 	onLoadedRef.current = onLoaded;
 
 	useEffect(() => {
 		setDiff(null);
+		setCitations([]);
 		setDiffError(null);
 		let cancelled = false;
 		fetch(
@@ -54,10 +73,14 @@ export function ContributionDiff({
 		)
 			.then(async (r) => {
 				if (!r.ok) throw new Error(`HTTP ${r.status}`);
-				return r.json() as Promise<{ entries: ContributionDiffEntry[] }>;
+				return r.json() as Promise<{
+					entries: ContributionDiffEntry[];
+					citations?: ContributionCitationDiffEntry[];
+				}>;
 			})
 			.then((j) => {
 				if (!cancelled) {
+					setCitations(j.citations ?? []);
 					setDiff(j.entries);
 					onLoadedRef.current?.(j.entries);
 				}
@@ -74,13 +97,18 @@ export function ContributionDiff({
 	if (diffError) return <p className="text-destructive text-xs">{diffError}</p>;
 	if (!diff)
 		return <p className="text-muted-foreground text-xs">Loading diff…</p>;
-	if (diff.length === 0)
+	if (diff.length === 0 && citations.length === 0)
 		return (
-			<p className="text-muted-foreground text-xs">No row changes detected.</p>
+			<p className="text-muted-foreground text-xs">No changes detected.</p>
 		);
 
 	return (
 		<div className="flex flex-col gap-2">
+			<ContributionCitationDiff
+				citations={citations}
+				hrefFor={citationHref}
+				LinkComponent={Link}
+			/>
 			{diff.map((d) => {
 				const row = (d.after ?? d.before) as {
 					id?: string;

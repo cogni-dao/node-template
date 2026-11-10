@@ -262,3 +262,19 @@ export const ContributionDiffEntrySchema = z.object({
   after: z.record(z.string(), z.unknown()).nullable(),
 });
 export type ContributionDiffEntry = z.infer<typeof ContributionDiffEntrySchema>;
+
+/**
+ * One citation edge a contribution adds, removes or re-contexts, read from the
+ * branch's `citations` diff. `context` is the after-side text (before-side for
+ * a removed edge). Reviewers see these beside the knowledge row diff.
+ */
+export const ContributionCitationDiffEntrySchema = z.object({
+  changeType: z.enum(["added", "modified", "removed"]),
+  citingId: z.string(),
+  citedId: z.string(),
+  citationType: z.string(),
+  context: z.string().nullable(),
+});
+export type ContributionCitationDiffEntry = z.infer<
+  typeof ContributionCitationDiffEntrySchema
+>;

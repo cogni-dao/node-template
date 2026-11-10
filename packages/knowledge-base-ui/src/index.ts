@@ -6,6 +6,17 @@ export {
   formatCitationLabel,
 } from "./citation-label.js";
 export {
+  type CitationDiffEdge,
+  type CitationLink,
+  type CitationLinkComponent,
+  type CitationLinkEndpoint,
+  type CitationLinkProps,
+  CitationLinks,
+  type CitationLinksProps,
+  ContributionCitationDiff,
+  type ContributionCitationDiffProps,
+} from "./citation-links.js";
+export {
   DirectRelationLinks,
   type DirectRelationLinksProps,
   type DirectRelationPage,
