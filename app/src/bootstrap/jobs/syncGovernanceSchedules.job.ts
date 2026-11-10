@@ -88,6 +88,11 @@ export async function runGovernanceSchedulesSyncJob(
   try {
     const config = getGovernanceConfig();
     const systemUserId = toUserId(COGNI_SYSTEM_PRINCIPAL_USER_ID);
+    const nodeId = getNodeId();
+    const missionPrefix = `governance:${nodeId}:`;
+    const ownsScheduleId = (id: string) =>
+      id === LEDGER_INGEST_SCHEDULE_ID ||
+      (id.startsWith(missionPrefix) && id.split(":").length === 3);
 
     const result = await syncGovernanceSchedules(config, {
       ensureGovernanceGrant: async () => {
@@ -160,7 +165,12 @@ export async function runGovernanceSchedulesSyncJob(
         return row.id;
       },
       systemUserId: COGNI_SYSTEM_PRINCIPAL_USER_ID,
-      nodeId: getNodeId(),
+      nodeId,
+      scheduleIdFor: (charter) =>
+        charter.toUpperCase() === "LEDGER_INGEST"
+          ? LEDGER_INGEST_SCHEDULE_ID
+          : `${missionPrefix}${charter.toLowerCase()}`,
+      ownsScheduleId,
       scheduleControl: container.scheduleControl,
       // Prune only this node database's system-owned governance rows. The
       // Temporal namespace is shared; a prefix scan could include sibling nodes.
@@ -171,9 +181,7 @@ export async function runGovernanceSchedulesSyncJob(
           .where(eq(schedules.ownerUserId, COGNI_SYSTEM_PRINCIPAL_USER_ID));
         return rows
           .map((row) => row.temporalScheduleId)
-          .filter(
-            (id): id is string => id !== null && id.startsWith("governance:")
-          );
+          .filter((id): id is string => id !== null && ownsScheduleId(id));
       },
       disableSchedule: async (temporalScheduleId: string) => {
         // Direct DB update via serviceDb (same pattern as upsertGovernanceScheduleRow).
