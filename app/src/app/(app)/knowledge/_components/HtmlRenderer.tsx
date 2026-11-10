@@ -39,11 +39,10 @@ export function HtmlRenderer({ html, title }: HtmlRendererProps): ReactElement {
 
   return (
     <KnowledgeHtmlFrame
-      key={mounted ? theme : "pending"}
       title={title}
       documentHtml={srcDoc}
       busy={!mounted}
-      className="h-[var(--height-artifact-canvas)] w-full rounded-md border border-border bg-background"
+      className="w-full rounded-md border border-border bg-background"
     />
   );
 }

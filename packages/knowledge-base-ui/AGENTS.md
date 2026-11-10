@@ -62,6 +62,10 @@ Published React components and hooks every node renders for knowledge (Browse, G
 - **Theme tokens (`./goals`).** The board uses the host's Tailwind theme and ships no CSS: `text-success` / `border-success` / `bg-success`, `text-warning` / `bg-warning`, `text-destructive` / `bg-destructive`, `text-muted-foreground` / `bg-muted`, `text-foreground` / `bg-background`, `bg-accent` / `text-accent-foreground`, `ring-ring` / `border-ring`, `border-border` / `border-input`, and the chart colour `--chart-1` (read as `hsl(var(--chart-1))`). A theme missing one renders that part unstyled, never wrong.
 - **Mount the board on its own tab.** Knowledge mounts `GoalsBoard` only on `?mode=goals`, so its 30 s poll (`refetchIntervalInBackground: false`) runs only while that tab is selected; the tab badge uses `useGoalsProgress({ poll: false, enabled })` and never polls. Wrap the badge and every Goals component in **one** `GoalsProvider` (client, `queryKeyPrefix`, `hrefs`, `LinkComponent`): a hook outside it reads the default client and unprefixed key, so board and badge would stop sharing a cache entry (tested).
 
+## Public Surface (html visuals, story.0027)
+
+- `KnowledgeHtmlFrame` — the sandboxed iframe for `entryType=html`. **FINAL_SRCDOC_AT_INSERT:** each iframe is inserted with its final normalized `srcdoc` and never mutated; a new document mounts a new iframe. Before the client can normalize, it renders a same-size `aria-busy` placeholder. (Chrome isolates sandboxed frames in their own process, and a `srcdoc` write during the first navigation committed an empty frame.) Height defaults to `var(--height-artifact-canvas, 720px)`. The node passes the themed document, `title` and `className`; it never keys or remounts the frame itself.
+
 ## Boundaries
 
 - Does not import node app code, routers, auth or environment.
