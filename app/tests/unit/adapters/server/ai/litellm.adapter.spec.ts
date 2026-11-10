@@ -584,7 +584,7 @@ describe("LiteLlmAdapter", () => {
 
       await adapter.completionStream({
         ...streamTestParams,
-        spendLogsMetadata: { run_id: "run-xyz", graph_id: "langgraph:poet" },
+        spendLogsMetadata: { run_id: "run-xyz", graph_id: "langgraph:cogni" },
       });
 
       const requestOptions = mockFetch.mock.calls[0]?.[1];
@@ -592,7 +592,7 @@ describe("LiteLlmAdapter", () => {
         expect.objectContaining({
           "x-litellm-spend-logs-metadata": JSON.stringify({
             run_id: "run-xyz",
-            graph_id: "langgraph:poet",
+            graph_id: "langgraph:cogni",
           }),
         })
       );

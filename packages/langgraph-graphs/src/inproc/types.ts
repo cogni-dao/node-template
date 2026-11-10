@@ -64,8 +64,8 @@ export type CompiledGraph = InvokableGraph<
  * Used by LangGraphInProcProvider to create graphs from catalog entries.
  *
  * Each graph type exports a factory matching this signature:
- * - createPoetGraph: Creates React agent for poet
- * - createResearchGraph: Creates research agent (Phase 5)
+ * - createCogniGraph: Creates the shared Cogni harness graph
+ * - createWorkPrioritizerGraph: Creates the scheduled scoring program
  */
 export type CreateGraphFn = ((opts: CreateGraphOptions) => CompiledGraph) & {
   readonly tierModelIds?: Readonly<Record<string, string>>;
