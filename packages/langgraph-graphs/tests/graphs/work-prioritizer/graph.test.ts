@@ -5,7 +5,7 @@
 import { EDO_DECIDE_NAME, GET_CURRENT_TIME_NAME, GOAL_LIST_NAME, KNOWLEDGE_READ_NAME, WORK_ITEM_TRANSITION_NAME } from "@cogni/ai-tools";
 import { AIMessage, ToolMessage } from "@langchain/core/messages";
 import { describe, expect, it } from "vitest";
-import { OPERATOR_LANGGRAPH_CATALOG } from "../../../src/catalog";
+import { LANGGRAPH_CATALOG } from "../../../src/catalog";
 import { COGNI_DECIDE_TOOL_IDS } from "../../../src/graphs/mission/cogni-decide";
 import { createMissionGraph } from "../../../src/graphs/mission/graph";
 import { cycleScores } from "../../../src/graphs/work-prioritizer/graph";
@@ -23,7 +23,7 @@ describe("work-prioritizer catalog and cycle report", () => {
     expect(deployed.allowsEvidenceUrl(new URL("https://node.example.test/knowledge/goal-a"))).toBe(true);
   });
   it("catalog entry binds the common Cogni factory (reads + scores-only writer) and cycle event", () => {
-    const entry = OPERATOR_LANGGRAPH_CATALOG["work-prioritizer"];
+    const entry = LANGGRAPH_CATALOG["work-prioritizer"];
     expect(entry.graphFactory).toBe(createMissionGraph);
     expect(entry.toolIds).toEqual(COGNI_DECIDE_TOOL_IDS);
     expect(entry.toolIds).not.toContain(EDO_DECIDE_NAME);

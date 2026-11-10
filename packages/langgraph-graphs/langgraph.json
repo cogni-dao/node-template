@@ -1,10 +1,6 @@
 {
 	"node_version": "22",
 	"graphs": {
-		"brain": "./src/graphs/brain/server.ts:brain",
-		"cogni": "./src/graphs/cogni/server.ts:cogni",
-		"poet": "./src/graphs/poet/server.ts:poet",
-		"ponderer": "./src/graphs/ponderer/server.ts:ponderer",
-		"research": "./src/graphs/research/server.ts:research"
+		"cogni": "./src/graphs/cogni/server.ts:cogni"
 	}
 }

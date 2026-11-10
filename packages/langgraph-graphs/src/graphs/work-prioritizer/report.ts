@@ -288,7 +288,7 @@ export function projectMissionCycleReport(
   receipts: RunReceipts,
   answer: string,
 ) {
-  if (program !== "work-review" && program !== "cogni-decide") return undefined;
+  if (program !== "work-review") return undefined;
   const rankScores = receipts.reportMessages.flatMap((message) => {
     if (!isToolMessage(message) || message.name !== WORK_ITEM_TRANSITION_NAME)
       return [];

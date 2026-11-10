@@ -3,7 +3,7 @@
 
 /**
  * Module: `@cogni/langgraph-graphs/graphs/mission/graph`
- * Purpose: Compatibility entrypoint for legacy mission roles and shared-harness programs.
+ * Purpose: Compatibility entrypoint for the shared-harness work-prioritizer program.
  * Scope: Legacy callers retain their injected ReAct prompt; declared programs delegate to the shared harness.
  * Invariants:
  *   - FACTORY_SEAM: Wraps createReactAgent — LangChain v1 migration is a single-file change
@@ -21,12 +21,6 @@ import {
 	createPrioritizerRunHooks,
 	createWorkPrioritizerGraph,
 } from "../work-prioritizer/graph";
-
-/**
- * Graph name constants for mission-engine roles.
- */
-export const OPERATING_REVIEW_GRAPH_NAME = "operating-review" as const;
-export const GIT_REVIEWER_GRAPH_NAME = "git-reviewer" as const;
 
 /**
  * Create a mission-engine graph with a catalog-driven system prompt.

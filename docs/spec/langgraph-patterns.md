@@ -95,11 +95,11 @@ packages/
 │
 └── langgraph-graphs/                 # Shared LangChain graph implementations and helpers
     └── src/
-        ├── catalog.ts                # NODE_LANGGRAPH_CATALOG, OPERATOR_LANGGRAPH_CATALOG, default node exports
+        ├── catalog.ts                # NODE_LANGGRAPH_CATALOG (cogni, work-prioritizer), default node exports
         ├── graphs/                   # Graph definitions
         │   ├── index.ts              # Barrel: inproc entrypoints
-        │   ├── poet/
-        │   │   ├── graph.ts          # Pure factory: createPoetGraph({ llm, tools })
+        │   ├── cogni/
+        │   │   ├── graph.ts          # Shared harness: createCogniGraph / createCogniProgram
         │   │   ├── server.ts         # langgraph dev entrypoint (initChatModel)
         │   │   ├── cogni-exec.ts     # Cogni executor entrypoint (ALS-based)
         │   │   └── prompts.ts        # System prompts
@@ -134,7 +134,7 @@ import { LANGGRAPH_CATALOG } from "@cogni/operator-graphs";
 import { LANGGRAPH_CATALOG } from "@cogni/node-template-graphs";
 
 // Compiled graph exports
-import { poetGraph, pondererGraph } from "@cogni/langgraph-graphs/graphs";
+import { createCogniGraph, createWorkPrioritizerGraph } from "@cogni/langgraph-graphs/graphs";
 
 // Runtime utilities
 import {

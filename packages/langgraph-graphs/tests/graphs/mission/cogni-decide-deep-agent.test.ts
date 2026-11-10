@@ -72,7 +72,7 @@ function setup() {
 
 describe("scheduled scores-only decision guard", () => {
   it("catalog exposes the narrow writer and no EDO", () => {
-    const entry = LANGGRAPH_CATALOG["cogni-decide"];
+    const entry = LANGGRAPH_CATALOG["work-prioritizer"];
     expect(entry?.toolIds).toEqual(COGNI_DECIDE_TOOL_IDS);
     expect(entry?.toolIds).not.toContain("core__edo_decide");
   });

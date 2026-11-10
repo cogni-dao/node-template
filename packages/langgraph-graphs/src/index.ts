@@ -32,21 +32,8 @@ export {
   NODE_AI_PRINCIPAL,
   NODE_LANGGRAPH_CATALOG,
   NODE_LANGGRAPH_GRAPH_IDS,
-  OPERATOR_LANGGRAPH_CATALOG,
-  OPERATOR_LANGGRAPH_GRAPH_IDS,
-  type OperatorLangGraphCatalogKeys,
-  type OperatorLangGraphGraphId,
   PRIORITIZER_PRINCIPAL,
 } from "./catalog";
-
-// Re-export graph constants and factories
-export {
-  AUTORESEARCH_REGISTRY_SWARM_GRAPH_NAME,
-  AUTORESEARCH_SINGLE_LANE_GRAPH_NAME,
-  AUTORESEARCH_SYNTROPY_LOOP_GRAPH_NAME,
-  BRAIN_GRAPH_NAME,
-  POET_GRAPH_NAME,
-} from "./graphs/index";
 
 // Re-export inproc runner (all LangChain logic contained in package)
 export { createInProcGraphRunner } from "./inproc/runner";

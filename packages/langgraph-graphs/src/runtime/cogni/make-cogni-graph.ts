@@ -48,11 +48,11 @@ import { toLangChainToolsFromContext } from "./tools";
  *
  * @example
  * ```typescript
- * // graphs/poet/cogni-exec.ts
- * export const poetGraph = makeCogniGraph({
- *   name: POET_GRAPH_NAME,
- *   createGraph: createPoetGraph,
- *   toolIds: POET_TOOL_IDS,
+ * // graphs/example/cogni-exec.ts
+ * export const exampleGraph = makeCogniGraph({
+ *   name: EXAMPLE_GRAPH_NAME,
+ *   createGraph: createExampleGraph,
+ *   toolIds: EXAMPLE_TOOL_IDS,
  * });
  * ```
  */
