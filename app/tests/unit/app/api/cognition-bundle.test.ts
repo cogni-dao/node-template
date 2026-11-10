@@ -525,6 +525,9 @@ it("follows the served oversized same-cognition index beyond 1,000 newer rows wi
 		expect(etag).toMatch(/^W\/"/);
 		const revalidated = await raw({ "if-none-match": etag ?? "" });
 		expect(revalidated.status).toBe(304);
+		expect(revalidated.headers.get("server-timing")).toMatch(
+			/^hub;dur=[\d.]+;desc="memo", total;dur=[\d.]+$/,
+		);
 		expect(await revalidated.text()).toBe("");
 		// Every request at the same store revision is served from the memo.
 		expect(list).toHaveBeenCalledTimes(1);

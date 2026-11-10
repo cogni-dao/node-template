@@ -24,6 +24,8 @@
  *     serves the last complete snapshot and logs `stale`); a weak ETag
  *     over revision, build, origin, name and mission
  *     answers a matching If-None-Match with 304 (bug.0018).
+ *   - SERVER_TIMING: every 200/304 carries `Server-Timing` (hub read and
+ *     total, with memo/read/stale), so latency is provable from any client.
  *   - NO_GOAL_PROGRESS: goal KPI readings are not bootstrap; agents read them
  *     live from /api/v1/metrics/goals.
  * Side-effects: IO (HTTP response, Doltgres reads via container port)
@@ -91,6 +93,7 @@ export const GET = wrapRouteHandlerWithLogging(
 		if (!sessionUser) {
 			return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 		}
+		const started = performance.now();
 		const container = getContainer();
 		const origin = publicOrigin(request);
 		const node = container.nodeId;
@@ -105,12 +108,20 @@ export const GET = wrapRouteHandlerWithLogging(
 		// `cogni-agent-orientation` starter seed every node inherits. Goal KPI
 		// readings are not bootstrap: agents read them live (GET /api/v1/metrics/goals).
 		const port = container.knowledgeStorePort;
+		const readStarted = performance.now();
 		const read = port
 			? await readCognitionSnapshot(port, [
 					`${name}-agent-orientation`,
 					"cogni-agent-orientation",
 				])
 			: null;
+		const readMs = performance.now() - readStarted;
+		// Server-Timing (W3C): any client can read the server cost without Loki.
+		const serverTiming = (total: number) =>
+			[
+				`hub;dur=${readMs.toFixed(1)};desc="${read?.memoHit ? "memo" : "read"}${read?.stale ? " stale" : ""}"`,
+				`total;dur=${total.toFixed(1)}`,
+			].join(", ");
 		const domainPointers: CognitionDomainPointer[] = [
 			...(read?.snapshot.domains ?? []),
 		];
@@ -150,7 +161,11 @@ export const GET = wrapRouteHandlerWithLogging(
 			);
 			return new NextResponse(null, {
 				status: 304,
-				headers: { ETag: etag, "Cache-Control": CACHE_CONTROL },
+				headers: {
+					ETag: etag,
+					"Cache-Control": CACHE_CONTROL,
+					"Server-Timing": serverTiming(performance.now() - started),
+				},
 			});
 		}
 
@@ -215,6 +230,10 @@ export const GET = wrapRouteHandlerWithLogging(
 		);
 		response.headers.set("Cache-Control", etag ? CACHE_CONTROL : "no-store");
 		if (etag) response.headers.set("ETag", etag);
+		response.headers.set(
+			"Server-Timing",
+			serverTiming(performance.now() - started),
+		);
 		return response;
 	},
 );
