@@ -24,7 +24,6 @@ import {
 } from "../../../../../packages/knowledge-store/tests/fixtures/governing-index.js";
 import {
 	renderBundleMarkdown,
-	resolveOrientation,
 	SESSION_BOOTSTRAP_INVARIANTS,
 	SESSION_WATCH_GATE,
 } from "@/app/api/v1/cognition/_bundle";
@@ -239,53 +238,6 @@ describe("bundle growth — whole indexes below the Markdown budget (task.5309)"
 	});
 });
 
-describe("resolveOrientation", () => {
-	const port = (rows: Record<string, string>) => ({
-		getKnowledge: async (id: string) =>
-			id in rows ? { id, content: rows[id] } : null,
-	});
-
-	it("finds the exact-id entry even when the domain scan missed it (bug.5280)", async () => {
-		// Repro: domain outgrew PER_DOMAIN_LIMIT, so the scan never saw the old
-		// orientation row and passed scannedOrientationId=null. Direct lookup
-		// must still resolve it.
-		const result = await resolveOrientation(
-			port({ "operator-agent-orientation": "the map" }),
-			"operator-agent-orientation",
-			null,
-		);
-		expect(result).toEqual({
-			id: "operator-agent-orientation",
-			content: "the map",
-		});
-	});
-
-	it("falls back to the scan-found suffix entry when the exact id is absent", async () => {
-		const result = await resolveOrientation(
-			port({ "legacy-agent-orientation": "older map" }),
-			"operator-agent-orientation",
-			"legacy-agent-orientation",
-		);
-		expect(result?.id).toBe("legacy-agent-orientation");
-	});
-
-	it("falls back to the generic starter seed last, else null", async () => {
-		const seeded = await resolveOrientation(
-			port({ "cogni-agent-orientation": "starter" }),
-			"operator-agent-orientation",
-			null,
-		);
-		expect(seeded?.id).toBe("cogni-agent-orientation");
-
-		const empty = await resolveOrientation(
-			port({}),
-			"operator-agent-orientation",
-			null,
-		);
-		expect(empty).toBeNull();
-	});
-});
-
 describe("Goals section — approved goals right after the orientation (story.5101)", () => {
 	const port = (
 		goals: {
@@ -473,9 +425,8 @@ it("follows the served oversized same-cognition index beyond 1,000 newer rows wi
 	const expected = await store.listGoverningIndex();
 	const list = vi.fn(() => store.listGoverningIndex());
 	composition.port = {
+		currentCommit: () => store.currentCommit(),
 		listDomainsFull: () => store.listDomainsFull(),
-		listKnowledge: (...args: Parameters<typeof store.listKnowledge>) =>
-			store.listKnowledge(...args),
 		listGoverningIndex: list,
 		getKnowledge: (id: string) => store.getKnowledge(id),
 		listActiveGoals: async () => [goal],
@@ -562,7 +513,21 @@ it("follows the served oversized same-cognition index beyond 1,000 newer rows wi
 		expect(JSON.stringify(first)).not.toContain("private-canonical-sentinel");
 		expect(JSON.stringify(first)).not.toContain("private-legacy-sentinel");
 		expect(fetcher).not.toHaveBeenCalled();
-		expect(list).toHaveBeenCalledTimes(2);
+		const raw = (headers?: HeadersInit) =>
+			handler(
+				{ log: { info: vi.fn(), warn: vi.fn() } },
+				new Request("https://fresh-node.cognidao.org/api/v1/cognition", {
+					headers,
+				}),
+				{ id: "own-agent" },
+			);
+		const etag = (await raw()).headers.get("etag");
+		expect(etag).toMatch(/^W\/"/);
+		const revalidated = await raw({ "if-none-match": etag ?? "" });
+		expect(revalidated.status).toBe(304);
+		expect(await revalidated.text()).toBe("");
+		// Every request at the same store revision is served from the memo.
+		expect(list).toHaveBeenCalledTimes(1);
 	} finally {
 		vi.unstubAllGlobals();
 		vi.unstubAllEnvs();
@@ -596,4 +561,39 @@ it("falls back again when the method shelf itself is too large, without losing m
 	expect(markdown).not.toContain("method-99");
 	expect(markdown).toContain("governingIndex");
 	expect(markdown).toContain("node-ai-traces-read");
+});
+
+it("serves a degraded bundle visibly with no ETag and no-store, and a hubless bundle the same", async () => {
+	const { GET } = await import("@/app/api/v1/cognition/route");
+	const handler = GET as unknown as (...args: unknown[]) => Promise<Response>;
+	const call = () =>
+		handler(
+			{ log: { info: vi.fn(), warn: vi.fn() } },
+			new Request("https://fresh-node.cognidao.org/api/v1/cognition", {
+				headers: { "if-none-match": "*" },
+			}),
+			{ id: "own-agent" },
+		);
+	composition.port = {
+		currentCommit: async () => "rev-degraded",
+		listDomainsFull: async () => [],
+		listGoverningIndex: async () => [],
+		getKnowledge: async () => null,
+		listActiveGoals: async () => {
+			throw new Error("goals down");
+		},
+	};
+	const degraded = await call();
+	expect(degraded.status).toBe(200);
+	expect(degraded.headers.get("etag")).toBeNull();
+	expect(degraded.headers.get("cache-control")).toBe("no-store");
+	expect((await degraded.json()).markdown).toContain("goals unavailable");
+
+	composition.port = undefined;
+	const hubless = await call();
+	expect(hubless.status).toBe(200);
+	expect(hubless.headers.get("etag")).toBeNull();
+	expect((await hubless.json()).markdown).toContain(
+		SESSION_BOOTSTRAP_INVARIANTS[0],
+	);
 });

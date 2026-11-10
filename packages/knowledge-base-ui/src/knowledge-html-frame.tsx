@@ -3,7 +3,12 @@
 
 "use client";
 
-import { type ReactElement, useEffect, useState } from "react";
+import {
+  type CSSProperties,
+  type ReactElement,
+  useMemo,
+  useSyncExternalStore,
+} from "react";
 
 /**
  * The only sandbox capability granted to authored knowledge HTML.
@@ -63,31 +68,72 @@ export interface KnowledgeHtmlFrameProps {
   readonly busy?: boolean;
 }
 
-/** Owns the security boundary shared by every node's knowledge renderer. */
+/**
+ * Default frame height. A node may set `--height-artifact-canvas`; nodes that
+ * never defined it would otherwise collapse the frame to the 150px iframe default.
+ */
+const FRAME_STYLE: CSSProperties = {
+  height: "var(--height-artifact-canvas, 720px)",
+};
+
+const subscribeNever = () => () => {};
+const onClient = () => true;
+const onServer = () => false;
+
+/** Small stable hash so a changed document always gets a fresh iframe. */
+function documentKey(html: string): string {
+  let hash = 5381;
+  for (let i = 0; i < html.length; i++) {
+    hash = ((hash << 5) + hash + html.charCodeAt(i)) | 0;
+  }
+  return `${html.length}:${hash >>> 0}`;
+}
+
+/**
+ * Owns the security boundary shared by every node's knowledge renderer.
+ *
+ * FINAL_SRCDOC_AT_INSERT: the iframe is created with its final `srcdoc` and
+ * never mutated. Chrome isolates sandboxed frames in their own process; a
+ * `srcdoc` change while the first navigation is in flight commits an empty
+ * document (the "black box"). A new document gets a new iframe instead.
+ */
 export function KnowledgeHtmlFrame({
   documentHtml,
   title,
   className,
   busy = false,
 }: KnowledgeHtmlFrameProps): ReactElement {
-  const [srcDoc, setSrcDoc] = useState("");
-
-  useEffect(() => {
-    setSrcDoc(
-      documentHtml
+  const isClient = useSyncExternalStore(subscribeNever, onClient, onServer);
+  const srcDoc = useMemo(
+    () =>
+      isClient && documentHtml
         ? normalizeKnowledgeHtmlNavigation(documentHtml, window.location.href)
-        : ""
+        : "",
+    [isClient, documentHtml]
+  );
+
+  if (!srcDoc) {
+    return (
+      <div
+        role="status"
+        aria-label={title}
+        aria-busy="true"
+        className={className}
+        style={FRAME_STYLE}
+      />
     );
-  }, [documentHtml]);
+  }
 
   return (
     <iframe
+      key={documentKey(srcDoc)}
       title={title}
       srcDoc={srcDoc}
       sandbox={KNOWLEDGE_HTML_SANDBOX}
       referrerPolicy="no-referrer"
-      aria-busy={busy || srcDoc.length === 0}
+      aria-busy={busy}
       className={className}
+      style={FRAME_STYLE}
     />
   );
 }

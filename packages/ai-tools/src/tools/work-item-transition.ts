@@ -198,6 +198,13 @@ export const workItemTransitionContract: ToolContract<
     "'patch' (requires id, optional priority/rank/labels/summary/scores, optional expectedRevision for compare-and-set) updates metadata fields. " +
     "Use core__work_item_query first to find items and check their current status.",
   effect: "state_change",
+  requires: {
+    scope: "work_item:transition",
+    kind: "node",
+    subject: "member",
+    label: "Update work items and their priority scores",
+    description: "Move work items along and change their scores.",
+  },
   inputSchema: WorkItemTransitionInputSchema,
   outputSchema: WorkItemTransitionOutputSchema,
 
