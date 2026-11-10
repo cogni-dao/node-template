@@ -716,15 +716,18 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
     // are separate Dolt branches and never appear here. The id-prefix and
     // status checks run in `selectActiveGoals` (app layer) rather than SQL, the
     // same Doltgres-safe idiom as `searchKnowledge`; the shelf is tiny.
-    const rows = await this.readSql.unsafe(
-      `SELECT id, entry_type, status, title, content, evaluate_at FROM knowledge WHERE entry_type = ${escapeValue(GOAL_ENTRY_TYPE)}`
-    );
     // GOAL_RETIRED_BY_SUPERSEDES: a merged `supersedes` edge onto a goal
     // retires it (DEPRECATE_NOT_DELETE — a cited goal cannot be deleted and no
     // contribution op sets `status`). Same Doltgres-safe idiom: filter in code.
-    const superseded = await this.readSql.unsafe(
-      `SELECT cited_id FROM citations WHERE citation_type = ${escapeValue(GOAL_RETIRING_EDGE)}`
-    );
+    // The two reads are independent, so they run together (bug.0018).
+    const [rows, superseded] = await Promise.all([
+      this.readSql.unsafe(
+        `SELECT id, entry_type, status, title, content, evaluate_at FROM knowledge WHERE entry_type = ${escapeValue(GOAL_ENTRY_TYPE)}`
+      ),
+      this.readSql.unsafe(
+        `SELECT cited_id FROM citations WHERE citation_type = ${escapeValue(GOAL_RETIRING_EDGE)}`
+      ),
+    ]);
     const supersededIds = new Set(
       superseded.map((r) => (r as Record<string, unknown>).cited_id as string)
     );
