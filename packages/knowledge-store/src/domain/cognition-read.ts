@@ -7,9 +7,9 @@
  * Scope: Takes a structural port, returns plain data plus `memoHit` and `stale`. Imports no web framework, auth, container, metrics or logger; the route renders and logs.
  * Invariants:
  *   - INDEX_ONLY: domains with counts, the projected governing index, active goals and ONE orientation body. No per-domain scan, no other body.
- *   - ONE_READ_PER_REVISION: per port, the latest revision's snapshot is remembered; concurrent callers share one in-flight read; a failed read or an unreadable goals section is forgotten.
- *   - NEVER_OLDER_THAN_LABEL: the key is the store HEAD, read before the index reads, so a snapshot is never older than its revision label; a new commit changes the key.
- *   - BOUNDED_REVALIDATION: with a complete snapshot already in memory, a revision check slower than `revisionDeadlineMs`, a failed check, or a failed fresh read serves that snapshot with `stale: true`; a late revision then refreshes the memo behind the response. With no complete snapshot, callers wait.
+ *   - ONE_READ_PER_REVISION: per port and orientation ids, one HEAD check and one index read are in flight at a time and shared by every caller; only a complete snapshot (goals readable) is kept, and only if it started after the kept one (monotonic).
+ *   - NEVER_OLDER_THAN_LABEL: HEAD is read before the index reads, so a snapshot is never older than its revision label; a new commit changes the key.
+ *   - BOUNDED_REVALIDATION: once a complete snapshot exists, a HEAD check slower than `revisionDeadlineMs`, a failed check, or a failed or degraded fresh read serves it with `stale: true`, and the shared HEAD check refreshes it when it lands. A snapshot unconfirmed for `maxStaleMs` is never served stale; callers then wait. With no complete snapshot, callers wait.
  *   - NO_GOAL_PROGRESS: goal KPI readings are not part of cognition; they are read live from the metrics API.
  * Side-effects: IO (port reads through the injected port)
  * Links: bug.0018, packages/knowledge-store/src/domain/graph-read.ts
@@ -47,29 +47,53 @@ export interface CognitionSnapshot {
 
 export interface CognitionReadResult {
   readonly snapshot: CognitionSnapshot;
-  /** True when the snapshot came from the per-revision memo or a shared in-flight read. */
+  /** True when no index read was needed: the kept snapshot matched HEAD, or was served stale. */
   readonly memoHit: boolean;
-  /** True when the revision could not be confirmed in time and the last complete snapshot was served. */
+  /** True when HEAD could not be confirmed in time and the kept complete snapshot was served. */
   readonly stale: boolean;
 }
 
 export interface CognitionReadOptions {
-  /** How long a caller holding a complete snapshot waits for the revision check. */
+  /** How long a caller holding a complete snapshot waits for the HEAD check. */
   readonly revisionDeadlineMs?: number;
+  /** The longest a snapshot may go unconfirmed by HEAD and still be served stale. */
+  readonly maxStaleMs?: number;
 }
 
-/** Default bound on the revision check once a complete snapshot exists. */
+/** Default bound on the HEAD check once a complete snapshot exists. */
 export const COGNITION_REVISION_DEADLINE_MS = 250;
+/** Default bound on how long an unconfirmed snapshot may be served stale. */
+export const COGNITION_MAX_STALE_MS = 60_000;
 
-const memos = new WeakMap<
-  object,
-  { key: string; read: Promise<CognitionSnapshot> }
->();
-/** The latest complete snapshot per port, for the orientation ids it was read with. */
-const lastComplete = new WeakMap<
-  object,
-  { idsKey: string; snapshot: CognitionSnapshot }
->();
+interface Kept {
+  readonly seq: number;
+  readonly snapshot: CognitionSnapshot;
+  /** When HEAD last matched this snapshot's revision (or it was read). */
+  confirmedAt: number;
+}
+
+interface CognitionState {
+  kept: Kept | null;
+  head: Promise<string> | null;
+  read: { revision: string; seq: number; promise: Promise<CognitionSnapshot> } | null;
+  nextSeq: number;
+}
+
+const states = new WeakMap<object, Map<string, CognitionState>>();
+
+function stateFor(port: CognitionReadPort, idsKey: string): CognitionState {
+  let byIds = states.get(port);
+  if (!byIds) {
+    byIds = new Map();
+    states.set(port, byIds);
+  }
+  let state = byIds.get(idsKey);
+  if (!state) {
+    state = { kept: null, head: null, read: null, nextSeq: 0 };
+    byIds.set(idsKey, state);
+  }
+  return state;
+}
 
 async function firstExisting(
   port: CognitionReadPort,
@@ -109,30 +133,52 @@ async function snapshotAt(
   };
 }
 
-function readAt(
+/** The shared index read for `revision`; keeps its result only if complete and newer than the kept one. */
+function readFor(
+  state: CognitionState,
   port: CognitionReadPort,
   revision: string,
   orientationIds: readonly string[]
-): { read: Promise<CognitionSnapshot>; memoHit: boolean } {
-  const idsKey = orientationIds.join("\u0000");
-  const key = `${revision}\u0000${idsKey}`;
-  const memo = memos.get(port);
-  if (memo?.key === key) return { read: memo.read, memoHit: true };
-  const read = snapshotAt(port, revision, orientationIds);
-  const placed = { key, read };
-  memos.set(port, placed);
-  // A failed read, or one whose goals were unreadable, is not remembered.
-  read.then(
+): Promise<CognitionSnapshot> {
+  if (state.read?.revision === revision) return state.read.promise;
+  const seq = state.nextSeq++;
+  const promise = snapshotAt(port, revision, orientationIds);
+  const placed = { revision, seq, promise };
+  state.read = placed;
+  promise.then(
     (snapshot) => {
-      if (snapshot.goals.status === "ok")
-        lastComplete.set(port, { idsKey, snapshot });
-      else if (memos.get(port) === placed) memos.delete(port);
+      if (state.read === placed) state.read = null;
+      if (snapshot.goals.status === "ok" && (!state.kept || seq > state.kept.seq))
+        state.kept = { seq, snapshot, confirmedAt: Date.now() };
     },
     () => {
-      if (memos.get(port) === placed) memos.delete(port);
+      if (state.read === placed) state.read = null;
     }
   );
-  return { read, memoHit: false };
+  return promise;
+}
+
+/** The shared HEAD check; when it lands it confirms or refreshes the kept snapshot. */
+function headFor(
+  state: CognitionState,
+  port: CognitionReadPort,
+  orientationIds: readonly string[]
+): Promise<string> {
+  if (state.head) return state.head;
+  const head = port.currentCommit();
+  state.head = head;
+  head.then(
+    (revision) => {
+      if (state.head === head) state.head = null;
+      if (state.kept?.snapshot.revision === revision)
+        state.kept.confirmedAt = Date.now();
+      else readFor(state, port, revision, orientationIds).catch(() => undefined);
+    },
+    () => {
+      if (state.head === head) state.head = null;
+    }
+  );
+  return head;
 }
 
 type Settled<T> = { kind: "value"; value: T } | { kind: "late" | "error" };
@@ -156,8 +202,8 @@ function settleWithin<T>(promise: Promise<T>, ms: number): Promise<Settled<T>> {
 
 /**
  * Read the cognition hub inputs at the current store revision. Costs one
- * revision query when it is unchanged, bounded by `revisionDeadlineMs` once a
- * complete snapshot exists. `orientationIds` are tried in order (exact node
+ * shared HEAD query when it is unchanged, bounded by `revisionDeadlineMs` once
+ * a complete snapshot exists. `orientationIds` are tried in order (exact node
  * entry first, generic seed last).
  */
 export async function readCognitionSnapshot(
@@ -165,29 +211,33 @@ export async function readCognitionSnapshot(
   orientationIds: readonly string[],
   {
     revisionDeadlineMs = COGNITION_REVISION_DEADLINE_MS,
+    maxStaleMs = COGNITION_MAX_STALE_MS,
   }: CognitionReadOptions = {}
 ): Promise<CognitionReadResult> {
-  const last = lastComplete.get(port);
+  const state = stateFor(port, orientationIds.join("\u0000"));
+  const kept = state.kept;
   const fallback =
-    last?.idsKey === orientationIds.join("\u0000") ? last.snapshot : null;
-  const revision = port.currentCommit();
+    kept && Date.now() - kept.confirmedAt <= maxStaleMs ? kept.snapshot : null;
+  const head = headFor(state, port, orientationIds);
   if (!fallback) {
-    const { read, memoHit } = readAt(port, await revision, orientationIds);
-    return { snapshot: await read, memoHit, stale: false };
+    const revision = await head;
+    if (state.kept?.snapshot.revision === revision)
+      return { snapshot: state.kept.snapshot, memoHit: true, stale: false };
+    return {
+      snapshot: await readFor(state, port, revision, orientationIds),
+      memoHit: false,
+      stale: false,
+    };
   }
-  const checked = await settleWithin(revision, revisionDeadlineMs);
-  if (checked.kind !== "value") {
-    // Refresh behind the response once the revision arrives.
-    revision.then(
-      (rev) => readAt(port, rev, orientationIds).read.catch(() => undefined),
-      () => undefined
-    );
+  const checked = await settleWithin(head, revisionDeadlineMs);
+  if (checked.kind !== "value")
     return { snapshot: fallback, memoHit: true, stale: true };
-  }
-  const { read, memoHit } = readAt(port, checked.value, orientationIds);
-  try {
-    return { snapshot: await read, memoHit, stale: false };
-  } catch {
-    return { snapshot: fallback, memoHit: true, stale: true };
-  }
+  if (checked.value === fallback.revision)
+    return { snapshot: fallback, memoHit: true, stale: false };
+  const fresh = await readFor(state, port, checked.value, orientationIds).catch(
+    () => null
+  );
+  if (fresh?.goals.status === "ok")
+    return { snapshot: fresh, memoHit: false, stale: false };
+  return { snapshot: fallback, memoHit: true, stale: true };
 }

@@ -80,7 +80,8 @@ describe("readCognitionSnapshot", () => {
       readCognitionSnapshot(port, ORIENTATION_IDS),
       readCognitionSnapshot(port, ORIENTATION_IDS),
     ]);
-    expect([a.memoHit, b.memoHit]).toEqual([false, true]);
+    // Concurrent callers share one HEAD check and one index read.
+    expect([a.memoHit, b.memoHit]).toEqual([false, false]);
     expect((await readCognitionSnapshot(port, ORIENTATION_IDS)).memoHit).toBe(true);
     expect(calls.governing).toHaveBeenCalledTimes(1);
 
@@ -135,9 +136,14 @@ describe("readCognitionSnapshot", () => {
     late.resolve("k2");
     await vi.waitFor(() => expect(calls.governing).toHaveBeenCalledTimes(2));
     next = Promise.resolve("k2");
+    await vi.waitFor(async () =>
+      expect(
+        (await readCognitionSnapshot(keyed, ORIENTATION_IDS)).snapshot.revision
+      ).toBe("k2")
+    );
     const fresh = await readCognitionSnapshot(keyed, ORIENTATION_IDS);
     expect(fresh).toMatchObject({ stale: false, memoHit: true });
-    expect(fresh.snapshot.revision).toBe("k2");
+    expect(calls.governing).toHaveBeenCalledTimes(2);
   });
 
   it("serves the last complete snapshot when the revision check or the fresh read fails", async () => {
@@ -156,6 +162,80 @@ describe("readCognitionSnapshot", () => {
     const served = await readCognitionSnapshot(keyed, ORIENTATION_IDS);
     expect(served).toMatchObject({ stale: true });
     expect(served.snapshot.revision).toBe("k1");
+  });
+
+  it("never serves stale while HEAD answers in time", async () => {
+    const { port, commit } = fixture();
+    await readCognitionSnapshot(port, ORIENTATION_IDS);
+    for (const rev of ["rev-a", "rev-b", "rev-b", "rev-c"]) {
+      commit(rev);
+      const r = await readCognitionSnapshot(port, ORIENTATION_IDS);
+      expect(r).toMatchObject({ stale: false });
+      expect(r.snapshot.revision).toBe(rev);
+    }
+  });
+
+  it("shares one in-flight HEAD check across concurrent callers", async () => {
+    const { port } = fixture();
+    await readCognitionSnapshot(port, ORIENTATION_IDS);
+    const late = deferred<string>();
+    const head = vi.fn(() => late.promise);
+    const keyed = Object.assign(port, { currentCommit: head });
+    const served = await Promise.all(
+      Array.from({ length: 5 }, () =>
+        readCognitionSnapshot(keyed, ORIENTATION_IDS, { revisionDeadlineMs: 5 })
+      )
+    );
+    expect(served.every((r) => r.stale)).toBe(true);
+    expect(head).toHaveBeenCalledTimes(1);
+    late.resolve("rev-a");
+  });
+
+  it("never lets an older read that lands late replace a newer kept snapshot", async () => {
+    const { port, calls } = fixture();
+    let rev = "k1";
+    const keyed = Object.assign(port, { currentCommit: async () => rev });
+    await readCognitionSnapshot(keyed, ORIENTATION_IDS);
+    const slow = deferred<{ id: string; domain: string; entryType: string; useWhen: string }[]>();
+    calls.governing.mockImplementationOnce(() => slow.promise);
+    rev = "k2";
+    const older = readCognitionSnapshot(keyed, ORIENTATION_IDS);
+    await new Promise((r) => setTimeout(r, 0));
+    rev = "k3";
+    expect((await readCognitionSnapshot(keyed, ORIENTATION_IDS)).snapshot.revision).toBe("k3");
+    slow.resolve([]);
+    expect((await older).snapshot.revision).toBe("k2");
+    // k2 started first, so it never replaces k3 as the stale fallback.
+    const bad = Object.assign(keyed, {
+      currentCommit: async () => {
+        throw new Error("dolt busy");
+      },
+    });
+    expect((await readCognitionSnapshot(bad, ORIENTATION_IDS)).snapshot.revision).toBe("k3");
+  });
+
+  it("serves the kept snapshot stale when a fresh read comes back with goals unreadable", async () => {
+    const { port, calls, commit } = fixture();
+    await readCognitionSnapshot(port, ORIENTATION_IDS);
+    commit("rev-b");
+    calls.goals.mockRejectedValueOnce(new Error("goals down"));
+    const served = await readCognitionSnapshot(port, ORIENTATION_IDS);
+    expect(served).toMatchObject({ stale: true });
+    expect(served.snapshot.revision).toBe("rev-a");
+    expect(served.snapshot.goals.status).toBe("ok");
+  });
+
+  it("stops serving stale once the kept snapshot is unconfirmed past maxStaleMs", async () => {
+    const { port } = fixture();
+    let next: () => Promise<string> = async () => "k1";
+    const keyed = Object.assign(port, { currentCommit: () => next() });
+    await readCognitionSnapshot(keyed, ORIENTATION_IDS);
+    next = async () => {
+      throw new Error("dolt down");
+    };
+    await expect(
+      readCognitionSnapshot(keyed, ORIENTATION_IDS, { maxStaleMs: -1 })
+    ).rejects.toThrow("dolt down");
   });
 
   it("makes a first caller wait: there is nothing complete to serve yet", async () => {

@@ -131,10 +131,11 @@ export const GET = wrapRouteHandlerWithLogging(
 		if (goals.status === "unavailable") {
 			ctx.log.warn({ reason: goals.reason }, "cognition.goals_unavailable");
 		}
-		// Only a complete bundle is revalidatable; a degraded one is never reused.
+		// Only a complete, HEAD-confirmed bundle is revalidatable; a degraded or
+		// stale one is never confirmed by 304 or reused.
 		const revision = read?.snapshot.revision ?? null;
 		const etag =
-			revision && goals.status === "ok"
+			revision && goals.status === "ok" && !read?.stale
 				? `W/"${createHash("sha256")
 						.update(
 							[revision, buildSha, origin, name, mission ?? ""].join("\u0000"),
