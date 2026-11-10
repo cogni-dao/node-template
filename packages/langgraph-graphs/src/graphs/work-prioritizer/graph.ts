@@ -2,10 +2,10 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /** Pure triage-program configuration of the shared native harness.
- * The program binds core__work_item_transition, the tool an outside agent uses, behind a thin guard.
+ * The program binds core__work_item_update, the twin of PATCH /api/v1/work/items/{id} that an outside agent uses, behind a thin guard.
  * Program-owned receipts feed the guard and the cycle report.
  */
-import { WORK_ITEM_TRANSITION_NAME } from "@cogni/ai-tools";
+import { WORK_ITEM_UPDATE_NAME } from "@cogni/ai-tools";
 import { cogniProfile, createCogniProgram } from "../cogni/graph";
 import type { CreateReactAgentGraphOptions } from "../types";
 import {
@@ -19,7 +19,7 @@ import {
 } from "./prompts";
 import { RunReceipts } from "./receipts";
 import { projectMissionCycleReport, projectStepBudgetReport } from "./report";
-import { createTransitionGuard } from "./transition-guard";
+import { createTriageGuard } from "./triage-guard";
 import { COGNI_READ_TOOL_IDS } from "./tools";
 export {
   cycleScores,
@@ -38,12 +38,12 @@ export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
     .map((tool) => tool.name)
     .filter(
       (name) =>
-        name !== WORK_ITEM_TRANSITION_NAME &&
+        name !== WORK_ITEM_UPDATE_NAME &&
         readAuthority.has(name),
     );
   const deciding = opts.program === "work-review";
   const writer = opts.tools.find(
-    (tool) => tool.name === WORK_ITEM_TRANSITION_NAME,
+    (tool) => tool.name === WORK_ITEM_UPDATE_NAME,
   );
   const requiredGuidanceIds = deciding ? REQUIRED_GUIDANCE_IDS : [];
   const profile = cogniProfile({
@@ -59,7 +59,7 @@ export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
   });
   const guardedTools =
     deciding && receipts && writer
-      ? [createTransitionGuard(receipts, writer, requiredGuidanceIds)]
+      ? [createTriageGuard(receipts, writer, requiredGuidanceIds)]
       : [];
   return createCogniProgram({
     ...opts,

@@ -10,6 +10,7 @@ import {
   KNOWLEDGE_READ_NAME,
   WORK_ITEM_QUERY_NAME,
   WORK_ITEM_TRANSITION_NAME,
+  WORK_ITEM_UPDATE_NAME,
 } from "@cogni/ai-tools";
 import {
   AIMessage,
@@ -54,6 +55,9 @@ const PATCH_FIELDS = [
 type Snapshot = Partial<Record<(typeof PATCH_FIELDS)[number], unknown>>;
 
 const same = isDeepStrictEqual;
+/** The triage writers: the deprecated transition tool and core__work_item_update (the PATCH route's twin). */
+const isWriter = (name: string | undefined) =>
+  name === WORK_ITEM_TRANSITION_NAME || name === WORK_ITEM_UPDATE_NAME;
 
 /** Tool-call args keyed by tool_call id, from every AI message in the transcript. */
 function toolCallArgs(
@@ -161,8 +165,12 @@ export function cycleScores(messages: readonly BaseMessage[]) {
         seen.set(it.id, snap);
         queryReadIds.add(it.id);
       }
-    } else if (m.name === WORK_ITEM_TRANSITION_NAME && v.success === true) {
-      const args = call?.args;
+    } else if (isWriter(m.name) && v.success === true) {
+      // An update call carries its fields in `set`; read it as the flat patch the transition tool takes.
+      const args =
+        call?.name === WORK_ITEM_UPDATE_NAME
+          ? { action: "patch", ...((call.args.set as object | undefined) ?? {}) }
+          : call?.args;
       if (args?.action !== "patch") continue;
       patches++;
       const prior = seen.get(String(v.id));
@@ -257,7 +265,7 @@ export function cycleTelemetry(
       else toolErrorCount++;
     } else if (m.name === GOAL_LIST_NAME && Array.isArray(v.goals)) {
       goalIds = v.goals.map((g: { id?: unknown }) => String(g?.id));
-    } else if (m.name === WORK_ITEM_TRANSITION_NAME && v.success === true) {
+    } else if (isWriter(m.name) && v.success === true) {
       if (!changedItemIds.includes(String(v.id)))
         changedItemIds.push(String(v.id));
     } else if (m.name === EDO_DECIDE_NAME) {
@@ -292,7 +300,7 @@ export function projectMissionCycleReport(
 ) {
   if (program !== "work-review") return undefined;
   const rankScores = receipts.reportMessages.flatMap((message) => {
-    if (!isToolMessage(message) || message.name !== WORK_ITEM_TRANSITION_NAME)
+    if (!isToolMessage(message) || !isWriter(message.name))
       return [];
     const output = parse(text(message));
     return output?.success === true &&

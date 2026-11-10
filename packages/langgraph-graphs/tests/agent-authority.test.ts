@@ -43,15 +43,16 @@ describe("catalog principals (N4)", () => {
   });
 
   it("gives work-prioritizer the guarded triage writer", () => {
-    expect(LANGGRAPH_CATALOG["work-prioritizer"]?.toolIds).toContain(
-      "core__work_item_transition",
-    );
+    const ids = LANGGRAPH_CATALOG["work-prioritizer"]?.toolIds ?? [];
+    expect(ids).toContain("core__work_item_update");
+    expect(ids).not.toContain("core__work_item_transition");
   });
 
   it("gives cogni no domain writer: its only write tool arranges schedules", () => {
     const ids = LANGGRAPH_CATALOG.cogni?.toolIds ?? [];
     expect(ids).toContain("core__schedule_manage");
     expect(ids).not.toContain("core__work_item_transition");
+    expect(ids).not.toContain("core__work_item_update");
     expect(ids).not.toContain("core__metric_compute");
     expect(ids).not.toContain("core__knowledge_write");
   });

@@ -9,7 +9,7 @@ import {
   KNOWLEDGE_SEARCH_NAME,
   WORK_ITEM_QUERY_NAME,
   WORK_ITEM_READ_NAME,
-  WORK_ITEM_TRANSITION_NAME,
+  WORK_ITEM_UPDATE_NAME,
 } from "@cogni/ai-tools";
 
 export { WORK_ITEM_READ_NAME };
@@ -36,7 +36,7 @@ export const COGNI_DECIDE_TOOL_IDS = [
   KNOWLEDGE_SEARCH_NAME,
   WORK_ITEM_QUERY_NAME,
   WORK_ITEM_READ_NAME,
-  WORK_ITEM_TRANSITION_NAME,
+  WORK_ITEM_UPDATE_NAME,
   GET_CURRENT_TIME_NAME,
 ] as const;
 /** Triage guide: a run changes at most this many distinct items. */

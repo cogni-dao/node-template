@@ -2,21 +2,23 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 /**
- * The prioritizer's `core__work_item_transition`: the real tool contract behind a thin guard.
- * The guard states only what the triage guide requires. The host ToolRunner still authorizes
- * `work_item:transition`, the same grant and door an outside agent uses.
- *   - the item was read this run, and a patch carries that exact revision;
+ * The prioritizer's `core__work_item_update`: the tool that mirrors PATCH /api/v1/work/items/{id}, behind a thin guard.
+ * One call carries status, scores and labels together with `expectedRevision`. The guard states only what the triage
+ * guide requires. The host ToolRunner still authorizes `work_item:transition`, the same grant and door an outside agent uses.
+ *   - the triage guide was read this run, and the item was read this run;
+ *   - the call carries the exact revision read, and `set` holds only status, scores and labels;
  *   - a score of 4-5 cites a source read this run, never the item's own page;
  *   - at most MAX_CHANGED_ITEMS_PER_RUN distinct items change per run;
- *   - no priority, rank or summary; labels keep every existing label and add only a listed goal;
- *   - status routes only to research, design, implement or cancelled (a cancel states its reason);
+ *   - labels keep every existing label and add only a listed goal;
+ *   - status routes from needs_triage/research/design/implement to research, design, implement or cancelled; a cancel states its reason;
+ *   - a write with no `reason` gets a one-line reason from the guard (task.0052);
  *   - a write that changes nothing writes nothing (a repeat run is quiet).
  * A failed read records nothing; it never blocks a write to a different item.
  */
 import {
-  WORK_ITEM_TRANSITION_NAME,
-  type WorkItemTransitionInput,
-  WorkItemTransitionInputSchema,
+  WORK_ITEM_UPDATE_NAME,
+  type WorkItemUpdateInput,
+  workItemUpdateContract,
 } from "@cogni/ai-tools";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import {
@@ -42,6 +44,8 @@ const ROUTABLE_FROM = new Set([
   "needs_design",
   "needs_implement",
 ]);
+/** The only fields a triage write may set. */
+const TRIAGE_FIELDS = new Set(["status", "scores", "labels"]);
 const EVIDENCE_FROM = 4;
 
 type Scores = NonNullable<ObservedItem["scores"]>;
@@ -65,7 +69,7 @@ function sameScores(a: Scores | undefined, b: Scores | undefined): boolean {
 const sameLabels = (a: readonly string[], b: readonly string[]) =>
   a.length === b.length && a.every((label) => b.includes(label));
 
-export function createTransitionGuard(
+export function createTriageGuard(
   receipts: RunReceipts,
   writer: StructuredToolInterface,
   requiredGuidance: readonly string[],
@@ -84,49 +88,45 @@ export function createTransitionGuard(
 
   /** The reason to refuse this call, or undefined. Pure over the receipts; writes nothing. */
   function refuse(
-    input: WorkItemTransitionInput,
+    input: WorkItemUpdateInput,
     item: ObservedItem,
   ): string | undefined {
-    if (input.action === "transition") {
-      if (!ROUTABLE_FROM.has(item.status))
-        return reject(
-          "route_source",
-          `${item.id} is ${item.status}; triage routes only from needs_triage, needs_research, needs_design or needs_implement`,
-        );
-      if (!input.toStatus || !ROUTES.has(input.toStatus))
-        return reject(
-          "route_not_allowed",
-          "route to needs_research, needs_design, needs_implement or cancelled only",
-        );
-      if (input.toStatus === "cancelled" && !input.reason?.trim())
-        return reject("cancel_needs_reason", "state why in reason");
-      return undefined;
-    }
-    if (
-      input.priority !== undefined ||
-      input.rank !== undefined ||
-      input.summary !== undefined
-    )
+    const { set } = input;
+    if (Object.keys(set).some((key) => !TRIAGE_FIELDS.has(key)))
       return reject(
         "field_not_allowed",
-        "triage never changes priority, rank or summary",
+        "triage sets only status, scores and labels; never priority, rank, summary, outcome or title",
       );
     if (input.expectedRevision !== item.revision)
       return reject(
         "expected_revision",
         `send expectedRevision ${item.revision}, the revision you read`,
       );
-    if (input.labels !== undefined) {
+    if (set.status !== undefined && set.status !== item.status) {
+      if (!ROUTABLE_FROM.has(item.status))
+        return reject(
+          "route_source",
+          `${item.id} is ${item.status}; triage routes only from needs_triage, needs_research, needs_design or needs_implement`,
+        );
+      if (!ROUTES.has(set.status))
+        return reject(
+          "route_not_allowed",
+          "route to needs_research, needs_design, needs_implement or cancelled only",
+        );
+      if (set.status === "cancelled" && !input.reason?.trim())
+        return reject("cancel_needs_reason", "state why in reason");
+    }
+    if (set.labels !== undefined) {
       const allowed = goalLabels();
-      const kept = item.labels.every((label) => input.labels?.includes(label));
-      const added = input.labels.filter((label) => !item.labels.includes(label));
+      const kept = item.labels.every((label) => set.labels?.includes(label));
+      const added = set.labels.filter((label) => !item.labels.includes(label));
       if (!kept || added.some((label) => !allowed.has(label)))
         return reject(
           "labels",
           "keep every existing label; add only goal:<id> of a listed goal",
         );
     }
-    for (const [axis, score] of Object.entries(input.scores ?? {})) {
+    for (const [axis, score] of Object.entries(set.scores ?? {})) {
       const stored = item.scores?.[axis];
       if (score.v < EVIDENCE_FROM) continue;
       if (stored?.v === score.v && stored.ev === score.ev) continue;
@@ -152,34 +152,38 @@ export function createTransitionGuard(
     return undefined;
   }
 
-  /** One-line audit reason for a patch the model sent without one (task.0052). */
-  function patchReason(input: WorkItemTransitionInput, item: ObservedItem) {
+  /** One-line audit reason for a write the model sent without one (task.0052). */
+  function autoReason(input: WorkItemUpdateInput, item: ObservedItem) {
+    const { set } = input;
     const parts: string[] = [];
-    const moved = Object.entries(input.scores ?? {})
+    if (set.status !== undefined && set.status !== item.status)
+      parts.push(`status ${item.status}→${set.status}`);
+    const moved = Object.entries(set.scores ?? {})
       .filter(([axis, score]) => (item.scores?.[axis]?.v ?? 0) !== score.v)
-      .map(([axis, score]) => `${axis} ${item.scores?.[axis]?.v ?? 0}→${score.v}`);
+      .map(
+        ([axis, score]) => `${axis} ${item.scores?.[axis]?.v ?? 0}→${score.v}`,
+      );
     if (moved.length) parts.push(`scores ${moved.join(", ")}`);
-    const added = (input.labels ?? []).filter((l) => !item.labels.includes(l));
+    const added = (set.labels ?? []).filter((l) => !item.labels.includes(l));
     if (added.length) parts.push(added.map((l) => `+${l}`).join(" "));
     return `triage: ${parts.join("; ") || "update"}`.slice(0, 512);
   }
 
   /** True when the call would leave the item as it is. */
-  function noChange(
-    input: WorkItemTransitionInput,
-    item: ObservedItem,
-  ): boolean {
-    if (input.action === "transition") return input.toStatus === item.status;
-    const scores = input.scores === undefined ||
-      (input.scores !== null && sameScores(input.scores, item.scores)) ||
-      (input.scores === null && !item.scores);
+  function noChange(input: WorkItemUpdateInput, item: ObservedItem): boolean {
+    const { set } = input;
+    const status = set.status === undefined || set.status === item.status;
+    const scores =
+      set.scores === undefined ||
+      (set.scores !== null && sameScores(set.scores, item.scores)) ||
+      (set.scores === null && !item.scores);
     const labels =
-      input.labels === undefined || sameLabels(input.labels, item.labels);
-    return scores && labels;
+      set.labels === undefined || sameLabels(set.labels, item.labels);
+    return status && scores && labels;
   }
 
   const run = async (
-    input: WorkItemTransitionInput,
+    input: WorkItemUpdateInput,
     _manager?: unknown,
     config?: RunnableConfig,
   ): Promise<string> => {
@@ -215,10 +219,9 @@ export function createTransitionGuard(
 
     pending.add(item.id);
     try {
-      const sent =
-        input.action === "patch" && !input.reason?.trim()
-          ? { ...input, reason: patchReason(input, item) }
-          : input;
+      const sent = input.reason?.trim()
+        ? input
+        : { ...input, reason: autoReason(input, item) };
       const result = await writer.invoke(sent, config);
       const text =
         typeof result === "string" ? result : JSON.stringify(result);
@@ -232,14 +235,15 @@ export function createTransitionGuard(
       }
       if (output.success === true) {
         changed.add(item.id);
-        // The write moved the revision. Keep the new one for a patch; force a re-read after a status move.
-        if (input.action === "patch" && typeof output.revision === "number")
+        // The write moved the revision. Keep the new one; without it, force a re-read.
+        if (typeof output.revision === "number")
           receipts.items.set(item.id, {
             ...item,
             revision: output.revision,
-            labels: input.labels ?? item.labels,
-            ...(input.scores !== undefined && {
-              scores: input.scores ?? undefined,
+            status: input.set.status ?? item.status,
+            labels: input.set.labels ?? item.labels,
+            ...(input.set.scores !== undefined && {
+              scores: input.set.scores ?? undefined,
             }),
           });
         else receipts.items.delete(item.id);
@@ -258,9 +262,9 @@ export function createTransitionGuard(
   // biome-ignore lint/suspicious/noExplicitAny: TS2589 workaround - breaks deep generic instantiation
   const ToolClass: any = DynamicStructuredTool;
   return new ToolClass({
-    name: WORK_ITEM_TRANSITION_NAME,
+    name: WORK_ITEM_UPDATE_NAME,
     description: writer.description,
-    schema: WorkItemTransitionInputSchema,
+    schema: workItemUpdateContract.inputSchema,
     func: run,
   }) as StructuredTool;
 }

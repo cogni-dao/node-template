@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 /**
- * The compiled work-review program offers the model exactly one write tool, the guarded transition,
+ * The compiled work-review program offers the model exactly one write tool, the guarded update,
  * and its delegated children offer none (task.0065). Deterministic: a scripted completion records the
  * tool definitions each model call receives.
  */
@@ -11,14 +11,14 @@ import {
   EDO_DECIDE_NAME,
   EDO_HYPOTHESIZE_NAME,
   EDO_RECORD_OUTCOME_NAME,
-  WORK_ITEM_TRANSITION_NAME,
+  WORK_ITEM_UPDATE_NAME,
   getCurrentTimeContract,
   goalListContract,
   knowledgeReadContract,
   knowledgeSearchContract,
   workItemQueryContract,
   workItemReadContract,
-  workItemTransitionContract,
+  workItemUpdateContract,
 } from "@cogni/ai-tools";
 import { describe, expect, it } from "vitest";
 import { LANGGRAPH_CATALOG } from "../../../src/catalog";
@@ -32,7 +32,7 @@ const name = (tool: unknown): string => {
 };
 
 describe("work-review program tool surface", () => {
-  it("offers only the guarded transition to the root and no write tool to children", async () => {
+  it("offers only the guarded core__work_item_update to the root and no write tool to children", async () => {
     const entry = LANGGRAPH_CATALOG["work-prioritizer"];
     const offered: string[][] = [];
     const completionFn: CompletionFn = (req) => {
@@ -79,7 +79,7 @@ describe("work-review program tool surface", () => {
         knowledgeSearchContract,
         workItemQueryContract,
         workItemReadContract,
-        workItemTransitionContract,
+        workItemUpdateContract,
         getCurrentTimeContract,
       ],
       request: {
@@ -95,10 +95,10 @@ describe("work-review program tool surface", () => {
 
     const [root, child] = offered;
     expect(offered.length).toBeGreaterThanOrEqual(2);
-    // Exactly one transition tool reaches the root: the guarded one, not a second raw copy.
-    expect(root?.filter((n) => n === WORK_ITEM_TRANSITION_NAME)).toHaveLength(1);
+    // Exactly one update tool reaches the root: the guarded one, not a second raw copy.
+    expect(root?.filter((n) => n === WORK_ITEM_UPDATE_NAME)).toHaveLength(1);
     // The child is a leaf: reads only, no write, no further delegation.
-    expect(child).not.toContain(WORK_ITEM_TRANSITION_NAME);
+    expect(child).not.toContain(WORK_ITEM_UPDATE_NAME);
     expect(child).not.toContain("task");
     expect(child).toContain("core__work_item_read");
   });

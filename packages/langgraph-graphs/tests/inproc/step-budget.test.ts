@@ -6,7 +6,7 @@
  * program's own report, not an error. Deterministic: the fake graph writes once, then exhausts its steps.
  */
 import type { AiEvent } from "@cogni/ai-core";
-import { workItemTransitionContract } from "@cogni/ai-tools";
+import { workItemUpdateContract } from "@cogni/ai-tools";
 import { GraphRecursionError } from "@langchain/langgraph";
 import { describe, expect, it } from "vitest";
 import { createPrioritizerRunHooks } from "../../src/graphs/work-prioritizer/graph";
@@ -35,15 +35,15 @@ function run(createGraph: CreateGraphFn) {
     completionFn,
     createToolExecFn: (): ToolExecFn => async () => ({
       ok: true,
-      value: { success: true, action: "transition", id: "task.1", message: "ok" },
+      value: { success: true, id: "task.1", message: "ok", revision: 8 },
     }),
-    toolContracts: [workItemTransitionContract],
+    toolContracts: [workItemUpdateContract],
     request: {
       runId: "budget",
       messages: [{ role: "user", content: "triage" }],
       configurable: {
         model: "test-model",
-        toolIds: [workItemTransitionContract.name],
+        toolIds: [workItemUpdateContract.name],
       },
     },
   });
@@ -59,8 +59,8 @@ function exhaustedGraph(write: boolean): CreateGraphFn {
     invoke: async () => {
       if (write)
         await opts.tools[0]?.invoke(
-          { action: "transition", id: "task.1", toStatus: "needs_design" },
-          { configurable: { toolIds: [workItemTransitionContract.name] } },
+          { id: "task.1", expectedRevision: 7, set: { status: "needs_design" } },
+          { configurable: { toolIds: [workItemUpdateContract.name] } },
         );
       throw new GraphRecursionError("Recursion limit of 100 reached");
     },
