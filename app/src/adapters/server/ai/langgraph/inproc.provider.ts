@@ -99,7 +99,7 @@ interface ProviderCatalogEntry {
   readonly principal?: string;
   readonly graphFactory: CreateGraphFn;
   readonly systemPrompt?: string;
-  readonly program?: "cogni" | "work-review" | "cogni-chat" | "cogni-decide";
+  readonly program?: "cogni" | "work-review";
   /** Graph-owned run report to log + echo on the stream (CatalogEntry.report). */
   readonly report?: GraphReportDecl;
 }
@@ -204,7 +204,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
     const scope = getExecutionScope();
     const requestId = ctx?.requestId ?? req.runId;
 
-    // Extract graph name from graphId (e.g., "langgraph:poet" → "poet")
+    // Extract graph name from graphId (e.g., "langgraph:cogni" → "cogni")
     const graphName = this.extractGraphName(graphId);
     if (!graphName) {
       this.log.error({ runId, graphId }, "Invalid graphId format");
@@ -500,7 +500,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
       }
       // Resolve the node source first so a mission graph still fails closed when its hub context is missing.
       const resolvedSource =
-        (entry.program || graphName === "poet") && this.sourceContext
+        entry.program && this.sourceContext
           ? await this.sourceContext(Boolean(entry.program))
           : undefined;
       if (endWithoutModel) {
@@ -542,13 +542,13 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
         toolContracts,
         ...(mcpToolSpecs.length > 0 && { mcpToolSpecs }),
         request: runnerRequest,
-        ...((entry.program || graphName === "poet") &&
+        ...(entry.program &&
           this.getPersistence && {
             persistence: await this.getPersistence(),
           }),
         ...(entry.program !== undefined && { program: entry.program }),
         ...(ctx?.actorUserId ? { trustedActorId: ctx.actorUserId } : {}),
-        ...((entry.program || graphName === "poet") && {
+        ...(entry.program && {
           trustedProgramId: entry.program ?? graphName,
         }),
         ...(resolvedSource !== undefined && { sourceContext: resolvedSource }),
@@ -699,7 +699,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
 
   /**
    * Extract graph name from namespaced graphId.
-   * Per GRAPH_ID_NAMESPACED: "langgraph:poet" → "poet"
+   * Per GRAPH_ID_NAMESPACED: "langgraph:cogni" → "cogni"
    */
   private extractGraphName(graphId: string): string | undefined {
     const prefix = `${this.providerId}:`;

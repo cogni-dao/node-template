@@ -47,10 +47,10 @@ export interface LangGraphCatalogEntry<TFactory> {
  * LangGraph catalog type.
  *
  * Maps graph name (without provider prefix) to catalog entry.
- * e.g., { "poet": { ... }, "ponderer": { ... } }
+ * e.g., { "cogni": { ... }, "work-prioritizer": { ... } }
  *
  * The full graphId is constructed as "${providerId}:${graphName}"
- * by the provider (e.g., "langgraph:poet").
+ * by the provider (e.g., "langgraph:cogni").
  *
  * Per CATALOG_SINGLE_SOURCE_OF_TRUTH: the catalog instance is exported
  * from @cogni/langgraph-graphs, not built in bootstrap.

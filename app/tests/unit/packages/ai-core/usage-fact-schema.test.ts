@@ -68,7 +68,7 @@ describe("UsageFactStrictSchema", () => {
 
   it("rejects non-namespaced graphId (no colon)", () => {
     const result = UsageFactStrictSchema.safeParse(
-      buildInprocUsageFact({ graphId: "poet" as `${string}:${string}` })
+      buildInprocUsageFact({ graphId: "cogni" as `${string}:${string}` })
     );
     expect(result.success).toBe(false);
     if (!result.success) {

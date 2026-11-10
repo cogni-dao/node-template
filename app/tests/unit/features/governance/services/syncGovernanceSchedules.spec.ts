@@ -486,7 +486,7 @@ describe("GRAPH_CHARTER — governance schedule `graph:` (task.5282)", () => {
     cron: "*/30 * * * *",
     timezone: "UTC",
     entrypoint: "DECIDE",
-    graph: "langgraph:cogni-decide",
+    graph: "langgraph:work-prioritizer",
     model: "gpt-oss-120b",
   };
   const created = (deps: GovernanceScheduleSyncDeps) =>
@@ -505,7 +505,7 @@ describe("GRAPH_CHARTER — governance schedule `graph:` (task.5282)", () => {
     const [params] = created(deps);
     expect(params).toMatchObject({
       scheduleId: "governance:cogni_decide",
-      graphId: "langgraph:cogni-decide",
+      graphId: "langgraph:work-prioritizer",
       executionGrantId: GRAPH_GRANT_ID,
       cron: "*/30 * * * *",
       timezone: "UTC",
@@ -518,18 +518,18 @@ describe("GRAPH_CHARTER — governance schedule `graph:` (task.5282)", () => {
     expect(params?.workflowType).toBeUndefined();
     expect(params?.taskQueueOverride).toBeUndefined();
     expect(deps.ensureGraphGrant).toHaveBeenCalledWith(
-      "langgraph:cogni-decide",
+      "langgraph:work-prioritizer",
     );
     expect(deps.upsertGovernanceScheduleRow).toHaveBeenCalledWith(
       expect.objectContaining({
-        graphId: "langgraph:cogni-decide",
+        graphId: "langgraph:work-prioritizer",
         executionGrantId: GRAPH_GRANT_ID,
       }),
     );
   });
 
   it.each([
-    { change: "graph only", graph: "langgraph:ponderer", grant: GRAPH_GRANT_ID, cron: DECIDE.cron, paused: false },
+    { change: "graph only", graph: "langgraph:cogni", grant: GRAPH_GRANT_ID, cron: DECIDE.cron, paused: false },
     { change: "rotated grant", graph: DECIDE.graph, grant: "replacement-grant", cron: DECIDE.cron, paused: false },
     { change: "cadence sharing the next tick", graph: DECIDE.graph, grant: GRAPH_GRANT_ID, cron: "15 * * * *", paused: false },
     { change: "paused cadence", graph: DECIDE.graph, grant: GRAPH_GRANT_ID, cron: "15 * * * *", paused: true },
@@ -642,7 +642,7 @@ describe("GRAPH_CHARTER — governance schedule `graph:` (task.5282)", () => {
             cron: "0 0 * * *",
             timezone: "UTC",
             entrypoint: "LEDGER_INGEST",
-            graph: "langgraph:cogni-decide",
+            graph: "langgraph:work-prioritizer",
             model: "gpt-oss-120b",
           },
         ],

@@ -156,7 +156,7 @@ describe("ExecutionGrantUserPort.ensureGrant (Component)", () => {
     expect(grant2.id).not.toBe(grant1.id);
   });
   it("retains distinct least-privilege graph grants across repeated reconciliations", async () => {
-    const scopes = ["graph:execute:sandbox:openclaw", "graph:execute:langgraph:poet", "graph:execute:langgraph:ponderer"];
+    const scopes = ["graph:execute:sandbox:openclaw", "graph:execute:langgraph:cogni", "graph:execute:langgraph:work-prioritizer"];
     const ids: string[] = [];
     for (const scope of scopes) {
       const grant = await adapter.ensureGrant({ userId: testUserId, billingAccountId: actor.billingAccountId, scopes: [scope] });
@@ -175,7 +175,7 @@ describe("ExecutionGrantUserPort.ensureGrant (Component)", () => {
   });
 
   it("reuses the valid scoped row after earlier expired and revoked rows", async () => {
-    const input = { userId: testUserId, billingAccountId: actor.billingAccountId, scopes: ["graph:execute:langgraph:poet"] };
+    const input = { userId: testUserId, billingAccountId: actor.billingAccountId, scopes: ["graph:execute:langgraph:cogni"] };
     const expired = await adapter.ensureGrant(input);
     await db.update(executionGrants).set({ expiresAt: new Date(Date.now() - 60_000) }).where(eq(executionGrants.id, expired.id));
     const revoked = await adapter.ensureGrant(input);

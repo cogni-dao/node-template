@@ -25,7 +25,7 @@ function subjectFor(ctx: { actorUserId?: string } | undefined): string | undefin
         return { stream: (async function* () {})(), final: Promise.resolve({ ok: true }) } as never;
       },
     } as never,
-    req: { runId: "r", graphId: "langgraph:brain", messages: [], modelRef: { providerKey: "platform", modelId: "m" } } as never,
+    req: { runId: "r", graphId: "langgraph:cogni", messages: [], modelRef: { providerKey: "platform", modelId: "m" } } as never,
     ...(ctx ? { ctx } : {}),
     billing: { billingAccountId: "b", virtualKeyId: "v" },
     llmService: {} as never,
