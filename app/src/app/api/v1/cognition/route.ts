@@ -20,8 +20,9 @@
  *     when the hub is unconfigured or empty.
  *   - NO_INTERNAL_BIND_ADDR: origin derived from forwarded headers first.
  *   - ONE_READ_PER_REVISION: hub inputs come from `readCognitionSnapshot`
- *     (memoized per store HEAD); a weak ETag over revision, build, origin,
- *     name and mission
+ *     (memoized per store HEAD; a slow or failed revision check
+ *     serves the last complete snapshot and logs `stale`); a weak ETag
+ *     over revision, build, origin, name and mission
  *     answers a matching If-None-Match with 304 (bug.0018).
  *   - NO_GOAL_PROGRESS: goal KPI readings are not bootstrap; agents read them
  *     live from /api/v1/metrics/goals.
@@ -55,8 +56,8 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 // Authed but principal-agnostic (index-only, identical for every caller). The
-// hub inputs are memoized per store revision, so a repeat costs one HEAD read;
-// clients revalidate every use and a matching ETag returns 304.
+// hub inputs are memoized per store revision, so a repeat costs one bounded
+// revision read; clients revalidate every use and a matching ETag returns 304.
 const CACHE_CONTROL = "private, no-cache, must-revalidate";
 
 /** External origin this request reached us through (forwarded headers first). */
@@ -130,10 +131,11 @@ export const GET = wrapRouteHandlerWithLogging(
 		if (goals.status === "unavailable") {
 			ctx.log.warn({ reason: goals.reason }, "cognition.goals_unavailable");
 		}
-		// Only a complete bundle is revalidatable; a degraded one is never reused.
+		// Only a complete, HEAD-confirmed bundle is revalidatable; a degraded or
+		// stale one is never confirmed by 304 or reused.
 		const revision = read?.snapshot.revision ?? null;
 		const etag =
-			revision && goals.status === "ok"
+			revision && goals.status === "ok" && !read?.stale
 				? `W/"${createHash("sha256")
 						.update(
 							[revision, buildSha, origin, name, mission ?? ""].join("\u0000"),
@@ -188,6 +190,8 @@ export const GET = wrapRouteHandlerWithLogging(
 				hub: Boolean(port),
 				revision,
 				memoHit: read?.memoHit ?? false,
+				stale: read?.stale ?? false,
+				...(read && !read.memoHit ? { readMs: read.snapshot.readMs } : {}),
 			},
 			"cognition.bundle_success",
 		);
