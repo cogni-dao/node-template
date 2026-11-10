@@ -143,6 +143,23 @@ describe("session cognition hook", () => {
 		);
 	});
 
+	it("warms the cognition cache in workspace setup before anything slow (bug.0018)", () => {
+		const setup = readFileSync(CONDUCTOR_SETUP, "utf8");
+		// Claude Code resolves the CLAUDE.md @import before its SessionStart hook
+		// can write the cache, so setup must warm it before the first agent starts.
+		const linkKey = setup.indexOf('\nlink_from_auth_root ".env.cogni"');
+		const warm = setup.indexOf("\nwarm_cognition_cache\n");
+		expect(linkKey).toBeGreaterThan(-1);
+		expect(warm).toBeGreaterThan(linkKey);
+		for (const slow of [
+			"\nrefresh_workspace_base_ref\n",
+			"pnpm install --offline --frozen-lockfile",
+			"pnpm build:packages",
+		])
+			expect(warm).toBeLessThan(setup.indexOf(slow));
+		expect(setup).toContain("bash scripts/agent/session-cognition.sh");
+	});
+
 	it("keeps the agent bootstrap automatic", () => {
 		const agents = readFileSync(path.join(REPO_ROOT, "AGENTS.md"), "utf8");
 
