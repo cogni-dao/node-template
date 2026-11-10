@@ -3,8 +3,9 @@
 
 /**
  * Module: `@cogni/knowledge-base-ui/citation-links`
- * Purpose: Render citation edges as one row each: direction arrow, relation, slug.
- *   Shared by an entry's Links section and the inbox citation diff.
+ * Purpose: Helps a reviewer decide whether an entry's or inbox's links are complete
+ *   and correct. Each edge is one row: direction arrow, relation, slug. Shared by
+ *   an entry's Links section and the inbox citation diff.
  * Scope: Presentation over injected data. The node owns transport, hrefs and its router link.
  * Invariants: SLUG_NOT_TITLE (titles only on hover), DIRECTION_VISIBLE, EVERY_DIFF_EDGE_LISTED.
  * Side-effects: IO (injected page loader, CitationLinks only)
@@ -24,6 +25,7 @@ export interface CitationLinkProps {
   readonly href: string;
   readonly title?: string;
   readonly className?: string;
+  readonly "aria-label"?: string;
   readonly children?: ReactNode;
 }
 /** A router link (for example `next/link`) or the default anchor. */
@@ -57,8 +59,8 @@ export interface CitationDiffEdge {
 }
 
 const ARROW = {
-  out: { glyph: "→", label: "cites" },
-  in: { glyph: "←", label: "cited by" },
+  out: { glyph: "→", label: "outgoing" },
+  in: { glyph: "←", label: "incoming" },
 } as const;
 
 const CHANGE = {
@@ -67,6 +69,11 @@ const CHANGE = {
   modified: { glyph: "~", label: "changed", className: "text-warning" },
 } as const;
 
+/**
+ * One edge, one interactive surface: the whole row is the link (≥24px tall,
+ * visible focus). Reads as marker, arrow, relation, slug; the title or edge
+ * context is the hover text only.
+ */
 function CitationRow({
   direction,
   relation,
@@ -87,36 +94,34 @@ function CitationRow({
   const arrow = ARROW[direction];
   const marker = change ? CHANGE[change] : null;
   return (
-    <span
-      className={cn(
-        "flex min-w-0 items-baseline gap-2 font-mono text-xs",
-        change === "removed" && "line-through decoration-destructive/60"
-      )}
+    <Link
+      href={href}
+      title={hoverTitle?.trim() || slug}
+      aria-label={[marker?.label, arrow.label, relation, slug]
+        .filter(Boolean)
+        .join(" ")}
+      className="-mx-1 flex min-h-6 min-w-0 items-center gap-2 rounded-sm px-1 text-xs outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
     >
       {marker && (
         <span className={cn("w-3 shrink-0 text-center", marker.className)}>
-          <span aria-hidden="true">{marker.glyph}</span>
-          <span className="sr-only">{marker.label}</span>
+          {marker.glyph}
         </span>
       )}
       <span className="w-3 shrink-0 text-center text-muted-foreground">
-        <span aria-hidden="true">{arrow.glyph}</span>
-        <span className="sr-only">{arrow.label}</span>
+        {arrow.glyph}
       </span>
       <span
-        className="w-24 shrink-0 truncate text-muted-foreground"
-        title={relation}
+        className={cn(
+          "flex min-w-0 flex-1 items-center gap-2",
+          change === "removed" && "line-through decoration-destructive/60"
+        )}
       >
-        {relation}
+        <span className="w-24 shrink-0 truncate text-muted-foreground">
+          {relation}
+        </span>
+        <span className="min-w-0 truncate font-mono">{slug}</span>
       </span>
-      <Link
-        href={href}
-        title={hoverTitle?.trim() || slug}
-        className="min-w-0 truncate hover:underline"
-      >
-        {slug}
-      </Link>
-    </span>
+    </Link>
   );
 }
 
@@ -207,7 +212,7 @@ export function ContributionCitationDiff({
         <div key={citingId} className="flex flex-col gap-0.5">
           <LinkComponent
             href={hrefFor(citingId)}
-            className="w-fit font-mono text-xs hover:underline"
+            className="-mx-1 flex min-h-6 w-fit items-center rounded-sm px-1 font-mono text-xs outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
           >
             {citingId}
           </LinkComponent>
@@ -215,13 +220,13 @@ export function ContributionCitationDiff({
             {edges.map((edge) => (
               <li
                 key={`${edge.changeType}:${edge.citationType}:${edge.citedId}`}
-                title={edge.context ?? undefined}
               >
                 <CitationRow
                   direction="out"
                   relation={edge.citationType}
                   slug={edge.citedId}
                   href={hrefFor(edge.citedId)}
+                  hoverTitle={edge.context}
                   change={edge.changeType}
                   Link={LinkComponent}
                 />

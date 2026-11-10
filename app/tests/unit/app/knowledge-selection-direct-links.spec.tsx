@@ -174,8 +174,14 @@ vi.mock("@cogni/knowledge-base-ui/goals", () => ({
   attentionCount: () => 0
 }));
 vi.mock("next/link", () => ({
-  default: ({ href, children }: { href: string; children: ReactNode }) => (
-    <a href={href}>{children}</a>
+  default: ({
+    href,
+    children,
+    ...rest
+  }: { href: string; children: ReactNode } & Record<string, unknown>) => (
+    <a href={href} {...rest}>
+      {children}
+    </a>
   )
 }));
 vi.mock("@/components", () => ({
@@ -323,7 +329,7 @@ it.each(["browse", "chains", "graph"])(
           })
     );
     await screen.findByText(selected.content);
-    await screen.findByRole("link", { name: "neighbor-4" });
+    await screen.findByRole("link", { name: "outgoing supports neighbor-4" });
     expect(
       fetchMock.mock.calls.every(
         ([url]) =>

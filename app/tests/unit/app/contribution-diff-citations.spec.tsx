@@ -21,8 +21,14 @@ vi.mock("@/components", () => ({
   Markdown: ({ content }: { content: string }) => <p>{content}</p>,
 }));
 vi.mock("next/link", () => ({
-  default: ({ href, children }: { href: string; children: ReactNode }) => (
-    <a href={href}>{children}</a>
+  default: ({
+    href,
+    children,
+    ...rest
+  }: { href: string; children: ReactNode } & Record<string, unknown>) => (
+    <a href={href} {...rest}>
+      {children}
+    </a>
   ),
 }));
 
@@ -67,10 +73,10 @@ describe("ContributionDiff citations", () => {
     expect(within(section).getByText("Links (2)")).toBeTruthy();
     expect(within(section).getAllByRole("listitem")).toHaveLength(2);
     expect(
-      within(section).getByRole("link", { name: "task.0059" }).getAttribute("href")
+      within(section).getByRole("link", { name: "added outgoing tracks task.0059" }).getAttribute("href")
     ).toBe("/work/items/task.0059");
     expect(
-      within(section).getByRole("link", { name: "b-entry" }).getAttribute("href")
+      within(section).getByRole("link", { name: "removed outgoing supports b-entry" }).getAttribute("href")
     ).toBe("/knowledge/b-entry");
     expect(screen.queryByText(/No changes detected/)).toBeNull();
   });

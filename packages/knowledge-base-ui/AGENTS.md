@@ -70,7 +70,7 @@ Published React components and hooks every node renders for knowledge (Browse, G
 
 - `CitationLinks` — an entry's Links section over `DirectRelationLinks` (five per page, explicit More). Each edge is one row: arrow (`→` cites, `←` cited by), relation, the other endpoint's slug. **SLUG_NOT_TITLE:** the title appears only as the link's hover `title`. The node passes `loadPage` (the `GET /api/v1/citations/{id}` page) and `LinkComponent`.
 - `ContributionCitationDiff` — **EVERY_DIFF_EDGE_LISTED:** every edge an inbox adds (`+`), removes (`−`, struck) or re-contexts (`~`), grouped under its citing slug, in the same row form, headed "Links (N)". Renders nothing for no edges. The node passes `citations` from the contribution diff, `hrefFor(id)` and `LinkComponent`.
-- Edge `context` shows only as the row hover title, by design (rows stay one line). The node gates its own empty state: "no changes" only when both `entries` and `citations` are empty.
+- **ONE_SURFACE_PER_ROW:** the whole row is the link, at least 24px tall, with a visible focus ring; its accessible name reads "[added|removed|changed] outgoing|incoming <relation> <slug>". Edge `context` (inbox) or the endpoint title (Links) is the hover title only, by design (rows stay one line). The node gates its own empty state: "no changes" only when both `entries` and `citations` are empty.
 - `formatCitationLabel` is deprecated (it drops direction); kept for existing adopters.
 
 ## Boundaries

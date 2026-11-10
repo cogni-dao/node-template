@@ -55,7 +55,9 @@ describe("CitationLinks", () => {
     }));
     render(<CitationLinks entityId="root-entry" loadPage={loadPage} />);
 
-    const out = await screen.findByRole("link", { name: "dao-goals-design" });
+    const out = await screen.findByRole("link", {
+      name: "outgoing supports dao-goals-design",
+    });
     expect(out).toHaveAttribute("href", "/knowledge/dao-goals-design");
     expect(out).toHaveAttribute(
       "title",
@@ -65,16 +67,13 @@ describe("CitationLinks", () => {
       screen.queryByText(/Goals live in the hub/),
     ).not.toBeInTheDocument();
 
-    const outRow = out.parentElement as HTMLElement;
-    expect(within(outRow).getByText("→")).toBeInTheDocument();
-    expect(within(outRow).getByText("cites")).toBeInTheDocument();
-    expect(within(outRow).getByText("supports")).toBeInTheDocument();
+    expect(within(out).getByText("→")).toBeInTheDocument();
 
-    const inRow = screen.getByRole("link", { name: "task.0059" })
-      .parentElement as HTMLElement;
-    expect(within(inRow).getByText("←")).toBeInTheDocument();
-    expect(within(inRow).getByText("cited by")).toBeInTheDocument();
-    expect(within(inRow).getByText("tracks")).toBeInTheDocument();
+    const incoming = screen.getByRole("link", {
+      name: "incoming tracks task.0059",
+    });
+    expect(incoming).toHaveAttribute("href", "/knowledge/task.0059");
+    expect(within(incoming).getByText("←")).toBeInTheDocument();
   });
 
   it("falls back to the slug for hover when an endpoint has no title", async () => {
@@ -85,7 +84,7 @@ describe("CitationLinks", () => {
     render(<CitationLinks entityId="root-entry" loadPage={loadPage} />);
 
     expect(
-      await screen.findByRole("link", { name: "no-title" }),
+      await screen.findByRole("link", { name: /no-title$/ }),
     ).toHaveAttribute("title", "no-title");
   });
 });
@@ -128,22 +127,20 @@ describe("ContributionCitationDiff", () => {
       within(section).getByRole("link", { name: "a-entry" }),
     ).toHaveAttribute("href", "/knowledge/a-entry");
     expect(
-      within(section).getByRole("link", { name: "task.0059" }),
+      within(section).getByRole("link", {
+        name: "added outgoing tracks task.0059",
+      }),
     ).toHaveAttribute("href", "/work/task.0059");
-
-    const [added, , removed] = within(section).getAllByRole("listitem");
-    expect(within(added as HTMLElement).getByText("added")).toBeInTheDocument();
-    expect(within(added as HTMLElement).getByText("→")).toBeInTheDocument();
     expect(
-      within(added as HTMLElement).getByText("supports"),
-    ).toBeInTheDocument();
-    expect(added).toHaveAttribute("title", "why a supports b");
+      within(section).getByRole("link", {
+        name: "added outgoing supports b-entry",
+      }),
+    ).toHaveAttribute("title", "why a supports b");
     expect(
-      within(removed as HTMLElement).getByText("removed"),
-    ).toBeInTheDocument();
-    expect(
-      within(removed as HTMLElement).getByText("extends"),
-    ).toBeInTheDocument();
+      within(section).getByRole("link", {
+        name: "removed outgoing extends b-entry",
+      }),
+    ).toHaveAttribute("href", "/knowledge/b-entry");
   });
 
   it("renders nothing when the inbox changes no edges", () => {
