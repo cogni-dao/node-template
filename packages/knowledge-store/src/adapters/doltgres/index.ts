@@ -1207,7 +1207,7 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
   async knowledgeRevision(): Promise<string> {
     // One statement, three table hashes: a work-item commit leaves all three unchanged.
     const result = await this.sql.unsafe(
-      "SELECT dolt_hashof_table('knowledge') AS k, dolt_hashof_table('domains') AS d, dolt_hashof_table('citations') AS c"
+      "SELECT dolt_hashof_table('public.knowledge') AS k, dolt_hashof_table('public.domains') AS d, dolt_hashof_table('public.citations') AS c"
     );
     const row = result[0] as Record<string, unknown>;
     return `${row.k}.${row.d}.${row.c}`;
