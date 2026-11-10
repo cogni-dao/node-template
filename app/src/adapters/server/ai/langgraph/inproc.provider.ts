@@ -548,9 +548,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
           }),
         ...(entry.program !== undefined && { program: entry.program }),
         ...(ctx?.actorUserId ? { trustedActorId: ctx.actorUserId } : {}),
-        ...(entry.program && {
-          trustedProgramId: entry.program ?? graphName,
-        }),
+        ...(entry.program && { trustedProgramId: entry.program }),
         ...(resolvedSource !== undefined && { sourceContext: resolvedSource }),
         ...(req.responseFormat !== undefined && {
           responseFormat: req.responseFormat,
