@@ -107,6 +107,19 @@ function toWireMessage(value: unknown): unknown {
   return wire;
 }
 
+const purposeLocks = new Map<string, Promise<unknown>>();
+
+/** Serialize work per key within this process; a failed holder never blocks the next caller. */
+function withPurposeLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const previous = purposeLocks.get(key) ?? Promise.resolve();
+  const next = previous.catch(() => undefined).then(fn);
+  purposeLocks.set(key, next);
+  void next.finally(() => {
+    if (purposeLocks.get(key) === next) purposeLocks.delete(key);
+  }).catch(() => undefined);
+  return next;
+}
+
 /**
  * Create a ScheduleCapability that resolves user identity from ALS at call time.
  *
@@ -180,48 +193,50 @@ export function createScheduleCapability(
         .object({ purpose: z.string().min(1).max(200) })
         .parse(input.input._meta);
       const boundInput = { ...input.input, messages, modelRef };
-      const matches = (await scheduleManager.listSchedules(userId)).filter(
-        (s) => {
-          const meta = (s.input as Record<string, unknown>)?._meta;
-          return (
-            typeof meta === "object" &&
-            meta !== null &&
-            "purpose" in meta &&
-            meta.purpose === purpose
+      // One app instance serves a node, so an in-process lock per owner and purpose makes
+      // read-then-create atomic for concurrent ticks, chats and parallel tool calls.
+      return withPurposeLock(`${userId}\u0000${purpose}`, async () => {
+        const matches = (await scheduleManager.listSchedules(userId))
+          .filter((s) => {
+            const meta = (s.input as Record<string, unknown>)?._meta;
+            return (
+              typeof meta === "object" &&
+              meta !== null &&
+              "purpose" in meta &&
+              meta.purpose === purpose
+            );
+          })
+          .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+        if (matches.length > 0) {
+          // Reuse the oldest same-configuration job, so an earlier duplicate never blocks reuse.
+          const same = matches.find(
+            (existing) =>
+              existing.graphId === input.graphId &&
+              existing.cron === input.cron &&
+              existing.timezone === input.timezone &&
+              isDeepStrictEqual(existing.input, boundInput),
           );
-        },
-      );
-      if (matches.length > 1)
-        throw new Error(
-          "ScheduleCapability: duplicate purpose requires reconciliation",
-        );
-      const existing = matches[0];
-      if (existing) {
-        if (
-          existing.graphId !== input.graphId ||
-          existing.cron !== input.cron ||
-          existing.timezone !== input.timezone ||
-          !isDeepStrictEqual(existing.input, boundInput)
-        ) {
-          throw new Error(
-            "ScheduleCapability: purpose already exists with different configuration; read and reconcile it",
-          );
+          if (!same) {
+            throw new Error(
+              "ScheduleCapability: purpose already exists with different configuration; read and reconcile it",
+            );
+          }
+          return toScheduleInfo(same);
         }
-        return toScheduleInfo(existing);
-      }
-      const billingAccountId = await getOrCreateBillingAccountId(userId);
-      const spec = await scheduleManager.createSchedule(
-        userId,
-        billingAccountId,
-        {
-          nodeId: getNodeId(),
-          graphId: input.graphId,
-          input: boundInput,
-          cron: input.cron,
-          timezone: input.timezone,
-        },
-      );
-      return toScheduleInfo(spec);
+        const billingAccountId = await getOrCreateBillingAccountId(userId);
+        const spec = await scheduleManager.createSchedule(
+          userId,
+          billingAccountId,
+          {
+            nodeId: getNodeId(),
+            graphId: input.graphId,
+            input: boundInput,
+            cron: input.cron,
+            timezone: input.timezone,
+          },
+        );
+        return toScheduleInfo(spec);
+      });
     },
 
     async update(

@@ -52,6 +52,14 @@ describe("catalog principals (N4)", () => {
     expect(decide?.toolIds).toContain("core__work_item_transition");
   });
 
+  it("gives cogni no domain writer: its only write tool arranges schedules", () => {
+    const ids = LANGGRAPH_CATALOG.cogni?.toolIds ?? [];
+    expect(ids).toContain("core__schedule_manage");
+    expect(ids).not.toContain("core__work_item_transition");
+    expect(ids).not.toContain("core__metric_compute");
+    expect(ids).not.toContain("core__knowledge_write");
+  });
+
   it("keeps principals limited to the named graphs", () => {
     const named = Object.entries(OPERATOR_LANGGRAPH_CATALOG)
       .filter(([, entry]) => "principal" in entry && entry.principal)

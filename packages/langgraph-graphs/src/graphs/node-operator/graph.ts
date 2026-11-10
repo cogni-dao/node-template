@@ -4,11 +4,12 @@ import { COGNI_TOOL_IDS } from "../cogni/tools";
 import type { CreateReactAgentGraphOptions } from "../types";
 import { NODE_OPERATOR_PROMPT } from "./prompts";
 
-export const NODE_OPERATOR_TOOL_IDS = [
-	...COGNI_TOOL_IDS,
+/** Cogni's reads plus schedule management; its only write is arranging jobs. */
+export const NODE_OPERATOR_TOOL_IDS: readonly string[] = [
+	...COGNI_TOOL_IDS.filter((id) => id !== "core__metric_compute"),
 	SCHEDULE_LIST_NAME,
 	SCHEDULE_MANAGE_NAME,
-] as const;
+];
 
 /**
  * A minimal operating program on the existing billed harness. Chat and schedules share one
