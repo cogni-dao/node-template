@@ -260,13 +260,19 @@ warm_cognition_cache() {
   started=$(date +%s)
   for attempt in 1 2 3; do
     bash scripts/agent/session-cognition.sh >/dev/null 2>&1 || true
-    if [[ -s "$cache" ]]; then
-      printf 'cognition cache warmed in %ss (attempt %s)\n' "$(($(date +%s) - started))" "$attempt"
+    # Complete means the contract itself arrived, not just a non-empty map.
+    if [[ -s "$cache" ]] && grep -q "<agent-contract" "$cache" && grep -q "<status-contract" "$cache"; then
+      printf 'cognition cache warmed with a complete contract in %ss (attempt %s)\n' "$(($(date +%s) - started))" "$attempt"
       return 0
     fi
-    sleep 2
+    [[ "$attempt" -lt 3 ]] && sleep 2
   done
-  warn "cognition cache not warmed; the first agent session will start in bootstrap recovery"
+  if [[ -s "$cache" ]]; then
+    warn "cognition cache has no complete agent-contract; agents start in bootstrap recovery (AGENTS.md)"
+  else
+    warn "cognition cache not warmed; agents start in bootstrap recovery (AGENTS.md)"
+  fi
+  warn "an agent that started before this step must be restarted or resumed to load the contract"
 }
 
 ensure_auth_root_cogni_env
