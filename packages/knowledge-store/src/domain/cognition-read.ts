@@ -9,7 +9,7 @@
  *   - INDEX_ONLY: domains with counts, the projected governing index, active goals and ONE orientation body. No per-domain scan, no other body.
  *   - ONE_READ_PER_REVISION: per port and orientation ids, one HEAD check and one index read are in flight at a time and shared by every caller; only a complete snapshot (goals readable) is kept, and only if it started after the kept one (monotonic).
  *   - NEVER_OLDER_THAN_LABEL: HEAD is read before the index reads, so a snapshot is never older than its revision label; a new commit changes the key.
- *   - BOUNDED_REVALIDATION: once a complete snapshot exists, a HEAD check slower than `revisionDeadlineMs`, a failed check, or a failed or degraded fresh read serves it with `stale: true`, and the shared HEAD check refreshes it when it lands. A snapshot unconfirmed for `maxStaleMs` is never served stale; callers then wait. With no complete snapshot, callers wait.
+ *   - BOUNDED_REVALIDATION: once a complete snapshot exists, a HEAD check slower than `revisionDeadlineMs`, a fresh index read slower than `freshReadDeadlineMs`, a failed check, or a failed or degraded fresh read serves it with `stale: true`; the shared check and read keep running and refresh it when they land. A shared HEAD check is reused for at most `COGNITION_HEAD_SHARE_MS`, so one hung query never captures later callers. A snapshot unconfirmed for `maxStaleMs` is never served stale; callers then wait. With no complete snapshot, callers wait.
  *   - NO_GOAL_PROGRESS: goal KPI readings are not part of cognition; they are read live from the metrics API.
  * Side-effects: IO (port reads through the injected port)
  * Links: bug.0018, packages/knowledge-store/src/domain/graph-read.ts
@@ -56,19 +56,25 @@ export interface CognitionReadResult {
 export interface CognitionReadOptions {
   /** How long a caller holding a complete snapshot waits for the HEAD check. */
   readonly revisionDeadlineMs?: number;
+  /** How long a caller holding a complete snapshot waits for a fresh index read after HEAD moved. */
+  readonly freshReadDeadlineMs?: number;
   /** The longest a snapshot may go unconfirmed by HEAD and still be served stale. */
   readonly maxStaleMs?: number;
 }
 
 /** Default bound on the HEAD check once a complete snapshot exists. */
 export const COGNITION_REVISION_DEADLINE_MS = 250;
+/** Default bound on a fresh index read once a complete snapshot exists. */
+export const COGNITION_FRESH_READ_DEADLINE_MS = 1_000;
 /** Default bound on how long an unconfirmed snapshot may be served stale. */
 export const COGNITION_MAX_STALE_MS = 60_000;
+/** A shared HEAD check older than this is not joined; the next caller issues its own. */
+export const COGNITION_HEAD_SHARE_MS = 2_000;
 
 interface Kept {
   readonly seq: number;
   readonly snapshot: CognitionSnapshot;
-  /** When HEAD last matched this snapshot's revision (or it was read). */
+  /** When a HEAD read last matched this snapshot's revision (or its read started). */
   confirmedAt: number;
 }
 
@@ -142,6 +148,7 @@ function readFor(
 ): Promise<CognitionSnapshot> {
   if (state.read?.revision === revision) return state.read.promise;
   const seq = state.nextSeq++;
+  const startedAt = Date.now();
   const promise = snapshotAt(port, revision, orientationIds);
   const placed = { revision, seq, promise };
   state.read = placed;
@@ -149,7 +156,7 @@ function readFor(
     (snapshot) => {
       if (state.read === placed) state.read = null;
       if (snapshot.goals.status === "ok" && (!state.kept || seq > state.kept.seq))
-        state.kept = { seq, snapshot, confirmedAt: Date.now() };
+        state.kept = { seq, snapshot, confirmedAt: startedAt };
     },
     () => {
       if (state.read === placed) state.read = null;
@@ -165,16 +172,23 @@ function headFor(
   orientationIds: readonly string[]
 ): Promise<string> {
   if (state.head) return state.head;
+  const askedAt = Date.now();
   const head = port.currentCommit();
   state.head = head;
+  const release = setTimeout(() => {
+    if (state.head === head) state.head = null;
+  }, COGNITION_HEAD_SHARE_MS);
+  release.unref?.();
   head.then(
     (revision) => {
+      clearTimeout(release);
       if (state.head === head) state.head = null;
       if (state.kept?.snapshot.revision === revision)
-        state.kept.confirmedAt = Date.now();
+        state.kept.confirmedAt = Math.max(state.kept.confirmedAt, askedAt);
       else readFor(state, port, revision, orientationIds).catch(() => undefined);
     },
     () => {
+      clearTimeout(release);
       if (state.head === head) state.head = null;
     }
   );
@@ -211,13 +225,15 @@ export async function readCognitionSnapshot(
   orientationIds: readonly string[],
   {
     revisionDeadlineMs = COGNITION_REVISION_DEADLINE_MS,
+    freshReadDeadlineMs = COGNITION_FRESH_READ_DEADLINE_MS,
     maxStaleMs = COGNITION_MAX_STALE_MS,
   }: CognitionReadOptions = {}
 ): Promise<CognitionReadResult> {
   const state = stateFor(port, orientationIds.join("\u0000"));
-  const kept = state.kept;
   const fallback =
-    kept && Date.now() - kept.confirmedAt <= maxStaleMs ? kept.snapshot : null;
+    state.kept && Date.now() - state.kept.confirmedAt <= maxStaleMs
+      ? state.kept.snapshot
+      : null;
   const head = headFor(state, port, orientationIds);
   if (!fallback) {
     const revision = await head;
@@ -229,15 +245,18 @@ export async function readCognitionSnapshot(
       stale: false,
     };
   }
+  // The newest complete snapshot at the moment of serving, never an older capture.
+  const kept = () => state.kept?.snapshot ?? fallback;
   const checked = await settleWithin(head, revisionDeadlineMs);
   if (checked.kind !== "value")
-    return { snapshot: fallback, memoHit: true, stale: true };
-  if (checked.value === fallback.revision)
-    return { snapshot: fallback, memoHit: true, stale: false };
-  const fresh = await readFor(state, port, checked.value, orientationIds).catch(
-    () => null
+    return { snapshot: kept(), memoHit: true, stale: true };
+  if (checked.value === kept().revision)
+    return { snapshot: kept(), memoHit: true, stale: false };
+  const fresh = await settleWithin(
+    readFor(state, port, checked.value, orientationIds),
+    freshReadDeadlineMs
   );
-  if (fresh?.goals.status === "ok")
-    return { snapshot: fresh, memoHit: false, stale: false };
-  return { snapshot: fallback, memoHit: true, stale: true };
+  if (fresh.kind === "value" && fresh.value.goals.status === "ok")
+    return { snapshot: fresh.value, memoHit: false, stale: false };
+  return { snapshot: kept(), memoHit: true, stale: true };
 }

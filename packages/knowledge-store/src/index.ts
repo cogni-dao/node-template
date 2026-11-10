@@ -155,6 +155,8 @@ export {
 } from "./domain/graph-read.js";
 // Session cognition hub inputs (bug.0018): one index read per store revision
 export {
+  COGNITION_FRESH_READ_DEADLINE_MS,
+  COGNITION_HEAD_SHARE_MS,
   COGNITION_MAX_STALE_MS,
   COGNITION_REVISION_DEADLINE_MS,
   type CognitionReadOptions,

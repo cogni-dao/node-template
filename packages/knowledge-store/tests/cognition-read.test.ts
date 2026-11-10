@@ -238,6 +238,24 @@ describe("readCognitionSnapshot", () => {
     ).rejects.toThrow("dolt down");
   });
 
+  it("bounds a fresh read after a commit: serves the kept snapshot stale, then keeps the fresh one", async () => {
+    const { port, calls, commit } = fixture();
+    await readCognitionSnapshot(port, ORIENTATION_IDS);
+    const slow = deferred<{ id: string; domain: string; entryType: string; useWhen: string }[]>();
+    calls.governing.mockImplementationOnce(() => slow.promise);
+    commit("rev-b");
+    const served = await readCognitionSnapshot(port, ORIENTATION_IDS, { freshReadDeadlineMs: 5 });
+    expect(served).toMatchObject({ stale: true });
+    expect(served.snapshot.revision).toBe("rev-a");
+    slow.resolve([]);
+    await vi.waitFor(async () => {
+      const next = await readCognitionSnapshot(port, ORIENTATION_IDS);
+      expect(next).toMatchObject({ stale: false, memoHit: true });
+      expect(next.snapshot.revision).toBe("rev-b");
+    });
+    expect(calls.governing).toHaveBeenCalledTimes(2);
+  });
+
   it("makes a first caller wait: there is nothing complete to serve yet", async () => {
     const { port } = fixture();
     const late = deferred<string>();
