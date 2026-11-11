@@ -1,0 +1,42 @@
+{
+  "name": "@cogni-dao/node-declarations",
+  "version": "0.1.0",
+  "license": "LicenseRef-PolyForm-Shield-1.0.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cogni-dao/node-template.git",
+    "directory": "packages/node-declarations"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "bin": {
+    "node-declarations-check": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "LICENSE.md"
+  ],
+  "scripts": {
+    "build": "tsup && tsc -b --force",
+    "typecheck": "tsc --noEmit --emitDeclarationOnly false",
+    "test": "vitest run --config vitest.config.ts"
+  },
+  "dependencies": {
+    "yaml": "^2.8.3",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "tsup": "^8.5.1",
+    "typescript": "^5",
+    "vitest": "^4.0.9",
+    "@types/node": "^22"
+  }
+}
