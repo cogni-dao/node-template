@@ -13,6 +13,7 @@
  * @public
  */
 
+import type { CiteRef } from "./cites.js";
 import type { WorkItemSummary } from "./contracts.js";
 import type { HistoryEntry } from "./history.js";
 import type { WorkItemLeasePort } from "./leases.js";
@@ -41,8 +42,13 @@ export interface WorkItemsPatchInput {
   readonly expectedRevision?: number;
   readonly id: WorkItemId;
   readonly set: WorkItemsPatchSet;
-  /** One-line change reason; stored in the Dolt commit message, never in the item (task.0052). */
-  readonly reason?: string;
+  /**
+   * Why this change happens (task.0086): required. One line, 1-240 chars, at most 25 words;
+   * stored in the Dolt commit message, never in the item. The Doltgres adapter enforces it.
+   */
+  readonly reason: string;
+  /** Hub atoms this change used, at most 8; the adapter pins each to a commit in the commit message. */
+  readonly cites?: readonly CiteRef[];
 }
 
 export interface WorkItemsPort {

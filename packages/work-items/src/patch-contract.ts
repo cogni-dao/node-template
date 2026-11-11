@@ -9,13 +9,19 @@
  *   - ONE_PATCH_SCHEMA: `PATCH /api/v1/work/items/{id}` and `core__work_item_update` share `WorkItemPatchInputSchema`; no second copy.
  *   - PATCH_ALLOWLIST: only fields in `set` are mutable. id/created_at/updated_at are server-managed.
  *   - Optional expectedRevision enables compare-and-set; omission preserves unconditional patches.
- *   - Optional reason is one line, 1-512 chars, stored in history, never in the item (task.0052).
+ *   - REASON_REQUIRED: every patch carries a reason (one line, 1-240 chars, at most 25 words), stored in history, never in the item (task.0052, task.0086).
+ *   - CITES_OPTIONAL: `cites` names at most 8 hub atoms the change used; the adapter pins each to a commit (task.0086).
  * Side-effects: none
  * @public
  */
 
 import { z } from "zod";
 
+import {
+  CITE_CONTRIBUTION_PATTERN,
+  CITE_ID_PATTERN,
+  CITE_MAX,
+} from "./cites.js";
 import { ChangeReasonSchema } from "./history-contract.js";
 
 /**
@@ -40,11 +46,46 @@ export const WorkItemPatchStatusSchema = z.enum([
   "cancelled",
 ]);
 
+/** One cited hub atom: plain id = main; with `contribution` = the head of that open inbox. */
+export const CiteRefSchema = z.strictObject({
+  id: z
+    .string()
+    .regex(CITE_ID_PATTERN, `id must match ${CITE_ID_PATTERN.source}`)
+    .describe("Hub atom id you read for this decision."),
+  contribution: z
+    .string()
+    .regex(
+      CITE_CONTRIBUTION_PATTERN,
+      `contribution must match ${CITE_CONTRIBUTION_PATTERN.source}`
+    )
+    .optional()
+    .describe("Open inbox id (contrib-...) when the atom exists only there."),
+});
+
 export const WorkItemPatchInputSchema = z.object({
   id: z.string(),
   expectedRevision: z.number().int().min(0).optional(),
-  // The adapter turns CR/LF into spaces and trims; this checks the result fits.
-  reason: ChangeReasonSchema.optional(),
+  // The adapter applies the same rule; this gives the 400 issue early.
+  reason: ChangeReasonSchema,
+  cites: z
+    .array(CiteRefSchema)
+    .max(CITE_MAX)
+    .superRefine((cites, ctx) => {
+      const seen = new Set<string>();
+      for (const [i, cite] of cites.entries()) {
+        if (seen.has(cite.id))
+          ctx.addIssue({
+            code: "custom",
+            path: [i, "id"],
+            message: `cite id repeats: ${cite.id}`,
+          });
+        seen.add(cite.id);
+      }
+    })
+    .optional()
+    .describe(
+      "Hub atoms (at most 8, ids unique) that governed this decision. Each is pinned to its commit in history. Cite only atoms you read."
+    ),
   set: z
     .strictObject({
       title: z.string().min(1).max(500).optional(),

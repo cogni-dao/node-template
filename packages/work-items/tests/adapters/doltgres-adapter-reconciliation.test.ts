@@ -255,7 +255,7 @@ describe("DoltgresWorkItemAdapter restart reconciliation", () => {
 
     await expect(
       adapter.patch(
-        { id: toWorkItemId("task.missing"), set: { title: "probe" } },
+        { reason: "test change", id: toWorkItemId("task.missing"), set: { title: "probe" } },
         "principal-1"
       )
     ).rejects.toThrow(/Work item not found/);
@@ -273,7 +273,7 @@ describe("DoltgresWorkItemAdapter restart reconciliation", () => {
 
     await expect(
       adapter.patch(
-        { id: toWorkItemId("task.missing"), set: { title: "probe" } },
+        { reason: "test change", id: toWorkItemId("task.missing"), set: { title: "probe" } },
         "principal-1"
       )
     ).rejects.toThrow(/Work item not found/);
@@ -294,7 +294,7 @@ describe("DoltgresWorkItemAdapter restart reconciliation", () => {
 
     await expect(
       adapter.patch(
-        { id: toWorkItemId("task.missing"), set: { title: "probe" } },
+        { reason: "test change", id: toWorkItemId("task.missing"), set: { title: "probe" } },
         "principal-1"
       )
     ).rejects.toThrow(/Work item not found/);
@@ -316,7 +316,7 @@ describe("DoltgresWorkItemAdapter restart reconciliation", () => {
 
     await expect(
       adapter.patch(
-        { id: toWorkItemId("task.missing"), set: { title: "blocked" } },
+        { reason: "test change", id: toWorkItemId("task.missing"), set: { title: "blocked" } },
         "principal-1"
       )
     ).rejects.toBeInstanceOf(WorkItemsBusyError);
@@ -408,7 +408,7 @@ describe("DoltgresWorkItemAdapter restart reconciliation", () => {
 
     await expect(
       adapter.patch(
-        { id: toWorkItemId("task.missing"), set: { title: "blocked" } },
+        { reason: "test change", id: toWorkItemId("task.missing"), set: { title: "blocked" } },
         "principal-1"
       )
     ).rejects.toBeInstanceOf(WorkItemsBusyError);
@@ -438,7 +438,7 @@ describe("DoltgresWorkItemAdapter restart reconciliation", () => {
     // difference is the whole fix.
     await expect(
       adapter.patch(
-        { id: toWorkItemId("task.missing"), set: { title: "unblocked" } },
+        { reason: "test change", id: toWorkItemId("task.missing"), set: { title: "unblocked" } },
         "principal-1"
       )
     ).rejects.toThrow(/Work item not found/);
@@ -484,7 +484,7 @@ describe("DoltgresWorkItemAdapter restart reconciliation", () => {
 
     await expect(
       adapter.patch(
-        { id: toWorkItemId("task.missing"), set: { title: "probe" } },
+        { reason: "test change", id: toWorkItemId("task.missing"), set: { title: "probe" } },
         "principal-1"
       )
     ).rejects.toThrow(/Work item not found/);
@@ -514,7 +514,7 @@ describe("DoltgresWorkItemAdapter restart reconciliation", () => {
 
     await expect(
       adapter.patch(
-        { id: toWorkItemId("task.missing"), set: { title: "probe" } },
+        { reason: "test change", id: toWorkItemId("task.missing"), set: { title: "probe" } },
         "principal-1"
       )
     ).rejects.toThrow(/Work item not found/);
@@ -539,6 +539,7 @@ describe("DoltgresWorkItemAdapter restart reconciliation", () => {
       await expect(
         adapter.patch(
           {
+            reason: "test change",
             id: toWorkItemId("task.missing"),
             set: { title: "never dispatched" },
           },
@@ -560,7 +561,7 @@ describe("DoltgresWorkItemAdapter restart reconciliation", () => {
       const count = state.queries.length;
       await expect(
         adapter.patch(
-          { id: toWorkItemId("task.missing"), set: { title: "retry" } },
+          { reason: "test change", id: toWorkItemId("task.missing"), set: { title: "retry" } },
           "principal-1"
         )
       ).rejects.toMatchObject({
@@ -582,7 +583,7 @@ describe("DoltgresWorkItemAdapter restart reconciliation", () => {
 
     await expect(
       adapter.patch(
-        { id: toWorkItemId("task.missing"), set: { title: "probe" } },
+        { reason: "test change", id: toWorkItemId("task.missing"), set: { title: "probe" } },
         "principal-1"
       )
     ).rejects.toBeInstanceOf(WorkItemsBusyError);
@@ -604,7 +605,7 @@ describe("DoltgresWorkItemAdapter restart reconciliation", () => {
 
     await expect(
       adapter.patch(
-        { id: toWorkItemId("task.missing"), set: { title: "blocked" } },
+        { reason: "test change", id: toWorkItemId("task.missing"), set: { title: "blocked" } },
         "principal-1"
       )
     ).rejects.toBeInstanceOf(WorkItemsBusyError);

@@ -44,8 +44,20 @@ export {
   WorkItemsCapacityError,
 } from "../../errors.js";
 
+import {
+  CITE_COMMIT_PATTERN,
+  type CiteRef,
+  CitesInvalidError,
+  CitesUnsupportedError,
+  citeIssues,
+  type EntryResolver,
+  EntryResolverUnavailableError,
+  EntryUnresolvedError,
+} from "../../cites.js";
 import { parseWorkItemScores } from "../../scores.js";
 import {
+  formatCitesTrailer,
+  type HistoryCite,
   HISTORY_READ_ROWS,
   type HistoryDiffRow,
   type HistoryEntry,
@@ -172,6 +184,12 @@ export interface DoltgresWorkItemAdapterOptions {
    * reads a WIDER pool than the write factory builds.
    */
   readonly readClient?: Sql;
+  /**
+   * Pins a patch's `cites` to commits (task.0086). Called inside the writer lock,
+   * before the branch checkout, within one `queryTimeoutMs` deadline. Without it a
+   * patch that carries cites is refused with `CitesUnsupportedError`; a reason still works.
+   */
+  readonly entryResolver?: EntryResolver;
 }
 
 interface OperationContext {
@@ -220,8 +238,10 @@ interface MutationProof {
   readonly commandProvided?: boolean;
   /** `patch` only: the revision the compare-and-set was conditioned on. */
   readonly expectedRevision?: number;
-  /** `patch` only: one-line reason, written as a `Reason:` commit line (task.0052). */
+  /** `patch` only: the required reason, written as a `Reason:` commit line (task.0052, task.0086). */
   readonly reason?: string;
+  /** `patch` only: the cites the resolver pinned inside the lock; written as the last `Cites:` commit line. */
+  cites?: readonly HistoryCite[];
 }
 
 interface MutationOptions<T> {
@@ -742,6 +762,95 @@ function asRevision(value: unknown): number | undefined {
   return Number.isInteger(revision) ? revision : undefined;
 }
 
+/**
+ * Commit message of one mutation: line 1 names the operation and actor (crash
+ * recovery reads only this line); a patch adds `Reason:` and, with cites, a last
+ * `Cites:` line. Reason and cite ids hold no line break, so neither can forge a line.
+ */
+function commitMessage(
+  message: string,
+  principalId: string,
+  proof: MutationProof
+): string {
+  const lines = [`${COMMIT_TAG}: ${message} by actor:${principalId}`];
+  if (proof.reason) lines.push(`Reason: ${proof.reason}`);
+  if (proof.cites?.length) lines.push(`Cites: ${formatCitesTrailer(proof.cites)}`);
+  return lines.join("\n");
+}
+
+/** Unresolved ids by the error's name: an implementation may bundle its own copy of the class. */
+function unresolvedIds(error: unknown): readonly string[] | undefined {
+  if (error instanceof EntryUnresolvedError) return error.ids;
+  const named = error as { name?: unknown; ids?: unknown } | null;
+  return named?.name === "EntryUnresolvedError" &&
+    Array.isArray(named.ids) &&
+    named.ids.every((id) => typeof id === "string")
+    ? (named.ids as string[])
+    : undefined;
+}
+
+/**
+ * Pins the cites with the resolver inside one deadline. The first answer per id
+ * wins; every pin is rebuilt from the request (ids, inbox) plus a validated commit,
+ * so a resolver cannot put a line or a foreign id into the commit message.
+ */
+async function pinCites(
+  resolver: EntryResolver,
+  refs: readonly CiteRef[],
+  deadlineMs: number
+): Promise<HistoryCite[]> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(
+        new EntryResolverUnavailableError(
+          `Cite resolver did not answer within ${deadlineMs}ms; nothing was written`
+        )
+      );
+    }, deadlineMs);
+  });
+  let resolved: Awaited<ReturnType<EntryResolver["resolve"]>>;
+  try {
+    resolved = await Promise.race([
+      Promise.resolve().then(() =>
+        resolver.resolve(refs, "cite", controller.signal)
+      ),
+      deadline,
+    ]);
+  } catch (error) {
+    const ids = unresolvedIds(error);
+    if (ids) throw new EntryUnresolvedError(ids);
+    if (error instanceof EntryResolverUnavailableError) throw error;
+    throw new EntryResolverUnavailableError();
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+  const pins: HistoryCite[] = [];
+  const unresolved: string[] = [];
+  for (const ref of refs) {
+    const plane = ref.contribution ? "inbox" : "main";
+    const found = resolved.find((r) => r.id === ref.id && r.plane === plane);
+    if (!found) {
+      unresolved.push(ref.id);
+      continue;
+    }
+    if (!CITE_COMMIT_PATTERN.test(found.commit)) {
+      throw new EntryResolverUnavailableError(
+        "Cite resolver returned an invalid commit; nothing was written"
+      );
+    }
+    pins.push({
+      id: ref.id,
+      commit: found.commit,
+      ...(ref.contribution ? { contribution: ref.contribution } : {}),
+    });
+  }
+  if (unresolved.length) throw new EntryUnresolvedError(unresolved);
+  return pins;
+}
+
 function isNullSnapshot(snapshot: RowSnapshot): boolean {
   return PERSISTED_WORK_ITEM_COLUMNS.every(
     (column) => snapshot[column] === null
@@ -1038,6 +1147,7 @@ export class DoltgresWorkItemAdapter
   private readonly writerLockProtocol: "bridge" | "database";
   private readonly queueWaitMs: number;
   private readonly queryTimeoutMs: number;
+  private readonly entryResolver: EntryResolver | undefined;
   private readonly branchTimeoutMs: number;
   private readonly reserveTimeoutMs: number;
   private readonly recreateClient: (() => Sql) | undefined;
@@ -1069,6 +1179,7 @@ export class DoltgresWorkItemAdapter
     this.writerLockProtocol = options.writerLockProtocol ?? "bridge";
     this.queueWaitMs = options.queueWaitMs ?? OPERATION_QUEUE_WAIT_MS;
     this.queryTimeoutMs = options.queryTimeoutMs ?? QUERY_TIMEOUT_MS;
+    this.entryResolver = options.entryResolver;
     this.branchTimeoutMs = options.branchTimeoutMs ?? BRANCH_TIMEOUT_MS;
     this.reserveTimeoutMs = options.reserveTimeoutMs ?? RESERVE_TIMEOUT_MS;
     this.recreateClient = options.recreateClient;
@@ -2287,7 +2398,7 @@ export class DoltgresWorkItemAdapter
       assertDoltStatus(addRows, "dolt_add");
       state.commitAttempted = true;
       const commitRows = await conn.unsafe(
-        `SELECT dolt_commit('-m', ${escapeValue(`${COMMIT_TAG}: ${message} by actor:${principalId}${proof.reason ? `\nReason: ${proof.reason}` : ""}`)})`
+        `SELECT dolt_commit('-m', ${escapeValue(commitMessage(message, principalId, proof))})`
       );
       const branchCommit = doltCommitHash(commitRows);
       state.branchCommit = branchCommit;
@@ -3148,6 +3259,7 @@ export class DoltgresWorkItemAdapter
     const id = input.id as string;
     const expectedRevision = parseExpectedRevision(input.expectedRevision);
     const reason = normalizeChangeReason(input.reason);
+    const cites = this.requireCites(input.cites);
     const set: WorkItemsPatchSet =
       input.set.scores === undefined
         ? input.set
@@ -3219,7 +3331,7 @@ export class DoltgresWorkItemAdapter
           principal,
           itemId: id,
           expectedRevision,
-          ...(reason ? { reason } : {}),
+          reason,
           patchValues: Object.fromEntries(
             setKeys.map((key) => [PATCH_COLUMNS[key], set[key]])
           ),
@@ -3230,6 +3342,15 @@ export class DoltgresWorkItemAdapter
           const conflict = revisionConflict(current);
           if (conflict) throw conflict;
           proof.beforeRow = current;
+          // Inside the writer lock and before the branch checkout, so a resolver
+          // failure is a clean admission failure: lock released, nothing written.
+          if (cites.length && this.entryResolver) {
+            proof.cites = await pinCites(
+              this.entryResolver,
+              cites,
+              this.queryTimeoutMs
+            );
+          }
         },
         shouldCommit: (value) =>
           !(value instanceof WorkItemRevisionConflictError),
@@ -3237,6 +3358,15 @@ export class DoltgresWorkItemAdapter
     );
     if (result instanceof WorkItemRevisionConflictError) throw result;
     return result;
+  }
+
+  /** Cite rules, then wiring: a patch with cites and no resolver is refused before any lock. */
+  private requireCites(cites: readonly CiteRef[] | undefined): readonly CiteRef[] {
+    const issues = citeIssues(cites);
+    if (issues.length) throw new CitesInvalidError(issues);
+    if (!cites?.length) return [];
+    if (!this.entryResolver) throw new CitesUnsupportedError();
+    return cites;
   }
 
   async delete(_id: WorkItemId, _principalId: string): Promise<boolean> {

@@ -26,6 +26,7 @@ const version = (reason: string | null): HistoryEntry => ({
   at: "2026-11-07T00:00:00.000Z",
   actor: "actor:1",
   reason,
+  cites: [],
   changed: ["title"],
   diff: { title: { before: "a", after: "b", truncated: false } },
 });
@@ -144,13 +145,17 @@ describe("readWorkItemHistory", () => {
 });
 
 describe("ChangeReasonSchema", () => {
+  const words = (n: number) => Array.from({ length: n }, () => "w").join(" ");
   it.each([
     ["one line", true],
     ["two\nlines", true],
     ["\n", false],
     ["", false],
-    ["x".repeat(512), true],
-    ["x".repeat(513), false],
+    [words(25), true],
+    [words(26), false],
+    ["x".repeat(240), true],
+    ["x".repeat(241), false],
+    ["a\u0000b", false],
   ])("%j -> %s", (value, ok) => {
     expect(ChangeReasonSchema.safeParse(value).success).toBe(ok);
   });
