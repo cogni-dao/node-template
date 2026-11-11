@@ -167,13 +167,13 @@ export function createPostgresEnrollmentStore(client: CredentialSql, options: Po
             // A second enrollment turns the permission off (a live row, or a still-pending ask) and expires the older codes. The new ask below is
             // what the admin sees; the older keys die only when the new key is confirmed (trigger `agent_credentials_enrollment_confirm_siblings`).
             await tx`
-              UPDATE agent_roles SET revoked_at = now()
-              WHERE principal_user_id = ${principalUserId} AND scope = ${input.scope} AND revoked_at IS NULL`;
-            await tx`
               WITH batch AS (
                 SELECT id FROM agent_service_enrollments WHERE principal_user_id = ${principalUserId} AND status = 'open'
                 ORDER BY id LIMIT ${SWEEP_BATCH} FOR UPDATE
               ) UPDATE agent_service_enrollments e SET status = 'expired' FROM batch WHERE e.id = batch.id`;
+            await tx`
+              UPDATE agent_roles SET revoked_at = now()
+              WHERE principal_user_id = ${principalUserId} AND scope = ${input.scope} AND revoked_at IS NULL`;
           }
 
           const ask = await createPostgresAgentGrantsStore(tx).requestRole({
