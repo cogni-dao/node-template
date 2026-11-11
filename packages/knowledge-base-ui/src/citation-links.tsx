@@ -87,7 +87,7 @@ const CHANGE = {
 } as const;
 
 /**
- * One edge, one interactive surface: the whole row is the link (≥24px tall,
+ * One edge, one interactive surface: the whole row is the link (≥32px tall,
  * visible focus). Reads as marker, arrow, relation, slug; the title or edge
  * context is the hover text only.
  */
@@ -138,10 +138,10 @@ function CitationRow({
           change === "removed" && "line-through decoration-destructive/60"
         )}
       >
-        <span className="w-28 shrink-0">
+        <span className="min-w-28 shrink-0">
           <span
             className={cn(
-              "inline-flex rounded-full px-2 py-0.5 font-medium text-xs",
+              "inline-flex whitespace-nowrap rounded-full px-2 py-0.5 font-medium text-xs",
               TONE_CLASS[tone]
             )}
           >
@@ -181,12 +181,9 @@ export function CitationLinks({
     <DirectRelationLinks
       entityId={entityId}
       loadPage={loadPage}
-      className={cn(
-        "flex flex-col gap-2 rounded-lg border border-border bg-card p-3",
-        className
-      )}
+      className={cn("flex flex-col gap-1.5", className)}
       headingClassName="font-medium text-muted-foreground text-xs uppercase tracking-wider"
-      linksClassName="flex flex-col"
+      linksClassName="flex flex-col rounded-lg border border-border bg-card px-2 py-1.5 empty:hidden"
       moreButtonClassName="w-fit rounded border px-2 py-1 text-xs disabled:opacity-50"
       renderLink={(link) => {
         const other = link.direction === "out" ? link.target : link.source;
