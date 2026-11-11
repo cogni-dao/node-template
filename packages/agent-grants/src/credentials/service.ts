@@ -15,19 +15,40 @@
  *   - PERIMETER_GUARD: a token with the wrong shape or a failing checksum is refused before any store read (`key-format.ts` owns the format).
  *   - ADMIT_BEFORE_STORE: an over-limit client gets `rate_limited` and no store read. The limiter itself lives in the node.
  *   - SPEND_ON_MISS: only a lookup that finds no usable key spends a limiter token (`onInvalid`); a valid key never does.
- * Side-effects: none (the store does the IO)
+ *   - NO_SELF_APPROVAL (proofs): bind, recover, stop and lift never write `approved_by` and never touch a role row. An actor cannot lift its own stop.
+ *   - CHECK_BEFORE_FETCH: the challenge (id, secret, expiry, attempts, consumed) is checked, and the node-wide GitHub budget spent, BEFORE any fetch.
+ *     A wrong secret is `invalid_challenge`: it consumes nothing and counts no attempt, so nobody can burn another agent's challenge.
+ *   - ADMIT_BEFORE_STORE (proofs): `admit` is the node's per-(challenge, IP) limiter check; `onInvalid` spends a token on a wrong secret only.
+ * Side-effects: none (the store does the IO; the injected verifier does the GitHub read)
  * Links: https://cognidao.org/knowledge/node-capability-grants-standard
  * @public
  */
 
+import type { AdminCheck } from "../types";
 import { formatRevocableKey, isWellFormedRevocableKey } from "./key-format";
 import {
+  evaluateProofComment,
+  type IssueRef,
+  isWellFormedChallengeSecret,
+  parseIssueRef,
+  type ProofFailure,
+  type ProofVerifier,
+  proofLine,
+  randomSecret,
+  sha256Hex,
+} from "./proofs";
+import {
+  type ChallengeRefusal,
   type ConfirmResult,
   type CredentialPolicy,
   type CredentialState,
   type CredentialStore,
   DEFAULT_CREDENTIAL_POLICY,
+  DEFAULT_PROOF_POLICY,
+  type GithubEvidence,
   type IssueResult,
+  type ProofPolicy,
+  type ProofPurpose,
 } from "./types";
 
 /** Thrown by a node's resolver when the store cannot answer, so the HTTP layer maps it to 503 instead of 401. */
@@ -209,4 +230,247 @@ export function revokeCredential(
   input: { credentialId: string; userId: string; revokedBy: string }
 ): Promise<boolean> {
   return viaStore(() => store.revoke({ ...input, reason: "revoked" }));
+}
+
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Proofs: bind a GitHub account, recover a key, stop and lift (task.0091, slice S1a of task.5474)
+// ---------------------------------------------------------------------------------------------------------------------
+
+/** What the node supplies once: its id (inside every proof line), the allowlisted proof issues and the limits. */
+export interface ProofConfig {
+  readonly nodeId: string;
+  /** `owner/repo#number` entries. Empty = every proof route answers `proof_unavailable`. */
+  readonly issues: readonly string[];
+  readonly policy?: ProofPolicy;
+}
+
+export type ProofRefusal =
+  | "invalid_challenge"
+  | "proof_failed"
+  | "proof_unavailable"
+  | "rate_limited"
+  | "already_linked"
+  | "binding_exists"
+  | "no_binding"
+  | "recovery_limited"
+  | "not_agent"
+  | "stopped";
+
+export type ChallengeOutcome =
+  | {
+      readonly ok: true;
+      readonly challengeId: string;
+      readonly proofLine: string;
+      /** Shown once to the requester. The store keeps only its sha256. */
+      readonly challengeSecret: string;
+      readonly expiresAt: string;
+      readonly issues: readonly string[];
+    }
+  | { readonly ok: false; readonly reason: ChallengeRefusal | "proof_unavailable" };
+
+/** Bind (authenticated caller) or recover (anonymous) challenge. */
+export async function issueProofChallenge(
+  store: CredentialStore,
+  input: ProofConfig & { purpose: ProofPurpose; principalUserId?: string }
+): Promise<ChallengeOutcome> {
+  if (input.issues.length === 0) return { ok: false, reason: "proof_unavailable" };
+  if (input.purpose === "bind" && !input.principalUserId) return { ok: false, reason: "unknown_user" };
+  const challengeId = crypto.randomUUID();
+  const nonce = randomSecret();
+  const challengeSecret = randomSecret();
+  const result = await viaStore(async () =>
+    store.createChallenge({
+      challengeId,
+      purpose: input.purpose,
+      principalUserId: input.purpose === "bind" ? (input.principalUserId as string) : null,
+      nonceHash: await sha256Hex(nonce),
+      secretHash: await sha256Hex(challengeSecret),
+      policy: input.policy ?? DEFAULT_PROOF_POLICY,
+    })
+  );
+  if (!result.ok) return { ok: false, reason: result.reason };
+  return {
+    ok: true,
+    challengeId,
+    proofLine: proofLine(input.nodeId, challengeId, nonce),
+    challengeSecret,
+    expiresAt: result.expiresAt,
+    issues: input.issues,
+  };
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+export interface ProofAttempt {
+  readonly challengeId: string;
+  readonly challengeSecret: string;
+  /** One of `ProofConfig.issues`. */
+  readonly issue: string;
+  readonly commentId: number;
+  /** The per-(challenge, IP) wrong-secret limiter: only CHECKS. False = over the limit, nothing is read. */
+  readonly admit?: () => boolean;
+  /** Spends one limiter token. Called only for a wrong or unknown secret. */
+  readonly onInvalid?: () => void;
+}
+
+type ProofChecked =
+  | { readonly ok: true; readonly secretHash: string; readonly evidence: GithubEvidence }
+  | { readonly ok: false; readonly reason: ProofRefusal; readonly failure?: ProofFailure };
+
+async function checkProof(
+  store: CredentialStore,
+  verifier: ProofVerifier,
+  config: ProofConfig,
+  purpose: ProofPurpose,
+  principalUserId: string | null,
+  attempt: ProofAttempt
+): Promise<ProofChecked> {
+  const policy = config.policy ?? DEFAULT_PROOF_POLICY;
+  if (config.issues.length === 0) return { ok: false, reason: "proof_unavailable" };
+  if (attempt.admit && !attempt.admit()) return { ok: false, reason: "rate_limited" };
+  if (!isWellFormedChallengeSecret(attempt.challengeSecret) || !UUID.test(attempt.challengeId)) {
+    attempt.onInvalid?.();
+    return { ok: false, reason: "invalid_challenge" };
+  }
+  const secretHash = await sha256Hex(attempt.challengeSecret);
+  const opened = await viaStore(() =>
+    store.openProofCheck({ challengeId: attempt.challengeId, secretHash, purpose, principalUserId, policy })
+  );
+  if (!opened.ok) {
+    if (opened.reason === "invalid_challenge") {
+      attempt.onInvalid?.();
+      return { ok: false, reason: "invalid_challenge" };
+    }
+    return { ok: false, reason: "proof_unavailable" }; // the node's GitHub budget is spent: delay, never grant
+  }
+  const fail = async (failure: ProofFailure): Promise<ProofChecked> => {
+    await viaStore(() => store.recordProofFailure({ challengeId: attempt.challengeId }));
+    return { ok: false, reason: "proof_failed", failure };
+  };
+  const issue: IssueRef | null = config.issues.includes(attempt.issue) ? parseIssueRef(attempt.issue) : null;
+  if (!issue) return fail("issue_not_allowed");
+  if (!Number.isSafeInteger(attempt.commentId) || attempt.commentId <= 0) return fail("comment_not_found");
+
+  const read = await verifier.fetchComment({ issue, commentId: attempt.commentId }).catch((): { kind: "unavailable" } => ({ kind: "unavailable" }));
+  const verdict = await evaluateProofComment(read, issue, {
+    nodeId: config.nodeId,
+    challengeId: attempt.challengeId,
+    nonceHash: opened.nonceHash,
+    issuedAt: opened.issuedAt,
+    expiresAt: opened.expiresAt,
+    commentSkewSec: policy.commentSkewSec,
+  });
+  if (verdict.ok === "unavailable") return { ok: false, reason: "proof_unavailable" }; // consumes nothing, counts nothing
+  if (!verdict.ok) return fail(verdict.reason);
+  return {
+    ok: true,
+    secretHash,
+    evidence: { githubId: verdict.githubId, login: verdict.login, userType: verdict.userType, commentId: attempt.commentId, issue: attempt.issue },
+  };
+}
+
+export type BindOutcome =
+  | { readonly ok: true; readonly result: "created" | "already_bound"; readonly githubId: string; readonly userType: "User" | "Bot" }
+  | { readonly ok: false; readonly reason: ProofRefusal; readonly failure?: ProofFailure };
+
+/** The authenticated agent proves it controls a GitHub account. `principalUserId` is the caller the node already authenticated. */
+export async function bindGithubIdentity(
+  store: CredentialStore,
+  verifier: ProofVerifier,
+  config: ProofConfig,
+  input: ProofAttempt & { principalUserId: string }
+): Promise<BindOutcome> {
+  const checked = await checkProof(store, verifier, config, "bind", input.principalUserId, input);
+  if (!checked.ok) return checked;
+  const policy = config.policy ?? DEFAULT_PROOF_POLICY;
+  const done = await viaStore(() =>
+    store.finishBind({
+      challengeId: input.challengeId,
+      secretHash: checked.secretHash,
+      principalUserId: input.principalUserId,
+      evidence: checked.evidence,
+      policy,
+    })
+  );
+  if (!done.ok) return { ok: false, reason: done.reason };
+  return { ok: true, result: done.result, githubId: checked.evidence.githubId, userType: checked.evidence.userType };
+}
+
+export type RecoverOutcome =
+  | {
+      readonly ok: true;
+      readonly userId: string;
+      readonly credentialId: string;
+      readonly apiKey: string;
+      readonly expiresAt: string;
+      readonly renewUntil: string;
+      readonly revokedCount: number;
+    }
+  | { readonly ok: false; readonly reason: ProofRefusal; readonly failure?: ProofFailure };
+
+/** An agent with no key proves the GitHub account bound to its principal and gets ONE active key on the SAME `users.id`. Every other key dies. */
+export async function recoverCredential(
+  store: CredentialStore,
+  verifier: ProofVerifier,
+  config: ProofConfig,
+  input: ProofAttempt
+): Promise<RecoverOutcome> {
+  const checked = await checkProof(store, verifier, config, "recover", null, input);
+  if (!checked.ok) return checked;
+  const policy = config.policy ?? DEFAULT_PROOF_POLICY;
+  const { token, tokenHash } = await mintKey();
+  const done = await viaStore(() =>
+    store.finishRecover({
+      challengeId: input.challengeId,
+      secretHash: checked.secretHash,
+      githubId: checked.evidence.githubId,
+      tokenHash,
+      policy,
+    })
+  );
+  if (!done.ok) return { ok: false, reason: done.reason };
+  return {
+    ok: true,
+    userId: done.userId,
+    credentialId: done.credentialId,
+    apiKey: token,
+    expiresAt: done.expiresAt,
+    renewUntil: done.renewUntil,
+    revokedCount: done.revokedCount,
+  };
+}
+
+export type StopActor = { readonly actorUserId: string; readonly targetUserId: string; readonly plane: "human" | "ai" };
+export type StopOutcome =
+  | { readonly ok: true; readonly revokedCount: number }
+  | { readonly ok: false; readonly reason: "authz_denied" | "authz_unavailable" | "principal_not_found" | "not_agent" };
+export type LiftOutcome =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly reason: "authz_denied" | "authz_unavailable" | "principal_not_found" | "not_stopped" | "self_lift" };
+
+/** The ONE admin gate of stop and lift, for both doors: a throw or `unavailable` is 503, never an allow. */
+async function adminAllows(adminCheck: AdminCheck, actorUserId: string): Promise<"allow" | "authz_denied" | "authz_unavailable"> {
+  const decision = await adminCheck(actorUserId).catch(() => "unavailable" as const);
+  return decision === "allow" ? "allow" : decision === "unavailable" ? "authz_unavailable" : "authz_denied";
+}
+
+/**
+ * Stop: every credential of the target dies and the agent cannot bind or recover until a lift. It removes only; it never writes `approved_by`.
+ * The human door (the keys row) and the bearer twin both call this, so the check is the same by construction.
+ */
+export async function revokePrincipalCredentials(store: CredentialStore, adminCheck: AdminCheck, input: StopActor): Promise<StopOutcome> {
+  const gate = await adminAllows(adminCheck, input.actorUserId);
+  if (gate !== "allow") return { ok: false, reason: gate };
+  const result = await viaStore(() => store.revokeAllForPrincipal({ actorUserId: input.actorUserId, targetUserId: input.targetUserId }));
+  return result.ok ? { ok: true, revokedCount: result.revokedCount } : result;
+}
+
+/** Lift: sets `lifted_at`. Mints nothing and revives no key. An actor cannot lift its own stop. */
+export async function liftPrincipalStop(store: CredentialStore, adminCheck: AdminCheck, input: StopActor): Promise<LiftOutcome> {
+  const gate = await adminAllows(adminCheck, input.actorUserId);
+  if (gate !== "allow") return { ok: false, reason: gate };
+  if (input.actorUserId === input.targetUserId) return { ok: false, reason: "self_lift" };
+  const result = await viaStore(() => store.liftStop({ actorUserId: input.actorUserId, targetUserId: input.targetUserId }));
+  return result.ok ? { ok: true } : result;
 }

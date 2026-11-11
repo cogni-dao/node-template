@@ -18,9 +18,22 @@
  * @public
  */
 
+import type { KeyHolder } from "./credentials/types";
 import type { NodeAiPermissionView, RoleRow } from "./types";
 
 const NEUTRAL_WHO = "Unnamed agent";
+
+/**
+ * The keys row (task.0091). `agent:keys` is NOT a declared scope: it is never in a declaration list, `askableScopes`, `agent_roles` or `hasRoles`,
+ * and an agent cannot ask for it. The node's roles route reads it as "stop or lift this agent's keys". Label and description live here, not in
+ * `ROUTE_ONLY_CAPABILITIES`.
+ */
+export const AGENT_KEYS_SCOPE = "agent:keys";
+export const AGENT_KEYS_VIEW = {
+  scope: AGENT_KEYS_SCOPE,
+  label: "Sign-in keys",
+  description: "Lets this agent call this node. Off cancels every key and blocks recovery. An agent with no linked GitHub account cannot come back.",
+} as const;
 
 export function buildNodeAiView(input: {
   /** scope -> the declaration (`requires`) that names it: every tool contract and every route-only capability. */
@@ -31,6 +44,8 @@ export function buildNodeAiView(input: {
   readonly internal: ReadonlyArray<{ userId: string; slug: string }>;
   /** Every pending and live row, any principal. */
   readonly rows: readonly RoleRow[];
+  /** Outside agents that hold a sign-in key (a bounded store read). One keys row each, last in the table. */
+  readonly keyHolders?: readonly KeyHolder[];
 }): NodeAiPermissionView[] {
   const named = (scope: string) => {
     const d = input.declarations[scope];
@@ -98,6 +113,22 @@ export function buildNodeAiView(input: {
       scope: row.scope,
       ...n,
       on: true,
+      until: null,
+    });
+  }
+
+  // 4. Sign-in keys: one row per outside agent that holds one, or is stopped. Off = stop (the agent stays visible), On = lift.
+  for (const holder of input.keyHolders ?? []) {
+    out.push({
+      section: "outside",
+      principalUserId: holder.userId,
+      who: holder.name ?? NEUTRAL_WHO,
+      outside: true,
+      hint: holder.githubId ? `GitHub id ${holder.githubId}` : null,
+      scope: AGENT_KEYS_VIEW.scope,
+      label: AGENT_KEYS_VIEW.label,
+      description: AGENT_KEYS_VIEW.description,
+      on: holder.on,
       until: null,
     });
   }
