@@ -63,6 +63,42 @@ emit_agent_context() {
   fi
 }
 
+# emit_claude_context <text> — Claude Code only, and only when this session's
+# CLAUDE.md @import could not have seen the cache: Claude resolves imports
+# before its SessionStart hook writes the file, so a fresh workspace's first
+# session would start without its contract. Its uncapped SessionStart channel
+# is structured JSON (hookSpecificOutput.additionalContext); raw stdout is
+# previewed to ~2 KB. A warm session already has the cache through the import,
+# so it gets nothing here (no duplicate).
+emit_claude_context() {
+  [ -z "${CODEX_THREAD_ID:-}" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  printf '%s' "$1" \
+    | jq -Rs '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:.}}'
+}
+
+# The hook's JSON input names the SessionStart source (startup, resume, clear,
+# compact). Read it once; absent input counts as startup.
+HOOK_SOURCE="startup"
+hook_input=""
+if [ ! -t 0 ]; then
+  # Bounded read: a caller's stdin may stay open (e.g. a setup script), so never
+  # block on it. Hook input is one small JSON object, delivered at once.
+  IFS= read -r -d '' -t 1 hook_input || true
+  if [ -n "$hook_input" ] && command -v jq >/dev/null 2>&1; then
+    HOOK_SOURCE="$(printf '%s' "$hook_input" | jq -r '.source // "startup"' 2>/dev/null || printf startup)"
+  fi
+fi
+
+# cache_is_fresh_for_this_boot — a new session (source startup) and a cache
+# written in the last 10 minutes, e.g. by workspace setup racing this start, so
+# the import may have missed it. Resume, clear and compact keep the import's
+# copy and get nothing here.
+cache_is_fresh_for_this_boot() {
+  [ "$HOOK_SOURCE" = "startup" ] || return 1
+  [ -n "$(find "$CACHE_FILE" -mmin -10 2>/dev/null)" ]
+}
+
 read_env_file_value() {
   var_name="$1"
   env_file="${2:-.env.cogni}"
@@ -147,6 +183,9 @@ refresh_in_background() {
 # a hub outage is invisible; we just refresh in the background for next time.
 if [ -f "$CACHE_FILE" ] && [ -s "$CACHE_FILE" ] && ! cache_is_repo_tracked; then
   emit_agent_context "$(cat "$CACHE_FILE")"
+  if cache_is_fresh_for_this_boot; then
+    emit_claude_context "$(cat "$CACHE_FILE")"
+  fi
   refresh_in_background
   exit 0
 fi
@@ -158,13 +197,14 @@ bundle="$(fetch_bundle)"
 if [ -n "$bundle" ]; then
   write_cache_atomic "$bundle"
   emit_agent_context "$bundle"
+  emit_claude_context "$bundle"
   exit 0
 fi
 
 # First boot AND fetch failed. Be honest, never cry wolf — separate a setup gap
 # (no key) from a key-present failure, without a second network probe.
 if [ -z "$AGENT_KEY" ]; then
-  emit_agent_context "$(cat <<EOF
+  notice="$(cat <<EOF
 COGNI COGNITION — no node credentials yet (first boot)
 
 No COGNI_NODE_API_KEY was found, so this session could not load its cognition
@@ -181,7 +221,7 @@ survives hub outages.)
 EOF
 )"
 else
-  emit_agent_context "$(cat <<EOF
+  notice="$(cat <<EOF
 COGNI COGNITION — could not load bundle (first boot, no cache)
 
 A credential IS present, so this is NOT a missing-key setup problem. Either the
@@ -194,3 +234,7 @@ cognition caches itself once it loads, and then survives hub outages.
 EOF
 )"
 fi
+# Both harnesses see the notice: Codex on stdout, Claude through its structured
+# channel (this boot's import found no cache either).
+emit_agent_context "$notice"
+emit_claude_context "$notice"
