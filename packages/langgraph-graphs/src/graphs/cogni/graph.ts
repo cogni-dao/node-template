@@ -6,7 +6,7 @@ import { isAiExecutionError } from "@cogni/ai-core";
 import { BaseLanguageModel } from "@langchain/core/language_models/base";
 import { SystemMessage, ToolMessage } from "@langchain/core/messages";
 import { StructuredTool } from "@langchain/core/tools";
-import { Command, StateSchema } from "@langchain/langgraph";
+import { Command, getConfig, StateSchema } from "@langchain/langgraph";
 import {
 	type CompiledSubAgent,
 	CompositeBackend,
@@ -26,7 +26,12 @@ import {
 } from "langchain";
 import { InvalidCompletionError } from "../../runtime/cogni/completion-adapter";
 import type { CreateReactAgentGraphOptions } from "../types";
-import { composeCogniPrompt, hostClockPrompt } from "./prompts";
+import {
+	composeCogniPrompt,
+	hostClockPrompt,
+	RUN_BUDGET_WRAP_UP_SHARE,
+	runBudgetPrompt,
+} from "./prompts";
 import { HubSkillBackend } from "./skill-backend";
 
 export interface AgentProfile {
@@ -232,6 +237,32 @@ export function createCogniProgram(
 						}),
 					]
 				: []),
+			// Long runs end in a handoff, not a crash: past a share of the run's own step limit (the host's
+			// recursionLimit, the one owner of that bound), every model call is told to write what its evidence
+			// supports and hand off the rest. The harness adds no limit of its own.
+			createMiddleware({
+				name: "CogniRunBudget",
+				wrapModelCall: (request, handler) => {
+					let config: ReturnType<typeof getConfig> | undefined;
+					try {
+						config = getConfig();
+					} catch {
+						config = undefined;
+					}
+					const step = Number(config?.metadata?.langgraph_step);
+					const limit = config?.recursionLimit;
+					return typeof limit === "number" &&
+						Number.isFinite(step) &&
+						step >= limit * RUN_BUDGET_WRAP_UP_SHARE
+						? handler({
+								...request,
+								systemMessage: request.systemMessage.concat(
+									new SystemMessage({ content: runBudgetPrompt(step, limit) }),
+								),
+							})
+						: handler(request);
+				},
+			}),
 			...(!children.length
 				? [
 						createMiddleware({
