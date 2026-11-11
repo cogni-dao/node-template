@@ -16,6 +16,7 @@
 
 import type { Tagged } from "type-fest";
 import type { WorkItemDto } from "./contracts.js";
+import type { WorkItemMove } from "./moves.js";
 import type { WorkItemSortBy, WorkItemSortDirection } from "./query-order.js";
 import { rankScore } from "./scores.js";
 
@@ -97,6 +98,7 @@ export type WorkItem = Readonly<
     | "status"
     | "rankScore"
     | "scores"
+    | "moves"
     | "projectId"
     | "parentId"
     | "blockedBy"
@@ -112,6 +114,8 @@ export type WorkItem = Readonly<
   readonly type: WorkItemType;
   readonly status: WorkItemStatus;
   readonly scores?: WorkItemScores;
+  /** The metrics this item moves, as stored (story.0033); readings are added at read time. */
+  readonly moves?: readonly WorkItemMove[];
   readonly projectId?: WorkItemId;
   readonly parentId?: WorkItemId;
   readonly blockedBy?: WorkItemId;
@@ -162,10 +166,11 @@ export function toWorkItemId(raw: string): WorkItemId {
 }
 
 export function toWorkItemDto(item: WorkItem): WorkItemDto {
-  const { actor, ...fields } = item;
+  const { actor, moves, ...fields } = item;
   return {
     ...fields,
     ...(actor !== "either" && { actor }),
+    ...(moves !== undefined && { moves: moves.map((m) => ({ ...m })) }),
     rankScore: rankScore(item.scores),
     assignees: item.assignees.map((a) => ({ ...a })),
     externalRefs: item.externalRefs.map((r) => ({ ...r })),

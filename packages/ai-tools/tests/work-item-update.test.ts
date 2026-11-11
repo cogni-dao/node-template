@@ -102,6 +102,32 @@ describe("core__work_item_update", () => {
     expect(workItemUpdateContract.description).toContain(CHANGE_REASON_REQUIRED_MESSAGE);
   });
 
+  it("lets an agent set moves, drops a baseline it sends, and says so in the tool text (story.0033)", async () => {
+    const parse = (moves: unknown) =>
+      workItemUpdateContract.inputSchema.safeParse({ id: "task.1", reason: "r", set: { moves } });
+    expect(parse([{ metricId: "convergence-ratio", direction: "up" }]).success).toBe(true);
+    expect(parse([]).success).toBe(true);
+    expect(parse([{ metricId: "m", direction: "sideways" }]).success).toBe(false);
+    expect(parse(Array.from({ length: 4 }, (_, i) => ({ metricId: `m${i}`, direction: "up" }))).success).toBe(false);
+    const sent = parse([
+      { metricId: "m", direction: "down", baselineObservationId: "11111111-1111-4111-8111-111111111111" },
+    ]);
+    expect(sent.success && sent.data.set.moves).toEqual([{ metricId: "m", direction: "down" }]);
+    expect(workItemUpdateContract.description).toContain("set.moves");
+    expect(workItemUpdateContract.description).toContain("Never send a baseline");
+    expect(workItemUpdateContract.description).toContain("core__metric_list");
+
+    const patch = vi.fn().mockResolvedValue(PATCHED);
+    const impl = createWorkItemUpdateImplementation({ workItemCapability: capability(patch) });
+    const input = {
+      id: "task.5001",
+      reason: "this raises the ratio",
+      set: { moves: [{ metricId: "convergence-ratio", direction: "up" as const }] },
+    };
+    await impl.execute(input, {} as never);
+    expect(patch).toHaveBeenCalledWith(input);
+  });
+
   it("returns a lost compare-and-set as a result, not a throw", async () => {
     const impl = createWorkItemUpdateImplementation({
       workItemCapability: capability(

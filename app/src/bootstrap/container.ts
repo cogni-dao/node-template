@@ -153,6 +153,7 @@ import { createScheduleCapability } from "@/bootstrap/capabilities/schedule";
 import { createGithubReadVcsCapability } from "@/bootstrap/capabilities/vcs";
 import { createWebSearchCapability } from "@/bootstrap/capabilities/web-search";
 import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
+import { createMoveMetricPorts } from "@/bootstrap/capabilities/work-item-moves";
 import {
 	type AgentAuthoritySql,
 	type AgentToolAuthority,
@@ -719,9 +720,13 @@ function createContainer(): Container {
 	const workItemAdapter = new MarkdownWorkItemAdapter(
 		env.COGNI_REPO_ROOT ?? "/nonexistent",
 	);
+	// story.0033: the work-items `moves` ports over this node's metrics service.
+	// `goalMetrics` is assigned below and read only at call time.
+	const moveMetrics = createMoveMetricPorts(() => goalMetrics);
 	const workItemCapability = createWorkItemCapability({
 		workItemQuery: workItemAdapter,
 		workItemCommand: workItemAdapter,
+		moveReadings: moveMetrics.readings,
 		// QUERY_READS_THE_LIVE_BACKLOG: the AI query tool (and the prioritizer) reads
 		// this node's Doltgres work items; `doltgresWorkItems` is assigned below and
 		// read only at call time.
@@ -799,6 +804,8 @@ function createContainer(): Container {
 				// task.0086: pins a patch's cites to commits with lock-free reads on the
 				// knowledge pool, never on the writer connection that holds the lock.
 				entryResolver: createDoltgresEntryResolver(doltClient),
+				// story.0033: a `moves` entry pins the metric's latest good observation as its baseline.
+				metricBaseline: moveMetrics.baselines,
 			}),
 			new PostgresWorkItemLeaseAdapter(serviceDb.$client, { logger: log })
 		);

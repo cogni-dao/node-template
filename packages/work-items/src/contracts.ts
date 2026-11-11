@@ -31,6 +31,33 @@ const WorkItemScoresDtoSchema = z.record(
 	z.object({ v: z.number(), ev: z.string().optional() }),
 );
 
+const MoveReadingDtoSchema = z.object({
+	value: z.number(),
+	observedAt: z.string(),
+});
+
+/**
+ * One move as a read returns it (story.0033). A list read and a write return the stored
+ * three fields; a single-item read adds the readings and the verdict at read time.
+ */
+export const WorkItemMoveDtoSchema = z.object({
+	metricId: z.string(),
+	direction: z.enum(["up", "down"]),
+	baselineObservationId: z.string().nullable(),
+	baseline: MoveReadingDtoSchema.nullable().optional(),
+	current: MoveReadingDtoSchema.nullable().optional(),
+	moved: z.enum(["as_declared", "against", "flat", "unknown"]).optional(),
+	unknownReason: z
+		.enum([
+			"no_baseline",
+			"baseline_unreadable",
+			"no_current",
+			"metric_deprecated",
+			"metrics_unavailable",
+		])
+		.optional(),
+});
+
 export const WorkItemDtoSchema = z.object({
 	id: z.string(),
 	type: z.string(),
@@ -41,6 +68,8 @@ export const WorkItemDtoSchema = z.object({
 	rankScore: z.number().optional(),
 	estimate: z.number().optional(),
 	scores: WorkItemScoresDtoSchema.optional(),
+	// Absent = no declaration; `[]` = declared to move nothing (the edit reason says why).
+	moves: z.array(WorkItemMoveDtoSchema).optional(),
 	summary: z.string().optional(),
 	outcome: z.string().optional(),
 	projectId: z.string().optional(),

@@ -30,6 +30,7 @@ import {
 	DoltBranchSessionRunner,
 	DoltgresKnowledgeStoreAdapter,
 	DoltgresKnowledgeContributionAdapter,
+	createDoltgresEntryResolver,
 } from "@cogni/knowledge-store/adapters/doltgres";
 import {
 	GenericContainer,
@@ -1260,6 +1261,165 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 		} finally {
 			await casReadSql.end({ timeout: 0 });
 			await casSql.end({ timeout: 0 });
+		}
+	}, 60_000);
+
+	it("stores moves with a baseline pinned once, through the real work_items column (story.0033)", async () => {
+		const movesSql = postgres(dbUrl, { max: 1, fetch_types: false });
+		const movesReadSql = postgres(dbUrl, { max: 1, fetch_types: false });
+		const OBS_1 = "11111111-1111-4111-8111-111111111111";
+		const OBS_2 = "22222222-2222-4222-8222-222222222222";
+		const observations = [OBS_1, OBS_2];
+		const baselineCalls: string[] = [];
+		const adapter = new DoltgresWorkItemAdapter(movesSql, {
+			readClient: movesReadSql,
+			logger: stageLogger,
+			lockWaitMs: 250,
+			lockRetryMs: 25,
+			queryTimeoutMs: 5_000,
+			entryResolver: {
+				resolve: async (refs, rule) => {
+					expect(rule).toBe("metric");
+					return refs.map((ref) => ({
+						id: ref.id,
+						commit: "a".repeat(32),
+						plane: "main" as const,
+					}));
+				},
+			},
+			metricBaseline: {
+				latestObservationId: async (metricId) => {
+					baselineCalls.push(metricId);
+					return observations.shift() ?? null;
+				},
+			},
+		});
+		const id = toWorkItemId("task.9507");
+		const principal = "doltgres-moves-writer";
+		try {
+			await adapter.create({ id, type: "task", title: "Move a metric" }, principal);
+			await expect(adapter.get(id)).resolves.not.toHaveProperty("moves");
+
+			const first = await adapter.patch(
+				{
+					id,
+					reason: "this change should raise the ratio",
+					set: { moves: [{ metricId: "convergence-ratio", direction: "up" }] },
+				},
+				principal,
+			);
+			expect(first.moves).toEqual([
+				{ metricId: "convergence-ratio", direction: "up", baselineObservationId: OBS_1 },
+			]);
+			await expect(adapter.get(id)).resolves.toMatchObject({ moves: first.moves });
+
+			// A direction change keeps the pinned baseline; no new baseline read.
+			const second = await adapter.patch(
+				{
+					id,
+					reason: "direction corrected",
+					set: { moves: [{ metricId: "convergence-ratio", direction: "down" }] },
+				},
+				principal,
+			);
+			expect(second.moves).toEqual([
+				{ metricId: "convergence-ratio", direction: "down", baselineObservationId: OBS_1 },
+			]);
+			expect(baselineCalls).toEqual(["convergence-ratio"]);
+
+			// [] clears it; adding the metric back pins a new baseline.
+			await expect(
+				adapter.patch({ id, reason: "moves nothing after all", set: { moves: [] } }, principal),
+			).resolves.toMatchObject({ moves: [] });
+			const third = await adapter.patch(
+				{
+					id,
+					reason: "moves it again",
+					set: { moves: [{ metricId: "convergence-ratio", direction: "up" }] },
+				},
+				principal,
+			);
+			expect(third.moves).toEqual([
+				{ metricId: "convergence-ratio", direction: "up", baselineObservationId: OBS_2 },
+			]);
+			// A create names its metric when it is filed: validated, baselined once (none left: null), stored.
+			const filedId = toWorkItemId("task.9508");
+			const filed = await adapter.create(
+				{
+					id: filedId,
+					type: "task",
+					title: "Filed with a metric",
+					moves: [{ metricId: "deploy-first-try-7d", direction: "up" }],
+				},
+				principal,
+			);
+			expect(filed.moves).toEqual([
+				{ metricId: "deploy-first-try-7d", direction: "up", baselineObservationId: null },
+			]);
+			await expect(adapter.get(filedId)).resolves.toMatchObject({ moves: filed.moves });
+			await expect(
+				movesSql.unsafe("SELECT name FROM dolt.branches WHERE name LIKE 'work-item-op/%'"),
+			).resolves.toHaveLength(0);
+		} finally {
+			await movesReadSql.end({ timeout: 0 });
+			await movesSql.end({ timeout: 0 });
+		}
+	}, 60_000);
+
+	it("resolves the metric rule on real Doltgres: main only, AS OF a pinned hash, spec present and not deprecated (story.0033)", async () => {
+		const ksSql = postgres(dbUrl, { max: 1, fetch_types: false });
+		try {
+			const row = (id: string, status: string, spec: string | null) =>
+				`(${literal(id)}, 'strategy', ${literal(id)}, 'body', 'guide', 'agent', ${literal(status)}, ${
+					spec === null ? "NULL" : `${literal(spec)}::jsonb`
+				})`;
+			await ksSql.unsafe(
+				`INSERT INTO knowledge (id, domain, title, content, entry_type, source_type, status, metric_spec) VALUES ${[
+					row("moves-live-metric", "established", '{"calculatorId":"work.count@1"}'),
+					row("moves-draft-metric", "draft", '{"calculatorId":"work.count@1"}'),
+					row("moves-old-metric", "deprecated", '{"calculatorId":"work.count@1"}'),
+					row("moves-plain-atom", "established", null),
+				].join(", ")}`,
+			);
+			await ksSql.unsafe("SELECT dolt_add('knowledge')");
+			await ksSql.unsafe("SELECT dolt_commit('-m', 'metric rule fixtures')");
+			const mainHash = String(
+				(await ksSql.unsafe("SELECT dolt_hashof('main') AS hash"))[0]?.hash ?? "",
+			);
+			const resolver = createDoltgresEntryResolver(ksSql);
+			const signal = new AbortController().signal;
+
+			await expect(
+				resolver.resolve(
+					[{ id: "moves-live-metric" }, { id: "moves-draft-metric" }],
+					"metric",
+					signal,
+				),
+			).resolves.toEqual([
+				{ id: "moves-live-metric", commit: mainHash, plane: "main" },
+				{ id: "moves-draft-metric", commit: mainHash, plane: "main" },
+			]);
+			// No spec, deprecated and absent all read as unresolved, by id.
+			const refused = resolver.resolve(
+				[
+					{ id: "moves-live-metric" },
+					{ id: "moves-plain-atom" },
+					{ id: "moves-old-metric" },
+					{ id: "moves-ghost" },
+				],
+				"metric",
+				signal,
+			);
+			await expect(refused).rejects.toMatchObject({
+				name: "EntryUnresolvedError",
+				ids: ["moves-plain-atom", "moves-old-metric", "moves-ghost"],
+			});
+			// The same atom still resolves under the cite rule: only the metric rule needs a spec.
+			await expect(
+				resolver.resolve([{ id: "moves-plain-atom" }], "cite", signal),
+			).resolves.toHaveLength(1);
+		} finally {
+			await ksSql.end({ timeout: 0 });
 		}
 	}, 60_000);
 

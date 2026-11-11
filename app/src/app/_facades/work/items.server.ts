@@ -8,6 +8,7 @@
  * Invariants: P0P1_IS_NODE_ADMIN (story.5101: priority <= 1 on create/patch requires node admin,
  *   checked before the store write), PORT_VIA_CONTAINER (no direct adapter imports), CONTRACTS_ARE_TRUTH, NODE_STORE_IS_LOCAL.
  * Evaluation: preserves scores in DTOs and normalizes package validation failures for HTTP400.
+ * Moves (story.0033): create and patch accept `moves` (new ids are resolved and baselined by the store). A single-item read, a create response and a patch response add each move's baseline, current reading and verdict from observations (at most 3 moves); list reads return the stored moves only. An unknown or deprecated metric id is `EntryUnresolvedError` (field `moves`); a non-empty write with no metric wiring is `MovesUnsupportedError`; a bad list is `MovesInvalidError`.
  * Side-effects: IO (filesystem read via port; database read/write via Doltgres port)
  * Links: contracts/work.items.{list,get,create,patch}.v1.contract
  * @internal
@@ -37,6 +38,10 @@ import {
   CitesUnsupportedError,
   EntryResolverUnavailableError,
   EntryUnresolvedError,
+  judgeMoves,
+  MetricBaselineUnavailableError,
+  MovesInvalidError,
+  MovesUnsupportedError,
   toWorkItemId,
   WorkItemRevisionConflictError,
   WorkItemScoresInvalidError,
@@ -49,6 +54,9 @@ export {
   CitesUnsupportedError,
   EntryResolverUnavailableError,
   EntryUnresolvedError,
+  MetricBaselineUnavailableError,
+  MovesInvalidError,
+  MovesUnsupportedError,
   WorkItemRevisionConflictError,
   WorkItemScoresInvalidError,
   WorkItemWriteOutcomeUnknownError,
@@ -59,6 +67,7 @@ import {
   isPrivilegedPriority,
   NodeAdminRequiredError,
 } from "@cogni/knowledge-store";
+import { createMoveMetricPorts } from "@/bootstrap/capabilities/work-item-moves";
 import { getContainer } from "@/bootstrap/container";
 import { toHttpWorkItem } from "../read-envelopes.server";
 
@@ -147,6 +156,20 @@ export class WorkItemsBackendNotReadyError extends Error {
 
 const toDto = toHttpWorkItem;
 
+/**
+ * MOVES_READ_AT_READ_TIME: add each move's baseline, current reading and verdict to a
+ * single item. Never throws: a lookup that fails reads `unknown`. A list read does not call this.
+ */
+async function withMoveReadings(dto: WorkItemDto): Promise<WorkItemDto> {
+  if (!dto.moves?.length) return dto;
+  const container = getContainer();
+  // No metrics service on this node: every move reads `unknown` (metrics_unavailable).
+  const readings = container.goalMetrics
+    ? createMoveMetricPorts(() => container.goalMetrics).readings
+    : undefined;
+  return { ...dto, moves: await judgeMoves(dto.moves, readings) };
+}
+
 function nextActionForWorkItem(item: WorkItem): string | null {
   if (item.blockedBy) return "blocked";
   switch (item.status) {
@@ -233,8 +256,18 @@ function rethrowBackendError(error: unknown): never {
   if (name === "CitesUnsupportedError") throw new CitesUnsupportedError();
   if (name === "EntryUnresolvedError") {
     const ids = (error as { ids?: unknown }).ids;
-    throw new EntryUnresolvedError(Array.isArray(ids) ? ids.map(String) : []);
+    const field = (error as { field?: unknown }).field === "moves" ? "moves" : "cites";
+    throw new EntryUnresolvedError(Array.isArray(ids) ? ids.map(String) : [], field);
   }
+  if (name === "MetricBaselineUnavailableError")
+    throw new MetricBaselineUnavailableError(message);
+  if (name === "MovesInvalidError") {
+    const issues = (error as { issues?: unknown }).issues;
+    throw new MovesInvalidError(
+      Array.isArray(issues) ? issues.map(String) : [message],
+    );
+  }
+  if (name === "MovesUnsupportedError") throw new MovesUnsupportedError();
   if (name === "EntryResolverUnavailableError") {
     throw new EntryResolverUnavailableError(message);
   }
@@ -389,7 +422,7 @@ export async function getWorkItem(id: string): Promise<WorkItemDto | null> {
   // Doltgres returns null, so unimported legacy IDs still resolve during transition.
   try {
     const item = await container.doltgresWorkItems.get(toWorkItemId(id));
-    if (item) return toDto(item);
+    if (item) return await withMoveReadings(toDto(item));
   } catch (e) {
     if ((e as Error)?.name !== "DoltgresNotConfiguredError") {
       rethrowBackendError(e);
@@ -428,10 +461,11 @@ export async function createWorkItem(
         ...(input.rank !== undefined && { rank: input.rank }),
         ...(input.estimate !== undefined && { estimate: input.estimate }),
         ...(input.scores !== undefined && { scores: input.scores }),
+        ...(input.moves !== undefined && { moves: input.moves }),
       },
       sessionUser.id,
     );
-    return toDto(created);
+    return await withMoveReadings(toDto(created));
   } catch (e) {
     rethrowBackendError(e);
   }
@@ -457,7 +491,7 @@ export async function patchWorkItem(
       sessionUser.id,
     );
     if (!patched) throw new WorkItemNotFoundError(input.id);
-    return toDto(patched);
+    return await withMoveReadings(toDto(patched));
   } catch (e) {
     rethrowBackendError(e);
   }

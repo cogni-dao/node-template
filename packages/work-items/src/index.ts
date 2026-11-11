@@ -44,8 +44,36 @@ export {
   workItemsHistoryOperation
 } from "./history-contract.js";
 export type { WorkItemPatchInput } from "./patch-contract.js";
+export type {
+  JudgedMove,
+  MetricBaselinePort,
+  MoveDirection,
+  MoveInput,
+  MoveReading,
+  MoveReadingPort,
+  MovedState,
+  MoveUnknownReason,
+  WorkItemMove
+} from "./moves.js";
+export {
+  judgeMove,
+  judgeMoves,
+  MOVE_METRIC_ID_MAX,
+  MOVE_OBSERVATION_ID_PATTERN,
+  MOVES_DEADLINE_MS,
+  MOVES_MAX,
+  MetricBaselineUnavailableError,
+  MoveMetricGoneError,
+  MovesInvalidError,
+  MovesUnsupportedError,
+  moveIssues,
+  parseStoredMoves,
+  pinMoves
+} from "./moves.js";
 export {
   CiteRefSchema,
+  MoveInputSchema,
+  WorkItemMovesInputSchema,
   WorkItemPatchInputSchema,
   WorkItemPatchStatusSchema,
   WorkItemScoresInputSchema

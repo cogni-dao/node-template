@@ -19,6 +19,8 @@
  *     becomes the ai-tools `WorkItemPatchConflictError`, nothing written. The markdown ports CAS on the
  *     revision they re-read (`current.revision`, a content hash, not the integer the tool exposes),
  *     so a caller `expectedRevision` there is refused, never silently dropped.
+ *   - MOVES_READ_AT_READ_TIME (story.0033): a read that returns exactly one item (core__work_item_read) adds each move's baseline,
+ *     current reading and verdict from `moveReadings`; a list read returns the stored moves only, so a page costs no metric lookup.
  * Side-effects: none (factory only)
  * Links: docs/spec/development-lifecycle.md
  * @internal
@@ -39,7 +41,8 @@ import type {
   WorkItemStatus,
   WorkItemType,
 } from "@cogni/work-items";
-import { toWorkItemDto, toWorkItemId } from "@cogni/work-items";
+import type { MoveReadingPort } from "@cogni/work-items";
+import { judgeMoves, toWorkItemDto, toWorkItemId } from "@cogni/work-items";
 import {
   WorkItemRevisionConflictError,
   type WorkItemsDoltgresPort,
@@ -62,6 +65,8 @@ export interface WorkItemCapabilityDeps {
    * PATCH_ON_THE_LIVE_BACKLOG: the node's Doltgres work-item store. When set, `patch`
    * writes there as `principalId` (with caller compare-and-set) instead of the markdown ports.
    */
+  /** Reads the metrics a single item moves; absent means no metrics service (every move reads `unknown`). */
+  readonly moveReadings?: MoveReadingPort | undefined;
   readonly backlogWriter?: {
     readonly store: Pick<WorkItemsDoltgresPort, "patch">;
     readonly principalId: string | (() => string);
@@ -115,10 +120,19 @@ export function createWorkItemCapability(
     });
   }
 
+  /** A one-item read gets each move judged from its observations (bounded: at most 3 moves). */
+  async function withMoveReadings(
+    items: readonly WorkItemInfo[],
+  ): Promise<readonly WorkItemInfo[]> {
+    const only = items.length === 1 ? items[0] : undefined;
+    if (!only?.moves?.length) return items;
+    return [{ ...only, moves: await judgeMoves(only.moves, deps.moveReadings) }];
+  }
+
   return {
     async query(params): Promise<readonly WorkItemInfo[]> {
       const result = await list(params);
-      return result.items.map(toWorkItemInfo);
+      return withMoveReadings(result.items.map(toWorkItemInfo));
     },
 
     /** Paginated read: a complete backlog snapshot follows `nextCursor` to the end. */

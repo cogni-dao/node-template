@@ -16,6 +16,7 @@
  * @internal
  */
 
+import { WorkItemMovesInputSchema } from "@cogni/work-items";
 import { z } from "zod";
 
 import {
@@ -65,6 +66,8 @@ export const workItemsCreateOperation = {
     rank: z.number().int().optional(),
     estimate: z.number().int().optional(),
     scores: WorkItemScoresInputSchema.optional(),
+    // story.0033: a new item names the metrics it moves when it is filed. The server pins each baseline.
+    moves: WorkItemMovesInputSchema.optional(),
     labels: z.array(z.string()).optional(),
     specRefs: z.array(z.string()).optional(),
     assignees: z.array(SubjectRefSchema).optional(),

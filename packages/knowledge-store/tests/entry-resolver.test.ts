@@ -24,6 +24,8 @@ const HEAD_OTHER = "b".repeat(32);
 
 interface World {
   main: string[];
+  /** Ids on main that hold a metric spec and are not deprecated (story.0033). */
+  metrics?: string[];
   inboxes: Record<string, { state: string; head: string | null; ids: string[] }>;
 }
 
@@ -32,6 +34,16 @@ function fakeSql(world: World) {
   const unsafe = async (query: string) => {
     queries.push(query);
     if (query.startsWith("SELECT dolt_hashof('main')")) return [{ hash: MAIN }];
+    const metric =
+      /^SELECT id FROM knowledge AS OF '([^']+)' WHERE id IN \((.*)\) AND metric_spec IS NOT NULL AND status <> 'deprecated'$/.exec(
+        query
+      );
+    if (metric) {
+      const [, commit, list] = metric;
+      const asked = [...(list as string).matchAll(/'((?:[^']|'')*)'/g)].map((m) => m[1] as string);
+      const held = commit === MAIN ? (world.metrics ?? []) : [];
+      return asked.filter((id) => held.includes(id)).map((id) => ({ id }));
+    }
     const asOf = /^SELECT id FROM knowledge AS OF '([^']+)' WHERE id IN \((.*)\)$/.exec(query);
     if (asOf) {
       const [, commit, list] = asOf;
@@ -184,5 +196,75 @@ describe("createDoltgresEntryResolver", () => {
     await expect(
       createDoltgresEntryResolver(sql).resolve([], "other" as never, signal())
     ).rejects.toThrow(/rule/);
+  });
+
+  describe("rule metric (story.0033)", () => {
+    const metricWorld = (): World => ({
+      ...world(),
+      metrics: ["convergence-ratio", "deploy-first-try-7d"],
+    });
+
+    it("pins a registered metric on main to the hash the read used", async () => {
+      const { sql, queries } = fakeSql(metricWorld());
+      const out = await createDoltgresEntryResolver(sql).resolve(
+        [{ id: "convergence-ratio" }, { id: "deploy-first-try-7d" }],
+        "metric",
+        signal()
+      );
+      expect(out).toEqual([
+        { id: "convergence-ratio", commit: MAIN, plane: "main" },
+        { id: "deploy-first-try-7d", commit: MAIN, plane: "main" },
+      ]);
+      expect(queries[0]).toBe("SELECT dolt_hashof('main') AS hash");
+      expect(queries[1]).toContain(`AS OF '${MAIN}'`);
+      expect(queries[1]).toContain("metric_spec IS NOT NULL");
+      expect(queries[1]).toContain("status <> 'deprecated'");
+    });
+
+    it.each([
+      // An atom with no metric spec, a deprecated metric and an absent id all read as not in the live set.
+      ["an atom that holds no metric spec", [{ id: "change-history-design" }], ["change-history-design"]],
+      ["a deprecated metric", [{ id: "old-deprecated-metric" }], ["old-deprecated-metric"]],
+      ["an unknown id", [{ id: "ghost" }], ["ghost"]],
+      ["an inbox ref, which has no meaning for a metric", [{ id: "convergence-ratio", contribution: "contrib-open" }], ["convergence-ratio"]],
+    ])("%s is EntryUnresolvedError by id", async (_name, refs, ids) => {
+      const { sql } = fakeSql(metricWorld());
+      const attempt = createDoltgresEntryResolver(sql).resolve(refs, "metric", signal());
+      await expect(attempt).rejects.toBeInstanceOf(EntryUnresolvedError);
+      await expect(attempt).rejects.toMatchObject({ ids });
+    });
+
+    it("lists every unresolved id and still pins none", async () => {
+      const { sql } = fakeSql(metricWorld());
+      await expect(
+        createDoltgresEntryResolver(sql).resolve(
+          [{ id: "ghost-a" }, { id: "convergence-ratio" }, { id: "ghost-b" }],
+          "metric",
+          signal()
+        )
+      ).rejects.toMatchObject({ ids: ["ghost-a", "ghost-b"] });
+    });
+
+    it("reads only dolt_hashof and AS OF: no checkout, no dolt_diff()", async () => {
+      const { sql, queries } = fakeSql(metricWorld());
+      await createDoltgresEntryResolver(sql).resolve([{ id: "convergence-ratio" }], "metric", signal());
+      expect(queries.join("\n")).not.toMatch(/dolt_checkout|dolt_diff\(/);
+    });
+
+    it("escapes the id and stops on an aborted signal", async () => {
+      const quote = fakeSql(metricWorld());
+      await expect(
+        createDoltgresEntryResolver(quote.sql).resolve([{ id: "a'b" }], "metric", signal())
+      ).rejects.toBeInstanceOf(EntryUnresolvedError);
+      expect(quote.queries[1]).toContain("'a''b'");
+
+      const { sql, queries } = fakeSql(metricWorld());
+      const controller = new AbortController();
+      controller.abort();
+      await expect(
+        createDoltgresEntryResolver(sql).resolve([{ id: "convergence-ratio" }], "metric", controller.signal)
+      ).rejects.toThrow();
+      expect(queries).toHaveLength(0);
+    });
   });
 });

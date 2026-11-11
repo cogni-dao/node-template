@@ -14,11 +14,13 @@
  */
 
 import { WorkItemPatchConflictError } from "@cogni/ai-tools";
+import { MetricError } from "@cogni-dao/metrics/contracts";
 import { toWorkItemId, type WorkItem, type WorkItemCommandPort, type WorkItemQueryPort } from "@cogni/work-items";
 import { WorkItemRevisionConflictError } from "@cogni/work-items/adapters/doltgres";
 import { describe, expect, it, vi } from "vitest";
 
 import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
+import { createMoveMetricPorts } from "@/bootstrap/capabilities/work-item-moves";
 
 const storedItem: WorkItem = {
   id: toWorkItemId("task.5001"),
@@ -299,5 +301,71 @@ describe("createWorkItemCapability", () => {
       cap.patch({ reason: "test change", id: "task.5001", set: { scores: { goal: { v: 3 } } } })
     ).rejects.toThrow("actorUserId is required");
     expect(store.patch).not.toHaveBeenCalled();
+  });
+
+  // story.0033: a one-item read (core__work_item_read) judges each move; a page does not.
+  describe("moves at read time", () => {
+    const OBS = "11111111-1111-4111-8111-111111111111";
+    const withMoves: WorkItem = {
+      ...storedItem,
+      moves: [{ metricId: "m-1", direction: "up", baselineObservationId: OBS }],
+    };
+    const ok = (value: number) => ({ id: OBS, status: "ok", value, observedAt: "2026-11-10T00:00:00.000Z" });
+    const metrics = (baseline: number, current: number) => ({
+      observation: vi.fn().mockResolvedValue({ observation: ok(baseline) }),
+      read: vi.fn().mockResolvedValue({ lastGood: ok(current) }),
+    });
+    const capability = (items: WorkItem[], service: ReturnType<typeof metrics> | undefined) =>
+      createWorkItemCapability({
+        workItemQuery: {} as WorkItemQueryPort,
+        workItemCommand: {} as WorkItemCommandPort,
+        backlogReader: {
+          list: vi.fn().mockResolvedValue({ items, pageInfo: { endCursor: null, hasMore: false } }),
+        } as unknown as Pick<WorkItemQueryPort, "list">,
+        moveReadings: createMoveMetricPorts(() => service as never).readings,
+      });
+
+    it("a read that returns one item adds the baseline, current reading and verdict", async () => {
+      const service = metrics(1, 3);
+      const [item] = await capability([withMoves], service).query({ ids: ["task.5001"], limit: 1 });
+      expect(item?.moves).toEqual([
+        {
+          metricId: "m-1",
+          direction: "up",
+          baselineObservationId: OBS,
+          baseline: { value: 1, observedAt: "2026-11-10T00:00:00.000Z" },
+          current: { value: 3, observedAt: "2026-11-10T00:00:00.000Z" },
+          moved: "as_declared",
+        },
+      ]);
+      expect(service.observation).toHaveBeenCalledTimes(1);
+      expect(service.read).toHaveBeenCalledTimes(1);
+    });
+
+    it("a page of items returns the stored moves and looks up nothing", async () => {
+      const service = metrics(1, 3);
+      const items = await capability([withMoves, { ...withMoves, id: toWorkItemId("task.5002") }], service).query({});
+      expect(items.map((item) => item.moves)).toEqual([
+        [{ metricId: "m-1", direction: "up", baselineObservationId: OBS }],
+        [{ metricId: "m-1", direction: "up", baselineObservationId: OBS }],
+      ]);
+      expect(service.observation).not.toHaveBeenCalled();
+      expect(service.read).not.toHaveBeenCalled();
+    });
+
+    it("a deprecated metric (metric_not_found) reads unknown with metric_deprecated", async () => {
+      const service = {
+        observation: vi.fn().mockRejectedValue(new MetricError("metric_not_found", 404)),
+        read: vi.fn(),
+      };
+      const [item] = await capability([withMoves], service as never).query({ ids: ["task.5001"] });
+      expect(item?.moves?.[0]).toMatchObject({ moved: "unknown", unknownReason: "metric_deprecated" });
+      expect(service.read).not.toHaveBeenCalled();
+    });
+
+    it("with no metrics service the move reads unknown", async () => {
+      const [item] = await capability([withMoves], undefined).query({ ids: ["task.5001"] });
+      expect(item?.moves?.[0]).toMatchObject({ moved: "unknown" });
+    });
   });
 });

@@ -26,7 +26,7 @@ export interface ResolvedEntry {
   readonly contribution?: string | undefined;
 }
 
-export type EntryResolverRule = "cite";
+export type EntryResolverRule = "cite" | "metric";
 
 export interface EntryResolver {
   resolve(
@@ -36,7 +36,7 @@ export interface EntryResolver {
   ): Promise<readonly ResolvedEntry[]>;
 }
 
-/** An unknown id, or an inbox that is closed or does not hold the id. */
+/** An unknown id, or an inbox that is closed or does not hold the id; under rule `"metric"`, an id with no metric spec or a deprecated one. */
 export class EntryUnresolvedError extends Error {
   readonly code = "cite_unresolved" as const;
   constructor(readonly ids: readonly string[]) {

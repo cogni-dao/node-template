@@ -37,6 +37,9 @@ vi.mock("@/app/_facades/work/items.server", async () => {
     CitesUnsupportedError: class extends Error {},
     EntryResolverUnavailableError: class extends Error {},
     EntryUnresolvedError: class extends Error {},
+    MetricBaselineUnavailableError: class extends Error {},
+    MovesInvalidError: class extends Error {},
+    MovesUnsupportedError: class extends Error {},
   };
 });
 

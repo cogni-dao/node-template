@@ -406,9 +406,13 @@ export class MarkdownWorkItemAdapter
     assignees?: SubjectRef[];
     node?: string;
     scores?: WorkItemScores;
+    moves?: readonly unknown[];
   }): Promise<WorkItem> {
     if (input.scores !== undefined) {
       throw new UnsupportedWorkItemFieldError("scores");
+    }
+    if (input.moves !== undefined) {
+      throw new UnsupportedWorkItemFieldError("moves");
     }
     const { id, numStr } = await allocateNextId(this.workDir, input.type);
     const slug = slugify(input.title);
@@ -479,10 +483,14 @@ export class MarkdownWorkItemAdapter
         | "reviewer"
         | "node"
       >
-    > & { scores?: WorkItemScores | null };
+    > & { scores?: WorkItemScores | null; moves?: readonly unknown[] };
   }): Promise<WorkItem> {
     if (input.set?.scores !== undefined) {
       throw new UnsupportedWorkItemFieldError("scores");
+    }
+    // Doltgres-only (story.0033): a silent drop would be a false success.
+    if (input.set?.moves !== undefined) {
+      throw new UnsupportedWorkItemFieldError("moves");
     }
     const entry = await findById(this.workDir, input.id);
     if (!entry) throw new Error(`Work item not found: ${input.id as string}`);

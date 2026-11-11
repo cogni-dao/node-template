@@ -8,6 +8,7 @@
  * Invariants: VALIDATE_IO, CONTRACTS_ARE_TRUTH, AUTH_VIA_GETSESSIONUSER, PATCH_ALLOWLIST, DURABLE_IDENTITY_NEVER_REUSED.
  * Evaluation: shared score validation failures return HTTP400 with typed issues.
  * Reason + cites (task.0086): a missing or over-cap reason is HTTP400 `invalid input` with an issue at `reason`; an unknown cite id or a closed inbox is HTTP400 `cite_unresolved`; cites with no resolver wired is HTTP400 `cites_unsupported`; a resolver failure is HTTP503. Nothing is written in each case.
+ * Moves (story.0033): `set.moves` with an unknown or deprecated metric id is HTTP400 `cite_unresolved` with an issue at `set.moves`; a bad list is HTTP400 `invalid input`; a non-empty list with no metric wiring is HTTP400 `moves_unsupported`; a resolver failure is HTTP503 `cite_resolver_unavailable`; a baseline failure is HTTP503 `metric_baseline_unavailable`. The client never sets a baseline: the server pins it.
  * Side-effects: IO (HTTP response, filesystem read via port, Doltgres read/write/delete)
  * Links: contracts/work.items.{get,patch,delete}.v1.contract
  * @public
@@ -24,8 +25,6 @@ import {
   ChangeReasonInvalidError,
   CitesInvalidError,
   CitesUnsupportedError,
-  EntryResolverUnavailableError,
-  EntryUnresolvedError,
   getWorkItem,
   NodeAdminRequiredError,
   patchWorkItem,
@@ -37,6 +36,7 @@ import {
   WorkItemWriteOutcomeUnknownError,
 } from "@/app/_facades/work/items.server";
 import { getSessionUser } from "@/app/_lib/auth/session";
+import { inputErrorResponse } from "../_input-errors";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 
 export const dynamic = "force-dynamic";
@@ -172,21 +172,8 @@ export const PATCH = wrapRouteHandlerWithLogging<{
           { status: 400 }
         );
       }
-      if (e instanceof EntryUnresolvedError) {
-        return NextResponse.json(
-          {
-            error: "invalid input",
-            errorCode: e.code,
-            ids: e.ids,
-            issues: e.ids.map((cited) => ({
-              code: "custom",
-              path: ["cites"],
-              message: `cited entry not found: ${cited}`,
-            })),
-          },
-          { status: 400 }
-        );
-      }
+      const input = inputErrorResponse(e, ["set"]);
+      if (input) return input;
       if (e instanceof CitesUnsupportedError) {
         return NextResponse.json(
           {
@@ -195,12 +182,6 @@ export const PATCH = wrapRouteHandlerWithLogging<{
             issues: [{ code: "custom", path: ["cites"], message: e.message }],
           },
           { status: 400 }
-        );
-      }
-      if (e instanceof EntryResolverUnavailableError) {
-        return NextResponse.json(
-          { error: "cites_unavailable", errorCode: e.code, message: e.message },
-          { status: 503 }
         );
       }
       if (e instanceof WorkItemNotFoundError) {
