@@ -288,6 +288,13 @@
       "when": 1794348431341,
       "tag": "0040_agent_credentials_key_upgrade",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1794425666737,
+      "tag": "0041_agent_service_enrollments",
+      "breakpoints": true
     }
   ]
 }

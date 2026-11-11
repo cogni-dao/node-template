@@ -45,6 +45,11 @@ export const agentPrincipals = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     kind: text("kind").notNull(),
     slug: text("slug"),
+    /**
+     * `<issuer origin>#<service>` for a principal made by a service enrollment (story.0038): ONE principal per (issuer, service). Null for every
+     * other principal. The knowledge read door treats a principal with a service key as a gated service (an ask the admin must turn on).
+     */
+    serviceKey: text("service_key"),
     userId: text("user_id")
       .notNull()
       .references(() => users.id),
@@ -62,6 +67,7 @@ export const agentPrincipals = pgTable(
       sql`${table.kind} <> 'internal' OR ${table.slug} IS NOT NULL`
     ),
     uniqueIndex("agent_principals_slug_unique").on(table.slug),
+    uniqueIndex("agent_principals_service_key_unique").on(table.serviceKey),
     uniqueIndex("agent_principals_user_id_unique").on(table.userId),
     // Read-only for every role: slug and seeded user id are not secret, and the wallet-binding trigger must see
     // them whichever role binds. Writes stay deny-all for the app role (no write policy; FORCE RLS).
@@ -132,7 +138,7 @@ export const agentCredentials = pgTable(
     }),
     check(
       "agent_credentials_created_from_canonical",
-      sql`${table.createdFrom} IN ('spawn_grant','rotation','key_upgrade','binding_recovery','recovery_grant')`
+      sql`${table.createdFrom} IN ('spawn_grant','rotation','key_upgrade','binding_recovery','recovery_grant','service_enrollment')`
     ),
     check(
       "agent_credentials_renew_after_expiry",
