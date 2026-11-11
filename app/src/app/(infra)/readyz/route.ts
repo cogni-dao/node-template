@@ -32,7 +32,6 @@ import {
   httpRequestsTotal,
   logRequestEnd,
   makeLogger,
-  type RequestContext,
   statusBucket,
 } from "@/shared/observability";
 import { setBuildInfo } from "@/shared/observability/server/metrics";
@@ -40,32 +39,21 @@ import { buildDeepChecks, deepRuntime } from "./readyz-probes";
 
 export const dynamic = "force-dynamic";
 
-/**
- * Logs readiness check failure with structured context.
- * Called before returning 503 to ensure failures are visible in deployment logs.
- */
-function logReadinessFailure(
-  ctx: RequestContext,
-  error:
-    | EnvValidationError
-    | RuntimeSecretError
-    | InfraConnectivityError
-    | Error,
-): void {
-  const errorCode =
-    error instanceof EnvValidationError
-      ? "INVALID_ENV"
-      : error instanceof RuntimeSecretError
-        ? "MISSING_RUNTIME_SECRET"
-        : error instanceof InfraConnectivityError
-          ? "INFRA_UNREACHABLE"
-          : "INTERNAL_ERROR";
-  ctx.log.error({ errorCode }, "readiness check failed");
+/** Classify diagnostics without retaining or logging the original error. */
+function readinessErrorCode(error: unknown): string {
+  return error instanceof EnvValidationError
+    ? "INVALID_ENV"
+    : error instanceof RuntimeSecretError
+      ? "MISSING_RUNTIME_SECRET"
+      : error instanceof InfraConnectivityError
+        ? "INFRA_UNREACHABLE"
+        : "INTERNAL_ERROR";
 }
 
 export async function GET(request: Request): Promise<NextResponse> {
   let start = 0;
   let status = 500;
+  let errorCode: string | undefined;
   let settledResponse: NextResponse | undefined;
   let log: ReturnType<typeof makeLogger> | undefined;
   try {
@@ -128,8 +116,10 @@ export async function GET(request: Request): Promise<NextResponse> {
           runtime: safeRuntime,
           onFailure: (error) => {
             try {
-              logReadinessFailure(ctx, error as Error);
-            } catch {}
+              errorCode = readinessErrorCode(error);
+            } catch {
+              errorCode = "INTERNAL_ERROR";
+            }
           },
           describeError: (error) => {
             if (error instanceof EnvValidationError)
@@ -155,14 +145,21 @@ export async function GET(request: Request): Promise<NextResponse> {
   } catch {
     if (settledResponse) return settledResponse;
     status = 500;
-    try {
-      log?.error({ errorCode: "INTERNAL_SERVER_ERROR" }, "request failed");
-    } catch {}
+    errorCode = "INTERNAL_SERVER_ERROR";
     return new NextResponse(
       JSON.stringify({ status: "error", reason: "INTERNAL_ERROR" }),
       { status: 500, headers: { "content-type": "application/json" } },
     );
   } finally {
+    try {
+      if (errorCode)
+        log?.error(
+          { errorCode },
+          errorCode === "INTERNAL_SERVER_ERROR"
+            ? "request failed"
+            : "readiness check failed",
+        );
+    } catch {}
     let durationMs = 0;
     try {
       durationMs = performance.now() - start;

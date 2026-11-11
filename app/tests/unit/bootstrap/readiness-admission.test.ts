@@ -46,6 +46,8 @@ vi.mock("@/shared/env/invariants", async (original) => ({
 }));
 
 import { GET } from "@/app/(infra)/readyz/route";
+import { NextResponse } from "next/server";
+import * as metrics from "@/shared/observability/server/metrics";
 import {
   resetStartupAssertionsForTest,
   startSystemTenantAssertionOnBoot,
@@ -434,6 +436,109 @@ describe("readiness admission", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ status: "healthy" });
   });
+  it("bounds diagnostics when failed deep response construction throws", async () => {
+    vi.stubEnv("VITEST", "false");
+    vi.stubEnv("NODE_ENV", "production");
+    const sentinel = "RESPONSE_PRIVATE_SENTINEL";
+    const pushed = vi.fn<typeof fetch>(
+      async () => new Response(null, { status: 204 }),
+    );
+    const stream = createLokiPushStream({
+      env: { LOKI_PUSH_URL: "https://logs.invalid" },
+      fetchFn: pushed,
+    });
+    globalLoki.__cogniLokiPushInit = true;
+    globalLoki.__cogniLokiPushStream = stream;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({ data: [{ model_name: "test-model" }] }),
+      ),
+    );
+    mocks.getContainer.mockReturnValue({
+      evmOnchainClient: {},
+      scheduleControl: {},
+      serviceAccountService: {},
+      runStream: { streamLength: vi.fn().mockResolvedValue(0) },
+    });
+    mocks.evm.mockResolvedValue({
+      ok: false,
+      source: "live",
+      errorMessage: sentinel,
+    });
+    vi.spyOn(NextResponse, "json").mockImplementationOnce(() => {
+      throw new Error(sentinel);
+    });
+    const response = await GET(new Request("http://localhost/readyz?deep=1"));
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({
+      status: "error",
+      reason: "INTERNAL_ERROR",
+    });
+    expect(pushed).not.toHaveBeenCalled();
+    stream?.flushNow();
+    const payload = JSON.parse(pushed.mock.calls[0]?.[1]?.body as string);
+    expect(JSON.stringify(payload)).not.toContain(sentinel);
+    const logs = payload.streams[0].values.map((entry: [string, string]) =>
+      JSON.parse(entry[1]),
+    );
+    expect(logs.length).toBeLessThanOrEqual(3);
+    expect(
+      logs.filter((line: { errorCode?: string }) => line.errorCode),
+    ).toEqual([
+      expect.objectContaining({ errorCode: "INTERNAL_SERVER_ERROR" }),
+    ]);
+    expect(
+      logs.filter(
+        (line: { event?: string }) => line.event === "substrate.deep.complete",
+      ),
+    ).toHaveLength(1);
+    expect(
+      logs.filter((line: { msg?: string }) => line.msg === "request complete"),
+    ).toEqual([
+      expect.objectContaining({ status: 500, durationMs: expect.any(Number) }),
+    ]);
+  });
+  it.each(["healthy", "failed-deep"] as const)(
+    "ignores build-info emission failure for %s",
+    async (scenario) => {
+      vi.spyOn(metrics, "setBuildInfo").mockImplementation(() => {
+        throw new Error("BUILD_INFO_SENTINEL");
+      });
+      if (scenario === "failed-deep") {
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async () =>
+            Response.json({ data: [{ model_name: "test-model" }] }),
+          ),
+        );
+        mocks.getContainer.mockReturnValue({
+          evmOnchainClient: {},
+          scheduleControl: {},
+          serviceAccountService: {},
+          runStream: { streamLength: vi.fn().mockResolvedValue(0) },
+        });
+        mocks.evm.mockResolvedValue({
+          ok: false,
+          source: "live",
+          errorMessage: "rpc down",
+        });
+      }
+      const response = await GET(
+        new Request(
+          `http://localhost/readyz${scenario === "failed-deep" ? "?deep=1" : ""}`,
+        ),
+      );
+      const body = await response.json();
+      expect(response.status).toBe(scenario === "healthy" ? 200 : 503);
+      expect(body.buildSha).toBe("test-sha");
+      if (scenario === "failed-deep")
+        expect(body).toMatchObject({
+          unreachable: ["evm-rpc"],
+          checks: { "evm-rpc": { status: "failed" } },
+        });
+    },
+  );
   it("does not let real Redis emit its native error stack", () => {
     const consoleError = vi
       .spyOn(console, "error")
