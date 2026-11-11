@@ -187,11 +187,8 @@ describe("GET /readyz async substrate contract", () => {
       { forceLive: true },
     );
     expect(mocks.error).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: "substrate.evm_rpc.unreachable",
-        severity: "critical",
-      }),
-      "deep readiness: EVM RPC unreachable",
+      { errorCode: "INFRA_UNREACHABLE" },
+      "readiness check failed",
     );
   });
 
@@ -201,10 +198,12 @@ describe("GET /readyz async substrate contract", () => {
     expect(response.status).toBe(200);
     expect(mocks.info).toHaveBeenCalledWith(
       expect.objectContaining({
-        event: "substrate.evm_rpc.reachable",
-        dependency: "evm-rpc",
+        event: "substrate.deep.complete",
+        checks: expect.objectContaining({
+          "evm-rpc": expect.objectContaining({ status: "ok" }),
+        }),
       }),
-      "deep readiness: EVM RPC reachable",
+      "deep readiness: checks complete",
     );
   });
 

@@ -78,7 +78,7 @@ export function deepRuntime(ctx: RequestContext): DeepRuntime {
     log: (fields, message) => ctx.log.info(fields, message),
     timeoutError: (dependency, budgetMs) =>
       new InfraConnectivityError(
-        `${dependency} check exceeded ${budgetMs}ms budget`
+        `${dependency} check exceeded ${budgetMs}ms budget`,
       ),
     budgetMs: DEEP_CHECK_BUDGET_MS,
   };
@@ -87,47 +87,28 @@ export function deepRuntime(ctx: RequestContext): DeepRuntime {
 /** Run every declared check concurrently with this node's runtime. */
 export async function runDeepChecks(
   ctx: RequestContext,
-  checks: ReadonlyArray<readonly [DeepDependency, () => Promise<unknown>]>
+  checks: ReadonlyArray<readonly [DeepDependency, () => Promise<unknown>]>,
 ): Promise<DeepChecks> {
   return pkgRunDeepChecks(checks, deepRuntime(ctx));
 }
 
 /** Forced live EVM RPC read; fatal on failure. */
 async function checkEvmRpc(
-  ctx: RequestContext,
+  _ctx: RequestContext,
   container: Container,
-  env: Env
+  env: Env,
 ): Promise<void> {
   const result = await checkEvmRpcConnectivity(
     container.evmOnchainClient,
     env,
     {
       forceLive: true,
-    }
+    },
   );
   if (!result.ok) {
     const message = `EVM RPC connectivity check failed: ${result.errorMessage ?? "unknown"}`;
-    ctx.log.error(
-      {
-        event: "substrate.evm_rpc.unreachable",
-        severity: "critical",
-        reason: "INFRA_UNREACHABLE",
-        dependency: "evm-rpc",
-        source: result.source,
-        message,
-      },
-      "deep readiness: EVM RPC unreachable"
-    );
     throw new InfraConnectivityError(message);
   }
-  ctx.log.info(
-    {
-      event: "substrate.evm_rpc.reachable",
-      dependency: "evm-rpc",
-      source: result.source,
-    },
-    "deep readiness: EVM RPC reachable"
-  );
 }
 
 function checkDoltgres(container: Container, env: Env): Promise<void> {
@@ -136,8 +117,8 @@ function checkDoltgres(container: Container, env: Env): Promise<void> {
   if (!port) {
     return Promise.reject(
       new InfraConnectivityError(
-        "Doltgres is declared (DOLTGRES_URL set) but the knowledge store is not wired"
-      )
+        "Doltgres is declared (DOLTGRES_URL set) but the knowledge store is not wired",
+      ),
     );
   }
   return probeKnowledgePlane(port, DOLTGRES_READYZ_PROBE_ID, {
@@ -152,7 +133,7 @@ function checkLiteLlm(env: Env): Promise<void> {
       apiKey: env.LITELLM_MASTER_KEY,
       budgetMs: DEEP_CHECK_BUDGET_MS,
     },
-    { wrapError: wrapInfra }
+    { wrapError: wrapInfra },
   )();
 }
 
@@ -172,7 +153,7 @@ type SubstrateName =
 type ProbeRun = (
   ctx: RequestContext,
   container: Container,
-  env: Env
+  env: Env,
 ) => Promise<unknown>;
 
 type SubstrateDependency = PkgSubstrateDependency<
@@ -183,7 +164,7 @@ type SubstrateDependency = PkgSubstrateDependency<
 >;
 
 function isProbe(
-  dep: SubstrateDependency
+  dep: SubstrateDependency,
 ): dep is PkgProbeDependency<Env, DeepDependency, ProbeRun> {
   return dep.readyz.kind === "probe";
 }
@@ -299,7 +280,7 @@ export const SUBSTRATE_DEPENDENCIES: readonly SubstrateDependency[] = [
 export function buildDeepChecks(
   ctx: RequestContext,
   container: Container,
-  env: Env
+  env: Env,
 ): ReadonlyArray<readonly [DeepDependency, () => Promise<unknown>]> {
   const checks: Array<readonly [DeepDependency, () => Promise<unknown>]> = [];
   for (const dep of SUBSTRATE_DEPENDENCIES) {
@@ -321,7 +302,7 @@ export const NON_SUBSTRATE_ALLOWLIST: readonly string[] = [
 
 /** Drift guard: every substrate-looking schema key owned by no map entry and not allowlisted. */
 export function findUnclassifiedSubstrateKeys(
-  schemaKeys: readonly string[]
+  schemaKeys: readonly string[],
 ): string[] {
   const classifiedKeys = SUBSTRATE_DEPENDENCIES.flatMap((dep) => [
     ...dep.envKeys,

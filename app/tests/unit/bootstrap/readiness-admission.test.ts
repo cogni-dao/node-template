@@ -10,6 +10,10 @@ const mocks = vi.hoisted(() => ({
   verify: vi.fn(),
   sdkStart: vi.fn(),
   sdkOptions: vi.fn(),
+  env: vi.fn(),
+  evm: vi.fn(),
+  temporal: vi.fn(),
+  scheduler: vi.fn(),
 }));
 vi.mock("@/bootstrap/local-readiness-preflight", () => ({
   localReadinessPreflight: mocks.preflight,
@@ -30,13 +34,15 @@ vi.mock("@opentelemetry/sdk-node", () => ({
 vi.mock("@/bootstrap/healthchecks", () => ({
   verifySystemTenant: mocks.verify,
 }));
-vi.mock("@/app/(infra)/readyz/readyz-probes", () => ({
-  buildDeepChecks: vi.fn(() => []),
-  deepRuntime: () => ({
-    log: () => {},
-    budgetMs: 3000,
-    timeoutError: () => new Error("timeout"),
-  }),
+vi.mock("@/shared/env", async (original) => ({
+  ...(await original<typeof import("@/shared/env")>()),
+  serverEnv: mocks.env,
+}));
+vi.mock("@/shared/env/invariants", async (original) => ({
+  ...(await original<typeof import("@/shared/env/invariants")>()),
+  checkEvmRpcConnectivity: mocks.evm,
+  assertTemporalConnectivity: mocks.temporal,
+  assertSchedulerWorkerConnectivity: mocks.scheduler,
 }));
 
 import { GET } from "@/app/(infra)/readyz/route";
@@ -65,11 +71,22 @@ beforeEach(() => {
   resetStartupAssertionsForTest();
   mocks.preflight.mockReturnValue({ APP_BUILD_SHA: "test-sha" });
   mocks.getNodeId.mockReturnValue("node-123");
+  mocks.env.mockReturnValue({
+    APP_BUILD_SHA: "test-sha",
+    LITELLM_BASE_URL: "http://test.invalid",
+    LITELLM_MASTER_KEY: "test",
+  });
+  mocks.evm.mockResolvedValue({ ok: true, source: "live" });
+  mocks.temporal.mockResolvedValue(undefined);
+  mocks.scheduler.mockResolvedValue(undefined);
+  mocks.verify.mockResolvedValue(undefined);
 });
 afterEach(() => {
   delete globalLoki.__cogniLokiPushInit;
   delete globalLoki.__cogniLokiPushStream;
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 describe("readiness admission", () => {
@@ -122,6 +139,111 @@ describe("readiness admission", () => {
       status: 503,
     });
   });
+  it.each([
+    "healthy",
+    "evm-failed",
+    "multiple",
+    "timeout",
+    "unexpected",
+  ] as const)(
+    "deep readiness logs safely within budget: %s",
+    async (scenario) => {
+      vi.stubEnv("VITEST", "false");
+      vi.stubEnv("NODE_ENV", "production");
+      const sentinel = "READINESS_PRIVATE_SENTINEL";
+      const pushed = vi.fn<typeof fetch>(
+        async () => new Response(null, { status: 204 }),
+      );
+      const stream = createLokiPushStream({
+        env: { LOKI_PUSH_URL: "https://logs.invalid" },
+        fetchFn: pushed,
+      });
+      globalLoki.__cogniLokiPushInit = true;
+      globalLoki.__cogniLokiPushStream = stream;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          Response.json({ data: [{ model_name: "test-model" }] }),
+        ),
+      );
+      mocks.getContainer.mockReturnValue({
+        evmOnchainClient: {},
+        scheduleControl: {},
+        serviceAccountService: {},
+        runStream: { streamLength: vi.fn().mockResolvedValue(0) },
+      });
+      if (scenario === "evm-failed" || scenario === "multiple")
+        mocks.evm.mockResolvedValue({
+          ok: false,
+          source: "live",
+          errorMessage: sentinel,
+        });
+      if (scenario === "multiple")
+        mocks.temporal.mockRejectedValue(new Error(sentinel));
+      if (scenario === "timeout") {
+        vi.useFakeTimers();
+        mocks.temporal.mockReturnValue(new Promise(() => {}));
+      }
+      if (scenario === "unexpected")
+        mocks.getNodeId.mockImplementation(() => {
+          throw new Error(sentinel);
+        });
+      const promise = GET(
+        new Request("http://localhost/readyz?deep=1", {
+          headers: { "x-request-id": "deep-123" },
+        }),
+      );
+      if (scenario === "timeout") await vi.advanceTimersByTimeAsync(3001);
+      if (scenario === "unexpected") {
+        const response = await promise;
+        expect(response.status).toBe(500);
+        expect(await response.json()).toEqual({
+          status: "error",
+          reason: "INTERNAL_ERROR",
+        });
+      } else {
+        const response = await promise;
+        const body = await response.json();
+        expect(response.status).toBe(scenario === "healthy" ? 200 : 503);
+        expect(body.buildSha).toBe("test-sha");
+        expect(body.checks).toBeDefined();
+        if (scenario === "evm-failed" || scenario === "multiple") {
+          expect(body.unreachable).toContain("evm-rpc");
+          expect(body.message).toContain(sentinel);
+        }
+        if (scenario === "multiple" || scenario === "timeout")
+          expect(body.unreachable).toContain("temporal");
+      }
+      stream?.flushNow();
+      const payload = JSON.parse(pushed.mock.calls[0]?.[1]?.body as string);
+      const logs = payload.streams[0].values.map((entry: [string, string]) =>
+        JSON.parse(entry[1]),
+      );
+      expect(JSON.stringify(logs)).not.toContain(sentinel);
+      expect(logs.length).toBeLessThanOrEqual(3);
+      expect(
+        logs.filter(
+          (x: { event?: string }) => x.event === "substrate.deep.complete",
+        ),
+      ).toHaveLength(scenario === "unexpected" ? 0 : 1);
+      expect(
+        logs.filter((x: { msg?: string }) => x.msg === "request complete"),
+      ).toEqual([
+        expect.objectContaining({
+          reqId: "deep-123",
+          status:
+            scenario === "healthy"
+              ? 200
+              : scenario === "unexpected"
+                ? 500
+                : 503,
+          durationMs: expect.any(Number),
+        }),
+      ]);
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    },
+  );
   it("the real local preflight refuses missing configuration without network IO", async () => {
     vi.stubEnv("APP_ENV", "test");
     vi.stubEnv("DATABASE_URL", "");

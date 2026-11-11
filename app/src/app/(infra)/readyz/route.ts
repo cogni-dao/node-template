@@ -31,8 +31,6 @@ import {
   httpRequestDurationMs,
   httpRequestsTotal,
   logRequestEnd,
-  logRequestError,
-  logRequestStart,
   makeLogger,
   type RequestContext,
   statusBucket,
@@ -54,45 +52,15 @@ function logReadinessFailure(
     | InfraConnectivityError
     | Error,
 ): void {
-  if (error instanceof EnvValidationError) {
-    ctx.log.error(
-      {
-        reason: error.meta.code,
-        missing: error.meta.missing,
-        invalid: error.meta.invalid,
-      },
-      "readiness check failed: invalid environment configuration",
-    );
-  } else if (error instanceof RuntimeSecretError) {
-    ctx.log.error(
-      {
-        reason: error.code,
-        message: error.message,
-      },
-      "readiness check failed: missing runtime secret",
-    );
-  } else if (error instanceof InfraConnectivityError) {
-    ctx.log.error(
-      {
-        reason: error.code,
-        message: error.message,
-      },
-      "readiness check failed: infrastructure unreachable",
-    );
-  } else {
-    // pg/drizzle errors wrap the driver error (with its SQLSTATE `code`) in `cause`.
-    const cause = (error as { cause?: { code?: unknown; message?: unknown } })
-      .cause;
-    ctx.log.error(
-      {
-        reason: "INTERNAL_ERROR",
-        error: error.message,
-        causeCode: cause?.code,
-        causeMessage: cause?.message,
-      },
-      "readiness check failed: internal error",
-    );
-  }
+  const errorCode =
+    error instanceof EnvValidationError
+      ? "INVALID_ENV"
+      : error instanceof RuntimeSecretError
+        ? "MISSING_RUNTIME_SECRET"
+        : error instanceof InfraConnectivityError
+          ? "INFRA_UNREACHABLE"
+          : "INTERNAL_ERROR";
+  ctx.log.error({ errorCode }, "readiness check failed");
 }
 
 export async function GET(request: Request): Promise<NextResponse> {
@@ -122,7 +90,6 @@ export async function GET(request: Request): Promise<NextResponse> {
           )
             throw error;
         }
-        logRequestStart(ctx.log);
         const deep = new URL(request.url).searchParams.get("deep") === "1";
         const result = await serveReadyz({
           deep,
@@ -157,9 +124,12 @@ export async function GET(request: Request): Promise<NextResponse> {
             : result.body;
         status = result.status;
         return NextResponse.json(body, { status });
-      } catch (error) {
-        logRequestError(ctx.log, error, "INTERNAL_SERVER_ERROR");
-        throw error;
+      } catch {
+        ctx.log.error({ errorCode: "INTERNAL_SERVER_ERROR" }, "request failed");
+        return NextResponse.json(
+          { status: "error", reason: "INTERNAL_ERROR" },
+          { status: 500 },
+        );
       } finally {
         const durationMs = performance.now() - start;
         logRequestEnd(ctx.log, { status, durationMs });
