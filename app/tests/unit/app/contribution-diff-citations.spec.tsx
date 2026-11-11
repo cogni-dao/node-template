@@ -77,10 +77,10 @@ describe("ContributionDiff citations", () => {
     expect(screen.getAllByText("a-entry")).toHaveLength(3);
     expect(within(section).getAllByRole("listitem")).toHaveLength(2);
     expect(
-      within(section).getByRole("link", { name: "added link: a-entry tracks task.0059" }).getAttribute("href")
+      within(section).getByRole("link", { name: "link + a-entry tracks task.0059" }).getAttribute("href")
     ).toBe("/work/items/task.0059");
     expect(
-      within(section).getByRole("link", { name: "removed link: a-entry supports b-entry" }).getAttribute("href")
+      within(section).getByRole("link", { name: "link − a-entry supports b-entry" }).getAttribute("href")
     ).toBe("/knowledge/b-entry");
     expect(screen.queryByText(/No changes detected/)).toBeNull();
   });
@@ -139,7 +139,7 @@ describe("ContributionDiff citations", () => {
     // The citing entry has its own card holding its link.
     expect(screen.getAllByText("frontend-development")).toHaveLength(2);
     expect(
-      screen.getByRole("link", { name: "added link: frontend-development extends agent-development" })
+      screen.getByRole("link", { name: "link + frontend-development extends agent-development" })
     ).toBeTruthy();
   });
 

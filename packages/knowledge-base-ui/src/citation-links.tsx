@@ -271,14 +271,10 @@ export interface CitationEdgeListProps {
   readonly className?: string;
 }
 
-/**
- * One entry's link changes inside its inbox card, one sentence per edge: badge,
- * the cited slug per row, in the same form as an entry's Links section.
- */
 const LINK_BADGE = {
-  added: { text: "link +", label: "added", className: "bg-success/15 text-success" },
-  removed: { text: "link −", label: "removed", className: "bg-destructive/15 text-destructive" },
-  modified: { text: "link ~", label: "changed", className: "bg-warning/15 text-warning" },
+  added: { text: "link +", className: "bg-success/15 text-success" },
+  removed: { text: "link −", className: "bg-destructive/15 text-destructive" },
+  modified: { text: "link ~", className: "bg-warning/15 text-warning" },
 } as const;
 
 /**
@@ -302,7 +298,7 @@ function CitationDiffRow({
       href={href}
       entityId={edge.citedId}
       title={edge.context?.trim() || edge.citedId}
-      aria-label={`${badge.label} link: ${edge.citingId} ${relation} ${edge.citedId}`}
+      aria-label={`${badge.text} ${edge.citingId} ${relation} ${edge.citedId}`}
       className="-mx-1.5 flex min-h-8 min-w-0 flex-wrap items-center gap-x-2 gap-y-1 rounded-md px-1.5 py-1 outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
     >
       <span
@@ -337,6 +333,10 @@ function CitationDiffRow({
   );
 }
 
+/**
+ * One entry's link changes inside its inbox card, one sentence per edge: badge,
+ * the cited slug per row, in the same form as an entry's Links section.
+ */
 export function CitationEdgeList({
   edges,
   entryId,

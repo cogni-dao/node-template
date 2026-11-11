@@ -171,13 +171,13 @@ describe("CitationEdgeList", () => {
     const list = screen.getByRole("list", { name: "Link changes" });
     expect(within(list).getAllByRole("listitem")).toHaveLength(3);
     expect(
-      screen.getByRole("link", { name: "added link: a tracks task.0059" })
+      screen.getByRole("link", { name: "link + a tracks task.0059" })
     ).toHaveAttribute("href", "/work/task.0059");
     expect(
-      screen.getByRole("link", { name: "removed link: a extends b-entry" })
+      screen.getByRole("link", { name: "link − a extends b-entry" })
     ).toHaveAttribute("title", "old why");
     expect(
-      screen.getByRole("link", { name: "changed link: a supports c-entry" })
+      screen.getByRole("link", { name: "link ~ a supports c-entry" })
     ).toHaveAttribute("title", "new why");
   });
 

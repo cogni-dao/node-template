@@ -14,6 +14,7 @@
 
 import type { CitationLinkProps } from "@cogni/knowledge-base-ui";
 import { isWorkItemEndpointId } from "@cogni/knowledge-store";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import {
   createContext,
@@ -24,7 +25,14 @@ import {
   useState,
 } from "react";
 
-import { KnowledgeSelection } from "../knowledge/_components/KnowledgeSelection";
+// The sheet loads only when a reader first peeks, so pages without links pay nothing.
+const KnowledgeSelection = dynamic(
+  () =>
+    import("../knowledge/_components/KnowledgeSelection").then(
+      (module) => module.KnowledgeSelection
+    ),
+  { ssr: false }
+);
 
 const PeekContext = createContext<((id: string) => void) | null>(null);
 
@@ -37,7 +45,9 @@ export function EntityPeekProvider({
   return (
     <PeekContext.Provider value={setId}>
       {children}
-      <KnowledgeSelection id={id} onClose={() => setId(null)} />
+      {id !== null && (
+        <KnowledgeSelection id={id} onClose={() => setId(null)} />
+      )}
     </PeekContext.Provider>
   );
 }
