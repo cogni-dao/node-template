@@ -201,8 +201,12 @@ export {
 export {
   type Citation,
   CitationSchema,
+  CITATION_TYPE_DEFINITIONS,
+  type CitationTone,
   type CitationType,
+  type CitationTypeDefinition,
   CitationTypeSchema,
+  describeCitation,
   citedEntryTypesFor,
   type DoltCommit,
   DoltCommitSchema,

@@ -50,6 +50,11 @@ function citationHref(id: string): string {
 		: `/knowledge/${encodeURIComponent(id)}`;
 }
 
+/** A confidence value as "60%", or "—" when that side has none. */
+function percent(value: unknown): string {
+	return value == null ? "—" : `${String(value)}%`;
+}
+
 export function ContributionDiff({
 	contributionId,
 	onLoaded,
@@ -151,8 +156,8 @@ export function ContributionDiff({
 							)}
 							{change.confidence && (
 								<span className="text-muted-foreground tabular-nums">
-									confidence {String(change.confidence.from ?? "—")}% →{" "}
-									{String(change.confidence.to ?? "—")}%
+									confidence {percent(change.confidence.from)} →{" "}
+									{percent(change.confidence.to)}
 								</span>
 							)}
 						</div>
@@ -224,6 +229,7 @@ export function ContributionDiff({
 						)}
 						<CitationEdgeList
 							edges={change.edges}
+							entryId={change.rowId}
 							hrefFor={citationHref}
 							LinkComponent={Link}
 							className="mt-1"

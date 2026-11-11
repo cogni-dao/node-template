@@ -20,6 +20,7 @@ import type {
   Principal,
 } from "../src/domain/contribution-schemas.js";
 import { KnowledgeGateError, shapeGate } from "../src/domain/gates/index.js";
+import { CitationTypeSchema, describeCitation } from "../src/domain/schemas.js";
 import {
   type NodeAdminAuthority,
   NodeAdminRequiredError,
@@ -386,6 +387,8 @@ describe("createContributionService", () => {
         citedId: "b-entry",
         citationType: "supports",
         context: null,
+        label: "supports",
+        tone: "positive",
       },
     ];
     const service = createContributionService({
@@ -1084,6 +1087,25 @@ describe("createContributionService", () => {
       );
       await bet.service.merge({ principal: adminUser, contributionId: "contrib-agent-1-abc123" });
       expect(bet.port.lastMerge?.expectedHeadCommit).toBe("h3");
+    });
+  });
+});
+
+describe("CITATION_TYPE_DEFINITIONS", () => {
+  it("defines both reading directions for every citation type", () => {
+    for (const type of CitationTypeSchema.options) {
+      const out = describeCitation(type, "out");
+      const inc = describeCitation(type, "in");
+      expect(out.label.length).toBeGreaterThan(0);
+      expect(inc.label).not.toBe(out.label);
+    }
+    expect(describeCitation("supports", "in")).toEqual({
+      label: "supported by",
+      tone: "positive",
+    });
+    expect(describeCitation("unknown_type", "in")).toEqual({
+      label: "unknown_type",
+      tone: "muted",
     });
   });
 });

@@ -47,7 +47,13 @@ export interface CitationLink {
   readonly source: CitationLinkEndpoint;
   readonly target: CitationLinkEndpoint;
   readonly context?: string | null;
+  /** This side's reading from the store's citation definitions ("supported by"). */
+  readonly label?: string;
+  readonly tone?: CitationTone;
 }
+
+/** Visual weight a citation definition assigns; rows map it to theme tokens. */
+export type CitationTone = "positive" | "negative" | "warning" | "neutral" | "muted";
 
 /** One edge a contribution changes, as the contribution diff serves it. */
 export interface CitationDiffEdge {
@@ -56,7 +62,18 @@ export interface CitationDiffEdge {
   readonly citedId: string;
   readonly citationType: string;
   readonly context?: string | null;
+  /** The citing side's reading from the store's citation definitions. */
+  readonly label?: string;
+  readonly tone?: CitationTone;
 }
+
+const TONE_CLASS: Record<CitationTone, string> = {
+  positive: "bg-success/15 text-success",
+  negative: "bg-destructive/15 text-destructive",
+  warning: "bg-warning/15 text-warning",
+  neutral: "bg-primary/15 text-primary",
+  muted: "bg-muted text-muted-foreground",
+};
 
 const ARROW = {
   out: { glyph: "→", label: "outgoing" },
@@ -77,6 +94,7 @@ const CHANGE = {
 function CitationRow({
   direction,
   relation,
+  tone = "muted",
   slug,
   href,
   hoverTitle,
@@ -84,7 +102,9 @@ function CitationRow({
   Link,
 }: {
   readonly direction: "out" | "in";
+  /** The definition's label for this side; the raw type only from an older server. */
   readonly relation: string;
+  readonly tone?: CitationTone | undefined;
   readonly slug: string;
   readonly href: string;
   readonly hoverTitle?: string | null | undefined;
@@ -100,26 +120,37 @@ function CitationRow({
       aria-label={[marker?.label, arrow.label, relation, slug]
         .filter(Boolean)
         .join(" ")}
-      className="-mx-1 flex min-h-6 min-w-0 items-center gap-2 rounded-sm px-1 py-0.5 text-xs outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+      className="-mx-1.5 flex min-h-8 min-w-0 items-center gap-2 rounded-md px-1.5 py-1 outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
     >
       {marker && (
-        <span className={cn("w-3 shrink-0 text-center", marker.className)}>
+        <span
+          className={cn("w-3 shrink-0 text-center text-sm", marker.className)}
+        >
           {marker.glyph}
         </span>
       )}
-      <span className="w-3 shrink-0 text-center text-muted-foreground">
+      <span className="w-3 shrink-0 text-center text-muted-foreground text-sm">
         {arrow.glyph}
       </span>
       <span
         className={cn(
-          "flex min-w-0 flex-1 items-center gap-2",
+          "flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1",
           change === "removed" && "line-through decoration-destructive/60"
         )}
       >
-        <span className="w-24 shrink-0 truncate text-muted-foreground">
-          {relation}
+        <span className="w-28 shrink-0">
+          <span
+            className={cn(
+              "inline-flex rounded-full px-2 py-0.5 font-medium text-xs",
+              TONE_CLASS[tone]
+            )}
+          >
+            {relation}
+          </span>
         </span>
-        <span className="min-w-0 break-all font-mono">{slug}</span>
+        <span className="min-w-0 break-all font-medium font-mono text-foreground text-sm">
+          {slug}
+        </span>
       </span>
     </Link>
   );
@@ -150,16 +181,20 @@ export function CitationLinks({
     <DirectRelationLinks
       entityId={entityId}
       loadPage={loadPage}
-      className={cn("flex flex-col gap-1", className)}
+      className={cn(
+        "flex flex-col gap-2 rounded-lg border border-border bg-card p-3",
+        className
+      )}
       headingClassName="font-medium text-muted-foreground text-xs uppercase tracking-wider"
-      linksClassName="flex flex-col gap-0.5"
+      linksClassName="flex flex-col"
       moreButtonClassName="w-fit rounded border px-2 py-1 text-xs disabled:opacity-50"
       renderLink={(link) => {
         const other = link.direction === "out" ? link.target : link.source;
         return (
           <CitationRow
             direction={link.direction}
-            relation={link.citationType}
+            relation={link.label ?? link.citationType}
+            tone={link.tone}
             slug={other.id}
             href={other.href}
             hoverTitle={other.title}
@@ -224,6 +259,7 @@ export function groupContributionChanges<E extends ContributionDiffRowLike>(
       authored:
         entry.changeType !== "modified" ||
         !fields ||
+        fields.length === 0 ||
         fields.some((field) => field !== "confidencePct"),
       confidence: confidenceChanged
         ? { from: entry.before?.confidencePct, to: entry.after?.confidencePct }
@@ -246,6 +282,8 @@ export function groupContributionChanges<E extends ContributionDiffRowLike>(
 export interface CitationEdgeListProps {
   /** The link changes one entry makes, from `groupContributionChanges`. */
   readonly edges: readonly CitationDiffEdge[];
+  /** The citing entry, so each card's list has its own accessible name. */
+  readonly entryId?: string;
   /** Permalink for an entry or work-item id; the node owns routing. */
   readonly hrefFor: (id: string) => string;
   readonly LinkComponent?: CitationLinkComponent;
@@ -258,18 +296,23 @@ export interface CitationEdgeListProps {
  */
 export function CitationEdgeList({
   edges,
+  entryId,
   hrefFor,
   LinkComponent = DefaultLink,
   className,
 }: CitationEdgeListProps): ReactElement | null {
   if (edges.length === 0) return null;
   return (
-    <ul aria-label="Link changes" className={cn("flex flex-col", className)}>
+    <ul
+      aria-label={entryId ? `Link changes for ${entryId}` : "Link changes"}
+      className={cn("flex flex-col", className)}
+    >
       {edges.map((edge) => (
         <li key={`${edge.changeType}:${edge.citationType}:${edge.citedId}`}>
           <CitationRow
             direction="out"
-            relation={edge.citationType}
+            relation={edge.label ?? edge.citationType}
+            tone={edge.tone}
             slug={edge.citedId}
             href={hrefFor(edge.citedId)}
             hoverTitle={edge.context}

@@ -457,6 +457,8 @@ describe("knowledge useWhen patch + q filter (task.5204)", () => {
         citedId: "cite-diff-b",
         citationType: "extends",
         context: "seeded on main",
+        label: "extends",
+        tone: "neutral",
       },
     ]);
 
@@ -488,6 +490,8 @@ describe("knowledge useWhen patch + q filter (task.5204)", () => {
         citedId: "cite-diff-b",
         citationType: "extends",
         context: "seeded on main",
+        label: "extends",
+        tone: "neutral",
       },
       {
         changeType: "added",
@@ -495,6 +499,8 @@ describe("knowledge useWhen patch + q filter (task.5204)", () => {
         citedId: "cite-diff-a",
         citationType: "extends",
         context: "b now extends a",
+        label: "extends",
+        tone: "neutral",
       },
     ]);
     // A cite only recomputes the cited row: the full-row diff names confidence alone.

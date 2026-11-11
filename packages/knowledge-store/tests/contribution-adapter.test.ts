@@ -748,9 +748,9 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
       `dolt_diff('base123', '${HEAD}', 'citations')`
     );
     expect(edges).toEqual([
-      { changeType: "modified", citingId: "a-entry", citedId: "b-entry", citationType: "extends", context: "after" },
-      { changeType: "added", citingId: "a-entry", citedId: "task.0059", citationType: "tracks", context: null },
-      { changeType: "removed", citingId: "b-entry", citedId: "goal-x", citationType: "supports", context: "old why" },
+      { changeType: "modified", citingId: "a-entry", citedId: "b-entry", citationType: "extends", context: "after", label: "extends", tone: "neutral" },
+      { changeType: "added", citingId: "a-entry", citedId: "task.0059", citationType: "tracks", context: null, label: "tracks", tone: "muted" },
+      { changeType: "removed", citingId: "b-entry", citedId: "goal-x", citationType: "supports", context: "old why", label: "supports", tone: "positive" },
     ]);
   });
 

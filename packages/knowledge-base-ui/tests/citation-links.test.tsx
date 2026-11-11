@@ -77,6 +77,26 @@ describe("CitationLinks", () => {
     expect(within(incoming).getByText("←")).toBeInTheDocument();
   });
 
+  it("reads the incoming side from the definition label, not the raw type", async () => {
+    const loadPage = vi.fn(async () => ({
+      links: [
+        {
+          ...edge("in", "supports", { id: "work-item-triage", title: null }),
+          label: "supported by",
+          tone: "positive" as const,
+        },
+      ],
+      nextCursor: null,
+    }));
+    render(<CitationLinks entityId="root-entry" loadPage={loadPage} />);
+
+    const row = await screen.findByRole("link", {
+      name: "incoming supported by work-item-triage",
+    });
+    expect(within(row).getByText("supported by")).toBeInTheDocument();
+    expect(within(row).queryByText("supports")).toBeNull();
+  });
+
   it("falls back to the slug for hover when an endpoint has no title", async () => {
     const loadPage = vi.fn(async () => ({
       links: [edge("out", "extends", { id: "no-title", title: null })],

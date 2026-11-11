@@ -70,6 +70,7 @@ import {
 import type { CitationType } from "../../domain/schemas.js";
 import {
   citedEntryTypesFor,
+  describeCitation,
   HYPOTHESIS_TARGETED_EDGES,
   isWorkItemEndpointId,
   requiresEvaluateAt,
@@ -1848,6 +1849,7 @@ export class DoltgresKnowledgeContributionAdapter
         citedId,
         citationType,
         context: typeof context === "string" ? context : null,
+        ...describeCitation(citationType, "out"),
       });
     }
     return edges.sort(

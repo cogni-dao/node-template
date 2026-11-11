@@ -70,7 +70,9 @@ describe("ContributionDiff citations", () => {
     render(<ContributionDiff contributionId="contrib-1" />);
 
     // One card for the citing entry; both edges inside it.
-    const section = await screen.findByRole("list", { name: "Link changes" });
+    const section = await screen.findByRole("list", {
+      name: "Link changes for a-entry",
+    });
     expect(screen.getAllByText("a-entry")).toHaveLength(1);
     expect(within(section).getAllByRole("listitem")).toHaveLength(2);
     expect(
@@ -145,7 +147,7 @@ describe("ContributionDiff citations", () => {
     render(<ContributionDiff contributionId="c" />);
 
     await screen.findByText("No changes detected.");
-    expect(screen.queryByRole("list", { name: "Link changes" })).toBeNull();
+    expect(screen.queryByRole("list", { name: /Link changes/ })).toBeNull();
   });
 
   it("treats a server without citations as no edge changes", async () => {

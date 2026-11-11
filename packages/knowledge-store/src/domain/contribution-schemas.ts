@@ -281,6 +281,9 @@ export const ContributionCitationDiffEntrySchema = z.object({
   citedId: z.string(),
   citationType: z.string(),
   context: z.string().nullable(),
+  /** The citing side's label and tone from CITATION_TYPE_DEFINITIONS. */
+  label: z.string(),
+  tone: z.enum(["positive", "negative", "warning", "neutral", "muted"]),
 });
 export type ContributionCitationDiffEntry = z.infer<
   typeof ContributionCitationDiffEntrySchema

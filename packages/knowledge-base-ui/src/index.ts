@@ -11,6 +11,7 @@ export {
   type CitationLinkComponent,
   type CitationLinkEndpoint,
   type CitationLinkProps,
+  type CitationTone,
   CitationLinks,
   type CitationLinksProps,
   CitationEdgeList,

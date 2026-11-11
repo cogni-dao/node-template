@@ -107,6 +107,50 @@ export const CitationTypeSchema = z.enum([
 ]);
 export type CitationType = z.infer<typeof CitationTypeSchema>;
 
+/** How a reader sees an edge: the citing side reads `outgoing`, the cited side reads `incoming`. */
+export type CitationTone = "positive" | "negative" | "warning" | "neutral" | "muted";
+
+export interface CitationTypeDefinition {
+  /** Label from the citing entry: "<citing> supports <cited>". */
+  readonly outgoing: string;
+  /** Label from the cited entry: "<cited> supported by <citing>". */
+  readonly incoming: string;
+  /** Visual weight; renderers map it to tokens and never branch on the type name. */
+  readonly tone: CitationTone;
+}
+
+/**
+ * CITATION_DIRECTION_IN_DEFINITION: every edge type owns both reading
+ * directions. Surfaces show `outgoing` or `incoming` from here and hold no
+ * wording of their own.
+ */
+export const CITATION_TYPE_DEFINITIONS = {
+  supports: { outgoing: "supports", incoming: "supported by", tone: "positive" },
+  contradicts: { outgoing: "contradicts", incoming: "contradicted by", tone: "negative" },
+  extends: { outgoing: "extends", incoming: "extended by", tone: "neutral" },
+  supersedes: { outgoing: "supersedes", incoming: "superseded by", tone: "warning" },
+  tracks: { outgoing: "tracks", incoming: "tracked by", tone: "muted" },
+  evidence_for: { outgoing: "evidence for", incoming: "evidenced by", tone: "positive" },
+  derives_from: { outgoing: "derives from", incoming: "basis for", tone: "neutral" },
+  validates: { outgoing: "validates", incoming: "validated by", tone: "positive" },
+  invalidates: { outgoing: "invalidates", incoming: "invalidated by", tone: "negative" },
+} as const satisfies Record<CitationType, CitationTypeDefinition>;
+
+/** The label and tone one side of an edge reads; unknown types read as their raw name. */
+export function describeCitation(
+  citationType: string,
+  direction: "out" | "in"
+): { readonly label: string; readonly tone: CitationTone } {
+  const definition = (
+    CITATION_TYPE_DEFINITIONS as Record<string, CitationTypeDefinition>
+  )[citationType];
+  if (!definition) return { label: citationType, tone: "muted" };
+  return {
+    label: direction === "out" ? definition.outgoing : definition.incoming,
+    tone: definition.tone,
+  };
+}
+
 export const WORK_ITEM_ENDPOINT_TYPES = [
   "task",
   "bug",
