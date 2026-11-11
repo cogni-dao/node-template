@@ -30,7 +30,7 @@ Private app-layer helpers for route handlers. Provides server-side utilities lik
 ## Public Surface
 
 - **Exports:** models-cache (getCachedModels, isModelAllowed, getDefaultModelId), auth/session helpers, request-identity resolver + agent key issuer, operator attestation verifier (verifyOperatorAttestation with exact node audience/nonce claims, getOperatorIssuerUrl)
-- **Files considered API:** models-cache.ts, auth/session.ts, auth/request-identity.ts, auth/operator-attestation.ts
+- **Files considered API:** models-cache.ts, auth/session.ts, auth/request-identity.ts, auth/service-enrollment-verifier.ts (the trusted-home list, default the operator issuer from `DOMAIN`, and the enrollment token verifier), auth/operator-attestation.ts (also refuses a token with the service enrollment `typ` or `kind`; exports the cached `getJwks` the enrollment verifier shares)
 
 ## Responsibilities
 

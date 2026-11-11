@@ -15,12 +15,25 @@
  *   - EDDSA_ONLY: `alg` restricted to EdDSA (Ed25519) — no HS/none downgrade.
  *   - EXACT_DEPLOYMENT_ORIGIN: signed targetOrigin must equal this node's
  *     canonical APP_BASE_URL, preventing candidate/preview/production replay.
+ *   - NO_ENROLLMENT_TOKEN_HERE (story.0038): a service enrollment token shares the issuer, the key and the `urn:cogni:node:<uuid>` audience
+ *     of a GitHub attestation. A token that carries the enrollment `typ` or `kind` is `invalid_token` here, before any key fetch, so one
+ *     signed purpose can never be replayed as the other.
  * Side-effects: IO (remote JWKS fetch, cached per issuer by jose)
  * Links: docs task.5024 fleet-identity design, src/app/api/v1/identity/bindings/import/route.ts
  * @public
  */
 
-import { createRemoteJWKSet, errors, jwtVerify } from "jose";
+import {
+	SERVICE_ENROLLMENT_KIND,
+	SERVICE_ENROLLMENT_TYP,
+} from "@cogni/agent-grants/enrollment";
+import {
+	createRemoteJWKSet,
+	decodeJwt,
+	decodeProtectedHeader,
+	errors,
+	jwtVerify,
+} from "jose";
 import {
 	IdentityAttestationClaimsSchema,
 	IdentityAttestationOriginSchema,
@@ -76,7 +89,8 @@ export function getNodeOriginUrl(): string {
 // unknown kid with a cooldown.
 const jwksCache = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
 
-function getJwks(issuerUrl: string): ReturnType<typeof createRemoteJWKSet> {
+/** The cached remote key set of an issuer (`${issuerUrl}/.well-known/jwks.json`). Shared with the service enrollment verifier. */
+export function getJwks(issuerUrl: string): ReturnType<typeof createRemoteJWKSet> {
 	let jwks = jwksCache.get(issuerUrl);
 	if (!jwks) {
 		jwks = createRemoteJWKSet(new URL(`${issuerUrl}/.well-known/jwks.json`), {
@@ -118,6 +132,13 @@ export async function verifyOperatorAttestation(
 	expectedNodeId: string,
 ): Promise<OperatorAttestationResult> {
 	try {
+		// NO_ENROLLMENT_TOKEN_HERE. Header and payload are read unverified, only to REFUSE; nothing read here is trusted.
+		if (
+			decodeProtectedHeader(token).typ === SERVICE_ENROLLMENT_TYP ||
+			decodeJwt(token).kind === SERVICE_ENROLLMENT_KIND
+		) {
+			return { ok: false, errorCode: "invalid_token" };
+		}
 		const issuerUrl = getOperatorIssuerUrl();
 		const expectedAudience = identityAttestationAudience(expectedNodeId);
 		const { payload } = await jwtVerify(token, getJwks(issuerUrl), {
