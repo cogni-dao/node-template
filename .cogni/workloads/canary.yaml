@@ -3,7 +3,8 @@
 # {node, env, workload}, so a canary release and an app release never supersede each other.
 # `POST /api/v1/deploy/workloads {nodeId, env: "candidate-a", workload: "canary", sourceSha}` reads this
 # file at sourceSha. In candidate-a it shares the app lane's database, so it is briefly volatile while
-# db migrations apply. Image "." = the image this repo's CI built at that sha.
+# db migrations apply. The host MUST differ from app.yaml's: two workloads cannot share one host.
+# Image "." = the image this repo's CI built at that sha.
 apiVersion: score.dev/v1b1
 metadata:
   name: canary
