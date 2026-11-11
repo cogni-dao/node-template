@@ -14,17 +14,31 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
+    },
+    "./credentials": {
+      "types": "./dist/credentials/index.d.ts",
+      "import": "./dist/credentials.js",
+      "default": "./dist/credentials.js"
+    },
+    "./conformance": {
+      "types": "./dist/credentials/conformance.d.ts",
+      "import": "./dist/conformance.js",
+      "default": "./dist/conformance.js"
     }
   },
   "types": "./dist/index.d.ts",
   "files": [
     "dist",
+    "migrations",
     "LICENSE.md"
   ],
   "scripts": {
     "build": "tsup && tsc -b --force",
     "typecheck": "tsc --noEmit --emitDeclarationOnly false",
     "test": "vitest run --config vitest.config.ts"
+  },
+  "dependencies": {
+    "zod": "^4.1.12"
   },
   "devDependencies": {
     "tsup": "^8.5.1",

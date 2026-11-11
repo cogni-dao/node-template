@@ -20,6 +20,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@cogni/agent-grants": "workspace:@cogni-dao/agent-grants@*",
     "@cogni/ai-core": "workspace:*",
     "@cogni/aragon-osx": "workspace:*",
     "@cogni/knowledge-store": "workspace:@cogni-dao/knowledge-store@*",

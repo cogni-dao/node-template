@@ -49,6 +49,20 @@ export const EVENT_NAMES = {
 	AGENT_ROLE_REQUESTED: "agent_role.requested",
 	/** A DAO admin dismissed a pending ask: principalUserId, scope, deniedBy. */
 	AGENT_ROLE_DENIED: "agent_role.denied",
+	/** revocable agent keys (task.0070): upgraded / rotated (a pending key issued), confirmed, revoked, refused. Carry userId and credentialId, never a key or hash. */
+	AGENT_CREDENTIAL_UPGRADED: "agent.credential.upgraded",
+	AGENT_CREDENTIAL_ROTATED: "agent.credential.rotated",
+	AGENT_CREDENTIAL_CONFIRMED: "agent.credential.confirmed",
+	AGENT_CREDENTIAL_REVOKED: "agent.credential.revoked",
+	AGENT_CREDENTIAL_REFUSED: "agent.credential.refused",
+	/** A revocable key could not be verified because the credential store failed; the request got 503, not 401. Carries routeId, plus the cause's errorClass and sqlState when known (never its message). */
+	AGENT_CREDENTIAL_STORE_UNAVAILABLE: "agent.credential.store_unavailable",
+	/** A signed (v1) key was used after its user confirmed a revocable key: 401 `v1_superseded`. The best replay signal for a leaked signed key. Carries routeId and userId only. */
+	AGENT_CREDENTIAL_V1_SUPERSEDED_DENIED: "agent.credential.v1_superseded_denied",
+	/** A revocable key was refused as invalid (unknown, revoked, expired or wrong state): 401. Carries routeId only: no key, hash or prefix. */
+	AGENT_CREDENTIAL_INVALID_DENIED: "agent.credential.invalid_denied",
+	/** A client went over the per-IP limit on credential lookups: 429, no store read. Carries routeId only. */
+	AGENT_CREDENTIAL_RATE_LIMITED: "agent.credential.rate_limited",
 	/** The roles route could not decide or list (store or admin check down), or refused a non-admin write. No secrets. */
 	AGENT_ROLES_UNAVAILABLE: "agent.roles.unavailable",
 	AGENT_ROLES_LIST_FAILED: "agent.roles.list_failed",
