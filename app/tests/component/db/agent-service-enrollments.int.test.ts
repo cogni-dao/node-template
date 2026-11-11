@@ -245,13 +245,15 @@ describe("agent service enrollments (real Postgres)", () => {
       let polling: ReturnType<typeof pollStore.poll> | undefined;
       try {
         await service.begin(async (tx) => {
-          // Hold both writes uncommitted while the other connection reaches the credential lock.
+          // Hold both writes uncommitted while the other connection reaches a coordinated authority lock.
+          // Poll now locks the user before the credential; FK key-share locks can make it wait at that earlier lock.
           await tx`UPDATE agent_credentials SET confirmed_at = now() WHERE id = ${issued.credentialId}`;
           await tx`UPDATE agent_credentials SET revoked_at = now(), revoked_reason = 'revoked' WHERE id = ${issued.credentialId}`;
           polling = pollStore.poll({ ...input, tokenHash: await hashAgentKey(randomUUID()) });
           await expect.poll(async () => {
             const rows = await service`SELECT count(*)::int AS n FROM pg_stat_activity
-              WHERE application_name = ${applicationName} AND wait_event_type = 'Lock' AND query LIKE '%agent_credentials%FOR UPDATE%'`;
+              WHERE application_name = ${applicationName} AND wait_event_type = 'Lock'
+                AND (query LIKE '%agent_credentials%FOR UPDATE%' OR query LIKE '%SELECT id FROM users%FOR UPDATE%')`;
             return Number(rows[0]?.n);
           }, { timeout: 3000 }).toBe(1);
         });
