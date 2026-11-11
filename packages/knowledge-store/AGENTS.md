@@ -4,7 +4,7 @@
 
 ## Metadata
 
-- **Last reviewed:** 2026-11-05
+- **Last reviewed:** 2026-11-10
 - **Owners:** @derekg1729
 - **Status:** stable
 
@@ -75,6 +75,8 @@ Shared ports, contribution workflow, and adapters for versioned domain knowledge
 **Service** (`@cogni/knowledge-store/service/contribution-service`):
 
 - `createContributionService`, `ContributionService`, `ContributionServiceDeps`
+- `CITATION_TYPE_DEFINITIONS`, `describeCitation(type, "out"|"in")`, `CitationTypeDefinition`, `CitationTone` (CITATION_DIRECTION_IN_DEFINITION, bug.0011): every citation type owns its `outgoing` label ("supports"), `incoming` label ("supported by") and `tone`. Routes and diffs return the label and tone for the reader's side; UIs hold no relation wording of their own. A new citation type must add its definition (`satisfies Record<CitationType, …>` enforces it).
+- `ContributionService.diffCitations(id)` → `ContributionCitationDiffEntry[]` with the citing side's `label`/`tone` (CITATION_DIFF_FOR_REVIEW, bug.0011): every citation edge the branch adds, removes or re-contexts (`dolt_diff(base, head, 'citations')`), sorted by citing, type, cited. Required port method `KnowledgeContributionPort.diffCitations`. Nodes return it beside `entries` from the contribution diff route so an edge-only inbox is never shown as empty. Each modified `ContributionDiffEntry` also carries `changedFields`: every knowledge column (camelCase) that differs in the full row diff, excluding `updatedAt`. `["confidencePct"]` alone means a cite edit recomputed the row and nothing was authored on it.
 - `ContributionServiceDeps.pushMainOnMerge?: () => Promise<void>` — optional post-merge mirror hook; caller owns error handling (service does not await + does not catch)
 - `ContributionServiceDeps.nodeAdmin?: NodeAdminAuthority` — goal-layer merge gate (raw diff ids via the required port method `KnowledgeContributionPort.touchedIds`, merge pinned with `expectedHeadCommit`); absent ⇒ goal-layer merges fail closed 503
 

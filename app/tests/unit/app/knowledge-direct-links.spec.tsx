@@ -35,8 +35,14 @@ vi.mock("@/components", () => ({
 }));
 
 vi.mock("next/link", () => ({
-  default: ({ href, children }: { href: string; children: ReactNode }) => (
-    <a href={href}>{children}</a>
+  default: ({
+    href,
+    children,
+    ...rest
+  }: { href: string; children: ReactNode } & Record<string, unknown>) => (
+    <a href={href} {...rest}>
+      {children}
+    </a>
   ),
 }));
 vi.mock("@/app/(app)/knowledge/_components/ConfidenceBar", () => ({
@@ -159,14 +165,14 @@ describe("ordinary knowledge reads", () => {
     });
     mount(fetchMock);
     await screen.findByText("Only the selected atom body");
-    await screen.findByRole("link", { name: "supports Related 4" });
-    expect(screen.queryByText("supports Related 5")).toBeNull();
+    await screen.findByRole("link", { name: "outgoing supports atom-4" });
+    expect(screen.queryByRole("link", { name: "outgoing supports atom-5" })).toBeNull();
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
       "/api/v1/knowledge/root",
       "/api/v1/citations/root",
     ]);
     fireEvent.click(screen.getByRole("button", { name: "More links" }));
-    await screen.findByRole("link", { name: "supports Related 6" });
+    await screen.findByRole("link", { name: "outgoing supports atom-6" });
     await waitFor(() =>
       expect(screen.queryByRole("button", { name: "More links" })).toBeNull()
     );
@@ -186,11 +192,11 @@ describe("ordinary knowledge reads", () => {
         return Response.json({ error: "unavailable" }, { status: 503 });
       })
     );
-    await screen.findByRole("link", { name: "supports Related 0" });
+    await screen.findByRole("link", { name: "outgoing supports atom-0" });
     fireEvent.click(screen.getByRole("button", { name: "More links" }));
     await screen.findByRole("alert");
     expect(
-      screen.getByRole("link", { name: "supports Related 0" })
+      screen.getByRole("link", { name: "outgoing supports atom-0" })
     ).toBeTruthy();
     expect(screen.getByText("Only the selected atom body")).toBeTruthy();
   });

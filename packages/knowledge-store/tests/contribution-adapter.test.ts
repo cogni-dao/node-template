@@ -726,6 +726,48 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
     );
   });
 
+  it("reads citation edges from the branch citations diff (CITATION_DIFF_FOR_REVIEW)", async () => {
+    class CitationDiffSql extends FakeSql {
+      override async unsafe(query: string) {
+        if (query.includes("'citations')")) {
+          this.queries.push(query);
+          return [
+            { diff_type: "removed", from_citing_id: "b-entry", from_cited_id: "goal-x", from_citation_type: "supports", from_context: "old why", to_citing_id: null, to_cited_id: null, to_citation_type: null, to_context: null },
+            { diff_type: "added", from_citing_id: null, from_cited_id: null, from_citation_type: null, from_context: null, to_citing_id: "a-entry", to_cited_id: "task.0059", to_citation_type: "tracks", to_context: null },
+            { diff_type: "modified", from_citing_id: "a-entry", from_cited_id: "b-entry", from_citation_type: "extends", from_context: "before", to_citing_id: "a-entry", to_cited_id: "b-entry", to_citation_type: "extends", to_context: "after" },
+          ];
+        }
+        return super.unsafe(query);
+      }
+    }
+    const fake = new CitationDiffSql();
+
+    const edges = await adapterFor(fake).diffCitations("contrib-agent-1-abc123");
+
+    expect(fake.queries.at(-1)).toContain(
+      `dolt_diff('base123', '${HEAD}', 'citations')`
+    );
+    expect(edges).toEqual([
+      { changeType: "modified", citingId: "a-entry", citedId: "b-entry", citationType: "extends", context: "after", label: "extends", tone: "neutral" },
+      { changeType: "added", citingId: "a-entry", citedId: "task.0059", citationType: "tracks", context: null, label: "tracks", tone: "muted" },
+      { changeType: "removed", citingId: "b-entry", citedId: "goal-x", citationType: "supports", context: "old why", label: "supports", tone: "positive" },
+    ]);
+  });
+
+  it("fails the citation diff read instead of hiding an incomplete edge", async () => {
+    class BrokenCitationDiffSql extends FakeSql {
+      override async unsafe(query: string) {
+        if (query.includes("'citations')"))
+          return [{ diff_type: "added", to_citing_id: "a-entry", to_cited_id: null, to_citation_type: "supports" }];
+        return super.unsafe(query);
+      }
+    }
+
+    await expect(
+      adapterFor(new BrokenCitationDiffSql()).diffCitations("contrib-agent-1-abc123")
+    ).rejects.toThrow(/incomplete/);
+  });
+
   it("commits merge metadata before deleting the contribution branch", async () => {
     const fake = new FakeSql();
 
@@ -1503,12 +1545,22 @@ describe("reviewed metric configuration", () => {
   it("shows the reviewed JSON in the contribution before/after diff", async () => {
     class ConfigDiffSql extends FakeSql {
       override async unsafe(query: string) {
-        if (query.includes("dolt_diff")) return [{ diff_type: "modified", from_id: "metric-work", to_id: "metric-work", from_metric_spec: { calculatorId: "work.count@1", params: { mode: "open" } }, to_metric_spec: null, from_kpi_bindings: [{ metricId: "metric-work" }], to_kpi_bindings: [] }];
+        if (query.includes("dolt_diff")) return [{ diff_type: "modified", from_id: "metric-work", to_id: "metric-work", from_metric_spec: { calculatorId: "work.count@1", params: { mode: "open" } }, to_metric_spec: null, from_kpi_bindings: [{ metricId: "metric-work" }], to_kpi_bindings: [], from_confidence_pct: 40, to_confidence_pct: 55 }];
         return super.unsafe(query);
       }
     }
     const [entry] = await adapterFor(new ConfigDiffSql()).diff("contrib-agent-1-abc123");
-    expect(entry?.before?.metricSpec).toMatchObject({ calculatorId: "work.count@1" }); expect(entry?.after?.metricSpec).toBeNull(); expect(entry?.after?.kpiBindings).toEqual([]);
+    expect(entry?.before?.metricSpec).toMatchObject({ calculatorId: "work.count@1" }); expect(entry?.after?.metricSpec).toBeNull(); expect(entry?.after?.kpiBindings).toEqual([]); expect(entry?.before?.confidencePct).toBe(40); expect(entry?.after?.confidencePct).toBe(55); expect(entry?.changedFields).toEqual(["confidencePct", "kpiBindings", "metricSpec"]);
+  });
+  it("reports unprojected column changes so a confidence-only row is never assumed", async () => {
+    class TagsDiffSql extends FakeSql {
+      override async unsafe(query: string) {
+        if (query.includes("dolt_diff")) return [{ diff_type: "modified", from_id: "x", to_id: "x", from_confidence_pct: 40, to_confidence_pct: 55, from_tags: ["a"], to_tags: ["a", "b"], from_updated_at: "t1", to_updated_at: "t2", from_commit: "c1", to_commit: "c2" }];
+        return super.unsafe(query);
+      }
+    }
+    const [entry] = await adapterFor(new TagsDiffSql()).diff("contrib-agent-1-abc123");
+    expect(entry?.changedFields).toEqual(["confidencePct", "tags"]);
   });
   it("keeps omission distinct from explicit clearing at the wire", () => {
     const common = { op: "update", targetRowId: "metric-work", entry: { id: "metric-work", domain: "meta", title: "Count", content: "Count items" } };

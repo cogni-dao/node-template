@@ -260,5 +260,31 @@ export const ContributionDiffEntrySchema = z.object({
   rowId: z.string(),
   before: z.record(z.string(), z.unknown()).nullable(),
   after: z.record(z.string(), z.unknown()).nullable(),
+  /**
+   * For a modified row: every knowledge column (camelCase) whose value differs,
+   * read from the full row diff, not only the projected `before`/`after`
+   * fields. `updatedAt` is excluded. `["confidencePct"]` alone means a cite edit
+   * recomputed the row and nothing was authored on it.
+   */
+  changedFields: z.array(z.string()).optional(),
 });
 export type ContributionDiffEntry = z.infer<typeof ContributionDiffEntrySchema>;
+
+/**
+ * One citation edge a contribution adds, removes or re-contexts, read from the
+ * branch's `citations` diff. `context` is the after-side text (before-side for
+ * a removed edge). Reviewers see these beside the knowledge row diff.
+ */
+export const ContributionCitationDiffEntrySchema = z.object({
+  changeType: z.enum(["added", "modified", "removed"]),
+  citingId: z.string(),
+  citedId: z.string(),
+  citationType: z.string(),
+  context: z.string().nullable(),
+  /** The citing side's label and tone from CITATION_TYPE_DEFINITIONS. */
+  label: z.string(),
+  tone: z.enum(["positive", "negative", "warning", "neutral", "muted"]),
+});
+export type ContributionCitationDiffEntry = z.infer<
+  typeof ContributionCitationDiffEntrySchema
+>;

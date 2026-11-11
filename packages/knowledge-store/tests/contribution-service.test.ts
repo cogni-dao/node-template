@@ -20,6 +20,7 @@ import type {
   Principal,
 } from "../src/domain/contribution-schemas.js";
 import { KnowledgeGateError, shapeGate } from "../src/domain/gates/index.js";
+import { CitationTypeSchema, describeCitation } from "../src/domain/schemas.js";
 import {
   type NodeAdminAuthority,
   NodeAdminRequiredError,
@@ -340,6 +341,12 @@ class FakeContributionPort implements KnowledgeContributionPort {
     return [];
   }
 
+  citationDiff: Awaited<ReturnType<KnowledgeContributionPort["diffCitations"]>> =
+    [];
+  async diffCitations() {
+    return this.citationDiff;
+  }
+
   touched: Awaited<ReturnType<KnowledgeContributionPort["touchedIds"]>> = {
     headCommit: "head123",
     knowledgeIds: [],
@@ -371,6 +378,30 @@ class FakeContributionPort implements KnowledgeContributionPort {
 }
 
 describe("createContributionService", () => {
+  it("returns the port's citation edges for review (CITATION_DIFF_FOR_REVIEW)", async () => {
+    const port = new FakeContributionPort();
+    port.citationDiff = [
+      {
+        changeType: "added",
+        citingId: "a-entry",
+        citedId: "b-entry",
+        citationType: "supports",
+        context: null,
+        label: "supports",
+        tone: "positive",
+      },
+    ];
+    const service = createContributionService({
+      port,
+      canMergeKnowledge: () => false,
+      rateLimit: { maxOpenPerPrincipal: 5 },
+    });
+
+    await expect(service.diffCitations("contrib-1")).resolves.toEqual(
+      port.citationDiff
+    );
+  });
+
   it("runs configured gates on create insert/update edits and rejects bad slugs", async () => {
     const port = new FakeContributionPort();
     const service = createContributionService({
@@ -1056,6 +1087,25 @@ describe("createContributionService", () => {
       );
       await bet.service.merge({ principal: adminUser, contributionId: "contrib-agent-1-abc123" });
       expect(bet.port.lastMerge?.expectedHeadCommit).toBe("h3");
+    });
+  });
+});
+
+describe("CITATION_TYPE_DEFINITIONS", () => {
+  it("defines both reading directions for every citation type", () => {
+    for (const type of CitationTypeSchema.options) {
+      const out = describeCitation(type, "out");
+      const inc = describeCitation(type, "in");
+      expect(out.label.length).toBeGreaterThan(0);
+      expect(inc.label).not.toBe(out.label);
+    }
+    expect(describeCitation("supports", "in")).toEqual({
+      label: "supported by",
+      tone: "positive",
+    });
+    expect(describeCitation("unknown_type", "in")).toEqual({
+      label: "unknown_type",
+      tone: "muted",
     });
   });
 });

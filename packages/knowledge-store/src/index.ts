@@ -33,6 +33,8 @@ export {
 } from "./domain/confidence-policy.js";
 // Contribution domain
 export {
+  type ContributionCitationDiffEntry,
+  ContributionCitationDiffEntrySchema,
   type ContributionCitationType,
   ContributionCitationTypeSchema,
   type ContributionCommitRecord,
@@ -199,8 +201,12 @@ export {
 export {
   type Citation,
   CitationSchema,
+  CITATION_TYPE_DEFINITIONS,
+  type CitationTone,
   type CitationType,
+  type CitationTypeDefinition,
   CitationTypeSchema,
+  describeCitation,
   citedEntryTypesFor,
   type DoltCommit,
   DoltCommitSchema,

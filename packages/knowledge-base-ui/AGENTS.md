@@ -6,7 +6,7 @@
 
 - **Owners:** @cogni-dao
 - **Status:** stable
-- **Last reviewed:** 2026-11-09
+- **Last reviewed:** 2026-11-10
 
 ## Purpose
 
@@ -65,6 +65,14 @@ Published React components and hooks every node renders for knowledge (Browse, G
 ## Public Surface (html visuals, story.0027)
 
 - `KnowledgeHtmlFrame` — the sandboxed iframe for `entryType=html`. **FINAL_SRCDOC_AT_INSERT:** each iframe is inserted with its final normalized `srcdoc` and never mutated; a new document mounts a new iframe. Before the client can normalize, it renders a same-size `aria-busy` placeholder. (Chrome isolates sandboxed frames in their own process, and a `srcdoc` write during the first navigation committed an empty frame.) Height defaults to `var(--height-artifact-canvas, 720px)`. The node passes the themed document, `title` and `className`; it never keys or remounts the frame itself.
+
+## Public Surface (citation links, bug.0011; root entry)
+
+- `CitationLinks` — an entry's Links section over `DirectRelationLinks` (five per page, explicit More). In a bordered list under the Links heading (the border appears only once links load), each edge is one row: arrow (`→` outgoing, `←` incoming), the relation as a pill and the other endpoint's slug. The pill shows the server-supplied `label` (from the store's `CITATION_TYPE_DEFINITIONS`, so the cited side reads "supported by"). Its colour comes from `tone`. It falls back to the raw type only for an older server. Nodes place Links above the entry body. **SLUG_NOT_TITLE:** the title appears only as the link's hover `title`. This is a CEO-approved exception to frontend-development §1.2 (bug.0011 Done when: Links "never shows titles inline"): in a link list the slug is the identity a reviewer checks; the slug wraps and never truncates. node-template's inbox cards follow the same rule for link rows. The node passes `loadPage` (the `GET /api/v1/citations/{id}` page) and `LinkComponent`.
+- `groupContributionChanges(entries, citations)` — **ONE_CARD_PER_ENTRY:** folds an inbox's row diff and citation diff into one record per entry: `entry` (row diff or null), `authored` (any change besides confidence; a modified row without `changedFields` counts as authored), `confidence` (`{from, to}` when it moved) and `edges` (the links it makes as the citing side). Each edge appears once. Order: authored, link-only, confidence-only. `CitationEdgeList` renders one entry's `edges` inside its card, each as one readable sentence: a `link +` / `link −` (struck) / `link ~` badge, the citing slug, the relation pill, an arrow and the cited slug. This is the operator inbox form. The node renders the card, passing `hrefFor(id)` and `LinkComponent`.
+- **ONE_SURFACE_PER_ROW:** the whole row is the link, at least 32px tall, with a visible focus ring; its accessible name contains its visible words: "outgoing|incoming <relation> <slug>" for entry Links, and "link +|link −|link ~ <citing> <relation> <cited>" for inbox rows. Edge `context` (inbox) or the endpoint title (Links) is the hover title only, by design (rows stay one line). The node gates its own empty state: "no changes" only when both `entries` and `citations` are empty.
+- Every row passes `entityId` to the injected `LinkComponent`, so a host can open the entry in place (node-template opens a side sheet). The default anchor drops it.
+- `formatCitationLabel` is deprecated (it drops direction); kept for existing adopters.
 
 ## Boundaries
 

@@ -55,6 +55,7 @@ import {
 } from "../../domain/confidence-policy.js";
 import type {
   ContributionCommitRecord,
+  ContributionCitationDiffEntry,
   ContributionDiffEntry,
   ContributionRecord,
   ContributionState,
@@ -69,6 +70,7 @@ import {
 import type { CitationType } from "../../domain/schemas.js";
 import {
   citedEntryTypesFor,
+  describeCitation,
   HYPOTHESIS_TARGETED_EDGES,
   isWorkItemEndpointId,
   requiresEvaluateAt,
@@ -580,6 +582,26 @@ async function insertCitationRow(input: {
     // Already exists — idempotent.
   }
   return { id, citedEndpoint: cited };
+}
+
+/** Dolt diff bookkeeping columns, not knowledge fields. */
+const DIFF_META_FIELDS = new Set(["commit", "commit_date", "updated_at"]);
+
+/**
+ * Every knowledge column a modified diff row changes, camelCased, from the full
+ * `from_*` / `to_*` pair set (so unprojected columns such as tags count).
+ */
+function changedKnowledgeFields(row: Record<string, unknown>): string[] {
+  const fields: string[] = [];
+  for (const key of Object.keys(row)) {
+    if (!key.startsWith("to_")) continue;
+    const column = key.slice(3);
+    if (DIFF_META_FIELDS.has(column) || !(`from_${column}` in row)) continue;
+    if (JSON.stringify(row[`from_${column}`]) === JSON.stringify(row[key]))
+      continue;
+    fields.push(column.replace(/_([a-z])/g, (_m, c: string) => c.toUpperCase()));
+  }
+  return fields.sort();
 }
 
 /**
@@ -1761,6 +1783,7 @@ export class DoltgresKnowledgeContributionAdapter
             kpiBindings: row.from_kpi_bindings ?? null,
             entryType: row.from_entry_type ?? null,
             domain: row.from_domain ?? null,
+            confidencePct: row.from_confidence_pct ?? null,
           }
         : null;
       const after: Record<string, unknown> | null = row.to_id
@@ -1773,6 +1796,7 @@ export class DoltgresKnowledgeContributionAdapter
             kpiBindings: row.to_kpi_bindings ?? null,
             entryType: row.to_entry_type ?? null,
             domain: row.to_domain ?? null,
+            confidencePct: row.to_confidence_pct ?? null,
           }
         : null;
       const rowId = String(row.to_id ?? row.from_id ?? "");
@@ -1781,8 +1805,59 @@ export class DoltgresKnowledgeContributionAdapter
         rowId,
         before,
         after,
+        ...(diffType === "modified"
+          ? { changedFields: changedKnowledgeFields(row) }
+          : {}),
       };
     });
+  }
+
+  async diffCitations(
+    contributionId: string
+  ): Promise<ContributionCitationDiffEntry[]> {
+    const rec = await this.getById(contributionId);
+    if (!rec) throw new ContributionNotFoundError(contributionId);
+    const toRef = rec.headCommit ?? rec.baseCommit;
+    const rows = await this.sql.unsafe(
+      `SELECT diff_type, from_citing_id, to_citing_id, from_cited_id, to_cited_id, from_citation_type, to_citation_type, from_context, to_context FROM dolt_diff(${escapeRef(rec.baseCommit)}, ${escapeRef(toRef)}, 'citations')`
+    );
+    const edges: ContributionCitationDiffEntry[] = [];
+    for (const r of rows) {
+      const row = r as Record<string, unknown>;
+      const diffType = String(row.diff_type ?? "modified");
+      const changeType: ContributionCitationDiffEntry["changeType"] =
+        diffType === "added" || diffType === "removed" ? diffType : "modified";
+      // A removed edge exists only on the from side; otherwise read the after side.
+      const side = changeType === "removed" ? "from" : "to";
+      const citingId = row[`${side}_citing_id`];
+      const citedId = row[`${side}_cited_id`];
+      const citationType = row[`${side}_citation_type`];
+      if (
+        typeof citingId !== "string" ||
+        typeof citedId !== "string" ||
+        typeof citationType !== "string"
+      ) {
+        // Never hide an edge from review: an unreadable row fails the read.
+        throw new Error(
+          `contribution citation diff row is incomplete: ${contributionId}`
+        );
+      }
+      const context = row[`${side}_context`];
+      edges.push({
+        changeType,
+        citingId,
+        citedId,
+        citationType,
+        context: typeof context === "string" ? context : null,
+        ...describeCitation(citationType, "out"),
+      });
+    }
+    return edges.sort(
+      (a, b) =>
+        a.citingId.localeCompare(b.citingId) ||
+        a.citationType.localeCompare(b.citationType) ||
+        a.citedId.localeCompare(b.citedId)
+    );
   }
 
   async touchedIds(contributionId: string): Promise<ContributionTouchedIds> {

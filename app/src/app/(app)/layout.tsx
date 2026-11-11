@@ -16,11 +16,16 @@
 import type { ReactNode } from "react";
 
 import { AppShell } from "@/features/layout/components/AppShell";
+import { EntityPeekProvider } from "./_components/EntityPeek";
 
 export default function AppLayout({
   children,
 }: {
   children: ReactNode;
 }): ReactNode {
-  return <AppShell>{children}</AppShell>;
+  return (
+    <AppShell>
+      <EntityPeekProvider>{children}</EntityPeekProvider>
+    </AppShell>
+  );
 }

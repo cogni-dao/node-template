@@ -19,6 +19,7 @@ import {
   touchesGoalLayer,
 } from "../domain/node-admin.js";
 import type {
+  ContributionCitationDiffEntry,
   ContributionCommitRecord,
   ContributionDiffEntry,
   ContributionRecord,
@@ -144,6 +145,9 @@ export interface ContributionService {
   getById(contributionId: string): Promise<ContributionRecord | null>;
   listCommits(contributionId: string): Promise<ContributionCommitRecord[]>;
   diff(contributionId: string): Promise<ContributionDiffEntry[]>;
+  diffCitations(
+    contributionId: string
+  ): Promise<ContributionCitationDiffEntry[]>;
   merge(args: {
     principal: Principal;
     contributionId: string;
@@ -339,6 +343,10 @@ export function createContributionService(
 
     async diff(contributionId) {
       return deps.port.diff(contributionId);
+    },
+
+    async diffCitations(contributionId) {
+      return deps.port.diffCitations(contributionId);
     },
 
     async merge({ principal, contributionId, confidencePct, actor }) {
