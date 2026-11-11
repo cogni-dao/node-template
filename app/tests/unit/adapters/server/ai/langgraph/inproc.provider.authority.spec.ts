@@ -66,7 +66,7 @@ vi.mock("@cogni/langgraph-graphs", async (importOriginal) => {
       "test-no-principal": {
         displayName: "Test no principal",
         description: "write tools and no catalog principal",
-        toolIds: ["core__knowledge_write", "core__work_item_transition"],
+        toolIds: ["core__knowledge_write", "core__work_item_update"],
         graphFactory: noopFactory,
       },
     },
@@ -224,7 +224,7 @@ async function start(
 const forTool = (events: unknown[], tool: string) =>
   (events as Array<{ tool: string }>).filter((e) => e.tool === tool);
 
-const TRANSITION_ARGS = { action: "patch", id: "task.1", priority: 3 };
+const UPDATE_ARGS = { id: "task.1", reason: "test update", set: { priority: 3 } };
 
 describe("V4: a graph whose principal has no seed row is denied before any tool runs", () => {
   it("fails the run and never builds a tool runner", async () => {
@@ -293,15 +293,15 @@ describe("V6: work-prioritizer writes; a graph with the same tool and no princip
       roles: [[PRIORITIZER_USER, "work_item:transition"]],
     });
 
-  it("allows work_item_transition for the prioritizer role", async () => {
+  it("allows core__work_item_update for the prioritizer role", async () => {
     const seen: Array<{ tool: string; scope: unknown }> = [];
     const a = auth();
     const run = await start("work-prioritizer", a, undefined, seen);
-    const result = await run.exec("core__work_item_transition", TRANSITION_ARGS);
+    const result = await run.exec("core__work_item_update", UPDATE_ARGS);
     expect(reached(result)).toBe(true);
     expect(seen).toHaveLength(1);
     expect(a.events).toEqual([
-      expect.objectContaining({ principal: PRIORITIZER_USER, subject: null, payer: "payer-1", tool: "core__work_item_transition", decision: "allow" }),
+      expect.objectContaining({ principal: PRIORITIZER_USER, subject: null, payer: "payer-1", tool: "core__work_item_update", decision: "allow" }),
     ]);
   });
 
@@ -310,12 +310,12 @@ describe("V6: work-prioritizer writes; a graph with the same tool and no princip
     const a = auth();
     const run = await start("test-no-principal", a, MEMBER, seen);
     // DENIAL_IS_TERMINAL (1/2): the model is never offered the tool.
-    expect(run.options!.toolContracts.map((c) => c.name)).not.toContain("core__work_item_transition");
-    expect(run.options!.request.configurable.toolIds).not.toContain("core__work_item_transition");
-    expect(forTool(a.events, "core__work_item_transition")).toEqual([
+    expect(run.options!.toolContracts.map((c) => c.name)).not.toContain("core__work_item_update");
+    expect(run.options!.request.configurable.toolIds).not.toContain("core__work_item_update");
+    expect(forTool(a.events, "core__work_item_update")).toEqual([
       expect.objectContaining({ principal: null, decision: "deny", code: "policy_denied", reason: "not_offered:no_principal" }),
     ]);
-    const result = await run.exec("core__work_item_transition", TRANSITION_ARGS);
+    const result = await run.exec("core__work_item_update", UPDATE_ARGS);
     expect(result.ok).toBe(false);
     expect(seen).toEqual([]);
   });
@@ -424,8 +424,8 @@ describe("bearer agents (subject with no wallet): admin narrows, member passes",
     const a = authority({ principals: { prioritizer: PRIORITIZER_USER }, roles: [[PRIORITIZER_USER, "work_item:transition"]] });
     const seen: Array<{ tool: string; scope: unknown }> = [];
     const run = await start("work-prioritizer", a, AGENT, seen);
-    expect(reached(await run.exec("core__work_item_transition", TRANSITION_ARGS))).toBe(true);
-    expect(forTool(a.events, "core__work_item_transition")).toEqual([expect.objectContaining({ principal: PRIORITIZER_USER, subject: AGENT, decision: "allow" })]);
+    expect(reached(await run.exec("core__work_item_update", UPDATE_ARGS))).toBe(true);
+    expect(forTool(a.events, "core__work_item_update")).toEqual([expect.objectContaining({ principal: PRIORITIZER_USER, subject: AGENT, decision: "allow" })]);
   });
 });
 
@@ -470,8 +470,8 @@ describe("a scheduled run's subject is its execution-grant owner", () => {
     const { COGNI_SYSTEM_PRINCIPAL_USER_ID } = await import("@cogni/node-shared");
     const a = authority({ principals: { prioritizer: PRIORITIZER_USER }, roles: [[PRIORITIZER_USER, "work_item:transition"]] });
     const exec = await scheduledRun("work-prioritizer", COGNI_SYSTEM_PRINCIPAL_USER_ID, a);
-    expect(reached(await exec("core__work_item_transition", TRANSITION_ARGS))).toBe(true);
-    expect(forTool(a.events, "core__work_item_transition")).toEqual([expect.objectContaining({ subject: null, decision: "allow" })]);
+    expect(reached(await exec("core__work_item_update", UPDATE_ARGS))).toBe(true);
+    expect(forTool(a.events, "core__work_item_update")).toEqual([expect.objectContaining({ subject: null, decision: "allow" })]);
   });
 });
 

@@ -32,7 +32,7 @@ import {
 } from "../src/catalog";
 import { createDevToolExecFn } from "../src/runtime/core/dev-tool-exec";
 
-const WRITE_ARGS = { action: "patch", id: "task.1", priority: 3 };
+const WRITE_ARGS = { action: "patch", id: "task.1", reason: "test change", priority: 3 };
 
 describe("catalog principals (N4)", () => {
   it("names prioritizer for work-prioritizer and node-ai for cogni", () => {
@@ -42,16 +42,17 @@ describe("catalog principals (N4)", () => {
     expect(NODE_AI_PRINCIPAL).toBe("node-ai");
   });
 
-  it("gives work-prioritizer the scores writer", () => {
-    expect(LANGGRAPH_CATALOG["work-prioritizer"]?.toolIds).toContain(
-      "core__work_item_transition",
-    );
+  it("gives work-prioritizer the guarded triage writer", () => {
+    const ids = LANGGRAPH_CATALOG["work-prioritizer"]?.toolIds ?? [];
+    expect(ids).toContain("core__work_item_update");
+    expect(ids).not.toContain("core__work_item_transition");
   });
 
   it("gives cogni no domain writer: its only write tool arranges schedules", () => {
     const ids = LANGGRAPH_CATALOG.cogni?.toolIds ?? [];
     expect(ids).toContain("core__schedule_manage");
     expect(ids).not.toContain("core__work_item_transition");
+    expect(ids).not.toContain("core__work_item_update");
     expect(ids).not.toContain("core__metric_compute");
     expect(ids).not.toContain("core__knowledge_write");
   });

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-/** Test doubles shared by the true-now and definition tests: a fake Sql and an in-memory observation store. */
+/** Test doubles shared by the no-inline-history and definition tests: a fake Sql and an in-memory observation store. */
 import type { Sql } from "postgres";
 import { createGoalMetrics } from "../src/knowledge.js";
 

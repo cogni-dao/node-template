@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 /**
- * true-now@1: the state, scope and edits source reads with their caps and
+ * no-inline-history@1: the state, scope and edits source reads with their caps and
  * failure map, the (commit, row) merge-repeat collapse, append detection, the
  * calculator in the goal-metric service, and the removal of package-served
  * definitions (definitions are hub rows only).
@@ -14,14 +14,14 @@ import {
 } from "../src/knowledge.js";
 import * as knowledge from "../src/knowledge.js";
 import {
-	readTrueNowEdits,
-	readTrueNowScope,
-	readTrueNowState,
-	TRUE_NOW_MAX_BYTES,
-	TRUE_NOW_MAX_EDITS,
-	TRUE_NOW_MAX_ROWS,
-	trueNowEditsSql,
-	trueNowStateSql,
+	readNoInlineHistoryEdits,
+	readNoInlineHistoryScope,
+	readNoInlineHistoryState,
+	NO_INLINE_HISTORY_MAX_BYTES,
+	NO_INLINE_HISTORY_MAX_EDITS,
+	NO_INLINE_HISTORY_MAX_ROWS,
+	noInlineHistoryEditsSql,
+	noInlineHistoryStateSql,
 } from "../src/sources.js";
 import { fakeSql, hub, metricRow, noObservations, type Row } from "./fakes.js";
 
@@ -53,7 +53,7 @@ const atomRow = (id: string, extra: Row = {}): Row => ({
 	...extra,
 });
 
-describe("true-now@1 state read", () => {
+describe("no-inline-history@1 state read", () => {
 	it("issues one statement and scores every open work item", async () => {
 		const { sql, queries } = fakeSql(() =>
 			joined([
@@ -65,12 +65,12 @@ describe("true-now@1 state read", () => {
 				itemRow("task.5", `${GOAL}\n${DONE}\nApproved on 2026-11-01:\n- [ ] 2026-11-02 a\n- [ ] Update: b`),
 			]),
 		);
-		const sample = await readTrueNowState(sql, "work-items", signal);
+		const sample = await readNoInlineHistoryState(sql, "work-items", signal);
 		expect(queries).toHaveLength(1);
 		expect(sample).toMatchObject({ value: 60, unit: "%", complete: true });
 		expect(sample.sourceWatermarks).toEqual([{ source: "node.work_items", asOf: ASOF }]);
 		expect(sample.evidenceRefs).toEqual([
-			"rules:true-now-rules@1",
+			"rules:no-inline-history-rules@1",
 			"counts:evaluated=5;passing=3",
 			"rule:dated_line=0",
 			"rule:label_line=1",
@@ -95,7 +95,7 @@ describe("true-now@1 state read", () => {
 				atomRow("e4", { content: "Single 2026-11-01 date" }),
 			]),
 		);
-		const sample = await readTrueNowState(sql, "atoms", signal);
+		const sample = await readNoInlineHistoryState(sql, "atoms", signal);
 		expect(sample).toMatchObject({ value: 50, unit: "%", complete: true });
 		expect(sample.sourceWatermarks[0]?.source).toBe("node.knowledge");
 		expect(sample.evidenceRefs).toContain("counts:evaluated=4;passing=2");
@@ -106,37 +106,37 @@ describe("true-now@1 state read", () => {
 	it("never puts row text in evidence and reads frozen rows as equal", async () => {
 		const secret = "SECRET-BODY-TEXT";
 		const { sql } = fakeSql(() => joined([atomRow("e1", { content: `Update: ${secret}` }), atomRow("e2")]));
-		const a = await readTrueNowState(sql, "atoms", signal);
-		const b = await readTrueNowState(sql, "atoms", signal);
+		const a = await readNoInlineHistoryState(sql, "atoms", signal);
+		const b = await readNoInlineHistoryState(sql, "atoms", signal);
 		expect(b).toEqual(a);
 		expect(a.evidenceRefs.join("\n")).not.toContain(secret);
 	});
 
 	it("maps an empty scope to zero_denominator, never 0", async () => {
 		const { sql } = fakeSql(() => [{ as_of: ASOF, n: "0", bytes: "0", id: null }]);
-		expect(await readTrueNowState(sql, "work-items", signal)).toMatchObject({
+		expect(await readNoInlineHistoryState(sql, "work-items", signal)).toMatchObject({
 			complete: false,
 			reason: "zero_denominator",
 		});
-		expect(await readTrueNowState(fakeSql(() => []).sql, "atoms", signal)).toMatchObject({
+		expect(await readNoInlineHistoryState(fakeSql(() => []).sql, "atoms", signal)).toMatchObject({
 			complete: false,
 			reason: "incomplete_or_invalid_source",
 		});
 	});
 
 	it.each([
-		["rows", { n: String(TRUE_NOW_MAX_ROWS + 1), bytes: "10" }],
-		["bytes", { n: "10", bytes: String(TRUE_NOW_MAX_BYTES + 1) }],
+		["rows", { n: String(NO_INLINE_HISTORY_MAX_ROWS + 1), bytes: "10" }],
+		["bytes", { n: "10", bytes: String(NO_INLINE_HISTORY_MAX_BYTES + 1) }],
 	])("fails closed on a cap hit on %s without scoring", async (_cap, totals) => {
 		const { sql } = fakeSql(() => [{ as_of: ASOF, id: null, ...totals }]);
-		const sample = await readTrueNowState(sql, "atoms", signal);
+		const sample = await readNoInlineHistoryState(sql, "atoms", signal);
 		expect(sample).toMatchObject({ complete: false, reason: "incomplete_or_invalid_source" });
 		expect(sample.evidenceRefs.join()).toContain("cap_hit");
 	});
 
 	it("fails closed when the rows disagree with their own count", async () => {
 		const { sql } = fakeSql(() => joined([atomRow("e1")]).map((r) => ({ ...r, n: "2" })));
-		expect(await readTrueNowState(sql, "atoms", signal)).toMatchObject({
+		expect(await readNoInlineHistoryState(sql, "atoms", signal)).toMatchObject({
 			complete: false,
 			reason: "incomplete_or_invalid_source",
 		});
@@ -144,7 +144,7 @@ describe("true-now@1 state read", () => {
 
 	it("fails a row whose field the statement sent absent as oversize", async () => {
 		const { sql } = fakeSql(() => joined([atomRow("e1", { content: null, oversize: true }), atomRow("e2")]));
-		const sample = await readTrueNowState(sql, "atoms", signal);
+		const sample = await readNoInlineHistoryState(sql, "atoms", signal);
 		expect(sample).toMatchObject({ value: 50, complete: true });
 		expect(sample.evidenceRefs).toContain("rule:oversize=1");
 		expect(sample.evidenceRefs).toContain("worst:e1:oversize");
@@ -154,7 +154,7 @@ describe("true-now@1 state read", () => {
 		const failing = fakeSql(() => {
 			throw new RangeError("relation does not exist SECRET-BODY-TEXT");
 		});
-		const sample = await readTrueNowState(failing.sql, "work-items", signal);
+		const sample = await readNoInlineHistoryState(failing.sql, "work-items", signal);
 		expect(sample).toMatchObject({ complete: false, reason: "source_failed" });
 		// The error class is observable; its message never is.
 		expect(sample.evidenceRefs).toEqual(["error:RangeError"]);
@@ -163,22 +163,22 @@ describe("true-now@1 state read", () => {
 			controller.abort();
 			throw new Error("canceled");
 		});
-		await expect(readTrueNowState(slow.sql, "work-items", controller.signal)).rejects.toThrow();
+		await expect(readNoInlineHistoryState(slow.sql, "work-items", controller.signal)).rejects.toThrow();
 	});
 
 	it("sends the scope and caps to the database in one read-only statement", () => {
-		const items = trueNowStateSql("work-items");
+		const items = noInlineHistoryStateSql("work-items");
 		expect(items).toContain("status NOT IN ('done','cancelled')");
 		for (const label of ['"test-fixture"', '"synthetic"', '"synthetic-fixture"']) expect(items).toContain(label);
 		expect(items).toContain("s.title, s.summary, s.outcome");
-		const atoms = trueNowStateSql("atoms");
+		const atoms = noInlineHistoryStateSql("atoms");
 		expect(atoms).toContain("status <> 'deprecated'");
 		expect(atoms).toContain("entry_type <> 'html'");
 		expect(atoms).toContain("[TEST]");
 		expect(atoms).toContain("s.title, s.use_when, s.content");
 		for (const text of [items, atoms]) {
-			expect(text).toContain(`t.n <= ${TRUE_NOW_MAX_ROWS}`);
-			expect(text).toContain(`t.bytes <= ${TRUE_NOW_MAX_BYTES}`);
+			expect(text).toContain(`t.n <= ${NO_INLINE_HISTORY_MAX_ROWS}`);
+			expect(text).toContain(`t.bytes <= ${NO_INLINE_HISTORY_MAX_BYTES}`);
 			expect(text).toContain("> 100000 THEN NULL");
 			expect(text).not.toContain(";");
 			expect(text).not.toMatch(/\b(INSERT|UPDATE|DELETE|DROP)\b/i);
@@ -186,10 +186,10 @@ describe("true-now@1 state read", () => {
 	});
 });
 
-describe("true-now@1 scope read", () => {
+describe("no-inline-history@1 scope read", () => {
 	it("counts open work items outside fixtures in one statement", async () => {
 		const { sql, queries } = fakeSql(() => [{ as_of: ASOF, value: "73" }]);
-		const sample = await readTrueNowScope(sql, signal);
+		const sample = await readNoInlineHistoryScope(sql, signal);
 		expect(queries).toHaveLength(1);
 		expect(queries[0]).toContain("status NOT IN ('done','cancelled')");
 		expect(sample).toMatchObject({ value: 73, unit: "items", complete: true });
@@ -198,11 +198,11 @@ describe("true-now@1 scope read", () => {
 	});
 
 	it("keeps a real zero but never a missing count", async () => {
-		expect(await readTrueNowScope(fakeSql(() => [{ as_of: ASOF, value: "0" }]).sql, signal)).toMatchObject({
+		expect(await readNoInlineHistoryScope(fakeSql(() => [{ as_of: ASOF, value: "0" }]).sql, signal)).toMatchObject({
 			value: 0,
 			complete: true,
 		});
-		expect(await readTrueNowScope(fakeSql(() => []).sql, signal)).toMatchObject({ complete: false });
+		expect(await readNoInlineHistoryScope(fakeSql(() => []).sql, signal)).toMatchObject({ complete: false });
 	});
 });
 
@@ -246,10 +246,10 @@ function history(items: Row[], atoms: Row[]) {
 }
 const edits = async (items: Row[], atoms: Row[], output: "share" | "count" = "share") => {
 	const { sql, queries } = history(items, atoms);
-	return { sample: await readTrueNowEdits(sql, output, window, read), queries };
+	return { sample: await readNoInlineHistoryEdits(sql, output, window, read), queries };
 };
 
-describe("true-now@1 edits read", () => {
+describe("no-inline-history@1 edits read", () => {
 	it("reads work items then atoms in two statements and scores the share that did not append", async () => {
 		const clean = Array.from({ length: 8 }, (_, i) => itemEdit(`task.${i}`, IN));
 		const appending = [
@@ -268,7 +268,7 @@ describe("true-now@1 edits read", () => {
 			{ source: "node.knowledge", asOf: ASOF },
 		]);
 		expect(sample.evidenceRefs).toEqual([
-			"rules:true-now-rules@1",
+			"rules:no-inline-history-rules@1",
 			`window:[${START},${END})`,
 			"counts:edits=12;appending=2;withReason=0",
 			"counts:merge_repeats=0",
@@ -437,22 +437,22 @@ describe("true-now@1 edits read", () => {
 		});
 
 		it("fails closed above the edit cap for either output", async () => {
-			const rows = Array.from({ length: TRUE_NOW_MAX_EDITS + 1 }, (_, i) => itemEdit(`task.${i}`, IN));
+			const rows = Array.from({ length: NO_INLINE_HISTORY_MAX_EDITS + 1 }, (_, i) => itemEdit(`task.${i}`, IN));
 			for (const output of ["share", "count"] as const) {
 				const { sample } = await edits(rows, [], output);
 				expect(sample).toMatchObject({ complete: false, reason: "incomplete_or_invalid_source" });
 				expect(sample.evidenceRefs).toContain("cap_hit");
 			}
-			const exact = Array.from({ length: TRUE_NOW_MAX_EDITS }, (_, i) => itemEdit(`task.${i}`, IN));
-			expect((await edits(exact, [], "count")).sample).toMatchObject({ complete: true, value: TRUE_NOW_MAX_EDITS });
+			const exact = Array.from({ length: NO_INLINE_HISTORY_MAX_EDITS }, (_, i) => itemEdit(`task.${i}`, IN));
+			expect((await edits(exact, [], "count")).sample).toMatchObject({ complete: true, value: NO_INLINE_HISTORY_MAX_EDITS });
 		});
 
 		it.each([
-			["rows", { n: String(TRUE_NOW_MAX_ROWS + 1), bytes: "10" }],
-			["bytes", { n: "10", bytes: String(TRUE_NOW_MAX_BYTES + 1) }],
+			["rows", { n: String(NO_INLINE_HISTORY_MAX_ROWS + 1), bytes: "10" }],
+			["bytes", { n: "10", bytes: String(NO_INLINE_HISTORY_MAX_BYTES + 1) }],
 		])("fails closed on a statement cap hit on %s and stops at the failing table", async (_cap, capped) => {
 			const { sql, queries } = fakeSql(() => [{ as_of: ASOF, id: null, ...capped }]);
-			const sample = await readTrueNowEdits(sql, "count", window, read);
+			const sample = await readNoInlineHistoryEdits(sql, "count", window, read);
 			expect(sample).toMatchObject({ complete: false, reason: "incomplete_or_invalid_source" });
 			expect(sample.evidenceRefs.join()).toContain("cap_hit");
 			expect(queries).toHaveLength(1);
@@ -472,7 +472,7 @@ describe("true-now@1 edits read", () => {
 				});
 			}
 			const empty = fakeSql(() => []);
-			expect(await readTrueNowEdits(empty.sql, "count", window, read)).toMatchObject({
+			expect(await readNoInlineHistoryEdits(empty.sql, "count", window, read)).toMatchObject({
 				complete: false,
 				reason: "incomplete_or_invalid_source",
 			});
@@ -482,7 +482,7 @@ describe("true-now@1 edits read", () => {
 			const failing = fakeSql(() => {
 				throw new TypeError("table not found: dolt_diff_work_items SECRET-BODY-TEXT");
 			});
-			const sample = await readTrueNowEdits(failing.sql, "share", window, read);
+			const sample = await readNoInlineHistoryEdits(failing.sql, "share", window, read);
 			expect(sample).toMatchObject({ complete: false, reason: "source_failed" });
 			// The error class is observable; its message never is.
 			expect(sample.evidenceRefs).toContain("error:TypeError");
@@ -494,7 +494,7 @@ describe("true-now@1 edits read", () => {
 				throw new Error("canceled");
 			});
 			await expect(
-				readTrueNowEdits(slow.sql, "share", window, (source) => source(controller.signal)),
+				readNoInlineHistoryEdits(slow.sql, "share", window, (source) => source(controller.signal)),
 			).rejects.toThrow();
 		});
 	});
@@ -520,23 +520,25 @@ describe("true-now@1 edits read", () => {
 
 	describe("statement", () => {
 		it.each(["work-items", "atoms"] as const)("is one read-only %s statement with UTC window bounds and the caps pushed down", (table) => {
-			const text = trueNowEditsSql(table, window);
+			const text = noInlineHistoryEditsSql(table, window);
 			expect(text.startsWith("WITH diffs AS")).toBe(true);
 			expect(text).toContain(table === "work-items" ? "FROM dolt_diff_work_items d" : "FROM dolt_diff_knowledge d");
 			expect(text).toContain("d.to_commit <> 'WORKING'");
 			expect(text).toContain("d.to_commit_date >= '2026-11-02 12:00:00.000'");
 			expect(text).toContain("d.to_commit_date < '2026-11-09 12:00:00.000'");
 			expect(text).toContain("d.diff_type = 'modified'");
-			expect(text).toContain("IS DISTINCT FROM");
+			// Doltgres 0.57.3 panics on a bare from_/to_ text comparison inside the CTE.
+			expect(text).not.toContain("IS DISTINCT FROM");
+			expect(text).toContain(table === "work-items" ? "COALESCE(substr(d.from_outcome, 1, 100000), '') <> COALESCE(substr(d.to_outcome, 1, 100000), '')" : "COALESCE(substr(d.from_content, 1, 100000), '') <> COALESCE(substr(d.to_content, 1, 100000), '')");
 			// No wider history: no subquery, ordered by id then date, one row past the cap.
 			expect(text).not.toMatch(/\bIN \(\s*SELECT/i);
 			expect(text.match(/FROM dolt_diff_/g)).toHaveLength(1);
-			expect(text).toContain(`ORDER BY d.to_id, d.to_commit_date LIMIT ${TRUE_NOW_MAX_ROWS + 1}`);
+			expect(text).toContain(`ORDER BY d.to_id, d.to_commit_date LIMIT ${NO_INLINE_HISTORY_MAX_ROWS + 1}`);
 			// A missing commit row never drops a diff row.
 			expect(text).toContain("LEFT JOIN dolt_log l ON l.commit_hash = d.to_commit");
 			expect(text).not.toMatch(/(?<!LEFT )JOIN /);
-			expect(text).toContain(`t.n <= ${TRUE_NOW_MAX_ROWS}`);
-			expect(text).toContain(`t.bytes <= ${TRUE_NOW_MAX_BYTES}`);
+			expect(text).toContain(`t.n <= ${NO_INLINE_HISTORY_MAX_ROWS}`);
+			expect(text).toContain(`t.bytes <= ${NO_INLINE_HISTORY_MAX_BYTES}`);
 			expect(text).toContain("> 100000 THEN NULL");
 			expect(text).toContain("CAST(COALESCE(SUM(");
 			expect(text).toContain("ORDER BY s.id, s.at, s.commit_hash");
@@ -545,13 +547,13 @@ describe("true-now@1 edits read", () => {
 		});
 
 		it("reads only the changed text columns and the fixture scope as of the commit", () => {
-			const items = trueNowEditsSql("work-items", window);
+			const items = noInlineHistoryEditsSql("work-items", window);
 			expect(items).toContain("from_summary");
 			expect(items).toContain("to_outcome");
 			expect(items).not.toContain("d.to_title");
 			expect(items).toContain('"test-fixture"');
 			expect(items).toContain('"synthetic-fixture"');
-			const atoms = trueNowEditsSql("atoms", window);
+			const atoms = noInlineHistoryEditsSql("atoms", window);
 			expect(atoms).toContain("from_content");
 			expect(atoms).not.toContain("d.to_summary");
 			expect(atoms).toContain("to_entry_type <> 'html'");
@@ -587,24 +589,24 @@ const rowsFor = (text: string): Row[] => {
 		return live(totals([atomEdit("a1", recent(), { to_content: "Body\nUpdate: s" })]));
 	return [];
 };
-const trueNowRows = () => [
-	metricRow("work-items-true-now", "true-now@1", spec.state),
-	metricRow("atoms-true-now", "true-now@1", spec.atoms),
-	metricRow("work-items-in-scope", "true-now@1", spec.scope),
-	metricRow("edits-kept-current-7d", "true-now@1", spec.share),
-	metricRow("edits-7d", "true-now@1", spec.count),
+const noInlineHistoryRows = () => [
+	metricRow("work-items-no-inline-history", "no-inline-history@1", spec.state),
+	metricRow("atoms-no-inline-history", "no-inline-history@1", spec.atoms),
+	metricRow("work-items-in-scope", "no-inline-history@1", spec.scope),
+	metricRow("edits-kept-current-7d", "no-inline-history@1", spec.share),
+	metricRow("edits-7d", "no-inline-history@1", spec.count),
 ];
 
-describe("true-now@1 in the goal-metric service", () => {
+describe("no-inline-history@1 in the goal-metric service", () => {
 	it("is a published calculator whose family no node calculator may take", () => {
-		expect(PACKAGE_CALCULATOR_IDS).toContain("true-now@1");
-		expect(calculatorFamily("true-now@1")).toBe("true-now");
-		expect(RESERVED_CALCULATOR_FAMILIES.has("true-now")).toBe(true);
+		expect(PACKAGE_CALCULATOR_IDS).toContain("no-inline-history@1");
+		expect(calculatorFamily("no-inline-history@1")).toBe("no-inline-history");
+		expect(RESERVED_CALCULATOR_FAMILIES.has("no-inline-history")).toBe(true);
 		const { reader } = hub([]);
 		const node = {
-			id: "true-now@2",
+			id: "no-inline-history@2",
 			unit: "%",
-			paramsSchema: reader.registry.get("true-now@1").paramsSchema,
+			paramsSchema: reader.registry.get("no-inline-history@1").paramsSchema,
 			budget: { timeoutMs: 1000, maxSourceCalls: 1, maxRows: 1, maxResponseBytes: 1024 },
 			compute: async () => {
 				throw new Error("unused");
@@ -629,9 +631,9 @@ describe("true-now@1 in the goal-metric service", () => {
 			"work.convergence@1",
 			"github.stars@1",
 			"brief.conformance@1",
-			"true-now@1",
+			"no-inline-history@1",
 		]);
-		const calc = reader.registry.get("true-now@1");
+		const calc = reader.registry.get("no-inline-history@1");
 		expect(calc.budget).toEqual({
 			timeoutMs: 15000,
 			maxSourceCalls: 2,
@@ -662,7 +664,7 @@ describe("true-now@1 in the goal-metric service", () => {
 	});
 
 	it("takes the three designed param shapes and nothing else", () => {
-		const schema = hub([]).reader.registry.get("true-now@1").paramsSchema;
+		const schema = hub([]).reader.registry.get("no-inline-history@1").paramsSchema;
 		for (const ok of Object.values(spec)) expect(schema.safeParse(ok).success, JSON.stringify(ok)).toBe(true);
 		for (const bad of [
 			{ measure: "state" },
@@ -681,15 +683,15 @@ describe("true-now@1 in the goal-metric service", () => {
 	});
 
 	it.each([
-		["work-items-true-now", 50, "%", "counts:evaluated=2;passing=1", 1],
-		["atoms-true-now", 100, "%", "counts:evaluated=1;passing=1", 1],
+		["work-items-no-inline-history", 50, "%", "counts:evaluated=2;passing=1", 1],
+		["atoms-no-inline-history", 100, "%", "counts:evaluated=1;passing=1", 1],
 		["work-items-in-scope", 73, "items", "counts:evaluated=73", 1],
 		["edits-kept-current-7d", (100 * 10) / 11, "%", "counts:edits=11;appending=1;withReason=0", 2],
 		["edits-7d", 11, "edits", "counts:edits=11;appending=1;withReason=0", 2],
 	])("computes %s end to end with one terminal log event and the designed source calls", async (id, value, unit, evidence, calls) => {
-		const { service, events, queries } = hub(trueNowRows(), rowsFor);
+		const { service, events, queries } = hub(noInlineHistoryRows(), rowsFor);
 		const saved = await service.compute(id, { requestKey: `k-${id}` });
-		expect(saved).toMatchObject({ status: "ok", unit, reason: null, calculatorVersion: "true-now@1" });
+		expect(saved).toMatchObject({ status: "ok", unit, reason: null, calculatorVersion: "no-inline-history@1" });
 		expect(saved.value).toBeCloseTo(value as number, 10);
 		expect(saved.evidenceRefs).toContain(evidence);
 		const source = queries.filter((q) => !q.startsWith("SELECT id,title,metric_spec"));
@@ -699,7 +701,7 @@ describe("true-now@1 in the goal-metric service", () => {
 	});
 
 	it("measures the edits window as seven UTC days ending at the reading", async () => {
-		const { service } = hub(trueNowRows(), rowsFor);
+		const { service } = hub(noInlineHistoryRows(), rowsFor);
 		const saved = await service.compute("edits-7d", { requestKey: "k-window" });
 		const span = Date.parse(saved.window.end) - Date.parse(saved.window.start);
 		expect(span).toBe(7 * 86400 * 1000);
@@ -707,9 +709,9 @@ describe("true-now@1 in the goal-metric service", () => {
 	});
 
 	it("refuses a historical evaluation time, since state is read from main now", async () => {
-		const { service } = hub(trueNowRows(), rowsFor);
+		const { service } = hub(noInlineHistoryRows(), rowsFor);
 		await expect(
-			service.compute("work-items-true-now", { requestKey: "k-hist", evaluationAt: "2026-11-01T00:00:00.000Z" }),
+			service.compute("work-items-no-inline-history", { requestKey: "k-hist", evaluationAt: "2026-11-01T00:00:00.000Z" }),
 		).rejects.toMatchObject({ code: "historical_window_not_supported", status: 422 });
 	});
 
@@ -720,7 +722,7 @@ describe("true-now@1 in the goal-metric service", () => {
 				: text.includes("dolt_diff_knowledge")
 					? live(totals([]))
 					: rowsFor(text);
-		const { service, events } = hub(trueNowRows(), sparse);
+		const { service, events } = hub(noInlineHistoryRows(), sparse);
 		const saved = await service.compute("edits-kept-current-7d", { requestKey: "k-unknown" });
 		expect(saved).toMatchObject({ status: "unavailable", value: null, reason: "insufficient_history" });
 		expect(events.filter((e) => (e as { event: string }).event === "metric.compute.completed")).toEqual([
@@ -793,16 +795,16 @@ describe("package-served definitions are gone", () => {
 		expect(queries.every((q) => !q.includes("id IN ("))).toBe(true);
 	});
 
-	it("still lists the true-now rows through the registry catalog", async () => {
-		const { reader } = hub(trueNowRows());
+	it("still lists the no-inline-history rows through the registry catalog", async () => {
+		const { reader } = hub(noInlineHistoryRows());
 		const page = await reader.list(50);
 		expect(ids(page.items).sort()).toEqual([
-			"atoms-true-now",
+			"atoms-no-inline-history",
 			"edits-7d",
 			"edits-kept-current-7d",
 			"work-items-in-scope",
-			"work-items-true-now",
+			"work-items-no-inline-history",
 		]);
-		expect(page.catalog.map((c) => c.id)).toContain("true-now@1");
+		expect(page.catalog.map((c) => c.id)).toContain("no-inline-history@1");
 	});
 });

@@ -53,7 +53,7 @@ describe("published node catalog", () => {
     expect(prompt.match(/"id":"langgraph:/g)).toHaveLength(2);
   });
 
-  it("work-prioritizer (mission loop) runs on every node, bound to the common Cogni factory (reads + scores-only writer)", () => {
+  it("work-prioritizer (mission loop) runs on every node, bound to the common Cogni factory (reads + triage writer)", () => {
     const entry = LANGGRAPH_CATALOG["work-prioritizer"];
     expect(entry).toBeDefined();
     // Powered by the shared Cogni engine (program "work-review" via createMissionGraph).

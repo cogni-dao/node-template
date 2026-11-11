@@ -38,6 +38,12 @@ export interface KnowledgeHistoryEntry {
   readonly at: string;
   readonly actor: string | null;
   readonly reason: string | null;
+  /** Always `[]`: one history shape across planes (task.0086). */
+  readonly cites: readonly {
+    id: string;
+    commit: string;
+    contribution?: string | undefined;
+  }[];
   readonly changed: string[];
   readonly diff: Readonly<
     Record<string, { before: unknown; after: unknown; truncated: boolean }>
@@ -124,6 +130,7 @@ export function shapeKnowledgeHistory(
       at: iso(row.to_commit_date),
       actor: row.contribution_principal ?? row.committer ?? null,
       reason: row.contribution_message ?? cleanMessage(row.message),
+      cites: [],
       changed,
       diff,
     });

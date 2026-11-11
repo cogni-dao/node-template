@@ -13,6 +13,8 @@
  *   - AUTHORITY_IS_NOT_KIND (bug.0019): the adapter never gates patch on creator equality; a principal that did not create the row may patch any field (the door's authorize() decided), and the creator column stays immutable.
  *   - SCORES_JSONB_ORDER (story.5111): a scores patch is proven even when jsonb reorders its keys.
  *   - SCORES_BOUNDS_IN_PACKAGE (story.5111): create/patch run parseWorkItemScores; invalid scores never reach SQL.
+ *   - REASON_REQUIRED (task.0086): a patch without a valid reason fails before any SQL; the reason is the commit's `Reason:` line.
+ *   - CITES_PINNED (task.0086): the resolver runs inside the writer lock, before the branch, within one deadline; a failure releases the lock and writes nothing; the `Cites:` line holds only validated pins.
  * Side-effects: none
  * Links: bug.5005, task.5284,
  *   packages/work-items/src/adapters/doltgres/adapter.ts
@@ -21,14 +23,26 @@
 
 import { toWorkItemId } from "@cogni-dao/work-items";
 import type { Sql } from "postgres";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   DoltgresWorkItemAdapter,
+  type DoltgresWorkItemAdapterOptions,
   WorkItemAuthorizationError,
   WorkItemRevisionConflictError,
 } from "../../src/adapters/doltgres/adapter.js";
+import {
+  CitesInvalidError,
+  CitesUnsupportedError,
+  type EntryResolver,
+  EntryResolverUnavailableError,
+  EntryUnresolvedError,
+} from "../../src/cites.js";
 import { WorkItemScoresInvalidError } from "../../src/errors.js";
+import {
+  CHANGE_REASON_REQUIRED_MESSAGE,
+  ChangeReasonInvalidError,
+} from "../../src/history.js";
 import {
   independentReadPool,
   makeFakeDoltgresSql,
@@ -95,7 +109,7 @@ describe("DoltgresWorkItemAdapter.patch — bug.5005 allowlist", () => {
       readClient: independentReadPool(sql),
     });
     await adapter.patch(
-      { id: toWorkItemId("bug.5005"), set: { deployVerified: true } },
+      { reason: "test change", id: toWorkItemId("bug.5005"), set: { deployVerified: true } },
       "test"
     );
     const update = queries.find((q) => q.startsWith("UPDATE work_items"));
@@ -109,7 +123,7 @@ describe("DoltgresWorkItemAdapter.patch — bug.5005 allowlist", () => {
       readClient: independentReadPool(sql),
     });
     await adapter.patch(
-      { id: toWorkItemId("bug.5005"), set: { projectId: null } },
+      { reason: "test change", id: toWorkItemId("bug.5005"), set: { projectId: null } },
       "test"
     );
     const update = queries.find((q) => q.startsWith("UPDATE work_items"));
@@ -124,6 +138,7 @@ describe("DoltgresWorkItemAdapter.patch — bug.5005 allowlist", () => {
     });
     await adapter.patch(
       {
+        reason: "test change",
         id: toWorkItemId("bug.5005"),
         set: { parentId: toWorkItemId("task.5004"), blockedBy: null },
       },
@@ -141,7 +156,7 @@ describe("DoltgresWorkItemAdapter.patch — bug.5005 allowlist", () => {
       readClient: independentReadPool(sql),
     });
     await adapter.patch(
-      { id: toWorkItemId("bug.5005"), set: { title: "renamed" } },
+      { reason: "test change", id: toWorkItemId("bug.5005"), set: { title: "renamed" } },
       "test"
     );
     const update = queries.find((q) => q.startsWith("UPDATE work_items"));
@@ -221,7 +236,12 @@ function asJsonb(value: unknown): unknown {
  * assumed. It deliberately has no creator arm: a creator predicate must fail loudly. `concurrentBumpBeforeUpdate` models
  * a writer outside this adapter's lock landing between preflight and UPDATE.
  */
-function casHarness(options: { concurrentBumpBeforeUpdate?: boolean } = {}) {
+function casHarness(
+  options: {
+    concurrentBumpBeforeUpdate?: boolean;
+    adapter?: Partial<DoltgresWorkItemAdapterOptions>;
+  } = {}
+) {
   const queries: string[] = [];
   const store = new Map<string, Record<string, unknown>>([
     [CAS_ID, { ...casSeed }],
@@ -273,6 +293,7 @@ function casHarness(options: { concurrentBumpBeforeUpdate?: boolean } = {}) {
   const adapter = new DoltgresWorkItemAdapter(sql, {
     readClient: independentReadPool(sql),
     recreateClient: () => sql,
+    ...options.adapter,
   });
   return { adapter, queries, store };
 }
@@ -289,7 +310,7 @@ describe("DoltgresWorkItemAdapter.patch — expectedRevision CAS (task.5284)", (
     const { adapter, queries } = casHarness();
 
     const result = await adapter.patch(
-      { id: toWorkItemId(CAS_ID), expectedRevision: 3, set: { title: "cas" } },
+      { reason: "test change", id: toWorkItemId(CAS_ID), expectedRevision: 3, set: { title: "cas" } },
       CREATOR
     );
 
@@ -299,7 +320,7 @@ describe("DoltgresWorkItemAdapter.patch — expectedRevision CAS (task.5284)", (
       `WHERE id = '${CAS_ID}' AND revision = 3 RETURNING`
     );
     expect(queries).toContain(
-      `SELECT dolt_commit('-m', 'work-items: patch ${CAS_ID} by actor:${CREATOR}')`
+      `SELECT dolt_commit('-m', 'work-items: patch ${CAS_ID} by actor:${CREATOR}\nReason: test change')`
     );
   });
 
@@ -307,7 +328,7 @@ describe("DoltgresWorkItemAdapter.patch — expectedRevision CAS (task.5284)", (
     const { adapter, queries, store } = casHarness();
 
     const attempt = adapter.patch(
-      { id: toWorkItemId(CAS_ID), expectedRevision: 2, set: { priority: 0 } },
+      { reason: "test change", id: toWorkItemId(CAS_ID), expectedRevision: 2, set: { priority: 0 } },
       CREATOR
     );
 
@@ -329,7 +350,7 @@ describe("DoltgresWorkItemAdapter.patch — expectedRevision CAS (task.5284)", (
 
     await expect(
       adapter.patch(
-        { id: toWorkItemId(CAS_ID), expectedRevision: 3, set: { priority: 0 } },
+        { reason: "test change", id: toWorkItemId(CAS_ID), expectedRevision: 3, set: { priority: 0 } },
         CREATOR
       )
     ).rejects.toMatchObject({
@@ -349,7 +370,7 @@ describe("DoltgresWorkItemAdapter.patch — expectedRevision CAS (task.5284)", (
 
     await expect(
       adapter.patch(
-        { id: toWorkItemId(CAS_ID), set: { title: "plain" } },
+        { reason: "test change", id: toWorkItemId(CAS_ID), set: { title: "plain" } },
         CREATOR
       )
     ).resolves.toMatchObject({ title: "plain", revision: 4 });
@@ -366,6 +387,7 @@ describe("DoltgresWorkItemAdapter.patch — expectedRevision CAS (task.5284)", (
     await expect(
       adapter.patch(
         {
+          reason: "test change",
           id: toWorkItemId(CAS_ID),
           expectedRevision: "abc",
           set: { priority: 1 },
@@ -384,6 +406,7 @@ describe("DoltgresWorkItemAdapter.patch — non-creator principals (task.5284, b
     await expect(
       adapter.patch(
         {
+          reason: "test change",
           id: toWorkItemId(CAS_ID),
           expectedRevision: 3,
           set: { priority: 0, rank: 1, labels: ["triaged"] },
@@ -399,7 +422,7 @@ describe("DoltgresWorkItemAdapter.patch — non-creator principals (task.5284, b
     expect(updateOf(queries)).not.toContain("created_by_principal_id");
     expect(updateOf(queries)).toContain("AND revision = 3");
     expect(queries).toContain(
-      `SELECT dolt_commit('-m', 'work-items: patch ${CAS_ID} by actor:${COLLABORATOR}')`
+      `SELECT dolt_commit('-m', 'work-items: patch ${CAS_ID} by actor:${COLLABORATOR}\nReason: test change')`
     );
   });
 
@@ -408,7 +431,7 @@ describe("DoltgresWorkItemAdapter.patch — non-creator principals (task.5284, b
 
     await expect(
       adapter.patch(
-        { id: toWorkItemId(CAS_ID), set: { priority: 0, title: "now yours" } },
+        { reason: "test change", id: toWorkItemId(CAS_ID), set: { priority: 0, title: "now yours" } },
         COLLABORATOR
       )
     ).resolves.toMatchObject({ priority: 0, title: "now yours", revision: 4 });
@@ -432,7 +455,7 @@ describe("DoltgresWorkItemAdapter.patch — non-creator principals (task.5284, b
     };
 
     const result = await adapter.patch(
-      { id: toWorkItemId(CAS_ID), expectedRevision: 3, set: { scores } },
+      { reason: "test change", id: toWorkItemId(CAS_ID), expectedRevision: 3, set: { scores } },
       COLLABORATOR
     );
 
@@ -453,7 +476,7 @@ describe("DoltgresWorkItemAdapter.patch — non-creator principals (task.5284, b
     const { adapter, queries } = casHarness();
 
     await expect(
-      adapter.patch({ id: toWorkItemId(CAS_ID), set: { priority: 0 } }, "  ")
+      adapter.patch({ reason: "test change", id: toWorkItemId(CAS_ID), set: { priority: 0 } }, "  ")
     ).rejects.toBeInstanceOf(WorkItemAuthorizationError);
     expect(queries).toHaveLength(0);
   });
@@ -527,7 +550,7 @@ describe("DoltgresWorkItemAdapter — scores (story.5111)", () => {
     store.set(CAS_ID, { ...casSeed, scores: asJsonb(scores) });
 
     const result = await adapter.patch(
-      { id: toWorkItemId(CAS_ID), expectedRevision: 3, set: { scores: null } },
+      { reason: "test change", id: toWorkItemId(CAS_ID), expectedRevision: 3, set: { scores: null } },
       COLLABORATOR
     );
 
@@ -559,6 +582,7 @@ describe("DoltgresWorkItemAdapter — scores (story.5111)", () => {
     await expect(
       adapter.patch(
         {
+          reason: "test change",
           id: toWorkItemId(CAS_ID),
           expectedRevision: 3,
           set: { scores: { goal: { v: 4, ev: "http://external.example/x" } } },
@@ -601,5 +625,304 @@ describe("DoltgresWorkItemAdapter — scores (story.5111)", () => {
     );
     expect(created.scores).toEqual(input.scores);
     expect(committed(queries)).toBe(true);
+  });
+});
+
+// task.0086: every patch carries a reason; cites are pinned by the resolver.
+const COMMIT_A = "a".repeat(32);
+const COMMIT_B = "0123456789abcdefghijklmnopqrstuv";
+const words = (n: number) => Array.from({ length: n }, () => "w").join(" ");
+const unlocked = (queries: string[]) =>
+  queries.some((query) => query.startsWith("SELECT pg_advisory_unlock"));
+const patchWith = (
+  adapter: DoltgresWorkItemAdapter,
+  fields: Record<string, unknown>
+) =>
+  adapter.patch(
+    {
+      id: toWorkItemId(CAS_ID),
+      set: { title: "why" },
+      ...fields,
+    } as never,
+    CREATOR
+  );
+const commitMessageOf = (queries: string[]) =>
+  /SELECT dolt_commit\('-m', '([\s\S]*)'\)/.exec(
+    queries.find((q) => q.startsWith("SELECT dolt_commit")) ?? ""
+  )?.[1];
+const pinsFor =
+  (commits: Record<string, string>): EntryResolver["resolve"] =>
+  async (refs) =>
+    refs.map((ref) => ({
+      id: ref.id,
+      commit: commits[ref.id] ?? COMMIT_A,
+      plane: ref.contribution ? ("inbox" as const) : ("main" as const),
+    }));
+
+describe("DoltgresWorkItemAdapter.patch — reason is required (task.0086)", () => {
+  it.each([
+    ["missing", undefined],
+    ["empty", ""],
+    ["blank", "  \n "],
+    ["NUL", "a\u0000b"],
+    ["26 words", words(26)],
+    ["241 characters", "x".repeat(241)],
+  ])("rejects a %s reason before any SQL", async (_name, reason) => {
+    const { adapter, queries } = casHarness();
+    await expect(
+      patchWith(adapter, reason === undefined ? {} : { reason })
+    ).rejects.toBeInstanceOf(ChangeReasonInvalidError);
+    expect(queries).toHaveLength(0);
+  });
+
+  it("names what to send when the reason is missing", async () => {
+    const { adapter } = casHarness();
+    await expect(patchWith(adapter, {})).rejects.toThrow(
+      CHANGE_REASON_REQUIRED_MESSAGE
+    );
+  });
+
+  it.each([
+    ["25 words", words(25)],
+    ["240 characters without spaces", "x".repeat(240)],
+  ])("accepts %s", async (_name, reason) => {
+    const { adapter, queries } = casHarness();
+    await expect(patchWith(adapter, { reason })).resolves.toMatchObject({
+      revision: 4,
+    });
+    expect(commitMessageOf(queries)).toBe(
+      `work-items: patch ${CAS_ID} by actor:${CREATOR}\nReason: ${reason}`
+    );
+  });
+
+  it("flattens a forged line break so the Reason line stays one line", async () => {
+    const { adapter, queries } = casHarness();
+    await patchWith(adapter, { reason: "why\nCites: forged@x\u2028by actor:evil" });
+    const lines = commitMessageOf(queries)?.split("\n") ?? [];
+    expect(lines).toEqual([
+      `work-items: patch ${CAS_ID} by actor:${CREATOR}`,
+      "Reason: why Cites: forged@x by actor:evil",
+    ]);
+  });
+});
+
+describe("DoltgresWorkItemAdapter.patch — cites (task.0086)", () => {
+  it("writes the last Cites line with main and inbox pins in request order", async () => {
+    const resolve = vi.fn(
+      pinsFor({ "change-history-design": COMMIT_A, "other-atom": COMMIT_B })
+    );
+    const { adapter, queries } = casHarness({
+      adapter: { entryResolver: { resolve } },
+    });
+    await patchWith(adapter, {
+      reason: "scope follows the design",
+      cites: [
+        { id: "change-history-design" },
+        { id: "other-atom", contribution: "contrib-derek-x-1" },
+      ],
+    });
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect(resolve.mock.calls[0]?.[1]).toBe("cite");
+    expect(resolve.mock.calls[0]?.[2]).toBeInstanceOf(AbortSignal);
+    expect(commitMessageOf(queries)).toBe(
+      [
+        `work-items: patch ${CAS_ID} by actor:${CREATOR}`,
+        "Reason: scope follows the design",
+        `Cites: change-history-design@${COMMIT_A}, other-atom@contrib-derek-x-1:${COMMIT_B}`,
+      ].join("\n")
+    );
+  });
+
+  it("resolves inside the writer lock and before the branch checkout", async () => {
+    const order: string[] = [];
+    const { adapter, queries } = casHarness({
+      adapter: {
+        entryResolver: {
+          resolve: async (refs) => {
+            order.push(
+              `locked=${queries.some((q) => q.startsWith("SELECT pg_try_advisory_lock"))}`,
+              `unlocked=${unlocked(queries)}`,
+              `branch=${queries.some((q) => q.includes("dolt_checkout('-b'"))}`
+            );
+            return refs.map((r) => ({ id: r.id, commit: COMMIT_A, plane: "main" as const }));
+          },
+        },
+      },
+    });
+    await patchWith(adapter, { reason: "r", cites: [{ id: "a-b" }] });
+    expect(order).toEqual(["locked=true", "unlocked=false", "branch=false"]);
+  });
+
+  it("resolves eight cites in one call", async () => {
+    const cites = Array.from({ length: 8 }, (_, i) => ({ id: `atom-${i}` }));
+    const resolve = vi.fn(pinsFor({}));
+    const { adapter, queries } = casHarness({
+      adapter: { entryResolver: { resolve } },
+    });
+    await patchWith(adapter, { reason: "r", cites });
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect(
+      commitMessageOf(queries)?.split("\n").at(-1)?.split(", ")
+    ).toHaveLength(8);
+  });
+
+  it("refuses nine cites, a repeated id and a bad id before any SQL", async () => {
+    const resolve = vi.fn(pinsFor({}));
+    const { adapter, queries } = casHarness({
+      adapter: { entryResolver: { resolve } },
+    });
+    for (const cites of [
+      Array.from({ length: 9 }, (_, i) => ({ id: `atom-${i}` })),
+      [{ id: "same" }, { id: "same" }],
+      [{ id: "bad\nid" }],
+      [{ id: "ok", contribution: "not-contrib" }],
+    ]) {
+      await expect(patchWith(adapter, { reason: "r", cites })).rejects.toBeInstanceOf(
+        CitesInvalidError
+      );
+    }
+    expect(queries).toHaveLength(0);
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it("refuses cites with no resolver wired (a reason alone still works)", async () => {
+    const { adapter, queries } = casHarness();
+    await expect(
+      patchWith(adapter, { reason: "r", cites: [{ id: "a-b" }] })
+    ).rejects.toBeInstanceOf(CitesUnsupportedError);
+    expect(queries).toHaveLength(0);
+    await expect(patchWith(adapter, { reason: "r" })).resolves.toBeDefined();
+  });
+
+  it("an unknown id or a closed inbox is EntryUnresolvedError: lock released, nothing written", async () => {
+    const { adapter, queries, store } = casHarness({
+      adapter: {
+        entryResolver: {
+          resolve: async () => {
+            throw new EntryUnresolvedError(["ghost"]);
+          },
+        },
+      },
+    });
+    const attempt = patchWith(adapter, { reason: "r", cites: [{ id: "ghost" }] });
+    await expect(attempt).rejects.toBeInstanceOf(EntryUnresolvedError);
+    await expect(attempt).rejects.toMatchObject({ ids: ["ghost"] });
+    expect(branchCreated(queries)).toBe(false);
+    expect(committed(queries)).toBe(false);
+    expect(updateOf(queries)).toBeUndefined();
+    expect(unlocked(queries)).toBe(true);
+    expect(store.get(CAS_ID)).toMatchObject({ title: "triage me", revision: 3 });
+  });
+
+  it("matches an unresolved error from a bundled copy of the class by name", async () => {
+    class EntryUnresolvedError extends Error {
+      readonly ids = ["ghost"];
+      constructor() {
+        super("copy");
+        this.name = "EntryUnresolvedError";
+      }
+    }
+    const { adapter } = casHarness({
+      adapter: {
+        entryResolver: {
+          resolve: async () => {
+            throw new EntryUnresolvedError();
+          },
+        },
+      },
+    });
+    await expect(
+      patchWith(adapter, { reason: "r", cites: [{ id: "ghost" }] })
+    ).rejects.toMatchObject({ code: "cite_unresolved", ids: ["ghost"] });
+  });
+
+  it("wraps any other resolver error as EntryResolverUnavailableError and writes nothing", async () => {
+    const { adapter, queries } = casHarness({
+      adapter: {
+        entryResolver: {
+          resolve: async () => {
+            throw new Error("connection reset");
+          },
+        },
+      },
+    });
+    await expect(
+      patchWith(adapter, { reason: "r", cites: [{ id: "a-b" }] })
+    ).rejects.toBeInstanceOf(EntryResolverUnavailableError);
+    expect(branchCreated(queries)).toBe(false);
+    expect(unlocked(queries)).toBe(true);
+  });
+
+  it("a resolver that never answers is EntryResolverUnavailableError within the deadline, with the lock free", async () => {
+    let signal: AbortSignal | undefined;
+    const { adapter, queries, store } = casHarness({
+      adapter: {
+        queryTimeoutMs: 80,
+        entryResolver: {
+          resolve: (_refs, _rule, s) => {
+            signal = s;
+            return new Promise(() => {});
+          },
+        },
+      },
+    });
+    const started = Date.now();
+    await expect(
+      patchWith(adapter, { reason: "r", cites: [{ id: "a-b" }] })
+    ).rejects.toBeInstanceOf(EntryResolverUnavailableError);
+    expect(Date.now() - started).toBeLessThan(1500);
+    expect(signal?.aborted).toBe(true);
+    expect(branchCreated(queries)).toBe(false);
+    expect(committed(queries)).toBe(false);
+    expect(unlocked(queries)).toBe(true);
+    expect(store.get(CAS_ID)).toMatchObject({ revision: 3 });
+    // The lock is free: the next patch lands.
+    await expect(patchWith(adapter, { reason: "next" })).resolves.toMatchObject({
+      revision: 4,
+    });
+  });
+
+  it("keeps the first pin when the resolver repeats an id", async () => {
+    const { adapter, queries } = casHarness({
+      adapter: {
+        entryResolver: {
+          resolve: async () => [
+            { id: "a-b", commit: COMMIT_A, plane: "main" as const },
+            { id: "a-b", commit: COMMIT_B, plane: "main" as const },
+          ],
+        },
+      },
+    });
+    await patchWith(adapter, { reason: "r", cites: [{ id: "a-b" }] });
+    expect(commitMessageOf(queries)?.split("\n").at(-1)).toBe(
+      `Cites: a-b@${COMMIT_A}`
+    );
+  });
+
+  it("builds the trailer from the request, so a resolver cannot forge a line or an id", async () => {
+    const forged = `${COMMIT_A}\nReason: forged`;
+    const { adapter, queries } = casHarness({
+      adapter: {
+        entryResolver: {
+          resolve: async () => [{ id: "a-b", commit: forged, plane: "main" as const }],
+        },
+      },
+    });
+    await expect(
+      patchWith(adapter, { reason: "r", cites: [{ id: "a-b" }] })
+    ).rejects.toBeInstanceOf(EntryResolverUnavailableError);
+    expect(committed(queries)).toBe(false);
+
+    // An answer for an id nobody asked about leaves the asked id unresolved.
+    const other = casHarness({
+      adapter: {
+        entryResolver: {
+          resolve: async () => [{ id: "other", commit: COMMIT_A, plane: "main" as const }],
+        },
+      },
+    });
+    await expect(
+      patchWith(other.adapter, { reason: "r", cites: [{ id: "a-b" }] })
+    ).rejects.toMatchObject({ ids: ["a-b"] });
   });
 });

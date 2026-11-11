@@ -32,6 +32,11 @@ vi.mock("@/app/_facades/work/items.server", async () => {
     WorkItemNotFoundError: class extends Error {},
     WorkItemForbiddenError: class extends Error {},
     WorkItemRevisionConflictError: class extends Error {},
+    ChangeReasonInvalidError: class extends Error {},
+    CitesInvalidError: class extends Error {},
+    CitesUnsupportedError: class extends Error {},
+    EntryResolverUnavailableError: class extends Error {},
+    EntryUnresolvedError: class extends Error {},
   };
 });
 
@@ -47,7 +52,7 @@ type Handler = (
 describe("work-item uncertain write HTTP receipts", () => {
   for (const [name, handler, body] of [
     ["create", POST, { type: "task", title: "uncertain" }],
-    ["patch", PATCH, { set: { title: "uncertain" } }],
+    ["patch", PATCH, { reason: "r", set: { title: "uncertain" } }],
   ] as const) {
     it(`${name} returns 409 plus the nonretryable lookup receipt`, async () => {
       const response = await (handler as unknown as Handler)(

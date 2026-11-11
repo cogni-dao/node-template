@@ -37,6 +37,7 @@ const entry = (reason: string | null) => ({
   at: "2026-11-07T00:00:00.000Z",
   actor: null,
   reason,
+  cites: [],
   changed: ["title"],
   diff: { title: { before: "a", after: "b", truncated: false } },
 });

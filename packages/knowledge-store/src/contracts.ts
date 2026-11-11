@@ -279,6 +279,14 @@ export const HistoryEntrySchema = z.object({
   at: z.string(),
   actor: z.string().nullable(),
   reason: z.string().nullable(),
+  /** Always `[]` on knowledge: the shape is the work-items one so both planes serve one contract (task.0086). */
+  cites: z.array(
+    z.object({
+      id: z.string(),
+      commit: z.string(),
+      contribution: z.string().optional(),
+    })
+  ),
   changed: z.array(z.string()),
   diff: z.record(
     z.string(),
@@ -300,7 +308,7 @@ export const knowledgeHistoryOperation = {
   id: "knowledge.history.v1",
   summary: "Read a knowledge entry's history",
   description:
-    "Returns the entry's versions, newest first, each with its change reason (the contribution commit message), actor and changed fields.",
+    "Returns the entry's versions, newest first, each with its change reason (the contribution commit message), actor and changed fields. `cites` is always empty on knowledge.",
   input: z.object({ id: z.string() }),
   output: HistoryOutputSchema,
 } as const;

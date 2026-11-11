@@ -18,6 +18,7 @@ import {
 	mkdtempSync,
 	readFileSync,
 	rmSync,
+	utimesSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -99,9 +100,15 @@ describe("session cognition hook", () => {
 			encoding: "utf8",
 		});
 
-		// Claude imports the cache through CLAUDE.md; its SessionStart hook only
-		// refreshes the file and must not duplicate a partial stdout preview.
-		expect(output).toBe("");
+		// First boot: this session's CLAUDE.md import ran before the file existed,
+		// so Claude gets the fetched bundle through its uncapped structured
+		// channel, never a raw-stdout preview (bug.0018).
+		expect(JSON.parse(output)).toEqual({
+			hookSpecificOutput: {
+				hookEventName: "SessionStart",
+				additionalContext: "live cognition",
+			},
+		});
 		expect(readFileSync(cache, "utf8")).toBe("live cognition\n");
 	});
 
@@ -125,9 +132,11 @@ describe("session cognition hook", () => {
 		expect(loader).not.toContain("SESSION_COGNITION_MAX_BYTES");
 		expect(loader).not.toContain("bundle_fits_budget");
 		expect(loader).not.toContain("oversized_bundle_notice");
-		// Only Codex consumes hook stdout; Claude's hook is write-only.
+		// Codex consumes raw stdout; Claude gets the structured channel only on a
+		// boot whose import could have missed the cache (bug.0018).
 		expect(loader).toContain("emit_agent_context");
-		expect(loader).not.toContain("hookSpecificOutput");
+		expect(loader).toContain("hookSpecificOutput");
+		expect(loader).toContain("cache_is_fresh_for_this_boot");
 	});
 
 	it("installs the stable user presenter during local Conductor setup", () => {
@@ -141,6 +150,23 @@ describe("session cognition hook", () => {
 		expect(setup.indexOf(guardedInstall)).toBeLessThan(
 			setup.indexOf("pnpm install --offline --frozen-lockfile"),
 		);
+	});
+
+	it("warms the cognition cache in workspace setup before anything slow (bug.0018)", () => {
+		const setup = readFileSync(CONDUCTOR_SETUP, "utf8");
+		// Claude Code resolves the CLAUDE.md @import before its SessionStart hook
+		// can write the cache, so setup must warm it before the first agent starts.
+		const linkKey = setup.indexOf('\nlink_from_auth_root ".env.cogni"');
+		const warm = setup.indexOf("\nwarm_cognition_cache\n");
+		expect(linkKey).toBeGreaterThan(-1);
+		expect(warm).toBeGreaterThan(linkKey);
+		for (const slow of [
+			"\nrefresh_workspace_base_ref\n",
+			"pnpm install --offline --frozen-lockfile",
+			"pnpm build:packages",
+		])
+			expect(warm).toBeLessThan(setup.indexOf(slow));
+		expect(setup).toContain("bash scripts/agent/session-cognition.sh");
 	});
 
 	it("keeps the agent bootstrap automatic", () => {
@@ -164,6 +190,13 @@ describe("session cognition hook", () => {
 		writeFileSync(
 			path.join(small, ".cogni/.cognition-cache.md"),
 			"complete cognition\n",
+		);
+		// A warm cache older than this boot: the import already has it.
+		const anHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+		utimesSync(
+			path.join(small, ".cogni/.cognition-cache.md"),
+			anHourAgo,
+			anHourAgo,
 		);
 		// Claude Code path: write-only hook; CLAUDE.md owns presentation.
 		const smallOut = execFileSync("bash", [LOADER], {
@@ -204,6 +237,11 @@ describe("session cognition hook", () => {
 			path.join(large, ".cogni/.cognition-cache.md"),
 			"x".repeat(overCapBytes),
 		);
+		utimesSync(
+			path.join(large, ".cogni/.cognition-cache.md"),
+			anHourAgo,
+			anHourAgo,
+		);
 		const largeOut = execFileSync("bash", [LOADER], {
 			cwd: large,
 			env,
@@ -214,6 +252,65 @@ describe("session cognition hook", () => {
 			overCapBytes,
 		);
 		expect(largeOut).not.toContain("bundle rejected before injection");
+
+		// A cache written moments ago (workspace setup racing this boot) may have
+		// missed the import: Claude gets it whole through the structured channel.
+		const fresh = path.join(root, "fresh");
+		mkdirSync(path.join(fresh, ".cogni"), { recursive: true });
+		writeFileSync(path.join(fresh, CACHE_PATH), "x".repeat(overCapBytes));
+		const freshOut = execFileSync("bash", [LOADER], {
+			cwd: fresh,
+			env,
+			encoding: "utf8",
+		});
+		expect(
+			JSON.parse(freshOut).hookSpecificOutput.additionalContext,
+		).toHaveLength(overCapBytes);
+
+		// Resume, clear and compact keep the import's copy: no duplicate.
+		for (const source of ["resume", "clear", "compact"]) {
+			expect(
+				execFileSync("bash", [LOADER], {
+					cwd: fresh,
+					env,
+					encoding: "utf8",
+					input: JSON.stringify({ hook_event_name: "SessionStart", source }),
+				}),
+			).toBe("");
+		}
+		expect(
+			JSON.parse(
+				execFileSync("bash", [LOADER], {
+					cwd: fresh,
+					env,
+					encoding: "utf8",
+					input: JSON.stringify({
+						hook_event_name: "SessionStart",
+						source: "startup",
+					}),
+				}),
+			).hookSpecificOutput.additionalContext,
+		).toHaveLength(overCapBytes);
+
+		// A first boot that cannot load tells Claude why, through the same channel.
+		const keyless = path.join(root, "keyless");
+		const offline = path.join(keyless, "bin");
+		mkdirSync(offline, { recursive: true });
+		// Hermetic: the fetch fails at once instead of reaching a real hub.
+		writeFileSync(path.join(offline, "curl"), "#!/bin/sh\nexit 22\n");
+		chmodSync(path.join(offline, "curl"), 0o755);
+		const keylessOut = execFileSync("bash", [LOADER], {
+			cwd: keyless,
+			env: {
+				...env,
+				COGNI_NODE_API_KEY: "",
+				PATH: `${offline}:${process.env.PATH ?? ""}`,
+			},
+			encoding: "utf8",
+		});
+		expect(
+			JSON.parse(keylessOut).hookSpecificOutput.additionalContext,
+		).toContain("no node credentials yet");
 	});
 
 	it("reconciles the legacy user hook idempotently", () => {

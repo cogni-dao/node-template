@@ -7,7 +7,7 @@
  * Scope: Takes a structural port, returns `{ status, body, log }`. Imports no web framework, auth, container or logger.
  * Invariants:
  *   - NEVER_THROWS: every failure becomes a 503 `history_unavailable`; a missing entry is a 404.
- *   - ONE_TERMINAL_LOG: `log` carries counts and codes only, never values; the route emits it once.
+ *   - ONE_TERMINAL_LOG: `log` carries counts, codes and, on failure, the database error code plus a 300-char single-line message (bug.0025); the route emits it once.
  *   - Event name is `knowledge.history_read`.
  * Side-effects: IO (port reads through the injected port)
  * Links: hub change-history-design, change-history-fleet-adoption
@@ -32,6 +32,10 @@ export interface KnowledgeHistoryReadLog {
   readonly errorCode?: "not_found" | "history_unavailable";
   /** Set on a failed read so the route may warn with the error class. */
   readonly errorName?: string;
+  /** Database error code (SQLSTATE) from the thrown error, when it carries one. */
+  readonly dbCode?: string;
+  /** First 300 chars of the thrown error's message, CR/LF collapsed. */
+  readonly errorMessage?: string;
 }
 
 export interface KnowledgeHistoryResult {
@@ -42,7 +46,28 @@ export interface KnowledgeHistoryResult {
 
 const EVENT = "knowledge.history_read" as const;
 
-const unavailable = (errorName?: string): KnowledgeHistoryResult => ({
+const DB_MESSAGE_MAX = 300;
+
+/** Database error code and bounded single-line message for the failure log (bug.0025). */
+const errorDetail = (
+  error: unknown
+): { dbCode?: string; errorMessage?: string } => {
+  const { code, message } = (error ?? {}) as {
+    code?: unknown;
+    message?: unknown;
+  };
+  return {
+    ...(typeof code === "string" && { dbCode: code }),
+    ...(typeof message === "string" && {
+      errorMessage: message.replace(/[\r\n]+/g, " ").slice(0, DB_MESSAGE_MAX),
+    }),
+  };
+};
+
+const unavailable = (
+  errorName?: string,
+  detail: { dbCode?: string; errorMessage?: string } = {}
+): KnowledgeHistoryResult => ({
   status: 503,
   body: { error: "history_unavailable" },
   log: {
@@ -51,6 +76,7 @@ const unavailable = (errorName?: string): KnowledgeHistoryResult => ({
     outcome: "error",
     errorCode: "history_unavailable",
     ...(errorName !== undefined && { errorName }),
+    ...detail,
   },
 });
 
@@ -86,6 +112,6 @@ export async function readKnowledgeHistory(
       },
     };
   } catch (error) {
-    return unavailable((error as Error)?.name);
+    return unavailable((error as Error)?.name, errorDetail(error));
   }
 }

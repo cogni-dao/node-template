@@ -31,9 +31,10 @@ without it. Recovery ends only when the native instruction path loads a complete
 
 On first setup, register through `/api/v1/agent/register` and save COGNI_NODE_API_KEY in
 the gitignored `.env.cogni`. Operator CI/CD credentials are not cognition credentials.
-Workspace setup warms the cache before the first agent starts. Claude resolves its
-imports before the SessionStart fetch can finish: after recovery warms the cache,
-restart or resume so the native instruction path loads it before normal work begins.
+Workspace setup warms the cache, but it may race the first agent. Claude resolves its
+imports before its SessionStart hook can write the cache, so on a boot whose import
+missed it the hook delivers the same complete bundle through Claude's structured
+SessionStart context. If neither arrived, restart or resume before normal work begins.
 The loader may cache a recovery notice for the next import; that notice is never a
 complete contract.
 

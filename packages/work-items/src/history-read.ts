@@ -7,7 +7,7 @@
  * Scope: Takes a structural store, returns `{ status, body, log }`. Imports no web framework, auth, container or logger.
  * Invariants:
  *   - NEVER_THROWS: every failure becomes a 503 `history_unavailable`; a missing row is a 404.
- *   - ONE_TERMINAL_LOG: `log` carries counts and codes only, never values; the route emits it once.
+ *   - ONE_TERMINAL_LOG: `log` carries counts, codes and, on failure, the database error code plus a 300-char single-line message (bug.0025); the route emits it once.
  *   - Event name is `work.items.history_read`.
  * Side-effects: IO (store reads through the injected store)
  * Links: hub change-history-design, change-history-fleet-adoption
@@ -33,6 +33,10 @@ export interface HistoryReadLog {
   readonly errorCode?: "not_found" | "history_unavailable";
   /** Set on a failed read so the route may warn with the error class. */
   readonly errorName?: string;
+  /** Database error code (SQLSTATE) from the thrown error, when it carries one. */
+  readonly dbCode?: string;
+  /** First 300 chars of the thrown error's message, CR/LF collapsed. */
+  readonly errorMessage?: string;
 }
 
 export interface WorkItemHistoryResult {
@@ -42,6 +46,23 @@ export interface WorkItemHistoryResult {
 }
 
 const EVENT = "work.items.history_read" as const;
+const DB_MESSAGE_MAX = 300;
+
+/** Database error code and bounded single-line message for the failure log (bug.0025). */
+const errorDetail = (
+  error: unknown
+): { dbCode?: string; errorMessage?: string } => {
+  const { code, message } = (error ?? {}) as {
+    code?: unknown;
+    message?: unknown;
+  };
+  return {
+    ...(typeof code === "string" && { dbCode: code }),
+    ...(typeof message === "string" && {
+      errorMessage: message.replace(/[\r\n]+/g, " ").slice(0, DB_MESSAGE_MAX),
+    }),
+  };
+};
 
 export async function readWorkItemHistory(
   store: WorkItemHistoryStore,
@@ -85,6 +106,7 @@ export async function readWorkItemHistory(
         outcome: "error",
         errorCode: "history_unavailable",
         errorName: (error as Error)?.name,
+        ...errorDetail(error),
       },
     };
   }

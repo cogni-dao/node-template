@@ -124,7 +124,7 @@ describe("lease/content composition", () => {
       adapter.create({ type: "task", title: "committed" }, "p")
     ).resolves.toBe(item);
     await expect(
-      adapter.patch({ id: item.id, set: { title: "committed" } }, "p")
+      adapter.patch({ reason: "test change", id: item.id, set: { title: "committed" } }, "p")
     ).resolves.toBe(item);
     expect(leases.getMany).not.toHaveBeenCalled();
   });

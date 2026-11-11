@@ -82,6 +82,10 @@ export type CreateGraphFn = ((opts: CreateGraphOptions) => CompiledGraph) & {
     ) => void;
     onSkillReadFailure?: () => void;
     projectOutput?: (answer: string) => Record<string, unknown> | undefined;
+    /** Ends a run that hit the step budget with a program-owned report; undefined keeps the error. */
+    projectStepBudget?: () =>
+      | { answer: string; output: Record<string, unknown> }
+      | undefined;
   };
 };
 

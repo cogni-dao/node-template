@@ -7,6 +7,7 @@
  * Scope: Auth-protected GET (node-local Doltgres first, markdown fallback), PATCH (Doltgres only), and DELETE (retired, HTTP 410).
  * Invariants: VALIDATE_IO, CONTRACTS_ARE_TRUTH, AUTH_VIA_GETSESSIONUSER, PATCH_ALLOWLIST, DURABLE_IDENTITY_NEVER_REUSED.
  * Evaluation: shared score validation failures return HTTP400 with typed issues.
+ * Reason + cites (task.0086): a missing or over-cap reason is HTTP400 `invalid input` with an issue at `reason`; an unknown cite id or a closed inbox is HTTP400 `cite_unresolved`; cites with no resolver wired is HTTP400 `cites_unsupported`; a resolver failure is HTTP503. Nothing is written in each case.
  * Side-effects: IO (HTTP response, filesystem read via port, Doltgres read/write/delete)
  * Links: contracts/work.items.{get,patch,delete}.v1.contract
  * @public
@@ -20,6 +21,11 @@ import {
 import { NextResponse } from "next/server";
 
 import {
+  ChangeReasonInvalidError,
+  CitesInvalidError,
+  CitesUnsupportedError,
+  EntryResolverUnavailableError,
+  EntryUnresolvedError,
   getWorkItem,
   NodeAdminRequiredError,
   patchWorkItem,
@@ -83,7 +89,7 @@ export const PATCH = wrapRouteHandlerWithLogging<{
 }>(
   {
     routeId: "work.items.patch",
-    sameDoor: "core__work_item_transition",
+    sameDoor: "core__work_item_update",
     auth: { mode: "required", getSessionUser },
   },
   async (ctx, request, sessionUser, context) => {
@@ -131,7 +137,7 @@ export const PATCH = wrapRouteHandlerWithLogging<{
         walletAddress: sessionUser.walletAddress,
       });
       ctx.log.info(
-        { workItemId: id, hasReason: parseResult.data.reason !== undefined },
+        { workItemId: id, citeCount: parseResult.data.cites?.length ?? 0 },
         "work.items.patch_success"
       );
       return NextResponse.json(workItemsPatchOperation.output.parse(patched));
@@ -140,6 +146,61 @@ export const PATCH = wrapRouteHandlerWithLogging<{
         return NextResponse.json(
           { error: "invalid input", errorCode: e.code, issues: e.issues },
           { status: 400 }
+        );
+      }
+      // The adapter is the one enforcer of reason and cites (task.0086); the schema above
+      // says the same thing earlier, so these cover a rule the schema could not see.
+      if (e instanceof ChangeReasonInvalidError) {
+        return NextResponse.json(
+          {
+            error: "invalid input",
+            issues: [{ code: "custom", path: ["reason"], message: e.message }],
+          },
+          { status: 400 }
+        );
+      }
+      if (e instanceof CitesInvalidError) {
+        return NextResponse.json(
+          {
+            error: "invalid input",
+            issues: e.issues.map((message) => ({
+              code: "custom",
+              path: ["cites"],
+              message,
+            })),
+          },
+          { status: 400 }
+        );
+      }
+      if (e instanceof EntryUnresolvedError) {
+        return NextResponse.json(
+          {
+            error: "invalid input",
+            errorCode: e.code,
+            ids: e.ids,
+            issues: e.ids.map((cited) => ({
+              code: "custom",
+              path: ["cites"],
+              message: `cited entry not found: ${cited}`,
+            })),
+          },
+          { status: 400 }
+        );
+      }
+      if (e instanceof CitesUnsupportedError) {
+        return NextResponse.json(
+          {
+            error: "invalid input",
+            errorCode: e.code,
+            issues: [{ code: "custom", path: ["cites"], message: e.message }],
+          },
+          { status: 400 }
+        );
+      }
+      if (e instanceof EntryResolverUnavailableError) {
+        return NextResponse.json(
+          { error: "cites_unavailable", errorCode: e.code, message: e.message },
+          { status: 503 }
         );
       }
       if (e instanceof WorkItemNotFoundError) {

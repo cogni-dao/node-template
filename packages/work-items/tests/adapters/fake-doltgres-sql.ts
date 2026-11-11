@@ -90,7 +90,7 @@ export function makeFakeDoltgresSql(
       operation += 1;
       branchCommit = `test-commit-${operation}`;
       commitMessage =
-        unquote(/SELECT dolt_commit\('-m', '(.*)'\)/.exec(query)?.[1]) ?? "";
+        unquote(/SELECT dolt_commit\('-m', '([\s\S]*)'\)/.exec(query)?.[1]) ?? "";
       commitDate = options.commitDate ?? nextCommitDate(afterRow ?? beforeRow);
       return [{ dolt_commit: branchCommit }];
     }

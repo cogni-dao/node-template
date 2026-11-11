@@ -42,7 +42,7 @@ LangGraph graph definitions and runtime utilities for agentic AI execution. Cont
 
 - **Exports (subpaths):**
   - `@cogni/langgraph-graphs` — Barrel re-export of common types plus:
-    - `LANGGRAPH_CATALOG` / `NODE_LANGGRAPH_CATALOG` — Graph catalog; publishes exactly two graphs: `cogni` (node operator, principal `node-ai`, default graph) and `work-prioritizer` (display "Work Prioritizer", principal `prioritizer`, scheduled scoring program)
+    - `LANGGRAPH_CATALOG` / `NODE_LANGGRAPH_CATALOG` — Graph catalog; publishes exactly two graphs: `cogni` (node operator, principal `node-ai`, default graph) and `work-prioritizer` (display "Work Prioritizer", principal `prioritizer`, scheduled triage program: the guarded `core__work_item_update` writer)
     - `LANGGRAPH_GRAPH_IDS`, `DEFAULT_LANGGRAPH_GRAPH_ID` (`langgraph:cogni`) — Namespaced graph ids
     - `McpToolSource` — ToolSourcePort implementation for MCP-discovered tools
     - `loadMcpTools()`, `parseMcpConfigFromEnv()` — MCP client connection + config parsing
@@ -51,7 +51,7 @@ LangGraph graph definitions and runtime utilities for agentic AI execution. Cont
     - `createInProcGraphRunner()` — Generic InProc graph runner factory
     - `InProcRunnerOptions`, `InProcGraphRequest`, `GraphResult` (includes optional `structuredOutput`) — Runner types
     - `CompletionFn`, `CompletionResult` — Injected completion function types
-    - `CreateGraphFn`, `CreateGraphOptions` — Graph factory types
+    - `CreateGraphFn`, `CreateGraphOptions` — Graph factory types. `CreateGraphFn.createRunHooks` returns per-run program hooks: `graphOptions`, `observeTool`, `onSkillReadFailure`, `projectOutput` and `projectStepBudget`. The runner calls `projectStepBudget` when a run hits `GraphRecursionError`; a program that returns a report ends the run ok with it (writes already made stay), and a program with no hook keeps the error
     - `ToolExecFn`, `ToolExecResult` — Tool execution types
   - `@cogni/langgraph-graphs/runtime` — LangChain utilities (split: `core/` generic, `cogni/` ALS-based):
     - **Core (no ALS):** `makeLangChainTool()`, `toLangChainToolsCaptured()`, `toBaseMessage()`, `fromBaseMessage()`, `AsyncQueue`, `makeServerGraph()`
@@ -59,7 +59,7 @@ LangGraph graph definitions and runtime utilities for agentic AI execution. Cont
     - `CogniExecContext` — Runtime context type (completionFn, tokenSink, toolExecFn; NO model per #35)
   - `@cogni/langgraph-graphs/graphs` — Graph factories and shared types:
     - `createCogniGraph()` / `createCogniProgram()` — shared native deep-agent composition for roots and bounded compiled children
-    - `createWorkPrioritizerGraph()` — Scheduled scoring program on the shared harness (`work-prioritizer`); `WORK_PRIORITIZER_GRAPH_NAME`, `cycleTelemetry()`
+    - `createWorkPrioritizerGraph()` — Scheduled triage program on the shared harness (`work-prioritizer`): the guarded triage writer, `core__work_item_update` (the PATCH route's twin) behind `triage-guard` (one PATCH carries status, scores and labels with `expectedRevision`: scores, goal label, status route, cancel; at most `MAX_CHANGED_ITEMS_PER_RUN` items per run, set limited to status, scores and labels; a write with no reason is refused `reason_required`, and the guard never writes a reason for the model, task.0086); `WORK_PRIORITIZER_GRAPH_NAME`, `cycleTelemetry()`
     - `InvokableGraph<I,O>`, `MessageGraphInput`, `MessageGraphOutput` — Type firewall
     - `GraphInvokeOptions`, `CreateReactAgentGraphOptions` — Factory types
   - **Per-graph tools:** `src/graphs/*/tools.ts` exports `*_TOOL_IDS` constants (e.g., `COGNI_TOOL_IDS`)

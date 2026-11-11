@@ -120,7 +120,7 @@ describe("DoltgresWorkItemAdapter content ownership", () => {
   it("does not scope patch by creator, and increments revision (bug.0019)", async () => {
     const { adapter, queries } = adapterWithQueries();
     await adapter.patch(
-      { id: toWorkItemId(row.id), set: { title: "renamed" } },
+      { reason: "test change", id: toWorkItemId(row.id), set: { title: "renamed" } },
       "principal-1"
     );
 
@@ -139,7 +139,7 @@ describe("DoltgresWorkItemAdapter content ownership", () => {
 
     await expect(
       adapter.patch(
-        { id: toWorkItemId(row.id), set: { title: "renamed by new principal" } },
+        { reason: "test change", id: toWorkItemId(row.id), set: { title: "renamed by new principal" } },
         "principal-2"
       )
     ).resolves.toMatchObject({ id: row.id });
@@ -156,7 +156,7 @@ describe("DoltgresWorkItemAdapter content ownership", () => {
     const { adapter, queries } = adapterWithQueries();
 
     await expect(
-      adapter.patch({ id: toWorkItemId(row.id), set: { title: "x" } }, "  ")
+      adapter.patch({ reason: "test change", id: toWorkItemId(row.id), set: { title: "x" } }, "  ")
     ).rejects.toMatchObject({ name: "WorkItemAuthorizationError" });
     expect(queries.some((query) => query.includes("dolt_checkout('-b'"))).toBe(
       false
@@ -178,7 +178,7 @@ describe("unadopted rows (NULL creator) stay mutable", () => {
     const { adapter } = adapterWithUnadoptedRow();
     await expect(
       adapter.patch(
-        { id: toWorkItemId(row.id), set: { title: "renamed" } },
+        { reason: "test change", id: toWorkItemId(row.id), set: { title: "renamed" } },
         "principal-1"
       )
     ).resolves.toMatchObject({ id: row.id, title: "renamed" });
@@ -194,7 +194,7 @@ describe("unadopted rows (NULL creator) stay mutable", () => {
   it("an unadopted row stays unadopted: a patch never adopts it", async () => {
     const { adapter } = adapterWithUnadoptedRow();
     const patched = await adapter.patch(
-      { id: toWorkItemId(row.id), set: { title: "renamed" } },
+      { reason: "test change", id: toWorkItemId(row.id), set: { title: "renamed" } },
       "principal-2"
     );
     expect(patched.title).toBe("renamed");

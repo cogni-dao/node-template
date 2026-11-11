@@ -7,7 +7,7 @@
  * Scope: Schemas and types only. No I/O, no store access.
  * Invariants:
  *   - ONE_HISTORY_SHAPE: `@cogni-dao/knowledge-store/contracts` declares the same item shape.
- *   - REASON_ONE_LINE: `ChangeReasonSchema` applies the `normalizeChangeReason` rule (line breaks become spaces, then 1-512 chars).
+ *   - REASON_REQUIRED: `ChangeReasonSchema` applies the `checkChangeReason` rule the adapter applies (line breaks become spaces, then 1-240 chars, at most 25 words, no NUL); a missing reason says what to send.
  *   - NOTE_NOT_BODY: the reason comes from Dolt history, never from the row.
  *   - BOUNDED_READ: newest first, at most 50 versions; values over 4 KB are truncated and flagged.
  * Side-effects: none
@@ -17,16 +17,25 @@
 
 import { z } from "zod";
 
-import { CHANGE_REASON_MAX_CHARS } from "./history.js";
+import { CHANGE_REASON_REQUIRED_MESSAGE, checkChangeReason } from "./history.js";
 
-/** One-line change reason. The adapter turns CR/LF into spaces and trims; this checks the result fits. */
-export const ChangeReasonSchema = z.string().refine(
-  (v) => {
-    const n = v.replace(/[\r\n]+/g, " ").trim().length;
-    return n >= 1 && n <= CHANGE_REASON_MAX_CHARS;
-  },
-  { message: "reason must be 1-512 characters on one line" }
-);
+/**
+ * The change reason every work-item patch carries (task.0086). The adapter turns
+ * line breaks into spaces and trims; this checks the result fits the same caps
+ * and says what to send when the reason is missing.
+ */
+export const ChangeReasonSchema = z
+  .string({
+    error: (issue) =>
+      issue.input === undefined ? CHANGE_REASON_REQUIRED_MESSAGE : undefined,
+  })
+  .superRefine((value, ctx) => {
+    const checked = checkChangeReason(value);
+    if (!checked.ok) ctx.addIssue({ code: "custom", message: checked.message });
+  })
+  .describe(
+    "Why this change happens: one line, at most 25 words and 240 characters. It is stored in the item's history, never in the item."
+  );
 
 export const HistoryEntrySchema = z.object({
   version: z.string(),
@@ -34,6 +43,13 @@ export const HistoryEntrySchema = z.object({
   at: z.string(),
   actor: z.string().nullable(),
   reason: z.string().nullable(),
+  cites: z.array(
+    z.object({
+      id: z.string(),
+      commit: z.string(),
+      contribution: z.string().optional(),
+    })
+  ),
   changed: z.array(z.string()),
   diff: z.record(
     z.string(),
@@ -53,7 +69,7 @@ export const workItemsHistoryOperation = {
   id: "work.items.history.v1",
   summary: "Read a work item's history",
   description:
-    "Returns the item's versions, newest first, each with its change reason, actor and changed fields. The reason is the PATCH `reason`, stored in Dolt history.",
+    "Returns the item's versions, newest first, each with its change reason, the atoms it cited (pinned to commits), actor and changed fields. The reason and cites are the PATCH `reason` and `cites`, stored in Dolt history.",
   input: z.object({ id: z.string() }),
   output: HistoryOutputSchema,
 } as const;

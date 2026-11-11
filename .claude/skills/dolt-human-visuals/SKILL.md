@@ -8,11 +8,12 @@ metadata:
 
 # dolt-human-visuals
 
-> The contract lives in the hub, not here. This file is only the trigger.
+> The contract lives in the node-template hub, not here. This file is only the trigger.
 
-Read the html visual standard before you write or review an html entry: the diagram-first budget, the fragment-only shape, theme tokens and `cogni-*` classes, and the review checklist.
+Read these node-template-owned entries with `COGNI_NODE_TEMPLATE_API_KEY` (on node-template itself, `COGNI_NODE_API_KEY`), then follow them:
+- `GET https://node-template.cognidao.org/api/v1/knowledge/knowledge-human-visuals` — the diagram-first budget, fragment-only shape, theme tokens, `cogni-*` classes and review checklist
+- Reference atom: `GET https://node-template.cognidao.org/api/v1/knowledge/cogni-harness-design`
 
-- `GET /api/v1/knowledge/knowledge-human-visuals`
-- Reference atom: `GET /api/v1/knowledge/cogni-harness-design`
+No key yet? Register once with `POST https://node-template.cognidao.org/api/v1/agent/register` and `{"name":"<agent name>"}`, then save the key in the gitignored `.env.cogni`.
 
-Do not reconstruct or preserve a fallback copy in this repository.
+Write the html entry itself to this node's own hub. Do not reconstruct or preserve a fallback copy in this repository.

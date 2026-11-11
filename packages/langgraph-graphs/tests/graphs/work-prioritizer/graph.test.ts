@@ -22,7 +22,7 @@ describe("work-prioritizer catalog and cycle report", () => {
     expect(deployed.allowsEvidenceUrl(new URL("http://127.0.0.1:55080/knowledge/goal-a"))).toBe(false);
     expect(deployed.allowsEvidenceUrl(new URL("https://node.example.test/knowledge/goal-a"))).toBe(true);
   });
-  it("catalog entry binds the common Cogni factory (reads + scores-only writer) and cycle event", () => {
+  it("catalog entry binds the common Cogni factory (reads + triage writer) and cycle event", () => {
     const entry = LANGGRAPH_CATALOG["work-prioritizer"];
     expect(entry.graphFactory).toBe(createMissionGraph);
     expect(entry.toolIds).toEqual(COGNI_DECIDE_TOOL_IDS);

@@ -32,6 +32,11 @@ import type {
   WorkSummaryReadOptions,
 } from "@cogni/work-items";
 import {
+  ChangeReasonInvalidError,
+  CitesInvalidError,
+  CitesUnsupportedError,
+  EntryResolverUnavailableError,
+  EntryUnresolvedError,
   toWorkItemId,
   WorkItemRevisionConflictError,
   WorkItemScoresInvalidError,
@@ -39,6 +44,11 @@ import {
 } from "@cogni/work-items";
 
 export {
+  ChangeReasonInvalidError,
+  CitesInvalidError,
+  CitesUnsupportedError,
+  EntryResolverUnavailableError,
+  EntryUnresolvedError,
   WorkItemRevisionConflictError,
   WorkItemScoresInvalidError,
   WorkItemWriteOutcomeUnknownError,
@@ -207,6 +217,26 @@ function rethrowBackendError(error: unknown): never {
         ? (issues as WorkItemScoresInvalidError["issues"])
         : [],
     );
+  }
+  // task.0086: the adapter is the one enforcer of reason and cites. Root and adapter
+  // entrypoints may bundle separate copies of these classes, so match by name and rebuild.
+  const name = (error as Error)?.name;
+  if (name === "ChangeReasonInvalidError") {
+    throw new ChangeReasonInvalidError(message);
+  }
+  if (name === "CitesInvalidError") {
+    const issues = (error as { issues?: unknown }).issues;
+    throw new CitesInvalidError(
+      Array.isArray(issues) ? issues.map(String) : [message],
+    );
+  }
+  if (name === "CitesUnsupportedError") throw new CitesUnsupportedError();
+  if (name === "EntryUnresolvedError") {
+    const ids = (error as { ids?: unknown }).ids;
+    throw new EntryUnresolvedError(Array.isArray(ids) ? ids.map(String) : []);
+  }
+  if (name === "EntryResolverUnavailableError") {
+    throw new EntryResolverUnavailableError(message);
   }
   if ((error as Error)?.name === "WorkItemWriteOutcomeUnknownError") {
     const receipt = error as WorkItemWriteOutcomeUnknownError;
@@ -420,7 +450,8 @@ export async function patchWorkItem(
         ...(input.expectedRevision !== undefined && {
           expectedRevision: input.expectedRevision,
         }),
-        ...(input.reason !== undefined && { reason: input.reason }),
+        reason: input.reason,
+        ...(input.cites !== undefined && { cites: input.cites }),
         set: dropUndefined(input.set),
       },
       sessionUser.id,

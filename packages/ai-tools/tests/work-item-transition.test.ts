@@ -11,6 +11,7 @@
  * @internal
  */
 
+import { CHANGE_REASON_REQUIRED_MESSAGE } from "@cogni-dao/work-items";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -54,6 +55,7 @@ describe("core__work_item_transition patch", () => {
   it("accepts expectedRevision + rank in the input schema", () => {
     const parsed = WorkItemTransitionInputSchema.safeParse({
       action: "patch",
+      reason: "test change",
       id: "task.5001",
       priority: 1,
       rank: 4,
@@ -63,6 +65,7 @@ describe("core__work_item_transition patch", () => {
     expect(
       WorkItemTransitionInputSchema.safeParse({
         action: "patch",
+        reason: "test change",
         id: "task.5001",
         priority: 1,
         expectedRevision: -1,
@@ -78,6 +81,7 @@ describe("core__work_item_transition patch", () => {
 
     const out = await tool.execute({
       action: "patch",
+      reason: "test change",
       id: "task.5001",
       priority: 1,
       rank: 4,
@@ -86,6 +90,7 @@ describe("core__work_item_transition patch", () => {
 
     expect(cap.patch).toHaveBeenCalledWith({
       id: "task.5001",
+      reason: "test change",
       expectedRevision: 7,
       set: { priority: 1, rank: 4 },
     });
@@ -99,10 +104,11 @@ describe("core__work_item_transition patch", () => {
       workItemCapability: cap,
     });
 
-    await tool.execute({ action: "patch", id: "task.5001", priority: 2 });
+    await tool.execute({ action: "patch", reason: "test change", id: "task.5001", priority: 2 });
 
     expect(cap.patch).toHaveBeenCalledWith({
       id: "task.5001",
+      reason: "test change",
       set: { priority: 2 },
     });
   });
@@ -117,6 +123,7 @@ describe("core__work_item_transition patch", () => {
 
     const out = await tool.execute({
       action: "patch",
+      reason: "test change",
       id: "task.5001",
       priority: 1,
       expectedRevision: 7,
@@ -143,6 +150,7 @@ describe("core__work_item_transition patch", () => {
     await expect(
       tool.execute({
         action: "patch",
+        reason: "test change",
         id: "task.5001",
         priority: 1,
         expectedRevision: 7,
@@ -186,6 +194,7 @@ describe("core__work_item_transition patch", () => {
 
     const stale = await tool.execute({
       action: "patch",
+      reason: "test change",
       id: "task.5001",
       rank: 1,
       expectedRevision: 7,
@@ -199,6 +208,7 @@ describe("core__work_item_transition patch", () => {
 
     const rankOnly = await tool.execute({
       action: "patch",
+      reason: "test change",
       id: "task.5001",
       rank: 1,
       expectedRevision: 9,
@@ -222,6 +232,7 @@ describe("core__work_item_transition patch", () => {
 
     const out = await tool.execute({
       action: "patch",
+      reason: "test change",
       id: "task.5001",
       scores,
       expectedRevision: 7,
@@ -229,6 +240,7 @@ describe("core__work_item_transition patch", () => {
 
     expect(cap.patch).toHaveBeenCalledWith({
       id: "task.5001",
+      reason: "test change",
       expectedRevision: 7,
       set: { scores },
     });
@@ -245,6 +257,7 @@ describe("core__work_item_transition patch", () => {
 
     await tool.execute({
       action: "patch",
+      reason: "test change",
       id: "task.5001",
       scores: { goal: { v: 3 }, agent: { v: 2 } },
       expectedRevision: 8,
@@ -263,6 +276,7 @@ describe("core__work_item_transition patch", () => {
 
     await tool.execute({
       action: "patch",
+      reason: "test change",
       id: "task.5001",
       scores: null,
       expectedRevision: 7,
@@ -270,6 +284,7 @@ describe("core__work_item_transition patch", () => {
 
     expect(cap.patch).toHaveBeenCalledWith({
       id: "task.5001",
+      reason: "test change",
       expectedRevision: 7,
       set: { scores: null },
     });
@@ -279,6 +294,7 @@ describe("core__work_item_transition patch", () => {
     const parse = (scores: unknown) =>
       WorkItemTransitionInputSchema.safeParse({
         action: "patch",
+        reason: "test change",
         id: "task.5001",
         expectedRevision: 7,
         scores,
@@ -322,6 +338,7 @@ describe("core__work_item_transition patch", () => {
     await expect(
       tool.execute({
         action: "patch",
+        reason: "test change",
         id: "task.5001",
         scores: { goal: { v: 5 } },
         expectedRevision: 7,
@@ -336,7 +353,7 @@ describe("core__work_item_transition patch", () => {
       workItemCapability: cap,
     });
     for (const scores of [{ goal: { v: 3 } }, null]) {
-      const base = { action: "patch" as const, id: "task.5001", scores };
+      const base = { action: "patch" as const, reason: "test change", id: "task.5001", scores };
       expect(WorkItemTransitionInputSchema.safeParse(base).success).toBe(false);
       await expect(tool.execute(base)).rejects.toThrow(
         "require expectedRevision"
@@ -368,8 +385,45 @@ describe("core__work_item_transition patch", () => {
     expect(
       WorkItemTransitionInputSchema.safeParse({
         action: "patch",
+        reason: "test change",
         id: "task.5001",
         priority: 2,
+      }).success
+    ).toBe(true);
+  });
+});
+
+describe("core__work_item_transition patch reason (task.0086)", () => {
+  const base = { action: "patch" as const, id: "task.5001", priority: 2 };
+
+  it("rejects a patch without a reason, naming what to send, before the capability", async () => {
+    const cap = capability(async () => PATCHED);
+    const tool = createWorkItemTransitionImplementation({ workItemCapability: cap });
+    const parsed = WorkItemTransitionInputSchema.safeParse(base);
+    expect(parsed.success).toBe(false);
+    expect(parsed.success ? [] : parsed.error.issues).toEqual([
+      expect.objectContaining({ path: ["reason"], message: CHANGE_REASON_REQUIRED_MESSAGE }),
+    ]);
+    await expect(tool.execute(base)).rejects.toThrow("reason is required");
+    expect(cap.patch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["26 words", Array.from({ length: 26 }, () => "w").join(" "), false],
+    ["25 words", Array.from({ length: 25 }, () => "w").join(" "), true],
+    ["241 characters", "x".repeat(241), false],
+    ["240 characters", "x".repeat(240), true],
+    ["a NUL", "a\u0000b", false],
+  ])("a patch reason of %s -> %s", (_name, reason, ok) => {
+    expect(WorkItemTransitionInputSchema.safeParse({ ...base, reason }).success).toBe(ok);
+  });
+
+  it("keeps the reason optional for the transition action", () => {
+    expect(
+      WorkItemTransitionInputSchema.safeParse({
+        action: "transition",
+        id: "task.5001",
+        toStatus: "done",
       }).success
     ).toBe(true);
   });

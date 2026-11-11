@@ -524,7 +524,7 @@ describe("native execution owns capacity beyond the caller deadline", () => {
     );
     await expect(
       adapter.patch(
-        { id: toWorkItemId("task.9998"), set: { title: "fresh intent" } },
+        { reason: "test change", id: toWorkItemId("task.9998"), set: { title: "fresh intent" } },
         "principal-1"
       )
     ).rejects.toThrow(/not found/);
@@ -732,7 +732,7 @@ describe("native execution owns capacity beyond the caller deadline", () => {
     expect(ended).toBe(0);
     await expect(
       adapter.patch(
-        { id: toWorkItemId("task.9998"), set: { title: "successor" } },
+        { reason: "test change", id: toWorkItemId("task.9998"), set: { title: "successor" } },
         "principal-1"
       )
     ).rejects.toThrow(/not found/);
@@ -815,7 +815,7 @@ describe("native execution owns capacity beyond the caller deadline", () => {
     expect(reserved).toBe(0);
     await expect(
       adapter.patch(
-        { id: toWorkItemId("task.9998"), set: { title: "fresh intent" } },
+        { reason: "test change", id: toWorkItemId("task.9998"), set: { title: "fresh intent" } },
         "principal-1"
       )
     ).rejects.toThrow(/not found/);
@@ -936,6 +936,7 @@ describe("DoltgresWorkItemAdapter merge timeout recovery", () => {
     await expect(
       adapter.patch(
         {
+          reason: "test change",
           id: toWorkItemId("task.0001"),
           set: { title: "still writable" },
         },
