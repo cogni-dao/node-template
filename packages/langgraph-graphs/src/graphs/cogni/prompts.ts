@@ -25,3 +25,7 @@ export function composeCogniPrompt(
 }
 export const hostClockPrompt = (utc: string) =>
 	`Host-owned current UTC time: ${utc}`;
+/** Share of the run's step limit after which every model call is told to write and hand off. */
+export const RUN_BUDGET_WRAP_UP_SHARE = 0.7;
+export const runBudgetPrompt = (step: number, limit: number) =>
+	`Run budget: step ${step} of ${limit} is used, and the run ends at ${limit}. Stop gathering. Now make the writes your evidence already supports, then end with a short handoff: what you did, and what remains for the next run.`;
