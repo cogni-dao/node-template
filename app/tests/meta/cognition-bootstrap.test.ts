@@ -152,6 +152,42 @@ describe("session cognition hook", () => {
 		);
 	});
 
+	it("boots a new worktree from the clone root's last complete bundle when the hub is down (bug.0018)", () => {
+		const root = fixture();
+		const clone = path.join(root, "clone");
+		mkdirSync(clone);
+		execFileSync("git", ["init", "-q"], { cwd: clone });
+		mkdirSync(path.join(clone, ".cogni"), { recursive: true });
+		writeFileSync(path.join(clone, ".cogni/repo-spec.yaml"), "intent:\n  name: fixture\n");
+		execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: clone });
+		const worktree = path.join(root, "wt");
+		execFileSync("git", ["worktree", "add", "-q", "--detach", worktree], { cwd: clone });
+		const complete = "# bundle\n<agent-contract>\n<status-contract>\n</status-contract>\n</agent-contract>";
+		mkdirSync(path.join(clone, ".cogni"), { recursive: true });
+		writeFileSync(path.join(clone, CACHE_PATH), `${complete}\n`);
+		const offline = path.join(root, "bin");
+		mkdirSync(offline);
+		writeFileSync(path.join(offline, "curl"), "#!/bin/sh\nexit 7\n");
+		chmodSync(path.join(offline, "curl"), 0o755);
+		const env = {
+			...process.env,
+			CODEX_HOME: path.join(root, "no-user-hook"),
+			CODEX_THREAD_ID: "",
+			COGNI_NODE_API_KEY: "test-key",
+			PATH: `${offline}:${process.env.PATH ?? ""}`,
+		};
+		const out = execFileSync("bash", [LOADER], { cwd: worktree, env, encoding: "utf8" });
+		expect(JSON.parse(out).hookSpecificOutput.additionalContext).toBe(complete);
+		expect(readFileSync(path.join(worktree, CACHE_PATH), "utf8")).toBe(`${complete}\n`);
+
+		// An incomplete root copy is never presented as the contract.
+		const second = path.join(root, "wt2");
+		execFileSync("git", ["worktree", "add", "-q", "--detach", second], { cwd: clone });
+		writeFileSync(path.join(clone, CACHE_PATH), "map only\n");
+		const recovery = execFileSync("bash", [LOADER], { cwd: second, env, encoding: "utf8" });
+		expect(JSON.parse(recovery).hookSpecificOutput.additionalContext).toContain("could not load bundle");
+	});
+
 	it("warms the cognition cache in workspace setup before anything slow (bug.0018)", () => {
 		const setup = readFileSync(CONDUCTOR_SETUP, "utf8");
 		// Claude Code resolves the CLAUDE.md @import before its SessionStart hook

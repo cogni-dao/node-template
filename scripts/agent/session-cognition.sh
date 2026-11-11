@@ -149,11 +149,41 @@ fetch_bundle() {
 
 # write_cache_atomic <content> — replace the cache in one rename, never a torn file.
 write_cache_atomic() {
-  mkdir -p "$(dirname "$CACHE_FILE")" 2>/dev/null || return 0
-  tmp="${CACHE_FILE}.tmp.$$"
-  printf '%s\n' "$1" > "$tmp" 2>/dev/null && mv -f "$tmp" "$CACHE_FILE" 2>/dev/null
+  write_file_atomic "$CACHE_FILE" "$1"
+  # Keep the clone root's copy current too, so a new worktree whose first fetch
+  # fails (hub slow or down) still boots from the last complete bundle.
+  if [ -n "$SHARED_CACHE" ] && bundle_is_complete "$1"; then
+    write_file_atomic "$SHARED_CACHE" "$1"
+  fi
+}
+
+write_file_atomic() {
+  mkdir -p "$(dirname "$1")" 2>/dev/null || return 0
+  tmp="${1}.tmp.$$"
+  printf '%s\n' "$2" > "$tmp" 2>/dev/null && mv -f "$tmp" "$1" 2>/dev/null
   rm -f "$tmp" 2>/dev/null
 }
+
+# bundle_is_complete <text> — carries the agent-contract and its status-contract.
+bundle_is_complete() {
+  case "$1" in *"<agent-contract"*"<status-contract"*) return 0 ;; esac
+  return 1
+}
+
+# SHARED_CACHE — the clone root's cache (the main checkout every worktree hangs
+# off), or empty when this checkout is the clone root.
+SHARED_CACHE=""
+common_dir="$(git rev-parse --git-common-dir 2>/dev/null || true)"
+# Only an ordinary clone whose common dir is <root>/.git and whose root is this
+# node's checkout; never a bare repo, a submodule's modules dir, or a tracked file.
+if [ -n "$common_dir" ] && [ "$(basename "$common_dir")" = ".git" ]; then
+  clone_root="$(cd "$(dirname "$common_dir")" 2>/dev/null && pwd || true)"
+  if [ -n "$clone_root" ] && [ "$clone_root" != "$(pwd)" ] \
+    && [ -f "$clone_root/.cogni/repo-spec.yaml" ] \
+    && ! git -C "$clone_root" ls-files --error-unmatch -- "$CACHE_FILE" >/dev/null 2>&1; then
+    SHARED_CACHE="$clone_root/$CACHE_FILE"
+  fi
+fi
 
 # cache_is_stale — true if the cache is missing or older than the refresh TTL.
 cache_is_stale() {
@@ -199,6 +229,23 @@ if [ -n "$bundle" ]; then
   emit_agent_context "$bundle"
   emit_claude_context "$bundle"
   exit 0
+fi
+
+# Fetch failed: boot from the clone root's last complete bundle when one exists,
+# then refresh behind it. A hub outage must not cost a new worktree its contract.
+if [ -n "$SHARED_CACHE" ] && [ -s "$SHARED_CACHE" ]; then
+  shared="$(cat "$SHARED_CACHE")"
+  if bundle_is_complete "$shared"; then
+    write_file_atomic "$CACHE_FILE" "$shared"
+    emit_agent_context "$shared"
+    emit_claude_context "$shared"
+    # Catch up behind it (the TTL gate would skip a cache written just now).
+    (
+      fresh="$(fetch_bundle)"
+      [ -n "$fresh" ] && write_cache_atomic "$fresh"
+    ) >/dev/null 2>&1 &
+    exit 0
+  fi
 fi
 
 # First boot AND fetch failed. Be honest, never cry wolf — separate a setup gap
