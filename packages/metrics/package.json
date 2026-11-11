@@ -50,10 +50,10 @@
       "import": "./dist/sources.js",
       "default": "./dist/sources.js"
     },
-    "./diary-free": {
-      "types": "./dist/diary-free.d.ts",
-      "import": "./dist/diary-free.js",
-      "default": "./dist/diary-free.js"
+    "./no-inline-history": {
+      "types": "./dist/no-inline-history.d.ts",
+      "import": "./dist/no-inline-history.js",
+      "default": "./dist/no-inline-history.js"
     }
   },
   "types": "./dist/index.d.ts",

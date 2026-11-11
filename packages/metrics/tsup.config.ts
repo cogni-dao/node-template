@@ -15,7 +15,7 @@ export default defineConfig({
 		"src/knowledge.ts",
 		"src/schema.ts",
 		"src/sources.ts",
-		"src/diary-free.ts",
+		"src/no-inline-history.ts",
 	],
 	format: ["esm"],
 	splitting: true,
