@@ -19,6 +19,8 @@
 import { randomUUID } from "node:crypto";
 import { runCredentialConformance } from "@cogni/agent-grants/conformance";
 import {
+  agentRolesHasRoles,
+  assertV1NotSuperseded,
   type CredentialSql,
   confirmCredential,
   createPostgresCredentialStore,
@@ -42,7 +44,8 @@ describe("agent credentials (real Postgres)", () => {
     users.push(id);
     return id;
   };
-  const store = () => createPostgresCredentialStore(service as unknown as CredentialSql);
+  const store = () =>
+    createPostgresCredentialStore(service as unknown as CredentialSql, { hasRoles: agentRolesHasRoles(service as unknown as CredentialSql) });
   const ok = (m: MintedKey) => {
     if (!m.ok) throw new Error(`refused: ${m.reason}`);
     return m;
@@ -96,10 +99,17 @@ describe("agent credentials (real Postgres)", () => {
       else
         await service`UPDATE agent_credentials SET expires_at = now() - interval '2 hour', renew_until = now() - interval '1 minute' WHERE id = ${credentialId}`;
     },
+    async addRoles(userId) {
+      const admin = await makeUser();
+      await service`INSERT INTO agent_roles (principal_user_id, scope, approved_by, granted_at) VALUES (${userId}, 'probe:scope', ${admin}, now())`;
+    },
     broken: () =>
-      createPostgresCredentialStore((async () => {
-        throw new Error("db down");
-      }) as unknown as CredentialSql),
+      createPostgresCredentialStore(
+        (async () => {
+          throw new Error("db down");
+        }) as unknown as CredentialSql,
+        { hasRoles: async () => false }
+      ),
     storedHash: async (credentialId) =>
       (await service`SELECT token_hash FROM agent_credentials WHERE id = ${credentialId}`)[0]?.token_hash ?? null,
     liveSuccessors: async (predecessorId) =>
@@ -115,6 +125,34 @@ describe("agent credentials (real Postgres)", () => {
         app`INSERT INTO agent_credentials (user_id, token_hash, created_from, expires_at, renew_until)
           VALUES (${user}, 'x', 'rotation', now(), now() + interval '1 day')`
       ).rejects.toThrow();
+    });
+
+    it("FAIL_CLOSED_ON_WRONG_ROLE: a store over the app role (no BYPASSRLS, FORCE RLS) is unavailable, never 'never confirmed'", async () => {
+      const user = await makeUser();
+      const key = ok(await upgradeSignedKey(store(), { userId: user }));
+      await confirmCredential(store(), { credentialId: key.credentialId });
+      const wrongRole = createPostgresCredentialStore(app as unknown as CredentialSql, { hasRoles: async () => false });
+      // The raw read the old store did returns zero rows for this role: the gate would have silently turned off.
+      expect(await app`SELECT 1 FROM agent_credentials WHERE user_id = ${user} AND confirmed_at IS NOT NULL LIMIT 1`).toHaveLength(0);
+      await expect(assertV1NotSuperseded(wrongRole, user)).rejects.toMatchObject({ code: "authz_unavailable" });
+      expect(await verifyBearer(wrongRole, key.apiKey)).toEqual({ ok: false, reason: "unavailable" });
+      // The right role still reads the confirmed credential.
+      await expect(assertV1NotSuperseded(store(), user)).rejects.toMatchObject({ code: "v1_superseded" });
+    });
+
+    it("hasRoles is the node's read: a true answer refuses upgrade without a binding even with no agent_roles row; a throw is an outage", async () => {
+      const user = await makeUser();
+      const sql = service as unknown as CredentialSql;
+      const openFga = createPostgresCredentialStore(sql, { hasRoles: async () => true });
+      expect(await upgradeSignedKey(openFga, { userId: user })).toEqual({ ok: false, reason: "binding_required" });
+      await service`INSERT INTO user_bindings (id, user_id, provider, external_id) VALUES (${randomUUID()}, ${user}, 'github', ${`gh-${randomUUID()}`})`;
+      expect(await upgradeSignedKey(openFga, { userId: user })).toMatchObject({ ok: true });
+      const down = createPostgresCredentialStore(sql, {
+        hasRoles: async () => {
+          throw new Error("openfga down");
+        },
+      });
+      await expect(upgradeSignedKey(down, { userId: user })).rejects.toMatchObject({ code: "authz_unavailable" });
     });
 
     it("only a user with an EXTERNAL agent principal may hold a credential (trigger)", async () => {

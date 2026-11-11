@@ -56,7 +56,13 @@ export type IssueResult =
 
 export type ConfirmResult =
   | { readonly ok: true; readonly status: "confirmed" | "already_active"; readonly userId: string; readonly expiresAt: string; readonly renewUntil: string }
-  | { readonly ok: false; readonly reason: "revoked" | "expired" | "predecessor_revoked" | "not_found" };
+  | { readonly ok: false; readonly reason: "revoked" | "expired" | "predecessor_revoked" | "not_found" | "binding_required" };
+
+/**
+ * Does this principal hold deploy or node roles? A node supplies the read: node-template reads `agent_roles` (`agentRolesHasRoles`); the operator
+ * supplies its OpenFGA read. A throw is an outage (503), never "no roles". BINDING_BEFORE_UPGRADE uses it at upgrade AND at confirm.
+ */
+export type HasRoles = (userId: string) => Promise<boolean>;
 
 /**
  * Persistence port. Every method is one atomic unit; the Postgres adapter runs each in one transaction.
@@ -68,7 +74,7 @@ export interface CredentialStore {
   /**
    * signed key -> pending revocable key for the SAME `users.id`. Creates the external `agent_principals` row when absent. Refuses a wallet user,
    * an internal principal, a user that already holds a live revocable key, and a user with live role rows and no GitHub binding
-   * (BINDING_BEFORE_UPGRADE). A pending upgrade key from an earlier call is superseded.
+   * (BINDING_BEFORE_UPGRADE, role read = the node's `HasRoles`). A pending upgrade key from an earlier call is superseded.
    */
   issueUpgrade(input: { userId: string; tokenHash: string; policy: CredentialPolicy }): Promise<IssueResult>;
   /**
@@ -76,7 +82,10 @@ export interface CredentialStore {
    * pending successor. Calls serialize on the predecessor; the last wins.
    */
   issueSuccessor(input: { predecessorId: string; tokenHash: string; policy: CredentialPolicy }): Promise<IssueResult>;
-  /** Activates a pending credential and revokes its predecessor (`rotated`) in one transaction. Idempotent for an active credential. */
+  /**
+   * Activates a pending credential and revokes its predecessor (`rotated`) in one transaction. Idempotent for an active credential.
+   * An UPGRADE key is refused `binding_required` when its user now holds roles and has no GitHub binding (roles approved after the upgrade call).
+   */
   confirm(input: { credentialId: string; policy: CredentialPolicy }): Promise<ConfirmResult>;
   /**
    * True when the user holds, or ever held, a CONFIRMED revocable credential, revoked or not. After an upgrade the user's signed keys stop working,

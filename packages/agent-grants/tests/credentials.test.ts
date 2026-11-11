@@ -33,6 +33,11 @@ runCredentialConformance({
       row.renewUntil = to === "renew_only" ? future : past;
     }
   },
+  async addRoles(userId) {
+    const user = current?.users[userId];
+    if (!user) throw new Error("unknown user");
+    user.roles = true;
+  },
   broken: () => memoryCredentialStore({ users: {}, failing: true }).store,
   storedHash: async (credentialId) => current?.rows.find((r) => r.id === credentialId)?.tokenHash ?? null,
   liveSuccessors: async (predecessorId) =>

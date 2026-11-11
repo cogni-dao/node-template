@@ -10,13 +10,25 @@
  *   - SERVICE_ROLE_ONLY: `agent_credentials` has FORCE RLS and no policy; only a BYPASSRLS connection reads or writes it.
  *   - STATE_IS_DERIVED: the SQL function `agent_credential_state(row)` is the one derivation, read against `now()`.
  *     The app clock is never read.
+ *   - FAIL_CLOSED_ON_WRONG_ROLE: every store call first verifies, once per store instance, that the connection role bypasses RLS
+ *     (`rolbypassrls` or superuser). Under FORCE RLS with no policy a role that does not bypass sees ZERO rows, so `everConfirmed` would read
+ *     false and the v1 supersession gate would silently turn off. Instead every call throws, so the service answers unavailable (503).
+ *   - ROLES_ARE_THE_NODES_READ: `hasRoles` is injected. The store never decides what a role is.
  *   - LOCK_ORDER: predecessor first, then successor, in rotate and confirm, so concurrent calls cannot deadlock.
  * Side-effects: IO
  * @public
  */
 
 import type { SqlTag } from "../postgres";
-import type { ConfirmResult, CredentialLookup, CredentialPolicy, CredentialState, CredentialStore, IssueResult } from "./types";
+import type {
+  ConfirmResult,
+  CredentialLookup,
+  CredentialPolicy,
+  CredentialState,
+  CredentialStore,
+  HasRoles,
+  IssueResult,
+} from "./types";
 
 /** A postgres.js `Sql`: a tagged template that can also open a transaction. */
 export interface CredentialSql extends SqlTag {
@@ -29,7 +41,35 @@ const iso = (value: unknown): string => {
 };
 const text = (value: unknown): string => (typeof value === "string" ? value : "");
 
-export function createPostgresCredentialStore(client: CredentialSql): CredentialStore {
+/** The `agent_roles` read (node-template): an approved, unrevoked role row. The operator injects its OpenFGA read instead. */
+export const agentRolesHasRoles =
+  (client: SqlTag): HasRoles =>
+  async (userId) => {
+    const rows = await client`
+      SELECT EXISTS (SELECT 1 FROM agent_roles r WHERE r.principal_user_id = ${userId}
+                       AND r.approved_by IS NOT NULL AND r.revoked_at IS NULL) AS has_roles`;
+    return rows[0]?.has_roles === true;
+  };
+
+export interface PostgresCredentialStoreOptions {
+  /** How this node tells that a principal holds roles (BINDING_BEFORE_UPGRADE). Required: there is no safe default across nodes. */
+  readonly hasRoles: HasRoles;
+}
+
+export function createPostgresCredentialStore(client: CredentialSql, options: PostgresCredentialStoreOptions): CredentialStore {
+  const { hasRoles } = options;
+  // Cached per store instance, success only: a wrong role keeps failing every call and is re-checked, never cached as fine.
+  let bypassVerified: Promise<void> | undefined;
+  const assertBypassRls = (): Promise<void> => {
+    bypassVerified ??= (async () => {
+      const rows = await client`SELECT (rolbypassrls OR rolsuper) AS bypass FROM pg_roles WHERE rolname = current_user`;
+      if (rows[0]?.bypass !== true) throw new Error("credential store role lacks BYPASSRLS");
+    })().catch((error) => {
+      bypassVerified = undefined;
+      throw error;
+    });
+    return bypassVerified;
+  };
   const insertPending = async (
     tx: SqlTag,
     row: { userId: string; tokenHash: string; createdFrom: string; predecessorId: string | null; policy: CredentialPolicy }
@@ -45,7 +85,7 @@ export function createPostgresCredentialStore(client: CredentialSql): Credential
     return { ok: true, credentialId: text(rows[0]?.id), userId, pendingExpiresAt: iso(rows[0]?.pending_expires_at) };
   };
 
-  return {
+  const store: CredentialStore = {
     async lookup(tokenHash): Promise<CredentialLookup | null> {
       const rows = await client`
         SELECT c.id, c.user_id, u.name, c.expires_at, c.renew_until, agent_credential_state(c) AS state
@@ -68,16 +108,17 @@ export function createPostgresCredentialStore(client: CredentialSql): Credential
       return rows.length > 0;
     },
 
-    issueUpgrade: ({ userId, tokenHash, policy }) =>
-      client.begin(async (tx): Promise<IssueResult> => {
+    issueUpgrade: async ({ userId, tokenHash, policy }) => {
+      // The role read is the node's (possibly a network call), so it runs before the transaction. Roles approved after this read are
+      // caught again at confirm.
+      const roles = await hasRoles(userId);
+      return client.begin(async (tx): Promise<IssueResult> => {
         // One upgrade at a time per user: the checks below and the insert must see one snapshot.
         await tx`SELECT pg_advisory_xact_lock(hashtext(${userId}))`;
         const facts = await tx`
           SELECT (u.wallet_address IS NOT NULL
                   OR EXISTS (SELECT 1 FROM user_bindings b WHERE b.user_id = u.id AND b.provider = 'wallet')) AS wallet,
                  (SELECT p.kind FROM agent_principals p WHERE p.user_id = u.id) AS kind,
-                 EXISTS (SELECT 1 FROM agent_roles r WHERE r.principal_user_id = u.id
-                           AND r.approved_by IS NOT NULL AND r.revoked_at IS NULL) AS has_roles,
                  EXISTS (SELECT 1 FROM user_bindings b WHERE b.user_id = u.id AND b.provider = 'github') AS bound,
                  EXISTS (SELECT 1 FROM agent_credentials c WHERE c.user_id = u.id
                            AND agent_credential_state(c) IN ('active', 'renew_only')) AS upgraded
@@ -88,13 +129,14 @@ export function createPostgresCredentialStore(client: CredentialSql): Credential
         if (f.kind === "internal") return { ok: false, reason: "internal_principal" };
         if (f.upgraded) return { ok: false, reason: "already_upgraded" };
         // BINDING_BEFORE_UPGRADE: a principal with node roles and no proven GitHub binding could not recover its identity.
-        if (f.has_roles && !f.bound) return { ok: false, reason: "binding_required" };
+        if (roles && !f.bound) return { ok: false, reason: "binding_required" };
         await tx`INSERT INTO agent_principals (kind, user_id) VALUES ('external', ${userId}) ON CONFLICT (user_id) DO NOTHING`;
         await tx`
           UPDATE agent_credentials SET revoked_at = now(), revoked_reason = 'superseded'
           WHERE user_id = ${userId} AND created_from = 'key_upgrade' AND confirmed_at IS NULL AND revoked_at IS NULL`;
         return insertPending(tx, { userId, tokenHash, createdFrom: "key_upgrade", predecessorId: null, policy });
-      }),
+      });
+    },
 
     issueSuccessor: ({ predecessorId, tokenHash, policy }) =>
       client.begin(async (tx): Promise<IssueResult> => {
@@ -108,8 +150,11 @@ export function createPostgresCredentialStore(client: CredentialSql): Credential
         return insertPending(tx, { userId: text(pred[0]?.user_id), tokenHash, createdFrom: "rotation", predecessorId, policy });
       }),
 
-    confirm: ({ credentialId, policy: p }) =>
-      client.begin(async (tx): Promise<ConfirmResult> => {
+    confirm: async ({ credentialId, policy: p }) => {
+      // BINDING_BEFORE_UPGRADE at confirm: read the node's roles for an UPGRADE key before the transaction (an upgrade key has no predecessor).
+      const head = await client`SELECT user_id, created_from FROM agent_credentials WHERE id = ${credentialId}`;
+      const rolesNow = head[0]?.created_from === "key_upgrade" && typeof head[0]?.user_id === "string" ? await hasRoles(head[0].user_id) : false;
+      return client.begin(async (tx): Promise<ConfirmResult> => {
         // Predecessor first (same order as rotate), then the successor row. An upgrade key has no predecessor: it takes the same
         // per-user advisory lock as `issueUpgrade`, so a confirm cannot interleave with a new upgrade (two live revocable keys).
         const link = await tx`SELECT predecessor_id, user_id FROM agent_credentials WHERE id = ${credentialId}`;
@@ -138,6 +183,10 @@ export function createPostgresCredentialStore(client: CredentialSql): Credential
           case "renew_only":
             return done("already_active", row);
           default: {
+            if (rolesNow) {
+              const bound = await tx`SELECT 1 FROM user_bindings WHERE user_id = ${text(row.user_id)} AND provider = 'github' LIMIT 1`;
+              if (bound.length === 0) return { ok: false, reason: "binding_required" };
+            }
             if (predecessorId) {
               const pred = await tx`SELECT revoked_at FROM agent_credentials WHERE id = ${predecessorId}`;
               if (pred[0]?.revoked_at) return { ok: false, reason: "predecessor_revoked" };
@@ -154,7 +203,8 @@ export function createPostgresCredentialStore(client: CredentialSql): Credential
             return done("confirmed", updated[0] ?? {});
           }
         }
-      }),
+      });
+    },
 
     revoke: ({ credentialId, userId, reason, revokedBy }) =>
       client.begin(async (tx) => {
@@ -168,5 +218,22 @@ export function createPostgresCredentialStore(client: CredentialSql): Credential
           WHERE predecessor_id = ${credentialId} AND confirmed_at IS NULL AND revoked_at IS NULL`;
         return true;
       }),
+  };
+
+  // Every call verifies the role first. A failure throws, so `verifyBearer` answers unavailable and the service functions throw
+  // `CredentialStoreUnavailableError`: 503, never 401, never a silent pass.
+  const guard =
+    <A extends unknown[], R>(call: (...args: A) => Promise<R>) =>
+    async (...args: A): Promise<R> => {
+      await assertBypassRls();
+      return call(...args);
+    };
+  return {
+    lookup: guard(store.lookup),
+    issueUpgrade: guard(store.issueUpgrade),
+    issueSuccessor: guard(store.issueSuccessor),
+    confirm: guard(store.confirm),
+    everConfirmed: guard(store.everConfirmed),
+    revoke: guard(store.revoke),
   };
 }

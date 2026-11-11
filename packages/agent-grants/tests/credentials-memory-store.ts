@@ -118,6 +118,8 @@ export function memoryCredentialStore(init: { users: Record<string, MemoryUser>;
       if (s === "active" || s === "renew_only") return done("already_active");
       const pred = r.predecessorId ? rows.find((x) => x.id === r.predecessorId) : undefined;
       if (pred?.revokedAt !== null && pred) return { ok: false, reason: "predecessor_revoked" };
+      const u = init.users[r.userId];
+      if (r.createdFrom === "key_upgrade" && u?.roles && !u.github) return { ok: false, reason: "binding_required" };
       r.confirmedAt = clock.now;
       r.expiresAt = plus(policy.ttlSec);
       r.renewUntil = plus(policy.ttlSec + policy.renewWindowSec);
@@ -137,5 +139,5 @@ export function memoryCredentialStore(init: { users: Record<string, MemoryUser>;
       return true;
     },
   };
-  return { store, rows, clock, outage, advance: (sec: number) => void (clock.now += sec * 1000) };
+  return { store, rows, clock, outage, users: init.users, advance: (sec: number) => void (clock.now += sec * 1000) };
 }

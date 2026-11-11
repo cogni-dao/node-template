@@ -13,8 +13,8 @@
  * @public
  */
 
+import { REVOCABLE_KEY_PREFIX, formatRevocableKey, isWellFormedRevocableKey } from "./key-format";
 import {
-  REVOCABLE_KEY_PREFIX,
   confirmCredential,
   hashAgentKey,
   type MintedKey,
@@ -49,6 +49,8 @@ export interface CredentialConformanceHarness {
    * `expired` = past the renew window; `pending_expired` = the pending window ended.
    */
   age(credentialId: string, to: "renew_only" | "expired" | "pending_expired"): Promise<void>;
+  /** Approve a live role for an existing user AFTER setup (the node's role read now says yes). */
+  addRoles(userId: string): Promise<void>;
   /** A store whose every call throws, for the outage rows. */
   broken(): CredentialStore;
   /** The stored `token_hash` of a credential. */
@@ -75,10 +77,11 @@ export function runCredentialConformance(h: CredentialConformanceHarness): void 
     revokeCredential(store, { credentialId, userId, revokedBy: userId });
 
   describe("credential conformance: key format and storage", () => {
-    it("a key is the revocable prefix + 43 base64url chars, and only its sha256 is stored", async () => {
+    it("a key is the revocable prefix + 43 base64url chars + a 6-char CRC32 checksum, and only its sha256 is stored", async () => {
       const { store, ids } = await h.setup(alice);
       const key = okKey(await upgradeSignedKey(store, { userId: ids.alice as string }));
-      expect(key.apiKey).toMatch(new RegExp(`^${REVOCABLE_KEY_PREFIX}[A-Za-z0-9_-]{43}$`));
+      expect(key.apiKey).toMatch(new RegExp(`^${REVOCABLE_KEY_PREFIX}[A-Za-z0-9_-]{43}[0-9A-Za-z]{6}$`));
+      expect(isWellFormedRevocableKey(key.apiKey)).toBe(true);
       expect(await h.storedHash(key.credentialId)).toBe(await hashAgentKey(key.apiKey));
     });
 
@@ -87,6 +90,31 @@ export function runCredentialConformance(h: CredentialConformanceHarness): void 
       const a = okKey(await upgradeSignedKey(store, { userId: ids.alice as string }));
       const b = okKey(await upgradeSignedKey(store, { userId: ids.bob as string }));
       expect(a.apiKey).not.toBe(b.apiKey);
+    });
+  });
+
+  describe("credential conformance: checksum and admission before the store", () => {
+    it("a key with a failing checksum (body or checksum edited) is refused before any store read", async () => {
+      const { store, ids } = await h.setup(alice);
+      const key = await active(store, ids.alice as string);
+      const swap = (at: number) => key.apiKey.slice(0, at) + (key.apiKey[at] === "A" ? "B" : "A") + key.apiKey.slice(at + 1);
+      for (const forged of [swap(REVOCABLE_KEY_PREFIX.length), swap(key.apiKey.length - 1), formatRevocableKey("a".repeat(43)).slice(0, -1) + "!"]) {
+        expect(isWellFormedRevocableKey(forged)).toBe(false);
+        expect(await verifyBearer(h.broken(), forged)).toEqual(INVALID);
+      }
+      expect(isWellFormedRevocableKey(formatRevocableKey("a".repeat(43)))).toBe(true);
+    });
+
+    it("admit runs after the shape check and before the store: over the limit is rate_limited with no store read; bad shape never spends it", async () => {
+      const { store, ids } = await h.setup(alice);
+      const key = await active(store, ids.alice as string);
+      let spent = 0;
+      const deny = { admit: () => (spent++, false) };
+      expect(await verifyBearer(h.broken(), key.apiKey, ["active"], deny)).toEqual({ ok: false, reason: "rate_limited" });
+      expect(spent).toBe(1);
+      expect(await verifyBearer(h.broken(), `${REVOCABLE_KEY_PREFIX}junk`, ["active"], deny)).toEqual(INVALID);
+      expect(spent).toBe(1);
+      expect(await verifyBearer(store, key.apiKey, ["active"], { admit: () => true })).toMatchObject({ ok: true });
     });
   });
 
@@ -217,6 +245,21 @@ export function runCredentialConformance(h: CredentialConformanceHarness): void 
       const { store, ids } = await h.setup({ roled: { roles: true }, bound: { roles: true, github: true } });
       expect(await upgradeSignedKey(store, { userId: ids.roled as string })).toEqual({ ok: false, reason: "binding_required" });
       expect(await upgradeSignedKey(store, { userId: ids.bound as string })).toMatchObject({ ok: true });
+    });
+
+    it("BINDING_BEFORE_UPGRADE is re-checked at confirm: roles approved after the upgrade call, no binding, refuses confirm; a rotation key is not re-checked", async () => {
+      const { store, ids } = await h.setup({ late: {}, bound: { github: true } });
+      const late = okKey(await upgradeSignedKey(store, { userId: ids.late as string }));
+      await h.addRoles(ids.late as string);
+      expect(await confirmCredential(store, { credentialId: late.credentialId })).toEqual({ ok: false, reason: "binding_required" });
+      expect(await verifyBearer(store, late.apiKey, ["pending", "active"])).toMatchObject({ ok: true, state: "pending" });
+      expect(await store.everConfirmed(ids.late as string)).toBe(false); // the signed key still works; nothing was activated
+      // With a binding the same roles pass, and a rotation of an active key is never re-checked.
+      const bound = okKey(await upgradeSignedKey(store, { userId: ids.bound as string }));
+      await h.addRoles(ids.bound as string);
+      expect(await confirmCredential(store, { credentialId: bound.credentialId })).toMatchObject({ ok: true, status: "confirmed" });
+      const next = okKey(await rotateCredential(store, { credentialId: bound.credentialId }));
+      expect(await confirmCredential(store, { credentialId: next.credentialId })).toMatchObject({ ok: true, status: "confirmed" });
     });
   });
 
