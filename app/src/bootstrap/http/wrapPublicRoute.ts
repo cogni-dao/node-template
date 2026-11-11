@@ -5,7 +5,7 @@
  * Module: `@bootstrap/http/wrapPublicRoute`
  * Purpose: Pure factory for public API route wrapper with mandatory rate limiting and caching.
  * Scope: Factory for route wrapper creation; enforces rate limiting, cache headers, standard error shape. Does NOT implement business logic or directly access container/env.
- * Invariants: All public routes MUST use this wrapper; rate limit 10 req/min/IP + burst 5; cache headers auto-applied; 429 on rate limit.
+ * Invariants: All public routes MUST use this wrapper; rate limit 10 req/min/IP + burst 5; cache headers auto-applied unless the handler set its own Cache-Control; 429 on rate limit.
  * Side-effects: IO (rate limiter state, request context, metrics)
  * Notes: Pure factory enables clean testing; bootstrap/http/index.ts exports bound instance.
  * Links: Used by all /api/v1/public/** routes; CI validation in tests/meta/public-route-enforcement.test.ts
@@ -129,8 +129,9 @@ export function makeWrapPublicRoute(deps: WrapPublicRouteDeps) {
         // Call handler
         const response = await handler(ctx, request, context);
 
-        // Auto-apply cache headers to successful responses
-        if (response.status >= 200 && response.status < 300) {
+        // Auto-apply cache headers to successful responses, unless the handler set its own Cache-Control (a route that returns a key or a
+        // challenge secret answers `no-store`, and the wrapper must not turn that into a public cache header).
+        if (response.status >= 200 && response.status < 300 && !response.headers.has("cache-control")) {
           response.headers.set(
             "Cache-Control",
             `public, max-age=${cacheTtl}, stale-while-revalidate=${swr}`

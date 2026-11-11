@@ -63,6 +63,16 @@ export const EVENT_NAMES = {
 	AGENT_CREDENTIAL_INVALID_DENIED: "agent.credential.invalid_denied",
 	/** A client went over the per-IP limit on credential lookups: 429, no store read. Carries routeId only. */
 	AGENT_CREDENTIAL_RATE_LIMITED: "agent.credential.rate_limited",
+	/** Proofs, recovery and stop (task.0091). One terminal event per operation; none carries a key, a challenge secret, a nonce, a hash, a token or a login. */
+	AGENT_PROOF_CHALLENGE_ISSUED: "agent.proof.challenge_issued",
+	AGENT_BINDING_CREATED: "agent.binding.created",
+	AGENT_CREDENTIAL_RECOVERED: "agent.credential.recovered",
+	AGENT_CREDENTIAL_REVOKED_ALL: "agent.credential.revoked_all",
+	AGENT_CREDENTIAL_STOP_LIFTED: "agent.credential.stop_lifted",
+	/** A challenge, bind or recover was refused: routeId, errorCode from a fixed set, and the fixed `reason` for `proof_failed`. */
+	AGENT_PROOF_REFUSED: "agent.proof.refused",
+	/** The GitHub read failed: dep, reasonCode, status, durationMs. */
+	AGENT_PROOF_GITHUB_FAILED: "agent.proof.github_failed",
 	/** The roles route could not decide or list (store or admin check down), or refused a non-admin write. No secrets. */
 	AGENT_ROLES_UNAVAILABLE: "agent.roles.unavailable",
 	AGENT_ROLES_LIST_FAILED: "agent.roles.list_failed",

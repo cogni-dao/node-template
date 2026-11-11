@@ -12,6 +12,8 @@
  *     request. Any bound admin wallet passes; no wallet is denied; no configured admins is unavailable.
  *   - AGENTS_HOLD_NO_WALLET (a payout guard, not an authority rule): an agent user has no wallet binding, so today it fails `adminCheck`.
  *     Admin is any principal the DAO approves (AUTHORITY_IS_NOT_KIND); an approved AI identity is item I2, so none passes yet.
+ *   - KEYS_ROW_IS_NOT_A_SCOPE: the admin table's `agent:keys` rows (stop and lift) come from the credential store, never from the declarations; the
+ *     scope never enters `declaredScopes`, `askableScopes`, `agent_roles` or `hasRoles`.
  *   - DECLARED_SCOPES_FROM_CONTRACTS: the scopes a role may name are exactly those the node's tool contracts declare.
  *   - NO_SECRETS_IN_LOGS: `agent_tool.authz` carries ids, tool, decision and code only.
  * Side-effects: IO (service-role database reads and writes)
@@ -43,6 +45,12 @@ import {
   type ToolRequires,
   type WithStore,
 } from "@cogni/agent-grants";
+import {
+  agentRolesHasRoles,
+  type CredentialSql,
+  type CredentialStore,
+  createPostgresCredentialStore,
+} from "@cogni/agent-grants/credentials";
 import type { CatalogBoundTool } from "@cogni/ai-tools";
 import { LANGGRAPH_CATALOG } from "@cogni/langgraph-graphs";
 import type { NodeAdminAuthority } from "@cogni/knowledge-store";
@@ -147,6 +155,8 @@ export function createAdminCheck(
 
 /** Outside-agent rows the admin read returns at most (pending asks first). The rest are counted, not sent. */
 export const MAX_ADMIN_OUTSIDE_ROWS = 100;
+/** Keys rows (one per outside agent that holds a sign-in key, or is stopped) the admin read returns at most. The rest are counted. */
+export const MAX_ADMIN_KEY_ROWS = 50;
 
 export function createAgentToolAuthority(deps: {
   sql: AgentAuthoritySql;
@@ -174,6 +184,10 @@ export function createAgentToolAuthority(deps: {
     ]),
   ].sort();
   const adminCheck = createAdminCheck(deps.sql, deps.nodeAdmin);
+  // The keys rows read the credential store (a bounded `listKeyHolders`). Built lazily on the same service-role client.
+  let keyStore: CredentialStore | undefined;
+  const credentialStore = (): CredentialStore =>
+    (keyStore ??= createPostgresCredentialStore(deps.sql as unknown as CredentialSql, { hasRoles: agentRolesHasRoles(deps.sql) }));
 
   // One transaction per call, so a role read sees one consistent snapshot.
   const withStore: WithStore = (fn) =>
@@ -205,9 +219,11 @@ export function createAgentToolAuthority(deps: {
         internal: await store.listInternalPrincipals(),
         listed: await store.listRoleRows(MAX_ADMIN_OUTSIDE_ROWS),
       }));
+      // `agent:keys` rows (task.0091): not a declared scope, so they come from the credential store, never from `declarations`.
+      const keys = await credentialStore().listKeyHolders(MAX_ADMIN_KEY_ROWS);
       return {
-        permissions: buildNodeAiView({ declarations, scopesByPrincipal, internal, rows: listed.rows }),
-        more: listed.more,
+        permissions: buildNodeAiView({ declarations, scopesByPrincipal, internal, rows: listed.rows, keyHolders: keys.holders }),
+        more: listed.more + keys.more,
       };
     },
     declaredScopes,

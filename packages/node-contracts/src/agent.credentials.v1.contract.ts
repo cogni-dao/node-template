@@ -3,7 +3,7 @@
 
 /**
  * Module: `@contracts/agent.credentials.v1`
- * Purpose: This node's import path for the revocable agent key route contracts (task.0070, child of task.5474): upgrade, rotate, confirm, revoke.
+ * Purpose: This node's import path for the revocable agent key route contracts (task.0070, child of task.5474): upgrade, rotate, confirm, revoke, and the proof routes (task.0091): proof challenge, bind GitHub, recover, revoke-principal (stop), lift-stop.
  * Scope: Re-export only. The zod wire shapes and the result-to-HTTP mapping are fleet-carried and live in the published
  *   `@cogni-dao/agent-grants/credentials`, so a node cannot drift from the fleet's codes. Nothing is defined here.
  * Invariants: CONTRACTS_ARE_TRUTH, defined once in the package (`http.ts`).
@@ -13,8 +13,13 @@
  */
 
 export {
+  bindGithubOperation,
   confirmAgentCredentialOperation,
+  liftStopOperation,
+  proofChallengeOperation,
+  recoverCredentialOperation,
   revokeAgentCredentialOperation,
+  revokePrincipalOperation,
   rotateAgentCredentialOperation,
   upgradeAgentCredentialOperation,
 } from "@cogni/agent-grants/credentials";

@@ -236,5 +236,18 @@ describe("makeWrapPublicRoute - Rate Limit Bypass", () => {
         "public, max-age=120, stale-while-revalidate=600"
       );
     });
+    it("leaves a Cache-Control the handler set (a route that returns a key answers no-store)", async () => {
+      const limiter = new TokenBucketRateLimiter({ maxTokens: 10, refillRate: 1, burstSize: 5 });
+      const wrapPublicRoute = makeWrapPublicRoute({
+        rateLimitBypass: { enabled: false, headerName: "x-stack-test", headerValue: "1" },
+        rateLimiter: limiter,
+        DEPLOY_ENVIRONMENT: "test",
+      });
+      const wrapped = wrapPublicRoute({ routeId: "test.route" }, async () =>
+        NextResponse.json({ ok: true }, { headers: { "cache-control": "no-store" } })
+      );
+      const response = await wrapped(createRequest({}));
+      expect(response.headers.get("Cache-Control")).toBe("no-store");
+    });
   });
 });
