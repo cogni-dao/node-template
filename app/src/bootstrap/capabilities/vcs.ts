@@ -95,7 +95,7 @@ export function createGithubReadVcsCapability(
     getPr: async ({ owner, repo, prNumber }): Promise<PrFacts> => {
       const pr = (await githubGet(
         fetchFn,
-        `/repos/${owner}/${repo}/pulls/${prNumber}`
+        `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${prNumber}`
       )) as GithubPullResponse;
       return {
         number: pr.number,
@@ -119,7 +119,7 @@ export function createGithubReadVcsCapability(
     }): Promise<CommitCompareResult> => {
       const cmp = (await githubGet(
         fetchFn,
-        `/repos/${owner}/${repo}/compare/${base}...${head}`
+        `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}`
       )) as GithubCompareResponse;
       return {
         status: cmp.status,
