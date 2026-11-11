@@ -6,6 +6,8 @@
  * Purpose: Route wrapper to eliminate boilerplate for request logging envelope and metrics.
  * Scope: Bootstrap-layer utility. Handles ctx creation, timing, envelope logging, and Prometheus metrics. Does not implement route-specific business logic.
  * Invariants: Always logs request start/end exactly once; always measures duration; catches unhandled errors; always records metrics (even on 5xx).
+ *   The session is resolved inside the request lifecycle, so a credential-store outage (503), a rate-limited key (429) and a superseded signed key (401)
+ *   are logged, measured and traced like any other response.
  * Side-effects: IO (creates request context, emits structured log entries, records Prometheus metrics). Container loaded via dynamic import to avoid Turbopack per-route module duplication.
  * Notes: Use this wrapper for all instrumented routes. Domain events go in facades/features, not here.
  *        logRequestEnd runs exactly once in the finally block for all paths (success, 401, 5xx).
@@ -19,7 +21,9 @@
 import {
   CredentialRateLimitedError,
   CredentialStoreUnavailableError,
+  credentialErrorHttp,
   isRevocableKey,
+  storeFailureFields,
   V1SupersededError,
 } from "@cogni/agent-grants/credentials";
 import type { SessionUser } from "@cogni/node-shared";
@@ -38,6 +42,18 @@ import {
   type RequestContext,
   statusBucket,
 } from "@/shared/observability";
+
+/** One log line for a credential outcome that answers before the handler. Fields: routeId, plus userId (v1_superseded) or errorClass and sqlState (outage). Never a key, a hash or a message. */
+function logCredentialRefusal(log: RequestContext["log"], error: unknown, routeId: string): void {
+  if (error instanceof V1SupersededError) {
+    // A signed key used after its user confirmed a revocable key: the best "leaked signed key is being replayed" signal. userId only.
+    log.warn({ event: EVENT_NAMES.AGENT_CREDENTIAL_V1_SUPERSEDED_DENIED, routeId, userId: error.userId }, EVENT_NAMES.AGENT_CREDENTIAL_V1_SUPERSEDED_DENIED);
+  } else if (error instanceof CredentialRateLimitedError) {
+    log.warn({ event: EVENT_NAMES.AGENT_CREDENTIAL_RATE_LIMITED, routeId }, EVENT_NAMES.AGENT_CREDENTIAL_RATE_LIMITED);
+  } else if (error instanceof CredentialStoreUnavailableError) {
+    log.warn({ event: EVENT_NAMES.AGENT_CREDENTIAL_STORE_UNAVAILABLE, routeId, ...storeFailureFields(error) }, EVENT_NAMES.AGENT_CREDENTIAL_STORE_UNAVAILABLE);
+  }
+}
 
 type AuthRequiredHandler<TContext = unknown> = (
   ctx: RequestContext,
@@ -172,68 +188,56 @@ export function wrapRouteHandlerWithLogging<TContext = unknown>(
       );
     }
 
-    // Fetch session based on auth mode. A revocable key whose store cannot answer is 503, never a false 401 (STORE_OUTAGE_IS_NOT_401).
-    let sessionUser: SessionUser | null = null;
-    if (options.auth && options.auth.mode !== "none") {
-      try {
-        sessionUser = await options.auth.getSessionUser();
-      } catch (error) {
-        // These early returns skip the request lifecycle below, so each one counts itself in the http request metric.
-        const earlyReturn = (status: number, body: Record<string, string>, headers: Record<string, string>) => {
-          httpRequestsTotal.inc({ route: options.routeId, method: request.method, status: statusBucket(status) });
-          return NextResponse.json(body, { status, headers });
-        };
-        if (error instanceof V1SupersededError) {
-          // A signed key used after its user confirmed a revocable key: the best "leaked signed key is being replayed" signal. userId only.
-          container.log.warn(
-            { event: EVENT_NAMES.AGENT_CREDENTIAL_V1_SUPERSEDED_DENIED, routeId: options.routeId, userId: error.userId },
-            EVENT_NAMES.AGENT_CREDENTIAL_V1_SUPERSEDED_DENIED
-          );
-          return earlyReturn(401, { error: error.code }, { "cache-control": "no-store", "www-authenticate": 'Bearer error="invalid_token"' });
-        }
-        if (error instanceof CredentialRateLimitedError) {
-          container.log.warn(
-            { event: EVENT_NAMES.AGENT_CREDENTIAL_RATE_LIMITED, routeId: options.routeId },
-            EVENT_NAMES.AGENT_CREDENTIAL_RATE_LIMITED
-          );
-          return earlyReturn(429, { error: error.code }, { "cache-control": "no-store", "retry-after": "60" });
-        }
-        if (!(error instanceof CredentialStoreUnavailableError)) throw error;
-        container.log.warn(
-          { event: EVENT_NAMES.AGENT_CREDENTIAL_STORE_UNAVAILABLE, routeId: options.routeId },
-          EVENT_NAMES.AGENT_CREDENTIAL_STORE_UNAVAILABLE
-        );
-        return earlyReturn(503, { error: "authz_unavailable" }, { "cache-control": "no-store", "retry-after": "5" });
-      }
-    }
-
     // Wrap entire request in OTel root span for distributed tracing
     // Per AI_SETUP_SPEC.md: root span bound to context via context.with()
     return withRootSpan(
       `${request.method} ${options.routeId}`,
       { route_id: options.routeId },
       async ({ traceId, span }) => {
-        const ctx = createRequestContext(
+        let ctx = createRequestContext(
           { baseLog: container.log, clock: container.clock },
           request,
-          {
-            routeId: options.routeId,
-            traceId,
-            session: sessionUser ?? undefined,
-          }
+          { routeId: options.routeId, traceId }
         );
 
         // Per AI_SETUP_SPEC.md: request_id must be on root span for trace-log correlation
         span.setAttribute("request_id", ctx.reqId);
 
-        logRequestStart(ctx.log);
         const start = performance.now();
+
+        // Resolve the session INSIDE the request lifecycle (after the request context exists), so a credential outcome (401 v1_superseded,
+        // 429, 503) is logged, measured and traced like every other response. The error is held here and answered in the try below, where
+        // `finally` logs the request end and records the metric exactly once. A revocable key whose store cannot answer is 503, never a
+        // false 401 (STORE_OUTAGE_IS_NOT_401).
+        let sessionUser: SessionUser | null = null;
+        let sessionError: unknown;
+        if (options.auth && options.auth.mode !== "none") {
+          try {
+            sessionUser = await options.auth.getSessionUser();
+          } catch (error) {
+            sessionError = error;
+          }
+        }
+        if (sessionUser) {
+          ctx = { ...ctx, log: ctx.log.child({ userId: sessionUser.id }), session: sessionUser };
+        }
+
+        logRequestStart(ctx.log);
 
         // Track response for metrics/logging (captured in try/catch, used in finally)
         let responseStatus = 500;
         let response: NextResponse;
 
         try {
+          if (sessionError !== undefined) {
+            const refusal = credentialErrorHttp(sessionError);
+            if (!refusal) throw sessionError;
+            logCredentialRefusal(ctx.log, sessionError, options.routeId);
+            responseStatus = refusal.status;
+            response = NextResponse.json(refusal.body, { status: refusal.status, headers: { ...refusal.headers } });
+            return response;
+          }
+
           // Check session requirement before calling handler
           if (options.auth?.mode === "required" && !sessionUser) {
             responseStatus = 401;

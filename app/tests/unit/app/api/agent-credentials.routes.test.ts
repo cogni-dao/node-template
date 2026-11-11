@@ -21,6 +21,8 @@ const fake = vi.hoisted(() => ({
   headers: new Map<string, string>(),
   /** false = the per-IP lookup limiter is exhausted. */
   admit: true,
+  /** How many limiter tokens lookups that found no usable key have spent (SPEND_ON_MISS). */
+  misses: 0,
   memory: undefined as unknown as {
     store: unknown;
     outage: { failing: boolean; failOn: string | null };
@@ -41,6 +43,9 @@ vi.mock("@/bootstrap/container", () => ({
 vi.mock("@/bootstrap/agent-credentials", () => ({
   getAgentCredentialStore: () => fake.memory.store,
   admitCredentialLookup: () => fake.admit,
+  recordCredentialMiss: () => {
+    fake.misses += 1;
+  },
 }));
 
 import { issueAgentApiKey, resolveRequestIdentity } from "@/app/_lib/auth/request-identity";
@@ -50,6 +55,7 @@ import { POST as revoke } from "@/app/api/v1/agent/credentials/revoke/route";
 import { POST as rotate } from "@/app/api/v1/agent/credentials/rotate/route";
 import { POST as upgrade } from "@/app/api/v1/agent/credentials/upgrade/route";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import { httpRequestDurationMs, httpRequestsTotal } from "@/shared/observability";
 
 const USER = "agent-user-1";
 const OTHER = "agent-user-2";
@@ -83,6 +89,7 @@ async function activeKey() {
 beforeEach(() => {
   vi.clearAllMocks();
   fake.admit = true;
+  fake.misses = 0;
   log.child.mockReturnValue(log);
   fake.memory = memoryCredentialStore({ users: { [USER]: {}, [OTHER]: {} } }) as never;
 });
@@ -245,6 +252,61 @@ describe("store outage", () => {
     fake.memory.outage.failing = true;
     expect((await post(rotate as never, `${REVOCABLE_KEY_PREFIX}${"a".repeat(42)}!`)).status).toBe(401);
     expect((await post(rotate as never, `${REVOCABLE_KEY_PREFIX}${"a".repeat(44)}`)).status).toBe(401);
+  });
+});
+
+describe("request lifecycle for credential outcomes (B1)", () => {
+  const completed = () => log.info.mock.calls.filter(([, message]) => message === "request complete").map(([fields]) => fields);
+
+  it("a credential-store outage on an ordinary route is 503 AND logs one request complete with status 503, counts it in the 5xx bucket and observes its duration", async () => {
+    const rk = await activeKey();
+    const counted = vi.spyOn(httpRequestsTotal, "inc");
+    const timed = vi.spyOn(httpRequestDurationMs, "observe");
+    log.info.mockClear();
+    fake.memory.outage.failing = true;
+    const res = await ping(rk.apiKey);
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: "authz_unavailable" });
+    expect(completed()).toEqual([expect.objectContaining({ status: 503 })]);
+    expect(counted).toHaveBeenCalledTimes(1);
+    expect(counted).toHaveBeenCalledWith({ route: "test.ordinary", method: "POST", status: "5xx" });
+    expect(timed).toHaveBeenCalledTimes(1);
+    expect(warned("agent.credential.store_unavailable")).toHaveLength(1);
+    counted.mockRestore();
+    timed.mockRestore();
+  });
+
+  it("a superseded signed key (401) and an over-limit client (429) each log exactly one request complete with their status", async () => {
+    const key = v1();
+    const pending = await (await post(upgrade as never, key)).json();
+    await post(confirm as never, pending.apiKey);
+    log.info.mockClear();
+    expect((await ping(key)).status).toBe(401);
+    expect(completed()).toEqual([expect.objectContaining({ status: 401 })]);
+    log.info.mockClear();
+    fake.admit = false;
+    expect((await ping(pending.apiKey)).status).toBe(429);
+    expect(completed()).toEqual([expect.objectContaining({ status: 429 })]);
+  });
+
+  const warned = (event: string) => log.warn.mock.calls.filter(([fields]) => fields?.event === event);
+});
+
+describe("limiter spend (B2, SPEND_ON_MISS)", () => {
+  it("a valid key never spends a limiter token; an unknown key, a revoked key and a key in a state the route refuses each spend one; a bad checksum spends none", async () => {
+    const rk = await activeKey();
+    const spentBefore = fake.misses; // activeKey() confirm calls verify with a pending key: it resolves, so no miss
+    for (let i = 0; i < 5; i++) expect((await ping(rk.apiKey)).status).toBe(200);
+    expect(fake.misses - spentBefore).toBe(0);
+
+    expect((await ping(formatRevocableKey("a".repeat(43)))).status).toBe(401);
+    expect(fake.misses - spentBefore).toBe(1);
+    expect((await ping(`${rk.apiKey.slice(0, -1)}${rk.apiKey.endsWith("A") ? "B" : "A"}`)).status).toBe(401);
+    expect(fake.misses - spentBefore).toBe(1);
+
+    await post(revoke as never, rk.apiKey);
+    expect((await ping(rk.apiKey)).status).toBe(401);
+    expect(fake.misses - spentBefore).toBe(2);
   });
 });
 
