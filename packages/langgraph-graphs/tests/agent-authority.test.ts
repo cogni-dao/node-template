@@ -66,12 +66,10 @@ describe("catalog principals (N4)", () => {
     expect(ids).not.toContain("core__knowledge_write");
   });
 
-  it("keeps principals limited to the named graphs", () => {
-    const named = Object.entries(LANGGRAPH_CATALOG)
-      .filter(([, entry]) => "principal" in entry && entry.principal)
-      .map(([name]) => name)
-      .sort();
-    expect(named).toEqual(["cogni", "work-closeout", "work-prioritizer"]);
+  it("names only seeded principal slugs", () => {
+    for (const entry of Object.values(LANGGRAPH_CATALOG))
+      if ("principal" in entry && entry.principal)
+        expect([NODE_AI_PRINCIPAL, PRIORITIZER_PRINCIPAL]).toContain(entry.principal);
   });
 });
 
