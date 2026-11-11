@@ -137,25 +137,15 @@ export function createCogniProgram(
 			store: opts.store,
 			namespace: [...opts.memoryNamespace],
 		});
-	// A growing hub must not take the agent down: keep the first entries that fit the
-	// skills-metadata budget (50 entries, 16 KiB) instead of failing the run.
-	const index: NonNullable<
-		NonNullable<CreateReactAgentGraphOptions["sourceContext"]>["governingIndex"]
-	>[number][] = [];
-	let indexBytes = 2;
-	for (const entry of opts.sourceContext?.governingIndex ?? []) {
-		if (
-			!allowedTools.has("core__knowledge_read") ||
-			!readTools.has("core__knowledge_read") ||
-			!(opts.profile?.skillIds.includes(entry.id) ?? true) ||
-			!/^[a-z0-9][a-z0-9-]{0,63}$/.test(entry.id)
-		)
-			continue;
-		const bytes = new TextEncoder().encode(JSON.stringify(entry)).length + 1;
-		if (index.length >= 50 || indexBytes + bytes > 16_384) break;
-		index.push(entry);
-		indexBytes += bytes;
-	}
+	// The governing index arrives already bounded by its owner (guidance-routing-design:
+	// one predicate, one query, one whole-bundle budget). The harness adds no second cap.
+	const index = (opts.sourceContext?.governingIndex ?? []).filter(
+		(entry) =>
+			allowedTools.has("core__knowledge_read") &&
+			readTools.has("core__knowledge_read") &&
+			(opts.profile?.skillIds.includes(entry.id) ?? true) &&
+			/^[a-z0-9][a-z0-9-]{0,63}$/.test(entry.id),
+	);
 	routes["/skills/"] = new HubSkillBackend(
 		index.map((entry) => entry.id),
 		opts.readSkill ??
