@@ -37,9 +37,11 @@ const CONDUCTOR_SETUP = path.join(
 	REPO_ROOT,
 	"scripts/conductor-worktree-setup.sh",
 );
-// The former hard cap (bug.5284), kept only to size an over-cap bundle that must
-// now surface WHOLE rather than be rejected (story.5070).
-const FORMER_CAP_BYTES = 16 * 1024;
+// A bundle larger than any harness preview: it must stay whole (story.5070).
+const LARGE_BUNDLE_BYTES = 17 * 1024;
+// A complete bundle as the hub serves it: the contract and its status-contract.
+const LIVE =
+	"live cognition\n<agent-contract>\n<status-contract>\n</status-contract>\n</agent-contract>";
 const CACHE_PATH = ".cogni/.cognition-cache.md";
 const fixtures: string[] = [];
 
@@ -84,7 +86,7 @@ describe("session cognition hook", () => {
 		mkdirSync(bin);
 		writeFileSync(
 			curl,
-			"#!/bin/sh\nprintf '%s\\n' '{\"markdown\":\"live cognition\"}'\n",
+			`#!/bin/sh\nprintf '%s\\n' '${JSON.stringify({ markdown: LIVE })}'\n`,
 		);
 		chmodSync(curl, 0o755);
 
@@ -104,8 +106,8 @@ describe("session cognition hook", () => {
 		// Claude is told to restart, never handed a partial contract (bug.0018).
 		const notice: string = JSON.parse(output).hookSpecificOutput.additionalContext;
 		expect(notice).toContain("restart or resume");
-		expect(notice).not.toContain("live cognition");
-		expect(readFileSync(cache, "utf8")).toBe("live cognition\n");
+		expect(notice).not.toContain("<agent-contract>");
+		expect(readFileSync(cache, "utf8")).toBe(`${LIVE}\n`);
 	});
 
 	it("uses one native, uncapped channel per supported harness (story.5070)", () => {
@@ -277,10 +279,17 @@ describe("session cognition hook", () => {
 	it("presents only to Codex while Claude reads the complete cache import (story.5070)", () => {
 		const root = fixture();
 		const noUserHook = path.join(root, "no-user-hook");
+		// Hermetic: background refreshes of the hour-old fixtures never reach a hub.
+		const unreachable = path.join(root, "unreachable");
+		mkdirSync(unreachable);
+		writeFileSync(path.join(unreachable, "curl"), "#!/bin/sh\nexit 7\n");
+		chmodSync(path.join(unreachable, "curl"), 0o755);
 		const env = {
 			...process.env,
 			CODEX_HOME: noUserHook,
 			CODEX_THREAD_ID: "",
+			COGNI_NODE_API_KEY: "",
+			PATH: `${unreachable}:${process.env.PATH ?? ""}`,
 		};
 
 		const small = path.join(root, "small");
@@ -326,9 +335,9 @@ describe("session cognition hook", () => {
 			}),
 		).toBe("");
 
-		// story.5070 regression: a bundle past the former 16 KB cap remains whole
-		// in the cache Claude imports; the write-only hook never emits a preview.
-		const overCapBytes = FORMER_CAP_BYTES + 1000;
+		// story.5070 regression: a large bundle remains whole in the cache Claude
+		// imports; the hook never emits a preview.
+		const overCapBytes = LARGE_BUNDLE_BYTES;
 		const large = path.join(root, "large");
 		mkdirSync(path.join(large, ".cogni"), { recursive: true });
 		writeFileSync(
@@ -445,7 +454,7 @@ describe("session cognition hook", () => {
 		mkdirSync(bin);
 		writeFileSync(
 			curl,
-			"#!/bin/sh\nprintf '%s\\n' '{\"markdown\":\"live cognition\"}'\n",
+			`#!/bin/sh\nprintf '%s\\n' '${JSON.stringify({ markdown: LIVE })}'\n`,
 		);
 		chmodSync(curl, 0o755);
 
@@ -460,7 +469,7 @@ describe("session cognition hook", () => {
 			},
 			encoding: "utf8",
 		});
-		expect(output).toBe("live cognition\n");
-		expect(readFileSync(cache, "utf8")).toBe("live cognition\n");
+		expect(output).toBe(`${LIVE}\n`);
+		expect(readFileSync(cache, "utf8")).toBe(`${LIVE}\n`);
 	});
 });

@@ -123,12 +123,15 @@ fetch_bundle() {
   fi
 }
 
-# write_cache_atomic <content> — replace the cache in one rename, never a torn file.
+# write_cache_atomic <content> — replace the cache in one rename, never a torn
+# file, and only with a complete bundle: an incomplete hub response never
+# replaces the contract a later import would load (bug.0024).
 write_cache_atomic() {
+  bundle_is_complete "$1" || return 1
   write_file_atomic "$CACHE_FILE" "$1"
-  # Keep the clone root's copy current too, so a new worktree whose first fetch
-  # fails (hub slow or down) still boots from the last complete bundle.
-  if [ -n "$SHARED_CACHE" ] && bundle_is_complete "$1"; then
+  # Keep the clone root's copy current too: Conductor copies it into every new
+  # worktree, and a worktree whose first fetch fails boots from it.
+  if [ -n "$SHARED_CACHE" ]; then
     write_file_atomic "$SHARED_CACHE" "$1"
     ensure_shared_cache_ignored
   fi
@@ -140,8 +143,13 @@ write_cache_atomic() {
 # branch and stays on this machine.
 ensure_shared_cache_ignored() {
   git -C "$clone_root" check-ignore -q -- "$CACHE_FILE" 2>/dev/null && return 0
-  mkdir -p "$clone_root/.git/info" 2>/dev/null \
-    && printf '/%s\n' "$CACHE_FILE" >> "$clone_root/.git/info/exclude" 2>/dev/null
+  exclude="$clone_root/.git/info/exclude"
+  mkdir -p "$clone_root/.git/info" 2>/dev/null || return 0
+  # Start on a new line even when the file's last line has no newline.
+  if [ -s "$exclude" ] && [ -n "$(tail -c 1 "$exclude" 2>/dev/null)" ]; then
+    printf '\n' >> "$exclude" 2>/dev/null
+  fi
+  printf '/%s\n' "$CACHE_FILE" >> "$exclude" 2>/dev/null
   return 0
 }
 
@@ -202,9 +210,8 @@ refresh_in_background() {
 # the hub's current one. Exits 0 only when a complete bundle was written, and
 # never replaces a complete cache with an incomplete response.
 if [ "${1:-}" = "--refresh" ]; then
-  fresh="$(fetch_bundle)"
-  bundle_is_complete "$fresh" || exit 1
-  write_cache_atomic "$fresh"
+  cache_is_repo_tracked && exit 1
+  write_cache_atomic "$(fetch_bundle)" || exit 1
   exit 0
 fi
 
@@ -224,8 +231,7 @@ fi
 # the network in the foreground, and the only one that can surface a notice.
 # Bounded fetch.
 bundle="$(fetch_bundle)"
-if [ -n "$bundle" ]; then
-  write_cache_atomic "$bundle"
+if write_cache_atomic "$bundle"; then
   emit_agent_context "$bundle"
   emit_claude_notice "$CLAUDE_RESTART_NOTICE"
   exit 0
@@ -276,8 +282,8 @@ hub is down/slow, or the key lacks a principal on this hub (or the node has no
 cognition published yet). There's no local cache to fall back on this first time.
 
 Check hub health (cognidao.org/version) and that GET /api/v1/cognition resolves
-with your key. Proceed with the repo's own AGENTS.md + skills meanwhile —
-cognition caches itself once it loads, and then survives hub outages.
+with your key. Stay in bootstrap recovery (AGENTS.md) until it loads; cognition
+caches itself once it loads, and then survives hub outages.
 EOF
 )"
 fi
