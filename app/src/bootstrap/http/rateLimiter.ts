@@ -110,25 +110,27 @@ export class TokenBucketRateLimiter {
    * Start periodic cleanup of stale entries (entries with full tokens unused for >60s).
    */
   private startCleanup(): void {
-    this.cleanupInterval = setInterval(() => {
-      const now = Date.now();
-      const staleThresholdMs = 60_000; // 60 seconds
-
-      for (const [key, bucket] of this.buckets.entries()) {
-        const timeSinceLastSeen = now - bucket.lastSeen;
-        const isFull =
-          bucket.tokens >= this.config.maxTokens + this.config.burstSize;
-
-        // Remove if bucket is full and unused for >60s
-        if (isFull && timeSinceLastSeen > staleThresholdMs) {
-          this.buckets.delete(key);
-        }
-      }
-    }, 60_000); // Run every 60s
+    this.cleanupInterval = setInterval(() => this.sweep(Date.now()), 60_000); // Run every 60s
 
     // Prevent cleanup from keeping process alive in tests
     if (this.cleanupInterval.unref) {
       this.cleanupInterval.unref();
+    }
+  }
+
+  /**
+   * Remove buckets that are idle for >60s AND would be full by now. Fullness is the REFILLED count (stored tokens + elapsed x rate, capped):
+   * the stored count is only updated by `consume`, so a drained bucket never looks full from storage alone and would never be evicted.
+   */
+  public sweep(now: number): void {
+    const capacity = this.config.maxTokens + this.config.burstSize;
+    const staleThresholdMs = 60_000; // 60 seconds
+    for (const [key, bucket] of this.buckets.entries()) {
+      const idleMs = now - bucket.lastSeen;
+      const refilled = Math.min(bucket.tokens + (idleMs / 1000) * this.config.refillRate, capacity);
+      if (refilled >= capacity && idleMs > staleThresholdMs) {
+        this.buckets.delete(key);
+      }
     }
   }
 
@@ -189,7 +191,7 @@ export function extractClientIp(request: { headers: { get(name: string): string 
 }
 
 /**
- * The client key for the credential-lookup limiter: the IP the CLOUDFLARE edge reports in `cf-connecting-ip`, or "unknown" when it is absent.
+ * The client key for the credential-lookup limiter: the IP the CLOUDFLARE edge reports in `cf-connecting-ip` (an IPv6 client by its /64 prefix), or "unknown" when it is absent.
  *
  * Why this header and not `x-real-ip` / `x-forwarded-for` (guard-needs-proven-writer). Evidence on where a node-template request comes from:
  * - The node runs on Akash. The operator points the node host at the lease's provider ingress with a PROXIED Cloudflare CNAME and requires
@@ -208,7 +210,30 @@ export function extractClientIp(request: { headers: { get(name: string): string 
  */
 export function extractEdgeClientIp(request: { headers: { get(name: string): string | null } }): string {
   const ip = request.headers.get("cf-connecting-ip")?.trim();
-  return ip && ip.length <= 45 && /^[0-9a-fA-F:.]+$/.test(ip) ? ip : "unknown";
+  if (!ip || ip.length > 45 || !/^[0-9a-fA-F:.]+$/.test(ip)) return "unknown";
+  return ip.includes(":") ? ipv6Prefix64(ip) : ip;
+}
+
+/**
+ * An IPv6 client is keyed by its /64 prefix (one subscriber normally holds a whole /64, so keying on the full address would hand it unlimited
+ * buckets). An IPv4-mapped address (`::ffff:a.b.c.d`) is keyed as that IPv4 address. A shape that does not parse is "unknown".
+ */
+function ipv6Prefix64(ip: string): string {
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(ip);
+  if (mapped?.[1]) return mapped[1];
+  const halves = ip.split("::");
+  if (halves.length > 2) return "unknown";
+  const side = (text: string | undefined) => (text ? text.split(":") : []);
+  const head = side(halves[0]);
+  const tail = side(halves[1]);
+  const missing = 8 - head.length - tail.length;
+  if (halves.length === 1 ? head.length !== 8 : missing < 1) return "unknown";
+  const groups = halves.length === 1 ? head : [...head, ...Array<string>(missing).fill("0"), ...tail];
+  if (!groups.every((g) => /^[0-9a-fA-F]{1,4}$/.test(g))) return "unknown";
+  return `${groups
+    .slice(0, 4)
+    .map((g) => Number.parseInt(g, 16).toString(16))
+    .join(":")}::/64`;
 }
 
 /**
