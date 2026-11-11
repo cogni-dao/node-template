@@ -351,7 +351,7 @@ export function createPostgresCredentialStore(client: CredentialSql, options: Po
         });
         await tx`
           INSERT INTO identity_events (id, user_id, event_type, payload)
-          VALUES (gen_random_uuid()::text, ${userId}, 'bind', ${payload}::jsonb)`;
+          VALUES (gen_random_uuid()::text, ${userId}, 'bind', ${payload}::text::jsonb)`;
         await consume();
         return { ok: true, result: "created" };
       }),
