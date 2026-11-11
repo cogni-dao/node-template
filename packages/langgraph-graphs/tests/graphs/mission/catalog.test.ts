@@ -26,18 +26,20 @@ import { COGNI_DECIDE_TOOL_IDS } from "../../../src/graphs/mission/cogni-decide"
 import { createMissionGraph } from "../../../src/graphs/mission/graph";
 
 describe("published node catalog", () => {
-  it("publishes exactly cogni and work-prioritizer with unique display names", () => {
+  it("publishes exactly cogni, work-closeout and work-prioritizer with unique display names", () => {
     expect(Object.keys(NODE_LANGGRAPH_CATALOG).sort()).toEqual([
       "cogni",
+      "work-closeout",
       "work-prioritizer",
     ]);
     const names = Object.values(NODE_LANGGRAPH_CATALOG).map(
       (entry) => entry.displayName,
     );
-    expect(names.sort()).toEqual(["Cogni", "Work Prioritizer"]);
+    expect(names.sort()).toEqual(["Cogni", "Work Closeout", "Work Prioritizer"]);
     expect(new Set(names).size).toBe(names.length);
     expect(Object.keys(LANGGRAPH_GRAPH_IDS).sort()).toEqual([
       "cogni",
+      "work-closeout",
       "work-prioritizer",
     ]);
   });
@@ -50,7 +52,8 @@ describe("published node catalog", () => {
     const prompt = NODE_LANGGRAPH_CATALOG.cogni.systemPrompt;
     expect(prompt).toContain('"id":"langgraph:cogni"');
     expect(prompt).toContain('"id":"langgraph:work-prioritizer"');
-    expect(prompt.match(/"id":"langgraph:/g)).toHaveLength(2);
+    expect(prompt).toContain('"id":"langgraph:work-closeout"');
+    expect(prompt.match(/"id":"langgraph:/g)).toHaveLength(3);
   });
 
   it("work-prioritizer (mission loop) runs on every node, bound to the common Cogni factory (reads + triage writer)", () => {
