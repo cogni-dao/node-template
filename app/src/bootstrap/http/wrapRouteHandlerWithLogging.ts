@@ -194,21 +194,12 @@ export function wrapRouteHandlerWithLogging<TContext = unknown>(
       `${request.method} ${options.routeId}`,
       { route_id: options.routeId },
       async ({ traceId, span }) => {
-        let ctx = createRequestContext(
-          { baseLog: container.log, clock: container.clock },
-          request,
-          { routeId: options.routeId, traceId }
-        );
-
-        // Per AI_SETUP_SPEC.md: request_id must be on root span for trace-log correlation
-        span.setAttribute("request_id", ctx.reqId);
-
         const start = performance.now();
 
-        // Resolve the session INSIDE the request lifecycle (after the request context exists), so a credential outcome (401 v1_superseded,
-        // 429, 503) is logged, measured and traced like every other response. The error is held here and answered in the try below, where
-        // `finally` logs the request end and records the metric exactly once. A revocable key whose store cannot answer is 503, never a
-        // false 401 (STORE_OUTAGE_IS_NOT_401).
+        // Resolve the session INSIDE the span, so a credential outcome (401 v1_superseded, 429, 503) is logged, measured and traced like every
+        // other response. The error is held here and answered in the try below, where `finally` logs the request end and records the metric
+        // exactly once. A revocable key whose store cannot answer is 503, never a false 401 (STORE_OUTAGE_IS_NOT_401). The context is built once,
+        // after this, with the session, exactly as before (no logger `.child` is assumed beyond what `createRequestContext` already uses).
         let sessionUser: SessionUser | null = null;
         let sessionError: unknown;
         if (options.auth && options.auth.mode !== "none") {
@@ -218,9 +209,19 @@ export function wrapRouteHandlerWithLogging<TContext = unknown>(
             sessionError = error;
           }
         }
-        if (sessionUser) {
-          ctx = { ...ctx, log: ctx.log.child({ userId: sessionUser.id }), session: sessionUser };
-        }
+
+        const ctx = createRequestContext(
+          { baseLog: container.log, clock: container.clock },
+          request,
+          {
+            routeId: options.routeId,
+            traceId,
+            session: sessionUser ?? undefined,
+          }
+        );
+
+        // Per AI_SETUP_SPEC.md: request_id must be on root span for trace-log correlation
+        span.setAttribute("request_id", ctx.reqId);
 
         logRequestStart(ctx.log);
 
