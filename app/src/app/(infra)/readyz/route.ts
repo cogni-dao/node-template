@@ -64,23 +64,27 @@ function logReadinessFailure(
 }
 
 export async function GET(request: Request): Promise<NextResponse> {
-  const start = performance.now();
-  return withRootSpan(
-    "GET meta.readyz",
-    { route_id: "meta.readyz" },
-    async ({ traceId, span }) => {
-      const log = makeLogger({ service: "cogni-template" });
-      const ctx = createRequestContext(
-        { baseLog: log, clock: { now: () => new Date().toISOString() } },
-        request,
-        { routeId: "meta.readyz", traceId },
-      );
-      span.setAttribute("request_id", ctx.reqId);
-      let status = 500;
-      try {
-        // Configuration refusals still get a request envelope; other invariants stay fatal.
+  let start = 0;
+  let status = 500;
+  let settledResponse: NextResponse | undefined;
+  let log: ReturnType<typeof makeLogger> | undefined;
+  try {
+    start = performance.now();
+    return await withRootSpan(
+      "GET meta.readyz",
+      { route_id: "meta.readyz" },
+      async ({ traceId, span }) => {
+        log = makeLogger({ service: "cogni-template" });
+        const ctx = createRequestContext(
+          { baseLog: log, clock: { now: () => new Date().toISOString() } },
+          request,
+          { routeId: "meta.readyz", traceId },
+        );
+        log = ctx.log;
+        span.setAttribute("request_id", ctx.reqId);
         try {
           ctx.log = ctx.log.child({ nodeId: getNodeId() });
+          log = ctx.log;
         } catch (error) {
           if (
             !(
@@ -91,22 +95,37 @@ export async function GET(request: Request): Promise<NextResponse> {
             throw error;
         }
         const deep = new URL(request.url).searchParams.get("deep") === "1";
+        const runtime = deepRuntime(ctx);
+        const safeRuntime = {
+          ...runtime,
+          log: (...args: Parameters<typeof runtime.log>) => {
+            try {
+              runtime.log(...args);
+            } catch {}
+          },
+        };
         const result = await serveReadyz({
           deep,
           local: () => {
             const env = localReadinessPreflight();
-            setBuildInfo(
-              process.env.npm_package_version || "unknown",
-              env.APP_BUILD_SHA || "unknown",
-            );
+            try {
+              setBuildInfo(
+                process.env.npm_package_version || "unknown",
+                env.APP_BUILD_SHA || "unknown",
+              );
+            } catch {}
             return {
               buildSha: env.APP_BUILD_SHA || undefined,
               version: process.env.npm_package_version || undefined,
             };
           },
           deepChecks: () => buildDeepChecks(ctx, getContainer(), serverEnv()),
-          runtime: deepRuntime(ctx),
-          onFailure: (error) => logReadinessFailure(ctx, error as Error),
+          runtime: safeRuntime,
+          onFailure: (error) => {
+            try {
+              logReadinessFailure(ctx, error as Error);
+            } catch {}
+          },
           describeError: (error) => {
             if (error instanceof EnvValidationError)
               return { reason: error.meta.code, details: error.meta };
@@ -122,27 +141,42 @@ export async function GET(request: Request): Promise<NextResponse> {
           result.status === 200
             ? metaReadyzOperation.output.parse(result.body)
             : result.body;
+        const response = NextResponse.json(body, { status: result.status });
         status = result.status;
-        return NextResponse.json(body, { status });
-      } catch {
-        ctx.log.error({ errorCode: "INTERNAL_SERVER_ERROR" }, "request failed");
-        return NextResponse.json(
-          { status: "error", reason: "INTERNAL_ERROR" },
-          { status: 500 },
-        );
-      } finally {
-        const durationMs = performance.now() - start;
-        logRequestEnd(ctx.log, { status, durationMs });
-        httpRequestsTotal.inc({
-          route: "meta.readyz",
-          method: request.method,
-          status: statusBucket(status),
-        });
-        httpRequestDurationMs.observe(
-          { route: "meta.readyz", method: request.method },
-          durationMs,
-        );
-      }
-    },
-  );
+        settledResponse = response;
+        return response;
+      },
+    );
+  } catch {
+    if (settledResponse) return settledResponse;
+    status = 500;
+    try {
+      log?.error({ errorCode: "INTERNAL_SERVER_ERROR" }, "request failed");
+    } catch {}
+    return new NextResponse(
+      JSON.stringify({ status: "error", reason: "INTERNAL_ERROR" }),
+      { status: 500, headers: { "content-type": "application/json" } },
+    );
+  } finally {
+    let durationMs = 0;
+    try {
+      durationMs = performance.now() - start;
+    } catch {}
+    try {
+      if (log) logRequestEnd(log, { status, durationMs });
+    } catch {}
+    try {
+      httpRequestsTotal.inc({
+        route: "meta.readyz",
+        method: request.method,
+        status: statusBucket(status),
+      });
+    } catch {}
+    try {
+      httpRequestDurationMs.observe(
+        { route: "meta.readyz", method: request.method },
+        durationMs,
+      );
+    } catch {}
+  }
 }

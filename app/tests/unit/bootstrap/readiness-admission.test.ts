@@ -55,6 +55,8 @@ import type { ServiceAccountService } from "@/ports";
 import { RuntimeSecretError } from "@/shared/env/invariants";
 import { EnvValidationError } from "@/shared/env/server-env";
 import * as observability from "@/shared/observability";
+import * as otel from "@/bootstrap/otel";
+import { createStreamRedisClient } from "@/bootstrap/stream-redis-client";
 import { createLokiPushStream } from "@/shared/observability/server/loki-push-stream";
 
 type LokiGlobal = typeof globalThis & {
@@ -244,6 +246,184 @@ describe("readiness admission", () => {
       vi.unstubAllGlobals();
     },
   );
+  it.each([
+    "local",
+    "construction",
+    "logger",
+    "context",
+    "span",
+    "completion",
+    "metrics",
+  ] as const)("contains readiness boundary failure: %s", async (phase) => {
+    const sentinel = "BOUNDARY_PRIVATE_SENTINEL";
+    vi.stubEnv("VITEST", "false");
+    vi.stubEnv("NODE_ENV", "production");
+    const pushed = vi.fn<typeof fetch>(
+      async () => new Response(null, { status: 204 }),
+    );
+    const stream = createLokiPushStream({
+      env: { LOKI_PUSH_URL: "https://logs.invalid" },
+      fetchFn: pushed,
+    });
+    globalLoki.__cogniLokiPushInit = true;
+    globalLoki.__cogniLokiPushStream = stream;
+    const completion =
+      phase === "context"
+        ? vi.spyOn(observability, "logRequestEnd")
+        : undefined;
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    const failure = () => {
+      throw new Error(sentinel);
+    };
+    if (phase === "local") mocks.preflight.mockImplementation(failure);
+    if (phase === "construction")
+      mocks.getContainer.mockImplementation(failure);
+    if (phase === "logger")
+      vi.spyOn(observability, "makeLogger").mockImplementation(failure);
+    if (phase === "context")
+      vi.spyOn(observability, "createRequestContext").mockImplementation(
+        failure,
+      );
+    if (phase === "span")
+      vi.spyOn(otel, "withRootSpan").mockImplementation(failure);
+    if (phase === "completion")
+      vi.spyOn(observability, "logRequestEnd").mockImplementation(failure);
+    if (phase === "metrics")
+      vi.spyOn(observability.httpRequestsTotal, "inc").mockImplementation(
+        failure,
+      );
+    const response = await GET(
+      new Request(
+        `http://localhost/readyz${phase === "construction" ? "?deep=1" : ""}`,
+      ),
+    );
+    expect(response.status).toBe(
+      phase === "local" || phase === "construction"
+        ? 503
+        : phase === "completion" || phase === "metrics"
+          ? 200
+          : 500,
+    );
+    const body = await response.json();
+    expect(JSON.stringify(body)).not.toContain(sentinel);
+    expect(JSON.stringify(consoleError.mock.calls)).not.toContain(sentinel);
+    if (completion)
+      expect(completion).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          status: 500,
+          durationMs: expect.any(Number),
+        }),
+      );
+    expect(pushed).not.toHaveBeenCalled();
+    stream?.flushNow();
+    if (phase !== "logger" && phase !== "span" && phase !== "completion") {
+      const payload = JSON.parse(pushed.mock.calls[0]?.[1]?.body as string);
+      expect(JSON.stringify(payload)).not.toContain(sentinel);
+      if (phase !== "completion") {
+        const lines = payload.streams[0].values.map((entry: [string, string]) =>
+          JSON.parse(entry[1]),
+        );
+        expect(
+          lines.filter(
+            (line: { msg?: string }) => line.msg === "request complete",
+          ),
+        ).toHaveLength(1);
+      }
+    }
+    if (phase === "local" || phase === "construction") {
+      expect(body).toMatchObject({ status: "error", reason: "INTERNAL_ERROR" });
+      expect(body).not.toHaveProperty("checks");
+      expect(body).not.toHaveProperty("unreachable");
+    }
+  });
+  it.each(["error", "summary", "histogram", "annotation"] as const)(
+    "contains %s emitter failure",
+    async (phase) => {
+      const sentinel = "EMITTER_PRIVATE_SENTINEL";
+      const fail = () => {
+        throw new Error(sentinel);
+      };
+      if (phase === "histogram")
+        vi.spyOn(
+          observability.httpRequestDurationMs,
+          "observe",
+        ).mockImplementation(fail);
+      if (phase === "annotation")
+        vi.spyOn(otel, "withRootSpan").mockImplementation(
+          async (_name, _attrs, callback) =>
+            callback({
+              traceId: "test",
+              span: { setAttribute: fail },
+            } as never),
+        );
+      if (phase === "error" || phase === "summary") {
+        const create = observability.createRequestContext;
+        vi.spyOn(observability, "createRequestContext").mockImplementation(
+          (...args) => {
+            const ctx = create(...args);
+            vi.spyOn(ctx.log, "child").mockReturnValue(ctx.log);
+            vi.spyOn(
+              ctx.log,
+              phase === "error" ? "error" : "info",
+            ).mockImplementation(fail);
+            return ctx;
+          },
+        );
+        if (phase === "error") mocks.preflight.mockImplementation(fail);
+      }
+      if (phase === "summary") {
+        mocks.getContainer.mockReturnValue({
+          evmOnchainClient: {},
+          scheduleControl: {},
+          serviceAccountService: {},
+          runStream: { streamLength: vi.fn().mockResolvedValue(0) },
+        });
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async () =>
+            Response.json({ data: [{ model_name: "test-model" }] }),
+          ),
+        );
+      }
+      const response = await GET(
+        new Request(
+          `http://localhost/readyz${phase === "summary" ? "?deep=1" : ""}`,
+        ),
+      );
+      expect(response.status).toBe(
+        phase === "error" ? 503 : phase === "annotation" ? 500 : 200,
+      );
+      expect(JSON.stringify(await response.json())).not.toContain(sentinel);
+    },
+  );
+  it("keeps a determined response when span cleanup fails", async () => {
+    vi.spyOn(otel, "withRootSpan").mockImplementation(
+      async (_name, _attrs, callback) => {
+        await callback({
+          traceId: "test",
+          span: { setAttribute: () => {} },
+        } as never);
+        throw new Error("SPAN_CLEANUP_SENTINEL");
+      },
+    );
+    const response = await GET(request());
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ status: "healthy" });
+  });
+  it("does not let real Redis emit its native error stack", () => {
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    const redis = createStreamRedisClient("redis://127.0.0.1:1");
+    (
+      redis as unknown as { silentEmit(event: string, error: Error): void }
+    ).silentEmit("error", new Error("REDIS_PRIVATE_SENTINEL"));
+    expect(consoleError).not.toHaveBeenCalled();
+    redis.disconnect();
+  });
   it("the real local preflight refuses missing configuration without network IO", async () => {
     vi.stubEnv("APP_ENV", "test");
     vi.stubEnv("DATABASE_URL", "");

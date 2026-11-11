@@ -52,6 +52,7 @@ System setup installers were moved to `scripts/bootstrap/` and are out of scope 
   - `startGovernanceSyncOnBoot()` - Once-per-process bounded startup reconcile, inert in tests
   - `runGovernanceSchedulesSyncJob({ throwIfLocked? })` - Job: advisory lock + governance schedule sync via container
   - `localReadinessPreflight()` - Synchronous local env, secret and EVM configuration assertions
+  - `createStreamRedisClient(url)` - Lazy stream Redis client with bounded retries and safe native error handling
   - `getContainer()` - Singleton DI container with logger and config
   - `resetContainer()` - Reset singleton (tests only)
   - `Container` interface - Ports + logger + config (includes scheduleRunReader (appDb), accountsForUser(userId), serviceAccountService, metricsQuery, metricsCapability, repoCapability, toolSource, threadPersistenceForUser(userId), modelCatalog, providerResolver; no usageService)
