@@ -39,11 +39,13 @@ import {
   createRepoSearchImplementation,
   createScheduleListImplementation,
   createScheduleManageImplementation,
+  createVcsCommitContainsImplementation,
   createVcsCreateBranchImplementation,
   createVcsFlightCandidateImplementation,
   createVcsGetCiStatusImplementation,
   createVcsListPrsImplementation,
   createVcsMergePrImplementation,
+  createVcsPrReadImplementation,
   createWebSearchImplementation,
   createWorkItemQueryImplementation,
   createWorkItemReadImplementation,
@@ -64,11 +66,13 @@ import {
   REPO_SEARCH_NAME,
   SCHEDULE_LIST_NAME,
   SCHEDULE_MANAGE_NAME,
+  VCS_COMMIT_CONTAINS_NAME,
   VCS_CREATE_BRANCH_NAME,
   VCS_FLIGHT_CANDIDATE_NAME,
   VCS_GET_CI_STATUS_NAME,
   VCS_LIST_PRS_NAME,
   VCS_MERGE_PR_NAME,
+  VCS_PR_READ_NAME,
   WEB_SEARCH_NAME,
   WORK_ITEM_QUERY_NAME,
   WORK_ITEM_READ_NAME,
@@ -90,6 +94,8 @@ export interface ToolBindingDeps {
   readonly repoCapability: RepoCapability;
   readonly scheduleCapability: ScheduleCapability;
   readonly vcsCapability: VcsCapability;
+  /** Build SHA of the running app (APP_BUILD_SHA, as /version reports it). */
+  readonly runningBuildSha?: string | undefined;
   readonly workItemCapability: WorkItemCapability;
 }
 
@@ -181,6 +187,11 @@ export function createToolBindings(deps: ToolBindingDeps): ToolBindings {
       scheduleCapability: deps.scheduleCapability,
     }) as AnyToolImplementation,
 
+    [VCS_COMMIT_CONTAINS_NAME]: createVcsCommitContainsImplementation({
+      vcsCapability: deps.vcsCapability,
+      runningBuildSha: deps.runningBuildSha,
+    }) as AnyToolImplementation,
+
     [VCS_CREATE_BRANCH_NAME]: createVcsCreateBranchImplementation({
       vcsCapability: deps.vcsCapability,
     }) as AnyToolImplementation,
@@ -198,6 +209,10 @@ export function createToolBindings(deps: ToolBindingDeps): ToolBindings {
     }) as AnyToolImplementation,
 
     [VCS_MERGE_PR_NAME]: createVcsMergePrImplementation({
+      vcsCapability: deps.vcsCapability,
+    }) as AnyToolImplementation,
+
+    [VCS_PR_READ_NAME]: createVcsPrReadImplementation({
       vcsCapability: deps.vcsCapability,
     }) as AnyToolImplementation,
 

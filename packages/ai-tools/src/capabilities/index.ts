@@ -76,9 +76,12 @@ export type {
 export type {
   CheckInfo,
   CiStatusResult,
+  CommitCompareResult,
+  CommitCompareStatus,
   CreateBranchResult,
   DispatchCandidateFlightResult,
   MergeResult,
+  PrFacts,
   PrSummary,
   VcsCapability,
 } from "./vcs";

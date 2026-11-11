@@ -31,11 +31,13 @@ import { repoOpenBoundTool } from "./tools/repo-open";
 import { repoSearchBoundTool } from "./tools/repo-search";
 import { scheduleListBoundTool } from "./tools/schedule-list";
 import { scheduleManageBoundTool } from "./tools/schedule-manage";
+import { vcsCommitContainsBoundTool } from "./tools/vcs-commit-contains";
 import { vcsCreateBranchBoundTool } from "./tools/vcs-create-branch";
 import { vcsFlightCandidateBoundTool } from "./tools/vcs-flight-candidate";
 import { vcsGetCiStatusBoundTool } from "./tools/vcs-get-ci-status";
 import { vcsListPrsBoundTool } from "./tools/vcs-list-prs";
 import { vcsMergePrBoundTool } from "./tools/vcs-merge-pr";
+import { vcsPrReadBoundTool } from "./tools/vcs-pr-read";
 import { webSearchBoundTool } from "./tools/web-search";
 import { workItemQueryBoundTool } from "./tools/work-item-query";
 import { workItemReadBoundTool } from "./tools/work-item-read";
@@ -111,7 +113,9 @@ export function createToolCatalog(
  * Adding a node-only tool (e.g. poly-only): add it to that node's
  * `nodes/<node>/packages/ai-tools/` package instead — never here.
  * Operator deploy, PR, and GitHub App control-plane tools belong in
- * VCS_TOOL_BUNDLE instead.
+ * VCS_TOOL_BUNDLE instead. The two read-only public-repo fact tools
+ * (`core__vcs_pr_read`, `core__vcs_commit_contains`) live here because node
+ * agents need them and they hold no GitHub credential.
  */
 export const CORE_TOOL_BUNDLE: readonly CatalogBoundTool[] = [
   ...METRIC_TOOL_BUNDLE,
@@ -129,6 +133,8 @@ export const CORE_TOOL_BUNDLE: readonly CatalogBoundTool[] = [
   repoSearchBoundTool as CatalogBoundTool,
   scheduleListBoundTool as CatalogBoundTool,
   scheduleManageBoundTool as CatalogBoundTool,
+  vcsCommitContainsBoundTool as CatalogBoundTool,
+  vcsPrReadBoundTool as CatalogBoundTool,
   webSearchBoundTool as CatalogBoundTool,
   workItemQueryBoundTool as CatalogBoundTool,
   workItemReadBoundTool as CatalogBoundTool,

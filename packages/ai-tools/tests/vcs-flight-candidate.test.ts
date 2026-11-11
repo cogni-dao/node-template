@@ -38,6 +38,12 @@ function makeVcsStub(
     getCiStatus: async () => {
       throw new Error("not used");
     },
+    getPr: async () => {
+      throw new Error("not used");
+    },
+    compareCommits: async () => {
+      throw new Error("not used");
+    },
     mergePr: async () => {
       throw new Error("not used");
     },
