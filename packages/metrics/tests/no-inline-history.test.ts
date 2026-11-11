@@ -833,6 +833,81 @@ describe("no-inline-history@1 in the goal-metric service", () => {
 		expect(terminal).toEqual([expect.objectContaining({ metricId: id, status: "ok", reason: null })]);
 	});
 
+	it.each([
+		["success", "knowledgeDiff", ["ok", 100, "ok", 200, "ok", 300, 1, 10, 1000, 1, 1000]],
+		["error", "windowCommits", ["error", 100, "not_started", null, "not_started", null, null, null, null, null, null]],
+		["error", "workDiff", ["ok", 100, "error", 200, "not_started", null, 1, null, null, null, null]],
+		["error", "knowledgeDiff", ["ok", 100, "ok", 200, "error", 300, 1, 10, 1000, null, null]],
+		["timeout", "windowCommits", ["running", 15000, "not_started", null, "not_started", null, null, null, null, null, null]],
+		["timeout", "workDiff", ["ok", 100, "running", 14900, "not_started", null, 1, null, null, null, null]],
+		["timeout", "knowledgeDiff", ["ok", 100, "ok", 200, "running", 14700, 1, 10, 1000, null, null]],
+		["malformed", "windowCommits", ["ok", 100, "not_started", null, "not_started", null, null, null, null, null, null]],
+		["malformed", "workDiff", ["ok", 100, "ok", 200, "not_started", null, 1, null, null, null, null]],
+		["malformed", "knowledgeDiff", ["ok", 100, "ok", 200, "ok", 300, 1, 10, 1000, null, null]],
+	] as const)("records exact %s timing and totals at %s", async (mode, target, expected) => {
+		vi.useFakeTimers();
+		const epoch = Date.now();
+		const monotonic = vi.spyOn(performance, "now").mockImplementation(() => Date.now() - epoch);
+		try {
+			const definitions = noInlineHistoryRows();
+			const delays = { windowCommits: 100, workDiff: 200, knowledgeDiff: 300 };
+			const sql = fakeSql((text) => {
+				if (text.startsWith("SELECT id,title,metric_spec")) return definitions.filter((row) => text.includes(`id='${row.id}'`));
+				const stage = WINDOW(text) ? "windowCommits" : text.includes("dolt_diff_work_items") ? "workDiff" : "knowledgeDiff";
+				return new Promise<Row[]>((resolve, reject) => {
+					if (stage === target && mode === "timeout") return;
+					setTimeout(() => {
+						if (stage === target && mode === "error") { reject(new Error("PRIVATE-TEXT")); return; }
+						const rows = rowsFor(text);
+						resolve(stage === target && mode === "malformed" ? rows.map((row) => ({ ...row, n: "invalid" })) : rows);
+					}, delays[stage]);
+				});
+			}).sql;
+			const events: object[] = [];
+			const service = createGoalMetrics({ knowledgeSql: sql, observationsSql: memoryObservations(), node: "n", environment: "test", log: (event) => events.push(event) });
+			const computation = service.compute("edits-7d", { requestKey: `${mode}-${target}` });
+			await vi.advanceTimersByTimeAsync(mode === "timeout" ? 15001 : 1000);
+			const result = await computation;
+			expect(result.status).toBe(mode === "success" ? "ok" : mode === "timeout" ? "error" : "unavailable");
+			if (mode === "success") expect(result.value).toBe(11);
+			const terminal = events.filter((event) => (event as { event: string }).event === "metric.compute.completed");
+			expect(terminal).toHaveLength(1);
+			expect((terminal[0] as { sourceTiming: unknown }).sourceTiming).toEqual({
+				windowCommits: { state: expected[0], durationMs: expected[1] },
+				workDiff: { state: expected[2], durationMs: expected[3] },
+				knowledgeDiff: { state: expected[4], durationMs: expected[5] },
+				windowCommitCount: expected[6], workRows: expected[7], workBytes: expected[8], knowledgeRows: expected[9], knowledgeBytes: expected[10],
+			});
+			expect(JSON.stringify(terminal)).not.toContain("PRIVATE-TEXT");
+		} finally { monotonic.mockRestore(); vi.useRealTimers(); }
+	});
+
+	it.each([
+		["windowCommits", "n", { windowCommits: "ok", workDiff: "not_started", knowledgeDiff: "not_started", counts: [null, null, null, null, null] }],
+		["workDiff", "n", { windowCommits: "ok", workDiff: "ok", knowledgeDiff: "ok", counts: [1, null, null, 1, 1000] }],
+		["workDiff", "bytes", { windowCommits: "ok", workDiff: "ok", knowledgeDiff: "ok", counts: [1, null, null, 1, 1000] }],
+		["knowledgeDiff", "n", { windowCommits: "ok", workDiff: "ok", knowledgeDiff: "ok", counts: [1, 10, 1000, null, null] }],
+		["knowledgeDiff", "bytes", { windowCommits: "ok", workDiff: "ok", knowledgeDiff: "ok", counts: [1, 10, 1000, null, null] }],
+	] as const)("leaves null %s %s aggregate unknown", async (target, field, expected) => {
+		const clock = vi.spyOn(performance, "now").mockReturnValue(7);
+		try {
+			const { service, events } = hub(noInlineHistoryRows(), (text) => {
+				const stage = WINDOW(text) ? "windowCommits" : text.includes("dolt_diff_work_items") ? "workDiff" : "knowledgeDiff";
+				const rows = rowsFor(text);
+				return stage === target ? rows.map((row) => ({ ...row, [field]: null })) : rows;
+			});
+			await service.compute("edits-7d", { requestKey: `null-${target}-${field}` });
+			const terminal = events.filter((event) => (event as { event: string }).event === "metric.compute.completed");
+			expect(terminal).toHaveLength(1);
+			expect((terminal[0] as { sourceTiming: unknown }).sourceTiming).toEqual({
+				windowCommits: { state: expected.windowCommits, durationMs: 0 },
+				workDiff: { state: expected.workDiff, durationMs: expected.workDiff === "not_started" ? null : 0 },
+				knowledgeDiff: { state: expected.knowledgeDiff, durationMs: expected.knowledgeDiff === "not_started" ? null : 0 },
+				windowCommitCount: expected.counts[0], workRows: expected.counts[1], workBytes: expected.counts[2], knowledgeRows: expected.counts[3], knowledgeBytes: expected.counts[4],
+			});
+		} finally { clock.mockRestore(); }
+	});
+
 	it("reports bounded stage timing on the existing terminal event", async () => {
 		const { service, events } = hub(noInlineHistoryRows(), rowsFor);
 		await service.compute("edits-7d", { requestKey: "timing" });
