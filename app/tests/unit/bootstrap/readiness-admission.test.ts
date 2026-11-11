@@ -331,6 +331,27 @@ describe("readiness admission", () => {
             (line: { msg?: string }) => line.msg === "request complete",
           ),
         ).toHaveLength(1);
+        if (phase === "context") {
+          expect(lines).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                msg: "request failed",
+                route: "meta.readyz",
+                method: "GET",
+                traceId: expect.stringMatching(/^[0-9a-f]{32}$/),
+                errorCode: "INTERNAL_SERVER_ERROR",
+              }),
+              expect.objectContaining({
+                msg: "request complete",
+                route: "meta.readyz",
+                method: "GET",
+                traceId: expect.stringMatching(/^[0-9a-f]{32}$/),
+                status: 500,
+                durationMs: expect.any(Number),
+              }),
+            ]),
+          );
+        }
       }
     }
     if (phase === "local" || phase === "construction") {

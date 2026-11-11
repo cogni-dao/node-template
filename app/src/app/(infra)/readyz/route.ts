@@ -74,7 +74,12 @@ export async function GET(request: Request): Promise<NextResponse> {
       "GET meta.readyz",
       { route_id: "meta.readyz" },
       async ({ traceId, span }) => {
-        log = makeLogger({ service: "cogni-template" });
+        log = makeLogger({
+          service: "cogni-template",
+          route: "meta.readyz",
+          method: request.method,
+          traceId,
+        });
         const ctx = createRequestContext(
           { baseLog: log, clock: { now: () => new Date().toISOString() } },
           request,
