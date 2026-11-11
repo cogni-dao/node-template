@@ -32,6 +32,8 @@ export * from "./assess.js";
 export * from "./contracts.js";
 export * from "./progress.js";
 
+/** Definitions one goal read scans for `serves`; a cut is reported as `truncated`. */
+export const SERVES_SCAN_MAX = 200;
 const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
 function canonical(value: unknown): string {
@@ -357,7 +359,60 @@ export function createMetricService(deps: {
 				now(),
 			);
 			view.lastGood = await observations.lastGood(id, hash);
+			const band = await service.bandAssessment(d);
+			if (band) view.bandAssessment = band;
 			return view;
+		},
+		/**
+		 * A metric's own band, assessed as a synthetic binding through kpi(): the
+		 * one assessment path. Latest reading only; null without a band.
+		 */
+		async bandAssessment(d: MetricDefinition): Promise<KpiAssessment | null> {
+			if (!d.band) return null;
+			return (
+				await service.kpi({ metricId: d.id, ...d.band }, { latestOnly: true })
+			).assessment;
+		},
+		/**
+		 * Registered metrics that declare `serves`, each with its band assessment.
+		 * Scans at most SERVES_SCAN_MAX definitions; `truncated` admits a cut.
+		 */
+		async serving(): Promise<{
+			items: Array<{
+				definition: MetricDefinition;
+				assessment: KpiAssessment | null;
+			}>;
+			truncated: boolean;
+		}> {
+			const items: Array<{
+				definition: MetricDefinition;
+				assessment: KpiAssessment | null;
+			}> = [];
+			let cursor: string | undefined;
+			let scanned = 0;
+			let truncated = false;
+			while (scanned < SERVES_SCAN_MAX) {
+				const page = await definitions.list(50, cursor);
+				for (const d of page.items) {
+					scanned++;
+					if (!d.serves) continue;
+					try {
+						await authorize("read", d);
+					} catch (e) {
+						// A metric this caller may not read is not listed; an authority outage is.
+						if (e instanceof MetricError && e.status === 404) continue;
+						throw e;
+					}
+					items.push({
+						definition: d,
+						assessment: await service.bandAssessment(d),
+					});
+				}
+				if (!page.nextCursor) break;
+				cursor = page.nextCursor;
+				if (scanned >= SERVES_SCAN_MAX) truncated = true;
+			}
+			return { items, truncated };
 		},
 		async history(id: string) {
 			const d = await definitionFor(id, "read");
@@ -407,7 +462,12 @@ export function createMetricService(deps: {
 		 */
 		async kpi(
 			b: KpiBinding,
-			options?: { deadline?: string | null; hypothesis?: boolean },
+			options?: {
+				deadline?: string | null;
+				hypothesis?: boolean;
+				/** Skip the trend and recent history queries: one bounded latest-reading read. */
+				latestOnly?: boolean;
+			},
 		): Promise<GoalKpiResult> {
 			const at = now();
 			const deadline = b.evaluationAt ?? options?.deadline ?? null;
@@ -511,20 +571,23 @@ export function createMetricService(deps: {
 					)
 				: null;
 			const dayEnd = floorTo(at.getTime(), "1d") + DAY_MS;
-			const trend = await series(
-				b.metricId,
-				hash,
-				shape.unit,
-				{
-					from: new Date(dayEnd - 30 * DAY_MS).toISOString(),
-					to: new Date(dayEnd).toISOString(),
-					step: "1d",
-				},
-				true,
-			).catch(() => null);
+			const trend = options?.latestOnly
+				? null
+				: await series(
+						b.metricId,
+						hash,
+						shape.unit,
+						{
+							from: new Date(dayEnd - 30 * DAY_MS).toISOString(),
+							to: new Date(dayEnd).toISOString(),
+							step: "1d",
+						},
+						true,
+					).catch(() => null);
 			// Hourly-or-faster metrics also carry their last day, so a young series has a shape.
 			const hourEnd = floorTo(at.getTime(), "1h") + HOUR_MS;
 			const recent =
+				!options?.latestOnly &&
 				(definition.spec.cadenceSeconds ?? Number.POSITIVE_INFINITY) <= 3600
 					? await series(
 							b.metricId,

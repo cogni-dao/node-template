@@ -1,5 +1,11 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-/** Measurement contracts. Nodes supply sources, authority and persistence. */
+/**
+ * Measurement contracts. Nodes supply sources, authority and persistence.
+ * Invariants: HASH_COVERS_SPEC_ONLY (the series hash covers `{id, spec}`;
+ * `display`, `serves` and `band` are stored beside the spec and never enter
+ * it); ONE_ASSESSMENT (a `band` is assessed as a synthetic binding
+ * `{metricId, ...band}` through the KPI path, never a second algorithm).
+ */
 import { z } from "zod";
 export const MetricSpecSchema = z.strictObject({
 	calculatorId: z.string().regex(/^[a-z][a-z0-9.-]*@[1-9][0-9]*$/),
@@ -25,19 +31,15 @@ export type MetricDisplay = z.infer<typeof MetricDisplaySchema>;
 /** The only unit an slo display reads correctly. */
 export const SLO_UNIT = "%";
 /**
- * A stored `metric_spec`: the strict spec plus the author's optional display.
- * Display sits beside the spec, so it never enters the series hash.
+ * Which KPI a metric explains or moves, and in what role. Stored beside the
+ * hashed spec like `display`, so adding or changing it never forks the series.
  */
-export const StoredMetricSpecSchema = MetricSpecSchema.extend({
-	display: MetricDisplaySchema.optional(),
+export const MetricServesSchema = z.strictObject({
+	kpi: z.string().min(1).max(40),
+	role: z.enum(["input", "diagnostic", "guardrail"]),
 });
-export function parseStoredMetricSpec(stored: unknown): {
-	spec: MetricSpec;
-	display: MetricDisplay | undefined;
-} {
-	const { display, ...spec } = StoredMetricSpecSchema.parse(stored);
-	return { spec, display };
-}
+export type MetricServes = z.infer<typeof MetricServesSchema>;
+export type MetricServesRole = MetricServes["role"];
 /** A display a metric of this unit can honour. */
 export function displayFits(display: MetricDisplay, unit: string): boolean {
 	return display !== "slo" || unit === SLO_UNIT;
@@ -59,6 +61,91 @@ export const KpiBindingSchema = z.strictObject({
 });
 export const KpiBindingsSchema = z.array(KpiBindingSchema).max(20);
 export type KpiBinding = z.infer<typeof KpiBindingSchema>;
+/**
+ * A metric's own health band: a binding without the identity, deadline or
+ * baseline fields. Assessed as a synthetic binding through the one KPI path.
+ */
+export const MetricBandSchema = KpiBindingSchema.omit({
+	metricId: true,
+	evaluationAt: true,
+	baselineObservationId: true,
+});
+export type MetricBand = z.infer<typeof MetricBandSchema>;
+
+/** Reason codes are an enum, never free text, so every reader can act on them. */
+export const KpiReasonSchema = z.enum([
+	"no_binding",
+	"calculator_unavailable",
+	"metric_unavailable",
+	"metric_authority_unavailable",
+	"insufficient_history",
+	"zero_denominator",
+	"history_unavailable",
+	"source_failed",
+	"source_timeout",
+	"incomplete_or_invalid_source",
+	"unit_mismatch",
+	"no_reading_at_evaluation",
+	"evaluation_not_due",
+	"baseline_unavailable_or_incompatible",
+	"fixed_prediction_and_baseline_required",
+	"target_breached",
+]);
+export type KpiReason = z.infer<typeof KpiReasonSchema>;
+/** First matching rule wins; see metric-foundation-design "One assessment". */
+export const KpiStatusSchema = z.enum([
+	"not_measured",
+	"evaluating",
+	"met",
+	"missed",
+	"unresolved",
+	"building",
+	"failing",
+	"delayed",
+	"on_track",
+	"behind",
+]);
+export type KpiStatus = z.infer<typeof KpiStatusSchema>;
+export const KpiAssessmentSchema = z.object({
+	status: KpiStatusSchema,
+	reason: KpiReasonSchema.nullable(),
+	/** Value the status speaks about: fresh, last good (delayed/failing) or the evaluation reading. */
+	value: z.number().finite().nullable(),
+	unit: z.string(),
+	observationId: z.uuid().nullable(),
+	observedAt: z.string().nullable(),
+	comparator: KpiBindingSchema.shape.comparator,
+	target: KpiBindingSchema.shape.target,
+	deadline: z.string().nullable(),
+	/** Display only. Never decides status. Units per week. */
+	pace: z.object({
+		observed: z.number().finite().nullable(),
+		needed: z.number().finite().nullable(),
+	}),
+});
+export type KpiAssessment = z.infer<typeof KpiAssessmentSchema>;
+
+
+/**
+ * A stored `metric_spec`: the strict spec plus the author's optional display,
+ * `serves` link and health `band`. All three sit beside the spec, so none of
+ * them enters the series hash.
+ */
+export const StoredMetricSpecSchema = MetricSpecSchema.extend({
+	display: MetricDisplaySchema.optional(),
+	serves: MetricServesSchema.optional(),
+	band: MetricBandSchema.optional(),
+});
+export function parseStoredMetricSpec(stored: unknown): {
+	spec: MetricSpec;
+	display: MetricDisplay | undefined;
+	serves: MetricServes | undefined;
+	band: MetricBand | undefined;
+} {
+	const { display, serves, band, ...spec } =
+		StoredMetricSpecSchema.parse(stored);
+	return { spec, display, serves, band };
+}
 export const MetricComputeInputSchema = z.strictObject({
 	requestKey: z.string().min(1).max(160),
 	evaluationAt: z.iso.datetime({ offset: true }).optional(),
@@ -93,10 +180,14 @@ export const MetricViewSchema = z.object({
 		revision: z.string(),
 		spec: MetricSpecSchema,
 		display: MetricDisplaySchema.optional(),
+		serves: MetricServesSchema.optional(),
+		band: MetricBandSchema.optional(),
 	}),
 	latestAttempt: MetricObservationSchema.nullable(),
 	lastGood: MetricObservationSchema.nullable(),
 	viewState: z.enum(["ok", "stale", "pending", "unavailable", "error"]),
+	/** The latest reading against the metric's own `band`; absent without a band. */
+	bandAssessment: KpiAssessmentSchema.optional(),
 });
 export type MetricView = z.infer<typeof MetricViewSchema>;
 /** GET /api/v1/metrics/{id}: the view plus its recent readings. */
@@ -248,59 +339,6 @@ export class MetricError extends Error {
 	}
 }
 
-/** Reason codes are an enum, never free text, so every reader can act on them. */
-export const KpiReasonSchema = z.enum([
-	"no_binding",
-	"calculator_unavailable",
-	"metric_unavailable",
-	"metric_authority_unavailable",
-	"insufficient_history",
-	"zero_denominator",
-	"history_unavailable",
-	"source_failed",
-	"source_timeout",
-	"incomplete_or_invalid_source",
-	"unit_mismatch",
-	"no_reading_at_evaluation",
-	"evaluation_not_due",
-	"baseline_unavailable_or_incompatible",
-	"fixed_prediction_and_baseline_required",
-	"target_breached",
-]);
-export type KpiReason = z.infer<typeof KpiReasonSchema>;
-/** First matching rule wins; see metric-foundation-design "One assessment". */
-export const KpiStatusSchema = z.enum([
-	"not_measured",
-	"evaluating",
-	"met",
-	"missed",
-	"unresolved",
-	"building",
-	"failing",
-	"delayed",
-	"on_track",
-	"behind",
-]);
-export type KpiStatus = z.infer<typeof KpiStatusSchema>;
-export const KpiAssessmentSchema = z.object({
-	status: KpiStatusSchema,
-	reason: KpiReasonSchema.nullable(),
-	/** Value the status speaks about: fresh, last good (delayed/failing) or the evaluation reading. */
-	value: z.number().finite().nullable(),
-	unit: z.string(),
-	observationId: z.uuid().nullable(),
-	observedAt: z.string().nullable(),
-	comparator: KpiBindingSchema.shape.comparator,
-	target: KpiBindingSchema.shape.target,
-	deadline: z.string().nullable(),
-	/** Display only. Never decides status. Units per week. */
-	pace: z.object({
-		observed: z.number().finite().nullable(),
-		needed: z.number().finite().nullable(),
-	}),
-});
-export type KpiAssessment = z.infer<typeof KpiAssessmentSchema>;
-
 export const MetricHistoryStepSchema = z.enum(["1h", "1d", "1w"]);
 export type MetricHistoryStep = z.infer<typeof MetricHistoryStepSchema>;
 export const MetricHistoryInputSchema = z.strictObject({
@@ -328,6 +366,26 @@ export const MetricHistorySchema = z.object({
 export type MetricHistory = z.infer<typeof MetricHistorySchema>;
 
 /** One goal-progress read model shared by the Goals tab, HTTP and agent tools. */
+/** A registered metric that serves one KPI, assessed against its own band (latest reading only). */
+export const ServedMetricSchema = z.object({
+	metric: z.object({
+		id: z.string(),
+		title: z.string(),
+		calculatorId: z.string(),
+		role: MetricServesSchema.shape.role,
+	}),
+	/** Null when the metric declares no band: it is listed, never judged. */
+	assessment: KpiAssessmentSchema.nullable(),
+});
+export type ServedMetric = z.infer<typeof ServedMetricSchema>;
+/** A metric whose `serves.kpi` names no bound KPI: reported, never hidden. */
+export const MetricOrphanSchema = z.object({
+	metricId: z.string(),
+	kpi: z.string(),
+	reason: z.literal("serves_unknown_kpi"),
+	assessment: KpiAssessmentSchema.nullable(),
+});
+export type MetricOrphan = z.infer<typeof MetricOrphanSchema>;
 export const GoalKpiSchema = z.object({
 	binding: KpiBindingSchema,
 	metric: z
@@ -348,6 +406,8 @@ export const GoalKpiSchema = z.object({
 	 * or null otherwise. Lets a young series show its shape before it has days.
 	 */
 	recent: MetricHistorySchema.nullable().optional(),
+	/** Metrics that serve this KPI; absent when none do or metrics are unavailable. */
+	served: z.array(ServedMetricSchema).optional(),
 });
 export const GoalHypothesisSchema = z.object({
 	id: z.string(),
@@ -381,5 +441,9 @@ export const GoalsProgressSchema = z.object({
 	goals: z.array(GoalProgressSchema),
 	asOf: z.string(),
 	environment: z.string(),
+	/** Metrics serving a KPI that no goal binds. Absent when metrics are unavailable. */
+	orphans: z.array(MetricOrphanSchema).optional(),
+	/** True when more definitions exist than one read scans, so `served`/`orphans` may be incomplete. */
+	servedTruncated: z.boolean().optional(),
 });
 export type GoalsProgress = z.infer<typeof GoalsProgressSchema>;

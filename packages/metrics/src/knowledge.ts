@@ -297,7 +297,7 @@ export function createGoalMetrics(deps: {
 	/** One malformed reviewed row must not stop every other metric: skip it and log. */
 	const parse = (row: Record<string, unknown>): MetricDefinition | null => {
 		try {
-			const { spec, display } = parseStoredMetricSpec(
+			const { spec, display, serves, band } = parseStoredMetricSpec(
 				typeof row.metric_spec === "string"
 					? JSON.parse(row.metric_spec)
 					: row.metric_spec,
@@ -308,6 +308,8 @@ export function createGoalMetrics(deps: {
 				revision: new Date(row.updated_at as string).toISOString(),
 				spec,
 				...(display ? { display } : {}),
+				...(serves ? { serves } : {}),
+				...(band ? { band } : {}),
 			};
 		} catch {
 			deps.log({
