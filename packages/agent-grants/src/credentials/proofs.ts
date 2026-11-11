@@ -47,11 +47,14 @@ export function parseIssueRef(text: string): IssueRef | null {
   return m ? { owner: m[1] as string, repo: m[2] as string, number: Number(m[3]) } : null;
 }
 
-/** Parse a comma or space separated allowlist. An entry that is not `owner/repo#number` is dropped. */
+/**
+ * Parse a comma or space separated allowlist. An entry that is not `owner/repo#number`, or that holds an upper case letter, is dropped: GitHub's
+ * `issue_url` is lowercase, so a lowercase entry is the one form that always matches (task.0095).
+ */
 export function parseIssueAllowlist(text: string | undefined): string[] {
   return (text ?? "")
     .split(/[\s,]+/)
-    .filter((entry) => parseIssueRef(entry) !== null);
+    .filter((entry) => entry === entry.toLowerCase() && parseIssueRef(entry) !== null);
 }
 
 /** What a comment says, as the verifier read it. */
@@ -130,7 +133,7 @@ export async function evaluateProofComment(read: CommentRead, issue: IssueRef, e
   if (read.kind === "unavailable") return { ok: "unavailable" };
   if (read.kind === "not_found") return { ok: false, reason: "comment_not_found" };
   const c = read.comment;
-  if (c.issueUrl !== issueApiUrl(issue)) return { ok: false, reason: "wrong_issue" };
+  if (c.issueUrl.toLowerCase() !== issueApiUrl(issue).toLowerCase()) return { ok: false, reason: "wrong_issue" };
   if (
     c.userId === null ||
     !Number.isInteger(c.userId) ||

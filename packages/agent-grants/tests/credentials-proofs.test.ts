@@ -11,10 +11,12 @@ import {
   bindGithubOperation,
   createGithubCommentVerifier,
   credentialHttp,
+  evaluateProofComment,
   githubCommentUrl,
   parseIssueAllowlist,
   parseIssueRef,
   proofChallengeOperation,
+  proofLine,
 } from "../src/credentials";
 import { AGENT_KEYS_VIEW, buildNodeAiView } from "../src";
 
@@ -112,6 +114,10 @@ describe("the GitHub comment verifier", () => {
     expect(parseIssueAllowlist("cogni-dao/node-template#12, bad entry ../x#1  a/b#0 o/r#3")).toEqual(["cogni-dao/node-template#12", "o/r#3"]);
     expect(parseIssueAllowlist(undefined)).toEqual([]);
   });
+
+  it("the allowlist drops an entry with an upper case letter (GitHub's issue_url is lowercase)", () => {
+    expect(parseIssueAllowlist("Cogni-DAO/node-template#12,cogni-dao/Node-Template#13,cogni-dao/node-template#14")).toEqual(["cogni-dao/node-template#14"]);
+  });
 });
 
 describe("the proof HTTP mapping", () => {
@@ -178,5 +184,26 @@ describe("the keys row of the admin table", () => {
   it("agent:keys is not a declared scope: it is never read from the declarations, so an undeclared scope cannot grow a keys row", () => {
     expect(view(undefined)).toEqual([]);
     expect(buildNodeAiView({ declarations: { "agent:keys": { label: "x", description: "y" } }, scopesByPrincipal: {}, internal: [], rows: [] })).toEqual([]);
+  });
+
+  it("evaluateProofComment compares the issue URL case-insensitively and still answers wrong_issue for another issue (task.0095)", async () => {
+    const nonce = "n".repeat(22);
+    const hex = [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(nonce)))].map((b) => b.toString(16).padStart(2, "0")).join("");
+    const expect_ = { nodeId: "node-1", challengeId: "11111111-1111-4111-8111-111111111111", nonceHash: hex, issuedAt: "2026-11-11T09:59:00Z", expiresAt: "2026-11-11T10:30:00Z", commentSkewSec: 60 };
+    const comment = (issueUrl: string) => ({
+      kind: "found" as const,
+      comment: {
+        issueUrl,
+        userId: 295942454,
+        login: "agent",
+        userType: "User",
+        body: proofLine("node-1", expect_.challengeId, nonce),
+        createdAt: "2026-11-11T10:00:00Z",
+        updatedAt: "2026-11-11T10:00:00Z",
+        lastEditedAt: null,
+      },
+    });
+    expect(await evaluateProofComment(comment("https://api.github.com/repos/Cogni-DAO/Proof-Issues/issues/1"), issue, expect_)).toMatchObject({ ok: true });
+    expect(await evaluateProofComment(comment("https://api.github.com/repos/cogni-dao/proof-issues/issues/2"), issue, expect_)).toEqual({ ok: false, reason: "wrong_issue" });
   });
 });

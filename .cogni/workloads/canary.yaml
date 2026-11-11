@@ -14,6 +14,11 @@ metadata:
 containers:
   app:
     image: .
+    # Agent proof issues (task.0095): lowercase `owner/repo#number`, one list for both envs. Not a secret.
+    # The operator reads the proof comment with its own GitHub App and signs it; this node holds no GitHub credential.
+    # The entry of the other env is inert: the operator reads only its own org.
+    variables:
+      AGENT_PROOF_ISSUES: "cogni-dao/node-template#341,cogni-test-org/node-template#46"
     resources:
       requests:
         cpu: "2"

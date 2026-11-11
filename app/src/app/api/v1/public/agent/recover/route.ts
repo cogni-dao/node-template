@@ -34,7 +34,7 @@ export const POST = wrapPublicRoute({ routeId: ROUTE_ID, ...proofPublicRateLimit
   const body = await parseProofBody(request, recoverCredentialOperation.input);
   if (!body) return invalidInput();
   return answerStoreOutage(ctx, ROUTE_ID, async () => {
-    const result = await recoverCredential(getAgentCredentialStore(), getProofVerifier(), getProofConfig(), {
+    const result = await recoverCredential(getAgentCredentialStore(), getProofVerifier(ctx), getProofConfig(), {
       ...body,
       ...proofAttemptGuards(await headers(), body.challengeId),
     });

@@ -38,7 +38,7 @@ export const POST = wrapRouteHandlerWithLogging(
     const body = await parseProofBody(request, bindGithubOperation.input);
     if (!body) return invalidInput();
     return answerStoreOutage(ctx, ROUTE_ID, async () => {
-      const result = await bindGithubIdentity(getAgentCredentialStore(), getProofVerifier(), getProofConfig(), {
+      const result = await bindGithubIdentity(getAgentCredentialStore(), getProofVerifier(ctx), getProofConfig(), {
         ...body,
         principalUserId: sessionUser.id,
         ...proofAttemptGuards(await headers(), body.challengeId),

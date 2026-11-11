@@ -71,8 +71,8 @@ export const EVENT_NAMES = {
 	AGENT_CREDENTIAL_STOP_LIFTED: "agent.credential.stop_lifted",
 	/** A challenge, bind or recover was refused: routeId, errorCode from a fixed set, and the fixed `reason` for `proof_failed`. */
 	AGENT_PROOF_REFUSED: "agent.proof.refused",
-	/** The GitHub read failed: dep, reasonCode, status, durationMs. */
-	AGENT_PROOF_GITHUB_FAILED: "agent.proof.github_failed",
+	/** The operator proof-comment read failed (task.0095): dep `operator`, reasonCode (timeout, network, http_4xx, http_5xx, bad_token, bad_claims, stale, jwks_unavailable, bad_config), status, durationMs. The answer is `unavailable`. */
+	AGENT_PROOF_OPERATOR_FAILED: "agent.proof.operator_failed",
 	/** The roles route could not decide or list (store or admin check down), or refused a non-admin write. No secrets. */
 	AGENT_ROLES_UNAVAILABLE: "agent.roles.unavailable",
 	AGENT_ROLES_LIST_FAILED: "agent.roles.list_failed",
