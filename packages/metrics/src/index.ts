@@ -374,7 +374,7 @@ export function createMetricService(deps: {
 			).assessment;
 		},
 		/**
-		 * Registered metrics that declare `serves`, each with its band assessment.
+		 * Registered metrics that declare `serves` (or carry an invalid annex), each with its band assessment.
 		 * Scans at most SERVES_SCAN_MAX definitions; `truncated` admits a cut.
 		 */
 		async serving(): Promise<{
@@ -395,7 +395,7 @@ export function createMetricService(deps: {
 				const page = await definitions.list(50, cursor);
 				for (const d of page.items) {
 					scanned++;
-					if (!d.serves) continue;
+					if (!d.serves && !d.annexInvalid?.length) continue;
 					try {
 						await authorize("read", d);
 					} catch (e) {

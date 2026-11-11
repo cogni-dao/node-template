@@ -7,8 +7,8 @@
  * citation table); LATEST_ONLY (a served metric adds one band assessment from
  * its latest reading: no trend, no history query, at most SERVES_SCAN_MAX
  * definitions scanned, a cut reported as `servedTruncated`); ORPHAN_NOT_HIDDEN
- * (a metric whose `serves.kpi` no goal binds is listed in `orphans` with its
- * assessment).
+ * (a metric whose `serves.kpi` no goal binds, or whose `serves`/`band` is
+ * invalid, is listed in `orphans` with its assessment and the zod issue paths).
  */
 import { assessKpi } from "./assess.js";
 import {
@@ -185,14 +185,25 @@ export async function readGoalsProgress(deps: {
 		});
 	}
 	// A metric serving a KPI no goal binds stays visible and assessed: absent is red.
-	const orphans: MetricOrphan[] = (serving?.items ?? [])
-		.filter((x) => x.definition.serves && !boundKpis.has(x.definition.serves.kpi))
-		.map((x) => ({
-			metricId: x.definition.id,
-			kpi: (x.definition.serves as NonNullable<typeof x.definition.serves>).kpi,
-			reason: "serves_unknown_kpi" as const,
-			assessment: x.assessment,
-		}));
+	const orphans: MetricOrphan[] = [];
+	for (const x of serving?.items ?? []) {
+		const { serves, annexInvalid } = x.definition;
+		if (serves && !boundKpis.has(serves.kpi))
+			orphans.push({
+				metricId: x.definition.id,
+				kpi: serves.kpi,
+				reason: "serves_unknown_kpi",
+				assessment: x.assessment,
+			});
+		for (const bad of annexInvalid ?? [])
+			orphans.push({
+				metricId: x.definition.id,
+				kpi: serves?.kpi ?? null,
+				reason: bad.field === "serves" ? "serves_invalid" : "band_invalid",
+				issues: bad.issues,
+				assessment: x.assessment,
+			});
+	}
 	return GoalsProgressSchema.parse({
 		goals: items,
 		asOf: at.toISOString(),

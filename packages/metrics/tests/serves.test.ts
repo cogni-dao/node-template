@@ -141,6 +141,7 @@ describe("serves and band schema (story.0033)", () => {
 			display: undefined,
 			serves: undefined,
 			band: undefined,
+			invalid: [],
 		});
 	});
 
@@ -186,34 +187,131 @@ describe("serves and band schema (story.0033)", () => {
 		).toBe(metricDefinitionHash(plain));
 	});
 
-	it("reads serves and band from a stored hub row and keeps an invalid row visible in the log", async () => {
-		const row = (id: string, extra: object) => ({
-			id,
-			title: id,
-			metric_spec: {
-				calculatorId: "work.count@1",
-				params: { mode: "open" },
-				maxAgeSeconds: 7200,
-				...extra,
-			},
-			updated_at: "2026-11-01T00:00:00Z",
-			status: "active",
-		});
-		const h = hub([
-			row("linked", { serves: { kpi: "k", role: "input" }, band }),
-			row("broken", { serves: { kpi: "k", role: "nope" } }),
-		]);
+	const row = (id: string, extra: object, core: object = {}) => ({
+		id,
+		title: id,
+		metric_spec: {
+			calculatorId: "work.count@1",
+			params: { mode: "open" },
+			maxAgeSeconds: 7200,
+			...core,
+			...extra,
+		},
+		updated_at: "2026-11-01T00:00:00Z",
+		status: "active",
+	});
+
+	it("reads serves and band from a stored hub row", async () => {
+		const h = hub([row("linked", { serves: { kpi: "k", role: "input" }, band })]);
 		const view = await h.reader.read("linked");
 		expect(view.definition.serves).toEqual({ kpi: "k", role: "input" });
 		expect(view.definition.band).toEqual(band);
-		// An invalid serves is the existing malformed-row path: logged, never silently coerced.
-		await expect(h.reader.read("broken")).rejects.toMatchObject({
+		expect(view.definition.annexInvalid).toBeUndefined();
+	});
+
+	it("keeps a metric whose serves or band is invalid, ignoring only the annex", async () => {
+		const h = hub([
+			row("bad-serves", { serves: { kpi: "k", role: "nope" }, band }),
+			row("bad-band", {
+				serves: { kpi: "k", role: "input" },
+				band: { ...band, metricId: "x" },
+			}),
+		]);
+		const a = await h.reader.read("bad-serves");
+		expect(a.definition.spec.calculatorId).toBe("work.count@1");
+		expect(a.definition.serves).toBeUndefined();
+		expect(a.definition.band).toEqual(band);
+		expect(a.definition.annexInvalid).toEqual([
+			{ field: "serves", issues: ["serves.role:invalid_value"] },
+		]);
+		const b = await h.reader.read("bad-band");
+		expect(b.definition.serves).toEqual({ kpi: "k", role: "input" });
+		expect(b.definition.band).toBeUndefined();
+		expect(b.definition.annexInvalid).toEqual([
+			{ field: "band", issues: ["band:unrecognized_keys"] },
+		]);
+		// Neither is the skipped-and-logged path, and both still list and compute.
+		expect(h.events).toEqual([]);
+		const page = await h.reader.list();
+		expect(page.items.map((i) => i.definition.id)).toEqual([
+			"bad-band",
+			"bad-serves",
+		]);
+		expect(h.reader.registry.get("work.count@1")).toBeDefined();
+	});
+
+	it("reports an invalid annex in orphans with its issue paths", async () => {
+		const h = hub([
+			row("bad-band", {
+				serves: { kpi: "kpi", role: "input" },
+				band: { comparator: "gte", target: { value: "x", unit: "items" } },
+			}),
+			row("bad-serves", { serves: { kpi: "kpi", role: "nope" } }),
+			row("kpi", {}),
+		]);
+		const read = await readGoalsProgress({
+			goals: {
+				listGoals: async () => [
+					{
+						id: "g",
+						title: "G",
+						evaluateAt: null,
+						kpiBindings: [
+							{
+								metricId: "kpi",
+								comparator: "gte",
+								target: { value: 1, unit: "items" },
+							},
+						],
+					},
+				],
+				hypotheses: async () => ({ items: [], more: false }),
+			},
+			metrics: h.reader,
+			environment: "test",
+		});
+		expect(GoalsProgressSchema.parse(read)).toEqual(read);
+		expect(read.orphans?.map((o) => [o.metricId, o.kpi, o.reason, o.issues])).toEqual([
+			["bad-band", "kpi", "band_invalid", ["band.target.value:invalid_type"]],
+			["bad-serves", null, "serves_invalid", ["serves.role:invalid_value"]],
+		]);
+		// A valid serves with an invalid band still nests under its KPI, unjudged.
+		expect(read.goals[0]?.kpis[0]?.served).toEqual([
+			expect.objectContaining({
+				metric: expect.objectContaining({ id: "bad-band", role: "input" }),
+				assessment: null,
+			}),
+		]);
+	});
+
+	it("still skips and logs a row whose core spec is invalid", async () => {
+		const h = hub([
+			row("bad-core", { serves: { kpi: "k", role: "input" } }, { maxAgeSeconds: -1 }),
+		]);
+		await expect(h.reader.read("bad-core")).rejects.toMatchObject({
 			code: "metric_not_found",
 		});
 		expect(h.events).toContainEqual({
 			event: "metric.definition_invalid",
-			metricId: "broken",
+			metricId: "bad-core",
 		});
+	});
+
+	it("parseStoredMetricSpec splits core from annex", () => {
+		const parsed = parseStoredMetricSpec({
+			...spec,
+			serves: { kpi: "k", role: "x" },
+			band: band,
+		});
+		expect(parsed.spec).toEqual(spec);
+		expect(parsed.serves).toBeUndefined();
+		expect(parsed.band).toEqual(band);
+		expect(parsed.invalid).toEqual([
+			{ field: "serves", issues: ["serves.role:invalid_value"] },
+		]);
+		expect(() => parseStoredMetricSpec({ ...spec, maxAgeSeconds: 0 })).toThrow();
+		expect(() => parseStoredMetricSpec({ ...spec, extra: 1 })).toThrow();
+		expect(() => parseStoredMetricSpec(null)).toThrow();
 	});
 });
 

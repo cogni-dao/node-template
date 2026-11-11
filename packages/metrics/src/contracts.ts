@@ -3,7 +3,8 @@
  * Measurement contracts. Nodes supply sources, authority and persistence.
  * Invariants: HASH_COVERS_SPEC_ONLY (the series hash covers `{id, spec}`;
  * `display`, `serves` and `band` are stored beside the spec and never enter
- * it); ONE_ASSESSMENT (a `band` is assessed as a synthetic binding
+ * it); ANNEX_NOT_CORE (an invalid `serves` or `band` is ignored and reported,
+ * never dropping a metric whose core spec is valid); ONE_ASSESSMENT (a `band` is assessed as a synthetic binding
  * `{metricId, ...band}` through the KPI path, never a second algorithm).
  */
 import { z } from "zod";
@@ -136,15 +137,64 @@ export const StoredMetricSpecSchema = MetricSpecSchema.extend({
 	serves: MetricServesSchema.optional(),
 	band: MetricBandSchema.optional(),
 });
+/** The core stored spec: the strict spec plus display. An invalid core drops the row. */
+const StoredCoreSpecSchema = MetricSpecSchema.extend({
+	display: MetricDisplaySchema.optional(),
+});
+/** An annex field (`serves` or `band`) that failed its schema, with where it failed. */
+export const AnnexInvalidSchema = z.object({
+	field: z.enum(["serves", "band"]),
+	/** Zod issue locations, e.g. `serves.role:invalid_value`; never the stored values. */
+	issues: z.array(z.string()),
+});
+export type AnnexInvalid = z.infer<typeof AnnexInvalidSchema>;
+/**
+ * Parse a stored `metric_spec` in two parts. The core spec (and display) is
+ * strict: invalid throws, and the caller skips the row. `serves` and `band`
+ * are an annex: an invalid one is ignored and reported in `invalid`, never
+ * dropping the metric, so it still computes and is assessed with its spec.
+ */
 export function parseStoredMetricSpec(stored: unknown): {
 	spec: MetricSpec;
 	display: MetricDisplay | undefined;
 	serves: MetricServes | undefined;
 	band: MetricBand | undefined;
+	invalid: AnnexInvalid[];
 } {
-	const { display, serves, band, ...spec } =
-		StoredMetricSpecSchema.parse(stored);
-	return { spec, display, serves, band };
+	const raw =
+		stored && typeof stored === "object" && !Array.isArray(stored)
+			? (stored as Record<string, unknown>)
+			: {};
+	const { serves: rawServes, band: rawBand, ...core } = raw;
+	const { display, ...spec } = StoredCoreSpecSchema.parse(
+		stored && typeof stored === "object" && !Array.isArray(stored)
+			? core
+			: stored,
+	);
+	const invalid: AnnexInvalid[] = [];
+	const annex = <T>(
+		field: "serves" | "band",
+		schema: z.ZodType<T>,
+		value: unknown,
+	): T | undefined => {
+		if (value === undefined) return undefined;
+		const r = schema.safeParse(value);
+		if (r.success) return r.data;
+		invalid.push({
+			field,
+			issues: r.error.issues.map(
+				(i) => `${[field, ...i.path].join(".")}:${i.code}`,
+			),
+		});
+		return undefined;
+	};
+	return {
+		spec,
+		display,
+		serves: annex("serves", MetricServesSchema, rawServes),
+		band: annex("band", MetricBandSchema, rawBand),
+		invalid,
+	};
 }
 export const MetricComputeInputSchema = z.strictObject({
 	requestKey: z.string().min(1).max(160),
@@ -182,6 +232,8 @@ export const MetricViewSchema = z.object({
 		display: MetricDisplaySchema.optional(),
 		serves: MetricServesSchema.optional(),
 		band: MetricBandSchema.optional(),
+		/** Annex fields the stored spec carried but that failed their schema; ignored, never silent. */
+		annexInvalid: z.array(AnnexInvalidSchema).optional(),
 	}),
 	latestAttempt: MetricObservationSchema.nullable(),
 	lastGood: MetricObservationSchema.nullable(),
@@ -378,11 +430,14 @@ export const ServedMetricSchema = z.object({
 	assessment: KpiAssessmentSchema.nullable(),
 });
 export type ServedMetric = z.infer<typeof ServedMetricSchema>;
-/** A metric whose `serves.kpi` names no bound KPI: reported, never hidden. */
+/** A metric whose `serves.kpi` names no bound KPI, or whose `serves`/`band` is invalid: reported, never hidden. */
 export const MetricOrphanSchema = z.object({
 	metricId: z.string(),
-	kpi: z.string(),
-	reason: z.literal("serves_unknown_kpi"),
+	/** The KPI the metric names; null when `serves` is invalid. */
+	kpi: z.string().nullable(),
+	reason: z.enum(["serves_unknown_kpi", "serves_invalid", "band_invalid"]),
+	/** Zod issue locations for an invalid annex field; absent for an unknown KPI. */
+	issues: z.array(z.string()).optional(),
 	assessment: KpiAssessmentSchema.nullable(),
 });
 export type MetricOrphan = z.infer<typeof MetricOrphanSchema>;
