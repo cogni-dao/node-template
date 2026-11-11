@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
-import { type CredentialPolicy, type CredentialStore } from "../src/credentials";
+import type { CredentialPolicy, CredentialStore } from "../src/credentials";
 import type {
   CreateEnrollmentResult,
   EnrollmentStatus,
@@ -50,14 +50,6 @@ export function memoryEnrollmentStore(init: { failing?: boolean } = {}) {
   const guard = () => {
     if (init.failing) throw new Error("db down");
   };
-  const credentialState = (id: string | null) => {
-    const row = credentialRows.find((r) => r.id === id);
-    if (!row) return null;
-    if (row.revokedAt !== null) return "revoked";
-    if (row.confirmedAt === null) return row.pendingExpiresAt > clock.now ? "pending" : "pending_expired";
-    return row.expiresAt > clock.now ? "active" : "expired";
-  };
-
   const sweepUnredeemed = () => {
     for (const p of [...principals]) {
       const stale = p.createdAt < clock.now - 24 * 3600 * 1000;
@@ -141,12 +133,11 @@ export function memoryEnrollmentStore(init: { failing?: boolean } = {}) {
       }
       const previous = e.credentialId;
       if (previous) {
-        const state = credentialState(previous);
-        if (state === "active") {
+        const prev = credentialRows.find((c) => c.id === previous);
+        if (prev?.confirmedAt != null) {
           e.status = "redeemed";
           return { state: "expired_token" };
         }
-        const prev = credentialRows.find((c) => c.id === previous);
         if (prev && prev.revokedAt === null && prev.confirmedAt === null) {
           prev.revokedAt = clock.now;
           prev.revokedReason = "superseded";

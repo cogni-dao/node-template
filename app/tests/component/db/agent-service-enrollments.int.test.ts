@@ -12,6 +12,7 @@
  *   - DEVICE_CODE_HASH_ONLY: only the sha256 of a device code is stored.
  *   - ONE_USE_TOKEN: `jti` is unique in the database, not only in the store's pre-check.
  *   - DB_CLOCK: a timestamp moves with UPDATE; nothing reads the app clock.
+ *   - CONFIRMED_CODE_STAYS_SPENT: polls waiting on a credential's confirmation/revocation cannot mint a replacement.
  * Side-effects: IO (testcontainers Postgres)
  * Notes: DATABASE_SERVICE_URL = BYPASSRLS; DATABASE_URL = app role with FORCE RLS. Every `setup()` removes ALL enrollment principals first: this file is
  *   the only writer of `agent_principals.service_key`, and the caps (5 open enrollments, 25 agents) are node-wide.
@@ -90,6 +91,11 @@ describe("agent service enrollments (real Postgres)", () => {
         async lapse(principalUserId) {
           await service`UPDATE agent_service_enrollments SET expires_at = now() - interval '1 second' WHERE principal_user_id = ${principalUserId}`;
         },
+        async expireCredential(credentialId) {
+          await service`UPDATE agent_credentials
+            SET expires_at = now() - interval '2 seconds', renew_until = now() - interval '1 second', pending_expires_at = now() - interval '1 second'
+            WHERE id = ${credentialId}`;
+        },
         async ageUnredeemed(principalUserId) {
           await service`UPDATE agent_principals SET created_at = now() - interval '25 hours' WHERE user_id = ${principalUserId}`;
         },
@@ -116,6 +122,51 @@ describe("agent service enrollments (real Postgres)", () => {
   });
 
   describe("schema (rows only SQL can prove)", () => {
+    it("a poll blocked behind confirmation and revocation observes the committed confirmation and never inserts a replacement", async () => {
+      await cleanup();
+      const user = randomUUID();
+      const admin = await makeAdmin();
+      const codeHash = await hashAgentKey(randomUUID());
+      const cnf = JSON.stringify({ kty: "OKP", crv: "X25519", x: Buffer.alloc(32, 7).toString("base64url") });
+      await service`INSERT INTO users (id, name) VALUES (${user}, 'svc-confirm-race')`;
+      await service`INSERT INTO agent_principals (kind, service_key, user_id) VALUES ('external', 'https://h.example#confirm-race', ${user})`;
+      const grants = createPostgresAgentGrantsStore(service as unknown as Parameters<typeof createPostgresAgentGrantsStore>[0]);
+      await grants.requestRole({ principalUserId: user, scope: "knowledge:read", maxPending: 5, maxPendingTotal: 25 });
+      await grants.approvePending({ principalUserId: user, scope: "knowledge:read", approvedBy: admin });
+      await service`INSERT INTO agent_service_enrollments (jti, issuer, service, principal_user_id, scope, device_code_hash, cnf_jwk, expires_at)
+        VALUES (${randomUUID()}, 'https://h.example', 'confirm-race', ${user}, 'knowledge:read', ${codeHash}, ${cnf}, now() + interval '1 day')`;
+      const input = { deviceCodeHash: codeHash, tokenHash: await hashAgentKey(randomUUID()), policy: { ttlSec: 60, renewWindowSec: 60, pendingSec: 60 }, intervalSec: 0 };
+      const issued = await createPostgresEnrollmentStore(client()).poll(input);
+      if (issued.state !== "issued") throw new Error(`expected pending issuance: ${issued.state}`);
+
+      const applicationName = `enrollment-poll-${randomUUID()}`;
+      const serviceUrl = process.env.DATABASE_SERVICE_URL;
+      if (!serviceUrl) throw new Error("component PostgreSQL required");
+      const pollClient = postgres(serviceUrl, { max: 1, connection: { application_name: applicationName } });
+      const pollStore = createPostgresEnrollmentStore(pollClient as unknown as CredentialSql);
+      let polling: ReturnType<typeof pollStore.poll> | undefined;
+      try {
+        await service.begin(async (tx) => {
+          // Hold both writes uncommitted while the other connection reaches the credential lock.
+          await tx`UPDATE agent_credentials SET confirmed_at = now() WHERE id = ${issued.credentialId}`;
+          await tx`UPDATE agent_credentials SET revoked_at = now(), revoked_reason = 'revoked' WHERE id = ${issued.credentialId}`;
+          polling = pollStore.poll({ ...input, tokenHash: await hashAgentKey(randomUUID()) });
+          await expect.poll(async () => {
+            const rows = await service`SELECT count(*)::int AS n FROM pg_stat_activity
+              WHERE application_name = ${applicationName} AND wait_event_type = 'Lock' AND query LIKE '%agent_credentials%FOR UPDATE%'`;
+            return Number(rows[0]?.n);
+          }, { timeout: 3000 }).toBe(1);
+        });
+        expect(await polling).toEqual({ state: "expired_token" });
+        expect((await service`SELECT count(*)::int AS n FROM agent_credentials WHERE user_id = ${user}`)[0]?.n).toBe(1);
+        expect((await service`SELECT status FROM agent_service_enrollments WHERE device_code_hash = ${codeHash}`)[0]?.status).toBe("redeemed");
+        expect(await grants.hasLiveRole(user, "knowledge:read")).toBe(true);
+      } finally {
+        await polling?.catch(() => undefined);
+        await pollClient.end({ timeout: 1 });
+      }
+    });
+
     it("the app role sees no enrollment row (FORCE RLS, no policy) and cannot write one", async () => {
       await cleanup();
       expect(await app`SELECT 1 FROM agent_service_enrollments`).toHaveLength(0);

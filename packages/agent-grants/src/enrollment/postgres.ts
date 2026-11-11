@@ -14,6 +14,7 @@
  *   - ONE_WRITER_AT_A_TIME: enrollment creation takes one advisory lock, so the caps and the one-principal-per-service rule see one snapshot.
  *   - NO_SELF_APPROVAL: the only role row written here is a pending ask (`approved_by` null) made through the grants store.
  *   - DB_CLOCK: expiry, the poll interval and key lifetimes read `now()`; the app clock is never read.
+ *   - CONFIRMED_CODE_STAYS_SPENT: the linked credential's confirmation consumes its code even after that credential is revoked or expires.
  *   - UNREDEEMED_PRINCIPALS_GO: a principal made by enrollment that never got a key, holds no approved permission and has no open enrollment
  *     is deleted 24 hours after it was made (best effort, swept on enrollment requests and on a lapsed poll).
  * Side-effects: IO
@@ -198,12 +199,12 @@ export function createPostgresEnrollmentStore(client: CredentialSql, options: Po
           return { state: "access_denied" };
         }
 
-        // The admin said yes. A key already confirmed ends the code; an unconfirmed key is replaced.
+        // The admin said yes. Read the linked key's historical confirmation, not its current validity: revocation/expiry must never reopen
+        // this code. The credential lock serializes with confirm/revoke; a poll winning before confirm still supersedes only a pending key.
         const previousId = typeof e.credential_id === "string" ? e.credential_id : null;
         if (previousId) {
-          const prev = await tx`SELECT agent_credential_state(c) AS state FROM agent_credentials c WHERE c.id = ${previousId} FOR UPDATE`;
-          const state = prev[0]?.state;
-          if (state === "active" || state === "renew_only") {
+          const prev = await tx`SELECT (c.confirmed_at IS NOT NULL) AS ever_confirmed FROM agent_credentials c WHERE c.id = ${previousId} FOR UPDATE`;
+          if (prev[0]?.ever_confirmed === true) {
             await tx`UPDATE agent_service_enrollments SET status = 'redeemed' WHERE id = ${id}`;
             return { state: "expired_token" };
           }

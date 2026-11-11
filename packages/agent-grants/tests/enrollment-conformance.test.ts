@@ -42,6 +42,13 @@ runEnrollmentConformance({
       async lapse(userId) {
         for (const e of m.enrollments) if (e.principalUserId === userId) e.expiresAt = m.clock.now - 1;
       },
+      async expireCredential(credentialId) {
+        const row = m.credentialRows.find((r) => r.id === credentialId);
+        if (!row) throw new Error("credential not found");
+        row.expiresAt = m.clock.now - 2;
+        row.renewUntil = m.clock.now - 1;
+        row.pendingExpiresAt = m.clock.now - 1;
+      },
       async ageUnredeemed(userId) {
         const p = m.principals.find((x) => x.userId === userId);
         if (p) p.createdAt = m.clock.now - 25 * 3600 * 1000;

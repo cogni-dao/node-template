@@ -16,7 +16,7 @@
 
 import { exportJWK, generateKeyPair, type JWK } from "jose";
 
-import { confirmCredential, verifyBearer } from "../credentials/service";
+import { confirmCredential, revokeCredential, verifyBearer } from "../credentials/service";
 import type { CredentialStore } from "../credentials/types";
 import { SERVICE_ENROLLMENT_KIND, type ServiceEnrollmentClaims, serviceEnrollmentAudience } from "./claims";
 import { openSealed } from "./seal";
@@ -45,6 +45,8 @@ export interface EnrollmentConformanceSetup {
   skipPollInterval(): Promise<void>;
   /** Make every enrollment of this principal lapse (its 24 hour code ended). */
   lapse(principalUserId: string): Promise<void>;
+  /** Expire both the pending and confirmed lifetimes of one key without lapsing its enrollment code. */
+  expireCredential(credentialId: string): Promise<void>;
   /** Make the principal 25 hours old. */
   ageUnredeemed(principalUserId: string): Promise<void>;
   principalExists(principalUserId: string): Promise<boolean>;
@@ -223,6 +225,43 @@ export function runEnrollmentConformance(h: EnrollmentConformanceHarness): void 
       expect(await verifyBearer(s.credentials, got.key)).toMatchObject({ ok: true, userId: e.principalUserId, state: "active" });
       await s.skipPollInterval();
       expect(await pollServiceEnrollment(s.store, { deviceCode: e.deviceCode })).toEqual({ ok: false, error: "expired_token" });
+    });
+
+    for (const endedBy of ["revoke", "expiry"] as const) {
+      it(`a confirmed code stays spent after credential ${endedBy}, even before its first post-confirm poll`, async () => {
+        const s = await h.setup();
+        const r = await requester();
+        const e = await enroll(s, r);
+        const got = await redeem(s, r, e);
+        expect(await confirmCredential(s.credentials, { credentialId: got.credentialId })).toMatchObject({ ok: true, status: "confirmed" });
+        if (endedBy === "revoke") {
+          expect(await revokeCredential(s.credentials, { credentialId: got.credentialId, userId: e.principalUserId, revokedBy: e.principalUserId })).toBe(true);
+        } else {
+          await s.expireCredential(got.credentialId);
+        }
+        expect(await verifyBearer(s.credentials, got.key)).toEqual({ ok: false, reason: "invalid" });
+        expect(await s.hasLiveRole(e.principalUserId, SCOPE)).toBe(true);
+        for (let i = 0; i < 2; i++) {
+          await s.skipPollInterval();
+          expect(await pollServiceEnrollment(s.store, { deviceCode: e.deviceCode })).toEqual({ ok: false, error: "expired_token" });
+        }
+      });
+    }
+
+    it("an expired unconfirmed key can still be replaced through its unspent code", async () => {
+      const s = await h.setup();
+      const r = await requester();
+      const e = await enroll(s, r);
+      const first = await redeem(s, r, e);
+      await s.expireCredential(first.credentialId);
+      await s.skipPollInterval();
+      const next = await pollServiceEnrollment(s.store, { deviceCode: e.deviceCode });
+      if (!next.ok) throw new Error(`retry refused: ${next.error}`);
+      expect(next.credentialId).not.toBe(first.credentialId);
+      const key = await openSealed(next.sealedKey, r.privateJwk);
+      expect(await verifyBearer(s.credentials, first.key, ["pending"])).toEqual({ ok: false, reason: "invalid" });
+      expect(await confirmCredential(s.credentials, { credentialId: next.credentialId })).toMatchObject({ ok: true, status: "confirmed" });
+      expect(await verifyBearer(s.credentials, key)).toMatchObject({ ok: true, userId: e.principalUserId });
     });
 
     it("a dismissed ask is access_denied, and stays so", async () => {
