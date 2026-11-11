@@ -153,9 +153,13 @@ export function createAdminCheck(
   };
 }
 
-/** Outside-agent rows the admin read returns at most (pending asks first). The rest are counted, not sent. */
+/**
+ * The admin read has TWO bounds, so a table of any size stays one bounded response:
+ * - `MAX_ADMIN_OUTSIDE_ROWS` role rows of outside agents (pending asks first), unchanged.
+ * - `MAX_ADMIN_KEY_ROWS` keys rows (`agent:keys`: one per outside agent that holds a sign-in key or is stopped), on top.
+ * So the response holds at most this node's own AI in full plus 150 outside rows. `more` is the sum of what both reads cut.
+ */
 export const MAX_ADMIN_OUTSIDE_ROWS = 100;
-/** Keys rows (one per outside agent that holds a sign-in key, or is stopped) the admin read returns at most. The rest are counted. */
 export const MAX_ADMIN_KEY_ROWS = 50;
 
 export function createAgentToolAuthority(deps: {

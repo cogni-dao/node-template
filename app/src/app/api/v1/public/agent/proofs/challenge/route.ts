@@ -20,7 +20,7 @@ import { headers } from "next/headers";
 
 import { answerStoreOutage } from "@/app/_lib/auth/agent-credential-route";
 import { answerProof, invalidInput, parseProofBody } from "@/app/_lib/auth/agent-proof-route";
-import { admitAnonymousChallenge, getAgentCredentialStore, getProofConfig } from "@/bootstrap/agent-credentials";
+import { admitAnonymousChallenge, getAgentCredentialStore, getProofConfig, proofPublicRateLimit } from "@/bootstrap/agent-credentials";
 import { wrapPublicRoute } from "@/bootstrap/http";
 import { EVENT_NAMES } from "@/shared/observability";
 
@@ -29,7 +29,7 @@ export const runtime = "nodejs";
 
 const ROUTE_ID = "agent.proofs.challenge.public";
 
-export const POST = wrapPublicRoute({ routeId: ROUTE_ID }, async (ctx, request) => {
+export const POST = wrapPublicRoute({ routeId: ROUTE_ID, ...proofPublicRateLimit }, async (ctx, request) => {
   const body = await parseProofBody(request, proofChallengeOperation.input);
   if (!body || body.purpose !== "recover") return invalidInput();
   if (!admitAnonymousChallenge(await headers())) {

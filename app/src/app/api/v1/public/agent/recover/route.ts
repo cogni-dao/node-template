@@ -21,7 +21,7 @@ import { headers } from "next/headers";
 
 import { answerStoreOutage } from "@/app/_lib/auth/agent-credential-route";
 import { answerProof, invalidInput, parseProofBody } from "@/app/_lib/auth/agent-proof-route";
-import { getAgentCredentialStore, getProofConfig, getProofVerifier, proofAttemptGuards } from "@/bootstrap/agent-credentials";
+import { getAgentCredentialStore, getProofConfig, getProofVerifier, proofAttemptGuards, proofPublicRateLimit } from "@/bootstrap/agent-credentials";
 import { wrapPublicRoute } from "@/bootstrap/http";
 import { EVENT_NAMES } from "@/shared/observability";
 
@@ -30,7 +30,7 @@ export const runtime = "nodejs";
 
 const ROUTE_ID = "agent.credentials.recover";
 
-export const POST = wrapPublicRoute({ routeId: ROUTE_ID }, async (ctx, request) => {
+export const POST = wrapPublicRoute({ routeId: ROUTE_ID, ...proofPublicRateLimit }, async (ctx, request) => {
   const body = await parseProofBody(request, recoverCredentialOperation.input);
   if (!body) return invalidInput();
   return answerStoreOutage(ctx, ROUTE_ID, async () => {

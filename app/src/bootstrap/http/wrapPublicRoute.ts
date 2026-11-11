@@ -23,6 +23,16 @@ import { wrapRouteHandlerWithLogging } from "./wrapRouteHandlerWithLogging";
 
 export interface PublicRouteConfig {
   routeId: string;
+  /**
+   * A bucket of this route's own, instead of the shared `publicApiLimiter`. Routes that must not be locked out by another client's traffic
+   * on other public routes (agent recovery) set it together with `clientKey`.
+   */
+  limiter?: TokenBucketRateLimiter;
+  /**
+   * The client key for the limiter. Default: `extractClientIp` (`x-real-ip`, then `x-forwarded-for`), which nothing writes on an Akash node behind
+   * Cloudflare, so every client then shares one bucket. A route on such a node passes `extractEdgeClientIp` (Cloudflare's `cf-connecting-ip`).
+   */
+  clientKey?: (request: { headers: { get(name: string): string | null } }) => string;
   cacheTtlSeconds?: number; // Default: 60
   staleWhileRevalidateSeconds?: number; // Default: 300
 }
@@ -93,8 +103,8 @@ export function makeWrapPublicRoute(deps: WrapPublicRouteDeps) {
           request.headers.get(deps.rateLimitBypass.headerName) ===
             deps.rateLimitBypass.headerValue;
 
-        const clientIp = extractClientIp(request);
-        const allowed = bypassEnabled || deps.rateLimiter.consume(clientIp);
+        const clientKey = (config.clientKey ?? extractClientIp)(request);
+        const allowed = bypassEnabled || (config.limiter ?? deps.rateLimiter).consume(clientKey);
 
         if (!allowed) {
           // Log without IP (aggregated metric provides observability)

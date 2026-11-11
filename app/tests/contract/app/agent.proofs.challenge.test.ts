@@ -46,6 +46,7 @@ vi.mock("@/bootstrap/agent-credentials", () => ({
   admitAnonymousChallenge: () => fake.admitAnonymous,
   admitCredentialLookup: () => true,
   recordCredentialMiss: () => undefined,
+  proofPublicRateLimit: { limiter: { consume: () => true }, clientKey: () => "test-client" },
 }));
 
 import { POST } from "@/app/api/v1/public/agent/proofs/challenge/route";

@@ -103,6 +103,7 @@ async function installationToken(): Promise<string | null> {
     type: "installation",
     installationId: installation.data.id,
     permissions: { issues: "read" },
+    repositoryNames: [first.repo], // one repository, not the whole installation
   })) as { token: string; expiresAt?: string };
   tokenCache = { token: auth.token, expiresAt: auth.expiresAt ? Date.parse(auth.expiresAt) : Date.now() + 30 * 60_000 };
   return auth.token;
@@ -153,6 +154,16 @@ export function admitAnonymousChallenge(headers: { get(name: string): string | n
 
 /** Wrong-secret flood on one challenge: 10 misses in 10 minutes per (challenge, client). A hit never spends. */
 const proofMissLimiter = new TokenBucketRateLimiter({ maxTokens: 10, refillRate: 10 / 600, burstSize: 0, maxKeys: 10_000 });
+
+/**
+ * The rate limit of the PUBLIC proof routes (anonymous challenge, recover): their OWN bucket, keyed on Cloudflare's `cf-connecting-ip` like the credential
+ * limiter. The shared public bucket is keyed on `x-real-ip`, which nothing writes on Akash, so there one client could lock every agent out of recovery.
+ * 10 per minute + 5 burst per client. Spread into the route's `wrapPublicRoute` config.
+ */
+export const proofPublicRateLimit = {
+  limiter: new TokenBucketRateLimiter({ maxTokens: 10, refillRate: 10 / 60, burstSize: 5, maxKeys: 10_000 }),
+  clientKey: (request: { headers: { get(name: string): string | null } }): string => extractEdgeClientIp(request),
+};
 
 export function proofAttemptGuards(headers: { get(name: string): string | null }, challengeId: string): { admit: () => boolean; onInvalid: () => void } {
   const key = `${challengeId}\u0000${extractEdgeClientIp({ headers })}`;
