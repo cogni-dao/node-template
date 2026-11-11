@@ -24,7 +24,7 @@ Response returns `{id, status: "needs_triage", ...}`. The id is server-allocated
 
 ## Rules
 
-- **NAME_THE_METRIC.** Name the metric the work moves: `"moves": [{"metricId": "<metric-id>", "direction": "up"}]`. Use at most 3 entries and `up` or `down`. Take each id from `core__metric_list`, `core__goal_progress` or `GET /api/v1/metrics`, and read the metric's row first. If no metric fits, send `"moves": []`. Never invent an id and never send a baseline: the server pins it. Triage later uses the metric's KPI and its current reading to judge the goal score.
+- **NAME_THE_METRIC.** Name the metric the work moves in `moves`: at most 3 entries of `{"metricId": "<id>", "direction": "up|down"}`. Pick the direction the work should move the metric. Take each id from `core__metric_list`, `core__goal_progress` or `GET /api/v1/metrics` on the hub you post to. Never invent an id. Never send a baseline: the server pins it. If no metric fits, send `"moves": []`. Triage later judges the goal score from the metric's KPI and its current reading.
 - **Be terse.** Stories describe _what_ and _why_, not _how_. Decomposition lands in `/task`.
 - **No file creation.** Do NOT add new `.md` files under `work/items/`. The API is source of truth.
 - **Spike if unknown.** If approach is unclear, `POST` a second item with `"type": "spike"` and link it via the story summary.

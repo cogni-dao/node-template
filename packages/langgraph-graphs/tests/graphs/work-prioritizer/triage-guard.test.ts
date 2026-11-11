@@ -182,6 +182,14 @@ describe("work-prioritizer binds core__work_item_update behind the guard", () =>
     a.read(item("task.2", { moves }));
     expect(await a.call(update("task.2", { moves }))).toContain("no_change");
     expect(a.writes).toHaveLength(2);
+    // An item that never declared moves takes `[]` as a real change; a declared `[]` repeats as no change.
+    a.read(item("task.3"));
+    expect(
+      await a.call(update("task.3", { moves: [] }, { reason: "no metric fits" })),
+    ).toContain('"revision"');
+    a.read(item("task.4", { moves: [] }));
+    expect(await a.call(update("task.4", { moves: [] }))).toContain("no_change");
+    expect(a.writes).toHaveLength(3);
   });
 
   it("sets only status, scores, labels and moves", async () => {

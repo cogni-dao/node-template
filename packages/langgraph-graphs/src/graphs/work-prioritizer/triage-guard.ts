@@ -28,7 +28,7 @@ import {
   type StructuredToolInterface,
 } from "@langchain/core/tools";
 import { z } from "zod";
-import type { ObservedItem, RunReceipts } from "./receipts";
+import { ObservedMoves, type ObservedItem, type RunReceipts } from "./receipts";
 import { MAX_CHANGED_ITEMS_PER_RUN } from "./tools";
 
 const ROUTES = new Set([
@@ -76,16 +76,11 @@ const sameLabels = (a: readonly string[], b: readonly string[]) =>
 
 type Moves = NonNullable<ObservedItem["moves"]>;
 /** Same metrics with the same directions; the server-owned baseline never counts. */
-const sameMoves = (a: Moves | undefined, b: Moves | undefined) => {
-  const x = a ?? [];
-  const y = b ?? [];
-  return (
-    x.length === y.length &&
-    x.every((m) =>
-      y.some((n) => n.metricId === m.metricId && n.direction === m.direction),
-    )
+const sameMoves = (a: Moves, b: Moves) =>
+  a.length === b.length &&
+  a.every((m) =>
+    b.some((n) => n.metricId === m.metricId && n.direction === m.direction),
   );
-};
 
 export function createTriageGuard(
   receipts: RunReceipts,
@@ -183,7 +178,10 @@ export function createTriageGuard(
       (set.scores === null && !item.scores);
     const labels =
       set.labels === undefined || sameLabels(set.labels, item.labels);
-    const moves = set.moves === undefined || sameMoves(set.moves, item.moves);
+    // An item with no declaration (`moves` absent) is not the same as one that declared `[]`.
+    const moves =
+      set.moves === undefined ||
+      (item.moves !== undefined && sameMoves(set.moves, item.moves));
     return status && scores && labels && moves;
   }
 
@@ -266,9 +264,7 @@ export function createTriageGuard(
             status: z.string(),
             labels: z.array(z.string()),
             scores: ObservedScores.optional(),
-            moves: z
-              .array(z.object({ metricId: z.string(), direction: z.string() }))
-              .optional(),
+            moves: ObservedMoves.optional(),
           })
           .safeParse(JSON.parse(text));
         if (dto.success)

@@ -26,7 +26,7 @@ Server allocates the id (`task.5XXX+`). Status defaults to `needs_triage`; `/tri
 
 - **ONE_TASK_ONE_PR.** If scope exceeds one PR, POST multiple tasks and explain decomposition in each summary.
 - **SCOPE_FROM_SPEC.** Reference governing spec invariants in `specRefs`. If contracts change and no spec exists, run `/spec` first.
-- **NAME_THE_METRIC.** Name the metric the work moves: `"moves": [{"metricId": "<metric-id>", "direction": "up"}]`. Use at most 3 entries and `up` or `down`. Take each id from `core__metric_list`, `core__goal_progress` or `GET /api/v1/metrics`, and read the metric's row first. If no metric fits, send `"moves": []`. Never invent an id and never send a baseline: the server pins it. Triage later uses the metric's KPI and its current reading to judge the goal score.
+- **NAME_THE_METRIC.** Name the metric the work moves in `moves`: at most 3 entries of `{"metricId": "<id>", "direction": "up|down"}`. Pick the direction the work should move the metric. Take each id from `core__metric_list`, `core__goal_progress` or `GET /api/v1/metrics` on the hub you post to. Never invent an id. Never send a baseline: the server pins it. If no metric fits, send `"moves": []`. Triage later judges the goal score from the metric's KPI and its current reading.
 - **Be terse.** Detailed plan + invariants land in `/design`. The task POST is acceptance criteria + scope, not a design doc.
 
 ## Next
