@@ -82,7 +82,8 @@ emit_claude_context() {
       "$contract" \
       "Governing index for this session: GET the node's /api/v1/knowledge/index.")"
   fi
-  [ "$(printf '%s' "$payload" | wc -m | tr -d ' ')" -le "$CLAUDE_CONTEXT_MAX_CHARS" ] || return 0
+  # Count characters with jq (Unicode code points, independent of the locale).
+  [ "$(printf '%s' "$payload" | jq -Rs 'length')" -le "$CLAUDE_CONTEXT_MAX_CHARS" ] || return 0
   printf '%s' "$payload" \
     | jq -Rs '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:.}}'
 }
