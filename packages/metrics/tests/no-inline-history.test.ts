@@ -527,7 +527,9 @@ describe("no-inline-history@1 edits read", () => {
 			expect(text).toContain("d.to_commit_date >= '2026-11-02 12:00:00.000'");
 			expect(text).toContain("d.to_commit_date < '2026-11-09 12:00:00.000'");
 			expect(text).toContain("d.diff_type = 'modified'");
-			expect(text).toContain("IS DISTINCT FROM");
+			// Doltgres 0.57.3 panics on a bare from_/to_ text comparison inside the CTE.
+			expect(text).not.toContain("IS DISTINCT FROM");
+			expect(text).toContain(table === "work-items" ? "COALESCE(substr(d.from_outcome, 1, 100000), '') <> COALESCE(substr(d.to_outcome, 1, 100000), '')" : "COALESCE(substr(d.from_content, 1, 100000), '') <> COALESCE(substr(d.to_content, 1, 100000), '')");
 			// No wider history: no subquery, ordered by id then date, one row past the cap.
 			expect(text).not.toMatch(/\bIN \(\s*SELECT/i);
 			expect(text.match(/FROM dolt_diff_/g)).toHaveLength(1);
