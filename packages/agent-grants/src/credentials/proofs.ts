@@ -172,7 +172,10 @@ export interface GithubVerifierOptions {
 
 async function readCapped(res: Response): Promise<string | null> {
   const declared = Number(res.headers.get("content-length") ?? 0);
-  if (declared > MAX_BODY_BYTES) return null;
+  if (declared > MAX_BODY_BYTES) {
+    drain(res);
+    return null;
+  }
   const reader = res.body?.getReader();
   if (!reader) {
     const text = await res.text();
@@ -198,6 +201,11 @@ async function readCapped(res: Response): Promise<string | null> {
   }
   return new TextDecoder().decode(all);
 }
+
+/** Release the socket of a response whose body is not read (a non-200 answer). Not awaited: a cancel on a tee'd stream settles only when both branches do. */
+const drain = (res: Response): void => {
+  res.body?.cancel().catch(() => undefined);
+};
 
 const asString = (v: unknown): string | null => (typeof v === "string" ? v : null);
 
@@ -236,8 +244,14 @@ export function createGithubCommentVerifier(options: GithubVerifierOptions): Pro
 
       const res = await call(githubCommentUrl(issue, commentId), { method: "GET", token });
       if (!res) return { kind: "unavailable" };
-      if (res.status === 404) return { kind: "not_found" };
-      if (res.status !== 200) return { kind: "unavailable" };
+      if (res.status === 404) {
+        drain(res);
+        return { kind: "not_found" };
+      }
+      if (res.status !== 200) {
+        drain(res);
+        return { kind: "unavailable" };
+      }
       const text = await readCapped(res).catch(() => null);
       if (text === null) return { kind: "unavailable" };
       let json: Record<string, unknown>;
@@ -270,7 +284,11 @@ export function createGithubCommentVerifier(options: GithubVerifierOptions): Pro
           variables: { id: nodeId },
         }),
       });
-      if (!gql || gql.status !== 200) return { kind: "unavailable" };
+      if (!gql) return { kind: "unavailable" };
+      if (gql.status !== 200) {
+        drain(gql);
+        return { kind: "unavailable" };
+      }
       const gqlText = await readCapped(gql).catch(() => null);
       if (gqlText === null) return { kind: "unavailable" };
       try {

@@ -205,7 +205,7 @@ export function memoryCredentialStore(init: { users: Record<string, MemoryUser>;
           return { ok: false, reason: "rate_limited" };
       } else if (
         challenges.filter((c) => c.purpose === "recover" && hourly(c)).length >= p.recoverPerHourNode ||
-        challenges.filter(open).length >= p.maxOpenChallenges
+        challenges.filter((c) => c.purpose === "recover" && open(c)).length >= p.maxOpenChallenges
       ) {
         return { ok: false, reason: "rate_limited" };
       }

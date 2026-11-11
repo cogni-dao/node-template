@@ -14,9 +14,10 @@
  *     (`rolbypassrls` or superuser). Under FORCE RLS with no policy a role that does not bypass sees ZERO rows, so `everConfirmed` would read
  *     false and the v1 supersession gate would silently turn off. Instead every call throws, so the service answers unavailable (503).
  *   - ROLES_ARE_THE_NODES_READ: `hasRoles` is injected. The store never decides what a role is.
- *   - LOCK_ORDER: predecessor first, then successor, in rotate and confirm, so concurrent calls cannot deadlock. Bind, stop, lift, upgrade and
- *     the upgrade confirm take the per-user advisory lock first; recover locks its challenge row, then the user (a bind challenge and a
- *     recover challenge are different rows, so the orders cannot cycle).
+ *   - LOCK_ORDER: EVERY write that touches a user's credential rows (upgrade, rotate, confirm, revoke, recover, stop, lift, bind) takes that
+ *     user's advisory lock FIRST, then locks credential rows (predecessor before successor). So a bulk revoke (stop, recover) can never meet a
+ *     rotation confirm in the opposite row order. Recover locks its challenge row, then the user; openProofCheck locks the challenge row, then
+ *     the node-wide fetch lock. A bind challenge and a recover challenge are different rows, so no order cycles.
  *   - STOP_IS_ONE_QUERY: `everConfirmed` reads `confirmed credential OR agent_stops row` in ONE statement, so the signed-key gate gains no read.
  *   - USER_BINDINGS_WRITTEN_WITH_EVIDENCE: a bind writes `user_bindings` and the `identity_events` row `bind` in one transaction (the app's Drizzle
  *     helper cannot be imported here; its invariants BINDINGS_ARE_EVIDENCED and NO_AUTO_MERGE are copied, not its code).
@@ -159,6 +160,9 @@ export function createPostgresCredentialStore(client: CredentialSql, options: Po
 
     issueSuccessor: ({ predecessorId, tokenHash, policy }) =>
       client.begin(async (tx): Promise<IssueResult> => {
+        // User lock first (LOCK_ORDER), so a stop or a recovery cannot interleave with this rotation in the opposite row order.
+        const owner = await tx`SELECT user_id FROM agent_credentials WHERE id = ${predecessorId}`;
+        if (typeof owner[0]?.user_id === "string") await tx`SELECT pg_advisory_xact_lock(hashtext(${owner[0].user_id}))`;
         const pred = await tx`
           SELECT c.user_id, agent_credential_state(c) AS state FROM agent_credentials c WHERE c.id = ${predecessorId} FOR UPDATE`;
         const state = pred[0]?.state;
@@ -174,12 +178,12 @@ export function createPostgresCredentialStore(client: CredentialSql, options: Po
       const head = await client`SELECT user_id, created_from FROM agent_credentials WHERE id = ${credentialId}`;
       const rolesNow = head[0]?.created_from === "key_upgrade" && typeof head[0]?.user_id === "string" ? await hasRoles(head[0].user_id) : false;
       return client.begin(async (tx): Promise<ConfirmResult> => {
-        // Predecessor first (same order as rotate), then the successor row. An upgrade key has no predecessor: it takes the same
-        // per-user advisory lock as `issueUpgrade`, so a confirm cannot interleave with a new upgrade (two live revocable keys).
+        // The per-user advisory lock first, for EVERY confirm (LOCK_ORDER): an upgrade key then cannot interleave with a new upgrade (two live
+        // revocable keys), and a rotation confirm cannot meet a stop or a recovery in the opposite row order. Then the predecessor, then the successor.
         const link = await tx`SELECT predecessor_id, user_id FROM agent_credentials WHERE id = ${credentialId}`;
         const predecessorId = typeof link[0]?.predecessor_id === "string" ? link[0].predecessor_id : null;
+        if (typeof link[0]?.user_id === "string") await tx`SELECT pg_advisory_xact_lock(hashtext(${link[0].user_id}))`;
         if (predecessorId) await tx`SELECT 1 FROM agent_credentials WHERE id = ${predecessorId} FOR UPDATE`;
-        else if (typeof link[0]?.user_id === "string") await tx`SELECT pg_advisory_xact_lock(hashtext(${link[0].user_id}))`;
         const rows = await tx`
           SELECT c.user_id, c.expires_at, c.renew_until, agent_credential_state(c) AS state
           FROM agent_credentials c WHERE c.id = ${credentialId} FOR UPDATE`;
@@ -229,6 +233,7 @@ export function createPostgresCredentialStore(client: CredentialSql, options: Po
 
     revoke: ({ credentialId, userId, reason, revokedBy }) =>
       client.begin(async (tx) => {
+        await tx`SELECT pg_advisory_xact_lock(hashtext(${userId}))`; // LOCK_ORDER
         const revoked = await tx`
           UPDATE agent_credentials SET revoked_at = now(), revoked_reason = ${reason}, revoked_by = ${revokedBy}
           WHERE id = ${credentialId} AND user_id = ${userId} AND revoked_at IS NULL RETURNING id`;
@@ -264,7 +269,7 @@ export function createPostgresCredentialStore(client: CredentialSql, options: Po
           await tx`SELECT pg_advisory_xact_lock(hashtext('agent_proof_challenges:recover'))`;
           const n = await tx`
             SELECT count(*) FILTER (WHERE purpose = 'recover' AND issued_at > now() - interval '1 hour')::int AS hourly,
-                   count(*) FILTER (WHERE consumed_at IS NULL AND expires_at > now() AND attempts < ${p.maxFailedChecks}::int)::int AS open
+                   count(*) FILTER (WHERE purpose = 'recover' AND consumed_at IS NULL AND expires_at > now() AND attempts < ${p.maxFailedChecks}::int)::int AS open
             FROM agent_proof_challenges`;
           if (Number(n[0]?.hourly ?? 0) >= p.recoverPerHourNode || Number(n[0]?.open ?? 0) >= p.maxOpenChallenges) {
             return { ok: false, reason: "rate_limited" };
@@ -280,8 +285,7 @@ export function createPostgresCredentialStore(client: CredentialSql, options: Po
 
     openProofCheck: ({ challengeId, secretHash, purpose, principalUserId, policy: p }) =>
       client.begin(async (tx): Promise<OpenProofCheckResult> => {
-        // One node-wide lock for the budget: the count and the stamp below must not interleave across instances.
-        await tx`SELECT pg_advisory_xact_lock(hashtext('agent_proof_challenges:fetch'))`;
+        // The secret is checked FIRST, on the challenge row alone: an anonymous wrong-secret or random-id request never takes the node-wide lock.
         const ch = await tx`
           SELECT issued_at, expires_at, nonce_hash FROM agent_proof_challenges
           WHERE id = ${challengeId}::uuid AND purpose = ${purpose} AND secret_hash = ${secretHash}
@@ -289,6 +293,8 @@ export function createPostgresCredentialStore(client: CredentialSql, options: Po
             AND principal_user_id IS NOT DISTINCT FROM ${principalUserId}::text
           FOR UPDATE`;
         if (!ch[0]) return { ok: false, reason: "invalid_challenge" }; // a wrong secret changes nothing: no attempt, no budget
+        // Then one node-wide lock for the budget: the count and the stamp below must not interleave across instances (row, then fetch lock).
+        await tx`SELECT pg_advisory_xact_lock(hashtext('agent_proof_challenges:fetch'))`;
         const used = await tx`SELECT count(*)::int AS n FROM agent_proof_challenges WHERE fetched_at > now() - interval '1 hour'`;
         if (Number(used[0]?.n ?? 0) >= p.fetchBudgetPerHour) return { ok: false, reason: "fetch_budget" };
         await tx`UPDATE agent_proof_challenges SET fetched_at = now() WHERE id = ${challengeId}::uuid`;
@@ -369,7 +375,8 @@ export function createPostgresCredentialStore(client: CredentialSql, options: Po
           SELECT b.user_id FROM user_bindings b
           JOIN agent_principals ap ON ap.user_id = b.user_id AND ap.kind = 'external'
           JOIN users u ON u.id = b.user_id
-          WHERE b.provider = 'github' AND b.external_id = ${githubId} AND u.wallet_address IS NULL`;
+          WHERE b.provider = 'github' AND b.external_id = ${githubId} AND u.wallet_address IS NULL
+            AND NOT EXISTS (SELECT 1 FROM user_bindings w WHERE w.user_id = b.user_id AND w.provider = 'wallet')`;
         const userId = typeof found[0]?.user_id === "string" ? found[0].user_id : null;
         if (!userId) return { ok: false, reason: "no_binding" };
         await tx`SELECT pg_advisory_xact_lock(hashtext(${userId}))`;

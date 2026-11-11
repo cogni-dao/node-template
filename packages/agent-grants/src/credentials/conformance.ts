@@ -575,6 +575,17 @@ function runProofConformance(h: CredentialConformanceHarness): void {
     });
   });
 
+  describe("proof conformance: open challenges", () => {
+    it("open BIND challenges do not count toward the recover open cap: many bind challenges never block recovery", async () => {
+      const { store, ids } = await h.setup({ a: {}, b: {} });
+      const policy = { maxOpenChallenges: 1 };
+      await challenge(store, "bind", ids.a as string, policy);
+      await challenge(store, "bind", ids.b as string, policy);
+      await challenge(store, "recover", undefined, policy); // the one recover challenge the cap allows
+      expect(await issueProofChallenge(store, { ...config(policy), purpose: "recover" })).toEqual({ ok: false, reason: "rate_limited" });
+    });
+  });
+
   describe("proof conformance: the comment check", () => {
     const failing = async (mutate: (ch: Ok<ChallengeOutcome>) => Partial<ProofComment>, issue = ISSUE) => {
       const gh = scriptedGithub();
