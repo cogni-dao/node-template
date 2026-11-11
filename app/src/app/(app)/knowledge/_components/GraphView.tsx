@@ -14,6 +14,7 @@
 
 import {
   KnowledgeGraph,
+  type KnowledgeGraphEntriesSummary,
   type KnowledgeGraphRendererProps,
 } from "@cogni/knowledge-base-ui/knowledge";
 import dynamic from "next/dynamic";
@@ -28,7 +29,14 @@ const KnowledgeForceGraph3D = dynamic(
   { ssr: false }
 ) as ComponentType<KnowledgeGraphRendererProps>;
 
-export function GraphView() {
+export function GraphView({
+  onEntriesChange,
+}: {
+  /** Exact shown/total entry counts for the page subtitle. */
+  readonly onEntriesChange?: (
+    summary: KnowledgeGraphEntriesSummary | null
+  ) => void;
+}) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const detail = useKnowledgeSelection(selectedId);
@@ -44,6 +52,7 @@ export function GraphView() {
         selectedId={selectedId}
         onSelect={onSelect}
         canvasClassName="h-[var(--height-knowledge-graph)]"
+        {...(onEntriesChange && { onEntriesChange })}
       />
       <KnowledgeDetail
         item={detail.data ?? null}
@@ -51,7 +60,11 @@ export function GraphView() {
         loading={detail.isFetching}
         error={detail.error}
         onRetry={() => void detail.refetch()}
-        onOpenChange={setDetailOpen}
+        onOpenChange={(open) => {
+          setDetailOpen(open);
+          // Closing the detail clears the highlight, as the original graph did.
+          if (!open) setSelectedId(null);
+        }}
       />
     </>
   );

@@ -6,7 +6,7 @@
  * Purpose: The knowledge Graph's WebGL force-graph renderer, published on its own client-only subpath so every node draws the whole corpus exactly as node-template does (task.0059).
  * Scope: A `KnowledgeGraphRendererProps` component over the peer `react-force-graph-3d`, which any host importing this subpath must install. The engine touches `window` when it loads, so it is imported after mount; hosts typically lazy-load the subpath too (`next/dynamic(() => import("@cogni/knowledge-base-ui/graph-3d"), { ssr: false })`).
  * Invariants:
- *   - DRAWS_EVERY_NODE: every node and link in `graphData` is drawn; large graphs get cheaper drawing, never fewer entries.
+ *   - DRAWS_EVERY_NODE: every node and link in `graphData` is drawn; large graphs get cheaper drawing, never fewer entries. Synthetic hub membership links are thin with no particles or arrows (as in the original graph).
  *   - RENDER_BUDGET: no warm-up ticks (first frame immediately); the simulation stops after `cooldownTicks` / `cooldownTime`; above `LARGE_GRAPH_NODES` nodes spheres drop to `LARGE_NODE_RESOLUTION`; above `LARGE_GRAPH_LINKS` links there are no particles or arrows; labels render only on hover (`nodeLabel` tooltip).
  * Side-effects: dynamic import of `react-force-graph-3d`
  * Links: task.0059, packages/knowledge-base-ui/src/knowledge-graph.tsx
@@ -59,10 +59,10 @@ interface ForceGraph3DProps {
   readonly nodeOpacity: number;
   readonly nodeResolution: number;
   readonly linkColor: (link: KnowledgeGraphLink) => string;
-  readonly linkWidth: number;
-  readonly linkDirectionalParticles: number;
+  readonly linkWidth: (link: KnowledgeGraphLink) => number;
+  readonly linkDirectionalParticles: (link: KnowledgeGraphLink) => number;
   readonly linkDirectionalParticleWidth: number;
-  readonly linkDirectionalArrowLength: number;
+  readonly linkDirectionalArrowLength: (link: KnowledgeGraphLink) => number;
   readonly linkDirectionalArrowRelPos: number;
   readonly onNodeClick: (node: KnowledgeGraphNode) => void;
 }
@@ -103,10 +103,15 @@ export function KnowledgeForceGraph3D(
         nodeResolution={
           largeNodes ? budget.LARGE_NODE_RESOLUTION : budget.NODE_RESOLUTION
         }
-        linkWidth={largeLinks ? 0 : 1.2}
-        linkDirectionalParticles={largeLinks ? 0 : 2}
+        // Citations as in the original graph; synthetic hub links stay faint.
+        linkWidth={(link) => (largeLinks ? 0 : link.kind === "cite" ? 1.2 : 0.4)}
+        linkDirectionalParticles={(link) =>
+          largeLinks || link.kind !== "cite" ? 0 : 2
+        }
         linkDirectionalParticleWidth={1.4}
-        linkDirectionalArrowLength={largeLinks ? 0 : 2.5}
+        linkDirectionalArrowLength={(link) =>
+          largeLinks || link.kind !== "cite" ? 0 : 2.5
+        }
         linkDirectionalArrowRelPos={1}
       />
     </Suspense>

@@ -3,13 +3,15 @@
 
 /**
  * Module: `@cogni/knowledge-base-ui/knowledge-graph`
- * Purpose: The knowledge Graph capability: every entry and every citation of the corpus, drawn at once with exact counts, domain/confidence coloring, client-side narrowing, in-memory neighbor highlighting and exact-id open (task.0059).
+ * Purpose: The knowledge Graph capability with the original node-template graph controls (Confidence | Domain colour toggle, "Domain hubs" toggle, bottom-left legend) plus instant Domain and Type dropdowns, over every entry and citation of the corpus (task.0059).
  * Scope: Client view over `useKnowledgeGraph`. The node injects its fetcher, a `renderer` (normally the package's `KnowledgeForceGraph3D` from `./graph-3d`, lazy-loaded) and what selecting opens (its detail sheet, via `selectedId` / `onSelect`).
  * Invariants:
- *   - ACCURATE_COUNTS: the header states the exact entry and citation counts of the loaded revision ("5,046 entries · 12,300 citations"); when narrowed, "Showing X of N".
- *   - WHOLE_CORPUS: nothing is capped, paged or sampled; narrowing filters the loaded set client-side and never fetches.
- *   - HIGHLIGHT_FROM_MEMORY: selecting an entry highlights it and its neighbors from the loaded edge set and dims the rest; no request.
- *   - STABLE_LAYOUT: the renderer's `graphData` changes only with the revision or the narrowing, never with selection or color mode, so selecting does not restart the simulation.
+ *   - HEADER_ROW: in order, Confidence (default) | Domain toggle, "Domain hubs" (checked), a Domain dropdown ("All domains", then "<domain> · <exact count>") and, when the data has entry types, a Type dropdown ("All types", "<type> · <exact count>"). Dropdowns apply on select; there are no free-text inputs or apply buttons. Toggle, checkbox and legend keep the pre-#264 GraphView classes and copy.
+ *   - ACCURATE_COUNTS: `onEntriesChange` reports the exact shown and total entry counts so the page subtitle reads "Showing X of N entries" when narrowed; the legend states exact citation and domain counts.
+ *   - NARROWING_IS_CLIENT_SIDE: dropdowns narrow the loaded corpus (entries, the citations between them, and their hubs); they never fetch.
+ *   - WHOLE_CORPUS: every entry and every citation is drawn; domain hubs are synthetic visual anchors added on top (one per domain plus faint membership links), never replacing or hiding entries.
+ *   - HIGHLIGHT_FROM_MEMORY: selecting an entry highlights it, its neighbours and its domain hub from the loaded edge set and dims the rest; no request. Hubs are not selectable.
+ *   - STABLE_LAYOUT: the renderer's `graphData` changes only with the revision or the hubs toggle, never with selection or colour mode.
  *   - LABELS_ESCAPED: `nodeLabel` returns HTML with every agent-authored string escaped.
  * Side-effects: IO (through the injected fetcher)
  * Links: task.0059
@@ -31,21 +33,37 @@ import {
 
 import { cn } from "./cn.js";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "./ui/select.js";
+import {
   type KnowledgeGraphFetcher,
   useKnowledgeGraph,
 } from "./use-knowledge-graph.js";
 
-export type KnowledgeGraphNode = KnowledgeGraphResponse["nodes"][number];
+type GraphEntry = KnowledgeGraphResponse["nodes"][number];
 
-/** A drawn edge. Force renderers replace `source`/`target` ids with node objects in place. */
+/** A drawn node: an entry, or a synthetic domain hub when hubs are shown. */
+export interface KnowledgeGraphNode extends GraphEntry {
+  readonly isHub: boolean;
+  /** Hubs only: the domain's exact entry count. */
+  readonly entryCount?: number;
+}
+
+/** A drawn link. Force renderers replace `source`/`target` ids with node objects in place. */
 export interface KnowledgeGraphLink {
   readonly id: string;
   source: string | { readonly id: string };
   target: string | { readonly id: string };
-  readonly citationType: string;
+  /** `cite`: a real citation. `member`: a synthetic entry→hub link. */
+  readonly kind: "cite" | "member";
+  readonly citationType?: string;
 }
 
-export type KnowledgeGraphColorMode = "domain" | "confidence";
+export type KnowledgeGraphColorMode = "confidence" | "domain";
 
 /** What a drawing engine receives. `graphData` holds fresh objects the engine may mutate. */
 export interface KnowledgeGraphRendererProps {
@@ -75,6 +93,9 @@ export const KNOWLEDGE_CITATION_COLORS: Readonly<Record<string, string>> = {
   invalidates: "#f87171",
 };
 const DEFAULT_LINK_COLOR = "#9aa0aa";
+const MEMBER_LINK_COLOR = "rgba(120,128,140,.18)";
+// Domain hubs are structural anchors, not a classifier — neutral in Confidence mode.
+const HUB_COLOR = "#94a3b8";
 const DIMMED = "rgba(100,116,139,0.18)";
 
 /** Confidence → hue across red (0) to green (100). */
@@ -98,7 +119,7 @@ const EXTENSION_PALETTE = [
   "#e879f9",
 ];
 
-/** Stable color per domain: fixed base domains, hashed hue for the rest. */
+/** Stable colour per domain: fixed base domains, hashed hue for the rest. */
 export function knowledgeDomainColor(domain: string): string {
   const base = BASE_DOMAIN_COLOR[domain];
   if (base) return base;
@@ -118,50 +139,110 @@ function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (c) => HTML_ESCAPES[c] ?? c);
 }
 
-const count = (n: number) => n.toLocaleString("en-US");
 const endpoint = (end: KnowledgeGraphLink["source"]) =>
   typeof end === "string" ? end : end.id;
+const hubId = (domain: string) => `domain:${domain}`;
+/** Radix Select reserves "" — the "All" option uses this value. */
+const ALL = "__all__";
 
-export interface KnowledgeGraphNarrowing {
-  /** Case-insensitive match on id, title, domain or entry type. */
-  readonly text: string;
+export interface KnowledgeGraphRenderOptions {
+  readonly hubs: boolean;
   /** One domain, or "" for all. */
-  readonly domain: string;
+  readonly domain?: string;
+  /** One entry type, or "" for all. */
+  readonly entryType?: string;
 }
 
-/** The narrowed subgraph as fresh objects: matching entries and the citations between them. */
-export function narrowKnowledgeGraph(
+/** Shown and total entry counts, exact for the loaded revision. */
+export interface KnowledgeGraphEntriesSummary {
+  readonly shown: number;
+  readonly total: number;
+  /** True while a Domain or Type dropdown narrows the graph. */
+  readonly narrowed: boolean;
+}
+
+/** "<value> · <exact count>" options, sorted by value. */
+function facet(
+  nodes: readonly GraphEntry[],
+  pick: (node: GraphEntry) => string,
+): [string, number][] {
+  const counts = new Map<string, number>();
+  for (const node of nodes) {
+    const value = pick(node);
+    if (value) counts.set(value, (counts.get(value) ?? 0) + 1);
+  }
+  return [...counts].sort(([a], [b]) => a.localeCompare(b));
+}
+
+/**
+ * Fresh renderer data: the entries matching the domain and type (all by
+ * default), the citations between them, plus synthetic domain hubs when `hubs`
+ * is on. Nothing is sampled or capped.
+ */
+export function knowledgeGraphRenderData(
   graph: Pick<KnowledgeGraphResponse, "nodes" | "edges">,
-  { text, domain }: KnowledgeGraphNarrowing,
+  { hubs, domain = "", entryType = "" }: KnowledgeGraphRenderOptions,
 ): KnowledgeGraphRendererProps["graphData"] {
-  const needle = text.trim().toLowerCase();
-  const nodes = graph.nodes
-    .filter(
-      (node) =>
-        (!domain || node.domain === domain) &&
-        (!needle ||
-          [node.id, node.title, node.domain, node.entryType].some((value) =>
-            value.toLowerCase().includes(needle),
-          )),
-    )
-    .map((node) => ({ ...node }));
-  const visible = new Set(nodes.map((node) => node.id));
-  const links = graph.edges
-    .filter((edge) => visible.has(edge.source) && visible.has(edge.target))
-    .map((edge) => ({ ...edge }));
-  return { nodes, links };
+  const visible =
+    domain || entryType
+      ? graph.nodes.filter(
+          (node) =>
+            (!domain || node.domain === domain) &&
+            (!entryType || node.entryType === entryType),
+        )
+      : graph.nodes;
+  const ids = visible === graph.nodes ? null : new Set(visible.map((n) => n.id));
+  const entries: KnowledgeGraphNode[] = visible.map((node) => ({
+    ...node,
+    isHub: false,
+  }));
+  const edges = ids
+    ? graph.edges.filter((edge) => ids.has(edge.source) && ids.has(edge.target))
+    : graph.edges;
+  const links: KnowledgeGraphLink[] = edges.map((edge) => ({
+    id: edge.id,
+    source: edge.source,
+    target: edge.target,
+    kind: "cite",
+    citationType: edge.citationType,
+  }));
+  if (!hubs) return { nodes: entries, links };
+  const perDomain = new Map<string, number>();
+  for (const node of visible)
+    perDomain.set(node.domain, (perDomain.get(node.domain) ?? 0) + 1);
+  const hubNodes: KnowledgeGraphNode[] = [...perDomain].map(
+    ([domain, entryCount]) => ({
+      id: hubId(domain),
+      domain,
+      title: domain,
+      entryType: "",
+      confidencePct: null,
+      sourceType: "",
+      isHub: true,
+      entryCount,
+    }),
+  );
+  const memberLinks: KnowledgeGraphLink[] = visible.map((node) => ({
+    id: `member:${node.id}`,
+    source: hubId(node.domain),
+    target: node.id,
+    kind: "member",
+  }));
+  return { nodes: [...hubNodes, ...entries], links: [...memberLinks, ...links] };
 }
 
 export interface KnowledgeGraphProps {
   readonly fetchGraph: KnowledgeGraphFetcher;
   readonly renderer: ComponentType<KnowledgeGraphRendererProps>;
   readonly selectedId: string | null;
-  /** Select an entry (graph click or exact id), or `null` to clear. */
+  /** Select an entry (graph click), or `null` to clear. */
   readonly onSelect: (id: string | null) => void;
   readonly staleTime?: number;
   readonly queryKeyPrefix?: readonly unknown[];
   /** Classes of the canvas container (e.g. the node's height token). */
   readonly canvasClassName?: string;
+  /** Exact shown/total entry counts whenever the graph or the narrowing changes (`null` until loaded). */
+  readonly onEntriesChange?: (summary: KnowledgeGraphEntriesSummary | null) => void;
 }
 
 export function KnowledgeGraph({
@@ -172,44 +253,71 @@ export function KnowledgeGraph({
   staleTime,
   queryKeyPrefix,
   canvasClassName,
+  onEntriesChange,
 }: KnowledgeGraphProps): ReactElement {
-  const { graph, neighbors, isLoading, error, retry } = useKnowledgeGraph({
+  const { graph, neighbors, error } = useKnowledgeGraph({
     fetchGraph,
     ...(staleTime !== undefined && { staleTime }),
     ...(queryKeyPrefix && { queryKeyPrefix }),
   });
-  const [colorMode, setColorMode] = useState<KnowledgeGraphColorMode>("domain");
-  const [draft, setDraft] = useState("");
-  const [narrowing, setNarrowing] = useState<KnowledgeGraphNarrowing>({
-    text: "",
-    domain: "",
-  });
-  const [entryId, setEntryId] = useState("");
-  const data = useMemo(
-    () => (graph ? narrowKnowledgeGraph(graph, narrowing) : null),
-    [graph, narrowing],
+  const [colorMode, setColorMode] =
+    useState<KnowledgeGraphColorMode>("confidence");
+  const [showHubs, setShowHubs] = useState(true);
+  const [domain, setDomain] = useState("");
+  const [entryType, setEntryType] = useState("");
+  const domainOptions = useMemo(
+    () => (graph ? facet(graph.nodes, (node) => node.domain) : []),
+    [graph],
   );
+  const typeOptions = useMemo(
+    () => (graph ? facet(graph.nodes, (node) => node.entryType) : []),
+    [graph],
+  );
+  const data = useMemo(
+    () =>
+      graph
+        ? knowledgeGraphRenderData(graph, { hubs: showHubs, domain, entryType })
+        : null,
+    [graph, showHubs, domain, entryType],
+  );
+  const shown = data?.nodes.filter((node) => !node.isHub).length ?? 0;
+  const total = graph?.nodes.length;
+  const report = useRef(onEntriesChange);
+  useEffect(() => {
+    report.current = onEntriesChange;
+  });
+  const narrowed = Boolean(domain || entryType);
+  useEffect(() => {
+    report.current?.(
+      total === undefined ? null : { shown, total, narrowed },
+    );
+  }, [shown, total, narrowed]);
   const highlighted = useMemo(() => {
     if (!selectedId) return null;
-    return new Set([selectedId, ...(neighbors.get(selectedId) ?? [])]);
-  }, [selectedId, neighbors]);
+    const set = new Set([selectedId, ...(neighbors.get(selectedId) ?? [])]);
+    const domain = graph?.nodes.find((node) => node.id === selectedId)?.domain;
+    if (domain !== undefined) set.add(hubId(domain));
+    return set;
+  }, [selectedId, neighbors, graph]);
 
   const nodeColor = useCallback(
     (node: KnowledgeGraphNode) => {
       if (highlighted && !highlighted.has(node.id)) return DIMMED;
-      return colorMode === "domain"
-        ? knowledgeDomainColor(node.domain)
-        : knowledgeConfidenceColor(node.confidencePct ?? 40);
+      if (colorMode === "domain") return knowledgeDomainColor(node.domain);
+      if (node.isHub) return HUB_COLOR;
+      return knowledgeConfidenceColor(node.confidencePct ?? 40);
     },
     [colorMode, highlighted],
   );
   const nodeVal = useCallback(
     (node: KnowledgeGraphNode) =>
-      node.id === selectedId ? 8 : 2 + (node.confidencePct ?? 40) / 40,
-    [selectedId],
+      node.isHub ? 22 : 2 + (node.confidencePct ?? 40) / 22,
+    [],
   );
   const nodeLabel = useCallback((node: KnowledgeGraphNode) => {
-    const meta = `${escapeHtml(node.id)} · ${escapeHtml(node.domain)} · ${escapeHtml(node.entryType)} · ${node.confidencePct ?? "?"}%`;
+    if (node.isHub)
+      return `<b>${escapeHtml(node.domain)}</b> · ${node.entryCount ?? 0} entries`;
+    const meta = `${escapeHtml(node.id)} · ${escapeHtml(node.entryType)} · ${node.confidencePct ?? "?"}%`;
     return `<div style="max-width:240px"><b>${escapeHtml(node.title)}</b><br/><span style="opacity:.6">${meta}</span></div>`;
   }, []);
   const linkColor = useCallback(
@@ -220,15 +328,21 @@ export function KnowledgeGraph({
         endpoint(link.target) !== selectedId
       )
         return DIMMED;
-      return KNOWLEDGE_CITATION_COLORS[link.citationType] ?? DEFAULT_LINK_COLOR;
+      if (link.kind === "member") return MEMBER_LINK_COLOR;
+      return (
+        KNOWLEDGE_CITATION_COLORS[link.citationType ?? ""] ?? DEFAULT_LINK_COLOR
+      );
     },
     [selectedId],
   );
   const onNodeClick = useCallback(
-    (node: KnowledgeGraphNode) => onSelect(node.id),
+    (node: KnowledgeGraphNode) => {
+      if (!node.isHub) onSelect(node.id);
+    },
     [onSelect],
   );
 
+  // Size the canvas to its container.
   const wrapRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 800, height: 600 });
   useEffect(() => {
@@ -242,10 +356,13 @@ export function KnowledgeGraph({
     return () => observer.disconnect();
   }, []);
 
-  const narrowed = Boolean(narrowing.text || narrowing.domain);
-  const selected = selectedId
-    ? graph?.nodes.find((node) => node.id === selectedId)
-    : undefined;
+  if (error) {
+    return (
+      <p className="py-8 text-center text-destructive">
+        Failed to load knowledge graph.
+      </p>
+    );
+  }
 
   return (
     <>
@@ -255,102 +372,75 @@ export function KnowledgeGraph({
           aria-label="Graph color mode"
           className="inline-flex items-center rounded-lg border border-border/60 bg-muted/40 p-0.5"
         >
-          {(["domain", "confidence"] as const).map((mode) => (
+          {(["confidence", "domain"] as const).map((mode) => (
             <button
               key={mode}
               type="button"
               aria-pressed={colorMode === mode}
               onClick={() => setColorMode(mode)}
-              className={cn(
-                "rounded-md px-3 py-1 text-xs capitalize transition-colors",
+              className={`rounded-md px-3 py-1 text-xs capitalize transition-colors ${
                 colorMode === mode
                   ? "bg-background font-medium text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
             >
               {mode}
             </button>
           ))}
         </div>
-        <form
-          role="search"
-          className="flex items-center gap-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            setNarrowing((current) => ({ ...current, text: draft }));
-          }}
-        >
+        <label className="flex cursor-pointer items-center gap-2 text-muted-foreground text-xs">
           <input
-            aria-label="Filter graph"
-            placeholder="Filter by id, title, domain, type"
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            className="rounded border bg-background px-2 py-1 text-xs"
+            type="checkbox"
+            checked={showHubs}
+            onChange={(event) => setShowHubs(event.target.checked)}
+            className="size-3.5 accent-primary"
           />
-          <button type="submit" className="text-xs underline">
-            Filter
-          </button>
-        </form>
-        <select
-          aria-label="Graph domain"
-          value={narrowing.domain}
-          onChange={(event) =>
-            setNarrowing((current) => ({ ...current, domain: event.target.value }))
-          }
-          className="rounded border bg-background px-2 py-1 text-xs"
+          Domain hubs
+        </label>
+        <Select
+          value={domain || ALL}
+          onValueChange={(value) => setDomain(value === ALL ? "" : value)}
+          disabled={!graph}
         >
-          <option value="">All domains</option>
-          {(graph?.domains ?? []).map((domain) => (
-            <option key={domain} value={domain}>
-              {domain}
-            </option>
-          ))}
-        </select>
-        {narrowed && (
-          <button
-            type="button"
-            className="text-xs underline"
-            onClick={() => {
-              setDraft("");
-              setNarrowing({ text: "", domain: "" });
-            }}
+          <SelectTrigger
+            aria-label="Domain"
+            className="w-full min-w-0 sm:w-56"
           >
-            Show all
-          </button>
+            <SelectValue placeholder="All domains" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ALL}>All domains</SelectItem>
+            {domainOptions.map(([value, n]) => (
+              <SelectItem key={value} value={value}>
+                {value} · {n.toLocaleString("en-US")}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {typeOptions.length > 0 && (
+          <Select
+            value={entryType || ALL}
+            onValueChange={(value) => setEntryType(value === ALL ? "" : value)}
+          >
+            <SelectTrigger aria-label="Type" className="w-full min-w-0 sm:w-44">
+              <SelectValue placeholder="All types" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL}>All types</SelectItem>
+              {typeOptions.map(([value, n]) => (
+                <SelectItem key={value} value={value}>
+                  {value} · {n.toLocaleString("en-US")}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         )}
-        <form
-          className="flex gap-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (entryId) onSelect(entryId);
-          }}
-        >
-          <input
-            aria-label="Knowledge ID"
-            placeholder="Open exact knowledge ID"
-            value={entryId}
-            onChange={(event) => setEntryId(event.target.value)}
-            className="rounded border bg-background px-2 py-1 text-xs"
-          />
-          <button type="submit" className="text-xs underline">
-            Open entry
-          </button>
-        </form>
       </div>
-      <p className="text-muted-foreground text-xs" role="status">
-        {graph && data
-          ? narrowed
-            ? `Showing ${count(data.nodes.length)} of ${count(graph.nodes.length)} entries · ${count(data.links.length)} of ${count(graph.edges.length)} citations`
-            : `${count(graph.nodes.length)} entries · ${count(graph.edges.length)} citations`
-          : isLoading
-            ? "Loading graph…"
-            : "Graph not loaded"}
-        {graph && ` · revision ${graph.revision.slice(0, 12)}`}
-      </p>
+
       <div
         ref={wrapRef}
         className={cn(
-          "relative h-[32rem] w-full overflow-hidden rounded-lg border border-border/60 bg-background",
+          "relative h-[var(--height-knowledge-graph)] w-full overflow-hidden rounded-lg border border-border/60 bg-background",
           canvasClassName,
         )}
       >
@@ -366,59 +456,37 @@ export function KnowledgeGraph({
             onNodeClick={onNodeClick}
           />
         )}
-        {data && (
-          <KnowledgeGraphLegend
-            colorMode={colorMode}
-            data={data}
-          />
-        )}
+        <GraphLegend
+          colorMode={colorMode}
+          edges={graph?.edges ?? []}
+          domains={graph?.domains ?? []}
+        />
       </div>
-      {Boolean(error) && (
-        <p role="alert">
-          Could not load the graph.{" "}
-          <button type="button" className="underline" onClick={retry}>
-            Retry graph
-          </button>
-        </p>
-      )}
-      {selectedId && (
-        <p className="text-xs">
-          Selected: {selected?.title ?? selectedId} ·{" "}
-          {count(neighbors.get(selectedId)?.size ?? 0)} connected entries{" "}
-          <button
-            type="button"
-            className="underline"
-            onClick={() => onSelect(null)}
-          >
-            Clear selection
-          </button>
-        </p>
-      )}
     </>
   );
 }
 
 const SECTION_CLASS =
-  "mb-1.5 font-medium text-[0.6875rem] text-muted-foreground uppercase tracking-wider";
+  "mb-1.5 font-medium text-[var(--text-knowledge-graph-section)] text-muted-foreground uppercase tracking-wider";
 
-function KnowledgeGraphLegend({
+function GraphLegend({
   colorMode,
-  data,
+  edges,
+  domains,
 }: {
   readonly colorMode: KnowledgeGraphColorMode;
-  readonly data: KnowledgeGraphRendererProps["graphData"];
+  readonly edges: ReadonlyArray<{ citationType: string }>;
+  readonly domains: ReadonlyArray<string>;
 }): ReactElement {
-  const domains = useMemo(
-    () => [...new Set(data.nodes.map((node) => node.domain))].sort(),
-    [data],
-  );
-  const citeTypes = useMemo(
-    () => [...new Set(data.links.map((link) => link.citationType))].sort(),
-    [data],
-  );
+  const citeTypes = [...new Set(edges.map((e) => e.citationType))];
   const ramp = [0, 25, 50, 75, 100];
   return (
-    <div className="absolute bottom-3 left-3 max-h-[70%] w-52 overflow-y-auto rounded-lg border border-border/60 bg-background/80 p-3 backdrop-blur">
+    <div className="absolute bottom-3 left-3 w-[var(--width-knowledge-graph-legend)] rounded-lg border border-border/60 bg-background/80 p-3 backdrop-blur">
+      <p className="mb-2.5 font-medium text-[var(--text-knowledge-graph-stat)] text-foreground tabular-nums">
+        {edges.length} citation{edges.length === 1 ? "" : "s"} ·{" "}
+        {domains.length} domain{domains.length === 1 ? "" : "s"}
+      </p>
+
       {colorMode === "confidence" ? (
         <>
           <p className={SECTION_CLASS}>Confidence</p>
@@ -438,33 +506,36 @@ function KnowledgeGraphLegend({
         </>
       ) : (
         <>
-          <p className={SECTION_CLASS}>Domains · {count(domains.length)}</p>
-          {domains.map((domain) => (
-            <div key={domain} className="flex items-center gap-2 text-xs">
+          <p className={SECTION_CLASS}>Domains</p>
+          {domains.slice(0, 8).map((d) => (
+            <div key={d} className="flex items-center gap-2 text-xs">
               <span
                 className="size-2.5 rounded-full"
-                style={{ backgroundColor: knowledgeDomainColor(domain) }}
+                style={{ backgroundColor: knowledgeDomainColor(d) }}
               />
-              {domain}
+              {d}
             </div>
           ))}
         </>
       )}
-      <p className={`${SECTION_CLASS} mt-2.5`}>Citations</p>
+
+      <p className={`${SECTION_CLASS} mt-2.5`}>Links · citations</p>
       {citeTypes.length > 0 ? (
-        citeTypes.map((type) => (
-          <div key={type} className="flex items-center gap-2 text-xs">
+        citeTypes.slice(0, 8).map((ct) => (
+          <div key={ct} className="flex items-center gap-2 text-xs">
             <span
               className="h-0 w-4 border-t-2"
               style={{
-                borderColor: KNOWLEDGE_CITATION_COLORS[type] ?? DEFAULT_LINK_COLOR,
+                borderColor: KNOWLEDGE_CITATION_COLORS[ct] ?? DEFAULT_LINK_COLOR,
               }}
             />
-            {type}
+            {ct}
           </div>
         ))
       ) : (
-        <span className="text-muted-foreground text-xs">none yet</span>
+        <span className="text-muted-foreground text-xs">
+          none yet — agents cite as they learn
+        </span>
       )}
     </div>
   );
