@@ -186,6 +186,7 @@ beforeEach(() => {
 		walletAddress: SESSION_WALLET,
 		displayName: null,
 		avatarColor: null,
+		via: "session",
 	});
 	mockRedeemBinding.mockResolvedValue("created");
 	mockCreateNonce.mockResolvedValue(NONCE);
@@ -379,6 +380,7 @@ describe("POST /api/v1/identity/bindings/import", () => {
 			walletAddress: null,
 			displayName: null,
 			avatarColor: null,
+			via: "session",
 		});
 
 		const res = await IMPORT_POST(makeRequest({ token: await mintToken() }));

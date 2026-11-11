@@ -23,9 +23,9 @@ const MAX_DEPTH = 3;
 const STORE_READ = /@cogni\/knowledge-store|knowledgeStorePort|EdoCapability|@cogni-dao\/metrics|metrics\.server/;
 /** Every way a route file can export a GET handler. */
 const GET_EXPORT = /export\s+(?:async\s+)?(?:const|let|var|function)\s+GET\b|export\s*\{[^}]*\bGET\b[^}]*\}/g;
-/** Export forms this test cannot classify (they could hide a GET): `export *` and destructured exports. A route file using one fails the test. */
-const UNCLASSIFIABLE_EXPORT = /export\s*\*|export\s+(?:const|let|var)\s*[{[]/;
-const ROUTE_FILE = /^route\.(?:ts|tsx|js|mjs)$/;
+/** Export forms this test cannot classify (they could hide a GET): `export *`, destructured exports and comma declarators (`export const a = 1, GET = ...`). A route file using one fails the test. */
+const UNCLASSIFIABLE_EXPORT = /export\s*\*|export\s+(?:const|let|var)\s*[{[]|export\s+(?:const|let|var)\s+[^;]*?,\s*GET\s*[=:]/;
+const ROUTE_FILE = /^route\.(?:ts|tsx|js|jsx|mjs|cjs|mts|cts)$/;
 const DOOR = /sameDoor:\s*"knowledge\.read"/;
 
 const NOT_STORE = {
@@ -104,7 +104,7 @@ function routeFiles(dir: string): string[] {
 function resolveImport(from: string, spec: string): string | undefined {
   const base = spec.startsWith("@/app/") ? join(SRC, spec.slice(2)) : spec.startsWith(".") ? resolve(dirname(from), spec) : undefined;
   if (!base) return undefined;
-  return [`${base}.ts`, `${base}.tsx`, `${base}.js`, `${base}.mjs`, join(base, "index.ts")].find((c) => existsSync(c));
+  return [`${base}.ts`, `${base}.tsx`, `${base}.js`, `${base}.jsx`, `${base}.mjs`, join(base, "index.ts")].find((c) => existsSync(c));
 }
 
 /** True when the file, or a module it imports (transitively, bounded depth, visited set), names a store marker. */
@@ -151,7 +151,7 @@ describe("knowledge.read door on every GET route (or an exempt reason)", () => {
     expect(door.length).toBeGreaterThanOrEqual(21);
   });
 
-  it("no route file uses an export form the scan cannot classify (export *, destructured exports)", () => {
+  it("no route file uses an export form the scan cannot classify (export *, destructured exports, comma declarators)", () => {
     expect(unclassifiableRoutes()).toEqual([]);
   });
 
