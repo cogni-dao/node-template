@@ -19,11 +19,10 @@
  *   - IRREDUCIBLE_INVARIANTS_ALWAYS_PRESENT: invariants + markdown render even
  *     when the hub is unconfigured or empty.
  *   - NO_INTERNAL_BIND_ADDR: origin derived from forwarded headers first.
- *   - ONE_READ_PER_REVISION: hub inputs come from `readCognitionSnapshot`
- *     (memoized per store HEAD; a slow or failed revision check
- *     serves the last complete snapshot and logs `stale`); a weak ETag
- *     over revision, build, origin, name and mission
- *     answers a matching If-None-Match with 304 (bug.0018).
+ *   - PACKAGE_OWNS_READ_AND_HEADERS: hub inputs, time budgets, the ETag/304
+ *     rule (never for a stale or degraded bundle) and Server-Timing come from
+ *     `@cogni/knowledge-store` cognition-read (bug.0018). A cold caller that
+ *     cannot be served in time gets a retryable 503.
  *   - NO_GOAL_PROGRESS: goal KPI readings are not bootstrap; agents read them
  *     live from /api/v1/metrics/goals.
  * Side-effects: IO (HTTP response, Doltgres reads via container port)
@@ -36,10 +35,15 @@ import {
 	type CognitionDomainPointer,
 } from "@cogni/node-contracts";
 import {
+	COGNITION_CACHE_CONTROL,
+	type CognitionReadResult,
+	CognitionUnavailableError,
+	cognitionEtag,
+	cognitionEtagMatches,
+	cognitionServerTiming,
 	type GoalsSection,
 	readCognitionSnapshot,
 } from "@cogni/knowledge-store";
-import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { getContainer } from "@/bootstrap/container";
@@ -55,11 +59,6 @@ import {
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-// Authed but principal-agnostic (index-only, identical for every caller). The
-// hub inputs are memoized per store revision, so a repeat costs one bounded
-// revision read; clients revalidate every use and a matching ETag returns 304.
-const CACHE_CONTROL = "private, no-cache, must-revalidate";
-
 /** External origin this request reached us through (forwarded headers first). */
 function publicOrigin(request: Request): string {
 	const url = new URL(request.url);
@@ -72,16 +71,6 @@ function publicOrigin(request: Request): string {
 	return `${proto}://${host}`;
 }
 
-/** True when an If-None-Match header names this entity tag (weak compare) or `*`. */
-function matchesEtag(ifNoneMatch: string | null, etag: string): boolean {
-	if (!ifNoneMatch) return false;
-	const bare = etag.replace(/^W\//, "");
-	return ifNoneMatch
-		.split(",")
-		.map((tag) => tag.trim().replace(/^W\//, ""))
-		.some((tag) => tag === bare || tag === "*");
-}
-
 export const GET = wrapRouteHandlerWithLogging(
 	{
 		routeId: "cognition.bundle",
@@ -91,6 +80,7 @@ export const GET = wrapRouteHandlerWithLogging(
 		if (!sessionUser) {
 			return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 		}
+		const started = performance.now();
 		const container = getContainer();
 		const origin = publicOrigin(request);
 		const node = container.nodeId;
@@ -105,12 +95,31 @@ export const GET = wrapRouteHandlerWithLogging(
 		// `cogni-agent-orientation` starter seed every node inherits. Goal KPI
 		// readings are not bootstrap: agents read them live (GET /api/v1/metrics/goals).
 		const port = container.knowledgeStorePort;
-		const read = port
-			? await readCognitionSnapshot(port, [
-					`${name}-agent-orientation`,
-					"cogni-agent-orientation",
-				])
-			: null;
+		// Authed but principal-agnostic (index-only, identical for every caller).
+		// The package owns the time budgets, the ETag/304 rule and Server-Timing.
+		const readStarted = performance.now();
+		let read: CognitionReadResult | null = null;
+		try {
+			read = port
+				? await readCognitionSnapshot(port, [
+						`${name}-agent-orientation`,
+						"cogni-agent-orientation",
+					])
+				: null;
+		} catch (error) {
+			if (!(error instanceof CognitionUnavailableError)) throw error;
+			ctx.log.warn({ reason: error.reason }, "cognition.bundle_unavailable");
+			return NextResponse.json(
+				{ error: "cognition_unavailable", retryable: true },
+				{
+					status: 503,
+					headers: { "Cache-Control": "no-store", "Retry-After": "1" },
+				},
+			);
+		}
+		const hubMs = performance.now() - readStarted;
+		const serverTiming = () =>
+			cognitionServerTiming(read, hubMs, performance.now() - started);
 		const domainPointers: CognitionDomainPointer[] = [
 			...(read?.snapshot.domains ?? []),
 		];
@@ -131,26 +140,20 @@ export const GET = wrapRouteHandlerWithLogging(
 		if (goals.status === "unavailable") {
 			ctx.log.warn({ reason: goals.reason }, "cognition.goals_unavailable");
 		}
-		// Only a complete, HEAD-confirmed bundle is revalidatable; a degraded or
-		// stale one is never confirmed by 304 or reused.
 		const revision = read?.snapshot.revision ?? null;
-		const etag =
-			revision && goals.status === "ok" && !read?.stale
-				? `W/"${createHash("sha256")
-						.update(
-							[revision, buildSha, origin, name, mission ?? ""].join("\u0000"),
-						)
-						.digest("base64url")
-						.slice(0, 27)}"`
-				: null;
-		if (etag && matchesEtag(request.headers.get("if-none-match"), etag)) {
+		const etag = cognitionEtag(read, [buildSha, origin, name, mission ?? ""]);
+		if (cognitionEtagMatches(request.headers.get("if-none-match"), etag)) {
 			ctx.log.info(
 				{ revision, notModified: true },
 				"cognition.bundle_not_modified",
 			);
 			return new NextResponse(null, {
 				status: 304,
-				headers: { ETag: etag, "Cache-Control": CACHE_CONTROL },
+				headers: {
+					ETag: etag as string,
+					"Cache-Control": COGNITION_CACHE_CONTROL,
+					"Server-Timing": serverTiming(),
+				},
 			});
 		}
 
@@ -191,6 +194,7 @@ export const GET = wrapRouteHandlerWithLogging(
 				revision,
 				memoHit: read?.memoHit ?? false,
 				stale: read?.stale ?? false,
+				...(read?.staleReason ? { staleReason: read.staleReason } : {}),
 				...(read && !read.memoHit ? { readMs: read.snapshot.readMs } : {}),
 			},
 			"cognition.bundle_success",
@@ -213,8 +217,12 @@ export const GET = wrapRouteHandlerWithLogging(
 				markdown,
 			}),
 		);
-		response.headers.set("Cache-Control", etag ? CACHE_CONTROL : "no-store");
+		response.headers.set(
+			"Cache-Control",
+			etag ? COGNITION_CACHE_CONTROL : "no-store",
+		);
 		if (etag) response.headers.set("ETag", etag);
+		response.headers.set("Server-Timing", serverTiming());
 		return response;
 	},
 );

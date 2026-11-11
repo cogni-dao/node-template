@@ -153,16 +153,24 @@ export {
   knowledgeGraphBudgetBytes,
   readKnowledgeGraph,
 } from "./domain/graph-read.js";
-// Session cognition hub inputs (bug.0018): one index read per store revision
+// Session cognition (bug.0018): hub inputs per store revision within time budgets, plus the bundle's ETag/304 and Server-Timing rules
 export {
+  COGNITION_CACHE_CONTROL,
+  COGNITION_COLD_DEADLINE_MS,
   COGNITION_FRESH_READ_DEADLINE_MS,
-  COGNITION_HEAD_SHARE_MS,
+  COGNITION_HEAD_ABANDON_MS,
   COGNITION_MAX_STALE_MS,
+  COGNITION_MAX_UNSETTLED,
   COGNITION_REVISION_DEADLINE_MS,
   type CognitionReadOptions,
   type CognitionReadPort,
   type CognitionReadResult,
   type CognitionSnapshot,
+  type CognitionStaleReason,
+  CognitionUnavailableError,
+  cognitionEtag,
+  cognitionEtagMatches,
+  cognitionServerTiming,
   readCognitionSnapshot,
 } from "./domain/cognition-read.js";
 export {
