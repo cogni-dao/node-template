@@ -14,7 +14,7 @@
  */
 
 import { NextRequest } from "next/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   extractClientIp,
@@ -230,6 +230,16 @@ describe("credential-lookup limiter inputs (task.0070 B2)", () => {
 });
 
 describe("TokenBucketRateLimiter cleanup (task.0070 N1)", () => {
+  // consume()/getTokens() read Date.now() while sweep() takes an explicit time. Pin the system clock so a few real
+  // milliseconds of refill cannot leak into the "still drained" assertion.
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_700_000_000_000);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("removes a DRAINED bucket after enough idle time (the refilled count is full), and keeps a recently seen or still-drained one", () => {
     const config = { maxTokens: 2, refillRate: 1, burstSize: 0 }; // refills 1 token/s, full in 2s
     const limiter = new TokenBucketRateLimiter(config);

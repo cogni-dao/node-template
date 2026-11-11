@@ -193,9 +193,12 @@ describe("access requests: an ask is an off row (real Postgres)", () => {
 
   it("the global pending cap stops a flood from throwaway agents, and clearing room lets the next ask in", async () => {
     const fillers: string[] = [];
-    const [{ n }] = (await service`SELECT count(*)::int AS n FROM agent_roles WHERE approved_by IS NULL AND revoked_at IS NULL`) as unknown as [{ n: number }];
+    // The cap is global by design and other component files share this database, so re-read the global pending count each pass
+    // (a one-shot snapshot goes stale if another file adds or clears pending asks) and fill until the cap is actually reached.
+    const pending = async () =>
+      ((await service`SELECT count(*)::int AS n FROM agent_roles WHERE approved_by IS NULL AND revoked_at IS NULL`) as unknown as [{ n: number }])[0].n;
     try {
-      for (let i = 0; i < MAX_PENDING_TOTAL - n; i++) {
+      for (let i = 0; (await pending()) < MAX_PENDING_TOTAL; i++) {
         const id = await mkUser(`flood-${i}-${randomUUID().slice(0, 4)}`);
         fillers.push(id);
         await service`INSERT INTO agent_roles (principal_user_id, scope, approved_by, requested_by) VALUES (${id}, 'edo:write', NULL, ${id})`;

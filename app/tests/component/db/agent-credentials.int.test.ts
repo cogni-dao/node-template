@@ -187,10 +187,13 @@ describe("agent credentials (real Postgres)", () => {
 
     it("upgrade writes an external principal on the SAME users.id and creates no second user", async () => {
       const user = await makeUser();
-      const before = (await service`SELECT count(*)::int AS n FROM users`)[0]?.n;
+      // Other component files insert users into this shared database in parallel, so never count ALL users: scope every fact to this principal.
+      const name = (await service`SELECT name FROM users WHERE id = ${user}`)[0]?.name as string;
       const key = ok(await upgradeSignedKey(store(), { userId: user }));
       expect(key.userId).toBe(user);
-      expect((await service`SELECT count(*)::int AS n FROM users`)[0]?.n).toBe(before);
+      expect(await service`SELECT user_id FROM agent_credentials WHERE id = ${key.credentialId}`).toEqual([expect.objectContaining({ user_id: user })]);
+      expect((await service`SELECT count(*)::int AS n FROM users WHERE id = ${user}`)[0]?.n).toBe(1);
+      expect((await service`SELECT count(*)::int AS n FROM users WHERE name = ${name}`)[0]?.n).toBe(1); // no second user minted for this principal
       expect(await service`SELECT kind FROM agent_principals WHERE user_id = ${user}`).toEqual([expect.objectContaining({ kind: "external" })]);
     });
 
