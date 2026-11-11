@@ -3,35 +3,36 @@
 
 /**
  * Module: `@app/readyz/readyz-probes`
- * Purpose: node-template's reference consumer of `@cogni-dao/substrate-health` — the declared-dependency
- *   registry and the node closures `/readyz` consumes. The deep runner, failure type, reach-probe factories
- *   and drift-guard helper live in the package; this adapter wires them to this node's logger, error type,
- *   ports, env and declaration map, keeping the shipped node signatures so the route and tests are unchanged.
- * Scope: Owns the node declaration map (`SUBSTRATE_DEPENDENCIES`), the four node substrate closures
- *   (EVM/Temporal/scheduler-worker/Postgres), the three node probe wrappers over the package factories, the
- *   default-path budget primitives, and the node-local drift-guard allowlist. Does not own the HTTP handler.
+ * Purpose: node-template's reference consumer of `@cogni-dao/substrate-health`: the declared-dependency registry
+ *   and the closures `/readyz?deep=1` runs. The readyz contract itself (`serveReadyz`), the deep runner, failure
+ *   type, reach-probe factories and drift-guard helper live in the package.
+ * Scope: Owns the declaration map (`SUBSTRATE_DEPENDENCIES`), the probe closures, the deep runtime and the
+ *   drift-guard allowlist. Does not own the HTTP handler. There is no default-path probe: the default /readyz
+ *   makes no remote calls (story.0040).
  * Invariants:
- *   - Imports are one-way: `route.ts` → this module → `@cogni/substrate-health` (never the reverse).
- *   - `?deep=1` probes exactly the dependencies this node DECLARES (`isDeclared`), each reach-only, fatal.
+ *   - Imports are one-way: `route.ts` → this module → `@cogni/substrate-health`.
+ *   - `?deep=1` probes exactly the dependencies this node DECLARES (`isDeclared`), concurrently, each reach-only,
+ *     fatal, under DEEP_CHECK_BUDGET_MS.
  *   - Deep registry order fixes first-failure `reason`/`message` and `unreachable[]`: evm-rpc, temporal,
  *     scheduler-worker, postgres, redis, litellm-gateway, doltgres.
- *   - Every substrate env key (`/_(URL|ADDRESS)$/`) is owned by a map entry or allowlisted; the drift guard
- *     fails CI otherwise.
- * Side-effects: IO (network reads to RPC/Temporal/LiteLLM/Redis, DB reads) only when a probe runs.
- * Links: src/app/(infra)/readyz/route.ts, @cogni-dao/substrate-health, deep-readyz-design
+ *   - Every substrate env key (`/_(URL|ADDRESS)$/`) is owned by a map entry or allowlisted; the drift guard fails
+ *     CI otherwise.
+ * Side-effects: IO (network reads to RPC/Temporal/LiteLLM/Redis/Doltgres, DB reads) only when a deep probe runs.
+ * Links: src/app/(infra)/readyz/route.ts, @cogni-dao/substrate-health, deep-readyz-design, story.0040
  * @public
  */
 
 import {
   type DeepChecks,
   DeepProbeFailure,
-  findUnclassifiedSubstrateKeys as pkgFindUnclassifiedSubstrateKeys,
+  type DeepRuntime,
   type ProbeDependency as PkgProbeDependency,
+  type SubstrateDependency as PkgSubstrateDependency,
+  findUnclassifiedSubstrateKeys as pkgFindUnclassifiedSubstrateKeys,
+  runDeepChecks as pkgRunDeepChecks,
   probeKnowledgePlane,
   probeLiteLlmGateway,
   probeRedisStream,
-  runDeepChecks as pkgRunDeepChecks,
-  type SubstrateDependency as PkgSubstrateDependency,
   SUBSTRATE_ENV_KEY_PATTERN,
 } from "@cogni/substrate-health";
 import type { getContainer } from "@/bootstrap/container";
@@ -45,361 +46,92 @@ import {
 } from "@/shared/env/invariants";
 import type { RequestContext } from "@/shared/observability";
 
-// Re-exported from the package so `route.ts` keeps one import site and the
-// parity meta-test can assert the node uses the package's class by identity.
 export { type DeepChecks, DeepProbeFailure, SUBSTRATE_ENV_KEY_PATTERN };
 
 type Container = ReturnType<typeof getContainer>;
 type Env = ReturnType<typeof serverEnv>;
 
-/** Default-path budget for each non-fatal remote check (EVM RPC, Temporal, scheduler-worker). */
-export const NON_FATAL_CHECK_BUDGET_MS = 1500;
-/** Default-path budget for the system-tenant DB check; exceeding it reports degraded (non-fatal). */
-export const SYSTEM_TENANT_BUDGET_MS = 2000;
-/** Successful system-tenant checks are reused for at most this long. Failures are never cached. */
-export const SYSTEM_TENANT_OK_TTL_MS = 30_000;
-/** An in-flight tenant query older than this is abandoned and a fresh one started. */
-export const SYSTEM_TENANT_INFLIGHT_MAX_AGE_MS = 10_000;
-/**
- * Deep-path budget for each dependency check. The checks run concurrently, so the
- * whole probe stays under this plus the response; it must stay below the 5 s deadline
- * of the fleet prober that reads `unreachable`, and above the 2 s system-tenant sub-budget.
- */
+/** Per-check deadline on `?deep=1`. */
 export const DEEP_CHECK_BUDGET_MS = 3000;
-/** Readiness summaries at or above this duration log at info (debug otherwise). */
-export const SLOW_READINESS_LOG_MS = 1000;
 
-/** A fixed, never-present id: a healthy knowledge plane returns null, a dead one throws. */
+/** A fixed id whose point read returns null on a healthy knowledge plane. */
 const DOLTGRES_READYZ_PROBE_ID = "readyz-probe-knowledge-reach";
-/** A fixed run id for the Redis XLEN reach probe; missing key returns 0. */
+/** A fixed run-stream key; `XLEN` of a missing key is 0. */
 const REDIS_READYZ_PROBE_KEY = "readyz:probe";
 
-/** This node's connectivity error, injected into the package's runner and probe factories. */
-const wrapInfra = (message: string): Error => new InfraConnectivityError(message);
+const wrapInfra = (message: string): Error =>
+  new InfraConnectivityError(message);
 
-/** Epoch ms of the last successful default-path system-tenant check (0 = never). */
-let systemTenantVerifiedAtMs = 0;
-/** The single in-flight default-path tenant query, shared by concurrent probes. */
-let systemTenantInflight: {
-  promise: Promise<void>;
-  startedAtMs: number;
-} | null = null;
-
-export type CheckStatus = "ok" | "cached" | "degraded" | "timeout" | "failed";
-export type CheckTimings = Record<
-  string,
-  { status: CheckStatus; durationMs: number }
->;
-
-const CHECK_TIMEOUT = Symbol("readyz.check_timeout");
-
-/** Dependencies a deep 503 can name in `unreachable` (this node's probe-name union). */
+/** Dependencies a deep 503 can name in `unreachable` (the operator's probe-name union). */
 export type DeepDependency =
-  | "postgres"
+  | "evm-rpc"
   | "temporal"
   | "scheduler-worker"
-  | "evm-rpc"
+  | "postgres"
   | "redis"
   | "litellm-gateway"
   | "doltgres";
 
-/**
- * Deep path: run every declared dependency check concurrently and report every
- * failure, with per-dependency observability. Thin wrapper that injects this
- * node's logger, connectivity error and deep budget into the package runner; the
- * package throws the shared `DeepProbeFailure` and emits `substrate.deep.complete`.
- */
-export async function runDeepChecks(
-  ctx: RequestContext,
-  checks: ReadonlyArray<readonly [DeepDependency, () => Promise<unknown>]>
-): Promise<DeepChecks> {
-  return pkgRunDeepChecks(checks, {
+/** The deep runner's logger, connectivity error and per-check budget for this node. */
+export function deepRuntime(ctx: RequestContext): DeepRuntime {
+  return {
     log: (fields, message) => ctx.log.info(fields, message),
     timeoutError: (dependency, budgetMs) =>
       new InfraConnectivityError(
         `${dependency} check exceeded ${budgetMs}ms budget`
       ),
     budgetMs: DEEP_CHECK_BUDGET_MS,
-  });
+  };
 }
 
-/**
- * Race `promise` against a budget. The underlying work keeps running (and may
- * warm a cache, e.g. the EVM RPC probe), but the probe stops waiting for it.
- * Node-local, for the default (non-deep) path.
- */
-export async function withBudget<T>(
-  promise: Promise<T>,
-  budgetMs: number
-): Promise<T | typeof CHECK_TIMEOUT> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<typeof CHECK_TIMEOUT>((resolve) => {
-    timer = setTimeout(() => resolve(CHECK_TIMEOUT), budgetMs);
-  });
-  try {
-    return await Promise.race([promise, timeout]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/** Run one named check, recording its status and duration in `timings`. */
-export async function timed(
-  timings: CheckTimings,
-  name: string,
-  run: () => Promise<CheckStatus>
-): Promise<void> {
-  const startedAt = Date.now();
-  try {
-    const status = await run();
-    timings[name] = { status, durationMs: Date.now() - startedAt };
-  } catch (error) {
-    timings[name] = { status: "failed", durationMs: Date.now() - startedAt };
-    throw error;
-  }
-}
-
-export function logBudgetExceeded(
+/** Run every declared check concurrently with this node's runtime. */
+export async function runDeepChecks(
   ctx: RequestContext,
-  event: string,
-  dependency: string
-): void {
-  ctx.log.warn(
-    {
-      event,
-      severity: "degraded",
-      reason: "CHECK_TIMEOUT",
-      dependency,
-      budgetMs: NON_FATAL_CHECK_BUDGET_MS,
-    },
-    `readiness: ${dependency} check exceeded its budget, returning ready (non-fatal)`
-  );
+  checks: ReadonlyArray<readonly [DeepDependency, () => Promise<unknown>]>
+): Promise<DeepChecks> {
+  return pkgRunDeepChecks(checks, deepRuntime(ctx));
 }
 
-/**
- * Bounded system-tenant check (per SYSTEM_TENANT_STARTUP_CHECK). Throws on
- * failure or budget; the default route wraps it non-fatally via
- * `checkSystemTenantNonFatal`. Bounded so a wedged service pool fails fast;
- * success is cached briefly so steady-state probes do not hit Postgres.
- * Probes share one in-flight query, and a success that lands after a probe's
- * budget still fills the cache, so a slow-but-healthy DB does not stack
- * queries or 503 forever. A query that never settles (the DB client has no
- * query timeout) is abandoned after SYSTEM_TENANT_INFLIGHT_MAX_AGE_MS so a
- * fresh query can prove recovery. Failures are never cached.
- */
-export async function checkSystemTenant(
-  serviceAccountService: Parameters<typeof verifySystemTenant>[0]
-): Promise<CheckStatus> {
-  if (
-    systemTenantVerifiedAtMs > 0 &&
-    Date.now() - systemTenantVerifiedAtMs < SYSTEM_TENANT_OK_TTL_MS
-  ) {
-    return "cached";
-  }
-  if (
-    !systemTenantInflight ||
-    Date.now() - systemTenantInflight.startedAtMs >
-      SYSTEM_TENANT_INFLIGHT_MAX_AGE_MS
-  ) {
-    // An abandoned query that settles later must not touch the newer state.
-    const inflight = {
-      startedAtMs: Date.now(),
-      promise: verifySystemTenant(serviceAccountService)
-        .then(() => {
-          if (systemTenantInflight === inflight) {
-            systemTenantVerifiedAtMs = Date.now();
-          }
-        })
-        .finally(() => {
-          if (systemTenantInflight === inflight) systemTenantInflight = null;
-        }),
-    };
-    systemTenantInflight = inflight;
-  }
-  const result = await withBudget(
-    systemTenantInflight.promise,
-    SYSTEM_TENANT_BUDGET_MS
-  );
-  if (result === CHECK_TIMEOUT) {
-    throw new InfraConnectivityError(
-      `System tenant check exceeded ${SYSTEM_TENANT_BUDGET_MS}ms budget`
-    );
-  }
-  return "ok";
-}
-
-/**
- * Default-path system-tenant check: NON-FATAL (bug.0022). A k8s readiness probe
- * must not hard-gate on a shared DB: a Postgres blip would drain every pod from
- * its Service at once. Provisioning (a missing cogni_system tenant) is asserted
- * once at process boot instead (`bootstrap/startup-assertions`), so a pod that
- * is genuinely unprovisioned crash-loops rather than serving.
- *
- * Any rejection of `checkSystemTenant` (query error, missing account, budget
- * exceeded) becomes `"degraded"` plus a stable critical log, never a throw. The
- * deep probe does not use this: it calls `verifySystemTenant` directly and
- * still 503s with `postgres` in `unreachable`.
- */
-export async function checkSystemTenantNonFatal(
-  ctx: RequestContext,
-  serviceAccountService: Parameters<typeof verifySystemTenant>[0]
-): Promise<CheckStatus> {
-  try {
-    return await checkSystemTenant(serviceAccountService);
-  } catch (error) {
-    // pg/drizzle errors wrap the driver error (with its SQLSTATE `code`) in `cause`.
-    const cause = (error as { cause?: { code?: unknown; message?: unknown } })
-      .cause;
-    ctx.log.error(
-      {
-        event: "substrate.postgres.unreachable",
-        severity: "critical",
-        reason:
-          error instanceof InfraConnectivityError
-            ? error.code
-            : "SYSTEM_TENANT_CHECK_FAILED",
-        dependency: "postgres",
-        message: error instanceof Error ? error.message : String(error),
-        causeCode: cause?.code,
-        causeMessage: cause?.message,
-      },
-      "readiness: postgres system-tenant check failed — shared DB down or unprovisioned. Returning ready: probe stays non-fatal so the fleet is not drained; provisioning is asserted at boot and the critical alert covers the outage."
-    );
-    return "degraded";
-  }
-}
-
-/**
- * Async-substrate connectivity check that is NON-FATAL to the k8s readiness
- * probe by default. Temporal and scheduler-worker are async dispatch substrate,
- * not synchronous serving dependencies — failing /readyz on their blip drains
- * every node-app from its Service endpoints and causes a fleet-wide 502
- * (incident 2026-06-26). Same rationale already applied to EVM RPC.
- *
- * They ARE mission-critical: all AI/chat work is dispatched through Temporal, so
- * a sustained outage means AI is down. We therefore log failures at ERROR with a
- * stable `event` + `severity:"critical"` so monitoring fires a critical alert,
- * and the request paths that need the substrate return 503 at request time — we
- * just never take the public site down with the probe.
- *
- * `deep` (from `?deep=1`) restores hard-fail semantics for provisioning /
- * stack-test smoke checks that must assert the substrate is actually up.
- */
-export async function assertSubstrate(
-  check: () => Promise<void>,
-  opts: {
-    ctx: RequestContext;
-    deep: boolean;
-    event: string;
-    dependency: string;
-  }
-): Promise<CheckStatus> {
-  try {
-    if (opts.deep) {
-      await check();
-      return "ok";
-    }
-    const inflight = check();
-    const result = await withBudget(inflight, NON_FATAL_CHECK_BUDGET_MS);
-    if (result === CHECK_TIMEOUT) {
-      logBudgetExceeded(opts.ctx, opts.event, opts.dependency);
-      // The probe has already answered, but a hang-type outage must still page:
-      // a failure that lands after the budget logs the same critical event.
-      inflight.catch((error: unknown) => {
-        if (error instanceof InfraConnectivityError) {
-          logSubstrateUnreachable(opts, error);
-        }
-      });
-      return "timeout";
-    }
-    return "ok";
-  } catch (error) {
-    if (opts.deep) throw error; // explicit deep probe: hard-fail (503)
-    if (error instanceof InfraConnectivityError) {
-      logSubstrateUnreachable(opts, error);
-      return "degraded";
-    }
-    throw error; // unexpected error type → fall through to default 503 handling
-  }
-}
-
-function logSubstrateUnreachable(
-  opts: { ctx: RequestContext; event: string; dependency: string },
-  error: InfraConnectivityError
-): void {
-  opts.ctx.log.error(
-    {
-      event: opts.event,
-      severity: "critical",
-      reason: error.code,
-      dependency: opts.dependency,
-      message: error.message,
-    },
-    `readiness: ${opts.dependency} unreachable — MISSION-CRITICAL async substrate down (AI/chat is dispatched through Temporal). Returning ready: probe stays non-fatal so the fleet is not drained; the critical alert + request-time 503 cover it.`
-  );
-}
-
-/**
- * EVM RPC connectivity. Default path: cached probe bounded by
- * NON_FATAL_CHECK_BUDGET_MS, degraded (never fatal) on failure or timeout.
- * Deep path: forced live read, fatal on failure.
- */
-export async function checkEvmRpc(
+/** Forced live EVM RPC read; fatal on failure. */
+async function checkEvmRpc(
   ctx: RequestContext,
   container: Container,
-  env: Env,
-  deep: boolean
-): Promise<CheckStatus> {
-  const probe = checkEvmRpcConnectivity(container.evmOnchainClient, env, {
-    forceLive: deep,
-  });
-  const evmRpcResult = deep
-    ? await probe
-    : await withBudget(probe, NON_FATAL_CHECK_BUDGET_MS);
-  if (evmRpcResult === CHECK_TIMEOUT) {
-    logBudgetExceeded(ctx, "substrate.evm_rpc.unreachable", "evm-rpc");
-    return "timeout";
-  }
-  if (!evmRpcResult.ok) {
-    const message = `EVM RPC connectivity check failed: ${evmRpcResult.errorMessage ?? "unknown"}`;
-    const context = {
-      event: "substrate.evm_rpc.unreachable",
-      severity: deep ? "critical" : "degraded",
-      reason: "INFRA_UNREACHABLE",
-      dependency: "evm-rpc",
-      source: evmRpcResult.source,
-      message,
-    };
-    if (deep) {
-      ctx.log.error(context, "deep readiness: EVM RPC unreachable");
-      throw new InfraConnectivityError(message);
+  env: Env
+): Promise<void> {
+  const result = await checkEvmRpcConnectivity(
+    container.evmOnchainClient,
+    env,
+    {
+      forceLive: true,
     }
-    ctx.log.warn(
-      context,
-      "readiness: EVM RPC unreachable, returning ready (non-fatal)"
-    );
-    return "degraded";
-  }
-  if (deep) {
-    ctx.log.info(
+  );
+  if (!result.ok) {
+    const message = `EVM RPC connectivity check failed: ${result.errorMessage ?? "unknown"}`;
+    ctx.log.error(
       {
-        event: "substrate.evm_rpc.reachable",
+        event: "substrate.evm_rpc.unreachable",
+        severity: "critical",
+        reason: "INFRA_UNREACHABLE",
         dependency: "evm-rpc",
-        source: evmRpcResult.source,
+        source: result.source,
+        message,
       },
-      "deep readiness: EVM RPC reachable"
+      "deep readiness: EVM RPC unreachable"
     );
+    throw new InfraConnectivityError(message);
   }
-  return evmRpcResult.source === "cached" ? "cached" : "ok";
+  ctx.log.info(
+    {
+      event: "substrate.evm_rpc.reachable",
+      dependency: "evm-rpc",
+      source: result.source,
+    },
+    "deep readiness: EVM RPC reachable"
+  );
 }
 
-/**
- * Doltgres knowledge-plane reach via the package factory. Only meaningful when
- * the node declares Doltgres (`DOLTGRES_URL`). A bounded point read on the
- * `max:5` knowledge pool; a healthy empty hit returns null.
- */
-export function checkDoltgres(container: Container, env: Env): Promise<void> {
-  if (!env.DOLTGRES_URL) return Promise.resolve(); // undeclared; the registry filter also guards this
+function checkDoltgres(container: Container, env: Env): Promise<void> {
+  if (!env.DOLTGRES_URL) return Promise.resolve();
   const port = container.knowledgeStorePort;
   if (!port) {
     return Promise.reject(
@@ -413,8 +145,7 @@ export function checkDoltgres(container: Container, env: Env): Promise<void> {
   })();
 }
 
-/** LiteLLM gateway reach via the package factory (uncached alias-catalog read). */
-export function checkLiteLlm(env: Env): Promise<void> {
+function checkLiteLlm(env: Env): Promise<void> {
   return probeLiteLlmGateway(
     {
       baseUrl: env.LITELLM_BASE_URL,
@@ -425,14 +156,12 @@ export function checkLiteLlm(env: Env): Promise<void> {
   )();
 }
 
-/** Redis run-stream reach via the package factory (`XLEN` on a fixed key). */
-export function checkRedis(container: Container): Promise<void> {
+function checkRedis(container: Container): Promise<void> {
   return probeRedisStream(container.runStream, REDIS_READYZ_PROBE_KEY, {
     wrapError: wrapInfra,
   })();
 }
 
-/** Every substrate dependency this node can declare, probe or justified non-probe. */
 type SubstrateName =
   | DeepDependency
   | "tigerbeetle"
@@ -446,7 +175,6 @@ type ProbeRun = (
   env: Env
 ) => Promise<unknown>;
 
-/** This node's declaration-map entry: the package type specialized to node names/closures. */
 type SubstrateDependency = PkgSubstrateDependency<
   Env,
   DeepDependency,
@@ -454,7 +182,6 @@ type SubstrateDependency = PkgSubstrateDependency<
   ProbeRun
 >;
 
-/** Narrow a registry entry to a probe entry (and thus `dependency: DeepDependency`). */
 function isProbe(
   dep: SubstrateDependency
 ): dep is PkgProbeDependency<Env, DeepDependency, ProbeRun> {
@@ -464,9 +191,8 @@ function isProbe(
 const always = (): boolean => true;
 
 /**
- * The single source of truth for what deep readiness proves. Probe entries are in
- * deep-registry order; new probes are appended so existing first-failure/order
- * assertions hold. `na` entries record why a declared dependency is not probed.
+ * The single source of truth for what the operator's deep readiness proves. Probe entries are in deep-registry
+ * order. `na` entries record why a declared dependency is not probed.
  */
 export const SUBSTRATE_DEPENDENCIES: readonly SubstrateDependency[] = [
   {
@@ -475,7 +201,7 @@ export const SUBSTRATE_DEPENDENCIES: readonly SubstrateDependency[] = [
     isDeclared: always,
     readyz: {
       kind: "probe",
-      run: (ctx, container, env) => checkEvmRpc(ctx, container, env, true),
+      run: (ctx, container, env) => checkEvmRpc(ctx, container, env),
     },
   },
   {
@@ -484,16 +210,8 @@ export const SUBSTRATE_DEPENDENCIES: readonly SubstrateDependency[] = [
     isDeclared: always,
     readyz: {
       kind: "probe",
-      run: (ctx, container, env) =>
-        assertSubstrate(
-          () => assertTemporalConnectivity(container.scheduleControl, env),
-          {
-            ctx,
-            deep: true,
-            event: "substrate.temporal.unreachable",
-            dependency: "temporal",
-          }
-        ),
+      run: (_ctx, container, env) =>
+        assertTemporalConnectivity(container.scheduleControl, env),
     },
   },
   {
@@ -502,17 +220,11 @@ export const SUBSTRATE_DEPENDENCIES: readonly SubstrateDependency[] = [
     isDeclared: always,
     readyz: {
       kind: "probe",
-      run: (ctx, _container, env) =>
-        assertSubstrate(() => assertSchedulerWorkerConnectivity(env), {
-          ctx,
-          deep: true,
-          event: "substrate.scheduler_worker.unreachable",
-          dependency: "scheduler-worker",
-        }),
+      run: (_ctx, _container, env) => assertSchedulerWorkerConnectivity(env),
     },
   },
   {
-    // System tenant billing account (SYSTEM_TENANT_STARTUP_CHECK) is the Postgres verdict.
+    // The system tenant billing account (SYSTEM_TENANT_STARTUP_CHECK) is the Postgres verdict.
     dependency: "postgres",
     envKeys: ["DATABASE_URL", "DATABASE_SERVICE_URL"],
     isDeclared: always,
@@ -532,7 +244,10 @@ export const SUBSTRATE_DEPENDENCIES: readonly SubstrateDependency[] = [
     dependency: "litellm-gateway",
     envKeys: ["LITELLM_BASE_URL"],
     isDeclared: always,
-    readyz: { kind: "probe", run: (_ctx, _container, env) => checkLiteLlm(env) },
+    readyz: {
+      kind: "probe",
+      run: (_ctx, _container, env) => checkLiteLlm(env),
+    },
   },
   {
     dependency: "doltgres",
@@ -580,10 +295,7 @@ export const SUBSTRATE_DEPENDENCIES: readonly SubstrateDependency[] = [
   },
 ];
 
-/**
- * Build the deep-path checks for the dependencies this node declares, in registry
- * order. Probe entries use a `DeepDependency` name by construction.
- */
+/** Build the deep-path checks for the dependencies the operator declares, in registry order. */
 export function buildDeepChecks(
   ctx: RequestContext,
   container: Container,
@@ -607,11 +319,7 @@ export const NON_SUBSTRATE_ALLOWLIST: readonly string[] = [
   "PROMETHEUS_QUERY_URL",
 ];
 
-/**
- * Drift guard: given the server-env schema keys, return every substrate-looking
- * key that is neither owned by a `SUBSTRATE_DEPENDENCIES` entry nor allowlisted.
- * Thin wrapper over the package helper with this node's classified keys.
- */
+/** Drift guard: every substrate-looking schema key owned by no map entry and not allowlisted. */
 export function findUnclassifiedSubstrateKeys(
   schemaKeys: readonly string[]
 ): string[] {
