@@ -19,10 +19,12 @@ import {
   type CatalogBoundTool,
   toBoundToolRuntime,
 } from "@cogni/ai-tools";
+import { NamespaceGraphRouter } from "@cogni/graph-execution-host";
 import { describe, expect, it, vi } from "vitest";
 
 import { runInScope } from "@/adapters/server/ai/execution-scope";
 import { LangGraphDevProvider } from "@/adapters/server/ai/langgraph/dev/provider";
+import { LangGraphInProcAgentCatalogProvider } from "@/adapters/server/ai/langgraph/inproc-agent-catalog.provider";
 import { LangGraphInProcProvider } from "@/adapters/server/ai/langgraph/inproc.provider";
 import {
   NODE_LOCAL_CATALOG,
@@ -207,5 +209,60 @@ describe("the dev provider never offers a secret tool", () => {
     for await (const _ of result.stream) void _;
     const config = stream.mock.calls[0]?.[2] as { config: { configurable: { toolIds: string[] } } };
     expect(config.config.configurable.toolIds).toEqual([CONTROL_TOOL]);
+  });
+});
+
+describe("graph resolution: the probe resolves by id and stays out of discovery", () => {
+  /** The same chain the internal run route builds: router -> in-proc provider with the node catalog. */
+  async function resolve(graphId: string) {
+    captured.options.length = 0;
+    const { source: src, bundle } = source();
+    const provider = new LangGraphInProcProvider(
+      { executeCompletionUnit: vi.fn() } as never,
+      src,
+      undefined,
+      bundle,
+      undefined,
+      undefined,
+      undefined,
+      NODE_LOCAL_CATALOG,
+    );
+    const router = new NamespaceGraphRouter(new Map([["langgraph", provider]]), {
+      debug: () => {},
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+    } as never);
+    const result = runInScope(scope, () =>
+      router.runGraph({
+        runId: "run-resolve",
+        graphId: graphId as `${string}:${string}`,
+        messages: [{ role: "user", content: "go" }],
+        modelRef: { providerKey: "platform", modelId: "m" },
+      }),
+    );
+    const events: AiEvent[] = [];
+    for await (const e of result.stream) events.push(e);
+    return { events, final: await result.final, built: captured.options.length };
+  }
+
+  it("runs langgraph:secret-probe (a graph runner is built, no not_found)", async () => {
+    const run = await resolve(`langgraph:${SECRET_PROBE_GRAPH_NAME}`);
+    expect(run.built).toBe(1);
+    expect(run.events.some((e) => e.type === "error")).toBe(false);
+    expect(run.final).toMatchObject({ ok: true });
+  });
+
+  it("still returns not_found for an unknown graph id", async () => {
+    const run = await resolve("langgraph:no-such-graph");
+    expect(run.built).toBe(0);
+    expect(run.events[0]).toEqual({ type: "error", error: "not_found" });
+    expect(run.final).toMatchObject({ ok: false, error: "not_found" });
+  });
+
+  it("is not listed by agent discovery", () => {
+    const ids = new LangGraphInProcAgentCatalogProvider().listAgents().map((a) => a.graphId);
+    expect(ids).not.toContain(`langgraph:${SECRET_PROBE_GRAPH_NAME}`);
+    expect(ids).toContain("langgraph:cogni");
   });
 });
