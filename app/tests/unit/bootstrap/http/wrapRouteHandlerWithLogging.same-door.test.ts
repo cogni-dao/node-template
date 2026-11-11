@@ -184,12 +184,49 @@ describe("the route door (real wrapper, real authorizeRoute)", () => {
     ]);
   });
 
-  it("a route with no sameDoor option is untouched (the door is opt-in per route)", async () => {
-    const res = await wrapRouteHandlerWithLogging(
-      { routeId: "plain", auth: { mode: "required", getSessionUser: async () => user("bearer") } },
-      handler
-    )(new NextRequest("https://node.example/api/v1/x", { method: "PATCH" }));
-    expect(res.status).toBe(200);
+  it("a route with no sameDoor option is untouched for a human and reads one row for a bearer", async () => {
+    const plain = (u: SessionUser) =>
+      wrapRouteHandlerWithLogging(
+        { routeId: "plain", auth: { mode: "required", getSessionUser: async () => u } },
+        handler
+      )(new NextRequest("https://node.example/api/v1/x", { method: "PATCH" }));
+    expect((await plain(user("session", "human-1"))).status).toBe(200);
     expect(state.queries).toBe(0);
+    expect((await plain(user("bearer"))).status).toBe(200);
+    expect(state.queries).toBe(1);
+  });
+
+  it("SERVICE_KEY_DENY_BY_DEFAULT: a service key is 403 on a route with no door (ai.chat), 200 on a knowledge.read door route while On, and an ordinary agent key still reaches ai.chat", async () => {
+    const chat = (u: SessionUser) =>
+      wrapRouteHandlerWithLogging(
+        { routeId: "ai.chat", auth: { mode: "required", getSessionUser: async () => u } },
+        handler
+      )(new NextRequest("https://node.example/api/v1/ai/chat", { method: "POST" }));
+    state.services.add(AGENT);
+    const refused = await chat(user("bearer"));
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toEqual({ error: "service_key_route_denied", code: "service_key_route_denied" });
+    expect(handler).not.toHaveBeenCalled();
+    // A door that is not knowledge.read does not open it either (deny by default).
+    state.roles.add(`${AGENT}|work_item:transition`);
+    expect((await call("core__work_item_update", user("bearer"))).status).toBe(403);
+    // The knowledge.read door route: 200 once its role row is On.
+    state.roles.add(`${AGENT}|knowledge:read`);
+    expect((await call("knowledge.read", user("bearer"))).status).toBe(200);
+    // An agent key without service_key and a human reach ai.chat as before.
+    expect((await chat(user("bearer", "other-agent"))).status).toBe(200);
+    expect((await chat(user("session", "human-1"))).status).toBe(200);
+    const denied = log.warn.mock.calls.map(([f]) => f as Record<string, unknown>).filter((f) => f.code === "service_key_route_denied");
+    expect(denied[0]).toEqual({ event: "agent.knowledge_read.denied", principal: AGENT, routeId: "ai.chat", code: "service_key_route_denied" });
+  });
+
+  it("the service-key gate is 503 on a store outage, never an allow", async () => {
+    state.down = true;
+    const res = await wrapRouteHandlerWithLogging(
+      { routeId: "ai.chat", auth: { mode: "required", getSessionUser: async () => user("bearer") } },
+      handler
+    )(new NextRequest("https://node.example/api/v1/ai/chat", { method: "POST" }));
+    expect(res.status).toBe(503);
+    expect(handler).not.toHaveBeenCalled();
   });
 });

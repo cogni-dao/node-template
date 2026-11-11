@@ -35,9 +35,9 @@ const NOT_STORE = {
   ops: "Node health/governance/telemetry; reads no knowledge-store content.",
 } as const;
 const WORK_ITEMS =
-  "Work-item plane: its own work.* authorization and ownership checks, not the knowledge notes this door covers. Reads the store, so a service key reaches it today; follow-up if services must be denied.";
+  "Work-item plane: its own work.* authorization and ownership checks, not the knowledge notes this door covers. Reads the store; service keys denied by default (the wrapper refuses a service_key principal on any route without the knowledge.read door).";
 
-/** GET routes that legitimately stay open. Key = path under `app/src/app/api`. `readsStore` = the cross-check found a store reader behind it. */
+/** GET routes that legitimately stay open to humans and existing agent keys (a service_key principal is refused on every one of them by the wrapper).  Key = path under `app/src/app/api`. `readsStore` = the cross-check found a store reader behind it. */
 const EXEMPT: Record<string, { reason: string; readsStore?: true }> = {
   "auth/[...nextauth]/route.ts": { reason: NOT_STORE.auth },
   "v1/auth/openai-codex/status/route.ts": { reason: NOT_STORE.auth },

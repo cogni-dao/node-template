@@ -55,6 +55,11 @@ export interface AgentAuthoritySql extends SqlTag {
   begin<T>(fn: (tx: SqlTag) => Promise<T>): Promise<T>;
 }
 
+/** The answer of the service-key gate: allow, or a deny with a stable code. */
+export type ServiceKeyGateDecision =
+  | { decision: "allow" }
+  | { decision: "deny"; code: "service_key_route_denied" | "authz_unavailable"; reason: string };
+
 export interface AgentToolAuthority {
   /** The seeded user id for a catalog principal slug, or null when no row exists (the run is then denied). */
   resolvePrincipal(slug: string): Promise<string | null>;
@@ -105,6 +110,12 @@ export interface AgentToolAuthority {
     userId: string;
     via: "bearer" | "session";
   }): Promise<AuthzDecision>;
+  /**
+   * SERVICE_KEY_DENY_BY_DEFAULT: the wrapper calls this for a bearer on every route that does not declare `sameDoor: "knowledge.read"`.
+   * A principal made by service enrollment (`service_key` set) is refused there (`service_key_route_denied`); any other bearer is allowed.
+   * A store that cannot answer is `authz_unavailable`, never an allow.
+   */
+  denyServiceKeyOffDoor(input: { routeId: string; userId: string }): Promise<ServiceKeyGateDecision>;
 }
 
 /** `requiresById` from the contracts the node already loads. */
@@ -264,6 +275,22 @@ export function createAgentToolAuthority(deps: {
       if (decision.decision === "deny" && routeOnly?.serviceKeyedOnly)
         deps.log.warn(
           { event: EVENT_NAMES.AGENT_KNOWLEDGE_READ_DENIED, principal: via === "bearer" ? userId : null, routeId, code: decision.code },
+          EVENT_NAMES.AGENT_KNOWLEDGE_READ_DENIED
+        );
+      return decision;
+    },
+    async denyServiceKeyOffDoor({ routeId, userId }) {
+      const decision: ServiceKeyGateDecision = await withStore(async (store): Promise<ServiceKeyGateDecision> => {
+        // A store that cannot tell is strict: refuse (it cannot be shown that the caller is not a service).
+        if (!store.isServicePrincipal)
+          return { decision: "deny", code: "service_key_route_denied", reason: "service_kind_unknown" };
+        return (await store.isServicePrincipal(userId))
+          ? { decision: "deny", code: "service_key_route_denied", reason: "route_has_no_knowledge_read_door" }
+          : { decision: "allow" };
+      }).catch((): ServiceKeyGateDecision => ({ decision: "deny", code: "authz_unavailable", reason: "store_unavailable" }));
+      if (decision.decision === "deny" && decision.code === "service_key_route_denied")
+        deps.log.warn(
+          { event: EVENT_NAMES.AGENT_KNOWLEDGE_READ_DENIED, principal: userId, routeId, code: decision.code },
           EVENT_NAMES.AGENT_KNOWLEDGE_READ_DENIED
         );
       return decision;
