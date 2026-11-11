@@ -113,6 +113,14 @@ export async function initOtelSdk(options?: {
   }
 }
 
+/** Fail explicitly: production Next catches rejected preparation without exiting. */
+function fatalStartup(error: unknown): never {
+  // biome-ignore lint/suspicious/noConsole: fatal startup may precede configured logging
+  console.error("[instrumentation] fatal startup failure:", error);
+  process.exit(1);
+  throw error;
+}
+
 /**
  * Next.js instrumentation hook - called once per Node.js process.
  * Awaits local preflight and mandatory tenant qualification before traffic admission.
@@ -124,37 +132,49 @@ export async function register(): Promise<void> {
     return;
   }
 
-  await initOtelSdk();
-
-  // Only local typed configuration refusals permit diagnostic HTTP startup.
-  const { localReadinessPreflight } = await import(
-    "./bootstrap/local-readiness-preflight"
-  );
-  const { EnvValidationError } = await import("./shared/env/server-env");
-  const { RuntimeSecretError } = await import("./shared/env/invariants");
-  let localConfigValid = true;
+  let qualification: Promise<void> | undefined;
   try {
-    localReadinessPreflight();
-  } catch (error) {
-    if (
-      !(
-        error instanceof EnvValidationError ||
-        error instanceof RuntimeSecretError
+    await initOtelSdk();
+
+    // Only errors from this synchronous local phase permit diagnostic startup.
+    const { localReadinessPreflight } = await import(
+      "./bootstrap/local-readiness-preflight"
+    );
+    const { EnvValidationError } = await import("./shared/env/server-env");
+    const { RuntimeSecretError } = await import("./shared/env/invariants");
+    let localConfigValid = true;
+    try {
+      localReadinessPreflight();
+    } catch (error) {
+      if (
+        !(
+          error instanceof EnvValidationError ||
+          error instanceof RuntimeSecretError
+        )
       )
-    )
-      throw error;
-    localConfigValid = false;
+        throw error;
+      localConfigValid = false;
+    }
+    if (localConfigValid) {
+      const { getContainer } = await import("./bootstrap/container");
+      const { startSystemTenantAssertionOnBoot } = await import(
+        "./bootstrap/startup-assertions"
+      );
+      qualification = startSystemTenantAssertionOnBoot(
+        getContainer().serviceAccountService,
+      );
+    }
+  } catch (error) {
+    fatalStartup(error);
   }
-  if (localConfigValid) {
-    const { getContainer } = await import("./bootstrap/container");
-    const { startSystemTenantAssertionOnBoot } = await import(
-      "./bootstrap/startup-assertions"
-    );
-    await startSystemTenantAssertionOnBoot(
-      getContainer().serviceAccountService,
-    );
+
+  // The qualification owner logs and exits on rejection; do not exit twice.
+  await qualification;
+  try {
+    logAppStarted();
+  } catch (error) {
+    fatalStartup(error);
   }
-  logAppStarted();
 
   // Dev mode (not test): warn if LiteLLM has stale test config from a previous session.
   // Keep this advisory check independent of mandatory qualification.

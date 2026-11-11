@@ -123,6 +123,56 @@ describe("readiness admission", () => {
     expect(() => localReadinessPreflight()).toThrow(EnvValidationError);
     expect(fetchFn).not.toHaveBeenCalled();
   });
+  it("reports invalid logging configuration through the real timed envelope", async () => {
+    vi.stubEnv("APP_ENV", "test");
+    vi.stubEnv("VITEST", "false");
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("PINO_LOG_LEVEL", "bogus");
+    vi.stubEnv("LITELLM_MASTER_KEY", "test-key");
+    vi.stubEnv(
+      "DATABASE_URL",
+      "postgresql://app_user:password@localhost:5432/db",
+    );
+    vi.stubEnv(
+      "DATABASE_SERVICE_URL",
+      "postgresql://app_service:password@localhost:5432/db",
+    );
+    vi.stubEnv("AUTH_SECRET", "a".repeat(32));
+    vi.stubEnv("SCHEDULER_API_TOKEN", "b".repeat(32));
+    vi.stubEnv("BILLING_INGEST_TOKEN", "c".repeat(32));
+    const { localReadinessPreflight } = await vi.importActual<
+      typeof import("@/bootstrap/local-readiness-preflight")
+    >("@/bootstrap/local-readiness-preflight");
+    mocks.preflight.mockImplementation(localReadinessPreflight);
+    const fetchFn = vi.fn<typeof fetch>(
+      async () => new Response(null, { status: 204 }),
+    );
+    const stream = createLokiPushStream({
+      env: { LOKI_PUSH_URL: "https://logs.invalid" },
+      fetchFn,
+    });
+    globalLoki.__cogniLokiPushInit = true;
+    globalLoki.__cogniLokiPushStream = stream;
+    const response = await GET(request());
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      reason: "INVALID_ENV",
+      details: { missing: [], invalid: ["PINO_LOG_LEVEL"] },
+    });
+    expect(mocks.getContainer).not.toHaveBeenCalled();
+    expect(fetchFn).not.toHaveBeenCalled();
+    stream?.flushNow();
+    const payload = JSON.parse(fetchFn.mock.calls[0]?.[1]?.body as string);
+    const complete = payload.streams[0].values
+      .map((entry: [string, string]) => JSON.parse(entry[1]))
+      .filter((entry: { msg?: string }) => entry.msg === "request complete");
+    expect(complete).toHaveLength(1);
+    expect(complete[0]).toMatchObject({
+      reqId: "ready-123",
+      status: 503,
+      durationMs: expect.any(Number),
+    });
+  });
   it("returns structured 503 for typed local refusal", async () => {
     mocks.preflight.mockImplementation(() => {
       throw new RuntimeSecretError("missing secret");
@@ -164,10 +214,36 @@ describe("readiness admission", () => {
     });
     await register();
     expect(mocks.getContainer).not.toHaveBeenCalled();
+    const exit = vi
+      .spyOn(process, "exit")
+      .mockImplementation((() => undefined) as never);
     mocks.preflight.mockImplementation(() => {
       throw new Error("repo invariant");
     });
     await expect(register()).rejects.toThrow("repo invariant");
+    expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+  });
+  it("exits and rejects when container construction fails", async () => {
+    vi.stubEnv("NEXT_RUNTIME", "nodejs");
+    const exit = vi
+      .spyOn(process, "exit")
+      .mockImplementation((() => undefined) as never);
+    mocks.getContainer.mockImplementation(() => {
+      throw new Error("container failed");
+    });
+    await expect(register()).rejects.toThrow("container failed");
+    expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+  });
+  it("does not classify typed container errors as local refusal", async () => {
+    vi.stubEnv("NEXT_RUNTIME", "nodejs");
+    const exit = vi
+      .spyOn(process, "exit")
+      .mockImplementation((() => undefined) as never);
+    mocks.getContainer.mockImplementation(() => {
+      throw new RuntimeSecretError("construction failure");
+    });
+    await expect(register()).rejects.toThrow("construction failure");
+    expect(exit).toHaveBeenCalledExactlyOnceWith(1);
   });
   it("native register rejects a failed remote qualification", async () => {
     vi.stubEnv("NEXT_RUNTIME", "nodejs");
@@ -179,7 +255,7 @@ describe("readiness admission", () => {
       .spyOn(process, "exit")
       .mockImplementation((() => undefined) as never);
     await expect(register()).rejects.toThrow("tenant unavailable");
-    expect(exit).toHaveBeenCalledWith(1);
+    expect(exit).toHaveBeenCalledExactlyOnceWith(1);
   });
   it("retains pending and rejected qualification when exit returns", async () => {
     let reject!: (error: Error) => void;
