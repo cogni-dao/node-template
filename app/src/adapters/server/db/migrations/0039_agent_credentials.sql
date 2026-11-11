@@ -1,6 +1,9 @@
--- IDEMPOTENT (task.0070): every statement below tolerates an existing object. A candidate DB held an agent_credentials table with no
--- 0039 ledger row (an earlier flight created it), so a plain CREATE TABLE failed the migrator ("already exists") and the pod never started.
-CREATE TABLE IF NOT EXISTS "agent_credentials" (
+-- 0039 owns agent_credentials. No database has a 0039 ledger row, so any agent_credentials table that already exists is a leaked draft
+-- from an unmerged candidate flight of this PR (it has a different column set and no ledger row). Drop it so this migration builds the
+-- table the same way on every database. CASCADE also removes the draft's dependent row-type function.
+-- Evidence: https://github.com/cogni-dao/node-template/pull/303#issuecomment-6787685388
+DROP TABLE IF EXISTS "agent_credentials" CASCADE;--> statement-breakpoint
+CREATE TABLE "agent_credentials" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"user_id" text NOT NULL,
 	"token_hash" text NOT NULL,
@@ -19,11 +22,11 @@ CREATE TABLE IF NOT EXISTS "agent_credentials" (
 );
 --> statement-breakpoint
 ALTER TABLE "agent_credentials" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
-DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'agent_credentials_user_id_users_id_fk') THEN ALTER TABLE "agent_credentials" ADD CONSTRAINT "agent_credentials_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action; END IF; END $$;--> statement-breakpoint
-DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'agent_credentials_predecessor_id_fk') THEN ALTER TABLE "agent_credentials" ADD CONSTRAINT "agent_credentials_predecessor_id_fk" FOREIGN KEY ("predecessor_id") REFERENCES "public"."agent_credentials"("id") ON DELETE no action ON UPDATE no action; END IF; END $$;--> statement-breakpoint
-CREATE UNIQUE INDEX IF NOT EXISTS "agent_credentials_token_hash_unique" ON "agent_credentials" USING btree ("token_hash");--> statement-breakpoint
-CREATE UNIQUE INDEX IF NOT EXISTS "agent_credentials_one_pending_successor" ON "agent_credentials" USING btree ("predecessor_id") WHERE "agent_credentials"."confirmed_at" IS NULL AND "agent_credentials"."revoked_at" IS NULL;--> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "agent_credentials_user_idx" ON "agent_credentials" USING btree ("user_id");
+ALTER TABLE "agent_credentials" ADD CONSTRAINT "agent_credentials_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "agent_credentials" ADD CONSTRAINT "agent_credentials_predecessor_id_fk" FOREIGN KEY ("predecessor_id") REFERENCES "public"."agent_credentials"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+CREATE UNIQUE INDEX "agent_credentials_token_hash_unique" ON "agent_credentials" USING btree ("token_hash");--> statement-breakpoint
+CREATE UNIQUE INDEX "agent_credentials_one_pending_successor" ON "agent_credentials" USING btree ("predecessor_id") WHERE "agent_credentials"."confirmed_at" IS NULL AND "agent_credentials"."revoked_at" IS NULL;--> statement-breakpoint
+CREATE INDEX "agent_credentials_user_idx" ON "agent_credentials" USING btree ("user_id");
 --> statement-breakpoint
 -- Hand-written below: FORCE RLS, a function and a trigger are outside Drizzle's DDL scope (same as 0027 / 0031 / 0036).
 -- agent_credentials has NO policy: ENABLE + FORCE = deny-all for the app role. Only the BYPASSRLS service role reads or writes it.
