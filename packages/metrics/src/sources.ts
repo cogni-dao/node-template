@@ -25,14 +25,17 @@ import {
 
 export async function readWorkCount(
 	sql: Sql,
-	mode: "open" | "validated",
+	mode: "open" | "validated" | "untriaged",
 	signal: AbortSignal,
 ): Promise<MetricSample> {
 	signal.throwIfAborted();
+	// untriaged: waiting for triage, or open with no scores yet (task.0085).
 	const where =
 		mode === "open"
 			? "status NOT IN ('done','cancelled')"
-			: "status = 'done' AND deploy_verified = true";
+			: mode === "untriaged"
+				? "(status = 'needs_triage' OR (status NOT IN ('done','cancelled') AND scores IS NULL))"
+				: "status = 'done' AND deploy_verified = true";
 	const query = sql.unsafe(
 		`SELECT NOW() AS as_of, (SELECT COUNT(*) FROM work_items WHERE ${where} AND (labels IS NULL OR (CAST(labels AS TEXT) NOT LIKE '%"test-fixture"%' AND CAST(labels AS TEXT) NOT LIKE '%"synthetic"%' AND CAST(labels AS TEXT) NOT LIKE '%"synthetic-fixture"%'))) AS value`,
 	);

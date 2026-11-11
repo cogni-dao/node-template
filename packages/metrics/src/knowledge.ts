@@ -118,7 +118,9 @@ export function createGoalMetrics(deps: {
 		maxRows: 1,
 		maxResponseBytes: 65536,
 	};
-	const countParams = z.strictObject({ mode: z.enum(["open", "validated"]) });
+	const countParams = z.strictObject({
+		mode: z.enum(["open", "validated", "untriaged"]),
+	});
 	registry.register({
 		id: "work.count@1",
 		unit: "items",
