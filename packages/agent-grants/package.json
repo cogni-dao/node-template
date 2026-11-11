@@ -30,6 +30,11 @@
       "import": "./dist/enrollment.js",
       "default": "./dist/enrollment.js"
     },
+    "./enrollment-client": {
+      "types": "./dist/enrollment/client/index.d.ts",
+      "import": "./dist/enrollment-client.js",
+      "default": "./dist/enrollment-client.js"
+    },
     "./enrollment-conformance": {
       "types": "./dist/enrollment/conformance.d.ts",
       "import": "./dist/enrollment-conformance.js",
