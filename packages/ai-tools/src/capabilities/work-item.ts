@@ -113,8 +113,10 @@ export interface WorkItemCapability {
   patch(input: {
     id: string;
     expectedRevision?: number;
-    /** One-line change reason; stored in history, never in the item (task.0052). */
-    reason?: string;
+    /** Why this change happens (task.0086): required; one line, at most 25 words and 240 characters; stored in history, never in the item. */
+    reason: string;
+    /** Hub atoms this change used (at most 8); the store pins each to a commit in history. */
+    cites?: WorkItemPatchInput["cites"];
     /** The PATCH route's `set` (core__work_item_update); the store enforces what it may change. */
     set: WorkItemPatchInput["set"];
   }): Promise<WorkItemInfo>;

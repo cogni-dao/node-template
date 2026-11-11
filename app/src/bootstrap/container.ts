@@ -58,6 +58,7 @@ import {
 } from "@cogni/knowledge-store";
 import {
 	buildDoltgresClient,
+	createDoltgresEntryResolver,
 	createDoltgresPusher,
 	DoltBranchSessionRunner,
 	DoltgresEdoResolverAdapter,
@@ -795,6 +796,9 @@ function createContainer(): Container {
 				readClient: createWorkItemsReadClient(),
 				recreateReadClient: createWorkItemsReadClient,
 				readConnectionBudget: 2,
+				// task.0086: pins a patch's cites to commits with lock-free reads on the
+				// knowledge pool, never on the writer connection that holds the lock.
+				entryResolver: createDoltgresEntryResolver(doltClient),
 			}),
 			new PostgresWorkItemLeaseAdapter(serviceDb.$client, { logger: log })
 		);

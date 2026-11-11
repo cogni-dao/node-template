@@ -59,7 +59,12 @@ function exhaustedGraph(write: boolean): CreateGraphFn {
     invoke: async () => {
       if (write)
         await opts.tools[0]?.invoke(
-          { id: "task.1", expectedRevision: 7, set: { status: "needs_design" } },
+          {
+            id: "task.1",
+            expectedRevision: 7,
+            reason: "test change",
+            set: { status: "needs_design" },
+          },
           { configurable: { toolIds: [workItemUpdateContract.name] } },
         );
       throw new GraphRecursionError("Recursion limit of 100 reached");

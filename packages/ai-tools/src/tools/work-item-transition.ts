@@ -11,6 +11,7 @@
  *   - STORE_AUTHORITY: the node's existing capability and store authorize writes; this tool adds no authority.
  *   - NO_ONEOF_IN_SCHEMA: Uses flat z.object per tool-use.md #10
  *   - TRANSITION_TABLE_ENFORCED: Capability validates transitions via development-lifecycle.md
+ *   - PATCH_REASON_REQUIRED (task.0086): a `patch` action without a valid reason fails before the capability; the store enforces it again.
  *   - PATCH_CAS_OPTIONAL: patch `expectedRevision` is compare-and-set; absent ⇒ unconditioned patch (unchanged)
  *   - CONFLICT_IS_A_RESULT: a lost compare-and-set returns `{success:false, code:"revision_conflict",
  *     currentRevision}` instead of throwing, so a graph can skip the row and retry next cycle
@@ -22,6 +23,7 @@
  * @public
  */
 
+import { checkChangeReason } from "@cogni-dao/work-items";
 import { z } from "zod";
 
 import {
@@ -70,7 +72,7 @@ export const WorkItemTransitionInputSchema = z
       .string()
       .optional()
       .describe(
-        "Why this change happens, one line. For 'patch' it is stored in the item's history (never in the item); for 'transition' it is the audit reason."
+        "Why this change happens, one line. Required for 'patch' (at most 25 words): it is stored in the item's history, never in the item. For 'transition' it is the optional audit reason."
       ),
     priority: z
       .number()
@@ -123,14 +125,14 @@ export const WorkItemTransitionInputSchema = z
       ),
   })
   .superRefine((input, ctx) => {
-    if (input.action === "patch" && input.reason !== undefined) {
-      // Same rule the store applies to a patch reason: one line, 1-512 chars (task.0052).
-      const n = input.reason.replace(/[\r\n]+/g, " ").trim().length;
-      if (n < 1 || n > 512)
+    if (input.action === "patch") {
+      // The rule the store applies to every patch reason: required, one line, 1-240 chars, at most 25 words (task.0086).
+      const checked = checkChangeReason(input.reason);
+      if (!checked.ok)
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["reason"],
-          message: "reason must be 1-512 characters on one line",
+          message: checked.message,
         });
     }
     if (input.scores === undefined) return;
@@ -196,7 +198,7 @@ export const workItemTransitionContract: ToolContract<
     "DEPRECATED: use core__work_item_update, which mirrors PATCH /api/v1/work/items/{id} one to one. " +
     "Modify a work item. Actions: " +
     "'transition' (requires id + toStatus, optional reason) changes the item's lifecycle status, " +
-    "'patch' (requires id, optional priority/rank/labels/summary/scores, optional expectedRevision for compare-and-set) updates metadata fields. " +
+    "'patch' (requires id and a reason that says why, optional priority/rank/labels/summary/scores, optional expectedRevision for compare-and-set) updates metadata fields. " +
     "Use core__work_item_query first to find items and check their current status.",
   effect: "state_change",
   requires: {
@@ -242,7 +244,8 @@ export function createWorkItemTransitionImplementation(
     execute: async (
       input: WorkItemTransitionInput
     ): Promise<WorkItemTransitionOutput> => {
-      if (input.scores !== undefined)
+      // A patch needs a valid reason and a scores patch its other rules; the store is the one enforcer.
+      if (input.action === "patch" || input.scores !== undefined)
         WorkItemTransitionInputSchema.parse(input);
       switch (input.action) {
         case "transition": {
@@ -295,7 +298,7 @@ export function createWorkItemTransitionImplementation(
               ...(input.expectedRevision !== undefined && {
                 expectedRevision: input.expectedRevision,
               }),
-              ...(input.reason !== undefined && { reason: input.reason }),
+              reason: input.reason as string,
               set: setFields,
             });
           } catch (e) {

@@ -90,6 +90,7 @@ const scores = (v: number, ev?: string) => ({
 const update = (id: string, set: Record<string, unknown>, extra = {}) => ({
   id,
   expectedRevision: 7,
+  reason: "triage this item",
   set,
   ...extra,
 });
@@ -132,6 +133,7 @@ describe("work-prioritizer binds core__work_item_update behind the guard", () =>
       await a.call({
         id: "task.1",
         expectedRevision: 8,
+        reason: "rescore",
         set: { scores: scores(2) },
       }),
     ).toContain('"revision"');
@@ -143,9 +145,6 @@ describe("work-prioritizer binds core__work_item_update behind the guard", () =>
     expect(
       await a.call(update("task.1", { status: "needs_implement" })),
     ).toContain('"revision"');
-    expect(
-      await a.call(update("task.2", { status: "cancelled" })),
-    ).toContain("cancel_needs_reason");
     expect(
       await a.call(
         update("task.2", { status: "cancelled" }, { reason: "Superseded by task.9" }),
@@ -291,24 +290,29 @@ describe("no read-failure latch", () => {
 });
 
 describe("audit reason, route source and uncertain writes", () => {
-  it("fills a one-line reason when none is sent; keeps the model's own", async () => {
+  it("refuses a write with no reason, and never writes one for the model (task.0086)", async () => {
     const a = setup();
-    a.read(item("task.1", { scores: { agent: { v: 5 } } }));
+    a.read(item("task.1"));
+    // The tool schema stops a missing reason first; the guard's own check covers a direct call.
+    const direct = (input: Record<string, unknown>) =>
+      (a.guard as unknown as { func: (i: unknown) => Promise<string> }).func(input);
+    for (const reason of [undefined, "", "  "]) {
+      const input = update("task.1", { status: "needs_design" });
+      expect(await direct({ ...input, reason })).toContain("reason_required");
+    }
+    await expect(
+      a.call({ id: "task.1", expectedRevision: 7, set: { status: "needs_design" } }),
+    ).rejects.toThrow(/reason is required/);
+    expect(a.writes).toHaveLength(0);
+  });
+
+  it("sends the model's own reason to the writer unchanged", async () => {
+    const a = setup();
     a.read(item("task.2"));
-    await a.call(
-      update("task.1", {
-        status: "needs_design",
-        labels: ["goal:delivery"],
-        scores: { ...scores(3), agent: { v: 1 } },
-      }),
-    );
-    expect(a.writes[0]?.reason).toBe(
-      "triage: status needs_triage→needs_design; scores agent 5→1, goal 0→3, time 0→2, unblocks 0→2, ease 0→3, confidence 0→3; +goal:delivery",
-    );
     await a.call(
       update("task.2", { scores: scores(3) }, { reason: "model reason" }),
     );
-    expect(a.writes[1]?.reason).toBe("model reason");
+    expect(a.writes[0]?.reason).toBe("model reason");
   });
 
   it("routes only from needs_triage, needs_research, needs_design and needs_implement", async () => {

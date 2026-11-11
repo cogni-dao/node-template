@@ -9,7 +9,10 @@
  * @internal
  */
 
-import { WorkItemPatchInputSchema } from "@cogni-dao/work-items";
+import {
+  CHANGE_REASON_REQUIRED_MESSAGE,
+  WorkItemPatchInputSchema,
+} from "@cogni-dao/work-items";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -74,6 +77,31 @@ describe("core__work_item_update", () => {
     expect(out).not.toHaveProperty("success");
   });
 
+  it("forwards cites unchanged and omits them when absent", async () => {
+    const patch = vi.fn().mockResolvedValue(PATCHED);
+    const impl = createWorkItemUpdateImplementation({
+      workItemCapability: capability(patch),
+    });
+    const cites = [{ id: "change-history-design" }, { id: "other-atom", contribution: "contrib-x-1" }];
+    await impl.execute({ id: "task.5001", reason: "r", cites, set: { rank: 1 } }, {} as never);
+    expect(patch).toHaveBeenLastCalledWith({ id: "task.5001", reason: "r", cites, set: { rank: 1 } });
+    await impl.execute({ id: "task.5001", reason: "r", set: { rank: 1 } }, {} as never);
+    expect(patch).toHaveBeenLastCalledWith({ id: "task.5001", reason: "r", set: { rank: 1 } });
+  });
+
+  it("the input schema requires a reason with the message the 400 uses, and bounds cites", () => {
+    const parse = (extra: Record<string, unknown>) =>
+      workItemUpdateContract.inputSchema.safeParse({ id: "task.1", set: { rank: 1 }, ...extra });
+    const missing = parse({});
+    expect(missing.success).toBe(false);
+    expect(missing.success ? [] : missing.error.issues).toEqual([
+      expect.objectContaining({ path: ["reason"], message: CHANGE_REASON_REQUIRED_MESSAGE }),
+    ]);
+    expect(parse({ reason: "r", cites: [{ id: "a" }] }).success).toBe(true);
+    expect(parse({ reason: "r", cites: Array.from({ length: 9 }, (_, i) => ({ id: `a${i}` })) }).success).toBe(false);
+    expect(workItemUpdateContract.description).toContain(CHANGE_REASON_REQUIRED_MESSAGE);
+  });
+
   it("returns a lost compare-and-set as a result, not a throw", async () => {
     const impl = createWorkItemUpdateImplementation({
       workItemCapability: capability(
@@ -81,7 +109,7 @@ describe("core__work_item_update", () => {
       ),
     });
     const out = await impl.execute(
-      { id: "task.5001", expectedRevision: 8, set: { rank: 1 } },
+      { id: "task.5001", expectedRevision: 8, reason: "r", set: { rank: 1 } },
       {} as never,
     );
     expect(out).toMatchObject({
@@ -96,7 +124,7 @@ describe("core__work_item_update", () => {
       workItemCapability: capability(vi.fn().mockRejectedValue(new Error("boom"))),
     });
     await expect(
-      impl.execute({ id: "task.1", set: { rank: 1 } }, {} as never),
+      impl.execute({ id: "task.1", reason: "r", set: { rank: 1 } }, {} as never),
     ).rejects.toThrow("boom");
   });
 });

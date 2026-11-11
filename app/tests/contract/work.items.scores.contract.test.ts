@@ -84,7 +84,7 @@ describe("scores on create and patch", () => {
 
   it("patch accepts scores and scores:null (clears the column)", () => {
     const patch = (set: unknown) =>
-      workItemsPatchOperation.input.safeParse({ id: "task.0001", set });
+      workItemsPatchOperation.input.safeParse({ id: "task.0001", reason: "r", set });
     expect(patch({ scores }).success).toBe(true);
     const cleared = patch({ scores: null });
     expect(cleared.success).toBe(true);

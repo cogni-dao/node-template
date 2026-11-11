@@ -12,6 +12,7 @@
  *   - STORE_AUTHORITY: the node's capability and store authorize and validate the write; this tool adds no authority.
  *   - OUTPUT_IS_THE_ROUTE_DTO: success returns `WorkItemDtoSchema`, the route's `workItemsPatchOperation.output`, with no field dropped
  *     and no bound: the write has already landed (agent-tool-context-envelope rules 1 and 4).
+ *   - REASON_REQUIRED (task.0086): `reason` is required by the shared schema, so the tool fails without one and nothing is written; `cites` is forwarded unchanged and the store pins it.
  *   - CONFLICT_IS_A_RESULT: a lost compare-and-set returns `{success:false, code:"revision_conflict", currentRevision}`
  *     (the route answers 409 with the same facts), so a graph can re-read and retry.
  * Side-effects: IO (mutates a work item via capability)
@@ -20,6 +21,7 @@
  */
 
 import {
+  CHANGE_REASON_REQUIRED_MESSAGE,
   type WorkItemPatchInput,
   WorkItemDtoSchema,
   WorkItemPatchInputSchema,
@@ -60,10 +62,12 @@ export const workItemUpdateContract: ToolContract<
   name: WORK_ITEM_UPDATE_NAME,
   description:
     "Update a work item: the same operation as PATCH /api/v1/work/items/{id}; it returns the updated item. " +
-    "Input { id, expectedRevision?, reason?, set }. `set` holds the fields to change (status, scores, labels, ...); " +
+    "Input { id, expectedRevision?, reason, cites?, set }. `set` holds the fields to change (status, scores, labels, ...); " +
     "`scores` replaces the whole object. With expectedRevision the write lands only if the item is still at that " +
     "revision; otherwise nothing is written and the result is success=false, code='revision_conflict'. " +
-    "`reason` is one line stored in the item's history. Read the item first with core__work_item_read.",
+    `${CHANGE_REASON_REQUIRED_MESSAGE}. Keep it to 25 words; never put the reason in summary or outcome. ` +
+    "`cites` (optional, at most 8) lists hub atoms you read for this decision, each as { id } or { id, contribution }; each is pinned to its commit in history; an unknown id fails the write. " +
+    "Read the item first with core__work_item_read.",
   effect: "state_change",
   requires: {
     scope: "work_item:transition",
@@ -100,7 +104,8 @@ export function createWorkItemUpdateImplementation(
           ...(input.expectedRevision !== undefined && {
             expectedRevision: input.expectedRevision,
           }),
-          ...(input.reason !== undefined && { reason: input.reason }),
+          reason: input.reason,
+          ...(input.cites !== undefined && { cites: input.cites }),
           set: input.set,
         });
         return WorkItemUpdateSuccessSchema.parse(updated);

@@ -10,7 +10,8 @@
  *   - All consumers use z.infer types
  *   - PATCH_ALLOWLIST: only fields in `set` are mutable. id/created_at/updated_at are server-managed.
  *   - Optional expectedRevision enables compare-and-set; omission preserves unconditional patches.
- *   - Optional reason is one line (CR/LF become spaces), 1-512 chars, stored in Dolt history, never in the item (task.0052).
+ *   - REASON_REQUIRED (task.0086): `reason` is required: one line (line breaks become spaces), 1-240 chars, at most 25 words, stored in Dolt history, never in the item (task.0052).
+ *   - Optional `cites` (at most 8 hub atoms) are pinned to commits in history; an unknown id is a 400.
  *   - No transition state-machine — whoever holds a valid token is trusted.
  * Side-effects: none
  * Links: /api/v1/work/items/[id] route, docs/spec/work-items-port.md, work/items/task.0423.doltgres-work-items-source-of-truth.md
@@ -26,7 +27,7 @@ export const workItemsPatchOperation = {
   id: "work.items.patch.v1",
   summary: "Patch a work item",
   description:
-    "Updates whitelisted fields on a work item. Optional expectedRevision makes the patch compare-and-set; a stale revision returns 409 without writing. Optional reason (one line, 1-512 chars) says why; it is stored in history (GET /work/items/{id}/history), not in the item.",
+    "Updates whitelisted fields on a work item. Optional expectedRevision makes the patch compare-and-set; a stale revision returns 409 without writing. Required reason (one line, at most 25 words and 240 chars) says why; a PATCH without it is a 400. It is stored in history (GET /work/items/{id}/history), not in the item. Optional cites (at most 8, each { id } or { id, contribution }) name hub atoms you read; each is pinned to its commit in history, and an unknown id is a 400.",
   // One schema for the route and the agent tool (core__work_item_update); it lives in @cogni-dao/work-items.
   input: WorkItemPatchInputSchema,
   output: WorkItemDtoSchema,

@@ -10,8 +10,8 @@
  *   - a score of 4-5 cites a source read this run, never the item's own page;
  *   - at most MAX_CHANGED_ITEMS_PER_RUN distinct items change per run;
  *   - labels keep every existing label and add only a listed goal;
- *   - status routes from needs_triage/research/design/implement to research, design, implement or cancelled; a cancel states its reason;
- *   - a write with no `reason` gets a one-line reason from the guard (task.0052);
+ *   - status routes from needs_triage/research/design/implement to research, design, implement or cancelled;
+ *   - a write with no `reason` is refused (`reason_required`); the guard never writes a reason for the model (task.0086);
  *   - a write that changes nothing writes nothing (a repeat run is quiet).
  * A failed read records nothing; it never blocks a write to a different item.
  */
@@ -117,8 +117,6 @@ export function createTriageGuard(
           "route_not_allowed",
           "route to needs_research, needs_design, needs_implement or cancelled only",
         );
-      if (set.status === "cancelled" && !input.reason?.trim())
-        return reject("cancel_needs_reason", "state why in reason");
     }
     if (set.labels !== undefined) {
       const allowed = goalLabels();
@@ -130,6 +128,11 @@ export function createTriageGuard(
           "keep every existing label; add only goal:<id> of a listed goal",
         );
     }
+    if (!input.reason?.trim())
+      return reject(
+        "reason_required",
+        "state why in reason: one line that says why this change happens",
+      );
     for (const [axis, score] of Object.entries(set.scores ?? {})) {
       const stored = item.scores?.[axis];
       if (score.v < EVIDENCE_FROM) continue;
@@ -154,23 +157,6 @@ export function createTriageGuard(
         );
     }
     return undefined;
-  }
-
-  /** One-line audit reason for a write the model sent without one (task.0052). */
-  function autoReason(input: WorkItemUpdateInput, item: ObservedItem) {
-    const { set } = input;
-    const parts: string[] = [];
-    if (set.status !== undefined && set.status !== item.status)
-      parts.push(`status ${item.status}→${set.status}`);
-    const moved = Object.entries(set.scores ?? {})
-      .filter(([axis, score]) => (item.scores?.[axis]?.v ?? 0) !== score.v)
-      .map(
-        ([axis, score]) => `${axis} ${item.scores?.[axis]?.v ?? 0}→${score.v}`,
-      );
-    if (moved.length) parts.push(`scores ${moved.join(", ")}`);
-    const added = (set.labels ?? []).filter((l) => !item.labels.includes(l));
-    if (added.length) parts.push(added.map((l) => `+${l}`).join(" "));
-    return `triage: ${parts.join("; ") || "update"}`.slice(0, 512);
   }
 
   /** True when the call would leave the item as it is. */
@@ -230,10 +216,7 @@ export function createTriageGuard(
 
     pending.add(item.id);
     try {
-      const sent = input.reason?.trim()
-        ? input
-        : { ...input, reason: autoReason(input, item) };
-      const result = await writer.invoke(sent, config);
+      const result = await writer.invoke(input, config);
       const text =
         typeof result === "string" ? result : JSON.stringify(result);
       // Success is the item the PATCH route returns; a failure is { success:false } or { error }.

@@ -12,6 +12,8 @@
  *     goes through the Doltgres `patch` attributed to `backlogWriter.principalId`; the store's own
  *     authority applies unchanged. A principal callback resolves the authenticated run actor at invocation
  *     time, never at singleton construction. Without it, `patch` stays on the markdown ports.
+ *   - PATCH_REASON_AND_CITES (task.0086): the required `reason` and the optional `cites` are forwarded to the Doltgres store, the one enforcer;
+ *     the markdown fallback (development only) has no history and ignores both, though the tool schema still requires a reason.
  *   - PATCH_CAS_PASSTHROUGH: a caller `expectedRevision` is forwarded as the Doltgres store's
  *     compare-and-set (absent => that store's unconditioned patch); its `WorkItemRevisionConflictError`
  *     becomes the ai-tools `WorkItemPatchConflictError`, nothing written. The markdown ports CAS on the
@@ -170,7 +172,8 @@ export function createWorkItemCapability(
               ...(input.expectedRevision !== undefined && {
                 expectedRevision: input.expectedRevision,
               }),
-              ...(input.reason !== undefined && { reason: input.reason }),
+              reason: input.reason,
+              ...(input.cites !== undefined && { cites: input.cites }),
               set: definedOnly(input.set) as Parameters<
                 typeof writer.store.patch
               >[0]["set"],

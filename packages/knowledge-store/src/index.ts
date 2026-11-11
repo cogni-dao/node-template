@@ -238,6 +238,14 @@ export type {
 } from "./domain/history-read.js";
 export { readKnowledgeHistory } from "./domain/history-read.js";
 export { createEdoCapability } from "./edo-capability.js";
+// Entry resolver (task.0086): the shape of the work-items `EntryResolver` port; implemented by the Doltgres adapter entry
+export type {
+  EntryCiteRef,
+  EntryResolver,
+  EntryResolverRule,
+  ResolvedEntry,
+} from "./port/entry-resolver.port.js";
+export { EntryUnresolvedError } from "./port/entry-resolver.port.js";
 export {
   ContributionConflictError,
   ContributionForbiddenError,

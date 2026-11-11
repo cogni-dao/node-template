@@ -13,12 +13,30 @@
 
 export type { WorkItemsContentPort, WorkItemsPort } from "./content.js";
 export type {
+  HistoryCite,
   HistoryDiffRow,
   HistoryEntry,
   HistoryFieldDiff,
   ShapeHistoryOptions
 } from "./history.js";
 export type { HistoryOutput } from "./history-contract.js";
+export type {
+  CiteRef,
+  EntryResolver,
+  EntryResolverRule,
+  ResolvedEntry
+} from "./cites.js";
+export {
+  CITE_COMMIT_PATTERN,
+  CITE_CONTRIBUTION_PATTERN,
+  CITE_ID_PATTERN,
+  CITE_MAX,
+  CitesInvalidError,
+  CitesUnsupportedError,
+  citeIssues,
+  EntryResolverUnavailableError,
+  EntryUnresolvedError
+} from "./cites.js";
 export {
   ChangeReasonSchema,
   HistoryEntrySchema,
@@ -27,6 +45,7 @@ export {
 } from "./history-contract.js";
 export type { WorkItemPatchInput } from "./patch-contract.js";
 export {
+  CiteRefSchema,
   WorkItemPatchInputSchema,
   WorkItemPatchStatusSchema,
   WorkItemScoresInputSchema
@@ -39,10 +58,15 @@ export type {
 export { readWorkItemHistory } from "./history-read.js";
 export {
   CHANGE_REASON_MAX_CHARS,
+  CHANGE_REASON_MAX_WORDS,
+  CHANGE_REASON_REQUIRED_MESSAGE,
   ChangeReasonInvalidError,
+  checkChangeReason,
+  formatCitesTrailer,
   HISTORY_MAX_VERSIONS,
   HISTORY_READ_ROWS,
   normalizeChangeReason,
+  parseCitesTrailer,
   parseWorkItemCommitMessage,
   shapeHistory
 } from "./history.js";
