@@ -19,6 +19,8 @@ export type {
   CheckInfo,
   CiStatusResult,
   ClockCapability,
+  CommitCompareResult,
+  CommitCompareStatus,
   CreateBranchResult,
   DecideParams,
   DispatchCandidateFlightResult,
@@ -39,6 +41,7 @@ export type {
   MetricsCapability,
   MetricTemplate,
   MetricWindow,
+  PrFacts,
   PrSummary,
   RecordOutcomeParams,
   RecordOutcomeResult,
@@ -302,6 +305,19 @@ export {
   vcsCreateBranchStubImplementation,
 } from "./tools/vcs-create-branch";
 export {
+  createVcsCommitContainsImplementation,
+  VCS_COMMIT_CONTAINS_NAME,
+  type VcsCommitContainsDeps,
+  type VcsCommitContainsInput,
+  VcsCommitContainsInputSchema,
+  type VcsCommitContainsOutput,
+  VcsCommitContainsOutputSchema,
+  type VcsCommitContainsRedacted,
+  vcsCommitContainsBoundTool,
+  vcsCommitContainsContract,
+  vcsCommitContainsStubImplementation,
+} from "./tools/vcs-commit-contains";
+export {
   createVcsFlightCandidateImplementation,
   VCS_FLIGHT_CANDIDATE_NAME,
   type VcsFlightCandidateDeps,
@@ -340,6 +356,19 @@ export {
   vcsListPrsContract,
   vcsListPrsStubImplementation,
 } from "./tools/vcs-list-prs";
+export {
+  createVcsPrReadImplementation,
+  VCS_PR_READ_NAME,
+  type VcsPrReadDeps,
+  type VcsPrReadInput,
+  VcsPrReadInputSchema,
+  type VcsPrReadOutput,
+  VcsPrReadOutputSchema,
+  type VcsPrReadRedacted,
+  vcsPrReadBoundTool,
+  vcsPrReadContract,
+  vcsPrReadStubImplementation,
+} from "./tools/vcs-pr-read";
 export {
   createVcsMergePrImplementation,
   VCS_MERGE_PR_NAME,

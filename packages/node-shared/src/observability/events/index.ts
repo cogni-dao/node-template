@@ -57,6 +57,8 @@ export const EVENT_NAMES = {
 	HUMAN_PLANE_REFUSED: "human_plane.refused",
 	/** One structured summary per mission-loop cycle on the work-prioritizer slot (story.5108; CatalogEntry.report). */
 	AI_WORK_PRIORITIZER_CYCLE: "ai.work_prioritizer.cycle",
+	/** One structured summary per work-closeout run (story.0035; CatalogEntry.report): changedItemIds, changeCount, refusedCount, toolErrorCount, aborted. */
+	AI_WORK_CLOSEOUT_CYCLE: "ai.work_closeout.cycle",
 	/** One structured summary per scheduled DECIDE tick (task.5377; CatalogEntry.report): scoresWritten, writeAttempts, skipped(reason), revisionConflicts, guardRejected. */
 	AI_COGNI_DECIDE_CYCLE: "ai.cogni_decide.cycle",
 	AI_CHAT_RECEIVED: "ai.chat_received",

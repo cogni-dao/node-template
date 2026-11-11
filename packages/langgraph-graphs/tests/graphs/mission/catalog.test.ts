@@ -3,11 +3,10 @@
 
 /**
  * Module: `@cogni/langgraph-graphs/tests/graphs/mission/catalog`
- * Purpose: Validate the published node catalog (cogni + work-prioritizer) and the createMissionGraph factory.
+ * Purpose: Validate the published node catalog and the createMissionGraph factory.
  * Scope: Catalog structure + factory validation. Does NOT invoke graphs with LLM.
  * Invariants:
  *   - CATALOG_SINGLE_SOURCE_OF_TRUTH: entries exist in catalog
- *   - PUBLISH_ONLY_CORE_GRAPHS: exactly `cogni` and `work-prioritizer` are published
  *   - FACTORY_SEAM: createMissionGraph requires systemPrompt
  * Side-effects: none
  * Links: catalog.ts, story.0028
@@ -26,31 +25,26 @@ import { COGNI_DECIDE_TOOL_IDS } from "../../../src/graphs/mission/cogni-decide"
 import { createMissionGraph } from "../../../src/graphs/mission/graph";
 
 describe("published node catalog", () => {
-  it("publishes exactly cogni and work-prioritizer with unique display names", () => {
-    expect(Object.keys(NODE_LANGGRAPH_CATALOG).sort()).toEqual([
-      "cogni",
-      "work-prioritizer",
-    ]);
+  it("gives every entry a unique display name and its namespaced graph id", () => {
     const names = Object.values(NODE_LANGGRAPH_CATALOG).map(
       (entry) => entry.displayName,
     );
-    expect(names.sort()).toEqual(["Cogni", "Work Prioritizer"]);
     expect(new Set(names).size).toBe(names.length);
-    expect(Object.keys(LANGGRAPH_GRAPH_IDS).sort()).toEqual([
-      "cogni",
-      "work-prioritizer",
-    ]);
+    for (const key of Object.keys(NODE_LANGGRAPH_CATALOG))
+      expect(LANGGRAPH_GRAPH_IDS[key as keyof typeof LANGGRAPH_GRAPH_IDS]).toBe(
+        `langgraph:${key}`,
+      );
   });
 
   it("defaults to cogni", () => {
     expect(DEFAULT_LANGGRAPH_GRAPH_ID).toBe("langgraph:cogni");
   });
 
-  it("cogni's catalog prompt lists only the published workflows", () => {
+  it("cogni's catalog prompt lists every catalog workflow", () => {
     const prompt = NODE_LANGGRAPH_CATALOG.cogni.systemPrompt;
-    expect(prompt).toContain('"id":"langgraph:cogni"');
-    expect(prompt).toContain('"id":"langgraph:work-prioritizer"');
-    expect(prompt.match(/"id":"langgraph:/g)).toHaveLength(2);
+    const keys = Object.keys(NODE_LANGGRAPH_CATALOG);
+    for (const key of keys) expect(prompt).toContain(`"id":"langgraph:${key}"`);
+    expect(prompt.match(/"id":"langgraph:/g)).toHaveLength(keys.length);
   });
 
   it("work-prioritizer (mission loop) runs on every node, bound to the common Cogni factory (reads + triage writer)", () => {

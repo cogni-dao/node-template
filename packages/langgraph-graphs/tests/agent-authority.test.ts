@@ -48,6 +48,15 @@ describe("catalog principals (N4)", () => {
     expect(ids).not.toContain("core__work_item_transition");
   });
 
+  it("gives work-closeout the guarded update writer and PR reads, as the prioritizer principal", () => {
+    const entry = LANGGRAPH_CATALOG["work-closeout"];
+    expect(entry?.principal).toBe(PRIORITIZER_PRINCIPAL);
+    expect(entry?.toolIds).toContain("core__work_item_update");
+    expect(entry?.toolIds).toContain("core__vcs_pr_read");
+    expect(entry?.toolIds).toContain("core__vcs_commit_contains");
+    expect(entry?.toolIds).not.toContain("core__vcs_merge_pr");
+  });
+
   it("gives cogni no domain writer: its only write tool arranges schedules", () => {
     const ids = LANGGRAPH_CATALOG.cogni?.toolIds ?? [];
     expect(ids).toContain("core__schedule_manage");
@@ -57,12 +66,10 @@ describe("catalog principals (N4)", () => {
     expect(ids).not.toContain("core__knowledge_write");
   });
 
-  it("keeps principals limited to the named graphs", () => {
-    const named = Object.entries(LANGGRAPH_CATALOG)
-      .filter(([, entry]) => "principal" in entry && entry.principal)
-      .map(([name]) => name)
-      .sort();
-    expect(named).toEqual(["cogni", "work-prioritizer"]);
+  it("names only seeded principal slugs", () => {
+    for (const entry of Object.values(LANGGRAPH_CATALOG))
+      if ("principal" in entry && entry.principal)
+        expect([NODE_AI_PRINCIPAL, PRIORITIZER_PRINCIPAL]).toContain(entry.principal);
   });
 });
 

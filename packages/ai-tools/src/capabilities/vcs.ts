@@ -54,6 +54,28 @@ export interface CiStatusResult {
   readonly checks: readonly CheckInfo[];
 }
 
+/** Read-only facts about one pull request. */
+export interface PrFacts {
+  readonly number: number;
+  readonly title: string;
+  readonly url: string;
+  readonly state: "open" | "closed";
+  readonly merged: boolean;
+  readonly mergedAt: string | null;
+  readonly mergeCommitSha: string | null;
+  readonly headSha: string;
+  readonly baseBranch: string;
+}
+
+/** Ancestry relation of `head` to `base` as GitHub's compare API reports it. */
+export type CommitCompareStatus = "ahead" | "behind" | "identical" | "diverged";
+
+/** Result of comparing two commits. `contains` is true when head contains base. */
+export interface CommitCompareResult {
+  readonly status: CommitCompareStatus;
+  readonly contains: boolean;
+}
+
 /** Result of merging a pull request. */
 export interface MergeResult {
   readonly merged: boolean;
@@ -112,6 +134,24 @@ export interface VcsCapability {
     repo: string;
     prNumber: number;
   }): Promise<CiStatusResult>;
+
+  /** Read the facts of one pull request (state, merge commit, head SHA). */
+  getPr(params: {
+    owner: string;
+    repo: string;
+    prNumber: number;
+  }): Promise<PrFacts>;
+
+  /**
+   * Compare two commits. `contains` is true when `head` contains `base`
+   * (status `ahead` or `identical`).
+   */
+  compareCommits(params: {
+    owner: string;
+    repo: string;
+    base: string;
+    head: string;
+  }): Promise<CommitCompareResult>;
 
   /** Merge a pull request. */
   mergePr(params: {

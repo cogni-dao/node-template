@@ -150,7 +150,7 @@ import {
 } from "@/bootstrap/capabilities/metrics";
 import { createRepoCapability } from "@/bootstrap/capabilities/repo";
 import { createScheduleCapability } from "@/bootstrap/capabilities/schedule";
-import { stubVcsCapability } from "@/bootstrap/capabilities/vcs";
+import { createGithubReadVcsCapability } from "@/bootstrap/capabilities/vcs";
 import { createWebSearchCapability } from "@/bootstrap/capabilities/web-search";
 import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
 import {
@@ -952,7 +952,8 @@ function createContainer(): Container {
 		webSearchCapability,
 		repoCapability,
 		scheduleCapability,
-		vcsCapability: stubVcsCapability,
+		vcsCapability: createGithubReadVcsCapability(),
+		runningBuildSha: env.APP_BUILD_SHA,
 		workItemCapability,
 	});
 	const goalProgress = createGoalProgressReader({
