@@ -73,6 +73,7 @@ function reading(
 function setup(
 	defs: MetricDefinition[],
 	readings: Record<string, MetricObservation[]> = {},
+	authorize: (d: MetricDefinition) => Promise<boolean> = async () => true,
 ) {
 	const calls = { buckets: 0 };
 	const registry = new MetricRegistry();
@@ -116,7 +117,7 @@ function setup(
 		registry,
 		scope: { node: "n", environment: "test", dataScope: "members" },
 		now: () => NOW,
-		authorize: async () => true,
+		authorize: async (_action, d) => authorize(d),
 	});
 	return { service, calls };
 }
@@ -512,6 +513,62 @@ describe("goal read lists served metrics under their KPI", () => {
 		expect(read.orphans).toBeUndefined();
 		expect(read.servedTruncated).toBeUndefined();
 		expect(read.goals[0]?.kpis[0]).not.toHaveProperty("served");
+	});
+
+	it("does not fail the goal read when the authority is unavailable for a served metric", async () => {
+		const kpi = definition("kpi");
+		const m = definition("m", { serves: { kpi: "kpi", role: "input" } });
+		const s = setup([kpi, m], { kpi: [reading(kpi, 60)] }, async (d) => {
+			if (d.id === "m") throw new Error("offline");
+			return true;
+		});
+		const read = await readGoalsProgress({
+			goals: goals(),
+			metrics: s.service,
+			environment: "test",
+		});
+		expect(GoalsProgressSchema.parse(read)).toEqual(read);
+		expect(read.servedUnavailable).toBe("metric_authority_unavailable");
+		expect(read.orphans).toBeUndefined();
+		expect(read.goals[0]?.kpis[0]?.served).toBeUndefined();
+		// The KPI itself is still assessed.
+		expect(read.goals[0]?.kpis[0]?.assessment.status).toBe("on_track");
+	});
+
+	it("treats a hypothesis prediction's KPI as a valid serves target", async () => {
+		const bet = definition("bet-kpi");
+		const m = definition("m", { serves: { kpi: "bet-kpi", role: "diagnostic" } });
+		const s = setup([bet, m]);
+		const read = await readGoalsProgress({
+			goals: {
+				listGoals: async () => [
+					{ id: "g", title: "G", evaluateAt: null, kpiBindings: [] },
+				],
+				hypotheses: async () => ({
+					items: [
+						{
+							id: "h",
+							title: "H",
+							evaluateAt: "2026-12-01T00:00:00Z",
+							outcome: null,
+							kpiBindings: [
+								{
+									metricId: "bet-kpi",
+									comparator: "gte",
+									target: { value: 1, unit: "items" },
+									evaluationAt: "2026-12-01T00:00:00Z",
+									baselineObservationId: crypto.randomUUID(),
+								},
+							],
+						},
+					],
+					more: false,
+				}),
+			},
+			metrics: s.service,
+			environment: "test",
+		});
+		expect(read.orphans).toEqual([]);
 	});
 
 	it("admits a truncated scan instead of reading unbounded definitions", async () => {

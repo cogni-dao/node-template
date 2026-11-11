@@ -7,8 +7,10 @@
  * citation table); LATEST_ONLY (a served metric adds one band assessment from
  * its latest reading: no trend, no history query, at most SERVES_SCAN_MAX
  * definitions scanned, a cut reported as `servedTruncated`); ORPHAN_NOT_HIDDEN
- * (a metric whose `serves.kpi` no goal binds, or whose `serves`/`band` is
- * invalid, is listed in `orphans` with its assessment and the zod issue paths).
+ * (a metric whose `serves.kpi` no goal KPI or hypothesis prediction binds, or whose `serves`/`band` is
+ * invalid, is listed in `orphans` with its assessment and the zod issue paths);
+ * SERVED_NEVER_FAILS_READ (a serving() failure, for example an authority
+ * outage, leaves `served`/`orphans` absent and sets `servedUnavailable`).
  */
 import { assessKpi } from "./assess.js";
 import {
@@ -18,6 +20,7 @@ import {
 	type KpiBinding,
 	KpiBindingsSchema,
 	type KpiReason,
+	MetricError,
 	type MetricOrphan,
 	type ServedMetric,
 } from "./contracts.js";
@@ -82,7 +85,16 @@ export async function readGoalsProgress(deps: {
 	const items: GoalProgress[] = [];
 	const goals = await deps.goals.listGoals();
 	// Metrics that declare `serves`, read once for every goal; absent without metrics.
-	const serving = deps.metrics ? await deps.metrics.serving() : null;
+	// The served annex never fails the goal read: an outage degrades it to unavailable.
+	let serving: Awaited<ReturnType<MetricService["serving"]>> | null = null;
+	let servedUnavailable: string | null = null;
+	if (deps.metrics) {
+		try {
+			serving = await deps.metrics.serving();
+		} catch (e) {
+			servedUnavailable = e instanceof MetricError ? e.code : "source_failed";
+		}
+	}
 	const boundKpis = new Set<string>();
 	for (const goal of goals)
 		for (const b of parseBindings(goal.kpiBindings).bindings)
@@ -136,6 +148,8 @@ export async function readGoalsProgress(deps: {
 			for (const bet of page.items) {
 				const predictions = [];
 				for (const binding of parseBindings(bet.kpiBindings).bindings) {
+					// A hypothesis prediction is a valid KPI target for `serves`.
+					boundKpis.add(binding.metricId);
 					if (!deps.metrics) {
 						predictions.push({
 							binding,
@@ -209,5 +223,6 @@ export async function readGoalsProgress(deps: {
 		asOf: at.toISOString(),
 		environment: deps.environment,
 		...(serving ? { orphans, servedTruncated: serving.truncated } : {}),
+		...(servedUnavailable ? { servedUnavailable } : {}),
 	});
 }

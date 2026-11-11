@@ -399,7 +399,8 @@ export function createMetricService(deps: {
 					try {
 						await authorize("read", d);
 					} catch (e) {
-						// A metric this caller may not read is not listed; an authority outage is.
+						// A metric this caller may not read is not listed; an authority outage
+						// throws, and the goal read reports it as servedUnavailable.
 						if (e instanceof MetricError && e.status === 404) continue;
 						throw e;
 					}

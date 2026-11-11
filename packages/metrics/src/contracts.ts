@@ -500,5 +500,7 @@ export const GoalsProgressSchema = z.object({
 	orphans: z.array(MetricOrphanSchema).optional(),
 	/** True when more definitions exist than one read scans, so `served`/`orphans` may be incomplete. */
 	servedTruncated: z.boolean().optional(),
+	/** Error code when the served read failed (for example metric_authority_unavailable); `served`/`orphans` are then absent. */
+	servedUnavailable: z.string().optional(),
 });
 export type GoalsProgress = z.infer<typeof GoalsProgressSchema>;
