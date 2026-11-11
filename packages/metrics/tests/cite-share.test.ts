@@ -83,6 +83,7 @@ describe("work-items-trailer@1", () => {
 		expect(parsed).toEqual({
 			itemId: "task.0086",
 			hasReason: true,
+			hasCitesLine: true,
 			cites: [
 				{ id: "change-history-design", commit: H1 },
 				{ id: "metrics-expert", commit: H2, contribution: "contrib-derek-x-1" },
@@ -181,6 +182,8 @@ describe("work.cite-share@1 statements", () => {
 		expect(text).toContain("LEFT JOIN work_items f ON f.id IN ('task.1', 'story.2')");
 		expect(text).toContain("SELECT NOW() AS as_of");
 		expect(citeShareFixturesSql([])).toContain("f.id IN ('')");
+		// Any caller: an id that could hold a quote never reaches the statement.
+		expect(() => citeShareFixturesSql(["task.1'; DROP TABLE work_items; --"])).toThrow(RangeError);
 		for (const label of ['"test-fixture"', '"synthetic"', '"synthetic-fixture"'])
 			expect(text).toContain(label);
 		expect(text).not.toContain(";");
@@ -202,7 +205,7 @@ describe("work.cite-share@1 read", () => {
 		expect(sample.evidenceRefs).toEqual([
 			"rules:work-items-trailer@1",
 			"window:[2026-11-10T12:00:00.000Z,2026-11-11T12:00:00.000Z)",
-			"counts:patches=12;cited=3;withReason=12;fixtures_excluded=0;malformed=0",
+			"counts:patches=12;cited=3;withReason=12;fixtures_excluded=0;malformed=0;cites_unparsed=0",
 			"counts:cited_atoms=1",
 			"top_atom:metrics-expert=3",
 		]);
@@ -212,6 +215,14 @@ describe("work.cite-share@1 read", () => {
 		const junk = commit("task.9", ["Reason: r.", "Cites: not-a-pin"]);
 		const { sample } = await run([...many(2, 8), junk]);
 		expect(sample).toMatchObject({ value: (100 * 2) / 11, complete: true });
+	});
+
+	it("counts a Cites line without a valid pin in evidence, so a format change shows", async () => {
+		const junk = commit("task.9", ["Reason: r.", "Cites: not-a-pin"]);
+		const { sample } = await run([...many(2, 7), junk]);
+		expect(sample.evidenceRefs).toContain(
+			"counts:patches=10;cited=2;withReason=10;fixtures_excluded=0;malformed=0;cites_unparsed=1",
+		);
 	});
 
 	it("counts a cite only from a line start", async () => {
@@ -255,7 +266,7 @@ describe("work.cite-share@1 read", () => {
 		const { sample } = await run(log, "share", ["task.fx"]);
 		expect(sample).toMatchObject({ value: 50, complete: true });
 		expect(sample.evidenceRefs).toContain(
-			"counts:patches=10;cited=5;withReason=10;fixtures_excluded=3;malformed=0",
+			"counts:patches=10;cited=5;withReason=10;fixtures_excluded=3;malformed=0;cites_unparsed=0",
 		);
 		expect((await run(log, "count", ["task.fx"])).sample.value).toBe(10);
 	});
@@ -287,7 +298,7 @@ describe("work.cite-share@1 read", () => {
 		// `one` once; `edge` is inside [start, end); `outside` is at end + 12h, `early` is 1 ms before start.
 		expect(sample.value).toBe(2);
 		expect(sample.evidenceRefs).toContain(
-			"counts:patches=2;cited=1;withReason=2;fixtures_excluded=0;malformed=1",
+			"counts:patches=2;cited=1;withReason=2;fixtures_excluded=0;malformed=1;cites_unparsed=0",
 		);
 	});
 
@@ -340,6 +351,18 @@ describe("work.cite-share@1 read", () => {
 					reason: "incomplete_or_invalid_source",
 				});
 			}
+		});
+
+		it("above the byte cap, with multi-byte messages inside the character cap", async () => {
+			// 4800 UTF-16 units of 4 bytes per 2 units: about 9.6 KB a row, so 1800 rows pass 16 MiB.
+			const wide = (i: number) =>
+				commit(`task.${i}`, [`Reason: ${"\u{1F600}".repeat(2400)}`]);
+			const rows = Array.from({ length: 1800 }, (_, i) => wide(i));
+			const { sample, queries } = await run(rows, "count");
+			expect(sample).toMatchObject({ complete: false, reason: "incomplete_or_invalid_source" });
+			expect(sample.evidenceRefs.join()).toContain("byte_cap_hit");
+			expect(queries).toHaveLength(1);
+			expect((await run(rows.slice(0, 1700), "count")).sample.complete).toBe(true);
 		});
 
 		it("when the fixture read has no server clock", async () => {

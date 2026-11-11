@@ -15,6 +15,7 @@ import {
 	CITE_SHARE_RULES_VERSION,
 	type PatchCommit,
 	parsePatchCommit,
+	WORK_ITEM_ID,
 } from "./cite-share.js";
 import type { MetricBudget, MetricSample } from "./contracts.js";
 import {
@@ -1091,6 +1092,9 @@ export function citeShareLogSql(window: { start: string; end: string }): string 
  * its patch is not in the table, so its patches count.
  */
 export function citeShareFixturesSql(ids: readonly string[]): string {
+	// The caller validated every id; this guard keeps a quote out of the statement for any caller.
+	if (!ids.every((id) => WORK_ITEM_ID.test(id)))
+		throw new RangeError("invalid work item id");
 	const list = ids.length > 0 ? ids.map((id) => `'${id}'`).join(", ") : "''";
 	return `WITH now_row AS (SELECT NOW() AS as_of) SELECT n.as_of, f.id FROM now_row n LEFT JOIN work_items f ON f.id IN (${list}) AND f.labels IS NOT NULL AND (CAST(f.labels AS TEXT) LIKE '%"test-fixture"%' OR CAST(f.labels AS TEXT) LIKE '%"synthetic"%' OR CAST(f.labels AS TEXT) LIKE '%"synthetic-fixture"%') ORDER BY f.id`;
 }
@@ -1158,6 +1162,8 @@ export async function readCiteShare(
 	const seen = new Set<string>();
 	const patches: PatchCommit[] = [];
 	let malformed = 0;
+	let bytes = 0;
+	const encoder = new TextEncoder();
 	for (const row of rows) {
 		const ms = Date.parse(doltInstant(row.at) ?? "");
 		const commit = String(row.commit_hash ?? "");
@@ -1169,6 +1175,12 @@ export async function readCiteShare(
 			message.length > CITE_SHARE_MESSAGE_CHARS
 		) {
 			evidenceRefs.push(`counts:rows=${rows.length};bad_row`);
+			return unknown("incomplete_or_invalid_source");
+		}
+		// The statement cannot bound bytes, so the sum is checked here, before any parse.
+		bytes += encoder.encode(message).length;
+		if (bytes > CITE_SHARE_MAX_BYTES) {
+			evidenceRefs.push(`counts:rows=${rows.length};byte_cap_hit`);
 			return unknown("incomplete_or_invalid_source");
 		}
 		// The statement bounds the window; a row outside it, or a repeat, is not a patch of it.
@@ -1185,7 +1197,7 @@ export async function readCiteShare(
 		return unknown("source_failed");
 	}
 	const fixtureAsOf = found.rows[0]?.as_of
-		? Date.parse(String(found.rows[0].as_of))
+		? new Date(found.rows[0].as_of as string).getTime()
 		: Number.NaN;
 	if (!Number.isFinite(fixtureAsOf)) {
 		evidenceRefs.push("counts:fixture_read;no_watermark");
@@ -1210,7 +1222,7 @@ export async function readCiteShare(
 		.sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))
 		.slice(0, 3);
 	evidenceRefs.push(
-		`counts:patches=${counted.length};cited=${cited.length};withReason=${counted.filter((p) => p.hasReason).length};fixtures_excluded=${patches.length - counted.length};malformed=${malformed}`,
+		`counts:patches=${counted.length};cited=${cited.length};withReason=${counted.filter((p) => p.hasReason).length};fixtures_excluded=${patches.length - counted.length};malformed=${malformed};cites_unparsed=${counted.filter((p) => p.hasCitesLine && p.cites.length === 0).length}`,
 		`counts:cited_atoms=${atoms.size}`,
 		...top.map(([id, n]) => `top_atom:${id}=${n}`),
 	);

@@ -39,6 +39,8 @@ export interface PatchCommit {
 	hasReason: boolean;
 	/** The valid pins of the first `Cites: ` line; an entry that is not a pin is dropped. */
 	cites: CitePin[];
+	/** The message holds a `Cites: ` line, valid or not. */
+	hasCitesLine: boolean;
 }
 
 /** `id@commit, id@contrib-x:commit` to pins; an entry that is not a pin is dropped. */
@@ -73,5 +75,6 @@ export function parsePatchCommit(message: unknown): PatchCommit | null {
 		itemId,
 		hasReason: reason !== undefined && reason.length > "Reason: ".length,
 		cites: cites === undefined ? [] : parseCitePins(cites.slice("Cites: ".length)),
+		hasCitesLine: cites !== undefined,
 	};
 }

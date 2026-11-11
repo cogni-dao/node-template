@@ -32,6 +32,9 @@ const messages: readonly string[] = [
   `${first}\nReason: r.\nCites: a@${H1}\nCites: b@${H2}`,
   `${first}\nReason: \nCites: a@${H1}`,
   `${first} Cites: a@${H1}`,
+  // Length boundaries of the id (256 ok, 257 not) and the inbox (200 ok, 201 not).
+  `${first}\nCites: ${"a".repeat(256)}@${H1}, ${"a".repeat(257)}@${H1}`,
+  `${first}\nCites: x@contrib-${"b".repeat(193)}:${H2}, x@contrib-${"b".repeat(194)}:${H2}`,
 ];
 
 describe("work.cite-share@1 reads the work-items commit message", () => {
