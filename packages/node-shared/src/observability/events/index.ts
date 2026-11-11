@@ -67,6 +67,21 @@ export const EVENT_NAMES = {
 	AGENT_ROLES_UNAVAILABLE: "agent.roles.unavailable",
 	AGENT_ROLES_LIST_FAILED: "agent.roles.list_failed",
 	AGENT_ROLES_REFUSED: "agent.roles.refused",
+	/**
+	 * Service enrollment (story.0038): one terminal event per operation. `requested` = a signed token became a pending ask and a device code (carries
+	 * principalUserId, service, issuerHost); `replayed` = a reused token (401); `attestation_rejected` = the token failed verification (carries reason: invalid_token | jwks_unavailable);
+	 * `redeemed` = the poll handed over a key sealed to the token's cnf key (carries principalUserId, credentialId); `denied` = the poll answered access_denied; `expired` = expired_token.
+	 * `agent.credential.issued` = a pending key was minted (credentialId, userId, createdFrom). None carries a token, a device code, a key, a hash or a sealed value.
+	 */
+	AGENT_ENROLLMENT_REQUESTED: "agent.enrollment.requested",
+	AGENT_ENROLLMENT_REPLAYED: "agent.enrollment.replayed",
+	AGENT_ENROLLMENT_ATTESTATION_REJECTED: "agent.enrollment.attestation_rejected",
+	AGENT_ENROLLMENT_REDEEMED: "agent.enrollment.redeemed",
+	AGENT_ENROLLMENT_DENIED: "agent.enrollment.denied",
+	AGENT_ENROLLMENT_EXPIRED: "agent.enrollment.expired",
+	AGENT_CREDENTIAL_ISSUED: "agent.credential.issued",
+	/** A knowledge read was refused at the `knowledge.read` door (an enrolled service with no approved role, or the store could not say): principal, routeId, code. */
+	AGENT_KNOWLEDGE_READ_DENIED: "agent.knowledge_read.denied",
 	/** A human route refused a request that carried an Authorization header; carries one of five fixed scheme names. */
 	HUMAN_PLANE_REFUSED: "human_plane.refused",
 	/** One structured summary per mission-loop cycle on the work-prioritizer slot (story.5108; CatalogEntry.report). */
