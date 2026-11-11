@@ -10,6 +10,7 @@ export default defineConfig({
 		"src/index.ts",
 		"src/adapters/postgres.ts",
 		"src/briefs.ts",
+		"src/cite-share.ts",
 		"src/contracts.ts",
 		"src/http.ts",
 		"src/knowledge.ts",

@@ -302,6 +302,7 @@ describe("brief.conformance@1 in the goal-metric service", () => {
 			"github.stars@1",
 			"brief.conformance@1",
 			"no-inline-history@1",
+			"work.cite-share@1",
 		]);
 	});
 
