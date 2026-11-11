@@ -18,6 +18,7 @@ import {
 	mkdtempSync,
 	readFileSync,
 	rmSync,
+	utimesSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -99,9 +100,15 @@ describe("session cognition hook", () => {
 			encoding: "utf8",
 		});
 
-		// Claude imports the cache through CLAUDE.md; its SessionStart hook only
-		// refreshes the file and must not duplicate a partial stdout preview.
-		expect(output).toBe("");
+		// First boot: this session's CLAUDE.md import ran before the file existed,
+		// so Claude gets the fetched bundle through its uncapped structured
+		// channel, never a raw-stdout preview (bug.0018).
+		expect(JSON.parse(output)).toEqual({
+			hookSpecificOutput: {
+				hookEventName: "SessionStart",
+				additionalContext: "live cognition",
+			},
+		});
 		expect(readFileSync(cache, "utf8")).toBe("live cognition\n");
 	});
 
@@ -125,9 +132,11 @@ describe("session cognition hook", () => {
 		expect(loader).not.toContain("SESSION_COGNITION_MAX_BYTES");
 		expect(loader).not.toContain("bundle_fits_budget");
 		expect(loader).not.toContain("oversized_bundle_notice");
-		// Only Codex consumes hook stdout; Claude's hook is write-only.
+		// Codex consumes raw stdout; Claude gets the structured channel only on a
+		// boot whose import could have missed the cache (bug.0018).
 		expect(loader).toContain("emit_agent_context");
-		expect(loader).not.toContain("hookSpecificOutput");
+		expect(loader).toContain("hookSpecificOutput");
+		expect(loader).toContain("cache_is_fresh_for_this_boot");
 	});
 
 	it("installs the stable user presenter during local Conductor setup", () => {
@@ -182,6 +191,13 @@ describe("session cognition hook", () => {
 			path.join(small, ".cogni/.cognition-cache.md"),
 			"complete cognition\n",
 		);
+		// A warm cache older than this boot: the import already has it.
+		const anHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+		utimesSync(
+			path.join(small, ".cogni/.cognition-cache.md"),
+			anHourAgo,
+			anHourAgo,
+		);
 		// Claude Code path: write-only hook; CLAUDE.md owns presentation.
 		const smallOut = execFileSync("bash", [LOADER], {
 			cwd: small,
@@ -221,6 +237,11 @@ describe("session cognition hook", () => {
 			path.join(large, ".cogni/.cognition-cache.md"),
 			"x".repeat(overCapBytes),
 		);
+		utimesSync(
+			path.join(large, ".cogni/.cognition-cache.md"),
+			anHourAgo,
+			anHourAgo,
+		);
 		const largeOut = execFileSync("bash", [LOADER], {
 			cwd: large,
 			env,
@@ -231,6 +252,20 @@ describe("session cognition hook", () => {
 			overCapBytes,
 		);
 		expect(largeOut).not.toContain("bundle rejected before injection");
+
+		// A cache written moments ago (workspace setup racing this boot) may have
+		// missed the import: Claude gets it whole through the structured channel.
+		const fresh = path.join(root, "fresh");
+		mkdirSync(path.join(fresh, ".cogni"), { recursive: true });
+		writeFileSync(path.join(fresh, CACHE_PATH), "x".repeat(overCapBytes));
+		const freshOut = execFileSync("bash", [LOADER], {
+			cwd: fresh,
+			env,
+			encoding: "utf8",
+		});
+		expect(
+			JSON.parse(freshOut).hookSpecificOutput.additionalContext,
+		).toHaveLength(overCapBytes);
 	});
 
 	it("reconciles the legacy user hook idempotently", () => {

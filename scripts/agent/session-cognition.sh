@@ -63,6 +63,27 @@ emit_agent_context() {
   fi
 }
 
+# emit_claude_context <text> — Claude Code only, and only when this session's
+# CLAUDE.md @import could not have seen the cache: Claude resolves imports
+# before its SessionStart hook writes the file, so a fresh workspace's first
+# session would start without its contract. Its uncapped SessionStart channel
+# is structured JSON (hookSpecificOutput.additionalContext); raw stdout is
+# previewed to ~2 KB. A warm session already has the cache through the import,
+# so it gets nothing here (no duplicate).
+emit_claude_context() {
+  [ -z "${CODEX_THREAD_ID:-}" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  printf '%s' "$1" \
+    | jq -Rs '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:.}}'
+}
+
+# cache_is_fresh_for_this_boot — the cache was written in the last 10 minutes,
+# e.g. by workspace setup racing this session's start, so the import may have
+# missed it.
+cache_is_fresh_for_this_boot() {
+  [ -n "$(find "$CACHE_FILE" -mmin -10 2>/dev/null)" ]
+}
+
 read_env_file_value() {
   var_name="$1"
   env_file="${2:-.env.cogni}"
@@ -147,6 +168,9 @@ refresh_in_background() {
 # a hub outage is invisible; we just refresh in the background for next time.
 if [ -f "$CACHE_FILE" ] && [ -s "$CACHE_FILE" ] && ! cache_is_repo_tracked; then
   emit_agent_context "$(cat "$CACHE_FILE")"
+  if cache_is_fresh_for_this_boot; then
+    emit_claude_context "$(cat "$CACHE_FILE")"
+  fi
   refresh_in_background
   exit 0
 fi
@@ -158,6 +182,7 @@ bundle="$(fetch_bundle)"
 if [ -n "$bundle" ]; then
   write_cache_atomic "$bundle"
   emit_agent_context "$bundle"
+  emit_claude_context "$bundle"
   exit 0
 fi
 
