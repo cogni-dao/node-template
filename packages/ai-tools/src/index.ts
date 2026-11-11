@@ -96,7 +96,14 @@ export {
   type ToolCatalog,
 } from "./catalog";
 // Runtime adapter
-export { contractToRuntime, toBoundToolRuntime } from "./runtime-adapter";
+export {
+  contractToRuntime,
+  SECRET_ARGS_UNAVAILABLE,
+  SECRET_ARGS_VALIDATION_MESSAGE,
+  toBoundToolRuntime,
+} from "./runtime-adapter";
+// Secret tool arguments
+export { declaresSecretArgs, REDACTION_MARKER } from "./secret-args";
 // Schema compilation
 export {
   type ToToolSpecResult,
