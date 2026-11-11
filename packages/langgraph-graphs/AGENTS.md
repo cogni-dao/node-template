@@ -59,7 +59,7 @@ LangGraph graph definitions and runtime utilities for agentic AI execution. Cont
     - `CogniExecContext` — Runtime context type (completionFn, tokenSink, toolExecFn; NO model per #35)
   - `@cogni/langgraph-graphs/graphs` — Graph factories and shared types:
     - `createCogniGraph()` / `createCogniProgram()` — shared native deep-agent composition for roots and bounded compiled children
-    - `createWorkPrioritizerGraph()` — Scheduled triage program on the shared harness (`work-prioritizer`): the guarded triage writer, `core__work_item_update` (the PATCH route's twin) behind `triage-guard` (one PATCH carries status, scores and labels with `expectedRevision`: scores, goal label, status route, cancel; at most `MAX_CHANGED_ITEMS_PER_RUN` items per run, set limited to status, scores and labels); `WORK_PRIORITIZER_GRAPH_NAME`, `cycleTelemetry()`
+    - `createWorkPrioritizerGraph()` — Scheduled triage program on the shared harness (`work-prioritizer`): the guarded triage writer, `core__work_item_update` (the PATCH route's twin) behind `triage-guard` (one PATCH carries status, scores and labels with `expectedRevision`: scores, goal label, status route, cancel; at most `MAX_CHANGED_ITEMS_PER_RUN` items per run, set limited to status, scores and labels; a write with no reason is refused `reason_required`, and the guard never writes a reason for the model, task.0086); `WORK_PRIORITIZER_GRAPH_NAME`, `cycleTelemetry()`
     - `InvokableGraph<I,O>`, `MessageGraphInput`, `MessageGraphOutput` — Type firewall
     - `GraphInvokeOptions`, `CreateReactAgentGraphOptions` — Factory types
   - **Per-graph tools:** `src/graphs/*/tools.ts` exports `*_TOOL_IDS` constants (e.g., `COGNI_TOOL_IDS`)

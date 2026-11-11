@@ -32,7 +32,7 @@ import {
 } from "../src/catalog";
 import { createDevToolExecFn } from "../src/runtime/core/dev-tool-exec";
 
-const WRITE_ARGS = { action: "patch", id: "task.1", priority: 3 };
+const WRITE_ARGS = { action: "patch", id: "task.1", reason: "test change", priority: 3 };
 
 describe("catalog principals (N4)", () => {
   it("names prioritizer for work-prioritizer and node-ai for cogni", () => {
