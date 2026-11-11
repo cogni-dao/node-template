@@ -100,15 +100,11 @@ describe("session cognition hook", () => {
 			encoding: "utf8",
 		});
 
-		// First boot: this session's CLAUDE.md import ran before the file existed,
-		// so Claude gets the fetched bundle through its uncapped structured
-		// channel, never a raw-stdout preview (bug.0018).
-		expect(JSON.parse(output)).toEqual({
-			hookSpecificOutput: {
-				hookEventName: "SessionStart",
-				additionalContext: "live cognition",
-			},
-		});
+		// First boot: this session's CLAUDE.md import ran before the file existed.
+		// Claude is told to restart, never handed a partial contract (bug.0018).
+		const notice: string = JSON.parse(output).hookSpecificOutput.additionalContext;
+		expect(notice).toContain("restart or resume");
+		expect(notice).not.toContain("live cognition");
 		expect(readFileSync(cache, "utf8")).toBe("live cognition\n");
 	});
 
@@ -132,11 +128,12 @@ describe("session cognition hook", () => {
 		expect(loader).not.toContain("SESSION_COGNITION_MAX_BYTES");
 		expect(loader).not.toContain("bundle_fits_budget");
 		expect(loader).not.toContain("oversized_bundle_notice");
-		// Codex consumes raw stdout; Claude gets the structured channel only on a
-		// boot whose import could have missed the cache (bug.0018).
+		// Codex consumes raw stdout; Claude's only bundle channel is the import.
+		// Its hook never sends contract text, so no Claude-side cap exists (bug.0018).
 		expect(loader).toContain("emit_agent_context");
-		expect(loader).toContain("hookSpecificOutput");
-		expect(loader).toContain("cache_is_fresh_for_this_boot");
+		expect(loader).toContain("emit_claude_notice");
+		expect(loader).not.toContain("emit_claude_context");
+		expect(loader).not.toContain("CLAUDE_CONTEXT_MAX_CHARS");
 	});
 
 	it("installs the stable user presenter during local Conductor setup", () => {
@@ -176,10 +173,12 @@ describe("session cognition hook", () => {
 			COGNI_NODE_API_KEY: "test-key",
 			PATH: `${offline}:${process.env.PATH ?? ""}`,
 		};
-		const out = execFileSync("bash", [LOADER], { cwd: worktree, env, encoding: "utf8" });
-		const delivered: string = JSON.parse(out).hookSpecificOutput.additionalContext;
-		expect(delivered).toContain("<agent-contract>");
-		expect(delivered).toContain("</agent-contract>");
+		const codexOut = execFileSync("bash", [LOADER], {
+			cwd: worktree,
+			env: { ...env, CODEX_THREAD_ID: "shared-boot", TMPDIR: root },
+			encoding: "utf8",
+		});
+		expect(codexOut).toBe(`${complete}\n`);
 		expect(readFileSync(path.join(worktree, CACHE_PATH), "utf8")).toBe(`${complete}\n`);
 
 		// An incomplete root copy is never presented as the contract.
@@ -191,12 +190,64 @@ describe("session cognition hook", () => {
 	});
 
 	it("copies the last complete bundle into every new Conductor worktree (bug.0018)", () => {
-		const include = readFileSync(path.join(REPO_ROOT, ".worktreeinclude"), "utf8")
-			.split("\n")
-			.map((line) => line.trim());
+		// The Mac app reads the shared settings from the remote default branch, so
+		// the copy does not depend on the branch the clone root has checked out.
+		const settings = readFileSync(
+			path.join(REPO_ROOT, ".conductor/settings.toml"),
+			"utf8",
+		);
+		const globs = /file_include_globs = """\n([\s\S]*?)"""/.exec(settings)?.[1];
+		const include = (globs ?? "").split("\n").map((line) => line.trim());
 		expect(include).toContain(CACHE_PATH);
-		// .worktreeinclude replaces Conductor's default pattern; env files still copy.
+		// file_include_globs replaces Conductor's default pattern; env files still copy.
 		expect(include).toContain(".env*");
+		expect(settings).toContain('setup = "bash scripts/conductor-worktree-setup.sh"');
+		// One owner: .worktreeinclude would win over these globs (Conductor docs).
+		for (const legacy of [".worktreeinclude", "conductor.json"])
+			expect(() => readFileSync(path.join(REPO_ROOT, legacy))).toThrow();
+	});
+
+	it("refreshes the copied bundle and keeps the clone root's copy copyable (bug.0018)", () => {
+		const root = fixture();
+		const clone = path.join(root, "clone");
+		mkdirSync(path.join(clone, ".cogni"), { recursive: true });
+		execFileSync("git", ["init", "-q"], { cwd: clone });
+		writeFileSync(path.join(clone, ".cogni/repo-spec.yaml"), "intent:\n  name: fixture\n");
+		execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: clone });
+		const worktree = path.join(root, "wt");
+		execFileSync("git", ["worktree", "add", "-q", "--detach", worktree], { cwd: clone });
+		const copied = "# old\n<agent-contract>\n<status-contract>\n</status-contract>\n</agent-contract>";
+		mkdirSync(path.join(worktree, ".cogni"), { recursive: true });
+		writeFileSync(path.join(worktree, CACHE_PATH), `${copied}\n`);
+		const bin = path.join(root, "bin");
+		mkdirSync(bin);
+		const curl = path.join(bin, "curl");
+		const env = {
+			...process.env,
+			CODEX_HOME: path.join(root, "no-user-hook"),
+			CODEX_THREAD_ID: "",
+			COGNI_NODE_API_KEY: "test-key",
+			PATH: `${bin}:${process.env.PATH ?? ""}`,
+		};
+
+		// An incomplete hub response never replaces the copied complete bundle.
+		writeFileSync(curl, "#!/bin/sh\nprintf '%s\\n' '{\"markdown\":\"map only\"}'\n");
+		chmodSync(curl, 0o755);
+		expect(() =>
+			execFileSync("bash", [LOADER, "--refresh"], { cwd: worktree, env, stdio: "ignore" }),
+		).toThrow();
+		expect(readFileSync(path.join(worktree, CACHE_PATH), "utf8")).toBe(`${copied}\n`);
+
+		// A complete one replaces it, updates the clone root's copy, and makes Git
+		// ignore that copy there, which Conductor requires before copying it.
+		const current = "# new\n<agent-contract>\n<status-contract>\n</status-contract>\n</agent-contract>";
+		writeFileSync(curl, `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify({ markdown: current })}'\n`);
+		expect(
+			execFileSync("bash", [LOADER, "--refresh"], { cwd: worktree, env, encoding: "utf8" }),
+		).toBe("");
+		expect(readFileSync(path.join(worktree, CACHE_PATH), "utf8")).toBe(`${current}\n`);
+		expect(readFileSync(path.join(clone, CACHE_PATH), "utf8")).toBe(`${current}\n`);
+		execFileSync("git", ["check-ignore", "-q", "--", CACHE_PATH], { cwd: clone });
 	});
 
 	it("warms the cognition cache in workspace setup before anything slow (bug.0018)", () => {
@@ -213,7 +264,7 @@ describe("session cognition hook", () => {
 			"pnpm build:packages",
 		])
 			expect(warm).toBeLessThan(setup.indexOf(slow));
-		expect(setup).toContain("bash scripts/agent/session-cognition.sh");
+		expect(setup).toContain("bash scripts/agent/session-cognition.sh --refresh");
 	});
 
 	it("keeps the agent bootstrap automatic", () => {
@@ -300,30 +351,15 @@ describe("session cognition hook", () => {
 		);
 		expect(largeOut).not.toContain("bundle rejected before injection");
 
-		// A cache written moments ago (workspace setup racing this boot) may have
-		// missed the import: Claude gets it whole through the structured channel.
-		// Claude Code shows at most 10,000 characters of hook context, so only the
-		// agent-contract section goes, never the whole (larger) bundle.
+		// A cache written moments ago (Conductor's copy at workspace creation) is
+		// already in Claude's import: the hook adds nothing on any source.
 		const fresh = path.join(root, "fresh");
 		mkdirSync(path.join(fresh, ".cogni"), { recursive: true });
-		const contract =
-			"## The agent-contract\n<agent-contract>\n<status-contract>\nrules\n</status-contract>\n</agent-contract>";
 		writeFileSync(
 			path.join(fresh, CACHE_PATH),
-			`# head\n${contract}\n## Governing index\n${"x".repeat(overCapBytes)}\n`,
+			"<agent-contract>\n<status-contract>\n</status-contract>\n</agent-contract>\n",
 		);
-		const freshOut = execFileSync("bash", [LOADER], {
-			cwd: fresh,
-			env,
-			encoding: "utf8",
-		});
-		const shown: string = JSON.parse(freshOut).hookSpecificOutput.additionalContext;
-		expect(shown).toContain(contract);
-		expect(shown).not.toContain("Governing index\nxxx");
-		expect(shown.length).toBeLessThan(10_000);
-
-		// Resume, clear and compact keep the import's copy: no duplicate.
-		for (const source of ["resume", "clear", "compact"]) {
+		for (const source of ["startup", "resume", "clear", "compact"]) {
 			expect(
 				execFileSync("bash", [LOADER], {
 					cwd: fresh,
@@ -333,41 +369,6 @@ describe("session cognition hook", () => {
 				}),
 			).toBe("");
 		}
-		expect(
-			JSON.parse(
-				execFileSync("bash", [LOADER], {
-					cwd: fresh,
-					env,
-					encoding: "utf8",
-					input: JSON.stringify({
-						hook_event_name: "SessionStart",
-						source: "startup",
-					}),
-				}),
-			).hookSpecificOutput.additionalContext,
-		).toContain(contract);
-
-		// Never a truncated preview: an oversized payload, or a bundle whose
-		// contract section cannot be extracted, sends the restart notice instead.
-		const blob = path.join(root, "blob");
-		mkdirSync(path.join(blob, ".cogni"), { recursive: true });
-		writeFileSync(path.join(blob, CACHE_PATH), "x".repeat(overCapBytes));
-		const notice: string = JSON.parse(
-			execFileSync("bash", [LOADER], { cwd: blob, env, encoding: "utf8" }),
-		).hookSpecificOutput.additionalContext;
-		expect(notice).toContain("could not be delivered");
-		expect(notice.length).toBeLessThan(1_000);
-		const headless = path.join(root, "headless");
-		mkdirSync(path.join(headless, ".cogni"), { recursive: true });
-		writeFileSync(
-			path.join(headless, CACHE_PATH),
-			"<agent-contract>\n<status-contract>\n</status-contract>\n</agent-contract>\n",
-		);
-		expect(
-			JSON.parse(
-				execFileSync("bash", [LOADER], { cwd: headless, env, encoding: "utf8" }),
-			).hookSpecificOutput.additionalContext,
-		).toContain("could not be delivered");
 
 		// A first boot that cannot load tells Claude why, through the same channel.
 		const keyless = path.join(root, "keyless");

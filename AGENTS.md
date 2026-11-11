@@ -31,10 +31,11 @@ without it. Recovery ends only when the native instruction path loads a complete
 
 On first setup, register through `/api/v1/agent/register` and save COGNI_NODE_API_KEY in
 the gitignored `.env.cogni`. Operator CI/CD credentials are not cognition credentials.
-Workspace setup warms the cache, but it may race the first agent. Claude resolves its
-imports before its SessionStart hook can write the cache, so on a boot whose import
-missed it the hook delivers the same complete bundle through Claude's structured
-SessionStart context. If neither arrived, restart or resume before normal work begins.
+Conductor copies the clone root's last complete cache into each new worktree at
+creation (`.conductor/settings.toml`), before any agent starts, and workspace setup then
+refreshes it from the hub. Claude resolves its imports before its SessionStart hook runs,
+so a boot that started without a cache gets only a restart notice; restart or resume
+before normal work begins.
 The loader may cache a recovery notice for the next import; that notice is never a
 complete contract.
 

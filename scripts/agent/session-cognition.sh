@@ -53,69 +53,26 @@ fi
 #   - Codex reads raw stdout as developer context and the .codex/config.toml
 #     `additionalContextLimit = 0` disables its head/tail spill, so the full
 #     payload lands untruncated.
-#   - Claude Code expands CLAUDE.md @imports before/at SessionStart, so hook output
-#     is too late for that session and duplicates a preview of the same bundle.
-#     Its hook is therefore write-only; the committed AGENTS.md floor covers a
-#     cold first boot and the warmed cache supplies the rich contract thereafter.
+#   - Claude Code expands CLAUDE.md @imports before SessionStart, so its only
+#     bundle channel is that import. Its hook refreshes the cache and otherwise
+#     says nothing, except a restart notice when this boot had no cache.
 emit_agent_context() {
   if [ -n "${CODEX_THREAD_ID:-}" ]; then
     printf '%s\n' "$1"
   fi
 }
 
-# emit_claude_context <text> — Claude Code only, and only when this session's
-# CLAUDE.md @import could not have seen the cache: Claude resolves imports
-# before its SessionStart hook writes the file. Claude Code shows at most
-# 10,000 characters of hook context; anything longer is saved to a file with a
-# 2 KB preview, which loses the contract. So send the agent-contract section
-# itself (it fits), never the whole bundle; the import loads the rest next
-# session. A recovery notice is short and goes as is.
-CLAUDE_CONTEXT_MAX_CHARS=9900
-emit_claude_context() {
+# emit_claude_notice <text> — Claude Code only. Claude loads the bundle through
+# its CLAUDE.md import, which resolves before this hook runs; a new worktree
+# already holds the bundle because Conductor copies the clone root's cache in
+# at creation (.conductor/settings.toml file_include_globs). When this boot
+# found no cache, the import missed it: say so plainly and ask for a restart.
+# Never a partial or trimmed contract.
+emit_claude_notice() {
   [ -z "${CODEX_THREAD_ID:-}" ] || return 0
   command -v jq >/dev/null 2>&1 || return 0
-  payload="$1"
-  if bundle_is_complete "$1"; then
-    contract="$(printf '%s\n' "$1" | awk '/^## The agent-contract/{on=1} on{print} /^<\/agent-contract>/{exit}')"
-    case "$contract" in
-      *"<agent-contract"*"</agent-contract>"*)
-        payload="$(printf '%s\n\n%s\n\n%s' \
-          "COGNI COGNITION (first boot): the CLAUDE.md import ran before the cache existed. This is the agent-contract; the full bundle loads through CLAUDE.md next session." \
-          "$contract" \
-          "Governing index for this session: GET the node's /api/v1/knowledge/index.")"
-        ;;
-      *) payload="" ;;
-    esac
-  fi
-  # Count characters with jq (Unicode code points, independent of the locale).
-  if [ -z "$payload" ] || [ "$(printf '%s' "$payload" | jq -Rs 'length')" -gt "$CLAUDE_CONTEXT_MAX_CHARS" ]; then
-    # Never a truncated preview: say plainly that the contract did not load.
-    payload="COGNI COGNITION (first boot): the agent-contract could not be delivered to this session (the CLAUDE.md import ran before the cache existed, and the contract does not fit Claude Code's hook-context limit). Stay in bootstrap recovery and restart or resume this session; the cache now exists, so CLAUDE.md will load it."
-  fi
-  printf '%s' "$payload" \
+  printf '%s' "$1" \
     | jq -Rs '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:.}}'
-}
-
-# The hook's JSON input names the SessionStart source (startup, resume, clear,
-# compact). Read it once; absent input counts as startup.
-HOOK_SOURCE="startup"
-hook_input=""
-if [ ! -t 0 ]; then
-  # Bounded read: a caller's stdin may stay open (e.g. a setup script), so never
-  # block on it. Hook input is one small JSON object, delivered at once.
-  IFS= read -r -d '' -t 1 hook_input || true
-  if [ -n "$hook_input" ] && command -v jq >/dev/null 2>&1; then
-    HOOK_SOURCE="$(printf '%s' "$hook_input" | jq -r '.source // "startup"' 2>/dev/null || printf startup)"
-  fi
-fi
-
-# cache_is_fresh_for_this_boot — a new session (source startup) and a cache
-# written in the last 10 minutes, e.g. by workspace setup racing this start, so
-# the import may have missed it. Resume, clear and compact keep the import's
-# copy and get nothing here.
-cache_is_fresh_for_this_boot() {
-  [ "$HOOK_SOURCE" = "startup" ] || return 1
-  [ -n "$(find "$CACHE_FILE" -mmin -10 2>/dev/null)" ]
 }
 
 read_env_file_value() {
@@ -173,7 +130,19 @@ write_cache_atomic() {
   # fails (hub slow or down) still boots from the last complete bundle.
   if [ -n "$SHARED_CACHE" ] && bundle_is_complete "$1"; then
     write_file_atomic "$SHARED_CACHE" "$1"
+    ensure_shared_cache_ignored
   fi
+}
+
+# ensure_shared_cache_ignored — Conductor copies a file from the clone root into
+# a new worktree only when Git ignores it there, and a clone root checked out on
+# an older branch may not ignore the cache. Its info/exclude applies on every
+# branch and stays on this machine.
+ensure_shared_cache_ignored() {
+  git -C "$clone_root" check-ignore -q -- "$CACHE_FILE" 2>/dev/null && return 0
+  mkdir -p "$clone_root/.git/info" 2>/dev/null \
+    && printf '/%s\n' "$CACHE_FILE" >> "$clone_root/.git/info/exclude" 2>/dev/null
+  return 0
 }
 
 write_file_atomic() {
@@ -228,13 +197,25 @@ refresh_in_background() {
   ) >/dev/null 2>&1 &
 }
 
+# --refresh — workspace setup's bounded foreground fetch. A new Conductor
+# worktree starts with the clone root's last complete bundle; replace it with
+# the hub's current one. Exits 0 only when a complete bundle was written, and
+# never replaces a complete cache with an incomplete response.
+if [ "${1:-}" = "--refresh" ]; then
+  fresh="$(fetch_bundle)"
+  bundle_is_complete "$fresh" || exit 1
+  write_cache_atomic "$fresh"
+  exit 0
+fi
+
+# Claude's import ran before this boot had a cache, so the contract is not in
+# its context. Never send a partial contract in its place.
+CLAUDE_RESTART_NOTICE="COGNI COGNITION — the agent-contract is not in this session: its CLAUDE.md import ran before .cogni/.cognition-cache.md existed. The cache is now complete. Stay in bootstrap recovery (AGENTS.md) and restart or resume this session to load it."
+
 # PRESENTATION — local-first. If we have ever oriented, boot is offline-safe and
 # a hub outage is invisible; we just refresh in the background for next time.
 if [ -f "$CACHE_FILE" ] && [ -s "$CACHE_FILE" ] && ! cache_is_repo_tracked; then
   emit_agent_context "$(cat "$CACHE_FILE")"
-  if cache_is_fresh_for_this_boot; then
-    emit_claude_context "$(cat "$CACHE_FILE")"
-  fi
   refresh_in_background
   exit 0
 fi
@@ -246,7 +227,7 @@ bundle="$(fetch_bundle)"
 if [ -n "$bundle" ]; then
   write_cache_atomic "$bundle"
   emit_agent_context "$bundle"
-  emit_claude_context "$bundle"
+  emit_claude_notice "$CLAUDE_RESTART_NOTICE"
   exit 0
 fi
 
@@ -257,7 +238,7 @@ if [ -n "$SHARED_CACHE" ] && [ -s "$SHARED_CACHE" ]; then
   if bundle_is_complete "$shared"; then
     write_file_atomic "$CACHE_FILE" "$shared"
     emit_agent_context "$shared"
-    emit_claude_context "$shared"
+    emit_claude_notice "$CLAUDE_RESTART_NOTICE"
     # Catch up behind it (the TTL gate would skip a cache written just now).
     (
       fresh="$(fetch_bundle)"
@@ -303,4 +284,4 @@ fi
 # Both harnesses see the notice: Codex on stdout, Claude through its structured
 # channel (this boot's import found no cache either).
 emit_agent_context "$notice"
-emit_claude_context "$notice"
+emit_claude_notice "$notice"
