@@ -174,9 +174,13 @@ bundle_is_complete() {
 # off), or empty when this checkout is the clone root.
 SHARED_CACHE=""
 common_dir="$(git rev-parse --git-common-dir 2>/dev/null || true)"
-if [ -n "$common_dir" ]; then
+# Only an ordinary clone whose common dir is <root>/.git and whose root is this
+# node's checkout; never a bare repo, a submodule's modules dir, or a tracked file.
+if [ -n "$common_dir" ] && [ "$(basename "$common_dir")" = ".git" ]; then
   clone_root="$(cd "$(dirname "$common_dir")" 2>/dev/null && pwd || true)"
-  if [ -n "$clone_root" ] && [ "$clone_root" != "$(pwd)" ]; then
+  if [ -n "$clone_root" ] && [ "$clone_root" != "$(pwd)" ] \
+    && [ -f "$clone_root/.cogni/repo-spec.yaml" ] \
+    && ! git -C "$clone_root" ls-files --error-unmatch -- "$CACHE_FILE" >/dev/null 2>&1; then
     SHARED_CACHE="$clone_root/$CACHE_FILE"
   fi
 fi
@@ -235,6 +239,11 @@ if [ -n "$SHARED_CACHE" ] && [ -s "$SHARED_CACHE" ]; then
     write_file_atomic "$CACHE_FILE" "$shared"
     emit_agent_context "$shared"
     emit_claude_context "$shared"
+    # Catch up behind it (the TTL gate would skip a cache written just now).
+    (
+      fresh="$(fetch_bundle)"
+      [ -n "$fresh" ] && write_cache_atomic "$fresh"
+    ) >/dev/null 2>&1 &
     exit 0
   fi
 fi

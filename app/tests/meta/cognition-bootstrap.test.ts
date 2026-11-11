@@ -157,6 +157,8 @@ describe("session cognition hook", () => {
 		const clone = path.join(root, "clone");
 		mkdirSync(clone);
 		execFileSync("git", ["init", "-q"], { cwd: clone });
+		mkdirSync(path.join(clone, ".cogni"), { recursive: true });
+		writeFileSync(path.join(clone, ".cogni/repo-spec.yaml"), "intent:\n  name: fixture\n");
 		execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: clone });
 		const worktree = path.join(root, "wt");
 		execFileSync("git", ["worktree", "add", "-q", "--detach", worktree], { cwd: clone });
