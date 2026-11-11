@@ -94,6 +94,43 @@ describe("readWorkItemHistory", () => {
     expect(result.log.errorName).toBe("TypeError");
   });
 
+  it("503: logs the database error code and a bounded single-line message", async () => {
+    const dbError = Object.assign(
+      new Error(`relation missing\r\n${"x".repeat(400)}`),
+      { name: "PostgresError", code: "42P01" }
+    );
+    const result = await readWorkItemHistory(
+      {
+        get: async () => ({ id: "task.1" }),
+        history: async () => {
+          throw dbError;
+        },
+      },
+      "task.1"
+    );
+    expect(result.status).toBe(503);
+    expect(result.body).toEqual({ error: "history_unavailable" });
+    expect(result.log.errorName).toBe("PostgresError");
+    expect(result.log.dbCode).toBe("42P01");
+    expect(result.log.errorMessage).toHaveLength(300);
+    expect(result.log.errorMessage).not.toMatch(/[\r\n]/);
+    expect(result.log.errorMessage?.startsWith("relation missing ")).toBe(true);
+  });
+
+  it("503: an error without a code logs no dbCode", async () => {
+    const result = await readWorkItemHistory(
+      {
+        get: async () => ({ id: "task.1" }),
+        history: async () => {
+          throw new TypeError("boom");
+        },
+      },
+      "task.1"
+    );
+    expect(result.log.dbCode).toBeUndefined();
+    expect(result.log.errorMessage).toBe("boom");
+  });
+
   it("503: a row that breaks the output shape is unavailable, not a 200", async () => {
     const result = await readWorkItemHistory(
       {
