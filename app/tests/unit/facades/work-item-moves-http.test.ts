@@ -15,6 +15,7 @@
  */
 
 import { EntryUnresolvedError, MovesInvalidError, MovesUnsupportedError } from "@cogni/work-items";
+import { MetricError } from "@cogni-dao/metrics/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/bootstrap/http", () => ({
@@ -24,6 +25,7 @@ vi.mock("@/app/_lib/auth/session", () => ({ getSessionUser: vi.fn() }));
 vi.mock("@/bootstrap/container", () => ({ getContainer: vi.fn() }));
 
 import { GET, PATCH } from "@/app/api/v1/work/items/[id]/route";
+import { POST } from "@/app/api/v1/work/items/route";
 import { getContainer } from "@/bootstrap/container";
 
 type Handler = (
@@ -81,6 +83,17 @@ const patchRequest = (body: unknown) =>
     { id: "principal-1" },
     { params: Promise.resolve({ id: "task.0001" }) }
   );
+const postRequest = (body: unknown) =>
+  (POST as unknown as Handler)(
+    { log: { info: vi.fn() } },
+    new Request("http://localhost/api/v1/work/items", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+    { id: "principal-1" },
+    undefined
+  );
+const create = vi.fn();
 const getRequest = () =>
   (GET as unknown as Handler)(
     { log: { info: vi.fn() } },
@@ -93,7 +106,7 @@ describe("work-item moves HTTP boundary (story.0033)", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     vi.mocked(getContainer).mockReturnValue({
-      doltgresWorkItems: { patch, get },
+      doltgresWorkItems: { patch, get, create },
       goalMetrics: { read, observation },
     } as never);
   });
@@ -219,15 +232,90 @@ describe("work-item moves HTTP boundary (story.0033)", () => {
       expect((await patchRequest({ reason: "r", set: { moves } })).status).toBe(400);
     });
 
-    it("maps a resolver or baseline failure to 503", async () => {
+    it("maps a resolver failure and a baseline failure to their own 503 codes", async () => {
+      const moves = [{ metricId: "m", direction: "up" }];
       patch.mockRejectedValue(
         Object.assign(new Error("down"), { name: "EntryResolverUnavailableError" })
       );
-      const response = await patchRequest({
-        reason: "r",
-        set: { moves: [{ metricId: "m", direction: "up" }] },
+      const resolver = await patchRequest({ reason: "r", set: { moves } });
+      expect(resolver.status).toBe(503);
+      expect(await resolver.json()).toMatchObject({ errorCode: "cite_resolver_unavailable" });
+
+      patch.mockRejectedValue(
+        Object.assign(new Error("baseline down"), { name: "MetricBaselineUnavailableError" })
+      );
+      const baseline = await patchRequest({ reason: "r", set: { moves } });
+      expect(baseline.status).toBe(503);
+      expect(await baseline.json()).toMatchObject({
+        error: "metric_baseline_unavailable",
+        errorCode: "metric_baseline_unavailable",
       });
-      expect(response.status).toBe(503);
+    });
+  });
+
+  describe("POST (create with moves)", () => {
+    const filed = { type: "task", title: "Filed with a metric" };
+
+    it("forwards moves, strips a client baseline, and returns the readings", async () => {
+      create.mockResolvedValue({ ...stored(["convergence-ratio", "up", OBS_BASE]), id: "task.0002" });
+      read.mockResolvedValue({ lastGood: ok(OBS_B2, 0.5) });
+      observation.mockResolvedValue({ observation: ok(OBS_BASE, 0.25) });
+      const response = await postRequest({
+        ...filed,
+        moves: [{ metricId: "convergence-ratio", direction: "up", baselineObservationId: OBS_B2 }],
+      });
+      expect(response.status).toBe(201);
+      expect(create).toHaveBeenCalledWith(
+        { ...filed, moves: [{ metricId: "convergence-ratio", direction: "up" }] },
+        "principal-1"
+      );
+      expect((await response.json()).moves[0]).toMatchObject({
+        baselineObservationId: OBS_BASE,
+        baseline: { value: 0.25 },
+        current: { value: 0.5 },
+        moved: "as_declared",
+      });
+    });
+
+    it("accepts [] and omits moves when absent", async () => {
+      create.mockResolvedValue({ ...base, moves: [] });
+      expect((await postRequest({ ...filed, moves: [] })).status).toBe(201);
+      expect(create.mock.calls[0]?.[0].moves).toEqual([]);
+      create.mockResolvedValue(base);
+      expect((await postRequest(filed)).status).toBe(201);
+      expect(create.mock.calls[1]?.[0]).not.toHaveProperty("moves");
+    });
+
+    it.each([
+      ["four entries", [1, 2, 3, 4].map((i) => ({ metricId: `m-${i}`, direction: "up" }))],
+      ["a repeated id", [{ metricId: "m", direction: "up" }, { metricId: "m", direction: "up" }]],
+      ["a bad direction", [{ metricId: "m", direction: "left" }]],
+    ])("rejects %s with 400 before the store", async (_name, moves) => {
+      expect((await postRequest({ ...filed, moves })).status).toBe(400);
+      expect(create).not.toHaveBeenCalled();
+    });
+
+    it("maps an unknown metric to 400 at the moves path, unsupported to 400, and a baseline failure to 503", async () => {
+      const moves = [{ metricId: "ghost", direction: "up" }];
+      create.mockRejectedValue(new EntryUnresolvedError(["ghost"], "moves"));
+      const unknown = await postRequest({ ...filed, moves });
+      expect(unknown.status).toBe(400);
+      expect(await unknown.json()).toMatchObject({
+        errorCode: "cite_unresolved",
+        issues: [{ path: ["moves"], message: "metric not found or deprecated: ghost" }],
+      });
+
+      create.mockRejectedValue(new MovesUnsupportedError());
+      const unsupported = await postRequest({ ...filed, moves });
+      expect(unsupported.status).toBe(400);
+      expect(await unsupported.json()).toMatchObject({ errorCode: "moves_unsupported" });
+
+      create.mockRejectedValue(
+        Object.assign(new Error("down"), { name: "MetricBaselineUnavailableError" })
+      );
+      const baseline = await postRequest({ ...filed, moves });
+      expect(baseline.status).toBe(503);
+      expect(await baseline.json()).toMatchObject({ errorCode: "metric_baseline_unavailable" });
     });
   });
 
@@ -286,6 +374,32 @@ describe("work-item moves HTTP boundary (story.0033)", () => {
         moved: "unknown",
         unknownReason: "no_current",
       });
+    });
+
+    it("a deprecated metric reads unknown (metric_deprecated), not a failure, and a stored entry shows its pinned baseline id", async () => {
+      get.mockResolvedValue(stored(["old-metric", "up", OBS_BASE], ["live", "up", OBS_BASE]));
+      observation.mockImplementation(async (id: string) => {
+        if (id === "old-metric") throw new MetricError("metric_not_found", 404);
+        return { observation: ok(OBS_BASE, 1) };
+      });
+      read.mockResolvedValue({ lastGood: ok(OBS_B2, 2) });
+      const response = await getRequest();
+      expect(response.status).toBe(200);
+      const moves = (await response.json()).moves;
+      expect(moves[0]).toMatchObject({
+        metricId: "old-metric",
+        baselineObservationId: OBS_BASE,
+        moved: "unknown",
+        unknownReason: "metric_deprecated",
+      });
+      expect(moves[1]).toMatchObject({ moved: "as_declared" });
+    });
+
+    it("a missing observation is not a deprecated metric", async () => {
+      get.mockResolvedValue(stored(["m-1", "up", OBS_BASE]));
+      observation.mockRejectedValue(new MetricError("observation_not_found", 404));
+      read.mockResolvedValue({ lastGood: ok(OBS_B2, 2) });
+      expect(await moveOf()).toMatchObject({ moved: "unknown", unknownReason: "baseline_unreadable" });
     });
 
     it("a failing metrics service reads unknown and never fails the item read", async () => {

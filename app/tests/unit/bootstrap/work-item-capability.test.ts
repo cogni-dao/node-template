@@ -14,6 +14,7 @@
  */
 
 import { WorkItemPatchConflictError } from "@cogni/ai-tools";
+import { MetricError } from "@cogni-dao/metrics/contracts";
 import { toWorkItemId, type WorkItem, type WorkItemCommandPort, type WorkItemQueryPort } from "@cogni/work-items";
 import { WorkItemRevisionConflictError } from "@cogni/work-items/adapters/doltgres";
 import { describe, expect, it, vi } from "vitest";
@@ -349,6 +350,16 @@ describe("createWorkItemCapability", () => {
         [{ metricId: "m-1", direction: "up", baselineObservationId: OBS }],
       ]);
       expect(service.observation).not.toHaveBeenCalled();
+      expect(service.read).not.toHaveBeenCalled();
+    });
+
+    it("a deprecated metric (metric_not_found) reads unknown with metric_deprecated", async () => {
+      const service = {
+        observation: vi.fn().mockRejectedValue(new MetricError("metric_not_found", 404)),
+        read: vi.fn(),
+      };
+      const [item] = await capability([withMoves], service as never).query({ ids: ["task.5001"] });
+      expect(item?.moves?.[0]).toMatchObject({ moved: "unknown", unknownReason: "metric_deprecated" });
       expect(service.read).not.toHaveBeenCalled();
     });
 

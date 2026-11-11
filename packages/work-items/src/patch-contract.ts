@@ -80,6 +80,29 @@ export const MoveInputSchema = z.object({
     .describe("The way this work should move the metric."),
 });
 
+/**
+ * The `moves` list of a create or a patch: at most 3, ids unique, `[]` = moves nothing.
+ * One schema for both writes (story.0033).
+ */
+export const WorkItemMovesInputSchema = z
+  .array(MoveInputSchema)
+  .max(MOVES_MAX)
+  .superRefine((moves, ctx) => {
+    const seen = new Set<string>();
+    for (const [i, move] of moves.entries()) {
+      if (seen.has(move.metricId))
+        ctx.addIssue({
+          code: "custom",
+          path: [i, "metricId"],
+          message: `metric id repeats: ${move.metricId}`,
+        });
+      seen.add(move.metricId);
+    }
+  })
+  .describe(
+    "Metrics this work moves: at most 3 of { metricId, direction: up|down }; [] means it moves none (say why in the reason on a patch). On a patch it replaces the whole list. The server resolves each new metric and pins its baseline; never send one."
+  );
+
 export const WorkItemPatchInputSchema = z.object({
   id: z.string(),
   expectedRevision: z.number().int().min(0).optional(),
@@ -116,25 +139,7 @@ export const WorkItemPatchInputSchema = z.object({
       // null clears the column back to SQL NULL (scores read as absent).
       scores: WorkItemScoresInputSchema.nullable().optional(),
       // [] = this item moves no metric (the edit reason says why). The server pins each baseline.
-      moves: z
-        .array(MoveInputSchema)
-        .max(MOVES_MAX)
-        .superRefine((moves, ctx) => {
-          const seen = new Set<string>();
-          for (const [i, move] of moves.entries()) {
-            if (seen.has(move.metricId))
-              ctx.addIssue({
-                code: "custom",
-                path: [i, "metricId"],
-                message: `metric id repeats: ${move.metricId}`,
-              });
-            seen.add(move.metricId);
-          }
-        })
-        .optional()
-        .describe(
-          "Metrics this work moves: at most 3 of { metricId, direction: up|down }; [] means it moves none. Replaces the whole list. The server pins each new metric's baseline; never send one."
-        ),
+      moves: WorkItemMovesInputSchema.optional(),
       labels: z.array(z.string()).optional(),
       specRefs: z.array(z.string()).optional(),
       branch: z.string().optional(),

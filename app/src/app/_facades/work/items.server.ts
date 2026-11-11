@@ -8,7 +8,7 @@
  * Invariants: P0P1_IS_NODE_ADMIN (story.5101: priority <= 1 on create/patch requires node admin,
  *   checked before the store write), PORT_VIA_CONTAINER (no direct adapter imports), CONTRACTS_ARE_TRUTH, NODE_STORE_IS_LOCAL.
  * Evaluation: preserves scores in DTOs and normalizes package validation failures for HTTP400.
- * Moves (story.0033): a single-item read and a patch response add each move's baseline, current reading and verdict from observations (at most 3 moves); list reads return the stored moves only. An unknown or deprecated metric id is `EntryUnresolvedError` (field `moves`); a non-empty write with no metric wiring is `MovesUnsupportedError`; a bad list is `MovesInvalidError`.
+ * Moves (story.0033): create and patch accept `moves` (new ids are resolved and baselined by the store). A single-item read, a create response and a patch response add each move's baseline, current reading and verdict from observations (at most 3 moves); list reads return the stored moves only. An unknown or deprecated metric id is `EntryUnresolvedError` (field `moves`); a non-empty write with no metric wiring is `MovesUnsupportedError`; a bad list is `MovesInvalidError`.
  * Side-effects: IO (filesystem read via port; database read/write via Doltgres port)
  * Links: contracts/work.items.{list,get,create,patch}.v1.contract
  * @internal
@@ -39,6 +39,7 @@ import {
   EntryResolverUnavailableError,
   EntryUnresolvedError,
   judgeMoves,
+  MetricBaselineUnavailableError,
   MovesInvalidError,
   MovesUnsupportedError,
   toWorkItemId,
@@ -53,6 +54,7 @@ export {
   CitesUnsupportedError,
   EntryResolverUnavailableError,
   EntryUnresolvedError,
+  MetricBaselineUnavailableError,
   MovesInvalidError,
   MovesUnsupportedError,
   WorkItemRevisionConflictError,
@@ -257,6 +259,8 @@ function rethrowBackendError(error: unknown): never {
     const field = (error as { field?: unknown }).field === "moves" ? "moves" : "cites";
     throw new EntryUnresolvedError(Array.isArray(ids) ? ids.map(String) : [], field);
   }
+  if (name === "MetricBaselineUnavailableError")
+    throw new MetricBaselineUnavailableError(message);
   if (name === "MovesInvalidError") {
     const issues = (error as { issues?: unknown }).issues;
     throw new MovesInvalidError(
@@ -457,10 +461,11 @@ export async function createWorkItem(
         ...(input.rank !== undefined && { rank: input.rank }),
         ...(input.estimate !== undefined && { estimate: input.estimate }),
         ...(input.scores !== undefined && { scores: input.scores }),
+        ...(input.moves !== undefined && { moves: input.moves }),
       },
       sessionUser.id,
     );
-    return toDto(created);
+    return await withMoveReadings(toDto(created));
   } catch (e) {
     rethrowBackendError(e);
   }

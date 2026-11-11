@@ -58,6 +58,11 @@ export interface WorkItemCommandPort {
      * markdown adapter throws `UnsupportedWorkItemFieldError`.
      */
     scores?: WorkItemScores;
+    /**
+     * Doltgres-only (story.0033): the metrics the new item moves; the adapter resolves each id
+     * and pins its baseline. `[]` declares none. The markdown adapter throws `UnsupportedWorkItemFieldError`.
+     */
+    moves?: readonly MoveInput[];
   }): Promise<WorkItem>;
 
   patch(input: {

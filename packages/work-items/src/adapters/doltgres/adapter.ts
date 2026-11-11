@@ -56,11 +56,13 @@ import {
 } from "../../cites.js";
 import {
   type MetricBaselinePort,
+  type MoveInput,
   moveIssues,
   MovesInvalidError,
   MovesUnsupportedError,
   parseStoredMoves,
   pinMoves,
+  type WorkItemMove,
 } from "../../moves.js";
 import { parseWorkItemScores } from "../../scores.js";
 import {
@@ -3158,6 +3160,12 @@ export class DoltgresWorkItemAdapter
       input.scores === undefined
         ? undefined
         : (validScores(input.scores) ?? undefined);
+    // Moves are checked and baselined once, before any lock: a create has no row to replace.
+    const declared = this.requireMoves(input.moves);
+    const moves =
+      declared === undefined
+        ? undefined
+        : await this.pinMoveEntries(undefined, declared);
     const createOnce = (allocatedId?: string) =>
       this.mutate(
         "create work item",
@@ -3193,6 +3201,7 @@ export class DoltgresWorkItemAdapter
             add("rank", input.rank);
             add("estimate", input.estimate);
             add("scores", scores);
+            add("moves", moves);
             add("assignees", input.assignees);
             add("labels", input.labels);
             add("spec_refs", input.specRefs);
@@ -3382,14 +3391,10 @@ export class DoltgresWorkItemAdapter
           if (moves !== undefined) {
             // MOVES_SERVER_PINS_BASELINE: an id already on the row keeps its baseline;
             // a new id reads the metric's latest good observation once.
-            const pinned =
-              moves.length && this.entryResolver && this.metricBaseline
-                ? await pinMoves(parseStoredMoves(current.moves), moves, {
-                    resolver: this.entryResolver,
-                    baselines: this.metricBaseline,
-                    deadlineMs: this.queryTimeoutMs,
-                  })
-                : [];
+            const pinned = await this.pinMoveEntries(
+              parseStoredMoves(current.moves),
+              moves
+            );
             patchValues.moves = pinned;
             movesClause = `moves = ${escapeValue(pinned)}`;
           }
@@ -3402,13 +3407,26 @@ export class DoltgresWorkItemAdapter
     return result;
   }
 
+  /** The entries a write stores: new ids resolved and baselined, stored ones kept (see `pinMoves`). */
+  private async pinMoveEntries(
+    existing: readonly WorkItemMove[] | undefined,
+    moves: readonly MoveInput[]
+  ): Promise<WorkItemMove[]> {
+    if (!moves.length || !this.entryResolver || !this.metricBaseline) return [];
+    return pinMoves(existing, moves, {
+      resolver: this.entryResolver,
+      baselines: this.metricBaseline,
+      deadlineMs: this.queryTimeoutMs,
+    });
+  }
+
   /**
    * Move rules, then wiring: a non-empty `moves` with no resolver or baseline reader is
    * refused before any lock. `undefined` means the patch leaves `moves` alone; `[]` clears it.
    */
   private requireMoves(
-    moves: readonly { metricId: string; direction: "up" | "down" }[] | undefined
-  ): readonly { metricId: string; direction: "up" | "down" }[] | undefined {
+    moves: readonly MoveInput[] | undefined
+  ): readonly MoveInput[] | undefined {
     if (moves === undefined) return undefined;
     const issues = moveIssues(moves);
     if (issues.length) throw new MovesInvalidError(issues);

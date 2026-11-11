@@ -7,6 +7,7 @@
  * Scope: Auth-protected GET (list — one authoritative backend) and POST (create — node-local Doltgres only).
  * Invariants: VALIDATE_IO, CONTRACTS_ARE_TRUTH, AUTH_VIA_GETSESSIONUSER, NODE_STORE_IS_LOCAL.
  * Evaluation: shared score validation failures return HTTP400 with typed issues.
+ * Moves (story.0033): POST accepts `moves`; an unknown or deprecated new metric id is HTTP400 `cite_unresolved` at `moves`; a baseline failure is HTTP503 `metric_baseline_unavailable`.
  * Side-effects: IO (HTTP response, filesystem read via port, Doltgres read/write)
  * Links: contracts/work.items.{list,create}.v1.contract
  * @public
@@ -29,6 +30,7 @@ import {
   WorkItemWriteOutcomeUnknownError,
 } from "@/app/_facades/work/items.server";
 import { getSessionUser } from "@/app/_lib/auth/session";
+import { inputErrorResponse } from "./_input-errors";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import {
   EVENT_NAMES,
@@ -231,6 +233,9 @@ export const POST = wrapRouteHandlerWithLogging(
           { status: 400 },
         );
       }
+      // story.0033: `moves` on a create is resolved and baselined like on a patch.
+      const input = inputErrorResponse(e, []);
+      if (input) return input;
       if (e instanceof WorkItemWriteOutcomeUnknownError) {
         return NextResponse.json(
           {

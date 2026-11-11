@@ -7,7 +7,9 @@
  * Scope: Fake `Sql` over one in-memory row. No real database.
  * Invariants:
  *   - MOVES_PIN_ONCE: a new entry reads the metric's latest observation once; an entry already on the row keeps its baseline; removing and re-adding pins a new one; no observation stores null.
- *   - METRIC_IS_RESOLVED: every id in a write goes through the resolver under rule "metric"; an unknown or deprecated id is EntryUnresolvedError and nothing is written.
+ *   - NEW_ENTRIES_ARE_RESOLVED: only ids new on the item go through the resolver under rule "metric"; an unknown or deprecated NEW id is EntryUnresolvedError and nothing is written. A stored entry is kept, even if its metric was deprecated since.
+ *   - CREATE_PINS_TOO: a create with `moves` validates and pins the baseline the same way, once, and writes nothing on failure.
+ *   - BASELINE_FAILURE_IS_ITS_OWN_ERROR: a baseline reader that fails or hangs is MetricBaselineUnavailableError, not the resolver's error.
  *   - INSIDE_THE_LOCK: the resolver and the baseline reader run inside the writer lock and before the branch checkout.
  *   - WIRING_IS_EXPLICIT: a non-empty write with no resolver or baseline reader is MovesUnsupportedError; `[]` needs neither.
  * Side-effects: none
@@ -27,6 +29,7 @@ import {
   EntryUnresolvedError,
 } from "../../src/cites.js";
 import {
+  MetricBaselineUnavailableError,
   type MetricBaselinePort,
   MovesInvalidError,
   MovesUnsupportedError,
@@ -85,6 +88,14 @@ function harness(adapter: Partial<DoltgresWorkItemAdapterOptions> = {}) {
       if (moves !== undefined) next.moves = JSON.parse(moves.replace(/''/g, "'"));
       store.set(ID, next);
       return [next];
+    }
+    if (query.startsWith("INSERT INTO work_items")) {
+      const id = /VALUES \('([^']+)'/.exec(query)?.[1] ?? "";
+      const written = /'(\[.*?\])'::jsonb/.exec(query)?.[1];
+      const row: Record<string, unknown> = { ...seed, id, revision: 0 };
+      if (written !== undefined) row.moves = JSON.parse(written.replace(/''/g, "'"));
+      store.set(id, row);
+      return [row];
     }
     const byId = /FROM work_items WHERE id = '([^']+)'/.exec(query)?.[1];
     if (byId) {
@@ -285,17 +296,48 @@ describe("DoltgresWorkItemAdapter.patch — moves (story.0033)", () => {
     expect(store.get(ID)?.moves).toBeUndefined();
   });
 
-  it("checks an entry that stays again, so a metric deprecated since must be dropped to save", async () => {
-    const { adapter, store } = wired(["m-1"], { "m-1": [OBS_1] });
-    await setMoves(adapter, [{ metricId: "m-1", direction: "up" }]);
-    const later = harness({
-      entryResolver: { resolve: metricResolver([]) },
-      metricBaseline: baselines({}).port,
+  it("resolves only ids that are new: a stored entry whose metric was deprecated since is kept, and unrelated saves still work", async () => {
+    const first = wired(["m-1"], { "m-1": [OBS_1] });
+    await setMoves(first.adapter, [{ metricId: "m-1", direction: "up" }]);
+    // m-1 is deprecated since: the resolver no longer lists it. m-2 is new and live.
+    const resolve = metricResolver(["m-2"]);
+    const reader = baselines({ "m-2": [OBS_2] });
+    const later = harness({ entryResolver: { resolve }, metricBaseline: reader.port });
+    later.store.set(ID, { ...seed, moves: first.store.get(ID)?.moves });
+
+    // An unrelated patch never touches moves.
+    await expect(patch(later.adapter, { title: "renamed" }, "rename")).resolves.toMatchObject({
+      title: "renamed",
     });
-    later.store.set(ID, { ...seed, moves: store.get(ID)?.moves });
+    expect(resolve).not.toHaveBeenCalled();
+
+    // Re-sending the stored entry (even with a new direction) and adding a live one resolves only m-2.
+    const result = await setMoves(later.adapter, [
+      { metricId: "m-1", direction: "down" },
+      { metricId: "m-2", direction: "up" },
+    ]);
+    expect(result.moves).toEqual([
+      { metricId: "m-1", direction: "down", baselineObservationId: OBS_1 },
+      { metricId: "m-2", direction: "up", baselineObservationId: OBS_2 },
+    ]);
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect(resolve.mock.calls[0]?.[0]).toEqual([{ id: "m-2" }]);
+    expect(reader.calls).toEqual(["m-2"]);
+
+    // A NEW deprecated id is still refused.
     await expect(
-      setMoves(later.adapter, [{ metricId: "m-1", direction: "down" }])
-    ).rejects.toBeInstanceOf(EntryUnresolvedError);
+      setMoves(later.adapter, [
+        { metricId: "m-1", direction: "down" },
+        { metricId: "m-3", direction: "up" },
+      ])
+    ).rejects.toMatchObject({ name: "EntryUnresolvedError", ids: ["m-3"], field: "moves" });
+    // Re-sending only stored entries calls no resolver at all.
+    resolve.mockClear();
+    await expect(
+      setMoves(later.adapter, [{ metricId: "m-1", direction: "up" }])
+    ).resolves.toMatchObject({ moves: [{ metricId: "m-1", baselineObservationId: OBS_1 }] });
+    expect(resolve).not.toHaveBeenCalled();
+    // A deprecated stored entry can be dropped.
     await expect(setMoves(later.adapter, [])).resolves.toMatchObject({ moves: [] });
   });
 
@@ -339,7 +381,7 @@ describe("DoltgresWorkItemAdapter.patch — moves (story.0033)", () => {
     expect(queries).toHaveLength(0);
   });
 
-  it("a baseline reader that fails is EntryResolverUnavailableError and writes nothing", async () => {
+  it("a baseline reader that fails is MetricBaselineUnavailableError (503 metric_baseline_unavailable) and writes nothing", async () => {
     const { adapter, queries } = harness({
       entryResolver: { resolve: metricResolver(["m-1"]) },
       metricBaseline: {
@@ -350,7 +392,23 @@ describe("DoltgresWorkItemAdapter.patch — moves (story.0033)", () => {
     });
     await expect(
       setMoves(adapter, [{ metricId: "m-1", direction: "up" }])
-    ).rejects.toBeInstanceOf(EntryResolverUnavailableError);
+    ).rejects.toMatchObject({
+      name: "MetricBaselineUnavailableError",
+      code: "metric_baseline_unavailable",
+    });
+    expect(branched(queries)).toBe(false);
+    expect(unlocked(queries)).toBe(true);
+  });
+
+  it("a baseline reader that never answers is MetricBaselineUnavailableError within the deadline, lock free", async () => {
+    const { adapter, queries } = harness({
+      queryTimeoutMs: 30,
+      entryResolver: { resolve: metricResolver(["m-1"]) },
+      metricBaseline: { latestObservationId: () => new Promise(() => undefined) },
+    });
+    const attempt = setMoves(adapter, [{ metricId: "m-1", direction: "up" }]);
+    await expect(attempt).rejects.toBeInstanceOf(MetricBaselineUnavailableError);
+    await expect(attempt).rejects.not.toBeInstanceOf(EntryResolverUnavailableError);
     expect(branched(queries)).toBe(false);
     expect(unlocked(queries)).toBe(true);
   });
@@ -374,5 +432,89 @@ describe("DoltgresWorkItemAdapter.patch — moves (story.0033)", () => {
     const { adapter } = wired(["m-1"], { "m-1": ["not-a-uuid"] });
     const result = await setMoves(adapter, [{ metricId: "m-1", direction: "up" }]);
     expect(result.moves?.[0]?.baselineObservationId).toBeNull();
+  });
+
+  describe("create (story.0033)", () => {
+    const create = (adapter: DoltgresWorkItemAdapter, moves?: unknown) =>
+      adapter.create(
+        { type: "task", title: "filed with a metric", ...(moves !== undefined && { moves }) } as never,
+        PRINCIPAL
+      );
+    const insert = (queries: string[]) =>
+      queries.find((q) => q.startsWith("INSERT INTO work_items"));
+
+    it("validates, pins the baseline once and stores moves on the new row", async () => {
+      const { adapter, queries, resolve, calls } = wired(["m-1", "m-2"], {
+        "m-1": [OBS_1],
+        "m-2": [null],
+      });
+      const created = await create(adapter, [
+        { metricId: "m-1", direction: "up" },
+        { metricId: "m-2", direction: "down" },
+      ]);
+      expect(created.moves).toEqual([
+        { metricId: "m-1", direction: "up", baselineObservationId: OBS_1 },
+        { metricId: "m-2", direction: "down", baselineObservationId: null },
+      ]);
+      expect(resolve).toHaveBeenCalledTimes(1);
+      expect(resolve.mock.calls[0]?.[0]).toEqual([{ id: "m-1" }, { id: "m-2" }]);
+      expect(resolve.mock.calls[0]?.[1]).toBe("metric");
+      expect(calls).toEqual(["m-1", "m-2"]);
+      expect(insert(queries)).toMatch(/^INSERT INTO work_items \([^)]*\bmoves\b[^)]*\) VALUES/);
+      expect(committed(queries)).toBe(true);
+    });
+
+    it("drops a baseline a client sends only at the HTTP edge; the adapter never reads one from input", async () => {
+      const { adapter } = wired(["m-1"], { "m-1": [OBS_1] });
+      const created = await create(adapter, [
+        { metricId: "m-1", direction: "up", baselineObservationId: OBS_3 },
+      ]);
+      expect(created.moves?.[0]?.baselineObservationId).toBe(OBS_1);
+    });
+
+    it("an item created without moves has none; [] is stored as a declaration and needs no wiring", async () => {
+      const plain = wired(["m-1"]);
+      expect(insert((await create(plain.adapter, undefined), plain.queries))).not.toMatch(/\bmoves\b/);
+      expect(plain.resolve).not.toHaveBeenCalled();
+      const bare = harness();
+      const created = await create(bare.adapter, []);
+      expect(created.moves).toEqual([]);
+      expect(insert(bare.queries)).toContain("'[]'::jsonb");
+    });
+
+    it("an unknown or deprecated metric writes nothing", async () => {
+      const { adapter, queries, calls } = wired(["m-1"], { "m-1": [OBS_1] });
+      const attempt = create(adapter, [
+        { metricId: "m-1", direction: "up" },
+        { metricId: "ghost", direction: "up" },
+      ]);
+      await expect(attempt).rejects.toBeInstanceOf(EntryUnresolvedError);
+      await expect(attempt).rejects.toMatchObject({ ids: ["ghost"], field: "moves" });
+      expect(calls).toEqual([]);
+      expect(queries).toHaveLength(0);
+    });
+
+    it("refuses a bad list and a missing wiring before any SQL, and a failing baseline reader is its own error", async () => {
+      const { adapter, queries } = wired(["m-1"]);
+      await expect(
+        create(adapter, [1, 2, 3, 4].map((i) => ({ metricId: `m-${i}`, direction: "up" })))
+      ).rejects.toBeInstanceOf(MovesInvalidError);
+      const bare = harness();
+      await expect(
+        create(bare.adapter, [{ metricId: "m-1", direction: "up" }])
+      ).rejects.toBeInstanceOf(MovesUnsupportedError);
+      const failing = harness({
+        entryResolver: { resolve: metricResolver(["m-1"]) },
+        metricBaseline: {
+          latestObservationId: async () => {
+            throw new Error("db down");
+          },
+        },
+      });
+      await expect(
+        create(failing.adapter, [{ metricId: "m-1", direction: "up" }])
+      ).rejects.toBeInstanceOf(MetricBaselineUnavailableError);
+      expect([...queries, ...bare.queries, ...failing.queries]).toHaveLength(0);
+    });
   });
 });

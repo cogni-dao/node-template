@@ -1342,6 +1342,21 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			expect(third.moves).toEqual([
 				{ metricId: "convergence-ratio", direction: "up", baselineObservationId: OBS_2 },
 			]);
+			// A create names its metric when it is filed: validated, baselined once (none left: null), stored.
+			const filedId = toWorkItemId("task.9508");
+			const filed = await adapter.create(
+				{
+					id: filedId,
+					type: "task",
+					title: "Filed with a metric",
+					moves: [{ metricId: "deploy-first-try-7d", direction: "up" }],
+				},
+				principal,
+			);
+			expect(filed.moves).toEqual([
+				{ metricId: "deploy-first-try-7d", direction: "up", baselineObservationId: null },
+			]);
+			await expect(adapter.get(filedId)).resolves.toMatchObject({ moves: filed.moves });
 			await expect(
 				movesSql.unsafe("SELECT name FROM dolt.branches WHERE name LIKE 'work-item-op/%'"),
 			).resolves.toHaveLength(0);

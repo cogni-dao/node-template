@@ -62,6 +62,8 @@ export {
   MOVE_OBSERVATION_ID_PATTERN,
   MOVES_DEADLINE_MS,
   MOVES_MAX,
+  MetricBaselineUnavailableError,
+  MoveMetricGoneError,
   MovesInvalidError,
   MovesUnsupportedError,
   moveIssues,
@@ -71,6 +73,7 @@ export {
 export {
   CiteRefSchema,
   MoveInputSchema,
+  WorkItemMovesInputSchema,
   WorkItemPatchInputSchema,
   WorkItemPatchStatusSchema,
   WorkItemScoresInputSchema

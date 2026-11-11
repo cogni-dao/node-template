@@ -406,9 +406,13 @@ export class MarkdownWorkItemAdapter
     assignees?: SubjectRef[];
     node?: string;
     scores?: WorkItemScores;
+    moves?: readonly unknown[];
   }): Promise<WorkItem> {
     if (input.scores !== undefined) {
       throw new UnsupportedWorkItemFieldError("scores");
+    }
+    if (input.moves !== undefined) {
+      throw new UnsupportedWorkItemFieldError("moves");
     }
     const { id, numStr } = await allocateNextId(this.workDir, input.type);
     const slug = slugify(input.title);

@@ -66,7 +66,7 @@ export const workItemUpdateContract: ToolContract<
     "Input { id, expectedRevision?, reason, cites?, set }. `set` holds the fields to change (status, scores, labels, ...); " +
     "`scores` replaces the whole object. " +
     "`set.moves` (optional) names the metrics this work moves: at most 3 of { metricId, direction: 'up'|'down' }; it replaces the whole list and [] means the item moves no metric (say why in the reason). " +
-    "Use a metric id from core__metric_list or core__goal_progress; an unknown or deprecated id fails the write. Never send a baseline: the server pins each new metric's baseline once and keeps it. " +
+    "Use a metric id from core__metric_list or core__goal_progress; an unknown or deprecated NEW id fails the write, while an entry already on the item is kept. Set moves when you file an item too (POST create takes the same `moves`). Never send a baseline: the server pins each new metric's baseline once and keeps it. " +
     "With expectedRevision the write lands only if the item is still at that " +
     "revision; otherwise nothing is written and the result is success=false, code='revision_conflict'. " +
     `${CHANGE_REASON_REQUIRED_MESSAGE}. Keep it to 25 words; never put the reason in summary or outcome. ` +

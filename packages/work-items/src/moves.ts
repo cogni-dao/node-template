@@ -7,9 +7,10 @@
  * Scope: Types, rules, the two narrow metric ports, the pin-once reconcile and the read-time judgement. No I/O of its own; this package never imports `@cogni-dao/metrics`.
  * Invariants:
  *   - MOVES_BOUNDED: at most 3 entries, metric ids unique, each id 1..40 characters; `[]` is allowed and means "moves nothing" (the required edit reason says why).
- *   - METRIC_IS_RESOLVED: every id in a write is checked with `EntryResolver` under rule `"metric"` (registered and not deprecated); an unknown id is `EntryUnresolvedError`.
+ *   - NEW_ENTRIES_ARE_RESOLVED: each id that is NEW on the item is checked with `EntryResolver` under rule `"metric"` (registered and not deprecated); an unknown or deprecated id is `EntryUnresolvedError`. An entry already on the item is kept as it is, so a metric deprecated later never blocks an unrelated save; a read shows it as `unknown` with `metric_deprecated`.
  *   - BASELINE_IS_SERVER_OWNED: clients send `{ metricId, direction }` only. The server fills `baselineObservationId` when an entry first appears and never changes it; removing an entry and adding it back pins a new baseline.
  *   - NULL_BASELINE_READS_UNKNOWN: with no observation to pin, the baseline stays `null` and the read says `unknown` (reason `no_baseline`), never zero.
+ *   - BASELINE_FAILURE_IS_ITS_OWN_ERROR: a baseline reader that fails or runs past the deadline is `MetricBaselineUnavailableError` (503 `metric_baseline_unavailable`); a resolver failure stays `EntryResolverUnavailableError`.
  *   - READ_IS_BOUNDED: judging an item looks up at most one baseline and one latest reading per move, within one deadline; a failed lookup reads `unknown`.
  * Side-effects: none (the ports it calls do I/O)
  * Links: hub metric-foundation-design ("Metrics serve KPIs; work moves metrics"), packages/work-items/src/cites.ts
@@ -58,9 +59,29 @@ export interface MoveReading {
   readonly observedAt: string;
 }
 
+/**
+ * A `MoveReadingPort` throws this when the metric itself is gone (unknown or deprecated), as
+ * opposed to a reading that is missing. The judge reads it as `unknown` / `metric_deprecated`.
+ */
+export class MoveMetricGoneError extends Error {
+  constructor(readonly metricId: string) {
+    super(`Metric is unknown or deprecated: ${metricId}`);
+    this.name = "MoveMetricGoneError";
+  }
+}
+
+/** The baseline reader failed or ran past its deadline; nothing was written. */
+export class MetricBaselineUnavailableError extends Error {
+  readonly code = "metric_baseline_unavailable" as const;
+  constructor(message = "Metric baseline is unavailable; retry shortly") {
+    super(message);
+    this.name = "MetricBaselineUnavailableError";
+  }
+}
+
 /** Read side of the same service, narrow enough that this package stays free of the metrics package. */
 export interface MoveReadingPort {
-  /** The reading with this id, or `null` when it is gone, has no value, or is not this metric's. */
+  /** The reading with this id, or `null` when it is gone, has no value, or is not this metric's. Throws `MoveMetricGoneError` when the metric is unknown or deprecated. */
   observation(
     metricId: string,
     observationId: string,
@@ -75,6 +96,7 @@ export type MoveUnknownReason =
   | "no_baseline"
   | "baseline_unreadable"
   | "no_current"
+  | "metric_deprecated"
   | "metrics_unavailable";
 
 export interface JudgedMove extends WorkItemMove {
@@ -204,11 +226,13 @@ function unresolvedIds(error: unknown): readonly string[] | undefined {
 /**
  * Build the entries a write stores. Pure on its inputs and two injected ports.
  *
- *   1. every incoming id is resolved under rule `"metric"` (unknown or deprecated: `EntryUnresolvedError`);
- *   2. an id already on the item keeps its stored baseline, whatever the client sent;
- *   3. an id that is new reads the metric's latest good observation once; none: `null`.
+ *   1. an id already on the item keeps its stored baseline, whatever the client sent, and is NOT
+ *      checked again: a metric deprecated since never blocks the save;
+ *   2. an id that is new is resolved under rule `"metric"` (unknown or deprecated:
+ *      `EntryUnresolvedError`), then reads the metric's latest good observation once; none: `null`.
  *
- * The caller holds the writer lock, so "already on the item" is the row the write replaces.
+ * With nothing new the resolver is not called. The caller holds the writer lock on a patch, so
+ * "already on the item" is the row the write replaces; a create passes no existing entries.
  */
 export async function pinMoves(
   existing: readonly WorkItemMove[] | undefined,
@@ -221,29 +245,30 @@ export async function pinMoves(
 ): Promise<WorkItemMove[]> {
   if (!incoming.length) return [];
   const deadlineMs = deps.deadlineMs ?? MOVES_DEADLINE_MS;
-  const unavailable = () =>
-    new EntryResolverUnavailableError(
-      `Metric lookup did not answer within ${deadlineMs}ms; nothing was written`
-    );
   const kept = new Map((existing ?? []).map((m) => [m.metricId, m]));
+  const fresh = incoming.filter((m) => !kept.has(m.metricId));
+  let phase: "resolve" | "baseline" = "resolve";
   return withDeadline(
     deadlineMs,
     async (signal) => {
-      try {
-        await deps.resolver.resolve(
-          incoming.map((m) => ({ id: m.metricId })),
-          "metric",
-          signal
-        );
-      } catch (error) {
-        const ids = unresolvedIds(error);
-        if (ids) throw new EntryUnresolvedError(ids, "moves");
-        throw error instanceof EntryResolverUnavailableError
-          ? error
-          : new EntryResolverUnavailableError(
-              "Metric resolver is unavailable; nothing was written"
-            );
+      if (fresh.length) {
+        try {
+          await deps.resolver.resolve(
+            fresh.map((m) => ({ id: m.metricId })),
+            "metric",
+            signal
+          );
+        } catch (error) {
+          const ids = unresolvedIds(error);
+          if (ids) throw new EntryUnresolvedError(ids, "moves");
+          throw error instanceof EntryResolverUnavailableError
+            ? error
+            : new EntryResolverUnavailableError(
+                "Metric resolver is unavailable; nothing was written"
+              );
+        }
       }
+      phase = "baseline";
       const pinned: WorkItemMove[] = [];
       for (const move of incoming) {
         const prior = kept.get(move.metricId);
@@ -262,7 +287,7 @@ export async function pinMoves(
             signal
           );
         } catch {
-          throw new EntryResolverUnavailableError(
+          throw new MetricBaselineUnavailableError(
             `Metric baseline for ${move.metricId} could not be read; nothing was written`
           );
         }
@@ -278,9 +303,20 @@ export async function pinMoves(
       }
       return pinned;
     },
-    unavailable
+    () =>
+      phase === "baseline"
+        ? new MetricBaselineUnavailableError(
+            `Metric baseline did not answer within ${deadlineMs}ms; nothing was written`
+          )
+        : new EntryResolverUnavailableError(
+            `Metric lookup did not answer within ${deadlineMs}ms; nothing was written`
+          )
   );
 }
+
+const isMetricGone = (error: unknown): boolean =>
+  error instanceof MoveMetricGoneError ||
+  (error as { name?: unknown } | null)?.name === "MoveMetricGoneError";
 
 /** The verdict of one move from its two readings. Never throws; absent data is `unknown`. */
 export function judgeMove(
@@ -339,14 +375,16 @@ export async function judgeMoves(
         move.baselineObservationId,
         controller.signal
       );
-    } catch {
+    } catch (error) {
+      if (isMetricGone(error)) return unknown(move, "metric_deprecated");
       baseline = null;
     }
     if (!baseline) return unknown(move, "baseline_unreadable");
     let current: MoveReading | null = null;
     try {
       current = await readings.latest(move.metricId, controller.signal);
-    } catch {
+    } catch (error) {
+      if (isMetricGone(error)) return unknown(move, "metric_deprecated", baseline);
       current = null;
     }
     if (!current) return unknown(move, "no_current", baseline);

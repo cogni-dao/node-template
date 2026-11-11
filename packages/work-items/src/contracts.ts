@@ -52,6 +52,7 @@ export const WorkItemMoveDtoSchema = z.object({
 			"no_baseline",
 			"baseline_unreadable",
 			"no_current",
+			"metric_deprecated",
 			"metrics_unavailable",
 		])
 		.optional(),

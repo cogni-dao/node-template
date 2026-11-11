@@ -27,7 +27,7 @@ vi.mock("@/shared/config/repoSpec.server", () => ({
 }));
 
 describe("agent.json work-item moves", () => {
-  it("offers set.moves on the PATCH action, without a baseline, and shows it on the read", async () => {
+  it("offers moves on the create and PATCH actions, without a baseline, and shows it on the read", async () => {
     const { GET } = await import("@/app/.well-known/agent.json/route");
     const body = await (
       await GET(new Request("https://node.example/.well-known/agent.json"))
@@ -45,6 +45,15 @@ describe("agent.json work-item moves", () => {
     expect(moves.items.properties.direction.enum).toEqual(["up", "down"]);
     expect(moves.items.properties).not.toHaveProperty("baselineObservationId");
 
+    // A create names its metrics at filing time with the same schema.
+    const onCreate =
+      body.actions.createWorkItem.inputSchema.properties.moves;
+    expect(onCreate).toMatchObject({ type: "array", maxItems: 3 });
+    expect(onCreate.description).toContain("never send one");
+    expect(onCreate.items.properties).not.toHaveProperty(
+      "baselineObservationId"
+    );
+
     const read =
       body.actions.getWorkItem.outputSchema.properties.moves.items.properties;
     expect(read).toHaveProperty("baselineObservationId");
@@ -54,5 +63,6 @@ describe("agent.json work-item moves", () => {
       "flat",
       "unknown",
     ]);
+    expect(read.unknownReason.enum).toContain("metric_deprecated");
   });
 });

@@ -21,6 +21,7 @@ import { WorkItemDtoSchema } from "../src/contracts.js";
 import {
   judgeMove,
   judgeMoves,
+  MoveMetricGoneError,
   type MoveReading,
   type MoveReadingPort,
   moveIssues,
@@ -92,6 +93,22 @@ describe("WorkItemPatchInputSchema moves", () => {
     expect(result.success).toBe(true);
     if (!result.success) return;
     expect(result.data.set.moves).toEqual([{ metricId: "m-1", direction: "up" }]);
+  });
+});
+
+describe("WorkItemMovesInputSchema (create and patch share it)", () => {
+  it("is the schema of both writes", async () => {
+    const { WorkItemMovesInputSchema } = await import("../src/patch-contract.js");
+    expect(WorkItemMovesInputSchema.safeParse([]).success).toBe(true);
+    expect(WorkItemMovesInputSchema.safeParse([{ metricId: "m", direction: "up", baselineObservationId: OBS_1 }]).data).toEqual([
+      { metricId: "m", direction: "up" },
+    ]);
+    expect(
+      WorkItemMovesInputSchema.safeParse([
+        { metricId: "m", direction: "up" },
+        { metricId: "m", direction: "down" },
+      ]).success
+    ).toBe(false);
   });
 });
 
@@ -200,9 +217,19 @@ describe("WorkItemDto moves", () => {
           moved: "unknown",
           unknownReason: "no_baseline",
         },
+        {
+          metricId: "m-3",
+          direction: "down",
+          baselineObservationId: OBS_1,
+          baseline: null,
+          current: null,
+          moved: "unknown",
+          unknownReason: "metric_deprecated",
+        },
       ],
     });
     expect(dto.moves?.[1]?.moved).toBe("unknown");
+    expect(dto.moves?.[2]?.unknownReason).toBe("metric_deprecated");
   });
 });
 
@@ -315,6 +342,40 @@ describe("judgeMoves", () => {
     );
     const out = await judgeMoves([move("m-1", "up"), move("m-2", "up")], readings);
     expect(out.map((m) => m.moved)).toEqual(["unknown", "as_declared"]);
+  });
+
+  it("a metric that is gone reads unknown (metric_deprecated), from either lookup", async () => {
+    const gone = (id: string) => new MoveMetricGoneError(id);
+    const onBaseline: MoveReadingPort = {
+      observation: async (id) => {
+        throw gone(id);
+      },
+      latest: async () => reading(1),
+    };
+    const [a] = await judgeMoves([move("m-1", "up")], onBaseline);
+    expect(a).toMatchObject({ moved: "unknown", unknownReason: "metric_deprecated", baseline: null });
+
+    const onLatest: MoveReadingPort = {
+      observation: async () => reading(1),
+      latest: async (id) => {
+        throw gone(id);
+      },
+    };
+    const [b] = await judgeMoves([move("m-1", "up")], onLatest);
+    expect(b).toMatchObject({
+      moved: "unknown",
+      unknownReason: "metric_deprecated",
+      baseline: reading(1),
+      current: null,
+    });
+    // A bundled copy of the class is matched by name; one bad move does not hide the others.
+    const copy: MoveReadingPort = {
+      observation: async (id) =>
+        id === "old" ? Promise.reject(Object.assign(new Error("x"), { name: "MoveMetricGoneError" })) : reading(1),
+      latest: async () => reading(2),
+    };
+    const out = await judgeMoves([move("old", "up"), move("live", "up")], copy);
+    expect(out.map((m) => m.unknownReason ?? m.moved)).toEqual(["metric_deprecated", "as_declared"]);
   });
 
   it("with no metrics service every move is unknown (metrics_unavailable)", async () => {
