@@ -170,6 +170,13 @@ deployment:
     expect(findRetiredSecretRefs(REPO_SPEC_TWO_SERVICES)).toEqual([]);
   });
 
+  it("fails closed on a repo-spec too large to check", () => {
+    const big = `# ${"x".repeat(300 * 1024)}\nnode_id: x\n`;
+    expect(findRetiredSecretRefs(big).map((i) => i.code)).toEqual([
+      "retired_secret_refs",
+    ]);
+  });
+
   it("never echoes a secret_refs value", () => {
     const marker = "sk-live-MARKER123";
     const result = check({

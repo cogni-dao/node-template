@@ -39,14 +39,21 @@ const has = (value: Record<string, unknown>, key: string): boolean =>
   Object.hasOwn(value, key);
 
 /**
- * Report every `secret_refs` field in a repo-spec's YAML text. Unparseable or oversized text yields no
- * issue: the repo-spec schema check owns that failure, and this function only answers the one question.
+ * Report every `secret_refs` field in a repo-spec's YAML text. Unparseable text yields no issue: the
+ * repo-spec schema check owns that failure. Oversized text fails closed with one issue, because a
+ * field this function cannot read is never assumed absent.
  */
 export function findRetiredSecretRefs(
   repoSpecText: string
 ): readonly RetiredSecretRefsIssue[] {
   if (new TextEncoder().encode(repoSpecText).length > MAX_REPO_SPEC_BYTES)
-    return [];
+    return [
+      {
+        code: "retired_secret_refs",
+        path: "",
+        message: "repo-spec is too large to check for secret_refs",
+      },
+    ];
   let raw: unknown;
   try {
     raw = parseYaml(repoSpecText, { prettyErrors: false, logLevel: "error" });
