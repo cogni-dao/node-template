@@ -16,6 +16,7 @@ import {
   type WorkItemUpdateInput,
   workItemUpdateContract,
 } from "@cogni/ai-tools";
+import { ToolMessage } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import {
   DynamicStructuredTool,
@@ -109,7 +110,13 @@ export function createCloseoutGuard(
     pending.add(input.id);
     try {
       const result = await writer.invoke(input, config);
-      const text = typeof result === "string" ? result : JSON.stringify(result);
+      // Called as a tool call, the writer returns a ToolMessage; its content is the route's reply.
+      const text =
+        typeof result === "string"
+          ? result
+          : result instanceof ToolMessage && typeof result.content === "string"
+            ? result.content
+            : JSON.stringify(result);
       let output: { id?: unknown; success?: unknown; error?: unknown } = {};
       try {
         output = JSON.parse(text);

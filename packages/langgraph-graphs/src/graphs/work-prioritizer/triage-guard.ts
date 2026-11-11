@@ -20,6 +20,7 @@ import {
   type WorkItemUpdateInput,
   workItemUpdateContract,
 } from "@cogni/ai-tools";
+import { ToolMessage } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import {
   DynamicStructuredTool,
@@ -217,8 +218,13 @@ export function createTriageGuard(
     pending.add(item.id);
     try {
       const result = await writer.invoke(input, config);
+      // Called as a tool call, the writer returns a ToolMessage; its content is the route's reply.
       const text =
-        typeof result === "string" ? result : JSON.stringify(result);
+        typeof result === "string"
+          ? result
+          : result instanceof ToolMessage && typeof result.content === "string"
+            ? result.content
+            : JSON.stringify(result);
       // Success is the item the PATCH route returns; a failure is { success:false } or { error }.
       let output: { id?: unknown; success?: unknown; error?: unknown; revision?: unknown } = {};
       try {

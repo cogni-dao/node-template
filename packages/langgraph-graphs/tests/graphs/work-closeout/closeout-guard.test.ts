@@ -67,7 +67,7 @@ function setup() {
     );
   const call = (input: Record<string, unknown>) =>
     guard.invoke(input as never) as Promise<string>;
-  return { hooks, receipts, writes, read, pr, live, call };
+  return { hooks, receipts, writes, guard, read, pr, live, call };
 }
 
 describe("closeout guard", () => {
@@ -82,6 +82,21 @@ describe("closeout guard", () => {
     expect(t.receipts.closed.has("bug.0019")).toBe(true);
     const report = t.hooks.projectOutput("closed bug.0019");
     expect(report.telemetry).toMatchObject({ changeCount: 1, aborted: false });
+  });
+
+  it("counts a close when the agent calls it as a tool call (the writer then returns a ToolMessage)", async () => {
+    const t = setup();
+    t.read(item("bug.0019"));
+    t.pr(true);
+    t.live(true);
+    await t.guard.invoke({
+      id: "call-1",
+      name: WORK_ITEM_UPDATE_NAME,
+      args: close("bug.0019"),
+      type: "tool_call",
+    } as never);
+    expect(t.writes).toHaveLength(1);
+    expect(t.receipts.closed.has("bug.0019")).toBe(true);
   });
 
   it("refuses without a live receipt for the running build", async () => {
