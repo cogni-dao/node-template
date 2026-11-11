@@ -1221,6 +1221,10 @@ export {
   wrapPushSafe,
 } from "./dolt-remote.js";
 export {
+  createDoltgresEntryResolver,
+  type EntryResolverSql,
+} from "./entry-resolver.js";
+export {
   DoltgresEdoResolverAdapter,
   type DoltgresEdoResolverConfig,
 } from "./edo-resolver.js";
