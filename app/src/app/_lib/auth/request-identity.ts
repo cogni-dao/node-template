@@ -37,6 +37,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import {
   assertV1NotSuperseded,
+  CredentialRateLimitedError,
   type CredentialState,
   CredentialStoreUnavailableError,
   isRevocableKey,
@@ -142,8 +143,9 @@ export async function verifyRevocableKey(
   token: string,
   allow: readonly CredentialState[]
 ): Promise<VerifyResult> {
-  const { getAgentCredentialStore } = await import("@/bootstrap/agent-credentials");
-  return verifyBearer(getAgentCredentialStore(), token, allow);
+  const { getAgentCredentialStore, admitCredentialLookup } = await import("@/bootstrap/agent-credentials");
+  const h = await headers();
+  return verifyBearer(getAgentCredentialStore(), token, allow, { admit: () => admitCredentialLookup(h) });
 }
 
 /** The bearer token of the current request, if any (the credential routes read it to tell a signed key from a revocable one). */
@@ -170,6 +172,7 @@ export async function resolveRequestIdentity(): Promise<SessionUser | null> {
         return { id: verified.userId, walletAddress: null, displayName: verified.name, avatarColor: null, via: "bearer" };
       }
       if (verified.reason === "unavailable") throw new CredentialStoreUnavailableError();
+      if (verified.reason === "rate_limited") throw new CredentialRateLimitedError();
       return null;
     }
     const payload = parseAgentToken(bearer);

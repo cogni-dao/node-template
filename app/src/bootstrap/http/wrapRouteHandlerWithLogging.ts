@@ -16,7 +16,12 @@
  * @public
  */
 
-import { CredentialStoreUnavailableError, V1SupersededError } from "@cogni/agent-grants/credentials";
+import {
+  CredentialRateLimitedError,
+  CredentialStoreUnavailableError,
+  isRevocableKey,
+  V1SupersededError,
+} from "@cogni/agent-grants/credentials";
 import type { SessionUser } from "@cogni/node-shared";
 import { type NextRequest, NextResponse } from "next/server";
 import type { Container } from "@/bootstrap/container";
@@ -173,21 +178,32 @@ export function wrapRouteHandlerWithLogging<TContext = unknown>(
       try {
         sessionUser = await options.auth.getSessionUser();
       } catch (error) {
+        // These early returns skip the request lifecycle below, so each one counts itself in the http request metric.
+        const earlyReturn = (status: number, body: Record<string, string>, headers: Record<string, string>) => {
+          httpRequestsTotal.inc({ route: options.routeId, method: request.method, status: statusBucket(status) });
+          return NextResponse.json(body, { status, headers });
+        };
         if (error instanceof V1SupersededError) {
-          return NextResponse.json(
-            { error: error.code },
-            { status: 401, headers: { "cache-control": "no-store", "www-authenticate": 'Bearer error="invalid_token"' } }
+          // A signed key used after its user confirmed a revocable key: the best "leaked signed key is being replayed" signal. userId only.
+          container.log.warn(
+            { event: EVENT_NAMES.AGENT_CREDENTIAL_V1_SUPERSEDED_DENIED, routeId: options.routeId, userId: error.userId },
+            EVENT_NAMES.AGENT_CREDENTIAL_V1_SUPERSEDED_DENIED
           );
+          return earlyReturn(401, { error: error.code }, { "cache-control": "no-store", "www-authenticate": 'Bearer error="invalid_token"' });
+        }
+        if (error instanceof CredentialRateLimitedError) {
+          container.log.warn(
+            { event: EVENT_NAMES.AGENT_CREDENTIAL_RATE_LIMITED, routeId: options.routeId },
+            EVENT_NAMES.AGENT_CREDENTIAL_RATE_LIMITED
+          );
+          return earlyReturn(429, { error: error.code }, { "cache-control": "no-store", "retry-after": "60" });
         }
         if (!(error instanceof CredentialStoreUnavailableError)) throw error;
         container.log.warn(
           { event: EVENT_NAMES.AGENT_CREDENTIAL_STORE_UNAVAILABLE, routeId: options.routeId },
           EVENT_NAMES.AGENT_CREDENTIAL_STORE_UNAVAILABLE
         );
-        return NextResponse.json(
-          { error: "authz_unavailable" },
-          { status: 503, headers: { "cache-control": "no-store", "retry-after": "5" } }
-        );
+        return earlyReturn(503, { error: "authz_unavailable" }, { "cache-control": "no-store", "retry-after": "5" });
       }
     }
 
@@ -221,6 +237,13 @@ export function wrapRouteHandlerWithLogging<TContext = unknown>(
           // Check session requirement before calling handler
           if (options.auth?.mode === "required" && !sessionUser) {
             responseStatus = 401;
+            // A refused revocable key (unknown, revoked, expired, wrong state) is a credential denial; logged with routeId only.
+            if (isRevocableKey(request.headers.get("authorization")?.slice("Bearer ".length) ?? "")) {
+              ctx.log.warn(
+                { event: EVENT_NAMES.AGENT_CREDENTIAL_INVALID_DENIED, routeId: options.routeId },
+                EVENT_NAMES.AGENT_CREDENTIAL_INVALID_DENIED
+              );
+            }
             response = NextResponse.json(
               { error: "Session required" },
               { status: responseStatus }

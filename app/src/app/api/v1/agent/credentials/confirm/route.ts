@@ -8,7 +8,7 @@
  * Scope: Auth shell and response mapping. The transaction lives in `@cogni-dao/agent-grants/credentials`.
  * Invariants:
  *   - IDEMPOTENT: confirming an already active key is 200 with `replay: true`. A revoked key never reaches here (401); a race that revokes it
- *     first is 409 `superseded`. A predecessor revoked meanwhile is 409 `predecessor_revoked`; an unconfirmed key past its window is 409 `pending_expired`.
+ *     first is 409 `superseded`. An upgrade key whose user gained roles and has no GitHub binding is 409 `binding_required` (BINDING_BEFORE_UPGRADE, re-checked at confirm). A predecessor revoked meanwhile is 409 `predecessor_revoked`; an unconfirmed key past its window is 409 `pending_expired`.
  *   - DB clock decides expiry. Never logs a key.
  * Side-effects: IO (service-role db), log `agent.credential.confirmed`
  * Links: https://cognidao.org/work/items/task.5474
@@ -30,6 +30,7 @@ const REFUSALS = {
   expired: "pending_expired",
   predecessor_revoked: "predecessor_revoked",
   not_found: "superseded",
+  binding_required: "binding_required",
 } as const;
 
 export const POST = credentialBearerRoute({

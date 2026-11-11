@@ -14,11 +14,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { REVOCABLE_KEY_PREFIX } from "@cogni/agent-grants/credentials";
+import { formatRevocableKey, REVOCABLE_KEY_PREFIX } from "@cogni/agent-grants/credentials";
 import { memoryCredentialStore } from "../../../../../packages/agent-grants/tests/credentials-memory-store";
 
 const fake = vi.hoisted(() => ({
   headers: new Map<string, string>(),
+  /** false = the per-IP lookup limiter is exhausted. */
+  admit: true,
   memory: undefined as unknown as {
     store: unknown;
     outage: { failing: boolean; failOn: string | null };
@@ -36,7 +38,10 @@ vi.mock("@/shared/env/server", () => ({ serverEnv: () => ({ AUTH_SECRET: "test-s
 vi.mock("@/bootstrap/container", () => ({
   getContainer: () => ({ log, config: { unhandledErrorPolicy: "respond_500" }, clock: { now: () => "2026-11-10T00:00:00Z" } }),
 }));
-vi.mock("@/bootstrap/agent-credentials", () => ({ getAgentCredentialStore: () => fake.memory.store }));
+vi.mock("@/bootstrap/agent-credentials", () => ({
+  getAgentCredentialStore: () => fake.memory.store,
+  admitCredentialLookup: () => fake.admit,
+}));
 
 import { issueAgentApiKey, resolveRequestIdentity } from "@/app/_lib/auth/request-identity";
 import { getSessionUser } from "@/app/_lib/auth/session";
@@ -54,6 +59,7 @@ const post = (handler: (r: NextRequest, c: never) => Promise<Response>, key: str
   return handler(
     new NextRequest("http://localhost/api/v1/agent/credentials/x", {
       method: "POST",
+      ...(key ? { headers: { authorization: `Bearer ${key}` } } : {}),
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     }),
     undefined as never
@@ -76,6 +82,7 @@ async function activeKey() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  fake.admit = true;
   log.child.mockReturnValue(log);
   fake.memory = memoryCredentialStore({ users: { [USER]: {}, [OTHER]: {} } }) as never;
 });
@@ -238,6 +245,58 @@ describe("store outage", () => {
     fake.memory.outage.failing = true;
     expect((await post(rotate as never, `${REVOCABLE_KEY_PREFIX}${"a".repeat(42)}!`)).status).toBe(401);
     expect((await post(rotate as never, `${REVOCABLE_KEY_PREFIX}${"a".repeat(44)}`)).status).toBe(401);
+  });
+});
+
+describe("detection and amplification (P1-1, P1-4)", () => {
+  const warned = (event: string) => log.warn.mock.calls.filter(([fields]) => fields?.event === event);
+
+  it("a superseded signed key logs agent.credential.v1_superseded_denied with routeId and userId only, and the request is counted", async () => {
+    const key = v1();
+    const pending = await (await post(upgrade as never, key)).json();
+    await post(confirm as never, pending.apiKey);
+    log.warn.mockClear();
+    const res = await ping(key);
+    expect(res.status).toBe(401);
+    const events = warned("agent.credential.v1_superseded_denied");
+    expect(events).toHaveLength(1);
+    expect(events[0]?.[0]).toEqual({ event: "agent.credential.v1_superseded_denied", routeId: "test.ordinary", userId: USER });
+    expect(JSON.stringify(log.warn.mock.calls)).not.toContain(key);
+  });
+
+  it("an invalid revocable key logs agent.credential.invalid_denied with routeId only, on an ordinary route and a credential route; a missing bearer logs nothing", async () => {
+    const rk = await activeKey();
+    await post(revoke as never, rk.apiKey);
+    log.warn.mockClear();
+    expect((await ping(rk.apiKey)).status).toBe(401);
+    expect((await post(rotate as never, rk.apiKey)).status).toBe(401);
+    const events = warned("agent.credential.invalid_denied").map(([fields]) => fields);
+    expect(events).toEqual([
+      { event: "agent.credential.invalid_denied", routeId: "test.ordinary" },
+      { event: "agent.credential.invalid_denied", routeId: "agent.credentials.rotate" },
+    ]);
+    expect(JSON.stringify(log.warn.mock.calls)).not.toContain(rk.apiKey);
+    log.warn.mockClear();
+    await post(rotate as never, null);
+    expect(warned("agent.credential.invalid_denied")).toHaveLength(0);
+  });
+
+  it("an over-limit client is 429 on an ordinary route and a credential route with NO store read, and an over-limit bad-checksum key is still 401", async () => {
+    const rk = await activeKey();
+    fake.memory.outage.failing = true; // any store read would surface as 503
+    fake.admit = false;
+    const ordinaryRes = await ping(rk.apiKey);
+    expect(ordinaryRes.status).toBe(429);
+    expect(ordinaryRes.headers.get("retry-after")).toBe("60");
+    expect(await ordinaryRes.json()).toEqual({ error: "rate_limited" });
+    expect((await post(rotate as never, rk.apiKey)).status).toBe(429);
+    expect(warned("agent.credential.rate_limited").length).toBe(2);
+    const bad = `${rk.apiKey.slice(0, -1)}${rk.apiKey.endsWith("A") ? "B" : "A"}`;
+    expect((await ping(bad)).status).toBe(401); // checksum fails before the limiter and the store
+  });
+
+  it("a well-formed random key is looked up (401), a malformed one is not", async () => {
+    expect((await ping(formatRevocableKey("a".repeat(43)))).status).toBe(401);
   });
 });
 

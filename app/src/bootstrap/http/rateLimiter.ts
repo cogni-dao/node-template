@@ -145,7 +145,7 @@ export class TokenBucketRateLimiter {
  * - Caddyfile: infra/compose/edge/configs/Caddyfile.tmpl (header_up X-Real-IP)
  * - Unit tests: tests/unit/bootstrap/http/rateLimiter.test.ts
  */
-export function extractClientIp(request: NextRequest): string {
+export function extractClientIp(request: { headers: { get(name: string): string | null } }): string {
   // Prefer X-Real-IP (set by Caddy from TCP source, non-spoofable)
   const realIp = request.headers.get("x-real-ip");
   if (realIp) return realIp.trim();
@@ -160,6 +160,18 @@ export function extractClientIp(request: NextRequest): string {
   // Last resort: group all unidentified clients together
   return "unknown";
 }
+
+/**
+ * Per-IP limit on revocable-key lookups (task.0070, P1-4). Every shape-valid revocable bearer costs one query on the small service pool, so an
+ * unauthenticated flood of well-formed random keys could starve register, NextAuth and the other service-pool users. Looser than the public
+ * limiter on purpose: a real agent behind one IP makes many calls. 300/min sustained + 100 burst per IP; keys that fail the shape or checksum
+ * never spend a token. Per-instance state, same limitation as the public limiter.
+ */
+export const credentialLookupLimiter = new TokenBucketRateLimiter({
+  maxTokens: 300,
+  refillRate: 300 / 60,
+  burstSize: 100,
+});
 
 /**
  * Public API rate limiter singleton.
