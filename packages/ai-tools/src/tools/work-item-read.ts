@@ -22,7 +22,8 @@ export const workItemReadContract: ToolContract<
 > = {
   name: WORK_ITEM_READ_NAME,
   description:
-    "Read one work item completely by exact id. Oversized items fail rather than returning truncated evidence.",
+    "Read one work item completely by exact id. Oversized items fail rather than returning truncated evidence. " +
+    "`moves` lists the metrics the item moves: each has its pinned baseline, the current reading and `moved` (as_declared, against, flat or unknown). unknown is never zero: it means a reading is missing.",
   effect: "read_only",
   inputSchema: Input,
   outputSchema: Output,

@@ -12,6 +12,7 @@
  *   - UNRESOLVED_IS_BY_ID: an unknown id, a closed or unknown inbox, or an inbox without the id is an `EntryUnresolvedError` listing those ids.
  *   - COMMIT_SHAPE: a hash is validated against `^[0-9a-v]{32}$` before it is placed in SQL.
  *   - ABORT_IS_HONORED: an aborted signal stops further reads.
+ *   - METRIC_RULE (story.0033): rule `"metric"` resolves ids on main only, as of the `dolt_hashof('main')` it read. An id resolves when its row has a `metric_spec` and is not `status = 'deprecated'` (the same filter the metric definitions read uses). Inbox refs never resolve under it.
  * Side-effects: IO (reads)
  * Links: hub change-history-design, packages/work-items/src/cites.ts
  * @public
@@ -55,6 +56,42 @@ async function idsAsOf(
   return new Set(rows.map((row) => String(row.id)));
 }
 
+/** The ids that hold a metric spec and are not deprecated in `knowledge` as of `commit`. */
+async function metricIdsAsOf(
+  sql: EntryResolverSql,
+  commit: string,
+  ids: readonly string[]
+): Promise<Set<string>> {
+  const rows = await sql.unsafe(
+    `SELECT id FROM knowledge AS OF '${commit}' WHERE id IN (${idList(ids)}) AND metric_spec IS NOT NULL AND status <> 'deprecated'`
+  );
+  return new Set(rows.map((row) => String(row.id)));
+}
+
+/** Rule `"metric"`: main only; every id must be a registered, not deprecated metric. */
+async function resolveMetrics(
+  sql: EntryResolverSql,
+  refs: readonly EntryCiteRef[],
+  signal: AbortSignal
+): Promise<readonly ResolvedEntry[]> {
+  signal.throwIfAborted();
+  // An inbox ref has no meaning here: a metric must be live on main.
+  const onMain = refs.filter((ref) => !ref.contribution);
+  const unresolved = refs.filter((ref) => ref.contribution).map((r) => r.id);
+  if (!onMain.length) throw new EntryUnresolvedError(unresolved);
+  const hashRows = await sql.unsafe("SELECT dolt_hashof('main') AS hash");
+  const hash = commitOf(hashRows[0]?.hash, "main");
+  signal.throwIfAborted();
+  const found = await metricIdsAsOf(sql, hash, onMain.map((r) => r.id));
+  const resolved: ResolvedEntry[] = [];
+  for (const ref of onMain) {
+    if (found.has(ref.id)) resolved.push({ id: ref.id, commit: hash, plane: "main" });
+    else unresolved.push(ref.id);
+  }
+  if (unresolved.length) throw new EntryUnresolvedError(unresolved);
+  return resolved;
+}
+
 export function createDoltgresEntryResolver(sql: EntryResolverSql): EntryResolver {
   return {
     async resolve(
@@ -62,6 +99,7 @@ export function createDoltgresEntryResolver(sql: EntryResolverSql): EntryResolve
       rule: EntryResolverRule,
       signal: AbortSignal
     ): Promise<readonly ResolvedEntry[]> {
+      if (rule === "metric") return resolveMetrics(sql, refs, signal);
       if (rule !== "cite") throw new Error(`Unknown entry resolution rule: ${String(rule)}`);
       const live = () => signal.throwIfAborted();
       live();

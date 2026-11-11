@@ -10,6 +10,7 @@
  *   - PATCH_ALLOWLIST: only fields in `set` are mutable. id/created_at/updated_at are server-managed.
  *   - Optional expectedRevision enables compare-and-set; omission preserves unconditional patches.
  *   - REASON_REQUIRED: every patch carries a reason (one line, 1-240 chars, at most 25 words), stored in history, never in the item (task.0052, task.0086).
+ *   - MOVES_SERVER_PINS_BASELINE (story.0033): `set.moves` is `[{ metricId, direction }]`, at most 3, or `[]`. Any other key on an entry (a read-only baseline, a reading) is dropped, never trusted; the store pins the baseline.
  *   - CITES_OPTIONAL: `cites` names at most 8 hub atoms the change used; the adapter pins each to a commit (task.0086).
  * Side-effects: none
  * @public
@@ -23,6 +24,7 @@ import {
   CITE_MAX,
 } from "./cites.js";
 import { ChangeReasonSchema } from "./history-contract.js";
+import { MOVE_METRIC_ID_MAX, MOVES_MAX } from "./moves.js";
 
 /**
  * Evaluation scores: configurable axis id -> { v, ev? }. Writes replace the whole object.
@@ -62,6 +64,22 @@ export const CiteRefSchema = z.strictObject({
     .describe("Open inbox id (contrib-...) when the atom exists only there."),
 });
 
+/**
+ * One declared move. Plain `z.object` strips unknown keys on purpose: an agent that sends a
+ * whole item back (with `baselineObservationId` or the read-time readings) must not fail,
+ * and the server fills the baseline itself.
+ */
+export const MoveInputSchema = z.object({
+  metricId: z
+    .string()
+    .min(1)
+    .max(MOVE_METRIC_ID_MAX)
+    .describe("Id of a registered metric (hub entry with a metric spec)."),
+  direction: z
+    .enum(["up", "down"])
+    .describe("The way this work should move the metric."),
+});
+
 export const WorkItemPatchInputSchema = z.object({
   id: z.string(),
   expectedRevision: z.number().int().min(0).optional(),
@@ -97,6 +115,26 @@ export const WorkItemPatchInputSchema = z.object({
       estimate: z.number().int().optional(),
       // null clears the column back to SQL NULL (scores read as absent).
       scores: WorkItemScoresInputSchema.nullable().optional(),
+      // [] = this item moves no metric (the edit reason says why). The server pins each baseline.
+      moves: z
+        .array(MoveInputSchema)
+        .max(MOVES_MAX)
+        .superRefine((moves, ctx) => {
+          const seen = new Set<string>();
+          for (const [i, move] of moves.entries()) {
+            if (seen.has(move.metricId))
+              ctx.addIssue({
+                code: "custom",
+                path: [i, "metricId"],
+                message: `metric id repeats: ${move.metricId}`,
+              });
+            seen.add(move.metricId);
+          }
+        })
+        .optional()
+        .describe(
+          "Metrics this work moves: at most 3 of { metricId, direction: up|down }; [] means it moves none. Replaces the whole list. The server pins each new metric's baseline; never send one."
+        ),
       labels: z.array(z.string()).optional(),
       specRefs: z.array(z.string()).optional(),
       branch: z.string().optional(),

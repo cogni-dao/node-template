@@ -54,6 +54,14 @@ import {
   EntryResolverUnavailableError,
   EntryUnresolvedError,
 } from "../../cites.js";
+import {
+  type MetricBaselinePort,
+  moveIssues,
+  MovesInvalidError,
+  MovesUnsupportedError,
+  parseStoredMoves,
+  pinMoves,
+} from "../../moves.js";
 import { parseWorkItemScores } from "../../scores.js";
 import {
   formatCitesTrailer,
@@ -190,6 +198,13 @@ export interface DoltgresWorkItemAdapterOptions {
    * patch that carries cites is refused with `CitesUnsupportedError`; a reason still works.
    */
   readonly entryResolver?: EntryResolver;
+  /**
+   * Reads a metric's latest good observation id when a `moves` entry first appears (story.0033).
+   * Called inside the writer lock with `entryResolver`, which checks the metric ids under rule `"metric"`.
+   * Without both, a patch that sets a non-empty `moves` is refused with `MovesUnsupportedError`;
+   * `moves: []` still works.
+   */
+  readonly metricBaseline?: MetricBaselinePort;
 }
 
 interface OperationContext {
@@ -232,7 +247,8 @@ interface MutationProof {
   itemId?: string;
   beforeRow?: Record<string, unknown>;
   afterRow?: Record<string, unknown>;
-  readonly patchValues?: Readonly<Record<string, unknown>>;
+  /** Mutable on purpose: `moves` is final only after the preflight read of the row it replaces (story.0033). */
+  readonly patchValues?: Record<string, unknown>;
   readonly runId?: string;
   readonly command?: string;
   readonly commandProvided?: boolean;
@@ -533,6 +549,7 @@ function rowToWorkItem(row: Record<string, unknown>): WorkItem {
     rank: optionalNumber(row.rank),
     estimate: optionalNumber(row.estimate),
     scores: optionalScores(row.scores),
+    moves: parseStoredMoves(row.moves),
     summary: optionalString(row.summary),
     outcome: optionalString(row.outcome),
     projectId: optionalWorkItemId(row.project_id),
@@ -618,6 +635,7 @@ const PATCH_COLUMNS: Record<keyof WorkItemsPatchSet, string> = {
   rank: "rank",
   estimate: "estimate",
   scores: "scores",
+  moves: "moves",
   labels: "labels",
   specRefs: "spec_refs",
   branch: "branch",
@@ -642,6 +660,7 @@ const PERSISTED_WORK_ITEM_COLUMNS = [
   "rank",
   "estimate",
   "scores",
+  "moves",
   "summary",
   "outcome",
   "branch",
@@ -1148,6 +1167,7 @@ export class DoltgresWorkItemAdapter
   private readonly queueWaitMs: number;
   private readonly queryTimeoutMs: number;
   private readonly entryResolver: EntryResolver | undefined;
+  private readonly metricBaseline: MetricBaselinePort | undefined;
   private readonly branchTimeoutMs: number;
   private readonly reserveTimeoutMs: number;
   private readonly recreateClient: (() => Sql) | undefined;
@@ -1180,6 +1200,7 @@ export class DoltgresWorkItemAdapter
     this.queueWaitMs = options.queueWaitMs ?? OPERATION_QUEUE_WAIT_MS;
     this.queryTimeoutMs = options.queryTimeoutMs ?? QUERY_TIMEOUT_MS;
     this.entryResolver = options.entryResolver;
+    this.metricBaseline = options.metricBaseline;
     this.branchTimeoutMs = options.branchTimeoutMs ?? BRANCH_TIMEOUT_MS;
     this.reserveTimeoutMs = options.reserveTimeoutMs ?? RESERVE_TIMEOUT_MS;
     this.recreateClient = options.recreateClient;
@@ -3267,18 +3288,26 @@ export class DoltgresWorkItemAdapter
             ...input.set,
             scores: validScores(input.set.scores),
           };
+    const moves = this.requireMoves(set.moves);
     const clauses: string[] = [];
     const setKeys: (keyof WorkItemsPatchSet)[] = [];
     for (const [key, column] of Object.entries(PATCH_COLUMNS) as [
       keyof WorkItemsPatchSet,
       string,
     ][]) {
+      // `moves` is built inside the lock: its baselines depend on the row it replaces.
+      if (key === "moves") continue;
       const value = set[key];
       if (value !== undefined) {
         clauses.push(`${column} = ${escapeValue(value)}`);
         setKeys.push(key);
       }
     }
+    const patchValues: Record<string, unknown> = Object.fromEntries(
+      setKeys.map((key) => [PATCH_COLUMNS[key], set[key]])
+    );
+    // The `moves` clause, set by the preflight once the baselines are pinned.
+    let movesClause: string | undefined;
     const revisionConflict = (row: Record<string, unknown>) => {
       const currentRevision = Number(row.revision ?? 0);
       return expectedRevision !== undefined &&
@@ -3290,7 +3319,7 @@ export class DoltgresWorkItemAdapter
           )
         : undefined;
     };
-    if (!clauses.length) {
+    if (!clauses.length && moves === undefined) {
       return this.readOnCleanMain(async (conn) => {
         const current = await this.getWith(conn, input.id);
         if (!current) throw new Error(`Work item not found: ${id}`);
@@ -3308,6 +3337,7 @@ export class DoltgresWorkItemAdapter
       `patch ${id}`,
       principal,
       async (conn, proof) => {
+        if (movesClause) clauses.push(movesClause);
         clauses.push("revision = revision + 1", "updated_at = NOW()");
         const rows = await conn.unsafe(
           `UPDATE work_items SET ${clauses.join(", ")} WHERE ${where.join(" AND ")} RETURNING *`
@@ -3332,9 +3362,7 @@ export class DoltgresWorkItemAdapter
           itemId: id,
           expectedRevision,
           reason,
-          patchValues: Object.fromEntries(
-            setKeys.map((key) => [PATCH_COLUMNS[key], set[key]])
-          ),
+          patchValues,
         },
         preflight: async (conn, proof) => {
           const current = await this.getWith(conn, input.id);
@@ -3351,6 +3379,20 @@ export class DoltgresWorkItemAdapter
               this.queryTimeoutMs
             );
           }
+          if (moves !== undefined) {
+            // MOVES_SERVER_PINS_BASELINE: an id already on the row keeps its baseline;
+            // a new id reads the metric's latest good observation once.
+            const pinned =
+              moves.length && this.entryResolver && this.metricBaseline
+                ? await pinMoves(parseStoredMoves(current.moves), moves, {
+                    resolver: this.entryResolver,
+                    baselines: this.metricBaseline,
+                    deadlineMs: this.queryTimeoutMs,
+                  })
+                : [];
+            patchValues.moves = pinned;
+            movesClause = `moves = ${escapeValue(pinned)}`;
+          }
         },
         shouldCommit: (value) =>
           !(value instanceof WorkItemRevisionConflictError),
@@ -3358,6 +3400,21 @@ export class DoltgresWorkItemAdapter
     );
     if (result instanceof WorkItemRevisionConflictError) throw result;
     return result;
+  }
+
+  /**
+   * Move rules, then wiring: a non-empty `moves` with no resolver or baseline reader is
+   * refused before any lock. `undefined` means the patch leaves `moves` alone; `[]` clears it.
+   */
+  private requireMoves(
+    moves: readonly { metricId: string; direction: "up" | "down" }[] | undefined
+  ): readonly { metricId: string; direction: "up" | "down" }[] | undefined {
+    if (moves === undefined) return undefined;
+    const issues = moveIssues(moves);
+    if (issues.length) throw new MovesInvalidError(issues);
+    if (moves.length && (!this.entryResolver || !this.metricBaseline))
+      throw new MovesUnsupportedError();
+    return moves;
   }
 
   /** Cite rules, then wiring: a patch with cites and no resolver is refused before any lock. */

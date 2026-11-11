@@ -8,7 +8,7 @@
  * Invariants:
  *   - CITE_ID_COPY: `CITE_ID_PATTERN` is a copy of the knowledge id pattern; a test in the app checks the knowledge-store pattern against it.
  *   - CITES_BOUNDED: at most 8 cites, ids unique, each id and contribution matches its pattern.
- *   - RULE_IS_CLOSED: `rule` names one resolution rule; this version ships `"cite"`.
+ *   - RULE_IS_CLOSED: `rule` names one resolution rule: `"cite"` (a hub atom exists) or `"metric"` (a registered, not deprecated metric on main; story.0033).
  *   - ERRORS_BY_NAME: an implementation may bundle its own copy of `EntryUnresolvedError`; the adapter matches it by name and `ids`.
  * Side-effects: none
  * Links: hub change-history-design
@@ -35,13 +35,14 @@ export interface ResolvedEntry {
   readonly contribution?: string | undefined;
 }
 
-export type EntryResolverRule = "cite";
+export type EntryResolverRule = "cite" | "metric";
 
 export interface EntryResolver {
   /**
    * Pin each ref under `rule`. Throws `EntryUnresolvedError` for ids that do not
-   * exist (or an inbox that is closed or lacks the id). Reads only; takes no
-   * writer lock. `signal` aborts when the caller's deadline passes.
+   * exist (or an inbox that is closed or lacks the id); under `"metric"` also for an id
+   * that holds no metric spec or is deprecated, and `contribution` is not used.
+   * Reads only; takes no writer lock. `signal` aborts when the caller's deadline passes.
    */
   resolve(
     refs: readonly CiteRef[],
@@ -78,11 +79,19 @@ export function citeIssues(cites: unknown): string[] {
   return issues;
 }
 
-/** An unknown cite id, or an inbox that is closed or does not hold it. */
+/** An unknown cite id, or an inbox that is closed or does not hold it; with `field: "moves"`, an unknown or deprecated metric id. */
 export class EntryUnresolvedError extends Error {
   readonly code = "cite_unresolved" as const;
-  constructor(readonly ids: readonly string[]) {
-    super(`Cited entries not found: ${ids.join(", ")}`);
+  constructor(
+    readonly ids: readonly string[],
+    /** The request field the ids came from; the HTTP issue path follows it. */
+    readonly field: "cites" | "moves" = "cites"
+  ) {
+    super(
+      field === "moves"
+        ? `Metrics not found or deprecated: ${ids.join(", ")}`
+        : `Cited entries not found: ${ids.join(", ")}`
+    );
     this.name = "EntryUnresolvedError";
   }
 }

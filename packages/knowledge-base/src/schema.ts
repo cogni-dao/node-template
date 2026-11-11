@@ -16,6 +16,7 @@
  *   - DELETE_IS_CLEAN: dead/retired knowledge is DELETEd (Dolt history preserves content + commits + attribution); supersession is refine-in-place. `status='deprecated'` retained only for the EDO temporal hypothesis lifecycle.
  *   - CONFIDENCE_EVERYWHERE: every row in every knowledge table has `confidence_pct` (integer 0-100). New rows default to 40 — start low, raise as evidence accumulates. 100 is reserved for "factual and works" (objectively verifiable + currently functioning). See seed `cogni-meta-confidence-convention`.
  *   - EVALUATION_SCORES: work_items.scores stores bounded evaluation JSON; work-items owns validation.
+ *   - WORK_ITEM_MOVES: work_items.moves stores at most 3 declared metric moves with a server-pinned baseline (story.0033); work-items owns validation. Migrate the column before any reader runs the new package.
  *   - No FK references to Postgres tables (different database server).
  *   - No RLS — access control via Doltgres roles (knowledge_reader / knowledge_writer).
  * Side-effects: none
@@ -281,6 +282,9 @@ export const workItems = pgTable(
     // Evaluation scores (story.5111): { "<axis id>": { v: 0–5, ev?: url } }.
     // Axis ids are config (hub `work-item-scores-design`), so no column per axis.
     scores: jsonb("scores"),
+    // Metrics this item moves (story.0033): [{ metricId, direction, baselineObservationId }].
+    // NULL = no declaration; [] = declared to move nothing. work-items owns validation and the pinned baseline.
+    moves: jsonb("moves"),
 
     // Free-text
     summary: text("summary"),

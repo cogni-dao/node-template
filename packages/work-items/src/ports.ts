@@ -24,6 +24,7 @@ import type {
   WorkQuery,
   WorkRelation,
 } from "./types.js";
+import type { MoveInput } from "./moves.js";
 
 // ── Query Port ────────────────────────────────────────
 
@@ -86,6 +87,12 @@ export interface WorkItemCommandPort {
        * markdown adapter throws `UnsupportedWorkItemFieldError`.
        */
       scores?: WorkItemScores | null;
+      /**
+       * Replaces the whole `moves` list (story.0033); `[]` declares none. The Doltgres
+       * adapter resolves each metric id and pins the baseline; the markdown adapter
+       * throws `UnsupportedWorkItemFieldError`.
+       */
+      moves?: readonly MoveInput[];
     };
   }): Promise<WorkItem>;
 

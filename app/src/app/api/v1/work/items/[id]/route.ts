@@ -8,6 +8,7 @@
  * Invariants: VALIDATE_IO, CONTRACTS_ARE_TRUTH, AUTH_VIA_GETSESSIONUSER, PATCH_ALLOWLIST, DURABLE_IDENTITY_NEVER_REUSED.
  * Evaluation: shared score validation failures return HTTP400 with typed issues.
  * Reason + cites (task.0086): a missing or over-cap reason is HTTP400 `invalid input` with an issue at `reason`; an unknown cite id or a closed inbox is HTTP400 `cite_unresolved`; cites with no resolver wired is HTTP400 `cites_unsupported`; a resolver failure is HTTP503. Nothing is written in each case.
+ * Moves (story.0033): `set.moves` with an unknown or deprecated metric id is HTTP400 `cite_unresolved` with an issue at `set.moves`; a bad list is HTTP400 `invalid input`; a non-empty list with no metric wiring is HTTP400 `moves_unsupported`; a lookup failure is HTTP503. The client never sets a baseline: the server pins it.
  * Side-effects: IO (HTTP response, filesystem read via port, Doltgres read/write/delete)
  * Links: contracts/work.items.{get,patch,delete}.v1.contract
  * @public
@@ -27,6 +28,8 @@ import {
   EntryResolverUnavailableError,
   EntryUnresolvedError,
   getWorkItem,
+  MovesInvalidError,
+  MovesUnsupportedError,
   NodeAdminRequiredError,
   patchWorkItem,
   WorkItemForbiddenError,
@@ -180,9 +183,36 @@ export const PATCH = wrapRouteHandlerWithLogging<{
             ids: e.ids,
             issues: e.ids.map((cited) => ({
               code: "custom",
-              path: ["cites"],
-              message: `cited entry not found: ${cited}`,
+              path: e.field === "moves" ? ["set", "moves"] : ["cites"],
+              message:
+                e.field === "moves"
+                  ? `metric not found or deprecated: ${cited}`
+                  : `cited entry not found: ${cited}`,
             })),
+          },
+          { status: 400 }
+        );
+      }
+      if (e instanceof MovesInvalidError) {
+        return NextResponse.json(
+          {
+            error: "invalid input",
+            errorCode: e.code,
+            issues: e.issues.map((message) => ({
+              code: "custom",
+              path: ["set", "moves"],
+              message,
+            })),
+          },
+          { status: 400 }
+        );
+      }
+      if (e instanceof MovesUnsupportedError) {
+        return NextResponse.json(
+          {
+            error: "invalid input",
+            errorCode: e.code,
+            issues: [{ code: "custom", path: ["set", "moves"], message: e.message }],
           },
           { status: 400 }
         );
