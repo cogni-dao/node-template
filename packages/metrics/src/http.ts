@@ -12,7 +12,10 @@
  * Invariants: ONE_WIRE_CONTRACT (every success body is parsed by the contract
  *   schema); TYPED_ERRORS (a MetricError keeps its code and status; anything
  *   else is `metrics_unavailable` 503 and is reported through
- *   `onUnexpectedError`, never to the caller); INVALID_INPUT_IS_400.
+ *   `onUnexpectedError`, never to the caller); INVALID_INPUT_IS_400;
+ *   SERVES_BESIDE_SPEC (the view carries `serves`, `band` and `bandAssessment`
+ *   from the contract schema; they sit beside the hashed spec, so a metric
+ *   outside any goal can read red).
  * Side-effects: none beyond the injected service and subject reader.
  * Links: ./contracts.ts, ./index.ts (MetricService), packages/metrics/AGENTS.md
  * @public

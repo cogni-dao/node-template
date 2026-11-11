@@ -62,6 +62,7 @@ describe("display type", () => {
     expect(parseStoredMetricSpec(stored)).toEqual({
       spec: { calculatorId: "x@1", params: {}, maxAgeSeconds: 60 },
       display: "volume",
+      invalid: [],
     });
     expect(() => parseStoredMetricSpec({ ...stored, display: "bogus" })).toThrow();
     expect(displayFits("slo", "%")).toBe(true);

@@ -294,10 +294,13 @@ export function createGoalMetrics(deps: {
 		...PACKAGE_CALCULATOR_IDS,
 		...nodeCalculatorIds,
 	]);
-	/** One malformed reviewed row must not stop every other metric: skip it and log. */
+	/**
+	 * One malformed reviewed row must not stop every other metric: skip it and log.
+	 * Only an invalid core spec skips; a bad `serves`/`band` is carried as `annexInvalid`.
+	 */
 	const parse = (row: Record<string, unknown>): MetricDefinition | null => {
 		try {
-			const { spec, display } = parseStoredMetricSpec(
+			const { spec, display, serves, band, invalid } = parseStoredMetricSpec(
 				typeof row.metric_spec === "string"
 					? JSON.parse(row.metric_spec)
 					: row.metric_spec,
@@ -308,6 +311,9 @@ export function createGoalMetrics(deps: {
 				revision: new Date(row.updated_at as string).toISOString(),
 				spec,
 				...(display ? { display } : {}),
+				...(serves ? { serves } : {}),
+				...(band ? { band } : {}),
+				...(invalid.length ? { annexInvalid: invalid } : {}),
 			};
 		} catch {
 			deps.log({
