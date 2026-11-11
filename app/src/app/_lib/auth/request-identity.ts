@@ -143,9 +143,12 @@ export async function verifyRevocableKey(
   token: string,
   allow: readonly CredentialState[]
 ): Promise<VerifyResult> {
-  const { getAgentCredentialStore, admitCredentialLookup } = await import("@/bootstrap/agent-credentials");
+  const { getAgentCredentialStore, admitCredentialLookup, recordCredentialMiss } = await import("@/bootstrap/agent-credentials");
   const h = await headers();
-  return verifyBearer(getAgentCredentialStore(), token, allow, { admit: () => admitCredentialLookup(h) });
+  return verifyBearer(getAgentCredentialStore(), token, allow, {
+    admit: () => admitCredentialLookup(h),
+    onInvalid: () => recordCredentialMiss(h),
+  });
 }
 
 /** The bearer token of the current request, if any (the credential routes read it to tell a signed key from a revocable one). */
@@ -171,7 +174,7 @@ export async function resolveRequestIdentity(): Promise<SessionUser | null> {
       if (verified.ok) {
         return { id: verified.userId, walletAddress: null, displayName: verified.name, avatarColor: null, via: "bearer" };
       }
-      if (verified.reason === "unavailable") throw new CredentialStoreUnavailableError();
+      if (verified.reason === "unavailable") throw new CredentialStoreUnavailableError(verified.cause);
       if (verified.reason === "rate_limited") throw new CredentialRateLimitedError();
       return null;
     }

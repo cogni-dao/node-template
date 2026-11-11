@@ -10,6 +10,8 @@
  * Side-effects: global (in-memory rate limit store with periodic cleanup)
  * Notes: Per-instance limitation - multiple app instances each have independent limits (acceptable for MVP).
  *        IP extraction prefers X-Real-IP (Caddy-set) over X-Forwarded-For (fallback).
+ *        The credential-lookup limiter (`credentialLookupLimiter`) is the exception: it keys on Cloudflare's `cf-connecting-ip` (`extractEdgeClientIp`), because
+ *        node-template runs on Akash behind Cloudflare, not behind the Caddy edge. Its header documents the evidence.
  * Links: Applied to /api/v1/public/* routes; Caddyfile sets X-Real-IP at infra/compose/edge/configs/Caddyfile.tmpl.
  * @public
  */
@@ -25,7 +27,11 @@ interface RateLimiterConfig {
   maxTokens: number; // Bucket capacity (e.g., 10)
   refillRate: number; // Tokens per second (e.g., 10/60 = 0.166...)
   burstSize: number; // Burst allowance beyond maxTokens (e.g., 5)
+  /** Cap on distinct keys. Past it, new keys share one overflow bucket, so a flood of invented keys cannot grow the map without bound. Default: no cap. */
+  maxKeys?: number;
 }
+
+const OVERFLOW_KEY = "\u0000overflow";
 
 /**
  * In-memory token bucket rate limiter.
@@ -46,8 +52,9 @@ export class TokenBucketRateLimiter {
    * Check if request is allowed for given key (typically IP address).
    * Returns true if allowed, false if rate limit exceeded.
    */
-  public consume(key: string): boolean {
+  public consume(rawKey: string): boolean {
     const now = Date.now();
+    const key = this.keyFor(rawKey);
     let bucket = this.buckets.get(key);
 
     if (!bucket) {
@@ -77,6 +84,21 @@ export class TokenBucketRateLimiter {
     }
 
     return false;
+  }
+
+  /**
+   * True when `consume(key)` would succeed. Spends nothing and creates no bucket, so a client that only checks never grows the map.
+   */
+  public hasTokens(rawKey: string): boolean {
+    const bucket = this.buckets.get(this.keyFor(rawKey));
+    if (!bucket) return true; // a new key starts with a full bucket
+    const refilled = bucket.tokens + ((Date.now() - bucket.lastSeen) / 1000) * this.config.refillRate;
+    return refilled >= 1;
+  }
+
+  private keyFor(key: string): string {
+    const { maxKeys } = this.config;
+    return maxKeys !== undefined && !this.buckets.has(key) && this.buckets.size >= maxKeys ? OVERFLOW_KEY : key;
   }
 
   /**
@@ -162,15 +184,38 @@ export function extractClientIp(request: { headers: { get(name: string): string 
 }
 
 /**
- * Per-IP limit on revocable-key lookups (task.0070, P1-4). Every shape-valid revocable bearer costs one query on the small service pool, so an
- * unauthenticated flood of well-formed random keys could starve register, NextAuth and the other service-pool users. Looser than the public
- * limiter on purpose: a real agent behind one IP makes many calls. 300/min sustained + 100 burst per IP; keys that fail the shape or checksum
- * never spend a token. Per-instance state, same limitation as the public limiter.
+ * The client key for the credential-lookup limiter: the IP the CLOUDFLARE edge reports in `cf-connecting-ip`, or "unknown" when it is absent.
+ *
+ * Why this header and not `x-real-ip` / `x-forwarded-for` (guard-needs-proven-writer). Evidence on where a node-template request comes from:
+ * - The node runs on Akash. The operator points the node host at the lease's provider ingress with a PROXIED Cloudflare CNAME and requires
+ *   `proxied=true` on readback (cogni `nodes/operator/app/src/features/node-deploy/edge.ts`, PROXIED_REQUIRED). A live
+ *   `curl -I https://node-template.cognidao.org/version` answers `server: cloudflare` with a `cf-ray`. So every normal request crosses Cloudflare.
+ * - Cloudflare sets `cf-connecting-ip` to the connecting client on every proxied request and overwrites a value the client sent.
+ * - The Caddy `header_up X-Real-IP {remote_host}` in cogni `infra/compose/edge/configs/Caddyfile.tmpl` is the operator's own Cherry VM edge.
+ *   It is not in front of an Akash node. Nothing in the operator repo writes `x-real-ip` for a node. At the provider ingress it is the TCP peer
+ *   (a Cloudflare address, so every agent would share one bucket) or, if the ingress passes it through, a header the client chose.
+ * Residual: the provider ingress is reachable without Cloudflare (the sequencer itself probes it directly), and a client that does so can send
+ * any `cf-connecting-ip`. That only lets it pick its own bucket: the shape and checksum perimeter and `maxKeys` still bound the cost of a flood,
+ * and a valid key never spends a token. Closing it needs the origin to accept only Cloudflare (an edge change, not this node's).
+ */
+export function extractEdgeClientIp(request: { headers: { get(name: string): string | null } }): string {
+  const ip = request.headers.get("cf-connecting-ip")?.trim();
+  return ip && ip.length <= 45 && /^[0-9a-fA-F:.]+$/.test(ip) ? ip : "unknown";
+}
+
+/**
+ * Per-IP limit on revocable-key lookups that find nothing (task.0070, P1-4). Every shape-valid revocable bearer costs one query on the small service
+ * pool, so an unauthenticated flood of well-formed random keys could starve register, NextAuth and the other service-pool users.
+ * SPEND_ON_MISS: a request checks the bucket first (`hasTokens`, over the limit = 429, no store read) and spends a token only when the lookup finds
+ * no usable key (`consume`). A valid key never spends, so a busy legitimate agent is never throttled by its own traffic. 300 misses/min sustained + 100
+ * burst per client; keys that fail the shape or checksum never reach it. Per-instance state, same limitation as the public limiter. At most
+ * 10 000 distinct clients are tracked (`maxKeys`); more share one overflow bucket.
  */
 export const credentialLookupLimiter = new TokenBucketRateLimiter({
   maxTokens: 300,
   refillRate: 300 / 60,
   burstSize: 100,
+  maxKeys: 10_000,
 });
 
 /**

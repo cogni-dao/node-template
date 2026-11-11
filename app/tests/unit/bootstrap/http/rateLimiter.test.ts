@@ -18,6 +18,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   extractClientIp,
+  extractEdgeClientIp,
   TokenBucketRateLimiter,
 } from "@/bootstrap/http/rateLimiter";
 
@@ -160,5 +161,47 @@ describe("TokenBucketRateLimiter", () => {
       expect(limiter.consume(ip)).toBe(true);
       expect(limiter.consume(ip)).toBe(false);
     });
+  });
+});
+
+describe("credential-lookup limiter inputs (task.0070 B2)", () => {
+  const request = (headers: Record<string, string>) => new NextRequest("http://localhost:3000/test", { headers });
+
+  it("hasTokens only checks: it spends nothing and creates no bucket; consume spends", () => {
+    const limiter = new TokenBucketRateLimiter({ maxTokens: 2, refillRate: 0, burstSize: 0 });
+    for (let i = 0; i < 10; i++) expect(limiter.hasTokens("ip")).toBe(true);
+    expect(limiter.getTokens("ip")).toBe(2); // nothing spent, no bucket created
+    expect(limiter.consume("ip")).toBe(true);
+    expect(limiter.hasTokens("ip")).toBe(true);
+    expect(limiter.consume("ip")).toBe(true);
+    expect(limiter.hasTokens("ip")).toBe(false);
+    expect(limiter.hasTokens("other")).toBe(true); // keys are isolated
+  });
+
+  it("maxKeys: keys past the cap share one overflow bucket, so invented keys cannot grow the map; known keys keep their own", () => {
+    const limiter = new TokenBucketRateLimiter({ maxTokens: 1, refillRate: 0, burstSize: 0, maxKeys: 2 });
+    expect(limiter.consume("a")).toBe(true);
+    expect(limiter.consume("b")).toBe(true);
+    expect(limiter.consume("c")).toBe(true); // first overflow key takes the shared bucket's only token
+    expect(limiter.consume("d")).toBe(false); // a different new key now shares that exhausted bucket
+    expect(limiter.hasTokens("e")).toBe(false);
+    expect(limiter.hasTokens("a")).toBe(false); // own bucket, spent
+  });
+
+  it("the key is the Cloudflare-written cf-connecting-ip; a forged x-real-ip or x-forwarded-for never changes it", () => {
+    expect(extractEdgeClientIp(request({ "cf-connecting-ip": "203.0.113.7" }))).toBe("203.0.113.7");
+    expect(
+      extractEdgeClientIp(
+        request({ "cf-connecting-ip": "203.0.113.7", "x-real-ip": "198.51.100.9", "x-forwarded-for": "192.0.2.1, 203.0.113.7" })
+      )
+    ).toBe("203.0.113.7");
+    expect(extractEdgeClientIp(request({ "x-real-ip": "198.51.100.9", "x-forwarded-for": "192.0.2.1" }))).toBe("unknown");
+    expect(extractEdgeClientIp(request({}))).toBe("unknown");
+  });
+
+  it("a malformed or oversized cf-connecting-ip is 'unknown', so a client cannot mint a bucket key from arbitrary text", () => {
+    expect(extractEdgeClientIp(request({ "cf-connecting-ip": "not an ip; drop table" }))).toBe("unknown");
+    expect(extractEdgeClientIp(request({ "cf-connecting-ip": "1".repeat(46) }))).toBe("unknown");
+    expect(extractEdgeClientIp(request({ "cf-connecting-ip": "2001:db8::1" }))).toBe("2001:db8::1");
   });
 });
