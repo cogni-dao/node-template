@@ -25,7 +25,8 @@ curl -X POST https://cognidao.org/api/v1/work/items \
     "priority": 1,
     "specRefs": ["<spec-id-if-violated>"],
     "summary": "OBSERVED: <what happens, with file:line>\nEXPECTED: <what should happen>\nREPRO: <steps>\nIMPACT: <who/severity>",
-    "outcome": "Success is when <human|AI> can <do the broken thing without seeing the failure>."
+    "outcome": "Success is when <human|AI> can <do the broken thing without seeing the failure>.",
+    "moves": [{"metricId": "<metric-id>", "direction": "<up|down>"}]
   }'
 ```
 
@@ -34,6 +35,7 @@ curl -X POST https://cognidao.org/api/v1/work/items \
 ## Rules
 
 - **INCLUDE_CODE_POINTERS.** Every bug names files and lines, not "the login flow."
+- **NAME_THE_METRIC.** Name the metric the work moves in `moves`: at most 3 entries of `{"metricId": "<id>", "direction": "up|down"}`. Pick the direction the work should move the metric. Take each id from `core__metric_list`, `core__goal_progress` or `GET /api/v1/metrics` on the hub you post to. Never invent an id. Never send a baseline: the server pins it. If no metric fits, send `"moves": []`. Triage later judges the goal score from the metric's KPI and its current reading.
 - **No file creation.** Do NOT add new `.md` files under `work/items/`. The API is source of truth.
 
 ## Next
