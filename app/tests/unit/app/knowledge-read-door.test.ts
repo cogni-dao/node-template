@@ -3,9 +3,10 @@
 
 /**
  * Module: `@tests/unit/app/knowledge-read-door`
- * Purpose: Every GET handler that reads the knowledge store (everything under `/api/v1/knowledge`, plus any other `api/**` GET route found by what it imports) carries the `knowledge.read` door (story.0038), so an enrolled service principal cannot read
- *   a knowledge route the admin has not turned on. The route list is declared once (`ROUTE_ONLY_CAPABILITIES["knowledge.read"].routes`); this test fails when a
- *   knowledge GET handler is added without it, or when the declaration names a route that does not exist.
+ * Purpose: Every GET route under `app/src/app/api` either carries the `knowledge.read` door (story.0038) or sits on the explicit exempt list below with a reason.
+ *   An enrolled service principal cannot read a knowledge route the admin has not turned on. A new GET route with neither fails this test. The door list is declared once
+ *   (`ROUTE_ONLY_CAPABILITIES["knowledge.read"].routes`). As a cross-check, imports are followed (relative and `@/app/**`, depth 3) and an exempt route that reads the
+ *   store must say so on its entry.
  * Scope: Static reads of the route files. Behavior of the door itself is in `wrapRouteHandlerWithLogging.same-door.test.ts` and the package tests.
  * Side-effects: filesystem reads
  */
@@ -15,10 +16,80 @@ import { dirname, join, resolve } from "node:path";
 import { ROUTE_ONLY_CAPABILITIES } from "@cogni/agent-grants";
 import { describe, expect, it } from "vitest";
 
-const API = resolve(__dirname, "../../../src/app/api");
-const KNOWLEDGE = join(API, "v1/knowledge");
-/** A route reads the store when its file, or a local file it imports, names one of these. */
-const STORE_READ = /@cogni\/knowledge-store|knowledgeStorePort|EdoCapability/;
+const SRC = resolve(__dirname, "../../../src");
+const API = join(SRC, "app/api");
+const MAX_DEPTH = 3;
+/** A module reads the store when its text names one of these. */
+const STORE_READ = /@cogni\/knowledge-store|knowledgeStorePort|EdoCapability|@cogni-dao\/metrics|metrics\.server/;
+/** Every way a route file can export a GET handler. */
+const GET_EXPORT = /export\s+(?:async\s+)?(?:const|function)\s+GET\b|export\s*\{[^}]*\bGET\b[^}]*\}/g;
+const DOOR = /sameDoor:\s*"knowledge\.read"/;
+
+const NOT_STORE = {
+  auth: "Auth/session plumbing; reads no knowledge-store content.",
+  ai: "AI run/thread/agent/model state in its own tables; reads no knowledge-store content.",
+  ledger: "Attribution ledger (epochs, claimants, statements) in its own tables; reads no knowledge-store content.",
+  money: "Billing/payments/treasury state in its own tables; reads no knowledge-store content.",
+  schedules: "Schedule rows in the scheduler tables; reads no knowledge-store content.",
+  identity: "The caller's own account and agent-access records; reads no knowledge-store content.",
+  ops: "Node health/governance/telemetry; reads no knowledge-store content.",
+} as const;
+const WORK_ITEMS =
+  "Work-item plane: its own work.* authorization and ownership checks, not the knowledge notes this door covers. Reads the store, so a service key reaches it today; follow-up if services must be denied.";
+
+/** GET routes that legitimately stay open. Key = path under `app/src/app/api`. `readsStore` = the cross-check found a store reader behind it. */
+const EXEMPT: Record<string, { reason: string; readsStore?: true }> = {
+  "auth/[...nextauth]/route.ts": { reason: NOT_STORE.auth },
+  "v1/auth/openai-codex/status/route.ts": { reason: NOT_STORE.auth },
+  "v1/auth/openai-compatible/status/route.ts": { reason: NOT_STORE.auth },
+  "metrics/route.ts": { reason: NOT_STORE.ops },
+  "v1/node/stream/route.ts": { reason: NOT_STORE.ops },
+  "v1/governance/activity/route.ts": { reason: NOT_STORE.ops },
+  "v1/governance/status/route.ts": { reason: NOT_STORE.ops },
+  "v1/activity/route.ts": { reason: NOT_STORE.ops },
+  "v1/public/analytics/summary/route.ts": { reason: NOT_STORE.ops },
+  "v1/ai/agents/route.ts": { reason: NOT_STORE.ai },
+  "v1/ai/models/route.ts": { reason: NOT_STORE.ai },
+  "v1/ai/runs/route.ts": { reason: NOT_STORE.ai },
+  "v1/ai/runs/[runId]/stream/route.ts": { reason: NOT_STORE.ai },
+  "v1/ai/runs/[runId]/ui-stream/route.ts": { reason: NOT_STORE.ai },
+  "v1/ai/threads/route.ts": { reason: NOT_STORE.ai },
+  "v1/ai/threads/[stateKey]/route.ts": { reason: NOT_STORE.ai },
+  "v1/agent/runs/route.ts": { reason: NOT_STORE.ai },
+  "v1/agent/runs/[runId]/stream/route.ts": { reason: NOT_STORE.ai },
+  "v1/attribution/epochs/route.ts": { reason: NOT_STORE.ledger },
+  "v1/attribution/epochs/[id]/activity/route.ts": { reason: NOT_STORE.ledger },
+  "v1/attribution/epochs/[id]/claimants/route.ts": { reason: NOT_STORE.ledger },
+  "v1/attribution/epochs/[id]/distribution-tx/route.ts": { reason: NOT_STORE.ledger },
+  "v1/attribution/epochs/[id]/review-subject-overrides/route.ts": { reason: NOT_STORE.ledger },
+  "v1/attribution/epochs/[id]/sign-data/route.ts": { reason: NOT_STORE.ledger },
+  "v1/attribution/epochs/[id]/statement/route.ts": { reason: NOT_STORE.ledger },
+  "v1/attribution/epochs/[id]/user-projections/route.ts": { reason: NOT_STORE.ledger },
+  "v1/attribution/settlement-lifecycle/route.ts": { reason: NOT_STORE.ledger },
+  "v1/public/attribution/distribution/latest/route.ts": { reason: NOT_STORE.ledger },
+  "v1/public/attribution/epochs/route.ts": { reason: NOT_STORE.ledger },
+  "v1/public/attribution/epochs/[id]/claimants/route.ts": { reason: NOT_STORE.ledger },
+  "v1/public/attribution/epochs/[id]/distribution/route.ts": { reason: NOT_STORE.ledger },
+  "v1/public/attribution/epochs/[id]/statement/route.ts": { reason: NOT_STORE.ledger },
+  "v1/public/attribution/epochs/[id]/user-projections/route.ts": { reason: NOT_STORE.ledger },
+  "v1/payments/attempts/[id]/route.ts": { reason: NOT_STORE.money },
+  "v1/payments/credits/summary/route.ts": { reason: NOT_STORE.money },
+  "v1/public/treasury/snapshot/route.ts": { reason: NOT_STORE.money },
+  "v1/schedules/route.ts": { reason: NOT_STORE.schedules },
+  "v1/schedules/[scheduleId]/route.ts": { reason: NOT_STORE.schedules },
+  "v1/schedules/[scheduleId]/runs/route.ts": { reason: NOT_STORE.schedules },
+  "v1/users/me/route.ts": { reason: NOT_STORE.identity },
+  "v1/users/me/ownership/route.ts": { reason: NOT_STORE.identity },
+  "v1/agent-access/roles/route.ts": { reason: NOT_STORE.identity },
+  "v1/agent/access-requests/route.ts": { reason: NOT_STORE.identity },
+  "v1/work/board/route.ts": { reason: WORK_ITEMS, readsStore: true },
+  "v1/work/summaries/route.ts": { reason: WORK_ITEMS, readsStore: true },
+  "v1/work/items/route.ts": { reason: WORK_ITEMS, readsStore: true },
+  "v1/work/items/[id]/route.ts": { reason: WORK_ITEMS, readsStore: true },
+  "v1/work/items/[id]/coordination/route.ts": { reason: WORK_ITEMS, readsStore: true },
+  "v1/work/items/[id]/history/route.ts": { reason: WORK_ITEMS },
+};
+
 function routeFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
     const p = join(dir, name);
@@ -26,48 +97,67 @@ function routeFiles(dir: string): string[] {
   });
 }
 
-/** The route file's own text plus the text of each local (relative) module it imports, one hop deep. */
-function sourceWithLocalImports(file: string): string {
+/** Resolve a relative or `@/app/**` import to a file; other aliases (bootstrap wiring, shared, ports) are not followed. */
+function resolveImport(from: string, spec: string): string | undefined {
+  const base = spec.startsWith("@/app/") ? join(SRC, spec.slice(2)) : spec.startsWith(".") ? resolve(dirname(from), spec) : undefined;
+  if (!base) return undefined;
+  return [`${base}.ts`, `${base}.tsx`, join(base, "index.ts")].find((c) => existsSync(c));
+}
+
+/** True when the file, or a module it imports (transitively, bounded depth, visited set), names a store marker. */
+function readsStore(file: string, depth = MAX_DEPTH, seen = new Set<string>()): boolean {
+  if (seen.has(file) || depth < 0) return false;
+  seen.add(file);
   const text = readFileSync(file, "utf8");
-  const local = [...text.matchAll(/from\s+"(\.[^"]*)"/g)].flatMap((m) => {
-    const base = resolve(dirname(file), m[1] as string);
-    return [`${base}.ts`, join(base, "index.ts")].filter((c) => existsSync(c));
-  });
-  return [text, ...local.map((c) => readFileSync(c, "utf8"))].join("\n");
-}
-
-/** Every GET handler that reads the knowledge store: its route id and whether the same options block names the door. */
-function getHandlers(): Array<{ file: string; routeId: string; door: boolean }> {
-  const files = routeFiles(API).filter(
-    (file) => file.startsWith(`${KNOWLEDGE}/`) || STORE_READ.test(sourceWithLocalImports(file)),
-  );
-  return files.flatMap((file) => {
-    const parts = readFileSync(file, "utf8").split(/export const GET\s*=/);
-    return parts.slice(1).map((chunk) => {
-      const options = chunk.slice(0, 900);
-      return {
-        file,
-        routeId: /routeId:\s*"([^"]+)"/.exec(options)?.[1] ?? "?",
-        door: /routeId:\s*"[^"]+",\s*sameDoor:\s*"knowledge\.read"/.test(options),
-      };
-    });
+  if (STORE_READ.test(text)) return true;
+  return [...text.matchAll(/from\s+"([^"]+)"/g)].some((m) => {
+    const next = resolveImport(file, m[1] as string);
+    return next !== undefined && readsStore(next, depth - 1, seen);
   });
 }
 
-describe("knowledge.read door on every GET route that reads the knowledge store", () => {
-  const handlers = getHandlers();
+type Handler = { key: string; file: string; door: boolean; routeIds: string[] };
 
-  it("finds the knowledge GET handlers, and the ones outside api/v1/knowledge", () => {
-    expect(handlers.length).toBeGreaterThanOrEqual(15);
-    const ids = handlers.map((h) => h.routeId);
-    expect(ids).toEqual(expect.arrayContaining(["cognition.bundle", "edo.chain", "citations.links"]));
+/** Every route file that exports GET (any form). Door = the options block after an inline GET names it; a re-exported GET falls back to the file text. */
+function getRoutes(): Handler[] {
+  return routeFiles(API).flatMap((file) => {
+    const text = readFileSync(file, "utf8");
+    const hits = [...text.matchAll(GET_EXPORT)];
+    if (hits.length === 0) return [];
+    const blocks = hits.map((h) => (h[0].includes("{") ? text : text.slice(h.index, (h.index ?? 0) + 900)));
+    const door = blocks.every((b) => DOOR.test(b));
+    const routeIds = [...text.matchAll(/routeId:\s*"([^"]+)",\s*sameDoor:\s*"knowledge\.read"/g)].map((m) => m[1] as string);
+    return [{ key: file.slice(API.length + 1), file, door, routeIds }];
+  });
+}
+
+describe("knowledge.read door on every GET route (or an exempt reason)", () => {
+  const routes = getRoutes();
+  const door = routes.filter((r) => r.door);
+  const open = routes.filter((r) => !r.door);
+
+  it("finds the GET routes in every export form", () => {
+    expect(routes.length).toBeGreaterThanOrEqual(60);
+    expect(door.length).toBeGreaterThanOrEqual(21);
   });
 
-  it("every GET handler declares sameDoor: knowledge.read next to its route id", () => {
-    expect(handlers.filter((h) => !h.door).map((h) => `${h.routeId} (${h.file})`)).toEqual([]);
+  it("every GET route carries sameDoor: knowledge.read or is on the exempt list", () => {
+    expect(open.filter((r) => !EXEMPT[r.key]).map((r) => r.key)).toEqual([]);
   });
 
-  it("the declaration lists exactly these GET route ids", () => {
-    expect(handlers.map((h) => h.routeId).sort()).toEqual([...(ROUTE_ONLY_CAPABILITIES["knowledge.read"]?.routes ?? [])].sort());
+  it("no exempt entry is stale, doubles as a door route, or lacks a reason", () => {
+    const keys = new Set(routes.map((r) => r.key));
+    expect(Object.keys(EXEMPT).filter((k) => !keys.has(k))).toEqual([]);
+    expect(Object.keys(EXEMPT).filter((k) => door.some((r) => r.key === k))).toEqual([]);
+    expect(Object.entries(EXEMPT).filter(([, v]) => v.reason.length < 10)).toEqual([]);
+  });
+
+  it("an exempt route reads the store only where its entry says so", () => {
+    const wrong = open.filter((r) => EXEMPT[r.key] && readsStore(r.file) !== (EXEMPT[r.key]?.readsStore === true));
+    expect(wrong.map((r) => `${r.key}: store reader ${readsStore(r.file) ? "found" : "not found"}`)).toEqual([]);
+  });
+
+  it("the declaration lists exactly the door route ids", () => {
+    expect(door.flatMap((r) => r.routeIds).sort()).toEqual([...(ROUTE_ONLY_CAPABILITIES["knowledge.read"]?.routes ?? [])].sort());
   });
 });

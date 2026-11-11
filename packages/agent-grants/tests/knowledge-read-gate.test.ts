@@ -23,7 +23,7 @@ describe("knowledge.read declaration", () => {
     expect(cap.serviceKeyedOnly).toBe(true);
   });
 
-  it("covers every knowledge GET route", () => {
+  it("covers every GET route that reads the knowledge store", () => {
     expect([...cap.routes].sort()).toEqual(
       [
         "knowledge.browse",
@@ -38,6 +38,15 @@ describe("knowledge.read declaration", () => {
         "knowledge.history",
         "knowledge.index",
         "knowledge.list",
+        "cognition.bundle",
+        "edo.chain",
+        "citations.links",
+        "metrics.metricList",
+        "metrics.metricRead",
+        "metrics.goalsRead",
+        "metrics.metricSubject",
+        "metrics.metricHistory",
+        "metrics.observationRead",
       ].sort()
     );
   });

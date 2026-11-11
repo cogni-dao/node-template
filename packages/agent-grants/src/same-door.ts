@@ -108,6 +108,13 @@ export const ROUTE_ONLY_CAPABILITIES: Readonly<Record<string, RouteOnlyCapabilit
       "cognition.bundle",
       "edo.chain",
       "citations.links",
+      // The metrics routes read the knowledge store through the metrics facade.
+      "metrics.metricList",
+      "metrics.metricRead",
+      "metrics.goalsRead",
+      "metrics.metricSubject",
+      "metrics.metricHistory",
+      "metrics.observationRead",
     ],
   },
 };
