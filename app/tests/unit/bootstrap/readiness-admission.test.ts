@@ -234,6 +234,55 @@ describe("readiness admission", () => {
     await expect(register()).rejects.toThrow("container failed");
     expect(exit).toHaveBeenCalledExactlyOnceWith(1);
   });
+  it("emits safe fatal metadata without serializing the original error", async () => {
+    vi.stubEnv("NEXT_RUNTIME", "nodejs");
+    const sentinel = "PRIVATE_SENTINEL_93d1";
+    const original = Object.assign(
+      new Error(sentinel, { cause: new Error(sentinel) }),
+      {
+        headers: { authorization: sentinel },
+        url: `https://example.invalid/${sentinel}`,
+      },
+    );
+    const output: string[] = [];
+    vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
+      output.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    const exit = vi
+      .spyOn(process, "exit")
+      .mockImplementation((() => undefined) as never);
+    mocks.getContainer.mockImplementation(() => {
+      throw original;
+    });
+    await expect(register()).rejects.toBe(original);
+    expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+    expect(consoleError).not.toHaveBeenCalled();
+    expect(output).toHaveLength(1);
+    expect(JSON.stringify(output)).not.toContain(sentinel);
+    expect(JSON.parse(output[0] ?? "{}")).toMatchObject({
+      errorCode: "STARTUP_FATAL",
+      phase: "initialization",
+    });
+  });
+  it("terminates and retains the original error if fatal logging fails", async () => {
+    vi.stubEnv("NEXT_RUNTIME", "nodejs");
+    const original = new Error("original");
+    vi.spyOn(process.stdout, "write").mockImplementation((() => {
+      throw new Error("logger failed");
+    }) as typeof process.stdout.write);
+    const exit = vi
+      .spyOn(process, "exit")
+      .mockImplementation((() => undefined) as never);
+    mocks.getContainer.mockImplementation(() => {
+      throw original;
+    });
+    await expect(register()).rejects.toBe(original);
+    expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+  });
   it("does not classify typed container errors as local refusal", async () => {
     vi.stubEnv("NEXT_RUNTIME", "nodejs");
     const exit = vi

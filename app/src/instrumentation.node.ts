@@ -22,6 +22,22 @@ import pino from "pino";
 
 let sdk: NodeSDK | null = null;
 
+/** The existing startup Pino configuration also serves fatal diagnostics. */
+function makeBootLogger() {
+  return pino(
+    {
+      base: {
+        app: "cogni-template",
+        // biome-ignore lint/style/noProcessEnv: startup logger before config framework
+        service: process.env.SERVICE_NAME ?? "app",
+      },
+      messageKey: "msg",
+      timestamp: pino.stdTimeFunctions.isoTime,
+    },
+    process.stdout,
+  );
+}
+
 /**
  * Emit one structured startup log with the image build SHA so grafana-based
  * agents can correlate a running pod to its PR/commit. Self-contained pino
@@ -33,15 +49,7 @@ function logAppStarted(): void {
   if (process.env.APP_ENV === "test" || process.env.VITEST === "true") {
     return;
   }
-  const bootLogger = pino({
-    base: {
-      app: "cogni-template",
-      // biome-ignore lint/style/noProcessEnv: startup log before config framework
-      service: process.env.SERVICE_NAME ?? "app",
-    },
-    messageKey: "msg",
-    timestamp: pino.stdTimeFunctions.isoTime,
-  });
+  const bootLogger = makeBootLogger();
   // biome-ignore lint/style/noProcessEnv: build-time plumbing injected via Dockerfile ARG
   const buildSha = process.env.APP_BUILD_SHA;
   if (buildSha) {
@@ -114,9 +122,18 @@ export async function initOtelSdk(options?: {
 }
 
 /** Fail explicitly: production Next catches rejected preparation without exiting. */
-function fatalStartup(error: unknown): never {
-  // biome-ignore lint/suspicious/noConsole: fatal startup may precede configured logging
-  console.error("[instrumentation] fatal startup failure:", error);
+function fatalStartup(
+  error: unknown,
+  phase: "initialization" | "startup_log",
+): never {
+  try {
+    makeBootLogger().error(
+      { errorCode: "STARTUP_FATAL", phase },
+      "fatal startup failure",
+    );
+  } catch {
+    // Logging must never prevent fatal termination or replace the original error.
+  }
   process.exit(1);
   throw error;
 }
@@ -165,7 +182,7 @@ export async function register(): Promise<void> {
       );
     }
   } catch (error) {
-    fatalStartup(error);
+    fatalStartup(error, "initialization");
   }
 
   // The qualification owner logs and exits on rejection; do not exit twice.
@@ -173,7 +190,7 @@ export async function register(): Promise<void> {
   try {
     logAppStarted();
   } catch (error) {
-    fatalStartup(error);
+    fatalStartup(error, "startup_log");
   }
 
   // Dev mode (not test): warn if LiteLLM has stale test config from a previous session.
