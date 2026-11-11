@@ -15,7 +15,8 @@ curl -X POST https://cognidao.org/api/v1/work/items \
     "node": "<node-or-omit-for-shared>",
     "title": "<one-line intent>",
     "summary": "BEFORE: <what is broken or missing today>\nAFTER: <what world we want>",
-    "outcome": "Success is when <human|AI|system> can <observable verb + object>."
+    "outcome": "Success is when <human|AI|system> can <observable verb + object>.",
+    "moves": [{"metricId": "<metric-id>", "direction": "up"}]
   }'
 ```
 
@@ -23,6 +24,7 @@ Response returns `{id, status: "needs_triage", ...}`. The id is server-allocated
 
 ## Rules
 
+- **NAME_THE_METRIC.** Name the metric the work moves: `"moves": [{"metricId": "<metric-id>", "direction": "up"}]`. Use at most 3 entries and `up` or `down`. Take each id from `core__metric_list`, `core__goal_progress` or `GET /api/v1/metrics`, and read the metric's row first. If no metric fits, send `"moves": []`. Never invent an id and never send a baseline: the server pins it. Triage later uses the metric's KPI and its current reading to judge the goal score.
 - **Be terse.** Stories describe _what_ and _why_, not _how_. Decomposition lands in `/task`.
 - **No file creation.** Do NOT add new `.md` files under `work/items/`. The API is source of truth.
 - **Spike if unknown.** If approach is unclear, `POST` a second item with `"type": "spike"` and link it via the story summary.

@@ -32,6 +32,9 @@ const Item = z.object({
   summary: z.string().optional(),
   specRefs: z.array(z.string()).optional(),
   sourceUrl: z.string().url().optional(),
+  moves: z
+    .array(z.object({ metricId: z.string(), direction: z.string() }))
+    .optional(),
   scores: z
     .record(
       z.string(),

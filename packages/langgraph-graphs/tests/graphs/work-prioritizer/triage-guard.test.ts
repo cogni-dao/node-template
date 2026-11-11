@@ -62,6 +62,7 @@ function setup(opts: { guidance?: boolean; goals?: boolean } = {}) {
         status: set.status ?? "needs_triage",
         labels: set.labels ?? [],
         scores: set.scores,
+        moves: set.moves,
         revision:
           typeof value.expectedRevision === "number"
             ? value.expectedRevision + 1
@@ -162,7 +163,28 @@ describe("work-prioritizer binds core__work_item_update behind the guard", () =>
     ]);
   });
 
-  it("sets only status, scores and labels", async () => {
+  it("writes moves, and a repeat of the same moves writes nothing", async () => {
+    const a = setup();
+    a.read(item("task.1"));
+    const moves = [{ metricId: "convergence-ratio-7d", direction: "up" }];
+    expect(await a.call(update("task.1", { moves }))).toContain('"revision"');
+    expect(a.writes).toHaveLength(1);
+    expect(a.writes[0]).toMatchObject({ set: { moves } });
+    // An empty list is a change from a stored list, and the same list again is not.
+    expect(
+      await a.call({
+        id: "task.1",
+        expectedRevision: 8,
+        reason: "no metric fits",
+        set: { moves: [] },
+      }),
+    ).toContain('"revision"');
+    a.read(item("task.2", { moves }));
+    expect(await a.call(update("task.2", { moves }))).toContain("no_change");
+    expect(a.writes).toHaveLength(2);
+  });
+
+  it("sets only status, scores, labels and moves", async () => {
     const a = setup();
     a.read(item("task.1", { labels: ["area:ai"] }));
     for (const extra of [
