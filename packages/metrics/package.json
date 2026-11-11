@@ -50,10 +50,10 @@
       "import": "./dist/sources.js",
       "default": "./dist/sources.js"
     },
-    "./true-now": {
-      "types": "./dist/true-now.d.ts",
-      "import": "./dist/true-now.js",
-      "default": "./dist/true-now.js"
+    "./no-inline-history": {
+      "types": "./dist/no-inline-history.d.ts",
+      "import": "./dist/no-inline-history.js",
+      "default": "./dist/no-inline-history.js"
     }
   },
   "types": "./dist/index.d.ts",
