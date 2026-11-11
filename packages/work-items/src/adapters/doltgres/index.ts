@@ -29,6 +29,10 @@ export {
   WorkItemsCapacityError,
 } from "./adapter.js";
 export {
+  createDoltgresWorkItemStore,
+  type DoltgresWorkItemStoreOptions,
+} from "./store.js";
+export {
   decodeCursor,
   encodeCursor,
   queryIdentity,
