@@ -51,7 +51,7 @@ function logAppStarted(): void {
     // rather than cloaked behind a placeholder.
     bootLogger.warn(
       { buildSha: null },
-      "app started (APP_BUILD_SHA unset — check CI --build-arg BUILD_SHA)"
+      "app started (APP_BUILD_SHA unset — check CI --build-arg BUILD_SHA)",
     );
   }
 }
@@ -115,7 +115,7 @@ export async function initOtelSdk(options?: {
 
 /**
  * Next.js instrumentation hook - called once per Node.js process.
- * Orchestrates OTel init + preflight checks.
+ * Awaits local preflight and mandatory tenant qualification before traffic admission.
  */
 export async function register(): Promise<void> {
   // Only initialize in Node.js runtime (allowlist, not denylist)
@@ -125,10 +125,39 @@ export async function register(): Promise<void> {
   }
 
   await initOtelSdk();
+
+  // Only local typed configuration refusals permit diagnostic HTTP startup.
+  const { localReadinessPreflight } = await import(
+    "./bootstrap/local-readiness-preflight"
+  );
+  const { EnvValidationError } = await import("./shared/env/server-env");
+  const { RuntimeSecretError } = await import("./shared/env/invariants");
+  let localConfigValid = true;
+  try {
+    localReadinessPreflight();
+  } catch (error) {
+    if (
+      !(
+        error instanceof EnvValidationError ||
+        error instanceof RuntimeSecretError
+      )
+    )
+      throw error;
+    localConfigValid = false;
+  }
+  if (localConfigValid) {
+    const { getContainer } = await import("./bootstrap/container");
+    const { startSystemTenantAssertionOnBoot } = await import(
+      "./bootstrap/startup-assertions"
+    );
+    await startSystemTenantAssertionOnBoot(
+      getContainer().serviceAccountService,
+    );
+  }
   logAppStarted();
 
   // Dev mode (not test): warn if LiteLLM has stale test config from a previous session.
-  // Inlined here (not in bootstrap/) because dep-cruiser forbids instrumentation→bootstrap imports.
+  // Keep this advisory check independent of mandatory qualification.
   // biome-ignore lint/style/noProcessEnv: startup check before config framework
   if (process.env.APP_ENV !== "test") {
     (async () => {
@@ -159,7 +188,7 @@ export async function register(): Promise<void> {
               "  ║  Fix: docker compose down litellm && pnpm dev:stack        ║",
               "  ╚══════════════════════════════════════════════════════════════╝",
               "",
-            ].join("\n")
+            ].join("\n"),
           );
         }
       } catch {

@@ -18,15 +18,25 @@ import { metaReadyzOperation } from "@cogni/node-contracts";
 import { serveReadyz } from "@cogni/substrate-health";
 import { NextResponse } from "next/server";
 import { getContainer } from "@/bootstrap/container";
-import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import { localReadinessPreflight } from "@/bootstrap/local-readiness-preflight";
+import { withRootSpan } from "@/bootstrap/otel";
+import { getNodeId } from "@/shared/config";
 import { EnvValidationError, serverEnv } from "@/shared/env";
 import {
-  assertEvmRpcConfig,
-  assertRuntimeSecrets,
   InfraConnectivityError,
   RuntimeSecretError,
 } from "@/shared/env/invariants";
-import type { RequestContext } from "@/shared/observability";
+import {
+  createRequestContext,
+  httpRequestDurationMs,
+  httpRequestsTotal,
+  logRequestEnd,
+  logRequestError,
+  logRequestStart,
+  makeLogger,
+  type RequestContext,
+  statusBucket,
+} from "@/shared/observability";
 import { setBuildInfo } from "@/shared/observability/server/metrics";
 import { buildDeepChecks, deepRuntime } from "./readyz-probes";
 
@@ -42,7 +52,7 @@ function logReadinessFailure(
     | EnvValidationError
     | RuntimeSecretError
     | InfraConnectivityError
-    | Error
+    | Error,
 ): void {
   if (error instanceof EnvValidationError) {
     ctx.log.error(
@@ -51,7 +61,7 @@ function logReadinessFailure(
         missing: error.meta.missing,
         invalid: error.meta.invalid,
       },
-      "readiness check failed: invalid environment configuration"
+      "readiness check failed: invalid environment configuration",
     );
   } else if (error instanceof RuntimeSecretError) {
     ctx.log.error(
@@ -59,7 +69,7 @@ function logReadinessFailure(
         reason: error.code,
         message: error.message,
       },
-      "readiness check failed: missing runtime secret"
+      "readiness check failed: missing runtime secret",
     );
   } else if (error instanceof InfraConnectivityError) {
     ctx.log.error(
@@ -67,7 +77,7 @@ function logReadinessFailure(
         reason: error.code,
         message: error.message,
       },
-      "readiness check failed: infrastructure unreachable"
+      "readiness check failed: infrastructure unreachable",
     );
   } else {
     // pg/drizzle errors wrap the driver error (with its SQLSTATE `code`) in `cause`.
@@ -80,49 +90,89 @@ function logReadinessFailure(
         causeCode: cause?.code,
         causeMessage: cause?.message,
       },
-      "readiness check failed: internal error"
+      "readiness check failed: internal error",
     );
   }
 }
 
-export const GET = wrapRouteHandlerWithLogging(
-  { routeId: "meta.readyz", auth: { mode: "none" } },
-  async (ctx, request): Promise<NextResponse> => {
-    const deep = new URL(request.url).searchParams.get("deep") === "1";
-    const result = await serveReadyz({
-      deep,
-      local: () => {
-        const env = serverEnv();
-        setBuildInfo(
-          process.env.npm_package_version || "unknown",
-          env.APP_BUILD_SHA || "unknown"
+export async function GET(request: Request): Promise<NextResponse> {
+  const start = performance.now();
+  return withRootSpan(
+    "GET meta.readyz",
+    { route_id: "meta.readyz" },
+    async ({ traceId, span }) => {
+      const log = makeLogger({ service: "cogni-template" });
+      const ctx = createRequestContext(
+        { baseLog: log, clock: { now: () => new Date().toISOString() } },
+        request,
+        { routeId: "meta.readyz", traceId },
+      );
+      span.setAttribute("request_id", ctx.reqId);
+      let status = 500;
+      try {
+        // Configuration refusals still get a request envelope; other invariants stay fatal.
+        try {
+          ctx.log = ctx.log.child({ nodeId: getNodeId() });
+        } catch (error) {
+          if (
+            !(
+              error instanceof EnvValidationError ||
+              error instanceof RuntimeSecretError
+            )
+          )
+            throw error;
+        }
+        logRequestStart(ctx.log);
+        const deep = new URL(request.url).searchParams.get("deep") === "1";
+        const result = await serveReadyz({
+          deep,
+          local: () => {
+            const env = localReadinessPreflight();
+            setBuildInfo(
+              process.env.npm_package_version || "unknown",
+              env.APP_BUILD_SHA || "unknown",
+            );
+            return {
+              buildSha: env.APP_BUILD_SHA || undefined,
+              version: process.env.npm_package_version || undefined,
+            };
+          },
+          deepChecks: () => buildDeepChecks(ctx, getContainer(), serverEnv()),
+          runtime: deepRuntime(ctx),
+          onFailure: (error) => logReadinessFailure(ctx, error as Error),
+          describeError: (error) => {
+            if (error instanceof EnvValidationError)
+              return { reason: error.meta.code, details: error.meta };
+            if (
+              error instanceof RuntimeSecretError ||
+              error instanceof InfraConnectivityError
+            )
+              return { reason: error.code, message: error.message };
+            return { reason: "INTERNAL_ERROR" };
+          },
+        });
+        const body =
+          result.status === 200
+            ? metaReadyzOperation.output.parse(result.body)
+            : result.body;
+        status = result.status;
+        return NextResponse.json(body, { status });
+      } catch (error) {
+        logRequestError(ctx.log, error, "INTERNAL_SERVER_ERROR");
+        throw error;
+      } finally {
+        const durationMs = performance.now() - start;
+        logRequestEnd(ctx.log, { status, durationMs });
+        httpRequestsTotal.inc({
+          route: "meta.readyz",
+          method: request.method,
+          status: statusBucket(status),
+        });
+        httpRequestDurationMs.observe(
+          { route: "meta.readyz", method: request.method },
+          durationMs,
         );
-        assertRuntimeSecrets(env);
-        // EVM RPC is baseline node substrate: missing config is a deployment error.
-        assertEvmRpcConfig(env);
-        return {
-          buildSha: env.APP_BUILD_SHA || undefined,
-          version: process.env.npm_package_version || undefined,
-        };
-      },
-      deepChecks: () => buildDeepChecks(ctx, getContainer(), serverEnv()),
-      runtime: deepRuntime(ctx),
-      onFailure: (error) => logReadinessFailure(ctx, error as Error),
-      describeError: (error) => {
-        if (error instanceof EnvValidationError)
-          return { reason: error.meta.code, details: error.meta };
-        if (
-          error instanceof RuntimeSecretError ||
-          error instanceof InfraConnectivityError
-        )
-          return { reason: error.code, message: error.message };
-        return { reason: "INTERNAL_ERROR" };
-      },
-    });
-    const body =
-      result.status === 200
-        ? metaReadyzOperation.output.parse(result.body)
-        : result.body;
-    return NextResponse.json(body, { status: result.status });
-  }
-);
+      }
+    },
+  );
+}

@@ -170,7 +170,7 @@ import {
 	startGovernanceSyncOnBoot,
 	startMetricsSyncOnBoot,
 } from "@/bootstrap/startup-reconcile";
-import { startSystemTenantAssertionOnBoot } from "@/bootstrap/startup-assertions";
+import { localReadinessPreflight } from "@/bootstrap/local-readiness-preflight";
 import type {
 	AccountService,
 	AiTelemetryPort,
@@ -361,9 +361,8 @@ let _workflowClientPromise: Promise<{
  */
 export function getContainer(): Container {
 	if (!_container) {
+		localReadinessPreflight();
 		_container = createContainer();
-		// bug.0022: provisioning is asserted once at boot (fail the pod), not on /readyz.
-		void startSystemTenantAssertionOnBoot(_container.serviceAccountService);
 		startGovernanceSyncOnBoot();
 		if (_container.goalMetrics) startMetricsSyncOnBoot();
 	}
