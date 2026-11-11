@@ -1,7 +1,7 @@
--- 0039 shipped with an older name for the upgrade value of created_from. Applied migrations are immutable (a deployed DB already ran
--- 0039), so this migration converges a fresh DB and an already-migrated DB on 'key_upgrade': drop the CHECK, rewrite any existing row,
--- add the CHECK back with the new value. Also drops the first draft's partial user index if an earlier flight created it (0039 now makes
--- agent_credentials_user_idx with IF NOT EXISTS).
+-- 0039 first named the upgrade value of created_from 'legacy_upgrade'. 0040 renames it to 'key_upgrade': drop the CHECK, rewrite any existing
+-- row, add the CHECK back with the new value. On every database that runs 0039 and 0040 together (a fresh one, or candidate-a after 0039
+-- drops the leaked #204 table) the table is empty at this point, so the rewrite touches no rows; it stays so a database that applied
+-- 0039 alone converges too. The DROP INDEX IF EXISTS below only clears a partial user index that an earlier draft of this PR may have created; it is a no-op where none exists.
 ALTER TABLE "agent_credentials" DROP CONSTRAINT IF EXISTS "agent_credentials_created_from_canonical";--> statement-breakpoint
 -- Data, hand-written (same as 0038): agent_credentials is FORCE RLS with no policy, so an UPDATE by the owner would silently touch 0 rows.
 -- Lift FORCE for this statement only, inside the migration transaction, then restore it.

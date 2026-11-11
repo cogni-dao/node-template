@@ -1,7 +1,14 @@
--- 0039 owns agent_credentials. No database has a 0039 ledger row, so any agent_credentials table that already exists is a leaked draft
--- from an unmerged candidate flight of this PR (it has a different column set and no ledger row). Drop it so this migration builds the
--- table the same way on every database. CASCADE also removes the draft's dependent row-type function.
--- Evidence: https://github.com/cogni-dao/node-template/pull/303#issuecomment-6787685388
+-- 0039 owns agent_credentials. No migration on main creates this table (main's ledger ends at 0038), so on a fresh database and on
+-- production the DROP below is a no-op. It exists for ONE database: the shared candidate database, where an `agent_credentials` table
+-- already exists. That table is a leak from draft PR #204 (story.5115): its migration 0034_agent_grants created
+-- agent_credentials(id, user_id, key_hash, created_at, revoked_at), the FK agent_credentials_user_id_users_id_fk,
+-- agent_credentials_key_hash_idx, agent_credentials_user_idx and FORCE RLS, and a flight of that draft applied it there.
+-- It has a different column set and no 0039 ledger row, so CREATE TABLE below would fail on it.
+-- CASCADE removes only that table with its own indexes and constraints: #204's DDL has no inbound foreign key, view or function on it,
+-- and its sibling tables (agent_access_requests, agent_capability_grants) do not reference it and stay.
+-- No database has a 0039 ledger row yet, so this file may still change; once any database applies it, it is immutable.
+-- The CEO approved the drop on 2026-11-11 (recorded on https://cognidao.org/work/items/story.5147).
+-- Evidence: https://github.com/cogni-dao/node-template/pull/303#issuecomment-6788002844 and `gh pr diff 204` (0034_agent_grants.sql).
 DROP TABLE IF EXISTS "agent_credentials" CASCADE;--> statement-breakpoint
 CREATE TABLE "agent_credentials" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
