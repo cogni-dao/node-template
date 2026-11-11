@@ -31,6 +31,7 @@ import {
   declaresSecretArgs,
   deepFreeze,
   maskDeclaredPaths,
+  parseSecretPath,
   scrubString,
   scrubValue,
 } from "./secret-args";
@@ -87,7 +88,10 @@ function toSecretRuntime<TInput, TOutput, TRedacted extends Record<string, unkno
   base: Omit<BoundToolRuntime, "validateInput" | "exec" | "validateOutput" | "redact">,
   paths: readonly string[]
 ): BoundToolRuntime {
-  /** scrubbed copy -> the real parsed input and its secret values */
+  // A bad path fails when the tool is bound, not on the first call.
+  for (const path of paths) parseSecretPath(path);
+
+  /** scrubbed copy -> the real parsed input and its secret values; deleted at exec, so a copy works once */
   const calls = new WeakMap<object, { real: TInput; secrets: readonly string[] }>();
   /** the call's output object (re-keyed at exec, validateOutput, redact) -> its secret values */
   const outputs = new WeakMap<object, readonly string[]>();
@@ -119,6 +123,8 @@ function toSecretRuntime<TInput, TOutput, TRedacted extends Record<string, unkno
           ? calls.get(validatedArgs)
           : undefined;
       if (!call) throw secretArgsUnavailable();
+      // Single use: the raw value is not kept alive by the scrubbed copy that the stream and thread hold.
+      calls.delete(validatedArgs as object);
       let output: unknown;
       try {
         output = await implementation.execute(call.real);
@@ -134,6 +140,8 @@ function toSecretRuntime<TInput, TOutput, TRedacted extends Record<string, unkno
     },
 
     validateOutput(rawOutput: unknown): unknown {
+      // A miss means the output is not the object exec scrubbed. It fails closed (the runner reports `validation`,
+      // with a fixed message) because nothing about it can be trusted to be free of the value.
       const secrets =
         typeof rawOutput === "object" && rawOutput !== null
           ? outputs.get(rawOutput)

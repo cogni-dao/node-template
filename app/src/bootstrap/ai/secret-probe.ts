@@ -72,8 +72,18 @@ export const NODE_LOCAL_TOOL_BINDINGS = {
   [SECRET_PROBE_NAME]: secretProbeImplementation as ToolImplementation<unknown, unknown>,
 } as const;
 
-const PROBE_PROMPT =
-  "You are a test harness. When the user gives you a test string, call the probe tool exactly once with that string as `secret`, then reply with one short sentence saying whether it arrived and its length. Do not repeat the string. Do not call the tool again.";
+/**
+ * Delivery of the canary: the user message lists the canary in numbered parts, never whole. The model joins the parts in
+ * order with a hyphen and passes the joined string as `secret`, so the literal canary is never in user text, the saved
+ * user message or the app's root trace input. Only the model's own tool call (scrubbed by the adapter, masked at the
+ * gateway) ever holds it.
+ */
+export const SECRET_PROBE_JOIN = "-";
+export function secretProbeUserMessage(parts: readonly string[]): string {
+  return `Parts of the test string, in order:\n${parts.map((p, i) => `${i + 1}. ${p}`).join("\n")}`;
+}
+
+const PROBE_PROMPT = `You are a test harness. The user lists numbered parts of a test string. Join the parts in order, separated by a single hyphen "${SECRET_PROBE_JOIN}", into one string. Call the probe tool exactly once with that joined string as \`secret\`, then reply with one short sentence saying whether it arrived and its length. Never write the joined string in your reply. Do not call the tool again.`;
 
 /**
  * Graphs this node adds to the shared catalog. The mission factory is the plain prompt-driven agent when no `program` is

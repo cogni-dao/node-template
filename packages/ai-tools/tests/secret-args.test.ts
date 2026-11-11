@@ -20,7 +20,7 @@ import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
 import { toBoundToolRuntime } from "../src/runtime-adapter";
-import { REDACTION_MARKER } from "../src/secret-args";
+import { REDACTION_MARKER, scrubValue } from "../src/secret-args";
 import type { BoundTool, ToolContract } from "../src/types";
 
 /** Matches no regex backstop (`sk-`, `key-`, `token-`, `api-`, `cogni_ag_sk_`), so only the scrub can hide it. */
@@ -297,6 +297,56 @@ describe("secretArgs: the value never reaches a runner record", () => {
       auth: { tokens: [CANARY, CANARY_2], user: "alice" },
       rows: [{ pass: CANARY, n: 1 }, { pass: CANARY_2, n: 2 }],
     });
+  });
+});
+
+describe("scrubValue", () => {
+  it("copies a shared, non-cyclic object or array each time it appears", () => {
+    const row = { n: 1 };
+    const list = [1, 2];
+    expect(scrubValue({ a: row, b: row, c: list, d: list }, [CANARY])).toEqual({
+      a: { n: 1 },
+      b: { n: 1 },
+      c: [1, 2],
+      d: [1, 2],
+    });
+  });
+
+  it("marks only a true cycle", () => {
+    const loop: Record<string, unknown> = { n: 1 };
+    loop.self = loop;
+    expect(scrubValue(loop, [CANARY])).toEqual({ n: 1, self: REDACTION_MARKER });
+  });
+
+  it("lets a secret tool return the same object twice", async () => {
+    const item = { n: 1 };
+    const { result } = await run(
+      makeTool({
+        secretArgs: ["secret"],
+        execute: async () => ({ ok: true, length: 1, echo: "e", a: item, b: item }) as never,
+      }),
+      { secret: CANARY, label: "l" }
+    );
+    expect(result).toMatchObject({ ok: true });
+  });
+});
+
+describe("a scrubbed copy works once, and a bad path fails at bind", () => {
+  it("fails closed when the same copy is replayed into exec", async () => {
+    const execute = vi.fn(async () => ({ ok: true, length: 1 }));
+    const rt = toBoundToolRuntime(makeTool({ secretArgs: ["secret"], execute }));
+    const copy = rt.validateInput({ secret: CANARY, label: "l" });
+    await rt.exec(copy, { runId: "r", toolCallId: "t" }, {});
+    await expect(rt.exec(copy, { runId: "r", toolCallId: "t" }, {})).rejects.toMatchObject({
+      receipt: { code: "secret_args_unavailable" },
+    });
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws when the runtime is built with a malformed path", () => {
+    expect(() =>
+      toBoundToolRuntime(makeTool({ secretArgs: ["a..b["], execute: async () => ({ ok: true, length: 1 }) })),
+    ).toThrow(/bad path segment/);
   });
 });
 

@@ -10,6 +10,8 @@
  *   - EXACT_MATCH_ONLY: a value is removed by exact match (raw and JSON-escaped); values under 8 characters are removed
  *     only when a whole string equals them, so a short value cannot mangle unrelated text
  *   - PURE: inputs are never mutated; results are new objects
+ * Limits: a secret that needs JSON escaping is removed in its raw and singly-escaped spellings, not a doubly-escaped
+ *   one; a Map, Set or class instance is scrubbed as a plain object of its own enumerable fields (tool output is JSON).
  * Side-effects: none
  * Links: runtime-adapter.ts, agent-run-authority (hub) "Secret tool arguments"
  * @public
@@ -125,7 +127,11 @@ export function scrubString(text: string, secrets: readonly string[]): string {
   return result;
 }
 
-/** Replace each secret in every string leaf and key of a JSON-like value. Returns a new value. */
+/**
+ * Replace each secret in every string leaf and key of a JSON-like value. Returns a new value.
+ * `seen` holds only the objects on the current path, so a shared (non-cyclic) object is copied each time it
+ * appears and only a true cycle becomes the marker.
+ */
 export function scrubValue(
   value: unknown,
   secrets: readonly string[],
@@ -136,15 +142,19 @@ export function scrubValue(
   if (value instanceof Date) return value;
   if (seen.has(value)) return REDACTION_MARKER;
   seen.add(value);
-  if (Array.isArray(value)) {
-    return value.map((item) => scrubValue(item, secrets, seen));
+  try {
+    if (Array.isArray(value)) {
+      return value.map((item) => scrubValue(item, secrets, seen));
+    }
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        scrubString(key, secrets),
+        scrubValue(item, secrets, seen),
+      ])
+    );
+  } finally {
+    seen.delete(value);
   }
-  return Object.fromEntries(
-    Object.entries(value).map(([key, item]) => [
-      scrubString(key, secrets),
-      scrubValue(item, secrets, seen),
-    ])
-  );
 }
 
 /** Freeze a JSON-like value and everything under it. */

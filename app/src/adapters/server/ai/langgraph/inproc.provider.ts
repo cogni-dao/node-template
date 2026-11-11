@@ -483,9 +483,10 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
                 graphName,
                 tool: name,
                 errorCode: result.errorCode,
-                ...(result.receipt ? { receiptCode: result.receipt.code } : {}),
                 ...(secretTool
-                  ? {}
+                  ? result.receipt
+                    ? { receiptCode: result.receipt.code }
+                    : {}
                   : { safeMessage: result.safeMessage.slice(0, 300) }),
               },
               "tool call failed",

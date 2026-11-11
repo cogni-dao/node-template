@@ -20,14 +20,22 @@ import {
   createToolAllowlistPolicy,
   createToolRunner,
 } from "@cogni/ai-core";
-import { toBoundToolRuntime } from "@cogni/ai-tools";
+import {
+  declaredPathsNotStringFields,
+  secretArgsLeaks,
+  toBoundToolRuntime,
+  undeclaredCredentialFields,
+} from "@cogni/ai-tools";
 import { scrubStringContent } from "@cogni/node-shared";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  SECRET_PROBE_JOIN,
   SECRET_PROBE_NAME,
   secretProbeBoundTool,
+  secretProbeContract,
   secretProbeImplementation,
+  secretProbeUserMessage,
 } from "@/bootstrap/ai/secret-probe";
 import { assembleAssistantMessage } from "@/features/ai/services/assemble-assistant-message";
 import { redactSecretsInMessages } from "@/features/ai/public.server";
@@ -90,6 +98,25 @@ describe("secret probe canary", () => {
     const result = await exec({ secret: CANARY });
     expect(result).toMatchObject({ ok: false, errorCode: "execution" });
     expect(JSON.stringify({ result, events })).not.toContain(CANARY);
+  });
+});
+
+describe("the probe contract passes the secretArgs guard", () => {
+  it("declares every credential field, declares only string fields, and no probe survives its own paths", async () => {
+    expect(undeclaredCredentialFields(secretProbeContract)).toEqual([]);
+    expect(declaredPathsNotStringFields(secretProbeContract)).toEqual([]);
+    expect(await secretArgsLeaks(secretProbeContract as never)).toEqual([]);
+  });
+});
+
+describe("probe delivery keeps the literal canary out of user text", () => {
+  it("lists the canary in parts; the joined literal is not in the user message", () => {
+    const parts = CANARY.split(SECRET_PROBE_JOIN);
+    expect(parts.length).toBeGreaterThan(1);
+    const message = secretProbeUserMessage(parts);
+    expect(message).not.toContain(CANARY);
+    expect(parts.join(SECRET_PROBE_JOIN)).toBe(CANARY);
+    for (const part of parts) expect(scrubStringContent(part)).toBe(part);
   });
 });
 
