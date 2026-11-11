@@ -22,6 +22,7 @@ import {
   type CredentialState,
   credentialDenialHttp,
   credentialErrorHttp,
+  storeFailureFields,
 } from "@cogni/agent-grants/credentials";
 import { type NextRequest, NextResponse } from "next/server";
 
@@ -34,14 +35,29 @@ export const credentialResponse = (http: CredentialHttpResponse): NextResponse =
   NextResponse.json(http.body, { status: http.status, headers: { ...http.headers } });
 
 /** Run a handler step; a `CredentialStoreUnavailableError` anywhere in it is 503 `authz_unavailable`. Other errors propagate. */
-export async function answerStoreOutage(run: () => Promise<NextResponse>): Promise<NextResponse> {
+export async function answerStoreOutage(
+  ctx: RequestContext,
+  routeId: string,
+  run: () => Promise<NextResponse>
+): Promise<NextResponse> {
   try {
     return await run();
   } catch (error) {
     const http = credentialErrorHttp(error);
-    if (http?.status === 503) return credentialResponse(http);
+    if (http?.status === 503) {
+      logStoreUnavailable(ctx, routeId, error);
+      return credentialResponse(http);
+    }
     throw error;
   }
+}
+
+/** One `store_unavailable` line: routeId, plus the cause's class and SQLSTATE (never its message, which can hold a key hash). */
+function logStoreUnavailable(ctx: RequestContext, routeId: string, source: unknown): void {
+  ctx.log.warn(
+    { event: EVENT_NAMES.AGENT_CREDENTIAL_STORE_UNAVAILABLE, routeId, ...storeFailureFields(source) },
+    EVENT_NAMES.AGENT_CREDENTIAL_STORE_UNAVAILABLE
+  );
 }
 
 export interface CredentialCaller {
@@ -56,12 +72,13 @@ export function credentialBearerRoute(options: {
   handle: (input: { ctx: RequestContext; request: NextRequest; caller: CredentialCaller }) => Promise<NextResponse>;
 }) {
   return wrapRouteHandlerWithLogging({ routeId: options.routeId, auth: { mode: "none" } }, (ctx, request) =>
-    answerStoreOutage(async () => {
+    answerStoreOutage(ctx, options.routeId, async () => {
       const token = await currentBearerToken();
       const verified = token ? await verifyRevocableKey(token, options.allow) : null;
       if (verified?.ok) {
         return options.handle({ ctx, request, caller: { userId: verified.userId, credentialId: verified.credentialId } });
       }
+      if (verified?.reason === "unavailable") logStoreUnavailable(ctx, options.routeId, verified);
       if (verified?.reason === "rate_limited") {
         ctx.log.warn({ event: EVENT_NAMES.AGENT_CREDENTIAL_RATE_LIMITED, routeId: options.routeId }, EVENT_NAMES.AGENT_CREDENTIAL_RATE_LIMITED);
       }

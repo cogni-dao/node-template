@@ -178,14 +178,22 @@ describe("credential-lookup limiter inputs (task.0070 B2)", () => {
     expect(limiter.hasTokens("other")).toBe(true); // keys are isolated
   });
 
-  it("maxKeys: keys past the cap share one overflow bucket, so invented keys cannot grow the map; known keys keep their own", () => {
+  it("maxKeys is a bounded LRU: past the cap the least-recently-seen bucket is evicted, never shared, and a client with no bucket always passes", () => {
     const limiter = new TokenBucketRateLimiter({ maxTokens: 1, refillRate: 0, burstSize: 0, maxKeys: 2 });
     expect(limiter.consume("a")).toBe(true);
     expect(limiter.consume("b")).toBe(true);
-    expect(limiter.consume("c")).toBe(true); // first overflow key takes the shared bucket's only token
-    expect(limiter.consume("d")).toBe(false); // a different new key now shares that exhausted bucket
-    expect(limiter.hasTokens("e")).toBe(false);
-    expect(limiter.hasTokens("a")).toBe(false); // own bucket, spent
+    expect(limiter.hasTokens("a")).toBe(false);
+    expect(limiter.consume("c")).toBe(true); // evicts "a", the least recently seen
+    expect(limiter.hasTokens("a")).toBe(true); // evicted: no bucket, so it passes
+    expect(limiter.hasTokens("b")).toBe(false); // still has its own spent bucket
+    expect(limiter.hasTokens("d")).toBe(true); // a new client is never throttled by other clients' misses
+  });
+
+  it("filling the limiter past maxKeys with misses from distinct IPs does not throttle a valid key from a new IP", () => {
+    const limiter = new TokenBucketRateLimiter({ maxTokens: 1, refillRate: 0, burstSize: 0, maxKeys: 100 });
+    for (let i = 0; i < 1_000; i++) limiter.consume(`198.51.100.${i}`); // each a miss that spends its own token
+    expect(limiter.hasTokens("203.0.113.200")).toBe(true); // a legitimate agent's first call: admitted, and a valid key then spends nothing
+    expect(limiter.getTokens("203.0.113.200")).toBe(1);
   });
 
   it("the key is the Cloudflare-written cf-connecting-ip; a forged x-real-ip or x-forwarded-for never changes it", () => {

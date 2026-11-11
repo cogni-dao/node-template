@@ -53,7 +53,8 @@ function attachCause(target: object, cause: unknown): void {
  * detail carries a token hash). A node with a role that lacks BYPASSRLS, or a missing `agent_credential_state()`, shows up here.
  */
 export function storeFailureFields(error: unknown): { errorClass?: string; sqlState?: string } {
-  const cause = error instanceof Error ? (error as { cause?: unknown }).cause : undefined;
+  // An error, or a `verifyBearer` unavailable result: both carry the cause the same way.
+  const cause = typeof error === "object" && error !== null ? (error as { cause?: unknown }).cause : undefined;
   if (cause === undefined || cause === null) return {};
   const code = (cause as { code?: unknown }).code;
   return {

@@ -27,11 +27,12 @@ interface RateLimiterConfig {
   maxTokens: number; // Bucket capacity (e.g., 10)
   refillRate: number; // Tokens per second (e.g., 10/60 = 0.166...)
   burstSize: number; // Burst allowance beyond maxTokens (e.g., 5)
-  /** Cap on distinct keys. Past it, new keys share one overflow bucket, so a flood of invented keys cannot grow the map without bound. Default: no cap. */
+  /**
+   * Cap on distinct keys (a bounded LRU). Past it, the least-recently-seen bucket is evicted to make room, so a flood of invented keys cannot grow
+   * the map without bound and never makes unrelated clients share a bucket. Default: no cap.
+   */
   maxKeys?: number;
 }
-
-const OVERFLOW_KEY = "\u0000overflow";
 
 /**
  * In-memory token bucket rate limiter.
@@ -52,10 +53,14 @@ export class TokenBucketRateLimiter {
    * Check if request is allowed for given key (typically IP address).
    * Returns true if allowed, false if rate limit exceeded.
    */
-  public consume(rawKey: string): boolean {
+  public consume(key: string): boolean {
     const now = Date.now();
-    const key = this.keyFor(rawKey);
     let bucket = this.buckets.get(key);
+    if (bucket) {
+      // Most recently seen goes last, so the first entry is always the least recently seen.
+      this.buckets.delete(key);
+      this.buckets.set(key, bucket);
+    }
 
     if (!bucket) {
       // New client - initialize with full bucket including burst capacity
@@ -63,6 +68,11 @@ export class TokenBucketRateLimiter {
         tokens: this.config.maxTokens + this.config.burstSize,
         lastSeen: now,
       };
+      const { maxKeys } = this.config;
+      if (maxKeys !== undefined && this.buckets.size >= maxKeys) {
+        const oldest = this.buckets.keys().next();
+        if (!oldest.done) this.buckets.delete(oldest.value);
+      }
       this.buckets.set(key, bucket);
     }
 
@@ -89,16 +99,11 @@ export class TokenBucketRateLimiter {
   /**
    * True when `consume(key)` would succeed. Spends nothing and creates no bucket, so a client that only checks never grows the map.
    */
-  public hasTokens(rawKey: string): boolean {
-    const bucket = this.buckets.get(this.keyFor(rawKey));
-    if (!bucket) return true; // a new key starts with a full bucket
+  public hasTokens(key: string): boolean {
+    const bucket = this.buckets.get(key);
+    if (!bucket) return true; // a client with no bucket always passes: only a miss creates one
     const refilled = bucket.tokens + ((Date.now() - bucket.lastSeen) / 1000) * this.config.refillRate;
     return refilled >= 1;
-  }
-
-  private keyFor(key: string): string {
-    const { maxKeys } = this.config;
-    return maxKeys !== undefined && !this.buckets.has(key) && this.buckets.size >= maxKeys ? OVERFLOW_KEY : key;
   }
 
   /**
@@ -195,8 +200,11 @@ export function extractClientIp(request: { headers: { get(name: string): string 
  *   It is not in front of an Akash node. Nothing in the operator repo writes `x-real-ip` for a node. At the provider ingress it is the TCP peer
  *   (a Cloudflare address, so every agent would share one bucket) or, if the ingress passes it through, a header the client chose.
  * Residual: the provider ingress is reachable without Cloudflare (the sequencer itself probes it directly), and a client that does so can send
- * any `cf-connecting-ip`. That only lets it pick its own bucket: the shape and checksum perimeter and `maxKeys` still bound the cost of a flood,
- * and a valid key never spends a token. Closing it needs the origin to accept only Cloudflare (an edge change, not this node's).
+ * any `cf-connecting-ip`. It can then pick its own bucket, so the per-client limit does NOT bound a deliberate flood from such a client: the CRC32
+ * checksum is public, so a flood of well-formed random keys passes the perimeter, and `maxKeys` bounds only this map's memory. What still holds:
+ * a valid key never spends a token and a client with no bucket always passes `hasTokens`, so the flood cannot throttle legitimate agents through
+ * this limiter. The real fix is an origin that accepts only Cloudflare (an edge change, not this node's); until then the cost of such a flood
+ * is the indexed lookups themselves on the service pool.
  */
 export function extractEdgeClientIp(request: { headers: { get(name: string): string | null } }): string {
   const ip = request.headers.get("cf-connecting-ip")?.trim();
@@ -209,7 +217,7 @@ export function extractEdgeClientIp(request: { headers: { get(name: string): str
  * SPEND_ON_MISS: a request checks the bucket first (`hasTokens`, over the limit = 429, no store read) and spends a token only when the lookup finds
  * no usable key (`consume`). A valid key never spends, so a busy legitimate agent is never throttled by its own traffic. 300 misses/min sustained + 100
  * burst per client; keys that fail the shape or checksum never reach it. Per-instance state, same limitation as the public limiter. At most
- * 10 000 distinct clients are tracked (`maxKeys`); more share one overflow bucket.
+ * 10 000 distinct clients are tracked (`maxKeys`, bounded LRU): the least-recently-seen bucket is evicted, never shared.
  */
 export const credentialLookupLimiter = new TokenBucketRateLimiter({
   maxTokens: 300,

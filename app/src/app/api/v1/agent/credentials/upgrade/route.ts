@@ -48,7 +48,7 @@ export const POST = wrapRouteHandlerWithLogging(
     const bearer = await currentBearerToken();
     if (sessionUser.via !== "bearer" || !bearer?.startsWith("cogni_ag_sk_v1_")) return answer({ op: "signed_key_required" });
 
-    return answerStoreOutage(async () => {
+    return answerStoreOutage(ctx, "agent.credentials.upgrade", async () => {
       const minted = await upgradeSignedKey(getAgentCredentialStore(), { userId: sessionUser.id });
       if (!minted.ok) return answer({ op: "upgrade", result: minted });
       ctx.log.info(
