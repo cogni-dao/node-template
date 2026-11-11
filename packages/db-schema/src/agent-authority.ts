@@ -69,6 +69,9 @@ export const agentPrincipals = pgTable(
     uniqueIndex("agent_principals_slug_unique").on(table.slug),
     uniqueIndex("agent_principals_service_key_unique").on(table.serviceKey),
     uniqueIndex("agent_principals_user_id_unique").on(table.userId),
+    index("agent_principals_service_created_idx")
+      .on(table.createdAt, table.userId)
+      .where(sql`${table.serviceKey} IS NOT NULL`),
     // Read-only for every role: slug and seeded user id are not secret, and the wallet-binding trigger must see
     // them whichever role binds. Writes stay deny-all for the app role (no write policy; FORCE RLS).
     pgPolicy("agent_principals_read", { for: "select", using: sql`true` }),
@@ -103,6 +106,11 @@ export const agentRoles = pgTable(
       .on(table.principalUserId, table.scope)
       .where(sql`${table.revokedAt} IS NULL`),
     index("agent_roles_principal_idx").on(table.principalUserId),
+    index("agent_roles_principal_scope_latest_idx")
+      .on(table.principalUserId, table.scope, table.createdAt.desc(), table.id.desc()),
+    index("agent_roles_unrevoked_principal_idx")
+      .on(table.principalUserId, table.id)
+      .where(sql`${table.revokedAt} IS NULL`),
   ]
 ).enableRLS();
 

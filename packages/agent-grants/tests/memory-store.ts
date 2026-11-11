@@ -54,7 +54,7 @@ export function memoryStore(init?: {
     },
     async listRoleRows(limit) {
       const all = roles
-        .filter((r) => !r.revoked)
+        .filter((r, i) => !r.revoked || (!!r.approvedBy && (init?.servicePrincipals ?? []).includes(r.principal) && !roles.slice(i + 1).some((newer) => newer.principal === r.principal && newer.scope === r.scope)))
         .map(
           (r): RoleRow => ({
             principalUserId: r.principal,
@@ -63,7 +63,7 @@ export function memoryStore(init?: {
             name: slugOf(r.principal) ? (init?.names?.[slugOf(r.principal) as string] ?? slugOf(r.principal)) : (init?.names?.[r.principal] ?? null),
             hint: null,
             scope: r.scope,
-            state: r.approvedBy ? "granted" : "pending",
+            state: r.approvedBy ? (r.revoked ? "revoked" : "granted") : "pending",
             at: "2026-11-09T00:00:00.000Z",
           })
         );
@@ -96,6 +96,14 @@ export function memoryStore(init?: {
       const row = openRow(principalUserId, scope);
       if (!row || row.approvedBy || principalUserId === approvedBy) return false;
       row.approvedBy = approvedBy;
+      return true;
+    },
+    async restoreRevoked({ principalUserId, scope, approvedBy }) {
+      guard();
+      if (principalUserId === approvedBy) return false;
+      const row = [...roles].reverse().find((r) => r.principal === principalUserId && r.scope === scope);
+      if (!row?.revoked || !row.approvedBy) return false;
+      roles.push({ principal: principalUserId, scope, revoked: false, approvedBy });
       return true;
     },
     async denyPending({ principalUserId, scope }) {

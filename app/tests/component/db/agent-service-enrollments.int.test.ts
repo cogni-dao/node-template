@@ -20,10 +20,11 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { createPostgresAgentGrantsStore } from "@cogni/agent-grants";
-import { type CredentialSql, createPostgresCredentialStore, agentRolesHasRoles, hashAgentKey } from "@cogni/agent-grants/credentials";
-import { createPostgresEnrollmentStore } from "@cogni/agent-grants/enrollment";
-import { runEnrollmentConformance } from "@cogni/agent-grants/enrollment-conformance";
+import { authorizeCaller, buildNodeAiView, grantRole, revokeRole, createPostgresAgentGrantsStore, type SqlTag } from "@cogni/agent-grants";
+import { type CredentialSql, createPostgresCredentialStore, agentRolesHasRoles, hashAgentKey, confirmCredential, verifyBearer } from "@cogni/agent-grants/credentials";
+import { createPostgresEnrollmentStore, pollServiceEnrollment, requestServiceEnrollment, openSealed, SERVICE_ENROLLMENT_KIND, serviceEnrollmentAudience, type ServiceEnrollmentClaims } from "@cogni/agent-grants/enrollment";
+import { runEnrollmentConformance, type EnrollmentConformanceHarness } from "@cogni/agent-grants/enrollment-conformance";
+import { generateKeyPair, exportJWK } from "jose";
 import postgres, { type Sql } from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -63,7 +64,7 @@ describe("agent service enrollments (real Postgres)", () => {
     await app?.end({ timeout: 1 });
   });
 
-  runEnrollmentConformance({
+  const enrollmentHarness: EnrollmentConformanceHarness = {
     describe,
     it,
     expect,
@@ -119,9 +120,106 @@ describe("agent service enrollments (real Postgres)", () => {
           ),
       };
     },
-  });
+  };
+  runEnrollmentConformance(enrollmentHarness);
+
+  const startEnrollment = async (setup: Awaited<ReturnType<typeof enrollmentHarness.setup>>, serviceName = "git-review") => {
+    const pair = await generateKeyPair("ECDH-ES", { crv: "X25519", extractable: true });
+    const publicJwk = await exportJWK(pair.publicKey);
+    const claims: ServiceEnrollmentClaims = {
+      iss: "https://home.example", aud: serviceEnrollmentAudience("11111111-1111-4111-8111-111111111111"),
+      kind: SERVICE_ENROLLMENT_KIND, jti: randomUUID(), iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 300,
+      service: serviceName, scopes: ["knowledge:read"], cnf: { jwk: { kty: "OKP", crv: "X25519", x: publicJwk.x as string } },
+    };
+    const made = await requestServiceEnrollment(setup.store, async () => ({ ok: true, claims, home: { origin: claims.iss, services: { [serviceName]: ["knowledge:read"] } } }), { token: "verified-test-claims", askableScopes: setup.askableScopes });
+    if (!made.ok) throw new Error(`enrollment refused: ${made.reason}`);
+    return { ...made, privateJwk: await exportJWK(pair.privateKey) };
+  };
 
   describe("schema (rows only SQL can prove)", () => {
+    it("cleanup rechecks after selection and cannot erase an approval committed by the shared role writer", async () => {
+      const setup = await enrollmentHarness.setup();
+      const enrollment = await startEnrollment(setup);
+      await setup.lapse(enrollment.principalUserId);
+      await setup.ageUnredeemed(enrollment.principalUserId);
+      let selected!: () => void;
+      let resume!: () => void;
+      const selection = new Promise<void>((resolve) => { selected = resolve; });
+      const resumed = new Promise<void>((resolve) => { resume = resolve; });
+      let paused = false;
+      const delayed = Object.assign(client().bind(null), {
+        begin: <T>(fn: (tx: SqlTag) => Promise<T>): Promise<T> => client().begin(async (tx) => {
+          const observed = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
+            const rows = await tx(strings, ...values);
+            if (!paused && strings.join("?").includes("LIMIT") && strings.join("?").includes("SELECT p.user_id FROM agent_principals")) {
+              paused = true;
+              selected();
+              await resumed;
+            }
+            return rows;
+          }, tx);
+          return fn(observed);
+        }),
+      }) as CredentialSql;
+      const maintenance = startEnrollment({ ...setup, store: createPostgresEnrollmentStore(delayed) }, "maintenance-trigger");
+      try {
+        await Promise.race([selection, maintenance.then(() => { throw new Error("cleanup never selected the abandoned principal"); })]);
+        await setup.approve(enrollment.principalUserId, "knowledge:read");
+        expect(await setup.hasLiveRole(enrollment.principalUserId, "knowledge:read")).toBe(true);
+      } finally {
+        resume();
+        await maintenance;
+      }
+      expect(await setup.principalExists(enrollment.principalUserId)).toBe(true);
+      expect(await setup.hasLiveRole(enrollment.principalUserId, "knowledge:read")).toBe(true);
+      const hash = await hashAgentKey(enrollment.deviceCode);
+      expect((await service`SELECT 1 FROM agent_service_enrollments WHERE device_code_hash = ${hash}`).length).toBe(1);
+    });
+
+    it("terminal history is retained while request maintenance and its index follow only open rows", async () => {
+      const setup = await enrollmentHarness.setup();
+      const enrollment = await startEnrollment(setup);
+      const prefix = randomUUID();
+      const cnf = JSON.stringify({ kty: "OKP", crv: "X25519", x: Buffer.alloc(32, 7).toString("base64url") });
+      await service`INSERT INTO agent_service_enrollments (jti, issuer, service, principal_user_id, scope, device_code_hash, cnf_jwk, status, expires_at)
+        SELECT ${prefix} || '-' || n, 'https://home.example', 'git-review', ${enrollment.principalUserId}, 'knowledge:read',
+          ${prefix} || '-code-' || n, ${cnf}, 'expired', now() - interval '1 day'
+        FROM generate_series(1, 5000) n`;
+      const plan = await service`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)
+        SELECT id FROM agent_service_enrollments WHERE status = 'open' AND expires_at <= now()
+        ORDER BY expires_at, id LIMIT 20 FOR UPDATE SKIP LOCKED`;
+      const explained = JSON.stringify(plan);
+      expect(explained).toContain("agent_service_enrollments_open_expiry_idx");
+      expect(explained).not.toContain('"Node Type":"Seq Scan"');
+      await startEnrollment(setup); // same service, a new ask; retained history must not become the working set
+      expect((await service`SELECT count(*)::int AS n FROM agent_service_enrollments WHERE jti LIKE ${`${prefix}-%`}`)[0]?.n).toBe(5000);
+      expect((await service`SELECT count(*)::int AS n FROM agent_service_enrollments WHERE status = 'open'`)[0]?.n).toBe(1);
+    });
+
+    it("real role mutations retain the On control after Off and authorize the same confirmed credential again", async () => {
+      const setup = await enrollmentHarness.setup();
+      const enrollment = await startEnrollment(setup);
+      const scope = "knowledge:read";
+      const admin = await makeAdmin();
+      const grants = createPostgresAgentGrantsStore(service as unknown as Parameters<typeof createPostgresAgentGrantsStore>[0]);
+      const grant = { principalUserId: enrollment.principalUserId, scope, approvedBy: admin, declaredScopes: [scope] };
+      await grantRole(grants, grant);
+      const issued = await pollServiceEnrollment(setup.store, { deviceCode: enrollment.deviceCode });
+      if (!issued.ok) throw new Error(`poll refused: ${issued.error}`);
+      const key = await openSealed(issued.sealedKey, enrollment.privateJwk);
+      expect(await confirmCredential(setup.credentials, { credentialId: issued.credentialId })).toMatchObject({ ok: true });
+      const decision = () => authorizeCaller(grants, async () => "denied", { userId: enrollment.principalUserId, via: "bearer", requires: { scope, kind: "node", subject: "member" }, serviceKeyedOnly: true });
+      expect(await decision()).toMatchObject({ decision: "allow" });
+      await revokeRole(grants, { principalUserId: enrollment.principalUserId, scope });
+      expect(await decision()).toMatchObject({ decision: "deny" });
+      const controls = buildNodeAiView({ declarations: { [scope]: { label: "Read the knowledge base", description: "Read this node's knowledge." } }, scopesByPrincipal: {}, internal: [], rows: (await grants.listRoleRows(25, [scope])).rows });
+      expect(controls).toEqual([expect.objectContaining({ principalUserId: enrollment.principalUserId, on: false })]);
+      await grantRole(grants, grant);
+      expect(await verifyBearer(setup.credentials, key)).toMatchObject({ ok: true, credentialId: issued.credentialId });
+      expect(await decision()).toMatchObject({ decision: "allow" });
+      expect((await service`SELECT count(*)::int AS n FROM agent_credentials WHERE user_id = ${enrollment.principalUserId}`)[0]?.n).toBe(1);
+      expect((await service`SELECT count(*)::int AS n FROM agent_roles WHERE principal_user_id = ${enrollment.principalUserId} AND revoked_at IS NOT NULL`)[0]?.n).toBe(1);
+    });
     it("a poll blocked behind confirmation and revocation observes the committed confirmation and never inserts a replacement", async () => {
       await cleanup();
       const user = randomUUID();

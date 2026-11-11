@@ -68,5 +68,11 @@ export const agentServiceEnrollments = pgTable(
       table.deviceCodeHash
     ),
     index("agent_service_enrollments_principal_idx").on(table.principalUserId),
+    index("agent_service_enrollments_open_expiry_idx")
+      .on(table.expiresAt, table.id)
+      .where(sql`${table.status} = 'open'`),
+    index("agent_service_enrollments_open_principal_idx")
+      .on(table.principalUserId, table.id)
+      .where(sql`${table.status} = 'open'`),
   ]
 ).enableRLS();

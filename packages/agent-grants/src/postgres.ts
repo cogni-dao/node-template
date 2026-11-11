@@ -5,7 +5,8 @@
  * Module: `@cogni-dao/agent-grants/postgres`
  * Purpose: The Postgres implementation of the store, over an injected tagged-template query function.
  * Scope: Raw SQL against `agent_roles` and `agent_principals`.
- *   A postgres.js `Sql` or `TransactionSql` fits `SqlTag` as is; a node adapts any other driver.
+ *   A postgres.js `Sql` or `TransactionSql` fits `SqlTag` as is; writes require a begin-capable client or transaction-bound tag.
+ *   Role mutations take the user lock before reading or changing authority, so provider maintenance can coordinate with the same writer.
  * Invariants:
  *   - The package never creates a client, switches a role, or runs a schema.
  *   - `agent_roles` has FORCE RLS and no policy: only a service-role connection reads or writes it. `agent_principals`
@@ -41,6 +42,18 @@ function serviceHint(serviceKey: string): string | null {
 }
 
 export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
+  // Lock order for authority writers: user -> enrollment (provider only) -> role -> credential.
+  // A root postgres client opens a transaction; a transaction-bound tag reuses its caller's transaction.
+  const mutate = <T>(principalUserId: string, fn: (tx: SqlTag) => Promise<T>): Promise<T> => {
+    const run = async (tx: SqlTag): Promise<T> => {
+      await tx`SELECT id FROM users WHERE id = ${principalUserId} FOR UPDATE`;
+      return fn(tx);
+    };
+    const client = sql as SqlTag & { begin?: <R>(f: (tx: SqlTag) => Promise<R>) => Promise<R>; savepoint?: unknown };
+    if (client.begin) return client.begin(run);
+    if (typeof client.savepoint === "function") return run(sql);
+    return Promise.reject(new Error("role writer requires a begin-capable client or a transaction-bound SQL tag"));
+  };
   return {
     async hasLiveRole(principalId, scope) {
       // LIVE_NEEDS_APPROVAL: approved_by IS NOT NULL. A pending ask never opens a lock.
@@ -87,7 +100,7 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
           : []
       );
     },
-    async listRoleRows(limit) {
+    async listRoleRows(limit, declaredScopes = []) {
       const toRow = (row: Record<string, unknown>): RoleRow | null => {
         const principalUserId = str(row.principal_user_id);
         const scope = str(row.scope);
@@ -103,13 +116,13 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
           // A proven binding, shown beside the agent's own (unproven) name. A service made by enrollment shows the node that signed for it.
           hint: serviceKey ? serviceHint(serviceKey) : githubId ? `GitHub id ${githubId}` : null,
           scope,
-          state: row.approved_by ? ("granted" as const) : ("pending" as const),
+          state: row.approved_by ? (row.revoked_at ? "revoked" as const : "granted" as const) : "pending" as const,
           at: iso(row.created_at),
         };
       };
       // This node's own AI: always all rows (a few principals times a few scopes).
       const own = await sql`
-        SELECT r.principal_user_id, r.scope, r.approved_by, r.created_at,
+        SELECT r.principal_user_id, r.scope, r.approved_by, r.revoked_at, r.created_at,
                p.slug AS slug, p.kind AS kind, u.name AS user_name,
                NULL::text AS github_id, NULL::text AS service_key
         FROM agent_roles r
@@ -119,7 +132,7 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
         ORDER BY r.created_at`;
       // Outside agents: pending asks first, bounded. `more` says how many are cut.
       const outside = await sql`
-        SELECT r.principal_user_id, r.scope, r.approved_by, r.created_at,
+        SELECT r.principal_user_id, r.scope, r.approved_by, r.revoked_at, r.created_at,
                NULL::text AS slug, 'external' AS kind, u.name AS user_name,
                (SELECT b.external_id FROM user_bindings b WHERE b.user_id = r.principal_user_id AND b.provider = 'github' LIMIT 1) AS github_id,
                (SELECT ap.service_key FROM agent_principals ap WHERE ap.user_id = r.principal_user_id) AS service_key
@@ -133,11 +146,27 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
         SELECT count(*)::int AS n FROM agent_roles r
         WHERE r.revoked_at IS NULL
           AND NOT EXISTS (SELECT 1 FROM agent_principals p WHERE p.user_id = r.principal_user_id AND p.kind = 'internal')`;
-      const rows = [...own, ...outside].flatMap((row) => {
+      // Only the bounded enrolled-principal x declared-scope set needs historical Off controls. Each lookup reads one indexed latest row,
+      // rather than walking retained role history. Ordinary external-agent listing keeps its existing live/pending behavior.
+      const off = declaredScopes.length === 0 ? [] : await sql`
+        SELECT r.principal_user_id, r.scope, r.approved_by, r.revoked_at, r.created_at,
+               NULL::text AS slug, 'external' AS kind, u.name AS user_name, NULL::text AS github_id, p.service_key
+        FROM (SELECT user_id, service_key FROM agent_principals WHERE service_key IS NOT NULL ORDER BY user_id LIMIT 25) p
+        CROSS JOIN unnest(${declaredScopes as string[]}::text[]) s(scope)
+        CROSS JOIN LATERAL (
+          SELECT principal_user_id, scope, approved_by, revoked_at, created_at FROM agent_roles
+          WHERE principal_user_id = p.user_id AND scope = s.scope
+          ORDER BY created_at DESC NULLS LAST, id DESC NULLS LAST LIMIT 1
+        ) r
+        JOIN users u ON u.id = p.user_id
+        WHERE r.approved_by IS NOT NULL AND r.revoked_at IS NOT NULL
+        ORDER BY r.created_at DESC`;
+      const controls = [...outside, ...off].sort((a, b) => Number(b.approved_by == null) - Number(a.approved_by == null) || iso(b.created_at).localeCompare(iso(a.created_at)));
+      const rows = [...own, ...controls.slice(0, limit)].flatMap((row) => {
         const mapped = toRow(row);
         return mapped ? [mapped] : [];
       });
-      return { rows, more: Math.max(0, Number(total[0]?.n ?? 0) - outside.length) };
+      return { rows, more: Math.max(0, Number(total[0]?.n ?? 0) + off.length - limit) };
     },
     async listOwnRoles(principalUserId) {
       const rows = await sql`
@@ -162,60 +191,85 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
       return out;
     },
     async requestRole({ principalUserId, scope, maxPending, maxPendingTotal }) {
-      const open = await sql`
-        SELECT approved_by FROM agent_roles
-        WHERE principal_user_id = ${principalUserId} AND scope = ${scope} AND revoked_at IS NULL LIMIT 1`;
-      if (open[0]) return open[0].approved_by ? "granted" : "pending";
-      const count = await sql`
-        SELECT count(*)::int AS n FROM agent_roles
-        WHERE principal_user_id = ${principalUserId} AND approved_by IS NULL AND revoked_at IS NULL`;
-      if (Number(count[0]?.n ?? 0) >= maxPending) return "too_many";
-      const all = await sql`
-        SELECT count(*)::int AS n FROM agent_roles WHERE approved_by IS NULL AND revoked_at IS NULL`;
-      if (Number(all[0]?.n ?? 0) >= maxPendingTotal) return "node_full";
-      const inserted = await sql`
-        INSERT INTO agent_roles (principal_user_id, scope, approved_by, requested_by)
-        VALUES (${principalUserId}, ${scope}, NULL, ${principalUserId})
-        ON CONFLICT (principal_user_id, scope) WHERE revoked_at IS NULL DO NOTHING
-        RETURNING id`;
-      return inserted.length > 0 ? "created" : "pending";
+      return mutate(principalUserId, async (sql) => {
+        const open = await sql`
+          SELECT approved_by FROM agent_roles
+          WHERE principal_user_id = ${principalUserId} AND scope = ${scope} AND revoked_at IS NULL LIMIT 1`;
+        if (open[0]) return open[0].approved_by ? "granted" : "pending";
+        const count = await sql`
+          SELECT count(*)::int AS n FROM agent_roles
+          WHERE principal_user_id = ${principalUserId} AND approved_by IS NULL AND revoked_at IS NULL`;
+        if (Number(count[0]?.n ?? 0) >= maxPending) return "too_many";
+        const all = await sql`
+          SELECT count(*)::int AS n FROM agent_roles WHERE approved_by IS NULL AND revoked_at IS NULL`;
+        if (Number(all[0]?.n ?? 0) >= maxPendingTotal) return "node_full";
+        const inserted = await sql`
+          INSERT INTO agent_roles (principal_user_id, scope, approved_by, requested_by, created_at)
+          VALUES (${principalUserId}, ${scope}, NULL, ${principalUserId}, clock_timestamp())
+          ON CONFLICT (principal_user_id, scope) WHERE revoked_at IS NULL DO NOTHING
+          RETURNING id`;
+        return inserted.length > 0 ? "created" : "pending";
+      });
     },
     async approvePending({ principalUserId, scope, approvedBy }) {
-      const rows = await sql`
-        UPDATE agent_roles SET approved_by = ${approvedBy}, granted_at = now()
-        WHERE principal_user_id = ${principalUserId} AND scope = ${scope}
-          AND approved_by IS NULL AND revoked_at IS NULL
-          AND principal_user_id <> ${approvedBy}
-        RETURNING id`;
-      return rows.length > 0;
+      return mutate(principalUserId, async (sql) => {
+        const rows = await sql`
+          UPDATE agent_roles SET approved_by = ${approvedBy}, granted_at = now()
+          WHERE principal_user_id = ${principalUserId} AND scope = ${scope}
+            AND approved_by IS NULL AND revoked_at IS NULL
+            AND principal_user_id <> ${approvedBy}
+          RETURNING id`;
+        return rows.length > 0;
+      });
+    },
+    async restoreRevoked({ principalUserId, scope, approvedBy }) {
+      return mutate(principalUserId, async (tx) => {
+        if (principalUserId === approvedBy) return false;
+        const rows = await tx`
+          SELECT id, approved_by, revoked_at FROM agent_roles
+          WHERE principal_user_id = ${principalUserId} AND scope = ${scope}
+          ORDER BY created_at DESC NULLS LAST, id DESC NULLS LAST LIMIT 1 FOR UPDATE`;
+        if (!rows[0]?.approved_by || !rows[0]?.revoked_at) return false;
+        const inserted = await tx`
+          INSERT INTO agent_roles (principal_user_id, scope, approved_by, granted_at, requested_by, created_at)
+          SELECT ${principalUserId}, ${scope}, ${approvedBy}, now(), requested_by, clock_timestamp() FROM agent_roles WHERE id = ${rows[0].id}
+          ON CONFLICT (principal_user_id, scope) WHERE revoked_at IS NULL DO NOTHING RETURNING id`;
+        return inserted.length > 0;
+      });
     },
     async denyPending({ principalUserId, scope }) {
-      const rows = await sql`
-        UPDATE agent_roles SET revoked_at = now()
-        WHERE principal_user_id = ${principalUserId} AND scope = ${scope}
-          AND approved_by IS NULL AND revoked_at IS NULL
-        RETURNING id`;
-      return rows.length > 0;
+      return mutate(principalUserId, async (sql) => {
+        const rows = await sql`
+          UPDATE agent_roles SET revoked_at = now()
+          WHERE principal_user_id = ${principalUserId} AND scope = ${scope}
+            AND approved_by IS NULL AND revoked_at IS NULL
+          RETURNING id`;
+        return rows.length > 0;
+      });
     },
     async insertRole({ principalUserId, scope, approvedBy }) {
-      const rows = await sql`
-        INSERT INTO agent_roles (principal_user_id, scope, approved_by, granted_at)
-        VALUES (${principalUserId}, ${scope}, ${approvedBy}, now())
-        ON CONFLICT (principal_user_id, scope) WHERE revoked_at IS NULL DO NOTHING
-        RETURNING id`;
-      return rows.length > 0;
+      return mutate(principalUserId, async (sql) => {
+        const rows = await sql`
+          INSERT INTO agent_roles (principal_user_id, scope, approved_by, granted_at, created_at)
+          VALUES (${principalUserId}, ${scope}, ${approvedBy}, now(), clock_timestamp())
+          ON CONFLICT (principal_user_id, scope) WHERE revoked_at IS NULL DO NOTHING
+          RETURNING id`;
+        return rows.length > 0;
+      });
     },
     async isServicePrincipal(principalUserId) {
       const rows = await sql`SELECT 1 AS ok FROM agent_principals WHERE user_id = ${principalUserId} AND service_key IS NOT NULL LIMIT 1`;
       return rows.length > 0;
     },
     async revokeRole({ principalUserId, scope }) {
-      const rows = await sql`
-        UPDATE agent_roles SET revoked_at = now()
-        WHERE principal_user_id = ${principalUserId} AND scope = ${scope}
-          AND approved_by IS NOT NULL AND revoked_at IS NULL
-        RETURNING id`;
-      return rows.length > 0;
+      return mutate(principalUserId, async (sql) => {
+        const rows = await sql`
+          UPDATE agent_roles SET revoked_at = now()
+          WHERE principal_user_id = ${principalUserId} AND scope = ${scope}
+            AND approved_by IS NOT NULL AND revoked_at IS NULL
+          RETURNING id`;
+        return rows.length > 0;
+      });
     },
   };
 }

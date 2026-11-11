@@ -12,6 +12,8 @@
  *     verifies once per instance that the role bypasses RLS and otherwise throws, so a wrong role is 503, never a silent "no enrollment".
  *   - ONE_USE_TOKEN: `jti` is a unique column. A reused token inserts nothing.
  *   - ONE_WRITER_AT_A_TIME: enrollment creation takes one advisory lock, so the caps and the one-principal-per-service rule see one snapshot.
+ *   - AUTHORITY_LOCK_ORDER: creation's capacity lock (creation only) -> user -> enrollment -> role -> credential. Cleanup rechecks under the user
+ *     lock shared with role writers and poll. Credential confirmation/revocation only locks credential rows, never a user/enrollment afterward.
  *   - NO_SELF_APPROVAL: the only role row written here is a pending ask (`approved_by` null) made through the grants store.
  *   - DB_CLOCK: expiry, the poll interval and key lifetimes read `now()`; the app clock is never read.
  *   - CONFIRMED_CODE_STAYS_SPENT: the linked credential's confirmation consumes its code even after that credential is revoked or expires.
@@ -76,7 +78,19 @@ export function createPostgresEnrollmentStore(client: CredentialSql, options: Po
             AND NOT EXISTS (SELECT 1 FROM agent_roles r WHERE r.principal_user_id = p.user_id AND r.approved_by IS NOT NULL)
             AND NOT EXISTS (SELECT 1 FROM agent_service_enrollments e WHERE e.principal_user_id = p.user_id AND e.status = 'open' AND e.expires_at > now())
           LIMIT ${SWEEP_BATCH}`;
-        const ids = stale.flatMap((row) => (typeof row.user_id === "string" ? [row.user_id] : []));
+        const candidates = stale.flatMap((row) => (typeof row.user_id === "string" ? [row.user_id] : []));
+        if (candidates.length === 0) return;
+        // Shared role writers and poll lock the user before any authority/enrollment row. Lock in a stable order, then take a fresh snapshot:
+        // a committed approval or issuance after candidate selection must invalidate this cleanup decision.
+        await tx`SELECT id FROM users WHERE id = ANY(${candidates}::text[]) ORDER BY id FOR UPDATE`;
+        const eligible = await tx`
+          SELECT p.user_id FROM agent_principals p
+          WHERE p.user_id = ANY(${candidates}::text[]) AND p.service_key IS NOT NULL
+            AND p.created_at < now() - (${unredeemedSec}::int * interval '1 second')
+            AND NOT EXISTS (SELECT 1 FROM agent_credentials c WHERE c.user_id = p.user_id)
+            AND NOT EXISTS (SELECT 1 FROM agent_roles r WHERE r.principal_user_id = p.user_id AND r.approved_by IS NOT NULL)
+            AND NOT EXISTS (SELECT 1 FROM agent_service_enrollments e WHERE e.principal_user_id = p.user_id AND e.status = 'open' AND e.expires_at > now())`;
+        const ids = eligible.flatMap((row) => (typeof row.user_id === "string" ? [row.user_id] : []));
         if (ids.length === 0) return;
         await tx`DELETE FROM agent_service_enrollments WHERE principal_user_id = ANY(${ids}::text[])`;
         await tx`DELETE FROM agent_roles WHERE principal_user_id = ANY(${ids}::text[]) OR requested_by = ANY(${ids}::text[])`;
@@ -86,6 +100,25 @@ export function createPostgresEnrollmentStore(client: CredentialSql, options: Po
     } catch {
       // Swept again on the next call.
     }
+  };
+
+  // Status-only maintenance holds enrollment locks in its own bounded transaction; it never waits on a user/authority writer.
+  // Release those locks before creation takes its capacity/user locks, avoiding enrollment -> user inversion against poll.
+  const maintainOpen = async (): Promise<void> => {
+    await client.begin(async (tx) => {
+      // Lapsed codes end; a code whose key was confirmed is redeemed (the holder stored the key and never polls again).
+      await tx`
+        WITH batch AS (
+          SELECT id FROM agent_service_enrollments WHERE status = 'open' AND expires_at <= now()
+          ORDER BY expires_at, id LIMIT ${SWEEP_BATCH} FOR UPDATE SKIP LOCKED
+        ) UPDATE agent_service_enrollments e SET status = 'expired' FROM batch WHERE e.id = batch.id`;
+      await tx`
+        WITH batch AS (
+          SELECT e.id FROM agent_service_enrollments e
+          WHERE e.status = 'open' AND EXISTS (SELECT 1 FROM agent_credentials c WHERE c.id = e.credential_id AND c.confirmed_at IS NOT NULL)
+          ORDER BY e.expires_at, e.id LIMIT ${SWEEP_BATCH} FOR UPDATE OF e SKIP LOCKED
+        ) UPDATE agent_service_enrollments e SET status = 'redeemed' FROM batch WHERE e.id = batch.id`;
+    });
   };
 
   const insertEnrollment = async (tx: SqlTag, input: Parameters<EnrollmentStore["createEnrollment"]>[0], principalUserId: string): Promise<string> => {
@@ -102,26 +135,29 @@ export function createPostgresEnrollmentStore(client: CredentialSql, options: Po
     async createEnrollment(input): Promise<CreateEnrollmentResult> {
       await assertBypassRls();
       await sweepUnredeemed();
+      await maintainOpen();
       try {
         return await client.begin(async (tx): Promise<CreateEnrollmentResult> => {
           await tx`SELECT pg_advisory_xact_lock(hashtext('agent_service_enrollments'))`;
           const seen = await tx`SELECT 1 AS used FROM agent_service_enrollments WHERE jti = ${input.claims.jti}`;
           if (seen.length > 0) return { ok: false, reason: "replayed_token" };
-          // Lapsed codes end; a code whose key was confirmed is redeemed (the holder stored the key and never polls again).
-          await tx`UPDATE agent_service_enrollments SET status = 'expired' WHERE status = 'open' AND expires_at <= now()`;
-          await tx`
-            UPDATE agent_service_enrollments e SET status = 'redeemed'
-            WHERE e.status = 'open' AND EXISTS (SELECT 1 FROM agent_credentials c WHERE c.id = e.credential_id AND c.confirmed_at IS NOT NULL)`;
+          const candidate = await tx`SELECT user_id FROM agent_principals WHERE service_key = ${input.serviceKey}`;
+          if (typeof candidate[0]?.user_id === "string") await tx`SELECT id FROM users WHERE id = ${candidate[0].user_id} FOR UPDATE`;
           const existing = await tx`SELECT user_id FROM agent_principals WHERE service_key = ${input.serviceKey}`;
           const existingId = typeof existing[0]?.user_id === "string" ? existing[0].user_id : null;
           // Enrollments of this same principal do not count: this request replaces them.
           const open = await tx`
-            SELECT count(*)::int AS n FROM agent_service_enrollments WHERE status = 'open' AND principal_user_id <> ${existingId ?? ""}`;
+            SELECT count(*)::int AS n FROM (
+              SELECT 1 FROM agent_service_enrollments WHERE status = 'open' AND principal_user_id <> ${existingId ?? ""}
+              LIMIT ${input.limits.openEnrollments}
+            ) active`;
           if (Number(open[0]?.n ?? 0) >= input.limits.openEnrollments) return { ok: false, reason: "too_many_enrollments" };
 
           let principalUserId: string;
           if (existingId === null) {
-            const agents = await tx`SELECT count(*)::int AS n FROM agent_principals WHERE service_key IS NOT NULL`;
+            const agents = await tx`SELECT count(*)::int AS n FROM (
+              SELECT 1 FROM agent_principals WHERE service_key IS NOT NULL LIMIT ${input.limits.enrolledAgents}
+            ) active`;
             if (Number(agents[0]?.n ?? 0) >= input.limits.enrolledAgents) return { ok: false, reason: "too_many_agents" };
             const user = await tx`INSERT INTO users (id, name) VALUES (gen_random_uuid()::text, ${input.principalName}) RETURNING id`;
             principalUserId = text(user[0]?.id);
@@ -133,7 +169,11 @@ export function createPostgresEnrollmentStore(client: CredentialSql, options: Po
             await tx`
               UPDATE agent_roles SET revoked_at = now()
               WHERE principal_user_id = ${principalUserId} AND scope = ${input.scope} AND revoked_at IS NULL`;
-            await tx`UPDATE agent_service_enrollments SET status = 'expired' WHERE principal_user_id = ${principalUserId} AND status = 'open'`;
+            await tx`
+              WITH batch AS (
+                SELECT id FROM agent_service_enrollments WHERE principal_user_id = ${principalUserId} AND status = 'open'
+                ORDER BY id LIMIT ${SWEEP_BATCH} FOR UPDATE
+              ) UPDATE agent_service_enrollments e SET status = 'expired' FROM batch WHERE e.id = batch.id`;
           }
 
           const ask = await createPostgresAgentGrantsStore(tx).requestRole({
@@ -158,6 +198,9 @@ export function createPostgresEnrollmentStore(client: CredentialSql, options: Po
     async poll({ deviceCodeHash, tokenHash, policy, intervalSec }): Promise<PollOutcome> {
       await assertBypassRls();
       const outcome = await client.begin(async (tx): Promise<PollOutcome & { lapsed?: true }> => {
+        const owner = await tx`SELECT principal_user_id FROM agent_service_enrollments WHERE device_code_hash = ${deviceCodeHash}`;
+        if (typeof owner[0]?.principal_user_id !== "string") return { state: "expired_token" };
+        await tx`SELECT id FROM users WHERE id = ${owner[0].principal_user_id} FOR UPDATE`;
         const rows = await tx`
           SELECT e.id, e.status, e.principal_user_id, e.scope, e.cnf_jwk, e.credential_id,
                  (e.expires_at <= now()) AS lapsed,
@@ -184,7 +227,7 @@ export function createPostgresEnrollmentStore(client: CredentialSql, options: Po
         const role = await tx`
           SELECT approved_by, revoked_at FROM agent_roles
           WHERE principal_user_id = ${principalUserId} AND scope = ${scope}
-          ORDER BY created_at DESC LIMIT 1`;
+          ORDER BY created_at DESC NULLS LAST, id DESC NULLS LAST LIMIT 1`;
         const row = role[0];
         if (!row) {
           await tx`UPDATE agent_service_enrollments SET status = 'denied' WHERE id = ${id}`;

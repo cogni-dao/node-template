@@ -53,7 +53,7 @@ export type AuthzDecision =
 /** The state of one grant row, from the asking agent's side. */
 export type RoleState = "pending" | "granted" | "denied" | "revoked";
 
-/** One pending or live grant row, with who it is for. For the admin table. */
+/** One pending, live or restorable revoked grant row, with who it is for. For the admin table. */
 export interface RoleRow {
   readonly principalUserId: string;
   /** The catalog slug for an internal AI, else null. */
@@ -64,7 +64,7 @@ export interface RoleRow {
   /** A plain note that the agent is tied to something outside, such as "GitHub linked". Null when nothing is known. */
   readonly hint: string | null;
   readonly scope: string;
-  readonly state: "pending" | "granted";
+  readonly state: "pending" | "granted" | "revoked";
   readonly at: string;
 }
 
@@ -85,10 +85,10 @@ export interface AgentGrantsStore {
   /** Every live role row with its principal's slug. Never cached. */
   listLiveRoles(): Promise<Array<{ principalSlug: string; scope: string }>>;
   /**
-   * Every pending and live row for the admin table. Never cached. Rows of this node's own AI are always all returned (few);
+   * Every pending and live row for the admin table, plus latest revoked enrolled-service controls for `declaredScopes`. Never cached. Rows of this node's own AI are always all returned (few);
    * rows of outside agents are bounded by `limit` (pending first). `more` counts the outside rows not returned.
    */
-  listRoleRows(limit: number): Promise<{ rows: RoleRow[]; more: number }>;
+  listRoleRows(limit: number, declaredScopes?: readonly string[]): Promise<{ rows: RoleRow[]; more: number }>;
   /** The caller's own rows, newest state per scope (bounded). */
   listOwnRoles(principalUserId: string): Promise<Array<{ scope: string; state: RoleState; at: string }>>;
   /**
@@ -104,6 +104,8 @@ export interface AgentGrantsStore {
   }): Promise<"created" | "pending" | "granted" | "too_many" | "node_full">;
   /** Approves the pending row: sets the approver and `granted_at`. False when no pending row exists. */
   approvePending(input: { principalUserId: string; scope: string; approvedBy: string }): Promise<boolean>;
+  /** Restores the latest previously approved, revoked permission in a new audit row; a newer denied ask never restores an older approval. */
+  restoreRevoked?(input: { principalUserId: string; scope: string; approvedBy: string }): Promise<boolean>;
   /** Denies the pending row (soft: `revoked_at` set, never approved). False when no pending row exists. */
   denyPending(input: { principalUserId: string; scope: string }): Promise<boolean>;
   /** Inserts a live role row an admin writes directly (approved at once); false when a live or pending row exists. */
