@@ -78,7 +78,7 @@ export function MetricRowView({ row, nowIso }: { readonly row: MetricRow; readon
     <li data-metric={row.id} data-status={status} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 py-2.5">
       <Link
         href={hrefs.metric(row.id)}
-        className="min-w-0 break-words rounded-sm font-medium text-sm outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+        className="flex min-h-6 min-w-0 items-center break-words rounded-sm font-medium text-sm outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
       >
         {row.title}
       </Link>
@@ -171,7 +171,7 @@ export function NotServingGroup({ data }: { readonly data: GoalsProgress }) {
       </h3>
       <p className="mt-1 text-muted-foreground text-xs">
         Bind each to a KPI or retire it ·{" "}
-        <Link href={hrefs.axioms} className="underline underline-offset-2">
+        <Link href={hrefs.axioms} className="inline-flex min-h-6 min-w-6 items-center underline underline-offset-2">
           why
         </Link>
       </p>
