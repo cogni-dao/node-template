@@ -1,4 +1,6 @@
-CREATE TABLE "agent_credentials" (
+-- IDEMPOTENT (task.0070): every statement below tolerates an existing object. A candidate DB held an agent_credentials table with no
+-- 0039 ledger row (an earlier flight created it), so a plain CREATE TABLE failed the migrator ("already exists") and the pod never started.
+CREATE TABLE IF NOT EXISTS "agent_credentials" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"user_id" text NOT NULL,
 	"token_hash" text NOT NULL,
@@ -17,11 +19,11 @@ CREATE TABLE "agent_credentials" (
 );
 --> statement-breakpoint
 ALTER TABLE "agent_credentials" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
-ALTER TABLE "agent_credentials" ADD CONSTRAINT "agent_credentials_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "agent_credentials" ADD CONSTRAINT "agent_credentials_predecessor_id_fk" FOREIGN KEY ("predecessor_id") REFERENCES "public"."agent_credentials"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-CREATE UNIQUE INDEX "agent_credentials_token_hash_unique" ON "agent_credentials" USING btree ("token_hash");--> statement-breakpoint
-CREATE UNIQUE INDEX "agent_credentials_one_pending_successor" ON "agent_credentials" USING btree ("predecessor_id") WHERE "agent_credentials"."confirmed_at" IS NULL AND "agent_credentials"."revoked_at" IS NULL;--> statement-breakpoint
-CREATE INDEX "agent_credentials_user_idx" ON "agent_credentials" USING btree ("user_id");
+DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'agent_credentials_user_id_users_id_fk') THEN ALTER TABLE "agent_credentials" ADD CONSTRAINT "agent_credentials_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action; END IF; END $$;--> statement-breakpoint
+DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'agent_credentials_predecessor_id_fk') THEN ALTER TABLE "agent_credentials" ADD CONSTRAINT "agent_credentials_predecessor_id_fk" FOREIGN KEY ("predecessor_id") REFERENCES "public"."agent_credentials"("id") ON DELETE no action ON UPDATE no action; END IF; END $$;--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "agent_credentials_token_hash_unique" ON "agent_credentials" USING btree ("token_hash");--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "agent_credentials_one_pending_successor" ON "agent_credentials" USING btree ("predecessor_id") WHERE "agent_credentials"."confirmed_at" IS NULL AND "agent_credentials"."revoked_at" IS NULL;--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "agent_credentials_user_idx" ON "agent_credentials" USING btree ("user_id");
 --> statement-breakpoint
 -- Hand-written below: FORCE RLS, a function and a trigger are outside Drizzle's DDL scope (same as 0027 / 0031 / 0036).
 -- agent_credentials has NO policy: ENABLE + FORCE = deny-all for the app role. Only the BYPASSRLS service role reads or writes it.
@@ -54,6 +56,7 @@ BEGIN
   RETURN NEW;
 END
 $$;--> statement-breakpoint
+DROP TRIGGER IF EXISTS "agent_credentials_external_principal_only" ON "agent_credentials";--> statement-breakpoint
 CREATE TRIGGER "agent_credentials_external_principal_only"
   BEFORE INSERT OR UPDATE OF user_id ON "agent_credentials"
   FOR EACH ROW EXECUTE FUNCTION agent_credentials_require_external_principal();
