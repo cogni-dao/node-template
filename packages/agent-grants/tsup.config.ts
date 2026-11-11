@@ -5,7 +5,11 @@ import { defineConfig } from "tsup";
 
 // biome-ignore lint/style/noDefaultExport: build tool configuration entrypoint
 export default defineConfig({
-  entry: { index: "src/index.ts", credentials: "src/credentials/index.ts", conformance: "src/credentials/conformance.ts" },
+  entry: {
+    index: "src/index.ts", credentials: "src/credentials/index.ts", conformance: "src/credentials/conformance.ts",
+    enrollment: "src/enrollment/index.ts",
+    "enrollment-conformance": "src/enrollment/conformance.ts",
+  },
   format: ["esm"],
   dts: false,
   clean: true,

@@ -31,6 +31,15 @@ const iso = (value: unknown): string => {
   return date && !Number.isNaN(date.getTime()) ? date.toISOString() : "";
 };
 
+/** `https://cognidao.org#git-review` -> `Verified service of cognidao.org`. Plain words only (TOKENLESS_COPY): no path, id or key. */
+function serviceHint(serviceKey: string): string | null {
+  try {
+    return `Verified service of ${new URL(serviceKey.split("#")[0] ?? "").host}`;
+  } catch {
+    return null;
+  }
+}
+
 export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
   return {
     async hasLiveRole(principalId, scope) {
@@ -85,13 +94,14 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
         if (!principalUserId || !scope) return null;
         const internal = row.kind === "internal";
         const githubId = str(row.github_id);
+        const serviceKey = str(row.service_key);
         return {
           principalUserId,
           slug: internal ? str(row.slug) : null,
           internal,
           name: internal ? str(row.slug) : str(row.user_name), // NAMES_ARE_IDENTIFIERS: the slug is the name
-          // A proven binding, shown beside the agent's own (unproven) name.
-          hint: githubId ? `GitHub id ${githubId}` : null,
+          // A proven binding, shown beside the agent's own (unproven) name. A service made by enrollment shows the node that signed for it.
+          hint: serviceKey ? serviceHint(serviceKey) : githubId ? `GitHub id ${githubId}` : null,
           scope,
           state: row.approved_by ? ("granted" as const) : ("pending" as const),
           at: iso(row.created_at),
@@ -101,7 +111,7 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
       const own = await sql`
         SELECT r.principal_user_id, r.scope, r.approved_by, r.created_at,
                p.slug AS slug, p.kind AS kind, u.name AS user_name,
-               NULL::text AS github_id
+               NULL::text AS github_id, NULL::text AS service_key
         FROM agent_roles r
         JOIN users u ON u.id = r.principal_user_id
         JOIN agent_principals p ON p.user_id = r.principal_user_id AND p.kind = 'internal'
@@ -111,7 +121,8 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
       const outside = await sql`
         SELECT r.principal_user_id, r.scope, r.approved_by, r.created_at,
                NULL::text AS slug, 'external' AS kind, u.name AS user_name,
-               (SELECT b.external_id FROM user_bindings b WHERE b.user_id = r.principal_user_id AND b.provider = 'github' LIMIT 1) AS github_id
+               (SELECT b.external_id FROM user_bindings b WHERE b.user_id = r.principal_user_id AND b.provider = 'github' LIMIT 1) AS github_id,
+               (SELECT ap.service_key FROM agent_principals ap WHERE ap.user_id = r.principal_user_id) AS service_key
         FROM agent_roles r
         JOIN users u ON u.id = r.principal_user_id
         WHERE r.revoked_at IS NULL
@@ -192,6 +203,10 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
         VALUES (${principalUserId}, ${scope}, ${approvedBy}, now())
         ON CONFLICT (principal_user_id, scope) WHERE revoked_at IS NULL DO NOTHING
         RETURNING id`;
+      return rows.length > 0;
+    },
+    async isServicePrincipal(principalUserId) {
+      const rows = await sql`SELECT 1 AS ok FROM agent_principals WHERE user_id = ${principalUserId} AND service_key IS NOT NULL LIMIT 1`;
       return rows.length > 0;
     },
     async revokeRole({ principalUserId, scope }) {

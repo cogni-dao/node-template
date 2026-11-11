@@ -17,6 +17,8 @@ export function memoryStore(init?: {
   roles?: Array<{ principal: string; scope: string; revoked?: boolean; pending?: boolean }>;
   principals?: Record<string, string>;
   names?: Record<string, string>;
+  /** User ids of principals made by a service enrollment (`agent_principals.service_key` set). */
+  servicePrincipals?: string[];
   failing?: boolean;
 }): AgentGrantsStore & { roles: MemoryRole[] } {
   const roles: MemoryRole[] = (init?.roles ?? []).map((r) => ({
@@ -113,6 +115,10 @@ export function memoryStore(init?: {
       if (openRow(principalUserId, scope)) return false;
       roles.push({ principal: principalUserId, scope, revoked: false, approvedBy });
       return true;
+    },
+    async isServicePrincipal(principalUserId) {
+      guard();
+      return (init?.servicePrincipals ?? []).includes(principalUserId);
     },
     async revokeRole({ principalUserId, scope }) {
       guard();

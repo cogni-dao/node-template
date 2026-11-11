@@ -114,6 +114,11 @@ export interface AgentGrantsStore {
   }): Promise<boolean>;
   /** Revokes the live (approved) role row; false when none exists. A pending row is not touched. */
   revokeRole(input: { principalUserId: string; scope: string }): Promise<boolean>;
+  /**
+   * True when the principal was made by a service enrollment (`agent_principals.service_key` is set). Optional: a store without it
+   * cannot tell, and a door that needs the answer (`serviceKeyedOnly`) then applies the ordinary role-row rule.
+   */
+  isServicePrincipal?(principalUserId: string): Promise<boolean>;
 }
 
 /** Hands the guard a store bound to one transaction or connection. */
