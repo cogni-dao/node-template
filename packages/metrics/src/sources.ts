@@ -11,6 +11,12 @@ import {
 	scoreBrief,
 	summarizeBriefs,
 } from "./briefs.js";
+import {
+	CITE_SHARE_RULES_VERSION,
+	type PatchCommit,
+	parsePatchCommit,
+	WORK_ITEM_ID,
+} from "./cite-share.js";
 import type { MetricBudget, MetricSample } from "./contracts.js";
 import {
 	appendsHistory,
@@ -1057,4 +1063,179 @@ export async function readNoInlineHistoryEdits(
 	if (edits.length === 0) return unknown("zero_denominator");
 	if (edits.length < NO_INLINE_HISTORY_MIN_EDITS) return unknown("insufficient_history");
 	return sample((100 * (edits.length - appending)) / edits.length);
+}
+
+/** Most work-item patch commits one cite-share statement reads; a window with more fails closed. */
+export const CITE_SHARE_MAX_ROWS = 2000;
+/** The statement keeps this many characters of each message; a longer one fails closed. */
+export const CITE_SHARE_MESSAGE_CHARS = 5000;
+/** Most bytes one cite-share statement sends (16 MiB); 2001 messages of 5001 ASCII characters fit. */
+export const CITE_SHARE_MAX_BYTES = 16_777_216;
+/** Fewer patches than this in the window is `insufficient_history`, never a share. */
+export const CITE_SHARE_MIN_PATCHES = 10;
+
+/**
+ * Work-item patch commits in [start, end): one `dolt_log` statement, newest
+ * first, one row past the cap. `dolt_log` is a cheap read of commit headers; the
+ * statement never reads `dolt_diff_work_items` (every commit, too slow) or
+ * `dolt_diff()` with a row filter (panics on Doltgres 0.57.3). Only the message
+ * prefix is matched here; the trailer is read in code.
+ */
+export function citeShareLogSql(window: { start: string; end: string }): string {
+	return `SELECT l.commit_hash, CAST(l.date AS TEXT) AS at, substr(l.message, 1, ${CITE_SHARE_MESSAGE_CHARS + 1}) AS message FROM dolt_log l WHERE l.message LIKE 'work-items: patch %' AND l.date >= '${doltUtc(window.start)}' AND l.date < '${doltUtc(window.end)}' ORDER BY l.date DESC, l.commit_hash LIMIT ${CITE_SHARE_MAX_ROWS + 1}`;
+}
+
+/**
+ * The patched ids that are fixtures now, with the server clock on every result
+ * (a LEFT join from a one-row CTE, so no fixture still returns the watermark).
+ * Each id passed `WORK_ITEM_ID`, so it holds no quote. An item deleted since
+ * its patch is not in the table, so its patches count.
+ */
+export function citeShareFixturesSql(ids: readonly string[]): string {
+	// The caller validated every id; this guard keeps a quote out of the statement for any caller.
+	if (!ids.every((id) => WORK_ITEM_ID.test(id)))
+		throw new RangeError("invalid work item id");
+	const list = ids.length > 0 ? ids.map((id) => `'${id}'`).join(", ") : "''";
+	return `WITH now_row AS (SELECT NOW() AS as_of) SELECT n.as_of, f.id FROM now_row n LEFT JOIN work_items f ON f.id IN (${list}) AND f.labels IS NOT NULL AND (CAST(f.labels AS TEXT) LIKE '%"test-fixture"%' OR CAST(f.labels AS TEXT) LIKE '%"synthetic"%' OR CAST(f.labels AS TEXT) LIKE '%"synthetic-fixture"%') ORDER BY f.id`;
+}
+
+/**
+ * Cite share of work-item patch commits in [start, end), two source calls. A patch is one commit whose message line 1 is
+ * `work-items: patch <id> by actor:<principal>`; it is cited when its first
+ * `Cites: ` line holds at least one valid pin. Patches of fixture items are out
+ * of both counts. `share` is the percent of patches that are cited; `count` is
+ * the raw number of patches (the denominator, the guardrail). Under
+ * `CITE_SHARE_MIN_PATCHES` a share is `insufficient_history`; with none it is
+ * `zero_denominator`. A cap hit, an oversize message, a bad date or a failed
+ * read is unknown, never zero. Evidence carries ids and counts, never a reason.
+ */
+export async function readCiteShare(
+	sql: Sql,
+	output: "share" | "count",
+	window: { start: string; end: string },
+	read: Read,
+): Promise<MetricSample> {
+	const unit = output === "share" ? "%" : "patches";
+	const start = new Date(Date.parse(window.start)).toISOString();
+	const end = new Date(Date.parse(window.end)).toISOString();
+	const watermarks: MetricSample["sourceWatermarks"] = [];
+	const evidenceRefs = [
+		`rules:${CITE_SHARE_RULES_VERSION}`,
+		`window:[${start},${end})`,
+	];
+	const unknown = (
+		reason: NonNullable<MetricSample["reason"]>,
+	): MetricSample => ({
+		value: 0,
+		unit,
+		complete: false,
+		sourceWatermarks: watermarks,
+		evidenceRefs,
+		reason,
+	});
+	const query = (text: string) =>
+		read<
+			| { rows: ReadonlyArray<Record<string, unknown>>; error?: undefined }
+			| { error: string }
+		>(async (signal) => {
+			try {
+				return { rows: await run(sql, text, signal) };
+			} catch (error) {
+				// A timeout keeps its own failure; every other read error is
+				// source_failed, recorded by class only.
+				if (signal.aborted) throw error;
+				return { error: errorClass(error) };
+			}
+		});
+	const log = await query(citeShareLogSql({ start, end }));
+	if (log.error !== undefined) {
+		evidenceRefs.push(log.error);
+		return unknown("source_failed");
+	}
+	const rows = log.rows;
+	if (rows.length > CITE_SHARE_MAX_ROWS) {
+		evidenceRefs.push(`counts:rows=${rows.length};cap_hit`);
+		return unknown("incomplete_or_invalid_source");
+	}
+	const startMs = Date.parse(start);
+	const endMs = Date.parse(end);
+	const seen = new Set<string>();
+	const patches: PatchCommit[] = [];
+	let malformed = 0;
+	let bytes = 0;
+	const encoder = new TextEncoder();
+	for (const row of rows) {
+		const ms = Date.parse(doltInstant(row.at) ?? "");
+		const commit = String(row.commit_hash ?? "");
+		const message = row.message == null ? null : String(row.message);
+		if (
+			!Number.isFinite(ms) ||
+			!commit ||
+			message === null ||
+			message.length > CITE_SHARE_MESSAGE_CHARS
+		) {
+			evidenceRefs.push(`counts:rows=${rows.length};bad_row`);
+			return unknown("incomplete_or_invalid_source");
+		}
+		// The statement cannot bound bytes, so the sum is checked here, before any parse.
+		bytes += encoder.encode(message).length;
+		if (bytes > CITE_SHARE_MAX_BYTES) {
+			evidenceRefs.push(`counts:rows=${rows.length};byte_cap_hit`);
+			return unknown("incomplete_or_invalid_source");
+		}
+		// The statement bounds the window; a row outside it, or a repeat, is not a patch of it.
+		if (ms < startMs || ms >= endMs || seen.has(commit)) continue;
+		seen.add(commit);
+		const patch = parsePatchCommit(message);
+		if (patch) patches.push(patch);
+		else malformed++;
+	}
+	const ids = [...new Set(patches.map((p) => p.itemId))].sort();
+	const found = await query(citeShareFixturesSql(ids));
+	if (found.error !== undefined) {
+		evidenceRefs.push(found.error);
+		return unknown("source_failed");
+	}
+	const fixtureAsOf = found.rows[0]?.as_of
+		? new Date(found.rows[0].as_of as string).getTime()
+		: Number.NaN;
+	if (!Number.isFinite(fixtureAsOf)) {
+		evidenceRefs.push("counts:fixture_read;no_watermark");
+		return unknown("incomplete_or_invalid_source");
+	}
+	// Both statements ran against one server within one deadline.
+	const asOf = new Date(fixtureAsOf).toISOString();
+	watermarks.push(
+		{ source: "node.dolt_log", asOf },
+		{ source: "node.work_items", asOf },
+	);
+	const fixtures = new Set(
+		found.rows.filter((r) => r.id != null).map((r) => String(r.id)),
+	);
+	const counted = patches.filter((p) => !fixtures.has(p.itemId));
+	const cited = counted.filter((p) => p.cites.length > 0);
+	const atoms = new Map<string, number>();
+	for (const patch of cited)
+		for (const id of new Set(patch.cites.map((c) => c.id)))
+			atoms.set(id, (atoms.get(id) ?? 0) + 1);
+	const top = [...atoms.entries()]
+		.sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))
+		.slice(0, 3);
+	evidenceRefs.push(
+		`counts:patches=${counted.length};cited=${cited.length};withReason=${counted.filter((p) => p.hasReason).length};fixtures_excluded=${patches.length - counted.length};malformed=${malformed};cites_unparsed=${counted.filter((p) => p.hasCitesLine && p.cites.length === 0).length}`,
+		`counts:cited_atoms=${atoms.size}`,
+		...top.map(([id, n]) => `top_atom:${id}=${n}`),
+	);
+	const sample = (value: number): MetricSample => ({
+		value,
+		unit,
+		complete: true,
+		sourceWatermarks: watermarks,
+		evidenceRefs,
+	});
+	if (output === "count") return sample(counted.length);
+	if (counted.length === 0) return unknown("zero_denominator");
+	if (counted.length < CITE_SHARE_MIN_PATCHES)
+		return unknown("insufficient_history");
+	return sample((100 * cited.length) / counted.length);
 }

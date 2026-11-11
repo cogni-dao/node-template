@@ -24,8 +24,11 @@ import { type GoalSourcePort, readGoalsProgress } from "./progress.js";
 import {
 	BRIEF_MAX_BYTES,
 	BRIEF_MAX_ROWS,
+	CITE_SHARE_MAX_BYTES,
+	CITE_SHARE_MAX_ROWS,
 	FIRST_PARENT_WALK_CAP,
 	readBriefConformance,
+	readCiteShare,
 	readGithubStars,
 	readNoInlineHistoryEdits,
 	readNoInlineHistoryScope,
@@ -72,6 +75,7 @@ export const PACKAGE_CALCULATOR_IDS = [
 	"github.stars@1",
 	"brief.conformance@1",
 	"no-inline-history@1",
+	"work.cite-share@1",
 ] as const;
 /** `work.count@1` → `work.count`: the family every version of a calculator shares. */
 export function calculatorFamily(id: string): string {
@@ -276,6 +280,36 @@ export function createGoalMetrics(deps: {
 				p.output,
 				ctx.window,
 				(source) => ctx.read((signal) => source(signal)),
+			);
+		},
+	});
+	const citeShareParams = z.strictObject({
+		output: z.enum(["share", "count"]),
+		hours: z.number().int().min(1).max(72),
+	});
+	registry.register({
+		id: "work.cite-share@1",
+		// Window edges are commit dates read from dolt_log, so a past slot is measurable.
+		historicalWindows: true,
+		unit: "%",
+		unitFor: (params) =>
+			citeShareParams.parse(params).output === "share" ? "%" : "patches",
+		displayFor: (params) =>
+			citeShareParams.parse(params).output === "share" ? "progress" : "volume",
+		windowSeconds: (params) => citeShareParams.parse(params).hours * 3600,
+		paramsSchema: citeShareParams,
+		// One dolt_log statement (cap + 1 rows of at most 5001 characters), then
+		// one work_items statement for the patched ids that are fixtures.
+		budget: {
+			timeoutMs: 15000,
+			maxSourceCalls: 2,
+			maxRows: CITE_SHARE_MAX_ROWS + 1,
+			maxResponseBytes: CITE_SHARE_MAX_BYTES,
+		},
+		compute: async (params, ctx) => {
+			const p = citeShareParams.parse(params);
+			return readCiteShare(deps.knowledgeSql, p.output, ctx.window, (source) =>
+				ctx.read((signal) => source(signal)),
 			);
 		},
 	});

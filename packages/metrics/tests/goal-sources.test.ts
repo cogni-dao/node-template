@@ -335,6 +335,7 @@ describe("@cogni-dao/metrics/knowledge", () => {
 			"github.stars@1",
 			"brief.conformance@1",
 			"no-inline-history@1",
+			"work.cite-share@1",
 		]);
 	});
 	describe("node calculators (task.5442)", () => {
