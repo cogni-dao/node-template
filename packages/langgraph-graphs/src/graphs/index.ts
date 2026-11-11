@@ -37,3 +37,8 @@ export {
 	type MissionLoopTelemetry,
 	WORK_PRIORITIZER_GRAPH_NAME,
 } from "./work-prioritizer/graph";
+// Work Closeout (shared harness; closes items whose merged pull request is live, story.0035)
+export {
+	createWorkCloseoutGraph,
+	WORK_CLOSEOUT_GRAPH_NAME,
+} from "./work-closeout/graph";

@@ -4,7 +4,7 @@
 /**
  * Module: `@cogni/langgraph-graphs/catalog`
  * Purpose: Single source of truth for LangGraph graph definitions.
- * Scope: Exports the node-runtime catalog (LANGGRAPH_CATALOG): `cogni` and `work-prioritizer`. Does NOT import from src/.
+ * Scope: Exports the node-runtime catalog (LANGGRAPH_CATALOG): `cogni`, `work-prioritizer` and `work-closeout`. Does NOT import from src/.
  * Invariants:
  *   - CATALOG_SINGLE_SOURCE_OF_TRUTH: Graph definitions live here, not in bootstrap
  *   - PACKAGES_NO_SRC_IMPORTS: No imports from src/**
@@ -24,6 +24,15 @@ import {
   NODE_OPERATOR_TOOL_IDS,
 } from "./graphs/node-operator/graph";
 import { nodeOperatorCatalogPrompt } from "./graphs/node-operator/prompts";
+import {
+  createWorkCloseoutGraph,
+  WORK_CLOSEOUT_GRAPH_NAME,
+} from "./graphs/work-closeout/graph";
+import { WORK_CLOSEOUT_SYSTEM_PROMPT } from "./graphs/work-closeout/prompts";
+import {
+  VCS_COMMIT_CONTAINS,
+  VCS_PR_READ,
+} from "./graphs/work-closeout/receipts";
 import { WORK_PRIORITIZER_GRAPH_NAME } from "./graphs/work-prioritizer/graph";
 import type { CreateGraphFn } from "./inproc/types";
 
@@ -39,7 +48,7 @@ export const PRIORITIZER_PRINCIPAL = "prioritizer" as const;
  */
 export interface CatalogEntry {
   /** Trusted catalog program assignment; routes mission-engine graphs to the cogni engine. */
-  readonly program?: "cogni" | "work-review";
+  readonly program?: "cogni" | "work-review" | "work-closeout";
   readonly displayName: string;
   readonly description: string;
   /**
@@ -128,6 +137,29 @@ export const NODE_LANGGRAPH_CATALOG = {
     program: "work-review",
     report: { event: "ai.work_prioritizer.cycle" },
   },
+  /**
+   * Work Closeout (story.0035) closes items whose merged pull request is live in the running build, marking them
+   * done and deployVerified with the pull request as evidence. It acts as the `prioritizer` principal: the node's
+   * work-ledger steward, which already holds `work_item:transition`.
+   */
+  [WORK_CLOSEOUT_GRAPH_NAME]: {
+    displayName: "Work Closeout",
+    description:
+      "Closes items whose merged pull request is live in this build: done and deployVerified, or changes nothing",
+    principal: PRIORITIZER_PRINCIPAL,
+    toolIds: [
+      "core__work_item_query",
+      "core__work_item_read",
+      VCS_PR_READ,
+      VCS_COMMIT_CONTAINS,
+      "core__work_item_update",
+      "core__get_current_time",
+    ],
+    graphFactory: createWorkCloseoutGraph,
+    systemPrompt: WORK_CLOSEOUT_SYSTEM_PROMPT,
+    program: "work-closeout",
+    report: { event: "ai.work_closeout.cycle" },
+  },
   cogni: {
     displayName: "Cogni",
     principal: NODE_AI_PRINCIPAL,
@@ -171,6 +203,7 @@ export const LANGGRAPH_PROVIDER_ID = "langgraph" as const;
 export const NODE_LANGGRAPH_GRAPH_IDS = {
   cogni: `${LANGGRAPH_PROVIDER_ID}:cogni`,
   "work-prioritizer": `${LANGGRAPH_PROVIDER_ID}:${WORK_PRIORITIZER_GRAPH_NAME}`,
+  "work-closeout": `${LANGGRAPH_PROVIDER_ID}:${WORK_CLOSEOUT_GRAPH_NAME}`,
 } as const;
 
 /**

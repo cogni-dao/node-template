@@ -99,7 +99,7 @@ interface ProviderCatalogEntry {
   readonly principal?: string;
   readonly graphFactory: CreateGraphFn;
   readonly systemPrompt?: string;
-  readonly program?: "cogni" | "work-review";
+  readonly program?: "cogni" | "work-review" | "work-closeout";
   /** Graph-owned run report to log + echo on the stream (CatalogEntry.report). */
   readonly report?: GraphReportDecl;
 }

@@ -48,6 +48,15 @@ describe("catalog principals (N4)", () => {
     expect(ids).not.toContain("core__work_item_transition");
   });
 
+  it("gives work-closeout the guarded update writer and PR reads, as the prioritizer principal", () => {
+    const entry = LANGGRAPH_CATALOG["work-closeout"];
+    expect(entry?.principal).toBe(PRIORITIZER_PRINCIPAL);
+    expect(entry?.toolIds).toContain("core__work_item_update");
+    expect(entry?.toolIds).toContain("core__vcs_pr_read");
+    expect(entry?.toolIds).toContain("core__vcs_commit_contains");
+    expect(entry?.toolIds).not.toContain("core__vcs_merge_pr");
+  });
+
   it("gives cogni no domain writer: its only write tool arranges schedules", () => {
     const ids = LANGGRAPH_CATALOG.cogni?.toolIds ?? [];
     expect(ids).toContain("core__schedule_manage");
@@ -62,7 +71,7 @@ describe("catalog principals (N4)", () => {
       .filter(([, entry]) => "principal" in entry && entry.principal)
       .map(([name]) => name)
       .sort();
-    expect(named).toEqual(["cogni", "work-prioritizer"]);
+    expect(named).toEqual(["cogni", "work-closeout", "work-prioritizer"]);
   });
 });
 
