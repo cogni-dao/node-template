@@ -26,12 +26,16 @@ export interface CitationLinkProps {
   readonly title?: string;
   readonly className?: string;
   readonly "aria-label"?: string;
+  /** The linked entry or work-item id, so a host link can open it in place (for example a side sheet). */
+  readonly entityId?: string;
   readonly children?: ReactNode;
 }
 /** A router link (for example `next/link`) or the default anchor. */
 export type CitationLinkComponent = ComponentType<CitationLinkProps>;
 
-const DefaultLink: CitationLinkComponent = (props) => <a {...props} />;
+const DefaultLink: CitationLinkComponent = ({ entityId: _entityId, ...props }) => (
+  <a {...props} />
+);
 
 export interface CitationLinkEndpoint {
   readonly id: string;
@@ -80,15 +84,9 @@ const ARROW = {
   in: { glyph: "←", label: "incoming" },
 } as const;
 
-const CHANGE = {
-  added: { glyph: "+", label: "added", className: "text-success" },
-  removed: { glyph: "−", label: "removed", className: "text-destructive" },
-  modified: { glyph: "~", label: "changed", className: "text-warning" },
-} as const;
-
 /**
  * One edge, one interactive surface: the whole row is the link (≥32px tall,
- * visible focus). Reads as marker, arrow, relation, slug; the title or edge
+ * visible focus). Reads as arrow, relation, slug; the title or edge
  * context is the hover text only.
  */
 function CitationRow({
@@ -98,7 +96,6 @@ function CitationRow({
   slug,
   href,
   hoverTitle,
-  change,
   Link,
 }: {
   readonly direction: "out" | "in";
@@ -108,35 +105,22 @@ function CitationRow({
   readonly slug: string;
   readonly href: string;
   readonly hoverTitle?: string | null | undefined;
-  readonly change?: CitationDiffEdge["changeType"];
   readonly Link: CitationLinkComponent;
 }): ReactElement {
   const arrow = ARROW[direction];
-  const marker = change ? CHANGE[change] : null;
   return (
     <Link
       href={href}
+      entityId={slug}
       title={hoverTitle?.trim() || slug}
-      aria-label={[marker?.label, arrow.label, relation, slug]
-        .filter(Boolean)
-        .join(" ")}
+      aria-label={`${arrow.label} ${relation} ${slug}`}
       className="-mx-1.5 flex min-h-8 min-w-0 items-center gap-2 rounded-md px-1.5 py-1 outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
     >
-      {marker && (
-        <span
-          className={cn("w-3 shrink-0 text-center text-sm", marker.className)}
-        >
-          {marker.glyph}
-        </span>
-      )}
       <span className="w-3 shrink-0 text-center text-muted-foreground text-sm">
         {arrow.glyph}
       </span>
       <span
-        className={cn(
-          "flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1",
-          change === "removed" && "line-through decoration-destructive/60"
-        )}
+        className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1"
       >
         <span className="min-w-28 shrink-0">
           <span
@@ -288,9 +272,71 @@ export interface CitationEdgeListProps {
 }
 
 /**
- * One entry's link changes inside its inbox card: marker, arrow, relation and
+ * One entry's link changes inside its inbox card, one sentence per edge: badge,
  * the cited slug per row, in the same form as an entry's Links section.
  */
+const LINK_BADGE = {
+  added: { text: "link +", label: "added", className: "bg-success/15 text-success" },
+  removed: { text: "link −", label: "removed", className: "bg-destructive/15 text-destructive" },
+  modified: { text: "link ~", label: "changed", className: "bg-warning/15 text-warning" },
+} as const;
+
+/**
+ * One changed edge as a readable sentence: badge, citing slug, relation,
+ * arrow, cited slug ("link + a-entry extends → b-entry"). The whole row opens
+ * the cited entry; the edge context is the hover text.
+ */
+function CitationDiffRow({
+  edge,
+  href,
+  Link,
+}: {
+  readonly edge: CitationDiffEdge;
+  readonly href: string;
+  readonly Link: CitationLinkComponent;
+}): ReactElement {
+  const badge = LINK_BADGE[edge.changeType];
+  const relation = edge.label ?? edge.citationType;
+  return (
+    <Link
+      href={href}
+      entityId={edge.citedId}
+      title={edge.context?.trim() || edge.citedId}
+      aria-label={`${badge.label} link: ${edge.citingId} ${relation} ${edge.citedId}`}
+      className="-mx-1.5 flex min-h-8 min-w-0 flex-wrap items-center gap-x-2 gap-y-1 rounded-md px-1.5 py-1 outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      <span
+        className={cn(
+          "inline-flex shrink-0 rounded-md px-1.5 py-0.5 font-mono text-xs uppercase tracking-wider",
+          badge.className
+        )}
+      >
+        {badge.text}
+      </span>
+      <span
+        className={cn(
+          "flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 font-mono text-sm",
+          edge.changeType === "removed" && "line-through decoration-destructive/60"
+        )}
+      >
+        <span className="break-all text-muted-foreground">{edge.citingId}</span>
+        <span
+          className={cn(
+            "inline-flex whitespace-nowrap rounded-full px-2 py-0.5 font-medium font-sans text-xs",
+            TONE_CLASS[edge.tone ?? "muted"]
+          )}
+        >
+          {relation}
+        </span>
+        <span className="text-muted-foreground">→</span>
+        <span className="break-all font-medium text-foreground">
+          {edge.citedId}
+        </span>
+      </span>
+    </Link>
+  );
+}
+
 export function CitationEdgeList({
   edges,
   entryId,
@@ -306,14 +352,9 @@ export function CitationEdgeList({
     >
       {edges.map((edge) => (
         <li key={`${edge.changeType}:${edge.citationType}:${edge.citedId}`}>
-          <CitationRow
-            direction="out"
-            relation={edge.label ?? edge.citationType}
-            tone={edge.tone}
-            slug={edge.citedId}
+          <CitationDiffRow
+            edge={edge}
             href={hrefFor(edge.citedId)}
-            hoverTitle={edge.context}
-            change={edge.changeType}
             Link={LinkComponent}
           />
         </li>
