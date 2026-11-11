@@ -825,8 +825,16 @@ export function noInlineHistoryEditsSql(
 		table === "work-items"
 			? SYNTHETIC_LABELS("d.to_labels")
 			: `d.to_entry_type <> 'html' AND (d.to_tags IS NULL OR CAST(d.to_tags AS TEXT) NOT LIKE '%"test-fixture"%') AND d.to_title NOT LIKE '%[TEST]%'`;
+	// Doltgres 0.57.3 panics (nil pointer) when a CTE filter compares a from_ and
+	// a to_ text column, through IS DISTINCT FROM, <>, md5, lower or a cast. Only
+	// COALESCE over substr materializes both sides safely (bug: edits KPI
+	// source_failed on production, 2026-11-11). NULL and '' read as the same text;
+	// the caller compares the full values again.
 	const changed = columns
-		.map((c) => `d.from_${c} IS DISTINCT FROM d.to_${c}`)
+		.map(
+			(c) =>
+				`COALESCE(substr(d.from_${c}, 1, ${NO_INLINE_HISTORY_MAX_FIELD_CHARS}), '') <> COALESCE(substr(d.to_${c}, 1, ${NO_INLINE_HISTORY_MAX_FIELD_CHARS}), '')`,
+		)
 		.join(" OR ");
 	const reason =
 		table === "work-items"
