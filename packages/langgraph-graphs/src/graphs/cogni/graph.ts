@@ -137,6 +137,8 @@ export function createCogniProgram(
 			store: opts.store,
 			namespace: [...opts.memoryNamespace],
 		});
+	// The governing index arrives already bounded by its owner (guidance-routing-design:
+	// one predicate, one query, one whole-bundle budget). The harness adds no second cap.
 	const index = (opts.sourceContext?.governingIndex ?? []).filter(
 		(entry) =>
 			allowedTools.has("core__knowledge_read") &&
@@ -155,12 +157,6 @@ export function createCogniProgram(
 		},
 	);
 	const backend = new CompositeBackend(new StateBackend(), routes);
-	const guidanceIndex = JSON.stringify(index);
-	if (
-		index.length > 50 ||
-		new TextEncoder().encode(guidanceIndex).length > 16_384
-	)
-		throw new Error("cogni_guidance_index_exceeds_limit");
 	return createDeepAgent({
 		name: "cogni",
 		model,
