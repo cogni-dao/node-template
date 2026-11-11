@@ -6,7 +6,8 @@
  * Purpose: Next.js 16 proxy (formerly middleware) for route protection.
  * Scope: Root-level proxy. Enforces session auth on /api/v1/* routes and page-level routing (redirect unauthenticated users away from app routes, redirect authenticated users from landing to /chat). Does not handle public infrastructure endpoints (e.g., /api/metrics, /api/health).
  * Invariants: /api/v1/public/* accessible without auth; /api/v1/* with cogni_ag_sk_v1_ bearer
- *   passes through (route handler validates token); other /api/v1/* require session.
+ *   passes through (route handler validates token); a revocable-key bearer passes only when its shape and checksum hold (else 401 here,
+ *   before any database read); other /api/v1/* require session.
  *   Single authority for auth routing — no client-side redirect logic.
  * Side-effects: none
  * Links: docs/spec/security-auth.md
@@ -16,7 +17,10 @@
 /* eslint-disable boundaries/no-unknown-files */
 
 import { randomUUID } from "node:crypto";
-import { REVOCABLE_KEY_PREFIX } from "@cogni/agent-grants/credentials";
+import {
+	isWellFormedRevocableKey,
+	REVOCABLE_KEY_PREFIX,
+} from "@cogni/agent-grants/credentials";
 import { type NextRequest, NextResponse } from "next/server";
 import { getToken } from "next-auth/jwt";
 
@@ -76,6 +80,20 @@ function isAgentApiRoute(pathname: string): boolean {
 	return pathname.startsWith("/api/v1/");
 }
 
+/**
+ * A revocable-key bearer whose shape or checksum fails (CHECKSUM_BEFORE_DB). Refused at the perimeter, so it never reaches a route handler,
+ * the credential store or its pool. The format has ONE definition, in the package.
+ */
+function hasMalformedRevocableBearer(req: NextRequest): boolean {
+	const authorization = req.headers.get("authorization");
+	const bearerPrefix = `Bearer ${REVOCABLE_KEY_PREFIX}`;
+	return (
+		authorization !== null &&
+		authorization.startsWith(bearerPrefix) &&
+		!isWellFormedRevocableKey(authorization.slice("Bearer ".length))
+	);
+}
+
 function hasAgentBearer(req: NextRequest): boolean {
 	const authorization = req.headers.get("authorization");
 	return (
@@ -104,7 +122,7 @@ function perimeterLog(): ReturnType<typeof makeLogger> {
 }
 
 /** Why an unauthenticated /api/v1 request was rejected at the perimeter. */
-type PerimeterDenyReason = "no_session" | "no_auth_secret";
+type PerimeterDenyReason = "no_session" | "no_auth_secret" | "bad_key_format";
 
 function logPerimeterDenial(
 	req: NextRequest,
@@ -139,6 +157,11 @@ export async function proxy(req: NextRequest): Promise<NextResponse> {
 	// Allow public namespace without authentication
 	if (isPublicApi) {
 		return NextResponse.next();
+	}
+
+	if (isAgentApiRoute(pathname) && hasMalformedRevocableBearer(req)) {
+		logPerimeterDenial(req, "bad_key_format");
+		return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 	}
 
 	// Resolve token once — reused for both page and API checks.

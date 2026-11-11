@@ -39,7 +39,10 @@ vi.mock("@/shared/config", () => ({
 }));
 
 // Import after mocks
-import { REVOCABLE_KEY_PREFIX } from "@cogni/agent-grants/credentials";
+import {
+	formatRevocableKey,
+	REVOCABLE_KEY_PREFIX,
+} from "@cogni/agent-grants/credentials";
 import { proxy } from "@/proxy";
 
 // --- Helpers ---
@@ -211,11 +214,14 @@ describe("proxy — API route protection", () => {
 		expect(mockGetToken).not.toHaveBeenCalled();
 	});
 
-	it("allows a revocable bearer through the perimeter, and rejects an unknown bearer prefix (task.0070)", async () => {
+	it("allows a well-formed revocable bearer through the perimeter, and rejects an unknown bearer prefix (task.0070)", async () => {
 		mockGetToken.mockResolvedValue(null);
 
 		const revocable = await proxy(
-			makeAgentRequest("/api/v1/agent/credentials/rotate", `Bearer ${REVOCABLE_KEY_PREFIX}abc`),
+			makeAgentRequest(
+				"/api/v1/agent/credentials/rotate",
+				`Bearer ${formatRevocableKey("a".repeat(43))}`,
+			),
 		);
 		expect(revocable.status).toBe(200);
 		expect(mockGetToken).not.toHaveBeenCalled();
@@ -224,6 +230,33 @@ describe("proxy — API route protection", () => {
 			makeAgentRequest("/api/v1/agent/credentials/rotate", "Bearer cogni_ag_sk_v3_abc"),
 		);
 		expect(v3.status).toBe(401);
+	});
+
+	it("rejects a revocable bearer with a bad shape or checksum at the perimeter, before any route handler (CHECKSUM_BEFORE_DB)", async () => {
+		mockGetToken.mockResolvedValue(null);
+		mockLoggerInfo.mockClear();
+		const good = formatRevocableKey("a".repeat(43));
+		const badChecksum = `${good.slice(0, -1)}${good.endsWith("A") ? "B" : "A"}`;
+		for (const token of [
+			`${REVOCABLE_KEY_PREFIX}abc`,
+			badChecksum,
+			`${good}x`,
+		]) {
+			const res = await proxy(
+				makeAgentRequest("/api/v1/knowledge", `Bearer ${token}`),
+			);
+			expect(res.status).toBe(401);
+		}
+		expect(mockLoggerInfo).toHaveBeenCalledWith(
+			expect.objectContaining({
+				routeId: "auth.perimeter",
+				reason: "bad_key_format",
+				status: 401,
+			}),
+			expect.anything(),
+		);
+		// The denial event never carries the token.
+		expect(JSON.stringify(mockLoggerInfo.mock.calls)).not.toContain(good.slice(-10));
 	});
 
 	it("rejects unauthenticated on /api/v1/*", async () => {

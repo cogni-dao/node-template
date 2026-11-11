@@ -9,19 +9,26 @@
  * @public
  */
 
-export { createPostgresCredentialStore, type CredentialSql } from "./postgres";
+export { agentRolesHasRoles, createPostgresCredentialStore, type CredentialSql, type PostgresCredentialStoreOptions } from "./postgres";
 export {
+  formatRevocableKey,
+  isRevocableKey,
+  isWellFormedRevocableKey,
   REVOCABLE_KEY_PREFIX,
+  REVOCABLE_KEY_SCAN_PATTERN,
+} from "./key-format";
+export {
   assertV1NotSuperseded,
   confirmCredential,
+  CredentialRateLimitedError,
   CredentialStoreUnavailableError,
   hashAgentKey,
-  isRevocableKey,
   type MintedKey,
   revokeCredential,
   rotateCredential,
   upgradeSignedKey,
   V1SupersededError,
+  type VerifyOptions,
   type VerifyResult,
   verifyBearer,
 } from "./service";
@@ -33,6 +40,7 @@ export {
   type CredentialState,
   type CredentialStore,
   DEFAULT_CREDENTIAL_POLICY,
+  type HasRoles,
   type IssueRefusal,
   type IssueResult,
 } from "./types";

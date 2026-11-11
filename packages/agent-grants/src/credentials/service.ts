@@ -12,12 +12,14 @@
  *   - FAIL_CLOSED_NON_DISCLOSING: every bad key is one `invalid` result; the reason is never told apart.
  *   - EVERY_STORE_FAILURE_IS_UNAVAILABLE: a store that throws at any step (verify, mint, confirm, revoke) surfaces as
  *     `CredentialStoreUnavailableError`, so a node answers 503 and never a 500 or a false 401.
- *   - PERIMETER_GUARD: a token with the wrong shape is refused before any store read.
+ *   - PERIMETER_GUARD: a token with the wrong shape or a failing checksum is refused before any store read (`key-format.ts` owns the format).
+ *   - ADMIT_BEFORE_STORE: an over-limit client gets `rate_limited` and no store read. The limiter itself lives in the node.
  * Side-effects: none (the store does the IO)
  * Links: https://cognidao.org/knowledge/node-capability-grants-standard
  * @public
  */
 
+import { formatRevocableKey, isWellFormedRevocableKey } from "./key-format";
 import {
   type ConfirmResult,
   type CredentialPolicy,
@@ -26,8 +28,6 @@ import {
   DEFAULT_CREDENTIAL_POLICY,
   type IssueResult,
 } from "./types";
-
-export const REVOCABLE_KEY_PREFIX = "cogni_ag_sk_v2_";
 
 /** Thrown by a node's resolver when the store cannot answer, so the HTTP layer maps it to 503 instead of 401. */
 export class CredentialStoreUnavailableError extends Error {
@@ -38,10 +38,22 @@ export class CredentialStoreUnavailableError extends Error {
   }
 }
 
-/** Thrown for a signed key whose user already holds a confirmed revocable key: the signed key is superseded (401 `v1_superseded`). */
+/** Thrown when a client is over its per-IP limit on credential lookups: the node answers 429 and the store is never read. */
+export class CredentialRateLimitedError extends Error {
+  readonly code = "rate_limited";
+  constructor() {
+    super("credential lookup rate limited");
+    this.name = "CredentialRateLimitedError";
+  }
+}
+
+/**
+ * Thrown for a signed key whose user already holds a confirmed revocable key: the signed key is superseded (401 `v1_superseded`).
+ * `userId` is the verified signed-key subject, carried so the node can log a replayed signed key.
+ */
 export class V1SupersededError extends Error {
   readonly code = "v1_superseded";
-  constructor() {
+  constructor(readonly userId: string) {
     super("signed key superseded by a revocable key");
     this.name = "V1SupersededError";
   }
@@ -58,12 +70,8 @@ async function viaStore<T>(call: () => Promise<T>): Promise<T> {
 
 /** Call after a signed key verified for `userId`. Throws `V1SupersededError` once the user holds a confirmed revocable key. */
 export async function assertV1NotSuperseded(store: CredentialStore, userId: string): Promise<void> {
-  if (await viaStore(() => store.everConfirmed(userId))) throw new V1SupersededError();
+  if (await viaStore(() => store.everConfirmed(userId))) throw new V1SupersededError(userId);
 }
-
-const SECRET_PATTERN = /^[A-Za-z0-9_-]{43}$/;
-
-export const isRevocableKey = (token: string): boolean => token.startsWith(REVOCABLE_KEY_PREFIX);
 
 const toBase64Url = (bytes: Uint8Array): string => {
   let binary = "";
@@ -78,7 +86,7 @@ export async function hashAgentKey(token: string): Promise<string> {
 }
 
 async function mintKey(): Promise<{ token: string; tokenHash: string }> {
-  const token = REVOCABLE_KEY_PREFIX + toBase64Url(crypto.getRandomValues(new Uint8Array(32)));
+  const token = formatRevocableKey(toBase64Url(crypto.getRandomValues(new Uint8Array(32))));
   return { token, tokenHash: await hashAgentKey(token) };
 }
 
@@ -90,7 +98,15 @@ export type VerifyResult =
       readonly name: string | null;
       readonly state: CredentialState;
     }
-  | { readonly ok: false; readonly reason: "invalid" | "unavailable" };
+  | { readonly ok: false; readonly reason: "invalid" | "unavailable" | "rate_limited" };
+
+export interface VerifyOptions {
+  /**
+   * Called once per token that passed shape and checksum, BEFORE the store read. Return false when the caller is over its limit:
+   * the result is `rate_limited` and the store is never read. A token with a bad shape or checksum never consumes it.
+   */
+  readonly admit?: () => boolean;
+}
 
 /**
  * One hash lookup. `allow` lists the states the caller accepts: ordinary routes take `active` only; rotate also takes
@@ -99,11 +115,11 @@ export type VerifyResult =
 export async function verifyBearer(
   store: CredentialStore,
   token: string,
-  allow: readonly CredentialState[] = ["active"]
+  allow: readonly CredentialState[] = ["active"],
+  options: VerifyOptions = {}
 ): Promise<VerifyResult> {
-  if (!isRevocableKey(token) || !SECRET_PATTERN.test(token.slice(REVOCABLE_KEY_PREFIX.length))) {
-    return { ok: false, reason: "invalid" };
-  }
+  if (!isWellFormedRevocableKey(token)) return { ok: false, reason: "invalid" };
+  if (options.admit && !options.admit()) return { ok: false, reason: "rate_limited" };
   try {
     const row = await store.lookup(await hashAgentKey(token));
     if (!row || !allow.includes(row.state)) return { ok: false, reason: "invalid" };
