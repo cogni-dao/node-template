@@ -1,0 +1,36 @@
+# Workload manifest (task.5480, story.5159): the canary lane. A SECOND workload of this node, same
+# image and node-app profile as `app`, on its own host `node-template-canary[-test]`. A release is keyed
+# {node, env, workload}, so a canary release and an app release never supersede each other.
+# `POST /api/v1/deploy/workloads {nodeId, env: "candidate-a", workload: "canary", sourceSha}` reads this
+# file at sourceSha. In candidate-a it shares the app lane's database, so it is briefly volatile while
+# db migrations apply. The host MUST differ from app.yaml's: two workloads cannot share one host.
+# Image "." = the image this repo's CI built at that sha.
+apiVersion: score.dev/v1b1
+metadata:
+  name: canary
+  annotations:
+    cogni.dev/exclusive: "false"
+    cogni.dev/ephemeral-storage: 4Gi
+containers:
+  app:
+    image: .
+    resources:
+      requests:
+        cpu: "2"
+        memory: 2048Mi
+    readinessProbe:
+      httpGet:
+        path: /readyz
+        port: 3200
+service:
+  ports:
+    web:
+      port: 80
+      targetPort: 3200
+resources:
+  web:
+    type: route
+    params:
+      host: node-template-canary.cognidao.org
+      path: /
+      port: 80
