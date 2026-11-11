@@ -347,13 +347,27 @@ describe("session cognition hook", () => {
 			).hookSpecificOutput.additionalContext,
 		).toContain(contract);
 
-		// An oversized payload with no contract is never sent as a truncated preview.
+		// Never a truncated preview: an oversized payload, or a bundle whose
+		// contract section cannot be extracted, sends the restart notice instead.
 		const blob = path.join(root, "blob");
 		mkdirSync(path.join(blob, ".cogni"), { recursive: true });
 		writeFileSync(path.join(blob, CACHE_PATH), "x".repeat(overCapBytes));
-		expect(
+		const notice: string = JSON.parse(
 			execFileSync("bash", [LOADER], { cwd: blob, env, encoding: "utf8" }),
-		).toBe("");
+		).hookSpecificOutput.additionalContext;
+		expect(notice).toContain("could not be delivered");
+		expect(notice.length).toBeLessThan(1_000);
+		const headless = path.join(root, "headless");
+		mkdirSync(path.join(headless, ".cogni"), { recursive: true });
+		writeFileSync(
+			path.join(headless, CACHE_PATH),
+			"<agent-contract>\n<status-contract>\n</status-contract>\n</agent-contract>\n",
+		);
+		expect(
+			JSON.parse(
+				execFileSync("bash", [LOADER], { cwd: headless, env, encoding: "utf8" }),
+			).hookSpecificOutput.additionalContext,
+		).toContain("could not be delivered");
 
 		// A first boot that cannot load tells Claude why, through the same channel.
 		const keyless = path.join(root, "keyless");

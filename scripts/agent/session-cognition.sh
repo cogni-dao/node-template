@@ -77,13 +77,21 @@ emit_claude_context() {
   payload="$1"
   if bundle_is_complete "$1"; then
     contract="$(printf '%s\n' "$1" | awk '/^## The agent-contract/{on=1} on{print} /^<\/agent-contract>/{exit}')"
-    payload="$(printf '%s\n\n%s\n\n%s' \
-      "COGNI COGNITION (first boot): the CLAUDE.md import ran before the cache existed. This is the agent-contract; the full bundle loads through CLAUDE.md next session." \
-      "$contract" \
-      "Governing index for this session: GET the node's /api/v1/knowledge/index.")"
+    case "$contract" in
+      *"<agent-contract"*"</agent-contract>"*)
+        payload="$(printf '%s\n\n%s\n\n%s' \
+          "COGNI COGNITION (first boot): the CLAUDE.md import ran before the cache existed. This is the agent-contract; the full bundle loads through CLAUDE.md next session." \
+          "$contract" \
+          "Governing index for this session: GET the node's /api/v1/knowledge/index.")"
+        ;;
+      *) payload="" ;;
+    esac
   fi
   # Count characters with jq (Unicode code points, independent of the locale).
-  [ "$(printf '%s' "$payload" | jq -Rs 'length')" -le "$CLAUDE_CONTEXT_MAX_CHARS" ] || return 0
+  if [ -z "$payload" ] || [ "$(printf '%s' "$payload" | jq -Rs 'length')" -gt "$CLAUDE_CONTEXT_MAX_CHARS" ]; then
+    # Never a truncated preview: say plainly that the contract did not load.
+    payload="COGNI COGNITION (first boot): the agent-contract could not be delivered to this session (the CLAUDE.md import ran before the cache existed, and the contract does not fit Claude Code's hook-context limit). Stay in bootstrap recovery and restart or resume this session; the cache now exists, so CLAUDE.md will load it."
+  fi
   printf '%s' "$payload" \
     | jq -Rs '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:.}}'
 }
