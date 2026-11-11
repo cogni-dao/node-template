@@ -31,15 +31,18 @@ export default async function MetricsPage() {
   }
   // A slow store must not hold the first paint: past the budget the client fetches it.
   let seed: unknown;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     seed = await Promise.race([
       loadGoalsProgress(),
-      new Promise<undefined>((resolve) =>
-        setTimeout(resolve, SEED_BUDGET_MS, undefined)
-      ),
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(resolve, SEED_BUDGET_MS, undefined);
+      }),
     ]);
   } catch {
     seed = undefined;
+  } finally {
+    clearTimeout(timer);
   }
   return <MetricsView initialData={GoalsProgressSchema.safeParse(seed).data} />;
 }

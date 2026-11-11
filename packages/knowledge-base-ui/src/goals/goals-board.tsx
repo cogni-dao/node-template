@@ -372,7 +372,7 @@ function MetricsFooter({ data }: { readonly data: GoalsProgress }) {
       )}
       {data.servedTruncated && (
         <p role="status" className="text-muted-foreground text-xs">
-          This list may be incomplete: more metrics exist than one read scans, or a goal's bets were not all read. Read every metric with core__metric_list.
+          This list is cut: more metrics exist than one read scans. Read every metric with core__metric_list.
         </p>
       )}
     </>

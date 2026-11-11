@@ -628,7 +628,7 @@ describe("goal read lists served metrics under their KPI", () => {
 		expect(read.goals[0]?.kpis[0]?.assessment.status).toBe("on_track");
 	});
 
-	it("lists a metric that serves a bet-only KPI as an orphan, and admits unread bets", async () => {
+	it("lists a metric that serves a bet-only KPI as an orphan, and the bet-only KPI metric as unbound", async () => {
 		const bet = definition("bet-kpi");
 		const m = definition("m", { serves: { kpi: "bet-kpi", role: "diagnostic" } });
 		const s = setup([bet, m]);
@@ -666,26 +666,6 @@ describe("goal read lists served metrics under their KPI", () => {
 		// A bet-only KPI metric serves no goal KPI, so the read lists it rather than hiding it.
 		expect(read.unbound?.map((u) => u.metric.id)).toEqual(["bet-kpi"]);
 		expect(read.servedTruncated).toBe(false);
-		const unseen = await readGoalsProgress({
-			goals: {
-				listGoals: async () => [{ id: "g", title: "G", evaluateAt: null, kpiBindings: [] }],
-				hypotheses: async () => ({ items: [], more: true }),
-			},
-			metrics: s.service,
-			environment: "test",
-		});
-		expect(unseen.servedTruncated).toBe(true);
-		const down = await readGoalsProgress({
-			goals: {
-				listGoals: async () => [{ id: "g", title: "G", evaluateAt: null, kpiBindings: [] }],
-				hypotheses: async () => {
-					throw new Error("down");
-				},
-			},
-			metrics: s.service,
-			environment: "test",
-		});
-		expect(down.servedTruncated).toBe(true);
 	});
 
 	it("admits a truncated scan instead of reading unbounded definitions", async () => {

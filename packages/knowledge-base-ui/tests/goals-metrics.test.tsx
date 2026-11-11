@@ -176,7 +176,7 @@ describe("MetricsBoard", () => {
     const cut = GoalsProgressSchema.parse({ asOf: AS_OF, environment: "t", goals: [goalFixture("g", "G", [bare])], orphans: [], unbound: [], servedTruncated: true });
     const a = renderMetrics(cut);
     expect(a.container.querySelector('[data-branch="empty"]')?.textContent).toContain("No metric serves this KPI yet");
-    expect(a.container.textContent).toContain("This list may be incomplete");
+    expect(a.container.textContent).toContain("This list is cut");
     expect(a.container.querySelector('[data-group="not-serving"]')).toBeNull();
     a.unmount();
     const down = GoalsProgressSchema.parse({ asOf: AS_OF, environment: "t", goals: [goalFixture("g", "G", [bare])], servedUnavailable: "metric_authority_unavailable" });

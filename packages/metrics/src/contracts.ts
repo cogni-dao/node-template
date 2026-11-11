@@ -542,7 +542,7 @@ export const GoalsProgressSchema = z.object({
 	orphans: z.array(MetricOrphanSchema).optional(),
 	/** Metrics that declare no `serves`. Absent when metrics are unavailable. */
 	unbound: z.array(UnboundMetricSchema).optional(),
-	/** True when the lists may be incomplete: more definitions exist than one read scans, or a goal's bets were not all read. */
+	/** True when more definitions exist than one read scans, so `served`/`orphans`/`unbound` may be incomplete. */
 	servedTruncated: z.boolean().optional(),
 	/** Error code when the served read failed (for example metric_authority_unavailable); `served`/`orphans`/`unbound` are then absent. */
 	servedUnavailable: z.string().optional(),

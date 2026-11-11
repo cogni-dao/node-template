@@ -35,7 +35,7 @@ export * from "./progress.js";
 
 /** Definitions one goal read scans for `serves`; a cut is reported as `truncated`. */
 export const SERVES_SCAN_MAX = 200;
-/** Definitions one goal read opens at once; reads stay bounded and keep their order. */
+/** Definitions one goal read opens at once; reads stay bounded and keep their order. The service pool bounds the real parallelism. */
 const SERVING_CONCURRENCY = 8;
 const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;

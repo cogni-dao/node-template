@@ -103,8 +103,6 @@ export async function readGoalsProgress(deps: {
 			boundKpis.add(b.metricId);
 	// KPIs a goal binds; `boundKpis` adds the ones only a bet binds, below.
 	const goalKpis = new Set(boundKpis);
-	// Bets not all read: a metric bound only by an unseen bet could read as unbound.
-	let betsIncomplete = false;
 	for (const goal of goals) {
 		const configured = parseBindings(goal.kpiBindings);
 		const kpis: GoalProgress["kpis"] = [];
@@ -152,7 +150,6 @@ export async function readGoalsProgress(deps: {
 		try {
 			const page = await deps.goals.hypotheses(goal.id);
 			moreHypotheses = page.more;
-			if (page.more) betsIncomplete = true;
 			for (const bet of page.items) {
 				const predictions = [];
 				for (const binding of parseBindings(bet.kpiBindings).bindings) {
@@ -194,7 +191,6 @@ export async function readGoalsProgress(deps: {
 			}
 		} catch {
 			hypothesesUnavailable = true;
-			betsIncomplete = true;
 		}
 		items.push({
 			id: goal.id,
@@ -253,7 +249,7 @@ export async function readGoalsProgress(deps: {
 						assessment: x.assessment,
 						latest: x.latest,
 					})),
-					servedTruncated: serving.truncated || betsIncomplete,
+					servedTruncated: serving.truncated,
 				}
 			: {}),
 		...(servedUnavailable ? { servedUnavailable } : {}),
