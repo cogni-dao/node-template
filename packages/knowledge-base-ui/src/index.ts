@@ -13,8 +13,11 @@ export {
   type CitationLinkProps,
   CitationLinks,
   type CitationLinksProps,
-  ContributionCitationDiff,
-  type ContributionCitationDiffProps,
+  CitationEdgeList,
+  type CitationEdgeListProps,
+  type ContributionDiffRowLike,
+  type ContributionEntryChange,
+  groupContributionChanges,
 } from "./citation-links.js";
 export {
   DirectRelationLinks,

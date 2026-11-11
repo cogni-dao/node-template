@@ -14,7 +14,8 @@
 "use client";
 
 import {
-	ContributionCitationDiff,
+	CitationEdgeList,
+	groupContributionChanges,
 	KnowledgeUseWhen,
 } from "@cogni/knowledge-base-ui";
 import { isWorkItemEndpointId } from "@cogni/knowledge-store";
@@ -47,23 +48,6 @@ function citationHref(id: string): string {
 	return isWorkItemEndpointId(id)
 		? `/work/items/${encodeURIComponent(id)}`
 		: `/knowledge/${encodeURIComponent(id)}`;
-}
-
-/**
- * A modified row whose only change is `confidencePct`. Cite edits recompute the
- * cited entry's confidence, so these rows carry no authored edit.
- */
-function confidenceOnlyChange(
-	d: ContributionDiffEntry,
-): { from: unknown; to: unknown } | null {
-	// The store compares every column; anything besides confidence is an edit.
-	if (
-		d.changeType !== "modified" ||
-		d.changedFields?.length !== 1 ||
-		d.changedFields[0] !== "confidencePct"
-	)
-		return null;
-	return { from: d.before?.confidencePct, to: d.after?.confidencePct };
 }
 
 export function ContributionDiff({
@@ -122,28 +106,15 @@ export function ContributionDiff({
 			<p className="text-muted-foreground text-xs">No changes detected.</p>
 		);
 
-	const recomputed: {
-		rowId: string;
-		title: string;
-		from: unknown;
-		to: unknown;
-	}[] = [];
-	const edited: ContributionDiffEntry[] = [];
-	for (const d of diff) {
-		const change = confidenceOnlyChange(d);
-		if (change)
-			recomputed.push({
-				rowId: d.rowId,
-				title: String(d.after?.title ?? d.rowId),
-				...change,
-			});
-		else edited.push(d);
-	}
+	// One card per entry: its authored change, its confidence move and the
+	// links it makes. Each edge appears once, under its citing entry.
+	const changes = groupContributionChanges(diff, citations);
 
 	return (
 		<div className="flex flex-col gap-2">
-			{edited.map((d) => {
-				const row = (d.after ?? d.before) as {
+			{changes.map((change) => {
+				const d = change.entry;
+				const row = (d?.after ?? d?.before ?? null) as {
 					id?: string;
 					title?: string;
 					useWhen?: string | null;
@@ -153,41 +124,63 @@ export function ContributionDiff({
 				const isHtml = row?.entryType === "html";
 				return (
 					<div
-						key={d.rowId}
+						key={change.rowId}
 						className="rounded-md border border-border/50 bg-muted/30 px-3 py-2"
 					>
-						<div className="flex items-center gap-2 text-xs">
-							<span
-								className={`inline-flex rounded-md px-1.5 py-0.5 font-mono text-xs uppercase tracking-wider ${
-									d.changeType === "added"
-										? "bg-success/15 text-success"
-										: d.changeType === "removed"
-											? "bg-destructive/15 text-destructive"
-											: "bg-warning/15 text-warning"
-								}`}
-							>
-								{d.changeType}
+						<div className="flex flex-wrap items-center gap-2 text-xs">
+							{d && change.authored && (
+								<span
+									className={`inline-flex rounded-md px-1.5 py-0.5 font-mono text-xs uppercase tracking-wider ${
+										d.changeType === "added"
+											? "bg-success/15 text-success"
+											: d.changeType === "removed"
+												? "bg-destructive/15 text-destructive"
+												: "bg-warning/15 text-warning"
+									}`}
+								>
+									{d.changeType}
+								</span>
+							)}
+							<span className="font-mono text-muted-foreground">
+								{change.rowId}
 							</span>
-							<span className="font-mono text-muted-foreground">{d.rowId}</span>
 							{row?.entryType && (
 								<span className="font-mono text-muted-foreground/70 text-xs">
 									{row.entryType}
 								</span>
 							)}
+							{change.confidence && (
+								<span className="text-muted-foreground tabular-nums">
+									confidence {String(change.confidence.from ?? "—")}% →{" "}
+									{String(change.confidence.to ?? "—")}%
+								</span>
+							)}
 						</div>
-						{row?.title && (
+						{d?.changeType === "modified" && change.authored && (
+							<p className="mt-1 text-muted-foreground text-xs">
+								Changed:{" "}
+								{(d.changedFields ?? [])
+									.filter((field) => field !== "confidencePct")
+									.join(", ") || "fields not reported"}
+							</p>
+						)}
+						{change.authored && row?.title && (
 							<p className="mt-1 line-clamp-2 font-medium text-sm">
 								{String(row.title)}
 							</p>
 						)}
-						<KnowledgeUseWhen
-							useWhen={row?.useWhen}
-							className="text-muted-foreground text-sm leading-relaxed [&>span]:font-medium"
-						/>
-						{(d.before?.metricSpec != null ||
-							d.after?.metricSpec != null ||
-							d.before?.kpiBindings != null ||
-							d.after?.kpiBindings != null) && (
+						{change.authored && (
+							<KnowledgeUseWhen
+								useWhen={row?.useWhen}
+								className="text-muted-foreground text-sm leading-relaxed [&>span]:font-medium"
+							/>
+						)}
+						{d &&
+							change.authored &&
+							(d.before?.metricSpec != null ||
+								d.after?.metricSpec != null ||
+								d.before?.kpiBindings != null ||
+								d.after?.kpiBindings != null) && (
 							<details className="mt-3 rounded border p-3 text-xs" open>
 								<summary className="font-medium">
 									Metric configuration and KPI targets
@@ -216,7 +209,7 @@ export function ContributionDiff({
 								</div>
 							</details>
 						)}
-						{isHtml && row?.content && (
+						{change.authored && isHtml && row?.content && (
 							<div className="mt-2">
 								<HtmlRenderer
 									html={row.content}
@@ -224,49 +217,20 @@ export function ContributionDiff({
 								/>
 							</div>
 						)}
-						{!isHtml && row?.content && (
+						{change.authored && !isHtml && row?.content && (
 							<div className="mt-2 max-h-96 overflow-y-auto rounded bg-background/60 px-2 py-1.5">
 								<Markdown content={String(row.content)} />
 							</div>
 						)}
+						<CitationEdgeList
+							edges={change.edges}
+							hrefFor={citationHref}
+							LinkComponent={Link}
+							className="mt-1"
+						/>
 					</div>
 				);
 			})}
-			<ContributionCitationDiff
-				citations={citations}
-				hrefFor={citationHref}
-				LinkComponent={Link}
-			/>
-			{recomputed.length > 0 && (
-				<section
-					aria-label="Confidence recomputed"
-					className="flex flex-col gap-1 rounded-md border border-border/50 bg-muted/30 px-3 py-2"
-				>
-					<span className="font-medium text-muted-foreground text-xs uppercase tracking-wider">
-						Confidence recomputed ({recomputed.length})
-					</span>
-					<p className="text-muted-foreground text-xs">
-						Link changes moved these entries&apos; confidence. Their content is
-						unchanged.
-					</p>
-					<ul className="flex flex-col">
-						{recomputed.map((r) => (
-							<li key={r.rowId}>
-								<Link
-									href={citationHref(r.rowId)}
-									title={r.title}
-									className="-mx-1 flex min-h-6 items-center gap-2 rounded-sm px-1 text-xs outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
-								>
-									<span className="min-w-0 break-all font-mono">{r.rowId}</span>
-									<span className="shrink-0 text-muted-foreground tabular-nums">
-										{String(r.from ?? "—")}% → {String(r.to ?? "—")}%
-									</span>
-								</Link>
-							</li>
-						))}
-					</ul>
-				</section>
-			)}
 		</div>
 	);
 }

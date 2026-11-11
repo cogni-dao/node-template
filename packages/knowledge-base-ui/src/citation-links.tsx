@@ -171,8 +171,81 @@ export function CitationLinks({
   );
 }
 
-export interface ContributionCitationDiffProps {
-  readonly citations: readonly CitationDiffEdge[];
+/** The diff-row fields the grouping reads; the node's diff entry satisfies it. */
+export interface ContributionDiffRowLike {
+  readonly changeType: "added" | "modified" | "removed";
+  readonly rowId: string;
+  readonly before: Readonly<Record<string, unknown>> | null;
+  readonly after: Readonly<Record<string, unknown>> | null;
+  readonly changedFields?: readonly string[] | undefined;
+}
+
+/** Everything one inbox changes about one entry, so each entry appears once. */
+export interface ContributionEntryChange<E extends ContributionDiffRowLike> {
+  readonly rowId: string;
+  /** The row diff, when the entry's row changed at all. */
+  readonly entry: E | null;
+  /** True when a field other than confidence changed (or the row was added/removed). */
+  readonly authored: boolean;
+  /** Before and after confidence, when it changed. */
+  readonly confidence: { readonly from: unknown; readonly to: unknown } | null;
+  /** Link changes this entry makes (it is the citing side). */
+  readonly edges: readonly CitationDiffEdge[];
+}
+
+/**
+ * Fold row changes and link changes into one record per entry. An edge belongs
+ * to its citing entry, so every edge appears exactly once. Order: authored
+ * changes (diff order), then entries that only change links, then entries whose
+ * only change is confidence. A modified row without `changedFields` counts as
+ * authored, so an older server never hides an edit.
+ */
+export function groupContributionChanges<E extends ContributionDiffRowLike>(
+  entries: readonly E[],
+  citations: readonly CitationDiffEdge[]
+): ContributionEntryChange<E>[] {
+  const edgesBy = new Map<string, CitationDiffEdge[]>();
+  for (const edge of citations) {
+    const list = edgesBy.get(edge.citingId);
+    if (list) list.push(edge);
+    else edgesBy.set(edge.citingId, [edge]);
+  }
+  const changes: ContributionEntryChange<E>[] = [];
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    seen.add(entry.rowId);
+    const fields = entry.changedFields;
+    const confidenceChanged =
+      entry.changeType === "modified" &&
+      (fields?.includes("confidencePct") ?? false);
+    changes.push({
+      rowId: entry.rowId,
+      entry,
+      authored:
+        entry.changeType !== "modified" ||
+        !fields ||
+        fields.some((field) => field !== "confidencePct"),
+      confidence: confidenceChanged
+        ? { from: entry.before?.confidencePct, to: entry.after?.confidencePct }
+        : null,
+      edges: edgesBy.get(entry.rowId) ?? [],
+    });
+  }
+  for (const [rowId, edges] of edgesBy) {
+    if (seen.has(rowId)) continue;
+    changes.push({ rowId, entry: null, authored: false, confidence: null, edges });
+  }
+  const rank = (change: ContributionEntryChange<E>) =>
+    change.authored ? 0 : change.edges.length > 0 ? 1 : 2;
+  return changes
+    .map((change, index) => ({ change, index }))
+    .sort((a, b) => rank(a.change) - rank(b.change) || a.index - b.index)
+    .map(({ change }) => change);
+}
+
+export interface CitationEdgeListProps {
+  /** The link changes one entry makes, from `groupContributionChanges`. */
+  readonly edges: readonly CitationDiffEdge[];
   /** Permalink for an entry or work-item id; the node owns routing. */
   readonly hrefFor: (id: string) => string;
   readonly LinkComponent?: CitationLinkComponent;
@@ -180,61 +253,31 @@ export interface ContributionCitationDiffProps {
 }
 
 /**
- * Every citation edge an inbox changes, grouped under its citing entry, each
- * row in the same arrow, relation, slug form as an entry's Links section.
+ * One entry's link changes inside its inbox card: marker, arrow, relation and
+ * the cited slug per row, in the same form as an entry's Links section.
  */
-export function ContributionCitationDiff({
-  citations,
+export function CitationEdgeList({
+  edges,
   hrefFor,
   LinkComponent = DefaultLink,
   className,
-}: ContributionCitationDiffProps): ReactElement | null {
-  if (citations.length === 0) return null;
-  const groups = new Map<string, CitationDiffEdge[]>();
-  for (const edge of citations) {
-    const group = groups.get(edge.citingId);
-    if (group) group.push(edge);
-    else groups.set(edge.citingId, [edge]);
-  }
-
+}: CitationEdgeListProps): ReactElement | null {
+  if (edges.length === 0) return null;
   return (
-    <section
-      aria-label="Link changes"
-      className={cn(
-        "flex flex-col gap-2 rounded-md border border-border/50 bg-muted/30 px-3 py-2",
-        className
-      )}
-    >
-      <span className="font-medium text-muted-foreground text-xs uppercase tracking-wider">
-        Links ({citations.length})
-      </span>
-      {[...groups].map(([citingId, edges]) => (
-        <div key={citingId} className="flex flex-col gap-0.5">
-          <LinkComponent
-            href={hrefFor(citingId)}
-            className="-mx-1 flex min-h-6 w-fit items-center rounded-sm px-1 font-mono text-xs outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            {citingId}
-          </LinkComponent>
-          <ul className="flex flex-col gap-0.5 pl-3">
-            {edges.map((edge) => (
-              <li
-                key={`${edge.changeType}:${edge.citationType}:${edge.citedId}`}
-              >
-                <CitationRow
-                  direction="out"
-                  relation={edge.citationType}
-                  slug={edge.citedId}
-                  href={hrefFor(edge.citedId)}
-                  hoverTitle={edge.context}
-                  change={edge.changeType}
-                  Link={LinkComponent}
-                />
-              </li>
-            ))}
-          </ul>
-        </div>
+    <ul aria-label="Link changes" className={cn("flex flex-col", className)}>
+      {edges.map((edge) => (
+        <li key={`${edge.changeType}:${edge.citationType}:${edge.citedId}`}>
+          <CitationRow
+            direction="out"
+            relation={edge.citationType}
+            slug={edge.citedId}
+            href={hrefFor(edge.citedId)}
+            hoverTitle={edge.context}
+            change={edge.changeType}
+            Link={LinkComponent}
+          />
+        </li>
       ))}
-    </section>
+    </ul>
   );
 }

@@ -18,7 +18,8 @@ import {
   type CitationDiffEdge,
   type CitationLink,
   CitationLinks,
-  ContributionCitationDiff,
+  CitationEdgeList,
+  groupContributionChanges,
 } from "../src/index.js";
 
 afterEach(cleanup);
@@ -89,85 +90,79 @@ describe("CitationLinks", () => {
   });
 });
 
-describe("ContributionCitationDiff", () => {
-  const citations: CitationDiffEdge[] = [
-    {
-      changeType: "added",
-      citingId: "a-entry",
-      citedId: "b-entry",
-      citationType: "supports",
-      context: "why a supports b",
-    },
-    {
-      changeType: "added",
-      citingId: "a-entry",
-      citedId: "task.0059",
-      citationType: "tracks",
-      context: null,
-    },
-    {
-      changeType: "removed",
-      citingId: "c-entry",
-      citedId: "b-entry",
-      citationType: "extends",
-      context: null,
-    },
-  ];
+describe("groupContributionChanges", () => {
+  const row = (rowId: string, changedFields?: string[], from = 30, to = 30) => ({
+    changeType: "modified" as const,
+    rowId,
+    before: { title: rowId, confidencePct: from },
+    after: { title: rowId, confidencePct: to },
+    ...(changedFields ? { changedFields } : {}),
+  });
+  const edge = (citingId: string, citedId: string): CitationDiffEdge => ({
+    changeType: "added",
+    citingId,
+    citedId,
+    citationType: "extends",
+    context: null,
+  });
+
+  it("gives each entry one record: authored, then link-only, then confidence-only", () => {
+    const changes = groupContributionChanges(
+      [
+        row("cited", ["confidencePct"], 30, 60),
+        row("edited", ["confidencePct", "useWhen"], 30, 40),
+      ],
+      [edge("citer", "cited"), edge("edited", "cited")]
+    );
+
+    expect(changes.map((c) => [c.rowId, c.authored, c.edges.length])).toEqual([
+      ["edited", true, 1],
+      ["citer", false, 1],
+      ["cited", false, 0],
+    ]);
+    expect(changes[0]?.confidence).toEqual({ from: 30, to: 40 });
+    expect(changes[2]?.confidence).toEqual({ from: 30, to: 60 });
+    expect(changes[1]?.entry).toBeNull();
+  });
+
+  it("treats a modified row without changedFields as authored", () => {
+    const [change] = groupContributionChanges([row("old-server")], []);
+    expect(change?.authored).toBe(true);
+    expect(change?.confidence).toBeNull();
+  });
+});
+
+describe("CitationEdgeList", () => {
   const hrefFor = (id: string) =>
     id.startsWith("task.") ? `/work/${id}` : `/knowledge/${id}`;
 
-  it("lists every changed edge under its citing entry with change, arrow, relation and slug", () => {
-    render(<ContributionCitationDiff citations={citations} hrefFor={hrefFor} />);
-
-    const section = screen.getByRole("region", { name: "Link changes" });
-    expect(within(section).getByText("Links (3)")).toBeInTheDocument();
-    expect(within(section).getAllByRole("listitem")).toHaveLength(3);
-
-    expect(
-      within(section).getByRole("link", { name: "a-entry" }),
-    ).toHaveAttribute("href", "/knowledge/a-entry");
-    expect(
-      within(section).getByRole("link", {
-        name: "added outgoing tracks task.0059",
-      }),
-    ).toHaveAttribute("href", "/work/task.0059");
-    expect(
-      within(section).getByRole("link", {
-        name: "added outgoing supports b-entry",
-      }),
-    ).toHaveAttribute("title", "why a supports b");
-    expect(
-      within(section).getByRole("link", {
-        name: "removed outgoing extends b-entry",
-      }),
-    ).toHaveAttribute("href", "/knowledge/b-entry");
-  });
-
-  it("marks a re-contexted edge as changed and keeps its context on hover", () => {
+  it("lists one entry's link changes with change, arrow, relation and slug", () => {
     render(
-      <ContributionCitationDiff
-        citations={[
-          {
-            changeType: "modified",
-            citingId: "a-entry",
-            citedId: "b-entry",
-            citationType: "extends",
-            context: "new why",
-          },
+      <CitationEdgeList
+        edges={[
+          { changeType: "added", citingId: "a", citedId: "task.0059", citationType: "tracks", context: null },
+          { changeType: "removed", citingId: "a", citedId: "b-entry", citationType: "extends", context: "old why" },
+          { changeType: "modified", citingId: "a", citedId: "c-entry", citationType: "supports", context: "new why" },
         ]}
         hrefFor={hrefFor}
-      />,
+      />
     );
 
+    const list = screen.getByRole("list", { name: "Link changes" });
+    expect(within(list).getAllByRole("listitem")).toHaveLength(3);
     expect(
-      screen.getByRole("link", { name: "changed outgoing extends b-entry" }),
+      screen.getByRole("link", { name: "added outgoing tracks task.0059" })
+    ).toHaveAttribute("href", "/work/task.0059");
+    expect(
+      screen.getByRole("link", { name: "removed outgoing extends b-entry" })
+    ).toHaveAttribute("title", "old why");
+    expect(
+      screen.getByRole("link", { name: "changed outgoing supports c-entry" })
     ).toHaveAttribute("title", "new why");
   });
 
-  it("renders nothing when the inbox changes no edges", () => {
-    const { container } = render(
-      <ContributionCitationDiff citations={[]} hrefFor={hrefFor} />,
-    );
+  it("renders nothing for an entry with no link changes", () => {
+    const { container } = render(<CitationEdgeList edges={[]} hrefFor={hrefFor} />);
     expect(container).toBeEmptyDOMElement();
   });
 });

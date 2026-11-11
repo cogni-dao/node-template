@@ -69,8 +69,9 @@ describe("ContributionDiff citations", () => {
     });
     render(<ContributionDiff contributionId="contrib-1" />);
 
-    const section = await screen.findByRole("region", { name: "Link changes" });
-    expect(within(section).getByText("Links (2)")).toBeTruthy();
+    // One card for the citing entry; both edges inside it.
+    const section = await screen.findByRole("list", { name: "Link changes" });
+    expect(screen.getAllByText("a-entry")).toHaveLength(1);
     expect(within(section).getAllByRole("listitem")).toHaveLength(2);
     expect(
       within(section).getByRole("link", { name: "added outgoing tracks task.0059" }).getAttribute("href")
@@ -81,7 +82,7 @@ describe("ContributionDiff citations", () => {
     expect(screen.queryByText(/No changes detected/)).toBeNull();
   });
 
-  it("lists only confidence-only rows compactly; any other change stays a card", async () => {
+  it("shows each entry once, with its confidence move and links inside its card", async () => {
     const row = {
       id: "agent-development",
       title: "Add an agent graph",
@@ -123,15 +124,20 @@ describe("ContributionDiff citations", () => {
     });
     render(<ContributionDiff contributionId="c" />);
 
-    const recomputed = await screen.findByRole("region", {
-      name: "Confidence recomputed",
-    });
-    expect(within(recomputed).getByText("40% → 55%")).toBeTruthy();
-    expect(within(recomputed).queryByText("tagged-entry")).toBeNull();
+    // Each entry appears once; its confidence move sits in its own header.
+    await screen.findByText("Tagged body");
+    // Its card header, plus the one link row that cites it.
+    expect(screen.getAllByText("agent-development")).toHaveLength(2);
+    expect(screen.getAllByText(/confidence 40% → 55%/)).toHaveLength(2);
+    // A confidence-only row shows no body and no "modified" badge.
     expect(screen.queryByText("Unchanged body")).toBeNull();
-    // A confidence change plus any authored column stays a full edited card.
     expect(screen.getAllByText("modified")).toHaveLength(1);
-    expect(screen.getByText("Tagged body")).toBeTruthy();
+    expect(screen.getByText("Changed: tags")).toBeTruthy();
+    // The citing entry has its own card holding its link.
+    expect(screen.getAllByText("frontend-development")).toHaveLength(1);
+    expect(
+      screen.getByRole("link", { name: "added outgoing extends agent-development" })
+    ).toBeTruthy();
   });
 
   it("says no changes only when neither rows nor edges changed", async () => {
@@ -139,7 +145,7 @@ describe("ContributionDiff citations", () => {
     render(<ContributionDiff contributionId="c" />);
 
     await screen.findByText("No changes detected.");
-    expect(screen.queryByRole("region", { name: "Link changes" })).toBeNull();
+    expect(screen.queryByRole("list", { name: "Link changes" })).toBeNull();
   });
 
   it("treats a server without citations as no edge changes", async () => {
