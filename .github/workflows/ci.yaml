@@ -68,6 +68,12 @@ jobs:
       - name: Workflow contract check
         run: pnpm check:workflow
 
+      # bug.5254: the same schema and sovereign policy the deploy verb runs (passes 1 and 2),
+      # plus the retired `secret_refs` refusal. Pass 3 (reserved, inherited and off-cluster keys)
+      # is operator data and runs only at deploy.
+      - name: Node declarations check
+        run: pnpm check:declarations
+
   unit:
     runs-on: ubuntu-latest
     # No `needs: static`: unit does its own install + packages:build and consumes
