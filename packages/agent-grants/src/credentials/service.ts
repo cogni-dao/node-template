@@ -14,6 +14,7 @@
  *     `CredentialStoreUnavailableError`, so a node answers 503 and never a 500 or a false 401.
  *   - PERIMETER_GUARD: a token with the wrong shape or a failing checksum is refused before any store read (`key-format.ts` owns the format).
  *   - ADMIT_BEFORE_STORE: an over-limit client gets `rate_limited` and no store read. The limiter itself lives in the node.
+ *   - SPEND_ON_MISS: only a lookup that finds no usable key spends a limiter token (`onInvalid`); a valid key never does.
  * Side-effects: none (the store does the IO)
  * Links: https://cognidao.org/knowledge/node-capability-grants-standard
  * @public
@@ -32,10 +33,33 @@ import {
 /** Thrown by a node's resolver when the store cannot answer, so the HTTP layer maps it to 503 instead of 401. */
 export class CredentialStoreUnavailableError extends Error {
   readonly code = "authz_unavailable";
-  constructor() {
+  constructor(cause?: unknown) {
     super("credential store unavailable");
     this.name = "CredentialStoreUnavailableError";
+    attachCause(this, cause);
   }
+}
+
+/**
+ * `Error`'s `cause` option is not in this package's ES2020 lib, so the cause is attached with `defineProperty` (non-enumerable, like the native one).
+ * The cause may carry a database error whose message holds a key hash: it is for a debugger, never for a log line (see `storeFailureFields`).
+ */
+function attachCause(target: object, cause: unknown): void {
+  if (cause !== undefined) Object.defineProperty(target, "cause", { value: cause, enumerable: false, writable: true, configurable: true });
+}
+
+/**
+ * The only parts of a store failure that are safe to log: the error class and the SQLSTATE `code`. Never `message` (a unique-violation
+ * detail carries a token hash). A node with a role that lacks BYPASSRLS, or a missing `agent_credential_state()`, shows up here.
+ */
+export function storeFailureFields(error: unknown): { errorClass?: string; sqlState?: string } {
+  const cause = error instanceof Error ? (error as { cause?: unknown }).cause : undefined;
+  if (cause === undefined || cause === null) return {};
+  const code = (cause as { code?: unknown }).code;
+  return {
+    errorClass: cause instanceof Error ? cause.name : typeof cause,
+    ...(typeof code === "string" && code.length <= 16 ? { sqlState: code } : {}),
+  };
 }
 
 /** Thrown when a client is over its per-IP limit on credential lookups: the node answers 429 and the store is never read. */
@@ -63,8 +87,8 @@ export class V1SupersededError extends Error {
 async function viaStore<T>(call: () => Promise<T>): Promise<T> {
   try {
     return await call();
-  } catch {
-    throw new CredentialStoreUnavailableError();
+  } catch (cause) {
+    throw new CredentialStoreUnavailableError(cause);
   }
 }
 
@@ -98,14 +122,19 @@ export type VerifyResult =
       readonly name: string | null;
       readonly state: CredentialState;
     }
-  | { readonly ok: false; readonly reason: "invalid" | "unavailable" | "rate_limited" };
+  | { readonly ok: false; readonly reason: "invalid" | "unavailable" | "rate_limited"; readonly cause?: unknown };
 
 export interface VerifyOptions {
   /**
    * Called once per token that passed shape and checksum, BEFORE the store read. Return false when the caller is over its limit:
-   * the result is `rate_limited` and the store is never read. A token with a bad shape or checksum never consumes it.
+   * the result is `rate_limited` and the store is never read. It only CHECKS the limit; it must not spend anything.
    */
   readonly admit?: () => boolean;
+  /**
+   * Called when the lookup finds no usable key (`invalid`): the caller spends its limiter token here. A key that resolves, a bad shape
+   * or checksum, and a store outage never call it, so a valid client is never throttled by its own traffic (SPEND_ON_MISS).
+   */
+  readonly onInvalid?: () => void;
 }
 
 /**
@@ -122,10 +151,15 @@ export async function verifyBearer(
   if (options.admit && !options.admit()) return { ok: false, reason: "rate_limited" };
   try {
     const row = await store.lookup(await hashAgentKey(token));
-    if (!row || !allow.includes(row.state)) return { ok: false, reason: "invalid" };
+    if (!row || !allow.includes(row.state)) {
+      options.onInvalid?.();
+      return { ok: false, reason: "invalid" };
+    }
     return { ok: true, credentialId: row.credentialId, userId: row.userId, name: row.name, state: row.state };
-  } catch {
-    return { ok: false, reason: "unavailable" };
+  } catch (cause) {
+    const unavailable: VerifyResult = { ok: false, reason: "unavailable" };
+    attachCause(unavailable, cause);
+    return unavailable;
   }
 }
 

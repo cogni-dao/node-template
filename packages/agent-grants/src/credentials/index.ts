@@ -9,6 +9,17 @@
  * @public
  */
 
+export {
+  type CredentialHttpInput,
+  type CredentialHttpResponse,
+  confirmAgentCredentialOperation,
+  credentialDenialHttp,
+  credentialErrorHttp,
+  credentialHttp,
+  revokeAgentCredentialOperation,
+  rotateAgentCredentialOperation,
+  upgradeAgentCredentialOperation,
+} from "./http";
 export { agentRolesHasRoles, createPostgresCredentialStore, type CredentialSql, type PostgresCredentialStoreOptions } from "./postgres";
 export {
   formatRevocableKey,
@@ -26,6 +37,7 @@ export {
   type MintedKey,
   revokeCredential,
   rotateCredential,
+  storeFailureFields,
   upgradeSignedKey,
   V1SupersededError,
   type VerifyOptions,

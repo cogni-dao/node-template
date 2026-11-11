@@ -37,6 +37,9 @@
     "typecheck": "tsc --noEmit --emitDeclarationOnly false",
     "test": "vitest run --config vitest.config.ts"
   },
+  "dependencies": {
+    "zod": "^4.1.12"
+  },
   "devDependencies": {
     "tsup": "^8.5.1",
     "typescript": "^5",

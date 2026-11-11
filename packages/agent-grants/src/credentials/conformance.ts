@@ -116,6 +116,21 @@ export function runCredentialConformance(h: CredentialConformanceHarness): void 
       expect(spent).toBe(1);
       expect(await verifyBearer(store, key.apiKey, ["active"], { admit: () => true })).toMatchObject({ ok: true });
     });
+
+    it("onInvalid spends only on a lookup that finds no usable key: a valid key, a bad checksum and an outage never spend", async () => {
+      const { store, ids } = await h.setup(alice);
+      const key = await active(store, ids.alice as string);
+      let spent = 0;
+      const options = { admit: () => true, onInvalid: () => void spent++ };
+      expect(await verifyBearer(store, key.apiKey, ["active"], options)).toMatchObject({ ok: true });
+      expect(await verifyBearer(store, key.apiKey, ["pending"], options)).toEqual(INVALID); // a known key in a state the route refuses is a miss
+      expect(spent).toBe(1);
+      expect(await verifyBearer(store, formatRevocableKey("a".repeat(43)), ["active"], options)).toEqual(INVALID); // unknown key
+      expect(spent).toBe(2);
+      expect(await verifyBearer(store, `${REVOCABLE_KEY_PREFIX}junk`, ["active"], options)).toEqual(INVALID);
+      expect(await verifyBearer(h.broken(), key.apiKey, ["active"], options)).toEqual({ ok: false, reason: "unavailable" });
+      expect(spent).toBe(2);
+    });
   });
 
   describe("credential conformance: verifyBearer", () => {

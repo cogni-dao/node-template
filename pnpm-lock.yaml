@@ -481,6 +481,10 @@ importers:
         version: 4.1.8(@opentelemetry/api@1.9.1)(@types/node@22.19.19)(happy-dom@20.10.2(bufferutil@4.1.0)(utf-8-validate@5.0.10))(jsdom@27.4.0(@noble/hashes@1.8.0)(bufferutil@4.1.0)(utf-8-validate@5.0.10))(vite@7.3.5(@types/node@22.19.19)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.22.4)(yaml@2.9.0))
 
   packages/agent-grants:
+    dependencies:
+      zod:
+        specifier: ^4.1.12
+        version: 4.4.3
     devDependencies:
       tsup:
         specifier: ^8.5.1
@@ -1075,6 +1079,9 @@ importers:
 
   packages/node-contracts:
     dependencies:
+      '@cogni/agent-grants':
+        specifier: workspace:@cogni-dao/agent-grants@*
+        version: link:../agent-grants
       '@cogni/ai-core':
         specifier: workspace:*
         version: link:../ai-core

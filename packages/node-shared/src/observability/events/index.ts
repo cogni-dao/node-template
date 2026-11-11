@@ -55,7 +55,7 @@ export const EVENT_NAMES = {
 	AGENT_CREDENTIAL_CONFIRMED: "agent.credential.confirmed",
 	AGENT_CREDENTIAL_REVOKED: "agent.credential.revoked",
 	AGENT_CREDENTIAL_REFUSED: "agent.credential.refused",
-	/** A revocable key could not be verified because the credential store failed; the request got 503, not 401. */
+	/** A revocable key could not be verified because the credential store failed; the request got 503, not 401. Carries routeId, plus the cause's errorClass and sqlState when known (never its message). */
 	AGENT_CREDENTIAL_STORE_UNAVAILABLE: "agent.credential.store_unavailable",
 	/** A signed (v1) key was used after its user confirmed a revocable key: 401 `v1_superseded`. The best replay signal for a leaked signed key. Carries routeId and userId only. */
 	AGENT_CREDENTIAL_V1_SUPERSEDED_DENIED: "agent.credential.v1_superseded_denied",

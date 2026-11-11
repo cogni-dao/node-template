@@ -1,3 +1,4 @@
+import { REVOCABLE_KEY_PREFIX } from "@cogni/agent-grants/credentials";
 import {
 	GoalsProgressSchema,
 	MetricComputeInputSchema,
@@ -94,7 +95,12 @@ export async function GET(request: Request) {
 			},
 		},
 		registrationUrl: `${origin}/api/v1/agent/register`,
-		auth: { type: "bearer", keyPrefix: "cogni_ag_sk_v1_" },
+		auth: {
+			type: "bearer",
+			keyPrefix: "cogni_ag_sk_v1_",
+			// The revocable key an agent upgrades to (POST /api/v1/agent/credentials/upgrade).
+			revocableKeyPrefix: REVOCABLE_KEY_PREFIX,
+		},
 		endpoints: {
 			openapi: `${origin}/openapi.json`,
 			completions: `${origin}/api/v1/chat/completions`,
