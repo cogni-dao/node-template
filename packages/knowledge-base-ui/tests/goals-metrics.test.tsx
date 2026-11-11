@@ -27,6 +27,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   bandFraction,
+  flagText,
   formatAge,
   GoalsBoard,
   type MetricRow,
@@ -176,7 +177,7 @@ describe("MetricsBoard", () => {
     const cut = GoalsProgressSchema.parse({ asOf: AS_OF, environment: "t", goals: [goalFixture("g", "G", [bare])], orphans: [], unbound: [], servedTruncated: true });
     const a = renderMetrics(cut);
     expect(a.container.querySelector('[data-branch="empty"]')?.textContent).toContain("No metric serves this KPI yet");
-    expect(a.container.textContent).toContain("This list is cut");
+    expect(a.container.textContent).toContain("This list may be incomplete");
     expect(a.container.querySelector('[data-group="not-serving"]')).toBeNull();
     a.unmount();
     const down = GoalsProgressSchema.parse({ asOf: AS_OF, environment: "t", goals: [goalFixture("g", "G", [bare])], servedUnavailable: "metric_authority_unavailable" });
@@ -230,6 +231,16 @@ describe("metrics-view", () => {
     const rows = notServingRows(data);
     expect(rows.map((r) => r.id)).toEqual(["x"]);
     expect(rows[0]?.flags.map((f) => f.kind)).toEqual(["serves_invalid", "band_invalid"]);
+  });
+
+  it("lists a metric that serves only a bet's KPI as not serving a goal KPI", () => {
+    const data = fixture({
+      orphans: [{ metricId: "bet-m", title: "Bet metric", kpi: "bet-kpi", reason: "serves_bet_kpi", assessment: null, latest: latest() }],
+      unbound: [],
+    });
+    const [r] = notServingRows(data);
+    expect(r?.title).toBe("Bet metric");
+    expect(r?.flags.map((f) => flagText(f))).toEqual(["Serves a bet's KPI only: bet-kpi"]);
   });
 
   it("reads age from the read's own clock and fills a meter toward the band", () => {

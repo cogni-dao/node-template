@@ -374,13 +374,14 @@ export function createMetricService(deps: {
 		/** One authorized definition's view: newest attempt, last good reading and band assessment. */
 		async viewOf(d: MetricDefinition): Promise<MetricView> {
 			const hash = metricDefinitionHash(d);
-			const view = selectMetricView(
-				d,
-				await observations.history(d.id, hash, 1),
-				now(),
-			);
+			const history = await observations.history(d.id, hash, 1);
+			const view = selectMetricView(d, history, now());
 			view.lastGood = await observations.lastGood(d.id, hash);
-			const band = await service.bandAssessment(d);
+			// The band reuses the two reads above: no second definition or reading read.
+			const band = await service.bandAssessment(d, {
+				latest: history[0],
+				lastGood: view.lastGood,
+			});
 			if (band) view.bandAssessment = band;
 			return view;
 		},
@@ -388,17 +389,27 @@ export function createMetricService(deps: {
 		 * A metric's own band, assessed as a synthetic binding through kpi(): the
 		 * one assessment path. Latest reading only; null without a band.
 		 */
-		async bandAssessment(d: MetricDefinition): Promise<KpiAssessment | null> {
+		async bandAssessment(
+			d: MetricDefinition,
+			preloaded?: { latest: MetricObservation | undefined; lastGood: MetricObservation | null },
+		): Promise<KpiAssessment | null> {
 			if (!d.band) return null;
 			return (
-				await service.kpi({ metricId: d.id, ...d.band }, { latestOnly: true })
+				await service.kpi(
+					{ metricId: d.id, ...d.band },
+					{
+						latestOnly: true,
+						...(preloaded ? { preloaded: { definition: d, ...preloaded } } : {}),
+					},
+				)
 			).assessment;
 		},
 		/**
 		 * Every readable metric with its band assessment and latest reading: those that
 		 * declare `serves` (or carry an invalid annex) in `items`, the rest in `unbound`.
 		 * Scans at most SERVES_SCAN_MAX definitions; `truncated` admits a cut. The read
-		 * is latest-only: two reads and at most one band assessment per definition.
+		 * is latest-only: per definition one newest-attempt read and one last-good read
+		 * (the band assessment reuses both). No history range read, no second definition read.
 		 */
 		async serving(): Promise<{
 			items: ServingRow[];
@@ -488,6 +499,15 @@ export function createMetricService(deps: {
 				hypothesis?: boolean;
 				/** Skip the trend and recent history queries: one bounded latest-reading read. */
 				latestOnly?: boolean;
+				/**
+				 * A definition the caller already authorized and its newest attempt and last
+				 * good reading, so this read repeats none of them (the goal read's metric list).
+				 */
+				preloaded?: {
+					definition: MetricDefinition;
+					latest: MetricObservation | undefined;
+					lastGood: MetricObservation | null;
+				};
 			},
 		): Promise<GoalKpiResult> {
 			const at = now();
@@ -524,7 +544,9 @@ export function createMetricService(deps: {
 			let current: MetricDefinition;
 			let pinned: Awaited<ReturnType<MetricObservationsPort["snapshot"]>>;
 			try {
-				current = await definitionFor(b.metricId, "read");
+				current =
+					options?.preloaded?.definition ??
+					(await definitionFor(b.metricId, "read"));
 				pinned = b.baselineObservationId
 					? await observations.snapshot(b.baselineObservationId)
 					: null;
@@ -579,9 +601,13 @@ export function createMetricService(deps: {
 				)
 			)
 				return unmeasured("baseline_unavailable_or_incompatible", metric);
-			const [latest] = await observations.history(b.metricId, hash, 1);
+			const latest = options?.preloaded
+				? options.preloaded.latest
+				: (await observations.history(b.metricId, hash, 1))[0];
 			const view = selectMetricView(definition, latest ? [latest] : [], at);
-			const lastGood = await observations.lastGood(b.metricId, hash);
+			const lastGood = options?.preloaded
+				? options.preloaded.lastGood
+				: await observations.lastGood(b.metricId, hash);
 			const due = deadline !== null && Date.parse(deadline) <= at.getTime();
 			const evaluation = due
 				? await observations.at(

@@ -47,6 +47,7 @@ type OrphanReason = MetricOrphan["reason"];
 export type MetricFlag =
   | { readonly kind: "unbound" }
   | { readonly kind: "serves_unknown_kpi"; readonly kpi: string | null }
+  | { readonly kind: "serves_bet_kpi"; readonly kpi: string | null }
   | { readonly kind: "serves_invalid" }
   | { readonly kind: "band_invalid" };
 
@@ -131,8 +132,8 @@ function flagsFor(orphans: readonly MetricOrphan[] | undefined): Map<string, Met
   const byId = new Map<string, MetricFlag[]>();
   for (const o of orphans ?? []) {
     const flag: MetricFlag =
-      o.reason === "serves_unknown_kpi"
-        ? { kind: "serves_unknown_kpi", kpi: o.kpi }
+      o.reason === "serves_unknown_kpi" || o.reason === "serves_bet_kpi"
+        ? { kind: o.reason, kpi: o.kpi }
         : { kind: o.reason };
     const list = byId.get(o.metricId) ?? [];
     if (!list.some((f) => f.kind === flag.kind)) list.push(flag);
@@ -180,8 +181,8 @@ export function worstRowStatus(rows: readonly MetricRow[]): KpiStatus | null {
 }
 
 /**
- * Metrics that serve no bound KPI: no `serves` at all, a `serves` that names a
- * KPI no goal binds, or an invalid `serves`. Sorted worst first. A metric with
+ * Metrics that serve no goal KPI: no `serves` at all, a `serves` that names a
+ * KPI no goal binds or only a bet binds, or an invalid `serves`. Sorted worst first. A metric with
  * only an invalid band still serves its KPI and shows there with a chip.
  */
 export function notServingRows(data: Pick<GoalsProgress, "orphans" | "unbound">): MetricRow[] {
@@ -220,7 +221,9 @@ export function flagText(flag: MetricFlag): string {
     case "unbound":
       return "Serves no KPI";
     case "serves_unknown_kpi":
-      return flag.kpi ? `Names an unbound KPI: ${flag.kpi}` : "Names an unbound KPI";
+      return flag.kpi ? `Names a KPI no goal binds: ${flag.kpi}` : "Names a KPI no goal binds";
+    case "serves_bet_kpi":
+      return flag.kpi ? `Serves a bet's KPI only: ${flag.kpi}` : "Serves a bet's KPI only";
     case "serves_invalid":
       return "Invalid serves";
     case "band_invalid":

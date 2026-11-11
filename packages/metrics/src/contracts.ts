@@ -448,14 +448,22 @@ export const ServedMetricSchema = z.object({
 	latest: MetricLatestSchema.optional(),
 });
 export type ServedMetric = z.infer<typeof ServedMetricSchema>;
-/** A metric whose `serves.kpi` names no bound KPI, or whose `serves`/`band` is invalid: reported, never hidden. */
+/**
+ * A metric whose `serves.kpi` names no bound KPI, names a KPI only a bet binds
+ * (`serves_bet_kpi`), or whose `serves`/`band` is invalid: reported, never hidden.
+ */
 export const MetricOrphanSchema = z.object({
 	metricId: z.string(),
 	/** The metric's title. Absent from servers older than 0.10.0. */
 	title: z.string().optional(),
 	/** The KPI the metric names; null when `serves` is invalid. */
 	kpi: z.string().nullable(),
-	reason: z.enum(["serves_unknown_kpi", "serves_invalid", "band_invalid"]),
+	reason: z.enum([
+		"serves_unknown_kpi",
+		"serves_bet_kpi",
+		"serves_invalid",
+		"band_invalid",
+	]),
 	/** Zod issue locations for an invalid annex field; absent for an unknown KPI. */
 	issues: z.array(z.string()).optional(),
 	assessment: KpiAssessmentSchema.nullable(),
@@ -534,7 +542,7 @@ export const GoalsProgressSchema = z.object({
 	orphans: z.array(MetricOrphanSchema).optional(),
 	/** Metrics that declare no `serves`. Absent when metrics are unavailable. */
 	unbound: z.array(UnboundMetricSchema).optional(),
-	/** True when more definitions exist than one read scans, so `served`/`orphans`/`unbound` may be incomplete. */
+	/** True when the lists may be incomplete: more definitions exist than one read scans, or a goal's bets were not all read. */
 	servedTruncated: z.boolean().optional(),
 	/** Error code when the served read failed (for example metric_authority_unavailable); `served`/`orphans`/`unbound` are then absent. */
 	servedUnavailable: z.string().optional(),

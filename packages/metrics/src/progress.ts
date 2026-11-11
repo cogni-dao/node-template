@@ -7,7 +7,7 @@
  * citation table); LATEST_ONLY (a served metric adds one band assessment from
  * its latest reading: no trend, no history query, at most SERVES_SCAN_MAX
  * definitions scanned, a cut reported as `servedTruncated`); ORPHAN_NOT_HIDDEN
- * (a metric whose `serves.kpi` no goal KPI or hypothesis prediction binds, or whose `serves`/`band` is
+ * (a metric whose `serves.kpi` no goal KPI binds (a bet-only KPI is `serves_bet_kpi`), or whose `serves`/`band` is
  * invalid, is listed in `orphans` with its assessment and the zod issue paths);
  * SERVED_NEVER_FAILS_READ (a serving() failure, for example an authority
  * outage, leaves `served`/`orphans`/`unbound` absent and sets `servedUnavailable`);
@@ -101,6 +101,10 @@ export async function readGoalsProgress(deps: {
 	for (const goal of goals)
 		for (const b of parseBindings(goal.kpiBindings).bindings)
 			boundKpis.add(b.metricId);
+	// KPIs a goal binds; `boundKpis` adds the ones only a bet binds, below.
+	const goalKpis = new Set(boundKpis);
+	// Bets not all read: a metric bound only by an unseen bet could read as unbound.
+	let betsIncomplete = false;
 	for (const goal of goals) {
 		const configured = parseBindings(goal.kpiBindings);
 		const kpis: GoalProgress["kpis"] = [];
@@ -148,6 +152,7 @@ export async function readGoalsProgress(deps: {
 		try {
 			const page = await deps.goals.hypotheses(goal.id);
 			moreHypotheses = page.more;
+			if (page.more) betsIncomplete = true;
 			for (const bet of page.items) {
 				const predictions = [];
 				for (const binding of parseBindings(bet.kpiBindings).bindings) {
@@ -189,6 +194,7 @@ export async function readGoalsProgress(deps: {
 			}
 		} catch {
 			hypothesesUnavailable = true;
+			betsIncomplete = true;
 		}
 		items.push({
 			id: goal.id,
@@ -205,12 +211,15 @@ export async function readGoalsProgress(deps: {
 	const orphans: MetricOrphan[] = [];
 	for (const x of serving?.items ?? []) {
 		const { serves, annexInvalid } = x.definition;
-		if (serves && !boundKpis.has(serves.kpi))
+		if (serves && !goalKpis.has(serves.kpi))
 			orphans.push({
 				metricId: x.definition.id,
 				title: x.definition.title,
 				kpi: serves.kpi,
-				reason: "serves_unknown_kpi",
+				// A bet's KPI is a valid target, but no goal card lists the metric.
+				reason: boundKpis.has(serves.kpi)
+					? "serves_bet_kpi"
+					: "serves_unknown_kpi",
 				assessment: x.assessment,
 				latest: x.latest,
 			});
@@ -244,7 +253,7 @@ export async function readGoalsProgress(deps: {
 						assessment: x.assessment,
 						latest: x.latest,
 					})),
-					servedTruncated: serving.truncated,
+					servedTruncated: serving.truncated || betsIncomplete,
 				}
 			: {}),
 		...(servedUnavailable ? { servedUnavailable } : {}),

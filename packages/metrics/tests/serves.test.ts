@@ -75,7 +75,7 @@ function setup(
 	readings: Record<string, MetricObservation[]> = {},
 	authorize: (d: MetricDefinition) => Promise<boolean> = async () => true,
 ) {
-	const calls = { buckets: 0 };
+	const calls = { buckets: 0, history: 0, lastGood: 0, get: 0 };
 	const registry = new MetricRegistry();
 	registry.register({
 		id: "work.count@1",
@@ -92,9 +92,14 @@ function setup(
 		},
 	});
 	const observations = {
-		history: async (id: string) => readings[id] ?? [],
-		lastGood: async (id: string) =>
-			(readings[id] ?? []).find((r) => r.status === "ok") ?? null,
+		history: async (id: string) => {
+			calls.history++;
+			return readings[id] ?? [];
+		},
+		lastGood: async (id: string) => {
+			calls.lastGood++;
+			return (readings[id] ?? []).find((r) => r.status === "ok") ?? null;
+		},
 		buckets: async () => {
 			calls.buckets++;
 			return [];
@@ -104,7 +109,10 @@ function setup(
 	} as unknown as MetricObservationsPort;
 	const service = createMetricService({
 		definitions: {
-			get: async (id) => defs.find((d) => d.id === id) ?? null,
+			get: async (id) => {
+				calls.get++;
+				return defs.find((d) => d.id === id) ?? null;
+			},
 			list: async (limit, after) => {
 				const rest = defs.filter((d) => !after || d.id > after);
 				return {
@@ -498,6 +506,20 @@ describe("goal read lists served metrics under their KPI", () => {
 		expect(byId("never-m")?.latest).toMatchObject({ viewState: "unavailable", value: null, observedAt: null, reason: null });
 	});
 
+	it("reads each listed metric's newest attempt and last good reading once, banded or not", async () => {
+		const kpi = definition("kpi");
+		const banded = definition("banded", { serves: { kpi: "kpi", role: "input" }, band });
+		const bare = definition("bare");
+		const s = setup([banded, bare, kpi], { banded: [reading(banded, 95)], bare: [reading(bare, 7)] });
+		const before = { ...s.calls };
+		await s.service.serving();
+		// Three definitions: one history read and one last-good read each, and no definition re-read for the band.
+		expect(s.calls.history - before.history).toBe(3);
+		expect(s.calls.lastGood - before.lastGood).toBe(3);
+		expect(s.calls.get - before.get).toBe(0);
+		expect(s.calls.buckets).toBe(0);
+	});
+
 	it("never lists an unreadable metric, and lists a metric with a bad annex only as an orphan", async () => {
 		const kpi = definition("kpi");
 		const secret = definition("secret");
@@ -588,7 +610,7 @@ describe("goal read lists served metrics under their KPI", () => {
 		expect(read.goals[0]?.kpis[0]?.assessment.status).toBe("on_track");
 	});
 
-	it("treats a hypothesis prediction's KPI as a valid serves target", async () => {
+	it("lists a metric that serves a bet-only KPI as an orphan, and admits unread bets", async () => {
 		const bet = definition("bet-kpi");
 		const m = definition("m", { serves: { kpi: "bet-kpi", role: "diagnostic" } });
 		const s = setup([bet, m]);
@@ -621,7 +643,31 @@ describe("goal read lists served metrics under their KPI", () => {
 			metrics: s.service,
 			environment: "test",
 		});
-		expect(read.orphans).toEqual([]);
+		// A bet's KPI is a valid target (not unknown), but no goal card lists the metric.
+		expect(read.orphans?.map((o) => [o.metricId, o.reason])).toEqual([["m", "serves_bet_kpi"]]);
+		// The bet's own metric is a KPI, never unbound.
+		expect(read.unbound).toEqual([]);
+		expect(read.servedTruncated).toBe(false);
+		const unseen = await readGoalsProgress({
+			goals: {
+				listGoals: async () => [{ id: "g", title: "G", evaluateAt: null, kpiBindings: [] }],
+				hypotheses: async () => ({ items: [], more: true }),
+			},
+			metrics: s.service,
+			environment: "test",
+		});
+		expect(unseen.servedTruncated).toBe(true);
+		const down = await readGoalsProgress({
+			goals: {
+				listGoals: async () => [{ id: "g", title: "G", evaluateAt: null, kpiBindings: [] }],
+				hypotheses: async () => {
+					throw new Error("down");
+				},
+			},
+			metrics: s.service,
+			environment: "test",
+		});
+		expect(down.servedTruncated).toBe(true);
 	});
 
 	it("admits a truncated scan instead of reading unbounded definitions", async () => {
