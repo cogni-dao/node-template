@@ -21,6 +21,7 @@
 
 import {
   type AdminCheck,
+  type AgentGrantsStore,
   agentNameKey,
   type AuthzDecision,
   authorizeCaller,
@@ -61,6 +62,8 @@ export interface AgentToolAuthority {
   readonly guardDeps: Omit<GuardDeps, "runAs">;
   /** Scopes a role may name. */
   readonly declaredScopes: readonly string[];
+  /** Scopes an outside agent can actually use (a route twin it can call). Asks, and service enrollments, are refused for any other scope. */
+  readonly askableScopes: readonly string[];
   /** Turn a row ON: approve a pending ask, or grant one of this node's AI directly. */
   grantRole(
     input: PrincipalRef & { scope: string; approvedBy: string }
@@ -145,6 +148,16 @@ export function createAdminCheck(
   };
 }
 
+/**
+ * A human session is a subject, not a principal: `authorizeCaller` decides it from the subject rules alone and never reads the role store. This store
+ * throws if that ever changes, so the call is denied loudly (`authz_unavailable`) instead of silently reading from nowhere.
+ */
+const SESSION_NEVER_READS_STORE = new Proxy({} as AgentGrantsStore, {
+  get() {
+    throw new Error("a session decision never reads the role store");
+  },
+});
+
 /** Outside-agent rows the admin read returns at most (pending asks first). The rest are counted, not sent. */
 export const MAX_ADMIN_OUTSIDE_ROWS = 100;
 
@@ -211,32 +224,48 @@ export function createAgentToolAuthority(deps: {
       };
     },
     declaredScopes,
+    askableScopes,
     adminCheck,
     async authorizeRoute({ toolId, routeId, userId, via }) {
-      const requires =
-        requiresById[toolId] ?? ROUTE_ONLY_CAPABILITIES[toolId]?.requires;
+      const routeOnly = ROUTE_ONLY_CAPABILITIES[toolId];
+      const requires = requiresById[toolId] ?? routeOnly?.requires;
+      const decide = (store: AgentGrantsStore) =>
+        authorizeCaller(store, adminCheck, {
+          userId,
+          via,
+          requires: requires as ToolRequires,
+          ...(routeOnly?.serviceKeyedOnly ? { serviceKeyedOnly: true } : {}),
+        });
       const decision: AuthzDecision = !requires
         ? { decision: "deny", code: "policy_denied", reason: "no_requires" }
-        : await withStore((store) =>
-            authorizeCaller(store, adminCheck, { userId, via, requires })
-          ).catch(
+        : await (via === "session" ? decide(SESSION_NEVER_READS_STORE) : withStore(decide)).catch(
             (): AuthzDecision => ({
               decision: "deny",
               code: "authz_unavailable",
               reason: "store_unavailable",
             })
           );
-      onDecision({
-        principal: via === "bearer" ? userId : null,
-        subject: via === "session" ? userId : null,
-        payer: null,
-        tool: toolId,
-        decision: decision.decision,
-        code: decision.decision === "allow" ? "allowed" : decision.code,
-        reason: decision.decision === "allow" ? decision.basis : decision.reason,
-        runId: null,
-        route: routeId,
-      });
+      // A read door that lets humans and existing agents through (`serviceKeyedOnly`) would log one line per UI read: only a decision made on a role row
+      // (an enrolled service) and every refusal are logged.
+      const quietRead = routeOnly?.serviceKeyedOnly === true && decision.decision === "allow" && decision.basis !== "role";
+      if (!quietRead)
+        onDecision({
+          principal: via === "bearer" ? userId : null,
+          subject: via === "session" ? userId : null,
+          payer: null,
+          tool: toolId,
+          decision: decision.decision,
+          code: decision.decision === "allow" ? "allowed" : decision.code,
+          reason: decision.decision === "allow" ? decision.basis : decision.reason,
+          runId: null,
+          route: routeId,
+        });
+      // A refused knowledge read is named on its own (story.0038): who was refused, at which route, with a fixed code. No key, no header.
+      if (decision.decision === "deny" && routeOnly?.serviceKeyedOnly)
+        deps.log.warn(
+          { event: EVENT_NAMES.AGENT_KNOWLEDGE_READ_DENIED, principal: via === "bearer" ? userId : null, routeId, code: decision.code },
+          EVENT_NAMES.AGENT_KNOWLEDGE_READ_DENIED
+        );
       return decision;
     },
     async grantRole(input) {

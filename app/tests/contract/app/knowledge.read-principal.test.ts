@@ -56,6 +56,13 @@ vi.mock("@/bootstrap/container", () => ({
     config: { unhandledErrorPolicy: "rethrow" },
     knowledgeStorePort: mockStore,
     knowledgeContributionService: mockContributions,
+    // The `knowledge.read` door (story.0038), as it answers for an EXISTING agent key (no service_key) and a human: both read, no role row.
+    agentAuthority: {
+      authorizeRoute: vi.fn(async ({ via }: { via: string }) => ({
+        decision: "allow",
+        basis: via === "bearer" ? "agent_without_service_key" : "signed_in",
+      })),
+    },
   })),
 }));
 

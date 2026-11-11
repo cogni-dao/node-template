@@ -22,6 +22,7 @@ export const runtime = "nodejs";
 export const GET = wrapRouteHandlerWithLogging(
   {
     routeId: "knowledge.domains.list",
+    sameDoor: "knowledge.read",
     auth: { mode: "required", getSessionUser },
   },
   async (_ctx, request, sessionUser) => handleList(request, sessionUser)

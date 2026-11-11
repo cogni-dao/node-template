@@ -23,7 +23,7 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export const GET = wrapRouteHandlerWithLogging(
-  { routeId: "knowledge.graph", auth: { mode: "required", getSessionUser } },
+  { routeId: "knowledge.graph", sameDoor: "knowledge.read", auth: { mode: "required", getSessionUser } },
   async (ctx, request, sessionUser) => {
     if (!sessionUser) {
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });

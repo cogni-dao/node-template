@@ -38,6 +38,7 @@ export const GET = wrapRouteHandlerWithLogging<{
 }>(
   {
     routeId: "knowledge.contributions.commits.list",
+    sameDoor: "knowledge.read",
     auth: { mode: "required", getSessionUser },
   },
   async (_ctx, _request, sessionUser, context) => {

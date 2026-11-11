@@ -34,13 +34,14 @@ const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), chil
 log.child.mockReturnValue(log);
 
 /** A tagged template that answers the role queries from a set. `begin` hands back the same tag. */
-function fakeSql(state: { roles: Set<string>; down: boolean; queries: number }): AgentAuthoritySql {
+function fakeSql(state: { roles: Set<string>; services: Set<string>; down: boolean; queries: number }): AgentAuthoritySql {
   const tag = (async (strings: TemplateStringsArray, ...values: unknown[]) => {
     state.queries += 1;
     if (state.down) throw new Error("db down");
     const text = strings.join("?");
     if (text.includes("FROM agent_roles"))
       return state.roles.has(`${values[0]}|${values[1]}`) ? [{ ok: 1 }] : [];
+    if (text.includes("FROM agent_principals") && text.includes("service_key IS NOT NULL")) return state.services.has(String(values[0])) ? [{ ok: 1 }] : [];
     return [];
   }) as unknown as AgentAuthoritySql;
   (tag as unknown as { begin: unknown }).begin = async (fn: (t: unknown) => Promise<unknown>) => fn(tag);
@@ -49,7 +50,7 @@ function fakeSql(state: { roles: Set<string>; down: boolean; queries: number }):
 
 const handler = vi.fn(async () => NextResponse.json({ ran: true }));
 const AGENT = "agent-user-1";
-const state = { roles: new Set<string>(), down: false, queries: 0 };
+const state = { roles: new Set<string>(), services: new Set<string>(), down: false, queries: 0 };
 
 function route(sameDoor: string, user: SessionUser | null) {
   return wrapRouteHandlerWithLogging(
@@ -71,6 +72,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   log.child.mockReturnValue(log);
   state.roles = new Set();
+  state.services = new Set();
   state.down = false;
   state.queries = 0;
   fake.container = {
@@ -141,6 +143,33 @@ describe("the route door (real wrapper, real authorizeRoute)", () => {
     expect((await call("knowledge.contribute", user("bearer"))).status).toBe(403);
     state.roles.add(`${AGENT}|knowledge:contribute`);
     expect((await call("knowledge.contribute", user("bearer"))).status).toBe(200);
+  });
+
+  it("the knowledge.read door (story.0038): an existing agent and a human read with no role row; an enrolled service is 403, then 200 on its role row, then 403 when Off", async () => {
+    // An existing agent key (no service_key) keeps reading exactly as before, and so does a signed-in human: no store read for the human.
+    expect((await call("knowledge.read", user("bearer"))).status).toBe(200);
+    expect((await call("knowledge.read", user("session", "human-1"))).status).toBe(200);
+    // An enrolled service principal is gated by its approved knowledge:read row.
+    state.services.add(AGENT);
+    const refused = await call("knowledge.read", user("bearer"));
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toEqual({ error: "policy_denied", code: "policy_denied" });
+    state.roles.add(`${AGENT}|knowledge:read`);
+    expect((await call("knowledge.read", user("bearer"))).status).toBe(200);
+    state.roles.delete(`${AGENT}|knowledge:read`);
+    expect((await call("knowledge.read", user("bearer"))).status).toBe(403);
+    // The refusal is named on its own, with a fixed code and no secret; allowed reads of humans and existing agents are not logged one by one.
+    const denied = log.warn.mock.calls.map(([f]) => f as Record<string, unknown>).filter((f) => f.event === "agent.knowledge_read.denied");
+    expect(denied).toHaveLength(2);
+    expect(denied[0]).toEqual({ event: "agent.knowledge_read.denied", principal: AGENT, routeId: "work.items.patch", code: "policy_denied" });
+    const authz = [...log.info.mock.calls].map(([f]) => f as Record<string, unknown>).filter((f) => f.event === "agent_tool.authz" && f.tool === "knowledge.read");
+    expect(authz).toEqual([expect.objectContaining({ decision: "allow", reason: "role", principal: AGENT })]);
+  });
+
+  it("the knowledge.read door treats a store outage as 503, for an unknown principal kind as well", async () => {
+    state.down = true;
+    expect((await call("knowledge.read", user("bearer"))).status).toBe(503);
+    expect((await call("knowledge.read", user("session", "human-1"))).status).toBe(200); // a human never reads the role store
   });
 
   it("logs agent_tool.authz with the route id, the principal (bearer) or the subject (human), and no secret", async () => {
