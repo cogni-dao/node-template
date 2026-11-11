@@ -127,6 +127,7 @@ describe("work-item scores HTTP boundary (story.5111)", () => {
   it("PATCH with invalid scores is a 400 with the package issue path, before any SQL", async () => {
     const response = await patch({
       expectedRevision: 3,
+      reason: "r",
       set: { scores: { goal: { v: 5 } } },
     });
     expect(response.status).toBe(400);
@@ -148,7 +149,7 @@ describe("work-item scores HTTP boundary (story.5111)", () => {
     vi.mocked(getContainer).mockReturnValue({
       doltgresWorkItems: { patch: adapterPatch },
     } as never);
-    const response = await patch({ set: { scores: { goal: { v: 1 } } } });
+    const response = await patch({ reason: "r", set: { scores: { goal: { v: 1 } } } });
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({
       issues: [{ code: "too_large" }],

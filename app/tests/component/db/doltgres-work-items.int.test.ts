@@ -1017,7 +1017,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 		expect((await adapter.list({ ids: [id] })).items).toHaveLength(1);
 
 		const patched = await adapter.patch(
-			{ id, set: { title: "Doltgres accepted" } },
+			{ reason: "test change", id, set: { title: "Doltgres accepted" } },
 			principalId,
 		);
 		expect(patched.title).toBe("Doltgres accepted");
@@ -1032,7 +1032,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			await blocker.unsafe("SELECT pg_advisory_lock(5001001)");
 			await expect(adapter.get(id)).resolves.toMatchObject({ id });
 			await expect(
-				adapter.patch({ id, set: { title: "blocked" } }, principalId),
+				adapter.patch({ reason: "test change", id, set: { title: "blocked" } }, principalId),
 			).rejects.toBeInstanceOf(WorkItemsBusyError);
 		} finally {
 			await blocker
@@ -1052,7 +1052,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 		try {
 			await expect(adapter.get(id)).resolves.toMatchObject({ id });
 			await expect(
-				adapter.patch({ id, set: { title: "scoped blocked" } }, principalId),
+				adapter.patch({ reason: "test change", id, set: { title: "scoped blocked" } }, principalId),
 			).rejects.toBeInstanceOf(WorkItemsBusyError);
 		} finally {
 			await writerGuard.release();
@@ -1086,7 +1086,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			// Only a write can observe this write-pool transport loss. It must
 			// quarantine its native capacity while the independent reader serves.
 			const recoveryAttempt = adapter.patch(
-				{ id, set: { title: "pool death" } },
+				{ reason: "test change", id, set: { title: "pool death" } },
 				principalId,
 			);
 			const destroyTimer = setTimeout(() => {
@@ -1105,7 +1105,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 		// Transport failure does not prove that Dolt finished the old statement.
 		// Keep that adapter quarantined, including after the lock-holder exits.
 		await expect(
-			adapter.patch({ id, set: { title: "no replacement" } }, principalId),
+			adapter.patch({ reason: "test change", id, set: { title: "no replacement" } }, principalId),
 		).rejects.toMatchObject({ code: "work_items_native_capacity_held" });
 		// This owned test can explicitly observe the old native session depart
 		// before constructing a replacement; production needs its own authority.
@@ -1131,7 +1131,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 		// write plane (COMMAND_QUERY_SEPARATION); a read used to do it here only
 		// because a read used to take the write lock.
 		await expect(
-			adapter.patch({ id, set: { title: "Doltgres accepted" } }, principalId),
+			adapter.patch({ reason: "test change", id, set: { title: "Doltgres accepted" } }, principalId),
 		).resolves.toMatchObject({ id, title: "Doltgres accepted" });
 		const verifier = createWorkItemClient();
 		try {
@@ -1147,9 +1147,9 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 		await expect(adapter.delete(id, principalId)).rejects.toMatchObject({
 			name: "WorkItemDeletionRetiredError",
 		});
-		await adapter.patch({ id, set: { status: "cancelled" } }, principalId);
+		await adapter.patch({ reason: "test change", id, set: { status: "cancelled" } }, principalId);
 		await adapter.patch(
-			{ id: searchId, set: { status: "cancelled" } },
+			{ reason: "test change", id: searchId, set: { status: "cancelled" } },
 			principalId,
 		);
 		await expect(adapter.get(id)).resolves.toMatchObject({
@@ -1187,7 +1187,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			);
 			// Matching expectedRevision lands and bumps the revision by one.
 			const casPatched = await adapter.patch(
-				{ id, expectedRevision: created.revision, set: { title: "CAS landed" } },
+				{ reason: "test change", id, expectedRevision: created.revision, set: { title: "CAS landed" } },
 				creator,
 			);
 			expect(casPatched).toMatchObject({
@@ -1200,7 +1200,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			const beforeStale = await mainHash();
 			await expect(
 				adapter.patch(
-					{ id, expectedRevision: created.revision, set: { title: "stale" } },
+					{ reason: "test change", id, expectedRevision: created.revision, set: { title: "stale" } },
 					creator,
 				),
 			).rejects.toBeInstanceOf(WorkItemRevisionConflictError);
@@ -1213,6 +1213,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			// A non-creator may set the triage fields, attributed to itself.
 			const triaged = await adapter.patch(
 				{
+					reason: "test change",
 					id,
 					expectedRevision: casPatched.revision,
 					set: { priority: 0, rank: 1, labels: ["triaged"] },
@@ -1227,7 +1228,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			});
 			await expect(
 				casSql.unsafe(
-					`SELECT commit_hash FROM dolt.commits WHERE message = 'work-items: patch ${id} by actor:${collaborator}'`,
+					`SELECT commit_hash FROM dolt.commits WHERE message = 'work-items: patch ${id} by actor:${collaborator}\nReason: test change'`,
 				),
 			).resolves.toHaveLength(1);
 
@@ -1235,7 +1236,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			// door's authorize() decided; the creator stays attribution.
 			await expect(
 				adapter.patch(
-					{ id, set: { priority: 5, title: "renamed by collaborator" } },
+					{ reason: "test change", id, set: { priority: 5, title: "renamed by collaborator" } },
 					collaborator,
 				),
 			).resolves.toMatchObject({
@@ -1246,7 +1247,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 
 			// The creator's unconditioned patch is unchanged.
 			await expect(
-				adapter.patch({ id, set: { title: "creator unconditioned" } }, creator),
+				adapter.patch({ reason: "test change", id, set: { title: "creator unconditioned" } }, creator),
 			).resolves.toMatchObject({
 				title: "creator unconditioned",
 				revision: triaged.revision + 2,
@@ -1313,6 +1314,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			await expect(
 				adapter.patch(
 					{
+						reason: "test change",
 						id: toWorkItemId("task.9599"),
 						set: { title: "must not land" },
 					},
@@ -1432,7 +1434,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 		} finally {
 			if (workItemCreated) {
 				await adapter
-					.patch({ id, set: { status: "cancelled" } }, principalId)
+					.patch({ reason: "test change", id, set: { status: "cancelled" } }, principalId)
 					.catch(() => undefined);
 			}
 			if (knowledgeSession) {
@@ -1714,7 +1716,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			expect(mutations).toBe(0);
 			await expect(
 				adapter.patch(
-					{ id: toWorkItemId("task.9612"), set: { title: "Fresh request" } },
+					{ reason: "test change", id: toWorkItemId("task.9612"), set: { title: "Fresh request" } },
 					"native-capacity-probe",
 				),
 			).rejects.toThrow(/not found/);
@@ -2785,7 +2787,7 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 			if (freshCreated)
 				await adapter
 					.patch(
-						{ id: toWorkItemId("task.9612"), set: { status: "cancelled" } },
+						{ reason: "test change", id: toWorkItemId("task.9612"), set: { status: "cancelled" } },
 						"orphan-budget-probe",
 					)
 					.catch(() => undefined);
@@ -3379,7 +3381,7 @@ if (role === 'original') {
 			).toEqual(mainBefore);
 			expect(await knowledgeRead.unsafe("SELECT * FROM dolt_status")).toHaveLength(0);
 			await expect(
-				work.patch({ id, set: { title: "must wait" } }, "mixed-principal"),
+				work.patch({ reason: "test change", id, set: { title: "must wait" } }, "mixed-principal"),
 			).rejects.toBeInstanceOf(WorkItemsBusyError);
 			await expect(work.get(id)).resolves.toMatchObject({
 				title: "before mixed write",
@@ -3394,7 +3396,7 @@ if (role === 'original') {
 			).resolves.toMatchObject({ content: "Atomic content" });
 			await expect(
 				work.patch(
-					{ id, set: { title: "after knowledge acknowledgement" } },
+					{ reason: "test change", id, set: { title: "after knowledge acknowledgement" } },
 					"mixed-principal",
 				),
 			).resolves.toMatchObject({ title: "after knowledge acknowledgement" });

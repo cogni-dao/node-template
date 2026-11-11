@@ -224,7 +224,7 @@ async function start(
 const forTool = (events: unknown[], tool: string) =>
   (events as Array<{ tool: string }>).filter((e) => e.tool === tool);
 
-const UPDATE_ARGS = { id: "task.1", set: { priority: 3 } };
+const UPDATE_ARGS = { id: "task.1", reason: "test update", set: { priority: 3 } };
 
 describe("V4: a graph whose principal has no seed row is denied before any tool runs", () => {
   it("fails the run and never builds a tool runner", async () => {

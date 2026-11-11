@@ -101,7 +101,7 @@ describe("createWorkItemCapability", () => {
       workItemCommand: command as unknown as WorkItemCommandPort,
     });
     await expect(
-      cap.patch({ id: "task.5001", set: { priority: 0 } })
+      cap.patch({ reason: "test change", id: "task.5001", set: { priority: 0 } })
     ).rejects.toThrow("authz_denied");
     expect(command.patch).not.toHaveBeenCalled();
   });
@@ -128,7 +128,7 @@ describe("createWorkItemCapability", () => {
       backlogReader: backlog as unknown as Pick<WorkItemQueryPort, "list">,
     });
     await cap.transitionStatus({ id: "task.5001", toStatus: "done" });
-    await cap.patch({ id: "task.5001", set: { priority: 3 } });
+    await cap.patch({ reason: "test change", id: "task.5001", set: { priority: 3 } });
     expect(markdown.get).toHaveBeenCalledTimes(2);
     expect(command.transitionStatus).toHaveBeenCalledTimes(1);
     expect(command.patch).toHaveBeenCalledTimes(1);
@@ -168,17 +168,24 @@ describe("createWorkItemCapability", () => {
         await cap.patch({
           id: "task.5001",
           expectedRevision: 7,
+          reason: "test change",
           set: { rank: 2 },
         })
       ).revision
     ).toBe(8);
     expect(store.patch).toHaveBeenLastCalledWith(
-      { id: "task.5001", expectedRevision: 7, set: { rank: 2 } },
+      {
+        id: "task.5001",
+        expectedRevision: 7,
+        reason: "test change",
+        set: { rank: 2 },
+      },
       "system"
     );
     const lost = cap.patch({
       id: "task.5001",
       expectedRevision: 7,
+      reason: "test change",
       set: { rank: 3 },
     });
     await expect(lost).rejects.toBeInstanceOf(WorkItemPatchConflictError);
@@ -189,6 +196,31 @@ describe("createWorkItemCapability", () => {
     expect(command.patch).not.toHaveBeenCalled();
   });
 
+  it("forwards the required reason and the cites to the live store (task.0086)", async () => {
+    const row = {
+      ...storedItem,
+      id: "task.5001",
+      type: "task",
+      title: "t",
+      status: "needs_implement",
+      labels: [],
+      assignees: [],
+      revision: 8,
+    };
+    const store = { patch: vi.fn().mockResolvedValue(row) };
+    const cap = createWorkItemCapability({
+      workItemQuery: { list: vi.fn(), get: vi.fn() } as unknown as WorkItemQueryPort,
+      workItemCommand: { patch: vi.fn() } as unknown as WorkItemCommandPort,
+      backlogWriter: { store, principalId: "system" },
+    });
+    const cites = [{ id: "change-history-design" }];
+    await cap.patch({ id: "task.5001", reason: "scope follows the design", cites, set: { rank: 2 } });
+    expect(store.patch).toHaveBeenLastCalledWith(
+      { id: "task.5001", reason: "scope follows the design", cites, set: { rank: 2 } },
+      "system"
+    );
+  });
+
   it("the markdown fallback refuses a caller expectedRevision instead of dropping it", async () => {
     const command = { patch: vi.fn() };
     const markdown = { list: vi.fn(), get: vi.fn() };
@@ -197,7 +229,7 @@ describe("createWorkItemCapability", () => {
       workItemCommand: command as unknown as WorkItemCommandPort,
     });
     await expect(
-      cap.patch({ id: "task.5001", expectedRevision: 7, set: { rank: 2 } })
+      cap.patch({ reason: "test change", id: "task.5001", expectedRevision: 7, set: { rank: 2 } })
     ).rejects.toThrow("expectedRevision requires the Doltgres backlog writer");
     expect(markdown.get).not.toHaveBeenCalled();
     expect(command.patch).not.toHaveBeenCalled();
@@ -233,17 +265,17 @@ describe("createWorkItemCapability", () => {
       backlogWriter: { store, principalId: () => actor },
     });
     expect(
-      (await cap.patch({ id: row.id, expectedRevision: 7, set: { scores } }))
+      (await cap.patch({ reason: "test change", id: row.id, expectedRevision: 7, set: { scores } }))
         .scores
     ).toEqual(scores);
     expect(store.patch).toHaveBeenLastCalledWith(
-      { id: row.id, expectedRevision: 7, set: { scores } },
+      { id: row.id, expectedRevision: 7, reason: "test change", set: { scores } },
       "authenticated-user-a"
     );
     actor = "scheduled-grant-user-b";
-    await cap.patch({ id: row.id, set: { scores } });
+    await cap.patch({ reason: "test change", id: row.id, set: { scores } });
     expect(store.patch).toHaveBeenLastCalledWith(
-      { id: row.id, set: { scores } },
+      { id: row.id, reason: "test change", set: { scores } },
       "scheduled-grant-user-b"
     );
     const readback = (await cap.query({ ids: [row.id] }))[0];
@@ -264,7 +296,7 @@ describe("createWorkItemCapability", () => {
       },
     });
     await expect(
-      cap.patch({ id: "task.5001", set: { scores: { goal: { v: 3 } } } })
+      cap.patch({ reason: "test change", id: "task.5001", set: { scores: { goal: { v: 3 } } } })
     ).rejects.toThrow("actorUserId is required");
     expect(store.patch).not.toHaveBeenCalled();
   });
