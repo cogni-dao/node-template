@@ -21,6 +21,7 @@ import {
 	NO_INLINE_HISTORY_MAX_EDITS,
 	NO_INLINE_HISTORY_MAX_ROWS,
 	noInlineHistoryEditsSql,
+	noInlineHistoryWindowCommitsSql,
 	noInlineHistoryStateSql,
 } from "../src/sources.js";
 import { fakeSql, hub, metricRow, noObservations, type Row } from "./fakes.js";
@@ -212,7 +213,7 @@ let seq = 0;
 /** One dolt_diff row of a work item: the kept commit and its before and after text. */
 const itemEdit = (id: string, at: string, over: Row = {}): Row => ({
 	id,
-	commit_hash: `c${String(++seq).padStart(4, "0")}`,
+	commit_hash: `c${String(++seq).padStart(31, "0")}`,
 	at,
 	diff_type: "modified",
 	reason_message: null,
@@ -225,7 +226,7 @@ const itemEdit = (id: string, at: string, over: Row = {}): Row => ({
 });
 const atomEdit = (id: string, at: string, over: Row = {}): Row => ({
 	id,
-	commit_hash: `c${String(++seq).padStart(4, "0")}`,
+	commit_hash: `c${String(++seq).padStart(31, "0")}`,
 	at,
 	diff_type: "modified",
 	reason_message: null,
@@ -240,9 +241,24 @@ const totals = (rows: Row[], bytes = 1000) =>
 		? [{ as_of: ASOF, n: "0", bytes: "0", id: null }]
 		: rows.map((r) => ({ as_of: ASOF, n: String(rows.length), bytes: String(bytes), ...r }));
 
-/** A fake hub answering the two edits statements from per-table row lists. */
+/** The window statement's answer: one row per commit hash, or the totals row alone for none. */
+const windowRows = (hashes: string[]): Row[] =>
+	hashes.length === 0
+		? [{ as_of: ASOF, n: "0", commit_hash: null }]
+		: hashes.map((commit_hash) => ({ as_of: ASOF, n: String(hashes.length), commit_hash }));
+const HASH_A = "a".repeat(32);
+const WINDOW = (text: string) => text.startsWith("WITH w AS");
+const hashesOf = (...tables: Row[][]) => [...new Set(tables.flat().map((r) => String(r.commit_hash)))];
+
+/** A fake hub answering the window statement and the two edits statements from per-table row lists. */
 function history(items: Row[], atoms: Row[]) {
-	return fakeSql((text) => (text.includes("dolt_diff_work_items") ? totals(items) : totals(atoms)));
+	return fakeSql((text) =>
+		WINDOW(text)
+			? windowRows(hashesOf(items, atoms))
+			: text.includes("dolt_diff_work_items")
+				? totals(items)
+				: totals(atoms),
+	);
 }
 const edits = async (items: Row[], atoms: Row[], output: "share" | "count" = "share") => {
 	const { sql, queries } = history(items, atoms);
@@ -250,7 +266,7 @@ const edits = async (items: Row[], atoms: Row[], output: "share" | "count" = "sh
 };
 
 describe("no-inline-history@1 edits read", () => {
-	it("reads work items then atoms in two statements and scores the share that did not append", async () => {
+	it("reads the window commits, then work items, then atoms and scores the share that did not append", async () => {
 		const clean = Array.from({ length: 8 }, (_, i) => itemEdit(`task.${i}`, IN));
 		const appending = [
 			itemEdit("task.8", IN, { from_outcome: "Outcome", to_outcome: "Outcome\nUpdate: shipped" }),
@@ -258,9 +274,10 @@ describe("no-inline-history@1 edits read", () => {
 		];
 		const atoms = [atomEdit("a1", IN), atomEdit("a2", IN)];
 		const { sample, queries } = await edits([...clean, ...appending], atoms);
-		expect(queries).toHaveLength(2);
-		expect(queries[0]).toContain("dolt_diff_work_items");
-		expect(queries[1]).toContain("dolt_diff_knowledge");
+		expect(queries).toHaveLength(3);
+		expect(queries[0]).toContain("FROM dolt_log l");
+		expect(queries[1]).toContain("dolt_diff_work_items");
+		expect(queries[2]).toContain("dolt_diff_knowledge");
 		expect(sample).toMatchObject({ unit: "%", complete: true });
 		expect(sample.value).toBeCloseTo((100 * 10) / 12, 10);
 		expect(sample.sourceWatermarks).toEqual([
@@ -451,10 +468,35 @@ describe("no-inline-history@1 edits read", () => {
 			["rows", { n: String(NO_INLINE_HISTORY_MAX_ROWS + 1), bytes: "10" }],
 			["bytes", { n: "10", bytes: String(NO_INLINE_HISTORY_MAX_BYTES + 1) }],
 		])("fails closed on a statement cap hit on %s and stops at the failing table", async (_cap, capped) => {
-			const { sql, queries } = fakeSql(() => [{ as_of: ASOF, id: null, ...capped }]);
+			const { sql, queries } = fakeSql((text) =>
+				WINDOW(text) ? windowRows([HASH_A]) : [{ as_of: ASOF, id: null, ...capped }],
+			);
 			const sample = await readNoInlineHistoryEdits(sql, "count", window, read);
 			expect(sample).toMatchObject({ complete: false, reason: "incomplete_or_invalid_source" });
 			expect(sample.evidenceRefs.join()).toContain("cap_hit");
+			expect(queries).toHaveLength(2);
+		});
+
+		it.each([
+			["rows over the cap", [{ as_of: ASOF, n: String(NO_INLINE_HISTORY_MAX_ROWS + 1), commit_hash: null }]],
+			["a row count mismatch", [{ as_of: ASOF, n: "2", commit_hash: HASH_A }]],
+			["a malformed hash", [{ as_of: ASOF, n: "1", commit_hash: "x'; DROP TABLE t; --" }]],
+			["no result", []],
+		])("fails closed when the window commits come back with %s, before any diff is read", async (_why, rows) => {
+			const { sql, queries } = fakeSql(() => rows);
+			const sample = await readNoInlineHistoryEdits(sql, "count", window, read);
+			expect(sample).toMatchObject({ complete: false, reason: "incomplete_or_invalid_source" });
+			expect(queries).toHaveLength(1);
+		});
+
+		it("reads no diff for a window with no commit and counts no edit", async () => {
+			const { sql, queries } = fakeSql((text) => (WINDOW(text) ? windowRows([]) : []));
+			const sample = await readNoInlineHistoryEdits(sql, "count", window, read);
+			expect(sample).toMatchObject({ complete: true, value: 0 });
+			expect(sample.sourceWatermarks).toEqual([
+				{ source: "node.work_items", asOf: ASOF },
+				{ source: "node.knowledge", asOf: ASOF },
+			]);
 			expect(queries).toHaveLength(1);
 		});
 
@@ -488,6 +530,15 @@ describe("no-inline-history@1 edits read", () => {
 			expect(sample.evidenceRefs).toContain("error:TypeError");
 			expect(sample.evidenceRefs.join("\n")).not.toContain("SECRET");
 			expect(failing.queries).toHaveLength(1);
+			// The same map holds when the diff statement, not the window read, fails.
+			const diffFails = fakeSql((text) => {
+				if (WINDOW(text)) return windowRows([HASH_A]);
+				throw new TypeError("table not found: dolt_diff_work_items SECRET-BODY-TEXT");
+			});
+			const second = await readNoInlineHistoryEdits(diffFails.sql, "share", window, read);
+			expect(second).toMatchObject({ complete: false, reason: "source_failed" });
+			expect(second.evidenceRefs).toContain("error:TypeError");
+			expect(diffFails.queries).toHaveLength(2);
 			const controller = new AbortController();
 			const slow = fakeSql(async () => {
 				controller.abort();
@@ -519,18 +570,25 @@ describe("no-inline-history@1 edits read", () => {
 	});
 
 	describe("statement", () => {
-		it.each(["work-items", "atoms"] as const)("is one read-only %s statement with UTC window bounds and the caps pushed down", (table) => {
-			const text = noInlineHistoryEditsSql(table, window);
+		const hashes = ["a".repeat(32), "b".repeat(32)];
+		it.each(["work-items", "atoms"] as const)("is one read-only %s statement that looks the window's commits up by to_commit, with the caps pushed down", (table) => {
+			const text = noInlineHistoryEditsSql(table, hashes);
 			expect(text.startsWith("WITH diffs AS")).toBe(true);
 			expect(text).toContain(table === "work-items" ? "FROM dolt_diff_work_items d" : "FROM dolt_diff_knowledge d");
 			expect(text).toContain("d.to_commit <> 'WORKING'");
-			expect(text).toContain("d.to_commit_date >= '2026-11-02 12:00:00.000'");
-			expect(text).toContain("d.to_commit_date < '2026-11-09 12:00:00.000'");
+			// Dolt pushes a to_commit filter down to an index lookup and never a date filter.
+			expect(text).toContain(`(d.to_commit = '${hashes[0]}' OR d.to_commit = '${hashes[1]}')`);
+			// Doltgres 0.57.3 cannot plan an IN list on to_commit, and a to_id IS NOT NULL test
+			// makes it scan the to_id index instead of looking the commits up (both seen on the real engine).
+			expect(text).not.toMatch(/to_commit IN/);
+			expect(text).not.toContain("to_id IS NOT NULL");
+			expect(text).not.toContain("to_commit_date >=");
+			expect(text).not.toContain("to_commit_date <");
 			expect(text).toContain("d.diff_type = 'modified'");
 			// Doltgres 0.57.3 panics on a bare from_/to_ text comparison inside the CTE.
 			expect(text).not.toContain("IS DISTINCT FROM");
 			expect(text).toContain(table === "work-items" ? "COALESCE(substr(d.from_outcome, 1, 100000), '') <> COALESCE(substr(d.to_outcome, 1, 100000), '')" : "COALESCE(substr(d.from_content, 1, 100000), '') <> COALESCE(substr(d.to_content, 1, 100000), '')");
-			// No wider history: no subquery, ordered by id then date, one row past the cap.
+			// No wider history: a literal list, no subquery, ordered by id then date, one row past the cap.
 			expect(text).not.toMatch(/\bIN \(\s*SELECT/i);
 			expect(text.match(/FROM dolt_diff_/g)).toHaveLength(1);
 			expect(text).toContain(`ORDER BY d.to_id, d.to_commit_date LIMIT ${NO_INLINE_HISTORY_MAX_ROWS + 1}`);
@@ -547,18 +605,92 @@ describe("no-inline-history@1 edits read", () => {
 		});
 
 		it("reads only the changed text columns and the fixture scope as of the commit", () => {
-			const items = noInlineHistoryEditsSql("work-items", window);
+			const items = noInlineHistoryEditsSql("work-items", hashes);
 			expect(items).toContain("from_summary");
 			expect(items).toContain("to_outcome");
 			expect(items).not.toContain("d.to_title");
 			expect(items).toContain('"test-fixture"');
 			expect(items).toContain('"synthetic-fixture"');
-			const atoms = noInlineHistoryEditsSql("atoms", window);
+			const atoms = noInlineHistoryEditsSql("atoms", hashes);
 			expect(atoms).toContain("from_content");
 			expect(atoms).not.toContain("d.to_summary");
 			expect(atoms).toContain("to_entry_type <> 'html'");
 			expect(atoms).toContain("[TEST]");
 			expect(atoms).toContain("LEFT JOIN knowledge_contribution_commits c ON c.commit_hash = d.to_commit");
+		});
+
+		it("takes only well-formed commit hashes, so a literal list cannot carry SQL", () => {
+			expect(() => noInlineHistoryEditsSql("atoms", [])).toThrow(TypeError);
+			expect(() => noInlineHistoryEditsSql("atoms", ["x'); DROP TABLE t; --"])).toThrow(TypeError);
+		});
+
+		it("selects the window's commits from main's log by UTC commit date, one row past the cap", () => {
+			const text = noInlineHistoryWindowCommitsSql(window);
+			expect(text.startsWith("WITH w AS")).toBe(true);
+			expect(text).toContain("FROM dolt_log l WHERE l.date >= '2026-11-02 12:00:00.000' AND l.date < '2026-11-09 12:00:00.000'");
+			expect(text).toContain(`LIMIT ${NO_INLINE_HISTORY_MAX_ROWS + 1}`);
+			expect(text).toContain(`t.n <= ${NO_INLINE_HISTORY_MAX_ROWS}`);
+			expect(text).not.toContain("dolt_diff");
+			expect(text).not.toContain(";");
+		});
+	});
+
+	describe("the diff read follows the window, not the history", () => {
+		// A history of 300 old commits, each with an edit, around 14 commits in the window.
+		const day = (n: number) => `2026-10-${String(1 + (n % 28)).padStart(2, "0")} 08:00:00`;
+		const hash = (i: number) => `d${String(i).padStart(31, "0")}`;
+		const old = Array.from({ length: 300 }, (_, i) => ({
+			...itemEdit(`task.${i % 9}`, day(i), { to_summary: `Old ${i}` }),
+			commit_hash: hash(i),
+		}));
+		const inside: Row[] = [
+			// Exactly the start is inside; exactly the end is outside.
+			{ ...itemEdit("task.1", "2026-11-02 12:00:00", { to_summary: "Edge start" }), commit_hash: hash(1001) },
+			{ ...itemEdit("task.1", "2026-11-09 12:00:00", { to_summary: "Edge end" }), commit_hash: hash(1002) },
+			// A branch commit and its merge commit repeat one edit; the older is kept.
+			{ ...itemEdit("task.2", "2026-11-04 09:00:00", { to_summary: "Appended\nUpdate: x" }), commit_hash: hash(1003) },
+			{ ...itemEdit("task.2", "2026-11-06 09:00:00", { to_summary: "Appended\nUpdate: x" }), commit_hash: hash(1004) },
+			...Array.from({ length: 10 }, (_, i) => ({
+				...itemEdit(`task.${10 + i}`, "2026-11-05 10:00:00"),
+				commit_hash: hash(2000 + i),
+			})),
+		];
+		const all = [...old, ...inside];
+		const ms = (at: unknown) => Date.parse(`${String(at).replace(" ", "T")}Z`);
+		// The rule the date-filtered statement applied: a diff row counts when its own commit date is in [start, end).
+		const dated = all.filter((r) => ms(r.at) >= Date.parse(START) && ms(r.at) < Date.parse(END));
+
+		// A history that answers like the engine: the window statement from its commit dates, the diff statement from its to_commit list.
+		const engine = () =>
+			fakeSql((text) => {
+				if (WINDOW(text)) {
+					const [, lo, hi] = /l\.date >= '(.*?)' AND l\.date < '(.*?)'/.exec(text) ?? [];
+					return windowRows(all.filter((r) => ms(r.at) >= ms(lo) && ms(r.at) < ms(hi)).map((r) => String(r.commit_hash)));
+				}
+				const listed = new Set([...text.matchAll(/'([a-z0-9]{32})'/g)].map((m) => m[1]));
+				return text.includes("dolt_diff_work_items")
+					? totals(all.filter((r) => listed.has(String(r.commit_hash))))
+					: totals([]);
+			});
+
+		it("puts only the window's commits in the diff statement", async () => {
+			const { sql, queries } = engine();
+			await readNoInlineHistoryEdits(sql, "count", window, read);
+			const list = [...queries[1]!.matchAll(/'([a-z0-9]{32})'/g)].map((m) => m[1]);
+			expect(list.sort()).toEqual(dated.map((r) => r.commit_hash as string).sort());
+			expect(list).toHaveLength(13);
+			expect(queries[1]).not.toContain(hash(0));
+		});
+
+		it("reads exactly the edits the date-filtered statement read", async () => {
+			const { sql } = engine();
+			const sample = await readNoInlineHistoryEdits(sql, "share", window, read);
+			// 13 in-window diff rows: the merge repeat collapses, leaving 12 edits, 1 appending.
+			expect(sample.evidenceRefs).toContain("counts:edits=12;appending=1;withReason=0");
+			expect(sample.evidenceRefs).toContain("counts:merge_repeats=1");
+			const { sql: reference } = history(dated, []);
+			const expected = await readNoInlineHistoryEdits(reference, "share", window, read);
+			expect(sample).toEqual(expected);
 		});
 	});
 });
@@ -583,6 +715,7 @@ const rowsFor = (text: string): Row[] => {
 		return live(joined([itemRow("task.1", `${GOAL}\n${DONE}`), itemRow("task.2", `${GOAL}\n${DONE}\nUpdate: x`)]));
 	if (text.startsWith("WITH scope AS")) return live(joined([atomRow("e1")]));
 	if (text.includes("COUNT(*) FROM work_items")) return live([{ as_of: ASOF, value: "73" }]);
+	if (WINDOW(text)) return live(windowRows([HASH_A]));
 	if (text.includes("dolt_diff_work_items"))
 		return live(totals(Array.from({ length: 10 }, (_, i) => itemEdit(`task.${i}`, recent()))));
 	if (text.includes("dolt_diff_knowledge"))
@@ -636,7 +769,7 @@ describe("no-inline-history@1 in the goal-metric service", () => {
 		const calc = reader.registry.get("no-inline-history@1");
 		expect(calc.budget).toEqual({
 			timeoutMs: 15000,
-			maxSourceCalls: 2,
+			maxSourceCalls: 3,
 			maxRows: 5000,
 			maxResponseBytes: 16_777_216,
 		});
@@ -686,8 +819,8 @@ describe("no-inline-history@1 in the goal-metric service", () => {
 		["work-items-no-inline-history", 50, "%", "counts:evaluated=2;passing=1", 1],
 		["atoms-no-inline-history", 100, "%", "counts:evaluated=1;passing=1", 1],
 		["work-items-in-scope", 73, "items", "counts:evaluated=73", 1],
-		["edits-kept-current-7d", (100 * 10) / 11, "%", "counts:edits=11;appending=1;withReason=0", 2],
-		["edits-7d", 11, "edits", "counts:edits=11;appending=1;withReason=0", 2],
+		["edits-kept-current-7d", (100 * 10) / 11, "%", "counts:edits=11;appending=1;withReason=0", 3],
+		["edits-7d", 11, "edits", "counts:edits=11;appending=1;withReason=0", 3],
 	])("computes %s end to end with one terminal log event and the designed source calls", async (id, value, unit, evidence, calls) => {
 		const { service, events, queries } = hub(noInlineHistoryRows(), rowsFor);
 		const saved = await service.compute(id, { requestKey: `k-${id}` });

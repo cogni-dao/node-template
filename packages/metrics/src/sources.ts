@@ -793,22 +793,46 @@ const EDIT_COLUMNS = {
 } as const;
 
 /**
+ * The window's commits: the hashes in main's history (`dolt_log`) whose commit
+ * date is in [start, end), oldest first. Dolt turns a filter on a diff table's
+ * `to_commit` into an index lookup but never pushes a date filter down, so the
+ * diff statement below takes these hashes as a literal list of `to_commit`
+ * tests and its cost follows the window, not the whole history. Like the other statements it
+ * counts rows (`n`) and joins the hashes in only while `n` is inside the row
+ * cap; the inner LIMIT reads one row past it.
+ */
+export function noInlineHistoryWindowCommitsSql(window: {
+	start: string;
+	end: string;
+}): string {
+	return `WITH w AS (SELECT l.commit_hash FROM dolt_log l WHERE l.date >= '${doltUtc(window.start)}' AND l.date < '${doltUtc(window.end)}' ORDER BY l.date, l.commit_hash LIMIT ${NO_INLINE_HISTORY_MAX_ROWS + 1}), totals AS (SELECT COUNT(*) AS n FROM w) SELECT NOW() AS as_of, t.n, w.commit_hash FROM totals t LEFT JOIN w ON t.n <= ${NO_INLINE_HISTORY_MAX_ROWS} ORDER BY w.commit_hash`;
+}
+
+/**
  * One statement per table: the diff rows (`dolt_diff_<table>`, one per commit
- * and row id) whose commit date is in [start, end) and whose edit column
- * changed, ordered by row id then commit date, with the changed text and the
- * commit's reason message. A diff row carries its own `from_` and `to_` text,
- * so no wider history is read. A merge commit repeats its branch commit's row;
- * the caller collapses repeats among these in-window rows. Scope and fixture
- * exclusions read the row as of that commit. The log joins are LEFT joins, so a
- * missing commit row never drops a diff row. The inner LIMIT reads one row past
- * the row cap; like the brief statement it counts rows (`n`) and the bytes of
- * its capped text and joins the rows in only while both are inside the caps, so
- * the database never sends a result over a cap.
+ * and row id) whose commit is one of the window's `commits` and whose edit
+ * column changed, ordered by row id then commit date, with the changed text and
+ * the commit's reason message. The commits are a chain of `to_commit = '<hash>'`
+ * tests joined by OR, which Doltgres 0.57.3 plans as index lookups on
+ * `to_commit`; an `IN` list fails to plan there ("plan is not resolved") and a
+ * cast list or a join scans every diff. A `to_id IS NOT NULL` test is left out
+ * on purpose: `diff_type = 'modified'` already means both sides hold the row,
+ * and with the test the planner scans the `to_id` index instead of looking the
+ * commits up. A diff row carries its own `from_` and `to_` text, so no wider
+ * history is read. A merge commit repeats its branch commit's row; the caller
+ * collapses repeats among these in-window rows. Scope and fixture exclusions
+ * read the row as of that commit. The log joins are LEFT joins, so a missing
+ * commit row never drops a diff row. The inner LIMIT reads one row past the row
+ * cap; like the brief statement it counts rows (`n`) and the bytes of its capped
+ * text and joins the rows in only while both are inside the caps, so the
+ * database never sends a result over a cap.
  */
 export function noInlineHistoryEditsSql(
 	table: EditTable,
-	window: { start: string; end: string },
+	commits: readonly string[],
 ): string {
+	if (commits.length === 0 || !commits.every((h) => COMMIT.test(h)))
+		throw new TypeError("commits must be a non-empty list of commit hashes");
 	const columns = EDIT_COLUMNS[table];
 	const diff =
 		table === "work-items" ? "dolt_diff_work_items" : "dolt_diff_knowledge";
@@ -845,7 +869,7 @@ export function noInlineHistoryEditsSql(
 			? "LEFT JOIN dolt_log l ON l.commit_hash = d.to_commit"
 			: "LEFT JOIN dolt_log l ON l.commit_hash = d.to_commit LEFT JOIN knowledge_contribution_commits c ON c.commit_hash = d.to_commit";
 	const bytes = text.map((c) => `${c}_bytes`).join(" + ");
-	return `WITH diffs AS (SELECT d.to_id AS id, d.to_commit AS commit_hash, CAST(d.to_commit_date AS TEXT) AS at, d.diff_type, ${reason}, ${text.map(capped).join(", ")}, ${text.map(size).join(", ")}, (${text.map(over).join(" OR ")}) AS oversize FROM ${diff} d ${join} WHERE d.to_commit <> 'WORKING' AND d.to_id IS NOT NULL AND d.diff_type = 'modified' AND d.to_commit_date >= '${doltUtc(window.start)}' AND d.to_commit_date < '${doltUtc(window.end)}' AND (${changed}) AND ${scope} ORDER BY d.to_id, d.to_commit_date LIMIT ${NO_INLINE_HISTORY_MAX_ROWS + 1}), totals AS (SELECT COUNT(*) AS n, CAST(COALESCE(SUM(${bytes}), 0) AS BIGINT) AS bytes FROM diffs) SELECT NOW() AS as_of, t.n, t.bytes, s.id, s.commit_hash, s.at, s.diff_type, s.reason_message, ${text.map((c) => `s.${c}`).join(", ")}, s.oversize FROM totals t LEFT JOIN diffs s ON t.n <= ${NO_INLINE_HISTORY_MAX_ROWS} AND t.bytes <= ${NO_INLINE_HISTORY_MAX_BYTES} ORDER BY s.id, s.at, s.commit_hash`;
+	return `WITH diffs AS (SELECT d.to_id AS id, d.to_commit AS commit_hash, CAST(d.to_commit_date AS TEXT) AS at, d.diff_type, ${reason}, ${text.map(capped).join(", ")}, ${text.map(size).join(", ")}, (${text.map(over).join(" OR ")}) AS oversize FROM ${diff} d ${join} WHERE d.to_commit <> 'WORKING' AND d.diff_type = 'modified' AND (${commits.map((h) => `d.to_commit = '${h}'`).join(" OR ")}) AND (${changed}) AND ${scope} ORDER BY d.to_id, d.to_commit_date LIMIT ${NO_INLINE_HISTORY_MAX_ROWS + 1}), totals AS (SELECT COUNT(*) AS n, CAST(COALESCE(SUM(${bytes}), 0) AS BIGINT) AS bytes FROM diffs) SELECT NOW() AS as_of, t.n, t.bytes, s.id, s.commit_hash, s.at, s.diff_type, s.reason_message, ${text.map((c) => `s.${c}`).join(", ")}, s.oversize FROM totals t LEFT JOIN diffs s ON t.n <= ${NO_INLINE_HISTORY_MAX_ROWS} AND t.bytes <= ${NO_INLINE_HISTORY_MAX_BYTES} ORDER BY s.id, s.at, s.commit_hash`;
 }
 
 /** The class of a thrown value, safe to publish: never its message or any row content. */
@@ -883,23 +907,21 @@ function workItemReason(message: unknown): boolean {
 		.some((line) => line.startsWith("Reason: ") && line.length > 8);
 }
 
-async function readEditsOf(
+type WindowCommitsRead =
+	| { ok: true; commits: string[]; asOf: string | null }
+	| Extract<EditRead, { ok: false }>;
+
+/** One statement read through the budget: its rows, or the error class (a timeout is rethrown). */
+async function readRows(
 	sql: Sql,
-	table: EditTable,
-	window: { start: string; end: string },
+	text: string,
 	read: Read,
-): Promise<EditRead> {
-	const failed = (
-		reason: NonNullable<MetricSample["reason"]>,
-		asOf: string | null,
-		evidence: string[] = [],
-	): EditRead => ({ ok: false, reason, asOf, evidence });
-	const result = await read<
-		| { rows: ReadonlyArray<Record<string, unknown>>; error?: undefined }
-		| { error: string }
-	>(async (signal) => {
+): Promise<
+	{ rows: ReadonlyArray<Record<string, unknown>>; error?: undefined } | { error: string }
+> {
+	return read(async (signal) => {
 		try {
-			return { rows: await run(sql, noInlineHistoryEditsSql(table, window), signal) };
+			return { rows: await run(sql, text, signal) };
 		} catch (error) {
 			// A timeout keeps its own failure; every other read error is
 			// source_failed, recorded by class only.
@@ -907,6 +929,68 @@ async function readEditsOf(
 			return { error: errorClass(error) };
 		}
 	});
+}
+
+/** The window's commit hashes, one source call shared by both tables. */
+async function readWindowCommits(
+	sql: Sql,
+	window: { start: string; end: string },
+	read: Read,
+): Promise<WindowCommitsRead> {
+	const failed = (
+		reason: NonNullable<MetricSample["reason"]>,
+		asOf: string | null,
+		evidence: string[] = [],
+	): WindowCommitsRead => ({ ok: false, reason, asOf, evidence });
+	const result = await readRows(
+		sql,
+		noInlineHistoryWindowCommitsSql(window),
+		read,
+	);
+	if (result.error !== undefined)
+		return failed("source_failed", null, [result.error]);
+	const rows = result.rows;
+	const first = rows[0];
+	if (!first) return failed("incomplete_or_invalid_source", null);
+	const asOf = first.as_of
+		? new Date(first.as_of as string).toISOString()
+		: null;
+	const n = Number(first.n);
+	if (!Number.isFinite(n)) return failed("incomplete_or_invalid_source", asOf);
+	if (n === 0) return { ok: true, commits: [], asOf };
+	// Over the cap the statement sends the totals row alone.
+	if (
+		n > NO_INLINE_HISTORY_MAX_ROWS ||
+		rows.length !== n ||
+		rows.some((r) => !COMMIT.test(String(r.commit_hash ?? "")))
+	)
+		return failed("incomplete_or_invalid_source", asOf, [
+			`counts:window_commits=${n};cap_hit`,
+		]);
+	return {
+		ok: true,
+		commits: rows.map((r) => String(r.commit_hash)),
+		asOf,
+	};
+}
+
+async function readEditsOf(
+	sql: Sql,
+	table: EditTable,
+	window: { start: string; end: string },
+	commits: string[],
+	read: Read,
+): Promise<EditRead> {
+	const failed = (
+		reason: NonNullable<MetricSample["reason"]>,
+		asOf: string | null,
+		evidence: string[] = [],
+	): EditRead => ({ ok: false, reason, asOf, evidence });
+	const result = await readRows(
+		sql,
+		noInlineHistoryEditsSql(table, commits),
+		read,
+	);
 	if (result.error !== undefined)
 		return failed("source_failed", null, [result.error]);
 	const rows = result.rows;
@@ -992,7 +1076,8 @@ async function readEditsOf(
 }
 
 /**
- * Edits in [start, end), work items then atoms, two source calls. An edit is
+ * Edits in [start, end): the window's commits, then work items, then atoms,
+ * three source calls (two when the window holds no commit). An edit is
  * one (commit, row id) pair on main that changed a work item's summary or
  * outcome or an atom's content; creation, deletion and fixtures are not edits.
  * `share` is the percent of edits that did not append history (the count of
@@ -1026,8 +1111,17 @@ export async function readNoInlineHistoryEdits(
 	});
 	const edits: Edit[] = [];
 	let mergeRepeats = 0;
+	// One read of the window's commits serves both tables. No commit in the
+	// window means no edit, so the diff statements are not run.
+	const inWindow = await readWindowCommits(sql, { start, end }, read);
+	if (!inWindow.ok) {
+		evidenceRefs.push(...inWindow.evidence);
+		return unknown(inWindow.reason);
+	}
 	for (const table of ["work-items", "atoms"] as const) {
-		const part = await readEditsOf(sql, table, { start, end }, read);
+		const part: EditRead = inWindow.commits.length
+			? await readEditsOf(sql, table, { start, end }, inWindow.commits, read)
+			: { ok: true, edits: [], mergeRepeats: 0, asOf: inWindow.asOf };
 		watermarks.push({ source: NO_INLINE_HISTORY_SOURCE[table], asOf: part.asOf });
 		if (!part.ok) {
 			evidenceRefs.push(...part.evidence);
