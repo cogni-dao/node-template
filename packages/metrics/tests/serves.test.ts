@@ -455,14 +455,66 @@ describe("goal read lists served metrics under their KPI", () => {
 		expect(read.orphans).toEqual([
 			{
 				metricId: "lost-m",
+				title: "lost-m",
 				kpi: "no-such-kpi",
 				reason: "serves_unknown_kpi",
 				assessment: expect.objectContaining({ status: "behind", value: 5 }),
+				latest: expect.objectContaining({ viewState: "ok", value: 5 }),
 			},
 		]);
+		// The KPI's own metric is the KPI, never unbound; only `other-m` serves nothing.
+		expect(read.unbound?.map((u) => u.metric.id)).toEqual(["other-m"]);
 		expect(read.servedTruncated).toBe(false);
 		// Only the KPI's own 30-day trend and 24-hour recent: served metrics add none.
 		expect(s.calls.buckets).toBe(2);
+	});
+
+	it("carries the latest reading on every listed metric, banded or not", async () => {
+		const kpi = definition("kpi");
+		const banded = definition("banded", { serves: { kpi: "kpi", role: "input" }, band });
+		const bare = definition("bare", { serves: { kpi: "kpi", role: "diagnostic" } });
+		const loose = definition("loose");
+		const failing = definition("failing-m");
+		const never = definition("never-m");
+		const s = setup([kpi, banded, bare, loose, failing, never], {
+			banded: [reading(banded, 95)],
+			bare: [reading(bare, 7)],
+			loose: [reading(loose, 3)],
+			"failing-m": [reading(failing, 0, "error")],
+		});
+		const read = await readGoalsProgress({ goals: goals(), metrics: s.service, environment: "test" });
+		expect(GoalsProgressSchema.parse(read)).toEqual(read);
+		const served = read.goals[0]?.kpis[0]?.served ?? [];
+		expect(served.find((x) => x.metric.id === "bare")).toMatchObject({
+			assessment: null,
+			latest: { viewState: "ok", value: 7, unit: "items", reason: null },
+		});
+		expect(served.find((x) => x.metric.id === "banded")?.latest?.value).toBe(95);
+		// Unbound: no serves and not a KPI. A failed latest attempt keeps its reason; unknown is null, never zero.
+		expect(read.unbound?.map((u) => u.metric.id)).toEqual(["loose", "failing-m", "never-m"]);
+		const byId = (id: string) => read.unbound?.find((u) => u.metric.id === id);
+		expect(byId("loose")).toMatchObject({ assessment: null, latest: { value: 3, viewState: "ok" } });
+		expect(byId("failing-m")?.latest).toMatchObject({ viewState: "error", value: null, reason: "source_failed" });
+		expect(byId("never-m")?.latest).toMatchObject({ viewState: "unavailable", value: null, observedAt: null, reason: null });
+	});
+
+	it("never lists an unreadable metric, and lists a metric with a bad annex only as an orphan", async () => {
+		const kpi = definition("kpi");
+		const secret = definition("secret");
+		const open = definition("open");
+		const badAnnex = definition("bad-annex", { annexInvalid: [{ field: "serves", issues: ["serves.role:invalid_value"] }] });
+		const s = setup([kpi, secret, open, badAnnex], {}, async (d) => d.id !== "secret");
+		const read = await readGoalsProgress({ goals: goals(), metrics: s.service, environment: "test" });
+		expect(read.unbound?.map((u) => u.metric.id)).toEqual(["open"]);
+		expect(read.orphans?.map((o) => o.metricId)).toEqual(["bad-annex"]);
+	});
+
+	it("marks a cut scan and still lists the unbound metrics it reached", async () => {
+		const defs = Array.from({ length: SERVES_SCAN_MAX + 5 }, (_, i) => definition(`m${String(i).padStart(4, "0")}`));
+		const s = setup(defs);
+		const read = await readGoalsProgress({ goals: goals([]), metrics: s.service, environment: "test" });
+		expect(read.servedTruncated).toBe(true);
+		expect(read.unbound).toHaveLength(SERVES_SCAN_MAX);
 	});
 
 	it("lists a served metric under every goal KPI that binds it, and no orphans when all are bound", async () => {
@@ -511,6 +563,7 @@ describe("goal read lists served metrics under their KPI", () => {
 			environment: "test",
 		});
 		expect(read.orphans).toBeUndefined();
+		expect(read.unbound).toBeUndefined();
 		expect(read.servedTruncated).toBeUndefined();
 		expect(read.goals[0]?.kpis[0]).not.toHaveProperty("served");
 	});

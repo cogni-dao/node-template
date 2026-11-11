@@ -179,7 +179,7 @@ export function summarize(goals: readonly GoalProgress[]): GoalsSummary {
 }
 
 /** Most urgent first: the status a collapsed goal row shows. */
-const STATUS_RANK: readonly KpiStatus[] = [
+export const STATUS_RANK: readonly KpiStatus[] = [
   "missed",
   "failing",
   "behind",

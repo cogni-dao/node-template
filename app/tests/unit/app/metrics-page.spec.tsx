@@ -2,12 +2,12 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 /**
- * Module: `@tests/unit/app/knowledge-goals-tab`
- * Purpose: Prove this node's mount of the published Goals capability (task.0062): the Goals tab is URL-addressable with WAI-ARIA tabs, its badge loads only on activation, and the entry page hands `?observation=` to the evidence view. The board, chart and read client themselves are proven in packages/knowledge-base-ui.
+ * Module: `@tests/unit/app/metrics-page`
+ * Purpose: Prove this node's mounts of the published Goals capability: the Metrics page (story.0039) renders the package's Metrics view; `/knowledge?mode=goals` redirects to it and the Knowledge tabs no longer carry Goals; the entry page hands `?observation=` to the evidence view (task.0062). The board, chart and read client themselves are proven in packages/knowledge-base-ui.
  * Scope: React Query plus the browser fetch boundary, rendering the real `@cogni/knowledge-base-ui/goals` entry. No live network.
- * Invariants: WAI_ARIA_TABS, URL_DRIVEN_MODE, ON_INTENT_READS (no Goals read until the tab is selected).
+ * Invariants: OLD_LINKS_KEEP_WORKING (redirect before any read), WAI_ARIA_TABS, URL_DRIVEN_MODE.
  * Side-effects: global (stubbed fetch)
- * Links: app/src/app/(app)/knowledge/view.tsx, app/src/app/(app)/knowledge/_components/GoalsMount.tsx
+ * Links: app/src/app/(app)/metrics/view.tsx, app/src/app/(app)/knowledge/page.tsx, app/src/app/(app)/knowledge/_components/GoalsMount.tsx
  * @vitest-environment jsdom
  * @internal
  */
@@ -26,7 +26,9 @@ import type { ComponentProps, ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { KnowledgeMetricEvidence } from "@/app/(app)/knowledge/_components/GoalsMount";
 import { KnowledgeDashboardView } from "@/app/(app)/knowledge/view";
+import { MetricsView } from "@/app/(app)/metrics/view";
 
+const loaders = vi.hoisted(() => ({ loadKnowledgeBrowse: vi.fn() }));
 const navigation = vi.hoisted(() => ({
   mode: "browse",
   observation: null as string | null,
@@ -34,6 +36,9 @@ const navigation = vi.hoisted(() => ({
 }));
 
 vi.mock("next/navigation", () => ({
+  redirect: (to: string) => {
+    throw new Error(`REDIRECT:${to}`);
+  },
   useRouter: () => ({ push: navigation.push }),
   useSearchParams: () =>
     new URLSearchParams({
@@ -99,11 +104,25 @@ afterEach(() => {
   navigation.observation = null;
 });
 
-/** One goal whose only KPI is behind pace: the badge reads "1 goal needs attention". */
+/** One goal whose only KPI is behind pace, plus one metric that serves no KPI. */
 function oneBehindGoal() {
   return GoalsProgressSchema.parse({
     asOf: "2026-11-02T10:05:00.000Z",
     environment: "local",
+    orphans: [],
+    unbound: [
+      {
+        metric: { id: "loose", title: "Loose count", calculatorId: "work.count@1" },
+        assessment: null,
+        latest: {
+          viewState: "ok",
+          value: 3,
+          unit: "items",
+          observedAt: "2026-11-02T10:00:00.000Z",
+          reason: null,
+        },
+      },
+    ],
     goals: [
       {
         id: "goal-x",
@@ -147,125 +166,87 @@ function oneBehindGoal() {
   });
 }
 
-describe("Knowledge Goals tab", () => {
-  it("loads tab badges only on activation and preserves Goals URL and ARIA controls", async () => {
-    navigation.mode = "browse";
-    const data = oneBehindGoal();
+describe("Knowledge tabs after the Goals tab moved to /metrics", () => {
+  it("has no Goals tab, no goal read and no Goals badge, and treats ?mode=goals as Browse", async () => {
+    navigation.mode = "goals";
     const fetchMock = vi.fn(async (url: string) => {
-      if (url === "/api/v1/metrics/goals") return Response.json(data);
       if (url.startsWith("/api/v1/knowledge/contributions"))
         return Response.json({ contributions: [] });
       return new Promise(() => {});
     });
     vi.stubGlobal("fetch", fetchMock);
-    const qc = client();
-    const view = () => (
-      <QueryClientProvider client={qc}>
+    render(
+      <QueryClientProvider client={client()}>
         <KnowledgeDashboardView
           initialList={{ items: [], domains: [] }}
           initialDomains={{ domains: [] }}
         />
       </QueryClientProvider>
     );
-    const { rerender } = render(view());
     const tablist = screen.getByRole("tablist", { name: "Knowledge views" });
-    const tabs = within(tablist).getAllByRole("tab");
-    expect(tabs.map((t) => t.id)).toEqual([
+    expect(within(tablist).getAllByRole("tab").map((t) => t.id)).toEqual([
       "knowledge-tab-browse",
       "knowledge-tab-graph",
       "knowledge-tab-chains",
       "knowledge-tab-domains",
-      "knowledge-tab-goals",
       "knowledge-tab-inbox",
     ]);
-    const goals = within(tablist).getByRole("tab", { name: /^Goals/ });
-    const inbox = within(tablist).getByRole("tab", { name: /^Inbox/ });
-    expect(goals.textContent).toContain(
-      "Goal status not loaded; open Goals to load"
-    );
-    expect(inbox.textContent).toContain("Inbox not loaded; open Inbox to load");
-    const requests = () => fetchMock.mock.calls.map(([url]) => url);
+    expect(
+      within(tablist).getByRole("tab", { name: /^Browse/ }).getAttribute("aria-selected")
+    ).toBe("true");
     await waitFor(() =>
       expect(
-        requests().some((url) => url.startsWith("/api/v1/knowledge/browse?"))
+        fetchMock.mock.calls.some(([url]) => url.startsWith("/api/v1/knowledge/browse?"))
       ).toBe(true)
     );
-    expect(requests()).not.toContain("/api/v1/metrics/goals");
-    expect(
-      requests().some((url) =>
-        url.startsWith("/api/v1/knowledge/contributions")
-      )
-    ).toBe(false);
-    expect(goals.getAttribute("aria-selected")).toBe("false");
-    expect(goals.getAttribute("tabindex")).toBe("-1");
-
-    // Manual tab focus alone must not activate a background read.
-    goals.focus();
-    fireEvent.keyDown(goals, { key: "ArrowRight" });
-    expect(document.activeElement).toBe(inbox);
-    expect(requests()).not.toContain("/api/v1/metrics/goals");
-    expect(
-      requests().some((url) =>
-        url.startsWith("/api/v1/knowledge/contributions")
-      )
-    ).toBe(false);
-
-    fireEvent.click(goals);
-    await waitFor(() =>
-      expect(goals.textContent).toContain("1 goal needs attention")
+    expect(fetchMock.mock.calls.map(([url]) => url)).not.toContain(
+      "/api/v1/metrics/goals"
     );
-    expect(
-      requests().filter((url) => url === "/api/v1/metrics/goals")
-    ).toHaveLength(1);
-    expect(goals.textContent).not.toContain("not loaded");
-    expect(
-      requests().some((url) =>
-        url.startsWith("/api/v1/knowledge/contributions")
-      )
-    ).toBe(false);
-    expect(navigation.push).toHaveBeenCalledWith("/knowledge?mode=goals", {
-      scroll: false,
-    });
-    expect(goals.getAttribute("aria-selected")).toBe("true");
-    // Re-selecting the current tab adds no history entry.
-    fireEvent.click(goals);
-    expect(navigation.push).toHaveBeenCalledTimes(1);
-    const panel = screen.getByRole("tabpanel");
-    expect(panel.getAttribute("aria-labelledby")).toBe(goals.id);
-    expect(within(panel).getByRole("region", { name: "Goals" })).toBeTruthy();
+  });
+});
 
-    // Arrow keys move focus along the tablist (manual activation).
-    goals.focus();
-    fireEvent.keyDown(goals, { key: "ArrowRight" });
-    expect(document.activeElement?.textContent).toMatch(/^Inbox/);
+describe("/knowledge?mode=goals redirect", () => {
+  it("sends a signed-in visitor to /metrics before any goal or knowledge read, and leaves other modes alone", async () => {
+    vi.doMock("@/lib/auth/server", () => ({
+      getServerSessionUser: async () => ({ id: "u" }),
+    }));
+    vi.doMock("@/bootstrap/container", () => ({
+      getContainer: () => ({ knowledgeStorePort: {} }),
+    }));
+    vi.doMock("@/app/(app)/knowledge/_server/loaders", () => ({
+      ...loaders,
+      loadDomains: vi.fn(),
+      loadKnowledgeListCached: vi.fn(),
+    }));
+    vi.doMock("@/app/(app)/knowledge/view", () => ({
+      KnowledgeDashboardView: () => null,
+    }));
+    const { default: KnowledgePage } = await import("@/app/(app)/knowledge/page");
+    await expect(
+      KnowledgePage({ searchParams: Promise.resolve({ mode: "goals" }) })
+    ).rejects.toThrow("REDIRECT:/metrics");
+    expect(loaders.loadKnowledgeBrowse).not.toHaveBeenCalled();
+    await expect(
+      KnowledgePage({ searchParams: Promise.resolve({ mode: "inbox" }) })
+    ).resolves.toBeTruthy();
+  });
+});
 
-    // Back/forward: the URL changes under the view and the tab follows it.
-    navigation.mode = "goals";
-    rerender(view());
-    navigation.mode = "browse";
-    rerender(view());
-    expect(
-      within(tablist)
-        .getByRole("tab", { name: "Browse" })
-        .getAttribute("aria-selected")
-    ).toBe("true");
-    navigation.mode = "goals";
-    rerender(view());
-    expect(goals.getAttribute("aria-selected")).toBe("true");
-
-    fireEvent.click(within(tablist).getByRole("tab", { name: "Browse" }));
-    expect(navigation.push).toHaveBeenLastCalledWith("/knowledge", {
-      scroll: false,
-    });
-    expect(goals.textContent).toContain("1 goal needs attention");
-
-    fireEvent.click(inbox);
-    await waitFor(() => expect(inbox.textContent).not.toContain("not loaded"));
-    expect(
-      requests().filter((url) =>
-        url.startsWith("/api/v1/knowledge/contributions")
-      )
-    ).toHaveLength(1);
+describe("Metrics page", () => {
+  it("renders the package's Metrics view under the page title, from the SSR seed, with no extra read", () => {
+    const fetchMock = vi.fn(async () => new Promise(() => {}));
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <QueryClientProvider client={client()}>
+        <MetricsView initialData={oneBehindGoal()} />
+      </QueryClientProvider>
+    );
+    expect(screen.getByRole("heading", { level: 1, name: "Metrics" })).toBeTruthy();
+    const region = screen.getByRole("region", { name: "Metrics" });
+    expect(within(region).getByText("Goal: Ship it")).toBeTruthy();
+    expect(within(region).getByText("Not serving a KPI")).toBeTruthy();
+    expect(within(region).getByText("Loose count")).toBeTruthy();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 

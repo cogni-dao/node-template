@@ -16,6 +16,7 @@ import {
 	type MetricCalculator,
 	type MetricDefinition,
 	type MetricDisplay,
+	type MetricLatest,
 	displayFits,
 	type MetricDefinitionsPort,
 	MetricError,
@@ -127,6 +128,23 @@ export function selectMetricView(
 			? "stale"
 			: (latestAttempt?.status ?? "unavailable");
 	return { definition, latestAttempt, lastGood, viewState };
+}
+/** A view's latest reading for the goal read: newest attempt state, last good value and its time. */
+export function metricLatest(view: MetricView): MetricLatest {
+	const { latestAttempt: attempt, lastGood: good } = view;
+	return {
+		viewState: view.viewState,
+		value: good?.value ?? null,
+		unit: good?.unit ?? attempt?.unit ?? "",
+		observedAt: good?.observedAt ?? null,
+		reason: attempt && attempt.status !== "ok" ? attempt.reason : null,
+	};
+}
+/** One metric listed by the goal read. */
+export interface ServingRow {
+	definition: MetricDefinition;
+	assessment: KpiAssessment | null;
+	latest: MetricLatest;
 }
 export function createMetricService(deps: {
 	definitions: MetricDefinitionsPort;
@@ -351,14 +369,17 @@ export function createMetricService(deps: {
 			return saved;
 		},
 		async read(id: string): Promise<MetricView> {
-			const d = await definitionFor(id, "read");
+			return service.viewOf(await definitionFor(id, "read"));
+		},
+		/** One authorized definition's view: newest attempt, last good reading and band assessment. */
+		async viewOf(d: MetricDefinition): Promise<MetricView> {
 			const hash = metricDefinitionHash(d);
 			const view = selectMetricView(
 				d,
-				await observations.history(id, hash, 1),
+				await observations.history(d.id, hash, 1),
 				now(),
 			);
-			view.lastGood = await observations.lastGood(id, hash);
+			view.lastGood = await observations.lastGood(d.id, hash);
 			const band = await service.bandAssessment(d);
 			if (band) view.bandAssessment = band;
 			return view;
@@ -374,20 +395,18 @@ export function createMetricService(deps: {
 			).assessment;
 		},
 		/**
-		 * Registered metrics that declare `serves` (or carry an invalid annex), each with its band assessment.
-		 * Scans at most SERVES_SCAN_MAX definitions; `truncated` admits a cut.
+		 * Every readable metric with its band assessment and latest reading: those that
+		 * declare `serves` (or carry an invalid annex) in `items`, the rest in `unbound`.
+		 * Scans at most SERVES_SCAN_MAX definitions; `truncated` admits a cut. The read
+		 * is latest-only: two reads and at most one band assessment per definition.
 		 */
 		async serving(): Promise<{
-			items: Array<{
-				definition: MetricDefinition;
-				assessment: KpiAssessment | null;
-			}>;
+			items: ServingRow[];
+			unbound: ServingRow[];
 			truncated: boolean;
 		}> {
-			const items: Array<{
-				definition: MetricDefinition;
-				assessment: KpiAssessment | null;
-			}> = [];
+			const items: ServingRow[] = [];
+			const unbound: ServingRow[] = [];
 			let cursor: string | undefined;
 			let scanned = 0;
 			let truncated = false;
@@ -395,7 +414,6 @@ export function createMetricService(deps: {
 				const page = await definitions.list(50, cursor);
 				for (const d of page.items) {
 					scanned++;
-					if (!d.serves && !d.annexInvalid?.length) continue;
 					try {
 						await authorize("read", d);
 					} catch (e) {
@@ -404,16 +422,18 @@ export function createMetricService(deps: {
 						if (e instanceof MetricError && e.status === 404) continue;
 						throw e;
 					}
-					items.push({
+					const view = await service.viewOf(d);
+					(!d.serves && !d.annexInvalid?.length ? unbound : items).push({
 						definition: d,
-						assessment: await service.bandAssessment(d),
+						assessment: view.bandAssessment ?? null,
+						latest: metricLatest(view),
 					});
 				}
 				if (!page.nextCursor) break;
 				cursor = page.nextCursor;
 				if (scanned >= SERVES_SCAN_MAX) truncated = true;
 			}
-			return { items, truncated };
+			return { items, unbound, truncated };
 		},
 		async history(id: string) {
 			const d = await definitionFor(id, "read");

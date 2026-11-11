@@ -10,7 +10,9 @@
  * (a metric whose `serves.kpi` no goal KPI or hypothesis prediction binds, or whose `serves`/`band` is
  * invalid, is listed in `orphans` with its assessment and the zod issue paths);
  * SERVED_NEVER_FAILS_READ (a serving() failure, for example an authority
- * outage, leaves `served`/`orphans` absent and sets `servedUnavailable`).
+ * outage, leaves `served`/`orphans`/`unbound` absent and sets `servedUnavailable`);
+ * UNBOUND_LISTED (a metric with no `serves` that no goal or bet binds as a KPI is listed in `unbound`, so the Metrics page
+ * and agents see every metric once; story.0039).
  */
 import { assessKpi } from "./assess.js";
 import {
@@ -129,6 +131,7 @@ export async function readGoalsProgress(deps: {
 							.role,
 					},
 					assessment: x.assessment,
+					latest: x.latest,
 				}));
 			kpis.push({
 				binding,
@@ -205,24 +208,45 @@ export async function readGoalsProgress(deps: {
 		if (serves && !boundKpis.has(serves.kpi))
 			orphans.push({
 				metricId: x.definition.id,
+				title: x.definition.title,
 				kpi: serves.kpi,
 				reason: "serves_unknown_kpi",
 				assessment: x.assessment,
+				latest: x.latest,
 			});
 		for (const bad of annexInvalid ?? [])
 			orphans.push({
 				metricId: x.definition.id,
+				title: x.definition.title,
 				kpi: serves?.kpi ?? null,
 				reason: bad.field === "serves" ? "serves_invalid" : "band_invalid",
 				issues: bad.issues,
 				assessment: x.assessment,
+				latest: x.latest,
 			});
 	}
 	return GoalsProgressSchema.parse({
 		goals: items,
 		asOf: at.toISOString(),
 		environment: deps.environment,
-		...(serving ? { orphans, servedTruncated: serving.truncated } : {}),
+		...(serving
+			? {
+					orphans,
+					// A metric a goal or bet binds as a KPI is the KPI, not bloat.
+					unbound: serving.unbound
+						.filter((x) => !boundKpis.has(x.definition.id))
+						.map((x) => ({
+						metric: {
+							id: x.definition.id,
+							title: x.definition.title,
+							calculatorId: x.definition.spec.calculatorId,
+						},
+						assessment: x.assessment,
+						latest: x.latest,
+					})),
+					servedTruncated: serving.truncated,
+				}
+			: {}),
 		...(servedUnavailable ? { servedUnavailable } : {}),
 	});
 }

@@ -41,6 +41,15 @@ import {
 } from "./presentation.js";
 import { KpiChart } from "./kpi-chart.js";
 import { AvailabilityStrip, ProgressBar, Sparkline, StatusPill } from "./marks.js";
+import { KpiBranch, NotServingGroup } from "./metrics-parts.js";
+import {
+  hasMetricDetail,
+  type MetricsSummary,
+  servedRows,
+  sortGoals,
+  sortKpis,
+  summarizeMetrics,
+} from "./metrics-view.js";
 import { GOALS_POLL_MS, useGoalsProgress } from "./use-goals-progress.js";
 
 export { GOALS_POLL_MS };
@@ -55,6 +64,11 @@ export interface GoalsBoardProps extends GoalsHostOptions {
   readonly goalId?: string | undefined;
   /** Called by "Signed out · reload". Default reloads the page so the session can be restored. */
   readonly onSignedOut?: (() => void) | undefined;
+  /**
+   * The Metrics view: goals and KPIs worst first, each KPI with the metrics that
+   * serve it grouped by role, then the metrics that serve no KPI. Use `MetricsBoard`.
+   */
+  readonly metrics?: boolean | undefined;
 }
 
 /** The Goals view. Node inputs (client, hrefs, link component, key prefix) are injected; see GoalsHostOptions. */
@@ -71,21 +85,33 @@ export function GoalsBoard({ client, queryKeyPrefix, hrefs, LinkComponent, ...re
   );
 }
 
-function GoalsBoardView({ initialData, goalId, onSignedOut }: Omit<GoalsBoardProps, keyof GoalsHostOptions>) {
+/** The whole Metrics view: the Goals board with every KPI's serving metrics and the metrics that serve none. */
+export function MetricsBoard(props: Omit<GoalsBoardProps, "goalId" | "metrics">) {
+  return <GoalsBoard {...props} metrics />;
+}
+
+function GoalsBoardView({ initialData, goalId, onSignedOut, metrics = false }: Omit<GoalsBoardProps, keyof GoalsHostOptions>) {
   const { hrefs, Link } = useGoalsHost();
   const query = useGoalsProgress({ initialData });
   const reload = onSignedOut ?? (() => window.location.reload());
   const failures = useFailedPolls(query.errorUpdatedAt, query.dataUpdatedAt);
   const data = query.data;
-  const goals = data ? (goalId ? data.goals.filter((g) => g.id === goalId) : data.goals) : [];
+  const listed = data ? (goalId ? data.goals.filter((g) => g.id === goalId) : data.goals) : [];
+  // Metrics view: worst goal first (the Goals view keeps the server's order).
+  const goals = metrics ? sortGoals(listed) : listed;
   const signedOut = goalsErrorStatus(query.error) === 401;
   const stale = !!data && (signedOut || failures >= STALE_AFTER_FAILURES);
 
   return (
-    <section aria-label={goalId ? "Goal progress" : "Goals"} aria-busy={!data && query.isPending} className="space-y-6">
+    <section
+      aria-label={goalId ? "Goal progress" : metrics ? "Metrics" : "Goals"}
+      aria-busy={!data && query.isPending}
+      className="space-y-6"
+    >
       {!goalId && (
         <Strip
           goals={goals}
+          metrics={metrics && data ? summarizeMetrics(data) : null}
           asOf={data?.asOf ?? null}
           stale={stale}
           signedOut={signedOut}
@@ -100,7 +126,7 @@ function GoalsBoardView({ initialData, goalId, onSignedOut }: Omit<GoalsBoardPro
               <ReloadLink onClick={reload} />
             ) : (
               <button type="button" onClick={() => query.refetch()} className="underline underline-offset-2">
-                Goals unavailable · retry
+                {metrics ? "Metrics unavailable · retry" : "Goals unavailable · retry"}
               </button>
             )}
           </p>
@@ -123,10 +149,11 @@ function GoalsBoardView({ initialData, goalId, onSignedOut }: Omit<GoalsBoardPro
           className={`divide-y divide-border/60 overflow-hidden rounded-xl border border-border/60 ${stale ? "opacity-70" : ""}`}
         >
           {goals.map((goal) => (
-            <GoalRow key={goal.id} goal={goal} nowIso={data.asOf} single={!!goalId} />
+            <GoalRow key={goal.id} goal={goal} data={data} metrics={metrics} single={!!goalId} />
           ))}
         </ul>
       )}
+      {metrics && data && <MetricsFooter data={data} />}
     </section>
   );
 }
@@ -156,6 +183,7 @@ function ReloadLink({ onClick }: { readonly onClick: () => void }) {
 
 function Strip({
   goals,
+  metrics,
   asOf,
   stale,
   signedOut,
@@ -163,6 +191,8 @@ function Strip({
   onReload,
 }: {
   readonly goals: readonly GoalProgress[];
+  /** Metrics view only: the distinct-metric counts beside the KPI counts. */
+  readonly metrics: MetricsSummary | null;
   readonly asOf: string | null;
   readonly stale: boolean;
   readonly signedOut: boolean;
@@ -183,9 +213,17 @@ function Strip({
   ];
   return (
     <div className="flex flex-wrap items-end justify-between gap-3">
-      <dl className="flex gap-px overflow-hidden rounded-lg border border-border/60 bg-border/60">
-        {cells.map((c) => (
-          <div key={c.label} className="flex min-w-24 flex-col gap-1 bg-background px-4 py-3">
+      <dl className="flex flex-wrap gap-px overflow-hidden rounded-lg border border-border/60 bg-border/60">
+        {[
+          ...cells,
+          ...(metrics
+            ? [
+                { label: "Metrics", value: metrics.metrics, tone: "" },
+                { label: "Serve no KPI", value: metrics.notServing, tone: "text-warning" },
+              ]
+            : []),
+        ].map((c) => (
+          <div key={c.label} className="flex min-w-20 flex-1 flex-col gap-1 bg-background px-3 py-3 sm:min-w-24 sm:flex-none sm:px-4">
             <dt className="text-[11px] text-muted-foreground uppercase tracking-widest">{c.label}</dt>
             <dd className={`font-semibold text-2xl tabular-nums leading-none ${c.value ? c.tone : ""}`}>{c.value}</dd>
           </div>
@@ -208,11 +246,14 @@ function Strip({
 
 function GoalRow({
   goal,
-  nowIso,
+  data,
+  metrics,
   single,
 }: {
   readonly goal: GoalProgress;
-  readonly nowIso: string;
+  readonly data: GoalsProgress;
+  /** Metrics view: KPIs worst first, each with its serving metrics. */
+  readonly metrics: boolean;
   /** The goal entry page: one row, first KPI open. */
   readonly single: boolean;
 }) {
@@ -224,6 +265,7 @@ function GoalRow({
   // A goal may bind one metric twice (a floor and a ceiling), so a card is its
   // position plus metric: if a refresh shifts the bindings, the chart closes
   // instead of silently showing another KPI.
+  // `i` is the binding's own position, so the red-first order never swaps cards.
   const keyOf = (kpi: GoalKpi, i: number) => `${i}:${kpi.binding.metricId}`;
   const first = goal.kpis[0];
   const [open, setOpen] = useState<string | null>(single && first ? keyOf(first, 0) : null);
@@ -231,6 +273,8 @@ function GoalRow({
   const chartId = useId();
   const openKpi = goal.kpis.find((kpi, i) => keyOf(kpi, i) === open);
   const worst = worstStatus(goal);
+  const nowIso = data.asOf;
+  const ranked = metrics ? sortKpis(goal.kpis) : goal.kpis.map((kpi, index) => ({ kpi, index }));
   return (
     <li data-goal={goal.id}>
       <h3 className="flex items-center">
@@ -268,26 +312,69 @@ function GoalRow({
       </h3>
       <div id={bodyId} hidden={!expanded} className="space-y-3 px-4 pt-1 pb-4">
         {goal.kpis.length ? (
-          <div className={CARD_GRID}>
-            {goal.kpis.map((kpi, i) => {
-              const key = keyOf(kpi, i);
-              return (
-                <KpiCard
-                  key={key}
-                  kpi={kpi}
-                  open={open === key}
-                  chartId={chartId}
-                  onToggle={() => setOpen(open === key ? null : key)}
-                />
-              );
-            })}
-          </div>
+          metrics ? (
+            <div className="space-y-4">
+              {ranked.map(({ kpi, index }) => {
+                const key = keyOf(kpi, index);
+                return (
+                  <div key={key} data-kpi-block={kpi.binding.metricId} className="grid gap-3 md:grid-cols-[15rem_minmax(0,1fr)] md:items-start">
+                    <KpiCard
+                      kpi={kpi}
+                      open={open === key}
+                      chartId={chartId}
+                      onToggle={() => setOpen(open === key ? null : key)}
+                    />
+                    {hasMetricDetail(data) ? (
+                      <KpiBranch rows={servedRows(kpi, data)} nowIso={nowIso} />
+                    ) : (
+                      <p className="text-muted-foreground text-sm">Serving metrics unavailable</p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className={CARD_GRID}>
+              {ranked.map(({ kpi, index }) => {
+                const key = keyOf(kpi, index);
+                return (
+                  <KpiCard
+                    key={key}
+                    kpi={kpi}
+                    open={open === key}
+                    chartId={chartId}
+                    onToggle={() => setOpen(open === key ? null : key)}
+                  />
+                );
+              })}
+            </div>
+          )
         ) : (
           <p className="text-muted-foreground text-sm">No metric bound</p>
         )}
         {openKpi && open && <KpiChart key={open} id={chartId} kpi={openKpi} nowIso={nowIso} />}
       </div>
     </li>
+  );
+}
+
+/** Metrics view footer: the metrics that serve no KPI, and honest notes when the list is cut or unavailable. */
+function MetricsFooter({ data }: { readonly data: GoalsProgress }) {
+  return (
+    <>
+      {hasMetricDetail(data) ? (
+        <NotServingGroup data={data} />
+      ) : (
+        <p role="status" className="text-muted-foreground text-sm">
+          {data.servedUnavailable ? "Metrics unavailable right now" : "This node's metrics package is older than 0.10.0: no metric detail"}
+        </p>
+      )}
+      {data.servedTruncated && (
+        <p role="status" className="text-muted-foreground text-xs">
+          This list is cut: more metrics exist than one read scans. Read the rest with core__metric_list.
+        </p>
+      )}
+    </>
   );
 }
 
