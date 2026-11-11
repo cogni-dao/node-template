@@ -577,7 +577,11 @@ describe("no-inline-history@1 edits read", () => {
 			expect(text).toContain(table === "work-items" ? "FROM dolt_diff_work_items d" : "FROM dolt_diff_knowledge d");
 			expect(text).toContain("d.to_commit <> 'WORKING'");
 			// Dolt pushes a to_commit filter down to an index lookup and never a date filter.
-			expect(text).toContain(`d.to_commit IN ('${hashes[0]}', '${hashes[1]}')`);
+			expect(text).toContain(`(d.to_commit = '${hashes[0]}' OR d.to_commit = '${hashes[1]}')`);
+			// Doltgres 0.57.3 cannot plan an IN list on to_commit, and a to_id IS NOT NULL test
+			// makes it scan the to_id index instead of looking the commits up (both seen on the real engine).
+			expect(text).not.toMatch(/to_commit IN/);
+			expect(text).not.toContain("to_id IS NOT NULL");
 			expect(text).not.toContain("to_commit_date >=");
 			expect(text).not.toContain("to_commit_date <");
 			expect(text).toContain("d.diff_type = 'modified'");

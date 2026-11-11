@@ -7,10 +7,10 @@
  * Dolt pushes a `to_commit` filter on `dolt_diff_<table>` down to an index
  * lookup but never a commit-date filter, so the edits read takes the window's
  * commit hashes from `dolt_log` and then filters the diff tables with
- * `to_commit IN (...)`. A fake `Sql` cannot see either engine behavior: this
- * runs the shipped statements against a real history with commits before,
- * inside and after the window and checks the edits equal what the date filter
- * selected.
+ * a chain of `to_commit = '<hash>'` tests (Doltgres 0.57.3 cannot plan an `IN`
+ * list there). A fake `Sql` cannot see either engine behavior: this runs the
+ * shipped statements against a real history with commits before, inside and
+ * after the window and checks the edits equal what the date filter selected.
  */
 
 import { execFileSync } from "node:child_process";
