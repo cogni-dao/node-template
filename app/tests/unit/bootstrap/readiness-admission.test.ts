@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   getContainer: vi.fn(),
   getNodeId: vi.fn(),
   verify: vi.fn(),
+  sdkStart: vi.fn(),
+  sdkOptions: vi.fn(),
 }));
 vi.mock("@/bootstrap/local-readiness-preflight", () => ({
   localReadinessPreflight: mocks.preflight,
@@ -15,8 +17,14 @@ vi.mock("@/bootstrap/local-readiness-preflight", () => ({
 vi.mock("@/bootstrap/container", () => ({ getContainer: mocks.getContainer }));
 vi.mock("@/shared/config", () => ({ getNodeId: mocks.getNodeId }));
 vi.mock("@opentelemetry/sdk-node", () => ({
+  tracing: { NoopSpanProcessor: class NoopSpanProcessor {} },
   NodeSDK: class {
-    async start() {}
+    constructor(options: unknown) {
+      mocks.sdkOptions(options);
+    }
+    start() {
+      return mocks.sdkStart();
+    }
   },
 }));
 vi.mock("@/bootstrap/healthchecks", () => ({
@@ -40,6 +48,7 @@ import { register } from "@/instrumentation.node";
 import type { ServiceAccountService } from "@/ports";
 import { RuntimeSecretError } from "@/shared/env/invariants";
 import { EnvValidationError } from "@/shared/env/server-env";
+import * as observability from "@/shared/observability";
 import { createLokiPushStream } from "@/shared/observability/server/loki-push-stream";
 
 type LokiGlobal = typeof globalThis & {
@@ -306,6 +315,81 @@ describe("readiness admission", () => {
     await expect(register()).rejects.toThrow("tenant unavailable");
     expect(exit).toHaveBeenCalledExactlyOnceWith(1);
   });
+  it.each(["construction", "emission"] as const)(
+    "retains remote rejection and exits when logger %s fails",
+    async (failure) => {
+      const original = Object.freeze(new Error("sensitive-sentinel-tenant"));
+      mocks.verify.mockRejectedValue(original);
+      const logger = vi.spyOn(observability, "makeLogger");
+      if (failure === "construction")
+        logger.mockImplementation(() => {
+          throw new Error("logger failed");
+        });
+      else
+        logger.mockReturnValue({
+          error: () => {
+            throw new Error("logger failed");
+          },
+        } as ReturnType<typeof observability.makeLogger>);
+      const exit = vi.fn();
+      const service = {} as ServiceAccountService;
+      const first = startSystemTenantAssertionOnBoot(service, {
+        force: true,
+        exit,
+      });
+      await expect(first).rejects.toBe(original);
+      expect(
+        startSystemTenantAssertionOnBoot(service, { force: true, exit }),
+      ).toBe(first);
+      await expect(first).rejects.toBe(original);
+      expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+    },
+  );
+  it("logs only safe tenant failure metadata", async () => {
+    vi.stubEnv("VITEST", "false");
+    vi.stubEnv("NODE_ENV", "production");
+    const sentinel = "sensitive-sentinel-tenant";
+    const original = Object.freeze(
+      Object.assign(new Error(sentinel, { cause: new Error(sentinel) }), {
+        headers: { authorization: sentinel },
+        url: `https://example.invalid/${sentinel}`,
+      }),
+    );
+    mocks.verify.mockRejectedValue(original);
+    const fetchFn = vi.fn<typeof fetch>(
+      async () => new Response(null, { status: 204 }),
+    );
+    const stream = createLokiPushStream({
+      env: { LOKI_PUSH_URL: "https://logs.invalid" },
+      fetchFn,
+    });
+    globalLoki.__cogniLokiPushInit = true;
+    globalLoki.__cogniLokiPushStream = stream;
+    const exit = vi.fn();
+    const service = {} as ServiceAccountService;
+    const first = startSystemTenantAssertionOnBoot(service, {
+      force: true,
+      exit,
+    });
+    await expect(first).rejects.toBe(original);
+    expect(
+      startSystemTenantAssertionOnBoot(service, { force: true, exit }),
+    ).toBe(first);
+    expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+    expect(fetchFn).not.toHaveBeenCalled();
+    stream?.flushNow();
+    const body = JSON.parse(fetchFn.mock.calls[0]?.[1]?.body as string);
+    expect(JSON.stringify(body)).not.toContain(sentinel);
+    const logs = body.streams[0].values.map((entry: [string, string]) =>
+      JSON.parse(entry[1]),
+    );
+    expect(logs).toEqual([
+      expect.objectContaining({
+        event: "startup.system_tenant.failed",
+        severity: "critical",
+      }),
+    ]);
+  });
   it("retains pending and rejected qualification when exit returns", async () => {
     let reject!: (error: Error) => void;
     mocks.verify.mockReturnValue(
@@ -329,5 +413,118 @@ describe("readiness admission", () => {
       startSystemTenantAssertionOnBoot(service, { force: true, exit }),
     ).rejects.toThrow("remote failure");
     expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+  });
+  it("configures native no-export processing while retaining a real processor", async () => {
+    vi.resetModules();
+    const { initOtelSdk } = await import("@/instrumentation.node");
+    await expect(initOtelSdk()).resolves.toBe(true);
+    expect(mocks.sdkOptions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        instrumentations: [],
+        logRecordProcessors: [],
+        spanProcessors: [
+          expect.objectContaining({
+            constructor: expect.objectContaining({ name: "NoopSpanProcessor" }),
+          }),
+        ],
+      }),
+    );
+  });
+  it("retains SDK failure for later required callers without logging its details", async () => {
+    vi.resetModules();
+    const original = Object.freeze(new Error("SDK_PRIVATE_SENTINEL"));
+    mocks.sdkStart.mockImplementation(() => {
+      throw original;
+    });
+    const logs: string[] = [];
+    vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
+      logs.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    const { initOtelSdk } = await import("@/instrumentation.node");
+    await expect(initOtelSdk({ failOnError: false })).resolves.toBe(false);
+    await expect(initOtelSdk({ failOnError: true })).rejects.toBe(original);
+    expect(mocks.sdkStart).toHaveBeenCalledOnce();
+    expect(JSON.stringify(logs)).not.toContain("SDK_PRIVATE_SENTINEL");
+    expect(consoleError).not.toHaveBeenCalled();
+    mocks.sdkStart.mockReset();
+  });
+  it("required SDK failure exits once and preserves the original error", async () => {
+    vi.resetModules();
+    vi.stubEnv("NEXT_RUNTIME", "nodejs");
+    vi.stubEnv("NODE_ENV", "production");
+    const original = new Error("SDK_PRIVATE_SENTINEL");
+    mocks.sdkStart.mockImplementation(() => {
+      throw original;
+    });
+    const output: string[] = [];
+    vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
+      output.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    const exit = vi
+      .spyOn(process, "exit")
+      .mockImplementation((() => undefined) as never);
+    const { register } = await import("@/instrumentation.node");
+    await expect(register()).rejects.toBe(original);
+    expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+    expect(mocks.getContainer).not.toHaveBeenCalled();
+    expect(JSON.stringify(output)).not.toContain("SDK_PRIVATE_SENTINEL");
+    mocks.sdkStart.mockReset();
+  });
+  it("real SDK keeps correlation IDs without exporting spans", async () => {
+    vi.useFakeTimers();
+    const http = await import("node:http");
+    const https = await import("node:https");
+    const httpRequest = vi.spyOn(http.default, "request");
+    const httpsRequest = vi.spyOn(https.default, "request");
+    const fetchFn = vi.spyOn(globalThis, "fetch");
+    const actual = await vi.importActual<
+      typeof import("@opentelemetry/sdk-node")
+    >("@opentelemetry/sdk-node");
+    const sdk = new actual.NodeSDK({
+      instrumentations: [],
+      spanProcessors: [new actual.tracing.NoopSpanProcessor()],
+      logRecordProcessors: [],
+    });
+    sdk.start();
+    const tracer = actual.api.trace.getTracer("readiness-test");
+    let traceId = "";
+    for (let i = 0; i < 520; i++) {
+      const span = tracer.startSpan("readyz");
+      traceId = span.spanContext().traceId;
+      span.end();
+    }
+    expect(traceId).not.toBe("00000000000000000000000000000000");
+    await vi.advanceTimersByTimeAsync(6000);
+    await sdk.shutdown();
+    expect(httpRequest).not.toHaveBeenCalled();
+    expect(httpsRequest).not.toHaveBeenCalled();
+    expect(fetchFn).not.toHaveBeenCalled();
+    actual.api.trace.disable();
+    vi.useRealTimers();
+  });
+  it("terminates safely when the native instrumentation import fails", async () => {
+    vi.resetModules();
+    vi.stubEnv("NEXT_RUNTIME", "nodejs");
+    const original = new Error("IMPORT_PRIVATE_SENTINEL");
+    vi.doMock("@/instrumentation.node", () => {
+      throw original;
+    });
+    const output = vi.spyOn(console, "error").mockImplementation(() => {});
+    const exit = vi
+      .spyOn(process, "exit")
+      .mockImplementation((() => undefined) as never);
+    const entry = await import("@/instrumentation");
+    await expect(entry.register()).rejects.toMatchObject({ cause: original });
+    expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+    expect(JSON.stringify(output.mock.calls)).not.toContain(
+      "IMPORT_PRIVATE_SENTINEL",
+    );
+    expect(output).toHaveBeenCalledOnce();
+    vi.doUnmock("@/instrumentation.node");
   });
 });

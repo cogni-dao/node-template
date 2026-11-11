@@ -70,14 +70,18 @@ export function startSystemTenantAssertionOnBoot(
     serviceAccountService,
     options.timeoutMs,
   ).catch((error: unknown) => {
-    makeLogger({ component: "startup-assertions" }).error(
-      {
-        event: "startup.system_tenant.failed",
-        severity: "critical",
-        err: error,
-      },
-      "boot assertion failed: cogni_system tenant not provisioned or unreachable — exiting so the pod crash-loops",
-    );
+    try {
+      makeLogger({ component: "startup-assertions" }).error(
+        {
+          event: "startup.system_tenant.failed",
+          severity: "critical",
+          errorCode: "SYSTEM_TENANT_QUALIFICATION_FAILED",
+        },
+        "boot assertion failed: cogni_system tenant not provisioned or unreachable — exiting so the pod crash-loops",
+      );
+    } catch {
+      // Diagnostics cannot prevent termination or replace the qualification error.
+    }
     exit(1);
     throw error;
   });
