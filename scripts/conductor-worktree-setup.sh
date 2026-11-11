@@ -259,7 +259,7 @@ warm_cognition_cache() {
   local cache=".cogni/.cognition-cache.md" attempt started
   started=$(date +%s)
   for attempt in 1 2 3; do
-    bash scripts/agent/session-cognition.sh >/dev/null 2>&1 || true
+    bash scripts/agent/session-cognition.sh </dev/null >/dev/null 2>&1 || true
     # Complete means the contract itself arrived, not just a non-empty map.
     if [[ -s "$cache" ]] && grep -q "<agent-contract" "$cache" && grep -q "<status-contract" "$cache"; then
       printf 'cognition cache warmed with a complete contract in %ss (attempt %s)\n' "$(($(date +%s) - started))" "$attempt"

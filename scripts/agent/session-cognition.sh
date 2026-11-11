@@ -80,8 +80,11 @@ emit_claude_context() {
 # The hook's JSON input names the SessionStart source (startup, resume, clear,
 # compact). Read it once; absent input counts as startup.
 HOOK_SOURCE="startup"
+hook_input=""
 if [ ! -t 0 ]; then
-  hook_input="$(cat 2>/dev/null || true)"
+  # Bounded read: a caller's stdin may stay open (e.g. a setup script), so never
+  # block on it. Hook input is one small JSON object, delivered at once.
+  IFS= read -r -d '' -t 1 hook_input || true
   if [ -n "$hook_input" ] && command -v jq >/dev/null 2>&1; then
     HOOK_SOURCE="$(printf '%s' "$hook_input" | jq -r '.source // "startup"' 2>/dev/null || printf startup)"
   fi

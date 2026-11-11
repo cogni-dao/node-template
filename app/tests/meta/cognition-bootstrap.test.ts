@@ -294,10 +294,18 @@ describe("session cognition hook", () => {
 
 		// A first boot that cannot load tells Claude why, through the same channel.
 		const keyless = path.join(root, "keyless");
-		mkdirSync(keyless, { recursive: true });
+		const offline = path.join(keyless, "bin");
+		mkdirSync(offline, { recursive: true });
+		// Hermetic: the fetch fails at once instead of reaching a real hub.
+		writeFileSync(path.join(offline, "curl"), "#!/bin/sh\nexit 22\n");
+		chmodSync(path.join(offline, "curl"), 0o755);
 		const keylessOut = execFileSync("bash", [LOADER], {
 			cwd: keyless,
-			env: { ...env, COGNI_NODE_API_KEY: "" },
+			env: {
+				...env,
+				COGNI_NODE_API_KEY: "",
+				PATH: `${offline}:${process.env.PATH ?? ""}`,
+			},
 			encoding: "utf8",
 		});
 		expect(
