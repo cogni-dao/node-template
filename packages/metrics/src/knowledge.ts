@@ -255,11 +255,12 @@ export function createGoalMetrics(deps: {
 			return p.measure === "edits" ? p.days * 86400 : 0;
 		},
 		paramsSchema: noInlineHistoryParams,
-		// State and scope make one call; edits make two (work items, atoms). Rows
-		// and bytes cap each statement; the service enforces the call count.
+		// State and scope make one call; edits make three (the window's commits,
+		// work items, atoms). Rows and bytes cap each statement; the service
+		// enforces the call count.
 		budget: {
 			timeoutMs: 15000,
-			maxSourceCalls: 2,
+			maxSourceCalls: 3,
 			maxRows: NO_INLINE_HISTORY_MAX_ROWS,
 			maxResponseBytes: NO_INLINE_HISTORY_MAX_BYTES,
 		},
