@@ -57,8 +57,6 @@ export { AvailabilityStrip, ProgressBar, Sparkline, StatusPill } from "./goals/m
 export { MetricEvidence, type MetricEvidenceProps } from "./goals/metric-evidence.js";
 export { KpiBranch, MetricRowView, NotServingGroup } from "./goals/metrics-parts.js";
 export {
-  bandFraction,
-  bandText,
   flagText,
   formatAge,
   groupByRole,
@@ -66,7 +64,6 @@ export {
   type MetricRow,
   type MetricsSummary,
   type MetricStatus,
-  metricRank,
   metricStatus,
   notServingRows,
   ROLE_META,
@@ -75,10 +72,7 @@ export {
   servedRows,
   sortGoals,
   sortKpis,
-  sortMetricRows,
-  statusRank,
   summarizeMetrics,
-  worstRowStatus,
 } from "./goals/metrics-view.js";
 export {
   attentionCount,

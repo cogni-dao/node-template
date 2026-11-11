@@ -261,7 +261,7 @@ function GoalRow({
   const measured = isMeasured(goal);
   // Until the reader toggles it, a row follows the data: open when measured (always on the goal page).
   const [choice, setChoice] = useState<boolean | null>(null);
-  const expanded = choice ?? (single || measured);
+  const expanded = choice ?? (single || measured || metrics);
   // A goal may bind one metric twice (a floor and a ceiling), so a card is its
   // position plus metric: if a refresh shifts the bindings, the chart closes
   // instead of silently showing another KPI.
@@ -289,7 +289,7 @@ function GoalRow({
             aria-hidden="true"
             className={`size-4 shrink-0 text-muted-foreground transition-transform ${expanded ? "rotate-90" : ""}`}
           />
-          <span className="min-w-0 flex-1 truncate font-medium text-sm">{goal.title}</span>
+          <span className={`min-w-0 flex-1 font-medium text-sm ${metrics ? "break-words" : "truncate"}`}>{goal.title}</span>
           <span className="shrink-0 text-muted-foreground text-xs tabular-nums">
             {goal.kpis.length ? `${goal.kpis.length} ${goal.kpis.length === 1 ? "KPI" : "KPIs"}` : "No KPIs"}
           </span>
@@ -322,6 +322,7 @@ function GoalRow({
                       kpi={kpi}
                       open={open === key}
                       chartId={chartId}
+                      wrap
                       onToggle={() => setOpen(open === key ? null : key)}
                     />
                     {hasMetricDetail(data) ? (
@@ -382,11 +383,14 @@ function KpiCard({
   kpi,
   open,
   chartId,
+  wrap = false,
   onToggle,
 }: {
   readonly kpi: GoalKpi;
   readonly open: boolean;
   readonly chartId: string;
+  /** Metrics view: the title and hint wrap instead of clipping. */
+  readonly wrap?: boolean;
   readonly onToggle: () => void;
 }) {
   const describedBy = useId();
@@ -426,7 +430,7 @@ function KpiCard({
         {[number ?? "No reading", STATUS_META[a.status].label, hint, reason].filter(Boolean).join(". ")}
       </span>
       <div aria-hidden="true" className="pointer-events-none flex flex-1 flex-col gap-3">
-        <span className="line-clamp-1 font-medium text-muted-foreground text-xs uppercase tracking-wider">{title}</span>
+        <span className={`${wrap ? "break-words" : "line-clamp-1"} font-medium text-muted-foreground text-xs uppercase tracking-wider`}>{title}</span>
         <div className="flex items-center justify-between gap-2">
           <div className="flex min-w-0 items-baseline gap-1.5">
             <span className={`font-semibold text-3xl tabular-nums tracking-tight ${muted ? "text-muted-foreground" : ""}`}>
@@ -436,7 +440,7 @@ function KpiCard({
           </div>
           <StatusPill status={a.status} />
         </div>
-        <span className="-mt-2 whitespace-nowrap text-muted-foreground text-xs tabular-nums">{hint}</span>
+        <span className={`-mt-2 ${wrap ? "" : "whitespace-nowrap"} text-muted-foreground text-xs tabular-nums`}>{hint}</span>
         <div className="mt-auto">
           {display === "progress" ? (
             <ProgressBar fraction={progressFraction(kpi)} label={markLabel} />

@@ -127,7 +127,7 @@ function setup(
 		now: () => NOW,
 		authorize: async (_action, d) => authorize(d),
 	});
-	return { service, calls };
+	return { service, calls, observations };
 }
 
 describe("serves and band schema (story.0033)", () => {
@@ -520,6 +520,24 @@ describe("goal read lists served metrics under their KPI", () => {
 		expect(s.calls.buckets).toBe(0);
 	});
 
+	it("lists a metric whose reading cannot be read as red, and keeps the rest of the list", async () => {
+		const kpi = definition("kpi");
+		const broken = definition("broken");
+		const fine = definition("fine");
+		const s = setup([kpi, broken, fine], { fine: [reading(fine, 1)] });
+		const real = s.observations.history;
+		s.observations.history = async (id: string, ...rest: [string, number]) => {
+			if (id === "broken") throw new Error("corrupt row");
+			return real(id, ...rest);
+		};
+		const read = await readGoalsProgress({ goals: goals(), metrics: s.service, environment: "test" });
+		expect(read.servedUnavailable).toBeUndefined();
+		expect(read.unbound?.map((u) => [u.metric.id, u.latest.viewState, u.latest.reason])).toEqual([
+			["broken", "error", "source_failed"],
+			["fine", "ok", null],
+		]);
+	});
+
 	it("never lists an unreadable metric, and lists a metric with a bad annex only as an orphan", async () => {
 		const kpi = definition("kpi");
 		const secret = definition("secret");
@@ -645,8 +663,8 @@ describe("goal read lists served metrics under their KPI", () => {
 		});
 		// A bet's KPI is a valid target (not unknown), but no goal card lists the metric.
 		expect(read.orphans?.map((o) => [o.metricId, o.reason])).toEqual([["m", "serves_bet_kpi"]]);
-		// The bet's own metric is a KPI, never unbound.
-		expect(read.unbound).toEqual([]);
+		// A bet-only KPI metric serves no goal KPI, so the read lists it rather than hiding it.
+		expect(read.unbound?.map((u) => u.metric.id)).toEqual(["bet-kpi"]);
 		expect(read.servedTruncated).toBe(false);
 		const unseen = await readGoalsProgress({
 			goals: {

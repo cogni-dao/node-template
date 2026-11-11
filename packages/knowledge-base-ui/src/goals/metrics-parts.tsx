@@ -42,10 +42,10 @@ function FlagChip({ flag }: { readonly flag: MetricFlag }) {
   return (
     <span
       data-flag={flag.kind}
-      className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border border-warning/40 bg-warning/15 px-2 py-0.5 font-medium text-[11px] text-warning leading-4"
+      className="inline-flex max-w-full items-start gap-1 break-words rounded-xl border border-warning/40 bg-warning/15 px-2 py-0.5 font-medium text-[11px] text-warning leading-4 [overflow-wrap:anywhere]"
     >
       <span aria-hidden="true">⚑</span>
-      {flagText(flag)}
+      <span className="min-w-0">{flagText(flag)}</span>
     </span>
   );
 }
@@ -54,7 +54,7 @@ function NoBandPill() {
   return (
     <span
       data-status="no_band"
-      className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border border-border bg-muted/60 px-2 py-0.5 font-medium text-[11px] text-muted-foreground leading-4"
+      className="inline-flex shrink-0 items-center gap-1 rounded-full border border-border bg-muted/60 px-2 py-0.5 font-medium text-[11px] text-muted-foreground leading-4"
     >
       <span aria-hidden="true">–</span>
       No band
@@ -83,12 +83,16 @@ export function MetricRowView({ row, nowIso }: { readonly row: MetricRow; readon
         {row.title}
       </Link>
       {status === "no_band" ? <NoBandPill /> : <StatusPill status={status} />}
-      <div className="col-span-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-muted-foreground text-xs">
-        <span
-          aria-label={number === null ? "No reading" : undefined}
-          className={`font-semibold text-sm tabular-nums ${muted || number === null ? "" : "text-foreground"}`}
-        >
-          {number === null ? "—" : number}
+      <div className="col-span-2 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-muted-foreground text-xs">
+        <span className={`font-semibold text-sm tabular-nums ${muted || number === null ? "" : "text-foreground"}`}>
+          {number === null ? (
+            <>
+              <span aria-hidden="true">—</span>
+              <span className="sr-only">No reading</span>
+            </>
+          ) : (
+            number
+          )}
           {number !== null && unit && unit !== "%" ? <span className="ml-1 font-normal text-muted-foreground text-xs">{unit}</span> : null}
         </span>
         {band && (

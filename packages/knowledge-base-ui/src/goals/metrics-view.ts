@@ -219,7 +219,7 @@ export function notServingRows(data: Pick<GoalsProgress, "orphans" | "unbound">)
 export function flagText(flag: MetricFlag): string {
   switch (flag.kind) {
     case "unbound":
-      return "Serves no KPI";
+      return "Serves no goal KPI";
     case "serves_unknown_kpi":
       return flag.kpi ? `Names a KPI no goal binds: ${flag.kpi}` : "Names a KPI no goal binds";
     case "serves_bet_kpi":

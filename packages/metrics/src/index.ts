@@ -35,6 +35,8 @@ export * from "./progress.js";
 
 /** Definitions one goal read scans for `serves`; a cut is reported as `truncated`. */
 export const SERVES_SCAN_MAX = 200;
+/** Definitions one goal read opens at once; reads stay bounded and keep their order. */
+const SERVING_CONCURRENCY = 8;
 const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
 function canonical(value: unknown): string {
@@ -205,6 +207,38 @@ export function createMetricService(deps: {
 			to: range.to,
 			buckets,
 		};
+	}
+	/** One definition as the goal read lists it; null when this caller may not read it. */
+	async function servingRow(d: MetricDefinition): Promise<ServingRow | null> {
+		try {
+			await authorize("read", d);
+		} catch (e) {
+			// A metric this caller may not read is not listed; an authority outage
+			// throws, and the goal read reports it as servedUnavailable.
+			if (e instanceof MetricError && e.status === 404) return null;
+			throw e;
+		}
+		try {
+			const view = await service.viewOf(d);
+			return {
+				definition: d,
+				assessment: view.bandAssessment ?? null,
+				latest: metricLatest(view),
+			};
+		} catch {
+			// One unreadable metric reads red; it never drops the whole list (absent is red).
+			return {
+				definition: d,
+				assessment: null,
+				latest: {
+					viewState: "error",
+					value: null,
+					unit: "",
+					observedAt: null,
+					reason: "source_failed",
+				},
+			};
+		}
 	}
 	const service = {
 		registry,
@@ -423,22 +457,17 @@ export function createMetricService(deps: {
 			let truncated = false;
 			while (scanned < SERVES_SCAN_MAX) {
 				const page = await definitions.list(50, cursor);
-				for (const d of page.items) {
-					scanned++;
-					try {
-						await authorize("read", d);
-					} catch (e) {
-						// A metric this caller may not read is not listed; an authority outage
-						// throws, and the goal read reports it as servedUnavailable.
-						if (e instanceof MetricError && e.status === 404) continue;
-						throw e;
+				scanned += page.items.length;
+				// A page reads in small concurrent chunks; results keep the page's order.
+				for (let i = 0; i < page.items.length; i += SERVING_CONCURRENCY) {
+					const rows = await Promise.all(
+						page.items.slice(i, i + SERVING_CONCURRENCY).map(servingRow),
+					);
+					for (const row of rows) {
+						if (!row) continue;
+						const d = row.definition;
+						(!d.serves && !d.annexInvalid?.length ? unbound : items).push(row);
 					}
-					const view = await service.viewOf(d);
-					(!d.serves && !d.annexInvalid?.length ? unbound : items).push({
-						definition: d,
-						assessment: view.bandAssessment ?? null,
-						latest: metricLatest(view),
-					});
 				}
 				if (!page.nextCursor) break;
 				cursor = page.nextCursor;

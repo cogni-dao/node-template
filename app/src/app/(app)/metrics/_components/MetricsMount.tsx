@@ -4,8 +4,8 @@
 /**
  * Module: `@app/(app)/metrics/_components/MetricsMount`
  * Purpose: This node's mount of the published Metrics view (`MetricsBoard`, story.0039).
- * Scope: One host (`LinkComponent: Link`) over the package-default cookie-session client at `/api/v1/metrics`. A fork that needs another client, `hrefs` or `queryKeyPrefix` changes only `METRICS_HOST`.
- * Invariants: Same client and query key as the goal entry page's board (`GOALS_QUERY_KEY`), so the goal read is one cache entry.
+ * Scope: Composition only, over the node's one Goals host (`(app)/_components/goals-host.ts`). A fork that needs another client, `hrefs` or `queryKeyPrefix` changes only that file.
+ * Invariants: ONE_CACHE_ENTRY (the same host and query key as the goal entry page's board).
  * Side-effects: IO (via the package's GoalsClient)
  * Links: packages/knowledge-base-ui/AGENTS.md
  * @internal
@@ -13,20 +13,14 @@
 
 "use client";
 
-import {
-  type GoalsHostOptions,
-  MetricsBoard,
-} from "@cogni/knowledge-base-ui/goals";
+import { MetricsBoard } from "@cogni/knowledge-base-ui/goals";
 import type { GoalsProgress } from "@cogni-dao/metrics/contracts";
-import Link from "next/link";
-
-/** Module-level so every render shares one identity. */
-const METRICS_HOST: GoalsHostOptions = { LinkComponent: Link };
+import { NODE_GOALS_HOST } from "../../_components/goals-host";
 
 export function MetricsMount({
   initialData,
 }: {
   readonly initialData?: GoalsProgress | undefined;
 }) {
-  return <MetricsBoard {...METRICS_HOST} initialData={initialData} />;
+  return <MetricsBoard {...NODE_GOALS_HOST} initialData={initialData} />;
 }

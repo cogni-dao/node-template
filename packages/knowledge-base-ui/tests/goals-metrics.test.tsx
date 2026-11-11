@@ -25,20 +25,19 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { GoalsBoard, MetricsBoard } from "../src/goals.js";
 import {
   bandFraction,
   flagText,
   formatAge,
-  GoalsBoard,
   type MetricRow,
-  MetricsBoard,
   metricRank,
   metricStatus,
   notServingRows,
   sortGoals,
   sortMetricRows,
   summarizeMetrics,
-} from "../src/goals.js";
+} from "../src/goals/metrics-view.js";
 import { goalFixture, kpiFixture, assessmentFixture } from "./_fixtures/goals-progress.js";
 
 afterEach(cleanup);
@@ -156,7 +155,7 @@ describe("MetricsBoard", () => {
     const group = container.querySelector('[data-group="not-serving"]') as HTMLElement;
     expect(ids(group.querySelectorAll("[data-metric]"), "data-metric")).toEqual(["m-loose-red", "m-lost", "m-loose"]);
     expect(group.querySelector('[data-metric="m-lost"] [data-flag="serves_unknown_kpi"]')?.textContent).toContain("no-such");
-    expect(group.querySelector('[data-metric="m-loose"] [data-flag="unbound"]')?.textContent).toContain("Serves no KPI");
+    expect(group.querySelector('[data-metric="m-loose"] [data-flag="unbound"]')?.textContent).toContain("Serves no goal KPI");
     // Unknown is not zero: a failed metric with no good value reads "—".
     expect(group.querySelector('[data-metric="m-lost"]')?.textContent).toContain("—");
     expect(within(group).getByRole("link", { name: "why" }).getAttribute("href")).toBe("/knowledge/goal-metrics-vs-telemetry");
@@ -184,6 +183,30 @@ describe("MetricsBoard", () => {
     const b = renderMetrics(down);
     expect(b.container.textContent).toContain("Metrics unavailable right now");
     expect(b.container.querySelector('[data-branch]')).toBeNull();
+  });
+
+  it("never clips or overflows: titles and flag chips wrap, and an unmeasured goal opens", () => {
+    const longId = "a-very-long-kpi-identifier-that-would-overflow-a-360px-row-if-it-never-wrapped";
+    const unmeasured = kpiFixture("k-un", "KPI with a long title that must wrap on a narrow screen", assessmentFixture("not_measured", { value: null }), null);
+    const data = GoalsProgressSchema.parse({
+      asOf: AS_OF,
+      environment: "t",
+      goals: [goalFixture("goal-un", "Goal with a long title that must wrap on a narrow screen", [unmeasured])],
+      orphans: [{ metricId: "m-long", kpi: longId, reason: "serves_unknown_kpi", assessment: null, latest: latest() }],
+      unbound: [],
+    });
+    const { container } = renderMetrics(data);
+    const chip = container.querySelector('[data-flag="serves_unknown_kpi"]') as HTMLElement;
+    expect(chip.textContent).toContain(longId);
+    expect(chip.className).toContain("break-words");
+    expect(chip.className).toContain("max-w-full");
+    expect(chip.className).not.toContain("whitespace-nowrap");
+    const goal = container.querySelector('[data-goal="goal-un"]') as HTMLElement;
+    expect(goal.innerHTML).not.toContain("truncate");
+    expect(goal.innerHTML).not.toContain("line-clamp");
+    // A goal with nothing measured still shows its KPIs and their metrics.
+    expect(within(goal).getAllByRole("button")[0]?.getAttribute("aria-expanded")).toBe("true");
+    expect(goal.querySelector('[data-branch="empty"]')).not.toBeNull();
   });
 
   it("leaves the Goals view as it was: server order, no metric branches", () => {

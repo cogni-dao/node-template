@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 /**
- * One goal-progress read model for the Goals tab, HTTP and agent tools. Nodes
+ * One goal-progress read model for the Goals and Metrics views, HTTP and agent tools. Nodes
  * inject where goals and hypotheses live; thresholds never write verdicts.
  * Invariants: SERVED_BY_TYPED_LINK (a KPI lists the registered metrics whose
  * `serves.kpi` names it, joined at read time from the stored spec, never from a
@@ -11,7 +11,7 @@
  * invalid, is listed in `orphans` with its assessment and the zod issue paths);
  * SERVED_NEVER_FAILS_READ (a serving() failure, for example an authority
  * outage, leaves `served`/`orphans`/`unbound` absent and sets `servedUnavailable`);
- * UNBOUND_LISTED (a metric with no `serves` that no goal or bet binds as a KPI is listed in `unbound`, so the Metrics page
+ * UNBOUND_LISTED (a metric with no `serves` that no goal binds as a KPI is listed in `unbound`, so the Metrics page
  * and agents see every metric once; story.0039).
  */
 import { assessKpi } from "./assess.js";
@@ -241,9 +241,9 @@ export async function readGoalsProgress(deps: {
 		...(serving
 			? {
 					orphans,
-					// A metric a goal or bet binds as a KPI is the KPI, not bloat.
+					// A goal's KPI metric is the KPI, not bloat. A bet-only KPI metric serves no goal KPI, so it is listed.
 					unbound: serving.unbound
-						.filter((x) => !boundKpis.has(x.definition.id))
+						.filter((x) => !goalKpis.has(x.definition.id))
 						.map((x) => ({
 						metric: {
 							id: x.definition.id,

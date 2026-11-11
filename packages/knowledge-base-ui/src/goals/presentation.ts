@@ -3,7 +3,7 @@
 
 /**
  * Module: `@cogni/knowledge-base-ui/goals (presentation)`
- * Purpose: Pure presentation for the Goals tab: status words and symbols, plain
+ * Purpose: Pure presentation for the Goals and Metrics views: status words and symbols, plain
  *   reason text, number/date formatting, summary counts, aligned history
  *   windows (hourly 1D/1W, daily 1M/3M) and the hero label.
  * Scope: Pure functions over `@cogni-dao/metrics/contracts` shapes. Never

@@ -417,7 +417,6 @@ export const MetricHistorySchema = z.object({
 });
 export type MetricHistory = z.infer<typeof MetricHistorySchema>;
 
-/** One goal-progress read model shared by the Metrics page, HTTP and agent tools. */
 /**
  * A metric's latest reading as the goal read lists it: the state of the newest
  * attempt, and the last good value with its time. Present for every listed
@@ -471,7 +470,7 @@ export const MetricOrphanSchema = z.object({
 	latest: MetricLatestSchema.optional(),
 });
 export type MetricOrphan = z.infer<typeof MetricOrphanSchema>;
-/** A registered metric that declares no `serves`: it explains no KPI (goal-metrics-vs-telemetry axiom 3). */
+/** A registered metric that declares no `serves` and that no goal binds as a KPI: it explains no goal KPI (goal-metrics-vs-telemetry axiom 3). A bet-only KPI metric is listed too. */
 export const UnboundMetricSchema = z.object({
 	metric: z.object({
 		id: z.string(),
@@ -483,6 +482,7 @@ export const UnboundMetricSchema = z.object({
 	latest: MetricLatestSchema,
 });
 export type UnboundMetric = z.infer<typeof UnboundMetricSchema>;
+/** One goal-progress read model shared by the Goals and Metrics views, HTTP and agent tools. */
 export const GoalKpiSchema = z.object({
 	binding: KpiBindingSchema,
 	metric: z
