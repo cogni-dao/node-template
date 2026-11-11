@@ -266,6 +266,43 @@ describe("session cognition hook", () => {
 		expect(
 			JSON.parse(freshOut).hookSpecificOutput.additionalContext,
 		).toHaveLength(overCapBytes);
+
+		// Resume, clear and compact keep the import's copy: no duplicate.
+		for (const source of ["resume", "clear", "compact"]) {
+			expect(
+				execFileSync("bash", [LOADER], {
+					cwd: fresh,
+					env,
+					encoding: "utf8",
+					input: JSON.stringify({ hook_event_name: "SessionStart", source }),
+				}),
+			).toBe("");
+		}
+		expect(
+			JSON.parse(
+				execFileSync("bash", [LOADER], {
+					cwd: fresh,
+					env,
+					encoding: "utf8",
+					input: JSON.stringify({
+						hook_event_name: "SessionStart",
+						source: "startup",
+					}),
+				}),
+			).hookSpecificOutput.additionalContext,
+		).toHaveLength(overCapBytes);
+
+		// A first boot that cannot load tells Claude why, through the same channel.
+		const keyless = path.join(root, "keyless");
+		mkdirSync(keyless, { recursive: true });
+		const keylessOut = execFileSync("bash", [LOADER], {
+			cwd: keyless,
+			env: { ...env, COGNI_NODE_API_KEY: "" },
+			encoding: "utf8",
+		});
+		expect(
+			JSON.parse(keylessOut).hookSpecificOutput.additionalContext,
+		).toContain("no node credentials yet");
 	});
 
 	it("reconciles the legacy user hook idempotently", () => {

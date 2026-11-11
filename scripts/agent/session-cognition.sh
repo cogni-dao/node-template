@@ -77,10 +77,22 @@ emit_claude_context() {
     | jq -Rs '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:.}}'
 }
 
-# cache_is_fresh_for_this_boot — the cache was written in the last 10 minutes,
-# e.g. by workspace setup racing this session's start, so the import may have
-# missed it.
+# The hook's JSON input names the SessionStart source (startup, resume, clear,
+# compact). Read it once; absent input counts as startup.
+HOOK_SOURCE="startup"
+if [ ! -t 0 ]; then
+  hook_input="$(cat 2>/dev/null || true)"
+  if [ -n "$hook_input" ] && command -v jq >/dev/null 2>&1; then
+    HOOK_SOURCE="$(printf '%s' "$hook_input" | jq -r '.source // "startup"' 2>/dev/null || printf startup)"
+  fi
+fi
+
+# cache_is_fresh_for_this_boot — a new session (source startup) and a cache
+# written in the last 10 minutes, e.g. by workspace setup racing this start, so
+# the import may have missed it. Resume, clear and compact keep the import's
+# copy and get nothing here.
 cache_is_fresh_for_this_boot() {
+  [ "$HOOK_SOURCE" = "startup" ] || return 1
   [ -n "$(find "$CACHE_FILE" -mmin -10 2>/dev/null)" ]
 }
 
@@ -189,7 +201,7 @@ fi
 # First boot AND fetch failed. Be honest, never cry wolf — separate a setup gap
 # (no key) from a key-present failure, without a second network probe.
 if [ -z "$AGENT_KEY" ]; then
-  emit_agent_context "$(cat <<EOF
+  notice="$(cat <<EOF
 COGNI COGNITION — no node credentials yet (first boot)
 
 No COGNI_NODE_API_KEY was found, so this session could not load its cognition
@@ -206,7 +218,7 @@ survives hub outages.)
 EOF
 )"
 else
-  emit_agent_context "$(cat <<EOF
+  notice="$(cat <<EOF
 COGNI COGNITION — could not load bundle (first boot, no cache)
 
 A credential IS present, so this is NOT a missing-key setup problem. Either the
@@ -219,3 +231,7 @@ cognition caches itself once it loads, and then survives hub outages.
 EOF
 )"
 fi
+# Both harnesses see the notice: Codex on stdout, Claude through its structured
+# channel (this boot's import found no cache either).
+emit_agent_context "$notice"
+emit_claude_context "$notice"
