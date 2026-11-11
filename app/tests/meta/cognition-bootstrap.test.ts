@@ -162,7 +162,7 @@ describe("session cognition hook", () => {
 		execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: clone });
 		const worktree = path.join(root, "wt");
 		execFileSync("git", ["worktree", "add", "-q", "--detach", worktree], { cwd: clone });
-		const complete = "# bundle\n<agent-contract>\n<status-contract>\n</status-contract>\n</agent-contract>";
+		const complete = "# bundle\n## The agent-contract\n<agent-contract>\n<status-contract>\n</status-contract>\n</agent-contract>";
 		mkdirSync(path.join(clone, ".cogni"), { recursive: true });
 		writeFileSync(path.join(clone, CACHE_PATH), `${complete}\n`);
 		const offline = path.join(root, "bin");
@@ -177,7 +177,9 @@ describe("session cognition hook", () => {
 			PATH: `${offline}:${process.env.PATH ?? ""}`,
 		};
 		const out = execFileSync("bash", [LOADER], { cwd: worktree, env, encoding: "utf8" });
-		expect(JSON.parse(out).hookSpecificOutput.additionalContext).toBe(complete);
+		const delivered: string = JSON.parse(out).hookSpecificOutput.additionalContext;
+		expect(delivered).toContain("<agent-contract>");
+		expect(delivered).toContain("</agent-contract>");
 		expect(readFileSync(path.join(worktree, CACHE_PATH), "utf8")).toBe(`${complete}\n`);
 
 		// An incomplete root copy is never presented as the contract.
@@ -186,6 +188,15 @@ describe("session cognition hook", () => {
 		writeFileSync(path.join(clone, CACHE_PATH), "map only\n");
 		const recovery = execFileSync("bash", [LOADER], { cwd: second, env, encoding: "utf8" });
 		expect(JSON.parse(recovery).hookSpecificOutput.additionalContext).toContain("could not load bundle");
+	});
+
+	it("copies the last complete bundle into every new Conductor worktree (bug.0018)", () => {
+		const include = readFileSync(path.join(REPO_ROOT, ".worktreeinclude"), "utf8")
+			.split("\n")
+			.map((line) => line.trim());
+		expect(include).toContain(CACHE_PATH);
+		// .worktreeinclude replaces Conductor's default pattern; env files still copy.
+		expect(include).toContain(".env*");
 	});
 
 	it("warms the cognition cache in workspace setup before anything slow (bug.0018)", () => {
@@ -291,17 +302,25 @@ describe("session cognition hook", () => {
 
 		// A cache written moments ago (workspace setup racing this boot) may have
 		// missed the import: Claude gets it whole through the structured channel.
+		// Claude Code shows at most 10,000 characters of hook context, so only the
+		// agent-contract section goes, never the whole (larger) bundle.
 		const fresh = path.join(root, "fresh");
 		mkdirSync(path.join(fresh, ".cogni"), { recursive: true });
-		writeFileSync(path.join(fresh, CACHE_PATH), "x".repeat(overCapBytes));
+		const contract =
+			"## The agent-contract\n<agent-contract>\n<status-contract>\nrules\n</status-contract>\n</agent-contract>";
+		writeFileSync(
+			path.join(fresh, CACHE_PATH),
+			`# head\n${contract}\n## Governing index\n${"x".repeat(overCapBytes)}\n`,
+		);
 		const freshOut = execFileSync("bash", [LOADER], {
 			cwd: fresh,
 			env,
 			encoding: "utf8",
 		});
-		expect(
-			JSON.parse(freshOut).hookSpecificOutput.additionalContext,
-		).toHaveLength(overCapBytes);
+		const shown: string = JSON.parse(freshOut).hookSpecificOutput.additionalContext;
+		expect(shown).toContain(contract);
+		expect(shown).not.toContain("Governing index\nxxx");
+		expect(shown.length).toBeLessThan(10_000);
 
 		// Resume, clear and compact keep the import's copy: no duplicate.
 		for (const source of ["resume", "clear", "compact"]) {
@@ -326,7 +345,15 @@ describe("session cognition hook", () => {
 					}),
 				}),
 			).hookSpecificOutput.additionalContext,
-		).toHaveLength(overCapBytes);
+		).toContain(contract);
+
+		// An oversized payload with no contract is never sent as a truncated preview.
+		const blob = path.join(root, "blob");
+		mkdirSync(path.join(blob, ".cogni"), { recursive: true });
+		writeFileSync(path.join(blob, CACHE_PATH), "x".repeat(overCapBytes));
+		expect(
+			execFileSync("bash", [LOADER], { cwd: blob, env, encoding: "utf8" }),
+		).toBe("");
 
 		// A first boot that cannot load tells Claude why, through the same channel.
 		const keyless = path.join(root, "keyless");
