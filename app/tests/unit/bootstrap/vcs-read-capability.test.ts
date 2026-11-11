@@ -40,15 +40,22 @@ const MERGED_PR = {
   base: { ref: "main" },
 };
 
+/** Routes by URL path; the first matching key wins. Unmatched paths are 404. */
+function routes(table: [RegExp, unknown, number?][]) {
+  return vi.fn(async (url: string | URL | Request, _init?: RequestInit) => {
+    const path = String(url).replace("https://api.github.com", "");
+    const hit = table.find(([re]) => re.test(path));
+    return hit ? jsonResponse(hit[1], hit[2] ?? 200) : jsonResponse({ message: "Not Found" }, 404);
+  });
+}
+const CLOSED_LIST = /\/pulls\?state=closed/;
+const LISTED_PR = { ...MERGED_PR, merged: undefined };
+
 describe("createGithubReadVcsCapability.getPr", () => {
-  it("maps a merged PR and calls the unauthenticated pulls endpoint", async () => {
-    const f = fakeFetch(MERGED_PR);
+  it("answers from one closed-PR list, unauthenticated, and reuses it", async () => {
+    const f = routes([[CLOSED_LIST, [LISTED_PR]]]);
     const vcs = createGithubReadVcsCapability(f as unknown as typeof fetch);
-    const pr = await vcs.getPr({
-      owner: "Cogni-DAO",
-      repo: "node-template",
-      prNumber: 7,
-    });
+    const pr = await vcs.getPr({ owner: "Cogni-DAO", repo: "node-template", prNumber: 7 });
     expect(pr).toEqual({
       number: 7,
       title: "feat: x",
@@ -60,92 +67,89 @@ describe("createGithubReadVcsCapability.getPr", () => {
       headSha: "h".repeat(40),
       baseBranch: "main",
     });
+    await vcs.getPr({ owner: "Cogni-DAO", repo: "node-template", prNumber: 7 });
+    expect(f).toHaveBeenCalledTimes(1);
     const [url, init] = f.mock.calls[0] ?? [];
-    expect(url).toBe(
-      "https://api.github.com/repos/Cogni-DAO/node-template/pulls/7"
+    expect(String(url)).toBe(
+      "https://api.github.com/repos/Cogni-DAO/node-template/pulls?state=closed&sort=updated&direction=desc&per_page=100"
     );
-    const headers = (init?.headers ?? {}) as Record<string, string>;
-    expect(headers.Authorization).toBeUndefined();
+    expect(((init?.headers ?? {}) as Record<string, string>).Authorization).toBeUndefined();
   });
 
-  it("maps an open PR and drops GitHub's test-merge SHA", async () => {
-    const f = fakeFetch({
-      ...MERGED_PR,
-      state: "open",
-      merged: false,
-      merged_at: null,
-      merge_commit_sha: "t".repeat(40),
-    });
+  it("refreshes the closed-PR list after 10 minutes", async () => {
+    let t = 0;
+    const f = routes([[CLOSED_LIST, [LISTED_PR]]]);
+    const vcs = createGithubReadVcsCapability(f as unknown as typeof fetch, () => t);
+    await vcs.getPr({ owner: "o", repo: "r", prNumber: 7 });
+    t = 10 * 60_000 + 1;
+    await vcs.getPr({ owner: "o", repo: "r", prNumber: 7 });
+    expect(f).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads an unlisted (open) PR on its own and drops GitHub's test-merge SHA", async () => {
+    const f = routes([
+      [CLOSED_LIST, []],
+      [/\/pulls\/7$/, { ...MERGED_PR, state: "open", merged: false, merged_at: null, merge_commit_sha: "t".repeat(40) }],
+    ]);
     const vcs = createGithubReadVcsCapability(f as unknown as typeof fetch);
     const pr = await vcs.getPr({ owner: "o", repo: "r", prNumber: 7 });
-    expect(pr).toMatchObject({
-      state: "open",
-      merged: false,
-      mergedAt: null,
-      mergeCommitSha: null,
-    });
+    expect(pr).toMatchObject({ state: "open", merged: false, mergedAt: null, mergeCommitSha: null });
   });
 
-  it("throws with the status code on 404", async () => {
-    const vcs = createGithubReadVcsCapability(
-      fakeFetch({ message: "Not Found" }, 404) as unknown as typeof fetch
+  it("throws with the status code on 404 and on 403 rate limit", async () => {
+    const missing = createGithubReadVcsCapability(routes([[CLOSED_LIST, []]]) as unknown as typeof fetch);
+    await expect(missing.getPr({ owner: "o", repo: "r", prNumber: 999 })).rejects.toThrow("404");
+    const limited = createGithubReadVcsCapability(
+      routes([[/./, { message: "rate limit exceeded" }, 403]]) as unknown as typeof fetch
     );
-    await expect(
-      vcs.getPr({ owner: "o", repo: "r", prNumber: 999 })
-    ).rejects.toThrow("404");
-  });
-
-  it("throws with the status code on 403 rate limit", async () => {
-    const vcs = createGithubReadVcsCapability(
-      fakeFetch({ message: "rate limit exceeded" }, 403) as unknown as typeof fetch
-    );
-    await expect(
-      vcs.getPr({ owner: "o", repo: "r", prNumber: 1 })
-    ).rejects.toThrow("403");
+    await expect(limited.getPr({ owner: "o", repo: "r", prNumber: 1 })).rejects.toThrow("403");
   });
 });
 
 describe("createGithubReadVcsCapability.compareCommits", () => {
+  const COMMITS = /\/commits\?sha=/;
+
+  it("finds a recent merge in one lineage read of the head and reuses it", async () => {
+    const f = routes([[COMMITS, [{ sha: "BBB" }, { sha: "AAA" }]]]);
+    const vcs = createGithubReadVcsCapability(f as unknown as typeof fetch);
+    const ref = { owner: "o", repo: "r", head: "bbb" };
+    expect(await vcs.compareCommits({ ...ref, base: "aaa" })).toEqual({ status: "ahead", contains: true });
+    expect(await vcs.compareCommits({ ...ref, base: "AAA" })).toEqual({ status: "ahead", contains: true });
+    expect(f).toHaveBeenCalledTimes(1);
+  });
+
+  it("is identical without a request when base equals head", async () => {
+    const f = routes([]);
+    const vcs = createGithubReadVcsCapability(f as unknown as typeof fetch);
+    expect(await vcs.compareCommits({ owner: "o", repo: "r", base: "abc", head: "ABC" })).toEqual({
+      status: "identical",
+      contains: true,
+    });
+    expect(f).not.toHaveBeenCalled();
+  });
+
   const cases = [
     { status: "ahead", contains: true },
-    { status: "identical", contains: true },
     { status: "behind", contains: false },
     { status: "diverged", contains: false },
   ] as const;
-
   for (const c of cases) {
-    it(`maps ${c.status} to contains=${c.contains}`, async () => {
-      const f = fakeFetch({ status: c.status });
+    it(`falls back to compare for an older commit: ${c.status} → contains=${c.contains}`, async () => {
+      const f = routes([[COMMITS, [{ sha: "bbb" }]], [/\/compare\//, { status: c.status }]]);
       const vcs = createGithubReadVcsCapability(f as unknown as typeof fetch);
-      const out = await vcs.compareCommits({
-        owner: "Cogni-DAO",
-        repo: "node-template",
-        base: "aaa",
-        head: "bbb",
-      });
+      const out = await vcs.compareCommits({ owner: "Cogni-DAO", repo: "node-template", base: "aaa", head: "bbb" });
       expect(out).toEqual({ status: c.status, contains: c.contains });
-      expect(f.mock.calls[0]?.[0]).toBe(
+      expect(String(f.mock.calls[1]?.[0])).toBe(
         "https://api.github.com/repos/Cogni-DAO/node-template/compare/aaa...bbb"
       );
     });
   }
 
-  it("throws with the status code on 404", async () => {
-    const vcs = createGithubReadVcsCapability(
-      fakeFetch({ message: "Not Found" }, 404) as unknown as typeof fetch
-    );
-    await expect(
-      vcs.compareCommits({ owner: "o", repo: "r", base: "a", head: "b" })
-    ).rejects.toThrow("404");
-  });
-
   it("throws with the status code on 403", async () => {
     const vcs = createGithubReadVcsCapability(
-      fakeFetch({ message: "rate limit" }, 403) as unknown as typeof fetch
+      routes([[/./, { message: "rate limit" }, 403]]) as unknown as typeof fetch
     );
-    await expect(
-      vcs.compareCommits({ owner: "o", repo: "r", base: "a", head: "b" })
-    ).rejects.toThrow("403");
+    await expect(vcs.compareCommits({ owner: "o", repo: "r", base: "a", head: "b" })).rejects.toThrow("403");
   });
 });
 
