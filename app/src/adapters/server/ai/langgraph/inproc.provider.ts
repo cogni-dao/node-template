@@ -12,6 +12,9 @@
  *   - NODE_BUNDLE_IS_CANONICAL: Resolves BoundTool from injected node bundle (CORE_TOOL_BUNDLE [+ POLY_TOOL_BUNDLE for poly]); never iterates the global TOOL_CATALOG (which is per-package and can drift behind per-node bundles).
  *   - DENY_BY_DEFAULT: Tool policy explicitly provided per graph
  *   - MCP_VIA_ASYNC_SOURCE: MCP tools resolved via async getMcpToolSource() function (shared cache with reconnect-on-error)
+ *   - SECRET_ARGS_MASK_MODEL_CALLS: a run that offers any tool whose contract declares `secretArgs` masks every model
+ *     call of that run (`maskContent` on the LlmCaller), because the model's own tool call and the next call that resends
+ *     it carry the raw argument to the gateway's Langfuse logger. The flag is run-scoped and set once the offered tools are known.
  *   - CATALOG_REPORT_SEAM: a catalog entry's `report` (not a graph name) decides whether the run's structured
  *     telemetry is logged as registered events and echoed onto the stream; graphs never touch the logger or ALS.
  * Side-effects: IO (executes graphs via package runner, MCP tool resolution via HTTP)
@@ -34,7 +37,7 @@ import {
   createToolAllowlistPolicy,
   createToolRunner,
 } from "@cogni/ai-core";
-import type { CatalogBoundTool } from "@cogni/ai-tools";
+import { type CatalogBoundTool, declaresSecretArgs } from "@cogni/ai-tools";
 import {
   type CompletionFn,
   type CreateGraphFn,
@@ -164,6 +167,8 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
   private readonly log: Logger;
   private readonly catalog: LangGraphCatalog<CreateGraphFn>;
   private readonly boundToolMap: ReadonlyMap<string, CatalogBoundTool>;
+  /** Ids of node-bundle tools whose contract declares `secretArgs`. */
+  private readonly secretToolIds: ReadonlySet<string>;
 
   constructor(
     private readonly adapter: CompletionUnitAdapter,
@@ -182,12 +187,22 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
       >
     >,
     private readonly authority?: ProviderAgentAuthority,
+    /** Graphs this node adds to the package catalog (never overrides a package entry). */
+    nodeCatalog: LangGraphCatalog<CreateGraphFn> = {},
   ) {
     this.log = makeLogger({ component: "LangGraphInProcProvider" });
     this.boundToolMap = new Map(nodeBundle.map((bt) => [bt.contract.name, bt]));
+    this.secretToolIds = new Set(
+      nodeBundle
+        .filter((bt) => declaresSecretArgs(bt.contract))
+        .map((bt) => bt.contract.name),
+    );
 
-    // Use catalog from package (single source of truth)
-    this.catalog = LANGGRAPH_CATALOG as LangGraphCatalog<CreateGraphFn>;
+    // Use catalog from package (single source of truth), plus this node's own graphs
+    this.catalog = {
+      ...nodeCatalog,
+      ...(LANGGRAPH_CATALOG as LangGraphCatalog<CreateGraphFn>),
+    };
 
     this.log.debug(
       {
@@ -224,8 +239,11 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
       "LangGraphInProcProvider.runGraph routing to package runner",
     );
 
+    // Run-scoped mask flag: set once the offered tools are known (below), read on every model call.
+    const modelCallMask = { on: false };
+
     // Create completion function wrapping adapter
-    const completionFn = this.createCompletionFn(req);
+    const completionFn = this.createCompletionFn(req, modelCallMask);
 
     // P0 Contract: undefined => catalog default, [] => deny-all, [...] => exact
     const catalogToolIds = entry.toolIds;
@@ -383,6 +401,11 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
       // Combined tool IDs for allowlist: native catalog tools + MCP tools
       const allToolIds = [...offeredToolIdList, ...offeredMcpToolIds];
 
+      // SECRET_ARGS_MASK_MODEL_CALLS: any offered secret tool masks every model call of this run.
+      modelCallMask.on = offeredToolIdList.some((id) =>
+        this.secretToolIds.has(id),
+      );
+
       // Get catalog tools for contract extraction from the injected node bundle
       // (per NODE_BUNDLE_IS_CANONICAL — TOOL_CATALOG only has core tools post-bug.0319 ckpt 2)
       const catalogTools = catalogToolIds
@@ -451,6 +474,8 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
                 })
               : await toolRunner.exec(name, args);
           if (!result.ok) {
+            // A secret tool's error text is scrubbed, but no text of it is logged: the code and receipt code suffice.
+            const secretTool = this.secretToolIds.has(name);
             this.log.warn(
               {
                 event: EVENT_NAMES.AI_TOOL_CALL_ERROR,
@@ -458,7 +483,10 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
                 graphName,
                 tool: name,
                 errorCode: result.errorCode,
-                safeMessage: result.safeMessage.slice(0, 300),
+                ...(result.receipt ? { receiptCode: result.receipt.code } : {}),
+                ...(secretTool
+                  ? {}
+                  : { safeMessage: result.safeMessage.slice(0, 300) }),
               },
               "tool call failed",
             );
@@ -713,6 +741,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
    */
   private createCompletionFn(
     req: GraphRunRequest,
+    modelCallMask: { readonly on: boolean },
   ): CompletionFn<LlmToolDefinition> {
     const { runId, graphId } = req;
     const attempt = 0; // P0_ATTEMPT_FREEZE
@@ -732,6 +761,8 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
           ...(params.abortSignal && { abortSignal: params.abortSignal }),
           ...(params.tools?.length && { tools: [...params.tools] }),
           ...(params.toolChoice !== undefined && { toolChoice: params.toolChoice }),
+          // Read per call: the flag is set after the offered tools are known, before the first model call.
+          ...(modelCallMask.on && { maskContent: true }),
         });
       })();
 

@@ -142,6 +142,10 @@ import {
 	getTestOnChainVerifier,
 	getTestOperatorWallet,
 } from "@/adapters/test";
+import {
+	NODE_LOCAL_TOOL_BINDINGS,
+	NODE_LOCAL_TOOL_BUNDLE,
+} from "@/bootstrap/ai/secret-probe";
 import { createToolBindings } from "@/bootstrap/ai/tool-bindings";
 import { createBoundToolSource } from "@/bootstrap/ai/tool-source.factory";
 import {
@@ -973,7 +977,10 @@ function createContainer(): Container {
 		metrics: () => goalMetrics,
 		goalProgress,
 	});
-	const toolSource = createBoundToolSource([...CORE_TOOL_BUNDLE], { ...toolBindings, ...metricTools.bindings });
+	const toolSource = createBoundToolSource(
+		[...CORE_TOOL_BUNDLE, ...NODE_LOCAL_TOOL_BUNDLE],
+		{ ...toolBindings, ...metricTools.bindings, ...NODE_LOCAL_TOOL_BINDINGS },
+	);
 
 	// Config: rethrow in dev/test for diagnosis, respond_500 in production for safety
 	const config: ContainerConfig = {
