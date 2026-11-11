@@ -161,7 +161,7 @@ describe("the route door (real wrapper, real authorizeRoute)", () => {
     // The refusal is named on its own, with a fixed code and no secret; allowed reads of humans and existing agents are not logged one by one.
     const denied = log.warn.mock.calls.map(([f]) => f as Record<string, unknown>).filter((f) => f.event === "agent.knowledge_read.denied");
     expect(denied).toHaveLength(2);
-    expect(denied[0]).toEqual({ event: "agent.knowledge_read.denied", principal: AGENT, routeId: "work.items.patch", code: "policy_denied" });
+    expect(denied[0]).toEqual({ event: "agent.knowledge_read.denied", principal: AGENT, routeId: "work.items.patch", code: "policy_denied", reason: "no_role" });
     const authz = [...log.info.mock.calls].map(([f]) => f as Record<string, unknown>).filter((f) => f.event === "agent_tool.authz" && f.tool === "knowledge.read");
     expect(authz).toEqual([expect.objectContaining({ decision: "allow", reason: "role", principal: AGENT })]);
   });
@@ -217,7 +217,7 @@ describe("the route door (real wrapper, real authorizeRoute)", () => {
     expect((await chat(user("bearer", "other-agent"))).status).toBe(200);
     expect((await chat(user("session", "human-1"))).status).toBe(200);
     const denied = log.warn.mock.calls.map(([f]) => f as Record<string, unknown>).filter((f) => f.code === "service_key_route_denied");
-    expect(denied[0]).toEqual({ event: "agent.knowledge_read.denied", principal: AGENT, routeId: "ai.chat", code: "service_key_route_denied" });
+    expect(denied[0]).toEqual({ event: "agent.knowledge_read.denied", principal: AGENT, routeId: "ai.chat", code: "service_key_route_denied", reason: "route_has_no_knowledge_read_door" });
   });
 
   it("the service-key gate is 503 on a store outage, never an allow", async () => {
@@ -228,5 +228,34 @@ describe("the route door (real wrapper, real authorizeRoute)", () => {
     )(new NextRequest("https://node.example/api/v1/ai/chat", { method: "POST" }));
     expect(res.status).toBe(503);
     expect(handler).not.toHaveBeenCalled();
+    // The outage is logged once, with the route, the code and the reason.
+    const warned = log.warn.mock.calls.map(([f]) => f as Record<string, unknown>).filter((f) => f.event === "agent.knowledge_read.denied");
+    expect(warned).toEqual([{ event: "agent.knowledge_read.denied", principal: AGENT, routeId: "ai.chat", code: "authz_unavailable", reason: "store_unavailable" }]);
+  });
+
+  it("fail closed like the door: an identity with no `via` is a bearer for the service-key gate", async () => {
+    state.services.add(AGENT);
+    const chat = (u: SessionUser) =>
+      wrapRouteHandlerWithLogging(
+        { routeId: "ai.chat", auth: { mode: "required", getSessionUser: async () => u } },
+        handler
+      )(new NextRequest("https://node.example/api/v1/ai/chat", { method: "POST" }));
+    expect((await chat(user(undefined))).status).toBe(403);
+    expect(handler).not.toHaveBeenCalled();
+    expect((await chat(user(undefined, "other-agent"))).status).toBe(200);
+  });
+
+  it("log budget: a refused door call and a refused service-key call each log at most 3 lines (start, one decision, end)", async () => {
+    const lines = () => log.info.mock.calls.length + log.warn.mock.calls.length + log.error.mock.calls.length + log.debug.mock.calls.length;
+    state.services.add(AGENT);
+    await call("knowledge.read", user("bearer"));
+    expect(lines()).toBeLessThanOrEqual(3);
+    vi.clearAllMocks();
+    log.child.mockReturnValue(log);
+    await wrapRouteHandlerWithLogging(
+      { routeId: "ai.chat", auth: { mode: "required", getSessionUser: async () => user("bearer") } },
+      handler
+    )(new NextRequest("https://node.example/api/v1/ai/chat", { method: "POST" }));
+    expect(lines()).toBeLessThanOrEqual(3);
   });
 });

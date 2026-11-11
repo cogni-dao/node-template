@@ -71,7 +71,7 @@ vi.mock("@/bootstrap/container", () => ({
 // token. We send a Bearer header on every request so the old guard — which
 // keyed off that header — would have returned 403.
 vi.mock("@/app/_lib/auth/session", () => ({
-  getSessionUser: vi.fn().mockResolvedValue(TEST_SESSION_USER_1),
+  getSessionUser: vi.fn().mockResolvedValue({ ...TEST_SESSION_USER_1, via: "bearer" }),
 }));
 
 import * as entryHandler from "@/app/api/v1/knowledge/[id]/route";

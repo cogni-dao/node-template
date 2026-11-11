@@ -22,7 +22,10 @@ const MAX_DEPTH = 3;
 /** A module reads the store when its text names one of these. */
 const STORE_READ = /@cogni\/knowledge-store|knowledgeStorePort|EdoCapability|@cogni-dao\/metrics|metrics\.server/;
 /** Every way a route file can export a GET handler. */
-const GET_EXPORT = /export\s+(?:async\s+)?(?:const|function)\s+GET\b|export\s*\{[^}]*\bGET\b[^}]*\}/g;
+const GET_EXPORT = /export\s+(?:async\s+)?(?:const|let|var|function)\s+GET\b|export\s*\{[^}]*\bGET\b[^}]*\}/g;
+/** Export forms this test cannot classify (they could hide a GET): `export *` and destructured exports. A route file using one fails the test. */
+const UNCLASSIFIABLE_EXPORT = /export\s*\*|export\s+(?:const|let|var)\s*[{[]/;
+const ROUTE_FILE = /^route\.(?:ts|tsx|js|mjs)$/;
 const DOOR = /sameDoor:\s*"knowledge\.read"/;
 
 const NOT_STORE = {
@@ -93,7 +96,7 @@ const EXEMPT: Record<string, { reason: string; readsStore?: true }> = {
 function routeFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
     const p = join(dir, name);
-    return statSync(p).isDirectory() ? routeFiles(p) : name === "route.ts" ? [p] : [];
+    return statSync(p).isDirectory() ? routeFiles(p) : ROUTE_FILE.test(name) ? [p] : [];
   });
 }
 
@@ -101,7 +104,7 @@ function routeFiles(dir: string): string[] {
 function resolveImport(from: string, spec: string): string | undefined {
   const base = spec.startsWith("@/app/") ? join(SRC, spec.slice(2)) : spec.startsWith(".") ? resolve(dirname(from), spec) : undefined;
   if (!base) return undefined;
-  return [`${base}.ts`, `${base}.tsx`, join(base, "index.ts")].find((c) => existsSync(c));
+  return [`${base}.ts`, `${base}.tsx`, `${base}.js`, `${base}.mjs`, join(base, "index.ts")].find((c) => existsSync(c));
 }
 
 /** True when the file, or a module it imports (transitively, bounded depth, visited set), names a store marker. */
@@ -131,6 +134,13 @@ function getRoutes(): Handler[] {
   });
 }
 
+/** Route files whose exports cannot be classified. Must stay empty. */
+function unclassifiableRoutes(): string[] {
+  return routeFiles(API)
+    .filter((file) => UNCLASSIFIABLE_EXPORT.test(readFileSync(file, "utf8")))
+    .map((file) => file.slice(API.length + 1));
+}
+
 describe("knowledge.read door on every GET route (or an exempt reason)", () => {
   const routes = getRoutes();
   const door = routes.filter((r) => r.door);
@@ -139,6 +149,10 @@ describe("knowledge.read door on every GET route (or an exempt reason)", () => {
   it("finds the GET routes in every export form", () => {
     expect(routes.length).toBeGreaterThanOrEqual(60);
     expect(door.length).toBeGreaterThanOrEqual(21);
+  });
+
+  it("no route file uses an export form the scan cannot classify (export *, destructured exports)", () => {
+    expect(unclassifiableRoutes()).toEqual([]);
   });
 
   it("every GET route carries sameDoor: knowledge.read or is on the exempt list", () => {

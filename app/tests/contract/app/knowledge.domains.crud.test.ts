@@ -37,6 +37,7 @@ const BEARER_AGENT: SessionUser = {
   walletAddress: null,
   displayName: "agent",
   avatarColor: null,
+  via: "bearer",
 };
 let currentUser: SessionUser | null = BEARER_AGENT;
 vi.mock("@/app/_lib/auth/session", () => ({
@@ -59,7 +60,11 @@ vi.mock("@/bootstrap/container", () => ({
     config: { unhandledErrorPolicy },
     knowledgeStorePort: mockStore,
     // Every knowledge GET route carries the `knowledge.read` door (story.0038); these tests are not about it, so it allows.
-    agentAuthority: { authorizeRoute: vi.fn(async () => ({ decision: "allow", basis: "signed_in" })) },
+    agentAuthority: {
+      authorizeRoute: vi.fn(async () => ({ decision: "allow", basis: "signed_in" })),
+      // The routes without a door (domain create/update/delete) pass the service-key gate for a plain agent key.
+      denyServiceKeyOffDoor: vi.fn(async () => ({ decision: "allow" })),
+    },
   })),
 }));
 

@@ -257,8 +257,11 @@ export function createAgentToolAuthority(deps: {
             })
           );
       // A read door that lets humans and existing agents through (`serviceKeyedOnly`) would log one line per UI read: only a decision made on a role row
-      // (an enrolled service) and every refusal are logged.
-      const quietRead = routeOnly?.serviceKeyedOnly === true && decision.decision === "allow" && decision.basis !== "role";
+      // (an enrolled service) is logged as `agent_tool.authz`. A refusal on that door is logged once, as `agent.knowledge_read.denied` below, so a
+      // refused call stays within the log budget (start, one decision line, end).
+      const quietRead =
+        routeOnly?.serviceKeyedOnly === true &&
+        (decision.decision === "deny" || decision.basis !== "role");
       if (!quietRead)
         onDecision({
           principal: via === "bearer" ? userId : null,
@@ -274,23 +277,26 @@ export function createAgentToolAuthority(deps: {
       // A refused knowledge read is named on its own (story.0038): who was refused, at which route, with a fixed code. No key, no header.
       if (decision.decision === "deny" && routeOnly?.serviceKeyedOnly)
         deps.log.warn(
-          { event: EVENT_NAMES.AGENT_KNOWLEDGE_READ_DENIED, principal: via === "bearer" ? userId : null, routeId, code: decision.code },
+          { event: EVENT_NAMES.AGENT_KNOWLEDGE_READ_DENIED, principal: via === "bearer" ? userId : null, routeId, code: decision.code, reason: decision.reason },
           EVENT_NAMES.AGENT_KNOWLEDGE_READ_DENIED
         );
       return decision;
     },
     async denyServiceKeyOffDoor({ routeId, userId }) {
-      const decision: ServiceKeyGateDecision = await withStore(async (store): Promise<ServiceKeyGateDecision> => {
+      // One plain read: no transaction, so no BEGIN/COMMIT round trips on every bearer call.
+      const decision: ServiceKeyGateDecision = await (async (): Promise<ServiceKeyGateDecision> => {
+        const store = createPostgresAgentGrantsStore(deps.sql);
         // A store that cannot tell is strict: refuse (it cannot be shown that the caller is not a service).
         if (!store.isServicePrincipal)
           return { decision: "deny", code: "service_key_route_denied", reason: "service_kind_unknown" };
         return (await store.isServicePrincipal(userId))
           ? { decision: "deny", code: "service_key_route_denied", reason: "route_has_no_knowledge_read_door" }
           : { decision: "allow" };
-      }).catch((): ServiceKeyGateDecision => ({ decision: "deny", code: "authz_unavailable", reason: "store_unavailable" }));
-      if (decision.decision === "deny" && decision.code === "service_key_route_denied")
+      })().catch((): ServiceKeyGateDecision => ({ decision: "deny", code: "authz_unavailable", reason: "store_unavailable" }));
+      // Every refusal is one warn (an outage as well as a service key), the same fields the door's refusal carries. No key, no header.
+      if (decision.decision === "deny")
         deps.log.warn(
-          { event: EVENT_NAMES.AGENT_KNOWLEDGE_READ_DENIED, principal: userId, routeId, code: decision.code },
+          { event: EVENT_NAMES.AGENT_KNOWLEDGE_READ_DENIED, principal: userId, routeId, code: decision.code, reason: decision.reason },
           EVENT_NAMES.AGENT_KNOWLEDGE_READ_DENIED
         );
       return decision;

@@ -259,8 +259,8 @@ export function wrapRouteHandlerWithLogging<TContext = unknown>(
           const sameDoor = "sameDoor" in options ? options.sameDoor : undefined;
           // SERVICE_KEY_DENY_BY_DEFAULT: a bearer made by service enrollment may call only a route that declares `sameDoor: "knowledge.read"`.
           // Every other authenticated route refuses it here, so a route added later is closed to it with no edit. A human session and a bearer
-          // without `service_key` pass. Every real bearer path sets `via: "bearer"`; an identity with no `via` is a cookie session read.
-          if (sessionUser && sessionUser.via === "bearer" && sameDoor !== "knowledge.read") {
+          // without `service_key` pass. Fail closed, like the door: only an identity that says `session` is a human; an absent or unknown `via` is a bearer.
+          if (sessionUser && sessionUser.via !== "session" && sameDoor !== "knowledge.read") {
             const gate = await container.agentAuthority.denyServiceKeyOffDoor({
               routeId: options.routeId,
               userId: sessionUser.id,
