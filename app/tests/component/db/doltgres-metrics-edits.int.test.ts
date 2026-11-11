@@ -18,6 +18,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+	noInlineHistoryEditsSql,
 	noInlineHistoryWindowCommitsSql,
 	readNoInlineHistoryEdits,
 } from "@cogni-dao/metrics/sources";
@@ -156,8 +157,17 @@ describe("Doltgres 0.57.3 no-inline-history edits read", () => {
 		expect(Number(found[0]?.n)).toBe(5);
 		expect(found.map((r) => String(r.commit_hash)).sort()).toEqual(legacy);
 
+		// Run each diff statement bare first so an engine error shows its message.
+		const hashes = found.map((r) => String(r.commit_hash));
+		for (const table of ["work-items", "atoms"] as const)
+			await sql.unsafe(noInlineHistoryEditsSql(table, hashes));
+
 		const sample = await readNoInlineHistoryEdits(sql, "count", window, read);
-		expect(sample).toMatchObject({ complete: true, value: 4, unit: "edits" });
+		expect(sample, JSON.stringify(sample)).toMatchObject({
+			complete: true,
+			value: 4,
+			unit: "edits",
+		});
 		expect(sample.evidenceRefs).toContain(
 			"counts:edits=4;appending=2;withReason=1",
 		);
