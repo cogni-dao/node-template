@@ -9,15 +9,17 @@ import {
 	metricHistoryRange,
 } from "./assess.js";
 import {
+	displayFits,
+	type EditsSourceTiming,
+	type EditsTimingUpdate,
 	type KpiAssessment,
 	type KpiBinding,
 	type KpiReason,
 	type MetricAction,
 	type MetricCalculator,
 	type MetricDefinition,
-	type MetricDisplay,
-	displayFits,
 	type MetricDefinitionsPort,
+	type MetricDisplay,
 	MetricError,
 	type MetricHistory,
 	type MetricHistoryInput,
@@ -146,6 +148,7 @@ export function createMetricService(deps: {
 		/** Stable reason code of a failed or unknown reading; null when ok. */
 		reason: string | null;
 		durationMs: number;
+		sourceTiming?: EditsSourceTiming;
 	}): void;
 }) {
 	const { definitions, observations, registry, now, scope } = deps;
@@ -272,6 +275,87 @@ export function createMetricService(deps: {
 			const c = registry.get(reserved.snapshot.definition.spec.calculatorId);
 			const controller = new AbortController();
 			let timer: ReturnType<typeof setTimeout> | undefined;
+			const isEdits =
+				c.id === "no-inline-history@1" &&
+				(reserved.snapshot.definition.spec.params as { measure?: string })
+					.measure === "edits";
+			const stage = () => ({ state: "not_started" as const, durationMs: null });
+			const timing: EditsSourceTiming = {
+				windowCommits: stage(),
+				workDiff: stage(),
+				knowledgeDiff: stage(),
+				windowCommitCount: null,
+				workRows: null,
+				workBytes: null,
+				knowledgeRows: null,
+				knowledgeBytes: null,
+			};
+			const starts: Partial<
+				Record<"windowCommits" | "workDiff" | "knowledgeDiff", number>
+			> = {};
+			let frozenTiming: EditsSourceTiming | undefined;
+			const clock = (): number | null => {
+				try {
+					const n = performance.now();
+					return Number.isFinite(n) ? n : null;
+				} catch {
+					return null;
+				}
+			};
+			const elapsed = (start: number | undefined, end: number | null) =>
+				start !== undefined && end !== null && end >= start
+					? end - start
+					: null;
+			const updateTiming = (update: EditsTimingUpdate) => {
+				try {
+					if (frozenTiming) return;
+					const part = timing[update.stage];
+					if (update.phase === "start") {
+						part.state = "running";
+						const n = clock();
+						if (n !== null) starts[update.stage] = n;
+					} else if (update.phase === "counts") {
+						if (
+							!Number.isSafeInteger(update.rows) ||
+							update.rows < 0 ||
+							(update.bytes !== undefined &&
+								(!Number.isSafeInteger(update.bytes) || update.bytes < 0))
+						)
+							return;
+						if (update.stage === "windowCommits")
+							timing.windowCommitCount = update.rows;
+						else if (update.stage === "workDiff") {
+							timing.workRows = update.rows;
+							timing.workBytes = update.bytes ?? null;
+						} else {
+							timing.knowledgeRows = update.rows;
+							timing.knowledgeBytes = update.bytes ?? null;
+						}
+					} else {
+						part.state = update.phase;
+						part.durationMs = elapsed(starts[update.stage], clock());
+					}
+				} catch {
+					/* diagnostics must not affect the calculator */
+				}
+			};
+			const freezeTiming = () => {
+				if (!isEdits || frozenTiming) return;
+				const n = clock();
+				frozenTiming = {
+					...timing,
+					windowCommits: { ...timing.windowCommits },
+					workDiff: { ...timing.workDiff },
+					knowledgeDiff: { ...timing.knowledgeDiff },
+				};
+				for (const key of [
+					"windowCommits",
+					"workDiff",
+					"knowledgeDiff",
+				] as const)
+					if (frozenTiming[key].state === "running")
+						frozenTiming[key].durationMs = elapsed(starts[key], n);
+			};
 			let calls = 0;
 			let result = { ...reserved.snapshot.observation };
 			try {
@@ -282,6 +366,7 @@ export function createMetricService(deps: {
 							window: result.window,
 							signal: controller.signal,
 							budget: c.budget,
+							editsTiming: isEdits ? updateTiming : undefined,
 							async read(source) {
 								controller.signal.throwIfAborted();
 								if (++calls > c.budget.maxSourceCalls)
@@ -292,6 +377,7 @@ export function createMetricService(deps: {
 					),
 					new Promise<never>((_, reject) => {
 						timer = setTimeout(() => {
+							freezeTiming();
 							controller.abort();
 							reject(new Error("source_timeout"));
 						}, c.budget.timeoutMs);
@@ -330,6 +416,7 @@ export function createMetricService(deps: {
 				};
 			} finally {
 				if (timer) clearTimeout(timer);
+				freezeTiming();
 				controller.abort();
 			}
 			// Authority may change while I/O runs. Denied results are never published.
@@ -347,6 +434,7 @@ export function createMetricService(deps: {
 				status: saved.status,
 				reason: saved.reason,
 				durationMs: now().getTime() - start.getTime(),
+				...(frozenTiming ? { sourceTiming: frozenTiming } : {}),
 			});
 			return saved;
 		},
