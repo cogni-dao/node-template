@@ -42,7 +42,12 @@ import type {
   WorkItemType,
 } from "@cogni/work-items";
 import type { MoveReadingPort } from "@cogni/work-items";
-import { judgeMoves, toWorkItemDto, toWorkItemId } from "@cogni/work-items";
+import {
+  judgeMoves,
+  toWorkItemDto,
+  toWorkItemId,
+  toWorkItemsPatchInput,
+} from "@cogni/work-items";
 import {
   WorkItemRevisionConflictError,
   type WorkItemsDoltgresPort,
@@ -181,17 +186,13 @@ export function createWorkItemCapability(
       if (writer) {
         try {
           const updated = await writer.store.patch(
-            {
-              id: toWorkItemId(input.id),
-              ...(input.expectedRevision !== undefined && {
-                expectedRevision: input.expectedRevision,
-              }),
+            toWorkItemsPatchInput({
+              id: input.id,
+              expectedRevision: input.expectedRevision,
               reason: input.reason,
-              ...(input.cites !== undefined && { cites: input.cites }),
-              set: definedOnly(input.set) as Parameters<
-                typeof writer.store.patch
-              >[0]["set"],
-            },
+              cites: input.cites,
+              set: input.set,
+            }),
             typeof writer.principalId === "function"
               ? writer.principalId()
               : writer.principalId,

@@ -145,6 +145,23 @@ export type {
   WorkRelation
 } from "./types.js";
 export { toWorkItemId } from "./types.js";
+export type {
+  WorkItemWriteErrorResponse,
+  WorkItemWriteOperation
+} from "./write-errors.js";
+export {
+  WORK_ITEM_WRITE_ERROR_NAMES,
+  workItemWriteErrorResponse
+} from "./write-errors.js";
+export type {
+  WorkItemCreateWire,
+  WorkItemPatchWire
+} from "./write-input.js";
+export {
+  toWorkItemsCreateInput,
+  toWorkItemsPatchInput,
+  WORK_ITEM_CREATE_FIELDS
+} from "./write-input.js";
 export { withWorkItemLeases } from "./with-leases.js";
 
 export {

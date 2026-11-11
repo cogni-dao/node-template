@@ -17,7 +17,11 @@ import {
   workItemsCreateOperation,
   workItemsListOperation,
 } from "@cogni/node-contracts";
-import { normalizeWorkItemOrder, type WorkItemOrder } from "@cogni/work-items";
+import {
+  normalizeWorkItemOrder,
+  type WorkItemOrder,
+  workItemWriteErrorResponse,
+} from "@cogni/work-items";
 import { NextResponse } from "next/server";
 
 import {
@@ -25,12 +29,9 @@ import {
   InvalidCursorError,
   listWorkItems,
   NodeAdminRequiredError,
-  WorkItemScoresInvalidError,
   WorkItemsBackendNotReadyError,
-  WorkItemWriteOutcomeUnknownError,
 } from "@/app/_facades/work/items.server";
 import { getSessionUser } from "@/app/_lib/auth/session";
-import { inputErrorResponse } from "./_input-errors";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import {
   EVENT_NAMES,
@@ -227,25 +228,10 @@ export const POST = wrapRouteHandlerWithLogging(
         status: 201,
       });
     } catch (e) {
-      if (e instanceof WorkItemScoresInvalidError) {
-        return NextResponse.json(
-          { error: "invalid input", errorCode: e.code, issues: e.issues },
-          { status: 400 },
-        );
-      }
-      // story.0033: `moves` on a create is resolved and baselined like on a patch.
-      const input = inputErrorResponse(e, []);
-      if (input) return input;
-      if (e instanceof WorkItemWriteOutcomeUnknownError) {
-        return NextResponse.json(
-          {
-            error: e.code,
-            retryable: false,
-            lookup: e.receipt.lookup,
-            message: e.message,
-          },
-          { status: 409 },
-        );
+      // The package owns every write-contract answer, including a `moves` failure (story.0033).
+      const mapped = workItemWriteErrorResponse(e, "create");
+      if (mapped) {
+        return NextResponse.json(mapped.body, { status: mapped.status });
       }
       if (e instanceof NodeAdminRequiredError) {
         return NextResponse.json(
@@ -255,12 +241,6 @@ export const POST = wrapRouteHandlerWithLogging(
       }
       if (e instanceof WorkItemsBackendNotReadyError) {
         return NextResponse.json({ error: e.message }, { status: 503 });
-      }
-      if ((e as Error)?.name === "WorkItemAlreadyExistsError") {
-        return NextResponse.json(
-          { error: (e as Error).message },
-          { status: 409 },
-        );
       }
       throw e;
     }

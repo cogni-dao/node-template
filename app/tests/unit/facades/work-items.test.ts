@@ -29,8 +29,7 @@ import {
   getWorkItem,
   listWorkItems,
   NodeAdminRequiredError,
-  patchWorkItem,
-  WorkItemWriteOutcomeUnknownError
+  patchWorkItem
 } from "@/app/_facades/work/items.server";
 import { getContainer } from "@/bootstrap/container";
 
@@ -107,7 +106,7 @@ describe("app/_facades/work/items.server", () => {
     } as never);
   });
 
-  it("preserves the current write uncertainty receipt instead of converting it to backend busy", async () => {
+  it("passes a write-outcome-unknown error through untouched; the package maps it to the 409 receipt (task.0097)", async () => {
     const error = Object.assign(new Error("inspect current branch"), {
       name: "WorkItemWriteOutcomeUnknownError",
       operationId: "operation-1",
@@ -121,24 +120,7 @@ describe("app/_facades/work/items.server", () => {
         { type: "task", title: "unknown result" },
         { id: "principal-1" }
       )
-    ).rejects.toMatchObject({
-      name: "WorkItemWriteOutcomeUnknownError",
-      code: "work_item_write_outcome_unknown",
-      retryable: false,
-      receipt: {
-        lookup: {
-          operationId: "operation-1",
-          branch: "work-item-op/one",
-          commitHash: "hash-1",
-          itemId: "task.0001"
-        }
-      }
-    });
-    const receipt = new WorkItemWriteOutcomeUnknownError(
-      "operation-1",
-      "work-item-op/one"
-    );
-    expect(receipt.receipt.lookup.commitHash).toBeNull();
+    ).rejects.toBe(error);
   });
 
   describe("listWorkItems", () => {
