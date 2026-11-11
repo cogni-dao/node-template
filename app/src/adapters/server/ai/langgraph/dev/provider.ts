@@ -12,6 +12,8 @@
  *   - THREAD_KEY_REQUIRED: stateKey required; derive threadId deterministically
  *   - STATEFUL_ONLY: Always send only last user message; server owns thread state
  *   - TOOL_CATALOG_IS_CANONICAL: Reads entry.toolIds for default catalog tools
+ *   - SECRET_ARGS_NOT_ON_DEV_SERVER: never offers a tool whose contract declares `secretArgs`; the dev server's thread
+ *     state would checkpoint the raw argument
  * Side-effects: IO (network calls to langgraph dev server)
  * Links: LANGGRAPH_SERVER.md (MVP section)
  * @internal
@@ -50,6 +52,11 @@ export const LANGGRAPH_PROVIDER_ID = "langgraph" as const;
 export interface LangGraphDevProviderConfig {
   /** Graph names available (keys from langgraph.json) */
   readonly availableGraphs: readonly string[];
+  /**
+   * Tool ids whose contract declares `secretArgs`. The dev server checkpoints raw tool arguments in its thread
+   * state, so this provider never offers them (task.0093).
+   */
+  readonly secretToolIds?: readonly string[];
 }
 
 /**
@@ -65,6 +72,7 @@ export class LangGraphDevProvider implements GraphExecutorPort {
   readonly providerId = LANGGRAPH_PROVIDER_ID;
   private readonly log: Logger;
   private readonly availableGraphs: Set<string>;
+  private readonly secretToolIds: ReadonlySet<string>;
 
   constructor(
     private readonly client: Client,
@@ -72,6 +80,7 @@ export class LangGraphDevProvider implements GraphExecutorPort {
   ) {
     this.log = makeLogger({ component: "LangGraphDevProvider" });
     this.availableGraphs = new Set(config.availableGraphs);
+    this.secretToolIds = new Set(config.secretToolIds ?? []);
 
     this.log.debug(
       {
@@ -177,6 +186,18 @@ export class LangGraphDevProvider implements GraphExecutorPort {
     } else {
       // [] or [...] => use exactly as provided (includes explicit deny-all)
       resolvedToolIds = toolIds;
+    }
+
+    // SECRET_ARGS_NOT_ON_DEV_SERVER: the dev server's thread state would keep the raw argument.
+    const refused = resolvedToolIds.filter((id) => this.secretToolIds.has(id));
+    if (refused.length > 0) {
+      this.log.warn(
+        { runId, graphName, refusedTools: refused },
+        "dev provider does not offer tools that declare secret arguments"
+      );
+      resolvedToolIds = resolvedToolIds.filter(
+        (id) => !this.secretToolIds.has(id)
+      );
     }
 
     // Shared state for deriving final result

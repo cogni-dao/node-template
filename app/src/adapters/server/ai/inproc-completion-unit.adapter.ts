@@ -102,6 +102,11 @@ export interface CompletionUnitParams {
   abortSignal?: AbortSignal;
   tools?: readonly import("@/ports").LlmToolDefinition[];
   toolChoice?: import("@/ports").LlmToolChoice;
+  /**
+   * Run-scoped: true when the run offers a tool that declares secret arguments. Becomes `LlmCaller.maskContent`, which
+   * makes the gateway's Langfuse logger write `redacted-by-litellm` for input and output (usage and cost still flow).
+   */
+  maskContent?: boolean;
 }
 
 /**
@@ -159,8 +164,15 @@ export class InProcCompletionUnitAdapter {
    * Runners orchestrate; this method handles transformation + billing events.
    */
   executeCompletionUnit(params: CompletionUnitParams): CompletionUnitResult {
-    const { messages, model, runContext, abortSignal, tools, toolChoice } =
-      params;
+    const {
+      messages,
+      model,
+      runContext,
+      abortSignal,
+      tools,
+      toolChoice,
+      maskContent,
+    } = params;
     const { runId, attempt, graphId } = runContext;
     const scope = getExecutionScope();
     const traceId =
@@ -196,6 +208,7 @@ export class InProcCompletionUnitAdapter {
           virtualKeyId: scope.billing.virtualKeyId,
           requestId: runId,
           traceId,
+          ...(maskContent && { maskContent: true }),
         };
 
         // Resolved LlmService from execution scope (set by provider registry at launch)

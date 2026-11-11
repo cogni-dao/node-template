@@ -36,6 +36,21 @@ describe("redactSecretsInMessages", () => {
     });
   });
 
+  it("masks a Cogni agent key (cogni_ag_sk_v2_), which the generic pattern misses", () => {
+    const msgs: UIMessage[] = [
+      makeMessage("user", [
+        {
+          type: "text",
+          text: "use cogni_ag_sk_v2_AbCd0123456789_-xyz as the bearer",
+        },
+      ]),
+    ];
+    const part = redactSecretsInMessages(msgs)[0]?.parts[0];
+    expect(part && "text" in part && part.text).toBe(
+      "use [REDACTED_AGENT_KEY] as the bearer"
+    );
+  });
+
   it("masks AWS access keys", () => {
     const msgs: UIMessage[] = [
       makeMessage("user", [

@@ -96,6 +96,13 @@ export interface ToolContract<
    */
   readonly requires?: ToolRequires;
   /**
+   * Input paths whose string values are credentials (dots for objects, `[]` for every item of an array, e.g.
+   * `secret`, `auth.tokens[]`, `rows[].pass`). The runtime adapter writes `[REDACTED]` in their place in every
+   * record the runner emits (tool_call_start, error text, output) and gives only `exec` the real value. A
+   * contract that omits this field changes nothing. CI: tests/secret-args-guard.test.ts.
+   */
+  readonly secretArgs?: readonly string[];
+  /**
    * Zod schema for input validation.
    * Source of truth — used by LangChain wrappers and compiled to JSONSchema7.
    */

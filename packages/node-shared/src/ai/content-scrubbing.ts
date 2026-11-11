@@ -133,6 +133,8 @@ export function computeContentHash(content: unknown): string {
 export function scrubStringContent(text: string): string {
   return (
     text
+      // Cogni agent keys (cogni_ag_sk_v<n>_...): `sk-[...]` below cannot match them
+      .replace(/cogni_ag_sk_v\d+_[a-zA-Z0-9_-]+/g, "[REDACTED_AGENT_KEY]")
       // API keys / tokens (various formats)
       .replace(/sk-[a-zA-Z0-9]{20,}/g, "[REDACTED_SK_KEY]")
       .replace(/pk-[a-zA-Z0-9]{20,}/g, "[REDACTED_PK_KEY]")

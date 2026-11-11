@@ -75,9 +75,10 @@ Pure tool definitions for AI agent execution. Defines `ToolContract`, `ToolImple
   - `TOOL_CATALOG` - Singleton catalog of all core tool definitions (Record<string, CatalogBoundTool>)
   - `CORE_TOOL_BUNDLE` - Cross-node core tool array (all non-Polymarket tools); pass to createBoundToolSource. Poly node additionally imports POLY_TOOL_BUNDLE from `@cogni/poly-ai-tools`.
   - `createToolCatalog()`, `getToolById()`, `getToolIds()`, `hasToolId()` - Catalog accessors
-  - `toBoundToolRuntime()`, `contractToRuntime()` - Runtime adapter converters (contractToRuntime for DI)
+  - `toBoundToolRuntime()`, `contractToRuntime()` - Runtime adapter converters (contractToRuntime for DI). A contract that declares `secretArgs` gets the scrubbing runtime
+  - `REDACTION_MARKER`, `declaresSecretArgs()`, `SECRET_ARGS_UNAVAILABLE`, `SECRET_ARGS_VALIDATION_MESSAGE` - secret tool argument helpers and fixed strings
   - `ToolCapabilities`, `AuthCapability`, `ClockCapability`, `MetricsCapability`, `RepoCapability` - Capability interfaces
-- **Files considered API:** `index.ts`, `types.ts`, `schema.ts`, `catalog.ts`, `runtime-adapter.ts`, `capabilities/*.ts`, `tools/*.ts`
+- **Files considered API:** `index.ts`, `types.ts`, `schema.ts`, `catalog.ts`, `runtime-adapter.ts`, `secret-args.ts`, `secret-args-lint.ts`, `capabilities/*.ts`, `tools/*.ts`
 
 ## Ports
 
@@ -122,3 +123,7 @@ pnpm --filter @cogni-dao/ai-tools build
 Metric list/read/compute tools consume the public @cogni-dao/metrics contracts. createMetricTools binds an injected node service. Completed evidence is read through the same service as HTTP/UI.
 
 Every non-`read_only` tool contract declares `requires = {scope, kind, subject}` (type `ToolRequires`); `tests/requires-guard.test.ts` fails CI for one without it. A node builds `requiresById` from these contracts and `@cogni-dao/agent-grants` `guardTools` enforces it. `core__metric_compute` is the tenth state-changing tool (story.5147 N3 names it `core__goal_progress`, which is read_only).
+
+A tool that takes a credential declares it once: `secretArgs` on its contract, a list of input paths (dots for objects, `[]` for every item of an array). `toBoundToolRuntime` then returns a runtime whose `validateInput` returns a frozen copy with `[REDACTED]` at those paths (the real value sits in a `WeakMap` keyed by that copy, read only by `exec`), whose validation error is the fixed `Invalid tool arguments`, and whose exec errors, receipt lookups and output are scrubbed by exact match. A runner or guard that clones the copy makes `exec` fail closed with receipt `secret_args_unavailable`. No `spanInput`/`spanPort` may be wired on any `createToolRunner` call. `tests/secret-args-guard.test.ts` is a lint (credential-named field must be declared; declared path must be a string field; a `cogni_ag_sk_v2_` probe must not survive); `tests/secret-args.test.ts` proves the sinks. A contract with no `secretArgs` is unchanged.
+
+Adopting 0.10.0 gives the scrub only. A node that declares a `secretArgs` tool must also add the app wiring the package cannot carry: (1) a run that offers any such tool masks every model call of that run (`maskContent` on the LlmCaller, set once the offered tools are known, because the model's own tool call and the next call that resends it reach the gateway's Langfuse logger raw); (2) its `ai.tool_call.error` line carries no `safeMessage` for such a tool; (3) its dev provider never offers them; (4) no `createToolRunner` call passes `spanInput`/`spanPort` (the runner hands them raw arguments before validation). Node-template's `inproc.provider.ts` is the reference. `secretArgsLeaks()`, `undeclaredCredentialFields()` and `declaredPathsNotStringFields()` are exported so a node can run the CI guard over its own bundle.

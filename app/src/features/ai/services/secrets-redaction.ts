@@ -20,6 +20,11 @@ import type { UIMessage } from "ai";
  * Order matters — more specific patterns first to avoid partial matches.
  */
 const SECRET_PATTERNS: Array<{ pattern: RegExp; replacement: string }> = [
+  // Cogni agent keys (cogni_ag_sk_v<n>_...): the generic pattern below cannot match them (no word boundary before `sk`)
+  {
+    pattern: /\bcogni_ag_sk_v\d+_[A-Za-z0-9_-]+/g,
+    replacement: "[REDACTED_AGENT_KEY]",
+  },
   // AWS keys
   { pattern: /AKIA[0-9A-Z]{16}/g, replacement: "[REDACTED_AWS_KEY]" },
   // Generic API keys (sk-*, key-*, token-*, api-* prefixed)

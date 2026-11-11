@@ -28,8 +28,8 @@ AI tool bindings and tool source factory. Wires tool implementations with inject
 
 ## Public Surface
 
-- **Exports:** `createToolBindings()`, `createBoundToolSource()`, `ToolBindings`, `ToolBindingDeps`
-- **Files considered API:** `tool-bindings.ts`, `tool-source.factory.ts`
+- **Exports:** `createToolBindings()`, `createBoundToolSource()`, `ToolBindings`, `ToolBindingDeps`, `NODE_LOCAL_TOOL_BUNDLE`, `NODE_LOCAL_TOOL_BINDINGS`, `NODE_LOCAL_CATALOG`, `secretProbeBoundTool`
+- **Files considered API:** `tool-bindings.ts`, `tool-source.factory.ts`, `secret-probe.ts`
 
 ## Responsibilities
 
@@ -58,3 +58,4 @@ AI tool bindings and tool source factory. Wires tool implementations with inject
 ## Notes
 
 - Per TOOL_BINDING_REQUIRED: createBoundToolSource throws if any catalog tool lacks binding
+- `secret-probe.ts` is the node-local probe (task.0093): a `read_only` tool that declares `secretArgs: ["secret"]` (output `{ok, length}`) and the `secret-probe` graph that offers only it. It is composed into the tool source (`container.ts`) and the in-proc provider's node catalog (`graph-executor.factory.ts`), is executable by graph id `langgraph:secret-probe`, and is not advertised by agent discovery.
