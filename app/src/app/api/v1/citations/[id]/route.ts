@@ -69,6 +69,7 @@ export const GET = wrapRouteHandlerWithLogging<{
 }>(
   {
     routeId: "citations.links",
+    sameDoor: "knowledge.read",
     auth: { mode: "required", getSessionUser },
   },
   async (ctx, request, sessionUser, context) => {

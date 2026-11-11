@@ -104,6 +104,10 @@ export const ROUTE_ONLY_CAPABILITIES: Readonly<Record<string, RouteOnlyCapabilit
       "knowledge.contributions.get",
       "knowledge.contributions.diff",
       "knowledge.contributions.commits.list",
+      // Not under /api/v1/knowledge, but they serve knowledge-store content, so a service Off must not read them.
+      "cognition.bundle",
+      "edo.chain",
+      "citations.links",
     ],
   },
 };
