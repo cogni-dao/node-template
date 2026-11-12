@@ -48,15 +48,15 @@ export interface CredentialLookup {
   readonly renewUntil: string;
 }
 
-export type IssueRefusal = "unknown_user" | "wallet_user" | "internal_principal" | "already_upgraded" | "binding_required" | "not_rotatable";
+export type IssueRefusal = "rate_limited" | "unknown_user" | "wallet_user" | "internal_principal" | "already_upgraded" | "binding_required" | "not_rotatable";
 
 export type IssueResult =
   | { readonly ok: true; readonly credentialId: string; readonly userId: string; readonly pendingExpiresAt: string }
   | { readonly ok: false; readonly reason: IssueRefusal };
 
 export type ConfirmResult =
-  | { readonly ok: true; readonly status: "confirmed" | "already_active"; readonly userId: string; readonly expiresAt: string; readonly renewUntil: string }
-  | { readonly ok: false; readonly reason: "revoked" | "expired" | "predecessor_revoked" | "not_found" | "binding_required" };
+  | { readonly ok: true; readonly status: "confirmed" | "already_active"; readonly observedAt?: string; readonly userId: string; readonly expiresAt: string; readonly renewUntil: string }
+  | { readonly ok: false; readonly reason: "revoked" | "expired" | "predecessor_revoked" | "not_found" | "binding_required" | "permission_off" | "superseded" };
 
 /**
  * Does this principal hold deploy or node roles? A node supplies the read: node-template reads `agent_roles` (`agentRolesHasRoles`); the operator

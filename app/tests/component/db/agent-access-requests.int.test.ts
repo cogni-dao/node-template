@@ -31,6 +31,7 @@ vi.mock("@/bootstrap/container", () => ({
 }));
 
 import { GET as askList, POST as askCreate } from "@/app/api/v1/agent/access-requests/route";
+import { DELETE as aiDelete, GET as aiGet, POST as aiPost } from "@/app/api/v1/agent/agent-access/roles/route";
 import { DELETE as rolesDelete, GET as rolesGet, POST as rolesPost } from "@/app/api/v1/agent-access/roles/route";
 import {
   type AgentAuthoritySql,
@@ -44,6 +45,7 @@ const SCOPE = "work_item:transition";
 describe("access requests: an ask is an off row (real Postgres)", () => {
   let service: Sql;
   const users: string[] = [];
+  const approvedAi = new Set<string>();
   let admin: string;
   let agent: string;
   let other: string;
@@ -58,8 +60,9 @@ describe("access requests: an ask is an off row (real Postgres)", () => {
     users.push(id);
     return id;
   };
-  const as = (id: string | null, via: "bearer" | "session") =>
-    (session.user = id ? { id, walletAddress: null, displayName: null, avatarColor: null, via } : null);
+  const as = (id: string | null, via: "bearer" | "session") => {
+    session.user = id ? { id, walletAddress: null, displayName: null, avatarColor: null, via } : null;
+  };
   const ask = (scope: unknown, headers: Record<string, string> = {}) =>
     askCreate(
       new NextRequest("http://localhost/api/v1/agent/access-requests", {
@@ -104,8 +107,8 @@ describe("access requests: an ask is an off row (real Postgres)", () => {
     authority = createAgentToolAuthority({
       sql: service as unknown as AgentAuthoritySql,
       nodeAdmin: {
-        check: async (who: { walletAddress?: string | null }) =>
-          who.walletAddress === ADMIN_WALLET ? { ok: true as const } : { ok: false as const, errorCode: "authz_denied" as const },
+        check: async (who: { userId: string; walletAddress?: string | null }) =>
+          who.walletAddress === ADMIN_WALLET || approvedAi.has(who.userId) ? { ok: true as const } : { ok: false as const, errorCode: "authz_denied" as const },
       },
       log: logger,
       toolBundle: [...CORE_TOOL_BUNDLE],
@@ -114,6 +117,7 @@ describe("access requests: an ask is an off row (real Postgres)", () => {
   });
   afterAll(async () => {
     await service?.unsafe("DELETE FROM agent_roles WHERE principal_user_id = ANY($1) OR approved_by = ANY($1)", [users]);
+    await service?.unsafe("DELETE FROM agent_principals WHERE user_id = ANY($1)", [users]);
     await service?.unsafe("DELETE FROM user_bindings WHERE user_id = ANY($1)", [users]);
     await service?.unsafe("DELETE FROM users WHERE id = ANY($1)", [users]);
     await service?.end({ timeout: 1 });
@@ -196,7 +200,7 @@ describe("access requests: an ask is an off row (real Postgres)", () => {
     // The cap is global by design and other component files share this database, so re-read the global pending count each pass
     // (a one-shot snapshot goes stale if another file adds or clears pending asks) and fill until the cap is actually reached.
     const pending = async () =>
-      ((await service`SELECT count(*)::int AS n FROM agent_roles WHERE approved_by IS NULL AND revoked_at IS NULL`) as unknown as [{ n: number }])[0].n;
+      ((await service`SELECT count(*)::int AS n FROM agent_roles WHERE approved_by IS NULL AND revoked_at IS NULL AND (request_expires_at IS NULL OR request_expires_at > clock_timestamp())`) as unknown as [{ n: number }])[0].n;
     try {
       for (let i = 0; (await pending()) < MAX_PENDING_TOTAL; i++) {
         const id = await mkUser(`flood-${i}-${randomUUID().slice(0, 4)}`);
@@ -248,6 +252,29 @@ describe("access requests: an ask is an off row (real Postgres)", () => {
     } finally {
       await service`DELETE FROM agent_roles WHERE principal_user_id = ANY(${seeded})`;
     }
+  });
+
+  it("DAO-approved service AI needs its own manage role at every role-management twin", async () => {
+    const serviceAi=await mkUser('service admin'), target=await mkUser('target agent');
+    await service`INSERT INTO agent_principals(kind,user_id,service_key) VALUES('external',${serviceAi},${`https://service-${randomUUID()}.example#node-ai`})`;
+    await service`INSERT INTO agent_roles(principal_user_id,scope,approved_by,granted_at) VALUES(${serviceAi},'agent_access:manage',${admin},clock_timestamp())`;
+    await service`INSERT INTO agent_roles(principal_user_id,scope,requested_by) VALUES(${target},${SCOPE},${target})`;
+    const request=(method:string,body?:unknown,authorization=true)=>new NextRequest('http://localhost/api/v1/agent/agent-access/roles',{
+      method,headers:{...(authorization?{authorization:'Bearer fixture-identity'}:{}),'content-type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)}),
+    });
+    as(serviceAi,'bearer'); approvedAi.add(serviceAi);
+    expect((await aiGet(request('GET'),undefined as never)).status).toBe(200);
+    expect((await aiPost(request('POST',{principalUserId:target,scope:SCOPE}),undefined as never)).status).toBe(200);
+    expect((await aiPost(request('POST',{principalUserId:serviceAi,scope:'agent_access:manage'}),undefined as never)).status).toBe(403);
+    expect((await aiDelete(request('DELETE',{principalUserId:target,scope:SCOPE}),undefined as never)).status).toBe(200);
+    expect(await authority.denyServiceKeyOffDoor({userId:serviceAi,routeId:'unrelated.route'})).toMatchObject({decision:'deny',code:'service_key_route_denied'});
+    approvedAi.delete(serviceAi);
+    expect((await aiGet(request('GET'),undefined as never)).status).toBe(403);
+    approvedAi.add(serviceAi);
+    await service`UPDATE agent_roles SET revoked_at=clock_timestamp() WHERE principal_user_id=${serviceAi} AND scope='agent_access:manage'`;
+    expect((await aiGet(request('GET'),undefined as never)).status).toBe(403);
+    as(serviceAi,'session'); expect((await aiGet(request('GET',undefined,false),undefined as never)).status).toBe(404);
+    expect((await rolesGet(new NextRequest('http://localhost/api/v1/agent-access/roles',{headers:{authorization:'Bearer fixture-identity'}}),undefined as never)).status).toBe(403);
   });
 
   it("AI plane is bearer-only: a browser session gets 404 on POST and GET and nothing is written", async () => {

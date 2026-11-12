@@ -29,20 +29,26 @@ describe("S1 wiring", () => {
     const route = resolve(SRC, `app${AGENT_ACCESS_ROLES_PATH}/route.ts`);
     expect(existsSync(route)).toBe(true);
     const source = readFileSync(route, "utf8");
+    expect(source).toContain('createRoleRoutes("human")');
+    const shared = read("app/_lib/agent-access/roles-route.ts");
     for (const verb of ["GET", "POST", "DELETE"])
-      expect(source).toMatch(new RegExp(`export const ${verb} =`));
-    // Every handler guards the plane first.
-    expect(source.match(/refuseNonSession\(request, ctx\.log\)/g)?.length).toBeGreaterThanOrEqual(2);
+      expect(shared).toContain(`const ${verb} =`);
+    expect(shared).toContain("refuseNonSession(request, log)");
+    expect(shared).toContain("guardPlane");
   });
 
   it("uses that endpoint in the profile view and mounts the block there", () => {
     const view = read("app/(app)/profile/view.tsx");
     expect(view).toContain('from "./agent-access-endpoints"');
-    expect(view).toContain("<AgentAccessSection endpoints={AGENT_ACCESS_ENDPOINTS} />");
+    expect(view).toContain(
+      "<AgentAccessSection endpoints={AGENT_ACCESS_ENDPOINTS} />"
+    );
     expect(view).not.toMatch(/\/api\/v1\/agent\/roles/);
   });
 
   it("keeps the old AI-plane path gone and the human route out of the AI namespace", () => {
-    expect(existsSync(resolve(SRC, "app/api/v1/agent/roles/route.ts"))).toBe(false);
+    expect(existsSync(resolve(SRC, "app/api/v1/agent/roles/route.ts"))).toBe(
+      false
+    );
   });
 });

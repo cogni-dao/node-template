@@ -3,7 +3,7 @@
 
 /**
  * Module: `@cogni/knowledge-base-ui/agent-access/agent-access-section`
- * Purpose: "AI access": one compact table where a DAO admin says yes or no to what each AI can do.
+ * Purpose: Helps a human decide which permissions each AI may use.
  *   Columns: Who · Can do · Until · On. One row = one grant row, in three blocks: asks waiting, this node's AI, outside agents.
  * Scope: Presentation over `useAgentAccess`. Renders nothing for a non-admin.
  * Invariants:
@@ -40,7 +40,8 @@ export interface AgentAccessSectionProps {
   readonly className?: string;
 }
 
-const keyOf = (row: NodeAiPermissionView) => `${row.principalUserId}|${row.scope}`;
+const keyOf = (row: NodeAiPermissionView) =>
+  `${row.principalUserId}|${row.scope}`;
 
 const BLOCKS: ReadonlyArray<{ section: AccessSection; title: string }> = [
   { section: "pending", title: "Asks waiting" },
@@ -48,8 +49,21 @@ const BLOCKS: ReadonlyArray<{ section: AccessSection; title: string }> = [
   { section: "outside", title: "Outside agents" },
 ];
 
-export function AgentAccessSection({ endpoints, className }: AgentAccessSectionProps) {
-  const { state, busy, error, allow, remove, dismiss, reload } = useAgentAccess(endpoints);
+export function AgentAccessSection({
+  endpoints,
+  className,
+}: AgentAccessSectionProps) {
+  const {
+    state,
+    busy,
+    error,
+    allow,
+    remove,
+    dismiss,
+    reload,
+    loadMore,
+    loadingMore,
+  } = useAgentAccess(endpoints);
 
   // No flash: nothing renders until the server confirms an admin view or a 503.
   if (state.status === "hidden" || state.status === "loading") return null;
@@ -57,16 +71,26 @@ export function AgentAccessSection({ endpoints, className }: AgentAccessSectionP
   return (
     <section aria-labelledby="node-ai-heading" className={className}>
       <div className="pt-8 pb-2">
-        <h2 id="node-ai-heading" className="font-semibold text-foreground text-lg">
+        <h2
+          id="node-ai-heading"
+          className="font-semibold text-foreground text-lg"
+        >
           AI access
         </h2>
         <div className="mt-2 border-border border-b" />
       </div>
 
       {state.status === "unavailable" && (
-        <p className="flex items-center gap-3 py-3 text-destructive text-sm" role="alert">
+        <p
+          className="flex items-center gap-3 py-3 text-destructive text-sm"
+          role="alert"
+        >
           {UNAVAILABLE_COPY}
-          <button type="button" className="text-foreground underline" onClick={() => void reload()}>
+          <button
+            type="button"
+            className="text-foreground underline"
+            onClick={() => void reload()}
+          >
             Try again
           </button>
         </p>
@@ -79,25 +103,45 @@ export function AgentAccessSection({ endpoints, className }: AgentAccessSectionP
               {error}
             </p>
           )}
-          {state.view.more > 0 && (
-            <p className="pb-2 text-muted-foreground text-xs" role="status">
-              {state.view.more} more outside {state.view.more === 1 ? "row is" : "rows are"} not shown. Clear some to see them.
-            </p>
+          {!state.view.nextCursor && state.view.more > 0 && (
+            <p>{state.view.more} more outside rows are not shown</p>
+          )}
+          {state.view.nextCursor && (
+            <button
+              type="button"
+              disabled={loadingMore || busy !== null}
+              className="min-h-6 text-foreground underline focus-visible:outline focus-visible:outline-ring disabled:opacity-50"
+              onClick={() => void loadMore()}
+            >
+              {loadingMore ? "Loading…" : "Load more"}
+            </button>
           )}
           {state.view.permissions.length === 0 ? (
-            <p className="py-2 text-muted-foreground text-sm">Nothing to manage.</p>
+            <p className="py-2 text-muted-foreground text-sm">
+              Nothing to manage.
+            </p>
           ) : (
             <table className="w-full text-left text-sm">
               <thead className="text-muted-foreground text-xs">
                 <tr>
-                  <th scope="col" className="py-1 pr-3 font-medium">Who</th>
-                  <th scope="col" className="py-1 pr-3 font-medium">Can do</th>
-                  <th scope="col" className="py-1 pr-3 font-medium">Until</th>
-                  <th scope="col" className="w-20 py-1 text-right font-medium">On</th>
+                  <th scope="col" className="py-1 pr-3 font-medium">
+                    Who
+                  </th>
+                  <th scope="col" className="py-1 pr-3 font-medium">
+                    Can do
+                  </th>
+                  <th scope="col" className="py-1 pr-3 font-medium">
+                    Until
+                  </th>
+                  <th scope="col" className="w-20 py-1 text-right font-medium">
+                    On
+                  </th>
                 </tr>
               </thead>
               {BLOCKS.map(({ section, title }) => {
-                const rows = state.view.permissions.filter((r) => r.section === section);
+                const rows = state.view.permissions.filter(
+                  (r) => r.section === section
+                );
                 if (rows.length === 0) return null;
                 return (
                   <tbody key={section} className="divide-y divide-border">
@@ -136,16 +180,20 @@ export function AgentAccessSection({ endpoints, className }: AgentAccessSectionP
                           </td>
                           <td className="py-2 pr-3 align-top">
                             <div className="text-foreground">{row.label}</div>
-                            <div className="text-muted-foreground text-xs">{row.description}</div>
+                            <div className="text-muted-foreground text-xs">
+                              {row.description}
+                            </div>
                           </td>
                           <td className="whitespace-nowrap py-2 pr-3 align-top text-muted-foreground">
-                            {row.section === "pending" ? "—" : (row.until ?? "No end")}
+                            {row.section === "pending"
+                              ? "—"
+                              : (row.until ?? "No end")}
                           </td>
                           <td className="h-10 py-2 text-right align-top">
                             {saving ? (
                               <>
                                 <Skeleton className="ml-auto h-5 w-9 rounded-full" />
-                                <span className="sr-only" role="status">Saving</span>
+                                <output className="sr-only">Saving</output>
                               </>
                             ) : (
                               <span className="inline-flex items-center justify-end gap-2">
@@ -164,9 +212,13 @@ export function AgentAccessSection({ endpoints, className }: AgentAccessSectionP
                                     type="button"
                                     aria-label={`Dismiss the ask: ${row.who}: ${row.label}`}
                                     aria-disabled={busy !== null || undefined}
-                                    className="px-1 text-muted-foreground hover:text-foreground"
+                                    className="inline-flex min-h-6 min-w-6 items-center justify-center px-1 text-muted-foreground hover:text-foreground focus-visible:outline focus-visible:outline-ring"
                                     onClick={() => {
-                                      if (busy === null) void dismiss(row.principalUserId, row.scope);
+                                      if (busy === null)
+                                        void dismiss(
+                                          row.principalUserId,
+                                          row.scope
+                                        );
                                     }}
                                   >
                                     ×
@@ -190,7 +242,12 @@ export function AgentAccessSection({ endpoints, className }: AgentAccessSectionP
 }
 
 /** A small switch. `locked` ignores clicks while another row saves; it never dims the switch. */
-function Switch(props: { on: boolean; label: string; locked: boolean; onToggle: () => void }) {
+function Switch(props: {
+  on: boolean;
+  label: string;
+  locked: boolean;
+  onToggle: () => void;
+}) {
   return (
     <button
       type="button"
@@ -202,7 +259,7 @@ function Switch(props: { on: boolean; label: string; locked: boolean; onToggle: 
         if (!props.locked) props.onToggle();
       }}
       className={cn(
-        "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border border-transparent transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+        "relative inline-flex min-h-6 min-w-6 w-9 shrink-0 items-center rounded-full border border-transparent transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
         props.on ? "bg-primary" : "bg-input"
       )}
     >

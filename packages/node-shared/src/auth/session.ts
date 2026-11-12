@@ -22,8 +22,9 @@ export interface SessionUser {
   displayName: string | null;
   avatarColor: string | null;
   /**
-   * How this request authenticated (`bearer` machine key or `session` cookie). For logging only: it never
-   * decides authority. Every authenticated caller is the run subject.
+   * How this request authenticated (`bearer` machine key or `session` cookie). It does not decide
+   * tool authority (every authenticated caller is the run subject), but the route wrapper reads it for the route doors: only `session`
+   * is a human; an absent or unknown `via` is a bearer (fail closed).
    */
   via?: "bearer" | "session";
 }

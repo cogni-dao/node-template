@@ -31,6 +31,7 @@ export {
   NO_ROUTE_TWIN,
   OPEN_BY_DESIGN_ROUTES,
   ROUTE_ONLY_CAPABILITIES,
+  type RouteOnlyCapability,
   SAME_DOOR_ROUTES,
   type SameDoorRoute,
 } from "./same-door";
@@ -60,6 +61,7 @@ export type {
   NodeAiAccessView,
   AccessSection,
   NodeAiPermissionView,
+  RoleCursor,
   RoleRow,
   RoleState,
   RunIdentity,

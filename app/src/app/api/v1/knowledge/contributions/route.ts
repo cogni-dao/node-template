@@ -30,6 +30,7 @@ export const POST = wrapRouteHandlerWithLogging(
 export const GET = wrapRouteHandlerWithLogging(
   {
     routeId: "knowledge.contributions.list",
+    sameDoor: "knowledge.read",
     auth: { mode: "required", getSessionUser },
   },
   async (_ctx, request, sessionUser) => handleList(request, sessionUser)

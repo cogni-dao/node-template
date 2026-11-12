@@ -46,6 +46,8 @@ export interface UseAgentAccess {
   /** A one-line message after a failed click; cleared by the next click. */
   readonly error: string | null;
   readonly reload: () => Promise<void>;
+  readonly loadMore: () => Promise<void>;
+  readonly loadingMore: boolean;
   /** Turn a row ON: approves a pending ask or grants one of this node's AI. */
   readonly allow: (principalUserId: string, scope: string) => Promise<void>;
   /** Turn a row OFF. */
@@ -66,12 +68,17 @@ function isAdminView(value: unknown): value is NodeAiAccessView {
   );
 }
 
-export function useAgentAccess(endpoints: AgentAccessEndpoints): UseAgentAccess {
+export function useAgentAccess(
+  endpoints: AgentAccessEndpoints
+): UseAgentAccess {
   const [state, setState] = useState<AgentAccessState>({ status: "loading" });
+  const [loadingMore, setLoadingMore] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const alive = useRef(true);
   const seq = useRef(0);
+  // Refresh only the prefix explicitly opened by this human, including after a later-page edit.
+  const loadedPages = useRef(1);
   /** The latest state, readable outside React's updater. */
   const current = useRef<AgentAccessState>({ status: "loading" });
   /** True only after the server said "not an admin" (canManage false, 401 or 403). A transient failure never sets it. */
@@ -90,41 +97,47 @@ export function useAgentAccess(endpoints: AgentAccessEndpoints): UseAgentAccess 
   const reload = useCallback(async () => {
     const mine = ++seq.current;
     try {
-      const res = await fetch(endpoints.roles, {
-        cache: "no-store",
-        credentials: "same-origin",
-        headers: { accept: "application/json" },
-      });
-      if (!alive.current || mine !== seq.current) return;
-      // 404 means this node has no such route: permanent, so it is confirmed like a 401 or 403 and focus does not retry it.
-      if (res.status === 401 || res.status === 403 || res.status === 404) {
-        confirmedNotAdmin.current = true;
-        return commit({ status: "hidden" });
-      }
-      if (res.status === 503) {
-        confirmedNotAdmin.current = false;
-        return commit({ status: "unavailable" });
-      }
-      if (!res.ok) return transientFailure();
-      let body: unknown;
-      try {
-        body = await res.json();
-      } catch {
-        body = null;
-      }
-      if (!alive.current || mine !== seq.current) return;
-      if (isAdminView(body)) {
-        confirmedNotAdmin.current = false;
-        return commit({
-          status: "ready",
-          view: { ...body, more: typeof (body as { more?: unknown }).more === "number" ? body.more : 0 },
+      let view: NodeAiAccessView | undefined;
+      const pages = loadedPages.current;
+      for (let page = 0; page < pages; page++) {
+        const cursor = view?.nextCursor;
+        const url = cursor ? `${endpoints.roles}?${new URLSearchParams({
+          afterPrincipal: cursor.principalUserId, afterScope: cursor.scope,
+        })}` : endpoints.roles;
+        const res = await fetch(url, {
+          cache: "no-store", credentials: "same-origin", headers: { accept: "application/json" },
         });
+        if (!alive.current || mine !== seq.current) return;
+        // A revoked administrator must lose the whole loaded prefix, including later pages.
+        if (res.status === 401 || res.status === 403 || res.status === 404) {
+          confirmedNotAdmin.current = true;
+          return commit({ status: "hidden" });
+        }
+        if (res.status === 503) {
+          confirmedNotAdmin.current = false;
+          return commit({ status: "unavailable" });
+        }
+        if (!res.ok) return transientFailure();
+        let body: unknown;
+        try { body = await res.json(); } catch { body = null; }
+        if (!alive.current || mine !== seq.current) return;
+        if (!isAdminView(body)) {
+          if (typeof body === "object" && body !== null &&
+              (body as { canManage?: unknown }).canManage === false) {
+            confirmedNotAdmin.current = true;
+            return commit({ status: "hidden" });
+          }
+          return transientFailure();
+        }
+        const controls = new Map((view?.permissions ?? []).map(p => [`${p.principalUserId}|${p.scope}`, p]));
+        for (const permission of body.permissions) controls.set(`${permission.principalUserId}|${permission.scope}`, permission);
+        view = { ...body, more: typeof body.more === "number" ? body.more : 0, permissions: [...controls.values()] };
+        if (!view.nextCursor) break;
       }
-      if (typeof body === "object" && body !== null && (body as { canManage?: unknown }).canManage === false) {
-        confirmedNotAdmin.current = true;
-        return commit({ status: "hidden" });
+      if (view) {
+        confirmedNotAdmin.current = false;
+        commit({ status: "ready", view });
       }
-      transientFailure();
     } catch {
       if (alive.current && mine === seq.current) transientFailure();
     }
@@ -132,6 +145,7 @@ export function useAgentAccess(endpoints: AgentAccessEndpoints): UseAgentAccess 
 
   useEffect(() => {
     alive.current = true;
+    loadedPages.current = 1;
     void reload();
     // Focus re-checks, except after the server confirmed this caller is not an admin (no wasted admin check). An admin whose
     // first load failed transiently is not "confirmed", so focus retries and the block can appear.
@@ -145,8 +159,66 @@ export function useAgentAccess(endpoints: AgentAccessEndpoints): UseAgentAccess 
     };
   }, [reload]);
 
+  const loadMore = useCallback(async () => {
+    const before = current.current;
+    if (before.status !== "ready" || !before.view.nextCursor || loadingMore)
+      return;
+    const cursor = before.view.nextCursor,
+      mine = ++seq.current;
+    setLoadingMore(true);
+    setError(null);
+    const params = new URLSearchParams({
+      afterPrincipal: cursor.principalUserId,
+      afterScope: cursor.scope,
+    });
+    try {
+      const res = await fetch(`${endpoints.roles}?${params}`, {
+        cache: "no-store",
+        credentials: "same-origin",
+        headers: { accept: "application/json" },
+      });
+      const body: unknown = await res.json();
+      if (!alive.current || mine !== seq.current) return;
+      if (res.status === 401 || res.status === 403 || res.status === 404) {
+        confirmedNotAdmin.current = true;
+        commit({ status: "hidden" });
+        return;
+      }
+      if (!res.ok || !isAdminView(body)) {
+        setError(UNAVAILABLE_COPY);
+        return;
+      }
+      // Internal rows recur in each bounded projection; one control per principal/scope survives page boundaries.
+      const controls = new Map(
+        before.view.permissions.map((p) => [
+          `${p.principalUserId}|${p.scope}`,
+          p,
+        ])
+      );
+      for (const permission of body.permissions)
+        controls.set(
+          `${permission.principalUserId}|${permission.scope}`,
+          permission
+        );
+      loadedPages.current += 1;
+      commit({
+        status: "ready",
+        view: { ...body, permissions: [...controls.values()] },
+      });
+    } catch {
+      if (alive.current && mine === seq.current) setError(UNAVAILABLE_COPY);
+    } finally {
+      if (alive.current) setLoadingMore(false);
+    }
+  }, [endpoints.roles, loadingMore, commit]);
+
   const send = useCallback(
-    async (method: "POST" | "DELETE", principalUserId: string, scope: string, deny = false) => {
+    async (
+      method: "POST" | "DELETE",
+      principalUserId: string,
+      scope: string,
+      deny = false
+    ) => {
       setBusy(`${principalUserId}|${scope}`);
       setError(null);
       try {
@@ -154,10 +226,18 @@ export function useAgentAccess(endpoints: AgentAccessEndpoints): UseAgentAccess 
           method,
           cache: "no-store",
           credentials: "same-origin",
-          headers: { "content-type": "application/json", accept: "application/json" },
-          body: JSON.stringify({ principalUserId, scope, ...(deny ? { deny: true } : {}) }),
+          headers: {
+            "content-type": "application/json",
+            accept: "application/json",
+          },
+          body: JSON.stringify({
+            principalUserId,
+            scope,
+            ...(deny ? { deny: true } : {}),
+          }),
         });
-        if (!res.ok) setError(res.status === 503 ? UNAVAILABLE_COPY : SAVE_FAILED_COPY);
+        if (!res.ok)
+          setError(res.status === 503 ? UNAVAILABLE_COPY : SAVE_FAILED_COPY);
       } catch {
         setError(SAVE_FAILED_COPY);
       }
@@ -165,7 +245,7 @@ export function useAgentAccess(endpoints: AgentAccessEndpoints): UseAgentAccess 
       await reload();
       if (alive.current) setBusy(null);
     },
-    [endpoints.roles, reload],
+    [endpoints.roles, reload]
   );
 
   return {
@@ -173,8 +253,11 @@ export function useAgentAccess(endpoints: AgentAccessEndpoints): UseAgentAccess 
     busy,
     error,
     reload,
+    loadMore,
+    loadingMore,
     allow: (principalUserId, scope) => send("POST", principalUserId, scope),
     remove: (principalUserId, scope) => send("DELETE", principalUserId, scope),
-    dismiss: (principalUserId, scope) => send("DELETE", principalUserId, scope, true),
+    dismiss: (principalUserId, scope) =>
+      send("DELETE", principalUserId, scope, true),
   };
 }

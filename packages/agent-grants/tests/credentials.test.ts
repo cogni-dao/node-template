@@ -8,6 +8,8 @@
 
 import { describe, expect, it } from "vitest";
 import { type ConformanceFacts, runCredentialConformance } from "../src/credentials/conformance";
+import { createPostgresCredentialStore, type CredentialSql } from "../src/credentials/postgres";
+import { confirmCredential } from "../src/credentials/service";
 import { memoryCredentialStore } from "./credentials-memory-store";
 
 let current: ReturnType<typeof memoryCredentialStore> | undefined;
@@ -42,4 +44,28 @@ runCredentialConformance({
   storedHash: async (credentialId) => current?.rows.find((r) => r.id === credentialId)?.tokenHash ?? null,
   liveSuccessors: async (predecessorId) =>
     current?.rows.filter((r) => r.predecessorId === predecessorId && r.confirmedAt === null && r.revokedAt === null).length ?? 0,
+});
+
+
+describe("confirmation history rollout", () => {
+  it("a confirmed identity remains superseded when its credential audit row is unavailable", async () => {
+    const m = memoryCredentialStore({ users: { alice: {} } });
+    const issued = await m.store.issueUpgrade({ userId: "alice", tokenHash: "test-hash", policy: { ttlSec: 60, renewWindowSec: 60, pendingSec: 60 } });
+    if (!issued.ok) throw new Error("issue refused");
+    await confirmCredential(m.store, { credentialId: issued.credentialId });
+    m.rows.splice(0); // Reader qualification control, not permission to enable SQL purge.
+    expect(await m.store.everConfirmed("alice")).toBe(true);
+    expect(await m.store.everConfirmed("never-confirmed")).toBe(false);
+  });
+
+  it("an incomplete migration fails closed instead of reporting never confirmed", async () => {
+    const sql = (async (strings: TemplateStringsArray) => {
+      const query = strings.join("?");
+      if (query.includes("pg_roles")) return [{ bypass: true }];
+      if (query.includes("agent_authority_maintenance")) return [{ backfill_ready: false }];
+      throw new Error("history must not be read as a fallback to incomplete migration");
+    }) as unknown as CredentialSql;
+    const store = createPostgresCredentialStore(sql, { hasRoles: async () => false });
+    await expect(store.everConfirmed("alice")).rejects.toThrow("confirmation migration incomplete");
+  });
 });

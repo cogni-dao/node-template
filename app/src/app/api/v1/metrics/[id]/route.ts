@@ -13,7 +13,11 @@ export const runtime = "nodejs";
 export const GET = wrapRouteHandlerWithLogging<{
 	params: Promise<{ id: string }>;
 }>(
-	{ routeId: "metrics.metricRead", auth: { mode: "required", getSessionUser } },
+	{
+		routeId: "metrics.metricRead",
+		sameDoor: "knowledge.read",
+		auth: { mode: "required", getSessionUser },
+	},
 	async (_ctx, _request, user, context) => {
 		if (!user)
 			return NextResponse.json({ error: "unauthorized" }, { status: 401 });

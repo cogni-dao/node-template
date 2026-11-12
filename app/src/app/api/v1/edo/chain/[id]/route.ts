@@ -24,6 +24,7 @@ export const GET = wrapRouteHandlerWithLogging<{
 }>(
   {
     routeId: "edo.chain",
+    sameDoor: "knowledge.read",
     auth: { mode: "required", getSessionUser },
   },
   async (_ctx, request, sessionUser, context) => {

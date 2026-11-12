@@ -17,7 +17,8 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { guardTools, ToolAuthorityError } from "@cogni/agent-grants";
+import { guardTools, ToolAuthorityError, type SqlTag } from "@cogni/agent-grants";
+import { createPostgresCredentialStore, type CredentialSql, hashAgentKey } from "@cogni/agent-grants/credentials";
 import {
   NODE_AI_PRINCIPAL_SLUG,
   NODE_AI_PRINCIPAL_USER_ID,
@@ -39,6 +40,7 @@ const ADMIN_WALLET = `0x${"ad".repeat(20)}`;
 describe("agent authority (real Postgres)", () => {
   let service: Sql;
   let app: Sql;
+  let serviceUrl: string;
   const created = {
     users: [] as string[],
     roles: [] as string[],
@@ -57,7 +59,8 @@ describe("agent authority (real Postgres)", () => {
   beforeAll(() => {
     if (!process.env.DATABASE_SERVICE_URL || !process.env.DATABASE_URL)
       throw new Error("component PostgreSQL required");
-    service = postgres(process.env.DATABASE_SERVICE_URL, { max: 4 });
+    serviceUrl = process.env.DATABASE_SERVICE_URL;
+    service = postgres(serviceUrl, { max: 4 });
     app = postgres(process.env.DATABASE_URL, { max: 2 });
   });
 
@@ -75,7 +78,7 @@ describe("agent authority (real Postgres)", () => {
   describe("V2: migration applies to a fresh database and seeds both principals", () => {
     it("has the node-ai and prioritizer internal principals", async () => {
       const rows = await service`
-        SELECT slug, kind, user_id FROM agent_principals ORDER BY slug`;
+        SELECT slug, kind, user_id FROM agent_principals WHERE kind = 'internal' ORDER BY slug`;
       expect(rows.map((r) => ({ slug: r.slug, kind: r.kind, user_id: r.user_id }))).toEqual([
         { slug: NODE_AI_PRINCIPAL_SLUG, kind: "internal", user_id: NODE_AI_PRINCIPAL_USER_ID },
         { slug: PRIORITIZER_PRINCIPAL_SLUG, kind: "internal", user_id: PRIORITIZER_PRINCIPAL_USER_ID },
@@ -120,7 +123,8 @@ describe("agent authority (real Postgres)", () => {
       await service`INSERT INTO agent_roles (principal_user_id, scope, approved_by)
         VALUES (${NODE_AI_PRINCIPAL_USER_ID}, 'rls:probe', ${u})`;
       expect(await app`SELECT 1 FROM agent_roles`).toHaveLength(0);
-      expect(await app`SELECT slug FROM agent_principals`).toHaveLength(2);
+      // Other component files may create external enrollment principals in the shared DB; the migration owns these internal seeds.
+      expect(await app`SELECT slug FROM agent_principals WHERE kind = 'internal'`).toHaveLength(2);
       await expect(
         app`INSERT INTO agent_roles (principal_user_id, scope, approved_by)
           VALUES (${NODE_AI_PRINCIPAL_USER_ID}, 'rls:write', ${u})`
@@ -247,6 +251,53 @@ describe("agent authority (real Postgres)", () => {
   });
 
   describe("wallet-bound admin check (N7)", () => {
+    it("two admin-subject bearers finish on max2 without reacquiring the root pool", async () => {
+      const pool = postgres(serviceUrl, { max: 2 });
+      const allowed = await makeUser(), denied = await makeUser(), approver = await makeUser();
+      for (const user of [allowed, denied]) {
+        await service`INSERT INTO agent_principals(kind,user_id) VALUES('external',${user})`;
+        await service`INSERT INTO agent_roles(principal_user_id,scope,approved_by) VALUES(${user},'agent_access:manage',${approver})`;
+      }
+      let roleReads = 0, release!: () => void;
+      const bothRoles = new Promise<void>((resolve) => { release = resolve; });
+      const root: SqlTag = (strings, ...values) => (pool as unknown as SqlTag)(strings, ...values);
+      const sql: AgentAuthoritySql = Object.assign(root, {
+        async begin<T>(fn: (tx: SqlTag) => Promise<T>): Promise<T> {
+          const result = await pool.begin(async (native) => {
+            const tx: SqlTag = async (strings, ...values) => {
+              const rows = await (native as unknown as SqlTag)(strings, ...values);
+              if (strings.join("?").includes("FROM agent_roles") && ++roleReads <= 2) {
+                if (roleReads === 2) release();
+                await bothRoles;
+              }
+              return rows;
+            };
+            return { value: await fn(tx) };
+          });
+          return result.value;
+        },
+      });
+      // Both role reads own a real connection before either admin read proceeds.
+      const authority = createAgentToolAuthority({ sql, toolBundle: [], log: makeLogger({ component: "max2-authority-test" }),
+        nodeAdmin: { check: async ({ userId }) => userId === allowed ? { ok: true } : { ok: false, errorCode: "authz_denied" } },
+      });
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const bounded = <T,>(work: Promise<T>) => Promise.race([work, new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("max2 authority stalled")), 2000);
+      })]).finally(() => clearTimeout(timer));
+      try {
+        const decide = (userId: string) => authority.authorizeRoute({ userId, via: "bearer", toolId: "agent-access.manage", routeId: "agent.access.roles.grant" });
+        expect(await bounded(Promise.all([decide(allowed), decide(denied)]))).toEqual([
+          { decision: "allow", basis: "role" }, { decision: "deny", code: "policy_denied", reason: "subject_not_admin" },
+        ]);
+        expect(roleReads).toBe(2);
+        const store = createPostgresCredentialStore(pool as unknown as CredentialSql, { hasRoles: async () => false });
+        expect(await bounded(store.lookup(await hashAgentKey(randomUUID())))).toBeNull();
+        await service`UPDATE agent_roles SET revoked_at=clock_timestamp() WHERE principal_user_id=${allowed} AND scope='agent_access:manage'`;
+        expect(await bounded(decide(allowed))).toMatchObject({ decision: "deny", reason: "no_role" });
+      } finally { release(); await pool.end({ timeout: 0 }); }
+    });
+
     const nodeAdmin = (admins: string[]) => ({
       check: async (actor: { walletAddress?: string | null }) =>
         admins.length === 0

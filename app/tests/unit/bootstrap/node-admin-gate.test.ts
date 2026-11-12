@@ -16,10 +16,14 @@ import { checkNodeAdmin, isPrivilegedPriority } from "@cogni/knowledge-store";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const ADMIN = "0x070075F1389Ae1182aBac722B36CA12285d0c949";
+const NODE_ID = "11111111-1111-4111-8111-111111111111";
+let principals: string[] = [];
 let approvers: string[] = [ADMIN.toLowerCase()];
 
 vi.mock("@/shared/config", () => ({
   getLedgerApprovers: () => approvers,
+  getNodeId: () => NODE_ID,
+  getNodeAdminPrincipals: () => principals,
   isDaoAdmin: (w: string | null | undefined) =>
     !!w && approvers.includes(w.toLowerCase()),
 }));
@@ -30,6 +34,7 @@ describe("approvers-backed NodeAdminAuthority", () => {
   const authority = createApproversNodeAdminAuthority();
   beforeEach(() => {
     approvers = [ADMIN.toLowerCase()];
+    principals = [];
   });
 
   it("allows an approver wallet, case-insensitively", async () => {
@@ -54,6 +59,22 @@ describe("approvers-backed NodeAdminAuthority", () => {
     await expect(
       authority.check({ userId: "u1", walletAddress: ADMIN })
     ).resolves.toMatchObject({ ok: false, errorCode: "authz_unavailable" });
+  });
+
+  it("allows a DAO-approved node-qualified AI principal with its own identity; another node or user remains denied", async () => {
+    principals = [`agent:${NODE_ID}/approved-ai`];
+    await expect(authority.check({ userId: "approved-ai" })).resolves.toEqual({
+      ok: true,
+    });
+    await expect(authority.check({ userId: "other-ai" })).resolves.toEqual({
+      ok: false,
+      errorCode: "authz_denied",
+    });
+    principals = ["agent:22222222-2222-4222-8222-222222222222/approved-ai"];
+    await expect(authority.check({ userId: "approved-ai" })).resolves.toEqual({
+      ok: false,
+      errorCode: "authz_denied",
+    });
   });
 
   it("priority <= 1 is privileged (negatives included); 2+ is open", () => {

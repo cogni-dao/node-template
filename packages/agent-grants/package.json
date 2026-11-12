@@ -1,6 +1,6 @@
 {
   "name": "@cogni-dao/agent-grants",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "license": "LicenseRef-PolyForm-Shield-1.0.0",
   "repository": {
     "type": "git",
@@ -24,6 +24,31 @@
       "types": "./dist/credentials/conformance.d.ts",
       "import": "./dist/conformance.js",
       "default": "./dist/conformance.js"
+    },
+    "./enrollment": {
+      "types": "./dist/enrollment/index.d.ts",
+      "import": "./dist/enrollment.js",
+      "default": "./dist/enrollment.js"
+    },
+    "./enrollment-client": {
+      "types": "./dist/enrollment/client/index.d.ts",
+      "import": "./dist/enrollment-client.js",
+      "default": "./dist/enrollment-client.js"
+    },
+    "./enrollment-conformance": {
+      "types": "./dist/enrollment/conformance.d.ts",
+      "import": "./dist/enrollment-conformance.js",
+      "default": "./dist/enrollment-conformance.js"
+    },
+    "./enrollment-requester": {
+      "types": "./dist/enrollment/requester/index.d.ts",
+      "import": "./dist/enrollment-requester.js",
+      "default": "./dist/enrollment-requester.js"
+    },
+    "./durable-enrollment-conformance": {
+      "types": "./dist/enrollment/durable-conformance.d.ts",
+      "import": "./dist/durable-enrollment-conformance.js",
+      "default": "./dist/durable-enrollment-conformance.js"
     }
   },
   "types": "./dist/index.d.ts",
@@ -38,6 +63,7 @@
     "test": "vitest run --config vitest.config.ts"
   },
   "dependencies": {
+    "jose": "^6.2.3",
     "zod": "^4.1.12"
   },
   "devDependencies": {

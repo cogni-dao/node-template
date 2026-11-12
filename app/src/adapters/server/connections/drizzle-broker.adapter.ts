@@ -95,6 +95,10 @@ export class DrizzleConnectionBrokerAdapter implements ConnectionBrokerPort {
       throw new ConnectionNotFoundError(connectionId);
     }
 
+    // Service custody uses the shared full-identity/generation resolver, never the legacy connection-id door.
+    if (row.provider === "cogni-node")
+      throw new ConnectionNotFoundError(connectionId);
+
     // Tenant verification (defense-in-depth)
     if (row.billingAccountId !== scope.tenantId) {
       this.log.warn(

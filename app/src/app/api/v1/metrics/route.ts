@@ -11,7 +11,11 @@ import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 export const GET = wrapRouteHandlerWithLogging(
-	{ routeId: "metrics.metricList", auth: { mode: "required", getSessionUser } },
+	{
+		routeId: "metrics.metricList",
+		sameDoor: "knowledge.read",
+		auth: { mode: "required", getSessionUser },
+	},
 	async (_ctx, request, user) => {
 		if (!user)
 			return NextResponse.json({ error: "unauthorized" }, { status: 401 });

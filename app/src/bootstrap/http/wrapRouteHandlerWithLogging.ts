@@ -85,6 +85,7 @@ type AuthRequiredOptions = {
 
 type AuthOptionalOptions = {
   routeId: string;
+  sameDoor?: string;
   auth: {
     mode: "optional";
     getSessionUser: () => Promise<SessionUser | null>;
@@ -257,6 +258,22 @@ export function wrapRouteHandlerWithLogging<TContext = unknown>(
           }
 
           const sameDoor = "sameDoor" in options ? options.sameDoor : undefined;
+          // SERVICE_KEY_DENY_BY_DEFAULT: an enrolled bearer needs an applicable declared capability gate. Its ordinary grants decide at that
+          // gate; service kind never overrides an approved capability. An ungated route stays closed. A human session and a bearer
+          // without `service_key` pass. Fail closed, like the door: only an identity that says `session` is a human; an absent or unknown `via` is a bearer.
+          if (sessionUser && sessionUser.via !== "session" && !sameDoor) {
+            const gate = await container.agentAuthority.denyServiceKeyOffDoor({
+              routeId: options.routeId,
+              userId: sessionUser.id,
+            });
+            if (gate.decision === "deny") {
+              responseStatus = gate.code === "authz_unavailable" ? 503 : 403;
+              return NextResponse.json(
+                { error: gate.code, code: gate.code },
+                { status: responseStatus, headers: { "cache-control": "no-store" } }
+              );
+            }
+          }
           if (sameDoor && sessionUser) {
             const decision = await container.agentAuthority.authorizeRoute({
               toolId: sameDoor,

@@ -30,9 +30,12 @@ export const agentRolesOperation = {
       scope: z.string().min(1).max(100),
       deny: z.boolean().optional(),
     })
-    .refine((v) => (v.principal === undefined) !== (v.principalUserId === undefined), {
-      message: "send exactly one of principal or principalUserId",
-    }),
+    .refine(
+      (v) => (v.principal === undefined) !== (v.principalUserId === undefined),
+      {
+        message: "send exactly one of principal or principalUserId",
+      }
+    ),
   output: z.object({
     principal: z.string().optional(),
     scope: z.string(),
@@ -51,7 +54,19 @@ export const HUMAN_SESSION_REQUIRED = "human_session_required" as const;
  */
 export const agentRolesListOperation = {
   id: "agent.roles.list.v1",
+  input: z
+    .object({
+      afterPrincipal: z.string().min(1).max(100).optional(),
+      afterScope: z.string().min(1).max(100).optional(),
+    })
+    .refine(
+      (v) => (v.afterPrincipal === undefined) === (v.afterScope === undefined)
+    ),
   output: z.object({
+    nextCursor: z
+      .object({ principalUserId: z.string(), scope: z.string() })
+      .nullable()
+      .optional(),
     canManage: z.boolean(),
     permissions: z.array(
       z.object({

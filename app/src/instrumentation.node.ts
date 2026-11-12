@@ -185,6 +185,53 @@ export async function register(): Promise<void> {
     fatalStartup(error, "startup_log");
   }
 
+  // This existing process owns the one package maintenance lease. No workflow or additional DB pool.
+  const { maintenanceTick, maintainEnrollmentDelivery } = await import("@cogni/agent-grants/enrollment");
+  const { maintainRequesterCustody } = await import("@cogni/agent-grants/enrollment-requester");
+  const { getServiceDb } = await import(
+    "@/adapters/server/db/drizzle.service-client"
+  );
+  const maintenanceLogger = pino({
+    base: { component: "agent-authority-maintenance" },
+  });
+  let maintenanceRunning = false;
+  const tick = async () => {
+    if (maintenanceRunning) return;
+    maintenanceRunning = true;
+    try {
+      const outcome = await maintenanceTick(
+        getServiceDb()
+          .$client as unknown as import("@cogni/agent-grants/credentials").CredentialSql,
+        async (tx) => {
+          await maintainRequesterCustody(tx);
+          await maintainEnrollmentDelivery(tx);
+        }
+      );
+      if (outcome.due)
+        maintenanceLogger.warn(
+          {
+            event: "agent.authority.maintenance_backlog",
+            processed: outcome.processed,
+          },
+          "agent.authority.maintenance_backlog"
+        );
+    } catch {
+      maintenanceLogger.warn(
+        { event: "agent.authority.maintenance_unavailable" },
+        "agent.authority.maintenance_unavailable"
+      );
+    } finally {
+      maintenanceRunning = false;
+    }
+  };
+  const timer = setInterval(() => {
+    void tick();
+  }, 60000);
+  timer.unref();
+  const stop = () => clearInterval(timer);
+  process.once("SIGTERM", stop);
+  process.once("SIGINT", stop);
+
   // Dev mode (not test): warn if LiteLLM has stale test config from a previous session.
   // Keep this advisory check independent of mandatory qualification.
   // biome-ignore lint/style/noProcessEnv: startup check before config framework
