@@ -4,8 +4,8 @@
 /**
  * Module: `@app/api/v1/knowledge/index/route`
  * Purpose: GET /api/v1/knowledge/index — the routing projection. Returns id + entryType + retrieval trigger per entry WITHOUT content, so an agent can choose a shelf entry without downloading bodies, optionally filtered to the triggers matching `?q=`.
- * Scope: Any authenticated principal (cookie-session human OR bearer agent), mirroring the list route. Reads via container.knowledgeStorePort. Does not search titles or bodies — `q` matches the retrieval trigger only.
- * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, KNOWLEDGE_READ_REQUIRES_PRINCIPAL, INDEX_CARRIES_NO_CONTENT, Q_MATCHES_USEWHEN_ONLY.
+ * Scope: Signed-in human, or a bearer agent holding the knowledge:read role (sameDoor `knowledge.read`), mirroring the list route. Reads via container.knowledgeStorePort. Does not search titles or bodies — `q` matches the retrieval trigger only.
+ * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, KNOWLEDGE_READ_NEEDS_GRANT, INDEX_CARRIES_NO_CONTENT, Q_MATCHES_USEWHEN_ONLY.
  * Side-effects: IO (HTTP response, Doltgres reads via container port)
  * Links: packages/node-contracts/src/knowledge.index.v1.contract.ts
  * @public
@@ -27,6 +27,7 @@ export const runtime = "nodejs";
 export const GET = wrapRouteHandlerWithLogging(
   {
     routeId: "knowledge.index",
+    sameDoor: "knowledge.read",
     auth: { mode: "required", getSessionUser },
   },
   async (_ctx, request, sessionUser) => {

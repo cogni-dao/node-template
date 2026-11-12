@@ -23,7 +23,11 @@ import {
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 export const GET = wrapRouteHandlerWithLogging(
-  { routeId: "knowledge.browse", auth: { mode: "required", getSessionUser } },
+  {
+    routeId: "knowledge.browse",
+    sameDoor: "knowledge.read",
+    auth: { mode: "required", getSessionUser },
+  },
   async (ctx, request, sessionUser) => {
     const startedAt = performance.now();
     let status = 500;

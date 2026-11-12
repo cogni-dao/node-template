@@ -4,8 +4,8 @@
 /**
  * Module: `@app/api/v1/knowledge/graph/route`
  * Purpose: GET /api/v1/knowledge/graph — the whole knowledge graph (every projected entry and every entry-to-entry citation) at one store revision.
- * Scope: Thin route: session check, `readKnowledgeGraph` from `@cogni/knowledge-store` (ETag/304, one pinned read per revision, deadline → retryable 503, byte budget), one log event, response. Any authenticated principal (cookie human or bearer agent).
- * Invariants: AUTH_VIA_GETSESSIONUSER (unauthenticated → 401 before any read, even with If-None-Match), KNOWLEDGE_READ_REQUIRES_PRINCIPAL, ONE_TERMINAL_LOG (`knowledge.graph_read`: counts, bytes, budgetExceeded).
+ * Scope: Thin route: session check, `readKnowledgeGraph` from `@cogni/knowledge-store` (ETag/304, one pinned read per revision, deadline → retryable 503, byte budget), one log event, response. Signed-in human, or a bearer agent holding the knowledge:read role (sameDoor `knowledge.read`).
+ * Invariants: AUTH_VIA_GETSESSIONUSER (unauthenticated → 401 before any read, even with If-None-Match), KNOWLEDGE_READ_NEEDS_GRANT, ONE_TERMINAL_LOG (`knowledge.graph_read`: counts, bytes, budgetExceeded).
  * Side-effects: IO (HTTP response, Doltgres reads via container port)
  * Links: @cogni-dao/knowledge-store readKnowledgeGraph, task.0059
  * @public
@@ -23,7 +23,11 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export const GET = wrapRouteHandlerWithLogging(
-  { routeId: "knowledge.graph", auth: { mode: "required", getSessionUser } },
+  {
+    routeId: "knowledge.graph",
+    sameDoor: "knowledge.read",
+    auth: { mode: "required", getSessionUser },
+  },
   async (ctx, request, sessionUser) => {
     if (!sessionUser) {
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });

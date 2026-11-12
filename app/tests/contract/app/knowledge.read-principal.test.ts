@@ -3,14 +3,14 @@
 
 /**
  * Module: `@tests/contract/app/knowledge.read-principal`
- * Purpose: Lock in KNOWLEDGE_READ_REQUIRES_PRINCIPAL — bearer-token agents may
- *   read the knowledge plane (list, single entry, citation graph, domain
- *   registry) just like cookie-session humans. Regression guard for the v0
- *   guard that 403'd every bearer browse request.
- * Scope: Exercises the four GET read routes and mutation failure receipts with an `Authorization: Bearer`
- *   header against a seeded fake store or a failing contribution service.
- * Invariants: a bearer-bearing read returns 200 (never 403); link-pulling
- *   (graph edges) is reachable by agents.
+ * Purpose: Lock in KNOWLEDGE_READ_NEEDS_GRANT — a bearer-token agent reads the
+ *   knowledge plane (list, single entry, citation graph, domain registry) only
+ *   with a live `knowledge:read` role row (task.0110); a signed-in human reads
+ *   with no row. Without the row a bearer gets 403 `policy_denied`.
+ * Scope: Exercises the GET read routes and mutation failure receipts with an `Authorization: Bearer`
+ *   header against a seeded fake store or a failing contribution service. The REAL `authorizeRoute` runs on a fake SQL tag.
+ * Invariants: a bearer with the role reads 200; a bearer without it is 403 before any read; link-pulling
+ *   (graph edges) is reachable by an agent that holds the role.
  * Side-effects: none (container + auth mocked, fake in-memory store)
  * Links: src/app/api/v1/knowledge, docs/spec/knowledge-syntropy.md
  * @internal
@@ -30,6 +30,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // Fresh fake store per test (reassigned in beforeEach); the container mock
 // hands the current instance to every route. Lazy factory => reads latest value.
 let mockStore: FakeKnowledgeStoreAdapter;
+// The real route door over a fake SQL tag: answers the role lookup from `roles` ("<principal>|<scope>").
+const grants = vi.hoisted(() => ({ roles: new Set<string>(), authority: undefined as unknown }));
 const mockContributions = vi.hoisted(() => ({
   create: vi.fn(),
   appendCommit: vi.fn(),
@@ -55,6 +57,7 @@ vi.mock("@/bootstrap/container", () => ({
     clock: { now: vi.fn(() => new Date("2026-01-01T00:00:00Z")) },
     config: { unhandledErrorPolicy: "rethrow" },
     knowledgeStorePort: mockStore,
+    agentAuthority: grants.authority,
     knowledgeContributionService: mockContributions,
   })),
 }));
@@ -67,6 +70,16 @@ vi.mock("@/app/_lib/auth/session", () => ({
   getSessionUser: vi.fn().mockResolvedValue(TEST_SESSION_USER_1),
 }));
 
+import { CORE_TOOL_BUNDLE } from "@cogni/ai-tools";
+import {
+  type AgentAuthoritySql,
+  createAgentToolAuthority,
+} from "@/bootstrap/agent-authority";
+import { getSessionUser } from "@/app/_lib/auth/session";
+import * as browseHandler from "@/app/api/v1/knowledge/browse/route";
+import * as historyHandler from "@/app/api/v1/knowledge/[id]/history/route";
+import * as indexHandler from "@/app/api/v1/knowledge/index/route";
+import * as domainHandler from "@/app/api/v1/knowledge/domains/[domain]/route";
 import * as entryHandler from "@/app/api/v1/knowledge/[id]/route";
 import * as domainsHandler from "@/app/api/v1/knowledge/domains/route";
 import * as graphHandler from "@/app/api/v1/knowledge/graph/route";
@@ -107,9 +120,31 @@ async function seedStore(store: FakeKnowledgeStoreAdapter) {
   );
 }
 
-describe("knowledge read routes — KNOWLEDGE_READ_REQUIRES_PRINCIPAL", () => {
+function fakeSql(): AgentAuthoritySql {
+  const tag = (async (strings: TemplateStringsArray, ...values: unknown[]) =>
+    strings.join("?").includes("FROM agent_roles") &&
+    grants.roles.has(`${values[0]}|${values[1]}`)
+      ? [{ ok: 1 }]
+      : []) as unknown as AgentAuthoritySql;
+  (tag as unknown as { begin: unknown }).begin = async (
+    fn: (t: unknown) => Promise<unknown>
+  ) => fn(tag);
+  return tag;
+}
+
+describe("knowledge read routes — KNOWLEDGE_READ_NEEDS_GRANT", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
+    // clearAllMocks keeps the default session user (no `via`: the strict bearer branch).
+    grants.roles = new Set([`${TEST_SESSION_USER_1.id}|knowledge:read`]);
+    const noop = () => undefined;
+    const quiet = { info: noop, warn: noop, error: noop, debug: noop };
+    grants.authority = createAgentToolAuthority({
+      sql: fakeSql(),
+      nodeAdmin: { check: async () => ({ ok: false, errorCode: "authz_denied" }) },
+      log: quiet as never,
+      toolBundle: CORE_TOOL_BUNDLE as never,
+    });
     mockStore = new FakeKnowledgeStoreAdapter();
     await seedStore(mockStore);
   });
@@ -206,6 +241,69 @@ describe("knowledge read routes — KNOWLEDGE_READ_REQUIRES_PRINCIPAL", () => {
         expect(res.status).toBe(200);
         const body = await res.json();
         expect(body.domains.map((d: { id: string }) => d.id)).toContain("eng");
+      },
+    });
+  });
+});
+
+describe("knowledge read door — bearer without the role is 403, a human is 200", () => {
+  const reads = [
+    { name: "list", appHandler: listHandler, url: "/api/v1/knowledge" },
+    { name: "get", appHandler: entryHandler, url: "/api/v1/knowledge/entry-a", params: { id: "entry-a" } },
+    { name: "history", appHandler: historyHandler, url: "/api/v1/knowledge/entry-a/history", params: { id: "entry-a" } },
+    { name: "browse", appHandler: browseHandler, url: "/api/v1/knowledge/browse" },
+    { name: "index", appHandler: indexHandler, url: "/api/v1/knowledge/index" },
+    { name: "graph", appHandler: graphHandler, url: "/api/v1/knowledge/graph" },
+    { name: "domains", appHandler: domainsHandler, url: "/api/v1/knowledge/domains" },
+    { name: "domain", appHandler: domainHandler, url: "/api/v1/knowledge/domains/eng", params: { domain: "eng" } },
+  ];
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mockStore = new FakeKnowledgeStoreAdapter();
+    await seedStore(mockStore);
+    grants.roles = new Set();
+    grants.authority = createAgentToolAuthority({
+      sql: fakeSql(),
+      nodeAdmin: { check: async () => ({ ok: false, errorCode: "authz_denied" }) },
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never,
+      toolBundle: CORE_TOOL_BUNDLE as never,
+    });
+  });
+  for (const r of reads) {
+    it(`GET ${r.name}: a bearer with no knowledge:read row is 403 policy_denied`, async () => {
+      await testApiHandler({
+        appHandler: r.appHandler,
+        ...(r.params ? { params: r.params } : {}),
+        url: r.url,
+        async test({ fetch }) {
+          const res = await fetch({ method: "GET", headers: BEARER });
+          expect(res.status).toBe(403);
+          expect(await res.json()).toEqual({ error: "policy_denied", code: "policy_denied" });
+        },
+      });
+    });
+  }
+  it("a bearer holding another scope is still 403; once knowledge:read is turned on it is 200", async () => {
+    grants.roles.add(`${TEST_SESSION_USER_1.id}|knowledge:contribute`);
+    await testApiHandler({
+      appHandler: listHandler,
+      url: "/api/v1/knowledge",
+      async test({ fetch }) {
+        expect((await fetch({ method: "GET", headers: BEARER })).status).toBe(403);
+        grants.roles.add(`${TEST_SESSION_USER_1.id}|knowledge:read`);
+        expect((await fetch({ method: "GET", headers: BEARER })).status).toBe(200);
+      },
+    });
+  });
+  it("a signed-in human session reads with no role row", async () => {
+    vi.mocked(getSessionUser).mockResolvedValueOnce({ ...TEST_SESSION_USER_1, via: "session" });
+    await testApiHandler({
+      appHandler: listHandler,
+      url: "/api/v1/knowledge",
+      async test({ fetch }) {
+        const res = await fetch({ method: "GET" });
+        expect(res.status).toBe(200);
+        expect((await res.json()).items).toHaveLength(2);
       },
     });
   });

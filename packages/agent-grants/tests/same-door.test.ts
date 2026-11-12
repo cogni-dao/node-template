@@ -60,6 +60,16 @@ describe("authorizeCaller (the route door)", () => {
     expect(await authorizeCaller(store, allowAdmin, { userId: "h", via: "session", requires: node("admin") })).toMatchObject({ decision: "allow" });
     expect(await authorizeCaller(store, async () => "unavailable", { userId: "h", via: "session", requires: node("admin") })).toMatchObject({ code: "authz_unavailable" });
   });
+  it("knowledge.read: a human reads unchanged, a bearer needs a knowledge:read role row", async () => {
+    const requires = ROUTE_ONLY_CAPABILITIES["knowledge.read"]!.requires;
+    expect(requires).toMatchObject({ scope: "knowledge:read", kind: "node", subject: "member" });
+    expect(await authorizeCaller(memoryStore(), denyAdmin, { userId: "h", via: "session", requires })).toMatchObject({ decision: "allow", basis: "signed_in" });
+    expect(await authorizeCaller(memoryStore(), denyAdmin, { userId: "a", via: "bearer", requires })).toMatchObject({ decision: "deny", code: "policy_denied", reason: "no_role" });
+    expect(await authorizeCaller(memoryStore({ roles: [{ principal: "a", scope: "knowledge:contribute" }] }), denyAdmin, { userId: "a", via: "bearer", requires })).toMatchObject({ decision: "deny" });
+    expect(await authorizeCaller(memoryStore({ roles: [{ principal: "a", scope: "knowledge:read" }] }), denyAdmin, { userId: "a", via: "bearer", requires })).toMatchObject({ decision: "allow" });
+    expect(ROUTE_ONLY_CAPABILITIES["knowledge.read"]!.routes).toEqual(expect.arrayContaining(["knowledge.list", "knowledge.get", "knowledge.graph"]));
+  });
+
   it("knowledge.contribute: a human proposes unchanged, a bearer needs a role row", async () => {
     const requires = ROUTE_ONLY_CAPABILITIES["knowledge.contribute"]!.requires;
     expect(await authorizeCaller(memoryStore(), denyAdmin, { userId: "h", via: "session", requires })).toMatchObject({ decision: "allow" });

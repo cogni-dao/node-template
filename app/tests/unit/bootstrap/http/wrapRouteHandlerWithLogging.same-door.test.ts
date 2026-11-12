@@ -143,6 +143,20 @@ describe("the route door (real wrapper, real authorizeRoute)", () => {
     expect((await call("knowledge.contribute", user("bearer"))).status).toBe(200);
   });
 
+  it("the route-only knowledge.read scope: a human reads, a bearer needs the knowledge:read row, and the ask for it is accepted", async () => {
+    expect((await call("knowledge.read", user("session", "human-1"))).status).toBe(200);
+    const denied = await call("knowledge.read", user("bearer"));
+    expect(denied.status).toBe(403);
+    expect(await denied.json()).toEqual({ error: "policy_denied", code: "policy_denied" });
+    state.roles.add(`${AGENT}|knowledge:contribute`);
+    expect((await call("knowledge.read", user("bearer"))).status).toBe(403); // another scope opens nothing here
+    state.roles.add(`${AGENT}|knowledge:read`);
+    expect((await call("knowledge.read", user("bearer"))).status).toBe(200);
+    const authority = (fake.container as { agentAuthority: ReturnType<typeof createAgentToolAuthority> }).agentAuthority;
+    expect(authority.declaredScopes).toContain("knowledge:read");
+    await expect(authority.requestAccess({ principalUserId: "asker", scope: "knowledge:read" })).resolves.toMatchObject({ state: "pending" });
+  });
+
   it("logs agent_tool.authz with the route id, the principal (bearer) or the subject (human), and no secret", async () => {
     await call("core__work_item_update", user("bearer"));
     await call("core__work_item_update", user("session", "human-1"));

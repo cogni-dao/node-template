@@ -13,7 +13,6 @@
 
 "use client";
 
-import { AgentAccessSection } from "@cogni/knowledge-base-ui";
 import { useConnectModal } from "@rainbow-me/rainbowkit";
 import { ArrowRight, Check, Server as ServerIcon } from "lucide-react";
 import Link from "next/link";
@@ -34,8 +33,6 @@ import {
 } from "@/components";
 import { Spinner } from "@cogni/node-ui-kit/shadcn/spinner";
 import { OpenAIIcon } from "@/features/ai/icons/providers/OpenAIIcon";
-
-import { AGENT_ACCESS_ENDPOINTS } from "./agent-access-endpoints";
 
 /* ─── Types ────────────────────────────────────────────────────────── */
 
@@ -1134,10 +1131,6 @@ export function ProfileView({
           </div>
         </div>
       )}
-
-      {/* ── This node's AI (DAO admins only; renders nothing for everyone else) ── */}
-
-      <AgentAccessSection endpoints={AGENT_ACCESS_ENDPOINTS} />
 
       {/* ── Ownership ── */}
 
