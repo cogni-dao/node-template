@@ -22,11 +22,9 @@ import {
   type MetricLatest,
 } from "@cogni-dao/metrics/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, fireEvent, render, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-
-import { GoalsBoard, MetricsBoard } from "../src/goals.js";
 import { createGoalsClient } from "../src/goals/client.js";
 import {
   bandFraction,
@@ -40,7 +38,8 @@ import {
   sortMetricRows,
   summarizeMetrics,
 } from "../src/goals/metrics-view.js";
-import { goalFixture, kpiFixture, assessmentFixture, trend } from "./_fixtures/goals-progress.js";
+import { GoalsBoard, GoalsProvider, MetricEvidence, MetricsBoard } from "../src/goals.js";
+import { assessmentFixture, goalFixture, kpiFixture, trend } from "./_fixtures/goals-progress.js";
 
 // Match the existing Goals chart harness: jsdom has no measured viewport.
 vi.mock("recharts", async (importOriginal) => {
@@ -547,5 +546,47 @@ describe("metrics-view", () => {
     expect(
       bandFraction(row({ assessment: band("failing", 0, { value: null }), latest: latest({ value: null }) })),
     ).toBeNull();
+  });
+});
+
+
+describe("independent immutable measurement evidence", () => {
+  it.each([
+    { currentFails: true, pinnedFails: false },
+    { currentFails: false, pinnedFails: true },
+    { currentFails: false, pinnedFails: false },
+  ])("isolates rolling and pinned reads: %j", async ({ currentFails, pinnedFails }) => {
+    const pinned = {
+      id: "pinned-proof", value: 17, unit: "items", status: "ok", window: { end: AS_OF },
+      definitionHash: "saved-definition", calculatorVersion: "work.count@1", reason: null, evidenceRefs: [],
+    };
+    const rolling = { ...pinned, id: "rolling-proof", value: 99 };
+    const fetchMetric = vi.fn(async () => {
+      if (currentFails) throw new Error("current failed");
+      return { history: [rolling] };
+    });
+    const fetchObservation = vi.fn(async () => {
+      if (pinnedFails) throw Object.assign(new Error("denied"), { status: 403 });
+      return { observation: pinned };
+    });
+    const client = { ...createGoalsClient(), fetchMetric, fetchObservation } as unknown as ReturnType<typeof createGoalsClient>;
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const view = render(<QueryClientProvider client={qc}><GoalsProvider client={client}>
+      <MetricEvidence id="metric-proof" observationId="pinned-proof" />
+    </GoalsProvider></QueryClientProvider>);
+    await waitFor(() => expect(view.queryByText("Loading evidence…")).not.toBeInTheDocument());
+    expect(fetchObservation).toHaveBeenCalledWith("metric-proof", "pinned-proof", expect.any(AbortSignal));
+    expect(fetchMetric).toHaveBeenCalledTimes(1);
+    if (pinnedFails) {
+      expect(view.getByRole("alert")).toHaveTextContent("Linked measurement evidence is unavailable");
+      expect(view.container.querySelector("article")).toBeNull();
+    } else {
+      expect(view.getByText("Observation pinned-proof")).toBeInTheDocument();
+      expect(view.container.querySelector("article")).toHaveTextContent("17 items");
+      expect(view.queryByText("Observation rolling-proof")).not.toBeInTheDocument();
+    }
+    if (currentFails) expect(view.getByRole("alert")).toHaveTextContent("Current measurement evidence is unavailable");
+    if (!currentFails && !pinnedFails) expect(view.queryByRole("alert")).not.toBeInTheDocument();
+    qc.clear();
   });
 });

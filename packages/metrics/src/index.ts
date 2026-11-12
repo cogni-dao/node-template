@@ -927,8 +927,18 @@ export function createMetricService(deps: {
 			try {
 				const hash = metricDefinitionHash(d);
 				const history = await observations.history(d.id, hash, 1);
+				const lastGood = await observations.lastGood(d.id, hash);
+				const shape = calculatorShape(
+					registry.get(d.spec.calculatorId),
+					d.spec.params,
+				);
+				if (
+					(history[0] && !compatibleEvidence(history[0], d, scope, shape)) ||
+					(lastGood && !compatibleEvidence(lastGood, d, scope, shape))
+				)
+					throw new MetricError("incomplete_or_invalid_source", 503);
 				const view = selectMetricView(d, history, now());
-				view.lastGood = await observations.lastGood(d.id, hash);
+				view.lastGood = lastGood;
 				// The band reuses the two reads above: no second definition or reading read.
 				const band = await service.bandAssessment(d, {
 					latest: history[0],
