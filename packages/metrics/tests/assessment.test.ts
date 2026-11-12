@@ -61,6 +61,29 @@ function reading(
 }
 const fresh = reading(1.2, "2026-11-02T11:00:00.000Z");
 
+it("rejects malformed persisted observation times across direct readers", async () => {
+	let observation = { ...fresh, observedAt: "not-a-date" };
+	const sql = vi.fn(async () => [{ observation, snapshot: {} }]);
+	const store = new PostgresMetricObservations(sql as never, {
+		node: "n",
+		environment: "e",
+		dataScope: "d",
+	});
+	const reads = () => [
+		store.history("ratio", "h", 1),
+		store.lastGood("ratio", "h"),
+		store.get(fresh.id),
+		store.at("ratio", "h", NOW.toISOString(), 7200),
+		store.snapshot(fresh.id),
+		store.scheduledAttempts("ratio", "h", fresh.window.end),
+	];
+	for (const result of await Promise.allSettled(reads()))
+		expect(result.status).toBe("rejected");
+	observation = fresh;
+	for (const result of await Promise.allSettled(reads()))
+		expect(result.status).toBe("fulfilled");
+});
+
 describe("work page database batch", () => {
 	it.each([
 		["fresh historical evidence", "fresh", "met", null],

@@ -8,13 +8,14 @@ import {
 	MetricError,
 	type MetricHistoryInput,
 	MetricObservationSchema,
-	MetricSnapshotSchema,
 	type MetricObservationsPort,
 	type MetricScope,
 	type MetricSnapshot,
+	MetricSnapshotSchema,
 } from "../contracts.js";
 
 import { readMetricBatch } from "./read-budget.js";
+
 type Row = Record<string, unknown>;
 const ISO_DATE = z.iso.date();
 /** `dolt:head:<32-char hash>@<toISOString()>`; only matching refs are cast to a time. */
@@ -35,6 +36,11 @@ function parseObservation(value: unknown) {
 				(datePrefix !== undefined && !ISO_DATE.safeParse(datePrefix).success)))
 	)
 		throw new MetricError("observation_unreadable", 503);
+	return observation;
+}
+function requiredObservation(value: unknown) {
+	const observation = parseObservation(value);
+	if (!observation) throw new MetricError("observation_unreadable", 503);
 	return observation;
 }
 export class PostgresMetricObservations implements MetricObservationsPort {
@@ -77,7 +83,7 @@ export class PostgresMetricObservations implements MetricObservationsPort {
 						row.baseline_observation != null
 							? MetricSnapshotSchema.parse({
 									definition: json(row.baseline_definition),
-									observation: json(row.baseline_observation),
+									observation: requiredObservation(row.baseline_observation),
 								})
 							: null,
 					latest: parseObservation(row.latest_observation),
@@ -156,7 +162,7 @@ export class PostgresMetricObservations implements MetricObservationsPort {
 			return {
 				snapshot: {
 					definition: json(chosen.snapshot),
-					observation: MetricObservationSchema.parse(json(chosen.observation)),
+					observation: requiredObservation(chosen.observation),
 				} as MetricSnapshot,
 				leaseToken: claimed ? token : null,
 			};
@@ -171,15 +177,13 @@ export class PostgresMetricObservations implements MetricObservationsPort {
 			.sql`UPDATE metric_observations SET observation=${JSON.stringify(result)}::text::jsonb,status=${result.status},lease_token=NULL,lease_expires_at=NULL
       WHERE id=${id} AND scope=${this.key} AND status='pending' AND lease_token=${token} AND lease_expires_at>clock_timestamp() RETURNING observation`;
 		if (!row) return null;
-		return MetricObservationSchema.parse(json(row.observation));
+		return requiredObservation(row.observation);
 	}
 	async history(metricId: string, definitionHash: string, limit: number) {
 		const rows = await this
 			.sql`SELECT observation FROM metric_observations WHERE scope=${this.key} AND metric_id=${metricId} AND definition_hash=${definitionHash}
       ORDER BY evaluation_at DESC,id DESC LIMIT ${Math.min(100, Math.max(1, limit))}`;
-		return rows.map((row) =>
-			MetricObservationSchema.parse(json(row.observation)),
-		);
+		return rows.map((row) => requiredObservation(row.observation));
 	}
 	async workReadBatch(
 		requests: readonly {
@@ -209,7 +213,7 @@ export class PostgresMetricObservations implements MetricObservationsPort {
 						row.baseline_observation != null
 							? MetricSnapshotSchema.parse({
 									definition: json(row.baseline_definition),
-									observation: json(row.baseline_observation),
+									observation: requiredObservation(row.baseline_observation),
 								})
 							: null,
 					latest: parseObservation(row.latest_observation),
@@ -228,12 +232,12 @@ export class PostgresMetricObservations implements MetricObservationsPort {
 	async get(id: string) {
 		const [row] = await this
 			.sql`SELECT observation FROM metric_observations WHERE id=${id} AND scope=${this.key}`;
-		return row ? MetricObservationSchema.parse(json(row.observation)) : null;
+		return row ? requiredObservation(row.observation) : null;
 	}
 	async lastGood(metricId: string, definitionHash: string) {
 		const [row] = await this
 			.sql`SELECT observation FROM metric_observations WHERE scope=${this.key} AND metric_id=${metricId} AND definition_hash=${definitionHash} AND status='ok' ORDER BY evaluation_at DESC,id DESC LIMIT 1`;
-		return row ? MetricObservationSchema.parse(json(row.observation)) : null;
+		return row ? requiredObservation(row.observation) : null;
 	}
 	/** Backward-only: ok, window.end in [at - maxAge, at], observedAt <= at + maxAge. */
 	async at(
@@ -246,9 +250,9 @@ export class PostgresMetricObservations implements MetricObservationsPort {
 			.sql`SELECT observation FROM metric_observations WHERE scope=${this.key} AND metric_id=${metricId} AND definition_hash=${definitionHash}
       AND status='ok' AND observation->'value' IS NOT NULL AND jsonb_typeof(observation->'value')='number'
       AND evaluation_at <= ${evaluationAt}::timestamptz AND evaluation_at >= ${evaluationAt}::timestamptz - (${maxAgeSeconds} * interval '1 second')
-      AND (observation->>'observedAt')::timestamptz <= ${evaluationAt}::timestamptz + (${maxAgeSeconds} * interval '1 second')
-      ORDER BY evaluation_at DESC,(observation->>'observedAt')::timestamptz DESC,id DESC LIMIT 1`;
-		return row ? MetricObservationSchema.parse(json(row.observation)) : null;
+      AND CASE WHEN jsonb_path_exists(jsonb_build_object('v',replace(observation->>'observedAt','Z','+00:00')), '$.v.datetime()', '{}'::jsonb, true) THEN (observation->>'observedAt')::timestamptz <= ${evaluationAt}::timestamptz + (${maxAgeSeconds} * interval '1 second') ELSE true END
+      ORDER BY evaluation_at DESC,id DESC LIMIT 1`;
+		return row ? requiredObservation(row.observation) : null;
 	}
 	/**
 	 * Server-side bucketing: date_bin over evaluation_at (window.end), DISTINCT ON
@@ -263,7 +267,7 @@ export class PostgresMetricObservations implements MetricObservationsPort {
 		const origin = new Date(HISTORY_ORIGIN_MS[r.step]).toISOString();
 		const step = `${r.stepMs / 1000} seconds`;
 		const rows = await this.sql`WITH picked AS (
-        SELECT DISTINCT ON (bucket) bucket, status, id, observation->'value' AS value FROM (
+        SELECT DISTINCT ON (bucket) bucket, status, id, observation FROM (
           SELECT date_bin(${step}::interval, evaluation_at, ${origin}::timestamptz) AS bucket, status, id, evaluation_at, observation
           FROM metric_observations
           WHERE scope=${this.key} AND metric_id=${metricId} AND definition_hash=${definitionHash}
@@ -272,14 +276,14 @@ export class PostgresMetricObservations implements MetricObservationsPort {
         ) attempts
         ORDER BY bucket, (status='ok' AND jsonb_typeof(observation->'value')='number') DESC, evaluation_at DESC, id DESC
       )
-      SELECT (extract(epoch FROM g) * 1000)::bigint AS start_ms, picked.status, picked.id, picked.value
+      SELECT (extract(epoch FROM g) * 1000)::bigint AS start_ms, picked.status, picked.id, picked.observation
       FROM generate_series(${r.from}::timestamptz, ${r.to}::timestamptz - ${step}::interval, ${step}::interval) AS g
       LEFT JOIN picked ON picked.bucket = g
       ORDER BY g`;
 		return rows.map((row) => {
 			const start = Number(row.start_ms);
 			const status = row.status ? String(row.status) : "missing";
-			const raw = json(row.value);
+			const raw = row.id ? requiredObservation(row.observation).value : null;
 			const value =
 				status === "ok" && typeof raw === "number" && Number.isFinite(raw)
 					? raw
@@ -346,7 +350,7 @@ export class PostgresMetricObservations implements MetricObservationsPort {
 		return row
 			? ({
 					definition: json(row.snapshot),
-					observation: MetricObservationSchema.parse(json(row.observation)),
+					observation: requiredObservation(row.observation),
 				} as MetricSnapshot)
 			: null;
 	}
@@ -357,9 +361,7 @@ export class PostgresMetricObservations implements MetricObservationsPort {
 	) {
 		const rows = await this
 			.sql`SELECT observation FROM metric_observations WHERE scope=${this.key} AND metric_id=${metricId} AND definition_hash=${definitionHash} AND scheduled_for=${slot} ORDER BY evaluation_at DESC,id DESC LIMIT 4`;
-		return rows.map((row) =>
-			MetricObservationSchema.parse(json(row.observation)),
-		);
+		return rows.map((row) => requiredObservation(row.observation));
 	}
 	async expireLeases() {
 		await this
