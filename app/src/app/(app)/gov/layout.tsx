@@ -16,7 +16,6 @@
 import {
   Activity,
   FileSignature,
-  KeyRound,
   LayoutDashboard,
   PieChart,
 } from "lucide-react";
@@ -41,12 +40,6 @@ const GOV_TABS = [
     href: "/gov/review",
     label: "Review",
     icon: FileSignature,
-    match: "prefix" as const,
-  },
-  {
-    href: "/gov/ai-access",
-    label: "AI access",
-    icon: KeyRound,
     match: "prefix" as const,
   },
   {
