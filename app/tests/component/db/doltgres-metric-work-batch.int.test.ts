@@ -9,7 +9,10 @@ import {
 } from "testcontainers";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { readMetricBatch } from "../../../../packages/metrics/src/adapters/read-budget";
-import { metricDefinitionHash } from "../../../../packages/metrics/src/index";
+import {
+	hashMetric,
+	metricDefinitionHash,
+} from "../../../../packages/metrics/src/index";
 import { createGoalMetrics } from "../../../../packages/metrics/src/knowledge";
 
 const containers: StartedTestContainer[] = [];
@@ -35,7 +38,7 @@ const observation = {
 	definitionRevision: now,
 	definitionHash: metricDefinitionHash(definition),
 	calculatorVersion: "work.count@1",
-	paramsHash: "p",
+	paramsHash: hashMetric(definition.spec.params),
 	node: "n",
 	environment: "test",
 	dataScope: "node-members",

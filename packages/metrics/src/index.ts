@@ -288,6 +288,15 @@ export function createMetricService(deps: {
 		}
 		try {
 			if (pair.unreadable) throw new MetricError("source_failed", 503);
+			const shape = calculatorShape(
+				registry.get(d.spec.calculatorId),
+				d.spec.params,
+			);
+			if (
+				(pair.latest && !compatibleEvidence(pair.latest, d, scope, shape)) ||
+				(pair.lastGood && !compatibleEvidence(pair.lastGood, d, scope, shape))
+			)
+				throw new MetricError("incomplete_or_invalid_source", 503);
 			const view = selectMetricView(d, pair.latest ? [pair.latest] : [], now());
 			view.lastGood = pair.lastGood ?? null;
 			const band = await service.bandAssessment(
@@ -302,7 +311,7 @@ export function createMetricService(deps: {
 				assessment: view.bandAssessment ?? null,
 				latest: metricLatest(view),
 			};
-		} catch {
+		} catch (error) {
 			signal?.throwIfAborted();
 			// One unreadable metric reads red; it never drops the whole list (absent is red).
 			return {
@@ -313,7 +322,11 @@ export function createMetricService(deps: {
 					value: null,
 					unit: "",
 					observedAt: null,
-					reason: "source_failed",
+					reason:
+						error instanceof MetricError &&
+						error.code === "incomplete_or_invalid_source"
+							? error.code
+							: "source_failed",
 				},
 			};
 		}

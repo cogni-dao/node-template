@@ -7,6 +7,7 @@ import {
 	createMetricService,
 	type GoalSourcePort,
 	GoalsProgressSchema,
+	hashMetric,
 	type KpiBinding,
 	type MetricBand,
 	type MetricDefinition,
@@ -58,7 +59,7 @@ function reading(
 		definitionRevision: d.revision,
 		definitionHash: metricDefinitionHash(d),
 		calculatorVersion: "work.count@1",
-		paramsHash: "p",
+		paramsHash: hashMetric(d.spec.params),
 		node: "n",
 		environment: "test",
 		dataScope: "members",
@@ -356,6 +357,55 @@ describe("serves and band schema (story.0033)", () => {
 		expect(() => parseStoredMetricSpec({ ...spec, extra: 1 })).toThrow();
 		expect(() => parseStoredMetricSpec(null)).toThrow();
 	});
+});
+
+describe("serving evidence compatibility", () => {
+	it.each([
+		["unit", { unit: "USD" }],
+		["params hash", { paramsHash: "incorrect" }],
+		["calculator version", { calculatorVersion: "work.count@2" }],
+	] satisfies [string, Partial<MetricObservation>][])(
+		"rejects incompatible %s in latest and last-good without losing healthy siblings",
+		async (_name, mismatch) => {
+			for (const slot of ["latest", "lastGood"] as const) {
+				const bad = definition("bad", {
+					serves: { kpi: "unknown-kpi", role: "input" },
+				});
+				const good = definition("good");
+				const badReading = reading(bad, 123);
+				const goodReading = reading(good, 10);
+				const s = setup([bad, good]);
+				s.observations.workReadBatch = async () => [
+					{
+						baseline: null,
+						latest: badReading,
+						lastGood: badReading,
+						[slot]: { ...badReading, ...mismatch },
+					},
+					{ baseline: null, latest: goodReading, lastGood: goodReading },
+				];
+				const result = await readGoalsProgress({
+					goals: {
+						listGoals: async () => [],
+						hypotheses: async () => ({ items: [], more: false }),
+					},
+					metrics: s.service,
+					environment: "test",
+				});
+				expect(result.orphans?.[0]?.latest).toMatchObject({
+					viewState: "error",
+					value: null,
+					reason: "incomplete_or_invalid_source",
+				});
+				expect(result.unbound?.[0]?.latest).toMatchObject({
+					viewState: "ok",
+					value: 10,
+					unit: "items",
+					reason: null,
+				});
+			}
+		},
+	);
 });
 
 describe("band assessment goes through the one KPI path", () => {
