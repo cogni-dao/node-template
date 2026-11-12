@@ -5,7 +5,7 @@ import type { StructuredToolInterface } from "@langchain/core/tools";
 import { createMiddleware } from "langchain";
 import { authorizedReadMessages } from "../cogni/authorized-read-messages";
 import { REQUIRED_GUIDANCE_IDS } from "./prompts";
-import { OPEN_STATUSES } from "./tools";
+import { OPEN_STATUSES, WORK_ITEM_QUERY_MAX_LIMIT } from "./tools";
 
 /** Fixed prerequisites use native state and the same authorized, instrumented read tools. */
 export function createTriagePreflight(
@@ -25,7 +25,7 @@ export function createTriagePreflight(
 					name: "core__work_item_query",
 					args: {
 						statuses: ["needs_triage"],
-						limit: 50,
+						limit: WORK_ITEM_QUERY_MAX_LIMIT,
 						sortBy: "createdAt",
 						sortDirection: "desc",
 					},
@@ -35,7 +35,7 @@ export function createTriagePreflight(
 					args: {
 						statuses: [...OPEN_STATUSES],
 						scored: false,
-						limit: 50,
+						limit: WORK_ITEM_QUERY_MAX_LIMIT,
 						sortBy: "createdAt",
 						sortDirection: "desc",
 					},

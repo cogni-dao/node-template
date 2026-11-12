@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 import {
 	ScheduleManageInputSchema,
+	WORK_ITEM_QUERY_MAX_LIMIT,
 	WorkItemQueryInputSchema,
 } from "@cogni/ai-tools";
 import {
@@ -46,7 +47,7 @@ const contextReads = [
 	},
 	{
 		name: "core__work_item_query",
-		args: { statuses: [...OPEN_STATUSES], limit: 50 },
+		args: { statuses: [...OPEN_STATUSES], limit: WORK_ITEM_QUERY_MAX_LIMIT },
 		schema: z.object({ items: z.array(z.unknown()) }),
 	},
 ];
@@ -81,7 +82,7 @@ export class NodeOperatorReceipts {
 		const canonical =
 			name !== "core__work_item_query" ||
 			(query.success &&
-				query.data.limit === 50 &&
+				query.data.limit === WORK_ITEM_QUERY_MAX_LIMIT &&
 				query.data.statuses?.length === OPEN_STATUSES.length &&
 				OPEN_STATUSES.every((status) => query.data.statuses?.includes(status)));
 		if (expected && canonical) {

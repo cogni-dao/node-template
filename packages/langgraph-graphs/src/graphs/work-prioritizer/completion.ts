@@ -6,7 +6,11 @@ import { isDeepStrictEqual } from "node:util";
 import type { ToolExecFn } from "@cogni/ai-core";
 import { isAIMessage, isToolMessage } from "@langchain/core/messages";
 import type { RunReceipts } from "./receipts";
-import { MAX_CHANGED_ITEMS_PER_RUN, OPEN_STATUSES } from "./tools";
+import {
+	MAX_CHANGED_ITEMS_PER_RUN,
+	OPEN_STATUSES,
+	RECEIPT_ERROR_MAX_CHARS,
+} from "./tools";
 
 type Row = Record<string, unknown>;
 const row = (value: unknown): Row | undefined =>
@@ -50,7 +54,7 @@ export function triageCompletionEvidence(receipts: RunReceipts) {
 		if (!value || value.error !== undefined || value.success === false) {
 			failedTools++;
 			failures.push(
-				`${call.name}${typeof call.args.id === "string" ? ` ${call.args.id}` : ""}: ${typeof value?.error === "string" ? value.error.slice(0, 240) : "failed or malformed result"}`,
+				`${call.name}${typeof call.args.id === "string" ? ` ${call.args.id}` : ""}: ${typeof value?.error === "string" ? value.error.slice(0, RECEIPT_ERROR_MAX_CHARS) : "failed or malformed result"}`,
 			);
 			continue;
 		}

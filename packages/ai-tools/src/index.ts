@@ -414,6 +414,7 @@ export {
 } from "./tools/web-search";
 export {
   createWorkItemQueryImplementation,
+  WORK_ITEM_QUERY_MAX_LIMIT,
   WORK_ITEM_QUERY_NAME,
   type WorkItemQueryDeps,
   type WorkItemQueryInput,

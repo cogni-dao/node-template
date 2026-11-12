@@ -29,7 +29,12 @@ import {
 } from "@langchain/core/tools";
 import { z } from "zod";
 import { type ObservedItem, ObservedMoves, type RunReceipts } from "./receipts";
-import { MAX_CHANGED_ITEMS_PER_RUN } from "./tools";
+import {
+  EVIDENCE_ISSUE_MAX_CHARS,
+  EVIDENCE_ISSUES_MAX,
+  MAX_CHANGED_ITEMS_PER_RUN,
+  RECEIPT_ERROR_MAX_CHARS,
+} from "./tools";
 
 const ROUTES = new Set([
   "needs_research",
@@ -146,7 +151,8 @@ export function createTriageGuard(
     const evidenceIssues: string[] = [];
     let omittedIssues = 0;
     const addEvidenceIssue = (issue: string) => {
-      if (evidenceIssues.length < 12) evidenceIssues.push(issue.slice(0, 300));
+      if (evidenceIssues.length < EVIDENCE_ISSUES_MAX)
+        evidenceIssues.push(issue.slice(0, EVIDENCE_ISSUE_MAX_CHARS));
       else omittedIssues++;
     };
     if (
@@ -376,7 +382,7 @@ export function createTriageGuard(
         result.startsWith("write_result_uncertain:")
       )
         receipts.recordTool(WORK_ITEM_UPDATE_NAME, input, {
-          error: result.slice(0, 240),
+          error: result.slice(0, RECEIPT_ERROR_MAX_CHARS),
         });
       return result;
     },
