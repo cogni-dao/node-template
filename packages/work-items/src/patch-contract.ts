@@ -70,7 +70,8 @@ export const MoveInputSchema = z.object({
     .describe("Id of a registered metric (hub entry with a metric spec)."),
   direction: z
     .enum(["up", "down"])
-    .describe("The intended direction. Directionless writes stay disabled until compatible readers are deployed."),
+    .nullable()
+    .describe("The intended direction, or null for no directional claim. Null-direction storage writes remain disabled until compatible readers are deployed."),
 });
 
 /**
@@ -93,7 +94,7 @@ export const WorkItemMovesInputSchema = z
     }
   })
   .describe(
-    "Metrics this work moves: at most 3 of { metricId, direction: up|down }; [] means it moves none (say why in the reason on a patch). On a patch it replaces the whole list. The server resolves each new metric and pins its baseline; never send one.",
+    "Metrics this work moves: at most 3 of { metricId, direction: up|down|null }; [] means it moves none (say why in the reason on a patch). On a patch it replaces the whole list. The server resolves each new metric and pins its baseline; never send one.",
   );
 
 export const WorkItemPatchInputSchema = z.object({

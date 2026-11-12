@@ -1,5 +1,11 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
+/**
+ * Helps a human decide the next action from recorded work expectations and outcomes.
+ * The host supplies authorized bounded reads. Knowledge/observation cache changes
+ * replace in-flight generations; a visible-only refresh observes other actors.
+ * Narrative remains narrative; the metrics service supplies numeric assessments.
+ */
 "use client";
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";

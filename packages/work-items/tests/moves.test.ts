@@ -53,8 +53,10 @@ describe("WorkItemPatchInputSchema moves", () => {
     expect(judgeMove(null, null, null)).toBeNull();
   });
 
-  it("reads a directionless association while write activation stays gated", () => {
-    expect(parse([{ metricId: "edits-7d", direction: null }]).success).toBe(false);
+  it("parses directionless associations without activating store writes", () => {
+    // Shape compatibility also lets the prioritizer recognize unchanged null links;
+    // reader-first adapter rejection is proved below before any SQL access.
+    expect(parse([{ metricId: "edits-7d", direction: null }]).success).toBe(true);
     expect(WorkItemDtoSchema.shape.moves.safeParse([{ metricId: "edits-7d", direction: null, baselineObservationId: OBS_1 }]).success).toBe(true);
     expect(
       parseStoredMoves([{ metricId: "edits-7d", direction: null, baselineObservationId: OBS_1 }]),
