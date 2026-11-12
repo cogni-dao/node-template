@@ -34,9 +34,11 @@ export async function readMetricChains(deps: {
 	const ids = [...new Set(deps.metricIds)];
 	if (!ids.length) return result;
 	const { signal } = deps;
+	// Each read starts inside an async function: a synchronous throw from one port becomes a
+	// rejection Promise.all owns, never a dangling rejection from the sibling.
 	const [goals, found] = await Promise.all([
-		deps.goals.listGoals(),
-		deps.metrics.describe(ids, signal),
+		(async () => deps.goals.listGoals())(),
+		(async () => deps.metrics.describe(ids, signal))(),
 	]);
 	signal?.throwIfAborted();
 	// The first active goal that binds a KPI owns it; invalid bindings are ignored here.
