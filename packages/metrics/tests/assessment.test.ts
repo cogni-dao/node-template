@@ -9,7 +9,7 @@ import {
 import { createGoalProgressReader, createGoalSource } from "../src/knowledge";
 import { createMetricHttpHandlers } from "../src/http";
 import { readGoalsProgress } from "../src/progress";
-import { readMetricBatch } from "../src/adapters/read-budget";
+import { readMetricBatch, readMetricBudget } from "../src/adapters/read-budget";
 import { PostgresMetricObservations } from "../src/adapters/postgres";
 import {
 	assessKpi,
@@ -2178,6 +2178,42 @@ it("retains goal admission until the parallel serving branch settles after goal 
 		expect(serving).toHaveBeenCalledTimes(5);
 		finishes[4]?.(null as never);
 		expect((await replacement).message).toBe("source failed");
+	} finally {
+		vi.useRealTimers();
+	}
+});
+
+it("stops native active-goal fan-out after the metric deadline", async () => {
+	vi.useFakeTimers();
+	try {
+		let finish!: (rows: Record<string, unknown>[]) => void;
+		const query = vi.fn(
+			() =>
+				new Promise<Record<string, unknown>[]>((resolve) => {
+					finish = resolve;
+				}),
+		);
+		const adapter = new DoltgresKnowledgeStoreAdapter({
+			sql: { unsafe: query } as never,
+		});
+		const pending = readMetricBudget(adapter, undefined, (signal) =>
+			createGoalSource(adapter, signal).listGoals(),
+		);
+		const result = pending.catch((error) => error);
+		await vi.advanceTimersByTimeAsync(2500);
+		expect(await result).toMatchObject({ code: "batch_unavailable" });
+		expect(query).toHaveBeenCalledTimes(1);
+		finish([
+			{
+				id: "goal-live",
+				entry_type: "goal",
+				title: "Live",
+				content: "",
+				kpi_bindings: [],
+			},
+		]);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(query).toHaveBeenCalledTimes(1);
 	} finally {
 		vi.useRealTimers();
 	}

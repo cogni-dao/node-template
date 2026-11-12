@@ -319,7 +319,7 @@ export interface KnowledgeStorePort {
    * [] when none are merged; no count cap (NO_GOAL_CAP).
    * Contribution-branch rows are never visible here.
    */
-  listActiveGoals(): Promise<ActiveGoal[]>;
+  listActiveGoals(signal?: AbortSignal): Promise<ActiveGoal[]>;
   /** Content-free governing rows across all shelves; no scan cap, blank trigger or superseded target. */
   listGoverningIndex(): Promise<GoverningIndexRow[]>;
   /**

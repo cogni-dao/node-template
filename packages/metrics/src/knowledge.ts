@@ -43,7 +43,7 @@ import {
  * carries no knowledge-store dependency.
  */
 export interface GoalKnowledgeReader {
-	listActiveGoals(): Promise<
+	listActiveGoals(signal?: AbortSignal): Promise<
 		ReadonlyArray<{
 			id: string;
 			title: string;
@@ -425,7 +425,7 @@ export function createGoalSource(
 		(b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0);
 	return {
 		async listGoals() {
-			const goals = await read(() => port.listActiveGoals());
+			const goals = await read(() => port.listActiveGoals(signal));
 			const items = [];
 			for (const goal of goals) {
 				// Current stores project bindings with the canonical active-goal list.
