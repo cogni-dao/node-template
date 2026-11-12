@@ -602,6 +602,24 @@ describe("durable enrollment requester", () => {
     expect((await f.step(r)).phase).toBe("awaiting_consent");
     expect(f.starts).toBe(2);
   });
+  it("explicit reenroll preserves an accepted predecessor after authenticated post-retention404", async () => {
+    const f=await fixture(),r=f.create(); const first=await r.ensure(key);
+    await f.step(r); const h={operationId:first.linkId,key};
+    await r.disconnect(h,f.row!.revision);
+    const expiry=Date.parse(f.row!.state.recoveryExpiresAt!);
+    f.shift(92*86400000);f.missingAt(new Date(expiry+90*86400000).toISOString());
+    await r.reenroll(h,f.row!.revision);
+    expect(f.row!.state.intent).toMatchObject({generation:2,expectedGeneration:1,expectedOperationId:first.linkId});
+  });
+  it("an early404 cannot erase an accepted predecessor or reset consent", async () => {
+    const f=await fixture(),r=f.create(); const first=await r.ensure(key);
+    await f.step(r); const h={operationId:first.linkId,key};
+    await r.disconnect(h,f.row!.revision);
+    const expiry=Date.parse(f.row!.state.recoveryExpiresAt!);
+    f.shift(92*86400000);f.missingAt(new Date(expiry+90*86400000-1).toISOString());
+    await expect(r.reenroll(h,f.row!.revision)).rejects.toThrow("remote_reconciliation_required");
+    expect(f.row!.operationId).toBe(first.linkId);
+  });
   it("unknown remote effects and a still-valid original start never authorize a fresh operation", async () => {
     const f = await fixture(); const r = f.create();
     const first = await r.ensure(key); const h = { operationId: first.linkId, key };

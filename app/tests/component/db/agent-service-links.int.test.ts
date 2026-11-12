@@ -17,6 +17,7 @@ import {
   type CredentialSql,
   confirmCredential,
   credentialHttp,
+  assertV1NotSuperseded,
   verifyBearer,
   createPostgresCredentialStore,
   hashAgentKey,
@@ -25,6 +26,8 @@ import {
 import { runDurableEnrollmentConformance } from "@cogni/agent-grants/durable-enrollment-conformance";
 import {
   createDurableProviderStore,
+  maintenanceTick,
+  maintainEnrollmentDelivery,
   ENROLLMENT_PROTOCOL,
   type EnrollmentProof,
   type EnrollmentIntent,
@@ -42,6 +45,7 @@ import {
   createEnrollmentTransport,
   createPostgresRequesterCustody,
   requesterMaintenanceTick,
+  maintainRequesterCustody,
 } from "@cogni/agent-grants/enrollment-requester";
 import { EnrollmentClientError } from "@cogni/agent-grants/enrollment-client";
 import {
@@ -164,7 +168,7 @@ describe("v2 enrollment and requester SQL", () => {
     await db`TRUNCATE agent_service_link_operations, agent_service_quotas, agent_service_enrollments, agent_credentials, agent_roles CASCADE`;
     await db`DELETE FROM agent_principals WHERE service_key IS NOT NULL`;
     await db`DELETE FROM connections WHERE provider='cogni-node'`;
-    await db`UPDATE agent_authority_maintenance SET oldest_due_at=NULL,next_run_at=clock_timestamp(),purge_enabled=false WHERE id='service-enrollment'`;
+    await db`UPDATE agent_authority_maintenance SET oldest_due_at=NULL,next_run_at=clock_timestamp(),purge_enabled=false,minimum_reader_build=NULL,audit_cursors='{}'::jsonb WHERE id='service-enrollment'`;
   });
   afterAll(async () => {
     await db?.end({ timeout: 1 });
@@ -748,7 +752,230 @@ describe("v2 enrollment and requester SQL", () => {
       await requesterOnly.begin(async (tx) => { await tx.unsafe(template).simple(); });
       expect((await requesterOnly`SELECT to_regclass('agent_service_enrollments') AS provider,to_regclass('agent_authority_maintenance') AS lease`)[0]).toMatchObject({provider:null,lease:null});
       expect(await requesterMaintenanceTick(requesterOnly as unknown as CredentialSql)).toBe(true);
+      const audit = await readFile(resolve('../packages/agent-grants/migrations/agent_service_requester_audit.sql'),'utf8');
+      await requesterOnly.begin(async (tx) => { await tx.unsafe(audit).simple(); });
+      expect((await requesterOnly`SELECT to_regclass('agent_service_enrollments') AS provider`)[0]?.provider).toBeNull();
+      expect((await requesterOnly`SELECT purge_enabled,minimum_reader_build FROM agent_authority_maintenance WHERE id='requester-audit'`)[0])
+        .toMatchObject({purge_enabled:false,minimum_reader_build:null});
+      expect(await requesterMaintenanceTick(requesterOnly as unknown as CredentialSql)).toBe(true);
     } finally { await requesterOnly.end({timeout:1}); }
   }, 10000);
 
+
+  const auditTick = async () => {
+    await db`UPDATE agent_authority_maintenance SET next_run_at=clock_timestamp() WHERE id='service-enrollment'`;
+    return maintenanceTick(client(), async (tx) => { await maintainRequesterCustody(tx); await maintainEnrollmentDelivery(tx); });
+  };
+  const qualifyFixtureAudit = async () => {
+    // This is an isolated migrated fixture, never a live rollout or an assertion that a build was qualified.
+    await db`UPDATE agent_authority_maintenance SET purge_enabled=true,minimum_reader_build=${"a".repeat(40)} WHERE id='service-enrollment' AND backfill_ready`;
+  };
+  async function seedAuditChain(length: number) {
+    const user=randomUUID(), ids=Array.from({length:length+2},()=>randomUUID());
+    const tokens=ids.map(()=>formatRevocableKey(randomBytes(32).toString('base64url')));
+    await db`INSERT INTO users(id,name) VALUES(${user},'audit fixture')`;
+    await db`INSERT INTO agent_principals(kind,user_id) VALUES('external',${user})`;
+    // Native timestamp fixtures reconstruct an old lineage, then restore every USER guard before exercising maintenance.
+    await db.begin(async tx => {
+      const at=String((await tx`SELECT clock_timestamp()::text AS at`)[0]!.at);
+      await tx.unsafe('ALTER TABLE agent_credentials DISABLE TRIGGER USER');
+      for (let i=0;i<ids.length;i++) {
+        const live=i===length,pending=i===length+1;
+        await tx`INSERT INTO agent_credentials(id,user_id,token_hash,created_from,predecessor_id,predecessor_provenance_id,
+          issued_at,confirmed_at,expires_at,renew_until,pending_expires_at,revoked_at)
+          VALUES(${ids[i]!},${user},${await hashAgentKey(tokens[i]!)},${i?'rotation':'spawn_grant'},${i?ids[i-1]!:null},${i?ids[i-1]!:null},
+            (${at}::timestamptz)-(${Math.max(0,length-i)*2}::int*interval '1 day')-CASE WHEN ${pending} THEN interval '3 minutes' ELSE interval '5 minutes' END,
+            CASE WHEN ${pending} THEN NULL ELSE (${at}::timestamptz)-(${Math.max(0,length-i)*2}::int*interval '1 day')-interval '4 minutes' END,
+            CASE WHEN ${live || pending} THEN (${at}::timestamptz)+interval '1 day' ELSE (${at}::timestamptz)-(${(length-i)*2}::int*interval '1 day')+interval '30 days'-interval '5 minutes' END,
+            CASE WHEN ${live || pending} THEN (${at}::timestamptz)+interval '2 days' ELSE (${at}::timestamptz)-(${(length-i)*2}::int*interval '1 day')+interval '44 days'-interval '5 minutes' END,
+            CASE WHEN ${pending} THEN (${at}::timestamptz)+interval '5 minutes' ELSE (${at}::timestamptz)-(${Math.max(0,length-i)*2}::int*interval '1 day')+interval '9 minutes' END,
+            CASE WHEN ${live || pending} THEN NULL ELSE (${at}::timestamptz)-(${(length-i-1)*2}::int*interval '1 day')-interval '4 minutes' END)`;
+      }
+      await tx.unsafe('ALTER TABLE agent_credentials ENABLE TRIGGER USER');
+      await tx`UPDATE agent_credentials SET purge_after=NULL WHERE user_id=${user}`;
+    });
+    return {user,ids,tokens,live:ids[length]!,pending:ids[length+1]!};
+  }
+
+  it('purge-off preserves old audit, then bounded FK compaction keeps the live leaf and unconfirmed immediate predecessor', async () => {
+    const chain=await seedAuditChain(100);
+    const summary=(await db`SELECT ever_confirmed,first_confirmed_at FROM agent_principals WHERE user_id=${chain.user}`)[0];
+    await expect(assertV1NotSuperseded(creds(),chain.user)).rejects.toThrow();
+    await auditTick();
+    expect((await db`SELECT count(*)::int AS n FROM agent_credentials WHERE user_id=${chain.user}`)[0]?.n).toBe(102);
+    await qualifyFixtureAudit();
+    for (let tick=0;tick<20;tick++) {
+      const before=(await db`SELECT count(*)::int AS rows,count(predecessor_id)::int AS edges FROM agent_credentials WHERE user_id=${chain.user}`)[0]!;
+      await auditTick();
+      const after=(await db`SELECT count(*)::int AS rows,count(predecessor_id)::int AS edges FROM agent_credentials WHERE user_id=${chain.user}`)[0]!;
+      expect(Number(before.rows)-Number(after.rows)).toBeLessThanOrEqual(20);
+      expect(Number(before.edges)-Number(after.edges)).toBeLessThanOrEqual(20);
+    }
+    const remaining=await db`SELECT id,predecessor_id,predecessor_provenance_id FROM agent_credentials WHERE user_id=${chain.user} ORDER BY id`;
+    expect(remaining).toHaveLength(47);
+    expect(remaining.find(x=>x.id===chain.ids[55])).toMatchObject({predecessor_id:null,predecessor_provenance_id:chain.ids[54]});
+    expect(remaining.find(x=>x.id===chain.live)).toMatchObject({predecessor_id:chain.ids[99]});
+    expect(remaining.find(x=>x.id===chain.pending)).toMatchObject({predecessor_id:chain.live,predecessor_provenance_id:chain.live});
+    expect((await db`SELECT ever_confirmed,first_confirmed_at FROM agent_principals WHERE user_id=${chain.user}`)[0]).toEqual(summary);
+    expect((await verifyBearer(creds(),chain.tokens[100]!,["active"])).ok).toBe(true);
+    expect((await verifyBearer(creds(),chain.tokens[0]!,["active"])).ok).toBe(false);
+    await expect(assertV1NotSuperseded(creds(),chain.user)).rejects.toThrow();
+    // Pending confirm still consumes its immediate predecessor after distant ancestors disappear.
+    expect((await confirmCredential(creds(),{credentialId:chain.pending})).ok).toBe(true);
+    expect((await verifyBearer(creds(),chain.tokens[101]!,["active"])).ok).toBe(true);
+    const successor=await creds().issueSuccessor({predecessorId:chain.pending,tokenHash:await hashAgentKey(randomUUID()),policy:{ttlSec:3600,renewWindowSec:3600,pendingSec:300}});
+    expect(successor.ok).toBe(true);
+    if (!successor.ok) throw new Error('fixture rotation refused');
+    await creds().revoke({credentialId:chain.pending,userId:chain.user,reason:'fixture',revokedBy:chain.user});
+    expect((await confirmCredential(creds(),{credentialId:successor.credentialId})).ok).toBe(false);
+    await db.begin(async tx=> {
+      await tx`SET LOCAL enable_seqscan=off`;
+      const observed=(await tx`SELECT clock_timestamp()::text AS at`)[0]!.at;
+      const plan=await tx`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) SELECT id,user_id,purge_after::text AS cursor_at FROM agent_credentials
+        WHERE purge_after<=${observed}::timestamptz ORDER BY purge_after,id LIMIT 5`;
+      expect(JSON.stringify(plan)).toContain('agent_credentials_purge_idx');
+      expect(JSON.stringify(plan)).toContain('Index Cond');
+    });
+  },30000);
+
+  it('never detaches an unconfirmed child even when its old parent is due',async()=> {
+    const user=randomUUID(),parent=randomUUID(),child=randomUUID();
+    await db`INSERT INTO users(id,name) VALUES(${user},'pending boundary')`;
+    await db`INSERT INTO agent_principals(kind,user_id) VALUES('external',${user})`;
+    await db.begin(async tx=> {
+      const at=String((await tx`SELECT clock_timestamp()::text AS at`)[0]!.at);
+      await tx.unsafe('ALTER TABLE agent_credentials DISABLE TRIGGER USER');
+      await tx`INSERT INTO agent_credentials(id,user_id,token_hash,created_from,issued_at,confirmed_at,expires_at,renew_until,pending_expires_at,revoked_at)
+        VALUES(${parent},${user},${await hashAgentKey(randomUUID())},'spawn_grant',(${at}::timestamptz)-interval '100 days',(${at}::timestamptz)-interval '99 days',
+          (${at}::timestamptz)-interval '69 days',(${at}::timestamptz)-interval '55 days',(${at}::timestamptz)-interval '100 days'+interval '15 minutes',
+          (${at}::timestamptz)-interval '90 days 5 minutes')`;
+      await tx`INSERT INTO agent_credentials(id,user_id,token_hash,created_from,predecessor_id,predecessor_provenance_id,issued_at,expires_at,renew_until,pending_expires_at)
+        VALUES(${child},${user},${await hashAgentKey(randomUUID())},'rotation',${parent},${parent},(${at}::timestamptz)-interval '90 days 10 minutes',
+          (${at}::timestamptz)-interval '60 days 10 minutes',(${at}::timestamptz)-interval '46 days 10 minutes',(${at}::timestamptz)-interval '89 days 23 hours 55 minutes')`;
+      await tx.unsafe('ALTER TABLE agent_credentials ENABLE TRIGGER USER');
+      await tx`UPDATE agent_credentials SET purge_after=NULL WHERE user_id=${user}`;
+    });
+    await qualifyFixtureAudit();
+    await expect(db`UPDATE agent_credentials SET predecessor_id=NULL WHERE id=${child}`).rejects.toThrow();
+    await auditTick();
+    expect((await db`SELECT predecessor_id FROM agent_credentials WHERE id=${child}`)[0]?.predecessor_id).toBe(parent);
+    expect(await db`SELECT id FROM agent_credentials WHERE id=${parent}`).toHaveLength(1);
+  },10000);
+
+  it('retains latest Off and Dismiss controls, purges older closed decisions and compacts a current terminal receipt',async()=> {
+    const {proof}=await proofAt(); const created=await provider().acceptProof(proof,await hashAgentKey(randomUUID()));
+    if(!created.ok) throw new Error('fixture start refused');
+    const user=created.principalUserId,admin=randomUUID();
+    await db`INSERT INTO users(id,name) VALUES(${admin},'fixture admin')`;
+    await db`UPDATE agent_roles SET approved_by=${admin},granted_at=clock_timestamp(),revoked_at=clock_timestamp()-interval '100 days'
+      WHERE principal_user_id=${user}`;
+    const oldOff=(await db`SELECT id FROM agent_roles WHERE principal_user_id=${user}`)[0]!.id;
+    const latestOff=randomUUID(),dismiss=randomUUID();
+    await db`INSERT INTO agent_roles(id,principal_user_id,scope,approved_by,granted_at,created_at,revoked_at)
+      VALUES(${latestOff},${user},'knowledge:read',${admin},clock_timestamp()-interval '120 days',date_trunc('second',clock_timestamp())-interval '110 days'+interval '0.123456 seconds',clock_timestamp()-interval '100 days')`;
+    // Ensure immutable order puts this explicit Off after the original decision despite timestamp reconstruction.
+    await db`UPDATE agent_roles SET created_at=clock_timestamp()-interval '130 days' WHERE id=${oldOff}`;
+    await db`INSERT INTO agent_roles(id,principal_user_id,scope,created_at,revoked_at,closed_reason)
+      VALUES(${dismiss},${user},'work:read',clock_timestamp()-interval '110 days',clock_timestamp()-interval '100 days','dismissed')`;
+    const expiredId=randomUUID(),expiredToken=formatRevocableKey(randomBytes(32).toString('base64url'));
+    await db.begin(async tx=> {
+      await tx.unsafe('ALTER TABLE agent_credentials DISABLE TRIGGER USER');
+      await tx`INSERT INTO agent_credentials(id,user_id,token_hash,created_from,service_operation_id,service_generation,
+        issued_at,confirmed_at,pending_expires_at,expires_at,renew_until,revoked_at)
+        VALUES(${expiredId},${user},${await hashAgentKey(expiredToken)},'service_enrollment',${proof.operationId},1,
+          clock_timestamp()-interval '150 days',clock_timestamp()-interval '149 days',clock_timestamp()-interval '149 days',
+          clock_timestamp()-interval '110 days',clock_timestamp()-interval '100 days',clock_timestamp()-interval '100 days')`;
+      await tx.unsafe('ALTER TABLE agent_credentials ENABLE TRIGGER USER');
+      await tx`UPDATE agent_credentials SET purge_after=NULL WHERE id=${expiredId}`;
+    });
+    await db.begin(async tx=> {
+      await tx.unsafe('ALTER TABLE agent_service_enrollments DISABLE TRIGGER agent_enrollment_v2_immutable');
+      await tx`UPDATE agent_service_enrollments SET status='expired',terminal_at=clock_timestamp()-interval '100 days',sealed_acceptance=NULL,
+        credential_id=${expiredId},historical_confirmed_at=clock_timestamp()-interval '149 days',original_start_exp=clock_timestamp()-interval '101 days' WHERE operation_id=${proof.operationId}`;
+      await tx.unsafe('ALTER TABLE agent_service_enrollments ENABLE TRIGGER agent_enrollment_v2_immutable');
+    });
+    await qualifyFixtureAudit();for(let i=0;i<5;i++) await auditTick();
+    expect(await db`SELECT id FROM agent_roles WHERE id=${oldOff}`).toHaveLength(0);
+    expect(await db`SELECT id FROM agent_roles WHERE id IN (${latestOff},${dismiss})`).toHaveLength(2);
+    expect(await db`SELECT id FROM agent_service_enrollments WHERE operation_id=${proof.operationId}`).toHaveLength(0);
+    expect((await db`SELECT current_operation_id,current_generation,current_operation_digest,service_key FROM agent_principals WHERE user_id=${user}`)[0])
+      .toMatchObject({current_operation_id:proof.operationId,current_generation:1,current_operation_digest:proof.intentDigest,service_key:await fullServiceKey(proof.home,proof.service)});
+    expect(await db`SELECT id FROM agent_credentials WHERE id=${expiredId}`).toHaveLength(0);
+    await expect(db`UPDATE agent_principals SET current_operation_id=NULL,current_generation=0 WHERE user_id=${user}`).rejects.toThrow();
+    const grants=createPostgresAgentGrantsStore(db as unknown as SqlTag);
+    await grantRole(grants,{principalUserId:user,scope:'knowledge:read',approvedBy:admin,declaredScopes:['knowledge:read']});
+    expect(await grants.hasLiveRole(user,'knowledge:read')).toBe(true);
+    expect((await verifyBearer(creds(),expiredToken,["active"])).ok).toBe(false);
+    await expect(assertV1NotSuperseded(creds(),user)).rejects.toThrow();
+    const continuation={...proof,op:'continue' as const,jti:randomUUID(),originalTokenDigest:await hashAgentKey(randomUUID())};
+    expect((await provider().acceptProof(continuation,await hashAgentKey(randomUUID())))).toMatchObject({ok:false,reason:'unknown_operation'});
+    expect((await provider().acceptProof(proof,await hashAgentKey(randomUUID())))).toMatchObject({ok:false,reason:'intent_conflict'});
+  },10000);
+
+  it('compacts current home audit without resetting K or its fence, deletes superseded audit and preserves a fresh intent',async()=> {
+    let now=Date.now()-110*86400000;
+    const signing=await generateKeyPair('EdDSA');
+    const custody=createPostgresRequesterCustody(client(),{cipher:createCustodyCipher(new Uint8Array(32).fill(9),'audit-fixture'),
+      systemPrincipalUserId:COGNI_SYSTEM_PRINCIPAL_USER_ID,readReadyConnection:async()=>null});
+    const requester=createEnrollmentRequester({...custody,cipher:createCustodyCipher(new Uint8Array(32).fill(9),'audit-fixture'),
+      signer:createEnrollmentProofSigner({kid:'audit-fixture',key:signing.privateKey}),now:()=>new Date(now),fetch:discoveryFetch,
+      transport:{postProof:async()=>{throw new EnrollmentClientError('enrollment_rejected',404,new Date().toISOString(),'unknown_operation');},
+        pollToken:async()=>{throw new Error('unused');},confirmStaged:async()=>{throw new Error('unused');}}});
+    const compact=await requester.ensure(key),other={...key,service:'other-service'},obsolete=await requester.ensure(other);
+    const a=await requester.disconnect({operationId:compact.linkId,key},compact.revision);
+    const b=await requester.disconnect({operationId:obsolete.linkId,key:other},obsolete.revision);
+    now=Date.now();const fresh=await requester.reenroll({operationId:obsolete.linkId,key:other},b.revision);
+    await db`UPDATE agent_service_link_operations SET terminal_at=clock_timestamp()-interval '100 days'
+      WHERE operation_id IN (${compact.linkId},${obsolete.linkId})`;
+    await auditTick();
+    expect(await db`SELECT operation_id FROM agent_service_link_operations WHERE operation_id=${obsolete.linkId}`).toHaveLength(1);
+    await qualifyFixtureAudit();await auditTick();
+    expect(await db`SELECT operation_id FROM agent_service_link_operations WHERE operation_id=${obsolete.linkId}`).toHaveLength(0);
+    const retained=(await db`SELECT * FROM agent_service_link_operations WHERE operation_id=${compact.linkId}`)[0]!;
+    expect(retained.current).toBe(true);expect(retained.generation).toBe(1);
+    expect(retained.audit_compacted_at).not.toBeNull();expect(retained.encrypted_secrets).toBeNull();
+    expect(Number(retained.revision)).toBeGreaterThan(a.revision);expect(Number(retained.fence)).toBeGreaterThan(0);
+    expect((await requester.ensure(key)).linkId).toBe(compact.linkId);
+    const afterCompact=await requester.read({operationId:compact.linkId,key});
+    await requester.reenroll({operationId:compact.linkId,key},afterCompact.revision);
+    await auditTick();
+    expect(await db`SELECT operation_id FROM agent_service_link_operations WHERE operation_id=${compact.linkId}`).toHaveLength(0);
+    expect(await db`SELECT operation_id FROM agent_service_link_operations WHERE operation_id=${fresh.linkId} AND encrypted_secrets IS NOT NULL`).toHaveLength(1);
+  },10000);
+
+  it('audit keyset progress skips locked identities without pinning the next unlocked identity',async()=> {
+    const chains: Awaited<ReturnType<typeof seedAuditChain>>[]=[];for(let i=0;i<6;i++) chains.push(await seedAuditChain(46));
+    await qualifyFixtureAudit();
+    let held!:()=>void,release!:()=>void;
+    const acquired=new Promise<void>(r=>{held=r;});
+    const holder=second.begin(async tx=> {
+      for(const chain of chains.slice(0,5)) await tx`SELECT pg_advisory_xact_lock(hashtext(${chain.user}))`;
+      held();await new Promise<void>(r=>{release=r;});
+    });
+    await acquired;
+    try {
+      await auditTick();
+      expect(await db`SELECT id FROM agent_credentials WHERE id=${chains[5]!.ids[0]!}`).toHaveLength(1);
+      await auditTick();
+      expect(await db`SELECT id FROM agent_credentials WHERE id=${chains[5]!.ids[0]!}`).toHaveLength(0);
+      for(const chain of chains.slice(0,5)) expect(await db`SELECT id FROM agent_credentials WHERE id=${chain.ids[0]!}`).toHaveLength(1);
+    } finally {release();await holder;}
+  },15000);
+
+  it('the native cumulative deadline rolls back audit bookkeeping and leaves purge work available',async()=> {
+    await qualifyFixtureAudit();
+    const result=await maintenanceTick(client(),async tx=> {
+      await tx`UPDATE agent_authority_maintenance SET audit_cursors='{"mustRollback":true}'::jsonb WHERE id='service-enrollment'`;
+      await tx`SELECT pg_sleep(3)`;
+    });
+    expect(result).toEqual({processed:0,due:true});
+    expect((await db`SELECT audit_cursors FROM agent_authority_maintenance WHERE id='service-enrollment'`)[0]?.audit_cursors).toEqual({});
+  },10000);
+
+  it('ships the exact forward audit guards and leaves cutover off',async()=> {
+    const shipped=await readFile(resolve('../packages/agent-grants/migrations/agent_service_enrollment_audit.sql'),'utf8');
+    expect(shipped).toBe(await readFile(resolve('src/adapters/server/db/migrations/0050_bounded_enrollment_audit.sql'),'utf8'));
+    expect((await db`SELECT purge_enabled,minimum_reader_build FROM agent_authority_maintenance WHERE id='service-enrollment'`)[0])
+      .toMatchObject({purge_enabled:false,minimum_reader_build:null});
+  });
 });

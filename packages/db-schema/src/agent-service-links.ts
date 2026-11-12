@@ -60,6 +60,7 @@ export const agentServiceLinkOperations = pgTable(
       .defaultNow(),
     terminalAt: timestamp("terminal_at", { withTimezone: true }),
     purgeAfter: timestamp("purge_after", { withTimezone: true }),
+    auditCompactedAt: timestamp("audit_compacted_at", { withTimezone: true }),
   },
   (t) => [
     // One retained current operation per full K; explicit replacement is an update under its CAS, never implicit ensure.
@@ -78,13 +79,15 @@ export const agentServiceLinkOperations = pgTable(
     uniqueIndex("agent_service_links_key_unique")
       .on(t.keyDigest)
       .where(sql`${t.current}`),
+    index("agent_service_links_connection_idx").on(t.stagedConnectionId, t.operationId),
+    index("agent_service_links_purge_idx").on(t.purgeAfter, t.operationId),
     index("agent_service_links_due_idx").on(t.nextAttemptAt, t.operationId),
     index("agent_service_links_staged_expiry_idx")
       .on(t.secretDeadline, t.operationId)
       .where(sql`${t.stagedConnectionId} IS NOT NULL AND COALESCE(${t.state}->>'quarantined','false') <> 'true' AND ${t.phase} <> 'expired'`),
     index("agent_service_links_secret_idx")
       .on(t.secretDeadline, t.operationId)
-      .where(sql`${t.encryptedSecrets} IS NOT NULL`),
+      .where(sql`${t.encryptedSecrets} IS NOT NULL AND ${t.stagedConnectionId} IS NULL AND ${t.confirmAuthorizedAt} IS NULL`),
   ]
 ).enableRLS();
 

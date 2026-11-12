@@ -97,7 +97,7 @@ export const agentServiceEnrollments = pgTable(
     uniqueIndex("agent_service_enrollments_device_code_hash_unique").on(
       table.deviceCodeHash
     ),
-    index("agent_service_enrollments_credential_idx").on(table.credentialId),
+    index("agent_service_enrollments_credential_idx").on(table.credentialId, table.id),
     index("agent_service_enrollments_principal_idx").on(table.principalUserId),
     index("agent_service_enrollments_open_expiry_idx")
       .on(table.expiresAt, table.id)

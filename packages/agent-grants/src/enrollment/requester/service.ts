@@ -344,7 +344,9 @@ export function createEnrollmentRequester(options: EnrollmentRequesterOptions) {
         if (!(error instanceof EnrollmentClientError) || !error.observedAt ||
             !((error.status === 404 && error.refusal === "unknown_operation") ||
               (error.status === 410 && error.refusal === "terminal_operation"))) throw error;
-        disposition = error.status === 404 ? "not_accepted" : "terminal";
+        const acceptedAuditExpired = error.status === 404 && previous.state.acceptedAt &&
+          previous.state.recoveryExpiresAt && Date.parse(error.observedAt) >= Date.parse(previous.state.recoveryExpiresAt) + 90 * DAY;
+        disposition = error.status === 404 && !acceptedAuditExpired ? "not_accepted" : "terminal";
         observedAt = error.observedAt;
       }
       if (!Number.isFinite(Date.parse(observedAt)) ||

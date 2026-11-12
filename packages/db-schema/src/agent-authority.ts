@@ -9,7 +9,7 @@
  *   - AGENTS_HOLD_NO_WALLET: an internal principal row points at a seeded `users` row with no wallet and has no credential.
  *   - CREDENTIALS_ONLY_ON_AGENT_PRINCIPALS: `agent_credentials` rows belong only to a user with an `external` `agent_principals` row
  *     (a trigger in the migration enforces it).
- *   - ROLE_ROWS_ARE_SOFT_REVOKED: a role row is never deleted; `revoked_at` ends it. One live row per (principal, scope).
+ *   - ROLE_ROWS_ARE_SOFT_REVOKED: `revoked_at` ends a role; bounded audit cleanup preserves live rows and latest explicit controls.
  *   - NO_ACCOUNT_GRANTS: account scopes are out of scope; no account-grant table ships.
  *   - TOKEN_HASH_ONLY / STATE_IS_DERIVED: `agent_credentials` stores sha256 of the key and timestamps only; state (pending, active,
  *     renew_only, expired, revoked) is derived by the SQL function `agent_credential_state` (migration), never stored.
@@ -31,6 +31,7 @@ import {
   check,
   foreignKey,
   index,
+  jsonb,
   pgPolicy,
   pgTable,
   text,
@@ -61,6 +62,7 @@ export const agentPrincipals = pgTable(
       .notNull()
       .default(0),
     currentOperationId: uuid("current_operation_id"),
+    currentOperationDigest: text("current_operation_digest"),
     /** Monotonic v1 supersession evidence; retained independently of credential audit retention. */
     everConfirmed: boolean("ever_confirmed").notNull().default(false),
     firstConfirmedAt: timestamp("first_confirmed_at", { withTimezone: true }),
@@ -131,8 +133,11 @@ export const agentRoles = pgTable(
     requestExpiresAt: timestamp("request_expires_at", { withTimezone: true }),
     closedReason: text("closed_reason"),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    purgeAfter: timestamp("purge_after", { withTimezone: true }),
   },
   (table) => [
+    index("agent_roles_purge_idx").on(table.purgeAfter, table.id),
+    index("agent_roles_enrollment_idx").on(table.enrollmentOperationId, table.id),
     uniqueIndex("agent_roles_live_unique")
       .on(table.principalUserId, table.scope)
       .where(sql`${table.revokedAt} IS NULL`),
@@ -183,8 +188,13 @@ export const agentCredentials = pgTable(
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
     revokedReason: text("revoked_reason"),
     revokedBy: text("revoked_by"),
+    purgeAfter: timestamp("purge_after", { withTimezone: true }),
   },
   (table) => [
+    index("agent_credentials_purge_idx").on(table.purgeAfter, table.id),
+    index("agent_credentials_service_operation_idx").on(table.serviceOperationId, table.id),
+    index("agent_credentials_confirmed_predecessor_idx").on(table.predecessorId, table.id)
+      .where(sql`${table.confirmedAt} IS NOT NULL AND ${table.predecessorId} IS NOT NULL`),
     foreignKey({
       columns: [table.predecessorId],
       foreignColumns: [table.id],
@@ -231,4 +241,5 @@ export const agentAuthorityMaintenance = pgTable("agent_authority_maintenance", 
   oldestDueAt: timestamp("oldest_due_at", { withTimezone: true }),
   cursorExpiresAt: timestamp("cursor_expires_at", { withTimezone: true }),
   cursorEnrollmentId: uuid("cursor_enrollment_id"),
+  auditCursors: jsonb("audit_cursors").notNull().default({}),
 }, (table) => [check("agent_authority_purge_qualified", sql`NOT ${table.purgeEnabled} OR (${table.backfillReady} AND ${table.minimumReaderBuild} IS NOT NULL)`)]).enableRLS();

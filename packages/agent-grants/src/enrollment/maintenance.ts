@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
-/** One leased non-destructive tick: twenty candidates, nonblocking authority locks, one cumulative two-second cancellation deadline. */
-import { tryLockServiceAuthority } from "../authority-lock";
+/** One leased expiry/audit tick: twenty candidates, nonblocking authority locks, one cumulative two-second cancellation deadline. */
+import { auditPurgeQualified, maintainAuthorityAudit, tryAuditIdentity, registerAuthorityBatch, type AuthorityBatch } from "./audit-maintenance";
 import type { CredentialSql } from "../credentials/postgres";
 import type { SqlTag } from "../postgres";
 
@@ -63,20 +63,24 @@ export async function maintenanceTick(client: CredentialSql, extra?: (tx: SqlTag
           FROM candidate WHERE s.id = candidate.id
           RETURNING s.id, s.cursor_expires_at::text AS cursor_expires_at, s.cursor_enrollment_id`;
         if (lease.length === 0) return { processed: 0, due: false };
+        const authorityBatch: AuthorityBatch = { identities: new Map(), operations: 0, roles: 0 };
+        registerAuthorityBatch(tx, authorityBatch);
+        const purge = await auditPurgeQualified(tx);
+        const expiryLimit = purge ? 5 : 20;
         const cursorAt = lease[0]?.cursor_expires_at;
         const cursorId = lease[0]?.cursor_enrollment_id;
         if ((cursorAt == null) !== (cursorId == null)) throw new Error("incomplete maintenance cursor");
         const firstPage = () => tx`SELECT id, principal_user_id, expires_at::text AS cursor_expires_at FROM agent_service_enrollments
-          WHERE status = 'open' AND expires_at <= (SELECT clock_timestamp()) ORDER BY expires_at, id LIMIT 20`;
+          WHERE status = 'open' AND expires_at <= (SELECT clock_timestamp()) ORDER BY expires_at, id LIMIT ${expiryLimit}`;
         let batch = cursorAt == null ? await firstPage() : await tx`SELECT id, principal_user_id, expires_at::text AS cursor_expires_at
           FROM agent_service_enrollments WHERE status = 'open' AND expires_at <= (SELECT clock_timestamp())
-            AND (expires_at, id) > (${cursorAt}::timestamptz, ${cursorId}::uuid) ORDER BY expires_at, id LIMIT 20`;
+            AND (expires_at, id) > (${cursorAt}::timestamptz, ${cursorId}::uuid) ORDER BY expires_at, id LIMIT ${expiryLimit}`;
         // Wrap only after reaching the end. Both indexed reads are bounded; at most 20 identities are attempted.
         if (batch.length === 0 && cursorAt != null) batch = await firstPage();
         let processed = 0;
         for (const item of batch) {
           if (typeof item.principal_user_id !== "string" || typeof item.id !== "string") throw new Error("unreadable maintenance row");
-          if (!(await tryLockServiceAuthority(tx, item.principal_user_id))) continue;
+          if (!(await tryAuditIdentity(tx, authorityBatch, item.principal_user_id))) continue;
           const receipt = await tx`SELECT id, scope FROM agent_service_enrollments WHERE id = ${item.id} FOR UPDATE SKIP LOCKED`;
           if (receipt.length === 0) continue;
           // Lock the sole current child ask after the receipt. A locked child skips the identity, before any mutation.
@@ -88,10 +92,13 @@ export async function maintenanceTick(client: CredentialSql, extra?: (tx: SqlTag
           if (ended.length > 0) {
             if (ask[0]) await tx`UPDATE agent_roles SET revoked_at = clock_timestamp(), closed_reason = 'enrollment_expired'
               WHERE id = ${ask[0].id} AND approved_by IS NULL AND revoked_at IS NULL AND request_expires_at <= clock_timestamp()`;
+            authorityBatch.operations++;
+            if (ask[0]) authorityBatch.roles++;
             processed++;
           }
         }
         if (extra) await extra(tx);
+        if (purge) await maintainAuthorityAudit(tx, authorityBatch);
         const due = await tx`SELECT expires_at FROM agent_service_enrollments WHERE status = 'open' AND expires_at <= (SELECT clock_timestamp())
           ORDER BY expires_at, id LIMIT 1`;
         const last = batch[batch.length - 1];
