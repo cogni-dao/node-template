@@ -467,7 +467,22 @@ export const MetricHistorySchema = z.object({
 });
 export type MetricHistory = z.infer<typeof MetricHistorySchema>;
 
-/** One goal-progress read model shared by the Goals tab, HTTP and agent tools. */
+/**
+ * A metric's latest reading as the goal read lists it: the state of the newest
+ * attempt, and the last good value with its time. Present for every listed
+ * metric, banded or not.
+ */
+export const MetricLatestSchema = z.object({
+	viewState: MetricViewSchema.shape.viewState,
+	/** The last good value; null when no reading was ok. Never zero for unknown. */
+	value: z.number().finite().nullable(),
+	unit: z.string(),
+	/** When the last good value was observed. */
+	observedAt: z.string().nullable(),
+	/** Why the newest attempt is not ok; null when it is, or when there is no attempt. */
+	reason: z.string().nullable(),
+});
+export type MetricLatest = z.infer<typeof MetricLatestSchema>;
 /** A registered metric that serves one KPI, assessed against its own band (latest reading only). */
 export const ServedMetricSchema = z.object({
 	metric: z.object({
@@ -478,19 +493,46 @@ export const ServedMetricSchema = z.object({
 	}),
 	/** Null when the metric declares no band: it is listed, never judged. */
 	assessment: KpiAssessmentSchema.nullable(),
+	/** The latest reading, banded or not. Absent from servers older than 0.10.0. */
+	latest: MetricLatestSchema.optional(),
 });
 export type ServedMetric = z.infer<typeof ServedMetricSchema>;
-/** A metric whose `serves.kpi` names no bound KPI, or whose `serves`/`band` is invalid: reported, never hidden. */
+/**
+ * A metric whose `serves.kpi` names no bound KPI, names a KPI only a bet binds
+ * (`serves_bet_kpi`), or whose `serves`/`band` is invalid: reported, never hidden.
+ */
 export const MetricOrphanSchema = z.object({
 	metricId: z.string(),
+	/** The metric's title. Absent from servers older than 0.10.0. */
+	title: z.string().optional(),
 	/** The KPI the metric names; null when `serves` is invalid. */
 	kpi: z.string().nullable(),
-	reason: z.enum(["serves_unknown_kpi", "serves_invalid", "band_invalid"]),
+	reason: z.enum([
+		"serves_unknown_kpi",
+		"serves_bet_kpi",
+		"serves_invalid",
+		"band_invalid",
+	]),
 	/** Zod issue locations for an invalid annex field; absent for an unknown KPI. */
 	issues: z.array(z.string()).optional(),
 	assessment: KpiAssessmentSchema.nullable(),
+	/** The latest reading, banded or not. Absent from servers older than 0.10.0. */
+	latest: MetricLatestSchema.optional(),
 });
 export type MetricOrphan = z.infer<typeof MetricOrphanSchema>;
+/** A registered metric that declares no `serves` and that no goal binds as a KPI: it explains no goal KPI (goal-metrics-vs-telemetry axiom 3). A bet-only KPI metric is listed too. */
+export const UnboundMetricSchema = z.object({
+	metric: z.object({
+		id: z.string(),
+		title: z.string(),
+		calculatorId: z.string(),
+	}),
+	/** Null when the metric declares no band: it is listed, never judged. */
+	assessment: KpiAssessmentSchema.nullable(),
+	latest: MetricLatestSchema,
+});
+export type UnboundMetric = z.infer<typeof UnboundMetricSchema>;
+/** One goal-progress read model shared by the Goals and Metrics views, HTTP and agent tools. */
 export const GoalKpiSchema = z.object({
 	binding: KpiBindingSchema,
 	metric: z
@@ -548,9 +590,11 @@ export const GoalsProgressSchema = z.object({
 	environment: z.string(),
 	/** Metrics serving a KPI that no goal binds. Absent when metrics are unavailable. */
 	orphans: z.array(MetricOrphanSchema).optional(),
-	/** True when more definitions exist than one read scans, so `served`/`orphans` may be incomplete. */
+	/** Metrics that declare no `serves`. Absent when metrics are unavailable. */
+	unbound: z.array(UnboundMetricSchema).optional(),
+	/** True when more definitions exist than one read scans, so `served`/`orphans`/`unbound` may be incomplete. */
 	servedTruncated: z.boolean().optional(),
-	/** Error code when the served read failed (for example metric_authority_unavailable); `served`/`orphans` are then absent. */
+	/** Error code when the served read failed (for example metric_authority_unavailable); `served`/`orphans`/`unbound` are then absent. */
 	servedUnavailable: z.string().optional(),
 });
 export type GoalsProgress = z.infer<typeof GoalsProgressSchema>;

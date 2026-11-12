@@ -8,6 +8,7 @@ import {
 	createWorkMetricReader,
 	createMetricService,
 	metricDefinitionHash,
+	hashMetric,
 	MetricRegistry,
 	type MetricObservationsPort,
 	type MetricView,
@@ -51,17 +52,234 @@ function reading(
 const fresh = reading(1.2, "2026-11-02T11:00:00.000Z");
 
 describe("work page database batch", () => {
+	it.each([
+		["fresh historical evidence", "fresh", "met", null],
+		[
+			"stale baseline source",
+			"baseline-source",
+			"not_measured",
+			"baseline_unavailable_or_incompatible",
+		],
+		[
+			"stale baseline window",
+			"baseline-window-age",
+			"not_measured",
+			"baseline_unavailable_or_incompatible",
+		],
+		[
+			"stale due source",
+			"due-source",
+			"unresolved",
+			"no_reading_at_evaluation",
+		],
+		[
+			"source stale at evaluation",
+			"due-source-at-evaluation",
+			"unresolved",
+			"no_reading_at_evaluation",
+		],
+		[
+			"incompatible due window",
+			"due-window",
+			"unresolved",
+			"no_reading_at_evaluation",
+		],
+		[
+			"incompatible baseline window",
+			"baseline-window",
+			"not_measured",
+			"baseline_unavailable_or_incompatible",
+		],
+		[
+			"incompatible due parameters",
+			"due-params",
+			"unresolved",
+			"no_reading_at_evaluation",
+		],
+	] as const)(
+		"validates %s at evidence time",
+		async (_name, change, status, reason) => {
+			const definition = {
+				id: "ratio",
+				title: "Ratio",
+				revision: "1",
+				spec: { calculatorId: "work.count@1", params: {}, maxAgeSeconds: 7200 },
+			};
+			const observation = (value: number, end: string): MetricObservation => ({
+				...reading(value, end),
+				definitionHash: metricDefinitionHash(definition),
+				calculatorVersion: "work.count@1",
+				paramsHash: hashMetric({}),
+				window: {
+					start: new Date(Date.parse(end) - 3600000).toISOString(),
+					end,
+				},
+			});
+			const baseline = observation(1, "2026-10-01T12:00:00.000Z");
+			const due = observation(2, "2026-10-02T12:00:00.000Z");
+			if (change === "baseline-source" || change === "due-source") {
+				const row = change === "baseline-source" ? baseline : due;
+				row.sourceWatermarks = [
+					{
+						source: "s",
+						asOf: new Date(
+							Date.parse(row.window.end) - 12 * 3600000,
+						).toISOString(),
+					},
+				];
+			}
+			if (change === "baseline-window-age") {
+				baseline.observedAt = "2026-10-01T20:00:00.000Z";
+				baseline.sourceWatermarks = [
+					{ source: "s", asOf: baseline.observedAt },
+				];
+			}
+			if (change === "due-source-at-evaluation") {
+				due.window = {
+					start: "2026-10-02T10:00:00.000Z",
+					end: "2026-10-02T11:00:00.000Z",
+				};
+				due.observedAt = due.window.end;
+				due.sourceWatermarks = [
+					{ source: "s", asOf: "2026-10-02T09:30:00.000Z" },
+				];
+			}
+			if (change === "due-window")
+				due.window.start = "2026-10-02T10:00:00.000Z";
+			if (change === "baseline-window")
+				baseline.window.start = "2026-10-01T10:00:00.000Z";
+			if (change === "due-params") due.paramsHash = "other";
+			const registry = new MetricRegistry();
+			registry.register({
+				id: "work.count@1",
+				unit: "ratio",
+				windowSeconds: () => 3600,
+				paramsSchema: { parse: (x: unknown) => x } as never,
+				budget: {
+					timeoutMs: 1,
+					maxSourceCalls: 1,
+					maxRows: 1,
+					maxResponseBytes: 1,
+				},
+				compute: async () => {
+					throw new Error("unused");
+				},
+			});
+			const service = createMetricService({
+				definitions: {
+					get: async () => definition,
+					getMany: async () => [definition],
+					list: async () => ({ items: [], nextCursor: null }),
+				},
+				observations: {
+					predictionReadBatch: async () => [
+						{
+							baseline: { definition, observation: baseline },
+							latest: due,
+							lastGood: due,
+							evaluation: due,
+						},
+					],
+				} as unknown as MetricObservationsPort,
+				registry,
+				scope: { node: "n", environment: "e", dataScope: "d" },
+				now: () => NOW,
+				authorize: async () => true,
+			});
+			const [result] = await service.predictionBatch([
+				{
+					metricId: "ratio",
+					comparator: "gte",
+					target: { value: 2, unit: "ratio" },
+					baselineObservationId: baseline.id,
+					evaluationAt: "2026-10-02T12:00:00.000Z",
+				},
+			]);
+			expect(result?.assessment).toMatchObject({
+				status,
+				reason,
+				observationId: change === "fresh" ? due.id : null,
+			});
+		},
+	);
 	it("retains the pinned definition when the current definition changes", async () => {
-		const old = { id: "ratio", title: "Ratio", revision: "old", spec: { calculatorId: "work.count@1", params: { version: 1 }, maxAgeSeconds: 7200 } };
-		const current = { ...old, revision: "new", spec: { ...old.spec, params: { version: 2 } } };
-		const baseline = { ...fresh, definitionHash: metricDefinitionHash(old), value: 1 };
-		const due = { ...baseline, id: "00000000-0000-4000-8000-000000000002", value: 2 };
-		const batch = vi.fn(async () => [{ baseline: { definition: old, observation: baseline }, latest: due, lastGood: due, evaluation: due }]);
+		const old = {
+			id: "ratio",
+			title: "Ratio",
+			revision: "old",
+			spec: {
+				calculatorId: "work.count@1",
+				params: { version: 1 },
+				maxAgeSeconds: 7200,
+			},
+		};
+		const current = {
+			...old,
+			revision: "new",
+			spec: { ...old.spec, params: { version: 2 } },
+		};
+		const baseline = {
+			...fresh,
+			definitionHash: metricDefinitionHash(old),
+			calculatorVersion: old.spec.calculatorId,
+			paramsHash: hashMetric(old.spec.params),
+			value: 1,
+		};
+		const due = {
+			...baseline,
+			id: "00000000-0000-4000-8000-000000000002",
+			value: 2,
+		};
+		const batch = vi.fn(async () => [
+			{
+				baseline: { definition: old, observation: baseline },
+				latest: due,
+				lastGood: due,
+				evaluation: due,
+			},
+		]);
 		const registry = new MetricRegistry();
-		registry.register({ id: "work.count@1", unit: "ratio", paramsSchema: { parse: (x: unknown) => x } as never, budget: { timeoutMs: 1, maxSourceCalls: 1, maxRows: 1, maxResponseBytes: 1 }, compute: async () => { throw new Error("unused"); } });
-		const service = createMetricService({ definitions: { get: async () => current, getMany: async () => [current], list: async () => ({ items: [], nextCursor: null }) }, observations: { predictionReadBatch: batch } as unknown as MetricObservationsPort, registry, scope: { node: "n", environment: "e", dataScope: "d" }, now: () => new Date(NOW.getTime() + 3 * 3600000), authorize: async () => true });
-		const [result] = await service.predictionBatch([{ metricId: "ratio", comparator: "gte", target: { value: 2, unit: "ratio" }, baselineObservationId: baseline.id, evaluationAt: NOW.toISOString() }]);
-		expect(result?.assessment).toMatchObject({ status: "met", observationId: due.id });
+		registry.register({
+			id: "work.count@1",
+			unit: "ratio",
+			paramsSchema: { parse: (x: unknown) => x } as never,
+			budget: {
+				timeoutMs: 1,
+				maxSourceCalls: 1,
+				maxRows: 1,
+				maxResponseBytes: 1,
+			},
+			compute: async () => {
+				throw new Error("unused");
+			},
+		});
+		const service = createMetricService({
+			definitions: {
+				get: async () => current,
+				getMany: async () => [current],
+				list: async () => ({ items: [], nextCursor: null }),
+			},
+			observations: {
+				predictionReadBatch: batch,
+			} as unknown as MetricObservationsPort,
+			registry,
+			scope: { node: "n", environment: "e", dataScope: "d" },
+			now: () => new Date(NOW.getTime() + 3 * 3600000),
+			authorize: async () => true,
+		});
+		const [result] = await service.predictionBatch([
+			{
+				metricId: "ratio",
+				comparator: "gte",
+				target: { value: 2, unit: "ratio" },
+				baselineObservationId: baseline.id,
+				evaluationAt: NOW.toISOString(),
+			},
+		]);
+		expect(result?.assessment).toMatchObject({
+			status: "met",
+			observationId: due.id,
+		});
 	});
 	it("assesses due commitments through one observation batch and preserves due evidence", async () => {
 		const definition = {
@@ -73,6 +291,8 @@ describe("work page database batch", () => {
 		const baseline = {
 			...fresh,
 			definitionHash: metricDefinitionHash(definition),
+			calculatorVersion: definition.spec.calculatorId,
+			paramsHash: hashMetric(definition.spec.params),
 			value: 1,
 		};
 		const due = {
@@ -213,6 +433,38 @@ describe("work page database batch", () => {
 			current: null,
 			unknownReason: "metrics_unavailable",
 		});
+	});
+	it("distinguishes absent definitions from denied observations without reading either", async () => {
+		const definition = {
+			id: "denied",
+			title: "Protected",
+			revision: "1",
+			spec: { calculatorId: "work.count@1", params: {}, maxAgeSeconds: 7200 },
+		};
+		const batch = vi.fn(async () => []);
+		const service = createMetricService({
+			definitions: {
+				get: async () => null,
+				getMany: async () => [definition],
+				list: async () => ({ items: [], nextCursor: null }),
+			},
+			observations: {
+				workReadBatch: batch,
+			} as unknown as MetricObservationsPort,
+			registry: new MetricRegistry(),
+			scope: { node: "n", environment: "e", dataScope: "d" },
+			now: () => NOW,
+			authorize: async () => false,
+		});
+		const results = await service.workReadBatch([
+			{ metricId: "missing", baselineObservationId: fresh.id },
+			{ metricId: "denied", baselineObservationId: fresh.id },
+		]);
+		expect(results).toEqual([
+			{ baseline: null, current: null, unknownReason: "metric_deprecated" },
+			{ baseline: null, current: null, unknownReason: "metrics_unavailable" },
+		]);
+		expect(batch).toHaveBeenCalledExactlyOnceWith([]);
 	});
 	it("issues one scoped ordered SQL statement for multiple snapshots", async () => {
 		const sql = vi.fn(async () => [{}, {}]);

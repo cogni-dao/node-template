@@ -7,6 +7,7 @@ import {
 	floorTo,
 	type KpiAssessmentInput,
 	metricHistoryRange,
+	selectEvaluation,
 } from "./assess.js";
 import {
 	displayFits,
@@ -18,6 +19,7 @@ import {
 	type MetricAction,
 	type MetricCalculator,
 	type MetricDefinition,
+	type MetricLatest,
 	type MetricDefinitionsPort,
 	type MetricDisplay,
 	MetricError,
@@ -36,6 +38,8 @@ export * from "./progress.js";
 
 /** Definitions one goal read scans for `serves`; a cut is reported as `truncated`. */
 export const SERVES_SCAN_MAX = 200;
+/** Definitions one goal read opens at once; reads stay bounded and keep their order. The service pool bounds the real parallelism. */
+const SERVING_CONCURRENCY = 8;
 const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
 function canonical(value: unknown): string {
@@ -130,6 +134,23 @@ export function selectMetricView(
 			: (latestAttempt?.status ?? "unavailable");
 	return { definition, latestAttempt, lastGood, viewState };
 }
+/** A view's latest reading for the goal read: newest attempt state, last good value and its time. */
+export function metricLatest(view: MetricView): MetricLatest {
+	const { latestAttempt: attempt, lastGood: good } = view;
+	return {
+		viewState: view.viewState,
+		value: good?.value ?? null,
+		unit: good?.unit ?? attempt?.unit ?? "",
+		observedAt: good?.observedAt ?? null,
+		reason: attempt && attempt.status !== "ok" ? attempt.reason : null,
+	};
+}
+/** One metric listed by the goal read. */
+export interface ServingRow {
+	definition: MetricDefinition;
+	assessment: KpiAssessment | null;
+	latest: MetricLatest;
+}
 export function createMetricService(deps: {
 	definitions: MetricDefinitionsPort;
 	observations: MetricObservationsPort;
@@ -190,6 +211,38 @@ export function createMetricService(deps: {
 			to: range.to,
 			buckets,
 		};
+	}
+	/** One definition as the goal read lists it; null when this caller may not read it. */
+	async function servingRow(d: MetricDefinition): Promise<ServingRow | null> {
+		try {
+			await authorize("read", d);
+		} catch (e) {
+			// A metric this caller may not read is not listed; an authority outage
+			// throws, and the goal read reports it as servedUnavailable.
+			if (e instanceof MetricError && e.status === 404) return null;
+			throw e;
+		}
+		try {
+			const view = await service.viewOf(d);
+			return {
+				definition: d,
+				assessment: view.bandAssessment ?? null,
+				latest: metricLatest(view),
+			};
+		} catch {
+			// One unreadable metric reads red; it never drops the whole list (absent is red).
+			return {
+				definition: d,
+				assessment: null,
+				latest: {
+					viewState: "error",
+					value: null,
+					unit: "",
+					observedAt: null,
+					reason: "source_failed",
+				},
+			};
+		}
 	}
 	const service = {
 		registry,
@@ -519,33 +572,80 @@ export function createMetricService(deps: {
 						Date.parse(baseline.window.end) > Date.parse(binding.evaluationAt)
 					)
 						return missing("baseline_unavailable_or_incompatible");
-					let unit: string;
+					let shape: ReturnType<typeof calculatorShape>;
 					try {
-						unit = calculatorShape(
+						shape = calculatorShape(
 							registry.get(def.spec.calculatorId),
 							def.spec.params,
-						).unit;
+						);
 					} catch {
 						return missing("calculator_unavailable");
 					}
+					const paramsHash = hashMetric(def.spec.params);
 					const compatible = (o: MetricObservation | null | undefined) =>
 						o &&
 						o.metricId === binding.metricId &&
 						o.definitionHash === hash &&
+						o.calculatorVersion === def.spec.calculatorId &&
+						o.paramsHash === paramsHash &&
+						o.unit === shape.unit &&
+						Date.parse(o.window.end) - Date.parse(o.window.start) ===
+							shape.windowSeconds * 1000 &&
 						o.node === scope.node &&
 						o.environment === scope.environment &&
 						o.dataScope === scope.dataScope
 							? o
 							: null;
+					// A fixed prediction keeps evidence that was fresh at its own
+					// observation/evaluation time, even years after the deadline.
+					const freshAt = (o: MetricObservation, reference: number) => {
+						const observed = Date.parse(o.observedAt ?? "");
+						const end = Date.parse(o.window.end);
+						const age = def.spec.maxAgeSeconds * 1000;
+						const at = Math.max(reference, observed);
+						return (
+							o.status === "ok" &&
+							o.value !== null &&
+							Number.isFinite(o.value) &&
+							Number.isFinite(at) &&
+							observed >= end &&
+							at - end <= age &&
+							o.sourceWatermarks.length > 0 &&
+							o.sourceWatermarks.every(({ asOf }) => {
+								const sourceAt = Date.parse(asOf ?? "");
+								return sourceAt <= observed && at - sourceAt <= age;
+							})
+						);
+					};
+					const deadline = Date.parse(binding.evaluationAt);
+					if (
+						!compatible(baseline) ||
+						!freshAt(baseline, Date.parse(baseline.observedAt ?? "")) ||
+						Date.parse(baseline.observedAt ?? "") > deadline
+					)
+						return missing("baseline_unavailable_or_incompatible");
 					const latest = compatible(row?.latest),
 						good = compatible(row?.lastGood),
-						evaluation = compatible(row?.evaluation);
+						candidate = compatible(row?.evaluation);
+					const evaluation =
+						candidate &&
+						freshAt(candidate, deadline) &&
+						Date.parse(candidate.window.end) >= Date.parse(baseline.window.end)
+							? selectEvaluation(
+									[candidate],
+									binding.evaluationAt,
+									def.spec.maxAgeSeconds,
+								)
+							: null;
 					const view = selectMetricView(def, latest ? [latest] : [], at);
 					return {
 						...binding,
 						assessment: assessKpi({
 							binding,
-							metric: { unit, maxAgeSeconds: def.spec.maxAgeSeconds },
+							metric: {
+								unit: shape.unit,
+								maxAgeSeconds: def.spec.maxAgeSeconds,
+							},
 							latestAttempt: latest,
 							lastGood: good,
 							viewState: view.viewState,
@@ -596,83 +696,103 @@ export function createMetricService(deps: {
 				throw new MetricError("batch_unavailable", 503);
 			let cursor = 0;
 			return Promise.all(
-				requests.map(async (request) => {
-					const definition = allowed.get(request.metricId);
-					if (!definition)
-						return {
-							baseline: null,
-							current: null,
-							unknownReason: "metrics_unavailable" as const,
-						};
-					const row = rows[cursor++];
-					let baseline = row?.baseline ?? null;
-					if (baseline) {
-						const observation = baseline.observation;
-						if (
-							observation.id !== request.baselineObservationId ||
-							observation.metricId !== request.metricId ||
-							baseline.definition.id !== request.metricId ||
-							observation.node !== scope.node ||
-							observation.environment !== scope.environment ||
-							observation.dataScope !== scope.dataScope ||
-							observation.definitionHash !==
-								metricDefinitionHash(baseline.definition)
-						)
-							baseline = null;
-						else {
-							try {
-								await authorize("read", baseline.definition);
-							} catch {
+				requests.map(
+					async (
+						request,
+					): Promise<{
+						baseline: MetricObservation | null;
+						current:
+							| (MetricObservation & {
+									metricTitle: string;
+									maxAgeSeconds: number;
+									viewState: MetricView["viewState"];
+							  })
+							| null;
+						unknownReason?: "metrics_unavailable" | "metric_deprecated";
+					}> => {
+						const definition = allowed.get(request.metricId);
+						if (!definition)
+							return {
+								baseline: null,
+								current: null,
+								unknownReason: found.some((d) => d.id === request.metricId)
+									? "metrics_unavailable"
+									: "metric_deprecated",
+							};
+						const row = rows[cursor++];
+						let baseline = row?.baseline ?? null;
+						if (baseline) {
+							const observation = baseline.observation;
+							if (
+								observation.id !== request.baselineObservationId ||
+								observation.metricId !== request.metricId ||
+								baseline.definition.id !== request.metricId ||
+								observation.node !== scope.node ||
+								observation.environment !== scope.environment ||
+								observation.dataScope !== scope.dataScope ||
+								observation.definitionHash !==
+									metricDefinitionHash(baseline.definition)
+							)
 								baseline = null;
+							else {
+								try {
+									await authorize("read", baseline.definition);
+								} catch {
+									baseline = null;
+								}
 							}
 						}
-					}
-					const candidate = row?.latest ?? null;
-					const latest =
-						candidate &&
-						candidate.metricId === request.metricId &&
-						candidate.definitionHash === metricDefinitionHash(definition) &&
-						candidate.node === scope.node &&
-						candidate.environment === scope.environment &&
-						candidate.dataScope === scope.dataScope
-							? candidate
+						const candidate = row?.latest ?? null;
+						const latest =
+							candidate &&
+							candidate.metricId === request.metricId &&
+							candidate.definitionHash === metricDefinitionHash(definition) &&
+							candidate.node === scope.node &&
+							candidate.environment === scope.environment &&
+							candidate.dataScope === scope.dataScope
+								? candidate
+								: null;
+						const view = selectMetricView(
+							definition,
+							latest ? [latest] : [],
+							now(),
+						);
+						const age = latest
+							? now().getTime() - Date.parse(latest.window.end)
+							: NaN;
+						const current = latest
+							? {
+									...latest,
+									metricTitle: definition.title,
+									maxAgeSeconds: definition.spec.maxAgeSeconds,
+									viewState:
+										view.viewState === "ok" &&
+										(!Number.isFinite(age) ||
+											age < 0 ||
+											age > definition.spec.maxAgeSeconds * 1000)
+											? ("stale" as const)
+											: view.viewState,
+								}
 							: null;
-					const view = selectMetricView(
-						definition,
-						latest ? [latest] : [],
-						now(),
-					);
-					const age = latest
-						? now().getTime() - Date.parse(latest.window.end)
-						: NaN;
-					const current = latest
-						? {
-								...latest,
-								metricTitle: definition.title,
-								maxAgeSeconds: definition.spec.maxAgeSeconds,
-								viewState:
-									view.viewState === "ok" &&
-									(!Number.isFinite(age) ||
-										age < 0 ||
-										age > definition.spec.maxAgeSeconds * 1000)
-										? ("stale" as const)
-										: view.viewState,
-							}
-						: null;
-					return { baseline: baseline?.observation ?? null, current };
-				}),
+						return { baseline: baseline?.observation ?? null, current };
+					},
+				),
 			);
 		},
 		async read(id: string): Promise<MetricView> {
-			const d = await definitionFor(id, "read");
+			return service.viewOf(await definitionFor(id, "read"));
+		},
+		/** One authorized definition's view: newest attempt, last good reading and band assessment. */
+		async viewOf(d: MetricDefinition): Promise<MetricView> {
 			const hash = metricDefinitionHash(d);
-			const view = selectMetricView(
-				d,
-				await observations.history(id, hash, 1),
-				now(),
-			);
-			view.lastGood = await observations.lastGood(id, hash);
-			const band = await service.bandAssessment(d);
+			const history = await observations.history(d.id, hash, 1);
+			const view = selectMetricView(d, history, now());
+			view.lastGood = await observations.lastGood(d.id, hash);
+			// The band reuses the two reads above: no second definition or reading read.
+			const band = await service.bandAssessment(d, {
+				latest: history[0],
+				lastGood: view.lastGood,
+			});
 			if (band) view.bandAssessment = band;
 			return view;
 		},
@@ -680,53 +800,68 @@ export function createMetricService(deps: {
 		 * A metric's own band, assessed as a synthetic binding through kpi(): the
 		 * one assessment path. Latest reading only; null without a band.
 		 */
-		async bandAssessment(d: MetricDefinition): Promise<KpiAssessment | null> {
+		async bandAssessment(
+			d: MetricDefinition,
+			preloaded?: {
+				latest: MetricObservation | undefined;
+				lastGood: MetricObservation | null;
+			},
+		): Promise<KpiAssessment | null> {
 			if (!d.band) return null;
 			return (
-				await service.kpi({ metricId: d.id, ...d.band }, { latestOnly: true })
+				await service.kpi(
+					{ metricId: d.id, ...d.band },
+					{
+						latestOnly: true,
+						...(preloaded
+							? { preloaded: { definition: d, ...preloaded } }
+							: {}),
+					},
+				)
 			).assessment;
 		},
 		/**
-		 * Registered metrics that declare `serves` (or carry an invalid annex), each with its band assessment.
-		 * Scans at most SERVES_SCAN_MAX definitions; `truncated` admits a cut.
+		 * Every readable metric with its band assessment and latest reading: those that
+		 * declare `serves` (or carry an invalid annex) in `items`, and those with no
+		 * valid or invalid `serves` in `unbound`. A bad band may appear in both.
+		 * Scans at most SERVES_SCAN_MAX definitions; `truncated` admits a cut. The read
+		 * is latest-only: per definition one newest-attempt read and one last-good read
+		 * (the band assessment reuses both). No history range read, no second definition read.
 		 */
 		async serving(): Promise<{
-			items: Array<{
-				definition: MetricDefinition;
-				assessment: KpiAssessment | null;
-			}>;
+			items: ServingRow[];
+			unbound: ServingRow[];
 			truncated: boolean;
 		}> {
-			const items: Array<{
-				definition: MetricDefinition;
-				assessment: KpiAssessment | null;
-			}> = [];
+			const items: ServingRow[] = [];
+			const unbound: ServingRow[] = [];
 			let cursor: string | undefined;
 			let scanned = 0;
 			let truncated = false;
 			while (scanned < SERVES_SCAN_MAX) {
 				const page = await definitions.list(50, cursor);
-				for (const d of page.items) {
-					scanned++;
-					if (!d.serves && !d.annexInvalid?.length) continue;
-					try {
-						await authorize("read", d);
-					} catch (e) {
-						// A metric this caller may not read is not listed; an authority outage
-						// throws, and the goal read reports it as servedUnavailable.
-						if (e instanceof MetricError && e.status === 404) continue;
-						throw e;
+				scanned += page.items.length;
+				// A page reads in small concurrent chunks; results keep the page's order.
+				for (let i = 0; i < page.items.length; i += SERVING_CONCURRENCY) {
+					const rows = await Promise.all(
+						page.items.slice(i, i + SERVING_CONCURRENCY).map(servingRow),
+					);
+					for (const row of rows) {
+						if (!row) continue;
+						const d = row.definition;
+						if (d.serves || d.annexInvalid?.length) items.push(row);
+						if (
+							!d.serves &&
+							!d.annexInvalid?.some((bad) => bad.field === "serves")
+						)
+							unbound.push(row);
 					}
-					items.push({
-						definition: d,
-						assessment: await service.bandAssessment(d),
-					});
 				}
 				if (!page.nextCursor) break;
 				cursor = page.nextCursor;
 				if (scanned >= SERVES_SCAN_MAX) truncated = true;
 			}
-			return { items, truncated };
+			return { items, unbound, truncated };
 		},
 		async history(id: string) {
 			const d = await definitionFor(id, "read");
@@ -781,6 +916,15 @@ export function createMetricService(deps: {
 				hypothesis?: boolean;
 				/** Skip the trend and recent history queries: one bounded latest-reading read. */
 				latestOnly?: boolean;
+				/**
+				 * A definition the caller already authorized and its newest attempt and last
+				 * good reading, so this read repeats none of them (the goal read's metric list).
+				 */
+				preloaded?: {
+					definition: MetricDefinition;
+					latest: MetricObservation | undefined;
+					lastGood: MetricObservation | null;
+				};
 			},
 		): Promise<GoalKpiResult> {
 			const at = now();
@@ -817,7 +961,9 @@ export function createMetricService(deps: {
 			let current: MetricDefinition;
 			let pinned: Awaited<ReturnType<MetricObservationsPort["snapshot"]>>;
 			try {
-				current = await definitionFor(b.metricId, "read");
+				current =
+					options?.preloaded?.definition ??
+					(await definitionFor(b.metricId, "read"));
 				pinned = b.baselineObservationId
 					? await observations.snapshot(b.baselineObservationId)
 					: null;
@@ -872,9 +1018,13 @@ export function createMetricService(deps: {
 				)
 			)
 				return unmeasured("baseline_unavailable_or_incompatible", metric);
-			const [latest] = await observations.history(b.metricId, hash, 1);
+			const latest = options?.preloaded
+				? options.preloaded.latest
+				: (await observations.history(b.metricId, hash, 1))[0];
 			const view = selectMetricView(definition, latest ? [latest] : [], at);
-			const lastGood = await observations.lastGood(b.metricId, hash);
+			const lastGood = options?.preloaded
+				? options.preloaded.lastGood
+				: await observations.lastGood(b.metricId, hash);
 			const due = deadline !== null && Date.parse(deadline) <= at.getTime();
 			const evaluation = due
 				? await observations.at(

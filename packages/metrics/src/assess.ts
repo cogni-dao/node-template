@@ -433,3 +433,26 @@ export function assessKpi(input: KpiAssessmentInput): KpiAssessment {
 		? result("failing", "target_breached", lastGood)
 		: result("behind", null, lastGood);
 }
+
+/** Expected benefit in KPI units; this does not establish eligibility or causation. */
+export function expectedKpiBenefit(input: {
+	comparator: "gte" | "lte" | "eq";
+	target: number;
+	without: number | null;
+	with: number | null;
+}): number | null {
+	const { comparator, target, without, with: withValue } = input;
+	if (
+		without === null ||
+		withValue === null ||
+		![target, without, withValue].every(Number.isFinite)
+	)
+		return null;
+	const benefit =
+		comparator === "gte"
+			? withValue - without
+			: comparator === "lte"
+				? without - withValue
+				: Math.abs(without - target) - Math.abs(withValue - target);
+	return Number.isFinite(benefit) ? benefit : null;
+}

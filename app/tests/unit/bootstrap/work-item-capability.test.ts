@@ -14,7 +14,6 @@
  */
 
 import { WorkItemPatchConflictError } from "@cogni/ai-tools";
-import { MetricError } from "@cogni-dao/metrics/contracts";
 import { toWorkItemId, type WorkItem, type WorkItemCommandPort, type WorkItemQueryPort } from "@cogni/work-items";
 import { WorkItemRevisionConflictError } from "@cogni/work-items/adapters/doltgres";
 import { describe, expect, it, vi } from "vitest";
@@ -310,10 +309,9 @@ describe("createWorkItemCapability", () => {
       ...storedItem,
       moves: [{ metricId: "m-1", direction: "up", baselineObservationId: OBS }],
     };
-    const ok = (value: number) => ({ id: OBS, status: "ok", value, observedAt: "2026-11-10T00:00:00.000Z" });
+    const ok = (value: number) => ({ id: OBS, metricId: "m-1", status: "ok", value, observedAt: "2026-11-10T00:00:00.000Z", definitionHash: "h", calculatorVersion: "work.count@1", paramsHash: "p", node: "n", environment: "test", dataScope: "node-members", unit: "items", window: { start: "2026-11-09T23:00:00.000Z", end: "2026-11-10T00:00:00.000Z" }, sourceWatermarks: [{ source: "test", asOf: "2026-11-10T00:00:00.000Z" }], viewState: "ok", maxAgeSeconds: 7200 });
     const metrics = (baseline: number, current: number) => ({
-      observation: vi.fn().mockResolvedValue({ observation: ok(baseline) }),
-      read: vi.fn().mockResolvedValue({ lastGood: ok(current) }),
+      workReadBatch: vi.fn().mockResolvedValue([{ baseline: ok(baseline), current: ok(current) }]),
     });
     const capability = (items: WorkItem[], service: ReturnType<typeof metrics> | undefined) =>
       createWorkItemCapability({
@@ -328,7 +326,7 @@ describe("createWorkItemCapability", () => {
     it("a read that returns one item adds the baseline, current reading and verdict", async () => {
       const service = metrics(1, 3);
       const [item] = await capability([withMoves], service).query({ ids: ["task.5001"], limit: 1 });
-      expect(item?.moves).toEqual([
+      expect(item?.moves).toMatchObject([
         {
           metricId: "m-1",
           direction: "up",
@@ -338,8 +336,8 @@ describe("createWorkItemCapability", () => {
           moved: "as_declared",
         },
       ]);
-      expect(service.observation).toHaveBeenCalledTimes(1);
-      expect(service.read).toHaveBeenCalledTimes(1);
+      expect(service.workReadBatch).toHaveBeenCalledOnce();
+      expect(service.workReadBatch).toHaveBeenCalledWith([{ metricId: "m-1", baselineObservationId: OBS }]);
     });
 
     it("a page of items returns the stored moves and looks up nothing", async () => {
@@ -349,18 +347,16 @@ describe("createWorkItemCapability", () => {
         [{ metricId: "m-1", direction: "up", baselineObservationId: OBS }],
         [{ metricId: "m-1", direction: "up", baselineObservationId: OBS }],
       ]);
-      expect(service.observation).not.toHaveBeenCalled();
-      expect(service.read).not.toHaveBeenCalled();
+      expect(service.workReadBatch).not.toHaveBeenCalled();
     });
 
     it("a deprecated metric (metric_not_found) reads unknown with metric_deprecated", async () => {
       const service = {
-        observation: vi.fn().mockRejectedValue(new MetricError("metric_not_found", 404)),
-        read: vi.fn(),
+        workReadBatch: vi.fn().mockResolvedValue([{ baseline: null, current: null, unknownReason: "metric_deprecated" }]),
       };
       const [item] = await capability([withMoves], service as never).query({ ids: ["task.5001"] });
       expect(item?.moves?.[0]).toMatchObject({ moved: "unknown", unknownReason: "metric_deprecated" });
-      expect(service.read).not.toHaveBeenCalled();
+      expect(service.workReadBatch).toHaveBeenCalledOnce();
     });
 
     it("with no metrics service the move reads unknown", async () => {

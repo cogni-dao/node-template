@@ -57,12 +57,13 @@ describe("agent.json work-item moves", () => {
     const read =
       body.actions.getWorkItem.outputSchema.properties.moves.items.properties;
     expect(read).toHaveProperty("baselineObservationId");
-    expect(read.moved.enum).toEqual([
+    expect(read.moved.anyOf.find((variant: { enum?: unknown }) => variant.enum)?.enum).toEqual([
       "as_declared",
       "against",
       "flat",
       "unknown",
     ]);
+    expect(read.moved.anyOf).toContainEqual({ type: "null" });
     expect(read.unknownReason.enum).toContain("metric_deprecated");
   });
 });

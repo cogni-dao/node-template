@@ -13,12 +13,22 @@
 
 import "@testing-library/jest-dom/vitest";
 
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import {
   WorkBoard,
   WorkMetricDetails,
+  WorkExpectations,
+  type WorkExpectationPage,
   createWorkItemColumns,
   type WorkBoardItem,
 } from "../src/index.js";
@@ -90,9 +100,15 @@ describe("WorkBoard", () => {
     });
     const card = open.parentElement as HTMLElement;
     expect(within(card).getAllByRole("link")).toHaveLength(1);
-    expect(within(card).getByRole("link")).toHaveAttribute("href", "/knowledge/goal-alpha");
+    expect(within(card).getByRole("link")).toHaveAttribute(
+      "href",
+      "/knowledge/goal-alpha",
+    );
     expect(within(card).getByText(/^Rank /)).toBeInTheDocument();
-    expect(card.querySelector("time")).toHaveAttribute("datetime", "2026-11-02T18:37:35.000Z");
+    expect(card.querySelector("time")).toHaveAttribute(
+      "datetime",
+      "2026-11-02T18:37:35.000Z",
+    );
     fireEvent.click(open);
     expect(onOpenItem).toHaveBeenCalledWith(item);
     expect(screen.getByText("No items")).toBeInTheDocument();
@@ -144,7 +160,12 @@ describe("WorkBoard", () => {
     render(
       <WorkBoard
         columns={[
-          { status: "needs_implement", items: [], hasMore: true, rowsScanned: 1000 },
+          {
+            status: "needs_implement",
+            items: [],
+            hasMore: true,
+            rowsScanned: 1000,
+          },
           { status: "done", items: [], hasMore: true, notStarted: true },
           { status: "cancelled", items: [], hasMore: false },
         ]}
@@ -154,8 +175,12 @@ describe("WorkBoard", () => {
       />,
     );
     expect(screen.getAllByText("No items")).toHaveLength(1);
-    expect(screen.getByText("No matches in the rows searched so far")).toBeInTheDocument();
-    const search = screen.getByRole("button", { name: "Search further needs_implement" });
+    expect(
+      screen.getByText("No matches in the rows searched so far"),
+    ).toBeInTheDocument();
+    const search = screen.getByRole("button", {
+      name: "Search further needs_implement",
+    });
     expect(search).toHaveTextContent("Search further (1,000 scanned)");
     expect(screen.getByText("Not loaded yet")).toBeInTheDocument();
     expect(screen.getByText("–")).toHaveAttribute("title", "Not loaded yet");
@@ -170,34 +195,195 @@ describe("WorkBoard", () => {
       <WorkBoard
         columns={[
           { status: "needs_implement", items: [item], hasMore: true },
-          { status: "done", items: [{ ...item, id: "task.0002", status: "done" }], hasMore: false },
+          {
+            status: "done",
+            items: [{ ...item, id: "task.0002", status: "done" }],
+            hasMore: false,
+          },
         ]}
         isLoading={false}
         onOpenItem={() => {}}
         onLoadMore={onLoadMore}
       />,
     );
-    expect(screen.getByText("1+")).toHaveAttribute("title", "1 loaded, more available");
+    expect(screen.getByText("1+")).toHaveAttribute(
+      "title",
+      "1 loaded, more available",
+    );
     expect(screen.getByText("1")).toHaveAttribute("title", "1 items");
-    fireEvent.click(screen.getByRole("button", { name: "Load more needs_implement" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Load more needs_implement" }),
+    );
     expect(onLoadMore).toHaveBeenCalledExactlyOnceWith("needs_implement");
-    expect(screen.getAllByRole("button", { name: /^Load more/ })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: /^Load more/ })).toHaveLength(
+      1,
+    );
     rerender(
       <WorkBoard
-        columns={[{ status: "needs_implement", items: [item], hasMore: true, isLoadingMore: true }]}
+        columns={[
+          {
+            status: "needs_implement",
+            items: [item],
+            hasMore: true,
+            isLoadingMore: true,
+          },
+        ]}
         isLoading={false}
         onOpenItem={() => {}}
         onLoadMore={onLoadMore}
       />,
     );
-    expect(screen.getByRole("button", { name: "Load more needs_implement" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Load more needs_implement" }),
+    ).toBeDisabled();
   });
 });
 
 describe("work expectation join", () => {
+  it("refreshes an open detail on knowledge and observation changes without changing moves", async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    let page: WorkExpectationPage = { items: [], truncated: false };
+    const load = vi.fn(async () => page);
+    const moves: NonNullable<WorkBoardItem["moves"]> = [];
+    const view = render(
+      <QueryClientProvider client={client}>
+        <WorkExpectations itemId="task.1" moves={moves} load={load} />
+      </QueryClientProvider>,
+    );
+    try {
+      expect(
+        await screen.findByText("No expectation recorded."),
+      ).toBeInTheDocument();
+      page = {
+        items: [
+          {
+            id: "hyp.1",
+            title: "New expectation",
+            content: "Expected result",
+            predictions: [
+              {
+                metricId: "m",
+                expected: "gte 4 count",
+                observed: "unresolved",
+              },
+            ],
+            outcomes: [],
+            truncated: false,
+          },
+        ],
+        truncated: false,
+      };
+      // The node's actual knowledge mutations invalidate this existing prefix.
+      await act(() => client.invalidateQueries({ queryKey: ["knowledge"] }));
+      expect(await screen.findByText("New expectation")).toBeInTheDocument();
+      page = {
+        ...page,
+        items: page.items.map((item) => ({
+          ...item,
+          outcomes: [
+            {
+              id: "outcome.1",
+              title: "Recorded outcome",
+              content: "Recount confirmed",
+            },
+          ],
+        })),
+      };
+      // A refreshed EDO query/revision must also invalidate the composed read.
+      act(() =>
+        client.setQueryData(["knowledge", "entry", "outcome.1"], {
+          revision: "next",
+        }),
+      );
+      expect(await screen.findByText("Recorded outcome")).toBeInTheDocument();
+      page = {
+        ...page,
+        items: page.items.map((item) => ({
+          ...item,
+          predictions: [
+            {
+              metricId: "m",
+              expected: "gte 4 count",
+              observed: "met · observation-2",
+            },
+          ],
+        })),
+      };
+      act(() =>
+        client.setQueryData(["metric", "evidence", "m", "observation-2"], {
+          observation: { id: "observation-2" },
+        }),
+      );
+      expect(
+        await screen.findByText(/observed met · observation-2/),
+      ).toBeInTheDocument();
+      await waitFor(() => expect(load).toHaveBeenCalledTimes(4));
+    } finally {
+      view.unmount();
+      client.clear();
+    }
+  });
+  it("replaces an in-flight expectation read when evidence changes", async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    let finishOld!: (page: WorkExpectationPage) => void;
+    const old = new Promise<WorkExpectationPage>((resolve) => {
+      finishOld = resolve;
+    });
+    const updated: WorkExpectationPage = {
+      items: [
+        {
+          id: "hyp.1",
+          title: "Current expectation",
+          content: "Expected result",
+          predictions: [],
+          outcomes: [],
+          truncated: false,
+        },
+      ],
+      truncated: false,
+    };
+    const load = vi
+      .fn()
+      .mockImplementationOnce(() => old)
+      .mockResolvedValue(updated);
+    const view = render(
+      <QueryClientProvider client={client}>
+        <WorkExpectations itemId="task.1" moves={[]} load={load} />
+      </QueryClientProvider>,
+    );
+    try {
+      await waitFor(() => expect(load).toHaveBeenCalledOnce());
+      act(() =>
+        client.setQueryData(["knowledge", "entry", "hyp.1"], {
+          revision: "new",
+        }),
+      );
+      expect(
+        await screen.findByText("Current expectation"),
+      ).toBeInTheDocument();
+      await act(async () => {
+        finishOld({ items: [], truncated: false });
+        await old;
+      });
+      expect(screen.getByText("Current expectation")).toBeInTheDocument();
+      expect(
+        screen.queryByText("No expectation recorded."),
+      ).not.toBeInTheDocument();
+      expect(load).toHaveBeenCalledTimes(2);
+    } finally {
+      view.unmount();
+      client.clear();
+    }
+  });
   it("provides shared table columns for goal and metric", () => {
     const columns = createWorkItemColumns();
-    expect(columns.map((column) => column.id)).toEqual(expect.arrayContaining(["goal", "metric"]));
+    expect(columns.map((column) => column.id)).toEqual(
+      expect.arrayContaining(["goal", "metric"]),
+    );
   });
 
   it("reports an unavailable expectation projection", async () => {
@@ -228,7 +414,9 @@ describe("work expectation join", () => {
       />,
     );
     expect(screen.getByText("Latest: Unknown · error")).toBeInTheDocument();
-    expect(screen.getByText("Baseline: 1 count · 2026-11-01")).toBeInTheDocument();
+    expect(
+      screen.getByText("Baseline: 1 count · 2026-11-01"),
+    ).toBeInTheDocument();
   });
   it("reads the bounded server projection in one request", async () => {
     const expected = {
@@ -237,17 +425,32 @@ describe("work expectation join", () => {
           id: "hyp.1",
           title: "Expectation",
           content: "fresh reading",
-          predictions: [{ metricId: "m", expected: "gte 4 count", observed: "met" }],
-          outcomes: [{ id: "outcome.1", title: "Observed", content: "independently recounted" }],
+          predictions: [
+            { metricId: "m", expected: "gte 4 count", observed: "met" },
+          ],
+          outcomes: [
+            {
+              id: "outcome.1",
+              title: "Observed",
+              content: "independently recounted",
+            },
+          ],
           truncated: false,
         },
       ],
       truncated: false,
     };
-    const fetcher = vi.fn(async () => ({ ok: true, json: async () => expected }));
+    const fetcher = vi.fn(async () => ({
+      ok: true,
+      json: async () => expected,
+    }));
     vi.stubGlobal("fetch", fetcher);
     try {
-      const page = await fetchWorkExpectations("task.1", new AbortController().signal, []);
+      const page = await fetchWorkExpectations(
+        "task.1",
+        new AbortController().signal,
+        [],
+      );
       expect(page).toEqual(expected);
       expect(fetcher).toHaveBeenCalledOnce();
     } finally {
