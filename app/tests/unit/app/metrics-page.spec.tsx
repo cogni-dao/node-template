@@ -245,7 +245,7 @@ describe("Metrics page", () => {
     const region = screen.getByRole("region", { name: "Metrics" });
     expect(within(region).getByText("Goal: Ship it")).toBeTruthy();
     expect(within(region).getByText("Not serving a KPI")).toBeTruthy();
-    expect(within(region).getByText("Loose count")).toBeTruthy();
+    expect(within(region).getByRole("button", { name: "Loose count" })).toBeTruthy();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
