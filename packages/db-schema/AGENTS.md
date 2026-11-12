@@ -101,3 +101,5 @@ Metric observations and refresh cursors store operational evidence under service
 Agent authority foundation0043 adds monotonic principal confirmation, active horizons, credential provenance, pending-ask deadlines and service-only maintenance/cutover state. Purge remains disabled; exercised0041/0042 are immutable. Last reviewed: 2026-11-11.
 
 Forward0045 adds the generated non-enrollment pending-key working-set index; custom final-deadline and eligible-sibling guards are appended per schema-update.0041–0044 and their snapshots remain immutable.
+
+Forward0046 adds the durable expiry/id maintenance cursor. Earlier migrations and snapshots remain immutable.

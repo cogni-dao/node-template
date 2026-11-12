@@ -48,10 +48,19 @@ export async function maintenanceTick(client: CredentialSql): Promise<{ processe
           SELECT id FROM agent_authority_maintenance WHERE id = 'service-enrollment' AND backfill_ready
             AND next_run_at <= clock_timestamp() FOR UPDATE SKIP LOCKED
         ) UPDATE agent_authority_maintenance s SET next_run_at = clock_timestamp() + interval '60 seconds'
-          FROM candidate WHERE s.id = candidate.id RETURNING s.id`;
+          FROM candidate WHERE s.id = candidate.id
+          RETURNING s.id, s.cursor_expires_at::text AS cursor_expires_at, s.cursor_enrollment_id`;
         if (lease.length === 0) return { processed: 0, due: false };
-        const batch = await tx`SELECT id, principal_user_id FROM agent_service_enrollments
+        const cursorAt = lease[0]?.cursor_expires_at;
+        const cursorId = lease[0]?.cursor_enrollment_id;
+        if ((cursorAt == null) !== (cursorId == null)) throw new Error("incomplete maintenance cursor");
+        const firstPage = () => tx`SELECT id, principal_user_id, expires_at::text AS cursor_expires_at FROM agent_service_enrollments
           WHERE status = 'open' AND expires_at <= (SELECT clock_timestamp()) ORDER BY expires_at, id LIMIT 20`;
+        let batch = cursorAt == null ? await firstPage() : await tx`SELECT id, principal_user_id, expires_at::text AS cursor_expires_at
+          FROM agent_service_enrollments WHERE status = 'open' AND expires_at <= (SELECT clock_timestamp())
+            AND (expires_at, id) > (${cursorAt}::timestamptz, ${cursorId}::uuid) ORDER BY expires_at, id LIMIT 20`;
+        // Wrap only after reaching the end. Both indexed reads are bounded; at most 20 identities are attempted.
+        if (batch.length === 0 && cursorAt != null) batch = await firstPage();
         let processed = 0;
         for (const item of batch) {
           if (typeof item.principal_user_id !== "string" || typeof item.id !== "string") throw new Error("unreadable maintenance row");
@@ -72,7 +81,11 @@ export async function maintenanceTick(client: CredentialSql): Promise<{ processe
         }
         const due = await tx`SELECT expires_at FROM agent_service_enrollments WHERE status = 'open' AND expires_at <= (SELECT clock_timestamp())
           ORDER BY expires_at, id LIMIT 1`;
-        await tx`UPDATE agent_authority_maintenance SET oldest_due_at = ${due[0]?.expires_at ?? null} WHERE id = 'service-enrollment'`;
+        const last = batch[batch.length - 1];
+        if (last && (typeof last.id !== "string" || typeof last.cursor_expires_at !== "string")) throw new Error("unreadable maintenance cursor");
+        await tx`UPDATE agent_authority_maintenance SET oldest_due_at = ${due[0]?.expires_at ?? null},
+          cursor_expires_at = ${last?.cursor_expires_at ?? null}::timestamptz,
+          cursor_enrollment_id = ${last?.id ?? null}::uuid WHERE id = 'service-enrollment'`;
         return { processed, due: due.length > 0 };
       })();
       // Leave a remaining (not reset2s) server allowance for COMMIT, which postgres.js sends after the callback returns.
