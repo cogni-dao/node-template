@@ -11,6 +11,11 @@
  * list there). A fake `Sql` cannot see either engine behavior: this runs the
  * shipped statements against a real history with commits before, inside and
  * after the window and checks the edits equal what the date filter selected.
+ * It also pins what a fake cannot: merge commits stay in the window (a
+ * contribution's edit can have its diff row at the merge commit only), a
+ * window commit touching neither edit table sends no diff row, and an
+ * over-cap result sends its first row alone carrying the totals. Dates hang
+ * off the database's own commits or sit in 2099, never the machine's clock.
  */
 
 import { execFileSync } from "node:child_process";
@@ -138,7 +143,7 @@ describe("Doltgres 0.57.3 no-inline-history edits read", () => {
 		await commit("atom append", "2026-11-07T10:00:00");
 		// After the window.
 		await sql.unsafe(`UPDATE work_items SET summary = 'later' WHERE id = 'task.1'`);
-		await commit("later", "2026-12-31T10:00:00");
+		await commit("later", "2099-01-01T10:00:00");
 
 		// What the date filter selected: the commits of the diff rows dated in the window.
 		const dated = async (table: string) =>
@@ -190,10 +195,18 @@ describe("Doltgres 0.57.3 no-inline-history edits read", () => {
 			{ complete: true, value: 0 },
 		);
 	});
+
 	it("keeps merge commits in the window: a contribution's edit can have its diff row at the merge commit only (bug.0030)", async () => {
 		const HOUR = 3_600_000;
 		const DAY = 24 * HOUR;
-		const now = Date.now();
+		// dolt_log dates are UTC wall time, returned as a Date or as text without a zone.
+		const utc = (value: unknown) =>
+			value instanceof Date
+				? value.getTime()
+				: Date.parse(`${String(value).replace(" ", "T")}Z`);
+		// Dates hang off the database's own setup commit, never the test machine's clock.
+		const setup = await sql.unsafe(`SELECT date FROM dolt_log WHERE message = 'CREATE DATABASE'`);
+		const now = utc(setup[0]?.date);
 		const iso = (ms: number) => new Date(ms).toISOString().slice(0, 19);
 		await sql.unsafe(
 			`INSERT INTO work_items (id,type,title,status,node,summary,outcome,labels) VALUES ('task.m1','task','merge one','needs_implement','shared','M1','O1','[]'::jsonb)`,
@@ -219,9 +232,14 @@ describe("Doltgres 0.57.3 no-inline-history edits read", () => {
 		await sql.unsafe(`SELECT * FROM dolt_merge('b_in')`);
 		await sql.unsafe(`SELECT * FROM dolt_merge('b_old')`);
 
+		// The window is built from the two merge commits' own dates: wide enough before them to hold the edits authored in it, a minute past the last merge.
+		const mergeDates = (
+			await sql.unsafe(`SELECT date FROM dolt_log WHERE message LIKE 'Merge branch%'`)
+		).map((r) => utc(r.date));
+		expect(mergeDates).toHaveLength(2);
 		const mergeWindow = {
-			start: new Date(now - 12 * HOUR).toISOString(),
-			end: new Date(now + 12 * HOUR).toISOString(),
+			start: new Date(Math.min(...mergeDates) - 6 * HOUR).toISOString(),
+			end: new Date(Math.max(...mergeDates) + 60_000).toISOString(),
 		};
 		const inWindow = (value: string) => value.replace("T", " ").replace("Z", "");
 		const merges = await sql.unsafe(
@@ -241,10 +259,10 @@ describe("Doltgres 0.57.3 no-inline-history edits read", () => {
 
 	it("reads a window commit that touches neither edit table as no edit, from a statement that sends no row", async () => {
 		await sql.unsafe(`INSERT INTO domains (id,name) VALUES ('merge-probe','Merge probe')`);
-		await commit("touches no edit table", "2027-03-10T10:00:00");
+		await commit("touches no edit table", "2099-03-10T10:00:00");
 		const quiet = {
-			start: "2027-03-09T00:00:00.000Z",
-			end: "2027-03-16T00:00:00.000Z",
+			start: "2099-03-09T00:00:00.000Z",
+			end: "2099-03-16T00:00:00.000Z",
 		};
 		const found = await sql.unsafe(noInlineHistoryWindowCommitsSql(quiet));
 		expect(Number(found[0]?.n)).toBe(1);
@@ -257,22 +275,23 @@ describe("Doltgres 0.57.3 no-inline-history edits read", () => {
 	});
 
 	it("sends the first row alone, carrying the totals, when the edits are over the byte cap", async () => {
-		const ROWS = 45; // 45 rows x 4 fields x 100,000 chars is over the 16 MiB cap.
+		// Each row carries four fields of 100,000 characters; one row more than the cap needs, plus margin.
+		const ROWS = Math.ceil(NO_INLINE_HISTORY_MAX_BYTES / 400_000) + 3;
 		const field = (c: string) => c.repeat(100_000);
 		for (let i = 0; i < ROWS; i++)
 			await sql.unsafe(
 				`INSERT INTO work_items (id,type,title,status,node,summary,outcome,labels) VALUES ('task.big${i}','task','big ${i}','needs_implement','shared','${field("a")}','${field("a")}','[]'::jsonb)`,
 			);
-		await commit("big fixtures", "2027-03-31T10:00:00");
+		await commit("big fixtures", "2099-03-31T10:00:00");
 		for (let i = 0; i < ROWS; i++) {
 			await sql.unsafe(
 				`UPDATE work_items SET summary = '${field("b")}', outcome = '${field("b")}' WHERE id = 'task.big${i}'`,
 			);
-			await commit(`big edit ${i}`, `2027-04-02T10:${String(i).padStart(2, "0")}:00`);
+			await commit(`big edit ${i}`, `2099-04-02T10:${String(i).padStart(2, "0")}:00`);
 		}
 		const big = {
-			start: "2027-04-01T00:00:00.000Z",
-			end: "2027-04-08T00:00:00.000Z",
+			start: "2099-04-01T00:00:00.000Z",
+			end: "2099-04-08T00:00:00.000Z",
 		};
 		const found = await sql.unsafe(noInlineHistoryWindowCommitsSql(big));
 		expect(Number(found[0]?.n)).toBe(ROWS);
@@ -280,10 +299,11 @@ describe("Doltgres 0.57.3 no-inline-history edits read", () => {
 		const rows = await sql.unsafe(noInlineHistoryEditsSql("work-items", hashes));
 		// One row, not the 45: the totals ride on the first row and no text over the cap is sent.
 		expect(rows).toHaveLength(1);
+		expect(rows[0]?.id).not.toBeNull();
 		expect(Number(rows[0]?.n)).toBe(ROWS);
 		expect(Number(rows[0]?.bytes)).toBeGreaterThan(NO_INLINE_HISTORY_MAX_BYTES);
 		const sample = await readNoInlineHistoryEdits(sql, "count", big, read);
 		expect(sample).toMatchObject({ complete: false, reason: "incomplete_or_invalid_source" });
 		expect(sample.evidenceRefs.join()).toContain("cap_hit");
-	}, 120_000);
+	});
 });

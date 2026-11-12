@@ -839,7 +839,7 @@ export function noInlineHistoryWindowCommitsSql(window: {
  * 0.57.3 evaluate the whole diff twice, about 2x the cost) and sends the rows
  * only while both are inside the caps. Over a cap it sends the first row alone,
  * so the totals still arrive and the database never sends a result over a cap.
- * No diff row at all sends no row: `n` is then 0.
+ * A table with no diff row sends no row; the caller reads that as no edit.
  */
 export function noInlineHistoryEditsSql(
 	table: EditTable,
@@ -1083,7 +1083,6 @@ async function readEditsOf(
 			});
 		} catch {}
 	}
-	if (n === 0) return { ok: true, edits: [], mergeRepeats: 0, asOf };
 	// Over a cap the statement sends its first row alone, carrying the totals.
 	if (
 		n > NO_INLINE_HISTORY_MAX_ROWS ||

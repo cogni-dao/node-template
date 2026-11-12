@@ -623,7 +623,8 @@ describe("no-inline-history@1 edits read", () => {
 			expect(text).toContain("> 100000 THEN NULL");
 			expect(text).toContain("CAST(COALESCE(SUM(");
 			// One pass: the totals are window functions over the one reference to the CTE, never a second scan of the diff.
-			expect(text.match(/FROM diffs/g)).toHaveLength(1);
+			// The CTE is defined once and read once: any further reference (FROM, JOIN, a subquery) would scan the diff again.
+			expect(text.match(/\bdiffs\b/g)).toHaveLength(2);
 			expect(text).toContain("COUNT(*) OVER () AS n");
 			expect(text).toContain(") OVER (), 0) AS BIGINT) AS bytes");
 			// Over a cap the first row alone carries the totals.
@@ -915,7 +916,8 @@ describe("no-inline-history@1 in the goal-metric service", () => {
 
 	it.each([
 		["windowCommits", "n", { windowCommits: "ok", workDiff: "not_started", knowledgeDiff: "not_started", counts: [null, null, null, null, null] }],
-		["workDiff", "n", { windowCommits: "ok", workDiff: "ok", knowledgeDiff: "ok", counts: [1, null, null, 1, 1000] }],
+		// A null count is a malformed result, not zero edits: the read stops at that table.
+		["workDiff", "n", { windowCommits: "ok", workDiff: "ok", knowledgeDiff: "not_started", counts: [1, null, null, null, null] }],
 		["workDiff", "bytes", { windowCommits: "ok", workDiff: "ok", knowledgeDiff: "ok", counts: [1, null, null, 1, 1000] }],
 		["knowledgeDiff", "n", { windowCommits: "ok", workDiff: "ok", knowledgeDiff: "ok", counts: [1, 10, 1000, null, null] }],
 		["knowledgeDiff", "bytes", { windowCommits: "ok", workDiff: "ok", knowledgeDiff: "ok", counts: [1, 10, 1000, null, null] }],
