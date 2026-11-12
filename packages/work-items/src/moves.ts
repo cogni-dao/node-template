@@ -30,7 +30,7 @@ export const MOVE_OBSERVATION_ID_PATTERN =
 /** Wall-clock budget for the baseline pin of one write, and for judging one item. */
 export const MOVES_DEADLINE_MS = 3_000;
 
-export type MoveDirection = "up" | "down";
+export type MoveDirection = "up" | "down" | null;
 
 /** What a client may send. Anything else on an entry is dropped. */
 export interface MoveInput {
@@ -47,16 +47,31 @@ export interface WorkItemMove extends MoveInput {
 /** The newest good reading of a metric at the moment a move first appears. */
 export interface MetricBaselinePort {
   /** The id of the metric's latest good observation, or `null` when it has none. Reads only. */
-  latestObservationId(
-    metricId: string,
-    signal: AbortSignal
-  ): Promise<string | null>;
+  latestObservationId(metricId: string, signal: AbortSignal): Promise<string | null>;
 }
 
 /** One reading as a work item shows it. */
 export interface MoveReading {
-  readonly value: number;
-  readonly observedAt: string;
+  readonly value: number | null;
+  readonly observedAt: string | null;
+  readonly id?: string;
+  readonly metricId?: string;
+  readonly metricTitle?: string;
+  readonly definitionRevision?: string;
+  readonly definitionHash?: string;
+  readonly calculatorVersion?: string;
+  readonly paramsHash?: string;
+  readonly node?: string;
+  readonly environment?: string;
+  readonly dataScope?: string;
+  readonly window?: { readonly start: string; readonly end: string };
+  readonly sourceWatermarks?: { readonly source: string; readonly asOf: string | null }[];
+  readonly status?: "pending" | "ok" | "unavailable" | "error";
+  readonly unit?: string;
+  readonly reason?: string | null;
+  readonly evidenceRefs?: string[];
+  readonly viewState?: "ok" | "stale" | "pending" | "unavailable" | "error";
+  readonly maxAgeSeconds?: number;
 }
 
 /**
@@ -81,22 +96,39 @@ export class MetricBaselineUnavailableError extends Error {
 
 /** Read side of the same service, narrow enough that this package stays free of the metrics package. */
 export interface MoveReadingPort {
+  batch?(
+    moves: readonly WorkItemMove[],
+    signal: AbortSignal,
+  ): Promise<
+    readonly {
+      baseline: MoveReading | null;
+      current: MoveReading | null;
+      unknownReason?: MoveUnknownReason;
+    }[]
+  >;
+  assess?(
+    direction: MoveDirection,
+    baseline: MoveReading | null,
+    current: MoveReading | null,
+  ): MovedState;
   /** The reading with this id, or `null` when it is gone, has no value, or is not this metric's. Throws `MoveMetricGoneError` when the metric is unknown or deprecated. */
   observation(
     metricId: string,
     observationId: string,
-    signal: AbortSignal
+    signal: AbortSignal,
   ): Promise<MoveReading | null>;
-  /** The metric's latest good reading, or `null` when there is none. */
+  /** The latest attempt, including failed or stale attempts, or null if absent. */
   latest(metricId: string, signal: AbortSignal): Promise<MoveReading | null>;
 }
 
-export type MovedState = "as_declared" | "against" | "flat" | "unknown";
+export type MovedState = "as_declared" | "against" | "flat" | "unknown" | null;
 export type MoveUnknownReason =
   | "no_baseline"
   | "baseline_unreadable"
   | "no_current"
   | "metric_deprecated"
+  | "incompatible_reading"
+  | "projection_budget"
   | "metrics_unavailable";
 
 export interface JudgedMove extends WorkItemMove {
@@ -110,24 +142,23 @@ export interface JudgedMove extends WorkItemMove {
 export function moveIssues(moves: unknown): string[] {
   if (!Array.isArray(moves)) return ["moves must be an array"];
   const issues: string[] = [];
-  if (moves.length > MOVES_MAX)
-    issues.push(`moves must hold at most ${MOVES_MAX} entries`);
+  if (moves.length > MOVES_MAX) issues.push(`moves must hold at most ${MOVES_MAX} entries`);
   const seen = new Set<string>();
   for (const [i, move] of moves.entries()) {
     const entry = move as { metricId?: unknown; direction?: unknown } | null;
     const id = entry?.metricId;
-    if (
-      typeof id !== "string" ||
-      id.length < 1 ||
-      id.length > MOVE_METRIC_ID_MAX
-    ) {
+    if (typeof id !== "string" || id.length < 1 || id.length > MOVE_METRIC_ID_MAX) {
       issues.push(`moves[${i}].metricId must be 1-${MOVE_METRIC_ID_MAX} characters`);
     } else {
       if (seen.has(id)) issues.push(`moves[${i}].metricId repeats ${id}`);
       seen.add(id);
     }
-    if (entry?.direction !== "up" && entry?.direction !== "down")
-      issues.push(`moves[${i}].direction must be "up" or "down"`);
+    if (entry?.direction !== "up" && entry?.direction !== "down" && entry?.direction !== null)
+      issues.push(`moves[${i}].direction must be "up", "down" or null`);
+    // Old deployed readers discard null-direction entries. Enable these writes only
+    // after every active reader has been upgraded to preserve them.
+    if (entry?.direction === null)
+      issues.push(`moves[${i}].direction null is not enabled until readers are upgraded`);
   }
   return issues;
 }
@@ -145,9 +176,7 @@ export class MovesInvalidError extends Error {
 export class MovesUnsupportedError extends Error {
   readonly code = "moves_unsupported" as const;
   constructor() {
-    super(
-      "moves are not supported: no metric resolver or baseline reader is wired on this node"
-    );
+    super("moves are not supported: no metric resolver or baseline reader is wired on this node");
     this.name = "MovesUnsupportedError";
   }
 }
@@ -175,7 +204,7 @@ export function parseStoredMoves(value: unknown): WorkItemMove[] | undefined {
       baselineObservationId?: unknown;
     } | null;
     if (typeof e?.metricId !== "string" || !e.metricId) continue;
-    if (e.direction !== "up" && e.direction !== "down") continue;
+    if (e.direction !== "up" && e.direction !== "down" && e.direction !== null) continue;
     moves.push({
       metricId: e.metricId,
       direction: e.direction,
@@ -193,7 +222,7 @@ export function parseStoredMoves(value: unknown): WorkItemMove[] | undefined {
 async function withDeadline<T>(
   deadlineMs: number,
   task: (signal: AbortSignal) => Promise<T>,
-  onTimeout: () => Error
+  onTimeout: () => Error,
 ): Promise<T> {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -204,10 +233,7 @@ async function withDeadline<T>(
     }, deadlineMs);
   });
   try {
-    return await Promise.race([
-      Promise.resolve().then(() => task(controller.signal)),
-      timeout,
-    ]);
+    return await Promise.race([Promise.resolve().then(() => task(controller.signal)), timeout]);
   } finally {
     if (timer) clearTimeout(timer);
   }
@@ -241,7 +267,7 @@ export async function pinMoves(
     readonly resolver: EntryResolver;
     readonly baselines: MetricBaselinePort;
     readonly deadlineMs?: number;
-  }
+  },
 ): Promise<WorkItemMove[]> {
   if (!incoming.length) return [];
   const deadlineMs = deps.deadlineMs ?? MOVES_DEADLINE_MS;
@@ -256,7 +282,7 @@ export async function pinMoves(
           await deps.resolver.resolve(
             fresh.map((m) => ({ id: m.metricId })),
             "metric",
-            signal
+            signal,
           );
         } catch (error) {
           const ids = unresolvedIds(error);
@@ -264,7 +290,7 @@ export async function pinMoves(
           throw error instanceof EntryResolverUnavailableError
             ? error
             : new EntryResolverUnavailableError(
-                "Metric resolver is unavailable; nothing was written"
+                "Metric resolver is unavailable; nothing was written",
               );
         }
       }
@@ -282,21 +308,17 @@ export async function pinMoves(
         }
         let observationId: string | null;
         try {
-          observationId = await deps.baselines.latestObservationId(
-            move.metricId,
-            signal
-          );
+          observationId = await deps.baselines.latestObservationId(move.metricId, signal);
         } catch {
           throw new MetricBaselineUnavailableError(
-            `Metric baseline for ${move.metricId} could not be read; nothing was written`
+            `Metric baseline for ${move.metricId} could not be read; nothing was written`,
           );
         }
         pinned.push({
           metricId: move.metricId,
           direction: move.direction,
           baselineObservationId:
-            observationId !== null &&
-            MOVE_OBSERVATION_ID_PATTERN.test(observationId)
+            observationId !== null && MOVE_OBSERVATION_ID_PATTERN.test(observationId)
               ? observationId
               : null,
         });
@@ -306,11 +328,11 @@ export async function pinMoves(
     () =>
       phase === "baseline"
         ? new MetricBaselineUnavailableError(
-            `Metric baseline did not answer within ${deadlineMs}ms; nothing was written`
+            `Metric baseline did not answer within ${deadlineMs}ms; nothing was written`,
           )
         : new EntryResolverUnavailableError(
-            `Metric lookup did not answer within ${deadlineMs}ms; nothing was written`
-          )
+            `Metric lookup did not answer within ${deadlineMs}ms; nothing was written`,
+          ),
   );
 }
 
@@ -318,14 +340,20 @@ const isMetricGone = (error: unknown): boolean =>
   error instanceof MoveMetricGoneError ||
   (error as { name?: unknown } | null)?.name === "MoveMetricGoneError";
 
-/** The verdict of one move from its two readings. Never throws; absent data is `unknown`. */
+/** @deprecated Legacy numeric helper; runtime projections delegate to the metrics port. */
 export function judgeMove(
   direction: MoveDirection,
   baseline: MoveReading | null,
-  current: MoveReading | null
+  current: MoveReading | null,
 ): MovedState {
+  if (direction === null) return null;
   if (!baseline || !current) return "unknown";
-  if (!Number.isFinite(baseline.value) || !Number.isFinite(current.value))
+  if (
+    baseline.value === null ||
+    current.value === null ||
+    !Number.isFinite(baseline.value) ||
+    !Number.isFinite(current.value)
+  )
     return "unknown";
   if (current.value === baseline.value) return "flat";
   const up = current.value > baseline.value;
@@ -335,25 +363,25 @@ export function judgeMove(
 /**
  * Read both ends of each move and judge it. At most one baseline lookup and one
  * latest lookup per move, run for the moves together within one deadline.
- * A missing baseline skips the latest lookup: the answer is `unknown` either way.
+ * A missing baseline still reads the current attempt; the directional verdict stays `unknown`.
  * `readings` absent (no metrics service on this node) reads every move `unknown`.
  */
 export async function judgeMoves(
   moves: readonly WorkItemMove[],
   readings: MoveReadingPort | undefined,
-  options: { readonly deadlineMs?: number } = {}
+  options: { readonly deadlineMs?: number } = {},
 ): Promise<JudgedMove[]> {
   const deadlineMs = options.deadlineMs ?? MOVES_DEADLINE_MS;
   const bounded = moves.slice(0, MOVES_MAX);
   const unknown = (
     move: WorkItemMove,
     unknownReason: MoveUnknownReason,
-    baseline: MoveReading | null = null
+    baseline: MoveReading | null = null,
   ): JudgedMove => ({
     ...move,
     baseline,
     current: null,
-    moved: "unknown",
+    moved: move.direction === null ? null : "unknown",
     unknownReason,
   });
   if (!readings) return bounded.map((m) => unknown(m, "metrics_unavailable"));
@@ -367,19 +395,33 @@ export async function judgeMoves(
     }, deadlineMs);
   });
   const one = async (move: WorkItemMove): Promise<JudgedMove> => {
-    if (move.baselineObservationId === null) return unknown(move, "no_baseline");
+    if (move.baselineObservationId === null) {
+      try {
+        const current = await readings.latest(move.metricId, controller.signal);
+        return { ...unknown(move, "no_baseline"), current };
+      } catch (error) {
+        return unknown(move, isMetricGone(error) ? "metric_deprecated" : "no_baseline");
+      }
+    }
     let baseline: MoveReading | null = null;
     try {
       baseline = await readings.observation(
         move.metricId,
         move.baselineObservationId,
-        controller.signal
+        controller.signal,
       );
     } catch (error) {
       if (isMetricGone(error)) return unknown(move, "metric_deprecated");
       baseline = null;
     }
-    if (!baseline) return unknown(move, "baseline_unreadable");
+    if (!baseline) {
+      try {
+        const current = await readings.latest(move.metricId, controller.signal);
+        return { ...unknown(move, "baseline_unreadable"), current };
+      } catch (error) {
+        return unknown(move, isMetricGone(error) ? "metric_deprecated" : "baseline_unreadable");
+      }
+    }
     let current: MoveReading | null = null;
     try {
       current = await readings.latest(move.metricId, controller.signal);
@@ -388,11 +430,18 @@ export async function judgeMoves(
       current = null;
     }
     if (!current) return unknown(move, "no_current", baseline);
+    let moved: MovedState = move.direction === null ? null : "unknown";
+    try {
+      if (readings.assess) moved = readings.assess(move.direction, baseline, current);
+    } catch {
+      // An unavailable assessor never turns readings into a directional claim.
+    }
     return {
       ...move,
       baseline,
       current,
-      moved: judgeMove(move.direction, baseline, current),
+      moved,
+      ...(moved === "unknown" ? { unknownReason: "incompatible_reading" as const } : {}),
     };
   };
   try {
@@ -400,4 +449,105 @@ export async function judgeMoves(
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+/** Enrich at most 100 items through one batch with a shared deadline. */
+export async function judgeMoveSummaries<T extends { moves?: WorkItemMove[] | undefined }>(
+  items: readonly T[],
+  readings: MoveReadingPort | undefined,
+  bounds: number | { readonly signal?: AbortSignal; readonly deadline?: number } = {},
+): Promise<T[]> {
+  const options = typeof bounds === "number" ? { deadline: Date.now() + bounds } : bounds;
+  const result = (await Promise.all(
+    items.map(async (item) =>
+      item.moves?.length
+        ? {
+            ...item,
+            moves: (
+              await judgeMoves(item.moves, undefined)
+            ).map((move) => ({
+              ...move,
+              unknownReason: readings?.batch
+                ? ("projection_budget" as const)
+                : ("metrics_unavailable" as const),
+            })),
+          }
+        : item,
+    ),
+  )) as T[];
+  if (!readings?.batch) return result;
+  const refs = items
+    .slice(0, 100)
+    .flatMap((item, index) =>
+      (item.moves ?? []).slice(0, MOVES_MAX).map((move) => ({ index, move })),
+    );
+  if (!refs.length || options.signal?.aborted || (options.deadline !== undefined && Date.now() >= options.deadline)) return result;
+  const controller = new AbortController();
+  const deadlineMs = Math.min(MOVES_DEADLINE_MS, options.deadline === undefined ? MOVES_DEADLINE_MS : options.deadline - Date.now());
+  if (deadlineMs <= 0) return result;
+  let cancel: (() => void) | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const cancelled = new Promise<never>((_, reject) => {
+      cancel = () => { controller.abort(); reject(new Error("metric batch cancelled")); };
+      options.signal?.addEventListener("abort", cancel, { once: true });
+      if (options.signal?.aborted) cancel();
+    });
+    if (controller.signal.aborted) return await cancelled;
+    const data = await Promise.race([
+      cancelled,
+      readings.batch(
+        refs.map((ref) => ref.move),
+        controller.signal,
+      ),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          reject(new Error("metric batch timed out"));
+        }, deadlineMs);
+      }),
+    ]);
+    const grouped = new Map<number, JudgedMove[]>();
+    refs.forEach(({ index, move }, i) => {
+      const pair = data[i];
+      let moved: MovedState = move.direction === null ? null : "unknown";
+      if (pair?.baseline && pair.current && readings.assess) {
+        try {
+          moved = readings.assess(move.direction, pair.baseline, pair.current);
+        } catch {
+          /* fail closed */
+        }
+      }
+      const unknownReason =
+        pair?.unknownReason ??
+        (!move.baselineObservationId
+          ? "no_baseline"
+          : !pair?.baseline
+            ? "baseline_unreadable"
+            : !pair.current
+              ? "no_current"
+              : moved === "unknown"
+                ? "incompatible_reading"
+                : undefined);
+      const entries = grouped.get(index) ?? [];
+      entries.push({
+        ...move,
+        baseline: pair?.baseline ?? null,
+        current: pair?.current ?? null,
+        moved,
+        ...(unknownReason ? { unknownReason } : {}),
+      });
+      grouped.set(index, entries);
+    });
+    grouped.forEach((moves, index) => {
+      const item = items[index];
+      if (item) result[index] = { ...item, moves };
+    });
+  } catch {
+    /* preserve unknown results on unavailable batch */
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (cancel) options.signal?.removeEventListener("abort", cancel);
+  }
+  return result;
 }

@@ -28,6 +28,8 @@
 	.table[data-work-presync]
 		[data-work-column="type"]:not([data-work-override="true"]),
 	.table[data-work-presync]
+		[data-work-column="goal"]:not([data-work-override="true"]),
+	.table[data-work-presync]
 		[data-work-column="projectId"]:not([data-work-override="true"]),
 	.table[data-work-presync]
 		[data-work-column="updatedAt"]:not([data-work-override="true"]),

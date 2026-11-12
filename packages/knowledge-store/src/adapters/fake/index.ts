@@ -316,6 +316,7 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
         title: r.title,
         content: r.content,
         evaluateAt: r.evaluateAt ?? null,
+        kpiBindings: r.kpiBindings ?? null,
       })),
       new Set(
         Array.from(this.edges.values())

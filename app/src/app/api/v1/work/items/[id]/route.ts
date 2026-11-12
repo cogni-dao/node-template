@@ -45,13 +45,13 @@ export const GET = wrapRouteHandlerWithLogging<{
   params: Promise<{ id: string }>;
 }>(
   { routeId: "work.items.get", auth: { mode: "required", getSessionUser } },
-  async (ctx, _request, _sessionUser, context) => {
+  async (ctx, request, _sessionUser, context) => {
     if (!context) throw new Error("context required for dynamic routes");
     const { id } = await context.params;
 
     let item: Awaited<ReturnType<typeof getWorkItem>>;
     try {
-      item = await getWorkItem(id);
+      item = await getWorkItem(id, { signal: request.signal });
     } catch (e) {
       if (e instanceof WorkItemsBackendNotReadyError) {
         return NextResponse.json({ error: e.message }, { status: 503 });

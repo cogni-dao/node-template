@@ -159,6 +159,13 @@ export {
 } from "./number-range-filter.js";
 export { StatusIcon, StatusPill, TypeIcon } from "./work-item-icons.js";
 export {
+  WorkMetricDetails,
+  WorkMetricSummary,
+  workMetricVerdict,
+  type WorkMetric,
+} from "./work-metrics.js";
+export { WorkExpectations, type WorkExpectation, type WorkExpectationPage } from "./work-edo.js";
+export {
   DataTable,
   DataTableColumnsPicker,
   type DataTableColumnsPickerProps,

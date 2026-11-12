@@ -18,16 +18,10 @@
  */
 
 import type { KnowledgeHistoryEntry } from "../domain/history.js";
-import type {
-  KnowledgeBrowsePage,
-  KnowledgeBrowseQuery,
-} from "../contracts.js";
+import type { KnowledgeBrowsePage, KnowledgeBrowseQuery } from "../contracts.js";
 import type { ActiveGoal } from "../domain/dao-goals.js";
 import type { GoverningIndexRow } from "../domain/governing.js";
-import type {
-  KnowledgeGraphNode,
-  KnowledgeGraphSnapshot,
-} from "../domain/knowledge-graph.js";
+import type { KnowledgeGraphNode, KnowledgeGraphSnapshot } from "../domain/knowledge-graph.js";
 import type {
   Citation,
   CitationType,
@@ -80,6 +74,16 @@ export interface CitationLinkSummary {
 export interface CitationLinkPage {
   links: CitationLinkSummary[];
   nextCursor: string | null;
+}
+
+/** A bounded first page of tracked hypotheses and their recorded outcomes. */
+export interface WorkEdoPage {
+  items: Array<{
+    hypothesis: Pick<Knowledge, "id" | "title" | "content" | "kpiBindings">;
+    outcomes: Array<{ id: string; title: string; content: string }>;
+    truncated: boolean;
+  }>;
+  truncated: boolean;
 }
 
 /**
@@ -147,7 +151,7 @@ export class HypothesisMissingEvaluateAtError extends Error {
     super(
       entryType === "goal"
         ? `goal '${entryId}' is missing evaluate_at — goal rows must declare their By: deadline`
-        : `hypothesis '${entryId}' is missing evaluate_at — hypothesis rows must declare a resolution date`
+        : `hypothesis '${entryId}' is missing evaluate_at — hypothesis rows must declare a resolution date`,
     );
     this.name = "HypothesisMissingEvaluateAtError";
     this.entryId = entryId;
@@ -183,10 +187,10 @@ export class CitationTypeMismatchError extends Error {
     citationType: CitationType,
     citedId: string,
     citedEntryType: string,
-    expectedEntryType: string
+    expectedEntryType: string,
   ) {
     super(
-      `citation_type '${citationType}' requires cited entry_type='${expectedEntryType}', but '${citedId}' has entry_type='${citedEntryType}'`
+      `citation_type '${citationType}' requires cited entry_type='${expectedEntryType}', but '${citedId}' has entry_type='${citedEntryType}'`,
     );
     this.name = "CitationTypeMismatchError";
     this.citationType = citationType;
@@ -205,7 +209,7 @@ export class GoalRequiresContributionError extends Error {
   readonly entryId: string;
   constructor(entryId: string) {
     super(
-      `'${entryId}' is a goal: goals change only through a contribution and a node-admin merge`
+      `'${entryId}' is a goal: goals change only through a contribution and a node-admin merge`,
     );
     this.name = "GoalRequiresContributionError";
     this.entryId = entryId;
@@ -221,7 +225,7 @@ export class EdoEntryTypeRequiresAtomicToolError extends Error {
   readonly entryType: string;
   constructor(entryType: string) {
     super(
-      `entry_type '${entryType}' must be written via the atomic core__edo_* tool, not core__knowledge_write`
+      `entry_type '${entryType}' must be written via the atomic core__edo_* tool, not core__knowledge_write`,
     );
     this.name = "EdoEntryTypeRequiresAtomicToolError";
     this.entryType = entryType;
@@ -244,10 +248,10 @@ export class KnowledgeWriteOutcomeUnknownError extends Error {
   constructor(
     readonly operationId: string,
     readonly branch: string,
-    readonly commitHash?: string
+    readonly commitHash?: string,
   ) {
     super(
-      `Knowledge write outcome requires inspection; do not replay ${operationId}. Inspect main and ${branch} using the operation receipt.`
+      `Knowledge write outcome requires inspection; do not replay ${operationId}. Inspect main and ${branch} using the operation receipt.`,
     );
     this.name = "KnowledgeWriteOutcomeUnknownError";
   }
@@ -271,7 +275,7 @@ export class KnowledgeWriteOutcomeUnknownError extends Error {
 export class KnowledgeWriteScopeRequiredError extends Error {
   constructor() {
     super(
-      "Knowledge mutations require withWrite; retain one logical write and its commit in the same scope."
+      "Knowledge mutations require withWrite; retain one logical write and its commit in the same scope.",
     );
     this.name = "KnowledgeWriteScopeRequiredError";
   }
@@ -281,17 +285,17 @@ export interface KnowledgeStorePort {
   /** One admitted, isolated logical write; never hold this scope across requests. */
   withWrite<T>(
     input: { operationId: string; message: string },
-    run: (write: KnowledgeWriteSession) => Promise<T>
+    run: (write: KnowledgeWriteSession) => Promise<T>,
   ): Promise<T>;
 
   // --- Read ---
   browseKnowledge(
     query: KnowledgeBrowseQuery,
-    options?: { signal?: AbortSignal }
+    options?: { signal?: AbortSignal },
   ): Promise<KnowledgeBrowsePage>;
   overviewKnowledge(
     query: Omit<KnowledgeBrowseQuery, "search">,
-    options?: { signal?: AbortSignal }
+    options?: { signal?: AbortSignal },
   ): Promise<KnowledgeBrowsePage>;
   getKnowledge(id: string): Promise<Knowledge | null>;
   /**
@@ -306,20 +310,16 @@ export interface KnowledgeStorePort {
    */
   listKnowledge(
     domain: string,
-    opts?: { tags?: string[]; limit?: number; q?: string }
+    opts?: { tags?: string[]; limit?: number; q?: string },
   ): Promise<Knowledge[]>;
-  searchKnowledge(
-    domain: string,
-    query: string,
-    opts?: { limit?: number }
-  ): Promise<Knowledge[]>;
+  searchKnowledge(domain: string, query: string, opts?: { limit?: number }): Promise<Knowledge[]>;
   /**
    * The approved DAO goals (ONE_GOAL_LIST): merged `entry_type = 'goal'` rows
    * with id prefix `goal-`, not deprecated or superseded, sorted by id. Returns
    * [] when none are merged; no count cap (NO_GOAL_CAP).
    * Contribution-branch rows are never visible here.
    */
-  listActiveGoals(): Promise<ActiveGoal[]>;
+  listActiveGoals(signal?: AbortSignal): Promise<ActiveGoal[]>;
   /** Content-free governing rows across all shelves; no scan cap, blank trigger or superseded target. */
   listGoverningIndex(): Promise<GoverningIndexRow[]>;
   /**
@@ -339,9 +339,7 @@ export interface KnowledgeStorePort {
    * `revision`. Runs under the read deadline/admission budget and rejects with
    * a retryable `KnowledgeBusyError` on deadline, abort or capacity.
    */
-  readKnowledgeGraphSnapshot(options?: {
-    signal?: AbortSignal;
-  }): Promise<KnowledgeGraphSnapshot>;
+  readKnowledgeGraphSnapshot(options?: { signal?: AbortSignal }): Promise<KnowledgeGraphSnapshot>;
   /** List distinct domain values present in the `knowledge` table (legacy / back-compat). */
   listDomains(): Promise<string[]>;
 
@@ -374,10 +372,7 @@ export interface KnowledgeStorePort {
   /** Insert or return an identical existing request; differing payload requires explicit update. */
   upsertKnowledge(entry: NewKnowledge): Promise<Knowledge>;
   addKnowledge(entry: NewKnowledge): Promise<Knowledge>;
-  updateKnowledge(
-    id: string,
-    update: Partial<NewKnowledge>
-  ): Promise<Knowledge>;
+  updateKnowledge(id: string, update: Partial<NewKnowledge>): Promise<Knowledge>;
   /**
    * Hard-delete a row. DELETE_IS_CLEAN — dead knowledge leaves the live table;
    * Dolt version history preserves content + commits + contributor chain. The
@@ -413,10 +408,8 @@ export interface KnowledgeStorePort {
   /** List edges where cited_id = id (incoming). Used by recomputeConfidence. */
   listCitationsByCitedId(citedId: string): Promise<Citation[]>;
   /** Five direct relations per page; never traverses or reads endpoint bodies. */
-  listCitationLinks(
-    endpointId: string,
-    after?: string
-  ): Promise<CitationLinkPage>;
+  listCitationLinks(endpointId: string, after?: string): Promise<CitationLinkPage>;
+  readWorkEdo?(workItemId: string, signal?: AbortSignal): Promise<WorkEdoPage>;
 
   /**
    * List every citation edge in a single query. Used to assemble the full

@@ -8,8 +8,9 @@
 import "@testing-library/jest-dom/vitest";
 
 import type { WorkItemDto } from "@cogni/node-contracts";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { createRef, useRef, useState } from "react";
+import { cleanup, fireEvent, render as renderUi, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { createRef, useRef, useState, type ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { WorkItemFetchError } from "@/app/(app)/work/_api/fetchWorkItems";
@@ -37,8 +38,17 @@ const item: WorkItemDto = {
   updatedAt: "2026-10-03T00:00:00.000Z",
 };
 
+const clients = new Set<QueryClient>();
+function render(ui: ReactElement) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  clients.add(client);
+  return renderUi(ui, { wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider> });
+}
+
 afterEach(() => {
   cleanup();
+  for (const client of clients) client.clear();
+  clients.clear();
   vi.restoreAllMocks();
 });
 

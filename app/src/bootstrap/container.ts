@@ -13,13 +13,6 @@
  */
 
 import type { ToolSourcePort } from "@cogni/ai-core";
-import { KpiBindingsSchema } from "@cogni-dao/metrics/contracts";
-import type { GoalsProgress, MetricService } from "@cogni-dao/metrics";
-import { createGoalMetricTools } from "@/bootstrap/capabilities/goal-metric-tools";
-import {
-	createGoalMetrics,
-	createGoalProgressReader,
-} from "@/bootstrap/capabilities/goal-metrics";
 import type {
 	EdoCapability,
 	KnowledgeCapability,
@@ -80,15 +73,16 @@ import { numberToPpm } from "@cogni/operator-wallet";
 import { PrivyOperatorWalletAdapter } from "@cogni/operator-wallet/adapters/privy";
 import type { ScheduleControlPort } from "@cogni/scheduler-core";
 import { type WorkItemQueryPort, withWorkItemLeases } from "@cogni/work-items";
-import { PostgresWorkItemLeaseAdapter } from "@cogni/work-items/adapters/postgres";
 import { createDoltgresWorkItemStore } from "@cogni/work-items/adapters/doltgres";
+import { PostgresWorkItemLeaseAdapter } from "@cogni/work-items/adapters/postgres";
 import { MarkdownWorkItemAdapter } from "@cogni/work-items/markdown";
+import type { GoalsProgress, MetricService } from "@cogni-dao/metrics";
+import { KpiBindingsSchema } from "@cogni-dao/metrics/contracts";
 import {
 	Client as TemporalClient,
 	Connection as TemporalConnection,
 	type WorkflowClient,
 } from "@temporalio/client";
-import { createStreamRedisClient } from "@/bootstrap/stream-redis-client";
 import type { Logger } from "pino";
 import {
 	ALCHEMY_ADAPTER_VERSION,
@@ -109,13 +103,13 @@ import {
 	GitHubWebhookNormalizer,
 	getAppDb,
 	getExecutionScope,
-	scopeUserId,
 	LangfuseAdapter,
 	LiteLlmAdapter,
 	type MimirAdapterConfig,
 	MimirMetricsAdapter,
 	RedisRunStreamAdapter,
 	SystemClock,
+	scopeUserId,
 	TemporalScheduleControlAdapter,
 	UserDrizzleAccountService,
 	UserDrizzlePaymentAttemptRepository,
@@ -143,11 +137,21 @@ import {
 	getTestOperatorWallet,
 } from "@/adapters/test";
 import {
+	type AgentAuthoritySql,
+	type AgentToolAuthority,
+	createAgentToolAuthority,
+} from "@/bootstrap/agent-authority";
+import {
 	NODE_LOCAL_TOOL_BINDINGS,
 	NODE_LOCAL_TOOL_BUNDLE,
 } from "@/bootstrap/ai/secret-probe";
 import { createToolBindings } from "@/bootstrap/ai/tool-bindings";
 import { createBoundToolSource } from "@/bootstrap/ai/tool-source.factory";
+import { createGoalMetricTools } from "@/bootstrap/capabilities/goal-metric-tools";
+import {
+	createGoalMetrics,
+	createGoalProgressReader,
+} from "@/bootstrap/capabilities/goal-metrics";
 import {
 	createMetricsCapability,
 	derivePrometheusQueryUrl,
@@ -158,19 +162,15 @@ import { createGithubReadVcsCapability } from "@/bootstrap/capabilities/vcs";
 import { createWebSearchCapability } from "@/bootstrap/capabilities/web-search";
 import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
 import { createMoveMetricPorts } from "@/bootstrap/capabilities/work-item-moves";
-import {
-	type AgentAuthoritySql,
-	type AgentToolAuthority,
-	createAgentToolAuthority,
-} from "@/bootstrap/agent-authority";
-import { createApproversNodeAdminAuthority } from "@/bootstrap/node-admin-gate";
 import type { RateLimitBypassConfig } from "@/bootstrap/http/wrapPublicRoute";
+import { localReadinessPreflight } from "@/bootstrap/local-readiness-preflight";
+import { createApproversNodeAdminAuthority } from "@/bootstrap/node-admin-gate";
 import { startProcessHealthPublisher } from "@/bootstrap/publishers";
 import {
 	startGovernanceSyncOnBoot,
 	startMetricsSyncOnBoot,
 } from "@/bootstrap/startup-reconcile";
-import { localReadinessPreflight } from "@/bootstrap/local-readiness-preflight";
+import { createStreamRedisClient } from "@/bootstrap/stream-redis-client";
 import type {
 	AccountService,
 	AiTelemetryPort,
@@ -221,7 +221,9 @@ export type UnhandledErrorPolicy = "rethrow" | "respond_500";
 
 class DoltgresNotConfiguredError extends Error {
 	constructor() {
-		super("Doltgres is not configured for this node. Set DOLTGRES_URL to enable the work-items API.");
+		super(
+			"Doltgres is not configured for this node. Set DOLTGRES_URL to enable the work-items API.",
+		);
 		this.name = "DoltgresNotConfiguredError";
 	}
 }
@@ -810,7 +812,7 @@ function createContainer(): Container {
 				// story.0033: a `moves` entry pins the metric's latest good observation as its baseline.
 				metricBaseline: moveMetrics.baselines,
 			}),
-			new PostgresWorkItemLeaseAdapter(serviceDb.$client, { logger: log })
+			new PostgresWorkItemLeaseAdapter(serviceDb.$client, { logger: log }),
 		);
 		const createKnowledgeBranchClient = () =>
 			buildDoltgresClient({
@@ -824,7 +826,7 @@ function createContainer(): Container {
 				writerProtocol: "database",
 				logger: log,
 				recreateClient: createKnowledgeBranchClient,
-			}
+			},
 		);
 		const knowledgePort = new DoltgresKnowledgeStoreAdapter({
 			sql: doltClient,
@@ -967,6 +969,8 @@ function createContainer(): Container {
 		workItemCapability,
 	});
 	const goalProgress = createGoalProgressReader({
+		// knowledgeStorePort uses doltClient, not the reserved knowledgeWriter.
+		pooledGoalReads: true,
 		metrics: () => goalMetrics,
 		knowledge: () => knowledgeStorePort,
 		// Same fallback as createGoalMetrics, so payload environment == observation scope.

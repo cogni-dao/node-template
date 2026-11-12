@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
 	bucketObservations,
 	createMetricService,
+	createWorkMetricReader,
 	type MetricDefinition,
 	MetricListInputSchema,
 	MetricListResponseSchema,
@@ -163,6 +164,7 @@ function setup(options?: {
 	});
 	return {
 		service,
+		port,
 		d,
 		snapshots,
 		windows,
@@ -262,6 +264,54 @@ describe("measurement evidence contract", () => {
 		expect(view.latestAttempt?.id).toBe(bad.id);
 		expect(view.lastGood?.id).toBe(good.id);
 	});
+	it.each(["latest", "lastGood"] as const)(
+		"rejects incompatible %s at every flat reading alias and baseline boundary",
+		async (slot) => {
+			for (const mismatch of [
+				{ unit: "wrong" },
+				{ paramsHash: "wrong" },
+				{ definitionHash: "wrong" },
+				{ calculatorVersion: "work.count@2" },
+			]) {
+				const s = setup();
+				const good = await s.service.compute("open-work", {
+					requestKey: "valid",
+				});
+				const reader = createWorkMetricReader(
+					s.service,
+					() => new Date("2026-10-30T12:00:00Z"),
+				);
+				expect(await reader.baselineId("open-work")).toBe(good.id);
+				expect((await s.service.list()).items[0]?.lastGood?.value).toBe(0);
+				if (slot === "latest")
+					vi.spyOn(s.port, "history").mockResolvedValue([
+						{ ...good, ...mismatch },
+					]);
+				else
+					vi.spyOn(s.port, "lastGood").mockResolvedValue({
+						...good,
+						...mismatch,
+					});
+				for (const view of [
+					await s.service.read("open-work"),
+					await s.service.viewOf(s.d),
+					(await s.service.list()).items[0],
+				]) {
+					expect(view).toMatchObject({
+						viewState: "error",
+						latestAttempt: null,
+						lastGood: null,
+					});
+				}
+				expect(await reader.latest("open-work")).toBeNull();
+				await expect(reader.baselineId("open-work")).rejects.toMatchObject({
+					code: "metrics_unavailable",
+					status: 503,
+				});
+			}
+		},
+	);
+
 	it("pins hypothesis evidence while rolling measurements change", async () => {
 		const s = setup();
 		const baseline = await s.service.compute("open-work", {
@@ -632,8 +682,12 @@ describe("goal KPI read model", () => {
 			(await setup(o).service.kpi(binding, {})).metric?.display;
 		expect(await display({})).toBeUndefined();
 		expect(await display({ display: "volume" })).toBe("volume");
-		expect(await display({ display: "volume", override: "progress" })).toBe("progress");
+		expect(await display({ display: "volume", override: "progress" })).toBe(
+			"progress",
+		);
 		// slo needs a "%" unit; an override the unit cannot honour yields to the default.
-		expect(await display({ display: "volume", override: "slo" })).toBe("volume");
+		expect(await display({ display: "volume", override: "slo" })).toBe(
+			"volume",
+		);
 	});
 });

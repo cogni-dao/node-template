@@ -7,6 +7,7 @@
 import type { Sql } from "postgres";
 import { z } from "zod";
 import { PostgresMetricObservations } from "./adapters/postgres.js";
+import { readMetricBudget } from "./adapters/read-budget.js";
 import {
 	type GoalsProgress,
 	type MetricCalculator,
@@ -25,6 +26,8 @@ import {
 	BRIEF_MAX_BYTES,
 	BRIEF_MAX_ROWS,
 	FIRST_PARENT_WALK_CAP,
+	NO_INLINE_HISTORY_MAX_BYTES,
+	NO_INLINE_HISTORY_MAX_ROWS,
 	readBriefConformance,
 	readGithubStars,
 	readNoInlineHistoryEdits,
@@ -32,8 +35,6 @@ import {
 	readNoInlineHistoryState,
 	readWorkConvergence,
 	readWorkCount,
-	NO_INLINE_HISTORY_MAX_BYTES,
-	NO_INLINE_HISTORY_MAX_ROWS,
 } from "./sources.js";
 
 /**
@@ -42,11 +43,12 @@ import {
  * carries no knowledge-store dependency.
  */
 export interface GoalKnowledgeReader {
-	listActiveGoals(): Promise<
+	listActiveGoals(signal?: AbortSignal): Promise<
 		ReadonlyArray<{
 			id: string;
 			title: string;
 			evaluateAt?: Date | null | undefined;
+			kpiBindings?: unknown;
 		}>
 	>;
 	getKnowledge(id: string): Promise<{
@@ -146,7 +148,9 @@ export function createGoalMetrics(deps: {
 		unitFor: (params) =>
 			convergenceParams.parse(params).output === "ratio" ? "ratio" : "items",
 		displayFor: (params) =>
-			convergenceParams.parse(params).output === "ratio" ? "progress" : "volume",
+			convergenceParams.parse(params).output === "ratio"
+				? "progress"
+				: "volume",
 		windowSeconds: (params) => convergenceParams.parse(params).days * 86400,
 		paramsSchema: convergenceParams,
 		// Worst case: counts (1) + main head (1) + per edge reflog then recorded
@@ -271,7 +275,9 @@ export function createGoalMetrics(deps: {
 					readNoInlineHistoryState(deps.knowledgeSql, p.subject, signal),
 				);
 			if (p.measure === "scope")
-				return ctx.read((signal) => readNoInlineHistoryScope(deps.knowledgeSql, signal));
+				return ctx.read((signal) =>
+					readNoInlineHistoryScope(deps.knowledgeSql, signal),
+				);
 			return readNoInlineHistoryEdits(
 				deps.knowledgeSql,
 				p.output,
@@ -329,13 +335,44 @@ export function createGoalMetrics(deps: {
 		return `'${id.replace(/'/g, "''")}'`;
 	}
 	const definitions = {
+		async getMany(ids: readonly string[], signal?: AbortSignal) {
+			if (!ids.length) return [];
+			if (ids.length > 300) throw new MetricError("too_many_metrics", 400);
+			// Doltgres rejects SET LOCAL. Use pooled read admission, retaining the
+			// permit until native settlement even after the caller abandons it.
+			// PostgreSQL observations keep their native statement timeout.
+			const rows = await readMetricBudget(
+				deps.knowledgeSql,
+				signal,
+				(bounded) => {
+					bounded.throwIfAborted();
+					return deps.knowledgeSql.unsafe(
+						`SELECT id,title,metric_spec,updated_at FROM knowledge WHERE id IN (${ids.map(literal).join(",")}) AND metric_spec IS NOT NULL AND status <> 'deprecated'`,
+					);
+				},
+			).catch((error: unknown) => {
+				const code = (error as { code?: unknown } | null)?.code;
+				deps.log({
+					event: "metric.definition_batch_failed",
+					phase: "definitions_read",
+					errorCode:
+						typeof code === "string" && /^[A-Za-z0-9_]{1,64}$/.test(code)
+							? code
+							: "unknown",
+				});
+				throw error;
+			});
+			return rows
+				.map(parse)
+				.filter((item): item is MetricDefinition => item !== null);
+		},
 		async get(id: string) {
 			const rows = await deps.knowledgeSql.unsafe(
 				`SELECT id,title,metric_spec,updated_at FROM knowledge WHERE id=${literal(id)} AND metric_spec IS NOT NULL AND status <> 'deprecated' LIMIT 1`,
 			);
 			return rows[0] ? parse(rows[0]) : null;
 		},
-		async list(limit: number, after?: string) {
+		async list(limit: number, after?: string, signal?: AbortSignal) {
 			const cap = Math.min(50, Math.max(1, Math.floor(limit)));
 			const items: MetricDefinition[] = [];
 			let cursor = after;
@@ -343,6 +380,7 @@ export function createGoalMetrics(deps: {
 			// Invalid rows are skipped, so keep reading until the page is full; the
 			// cursor advances past every examined row so refresh never stalls on one.
 			for (let pass = 0; pass < 20 && more && items.length < cap; pass++) {
+				signal?.throwIfAborted();
 				const need = cap - items.length;
 				const rows = await deps.knowledgeSql.unsafe(
 					`SELECT id,title,metric_spec,updated_at FROM knowledge WHERE metric_spec IS NOT NULL AND status <> 'deprecated' ${cursor ? `AND id > ${literal(cursor)}` : ""} ORDER BY id LIMIT ${need + 1}`,
@@ -372,21 +410,35 @@ export function createGoalMetrics(deps: {
 }
 
 /** Goals and hypotheses stay knowledge entries; the shared read model only sees this port. */
-export function createGoalSource(port: GoalKnowledgeReader): GoalSourcePort {
+export function createGoalSource(
+	port: GoalKnowledgeReader,
+	signal?: AbortSignal,
+): GoalSourcePort {
+	const read = async <T>(query: () => Promise<T>): Promise<T> => {
+		signal?.throwIfAborted();
+		const result = await query();
+		signal?.throwIfAborted();
+		return result;
+	};
 	type Dated = { createdAt?: Date | undefined };
 	const newest = (a: Dated, b: Dated) =>
 		(b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0);
 	return {
 		async listGoals() {
-			const goals = await port.listActiveGoals();
+			const goals = await read(() => port.listActiveGoals(signal));
 			const items = [];
 			for (const goal of goals) {
-				const row = await port.getKnowledge(goal.id);
+				// Current stores project bindings with the canonical active-goal list.
+				// Older injected readers keep the existing direct-body fallback.
+				const bindings =
+					goal.kpiBindings !== undefined
+						? goal.kpiBindings
+						: (await read(() => port.getKnowledge(goal.id)))?.kpiBindings;
 				items.push({
 					id: goal.id,
 					title: goal.title,
 					evaluateAt: goal.evaluateAt?.toISOString() ?? null,
-					kpiBindings: row?.kpiBindings ?? [],
+					kpiBindings: bindings ?? [],
 				});
 			}
 			return items;
@@ -394,7 +446,7 @@ export function createGoalSource(port: GoalKnowledgeReader): GoalSourcePort {
 		async hypotheses(goalId) {
 			const ids = [
 				...new Set(
-					(await port.listCitationsByCitedId(goalId))
+					(await read(() => port.listCitationsByCitedId(goalId)))
 						.filter((e) => e.citationType === "extends")
 						.sort(newest)
 						.map((e) => e.citingId),
@@ -403,9 +455,9 @@ export function createGoalSource(port: GoalKnowledgeReader): GoalSourcePort {
 			const items = [];
 			// At most ten source bodies per goal; `more` admits the truncation.
 			for (const id of ids.slice(0, 10)) {
-				const bet = await port.getKnowledge(id);
+				const bet = await read(() => port.getKnowledge(id));
 				if (bet?.entryType !== "hypothesis") continue;
-				const outcomeEdge = (await port.listCitationsByCitedId(id))
+				const outcomeEdge = (await read(() => port.listCitationsByCitedId(id)))
 					.filter(
 						(e) =>
 							e.citationType === "validates" ||
@@ -413,7 +465,7 @@ export function createGoalSource(port: GoalKnowledgeReader): GoalSourcePort {
 					)
 					.sort(newest)[0];
 				const outcome = outcomeEdge
-					? await port.getKnowledge(outcomeEdge.citingId)
+					? await read(() => port.getKnowledge(outcomeEdge.citingId))
 					: null;
 				items.push({
 					id: bet.id,
@@ -440,14 +492,29 @@ export function createGoalProgressReader(deps: {
 	metrics: () => MetricService | undefined;
 	knowledge: () => GoalKnowledgeReader | undefined;
 	environment: string;
+	/** Explicitly pooled read-only knowledge port; reserved scopes stay serial. */
+	pooledGoalReads?: boolean;
 }): () => Promise<GoalsProgress> {
-	return async () => {
-		const port = deps.knowledge();
-		if (!port) throw new MetricError("goals_unavailable", 503);
-		return readGoalsProgress({
-			goals: createGoalSource(port),
-			metrics: deps.metrics(),
-			environment: deps.environment,
+	let inFlight: Promise<GoalsProgress> | undefined;
+	return () => {
+		if (inFlight) return inFlight;
+		const run = async () => {
+			const port = deps.knowledge();
+			if (!port) throw new MetricError("goals_unavailable", 503);
+			return readMetricBudget(port, undefined, (signal) =>
+				readGoalsProgress({
+					goals: createGoalSource(port, signal),
+					pooledGoalReads: deps.pooledGoalReads,
+					metrics: deps.metrics(),
+					environment: deps.environment,
+					signal,
+				}),
+			);
+		};
+		const pending = run().finally(() => {
+			if (inFlight === pending) inFlight = undefined;
 		});
+		inFlight = pending;
+		return pending;
 	};
 }

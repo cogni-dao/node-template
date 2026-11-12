@@ -4,16 +4,15 @@
 /**
  * Authenticated dashboard shell. Seeds only the active tab with its canonical
  * wire response. Browse reads one bounded metadata window (with its exact
- * total), with no domain, legacy list, graph, Goals or Inbox reads. Graph is not
+ * total), with no domain, legacy list, graph or Inbox reads. Graph is not
  * seeded: the client reads the whole corpus once per revision (ETag/304). Other
- * tabs retain their loaders.
+ * tabs retain their loaders. `?mode=goals` redirects to `/metrics` (story.0039), so old
+ * deep links keep working.
  * @public
  */
 
-import { GoalsProgressSchema } from "@cogni-dao/metrics/contracts";
 import { redirect } from "next/navigation";
 
-import { loadGoalsProgress } from "@/app/_facades/metrics.server";
 import { getContainer } from "@/bootstrap/container";
 import { getServerSessionUser } from "@/lib/auth/server";
 import {
@@ -48,13 +47,10 @@ export default async function KnowledgePage({
 
   const port = getContainer().knowledgeStorePort;
   const { mode } = await searchParams;
-
-  const goalsSeed =
-    mode === "goals"
-      ? safe(loadGoalsProgress()).then(
-          (d) => GoalsProgressSchema.safeParse(d).data
-        )
-      : Promise.resolve(undefined);
+  // The Goals tab became the top-level Metrics page; keep old links working.
+  if (mode === "goals") {
+    redirect("/metrics");
+  }
 
   // Graph is not SSR-seeded: the whole-corpus payload is fetched once per store
   // revision and revalidated by ETag (304), which an HTML seed cannot do.
@@ -69,11 +65,9 @@ export default async function KnowledgePage({
         mode === "domains" ? safe(loadDomains(port)) : undefined,
       ])
     : [undefined, undefined, undefined];
-  const initialGoals = await goalsSeed;
 
   return (
     <KnowledgeDashboardView
-      initialGoals={initialGoals}
       initialList={initialList}
       initialDomains={initialDomains}
       initialBrowse={initialBrowse}

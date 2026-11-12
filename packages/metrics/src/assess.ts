@@ -35,6 +35,144 @@ import {
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 const WEEK = 7 * DAY;
+
+/** Use the authorized service for every read, including pinned observations. */
+export function createWorkMetricReader(
+	service: {
+		read(id: string): Promise<MetricView>;
+		observation(
+			id: string,
+			observationId: string,
+		): Promise<{ observation: MetricObservation }>;
+	},
+	now: () => Date = () => new Date(),
+) {
+	const readLatest = async (id: string, requireReadable: boolean) => {
+		const view = await service.read(id);
+		const attempt = view.latestAttempt;
+		if (!attempt) {
+			if (requireReadable && view.viewState === "error")
+				throw new MetricError("metrics_unavailable", 503);
+			return null;
+		}
+		const age = now().getTime() - Date.parse(attempt.window.end);
+		const fresh =
+			Number.isFinite(age) &&
+			age >= 0 &&
+			age <= view.definition.spec.maxAgeSeconds * 1000;
+		return {
+			...attempt,
+			metricTitle: view.definition.title,
+			maxAgeSeconds: view.definition.spec.maxAgeSeconds,
+			viewState:
+				view.viewState === "ok" && !fresh ? ("stale" as const) : view.viewState,
+		};
+	};
+	return {
+		latest: (id: string) => readLatest(id, false),
+		async baselineId(id: string) {
+			const attempt = await readLatest(id, true);
+			return attempt?.viewState === "ok" &&
+				attempt.status === "ok" &&
+				attempt.value !== null &&
+				Number.isFinite(attempt.value) &&
+				attempt.observedAt !== null &&
+				Number.isFinite(Date.parse(attempt.observedAt))
+				? attempt.id
+				: null;
+		},
+		async observation(id: string, observationId: string) {
+			return (await service.observation(id, observationId)).observation;
+		},
+	};
+}
+
+/** Compare authorized observations from the same measurement series. */
+export function assessDirection(
+	direction: "up" | "down" | null,
+	baseline: MetricObservation | null,
+	current:
+		| (MetricObservation & {
+				viewState?: MetricView["viewState"];
+				maxAgeSeconds?: number;
+		  })
+		| null,
+): "as_declared" | "against" | "flat" | "unknown" | null {
+	if (direction === null) return null;
+	if (
+		!baseline ||
+		!current ||
+		baseline.status !== "ok" ||
+		current.status !== "ok" ||
+		(current.viewState !== undefined && current.viewState !== "ok") ||
+		baseline.value === null ||
+		current.value === null ||
+		!Number.isFinite(baseline.value) ||
+		!Number.isFinite(current.value)
+	)
+		return "unknown";
+	for (const observation of [baseline, current]) {
+		if (
+			!observation.observedAt ||
+			!Number.isFinite(Date.parse(observation.observedAt)) ||
+			!observation.sourceWatermarks.length ||
+			observation.sourceWatermarks.some(
+				(watermark) =>
+					!watermark.asOf || !Number.isFinite(Date.parse(watermark.asOf)),
+			)
+		)
+			return "unknown";
+		const maxAgeSeconds = current.maxAgeSeconds;
+		if (maxAgeSeconds !== undefined) {
+			const windowAge =
+				Date.parse(observation.observedAt) - Date.parse(observation.window.end);
+			if (
+				!Number.isFinite(maxAgeSeconds) ||
+				maxAgeSeconds < 0 ||
+				!Number.isFinite(windowAge) ||
+				windowAge < 0 ||
+				windowAge > maxAgeSeconds * 1000
+			)
+				return "unknown";
+		}
+		if (
+			maxAgeSeconds !== undefined &&
+			observation.sourceWatermarks.some((watermark) => {
+				const age =
+					Date.parse(observation.observedAt as string) -
+					Date.parse(watermark.asOf as string);
+				return age < 0 || age > maxAgeSeconds * 1000;
+			})
+		)
+			return "unknown";
+	}
+	for (const field of [
+		"metricId",
+		"definitionHash",
+		"calculatorVersion",
+		"paramsHash",
+		"node",
+		"environment",
+		"dataScope",
+		"unit",
+	] as const)
+		if (baseline[field] !== current[field]) return "unknown";
+	const duration = (o: MetricObservation) =>
+		Date.parse(o.window.end) - Date.parse(o.window.start);
+	const first = duration(baseline),
+		second = duration(current);
+	if (
+		!Number.isFinite(first) ||
+		first < 0 ||
+		first !== second ||
+		Date.parse(current.window.end) < Date.parse(baseline.window.end)
+	)
+		return "unknown";
+	if (baseline.value === current.value) return "flat";
+	return current.value > baseline.value === (direction === "up")
+		? "as_declared"
+		: "against";
+}
 export const HISTORY_STEP_MS: Record<MetricHistoryStep, number> = {
 	"1h": HOUR,
 	"1d": DAY,
@@ -273,8 +411,21 @@ export function assessKpi(input: KpiAssessmentInput): KpiAssessment {
 		input.lastGood?.status === "ok" && input.lastGood.value !== null
 			? input.lastGood
 			: null;
+	// Fixed predictions remain unresolved before their immutable deadline.
+	// Rolling progress and refresh state do not decide a future commitment.
+	if (
+		deadlineMs !== null &&
+		binding.evaluationAt &&
+		binding.baselineObservationId
+	)
+		return result(
+			"unresolved",
+			"evaluation_not_due",
+			lastGood?.unit === binding.target.unit ? lastGood : null,
+		);
 	// 3. building
 	const latest = input.latestAttempt;
+	const pending = latest?.status === "pending" || input.viewState === "pending";
 	if (
 		latest?.status === "unavailable" &&
 		latest.reason === "insufficient_history"
@@ -286,11 +437,22 @@ export function assessKpi(input: KpiAssessmentInput): KpiAssessment {
 	// 5. delayed: no ok reading, an old one, or stale source evidence.
 	if (!lastGood)
 		return result(
-			"delayed",
-			latest?.status === "pending" ? null : "metric_unavailable",
+			pending ? "building" : "delayed",
+			pending ? null : "metric_unavailable",
 			null,
 		);
 	if (
+		!Number.isFinite(Date.parse(lastGood.window.end)) ||
+		Date.parse(lastGood.window.end) > now.getTime() ||
+		lastGood.sourceWatermarks.length === 0 ||
+		lastGood.sourceWatermarks.some(({ asOf }) => {
+			const at = Date.parse(asOf ?? "");
+			return (
+				!Number.isFinite(at) ||
+				at > now.getTime() ||
+				now.getTime() - at > maxAge
+			);
+		}) ||
 		now.getTime() - Date.parse(lastGood.window.end) > maxAge ||
 		(latest?.id === lastGood.id && input.viewState === "stale")
 	)
@@ -298,12 +460,42 @@ export function assessKpi(input: KpiAssessmentInput): KpiAssessment {
 	// Rule 1 also covers a stored reading whose unit differs from the target.
 	if (lastGood.unit !== binding.target.unit)
 		return result("not_measured", "unit_mismatch", null);
+	// A pending refresh never promotes its historical value to current success.
+	// Freshness/unit checks still precede this qualification; deadline verdicts precede it all.
+	if (pending) return result("building", null, lastGood);
 	// 6/7. on_track or behind; an opted-in breach is failing, never behind.
 	if (
-		satisfies(binding.comparator, lastGood.value as number, binding.target.value)
+		satisfies(
+			binding.comparator,
+			lastGood.value as number,
+			binding.target.value,
+		)
 	)
 		return result("on_track", null, lastGood);
 	return binding.breach === "failing"
 		? result("failing", "target_breached", lastGood)
 		: result("behind", null, lastGood);
+}
+
+/** Expected benefit in KPI units; this does not establish eligibility or causation. */
+export function expectedKpiBenefit(input: {
+	comparator: "gte" | "lte" | "eq";
+	target: number;
+	without: number | null;
+	with: number | null;
+}): number | null {
+	const { comparator, target, without, with: withValue } = input;
+	if (
+		without === null ||
+		withValue === null ||
+		![target, without, withValue].every(Number.isFinite)
+	)
+		return null;
+	const benefit =
+		comparator === "gte"
+			? withValue - without
+			: comparator === "lte"
+				? without - withValue
+				: Math.abs(without - target) - Math.abs(withValue - target);
+	return Number.isFinite(benefit) ? benefit : null;
 }

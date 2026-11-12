@@ -3449,6 +3449,7 @@ if (role === 'original') {
 						content: "Existing commitment",
 						entryType: "goal",
 						evaluateAt: new Date("2027-01-01T00:00:00Z"),
+						kpiBindings: [{ metricId: "metric-work", comparator: "lte", target: { value: 10, unit: "items" } }],
 						sourceType: "human"
 					});
 				}
@@ -3496,7 +3497,8 @@ if (role === 'original') {
 						id: "goal-native-committed",
 						title: "Committed goal",
 						content: "Existing commitment",
-						evaluateAt: new Date("2027-01-01T00:00:00Z")
+						evaluateAt: new Date("2027-01-01T00:00:00Z"),
+						kpiBindings: [{ metricId: "metric-work", comparator: "lte", target: { value: 10, unit: "items" } }]
 					});
 					expect(goals.some((goal) => goal.id === "goal-native-dirty")).toBe(
 						false

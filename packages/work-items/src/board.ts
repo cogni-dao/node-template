@@ -88,7 +88,7 @@ export type ListWorkBoardColumns = (
   query: WorkSummaryQuery,
   statuses: readonly string[],
   perColumn: number,
-  options?: { readonly signal?: AbortSignal },
+  options?: WorkSummaryReadOptions,
 ) => Promise<WorkBoardColumnPages>;
 
 /**
@@ -168,6 +168,8 @@ export async function loadWorkBoardColumns(
   if (unknown.length) {
     throw new RangeError(`unknown work status: ${unknown.join(", ")}`);
   }
+  const now = options.now ?? Date.now;
+  const deadline = now() + (options.budgetMs ?? WORK_BOARD_READ_BUDGET_MS);
   if (options.listColumns && !query.text && visible.length > 0) {
     options.signal?.throwIfAborted();
     const base = workBoardColumnQuery(query, visible[0] as string, options.perColumn);
@@ -176,7 +178,7 @@ export async function loadWorkBoardColumns(
       filters,
       visible,
       base.limit ?? WORK_BOARD_COLUMN_PAGE,
-      options.signal ? { signal: options.signal } : undefined,
+      { deadline, ...(options.signal && { signal: options.signal }) },
     );
     return {
       columns: visible.map((status): WorkBoardColumn => {
@@ -186,8 +188,6 @@ export async function loadWorkBoardColumns(
       }),
     };
   }
-  const now = options.now ?? Date.now;
-  const deadline = now() + (options.budgetMs ?? WORK_BOARD_READ_BUDGET_MS);
   const scanBudget = Number(options.maxScanRows);
   let scanRowsLeft = Number.isFinite(scanBudget)
     ? Math.min(Math.trunc(scanBudget), WORK_TEXT_SCAN_MAX_ROWS)

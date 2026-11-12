@@ -30,6 +30,8 @@ import { HypothesisMissingEvaluateAtError } from "../src/port/knowledge-store.po
 
 type Row = Record<string, unknown>;
 
+const kpiBindings = [{ metricId: "metric-work", comparator: "lte", target: { value: 10, unit: "items" } }];
+
 function goalRow(id: string, over: Row = {}): Row {
   return {
     id,
@@ -75,10 +77,10 @@ describe("DoltgresKnowledgeStoreAdapter.listActiveGoals", () => {
     await expect(adapter.listActiveGoals()).resolves.toEqual([]);
   });
 
-  it("returns goals sorted by id with id, title, content, evaluateAt verbatim", async () => {
+  it("returns goals sorted by id with projected KPI bindings", async () => {
     const { adapter } = adapterFor([
       goalRow("goal-b"),
-      goalRow("goal-a"),
+      goalRow("goal-a", { kpi_bindings: kpiBindings }),
       goalRow("goal-c"),
     ]);
     const goals = await adapter.listActiveGoals();
@@ -88,7 +90,9 @@ describe("DoltgresKnowledgeStoreAdapter.listActiveGoals", () => {
       title: "Goal: goal-a",
       content: "Statement for goal-a.\nKPI: x\nTarget: 1\nBy: 2026-12-31",
       evaluateAt: new Date("2026-12-31T00:00:00.000Z"),
+      kpiBindings,
     });
+    expect(goals[1]?.kpiBindings).toBeNull();
   });
 
   it("excludes deprecated rows, non-goal-prefixed ids and goal-loop hypotheses", async () => {
@@ -128,6 +132,7 @@ describe("DoltgresKnowledgeStoreAdapter.listActiveGoals", () => {
     const [q, c] = fake.queries as [string, string];
     expect(q).toContain("FROM knowledge WHERE entry_type = 'goal'");
     expect(q).toContain("evaluate_at");
+    expect(q).toContain("kpi_bindings");
     expect(c).toContain("FROM citations WHERE citation_type = 'supersedes'");
     for (const query of fake.queries) {
       expect(query).not.toMatch(/dolt_checkout|AS OF|contrib\//i);
@@ -248,6 +253,28 @@ describe("FakeKnowledgeStoreAdapter — goal parity", () => {
     await seed(store, "goal-c");
     await seed(store, "goal-d");
     await expect(store.listActiveGoals()).resolves.toHaveLength(4);
+  });
+
+  it("projects populated and null KPI bindings like Doltgres", async () => {
+    const store = await freshStore();
+    await seed(store, "goal-empty");
+    await store.withWrite(
+      { operationId: "goal-bindings-test", message: "seed goal bindings" },
+      async (write) => write.addKnowledge({
+        id: "goal-bound",
+        domain: "strategy",
+        title: "Goal: goal-bound",
+        content: "statement",
+        entryType: "goal",
+        evaluateAt: new Date("2026-12-31T00:00:00.000Z"),
+        sourceType: "human",
+        kpiBindings,
+      })
+    );
+    expect(await store.listActiveGoals()).toEqual([
+      { id: "goal-bound", title: "Goal: goal-bound", content: "statement", evaluateAt: new Date("2026-12-31T00:00:00.000Z"), kpiBindings },
+      { id: "goal-empty", title: "Goal: goal-empty", content: "statement", evaluateAt: new Date("2026-12-31T00:00:00.000Z"), kpiBindings: null },
+    ]);
   });
 
   it("retires a goal once a supersedes edge cites it", async () => {

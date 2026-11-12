@@ -16,6 +16,7 @@ import { logEvent as logSharedEvent } from "./server";
 // App-local event registry: the shared registry plus node-local events.
 export const EVENT_NAMES = {
   ...NODE_SHARED_EVENT_NAMES,
+  WORK_EXPECTATIONS_READ: "work.expectations.read",
   KNOWLEDGE_BROWSE_COMPLETE: "knowledge.browse.complete",
   KNOWLEDGE_OVERVIEW_COMPLETE: "knowledge.overview.complete",
   DB_POOL_CONFIGURED: "adapter.db_pool.configured",

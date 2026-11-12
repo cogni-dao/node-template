@@ -8,7 +8,7 @@
  * Invariants: P0P1_IS_NODE_ADMIN (story.5101: priority <= 1 on create/patch requires node admin,
  *   checked before the store write), PORT_VIA_CONTAINER (no direct adapter imports), CONTRACTS_ARE_TRUTH, NODE_STORE_IS_LOCAL.
  * Evaluation: preserves scores in DTOs. Write errors pass through unchanged; `workItemWriteErrorResponse` (@cogni/work-items) maps them to HTTP in the route (task.0097).
- * Moves (story.0033): create and patch accept `moves` (new ids are resolved and baselined by the store). A single-item read, a create response and a patch response add each move's baseline, current reading and verdict from observations (at most 3 moves); list reads return the stored moves only. An unknown or deprecated metric id is `EntryUnresolvedError` (field `moves`); a non-empty write with no metric wiring is `MovesUnsupportedError`; a bad list is `MovesInvalidError`.
+ * Moves (story.0033): create and patch resolve new metric links and pin baselines. Detail and bounded summary reads add authorized observations and directional verdicts. Null-direction writes remain gated until reader rollout completes.
  * Side-effects: IO (filesystem read via port; database read/write via Doltgres port)
  * Links: contracts/work.items.{list,get,create,patch}.v1.contract
  * @internal
@@ -33,7 +33,7 @@ import type {
   WorkSummaryReadOptions,
 } from "@cogni/work-items";
 import {
-  judgeMoves,
+  judgeMoveSummaries,
   toWorkItemId,
   toWorkItemsCreateInput,
   toWorkItemsPatchInput,
@@ -94,10 +94,7 @@ async function assertPriorityAuthority(
     walletAddress: actor.walletAddress ?? null,
   });
   if (!decision.ok) {
-    const err = new NodeAdminRequiredError(
-      decision,
-      `work.items.priority.p${priority}`,
-    );
+    const err = new NodeAdminRequiredError(decision, `work.items.priority.p${priority}`);
     getContainer().log.warn(
       {
         errorCode: err.errorCode,
@@ -137,14 +134,25 @@ const toDto = toHttpWorkItem;
  * MOVES_READ_AT_READ_TIME: add each move's baseline, current reading and verdict to a
  * single item. Never throws: a lookup that fails reads `unknown`. A list read does not call this.
  */
-async function withMoveReadings(dto: WorkItemDto): Promise<WorkItemDto> {
+async function withMoveReadings(dto: WorkItemDto, options?: WorkSummaryReadOptions): Promise<WorkItemDto> {
   if (!dto.moves?.length) return dto;
   const container = getContainer();
   // No metrics service on this node: every move reads `unknown` (metrics_unavailable).
   const readings = container.goalMetrics
     ? createMoveMetricPorts(() => container.goalMetrics).readings
     : undefined;
-  return { ...dto, moves: await judgeMoves(dto.moves, readings) };
+  return (await judgeMoveSummaries([dto], readings, options))[0] ?? dto;
+}
+
+async function withSummaryReadings<T extends { moves?: WorkItemDto["moves"] }>(
+  items: readonly T[],
+  options?: WorkSummaryReadOptions,
+): Promise<T[]> {
+  const container = getContainer();
+  const readings = container.goalMetrics
+    ? createMoveMetricPorts(() => container.goalMetrics).readings
+    : undefined;
+  return judgeMoveSummaries(items, readings, options);
 }
 
 function nextActionForWorkItem(item: WorkItem): string | null {
@@ -218,8 +226,7 @@ function workQuery(input: WorkItemsListInput) {
     limit: input.limit ?? 100,
     ...(input.cursor && { cursor: input.cursor }),
   };
-
- }
+}
 
 export async function listWorkItems(input: WorkItemsListInput): Promise<WorkItemsListOutput> {
   const container = getContainer();
@@ -239,8 +246,7 @@ export async function listWorkItems(input: WorkItemsListInput): Promise<WorkItem
   } catch (error) {
     if ((error as Error)?.name === "InvalidCursorError")
       throw new InvalidCursorError((error as Error).message);
-    if ((error as Error)?.name !== "DoltgresNotConfiguredError")
-      rethrowBackendError(error);
+    if ((error as Error)?.name !== "DoltgresNotConfiguredError") rethrowBackendError(error);
   }
   try {
     const result = await container.workItemQuery.list(queryShared);
@@ -267,18 +273,26 @@ export async function listWorkSummaries(
   const container = getContainer();
   const query = workQuery(input);
   try {
-    return await container.doltgresWorkItems.listSummaries(query, options);
+    const page = await container.doltgresWorkItems.listSummaries(query, options);
+    return { ...page, items: await withSummaryReadings(page.items, options) };
   } catch (error) {
-    if ((error as Error)?.name === "InvalidCursorError") throw new InvalidCursorError((error as Error).message);
+    if ((error as Error)?.name === "InvalidCursorError")
+      throw new InvalidCursorError((error as Error).message);
     if ((error as Error)?.name !== "DoltgresNotConfiguredError") rethrowBackendError(error);
   }
   try {
     const result = await container.workItemQuery.list(query);
-    return { items: result.items.map((item) => WorkItemSummarySchema.parse(toDto(item))),
+    return {
+      items: await withSummaryReadings(
+        result.items.map((item) => WorkItemSummarySchema.parse(toDto(item))),
+        options,
+      ),
       pageInfo: { endCursor: result.nextCursor ?? null, hasMore: result.nextCursor !== undefined },
-      ...(result.nextCursor !== undefined && { nextCursor: result.nextCursor }) };
+      ...(result.nextCursor !== undefined && { nextCursor: result.nextCursor }),
+    };
   } catch (error) {
-    if ((error as Error)?.name === "InvalidCursorError") throw new InvalidCursorError((error as Error).message);
+    if ((error as Error)?.name === "InvalidCursorError")
+      throw new InvalidCursorError((error as Error).message);
     throw error;
   }
 }
@@ -292,41 +306,55 @@ export async function listWorkBoardColumns(
   input: WorkItemSummariesListInput,
   statuses: readonly string[],
   perColumn: number,
-  options?: { readonly signal?: AbortSignal },
+  options?: WorkSummaryReadOptions,
 ): Promise<WorkBoardColumnPages> {
   const container = getContainer();
   const port = container.doltgresWorkItems;
   if (port.listBoardColumns) {
     try {
-      return await port.listBoardColumns(workQuery(input), statuses, perColumn, options);
+      const page = await port.listBoardColumns(workQuery(input), statuses, perColumn, options);
+      const items = await withSummaryReadings(page.columns.flatMap((column) => column.items), options);
+      let offset = 0;
+      return {
+        ...page,
+        columns: page.columns.map((column) => {
+          const start = offset;
+          offset += column.items.length;
+          return { ...column, items: items.slice(start, offset) };
+        }),
+      };
     } catch (error) {
-      if ((error as Error)?.name === "InvalidCursorError") throw new InvalidCursorError((error as Error).message);
+      if ((error as Error)?.name === "InvalidCursorError")
+        throw new InvalidCursorError((error as Error).message);
       if ((error as Error)?.name !== "DoltgresNotConfiguredError") rethrowBackendError(error);
     }
   }
   const columns = [];
   for (const status of statuses) {
-    const page = await listWorkSummaries({ ...input, statuses: [status], limit: perColumn }, options);
+    const page = await listWorkSummaries(
+      { ...input, statuses: [status], limit: perColumn },
+      options,
+    );
     columns.push({ status, items: page.items, pageInfo: page.pageInfo });
   }
   return { columns, queryCount: columns.length };
 }
 
-export async function getWorkItem(id: string): Promise<WorkItemDto | null> {
+export async function getWorkItem(id: string, options?: WorkSummaryReadOptions): Promise<WorkItemDto | null> {
   const container = getContainer();
   // Doltgres-first: legacy markdown IDs (e.g. bug.0002) can also live in Doltgres
   // after the markdown→Doltgres import (task.5002). Fall back to markdown only when
   // Doltgres returns null, so unimported legacy IDs still resolve during transition.
   try {
     const item = await container.doltgresWorkItems.get(toWorkItemId(id));
-    if (item) return await withMoveReadings(toDto(item));
+    if (item) return await withMoveReadings(toDto(item), options);
   } catch (e) {
     if ((e as Error)?.name !== "DoltgresNotConfiguredError") {
       rethrowBackendError(e);
     }
   }
   const mdItem = await container.workItemQuery.get(id as WorkItemId);
-  return mdItem ? toDto(mdItem) : null;
+  return mdItem ? withMoveReadings(toDto(mdItem), options) : null;
 }
 
 export async function createWorkItem(
@@ -364,16 +392,10 @@ export async function patchWorkItem(
   }
 }
 
-export async function deleteWorkItem(
-  id: string,
-  sessionUser: { id: string },
-): Promise<boolean> {
+export async function deleteWorkItem(id: string, sessionUser: { id: string }): Promise<boolean> {
   const container = getContainer();
   try {
-    return await container.doltgresWorkItems.delete(
-      toWorkItemId(id),
-      sessionUser.id,
-    );
+    return await container.doltgresWorkItems.delete(toWorkItemId(id), sessionUser.id);
   } catch (e) {
     rethrowBackendError(e);
   }
@@ -441,9 +463,7 @@ export async function heartbeatWorkItem(input: {
   }
 }
 
-export async function getWorkItemCoordination(
-  id: string,
-): Promise<WorkItemCoordinationOutput> {
+export async function getWorkItemCoordination(id: string): Promise<WorkItemCoordinationOutput> {
   const container = getContainer();
   try {
     const current = await container.doltgresWorkItems.get(toWorkItemId(id));

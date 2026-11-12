@@ -427,7 +427,7 @@ describe("Work Kanban", () => {
     const table = document.querySelector("table[data-work-presync]");
     expect(table).not.toBeNull();
     const ids = (selector: string) => Array.from(table?.querySelectorAll(selector) ?? [], (node) => node.getAttribute("data-work-column"));
-    expect(ids("colgroup col")).toEqual(["priority", "rankScore", "type", "item", "status", "projectId", "updatedAt", "estimate"]);
+    expect(ids("colgroup col")).toEqual(["priority", "rankScore", "type", "item", "metric", "goal", "status", "projectId", "updatedAt", "estimate"]);
     expect(ids("thead th")).toEqual(ids("colgroup col"));
     expect(ids("tbody tr:first-child td")).toEqual(ids("colgroup col"));
   });
