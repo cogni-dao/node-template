@@ -413,6 +413,17 @@ export function assessKpi(input: KpiAssessmentInput): KpiAssessment {
 			null,
 		);
 	if (
+		!Number.isFinite(Date.parse(lastGood.window.end)) ||
+		Date.parse(lastGood.window.end) > now.getTime() ||
+		lastGood.sourceWatermarks.length === 0 ||
+		lastGood.sourceWatermarks.some(({ asOf }) => {
+			const at = Date.parse(asOf ?? "");
+			return (
+				!Number.isFinite(at) ||
+				at > now.getTime() ||
+				now.getTime() - at > maxAge
+			);
+		}) ||
 		now.getTime() - Date.parse(lastGood.window.end) > maxAge ||
 		(latest?.id === lastGood.id && input.viewState === "stale")
 	)

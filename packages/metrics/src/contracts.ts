@@ -552,6 +552,8 @@ export const GoalKpiSchema = z.object({
 		})
 		.nullable(),
 	assessment: KpiAssessmentSchema,
+	/** Newest attempt state; assessment may describe the historical last-good value. */
+	viewState: MetricViewSchema.shape.viewState.optional(),
 	/** 30 daily buckets ending at the current UTC day; null when unreadable. */
 	trend: MetricHistorySchema.nullable(),
 	/**

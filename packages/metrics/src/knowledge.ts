@@ -458,13 +458,22 @@ export function createGoalProgressReader(deps: {
 	knowledge: () => GoalKnowledgeReader | undefined;
 	environment: string;
 }): () => Promise<GoalsProgress> {
-	return async () => {
-		const port = deps.knowledge();
-		if (!port) throw new MetricError("goals_unavailable", 503);
-		return readGoalsProgress({
-			goals: createGoalSource(port),
-			metrics: deps.metrics(),
-			environment: deps.environment,
+	let inFlight: Promise<GoalsProgress> | undefined;
+	return () => {
+		if (inFlight) return inFlight;
+		const run = async () => {
+			const port = deps.knowledge();
+			if (!port) throw new MetricError("goals_unavailable", 503);
+			return readGoalsProgress({
+				goals: createGoalSource(port),
+				metrics: deps.metrics(),
+				environment: deps.environment,
+			});
+		};
+		const pending = run().finally(() => {
+			if (inFlight === pending) inFlight = undefined;
 		});
+		inFlight = pending;
+		return pending;
 	};
 }

@@ -28,7 +28,7 @@ const get = vi.fn();
 const listSummaries = vi.fn();
 const listBoardColumns = vi.fn();
 const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), child: vi.fn() };
-const request = () => GET(new NextRequest("http://localhost/api/v1/work/items/task.0001/expectations"), { params: Promise.resolve({ id: "task.0001" }) });
+const request = (input = new NextRequest("http://localhost/api/v1/work/items/task.0001/expectations")) => GET(input, { params: Promise.resolve({ id: "task.0001" }) });
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -50,11 +50,12 @@ describe("authenticated work metric projection", () => {
     expect(predictionBatch).not.toHaveBeenCalled();
   });
   it("only assesses pinned matching commitments and preserves failure and unknown", async () => {
-    const response = await request();
+    const input = new NextRequest("http://localhost/api/v1/work/items/task.0001/expectations");
+    const response = await request(input);
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(predictionBatch).toHaveBeenCalledOnce();
-    expect(predictionBatch).toHaveBeenCalledWith([binding(baselineId)]);
+    expect(predictionBatch).toHaveBeenCalledWith([binding(baselineId)], input.signal);
     expect((await response.json()).items[0].predictions).toEqual([
       { metricId: "m", expected: "gte 5 count", observed: `failing · 3 count · ${otherId} · source_failed` },
       { metricId: "m", expected: "gte 5 count", observed: "unresolved (metric or baseline mismatch)" },

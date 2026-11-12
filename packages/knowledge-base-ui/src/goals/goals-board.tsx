@@ -289,7 +289,7 @@ function GoalRow({
             aria-hidden="true"
             className={`size-4 shrink-0 text-muted-foreground transition-transform ${expanded ? "rotate-90" : ""}`}
           />
-          <span className={`min-w-0 flex-1 font-medium text-sm ${metrics ? "break-words" : "truncate"}`}>
+          <span className={`min-w-0 flex-1 ${metrics ? "break-words font-semibold text-lg" : "truncate font-medium text-sm"}`}>
             {goal.title}
           </span>
           <span className="shrink-0 text-muted-foreground text-xs tabular-nums">
@@ -317,23 +317,19 @@ function GoalRow({
           <>
         {goal.kpis.length ? (
           metrics ? (
-            <div className="space-y-4">
+            <div className="space-y-2 border-l border-border/60 pl-3 md:pl-4">
               {ranked.map(({ kpi, index }) => {
                 const key = keyOf(kpi, index);
+                const selected = open === key;
+                const detailId = `${chartId}-${index}`;
                 return (
-                  <div key={key} data-kpi-block={kpi.binding.metricId} className="grid gap-3 md:grid-cols-[15rem_minmax(0,1fr)] md:items-start">
-                    <KpiCard
-                      kpi={kpi}
-                      open={open === key}
-                      chartId={chartId}
-                      wrap
-                      onToggle={() => setOpen(open === key ? null : key)}
-                    />
-                    {hasMetricDetail(data) ? (
-                      <KpiBranch rows={servedRows(kpi, data)} nowIso={nowIso} complete={!data.servedTruncated} />
-                    ) : (
-                      <p className="text-muted-foreground text-sm">Serving metrics unavailable</p>
-                    )}
+                  <div key={key} data-kpi-block={kpi.binding.metricId}>
+                    <KpiCard kpi={kpi} open={selected} chartId={detailId} wrap variant="row"
+                      onToggle={() => setOpen(selected ? null : key)} />
+                    {selected && <div id={detailId} className="space-y-4 py-3 pl-3">
+                      <KpiChart kpi={kpi} nowIso={nowIso} />
+                      {hasMetricDetail(data) ? <KpiBranch rows={servedRows(kpi, data)} nowIso={nowIso} complete={!data.servedTruncated} /> : <p className="text-muted-foreground text-sm">Serving metrics unavailable</p>}
+                    </div>}
                   </div>
                 );
               })}
@@ -357,7 +353,7 @@ function GoalRow({
         ) : (
           <p className="text-muted-foreground text-sm">No metric bound</p>
         )}
-        {openKpi && open && <KpiChart key={open} id={chartId} kpi={openKpi} nowIso={nowIso} />}
+        {!metrics && openKpi && open && <KpiChart key={open} id={chartId} kpi={openKpi} nowIso={nowIso} />}
           </>
         )}
       </div>
@@ -392,6 +388,7 @@ function KpiCard({
   open,
   chartId,
   wrap = false,
+  variant = "card",
   onToggle,
 }: {
   readonly kpi: GoalKpi;
@@ -399,26 +396,30 @@ function KpiCard({
   readonly chartId: string;
   /** Metrics view: the title and hint wrap instead of clipping. */
   readonly wrap?: boolean;
+  readonly variant?: "card" | "row";
   readonly onToggle: () => void;
 }) {
+  const row = variant === "row";
   const describedBy = useId();
   const display = displayOf(kpi);
   const series = cardSeries(kpi);
   const hint = cardHint(kpi, display, series);
   const a = kpi.assessment;
+  const pending = kpi.viewState === "pending";
+  const status = pending ? "building" : a.status;
   const unit = kpi.binding.target.unit;
   const title = kpi.metric?.title ?? kpi.binding.metricId;
   const number = a.value === null ? null : formatValue(a.value, display, unit);
   const reason = reasonText(a.reason);
   // A breached target is a fresh reading, so it stays at full strength.
   const muted =
-    a.value !== null && (a.status === "delayed" || (a.status === "failing" && a.reason !== "target_breached"));
+    a.value !== null && (pending || a.status === "delayed" || (a.status === "failing" && a.reason !== "target_breached"));
   const markLabel = `${title}: ${number ?? "no reading"}; ${hint}`;
   return (
     <div
       data-kpi={kpi.binding.metricId}
       data-display={display}
-      className={`relative flex min-h-40 flex-col gap-3 rounded-xl border bg-muted/10 p-4 transition-colors hover:bg-muted/30 ${open ? "border-foreground/40" : "border-border/60"}`}
+      className={`relative ${row ? "rounded-md border px-3 py-3" : "flex min-h-40 flex-col gap-3 rounded-xl border bg-muted/10 p-4"} transition-colors hover:bg-muted/30 ${open ? "border-foreground/40" : "border-border/60"}`}
     >
       {/* The whole card is the toggle; its visible content stays outside the button. */}
       <button
@@ -433,29 +434,30 @@ function KpiCard({
         <span className="sr-only">{title}</span>
       </button>
       <span id={describedBy} className="sr-only">
-        {[number ?? "No reading", STATUS_META[a.status].label, hint, reason].filter(Boolean).join(". ")}
+        {[number ?? "No reading", STATUS_META[status].label, hint, reason].filter(Boolean).join(". ")}
       </span>
-      <div aria-hidden="true" className="pointer-events-none flex flex-1 flex-col gap-3">
+      <div aria-hidden="true" className={row ? "pointer-events-none grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-2 md:grid-cols-[minmax(0,1fr)_auto_minmax(8rem,12rem)]" : "pointer-events-none flex flex-1 flex-col gap-3"}>
         <span
-          className={`${wrap ? "break-words" : "line-clamp-1"} font-medium text-muted-foreground text-xs uppercase tracking-wider`}
+          className={row ? "flex min-w-0 items-center gap-2 break-words font-medium text-sm" : `${wrap ? "break-words" : "line-clamp-1"} font-medium text-muted-foreground text-xs uppercase tracking-wider`}
         >
+          {row && <ChevronRight aria-hidden="true" className={`size-4 shrink-0 ${open ? "rotate-90" : ""}`} />}
           {title}
         </span>
         <div className="flex items-center justify-between gap-2">
           <div className="flex min-w-0 items-baseline gap-1.5">
             <span
-              className={`font-semibold text-3xl tabular-nums tracking-tight ${muted ? "text-muted-foreground" : ""}`}
+              className={`font-semibold ${row ? "text-xl" : "text-3xl"} tabular-nums tracking-tight ${muted ? "text-muted-foreground" : ""}`}
             >
               {number ?? "—"}
             </span>
             {number !== null && display !== "slo" && <span className="text-muted-foreground text-xs">{unit}</span>}
           </div>
-          <StatusPill status={a.status} />
+          <StatusPill status={status} />
         </div>
-        <span className={`-mt-2 ${wrap ? "" : "whitespace-nowrap"} text-muted-foreground text-xs tabular-nums`}>
-          {hint}
+        <span className={`${row ? "pl-6" : "-mt-2"} ${wrap ? "" : "whitespace-nowrap"} text-muted-foreground text-xs tabular-nums`}>
+          {pending ? `${hint} · Pending, historical reading` : hint}
         </span>
-        <div className="mt-auto">
+        <div className={row ? "col-span-2 min-w-0 md:col-span-1 md:col-start-3 md:row-span-2 md:row-start-1" : "mt-auto"}>
           {display === "progress" ? (
             <ProgressBar fraction={progressFraction(kpi)} label={markLabel} />
           ) : display === "slo" ? (

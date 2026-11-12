@@ -129,8 +129,9 @@ export async function readGoalsProgress(deps: {
 						title: x.definition.title,
 						calculatorId: x.definition.spec.calculatorId,
 						// The filter above guarantees `serves`.
-						role: (x.definition.serves as NonNullable<typeof x.definition.serves>)
-							.role,
+						role: (
+							x.definition.serves as NonNullable<typeof x.definition.serves>
+						).role,
 					},
 					assessment: x.assessment,
 					latest: x.latest,
@@ -139,6 +140,7 @@ export async function readGoalsProgress(deps: {
 				binding,
 				metric: r.metric,
 				assessment: r.assessment,
+				viewState: r.viewState,
 				trend: r.trend,
 				...(r.recent ? { recent: r.recent } : {}),
 				...(served.length ? { served } : {}),
@@ -241,14 +243,14 @@ export async function readGoalsProgress(deps: {
 					unbound: serving.unbound
 						.filter((x) => !goalKpis.has(x.definition.id))
 						.map((x) => ({
-						metric: {
-							id: x.definition.id,
-							title: x.definition.title,
-							calculatorId: x.definition.spec.calculatorId,
-						},
-						assessment: x.assessment,
-						latest: x.latest,
-					})),
+							metric: {
+								id: x.definition.id,
+								title: x.definition.title,
+								calculatorId: x.definition.spec.calculatorId,
+							},
+							assessment: x.assessment,
+							latest: x.latest,
+						})),
 					servedTruncated: serving.truncated,
 				}
 			: {}),

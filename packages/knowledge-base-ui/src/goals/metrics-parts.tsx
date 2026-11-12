@@ -18,6 +18,7 @@
 
 "use client";
 
+import { useState } from "react";
 import { useGoalsHost } from "./context.js";
 import { ProgressBar, StatusPill } from "./marks.js";
 import {
@@ -123,6 +124,12 @@ export function MetricRowView({ row, nowIso }: { readonly row: MetricRow; readon
 
 /** The metrics that serve one KPI, grouped by role, worst first. */
 export function KpiBranch({ rows, nowIso, complete = true }: { readonly rows: readonly MetricRow[]; readonly nowIso: string; readonly complete?: boolean }) {
+  const [page,setPage] = useState(0);
+  const ordered = groupByRole(rows).flatMap(group=>group.rows);
+  const current = Math.min(page,Math.max(0,Math.ceil(ordered.length/20)-1));
+  const start=current*20;
+  const visible=ordered.slice(start,start+20);
+
   if (rows.length === 0)
     return (
       <p
@@ -134,7 +141,7 @@ export function KpiBranch({ rows, nowIso, complete = true }: { readonly rows: re
     );
   return (
     <div data-branch="served" className="min-w-0 border-border/60 border-l-2 pl-3 md:pl-4">
-      {groupByRole(rows).map((g) => (
+      {groupByRole(visible).map((g) => (
         <section key={g.role} data-role={g.role} aria-label={ROLE_META[g.role].label} className="mt-2">
           <h4 className="text-[11px] text-muted-foreground uppercase tracking-widest">{ROLE_META[g.role].label}</h4>
           <ul className="divide-y divide-border/60">
@@ -144,6 +151,13 @@ export function KpiBranch({ rows, nowIso, complete = true }: { readonly rows: re
           </ul>
         </section>
       ))}
+      {rows.length > 20 && <nav aria-label="Serving metric pages" className="mt-3 flex flex-wrap items-center gap-3 text-xs">
+        <button type="button" className="min-h-8 rounded-md border px-3 disabled:opacity-50" disabled={current===0} onClick={()=>setPage(current-1)}>Previous</button>
+        <span className="tabular-nums">{start+1}–{Math.min(start+20,rows.length)} of {rows.length} loaded</span>
+        <button type="button" className="min-h-8 rounded-md border px-3 disabled:opacity-50" disabled={start+20>=rows.length} onClick={()=>setPage(current+1)}>Next</button>
+      </nav>}
+      {!complete && <p role="status" className="mt-2 text-muted-foreground text-xs">More metrics may exist beyond this scan.</p>}
+
     </div>
   );
 }

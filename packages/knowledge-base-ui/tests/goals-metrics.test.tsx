@@ -22,7 +22,7 @@ import {
   type MetricLatest,
 } from "@cogni-dao/metrics/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { GoalsBoard, MetricsBoard } from "../src/goals.js";
@@ -154,18 +154,48 @@ describe("MetricsBoard", () => {
     expect(container.textContent).not.toMatch(/\b0\b/);
   });
 
-  it("retains existing measurement cards and opens their chart in Metrics mode", () => {
+  it("retains measurement visualization in a clear KPI row with inline history and supporting disclosure", () => {
     const { container } = renderMetrics(fixture());
     const goal = container.querySelector('[data-goal="goal-a"]') as HTMLElement;
     const card = goal.querySelector('[data-kpi="k-red"]') as HTMLElement;
     expect(card).not.toBeNull();
     expect(card.querySelector('[role="img"]')).not.toBeNull();
     expect(card.textContent).toContain("KPI red");
-    expect(card.parentElement?.querySelector('[data-branch="served"]')).not.toBeNull();
+    expect(card.parentElement?.querySelector('[data-branch="served"]')).toBeNull();
     expect(goal.querySelector("figure")).toBeNull();
     fireEvent.click(within(card).getByRole("button", { name: "KPI red" }));
     expect(goal.querySelector('[data-branch="served"]')).not.toBeNull();
-    expect(within(goal).getByRole("figure")).toBeInTheDocument();
+    expect(within(card.parentElement as HTMLElement).getByRole("figure")).toBeInTheDocument();
+  });
+
+  it("reveals seven supporting metrics only after selecting the measured KPI", () => {
+    const data=fixture();
+    const kpi=data.goals.find(goal=>goal.id === "goal-a")!.kpis.find(kpi=>kpi.binding.metricId === "k-red")!;
+    kpi.served=Array.from({length:7},(_,i)=>served(`seven-${i}`,"input",null));
+    const {container}=renderMetrics(data);
+    const block=container.querySelector('[data-kpi-block="k-red"]') as HTMLElement;
+    expect(block.querySelectorAll('[data-metric]')).toHaveLength(0);
+    expect(block.querySelector('[role="img"]')).not.toBeNull();
+    const toggle=within(block).getByRole("button",{name:"KPI red"});
+    fireEvent.click(toggle);
+    expect(block.querySelectorAll('[data-metric]')).toHaveLength(7);
+    expect(within(block).getByRole("figure")).toBeInTheDocument();
+    fireEvent.click(toggle);
+    expect(block.querySelectorAll('[data-metric]')).toHaveLength(0);
+  });
+
+  it("keeps delayed first reads free of false-zero header statistics", async () => {
+    let finish!: (data: GoalsProgress)=>void;
+    const pending=new Promise<GoalsProgress>(resolve=>{finish=resolve;});
+    const client=new QueryClient({defaultOptions:{queries:{retry:false,gcTime:0}}});
+    const view=render(<QueryClientProvider client={client}><MetricsBoard client={{...createGoalsClient(),fetchGoals:()=>pending}} /></QueryClientProvider>);
+    expect(view.container.querySelector('[aria-busy="true"]')).not.toBeNull();
+    expect(view.container.querySelector('dl')).toBeNull();
+    expect(view.container.textContent).not.toMatch(/\b0\b/);
+    await act(async()=>{finish(fixture());await pending;});
+    expect(await within(view.container).findByRole("button",{name:"KPI red"})).toBeInTheDocument();
+    expect(view.container.textContent).not.toContain("0 KPIs");
+    view.unmount();client.clear();
   });
 
   it("sorts goals, KPIs, role groups and metrics worst first", () => {
@@ -205,6 +235,19 @@ describe("MetricsBoard", () => {
     expect(diag.textContent).not.toContain("≥");
     // The band_invalid orphan of a served metric is a chip on its row, not a member of the not-serving group.
     expect(red.querySelector('[data-flag="band_invalid"]')).not.toBeNull();
+  });
+
+  it("preserves primary KPI attempt state and labels the last-good measurement historical", () => {
+    const data=fixture();
+    const kpi=data.goals.find(goal=>goal.id === "goal-a")!.kpis.find(kpi=>kpi.binding.metricId === "k-red")!;
+    kpi.viewState="pending";
+    kpi.assessment=band("on_track",95);
+    const {container}=renderMetrics(GoalsProgressSchema.parse(data));
+    const row=container.querySelector('[data-kpi="k-red"]') as HTMLElement;
+    expect(row.querySelector('[data-status="building"]')).not.toBeNull();
+    expect(row.querySelector('[data-status="on_track"]')).toBeNull();
+    expect(row.textContent).toContain("historical reading");
+    expect(row.textContent).toContain("95");
   });
 
   it("shows pending attempts instead of a healthy historical band verdict", () => {
@@ -305,22 +348,40 @@ describe("MetricsBoard", () => {
     expect(goal.querySelector('[data-branch="empty"]')).not.toBeNull();
   });
 
-  it("keeps serving rows beside cards while the goal is expanded and makes each metric one link", () => {
-    const { container } = renderMetrics(fixture());
-    const goal = container.querySelector('[data-goal="goal-a"]') as HTMLElement;
-    const toggle = within(goal).getByRole("button", { name: /KPI red/ });
-    expect(toggle).toHaveAttribute("aria-expanded", "false");
-    expect(goal.querySelector('[data-metric="m-guard-red"]')).not.toBeNull();
+  it("discloses supporting rows only while the KPI is expanded and keeps each metric one link", () => {
+    const {container}=renderMetrics(fixture());
+    const goal=container.querySelector('[data-goal="goal-a"]') as HTMLElement;
+    const toggle=within(goal).getByRole("button",{name:"KPI red"});
+    expect(toggle).toHaveAttribute("aria-expanded","false");
+    expect(goal.querySelector('[data-metric="m-guard-red"]')).toBeNull();
     fireEvent.click(toggle);
-    const row = goal.querySelector('[data-metric="m-guard-red"]') as HTMLElement;
-    const link = within(row).getByRole("link");
-    expect(link).toHaveAttribute("href", "/knowledge/m-guard-red");
+    const row=goal.querySelector('[data-metric="m-guard-red"]') as HTMLElement;
+    const link=within(row).getByRole("link");
+    expect(link).toHaveAttribute("href","/knowledge/m-guard-red");
     expect(link).toHaveTextContent("Failing");
     expect(link).toHaveTextContent("40");
     fireEvent.click(toggle);
-    expect(goal.querySelector('[data-metric="m-guard-red"]')).not.toBeNull();
-    fireEvent.click(within(goal).getAllByRole("button")[0]!);
     expect(goal.querySelector('[data-metric="m-guard-red"]')).toBeNull();
+  });
+
+  it("pages the bounded supporting set in inline pages of20", () => {
+    const data=fixture();
+    const kpi=data.goals.find(goal=>goal.id === "goal-a")!.kpis.find(kpi=>kpi.binding.metricId === "k-red")!;
+    kpi.served=Array.from({length:45},(_,i)=>served(`page-${String(i).padStart(2,"0")}`,"input",null));
+    const {container}=renderMetrics(data);
+    const block=container.querySelector('[data-kpi-block="k-red"]') as HTMLElement;
+    expect(block.querySelectorAll('[data-metric]')).toHaveLength(0);
+    fireEvent.click(within(block).getByRole("button",{name:"KPI red"}));
+    expect(block.querySelectorAll('[data-metric]')).toHaveLength(20);
+    expect(within(block).getByText("1–20 of 45 loaded")).toBeInTheDocument();
+    fireEvent.click(within(block).getByRole("button",{name:"Next"}));
+    expect(block.querySelectorAll('[data-metric]')).toHaveLength(20);
+    expect(within(block).getByText("21–40 of 45 loaded")).toBeInTheDocument();
+    fireEvent.click(within(block).getByRole("button",{name:"Next"}));
+    expect(block.querySelectorAll('[data-metric]')).toHaveLength(5);
+    expect(within(block).getByRole("button",{name:"Next"})).toBeDisabled();
+    fireEvent.click(within(block).getByRole("button",{name:"Previous"}));
+    expect(within(block).getByText("21–40 of 45 loaded")).toBeInTheDocument();
   });
 
   it("shows an unbound invalid band with both warnings", () => {
