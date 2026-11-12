@@ -689,9 +689,10 @@ export function createMetricService(deps: {
 								)
 							: null;
 					const view = selectMetricView(def, latest ? [latest] : [], at);
+					const viewState = row?.rollingUnreadable ? "error" : view.viewState;
 					return {
 						...binding,
-						viewState: view.viewState,
+						viewState,
 						assessment: assessKpi({
 							binding,
 							metric: {
@@ -700,7 +701,7 @@ export function createMetricService(deps: {
 							},
 							latestAttempt: latest,
 							lastGood: good,
-							viewState: view.viewState,
+							viewState,
 							deadline: binding.evaluationAt,
 							evaluation,
 							daily: [],
@@ -1224,16 +1225,26 @@ export function createMetricService(deps: {
 								).catch(() => null)
 							: Promise.resolve(null),
 					]);
+				options?.signal?.throwIfAborted();
 				const settled = <T>(result: PromiseSettledResult<T>): T => {
 					if (result.status === "rejected") throw result.reason;
 					return result.value;
 				};
-				const latest = settled(latestRead);
-				const lastGood = settled(goodRead);
+				const rollingFailed =
+					latestRead.status === "rejected" || goodRead.status === "rejected";
+				if (rollingFailed && !due) {
+					settled(latestRead);
+					settled(goodRead);
+				}
+				const latest =
+					latestRead.status === "fulfilled" ? latestRead.value : null;
+				const lastGood =
+					goodRead.status === "fulfilled" ? goodRead.value : null;
 				const candidate = settled(evaluationRead);
 				const trend = settled(trendRead);
 				const recent = settled(recentRead);
 				const view = selectMetricView(definition, latest ? [latest] : [], at);
+				const viewState = rollingFailed ? "error" : view.viewState;
 				const evaluation =
 					candidate &&
 					compatibleEvidence(candidate, definition, scope, shape) &&
@@ -1250,7 +1261,7 @@ export function createMetricService(deps: {
 					},
 					latestAttempt: view.latestAttempt,
 					lastGood,
-					viewState: view.viewState,
+					viewState,
 					deadline,
 					evaluation,
 					daily: trend?.buckets.slice(-28) ?? [],
@@ -1264,7 +1275,7 @@ export function createMetricService(deps: {
 					recent,
 					baseline,
 					observation: due ? evaluation : view.latestAttempt,
-					viewState: view.viewState,
+					viewState,
 				};
 			} catch {
 				options?.signal?.throwIfAborted();

@@ -367,6 +367,8 @@ export interface MetricObservationsPort {
 		readonly {
 			/** This position failed decoding; siblings retain their positions. */
 			unreadable?: true;
+			/** A rolling observation failed decoding; immutable evidence remains independent. */
+			rollingUnreadable?: true;
 			baseline: MetricSnapshot | null;
 			latest: MetricObservation | null;
 			lastGood: MetricObservation | null;

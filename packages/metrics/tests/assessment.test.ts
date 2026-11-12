@@ -1,37 +1,36 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { DoltgresKnowledgeStoreAdapter } from "../../knowledge-store/src/adapters/doltgres/index";
 import {
 	judgeMoves,
-	pinMoves,
 	type MoveReadingPort,
+	pinMoves,
 } from "../../work-items/src/moves";
-import { createGoalProgressReader, createGoalSource } from "../src/knowledge";
-import { createMetricHttpHandlers } from "../src/http";
-import { readGoalsProgress } from "../src/progress";
-import { readMetricBatch, readMetricBudget } from "../src/adapters/read-budget";
 import { PostgresMetricObservations } from "../src/adapters/postgres";
+import { readMetricBatch, readMetricBudget } from "../src/adapters/read-budget";
+import { createMetricHttpHandlers } from "../src/http";
 import {
-	assessKpi,
 	assessDirection,
-	createWorkMetricReader,
-	createMetricService,
-	metricDefinitionHash,
-	hashMetric,
-	MetricRegistry,
-	type MetricObservationsPort,
-	type MetricView,
-	KpiBindingSchema,
+	assessKpi,
 	bucketObservations,
+	createMetricService,
+	createWorkMetricReader,
+	hashMetric,
 	type KpiAssessmentInput,
+	KpiBindingSchema,
 	type MetricHistory,
 	type MetricObservation,
+	type MetricObservationsPort,
+	MetricRegistry,
+	type MetricView,
+	metricDefinitionHash,
 	metricHistoryRange,
 	selectEvaluation,
 	selectMetricView,
 } from "../src/index";
-
-import { DoltgresKnowledgeStoreAdapter } from "../../knowledge-store/src/adapters/doltgres/index";
+import { createGoalProgressReader, createGoalSource } from "../src/knowledge";
+import { readGoalsProgress } from "../src/progress";
 
 const NOW = new Date("2026-11-02T12:00:00Z");
 const DAY = 86_400_000;
@@ -1476,7 +1475,7 @@ describe("per-metric batch decode isolation", () => {
 					evaluationAt: NOW.toISOString(),
 				})),
 			);
-			expect(rows[1]).toMatchObject({ unreadable: true });
+			expect(rows[1]).toMatchObject({ rollingUnreadable: true });
 			expect(rows[2]?.latest?.metricId).toBe("healthy-c");
 		},
 	);
@@ -1534,18 +1533,29 @@ describe("per-metric batch decode isolation", () => {
 			}));
 			const rows = await store.predictionReadBatch(bindings);
 			expect(rows).toHaveLength(4);
-			expect(rows[1]).toMatchObject({ unreadable: true, evaluation: null });
+			const rollingFailure =
+				field === "latest_observation" || field === "good_observation";
+			expect(rows[1]).toMatchObject(
+				rollingFailure
+					? { rollingUnreadable: true, evaluation: observation("bad") }
+					: { unreadable: true, evaluation: null },
+			);
 			expect(rows[2]?.latest?.metricId).toBe("healthy-c");
 			const results = await service.predictionBatch(bindings);
 			expect(results.map((row) => row.metricId)).toEqual(ids);
-			expect(results[1]?.assessment).toMatchObject({
-				status: "not_measured",
-				reason: "source_failed",
-				observationId: null,
-			});
+			expect(results[1]?.viewState).toBe("error");
+			expect(results[1]?.assessment).toMatchObject(
+				rollingFailure
+					? { status: "met", observationId: observation("bad").id }
+					: {
+							status: "not_measured",
+							reason: "source_failed",
+							observationId: null,
+						},
+			);
 			expect(results.map((row) => row.assessment.status)).toEqual([
 				"met",
-				"not_measured",
+				rollingFailure ? "met" : "not_measured",
 				"met",
 				"met",
 			]);
@@ -1885,7 +1895,7 @@ describe("bound KPI decoder containment", () => {
 				observations,
 				registry,
 				scope: { node: "n", environment: "e", dataScope: "d" },
-				now: () => NOW,
+				now: () => new Date(NOW.getTime() + 3 * 3600000),
 				authorize: async () => true,
 			});
 			const bindings = defs.map((d) => ({
@@ -1899,6 +1909,17 @@ describe("bound KPI decoder containment", () => {
 					? { evaluationAt: fresh.window.end }
 					: {}),
 			}));
+			if (failedRead === "history" || failedRead === "lastGood") {
+				const due = await service.kpi({
+					...bindings[0]!,
+					evaluationAt: fresh.window.end,
+				});
+				expect(due.viewState).toBe("error");
+				expect(due.assessment).toMatchObject({
+					status: "met",
+					observationId: readingFor("bad").id,
+				});
+			}
 			const goalSource = {
 				listGoals: async () => [
 					{
@@ -1949,7 +1970,7 @@ describe("bound KPI decoder containment", () => {
 			expect((subject.body as { kpis: unknown[] }).kpis).toHaveLength(2);
 			const flat = await service.list();
 			expect(flat.items).toHaveLength(2);
-			expect(flat.items[1]?.viewState).toBe("ok");
+			expect(flat.items[1]?.viewState).toBe("stale");
 			if (failedRead === "history" || failedRead === "lastGood")
 				expect(flat.items[0]?.viewState).toBe("error");
 		},

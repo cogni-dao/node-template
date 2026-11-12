@@ -77,7 +77,18 @@ export class PostgresMetricObservations implements MetricObservationsPort {
 		LEFT JOIN LATERAL (SELECT observation FROM metric_observations WHERE scope=${this.key} AND metric_id=r.metric_id AND definition_hash=b.definition_hash AND status='ok' AND observation->'value' IS NOT NULL AND jsonb_typeof(observation->'value')='number' AND evaluation_at <= r.due::timestamptz AND evaluation_at >= r.due::timestamptz - ((b.snapshot->'spec'->>'maxAgeSeconds')::int * interval '1 second') AND CASE WHEN jsonb_path_exists(jsonb_build_object('v',replace(observation->>'observedAt','Z','+00:00')), '$.v.datetime()', '{}'::jsonb, true) THEN (observation->>'observedAt')::timestamptz <= r.due::timestamptz + ((b.snapshot->'spec'->>'maxAgeSeconds')::int * interval '1 second') ELSE true END ORDER BY evaluation_at DESC,id DESC LIMIT 1) e ON true ORDER BY r.ord`,
 		);
 		return rows.map((row) => {
+			let rollingUnreadable = false;
+			const rolling = (value: unknown) => {
+				try {
+					return parseObservation(value);
+				} catch {
+					rollingUnreadable = true;
+					return null;
+				}
+			};
 			try {
+				const latest = rolling(row.latest_observation);
+				const lastGood = rolling(row.good_observation);
 				return {
 					baseline:
 						row.baseline_observation != null
@@ -86,8 +97,9 @@ export class PostgresMetricObservations implements MetricObservationsPort {
 									observation: requiredObservation(row.baseline_observation),
 								})
 							: null,
-					latest: parseObservation(row.latest_observation),
-					lastGood: parseObservation(row.good_observation),
+					latest,
+					lastGood,
+					...(rollingUnreadable ? { rollingUnreadable: true as const } : {}),
 					evaluation: parseObservation(row.evaluation_observation),
 				};
 			} catch {
