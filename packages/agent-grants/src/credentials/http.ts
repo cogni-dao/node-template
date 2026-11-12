@@ -19,6 +19,7 @@
  */
 
 import { z } from "zod";
+import { confirmAgentCredentialOperation } from "../enrollment/protocol";
 
 import {
   CredentialRateLimitedError,
@@ -41,18 +42,7 @@ const pendingKey = z.object({
 export const upgradeAgentCredentialOperation = { id: "agent.credentials.upgrade", output: pendingKey } as const;
 export const rotateAgentCredentialOperation = { id: "agent.credentials.rotate", output: pendingKey } as const;
 
-export const confirmAgentCredentialOperation = {
-  id: "agent.credentials.confirm",
-  output: z.object({
-    userId: z.string().min(1),
-    credentialId: z.string().min(1),
-    status: z.literal("active"),
-    /** True when the credential was already active (a replayed confirm). */
-    replay: z.boolean(),
-    expiresAt: z.string().min(1),
-    renewUntil: z.string().min(1),
-  }),
-} as const;
+export { confirmAgentCredentialOperation } from "../enrollment/protocol";
 
 export const revokeAgentCredentialOperation = {
   id: "agent.credentials.revoke",

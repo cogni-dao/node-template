@@ -219,22 +219,13 @@ export const agentCredentials = pgTable(
 ).enableRLS();
 
 /** Service-only rollout/maintenance state. History purge requires a separate qualified cutover, never this migration. */
-export const agentAuthorityMaintenance = pgTable(
-  "agent_authority_maintenance",
-  {
-    id: text("id").primaryKey(),
-    backfillReady: boolean("backfill_ready").notNull().default(false),
-    purgeEnabled: boolean("purge_enabled").notNull().default(false),
-    minimumReaderBuild: text("minimum_reader_build"),
-    nextRunAt: timestamp("next_run_at", { withTimezone: true })
-      .notNull()
-      .defaultNow(),
-    oldestDueAt: timestamp("oldest_due_at", { withTimezone: true }),
-  },
-  (table) => [
-    check(
-      "agent_authority_purge_qualified",
-      sql`NOT ${table.purgeEnabled} OR (${table.backfillReady} AND ${table.minimumReaderBuild} IS NOT NULL)`
-    ),
-  ]
-).enableRLS();
+export const agentAuthorityMaintenance = pgTable("agent_authority_maintenance", {
+  id: text("id").primaryKey(),
+  backfillReady: boolean("backfill_ready").notNull().default(false),
+  purgeEnabled: boolean("purge_enabled").notNull().default(false),
+  minimumReaderBuild: text("minimum_reader_build"),
+  nextRunAt: timestamp("next_run_at", { withTimezone: true }).notNull().defaultNow(),
+  oldestDueAt: timestamp("oldest_due_at", { withTimezone: true }),
+  cursorExpiresAt: timestamp("cursor_expires_at", { withTimezone: true }),
+  cursorEnrollmentId: uuid("cursor_enrollment_id"),
+}, (table) => [check("agent_authority_purge_qualified", sql`NOT ${table.purgeEnabled} OR (${table.backfillReady} AND ${table.minimumReaderBuild} IS NOT NULL)`)]).enableRLS();

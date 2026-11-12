@@ -3,6 +3,8 @@
 
 /** Called only inside the existing authority maintenance lease/transaction; no separate scheduler or audit purge. */
 import type { SqlTag } from "../../postgres";
+import type { CredentialSql } from "../../credentials/postgres";
+import { runBoundedMaintenance } from "../maintenance";
 export async function maintainRequesterCustody(tx: SqlTag): Promise<void> {
   // No staged reference and no confirm authorization: safe pre-key expiration, serialized with stage by the operation row lock.
   await tx`WITH batch AS (SELECT operation_id FROM agent_service_link_operations WHERE encrypted_secrets IS NOT NULL
@@ -26,14 +28,14 @@ export async function maintainRequesterCustody(tx: SqlTag): Promise<void> {
     await tx`UPDATE agent_service_link_operations SET encrypted_secrets=NULL,phase='expired',state=${JSON.stringify({ ...state, phase: "expired", nextAction: "none" })}::text::jsonb,
       revision=revision+1,fence=fence+1,lease_owner=NULL,lease_until=NULL,terminal_at=COALESCE(terminal_at,clock_timestamp()) WHERE operation_id=${row.operation_id}`;
   }
-  // Delivery material has logical deadlines even with audit purge disabled. Identity/high-water/confirmation/consent remain untouched.
-  await tx`WITH batch AS (SELECT id FROM agent_service_enrollments WHERE operation_id IS NOT NULL AND sealed_acceptance IS NOT NULL
-    AND expires_at<=clock_timestamp() ORDER BY expires_at,id LIMIT 20 FOR UPDATE SKIP LOCKED)
-    UPDATE agent_service_enrollments e SET sealed_acceptance=NULL FROM batch WHERE e.id=batch.id`;
-  await tx`WITH batch AS (SELECT id FROM agent_service_enrollments WHERE operation_id IS NOT NULL AND sealed_pending_key IS NOT NULL
-    AND (pending_expires_at<=clock_timestamp() OR historical_confirmed_at IS NOT NULL OR status<>'open') ORDER BY pending_expires_at,id LIMIT 20 FOR UPDATE SKIP LOCKED)
-    UPDATE agent_service_enrollments e SET sealed_pending_key=NULL FROM batch WHERE e.id=batch.id`;
-  await tx`WITH batch AS (SELECT subject,kind,hour FROM agent_service_quotas WHERE hour<floor(extract(epoch FROM clock_timestamp())/3600)::bigint-1
-    ORDER BY hour,subject,kind LIMIT 20 FOR UPDATE SKIP LOCKED)
-    DELETE FROM agent_service_quotas q USING batch WHERE q.subject=batch.subject AND q.kind=batch.kind AND q.hour=batch.hour`;
+}
+
+/** Requester-only consumers call this from their existing maintenance driver. No provider tables or extra scheduler/lease are required. */
+export async function requesterMaintenanceTick(client: CredentialSql): Promise<boolean> {
+  return runBoundedMaintenance(client, async (tx) => {
+    const role = await tx`SELECT (rolbypassrls OR rolsuper) AS bypass FROM pg_roles WHERE rolname=current_user`;
+    if (role[0]?.bypass !== true) throw new Error("requester_service_role_required");
+    await maintainRequesterCustody(tx);
+    return true;
+  }, false);
 }

@@ -24,6 +24,7 @@ import {
 } from "../protocol";
 import { openSealed } from "../seal";
 import { custodyAad, fromBase64, toBase64 } from "./cipher";
+import { admitEnrollmentTarget } from "./admission";
 import {
   type CustodyCipher,
   type LeaseGuard,
@@ -63,6 +64,7 @@ const hash = async (text: string): Promise<string> =>
   ).join("");
 export interface EnrollmentRequesterOptions {
   signer: EnrollmentProofSigner;
+  fetch?: typeof fetch;
   transport: Pick<
     EnrollmentTransport,
     "postProof" | "pollToken" | "confirmStaged"
@@ -293,6 +295,8 @@ export function createEnrollmentRequester(options: EnrollmentRequesterOptions) {
   }
   return {
     async ensure(key: ConnectionKey) {
+      key = connectionKeySchema.parse(key);
+      await admitEnrollmentTarget(key, options.fetch);
       return linkView(await store.reserve(await draft(key)));
     },
     async reenroll(handle: LinkHandle, expectedRevision: number) {
@@ -304,6 +308,7 @@ export function createEnrollmentRequester(options: EnrollmentRequesterOptions) {
         !store.replace
       )
         throw new Error("link_revision_conflict");
+      await admitEnrollmentTarget(handle.key, options.fetch);
       const result = await store.replace(
         handle,
         expectedRevision,

@@ -47,7 +47,8 @@ describe("agent service enrollments (real Postgres)", () => {
   const cleanup = async () => {
     const ids = (await service`SELECT user_id FROM agent_principals WHERE service_key IS NOT NULL`).map((r) => r.user_id as string);
     await service`DELETE FROM agent_service_enrollments`;
-    await service`UPDATE agent_authority_maintenance SET next_run_at = clock_timestamp(), oldest_due_at = NULL WHERE id = 'service-enrollment'`;
+    await service`UPDATE agent_authority_maintenance SET next_run_at = clock_timestamp(), oldest_due_at = NULL,
+      cursor_expires_at = NULL, cursor_enrollment_id = NULL WHERE id = 'service-enrollment'`;
     if (ids.length === 0) return;
     await service`DELETE FROM agent_credentials WHERE user_id = ANY(${ids}::text[])`;
     await service`DELETE FROM agent_roles WHERE principal_user_id = ANY(${ids}::text[]) OR requested_by = ANY(${ids}::text[])`;
@@ -225,7 +226,9 @@ describe("agent service enrollments (real Postgres)", () => {
             const pending = tx(strings, ...values) as ReturnType<SqlTag> & { cancel: () => void };
             const result = (async () => {
             const rows = await pending;
-            if (!paused && strings.join("?").includes("SELECT id, principal_user_id FROM agent_service_enrollments")) {
+            const query = strings.join("?");
+            if (!paused && /SELECT\s+id,\s*principal_user_id,\s*expires_at::text AS cursor_expires_at\s+FROM\s+agent_service_enrollments/i.test(query)
+                && rows.some((row) => row.principal_user_id === enrollment.principalUserId)) {
               paused = true; selected(); await resumed;
             }
             return rows;
@@ -490,6 +493,35 @@ describe("agent service enrollments (real Postgres)", () => {
       expect(await grants.restoreRevoked?.({ principalUserId: last, scope, approvedBy: admin })).toBe(true);
       expect(await grants.hasLiveRole(last, scope)).toBe(true);
     });
+
+    it("rotates past twenty locked identities to the unlocked twenty-first", async () => {
+      await enrollmentHarness.setup();
+      const prefix = `cursor-${randomUUID()}`;
+      await service`INSERT INTO users (id, name)
+        SELECT ${prefix} || '-' || n, 'cursor fixture' FROM generate_series(1, 21) AS n`;
+      await service`INSERT INTO agent_principals (user_id, kind, service_key)
+        SELECT ${prefix} || '-' || n, 'external', ${prefix} || '#' || n FROM generate_series(1, 21) AS n`;
+      await service`INSERT INTO agent_service_enrollments
+        (jti, issuer, service, principal_user_id, scope, device_code_hash, cnf_jwk, expires_at)
+        SELECT gen_random_uuid(), 'https://home.example', 'cursor', ${prefix} || '-' || n, 'knowledge:read',
+          ${prefix} || '-hash-' || n,
+          '{"kty":"OKP","crv":"X25519","x":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}',
+          clock_timestamp() - interval '2 hours' + n * interval '1 second'
+        FROM generate_series(1, 21) AS n`;
+      await service.begin(async (tx) => {
+        for (let i = 1; i <= 20; i++) await tx`SELECT pg_advisory_xact_lock(hashtext(${`${prefix}-${i}`}))`;
+        const start = Date.now();
+        expect(await maintenanceTick(client())).toEqual({ processed: 0, due: true });
+        await service`UPDATE agent_authority_maintenance SET next_run_at = clock_timestamp() WHERE id = 'service-enrollment'`;
+        expect(await maintenanceTick(client())).toEqual({ processed: 1, due: true });
+        expect(Date.now() - start).toBeLessThan(4000);
+        expect((await service`SELECT status FROM agent_service_enrollments WHERE principal_user_id = ${`${prefix}-21`}`)[0]?.status).toBe("expired");
+        expect((await service`SELECT count(*)::int AS n FROM agent_service_enrollments
+          WHERE principal_user_id LIKE ${`${prefix}-%`} AND status = 'open'`)[0]?.n).toBe(20);
+      });
+      await service`UPDATE agent_authority_maintenance SET next_run_at = clock_timestamp() WHERE id = 'service-enrollment'`;
+      expect(await maintenanceTick(client())).toEqual({ processed: 20, due: false });
+    }, 15000);
 
     it("skips a locked first identity and still maintains another identity and creates an unrelated enrollment", async () => {
       const setup = await enrollmentHarness.setup();

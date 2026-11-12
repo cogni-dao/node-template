@@ -7,6 +7,7 @@ import { REVOCABLE_KEY_SCAN_PATTERN } from "../../credentials/key-format";
 import { readBoundedText } from "../client/bounded-body";
 import { type ConnectionKey, canonicalJson } from "../protocol";
 import type { createEnrollmentRequester } from "./service";
+import { EnrollmentAdmissionError } from "./admission";
 import type { LinkHandle, RequesterStore, RequesterVault } from "./types";
 export const serviceLinkCreateInput = z.strictObject({
   targetAlias: z.string().regex(/^[a-z0-9-]{1,63}$/),
@@ -48,33 +49,6 @@ export function createServiceLinkHandlers(host: ServiceLinkHost) {
       const parsed = serviceLinkCreateInput.safeParse(input);
       if (!parsed.success) return answer(400, { error: "invalid_input" });
       const key = host.keyForAlias(parsed.data.targetAlias);
-      const res = await (host.fetch ?? fetch)(
-        new URL("/.well-known/agent.json", key.target.origin),
-        {
-          method: "GET",
-          redirect: "manual",
-          signal: AbortSignal.timeout(10000),
-          headers: { accept: "application/json" },
-        }
-      );
-      const text = await readBoundedText(res, 64 * 1024);
-      if (!res.ok || !text.ok)
-        return answer(503, { error: "target_unavailable" });
-      const discovery = JSON.parse(text.text);
-      if (
-        discovery.nodeId !== key.target.nodeId ||
-        canonicalJson(discovery.serviceEnrollment?.receiver) !==
-          canonicalJson(key.target) ||
-        discovery.serviceEnrollment?.protocol !== "service.enrollment.v2"
-      )
-        return answer(503, { error: "target_identity_mismatch" });
-      const ceilings = z.strictObject({
-        ttlSec: z.number().int().positive().max(30 * 86400),
-        renewWindowSec: z.number().int().nonnegative().max(14 * 86400),
-        pendingSec: z.number().int().positive().max(15 * 60),
-      }).safeParse(discovery.serviceEnrollment?.credentialCeilings);
-      if (!ceilings.success)
-        return answer(503, { error: "unsupported_credential_policy" });
       if (parsed.data.replace) {
         const h = await handle(parsed.data.replace.linkId);
         if (!h || canonicalJson(h.key) !== canonicalJson(key))
@@ -87,11 +61,17 @@ export function createServiceLinkHandlers(host: ServiceLinkHost) {
               parsed.data.replace.expectedRevision
             )
           );
-        } catch {
+        } catch (error) {
+          if (error instanceof EnrollmentAdmissionError) return answer(503, { error: error.code });
           return answer(409, { error: "link_revision_conflict" });
         }
       }
-      return answer(200, await host.requester.ensure(key));
+      try {
+        return answer(200, await host.requester.ensure(key));
+      } catch (error) {
+        if (error instanceof EnrollmentAdmissionError) return answer(503, { error: error.code });
+        throw error;
+      }
     },
     async read(
       id: string,

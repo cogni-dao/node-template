@@ -68,6 +68,7 @@ ALTER TABLE "agent_service_link_operations" ADD CONSTRAINT "agent_service_link_o
 CREATE UNIQUE INDEX "agent_service_links_identity_unique" ON "agent_service_link_operations" USING btree ("home_node_id","home_environment","home_origin","service","billing_account_id","target_node_id","target_environment","target_origin") WHERE "agent_service_link_operations"."current";--> statement-breakpoint
 CREATE UNIQUE INDEX "agent_service_links_key_unique" ON "agent_service_link_operations" USING btree ("key_digest") WHERE "agent_service_link_operations"."current";--> statement-breakpoint
 CREATE INDEX "agent_service_links_due_idx" ON "agent_service_link_operations" USING btree ("next_attempt_at","operation_id");--> statement-breakpoint
+CREATE INDEX "agent_service_links_staged_expiry_idx" ON "agent_service_link_operations" USING btree ("secret_deadline","operation_id") WHERE "agent_service_link_operations"."staged_connection_id" IS NOT NULL AND COALESCE("agent_service_link_operations"."state"->>'quarantined','false') <> 'true' AND "agent_service_link_operations"."phase" <> 'expired';--> statement-breakpoint
 CREATE INDEX "agent_service_links_secret_idx" ON "agent_service_link_operations" USING btree ("secret_deadline","operation_id") WHERE "agent_service_link_operations"."encrypted_secrets" IS NOT NULL;--> statement-breakpoint
 CREATE UNIQUE INDEX "agent_service_quotas_bucket_unique" ON "agent_service_quotas" USING btree ("subject","kind","hour");--> statement-breakpoint
 CREATE INDEX "agent_service_quotas_hour_idx" ON "agent_service_quotas" USING btree ("hour");--> statement-breakpoint
@@ -83,7 +84,7 @@ CREATE UNIQUE INDEX "connections_service_ready_unique" ON "connections" USING bt
 CREATE UNIQUE INDEX "connections_billing_account_provider_active_idx" ON "connections" USING btree ("billing_account_id","provider") WHERE "connections"."revoked_at" IS NULL AND "connections"."provider" <> 'cogni-node';--> statement-breakpoint
 ALTER TABLE "connections" ADD CONSTRAINT "connections_provider_check" CHECK ("connections"."provider" IN ('openai-chatgpt', 'openai-compatible', 'github', 'google', 'bluesky', 'cogni-node'));
 --> statement-breakpoint
--- V2 custom triggers and forced RLS; provider guard repairs remain in force.
+-- V2 custom RLS and guards; retained provider fixes remain in force.
 ALTER TABLE agent_service_link_operations FORCE ROW LEVEL SECURITY;
 --> statement-breakpoint
 ALTER TABLE agent_service_quotas FORCE ROW LEVEL SECURITY;

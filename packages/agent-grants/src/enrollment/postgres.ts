@@ -35,7 +35,7 @@ import {
   type ServiceEnrollmentCnfJwk,
   serviceEnrollmentCnfJwk,
 } from "./claims";
-import { createDurableProviderStore } from "./durable-provider";
+import { createDurableProviderStore, type DurableProviderOptions } from "./durable-provider";
 import { maintenanceTick } from "./maintenance";
 import type {
   CreateEnrollmentRefusal,
@@ -44,7 +44,7 @@ import type {
   PollOutcome,
 } from "./types";
 
-export interface PostgresEnrollmentStoreOptions {
+export interface PostgresEnrollmentStoreOptions extends DurableProviderOptions {
   /** @deprecated Ignored: identity and service marking are retained permanently. */
   readonly unredeemedPrincipalSec?: number;
 }
@@ -334,5 +334,5 @@ export function createPostgresEnrollmentStore(
       return result as PollOutcome;
     },
   };
-  return { ...store, ...createDurableProviderStore(client) };
+  return { ...store, ...createDurableProviderStore(client, options) };
 }

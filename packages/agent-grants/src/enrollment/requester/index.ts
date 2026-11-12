@@ -13,8 +13,9 @@ export {
   type NodeTuple,
 } from "../protocol";
 export * from "./cipher";
+export * from "./admission";
 export * from "./http";
-export { maintainRequesterCustody } from "./maintenance";
+export { maintainRequesterCustody, requesterMaintenanceTick } from "./maintenance";
 export * from "./postgres";
 export * from "./service";
 export * from "./types";

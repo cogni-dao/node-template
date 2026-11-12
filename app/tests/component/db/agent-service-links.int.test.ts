@@ -4,6 +4,7 @@
 /** Real migration/locks/custody/crash fixtures. CI only; no local SQL prerequisite. */
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
 import {
@@ -31,6 +32,7 @@ import {
   createEnrollmentProofSigner,
   createEnrollmentRequester,
   createPostgresRequesterCustody,
+  requesterMaintenanceTick,
 } from "@cogni/agent-grants/enrollment-requester";
 import {
   COGNI_SYSTEM_BILLING_ACCOUNT_ID,
@@ -60,6 +62,10 @@ const key: ConnectionKey = {
   service: "node-ai",
   billingAccountId: COGNI_SYSTEM_BILLING_ACCOUNT_ID,
 };
+const discoveryFetch: typeof fetch = async () => Response.json({ nodeId: target.nodeId, serviceEnrollment: {
+  protocol: ENROLLMENT_PROTOCOL, receiver: target, credentialCeilings: { ttlSec: 2592000, renewWindowSec: 1209600, pendingSec: 900 },
+} });
+
 let container: StartedPostgreSqlContainer, db: Sql, second: Sql;
 const client = () => db as unknown as CredentialSql;
 const creds = () =>
@@ -257,7 +263,7 @@ describe("v2 enrollment and requester SQL", () => {
       confirmStaged: async () => ({ status: 503 }),
     };
     const first = custody(),
-      r = createEnrollmentRequester({ ...first, cipher, signer, transport });
+      r = createEnrollmentRequester({ ...first, cipher, signer, transport, fetch: discoveryFetch });
     const [a, b] = await Promise.all([r.ensure(key), r.ensure(key)]);
     expect(a.linkId).toBe(b.linkId);
     const h = { operationId: a.linkId, key },
@@ -297,7 +303,7 @@ describe("v2 enrollment and requester SQL", () => {
       readReadyConnection: async () => null,
     });
     const requester = createEnrollmentRequester({
-      ...custody, cipher, signer: createEnrollmentProofSigner({ kid: "fixture", key: signing.privateKey }),
+      ...custody, cipher, fetch: discoveryFetch, signer: createEnrollmentProofSigner({ kid: "fixture", key: signing.privateKey }),
       transport: {
         postProof: async () => { throw new Error("unused"); },
         pollToken: async () => ({ kind: "authorization_pending" as const }),
@@ -335,6 +341,69 @@ describe("v2 enrollment and requester SQL", () => {
     const connection = await db`SELECT service_state FROM connections WHERE id=${connectionId}`;
     expect(connection[0]?.service_state).toBe("staged");
     expect((await custody.store.read(handle))?.state.phase).toBe("confirm_unknown");
+  }, 10000);
+
+  it("verified legacy tuple reconciliation preserves the marker, user and grant and refuses ambiguous environments", async () => {
+    const { proof } = await proofAt();
+    const user = randomUUID(), admin = randomUUID(), role = randomUUID();
+    const marker = `${home.origin}#node-ai`;
+    await db`INSERT INTO users(id,name) VALUES(${user},'legacy service'),(${admin},'legacy admin')`;
+    await db`INSERT INTO agent_principals(kind,user_id,service_key) VALUES('external',${user},${marker})`;
+    await db`INSERT INTO agent_roles(id,principal_user_id,scope,approved_by,granted_at) VALUES(${role},${user},'knowledge:read',${admin},clock_timestamp())`;
+    await db`INSERT INTO agent_service_enrollments(jti,issuer,service,principal_user_id,scope,device_code_hash,cnf_jwk,expires_at,status)
+      VALUES(${randomUUID()},${home.origin},'node-ai',${user},'knowledge:read',${randomUUID()},${JSON.stringify(proof.cnf.jwk)}::text::jsonb,clock_timestamp()-interval '1 day','expired')`;
+    const legacyCredential = await db`INSERT INTO agent_credentials(user_id,token_hash,created_from,issued_at,pending_expires_at,expires_at,renew_until,confirmed_at)
+      VALUES(${user},${await hashAgentKey('legacy-key')},'key_upgrade',clock_timestamp(),clock_timestamp()+interval '1 minute',clock_timestamp()+interval '1 day',clock_timestamp()+interval '2 days',clock_timestamp()) RETURNING id`;
+    const digest = await hashAgentKey("legacy-start");
+    expect(await provider().acceptProof(proof,digest)).toMatchObject({ok:false,reason:"intent_conflict"});
+    const ambiguous = createDurableProviderStore(client(), { legacyHomes: [
+      {home,services:['node-ai']},{home:{...home,environment:'production'},services:['node-ai']},
+    ] });
+    expect(await ambiguous.acceptProof(proof,digest)).toMatchObject({ok:false,reason:"intent_conflict"});
+    const mapped = createDurableProviderStore(client(), {legacyHomes:[{home,services:['node-ai']}]});
+    expect(await mapped.acceptProof(proof,digest)).toMatchObject({ok:true,principalUserId:user,principalCreated:false});
+    expect(await creds().lookup(await hashAgentKey('legacy-key'))).toMatchObject({credentialId:legacyCredential[0]?.id,userId:user,state:'active'});
+    const principal = await db`SELECT user_id,service_key,home_node_id,home_environment,home_origin,home_service FROM agent_principals WHERE user_id=${user}`;
+    expect(principal[0]).toMatchObject({user_id:user,service_key:marker,home_node_id:home.nodeId,home_environment:home.environment,home_origin:home.origin,home_service:'node-ai'});
+    expect((await db`SELECT id,approved_by FROM agent_roles WHERE principal_user_id=${user} AND scope='knowledge:read'`)).toEqual([expect.objectContaining({id:role,approved_by:admin})]);
+    expect((await db`SELECT user_id FROM agent_principals WHERE home_node_id=${home.nodeId} AND home_environment=${home.environment} AND home_origin=${home.origin} AND home_service='node-ai'`)).toHaveLength(1);
+    // A different operation using the verified tuple reaches this same retained identity even without a legacy mapping.
+    expect(await provider().acceptProof(proof,digest)).toMatchObject({ok:true,principalUserId:user,principalCreated:false});
+  });
+
+  it("staged expiry uses its partial deadline index across terminal retained history", async () => {
+    const connection = randomUUID();
+    await db`INSERT INTO connections(id,billing_account_id,provider,credential_type,encrypted_credentials,encryption_key_id,created_by_user_id,service_state)
+      VALUES(${connection},${key.billingAccountId},'cogni-node','api_key',${Buffer.from('fixture')},'fixture',${COGNI_SYSTEM_PRINCIPAL_USER_ID},'staged')`;
+    await db`INSERT INTO agent_service_link_operations(operation_id,key_digest,home_node_id,home_environment,home_origin,service,billing_account_id,target_node_id,target_environment,target_origin,generation,phase,current,state,secret_deadline,staged_connection_id)
+      SELECT gen_random_uuid(),'terminal-'||n,${home.nodeId},${home.environment},${home.origin},'node-ai',${key.billingAccountId},${target.nodeId},${target.environment},${target.origin},n,'expired',false,'{}'::jsonb,clock_timestamp()-interval '1 day',${connection}
+      FROM generate_series(1,5000) n`;
+    await db`INSERT INTO agent_service_link_operations(operation_id,key_digest,home_node_id,home_environment,home_origin,service,billing_account_id,target_node_id,target_environment,target_origin,generation,phase,current,state,secret_deadline,staged_connection_id)
+      VALUES(gen_random_uuid(),'staged-due',${home.nodeId},${home.environment},${home.origin},'node-ai',${key.billingAccountId},${target.nodeId},${target.environment},${target.origin},5001,'confirm_unknown',false,'{}'::jsonb,clock_timestamp()-interval '1 minute',${connection})`;
+    await db`ANALYZE agent_service_link_operations`;
+    const plan = await db`EXPLAIN (FORMAT JSON) SELECT operation_id,state,staged_connection_id FROM agent_service_link_operations
+      WHERE staged_connection_id IS NOT NULL AND secret_deadline<=clock_timestamp() AND COALESCE(state->>'quarantined','false')<>'true' AND phase<>'expired'
+      ORDER BY secret_deadline,operation_id LIMIT 20 FOR UPDATE SKIP LOCKED`;
+    expect(JSON.stringify(plan)).toContain('agent_service_links_staged_expiry_idx');
+  }, 10000);
+
+  it("the requester-only template and bounded maintenance need no provider tables", async () => {
+    await db.unsafe('CREATE DATABASE requester_only_fixture');
+    const uri = new URL(container.getConnectionUri());
+    uri.pathname = '/requester_only_fixture';
+    const requesterOnly = postgres(uri.toString(), {max:2});
+    try {
+      // Host prerequisites only. The published requester template supplies its own operations table and connection delta.
+      await requesterOnly.unsafe(`CREATE TABLE billing_accounts(id text PRIMARY KEY);
+        CREATE TABLE connections(id uuid PRIMARY KEY, billing_account_id text NOT NULL REFERENCES billing_accounts(id), provider text NOT NULL,
+          credential_type text NOT NULL, encrypted_credentials bytea NOT NULL, encryption_key_id text NOT NULL, created_by_user_id text NOT NULL,
+          revoked_at timestamptz, CONSTRAINT connections_provider_check CHECK(provider IN ('github')));
+        CREATE UNIQUE INDEX connections_billing_account_provider_active_idx ON connections(billing_account_id,provider) WHERE revoked_at IS NULL;`).simple();
+      const template = await readFile(resolve('../packages/agent-grants/migrations/agent_service_requester.sql'),'utf8');
+      await requesterOnly.begin(async (tx) => { await tx.unsafe(template).simple(); });
+      expect((await requesterOnly`SELECT to_regclass('agent_service_enrollments') AS provider,to_regclass('agent_authority_maintenance') AS lease`)[0]).toMatchObject({provider:null,lease:null});
+      expect(await requesterMaintenanceTick(requesterOnly as unknown as CredentialSql)).toBe(true);
+    } finally { await requesterOnly.end({timeout:1}); }
   }, 10000);
 
 });

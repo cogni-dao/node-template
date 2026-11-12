@@ -18,6 +18,7 @@
 
 import { CredentialStoreUnavailableError, type CredentialSql } from "@cogni/agent-grants/credentials";
 import { createPostgresEnrollmentStore, type EnrollmentStore } from "@cogni/agent-grants/enrollment";
+import { serviceTrustedHomes } from "./service-links";
 import { getContainer, resolveServiceDb } from "@/bootstrap/container";
 import { extractEdgeClientIp, TokenBucketRateLimiter } from "@/bootstrap/http/rateLimiter";
 
@@ -26,7 +27,11 @@ let store: EnrollmentStore | undefined;
 /** A missing or broken service connection is an outage (503). */
 export function getAgentEnrollmentStore(): EnrollmentStore {
   try {
-    store ??= createPostgresEnrollmentStore(resolveServiceDb().$client as unknown as CredentialSql);
+    store ??= createPostgresEnrollmentStore(resolveServiceDb().$client as unknown as CredentialSql, {
+      legacyHomes: serviceTrustedHomes().filter((home) => home.reconcileLegacy === true).map((home) => ({
+        home: { nodeId: home.nodeId, environment: home.environment, origin: home.origin }, services: Object.keys(home.services),
+      })),
+    });
   } catch (cause) {
     throw new CredentialStoreUnavailableError(cause);
   }

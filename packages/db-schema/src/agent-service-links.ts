@@ -79,6 +79,9 @@ export const agentServiceLinkOperations = pgTable(
       .on(t.keyDigest)
       .where(sql`${t.current}`),
     index("agent_service_links_due_idx").on(t.nextAttemptAt, t.operationId),
+    index("agent_service_links_staged_expiry_idx")
+      .on(t.secretDeadline, t.operationId)
+      .where(sql`${t.stagedConnectionId} IS NOT NULL AND COALESCE(${t.state}->>'quarantined','false') <> 'true' AND ${t.phase} <> 'expired'`),
     index("agent_service_links_secret_idx")
       .on(t.secretDeadline, t.operationId)
       .where(sql`${t.encryptedSecrets} IS NOT NULL`),

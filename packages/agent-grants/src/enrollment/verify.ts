@@ -100,12 +100,17 @@ export function createEnrollmentTokenVerifier(
   return async (token) => {
     if (token.length === 0 || token.length > MAX_TOKEN_CHARS) return INVALID;
     let issuer: unknown;
+    let unverifiedHome: unknown;
     try {
-      issuer = decodeJwt(token).iss;
+      const unverified = decodeJwt(token);
+      issuer = unverified.iss;
+      unverifiedHome = unverified.home;
     } catch {
       return INVALID;
     }
-    const home = options.homes.find((h) => h.origin === issuer);
+    const tuple = unverifiedHome as Partial<NodeTuple> | null;
+    const matching = options.homes.filter((h) => h.origin === issuer && h.nodeId === tuple?.nodeId && h.environment === tuple?.environment && h.origin === tuple?.origin);
+    const home = matching.length === 1 ? matching[0] : undefined;
     if (!home) return INVALID;
     try {
       const currentDate = now();

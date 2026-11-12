@@ -36,6 +36,16 @@ export function serviceHomeTuple() {
     origin: env.SERVICE_ENROLLMENT_ORIGIN,
   });
 }
+/** Owner-reviewed trust tuples. Legacy reconciliation is explicit and ambiguous origin/service mappings are refused by the store. */
+export function serviceTrustedHomes() {
+  const raw = serverEnv().SERVICE_ENROLLMENT_TRUSTED_HOMES;
+  if (!raw) throw new Error("trusted_home_configuration_unavailable");
+  return z.array(nodeTupleSchema.extend({
+    kids: z.array(z.string().min(1)).min(1),
+    services: z.record(z.string(), z.array(z.string()).min(1)),
+    reconcileLegacy: z.boolean().optional(),
+  })).min(1).max(25).parse(JSON.parse(raw));
+}
 export function serviceTargetRegistry() {
   const raw = serverEnv().SERVICE_LINK_TARGETS;
   if (!raw) throw new Error("service_registry_unavailable");
@@ -92,10 +102,11 @@ export async function serviceSigner() {
 let composed: Promise<Awaited<ReturnType<typeof compose>>> | undefined;
 async function compose() {
   const encoded = serverEnv().CONNECTIONS_ENCRYPTION_KEY;
-  if (!encoded || !/^[0-9a-fA-F]{64}$/.test(encoded))
-    throw new Error("service_vault_unavailable");
+  if (!encoded) throw new Error("service_vault_unavailable");
+  const bytes = /^[0-9a-fA-F]{64}$/.test(encoded) ? Buffer.from(encoded, "hex") : Buffer.from(encoded, "base64");
+  if (bytes.length !== 32) throw new Error("service_vault_unavailable");
   const cipher = createCustodyCipher(
-    Uint8Array.from(Buffer.from(encoded, "hex")),
+    Uint8Array.from(bytes),
     "connections-v2"
   );
   const client = resolveServiceDb().$client as unknown as CredentialSql;

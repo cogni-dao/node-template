@@ -1,0 +1,2 @@
+ALTER TABLE "agent_authority_maintenance" ADD COLUMN "cursor_expires_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "agent_authority_maintenance" ADD COLUMN "cursor_enrollment_id" uuid;

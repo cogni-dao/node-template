@@ -186,7 +186,7 @@ export async function register(): Promise<void> {
   }
 
   // This existing process owns the one package maintenance lease. No workflow or additional DB pool.
-  const { maintenanceTick } = await import("@cogni/agent-grants/enrollment");
+  const { maintenanceTick, maintainEnrollmentDelivery } = await import("@cogni/agent-grants/enrollment");
   const { maintainRequesterCustody } = await import("@cogni/agent-grants/enrollment-requester");
   const { getServiceDb } = await import(
     "@/adapters/server/db/drizzle.service-client"
@@ -202,7 +202,10 @@ export async function register(): Promise<void> {
       const outcome = await maintenanceTick(
         getServiceDb()
           .$client as unknown as import("@cogni/agent-grants/credentials").CredentialSql,
-        maintainRequesterCustody
+        async (tx) => {
+          await maintainRequesterCustody(tx);
+          await maintainEnrollmentDelivery(tx);
+        }
       );
       if (outcome.due)
         maintenanceLogger.warn(

@@ -182,3 +182,17 @@ export const enrollmentReplySchema = z.strictObject({
   observedAt: z.string().datetime(),
 });
 export type EnrollmentReply = z.infer<typeof enrollmentReplySchema>;
+
+/** Pure confirmation wire contract shared by provider HTTP and storage-free clients. */
+export const confirmAgentCredentialOperation = {
+  id: "agent.credentials.confirm",
+  output: z.object({
+    userId: z.string().min(1),
+    credentialId: z.string().min(1),
+    status: z.literal("active"),
+    /** True when the credential was already active (a replayed confirm). */
+    replay: z.boolean(),
+    expiresAt: z.string().min(1),
+    renewUntil: z.string().min(1),
+  }),
+} as const;

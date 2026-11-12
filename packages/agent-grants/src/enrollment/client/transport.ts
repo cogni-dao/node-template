@@ -19,7 +19,7 @@
  */
 
 import { z } from "zod";
-import { confirmAgentCredentialOperation } from "../../credentials/http";
+import { confirmAgentCredentialOperation } from "../protocol";
 import {
   pollServiceEnrollmentOperation,
   requestServiceEnrollmentOperation,

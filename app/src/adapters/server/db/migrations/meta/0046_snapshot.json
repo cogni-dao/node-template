@@ -1,5 +1,5 @@
 {
-  "id": "6ae71bf9-279a-48e7-b553-8c5b3bb062df",
+  "id": "ac7cbaa2-9538-4498-b1a4-9293c0c34021",
   "prevId": "661d3d57-bcfc-4d2d-aa38-f181f027657b",
   "version": "7",
   "dialect": "postgresql",
@@ -44,6 +44,18 @@
         "oldest_due_at": {
           "name": "oldest_due_at",
           "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cursor_expires_at": {
+          "name": "cursor_expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cursor_enrollment_id": {
+          "name": "cursor_enrollment_id",
+          "type": "uuid",
           "primaryKey": false,
           "notNull": false
         }
@@ -353,19 +365,6 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "agent_credentials_service_operation_id_agent_service_enrollments_operation_id_fk": {
-          "name": "agent_credentials_service_operation_id_agent_service_enrollments_operation_id_fk",
-          "tableFrom": "agent_credentials",
-          "tableTo": "agent_service_enrollments",
-          "columnsFrom": [
-            "service_operation_id"
-          ],
-          "columnsTo": [
-            "operation_id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
         "agent_credentials_predecessor_id_fk": {
           "name": "agent_credentials_predecessor_id_fk",
           "tableFrom": "agent_credentials",
@@ -421,43 +420,6 @@
         "service_key": {
           "name": "service_key",
           "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "home_node_id": {
-          "name": "home_node_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "home_environment": {
-          "name": "home_environment",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "home_origin": {
-          "name": "home_origin",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "home_service": {
-          "name": "home_service",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "current_generation": {
-          "name": "current_generation",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "current_operation_id": {
-          "name": "current_operation_id",
-          "type": "uuid",
           "primaryKey": false,
           "notNull": false
         },
@@ -521,39 +483,6 @@
           "columns": [
             {
               "expression": "service_key",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "agent_principals_home_service_unique": {
-          "name": "agent_principals_home_service_unique",
-          "columns": [
-            {
-              "expression": "home_node_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "home_environment",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "home_origin",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "home_service",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -712,12 +641,6 @@
           "notNull": true,
           "default": "now()"
         },
-        "enrollment_operation_id": {
-          "name": "enrollment_operation_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
         "request_expires_at": {
           "name": "request_expires_at",
           "type": "timestamp with time zone",
@@ -870,19 +793,6 @@
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
-        },
-        "agent_roles_enrollment_operation_id_agent_service_enrollments_operation_id_fk": {
-          "name": "agent_roles_enrollment_operation_id_agent_service_enrollments_operation_id_fk",
-          "tableFrom": "agent_roles",
-          "tableTo": "agent_service_enrollments",
-          "columnsFrom": [
-            "enrollment_operation_id"
-          ],
-          "columnsTo": [
-            "operation_id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -907,72 +817,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
-        },
-        "operation_id": {
-          "name": "operation_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "generation": {
-          "name": "generation",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "original_start_iat": {
-          "name": "original_start_iat",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "original_start_exp": {
-          "name": "original_start_exp",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "original_token_digest": {
-          "name": "original_token_digest",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "intent_digest": {
-          "name": "intent_digest",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "canonical_intent": {
-          "name": "canonical_intent",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "sealed_acceptance": {
-          "name": "sealed_acceptance",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "sealed_pending_key": {
-          "name": "sealed_pending_key",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "pending_expires_at": {
-          "name": "pending_expires_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "purge_after": {
-          "name": "purge_after",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
         },
         "issuer": {
           "name": "issuer",
@@ -1056,107 +900,6 @@
         }
       },
       "indexes": {
-        "agent_service_enrollments_operation_unique": {
-          "name": "agent_service_enrollments_operation_unique",
-          "columns": [
-            {
-              "expression": "operation_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "agent_service_enrollments_generation_unique": {
-          "name": "agent_service_enrollments_generation_unique",
-          "columns": [
-            {
-              "expression": "principal_user_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "generation",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "agent_service_enrollments_delivery_idx": {
-          "name": "agent_service_enrollments_delivery_idx",
-          "columns": [
-            {
-              "expression": "expires_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "\"agent_service_enrollments\".\"sealed_acceptance\" IS NOT NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "agent_service_enrollments_pending_delivery_idx": {
-          "name": "agent_service_enrollments_pending_delivery_idx",
-          "columns": [
-            {
-              "expression": "pending_expires_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "\"agent_service_enrollments\".\"sealed_pending_key\" IS NOT NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "agent_service_enrollments_purge_idx": {
-          "name": "agent_service_enrollments_purge_idx",
-          "columns": [
-            {
-              "expression": "purge_after",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
         "agent_service_enrollments_jti_unique": {
           "name": "agent_service_enrollments_jti_unique",
           "columns": [
@@ -1305,405 +1048,6 @@
           "value": "\"agent_service_enrollments\".\"status\" IN ('open','redeemed','denied','expired')"
         }
       },
-      "isRLSEnabled": true
-    },
-    "public.agent_service_link_operations": {
-      "name": "agent_service_link_operations",
-      "schema": "",
-      "columns": {
-        "operation_id": {
-          "name": "operation_id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "key_digest": {
-          "name": "key_digest",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "home_node_id": {
-          "name": "home_node_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "home_environment": {
-          "name": "home_environment",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "home_origin": {
-          "name": "home_origin",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "service": {
-          "name": "service",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "billing_account_id": {
-          "name": "billing_account_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "target_node_id": {
-          "name": "target_node_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "target_environment": {
-          "name": "target_environment",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "target_origin": {
-          "name": "target_origin",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "generation": {
-          "name": "generation",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "phase": {
-          "name": "phase",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "current": {
-          "name": "current",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": true
-        },
-        "state": {
-          "name": "state",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "encrypted_secrets": {
-          "name": "encrypted_secrets",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "revision": {
-          "name": "revision",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "fence": {
-          "name": "fence",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "lease_owner": {
-          "name": "lease_owner",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "lease_until": {
-          "name": "lease_until",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "next_attempt_at": {
-          "name": "next_attempt_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "secret_deadline": {
-          "name": "secret_deadline",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "staged_connection_id": {
-          "name": "staged_connection_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "confirm_authorized_at": {
-          "name": "confirm_authorized_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "terminal_at": {
-          "name": "terminal_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "purge_after": {
-          "name": "purge_after",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "agent_service_links_identity_unique": {
-          "name": "agent_service_links_identity_unique",
-          "columns": [
-            {
-              "expression": "home_node_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "home_environment",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "home_origin",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "service",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "billing_account_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "target_node_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "target_environment",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "target_origin",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"agent_service_link_operations\".\"current\"",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "agent_service_links_key_unique": {
-          "name": "agent_service_links_key_unique",
-          "columns": [
-            {
-              "expression": "key_digest",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"agent_service_link_operations\".\"current\"",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "agent_service_links_due_idx": {
-          "name": "agent_service_links_due_idx",
-          "columns": [
-            {
-              "expression": "next_attempt_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "operation_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "agent_service_links_secret_idx": {
-          "name": "agent_service_links_secret_idx",
-          "columns": [
-            {
-              "expression": "secret_deadline",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "operation_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "\"agent_service_link_operations\".\"encrypted_secrets\" IS NOT NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "agent_service_link_operations_billing_account_id_billing_accounts_id_fk": {
-          "name": "agent_service_link_operations_billing_account_id_billing_accounts_id_fk",
-          "tableFrom": "agent_service_link_operations",
-          "tableTo": "billing_accounts",
-          "columnsFrom": [
-            "billing_account_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "agent_service_link_operations_staged_connection_id_connections_id_fk": {
-          "name": "agent_service_link_operations_staged_connection_id_connections_id_fk",
-          "tableFrom": "agent_service_link_operations",
-          "tableTo": "connections",
-          "columnsFrom": [
-            "staged_connection_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": true
-    },
-    "public.agent_service_quotas": {
-      "name": "agent_service_quotas",
-      "schema": "",
-      "columns": {
-        "subject": {
-          "name": "subject",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "kind": {
-          "name": "kind",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "hour": {
-          "name": "hour",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "count": {
-          "name": "count",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "agent_service_quotas_bucket_unique": {
-          "name": "agent_service_quotas_bucket_unique",
-          "columns": [
-            {
-              "expression": "subject",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "kind",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "hour",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "agent_service_quotas_hour_idx": {
-          "name": "agent_service_quotas_hour_idx",
-          "columns": [
-            {
-              "expression": "hour",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
       "isRLSEnabled": true
     },
     "public.ai_threads": {
@@ -5712,48 +5056,6 @@
           "primaryKey": false,
           "notNull": true
         },
-        "service_key_digest": {
-          "name": "service_key_digest",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "service_identity": {
-          "name": "service_identity",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "service_operation_id": {
-          "name": "service_operation_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "service_generation": {
-          "name": "service_generation",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "service_credential_id": {
-          "name": "service_credential_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "service_state": {
-          "name": "service_state",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "renew_until": {
-          "name": "renew_until",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
         "credential_type": {
           "name": "credential_type",
           "type": "text",
@@ -5850,23 +5152,7 @@
             }
           ],
           "isUnique": true,
-          "where": "\"connections\".\"revoked_at\" IS NULL AND \"connections\".\"provider\" <> 'cogni-node'",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "connections_service_ready_unique": {
-          "name": "connections_service_ready_unique",
-          "columns": [
-            {
-              "expression": "service_key_digest",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"connections\".\"provider\" = 'cogni-node' AND \"connections\".\"service_state\" = 'ready'",
+          "where": "\"connections\".\"revoked_at\" IS NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -5919,7 +5205,7 @@
       "checkConstraints": {
         "connections_provider_check": {
           "name": "connections_provider_check",
-          "value": "\"connections\".\"provider\" IN ('openai-chatgpt', 'openai-compatible', 'github', 'google', 'bluesky', 'cogni-node')"
+          "value": "\"connections\".\"provider\" IN ($1, $2, $3, $4, $5)"
         },
         "connections_credential_type_check": {
           "name": "connections_credential_type_check",
@@ -6275,177 +5561,6 @@
           "value": "\"user_bindings\".\"provider\" IN ('wallet', 'discord', 'github', 'google')"
         }
       },
-      "isRLSEnabled": true
-    },
-    "public.metric_observations": {
-      "name": "metric_observations",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "scope": {
-          "name": "scope",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "metric_id": {
-          "name": "metric_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "scheduled_for": {
-          "name": "scheduled_for",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "definition_hash": {
-          "name": "definition_hash",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "evaluation_at": {
-          "name": "evaluation_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "snapshot": {
-          "name": "snapshot",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "observation": {
-          "name": "observation",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "status": {
-          "name": "status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "lease_token": {
-          "name": "lease_token",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "lease_expires_at": {
-          "name": "lease_expires_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "metric_scheduled_slot": {
-          "name": "metric_scheduled_slot",
-          "columns": [
-            {
-              "expression": "scope",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "metric_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "definition_hash",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "scheduled_for",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "metric_observation_slot": {
-          "name": "metric_observation_slot",
-          "columns": [
-            {
-              "expression": "scope",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "metric_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "definition_hash",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "evaluation_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": true
-    },
-    "public.metric_refresh_cursors": {
-      "name": "metric_refresh_cursors",
-      "schema": "",
-      "columns": {
-        "scope": {
-          "name": "scope",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "last_metric_id": {
-          "name": "last_metric_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
       "isRLSEnabled": true
     },
     "public.user_profiles": {
@@ -7176,6 +6291,177 @@
         },
         "last_command": {
           "name": "last_command",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": true
+    },
+    "public.metric_observations": {
+      "name": "metric_observations",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "scope": {
+          "name": "scope",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "metric_id": {
+          "name": "metric_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "scheduled_for": {
+          "name": "scheduled_for",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "definition_hash": {
+          "name": "definition_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "evaluation_at": {
+          "name": "evaluation_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "snapshot": {
+          "name": "snapshot",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "observation": {
+          "name": "observation",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "lease_token": {
+          "name": "lease_token",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "lease_expires_at": {
+          "name": "lease_expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "metric_scheduled_slot": {
+          "name": "metric_scheduled_slot",
+          "columns": [
+            {
+              "expression": "scope",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "metric_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "definition_hash",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "scheduled_for",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "metric_observation_slot": {
+          "name": "metric_observation_slot",
+          "columns": [
+            {
+              "expression": "scope",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "metric_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "definition_hash",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "evaluation_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": true
+    },
+    "public.metric_refresh_cursors": {
+      "name": "metric_refresh_cursors",
+      "schema": "",
+      "columns": {
+        "scope": {
+          "name": "scope",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "last_metric_id": {
+          "name": "last_metric_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true

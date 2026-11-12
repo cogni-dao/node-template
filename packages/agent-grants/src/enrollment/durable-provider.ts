@@ -22,7 +22,10 @@ import {
   type EnrollmentReply,
   fullServiceKey,
   intentOf,
+  type NodeTuple,
+  sameTuple,
 } from "./protocol";
+import { serviceKeyOf } from "./claims";
 import { sealToJwk } from "./seal";
 
 export type ProviderRefusal =
@@ -94,8 +97,17 @@ export async function chargeServiceQuota(
     if (charged.length === 0) throw new Refusal("node_full");
   }
 }
+export interface LegacyHomeBinding {
+  /** Explicit verified deployment mapping. Never infer an environment from an issuer origin. */
+  home: NodeTuple;
+  services: readonly string[];
+}
+export interface DurableProviderOptions {
+  legacyHomes?: readonly LegacyHomeBinding[];
+}
 export function createDurableProviderStore(
-  client: CredentialSql
+  client: CredentialSql,
+  options: DurableProviderOptions = {}
 ): DurableProviderStore {
   let ready: Promise<void> | undefined;
   const guard = async () => {
@@ -160,7 +172,7 @@ export function createDurableProviderStore(
   return {
     async acceptProof(proof, exactTokenDigest) {
       await guard();
-      const serviceKey = await fullServiceKey(proof.home, proof.service);
+      let serviceKey = await fullServiceKey(proof.home, proof.service);
       try {
         return await client.begin(async (tx): Promise<ProviderResult> => {
           await tx`SELECT pg_advisory_xact_lock(hashtext('agent_service_enrollments'))`;
@@ -191,12 +203,38 @@ export function createDurableProviderStore(
             AND NOT EXISTS (SELECT 1 FROM (SELECT expires_at FROM agent_service_enrollments WHERE status = 'open' AND expires_at <= (SELECT clock_timestamp()) ORDER BY expires_at, id LIMIT 1) due WHERE expires_at < clock_timestamp() - interval '5 minutes')`;
           if (!pressure.length)
             throw new Error("maintenance unavailable or overdue");
-          const candidates =
-            await tx`SELECT user_id FROM agent_principals WHERE service_key = ${serviceKey}`;
-          let userId = candidates[0]?.user_id
-            ? str(candidates[0].user_id)
-            : null;
-          if (userId) await lockUserAuthority(tx, userId);
+          // Resolve the verified tuple before its marker. A backfilled legacy marker is permanent.
+          const legacyKey = serviceKeyOf(proof.home.origin, proof.service);
+          const candidates = await tx`SELECT user_id, service_key, home_node_id, home_environment, home_origin, home_service
+            FROM agent_principals WHERE service_key IN (${serviceKey}, ${legacyKey}) OR
+              (home_node_id=${proof.home.nodeId} AND home_environment=${proof.home.environment} AND home_origin=${proof.home.origin} AND home_service=${proof.service}) LIMIT 3`;
+          const tupleMatches = candidates.filter((p) => p.home_node_id === proof.home.nodeId && p.home_environment === proof.home.environment && p.home_origin === proof.home.origin && p.home_service === proof.service);
+          const unresolved = candidates.filter((p) => p.service_key === legacyKey && p.home_node_id == null && p.home_environment == null && p.home_origin == null && p.home_service == null);
+          if (tupleMatches.length > 1 || unresolved.length > 1 || tupleMatches.length && unresolved.length)
+            throw new Refusal("intent_conflict");
+          let principal = tupleMatches[0];
+          if (!principal && unresolved[0]) {
+            const mappings = (options.legacyHomes ?? []).filter((binding) => binding.home.origin === proof.home.origin && binding.services.includes(proof.service));
+            if (mappings.length !== 1 || !sameTuple(mappings[0]!.home, proof.home)) throw new Refusal("intent_conflict");
+            const legacy = unresolved[0];
+            await tx`SELECT pg_advisory_xact_lock(hashtext(${`service:${legacyKey}`}))`;
+            await lockUserAuthority(tx, str(legacy.user_id));
+            // Historical receipts are verified issuer/service evidence; configuration supplies the otherwise unknowable environment.
+            const evidence = await tx`SELECT 1 FROM agent_service_enrollments WHERE principal_user_id=${legacy.user_id} AND issuer=${proof.home.origin} AND service=${proof.service} LIMIT 1`;
+            if (!evidence.length) throw new Refusal("intent_conflict");
+            const backfilled = await tx`UPDATE agent_principals SET home_node_id=${proof.home.nodeId},home_environment=${proof.home.environment},home_origin=${proof.home.origin},home_service=${proof.service}
+              WHERE user_id=${legacy.user_id} AND service_key=${legacyKey} AND home_node_id IS NULL AND home_environment IS NULL AND home_origin IS NULL AND home_service IS NULL RETURNING user_id,service_key`;
+            if (!backfilled[0]) throw new Refusal("intent_conflict");
+            principal = { ...legacy, ...backfilled[0] };
+          }
+          if (!principal && candidates.some((p) => p.service_key === serviceKey || p.service_key === legacyKey && (p.home_node_id == null || p.home_environment == null || p.home_origin == null || p.home_service == null)))
+            throw new Refusal("intent_conflict");
+          let userId = principal ? str(principal.user_id) : null;
+          if (principal) {
+            serviceKey = str(principal.service_key);
+            await tx`SELECT pg_advisory_xact_lock(hashtext(${`service:${serviceKey}`}))`;
+            await lockUserAuthority(tx, userId!);
+          }
           const current = userId
             ? await tx`SELECT current_operation_id, current_generation FROM agent_principals WHERE user_id = ${userId}`
             : [];
@@ -206,7 +244,7 @@ export function createDurableProviderStore(
             (current[0]?.current_operation_id ?? null) !==
               proof.expectedOperationId
           )
-            return { ok: false, reason: "intent_conflict", observedAt: at };
+            throw new Refusal("intent_conflict");
           if (proof.expectedOperationId) {
             const prior =
               await tx`SELECT status, expires_at, historical_confirmed_at FROM agent_service_enrollments WHERE operation_id = ${proof.expectedOperationId} FOR UPDATE`;

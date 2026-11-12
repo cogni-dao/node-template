@@ -68,3 +68,5 @@ export {
   type EnrollmentVerifyResult,
   type TrustedHome,
 } from "./verify";
+
+export { maintainEnrollmentDelivery } from "./delivery-maintenance";

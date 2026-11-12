@@ -92,9 +92,12 @@ export function createPostgresCredentialStore(client: CredentialSql, options: Po
 
   const store: CredentialStore = {
     async lookup(tokenHash): Promise<CredentialLookup | null> {
+      // Confirmed legacy keys retain service during tuple backfill; normal confirmation retires siblings. V2 lineages and pending legacy activation stay fenced.
       const rows = await client`
         SELECT c.id, c.user_id, u.name, c.expires_at, c.renew_until,
-          CASE WHEN p.current_generation > 0 AND (c.service_operation_id IS DISTINCT FROM p.current_operation_id OR c.service_generation IS DISTINCT FROM p.current_generation)
+          CASE WHEN p.current_generation > 0
+            AND (c.service_operation_id IS NOT NULL OR c.confirmed_at IS NULL)
+            AND (c.service_operation_id IS DISTINCT FROM p.current_operation_id OR c.service_generation IS DISTINCT FROM p.current_generation)
             THEN 'revoked' ELSE agent_credential_state(c) END AS state
         FROM agent_credentials c JOIN users u ON u.id = c.user_id LEFT JOIN agent_principals p ON p.user_id=c.user_id
         WHERE c.token_hash = ${tokenHash}`;

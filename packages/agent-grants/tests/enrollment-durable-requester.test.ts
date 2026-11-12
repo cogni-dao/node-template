@@ -40,7 +40,7 @@ const key: ConnectionKey = {
   billingAccountId: "system",
 };
 const clone = <T>(v: T): T => structuredClone(v);
-async function fixture() {
+async function fixture(discovery?: unknown) {
   let time = Date.parse("2026-11-12T01:00:00Z"),
     row: LinkRow | null = null,
     accepted: EnrollmentProof | null = null,
@@ -331,6 +331,10 @@ async function fixture() {
     createEnrollmentRequester({
       signer,
       transport,
+      fetch: async () => Response.json(discovery ?? {
+        nodeId: key.target.nodeId,
+        serviceEnrollment: { protocol: ENROLLMENT_PROTOCOL, receiver: key.target, credentialCeilings: { ttlSec: 2592000, renewWindowSec: 1209600, pendingSec: 900 } },
+      }),
       cipher,
       store,
       vault,
@@ -385,11 +389,26 @@ async function fixture() {
 }
 
 describe("durable enrollment requester", () => {
-  it("sends no target call before successful encrypted reservation", async () => {
+  it("sends no enrollment effect before successful encrypted reservation", async () => {
     const f = await fixture();
     f.failReserve();
     await expect(f.create().ensure(key)).rejects.toThrow("disk unavailable");
     expect(f.starts).toBe(0);
+  });
+  it("ensure refuses an oversized credential policy before reserving or starting", async () => {
+    const f = await fixture({ nodeId: key.target.nodeId, serviceEnrollment: {
+      protocol: ENROLLMENT_PROTOCOL, receiver: key.target, credentialCeilings: { ttlSec: 2592001, renewWindowSec: 1209600, pendingSec: 900 },
+    } });
+    await expect(f.create().ensure(key)).rejects.toThrow("unsupported_credential_policy");
+    expect(f.row).toBeNull();
+    expect(f.starts).toBe(0);
+  });
+  it("ensure refuses another environment at the configured origin before reserving", async () => {
+    const f = await fixture({ nodeId: key.target.nodeId, serviceEnrollment: {
+      protocol: ENROLLMENT_PROTOCOL, receiver: { ...key.target, environment: "production" }, credentialCeilings: { ttlSec: 2592000, renewWindowSec: 1209600, pendingSec: 900 },
+    } });
+    await expect(f.create().ensure(key)).rejects.toThrow("target_identity_mismatch");
+    expect(f.row).toBeNull();
   });
   it("concurrent ensure reserves one exact token and operation", async () => {
     const f = await fixture();
