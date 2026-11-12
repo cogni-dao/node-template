@@ -24,6 +24,7 @@ import {
 	type MetricObservation,
 	metricHistoryRange,
 	selectEvaluation,
+	selectMetricView,
 } from "../src/index";
 
 const NOW = new Date("2026-11-02T12:00:00Z");
@@ -1801,4 +1802,116 @@ describe("bound KPI decoder containment", () => {
 				expect(flat.items[0]?.viewState).toBe("error");
 		},
 	);
+});
+
+it("keeps expired or invalid current windows stale across readers without changing pending/failure or final evidence", async () => {
+	const definition = {
+		id: "ratio",
+		title: "Ratio",
+		revision: "1",
+		spec: { calculatorId: "work.count@1", params: {}, maxAgeSeconds: 3600 },
+	};
+	const end = new Date(NOW.getTime() - 4 * 3600000).toISOString();
+	const current: MetricObservation = {
+		...reading(1.2, end),
+		definitionHash: metricDefinitionHash(definition),
+		calculatorVersion: "work.count@1",
+		paramsHash: hashMetric({}),
+		observedAt: NOW.toISOString(),
+		sourceWatermarks: [{ source: "s", asOf: NOW.toISOString() }],
+	};
+	const evaluation = {
+		...current,
+		observedAt: end,
+		sourceWatermarks: [{ source: "s", asOf: end }],
+	};
+	const registry = new MetricRegistry();
+	registry.register({
+		id: "work.count@1",
+		unit: "ratio",
+		paramsSchema: z.object({}),
+		budget: {
+			timeoutMs: 1,
+			maxSourceCalls: 1,
+			maxRows: 1,
+			maxResponseBytes: 1,
+		},
+		compute: async () => {
+			throw new Error("unused");
+		},
+	});
+	const service = createMetricService({
+		definitions: {
+			get: async () => definition,
+			getMany: async () => [definition],
+			list: async () => ({ items: [definition], nextCursor: null }),
+		},
+		observations: {
+			history: async () => [current],
+			lastGood: async () => current,
+			at: async () => evaluation,
+			buckets: async () => [],
+			workReadBatch: async () => [
+				{ baseline: null, latest: current, lastGood: current },
+			],
+		} as unknown as MetricObservationsPort,
+		registry,
+		scope: { node: "n", environment: "e", dataScope: "d" },
+		now: () => NOW,
+		authorize: async () => true,
+	});
+	const binding = {
+		metricId: "ratio",
+		comparator: "gte" as const,
+		target: { value: 1, unit: "ratio" },
+	};
+	expect(
+		(await service.kpi(binding, { latestOnly: true })).assessment.status,
+	).toBe("delayed");
+	expect(
+		(await createWorkMetricReader(service, () => NOW).latest("ratio"))
+			?.viewState,
+	).toBe("stale");
+	expect((await service.read("ratio")).viewState).toBe("stale");
+	expect((await service.serving()).unbound[0]?.latest.viewState).toBe("stale");
+	expect(
+		(
+			await service.workReadBatch([
+				{ metricId: "ratio", baselineObservationId: null },
+			])
+		)[0]?.current?.viewState,
+	).toBe("stale");
+	for (const windowEnd of [
+		end,
+		"not-a-date",
+		new Date(NOW.getTime() + 1).toISOString(),
+	])
+		expect(
+			selectMetricView(
+				definition,
+				[{ ...current, window: { start: windowEnd, end: windowEnd } }],
+				NOW,
+			).viewState,
+		).toBe("stale");
+	const boundary = new Date(NOW.getTime() - 3600000).toISOString();
+	expect(
+		selectMetricView(
+			definition,
+			[{ ...current, window: { start: boundary, end: boundary } }],
+			NOW,
+		).viewState,
+	).toBe("ok");
+	for (const status of ["pending", "error", "unavailable"] as const)
+		expect(
+			selectMetricView(definition, [{ ...current, status, value: null }], NOW)
+				.viewState,
+		).toBe(status);
+	const final = await service.kpi(
+		{ ...binding, evaluationAt: end },
+		{ latestOnly: true },
+	);
+	expect(final).toMatchObject({
+		viewState: "stale",
+		assessment: { status: "met", observationId: evaluation.id },
+	});
 });

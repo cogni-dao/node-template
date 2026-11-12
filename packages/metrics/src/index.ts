@@ -163,9 +163,13 @@ export function selectMetricView(
 ): MetricView {
 	const latestAttempt = history[0] ?? null;
 	const lastGood = history.find((x) => x.status === "ok") ?? null;
+	const windowAge = now.getTime() - Date.parse(latestAttempt?.window.end ?? "");
 	const viewState: MetricView["viewState"] =
 		latestAttempt?.status === "ok" &&
-		(!latestAttempt.sourceWatermarks.length ||
+		(!Number.isFinite(windowAge) ||
+			windowAge < 0 ||
+			windowAge > definition.spec.maxAgeSeconds * 1000 ||
+			!latestAttempt.sourceWatermarks.length ||
 			latestAttempt.sourceWatermarks.some(
 				(w) =>
 					!w.asOf ||
