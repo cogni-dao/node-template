@@ -810,8 +810,14 @@ describe("work observation projection", () => {
 			revision: "1",
 			spec: { calculatorId: "work.test@1", params: {}, maxAgeSeconds: 7200 },
 		};
-		const failed = {
+		const valid = {
 			...fresh,
+			definitionHash: metricDefinitionHash(definition),
+			calculatorVersion: definition.spec.calculatorId,
+			paramsHash: hashMetric(definition.spec.params),
+		};
+		const failed = {
+			...valid,
 			status: "error" as const,
 			value: null,
 			reason: "source_failed",
@@ -820,17 +826,32 @@ describe("work observation projection", () => {
 		const observations = {
 			history: async () => {
 				if (mode === "outage") throw new Error("private store detail");
-				return mode === "absent" ? [] : [mode === "failed" ? failed : fresh];
+				return mode === "absent" ? [] : [mode === "failed" ? failed : valid];
 			},
-			lastGood: async () => (mode === "fresh" ? fresh : null),
+			lastGood: async () => (mode === "fresh" ? valid : null),
 		} as unknown as MetricObservationsPort;
+		const registry = new MetricRegistry();
+		registry.register({
+			id: definition.spec.calculatorId,
+			unit: "ratio",
+			paramsSchema: z.object({}),
+			budget: {
+				timeoutMs: 1,
+				maxSourceCalls: 1,
+				maxRows: 1,
+				maxResponseBytes: 1,
+			},
+			compute: async () => {
+				throw new Error("unused");
+			},
+		});
 		const service = createMetricService({
 			definitions: {
 				get: async () => definition,
 				list: async () => ({ items: [definition], nextCursor: null }),
 			},
 			observations,
-			registry: new MetricRegistry(),
+			registry,
 			scope: { node: "n", environment: "e", dataScope: "d" },
 			now: () => NOW,
 			authorize: async () => true,
