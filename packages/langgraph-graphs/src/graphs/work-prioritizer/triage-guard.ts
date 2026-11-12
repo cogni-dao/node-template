@@ -144,16 +144,21 @@ export function createTriageGuard(
       );
     // Report independent evidence defects together so one repair does not cost one model turn per axis.
     const evidenceIssues: string[] = [];
+    let omittedIssues = 0;
+    const addEvidenceIssue = (issue: string) => {
+      if (evidenceIssues.length < 12) evidenceIssues.push(issue.slice(0, 300));
+      else omittedIssues++;
+    };
     if (
       set.moves !== undefined &&
       (item.moves === undefined || !sameMoves(set.moves, item.moves))
     ) {
       if (!receipts.metricCatalogRead)
-        evidenceIssues.push(
+        addEvidenceIssue(
           "metric_catalog: read core__goal_progress or core__metric_list before declaring what metrics this work moves",
         );
       if (!set.moves.length && !receipts.metricCatalogComplete)
-        evidenceIssues.push(
+        addEvidenceIssue(
           "metric_catalog_incomplete: an unavailable or partial catalog cannot establish that no metric fits; read complete discovery before declaring []",
         );
       for (const move of set.moves) {
@@ -169,7 +174,7 @@ export function createTriageGuard(
           !receipts.metricIds.has(move.metricId) ||
           !receipts.guidance.has(move.metricId)
         )
-          evidenceIssues.push(
+          addEvidenceIssue(
             `metric_not_read: discover ${move.metricId} in core__goal_progress or core__metric_list, then read its full body with core__knowledge_read`,
           );
       }
@@ -187,7 +192,7 @@ export function createTriageGuard(
             move.metricId,
         )
       )
-        evidenceIssues.push(
+        addEvidenceIssue(
           "metric_goal_evidence: a goal score of 4 or 5 for a new metric declaration cites the metric body you read in ev",
         );
     }
@@ -209,12 +214,12 @@ export function createTriageGuard(
         score.ev === item.sourceUrl ||
         receipts.isItemPage(url, item.id)
       )
-        evidenceIssues.push(
+        addEvidenceIssue(
           `evidence: ${axis} ${score.v} needs a source you read this run in ev; never the item's own page`,
         );
     }
     return evidenceIssues.length
-      ? `guard_rejected: ${evidenceIssues.join("; ")}`
+      ? `guard_rejected: ${evidenceIssues.join("; ")}${omittedIssues ? `; ${omittedIssues} additional evidence defects omitted` : ""}`
       : undefined;
   }
 

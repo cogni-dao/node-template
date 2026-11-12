@@ -183,6 +183,22 @@ describe("work-prioritizer binds core__work_item_update behind the guard", () =>
     expect(a.writes).toHaveLength(1);
   });
 
+  it("bounds repair feedback even when the wire schema admits many score keys", async () => {
+    const a = setup();
+    a.read(item("task.1"));
+    const scores = Object.fromEntries(
+      Array.from({ length: 1000 }, (_, i) => [
+        `unsupported-${i}-${"x".repeat(400)}`,
+        { v: 5 },
+      ]),
+    );
+    const out = await a.call(update("task.1", { scores }));
+    expect(out).toContain("guard_rejected:");
+    expect(out).toContain("988 additional evidence defects omitted");
+    expect(out.length).toBeLessThan(4096);
+    expect(a.writes).toHaveLength(0);
+  });
+
   it("writes status, scores and a goal link as one CAS patch, then keeps the new revision", async () => {
     const a = setup();
     a.read(item("task.1", { labels: ["area:ai"] }));
