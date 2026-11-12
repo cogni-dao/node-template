@@ -453,11 +453,19 @@ describe("service authority forward migration", () => {
   it("backfills every confirmation atomically and keeps purge disabled; lock timeout rolls back before retry", async () => {
     const container = await new PostgreSqlContainer("postgres:15-alpine").start();
     const db = postgres(container.getConnectionUri(), { max: 3 });
+    // Match production: the migration owner is NOT BYPASSRLS/superuser. Seed assertions use the isolated container admin.
+    await db.unsafe("CREATE ROLE foundation_migration_owner LOGIN PASSWORD 'fixture_only' NOSUPERUSER NOBYPASSRLS");
+    await db`GRANT CREATE ON DATABASE ${db(container.getDatabase())} TO foundation_migration_owner`;
+    await db`GRANT USAGE, CREATE ON SCHEMA public TO foundation_migration_owner`;
+    const ownerUri = new URL(container.getConnectionUri());
+    ownerUri.username = "foundation_migration_owner";
+    ownerUri.password = "fixture_only";
+    const owner = postgres(ownerUri.toString(), { max: 1 });
     const directory = await mkdtemp(join(tmpdir(), "authority-foundation-"));
     const migrations = resolve("src/adapters/server/db/migrations");
     const previous = join(directory, "previous");
     const run = (folder: string) => promisify(execFile)(process.execPath, [resolve("../scripts/db/migrate.mjs"), folder], {
-      env: { ...process.env, DATABASE_URL: container.getConnectionUri(), NODE_NAME: "node-template" }, timeout: 90000,
+      env: { ...process.env, DATABASE_URL: ownerUri.toString(), NODE_NAME: "node-template" }, timeout: 90000,
     });
     try {
       await cp(migrations, previous, { recursive: true });
@@ -496,9 +504,16 @@ describe("service authority forward migration", () => {
       }
       expect((await db`SELECT backfill_ready, purge_enabled, minimum_reader_build FROM agent_authority_maintenance WHERE id = 'service-enrollment'`)[0])
         .toMatchObject({ backfill_ready: true, purge_enabled: false, minimum_reader_build: null });
-      // Purge is not enabled/executed. A compatible reader must still OR the historical source if a pre-summary row is encountered.
+      const rls = await db`SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = ANY(
+        ARRAY['agent_credentials','agent_principals','agent_roles','agent_service_enrollments','agent_authority_maintenance'])`;
+      expect(rls).toHaveLength(5);
+      expect(rls.every((r) => r.relrowsecurity && r.relforcerowsecurity)).toBe(true);
+      expect(await owner`SELECT 1 FROM agent_credentials`).toHaveLength(0);
+      expect(await owner`SELECT 1 FROM agent_authority_maintenance`).toHaveLength(0);
+      // Purge is not enabled/executed. The final RLS posture is unchanged for every serving connection.
       await expect(db`UPDATE agent_principals SET first_confirmed_at = NULL WHERE user_id = ${ids.multiple}`).rejects.toThrow();
     } finally {
+      await owner.end({ timeout: 1 });
       await db.end({ timeout: 1 });
       await container.stop();
       await rm(directory, { recursive: true, force: true });

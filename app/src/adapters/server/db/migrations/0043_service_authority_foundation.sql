@@ -34,7 +34,12 @@ CREATE INDEX "agent_service_enrollments_open_principal_idx" ON "agent_service_en
 --> statement-breakpoint
 -- Hand-authored functions/triggers only. DDL, indexes, journal and snapshot above were generated from schema TS.
 -- The normal migration runner holds the initial credential mutation lock through all backfill and state changes.
-ALTER TABLE agent_authority_maintenance FORCE ROW LEVEL SECURITY;--> statement-breakpoint
+-- The actual node migration role owns these FORCE-RLS tables and is not BYPASSRLS. Temporarily lift FORCE for the owner only,
+-- inside this atomic migration transaction, so backfill cannot silently read/write zero rows. Restore every FORCE before commit.
+ALTER TABLE agent_credentials NO FORCE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE agent_principals NO FORCE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE agent_roles NO FORCE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE agent_service_enrollments NO FORCE ROW LEVEL SECURITY;--> statement-breakpoint
 INSERT INTO agent_authority_maintenance (id, backfill_ready, purge_enabled) VALUES ('service-enrollment', false, false);--> statement-breakpoint
 CREATE OR REPLACE FUNCTION agent_credential_state(c agent_credentials)
 RETURNS text LANGUAGE sql VOLATILE AS $$
@@ -224,3 +229,10 @@ END
 $$;--> statement-breakpoint
 CREATE TRIGGER agent_role_approval_guard BEFORE UPDATE OF approved_by ON agent_roles
 FOR EACH ROW EXECUTE FUNCTION agent_role_approval_guard();
+
+--> statement-breakpoint
+ALTER TABLE agent_credentials FORCE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE agent_principals FORCE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE agent_roles FORCE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE agent_service_enrollments FORCE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE agent_authority_maintenance FORCE ROW LEVEL SECURITY;

@@ -177,6 +177,4 @@ export interface NodeAiAccessView {
   readonly permissions: readonly NodeAiPermissionView[];
   /** Outside rows left out of `permissions` because the list is bounded. 0 when nothing is cut. */
   readonly more: number;
-  /** Provider cursor; host and shared UI must carry it together before claiming full retained-control visibility. */
-  readonly nextCursor?: RoleCursor | null;
 }
