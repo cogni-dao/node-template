@@ -22,6 +22,7 @@ export type RolesErrorCode =
   | "principal_not_found"
   | "invalid_scope"
   | "not_pending"
+  | "request_expired"
   | "self_approval"
   | "too_many_requests"
   | "no_external_door";

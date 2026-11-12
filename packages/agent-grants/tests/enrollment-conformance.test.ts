@@ -30,6 +30,7 @@ runEnrollmentConformance({
       async switchOff(userId, scope) {
         m.switchOff(userId, scope);
       },
+      async switchOn(userId, scope) { m.switchOn(userId, scope); },
       async hasLiveRole(userId, scope) {
         return m.roles.some((r) => r.principal === userId && r.scope === scope && r.approved && !r.revoked);
       },
@@ -41,6 +42,7 @@ runEnrollmentConformance({
       },
       async lapse(userId) {
         for (const e of m.enrollments) if (e.principalUserId === userId) e.expiresAt = m.clock.now - 1;
+        for (const r of m.roles) if (r.principal === userId && !r.approved) r.expiresAt = m.clock.now - 1;
       },
       async expireCredential(credentialId) {
         const row = m.credentialRows.find((r) => r.id === credentialId);

@@ -56,6 +56,8 @@ export const agentServiceEnrollments = pgTable(
       .notNull()
       .defaultNow(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    historicalConfirmedAt: timestamp("historical_confirmed_at", { withTimezone: true }),
+    terminalAt: timestamp("terminal_at", { withTimezone: true }),
     lastPolledAt: timestamp("last_polled_at", { withTimezone: true }),
   },
   (table) => [
@@ -67,12 +69,13 @@ export const agentServiceEnrollments = pgTable(
     uniqueIndex("agent_service_enrollments_device_code_hash_unique").on(
       table.deviceCodeHash
     ),
+    index("agent_service_enrollments_credential_idx").on(table.credentialId),
     index("agent_service_enrollments_principal_idx").on(table.principalUserId),
     index("agent_service_enrollments_open_expiry_idx")
       .on(table.expiresAt, table.id)
       .where(sql`${table.status} = 'open'`),
     index("agent_service_enrollments_open_principal_idx")
-      .on(table.principalUserId, table.id)
+      .on(table.principalUserId, table.expiresAt, table.id)
       .where(sql`${table.status} = 'open'`),
   ]
 ).enableRLS();

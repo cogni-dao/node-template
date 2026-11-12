@@ -302,6 +302,13 @@
       "when": 1794438642607,
       "tag": "0042_service_enrollment_maintenance",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1794443737149,
+      "tag": "0043_service_authority_foundation",
+      "breakpoints": true
     }
   ]
 }

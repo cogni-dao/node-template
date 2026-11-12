@@ -38,6 +38,7 @@ export interface EnrollmentConformanceSetup {
   dismiss(principalUserId: string, scope: string): Promise<void>;
   /** The admin switching a live permission off. */
   switchOff(principalUserId: string, scope: string): Promise<void>;
+  switchOn(userId: string, scope: string): Promise<void>;
   hasLiveRole(principalUserId: string, scope: string): Promise<boolean>;
   /** Pending (unapproved, unrevoked) asks of this principal. */
   pendingAsks(principalUserId: string, scope: string): Promise<number>;
@@ -293,7 +294,7 @@ export function runEnrollmentConformance(h: EnrollmentConformanceHarness): void 
   });
 
   describe("enrollment conformance: one principal per issuer and service", () => {
-    it("a second enrollment reuses the principal, turns its permission off and asks again; the older key dies only when the new key confirms", async () => {
+    it("a second enrollment reuses the principal and retains current consent; the older key dies only when the new key confirms", async () => {
       const s = await h.setup();
       const first = await requester();
       const e1 = await enroll(s, first);
@@ -305,9 +306,9 @@ export function runEnrollmentConformance(h: EnrollmentConformanceHarness): void 
       const e2 = await enroll(s, second);
       expect(e2.principalUserId).toBe(e1.principalUserId);
       expect(e2.principalCreated).toBe(false);
-      // The permission is off and a fresh ask waits; the old key still authenticates, and the old code is spent.
-      expect(await s.hasLiveRole(e1.principalUserId, SCOPE)).toBe(false);
-      expect(await s.pendingAsks(e1.principalUserId, SCOPE)).toBe(1);
+      // Consent survives; the old key still authenticates and the old code stays spent.
+      expect(await s.hasLiveRole(e1.principalUserId, SCOPE)).toBe(true);
+      expect(await s.pendingAsks(e1.principalUserId, SCOPE)).toBe(0);
       expect(await verifyBearer(s.credentials, k1.key)).toMatchObject({ ok: true });
       await s.skipPollInterval();
       expect(await pollServiceEnrollment(s.store, { deviceCode: e1.deviceCode })).toEqual({ ok: false, error: "expired_token" });
@@ -342,24 +343,81 @@ export function runEnrollmentConformance(h: EnrollmentConformanceHarness): void 
       expect(await requestServiceEnrollment(s.store, stubVerifier, { token: JSON.stringify({ ...sixth.claims, jti: uuid() }), askableScopes: s.askableScopes })).toMatchObject({ ok: true });
     });
 
-    it("the 26th enrolled agent is too_many_agents", async () => {
+    it("the 26th ACTIVE enrolled agent is too_many_agents", async () => {
       const s = await h.setup();
       for (let i = 0; i < 25; i++) {
-        const e = await enroll(s, await requester({ service: `agent-${i}` }));
-        await s.lapse(e.principalUserId); // keeps the open cap out of the way; the principal stays
+        const r = await requester({ service: `agent-${i}` });
+        const e = await enroll(s, r);
+        const key = await redeem(s, r, e);
+        await confirmCredential(s.credentials, { credentialId: key.credentialId });
       }
       const result = await requestServiceEnrollment(s.store, stubVerifier, { token: token(await requester({ service: "agent-25" })), askableScopes: s.askableScopes });
       expect(result).toEqual({ ok: false, reason: "too_many_agents" });
     });
 
-    it("UNREDEEMED_PRINCIPALS_GO: a principal that never earned a key is removed 24 hours after it was made, on the next request", async () => {
+    it("RETAINED_IDENTITY: an abandoned principal remains marked after expiry while capacity is reusable", async () => {
       const s = await h.setup();
       const stale = await enroll(s, await requester({ service: "stale" }));
       await s.lapse(stale.principalUserId);
       await s.ageUnredeemed(stale.principalUserId);
       expect(await s.principalExists(stale.principalUserId)).toBe(true);
       await enroll(s, await requester({ service: "fresh" }));
-      expect(await s.principalExists(stale.principalUserId)).toBe(false);
+      expect(await s.principalExists(stale.principalUserId)).toBe(true);
+    });
+
+    it("approved abandoned operations free active capacity without erasing identity or consent", async () => {
+      const s = await h.setup();
+      const first = await requester({ service: "retained" });
+      const e = await enroll(s, first);
+      await s.approve(e.principalUserId, SCOPE);
+      await s.lapse(e.principalUserId);
+      for (let i = 0; i < 26; i++) {
+        const other = await enroll(s, await requester({ service: `inactive-${i}` }));
+        await s.lapse(other.principalUserId);
+      }
+      expect(await s.principalExists(e.principalUserId)).toBe(true);
+      expect(await s.hasLiveRole(e.principalUserId, SCOPE)).toBe(true);
+      const again = await enroll(s, await requester({ service: "retained" }));
+      expect(again.principalUserId).toBe(e.principalUserId);
+      expect(await s.pendingAsks(e.principalUserId, SCOPE)).toBe(0);
+    });
+
+    it("retained identity250 cap never deletes an older marked principal", async () => {
+      const s = await h.setup();
+      for (let i = 0; i < 250; i++) {
+        const e = await enroll(s, await requester({ service: `retained-${i}` }));
+        await s.lapse(e.principalUserId);
+      }
+      expect(await requestServiceEnrollment(s.store, stubVerifier, { token: token(await requester({ service: "retained-250" })), askableScopes: s.askableScopes }))
+        .toEqual({ ok: false, reason: "too_many_agents" });
+      expect((await enroll(s, await requester({ service: "retained-0" }))).principalCreated).toBe(false);
+    });
+
+    it("Off pauses an unconfirmed receipt and On resumes it without re-enrollment", async () => {
+      const s = await h.setup();
+      const r = await requester();
+      const e = await enroll(s, r);
+      await s.approve(e.principalUserId, SCOPE);
+      await s.switchOff(e.principalUserId, SCOPE);
+      expect(await pollServiceEnrollment(s.store, { deviceCode: e.deviceCode })).toEqual({ ok: false, error: "access_denied" });
+      await s.switchOn(e.principalUserId, SCOPE);
+      await s.skipPollInterval();
+      expect(await pollServiceEnrollment(s.store, { deviceCode: e.deviceCode })).toMatchObject({ ok: true });
+    });
+
+    it("late approval and first activation cannot cross the receipt deadline", async () => {
+      const s = await h.setup();
+      const pending = await enroll(s, await requester({ service: "late-approve" }));
+      await s.lapse(pending.principalUserId);
+      await s.approve(pending.principalUserId, SCOPE);
+      expect(await s.hasLiveRole(pending.principalUserId, SCOPE)).toBe(false);
+      const r = await requester({ service: "late-confirm" });
+      const e = await enroll(s, r);
+      const key = await redeem(s, r, e);
+      await s.lapse(e.principalUserId);
+      expect(await confirmCredential(s.credentials, { credentialId: key.credentialId })).toMatchObject({ ok: false });
+      expect(await verifyBearer(s.credentials, key.key)).toMatchObject({ ok: false });
+      expect(await s.hasLiveRole(e.principalUserId, SCOPE)).toBe(true);
     });
 
     it("a principal that holds a key is never removed", async () => {

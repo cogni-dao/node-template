@@ -73,6 +73,8 @@ export interface RoleRow {
  * LIVE_NEEDS_APPROVAL: every read that opens a lock (`hasLiveRole`, `liveScopes`) counts only rows with an approver and no revoke.
  * A pending row (an ask) never opens a lock.
  */
+export interface RoleCursor { readonly principalUserId: string; readonly scope: string; }
+
 export interface AgentGrantsStore {
   /** A live (approved, unrevoked) role row for this principal user id and scope. Never cached. */
   hasLiveRole(principalId: string, scope: string): Promise<boolean>;
@@ -88,7 +90,7 @@ export interface AgentGrantsStore {
    * Every pending and live row for the admin table, plus latest revoked enrolled-service controls for `declaredScopes`. Never cached. Rows of this node's own AI are always all returned (few);
    * rows of outside agents are bounded by `limit` (pending first). `more` counts the outside rows not returned.
    */
-  listRoleRows(limit: number, declaredScopes?: readonly string[]): Promise<{ rows: RoleRow[]; more: number }>;
+  listRoleRows(limit: number, declaredScopes?: readonly string[], after?: RoleCursor): Promise<{ rows: RoleRow[]; more: number; nextCursor?: RoleCursor | null }>;
   /** The caller's own rows, newest state per scope (bounded). */
   listOwnRoles(principalUserId: string): Promise<Array<{ scope: string; state: RoleState; at: string }>>;
   /**
@@ -175,4 +177,6 @@ export interface NodeAiAccessView {
   readonly permissions: readonly NodeAiPermissionView[];
   /** Outside rows left out of `permissions` because the list is bounded. 0 when nothing is cut. */
   readonly more: number;
+  /** Provider cursor; host and shared UI must carry it together before claiming full retained-control visibility. */
+  readonly nextCursor?: RoleCursor | null;
 }

@@ -19,10 +19,16 @@
  * Links: app/src/adapters/server/db/migrations/0041_agent_service_enrollments.sql
  */
 
+import { execFile } from "node:child_process";
+import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { promisify } from "node:util";
+import { PostgreSqlContainer } from "@testcontainers/postgresql";
 import { randomUUID } from "node:crypto";
-import { authorizeCaller, buildNodeAiView, grantRole, revokeRole, createPostgresAgentGrantsStore, type SqlTag } from "@cogni/agent-grants";
+import { AgentRolesError, authorizeCaller, buildNodeAiView, grantRole, revokeRole, createPostgresAgentGrantsStore, type SqlTag } from "@cogni/agent-grants";
 import { type CredentialSql, createPostgresCredentialStore, agentRolesHasRoles, hashAgentKey, confirmCredential, verifyBearer } from "@cogni/agent-grants/credentials";
-import { createPostgresEnrollmentStore, pollServiceEnrollment, requestServiceEnrollment, openSealed, SERVICE_ENROLLMENT_KIND, serviceEnrollmentAudience, type ServiceEnrollmentClaims } from "@cogni/agent-grants/enrollment";
+import { maintenanceTick, createPostgresEnrollmentStore, pollServiceEnrollment, requestServiceEnrollment, openSealed, SERVICE_ENROLLMENT_KIND, serviceEnrollmentAudience, type ServiceEnrollmentClaims } from "@cogni/agent-grants/enrollment";
 import { runEnrollmentConformance, type EnrollmentConformanceHarness } from "@cogni/agent-grants/enrollment-conformance";
 import { generateKeyPair, exportJWK } from "jose";
 import postgres, { type Sql } from "postgres";
@@ -37,6 +43,7 @@ describe("agent service enrollments (real Postgres)", () => {
   const cleanup = async () => {
     const ids = (await service`SELECT user_id FROM agent_principals WHERE service_key IS NOT NULL`).map((r) => r.user_id as string);
     await service`DELETE FROM agent_service_enrollments`;
+    await service`UPDATE agent_authority_maintenance SET next_run_at = clock_timestamp(), oldest_due_at = NULL WHERE id = 'service-enrollment'`;
     if (ids.length === 0) return;
     await service`DELETE FROM agent_credentials WHERE user_id = ANY(${ids}::text[])`;
     await service`DELETE FROM agent_roles WHERE principal_user_id = ANY(${ids}::text[]) OR requested_by = ANY(${ids}::text[])`;
@@ -76,9 +83,13 @@ describe("agent service enrollments (real Postgres)", () => {
         store: createPostgresEnrollmentStore(client()),
         credentials: createPostgresCredentialStore(client(), { hasRoles: agentRolesHasRoles(client()) }),
         askableScopes: ["knowledge:read", "knowledge:contribute"],
-        approve: async (principalUserId, scope) => void (await grants.approvePending({ principalUserId, scope, approvedBy: admin })),
+        approve: async (principalUserId, scope) => {
+          try { await grants.approvePending({ principalUserId, scope, approvedBy: admin }); }
+          catch (error) { if (!(error instanceof AgentRolesError) || error.code !== "request_expired") throw error; }
+        },
         dismiss: async (principalUserId, scope) => void (await grants.denyPending({ principalUserId, scope })),
         switchOff: async (principalUserId, scope) => void (await grants.revokeRole({ principalUserId, scope })),
+        switchOn: async (principalUserId, scope) => void (await grants.restoreRevoked?.({ principalUserId, scope, approvedBy: admin })),
         hasLiveRole: (principalUserId, scope) => grants.hasLiveRole(principalUserId, scope),
         async pendingAsks(principalUserId, scope) {
           const rows = await service`
@@ -91,6 +102,7 @@ describe("agent service enrollments (real Postgres)", () => {
         },
         async lapse(principalUserId) {
           await service`UPDATE agent_service_enrollments SET expires_at = now() - interval '1 second' WHERE principal_user_id = ${principalUserId}`;
+          await service`UPDATE agent_roles SET request_expires_at = now() - interval '1 second' WHERE principal_user_id = ${principalUserId} AND approved_by IS NULL`;
         },
         async expireCredential(credentialId) {
           await service`UPDATE agent_credentials
@@ -137,11 +149,10 @@ describe("agent service enrollments (real Postgres)", () => {
   };
 
   describe("schema (rows only SQL can prove)", () => {
-    it("cleanup rechecks after selection and cannot erase an approval committed by the shared role writer", async () => {
+    it("maintenance locks and rechecks expiry; late approval refuses without erasing identity, consent or replay evidence", async () => {
       const setup = await enrollmentHarness.setup();
       const enrollment = await startEnrollment(setup);
       await setup.lapse(enrollment.principalUserId);
-      await setup.ageUnredeemed(enrollment.principalUserId);
       let selected!: () => void;
       let resume!: () => void;
       const selection = new Promise<void>((resolve) => { selected = resolve; });
@@ -151,29 +162,24 @@ describe("agent service enrollments (real Postgres)", () => {
         begin: <T>(fn: (tx: SqlTag) => Promise<T>): Promise<T> => client().begin(async (tx) => {
           const observed = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
             const rows = await tx(strings, ...values);
-            if (!paused && strings.join("?").includes("LIMIT") && strings.join("?").includes("SELECT p.user_id FROM agent_principals")) {
-              paused = true;
-              selected();
-              await resumed;
+            if (!paused && strings.join("?").includes("SELECT id, principal_user_id FROM agent_service_enrollments")) {
+              paused = true; selected(); await resumed;
             }
             return rows;
           }, tx);
           return fn(observed);
         }),
       }) as CredentialSql;
-      const maintenance = startEnrollment({ ...setup, store: createPostgresEnrollmentStore(delayed) }, "maintenance-trigger");
+      const tick = maintenanceTick(delayed);
       try {
-        await Promise.race([selection, maintenance.then(() => { throw new Error("cleanup never selected the abandoned principal"); })]);
+        await Promise.race([selection, tick.then(() => { throw new Error("maintenance never selected expired receipt"); })]);
         await setup.approve(enrollment.principalUserId, "knowledge:read");
-        expect(await setup.hasLiveRole(enrollment.principalUserId, "knowledge:read")).toBe(true);
-      } finally {
-        resume();
-        await maintenance;
-      }
+        expect(await setup.hasLiveRole(enrollment.principalUserId, "knowledge:read")).toBe(false);
+      } finally { resume(); await tick; }
       expect(await setup.principalExists(enrollment.principalUserId)).toBe(true);
-      expect(await setup.hasLiveRole(enrollment.principalUserId, "knowledge:read")).toBe(true);
       const hash = await hashAgentKey(enrollment.deviceCode);
-      expect((await service`SELECT 1 FROM agent_service_enrollments WHERE device_code_hash = ${hash}`).length).toBe(1);
+      expect((await service`SELECT status FROM agent_service_enrollments WHERE device_code_hash = ${hash}`)[0]?.status).toBe("expired");
+      expect(await setup.pendingAsks(enrollment.principalUserId, "knowledge:read")).toBe(0);
     });
 
     it("terminal history is retained while request maintenance and its index follow only open rows", async () => {
@@ -253,7 +259,7 @@ describe("agent service enrollments (real Postgres)", () => {
           await expect.poll(async () => {
             const rows = await service`SELECT count(*)::int AS n FROM pg_stat_activity
               WHERE application_name = ${applicationName} AND wait_event_type = 'Lock'
-                AND (query LIKE '%agent_credentials%FOR UPDATE%' OR query LIKE '%SELECT id FROM users%FOR UPDATE%')`;
+                AND (query LIKE '%agent_credentials%FOR UPDATE%' OR query LIKE '%pg_advisory_xact_lock%' OR query LIKE '%agent_principals%FOR UPDATE%')`;
             return Number(rows[0]?.n);
           }, { timeout: 3000 }).toBe(1);
         });
@@ -297,29 +303,205 @@ describe("agent service enrollments (real Postgres)", () => {
       await service`DELETE FROM users WHERE id = ${other}`;
     });
 
-    it("a key made by an enrollment carries created_from service_enrollment; confirming it kills every other unrevoked key of the principal in the same statement", async () => {
-      await cleanup();
-      const user = randomUUID();
-      await service`INSERT INTO users (id, name) VALUES (${user}, 'svc-trigger')`;
-      await service`INSERT INTO agent_principals (kind, service_key, user_id) VALUES ('external', 'https://h.example#trigger', ${user})`;
-      const key = (from: string, confirmed: boolean) =>
-        service`INSERT INTO agent_credentials (user_id, token_hash, created_from, expires_at, renew_until, pending_expires_at, confirmed_at)
-          VALUES (${user}, ${randomUUID()}, ${from}, now() + interval '30 days', now() + interval '44 days', now() + interval '15 minutes', ${confirmed ? service`now()` : null})
-          RETURNING id`;
-      const old = (await key("service_enrollment", true))[0]?.id as string;
-      const rotation = (await key("rotation", false))[0]?.id as string;
-      const fresh = (await key("service_enrollment", false))[0]?.id as string;
-      await service`UPDATE agent_credentials SET confirmed_at = now() WHERE id = ${fresh}`;
+    it("direct confirmation obeys receipt eligibility and retires only bounded usable siblings", async () => {
+      const setup = await enrollmentHarness.setup();
+      const enrollment = await startEnrollment(setup);
+      await setup.approve(enrollment.principalUserId, "knowledge:read");
+      const user = enrollment.principalUserId;
+      const old = (await service`INSERT INTO agent_credentials (user_id, token_hash, created_from, expires_at, renew_until, pending_expires_at, confirmed_at)
+        VALUES (${user}, ${randomUUID()}, 'key_upgrade', now() + interval '29 days', now() + interval '43 days', now() + interval '15 minutes', now()) RETURNING id`)[0]?.id as string;
+      const rotation = await setup.credentials.issueSuccessor({ predecessorId: old, tokenHash: randomUUID(), policy: { ttlSec: 60, renewWindowSec: 60, pendingSec: 60 } });
+      if (!rotation.ok) throw new Error("rotation refused");
+      const fresh = await pollServiceEnrollment(setup.store, { deviceCode: enrollment.deviceCode });
+      if (!fresh.ok) throw new Error("poll refused");
+      await service`UPDATE agent_credentials SET confirmed_at = clock_timestamp() WHERE id = ${fresh.credentialId}`;
       const state = async (id: string) => (await service`SELECT agent_credential_state(c) AS s FROM agent_credentials c WHERE c.id = ${id}`)[0]?.s;
-      expect(await state(fresh)).toBe("active");
+      expect(await state(fresh.credentialId)).toBe("active");
       expect(await state(old)).toBe("revoked");
-      expect(await state(rotation)).toBe("revoked");
-      // A confirm of a key made any other way never fires the trigger.
-      const a = (await key("key_upgrade", true))[0]?.id as string;
-      const b = (await key("rotation", false))[0]?.id as string;
-      await service`UPDATE agent_credentials SET confirmed_at = now() WHERE id = ${b}`;
-      expect(await state(a)).toBe("active");
-      expect(await state(fresh)).toBe("active");
+      expect(await state(rotation.credentialId)).toBe("revoked");
+      const summary = (await service`SELECT ever_confirmed, first_confirmed_at FROM agent_principals WHERE user_id = ${user}`)[0];
+      expect(summary?.ever_confirmed).toBe(true);
+      expect(summary?.first_confirmed_at).toBeTruthy();
+      await expect(service`UPDATE agent_principals SET ever_confirmed = false WHERE user_id = ${user}`).rejects.toThrow();
+      await expect(service`UPDATE agent_credentials SET confirmed_at = NULL WHERE id = ${fresh.credentialId}`).rejects.toThrow();
     });
+
+    it("direct first activation after expiry refuses while ordinary rotation outlives the receipt", async () => {
+      const setup = await enrollmentHarness.setup();
+      const e = await startEnrollment(setup);
+      await setup.approve(e.principalUserId, "knowledge:read");
+      const issued = await pollServiceEnrollment(setup.store, { deviceCode: e.deviceCode });
+      if (!issued.ok) throw new Error("poll refused");
+      await setup.lapse(e.principalUserId);
+      await expect(service`UPDATE agent_credentials SET confirmed_at = clock_timestamp() WHERE id = ${issued.credentialId}`).rejects.toThrow();
+      expect(await setup.hasLiveRole(e.principalUserId, "knowledge:read")).toBe(true);
+      const next = await startEnrollment(setup);
+      const fresh = await pollServiceEnrollment(setup.store, { deviceCode: next.deviceCode });
+      if (!fresh.ok) throw new Error("poll refused");
+      await confirmCredential(setup.credentials, { credentialId: fresh.credentialId });
+      await setup.lapse(e.principalUserId);
+      const successor = await setup.credentials.issueSuccessor({ predecessorId: fresh.credentialId, tokenHash: randomUUID(), policy: { ttlSec: 60, renewWindowSec: 60, pendingSec: 60 } });
+      if (!successor.ok) throw new Error("rotation refused");
+      expect(await setup.credentials.confirm({ credentialId: successor.credentialId, policy: { ttlSec: 60, renewWindowSec: 60, pendingSec: 60 } })).toMatchObject({ ok: true });
+    });
+
+    it("a direct credential writer fails serialization instead of waiting behind an earlier authority advisory", async () => {
+      const setup = await enrollmentHarness.setup();
+      const e = await startEnrollment(setup);
+      await setup.approve(e.principalUserId, "knowledge:read");
+      const key = await pollServiceEnrollment(setup.store, { deviceCode: e.deviceCode });
+      if (!key.ok) throw new Error("poll refused");
+      await service.begin(async (tx) => {
+        await tx`SELECT pg_advisory_xact_lock(hashtext(${e.principalUserId}))`;
+        await expect(service`UPDATE agent_credentials SET confirmed_at = clock_timestamp() WHERE id = ${key.credentialId}`)
+          .rejects.toMatchObject({ code: "40001" });
+      });
+      expect((await service`SELECT confirmed_at FROM agent_credentials WHERE id = ${key.credentialId}`)[0]?.confirmed_at).toBeNull();
+      expect(await confirmCredential(setup.credentials, { credentialId: key.credentialId })).toMatchObject({ ok: true });
+    });
+
+    it("approval and confirm waiting on the user lock recheck wall-clock deadlines after acquiring it", async () => {
+      const setup = await enrollmentHarness.setup();
+      const e = await startEnrollment(setup);
+      const admin = await makeAdmin();
+      const serviceUrl = process.env.DATABASE_SERVICE_URL;
+      if (!serviceUrl) throw new Error("component PostgreSQL required");
+      const name = `deadline-writer-${randomUUID()}`;
+      const other = postgres(serviceUrl, { max: 1, connection: { application_name: name } });
+      const grants = createPostgresAgentGrantsStore(other as unknown as SqlTag);
+      const credentials = createPostgresCredentialStore(other as unknown as CredentialSql, { hasRoles: async () => false });
+      const blocked = async () => expect.poll(async () => Number((await service`SELECT count(*)::int AS n FROM pg_stat_activity
+        WHERE application_name = ${name} AND wait_event_type = 'Lock' AND query LIKE '%pg_advisory_xact_lock%'`)[0]?.n), { timeout: 3000 }).toBe(1);
+      let approving: Promise<boolean> | undefined;
+      let confirming: ReturnType<typeof credentials.confirm> | undefined;
+      try {
+        await service.begin(async (tx) => {
+          await tx`SELECT pg_advisory_xact_lock(hashtext(${e.principalUserId}))`;
+          approving = grants.approvePending({ principalUserId: e.principalUserId, scope: "knowledge:read", approvedBy: admin });
+          await blocked();
+          await tx`UPDATE agent_roles SET request_expires_at = clock_timestamp() - interval '1 second'
+            WHERE principal_user_id = ${e.principalUserId} AND approved_by IS NULL`;
+        });
+        await expect(approving).rejects.toMatchObject({ code: "request_expired" });
+        await service`UPDATE agent_roles SET request_expires_at = clock_timestamp() + interval '1 hour' WHERE principal_user_id = ${e.principalUserId}`;
+        await setup.approve(e.principalUserId, "knowledge:read");
+        const issued = await pollServiceEnrollment(setup.store, { deviceCode: e.deviceCode });
+        if (!issued.ok) throw new Error("poll refused");
+        await service.begin(async (tx) => {
+          await tx`SELECT pg_advisory_xact_lock(hashtext(${e.principalUserId}))`;
+          confirming = credentials.confirm({ credentialId: issued.credentialId, policy: { ttlSec: 60, renewWindowSec: 60, pendingSec: 60 } });
+          await blocked();
+          await tx`UPDATE agent_service_enrollments SET expires_at = clock_timestamp() - interval '1 second' WHERE principal_user_id = ${e.principalUserId}`;
+        });
+        expect(await confirming).toMatchObject({ ok: false, reason: "expired" });
+        expect((await service`SELECT confirmed_at FROM agent_credentials WHERE id = ${issued.credentialId}`)[0]?.confirmed_at).toBeNull();
+      } finally { await approving?.catch(() => undefined); await confirming?.catch(() => undefined); await other.end({ timeout: 1 }); }
+    });
+
+    it("all retained service Off controls remain reachable through keyset pages beyond25 identities", async () => {
+      await enrollmentHarness.setup();
+      const admin = await makeAdmin();
+      const scope = "knowledge:read";
+      const ids: string[] = [];
+      for (let i = 0; i < 40; i++) {
+        const id = randomUUID(); ids.push(id);
+        await service`INSERT INTO users (id, name) VALUES (${id}, ${`paged-service-${i}`})`;
+        await service`INSERT INTO agent_principals (kind, user_id, service_key) VALUES ('external', ${id}, ${`https://paging.example#service-${i}`})`;
+        await service`INSERT INTO agent_roles (principal_user_id, scope, approved_by, granted_at, revoked_at)
+          VALUES (${id}, ${scope}, ${admin}, now(), now())`;
+      }
+      const grants = createPostgresAgentGrantsStore(client());
+      const first = await grants.listRoleRows(25, [scope]);
+      expect(first.nextCursor).toBeTruthy();
+      const second = await grants.listRoleRows(25, [scope], first.nextCursor ?? undefined);
+      expect(second.nextCursor).toBeNull();
+      const controls = [...first.rows, ...second.rows].filter((r) => ids.includes(r.principalUserId));
+      expect(new Set(controls.map((r) => r.principalUserId)).size).toBe(40);
+      expect(controls.every((r) => r.state === "revoked")).toBe(true);
+      ids.sort();
+      const last = ids[ids.length - 1];
+      if (!last) throw new Error("missing last control");
+      expect(await grants.restoreRevoked?.({ principalUserId: last, scope, approvedBy: admin })).toBe(true);
+      expect(await grants.hasLiveRole(last, scope)).toBe(true);
+    });
+
+    it("maintenance is leased and bounded; expired approved identities and children persist with purge disabled", async () => {
+      const setup = await enrollmentHarness.setup();
+      const first = await startEnrollment(setup);
+      await setup.approve(first.principalUserId, "knowledge:read");
+      const prefix = randomUUID();
+      const cnf = JSON.stringify({ kty: "OKP", crv: "X25519", x: Buffer.alloc(32, 7).toString("base64url") });
+      await service`UPDATE agent_service_enrollments SET expires_at = now() - interval '1 second' WHERE principal_user_id = ${first.principalUserId}`;
+      await service`INSERT INTO agent_service_enrollments (jti, issuer, service, principal_user_id, scope, device_code_hash, cnf_jwk, expires_at)
+        SELECT ${prefix} || '-' || n, 'https://home.example', 'git-review', ${first.principalUserId}, 'knowledge:read', ${prefix} || '-code-' || n, ${cnf}, now() - interval '1 second' FROM generate_series(1, 24) n`;
+      await service`UPDATE agent_authority_maintenance SET next_run_at = now() WHERE id = 'service-enrollment'`;
+      const results = await Promise.all([maintenanceTick(client()), maintenanceTick(client())]);
+      expect(results.map((r) => r.processed).sort((a,b) => a-b)).toEqual([0,20]);
+      expect((await service`SELECT count(*)::int AS n FROM agent_service_enrollments WHERE status = 'open'`)[0]?.n).toBe(5);
+      expect((await service`SELECT count(*)::int AS n FROM agent_service_enrollments`)[0]?.n).toBe(25);
+      expect(await setup.hasLiveRole(first.principalUserId, "knowledge:read")).toBe(true);
+      expect(await setup.principalExists(first.principalUserId)).toBe(true);
+      expect((await service`SELECT purge_enabled, minimum_reader_build FROM agent_authority_maintenance WHERE id = 'service-enrollment'`)[0]).toMatchObject({ purge_enabled: false, minimum_reader_build: null });
+    });
+
   });
+});
+
+
+// CI only: the real runner migrates a disposable database from immutable0042, with pre-existing historical confirmations.
+describe("service authority forward migration", () => {
+  it("backfills every confirmation atomically and keeps purge disabled; lock timeout rolls back before retry", async () => {
+    const container = await new PostgreSqlContainer("postgres:15-alpine").start();
+    const db = postgres(container.getConnectionUri(), { max: 3 });
+    const directory = await mkdtemp(join(tmpdir(), "authority-foundation-"));
+    const migrations = resolve("src/adapters/server/db/migrations");
+    const previous = join(directory, "previous");
+    const run = (folder: string) => promisify(execFile)(process.execPath, [resolve("../scripts/db/migrate.mjs"), folder], {
+      env: { ...process.env, DATABASE_URL: container.getConnectionUri(), NODE_NAME: "node-template" }, timeout: 90000,
+    });
+    try {
+      await cp(migrations, previous, { recursive: true });
+      const journalPath = join(previous, "meta", "_journal.json");
+      const journal = JSON.parse(await readFile(journalPath, "utf8"));
+      journal.entries = journal.entries.filter((e: { idx: number }) => e.idx <= 42);
+      await writeFile(journalPath, JSON.stringify(journal));
+      expect((await run(previous)).stdout).toContain("migrations applied");
+      const ids = { active: randomUUID(), revoked: randomUUID(), expired: randomUUID(), multiple: randomUUID(), never: randomUUID() };
+      const first = new Date("2026-01-01T00:00:00.000Z");
+      for (const [kind, user] of Object.entries(ids)) {
+        await db`INSERT INTO users (id, name) VALUES (${user}, ${kind})`;
+        await db`INSERT INTO agent_principals (kind, user_id) VALUES ('external', ${user})`;
+        if (kind === "never") continue;
+        await db`INSERT INTO agent_credentials (user_id, token_hash, created_from, confirmed_at, expires_at, renew_until, revoked_at)
+          VALUES (${user}, ${randomUUID()}, 'key_upgrade', ${first},
+            ${kind === "expired" ? new Date("2026-01-02T00:00:00Z") : new Date("2099-01-01T00:00:00Z")},
+            ${kind === "expired" ? new Date("2026-01-03T00:00:00Z") : new Date("2099-01-02T00:00:00Z")},
+            ${kind === "revoked" ? first : null})`;
+        if (kind === "multiple") await db`INSERT INTO agent_credentials (user_id, token_hash, created_from, confirmed_at, expires_at, renew_until, revoked_at)
+          VALUES (${user}, ${randomUUID()}, 'key_upgrade', '2026-02-01T00:00:00Z', '2026-02-02T00:00:00Z', '2026-02-03T00:00:00Z', '2026-02-02T00:00:00Z')`;
+      }
+      // Credential mutation blocks0043's bounded quiescence. The runner must fail with no partial schema/state qualification.
+      await db.begin(async (tx) => {
+        await tx`UPDATE agent_credentials SET revoked_reason = 'fixture' WHERE user_id = ${ids.active}`;
+        await expect(run(migrations)).rejects.toThrow();
+        expect((await tx`SELECT to_regclass('public.agent_authority_maintenance') AS relation`)[0]?.relation).toBeNull();
+      });
+      expect((await run(migrations)).stdout).toContain("0043_service_authority_foundation");
+      const store = createPostgresCredentialStore(db as unknown as CredentialSql, { hasRoles: async () => false });
+      for (const [kind, user] of Object.entries(ids)) {
+        const row = (await db`SELECT ever_confirmed, first_confirmed_at FROM agent_principals WHERE user_id = ${user}`)[0];
+        expect(row?.ever_confirmed).toBe(kind !== "never");
+        expect(row?.first_confirmed_at?.toISOString() ?? null).toBe(kind === "never" ? null : first.toISOString());
+        expect(await store.everConfirmed(user)).toBe(kind !== "never");
+      }
+      expect((await db`SELECT backfill_ready, purge_enabled, minimum_reader_build FROM agent_authority_maintenance WHERE id = 'service-enrollment'`)[0])
+        .toMatchObject({ backfill_ready: true, purge_enabled: false, minimum_reader_build: null });
+      // Purge is not enabled/executed. A compatible reader must still OR the historical source if a pre-summary row is encountered.
+      await expect(db`UPDATE agent_principals SET first_confirmed_at = NULL WHERE user_id = ${ids.multiple}`).rejects.toThrow();
+    } finally {
+      await db.end({ timeout: 1 });
+      await container.stop();
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 180000);
 });

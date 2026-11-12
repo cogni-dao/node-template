@@ -57,3 +57,5 @@ export {
   type EnrollmentVerifyResult,
   type TrustedHome,
 } from "./verify";
+
+export { maintenanceTick } from "./maintenance";
