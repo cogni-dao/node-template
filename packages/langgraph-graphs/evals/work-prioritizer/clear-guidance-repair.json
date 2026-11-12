@@ -32,7 +32,8 @@
 		"goalAndMove": "Read canonical KPI and full metric body, justify goal score, declare atoms-no-inline-history up, retain server baseline",
 		"effect": "One combined justified update, preserving complete brief and existing labels; actual post-write readback",
 		"repeat": "Zero writes and complete stored item/revision unchanged; quiet repetition cannot repair the original wrong judgment",
-		"availability": "Missing inference or required evidence is unscorable, not a pass"
+		"availability": "Missing inference or required evidence is unscorable, not a pass",
+		"agentReadiness": "Name the required human knowledge-merge gate and reflect it in readiness; reading policy is not an effect grant."
 	},
 	"observedFailure": {
 		"route": "needs_research",
