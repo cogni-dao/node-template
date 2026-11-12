@@ -237,8 +237,9 @@ const atomEdit = (id: string, at: string, over: Row = {}): Row => ({
 });
 const IN = "2026-11-05 10:00:00";
 const totals = (rows: Row[], bytes = 1000) =>
+	// The engine sends no row at all when no diff row qualifies.
 	rows.length === 0
-		? [{ as_of: ASOF, n: "0", bytes: "0", id: null }]
+		? []
 		: rows.map((r) => ({ as_of: ASOF, n: String(rows.length), bytes: String(bytes), ...r }));
 
 /** The window statement's answer: one row per commit hash, or the totals row alone for none. */
@@ -453,6 +454,28 @@ describe("no-inline-history@1 edits read", () => {
 			expect((await edits([], [])).sample).toMatchObject({ complete: false, reason: "zero_denominator" });
 		});
 
+		it("reads a statement that sends no row as no edit, with the window read's as_of", async () => {
+			const { sql, queries } = fakeSql((text) => (WINDOW(text) ? windowRows([HASH_A]) : []));
+			const sample = await readNoInlineHistoryEdits(sql, "count", window, read);
+			expect(sample).toMatchObject({ complete: true, value: 0, unit: "edits" });
+			expect(queries).toHaveLength(3);
+			expect(sample.sourceWatermarks).toEqual([
+				{ source: "node.work_items", asOf: new Date(ASOF).toISOString() },
+				{ source: "node.knowledge", asOf: new Date(ASOF).toISOString() },
+			]);
+		});
+
+		it("fails closed on the first row alone that an over-cap statement sends", async () => {
+			const { sql } = fakeSql((text) =>
+				WINDOW(text)
+					? windowRows([HASH_A])
+					: [{ as_of: ASOF, n: String(NO_INLINE_HISTORY_MAX_ROWS + 1), bytes: "10", ...itemEdit("task.1", IN) }],
+			);
+			const sample = await readNoInlineHistoryEdits(sql, "count", window, read);
+			expect(sample).toMatchObject({ complete: false, reason: "incomplete_or_invalid_source" });
+			expect(sample.evidenceRefs.join()).toContain("cap_hit");
+		});
+
 		it("fails closed above the edit cap for either output", async () => {
 			const rows = Array.from({ length: NO_INLINE_HISTORY_MAX_EDITS + 1 }, (_, i) => itemEdit(`task.${i}`, IN));
 			for (const output of ["share", "count"] as const) {
@@ -599,7 +622,14 @@ describe("no-inline-history@1 edits read", () => {
 			expect(text).toContain(`t.bytes <= ${NO_INLINE_HISTORY_MAX_BYTES}`);
 			expect(text).toContain("> 100000 THEN NULL");
 			expect(text).toContain("CAST(COALESCE(SUM(");
-			expect(text).toContain("ORDER BY s.id, s.at, s.commit_hash");
+			// One pass: the totals are window functions over the one reference to the CTE, never a second scan of the diff.
+			// The CTE is defined once and read once: any further reference (FROM, JOIN, a subquery) would scan the diff again.
+			expect(text.match(/\bdiffs\b/g)).toHaveLength(2);
+			expect(text).toContain("COUNT(*) OVER () AS n");
+			expect(text).toContain(") OVER (), 0) AS BIGINT) AS bytes");
+			// Over a cap the first row alone carries the totals.
+			expect(text).toContain("OR t.rn = 1 ORDER BY t.id, t.at, t.commit_hash");
+			expect(text).not.toContain("LEFT JOIN diffs");
 			expect(text).not.toContain(";");
 			expect(text).not.toMatch(/\b(INSERT|UPDATE|DELETE|DROP)\b/i);
 		});
@@ -628,6 +658,8 @@ describe("no-inline-history@1 edits read", () => {
 			const text = noInlineHistoryWindowCommitsSql(window);
 			expect(text.startsWith("WITH w AS")).toBe(true);
 			expect(text).toContain("FROM dolt_log l WHERE l.date >= '2026-11-02 12:00:00.000' AND l.date < '2026-11-09 12:00:00.000'");
+			// Merge commits stay in the list: a contribution's edit can have its diff row at the merge commit only.
+			expect(text).not.toContain("dolt_commit_ancestors");
 			expect(text).toContain(`LIMIT ${NO_INLINE_HISTORY_MAX_ROWS + 1}`);
 			expect(text).toContain(`t.n <= ${NO_INLINE_HISTORY_MAX_ROWS}`);
 			expect(text).not.toContain("dolt_diff");
@@ -884,7 +916,8 @@ describe("no-inline-history@1 in the goal-metric service", () => {
 
 	it.each([
 		["windowCommits", "n", { windowCommits: "ok", workDiff: "not_started", knowledgeDiff: "not_started", counts: [null, null, null, null, null] }],
-		["workDiff", "n", { windowCommits: "ok", workDiff: "ok", knowledgeDiff: "ok", counts: [1, null, null, 1, 1000] }],
+		// A null count is a malformed result, not zero edits: the read stops at that table.
+		["workDiff", "n", { windowCommits: "ok", workDiff: "ok", knowledgeDiff: "not_started", counts: [1, null, null, null, null] }],
 		["workDiff", "bytes", { windowCommits: "ok", workDiff: "ok", knowledgeDiff: "ok", counts: [1, null, null, 1, 1000] }],
 		["knowledgeDiff", "n", { windowCommits: "ok", workDiff: "ok", knowledgeDiff: "ok", counts: [1, 10, 1000, null, null] }],
 		["knowledgeDiff", "bytes", { windowCommits: "ok", workDiff: "ok", knowledgeDiff: "ok", counts: [1, 10, 1000, null, null] }],
