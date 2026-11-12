@@ -1574,6 +1574,83 @@ describe("goal reader deadline ownership", () => {
 			vi.useRealTimers();
 		}
 	});
+	it.each([
+		// Unreadable in time: the fresh read's own error reaches the caller.
+		["a check that never answers", () => new Promise<boolean>(() => {}), "error"],
+		// Readable after 400 ms: the last good result is served, marked failed.
+		["a check that answers slowly", () => new Promise<boolean>((resolve) => setTimeout(() => resolve(true), 400)), "stale"],
+	] as const)("raises no unhandled rejection when the fresh read fails while %s", async (_name, check, outcome) => {
+		vi.useFakeTimers();
+		const unhandled = vi.fn();
+		process.on("unhandledRejection", unhandled);
+		try {
+			const definition = {
+				id: "m1",
+				title: "M one",
+				revision: "r1",
+				spec: { calculatorId: "c@1" },
+			};
+			const canRead = vi.fn(async () => true);
+			const metrics = {
+				serving: async () => ({
+					items: [],
+					unbound: [
+						{
+							definition,
+							assessment: null,
+							latest: {
+								viewState: "unavailable",
+								value: null,
+								unit: "x",
+								observedAt: null,
+								reason: null,
+							},
+						},
+					],
+					truncated: false,
+					readKpi: vi.fn(),
+				}),
+				canRead,
+			};
+			let calls = 0;
+			const read = createGoalProgressReader({
+				knowledge: () => ({
+					// The first read answers; the next one fails at once.
+					listActiveGoals: async () => {
+						if (calls++ === 0) return [];
+						throw new Error("source failed");
+					},
+					getKnowledge: async () => null,
+					listCitationsByCitedId: async () => [],
+				}),
+				metrics: () => metrics as never,
+				environment: "test",
+			});
+			await read();
+			canRead.mockImplementation(check as never);
+			// The fresh read rejects while the check is still pending: nothing is attached to it yet.
+			const late = read().then(
+				(body) => body,
+				(error: Error) => error,
+			);
+			await vi.advanceTimersByTimeAsync(600);
+			await new Promise<void>((resolve) => process.nextTick(resolve));
+			await new Promise<void>((resolve) => process.nextTick(resolve));
+			expect(unhandled).not.toHaveBeenCalled();
+			const result = await late;
+			if (outcome === "error") {
+				expect(result).toBeInstanceOf(Error);
+				expect((result as Error).message).toBe("source failed");
+			} else {
+				expect(result).toMatchObject({
+					stale: { reason: "fresh_read_failed" },
+				});
+			}
+		} finally {
+			process.off("unhandledRejection", unhandled);
+			vi.useRealTimers();
+		}
+	});
 	it("serves nothing stale past ten minutes: the caller waits for the read, then gets a retryable 503", async () => {
 		vi.useFakeTimers();
 		try {

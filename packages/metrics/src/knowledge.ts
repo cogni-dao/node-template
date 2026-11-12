@@ -595,6 +595,10 @@ export function createGoalProgressReader(deps: {
 		pending: Promise<GoalsProgress>,
 		kept: NonNullable<typeof lastGood>,
 	): Promise<GoalsProgress> {
+		// The read may fail while the check runs, before anything awaits it: guard
+		// it here (an unhandled rejection can end the process); every path below
+		// still returns or races the original promise, so its error propagates.
+		pending.catch(() => {});
 		// A metric no longer readable, or a check that is not answered in time,
 		// voids the last good result: wait for the fresh read.
 		let checkTimer: ReturnType<typeof setTimeout> | undefined;
