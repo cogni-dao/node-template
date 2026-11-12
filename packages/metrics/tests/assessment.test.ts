@@ -1317,6 +1317,92 @@ describe("metric batch cancellation admission", () => {
 });
 
 describe("goal reader deadline ownership", () => {
+	const slowPort = () => {
+		const finishes: ((rows: never[]) => void)[] = [];
+		const port = {
+			listActiveGoals: vi.fn(
+				() => new Promise<never[]>((resolve) => finishes.push(resolve)),
+			),
+			getKnowledge: async () => null,
+			listCitationsByCitedId: async () => [],
+		};
+		const read = createGoalProgressReader({
+			knowledge: () => port,
+			metrics: () => undefined,
+			environment: "test",
+		});
+		return { finishes, port, read };
+	};
+	it("lets a read that needs more than 2.5 s finish for every caller that joined it (bug.0035)", async () => {
+		vi.useFakeTimers();
+		try {
+			const { finishes, port, read } = slowPort();
+			const first = read();
+			const second = read();
+			await vi.advanceTimersByTimeAsync(4000);
+			expect(port.listActiveGoals).toHaveBeenCalledTimes(1);
+			finishes[0]!([]);
+			expect(await first).toMatchObject({ goals: [] });
+			expect(await second).toMatchObject({ goals: [] });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+	it("serves the last good result when the fresh read is slower than the caller wait, and joins that read", async () => {
+		vi.useFakeTimers();
+		try {
+			const { finishes, port, read } = slowPort();
+			const cold = read();
+			await vi.advanceTimersByTimeAsync(0);
+			finishes[0]!([]);
+			const good = await cold;
+			const warm = read();
+			await vi.advanceTimersByTimeAsync(2499);
+			expect(port.listActiveGoals).toHaveBeenCalledTimes(2);
+			await vi.advanceTimersByTimeAsync(1);
+			expect(await warm).toBe(good);
+			// Another caller joins the read still in flight; none starts a third.
+			const joined = read();
+			await vi.advanceTimersByTimeAsync(0);
+			expect(port.listActiveGoals).toHaveBeenCalledTimes(2);
+			finishes[1]!([]);
+			const fresh = await joined;
+			expect(fresh).not.toBe(good);
+			expect(fresh).toMatchObject({ goals: [] });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+	it("serves the last good result when the fresh read fails", async () => {
+		vi.useFakeTimers();
+		try {
+			const { finishes, port, read } = slowPort();
+			const cold = read();
+			await vi.advanceTimersByTimeAsync(0);
+			finishes[0]!([]);
+			const good = await cold;
+			port.listActiveGoals.mockRejectedValueOnce(new Error("source failed"));
+			expect(await read()).toBe(good);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+	it("serves nothing stale past ten minutes: the caller waits for the read, then gets a retryable 503", async () => {
+		vi.useFakeTimers();
+		try {
+			const { finishes, read } = slowPort();
+			const cold = read();
+			await vi.advanceTimersByTimeAsync(0);
+			finishes[0]!([]);
+			await cold;
+			await vi.advanceTimersByTimeAsync(10 * 60_000 + 1);
+			const late = read().catch((error) => error);
+			await vi.advanceTimersByTimeAsync(8000);
+			expect(await late).toMatchObject({ status: 503, code: "batch_unavailable" });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
 	it("coalesces callers, abandons a hung owner, and ignores its late completion", async () => {
 		vi.useFakeTimers();
 		try {
@@ -1336,7 +1422,7 @@ describe("goal reader deadline ownership", () => {
 			const first = read();
 			expect(read()).toBe(first);
 			const failed = first.catch((error) => error);
-			await vi.advanceTimersByTimeAsync(2500);
+			await vi.advanceTimersByTimeAsync(8000);
 			expect(await failed).toMatchObject({
 				status: 503,
 				code: "batch_unavailable",
@@ -1372,7 +1458,7 @@ describe("goal reader deadline ownership", () => {
 				});
 			for (let i = 0; i < 4; i++) {
 				const failed = makeReader()().catch((error) => error);
-				await vi.advanceTimersByTimeAsync(2500);
+				await vi.advanceTimersByTimeAsync(8000);
 				expect(await failed).toMatchObject({ status: 503 });
 			}
 			await expect(makeReader()()).rejects.toMatchObject({ status: 503 });
@@ -2269,7 +2355,7 @@ it("retains goal admission until the parallel serving branch settles after goal 
 			});
 		for (let i = 0; i < 4; i++) {
 			const failed = make()().catch((error) => error);
-			await vi.advanceTimersByTimeAsync(2500);
+			await vi.advanceTimersByTimeAsync(8000);
 			expect(await failed).toMatchObject({ code: "batch_unavailable" });
 		}
 		await expect(make()()).rejects.toMatchObject({ code: "batch_unavailable" });

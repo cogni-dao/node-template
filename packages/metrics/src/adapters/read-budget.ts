@@ -8,6 +8,7 @@ export async function readMetricBudget<T>(
 	owner: object,
 	signal: AbortSignal | undefined,
 	read: (signal: AbortSignal) => PromiseLike<T>,
+	timeoutMs = 2500,
 ): Promise<T> {
 	if (signal?.aborted || (active.get(owner) ?? 0) >= 4)
 		throw new MetricError("batch_unavailable", 503);
@@ -22,7 +23,7 @@ export async function readMetricBudget<T>(
 	const deadline = new Promise<never>((_, reject) => {
 		rejectCaller = reject;
 	});
-	const timer = setTimeout(stop, 2500);
+	const timer = setTimeout(stop, timeoutMs);
 	signal?.addEventListener("abort", stop, { once: true });
 	const native = Promise.resolve()
 		.then(() => {

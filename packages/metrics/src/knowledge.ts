@@ -487,7 +487,27 @@ export function createGoalSource(
 	};
 }
 
-/** A node's ONE goal-progress function; HTTP, SSR and agent tools all call it. */
+/** How long one shared goal-progress read may run before it is abandoned. */
+const GOAL_READ_DEADLINE_MS = 8000;
+/** With a last good result in hand, how long a caller waits for the fresh read. */
+const GOAL_READ_CALLER_WAIT_MS = 2500;
+/** The oldest last good result a caller may be served instead of a fresh read. */
+const GOAL_READ_MAX_STALE_MS = 10 * 60_000;
+
+/**
+ * A node's ONE goal-progress function; HTTP, SSR and agent tools all call it.
+ *
+ * Callers share one in-flight read, and that read is not aborted when a caller
+ * stops waiting: a read that needs more than the old 2.5 s (bug.0035: production
+ * reads sat at 1-2.5 s and, once the store was busy, every caller aborted and
+ * restarted the read, so none ever finished) runs to its own deadline and its
+ * result serves the callers that joined it. A complete result is kept as the
+ * last good one. While one exists and is under ten minutes old, a caller waits
+ * 2.5 s for the fresh read, then gets the last good result (its `asOf` is the
+ * time it was read) rather than a failure; a caller with nothing to serve waits
+ * for the read, up to its deadline, then gets a retryable 503. A result with an
+ * unavailable annex or hypothesis is never kept.
+ */
 export function createGoalProgressReader(deps: {
 	metrics: () => MetricService | undefined;
 	knowledge: () => GoalKnowledgeReader | undefined;
@@ -496,25 +516,50 @@ export function createGoalProgressReader(deps: {
 	pooledGoalReads?: boolean;
 }): () => Promise<GoalsProgress> {
 	let inFlight: Promise<GoalsProgress> | undefined;
-	return () => {
-		if (inFlight) return inFlight;
+	let lastGood: { value: GoalsProgress; at: number } | undefined;
+	const start = (): Promise<GoalsProgress> => {
 		const run = async () => {
 			const port = deps.knowledge();
 			if (!port) throw new MetricError("goals_unavailable", 503);
-			return readMetricBudget(port, undefined, (signal) =>
-				readGoalsProgress({
-					goals: createGoalSource(port, signal),
-					pooledGoalReads: deps.pooledGoalReads,
-					metrics: deps.metrics(),
-					environment: deps.environment,
-					signal,
-				}),
+			return readMetricBudget(
+				port,
+				undefined,
+				(signal) =>
+					readGoalsProgress({
+						goals: createGoalSource(port, signal),
+						pooledGoalReads: deps.pooledGoalReads,
+						metrics: deps.metrics(),
+						environment: deps.environment,
+						signal,
+					}),
+				GOAL_READ_DEADLINE_MS,
 			);
 		};
-		const pending = run().finally(() => {
-			if (inFlight === pending) inFlight = undefined;
-		});
+		const pending = run()
+			.then((value) => {
+				if (
+					!value.servedUnavailable &&
+					value.goals.every((g) => !g.hypothesesUnavailable)
+				)
+					lastGood = { value, at: Date.now() };
+				return value;
+			})
+			.finally(() => {
+				if (inFlight === pending) inFlight = undefined;
+			});
 		inFlight = pending;
 		return pending;
+	};
+	return () => {
+		const pending = inFlight ?? start();
+		const kept = lastGood;
+		if (!kept || Date.now() - kept.at > GOAL_READ_MAX_STALE_MS) return pending;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const waited = new Promise<GoalsProgress>((resolve) => {
+			timer = setTimeout(() => resolve(kept.value), GOAL_READ_CALLER_WAIT_MS);
+		});
+		return Promise.race([pending.catch(() => kept.value), waited]).finally(() =>
+			clearTimeout(timer),
+		);
 	};
 }
