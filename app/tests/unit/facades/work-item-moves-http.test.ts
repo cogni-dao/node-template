@@ -596,4 +596,62 @@ describe("work-item moves HTTP boundary (story.0033)", () => {
       });
     });
   });
+
+  // task.0118: the route serves the envelope; ?include=links adds the first citation page.
+  describe("GET envelope (task.0118)", () => {
+    const withInclude = (query: string) =>
+      (GET as unknown as Handler)(
+        { log: { info: vi.fn() } },
+        new Request(`http://localhost/api/v1/work/items/task.0001${query}`),
+        { id: "principal-1" },
+        { params: Promise.resolve({ id: "task.0001" }) },
+      );
+    const listCitationLinks = vi.fn();
+    beforeEach(() => {
+      vi.mocked(getContainer).mockReturnValue({
+        doltgresWorkItems: { patch, get, create },
+        goalMetrics: { workReadBatch: batch },
+        knowledgeStorePort: { listCitationLinks },
+      } as never);
+      get.mockResolvedValue(base);
+      listCitationLinks.mockResolvedValue({
+        links: [
+          {
+            id: "c1",
+            citingId: "task.0001",
+            citedId: "goal-x",
+            citationType: "extends",
+            context: null,
+            sourceTitle: "Moves fixture",
+            targetTitle: "Goal X",
+          },
+        ],
+        nextCursor: "n1",
+      });
+    });
+
+    it("include=links returns links.items and nextCursor; the default read has no links and costs no read", async () => {
+      const body = await (await withInclude("?include=links")).json();
+      expect(body.links.nextCursor).toBe("n1");
+      expect(body.links.items[0]).toMatchObject({ id: "c1", direction: "out", citationType: "extends" });
+      expect(listCitationLinks).toHaveBeenCalledOnce();
+      listCitationLinks.mockClear();
+      expect(await (await withInclude("")).json()).not.toHaveProperty("links");
+      expect(listCitationLinks).not.toHaveBeenCalled();
+    });
+
+    it("an unknown include is 400, never silently ignored", async () => {
+      const response = await withInclude("?include=links,secrets");
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ error: "invalid input" });
+      expect(get).not.toHaveBeenCalled();
+    });
+
+    it("unreadable links are marked unavailable instead of empty, and the item still reads 200", async () => {
+      listCitationLinks.mockRejectedValue(new Error("down"));
+      const response = await withInclude("?include=links");
+      expect(response.status).toBe(200);
+      expect((await response.json()).links).toEqual({ items: [], nextCursor: null, unavailable: true });
+    });
+  });
 });

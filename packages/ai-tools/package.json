@@ -1,6 +1,6 @@
 {
   "name": "@cogni-dao/ai-tools",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "license": "LicenseRef-PolyForm-Shield-1.0.0",
   "repository": {
     "type": "git",
@@ -43,8 +43,8 @@
     "@cogni-dao/metrics": "workspace:*"
   },
   "peerDependencies": {
-    "@cogni-dao/work-items": "^0.10.0 || ^0.11.0 || ^0.12.0",
+    "@cogni-dao/work-items": "^0.10.0 || ^0.11.0 || ^0.12.0 || ^0.13.0",
     "@cogni-dao/knowledge-store": "^0.11.0 || ^0.12.0 || ^0.13.0 || ^0.14.0 || ^0.15.0 || ^0.16.0 || ^0.17.0 || ^0.18.0",
-    "@cogni-dao/metrics": "^0.13.0"
+    "@cogni-dao/metrics": "^0.13.0 || ^0.14.0"
   }
 }

@@ -9,7 +9,15 @@ import type { BoundTool, ToolContract, ToolImplementation } from "../types";
 import { toToolAssignee, WorkItemOutputSchema } from "./work-item-query";
 
 export const WORK_ITEM_READ_NAME = "core__work_item_read" as const;
-const Input = z.object({ id: z.string().min(1).max(200) });
+const Input = z.object({
+  id: z.string().min(1).max(200),
+  includeLinks: z
+    .boolean()
+    .optional()
+    .describe(
+      "true adds links: the first page (five) of the item's citation links with nextCursor; page on through GET /api/v1/citations/{id}?cursor=",
+    ),
+});
 const Output = z.object({ item: WorkItemOutputSchema.nullable() });
 type Input = z.infer<typeof Input>;
 type Output = z.infer<typeof Output>;
@@ -23,7 +31,10 @@ export const workItemReadContract: ToolContract<
   name: WORK_ITEM_READ_NAME,
   description:
     "Read one work item completely by exact id. Oversized items fail rather than returning truncated evidence. " +
-    "`moves` lists the metrics the item moves: each has its pinned baseline, the current reading and `moved` (as_declared, against, flat or unknown). unknown is never zero: it means a reading is missing.",
+    "`moves` lists the metrics the item moves: each has its pinned baseline, the current reading and `moved` (as_declared, against, flat or unknown). unknown is never zero: it means a reading is missing. " +
+    "Each move also names its goal chain: `metric` (id, title, unit, display), `kpi` (the goal KPI it moves or serves: metricId, title, comparator, target, status) and `goal` (id, title). Read the goal and KPI here rather than through goal or metric reads. " +
+    "kpi and goal are absent when the metric serves no goal KPI; `context: \"unavailable\"` means the chain could not be resolved, never that there is none. " +
+    "Set includeLinks to also get `links`: the first page of the item's citation links with nextCursor (`links.unavailable` means they could not be read, not that there are none).",
   effect: "read_only",
   inputSchema: Input,
   outputSchema: Output,
@@ -36,13 +47,15 @@ export function createWorkItemReadImplementation(deps: {
   readonly nodePublicOrigin?: string | undefined;
 }): ToolImplementation<Input, Output> {
   return {
-    async execute({ id }) {
-      const items = await deps.workItemCapability.query({
-        ids: [id],
-        limit: 1,
-      });
-      const item = items.find((entry) => entry.id === id);
-      if (!item) return { item: null };
+    async execute({ id, includeLinks }) {
+      // ONE_ITEM_ENVELOPE: the capability's `read` is the single-item envelope the route serves.
+      const capability = deps.workItemCapability;
+      const item = capability.read
+        ? await capability.read(id, { includeLinks: includeLinks === true })
+        : (await capability.query({ ids: [id], limit: 1 })).find(
+            (entry) => entry.id === id,
+          );
+      if (!item || item.id !== id) return { item: null };
       const result = {
         ...withoutSourceProvenance(item),
         labels: [...item.labels],

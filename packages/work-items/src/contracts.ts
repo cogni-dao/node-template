@@ -59,8 +59,70 @@ const MoveReadingDtoSchema = z.object({
 });
 
 /**
+ * The metric a move names, as the single-item read resolves it (task.0118). Derived on the
+ * server from the metric definition; never stored on the item.
+ */
+export const MoveMetricContextSchema = z.object({
+	id: z.string(),
+	title: z.string(),
+	unit: z.string(),
+	display: z.enum(["progress", "slo", "volume"]).optional(),
+});
+
+/** The goal KPI a move serves: the moved metric itself when a goal binds it, else the KPI it `serves`. */
+export const MoveKpiContextSchema = z.object({
+	metricId: z.string(),
+	title: z.string(),
+	comparator: z.enum(["gte", "lte", "eq"]),
+	target: z.object({ value: z.number(), unit: z.string() }),
+	/** The KPI's latest assessment; absent when it could not be read, never guessed. */
+	status: z.string().optional(),
+});
+
+export const MoveGoalContextSchema = z.object({
+	id: z.string(),
+	title: z.string(),
+});
+
+/** Links per page; the citations read serves five. */
+export const CITATION_LINKS_PAGE_MAX = 5;
+
+/** One depth-1 citation endpoint and link, the wire shape of `GET /api/v1/citations/{id}`. */
+export const CitationEndpointDtoSchema = z.object({
+	id: z.string(),
+	kind: z.enum(["knowledge", "work"]),
+	title: z.string().nullable(),
+	href: z.string(),
+});
+export const CitationLinkDtoSchema = z.object({
+	id: z.string(),
+	direction: z.enum(["out", "in"]),
+	citationType: z.string(),
+	source: CitationEndpointDtoSchema,
+	target: CitationEndpointDtoSchema,
+	context: z.string().nullable(),
+	/** This side's reading from CITATION_TYPE_DEFINITIONS ("supported by" on the cited side). */
+	label: z.string(),
+	tone: z.enum(["positive", "negative", "warning", "neutral", "muted"]),
+});
+/** One bounded page of citation links: the `GET /api/v1/citations/{id}` body. */
+export const CitationLinksPageSchema = z.object({
+	links: z.array(CitationLinkDtoSchema).max(CITATION_LINKS_PAGE_MAX),
+	nextCursor: z.string().nullable(),
+});
+
+/** An item's first page of citation links (`?include=links`); `unavailable` is never an empty list. */
+export const WorkItemLinksSchema = z.object({
+	items: z.array(CitationLinkDtoSchema).max(CITATION_LINKS_PAGE_MAX),
+	nextCursor: z.string().nullable(),
+	unavailable: z.literal(true).optional(),
+});
+export type WorkItemLinks = z.infer<typeof WorkItemLinksSchema>;
+
+/**
  * One move as a read returns it (story.0033). A list read and a write return the stored
- * three fields; a single-item read adds the readings and the verdict at read time.
+ * three fields; a single-item read adds the readings and the verdict at read time, and
+ * (task.0118) the metric with the KPI and goal it serves.
  */
 export const WorkItemMoveDtoSchema = z.object({
 	metricId: z.string(),
@@ -83,6 +145,12 @@ export const WorkItemMoveDtoSchema = z.object({
 			"metrics_unavailable",
 		])
 		.optional(),
+	// Single-item read only (task.0118). `kpi` and `goal` are absent when the metric serves no
+	// goal KPI; `context: "unavailable"` means resolution failed, so none of the three is guessed.
+	metric: MoveMetricContextSchema.optional(),
+	kpi: MoveKpiContextSchema.optional(),
+	goal: MoveGoalContextSchema.optional(),
+	context: z.literal("unavailable").optional(),
 });
 
 export const WorkItemDtoSchema = z.object({
@@ -116,6 +184,8 @@ export const WorkItemDtoSchema = z.object({
 	claimedByRun: z.string().optional(),
 	claimedAt: z.string().optional(),
 	lastCommand: z.string().optional(),
+	// Single-item read with `include=links` only (task.0118).
+	links: WorkItemLinksSchema.optional(),
 	createdAt: z.string(),
 	updatedAt: z.string(),
 });

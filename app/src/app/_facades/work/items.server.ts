@@ -9,6 +9,7 @@
  *   checked before the store write), PORT_VIA_CONTAINER (no direct adapter imports), CONTRACTS_ARE_TRUTH, NODE_STORE_IS_LOCAL.
  * Evaluation: preserves scores in DTOs. Write errors pass through unchanged; `workItemWriteErrorResponse` (@cogni/work-items) maps them to HTTP in the route (task.0097).
  * Moves (story.0033): create and patch resolve new metric links and pin baselines. Detail and bounded summary reads add authorized observations and directional verdicts. Null-direction writes remain gated until reader rollout completes.
+ * Envelope (task.0118): `getWorkItem` is the one single-item read; each move also carries its metric, KPI and goal, and `includeLinks` adds the first page of citation links. List and summary reads stay summary-sized.
  * Side-effects: IO (filesystem read via port; database read/write via Doltgres port)
  * Links: contracts/work.items.{list,get,create,patch}.v1.contract
  * @internal
@@ -33,6 +34,7 @@ import type {
   WorkSummaryReadOptions,
 } from "@cogni/work-items";
 import {
+  judgeItemMoves,
   judgeMoveSummaries,
   toWorkItemId,
   toWorkItemsCreateInput,
@@ -44,6 +46,7 @@ import {
   isPrivilegedPriority,
   NodeAdminRequiredError,
 } from "@cogni/knowledge-store";
+import { readItemLinks } from "@/bootstrap/capabilities/citation-links";
 import { createMoveMetricPorts } from "@/bootstrap/capabilities/work-item-moves";
 import { getContainer } from "@/bootstrap/container";
 import { toHttpWorkItem } from "../read-envelopes.server";
@@ -340,21 +343,47 @@ export async function listWorkBoardColumns(
   return { columns, queryCount: columns.length };
 }
 
-export async function getWorkItem(id: string, options?: WorkSummaryReadOptions): Promise<WorkItemDto | null> {
+/** Single-item read options; `includeLinks` adds the first page of citation links (`?include=links`). */
+export interface WorkItemReadOptions extends WorkSummaryReadOptions {
+  readonly includeLinks?: boolean;
+  /** Set false for a caller that needs only the stored move ids (the EDO expectations read). Default: resolve the chain. */
+  readonly chain?: boolean;
+}
+
+/**
+ * THE single-item envelope (task.0118): the stored item plus, for each move, its readings, verdict
+ * and the metric → KPI → goal chain, and optionally the first page of citation links. Moves and
+ * links read together, so neither adds a round trip to the other. Never throws for either: an
+ * unresolved chain reads `context: "unavailable"` and unreadable links read `unavailable`.
+ */
+async function withItemEnvelope(dto: WorkItemDto, options?: WorkItemReadOptions): Promise<WorkItemDto> {
+  if (options?.chain === false && !options.includeLinks) return withMoveReadings(dto, options);
+  const container = getContainer();
+  const readings = container.goalMetrics
+    ? createMoveMetricPorts(() => container.goalMetrics, () => container.knowledgeStorePort).readings
+    : undefined;
+  const [judged, links] = await Promise.all([
+    judgeItemMoves(dto, readings, options),
+    options?.includeLinks ? readItemLinks(container.knowledgeStorePort, dto.id) : undefined,
+  ]);
+  return links ? { ...judged, links } : judged;
+}
+
+export async function getWorkItem(id: string, options?: WorkItemReadOptions): Promise<WorkItemDto | null> {
   const container = getContainer();
   // Doltgres-first: legacy markdown IDs (e.g. bug.0002) can also live in Doltgres
   // after the markdown→Doltgres import (task.5002). Fall back to markdown only when
   // Doltgres returns null, so unimported legacy IDs still resolve during transition.
   try {
     const item = await container.doltgresWorkItems.get(toWorkItemId(id));
-    if (item) return await withMoveReadings(toDto(item), options);
+    if (item) return await withItemEnvelope(toDto(item), options);
   } catch (e) {
     if ((e as Error)?.name !== "DoltgresNotConfiguredError") {
       rethrowBackendError(e);
     }
   }
   const mdItem = await container.workItemQuery.get(id as WorkItemId);
-  return mdItem ? withMoveReadings(toDto(mdItem), options) : null;
+  return mdItem ? withItemEnvelope(toDto(mdItem), options) : null;
 }
 
 export async function createWorkItem(

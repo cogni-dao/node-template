@@ -48,6 +48,7 @@ export type {
   JudgedMove,
   MetricBaselinePort,
   MoveDirection,
+  MoveContext,
   MoveInput,
   MoveReading,
   MoveReadingPort,
@@ -56,9 +57,12 @@ export type {
   WorkItemMove,
 } from "./moves.js";
 export {
+  judgeItemMoves,
   judgeMove,
   judgeMoves,
   judgeMoveSummaries,
+  readMoveContext,
+  withMoveContext,
   MOVE_METRIC_ID_MAX,
   MOVE_OBSERVATION_ID_PATTERN,
   MOVES_DEADLINE_MS,

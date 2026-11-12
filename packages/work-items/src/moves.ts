@@ -12,6 +12,7 @@
  *   - NULL_BASELINE_READS_UNKNOWN: with no observation to pin, the baseline stays `null` and the read says `unknown` (reason `no_baseline`), never zero.
  *   - BASELINE_FAILURE_IS_ITS_OWN_ERROR: a baseline reader that fails or runs past the deadline is `MetricBaselineUnavailableError` (503 `metric_baseline_unavailable`); a resolver failure stays `EntryResolverUnavailableError`.
  *   - READ_IS_BOUNDED: judging an item looks up at most one baseline and one latest reading per move, within one deadline; a failed lookup reads `unknown`.
+ *   - CHAIN_NEVER_GUESSED (task.0118): the single-item read (`judgeItemMoves`) also asks `MoveReadingPort.context` for each move's metric, KPI and goal within the same deadline; an unresolved id, a failure, a timeout or no port marks the move `context: "unavailable"` and adds none of the three. A list or summary read never resolves it.
  * Side-effects: none (the ports it calls do I/O)
  * Links: hub metric-foundation-design ("Metrics serve KPIs; work moves metrics"), packages/work-items/src/cites.ts
  * @public
@@ -119,6 +120,11 @@ export interface MoveReadingPort {
   ): Promise<MoveReading | null>;
   /** The latest attempt, including failed or stale attempts, or null if absent. */
   latest(metricId: string, signal: AbortSignal): Promise<MoveReading | null>;
+  /**
+   * The metric → KPI → goal chain of each id (task.0118). An id the port cannot resolve is
+   * absent from the map. Throws when the whole resolution is unavailable.
+   */
+  context?(metricIds: readonly string[], signal: AbortSignal): Promise<ReadonlyMap<string, MoveContext>>;
 }
 
 export type MovedState = "as_declared" | "against" | "flat" | "unknown" | null;
@@ -550,4 +556,98 @@ export async function judgeMoveSummaries<T extends { moves?: WorkItemMove[] | un
     if (cancel) options.signal?.removeEventListener("abort", cancel);
   }
   return result;
+}
+
+/**
+ * The metric a move names and the goal KPI it serves, resolved once by the port (task.0118).
+ * `kpi` and `goal` are absent when the metric serves no KPI that an active goal binds.
+ */
+export interface MoveContext {
+  readonly metric: { readonly id: string; readonly title: string; readonly unit: string; readonly display?: "progress" | "slo" | "volume" };
+  readonly kpi?: {
+    readonly metricId: string;
+    readonly title: string;
+    readonly comparator: "gte" | "lte" | "eq";
+    readonly target: { readonly value: number; readonly unit: string };
+    readonly status?: string;
+  };
+  readonly goal?: { readonly id: string; readonly title: string };
+}
+
+type MoveBounds = number | { readonly signal?: AbortSignal; readonly deadline?: number };
+
+/**
+ * Resolve `metricIds` through `readings.context` within one deadline. `undefined` means the
+ * resolution is unavailable (no port, a failure, or the deadline): the caller marks every move
+ * `context: "unavailable"` and never invents a chain.
+ */
+export async function readMoveContext(
+  metricIds: readonly string[],
+  readings: MoveReadingPort | undefined,
+  bounds: MoveBounds = {},
+): Promise<ReadonlyMap<string, MoveContext> | undefined> {
+  if (!readings?.context || !metricIds.length) return undefined;
+  const options = typeof bounds === "number" ? { deadline: Date.now() + bounds } : bounds;
+  const deadlineMs = Math.min(
+    MOVES_DEADLINE_MS,
+    options.deadline === undefined ? MOVES_DEADLINE_MS : options.deadline - Date.now(),
+  );
+  if (deadlineMs <= 0 || options.signal?.aborted) return undefined;
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  options.signal?.addEventListener("abort", abort, { once: true });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(() => readings.context?.([...new Set(metricIds)], controller.signal)),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          reject(new Error("move context timed out"));
+        }, deadlineMs);
+      }),
+    ]);
+  } catch {
+    return undefined;
+  } finally {
+    if (timer) clearTimeout(timer);
+    options.signal?.removeEventListener("abort", abort);
+  }
+}
+
+/** Add each move's resolved context, or the explicit `unavailable` marker when it did not resolve. */
+export function withMoveContext<T extends { moves?: readonly { readonly metricId: string }[] | undefined }>(
+  item: T,
+  context: ReadonlyMap<string, MoveContext> | undefined,
+): T {
+  if (!item.moves?.length) return item;
+  return {
+    ...item,
+    moves: item.moves.map((move) => {
+      const resolved = context?.get(move.metricId);
+      return resolved ? { ...move, ...resolved } : { ...move, context: "unavailable" as const };
+    }),
+  };
+}
+
+/**
+ * The single-item read of moves: readings and verdict (`judgeMoveSummaries`) plus the
+ * metric, KPI and goal chain (`readMoveContext`), run together within one deadline so the chain
+ * adds no round trip to the read. A list read never calls this.
+ */
+export async function judgeItemMoves<T extends { moves?: WorkItemMove[] | undefined }>(
+  item: T,
+  readings: MoveReadingPort | undefined,
+  bounds: MoveBounds = {},
+): Promise<T> {
+  if (!item.moves?.length) return item;
+  const [judged, context] = await Promise.all([
+    judgeMoveSummaries([item], readings, bounds),
+    readMoveContext(
+      item.moves.map((move) => move.metricId),
+      readings,
+      bounds,
+    ),
+  ]);
+  return withMoveContext(judged[0] ?? item, context);
 }
