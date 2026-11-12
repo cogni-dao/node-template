@@ -1360,7 +1360,14 @@ describe("goal reader deadline ownership", () => {
 			await vi.advanceTimersByTimeAsync(2499);
 			expect(port.listActiveGoals).toHaveBeenCalledTimes(2);
 			await vi.advanceTimersByTimeAsync(1);
-			expect(await warm).toBe(good);
+			// The body is the last good one, marked with why and how old it is.
+			expect(good.stale).toBeUndefined();
+			const served = await warm;
+			expect(served).toMatchObject({
+				asOf: good.asOf,
+				stale: { reason: "fresh_read_slow", ageSeconds: 2 },
+			});
+			expect(good.stale).toBeUndefined();
 			// Another caller joins the read still in flight; none starts a third.
 			const joined = read();
 			await vi.advanceTimersByTimeAsync(0);
@@ -1369,6 +1376,7 @@ describe("goal reader deadline ownership", () => {
 			const fresh = await joined;
 			expect(fresh).not.toBe(good);
 			expect(fresh).toMatchObject({ goals: [] });
+			expect(fresh.stale).toBeUndefined();
 		} finally {
 			vi.useRealTimers();
 		}
@@ -1382,7 +1390,45 @@ describe("goal reader deadline ownership", () => {
 			finishes[0]!([]);
 			const good = await cold;
 			port.listActiveGoals.mockRejectedValueOnce(new Error("source failed"));
-			expect(await read()).toBe(good);
+			expect(await read()).toMatchObject({
+				asOf: good.asOf,
+				stale: { reason: "fresh_read_failed", ageSeconds: 0 },
+			});
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+	it("serves the last good result, marked, when the fresh read completes degraded, and never keeps the degraded one", async () => {
+		vi.useFakeTimers();
+		try {
+			const serving = vi
+				.fn()
+				.mockResolvedValueOnce(null)
+				.mockRejectedValue(new Error("serving failed"));
+			const read = createGoalProgressReader({
+				knowledge: () => ({
+					listActiveGoals: async () => [],
+					getKnowledge: async () => null,
+					listCitationsByCitedId: async () => [],
+				}),
+				metrics: () => ({ serving }) as never,
+				environment: "test",
+			});
+			const good = await read();
+			expect(good.servedUnavailable).toBeUndefined();
+			await vi.advanceTimersByTimeAsync(5000);
+			const degraded = await read();
+			expect(degraded).toMatchObject({
+				asOf: good.asOf,
+				stale: { reason: "fresh_read_degraded", ageSeconds: 5 },
+			});
+			expect(degraded.servedUnavailable).toBeUndefined();
+			// The degraded read was not kept: the next one is served from the first.
+			await vi.advanceTimersByTimeAsync(5000);
+			expect(await read()).toMatchObject({
+				asOf: good.asOf,
+				stale: { reason: "fresh_read_degraded", ageSeconds: 10 },
+			});
 		} finally {
 			vi.useRealTimers();
 		}

@@ -31,6 +31,14 @@ export const GET = wrapRouteHandlerWithLogging(
 						0,
 					),
 					outcome: "success",
+					// A stale 200 is the last good result, not a fresh read.
+					stale: data.stale !== undefined,
+					...(data.stale
+						? {
+								staleReason: data.stale.reason,
+								staleAgeSeconds: data.stale.ageSeconds,
+							}
+						: {}),
 					status: result.status,
 					durationMs: Date.now() - started,
 				});

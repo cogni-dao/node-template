@@ -98,7 +98,7 @@ function GoalsBoardView({
   // Metrics view: worst goal first (the Goals view keeps the server's order).
   const goals = metrics ? sortGoals(listed) : listed;
   const signedOut = goalsErrorStatus(query.error) === 401;
-  const stale = !!data && (signedOut || failures >= STALE_AFTER_FAILURES);
+  const stale = !!data && (signedOut || failures >= STALE_AFTER_FAILURES || !!data.stale);
 
   return (
     <section

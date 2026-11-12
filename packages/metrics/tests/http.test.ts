@@ -109,6 +109,31 @@ describe("metric HTTP core", () => {
 		expect(read.ok && read.body.definition.id).toBe("open-work");
 	});
 
+	it("carries the stale marker of a last-good goals body through to the wire, and rejects an unknown reason", async () => {
+		const { handlers, goalProgress } = setup();
+		goalProgress.mockResolvedValueOnce({
+			asOf: "2026-11-01T01:00:00.000Z",
+			environment: "local",
+			goals: [],
+			stale: { reason: "fresh_read_slow", ageSeconds: 7 },
+		} as never);
+		const stale = await handlers.goals();
+		expect(stale.ok && stale.body.stale).toEqual({
+			reason: "fresh_read_slow",
+			ageSeconds: 7,
+		});
+		// A fresh body has no marker.
+		const fresh = await handlers.goals();
+		expect(fresh.ok && fresh.body.stale).toBeUndefined();
+		goalProgress.mockResolvedValueOnce({
+			asOf: "2026-11-01T01:00:00.000Z",
+			environment: "local",
+			goals: [],
+			stale: { reason: "whenever", ageSeconds: -1 },
+		} as never);
+		expect(await handlers.goals()).toMatchObject({ ok: false, status: 503 });
+	});
+
 	it("rejects invalid list, history, compute and observation input with 400", async () => {
 		const { handlers, service } = setup();
 		expect(await handlers.list(new URLSearchParams("limit=0"))).toEqual({

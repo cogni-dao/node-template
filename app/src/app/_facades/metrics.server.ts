@@ -34,7 +34,11 @@ export function metricHandlers() {
 export function metricResponse(result: MetricHttpResult): NextResponse {
 	return NextResponse.json(result.body, {
 		status: result.status,
-		headers: METRIC_HTTP_HEADERS,
+		// A 503 here is a read that may finish on its own: tell clients when to retry.
+		headers:
+			result.status === 503
+				? { ...METRIC_HTTP_HEADERS, "Retry-After": "2" }
+				: METRIC_HTTP_HEADERS,
 	});
 }
 

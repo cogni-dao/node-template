@@ -87,6 +87,26 @@ describe("metrics facade", () => {
     expect(container.log.error).not.toHaveBeenCalled();
   });
 
+  it("tells clients to retry a 503 after 2 s, and no other status", async () => {
+    container.goalProgress.mockRejectedValue(new Error("unavailable"));
+    expect(
+      metricResponse(await metricHandlers().goals()).headers.get("Retry-After")
+    ).toBe("2");
+    container.goalProgress.mockResolvedValue({
+      asOf: "2026-11-02T10:00:00.000Z",
+      environment: "local",
+      goals: [],
+    });
+    expect(
+      metricResponse(await metricHandlers().goals()).headers.get("Retry-After")
+    ).toBeNull();
+    expect(
+      metricResponse(
+        await metricHandlers().list(new URLSearchParams("limit=0"))
+      ).headers.get("Retry-After")
+    ).toBeNull();
+  });
+
   it("logs an unexpected failure once and answers a quiet 503 with no-store", async () => {
     container.goalProgress.mockRejectedValue(new Error("db password leaked"));
     const out = await read(metricResponse(await metricHandlers().goals()));

@@ -503,10 +503,12 @@ const GOAL_READ_MAX_STALE_MS = 10 * 60_000;
  * restarted the read, so none ever finished) runs to its own deadline and its
  * result serves the callers that joined it. A complete result is kept as the
  * last good one. While one exists and is under ten minutes old, a caller waits
- * 2.5 s for the fresh read, then gets the last good result (its `asOf` is the
- * time it was read) rather than a failure; a caller with nothing to serve waits
- * for the read, up to its deadline, then gets a retryable 503. A result with an
- * unavailable annex or hypothesis is never kept.
+ * 2.5 s for the fresh read, then gets the last good result rather than a
+ * failure; so does a caller whose fresh read failed or completed degraded.
+ * That body carries `stale: {reason, ageSeconds}`; a fresh read never does. A
+ * caller with nothing to serve waits for the read, up to its deadline, then
+ * gets a retryable 503. A result with an unavailable annex or hypothesis is
+ * never kept.
  */
 export function createGoalProgressReader(deps: {
 	metrics: () => MetricService | undefined;
@@ -550,16 +552,39 @@ export function createGoalProgressReader(deps: {
 		inFlight = pending;
 		return pending;
 	};
+	const degraded = (value: GoalsProgress) =>
+		!!value.servedUnavailable ||
+		value.goals.some((g) => g.hypothesesUnavailable);
 	return () => {
 		const pending = inFlight ?? start();
 		const kept = lastGood;
 		if (!kept || Date.now() - kept.at > GOAL_READ_MAX_STALE_MS) return pending;
+		// The last good result, marked with why it was served and how old it is.
+		const stale = (
+			reason: NonNullable<GoalsProgress["stale"]>["reason"],
+		): GoalsProgress => ({
+			...kept.value,
+			stale: {
+				reason,
+				ageSeconds: Math.max(
+					0,
+					Math.floor((Date.now() - Date.parse(kept.value.asOf)) / 1000),
+				),
+			},
+		});
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		const waited = new Promise<GoalsProgress>((resolve) => {
-			timer = setTimeout(() => resolve(kept.value), GOAL_READ_CALLER_WAIT_MS);
+			timer = setTimeout(
+				() => resolve(stale("fresh_read_slow")),
+				GOAL_READ_CALLER_WAIT_MS,
+			);
 		});
-		return Promise.race([pending.catch(() => kept.value), waited]).finally(() =>
-			clearTimeout(timer),
-		);
+		return Promise.race([
+			pending.then(
+				(fresh) => (degraded(fresh) ? stale("fresh_read_degraded") : fresh),
+				() => stale("fresh_read_failed"),
+			),
+			waited,
+		]).finally(() => clearTimeout(timer));
 	};
 }

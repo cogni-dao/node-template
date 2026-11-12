@@ -362,6 +362,17 @@ describe("GoalsBoard", () => {
     expect(onSignedOut).toHaveBeenCalledTimes(1);
   });
 
+  it("marks the board Stale when the body is a served last-good result, with no failed poll", async () => {
+    renderBoard(
+      {
+        ...visualFixture(),
+        stale: { reason: "fresh_read_slow", ageSeconds: 30 },
+      },
+      { client: stubClient() }
+    );
+    expect(await screen.findByText(/Stale ·/)).toBeTruthy();
+  });
+
   it("opens a card into a named chart that keeps gaps and links every reading", async () => {
     const data = visualFixture();
     const kpi = data.goals[0]!.kpis[0]!;
