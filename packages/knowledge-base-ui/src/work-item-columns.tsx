@@ -18,21 +18,14 @@
 "use client";
 
 import { rankScore } from "@cogni/work-items";
-import {
-  type ColumnDef,
-  createColumnHelper,
-  type Row,
-} from "@tanstack/react-table";
+import { type ColumnDef, createColumnHelper, type Row } from "@tanstack/react-table";
 import type { ReactNode } from "react";
 
-import type { WorkBoardItem } from "./work-board.js";
-import {
-  formatWorkProject,
-  WorkFacetControls,
-  WorkRankControls,
-} from "./work-board-controls.js";
+import { firstGoal, type WorkBoardItem } from "./work-board.js";
+import { formatWorkProject, WorkFacetControls, WorkRankControls } from "./work-board-controls.js";
 import { WorkColumnHeader, workHeaderDisabled } from "./work-column-header.js";
 import { StatusPill, TypeIcon } from "./work-item-icons.js";
+import { WorkMetricSummary } from "./work-metrics.js";
 
 /** The structural subset of a work item the board and table columns read. */
 export interface WorkItemRow extends WorkBoardItem {
@@ -81,17 +74,12 @@ export function createWorkItemColumns<TItem extends WorkItemRow>(
     col.accessor((row) => row.priority ?? undefined, {
       id: "priority",
       header: ({ column, table }) => (
-        <WorkColumnHeader
-          column={column}
-          title="Pri"
-          disabled={workHeaderDisabled(table)}
-        />
+        <WorkColumnHeader column={column} title="Pri" disabled={workHeaderDisabled(table)} />
       ),
       size: 60,
       cell: (info) => {
         const v = info.getValue();
-        if (v == null)
-          return <span className="text-muted-foreground">&mdash;</span>;
+        if (v == null) return <span className="text-muted-foreground">&mdash;</span>;
         return (
           <span className="inline-flex w-7 justify-center rounded-md bg-muted px-1.5 py-0.5 font-medium text-xs">
             P{v}
@@ -113,8 +101,7 @@ export function createWorkItemColumns<TItem extends WorkItemRow>(
       minSize: 220,
       cell: (info) => {
         const v = info.getValue();
-        if (v === undefined)
-          return <span className="text-muted-foreground">&mdash;</span>;
+        if (v === undefined) return <span className="text-muted-foreground">&mdash;</span>;
         return <span className="font-mono text-xs">{v.toFixed(1)}</span>;
       },
       sortDescFirst: true,
@@ -126,11 +113,7 @@ export function createWorkItemColumns<TItem extends WorkItemRow>(
     col.accessor((row) => row.type, {
       id: "type",
       header: ({ column, table }) => (
-        <WorkFacetControls
-          column={column}
-          facet="type"
-          disabled={workHeaderDisabled(table)}
-        />
+        <WorkFacetControls column={column} facet="type" disabled={workHeaderDisabled(table)} />
       ),
       size: 110,
       minSize: 110,
@@ -147,14 +130,25 @@ export function createWorkItemColumns<TItem extends WorkItemRow>(
       meta: { headerTitle: "Item" },
     }),
 
+    col.display({
+      id: "metric",
+      header: "Metric",
+      cell: ({ row }) =>
+        row.original.moves?.[0] ? <WorkMetricSummary move={row.original.moves[0]} /> : "—",
+      meta: { headerTitle: "Metric" },
+    }),
+
+    col.display({
+      id: "goal",
+      header: "Goal",
+      cell: ({ row }) => firstGoal(row.original.labels)?.label ?? "—",
+      meta: { headerTitle: "Goal" },
+    }),
+
     col.accessor((row) => row.status, {
       id: "status",
       header: ({ column, table }) => (
-        <WorkFacetControls
-          column={column}
-          facet="status"
-          disabled={workHeaderDisabled(table)}
-        />
+        <WorkFacetControls column={column} facet="status" disabled={workHeaderDisabled(table)} />
       ),
       size: 150,
       cell: (info) => <StatusPill status={info.getValue()} />,
@@ -165,20 +159,14 @@ export function createWorkItemColumns<TItem extends WorkItemRow>(
     col.accessor((row) => row.projectId, {
       id: "projectId",
       header: ({ column, table }) => (
-        <WorkFacetControls
-          column={column}
-          facet="projectId"
-          disabled={workHeaderDisabled(table)}
-        />
+        <WorkFacetControls column={column} facet="projectId" disabled={workHeaderDisabled(table)} />
       ),
       size: 140,
       cell: (info) => {
         const v = info.getValue();
         if (!v) return null;
         return (
-          <span className="truncate text-muted-foreground text-xs">
-            {formatWorkProject(v)}
-          </span>
+          <span className="truncate text-muted-foreground text-xs">{formatWorkProject(v)}</span>
         );
       },
       filterFn: "arrIncludesSome",
@@ -188,19 +176,13 @@ export function createWorkItemColumns<TItem extends WorkItemRow>(
     col.accessor((row) => row.updatedAt ?? undefined, {
       id: "updatedAt",
       header: ({ column, table }) => (
-        <WorkColumnHeader
-          column={column}
-          title="Updated"
-          disabled={workHeaderDisabled(table)}
-        />
+        <WorkColumnHeader column={column} title="Updated" disabled={workHeaderDisabled(table)} />
       ),
       size: 110,
       cell: (info) => {
         const v = info.getValue() || info.row.original.createdAt;
         if (!v) return <span className="text-muted-foreground">&mdash;</span>;
-        return (
-          <span className="text-muted-foreground text-xs">{v.slice(0, 10)}</span>
-        );
+        return <span className="text-muted-foreground text-xs">{v.slice(0, 10)}</span>;
       },
       sortingFn: (a, b) => {
         const da = a.original.updatedAt || a.original.createdAt || "";
@@ -213,21 +195,13 @@ export function createWorkItemColumns<TItem extends WorkItemRow>(
     col.accessor((row) => row.estimate ?? undefined, {
       id: "estimate",
       header: ({ column, table }) => (
-        <WorkColumnHeader
-          column={column}
-          title="Est"
-          disabled={workHeaderDisabled(table)}
-        />
+        <WorkColumnHeader column={column} title="Est" disabled={workHeaderDisabled(table)} />
       ),
       size: 70,
       minSize: 70,
       cell: (info) => {
         const v = info.getValue();
-        return (
-          <span className="text-center text-muted-foreground text-xs">
-            {v ?? "—"}
-          </span>
-        );
+        return <span className="text-center text-muted-foreground text-xs">{v ?? "—"}</span>;
       },
       meta: { headerTitle: "Est" },
     }),

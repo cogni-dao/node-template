@@ -350,6 +350,231 @@ export function createMetricService(deps: {
 			});
 			return saved;
 		},
+		/** One scoped definition query and one scoped observation query for a work page. */
+		/** Fixed EDO commitments share one authorized snapshot and due-evidence read. */
+		async predictionBatch(bindings: readonly KpiBinding[]) {
+			if (bindings.length > 100) throw new MetricError("too_many_metrics", 400);
+			if (!definitions.getMany || !observations.predictionReadBatch)
+				throw new MetricError("batch_unavailable", 503);
+			const at = now();
+			const found = await definitions.getMany([
+				...new Set(bindings.map((b) => b.metricId)),
+			]);
+			const allowed = new Map<string, MetricDefinition>();
+			for (const d of found) {
+				try {
+					await authorize("read", d);
+					allowed.set(d.id, d);
+				} catch {
+					/* denied stays unknown */
+				}
+			}
+			const selected = bindings.filter(
+				(b) =>
+					allowed.has(b.metricId) && b.baselineObservationId && b.evaluationAt,
+			);
+			const rows = await observations.predictionReadBatch(
+				selected.map((b) => ({
+					metricId: b.metricId,
+					baselineObservationId: b.baselineObservationId as string,
+					evaluationAt: b.evaluationAt as string,
+				})),
+			);
+			if (rows.length !== selected.length)
+				throw new MetricError("batch_unavailable", 503);
+			let cursor = 0;
+			return Promise.all(
+				bindings.map(async (binding) => {
+					const missing = (reason: KpiReason) => ({
+						...binding,
+						assessment: assessKpi({
+							binding,
+							metric: null,
+							unavailable: reason,
+							latestAttempt: null,
+							lastGood: null,
+							viewState: "unavailable",
+							deadline: binding.evaluationAt ?? null,
+							evaluation: null,
+							daily: [],
+							now: at,
+						}),
+					});
+					if (!allowed.has(binding.metricId))
+						return missing("metric_unavailable");
+					if (!binding.baselineObservationId || !binding.evaluationAt)
+						return missing("fixed_prediction_and_baseline_required");
+					const row = rows[cursor++];
+					const pinned = row?.baseline;
+					if (!pinned) return missing("baseline_unavailable_or_incompatible");
+					const def = pinned.definition,
+						baseline = pinned.observation,
+						hash = metricDefinitionHash(def);
+					try {
+						await authorize("read", def);
+					} catch {
+						return missing("metric_unavailable");
+					}
+					if (
+						def.id !== binding.metricId ||
+						baseline.id !== binding.baselineObservationId ||
+						baseline.metricId !== binding.metricId ||
+						baseline.definitionHash !== hash ||
+						baseline.node !== scope.node ||
+						baseline.environment !== scope.environment ||
+						baseline.dataScope !== scope.dataScope ||
+						baseline.status !== "ok" ||
+						baseline.value === null ||
+						!Number.isFinite(baseline.value) ||
+						baseline.unit !== binding.target.unit ||
+						!Number.isFinite(Date.parse(baseline.window.end)) ||
+						Date.parse(baseline.window.end) > Date.parse(binding.evaluationAt)
+					)
+						return missing("baseline_unavailable_or_incompatible");
+					let unit: string;
+					try {
+						unit = calculatorShape(
+							registry.get(def.spec.calculatorId),
+							def.spec.params,
+						).unit;
+					} catch {
+						return missing("calculator_unavailable");
+					}
+					const compatible = (o: MetricObservation | null | undefined) =>
+						o &&
+						o.metricId === binding.metricId &&
+						o.definitionHash === hash &&
+						o.node === scope.node &&
+						o.environment === scope.environment &&
+						o.dataScope === scope.dataScope
+							? o
+							: null;
+					const latest = compatible(row?.latest),
+						good = compatible(row?.lastGood),
+						evaluation = compatible(row?.evaluation);
+					const view = selectMetricView(def, latest ? [latest] : [], at);
+					return {
+						...binding,
+						assessment: assessKpi({
+							binding,
+							metric: { unit, maxAgeSeconds: def.spec.maxAgeSeconds },
+							latestAttempt: latest,
+							lastGood: good,
+							viewState: view.viewState,
+							deadline: binding.evaluationAt,
+							evaluation,
+							daily: [],
+							now: at,
+						}),
+					};
+				}),
+			);
+		},
+		async workReadBatch(
+			requests: readonly {
+				metricId: string;
+				baselineObservationId: string | null;
+			}[],
+		) {
+			if (requests.length > 300) throw new MetricError("too_many_metrics", 400);
+			if (!definitions.getMany || !observations.workReadBatch)
+				throw new MetricError("batch_unavailable", 503);
+			const found = await definitions.getMany([
+				...new Set(requests.map((r) => r.metricId)),
+			]);
+			const allowed = new Map<string, MetricDefinition>();
+			for (const definition of found) {
+				try {
+					await authorize("read", definition);
+					allowed.set(definition.id, definition);
+				} catch {
+					/* denied stays unknown */
+				}
+			}
+			const selected = requests
+				.map((r) => ({ ...r, definition: allowed.get(r.metricId) }))
+				.filter(
+					(r): r is typeof r & { definition: MetricDefinition } =>
+						!!r.definition,
+				);
+			const rows = await observations.workReadBatch(
+				selected.map((r) => ({
+					metricId: r.metricId,
+					baselineObservationId: r.baselineObservationId,
+					definitionHash: metricDefinitionHash(r.definition),
+				})),
+			);
+			if (rows.length !== selected.length)
+				throw new MetricError("batch_unavailable", 503);
+			let cursor = 0;
+			return Promise.all(
+				requests.map(async (request) => {
+					const definition = allowed.get(request.metricId);
+					if (!definition)
+						return {
+							baseline: null,
+							current: null,
+							unknownReason: "metrics_unavailable" as const,
+						};
+					const row = rows[cursor++];
+					let baseline = row?.baseline ?? null;
+					if (baseline) {
+						const observation = baseline.observation;
+						if (
+							observation.id !== request.baselineObservationId ||
+							observation.metricId !== request.metricId ||
+							baseline.definition.id !== request.metricId ||
+							observation.node !== scope.node ||
+							observation.environment !== scope.environment ||
+							observation.dataScope !== scope.dataScope ||
+							observation.definitionHash !==
+								metricDefinitionHash(baseline.definition)
+						)
+							baseline = null;
+						else {
+							try {
+								await authorize("read", baseline.definition);
+							} catch {
+								baseline = null;
+							}
+						}
+					}
+					const candidate = row?.latest ?? null;
+					const latest =
+						candidate &&
+						candidate.metricId === request.metricId &&
+						candidate.definitionHash === metricDefinitionHash(definition) &&
+						candidate.node === scope.node &&
+						candidate.environment === scope.environment &&
+						candidate.dataScope === scope.dataScope
+							? candidate
+							: null;
+					const view = selectMetricView(
+						definition,
+						latest ? [latest] : [],
+						now(),
+					);
+					const age = latest
+						? now().getTime() - Date.parse(latest.window.end)
+						: NaN;
+					const current = latest
+						? {
+								...latest,
+								metricTitle: definition.title,
+								maxAgeSeconds: definition.spec.maxAgeSeconds,
+								viewState:
+									view.viewState === "ok" &&
+									(!Number.isFinite(age) ||
+										age < 0 ||
+										age > definition.spec.maxAgeSeconds * 1000)
+										? ("stale" as const)
+										: view.viewState,
+							}
+						: null;
+					return { baseline: baseline?.observation ?? null, current };
+				}),
+			);
+		},
 		async read(id: string): Promise<MetricView> {
 			const d = await definitionFor(id, "read");
 			const hash = metricDefinitionHash(d);

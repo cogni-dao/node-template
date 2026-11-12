@@ -16,7 +16,13 @@ import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { WorkBoard, type WorkBoardItem } from "../src/index.js";
+import {
+  WorkBoard,
+  WorkMetricDetails,
+  createWorkItemColumns,
+  type WorkBoardItem,
+} from "../src/index.js";
+import { fetchWorkExpectations } from "../../../app/src/app/(app)/work/_api/fetchWorkExpectations";
 
 const scored = { v: 3 };
 const item: WorkBoardItem = {
@@ -37,6 +43,35 @@ const item: WorkBoardItem = {
 };
 
 describe("WorkBoard", () => {
+  it("shows the first affected metric and verdict on the card", () => {
+    render(
+      <WorkBoard
+        columns={[
+          {
+            status: "needs_implement",
+            items: [
+              {
+                ...item,
+                moves: [
+                  {
+                    metricId: "edits-7d",
+                    direction: null,
+                    baselineObservationId: null,
+                    moved: null,
+                  },
+                ],
+              },
+            ],
+            hasMore: false,
+          },
+        ]}
+        isLoading={false}
+        onOpenItem={() => {}}
+        onLoadMore={() => {}}
+      />,
+    );
+    expect(screen.getByText(/edits-7d.*affected/i)).toBeInTheDocument();
+  });
   it("renders one plain goal anchor, a rank, and a time without a router", () => {
     const onOpenItem = vi.fn();
     render(
@@ -55,15 +90,9 @@ describe("WorkBoard", () => {
     });
     const card = open.parentElement as HTMLElement;
     expect(within(card).getAllByRole("link")).toHaveLength(1);
-    expect(within(card).getByRole("link")).toHaveAttribute(
-      "href",
-      "/knowledge/goal-alpha",
-    );
+    expect(within(card).getByRole("link")).toHaveAttribute("href", "/knowledge/goal-alpha");
     expect(within(card).getByText(/^Rank /)).toBeInTheDocument();
-    expect(card.querySelector("time")).toHaveAttribute(
-      "datetime",
-      "2026-11-02T18:37:35.000Z",
-    );
+    expect(card.querySelector("time")).toHaveAttribute("datetime", "2026-11-02T18:37:35.000Z");
     fireEvent.click(open);
     expect(onOpenItem).toHaveBeenCalledWith(item);
     expect(screen.getByText("No items")).toBeInTheDocument();
@@ -162,5 +191,67 @@ describe("WorkBoard", () => {
       />,
     );
     expect(screen.getByRole("button", { name: "Load more needs_implement" })).toBeDisabled();
+  });
+});
+
+describe("work expectation join", () => {
+  it("provides shared table columns for goal and metric", () => {
+    const columns = createWorkItemColumns();
+    expect(columns.map((column) => column.id)).toEqual(expect.arrayContaining(["goal", "metric"]));
+  });
+
+  it("reports an unavailable expectation projection", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, status: 403 })),
+    );
+    try {
+      await expect(
+        fetchWorkExpectations("task.1", new AbortController().signal, []),
+      ).rejects.toThrow("HTTP 403");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+  it("shows the failed latest reading without presenting it as success", () => {
+    render(
+      <WorkMetricDetails
+        moves={[
+          {
+            metricId: "m",
+            direction: "up",
+            moved: "unknown",
+            baseline: { value: 1, unit: "count", observedAt: "2026-11-01" },
+            current: { value: null, observedAt: null, viewState: "error" },
+          },
+        ]}
+      />,
+    );
+    expect(screen.getByText("Latest: Unknown · error")).toBeInTheDocument();
+    expect(screen.getByText("Baseline: 1 count · 2026-11-01")).toBeInTheDocument();
+  });
+  it("reads the bounded server projection in one request", async () => {
+    const expected = {
+      items: [
+        {
+          id: "hyp.1",
+          title: "Expectation",
+          content: "fresh reading",
+          predictions: [{ metricId: "m", expected: "gte 4 count", observed: "met" }],
+          outcomes: [{ id: "outcome.1", title: "Observed", content: "independently recounted" }],
+          truncated: false,
+        },
+      ],
+      truncated: false,
+    };
+    const fetcher = vi.fn(async () => ({ ok: true, json: async () => expected }));
+    vi.stubGlobal("fetch", fetcher);
+    try {
+      const page = await fetchWorkExpectations("task.1", new AbortController().signal, []);
+      expect(page).toEqual(expected);
+      expect(fetcher).toHaveBeenCalledOnce();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
