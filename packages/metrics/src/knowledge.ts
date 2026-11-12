@@ -6,8 +6,8 @@
  */
 import type { Sql } from "postgres";
 import { z } from "zod";
-import { readMetricBatch, readMetricBudget } from "./adapters/read-budget.js";
 import { PostgresMetricObservations } from "./adapters/postgres.js";
+import { readMetricBudget } from "./adapters/read-budget.js";
 import {
 	type GoalsProgress,
 	type MetricCalculator,
@@ -26,6 +26,8 @@ import {
 	BRIEF_MAX_BYTES,
 	BRIEF_MAX_ROWS,
 	FIRST_PARENT_WALK_CAP,
+	NO_INLINE_HISTORY_MAX_BYTES,
+	NO_INLINE_HISTORY_MAX_ROWS,
 	readBriefConformance,
 	readGithubStars,
 	readNoInlineHistoryEdits,
@@ -33,8 +35,6 @@ import {
 	readNoInlineHistoryState,
 	readWorkConvergence,
 	readWorkCount,
-	NO_INLINE_HISTORY_MAX_BYTES,
-	NO_INLINE_HISTORY_MAX_ROWS,
 } from "./sources.js";
 
 /**
@@ -338,11 +338,30 @@ export function createGoalMetrics(deps: {
 		async getMany(ids: readonly string[], signal?: AbortSignal) {
 			if (!ids.length) return [];
 			if (ids.length > 300) throw new MetricError("too_many_metrics", 400);
-			const rows = await readMetricBatch(deps.knowledgeSql, signal, (sql) =>
-				sql.unsafe(
-					`SELECT id,title,metric_spec,updated_at FROM knowledge WHERE id IN (${ids.map(literal).join(",")}) AND metric_spec IS NOT NULL AND status <> 'deprecated'`,
-				),
-			);
+			// Doltgres rejects SET LOCAL. Use pooled read admission, retaining the
+			// permit until native settlement even after the caller abandons it.
+			// PostgreSQL observations keep their native statement timeout.
+			const rows = await readMetricBudget(
+				deps.knowledgeSql,
+				signal,
+				(bounded) => {
+					bounded.throwIfAborted();
+					return deps.knowledgeSql.unsafe(
+						`SELECT id,title,metric_spec,updated_at FROM knowledge WHERE id IN (${ids.map(literal).join(",")}) AND metric_spec IS NOT NULL AND status <> 'deprecated'`,
+					);
+				},
+			).catch((error: unknown) => {
+				const code = (error as { code?: unknown } | null)?.code;
+				deps.log({
+					event: "metric.definition_batch_failed",
+					phase: "definitions_read",
+					errorCode:
+						typeof code === "string" && /^[A-Za-z0-9_]{1,64}$/.test(code)
+							? code
+							: "unknown",
+				});
+				throw error;
+			});
 			return rows
 				.map(parse)
 				.filter((item): item is MetricDefinition => item !== null);
