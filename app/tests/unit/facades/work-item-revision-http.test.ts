@@ -207,7 +207,9 @@ describe("work-item revision HTTP boundary", () => {
     );
     const response = await request({ reason: "r", set: { summary: "x" } });
     expect(response.status).toBe(400);
-    expect((await response.json()).issues[0]).toMatchObject({ path: ["reason"] });
+    const body = await response.json();
+    expect(body.issues[0]).toMatchObject({ path: ["reason"] });
+    expect(body.errorCode).toBe("reason_invalid");
   });
 
   it("keeps writer admission failures as 503", async () => {

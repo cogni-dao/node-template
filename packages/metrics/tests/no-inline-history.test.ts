@@ -5,7 +5,7 @@
  * calculator in the goal-metric service, and the removal of package-served
  * definitions (definitions are hub rows only).
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
 	calculatorFamily,
 	createGoalMetrics,
@@ -24,7 +24,7 @@ import {
 	noInlineHistoryWindowCommitsSql,
 	noInlineHistoryStateSql,
 } from "../src/sources.js";
-import { fakeSql, hub, metricRow, noObservations, type Row } from "./fakes.js";
+import { fakeSql, hub, metricRow, noObservations, memoryObservations, type Row } from "./fakes.js";
 
 const signal = new AbortController().signal;
 const ASOF = "2026-11-09T12:00:00.000Z";
@@ -831,6 +831,246 @@ describe("no-inline-history@1 in the goal-metric service", () => {
 		expect(source).toHaveLength(calls as number);
 		const terminal = events.filter((e) => (e as { event: string }).event === "metric.compute.completed");
 		expect(terminal).toEqual([expect.objectContaining({ metricId: id, status: "ok", reason: null })]);
+	});
+
+	it.each([
+		["success", "knowledgeDiff", ["ok", 100, "ok", 200, "ok", 300, 1, 10, 1000, 1, 1000]],
+		["error", "windowCommits", ["error", 100, "not_started", null, "not_started", null, null, null, null, null, null]],
+		["error", "workDiff", ["ok", 100, "error", 200, "not_started", null, 1, null, null, null, null]],
+		["error", "knowledgeDiff", ["ok", 100, "ok", 200, "error", 300, 1, 10, 1000, null, null]],
+		["timeout", "windowCommits", ["running", 15000, "not_started", null, "not_started", null, null, null, null, null, null]],
+		["timeout", "workDiff", ["ok", 100, "running", 14900, "not_started", null, 1, null, null, null, null]],
+		["timeout", "knowledgeDiff", ["ok", 100, "ok", 200, "running", 14700, 1, 10, 1000, null, null]],
+		["malformed", "windowCommits", ["ok", 100, "not_started", null, "not_started", null, null, null, null, null, null]],
+		["malformed", "workDiff", ["ok", 100, "ok", 200, "not_started", null, 1, null, null, null, null]],
+		["malformed", "knowledgeDiff", ["ok", 100, "ok", 200, "ok", 300, 1, 10, 1000, null, null]],
+	] as const)("records exact %s timing and totals at %s", async (mode, target, expected) => {
+		vi.useFakeTimers();
+		const epoch = Date.now();
+		const monotonic = vi.spyOn(performance, "now").mockImplementation(() => Date.now() - epoch);
+		try {
+			const definitions = noInlineHistoryRows();
+			const delays = { windowCommits: 100, workDiff: 200, knowledgeDiff: 300 };
+			const sql = fakeSql((text) => {
+				if (text.startsWith("SELECT id,title,metric_spec")) return definitions.filter((row) => text.includes(`id='${row.id}'`));
+				const stage = WINDOW(text) ? "windowCommits" : text.includes("dolt_diff_work_items") ? "workDiff" : "knowledgeDiff";
+				return new Promise<Row[]>((resolve, reject) => {
+					if (stage === target && mode === "timeout") return;
+					setTimeout(() => {
+						if (stage === target && mode === "error") { reject(new Error("PRIVATE-TEXT")); return; }
+						const rows = rowsFor(text);
+						resolve(stage === target && mode === "malformed" ? rows.map((row) => ({ ...row, n: "invalid" })) : rows);
+					}, delays[stage]);
+				});
+			}).sql;
+			const events: object[] = [];
+			const service = createGoalMetrics({ knowledgeSql: sql, observationsSql: memoryObservations(), node: "n", environment: "test", log: (event) => events.push(event) });
+			const computation = service.compute("edits-7d", { requestKey: `${mode}-${target}` });
+			await vi.advanceTimersByTimeAsync(mode === "timeout" ? 15001 : 1000);
+			const result = await computation;
+			expect(result.status).toBe(mode === "success" ? "ok" : mode === "timeout" ? "error" : "unavailable");
+			if (mode === "success") expect(result.value).toBe(11);
+			const terminal = events.filter((event) => (event as { event: string }).event === "metric.compute.completed");
+			expect(terminal).toHaveLength(1);
+			expect((terminal[0] as { sourceTiming: unknown }).sourceTiming).toEqual({
+				windowCommits: { state: expected[0], durationMs: expected[1] },
+				workDiff: { state: expected[2], durationMs: expected[3] },
+				knowledgeDiff: { state: expected[4], durationMs: expected[5] },
+				windowCommitCount: expected[6], workRows: expected[7], workBytes: expected[8], knowledgeRows: expected[9], knowledgeBytes: expected[10],
+			});
+			expect(JSON.stringify(terminal)).not.toContain("PRIVATE-TEXT");
+		} finally { monotonic.mockRestore(); vi.useRealTimers(); }
+	});
+
+	it.each([
+		["windowCommits", "n", { windowCommits: "ok", workDiff: "not_started", knowledgeDiff: "not_started", counts: [null, null, null, null, null] }],
+		["workDiff", "n", { windowCommits: "ok", workDiff: "ok", knowledgeDiff: "ok", counts: [1, null, null, 1, 1000] }],
+		["workDiff", "bytes", { windowCommits: "ok", workDiff: "ok", knowledgeDiff: "ok", counts: [1, null, null, 1, 1000] }],
+		["knowledgeDiff", "n", { windowCommits: "ok", workDiff: "ok", knowledgeDiff: "ok", counts: [1, 10, 1000, null, null] }],
+		["knowledgeDiff", "bytes", { windowCommits: "ok", workDiff: "ok", knowledgeDiff: "ok", counts: [1, 10, 1000, null, null] }],
+	] as const)("leaves null %s %s aggregate unknown", async (target, field, expected) => {
+		const clock = vi.spyOn(performance, "now").mockReturnValue(7);
+		try {
+			const { service, events } = hub(noInlineHistoryRows(), (text) => {
+				const stage = WINDOW(text) ? "windowCommits" : text.includes("dolt_diff_work_items") ? "workDiff" : "knowledgeDiff";
+				const rows = rowsFor(text);
+				return stage === target ? rows.map((row) => ({ ...row, [field]: null })) : rows;
+			});
+			await service.compute("edits-7d", { requestKey: `null-${target}-${field}` });
+			const terminal = events.filter((event) => (event as { event: string }).event === "metric.compute.completed");
+			expect(terminal).toHaveLength(1);
+			expect((terminal[0] as { sourceTiming: unknown }).sourceTiming).toEqual({
+				windowCommits: { state: expected.windowCommits, durationMs: 0 },
+				workDiff: { state: expected.workDiff, durationMs: expected.workDiff === "not_started" ? null : 0 },
+				knowledgeDiff: { state: expected.knowledgeDiff, durationMs: expected.knowledgeDiff === "not_started" ? null : 0 },
+				windowCommitCount: expected.counts[0], workRows: expected.counts[1], workBytes: expected.counts[2], knowledgeRows: expected.counts[3], knowledgeBytes: expected.counts[4],
+			});
+		} finally { clock.mockRestore(); }
+	});
+
+	it("reports bounded stage timing on the existing terminal event", async () => {
+		const { service, events } = hub(noInlineHistoryRows(), rowsFor);
+		await service.compute("edits-7d", { requestKey: "timing" });
+		const terminal = events.filter(
+			(e) => (e as { event: string }).event === "metric.compute.completed",
+		);
+		expect(terminal).toHaveLength(1);
+		expect(terminal[0]).toMatchObject({
+			sourceTiming: {
+				windowCommits: { state: "ok", durationMs: expect.any(Number) },
+				workDiff: { state: "ok", durationMs: expect.any(Number) },
+				knowledgeDiff: { state: "ok", durationMs: expect.any(Number) },
+				windowCommitCount: expect.any(Number),
+				workRows: expect.any(Number),
+				knowledgeRows: expect.any(Number),
+			},
+		});
+	});
+
+	it.each(["windowCommits", "workDiff", "knowledgeDiff"] as const)(
+		"reports %s errors without leaking messages",
+		async (stage) => {
+			const target = {
+				windowCommits: "dolt_log l WHERE",
+				workDiff: "dolt_diff_work_items",
+				knowledgeDiff: "dolt_diff_knowledge",
+			}[stage];
+			const { service, events } = hub(noInlineHistoryRows(), (text) => {
+				if (text.includes(target)) throw new Error("SECRET-ROW-TEXT");
+				return rowsFor(text);
+			});
+			await service.compute("edits-7d", { requestKey: `error-${stage}` });
+			const event = events.find(
+				(e) => (e as { event: string }).event === "metric.compute.completed",
+			);
+			expect(event).toMatchObject({
+				sourceTiming: { [stage]: { state: "error" } },
+			});
+			expect(JSON.stringify(event)).not.toContain("SECRET-ROW-TEXT");
+		},
+	);
+
+	it.each(["windowCommits", "workDiff", "knowledgeDiff"] as const)(
+		"freezes %s as running before abort and ignores late settlement",
+		async (stage) => {
+			vi.useFakeTimers();
+			try {
+				let resolve!: (rows: Row[]) => void;
+				const delayed = new Promise<Row[]>((r) => {
+					resolve = r;
+				});
+				const needles = {
+					windowCommits: "dolt_log l WHERE",
+					workDiff: "dolt_diff_work_items",
+					knowledgeDiff: "dolt_diff_knowledge",
+				};
+				const rows = noInlineHistoryRows();
+				const sql = fakeSql((text) => {
+					if (text.startsWith("SELECT id,title,metric_spec"))
+						return rows.filter((r) => text.includes(`id='${r.id}'`));
+					return text.includes(needles[stage]) ? delayed : rowsFor(text);
+				}).sql;
+				const events: object[] = [];
+				const service = createGoalMetrics({
+					knowledgeSql: sql,
+					observationsSql: memoryObservations(),
+					node: "n",
+					environment: "test",
+					log: (e) => events.push(e),
+				});
+				const compute = service.compute("edits-7d", {
+					requestKey: `timeout-${stage}`,
+				});
+				await vi.advanceTimersByTimeAsync(15001);
+				const result = await compute;
+				expect(result.reason).toBe("source_timeout");
+				const event = events.find(
+					(e) => (e as { event: string }).event === "metric.compute.completed",
+				);
+				expect(event).toMatchObject({
+					sourceTiming: { [stage]: { state: "running" } },
+				});
+				const snapshot = JSON.stringify(event);
+				resolve(rowsFor(needles[stage]));
+				await vi.advanceTimersByTimeAsync(10);
+				expect(JSON.stringify(event)).toBe(snapshot);
+				expect(
+					events.filter(
+						(e) =>
+							(e as { event: string }).event === "metric.compute.completed",
+					),
+				).toHaveLength(1);
+			} finally {
+				vi.useRealTimers();
+			}
+		},
+	);
+
+	it("freezes the snapshot before abort and late rejection while persistence waits", async () => {
+		vi.useFakeTimers();
+		try {
+			let rejectQuery!: (error: Error) => void;
+			const pending = new Promise<Row[]>((_resolve, reject) => { rejectQuery = reject; });
+			let release!: () => void;
+			const gate = new Promise<void>((resolve) => { release = resolve; });
+			const base = memoryObservations();
+			const wrapped = ((strings: TemplateStringsArray, ...values: unknown[]) => {
+				if (strings.join("?").startsWith("UPDATE metric_observations SET observation="))
+					return gate.then(() => base(strings, ...values));
+				return base(strings, ...values);
+			}) as typeof base;
+			Object.assign(wrapped, { begin: (fn: (tx: typeof wrapped) => Promise<unknown>) => fn(wrapped) });
+			const rows = noInlineHistoryRows();
+			const sql = fakeSql((text) => text.startsWith("SELECT id,title,metric_spec")
+				? rows.filter((row) => text.includes(`id='${row.id}'`))
+				: text.includes("dolt_diff_work_items") ? pending : rowsFor(text)).sql;
+			const events: object[] = [];
+			const service = createGoalMetrics({ knowledgeSql: sql, observationsSql: wrapped, node: "n", environment: "test", log: (event) => events.push(event) });
+			const result = service.compute("edits-7d", { requestKey: "late-rejection" });
+			await vi.advanceTimersByTimeAsync(15001);
+			rejectQuery(new Error("SECRET-LATE-ERROR"));
+			await vi.advanceTimersByTimeAsync(1);
+			release();
+			await vi.advanceTimersByTimeAsync(1);
+			expect((await result).reason).toBe("source_timeout");
+			const terminal = events.filter((e) => (e as { event: string }).event === "metric.compute.completed");
+			expect(terminal).toHaveLength(1);
+			expect(terminal[0]).toMatchObject({ sourceTiming: { workDiff: { state: "running" }, knowledgeDiff: { state: "not_started" } } });
+			expect(JSON.stringify(terminal)).not.toContain("SECRET-LATE-ERROR");
+		} finally { vi.useRealTimers(); }
+	});
+
+	it("ignores throwing timing callbacks and clocks", async () => {
+		const { sql } = fakeSql(rowsFor);
+		const sample = await readNoInlineHistoryEdits(
+			sql,
+			"count",
+			window,
+			read,
+			() => {
+				throw new Error("diagnostic");
+			},
+		);
+		expect(sample.complete).toBe(true);
+		const clock = vi.spyOn(performance, "now").mockImplementation(() => {
+			throw new Error("clock");
+		});
+		try {
+			const { service, events } = hub(noInlineHistoryRows(), rowsFor);
+			const saved = await service.compute("edits-7d", {
+				requestKey: "bad-clock",
+			});
+			expect(saved.status).toBe("ok");
+			expect(
+				events.find(
+					(e) => (e as { event: string }).event === "metric.compute.completed",
+				),
+			).toMatchObject({
+				sourceTiming: { windowCommits: { state: "ok", durationMs: null } },
+			});
+		} finally {
+			clock.mockRestore();
+		}
 	});
 
 	it("measures the edits window as seven UTC days ending at the reading", async () => {

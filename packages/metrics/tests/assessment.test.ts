@@ -1,7 +1,16 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { judgeMoves, type MoveReadingPort } from "../../work-items/src/moves";
+import { PostgresMetricObservations } from "../src/adapters/postgres";
 import {
 	assessKpi,
+	assessDirection,
+	createWorkMetricReader,
+	createMetricService,
+	metricDefinitionHash,
+	MetricRegistry,
+	type MetricObservationsPort,
+	type MetricView,
 	KpiBindingSchema,
 	bucketObservations,
 	type KpiAssessmentInput,
@@ -40,6 +49,413 @@ function reading(
 	};
 }
 const fresh = reading(1.2, "2026-11-02T11:00:00.000Z");
+
+describe("work page database batch", () => {
+	it("retains the pinned definition when the current definition changes", async () => {
+		const old = { id: "ratio", title: "Ratio", revision: "old", spec: { calculatorId: "work.count@1", params: { version: 1 }, maxAgeSeconds: 7200 } };
+		const current = { ...old, revision: "new", spec: { ...old.spec, params: { version: 2 } } };
+		const baseline = { ...fresh, definitionHash: metricDefinitionHash(old), value: 1 };
+		const due = { ...baseline, id: "00000000-0000-4000-8000-000000000002", value: 2 };
+		const batch = vi.fn(async () => [{ baseline: { definition: old, observation: baseline }, latest: due, lastGood: due, evaluation: due }]);
+		const registry = new MetricRegistry();
+		registry.register({ id: "work.count@1", unit: "ratio", paramsSchema: { parse: (x: unknown) => x } as never, budget: { timeoutMs: 1, maxSourceCalls: 1, maxRows: 1, maxResponseBytes: 1 }, compute: async () => { throw new Error("unused"); } });
+		const service = createMetricService({ definitions: { get: async () => current, getMany: async () => [current], list: async () => ({ items: [], nextCursor: null }) }, observations: { predictionReadBatch: batch } as unknown as MetricObservationsPort, registry, scope: { node: "n", environment: "e", dataScope: "d" }, now: () => new Date(NOW.getTime() + 3 * 3600000), authorize: async () => true });
+		const [result] = await service.predictionBatch([{ metricId: "ratio", comparator: "gte", target: { value: 2, unit: "ratio" }, baselineObservationId: baseline.id, evaluationAt: NOW.toISOString() }]);
+		expect(result?.assessment).toMatchObject({ status: "met", observationId: due.id });
+	});
+	it("assesses due commitments through one observation batch and preserves due evidence", async () => {
+		const definition = {
+			id: "ratio",
+			title: "Ratio",
+			revision: "1",
+			spec: { calculatorId: "work.count@1", params: {}, maxAgeSeconds: 7200 },
+		};
+		const baseline = {
+			...fresh,
+			definitionHash: metricDefinitionHash(definition),
+			value: 1,
+		};
+		const due = {
+			...baseline,
+			id: "00000000-0000-4000-8000-000000000002",
+			value: 2,
+		};
+		const batch = vi.fn(async () => [
+			{
+				baseline: { definition, observation: baseline },
+				latest: due,
+				lastGood: due,
+				evaluation: due,
+			},
+		]);
+		const registry = new MetricRegistry();
+		registry.register({
+			id: "work.count@1",
+			unit: "ratio",
+			paramsSchema: { parse: (x: unknown) => x } as never,
+			budget: {
+				timeoutMs: 1,
+				maxSourceCalls: 1,
+				maxRows: 1,
+				maxResponseBytes: 1,
+			},
+			compute: async () => {
+				throw new Error("unused");
+			},
+		});
+		const service = createMetricService({
+			definitions: {
+				get: async () => definition,
+				getMany: async () => [definition],
+				list: async () => ({ items: [], nextCursor: null }),
+			},
+			observations: {
+				predictionReadBatch: batch,
+			} as unknown as MetricObservationsPort,
+			registry,
+			scope: { node: "n", environment: "e", dataScope: "d" },
+			now: () => new Date(NOW.getTime() + 3 * 3600000),
+			authorize: async () => true,
+		});
+		const result = await service.predictionBatch([
+			{
+				metricId: "ratio",
+				comparator: "gte",
+				target: { value: 2, unit: "ratio" },
+				baselineObservationId: baseline.id,
+				evaluationAt: NOW.toISOString(),
+			},
+		]);
+		expect(batch).toHaveBeenCalledOnce();
+		expect(result[0]?.assessment).toMatchObject({
+			status: "met",
+			observationId: due.id,
+			value: 2,
+		});
+	});
+	it("does not expose a due observation when its historical definition is denied", async () => {
+		const definition = {
+			id: "ratio",
+			title: "Ratio",
+			revision: "new",
+			spec: { calculatorId: "work.count@1", params: {}, maxAgeSeconds: 7200 },
+		};
+		const old = { ...definition, revision: "old" };
+		const baseline = { ...fresh, definitionHash: metricDefinitionHash(old) };
+		const batch = vi.fn(async () => [
+			{
+				baseline: { definition: old, observation: baseline },
+				latest: baseline,
+				lastGood: baseline,
+				evaluation: baseline,
+			},
+		]);
+		const service = createMetricService({
+			definitions: {
+				get: async () => definition,
+				getMany: async () => [definition],
+				list: async () => ({ items: [], nextCursor: null }),
+			},
+			observations: {
+				predictionReadBatch: batch,
+			} as unknown as MetricObservationsPort,
+			registry: new MetricRegistry(),
+			scope: { node: "n", environment: "e", dataScope: "d" },
+			now: () => NOW,
+			authorize: async (_action, d) => d.revision !== "old",
+		});
+		const [result] = await service.predictionBatch([
+			{
+				metricId: "ratio",
+				comparator: "gte",
+				target: { value: 1, unit: "ratio" },
+				baselineObservationId: baseline.id,
+				evaluationAt: NOW.toISOString(),
+			},
+		]);
+		expect(result?.assessment).toMatchObject({
+			status: "not_measured",
+			reason: "metric_unavailable",
+			observationId: null,
+			value: null,
+		});
+		expect(batch).toHaveBeenCalledOnce();
+	});
+	it("never requests observations for a denied metric", async () => {
+		const definition = {
+			id: "ratio",
+			title: "Ratio",
+			revision: "1",
+			spec: { calculatorId: "work.count@1", params: {}, maxAgeSeconds: 7200 },
+		};
+		const getMany = vi.fn(async () => [definition]);
+		const batch = vi.fn(async () => []);
+		const service = createMetricService({
+			definitions: {
+				get: async () => definition,
+				getMany,
+				list: async () => ({ items: [], nextCursor: null }),
+			},
+			observations: {
+				workReadBatch: batch,
+			} as unknown as MetricObservationsPort,
+			registry: new MetricRegistry(),
+			scope: { node: "n", environment: "e", dataScope: "d" },
+			now: () => NOW,
+			authorize: async () => false,
+		});
+		const result = await service.workReadBatch([
+			{ metricId: "ratio", baselineObservationId: fresh.id },
+		]);
+		expect(batch).toHaveBeenCalledWith([]);
+		expect(result[0]).toMatchObject({
+			baseline: null,
+			current: null,
+			unknownReason: "metrics_unavailable",
+		});
+	});
+	it("issues one scoped ordered SQL statement for multiple snapshots", async () => {
+		const sql = vi.fn(async () => [{}, {}]);
+		const store = new PostgresMetricObservations(sql as never, {
+			node: "n",
+			environment: "e",
+			dataScope: "d",
+		});
+		const rows = await store.workReadBatch([
+			{ metricId: "a", definitionHash: "one", baselineObservationId: null },
+			{ metricId: "b", definitionHash: "two", baselineObservationId: null },
+		]);
+		expect(rows).toHaveLength(2);
+		expect(sql).toHaveBeenCalledOnce();
+		const call = sql.mock.calls[0] as unknown as [
+			TemplateStringsArray,
+			...unknown[],
+		];
+		expect(call[0].join("?")).toContain("ORDER BY r.ord");
+		expect(call.slice(1)).toContain("n/e/d");
+	});
+	it("reads multiple pinned due observations in one scoped statement", async () => {
+		const sql = vi.fn(async () => [{}, {}]);
+		const store = new PostgresMetricObservations(sql as never, {
+			node: "n",
+			environment: "e",
+			dataScope: "d",
+		});
+		const rows = await store.predictionReadBatch([
+			{
+				metricId: "a",
+				baselineObservationId: fresh.id,
+				evaluationAt: NOW.toISOString(),
+			},
+			{
+				metricId: "b",
+				baselineObservationId: fresh.id,
+				evaluationAt: NOW.toISOString(),
+			},
+		]);
+		expect(rows).toHaveLength(2);
+		expect(sql).toHaveBeenCalledOnce();
+		const call = sql.mock.calls[0] as unknown as [
+			TemplateStringsArray,
+			...unknown[],
+		];
+		expect(call[0].join("?")).toContain("evaluation_at <= r.due::timestamptz");
+		expect(call.slice(1)).toContain("n/e/d");
+	});
+	it("reads one batch and reauthorizes historical snapshots", async () => {
+		const definition = {
+			id: "ratio",
+			title: "Ratio",
+			revision: "1",
+			spec: { calculatorId: "work.count@1", params: {}, maxAgeSeconds: 7200 },
+		};
+		const baseline = {
+			...fresh,
+			definitionHash: metricDefinitionHash(definition),
+		};
+		const failed = {
+			...baseline,
+			id: "00000000-0000-4000-8000-000000000002",
+			status: "error" as const,
+			value: null,
+		};
+		const historical = { ...definition, revision: "old" };
+		const getMany = vi.fn(async () => [definition]);
+		const batch = vi.fn(async () => [
+			{
+				baseline: { definition: historical, observation: baseline },
+				latest: failed,
+			},
+		]);
+		const authorize = vi.fn(
+			async (_: unknown, d: typeof definition) => d.revision !== "old",
+		);
+		const service = createMetricService({
+			definitions: {
+				get: async () => definition,
+				getMany,
+				list: async () => ({ items: [], nextCursor: null }),
+			},
+			observations: {
+				workReadBatch: batch,
+			} as unknown as MetricObservationsPort,
+			registry: new MetricRegistry(),
+			scope: { node: "n", environment: "e", dataScope: "d" },
+			now: () => NOW,
+			authorize,
+		});
+		const result = await service.workReadBatch([
+			{ metricId: "ratio", baselineObservationId: baseline.id },
+		]);
+		expect(getMany).toHaveBeenCalledOnce();
+		expect(batch).toHaveBeenCalledOnce();
+		expect(result[0]).toMatchObject({
+			baseline: null,
+			current: { id: failed.id, status: "error" },
+		});
+		expect(authorize).toHaveBeenCalledTimes(2);
+	});
+});
+
+describe("directional assessment", () => {
+	const current = {
+		...fresh,
+		id: "00000000-0000-4000-8000-000000000002",
+		value: 2,
+	};
+	it("compares compatible evidence without inventing a claim", () => {
+		expect(assessDirection("up", fresh, current)).toBe("as_declared");
+		expect(assessDirection("down", fresh, current)).toBe("against");
+		expect(assessDirection("up", fresh, fresh)).toBe("flat");
+		expect(assessDirection(null, fresh, current)).toBeNull();
+	});
+	it("rejects incompatible or failed observations", () => {
+		for (const change of [
+			{ unit: "count" },
+			{ definitionHash: "different" },
+			{ paramsHash: "different" },
+			{ dataScope: "other" },
+			{ status: "error" as const },
+			{ status: "pending" as const },
+			{ viewState: "stale" as const },
+			{ sourceWatermarks: [] },
+			{ window: { start: "2026-11-01T00:00:00Z", end: current.window.end } },
+			{ value: null },
+		])
+			expect(assessDirection("up", fresh, { ...current, ...change })).toBe(
+				"unknown",
+			);
+	});
+});
+
+describe("work observation projection", () => {
+	const view = (
+		attempt: MetricObservation,
+		viewState: MetricView["viewState"] = "ok",
+	): MetricView => ({
+		definition: {
+			id: "ratio",
+			title: "Ratio",
+			revision: "1",
+			spec: { calculatorId: "work.test@1", params: {}, maxAgeSeconds: 7200 },
+		},
+		latestAttempt: attempt,
+		lastGood: fresh,
+		viewState,
+	});
+	it("pins only a fresh latest attempt and preserves its immutable identity", async () => {
+		const service = {
+			read: async () => view(fresh),
+			observation: async (_id: string, id: string) => ({
+				observation: { ...fresh, id },
+			}),
+		};
+		const reader = createWorkMetricReader(service, () => NOW);
+		expect(await reader.baselineId("ratio")).toBe(fresh.id);
+		expect(await reader.observation("ratio", fresh.id)).toEqual(fresh);
+		expect(await reader.latest("ratio")).toMatchObject({
+			id: fresh.id,
+			unit: "ratio",
+			definitionHash: "h",
+			viewState: "ok",
+		});
+	});
+	it("preserves a newer failure and refuses stale evidence as a baseline", async () => {
+		const failed = {
+			...fresh,
+			id: "00000000-0000-4000-8000-000000000002",
+			status: "error" as const,
+			value: null,
+			reason: "source_failed",
+		};
+		const service = {
+			read: async () => view(failed, "error"),
+			observation: async () => ({ observation: fresh }),
+		};
+		const reader = createWorkMetricReader(service, () => NOW);
+		expect(await reader.baselineId("ratio")).toBeNull();
+		expect(await reader.latest("ratio")).toMatchObject({
+			id: failed.id,
+			status: "error",
+			reason: "source_failed",
+		});
+		const stale = createWorkMetricReader(
+			{ ...service, read: async () => view(fresh) },
+			() => new Date(NOW.getTime() + DAY),
+		);
+		expect(await stale.baselineId("ratio")).toBeNull();
+		expect(await stale.latest("ratio")).toMatchObject({ viewState: "stale" });
+	});
+	it("does not bypass denied reads for current or pinned observations", async () => {
+		const denied = new Error("denied");
+		const reader = createWorkMetricReader({
+			read: async () => {
+				throw denied;
+			},
+			observation: async () => {
+				throw denied;
+			},
+		});
+		await expect(reader.latest("ratio")).rejects.toBe(denied);
+		await expect(reader.baselineId("ratio")).rejects.toBe(denied);
+		await expect(reader.observation("ratio", fresh.id)).rejects.toBe(denied);
+	});
+	it("projects the same pinned and latest IDs through the work-items seam", async () => {
+		const current = {
+			...fresh,
+			id: "00000000-0000-4000-8000-000000000002",
+			value: 2,
+		};
+		const reader = createWorkMetricReader(
+			{
+				read: async () => view(current),
+				observation: async () => ({ observation: fresh }),
+			},
+			() => NOW,
+		);
+		const port: MoveReadingPort = {
+			observation: async (id, observationId) =>
+				reader.observation(id, observationId),
+			latest: async (id) => reader.latest(id),
+			assess: (direction, baseline, latest) =>
+				assessDirection(
+					direction,
+					baseline as MetricObservation,
+					latest as MetricObservation,
+				),
+		};
+		const [result] = await judgeMoves(
+			[{ metricId: "ratio", direction: "up", baselineObservationId: fresh.id }],
+			port,
+		);
+		expect(result).toMatchObject({
+			baselineObservationId: fresh.id,
+			baseline: { id: fresh.id, unit: "ratio", definitionHash: "h" },
+			current: { id: current.id, value: 2 },
+			moved: "as_declared",
+		});
+	});
+});
 function input(over: Partial<KpiAssessmentInput> = {}): KpiAssessmentInput {
 	return {
 		binding: {
@@ -161,9 +577,9 @@ describe("assessKpi first-match rules", () => {
 				.status,
 		).toBe("delayed");
 		const err = reading(null, "2026-11-02T11:30:00.000Z", "unavailable");
-		expect(
-			assessKpi(input({ ...breaching, latestAttempt: err })).reason,
-		).toBe("zero_denominator");
+		expect(assessKpi(input({ ...breaching, latestAttempt: err })).reason).toBe(
+			"zero_denominator",
+		);
 		// After the deadline the evaluation verdict is unchanged: missed, not failing.
 		const final = assessKpi(
 			input({
@@ -178,18 +594,22 @@ describe("assessKpi first-match rules", () => {
 		const missed = reading(0.4, "2026-11-02T11:00:00.000Z");
 		const a = assessKpi(input({ latestAttempt: missed, lastGood: missed }));
 		expect([a.status, a.reason]).toEqual(["behind", null]);
-		expect(KpiBindingSchema.safeParse({
-			metricId: "ratio",
-			comparator: "gte",
-			target: { value: 1, unit: "ratio" },
-			breach: "failing",
-		}).success).toBe(true);
-		expect(KpiBindingSchema.safeParse({
-			metricId: "ratio",
-			comparator: "gte",
-			target: { value: 1, unit: "ratio" },
-			breach: "behind",
-		}).success).toBe(false);
+		expect(
+			KpiBindingSchema.safeParse({
+				metricId: "ratio",
+				comparator: "gte",
+				target: { value: 1, unit: "ratio" },
+				breach: "failing",
+			}).success,
+		).toBe(true);
+		expect(
+			KpiBindingSchema.safeParse({
+				metricId: "ratio",
+				comparator: "gte",
+				target: { value: 1, unit: "ratio" },
+				breach: "behind",
+			}).success,
+		).toBe(false);
 	});
 	it("does not treat a young series as building: a historical window is complete at its first reading", () => {
 		expect(assessKpi(input()).status).toBe("on_track");

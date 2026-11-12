@@ -1,0 +1,7 @@
+# Conductor "Files to copy": gitignored files copied from the main checkout into
+# each new worktree. This replaces the default `.env*` pattern, so keep it.
+.env*
+# The last complete cognition bundle, kept current by scripts/agent/session-cognition.sh.
+# A new worktree starts with it, so Claude's CLAUDE.md import loads the contract
+# on the first session instead of racing workspace setup.
+.cogni/.cognition-cache.md

@@ -17,10 +17,13 @@
 
 import { describe, expect, it, vi } from "vitest";
 
-import { WorkItemDtoSchema } from "../src/contracts.js";
+import { WorkItemDtoSchema, WorkItemSummarySchema } from "../src/contracts.js";
+import { DoltgresWorkItemAdapter } from "../src/adapters/doltgres/adapter.js";
+import { independentReadPool, makeFakeDoltgresSql } from "./adapters/fake-doltgres-sql.js";
 import {
   judgeMove,
   judgeMoves,
+  judgeMoveSummaries,
   MoveMetricGoneError,
   type MoveReading,
   type MoveReadingPort,
@@ -45,11 +48,23 @@ const parse = (moves: unknown) =>
   });
 
 describe("WorkItemPatchInputSchema moves", () => {
+  it("does not claim movement for a directionless association", () => {
+    expect(judgeMove(null, reading(1), reading(2))).toBeNull();
+    expect(judgeMove(null, null, null)).toBeNull();
+  });
+
+  it("retains a direct affected metric without inventing a direction", () => {
+    expect(parse([{ metricId: "edits-7d", direction: null }]).success).toBe(true);
+    expect(
+      parseStoredMoves([{ metricId: "edits-7d", direction: null, baselineObservationId: OBS_1 }]),
+    ).toEqual([{ metricId: "edits-7d", direction: null, baselineObservationId: OBS_1 }]);
+  });
+
   it("accepts [] (moves nothing), one entry and three entries", () => {
     expect(parse([]).success).toBe(true);
     expect(parse([{ metricId: "m-1", direction: "up" }]).success).toBe(true);
     expect(
-      parse(["a", "b", "c"].map((metricId) => ({ metricId, direction: "down" }))).success
+      parse(["a", "b", "c"].map((metricId) => ({ metricId, direction: "down" }))).success,
     ).toBe(true);
   });
 
@@ -64,7 +79,13 @@ describe("WorkItemPatchInputSchema moves", () => {
 
   it.each([
     ["four entries", [1, 2, 3, 4].map((i) => ({ metricId: `m-${i}`, direction: "up" }))],
-    ["a repeated id", [{ metricId: "m", direction: "up" }, { metricId: "m", direction: "down" }]],
+    [
+      "a repeated id",
+      [
+        { metricId: "m", direction: "up" },
+        { metricId: "m", direction: "down" },
+      ],
+    ],
     ["an empty id", [{ metricId: "", direction: "up" }]],
     ["a 41-character id", [{ metricId: "x".repeat(41), direction: "up" }]],
     ["a bad direction", [{ metricId: "m", direction: "sideways" }]],
@@ -100,14 +121,16 @@ describe("WorkItemMovesInputSchema (create and patch share it)", () => {
   it("is the schema of both writes", async () => {
     const { WorkItemMovesInputSchema } = await import("../src/patch-contract.js");
     expect(WorkItemMovesInputSchema.safeParse([]).success).toBe(true);
-    expect(WorkItemMovesInputSchema.safeParse([{ metricId: "m", direction: "up", baselineObservationId: OBS_1 }]).data).toEqual([
-      { metricId: "m", direction: "up" },
-    ]);
+    expect(
+      WorkItemMovesInputSchema.safeParse([
+        { metricId: "m", direction: "up", baselineObservationId: OBS_1 },
+      ]).data,
+    ).toEqual([{ metricId: "m", direction: "up" }]);
     expect(
       WorkItemMovesInputSchema.safeParse([
         { metricId: "m", direction: "up" },
         { metricId: "m", direction: "down" },
-      ]).success
+      ]).success,
     ).toBe(false);
   });
 });
@@ -121,11 +144,75 @@ describe("moveIssues", () => {
       moveIssues([
         { metricId: "m", direction: "up" },
         { metricId: "m", direction: "left" },
-      ])
-    ).toEqual([
-      "moves[1].metricId repeats m",
-      'moves[1].direction must be "up" or "down"',
+      ]),
+    ).toEqual(["moves[1].metricId repeats m", 'moves[1].direction must be "up", "down" or null']);
+  });
+
+  it("refuses directionless writes until readers are upgraded", () => {
+    expect(moveIssues([{ metricId: "edits-7d", direction: null }])).toEqual([
+      "moves[0].direction null is not enabled until readers are upgraded",
     ]);
+  });
+});
+
+describe("reader-first store gate", () => {
+  it("rejects null writes on create and patch before any database access", async () => {
+    const sql = vi.fn();
+    const adapter = new DoltgresWorkItemAdapter(sql as never, {
+      recreateClient: () => sql as never,
+    });
+    const moves = [{ metricId: "edits-7d", direction: null }];
+    await expect(
+      adapter.create({ type: "task", title: "t", node: "shared", moves } as never, "principal"),
+    ).rejects.toMatchObject({ code: "moves_invalid" });
+    await expect(
+      adapter.patch({ id: "task.1", reason: "test gate", set: { moves } } as never, "principal"),
+    ).rejects.toMatchObject({ code: "moves_invalid" });
+    expect(sql).not.toHaveBeenCalled();
+  });
+
+  it("retains directionless links in summary wire projection", () => {
+    const result = WorkItemSummarySchema.parse({
+      id: "task.1",
+      title: "t",
+      type: "task",
+      status: "needs_implement",
+      labels: [],
+      createdAt: "t",
+      updatedAt: "t",
+      moves: [{ metricId: "edits-7d", direction: null, baselineObservationId: OBS_1 }],
+    });
+    expect(result.moves).toEqual([
+      { metricId: "edits-7d", direction: null, baselineObservationId: OBS_1 },
+    ]);
+  });
+
+  it("selects stored links in a bounded summary page", async () => {
+    const queries: string[] = [];
+    const moves = [{ metricId: "edits-7d", direction: null, baselineObservationId: OBS_1 }];
+    const sql = makeFakeDoltgresSql(
+      (query) =>
+        query.includes("FROM (SELECT")
+          ? [
+              {
+                id: "task.1",
+                title: "t",
+                type: "task",
+                status: "needs_implement",
+                labels: [],
+                moves,
+                __sort_key: null,
+              },
+            ]
+          : [],
+      queries,
+    );
+    const adapter = new DoltgresWorkItemAdapter(independentReadPool(sql), { readClient: sql });
+    const page = await adapter.listSummaries({ limit: 1 });
+    expect(page.items[0]?.moves).toEqual(moves);
+    expect(queries.find((query) => query.includes("FROM (SELECT"))).toContain(
+      "labels, moves, created_at",
+    );
   });
 });
 
@@ -141,8 +228,8 @@ describe("parseStoredMoves", () => {
     expect(parseStoredMoves([])).toEqual([]);
     expect(
       parseStoredMoves(
-        JSON.stringify([{ metricId: "m", direction: "up", baselineObservationId: OBS_1 }])
-      )
+        JSON.stringify([{ metricId: "m", direction: "up", baselineObservationId: OBS_1 }]),
+      ),
     ).toEqual([{ metricId: "m", direction: "up", baselineObservationId: OBS_1 }]);
   });
 
@@ -154,7 +241,7 @@ describe("parseStoredMoves", () => {
         { metricId: "c", direction: "sideways" },
         { direction: "up" },
         null,
-      ])
+      ]),
     ).toEqual([
       { metricId: "a", direction: "up", baselineObservationId: null },
       { metricId: "b", direction: "down", baselineObservationId: null },
@@ -259,11 +346,11 @@ describe("judgeMoves", () => {
   const move = (
     metricId: string,
     direction: "up" | "down",
-    baselineObservationId: string | null = OBS_1
+    baselineObservationId: string | null = OBS_1,
   ): WorkItemMove => ({ metricId, direction, baselineObservationId });
   const port = (
     baseline: Record<string, MoveReading | null | Error>,
-    latest: Record<string, MoveReading | null | Error>
+    latest: Record<string, MoveReading | null | Error>,
   ) => {
     const observation = vi.fn<MoveReadingPort["observation"]>(async (metricId) => {
       const found = baseline[metricId];
@@ -275,13 +362,17 @@ describe("judgeMoves", () => {
       if (found instanceof Error) throw found;
       return found ?? null;
     });
-    return { port: { observation, latest: current }, observation, current };
+    return { port: { observation, latest: current, assess: judgeMove }, observation, current };
   };
 
   it("reads both ends of each move and judges it", async () => {
-    const { port: readings, observation, current } = port(
+    const {
+      port: readings,
+      observation,
+      current,
+    } = port(
       { "m-1": reading(10), "m-2": reading(10) },
-      { "m-1": reading(12), "m-2": reading(12) }
+      { "m-1": reading(12), "m-2": reading(12) },
     );
     const out = await judgeMoves([move("m-1", "up"), move("m-2", "down")], readings);
     expect(out).toEqual([
@@ -304,24 +395,25 @@ describe("judgeMoves", () => {
     expect(observation.mock.calls[0]?.[1]).toBe(OBS_1);
   });
 
-  it("a null baseline is unknown (no_baseline) and costs no lookup", async () => {
+  it("a null baseline remains unknown while showing the current observation", async () => {
     const { port: readings, observation, current } = port({}, { "m-1": reading(3) });
     const [out] = await judgeMoves([move("m-1", "up", null)], readings);
     expect(out).toMatchObject({
       baseline: null,
-      current: null,
+      current: reading(3),
       moved: "unknown",
       unknownReason: "no_baseline",
     });
     expect(observation).not.toHaveBeenCalled();
-    expect(current).not.toHaveBeenCalled();
+    expect(current).toHaveBeenCalledTimes(1);
   });
 
-  it("an unreadable baseline is unknown and skips the latest lookup", async () => {
+  it("an unreadable baseline is unknown while retaining the latest reading", async () => {
     const { port: readings, current } = port({ "m-1": null }, { "m-1": reading(3) });
     const [out] = await judgeMoves([move("m-1", "up")], readings);
     expect(out).toMatchObject({ moved: "unknown", unknownReason: "baseline_unreadable" });
-    expect(current).not.toHaveBeenCalled();
+    expect(out?.current).toEqual(reading(3));
+    expect(current).toHaveBeenCalledTimes(1);
   });
 
   it("no current reading is unknown and keeps the baseline it read", async () => {
@@ -338,7 +430,7 @@ describe("judgeMoves", () => {
   it("a failing lookup reads unknown for that move only", async () => {
     const { port: readings } = port(
       { "m-1": new Error("db down"), "m-2": reading(1) },
-      { "m-2": reading(2) }
+      { "m-2": reading(2) },
     );
     const out = await judgeMoves([move("m-1", "up"), move("m-2", "up")], readings);
     expect(out.map((m) => m.moved)).toEqual(["unknown", "as_declared"]);
@@ -353,7 +445,11 @@ describe("judgeMoves", () => {
       latest: async () => reading(1),
     };
     const [a] = await judgeMoves([move("m-1", "up")], onBaseline);
-    expect(a).toMatchObject({ moved: "unknown", unknownReason: "metric_deprecated", baseline: null });
+    expect(a).toMatchObject({
+      moved: "unknown",
+      unknownReason: "metric_deprecated",
+      baseline: null,
+    });
 
     const onLatest: MoveReadingPort = {
       observation: async () => reading(1),
@@ -371,11 +467,17 @@ describe("judgeMoves", () => {
     // A bundled copy of the class is matched by name; one bad move does not hide the others.
     const copy: MoveReadingPort = {
       observation: async (id) =>
-        id === "old" ? Promise.reject(Object.assign(new Error("x"), { name: "MoveMetricGoneError" })) : reading(1),
+        id === "old"
+          ? Promise.reject(Object.assign(new Error("x"), { name: "MoveMetricGoneError" }))
+          : reading(1),
       latest: async () => reading(2),
+      assess: judgeMove,
     };
     const out = await judgeMoves([move("old", "up"), move("live", "up")], copy);
-    expect(out.map((m) => m.unknownReason ?? m.moved)).toEqual(["metric_deprecated", "as_declared"]);
+    expect(out.map((m) => m.unknownReason ?? m.moved)).toEqual([
+      "metric_deprecated",
+      "as_declared",
+    ]);
   });
 
   it("with no metrics service every move is unknown (metrics_unavailable)", async () => {
@@ -400,13 +502,104 @@ describe("judgeMoves", () => {
   it("reads at most three moves", async () => {
     const { port: readings, observation } = port(
       Object.fromEntries([1, 2, 3, 4].map((i) => [`m-${i}`, reading(1)])),
-      Object.fromEntries([1, 2, 3, 4].map((i) => [`m-${i}`, reading(2)]))
+      Object.fromEntries([1, 2, 3, 4].map((i) => [`m-${i}`, reading(2)])),
     );
     const out = await judgeMoves(
       [1, 2, 3, 4].map((i) => move(`m-${i}`, "up")),
-      readings
+      readings,
     );
     expect(out).toHaveLength(3);
     expect(observation).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("bounded summary assessment", () => {
+  it("does not fall back to per-row reads when batching is unavailable", async () => {
+    const observation = vi.fn(async () => reading(1));
+    const latest = vi.fn(async () => reading(2));
+    const port: MoveReadingPort = { observation, latest, assess: judgeMove };
+    const [item] = await judgeMoveSummaries(
+      [{ id: "task.1", moves: [{ metricId: "m", direction: "up", baselineObservationId: OBS_1 }] }],
+      port,
+    );
+    expect(item?.moves?.[0]).toMatchObject({
+      moved: "unknown",
+      unknownReason: "metrics_unavailable",
+    });
+    expect(observation).not.toHaveBeenCalled();
+    expect(latest).not.toHaveBeenCalled();
+  });
+  it("joins the page through one batch port without individual lookups", async () => {
+    const observation = vi.fn(async () => reading(1));
+    const latest = vi.fn(async () => reading(2));
+    const batch = vi.fn(async (moves: readonly WorkItemMove[]) =>
+      moves.map(() => ({ baseline: reading(1), current: reading(2) })),
+    );
+    const port = { observation, latest, batch, assess: judgeMove };
+    const items = ["a", "b"].map((id) => ({
+      id,
+      moves: [{ metricId: id, direction: "up" as const, baselineObservationId: OBS_1 }],
+    }));
+    const result = await judgeMoveSummaries(items, port);
+    expect(batch).toHaveBeenCalledOnce();
+    expect(observation).not.toHaveBeenCalled();
+    expect(latest).not.toHaveBeenCalled();
+    expect(result.map((row) => row.moves?.[0]?.moved)).toEqual(["as_declared", "as_declared"]);
+  });
+  it("marks links beyond the page assessment cap as budget-limited", async () => {
+    const port: MoveReadingPort = {
+      observation: async () => reading(1),
+      latest: async () => reading(2),
+      batch: async (moves) => moves.map(() => ({ baseline: reading(1), current: reading(2) })),
+      assess: judgeMove,
+    };
+    const items = [
+      ...Array.from({ length: 100 }, (_, i) => ({ id: `task.${i}` })),
+      {
+        id: "task.100",
+        moves: [{ metricId: "m", direction: "up" as const, baselineObservationId: OBS_1 }],
+      },
+    ];
+    const out = await judgeMoveSummaries(items, port);
+    expect(out[100]?.moves?.[0]).toMatchObject({
+      moved: "unknown",
+      unknownReason: "projection_budget",
+    });
+  });
+  it("fails closed when an old reader does not supply the metrics assessor", async () => {
+    const port: MoveReadingPort = {
+      observation: async () => reading(1),
+      latest: async () => reading(2),
+    };
+    const [result] = await judgeMoves(
+      [{ metricId: "m", direction: "up", baselineObservationId: OBS_1 }],
+      port,
+    );
+    expect(result?.moved).toBe("unknown");
+  });
+  it("enriches declared moves and leaves unrelated items untouched", async () => {
+    const assess = vi.fn(() => "against" as const);
+    const port: MoveReadingPort = {
+      observation: async () => reading(1),
+      latest: async () => reading(2),
+      batch: async (moves) => moves.map(() => ({ baseline: reading(1), current: reading(2) })),
+      assess,
+    };
+    const items = [
+      {
+        id: "task.1",
+        moves: [{ metricId: "m", direction: "up" as const, baselineObservationId: OBS_1 }],
+      },
+      { id: "task.2" },
+    ];
+    const out = await judgeMoveSummaries(items, port);
+    expect(out[0]?.moves?.[0]).toMatchObject({
+      metricId: "m",
+      moved: "against",
+      baseline: reading(1),
+      current: reading(2),
+    });
+    expect(out[1]).toEqual({ id: "task.2" });
+    expect(assess).toHaveBeenCalledOnce();
   });
 });

@@ -65,15 +65,34 @@ emit_agent_context() {
 
 # emit_claude_context <text> — Claude Code only, and only when this session's
 # CLAUDE.md @import could not have seen the cache: Claude resolves imports
-# before its SessionStart hook writes the file, so a fresh workspace's first
-# session would start without its contract. Its uncapped SessionStart channel
-# is structured JSON (hookSpecificOutput.additionalContext); raw stdout is
-# previewed to ~2 KB. A warm session already has the cache through the import,
-# so it gets nothing here (no duplicate).
+# before its SessionStart hook writes the file. Claude Code shows at most
+# 10,000 characters of hook context; anything longer is saved to a file with a
+# 2 KB preview, which loses the contract. So send the agent-contract section
+# itself (it fits), never the whole bundle; the import loads the rest next
+# session. A recovery notice is short and goes as is.
+CLAUDE_CONTEXT_MAX_CHARS=9900
 emit_claude_context() {
   [ -z "${CODEX_THREAD_ID:-}" ] || return 0
   command -v jq >/dev/null 2>&1 || return 0
-  printf '%s' "$1" \
+  payload="$1"
+  if bundle_is_complete "$1"; then
+    contract="$(printf '%s\n' "$1" | awk '/^## The agent-contract/{on=1} on{print} /^<\/agent-contract>/{exit}')"
+    case "$contract" in
+      *"<agent-contract"*"</agent-contract>"*)
+        payload="$(printf '%s\n\n%s\n\n%s' \
+          "COGNI COGNITION (first boot): the CLAUDE.md import ran before the cache existed. This is the agent-contract; the full bundle loads through CLAUDE.md next session." \
+          "$contract" \
+          "Governing index for this session: GET the node's /api/v1/knowledge/index.")"
+        ;;
+      *) payload="" ;;
+    esac
+  fi
+  # Count characters with jq (Unicode code points, independent of the locale).
+  if [ -z "$payload" ] || [ "$(printf '%s' "$payload" | jq -Rs 'length')" -gt "$CLAUDE_CONTEXT_MAX_CHARS" ]; then
+    # Never a truncated preview: say plainly that the contract did not load.
+    payload="COGNI COGNITION (first boot): the agent-contract could not be delivered to this session (the CLAUDE.md import ran before the cache existed, and the contract does not fit Claude Code's hook-context limit). Stay in bootstrap recovery and restart or resume this session; the cache now exists, so CLAUDE.md will load it."
+  fi
+  printf '%s' "$payload" \
     | jq -Rs '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:.}}'
 }
 

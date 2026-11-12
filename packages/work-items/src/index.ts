@@ -17,14 +17,14 @@ export type {
   HistoryDiffRow,
   HistoryEntry,
   HistoryFieldDiff,
-  ShapeHistoryOptions
+  ShapeHistoryOptions,
 } from "./history.js";
 export type { HistoryOutput } from "./history-contract.js";
 export type {
   CiteRef,
   EntryResolver,
   EntryResolverRule,
-  ResolvedEntry
+  ResolvedEntry,
 } from "./cites.js";
 export {
   CITE_COMMIT_PATTERN,
@@ -35,13 +35,13 @@ export {
   CitesUnsupportedError,
   citeIssues,
   EntryResolverUnavailableError,
-  EntryUnresolvedError
+  EntryUnresolvedError,
 } from "./cites.js";
 export {
   ChangeReasonSchema,
   HistoryEntrySchema,
   HistoryOutputSchema,
-  workItemsHistoryOperation
+  workItemsHistoryOperation,
 } from "./history-contract.js";
 export type { WorkItemPatchInput } from "./patch-contract.js";
 export type {
@@ -53,11 +53,12 @@ export type {
   MoveReadingPort,
   MovedState,
   MoveUnknownReason,
-  WorkItemMove
+  WorkItemMove,
 } from "./moves.js";
 export {
   judgeMove,
   judgeMoves,
+  judgeMoveSummaries,
   MOVE_METRIC_ID_MAX,
   MOVE_OBSERVATION_ID_PATTERN,
   MOVES_DEADLINE_MS,
@@ -68,7 +69,7 @@ export {
   MovesUnsupportedError,
   moveIssues,
   parseStoredMoves,
-  pinMoves
+  pinMoves,
 } from "./moves.js";
 export {
   CiteRefSchema,
@@ -76,12 +77,12 @@ export {
   WorkItemMovesInputSchema,
   WorkItemPatchInputSchema,
   WorkItemPatchStatusSchema,
-  WorkItemScoresInputSchema
+  WorkItemScoresInputSchema,
 } from "./patch-contract.js";
 export type {
   HistoryReadLog,
   WorkItemHistoryResult,
-  WorkItemHistoryStore
+  WorkItemHistoryStore,
 } from "./history-read.js";
 export { readWorkItemHistory } from "./history-read.js";
 export {
@@ -96,25 +97,25 @@ export {
   normalizeChangeReason,
   parseCitesTrailer,
   parseWorkItemCommitMessage,
-  shapeHistory
+  shapeHistory,
 } from "./history.js";
 export {
   WorkItemRevisionConflictError,
   WorkItemScoresInvalidError,
   WorkItemsCapacityError,
-  WorkItemWriteOutcomeUnknownError
+  WorkItemWriteOutcomeUnknownError,
 } from "./errors.js";
 
 export type {
   WorkItemLease,
   WorkItemLeaseOwner,
-  WorkItemLeasePort
+  WorkItemLeasePort,
 } from "./leases.js";
 export type { WorkItemCommandPort, WorkItemQueryPort } from "./ports.js";
 export type {
   WorkItemScoresIssue,
   WorkItemScoresIssueCode,
-  WorkItemScoresParseResult
+  WorkItemScoresParseResult,
 } from "./scores.js";
 export {
   EASE_ITERATIONS,
@@ -126,7 +127,7 @@ export {
   WORK_ITEM_SCORE_MAX,
   WORK_ITEM_SCORE_MIN,
   WORK_ITEM_SCORES_MAX_AXES,
-  WORK_ITEM_SCORES_MAX_BYTES
+  WORK_ITEM_SCORES_MAX_BYTES,
 } from "./scores.js";
 export { isValidTransition, VALID_TRANSITIONS } from "./transitions.js";
 export type {
@@ -142,21 +143,38 @@ export type {
   WorkItemStatus,
   WorkItemType,
   WorkQuery,
-  WorkRelation
+  WorkRelation,
 } from "./types.js";
 export { toWorkItemId } from "./types.js";
+export type {
+  WorkItemWriteErrorResponse,
+  WorkItemWriteOperation,
+} from "./write-errors.js";
+export {
+  WORK_ITEM_WRITE_ERROR_NAMES,
+  workItemWriteErrorResponse,
+} from "./write-errors.js";
+export type {
+  WorkItemCreateWire,
+  WorkItemPatchWire,
+} from "./write-input.js";
+export {
+  toWorkItemsCreateInput,
+  toWorkItemsPatchInput,
+  WORK_ITEM_CREATE_FIELDS,
+} from "./write-input.js";
 export { withWorkItemLeases } from "./with-leases.js";
 
 export {
   WORK_ITEM_SORT_FIELDS,
   WORK_ITEM_SORT_DIRECTIONS,
   normalizeWorkItemOrder,
-  compareWorkItems
+  compareWorkItems,
 } from "./query-order.js";
 export type {
   WorkItemSortBy,
   WorkItemSortDirection,
-  WorkItemOrder
+  WorkItemOrder,
 } from "./query-order.js";
 
 export { toWorkItemDto } from "./types.js";
@@ -170,7 +188,7 @@ export type {
   WorkBoardColumnPages,
   WorkBoardColumn,
   WorkBoardColumns,
-  WorkBoardQueryParse
+  WorkBoardQueryParse,
 } from "./board.js";
 export {
   loadWorkBoardColumns,
@@ -180,7 +198,7 @@ export {
   WORK_BOARD_STATUSES,
   WorkBoardColumnSchema,
   WorkBoardColumnsSchema,
-  workBoardColumnQuery
+  workBoardColumnQuery,
 } from "./board.js";
 export type {
   ParsedWorkSummaryQuery,
@@ -189,7 +207,7 @@ export type {
   WorkSummaryPageInfo,
   WorkSummaryQuery,
   WorkSummaryQueryParse,
-  WorkSummaryReadOptions
+  WorkSummaryReadOptions,
 } from "./summary-query.js";
 export {
   parseWorkSummarySearchParams,
@@ -203,7 +221,7 @@ export {
   WorkSummaryPageInfoSchema,
   WorkSummaryPageSchema,
   WorkSummaryQuerySchema,
-  workSummaryQueryToSearchParams
+  workSummaryQueryToSearchParams,
 } from "./summary-query.js";
 export type {
   WorkBoardRequestOptions,
@@ -211,12 +229,12 @@ export type {
   WorkReadErrorCode,
   WorkReadResult,
   WorkReadTelemetry,
-  WorkSummariesRequestOptions
+  WorkSummariesRequestOptions,
 } from "./read-handlers.js";
 export {
   classifyWorkReadError,
   handleWorkBoardRequest,
   handleWorkSummariesRequest,
   WORK_READ_CLIENT_CLOSED,
-  WORK_READ_ERROR_CODES
+  WORK_READ_ERROR_CODES,
 } from "./read-handlers.js";

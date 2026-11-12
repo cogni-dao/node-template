@@ -35,6 +35,128 @@ import {
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 const WEEK = 7 * DAY;
+
+/** Use the authorized service for every read, including pinned observations. */
+export function createWorkMetricReader(
+	service: {
+		read(id: string): Promise<MetricView>;
+		observation(
+			id: string,
+			observationId: string,
+		): Promise<{ observation: MetricObservation }>;
+	},
+	now: () => Date = () => new Date(),
+) {
+	const latest = async (id: string) => {
+		const view = await service.read(id);
+		const attempt = view.latestAttempt;
+		if (!attempt) return null;
+		const age = now().getTime() - Date.parse(attempt.window.end);
+		const fresh =
+			Number.isFinite(age) &&
+			age >= 0 &&
+			age <= view.definition.spec.maxAgeSeconds * 1000;
+		return {
+			...attempt,
+			metricTitle: view.definition.title,
+			maxAgeSeconds: view.definition.spec.maxAgeSeconds,
+			viewState:
+				view.viewState === "ok" && !fresh ? ("stale" as const) : view.viewState,
+		};
+	};
+	return {
+		latest,
+		async baselineId(id: string) {
+			const attempt = await latest(id);
+			return attempt?.viewState === "ok" &&
+				attempt.status === "ok" &&
+				attempt.value !== null &&
+				Number.isFinite(attempt.value) &&
+				attempt.observedAt !== null &&
+				Number.isFinite(Date.parse(attempt.observedAt))
+				? attempt.id
+				: null;
+		},
+		async observation(id: string, observationId: string) {
+			return (await service.observation(id, observationId)).observation;
+		},
+	};
+}
+
+/** Compare authorized observations from the same measurement series. */
+export function assessDirection(
+	direction: "up" | "down" | null,
+	baseline: MetricObservation | null,
+	current:
+		| (MetricObservation & {
+				viewState?: MetricView["viewState"];
+				maxAgeSeconds?: number;
+		  })
+		| null,
+): "as_declared" | "against" | "flat" | "unknown" | null {
+	if (direction === null) return null;
+	if (
+		!baseline ||
+		!current ||
+		baseline.status !== "ok" ||
+		current.status !== "ok" ||
+		(current.viewState !== undefined && current.viewState !== "ok") ||
+		baseline.value === null ||
+		current.value === null ||
+		!Number.isFinite(baseline.value) ||
+		!Number.isFinite(current.value)
+	)
+		return "unknown";
+	for (const observation of [baseline, current]) {
+		if (
+			!observation.observedAt ||
+			!Number.isFinite(Date.parse(observation.observedAt)) ||
+			!observation.sourceWatermarks.length ||
+			observation.sourceWatermarks.some(
+				(watermark) =>
+					!watermark.asOf || !Number.isFinite(Date.parse(watermark.asOf)),
+			)
+		)
+			return "unknown";
+		const maxAgeSeconds = current.maxAgeSeconds;
+		if (
+			maxAgeSeconds !== undefined &&
+			observation.sourceWatermarks.some((watermark) => {
+				const age =
+					Date.parse(observation.observedAt as string) -
+					Date.parse(watermark.asOf as string);
+				return age < 0 || age > maxAgeSeconds * 1000;
+			})
+		)
+			return "unknown";
+	}
+	for (const field of [
+		"metricId",
+		"definitionHash",
+		"calculatorVersion",
+		"paramsHash",
+		"node",
+		"environment",
+		"dataScope",
+		"unit",
+	] as const)
+		if (baseline[field] !== current[field]) return "unknown";
+	const duration = (o: MetricObservation) =>
+		Date.parse(o.window.end) - Date.parse(o.window.start);
+	const first = duration(baseline),
+		second = duration(current);
+	if (
+		!Number.isFinite(first) ||
+		first < 0 ||
+		first !== second ||
+		Date.parse(current.window.end) < Date.parse(baseline.window.end)
+	)
+		return "unknown";
+	if (baseline.value === current.value) return "flat";
+	return current.value > baseline.value === (direction === "up")
+		? "as_declared"
+		: "against";
+}
 export const HISTORY_STEP_MS: Record<MetricHistoryStep, number> = {
 	"1h": HOUR,
 	"1d": DAY,
@@ -300,7 +422,11 @@ export function assessKpi(input: KpiAssessmentInput): KpiAssessment {
 		return result("not_measured", "unit_mismatch", null);
 	// 6/7. on_track or behind; an opted-in breach is failing, never behind.
 	if (
-		satisfies(binding.comparator, lastGood.value as number, binding.target.value)
+		satisfies(
+			binding.comparator,
+			lastGood.value as number,
+			binding.target.value,
+		)
 	)
 		return result("on_track", null, lastGood);
 	return binding.breach === "failing"

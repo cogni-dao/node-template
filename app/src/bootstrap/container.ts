@@ -81,14 +81,14 @@ import { PrivyOperatorWalletAdapter } from "@cogni/operator-wallet/adapters/priv
 import type { ScheduleControlPort } from "@cogni/scheduler-core";
 import { type WorkItemQueryPort, withWorkItemLeases } from "@cogni/work-items";
 import { PostgresWorkItemLeaseAdapter } from "@cogni/work-items/adapters/postgres";
-import { DoltgresWorkItemAdapter } from "@cogni/work-items/adapters/doltgres";
+import { createDoltgresWorkItemStore } from "@cogni/work-items/adapters/doltgres";
 import { MarkdownWorkItemAdapter } from "@cogni/work-items/markdown";
 import {
 	Client as TemporalClient,
 	Connection as TemporalConnection,
 	type WorkflowClient,
 } from "@temporalio/client";
-import Redis from "ioredis";
+import { createStreamRedisClient } from "@/bootstrap/stream-redis-client";
 import type { Logger } from "pino";
 import {
 	ALCHEMY_ADAPTER_VERSION,
@@ -170,7 +170,7 @@ import {
 	startGovernanceSyncOnBoot,
 	startMetricsSyncOnBoot,
 } from "@/bootstrap/startup-reconcile";
-import { startSystemTenantAssertionOnBoot } from "@/bootstrap/startup-assertions";
+import { localReadinessPreflight } from "@/bootstrap/local-readiness-preflight";
 import type {
 	AccountService,
 	AiTelemetryPort,
@@ -361,9 +361,8 @@ let _workflowClientPromise: Promise<{
  */
 export function getContainer(): Container {
 	if (!_container) {
+		localReadinessPreflight();
 		_container = createContainer();
-		// bug.0022: provisioning is asserted once at boot (fail the pod), not on /readyz.
-		void startSystemTenantAssertionOnBoot(_container.serviceAccountService);
 		startGovernanceSyncOnBoot();
 		if (_container.goalMetrics) startMetricsSyncOnBoot();
 	}
@@ -797,7 +796,7 @@ function createContainer(): Container {
 		// Node stores start their allocator at 1; operator alone reserves the
 		// imported legacy range below 5000.
 		doltgresWorkItems = withWorkItemLeases(
-			new DoltgresWorkItemAdapter(workItemsClient, {
+			createDoltgresWorkItemStore(workItemsClient, {
 				// First write follows the coordinated per-database legacy-producer drain.
 				writerLockProtocol: "database",
 				logger: log,
@@ -1080,10 +1079,7 @@ function createContainer(): Container {
 
 	// Redis client for run event streaming (ephemeral stream plane)
 	// Per REDIS_IS_STREAM_PLANE: only transient data, no durable state
-	const redisClient = new Redis(env.REDIS_URL, {
-		lazyConnect: true,
-		maxRetriesPerRequest: 3,
-	});
+	const redisClient = createStreamRedisClient(env.REDIS_URL);
 	const runStream = new RedisRunStreamAdapter(redisClient);
 	const nodeStream = new RedisNodeStreamAdapter(redisClient);
 

@@ -126,7 +126,6 @@ export const KpiAssessmentSchema = z.object({
 });
 export type KpiAssessment = z.infer<typeof KpiAssessmentSchema>;
 
-
 /**
  * A stored `metric_spec`: the strict spec plus the author's optional display,
  * `serves` link and health `band`. All three sit beside the spec, so none of
@@ -295,7 +294,31 @@ export interface MetricSample {
 	/** Why an incomplete sample is unknown, e.g. zero_denominator or history_unavailable. */
 	reason?: KpiReason;
 }
+export type EditsStage = "windowCommits" | "workDiff" | "knowledgeDiff";
+export type EditsTimingUpdate =
+	| { stage: EditsStage; phase: "start" | "ok" | "error" }
+	| { stage: EditsStage; phase: "counts"; rows: number; bytes?: number };
+export interface EditsSourceTiming {
+	windowCommits: {
+		state: "not_started" | "running" | "ok" | "error";
+		durationMs: number | null;
+	};
+	workDiff: {
+		state: "not_started" | "running" | "ok" | "error";
+		durationMs: number | null;
+	};
+	knowledgeDiff: {
+		state: "not_started" | "running" | "ok" | "error";
+		durationMs: number | null;
+	};
+	windowCommitCount: number | null;
+	workRows: number | null;
+	workBytes: number | null;
+	knowledgeRows: number | null;
+	knowledgeBytes: number | null;
+}
 export interface CalculatorContext {
+	editsTiming?(update: EditsTimingUpdate): void;
 	window: MetricObservation["window"];
 	signal: AbortSignal;
 	budget: Readonly<MetricBudget>;
@@ -322,12 +345,39 @@ export interface MetricCalculator {
 }
 export interface MetricDefinitionsPort {
 	get(id: string): Promise<MetricDefinition | null>;
+	getMany?(ids: readonly string[]): Promise<MetricDefinition[]>;
 	list(
 		limit: number,
 		after?: string,
 	): Promise<{ items: MetricDefinition[]; nextCursor: string | null }>;
 }
 export interface MetricObservationsPort {
+	predictionReadBatch?(
+		requests: readonly {
+			metricId: string;
+			baselineObservationId: string;
+			evaluationAt: string;
+		}[],
+	): Promise<
+		readonly {
+			baseline: MetricSnapshot | null;
+			latest: MetricObservation | null;
+			lastGood: MetricObservation | null;
+			evaluation: MetricObservation | null;
+		}[]
+	>;
+	workReadBatch?(
+		requests: readonly {
+			metricId: string;
+			definitionHash: string;
+			baselineObservationId: string | null;
+		}[],
+	): Promise<
+		readonly {
+			baseline: MetricSnapshot | null;
+			latest: MetricObservation | null;
+		}[]
+	>;
 	request(
 		metricId: string,
 		requestKey: string,

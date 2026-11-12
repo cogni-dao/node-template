@@ -146,7 +146,9 @@ export function createGoalMetrics(deps: {
 		unitFor: (params) =>
 			convergenceParams.parse(params).output === "ratio" ? "ratio" : "items",
 		displayFor: (params) =>
-			convergenceParams.parse(params).output === "ratio" ? "progress" : "volume",
+			convergenceParams.parse(params).output === "ratio"
+				? "progress"
+				: "volume",
 		windowSeconds: (params) => convergenceParams.parse(params).days * 86400,
 		paramsSchema: convergenceParams,
 		// Worst case: counts (1) + main head (1) + per edge reflog then recorded
@@ -271,12 +273,15 @@ export function createGoalMetrics(deps: {
 					readNoInlineHistoryState(deps.knowledgeSql, p.subject, signal),
 				);
 			if (p.measure === "scope")
-				return ctx.read((signal) => readNoInlineHistoryScope(deps.knowledgeSql, signal));
+				return ctx.read((signal) =>
+					readNoInlineHistoryScope(deps.knowledgeSql, signal),
+				);
 			return readNoInlineHistoryEdits(
 				deps.knowledgeSql,
 				p.output,
 				ctx.window,
 				(source) => ctx.read((signal) => source(signal)),
+				ctx.editsTiming,
 			);
 		},
 	});
@@ -328,6 +333,16 @@ export function createGoalMetrics(deps: {
 		return `'${id.replace(/'/g, "''")}'`;
 	}
 	const definitions = {
+		async getMany(ids: readonly string[]) {
+			if (!ids.length) return [];
+			if (ids.length > 300) throw new MetricError("too_many_metrics", 400);
+			const rows = await deps.knowledgeSql.unsafe(
+				`SELECT id,title,metric_spec,updated_at FROM knowledge WHERE id IN (${ids.map(literal).join(",")}) AND metric_spec IS NOT NULL AND status <> 'deprecated'`,
+			);
+			return rows
+				.map(parse)
+				.filter((item): item is MetricDefinition => item !== null);
+		},
 		async get(id: string) {
 			const rows = await deps.knowledgeSql.unsafe(
 				`SELECT id,title,metric_spec,updated_at FROM knowledge WHERE id=${literal(id)} AND metric_spec IS NOT NULL AND status <> 'deprecated' LIMIT 1`,
