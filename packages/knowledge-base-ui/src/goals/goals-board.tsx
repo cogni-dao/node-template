@@ -308,13 +308,13 @@ function GoalRow({
   const ranked = metrics ? sortKpis(goal.kpis) : goal.kpis.map((kpi, index) => ({ kpi, index }));
   return (
     <li data-goal={goal.id}>
-      <h3 className={`flex items-center ${metrics ? "border-b border-border/60 bg-muted/40" : ""}`}>
+      <h3 className={`flex items-start md:items-center ${metrics ? "border-b border-border/60 bg-muted/40" : ""}`}>
         <button
           type="button"
           aria-expanded={expanded}
           aria-controls={bodyId}
           onClick={() => setChoice(!expanded)}
-          className="flex min-w-0 flex-1 items-center gap-3 py-3 pr-2 pl-4 text-left outline-none hover:bg-muted/30 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+          className="grid min-w-0 flex-1 grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-1 py-3 pr-2 pl-4 text-left outline-none hover:bg-muted/30 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset md:flex"
         >
           <ChevronRight
             aria-hidden="true"
@@ -323,15 +323,18 @@ function GoalRow({
           <span className={`min-w-0 flex-1 ${metrics ? "break-words font-semibold text-lg" : "truncate font-medium text-sm"}`}>
             {goal.title}
           </span>
-          <span className="shrink-0 text-muted-foreground text-xs tabular-nums">
-            {goal.kpis.length ? `${goal.kpis.length} ${goal.kpis.length === 1 ? "KPI" : "KPIs"}` : "No KPIs"}
-          </span>
-          {measured && worst && <StatusPill status={worst} />}
-          {goal.evaluateAt && (
-            <span className="hidden shrink-0 text-muted-foreground text-xs tabular-nums sm:inline">
-              {formatDate(goal.evaluateAt, true)}
+          {/* Below md the meta is a second line under the title; from md it sits beside it. */}
+          <span className="col-start-2 flex flex-wrap items-center gap-x-3 gap-y-1 md:contents">
+            <span className="shrink-0 text-muted-foreground text-xs tabular-nums">
+              {goal.kpis.length ? `${goal.kpis.length} ${goal.kpis.length === 1 ? "KPI" : "KPIs"}` : "No KPIs"}
             </span>
-          )}
+            {measured && worst && <StatusPill status={worst} />}
+            {goal.evaluateAt && (
+              <span className="shrink-0 text-muted-foreground text-xs tabular-nums">
+                {formatDate(goal.evaluateAt, true)}
+              </span>
+            )}
+          </span>
         </button>
         {!single && (
           <Link

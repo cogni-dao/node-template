@@ -106,6 +106,14 @@ export function Sparkline({
   const values = data.flatMap((d) => (d.v === null ? [] : [d.v]));
   return (
     <div role="img" aria-label={label} className="h-10 w-full">
+      {values.length < 2 && (
+        // Not enough readings to draw a line: a neutral dashed baseline, so the slot never reads as broken.
+        <div
+          data-spark="empty"
+          title="Not enough readings to draw a trace"
+          className="mt-5 border-muted-foreground/40 border-t border-dashed"
+        />
+      )}
       {values.length >= 2 && (
         <ChartContainer config={CHART_CONFIG} className="aspect-auto h-10 w-full">
           <AreaChart id={id} data={data} margin={{ top: 2, right: 0, bottom: 0, left: 0 }}>

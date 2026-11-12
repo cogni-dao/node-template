@@ -517,6 +517,42 @@ describe("MetricsBoard", () => {
     }
   });
 
+  it("draws the supporting metric's trace from its one 1D read, or a neutral dashed placeholder when there is nothing to draw", async () => {
+    class Visible {
+      constructor(private readonly cb: (e: { isIntersecting: boolean }[]) => void) {}
+      observe() { this.cb([{ isIntersecting: true }]); }
+      disconnect() {}
+    }
+    vi.stubGlobal("IntersectionObserver", Visible);
+    try {
+      const mount = async (values: (number | null)[]) => {
+        const fetchHistory = vi.fn(async (id: string) => trend(id, "items", values));
+        const client = { ...createGoalsClient(), fetchHistory };
+        const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+        const view = render(<QueryClientProvider client={qc}><MetricsBoard client={client} initialData={fixture()} /></QueryClientProvider>);
+        const goal = view.container.querySelector('[data-goal="goal-a"]') as HTMLElement;
+        fireEvent.click(within(goal).getByRole("button", { name: "KPI red" }));
+        const card = goal.querySelector('[data-metric="m-guard-red"]') as HTMLElement;
+        await waitFor(() => expect(fetchHistory.mock.calls.some(([id]) => id === "m-guard-red")).toBe(true));
+        return { view, card, qc };
+      };
+      // Readings: a line is drawn inside the card's mark.
+      const full = await mount([3, 4, 5, 6, 7, 8]);
+      await waitFor(() => expect(full.card.querySelector('[role="img"] .recharts-area-curve')).not.toBeNull());
+      expect(full.card.querySelector('[data-spark="empty"]')).toBeNull();
+      full.view.unmount();
+      full.qc.clear();
+      // No readings in the window: a dashed placeholder with a title, not a blank slot.
+      const none = await mount(Array.from({ length: 30 }, () => null));
+      await waitFor(() => expect(none.card.querySelector('[data-spark="empty"]')).not.toBeNull());
+      expect(none.card.querySelector('[data-spark="empty"]')).toHaveAttribute("title", expect.stringMatching(/readings/));
+      expect(none.card.querySelector('[role="img"] .recharts-area-curve')).toBeNull();
+      none.qc.clear();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("pages the not-serving group at 20 like a KPI's metrics", () => {
     const unbound = Array.from({ length: 45 }, (_, i) => ({
       metric: { id: `loose-${String(i).padStart(2, "0")}`, title: `Loose ${String(i).padStart(2, "0")}`, calculatorId: "work.count@1" },
