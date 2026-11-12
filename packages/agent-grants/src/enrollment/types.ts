@@ -14,11 +14,18 @@
  */
 
 import type { CredentialPolicy } from "../credentials/types";
-import type { ServiceEnrollmentClaims, ServiceEnrollmentCnfJwk } from "./claims";
+import type {
+  ServiceEnrollmentClaims,
+  ServiceEnrollmentCnfJwk,
+} from "./claims";
 
 export type EnrollmentStatus = "open" | "redeemed" | "denied" | "expired";
 
-export type CreateEnrollmentRefusal = "replayed_token" | "too_many_enrollments" | "too_many_agents" | "node_full";
+export type CreateEnrollmentRefusal =
+  | "replayed_token"
+  | "too_many_enrollments"
+  | "too_many_agents"
+  | "node_full";
 
 export interface CreateEnrollmentInput {
   readonly claims: ServiceEnrollmentClaims;
@@ -29,7 +36,11 @@ export interface CreateEnrollmentInput {
   /** `<issuer origin>#<service>`. */
   readonly serviceKey: string;
   readonly deviceCodeHash: string;
-  readonly limits: { readonly deviceCodeSec: number; readonly openEnrollments: number; readonly enrolledAgents: number };
+  readonly limits: {
+    readonly deviceCodeSec: number;
+    readonly openEnrollments: number;
+    readonly enrolledAgents: number;
+  };
 }
 
 export type CreateEnrollmentResult =
@@ -59,16 +70,26 @@ export type PollOutcome =
       readonly pendingExpiresAt: string;
       readonly cnfJwk: ServiceEnrollmentCnfJwk;
     }
-  | { readonly state: "authorization_pending" | "slow_down" | "access_denied" | "expired_token" };
+  | {
+      readonly state:
+        | "authorization_pending"
+        | "slow_down"
+        | "access_denied"
+        | "expired_token";
+    };
 
 /** Persistence port. Every method is one atomic unit. Expiry and ordering use the database clock. */
 export interface EnrollmentStore {
+  acceptProof?: import("./durable-provider").DurableProviderStore["acceptProof"];
+  pollStable?: import("./durable-provider").DurableProviderStore["pollStable"];
   /**
    * One transaction: refuses a reused `jti`, expires lapsed enrollments, applies the caps, creates the principal (or reuses the one for this
    * `serviceKey`, retaining consent and expiring only its older open enrollments), reuses or writes ONE pending ask for
    * the scope and inserts the enrollment with the hash of its device code.
    */
-  createEnrollment(input: CreateEnrollmentInput): Promise<CreateEnrollmentResult>;
+  createEnrollment(
+    input: CreateEnrollmentInput
+  ): Promise<CreateEnrollmentResult>;
   /**
    * One transaction, row-locked on the enrollment: `expired_token` for an unknown, redeemed, expired or lapsed code; `access_denied` for a
    * dismissed or switched-off ask; `slow_down` inside the interval; `authorization_pending` while the ask waits; once the admin said yes,

@@ -48,7 +48,7 @@ export interface CredentialLookup {
   readonly renewUntil: string;
 }
 
-export type IssueRefusal = "unknown_user" | "wallet_user" | "internal_principal" | "already_upgraded" | "binding_required" | "not_rotatable";
+export type IssueRefusal = "rate_limited" | "unknown_user" | "wallet_user" | "internal_principal" | "already_upgraded" | "binding_required" | "not_rotatable";
 
 export type IssueResult =
   | { readonly ok: true; readonly credentialId: string; readonly userId: string; readonly pendingExpiresAt: string }

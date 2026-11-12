@@ -18,40 +18,63 @@
  * @public
  */
 
-import { decodeJwt, errors, importJWK, type JWTVerifyGetKey, jwtVerify } from "jose";
-
+import {
+  decodeJwt,
+  decodeProtectedHeader,
+  errors,
+  importJWK,
+  type JWTVerifyGetKey,
+  jwtVerify,
+} from "jose";
 import {
   SERVICE_ENROLLMENT_MAX_TTL_SEC,
   SERVICE_ENROLLMENT_TYP,
-  type ServiceEnrollmentClaims,
   serviceEnrollmentAudience,
-  serviceEnrollmentClaims,
 } from "./claims";
+import {
+  type EnrollmentProof,
+  enrollmentProofSchema,
+  intentDigestOf,
+  type NodeTuple,
+  sameTuple,
+} from "./protocol";
 
 /** One home node this node trusts to sign enrollment tokens. `services` maps a service name to the scopes it may ask for. */
 export interface TrustedHome {
   readonly origin: string;
+  readonly nodeId?: string;
+  readonly environment?: string;
+  readonly kids?: readonly string[];
   readonly services: Readonly<Record<string, readonly string[]>>;
 }
 
 export type EnrollmentVerifyResult =
-  | { readonly ok: true; readonly claims: ServiceEnrollmentClaims; readonly home: TrustedHome }
-  | { readonly ok: false; readonly reason: "invalid_token" | "jwks_unavailable" };
+  | {
+      readonly ok: true;
+      readonly claims: EnrollmentProof;
+      readonly home: TrustedHome;
+    }
+  | {
+      readonly ok: false;
+      readonly reason: "invalid_token" | "jwks_unavailable";
+    };
 
 /** The verifier port a node injects into `requestServiceEnrollment`. */
-export type EnrollmentTokenVerifier = (token: string) => Promise<EnrollmentVerifyResult>;
+export type EnrollmentTokenVerifier = (
+  token: string
+) => Promise<EnrollmentVerifyResult>;
 
 export interface EnrollmentVerifierOptions {
   /** This node's uuid (the audience). */
   readonly nodeId: string;
+  readonly receiver?: NodeTuple;
   readonly homes: readonly TrustedHome[];
   /** The key set of one home (the node supplies a cached remote JWKS reader for `${origin}/.well-known/jwks.json`). */
   readonly keysFor: (origin: string) => JWTVerifyGetKey;
   readonly now?: () => Date;
 }
 
-const MAX_TOKEN_CHARS = 4096;
-const CLOCK_SKEW_SEC = 60;
+const MAX_TOKEN_CHARS = 16384;
 const INVALID = { ok: false, reason: "invalid_token" } as const;
 
 /** Errors that prove the TOKEN is bad. Everything else (a JWKS timeout, a malformed key document) is an issuer availability problem. */
@@ -69,7 +92,9 @@ function isTokenError(error: unknown): boolean {
   );
 }
 
-export function createEnrollmentTokenVerifier(options: EnrollmentVerifierOptions): EnrollmentTokenVerifier {
+export function createEnrollmentTokenVerifier(
+  options: EnrollmentVerifierOptions
+): EnrollmentTokenVerifier {
   const now = options.now ?? (() => new Date());
   const audience = serviceEnrollmentAudience(options.nodeId);
   return async (token) => {
@@ -91,18 +116,38 @@ export function createEnrollmentTokenVerifier(options: EnrollmentVerifierOptions
         typ: SERVICE_ENROLLMENT_TYP,
         currentDate,
       });
-      const parsed = serviceEnrollmentClaims.safeParse(payload);
+      const parsed = enrollmentProofSchema.safeParse(payload);
       if (!parsed.success) return INVALID;
       const claims = parsed.data;
       const nowSec = Math.floor(currentDate.getTime() / 1000);
-      if (claims.exp - claims.iat > SERVICE_ENROLLMENT_MAX_TTL_SEC || claims.iat > nowSec + CLOCK_SKEW_SEC) return INVALID;
+      if (
+        claims.exp - claims.iat > SERVICE_ENROLLMENT_MAX_TTL_SEC ||
+        claims.iat > nowSec ||
+        claims.exp <= nowSec
+      )
+        return INVALID;
+      const header = decodeProtectedHeader(token);
+      if (
+        !header.kid ||
+        (home.kids && !home.kids.includes(header.kid)) ||
+        !options.receiver ||
+        !sameTuple(claims.target, options.receiver) ||
+        claims.home.nodeId !== home.nodeId ||
+        claims.home.environment !== home.environment ||
+        claims.home.origin !== home.origin ||
+        claims.intentDigest !== (await intentDigestOf(claims))
+      )
+        return INVALID;
       const allowed = home.services[claims.service];
-      if (!allowed || !claims.scopes.every((scope) => allowed.includes(scope))) return INVALID;
+      if (!allowed || !claims.scopes.every((scope) => allowed.includes(scope)))
+        return INVALID;
       // The key must be importable as an ECDH-ES key before a device code is issued for it.
       await importJWK(claims.cnf.jwk, "ECDH-ES");
       return { ok: true, claims, home };
     } catch (error) {
-      return isTokenError(error) ? INVALID : { ok: false, reason: "jwks_unavailable" };
+      return isTokenError(error)
+        ? INVALID
+        : { ok: false, reason: "jwks_unavailable" };
     }
   };
 }

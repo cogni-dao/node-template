@@ -17,10 +17,21 @@
  * @public
  */
 
-import { enrollmentHttp, pollServiceEnrollment, pollServiceEnrollmentOperation } from "@cogni/agent-grants/enrollment";
+import {
+  durablePollHttp,
+  enrollmentHttp,
+  pollDurableEnrollment,
+  pollServiceEnrollmentOperation,
+} from "@cogni/agent-grants/enrollment";
 
-import { answerStoreOutage, credentialResponse } from "@/app/_lib/auth/agent-credential-route";
-import { enrollmentPublicRateLimit, getAgentEnrollmentStore } from "@/bootstrap/agent-enrollment";
+import {
+  answerStoreOutage,
+  credentialResponse,
+} from "@/app/_lib/auth/agent-credential-route";
+import {
+  enrollmentPublicRateLimit,
+  getAgentEnrollmentStore,
+} from "@/bootstrap/agent-enrollment";
 import { wrapPublicRoute } from "@/bootstrap/http";
 import { EVENT_NAMES } from "@/shared/observability";
 
@@ -29,31 +40,59 @@ export const runtime = "nodejs";
 
 const ROUTE_ID = "agent.service_enrollments.token";
 
-export const POST = wrapPublicRoute({ routeId: ROUTE_ID, ...enrollmentPublicRateLimit }, async (ctx, request) => {
-  const body = pollServiceEnrollmentOperation.input.safeParse(await request.json().catch(() => undefined));
-  if (!body.success) return credentialResponse(enrollmentHttp({ op: "invalid_input" }));
-  return answerStoreOutage(ctx, ROUTE_ID, async () => {
-    const result = await pollServiceEnrollment(getAgentEnrollmentStore(), { deviceCode: body.data.deviceCode });
-    if (result.ok) {
-      ctx.log.info(
-        {
-          event: EVENT_NAMES.AGENT_ENROLLMENT_REDEEMED,
-          routeId: ROUTE_ID,
-          principalUserId: result.userId,
-          enrollmentId: result.enrollmentId,
-          credentialId: result.credentialId,
-        },
-        EVENT_NAMES.AGENT_ENROLLMENT_REDEEMED
-      );
-      ctx.log.info(
-        { event: EVENT_NAMES.AGENT_CREDENTIAL_ISSUED, routeId: ROUTE_ID, userId: result.userId, credentialId: result.credentialId, createdFrom: "service_enrollment" },
-        EVENT_NAMES.AGENT_CREDENTIAL_ISSUED
-      );
-    } else if (result.error === "access_denied") {
-      ctx.log.warn({ event: EVENT_NAMES.AGENT_ENROLLMENT_DENIED, routeId: ROUTE_ID, errorCode: result.error }, EVENT_NAMES.AGENT_ENROLLMENT_DENIED);
-    } else if (result.error === "expired_token") {
-      ctx.log.warn({ event: EVENT_NAMES.AGENT_ENROLLMENT_EXPIRED, routeId: ROUTE_ID, errorCode: result.error }, EVENT_NAMES.AGENT_ENROLLMENT_EXPIRED);
-    }
-    return credentialResponse(enrollmentHttp({ op: "poll", result }));
-  });
-});
+export const POST = wrapPublicRoute(
+  { routeId: ROUTE_ID, ...enrollmentPublicRateLimit },
+  async (ctx, request) => {
+    const body = pollServiceEnrollmentOperation.input.safeParse(
+      await request.json().catch(() => undefined)
+    );
+    if (!body.success)
+      return credentialResponse(enrollmentHttp({ op: "invalid_input" }));
+    return answerStoreOutage(ctx, ROUTE_ID, async () => {
+      const result = await pollDurableEnrollment(getAgentEnrollmentStore(), {
+        deviceCode: body.data.deviceCode,
+      });
+      if (result.ok) {
+        ctx.log.info(
+          {
+            event: EVENT_NAMES.AGENT_ENROLLMENT_REDEEMED,
+            routeId: ROUTE_ID,
+            principalUserId: result.userId,
+            enrollmentId: result.enrollmentId,
+            credentialId: result.credentialId,
+          },
+          EVENT_NAMES.AGENT_ENROLLMENT_REDEEMED
+        );
+        ctx.log.info(
+          {
+            event: EVENT_NAMES.AGENT_CREDENTIAL_ISSUED,
+            routeId: ROUTE_ID,
+            userId: result.userId,
+            credentialId: result.credentialId,
+            createdFrom: "service_enrollment",
+          },
+          EVENT_NAMES.AGENT_CREDENTIAL_ISSUED
+        );
+      } else if (result.error === "access_denied") {
+        ctx.log.warn(
+          {
+            event: EVENT_NAMES.AGENT_ENROLLMENT_DENIED,
+            routeId: ROUTE_ID,
+            errorCode: result.error,
+          },
+          EVENT_NAMES.AGENT_ENROLLMENT_DENIED
+        );
+      } else if (result.error === "expired_token") {
+        ctx.log.warn(
+          {
+            event: EVENT_NAMES.AGENT_ENROLLMENT_EXPIRED,
+            routeId: ROUTE_ID,
+            errorCode: result.error,
+          },
+          EVENT_NAMES.AGENT_ENROLLMENT_EXPIRED
+        );
+      }
+      return credentialResponse(durablePollHttp(result));
+    });
+  }
+);

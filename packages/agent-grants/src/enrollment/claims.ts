@@ -20,12 +20,14 @@
 import { z } from "zod";
 
 export const SERVICE_ENROLLMENT_TYP = "cogni-service-enrollment+jwt";
+/** Legacy utility codec only. The serving verifier exclusively parses protocol.enrollmentProofSchema (v2). */
 export const SERVICE_ENROLLMENT_KIND = "service.enrollment.v1";
 export const SERVICE_ENROLLMENT_MAX_TTL_SEC = 600;
 export const SERVICE_ENROLLMENT_AUDIENCE_PREFIX = "urn:cogni:node:";
 
 /** The audience of an enrollment token for the node with this uuid. */
-export const serviceEnrollmentAudience = (nodeId: string): string => `${SERVICE_ENROLLMENT_AUDIENCE_PREFIX}${nodeId}`;
+export const serviceEnrollmentAudience = (nodeId: string): string =>
+  `${SERVICE_ENROLLMENT_AUDIENCE_PREFIX}${nodeId}`;
 
 /** Fixed limits (constants, no setting). The device code lives 24 hours; a client may poll every 5 seconds. */
 export const SERVICE_ENROLLMENT_LIMITS = {
@@ -41,22 +43,33 @@ export const SERVICE_ENROLLMENT_LIMITS = {
 export function isHttpsOrigin(value: string): boolean {
   try {
     const url = new URL(value);
-    return url.protocol === "https:" && url.origin === value && !url.username && !url.password;
+    return (
+      url.protocol === "https:" &&
+      url.origin === value &&
+      !url.username &&
+      !url.password
+    );
   } catch {
     return false;
   }
 }
 
-const origin = z.string().refine(isHttpsOrigin, { message: "must be a canonical HTTPS origin" });
+const origin = z
+  .string()
+  .refine(isHttpsOrigin, { message: "must be a canonical HTTPS origin" });
 
 /** An X25519 public JWK. `d` (a private key) is refused. The parsed value keeps only the three public members. */
 export const serviceEnrollmentCnfJwk = z
   .looseObject({
     kty: z.literal("OKP"),
     crv: z.literal("X25519"),
-    x: z.string().regex(/^[A-Za-z0-9_-]{43}$/, "x must be 32 bytes in base64url"),
+    x: z
+      .string()
+      .regex(/^[A-Za-z0-9_-]{43}$/, "x must be 32 bytes in base64url"),
   })
-  .refine((jwk) => !("d" in jwk), { message: "a private key is never a confirmation key" })
+  .refine((jwk) => !("d" in jwk), {
+    message: "a private key is never a confirmation key",
+  })
   .transform(({ kty, crv, x }) => ({ kty, crv, x }));
 
 export type ServiceEnrollmentCnfJwk = z.infer<typeof serviceEnrollmentCnfJwk>;
@@ -68,16 +81,22 @@ export const serviceEnrollmentClaims = z.object({
   jti: z.string().uuid(),
   iat: z.number().int().nonnegative(),
   exp: z.number().int().positive(),
-  service: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/, "service is a lowercase slug"),
+  service: z
+    .string()
+    .regex(/^[a-z0-9][a-z0-9-]{0,62}$/, "service is a lowercase slug"),
   /** v0 carries exactly one permission. */
-  scopes: z.array(z.string().regex(/^[a-z][a-z0-9_.-]*:[a-z0-9_.-]+$/)).length(1),
+  scopes: z
+    .array(z.string().regex(/^[a-z][a-z0-9_.-]*:[a-z0-9_.-]+$/))
+    .length(1),
   cnf: z.object({ jwk: serviceEnrollmentCnfJwk }),
 });
 
 export type ServiceEnrollmentClaims = z.infer<typeof serviceEnrollmentClaims>;
 
 /** `<issuer origin>#<service>`: the key of the ONE principal an (issuer, service) pair owns on a node. */
-export const serviceKeyOf = (issuer: string, service: string): string => `${issuer}#${service}`;
+export const serviceKeyOf = (issuer: string, service: string): string =>
+  `${issuer}#${service}`;
 
 /** The principal's name, built only from verified claims: `git-review@cognidao.org`. */
-export const servicePrincipalName = (issuer: string, service: string): string => `${service}@${new URL(issuer).host}`;
+export const servicePrincipalName = (issuer: string, service: string): string =>
+  `${service}@${new URL(issuer).host}`;

@@ -1,3 +1,4 @@
+-- Baseline credential shape only. Every reader/credential-only adopter MUST also apply the complete chain in README.md through agent_authority_review_repairs.sql.
 CREATE TABLE "agent_credentials" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"user_id" text NOT NULL,

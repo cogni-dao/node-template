@@ -18,7 +18,10 @@ const ENTRY = resolve(SRC, "enrollment/client/index.ts");
 function runtimeImports(file: string): string[] {
   const text = readFileSync(file, "utf8");
   const found: string[] = [];
-  for (const match of text.matchAll(/^(?:import|export)\s+(?!type\s)[^;]*?\bfrom\s+["']([^"']+)["']/gms)) found.push(match[1] as string);
+  for (const match of text.matchAll(
+    /^(?:import|export)\s+(?!type\s)[^;]*?\bfrom\s+["']([^"']+)["']/gms
+  ))
+    found.push(match[1] as string);
   return found;
 }
 
@@ -50,14 +53,37 @@ describe("enrollment-client entry boundary", () => {
 
   it("reaches only the pure modules: its own folder, claims, seal, key-format and the provider's wire shapes", () => {
     for (const name of names) {
-      expect(name.startsWith("enrollment/client/") || ["enrollment/claims.ts", "enrollment/seal.ts", "enrollment/http.ts", "credentials/key-format.ts"].includes(name)).toBe(true);
+      expect(
+        name.startsWith("enrollment/client/") ||
+          [
+            "enrollment/claims.ts",
+            "enrollment/seal.ts",
+            "enrollment/http.ts",
+            "enrollment/protocol.ts",
+            "credentials/http.ts",
+            "credentials/key-format.ts",
+          ].includes(name)
+      ).toBe(true);
     }
   });
 
   it("never reaches a Postgres adapter, the roles code, a store or a service", () => {
-    for (const forbidden of ["postgres", "roles", "service", "types", "guard", "authorize", "verify"]) {
-      expect(names.filter((n) => new RegExp(`(^|/)${forbidden}\\.ts$`).test(n))).toEqual([]);
+    for (const forbidden of [
+      "postgres",
+      "roles",
+      "service",
+      "types",
+      "guard",
+      "authorize",
+      "verify",
+    ]) {
+      expect(
+        names.filter((n) => new RegExp(`(^|/)${forbidden}\\.ts$`).test(n))
+      ).toEqual([]);
     }
-    for (const file of files) expect(readFileSync(file, "utf8")).not.toMatch(/\bbegin\(|pg_roles|agent_roles|agent_credentials/);
+    for (const file of files)
+      expect(readFileSync(file, "utf8")).not.toMatch(
+        /\bbegin\(|pg_roles|agent_roles|agent_credentials/
+      );
   });
 });

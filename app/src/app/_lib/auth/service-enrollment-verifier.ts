@@ -19,25 +19,42 @@
 import {
   createEnrollmentTokenVerifier,
   type EnrollmentTokenVerifier,
+  nodeTupleSchema,
   type TrustedHome,
 } from "@cogni/agent-grants/enrollment";
-
-import { getJwks, getOperatorIssuerUrl } from "@/app/_lib/auth/operator-attestation";
+import { z } from "zod";
+import { getJwks } from "@/app/_lib/auth/operator-attestation";
+import { serviceHomeTuple } from "@/bootstrap/service-links";
 import { getNodeId } from "@/shared/config";
+import { serverEnv } from "@/shared/env";
 
 /** The services a home may sign for, and the one permission each may ask. v0: the operator's git-review reads the knowledge base. */
-const OPERATOR_SERVICES = { "git-review": ["knowledge:read"] } as const;
 
 /** The home nodes this node trusts to sign enrollment tokens. Default: the operator issuer of this deployment's `DOMAIN`. */
 export function getTrustedHomes(): readonly TrustedHome[] {
-  return [{ origin: getOperatorIssuerUrl(), services: OPERATOR_SERVICES }];
+  const raw = serverEnv().SERVICE_ENROLLMENT_TRUSTED_HOMES;
+  if (!raw) throw new Error("trusted_home_configuration_unavailable");
+  return z
+    .array(
+      nodeTupleSchema.extend({
+        kids: z.array(z.string().min(1)).min(1),
+        services: z.record(z.string(), z.array(z.string()).min(1)),
+      })
+    )
+    .min(1)
+    .parse(JSON.parse(raw));
 }
 
 let verifier: EnrollmentTokenVerifier | undefined;
 
 export function getEnrollmentTokenVerifier(): EnrollmentTokenVerifier {
   try {
-    verifier ??= createEnrollmentTokenVerifier({ nodeId: getNodeId(), homes: getTrustedHomes(), keysFor: (origin) => getJwks(origin) });
+    verifier ??= createEnrollmentTokenVerifier({
+      nodeId: getNodeId(),
+      homes: getTrustedHomes(),
+      receiver: serviceHomeTuple(),
+      keysFor: (origin) => getJwks(origin),
+    });
     return verifier;
   } catch {
     return async () => ({ ok: false, reason: "jwks_unavailable" });

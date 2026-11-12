@@ -20,6 +20,7 @@
 
 import { sql } from "drizzle-orm";
 import {
+  bigint,
   check,
   index,
   pgTable,
@@ -38,6 +39,17 @@ export const agentServiceEnrollments = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     /** The enrollment token's `jti`. Unique: the replay wall. */
     jti: text("jti").notNull(),
+    operationId: uuid("operation_id"),
+    generation: bigint("generation", { mode: "number" }),
+    originalStartIat: timestamp("original_start_iat", { withTimezone: true }),
+    originalStartExp: timestamp("original_start_exp", { withTimezone: true }),
+    originalTokenDigest: text("original_token_digest"),
+    intentDigest: text("intent_digest"),
+    canonicalIntent: text("canonical_intent"),
+    sealedAcceptance: text("sealed_acceptance"),
+    sealedPendingKey: text("sealed_pending_key"),
+    pendingExpiresAt: timestamp("pending_expires_at", { withTimezone: true }),
+    purgeAfter: timestamp("purge_after", { withTimezone: true }),
     /** The verified issuer origin, for example `https://cognidao.org`. */
     issuer: text("issuer").notNull(),
     service: text("service").notNull(),
@@ -56,7 +68,9 @@ export const agentServiceEnrollments = pgTable(
       .notNull()
       .defaultNow(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
-    historicalConfirmedAt: timestamp("historical_confirmed_at", { withTimezone: true }),
+    historicalConfirmedAt: timestamp("historical_confirmed_at", {
+      withTimezone: true,
+    }),
     terminalAt: timestamp("terminal_at", { withTimezone: true }),
     lastPolledAt: timestamp("last_polled_at", { withTimezone: true }),
   },
@@ -65,6 +79,20 @@ export const agentServiceEnrollments = pgTable(
       "agent_service_enrollments_status_canonical",
       sql`${table.status} IN ('open','redeemed','denied','expired')`
     ),
+    uniqueIndex("agent_service_enrollments_operation_unique").on(
+      table.operationId
+    ),
+    uniqueIndex("agent_service_enrollments_generation_unique").on(
+      table.principalUserId,
+      table.generation
+    ),
+    index("agent_service_enrollments_delivery_idx")
+      .on(table.expiresAt, table.id)
+      .where(sql`${table.sealedAcceptance} IS NOT NULL`),
+    index("agent_service_enrollments_pending_delivery_idx")
+      .on(table.pendingExpiresAt, table.id)
+      .where(sql`${table.sealedPendingKey} IS NOT NULL`),
+    index("agent_service_enrollments_purge_idx").on(table.purgeAfter, table.id),
     uniqueIndex("agent_service_enrollments_jti_unique").on(table.jti),
     uniqueIndex("agent_service_enrollments_device_code_hash_unique").on(
       table.deviceCodeHash

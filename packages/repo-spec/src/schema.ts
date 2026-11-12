@@ -112,6 +112,16 @@ export type GovernanceScheduleSpec = z.infer<typeof governanceScheduleSchema>;
  * governance still validates; the DAO accessors return null when identity is incomplete.
  */
 export const governanceSpecSchema = z.object({
+  /** DAO-approved node-qualified AI principals. Credentials and human wallets are never copied into this list. */
+  admin_principals: z
+    .array(
+      z
+        .string()
+        .regex(
+          /^agent:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/[a-zA-Z0-9_-]{1,100}$/
+        )
+    )
+    .optional(),
   /** Chain ID as string or number (YAML flexibility); normalized to string. */
   chain_id: z
     .union([z.string(), z.number()])
@@ -393,7 +403,10 @@ export const nodeDeploymentSchema = z
   .superRefine((deployment, ctx) => {
     const serviceNames = deployment.services.map((service) => service.name);
     if (new Set(serviceNames).size !== serviceNames.length) {
-      ctx.addIssue({ code: "custom", message: "Duplicate deployment service names" });
+      ctx.addIssue({
+        code: "custom",
+        message: "Duplicate deployment service names",
+      });
     }
 
     const artifactsByName = new Map<

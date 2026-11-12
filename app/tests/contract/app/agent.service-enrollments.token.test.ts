@@ -21,18 +21,36 @@ const fake = vi.hoisted(() => ({
   ownLimiter: { consume: vi.fn(() => true) },
   sharedLimiter: { consume: vi.fn(() => true) },
 }));
-const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), child: vi.fn() };
+const log = {
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+  debug: vi.fn(),
+  child: vi.fn(),
+};
 
 vi.mock("next/headers", () => ({ headers: async () => ({ get: () => null }) }));
-vi.mock("@/lib/auth/server", () => ({ getServerSessionUser: async () => null }));
+vi.mock("@/lib/auth/server", () => ({
+  getServerSessionUser: async () => null,
+}));
 vi.mock("@/shared/env", () => ({ serverEnv: () => MOCK_SERVER_ENV }));
 vi.mock("@/shared/env/server", () => ({ serverEnv: () => MOCK_SERVER_ENV }));
-vi.mock("@/shared/env/server-env", () => ({ serverEnv: () => MOCK_SERVER_ENV }));
+vi.mock("@/shared/env/server-env", () => ({
+  serverEnv: () => MOCK_SERVER_ENV,
+}));
 vi.mock("@/bootstrap/container", () => ({
   getContainer: vi.fn(() => ({
     log,
     clock: { now: () => new Date("2026-11-11T12:00:00Z") },
-    config: { rateLimitBypass: { enabled: false, headerName: "x-stack-test", headerValue: "1" }, DEPLOY_ENVIRONMENT: "test", unhandledErrorPolicy: "rethrow" },
+    config: {
+      rateLimitBypass: {
+        enabled: false,
+        headerName: "x-stack-test",
+        headerValue: "1",
+      },
+      DEPLOY_ENVIRONMENT: "test",
+      unhandledErrorPolicy: "rethrow",
+    },
   })),
 }));
 vi.mock("@/bootstrap/http/rateLimiter", () => ({
@@ -47,18 +65,31 @@ vi.mock("@/bootstrap/agent-credentials", () => ({
 }));
 vi.mock("@/bootstrap/agent-enrollment", () => ({
   getAgentEnrollmentStore: () => fake.memory.store,
-  enrollmentPublicRateLimit: { limiter: fake.ownLimiter, clientKey: () => "edge-client" },
+  enrollmentPublicRateLimit: {
+    limiter: fake.ownLimiter,
+    clientKey: () => "edge-client",
+  },
 }));
 
 import { POST } from "@/app/api/v1/public/agent/service-enrollments/token/route";
 
 const poll = (body: unknown) =>
-  POST(new NextRequest("http://localhost/api/v1/public/agent/service-enrollments/token", { method: "POST", body: JSON.stringify(body) }), undefined as never);
+  POST(
+    new NextRequest(
+      "http://localhost/api/v1/public/agent/service-enrollments/token",
+      { method: "POST", body: JSON.stringify(body) }
+    ),
+    undefined as never
+  );
 
 beforeEach(() => {
   vi.clearAllMocks();
   log.child.mockReturnValue(log);
   fake.memory = memoryEnrollmentStore();
+  (fake.memory.store as { pollStable?: unknown }).pollStable = async () => ({
+    ok: false,
+    error: "expired_token",
+  });
   fake.ownLimiter.consume.mockReturnValue(true);
 });
 
@@ -68,7 +99,9 @@ describe("POST /api/v1/public/agent/service-enrollments/token", () => {
     expect(unknown.status).toBe(400);
     expect(unknown.headers.get("cache-control")).toBe("no-store");
     expect(await unknown.json()).toEqual({ error: "expired_token" });
-    expect(await (await poll({ deviceCode: "short" })).json()).toEqual({ error: "expired_token" });
+    expect(await (await poll({ deviceCode: "short" })).json()).toEqual({
+      error: "expired_token",
+    });
   });
 
   it("an empty body is 400 invalid input and no-store", async () => {

@@ -19,7 +19,6 @@
  */
 
 import { SignJWT } from "jose";
-
 import {
   SERVICE_ENROLLMENT_KIND,
   SERVICE_ENROLLMENT_MAX_TTL_SEC,
@@ -29,6 +28,7 @@ import {
   serviceEnrollmentAudience,
   serviceEnrollmentClaims,
 } from "../claims";
+import { enrollmentProofSchema } from "../protocol";
 
 export const SERVICE_ENROLLMENT_SIGNING_ALG = "EdDSA";
 
@@ -37,7 +37,10 @@ export type EnrollmentSigningKey = Parameters<SignJWT["sign"]>[0];
 /** Where the signature comes from: a key `jose` can sign with, or a function that signs the JWS signing input (`<header>.<payload>`). */
 export type EnrollmentSignerInput =
   | { readonly kid: string; readonly key: EnrollmentSigningKey }
-  | { readonly kid: string; readonly signBytes: (signingInput: Uint8Array) => Promise<Uint8Array> };
+  | {
+      readonly kid: string;
+      readonly signBytes: (signingInput: Uint8Array) => Promise<Uint8Array>;
+    };
 
 export interface EnrollmentSigner {
   sign(claims: ServiceEnrollmentClaims): Promise<string>;
@@ -46,16 +49,29 @@ export interface EnrollmentSigner {
 const toBase64Url = (bytes: Uint8Array): string => {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return btoa(binary)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
 };
 
-export function createEnrollmentSigner(input: EnrollmentSignerInput): EnrollmentSigner {
+export function createEnrollmentSigner(
+  input: EnrollmentSignerInput
+): EnrollmentSigner {
   return {
     async sign(claims) {
       const checked = serviceEnrollmentClaims.parse(claims);
-      if (checked.exp - checked.iat > SERVICE_ENROLLMENT_MAX_TTL_SEC) throw new Error("enrollment token lifetime exceeds the maximum");
-      const header = { alg: SERVICE_ENROLLMENT_SIGNING_ALG, typ: SERVICE_ENROLLMENT_TYP, kid: input.kid };
-      if ("key" in input) return new SignJWT({ ...checked }).setProtectedHeader(header).sign(input.key);
+      if (checked.exp - checked.iat > SERVICE_ENROLLMENT_MAX_TTL_SEC)
+        throw new Error("enrollment token lifetime exceeds the maximum");
+      const header = {
+        alg: SERVICE_ENROLLMENT_SIGNING_ALG,
+        typ: SERVICE_ENROLLMENT_TYP,
+        kid: input.kid,
+      };
+      if ("key" in input)
+        return new SignJWT({ ...checked })
+          .setProtectedHeader(header)
+          .sign(input.key);
       const encoder = new TextEncoder();
       const signingInput = `${toBase64Url(encoder.encode(JSON.stringify(header)))}.${toBase64Url(encoder.encode(JSON.stringify(checked)))}`;
       const signature = await input.signBytes(encoder.encode(signingInput));
@@ -83,7 +99,9 @@ export interface BuildEnrollmentClaimsInput {
 }
 
 /** The claims of one enrollment token, checked against the provider's own shape. */
-export function buildEnrollmentClaims(input: BuildEnrollmentClaimsInput): ServiceEnrollmentClaims {
+export function buildEnrollmentClaims(
+  input: BuildEnrollmentClaimsInput
+): ServiceEnrollmentClaims {
   const iat = Math.floor(input.now.getTime() / 1000);
   return serviceEnrollmentClaims.parse({
     iss: input.issuer,
@@ -91,9 +109,41 @@ export function buildEnrollmentClaims(input: BuildEnrollmentClaimsInput): Servic
     kind: SERVICE_ENROLLMENT_KIND,
     jti: input.jti,
     iat,
-    exp: iat + Math.min(input.ttlSec ?? SERVICE_ENROLLMENT_MAX_TTL_SEC, SERVICE_ENROLLMENT_MAX_TTL_SEC),
+    exp:
+      iat +
+      Math.min(
+        input.ttlSec ?? SERVICE_ENROLLMENT_MAX_TTL_SEC,
+        SERVICE_ENROLLMENT_MAX_TTL_SEC
+      ),
     service: input.service,
     scopes: [input.scope],
     cnf: { jwk: input.cnfPublicJwk },
   });
+}
+
+/** Durable proofs carry the original immutable identity; continuation gets only a fresh proof identifier/deadline. */
+export interface EnrollmentProofSigner {
+  signProof(proof: import("../protocol").EnrollmentProof): Promise<string>;
+}
+export function createEnrollmentProofSigner(
+  input: EnrollmentSignerInput
+): EnrollmentProofSigner {
+  return {
+    async signProof(proof) {
+      const checked = enrollmentProofSchema.parse(proof);
+      if (!input.kid) throw new Error("enrollment_signer_unavailable");
+      const header = {
+        alg: "EdDSA",
+        typ: SERVICE_ENROLLMENT_TYP,
+        kid: input.kid,
+      };
+      if ("key" in input)
+        return new SignJWT({ ...checked })
+          .setProtectedHeader(header)
+          .sign(input.key);
+      const encode = (s: string) => toBase64Url(new TextEncoder().encode(s));
+      const bytes = `${encode(JSON.stringify(header))}.${encode(JSON.stringify(checked))}`;
+      return `${bytes}.${toBase64Url(await input.signBytes(new TextEncoder().encode(bytes)))}`;
+    },
+  };
 }

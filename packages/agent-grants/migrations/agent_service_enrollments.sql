@@ -1,6 +1,6 @@
 -- agent_service_enrollments migration template (@cogni-dao/agent-grants 0.4.0, story.0038).
 --
--- This is the FINAL shape a node applies for `@cogni-dao/agent-grants/enrollment`: node-template's `0041_agent_service_enrollments.sql`. Do not copy it blind into a fork:
+-- This is the baseline shape (the complete additive foundation chain in README.md is mandatory, even for credentials-only adopters). It is the shape a node applies for `@cogni-dao/agent-grants/enrollment`: node-template's `0041_agent_service_enrollments.sql`. Do not copy it blind into a fork:
 --
 -- 1. Needs `agent_principals` (0036 shape) and `agent_credentials` (`agent_credentials.sql` in this folder, which already holds the 0039 and 0040 shape) first.
 -- 2. Add the `agentServiceEnrollments` table and the `service_key` column of `agentPrincipals` to the node's own schema package, and add
@@ -57,7 +57,6 @@ BEGIN
   RETURN NULL;
 END
 $$;--> statement-breakpoint
-DROP TRIGGER IF EXISTS "agent_credentials_enrollment_confirm_siblings" ON "agent_credentials";--> statement-breakpoint
 CREATE TRIGGER "agent_credentials_enrollment_confirm_siblings"
   AFTER UPDATE OF confirmed_at ON "agent_credentials"
   FOR EACH ROW

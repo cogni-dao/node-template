@@ -20,17 +20,21 @@
 
 import { CredentialStoreUnavailableError } from "@cogni/agent-grants/credentials";
 import {
+  durableEnrollmentHttp,
+  durableEnrollmentOperation,
   enrollmentHttp,
-  requestServiceEnrollment,
-  requestServiceEnrollmentOperation,
+  requestDurableEnrollment,
   servicePrincipalName,
 } from "@cogni/agent-grants/enrollment";
 
-import { answerStoreOutage, credentialResponse } from "@/app/_lib/auth/agent-credential-route";
+import {
+  answerStoreOutage,
+  credentialResponse,
+} from "@/app/_lib/auth/agent-credential-route";
 import { getEnrollmentTokenVerifier } from "@/app/_lib/auth/service-enrollment-verifier";
 import {
-  ensureEnrollmentBillingAccount,
   enrollmentPublicRateLimit,
+  ensureEnrollmentBillingAccount,
   getAgentEnrollmentStore,
   getAskableScopes,
 } from "@/bootstrap/agent-enrollment";
@@ -42,46 +46,69 @@ export const runtime = "nodejs";
 
 const ROUTE_ID = "agent.service_enrollments.create";
 
-export const POST = wrapPublicRoute({ routeId: ROUTE_ID, ...enrollmentPublicRateLimit }, async (ctx, request) => {
-  const body = requestServiceEnrollmentOperation.input.safeParse(await request.json().catch(() => undefined));
-  if (!body.success) return credentialResponse(enrollmentHttp({ op: "invalid_input" }));
-  return answerStoreOutage(ctx, ROUTE_ID, async () => {
-    const result = await requestServiceEnrollment(getAgentEnrollmentStore(), getEnrollmentTokenVerifier(), {
-      token: body.data.token,
-      askableScopes: getAskableScopes(),
-    });
-    if (result.ok) {
-      try {
-        await ensureEnrollmentBillingAccount(result.principalUserId, servicePrincipalName(result.issuer, result.service));
-      } catch (cause) {
-        throw new CredentialStoreUnavailableError(cause);
-      }
-      ctx.log.info(
+export const POST = wrapPublicRoute(
+  { routeId: ROUTE_ID, ...enrollmentPublicRateLimit },
+  async (ctx, request) => {
+    const body = durableEnrollmentOperation.input.safeParse(
+      await request.json().catch(() => undefined)
+    );
+    if (!body.success)
+      return credentialResponse(enrollmentHttp({ op: "invalid_input" }));
+    return answerStoreOutage(ctx, ROUTE_ID, async () => {
+      const result = await requestDurableEnrollment(
+        getAgentEnrollmentStore(),
+        getEnrollmentTokenVerifier(),
         {
-          event: EVENT_NAMES.AGENT_ENROLLMENT_REQUESTED,
-          routeId: ROUTE_ID,
-          principalUserId: result.principalUserId,
-          enrollmentId: result.enrollmentId,
-          service: result.service,
-          issuerHost: new URL(result.issuer).host,
-          scope: result.scope,
-          principalCreated: result.principalCreated,
-        },
-        EVENT_NAMES.AGENT_ENROLLMENT_REQUESTED
+          token: body.data.token,
+          askableScopes: getAskableScopes(),
+        }
       );
-    } else if (result.reason === "replayed_token") {
-      ctx.log.warn({ event: EVENT_NAMES.AGENT_ENROLLMENT_REPLAYED, routeId: ROUTE_ID }, EVENT_NAMES.AGENT_ENROLLMENT_REPLAYED);
-    } else if (result.reason === "invalid_token" || result.reason === "jwks_unavailable") {
-      ctx.log.warn(
-        { event: EVENT_NAMES.AGENT_ENROLLMENT_ATTESTATION_REJECTED, routeId: ROUTE_ID, reason: result.reason },
-        EVENT_NAMES.AGENT_ENROLLMENT_ATTESTATION_REJECTED
-      );
-    } else {
-      ctx.log.warn(
-        { event: EVENT_NAMES.AGENT_ENROLLMENT_DENIED, routeId: ROUTE_ID, errorCode: result.reason },
-        EVENT_NAMES.AGENT_ENROLLMENT_DENIED
-      );
-    }
-    return credentialResponse(enrollmentHttp({ op: "request", result }));
-  });
-});
+      if (result.ok) {
+        try {
+          if (result.proofOp === "start")
+            await ensureEnrollmentBillingAccount(
+              result.principalUserId,
+              servicePrincipalName(result.issuer, result.service)
+            );
+        } catch (cause) {
+          throw new CredentialStoreUnavailableError(cause);
+        }
+        ctx.log.info(
+          {
+            event: EVENT_NAMES.AGENT_ENROLLMENT_REQUESTED,
+            routeId: ROUTE_ID,
+            principalUserId: result.principalUserId,
+            enrollmentId: result.enrollmentId,
+            service: result.service,
+            issuerHost: new URL(result.issuer).host,
+            scope: result.scope,
+            principalCreated: result.principalCreated,
+          },
+          EVENT_NAMES.AGENT_ENROLLMENT_REQUESTED
+        );
+      } else if (
+        result.reason === "invalid_token" ||
+        result.reason === "jwks_unavailable"
+      ) {
+        ctx.log.warn(
+          {
+            event: EVENT_NAMES.AGENT_ENROLLMENT_ATTESTATION_REJECTED,
+            routeId: ROUTE_ID,
+            reason: result.reason,
+          },
+          EVENT_NAMES.AGENT_ENROLLMENT_ATTESTATION_REJECTED
+        );
+      } else {
+        ctx.log.warn(
+          {
+            event: EVENT_NAMES.AGENT_ENROLLMENT_DENIED,
+            routeId: ROUTE_ID,
+            errorCode: result.reason,
+          },
+          EVENT_NAMES.AGENT_ENROLLMENT_DENIED
+        );
+      }
+      return credentialResponse(durableEnrollmentHttp(result));
+    });
+  }
+);

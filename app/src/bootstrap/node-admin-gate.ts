@@ -21,22 +21,30 @@
  */
 
 import type { NodeAdminAuthority } from "@cogni/knowledge-store";
-import { getLedgerApprovers, isDaoAdmin } from "@/shared/config";
+import {
+  getLedgerApprovers,
+  getNodeAdminPrincipals,
+  getNodeId,
+  isDaoAdmin,
+} from "@/shared/config";
 
 /** Repo-spec admin wallets as this node's `NodeAdminAuthority`. */
 export function createApproversNodeAdminAuthority(): NodeAdminAuthority {
-	return {
-		async check(actor) {
-			if (getLedgerApprovers().length === 0) {
-				return {
-					ok: false,
-					errorCode: "authz_unavailable",
-					reason: "no_node_admins_configured",
-				};
-			}
-			return isDaoAdmin(actor.walletAddress)
-				? { ok: true }
-				: { ok: false, errorCode: "authz_denied" };
-		},
-	};
+  return {
+    async check(actor) {
+      const principals = getNodeAdminPrincipals();
+      if (principals.includes(`agent:${getNodeId()}/${actor.userId}`))
+        return { ok: true };
+      if (getLedgerApprovers().length === 0 && principals.length === 0) {
+        return {
+          ok: false,
+          errorCode: "authz_unavailable",
+          reason: "no_node_admins_configured",
+        };
+      }
+      return isDaoAdmin(actor.walletAddress)
+        ? { ok: true }
+        : { ok: false, errorCode: "authz_denied" };
+    },
+  };
 }

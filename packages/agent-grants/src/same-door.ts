@@ -46,8 +46,14 @@ export const SAME_DOOR_ROUTES: Readonly<Record<string, SameDoorRoute>> = {
   },
   core__edo_hypothesize: { scope: "edo:write", routes: ["edo.hypothesize"] },
   core__edo_decide: { scope: "edo:write", routes: ["edo.decide"] },
-  core__edo_record_outcome: { scope: "edo:write", routes: ["edo.record_outcome"] },
-  core__metric_compute: { scope: "metric:compute", routes: ["metrics.metricCompute"] },
+  core__edo_record_outcome: {
+    scope: "edo:write",
+    routes: ["edo.record_outcome"],
+  },
+  core__metric_compute: {
+    scope: "metric:compute",
+    routes: ["metrics.metricCompute"],
+  },
 };
 
 /** A route-only capability: its `requires`, the route ids that carry its door, and how a bearer is gated. */
@@ -66,14 +72,33 @@ export interface RouteOnlyCapability {
  * Routes an outside agent may call that no tool twins. They declare their own scope here, once, with the same
  * `requires` shape a tool contract uses. A signed-in human passes `member`; a bearer agent needs a live role row.
  */
-export const ROUTE_ONLY_CAPABILITIES: Readonly<Record<string, RouteOnlyCapability>> = {
+export const ROUTE_ONLY_CAPABILITIES: Readonly<
+  Record<string, RouteOnlyCapability>
+> = {
+  "service-link.manage": {
+    requires: {
+      scope: "service_link:manage",
+      kind: "node",
+      subject: "admin",
+      label: "Manage service connections",
+      description:
+        "Connect this node to a declared service. Target permissions still require that node's approval.",
+    },
+    routes: [
+      "service.links.create",
+      "service.links.read",
+      "service.links.knowledge",
+      "service.links.disconnect",
+    ],
+  },
   "knowledge.contribute": {
     requires: {
       scope: "knowledge:contribute",
       kind: "node",
       subject: "member",
       label: "Propose changes to the knowledge base",
-      description: "Suggest new or changed notes. An admin still decides what is kept.",
+      description:
+        "Suggest new or changed notes. An admin still decides what is kept.",
     },
     routes: [
       "knowledge.contributions.create",
@@ -88,7 +113,8 @@ export const ROUTE_ONLY_CAPABILITIES: Readonly<Record<string, RouteOnlyCapabilit
       kind: "node",
       subject: "member",
       label: "Read the knowledge base",
-      description: "Read the notes, rules and index of this node. An admin can turn it off at any time.",
+      description:
+        "Read the notes, rules and index of this node. An admin can turn it off at any time.",
     },
     serviceKeyedOnly: true,
     routes: [
@@ -122,12 +148,14 @@ export const ROUTE_ONLY_CAPABILITIES: Readonly<Record<string, RouteOnlyCapabilit
 /** Tools that have no node route, with the reason. A new tool must be added here or to `SAME_DOOR_ROUTES`. */
 export const NO_ROUTE_TWIN: Readonly<Record<string, string>> = {
   // Deprecated (task.0065): core__work_item_update twins work.items.patch; this tool keeps its scope but carries no route.
-  core__work_item_transition: "deprecated; core__work_item_update is the twin of work.items.patch",
+  core__work_item_transition:
+    "deprecated; core__work_item_update is the twin of work.items.patch",
   // These call the operator's API with the node's identity; the operator's own deploy roles (operator OpenFGA) gate them.
   // The tool writes straight to main. Its true twin (a direct-to-main knowledge write route) deliberately does not
   // exist: the node route an outside agent uses is the contribution proposal (`knowledge.contribute`). Whether the tool
   // should write contributions instead of main is a design question (C2, task.5465).
-  core__knowledge_write: "no direct-to-main write route exists on purpose; outside agents use knowledge.contribute",
+  core__knowledge_write:
+    "no direct-to-main write route exists on purpose; outside agents use knowledge.contribute",
   core__vcs_create_branch: "calls the operator VCS API, not a node route",
   core__vcs_merge_pr: "calls the operator VCS API, not a node route",
   core__vcs_flight_candidate: "calls the operator VCS API, not a node route",
@@ -140,16 +168,22 @@ export const NO_ROUTE_TWIN: Readonly<Record<string, string>> = {
  * `SAME_DOOR_ROUTES` / `ROUTE_ONLY_CAPABILITIES`.
  */
 export const DEFERRED_WRITE_ROUTES: Readonly<Record<string, string>> = {
-  "work.items.create": "creating an item is not work_item:transition; open question for task.5466 (ask-for-access) / task.5465",
+  "work.items.create":
+    "creating an item is not work_item:transition; open question for task.5466 (ask-for-access) / task.5465",
   "work.items.delete": "retired (HTTP 410); no capability to gate",
   "work.items.claim": "coordination, not work_item:transition; task.5465",
   "work.items.release": "coordination, not work_item:transition; task.5465",
   "work.items.heartbeat": "coordination, not work_item:transition; task.5465",
-  "knowledge.contributions.close": "contribution lifecycle; C2 design question (task.5465)",
-  "knowledge.contributions.merge": "already admin-session gated in the service; C2 design question (task.5465)",
-  "knowledge.domains.create": "domain registry writes; C2 design question (task.5465)",
-  "knowledge.domains.update": "domain registry writes; C2 design question (task.5465)",
-  "knowledge.domains.delete": "domain registry writes; C2 design question (task.5465)",
+  "knowledge.contributions.close":
+    "contribution lifecycle; C2 design question (task.5465)",
+  "knowledge.contributions.merge":
+    "already admin-session gated in the service; C2 design question (task.5465)",
+  "knowledge.domains.create":
+    "domain registry writes; C2 design question (task.5465)",
+  "knowledge.domains.update":
+    "domain registry writes; C2 design question (task.5465)",
+  "knowledge.domains.delete":
+    "domain registry writes; C2 design question (task.5465)",
 };
 
 /**
@@ -158,8 +192,10 @@ export const DEFERRED_WRITE_ROUTES: Readonly<Record<string, string>> = {
  * NO_SELF_APPROVAL protects activation: the ask writes a pending row with no approver; only an admin session turns it on.
  */
 export const OPEN_BY_DESIGN_ROUTES: Readonly<Record<string, string>> = {
-  "agent.access.requests.create": "the ask door is open by design; NO_SELF_APPROVAL protects activation (only an admin session approves)",
-  "agent.register": "the anonymous onboarding door that mints an agent identity and key (bug.0297, an invitation token is tracked there); an identity alone opens no route: only an admin's yes does",
+  "agent.access.requests.create":
+    "the ask door is open by design; NO_SELF_APPROVAL protects activation (only an admin session approves)",
+  "agent.register":
+    "the anonymous onboarding door that mints an agent identity and key (bug.0297, an invitation token is tracked there); an identity alone opens no route: only an admin's yes does",
 };
 
 export interface CallerInput {
@@ -186,9 +222,14 @@ export async function authorizeCaller(
         try {
           service = await store.isServicePrincipal(userId);
         } catch {
-          return { decision: "deny", code: "authz_unavailable", reason: "store_unavailable" };
+          return {
+            decision: "deny",
+            code: "authz_unavailable",
+            reason: "store_unavailable",
+          };
         }
-        if (!service) return { decision: "allow", basis: "agent_without_service_key" };
+        if (!service)
+          return { decision: "allow", basis: "agent_without_service_key" };
       }
     }
     // The bearer IS the principal. `own` data belongs to it, so it is also the subject there. `admin`-subject scopes
@@ -197,22 +238,41 @@ export async function authorizeCaller(
       principalId: userId,
       subjectUserId: requires.kind === "own" ? userId : undefined,
       requires:
-        requires.subject === "admin" ? { ...requires, subject: "member" } : requires,
+        requires.subject === "admin"
+          ? { ...requires, subject: "member" }
+          : requires,
     });
   }
   if (requires.kind === "account")
-    return { decision: "deny", code: "policy_denied", reason: "account_scope_unsupported" };
-  if (requires.subject === "member") return { decision: "allow", basis: "signed_in" };
+    return {
+      decision: "deny",
+      code: "policy_denied",
+      reason: "account_scope_unsupported",
+    };
+  if (requires.subject === "member")
+    return { decision: "allow", basis: "signed_in" };
   if (requires.subject !== "admin")
-    return { decision: "deny", code: "policy_denied", reason: "unknown_contract_value" };
+    return {
+      decision: "deny",
+      code: "policy_denied",
+      reason: "unknown_contract_value",
+    };
   let admin: Awaited<ReturnType<AdminCheck>>;
   try {
     admin = await adminCheck(userId);
   } catch {
-    return { decision: "deny", code: "authz_unavailable", reason: "admin_check_failed" };
+    return {
+      decision: "deny",
+      code: "authz_unavailable",
+      reason: "admin_check_failed",
+    };
   }
   if (admin === "unavailable")
-    return { decision: "deny", code: "authz_unavailable", reason: "no_admin_authority" };
+    return {
+      decision: "deny",
+      code: "authz_unavailable",
+      reason: "no_admin_authority",
+    };
   return admin === "allow"
     ? { decision: "allow", basis: "node_admin" }
     : { decision: "deny", code: "policy_denied", reason: "subject_not_admin" };

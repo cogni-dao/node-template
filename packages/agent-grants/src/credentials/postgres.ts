@@ -93,8 +93,10 @@ export function createPostgresCredentialStore(client: CredentialSql, options: Po
   const store: CredentialStore = {
     async lookup(tokenHash): Promise<CredentialLookup | null> {
       const rows = await client`
-        SELECT c.id, c.user_id, u.name, c.expires_at, c.renew_until, agent_credential_state(c) AS state
-        FROM agent_credentials c JOIN users u ON u.id = c.user_id
+        SELECT c.id, c.user_id, u.name, c.expires_at, c.renew_until,
+          CASE WHEN p.current_generation > 0 AND (c.service_operation_id IS DISTINCT FROM p.current_operation_id OR c.service_generation IS DISTINCT FROM p.current_generation)
+            THEN 'revoked' ELSE agent_credential_state(c) END AS state
+        FROM agent_credentials c JOIN users u ON u.id = c.user_id LEFT JOIN agent_principals p ON p.user_id=c.user_id
         WHERE c.token_hash = ${tokenHash}`;
       const row = rows[0];
       if (!row) return null;
@@ -261,10 +263,17 @@ export function createPostgresCredentialStore(client: CredentialSql, options: Po
       await assertBypassRls();
       return call(...args);
     };
+  const issueGuard = <A extends unknown[]>(call: (...args: A) => Promise<IssueResult>) => async (...args: A): Promise<IssueResult> => {
+    try { return await guard(call)(...args); }
+    catch (error) {
+      if (typeof error === "object" && error !== null && (error as { constraint_name?: string }).constraint_name === "agent_service_issuance_quota") return { ok: false, reason: "rate_limited" };
+      throw error;
+    }
+  };
   return {
     lookup: guard(store.lookup),
-    issueUpgrade: guard(store.issueUpgrade),
-    issueSuccessor: guard(store.issueSuccessor),
+    issueUpgrade: issueGuard(store.issueUpgrade),
+    issueSuccessor: issueGuard(store.issueSuccessor),
     confirm: guard(store.confirm),
     everConfirmed: guard(store.everConfirmed),
     revoke: guard(store.revoke),

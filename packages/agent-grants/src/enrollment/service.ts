@@ -18,12 +18,19 @@
  * @public
  */
 
-import { type CredentialPolicy, DEFAULT_CREDENTIAL_POLICY } from "../credentials/types";
-import { CredentialStoreUnavailableError, hashAgentKey, mintKey } from "../credentials/service";
+import {
+  CredentialStoreUnavailableError,
+  hashAgentKey,
+  mintKey,
+} from "../credentials/service";
+import {
+  type CredentialPolicy,
+  DEFAULT_CREDENTIAL_POLICY,
+} from "../credentials/types";
 import {
   SERVICE_ENROLLMENT_LIMITS,
-  servicePrincipalName,
   serviceKeyOf,
+  servicePrincipalName,
 } from "./claims";
 import { sealToJwk } from "./seal";
 import type { CreateEnrollmentRefusal, EnrollmentStore } from "./types";
@@ -32,7 +39,10 @@ import type { EnrollmentTokenVerifier } from "./verify";
 const toBase64Url = (bytes: Uint8Array): string => {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return btoa(binary)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
 };
 
 /** A device code is exactly 43 base64url characters (32 random bytes). Anything else is refused before a store read. */
@@ -59,11 +69,23 @@ export type RequestEnrollmentResult =
       readonly issuer: string;
       readonly scope: string;
     }
-  | { readonly ok: false; readonly reason: "invalid_token" | "jwks_unavailable" | "invalid_scope" | CreateEnrollmentRefusal };
+  | {
+      readonly ok: false;
+      readonly reason:
+        | "invalid_token"
+        | "jwks_unavailable"
+        | "invalid_scope"
+        | CreateEnrollmentRefusal;
+    };
 
 export async function requestServiceEnrollment(
   store: EnrollmentStore,
-  verify: EnrollmentTokenVerifier,
+  verify: (
+    token: string
+  ) => Promise<
+    | { ok: true; claims: import("./claims").ServiceEnrollmentClaims }
+    | { ok: false; reason: "invalid_token" | "jwks_unavailable" }
+  >,
   input: {
     readonly token: string;
     /** The scopes an outside agent can use on this node (`askableScopes` of the node's authority). */
@@ -74,7 +96,8 @@ export async function requestServiceEnrollment(
   if (!verified.ok) return verified;
   const { claims } = verified;
   const scope = claims.scopes[0] as string;
-  if (!input.askableScopes.includes(scope)) return { ok: false, reason: "invalid_scope" };
+  if (!input.askableScopes.includes(scope))
+    return { ok: false, reason: "invalid_scope" };
   const deviceCode = toBase64Url(crypto.getRandomValues(new Uint8Array(32)));
   const created = await viaStore(async () =>
     store.createEnrollment({
@@ -111,13 +134,21 @@ export type PollEnrollmentResult =
       readonly enrollmentId: string;
       readonly pendingExpiresAt: string;
     }
-  | { readonly ok: false; readonly error: "authorization_pending" | "slow_down" | "access_denied" | "expired_token" };
+  | {
+      readonly ok: false;
+      readonly error:
+        | "authorization_pending"
+        | "slow_down"
+        | "access_denied"
+        | "expired_token";
+    };
 
 export async function pollServiceEnrollment(
   store: EnrollmentStore,
   input: { readonly deviceCode: string; readonly policy?: CredentialPolicy }
 ): Promise<PollEnrollmentResult> {
-  if (!DEVICE_CODE_SHAPE.test(input.deviceCode)) return { ok: false, error: "expired_token" };
+  if (!DEVICE_CODE_SHAPE.test(input.deviceCode))
+    return { ok: false, error: "expired_token" };
   const { token, tokenHash } = await mintKey();
   const deviceCodeHash = await hashAgentKey(input.deviceCode);
   const outcome = await viaStore(() =>
@@ -137,4 +168,43 @@ export async function pollServiceEnrollment(
     enrollmentId: outcome.enrollmentId,
     pendingExpiresAt: outcome.pendingExpiresAt,
   };
+}
+
+/** V2 is the only serving enrollment path. Legacy storage-free helpers are not mounted. */
+export async function requestDurableEnrollment(
+  store: EnrollmentStore,
+  verify: EnrollmentTokenVerifier,
+  input: {
+    token: string;
+    askableScopes: readonly string[];
+  }
+): Promise<
+  | import("./durable-provider").ProviderResult
+  | { ok: false; reason: "jwks_unavailable" | "invalid_scope" }
+> {
+  const checked = await verify(input.token);
+  if (!checked.ok) return checked;
+  if (!input.askableScopes.includes(checked.claims.scopes[0] ?? ""))
+    return { ok: false, reason: "invalid_scope" };
+  if (!store.acceptProof)
+    throw new CredentialStoreUnavailableError(
+      new Error("v2 provider migration required")
+    );
+  const digest = await hashAgentKey(input.token);
+  const accept = store.acceptProof;
+  return viaStore(() => accept(checked.claims, digest));
+}
+export async function pollDurableEnrollment(
+  store: EnrollmentStore,
+  input: { deviceCode: string; policy?: CredentialPolicy }
+): Promise<import("./durable-provider").StablePoll> {
+  if (!DEVICE_CODE_SHAPE.test(input.deviceCode))
+    return { ok: false, error: "expired_token" };
+  if (!store.pollStable)
+    throw new CredentialStoreUnavailableError(
+      new Error("v2 provider required")
+    );
+  const hash = await hashAgentKey(input.deviceCode);
+  const poll = store.pollStable;
+  return viaStore(() => poll(hash, input.policy));
 }

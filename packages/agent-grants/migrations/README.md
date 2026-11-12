@@ -1,20 +1,29 @@
-# agent_credentials migration template
+# Agent authority storage adoption
 
-`agent_credentials.sql` is the FINAL shape a node applies for the `@cogni-dao/agent-grants/credentials` store: node-template's `0039_agent_credentials.sql`
-plus `0040_agent_credentials_key_upgrade.sql` folded into one (node-template keeps them as two migrations; a fresh fork needs only this
-file, and it must not copy node-template's `DROP TABLE IF EXISTS ... CASCADE`, which only cleans a table leaked onto node-template's shared candidate database). Do not copy it blind into a fork:
+Every exported Postgres reader/writer, including **credentials-only** consumers, requires the complete authority storage contract below. `everConfirmed()` reads the monotonic principal summary and migration-state row; credential guards reference service receipt storage even when no enrollment HTTP endpoint is mounted. Installing these dormant service-only tables neither enables enrollment nor grants consent. Apply storage before serving this package; missing/incomplete state fails closed503.
 
-1. Add the `agentCredentials` table to the node's own schema package, then run the node's `db:generate`. drizzle-kit writes the table DDL and
-   the snapshot against the node's own prior snapshot. Never copy a snapshot.
-2. Append the hand-written part (everything after the line `Hand-written below`): FORCE RLS, `agent_credential_state()` and the
-   external-principal trigger. Drizzle cannot emit them.
-3. The node needs `agent_principals` (migration 0036 shape) first. The trigger reads it.
-4. Run `db:check`. The journal `when` must be greater than every earlier entry.
+Use your node's schema package and migration runner. Add the schema fields/indexes represented by the templates, generate **your own** ordinary DDL/journal/snapshot, then append the template's custom functions, triggers, RLS and data backfill that Drizzle cannot generate. Never copy another node's snapshots, rewrite exercised history, remove constraints, or add permissive `IF NOT EXISTS`/catch-and-continue. A predecessor-shape mismatch must fail migration. Run normal `db:check` before shipping. Migration transactions run as the table owner, not an assumed superuser; the foundation temporarily lifts FORCE for that owner during locked backfill and restores every FORCE flag before commit.
 
-The store needs a BYPASSRLS (service role) connection: the table has no policy, so the app role sees nothing.
+Host prerequisites: `users(id text primary key, name text, wallet_address text)` and `user_bindings(user_id text -> users.id, provider text, external_id text)` (additional host columns/constraints remain host-owned). UUID defaults use PostgreSQL's `gen_random_uuid()`. Existing authority/principal identifiers, service bindings, all credential/enrollment history and current consent remain intact. No node-specific principal or role seed is supplied.
 
-The corrected enrollment provider also needs `agent_service_enrollment_maintenance.sql` after the enrollment table exists. These active-set,
-latest-role and child-working-set indexes support bounded maintenance and the existing admin Off/On control. Add the indexes to the adopter's
-own schema and auto-generate its migration; do not edit any exercised enrollment migration or copy a snapshot. Node-template owns this as
-additive migration `0042_service_enrollment_maintenance`. Apply before the corrected provider serves traffic; publishing/adoption stays gated
-on independent review and real-Postgres conformance. Role writers need a begin-capable client or an existing postgres transaction-bound tag.
+Apply each stage **once**, in this order, through the adopter's own migration journal:
+
+| Stage / shipped template | Required predecessor and result | Node-template reference |
+| --- | --- | --- |
+| `agent_authority.sql` | Host prerequisites; creates principals/roles plus nullable pending approval, requested_by and granted_at, RLS and wallet-binding guard. Skip this whole baseline only when that exact authority shape already exists. |0036 +0038 (no0037 node seed) |
+| `agent_credentials.sql` | Authority baseline; revocable hashed credentials, predecessor FK, canonical origins including key_upgrade, external-principal guard. |0039 +0040 |
+| `agent_service_enrollments.sql` | Credential baseline; strict additive service_key/receipt table and service_enrollment origin. Required for credentials-only consumers too. |0041 |
+| `agent_service_enrollment_maintenance.sql` | Enrollment baseline; latest-consent, active-receipt and child working-set indexes. |0042 |
+| `agent_authority_foundation.sql` | All previous stages; monotonic summary/all-history earliest backfill, provenance, active horizons, pending deadlines, strict guards and service-only rollout/lease state. Holds credential-mutation lock with5s timeout; failure rolls everything back. |0043 |
+| `agent_authority_guard_compatibility.sql` | Foundation; eligible rotation preparation and confirmation, terminal-history working-set isolation. |0044 |
+| `agent_authority_review_repairs.sql` | Compatibility; generated non-enrollment pending index, final post-lock activation-deadline check and receipt-eligible bounded sibling retirement. |0045 |
+
+For an **existing0036-only authority** adopter, apply the strict additive `agent_access_requests.sql` (0038) before the credential/enrollment stages; do not replay the combined fresh authority baseline. This preserves existing role decisions while adding pending-ask columns. For every other **existing** adopter, start after its last qualified predecessor stage; do not replay baselines. In particular, credentials-only adopters that stopped at0039/0040 must add0041–0045 storage before upgrading readers. An adopter already on0043/0044 needs only0045. Verify exact columns, indexes, constraints, trigger definitions, FORCE RLS, migration receipt and `backfill_ready=true`; do not infer completion from a release number. Keep migration ordering/version publication manager-owned.
+
+The v2 provider and durable requester additionally require `agent_service_enrollment_v2.sql` after the complete authority chain. Its requester custody tables reference the host billing_accounts and connections schemas; hosts must adapt the generated DDL to their existing connection schema and qualify their own migration and real SQL conformance before adopting `/enrollment-requester`.
+
+All authority writes use a BYPASSRLS service connection. Only principal metadata is publicly readable; credential/role/receipt/maintenance tables have ENABLE+FORCE RLS and no app policy. Preserve the predecessor FK and flat immutable provenance. Purge is disabled (`purge_enabled=false`, `minimum_reader_build=null`) and remains disabled until separately qualified serving-reader cutover; no template enables purge or deletes identities/history.
+
+The adapter takes a begin-capable postgres.js-compatible client. `maintenanceTick` additionally needs cancellable pending queries (`PendingQuery.cancel()`), uses one cumulative2s deadline including lease and bookkeeping, and rolls back an exhausted tick. Maintenance skips locked identities in admission→service→user advisory→principal→receipt→credentials→roles order. Its result shape remains `{processed,due}`; `{processed:0,due:true}` may report rolled-back budget exhaustion. Admission independently reads actual oldest due indexed work, so rolled-back housekeeping cannot hide backlog pressure.
+
+CI qualifies a standalone adopter from **these package files only**, with documented host prerequisite tables, real non-BYPASS migration owner/app role and BYPASS service role, then exported credential and enrollment conformance. It also demonstrates the old counterexamples before the final stage and the corrected behavior afterward. App-local migrations are separately qualified for reference-node upgrades; they are not a substitute for package adoption proof. Source/CI is not candidate/live acceptance.

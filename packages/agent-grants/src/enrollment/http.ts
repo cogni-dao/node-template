@@ -25,9 +25,13 @@
  */
 
 import { z } from "zod";
-
 import type { CredentialHttpResponse } from "../credentials/http";
-import type { PollEnrollmentResult, RequestEnrollmentResult } from "./service";
+import { enrollmentReplySchema } from "./protocol";
+import type {
+  PollEnrollmentResult,
+  RequestEnrollmentResult,
+  requestDurableEnrollment,
+} from "./service";
 
 export const requestServiceEnrollmentOperation = {
   id: "agent.service_enrollments.request",
@@ -54,12 +58,21 @@ export const pollServiceEnrollmentOperation = {
 } as const;
 
 const NO_STORE = { "cache-control": "no-store" } as const;
-const ok = (body: Record<string, unknown>): CredentialHttpResponse => ({ status: 200, body, headers: NO_STORE });
+const ok = (body: Record<string, unknown>): CredentialHttpResponse => ({
+  status: 200,
+  body,
+  headers: NO_STORE,
+});
 const refuse = (
   status: number,
   error: string,
   headers: Readonly<Record<string, string>> = NO_STORE
-): CredentialHttpResponse => ({ status, body: { error }, headers, refusal: error });
+): CredentialHttpResponse => ({
+  status,
+  body: { error },
+  headers,
+  refusal: error,
+});
 
 const REQUEST_REFUSALS = {
   invalid_token: [401, "invalid_token"],
@@ -76,17 +89,33 @@ export type EnrollmentHttpInput =
   | { readonly op: "invalid_input" };
 
 /** The answer for the result of an enrollment route operation. */
-export function enrollmentHttp(input: EnrollmentHttpInput): CredentialHttpResponse {
+export function enrollmentHttp(
+  input: EnrollmentHttpInput
+): CredentialHttpResponse {
   switch (input.op) {
     case "invalid_input":
       return refuse(400, "invalid input");
     case "request": {
       const result = input.result;
       if (result.ok)
-        return ok(requestServiceEnrollmentOperation.output.parse({ deviceCode: result.deviceCode, expires_in: result.expiresIn, interval: result.interval }));
-      if (result.reason === "jwks_unavailable") return refuse(503, "jwks_unavailable", { ...NO_STORE, "retry-after": "5" });
+        return ok(
+          requestServiceEnrollmentOperation.output.parse({
+            deviceCode: result.deviceCode,
+            expires_in: result.expiresIn,
+            interval: result.interval,
+          })
+        );
+      if (result.reason === "jwks_unavailable")
+        return refuse(503, "jwks_unavailable", {
+          ...NO_STORE,
+          "retry-after": "5",
+        });
       const [status, error] = REQUEST_REFUSALS[result.reason];
-      return refuse(status, error, status === 429 ? { ...NO_STORE, "retry-after": "60" } : NO_STORE);
+      return refuse(
+        status,
+        error,
+        status === 429 ? { ...NO_STORE, "retry-after": "60" } : NO_STORE
+      );
     }
     case "poll": {
       const result = input.result;
@@ -102,4 +131,47 @@ export function enrollmentHttp(input: EnrollmentHttpInput): CredentialHttpRespon
       );
     }
   }
+}
+
+/** Strict v2 operations share the existing public route. No plaintext code is returned. */
+export const durableEnrollmentOperation = {
+  input: z.strictObject({ token: z.string().min(1).max(16384) }),
+  output: enrollmentReplySchema,
+};
+export function durableEnrollmentHttp(
+  result: Awaited<ReturnType<typeof requestDurableEnrollment>>
+): CredentialHttpResponse {
+  if (result.ok)
+    return ok(durableEnrollmentOperation.output.parse(result.reply));
+  const codes = {
+    invalid_token: 401,
+    jwks_unavailable: 503,
+    invalid_scope: 400,
+    intent_conflict: 409,
+    unknown_operation: 404,
+    terminal_operation: 410,
+    node_full: 429,
+  } as const;
+  return {
+    status: codes[result.reason],
+    body: {
+      error: result.reason,
+      ...("observedAt" in result && result.observedAt
+        ? { observedAt: result.observedAt }
+        : {}),
+    },
+    headers: NO_STORE,
+    refusal: result.reason,
+  };
+}
+export function durablePollHttp(
+  result: import("./durable-provider").StablePoll
+): CredentialHttpResponse {
+  if (!result.ok) return refuse(400, result.error);
+  return ok(
+    pollServiceEnrollmentOperation.output.parse({
+      ...result,
+      status: "pending",
+    })
+  );
 }

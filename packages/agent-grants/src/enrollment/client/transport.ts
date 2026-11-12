@@ -19,12 +19,18 @@
  */
 
 import { z } from "zod";
-
-import { pollServiceEnrollmentOperation, requestServiceEnrollmentOperation } from "../http";
+import { confirmAgentCredentialOperation } from "../../credentials/http";
+import {
+  pollServiceEnrollmentOperation,
+  requestServiceEnrollmentOperation,
+} from "../http";
+import { type EnrollmentReply, enrollmentReplySchema } from "../protocol";
 import { readBoundedText } from "./bounded-body";
 
-export const ENROLLMENT_REQUEST_PATH = "/api/v1/public/agent/service-enrollments";
-export const ENROLLMENT_TOKEN_PATH = "/api/v1/public/agent/service-enrollments/token";
+export const ENROLLMENT_REQUEST_PATH =
+  "/api/v1/public/agent/service-enrollments";
+export const ENROLLMENT_TOKEN_PATH =
+  "/api/v1/public/agent/service-enrollments/token";
 export const ENROLLMENT_CONFIRM_PATH = "/api/v1/agent/credentials/confirm";
 
 export const ENROLLMENT_CLIENT_LIMITS = {
@@ -36,13 +42,18 @@ export const ENROLLMENT_CLIENT_LIMITS = {
   maxIntervalS: 60,
 } as const;
 
-export type EnrollmentClientErrorCode = "origin_unreachable" | "enrollment_rejected" | "replayed_token" | "bad_response";
+export type EnrollmentClientErrorCode =
+  | "origin_unreachable"
+  | "enrollment_rejected"
+  | "replayed_token"
+  | "bad_response";
 
 /** A failure talking to the node. `status` is the HTTP status when there was one. */
 export class EnrollmentClientError extends Error {
   constructor(
     readonly code: EnrollmentClientErrorCode,
-    readonly status?: number
+    readonly status?: number,
+    readonly observedAt?: string
   ) {
     super(code);
     this.name = "EnrollmentClientError";
@@ -60,16 +71,36 @@ export type EnrollmentPollResult =
   | { readonly kind: "authorization_pending" }
   | { readonly kind: "slow_down" }
   | { readonly kind: "access_denied" }
+  | { readonly kind: "permission_off" }
   | { readonly kind: "expired_token" }
-  | { readonly kind: "issued"; readonly sealedKey: string; readonly credentialId: string; readonly pendingExpiresAt: string };
+  | {
+      readonly kind: "issued";
+      readonly sealedKey: string;
+      readonly credentialId: string;
+      readonly pendingExpiresAt: string;
+    };
 
 export interface EnrollmentTransport {
+  postProof(origin: string, token: string): Promise<EnrollmentReply>;
+  confirmStaged(
+    origin: string,
+    apiKey: string
+  ): Promise<{
+    status: number;
+    credentialId?: string;
+    expiresAt?: string;
+    renewUntil?: string;
+  }>;
+
   /** POST the signed token to the node's `service-enrollments` route. */
   postEnrollment(origin: string, token: string): Promise<EnrollmentAccepted>;
   /** POST the device code to the node's `service-enrollments/token` route. */
   pollToken(origin: string, deviceCode: string): Promise<EnrollmentPollResult>;
   /** Confirm the freshly stored key with the node (`POST /api/v1/agent/credentials/confirm`, bearer = the key). */
-  confirmKey(origin: string, apiKey: string): Promise<{ readonly ok: boolean; readonly status: number }>;
+  confirmKey(
+    origin: string,
+    apiKey: string
+  ): Promise<{ readonly ok: boolean; readonly status: number }>;
 }
 
 export interface EnrollmentTransportOptions {
@@ -78,19 +109,41 @@ export interface EnrollmentTransportOptions {
   readonly maxResponseBytes?: number;
 }
 
-const PollErrorSchema = z.object({ error: z.enum(["authorization_pending", "slow_down", "access_denied", "expired_token"]) });
-const clamp = (n: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, n));
+const PollErrorSchema = z.object({
+  error: z.enum([
+    "authorization_pending",
+    "slow_down",
+    "access_denied",
+    "expired_token",
+    "permission_off",
+  ]),
+});
+const clamp = (n: number, lo: number, hi: number): number =>
+  Math.min(hi, Math.max(lo, n));
 
-export function createEnrollmentTransport(options: EnrollmentTransportOptions = {}): EnrollmentTransport {
+export function createEnrollmentTransport(
+  options: EnrollmentTransportOptions = {}
+): EnrollmentTransport {
   const doFetch = options.fetch ?? fetch;
   const timeoutMs = options.timeoutMs ?? ENROLLMENT_CLIENT_LIMITS.timeoutMs;
-  const maxBytes = options.maxResponseBytes ?? ENROLLMENT_CLIENT_LIMITS.maxResponseBytes;
+  const maxBytes =
+    options.maxResponseBytes ?? ENROLLMENT_CLIENT_LIMITS.maxResponseBytes;
 
-  async function call(origin: string, path: string, init: { body?: unknown; bearer?: string }): Promise<{ status: number; json: Record<string, unknown> }> {
+  async function call(
+    origin: string,
+    path: string,
+    init: { body?: unknown; bearer?: string }
+  ): Promise<{ status: number; json: Record<string, unknown> }> {
     let url: URL;
     try {
       url = new URL(path, origin);
-      if (url.protocol !== "https:" || url.origin !== new URL(origin).origin) throw new Error("origin");
+      if (
+        url.protocol !== "https:" ||
+        url.origin !== origin ||
+        new URL(origin).username ||
+        new URL(origin).password
+      )
+        throw new Error("origin");
     } catch {
       throw new EnrollmentClientError("origin_unreachable");
     }
@@ -110,14 +163,17 @@ export function createEnrollmentTransport(options: EnrollmentTransportOptions = 
     } catch {
       throw new EnrollmentClientError("origin_unreachable");
     }
-    if (response.status >= 500) throw new EnrollmentClientError("origin_unreachable", response.status);
+    if (response.status >= 500)
+      throw new EnrollmentClientError("origin_unreachable", response.status);
     let json: Record<string, unknown> = {};
     try {
       const body = await readBoundedText(response, maxBytes);
-      if (!body.ok) throw new EnrollmentClientError("bad_response", response.status);
+      if (!body.ok)
+        throw new EnrollmentClientError("bad_response", response.status);
       if (body.text.length > 0) {
         const parsed: unknown = JSON.parse(body.text);
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) json = parsed as Record<string, unknown>;
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed))
+          json = parsed as Record<string, unknown>;
       }
     } catch (error) {
       if (error instanceof EnrollmentClientError) throw error;
@@ -128,28 +184,81 @@ export function createEnrollmentTransport(options: EnrollmentTransportOptions = 
   }
 
   return {
+    async postProof(origin, token) {
+      const { status, json } = await call(origin, ENROLLMENT_REQUEST_PATH, {
+        body: { token },
+      });
+      if (status !== 200)
+        throw new EnrollmentClientError(
+          "enrollment_rejected",
+          status,
+          typeof json.observedAt === "string" ? json.observedAt : undefined
+        );
+      const parsed = enrollmentReplySchema.safeParse(json);
+      if (!parsed.success)
+        throw new EnrollmentClientError("bad_response", status);
+      return parsed.data;
+    },
+    async confirmStaged(origin, apiKey) {
+      const { status, json } = await call(origin, ENROLLMENT_CONFIRM_PATH, {
+        bearer: apiKey,
+      });
+      if (status !== 200) return { status };
+      const parsed = confirmAgentCredentialOperation.output.safeParse(json);
+      if (!parsed.success)
+        throw new EnrollmentClientError("bad_response", status);
+      return {
+        status,
+        credentialId: parsed.data.credentialId,
+        expiresAt: parsed.data.expiresAt,
+        renewUntil: parsed.data.renewUntil,
+      };
+    },
     async postEnrollment(origin, token) {
-      const { status, json } = await call(origin, ENROLLMENT_REQUEST_PATH, { body: { token } });
+      const { status, json } = await call(origin, ENROLLMENT_REQUEST_PATH, {
+        body: { token },
+      });
       if (status === 401) {
-        const code = typeof json.error === "string" ? json.error : json.errorCode;
-        throw new EnrollmentClientError(code === "replayed_token" ? "replayed_token" : "enrollment_rejected", status);
+        const code =
+          typeof json.error === "string" ? json.error : json.errorCode;
+        throw new EnrollmentClientError(
+          code === "replayed_token" ? "replayed_token" : "enrollment_rejected",
+          status
+        );
       }
-      if (status < 200 || status >= 300) throw new EnrollmentClientError("enrollment_rejected", status);
+      if (status < 200 || status >= 300)
+        throw new EnrollmentClientError("enrollment_rejected", status);
       const accepted = requestServiceEnrollmentOperation.output.safeParse(json);
-      if (!accepted.success) throw new EnrollmentClientError("bad_response", status);
+      if (!accepted.success)
+        throw new EnrollmentClientError("bad_response", status);
       return {
         deviceCode: accepted.data.deviceCode,
-        expiresInS: clamp(accepted.data.expires_in, ENROLLMENT_CLIENT_LIMITS.minExpiresInS, ENROLLMENT_CLIENT_LIMITS.maxExpiresInS),
-        intervalS: clamp(accepted.data.interval, ENROLLMENT_CLIENT_LIMITS.minIntervalS, ENROLLMENT_CLIENT_LIMITS.maxIntervalS),
+        expiresInS: clamp(
+          accepted.data.expires_in,
+          ENROLLMENT_CLIENT_LIMITS.minExpiresInS,
+          ENROLLMENT_CLIENT_LIMITS.maxExpiresInS
+        ),
+        intervalS: clamp(
+          accepted.data.interval,
+          ENROLLMENT_CLIENT_LIMITS.minIntervalS,
+          ENROLLMENT_CLIENT_LIMITS.maxIntervalS
+        ),
       };
     },
 
     async pollToken(origin, deviceCode) {
-      const { status, json } = await call(origin, ENROLLMENT_TOKEN_PATH, { body: { deviceCode } });
+      const { status, json } = await call(origin, ENROLLMENT_TOKEN_PATH, {
+        body: { deviceCode },
+      });
       if (status >= 200 && status < 300) {
         const issued = pollServiceEnrollmentOperation.output.safeParse(json);
         if (issued.success) {
-          return { kind: "issued", sealedKey: issued.data.sealedKey, credentialId: issued.data.credentialId, pendingExpiresAt: issued.data.pendingExpiresAt };
+          return {
+            kind: "issued",
+            sealedKey: issued.data.sealedKey,
+            credentialId: issued.data.credentialId,
+            pendingExpiresAt: issued.data.pendingExpiresAt,
+          };
         }
       }
       if (status === 429) return { kind: "slow_down" };
@@ -159,7 +268,9 @@ export function createEnrollmentTransport(options: EnrollmentTransportOptions = 
     },
 
     async confirmKey(origin, apiKey) {
-      const { status } = await call(origin, ENROLLMENT_CONFIRM_PATH, { bearer: apiKey });
+      const { status } = await call(origin, ENROLLMENT_CONFIRM_PATH, {
+        bearer: apiKey,
+      });
       return { ok: status === 200, status };
     },
   };

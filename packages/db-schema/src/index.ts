@@ -13,6 +13,7 @@
 
 export * from "./agent-authority";
 export * from "./agent-service-enrollments";
+export * from "./agent-service-links";
 export * from "./ai";
 export * from "./ai-threads";
 export * from "./attribution";
@@ -20,11 +21,9 @@ export * from "./auth";
 export * from "./billing";
 export * from "./connections";
 export * from "./identity";
+export * from "./metric-observations.js";
 // poly-copy-trade relocated to nodes/poly/app/src/shared/db/copy-trade.ts (task.0322)
 export * from "./profile";
 export * from "./refs";
 export * from "./scheduling";
-
 export * from "./work-item-leases";
-
-export * from "./metric-observations.js";

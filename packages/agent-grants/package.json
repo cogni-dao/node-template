@@ -39,6 +39,16 @@
       "types": "./dist/enrollment/conformance.d.ts",
       "import": "./dist/enrollment-conformance.js",
       "default": "./dist/enrollment-conformance.js"
+    },
+    "./enrollment-requester": {
+      "types": "./dist/enrollment/requester/index.d.ts",
+      "import": "./dist/enrollment-requester.js",
+      "default": "./dist/enrollment-requester.js"
+    },
+    "./durable-enrollment-conformance": {
+      "types": "./dist/enrollment/durable-conformance.d.ts",
+      "import": "./dist/durable-enrollment-conformance.js",
+      "default": "./dist/durable-enrollment-conformance.js"
     }
   },
   "types": "./dist/index.d.ts",

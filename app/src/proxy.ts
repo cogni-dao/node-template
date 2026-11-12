@@ -18,8 +18,8 @@
 
 import { randomUUID } from "node:crypto";
 import {
-	isWellFormedRevocableKey,
-	REVOCABLE_KEY_PREFIX,
+  isWellFormedRevocableKey,
+  REVOCABLE_KEY_PREFIX,
 } from "@cogni/agent-grants/credentials";
 import { type NextRequest, NextResponse } from "next/server";
 import { getToken } from "next-auth/jwt";
@@ -30,54 +30,54 @@ import { EVENT_NAMES, makeLogger } from "@/shared/observability";
 
 /** App routes that require authentication — unauthenticated visitors are redirected to /. */
 const APP_ROUTES = [
-	"/chat",
-	"/dashboard",
-	"/profile",
-	"/credits",
-	"/gov",
-	"/knowledge",
-	"/schedules",
-	"/setup",
-	"/work",
-	"/activity",
-	"/admin",
+  "/chat",
+  "/dashboard",
+  "/profile",
+  "/credits",
+  "/gov",
+  "/knowledge",
+  "/schedules",
+  "/setup",
+  "/work",
+  "/activity",
+  "/admin",
 ];
 
 function isAppRoute(pathname: string): boolean {
-	return APP_ROUTES.some(
-		(route) => pathname === route || pathname.startsWith(`${route}/`),
-	);
+  return APP_ROUTES.some(
+    (route) => pathname === route || pathname.startsWith(`${route}/`)
+  );
 }
 
 // The signed-key prefix is wire format; the revocable-key prefix has ONE definition, in the package.
 const AGENT_BEARER_PREFIXES = [
-	"Bearer cogni_ag_sk_v1_",
-	`Bearer ${REVOCABLE_KEY_PREFIX}`,
+  "Bearer cogni_ag_sk_v1_",
+  `Bearer ${REVOCABLE_KEY_PREFIX}`,
 ];
 
 function isPublicApiRoute(pathname: string): boolean {
-	// Agent register is the one bootstrap seam left open: register → key →
-	// everything else (cognition included) requires that principal.
-	//
-	// The attestation START leg is the HUMAN bootstrap seam, for the same reason
-	// (task.5042): someone signing in with GitHub has no session yet, so requiring
-	// one here is a deadlock — it is the request that gets them a session. Safe to
-	// expose because the leg reads nothing and returns nothing sensitive: it mints
-	// a single-use challenge and hands back a URL built entirely from THIS node's
-	// own configured origin and node id. Nothing about who is asking changes it.
-	// The signed-in LINK mode of the same route still resolves its session inside
-	// the handler, so nothing is weakened for that path.
-	return (
-		pathname.startsWith("/api/v1/public/") ||
-		pathname === "/api/v1/agent/register" ||
-		pathname === "/api/v1/identity/bindings/import/start"
-	);
+  // Agent register is the one bootstrap seam left open: register → key →
+  // everything else (cognition included) requires that principal.
+  //
+  // The attestation START leg is the HUMAN bootstrap seam, for the same reason
+  // (task.5042): someone signing in with GitHub has no session yet, so requiring
+  // one here is a deadlock — it is the request that gets them a session. Safe to
+  // expose because the leg reads nothing and returns nothing sensitive: it mints
+  // a single-use challenge and hands back a URL built entirely from THIS node's
+  // own configured origin and node id. Nothing about who is asking changes it.
+  // The signed-in LINK mode of the same route still resolves its session inside
+  // the handler, so nothing is weakened for that path.
+  return (
+    pathname.startsWith("/api/v1/public/") ||
+    pathname === "/api/v1/agent/register" ||
+    pathname === "/api/v1/identity/bindings/import/start"
+  );
 }
 
 function isAgentApiRoute(pathname: string): boolean {
-	// Any /api/v1/* route may accept machine bearer tokens — route handlers
-	// do the actual token validation and return 401 for invalid/missing creds.
-	return pathname.startsWith("/api/v1/");
+  // Any /api/v1/* route may accept machine bearer tokens — route handlers
+  // do the actual token validation and return 401 for invalid/missing creds.
+  return pathname.startsWith("/api/v1/");
 }
 
 /**
@@ -85,21 +85,20 @@ function isAgentApiRoute(pathname: string): boolean {
  * the credential store or its pool. The format has ONE definition, in the package.
  */
 function hasMalformedRevocableBearer(req: NextRequest): boolean {
-	const authorization = req.headers.get("authorization");
-	const bearerPrefix = `Bearer ${REVOCABLE_KEY_PREFIX}`;
-	return (
-		authorization !== null &&
-		authorization.startsWith(bearerPrefix) &&
-		!isWellFormedRevocableKey(authorization.slice("Bearer ".length))
-	);
+  const authorization = req.headers.get("authorization");
+  const bearerPrefix = `Bearer ${REVOCABLE_KEY_PREFIX}`;
+  return (
+    authorization?.startsWith(bearerPrefix) &&
+    !isWellFormedRevocableKey(authorization.slice("Bearer ".length))
+  );
 }
 
 function hasAgentBearer(req: NextRequest): boolean {
-	const authorization = req.headers.get("authorization");
-	return (
-		authorization !== null &&
-		AGENT_BEARER_PREFIXES.some((prefix) => authorization.startsWith(prefix))
-	);
+  const authorization = req.headers.get("authorization");
+  return (
+    authorization !== null &&
+    AGENT_BEARER_PREFIXES.some((prefix) => authorization.startsWith(prefix))
+  );
 }
 
 // Perimeter denials are rejected here, before any route handler runs, so the
@@ -109,132 +108,143 @@ function hasAgentBearer(req: NextRequest): boolean {
 // auth decision (or middleware init / tests).
 let perimeterLogger: ReturnType<typeof makeLogger> | undefined;
 function perimeterLog(): ReturnType<typeof makeLogger> {
-	if (!perimeterLogger) {
-		let nodeId = "unknown";
-		try {
-			nodeId = getNodeId();
-		} catch {
-			// repo-spec unavailable (e.g. test env) — fall back to "unknown".
-		}
-		perimeterLogger = makeLogger({ nodeId });
-	}
-	return perimeterLogger;
+  if (!perimeterLogger) {
+    let nodeId = "unknown";
+    try {
+      nodeId = getNodeId();
+    } catch {
+      // repo-spec unavailable (e.g. test env) — fall back to "unknown".
+    }
+    perimeterLogger = makeLogger({ nodeId });
+  }
+  return perimeterLogger;
 }
 
 /** Why an unauthenticated /api/v1 request was rejected at the perimeter. */
 type PerimeterDenyReason = "no_session" | "no_auth_secret" | "bad_key_format";
 
 function logPerimeterDenial(
-	req: NextRequest,
-	reason: PerimeterDenyReason,
+  req: NextRequest,
+  reason: PerimeterDenyReason
 ): void {
-	try {
-		// Direct logger call (not logEvent): AUTH_PERIMETER_DENIED is an
-		// operator-local event, and logEvent only types the shared registry —
-		// the same pattern as ADAPTER_GITHUB_REPO_WRITE_ERROR / NODE_*_COMPLETE.
-		perimeterLog().info(
-			{
-				event: EVENT_NAMES.AUTH_PERIMETER_DENIED,
-				reqId: randomUUID(),
-				routeId: "auth.perimeter",
-				route: req.nextUrl.pathname,
-				method: req.method,
-				reason,
-				status: 401,
-			},
-			EVENT_NAMES.AUTH_PERIMETER_DENIED,
-		);
-	} catch {
-		// Never let an observability failure break the auth perimeter.
-	}
+  try {
+    // Direct logger call (not logEvent): AUTH_PERIMETER_DENIED is an
+    // operator-local event, and logEvent only types the shared registry —
+    // the same pattern as ADAPTER_GITHUB_REPO_WRITE_ERROR / NODE_*_COMPLETE.
+    perimeterLog().info(
+      {
+        event: EVENT_NAMES.AUTH_PERIMETER_DENIED,
+        reqId: randomUUID(),
+        routeId: "auth.perimeter",
+        route: req.nextUrl.pathname,
+        method: req.method,
+        reason,
+        status: 401,
+      },
+      EVENT_NAMES.AUTH_PERIMETER_DENIED
+    );
+  } catch {
+    // Never let an observability failure break the auth perimeter.
+  }
 }
 
 export async function proxy(req: NextRequest): Promise<NextResponse> {
-	const { pathname } = req.nextUrl;
-	const isPublicApi = isPublicApiRoute(pathname);
-	const isAgentBearerRequest = isAgentApiRoute(pathname) && hasAgentBearer(req);
+  const { pathname } = req.nextUrl;
+  if (
+    (pathname === "/api/v1/service-links" ||
+      pathname.startsWith("/api/v1/service-links/") ||
+      pathname === "/api/v1/agent-access/roles") &&
+    req.headers.has("authorization")
+  ) {
+    return NextResponse.json(
+      { error: "human_session_required", code: "human_session_required" },
+      { status: 403, headers: { "cache-control": "no-store" } }
+    );
+  }
+  const isPublicApi = isPublicApiRoute(pathname);
+  const isAgentBearerRequest = isAgentApiRoute(pathname) && hasAgentBearer(req);
 
-	// Allow public namespace without authentication
-	if (isPublicApi) {
-		return NextResponse.next();
-	}
+  // Allow public namespace without authentication
+  if (isPublicApi) {
+    return NextResponse.next();
+  }
 
-	if (isAgentApiRoute(pathname) && hasMalformedRevocableBearer(req)) {
-		logPerimeterDenial(req, "bad_key_format");
-		return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-	}
+  if (isAgentApiRoute(pathname) && hasMalformedRevocableBearer(req)) {
+    logPerimeterDenial(req, "bad_key_format");
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
 
-	// Resolve token once — reused for both page and API checks.
-	// Only call getToken when the route actually needs auth checking.
-	const needsAuth =
-		pathname === "/" ||
-		isAppRoute(pathname) ||
-		(pathname.startsWith("/api/v1/") && !isAgentBearerRequest);
-	const tokenSecret = authSecret || authOptions.secret;
+  // Resolve token once — reused for both page and API checks.
+  // Only call getToken when the route actually needs auth checking.
+  const needsAuth =
+    pathname === "/" ||
+    isAppRoute(pathname) ||
+    (pathname.startsWith("/api/v1/") && !isAgentBearerRequest);
+  const tokenSecret = authSecret || authOptions.secret;
 
-	if (
-		!tokenSecret &&
-		pathname.startsWith("/api/v1/") &&
-		!isAgentBearerRequest
-	) {
-		logPerimeterDenial(req, "no_auth_secret");
-		return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-	}
+  if (
+    !tokenSecret &&
+    pathname.startsWith("/api/v1/") &&
+    !isAgentBearerRequest
+  ) {
+    logPerimeterDenial(req, "no_auth_secret");
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
 
-	const token =
-		tokenSecret && needsAuth
-			? await getToken({ req, secret: tokenSecret })
-			: null;
+  const token =
+    tokenSecret && needsAuth
+      ? await getToken({ req, secret: tokenSecret })
+      : null;
 
-	const isLoggedIn = !!token;
+  const isLoggedIn = !!token;
 
-	// --- Page-level routing (single authority, replaces client-side redirects) ---
+  // --- Page-level routing (single authority, replaces client-side redirects) ---
 
-	// Authenticated on landing page → redirect to /chat
-	if (pathname === "/" && isLoggedIn) {
-		return NextResponse.redirect(new URL("/chat", req.url));
-	}
+  // Authenticated on landing page → redirect to /chat
+  if (pathname === "/" && isLoggedIn) {
+    return NextResponse.redirect(new URL("/chat", req.url));
+  }
 
-	// Unauthenticated on app routes → redirect to /
-	if (isAppRoute(pathname) && !isLoggedIn) {
-		return NextResponse.redirect(new URL("/", req.url));
-	}
+  // Unauthenticated on app routes → redirect to /
+  if (isAppRoute(pathname) && !isLoggedIn) {
+    return NextResponse.redirect(new URL("/", req.url));
+  }
 
-	// --- API route protection ---
+  // --- API route protection ---
 
-	// Protect /api/v1/* routes (except /api/v1/public/* which was early-returned above)
-	// IMPORTANT: All route handlers under /api/v1 must still call getServerSession() server-side.
-	// This proxy provides early rejection for unauthenticated requests, but handlers
-	// are responsible for their own auth enforcement.
-	// Public unauthenticated endpoints must use /api/v1/public/* namespace.
-	if (pathname.startsWith("/api/v1/")) {
-		if (isAgentBearerRequest) {
-			return NextResponse.next();
-		}
-		if (!isLoggedIn) {
-			logPerimeterDenial(req, "no_session");
-			return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-		}
-	}
+  // Protect /api/v1/* routes (except /api/v1/public/* which was early-returned above)
+  // IMPORTANT: All route handlers under /api/v1 must still call getServerSession() server-side.
+  // This proxy provides early rejection for unauthenticated requests, but handlers
+  // are responsible for their own auth enforcement.
+  // Public unauthenticated endpoints must use /api/v1/public/* namespace.
+  if (pathname.startsWith("/api/v1/")) {
+    if (isAgentBearerRequest) {
+      return NextResponse.next();
+    }
+    if (!isLoggedIn) {
+      logPerimeterDenial(req, "no_session");
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+  }
 
-	return NextResponse.next();
+  return NextResponse.next();
 }
 
 export const config = {
-	// Run proxy on page routes (landing + app) and API routes for uniform auth perimeter
-	matcher: [
-		"/",
-		"/chat/:path*",
-		"/dashboard/:path*",
-		"/profile/:path*",
-		"/credits/:path*",
-		"/gov/:path*",
-		"/knowledge/:path*",
-		"/schedules/:path*",
-		"/setup/:path*",
-		"/work/:path*",
-		"/activity/:path*",
-		"/admin/:path*",
-		"/api/v1/:path*",
-	],
+  // Run proxy on page routes (landing + app) and API routes for uniform auth perimeter
+  matcher: [
+    "/",
+    "/chat/:path*",
+    "/dashboard/:path*",
+    "/profile/:path*",
+    "/credits/:path*",
+    "/gov/:path*",
+    "/knowledge/:path*",
+    "/schedules/:path*",
+    "/setup/:path*",
+    "/work/:path*",
+    "/activity/:path*",
+    "/admin/:path*",
+    "/api/v1/:path*",
+  ],
 };

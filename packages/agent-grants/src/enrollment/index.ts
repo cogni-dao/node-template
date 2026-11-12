@@ -23,22 +23,33 @@ export {
   serviceEnrollmentAudience,
   serviceEnrollmentClaims,
   serviceEnrollmentCnfJwk,
-  servicePrincipalName,
   serviceKeyOf,
+  servicePrincipalName,
 } from "./claims";
+export * from "./durable-provider";
 export {
+  durableEnrollmentHttp,
+  durableEnrollmentOperation,
+  durablePollHttp,
   type EnrollmentHttpInput,
   enrollmentHttp,
   pollServiceEnrollmentOperation,
   requestServiceEnrollmentOperation,
 } from "./http";
-export { createPostgresEnrollmentStore, type PostgresEnrollmentStoreOptions } from "./postgres";
+export { maintenanceTick } from "./maintenance";
+export {
+  createPostgresEnrollmentStore,
+  type PostgresEnrollmentStoreOptions,
+} from "./postgres";
+export * from "./protocol";
 export { openSealed, SEAL_ALG, SEAL_ENC, sealToJwk } from "./seal";
 export {
   DEVICE_CODE_SHAPE,
   type PollEnrollmentResult,
+  pollDurableEnrollment,
   pollServiceEnrollment,
   type RequestEnrollmentResult,
+  requestDurableEnrollment,
   requestServiceEnrollment,
 } from "./service";
 export type {
@@ -57,5 +68,3 @@ export {
   type EnrollmentVerifyResult,
   type TrustedHome,
 } from "./verify";
-
-export { maintenanceTick } from "./maintenance";

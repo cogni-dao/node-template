@@ -12,20 +12,26 @@
  * Side-effects: none
  */
 
-import { exportJWK, generateKeyPair, type JWK, createLocalJWKSet, SignJWT } from "jose";
-import { MOCK_SERVER_ENV } from "@tests/_fixtures/env/base-env";
-import { NextRequest } from "next/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
-import { confirmCredential, verifyBearer } from "@cogni/agent-grants/credentials";
 import {
   createEnrollmentTokenVerifier,
+  ENROLLMENT_PROTOCOL,
+  type EnrollmentProof,
+  intentDigestOf,
   openSealed,
-  SERVICE_ENROLLMENT_KIND,
   SERVICE_ENROLLMENT_TYP,
+  sealToJwk,
   serviceEnrollmentAudience,
 } from "@cogni/agent-grants/enrollment";
-import { memoryEnrollmentStore } from "../../../../packages/agent-grants/tests/enrollment-memory-store";
+import { MOCK_SERVER_ENV } from "@tests/_fixtures/env/base-env";
+import {
+  createLocalJWKSet,
+  exportJWK,
+  generateKeyPair,
+  type JWK,
+  SignJWT,
+} from "jose";
+import { NextRequest } from "next/server";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const NODE_ID = "55555555-5555-4555-8555-555555555555";
 const ISSUER = "https://home.example";
@@ -36,18 +42,36 @@ const fake = vi.hoisted(() => ({
   billingFails: false,
   billing: undefined as unknown as { mock: { calls: unknown[][] } },
 }));
-const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), child: vi.fn() };
+const log = {
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+  debug: vi.fn(),
+  child: vi.fn(),
+};
 
 vi.mock("next/headers", () => ({ headers: async () => ({ get: () => null }) }));
-vi.mock("@/lib/auth/server", () => ({ getServerSessionUser: async () => null }));
+vi.mock("@/lib/auth/server", () => ({
+  getServerSessionUser: async () => null,
+}));
 vi.mock("@/shared/env", () => ({ serverEnv: () => MOCK_SERVER_ENV }));
 vi.mock("@/shared/env/server", () => ({ serverEnv: () => MOCK_SERVER_ENV }));
-vi.mock("@/shared/env/server-env", () => ({ serverEnv: () => MOCK_SERVER_ENV }));
+vi.mock("@/shared/env/server-env", () => ({
+  serverEnv: () => MOCK_SERVER_ENV,
+}));
 vi.mock("@/bootstrap/container", () => ({
   getContainer: vi.fn(() => ({
     log,
     clock: { now: () => new Date("2026-11-11T12:00:00Z") },
-    config: { rateLimitBypass: { enabled: true, headerName: "x-stack-test", headerValue: "1" }, DEPLOY_ENVIRONMENT: "test", unhandledErrorPolicy: "rethrow" },
+    config: {
+      rateLimitBypass: {
+        enabled: true,
+        headerName: "x-stack-test",
+        headerValue: "1",
+      },
+      DEPLOY_ENVIRONMENT: "test",
+      unhandledErrorPolicy: "rethrow",
+    },
   })),
 }));
 vi.mock("@/bootstrap/http/rateLimiter", () => ({
@@ -60,7 +84,9 @@ vi.mock("@/bootstrap/agent-credentials", () => ({
   admitCredentialLookup: () => true,
   recordCredentialMiss: () => undefined,
 }));
-vi.mock("@/app/_lib/auth/service-enrollment-verifier", () => ({ getEnrollmentTokenVerifier: () => fake.verifier }));
+vi.mock("@/app/_lib/auth/service-enrollment-verifier", () => ({
+  getEnrollmentTokenVerifier: () => fake.verifier,
+}));
 vi.mock("@/bootstrap/agent-enrollment", () => ({
   getAgentEnrollmentStore: () => fake.memory.store,
   getAskableScopes: () => ["knowledge:read", "knowledge:contribute"],
@@ -68,190 +94,234 @@ vi.mock("@/bootstrap/agent-enrollment", () => ({
     (fake.billing.mock.calls as unknown[][]).push(args);
     if (fake.billingFails) throw new Error("billing down");
   },
-  enrollmentPublicRateLimit: { limiter: { consume: () => true }, clientKey: () => "test-client" },
+  enrollmentPublicRateLimit: {
+    limiter: { consume: () => true },
+    clientKey: () => "test-client",
+  },
 }));
 
-import { POST as poll } from "@/app/api/v1/public/agent/service-enrollments/token/route";
 import { POST as create } from "@/app/api/v1/public/agent/service-enrollments/route";
+import { POST as poll } from "@/app/api/v1/public/agent/service-enrollments/token/route";
 
 const post = (handler: typeof create, path: string, body: unknown) =>
-  handler(new NextRequest(`http://localhost/api/v1/public/agent/${path}`, { method: "POST", headers: { "x-stack-test": "1" }, body: JSON.stringify(body) }), undefined as never);
-const enroll = (token: string) => post(create, "service-enrollments", { token });
-const token = (deviceCode: string) => post(poll, "service-enrollments/token", { deviceCode });
-const events = () => [...log.info.mock.calls, ...log.warn.mock.calls].map((c) => (c[0] as { event?: string }).event).filter((e) => e?.startsWith("agent."));
-const logged = () => JSON.stringify([...log.info.mock.calls, ...log.warn.mock.calls, ...log.error.mock.calls]);
+  handler(
+    new NextRequest(`http://localhost/api/v1/public/agent/${path}`, {
+      method: "POST",
+      headers: { "x-stack-test": "1" },
+      body: JSON.stringify(body),
+    }),
+    undefined as never
+  );
+const enroll = (token: string) =>
+  post(create, "service-enrollments", { token });
+const token = (deviceCode: string) =>
+  post(poll, "service-enrollments/token", { deviceCode });
+
+const logged = () =>
+  JSON.stringify([
+    ...log.info.mock.calls,
+    ...log.warn.mock.calls,
+    ...log.error.mock.calls,
+  ]);
 
 let signer: Awaited<ReturnType<typeof generateKeyPair>>;
-let cnfPublic: JWK;
-let cnfPrivate: JWK;
-let counter = 0;
-const uuid = () => `00000000-0000-4000-8000-${String(++counter).padStart(12, "0")}`;
-
-async function sign(over: { typ?: string; kind?: string; jti?: string; service?: string } = {}) {
-  const nowSec = Math.floor(Date.now() / 1000);
-  return new SignJWT({
-    kind: over.kind ?? SERVICE_ENROLLMENT_KIND,
-    jti: over.jti ?? uuid(),
-    service: over.service ?? "git-review",
-    scopes: ["knowledge:read"],
-    cnf: { jwk: { kty: "OKP", crv: "X25519", x: cnfPublic.x } },
-  } as never)
-    .setProtectedHeader({ alg: "EdDSA", kid: "k1", typ: over.typ ?? SERVICE_ENROLLMENT_TYP })
-    .setIssuer(ISSUER)
-    .setAudience(serviceEnrollmentAudience(NODE_ID))
-    .setIssuedAt(nowSec)
-    .setExpirationTime(nowSec + 300)
+let cnfPublic: JWK, cnfPrivate: JWK;
+const home = {
+  nodeId: "11111111-1111-4111-8111-111111111111",
+  environment: "candidate-a",
+  origin: ISSUER,
+};
+const target = {
+  nodeId: NODE_ID,
+  environment: "candidate-a",
+  origin: "https://target.example",
+};
+let proof: EnrollmentProof;
+let acceptCalls: unknown[];
+let pendingError = "authorization_pending";
+let stored: Record<string, unknown> | undefined;
+async function sign(patch: Record<string, unknown> = {}) {
+  return new SignJWT({ ...proof, ...patch })
+    .setProtectedHeader({
+      alg: "EdDSA",
+      kid: "k1",
+      typ: SERVICE_ENROLLMENT_TYP,
+    })
     .sign(signer.privateKey);
 }
-
-let memory: ReturnType<typeof memoryEnrollmentStore>;
-
 beforeEach(async () => {
   vi.clearAllMocks();
   log.child.mockReturnValue(log);
-  signer = await generateKeyPair("EdDSA", { crv: "Ed25519" });
-  const cnf = await generateKeyPair("ECDH-ES", { crv: "X25519", extractable: true });
-  cnfPublic = await exportJWK(cnf.publicKey);
-  cnfPrivate = await exportJWK(cnf.privateKey);
-  memory = memoryEnrollmentStore();
-  fake.memory = memory;
   fake.billingFails = false;
   fake.billing = { mock: { calls: [] } };
-  const keys = createLocalJWKSet({ keys: [{ ...(await exportJWK(signer.publicKey)), alg: "EdDSA", kid: "k1" }] });
+  signer = await generateKeyPair("EdDSA");
+  const cnf = await generateKeyPair("ECDH-ES", {
+    crv: "X25519",
+    extractable: true,
+  });
+  cnfPublic = await exportJWK(cnf.publicKey);
+  cnfPrivate = await exportJWK(cnf.privateKey);
+  const iat = Math.floor(Date.now() / 1000),
+    jti = crypto.randomUUID();
+  const intent = {
+    kind: ENROLLMENT_PROTOCOL,
+    operationId: crypto.randomUUID(),
+    generation: 1,
+    expectedGeneration: 0,
+    expectedOperationId: null,
+    home,
+    target,
+    service: "git-review",
+    scopes: ["knowledge:read"],
+    cnf: {
+      jwk: {
+        kty: "OKP" as const,
+        crv: "X25519" as const,
+        x: cnfPublic.x as string,
+      },
+    },
+    originalStartJti: jti,
+    originalStartIat: iat,
+    originalStartExp: iat + 600,
+  };
+  proof = {
+    ...intent,
+    op: "start",
+    intentDigest: await intentDigestOf(intent),
+    iss: ISSUER,
+    aud: serviceEnrollmentAudience(NODE_ID),
+    jti,
+    iat,
+    exp: iat + 600,
+  };
+  const keys = createLocalJWKSet({
+    keys: [{ ...(await exportJWK(signer.publicKey)), kid: "k1", alg: "EdDSA" }],
+  });
   fake.verifier = createEnrollmentTokenVerifier({
     nodeId: NODE_ID,
-    homes: [{ origin: ISSUER, services: { "git-review": ["knowledge:read"] } }],
+    receiver: target,
+    homes: [
+      { ...home, kids: ["k1"], services: { "git-review": ["knowledge:read"] } },
+    ],
     keysFor: () => keys,
   });
-});
-
-describe("POST /api/v1/public/agent/service-enrollments", () => {
-  it("a signed token becomes a principal, one pending ask and a device code; nothing secret is cached or logged", async () => {
-    const jwt = await sign();
-    const res = await enroll(jwt);
-    expect(res.status).toBe(200);
-    expect(res.headers.get("cache-control")).toBe("no-store");
-    const body = await res.json();
-    expect(body).toEqual({ deviceCode: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/), expires_in: 86_400, interval: 5 });
-    expect(memory.principals).toHaveLength(1);
-    expect(memory.roles).toEqual([expect.objectContaining({ scope: "knowledge:read", approved: false, revoked: false })]);
-    expect(fake.billing.mock.calls).toEqual([[expect.any(String), "git-review@home.example"]]);
-    expect(events()).toEqual(["agent.enrollment.requested"]);
-    expect(logged()).not.toContain(jwt);
-    expect(logged()).not.toContain(body.deviceCode);
-  });
-
-  it("TOKEN_ONCE: the same token a second time is 401 replayed_token and creates nothing", async () => {
-    const jwt = await sign();
-    expect((await enroll(jwt)).status).toBe(200);
-    const again = await enroll(jwt);
-    expect(again.status).toBe(401);
-    expect(await again.json()).toEqual({ error: "replayed_token" });
-    expect(memory.principals).toHaveLength(1);
-    expect(events()).toEqual(["agent.enrollment.requested", "agent.enrollment.replayed"]);
-  });
-
-  it("a token with another typ or kind (an identity attestation reused here) is one 401 invalid_token and creates nothing", async () => {
-    for (const over of [{ typ: "JWT" }, { kind: "identity.attestation.v1" }]) {
-      const res = await enroll(await sign(over));
-      expect(res.status).toBe(401);
-      expect(await res.json()).toEqual({ error: "invalid_token" });
-    }
-    expect(memory.principals).toHaveLength(0);
-    expect(events()).toEqual(["agent.enrollment.attestation_rejected", "agent.enrollment.attestation_rejected"]);
-  });
-
-  it("a service the home may not sign for is 401, and a missing or malformed body is 400", async () => {
-    expect((await enroll(await sign({ service: "outreach" }))).status).toBe(401);
-    expect((await post(create, "service-enrollments", {})).status).toBe(400);
-    expect((await post(create, "service-enrollments", { token: "" })).status).toBe(400);
-  });
-
-  it("a billing account that cannot be made is 503 authz_unavailable, never a 401 or a 500", async () => {
-    fake.billingFails = true;
-    const res = await enroll(await sign());
-    expect(res.status).toBe(503);
-    expect(await res.json()).toEqual({ error: "authz_unavailable" });
-  });
-
-  it("a store outage is 503", async () => {
-    fake.memory = { store: memoryEnrollmentStore({ failing: true }).store, credentials: memory.credentials };
-    expect((await enroll(await sign())).status).toBe(503);
-  });
-
-  it("an issuer whose keys cannot be read is 503 jwks_unavailable (never an accept)", async () => {
-    fake.verifier = createEnrollmentTokenVerifier({
-      nodeId: NODE_ID,
-      homes: [{ origin: ISSUER, services: { "git-review": ["knowledge:read"] } }],
-      keysFor: () => async () => {
-        throw new Error("jwks down");
+  stored = undefined;
+  acceptCalls = [];
+  pendingError = "authorization_pending";
+  fake.memory = {
+    credentials: {},
+    store: {
+      async acceptProof(p: EnrollmentProof, digest: string) {
+        acceptCalls.push({ operationId: p.operationId, digest });
+        if (stored) return stored;
+        if (p.op === "continue")
+          return {
+            ok: false,
+            reason: "unknown_operation",
+            observedAt: new Date().toISOString(),
+          };
+        stored = {
+          ok: true,
+          proofOp: p.op,
+          principalUserId: "target-principal",
+          enrollmentId: crypto.randomUUID(),
+          principalCreated: true,
+          service: p.service,
+          issuer: p.iss,
+          scope: p.scopes[0],
+          reply: {
+            operationId: p.operationId,
+            generation: p.generation,
+            status: "open",
+            credentialId: null,
+            credentialState: null,
+            observedAt: new Date().toISOString(),
+            sealedAcceptance: await sealToJwk(
+              JSON.stringify({ marker: "only-the-home-can-open" }),
+              p.cnf.jwk
+            ),
+          },
+        };
+        return stored;
       },
-    });
-    const res = await enroll(await sign());
-    expect(res.status).toBe(503);
-    expect(await res.json()).toEqual({ error: "jwks_unavailable" });
-  });
-});
-
-describe("POST /api/v1/public/agent/service-enrollments/token", () => {
-  const redeem = async () => {
-    const created = await (await enroll(await sign())).json();
-    const principalUserId = memory.principals[0]?.userId as string;
-    return { deviceCode: created.deviceCode as string, principalUserId };
+      async pollStable() {
+        return { ok: false, error: pendingError };
+      },
+    },
   };
-
-  it("before the click: 400 authorization_pending, then slow_down inside the interval; both no-store", async () => {
-    const { deviceCode } = await redeem();
-    const pending = await token(deviceCode);
-    expect(pending.status).toBe(400);
-    expect(pending.headers.get("cache-control")).toBe("no-store");
-    expect(await pending.json()).toEqual({ error: "authorization_pending" });
-    expect(await (await token(deviceCode)).json()).toEqual({ error: "slow_down" });
+});
+describe("public v2 enrollment mounts", () => {
+  it("returns only the sealed receipt; exact response-loss retry returns identical ciphertext", async () => {
+    const jwt = await sign(),
+      a = await enroll(jwt),
+      body = await a.json(),
+      b = await enroll(jwt);
+    expect(a.status).toBe(200);
+    expect(a.headers.get("cache-control")).toBe("no-store");
+    expect(await b.json()).toEqual(body);
+    expect(body.deviceCode).toBeUndefined();
+    expect(body.sealedAcceptance).toBeTruthy();
+    expect(
+      JSON.parse(await openSealed(body.sealedAcceptance, cnfPrivate))
+    ).toEqual({ marker: "only-the-home-can-open" });
+    expect(logged()).not.toContain(jwt);
+    expect(logged()).not.toContain(body.sealedAcceptance);
+    expect(acceptCalls).toHaveLength(2);
   });
-
-  it("KEY_SEALED_TO_CNF: after the click the key comes back sealed; only the cnf private key opens it; the key is never logged; a copied device code gets ciphertext", async () => {
-    const { deviceCode, principalUserId } = await redeem();
-    memory.approve(principalUserId, "knowledge:read");
-    const res = await token(deviceCode);
-    expect(res.status).toBe(200);
-    expect(res.headers.get("cache-control")).toBe("no-store");
-    const out = await res.json();
-    expect(out).toMatchObject({ status: "pending", userId: principalUserId, sealedKey: expect.any(String) });
-    expect(out.sealedKey.split(".")).toHaveLength(5);
-    const apiKey = await openSealed(out.sealedKey, cnfPrivate);
-    expect(apiKey).toMatch(/^cogni_ag_sk_v2_/);
-    expect(JSON.stringify(out)).not.toContain(apiKey);
-    expect(logged()).not.toContain(apiKey);
-    expect(logged()).not.toContain(out.sealedKey);
-    expect(events()).toContain("agent.enrollment.redeemed");
-    expect(events()).toContain("agent.credential.issued");
-    // The holder confirms with the key; it is then active, and the device code is spent.
-    expect(await verifyBearer(memory.credentials, apiKey, ["pending"])).toMatchObject({ ok: true, userId: principalUserId });
-    expect(await confirmCredential(memory.credentials, { credentialId: out.credentialId })).toMatchObject({ ok: true });
-    expect(await verifyBearer(memory.credentials, apiKey)).toMatchObject({ ok: true, state: "active" });
-    memory.enrollments.forEach((e) => {
-      e.lastPolledAt = null;
+  it("rejects v1, wrong environment, expired proof and unknown body fields before the provider", async () => {
+    for (const patch of [
+      { kind: "service.enrollment.v1" },
+      { target: { ...target, environment: "production" } },
+      { exp: 1 },
+    ])
+      expect((await enroll(await sign(patch))).status).toBe(401);
+    expect(
+      (
+        await post(create, "service-enrollments", {
+          token: await sign(),
+          challenge: "not-a-human-door",
+        })
+      ).status
+    ).toBe(400);
+    expect(acceptCalls).toHaveLength(0);
+  });
+  it("accepted-only unknown continuation is404 with receiver time and no creation", async () => {
+    const res = await enroll(
+      await sign({
+        op: "continue",
+        originalTokenDigest: "a".repeat(64),
+        jti: crypto.randomUUID(),
+      })
+    );
+    expect(res.status).toBe(404);
+    expect(await res.json()).toMatchObject({
+      error: "unknown_operation",
+      observedAt: expect.any(String),
     });
-    const spent = await token(deviceCode);
-    expect(spent.status).toBe(400);
-    expect(await spent.json()).toEqual({ error: "expired_token" });
+    expect(stored).toBeUndefined();
   });
-
-  it("a dismissed ask is 400 access_denied with one agent.enrollment.denied line; an unknown code is 400 expired_token", async () => {
-    const { deviceCode, principalUserId } = await redeem();
-    memory.dismiss(principalUserId, "knowledge:read");
-    const denied = await token(deviceCode);
-    expect(denied.status).toBe(400);
-    expect(await denied.json()).toEqual({ error: "access_denied" });
-    expect(events()).toContain("agent.enrollment.denied");
-    const unknown = await token("z".repeat(43));
-    expect(await unknown.json()).toEqual({ error: "expired_token" });
-    expect(events()).toContain("agent.enrollment.expired");
+  it("billing response failure retains the provider acceptance for exact retry", async () => {
+    fake.billingFails = true;
+    const jwt = await sign();
+    expect((await enroll(jwt)).status).toBe(503);
+    const ciphertext = (stored?.reply as { sealedAcceptance: string })
+      .sealedAcceptance;
+    fake.billingFails = false;
+    const retried = await enroll(jwt);
+    expect((await retried.json()).sealedAcceptance).toBe(ciphertext);
   });
-
-  it("a malformed body is 400 and a store outage is 503", async () => {
-    expect((await post(poll, "service-enrollments/token", {})).status).toBe(400);
-    fake.memory = { store: memoryEnrollmentStore({ failing: true }).store, credentials: memory.credentials };
-    expect((await token("a".repeat(43))).status).toBe(503);
+  it("poll pending/Off/terminal answers retain no-store and contain no bearer", async () => {
+    for (const error of [
+      "authorization_pending",
+      "permission_off",
+      "access_denied",
+      "expired_token",
+    ]) {
+      pendingError = error;
+      const res = await token("a".repeat(43));
+      expect(res.status).toBe(400);
+      expect(res.headers.get("cache-control")).toBe("no-store");
+      expect(await res.json()).toEqual({ error });
+    }
   });
 });

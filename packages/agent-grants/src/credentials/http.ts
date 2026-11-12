@@ -81,6 +81,7 @@ const refuse = (status: number, error: string, headers: Readonly<Record<string, 
 });
 
 const UPGRADE_REFUSALS = {
+  rate_limited: [429, "rate_limited"],
   unknown_user: [403, "not_agent_key"],
   wallet_user: [403, "not_agent_key"],
   internal_principal: [403, "not_agent_key"],
@@ -118,6 +119,7 @@ export function credentialHttp(input: CredentialHttpInput): CredentialHttpRespon
     case "rotate": {
       const minted = input.result;
       if (!minted.ok) {
+        if (minted.reason === "rate_limited") return refuse(429, "rate_limited", { ...NO_STORE, "retry-after": "60" });
         // Rotate has one refusal; upgrade names each one.
         const [status, error] = input.op === "rotate" ? ([409, "not_rotatable"] as const) : UPGRADE_REFUSALS[minted.reason];
         return refuse(status, error);
