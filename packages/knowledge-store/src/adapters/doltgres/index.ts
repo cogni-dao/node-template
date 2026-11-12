@@ -717,7 +717,7 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
     // status checks run in `selectActiveGoals` (app layer) rather than SQL, the
     // same Doltgres-safe idiom as `searchKnowledge`; the shelf is tiny.
     const rows = await this.readSql.unsafe(
-      `SELECT id, entry_type, status, title, content, evaluate_at FROM knowledge WHERE entry_type = ${escapeValue(GOAL_ENTRY_TYPE)}`
+      `SELECT id, entry_type, status, title, content, evaluate_at, kpi_bindings FROM knowledge WHERE entry_type = ${escapeValue(GOAL_ENTRY_TYPE)}`
     );
     // GOAL_RETIRED_BY_SUPERSEDES: a merged `supersedes` edge onto a goal
     // retires it (DEPRECATE_NOT_DELETE — a cited goal cannot be deleted and no
@@ -740,6 +740,7 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
           evaluateAt: row.evaluate_at
             ? new Date(row.evaluate_at as string)
             : null,
+          kpiBindings: row.kpi_bindings ?? null,
         };
       }),
       supersededIds

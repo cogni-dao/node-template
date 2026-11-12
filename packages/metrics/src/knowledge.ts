@@ -48,6 +48,7 @@ export interface GoalKnowledgeReader {
 			id: string;
 			title: string;
 			evaluateAt?: Date | null | undefined;
+			kpiBindings?: unknown;
 		}>
 	>;
 	getKnowledge(id: string): Promise<{
@@ -407,12 +408,17 @@ export function createGoalSource(
 			const goals = await read(() => port.listActiveGoals());
 			const items = [];
 			for (const goal of goals) {
-				const row = await read(() => port.getKnowledge(goal.id));
+				// Current stores project bindings with the canonical active-goal list.
+				// Older injected readers keep the existing direct-body fallback.
+				const bindings =
+					goal.kpiBindings !== undefined
+						? goal.kpiBindings
+						: (await read(() => port.getKnowledge(goal.id)))?.kpiBindings;
 				items.push({
 					id: goal.id,
 					title: goal.title,
 					evaluateAt: goal.evaluateAt?.toISOString() ?? null,
-					kpiBindings: row?.kpiBindings ?? [],
+					kpiBindings: bindings ?? [],
 				});
 			}
 			return items;

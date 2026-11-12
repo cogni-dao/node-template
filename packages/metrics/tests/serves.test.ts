@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 /** story.0033 part A: `serves` + `band` live beside the hashed spec, never inside it. */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
 	createMetricService,
+	bucketObservations,
+	metricHistoryRange,
 	type GoalSourcePort,
 	GoalsProgressSchema,
 	type KpiBinding,
@@ -22,6 +24,7 @@ import {
 	StoredMetricSpecSchema,
 } from "../src/index";
 import { hub } from "./fakes";
+import { createGoalProgressReader } from "../src/knowledge";
 
 const NOW = new Date("2026-11-10T12:00:00Z");
 const spec = {
@@ -821,5 +824,209 @@ describe("goal read lists served metrics under their KPI", () => {
 		});
 		expect(read.servedTruncated).toBe(true);
 		expect(read.goals[0]?.kpis[0]?.served?.length).toBe(SERVES_SCAN_MAX);
+	});
+});
+
+describe("bounded complete goal reads", () => {
+	it("renders all measurements, charts and seven supports inside the unchanged deadline", async () => {
+		vi.useFakeTimers();
+		try {
+			vi.setSystemTime(NOW);
+			const pause = () =>
+				new Promise<void>((resolve) => setTimeout(resolve, 100));
+			const kpis = Array.from({ length: 6 }, (_, i) => definition(`kpi-${i}`));
+			const supports = Array.from({ length: 7 }, (_, i) =>
+				definition(`support-${i}`, {
+					serves: { kpi: "kpi-0", role: "input" },
+				}),
+			);
+			const defs = [...kpis, ...supports];
+			const readings = Object.fromEntries(
+				defs.map((d, i) => [d.id, [reading(d, i === 1 ? 24 : 8)]]),
+			);
+			const s = setup(defs, readings);
+			s.observations.workReadBatch = async (requests) => {
+				await pause();
+				return requests.map((r) => ({
+					baseline: null,
+					latest: readings[r.metricId]?.[0] ?? null,
+					lastGood: readings[r.metricId]?.[0] ?? null,
+				}));
+			};
+			s.observations.buckets = async (id, _hash, range) => {
+				s.calls.buckets++;
+				await pause();
+				return bucketObservations(
+					readings[id] ?? [],
+					metricHistoryRange(range, NOW, { allowOpenBucket: true }),
+				);
+			};
+			const body = vi.fn(async () => {
+				throw new Error("goal body must already be projected");
+			});
+			const reader = createGoalProgressReader({
+				metrics: () => s.service,
+				knowledge: () => ({
+					listActiveGoals: async () => {
+						await pause();
+						return Array.from({ length: 3 }, (_, i) => ({
+							id: `goal-${i}`,
+							title: `Goal ${i}`,
+							evaluateAt: null,
+							kpiBindings: kpis.slice(i * 2, i * 2 + 2).map((d) => ({
+								metricId: d.id,
+								comparator: "gte",
+								target: { value: 24, unit: "items" },
+							})),
+						}));
+					},
+					getKnowledge: body,
+					listCitationsByCitedId: async () => {
+						await pause();
+						return [];
+					},
+				}),
+				environment: "test",
+			});
+			const pending = reader();
+			expect(reader()).toBe(pending);
+			await vi.advanceTimersByTimeAsync(1200);
+			const result = await pending;
+			expect(result.asOf).toBe(NOW.toISOString());
+			expect(result.goals.map((g) => g.id)).toEqual([
+				"goal-0",
+				"goal-1",
+				"goal-2",
+			]);
+			expect(result.goals[0]?.kpis.map((k) => k.assessment.value)).toEqual([
+				8, 24,
+			]);
+			expect(result.goals[0]?.kpis[0]?.served).toHaveLength(7);
+			for (const goal of result.goals)
+				for (const kpi of goal.kpis) {
+					expect(kpi.trend?.buckets).toHaveLength(30);
+					expect(kpi.recent?.buckets).toHaveLength(24);
+				}
+			expect(s.calls).toMatchObject({
+				get: 0,
+				history: 0,
+				lastGood: 0,
+				buckets: 12,
+			});
+			expect(body).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it.each(["ok", "zero", "pending", "error", "missing", "stale"] as const)(
+		"preserves %s through request-local reuse",
+		async (state) => {
+			const d = definition("kpi");
+			const good = reading(d, state === "zero" ? 0 : 8);
+			let rows = [good];
+			if (state === "pending" || state === "error")
+				rows = [
+					{
+						...good,
+						status: state,
+						value: null,
+						reason: state === "error" ? "source_failed" : null,
+					},
+					good,
+				];
+			if (state === "missing") rows = [];
+			if (state === "stale")
+				rows = [
+					{
+						...good,
+						window: {
+							start: "2020-01-01T00:00:00Z",
+							end: "2020-01-01T00:00:00Z",
+						},
+					},
+				];
+			const s = setup([d], { kpi: rows });
+			const binding = {
+				metricId: "kpi",
+				comparator: "gte" as const,
+				target: { value: 24, unit: "items" },
+			};
+			const direct = await s.service.kpi(binding);
+			const scan = await s.service.serving();
+			const before = { ...s.calls };
+			expect(await scan.readKpi(binding)).toEqual(direct);
+			expect(s.calls.get).toBe(before.get);
+			expect(s.calls.history).toBe(before.history);
+			expect(s.calls.lastGood).toBe(before.lastGood);
+		},
+	);
+
+	it("waits for every native KPI read when a sibling fails", async () => {
+		const d = definition("kpi");
+		const s = setup([d]);
+		const finishes: ((rows: []) => void)[] = [];
+		s.observations.history = async () => {
+			throw new Error("source failed");
+		};
+		s.observations.buckets = () =>
+			new Promise<[]>((resolve) => finishes.push(resolve));
+		let returned = false;
+		const pending = s.service
+			.kpi({
+				metricId: "kpi",
+				comparator: "gte",
+				target: { value: 24, unit: "items" },
+			})
+			.then((result) => {
+				returned = true;
+				return result;
+			});
+		await vi.waitFor(() => expect(finishes).toHaveLength(2));
+		expect(returned).toBe(false);
+		finishes[0]?.([]);
+		await Promise.resolve();
+		expect(returned).toBe(false);
+		finishes[1]?.([]);
+		expect(await pending).toMatchObject({
+			viewState: "error",
+			assessment: { reason: "source_failed" },
+		});
+	});
+
+	it("reauthorizes reused readings and never substitutes them for pinned evidence", async () => {
+		const d = definition("kpi");
+		let allowed = true;
+		let available = true;
+		const s = setup([d], { kpi: [reading(d, 8)] }, async () => {
+			if (!available) throw new Error("authority unavailable");
+			return allowed;
+		});
+		const scan = await s.service.serving();
+		const binding = {
+			metricId: "kpi",
+			comparator: "gte" as const,
+			target: { value: 24, unit: "items" },
+		};
+		const pinned = {
+			...binding,
+			baselineObservationId: crypto.randomUUID(),
+			evaluationAt: NOW.toISOString(),
+		};
+		const snapshot = vi.spyOn(s.observations, "snapshot");
+		expect((await scan.readKpi(pinned)).assessment.reason).toBe(
+			"baseline_unavailable_or_incompatible",
+		);
+		expect(snapshot).toHaveBeenCalledWith(pinned.baselineObservationId);
+		expect(s.calls.get).toBe(1);
+		allowed = false;
+		expect((await scan.readKpi(binding)).assessment.reason).toBe(
+			"metric_unavailable",
+		);
+		expect(s.calls.history).toBe(0);
+		available = false;
+		expect((await scan.readKpi(binding)).assessment.reason).toBe(
+			"metric_authority_unavailable",
+		);
 	});
 });

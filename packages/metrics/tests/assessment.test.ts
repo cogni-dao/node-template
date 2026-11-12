@@ -6,7 +6,7 @@ import {
 	pinMoves,
 	type MoveReadingPort,
 } from "../../work-items/src/moves";
-import { createGoalProgressReader } from "../src/knowledge";
+import { createGoalProgressReader, createGoalSource } from "../src/knowledge";
 import { createMetricHttpHandlers } from "../src/http";
 import { readGoalsProgress } from "../src/progress";
 import { readMetricBatch } from "../src/adapters/read-budget";
@@ -30,6 +30,8 @@ import {
 	selectEvaluation,
 	selectMetricView,
 } from "../src/index";
+
+import { DoltgresKnowledgeStoreAdapter } from "../../knowledge-store/src/adapters/doltgres/index";
 
 const NOW = new Date("2026-11-02T12:00:00Z");
 const DAY = 86_400_000;
@@ -2064,4 +2066,119 @@ it("keeps expired or invalid current windows stale across readers without changi
 		viewState: "stale",
 		assessment: { status: "met", observationId: evaluation.id },
 	});
+});
+
+it("projects bindings with the canonical active-goal list and preserves older reader fallback", async () => {
+	const binding = {
+		metricId: "ratio",
+		comparator: "gte",
+		target: { value: 1, unit: "ratio" },
+	};
+	const query = vi.fn(async (text: string) =>
+		text.includes("FROM citations")
+			? [{ cited_id: "goal-retired" }]
+			: [
+					{
+						id: "goal-live",
+						entry_type: "goal",
+						title: "Live",
+						content: "",
+						evaluate_at: null,
+						kpi_bindings: [binding],
+					},
+					{
+						id: "goal-empty",
+						entry_type: "goal",
+						title: "Empty",
+						content: "",
+						evaluate_at: null,
+						kpi_bindings: null,
+					},
+					{
+						id: "goal-bad",
+						entry_type: "goal",
+						title: "Invalid",
+						content: "",
+						evaluate_at: null,
+						kpi_bindings: { malformed: true },
+					},
+					{
+						id: "goal-retired",
+						entry_type: "goal",
+						title: "Retired",
+						content: "",
+						evaluate_at: null,
+						kpi_bindings: [binding],
+					},
+				],
+	);
+	const adapter = new DoltgresKnowledgeStoreAdapter({
+		sql: { unsafe: query } as never,
+	});
+	const body = vi.spyOn(adapter, "getKnowledge");
+	const subjects = await createGoalSource(adapter).listGoals();
+	expect(subjects.map((s) => [s.id, s.kpiBindings])).toEqual([
+		["goal-bad", { malformed: true }],
+		["goal-empty", []],
+		["goal-live", [binding]],
+	]);
+	expect(query).toHaveBeenCalledTimes(2);
+	expect(query.mock.calls[0]?.[0]).toContain("kpi_bindings");
+	expect(body).not.toHaveBeenCalled();
+	const fallback = vi.fn(async () => ({
+		id: "goal-old",
+		title: "Older port",
+		kpiBindings: [binding],
+	}));
+	expect(
+		(
+			await createGoalSource({
+				listActiveGoals: async () => [{ id: "goal-old", title: "Older port" }],
+				getKnowledge: fallback,
+				listCitationsByCitedId: async () => [],
+			}).listGoals()
+		)[0]?.kpiBindings,
+	).toEqual([binding]);
+	expect(fallback).toHaveBeenCalledWith("goal-old");
+});
+
+it("retains goal admission until the parallel serving branch settles after goal failure", async () => {
+	vi.useFakeTimers();
+	try {
+		const finishes: ((value: never) => void)[] = [];
+		const port = {
+			listActiveGoals: async () => {
+				throw new Error("source failed");
+			},
+			getKnowledge: async () => null,
+			listCitationsByCitedId: async () => [],
+		};
+		const serving = vi.fn(
+			() => new Promise<never>((resolve) => finishes.push(resolve)),
+		);
+		const make = () =>
+			createGoalProgressReader({
+				knowledge: () => port,
+				metrics: () => ({ serving }) as never,
+				environment: "test",
+			});
+		for (let i = 0; i < 4; i++) {
+			const failed = make()().catch((error) => error);
+			await vi.advanceTimersByTimeAsync(2500);
+			expect(await failed).toMatchObject({ code: "batch_unavailable" });
+		}
+		await expect(make()()).rejects.toMatchObject({ code: "batch_unavailable" });
+		expect(serving).toHaveBeenCalledTimes(4);
+		finishes.forEach((finish) => {
+			finish(null as never);
+		});
+		await vi.advanceTimersByTimeAsync(0);
+		const replacement = make()().catch((error) => error);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(serving).toHaveBeenCalledTimes(5);
+		finishes[4]?.(null as never);
+		expect((await replacement).message).toBe("source failed");
+	} finally {
+		vi.useRealTimers();
+	}
 });

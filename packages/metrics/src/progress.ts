@@ -86,18 +86,21 @@ export async function readGoalsProgress(deps: {
 			now: at,
 		});
 	const items: GoalProgress[] = [];
-	const goals = await deps.goals.listGoals();
-	deps.signal?.throwIfAborted();
 	// Metrics that declare `serves`, read once for every goal; absent without metrics.
 	// The served annex never fails the goal read: an outage degrades it to unavailable.
 	let serving: Awaited<ReturnType<MetricService["serving"]>> | null = null;
 	let servedUnavailable: string | null = null;
-	if (deps.metrics) {
-		try {
-			serving = await deps.metrics.serving();
-		} catch (e) {
-			servedUnavailable = e instanceof MetricError ? e.code : "source_failed";
-		}
+	// These reads are independent. Keep ownership until both native reads settle.
+	const [goalRead, servedRead] = await Promise.allSettled([
+		deps.goals.listGoals(),
+		deps.metrics?.serving() ?? Promise.resolve(null),
+	]);
+	if (goalRead.status === "rejected") throw goalRead.reason;
+	const goals = goalRead.value;
+	if (servedRead.status === "fulfilled") serving = servedRead.value;
+	else {
+		const e = servedRead.reason;
+		servedUnavailable = e instanceof MetricError ? e.code : "source_failed";
 	}
 	deps.signal?.throwIfAborted();
 	const boundKpis = new Set<string>();
@@ -124,7 +127,9 @@ export async function readGoalsProgress(deps: {
 				});
 				continue;
 			}
-			const r = await deps.metrics.kpi(binding, { deadline: goal.evaluateAt });
+			const r = serving?.readKpi
+				? await serving.readKpi(binding, { deadline: goal.evaluateAt })
+				: await deps.metrics.kpi(binding, { deadline: goal.evaluateAt });
 			const served: ServedMetric[] = (serving?.items ?? [])
 				.filter((x) => x.definition.serves?.kpi === binding.metricId)
 				.map((x) => ({

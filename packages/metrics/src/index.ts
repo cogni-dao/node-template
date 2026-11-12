@@ -877,12 +877,25 @@ export function createMetricService(deps: {
 			items: ServingRow[];
 			unbound: ServingRow[];
 			truncated: boolean;
+			/** Request-local reuse of this scan; fixed baselines use the evidence path. */
+			readKpi(
+				binding: KpiBinding,
+				options?: { deadline?: string | null; hypothesis?: boolean },
+			): Promise<GoalKpiResult>;
 		}> {
 			const items: ServingRow[] = [];
 			const unbound: ServingRow[] = [];
 			let cursor: string | undefined;
 			let scanned = 0;
 			let truncated = false;
+			const readings = new Map<
+				string,
+				{
+					definition: MetricDefinition;
+					latest: MetricObservation | undefined;
+					lastGood: MetricObservation | null;
+				}
+			>();
 			while (scanned < SERVES_SCAN_MAX) {
 				const page = await definitions.list(50, cursor);
 				scanned += page.items.length;
@@ -909,10 +922,20 @@ export function createMetricService(deps: {
 					throw new MetricError("batch_unavailable", 503);
 				for (let i = 0; i < allowed.length; i++) {
 					const pair = pairs[i];
-          if (!pair) throw new MetricError("batch_unavailable",503);
-          const row = await servingRow(allowed[i]!, pair);
+					if (!pair) throw new MetricError("batch_unavailable", 503);
+					const row = await servingRow(allowed[i]!, pair);
 					if (!row) continue;
 					const d = row.definition;
+					try {
+						if (!pair.unreadable)
+							readings.set(d.id, {
+								definition: d,
+								latest: pair.latest ?? undefined,
+								lastGood: pair.lastGood ?? null,
+							});
+					} catch {
+						// servingRow already marked this row unreadable; never reuse it.
+					}
 					if (d.serves || d.annexInvalid?.length) items.push(row);
 					if (
 						!d.serves &&
@@ -924,7 +947,20 @@ export function createMetricService(deps: {
 				cursor = page.nextCursor;
 				if (scanned >= SERVES_SCAN_MAX) truncated = true;
 			}
-			return { items, unbound, truncated };
+			return {
+				items,
+				unbound,
+				truncated,
+				readKpi: (binding, options) => {
+					const preloaded = !binding.baselineObservationId
+						? readings.get(binding.metricId)
+						: undefined;
+					return service.kpi(binding, {
+						...options,
+						...(preloaded ? { preloaded } : {}),
+					});
+				},
+			};
 		},
 		async history(id: string) {
 			const d = await definitionFor(id, "read");
@@ -1027,6 +1063,7 @@ export function createMetricService(deps: {
 				current =
 					options?.preloaded?.definition ??
 					(await definitionFor(b.metricId, "read"));
+				if (options?.preloaded) await authorize("read", current);
 				pinned = b.baselineObservationId
 					? await observations.snapshot(b.baselineObservationId)
 					: null;
@@ -1034,7 +1071,11 @@ export function createMetricService(deps: {
 			} catch (error) {
 				if (!(error instanceof MetricError))
 					return { ...unmeasured("source_failed"), viewState: "error" };
-				return unmeasured(error.status === 503 ? "metric_authority_unavailable" : "metric_unavailable");
+				return unmeasured(
+					error.status === 503
+						? "metric_authority_unavailable"
+						: "metric_unavailable",
+				);
 			}
 			// A fixed prediction keeps the definition its baseline measured.
 			const definition = b.evaluationAt && pinned ? pinned.definition : current;
@@ -1089,22 +1130,67 @@ export function createMetricService(deps: {
 			)
 				return unmeasured("baseline_unavailable_or_incompatible", metric);
 			try {
-				const latest = options?.preloaded
-					? options.preloaded.latest
-					: (await observations.history(b.metricId, hash, 1))[0];
-				const view = selectMetricView(definition, latest ? [latest] : [], at);
-				const lastGood = options?.preloaded
-					? options.preloaded.lastGood
-					: await observations.lastGood(b.metricId, hash);
 				const due = deadline !== null && Date.parse(deadline) <= at.getTime();
-				const candidate = due
-					? await observations.at(
-							b.metricId,
-							hash,
-							deadline,
-							definition.spec.maxAgeSeconds,
-						)
-					: null;
+				const dayEnd = floorTo(at.getTime(), "1d") + DAY_MS;
+				const hourEnd = floorTo(at.getTime(), "1h") + HOUR_MS;
+				// One KPI has at most five independent observation reads. Wait for every
+				// native read, including siblings of a failure, before releasing ownership.
+				const [latestRead, goodRead, evaluationRead, trendRead, recentRead] =
+					await Promise.allSettled([
+						options?.preloaded
+							? Promise.resolve(options.preloaded.latest)
+							: observations
+									.history(b.metricId, hash, 1)
+									.then((rows) => rows[0]),
+						options?.preloaded
+							? Promise.resolve(options.preloaded.lastGood)
+							: observations.lastGood(b.metricId, hash),
+						due
+							? observations.at(
+									b.metricId,
+									hash,
+									deadline,
+									definition.spec.maxAgeSeconds,
+								)
+							: Promise.resolve(null),
+						options?.latestOnly
+							? Promise.resolve(null)
+							: series(
+									b.metricId,
+									hash,
+									shape.unit,
+									{
+										from: new Date(dayEnd - 30 * DAY_MS).toISOString(),
+										to: new Date(dayEnd).toISOString(),
+										step: "1d",
+									},
+									true,
+								).catch(() => null),
+						!options?.latestOnly &&
+						(definition.spec.cadenceSeconds ?? Number.POSITIVE_INFINITY) <= 3600
+							? series(
+									b.metricId,
+									hash,
+									shape.unit,
+									{
+										from: new Date(hourEnd - 24 * HOUR_MS).toISOString(),
+										to: new Date(hourEnd).toISOString(),
+										step: "1h",
+									},
+									true,
+								).catch(() => null)
+							: Promise.resolve(null),
+					]);
+				const settled = <T>(result: PromiseSettledResult<T>): T => {
+					if (result.status === "rejected") throw result.reason;
+					return result.value;
+				};
+				const latest = settled(latestRead);
+				const lastGood = settled(goodRead);
+				const candidate = settled(evaluationRead);
+				const trend = settled(trendRead);
+				const recent = settled(recentRead);
+				const view = selectMetricView(definition, latest ? [latest] : [], at);
 				const evaluation =
 					candidate &&
 					compatibleEvidence(candidate, definition, scope, shape) &&
@@ -1112,37 +1198,6 @@ export function createMetricService(deps: {
 					(!baseline ||
 						Date.parse(candidate.window.end) >= Date.parse(baseline.window.end))
 						? candidate
-						: null;
-				const dayEnd = floorTo(at.getTime(), "1d") + DAY_MS;
-				const trend = options?.latestOnly
-					? null
-					: await series(
-							b.metricId,
-							hash,
-							shape.unit,
-							{
-								from: new Date(dayEnd - 30 * DAY_MS).toISOString(),
-								to: new Date(dayEnd).toISOString(),
-								step: "1d",
-							},
-							true,
-						).catch(() => null);
-				// Hourly-or-faster metrics also carry their last day, so a young series has a shape.
-				const hourEnd = floorTo(at.getTime(), "1h") + HOUR_MS;
-				const recent =
-					!options?.latestOnly &&
-					(definition.spec.cadenceSeconds ?? Number.POSITIVE_INFINITY) <= 3600
-						? await series(
-								b.metricId,
-								hash,
-								shape.unit,
-								{
-									from: new Date(hourEnd - 24 * HOUR_MS).toISOString(),
-									to: new Date(hourEnd).toISOString(),
-									step: "1h",
-								},
-								true,
-							).catch(() => null)
 						: null;
 				const assessment = assessKpi({
 					binding: b,

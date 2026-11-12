@@ -45,6 +45,8 @@ export interface ActiveGoal {
   content: string;
   /** The goal's `By:` deadline (`evaluate_at`), when set. */
   evaluateAt: Date | null;
+  /** Optional projection for metrics readers; older ports can omit it. */
+  kpiBindings?: unknown;
 }
 
 /** The row fields goal selection needs; both adapters project to this. */
@@ -55,6 +57,7 @@ export interface GoalCandidateRow {
   title: string;
   content: string;
   evaluateAt: Date | null;
+  kpiBindings?: unknown;
 }
 
 /**
@@ -85,6 +88,7 @@ export function selectActiveGoals(
       title: r.title,
       content: r.content,
       evaluateAt: r.evaluateAt,
+      ...(r.kpiBindings !== undefined ? { kpiBindings: r.kpiBindings } : {}),
     }))
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   return goals;
