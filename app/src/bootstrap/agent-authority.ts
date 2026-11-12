@@ -25,7 +25,6 @@ import {
   type AuthzDecision,
   authorizeCaller,
   ROUTE_ONLY_CAPABILITIES,
-  SAME_DOOR_ROUTES,
   type AuthzEvent,
   createPostgresAgentGrantsStore,
   buildNodeAiView,
@@ -48,6 +47,7 @@ import { LANGGRAPH_CATALOG } from "@cogni/langgraph-graphs";
 import type { NodeAdminAuthority } from "@cogni/knowledge-store";
 import type { Logger } from "pino";
 import { EVENT_NAMES } from "@/shared/observability";
+import { buildPermissionCatalog, buildRequiresById } from "./agent-permissions";
 
 /** The service-role postgres.js client (`serviceDb.$client`): a tagged template that can also open a transaction. */
 export interface AgentAuthoritySql extends SqlTag {
@@ -104,17 +104,6 @@ export interface AgentToolAuthority {
   }): Promise<AuthzDecision>;
 }
 
-/** `requiresById` from the contracts the node already loads. */
-export function buildRequiresById(
-  bundle: readonly CatalogBoundTool[]
-): Record<string, ToolRequires> {
-  const byId: Record<string, ToolRequires> = {};
-  for (const tool of bundle) {
-    if (tool.contract.requires) byId[tool.contract.name] = tool.contract.requires;
-  }
-  return byId;
-}
-
 /** Wallet-bound admin check: any bound wallet that is a node admin passes. */
 export function createAdminCheck(
   sql: SqlTag,
@@ -155,24 +144,9 @@ export function createAgentToolAuthority(deps: {
   toolBundle: readonly CatalogBoundTool[];
 }): AgentToolAuthority {
   const requiresById = buildRequiresById(deps.toolBundle);
-  // Declared once, shown everywhere: every tool contract's `requires` plus every route-only capability.
-  const declarations: Record<string, { label?: string | undefined; description?: string | undefined }> = {};
-  for (const r of Object.values(requiresById))
-    declarations[r.scope] = { label: r.label, description: r.description };
-  for (const cap of Object.values(ROUTE_ONLY_CAPABILITIES))
-    declarations[cap.requires.scope] = {
-      label: cap.requires.label,
-      description: cap.requires.description,
-    };
-  const declaredScopes = Object.keys(declarations).sort();
-  // The scopes an outside agent can actually use: a route twin it can call. An ask for any other scope would be an approvable
-  // row that opens nothing, so it is refused up front.
-  const askableScopes = [
-    ...new Set([
-      ...Object.values(SAME_DOOR_ROUTES).map((r) => r.scope),
-      ...Object.values(ROUTE_ONLY_CAPABILITIES).map((c) => c.requires.scope),
-    ]),
-  ].sort();
+  // Declared once, shown everywhere: one derivation feeds the role routes, the ask door and agent discovery.
+  const { declarations, declaredScopes, askableScopes } =
+    buildPermissionCatalog(requiresById);
   const adminCheck = createAdminCheck(deps.sql, deps.nodeAdmin);
 
   // One transaction per call, so a role read sees one consistent snapshot.
