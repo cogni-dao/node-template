@@ -48,7 +48,7 @@ import {
   historyWindow,
   STEP_MS,
 } from "./presentation.js";
-import { areaGradient, barCells, CHART_CONFIG, useChartId } from "./marks.js";
+import { areaGradient, barCells, CHART_CONFIG, StatusPill, useChartId } from "./marks.js";
 import { RangeToggle } from "./range-toggle.js";
 import { metricHistoryKey } from "./use-goals-progress.js";
 
@@ -75,8 +75,11 @@ export function MetricChart({
   nowIso,
   id: figureId,
   href,
+  showStatus = false,
 }: {
   readonly subject: MetricSubject;
+  /** Draw the status pill beside the value (a metric's own page, where no card carries it). */
+  readonly showStatus?: boolean;
   readonly nowIso: string;
   /** DOM id, so the card that opens this chart can point at it. */
   readonly id?: string;
@@ -191,6 +194,11 @@ export function MetricChart({
               {value === null ? "—" : formatValue(value, display, unit)}
             </span>
             {value !== null && display !== "slo" && unit && <span className="pb-1 text-muted-foreground text-sm">{unit}</span>}
+            {showStatus && subject.status && (
+              <span className="pb-1">
+                <StatusPill status={subject.status} />
+              </span>
+            )}
             {label && <span className="pb-1 text-muted-foreground text-xs">{label}</span>}
           </div>
         </div>

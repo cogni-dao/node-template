@@ -13,12 +13,29 @@
 
 "use client";
 
+import type { GoalsProgress } from "@cogni-dao/metrics/contracts";
 import { useQuery } from "@tanstack/react-query";
 
 import { useGoalsHost } from "./context.js";
 import { MetricChart } from "./metric-chart.js";
-import { readSubject } from "./metric-subject.js";
-import { metricEvidenceKey } from "./use-goals-progress.js";
+import { kpiSubject, type MetricSubject, readSubject } from "./metric-subject.js";
+import { metricEvidenceKey, useGoalsProgress } from "./use-goals-progress.js";
+
+/** How this metric relates to the goals: a KPI of a goal, or a metric serving a KPI. */
+type Relation =
+  | { readonly kind: "kpi"; readonly goalId: string; readonly goalTitle: string; readonly subject: MetricSubject }
+  | { readonly kind: "serves"; readonly kpiId: string; readonly kpiTitle: string };
+
+function relationOf(data: GoalsProgress | undefined, id: string, servesKpi: string | null): Relation | null {
+  if (!data) return servesKpi ? { kind: "serves", kpiId: servesKpi, kpiTitle: servesKpi } : null;
+  for (const goal of data.goals) {
+    const kpi = goal.kpis.find((k) => k.binding.metricId === id);
+    if (kpi) return { kind: "kpi", goalId: goal.id, goalTitle: goal.title, subject: kpiSubject(kpi) };
+  }
+  if (!servesKpi) return null;
+  const served = data.goals.flatMap((g) => g.kpis).find((k) => k.binding.metricId === servesKpi);
+  return { kind: "serves", kpiId: servesKpi, kpiTitle: served?.metric?.title ?? servesKpi };
+}
 
 export interface MetricEvidenceProps {
   /** The metric (or the knowledge entry id of a metric definition). */
@@ -29,7 +46,9 @@ export interface MetricEvidenceProps {
 
 /** Evidence inspection lives with its owning knowledge atom, never a manual compute control. */
 export function MetricEvidence({ id, observationId = null }: MetricEvidenceProps) {
-  const { client, queryKeyPrefix } = useGoalsHost();
+  const { client, queryKeyPrefix, hrefs, Link } = useGoalsHost();
+  // The page shows what the metric is to the goals (a KPI of a goal, or serving a KPI) from the cached goal read.
+  const goals = useGoalsProgress({ poll: false });
   const query = useQuery({
     queryKey: metricEvidenceKey(queryKeyPrefix, id, observationId),
     refetchInterval: 15000,
@@ -55,10 +74,37 @@ export function MetricEvidence({ id, observationId = null }: MetricEvidenceProps
   if (!query.data) return <p className="text-sm text-muted-foreground">Loading evidence…</p>;
   const { current, pinned, currentFailed, pinnedFailed } = query.data;
   const history = observationId ? (pinned ? [pinned] : []) : current?.history ?? [];
+  const definition = current?.definition as { serves?: { kpi: string } } | undefined;
+  const relation = current ? relationOf(goals.data, id, definition?.serves?.kpi ?? null) : null;
   return (
     <div className="space-y-4">
       {current && (
-        <MetricChart subject={readSubject(current, id)} nowIso={new Date(query.dataUpdatedAt).toISOString()} />
+        <div className="space-y-2">
+          {relation && (
+            <p data-relation={relation.kind} className="text-muted-foreground text-xs">
+              {relation.kind === "kpi" ? (
+                <>
+                  KPI of goal{" "}
+                  <Link href={hrefs.goal(relation.goalId)} className="underline underline-offset-2">
+                    {relation.goalTitle}
+                  </Link>
+                </>
+              ) : (
+                <>
+                  Metric serving KPI{" "}
+                  <Link href={hrefs.metric(relation.kpiId)} className="underline underline-offset-2">
+                    {relation.kpiTitle}
+                  </Link>
+                </>
+              )}
+            </p>
+          )}
+          <MetricChart
+            subject={relation?.kind === "kpi" ? relation.subject : readSubject(current, id)}
+            nowIso={new Date(query.dataUpdatedAt).toISOString()}
+            showStatus
+          />
+        </div>
       )}
       {currentFailed && (
         <p role="alert" className="text-sm text-warning">

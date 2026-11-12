@@ -125,6 +125,11 @@ export function MetricCard({
         >
           {row && <ChevronRight aria-hidden="true" className={`size-4 shrink-0 ${open ? "rotate-90" : ""}`} />}
           {title}
+          {kpi && row && (
+            <span className="shrink-0 rounded border border-border/60 px-1 font-normal text-[10px] text-muted-foreground uppercase leading-4 tracking-wide">
+              KPI
+            </span>
+          )}
           {roleTag && (
             <span className="shrink-0 rounded border border-border/60 px-1 font-normal text-[10px] text-muted-foreground uppercase leading-4 tracking-wide">
               {roleTag}

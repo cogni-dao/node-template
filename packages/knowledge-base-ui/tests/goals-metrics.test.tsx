@@ -445,6 +445,9 @@ describe("MetricsBoard", () => {
     expect(metricCard.className).toContain("rounded-md border");
     const section=goal.querySelector('[data-branch="served"]') as HTMLElement;
     expect(section.querySelector("h4")).toHaveTextContent(/^Metrics$/);
+    // The KPI rows are labelled too: a "KPIs" heading over the list and a KPI tag on each row.
+    expect(kpiCard.parentElement?.parentElement?.querySelector("h4")).toHaveTextContent(/^KPIs$/);
+    expect(kpiCard.textContent).toContain("KPI");
     // Metrics are metrics: no "Diagnostics" (or any diagnostic label) anywhere in the rendered view.
     expect(container.textContent).not.toMatch(/diagnostic/i);
   });
@@ -729,6 +732,45 @@ describe("a metric's own page", () => {
     expect(evidence.textContent).toContain(`Observation ${reading.id}`);
     expect(evidence.textContent).toContain("hash-raw");
     qc.clear();
+  });
+
+  it("gives a KPI's metric and a supporting metric the same header; only the label and links differ", async () => {
+    const readFor = (id: string, serves: { kpi: string; role: "input" } | undefined, bandAssessment?: KpiAssessment) => ({
+      definition: { id, title: `Title ${id}`, revision: "1", spec: { calculatorId: "work.count@1", params: {}, maxAgeSeconds: 600 }, ...(serves ? { serves } : {}) },
+      latestAttempt: reading,
+      lastGood: reading,
+      viewState: "ok",
+      ...(bandAssessment ? { bandAssessment } : {}),
+      history: [reading],
+    });
+    const mount = async (id: string, serves?: { kpi: string; role: "input" }, assessment?: KpiAssessment) => {
+      const client = {
+        ...createGoalsClient(),
+        fetchGoals: async () => fixture(),
+        fetchMetric: async () => readFor(id, serves, assessment),
+        fetchHistory: async () => trend(id, "items", [3, 4, 5, 6, 7, 8]),
+      } as unknown as ReturnType<typeof createGoalsClient>;
+      const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const view = render(<QueryClientProvider client={qc}><GoalsProvider client={client}><MetricEvidence id={id} /></GoalsProvider></QueryClientProvider>);
+      const figure = await view.findByRole("figure");
+      return { view, figure, qc };
+    };
+    const kpi = await mount("k-red");
+    const kpiLabel = await kpi.view.findByText(/KPI of goal/);
+    expect(kpiLabel).toHaveAttribute("data-relation", "kpi");
+    expect(within(kpiLabel).getByRole("link", { name: "Goal A" })).toHaveAttribute("href", "/knowledge/goal-a");
+    const sameParts = (el: HTMLElement) => ["span[data-status]", "[role=group]", "figcaption"].map((q) => el.querySelector(q) !== null);
+    expect(sameParts(kpi.figure)).toEqual([true, true, true]);
+    kpi.view.unmount();
+    kpi.qc.clear();
+
+    const metric = await mount("m-guard-red", { kpi: "k-red", role: "input" }, band("failing", 40));
+    const label = await metric.view.findByText(/Metric serving KPI/);
+    expect(label).toHaveAttribute("data-relation", "serves");
+    expect(within(label).getByRole("link", { name: "KPI red" })).toHaveAttribute("href", "/knowledge/k-red");
+    expect(sameParts(metric.figure)).toEqual(sameParts(kpi.figure));
+    expect(metric.view.container.textContent).not.toMatch(/diagnostic/i);
+    metric.qc.clear();
   });
 
   it("opens the Evidence disclosure when the page links one immutable reading", async () => {

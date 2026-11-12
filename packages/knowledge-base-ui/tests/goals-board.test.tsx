@@ -740,7 +740,7 @@ describe("MetricEvidence", () => {
     expect(articles).toHaveLength(1);
     expect(articles[0]?.id).toBe(`observation-${pinned.id}`);
     expect(articles[0]?.textContent).toContain("5 items");
-    expect(fetchMock.mock.calls.map(([u]) => u).filter((u) => !u.includes("/history?"))).toEqual([
+    expect(fetchMock.mock.calls.map(([u]) => u).filter((u) => !u.includes("/history?") && u !== "/api/v1/metrics/goals")).toEqual([
       "/api/v1/metrics/work",
       `/api/v1/metrics/work/observations/${pinned.id}`,
     ]);

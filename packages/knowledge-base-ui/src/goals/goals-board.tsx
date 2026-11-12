@@ -349,6 +349,7 @@ function GoalRow({
         {goal.kpis.length ? (
           metrics ? (
             <div className="space-y-2 border-l border-border/60 pl-3 md:pl-4">
+              <h4 className="font-medium text-muted-foreground text-xs uppercase tracking-wider">KPIs</h4>
               {ranked.map(({ kpi, index }) => {
                 const key = keyOf(kpi, index);
                 const selected = open === key;

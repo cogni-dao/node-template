@@ -299,7 +299,7 @@ describe("Knowledge metric evidence mount", () => {
       </QueryClientProvider>
     );
     await screen.findByText(/Linked immutable evidence/);
-    expect(fetchMock.mock.calls.map(([u]) => u).filter((u) => !u.includes("/history?"))).toEqual([
+    expect(fetchMock.mock.calls.map(([u]) => u).filter((u) => !u.includes("/history?") && u !== "/api/v1/metrics/goals")).toEqual([
       "/api/v1/metrics/work",
       `/api/v1/metrics/work/observations/${id}`,
     ]);
