@@ -7,8 +7,9 @@
  * Scope: Owns the concurrent bounded deep runner (`runDeepChecks`), its failure type (`DeepProbeFailure`),
  *   the three reach-probe factories (Redis stream, knowledge plane, LiteLLM gateway), the declared-dependency
  *   type (`SubstrateDependency`), the env-schema drift guard (`findUnclassifiedSubstrateKeys`), the deep HTTP
- *   body contract (`DeepReadyzEvidence`) and its one reader (`readDeepReadiness`). It owns no node identity: a
- *   node injects its logger, error type, budget, ports and declaration map.
+ *   body contract (`DeepReadyzEvidence`) and its one reader (`readDeepReadiness`), and the whole `/readyz`
+ *   response (`serveReadyz`): a local-only default path and the registry-driven deep path. It owns no node
+ *   identity: a node injects its logger, error type, budget, ports and declaration map.
  * Invariants:
  *   - Leaf package: no app, container, env-loader or framework imports. Everything node-specific is injected.
  *   - A probe factory calls its port AS A METHOD (`port.streamLength(key)`), so a class method keeps `this`.
@@ -20,6 +21,9 @@
  *     named dependency at one named revision from the subject itself. `readDeepReadiness` is the only parser:
  *     a dependency is `reached` only on positive `checks[name].status === "ok"` evidence; a body without
  *     `checks` is `unknown`, never green.
+ *   - `serveReadyz` default path (the kubelet probe) makes ZERO remote calls: it runs only the node's local
+ *     config/secret assertion. Remote dependencies are proven only by `?deep=1`, so a slow or down shared
+ *     substrate can neither delay nor drain the serving fleet.
  * Side-effects: none in this module; injected probes do IO when run.
  * Links: fleet-reliability-substrate-matrix, node-substrate-health-checklist, deep-readyz-design
  * @public
@@ -396,4 +400,89 @@ export function findUnclassifiedSubstrateKeys(
   const pattern = opts.pattern ?? SUBSTRATE_ENV_KEY_PATTERN;
   const classified = new Set<string>([...opts.classifiedKeys, ...opts.allowlist]);
   return schemaKeys.filter((key) => pattern.test(key) && !classified.has(key));
+}
+
+/** What a node's `/readyz` route returns: an HTTP status and a JSON body. Framework-free. */
+export interface ReadyzResponse {
+  status: 200 | 503;
+  body: Record<string, unknown>;
+}
+
+/** A node's error vocabulary, mapped to the readyz 503 body fields. */
+export interface ReadyzErrorDescription {
+  reason: string;
+  message?: string;
+  details?: unknown;
+}
+
+/** Everything node-specific `serveReadyz` needs. Nothing here may do remote IO except `deepChecks`. */
+export interface ServeReadyzOptions<Name extends string> {
+  /** `?deep=1` was requested. */
+  deep: boolean;
+  /**
+   * Local serving readiness: parse env, assert runtime secrets and config. Throws on misconfiguration.
+   * MUST NOT do remote IO. Returns the identity the body reports.
+   */
+  local: () => { buildSha?: string | undefined; version?: string | undefined };
+  /** The node's declared deep checks, built only when `deep` (so the container is touched only then). */
+  deepChecks: () => ReadonlyArray<readonly [Name, () => Promise<unknown>]>;
+  /** Logger, connectivity error and per-check budget for the deep runner. */
+  runtime: DeepRuntime;
+  /** Map a thrown error (config error or the first deep failure) to the 503 body fields. */
+  describeError: (error: unknown) => ReadyzErrorDescription;
+  /** Log a failure before the 503 is returned. */
+  onFailure?: (error: unknown) => void;
+}
+
+/**
+ * The whole `/readyz` contract, shared by every node and the operator.
+ *
+ * - Default path: `local()` only. No remote IO, so it answers in milliseconds and a shared-substrate
+ *   outage cannot drain the fleet. 200 `{status:"healthy", timestamp, version?, buildSha?}`.
+ * - `?deep=1`: also runs every declared check concurrently (`runDeepChecks`). 200 adds `checks`;
+ *   a failure is 503 with `reason`/`message` from the first failure plus `unreachable`, `checks` and
+ *   `buildSha` (`DeepReadyzEvidence`).
+ * - A local failure (config, secrets) is 503 with `reason`/`message`/`details` and no deep evidence.
+ */
+export async function serveReadyz<Name extends string>(
+  opts: ServeReadyzOptions<Name>
+): Promise<ReadyzResponse> {
+  let identity: { buildSha?: string | undefined; version?: string | undefined } = {};
+  try {
+    identity = opts.local();
+    let checks: DeepChecks | undefined;
+    if (opts.deep) {
+      checks = await runDeepChecks(opts.deepChecks(), opts.runtime);
+    }
+    return {
+      status: 200,
+      body: {
+        status: "healthy",
+        timestamp: new Date().toISOString(),
+        ...(identity.version ? { version: identity.version } : {}),
+        ...(identity.buildSha ? { buildSha: identity.buildSha } : {}),
+        ...(checks ? { checks } : {}),
+      },
+    };
+  } catch (caught) {
+    const error = caught instanceof DeepProbeFailure ? caught.primary : caught;
+    opts.onFailure?.(error);
+    const described = opts.describeError(error);
+    return {
+      status: 503,
+      body: {
+        status: "error",
+        reason: described.reason,
+        ...(described.message !== undefined ? { message: described.message } : {}),
+        ...(described.details !== undefined ? { details: described.details } : {}),
+        ...(caught instanceof DeepProbeFailure
+          ? {
+              unreachable: caught.unreachable,
+              checks: caught.checks,
+              ...(identity.buildSha ? { buildSha: identity.buildSha } : {}),
+            }
+          : {}),
+      },
+    };
+  }
 }

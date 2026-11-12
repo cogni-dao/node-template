@@ -4,7 +4,7 @@
 /**
  * Module: `@tests/shared/observability/loki-push-stream`
  * Purpose: Verifies the env-gated lease Loki push sink (bug.5127): gating on LOKI_PUSH_URL, batch shape +
- *   labels + basic auth, size-triggered and timer-triggered flushes, memory caps with oldest-first drops,
+ *   labels + basic auth, explicit and timer-triggered flushes, memory caps with oldest-first drops,
  *   and fail-open behavior on push failure.
  * Scope: Pure unit — injected env/fetch/clock; no real network, no pino integration.
  * Invariants: createLokiPushStream never throws; a failed push drops the batch; buffer never exceeds caps.
@@ -43,7 +43,7 @@ describe("createLokiPushStream", () => {
 
   it("returns undefined when LOKI_PUSH_URL is not set", () => {
     expect(
-      createLokiPushStream({ env: { ...BASE_ENV, LOKI_PUSH_URL: undefined } })
+      createLokiPushStream({ env: { ...BASE_ENV, LOKI_PUSH_URL: undefined } }),
     ).toBeUndefined();
   });
 
@@ -61,9 +61,9 @@ describe("createLokiPushStream", () => {
     expect(fetchFn).toHaveBeenCalledTimes(1);
     const [url, init] = fetchFn.mock.calls[0] as [string, RequestInit];
     expect(url).toBe(BASE_ENV.LOKI_PUSH_URL);
-    expect(
-      (init.headers as Record<string, string>).authorization
-    ).toBe(`Basic ${Buffer.from("123456:glc_write_only").toString("base64")}`);
+    expect((init.headers as Record<string, string>).authorization).toBe(
+      `Basic ${Buffer.from("123456:glc_write_only").toString("base64")}`,
+    );
     const body = JSON.parse(init.body as string);
     expect(body.streams).toHaveLength(1);
     expect(body.streams[0].stream).toEqual({
@@ -88,38 +88,59 @@ describe("createLokiPushStream", () => {
     expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 
-  it("flushes immediately once the batch threshold is reached", () => {
+  it("only enqueues when the old batch threshold is reached", () => {
     const fetchFn = makeFetchMock();
     const stream = createLokiPushStream({ env: BASE_ENV, fetchFn });
     for (let i = 0; i < 500; i++) stream?.write(`{"i":${i}}\n`);
+    expect(fetchFn).not.toHaveBeenCalled();
+    stream?.flushNow();
     expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 
   it("caps the buffer, drops oldest lines, and reports the drop count", async () => {
     const fetchFn = makeFetchMock();
     const stream = createLokiPushStream({ env: BASE_ENV, fetchFn });
-    // The size-triggered flush at 500 claims one batch and stays in flight for
-    // the whole synchronous loop, so the remaining 2500 writes overflow the
-    // 2000-entry hard cap and must drop the oldest 500.
+    // Writes only enqueue; 3000 entries overflow the 2000-entry cap.
     for (let i = 0; i < 3_000; i++) stream?.write(`{"i":${i}}\n`);
-    // First advance lets the in-flight push settle; second flushes the
-    // capped remainder including the drop report.
+    // The timer flushes the capped remainder including the drop report.
     await vi.advanceTimersByTimeAsync(2_000);
     await vi.advanceTimersByTimeAsync(2_000);
     const calls = fetchFn.mock.calls.map(
-      ([, init]) => JSON.parse((init as RequestInit).body as string) as {
-        streams: { values: [string, string][] }[];
-      }
+      ([, init]) =>
+        JSON.parse((init as RequestInit).body as string) as {
+          streams: { values: [string, string][] }[];
+        },
     );
     const allValues = calls.flatMap((c) => c.streams[0]?.values ?? []);
     const dropReport = allValues.find(([, line]) =>
-      line.includes("loki_push_dropped")
+      line.includes("loki_push_dropped"),
     );
     expect(dropReport).toBeDefined();
     // No single payload may exceed cap + drop-report line.
     for (const c of calls) {
       expect(c.streams[0]?.values.length ?? 0).toBeLessThanOrEqual(2_001);
     }
+  });
+
+  it("allows only one push in flight", async () => {
+    let resolve!: (response: Response) => void;
+    const fetchFn = vi.fn<typeof fetch>(
+      () =>
+        new Promise((done) => {
+          resolve = done;
+        }),
+    );
+    const stream = createLokiPushStream({ env: BASE_ENV, fetchFn });
+    stream?.write("first\n");
+    stream?.flushNow();
+    stream?.write("second\n");
+    stream?.flushNow();
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    resolve(new Response(null, { status: 204 }));
+    await Promise.resolve();
+    await Promise.resolve();
+    stream?.flushNow();
+    expect(fetchFn).toHaveBeenCalledTimes(2);
   });
 
   it("stays fail-open when the push rejects and drops the failed batch", async () => {

@@ -8,6 +8,7 @@
  * Invariants: Always emits JSON to stdout; no worker transports; env label added by Alloy. Safe to call at module scope (no env validation).
  *   On lease deployments (LOKI_PUSH_URL injected by the operator, bug.5127) stdout is additionally teed to the in-process,
  *   fail-open Loki push sink — stdout emission is unchanged and the sink can never crash or block the app.
+ *   Invalid PINO_LOG_LEVEL uses info for diagnostics; environment validation still rejects it.
  * Side-effects: none
  * Notes: Use makeLogger for app logger; use makeNoopLogger for tests. Formatting via external pipe (pino-pretty).
  * Notes: Reads logging-specific env vars directly (NODE_ENV, PINO_LOG_LEVEL, SERVICE_NAME) without serverEnv() to avoid triggering full env validation at module load time.
@@ -26,7 +27,13 @@ export type { Logger } from "pino";
 export function makeLogger(bindings?: Record<string, unknown>): Logger {
   const isVitest = process.env.VITEST === "true";
   const nodeEnv = process.env.NODE_ENV ?? "development";
-  const pinoLogLevel = process.env.PINO_LOG_LEVEL ?? "info";
+  const configuredLevel = process.env.PINO_LOG_LEVEL ?? "info";
+  // Keep diagnostic logging available when env validation rejects this field.
+  const pinoLogLevel = ["trace", "debug", "info", "warn", "error"].includes(
+    configuredLevel,
+  )
+    ? configuredLevel
+    : "info";
   const serviceName = process.env.SERVICE_NAME ?? "app";
 
   // Silence logs in test tooling (VITEST or NODE_ENV=test)
@@ -64,9 +71,9 @@ export function makeLogger(bindings?: Record<string, unknown>): Logger {
             { level: pinoLogLevel as pino.Level, stream: stdout },
             { level: pinoLogLevel as pino.Level, stream: lokiPush },
           ],
-          { dedupe: false }
+          { dedupe: false },
         )
-      : stdout
+      : stdout,
   );
 }
 
