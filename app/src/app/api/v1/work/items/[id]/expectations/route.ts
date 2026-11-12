@@ -17,7 +17,7 @@ export const GET = wrapRouteHandlerWithLogging<{ params: Promise<{ id: string }>
   async (ctx, request, user, context) => {
     const started = Date.now();
     const reply = (body: unknown, status: number, errorCode?: string) => {
-      logEvent(ctx.log, EVENT_NAMES.WORK_EXPECTATIONS_READ, { reqId: ctx.reqId, routeId: ctx.routeId, status, durationMs: Date.now()-started, outcome: status < 400 ? "success" : "error", ...(errorCode ? {errorCode} : {}) });
+      logEvent(ctx.log, EVENT_NAMES.WORK_EXPECTATIONS_READ, { reqId: ctx.reqId, routeId: ctx.routeId, status, durationMs: Date.now()-started, outcome: status < 400 && !errorCode ? "success" : "error", ...(errorCode ? {errorCode} : {}) });
       return NextResponse.json(body, { status, headers: { "Cache-Control": "no-store" } });
     };
     try {
@@ -54,10 +54,15 @@ export const GET = wrapRouteHandlerWithLogging<{ params: Promise<{ id: string }>
           )
         : [],
     );
+    let evidenceUnavailable = matched.length > 0 && !container.goalMetrics;
     const assessments =
       container.goalMetrics && matched.length
-        ? await container.goalMetrics.predictionBatch(matched, request.signal).catch(() => [])
+        ? await container.goalMetrics.predictionBatch(matched, request.signal).catch(() => {
+            evidenceUnavailable = true;
+            return [];
+          })
         : [];
+    if (assessments.length !== matched.length) evidenceUnavailable = true;
     let cursor = 0;
     const items = entries.map(({ hypothesis, outcomes, truncated, parsed }) => ({
       id: hypothesis.id,
@@ -75,6 +80,7 @@ export const GET = wrapRouteHandlerWithLogging<{ params: Promise<{ id: string }>
             );
             const result = same ? assessments[cursor++] : undefined;
             const assessment = result?.assessment;
+            if (same && (!assessment || result?.viewState === "error" || assessment.reason === "metric_authority_unavailable")) evidenceUnavailable = true;
             const observed = assessment
               ? [
                   assessment.status,
@@ -86,7 +92,7 @@ export const GET = wrapRouteHandlerWithLogging<{ params: Promise<{ id: string }>
                 ]
                   .filter(Boolean)
                   .join(" · ")
-              : "unresolved";
+              : "unavailable (metrics_unavailable)";
             return {
               metricId: binding.metricId,
               expected: `${binding.comparator} ${binding.target.value} ${binding.target.unit}`,
@@ -95,7 +101,7 @@ export const GET = wrapRouteHandlerWithLogging<{ params: Promise<{ id: string }>
           })
         : [{ metricId: "", expected: "invalid binding", observed: "unresolved" }],
     }));
-    return reply({ items, truncated: page.truncated }, 200);
+    return reply({ items, truncated: page.truncated }, 200, evidenceUnavailable ? "metrics_unavailable" : undefined);
     } catch { return reply({error:"unavailable"},503,"unavailable"); }
   },
 );

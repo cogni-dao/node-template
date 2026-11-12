@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { judgeMoves, type MoveReadingPort } from "../../work-items/src/moves";
+import {
+	judgeMoves,
+	pinMoves,
+	type MoveReadingPort,
+} from "../../work-items/src/moves";
 import { createGoalProgressReader } from "../src/knowledge";
 import { createMetricHttpHandlers } from "../src/http";
 import { readGoalsProgress } from "../src/progress";
@@ -710,6 +714,68 @@ describe("work observation projection", () => {
 		await expect(reader.latest("ratio")).rejects.toBe(denied);
 		await expect(reader.baselineId("ratio")).rejects.toBe(denied);
 		await expect(reader.observation("ratio", fresh.id)).rejects.toBe(denied);
+	});
+	it("rejects an unreadable view when pinning, while allowing proven absence and ineligible readings", async () => {
+		const definition = {
+			id: "ratio",
+			title: "Ratio",
+			revision: "1",
+			spec: { calculatorId: "work.test@1", params: {}, maxAgeSeconds: 7200 },
+		};
+		const failed = {
+			...fresh,
+			status: "error" as const,
+			value: null,
+			reason: "source_failed",
+		};
+		let mode: "outage" | "absent" | "failed" | "fresh" = "outage";
+		const observations = {
+			history: async () => {
+				if (mode === "outage") throw new Error("private store detail");
+				return mode === "absent" ? [] : [mode === "failed" ? failed : fresh];
+			},
+			lastGood: async () => (mode === "fresh" ? fresh : null),
+		} as unknown as MetricObservationsPort;
+		const service = createMetricService({
+			definitions: {
+				get: async () => definition,
+				list: async () => ({ items: [definition], nextCursor: null }),
+			},
+			observations,
+			registry: new MetricRegistry(),
+			scope: { node: "n", environment: "e", dataScope: "d" },
+			now: () => NOW,
+			authorize: async () => true,
+		});
+		const reader = createWorkMetricReader(service, () => NOW);
+		const input = [{ metricId: "ratio", direction: "up" as const }];
+		const baselines = {
+			latestObservationId: (id: string) => reader.baselineId(id),
+		};
+		const resolver = { resolve: async () => [] };
+		await expect(
+			pinMoves([], input, { resolver, baselines }),
+		).rejects.toMatchObject({
+			name: "MetricBaselineUnavailableError",
+			code: "metric_baseline_unavailable",
+		});
+		expect(await reader.latest("ratio")).toBeNull();
+		for (mode of ["absent", "failed"] as const)
+			expect(await pinMoves([], input, { resolver, baselines })).toMatchObject([
+				{ baselineObservationId: null },
+			]);
+		mode = "fresh";
+		expect(await pinMoves([], input, { resolver, baselines })).toMatchObject([
+			{ baselineObservationId: fresh.id },
+		]);
+		mode = "outage";
+		expect(
+			await pinMoves(
+				[{ ...input[0]!, baselineObservationId: fresh.id }],
+				input,
+				{ resolver, baselines },
+			),
+		).toMatchObject([{ baselineObservationId: fresh.id }]);
 	});
 	it("projects the same pinned and latest IDs through the work-items seam", async () => {
 		const current = {

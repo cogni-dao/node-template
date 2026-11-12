@@ -47,10 +47,14 @@ export function createWorkMetricReader(
 	},
 	now: () => Date = () => new Date(),
 ) {
-	const latest = async (id: string) => {
+	const readLatest = async (id: string, requireReadable: boolean) => {
 		const view = await service.read(id);
 		const attempt = view.latestAttempt;
-		if (!attempt) return null;
+		if (!attempt) {
+			if (requireReadable && view.viewState === "error")
+				throw new MetricError("metrics_unavailable", 503);
+			return null;
+		}
 		const age = now().getTime() - Date.parse(attempt.window.end);
 		const fresh =
 			Number.isFinite(age) &&
@@ -65,9 +69,9 @@ export function createWorkMetricReader(
 		};
 	};
 	return {
-		latest,
+		latest: (id: string) => readLatest(id, false),
 		async baselineId(id: string) {
-			const attempt = await latest(id);
+			const attempt = await readLatest(id, true);
 			return attempt?.viewState === "ok" &&
 				attempt.status === "ok" &&
 				attempt.value !== null &&

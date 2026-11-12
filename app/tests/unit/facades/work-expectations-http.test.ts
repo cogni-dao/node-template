@@ -56,6 +56,7 @@ describe("authenticated work metric projection", () => {
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(predictionBatch).toHaveBeenCalledOnce();
     expect(predictionBatch).toHaveBeenCalledWith([binding(baselineId)], input.signal);
+    expect(log.info).toHaveBeenCalledWith(expect.objectContaining({ event: "work.expectations.read", status: 200, outcome: "success" }), expect.any(String));
     expect((await response.json()).items[0].predictions).toEqual([
       { metricId: "m", expected: "gte 5 count", observed: `failing · 3 count · ${otherId} · source_failed` },
       { metricId: "m", expected: "gte 5 count", observed: "unresolved (metric or baseline mismatch)" },
@@ -63,8 +64,48 @@ describe("authenticated work metric projection", () => {
   });
   it("fails closed when metrics authority is unavailable", async () => {
     predictionBatch.mockRejectedValue(new Error("authority unavailable"));
-    const body = await (await request()).json();
-    expect(body.items[0].predictions[0].observed).toBe("unresolved");
+    const response = await request();
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.items[0]).toMatchObject({ title: "Hypothesis", content: "content", outcomes: [] });
+    expect(body.items[0].predictions[0].observed).toBe("unavailable (metrics_unavailable)");
+    expect(body.items[0].predictions[1].observed).toBe("unresolved (metric or baseline mismatch)");
+    expect(log.info).toHaveBeenCalledWith(expect.objectContaining({ event: "work.expectations.read", status: 200, outcome: "error", errorCode: "metrics_unavailable" }), expect.any(String));
+    expect(JSON.stringify(log.info.mock.calls)).not.toContain("authority unavailable");
+  });
+  it("keeps healthy results and recorded outcomes if one matched result is unavailable", async () => {
+    get.mockResolvedValue({ ...item, moves: [move, { ...move, baselineObservationId: otherId }] });
+    readWorkEdo.mockResolvedValue({ items: [{ hypothesis: { id: "hyp.1", title: "Hypothesis", content: "content", kpiBindings: [binding(baselineId), binding(otherId)] }, outcomes: [{ id: "out.1", title: "Outcome", content: "Recorded" }], truncated: false }], truncated: false });
+    const response = await request();
+    const body = await response.json();
+    expect(response.status).toBe(200);
+    expect(body.items[0].outcomes).toEqual([{ id: "out.1", title: "Outcome", content: "Recorded" }]);
+    expect(body.items[0].predictions[0].observed).toContain(`failing · 3 count · ${otherId}`);
+    expect(body.items[0].predictions[1].observed).toBe("unavailable (metrics_unavailable)");
+    expect(log.info).toHaveBeenCalledWith(expect.objectContaining({ event: "work.expectations.read", status: 200, outcome: "error", errorCode: "metrics_unavailable" }), expect.any(String));
+  });
+  it("records degraded telemetry for an explicit unreadable batch position", async () => {
+    predictionBatch.mockResolvedValue([{ viewState: "error", assessment: { status: "not_measured", value: null, unit: "count", observationId: null, reason: "source_failed" } }]);
+    const response = await request();
+    const body = await response.json();
+    expect(response.status).toBe(200);
+    expect(body.items[0].predictions[0].observed).toContain("not_measured · source_failed · error");
+    expect(log.info).toHaveBeenCalledWith(expect.objectContaining({ event: "work.expectations.read", status: 200, outcome: "error", errorCode: "metrics_unavailable" }), expect.any(String));
+  });
+  it("marks matched evidence unavailable when the metrics service is missing", async () => {
+    (fake.container as { goalMetrics?: unknown }).goalMetrics = undefined;
+    const response = await request();
+    expect(response.status).toBe(200);
+    expect((await response.json()).items[0].predictions[0].observed).toBe("unavailable (metrics_unavailable)");
+    expect(log.info).toHaveBeenCalledWith(expect.objectContaining({ event: "work.expectations.read", outcome: "error", errorCode: "metrics_unavailable" }), expect.any(String));
+  });
+  it("does not report a metrics failure when there are no matched bindings", async () => {
+    (fake.container as { goalMetrics?: unknown }).goalMetrics = undefined;
+    get.mockResolvedValue({ ...item, moves: [] });
+    const response = await request();
+    expect(response.status).toBe(200);
+    expect((await response.json()).items[0].predictions[0].observed).toBe("unresolved (metric or baseline mismatch)");
+    expect(log.info).toHaveBeenCalledWith(expect.objectContaining({ event: "work.expectations.read", status: 200, outcome: "success" }), expect.any(String));
   });
   it("uses one shared projection for detail, table and composed board", async () => {
     listSummaries.mockResolvedValue({ items: [item], pageInfo: { endCursor: null, hasMore: false } });
