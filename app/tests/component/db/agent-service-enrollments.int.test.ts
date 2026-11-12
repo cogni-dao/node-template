@@ -76,7 +76,11 @@ describe("agent service enrollments (real Postgres)", () => {
 
   const enrollmentHarness: EnrollmentConformanceHarness = {
     describe,
-    it,
+    // This row performs 250 sequential real admissions, not one latency-sensitive operation.
+    // Keep every public-path assertion while allowing the SQL fixture's cumulative setup cost.
+    it: (name, fn) => name === "retained identity250 cap never deletes an older marked principal"
+      ? it(name, fn, 30000)
+      : it(name, fn),
     expect,
     async setup() {
       await cleanup();
