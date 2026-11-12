@@ -12,3 +12,15 @@ file, and it must not copy node-template's `DROP TABLE IF EXISTS ... CASCADE`, w
 4. Run `db:check`. The journal `when` must be greater than every earlier entry.
 
 The store needs a BYPASSRLS (service role) connection: the table has no policy, so the app role sees nothing.
+
+# agent_proofs migration template (0.4.0)
+
+`agent_proofs.sql` is node-template's `0041_agent_proof_challenges.sql`: the tables for binding a GitHub account, recovering a key and stopping an agent.
+
+- `agent_proof_challenges`: one proof challenge (`purpose` `bind` or `recover`). Only sha256 of the nonce and of the requester's secret is stored.
+- `agent_stops`: one admin stop of one agent. `lifted_at IS NULL` means stopped. A row, lifted or not, also kills the user's signed keys for good.
+
+Same steps as above: add both tables to the node's schema package, run the node's `db:generate`, append the hand-written part (the two `FORCE ROW LEVEL SECURITY`
+lines at the end), run `db:check`, and keep the journal `when` above every earlier entry. The tables must exist BEFORE the code serves traffic: the signed-key gate
+(`everConfirmed`) reads `agent_stops`. The node needs `user_bindings` and `identity_events` (the bind writes both, in one transaction) and `agent_principals`.
+Both tables need a BYPASSRLS (service role) connection.

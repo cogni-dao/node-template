@@ -156,6 +156,11 @@ export const serverSchema = z.object({
   GH_REVIEW_APP_ID: optionalString,
   GH_REVIEW_APP_PRIVATE_KEY_BASE64: optionalString,
 
+  // Agent proof issues (task.0091, task.0095): public GitHub issues, LOWERCASE `owner/repo#number` separated by comma or space, where an agent posts its proof
+  // line to bind its GitHub account or recover a key. Not a secret: workload `variables` (one list names both envs' issues; the operator reads only its own org).
+  // Empty = every proof route answers 503 `proof_unavailable`. This node holds no GitHub credential: the operator (DOMAIN) reads the comment and signs it.
+  AGENT_PROOF_ISSUES: optionalString,
+
   // Billing ingest token - Bearer auth for LiteLLM generic_api callback → billing ingest endpoint
   // Per billing-ingest-spec: CALLBACK_AUTHENTICATED invariant. Min 32 chars to reduce weak-token risk.
   // Required: Billing ingest endpoint will reject all callbacks without this token.

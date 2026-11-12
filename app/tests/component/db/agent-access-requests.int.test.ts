@@ -35,6 +35,7 @@ import { DELETE as rolesDelete, GET as rolesGet, POST as rolesPost } from "@/app
 import {
   type AgentAuthoritySql,
   createAgentToolAuthority,
+  MAX_ADMIN_KEY_ROWS,
   MAX_ADMIN_OUTSIDE_ROWS,
 } from "@/bootstrap/agent-authority";
 // A wallet of its own, so this file never fights another component file for the repo-spec approver's unique wallet binding.
@@ -140,7 +141,10 @@ describe("access requests: an ask is an off row (real Postgres)", () => {
     expect(live?.granted_at).not.toBeNull();
     expect(await door(agent)).toMatchObject({ decision: "allow", basis: "role" });
     const outside = (await adminView()).permissions.filter((r) => r.section === "outside" && r.principalUserId === agent);
-    expect(outside).toEqual([expect.objectContaining({ who: "Helper bot", on: true, scope: SCOPE })]);
+    // The role row, and the keys row (task.0091): a role-holding agent with no confirmed key and no stop is On, and the stop switch is the keys row.
+    expect(outside.filter((r) => r.scope === SCOPE)).toEqual([expect.objectContaining({ who: "Helper bot", on: true, scope: SCOPE })]);
+    expect(outside.filter((r) => r.scope === "agent:keys")).toEqual([expect.objectContaining({ who: "Helper bot", on: true, scope: "agent:keys" })]);
+    expect(outside).toHaveLength(2);
 
     as(agent, "bearer");
     expect((await (await mine()).json()).requests).toEqual([expect.objectContaining({ scope: SCOPE, state: "granted" })]);
@@ -242,7 +246,14 @@ describe("access requests: an ask is an off row (real Postgres)", () => {
         await service`INSERT INTO agent_roles (principal_user_id, scope, approved_by, granted_at) VALUES (${id}, 'edo:write', ${admin}, now())`;
       }
       const view = await adminViewFull();
-      expect(view.permissions.filter((r) => r.section !== "node")).toHaveLength(MAX_ADMIN_OUTSIDE_ROWS);
+      // Two bounds, each documented in agent-authority.ts: at most MAX_ADMIN_OUTSIDE_ROWS role rows, and, beside them, at most MAX_ADMIN_KEY_ROWS keys rows
+      // (one per outside agent that holds a sign-in key). `more` counts what both cut.
+      const keys = view.permissions.filter((r) => r.scope === "agent:keys");
+      const roleRows = view.permissions.filter((r) => r.section !== "node" && r.scope !== "agent:keys");
+      expect(roleRows).toHaveLength(MAX_ADMIN_OUTSIDE_ROWS);
+      expect(keys.length).toBeGreaterThan(0);
+      expect(keys.length).toBeLessThanOrEqual(MAX_ADMIN_KEY_ROWS);
+      expect(view.permissions.length - view.permissions.filter((r) => r.section === "node").length).toBeLessThanOrEqual(MAX_ADMIN_OUTSIDE_ROWS + MAX_ADMIN_KEY_ROWS);
       expect(view.more).toBeGreaterThanOrEqual(3);
       expect(view.permissions.filter((r) => r.section === "node").length).toBeGreaterThan(0); // this node's AI is never cut
     } finally {

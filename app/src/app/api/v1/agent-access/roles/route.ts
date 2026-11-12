@@ -12,18 +12,31 @@
  *     approves (AUTHORITY_IS_NOT_KIND); AGENTS_HOLD_NO_WALLET is a payout guard, not an authority rule.
  *   - FAIL_CLOSED_WITH_DISTINCTION: non-admin write is 403 `authz_denied`; no configured admins is 503 `authz_unavailable`.
  *   - NODE_DECLARED_SCOPES: an undeclared scope is 400 before any write.
+ *   - KEYS_SWITCH (task.0091): the scope string `agent:keys` is NOT a declared scope. DELETE on it stops the agent (every credential dies, bind and
+ *     recover are refused, a signed key answers 401 `v1_superseded`); POST lifts the stop and mints nothing. It needs `principalUserId` (never a slug),
+ *     `deny: true` is 400, and it calls the SAME package functions and admin check as the bearer twin (`revoke-principal`, `lift-stop`).
  *   - Logs `agent_role.granted` / `agent_role.revoked`; no secrets.
  * Side-effects: IO (service-role database read and write)
  * Links: packages/agent-grants, src/bootstrap/agent-authority.ts, https://cognidao.org/knowledge/ai-access-surface-design
  * @public
  */
 
-import { AgentRolesError, type PrincipalRef } from "@cogni/agent-grants";
+import { type AdminCheck, AGENT_KEYS_SCOPE, AgentRolesError, type PrincipalRef } from "@cogni/agent-grants";
+import {
+  type CredentialHttpInput,
+  type CredentialStore,
+  liftPrincipalStop,
+  revokePrincipalCredentials,
+  type StopActor,
+} from "@cogni/agent-grants/credentials";
 import { agentRolesListOperation, agentRolesOperation } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
 
+import { answerStoreOutage } from "@/app/_lib/auth/agent-credential-route";
+import { answerProof } from "@/app/_lib/auth/agent-proof-route";
 import { refuseNonSession } from "@/app/_lib/auth/human-plane";
 import { getSessionUser } from "@/app/_lib/auth/session";
+import { getAgentCredentialStore } from "@/bootstrap/agent-credentials";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { EVENT_NAMES } from "@/shared/observability";
@@ -66,7 +79,23 @@ export const GET = wrapRouteHandlerWithLogging(
   }
 );
 
-function writeRoute(routeId: string, write: Writer) {
+/** The keys switch for one verb: the package call, its HTTP input, and the success event. */
+type KeysRunner = (
+  store: CredentialStore,
+  adminCheck: AdminCheck,
+  actor: StopActor
+) => Promise<{ input: CredentialHttpInput; ok: boolean; event: string; revokedCount?: number }>;
+
+const stopKeys: KeysRunner = async (store, adminCheck, actor) => {
+  const result = await revokePrincipalCredentials(store, adminCheck, actor);
+  return { input: { op: "stop", result }, ok: result.ok, event: EVENT_NAMES.AGENT_CREDENTIAL_REVOKED_ALL, ...(result.ok ? { revokedCount: result.revokedCount } : {}) };
+};
+const liftKeys: KeysRunner = async (store, adminCheck, actor) => {
+  const result = await liftPrincipalStop(store, adminCheck, actor);
+  return { input: { op: "lift", result }, ok: result.ok, event: EVENT_NAMES.AGENT_CREDENTIAL_STOP_LIFTED };
+};
+
+function writeRoute(routeId: string, write: Writer, keys: KeysRunner) {
   return wrapRouteHandlerWithLogging(
     { routeId, auth: { mode: "optional", getSessionUser } },
     async (ctx, request, sessionUser) => {
@@ -94,6 +123,30 @@ function writeRoute(routeId: string, write: Writer) {
       const parsed = agentRolesOperation.input.safeParse(body);
       if (!parsed.success) {
         return json({ error: "invalid input", issues: parsed.error.issues }, 400);
+      }
+
+      if (parsed.data.scope === AGENT_KEYS_SCOPE) {
+        const targetUserId = parsed.data.principalUserId;
+        if (targetUserId === undefined || parsed.data.deny === true) return json({ error: "invalid input" }, 400);
+        const principalUserId = targetUserId;
+        return answerStoreOutage(ctx, routeId, async () => {
+          const done = await keys(getAgentCredentialStore(), authority.adminCheck, { actorUserId: sessionUser.id, targetUserId, plane: "human" });
+          if (!done.ok) {
+            // A refusal is the package's answer (status, body, headers); the terminal event is `agent.credential.refused`.
+            return answerProof(ctx, routeId, done.input, { kind: "credential", ids: { actorUserId: sessionUser.id, targetUserId } });
+          }
+          ctx.log.info(
+            {
+              event: done.event,
+              actorUserId: sessionUser.id,
+              targetUserId,
+              plane: "human",
+              ...(done.revokedCount !== undefined ? { revokedCount: done.revokedCount } : {}),
+            },
+            done.event
+          );
+          return json(agentRolesOperation.output.parse({ scope: AGENT_KEYS_SCOPE, principalUserId, changed: true }));
+        });
       }
 
       const ref: PrincipalRef =
@@ -133,17 +186,21 @@ function writeRoute(routeId: string, write: Writer) {
   );
 }
 
-/** Flipping a row ON: approves a pending ask, or grants one of this node's own AI directly. */
-export const POST = writeRoute("agent.access.roles.grant", async (authority, input) => {
-  const { principalUserId, created } = await authority.grantRole({
-    ...input.ref,
-    scope: input.scope,
-    approvedBy: input.adminUserId,
-  });
-  return { principalUserId, changed: created };
-});
+/** Flipping a row ON: approves a pending ask, or grants one of this node's own AI directly. On the keys row: lifts the stop. */
+export const POST = writeRoute(
+  "agent.access.roles.grant",
+  async (authority, input) => {
+    const { principalUserId, created } = await authority.grantRole({
+      ...input.ref,
+      scope: input.scope,
+      approvedBy: input.adminUserId,
+    });
+    return { principalUserId, changed: created };
+  },
+  liftKeys
+);
 
-/** Flipping a row OFF (revoke), or the x on a pending ask (`deny: true`). */
+/** Flipping a row OFF (revoke), or the x on a pending ask (`deny: true`). On the keys row: stops the agent. */
 export const DELETE = writeRoute("agent.access.roles.revoke", async (authority, input) => {
   if (input.deny) {
     const { principalUserId, denied } = await authority.denyRequest({
@@ -159,4 +216,4 @@ export const DELETE = writeRoute("agent.access.roles.revoke", async (authority, 
     revokedBy: input.adminUserId,
   });
   return { principalUserId, changed: revoked };
-});
+}, stopKeys);

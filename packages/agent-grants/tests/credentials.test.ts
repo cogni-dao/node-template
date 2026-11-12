@@ -17,7 +17,7 @@ runCredentialConformance({
   it,
   expect,
   async setup(users: Record<string, ConformanceFacts>) {
-    const ids = Object.fromEntries(Object.keys(users).map((name) => [name, `user-${name}`]));
+    const ids = Object.fromEntries(Object.keys(users).map((name) => [name, `user-${name}-${crypto.randomUUID()}`]));
     const facts = Object.fromEntries(Object.entries(users).map(([name, f]) => [ids[name] as string, f]));
     current = memoryCredentialStore({ users: facts });
     return { store: current.store, ids };
@@ -37,6 +37,24 @@ runCredentialConformance({
     const user = current?.users[userId];
     if (!user) throw new Error("unknown user");
     user.roles = true;
+  },
+  async expireChallenge(challengeId) {
+    const c = current?.challenges.find((x) => x.id === challengeId);
+    if (!c || !current) throw new Error("unknown challenge");
+    c.expiresAt = current.clock.now - 1000;
+  },
+  async challengeInfo(challengeId) {
+    const c = current?.challenges.find((x) => x.id === challengeId);
+    return c ? { attempts: c.attempts, consumed: c.consumedAt !== null } : null;
+  },
+  async credentialRows(userId) {
+    return current?.rows.filter((r) => r.userId === userId).length ?? 0;
+  },
+  async githubBindings(userId) {
+    return current?.bindingsOf(userId) ?? [];
+  },
+  async bindEvents(userId) {
+    return current?.identityEvents.filter((e) => e.userId === userId).length ?? 0;
   },
   broken: () => memoryCredentialStore({ users: {}, failing: true }).store,
   storedHash: async (credentialId) => current?.rows.find((r) => r.id === credentialId)?.tokenHash ?? null,

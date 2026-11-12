@@ -16,6 +16,10 @@
  *   - SERVICE_ROLE_ONLY_WRITES: `agent_credentials` and `agent_roles` have ENABLE + FORCE RLS and no policy (deny-all for the app role).
  *     `agent_principals` is readable by every role (its select policy) and writable only by a BYPASSRLS service
  *     connection. FORCE is added by hand in the migration.
+ *   - PROOF_CHALLENGES_ARE_SERVICE_ONLY / AGENT_STOPS_ARE_SERVICE_ONLY: `agent_proof_challenges` (a GitHub-comment proof challenge: sha256 of the nonce and
+ *     of the requester's secret, never the values) and `agent_stops` (an admin stop of one agent: stopped, or lifted) have ENABLE + FORCE RLS and no policy.
+ *   - STOP_ROW_KILLS_SIGNED_KEYS: an `agent_stops` row, lifted or not, means the user's signed (v1) keys are dead for good. It is its own table because a
+ *     signed-key agent has no `agent_principals` row, and the credential trigger refuses a credential row for such a user.
  *   - AGENTS_HOLD_NO_WALLET (a payout guard, enforced in the database; it does not decide who may be admin): a trigger on `user_bindings` (migration) refuses a wallet
  *     binding for any user that has an `agent_principals` row, on every binding path.
  * Side-effects: none (schema definitions only)
@@ -28,6 +32,7 @@ import {
   check,
   foreignKey,
   index,
+  integer,
   pgPolicy,
   pgTable,
   text,
@@ -147,3 +152,49 @@ export const agentCredentials = pgTable(
     index("agent_credentials_user_idx").on(table.userId),
   ]
 ).enableRLS();
+
+/**
+ * One proof challenge (task.0091): an agent proves it controls a GitHub account by posting the node-made proof line as a public comment.
+ * `purpose = 'bind'` belongs to an authenticated principal (`principal_user_id`); `'recover'` is anonymous (null principal). The node keeps only
+ * sha256 of the nonce (inside the public proof line) and of `challengeSecret` (shown once to the requester, never stored).
+ * `attempts` counts failed comment checks only; a wrong secret counts nothing. `fetched_at` stamps the last GitHub read, for the node-wide budget.
+ */
+export const agentProofChallenges = pgTable(
+  "agent_proof_challenges",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    purpose: text("purpose").notNull(),
+    nonceHash: text("nonce_hash").notNull(),
+    secretHash: text("secret_hash").notNull(),
+    principalUserId: text("principal_user_id").references(() => users.id),
+    issuedAt: timestamp("issued_at", { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    attempts: integer("attempts").notNull().default(0),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true }),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+  },
+  (table) => [
+    // S1 widens this CHECK to `enroll`.
+    check("agent_proof_challenges_purpose_canonical", sql`${table.purpose} IN ('bind','recover')`),
+    check(
+      "agent_proof_challenges_bind_has_principal",
+      sql`${table.purpose} <> 'bind' OR ${table.principalUserId} IS NOT NULL`
+    ),
+    index("agent_proof_challenges_issued_idx").on(table.issuedAt),
+    index("agent_proof_challenges_principal_idx").on(table.principalUserId),
+  ]
+).enableRLS();
+
+/**
+ * One admin stop of one agent (task.0091). `lifted_at IS NULL` = STOPPED: the agent cannot bind or recover and every key is dead.
+ * A row, lifted or not, also means the user's signed keys are dead for good (read inside `everConfirmed`). Stop and lift never write `approved_by`.
+ */
+export const agentStops = pgTable("agent_stops", {
+  userId: text("user_id")
+    .primaryKey()
+    .references(() => users.id),
+  stoppedAt: timestamp("stopped_at", { withTimezone: true }).notNull().defaultNow(),
+  stoppedBy: text("stopped_by").notNull(),
+  liftedAt: timestamp("lifted_at", { withTimezone: true }),
+  liftedBy: text("lifted_by"),
+}).enableRLS();

@@ -3,7 +3,7 @@
 
 /**
  * Module: `@tests/component/db/agent-credentials.int.test`
- * Purpose: The revocable agent key store against real Postgres with migration 0039 applied (task.0070). Runs the package's OWN conformance suite
+ * Purpose: The revocable agent key store against real Postgres with migrations 0039-0041 applied (task.0070, task.0091). Runs the package's OWN conformance suite
  *   (`runCredentialConformance`, SUITE_GATES_RELEASE) over the real SQL, then the rows only SQL can prove: the RLS wall, the
  *   external-principal trigger, hash uniqueness, the renew check and the same-users.id upgrade.
  * Scope: `@cogni-dao/agent-grants/credentials` + migration 0039. No HTTP.
@@ -60,11 +60,14 @@ describe("agent credentials (real Postgres)", () => {
   });
 
   afterAll(async () => {
+    await service?.unsafe("DELETE FROM agent_proof_challenges WHERE principal_user_id = ANY($1) OR principal_user_id IS NULL", [users]);
+    await service?.unsafe("DELETE FROM agent_stops WHERE user_id = ANY($1)", [users]);
     await service?.unsafe("DELETE FROM agent_credentials WHERE user_id = ANY($1)", [users]);
     await service?.unsafe("DELETE FROM agent_roles WHERE principal_user_id = ANY($1) OR approved_by = ANY($1)", [users]);
     await service?.unsafe("DELETE FROM agent_principals WHERE user_id = ANY($1)", [users]);
     await service?.unsafe("DELETE FROM user_bindings WHERE user_id = ANY($1)", [users]);
-    await service?.unsafe("DELETE FROM users WHERE id = ANY($1)", [users]);
+    // identity_events is append-only (a trigger refuses DELETE) and references users: a user that was bound keeps its row (the test database is throwaway).
+    await service?.unsafe("DELETE FROM users u WHERE u.id = ANY($1) AND NOT EXISTS (SELECT 1 FROM identity_events e WHERE e.user_id = u.id)", [users]);
     await service?.end({ timeout: 1 });
     await app?.end({ timeout: 1 });
   });
@@ -76,6 +79,8 @@ describe("agent credentials (real Postgres)", () => {
     it,
     expect,
     async setup(facts) {
+      // The proof limits (per hour, GitHub budget) are node-wide counts: every row starts from an empty challenge table.
+      await service`DELETE FROM agent_proof_challenges`;
       const ids: Record<string, string> = {};
       for (const [name, f] of Object.entries(facts)) {
         const id = await makeUser();
@@ -84,10 +89,11 @@ describe("agent credentials (real Postgres)", () => {
         if (f.wallet)
           await service`UPDATE users SET wallet_address = ${`0x${randomUUID().replaceAll("-", "").padEnd(40, "0").slice(0, 40)}`} WHERE id = ${id}`;
         if (f.internal) await service`INSERT INTO agent_principals (kind, slug, user_id) VALUES ('internal', ${`conf-${id}`}, ${id})`;
+        if (f.agent) await service`INSERT INTO agent_principals (kind, user_id) VALUES ('external', ${id}) ON CONFLICT (user_id) DO NOTHING`;
         if (f.roles)
           await service`INSERT INTO agent_roles (principal_user_id, scope, approved_by, granted_at) VALUES (${id}, 'probe:scope', ${admin}, now())`;
-        if (f.github)
-          await service`INSERT INTO user_bindings (id, user_id, provider, external_id) VALUES (${randomUUID()}, ${id}, 'github', ${`gh-${randomUUID()}`})`;
+        if (f.github || f.githubId)
+          await service`INSERT INTO user_bindings (id, user_id, provider, external_id) VALUES (${randomUUID()}, ${id}, 'github', ${f.githubId ?? `gh-${randomUUID()}`})`;
       }
       return { store: store(), ids };
     },
@@ -114,6 +120,18 @@ describe("agent credentials (real Postgres)", () => {
       (await service`SELECT token_hash FROM agent_credentials WHERE id = ${credentialId}`)[0]?.token_hash ?? null,
     liveSuccessors: async (predecessorId) =>
       (await service`SELECT count(*)::int AS n FROM agent_credentials WHERE predecessor_id = ${predecessorId} AND confirmed_at IS NULL AND revoked_at IS NULL`)[0]?.n ?? 0,
+    async expireChallenge(challengeId) {
+      await service`UPDATE agent_proof_challenges SET expires_at = now() - interval '1 second' WHERE id = ${challengeId}::uuid`;
+    },
+    async challengeInfo(challengeId) {
+      const row = (await service`SELECT attempts, consumed_at FROM agent_proof_challenges WHERE id = ${challengeId}::uuid`)[0];
+      return row ? { attempts: Number(row.attempts), consumed: row.consumed_at !== null } : null;
+    },
+    credentialRows: async (userId) => Number((await service`SELECT count(*)::int AS n FROM agent_credentials WHERE user_id = ${userId}`)[0]?.n ?? 0),
+    githubBindings: async (userId) =>
+      (await service`SELECT external_id FROM user_bindings WHERE user_id = ${userId} AND provider = 'github'`).map((r) => String(r.external_id)),
+    bindEvents: async (userId) =>
+      Number((await service`SELECT count(*)::int AS n FROM identity_events WHERE user_id = ${userId} AND event_type = 'bind'`)[0]?.n ?? 0),
   });
 
   describe("schema (rows only SQL can prove)", () => {
@@ -124,6 +142,23 @@ describe("agent credentials (real Postgres)", () => {
       await expect(
         app`INSERT INTO agent_credentials (user_id, token_hash, created_from, expires_at, renew_until)
           VALUES (${user}, 'x', 'rotation', now(), now() + interval '1 day')`
+      ).rejects.toThrow();
+    });
+
+    it("the proof tables are service-role only: the app role sees no challenge and no stop row, and cannot write one (migration 0041)", async () => {
+      const user = await makeUser();
+      await service`INSERT INTO agent_stops (user_id, stopped_by) VALUES (${user}, ${user})`;
+      await service`INSERT INTO agent_proof_challenges (purpose, nonce_hash, secret_hash, principal_user_id, expires_at)
+        VALUES ('bind', 'n', 's', ${user}, now() + interval '10 minutes')`;
+      expect(await app`SELECT 1 FROM agent_stops`).toHaveLength(0);
+      expect(await app`SELECT 1 FROM agent_proof_challenges`).toHaveLength(0);
+      await expect(app`INSERT INTO agent_stops (user_id, stopped_by) VALUES (${user}, 'x')`).rejects.toThrow();
+      // A bind challenge needs a principal; the purpose is canonical.
+      await expect(
+        service`INSERT INTO agent_proof_challenges (purpose, nonce_hash, secret_hash, expires_at) VALUES ('bind', 'n', 's', now() + interval '1 minute')`
+      ).rejects.toThrow();
+      await expect(
+        service`INSERT INTO agent_proof_challenges (purpose, nonce_hash, secret_hash, expires_at) VALUES ('enroll', 'n', 's', now() + interval '1 minute')`
       ).rejects.toThrow();
     });
 

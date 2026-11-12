@@ -76,7 +76,10 @@ export function getNodeOriginUrl(): string {
 // unknown kid with a cooldown.
 const jwksCache = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
 
-function getJwks(issuerUrl: string): ReturnType<typeof createRemoteJWKSet> {
+/** The cached remote JWKS of the pinned issuer. Shared with the proof-comment verifier (`operator-proof-verifier.ts`): one key set, one cache. */
+export function getOperatorJwks(
+	issuerUrl: string,
+): ReturnType<typeof createRemoteJWKSet> {
 	let jwks = jwksCache.get(issuerUrl);
 	if (!jwks) {
 		jwks = createRemoteJWKSet(new URL(`${issuerUrl}/.well-known/jwks.json`), {
@@ -96,7 +99,7 @@ export function resetOperatorAttestationJwksCacheForTests(): void {
 // Errors that prove the TOKEN is bad (tampered/expired/wrong key/claims).
 // Everything else (network failure, timeout, malformed JWKS document) is an
 // issuer availability problem → fail closed as jwks_unavailable.
-function isTokenError(error: unknown): boolean {
+export function isTokenError(error: unknown): boolean {
 	return (
 		error instanceof errors.JWTExpired ||
 		error instanceof errors.JWTClaimValidationFailed ||
@@ -120,7 +123,7 @@ export async function verifyOperatorAttestation(
 	try {
 		const issuerUrl = getOperatorIssuerUrl();
 		const expectedAudience = identityAttestationAudience(expectedNodeId);
-		const { payload } = await jwtVerify(token, getJwks(issuerUrl), {
+		const { payload } = await jwtVerify(token, getOperatorJwks(issuerUrl), {
 			issuer: issuerUrl,
 			audience: expectedAudience,
 			algorithms: ["EdDSA"],

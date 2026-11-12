@@ -35,7 +35,7 @@ export {
   type SameDoorRoute,
 } from "./same-door";
 export { agentNameKey, hasHiddenCharacters } from "./names";
-export { buildNodeAiView } from "./node-ai";
+export { AGENT_KEYS_SCOPE, AGENT_KEYS_VIEW, buildNodeAiView } from "./node-ai";
 export { createPostgresAgentGrantsStore, type SqlTag } from "./postgres";
 export {
   AgentRolesError,
