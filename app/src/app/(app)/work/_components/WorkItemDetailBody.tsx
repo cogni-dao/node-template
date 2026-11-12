@@ -9,13 +9,14 @@ import {
 	WorkExpectations,
 	type WorkMetric,
 } from "@cogni/knowledge-base-ui";
-import { WorkMoves } from "@cogni/knowledge-base-ui/goals";
+import { WorkMoveLinks } from "@cogni/knowledge-base-ui/goals";
 import type { WorkItemDto } from "@cogni/node-contracts";
 import { SheetDescription, SheetHeader, SheetTitle } from "@/components/sheet";
 import type { ReactElement } from "react";
 import { Markdown } from "@/components/markdown";
 
 import { EntityCitationLinks } from "../../_components/EntityCitationLinks";
+import { PeekLink } from "../../_components/EntityPeek";
 import { isWorkItemNotFoundError } from "../_api/fetchWorkItems";
 import { fetchWorkExpectations } from "../_api/fetchWorkExpectations";
 import { StatusPill, TypeIcon } from "./work-item-icons";
@@ -118,7 +119,11 @@ export function WorkItemDetailBody({
 					</SheetHeader>
 
 					<div className="mt-6 flex flex-col gap-5 px-1">
-						<WorkMoves moves={item.moves ?? NO_MOVES} labels={item.labels} />
+						<WorkMoveLinks
+							moves={item.moves ?? NO_MOVES}
+							labels={item.labels}
+							LinkComponent={PeekLink}
+						/>
 						<WorkExpectations
 							itemId={item.id}
 							moves={item.moves ?? NO_MOVES}

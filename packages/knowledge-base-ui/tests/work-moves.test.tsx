@@ -3,11 +3,11 @@
 
 /**
  * Module: `@cogni/knowledge-base-ui/work-moves.test`
- * Purpose: Proves a work item leads with the KPI it moves (task.0112): the pure goal resolver (KPI, serves, label spellings, unknown), the detail `WorkMoves` block with and without moves, and the table's Goal column showing the resolved title (never the raw label) with no Project column.
+ * Purpose: Proves a work item leads with the KPI it moves (task.0112): the pure goal resolver (KPI, serves, label spellings, unknown), the detail Moves section (existing link rows plus `WorkMetricDetails`) with and without moves, and the table's Goal column showing the resolved title (never the raw label) with no Project column.
  * Scope: Package exports + fixture goal progress. No node app code, router or URL state.
- * Invariants: GOAL_IS_INHERITED, ONE_SUBJECT_ONE_COMPONENT, GAP_IS_VISIBLE, ONE_READ_FOR_ALL_ROWS.
+ * Invariants: GOAL_IS_INHERITED, ONE_ROW_RENDERER, GAP_IS_VISIBLE, NEVER_DEAD_END, ONE_READ_FOR_ALL_ROWS.
  * Side-effects: DOM rendering in jsdom
- * Links: task.0112, ../src/goals/work-goals.ts, ../src/goals/work-moves.tsx, ../src/work-item-columns.tsx
+ * Links: task.0112, ../src/goals/work-goals.ts, ../src/goals/work-move-links.tsx, ../src/work-item-columns.tsx
  */
 
 // @vitest-environment jsdom
@@ -27,7 +27,7 @@ import {
   locateMetric,
   resolveWorkGoal,
   WorkGoalsScope,
-  WorkMoves,
+  WorkMoveLinks,
 } from "../src/goals.js";
 import { createWorkItemColumns, type WorkItemRow, type WorkMetric } from "../src/index.js";
 import { assessmentFixture, goalFixture, kpiFixture } from "./_fixtures/goals-progress.js";
@@ -128,62 +128,77 @@ function renderWithGoals(ui: React.ReactElement, data: GoalsProgress | Error = f
   return { ...view, fetchGoals };
 }
 
-describe("WorkMoves", () => {
-  it("leads with Goal, then the KPI card, with direction, baseline, latest and result", async () => {
-    const { container } = renderWithGoals(<WorkMoves moves={[move("k-ratio")]} labels={[]} />);
-    const goal = await screen.findByRole("link", { name: "Alpha goal: converge" });
-    expect(goal).toHaveAttribute("href", "/knowledge/goal-alpha");
-    const card = container.querySelector('[data-kpi="k-ratio"]') as HTMLElement;
-    expect(card).not.toBeNull();
-    expect(card.getAttribute("data-card")).toBe("kpi");
-    // Goal title precedes the KPI card in document order.
-    expect(goal.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    const readout = container.querySelector('[data-move-readout="k-ratio"]') as HTMLElement;
-    expect(readout).toHaveTextContent(/Baseline 0\.80 → Latest 0\.90/);
-    expect(within(readout).getByLabelText("Expected to rise")).toHaveTextContent("↑");
-    expect(readout).toHaveTextContent("as expected");
-    expect(within(readout).getByRole("link", { name: "Baseline reading 0.80" })).toHaveAttribute(
-      "href",
-      "/knowledge/k-ratio?observation=obs-base",
-    );
-    // The same card opens the chart: one toggle button, collapsed to start.
-    expect(within(card).getByRole("button", { expanded: false })).toBeInTheDocument();
+const rowsOf = (container: HTMLElement) =>
+  [...container.querySelectorAll("a[aria-label^='outgoing']")].map((a) => a.getAttribute("aria-label"));
+
+describe("WorkMoveLinks (the item's Moves section)", () => {
+  it("draws the existing link rows for a moved KPI: moves, then its goal, then the measurement", async () => {
+    const { container } = renderWithGoals(<WorkMoveLinks moves={[move("k-ratio")]} labels={[]} />);
+    await waitFor(() => expect(rowsOf(container)).toEqual(["outgoing moves ↑ k-ratio", "outgoing goal goal-alpha"]));
+    // Each target links to its knowledge page, in the same row style as an entry's Links section.
+    expect(screen.getByRole("link", { name: "outgoing goal goal-alpha" })).toHaveAttribute("href", "/knowledge/goal-alpha");
+    expect(screen.getByRole("link", { name: "outgoing moves ↑ k-ratio" })).toHaveAttribute("href", "/knowledge/k-ratio");
+    // The existing WorkMetricDetails supplies baseline, latest and result under the rows.
+    const details = screen.getByRole("region", { name: "Affected metrics" });
+    expect(details).toHaveTextContent("Baseline");
+    expect(details).toHaveTextContent("as expected");
+    expect(rowsOf(container).length).toBe(2);
+    expect(container.querySelector("[data-kpi]")).toBeNull();
   });
 
-  it("shows Goal, KPI and the supporting metric when the moved metric serves a KPI", async () => {
+  it("adds the serving KPI row when the moved metric is a supporting metric", async () => {
     const { container } = renderWithGoals(
-      <WorkMoves moves={[move("m-created", { direction: "down", moved: "flat" })]} labels={[]} />,
+      <WorkMoveLinks moves={[move("m-created", { direction: "down", moved: "flat" })]} labels={[]} />,
     );
-    await screen.findByRole("link", { name: "Alpha goal: converge" });
-    const kpiCard = container.querySelector('[data-kpi="k-ratio"]') as HTMLElement;
-    const metricCard = container.querySelector('[data-metric="m-created"]') as HTMLElement;
-    expect(kpiCard).not.toBeNull();
-    expect(metricCard).not.toBeNull();
-    expect(kpiCard.compareDocumentPosition(metricCard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    // The item's own readout belongs to the metric it moves, not the KPI above it.
-    expect(container.querySelector('[data-chain-id="m-created"] [data-move-readout]')).not.toBeNull();
-    expect(container.querySelector('[data-chain-id="k-ratio"] [data-move-readout]')).toBeNull();
-    expect(within(container.querySelector('[data-move-readout="m-created"]') as HTMLElement).getByLabelText("Expected to fall")).toHaveTextContent("↓");
+    await waitFor(() =>
+      expect(rowsOf(container)).toEqual([
+        "outgoing moves ↓ m-created",
+        "outgoing serves k-ratio",
+        "outgoing goal goal-alpha",
+      ]),
+    );
   });
 
-  it("names the measurement gap for an item with no moves, with the goal from its label and no edit controls", async () => {
-    const { container } = renderWithGoals(<WorkMoves moves={[]} labels={["goal:goal-beta"]} />);
+  it("opens targets through the node's link component with the entity id", async () => {
+    const seen: (string | undefined)[] = [];
+    renderWithGoals(
+      <WorkMoveLinks
+        moves={[move("k-ratio")]}
+        labels={[]}
+        LinkComponent={({ entityId, href, children, ...rest }) => {
+          seen.push(entityId);
+          return (
+            <a href={href} {...rest}>
+              {children}
+            </a>
+          );
+        }}
+      />,
+    );
+    await waitFor(() => expect(seen).toContain("goal-alpha"));
+    expect(seen).toContain("k-ratio");
+  });
+
+  it("names the measurement gap for an item with no moves, with the goal row from its label", () => {
+    const { container } = renderWithGoals(<WorkMoveLinks moves={[]} labels={["goal:goal-beta"]} />);
     expect(screen.getByText("Names no KPI — measurement gap")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "why" })).toHaveAttribute(
       "href",
       "https://node-template.cognidao.org/knowledge/kpi-through-delivery",
     );
-    expect(await screen.findByRole("link", { name: "Beta goal: grow" })).toBeInTheDocument();
-    expect(container.querySelector("[data-kpi]")).toBeNull();
+    expect(rowsOf(container)).toEqual(["outgoing goal goal-beta"]);
     expect(screen.queryByRole("button")).toBeNull();
-    expect(screen.queryByText(/goal:[a-z]/)).toBeNull();
   });
 
-  it("keeps each move's direction, baseline and latest readable when the goals read fails", async () => {
-    renderWithGoals(<WorkMoves moves={[move("k-ratio")]} labels={[]} />, new Error("down"));
-    expect(await screen.findByText("Goal and KPI unavailable")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Ratio KPI" })).toBeInTheDocument();
-    expect(document.querySelector('[data-move-readout="k-ratio"]')).toHaveTextContent(/Baseline 0\.80 → Latest 0\.90/);
+  it("still shows the moves row, its measurement and the label's goal when the goals read fails", async () => {
+    const { container, fetchGoals } = renderWithGoals(
+      <WorkMoveLinks moves={[move("k-ratio")]} labels={["goal:ai-work-converges"]} />,
+      new Error("batch_unavailable"),
+    );
+    await waitFor(() => expect(fetchGoals).toHaveBeenCalled());
+    expect(rowsOf(container)).toEqual(["outgoing moves ↑ k-ratio", "outgoing goal goal-ai-work-converges"]);
+    expect(screen.getByRole("region", { name: "Affected metrics" })).toHaveTextContent("Baseline");
+    expect(container.textContent).not.toMatch(/unavailable/i);
   });
 });
 

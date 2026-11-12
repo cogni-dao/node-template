@@ -3,7 +3,7 @@
 
 /**
  * Module: `@cogni/knowledge-base-ui/goals`
- * Purpose: Subpath entry for the whole Goals capability (task.0062, story.0039; the work item's `WorkMoves` block and `WorkGoalsScope`, task.0112): the board, the Metrics view (`MetricsBoard`) with the one metric card and chart (a KPI and a supporting metric are the same component), the range control, the metric and hypothesis KPI evidence views, the read client and the shared progress hook.
+ * Purpose: Subpath entry for the whole Goals capability (task.0062, story.0039; the work item's `WorkMoveLinks` section and `WorkGoalsScope`, task.0112): the board, the Metrics view (`MetricsBoard`) with the one metric card and chart (a KPI and a supporting metric are the same component), the range control, the metric and hypothesis KPI evidence views, the read client and the shared progress hook.
  * Scope: Re-exports only. Kept off the root entry so work-board-only adopters never need the `@cogni-dao/metrics` (>= 0.7.0) and `recharts` peers. A node supplies its endpoint (`createGoalsClient`), auth (a `fetch` or request `init`), link component and hrefs, and the `?observation=` URL value; it renders no Goals markup of its own.
  * Invariants: Requires the host's `QueryClientProvider` (react-query 5). Imports no router, no node app code and no node UI kit.
  * Side-effects: none
@@ -103,13 +103,14 @@ export {
 export { NEAR_VIEWPORT_MARGIN_PX, useMetricSeries, useMetricSeriesRead, useNearViewport } from "./goals/use-metric-series.js";
 export {
   goalForLabels,
+  goalIdFromLabels,
   locateMetric,
   type MoveChain,
   type ResolvedWorkGoal,
   resolveWorkGoal,
 } from "./goals/work-goals.js";
 export { WorkGoalsScope } from "./goals/work-goals-scope.js";
-export { KPI_THROUGH_DELIVERY_HREF, WorkMoveReadout, WorkMoves } from "./goals/work-moves.js";
+export { KPI_THROUGH_DELIVERY_HREF, moveRows, WorkMoveLinks, type WorkMoveRow } from "./goals/work-move-links.js";
 export {
   GOALS_POLL_MS,
   GOALS_QUERY_KEY,

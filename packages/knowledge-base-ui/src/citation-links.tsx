@@ -85,11 +85,12 @@ const ARROW = {
 } as const;
 
 /**
- * One edge, one interactive surface: the whole row is the link (≥32px tall,
+ * One edge, one interactive surface (exported so a work item's Moves section draws
+ * the same rows): the whole row is the link (≥32px tall,
  * visible focus). Reads as arrow, relation, slug; the title or edge
  * context is the hover text only.
  */
-function CitationRow({
+export function CitationRow({
   direction,
   relation,
   tone = "muted",

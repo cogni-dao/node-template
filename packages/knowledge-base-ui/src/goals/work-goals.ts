@@ -55,6 +55,15 @@ export function goalForLabels(data: Pick<GoalsProgress, "goals">, labels: readon
   return null;
 }
 
+/** The goal id a `goal:<slug>` or `goal:goal-<slug>` label names, without needing the goals read; null when no label does. */
+export function goalIdFromLabels(labels: readonly string[]): string | null {
+  for (const label of labels) {
+    const slug = GOAL_LABEL.exec(label)?.[1];
+    if (slug) return slug.startsWith("goal-") ? slug : `goal-${slug}`;
+  }
+  return null;
+}
+
 export interface ResolvedWorkGoal {
   readonly goal: GoalProgress;
   readonly via: "kpi" | "serves" | "label";

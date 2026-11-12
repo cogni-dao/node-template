@@ -15,6 +15,7 @@ export {
   CitationLinks,
   type CitationLinksProps,
   CitationEdgeList,
+  CitationRow,
   type CitationEdgeListProps,
   type ContributionDiffRowLike,
   type ContributionEntryChange,
