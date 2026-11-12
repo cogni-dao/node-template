@@ -24,20 +24,22 @@ import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
-import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import { PostgreSqlContainer } from "@testcontainers/postgresql";
 import { randomUUID } from "node:crypto";
 import { AgentRolesError, authorizeCaller, buildNodeAiView, grantRole, revokeRole, createPostgresAgentGrantsStore, type SqlTag } from "@cogni/agent-grants";
-import { type CredentialSql, createPostgresCredentialStore, agentRolesHasRoles, hashAgentKey, confirmCredential, verifyBearer } from "@cogni/agent-grants/credentials";
+import { type CredentialSql, assertV1NotSuperseded, createPostgresCredentialStore, agentRolesHasRoles, hashAgentKey, confirmCredential, verifyBearer } from "@cogni/agent-grants/credentials";
 import { maintenanceTick, createPostgresEnrollmentStore, pollServiceEnrollment, requestServiceEnrollment, openSealed, SERVICE_ENROLLMENT_KIND, serviceEnrollmentAudience, type ServiceEnrollmentClaims } from "@cogni/agent-grants/enrollment";
 import { runEnrollmentConformance, type EnrollmentConformanceHarness } from "@cogni/agent-grants/enrollment-conformance";
 import { generateKeyPair, exportJWK } from "jose";
 import postgres, { type Sql } from "postgres";
+import { startAgentGrantsAdopter } from "./agent-grants-adopter.fixture";
+import { runCredentialConformance } from "@cogni/agent-grants/conformance";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 describe("agent service enrollments (real Postgres)", () => {
   let service: Sql;
   let app: Sql;
-  let providerContainer: StartedPostgreSqlContainer;
+  let adopter: Awaited<ReturnType<typeof startAgentGrantsAdopter>>;
   let providerServiceUrl: string;
   const admins: string[] = [];
   const client = () => service as unknown as CredentialSql;
@@ -60,33 +62,16 @@ describe("agent service enrollments (real Postgres)", () => {
   };
 
   beforeAll(async () => {
-    // Node-wide capacity must not race another file's deliberate50-ask flood. Own this file's database and real RLS roles.
-    providerContainer = await new PostgreSqlContainer("postgres:15-alpine").start();
-    const admin = postgres(providerContainer.getConnectionUri(), { max: 1 });
-    try {
-      await promisify(execFile)(process.execPath, [resolve("../scripts/db/migrate.mjs"), resolve("src/adapters/server/db/migrations")], {
-        env: { ...process.env, DATABASE_URL: providerContainer.getConnectionUri(), NODE_NAME: "node-template-provider-fixture" }, timeout: 90000,
-      });
-      await admin.unsafe("CREATE ROLE provider_app LOGIN PASSWORD 'fixture_app_only' NOSUPERUSER NOBYPASSRLS");
-      await admin.unsafe("CREATE ROLE provider_service LOGIN PASSWORD 'fixture_service_only' NOSUPERUSER BYPASSRLS");
-      await admin.unsafe("GRANT USAGE ON SCHEMA public TO provider_app, provider_service");
-      await admin.unsafe("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO provider_app, provider_service");
-      const uri = new URL(providerContainer.getConnectionUri());
-      uri.username = "provider_service"; uri.password = "fixture_service_only";
-      providerServiceUrl = uri.toString();
-      service = postgres(providerServiceUrl, { max: 8 });
-      uri.username = "provider_app"; uri.password = "fixture_app_only";
-      app = postgres(uri.toString(), { max: 2 });
-    } finally { await admin.end({ timeout: 1 }); }
+    // Real standalone adopter: only package templates, its own host prerequisites and actual non-BYPASS owner/app + BYPASS service roles.
+    adopter = await startAgentGrantsAdopter();
+    service = adopter.service; app = adopter.app; providerServiceUrl = adopter.serviceUrl;
   }, 90000);
 
   afterAll(async () => {
     await cleanup();
     await service?.unsafe("DELETE FROM agent_roles WHERE approved_by = ANY($1)", [admins]);
     await service?.unsafe("DELETE FROM users WHERE id = ANY($1)", [admins]);
-    await service?.end({ timeout: 1 });
-    await app?.end({ timeout: 1 });
-    await providerContainer?.stop();
+    await adopter?.close();
   });
 
   const enrollmentHarness: EnrollmentConformanceHarness = {
@@ -178,12 +163,16 @@ describe("agent service enrollments (real Postgres)", () => {
       let paused = false;
       const delayed = Object.assign(client().bind(null), {
         begin: <T>(fn: (tx: SqlTag) => Promise<T>): Promise<T> => client().begin(async (tx) => {
-          const observed = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
-            const rows = await tx(strings, ...values);
+          const observed = Object.assign((strings: TemplateStringsArray, ...values: unknown[]) => {
+            const pending = tx(strings, ...values) as ReturnType<SqlTag> & { cancel: () => void };
+            const result = (async () => {
+            const rows = await pending;
             if (!paused && strings.join("?").includes("SELECT id, principal_user_id FROM agent_service_enrollments")) {
               paused = true; selected(); await resumed;
             }
             return rows;
+            })();
+            return Object.assign(result, { cancel: () => pending.cancel() });
           }, tx);
           return fn(observed);
         }),
@@ -444,6 +433,56 @@ describe("agent service enrollments (real Postgres)", () => {
       expect(await grants.hasLiveRole(last, scope)).toBe(true);
     });
 
+    it("skips a locked first identity and still maintains another identity and creates an unrelated enrollment", async () => {
+      const setup = await enrollmentHarness.setup();
+      const a = await startEnrollment(setup, "busy-first");
+      const b = await startEnrollment(setup, "free-second");
+      await setup.lapse(a.principalUserId); await setup.lapse(b.principalUserId);
+      await service`UPDATE agent_service_enrollments SET expires_at = clock_timestamp() - interval '2 minutes' WHERE principal_user_id = ${a.principalUserId}`;
+      await service`UPDATE agent_authority_maintenance SET next_run_at = clock_timestamp() WHERE id = 'service-enrollment'`;
+      await service.begin(async (tx) => {
+        await tx`SELECT pg_advisory_xact_lock(hashtext(${a.principalUserId}))`;
+        const unrelated = await startEnrollment(setup, "unrelated");
+        expect(unrelated.principalCreated).toBe(true);
+        expect((await service`SELECT status FROM agent_service_enrollments WHERE principal_user_id = ${a.principalUserId}`)[0]?.status).toBe("open");
+        expect((await service`SELECT status FROM agent_service_enrollments WHERE principal_user_id = ${b.principalUserId}`)[0]?.status).toBe("expired");
+      });
+      expect(await setup.principalExists(a.principalUserId)).toBe(true);
+      expect(await setup.principalExists(b.principalUserId)).toBe(true);
+    });
+
+    it("cancels cumulative delayed SQL and rolls back lease, mutations and final bookkeeping within one budget", async () => {
+      const setup = await enrollmentHarness.setup();
+      const e = await startEnrollment(setup);
+      await setup.lapse(e.principalUserId);
+      await service`UPDATE agent_authority_maintenance SET next_run_at = clock_timestamp() WHERE id = 'service-enrollment'`;
+      const before = (await service`SELECT next_run_at FROM agent_authority_maintenance WHERE id = 'service-enrollment'`)[0]?.next_run_at;
+      const delayed = Object.assign(client().bind(null), {
+        begin: <T>(fn: (tx: SqlTag) => Promise<T>) => client().begin(async (tx) => {
+          const observed = Object.assign((strings: TemplateStringsArray, ...values: unknown[]) => {
+            const sql = strings.join("?");
+            let pending = tx(strings, ...values) as ReturnType<SqlTag> & { cancel: () => void };
+            const result = (async () => {
+              if (sql.includes("FROM candidate") || sql.includes("SELECT id, principal_user_id") || sql.includes("SET oldest_due_at")) {
+                pending = tx`SELECT pg_sleep(0.8)` as typeof pending;
+                await pending;
+                pending = tx(strings, ...values) as typeof pending;
+              }
+              return await pending;
+            })();
+            return Object.assign(result, { cancel: () => pending.cancel() });
+          }, tx);
+          return fn(observed);
+        }),
+      }) as CredentialSql;
+      const start = Date.now();
+      expect(await maintenanceTick(delayed)).toEqual({ processed: 0, due: true });
+      expect(Date.now() - start).toBeLessThan(3000); //2s server work plus bounded cancellation/rollback transport margin.
+      expect((await service`SELECT status FROM agent_service_enrollments WHERE principal_user_id = ${e.principalUserId}`)[0]?.status).toBe("open");
+      expect((await service`SELECT next_run_at FROM agent_authority_maintenance WHERE id = 'service-enrollment'`)[0]?.next_run_at).toEqual(before);
+      expect((await service`SELECT pg_try_advisory_xact_lock(hashtext('agent_service_enrollments')) AS released`)[0]?.released).toBe(true);
+    });
+
     it("maintenance is leased and bounded; expired approved identities and children persist with purge disabled", async () => {
       const setup = await enrollmentHarness.setup();
       const first = await startEnrollment(setup);
@@ -538,4 +577,136 @@ describe("service authority forward migration", () => {
       await rm(directory, { recursive: true, force: true });
     }
   }, 180000);
+});
+
+// A credentials-only consumer mounts no enrollment endpoint, but requires the same dormant authority storage contract.
+describe("published-template credentials-only adopter", () => {
+  let adopter: Awaited<ReturnType<typeof startAgentGrantsAdopter>>;
+  const historyId = randomUUID();
+  const historicalDate = new Date("2026-01-01T00:00:00Z");
+  const current = () => createPostgresCredentialStore(adopter.service as unknown as CredentialSql, { hasRoles: agentRolesHasRoles(adopter.service as unknown as SqlTag) });
+  const user = async () => {
+    const id = randomUUID();
+    await adopter.service`INSERT INTO users (id, name) VALUES (${id}, ${`credential-adopter-${id}`})`;
+    return id;
+  };
+  beforeAll(async () => {
+    adopter = await startAgentGrantsAdopter(true, async (db) => {
+      await db`INSERT INTO users (id, name) VALUES (${historyId}, 'legacy-credentials-only')`;
+      await db`INSERT INTO agent_principals (kind, user_id) VALUES ('external', ${historyId})`;
+      await db`INSERT INTO agent_credentials (user_id, token_hash, created_from, confirmed_at, expires_at, renew_until, revoked_at)
+        VALUES (${historyId}, ${randomUUID()}, 'key_upgrade', ${historicalDate}, '2026-01-02T00:00:00Z', '2026-01-03T00:00:00Z', ${historicalDate}),
+          (${historyId}, ${randomUUID()}, 'key_upgrade', '2026-02-01T00:00:00Z', '2026-02-02T00:00:00Z', '2026-02-03T00:00:00Z', NULL)`;
+      await expect(assertV1NotSuperseded(createPostgresCredentialStore(db as unknown as CredentialSql, { hasRoles: async () => false }), historyId)).rejects.toMatchObject({ code: "authz_unavailable" });
+    });
+  }, 90000);
+  afterAll(async () => { await adopter?.close(); });
+  runCredentialConformance({
+    describe, it, expect,
+    async setup(facts) {
+      const ids: Record<string, string> = {};
+      for (const [name, f] of Object.entries(facts)) {
+        const id = await user(); ids[name] = id;
+        if (f.wallet) await adopter.service`UPDATE users SET wallet_address = ${`0x${randomUUID().replaceAll("-", "").padEnd(40, "0")}`} WHERE id = ${id}`;
+        if (f.internal) await adopter.service`INSERT INTO agent_principals (kind, slug, user_id) VALUES ('internal', ${`fixture-${id}`}, ${id})`;
+        if (f.roles) await adopter.service`INSERT INTO agent_roles (principal_user_id, scope, approved_by, granted_at) VALUES (${id}, 'probe:scope', ${await user()}, clock_timestamp())`;
+        if (f.github) await adopter.service`INSERT INTO user_bindings (user_id, provider, external_id) VALUES (${id}, 'github', ${`gh-${randomUUID()}`})`;
+      }
+      return { ids, store: current() };
+    },
+    async age(id, state) {
+      if (state === "pending_expired") await adopter.service`UPDATE agent_credentials SET pending_expires_at = clock_timestamp() - interval '1 second' WHERE id = ${id}`;
+      else if (state === "renew_only") await adopter.service`UPDATE agent_credentials SET expires_at = clock_timestamp() - interval '1 hour', renew_until = clock_timestamp() + interval '1 day' WHERE id = ${id}`;
+      else await adopter.service`UPDATE agent_credentials SET expires_at = clock_timestamp() - interval '2 hours', renew_until = clock_timestamp() - interval '1 minute' WHERE id = ${id}`;
+    },
+    async addRoles(id) { await adopter.service`INSERT INTO agent_roles (principal_user_id, scope, approved_by, granted_at) VALUES (${id}, 'probe:scope', ${await user()}, clock_timestamp())`; },
+    broken: () => createPostgresCredentialStore((async () => { throw new Error("db down"); }) as unknown as CredentialSql, { hasRoles: async () => false }),
+    storedHash: async (id) => (await adopter.service`SELECT token_hash FROM agent_credentials WHERE id = ${id}`)[0]?.token_hash ?? null,
+    liveSuccessors: async (id) => Number((await adopter.service`SELECT count(*)::int AS n FROM agent_credentials WHERE predecessor_id = ${id} AND confirmed_at IS NULL AND revoked_at IS NULL`)[0]?.n),
+  });
+  it("preserves app RLS and strict predecessor checks without any app-local journal or seed", async () => {
+    expect(await current().everConfirmed(historyId)).toBe(true);
+    expect((await adopter.service`SELECT ever_confirmed, first_confirmed_at FROM agent_principals WHERE user_id = ${historyId}`)[0])
+      .toMatchObject({ ever_confirmed: true, first_confirmed_at: historicalDate });
+    expect(await adopter.app`SELECT 1 FROM agent_credentials`).toHaveLength(0);
+    expect(await adopter.app`SELECT 1 FROM agent_authority_maintenance`).toHaveLength(0);
+    expect((await adopter.service`SELECT backfill_ready, purge_enabled, minimum_reader_build FROM agent_authority_maintenance WHERE id = 'service-enrollment'`)[0])
+      .toMatchObject({ backfill_ready: true, purge_enabled: false, minimum_reader_build: null });
+    // A wrong predecessor cannot be hidden by permissive IF NOT EXISTS/replay logic.
+    await expect(adopter.owner.unsafe(await readFile(resolve("../packages/agent-grants/migrations/agent_authority_review_repairs.sql"), "utf8")).simple())
+      .rejects.toThrow(/already exists/);
+  });
+});
+
+// Same historical rows/guard boundary before and after the strict final package stage; no rewritten migration or erased fact.
+describe("published-template0045 counterexample upgrade", () => {
+  it("rejects obsolete-sibling obstruction and late direct activation after receipt/predecessor waits", async () => {
+    const adopter = await startAgentGrantsAdopter(false);
+    const db = adopter.service;
+    const cnf = JSON.stringify({ kty: "OKP", crv: "X25519", x: Buffer.alloc(32, 7).toString("base64url") });
+    const create = async (serviceName: string, count = 1) => {
+      const user = randomUUID(); const admin = randomUUID();
+      await db`INSERT INTO users (id, name) VALUES (${user}, ${serviceName}), (${admin}, 'fixture-owner')`;
+      await db`INSERT INTO agent_principals (kind, user_id, service_key) VALUES ('external', ${user}, ${`https://adopter.example#${serviceName}`})`;
+      await db`INSERT INTO agent_roles (principal_user_id, scope, approved_by, granted_at) VALUES (${user}, 'knowledge:read', ${admin}, clock_timestamp())`;
+      const credentials: string[] = []; let receipt = "";
+      for (let i = 0; i < count; i++) {
+        const current = i === count - 1;
+        const e = await db`INSERT INTO agent_service_enrollments (jti, issuer, service, principal_user_id, scope, device_code_hash, cnf_jwk, status, expires_at, terminal_at)
+          VALUES (${randomUUID()}, 'https://adopter.example', ${serviceName}, ${user}, 'knowledge:read', ${randomUUID()}, ${cnf},
+            ${current ? 'open' : 'expired'}, now() + interval '1 day', ${current ? null : new Date()}) RETURNING id`;
+        receipt = e[0]?.id as string;
+        const c = await db`INSERT INTO agent_credentials (user_id, token_hash, created_from, expires_at, renew_until, pending_expires_at)
+          VALUES (${user}, ${randomUUID()}, 'service_enrollment', now() + interval '30 days', now() + interval '44 days', now() + interval '15 minutes') RETURNING id`;
+        const id = c[0]?.id as string; credentials.push(id);
+        await db`UPDATE agent_service_enrollments SET credential_id = ${id} WHERE id = ${receipt}`;
+      }
+      const id = credentials[credentials.length - 1]; if (!id) throw new Error("missing fixture key");
+      return { user, id, receipt, credentials };
+    };
+    const late = async (rotation: boolean, expectAccepted: boolean) => {
+      const e = await create(`${rotation ? 'rotation' : 'receipt'}-${expectAccepted ? 'before' : 'after'}`);
+      let id = e.id;
+      let predecessor = "";
+      if (rotation) {
+        await db`UPDATE agent_credentials SET confirmed_at = clock_timestamp() WHERE id = ${id}`;
+        predecessor = id;
+        const issued = await createPostgresCredentialStore(db as unknown as CredentialSql, { hasRoles: async () => false }).issueSuccessor({
+          predecessorId: id, tokenHash: randomUUID(), policy: { ttlSec: 60, renewWindowSec: 60, pendingSec: 60 },
+        });
+        if (!issued.ok) throw new Error("rotation preparation refused"); id = issued.credentialId;
+      }
+      await db`UPDATE agent_credentials SET pending_expires_at = clock_timestamp() + interval '2 seconds' WHERE id = ${id}`;
+      const name = `direct-deadline-${randomUUID()}`;
+      const other = postgres(adopter.serviceUrl, { max: 1, connection: { application_name: name } });
+      let outcome: Promise<{ accepted: boolean; code?: string }> | undefined;
+      try {
+        await db.begin(async (tx) => {
+          if (rotation) await tx`SELECT id FROM agent_credentials WHERE id = ${predecessor} FOR UPDATE`;
+          else await tx`SELECT id FROM agent_service_enrollments WHERE id = ${e.receipt} FOR UPDATE`;
+          outcome = other`UPDATE agent_credentials SET confirmed_at = clock_timestamp() WHERE id = ${id}`
+            .then(() => ({ accepted: true }), (error: { code: string }) => ({ accepted: false, code: error.code }));
+          await expect.poll(async () => Number((await db`SELECT count(*)::int AS n FROM pg_stat_activity
+            WHERE application_name = ${name} AND wait_event_type = 'Lock' AND query LIKE '%UPDATE agent_credentials%'`)[0]?.n), { timeout: 1500 }).toBe(1);
+          await tx`SELECT pg_sleep(2.1)`;
+        });
+        expect(await outcome).toMatchObject(expectAccepted ? { accepted: true } : { accepted: false, code: "23514" });
+        const c = (await db`SELECT confirmed_at FROM agent_credentials WHERE id = ${id}`)[0];
+        expect(c?.confirmed_at != null).toBe(expectAccepted);
+      } finally { await outcome?.catch(() => undefined); await other.end({ timeout: 1 }); }
+    };
+    try {
+      const four = await create("retained-obsolete-pending", 4);
+      await expect(db`UPDATE agent_credentials SET confirmed_at = clock_timestamp() WHERE id = ${four.id}`).rejects.toThrow(/working set exceeds bound/);
+      await late(false, true); await late(true, true); // Both direct-writer deadline counterexamples exist on the shipped predecessor.
+      await adopter.applyRepairs();
+      await db`UPDATE agent_credentials SET confirmed_at = clock_timestamp() WHERE id = ${four.id}`;
+      expect((await db`SELECT agent_credential_state(c) AS state FROM agent_credentials c WHERE id = ${four.id}`)[0]?.state).toBe("active");
+      expect((await db`SELECT count(*)::int AS n FROM agent_credentials WHERE user_id = ${four.user}`)[0]?.n).toBe(4);
+      expect((await db`SELECT historical_confirmed_at FROM agent_service_enrollments WHERE id = ${four.receipt}`)[0]?.historical_confirmed_at).toBeTruthy();
+      await late(false, false); await late(true, false);
+      expect((await db`SELECT purge_enabled, minimum_reader_build FROM agent_authority_maintenance WHERE id = 'service-enrollment'`)[0])
+        .toMatchObject({ purge_enabled: false, minimum_reader_build: null });
+    } finally { await adopter.close(); }
+  }, 30000);
 });

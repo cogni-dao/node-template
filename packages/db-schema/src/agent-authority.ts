@@ -180,6 +180,8 @@ export const agentCredentials = pgTable(
       .where(sql`${table.confirmedAt} IS NOT NULL`),
     index("agent_credentials_usable_idx").on(table.userId, table.renewUntil, table.id)
       .where(sql`${table.revokedAt} IS NULL AND ${table.confirmedAt} IS NOT NULL`),
+    index("agent_credentials_pending_non_enrollment_idx").on(table.userId, table.pendingExpiresAt, table.id)
+      .where(sql`${table.revokedAt} IS NULL AND ${table.confirmedAt} IS NULL AND ${table.createdFrom} <> 'service_enrollment'`),
     index("agent_credentials_pending_idx").on(table.userId, table.pendingExpiresAt, table.id)
       .where(sql`${table.revokedAt} IS NULL AND ${table.confirmedAt} IS NULL`),
   ]

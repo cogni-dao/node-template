@@ -320,6 +320,22 @@ export function runEnrollmentConformance(h: EnrollmentConformanceHarness): void 
       expect(await verifyBearer(s.credentials, k2.key)).toMatchObject({ ok: true, userId: e1.principalUserId });
     });
 
+    it("four successive approved pending enrollments cannot obstruct the latest confirmation", async () => {
+      const s = await h.setup();
+      let latest: Awaited<ReturnType<typeof redeem>> | undefined;
+      const older: string[] = [];
+      for (let i = 0; i < 4; i++) {
+        const r = await requester();
+        const e = await enroll(s, r);
+        if (latest) older.push(latest.key);
+        latest = await redeem(s, r, e);
+      }
+      if (!latest) throw new Error("missing latest credential");
+      expect(await confirmCredential(s.credentials, { credentialId: latest.credentialId })).toMatchObject({ ok: true });
+      expect(await verifyBearer(s.credentials, latest.key)).toMatchObject({ ok: true });
+      for (const key of older) expect(await verifyBearer(s.credentials, key)).toMatchObject({ ok: false });
+    });
+
     it("another service of the same issuer, and the same service of another issuer, are other principals", async () => {
       const s = await h.setup();
       const a = await enroll(s, await requester({ service: "git-review" }));

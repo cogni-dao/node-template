@@ -92,7 +92,10 @@ export function createPostgresEnrollmentStore(client: CredentialSql, options: Po
           await tx`SELECT pg_advisory_xact_lock(hashtext('agent_service_enrollments'))`;
           await tx`SELECT pg_advisory_xact_lock(hashtext(${`service:${input.serviceKey}`}))`;
           const pressure = await tx`SELECT 1 FROM agent_authority_maintenance WHERE id = 'service-enrollment'
-            AND backfill_ready AND (oldest_due_at IS NULL OR oldest_due_at >= clock_timestamp() - interval '5 minutes')`;
+            AND backfill_ready AND NOT EXISTS (SELECT 1 FROM (
+              SELECT expires_at FROM agent_service_enrollments WHERE status = 'open' AND expires_at <= (SELECT clock_timestamp())
+              ORDER BY expires_at, id LIMIT 1
+            ) due WHERE expires_at < clock_timestamp() - interval '5 minutes')`;
           if (pressure.length === 0) throw new Error("enrollment maintenance unavailable or backlogged");
           const valid = await tx`SELECT to_timestamp(${input.claims.exp}) > clock_timestamp() AS valid`;
           if (valid[0]?.valid !== true) throw new Error("enrollment proof expired while awaiting admission");
@@ -133,13 +136,18 @@ export function createPostgresEnrollmentStore(client: CredentialSql, options: Po
             ) bounded`;
             if (Number(working[0]?.n ?? 0) > SWEEP_BATCH) throw new Error("enrollment working set exceeds bound");
             // A new receipt replaces only unconfirmed codes. Current consent and all identity/audit facts survive.
-            await tx`
+            const replaced = await tx`
               WITH batch AS (
                 SELECT id FROM agent_service_enrollments WHERE principal_user_id = ${principalUserId} AND status = 'open'
                 ORDER BY id LIMIT ${SWEEP_BATCH} FOR UPDATE
               ) UPDATE agent_service_enrollments e SET status = 'expired', terminal_at = clock_timestamp()
-                FROM batch WHERE e.id = batch.id`;
-
+                FROM batch WHERE e.id = batch.id RETURNING e.credential_id`;
+            const pendingIds = replaced.flatMap((e) => typeof e.credential_id === "string" ? [e.credential_id] : []).sort();
+            if (pendingIds.length > 0) {
+              await tx`SELECT id FROM agent_credentials WHERE id = ANY(${pendingIds}::uuid[]) ORDER BY id FOR UPDATE`;
+              await tx`UPDATE agent_credentials SET revoked_at = clock_timestamp(), revoked_reason = 'superseded'
+                WHERE id = ANY(${pendingIds}::uuid[]) AND confirmed_at IS NULL AND revoked_at IS NULL`;
+            }
           }
 
           const ask = await createPostgresAgentGrantsStore(tx).requestRole({

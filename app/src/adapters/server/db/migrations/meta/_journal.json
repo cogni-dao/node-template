@@ -316,6 +316,13 @@
       "when": 1794445405181,
       "tag": "0044_service_authority_guard_compatibility",
       "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1794448012572,
+      "tag": "0045_service_authority_review_repairs",
+      "breakpoints": true
     }
   ]
 }

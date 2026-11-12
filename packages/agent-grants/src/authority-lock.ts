@@ -27,3 +27,14 @@ export function assertCredentialPolicy(p: { ttlSec: number; renewWindowSec: numb
     throw new Error("credential policy exceeds accepted lifetime bounds");
   }
 }
+
+/** Maintenance never waits behind another authority writer; partial advisory acquisitions release at tick commit/rollback. */
+export async function tryLockServiceAuthority(tx: SqlTag, userId: string): Promise<boolean> {
+  const rows = await tx`SELECT service_key FROM agent_principals WHERE user_id = ${userId}`;
+  const serviceKey = rows[0]?.service_key;
+  if (typeof serviceKey !== "string") return false;
+  if ((await tx`SELECT pg_try_advisory_xact_lock(hashtext('agent_service_enrollments')) AS locked`)[0]?.locked !== true) return false;
+  if ((await tx`SELECT pg_try_advisory_xact_lock(hashtext(${`service:${serviceKey}`})) AS locked`)[0]?.locked !== true) return false;
+  if ((await tx`SELECT pg_try_advisory_xact_lock(hashtext(${userId})) AS locked`)[0]?.locked !== true) return false;
+  return (await tx`SELECT user_id FROM agent_principals WHERE user_id = ${userId} FOR UPDATE SKIP LOCKED`).length > 0;
+}
