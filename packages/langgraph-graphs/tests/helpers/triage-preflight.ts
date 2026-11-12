@@ -6,9 +6,12 @@ import type { ToolExecFn } from "../../src/inproc/types";
 
 /** Real contracts and complete no-work prerequisites for native program tests. */
 export const triageReadContracts = CORE_TOOL_BUNDLE.filter((tool) =>
-  ["core__knowledge_read", "core__goal_list", "core__goal_progress"].includes(
-    tool.contract.name,
-  ),
+  [
+    "core__knowledge_read",
+    "core__goal_list",
+    "core__goal_progress",
+    "core__work_item_query",
+  ].includes(tool.contract.name),
 ).map((tool) => tool.contract);
 
 export const emptyTriageRead: ToolExecFn = async (name, input) => {
@@ -27,6 +30,8 @@ export const emptyTriageRead: ToolExecFn = async (name, input) => {
       },
     };
   if (name === "core__goal_list") return { ok: true, value: { goals: [] } };
+  if (name === "core__work_item_query")
+    return { ok: true, value: { items: [], count: 0 } };
   if (name === "core__goal_progress")
     return {
       ok: true,
