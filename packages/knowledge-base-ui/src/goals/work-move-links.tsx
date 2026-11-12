@@ -3,27 +3,29 @@
 
 /**
  * Module: `@cogni/knowledge-base-ui/goals (work-move-links)`
- * Purpose: The "Moves" section a work item leads with (task.0112), drawn with the
- *   existing knowledge link rows: `→ [moves ↑] <metric>`, `→ [serves] <kpi>` and
- *   `→ [goal] <goal>` (the same `CitationRow` an entry's Links section uses), then
- *   the existing `WorkMetricDetails` for baseline, latest and result. An item that
- *   moves no metric says so.
- * Scope: Read-only client component. The goal chain is inherited from the cached goals
- *   read (`useGoalsProgress`, shared with the Metrics page); without it the rows fall
- *   back to the item's own `moves` and `goal:` label, never to an error line.
+ * Purpose: The "Moves" section a work item leads with (task.0112): the standard knowledge
+ *   link rows (`CitationRow`, the row an entry's Links section draws) `→ [moves ↑] <metric>`,
+ *   `→ [serves] <kpi>` and `→ [goal] <goal>`, then the moved metric itself as the one
+ *   `MetricCard` row the Metrics page uses, whose mark follows the metric's display type and
+ *   whose click opens the same `MetricChart`. The item's pinned baseline and result ride in
+ *   the card's existing hint slot. An item that moves no metric says so.
+ * Scope: Read-only client component. The metric subject comes from the cached goals read
+ *   (`useGoalsProgress`, shared with the Metrics page); when that read is unavailable it comes
+ *   from the metric's own read (`client.fetchMetric`), which also names the KPI it serves.
  * Invariants:
- *   - ONE_ROW_RENDERER: rows are `CitationRow`; no second link style.
+ *   - ONE_ROW_RENDERER: link rows are `CitationRow`; the measurement is `MetricCard`; no bespoke layout.
  *   - GOAL_IS_INHERITED: moved KPI's goal, else the serving KPI's goal, else the goal label.
- *   - NEVER_DEAD_END: a failed or pending goals read still shows the moves row and its measurement.
- * Side-effects: IO (the shared goals read)
- * Links: ./work-goals.ts, ../citation-links.tsx, ../work-metrics.tsx
+ *   - NEVER_DEAD_END: a failed or pending read still shows the moves row.
+ * Side-effects: IO (the shared goals read; the metric read only when the goals read cannot place it)
+ * Links: ./work-goals.ts, ../citation-links.tsx, ./metric-card.tsx
  * @public
  */
 
 "use client";
 
 import type { GoalsProgress } from "@cogni-dao/metrics/contracts";
-import type { ReactElement } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { type ReactElement, useId, useState } from "react";
 
 import {
   CITATION_HEADING_CLASS,
@@ -33,10 +35,14 @@ import {
   CitationRow,
   DefaultCitationLink,
 } from "../citation-links.js";
-import { type WorkMetric, WorkMetricDetails, workMetricArrow } from "../work-metrics.js";
+import { type WorkMetric, workMetricArrow, workMetricVerdict } from "../work-metrics.js";
 import { useGoalsHost } from "./context.js";
+import { MetricCard } from "./metric-card.js";
+import { MetricChart } from "./metric-chart.js";
+import { kpiSubject, type MetricSubject, readSubject, rowSubject } from "./metric-subject.js";
+import { formatNumber } from "./presentation.js";
 import { useGoalsProgress } from "./use-goals-progress.js";
-import { goalIdFromLabels, locateMetric } from "./work-goals.js";
+import { goalIdFromLabels, locateMetric, type MoveChain } from "./work-goals.js";
 
 /** Why a measured delivery path matters: the hub guide an item without moves links to. */
 export const KPI_THROUGH_DELIVERY_HREF =
@@ -50,25 +56,107 @@ export interface WorkMoveRow {
 
 /**
  * The rows for one move: the metric it moves (with direction), the KPI it serves
- * when it is a supporting metric, and the goal (inherited from the goals read when
- * it is there, else from the item's goal label).
+ * when it is a supporting metric (from the goals read, else the metric's own
+ * `serves`), and the goal (inherited from the goals read when it is there, else
+ * from the item's goal label).
  */
 export function moveRows(
   move: Pick<WorkMetric, "metricId" | "direction">,
-  data: GoalsProgress | undefined,
+  chain: MoveChain | null,
   labels: readonly string[],
+  servesKpi: string | null = null,
 ): WorkMoveRow[] {
   const arrow = workMetricArrow(move.direction);
   const rows: WorkMoveRow[] = [
     { relation: arrow ? `moves ${arrow}` : "moves", tone: "neutral", slug: move.metricId },
   ];
-  const chain = data ? locateMetric(data, move.metricId) : null;
-  if (chain?.kind === "serves")
-    rows.push({ relation: "serves", tone: "muted", slug: chain.kpi.binding.metricId });
+  const kpi = chain?.kind === "serves" ? chain.kpi.binding.metricId : chain ? null : servesKpi;
+  if (kpi) rows.push({ relation: "serves", tone: "muted", slug: kpi });
   const goalId =
     chain?.kind === "kpi" || chain?.kind === "serves" ? chain.goal.id : goalIdFromLabels(labels);
   if (goalId) rows.push({ relation: "goal", tone: "muted", slug: goalId });
   return rows;
+}
+
+type Reading = WorkMetric["baseline"];
+
+function readingNumber(reading: Reading, withUnit: boolean): string {
+  if (!reading || reading.value === null || reading.value === undefined) return "—";
+  const unit = withUnit && reading.unit && reading.unit !== "ratio" ? ` ${reading.unit}` : "";
+  return `${formatNumber(reading.value, reading.unit)}${unit}`;
+}
+
+/** "Baseline 8 items → 8 · flat": the item's pinned baseline, its latest reading and the result. */
+export function moveNote(move: WorkMetric): string {
+  return `Baseline ${readingNumber(move.baseline, true)} → ${readingNumber(move.current, false)} · ${workMetricVerdict(move)}`;
+}
+
+/** One moved metric: the Metrics page's `MetricCard` row, opening the same chart on click. */
+function MovedMetric({ subject, nowIso, note }: { readonly subject: MetricSubject; readonly nowIso: string; readonly note: string }) {
+  const { hrefs } = useGoalsHost();
+  const [open, setOpen] = useState(false);
+  const chartId = useId();
+  return (
+    <div data-moved-metric={subject.id} className="space-y-2">
+      <MetricCard subject={subject} nowIso={nowIso} open={open} chartId={chartId} wrap variant="row" note={note} onToggle={() => setOpen(!open)} />
+      {open && (
+        <div id={chartId} className="pl-3">
+          <MetricChart subject={subject} nowIso={nowIso} href={hrefs.metric(subject.id)} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MoveEntry({
+  move,
+  labels,
+  goals,
+  LinkComponent,
+}: {
+  readonly move: WorkMetric;
+  readonly labels: readonly string[];
+  readonly goals: { readonly data: GoalsProgress | undefined; readonly pending: boolean };
+  readonly LinkComponent: CitationLinkComponent;
+}) {
+  const { client, queryKeyPrefix, hrefs } = useGoalsHost();
+  const chain = goals.data ? locateMetric(goals.data, move.metricId) : null;
+  // The metric's own read places it when the goals read cannot (failed, or it lists no such metric).
+  const read = useQuery({
+    queryKey: [...queryKeyPrefix, "metric", "read", move.metricId],
+    queryFn: ({ signal }) => client.fetchMetric(move.metricId, signal),
+    enabled: !chain && !goals.pending,
+    staleTime: 30_000,
+    retry: 1,
+  });
+  const servesKpi = (read.data?.definition as { serves?: { kpi: string } } | undefined)?.serves?.kpi ?? null;
+  const subject: MetricSubject | null = chain
+    ? chain.kind === "kpi"
+      ? kpiSubject(chain.kpi)
+      : rowSubject(chain.row)
+    : read.data
+      ? readSubject(read.data, move.metricId)
+      : null;
+  // Windows and ages use a server clock: the goals read's, else the reading's own time.
+  const nowIso = goals.data?.asOf ?? read.data?.lastGood?.observedAt ?? move.current?.observedAt ?? null;
+  return (
+    <div className="flex flex-col gap-2">
+      <div className={CITATION_LIST_CLASS}>
+        {moveRows(move, chain, labels, servesKpi).map((r) => (
+          <CitationRow
+            key={`${r.relation}:${r.slug}`}
+            direction="out"
+            relation={r.relation}
+            tone={r.tone}
+            slug={r.slug}
+            href={r.relation === "goal" ? hrefs.goal(r.slug) : hrefs.metric(r.slug)}
+            Link={LinkComponent}
+          />
+        ))}
+      </div>
+      {subject && nowIso && <MovedMetric subject={subject} nowIso={nowIso} note={moveNote(move)} />}
+    </div>
+  );
 }
 
 export function WorkMoveLinks({
@@ -85,28 +173,17 @@ export function WorkMoveLinks({
   readonly gapHref?: string;
 }): ReactElement {
   const { hrefs } = useGoalsHost();
-  const data = useGoalsProgress({ poll: false }).data;
-  const heading = (
-    <h3 className={CITATION_HEADING_CLASS}>Moves</h3>
-  );
-  const row = (r: WorkMoveRow, key = "") => (
-    <CitationRow
-      key={`${key}${r.relation}:${r.slug}`}
-      direction="out"
-      relation={r.relation}
-      tone={r.tone}
-      slug={r.slug}
-      href={r.relation === "goal" ? hrefs.goal(r.slug) : hrefs.metric(r.slug)}
-      Link={LinkComponent}
-    />
-  );
+  const goals = useGoalsProgress({ poll: false });
+  const heading = <h3 className={CITATION_HEADING_CLASS}>Moves</h3>;
   if (moves.length === 0) {
     const goalId = goalIdFromLabels(labels);
     return (
       <section aria-label="Moves" data-work-moves="none" className="flex flex-col gap-1.5">
         {heading}
         <div className={CITATION_LIST_CLASS}>
-          {goalId && row({ relation: "goal", tone: "muted", slug: goalId })}
+          {goalId && (
+            <CitationRow direction="out" relation="goal" tone="muted" slug={goalId} href={hrefs.goal(goalId)} Link={LinkComponent} />
+          )}
           <p className="flex min-h-8 items-center gap-x-2 text-sm">
             <span aria-hidden="true" className="text-warning">
               ⚑
@@ -124,12 +201,17 @@ export function WorkMoveLinks({
     );
   }
   return (
-    <section aria-label="Moves" data-work-moves="moves" className="flex flex-col gap-2">
+    <section aria-label="Moves" data-work-moves="moves" className="flex flex-col gap-3">
       {heading}
-      <div className={CITATION_LIST_CLASS}>
-        {moves.flatMap((move) => moveRows(move, data, labels).map((r) => row(r, `${move.metricId}|`)))}
-      </div>
-      <WorkMetricDetails moves={moves} />
+      {moves.map((move) => (
+        <MoveEntry
+          key={move.metricId}
+          move={move}
+          labels={labels}
+          goals={{ data: goals.data, pending: goals.isPending }}
+          LinkComponent={LinkComponent}
+        />
+      ))}
     </section>
   );
 }

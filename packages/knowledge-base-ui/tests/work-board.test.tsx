@@ -27,7 +27,6 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   WorkBoard,
-  WorkMetricDetails,
   WorkExpectations,
   type WorkExpectationPage,
   createWorkItemColumns,
@@ -437,25 +436,6 @@ describe("work expectation join", () => {
     } finally {
       vi.unstubAllGlobals();
     }
-  });
-  it("shows the failed latest reading without presenting it as success", () => {
-    render(
-      <WorkMetricDetails
-        moves={[
-          {
-            metricId: "m",
-            direction: "up",
-            moved: "unknown",
-            baseline: { value: 1, unit: "count", observedAt: "2026-11-01" },
-            current: { value: null, observedAt: null, viewState: "error" },
-          },
-        ]}
-      />,
-    );
-    expect(screen.getByText("Latest: Unknown · error")).toBeInTheDocument();
-    expect(
-      screen.getByText("Baseline: 1 count · 2026-11-01"),
-    ).toBeInTheDocument();
   });
   it("reads the bounded server projection in one request", async () => {
     const expected = {

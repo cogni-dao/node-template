@@ -3,7 +3,7 @@
 
 /**
  * Module: `@cogni/knowledge-base-ui/work-move-links.test`
- * Purpose: Proves a work item leads with the KPI it moves (task.0112): the pure goal resolver (KPI, serves, label spellings, unknown), the detail Moves section (existing link rows plus `WorkMetricDetails`) with and without moves, and the table's Goal column showing the resolved title (never the raw label) with no Project column.
+ * Purpose: Proves a work item leads with the KPI it moves (task.0112): the pure goal resolver (KPI, serves, label spellings, unknown), the detail Moves section (standard link rows plus the Metrics page `MetricCard`) with and without moves, and the table's Goal column showing the resolved title (never the raw label) with no Project column.
  * Scope: Package exports + fixture goal progress. No node app code, router or URL state.
  * Invariants: GOAL_IS_INHERITED, ONE_ROW_RENDERER, GAP_IS_VISIBLE, NEVER_DEAD_END, ONE_READ_FOR_ALL_ROWS.
  * Side-effects: DOM rendering in jsdom
@@ -113,12 +113,12 @@ describe("work goal resolver", () => {
   });
 });
 
-function renderWithGoals(ui: React.ReactElement, data: GoalsProgress | Error = fixture()) {
+function renderWithGoals(ui: React.ReactElement, data: GoalsProgress | Error = fixture(), clientOver: Record<string, unknown> = {}) {
   const fetchGoals = vi.fn(async () => {
     if (data instanceof Error) throw data;
     return data;
   });
-  const client = { ...createGoalsClient(), fetchGoals };
+  const client = { ...createGoalsClient(), fetchGoals, ...clientOver };
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, retryDelay: 0, gcTime: 0 } } });
   const view = render(
     <QueryClientProvider client={qc}>
@@ -138,12 +138,12 @@ describe("WorkMoveLinks (the item's Moves section)", () => {
     // Each target links to its knowledge page, in the same row style as an entry's Links section.
     expect(screen.getByRole("link", { name: "outgoing goal goal-alpha" })).toHaveAttribute("href", "/knowledge/goal-alpha");
     expect(screen.getByRole("link", { name: "outgoing moves ↑ k-ratio" })).toHaveAttribute("href", "/knowledge/k-ratio");
-    // The existing WorkMetricDetails supplies baseline, latest and result under the rows.
-    const details = screen.getByRole("region", { name: "Affected metrics" });
-    expect(details).toHaveTextContent("Baseline");
-    expect(details).toHaveTextContent("as expected");
-    expect(rowsOf(container).length).toBe(2);
-    expect(container.querySelector("[data-kpi]")).toBeNull();
+    // Under the rows, the moved metric is the Metrics page's own card row; baseline and result ride in its hint slot.
+    const card = container.querySelector('[data-kpi="k-ratio"]') as HTMLElement;
+    expect(card).not.toBeNull();
+    expect(card).toHaveTextContent("Baseline 0.80 → 0.90 · as expected");
+    expect(within(card).getByRole("button", { expanded: false })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Affected metrics" })).toBeNull();
   });
 
   it("adds the serving KPI row when the moved metric is a supporting metric", async () => {
@@ -157,6 +157,8 @@ describe("WorkMoveLinks (the item's Moves section)", () => {
         "outgoing goal goal-alpha",
       ]),
     );
+    // A supporting metric is the same `data-metric` card /metrics draws.
+    expect(container.querySelector('[data-metric="m-created"]')).toHaveTextContent("Baseline 0.80 → 0.90 · flat");
   });
 
   it("opens targets through the node's link component with the entity id", async () => {
@@ -190,14 +192,38 @@ describe("WorkMoveLinks (the item's Moves section)", () => {
     expect(screen.queryByRole("button")).toBeNull();
   });
 
-  it("still shows the moves row, its measurement and the label's goal when the goals read fails", async () => {
+  it("when the goals read fails, places the metric from its own read: moves and serves rows, the card, and the label's goal", async () => {
+    const fetchMetric = vi.fn(async () => ({
+      definition: { id: "m-created", title: "Created in 7 days", serves: { kpi: "k-ratio", role: "input" }, spec: { cadenceSeconds: 3600 } },
+      lastGood: { id: "obs", value: 12, unit: "items", observedAt: "2026-11-02T09:55:00.000Z" },
+      viewState: "ok",
+      history: [],
+    }));
+    const { container, fetchGoals } = renderWithGoals(
+      <WorkMoveLinks moves={[move("m-created")]} labels={["goal:ai-work-converges"]} />,
+      new Error("batch_unavailable"),
+      { fetchMetric },
+    );
+    await waitFor(() => expect(fetchGoals).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(rowsOf(container)).toEqual([
+        "outgoing moves ↑ m-created",
+        "outgoing serves k-ratio",
+        "outgoing goal goal-ai-work-converges",
+      ]),
+    );
+    await waitFor(() => expect(container.querySelector('[data-metric="m-created"]')).toHaveTextContent("Baseline 0.80 → 0.90 · as expected"));
+    expect(container.textContent).not.toMatch(/unavailable/i);
+  });
+
+  it("still shows the moves row and the label's goal when neither read answers", async () => {
     const { container, fetchGoals } = renderWithGoals(
       <WorkMoveLinks moves={[move("k-ratio")]} labels={["goal:ai-work-converges"]} />,
       new Error("batch_unavailable"),
+      { fetchMetric: vi.fn(async () => { throw new Error("down"); }) },
     );
     await waitFor(() => expect(fetchGoals).toHaveBeenCalled());
     expect(rowsOf(container)).toEqual(["outgoing moves ↑ k-ratio", "outgoing goal goal-ai-work-converges"]);
-    expect(screen.getByRole("region", { name: "Affected metrics" })).toHaveTextContent("Baseline");
     expect(container.textContent).not.toMatch(/unavailable/i);
   });
 });

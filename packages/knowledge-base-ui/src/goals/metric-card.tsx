@@ -53,6 +53,7 @@ export function MetricCard({
   chartId,
   wrap = false,
   variant = "card",
+  note,
   onToggle,
 }: {
   readonly subject: MetricSubject;
@@ -64,6 +65,8 @@ export function MetricCard({
   /** Metrics view: the title and hint wrap instead of clipping. */
   readonly wrap?: boolean;
   readonly variant?: "card" | "row";
+  /** Extra text in the hint slot after the target hint (a work item's pinned baseline and result). */
+  readonly note?: string;
   readonly onToggle: () => void;
 }) {
   const row = variant === "row";
@@ -73,7 +76,8 @@ export function MetricCard({
   // A supporting metric reads its own series, but only once its card is near the viewport.
   const cardRef = useRef<HTMLDivElement>(null);
   const { series, pending: seriesPending, failed: seriesFailed } = useMetricSeriesRead(subject, nowIso, useNearViewport(cardRef));
-  const hint = row ? (targetText(subject) ?? "No target") : subjectHint(subject, series);
+  const baseHint = row ? (targetText(subject) ?? "No target") : subjectHint(subject, series);
+  const hint = note ? `${baseHint} · ${note}` : baseHint;
   const pending = subject.viewState === "pending";
   const number = subject.value === null ? null : formatValue(subject.value, display, unit);
   const reason = reasonText(subject.reason);

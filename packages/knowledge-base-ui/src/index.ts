@@ -162,7 +162,6 @@ export {
 } from "./number-range-filter.js";
 export { StatusIcon, StatusPill, TypeIcon } from "./work-item-icons.js";
 export {
-  WorkMetricDetails,
   WorkMetricSummary,
   workMetricArrow,
   workMetricVerdict,
