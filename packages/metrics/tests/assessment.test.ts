@@ -573,11 +573,13 @@ describe("work page database batch", () => {
 			},
 		]);
 		expect(rows).toHaveLength(2);
-		expect(sql).toHaveBeenCalledOnce();
-		const call = sql.mock.calls[0] as unknown as [
-			TemplateStringsArray,
-			...unknown[],
-		];
+		const calls = sql.mock.calls.filter((call) =>
+			String((call[0] as unknown as TemplateStringsArray)[0]).startsWith(
+				"WITH requested",
+			),
+		);
+		expect(calls).toHaveLength(1);
+		const call = calls[0] as unknown as [TemplateStringsArray, ...unknown[]];
 		expect(call[0].join("?")).toContain("evaluation_at <= r.due::timestamptz");
 		expect(call.slice(1)).toContain("n/e/d");
 	});

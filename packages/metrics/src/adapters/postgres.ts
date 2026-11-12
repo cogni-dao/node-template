@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 /** Scoped injected SQL. Snapshot reservation precedes I/O; completed observations never change. */
 import { randomUUID } from "node:crypto";
-import type { Sql } from "postgres";
+import type { Fragment, Sql } from "postgres";
 import { z } from "zod";
 import { HISTORY_ORIGIN_MS, metricHistoryRange } from "../assess.js";
 import {
@@ -43,6 +43,27 @@ function requiredObservation(value: unknown) {
 	if (!observation) throw new MetricError("observation_unreadable", 503);
 	return observation;
 }
+/** Keep source freshness inside both bounded due-evidence selections. */
+function dueSourceFreshness(
+	sql: Sql,
+	due: string | Fragment,
+	age: number | Fragment,
+) {
+	return sql`CASE
+		WHEN jsonb_path_exists(jsonb_build_object('v',replace(observation->>'observedAt','Z','+00:00')), '$.v.datetime()', '{}'::jsonb, true)
+		AND jsonb_typeof(observation->'sourceWatermarks') = 'array'
+		THEN (observation->>'observedAt')::timestamptz >= evaluation_at
+		AND GREATEST(${due}::timestamptz, (observation->>'observedAt')::timestamptz) - evaluation_at <= (${age} * interval '1 second')
+		AND jsonb_array_length(observation->'sourceWatermarks') > 0
+		AND NOT EXISTS (
+			SELECT 1 FROM jsonb_array_elements(observation->'sourceWatermarks') AS watermark
+			WHERE CASE WHEN jsonb_path_exists(jsonb_build_object('v',replace(watermark->>'asOf','Z','+00:00')), '$.v.datetime()', '{}'::jsonb, true)
+				THEN (watermark->>'asOf')::timestamptz > (observation->>'observedAt')::timestamptz
+					OR GREATEST(${due}::timestamptz, (observation->>'observedAt')::timestamptz) - (watermark->>'asOf')::timestamptz > (${age} * interval '1 second')
+				ELSE true END
+		)
+		ELSE false END`;
+}
 export class PostgresMetricObservations implements MetricObservationsPort {
 	constructor(
 		private readonly sql: Sql,
@@ -74,7 +95,7 @@ export class PostgresMetricObservations implements MetricObservationsPort {
 		FROM requested r LEFT JOIN metric_observations b ON b.scope=${this.key} AND b.id=CASE WHEN r.baseline_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN r.baseline_id::uuid ELSE NULL END AND b.metric_id=r.metric_id
 		LEFT JOIN LATERAL (SELECT observation FROM metric_observations WHERE scope=${this.key} AND metric_id=r.metric_id AND definition_hash=b.definition_hash ORDER BY evaluation_at DESC,id DESC LIMIT 1) l ON true
 		LEFT JOIN LATERAL (SELECT observation FROM metric_observations WHERE scope=${this.key} AND metric_id=r.metric_id AND definition_hash=b.definition_hash AND status='ok' ORDER BY evaluation_at DESC,id DESC LIMIT 1) g ON true
-		LEFT JOIN LATERAL (SELECT observation FROM metric_observations WHERE scope=${this.key} AND metric_id=r.metric_id AND definition_hash=b.definition_hash AND status='ok' AND observation->'value' IS NOT NULL AND jsonb_typeof(observation->'value')='number' AND evaluation_at <= r.due::timestamptz AND evaluation_at >= r.due::timestamptz - ((b.snapshot->'spec'->>'maxAgeSeconds')::int * interval '1 second') AND CASE WHEN jsonb_path_exists(jsonb_build_object('v',replace(observation->>'observedAt','Z','+00:00')), '$.v.datetime()', '{}'::jsonb, true) THEN (observation->>'observedAt')::timestamptz <= r.due::timestamptz + ((b.snapshot->'spec'->>'maxAgeSeconds')::int * interval '1 second') ELSE true END ORDER BY evaluation_at DESC,id DESC LIMIT 1) e ON true ORDER BY r.ord`,
+		LEFT JOIN LATERAL (SELECT observation FROM metric_observations WHERE scope=${this.key} AND metric_id=r.metric_id AND definition_hash=b.definition_hash AND status='ok' AND observation->'value' IS NOT NULL AND jsonb_typeof(observation->'value')='number' AND evaluation_at <= r.due::timestamptz AND evaluation_at >= r.due::timestamptz - ((b.snapshot->'spec'->>'maxAgeSeconds')::int * interval '1 second') AND CASE WHEN jsonb_path_exists(jsonb_build_object('v',replace(observation->>'observedAt','Z','+00:00')), '$.v.datetime()', '{}'::jsonb, true) THEN (observation->>'observedAt')::timestamptz <= r.due::timestamptz + ((b.snapshot->'spec'->>'maxAgeSeconds')::int * interval '1 second') ELSE true END AND ${dueSourceFreshness(sql, sql`r.due`, sql`(b.snapshot->'spec'->>'maxAgeSeconds')::int`)} ORDER BY evaluation_at DESC,id DESC LIMIT 1) e ON true ORDER BY r.ord`,
 		);
 		return rows.map((row) => {
 			let rollingUnreadable = false;
@@ -272,6 +293,7 @@ export class PostgresMetricObservations implements MetricObservationsPort {
       AND status='ok' AND observation->'value' IS NOT NULL AND jsonb_typeof(observation->'value')='number'
       AND evaluation_at <= ${evaluationAt}::timestamptz AND evaluation_at >= ${evaluationAt}::timestamptz - (${maxAgeSeconds} * interval '1 second')
       AND CASE WHEN jsonb_path_exists(jsonb_build_object('v',replace(observation->>'observedAt','Z','+00:00')), '$.v.datetime()', '{}'::jsonb, true) THEN (observation->>'observedAt')::timestamptz <= ${evaluationAt}::timestamptz + (${maxAgeSeconds} * interval '1 second') ELSE true END
+      AND ${dueSourceFreshness(this.sql, evaluationAt, maxAgeSeconds)}
       ORDER BY evaluation_at DESC,id DESC LIMIT 1`;
 		return row ? requiredObservation(row.observation) : null;
 	}
