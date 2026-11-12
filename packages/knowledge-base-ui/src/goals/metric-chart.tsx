@@ -22,8 +22,7 @@
 
 "use client";
 
-import type { MetricHistory } from "@cogni-dao/metrics/contracts";
-import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useId, useState } from "react";
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ReferenceLine, XAxis, YAxis } from "recharts";
 
@@ -31,7 +30,6 @@ import { ChartContainer, ChartTooltip } from "./chart.js";
 import { useGoalsHost } from "./context.js";
 import {
   formatValue,
-  hasDailyShape,
   MIN_DAILY_SHAPE,
   type Point,
   seriesPoints,
@@ -53,15 +51,15 @@ import { RangeToggle } from "./range-toggle.js";
 import { metricHistoryKey } from "./use-goals-progress.js";
 
 /**
- * Hourly metrics open on the day until they have days of shape, then the week;
- * slower ones open on the month. A metric whose cadence the read does not carry
- * (a supporting metric) opens on the month once its daily series has a shape,
- * the day before that.
+ * A KPI opens on the day until it has days of shape, then the week (hourly
+ * cadence), or on the month. A supporting metric carries neither cadence nor
+ * series in the goal read, so it always opens on the day, the series its card
+ * already read: the same subject opens on the same range everywhere.
  */
-export function initialRangeOf(subject: MetricSubject, daily?: MetricHistory | null): HistoryRange {
-  if (subject.cadenceSeconds === null) return subject.ownSeries && daily && !hasDailyShape(daily) ? "1d" : "1m";
-  if (subject.cadenceSeconds > 3600) return "1m";
-  const days = (subject.trend ?? daily)?.buckets.filter((b) => b.status === "ok").length ?? 0;
+export function initialRangeOf(subject: MetricSubject): HistoryRange {
+  if (subject.ownSeries) return "1d";
+  if (subject.cadenceSeconds === null || subject.cadenceSeconds > 3600) return "1m";
+  const days = subject.trend?.buckets.filter((b) => b.status === "ok").length ?? 0;
   return days >= MIN_DAILY_SHAPE ? "1w" : "1d";
 }
 
@@ -90,14 +88,7 @@ export function MetricChart({
   const display = subject.display;
   const unit = subject.unit;
   const { client, queryKeyPrefix, hrefs, Link } = useGoalsHost();
-  const queryClient = useQueryClient();
-  const [range, setRange] = useState<HistoryRange>(() => {
-    const daily = historyWindow("1m", Date.parse(nowIso));
-    return initialRangeOf(
-      subject,
-      queryClient.getQueryData<MetricHistory>(metricHistoryKey(queryKeyPrefix, metricId, daily.from, daily.step)),
-    );
-  });
+  const [range, setRange] = useState<HistoryRange>(() => initialRangeOf(subject));
   const span = historyWindow(range, Date.parse(nowIso));
   const history = useQuery({
     queryKey: metricHistoryKey(queryKeyPrefix, metricId, span.from, span.step),

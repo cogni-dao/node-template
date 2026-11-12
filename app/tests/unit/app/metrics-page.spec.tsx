@@ -290,7 +290,18 @@ describe("Knowledge metric evidence mount", () => {
           })
         : url === `/api/v1/metrics/work/observations/${id}`
           ? Response.json({ definition, observation: reading })
-          : new Response("{}", { status: 404 })
+          : url === "/api/v1/metrics/goals"
+            ? Response.json({ goals: [], asOf: "2026-11-02T10:05:00.000Z", environment: "test" })
+            : url.includes("/history?")
+              ? Response.json({
+                  metricId: "work",
+                  unit: "items",
+                  step: "1h",
+                  from: "2026-11-01T10:00:00.000Z",
+                  to: "2026-11-02T10:00:00.000Z",
+                  buckets: [],
+                })
+              : new Response("{}", { status: 404 })
     );
     vi.stubGlobal("fetch", fetchMock);
     render(
@@ -299,9 +310,23 @@ describe("Knowledge metric evidence mount", () => {
       </QueryClientProvider>
     );
     await screen.findByText(/Linked immutable evidence/);
-    expect(fetchMock.mock.calls.map(([u]) => u).filter((u) => !u.includes("/history?") && u !== "/api/v1/metrics/goals")).toEqual([
-      "/api/v1/metrics/work",
-      `/api/v1/metrics/work/observations/${id}`,
-    ]);
+    await screen.findByRole("figure");
+    // The exact reads of a metric page: the metric, the linked reading, the goal read, and one 1D history window
+    // (the 24 hours before the goal read's server hour).
+    const historyUrl = `/api/v1/metrics/work/history?${new URLSearchParams({
+      from: "2026-11-01T10:00:00.000Z",
+      to: "2026-11-02T10:00:00.000Z",
+      step: "1h",
+    })}`;
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.map(([u]) => u).sort()).toEqual(
+        [
+          "/api/v1/metrics/work",
+          `/api/v1/metrics/work/observations/${id}`,
+          "/api/v1/metrics/goals",
+          historyUrl,
+        ].sort()
+      )
+    );
   });
 });

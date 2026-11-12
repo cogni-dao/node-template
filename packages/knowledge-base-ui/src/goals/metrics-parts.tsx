@@ -14,7 +14,7 @@
  *   NEVER_COLOR_ONLY; NO_TARGET_NO_VERDICT; UNKNOWN_IS_NOT_ZERO ("—");
  *   ONE_COLUMN_AT_360 (rows wrap, nothing scrolls sideways); theme tokens only;
  *   METRICS_ARE_METRICS (the section is "Metrics"; a role is small metadata).
- * Side-effects: none of its own
+ * Side-effects: IO (via GoalsClient.fetchHistory: each open chart, and each card's one 1D read once near the viewport)
  * Links: ./metric-card.tsx, ./metric-chart.tsx, ./metrics-view.ts
  * @public
  */
@@ -55,13 +55,41 @@ export function MetricRowView({ row, nowIso }: { readonly row: MetricRow; readon
   );
 }
 
+const PAGE_SIZE = 20;
+
+/** One inline page of a bounded, already-fetched list. */
+function usePage<T>(items: readonly T[]) {
+  const [page, setPage] = useState(0);
+  const current = Math.min(page, Math.max(0, Math.ceil(items.length / PAGE_SIZE) - 1));
+  const start = current * PAGE_SIZE;
+  return { current, start, setPage, visible: items.slice(start, start + PAGE_SIZE) };
+}
+
+function PageNav({
+  total,
+  current,
+  start,
+  setPage,
+}: {
+  readonly total: number;
+  readonly current: number;
+  readonly start: number;
+  readonly setPage: (page: number) => void;
+}) {
+  if (total <= PAGE_SIZE) return null;
+  return (
+    <nav aria-label="Serving metric pages" className="mt-3 flex flex-wrap items-center gap-3 text-xs">
+      <button type="button" className="min-h-8 rounded-md border px-3 disabled:opacity-50" disabled={current === 0} onClick={() => setPage(current - 1)}>Previous</button>
+      <span className="tabular-nums">{start + 1}–{Math.min(start + PAGE_SIZE, total)} of {total} loaded</span>
+      <button type="button" className="min-h-8 rounded-md border px-3 disabled:opacity-50" disabled={start + PAGE_SIZE >= total} onClick={() => setPage(current + 1)}>Next</button>
+    </nav>
+  );
+}
+
 /** The metrics that serve one KPI, in the fixed role order, worst first inside each role. */
 export function KpiBranch({ rows, nowIso, complete = true }: { readonly rows: readonly MetricRow[]; readonly nowIso: string; readonly complete?: boolean }) {
-  const [page, setPage] = useState(0);
   const ordered = groupByRole(rows).flatMap((group) => group.rows);
-  const current = Math.min(page, Math.max(0, Math.ceil(ordered.length / 20) - 1));
-  const start = current * 20;
-  const visible = ordered.slice(start, start + 20);
+  const { current, start, setPage, visible } = usePage(ordered);
 
   if (rows.length === 0)
     return (
@@ -80,11 +108,7 @@ export function KpiBranch({ rows, nowIso, complete = true }: { readonly rows: re
           <MetricRowView key={r.id} row={r} nowIso={nowIso} />
         ))}
       </ul>
-      {rows.length > 20 && <nav aria-label="Serving metric pages" className="mt-3 flex flex-wrap items-center gap-3 text-xs">
-        <button type="button" className="min-h-8 rounded-md border px-3 disabled:opacity-50" disabled={current === 0} onClick={() => setPage(current - 1)}>Previous</button>
-        <span className="tabular-nums">{start + 1}–{Math.min(start + 20, rows.length)} of {rows.length} loaded</span>
-        <button type="button" className="min-h-8 rounded-md border px-3 disabled:opacity-50" disabled={start + 20 >= rows.length} onClick={() => setPage(current + 1)}>Next</button>
-      </nav>}
+      <PageNav total={rows.length} current={current} start={start} setPage={setPage} />
       {!complete && <p role="status" className="mt-2 text-muted-foreground text-xs">More metrics may exist beyond this scan.</p>}
     </section>
   );
@@ -94,6 +118,7 @@ export function KpiBranch({ rows, nowIso, complete = true }: { readonly rows: re
 export function NotServingGroup({ data }: { readonly data: GoalsProgress }) {
   const { hrefs, Link } = useGoalsHost();
   const rows = notServingRows(data);
+  const { current, start, setPage, visible } = usePage(rows);
   if (rows.length === 0) return null;
   return (
     <section
@@ -114,10 +139,11 @@ export function NotServingGroup({ data }: { readonly data: GoalsProgress }) {
         </Link>
       </p>
       <ul className="mt-2 space-y-2">
-        {rows.map((r) => (
+        {visible.map((r) => (
           <MetricRowView key={r.id} row={r} nowIso={data.asOf} />
         ))}
       </ul>
+      <PageNav total={rows.length} current={current} start={start} setPage={setPage} />
     </section>
   );
 }

@@ -76,9 +76,12 @@ export function MetricEvidence({ id, observationId = null }: MetricEvidenceProps
   const history = observationId ? (pinned ? [pinned] : []) : current?.history ?? [];
   const definition = current?.definition as { serves?: { kpi: string } } | undefined;
   const relation = current ? relationOf(goals.data, id, definition?.serves?.kpi ?? null) : null;
+  // History windows end at a server time, never the browser clock: the goal read's own `asOf`, or, when that
+  // read failed, the last good reading's time. The header waits for the goal read so it never jumps subject.
+  const serverNow = goals.isPending ? null : (goals.data?.asOf ?? current?.lastGood?.observedAt ?? null);
   return (
     <div className="space-y-4">
-      {current && (
+      {current && serverNow && (
         <div className="space-y-2">
           {relation && (
             <p data-relation={relation.kind} className="text-muted-foreground text-xs">
@@ -101,7 +104,7 @@ export function MetricEvidence({ id, observationId = null }: MetricEvidenceProps
           )}
           <MetricChart
             subject={relation?.kind === "kpi" ? relation.subject : readSubject(current, id)}
-            nowIso={new Date(query.dataUpdatedAt).toISOString()}
+            nowIso={serverNow}
             showStatus
           />
         </div>

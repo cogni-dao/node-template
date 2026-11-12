@@ -106,20 +106,29 @@ export function MetricCard({
         <span className="sr-only">{title}</span>
       </button>
       <span id={describedBy} className="sr-only">
-        {[number ?? "No reading", status ? STATUS_META[status].label : "No target", hint, reason].filter(Boolean).join(". ")}
+        {[
+          number ?? "No reading",
+          status ? STATUS_META[status].label : "No target",
+          hint,
+          reason,
+          roleTag,
+          ...subject.flags.map(flagText),
+        ]
+          .filter(Boolean)
+          .join(". ")}
       </span>
       <div
         aria-hidden="true"
         className={
           row
-            ? "pointer-events-none grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-2 md:grid-cols-[minmax(0,1fr)_auto_minmax(8rem,12rem)]"
+            ? "pointer-events-none grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-x-4 gap-y-2 md:grid-cols-[minmax(0,1fr)_auto_minmax(8rem,12rem)]"
             : "pointer-events-none flex flex-1 flex-col gap-3"
         }
       >
         <span
           className={
             row
-              ? `flex min-w-0 items-center gap-2 break-words text-sm ${kpi ? "font-medium" : "font-normal"}`
+              ? `col-span-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 break-words text-sm md:col-span-1 ${kpi ? "font-medium" : "font-normal"}`
               : `${wrap ? "break-words" : "line-clamp-1"} font-medium text-muted-foreground text-xs uppercase tracking-wider`
           }
         >
@@ -147,7 +156,7 @@ export function MetricCard({
           </div>
           {status && <StatusPill status={status} />}
         </div>
-        <span className={`${row ? "pl-6" : "-mt-2"} ${wrap ? "" : "whitespace-nowrap"} text-muted-foreground text-xs tabular-nums`}>
+        <span className={`${row ? "col-span-2 pl-6 md:col-span-1" : "-mt-2"} ${wrap ? "" : "whitespace-nowrap"} text-muted-foreground text-xs tabular-nums`}>
           {pending
             ? `${hint} · ${(status && isDeadlineStatus(status)) || subject.value === null ? "Pending refresh" : "Pending, historical reading"}`
             : hint}
@@ -165,8 +174,8 @@ export function MetricCard({
             ))}
           </div>
         )}
-        <div className={row ? "col-span-2 min-w-0 md:col-span-1 md:col-start-3 md:row-span-2 md:row-start-1" : "mt-auto"}>
-          {display === "progress" ? (
+        <div className={row ? "col-start-2 row-start-2 min-w-0 md:col-start-3 md:row-span-2 md:row-start-1" : "mt-auto"}>
+          {display === "progress" && !row ? (
             <ProgressBar fraction={subjectFraction(subject)} label={markLabel} />
           ) : display === "slo" ? (
             <AvailabilityStrip series={series} binding={target} label={markLabel} />

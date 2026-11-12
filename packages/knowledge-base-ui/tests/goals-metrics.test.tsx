@@ -508,11 +508,27 @@ describe("MetricsBoard", () => {
       const second = mount();
       await waitFor(() => expect(fetchHistory.mock.calls.some(([id]) => id === "m-guard-red")).toBe(true));
       const [, window] = fetchHistory.mock.calls.find(([id]) => id === "m-guard-red") as unknown as [string, { step: string }];
-      expect(window.step).toBe("1d");
+      // One read per card: the 1D window (hourly), the series the 1D chart starts on.
+      expect(window.step).toBe("1h");
+      expect(fetchHistory.mock.calls.filter(([id]) => id === "m-guard-red")).toHaveLength(1);
       second.qc.clear();
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it("pages the not-serving group at 20 like a KPI's metrics", () => {
+    const unbound = Array.from({ length: 45 }, (_, i) => ({
+      metric: { id: `loose-${String(i).padStart(2, "0")}`, title: `Loose ${String(i).padStart(2, "0")}`, calculatorId: "work.count@1" },
+      assessment: null,
+      latest: latest(),
+    }));
+    const { container } = renderMetrics(fixture({ orphans: [], unbound }));
+    const group = container.querySelector('[data-group="not-serving"]') as HTMLElement;
+    expect(group.querySelectorAll("[data-metric]")).toHaveLength(20);
+    expect(within(group).getByText("1–20 of 45 loaded")).toBeInTheDocument();
+    fireEvent.click(within(group).getByRole("button", { name: "Next" }));
+    expect(within(group).getByText("21–40 of 45 loaded")).toBeInTheDocument();
   });
 
   it("pages the bounded supporting set in inline pages of20", () => {
@@ -708,7 +724,7 @@ describe("a metric's own page", () => {
       history: [reading],
     }));
     const fetchHistory = vi.fn(async () => trend("m-page", "items", [3, 4, 5, 6, 7, 8]));
-    const client = { ...createGoalsClient(), fetchMetric, fetchHistory } as unknown as ReturnType<typeof createGoalsClient>;
+    const client = { ...createGoalsClient(), fetchGoals: async () => fixture(), fetchMetric, fetchHistory } as unknown as ReturnType<typeof createGoalsClient>;
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const view = render(<QueryClientProvider client={qc}><GoalsProvider client={client}>
       <MetricEvidence id="m-page" />
@@ -777,7 +793,7 @@ describe("a metric's own page", () => {
     const fetchMetric = vi.fn(async () => ({ history: [reading] }));
     const fetchObservation = vi.fn(async () => ({ observation: reading }));
     const fetchHistory = vi.fn(async () => trend("m-page", "items", [3, 4, 5]));
-    const client = { ...createGoalsClient(), fetchMetric, fetchObservation, fetchHistory } as unknown as ReturnType<typeof createGoalsClient>;
+    const client = { ...createGoalsClient(), fetchGoals: async () => fixture(), fetchMetric, fetchObservation, fetchHistory } as unknown as ReturnType<typeof createGoalsClient>;
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const view = render(<QueryClientProvider client={qc}><GoalsProvider client={client}>
       <MetricEvidence id="m-page" observationId={reading.id} />
