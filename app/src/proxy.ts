@@ -75,6 +75,18 @@ function isPublicApiRoute(pathname: string): boolean {
 	);
 }
 
+// ADMIN_ACTS_IN_ADMIN: the Admin area is a browser-session area. A key never reaches it.
+// Same code as `HUMAN_SESSION_REQUIRED` in @cogni/node-contracts (kept literal: the proxy imports no contracts).
+const HUMAN_SESSION_REQUIRED = "human_session_required";
+function isAdminArea(pathname: string): boolean {
+	return (
+		pathname === "/admin" ||
+		pathname.startsWith("/admin/") ||
+		pathname === "/api/v1/admin" ||
+		pathname.startsWith("/api/v1/admin/")
+	);
+}
+
 function isAgentApiRoute(pathname: string): boolean {
 	// Any /api/v1/* route may accept machine bearer tokens — route handlers
 	// do the actual token validation and return 401 for invalid/missing creds.
@@ -154,6 +166,14 @@ export async function proxy(req: NextRequest): Promise<NextResponse> {
 	const { pathname } = req.nextUrl;
 	const isPublicApi = isPublicApiRoute(pathname);
 	const isAgentBearerRequest = isAgentApiRoute(pathname) && hasAgentBearer(req);
+
+	// Any Authorization header on /admin or /api/v1/admin is refused before the app runs.
+	if (isAdminArea(pathname) && req.headers.has("authorization")) {
+		return NextResponse.json(
+			{ error: HUMAN_SESSION_REQUIRED, code: HUMAN_SESSION_REQUIRED },
+			{ status: 403, headers: { "cache-control": "no-store" } },
+		);
+	}
 
 	// Allow public namespace without authentication
 	if (isPublicApi) {

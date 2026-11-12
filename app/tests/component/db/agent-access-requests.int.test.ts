@@ -31,12 +31,13 @@ vi.mock("@/bootstrap/container", () => ({
 }));
 
 import { GET as askList, POST as askCreate } from "@/app/api/v1/agent/access-requests/route";
-import { DELETE as rolesDelete, GET as rolesGet, POST as rolesPost } from "@/app/api/v1/agent-access/roles/route";
+import { DELETE as rolesDelete, GET as rolesGet, POST as rolesPost } from "@/app/api/v1/admin/ai-access/route";
 import {
   type AgentAuthoritySql,
   createAgentToolAuthority,
   MAX_ADMIN_OUTSIDE_ROWS,
 } from "@/bootstrap/agent-authority";
+import { createNodeAdminPort } from "@/bootstrap/node-admin-port";
 // A wallet of its own, so this file never fights another component file for the repo-spec approver's unique wallet binding.
 const ADMIN_WALLET = `0x${randomUUID().replaceAll("-", "").padEnd(40, "a").slice(0, 40)}`;
 const SCOPE = "work_item:transition";
@@ -59,7 +60,7 @@ describe("access requests: an ask is an off row (real Postgres)", () => {
     return id;
   };
   const as = (id: string | null, via: "bearer" | "session") =>
-    (session.user = id ? { id, walletAddress: null, displayName: null, avatarColor: null, via } : null);
+    (session.user = id ? { id, walletAddress: id === admin ? ADMIN_WALLET : null, displayName: null, avatarColor: null, via } : null);
   const ask = (scope: unknown, headers: Record<string, string> = {}) =>
     askCreate(
       new NextRequest("http://localhost/api/v1/agent/access-requests", {
@@ -72,7 +73,7 @@ describe("access requests: an ask is an off row (real Postgres)", () => {
   const mine = () => askList(new NextRequest("http://localhost/api/v1/agent/access-requests"), undefined as never);
   const roles = (handler: typeof rolesPost, body: unknown) =>
     handler(
-      new NextRequest("http://localhost/api/v1/agent-access/roles", {
+      new NextRequest("http://localhost/api/v1/admin/ai-access", {
         method: handler === rolesPost ? "POST" : "DELETE",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
@@ -82,14 +83,14 @@ describe("access requests: an ask is an off row (real Postgres)", () => {
   const door = (userId: string) => authority.authorizeRoute({ toolId: "core__work_item_update", routeId: "work.items.patch", userId, via: "bearer" });
   const adminViewFull = async () => {
     as(admin, "session");
-    return (await (await rolesGet(new NextRequest("http://localhost/api/v1/agent-access/roles"), undefined as never)).json()) as {
+    return (await (await rolesGet(new NextRequest("http://localhost/api/v1/admin/ai-access"), undefined as never)).json()) as {
       more: number;
       permissions: Array<{ section: string }>;
     };
   };
   const adminView = async () => {
     as(admin, "session");
-    return (await (await rolesGet(new NextRequest("http://localhost/api/v1/agent-access/roles"), undefined as never)).json()) as {
+    return (await (await rolesGet(new NextRequest("http://localhost/api/v1/admin/ai-access"), undefined as never)).json()) as {
       permissions: Array<{ section: string; principalUserId: string; who: string; outside: boolean; scope: string; on: boolean; hint: string | null }>;
     };
   };
@@ -101,16 +102,17 @@ describe("access requests: an ask is an off row (real Postgres)", () => {
     other = await mkUser("Other bot");
     await service`INSERT INTO user_bindings (id, user_id, provider, external_id) VALUES (${randomUUID()}, ${agent}, 'github', ${`gh-${randomUUID()}`})`;
     const logger = pino({ level: "info", timestamp: false }, { write: (c: string) => void lines.push(JSON.parse(c)) });
+    const nodeAdmin = {
+      check: async (who: { walletAddress?: string | null }) =>
+        who.walletAddress === ADMIN_WALLET ? { ok: true as const } : { ok: false as const, errorCode: "authz_denied" as const },
+    };
     authority = createAgentToolAuthority({
       sql: service as unknown as AgentAuthoritySql,
-      nodeAdmin: {
-        check: async (who: { walletAddress?: string | null }) =>
-          who.walletAddress === ADMIN_WALLET ? { ok: true as const } : { ok: false as const, errorCode: "authz_denied" as const },
-      },
+      nodeAdmin,
       log: logger,
       toolBundle: [...CORE_TOOL_BUNDLE],
     });
-    holder.container = { log: logger, config: { unhandledErrorPolicy: "rethrow" }, agentAuthority: authority };
+    holder.container = { log: logger, config: { unhandledErrorPolicy: "rethrow" }, agentAuthority: authority, nodeAdmin, nodeAdminPort: createNodeAdminPort(authority) };
   });
   afterAll(async () => {
     await service?.unsafe("DELETE FROM agent_roles WHERE principal_user_id = ANY($1) OR approved_by = ANY($1)", [users]);
@@ -268,7 +270,7 @@ describe("access requests: an ask is an off row (real Postgres)", () => {
     await ask(SCOPE);
     for (const handler of [rolesPost, rolesDelete]) {
       const res = await handler(
-        new NextRequest("http://localhost/api/v1/agent-access/roles", {
+        new NextRequest("http://localhost/api/v1/admin/ai-access", {
           method: handler === rolesPost ? "POST" : "DELETE",
           headers: { "content-type": "application/json", authorization: "Bearer cogni_ag_sk_v1_x" },
           body: JSON.stringify({ principalUserId: agent, scope: SCOPE }),

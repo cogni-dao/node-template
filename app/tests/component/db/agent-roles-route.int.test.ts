@@ -3,8 +3,8 @@
 
 /**
  * Module: `@tests/component/db/agent-roles-route.int.test`
- * Purpose: GET/POST/DELETE /api/v1/agent-access/roles (the human plane) and the guard it controls, against real Postgres
- *   (task.5456, V8 V9): any Authorization header 403 human_session_required, non-admin 403 and canManage:false, 503 when no
+ * Purpose: GET/POST/DELETE /api/v1/admin/ai-access (the admin area, through requireAdminSession and NodeAdminPort) and the guard it controls, against real Postgres
+ *   (task.5456, V8 V9): any Authorization header 403 human_session_required, non-admin 403, 503 when no
  *   admins are configured, GET shows the live Allow state after grant and after revoke, admin grant allows the next tool call, admin revoke denies it, and the log lines.
  * Scope: The real route handlers, real wrapRouteHandlerWithLogging, real `agent-authority` wiring, real repo-spec
  *   node admin authority and a real database. Only the NextAuth session decode is replaced (`getSessionUser`).
@@ -43,16 +43,17 @@ vi.mock("@/bootstrap/container", () => ({
   getContainer: () => holder.container,
 }));
 
-import { DELETE, GET, POST } from "@/app/api/v1/agent-access/roles/route";
+import { DELETE, GET, POST } from "@/app/api/v1/admin/ai-access/route";
 import {
   type AgentAuthoritySql,
   createAgentToolAuthority,
 } from "@/bootstrap/agent-authority";
 import { createApproversNodeAdminAuthority } from "@/bootstrap/node-admin-gate";
+import { createNodeAdminPort } from "@/bootstrap/node-admin-port";
 
 // The repo-spec approver (`activity_ledger.approvers[0]`) is this node's DAO admin.
 const ADMIN_WALLET = "0x070075F1389Ae1182aBac722B36CA12285d0c949";
-const url2 = "http://localhost/api/v1/agent-access/roles";
+const url2 = "http://localhost/api/v1/admin/ai-access";
 const call = (handler: typeof POST, body: unknown, headers: Record<string, string> = {}) =>
   handler(
     new NextRequest(url2, {
@@ -82,9 +83,10 @@ describe("agent roles route (real Postgres, real repo-spec admin)", () => {
     users.push(id);
     return id;
   };
+  const wallets = new Map<string, string>();
   const sessionUser = (id: string, via: "session" | "bearer") => ({
     id,
-    walletAddress: null,
+    walletAddress: wallets.get(id) ?? null,
     displayName: null,
     avatarColor: null,
     via,
@@ -108,6 +110,9 @@ describe("agent roles route (real Postgres, real repo-spec admin)", () => {
     await service`DELETE FROM user_bindings WHERE provider = 'wallet' AND external_id = ${ADMIN_WALLET}`;
     adminUser = await mkUser(ADMIN_WALLET);
     memberUser = await mkUser(`0x${"5e".repeat(20)}`);
+    // The Admin area's mint asks the node-admin check with the session wallet.
+    wallets.set(adminUser, ADMIN_WALLET);
+    wallets.set(memberUser, `0x${"5e".repeat(20)}`);
     agentUser = await mkUser();
     authority = createAgentToolAuthority({
       sql: service as unknown as AgentAuthoritySql,
@@ -119,6 +124,8 @@ describe("agent roles route (real Postgres, real repo-spec admin)", () => {
       log: logger,
       config: { unhandledErrorPolicy: "rethrow" },
       agentAuthority: authority,
+      nodeAdmin: createApproversNodeAdminAuthority(),
+      nodeAdminPort: createNodeAdminPort(authority),
     };
   });
 
@@ -152,11 +159,11 @@ describe("agent roles route (real Postgres, real repo-spec admin)", () => {
     expect(rows).toHaveLength(0);
   });
 
-  it("NON-ADMIN-SEES-NOTHING: GET gives canManage false and no AI; POST is 403", async () => {
+  it("NON-ADMIN-SEES-NOTHING: GET and POST are 403 authz_denied and carry no AI", async () => {
     session.user = sessionUser(memberUser, "session");
     const res = await getView();
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ canManage: false, permissions: [], more: 0 });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "authz_denied" });
     expect((await call(POST, body)).status).toBe(403);
     session.user = null;
     expect((await getView()).status).toBe(401);
@@ -184,14 +191,9 @@ describe("agent roles route (real Postgres, real repo-spec admin)", () => {
   });
 
   it("503: no configured admins gives authz_unavailable on GET and POST, never a plain deny", async () => {
-    const real = holder.container as { agentAuthority: unknown };
-    const down = createAgentToolAuthority({
-      sql: service as unknown as AgentAuthoritySql,
-      nodeAdmin: { check: async () => ({ ok: false, errorCode: "authz_unavailable", reason: "no_node_admins_configured" }) },
-      log: logger,
-      toolBundle: [...CORE_TOOL_BUNDLE],
-    });
-    holder.container = { ...real, agentAuthority: down };
+    const real = holder.container as Record<string, unknown>;
+    const nodeAdmin = { check: async () => ({ ok: false, errorCode: "authz_unavailable", reason: "no_node_admins_configured" }) };
+    holder.container = { ...real, nodeAdmin };
     try {
       session.user = sessionUser(adminUser, "session");
       expect((await getView()).status).toBe(503);
@@ -216,10 +218,10 @@ describe("agent roles route (real Postgres, real repo-spec admin)", () => {
     expect(await live()).toHaveLength(before.length);
   });
 
-  it("V8: a bearer agent (a user with no wallet binding) is refused by the same admin check", async () => {
+  it("V8: a bearer identity is not a session: the mint refuses it, and nothing is written", async () => {
     session.user = sessionUser(agentUser, "bearer");
-    expect((await call(POST, body)).status).toBe(403);
-    expect((await call(DELETE, body)).status).toBe(403);
+    expect((await call(POST, body)).status).toBe(401);
+    expect((await call(DELETE, body)).status).toBe(401);
     const rows = await service`SELECT 1 FROM agent_roles WHERE principal_user_id = ${PRIORITIZER_PRINCIPAL_USER_ID} AND revoked_at IS NULL`;
     expect(rows).toHaveLength(0);
   });

@@ -7,7 +7,7 @@
  * Scope: Server component. Access gated upstream by `(admin)/layout.tsx` (non-approver wallets redirect to /dashboard); the shared section still renders nothing unless the roles route confirms canManage. Adds no authority logic.
  * Invariants: HUMAN_ROUTES_SESSION_ONLY, NON_ADMIN_SEES_NOTHING.
  * Side-effects: none (server render only)
- * Links: task.0114, src/app/api/v1/agent-access/roles/route.ts
+ * Links: task.0114, src/app/api/v1/admin/ai-access/route.ts
  * @public
  */
 

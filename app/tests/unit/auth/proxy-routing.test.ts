@@ -360,6 +360,34 @@ describe("proxy — API route protection", () => {
 	});
 });
 
+describe("proxy — Admin area refuses any Authorization header (ADMIN_ACTS_IN_ADMIN)", () => {
+	beforeEach(() => {
+		mockGetToken.mockReset();
+	});
+
+	it.each([
+		"/api/v1/admin/ai-access",
+		"/admin/ai-access",
+		"/admin",
+	])("403 human_session_required on %s, even with a valid session, before getToken", async (path) => {
+		mockGetToken.mockResolvedValue({ sub: "admin-1" });
+
+		const res = await proxy(makeAgentRequest(path));
+
+		expect(res.status).toBe(403);
+		expect(await res.json()).toMatchObject({ code: "human_session_required" });
+		expect(mockGetToken).not.toHaveBeenCalled();
+	});
+
+	it("still lets a session-only request through to /api/v1/admin/*", async () => {
+		mockGetToken.mockResolvedValue({ sub: "admin-1" });
+
+		const res = await proxy(makeRequest("/api/v1/admin/ai-access"));
+
+		expect(res.status).toBe(200);
+	});
+});
+
 describe("proxy — unmatched routes", () => {
 	beforeEach(() => {
 		mockGetToken.mockReset();
