@@ -3,9 +3,9 @@
 
 /**
  * Module: `@tests/unit/app/agent-access-wiring`
- * Purpose: S1 wiring that no other test covers (task.5456): the roles endpoint the profile table calls and its mount. (The DTO-equals-view guarantee is a compile-time check in
+ * Purpose: S1 wiring that no other test covers (task.5456): the roles endpoint the governance AI-access page calls, its mount, and its absence from the profile. (The DTO-equals-view guarantee is a compile-time check in
  *   src/app/_lib/agent-access/dto-type-check.ts; a vitest test cannot enforce types.)
- * Scope: Reads source files and imports route modules; renders nothing. Fails if the profile table's endpoint path stops pointing at an existing human-plane route, or if the old route returns.
+ * Scope: Reads source files and imports route modules; renders nothing. Fails if the governance page's endpoint path stops pointing at an existing human-plane route, or if the old route returns.
  * Invariants: HUMAN_ROUTES_SESSION_ONLY, NON_ADMIN_SEES_NOTHING (wiring half).
  * Side-effects: filesystem reads
  */
@@ -17,13 +17,13 @@ import { describe, expect, it } from "vitest";
 import {
   AGENT_ACCESS_ENDPOINTS,
   AGENT_ACCESS_ROLES_PATH,
-} from "@/app/(app)/profile/agent-access-endpoints";
+} from "@/app/(app)/gov/ai-access/agent-access-endpoints";
 
 const SRC = resolve(__dirname, "../../../src");
 const read = (rel: string) => readFileSync(resolve(SRC, rel), "utf8");
 
 describe("S1 wiring", () => {
-  it("points the profile block at an existing human-plane route that serves GET, POST and DELETE", async () => {
+  it("points the AI-access page at an existing human-plane route that serves GET, POST and DELETE", async () => {
     expect(AGENT_ACCESS_ROLES_PATH).toBe("/api/v1/agent-access/roles");
     expect(AGENT_ACCESS_ENDPOINTS.roles).toBe(AGENT_ACCESS_ROLES_PATH);
     const route = resolve(SRC, `app${AGENT_ACCESS_ROLES_PATH}/route.ts`);
@@ -35,11 +35,21 @@ describe("S1 wiring", () => {
     expect(source.match(/refuseNonSession\(request, ctx\.log\)/g)?.length).toBeGreaterThanOrEqual(2);
   });
 
-  it("uses that endpoint in the profile view and mounts the block there", () => {
-    const view = read("app/(app)/profile/view.tsx");
+  it("uses that endpoint in the governance AI-access view and mounts the block there", () => {
+    const view = read("app/(app)/gov/ai-access/view.tsx");
     expect(view).toContain('from "./agent-access-endpoints"');
     expect(view).toContain("<AgentAccessSection endpoints={AGENT_ACCESS_ENDPOINTS} />");
     expect(view).not.toMatch(/\/api\/v1\/agent\/roles/);
+  });
+
+  it("no longer mounts the node-wide block on the profile page, and lists the gov tab right after Review", () => {
+    const profile = read("app/(app)/profile/view.tsx");
+    expect(profile).not.toContain("AgentAccessSection");
+    expect(profile).not.toContain("agent-access-endpoints");
+    expect(existsSync(resolve(SRC, "app/(app)/profile/agent-access-endpoints.ts"))).toBe(false);
+    const tabs = [...read("app/(app)/gov/layout.tsx").matchAll(/href: "(\/gov\/[a-z-]+)"/g)].map((m) => m[1]);
+    expect(tabs).toContain("/gov/ai-access");
+    expect(tabs.indexOf("/gov/ai-access")).toBe(tabs.indexOf("/gov/review") + 1);
   });
 
   it("keeps the old AI-plane path gone and the human route out of the AI namespace", () => {
