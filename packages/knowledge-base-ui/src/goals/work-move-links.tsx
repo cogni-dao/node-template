@@ -26,9 +26,12 @@ import type { GoalsProgress } from "@cogni-dao/metrics/contracts";
 import type { ReactElement } from "react";
 
 import {
+  CITATION_HEADING_CLASS,
+  CITATION_LIST_CLASS,
   type CitationLinkComponent,
   type CitationTone,
   CitationRow,
+  DefaultCitationLink,
 } from "../citation-links.js";
 import { type WorkMetric, WorkMetricDetails, workMetricArrow } from "../work-metrics.js";
 import { useGoalsHost } from "./context.js";
@@ -68,14 +71,10 @@ export function moveRows(
   return rows;
 }
 
-const DefaultLink: CitationLinkComponent = ({ entityId: _entityId, ...props }) => <a {...props} />;
-
-const LIST = "flex flex-col rounded-lg border border-border bg-card px-2 py-1.5";
-
 export function WorkMoveLinks({
   moves,
   labels,
-  LinkComponent = DefaultLink,
+  LinkComponent = DefaultCitationLink,
   gapHref = KPI_THROUGH_DELIVERY_HREF,
 }: {
   readonly moves: readonly WorkMetric[];
@@ -88,7 +87,7 @@ export function WorkMoveLinks({
   const { hrefs } = useGoalsHost();
   const data = useGoalsProgress({ poll: false }).data;
   const heading = (
-    <h3 className="font-medium text-muted-foreground text-xs uppercase tracking-wider">Moves</h3>
+    <h3 className={CITATION_HEADING_CLASS}>Moves</h3>
   );
   const row = (r: WorkMoveRow, key = "") => (
     <CitationRow
@@ -106,7 +105,7 @@ export function WorkMoveLinks({
     return (
       <section aria-label="Moves" data-work-moves="none" className="flex flex-col gap-1.5">
         {heading}
-        <div className={LIST}>
+        <div className={CITATION_LIST_CLASS}>
           {goalId && row({ relation: "goal", tone: "muted", slug: goalId })}
           <p className="flex min-h-8 items-center gap-x-2 text-sm">
             <span aria-hidden="true" className="text-warning">
@@ -127,7 +126,7 @@ export function WorkMoveLinks({
   return (
     <section aria-label="Moves" data-work-moves="moves" className="flex flex-col gap-2">
       {heading}
-      <div className={LIST}>
+      <div className={CITATION_LIST_CLASS}>
         {moves.flatMap((move) => moveRows(move, data, labels).map((r) => row(r, `${move.metricId}|`)))}
       </div>
       <WorkMetricDetails moves={moves} />

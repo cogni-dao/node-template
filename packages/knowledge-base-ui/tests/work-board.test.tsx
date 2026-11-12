@@ -166,6 +166,20 @@ describe("WorkBoard", () => {
     expect(document.querySelector("time")).toBeNull();
   });
 
+  it("links a goal id without the goal- prefix to its own page by default", () => {
+    render(
+      <WorkGoalsProvider resolve={() => ({ id: "ai-work-converges", title: "Converge" })}>
+        <WorkBoard
+          columns={[{ status: "needs_implement", items: [item], hasMore: false }]}
+          isLoading={false}
+          onOpenItem={() => {}}
+          onLoadMore={() => {}}
+        />
+      </WorkGoalsProvider>,
+    );
+    expect(screen.getByRole("link", { name: "Converge" })).toHaveAttribute("href", "/knowledge/ai-work-converges");
+  });
+
   it("renders skeletons while loading", () => {
     const { container } = render(
       <WorkBoard

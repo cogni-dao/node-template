@@ -79,10 +79,8 @@ function reading(value: WorkMetric["current"]): string {
 
 export function WorkMetricDetails({
   moves,
-  goal,
 }: {
   readonly moves: readonly WorkMetric[];
-  readonly goal?: string | undefined;
 }): ReactElement | null {
   if (!moves.length) return null;
   return (
@@ -96,7 +94,6 @@ export function WorkMetricDetails({
           >
             {move.current?.metricTitle ?? move.metricId}
           </a>
-          {goal && <div>{goal}</div>}
           <div>
             {workMetricVerdict(move)}
             {move.unknownReason ? ` · ${move.unknownReason.replace(/_/g, " ")}` : ""}

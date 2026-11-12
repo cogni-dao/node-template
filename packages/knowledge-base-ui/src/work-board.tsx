@@ -74,7 +74,7 @@ export interface WorkBoardProps<TItem extends WorkBoardItem> {
   readonly onOpenItem: (item: TItem) => void;
   /** Requests the next page of one column; the node fetches it and passes it back in `columns`. */
   readonly onLoadMore: (status: string) => void;
-  /** Builds a goal link href from its slug. Defaults to `/knowledge/goal-<slug>`. */
+  /** Builds a goal link href from its slug. Defaults to `/knowledge/<goal id>`, so an id without the `goal-` prefix still links to its own page. */
   readonly goalHref?: (slug: string) => string;
   /** Renders the goal link, e.g. with a router link. Defaults to a plain `<a>`. */
   readonly renderGoalLink?: (link: WorkBoardGoalLink) => ReactNode;
@@ -83,8 +83,8 @@ export interface WorkBoardProps<TItem extends WorkBoardItem> {
 const GOAL_LINK_CLASS =
   "relative z-10 block min-h-6 min-w-6 max-w-full truncate leading-6 underline hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
-function defaultGoalHref(slug: string): string {
-  return `/knowledge/${encodeURIComponent(`goal-${slug}`)}`;
+function defaultGoalHref(goalId: string): string {
+  return `/knowledge/${encodeURIComponent(goalId)}`;
 }
 
 function defaultGoalLink(link: WorkBoardGoalLink): ReactNode {
@@ -102,7 +102,7 @@ function GoalPointer({
   renderGoalLink,
 }: {
   readonly item: WorkBoardItem;
-  readonly goalHref: (slug: string) => string;
+  readonly goalHref: ((slug: string) => string) | undefined;
   readonly renderGoalLink: (link: WorkBoardGoalLink) => ReactNode;
 }): ReactElement | null {
   const goal = useWorkGoal(item);
@@ -110,7 +110,7 @@ function GoalPointer({
   const slug = goal.id.replace(/^goal-/, "");
   return (
     <span title={goal.title} className="min-w-0 max-w-full">
-      {renderGoalLink({ slug, label: goal.title, href: goalHref(slug), className: GOAL_LINK_CLASS })}
+      {renderGoalLink({ slug, label: goal.title, href: goalHref ? goalHref(slug) : defaultGoalHref(goal.id), className: GOAL_LINK_CLASS })}
     </span>
   );
 }
@@ -146,7 +146,7 @@ export function WorkBoard<TItem extends WorkBoardItem>({
   isLoading,
   onOpenItem,
   onLoadMore,
-  goalHref = defaultGoalHref,
+  goalHref,
   renderGoalLink = defaultGoalLink,
 }: WorkBoardProps<TItem>): ReactElement {
   const byStatus = useMemo(

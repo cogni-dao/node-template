@@ -33,9 +33,15 @@ export interface CitationLinkProps {
 /** A router link (for example `next/link`) or the default anchor. */
 export type CitationLinkComponent = ComponentType<CitationLinkProps>;
 
-const DefaultLink: CitationLinkComponent = ({ entityId: _entityId, ...props }) => (
+/** The plain anchor a host without a router link falls back to. */
+export const DefaultCitationLink: CitationLinkComponent = ({ entityId: _entityId, ...props }) => (
   <a {...props} />
 );
+const DefaultLink = DefaultCitationLink;
+
+/** The Links section's heading and its bordered row list, shared by every section that draws `CitationRow`s. */
+export const CITATION_HEADING_CLASS = "font-medium text-muted-foreground text-xs uppercase tracking-wider";
+export const CITATION_LIST_CLASS = "flex flex-col rounded-lg border border-border bg-card px-2 py-1.5";
 
 export interface CitationLinkEndpoint {
   readonly id: string;
@@ -167,8 +173,8 @@ export function CitationLinks({
       entityId={entityId}
       loadPage={loadPage}
       className={cn("flex flex-col gap-1.5", className)}
-      headingClassName="font-medium text-muted-foreground text-xs uppercase tracking-wider"
-      linksClassName="flex flex-col rounded-lg border border-border bg-card px-2 py-1.5 empty:hidden"
+      headingClassName={CITATION_HEADING_CLASS}
+      linksClassName={cn(CITATION_LIST_CLASS, "empty:hidden")}
       moreButtonClassName="w-fit rounded border px-2 py-1 text-xs disabled:opacity-50"
       renderLink={(link) => {
         const other = link.direction === "out" ? link.target : link.source;

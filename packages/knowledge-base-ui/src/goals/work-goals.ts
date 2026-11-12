@@ -10,7 +10,7 @@
  *   - LABEL_SPELLINGS: `goal:<slug>` and `goal:goal-<slug>` name the same goal; the label resolves only against goals the read lists, so a raw label is never displayed.
  *   - FIRST_RESOLVABLE_MOVE_WINS: moves are tried in order; a metric that serves no bound KPI is skipped for the goal.
  * Side-effects: none
- * Links: ./work-moves.tsx, ../work-goals.tsx, ./metrics-view.ts
+ * Links: ./work-move-links.tsx, ../work-goals.tsx, ./metrics-view.ts
  * @public
  */
 

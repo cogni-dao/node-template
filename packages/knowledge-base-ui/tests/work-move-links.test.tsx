@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 /**
- * Module: `@cogni/knowledge-base-ui/work-moves.test`
+ * Module: `@cogni/knowledge-base-ui/work-move-links.test`
  * Purpose: Proves a work item leads with the KPI it moves (task.0112): the pure goal resolver (KPI, serves, label spellings, unknown), the detail Moves section (existing link rows plus `WorkMetricDetails`) with and without moves, and the table's Goal column showing the resolved title (never the raw label) with no Project column.
  * Scope: Package exports + fixture goal progress. No node app code, router or URL state.
  * Invariants: GOAL_IS_INHERITED, ONE_ROW_RENDERER, GAP_IS_VISIBLE, NEVER_DEAD_END, ONE_READ_FOR_ALL_ROWS.

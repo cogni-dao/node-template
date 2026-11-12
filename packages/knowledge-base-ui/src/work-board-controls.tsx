@@ -46,11 +46,6 @@ export function formatWorkStatus(status: string): string {
   return status.replace("needs_", "").replace(/_/g, " ");
 }
 
-/** `proj.alpha` → `alpha`. */
-export function formatWorkProject(projectId: string): string {
-  return projectId.replace("proj.", "");
-}
-
 /** The faceted work columns the board filters on, by TanStack column id. */
 export type WorkFacet = "type" | "status";
 

@@ -16,6 +16,9 @@ export {
   type CitationLinksProps,
   CitationEdgeList,
   CitationRow,
+  CITATION_HEADING_CLASS,
+  CITATION_LIST_CLASS,
+  DefaultCitationLink,
   type CitationEdgeListProps,
   type ContributionDiffRowLike,
   type ContributionEntryChange,
@@ -130,7 +133,6 @@ export {
 } from "./work-board-toolbar.js";
 export {
   ACTIVE_WORK_STATUSES,
-  formatWorkProject,
   formatWorkStatus,
   WORK_STATUSES,
   WORK_TYPES,
