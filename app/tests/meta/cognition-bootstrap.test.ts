@@ -252,17 +252,25 @@ describe("session cognition hook", () => {
 		execFileSync("git", ["check-ignore", "-q", "--", CACHE_PATH], { cwd: clone });
 	});
 
-	it("gives the clone root the copy rule whatever branch it has out (bug.0018)", () => {
+	it("mirrors the shared copy rule into the clone root on any branch (bug.0018)", () => {
 		const root = fixture();
 		const clone = path.join(root, "clone");
 		mkdirSync(path.join(clone, ".cogni"), { recursive: true });
+		mkdirSync(path.join(clone, ".conductor"));
 		execFileSync("git", ["init", "-q"], { cwd: clone });
 		writeFileSync(path.join(clone, ".cogni/repo-spec.yaml"), "intent:\n  name: fixture\n");
-		execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: clone });
+		const shared = (globs: string) =>
+			`[scripts]\nsetup = "bash setup.sh"\n`.replace("[scripts]", `file_include_globs = """\n${globs}"""\n\n[scripts]`);
+		const rule = `.env*\n${CACHE_PATH}\n`;
+		writeFileSync(path.join(clone, ".conductor/settings.toml"), shared(rule));
+		execFileSync("git", ["add", "."], { cwd: clone });
+		execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "init"], { cwd: clone });
 		const worktree = path.join(root, "wt");
 		execFileSync("git", ["worktree", "add", "-q", "--detach", worktree], { cwd: clone });
+		// The clone root has moved to a branch without the shared rule.
+		execFileSync("git", ["rm", "-q", ".conductor/settings.toml"], { cwd: clone });
 		const local = path.join(clone, ".conductor/settings.local.toml");
-		mkdirSync(path.dirname(local));
+		mkdirSync(path.dirname(local), { recursive: true });
 		const machineSetup = [
 			'"$schema" = "https://conductor.build/schemas/settings.repo.schema.json"',
 			"",
@@ -280,31 +288,48 @@ describe("session cognition hook", () => {
 			CODEX_HOME: path.join(root, "no-user-hook"),
 			CODEX_THREAD_ID: "",
 			COGNI_NODE_API_KEY: "test-key",
+			CONDUCTOR_ROOT_PATH: "",
 			PATH: `${bin}:${process.env.PATH ?? ""}`,
 		};
+		const refresh = (extra: Record<string, string> = {}) =>
+			execFileSync("bash", [LOADER, "--refresh"], { cwd: worktree, env: { ...env, ...extra }, stdio: "ignore" });
+		const toml = () =>
+			JSON.parse(
+				execFileSync("python3", ["-c", "import json,sys,tomllib; print(json.dumps(tomllib.load(open(sys.argv[1],'rb'))))", local], { encoding: "utf8" }),
+			) as { file_include_globs?: string; scripts: { setup: string } };
 
 		// Outside Conductor the loader never writes Conductor settings.
-		execFileSync("bash", [LOADER, "--refresh"], { cwd: worktree, env, stdio: "ignore" });
+		refresh();
 		expect(readFileSync(local, "utf8")).toBe(`${machineSetup}\n`);
 
-		// Under Conductor the rule lands before the first table, keeping the
-		// machine's own settings, and a second refresh changes nothing.
-		const conductor = { ...env, CONDUCTOR_ROOT_PATH: clone };
-		execFileSync("bash", [LOADER, "--refresh"], { cwd: worktree, env: conductor, stdio: "ignore" });
+		// Under Conductor the shared rule lands verbatim before the first table,
+		// the machine's own settings stay, and a second refresh changes nothing.
+		const conductor = { CONDUCTOR_ROOT_PATH: clone };
+		refresh(conductor);
 		const once = readFileSync(local, "utf8");
-		execFileSync("bash", [LOADER, "--refresh"], { cwd: worktree, env: conductor, stdio: "ignore" });
+		refresh(conductor);
 		expect(readFileSync(local, "utf8")).toBe(once);
-		const parsed = JSON.parse(
-			execFileSync("python3", ["-c", "import json,sys,tomllib; print(json.dumps(tomllib.load(open(sys.argv[1],'rb'))))", local], { encoding: "utf8" }),
-		) as { file_include_globs: string; scripts: { setup: string } };
-		expect(parsed.file_include_globs.split("\n")).toEqual([".env*", CACHE_PATH, ""]);
-		expect(parsed.scripts.setup).toBe("bash machine-setup.sh");
+		expect(toml().file_include_globs).toBe(rule);
+		expect(toml().scripts.setup).toBe("bash machine-setup.sh");
 		execFileSync("git", ["check-ignore", "-q", "--", ".conductor/settings.local.toml"], { cwd: clone });
+
+		// The mirror follows the shared rule; it never becomes a second owner.
+		const grown = `.env*\n${CACHE_PATH}\n.local-auth\n`;
+		writeFileSync(path.join(worktree, ".conductor/settings.toml"), shared(grown));
+		refresh(conductor);
+		expect(toml().file_include_globs).toBe(grown);
+		expect(readFileSync(local, "utf8").match(/^file_include_globs/gm)).toHaveLength(1);
+
+		// A rule the human set is never touched.
+		const human = `${machineSetup.replace("[scripts]", 'file_include_globs = ".env*"\n\n[scripts]')}\n`;
+		writeFileSync(local, human);
+		refresh(conductor);
+		expect(readFileSync(local, "utf8")).toBe(human);
 
 		// A clone root with no local settings gets a valid file of its own.
 		rmSync(local);
-		execFileSync("bash", [LOADER, "--refresh"], { cwd: worktree, env: conductor, stdio: "ignore" });
-		expect(readFileSync(local, "utf8")).toContain(`file_include_globs = """\n.env*\n${CACHE_PATH}\n"""`);
+		refresh(conductor);
+		expect(toml().file_include_globs).toBe(grown);
 	});
 
 	it("warms the cognition cache in workspace setup before anything slow (bug.0018)", () => {

@@ -158,36 +158,47 @@ ensure_clone_root_ignores() {
 # Files-to-copy rule (.conductor/settings.toml) is read from the clone root's
 # checkout or the default branch. A clone root on a branch without it would copy
 # only .env*, and Claude's first import would find no cache. The clone root's
-# machine-local settings.local.toml outranks the shared file on every branch;
-# give it the same rule unless it already sets one. Conductor only.
-CONDUCTOR_COPY_GLOBS='file_include_globs = """
-.env*
-.cogni/.cognition-cache.md
-"""'
+# machine-local settings.local.toml outranks the shared file on every branch, so
+# mirror the shared rule there, verbatim and kept in sync, inside a marked block.
+# A rule the human set there is never touched. Conductor only.
+CONDUCTOR_COPY_MARK="# cogni:file_include_globs — mirrored from .conductor/settings.toml by scripts/agent/session-cognition.sh"
 ensure_conductor_copies_cache() {
   [ -n "${CONDUCTOR_ROOT_PATH:-}" ] || return 0
   [ "$(cd "$CONDUCTOR_ROOT_PATH" 2>/dev/null && pwd -P)" = "$(cd "$clone_root" && pwd -P)" ] || return 0
+  rule="$(awk '
+    /^file_include_globs[[:space:]]*=[[:space:]]*"""/ { on = 1 }
+    on { print }
+    on && /"""[[:space:]]*$/ && !/^file_include_globs/ { exit }
+  ' .conductor/settings.toml 2>/dev/null)"
+  case "$rule" in *"$CACHE_FILE"*) ;; *) return 0 ;; esac
+  block="$CONDUCTOR_COPY_MARK
+$rule"
   settings="$clone_root/.conductor/settings.local.toml"
-  if grep -q '^[[:space:]]*file_include_globs[[:space:]]*=' "$settings" 2>/dev/null; then
-    grep -qF "$CACHE_FILE" "$settings" \
-      || printf 'warn: %s sets file_include_globs without %s; new worktrees start without cognition\n' "$settings" "$CACHE_FILE" >&2
+  # Drop our previous block; anything else in the file is the human's.
+  kept="$(MARK="$CONDUCTOR_COPY_MARK" awk '
+    $0 == ENVIRON["MARK"] { skip = 1; next }
+    skip && /"""[[:space:]]*$/ && !/^file_include_globs/ { skip = 0; after = 1; next }
+    after && /^[[:space:]]*$/ { after = 0; next }
+    { after = 0 }
+    !skip { print }
+  ' "$settings" 2>/dev/null)"
+  if printf '%s\n' "$kept" | grep -q '^[[:space:]]*file_include_globs[[:space:]]*='; then
+    printf 'warn: %s sets its own file_include_globs; new worktrees get the cognition cache only if it lists %s\n' "$settings" "$CACHE_FILE" >&2
     return 0
   fi
-  block="# Cogni: copy the last complete cognition bundle into each new worktree,
-# whatever branch this checkout has out (scripts/agent/session-cognition.sh).
-$CONDUCTOR_COPY_GLOBS"
   if [ -f "$settings" ]; then
     # TOML top-level keys must precede the first [table].
-    updated="$(BLOCK="$block" awk '
+    updated="$(printf '%s\n' "$kept" | BLOCK="$block" awk '
       !done && /^[[:space:]]*\[/ { print ENVIRON["BLOCK"]; print ""; done = 1 }
-      { print }
-      END { if (!done) { print ""; print ENVIRON["BLOCK"] } }
-    ' "$settings")" || return 0
+      { print; last = $0 }
+      END { if (!done) { if (last !~ /^[[:space:]]*$/) print ""; print ENVIRON["BLOCK"] } }
+    ')" || return 0
   else
     updated="\"\$schema\" = \"https://conductor.build/schemas/settings.repo.schema.json\"
 
 $block"
   fi
+  [ "$updated" = "$(cat "$settings" 2>/dev/null)" ] && return 0
   write_file_atomic "$settings" "$updated"
   chmod 600 "$settings" 2>/dev/null
   ensure_clone_root_ignores ".conductor/settings.local.toml"
