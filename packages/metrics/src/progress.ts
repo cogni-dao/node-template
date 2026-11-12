@@ -1,16 +1,18 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 /**
- * One goal-progress read model for the Goals tab, HTTP and agent tools. Nodes
+ * One goal-progress read model for the Goals and Metrics views, HTTP and agent tools. Nodes
  * inject where goals and hypotheses live; thresholds never write verdicts.
  * Invariants: SERVED_BY_TYPED_LINK (a KPI lists the registered metrics whose
  * `serves.kpi` names it, joined at read time from the stored spec, never from a
  * citation table); LATEST_ONLY (a served metric adds one band assessment from
  * its latest reading: no trend, no history query, at most SERVES_SCAN_MAX
  * definitions scanned, a cut reported as `servedTruncated`); ORPHAN_NOT_HIDDEN
- * (a metric whose `serves.kpi` no goal KPI or hypothesis prediction binds, or whose `serves`/`band` is
+ * (a metric whose `serves.kpi` no goal KPI binds (a bet-only KPI is `serves_bet_kpi`), or whose `serves`/`band` is
  * invalid, is listed in `orphans` with its assessment and the zod issue paths);
  * SERVED_NEVER_FAILS_READ (a serving() failure, for example an authority
- * outage, leaves `served`/`orphans` absent and sets `servedUnavailable`).
+ * outage, leaves `served`/`orphans`/`unbound` absent and sets `servedUnavailable`);
+ * UNBOUND_LISTED (a metric with no `serves` that no goal binds as a KPI is listed in `unbound`, so the Metrics page
+ * and agents see every metric once; story.0039).
  */
 import { assessKpi } from "./assess.js";
 import {
@@ -99,6 +101,8 @@ export async function readGoalsProgress(deps: {
 	for (const goal of goals)
 		for (const b of parseBindings(goal.kpiBindings).bindings)
 			boundKpis.add(b.metricId);
+	// KPIs a goal binds; `boundKpis` adds the ones only a bet binds, below.
+	const goalKpis = new Set(boundKpis);
 	for (const goal of goals) {
 		const configured = parseBindings(goal.kpiBindings);
 		const kpis: GoalProgress["kpis"] = [];
@@ -129,6 +133,7 @@ export async function readGoalsProgress(deps: {
 							.role,
 					},
 					assessment: x.assessment,
+					latest: x.latest,
 				}));
 			kpis.push({
 				binding,
@@ -202,27 +207,51 @@ export async function readGoalsProgress(deps: {
 	const orphans: MetricOrphan[] = [];
 	for (const x of serving?.items ?? []) {
 		const { serves, annexInvalid } = x.definition;
-		if (serves && !boundKpis.has(serves.kpi))
+		if (serves && !goalKpis.has(serves.kpi))
 			orphans.push({
 				metricId: x.definition.id,
+				title: x.definition.title,
 				kpi: serves.kpi,
-				reason: "serves_unknown_kpi",
+				// A bet's KPI is a valid target, but no goal card lists the metric.
+				reason: boundKpis.has(serves.kpi)
+					? "serves_bet_kpi"
+					: "serves_unknown_kpi",
 				assessment: x.assessment,
+				latest: x.latest,
 			});
 		for (const bad of annexInvalid ?? [])
 			orphans.push({
 				metricId: x.definition.id,
+				title: x.definition.title,
 				kpi: serves?.kpi ?? null,
 				reason: bad.field === "serves" ? "serves_invalid" : "band_invalid",
 				issues: bad.issues,
 				assessment: x.assessment,
+				latest: x.latest,
 			});
 	}
 	return GoalsProgressSchema.parse({
 		goals: items,
 		asOf: at.toISOString(),
 		environment: deps.environment,
-		...(serving ? { orphans, servedTruncated: serving.truncated } : {}),
+		...(serving
+			? {
+					orphans,
+					// A goal's KPI metric is the KPI, not bloat. A bet-only KPI metric serves no goal KPI, so it is listed.
+					unbound: serving.unbound
+						.filter((x) => !goalKpis.has(x.definition.id))
+						.map((x) => ({
+						metric: {
+							id: x.definition.id,
+							title: x.definition.title,
+							calculatorId: x.definition.spec.calculatorId,
+						},
+						assessment: x.assessment,
+						latest: x.latest,
+					})),
+					servedTruncated: serving.truncated,
+				}
+			: {}),
 		...(servedUnavailable ? { servedUnavailable } : {}),
 	});
 }

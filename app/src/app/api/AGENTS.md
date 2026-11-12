@@ -64,6 +64,7 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
   - `/api/v1/users/me/ownership` [GET] - current ownership summary derived from linked identities
   - `/api/v1/work/summaries` [GET] - one bounded page (default 25, max 100; text scans ≤1000 rows, `pageInfo.rowsScanned`) of projected Work summaries; the route is auth + logging + the published `handleWorkSummariesRequest` (SIWE or agent bearer auth)
   - `/api/v1/work/board` [GET] - first page (≤20) of each visible status column under one deadline and scan budget (unreached columns `not_started`); the route is auth + logging + the published `handleWorkBoardRequest`; column cursors continue through `/summaries` (SIWE or agent bearer auth)
+  - `/api/v1/work/items/{id}/expectations` [GET] - authenticated bounded tracked EDO projection using composed knowledge and metrics reads; unmatched commitments remain unresolved.
   - `/api/v1/work/items` [GET, POST] - list or create node-local Dolt work items (SIWE or agent bearer auth)
   - `/api/v1/work/items/[id]` [GET, PATCH, DELETE] - read/update a node-local Dolt work item; DELETE returns 410 (use status=cancelled) (SIWE or agent bearer auth)
   - `/api/v1/work/items/[id]/claims` [POST, DELETE] - acquire or release an authenticated principal+run lease

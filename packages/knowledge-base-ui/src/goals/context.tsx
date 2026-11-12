@@ -33,6 +33,8 @@ export interface GoalsHrefs {
   readonly observation: (metricId: string, observationId: string) => string;
   /** "how goals work" under an empty board. Default `/knowledge/dao-goals-design`. */
   readonly help: string;
+  /** Why a metric that serves no KPI is bloat. Default `/knowledge/goal-metrics-vs-telemetry`. */
+  readonly axioms: string;
 }
 
 /** Only what the Goals views pass, so `next/link` and a plain anchor both fit under exactOptionalPropertyTypes. */
@@ -68,6 +70,7 @@ export const DEFAULT_GOALS_HREFS: GoalsHrefs = {
   metric: (metricId) => `/knowledge/${encodeURIComponent(metricId)}`,
   observation: observationHref,
   help: "/knowledge/dao-goals-design",
+  axioms: "/knowledge/goal-metrics-vs-telemetry",
 };
 
 let defaultClient: GoalsClient | undefined;

@@ -18,11 +18,7 @@
 
 import { z } from "zod";
 
-import {
-  CITE_CONTRIBUTION_PATTERN,
-  CITE_ID_PATTERN,
-  CITE_MAX,
-} from "./cites.js";
+import { CITE_CONTRIBUTION_PATTERN, CITE_ID_PATTERN, CITE_MAX } from "./cites.js";
 import { ChangeReasonSchema } from "./history-contract.js";
 import { MOVE_METRIC_ID_MAX, MOVES_MAX } from "./moves.js";
 
@@ -33,7 +29,7 @@ import { MOVE_METRIC_ID_MAX, MOVES_MAX } from "./moves.js";
  */
 export const WorkItemScoresInputSchema = z.record(
   z.string(),
-  z.looseObject({ v: z.number(), ev: z.string().optional() })
+  z.looseObject({ v: z.number(), ev: z.string().optional() }),
 );
 
 export const WorkItemPatchStatusSchema = z.enum([
@@ -56,10 +52,7 @@ export const CiteRefSchema = z.strictObject({
     .describe("Hub atom id you read for this decision."),
   contribution: z
     .string()
-    .regex(
-      CITE_CONTRIBUTION_PATTERN,
-      `contribution must match ${CITE_CONTRIBUTION_PATTERN.source}`
-    )
+    .regex(CITE_CONTRIBUTION_PATTERN, `contribution must match ${CITE_CONTRIBUTION_PATTERN.source}`)
     .optional()
     .describe("Open inbox id (contrib-...) when the atom exists only there."),
 });
@@ -77,7 +70,8 @@ export const MoveInputSchema = z.object({
     .describe("Id of a registered metric (hub entry with a metric spec)."),
   direction: z
     .enum(["up", "down"])
-    .describe("The way this work should move the metric."),
+    .nullable()
+    .describe("The intended direction, or null for an affected metric without a direction."),
 });
 
 /**
@@ -100,7 +94,7 @@ export const WorkItemMovesInputSchema = z
     }
   })
   .describe(
-    "Metrics this work moves: at most 3 of { metricId, direction: up|down }; [] means it moves none (say why in the reason on a patch). On a patch it replaces the whole list. The server resolves each new metric and pins its baseline; never send one."
+    "Metrics this work moves: at most 3 of { metricId, direction: up|down|null }; [] means it moves none (say why in the reason on a patch). On a patch it replaces the whole list. The server resolves each new metric and pins its baseline; never send one.",
   );
 
 export const WorkItemPatchInputSchema = z.object({
@@ -125,7 +119,7 @@ export const WorkItemPatchInputSchema = z.object({
     })
     .optional()
     .describe(
-      "Hub atoms (at most 8, ids unique) that governed this decision. Each is pinned to its commit in history. Cite only atoms you read."
+      "Hub atoms (at most 8, ids unique) that governed this decision. Each is pinned to its commit in history. Cite only atoms you read.",
     ),
   set: z
     .strictObject({

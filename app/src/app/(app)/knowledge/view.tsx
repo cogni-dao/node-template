@@ -5,7 +5,7 @@
  * Module: `@app/(app)/knowledge/view`
  * Purpose: Client knowledge dashboard. Tab-intent dashboard with bounded Browse/Graph and legacy grids for
  *   Browse mode (knowledge entries on `main`) and Inbox mode (open external-agent
- *   contributions), plus Graph, Chains, Domains and Goals peers. One WAI-ARIA
+ *   contributions), plus Graph, Chains and Domains peers. One WAI-ARIA
  *   tablist and URL-driven mode.
  * Scope: Presentation. Fetches data via React Query; mutates via direct fetch.
  * Invariants:
@@ -13,14 +13,13 @@
  *   - SINGLE_COLUMNS_TOGGLE (toolbar, not per-column).
  *   - URL_DRIVEN_MODE; inactive tabs do not start reads.
  *   - Cookie-session merges only — no Bearer header is ever sent from this page.
- * Side-effects: IO (GET /knowledge, GET /knowledge/contributions, GET /metrics/goals, POST .../merge, POST .../close).
+ * Side-effects: IO (GET /knowledge, GET /knowledge/contributions, POST .../merge, POST .../close).
  * Links: docs/spec/knowledge-syntropy.md, [/work view](../work/view.tsx)
  * @public
  */
 
 "use client";
 
-import { attentionCount } from "@cogni/knowledge-base-ui/goals";
 import type {
   ContributionRecord,
   DomainRow,
@@ -36,7 +35,6 @@ import {
 import { DataGridColumnVisibility } from "@cogni/node-ui-kit/reui/data-grid/data-grid-column-visibility";
 import { DataGridPagination } from "@cogni/node-ui-kit/reui/data-grid/data-grid-pagination";
 import { DataGridTable } from "@cogni/node-ui-kit/reui/data-grid/data-grid-table";
-import type { GoalsProgress } from "@cogni-dao/metrics/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   type ColumnFiltersState,
@@ -58,7 +56,6 @@ import {
   Plus,
   Settings2,
   Tags,
-  Target,
 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
@@ -84,15 +81,10 @@ import { ContributionDetail } from "./_components/ContributionDetail";
 import { knowledgeColumns } from "./_components/columns";
 import { buildContributionColumns } from "./_components/contribution-columns";
 import { domainColumns } from "./_components/domain-columns";
-import {
-  KnowledgeGoalsBoard,
-  KnowledgeGoalsProvider,
-  useKnowledgeGoalsBadge,
-} from "./_components/GoalsMount";
 import { GraphView } from "./_components/GraphView";
 import { KnowledgeDetail } from "./_components/KnowledgeDetail";
 
-type ViewMode = "browse" | "graph" | "chains" | "domains" | "goals" | "inbox";
+type ViewMode = "browse" | "graph" | "chains" | "domains" | "inbox";
 
 /** Tab order is the visual order; arrow keys walk it. */
 const MODES: readonly ViewMode[] = [
@@ -100,7 +92,6 @@ const MODES: readonly ViewMode[] = [
   "graph",
   "chains",
   "domains",
-  "goals",
   "inbox",
 ];
 
@@ -117,8 +108,7 @@ function isMode(v: string | null): v is ViewMode {
     v === "domains" ||
     v === "inbox" ||
     v === "chains" ||
-    v === "graph" ||
-    v === "goals"
+    v === "graph"
   );
 }
 
@@ -127,8 +117,6 @@ function errorMessage(error: unknown): string {
 }
 
 interface KnowledgeDashboardViewProps {
-  /** SSR-seeded goal progress — only present on a `?mode=goals` deep-link. */
-  readonly initialGoals?: GoalsProgress | undefined;
   /** SSR-seeded legacy Chains list; never read for Browse/Graph. */
   readonly initialList?: KnowledgeListResponse | undefined;
   /** SSR-seeded domain registry. */
@@ -137,21 +125,11 @@ interface KnowledgeDashboardViewProps {
   readonly initialBrowse?: KnowledgeBrowsePage | undefined;
 }
 
-/** One Goals host for the tab badge and the board, so both read one cache entry. */
-export function KnowledgeDashboardView(props: KnowledgeDashboardViewProps = {}) {
-  return (
-    <KnowledgeGoalsProvider>
-      <KnowledgeDashboard {...props} />
-    </KnowledgeGoalsProvider>
-  );
-}
-
-function KnowledgeDashboard({
-  initialGoals,
+export function KnowledgeDashboardView({
   initialList,
   initialDomains,
   initialBrowse,
-}: KnowledgeDashboardViewProps) {
+}: KnowledgeDashboardViewProps = {}) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
@@ -200,23 +178,6 @@ function KnowledgeDashboard({
   });
 
   const openCount = contributionsQuery.data?.contributions.length ?? 0;
-
-  // On-intent reads feed the Goals tab badge. Polling lives in GoalsBoard, which is
-  // mounted only while the Goals tab is selected.
-  const goalsQuery = useKnowledgeGoalsBadge({
-    enabled: mode === "goals",
-    initialData: initialGoals,
-  });
-  const goalsAttention = goalsQuery.data
-    ? attentionCount(goalsQuery.data.goals)
-    : 0;
-  const noneFailingOrMissed =
-    goalsQuery.data?.goals.every((g) =>
-      g.kpis.every(
-        (k) =>
-          k.assessment.status !== "failing" && k.assessment.status !== "missed"
-      )
-    ) ?? true;
 
   const tabRefs = useRef(new Map<ViewMode, HTMLButtonElement>());
   const onTabKeyDown = useCallback((e: KeyboardEvent<HTMLDivElement>) => {
@@ -333,25 +294,6 @@ function KnowledgeDashboard({
               icon={<Tags className="size-3.5" />}
             />
             <ModeButton
-              {...tabProps("goals")}
-              label="Goals"
-              {...(!goalsQuery.data
-                ? {
-                    badge: "—",
-                    badgeLabel: "Goal status not loaded; open Goals to load",
-                  }
-                : {})}
-              icon={<Target className="size-3.5" />}
-              {...(goalsAttention > 0
-                ? {
-                    badge: noneFailingOrMissed
-                      ? `${goalsAttention} behind`
-                      : `${goalsAttention} at risk`,
-                    badgeLabel: `${goalsAttention} ${goalsAttention === 1 ? "goal needs" : "goals need"} attention`,
-                  }
-                : {})}
-            />
-            <ModeButton
               {...tabProps("inbox")}
               label="Inbox"
               {...(!contributionsQuery.data
@@ -378,7 +320,6 @@ function KnowledgeDashboard({
         aria-labelledby={`knowledge-tab-${mode}`}
         className="flex min-w-0 flex-col gap-4"
       >
-        {mode === "goals" && <KnowledgeGoalsBoard initialData={initialGoals} />}
         {mode === "browse" && <BoundedBrowse initialData={initialBrowse} />}
         {mode === "chains" && (
           <BrowsePanel

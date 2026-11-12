@@ -39,7 +39,7 @@ export function createMetricTools(
 		{
 			name: "core__goal_progress",
 			description:
-				"Read every active goal with its KPI bindings, one assessment per KPI (status, enum reason, value, target, deadline, display pace), its display type, 30 daily buckets (plus the last 24 hourly buckets for hourly metrics) and hypotheses. Call before triage/planning and after acting. Unknown is never zero.",
+				"Read every active goal with its KPI bindings, one assessment per KPI (status, enum reason, value, target, deadline, display pace), its display type, 30 daily buckets (plus the last 24 hourly buckets for hourly metrics), the metrics that serve each KPI (served, by role, each with status against its band, latest value and its time), the metrics that serve no KPI (orphans and unbound) and hypotheses. The Metrics page shows this same read. Call before triage/planning and after acting. Unknown is never zero.",
 			effect: "read_only" as const,
 			inputSchema: z.strictObject({}),
 			outputSchema: GoalsProgressSchema,
@@ -62,7 +62,7 @@ export function createMetricTools(
 		{
 			name: "core__metric_list",
 			description:
-				"List configured metrics and available calculators with stored observations and freshness. Pass nextCursor as after to continue. Never invent values.",
+				"List configured metrics and available calculators with stored observations and freshness. Each metric carries serves (the KPI it serves and its role), band and bandAssessment. Pass nextCursor as after to continue; this is the flat list of every metric (core__goal_progress groups them by KPI). Never invent values.",
 			effect: "read_only" as const,
 			inputSchema: MetricListInputSchema,
 			outputSchema: MetricListResponseSchema,

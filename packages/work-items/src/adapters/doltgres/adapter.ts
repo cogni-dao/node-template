@@ -391,6 +391,7 @@ function rowToSummary(row: Record<string, unknown>): WorkItemSummary {
     ...(optionalNumber(row.priority) !== undefined && { priority: optionalNumber(row.priority) }),
     ...(optionalNumber(row.estimate) !== undefined && { estimate: optionalNumber(row.estimate) }),
     ...(optionalScores(row.scores) !== undefined && { scores: optionalScores(row.scores) }),
+    ...(parseStoredMoves(row.moves) !== undefined && { moves: parseStoredMoves(row.moves) }),
     ...(optionalString(row.project_id) !== undefined && { projectId: optionalString(row.project_id) }),
     labels: [...jsonArrayOf<string>(row.labels)],
     createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at ?? ""),
@@ -2965,7 +2966,7 @@ export class DoltgresWorkItemAdapter
           }[order.sortBy];
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
     const columns = summary
-      ? `id, title, type, status, priority, scores, project_id, estimate, labels, created_at, updated_at${textNeedle ? ", summary" : ""}`
+      ? `id, title, type, status, priority, scores, project_id, estimate, labels, moves, created_at, updated_at${textNeedle ? ", summary" : ""}`
       : "work_items.*";
     const nativeCursor = (row: Record<string, unknown>): WorkItemCursor => ({
       v: 2,
