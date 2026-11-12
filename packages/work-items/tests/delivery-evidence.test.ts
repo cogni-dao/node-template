@@ -34,6 +34,7 @@ describe("delivery evidence", () => {
     expect(evaluateConfirmedMerge(submission, proof, receipt)).toBe(true);
     expect(evaluateConfirmedMerge(submission, proof, { ...receipt, ci: [{ name: "build", verdict: "fail" }] })).toBe(false);
     expect(evaluateConfirmedMerge(submission, proof, { ...receipt, proofId: "other" })).toBe(false);
+    expect(evaluateConfirmedMerge(submission, proof, { ...receipt, submissionIds: ["s1", "unknown"] })).toBe(false);
     expect(evaluateConfirmedMerge(submission, proof, { ...receipt, releaseSourceSha: "d".repeat(40) })).toBe(false);
     expect(evaluateConfirmedMerge(submission, proof, { ...receipt, mergeCommitSha: "" })).toBe(false);
     expect(evaluateConfirmedMerge(submission, proof, { ...receipt, reviewRequestId: "" })).toBe(false);

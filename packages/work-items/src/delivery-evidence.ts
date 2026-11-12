@@ -50,7 +50,7 @@ export function evaluateConfirmedMerge(submissionValue: unknown, proofValue: unk
   if (!submission.success || !proof.success || !receipt.success) return false;
   const s = submission.data, p = proof.data, r = receipt.data;
   return evaluateValidation(s, p, r.validatedHead) && r.itemId === s.itemId && r.pr === s.pr &&
-    r.proofId === p.id && r.submissionIds.includes(s.id) && r.releaseSourceSha === r.validatedHead &&
+    r.proofId === p.id && r.submissionIds.length === 1 && r.submissionIds[0] === s.id && r.releaseSourceSha === r.validatedHead &&
     Date.parse(p.admittedAt) <= Date.parse(r.checkedAt) && Date.parse(r.checkedAt) <= Date.parse(r.mergedAt) &&
     Date.parse(r.mergedAt) <= Date.parse(r.confirmedAt);
 }
