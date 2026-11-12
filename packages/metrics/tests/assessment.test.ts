@@ -1433,6 +1433,82 @@ describe("goal reader deadline ownership", () => {
 			vi.useRealTimers();
 		}
 	});
+	it("serves the last good result only while every metric it lists is still readable", async () => {
+		vi.useFakeTimers();
+		try {
+			const definition = {
+				id: "m1",
+				title: "M one",
+				revision: "r1",
+				spec: { calculatorId: "c@1" },
+			};
+			const canRead = vi.fn(async () => true);
+			const metrics = {
+				serving: async () => ({
+					items: [],
+					unbound: [
+						{
+							definition,
+							assessment: null,
+							latest: {
+								viewState: "unavailable",
+								value: null,
+								unit: "x",
+								observedAt: null,
+								reason: null,
+							},
+						},
+					],
+					truncated: false,
+					readKpi: vi.fn(),
+				}),
+				canRead,
+			};
+			const finishes: ((rows: never[]) => void)[] = [];
+			let calls = 0;
+			const port = {
+				// The first read answers at once; later reads hang until finished.
+				listActiveGoals: vi.fn(() =>
+					calls++ === 0
+						? Promise.resolve([] as never[])
+						: new Promise<never[]>((resolve) => finishes.push(resolve)),
+				),
+				getKnowledge: async () => null,
+				listCitationsByCitedId: async () => [],
+			};
+			const read = createGoalProgressReader({
+				knowledge: () => port,
+				metrics: () => metrics as never,
+				environment: "test",
+			});
+			const good = await read();
+			expect(good.unbound).toHaveLength(1);
+			// Still readable: served stale after the caller wait.
+			const warm = read();
+			await vi.advanceTimersByTimeAsync(2500);
+			expect(await warm).toMatchObject({
+				asOf: good.asOf,
+				stale: { reason: "fresh_read_slow" },
+			});
+			expect(canRead).toHaveBeenCalledWith(definition);
+			// No longer readable: nothing stale is served; the caller gets the fresh read.
+			canRead.mockResolvedValue(false);
+			const late = read();
+			let settled = false;
+			void late.then(() => {
+				settled = true;
+			});
+			await vi.advanceTimersByTimeAsync(2500);
+			expect(settled).toBe(false);
+			finishes[0]!([]);
+			const fresh = await late;
+			expect(fresh.stale).toBeUndefined();
+			// It joined the one read already in flight; none started for it.
+			expect(port.listActiveGoals).toHaveBeenCalledTimes(2);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
 	it("serves nothing stale past ten minutes: the caller waits for the read, then gets a retryable 503", async () => {
 		vi.useFakeTimers();
 		try {

@@ -518,8 +518,19 @@ export function createGoalProgressReader(deps: {
 	pooledGoalReads?: boolean;
 }): () => Promise<GoalsProgress> {
 	let inFlight: Promise<GoalsProgress> | undefined;
-	let lastGood: { value: GoalsProgress; at: number } | undefined;
+	let lastGood:
+		| {
+				value: GoalsProgress;
+				at: number;
+				/** The definitions the read that produced it was authorized to list. */
+				definitions: readonly MetricDefinition[];
+		  }
+		| undefined;
+	const degraded = (value: GoalsProgress) =>
+		!!value.servedUnavailable ||
+		value.goals.some((g) => g.hypothesesUnavailable);
 	const start = (): Promise<GoalsProgress> => {
+		let definitions: readonly MetricDefinition[] = [];
 		const run = async () => {
 			const port = deps.knowledge();
 			if (!port) throw new MetricError("goals_unavailable", 503);
@@ -533,17 +544,17 @@ export function createGoalProgressReader(deps: {
 						metrics: deps.metrics(),
 						environment: deps.environment,
 						signal,
+						authorized: (list) => {
+							definitions = list;
+						},
 					}),
 				GOAL_READ_DEADLINE_MS,
 			);
 		};
 		const pending = run()
 			.then((value) => {
-				if (
-					!value.servedUnavailable &&
-					value.goals.every((g) => !g.hypothesesUnavailable)
-				)
-					lastGood = { value, at: Date.now() };
+				if (!degraded(value))
+					lastGood = { value, at: Date.now(), definitions };
 				return value;
 			})
 			.finally(() => {
@@ -552,13 +563,30 @@ export function createGoalProgressReader(deps: {
 		inFlight = pending;
 		return pending;
 	};
-	const degraded = (value: GoalsProgress) =>
-		!!value.servedUnavailable ||
-		value.goals.some((g) => g.hypothesesUnavailable);
+	/** Whether every metric a last good result lists is still readable. */
+	const readable = async (kept: NonNullable<typeof lastGood>) => {
+		const metrics = deps.metrics();
+		try {
+			const each = await Promise.all(
+				kept.definitions.map((d) => metrics?.canRead(d) ?? false),
+			);
+			return each.every(Boolean);
+		} catch {
+			return false;
+		}
+	};
 	return () => {
 		const pending = inFlight ?? start();
 		const kept = lastGood;
 		if (!kept || Date.now() - kept.at > GOAL_READ_MAX_STALE_MS) return pending;
+		return serve(pending, kept);
+	};
+	async function serve(
+		pending: Promise<GoalsProgress>,
+		kept: NonNullable<typeof lastGood>,
+	): Promise<GoalsProgress> {
+		// A metric no longer readable voids the last good result: wait for the fresh read.
+		if (!(await readable(kept))) return pending;
 		// The last good result, marked with why it was served and how old it is.
 		const stale = (
 			reason: NonNullable<GoalsProgress["stale"]>["reason"],
@@ -586,5 +614,5 @@ export function createGoalProgressReader(deps: {
 			),
 			waited,
 		]).finally(() => clearTimeout(timer));
-	};
+	}
 }
