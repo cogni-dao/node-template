@@ -245,7 +245,7 @@ export function WorkMoves({
           <p role="status" className="text-muted-foreground text-xs">Goal and KPI unavailable</p>
         </>
       ) : (
-        <div role="status" aria-label="Loading moves" className="h-24 animate-pulse rounded-md bg-primary/10" />
+        <div role="status" aria-label="Loading moves" className="h-24 motion-safe:animate-pulse rounded-md bg-primary/10" />
       )}
     </section>
   );

@@ -75,7 +75,7 @@ export function MetricCard({
   const { display, unit, title, status, target } = subject;
   // A supporting metric reads its own series, but only once its card is near the viewport.
   const cardRef = useRef<HTMLDivElement>(null);
-  const { series, pending: seriesPending } = useMetricSeriesRead(subject, nowIso, useNearViewport(cardRef));
+  const { series, pending: seriesPending, failed: seriesFailed } = useMetricSeriesRead(subject, nowIso, useNearViewport(cardRef));
   const hint = row ? (targetText(subject) ?? "No target") : subjectHint(subject, series);
   const pending = subject.viewState === "pending";
   const number = subject.value === null ? null : formatValue(subject.value, display, unit);
@@ -181,9 +181,9 @@ export function MetricCard({
           {display === "progress" && !row ? (
             <ProgressBar fraction={subjectFraction(subject)} label={markLabel} />
           ) : display === "slo" ? (
-            <AvailabilityStrip series={series} binding={target} label={markLabel} loading={seriesPending} />
+            <AvailabilityStrip series={series} binding={target} label={markLabel} loading={seriesPending} failed={seriesFailed} />
           ) : (
-            <Sparkline series={series} label={markLabel} loading={seriesPending} {...(subject.ownSeries ? { latest: subject } : {})} />
+            <Sparkline series={series} label={markLabel} loading={seriesPending} failed={seriesFailed} {...(subject.ownSeries ? { latest: subject } : {})} />
           )}
         </div>
       </div>

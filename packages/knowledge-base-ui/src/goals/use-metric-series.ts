@@ -69,13 +69,14 @@ export function useMetricSeries(subject: MetricSubject, nowIso: string, visible 
  * The same series plus whether its read is still to come. `pending` is true from
  * mount until the history read has resolved or failed (including while the card
  * is not yet near the viewport), so a card draws a loading mark, never the
- * "not enough readings" mark, for a series it has not read yet.
+ * "not enough readings" mark, for a series it has not read yet. `failed` is
+ * true when the read errored and left no series: the card says "Unavailable".
  */
 export function useMetricSeriesRead(
   subject: MetricSubject,
   nowIso: string,
   visible = true
-): { readonly series: MetricHistory | null; readonly pending: boolean } {
+): { readonly series: MetricHistory | null; readonly pending: boolean; readonly failed: boolean } {
   const { client, queryKeyPrefix } = useGoalsHost();
   const day = historyWindow("1d", Date.parse(nowIso));
   const read = useQuery({
@@ -86,6 +87,6 @@ export function useMetricSeriesRead(
     staleTime: 60_000,
     retry: 1,
   });
-  if (!subject.ownSeries) return { series: subjectSeries(subject), pending: false };
-  return { series: read.data ?? null, pending: read.isPending };
+  if (!subject.ownSeries) return { series: subjectSeries(subject), pending: false, failed: false };
+  return { series: read.data ?? null, pending: read.isPending, failed: read.isError && !read.data };
 }

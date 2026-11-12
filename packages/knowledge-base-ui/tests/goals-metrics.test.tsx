@@ -596,6 +596,32 @@ describe("MetricsBoard", () => {
     }
   });
 
+  it("says Unavailable, not the dashed no-readings mark, when a supporting metric's history read fails", async () => {
+    class Visible {
+      constructor(private readonly cb: (e: { isIntersecting: boolean }[]) => void) {}
+      observe() { this.cb([{ isIntersecting: true }]); }
+      disconnect() {}
+    }
+    vi.stubGlobal("IntersectionObserver", Visible);
+    try {
+      const fetchHistory = vi.fn(async () => { throw new Error("history down"); });
+      const client = { ...createGoalsClient(), fetchHistory };
+      const qc = new QueryClient({ defaultOptions: { queries: { retry: false, retryDelay: 0, gcTime: 0 } } });
+      const view = render(<QueryClientProvider client={qc}><MetricsBoard client={client} initialData={fixture()} /></QueryClientProvider>);
+      const goal = view.container.querySelector('[data-goal="goal-a"]') as HTMLElement;
+      fireEvent.click(within(goal).getByRole("button", { name: "KPI red" }));
+      const card = goal.querySelector('[data-metric="m-guard-red"]') as HTMLElement;
+      await waitFor(() => expect(card.querySelector('[data-spark="unavailable"]')).not.toBeNull(), { timeout: 4000 });
+      expect(card.querySelector('[data-spark="unavailable"]')).toHaveAttribute("title", "Unavailable");
+      expect(card.querySelector('[data-spark="empty"]')).toBeNull();
+      expect(card.querySelector('[data-spark="loading"]')).toBeNull();
+      view.unmount();
+      qc.clear();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("pages the not-serving group at 20 like a KPI's metrics", () => {
     const unbound = Array.from({ length: 45 }, (_, i) => ({
       metric: { id: `loose-${String(i).padStart(2, "0")}`, title: `Loose ${String(i).padStart(2, "0")}`, calculatorId: "work.count@1" },
