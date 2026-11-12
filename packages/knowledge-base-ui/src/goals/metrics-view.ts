@@ -85,8 +85,6 @@ export function metricStatus(row: Pick<MetricRow, "assessment" | "latest">): Met
       return "failing";
     case "stale":
       return "delayed";
-    case "pending":
-      return "building";
     default:
       return "no_band";
   }
