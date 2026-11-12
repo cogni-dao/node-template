@@ -167,13 +167,26 @@ export interface GoalsSummary {
   readonly byStatus: Readonly<Partial<Record<KpiStatus, number>>>;
 }
 
+/** Refresh state qualifies rolling readings, never replaces a deadline verdict. */
+export function isDeadlineStatus(status: KpiStatus): boolean {
+  return status === "met" || status === "missed" || status === "unresolved" || status === "evaluating";
+}
+
+export function kpiDisplayStatus(kpi: Pick<GoalKpi, "assessment" | "viewState">): KpiStatus {
+  const status = kpi.assessment.status;
+  return kpi.viewState === "pending" && (status === "on_track" || status === "behind" || (status === "failing" && kpi.assessment.reason === "target_breached"))
+    ? "building"
+    : status;
+}
+
 export function summarize(goals: readonly GoalProgress[]): GoalsSummary {
   const byStatus: Partial<Record<KpiStatus, number>> = {};
   let kpis = 0;
   for (const g of goals)
     for (const k of g.kpis) {
       kpis++;
-      byStatus[k.assessment.status] = (byStatus[k.assessment.status] ?? 0) + 1;
+      const status = kpiDisplayStatus(k);
+      byStatus[status] = (byStatus[status] ?? 0) + 1;
     }
   return { goals: goals.length, kpis, byStatus };
 }
@@ -193,7 +206,7 @@ export const STATUS_RANK: readonly KpiStatus[] = [
 ];
 
 export function worstStatus(goal: GoalProgress): KpiStatus | null {
-  const present = new Set(goal.kpis.map((k) => k.assessment.status));
+  const present = new Set(goal.kpis.map(kpiDisplayStatus));
   return STATUS_RANK.find((s) => present.has(s)) ?? null;
 }
 
@@ -265,16 +278,20 @@ export function observationHref(metricId: string, observationId: string): string
  */
 export function heroLabel(
   a: Pick<KpiAssessment, "status" | "value" | "observedAt" | "reason">,
-  nowIso: string
+  nowIso: string,
+  viewState?: GoalKpi["viewState"]
 ): string | null {
-  if (a.value === null || !a.observedAt) return null;
+  if (a.value === null || !a.observedAt) return viewState === "pending" ? "Pending refresh" : null;
   const time = formatReadingTime(a.observedAt, nowIso);
+  if (viewState === "pending" && !isDeadlineStatus(a.status))
+    return `Pending · historical reading · ${time}`;
+  const refresh = viewState === "pending" ? " · Pending refresh" : "";
   switch (a.status) {
     case "met":
     case "missed":
-      return `Final · ${time}`;
+      return `Final · ${time}${refresh}`;
     case "evaluating":
-      return `At deadline · ${time}`;
+      return `At deadline · ${time}${refresh}`;
     case "on_track":
     case "behind":
       return `Latest · ${time}`;
@@ -283,6 +300,6 @@ export function heroLabel(
         ? `Latest · ${time}`
         : `Last good · ${time}`;
     default:
-      return `Last good · ${time}`;
+      return `Last good · ${time}${refresh}`;
   }
 }

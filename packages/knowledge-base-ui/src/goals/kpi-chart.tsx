@@ -101,7 +101,7 @@ export function KpiChart({
     ...data.map((d) => d.t)
   );
   const value = kpi.assessment.value;
-  const label = heroLabel(kpi.assessment, nowIso);
+  const label = heroLabel(kpi.assessment, nowIso, kpi.viewState);
 
   const axes = [
     <CartesianGrid key="grid" vertical={false} strokeDasharray="3 3" className="stroke-border/50" />,

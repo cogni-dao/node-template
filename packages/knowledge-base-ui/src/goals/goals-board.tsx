@@ -34,6 +34,8 @@ import {
   formatUtcTime,
   type GoalKpi,
   isMeasured,
+  isDeadlineStatus,
+  kpiDisplayStatus,
   reasonText,
   STATUS_META,
   summarize,
@@ -406,7 +408,7 @@ function KpiCard({
   const hint = cardHint(kpi, display, series);
   const a = kpi.assessment;
   const pending = kpi.viewState === "pending";
-  const status = pending ? "building" : a.status;
+  const status = kpiDisplayStatus(kpi);
   const unit = kpi.binding.target.unit;
   const title = kpi.metric?.title ?? kpi.binding.metricId;
   const number = a.value === null ? null : formatValue(a.value, display, unit);
@@ -455,7 +457,7 @@ function KpiCard({
           <StatusPill status={status} />
         </div>
         <span className={`${row ? "pl-6" : "-mt-2"} ${wrap ? "" : "whitespace-nowrap"} text-muted-foreground text-xs tabular-nums`}>
-          {pending ? `${hint} · Pending, historical reading` : hint}
+          {pending ? `${hint} · ${isDeadlineStatus(a.status) || a.value === null ? "Pending refresh" : "Pending, historical reading"}` : hint}
         </span>
         <div className={row ? "col-span-2 min-w-0 md:col-span-1 md:col-start-3 md:row-span-2 md:row-start-1" : "mt-auto"}>
           {display === "progress" ? (

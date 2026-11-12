@@ -64,6 +64,7 @@ export async function readGoalsProgress(deps: {
 	metrics: MetricService | undefined;
 	environment: string;
 	now?: () => Date;
+	signal?: AbortSignal;
 }): Promise<GoalsProgress> {
 	const now = deps.now ?? deps.metrics?.now ?? (() => new Date());
 	const at = now();
@@ -86,6 +87,7 @@ export async function readGoalsProgress(deps: {
 		});
 	const items: GoalProgress[] = [];
 	const goals = await deps.goals.listGoals();
+	deps.signal?.throwIfAborted();
 	// Metrics that declare `serves`, read once for every goal; absent without metrics.
 	// The served annex never fails the goal read: an outage degrades it to unavailable.
 	let serving: Awaited<ReturnType<MetricService["serving"]>> | null = null;
@@ -97,6 +99,7 @@ export async function readGoalsProgress(deps: {
 			servedUnavailable = e instanceof MetricError ? e.code : "source_failed";
 		}
 	}
+	deps.signal?.throwIfAborted();
 	const boundKpis = new Set<string>();
 	for (const goal of goals)
 		for (const b of parseBindings(goal.kpiBindings).bindings)
@@ -107,6 +110,7 @@ export async function readGoalsProgress(deps: {
 		const configured = parseBindings(goal.kpiBindings);
 		const kpis: GoalProgress["kpis"] = [];
 		for (const binding of configured.bindings) {
+			deps.signal?.throwIfAborted();
 			if (!deps.metrics) {
 				kpis.push({
 					binding,
@@ -155,6 +159,7 @@ export async function readGoalsProgress(deps: {
 			for (const bet of page.items) {
 				const predictions = [];
 				for (const binding of parseBindings(bet.kpiBindings).bindings) {
+					deps.signal?.throwIfAborted();
 					// A hypothesis prediction is a valid KPI target for `serves`.
 					boundKpis.add(binding.metricId);
 					if (!deps.metrics) {
@@ -232,6 +237,7 @@ export async function readGoalsProgress(deps: {
 				latest: x.latest,
 			});
 	}
+	deps.signal?.throwIfAborted();
 	return GoalsProgressSchema.parse({
 		goals: items,
 		asOf: at.toISOString(),

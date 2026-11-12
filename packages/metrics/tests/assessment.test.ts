@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 import { describe, expect, it, vi } from "vitest";
 import { judgeMoves, type MoveReadingPort } from "../../work-items/src/moves";
+import { createGoalProgressReader } from "../src/knowledge";
+import { readGoalsProgress } from "../src/progress";
 import { readMetricBatch } from "../src/adapters/read-budget";
 import { PostgresMetricObservations } from "../src/adapters/postgres";
 import {
@@ -1110,7 +1112,9 @@ describe("metric batch cancellation admission", () => {
 			).catch((error) => error),
 		);
 		await vi.waitFor(() => expect(finishes).toHaveLength(4));
-		controllers.forEach((controller) => controller.abort());
+		controllers.forEach((controller) => {
+			controller.abort();
+		});
 		const errors = await Promise.all(reads);
 		expect(errors.every((error) => error.code === "batch_unavailable")).toBe(
 			true,
@@ -1121,7 +1125,9 @@ describe("metric batch cancellation admission", () => {
 		).rejects.toMatchObject({ code: "batch_unavailable" });
 		expect(pool.begin).toHaveBeenCalledTimes(4);
 		expect(set).toHaveBeenCalledWith("SET LOCAL statement_timeout=2000");
-		finishes.forEach((finish) => finish());
+		finishes.forEach((finish) => {
+			finish();
+		});
 		await vi.waitFor(async () =>
 			expect(
 				await readMetricBatch(pool as never, undefined, () =>
@@ -1130,4 +1136,267 @@ describe("metric batch cancellation admission", () => {
 			).toBe(2),
 		);
 	});
+});
+
+describe("goal reader deadline ownership", () => {
+	it("coalesces callers, abandons a hung owner, and ignores its late completion", async () => {
+		vi.useFakeTimers();
+		try {
+			const finishes: ((rows: never[]) => void)[] = [];
+			const port = {
+				listActiveGoals: vi.fn(
+					() => new Promise<never[]>((resolve) => finishes.push(resolve)),
+				),
+				getKnowledge: async () => null,
+				listCitationsByCitedId: async () => [],
+			};
+			const read = createGoalProgressReader({
+				knowledge: () => port,
+				metrics: () => undefined,
+				environment: "test",
+			});
+			const first = read();
+			expect(read()).toBe(first);
+			const failed = first.catch((error) => error);
+			await vi.advanceTimersByTimeAsync(2500);
+			expect(await failed).toMatchObject({
+				status: 503,
+				code: "batch_unavailable",
+			});
+			const second = read();
+			await vi.advanceTimersByTimeAsync(0);
+			expect(port.listActiveGoals).toHaveBeenCalledTimes(2);
+			finishes[0]!([]);
+			await vi.advanceTimersByTimeAsync(0);
+			expect(read()).toBe(second);
+			finishes[1]!([]);
+			expect(await second).toMatchObject({ goals: [] });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+	it("caps unsettled reads per port across reader instances until native settlement", async () => {
+		vi.useFakeTimers();
+		try {
+			const finishes: ((rows: never[]) => void)[] = [];
+			const port = {
+				listActiveGoals: vi.fn(
+					() => new Promise<never[]>((resolve) => finishes.push(resolve)),
+				),
+				getKnowledge: async () => null,
+				listCitationsByCitedId: async () => [],
+			};
+			const makeReader = () =>
+				createGoalProgressReader({
+					knowledge: () => port,
+					metrics: () => undefined,
+					environment: "test",
+				});
+			for (let i = 0; i < 4; i++) {
+				const failed = makeReader()().catch((error) => error);
+				await vi.advanceTimersByTimeAsync(2500);
+				expect(await failed).toMatchObject({ status: 503 });
+			}
+			await expect(makeReader()()).rejects.toMatchObject({ status: 503 });
+			expect(port.listActiveGoals).toHaveBeenCalledTimes(4);
+			finishes[0]!([]);
+			await vi.advanceTimersByTimeAsync(0);
+			const replacement = makeReader()();
+			await vi.advanceTimersByTimeAsync(0);
+			expect(port.listActiveGoals).toHaveBeenCalledTimes(5);
+			finishes[4]!([]);
+			expect(await replacement).toMatchObject({ goals: [] });
+			finishes.slice(1, 4).forEach((finish) => {
+				finish([]);
+			});
+			await vi.advanceTimersByTimeAsync(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+});
+
+describe("per-metric batch decode isolation", () => {
+	const definition = (id: string) => ({
+		id,
+		title: id,
+		revision: "1",
+		spec: { calculatorId: "work.count@1", params: {}, maxAgeSeconds: 7200 },
+	});
+	const observation = (id: string) => ({
+		...fresh,
+		id: `00000000-0000-4000-8000-${id === "healthy-a" ? "000000000001" : id === "bad" ? "000000000002" : "000000000003"}`,
+		metricId: id,
+		definitionHash: metricDefinitionHash(definition(id)),
+		calculatorVersion: "work.count@1",
+		paramsHash: hashMetric({}),
+	});
+	const raw = (id: string) => ({
+		baseline_definition: definition(id),
+		baseline_observation: observation(id),
+		latest_observation: observation(id),
+		good_observation: observation(id),
+		evaluation_observation: observation(id),
+	});
+	const setup = (rows: Record<string, unknown>[], at = NOW) => {
+		const sql = Object.assign(
+			vi.fn(async () => rows),
+			{
+				unsafe: vi.fn(async () => []),
+				begin: async (fn: (tx: unknown) => unknown): Promise<unknown> =>
+					fn(sql),
+			},
+		);
+		const store = new PostgresMetricObservations(sql as never, {
+			node: "n",
+			environment: "e",
+			dataScope: "d",
+		});
+		const registry = new MetricRegistry();
+		registry.register({
+			id: "work.count@1",
+			unit: "ratio",
+			paramsSchema: { parse: (v: unknown) => v } as never,
+			budget: {
+				timeoutMs: 1,
+				maxSourceCalls: 1,
+				maxRows: 1,
+				maxResponseBytes: 1,
+			},
+			compute: async () => {
+				throw new Error("unused");
+			},
+		});
+		const ids = ["healthy-a", "bad", "healthy-c", "healthy-a"];
+		const service = createMetricService({
+			definitions: {
+				get: async (id) => definition(id),
+				getMany: async (found) => found.map(definition),
+				list: async () => ({
+					items: ids.slice(0, 3).map(definition),
+					nextCursor: null,
+				}),
+			},
+			observations: store,
+			registry,
+			scope: { node: "n", environment: "e", dataScope: "d" },
+			now: () => at,
+			authorize: async () => true,
+		});
+		return { ids, store, service, sql };
+	};
+	it.each([
+		"latest_observation",
+		"good_observation",
+		"baseline_observation",
+		"baseline_definition",
+	])(
+		"isolates malformed %s in work reads, preserving duplicates and positions",
+		async (field) => {
+			const rows = [
+				raw("healthy-a"),
+				{ ...raw("bad"), [field]: "malformed-json" },
+				raw("healthy-c"),
+				raw("healthy-a"),
+			];
+			const { ids, store, service } = setup(rows);
+			const result = await store.workReadBatch(
+				ids.map((metricId) => ({
+					metricId,
+					definitionHash: metricDefinitionHash(definition(metricId)),
+					baselineObservationId: observation(metricId).id,
+				})),
+			);
+			expect(result).toHaveLength(4);
+			expect(result.map((row) => row.latest?.metricId ?? "unreadable")).toEqual(
+				["healthy-a", "unreadable", "healthy-c", "healthy-a"],
+			);
+			expect(result[1]).toMatchObject({ unreadable: true });
+			const projected = await service.workReadBatch(
+				ids.map((metricId) => ({
+					metricId,
+					baselineObservationId: observation(metricId).id,
+				})),
+			);
+			expect(projected[1]).toMatchObject({
+				current: null,
+				unknownReason: "metrics_unavailable",
+			});
+			expect(projected[2]?.current?.metricId).toBe("healthy-c");
+		},
+	);
+	it("keeps healthy unbound/served rows when an actual adapter cannot decode a sibling", async () => {
+		const { service } = setup([
+			raw("healthy-a"),
+			{
+				...raw("bad"),
+				latest_observation: { ...observation("bad"), value: "wrong-type" },
+			},
+			raw("healthy-c"),
+		]);
+		const goals = await readGoalsProgress({
+			goals: {
+				listGoals: async () => [],
+				hypotheses: async () => ({ items: [], more: false }),
+			},
+			metrics: service,
+			environment: "test",
+		});
+		expect(goals.servedUnavailable).toBeUndefined();
+		expect(
+			goals.unbound?.map((row) => [row.metric.id, row.latest?.viewState]),
+		).toEqual([
+			["healthy-a", "ok"],
+			["bad", "error"],
+			["healthy-c", "ok"],
+		]);
+	});
+	it.each([
+		"latest_observation",
+		"good_observation",
+		"baseline_observation",
+		"baseline_definition",
+		"evaluation_observation",
+	])(
+		"isolates malformed %s in prediction reads and assessments",
+		async (field) => {
+			const { ids, store, service } = setup(
+				[
+					raw("healthy-a"),
+					{ ...raw("bad"), [field]: "malformed-json" },
+					raw("healthy-c"),
+					raw("healthy-a"),
+				],
+				new Date(NOW.getTime() + 3 * 3600000),
+			);
+			const evaluationAt = fresh.window.end;
+			const bindings = ids.map((metricId) => ({
+				metricId,
+				comparator: "gte" as const,
+				target: { value: 1, unit: "ratio" },
+				baselineObservationId: observation(metricId).id,
+				evaluationAt,
+			}));
+			const rows = await store.predictionReadBatch(bindings);
+			expect(rows).toHaveLength(4);
+			expect(rows[1]).toMatchObject({ unreadable: true, evaluation: null });
+			expect(rows[2]?.latest?.metricId).toBe("healthy-c");
+			const results = await service.predictionBatch(bindings);
+			expect(results.map((row) => row.metricId)).toEqual(ids);
+			expect(results[1]?.assessment).toMatchObject({
+				status: "not_measured",
+				reason: "source_failed",
+				observationId: null,
+			});
+			expect(results.map((row) => row.assessment.status)).toEqual([
+				"met",
+				"not_measured",
+				"met",
+				"met",
+			]);
+			expect(results[2]?.assessment.observationId).toBe(
+				observation("healthy-c").id,
+			);
+		},
+	);
 });

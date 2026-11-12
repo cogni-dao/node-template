@@ -248,6 +248,35 @@ describe("MetricsBoard", () => {
     expect(row.querySelector('[data-status="on_track"]')).toBeNull();
     expect(row.textContent).toContain("historical reading");
     expect(row.textContent).toContain("95");
+    const goal=container.querySelector('[data-goal="goal-a"]') as HTMLElement;
+    expect(goal.querySelector('h3 [data-status="on_track"]')).toBeNull();
+    expect(goal.querySelector('h3 [data-status="building"]')).not.toBeNull();
+    fireEvent.click(within(row).getByRole("button"));
+    const figure=within(row.parentElement as HTMLElement).getByRole("figure");
+    expect(figure.textContent).toContain("Pending · historical reading");
+    expect(figure.textContent).not.toContain("Latest");
+  });
+
+  it.each(["met","missed","unresolved","evaluating"] as const)("preserves %s during a pending refresh across row, chart and goal summary",status=>{
+    const data=fixture();
+    const goal=data.goals.find(goal=>goal.id === "goal-a")!;
+    const kpi=goal.kpis.find(kpi=>kpi.binding.metricId === "k-red")!;
+    goal.kpis=[kpi];
+    kpi.viewState="pending";
+    kpi.assessment=band(status,95,{deadline:"2026-11-01T10:00:00.000Z",...(status === "unresolved" ? {value:null,observedAt:null} : {})});
+    const {container}=renderMetrics(GoalsProgressSchema.parse(data));
+    const row=container.querySelector('[data-kpi="k-red"]') as HTMLElement;
+    expect(row.querySelector(`[data-status="${status}"]`)).not.toBeNull();
+    expect(row.querySelector('[data-status="building"]')).toBeNull();
+    const header=container.querySelector('[data-goal="goal-a"] h3') as HTMLElement;
+    expect(header.querySelector(`[data-status="${status}"]`)).not.toBeNull();
+    expect(row.textContent).toContain("Pending refresh");
+    fireEvent.click(within(row).getByRole("button"));
+    const figure=within(row.parentElement as HTMLElement).getByRole("figure");
+    expect(figure.textContent).toContain("Pending refresh");
+    if(status === "met" || status === "missed") expect(figure.textContent).toContain("Final");
+    if(status === "evaluating") expect(figure.textContent).toContain("At deadline");
+    expect(figure.textContent).not.toContain("Latest");
   });
 
   it("shows pending attempts instead of a healthy historical band verdict", () => {

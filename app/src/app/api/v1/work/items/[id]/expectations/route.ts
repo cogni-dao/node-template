@@ -74,7 +74,10 @@ export const GET = wrapRouteHandlerWithLogging<{ params: Promise<{ id: string }>
                 move.baselineObservationId === binding.baselineObservationId,
             );
             const assessment = same ? assessments[cursor++]?.assessment : undefined;
-            const observed = assessment
+            const notDue = binding.evaluationAt && Date.parse(binding.evaluationAt) > Date.now();
+            const observed = notDue
+              ? `unresolved · evaluation_not_due · ${binding.evaluationAt}`
+              : assessment
               ? [
                   assessment.status,
                   assessment.value == null ? null : `${assessment.value} ${assessment.unit}`,

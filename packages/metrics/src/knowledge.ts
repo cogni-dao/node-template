@@ -6,7 +6,7 @@
  */
 import type { Sql } from "postgres";
 import { z } from "zod";
-import { readMetricBatch } from "./adapters/read-budget.js";
+import { readMetricBatch, readMetricBudget } from "./adapters/read-budget.js";
 import { PostgresMetricObservations } from "./adapters/postgres.js";
 import {
 	type GoalsProgress,
@@ -389,16 +389,25 @@ export function createGoalMetrics(deps: {
 }
 
 /** Goals and hypotheses stay knowledge entries; the shared read model only sees this port. */
-export function createGoalSource(port: GoalKnowledgeReader): GoalSourcePort {
+export function createGoalSource(
+	port: GoalKnowledgeReader,
+	signal?: AbortSignal,
+): GoalSourcePort {
+	const read = async <T>(query: () => Promise<T>): Promise<T> => {
+		signal?.throwIfAborted();
+		const result = await query();
+		signal?.throwIfAborted();
+		return result;
+	};
 	type Dated = { createdAt?: Date | undefined };
 	const newest = (a: Dated, b: Dated) =>
 		(b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0);
 	return {
 		async listGoals() {
-			const goals = await port.listActiveGoals();
+			const goals = await read(() => port.listActiveGoals());
 			const items = [];
 			for (const goal of goals) {
-				const row = await port.getKnowledge(goal.id);
+				const row = await read(() => port.getKnowledge(goal.id));
 				items.push({
 					id: goal.id,
 					title: goal.title,
@@ -411,7 +420,7 @@ export function createGoalSource(port: GoalKnowledgeReader): GoalSourcePort {
 		async hypotheses(goalId) {
 			const ids = [
 				...new Set(
-					(await port.listCitationsByCitedId(goalId))
+					(await read(() => port.listCitationsByCitedId(goalId)))
 						.filter((e) => e.citationType === "extends")
 						.sort(newest)
 						.map((e) => e.citingId),
@@ -420,9 +429,9 @@ export function createGoalSource(port: GoalKnowledgeReader): GoalSourcePort {
 			const items = [];
 			// At most ten source bodies per goal; `more` admits the truncation.
 			for (const id of ids.slice(0, 10)) {
-				const bet = await port.getKnowledge(id);
+				const bet = await read(() => port.getKnowledge(id));
 				if (bet?.entryType !== "hypothesis") continue;
-				const outcomeEdge = (await port.listCitationsByCitedId(id))
+				const outcomeEdge = (await read(() => port.listCitationsByCitedId(id)))
 					.filter(
 						(e) =>
 							e.citationType === "validates" ||
@@ -430,7 +439,7 @@ export function createGoalSource(port: GoalKnowledgeReader): GoalSourcePort {
 					)
 					.sort(newest)[0];
 				const outcome = outcomeEdge
-					? await port.getKnowledge(outcomeEdge.citingId)
+					? await read(() => port.getKnowledge(outcomeEdge.citingId))
 					: null;
 				items.push({
 					id: bet.id,
@@ -464,11 +473,14 @@ export function createGoalProgressReader(deps: {
 		const run = async () => {
 			const port = deps.knowledge();
 			if (!port) throw new MetricError("goals_unavailable", 503);
-			return readGoalsProgress({
-				goals: createGoalSource(port),
-				metrics: deps.metrics(),
-				environment: deps.environment,
-			});
+			return readMetricBudget(port, undefined, (signal) =>
+				readGoalsProgress({
+					goals: createGoalSource(port, signal),
+					metrics: deps.metrics(),
+					environment: deps.environment,
+					signal,
+				}),
+			);
 		};
 		const pending = run().finally(() => {
 			if (inFlight === pending) inFlight = undefined;

@@ -7,6 +7,7 @@ import {
 	MetricError,
 	type MetricHistoryInput,
 	MetricObservationSchema,
+	MetricSnapshotSchema,
 	type MetricObservationsPort,
 	type MetricScope,
 	type MetricSnapshot,
@@ -19,6 +20,9 @@ const HEAD_REF =
 	"^dolt:head:[a-z0-9]{32}@[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$";
 function json(value: unknown) {
 	return typeof value === "string" ? JSON.parse(value) : value;
+}
+function parseObservation(value: unknown) {
+	return value == null ? null : MetricObservationSchema.parse(json(value));
 }
 export class PostgresMetricObservations implements MetricObservationsPort {
 	constructor(
@@ -50,21 +54,30 @@ export class PostgresMetricObservations implements MetricObservationsPort {
 		LEFT JOIN LATERAL (SELECT observation FROM metric_observations WHERE scope=${this.key} AND metric_id=r.metric_id AND definition_hash=b.definition_hash AND status='ok' ORDER BY evaluation_at DESC,id DESC LIMIT 1) g ON true
 		LEFT JOIN LATERAL (SELECT observation FROM metric_observations WHERE scope=${this.key} AND metric_id=r.metric_id AND definition_hash=b.definition_hash AND status='ok' AND observation->'value' IS NOT NULL AND jsonb_typeof(observation->'value')='number' AND evaluation_at <= r.due::timestamptz AND evaluation_at >= r.due::timestamptz - ((b.snapshot->'spec'->>'maxAgeSeconds')::int * interval '1 second') AND (observation->>'observedAt')::timestamptz <= r.due::timestamptz + ((b.snapshot->'spec'->>'maxAgeSeconds')::int * interval '1 second') ORDER BY evaluation_at DESC,(observation->>'observedAt')::timestamptz DESC,id DESC LIMIT 1) e ON true ORDER BY r.ord`,
 		);
-		const parse = (value: unknown) =>
-			value ? MetricObservationSchema.parse(json(value)) : null;
-		return rows.map((row) => ({
-			baseline: row.baseline_observation
-				? ({
-						definition: json(row.baseline_definition),
-						observation: MetricObservationSchema.parse(
-							json(row.baseline_observation),
-						),
-					} as MetricSnapshot)
-				: null,
-			latest: parse(row.latest_observation),
-			lastGood: parse(row.good_observation),
-			evaluation: parse(row.evaluation_observation),
-		}));
+		return rows.map((row) => {
+			try {
+				return {
+					baseline:
+						row.baseline_observation != null
+							? MetricSnapshotSchema.parse({
+									definition: json(row.baseline_definition),
+									observation: json(row.baseline_observation),
+								})
+							: null,
+					latest: parseObservation(row.latest_observation),
+					lastGood: parseObservation(row.good_observation),
+					evaluation: parseObservation(row.evaluation_observation),
+				};
+			} catch {
+				return {
+					unreadable: true as const,
+					baseline: null,
+					latest: null,
+					lastGood: null,
+					evaluation: null,
+				};
+			}
+		});
 	}
 	async request(metricId: string, requestKey: string, requestHash: string) {
 		const key = `metric/${this.key}/${metricId}/${requestKey}`;
@@ -173,22 +186,28 @@ export class PostgresMetricObservations implements MetricObservationsPort {
 		FROM requested r LEFT JOIN metric_observations b ON b.scope=${this.key} AND b.id=CASE WHEN r."baselineObservationId" ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN r."baselineObservationId"::uuid ELSE NULL END
 		LEFT JOIN LATERAL (SELECT observation FROM metric_observations WHERE scope=${this.key} AND metric_id=r."metricId" AND definition_hash=r."definitionHash" ORDER BY evaluation_at DESC,id DESC LIMIT 1) l ON true LEFT JOIN LATERAL (SELECT observation FROM metric_observations WHERE scope=${this.key} AND metric_id=r."metricId" AND definition_hash=r."definitionHash" AND status='ok' ORDER BY evaluation_at DESC,id DESC LIMIT 1) g ON true ORDER BY r.ord`,
 		);
-		return rows.map((row) => ({
-			lastGood: row.good_observation
-				? MetricObservationSchema.parse(json(row.good_observation))
-				: null,
-			baseline: row.baseline_observation
-				? ({
-						definition: json(row.baseline_definition),
-						observation: MetricObservationSchema.parse(
-							json(row.baseline_observation),
-						),
-					} as MetricSnapshot)
-				: null,
-			latest: row.latest_observation
-				? MetricObservationSchema.parse(json(row.latest_observation))
-				: null,
-		}));
+		return rows.map((row) => {
+			try {
+				return {
+					baseline:
+						row.baseline_observation != null
+							? MetricSnapshotSchema.parse({
+									definition: json(row.baseline_definition),
+									observation: json(row.baseline_observation),
+								})
+							: null,
+					latest: parseObservation(row.latest_observation),
+					lastGood: parseObservation(row.good_observation),
+				};
+			} catch {
+				return {
+					unreadable: true as const,
+					baseline: null,
+					latest: null,
+					lastGood: null,
+				};
+			}
+		});
 	}
 	async get(id: string) {
 		const [row] = await this

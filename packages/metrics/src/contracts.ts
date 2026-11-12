@@ -364,6 +364,8 @@ export interface MetricObservationsPort {
 		signal?: AbortSignal,
 	): Promise<
 		readonly {
+			/** This position failed decoding; siblings retain their positions. */
+			unreadable?: true;
 			baseline: MetricSnapshot | null;
 			latest: MetricObservation | null;
 			lastGood: MetricObservation | null;
@@ -379,6 +381,8 @@ export interface MetricObservationsPort {
 		signal?: AbortSignal,
 	): Promise<
 		readonly {
+			/** This position failed decoding; siblings retain their positions. */
+			unreadable?: true;
 			baseline: MetricSnapshot | null;
 			latest: MetricObservation | null;
 			lastGood?: MetricObservation | null;

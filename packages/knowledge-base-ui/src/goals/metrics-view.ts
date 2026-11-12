@@ -30,7 +30,7 @@ import type {
   MetricServesRole,
 } from "@cogni-dao/metrics/contracts";
 
-import { formatDate, formatNumber, STATUS_RANK, type GoalKpi } from "./presentation.js";
+import { formatDate, formatNumber, kpiDisplayStatus, STATUS_RANK, type GoalKpi } from "./presentation.js";
 
 /** Input moves the KPI, a guardrail keeps it honest, a diagnostic explains it. */
 export const ROLE_ORDER: readonly MetricServesRole[] = ["input", "guardrail", "diagnostic"];
@@ -107,7 +107,7 @@ export function sortMetricRows(rows: readonly MetricRow[]): MetricRow[] {
 /** Goals, worst KPI first; a goal with no KPIs last. Ties keep server order. */
 export function sortGoals(goals: readonly GoalProgress[]): GoalProgress[] {
   const rank = (g: GoalProgress) =>
-    g.kpis.length ? Math.min(...g.kpis.map((k) => statusRank(k.assessment.status))) : STATUS_RANK.length + 1;
+    g.kpis.length ? Math.min(...g.kpis.map((k) => statusRank(kpiDisplayStatus(k)))) : STATUS_RANK.length + 1;
   return goals
     .map((goal, i) => ({ goal, i, r: rank(goal) }))
     .sort((a, b) => a.r - b.r || a.i - b.i)
@@ -124,7 +124,7 @@ export interface RankedKpi {
 export function sortKpis(kpis: readonly GoalKpi[]): RankedKpi[] {
   return kpis
     .map((kpi, index) => ({ kpi, index }))
-    .sort((a, b) => statusRank(a.kpi.assessment.status) - statusRank(b.kpi.assessment.status) || a.index - b.index);
+    .sort((a, b) => statusRank(kpiDisplayStatus(a.kpi)) - statusRank(kpiDisplayStatus(b.kpi)) || a.index - b.index);
 }
 
 function flagsFor(orphans: readonly MetricOrphan[] | undefined): Map<string, MetricFlag[]> {

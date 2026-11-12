@@ -260,6 +260,7 @@ export function createMetricService(deps: {
 	async function servingRow(
 		d: MetricDefinition,
 		pair: {
+			unreadable?: true;
 			latest: MetricObservation | null;
 			lastGood?: MetricObservation | null;
 		},
@@ -273,6 +274,7 @@ export function createMetricService(deps: {
 			throw e;
 		}
 		try {
+			if (pair.unreadable) throw new MetricError("source_failed", 503);
       const view = selectMetricView(d, pair.latest ? [pair.latest] : [], now());
       view.lastGood = pair.lastGood ?? null;
       const band = await service.bandAssessment(d, {latest: pair.latest ?? undefined, lastGood: view.lastGood});
@@ -605,6 +607,7 @@ export function createMetricService(deps: {
 					if (!binding.baselineObservationId || !binding.evaluationAt)
 						return missing("fixed_prediction_and_baseline_required");
 					const row = rows[cursor++];
+					if (row?.unreadable) return missing("source_failed");
 					const pinned = row?.baseline;
 					if (!pinned) return missing("baseline_unavailable_or_incompatible");
 					const def = pinned.definition,
@@ -750,6 +753,8 @@ export function createMetricService(deps: {
 									: "metric_deprecated",
 							};
 						const row = rows[cursor++];
+						if (row?.unreadable)
+							return { baseline: null, current: null, unknownReason: "metrics_unavailable" };
 						let baseline = row?.baseline ?? null;
 						if (baseline) {
 							const observation = baseline.observation;
