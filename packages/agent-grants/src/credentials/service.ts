@@ -110,7 +110,8 @@ export async function hashAgentKey(token: string): Promise<string> {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-async function mintKey(): Promise<{ token: string; tokenHash: string }> {
+/** A fresh revocable key and its sha256 (the store sees only the hash). Exported for `@cogni-dao/agent-grants/enrollment`, which mints the key a poll seals. */
+export async function mintKey(): Promise<{ token: string; tokenHash: string }> {
   const token = formatRevocableKey(toBase64Url(crypto.getRandomValues(new Uint8Array(32))));
   return { token, tokenHash: await hashAgentKey(token) };
 }

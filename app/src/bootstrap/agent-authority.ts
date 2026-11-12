@@ -21,6 +21,7 @@
 
 import {
   type AdminCheck,
+  type AgentGrantsStore,
   agentNameKey,
   type AuthzDecision,
   authorizeCaller,
@@ -54,6 +55,11 @@ export interface AgentAuthoritySql extends SqlTag {
   begin<T>(fn: (tx: SqlTag) => Promise<T>): Promise<T>;
 }
 
+/** The answer of the service-key gate: allow, or a deny with a stable code. */
+export type ServiceKeyGateDecision =
+  | { decision: "allow" }
+  | { decision: "deny"; code: "service_key_route_denied" | "authz_unavailable"; reason: string };
+
 export interface AgentToolAuthority {
   /** The seeded user id for a catalog principal slug, or null when no row exists (the run is then denied). */
   resolvePrincipal(slug: string): Promise<string | null>;
@@ -61,6 +67,8 @@ export interface AgentToolAuthority {
   readonly guardDeps: Omit<GuardDeps, "runAs">;
   /** Scopes a role may name. */
   readonly declaredScopes: readonly string[];
+  /** Scopes an outside agent can actually use (a route twin it can call). Asks, and service enrollments, are refused for any other scope. */
+  readonly askableScopes: readonly string[];
   /** Turn a row ON: approve a pending ask, or grant one of this node's AI directly. */
   grantRole(
     input: PrincipalRef & { scope: string; approvedBy: string }
@@ -102,6 +110,12 @@ export interface AgentToolAuthority {
     userId: string;
     via: "bearer" | "session";
   }): Promise<AuthzDecision>;
+  /**
+   * SERVICE_KEY_DENY_BY_DEFAULT: the wrapper calls this for a bearer on every route without a declared capability gate.
+   * A principal made by service enrollment (`service_key` set) is refused there (`service_key_route_denied`); any other bearer is allowed.
+   * A store that cannot answer is `authz_unavailable`, never an allow.
+   */
+  denyServiceKeyOffDoor(input: { routeId: string; userId: string }): Promise<ServiceKeyGateDecision>;
 }
 
 /** `requiresById` from the contracts the node already loads. */
@@ -144,6 +158,16 @@ export function createAdminCheck(
     return "denied";
   };
 }
+
+/**
+ * A human session is a subject, not a principal: `authorizeCaller` decides it from the subject rules alone and never reads the role store. This store
+ * throws if that ever changes, so the call is denied loudly (`authz_unavailable`) instead of silently reading from nowhere.
+ */
+const SESSION_NEVER_READS_STORE = new Proxy({} as AgentGrantsStore, {
+  get() {
+    throw new Error("a session decision never reads the role store");
+  },
+});
 
 /** Outside-agent rows the admin read returns at most (pending asks first). The rest are counted, not sent. */
 export const MAX_ADMIN_OUTSIDE_ROWS = 100;
@@ -195,7 +219,8 @@ export function createAgentToolAuthority(deps: {
       const scopesByPrincipal: Record<string, string[]> = {};
       for (const entry of Object.values(LANGGRAPH_CATALOG)) {
         if (!entry.principal) continue;
-        const scopes = (scopesByPrincipal[entry.principal] ??= []);
+        const scopes = scopesByPrincipal[entry.principal] ?? [];
+        scopesByPrincipal[entry.principal] = scopes;
         for (const toolId of entry.toolIds) {
           const requires = requiresById[toolId];
           if (requires) scopes.push(requires.scope);
@@ -203,7 +228,7 @@ export function createAgentToolAuthority(deps: {
       }
       const { internal, listed } = await withStore(async (store) => ({
         internal: await store.listInternalPrincipals(),
-        listed: await store.listRoleRows(MAX_ADMIN_OUTSIDE_ROWS),
+        listed: await store.listRoleRows(MAX_ADMIN_OUTSIDE_ROWS, declaredScopes),
       }));
       return {
         permissions: buildNodeAiView({ declarations, scopesByPrincipal, internal, rows: listed.rows }),
@@ -211,32 +236,70 @@ export function createAgentToolAuthority(deps: {
       };
     },
     declaredScopes,
+    askableScopes,
     adminCheck,
     async authorizeRoute({ toolId, routeId, userId, via }) {
-      const requires =
-        requiresById[toolId] ?? ROUTE_ONLY_CAPABILITIES[toolId]?.requires;
+      const routeOnly = ROUTE_ONLY_CAPABILITIES[toolId];
+      const requires = requiresById[toolId] ?? routeOnly?.requires;
+      const decide = (store: AgentGrantsStore) =>
+        authorizeCaller(store, adminCheck, {
+          userId,
+          via,
+          requires: requires as ToolRequires,
+          ...(routeOnly?.serviceKeyedOnly ? { serviceKeyedOnly: true } : {}),
+        });
       const decision: AuthzDecision = !requires
         ? { decision: "deny", code: "policy_denied", reason: "no_requires" }
-        : await withStore((store) =>
-            authorizeCaller(store, adminCheck, { userId, via, requires })
-          ).catch(
+        : await (via === "session" ? decide(SESSION_NEVER_READS_STORE) : withStore(decide)).catch(
             (): AuthzDecision => ({
               decision: "deny",
               code: "authz_unavailable",
               reason: "store_unavailable",
             })
           );
-      onDecision({
-        principal: via === "bearer" ? userId : null,
-        subject: via === "session" ? userId : null,
-        payer: null,
-        tool: toolId,
-        decision: decision.decision,
-        code: decision.decision === "allow" ? "allowed" : decision.code,
-        reason: decision.decision === "allow" ? decision.basis : decision.reason,
-        runId: null,
-        route: routeId,
-      });
+      // A read door that lets humans and existing agents through (`serviceKeyedOnly`) would log one line per UI read: only a decision made on a role row
+      // (an enrolled service) is logged as `agent_tool.authz`. A refusal on that door is logged once, as `agent.knowledge_read.denied` below, so a
+      // refused call stays within the log budget (start, one decision line, end).
+      const quietRead =
+        routeOnly?.serviceKeyedOnly === true &&
+        (decision.decision === "deny" || decision.basis !== "role");
+      if (!quietRead)
+        onDecision({
+          principal: via === "bearer" ? userId : null,
+          subject: via === "session" ? userId : null,
+          payer: null,
+          tool: toolId,
+          decision: decision.decision,
+          code: decision.decision === "allow" ? "allowed" : decision.code,
+          reason: decision.decision === "allow" ? decision.basis : decision.reason,
+          runId: null,
+          route: routeId,
+        });
+      // A refused knowledge read is named on its own (story.0038): who was refused, at which route, with a fixed code. No key, no header.
+      if (decision.decision === "deny" && routeOnly?.serviceKeyedOnly)
+        deps.log.warn(
+          { event: EVENT_NAMES.AGENT_KNOWLEDGE_READ_DENIED, principal: via === "bearer" ? userId : null, routeId, code: decision.code, reason: decision.reason },
+          EVENT_NAMES.AGENT_KNOWLEDGE_READ_DENIED
+        );
+      return decision;
+    },
+    async denyServiceKeyOffDoor({ routeId, userId }) {
+      // One plain read: no transaction, so no BEGIN/COMMIT round trips on every bearer call.
+      const decision: ServiceKeyGateDecision = await (async (): Promise<ServiceKeyGateDecision> => {
+        const store = createPostgresAgentGrantsStore(deps.sql);
+        // A store that cannot tell is strict: refuse (it cannot be shown that the caller is not a service).
+        if (!store.isServicePrincipal)
+          return { decision: "deny", code: "service_key_route_denied", reason: "service_kind_unknown" };
+        return (await store.isServicePrincipal(userId))
+          ? { decision: "deny", code: "service_key_route_denied", reason: "route_has_no_capability_door" }
+          : { decision: "allow" };
+      })().catch((): ServiceKeyGateDecision => ({ decision: "deny", code: "authz_unavailable", reason: "store_unavailable" }));
+      // Every refusal is one warn (an outage as well as a service key), the same fields the door's refusal carries. No key, no header.
+      if (decision.decision === "deny")
+        deps.log.warn(
+          { event: EVENT_NAMES.AGENT_KNOWLEDGE_READ_DENIED, principal: userId, routeId, code: decision.code, reason: decision.reason },
+          EVENT_NAMES.AGENT_KNOWLEDGE_READ_DENIED
+        );
       return decision;
     },
     async grantRole(input) {

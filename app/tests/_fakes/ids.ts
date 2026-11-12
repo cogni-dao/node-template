@@ -46,22 +46,27 @@ export const TEST_WALLET_5 = `0x${"0".repeat(39)}5`;
 export const TEST_SESSION_USER_1: SessionUser = {
   id: TEST_USER_ID_1,
   walletAddress: TEST_WALLET_1,
+  via: "session",
 };
 export const TEST_SESSION_USER_2: SessionUser = {
   id: TEST_USER_ID_2,
   walletAddress: TEST_WALLET_2,
+  via: "session",
 };
 export const TEST_SESSION_USER_3: SessionUser = {
   id: TEST_USER_ID_3,
   walletAddress: TEST_WALLET_3,
+  via: "session",
 };
 export const TEST_SESSION_USER_4: SessionUser = {
   id: TEST_USER_ID_4,
   walletAddress: TEST_WALLET_4,
+  via: "session",
 };
 export const TEST_SESSION_USER_5: SessionUser = {
   id: TEST_USER_ID_5,
   walletAddress: TEST_WALLET_5,
+  via: "session",
 };
 
 /** Lookup a deterministic test session user by index (1–5). */

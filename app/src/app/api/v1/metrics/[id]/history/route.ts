@@ -15,6 +15,7 @@ export const GET = wrapRouteHandlerWithLogging<{
 }>(
 	{
 		routeId: "metrics.metricHistory",
+		sameDoor: "knowledge.read",
 		auth: { mode: "required", getSessionUser },
 	},
 	async (_ctx, request, user, context) => {

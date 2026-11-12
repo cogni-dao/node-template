@@ -24,6 +24,7 @@ export const runtime = "nodejs";
 export const GET = wrapRouteHandlerWithLogging(
   {
     routeId: "knowledge.list",
+    sameDoor: "knowledge.read",
     auth: { mode: "required", getSessionUser },
   },
   async (ctx, request, sessionUser) => {

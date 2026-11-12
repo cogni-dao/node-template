@@ -288,6 +288,48 @@
       "when": 1794348431341,
       "tag": "0040_agent_credentials_key_upgrade",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1794425666737,
+      "tag": "0041_agent_service_enrollments",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1794438642607,
+      "tag": "0042_service_enrollment_maintenance",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1794443737149,
+      "tag": "0043_service_authority_foundation",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1794445405181,
+      "tag": "0044_service_authority_guard_compatibility",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1794448012572,
+      "tag": "0045_service_authority_review_repairs",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1794468270498,
+      "tag": "0046_service_authority_maintenance_cursor",
+      "breakpoints": true
     }
   ]
 }

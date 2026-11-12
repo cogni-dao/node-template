@@ -58,8 +58,9 @@ describe("access requests: an ask is an off row (real Postgres)", () => {
     users.push(id);
     return id;
   };
-  const as = (id: string | null, via: "bearer" | "session") =>
-    (session.user = id ? { id, walletAddress: null, displayName: null, avatarColor: null, via } : null);
+  const as = (id: string | null, via: "bearer" | "session") => {
+    session.user = id ? { id, walletAddress: null, displayName: null, avatarColor: null, via } : null;
+  };
   const ask = (scope: unknown, headers: Record<string, string> = {}) =>
     askCreate(
       new NextRequest("http://localhost/api/v1/agent/access-requests", {
@@ -196,7 +197,7 @@ describe("access requests: an ask is an off row (real Postgres)", () => {
     // The cap is global by design and other component files share this database, so re-read the global pending count each pass
     // (a one-shot snapshot goes stale if another file adds or clears pending asks) and fill until the cap is actually reached.
     const pending = async () =>
-      ((await service`SELECT count(*)::int AS n FROM agent_roles WHERE approved_by IS NULL AND revoked_at IS NULL`) as unknown as [{ n: number }])[0].n;
+      ((await service`SELECT count(*)::int AS n FROM agent_roles WHERE approved_by IS NULL AND revoked_at IS NULL AND (request_expires_at IS NULL OR request_expires_at > clock_timestamp())`) as unknown as [{ n: number }])[0].n;
     try {
       for (let i = 0; (await pending()) < MAX_PENDING_TOTAL; i++) {
         const id = await mkUser(`flood-${i}-${randomUUID().slice(0, 4)}`);

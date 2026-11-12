@@ -12,7 +12,11 @@ import { EVENT_NAMES, logEvent } from "@/shared/observability";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 export const GET = wrapRouteHandlerWithLogging(
-	{ routeId: "metrics.goalsRead", auth: { mode: "required", getSessionUser } },
+	{
+		routeId: "metrics.goalsRead",
+		sameDoor: "knowledge.read",
+		auth: { mode: "required", getSessionUser },
+	},
 	async (ctx, _request, user) => {
 		if (!user)
 			return NextResponse.json({ error: "unauthorized" }, { status: 401 });

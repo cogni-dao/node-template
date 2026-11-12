@@ -120,7 +120,9 @@ function writeRoute(routeId: string, write: Writer) {
           const status =
             error.code === "principal_not_found"
               ? 404
-              : error.code === "not_pending"
+              : error.code === "request_expired"
+                ? 410
+                : error.code === "not_pending"
                 ? 409
                 : error.code === "self_approval"
                   ? 403

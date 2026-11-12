@@ -12,6 +12,7 @@
  */
 
 export * from "./agent-authority";
+export * from "./agent-service-enrollments";
 export * from "./ai";
 export * from "./ai-threads";
 export * from "./attribution";

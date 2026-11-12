@@ -77,6 +77,7 @@ describe.skip("Payment Routes HTTP Contract Tests", () => {
     testSessionUser = {
       id: seeded.user.id,
       walletAddress: seeded.user.walletAddress,
+      via: "session",
     };
   });
 
@@ -157,6 +158,7 @@ describe.skip("Payment Routes HTTP Contract Tests", () => {
       const unprovisionedUser: SessionUser = {
         id: randomUUID(),
         walletAddress: generateTestWallet(),
+        via: "session",
       };
       vi.mocked(getSessionUser).mockResolvedValue(unprovisionedUser);
       // Don't seed user in DB - should trigger AUTH_USER_NOT_FOUND
@@ -385,6 +387,7 @@ describe.skip("Payment Routes HTTP Contract Tests", () => {
       const sessionUser2: SessionUser = {
         id: user2.user.id,
         walletAddress: user2.user.walletAddress,
+        via: "session",
       };
 
       vi.mocked(getSessionUser).mockResolvedValue(sessionUser2);

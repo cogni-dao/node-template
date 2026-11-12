@@ -12,6 +12,8 @@
  *     tool guard runs. A denied bearer gets 403 `policy_denied`; a store outage gets 503 `authz_unavailable`.
  *   - Humans are subjects, not principals. A signed-in human passes `member`; `admin` needs the node admin check. A human
  *     needs no role row.
+ *   - SERVICE_KEYED_GATE: a read capability may gate only principals made by a service enrollment (`serviceKeyedOnly`). Every other
+ *     bearer passes, so an existing agent key keeps reading. The anonymous `agent.register` door stays until its own retirement.
  *   - TOOL_HAS_ROUTE_TWIN: every non-read_only tool is in `SAME_DOOR_ROUTES` or in `NO_ROUTE_TWIN` with a reason.
  *   - NEVER_CACHED: every call reads the store.
  * Side-effects: IO (store reads, through `authorize`)
@@ -48,13 +50,23 @@ export const SAME_DOOR_ROUTES: Readonly<Record<string, SameDoorRoute>> = {
   core__metric_compute: { scope: "metric:compute", routes: ["metrics.metricCompute"] },
 };
 
+/** A route-only capability: its `requires`, the route ids that carry its door, and how a bearer is gated. */
+export interface RouteOnlyCapability {
+  readonly requires: ToolRequires;
+  readonly routes: readonly string[];
+  /**
+   * SERVICE_KEYED_GATE: the door gates only a bearer whose principal has a `service_key` (made by a service enrollment). Every other
+   * bearer passes, so a read route that was open to any signed-in agent stays open to existing agents while an enrolled service needs
+   * an approved role row. Absent: the ordinary rule (a bearer needs a live role row).
+   */
+  readonly serviceKeyedOnly?: boolean;
+}
+
 /**
- * Write routes an outside agent may call that no tool twins. They declare their own scope here, once, with the same
+ * Routes an outside agent may call that no tool twins. They declare their own scope here, once, with the same
  * `requires` shape a tool contract uses. A signed-in human passes `member`; a bearer agent needs a live role row.
  */
-export const ROUTE_ONLY_CAPABILITIES: Readonly<
-  Record<string, { readonly requires: ToolRequires; readonly routes: readonly string[] }>
-> = {
+export const ROUTE_ONLY_CAPABILITIES: Readonly<Record<string, RouteOnlyCapability>> = {
   "knowledge.contribute": {
     requires: {
       scope: "knowledge:contribute",
@@ -66,6 +78,43 @@ export const ROUTE_ONLY_CAPABILITIES: Readonly<
     routes: [
       "knowledge.contributions.create",
       "knowledge.contributions.commits.append",
+    ],
+  },
+  // Reads. Every knowledge GET route carries this door (story.0038). It gates ONLY an enrolled service principal: an existing agent
+  // (no `service_key`) and a signed-in human pass exactly as before, so no existing key changes behavior.
+  "knowledge.read": {
+    requires: {
+      scope: "knowledge:read",
+      kind: "node",
+      subject: "member",
+      label: "Read the knowledge base",
+      description: "Read the notes, rules and index of this node. An admin can turn it off at any time.",
+    },
+    serviceKeyedOnly: true,
+    routes: [
+      "knowledge.list",
+      "knowledge.get",
+      "knowledge.index",
+      "knowledge.browse",
+      "knowledge.graph",
+      "knowledge.history",
+      "knowledge.domains.list",
+      "knowledge.domains.get",
+      "knowledge.contributions.list",
+      "knowledge.contributions.get",
+      "knowledge.contributions.diff",
+      "knowledge.contributions.commits.list",
+      // Not under /api/v1/knowledge, but they serve knowledge-store content, so a service Off must not read them.
+      "cognition.bundle",
+      "edo.chain",
+      "citations.links",
+      // The metrics routes read the knowledge store through the metrics facade.
+      "metrics.metricList",
+      "metrics.metricRead",
+      "metrics.goalsRead",
+      "metrics.metricSubject",
+      "metrics.metricHistory",
+      "metrics.observationRead",
     ],
   },
 };
@@ -118,6 +167,8 @@ export interface CallerInput {
   /** How the request authenticated. `bearer` is an AI on the AI plane; `session` is a human. */
   readonly via: "bearer" | "session";
   readonly requires: ToolRequires;
+  /** SERVICE_KEYED_GATE (`ROUTE_ONLY_CAPABILITIES[..].serviceKeyedOnly`): a bearer with no `service_key` passes. */
+  readonly serviceKeyedOnly?: boolean;
 }
 
 /** The route door. Same `authorize()` for a bearer (its own principal); subject rules only for a human. */
@@ -128,6 +179,18 @@ export async function authorizeCaller(
 ): Promise<AuthzDecision> {
   const { userId, via, requires } = input;
   if (via === "bearer") {
+    if (input.serviceKeyedOnly) {
+      // SERVICE_KEYED_GATE. A store that cannot tell (no `isServicePrincipal`) is strict: the ordinary role-row rule. A store failure is unavailable.
+      if (store.isServicePrincipal) {
+        let service: boolean;
+        try {
+          service = await store.isServicePrincipal(userId);
+        } catch {
+          return { decision: "deny", code: "authz_unavailable", reason: "store_unavailable" };
+        }
+        if (!service) return { decision: "allow", basis: "agent_without_service_key" };
+      }
+    }
     // The bearer IS the principal. `own` data belongs to it, so it is also the subject there. `admin`-subject scopes
     // pass on the role row alone: a DAO admin wrote that row, and an AI identity has no admin check yet (item I2).
     return authorize(store, adminCheck, {

@@ -91,7 +91,10 @@ export function wrapPublicRoute<TContext = unknown>(
           }),
           {
             status: 503,
-            headers: { "content-type": "application/json" },
+            headers: {
+              "content-type": "application/json",
+              ...(config.noStore ? { "cache-control": "no-store" } : {}),
+            },
           }
         );
       }

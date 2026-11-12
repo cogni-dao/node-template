@@ -74,6 +74,7 @@ function publicOrigin(request: Request): string {
 export const GET = wrapRouteHandlerWithLogging(
 	{
 		routeId: "cognition.bundle",
+		sameDoor: "knowledge.read",
 		auth: { mode: "required", getSessionUser },
 	},
 	async (ctx, request, sessionUser) => {

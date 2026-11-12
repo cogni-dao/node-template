@@ -31,6 +31,7 @@ export interface MemoryUser {
 export function memoryCredentialStore(init: { users: Record<string, MemoryUser>; failing?: boolean }) {
   const clock = { now: Date.parse("2026-11-10T12:00:00Z") };
   const rows: Row[] = [];
+  const confirmed = new Set<string>();
   const outage = { failing: init.failing ?? false, /** Fail only this store method (an outage AFTER a successful verify). */ failOn: null as string | null };
   let seq = 0;
   const guard = (method: string) => {
@@ -121,6 +122,7 @@ export function memoryCredentialStore(init: { users: Record<string, MemoryUser>;
       const u = init.users[r.userId];
       if (r.createdFrom === "key_upgrade" && u?.roles && !u.github) return { ok: false, reason: "binding_required" };
       r.confirmedAt = clock.now;
+      confirmed.add(r.userId);
       r.expiresAt = plus(policy.ttlSec);
       r.renewUntil = plus(policy.ttlSec + policy.renewWindowSec);
       if (pred) revokeRow(pred, "rotated");
@@ -128,7 +130,7 @@ export function memoryCredentialStore(init: { users: Record<string, MemoryUser>;
     },
     async everConfirmed(userId) {
       guard("everConfirmed");
-      return rows.some((r) => r.userId === userId && r.confirmedAt !== null);
+      return confirmed.has(userId) || rows.some((r) => r.userId === userId && r.confirmedAt !== null);
     },
     async revoke({ credentialId, userId, reason }) {
       guard("revoke");
@@ -139,5 +141,5 @@ export function memoryCredentialStore(init: { users: Record<string, MemoryUser>;
       return true;
     },
   };
-  return { store, rows, clock, outage, users: init.users, advance: (sec: number) => void (clock.now += sec * 1000) };
+  return { store, rows, clock, outage, users: init.users, advance: (sec: number) => { clock.now += sec * 1000; } };
 }

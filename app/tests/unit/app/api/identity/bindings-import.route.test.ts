@@ -186,6 +186,7 @@ beforeEach(() => {
 		walletAddress: SESSION_WALLET,
 		displayName: null,
 		avatarColor: null,
+		via: "session",
 	});
 	mockRedeemBinding.mockResolvedValue("created");
 	mockCreateNonce.mockResolvedValue(NONCE);
@@ -260,6 +261,32 @@ describe("POST /api/v1/identity/bindings/import", () => {
 			}),
 		);
 		expect(res.status).toBe(401);
+		expect(mockRedeemBinding).not.toHaveBeenCalled();
+	});
+
+	it("401 for a service enrollment token: same issuer, key and audience, but its own typ or kind (story.0038, NO_ENROLLMENT_TOKEN_HERE)", async () => {
+		const now = Math.floor(Date.now() / 1000);
+		const enrollment = (header: Record<string, unknown>, extra: Record<string, unknown>) =>
+			new SignJWT({ service: "git-review", scopes: ["knowledge:read"], ...extra })
+				.setProtectedHeader({ alg: "EdDSA", kid: "k1", ...header })
+				.setIssuer(ISSUER)
+				.setAudience(`urn:cogni:node:${NODE_ID}`)
+				.setJti(JTI)
+				.setIssuedAt(now)
+				.setExpirationTime(now + 300)
+				.sign(privateKey);
+		const tokens = [
+			await enrollment({ typ: "cogni-service-enrollment+jwt" }, { kind: "service.enrollment.v1" }),
+			// Right shape for an attestation, but carrying the enrollment typ or kind: still refused.
+			await enrollment({ typ: "cogni-service-enrollment+jwt" }, { type: "identity.attestation.v1" }),
+			await enrollment({}, { type: "identity.attestation.v1", kind: "service.enrollment.v1" }),
+		];
+		for (const token of tokens) {
+			const res = await IMPORT_POST(makeRequest({ token }));
+			expect(res.status).toBe(401);
+			expect(await res.json()).toMatchObject({ errorCode: "invalid_token" });
+		}
+		expect(fetchMock).not.toHaveBeenCalled(); // refused before any key fetch
 		expect(mockRedeemBinding).not.toHaveBeenCalled();
 	});
 
@@ -353,6 +380,7 @@ describe("POST /api/v1/identity/bindings/import", () => {
 			walletAddress: null,
 			displayName: null,
 			avatarColor: null,
+			via: "session",
 		});
 
 		const res = await IMPORT_POST(makeRequest({ token: await mintToken() }));

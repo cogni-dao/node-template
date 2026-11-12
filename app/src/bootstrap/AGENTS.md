@@ -71,7 +71,7 @@ System setup installers were moved to `scripts/bootstrap/` and are out of scope 
   - `RateLimitBypassConfig` - Test bypass config type (from `http/wrapPublicRoute`)
   - `TokenBucketRateLimiter`, `publicApiLimiter`, `extractClientIp` - Rate limiting utilities (from `http/`)
 - **Env/Config keys:** none (uses `@/shared/env`)
-- **Files considered API:** `agent-authority.ts` (tool authority wiring: principal lookup, wallet-bound `adminCheck`, role grant/revoke, `agent_tool.authz` log), `agent-credentials.ts` (the revocable agent key store over the service-role client), `container.ts`, `graph-executor.factory.ts`, `agent-discovery.ts`, `identity.ts`, `http/index.ts`, `http/wrapPublicRoute.ts`, `http/rateLimiter.ts`
+- **Files considered API:** `agent-authority.ts` (tool authority wiring: principal lookup, wallet-bound `adminCheck`, role grant/revoke, `agent_tool.authz` log), `agent-credentials.ts` (the revocable agent key store over the service-role client), `agent-enrollment.ts` (service enrollment: the service-role store, the own per-IP limiter of the two public enrollment routes, the askable scopes, the enrolled service's billing account; the trusted-home list and token verifier are `app/_lib/auth/service-enrollment-verifier.ts`), `container.ts`, `graph-executor.factory.ts`, `agent-discovery.ts`, `identity.ts`, `http/index.ts`, `http/wrapPublicRoute.ts`, `http/rateLimiter.ts`
 
 **Subdirectories:**
 
