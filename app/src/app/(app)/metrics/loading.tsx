@@ -15,7 +15,7 @@ import { PageHeaderSkeleton } from "@/components/kit/layout/PageHeaderSkeleton";
 export default function MetricsLoading() {
   return (
     <div className="flex flex-col gap-4 p-5 md:p-6">
-      <PageHeaderSkeleton titleWidth="w-32" withSubtitle subtitleWidth="w-56" />
+      <PageHeaderSkeleton titleWidth="w-32" />
       <div aria-hidden="true" className="space-y-3">
         {[0, 1, 2].map((i) => (
           <div key={i} className="h-24 animate-pulse rounded-xl bg-muted" />

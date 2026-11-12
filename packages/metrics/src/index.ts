@@ -440,7 +440,8 @@ export function createMetricService(deps: {
 		},
 		/**
 		 * Every readable metric with its band assessment and latest reading: those that
-		 * declare `serves` (or carry an invalid annex) in `items`, the rest in `unbound`.
+		 * declare `serves` (or carry an invalid annex) in `items`, and those with no
+		 * valid or invalid `serves` in `unbound`. A bad band may appear in both.
 		 * Scans at most SERVES_SCAN_MAX definitions; `truncated` admits a cut. The read
 		 * is latest-only: per definition one newest-attempt read and one last-good read
 		 * (the band assessment reuses both). No history range read, no second definition read.
@@ -466,7 +467,12 @@ export function createMetricService(deps: {
 					for (const row of rows) {
 						if (!row) continue;
 						const d = row.definition;
-						(!d.serves && !d.annexInvalid?.length ? unbound : items).push(row);
+						if (d.serves || d.annexInvalid?.length) items.push(row);
+						if (
+							!d.serves &&
+							!d.annexInvalid?.some((bad) => bad.field === "serves")
+						)
+							unbound.push(row);
 					}
 				}
 				if (!page.nextCursor) break;

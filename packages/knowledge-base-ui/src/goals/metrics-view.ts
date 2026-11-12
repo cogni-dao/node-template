@@ -209,7 +209,7 @@ export function notServingRows(data: Pick<GoalsProgress, "orphans" | "unbound">)
       role: null,
       assessment: u.assessment,
       latest: u.latest,
-      flags: [{ kind: "unbound" }],
+      flags: [{ kind: "unbound" }, ...(flags.get(u.metric.id) ?? [])],
     });
   }
   return sortMetricRows([...rows.values()]);

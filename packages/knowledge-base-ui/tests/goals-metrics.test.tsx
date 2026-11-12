@@ -22,10 +22,11 @@ import {
   type MetricLatest,
 } from "@cogni-dao/metrics/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { GoalsBoard, MetricsBoard } from "../src/goals.js";
+import { createGoalsClient } from "../src/goals/client.js";
 import {
   bandFraction,
   flagText,
@@ -67,7 +68,12 @@ const latest = (over: Partial<MetricLatest> = {}): MetricLatest => ({
   reason: null,
   ...over,
 });
-const served = (id: string, role: "input" | "guardrail" | "diagnostic", assessment: KpiAssessment | null, l: MetricLatest = latest()) => ({
+const served = (
+  id: string,
+  role: "input" | "guardrail" | "diagnostic",
+  assessment: KpiAssessment | null,
+  l: MetricLatest = latest(),
+) => ({
   metric: { id, title: `Title ${id}`, calculatorId: "work.count@1", role },
   assessment,
   latest: l,
@@ -76,27 +82,48 @@ const served = (id: string, role: "input" | "guardrail" | "diagnostic", assessme
 /** Goal B is healthy and listed first; goal A has a failing KPI and must sort above it. */
 function fixture(extra: Partial<GoalsProgress> = {}): GoalsProgress {
   const healthy = kpiFixture("k-ok", "KPI ok", assessmentFixture("on_track"), null);
-  const red = { ...kpiFixture("k-red", "KPI red", assessmentFixture("failing"), null), served: [
-    served("m-diag", "diagnostic", null, latest({ viewState: "stale" })),
-    served("m-input-ok", "input", band("on_track", 95)),
-    served("m-guard-red", "guardrail", band("failing", 40)),
-    served("m-input-red", "input", band("behind", 50)),
-  ] };
+  const red = {
+    ...kpiFixture("k-red", "KPI red", assessmentFixture("failing"), null),
+    served: [
+      served("m-diag", "diagnostic", null, latest({ viewState: "stale" })),
+      served("m-input-ok", "input", band("on_track", 95)),
+      served("m-guard-red", "guardrail", band("failing", 40)),
+      served("m-input-red", "input", band("behind", 50)),
+    ],
+  };
   const okAlso = kpiFixture("k-ok2", "KPI ok 2", assessmentFixture("met"), null);
   return GoalsProgressSchema.parse({
     asOf: AS_OF,
     environment: "test",
-    goals: [
-      goalFixture("goal-b", "Goal B", [healthy, okAlso]),
-      goalFixture("goal-a", "Goal A", [healthy, red]),
-    ],
+    goals: [goalFixture("goal-b", "Goal B", [healthy, okAlso]), goalFixture("goal-a", "Goal A", [healthy, red])],
     orphans: [
-      { metricId: "m-lost", kpi: "no-such", reason: "serves_unknown_kpi", assessment: null, latest: latest({ viewState: "error", value: null, reason: "source_failed" }) },
-      { metricId: "m-guard-red", kpi: "k-red", reason: "band_invalid", issues: ["band:x"], assessment: null, latest: latest() },
+      {
+        metricId: "m-lost",
+        kpi: "no-such",
+        reason: "serves_unknown_kpi",
+        assessment: null,
+        latest: latest({ viewState: "error", value: null, reason: "source_failed" }),
+      },
+      {
+        metricId: "m-guard-red",
+        kpi: "k-red",
+        reason: "band_invalid",
+        issues: ["band:x"],
+        assessment: null,
+        latest: latest(),
+      },
     ],
     unbound: [
-      { metric: { id: "m-loose", title: "Loose count", calculatorId: "work.count@1" }, assessment: null, latest: latest({ value: 3 }) },
-      { metric: { id: "m-loose-red", title: "Loose red", calculatorId: "work.count@1" }, assessment: band("failing", 2), latest: latest({ value: 2 }) },
+      {
+        metric: { id: "m-loose", title: "Loose count", calculatorId: "work.count@1" },
+        assessment: null,
+        latest: latest({ value: 3 }),
+      },
+      {
+        metric: { id: "m-loose-red", title: "Loose red", calculatorId: "work.count@1" },
+        assessment: band("failing", 2),
+        latest: latest({ value: 2 }),
+      },
     ],
     servedTruncated: false,
     ...extra,
@@ -108,19 +135,32 @@ function renderMetrics(data: GoalsProgress) {
   return render(
     <QueryClientProvider client={c}>
       <MetricsBoard initialData={data} />
-    </QueryClientProvider>
+    </QueryClientProvider>,
   );
 }
 
 const ids = (els: Iterable<Element>, attr: string) => [...els].map((e) => e.getAttribute(attr));
 
 describe("MetricsBoard", () => {
+  it("does not show fabricated counts while the first read is pending", () => {
+    const c = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    const { container } = render(
+      <QueryClientProvider client={c}>
+        <MetricsBoard client={{ ...createGoalsClient(), fetchGoals: () => new Promise(() => {}) }} />
+      </QueryClientProvider>,
+    );
+    expect(container.querySelector('[aria-busy="true"]')).not.toBeNull();
+    expect(container.querySelector("dl")).toBeNull();
+    expect(container.textContent).not.toMatch(/\b0\b/);
+  });
+
   it("sorts goals, KPIs, role groups and metrics worst first", () => {
     const { container } = renderMetrics(fixture());
     // The failing goal is last in the data and first on the page.
     expect(ids(container.querySelectorAll("[data-goal]"), "data-goal")).toEqual(["goal-a", "goal-b"]);
     const goalA = container.querySelector('[data-goal="goal-a"]') as HTMLElement;
     expect(ids(goalA.querySelectorAll("[data-kpi-block]"), "data-kpi-block")).toEqual(["k-red", "k-ok"]);
+    fireEvent.click(within(goalA).getByRole("button", { name: /KPI red/ }));
     const branch = goalA.querySelector('[data-branch="served"]') as HTMLElement;
     // Roles in fixed order; inside a role, worst status first.
     expect(ids(branch.querySelectorAll("[data-role]"), "data-role")).toEqual(["input", "guardrail", "diagnostic"]);
@@ -134,6 +174,9 @@ describe("MetricsBoard", () => {
 
   it("shows status, band, latest value and age on every serving metric, and No band without a verdict", () => {
     const { container } = renderMetrics(fixture());
+    fireEvent.click(
+      within(container.querySelector('[data-goal="goal-a"]') as HTMLElement).getByRole("button", { name: /KPI red/ }),
+    );
     const row = (id: string) => container.querySelector(`[data-metric="${id}"]`) as HTMLElement;
     const red = row("m-guard-red");
     expect(red.getAttribute("data-status")).toBe("failing");
@@ -154,11 +197,17 @@ describe("MetricsBoard", () => {
     const { container } = renderMetrics(fixture());
     const group = container.querySelector('[data-group="not-serving"]') as HTMLElement;
     expect(ids(group.querySelectorAll("[data-metric]"), "data-metric")).toEqual(["m-loose-red", "m-lost", "m-loose"]);
-    expect(group.querySelector('[data-metric="m-lost"] [data-flag="serves_unknown_kpi"]')?.textContent).toContain("no-such");
-    expect(group.querySelector('[data-metric="m-loose"] [data-flag="unbound"]')?.textContent).toContain("Serves no goal KPI");
+    expect(group.querySelector('[data-metric="m-lost"] [data-flag="serves_unknown_kpi"]')?.textContent).toContain(
+      "no-such",
+    );
+    expect(group.querySelector('[data-metric="m-loose"] [data-flag="unbound"]')?.textContent).toContain(
+      "Serves no goal KPI",
+    );
     // Unknown is not zero: a failed metric with no good value reads "—".
     expect(group.querySelector('[data-metric="m-lost"]')?.textContent).toContain("—");
-    expect(within(group).getByRole("link", { name: "why" }).getAttribute("href")).toBe("/knowledge/goal-metrics-vs-telemetry");
+    expect(within(group).getByRole("link", { name: "why" }).getAttribute("href")).toBe(
+      "/knowledge/goal-metrics-vs-telemetry",
+    );
     // Rows wrap and never truncate their titles.
     expect(group.innerHTML).not.toContain("truncate");
   });
@@ -173,21 +222,39 @@ describe("MetricsBoard", () => {
 
   it("says so when a KPI has no serving metric, when the scan is cut and when detail is unavailable", () => {
     const bare = kpiFixture("k-bare", "KPI bare", assessmentFixture("on_track"), null);
-    const cut = GoalsProgressSchema.parse({ asOf: AS_OF, environment: "t", goals: [goalFixture("g", "G", [bare])], orphans: [], unbound: [], servedTruncated: true });
+    const cut = GoalsProgressSchema.parse({
+      asOf: AS_OF,
+      environment: "t",
+      goals: [goalFixture("g", "G", [bare])],
+      orphans: [],
+      unbound: [],
+      servedTruncated: true,
+    });
     const a = renderMetrics(cut);
+    fireEvent.click(within(a.container).getByRole("button", { name: /KPI bare/ }));
     expect(a.container.querySelector('[data-branch="empty"]')?.textContent).toContain("No metric serves this KPI yet");
     expect(a.container.textContent).toContain("This list is cut");
     expect(a.container.querySelector('[data-group="not-serving"]')).toBeNull();
     a.unmount();
-    const down = GoalsProgressSchema.parse({ asOf: AS_OF, environment: "t", goals: [goalFixture("g", "G", [bare])], servedUnavailable: "metric_authority_unavailable" });
+    const down = GoalsProgressSchema.parse({
+      asOf: AS_OF,
+      environment: "t",
+      goals: [goalFixture("g", "G", [bare])],
+      servedUnavailable: "metric_authority_unavailable",
+    });
     const b = renderMetrics(down);
     expect(b.container.textContent).toContain("Metrics unavailable right now");
-    expect(b.container.querySelector('[data-branch]')).toBeNull();
+    expect(b.container.querySelector("[data-branch]")).toBeNull();
   });
 
   it("never clips or overflows: titles and flag chips wrap, and an unmeasured goal opens", () => {
     const longId = "a-very-long-kpi-identifier-that-would-overflow-a-360px-row-if-it-never-wrapped";
-    const unmeasured = kpiFixture("k-un", "KPI with a long title that must wrap on a narrow screen", assessmentFixture("not_measured", { value: null }), null);
+    const unmeasured = kpiFixture(
+      "k-un",
+      "KPI with a long title that must wrap on a narrow screen",
+      assessmentFixture("not_measured", { value: null }),
+      null,
+    );
     const data = GoalsProgressSchema.parse({
       asOf: AS_OF,
       environment: "t",
@@ -206,7 +273,39 @@ describe("MetricsBoard", () => {
     expect(goal.innerHTML).not.toContain("line-clamp");
     // A goal with nothing measured still shows its KPIs and their metrics.
     expect(within(goal).getAllByRole("button")[0]?.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(within(goal).getByRole("button", { name: /KPI with a long title/ }));
     expect(goal.querySelector('[data-branch="empty"]')).not.toBeNull();
+  });
+
+  it("mounts serving rows only while expanded and makes the entire metric one link", () => {
+    const { container } = renderMetrics(fixture());
+    const goal = container.querySelector('[data-goal="goal-a"]') as HTMLElement;
+    const toggle = within(goal).getByRole("button", { name: /KPI red/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(goal.querySelector('[data-metric="m-guard-red"]')).toBeNull();
+    fireEvent.click(toggle);
+    const row = goal.querySelector('[data-metric="m-guard-red"]') as HTMLElement;
+    const link = within(row).getByRole("link");
+    expect(link).toHaveAttribute("href", "/knowledge/m-guard-red");
+    expect(link).toHaveTextContent("Failing");
+    expect(link).toHaveTextContent("40");
+    fireEvent.click(toggle);
+    expect(goal.querySelector('[data-metric="m-guard-red"]')).toBeNull();
+  });
+
+  it("shows an unbound invalid band with both warnings", () => {
+    const data = fixture({
+      orphans: [
+        { metricId: "bad", title: "Bad band", kpi: null, reason: "band_invalid", assessment: null, latest: latest() },
+      ],
+      unbound: [
+        { metric: { id: "bad", title: "Bad band", calculatorId: "work.count@1" }, assessment: null, latest: latest() },
+      ],
+    });
+    const { container } = renderMetrics(data);
+    const row = container.querySelector('[data-metric="bad"]') as HTMLElement;
+    expect(row.querySelector('[data-flag="unbound"]')).not.toBeNull();
+    expect(row.querySelector('[data-flag="band_invalid"]')).not.toBeNull();
   });
 
   it("leaves the Goals view as it was: server order, no metric branches", () => {
@@ -214,7 +313,7 @@ describe("MetricsBoard", () => {
     const { container } = render(
       <QueryClientProvider client={c}>
         <GoalsBoard initialData={fixture()} />
-      </QueryClientProvider>
+      </QueryClientProvider>,
     );
     expect(ids(container.querySelectorAll("[data-goal]"), "data-goal")).toEqual(["goal-b", "goal-a"]);
     expect(container.querySelector("[data-branch], [data-group]")).toBeNull();
@@ -222,7 +321,16 @@ describe("MetricsBoard", () => {
 });
 
 describe("metrics-view", () => {
-  const row = (over: Partial<MetricRow>): MetricRow => ({ id: "m", title: "m", calculatorId: "c", role: "input", assessment: null, latest: latest(), flags: [], ...over });
+  const row = (over: Partial<MetricRow>): MetricRow => ({
+    id: "m",
+    title: "m",
+    calculatorId: "c",
+    role: "input",
+    assessment: null,
+    latest: latest(),
+    flags: [],
+    ...over,
+  });
 
   it("ranks red first, unjudged after every problem and before healthy", () => {
     const rows = sortMetricRows([
@@ -235,12 +343,23 @@ describe("metrics-view", () => {
     expect(rows.map((r) => r.id)).toEqual(["err", "behind", "stale", "nb", "ok"]);
     expect(metricStatus(row({ latest: latest({ viewState: "unavailable", value: null }) }))).toBe("failing");
     expect(metricStatus(row({ latest: null }))).toBe("no_band");
-    expect(metricRank(row({ assessment: band("failing", 1) }))).toBeLessThan(metricRank(row({ assessment: band("on_track", 99) })));
+    expect(metricRank(row({ assessment: band("failing", 1) }))).toBeLessThan(
+      metricRank(row({ assessment: band("on_track", 99) })),
+    );
   });
 
   it("sorts goals by their worst KPI, with a goal with no KPIs last and ties in server order", () => {
-    const g = (id: string, s: KpiStatus[]) => goalFixture(id, id, s.map((x, i) => kpiFixture(`${id}${i}`, "t", assessmentFixture(x), null)));
-    expect(sortGoals([g("none", []), g("ok1", ["on_track"]), g("red", ["on_track", "failing"]), g("ok2", ["on_track"])]).map((x) => x.id)).toEqual(["red", "ok1", "ok2", "none"]);
+    const g = (id: string, s: KpiStatus[]) =>
+      goalFixture(
+        id,
+        id,
+        s.map((x, i) => kpiFixture(`${id}${i}`, "t", assessmentFixture(x), null)),
+      );
+    expect(
+      sortGoals([g("none", []), g("ok1", ["on_track"]), g("red", ["on_track", "failing"]), g("ok2", ["on_track"])]).map(
+        (x) => x.id,
+      ),
+    ).toEqual(["red", "ok1", "ok2", "none"]);
   });
 
   it("does not list a band_invalid orphan as not serving, and merges duplicate orphan rows", () => {
@@ -258,7 +377,16 @@ describe("metrics-view", () => {
 
   it("lists a metric that serves only a bet's KPI as not serving a goal KPI", () => {
     const data = fixture({
-      orphans: [{ metricId: "bet-m", title: "Bet metric", kpi: "bet-kpi", reason: "serves_bet_kpi", assessment: null, latest: latest() }],
+      orphans: [
+        {
+          metricId: "bet-m",
+          title: "Bet metric",
+          kpi: "bet-kpi",
+          reason: "serves_bet_kpi",
+          assessment: null,
+          latest: latest(),
+        },
+      ],
       unbound: [],
     });
     const [r] = notServingRows(data);
@@ -273,6 +401,8 @@ describe("metrics-view", () => {
     expect(bandFraction(row({ assessment: band("behind", 45) }))).toBe(0.5);
     expect(bandFraction(row({ assessment: band("on_track", 95) }))).toBe(1);
     expect(bandFraction(row({ assessment: null }))).toBeNull();
-    expect(bandFraction(row({ assessment: band("failing", 0, { value: null }), latest: latest({ value: null }) }))).toBeNull();
+    expect(
+      bandFraction(row({ assessment: band("failing", 0, { value: null }), latest: latest({ value: null }) })),
+    ).toBeNull();
   });
 });

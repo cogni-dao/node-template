@@ -17,20 +17,11 @@ import type { GoalsProgress } from "@cogni-dao/metrics/contracts";
 
 import { MetricsMount } from "./_components/MetricsMount";
 
-export function MetricsView({
-  initialData,
-}: {
-  readonly initialData?: GoalsProgress | undefined;
-}) {
+export function MetricsView({ initialData }: { readonly initialData?: GoalsProgress | undefined }) {
   return (
     <div className="flex flex-col gap-4 p-5 md:p-6">
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <h1 className="font-semibold text-xl tracking-tight md:text-2xl">
-          Metrics
-        </h1>
-        <span className="text-muted-foreground text-xs">
-          Goals, their KPIs and the metrics that serve each KPI
-        </span>
+        <h1 className="font-semibold text-xl tracking-tight md:text-2xl">Metrics</h1>
       </div>
       <MetricsMount initialData={initialData} />
     </div>

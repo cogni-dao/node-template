@@ -412,6 +412,29 @@ describe("goal read lists served metrics under their KPI", () => {
 		hypotheses: async () => ({ items: [], more: false }),
 	});
 
+	it("keeps an unbound metric with an invalid band and its warning", async () => {
+		const d = definition("bad-band", {
+			annexInvalid: [
+				{ field: "band", issues: ["band.target.value:invalid_type"] },
+			],
+		});
+		const s = setup([d], { "bad-band": [reading(d, 12)] });
+		const read = await readGoalsProgress({
+			goals: goals([]),
+			metrics: s.service,
+			environment: "test",
+		});
+		expect(read.unbound).toEqual([
+			expect.objectContaining({
+				metric: expect.objectContaining({ id: "bad-band" }),
+				latest: expect.objectContaining({ value: 12 }),
+			}),
+		]);
+		expect(read.orphans).toEqual([
+			expect.objectContaining({ metricId: "bad-band", reason: "band_invalid" }),
+		]);
+	});
+
 	it("nests each served metric with role and band assessment, keeps orphans and the unbanded", async () => {
 		const kpi = definition("kpi");
 		const input = definition("input-m", {
