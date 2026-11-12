@@ -1440,23 +1440,60 @@ describe("per-metric batch decode isolation", () => {
 				})),
 			);
 			expect(result).toHaveLength(4);
-			expect(result.map((row) => row.latest?.metricId ?? "unreadable")).toEqual(
-				["healthy-a", "unreadable", "healthy-c", "healthy-a"],
+			const latestBroken = field === "latest_observation";
+			const baselineBroken = field.startsWith("baseline_");
+			expect(result[1]?.latest?.metricId ?? null).toBe(
+				latestBroken ? null : "bad",
 			);
-			expect(result[1]).toMatchObject({ unreadable: true });
+			expect(result[1]?.baseline?.observation.metricId ?? null).toBe(
+				baselineBroken ? null : "bad",
+			);
 			const projected = await service.workReadBatch(
 				ids.map((metricId) => ({
 					metricId,
 					baselineObservationId: observation(metricId).id,
 				})),
 			);
-			expect(projected[1]).toMatchObject({
-				current: null,
-				unknownReason: "metrics_unavailable",
-			});
+			expect(projected[1]?.baseline?.metricId ?? null).toBe(
+				baselineBroken ? null : "bad",
+			);
+			expect(projected[1]?.current?.metricId ?? null).toBe(
+				latestBroken ? null : "bad",
+			);
+			if (latestBroken)
+				expect(projected[1]?.unknownReason).toBe("metrics_unavailable");
 			expect(projected[2]?.current?.metricId).toBe("healthy-c");
 		},
 	);
+	it("preserves current six when a pinned baseline timestamp is malformed or absent", async () => {
+		const current = { ...observation("bad"), value: 6 };
+		const rows = [
+			{
+				...raw("bad"),
+				baseline_observation: {
+					...observation("bad"),
+					observedAt: "not-a-date",
+				},
+				latest_observation: current,
+			},
+			{
+				...raw("bad"),
+				baseline_observation: null,
+				latest_observation: current,
+			},
+		];
+		const { service } = setup(rows);
+		const projected = await service.workReadBatch(
+			rows.map(() => ({
+				metricId: "bad",
+				baselineObservationId: observation("bad").id,
+			})),
+		);
+		for (const row of projected) {
+			expect(row.baseline).toBeNull();
+			expect(row.current).toMatchObject({ value: 6, viewState: "ok" });
+		}
+	});
 	it.each(["not-a-date", "2026-02-30T11:00:00.000Z"])(
 		"isolates malformed observedAt %s without dropping a healthy sibling",
 		async (malformed) => {

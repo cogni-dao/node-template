@@ -776,12 +776,6 @@ export function createMetricService(deps: {
 									: "metric_deprecated",
 							};
 						const row = rows[cursor++];
-						if (row?.unreadable)
-							return {
-								baseline: null,
-								current: null,
-								unknownReason: "metrics_unavailable",
-							};
 						let baseline = row?.baseline ?? null;
 						if (baseline) {
 							const observation = baseline.observation;
@@ -836,7 +830,13 @@ export function createMetricService(deps: {
 											: view.viewState,
 								}
 							: null;
-						return { baseline: baseline?.observation ?? null, current };
+						return {
+							baseline: baseline?.observation ?? null,
+							current,
+							...(!current && row?.unreadable
+								? { unknownReason: "metrics_unavailable" as const }
+								: {}),
+						};
 					},
 				),
 			);

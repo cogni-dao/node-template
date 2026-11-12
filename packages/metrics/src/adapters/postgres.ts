@@ -219,26 +219,35 @@ export class PostgresMetricObservations implements MetricObservationsPort {
 		LEFT JOIN LATERAL (SELECT observation FROM metric_observations WHERE scope=${this.key} AND metric_id=r."metricId" AND definition_hash=r."definitionHash" ORDER BY evaluation_at DESC,id DESC LIMIT 1) l ON true LEFT JOIN LATERAL (SELECT observation FROM metric_observations WHERE scope=${this.key} AND metric_id=r."metricId" AND definition_hash=r."definitionHash" AND status='ok' ORDER BY evaluation_at DESC,id DESC LIMIT 1) g ON true ORDER BY r.ord`,
 		);
 		return rows.map((row) => {
+			let unreadable = false;
+			const rolling = (value: unknown) => {
+				try {
+					return parseObservation(value);
+				} catch {
+					unreadable = true;
+					return null;
+				}
+			};
+			let baseline: ReturnType<typeof MetricSnapshotSchema.parse> | null = null;
 			try {
-				return {
-					baseline:
-						row.baseline_observation != null
-							? MetricSnapshotSchema.parse({
-									definition: json(row.baseline_definition),
-									observation: requiredObservation(row.baseline_observation),
-								})
-							: null,
-					latest: parseObservation(row.latest_observation),
-					lastGood: parseObservation(row.good_observation),
-				};
+				baseline =
+					row.baseline_observation != null
+						? MetricSnapshotSchema.parse({
+								definition: json(row.baseline_definition),
+								observation: requiredObservation(row.baseline_observation),
+							})
+						: null;
 			} catch {
-				return {
-					unreadable: true as const,
-					baseline: null,
-					latest: null,
-					lastGood: null,
-				};
+				// A malformed pinned snapshot cannot invalidate rolling evidence.
 			}
+			const latest = rolling(row.latest_observation);
+			const lastGood = rolling(row.good_observation);
+			return {
+				baseline,
+				latest,
+				lastGood,
+				...(unreadable ? { unreadable: true as const } : {}),
+			};
 		});
 	}
 	async get(id: string) {
