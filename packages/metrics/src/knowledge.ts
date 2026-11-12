@@ -35,6 +35,7 @@ import {
 	readNoInlineHistoryState,
 	readWorkConvergence,
 	readWorkCount,
+	readWorkKpiLinked,
 } from "./sources.js";
 
 /**
@@ -120,21 +121,28 @@ export function createGoalMetrics(deps: {
 		maxRows: 1,
 		maxResponseBytes: 65536,
 	};
-	const countParams = z.strictObject({ mode: z.enum(["open", "validated"]) });
+	const countParams = z.strictObject({
+		mode: z.enum(["open", "validated", "kpi-linked"]),
+	});
 	registry.register({
 		id: "work.count@1",
 		unit: "items",
+		// `kpi-linked` is the percent of open work items naming a metric in `moves`.
+		unitFor: (params) =>
+			countParams.parse(params).mode === "kpi-linked" ? "%" : "items",
 		display: "volume",
+		displayFor: (params) =>
+			countParams.parse(params).mode === "kpi-linked" ? "progress" : "volume",
 		paramsSchema: countParams,
 		budget,
-		compute: async (params, ctx) =>
-			ctx.read((signal) =>
-				readWorkCount(
-					deps.knowledgeSql,
-					countParams.parse(params).mode,
-					signal,
-				),
-			),
+		compute: async (params, ctx) => {
+			const { mode } = countParams.parse(params);
+			return ctx.read((signal) =>
+				mode === "kpi-linked"
+					? readWorkKpiLinked(deps.knowledgeSql, signal)
+					: readWorkCount(deps.knowledgeSql, mode, signal),
+			);
+		},
 	});
 	const convergenceParams = z.strictObject({
 		output: z.enum(["ratio", "validated", "created"]),

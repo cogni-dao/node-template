@@ -148,6 +148,69 @@ async function run(
 	}
 }
 
+/**
+ * One statement: open, non-synthetic work items (`total`) and those whose
+ * `moves` names at least one metric (`linked`). `moves` is NULL when never
+ * declared and `[]` when cleared; a real entry always carries a `metricId`
+ * key, so a text match on the key counts entries and neither empty form.
+ * Two scalar COUNTs, the shape `readWorkCount` already runs on Doltgres.
+ */
+export const WORK_KPI_LINKED_SQL = `SELECT NOW() AS as_of, (SELECT COUNT(*) FROM work_items WHERE status NOT IN ('done','cancelled') AND ${SYNTHETIC_LABELS("labels")}) AS total, (SELECT COUNT(*) FROM work_items WHERE status NOT IN ('done','cancelled') AND ${SYNTHETIC_LABELS("labels")} AND moves IS NOT NULL AND CAST(moves AS TEXT) LIKE '%"metricId"%') AS linked`;
+
+/**
+ * The percent of open, non-synthetic work items that name at least one
+ * metric in `moves`. An empty scope is `zero_denominator` and a malformed
+ * result is `incomplete_or_invalid_source`, never zero.
+ */
+export async function readWorkKpiLinked(
+	sql: Sql,
+	signal: AbortSignal,
+): Promise<MetricSample> {
+	const rows = await run(sql, WORK_KPI_LINKED_SQL, signal);
+	const first = rows[0];
+	const asOf = first?.as_of
+		? new Date(first.as_of as string).toISOString()
+		: null;
+	const total = Number(first?.total);
+	const linked = Number(first?.linked);
+	const valid =
+		rows.length === 1 &&
+		Number.isInteger(total) &&
+		Number.isInteger(linked) &&
+		linked >= 0 &&
+		linked <= total;
+	const common = {
+		unit: "%",
+		sourceWatermarks: [{ source: "node.work_items", asOf }],
+	};
+	if (!valid)
+		return {
+			...common,
+			value: 0,
+			complete: false,
+			evidenceRefs: [],
+			reason: "incomplete_or_invalid_source",
+		};
+	const evidenceRefs = [
+		"node:work_items:count:kpi-linked:excludes-synthetic",
+		`counts:evaluated=${total};linked=${linked}`,
+	];
+	if (total === 0)
+		return {
+			...common,
+			value: 0,
+			complete: false,
+			evidenceRefs,
+			reason: "zero_denominator",
+		};
+	return {
+		...common,
+		value: (100 * linked) / total,
+		complete: true,
+		evidenceRefs,
+	};
+}
+
 /** dolt_log.date is timestamp without time zone holding UTC wall time. */
 function doltUtc(iso: string): string {
 	return new Date(Date.parse(iso))
