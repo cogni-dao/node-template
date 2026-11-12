@@ -13,16 +13,19 @@
  */
 
 import type { AiEvent } from "@cogni/ai-core";
-import { edoDecideContract, goalListContract } from "@cogni/ai-tools";
 import { describe, expect, it } from "vitest";
 
 import { COGNI_TOOL_IDS } from "../../../src/graphs/mission/cogni";
 import { createMissionGraph } from "../../../src/graphs/mission/graph";
 import { createInProcGraphRunner } from "../../../src/inproc/runner";
 import type { CompletionFn, ToolExecFn } from "../../../src/inproc/types";
+import {
+  emptyTriageRead,
+  triageReadContracts,
+} from "../../helpers/triage-preflight";
 
-const noopExec: (emit: (e: AiEvent) => void) => ToolExecFn =
-  () => async () => ({ ok: true, value: {} });
+const noopExec: (emit: (e: AiEvent) => void) => ToolExecFn = () =>
+  emptyTriageRead;
 
 describe("cogni engine host-owned clock grounding", () => {
   it("HOST_OWNED_CLOCK: the host preamble carries the real current UTC year, not a guessed date", async () => {
@@ -53,7 +56,7 @@ describe("cogni engine host-owned clock grounding", () => {
       createGraph: createMissionGraph,
       completionFn,
       createToolExecFn: noopExec,
-      toolContracts: [goalListContract, edoDecideContract],
+      toolContracts: triageReadContracts,
       request: {
         runId: "clock-1",
         messages: [{ role: "user", content: "what's our top priority?" }],

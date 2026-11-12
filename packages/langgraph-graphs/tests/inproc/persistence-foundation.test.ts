@@ -16,7 +16,6 @@
  */
 
 import type { AiEvent } from "@cogni/ai-core";
-import { edoDecideContract, goalListContract } from "@cogni/ai-tools";
 import { InMemoryStore, MemorySaver } from "@langchain/langgraph";
 import { describe, expect, it } from "vitest";
 
@@ -29,6 +28,10 @@ import type {
   CreateGraphFn,
   ToolExecFn,
 } from "../../src/inproc/types";
+import {
+  emptyTriageRead,
+  triageReadContracts,
+} from "../helpers/triage-preflight";
 
 // A completion that never calls a tool: gather ends on the first turn, no goals were read, so the
 // graph runs GATHER → report → END (NO_GOALS_NO_DECISION). Deterministic: exactly one model call.
@@ -41,8 +44,8 @@ const noGoalsCompletion: CompletionFn = () => ({
   }),
 });
 
-const noopExec: (emit: (e: AiEvent) => void) => ToolExecFn =
-  () => async () => ({ ok: true, value: {} });
+const noopExec: (emit: (e: AiEvent) => void) => ToolExecFn = () =>
+  emptyTriageRead;
 
 const SOURCE = {
   nodeId: "test-node",
@@ -66,8 +69,8 @@ async function runTick(opts: {
     createGraph: createMissionGraph,
     completionFn: noGoalsCompletion,
     createToolExecFn: noopExec,
-    // edo_decide must be present or the engine throws cogni_decision_tool_unavailable at build.
-    toolContracts: [goalListContract, edoDecideContract],
+    // The native program requires the same prerequisite reads as a real host.
+    toolContracts: triageReadContracts,
     persistence: { checkpointer: opts.checkpointer, store: opts.store },
     request: {
       runId: opts.runId,
@@ -148,7 +151,7 @@ describe("cogni engine persistence foundation", () => {
         createGraph: captureGraph,
         completionFn: noGoalsCompletion,
         createToolExecFn: noopExec,
-        toolContracts: [goalListContract, edoDecideContract],
+        toolContracts: triageReadContracts,
         ...(persistence ? { persistence } : {}),
         request: {
           runId: "wire",
