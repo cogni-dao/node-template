@@ -27,6 +27,7 @@ import {
 } from "./protocol";
 import { serviceKeyOf } from "./claims";
 import { sealToJwk } from "./seal";
+import { assertEnrollmentMaintenance } from "./backlog";
 
 export type ProviderRefusal =
   | "invalid_token"
@@ -198,11 +199,7 @@ export function createDurableProviderStore(
           }
           if (proof.op === "continue")
             return { ok: false, reason: "unknown_operation", observedAt: at };
-          const pressure =
-            await tx`SELECT 1 FROM agent_authority_maintenance WHERE id = 'service-enrollment' AND backfill_ready
-            AND NOT EXISTS (SELECT 1 FROM (SELECT expires_at FROM agent_service_enrollments WHERE status = 'open' AND expires_at <= (SELECT clock_timestamp()) ORDER BY expires_at, id LIMIT 1) due WHERE expires_at < clock_timestamp() - interval '5 minutes')`;
-          if (!pressure.length)
-            throw new Error("maintenance unavailable or overdue");
+          await assertEnrollmentMaintenance(tx);
           // Resolve the verified tuple before its marker. A backfilled legacy marker is permanent.
           const legacyKey = serviceKeyOf(proof.home.origin, proof.service);
           const candidates = await tx`SELECT user_id, service_key, home_node_id, home_environment, home_origin, home_service

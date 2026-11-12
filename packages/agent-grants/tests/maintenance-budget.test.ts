@@ -14,7 +14,9 @@ function delayedClient(latency: (query: string) => number) {
     let timer: ReturnType<typeof setTimeout>;
     const result = new Promise<Record<string, unknown>[]>((resolve, reject) => {
       rejectQuery = reject;
-      timer = setTimeout(() => resolve(query.includes("FROM candidate") ? [{ id: "lease" }] : []), latency(query));
+      timer = setTimeout(() => resolve(query.includes("FROM candidate") ? [{ id: "lease" }]
+        : query.includes("clock_timestamp()::text AS at") ? [{ at: "2026-11-12 12:00:00+00" }]
+        : query.includes("min(at)::text") ? [{ oldest_due_at: null, overdue: false }] : []), latency(query));
     });
     return Object.assign(result, { cancel: async () => { facts.cancelled++; clearTimeout(timer); rejectQuery(new Error("cancelled")); } });
   };

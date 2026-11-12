@@ -5,6 +5,7 @@
 import { auditPurgeQualified, maintainAuthorityAudit, tryAuditIdentity, registerAuthorityBatch, type AuthorityBatch } from "./audit-maintenance";
 import type { CredentialSql } from "../credentials/postgres";
 import type { SqlTag } from "../postgres";
+import { enrollmentBacklog } from "./backlog";
 
 class BudgetExpired extends Error {}
 
@@ -99,13 +100,12 @@ export async function maintenanceTick(client: CredentialSql, extra?: (tx: SqlTag
         }
         if (extra) await extra(tx);
         if (purge) await maintainAuthorityAudit(tx, authorityBatch);
-        const due = await tx`SELECT expires_at FROM agent_service_enrollments WHERE status = 'open' AND expires_at <= (SELECT clock_timestamp())
-          ORDER BY expires_at, id LIMIT 1`;
+        const backlog = await enrollmentBacklog(tx);
         const last = batch[batch.length - 1];
         if (last && (typeof last.id !== "string" || typeof last.cursor_expires_at !== "string")) throw new Error("unreadable maintenance cursor");
-        await tx`UPDATE agent_authority_maintenance SET oldest_due_at = ${due[0]?.expires_at ?? null},
+        await tx`UPDATE agent_authority_maintenance SET oldest_due_at = ${backlog.oldestDueAt}::text::timestamptz,
           cursor_expires_at = ${last?.cursor_expires_at ?? null}::text::timestamptz,
           cursor_enrollment_id = ${last?.id ?? null}::uuid WHERE id = 'service-enrollment'`;
-        return { processed, due: due.length > 0 };
+        return { processed, due: backlog.oldestDueAt !== null };
   }, { processed: 0, due: true });
 }

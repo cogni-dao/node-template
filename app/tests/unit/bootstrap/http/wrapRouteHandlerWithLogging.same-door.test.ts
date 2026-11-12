@@ -13,6 +13,7 @@
 
 import { CORE_TOOL_BUNDLE } from "@cogni/ai-tools";
 import type { SessionUser } from "@cogni/node-shared";
+import type { SqlTag } from "@cogni/agent-grants";
 import { NextRequest, NextResponse } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -89,6 +90,34 @@ beforeEach(() => {
 });
 
 describe("the route door (real wrapper, real authorizeRoute)", () => {
+  it("uses the reserved transaction for both live-role and DAO-admin reads", async () => {
+    const roles = new Set(["dao-admin", "not-admin"]);
+    const reads: string[] = [];
+    const tx: SqlTag = async (strings, ...values) => {
+      const text = strings.join("?");
+      if (text.includes("FROM agent_roles")) {
+        reads.push("role");
+        return roles.has(String(values[0])) ? [{ ok: 1 }] : [];
+      }
+      if (text.includes("FROM user_bindings")) { reads.push("admin"); return []; }
+      throw new Error("unexpected authority read");
+    };
+    const sql = Object.assign(async () => { throw new Error("root pool must not be reacquired"); }, {
+      begin: async <T,>(fn: (connection: SqlTag) => Promise<T>) => fn(tx),
+    });
+    const authority = createAgentToolAuthority({ sql, toolBundle: [], log: log as never,
+      nodeAdmin: { check: async ({ userId }) => userId === "dao-admin" ? { ok: true } : { ok: false, errorCode: "authz_denied" } },
+    });
+    const decide = (userId: string) => authority.authorizeRoute({ toolId: "agent-access.manage", routeId: "agent.access.roles.grant", userId, via: "bearer" });
+    expect(await Promise.all([decide("dao-admin"), decide("not-admin")])).toEqual([
+      { decision: "allow", basis: "role" }, { decision: "deny", code: "policy_denied", reason: "subject_not_admin" },
+    ]);
+    expect(reads.filter((r) => r === "admin")).toHaveLength(2);
+    roles.delete("dao-admin");
+    expect(await decide("dao-admin")).toMatchObject({ decision: "deny", reason: "no_role" });
+    expect(reads.filter((r) => r === "admin")).toHaveLength(2);
+  });
+
   it("a bearer with no role row gets 403 policy_denied and the handler never runs", async () => {
     const res = await call("core__work_item_update", user("bearer"));
     expect(res.status).toBe(403);

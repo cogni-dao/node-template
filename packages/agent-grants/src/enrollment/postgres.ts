@@ -37,6 +37,7 @@ import {
 } from "./claims";
 import { createDurableProviderStore, type DurableProviderOptions } from "./durable-provider";
 import { maintenanceTick } from "./maintenance";
+import { assertEnrollmentMaintenance } from "./backlog";
 import type {
   CreateEnrollmentRefusal,
   CreateEnrollmentResult,
@@ -128,12 +129,7 @@ export function createPostgresEnrollmentStore(
         return await client.begin(async (tx): Promise<CreateEnrollmentResult> => {
           await tx`SELECT pg_advisory_xact_lock(hashtext('agent_service_enrollments'))`;
           await tx`SELECT pg_advisory_xact_lock(hashtext(${`service:${input.serviceKey}`}))`;
-          const pressure = await tx`SELECT 1 FROM agent_authority_maintenance WHERE id = 'service-enrollment'
-            AND backfill_ready AND NOT EXISTS (SELECT 1 FROM (
-              SELECT expires_at FROM agent_service_enrollments WHERE status = 'open' AND expires_at <= (SELECT clock_timestamp())
-              ORDER BY expires_at, id LIMIT 1
-            ) due WHERE expires_at < clock_timestamp() - interval '5 minutes')`;
-          if (pressure.length === 0) throw new Error("enrollment maintenance unavailable or backlogged");
+          await assertEnrollmentMaintenance(tx);
           const valid = await tx`SELECT to_timestamp(${input.claims.exp}) > clock_timestamp() AS valid`;
           if (valid[0]?.valid !== true) throw new Refusal("invalid_token");
           const seen = await tx`SELECT 1 AS used FROM agent_service_enrollments WHERE jti = ${input.claims.jti}`;

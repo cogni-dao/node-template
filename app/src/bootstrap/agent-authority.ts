@@ -271,8 +271,8 @@ export function createAgentToolAuthority(deps: {
     async authorizeRoute({ toolId, routeId, userId, via }) {
       const routeOnly = ROUTE_ONLY_CAPABILITIES[toolId];
       const requires = requiresById[toolId] ?? routeOnly?.requires;
-      const decide = (store: AgentGrantsStore) =>
-        authorizeCaller(store, adminCheck, {
+      const decide = (store: AgentGrantsStore, check: AdminCheck = adminCheck) =>
+        authorizeCaller(store, check, {
           userId,
           via,
           requires: requires as ToolRequires,
@@ -282,7 +282,12 @@ export function createAgentToolAuthority(deps: {
         ? { decision: "deny", code: "policy_denied", reason: "no_requires" }
         : await (via === "session"
             ? decide(SESSION_NEVER_READS_STORE)
-            : withStore(decide)
+            : deps.sql.begin((tx) =>
+                decide(
+                  createPostgresAgentGrantsStore(tx),
+                  createAdminCheck(tx, deps.nodeAdmin)
+                )
+              )
           ).catch(
             (): AuthzDecision => ({
               decision: "deny",

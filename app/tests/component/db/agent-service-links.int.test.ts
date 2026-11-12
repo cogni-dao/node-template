@@ -770,6 +770,64 @@ describe("v2 enrollment and requester SQL", () => {
     // This is an isolated migrated fixture, never a live rollout or an assertion that a build was qualified.
     await db`UPDATE agent_authority_maintenance SET purge_enabled=true,minimum_reader_build=${"a".repeat(40)} WHERE id='service-enrollment' AND backfill_ready`;
   };
+  it('terminal delivery backlog signals and refuses only new operations while purge is off', async () => {
+    const grants = createPostgresAgentGrantsStore(db as unknown as SqlTag);
+    const terminal: string[] = [];
+    for (let i=0;i<6;i++) {
+      const { proof } = await proofAt();
+      proof.service = `delivery-${i}`;
+      proof.intentDigest = await intentDigestOf(intentOf(proof));
+      const accepted = await provider().acceptProof(proof, await hashAgentKey(randomUUID()));
+      if (!accepted.ok) throw new Error(accepted.reason);
+      expect(await grants.denyPending({ principalUserId: accepted.principalUserId, scope: 'knowledge:read' })).toBe(true);
+      terminal.push(accepted.enrollmentId);
+    }
+    const { proof: replay } = await proofAt(), replayDigest = await hashAgentKey(randomUUID());
+    const accepted = await provider().acceptProof(replay,replayDigest);
+    if (!accepted.ok) throw new Error(accepted.reason);
+    // Only timestamp aging bypasses guards; production writers and maintenance run with every trigger enabled.
+    await db.begin(async tx => {
+      await tx.unsafe('ALTER TABLE agent_service_enrollments DISABLE TRIGGER USER');
+      await tx`UPDATE agent_service_enrollments SET expires_at=clock_timestamp()-interval '10 minutes'
+        WHERE id=ANY(${terminal}::uuid[])`;
+      await tx.unsafe('ALTER TABLE agent_service_enrollments ENABLE TRIGGER USER');
+    });
+    expect(await db`SELECT id FROM agent_service_enrollments WHERE status='open' AND expires_at<=clock_timestamp()`).toHaveLength(0);
+    expect((await auditTick()).due).toBe(true);
+    expect(await db`SELECT id FROM agent_service_enrollments WHERE status<>'open' AND sealed_acceptance IS NOT NULL`).toHaveLength(1);
+    expect((await db`SELECT oldest_due_at<clock_timestamp()-interval '5 minutes' AS overdue,purge_enabled
+      FROM agent_authority_maintenance WHERE id='service-enrollment'`)[0]).toMatchObject({ overdue:true,purge_enabled:false });
+    const { proof: fresh } = await proofAt(); fresh.service='new-delivery'; fresh.intentDigest=await intentDigestOf(intentOf(fresh));
+    const freshDigest=await hashAgentKey(randomUUID()), before=await inspect();
+    await expect(provider().acceptProof(fresh,freshDigest)).rejects.toThrow('maintenance');
+    expect(await inspect()).toEqual(before);
+    const replayed=await provider().acceptProof(replay,replayDigest);
+    expect(replayed).toMatchObject({ok:true,reply:{...accepted.reply,observedAt:expect.any(String)}});
+    const continuation={...replay,op:'continue' as const,jti:randomUUID(),originalTokenDigest:replayDigest};
+    expect(await provider().acceptProof(continuation,await hashAgentKey(randomUUID())))
+      .toMatchObject({ok:true,reply:{...accepted.reply,observedAt:expect.any(String)}});
+    expect((await auditTick()).due).toBe(false);
+    expect((await provider().acceptProof(fresh,freshDigest)).ok).toBe(true);
+  });
+
+  it('audit backlog excludes purge-off history and the retained latest consent control', async () => {
+    const user=randomUUID(),admin=randomUUID();
+    await db`INSERT INTO users(id,name) VALUES(${user},'audit queue'),(${admin},'audit approver')`;
+    await db`INSERT INTO agent_principals(kind,user_id) VALUES('external',${user})`;
+    for(let i=0;i<7;i++) await db`INSERT INTO agent_roles(principal_user_id,scope,approved_by,created_at,granted_at,revoked_at)
+      VALUES(${user},'knowledge:read',${admin},clock_timestamp()-interval '120 days'+${i}*interval '1 second',
+        clock_timestamp()-interval '120 days',clock_timestamp()-interval '100 days')`;
+    const latest=(await db`SELECT id FROM agent_roles WHERE principal_user_id=${user} ORDER BY created_at DESC,id DESC LIMIT 1`)[0]!.id;
+    expect((await auditTick()).due).toBe(false);
+    await qualifyFixtureAudit();
+    expect((await auditTick()).due).toBe(true);
+    const {proof}=await proofAt(),digest=await hashAgentKey(randomUUID());
+    await expect(provider().acceptProof(proof,digest)).rejects.toThrow('maintenance');
+    expect((await auditTick()).due).toBe(false);
+    expect((await db`SELECT id FROM agent_roles WHERE principal_user_id=${user}`).map(r=>r.id)).toEqual([latest]);
+    expect((await provider().acceptProof(proof,digest)).ok).toBe(true);
+  });
+
   async function seedAuditChain(length: number, exerciseRotations=true) {
     const user=randomUUID();
     const ids: string[]=Array.from({length:length+2},()=>randomUUID());
@@ -973,6 +1031,9 @@ describe("v2 enrollment and requester SQL", () => {
     expect((await requester.ensure(key)).linkId).toBe(compact.linkId);
     const afterCompact=await requester.read({operationId:compact.linkId,key});
     await requester.reenroll({operationId:compact.linkId,key},afterCompact.revision);
+    // The newly superseded row can sort behind the saved cursor. One empty page
+    // resets that cursor; the following bounded tick reaches the row on wrap.
+    await auditTick();
     await auditTick();
     expect(await db`SELECT operation_id FROM agent_service_link_operations WHERE operation_id=${compact.linkId}`).toHaveLength(0);
     expect(await db`SELECT operation_id FROM agent_service_link_operations WHERE operation_id=${fresh.linkId} AND encrypted_secrets IS NOT NULL`).toHaveLength(1);
