@@ -30,8 +30,16 @@ import {
  * @public
  */
 
+import { CORE_TOOL_BUNDLE } from "@cogni/ai-tools";
 import {
+	agentAccessRequestCreateOperation,
+	agentAccessRequestListOperation,
+	confirmAgentCredentialOperation,
 	knowledgeHistoryOperation,
+	registerAgentOperation,
+	revokeAgentCredentialOperation,
+	rotateAgentCredentialOperation,
+	upgradeAgentCredentialOperation,
 	workItemsClaimOperation,
 	workItemsCoordinationOperation,
 	workItemsCreateOperation,
@@ -45,6 +53,10 @@ import {
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import {
+	buildPermissionCatalog,
+	buildRequiresById,
+} from "@/bootstrap/agent-permissions";
+import {
 	getNodeBrandColor,
 	getNodeBrandIcon,
 	getNodeHook,
@@ -55,6 +67,7 @@ import {
 import { serverEnv } from "@/shared/env";
 
 export const runtime = "nodejs";
+
 
 /**
  * Resolve the public origin this request reached us through. In prod the app
@@ -77,6 +90,10 @@ function publicOrigin(request: Request): string {
 export async function GET(request: Request) {
 	const env = serverEnv();
 	const origin = publicOrigin(request);
+	// DECLARED_ONCE_SHOWN_EVERYWHERE: rendered from the grant declarations on every read, never a copy table.
+	const { permissions } = buildPermissionCatalog(
+		buildRequiresById([...CORE_TOOL_BUNDLE]),
+	);
 	return NextResponse.json({
 		name: "Cogni Node API",
 		version: "v1",
@@ -115,7 +132,60 @@ export async function GET(request: Request) {
 			workItemHeartbeat: `${origin}/api/v1/work/items/{id}/heartbeat`,
 			workItemCoordination: `${origin}/api/v1/work/items/{id}/coordination`,
 		},
+		// Scopes an outside agent can ask for (requestPermission). Derived from the declarations, not listed here.
+		permissions,
+		permissionsHow:
+			"Ask with requestPermission; a node admin turns it On on the profile page.",
 		actions: {
+			register: {
+				method: "POST",
+				endpoint: `${origin}/api/v1/agent/register`,
+				auth: { type: "none" },
+				inputSchema: z.toJSONSchema(registerAgentOperation.input),
+				outputSchema: z.toJSONSchema(registerAgentOperation.output),
+			},
+			upgradeCredential: {
+				method: "POST",
+				endpoint: `${origin}/api/v1/agent/credentials/upgrade`,
+				auth: { type: "bearer" },
+				inputSchema: z.toJSONSchema(z.strictObject({})),
+				outputSchema: z.toJSONSchema(upgradeAgentCredentialOperation.output),
+			},
+			confirmCredential: {
+				method: "POST",
+				endpoint: `${origin}/api/v1/agent/credentials/confirm`,
+				auth: { type: "bearer" },
+				inputSchema: z.toJSONSchema(z.strictObject({})),
+				outputSchema: z.toJSONSchema(confirmAgentCredentialOperation.output),
+			},
+			rotateCredential: {
+				method: "POST",
+				endpoint: `${origin}/api/v1/agent/credentials/rotate`,
+				auth: { type: "bearer" },
+				inputSchema: z.toJSONSchema(z.strictObject({})),
+				outputSchema: z.toJSONSchema(rotateAgentCredentialOperation.output),
+			},
+			revokeCredential: {
+				method: "POST",
+				endpoint: `${origin}/api/v1/agent/credentials/revoke`,
+				auth: { type: "bearer" },
+				inputSchema: z.toJSONSchema(revokeAgentCredentialOperation.input),
+				outputSchema: z.toJSONSchema(revokeAgentCredentialOperation.output),
+			},
+			requestPermission: {
+				method: "POST",
+				endpoint: `${origin}/api/v1/agent/access-requests`,
+				auth: { type: "bearer" },
+				inputSchema: z.toJSONSchema(agentAccessRequestCreateOperation.input),
+				outputSchema: z.toJSONSchema(agentAccessRequestCreateOperation.output),
+			},
+			listMyPermissions: {
+				method: "GET",
+				endpoint: `${origin}/api/v1/agent/access-requests`,
+				auth: { type: "bearer" },
+				inputSchema: z.toJSONSchema(z.strictObject({})),
+				outputSchema: z.toJSONSchema(agentAccessRequestListOperation.output),
+			},
 			readGoalsProgress: {
 				method: "GET",
 				endpoint: `${origin}/api/v1/metrics/goals`,
