@@ -133,24 +133,64 @@ write_cache_atomic() {
   # worktree, and a worktree whose first fetch fails boots from it.
   if [ -n "$SHARED_CACHE" ]; then
     write_file_atomic "$SHARED_CACHE" "$1"
-    ensure_shared_cache_ignored
+    ensure_clone_root_ignores "$CACHE_FILE"
+    ensure_conductor_copies_cache
   fi
 }
 
-# ensure_shared_cache_ignored — Conductor copies a file from the clone root into
-# a new worktree only when Git ignores it there, and a clone root checked out on
-# an older branch may not ignore the cache. Its info/exclude applies on every
-# branch and stays on this machine.
-ensure_shared_cache_ignored() {
-  git -C "$clone_root" check-ignore -q -- "$CACHE_FILE" 2>/dev/null && return 0
+# ensure_clone_root_ignores <path> — Conductor copies a file from the clone root
+# into a new worktree only when Git ignores it there, and a clone root checked
+# out on an older branch may not ignore the cache. Its info/exclude applies on
+# every branch and stays on this machine.
+ensure_clone_root_ignores() {
+  git -C "$clone_root" check-ignore -q -- "$1" 2>/dev/null && return 0
   exclude="$clone_root/.git/info/exclude"
   mkdir -p "$clone_root/.git/info" 2>/dev/null || return 0
   # Start on a new line even when the file's last line has no newline.
   if [ -s "$exclude" ] && [ -n "$(tail -c 1 "$exclude" 2>/dev/null)" ]; then
     printf '\n' >> "$exclude" 2>/dev/null
   fi
-  printf '/%s\n' "$CACHE_FILE" >> "$exclude" 2>/dev/null
+  printf '/%s\n' "$1" >> "$exclude" 2>/dev/null
   return 0
+}
+
+# ensure_conductor_copies_cache — Conductor's docs do not say whether the shared
+# Files-to-copy rule (.conductor/settings.toml) is read from the clone root's
+# checkout or the default branch. A clone root on a branch without it would copy
+# only .env*, and Claude's first import would find no cache. The clone root's
+# machine-local settings.local.toml outranks the shared file on every branch;
+# give it the same rule unless it already sets one. Conductor only.
+CONDUCTOR_COPY_GLOBS='file_include_globs = """
+.env*
+.cogni/.cognition-cache.md
+"""'
+ensure_conductor_copies_cache() {
+  [ -n "${CONDUCTOR_ROOT_PATH:-}" ] || return 0
+  [ "$(cd "$CONDUCTOR_ROOT_PATH" 2>/dev/null && pwd -P)" = "$(cd "$clone_root" && pwd -P)" ] || return 0
+  settings="$clone_root/.conductor/settings.local.toml"
+  if grep -q '^[[:space:]]*file_include_globs[[:space:]]*=' "$settings" 2>/dev/null; then
+    grep -qF "$CACHE_FILE" "$settings" \
+      || printf 'warn: %s sets file_include_globs without %s; new worktrees start without cognition\n' "$settings" "$CACHE_FILE" >&2
+    return 0
+  fi
+  block="# Cogni: copy the last complete cognition bundle into each new worktree,
+# whatever branch this checkout has out (scripts/agent/session-cognition.sh).
+$CONDUCTOR_COPY_GLOBS"
+  if [ -f "$settings" ]; then
+    # TOML top-level keys must precede the first [table].
+    updated="$(BLOCK="$block" awk '
+      !done && /^[[:space:]]*\[/ { print ENVIRON["BLOCK"]; print ""; done = 1 }
+      { print }
+      END { if (!done) { print ""; print ENVIRON["BLOCK"] } }
+    ' "$settings")" || return 0
+  else
+    updated="\"\$schema\" = \"https://conductor.build/schemas/settings.repo.schema.json\"
+
+$block"
+  fi
+  write_file_atomic "$settings" "$updated"
+  chmod 600 "$settings" 2>/dev/null
+  ensure_clone_root_ignores ".conductor/settings.local.toml"
 }
 
 write_file_atomic() {
