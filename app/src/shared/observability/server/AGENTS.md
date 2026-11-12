@@ -78,6 +78,7 @@ logEvent(logger, EVENT_NAMES.ADAPTER_LITELLM_STREAM_RESULT, {
 
 ## Standards
 
+- Invalid `PINO_LOG_LEVEL` falls back to info for diagnostic logging; env validation still rejects the configuration.
 - Sync mode: `pino.destination({ sync: true, minLength: 0 })` prevents buffering
 - Fail-closed reqId: logEvent() throws in tests (VITEST=true), logs error elsewhere
 - No worker transports - JSON stdout only; on lease deployments (`LOKI_PUSH_URL` set by the operator) stdout is additionally teed to the in-process, fail-open, memory-capped Loki push sink (`loki-push-stream.ts`)

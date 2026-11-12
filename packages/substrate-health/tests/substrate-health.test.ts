@@ -10,6 +10,7 @@ import {
   probeRedisStream,
   readDeepReadiness,
   runDeepChecks,
+  serveReadyz,
 } from "../src/index.ts";
 
 const wrapError = (message: string) => new Error(message);
@@ -222,5 +223,87 @@ describe("readDeepReadiness", () => {
     expect(readDeepReadiness(200, "<html>").dependencyState("postgres")).toBe("unknown");
     expect(readDeepReadiness(503, { status: "error", checks: { postgres: "ok" } }).dependencyState("postgres")).toBe("unknown");
     expect(readDeepReadiness(200, { status: "healthy", checks: {} }).dependencyState("toString")).toBe("na");
+  });
+});
+
+describe("serveReadyz", () => {
+  const describeError = (error: unknown) => ({
+    reason: "INFRA_UNREACHABLE",
+    message: error instanceof Error ? error.message : String(error),
+  });
+
+  it("default path runs only the local check: no deep check is built or run", async () => {
+    const { rt } = runtime();
+    const deepChecks = vi.fn(() => [["postgres", async () => undefined]] as const);
+    const res = await serveReadyz({
+      deep: false,
+      local: () => ({ buildSha: "abc", version: "1" }),
+      deepChecks,
+      runtime: rt,
+      describeError,
+    });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ status: "healthy", buildSha: "abc", version: "1" });
+    expect(res.body).not.toHaveProperty("checks");
+    expect(deepChecks).not.toHaveBeenCalled();
+  });
+
+  it("deep 200 carries checks", async () => {
+    const { rt } = runtime();
+    const res = await serveReadyz({
+      deep: true,
+      local: () => ({ buildSha: "abc" }),
+      deepChecks: () => [["postgres", async () => undefined]] as const,
+      runtime: rt,
+      describeError,
+    });
+    expect(res.status).toBe(200);
+    expect((res.body.checks as Record<string, { status: string }>).postgres?.status).toBe("ok");
+  });
+
+  it("deep 503 carries reason/message from the first failure plus unreachable, checks and buildSha", async () => {
+    const { rt } = runtime();
+    const onFailure = vi.fn();
+    const res = await serveReadyz({
+      deep: true,
+      local: () => ({ buildSha: "abc" }),
+      deepChecks: () =>
+        [
+          ["postgres", async () => undefined],
+          ["scheduler-worker", async () => Promise.reject(new Error("worker down"))],
+        ] as const,
+      runtime: rt,
+      describeError,
+      onFailure,
+    });
+    expect(res.status).toBe(503);
+    expect(res.body).toMatchObject({
+      status: "error",
+      reason: "INFRA_UNREACHABLE",
+      message: "worker down",
+      unreachable: ["scheduler-worker"],
+      buildSha: "abc",
+    });
+    expect(onFailure).toHaveBeenCalledOnce();
+    const reading = readDeepReadiness(res.status, res.body);
+    expect(reading.dependencyState("postgres")).toBe("reached");
+    expect(reading.dependencyState("scheduler-worker")).toBe("unreached");
+  });
+
+  it("a local (config) failure is 503 with no deep evidence, even on ?deep=1", async () => {
+    const { rt } = runtime();
+    const deepChecks = vi.fn(() => [] as const);
+    const res = await serveReadyz({
+      deep: true,
+      local: () => {
+        throw new Error("secret missing");
+      },
+      deepChecks,
+      runtime: rt,
+      describeError: () => ({ reason: "MISSING_RUNTIME_SECRET", message: "secret missing" }),
+    });
+    expect(res.status).toBe(503);
+    expect(res.body).toEqual({ status: "error", reason: "MISSING_RUNTIME_SECRET", message: "secret missing" });
+    expect(deepChecks).not.toHaveBeenCalled();
   });
 });

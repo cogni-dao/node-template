@@ -23,7 +23,7 @@
  *     operator's node log proxy forces (observability-logs.ts), `service_name`
  *     is the Grafana Cloud Logs default service label, `source` distinguishes
  *     lease-pushed lines from Alloy-scraped ones.
- * Side-effects: IO (HTTP POST to Loki) on the flush timer.
+ * Side-effects: IO (HTTP POST to Loki) on the flush timer or explicit flush.
  * Links: bug.5127, operator compute-workload-reconciler.ts (env injection),
  *   nodes/operator observability-logs.ts (forced read labels)
  * @public
@@ -47,8 +47,6 @@ export interface LokiPushStream {
 
 /** Flush cadence; matches the operator v000 stdout pump. */
 const FLUSH_INTERVAL_MS = 2_000;
-/** Flush immediately once a batch reaches this many lines. */
-const MAX_BATCH_ENTRIES = 500;
 /** Hard entry cap — beyond this the oldest lines are dropped. */
 const MAX_BUFFER_ENTRIES = 2_000;
 /** Hard byte cap across buffered lines (~1 MiB). */
@@ -64,7 +62,7 @@ const PUSH_TIMEOUT_MS = 5_000;
  * variable (lease workloads); everywhere else this module is inert.
  */
 export function createLokiPushStream(
-  deps: LokiPushDeps
+  deps: LokiPushDeps,
 ): LokiPushStream | undefined {
   try {
     const { env } = deps;
@@ -75,7 +73,7 @@ export function createLokiPushStream(
     const auth =
       env.LOKI_PUSH_USER && env.LOKI_PUSH_PASSWORD
         ? `Basic ${Buffer.from(
-            `${env.LOKI_PUSH_USER}:${env.LOKI_PUSH_PASSWORD}`
+            `${env.LOKI_PUSH_USER}:${env.LOKI_PUSH_PASSWORD}`,
           ).toString("base64")}`
         : undefined;
     const serviceName = env.SERVICE_NAME ?? "app";
@@ -153,7 +151,6 @@ export function createLokiPushStream(
               dropped += 1;
             }
           }
-          if (buffer.length >= MAX_BATCH_ENTRIES) flush();
         } catch {
           // FAIL_OPEN: a sink defect must never surface into app code paths.
         }
