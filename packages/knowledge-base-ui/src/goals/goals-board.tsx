@@ -135,7 +135,7 @@ function GoalsBoardView({
             {signedOut ? (
               <ReloadLink onClick={reload} />
             ) : (
-              <button type="button" onClick={() => query.refetch()} className="underline underline-offset-2">
+              <button type="button" onClick={() => query.refetch()} className="inline-flex min-h-6 items-center underline underline-offset-2">
                 {metrics ? "Metrics unavailable · retry" : "Goals unavailable · retry"}
               </button>
             )}

@@ -81,7 +81,7 @@ export interface WorkBoardProps<TItem extends WorkBoardItem> {
 
 const GOAL_LABEL = /^goal:(?:goal-)?([a-z0-9]+(?:-[a-z0-9]+)*)$/;
 const GOAL_LINK_CLASS =
-  "relative z-10 truncate underline hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+  "relative z-10 inline-flex min-h-6 min-w-6 items-center truncate underline hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
 function defaultGoalHref(slug: string): string {
   return `/knowledge/${encodeURIComponent(`goal-${slug}`)}`;
