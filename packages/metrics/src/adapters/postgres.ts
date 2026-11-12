@@ -2,6 +2,7 @@
 /** Scoped injected SQL. Snapshot reservation precedes I/O; completed observations never change. */
 import { randomUUID } from "node:crypto";
 import type { Sql } from "postgres";
+import { z } from "zod";
 import { HISTORY_ORIGIN_MS, metricHistoryRange } from "../assess.js";
 import {
 	MetricError,
@@ -15,6 +16,7 @@ import {
 
 import { readMetricBatch } from "./read-budget.js";
 type Row = Record<string, unknown>;
+const ISO_DATE = z.iso.date();
 /** `dolt:head:<32-char hash>@<toISOString()>`; only matching refs are cast to a time. */
 const HEAD_REF =
 	"^dolt:head:[a-z0-9]{32}@[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$";
@@ -22,7 +24,18 @@ function json(value: unknown) {
 	return typeof value === "string" ? JSON.parse(value) : value;
 }
 function parseObservation(value: unknown) {
-	return value == null ? null : MetricObservationSchema.parse(json(value));
+	if (value == null) return null;
+	const observation = MetricObservationSchema.parse(json(value));
+	const observedAt = observation.observedAt;
+	const datePrefix = observedAt?.match(/^\d{4}-\d{2}-\d{2}/)?.[0];
+	if (
+		(observation.status === "ok" && observedAt === null) ||
+		(observedAt !== null &&
+			(!Number.isFinite(Date.parse(observedAt)) ||
+				(datePrefix !== undefined && !ISO_DATE.safeParse(datePrefix).success)))
+	)
+		throw new MetricError("observation_unreadable", 503);
+	return observation;
 }
 export class PostgresMetricObservations implements MetricObservationsPort {
 	constructor(
@@ -42,6 +55,9 @@ export class PostgresMetricObservations implements MetricObservationsPort {
 	) {
 		if (!requests.length) return [];
 		if (requests.length > 100) throw new MetricError("too_many_metrics", 400);
+		// JSON path's silent datetime parse guards the native cast on PostgreSQL 15.
+		// Invalid candidates reach per-position decoding, which marks them unreadable.
+		// The unique metric_observation_slot index makes evaluation_at ties impossible.
 		const rows = await readMetricBatch(
 			this.sql,
 			signal,
@@ -52,7 +68,7 @@ export class PostgresMetricObservations implements MetricObservationsPort {
 		FROM requested r LEFT JOIN metric_observations b ON b.scope=${this.key} AND b.id=CASE WHEN r.baseline_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN r.baseline_id::uuid ELSE NULL END AND b.metric_id=r.metric_id
 		LEFT JOIN LATERAL (SELECT observation FROM metric_observations WHERE scope=${this.key} AND metric_id=r.metric_id AND definition_hash=b.definition_hash ORDER BY evaluation_at DESC,id DESC LIMIT 1) l ON true
 		LEFT JOIN LATERAL (SELECT observation FROM metric_observations WHERE scope=${this.key} AND metric_id=r.metric_id AND definition_hash=b.definition_hash AND status='ok' ORDER BY evaluation_at DESC,id DESC LIMIT 1) g ON true
-		LEFT JOIN LATERAL (SELECT observation FROM metric_observations WHERE scope=${this.key} AND metric_id=r.metric_id AND definition_hash=b.definition_hash AND status='ok' AND observation->'value' IS NOT NULL AND jsonb_typeof(observation->'value')='number' AND evaluation_at <= r.due::timestamptz AND evaluation_at >= r.due::timestamptz - ((b.snapshot->'spec'->>'maxAgeSeconds')::int * interval '1 second') AND (observation->>'observedAt')::timestamptz <= r.due::timestamptz + ((b.snapshot->'spec'->>'maxAgeSeconds')::int * interval '1 second') ORDER BY evaluation_at DESC,(observation->>'observedAt')::timestamptz DESC,id DESC LIMIT 1) e ON true ORDER BY r.ord`,
+		LEFT JOIN LATERAL (SELECT observation FROM metric_observations WHERE scope=${this.key} AND metric_id=r.metric_id AND definition_hash=b.definition_hash AND status='ok' AND observation->'value' IS NOT NULL AND jsonb_typeof(observation->'value')='number' AND evaluation_at <= r.due::timestamptz AND evaluation_at >= r.due::timestamptz - ((b.snapshot->'spec'->>'maxAgeSeconds')::int * interval '1 second') AND CASE WHEN jsonb_path_exists(jsonb_build_object('v',replace(observation->>'observedAt','Z','+00:00')), '$.v.datetime()', '{}'::jsonb, true) THEN (observation->>'observedAt')::timestamptz <= r.due::timestamptz + ((b.snapshot->'spec'->>'maxAgeSeconds')::int * interval '1 second') ELSE true END ORDER BY evaluation_at DESC,id DESC LIMIT 1) e ON true ORDER BY r.ord`,
 		);
 		return rows.map((row) => {
 			try {

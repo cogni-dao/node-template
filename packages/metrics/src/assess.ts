@@ -123,6 +123,18 @@ export function assessDirection(
 		)
 			return "unknown";
 		const maxAgeSeconds = current.maxAgeSeconds;
+		if (maxAgeSeconds !== undefined) {
+			const windowAge =
+				Date.parse(observation.observedAt) - Date.parse(observation.window.end);
+			if (
+				!Number.isFinite(maxAgeSeconds) ||
+				maxAgeSeconds < 0 ||
+				!Number.isFinite(windowAge) ||
+				windowAge < 0 ||
+				windowAge > maxAgeSeconds * 1000
+			)
+				return "unknown";
+		}
 		if (
 			maxAgeSeconds !== undefined &&
 			observation.sourceWatermarks.some((watermark) => {

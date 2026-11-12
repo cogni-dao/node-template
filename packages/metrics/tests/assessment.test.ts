@@ -624,6 +624,45 @@ describe("directional assessment", () => {
 		expect(assessDirection("up", fresh, fresh)).toBe("flat");
 		expect(assessDirection(null, fresh, current)).toBeNull();
 	});
+	it("keeps stale or future baseline windows unknown at their observation time", () => {
+		const observed = "2026-11-02T11:00:00.000Z";
+		const baseline = {
+			...fresh,
+			window: {
+				start: "2026-11-02T03:00:00.000Z",
+				end: "2026-11-02T03:00:00.000Z",
+			},
+			observedAt: observed,
+			sourceWatermarks: [{ source: "s", asOf: observed }],
+		};
+		const later = {
+			...current,
+			window: {
+				start: "2026-11-02T11:00:00.000Z",
+				end: "2026-11-02T11:00:00.000Z",
+			},
+			maxAgeSeconds: 3600,
+		};
+		expect(assessDirection("up", baseline, later)).toBe("unknown");
+		const future = {
+			...baseline,
+			window: {
+				start: "2026-11-02T11:30:00.000Z",
+				end: "2026-11-02T11:30:00.000Z",
+			},
+		};
+		expect(
+			assessDirection("up", future, { ...later, window: future.window }),
+		).toBe("unknown");
+		const boundary = {
+			...baseline,
+			window: {
+				start: "2026-11-02T10:00:00.000Z",
+				end: "2026-11-02T10:00:00.000Z",
+			},
+		};
+		expect(assessDirection("up", boundary, later)).toBe("as_declared");
+	});
 	it("rejects incompatible or failed observations", () => {
 		for (const change of [
 			{ unit: "count" },
@@ -1392,6 +1431,28 @@ describe("per-metric batch decode isolation", () => {
 				unknownReason: "metrics_unavailable",
 			});
 			expect(projected[2]?.current?.metricId).toBe("healthy-c");
+		},
+	);
+	it.each(["not-a-date", "2026-02-30T11:00:00.000Z"])(
+		"isolates malformed observedAt %s without dropping a healthy sibling",
+		async (malformed) => {
+			const { store } = setup([
+				raw("healthy-a"),
+				{
+					...raw("bad"),
+					latest_observation: { ...observation("bad"), observedAt: malformed },
+				},
+				raw("healthy-c"),
+			]);
+			const rows = await store.predictionReadBatch(
+				["healthy-a", "bad", "healthy-c"].map((metricId) => ({
+					metricId,
+					baselineObservationId: observation(metricId).id,
+					evaluationAt: NOW.toISOString(),
+				})),
+			);
+			expect(rows[1]).toMatchObject({ unreadable: true });
+			expect(rows[2]?.latest?.metricId).toBe("healthy-c");
 		},
 	);
 	it("keeps healthy unbound/served rows when an actual adapter cannot decode a sibling", async () => {
