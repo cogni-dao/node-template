@@ -770,26 +770,42 @@ describe("v2 enrollment and requester SQL", () => {
     // This is an isolated migrated fixture, never a live rollout or an assertion that a build was qualified.
     await db`UPDATE agent_authority_maintenance SET purge_enabled=true,minimum_reader_build=${"a".repeat(40)} WHERE id='service-enrollment' AND backfill_ready`;
   };
-  async function seedAuditChain(length: number) {
-    const user=randomUUID(), ids=Array.from({length:length+2},()=>randomUUID());
+  async function seedAuditChain(length: number, exerciseRotations=true) {
+    const user=randomUUID();
+    const ids: string[]=Array.from({length:length+2},()=>randomUUID());
     const tokens=ids.map(()=>formatRevocableKey(randomBytes(32).toString('base64url')));
     await db`INSERT INTO users(id,name) VALUES(${user},'audit fixture')`;
     await db`INSERT INTO agent_principals(kind,user_id) VALUES('external',${user})`;
-    // Native timestamp fixtures reconstruct an old lineage, then restore every USER guard before exercising maintenance.
+    if(exerciseRotations) {
+      const store=creds(),policy={ttlSec:2592000,renewWindowSec:1209600,pendingSec:900};
+      for(let i=0;i<ids.length;i++) {
+        const tokenHash=await hashAgentKey(tokens[i]!);
+        const issued=i===0 ? await store.issueUpgrade({userId:user,tokenHash,policy}) :
+          await store.issueSuccessor({predecessorId:ids[i-1]!,tokenHash,policy});
+        if(!issued.ok) throw new Error(`fixture issue refused: ${issued.reason}`);
+        ids[i]=issued.credentialId;
+        if(i<=length) {
+          const confirmed=await confirmCredential(store,{credentialId:issued.credentialId,policy});
+          if(!confirmed.ok) throw new Error(`fixture confirmation refused: ${confirmed.reason}`);
+        }
+      }
+    }
+    // Real rotation writes above establish ancestry. Timestamp fixtures age that history; all guards return before maintenance.
     await db.begin(async tx => {
       const at=String((await tx`SELECT clock_timestamp()::text AS at`)[0]!.at);
       await tx.unsafe('ALTER TABLE agent_credentials DISABLE TRIGGER USER');
       for (let i=0;i<ids.length;i++) {
         const live=i===length,pending=i===length+1;
-        await tx`INSERT INTO agent_credentials(id,user_id,token_hash,created_from,predecessor_id,predecessor_provenance_id,
-          issued_at,confirmed_at,expires_at,renew_until,pending_expires_at,revoked_at)
-          VALUES(${ids[i]!},${user},${await hashAgentKey(tokens[i]!)},${i?'rotation':'spawn_grant'},${i?ids[i-1]!:null},${i?ids[i-1]!:null},
-            (${at}::timestamptz)-(${Math.max(0,length-i)*2}::int*interval '1 day')-CASE WHEN ${pending} THEN interval '3 minutes' ELSE interval '5 minutes' END,
-            CASE WHEN ${pending} THEN NULL ELSE (${at}::timestamptz)-(${Math.max(0,length-i)*2}::int*interval '1 day')-interval '4 minutes' END,
-            CASE WHEN ${live || pending} THEN (${at}::timestamptz)+interval '1 day' ELSE (${at}::timestamptz)-(${(length-i)*2}::int*interval '1 day')+interval '30 days'-interval '5 minutes' END,
-            CASE WHEN ${live || pending} THEN (${at}::timestamptz)+interval '2 days' ELSE (${at}::timestamptz)-(${(length-i)*2}::int*interval '1 day')+interval '44 days'-interval '5 minutes' END,
-            CASE WHEN ${pending} THEN (${at}::timestamptz)+interval '5 minutes' ELSE (${at}::timestamptz)-(${Math.max(0,length-i)*2}::int*interval '1 day')+interval '9 minutes' END,
-            CASE WHEN ${live || pending} THEN NULL ELSE (${at}::timestamptz)-(${(length-i-1)*2}::int*interval '1 day')-interval '4 minutes' END)`;
+        if(!exerciseRotations) await tx`INSERT INTO agent_credentials(id,user_id,token_hash,created_from,predecessor_id,predecessor_provenance_id,
+          issued_at,expires_at,renew_until) VALUES(${ids[i]!},${user},${await hashAgentKey(tokens[i]!)},${i?'rotation':'spawn_grant'},
+            ${i?ids[i-1]!:null},${i?ids[i-1]!:null},${at}::timestamptz,${at}::timestamptz+interval '1 day',${at}::timestamptz+interval '2 days')`;
+        await tx`UPDATE agent_credentials SET issued_at=(${at}::timestamptz)-(${Math.max(0,length-i)*2}::int*interval '1 day')-CASE WHEN ${pending} THEN interval '3 minutes' ELSE interval '5 minutes' END,
+          confirmed_at=CASE WHEN ${pending} THEN NULL ELSE (${at}::timestamptz)-(${Math.max(0,length-i)*2}::int*interval '1 day')-interval '4 minutes' END,
+          expires_at=CASE WHEN ${live || pending} THEN (${at}::timestamptz)+interval '1 day' ELSE (${at}::timestamptz)-(${(length-i)*2}::int*interval '1 day')+interval '30 days'-interval '5 minutes' END,
+          renew_until=CASE WHEN ${live || pending} THEN (${at}::timestamptz)+interval '2 days' ELSE (${at}::timestamptz)-(${(length-i)*2}::int*interval '1 day')+interval '44 days'-interval '5 minutes' END,
+          pending_expires_at=CASE WHEN ${pending} THEN (${at}::timestamptz)+interval '5 minutes' ELSE (${at}::timestamptz)-(${Math.max(0,length-i)*2}::int*interval '1 day')+interval '9 minutes' END,
+          revoked_at=CASE WHEN ${live || pending} THEN NULL ELSE (${at}::timestamptz)-(${(length-i-1)*2}::int*interval '1 day')-interval '4 minutes' END
+          WHERE id=${ids[i]!}`;
       }
       await tx.unsafe('ALTER TABLE agent_credentials ENABLE TRIGGER USER');
       await tx`UPDATE agent_credentials SET purge_after=NULL WHERE user_id=${user}`;
@@ -944,7 +960,7 @@ describe("v2 enrollment and requester SQL", () => {
   },10000);
 
   it('audit keyset progress skips locked identities without pinning the next unlocked identity',async()=> {
-    const chains: Awaited<ReturnType<typeof seedAuditChain>>[]=[];for(let i=0;i<6;i++) chains.push(await seedAuditChain(46));
+    const chains: Awaited<ReturnType<typeof seedAuditChain>>[]=[];for(let i=0;i<6;i++) chains.push(await seedAuditChain(46,false));
     await qualifyFixtureAudit();
     let held!:()=>void,release!:()=>void;
     const acquired=new Promise<void>(r=>{held=r;});
