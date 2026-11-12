@@ -14,7 +14,6 @@ import {
   getCurrentTimeContract,
   knowledgeSearchContract,
   WORK_ITEM_UPDATE_NAME,
-  workItemQueryContract,
   workItemReadContract,
   workItemUpdateContract,
 } from "@cogni/ai-tools";
@@ -78,7 +77,6 @@ describe("work-review program tool surface", () => {
       toolContracts: [
         ...triageReadContracts,
         knowledgeSearchContract,
-        workItemQueryContract,
         workItemReadContract,
         workItemUpdateContract,
         getCurrentTimeContract,
