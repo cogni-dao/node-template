@@ -28,7 +28,7 @@ export const GET = wrapRouteHandlerWithLogging<{ params: Promise<{ id: string }>
     if (!container.knowledgeStorePort?.readWorkEdo)
       return reply({ error: "unavailable" }, 503, "unavailable");
     const [itemResult, pageResult] = await Promise.allSettled([
-      getWorkItem(id),
+      getWorkItem(id, { signal: request.signal }),
       container.knowledgeStorePort.readWorkEdo(id, request.signal),
     ]);
     if (itemResult.status !== "fulfilled" || pageResult.status !== "fulfilled")

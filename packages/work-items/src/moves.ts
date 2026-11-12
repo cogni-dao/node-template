@@ -455,8 +455,9 @@ export async function judgeMoves(
 export async function judgeMoveSummaries<T extends { moves?: WorkItemMove[] | undefined }>(
   items: readonly T[],
   readings: MoveReadingPort | undefined,
-  deadlineMs = MOVES_DEADLINE_MS,
+  bounds: number | { readonly signal?: AbortSignal; readonly deadline?: number } = {},
 ): Promise<T[]> {
+  const options = typeof bounds === "number" ? { deadline: Date.now() + bounds } : bounds;
   const result = (await Promise.all(
     items.map(async (item) =>
       item.moves?.length
@@ -480,11 +481,21 @@ export async function judgeMoveSummaries<T extends { moves?: WorkItemMove[] | un
     .flatMap((item, index) =>
       (item.moves ?? []).slice(0, MOVES_MAX).map((move) => ({ index, move })),
     );
-  if (!refs.length) return result;
+  if (!refs.length || options.signal?.aborted || (options.deadline !== undefined && Date.now() >= options.deadline)) return result;
   const controller = new AbortController();
+  const deadlineMs = Math.min(MOVES_DEADLINE_MS, options.deadline === undefined ? MOVES_DEADLINE_MS : options.deadline - Date.now());
+  if (deadlineMs <= 0) return result;
+  let cancel: (() => void) | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
+    const cancelled = new Promise<never>((_, reject) => {
+      cancel = () => { controller.abort(); reject(new Error("metric batch cancelled")); };
+      options.signal?.addEventListener("abort", cancel, { once: true });
+      if (options.signal?.aborted) cancel();
+    });
+    if (controller.signal.aborted) return await cancelled;
     const data = await Promise.race([
+      cancelled,
       readings.batch(
         refs.map((ref) => ref.move),
         controller.signal,
@@ -536,6 +547,7 @@ export async function judgeMoveSummaries<T extends { moves?: WorkItemMove[] | un
     /* preserve unknown results on unavailable batch */
   } finally {
     if (timer) clearTimeout(timer);
+    if (cancel) options.signal?.removeEventListener("abort", cancel);
   }
   return result;
 }

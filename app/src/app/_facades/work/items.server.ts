@@ -134,24 +134,25 @@ const toDto = toHttpWorkItem;
  * MOVES_READ_AT_READ_TIME: add each move's baseline, current reading and verdict to a
  * single item. Never throws: a lookup that fails reads `unknown`. A list read does not call this.
  */
-async function withMoveReadings(dto: WorkItemDto): Promise<WorkItemDto> {
+async function withMoveReadings(dto: WorkItemDto, options?: WorkSummaryReadOptions): Promise<WorkItemDto> {
   if (!dto.moves?.length) return dto;
   const container = getContainer();
   // No metrics service on this node: every move reads `unknown` (metrics_unavailable).
   const readings = container.goalMetrics
     ? createMoveMetricPorts(() => container.goalMetrics).readings
     : undefined;
-  return (await judgeMoveSummaries([dto], readings))[0] ?? dto;
+  return (await judgeMoveSummaries([dto], readings, options))[0] ?? dto;
 }
 
 async function withSummaryReadings<T extends { moves?: WorkItemDto["moves"] }>(
   items: readonly T[],
+  options?: WorkSummaryReadOptions,
 ): Promise<T[]> {
   const container = getContainer();
   const readings = container.goalMetrics
     ? createMoveMetricPorts(() => container.goalMetrics).readings
     : undefined;
-  return judgeMoveSummaries(items, readings);
+  return judgeMoveSummaries(items, readings, options);
 }
 
 function nextActionForWorkItem(item: WorkItem): string | null {
@@ -273,7 +274,7 @@ export async function listWorkSummaries(
   const query = workQuery(input);
   try {
     const page = await container.doltgresWorkItems.listSummaries(query, options);
-    return { ...page, items: await withSummaryReadings(page.items) };
+    return { ...page, items: await withSummaryReadings(page.items, options) };
   } catch (error) {
     if ((error as Error)?.name === "InvalidCursorError")
       throw new InvalidCursorError((error as Error).message);
@@ -284,6 +285,7 @@ export async function listWorkSummaries(
     return {
       items: await withSummaryReadings(
         result.items.map((item) => WorkItemSummarySchema.parse(toDto(item))),
+        options,
       ),
       pageInfo: { endCursor: result.nextCursor ?? null, hasMore: result.nextCursor !== undefined },
       ...(result.nextCursor !== undefined && { nextCursor: result.nextCursor }),
@@ -304,14 +306,14 @@ export async function listWorkBoardColumns(
   input: WorkItemSummariesListInput,
   statuses: readonly string[],
   perColumn: number,
-  options?: { readonly signal?: AbortSignal },
+  options?: WorkSummaryReadOptions,
 ): Promise<WorkBoardColumnPages> {
   const container = getContainer();
   const port = container.doltgresWorkItems;
   if (port.listBoardColumns) {
     try {
       const page = await port.listBoardColumns(workQuery(input), statuses, perColumn, options);
-      const items = await withSummaryReadings(page.columns.flatMap((column) => column.items));
+      const items = await withSummaryReadings(page.columns.flatMap((column) => column.items), options);
       let offset = 0;
       return {
         ...page,
@@ -338,21 +340,21 @@ export async function listWorkBoardColumns(
   return { columns, queryCount: columns.length };
 }
 
-export async function getWorkItem(id: string): Promise<WorkItemDto | null> {
+export async function getWorkItem(id: string, options?: WorkSummaryReadOptions): Promise<WorkItemDto | null> {
   const container = getContainer();
   // Doltgres-first: legacy markdown IDs (e.g. bug.0002) can also live in Doltgres
   // after the markdown→Doltgres import (task.5002). Fall back to markdown only when
   // Doltgres returns null, so unimported legacy IDs still resolve during transition.
   try {
     const item = await container.doltgresWorkItems.get(toWorkItemId(id));
-    if (item) return await withMoveReadings(toDto(item));
+    if (item) return await withMoveReadings(toDto(item), options);
   } catch (e) {
     if ((e as Error)?.name !== "DoltgresNotConfiguredError") {
       rethrowBackendError(e);
     }
   }
   const mdItem = await container.workItemQuery.get(id as WorkItemId);
-  return mdItem ? withMoveReadings(toDto(mdItem)) : null;
+  return mdItem ? withMoveReadings(toDto(mdItem), options) : null;
 }
 
 export async function createWorkItem(
