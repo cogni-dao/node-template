@@ -40,12 +40,13 @@ export async function readMetricBudget<T>(
 	}
 }
 
-/** Native postgres.js cancellation and transaction timeout; a rejected caller
- * never releases capacity before the transaction actually settles. */
+/** Native statement timeout bounds SQL without postgres.js auxiliary cancel
+ * connections. Caller abort/deadline stops waiting; admission stays held until
+ * the transaction settles, including a driver/connection stall. */
 export function readMetricBatch<T>(
 	pool: Sql,
 	signal: AbortSignal | undefined,
-	read: (sql: Sql) => PromiseLike<T> & { cancel?(): void | Promise<unknown> },
+	read: (sql: Sql) => PromiseLike<T>,
 ): Promise<T> {
 	return readMetricBudget(
 		pool,
@@ -54,18 +55,9 @@ export function readMetricBatch<T>(
 			pool.begin(async (tx) => {
 				await tx.unsafe("SET LOCAL statement_timeout=2000");
 				boundedSignal.throwIfAborted();
-				const query = read(tx as unknown as Sql);
-				const cancel = () => {
-					void Promise.resolve(query.cancel?.()).catch(() => undefined);
-				};
-				boundedSignal.addEventListener("abort", cancel, { once: true });
-				try {
-					const result = await query;
-					boundedSignal.throwIfAborted();
-					return result;
-				} finally {
-					boundedSignal.removeEventListener("abort", cancel);
-				}
+				const result = await read(tx as unknown as Sql);
+				boundedSignal.throwIfAborted();
+				return result;
 			}) as Promise<T>,
 	);
 }

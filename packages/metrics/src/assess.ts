@@ -395,8 +395,21 @@ export function assessKpi(input: KpiAssessmentInput): KpiAssessment {
 		input.lastGood?.status === "ok" && input.lastGood.value !== null
 			? input.lastGood
 			: null;
+	// Fixed predictions remain unresolved before their immutable deadline.
+	// Rolling progress and refresh state do not decide a future commitment.
+	if (
+		deadlineMs !== null &&
+		binding.evaluationAt &&
+		binding.baselineObservationId
+	)
+		return result(
+			"unresolved",
+			"evaluation_not_due",
+			lastGood?.unit === binding.target.unit ? lastGood : null,
+		);
 	// 3. building
 	const latest = input.latestAttempt;
+	const pending = latest?.status === "pending" || input.viewState === "pending";
 	if (
 		latest?.status === "unavailable" &&
 		latest.reason === "insufficient_history"
@@ -408,8 +421,8 @@ export function assessKpi(input: KpiAssessmentInput): KpiAssessment {
 	// 5. delayed: no ok reading, an old one, or stale source evidence.
 	if (!lastGood)
 		return result(
-			"delayed",
-			latest?.status === "pending" ? null : "metric_unavailable",
+			pending ? "building" : "delayed",
+			pending ? null : "metric_unavailable",
 			null,
 		);
 	if (
@@ -431,6 +444,9 @@ export function assessKpi(input: KpiAssessmentInput): KpiAssessment {
 	// Rule 1 also covers a stored reading whose unit differs from the target.
 	if (lastGood.unit !== binding.target.unit)
 		return result("not_measured", "unit_mismatch", null);
+	// A pending refresh never promotes its historical value to current success.
+	// Freshness/unit checks still precede this qualification; deadline verdicts precede it all.
+	if (pending) return result("building", null, lastGood);
 	// 6/7. on_track or behind; an opted-in breach is failing, never behind.
 	if (
 		satisfies(

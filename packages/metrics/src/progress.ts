@@ -167,6 +167,7 @@ export async function readGoalsProgress(deps: {
 							binding,
 							baselineValue: null,
 							baselineAt: null,
+							viewState: "unavailable" as const,
 							assessment: unmeasured(
 								binding,
 								bet.evaluateAt,
@@ -186,6 +187,7 @@ export async function readGoalsProgress(deps: {
 						baselineAt:
 							r.baseline?.status === "ok" ? r.baseline.window.end : null,
 						assessment: r.assessment,
+						viewState: r.viewState,
 					});
 				}
 				hypotheses.push({

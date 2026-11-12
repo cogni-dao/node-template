@@ -587,8 +587,9 @@ export function createMetricService(deps: {
 			let cursor = 0;
 			return Promise.all(
 				bindings.map(async (binding) => {
-					const missing = (reason: KpiReason) => ({
+					const missing = (reason: KpiReason, viewState: MetricView["viewState"] = "unavailable") => ({
 						...binding,
+						viewState,
 						assessment: assessKpi({
 							binding,
 							metric: null,
@@ -607,7 +608,7 @@ export function createMetricService(deps: {
 					if (!binding.baselineObservationId || !binding.evaluationAt)
 						return missing("fixed_prediction_and_baseline_required");
 					const row = rows[cursor++];
-					if (row?.unreadable) return missing("source_failed");
+					if (row?.unreadable) return missing("source_failed", "error");
 					const pinned = row?.baseline;
 					if (!pinned) return missing("baseline_unavailable_or_incompatible");
 					const def = pinned.definition,
@@ -670,6 +671,7 @@ export function createMetricService(deps: {
 					const view = selectMetricView(def, latest ? [latest] : [], at);
 					return {
 						...binding,
+						viewState: view.viewState,
 						assessment: assessKpi({
 							binding,
 							metric: {
@@ -819,17 +821,21 @@ export function createMetricService(deps: {
 		},
 		/** One authorized definition's view: newest attempt, last good reading and band assessment. */
 		async viewOf(d: MetricDefinition): Promise<MetricView> {
-			const hash = metricDefinitionHash(d);
-			const history = await observations.history(d.id, hash, 1);
-			const view = selectMetricView(d, history, now());
-			view.lastGood = await observations.lastGood(d.id, hash);
-			// The band reuses the two reads above: no second definition or reading read.
-			const band = await service.bandAssessment(d, {
-				latest: history[0],
-				lastGood: view.lastGood,
-			});
-			if (band) view.bandAssessment = band;
-			return view;
+			try {
+				const hash = metricDefinitionHash(d);
+				const history = await observations.history(d.id, hash, 1);
+				const view = selectMetricView(d, history, now());
+				view.lastGood = await observations.lastGood(d.id, hash);
+				// The band reuses the two reads above: no second definition or reading read.
+				const band = await service.bandAssessment(d, {
+					latest: history[0],
+					lastGood: view.lastGood,
+				});
+				if (band) view.bandAssessment = band;
+				return view;
+			} catch {
+				return { definition: d, latestAttempt: null, lastGood: null, viewState: "error" };
+			}
 		},
 		/**
 		 * A metric's own band, assessed as a synthetic binding through kpi(): the
@@ -1022,11 +1028,9 @@ export function createMetricService(deps: {
 					: null;
 				if (pinned) await authorize("read", pinned.definition);
 			} catch (error) {
-				return unmeasured(
-					error instanceof MetricError && error.status === 503
-						? "metric_authority_unavailable"
-						: "metric_unavailable",
-				);
+				if (!(error instanceof MetricError))
+					return { ...unmeasured("source_failed"), viewState: "error" };
+				return unmeasured(error.status === 503 ? "metric_authority_unavailable" : "metric_unavailable");
 			}
 			// A fixed prediction keeps the definition its baseline measured.
 			const definition = b.evaluationAt && pinned ? pinned.definition : current;
@@ -1080,85 +1084,89 @@ export function createMetricService(deps: {
 				)
 			)
 				return unmeasured("baseline_unavailable_or_incompatible", metric);
-			const latest = options?.preloaded
-				? options.preloaded.latest
-				: (await observations.history(b.metricId, hash, 1))[0];
-			const view = selectMetricView(definition, latest ? [latest] : [], at);
-			const lastGood = options?.preloaded
-				? options.preloaded.lastGood
-				: await observations.lastGood(b.metricId, hash);
-			const due = deadline !== null && Date.parse(deadline) <= at.getTime();
-			const candidate = due
-				? await observations.at(
-						b.metricId,
-						hash,
-						deadline,
-						definition.spec.maxAgeSeconds,
-					)
-				: null;
-			const evaluation =
-				candidate &&
-				compatibleEvidence(candidate, definition, scope, shape) &&
-				freshEvidenceAt(candidate, definition, Date.parse(deadline!)) &&
-				(!baseline ||
-					Date.parse(candidate.window.end) >= Date.parse(baseline.window.end))
-					? candidate
+			try {
+				const latest = options?.preloaded
+					? options.preloaded.latest
+					: (await observations.history(b.metricId, hash, 1))[0];
+				const view = selectMetricView(definition, latest ? [latest] : [], at);
+				const lastGood = options?.preloaded
+					? options.preloaded.lastGood
+					: await observations.lastGood(b.metricId, hash);
+				const due = deadline !== null && Date.parse(deadline) <= at.getTime();
+				const candidate = due
+					? await observations.at(
+							b.metricId,
+							hash,
+							deadline,
+							definition.spec.maxAgeSeconds,
+						)
 					: null;
-			const dayEnd = floorTo(at.getTime(), "1d") + DAY_MS;
-			const trend = options?.latestOnly
-				? null
-				: await series(
-						b.metricId,
-						hash,
-						shape.unit,
-						{
-							from: new Date(dayEnd - 30 * DAY_MS).toISOString(),
-							to: new Date(dayEnd).toISOString(),
-							step: "1d",
-						},
-						true,
-					).catch(() => null);
-			// Hourly-or-faster metrics also carry their last day, so a young series has a shape.
-			const hourEnd = floorTo(at.getTime(), "1h") + HOUR_MS;
-			const recent =
-				!options?.latestOnly &&
-				(definition.spec.cadenceSeconds ?? Number.POSITIVE_INFINITY) <= 3600
-					? await series(
+				const evaluation =
+					candidate &&
+					compatibleEvidence(candidate, definition, scope, shape) &&
+					freshEvidenceAt(candidate, definition, Date.parse(deadline!)) &&
+					(!baseline ||
+						Date.parse(candidate.window.end) >= Date.parse(baseline.window.end))
+						? candidate
+						: null;
+				const dayEnd = floorTo(at.getTime(), "1d") + DAY_MS;
+				const trend = options?.latestOnly
+					? null
+					: await series(
 							b.metricId,
 							hash,
 							shape.unit,
 							{
-								from: new Date(hourEnd - 24 * HOUR_MS).toISOString(),
-								to: new Date(hourEnd).toISOString(),
-								step: "1h",
+								from: new Date(dayEnd - 30 * DAY_MS).toISOString(),
+								to: new Date(dayEnd).toISOString(),
+								step: "1d",
 							},
 							true,
-						).catch(() => null)
-					: null;
-			const assessment = assessKpi({
-				binding: b,
-				metric: {
-					unit: shape.unit,
-					maxAgeSeconds: definition.spec.maxAgeSeconds,
-				},
-				latestAttempt: view.latestAttempt,
-				lastGood,
-				viewState: view.viewState,
-				deadline,
-				evaluation,
-				daily: trend?.buckets.slice(-28) ?? [],
-				now: at,
-			});
-			return {
-				binding: b,
-				metric,
-				assessment,
-				trend,
-				recent,
-				baseline,
-				observation: due ? evaluation : view.latestAttempt,
-				viewState: view.viewState,
-			};
+						).catch(() => null);
+				// Hourly-or-faster metrics also carry their last day, so a young series has a shape.
+				const hourEnd = floorTo(at.getTime(), "1h") + HOUR_MS;
+				const recent =
+					!options?.latestOnly &&
+					(definition.spec.cadenceSeconds ?? Number.POSITIVE_INFINITY) <= 3600
+						? await series(
+								b.metricId,
+								hash,
+								shape.unit,
+								{
+									from: new Date(hourEnd - 24 * HOUR_MS).toISOString(),
+									to: new Date(hourEnd).toISOString(),
+									step: "1h",
+								},
+								true,
+							).catch(() => null)
+						: null;
+				const assessment = assessKpi({
+					binding: b,
+					metric: {
+						unit: shape.unit,
+						maxAgeSeconds: definition.spec.maxAgeSeconds,
+					},
+					latestAttempt: view.latestAttempt,
+					lastGood,
+					viewState: view.viewState,
+					deadline,
+					evaluation,
+					daily: trend?.buckets.slice(-28) ?? [],
+					now: at,
+				});
+				return {
+					binding: b,
+					metric,
+					assessment,
+					trend,
+					recent,
+					baseline,
+					observation: due ? evaluation : view.latestAttempt,
+					viewState: view.viewState,
+				};
+			} catch {
+				return { ...unmeasured("source_failed", metric), viewState: "error" };
+			}
 		},
 		/**
 		 * Legacy reading projection over kpi(). With a deadline, `met` comes only

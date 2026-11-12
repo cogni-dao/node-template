@@ -23,7 +23,8 @@ import {
 } from "@cogni-dao/metrics/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, within } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import type { ReactElement } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { GoalsBoard, MetricsBoard } from "../src/goals.js";
 import { createGoalsClient } from "../src/goals/client.js";
@@ -39,7 +40,18 @@ import {
   sortMetricRows,
   summarizeMetrics,
 } from "../src/goals/metrics-view.js";
-import { goalFixture, kpiFixture, assessmentFixture } from "./_fixtures/goals-progress.js";
+import { goalFixture, kpiFixture, assessmentFixture, trend } from "./_fixtures/goals-progress.js";
+
+// Match the existing Goals chart harness: jsdom has no measured viewport.
+vi.mock("recharts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("recharts")>();
+  const React = await import("react");
+  return {
+    ...actual,
+    ResponsiveContainer: ({ children }: { children: ReactElement }) =>
+      React.createElement("div", {}, React.cloneElement(children as ReactElement<Record<string, unknown>>, { width: 800, height: 192 })),
+  };
+});
 
 afterEach(cleanup);
 
@@ -168,6 +180,17 @@ describe("MetricsBoard", () => {
     expect(within(card.parentElement as HTMLElement).getByRole("figure")).toBeInTheDocument();
   });
 
+  it.each(["volume","slo"] as const)("keeps the configured target explicit on a measured %s row",display=>{
+    const unit=display === "slo"?"%":"items";
+    const target=display === "slo"?99:90;
+    const kpi=kpiFixture("targeted","Measured KPI",band("on_track",95,{unit,target:{value:target,unit}}),trend("targeted",unit,[40,60,95]));
+    kpi.metric={...kpi.metric!,display};
+    const {container}=renderMetrics(fixture({goals:[goalFixture("goal-target","Target goal",[kpi])]}));
+    const row=container.querySelector('[data-kpi="targeted"]') as HTMLElement;
+    expect(row.textContent).toContain(display === "slo"?"≥ 99%":"≥ 90 items");
+    expect(row.querySelector('[role="img"]')).not.toBeNull();
+  });
+
   it("reveals seven supporting metrics only after selecting the measured KPI", () => {
     const data=fixture();
     const kpi=data.goals.find(goal=>goal.id === "goal-a")!.kpis.find(kpi=>kpi.binding.metricId === "k-red")!;
@@ -241,7 +264,7 @@ describe("MetricsBoard", () => {
     const data=fixture();
     const kpi=data.goals.find(goal=>goal.id === "goal-a")!.kpis.find(kpi=>kpi.binding.metricId === "k-red")!;
     kpi.viewState="pending";
-    kpi.assessment=band("on_track",95);
+    kpi.assessment=band("building",95);
     const {container}=renderMetrics(GoalsProgressSchema.parse(data));
     const row=container.querySelector('[data-kpi="k-red"]') as HTMLElement;
     expect(row.querySelector('[data-status="building"]')).not.toBeNull();
@@ -283,7 +306,7 @@ describe("MetricsBoard", () => {
     const data = fixture();
     const target = data.goals.find(goal => goal.id === "goal-a")!.kpis.find(kpi => kpi.binding.metricId === "k-red")!.served![0]!;
     target.latest = latest({viewState:"pending"});
-    target.assessment = band("on_track",95);
+    target.assessment = band("building",95);
     const {container}=renderMetrics(data);
     const goal=container.querySelector('[data-goal="goal-a"]') as HTMLElement;
     fireEvent.click(within(goal).getByRole("button",{name:"KPI red"}));

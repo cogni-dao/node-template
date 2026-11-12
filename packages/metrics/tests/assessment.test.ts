@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 import { describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import { judgeMoves, type MoveReadingPort } from "../../work-items/src/moves";
 import { createGoalProgressReader } from "../src/knowledge";
+import { createMetricHttpHandlers } from "../src/http";
 import { readGoalsProgress } from "../src/progress";
 import { readMetricBatch } from "../src/adapters/read-budget";
 import { PostgresMetricObservations } from "../src/adapters/postgres";
@@ -1095,14 +1097,14 @@ describe("ranged history bucketing", () => {
 });
 
 describe("metric batch cancellation admission", () => {
-	it("cancels native reads and retains bounded capacity until settlement", async () => {
+	it("uses native timeout without auxiliary cancellation and retains capacity until settlement", async () => {
 		const set = vi.fn(async () => []);
 		const pool = {
 			begin: vi.fn(async (fn: (tx: unknown) => unknown) => fn({ unsafe: set })),
 		};
 		const controllers = Array.from({ length: 4 }, () => new AbortController());
 		const finishes: (() => void)[] = [];
-		const cancel = vi.fn();
+		const cancel = vi.fn(() => new Promise<never>(() => {}));
 		const reads = controllers.map((controller) =>
 			readMetricBatch(pool as never, controller.signal, () =>
 				Object.assign(
@@ -1119,7 +1121,7 @@ describe("metric batch cancellation admission", () => {
 		expect(errors.every((error) => error.code === "batch_unavailable")).toBe(
 			true,
 		);
-		expect(cancel).toHaveBeenCalledTimes(4);
+		expect(cancel).not.toHaveBeenCalled();
 		await expect(
 			readMetricBatch(pool as never, undefined, () => Promise.resolve(2)),
 		).rejects.toMatchObject({ code: "batch_unavailable" });
@@ -1397,6 +1399,406 @@ describe("per-metric batch decode isolation", () => {
 			expect(results[2]?.assessment.observationId).toBe(
 				observation("healthy-c").id,
 			);
+		},
+	);
+});
+
+describe("one assessment across public readers", () => {
+	const definition = {
+		id: "ratio",
+		title: "Ratio",
+		revision: "1",
+		spec: { calculatorId: "work.count@1", params: {}, maxAgeSeconds: 7200 },
+		band: { comparator: "gte" as const, target: { value: 1, unit: "ratio" } },
+	};
+	const good: MetricObservation = {
+		...fresh,
+		definitionHash: metricDefinitionHash(definition),
+		calculatorVersion: "work.count@1",
+		paramsHash: hashMetric({}),
+	};
+	const pending: MetricObservation = {
+		...good,
+		id: "00000000-0000-4000-8000-000000000099",
+		status: "pending",
+		value: null,
+		reason: null,
+		observedAt: null,
+		window: { start: NOW.toISOString(), end: NOW.toISOString() },
+	};
+	const rolling = {
+		metricId: "ratio",
+		comparator: "gte" as const,
+		target: { value: 1, unit: "ratio" },
+	};
+	const prediction = {
+		...rolling,
+		baselineObservationId: good.id,
+		evaluationAt: new Date(NOW.getTime() + DAY).toISOString(),
+	};
+	const setup = (evaluation: MetricObservation | null = good) => {
+		let clock = NOW;
+		const registry = new MetricRegistry();
+		registry.register({
+			id: "work.count@1",
+			unit: "ratio",
+			paramsSchema: z.object({}),
+			budget: {
+				timeoutMs: 1,
+				maxSourceCalls: 1,
+				maxRows: 1,
+				maxResponseBytes: 1,
+			},
+			compute: async () => {
+				throw new Error("unused");
+			},
+		});
+		const service = createMetricService({
+			definitions: {
+				get: async () => definition,
+				getMany: async () => [definition],
+				list: async () => ({ items: [definition], nextCursor: null }),
+			},
+			observations: {
+				history: async () => [pending],
+				lastGood: async () => good,
+				at: async () => evaluation,
+				snapshot: async () => ({ definition, observation: good }),
+				buckets: async () => [],
+				workReadBatch: async () => [
+					{ baseline: null, latest: pending, lastGood: good },
+				],
+				predictionReadBatch: async () => [
+					{
+						baseline: { definition, observation: good },
+						latest: pending,
+						lastGood: good,
+						evaluation,
+					},
+				],
+			} as unknown as MetricObservationsPort,
+			registry,
+			scope: { node: "n", environment: "e", dataScope: "d" },
+			now: () => clock,
+			authorize: async () => true,
+		});
+		return {
+			service,
+			setClock: (value: Date) => {
+				clock = value;
+			},
+		};
+	};
+	it("qualifies pending rolling readings in kpi, band, flat read, subject and goals", async () => {
+		const { service } = setup();
+		const kpi = await service.kpi(rolling, { latestOnly: true });
+		expect(kpi).toMatchObject({
+			viewState: "pending",
+			assessment: {
+				status: "building",
+				value: good.value,
+				observationId: good.id,
+			},
+		});
+		expect((await service.read("ratio")).bandAssessment).toEqual(
+			kpi.assessment,
+		);
+		expect((await service.serving()).unbound[0]?.assessment).toEqual(
+			kpi.assessment,
+		);
+		const handlers = createMetricHttpHandlers({
+			service: () => service,
+			goalProgress: async () => {
+				throw new Error("unused");
+			},
+			subject: async () => ({
+				id: "goal",
+				title: "Goal",
+				entryType: "goal",
+				kpiBindings: [rolling],
+			}),
+		});
+		const subject = await handlers.subject("goal");
+		expect(subject.status).toBe(200);
+		expect((subject.body as { kpis: unknown[] }).kpis[0]).toMatchObject({
+			met: null,
+			viewState: "pending",
+			assessment: kpi.assessment,
+		});
+		const goals = await readGoalsProgress({
+			goals: {
+				listGoals: async () => [
+					{
+						id: "goal",
+						title: "Goal",
+						evaluateAt: null,
+						kpiBindings: [rolling],
+					},
+				],
+				hypotheses: async () => ({ items: [], more: false }),
+			},
+			metrics: service,
+			environment: "test",
+		});
+		expect(goals.goals[0]?.kpis[0]).toMatchObject({
+			viewState: "pending",
+			assessment: kpi.assessment,
+		});
+	});
+	it("retains pending and not-due uncertainty through batch, subject and hypothesis projections", async () => {
+		const { service } = setup();
+		const [batch] = await service.predictionBatch([prediction]);
+		expect(batch).toMatchObject({
+			viewState: "pending",
+			assessment: {
+				status: "unresolved",
+				reason: "evaluation_not_due",
+				value: good.value,
+			},
+		});
+		const kpi = await service.kpi(prediction, {
+			hypothesis: true,
+			latestOnly: true,
+		});
+		expect(kpi.assessment).toEqual(batch?.assessment);
+		const [legacy] = await service.bindings([prediction], { hypothesis: true });
+		expect(legacy).toMatchObject({
+			met: null,
+			viewState: "pending",
+			reason: "evaluation_not_due",
+			assessment: batch?.assessment,
+		});
+		const goals = await readGoalsProgress({
+			goals: {
+				listGoals: async () => [
+					{ id: "goal", title: "Goal", evaluateAt: null, kpiBindings: [] },
+				],
+				hypotheses: async () => ({
+					items: [
+						{
+							id: "bet",
+							title: "Bet",
+							evaluateAt: prediction.evaluationAt,
+							kpiBindings: [prediction],
+							outcome: null,
+						},
+					],
+					more: false,
+				}),
+			},
+			metrics: service,
+			environment: "test",
+		});
+		expect(goals.goals[0]?.hypotheses[0]?.predictions[0]).toMatchObject({
+			viewState: "pending",
+			assessment: batch?.assessment,
+		});
+	});
+	it.each(["met", "missed", "unresolved", "evaluating"] as const)(
+		"does not replace the immutable %s deadline assessment with a pending refresh",
+		async (status) => {
+			const { service, setClock } = setup(
+				status === "unresolved" ? null : good,
+			);
+			const binding = {
+				...rolling,
+				baselineObservationId: good.id,
+				evaluationAt: good.window.end,
+				target: { value: status === "missed" ? 2 : 1, unit: "ratio" },
+			};
+			if (status === "evaluating")
+				setClock(new Date(Date.parse(good.window.end) + 3600000));
+			else setClock(new Date(Date.parse(good.window.end) + 3 * 3600000));
+			const evaluation = status === "unresolved" ? null : good;
+			const result = assessKpi(
+				input({
+					binding,
+					latestAttempt: pending,
+					lastGood: good,
+					viewState: "pending",
+					deadline: binding.evaluationAt,
+					evaluation,
+					now: service.now(),
+				}),
+			);
+			expect(result.status).toBe(status);
+			{
+				const kpi = await service.kpi(binding, {
+					hypothesis: true,
+					latestOnly: true,
+				});
+				const [batch] = await service.predictionBatch([binding]);
+				expect(kpi.assessment.status).toBe(status);
+				expect(batch?.assessment).toEqual(kpi.assessment);
+			}
+		},
+	);
+});
+
+describe("bound KPI decoder containment", () => {
+	it.each(["history", "lastGood", "evaluation", "baseline"])(
+		"keeps healthy goal/subject siblings when %s decoding fails",
+		async (failedRead) => {
+			const defs = ["bad", "healthy"].map((id) => ({
+				id,
+				title: id,
+				revision: "1",
+				spec: { calculatorId: "work.count@1", params: {}, maxAgeSeconds: 7200 },
+			}));
+			const readingFor = (id: string) => ({
+				...fresh,
+				metricId: id,
+				id: `00000000-0000-4000-8000-${id === "bad" ? "000000000001" : "000000000002"}`,
+				definitionHash: metricDefinitionHash(defs.find((d) => d.id === id)!),
+				calculatorVersion: "work.count@1",
+				paramsHash: hashMetric({}),
+			});
+			const sql = Object.assign(
+				(strings: TemplateStringsArray, ...values: unknown[]) => {
+					const text = strings.join("?");
+					if (text.startsWith("WITH requested"))
+						return Promise.resolve(
+							JSON.parse(String(values[0])).map(
+								(request: { metricId: string }) => ({
+									latest_observation:
+										request.metricId === "bad"
+											? { ...readingFor("bad"), value: "broken" }
+											: readingFor("healthy"),
+									good_observation: readingFor(request.metricId),
+								}),
+							),
+						);
+					if (text.startsWith("SELECT snapshot,observation")) {
+						const id = values[0] === readingFor("bad").id ? "bad" : "healthy";
+						return Promise.resolve([
+							{
+								snapshot: defs.find((d) => d.id === id),
+								observation:
+									id === "bad" && failedRead === "baseline"
+										? "malformed-json"
+										: readingFor(id),
+							},
+						]);
+					}
+					if (text.startsWith("SELECT observation")) {
+						const id = String(values[1]);
+						const kind = text.includes("evaluation_at <=")
+							? "evaluation"
+							: text.includes("status='ok'")
+								? "lastGood"
+								: "history";
+						return Promise.resolve([
+							{
+								observation:
+									id === "bad" && kind === failedRead
+										? { ...readingFor(id), value: "broken" }
+										: readingFor(id),
+							},
+						]);
+					}
+					return Promise.resolve([]);
+				},
+				{
+					unsafe: async () => [],
+					begin: async (fn: (tx: unknown) => unknown): Promise<unknown> =>
+						fn(sql),
+				},
+			);
+			const observations = new PostgresMetricObservations(sql as never, {
+				node: "n",
+				environment: "e",
+				dataScope: "d",
+			});
+			const registry = new MetricRegistry();
+			registry.register({
+				id: "work.count@1",
+				unit: "ratio",
+				paramsSchema: z.object({}),
+				budget: {
+					timeoutMs: 1,
+					maxSourceCalls: 1,
+					maxRows: 1,
+					maxResponseBytes: 1,
+				},
+				compute: async () => {
+					throw new Error("unused");
+				},
+			});
+			const service = createMetricService({
+				definitions: {
+					get: async (id) => defs.find((d) => d.id === id) ?? null,
+					list: async () => ({ items: defs, nextCursor: null }),
+				},
+				observations,
+				registry,
+				scope: { node: "n", environment: "e", dataScope: "d" },
+				now: () => NOW,
+				authorize: async () => true,
+			});
+			const bindings = defs.map((d) => ({
+				metricId: d.id,
+				comparator: "gte" as const,
+				target: { value: 1, unit: "ratio" },
+				...(failedRead === "baseline"
+					? { baselineObservationId: readingFor(d.id).id }
+					: {}),
+				...(failedRead === "evaluation"
+					? { evaluationAt: fresh.window.end }
+					: {}),
+			}));
+			const goalSource = {
+				listGoals: async () => [
+					{
+						id: "first",
+						title: "First",
+						evaluateAt: null,
+						kpiBindings: bindings,
+					},
+					{
+						id: "unrelated",
+						title: "Unrelated",
+						evaluateAt: null,
+						kpiBindings: [bindings[1]!],
+					},
+				],
+				hypotheses: async () => ({ items: [], more: false }),
+			};
+			const goalProgress = () =>
+				readGoalsProgress({
+					goals: goalSource,
+					metrics: service,
+					environment: "test",
+				});
+			const handlers = createMetricHttpHandlers({
+				service: () => service,
+				goalProgress,
+				subject: async () => ({
+					id: "first",
+					title: "First",
+					entryType: "goal",
+					kpiBindings: bindings,
+				}),
+			});
+			const response = await handlers.goals();
+			expect(response.status).toBe(200);
+			const result = await goalProgress();
+			expect(result.goals).toHaveLength(2);
+			expect(result.goals[0]?.kpis[0]).toMatchObject({
+				viewState: "error",
+				assessment: { status: "not_measured", reason: "source_failed" },
+			});
+			expect(result.goals[0]?.kpis[1]?.assessment.reason).not.toBe(
+				"source_failed",
+			);
+			expect(result.goals[1]?.kpis[0]?.metric?.id).toBe("healthy");
+			const subject = await handlers.subject("first");
+			expect(subject.status).toBe(200);
+			expect((subject.body as { kpis: unknown[] }).kpis).toHaveLength(2);
+			const flat = await service.list();
+			expect(flat.items).toHaveLength(2);
+			expect(flat.items[1]?.viewState).toBe("ok");
+			if (failedRead === "history" || failedRead === "lastGood")
+				expect(flat.items[0]?.viewState).toBe("error");
 		},
 	);
 });

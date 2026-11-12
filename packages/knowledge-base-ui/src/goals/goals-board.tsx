@@ -30,12 +30,12 @@ import { goalsErrorStatus } from "./client.js";
 import { type GoalsHostOptions, GoalsProvider, useGoalsHost } from "./context.js";
 import { cardHint, cardSeries, displayOf, formatValue, progressFraction } from "./display.js";
 import {
+  COMPARATOR_SYMBOL,
   formatDate,
   formatUtcTime,
   type GoalKpi,
   isMeasured,
   isDeadlineStatus,
-  kpiDisplayStatus,
   reasonText,
   STATUS_META,
   summarize,
@@ -405,10 +405,12 @@ function KpiCard({
   const describedBy = useId();
   const display = displayOf(kpi);
   const series = cardSeries(kpi);
-  const hint = cardHint(kpi, display, series);
+  const hint = row
+    ? `${COMPARATOR_SYMBOL[kpi.binding.comparator]} ${formatValue(kpi.binding.target.value, display, kpi.binding.target.unit)}${display === "slo" ? "" : ` ${kpi.binding.target.unit}`}`
+    : cardHint(kpi, display, series);
   const a = kpi.assessment;
   const pending = kpi.viewState === "pending";
-  const status = kpiDisplayStatus(kpi);
+  const status = a.status;
   const unit = kpi.binding.target.unit;
   const title = kpi.metric?.title ?? kpi.binding.metricId;
   const number = a.value === null ? null : formatValue(a.value, display, unit);

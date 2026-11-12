@@ -579,6 +579,7 @@ export const GoalHypothesisSchema = z.object({
 			/** Baseline reading's window.end, for drawing the bet window. */
 			baselineAt: z.string().nullable(),
 			assessment: KpiAssessmentSchema,
+			viewState: MetricViewSchema.shape.viewState.optional(),
 		}),
 	),
 	outcome: z

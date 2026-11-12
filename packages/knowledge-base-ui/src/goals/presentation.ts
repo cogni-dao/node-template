@@ -172,20 +172,13 @@ export function isDeadlineStatus(status: KpiStatus): boolean {
   return status === "met" || status === "missed" || status === "unresolved" || status === "evaluating";
 }
 
-export function kpiDisplayStatus(kpi: Pick<GoalKpi, "assessment" | "viewState">): KpiStatus {
-  const status = kpi.assessment.status;
-  return kpi.viewState === "pending" && (status === "on_track" || status === "behind" || (status === "failing" && kpi.assessment.reason === "target_breached"))
-    ? "building"
-    : status;
-}
-
 export function summarize(goals: readonly GoalProgress[]): GoalsSummary {
   const byStatus: Partial<Record<KpiStatus, number>> = {};
   let kpis = 0;
   for (const g of goals)
     for (const k of g.kpis) {
       kpis++;
-      const status = kpiDisplayStatus(k);
+      const status = k.assessment.status;
       byStatus[status] = (byStatus[status] ?? 0) + 1;
     }
   return { goals: goals.length, kpis, byStatus };
@@ -206,7 +199,7 @@ export const STATUS_RANK: readonly KpiStatus[] = [
 ];
 
 export function worstStatus(goal: GoalProgress): KpiStatus | null {
-  const present = new Set(goal.kpis.map(kpiDisplayStatus));
+  const present = new Set(goal.kpis.map(k => k.assessment.status));
   return STATUS_RANK.find((s) => present.has(s)) ?? null;
 }
 
