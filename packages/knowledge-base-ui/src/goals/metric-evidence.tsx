@@ -46,7 +46,7 @@ export function MetricEvidence({ id, observationId = null }: MetricEvidenceProps
   });
   if (query.isError)
     return (
-      <p role="alert" className="text-sm text-amber-500">
+      <p role="alert" className="text-sm text-warning">
         Measurement evidence is unavailable.
       </p>
     );
@@ -60,12 +60,12 @@ export function MetricEvidence({ id, observationId = null }: MetricEvidenceProps
         Readings are recorded automatically. Each keeps its source time and definition.
       </p>
       {currentFailed && (
-        <p role="alert" className="text-sm text-amber-500">
-          Current measurement evidence is unavailable.
+        <p role="alert" className="text-sm text-warning">
+          {observationId ? "Current measurement evidence is unavailable." : "Measurement evidence is unavailable."}
         </p>
       )}
       {pinnedFailed && (
-        <p role="alert" className="text-sm text-amber-500">
+        <p role="alert" className="text-sm text-warning">
           Linked measurement evidence is unavailable.
         </p>
       )}
