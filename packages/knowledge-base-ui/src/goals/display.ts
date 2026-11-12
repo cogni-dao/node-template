@@ -22,6 +22,7 @@ import type {
   MetricHistory,
 } from "@cogni-dao/metrics/contracts";
 
+import { kpiSubject, type MetricSubject } from "./metric-subject.js";
 import { COMPARATOR_SYMBOL, formatDate, formatNumber, formatUtcTime, type GoalKpi } from "./presentation.js";
 
 export type { MetricDisplay };
@@ -68,16 +69,22 @@ export interface Point {
   readonly observationId: string | null;
 }
 
+/** The newest reading of a metric: a KPI's assessment or a metric subject both fit. */
+export interface LatestReading {
+  readonly value: number | null;
+  readonly observedAt: string | null;
+  readonly observationId: string | null;
+}
+
 /** Buckets as points (gaps null), plus the newest reading when it is past the last bucket. */
-export function seriesPoints(series: MetricHistory, kpi?: GoalKpi): Point[] {
+export function seriesPoints(series: MetricHistory, latest?: LatestReading): Point[] {
   const points: Point[] = series.buckets.map((b) => ({
     t: Date.parse(b.start),
     v: b.status === "ok" ? b.value : null,
     observationId: b.status === "ok" ? b.observationId : null,
   }));
-  const a = kpi?.assessment;
-  if (a?.value != null && a.observedAt && Date.parse(a.observedAt) >= Date.parse(series.to))
-    points.push({ t: Date.parse(a.observedAt), v: a.value, observationId: a.observationId });
+  if (latest?.value != null && latest.observedAt && Date.parse(latest.observedAt) >= Date.parse(series.to))
+    points.push({ t: Date.parse(latest.observedAt), v: latest.value, observationId: latest.observationId });
   return points;
 }
 
@@ -85,10 +92,19 @@ function readingCount(series: MetricHistory | null | undefined): number {
   return series?.buckets.filter((b) => b.status === "ok").length ?? 0;
 }
 
+/** Whether a daily series has days of shape yet. */
+export function hasDailyShape(series: MetricHistory | null | undefined): boolean {
+  return readingCount(series) >= MIN_DAILY_SHAPE;
+}
+
 /** The daily trend once it has a shape; before that, the last day hourly. */
+export function subjectSeries(subject: Pick<MetricSubject, "trend" | "recent">): MetricHistory | null {
+  if (hasDailyShape(subject.trend) || !subject.recent) return subject.trend;
+  return subject.recent;
+}
+
 export function cardSeries(kpi: GoalKpi): MetricHistory | null {
-  if (readingCount(kpi.trend) >= MIN_DAILY_SHAPE || !kpi.recent) return kpi.trend;
-  return kpi.recent;
+  return subjectSeries(kpiSubject(kpi));
 }
 
 /**
@@ -101,42 +117,61 @@ export function fromFirstReading(points: readonly Point[]): Point[] {
 }
 
 /** Change from the first reading in `series` to now, labelled by the bucket it was read in. */
-function changeHint(kpi: GoalKpi, display: MetricDisplay, series: MetricHistory | null): string | null {
-  const { value } = kpi.assessment;
+function changeHint(subject: MetricSubject, series: MetricHistory | null): string | null {
+  const { value } = subject;
   const first = series?.buckets.find((b) => b.status === "ok" && b.value !== null);
   if (value === null || !series || !first || first.value === null || readingCount(series) < 2) return null;
   // No change says nothing at a glance; the target does.
   if (value === first.value) return null;
   // An hour reads as a time only on the same UTC day as the value; otherwise as its date.
-  const sameDay = first.start.slice(0, 10) === (kpi.assessment.observedAt ?? "").slice(0, 10);
+  const sameDay = first.start.slice(0, 10) === (subject.observedAt ?? "").slice(0, 10);
   const since = series.step === "1h" && sameDay ? formatUtcTime(first.start).replace(" UTC", "") : formatDate(first.start);
-  return `${signed(value - first.value, display, kpi.binding.target.unit)} since ${since}`;
+  return `${signed(value - first.value, subject.display, subject.unit)} since ${since}`;
 }
 
 function signed(delta: number, display: MetricDisplay, unit: string): string {
   return `${delta > 0 ? "+" : delta < 0 ? "−" : "±"}${formatValue(Math.abs(delta), display, unit)}`;
 }
 
-/** The one muted hint under the number, ≤ 3 words. */
-export function cardHint(kpi: GoalKpi, display: MetricDisplay, series: MetricHistory | null): string {
-  const { value } = kpi.assessment;
-  const target = `${COMPARATOR_SYMBOL[kpi.binding.comparator]} ${formatValue(kpi.binding.target.value, display, kpi.binding.target.unit)}`;
-  if (display === "slo") {
-    const budget = value === null ? null : sloBudget(value, kpi.binding);
-    return budget === null ? target : `budget ${Math.round(budget * 100)}%`;
-  }
-  if (display === "volume") return changeHint(kpi, display, series) ?? target;
-  return target;
+/** The target in full words: "≥ 90 items" (a % objective reads "≥ 99%"). Null without a target. */
+export function targetText(subject: Pick<MetricSubject, "target" | "display">): string | null {
+  const t = subject.target;
+  if (!t) return null;
+  const unit = subject.display === "slo" ? "" : ` ${t.target.unit}`;
+  return `${COMPARATOR_SYMBOL[t.comparator]} ${formatValue(t.target.value, subject.display, t.target.unit)}${unit}`;
 }
 
-/** Progress bar fill 0..1 toward the target; null without a value. */
-export function progressFraction(kpi: GoalKpi): number | null {
-  const { value } = kpi.assessment;
-  const t = kpi.binding.target.value;
-  if (value === null) return null;
-  if (meetsTarget(value, kpi.binding)) return 1;
-  if (kpi.binding.comparator === "lte") return value > 0 ? Math.max(0, t / value) : 0;
+/** The one muted hint under the number, ≤ 3 words. Without a target it says so; it is never a verdict. */
+export function subjectHint(subject: MetricSubject, series: MetricHistory | null): string {
+  const { value, display, target } = subject;
+  const goal = target
+    ? `${COMPARATOR_SYMBOL[target.comparator]} ${formatValue(target.target.value, display, target.target.unit)}`
+    : "No target";
+  if (display === "slo" && target) {
+    const budget = value === null ? null : sloBudget(value, target);
+    return budget === null ? goal : `budget ${Math.round(budget * 100)}%`;
+  }
+  if (display === "volume") return changeHint(subject, series) ?? goal;
+  return goal;
+}
+
+/** The hint of a KPI card (see `subjectHint`); `display` is the KPI's own. */
+export function cardHint(kpi: GoalKpi, display: MetricDisplay, series: MetricHistory | null): string {
+  return subjectHint({ ...kpiSubject(kpi), display }, series);
+}
+
+/** Progress bar fill 0..1 toward the target; null without a value or a target. */
+export function subjectFraction(subject: Pick<MetricSubject, "value" | "target">): number | null {
+  const { value, target } = subject;
+  if (value === null || !target) return null;
+  const t = target.target.value;
+  if (meetsTarget(value, target)) return 1;
+  if (target.comparator === "lte") return value > 0 ? Math.max(0, t / value) : 0;
   return t > 0 ? Math.max(0, Math.min(1, value / t)) : 0;
+}
+
+export function progressFraction(kpi: GoalKpi): number | null {
+  return subjectFraction(kpiSubject(kpi));
 }
 
 /** Lowest bar still shows: the floor sits below the worst reading and the objective. */

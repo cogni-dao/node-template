@@ -39,6 +39,7 @@ import {
   type GoalsLinkProps,
   GoalsProvider,
   KpiChart,
+  historyWindow,
   KpiEvidence,
   MetricEvidence,
   STATUS_META,
@@ -727,7 +728,18 @@ describe("MetricEvidence", () => {
           })
         : url === `/api/v1/metrics/work/observations/${pinned.id}`
           ? Response.json({ definition, observation: pinned })
-          : new Response("{}", { status: 404 })
+          : url === "/api/v1/metrics/goals"
+            ? Response.json({ goals: [], asOf: "2026-11-02T10:05:00.000Z", environment: "test" })
+            : url.includes("/history?")
+              ? Response.json({
+                  metricId: "work",
+                  unit: "items",
+                  step: "1h",
+                  from: "2026-11-01T10:00:00.000Z",
+                  to: "2026-11-02T10:00:00.000Z",
+                  buckets: [],
+                })
+              : new Response("{}", { status: 404 })
     );
     vi.stubGlobal("fetch", fetchMock);
     const { container } = render(
@@ -736,14 +748,25 @@ describe("MetricEvidence", () => {
       </QueryClientProvider>
     );
     await screen.findByText(/Linked immutable evidence/);
+    // The header (the same chart a KPI opens) waits for the goal read's server clock.
+    await screen.findByRole("figure");
     const articles = container.querySelectorAll("article");
     expect(articles).toHaveLength(1);
     expect(articles[0]?.id).toBe(`observation-${pinned.id}`);
     expect(articles[0]?.textContent).toContain("5 items");
-    expect(fetchMock.mock.calls.map(([u]) => u)).toEqual([
-      "/api/v1/metrics/work",
-      `/api/v1/metrics/work/observations/${pinned.id}`,
-    ]);
+    // The exact reads of a metric page: the metric, the linked reading, the goal read, and one 1D history window.
+    const day = historyWindow("1d", Date.parse("2026-11-02T10:05:00.000Z"));
+    const historyUrl = `/api/v1/metrics/work/history?${new URLSearchParams({ from: day.from, to: day.to, step: day.step })}`;
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.map(([u]) => u).sort()).toEqual(
+        [
+          "/api/v1/metrics/work",
+          `/api/v1/metrics/work/observations/${pinned.id}`,
+          "/api/v1/metrics/goals",
+          historyUrl,
+        ].sort()
+      )
+    );
   });
 
   it("shows the newest readings with no link, and says so when evidence is unavailable", async () => {

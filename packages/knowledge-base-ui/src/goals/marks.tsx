@@ -24,7 +24,7 @@ import type { KpiBinding, KpiStatus, MetricHistory } from "@cogni-dao/metrics/co
 import { useId } from "react";
 import { Area, AreaChart, Bar, BarChart, Cell, YAxis } from "recharts";
 
-import { fromFirstReading, meetsTarget, type Point, seriesPoints, yDomain } from "./display.js";
+import { fromFirstReading, type LatestReading, meetsTarget, type Point, seriesPoints, yDomain } from "./display.js";
 import { STATUS_META, type StatusTone } from "./presentation.js";
 
 const TONE_CLASS: Record<StatusTone, string> = {
@@ -71,9 +71,9 @@ export function areaGradient(id: string, top = 0.28) {
 }
 
 /** One bar colour per point: series colour when the objective holds, miss colour when it does not. */
-export function barCells(points: readonly Point[], binding: Pick<KpiBinding, "comparator" | "target">) {
+export function barCells(points: readonly Point[], binding: Pick<KpiBinding, "comparator" | "target"> | null) {
   return points.map((p) => (
-    <Cell key={p.t} fill={p.v !== null && !meetsTarget(p.v, binding) ? MISS_COLOR : "var(--color-v)"} />
+    <Cell key={p.t} fill={binding && p.v !== null && !meetsTarget(p.v, binding) ? MISS_COLOR : "var(--color-v)"} />
   ));
 }
 
@@ -91,12 +91,29 @@ export function ProgressBar({ fraction, label }: { readonly fraction: number | n
 }
 
 /** Volume: gradient area over the series; gaps break the line. */
-export function Sparkline({ series, label }: { readonly series: MetricHistory | null; readonly label: string }) {
+export function Sparkline({
+  series,
+  label,
+  latest,
+}: {
+  readonly series: MetricHistory | null;
+  readonly label: string;
+  /** The newest reading, drawn as the last point when it is past the series' last bucket. */
+  readonly latest?: LatestReading;
+}) {
   const id = useChartId("spark");
-  const data = series ? fromFirstReading(seriesPoints(series)) : [];
+  const data = series ? fromFirstReading(seriesPoints(series, latest)) : [];
   const values = data.flatMap((d) => (d.v === null ? [] : [d.v]));
   return (
     <div role="img" aria-label={label} className="h-10 w-full">
+      {values.length < 2 && (
+        // Not enough readings to draw a line: a neutral dashed baseline, so the slot never reads as broken.
+        <div
+          data-spark="empty"
+          title="Not enough readings to draw a trace"
+          className="mt-5 border-muted-foreground/40 border-t border-dashed"
+        />
+      )}
       {values.length >= 2 && (
         <ChartContainer config={CHART_CONFIG} className="aspect-auto h-10 w-full">
           <AreaChart id={id} data={data} margin={{ top: 2, right: 0, bottom: 0, left: 0 }}>
@@ -127,7 +144,7 @@ export function AvailabilityStrip({
   label,
 }: {
   readonly series: MetricHistory | null;
-  readonly binding: Pick<KpiBinding, "comparator" | "target">;
+  readonly binding: Pick<KpiBinding, "comparator" | "target"> | null;
   readonly label: string;
 }) {
   const id = useChartId("slo");
@@ -138,7 +155,7 @@ export function AvailabilityStrip({
       {values.length > 0 && (
         <ChartContainer config={CHART_CONFIG} className="aspect-auto h-10 w-full">
           <BarChart id={id} data={data} margin={{ top: 2, right: 0, bottom: 0, left: 0 }} barCategoryGap={1}>
-            <YAxis hide domain={yDomain("slo", values, binding.target.value, binding.comparator)} allowDataOverflow />
+            <YAxis hide domain={yDomain("slo", values, binding?.target.value ?? null, binding?.comparator)} allowDataOverflow />
             <Bar id={`${id}-bar`} dataKey="v" isAnimationActive={false} radius={1}>
               {barCells(data, binding)}
             </Bar>

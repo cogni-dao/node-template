@@ -3,7 +3,7 @@
 
 /**
  * Module: `@cogni/knowledge-base-ui/goals`
- * Purpose: Subpath entry for the whole Goals capability (task.0062, story.0039): the board, the Metrics view (`MetricsBoard`) with its KPI cards, open chart and range control, the metric and hypothesis KPI evidence views, the read client and the shared progress hook.
+ * Purpose: Subpath entry for the whole Goals capability (task.0062, story.0039): the board, the Metrics view (`MetricsBoard`) with the one metric card and chart (a KPI and a supporting metric are the same component), the range control, the metric and hypothesis KPI evidence views, the read client and the shared progress hook.
  * Scope: Re-exports only. Kept off the root entry so work-board-only adopters never need the `@cogni-dao/metrics` (>= 0.7.0) and `recharts` peers. A node supplies its endpoint (`createGoalsClient`), auth (a `fetch` or request `init`), link component and hrefs, and the `?observation=` URL value; it renders no Goals markup of its own.
  * Invariants: Requires the host's `QueryClientProvider` (react-query 5). Imports no router, no node app code and no node UI kit.
  * Side-effects: none
@@ -48,6 +48,16 @@ export {
   STALE_AFTER_FAILURES,
 } from "./goals/goals-board.js";
 export { initialRange, KpiChart } from "./goals/kpi-chart.js";
+export { FlagChip, MetricCard } from "./goals/metric-card.js";
+export { initialRangeOf, MetricChart } from "./goals/metric-chart.js";
+export {
+  kpiSubject,
+  type MetricLevel,
+  type MetricSubject,
+  readSubject,
+  rowSubject,
+  type SubjectTarget,
+} from "./goals/metric-subject.js";
 export {
   KpiEvidence,
   type KpiEvidenceProps,
@@ -90,6 +100,7 @@ export {
   summarize,
   worstStatus,
 } from "./goals/presentation.js";
+export { useMetricSeries, useNearViewport } from "./goals/use-metric-series.js";
 export {
   GOALS_POLL_MS,
   GOALS_QUERY_KEY,

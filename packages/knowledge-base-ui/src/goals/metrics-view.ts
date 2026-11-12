@@ -32,13 +32,14 @@ import type {
 
 import { formatDate, formatNumber, STATUS_RANK, type GoalKpi } from "./presentation.js";
 
-/** Input moves the KPI, a guardrail keeps it honest, a diagnostic explains it. */
+/** Input moves the KPI, a guardrail keeps it honest, a diagnostic explains it. Only the order of a KPI's metrics. */
 export const ROLE_ORDER: readonly MetricServesRole[] = ["input", "guardrail", "diagnostic"];
 
+/** A role is small secondary metadata on a metric, never a section heading; a plain metric has no tag. */
 export const ROLE_META = {
-  input: { label: "Inputs", hint: "move the KPI" },
-  guardrail: { label: "Guardrails", hint: "keep it honest" },
-  diagnostic: { label: "Diagnostics", hint: "explain it" },
+  input: { label: "Input", hint: "moves the KPI" },
+  guardrail: { label: "Guardrail", hint: "keeps it honest" },
+  diagnostic: { label: "Metric", hint: "explains it" },
 } as const satisfies Record<MetricServesRole, { label: string; hint: string }>;
 
 type OrphanReason = MetricOrphan["reason"];

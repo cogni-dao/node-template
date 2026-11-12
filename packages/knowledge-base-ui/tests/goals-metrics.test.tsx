@@ -161,7 +161,11 @@ describe("MetricsBoard", () => {
       </QueryClientProvider>,
     );
     expect(container.querySelector('[aria-busy="true"]')).not.toBeNull();
-    expect(container.querySelector("dl")).toBeNull();
+    // The statline holds its place with placeholders, never zeros.
+    const strip = container.querySelector('[data-strip="loading"]') as HTMLElement;
+    expect(strip).not.toBeNull();
+    expect(strip.querySelectorAll("dd[data-loading]").length).toBeGreaterThanOrEqual(7);
+    expect(strip.querySelectorAll("dd:not([data-loading])")).toHaveLength(0);
     expect(container.textContent).not.toMatch(/\b0\b/);
   });
 
@@ -212,10 +216,12 @@ describe("MetricsBoard", () => {
     const client=new QueryClient({defaultOptions:{queries:{retry:false,gcTime:0}}});
     const view=render(<QueryClientProvider client={client}><MetricsBoard client={{...createGoalsClient(),fetchGoals:()=>pending}} /></QueryClientProvider>);
     expect(view.container.querySelector('[aria-busy="true"]')).not.toBeNull();
-    expect(view.container.querySelector('dl')).toBeNull();
+    expect(view.container.querySelector('[data-strip="loading"]')).not.toBeNull();
     expect(view.container.textContent).not.toMatch(/\b0\b/);
     await act(async()=>{finish(fixture());await pending;});
     expect(await within(view.container).findByRole("button",{name:"KPI red"})).toBeInTheDocument();
+    expect(view.container.querySelector('[data-strip="ready"]')).not.toBeNull();
+    expect(view.container.querySelector("dd[data-loading]")).toBeNull();
     expect(view.container.textContent).not.toContain("0 KPIs");
     view.unmount();client.clear();
   });
@@ -228,8 +234,9 @@ describe("MetricsBoard", () => {
     expect(ids(goalA.querySelectorAll("[data-kpi-block]"), "data-kpi-block")).toEqual(["k-red", "k-ok"]);
     fireEvent.click(within(goalA).getByRole("button", { name: /KPI red/ }));
     const branch = goalA.querySelector('[data-branch="served"]') as HTMLElement;
-    // Roles in fixed order; inside a role, worst status first.
-    expect(ids(branch.querySelectorAll("[data-role]"), "data-role")).toEqual(["input", "guardrail", "diagnostic"]);
+    // Roles in fixed order; inside a role, worst status first. A role is metadata on a metric, never a heading.
+    expect(ids(branch.querySelectorAll("[data-role]"), "data-role")).toEqual(["input", "input", "guardrail", "diagnostic"]);
+    expect(branch.querySelectorAll("h4")).toHaveLength(1);
     expect(ids(branch.querySelectorAll("[data-metric]"), "data-metric")).toEqual([
       "m-input-red",
       "m-input-ok",
@@ -311,7 +318,7 @@ describe("MetricsBoard", () => {
     fireEvent.click(within(goal).getByRole("button",{name:"KPI red"}));
     const row=goal.querySelector(`[data-metric="${target.metric.id}"]`) as HTMLElement;
     expect(row).toHaveAttribute("data-status","building");
-    expect(row.textContent).toContain("Pending · historical reading");
+    expect(row.textContent).toContain("Pending, historical reading");
     expect(row.querySelector('[data-status="on_track"]')).toBeNull();
   });
 
@@ -399,7 +406,7 @@ describe("MetricsBoard", () => {
     expect(goal.querySelector('[data-branch="empty"]')).not.toBeNull();
   });
 
-  it("discloses supporting rows only while the KPI is expanded and keeps each metric one link", () => {
+  it("discloses supporting metrics only while the KPI is expanded; a metric opens like a KPI and links to its page", () => {
     const {container}=renderMetrics(fixture());
     const goal=container.querySelector('[data-goal="goal-a"]') as HTMLElement;
     const toggle=within(goal).getByRole("button",{name:"KPI red"});
@@ -407,12 +414,161 @@ describe("MetricsBoard", () => {
     expect(goal.querySelector('[data-metric="m-guard-red"]')).toBeNull();
     fireEvent.click(toggle);
     const row=goal.querySelector('[data-metric="m-guard-red"]') as HTMLElement;
-    const link=within(row).getByRole("link");
-    expect(link).toHaveAttribute("href","/knowledge/m-guard-red");
-    expect(link).toHaveTextContent("Failing");
-    expect(link).toHaveTextContent("40");
+    expect(row).toHaveTextContent("Failing");
+    expect(row).toHaveTextContent("40");
+    // Clicking the metric opens the same chart a KPI opens, with the same range control and a link to its page.
+    const block=row.closest("[data-metric-block]") as HTMLElement;
+    expect(block.querySelector("figure")).toBeNull();
+    fireEvent.click(within(row).getByRole("button",{name:"Title m-guard-red"}));
+    const figure=within(block).getByRole("figure");
+    expect(figure).toHaveAttribute("data-chart","metric");
+    expect(within(figure).getByRole("group",{name:"Chart range"})).toBeInTheDocument();
+    for(const label of ["1D","1W","1M","3M"]) expect(within(figure).getByRole("radio",{name:label})).toBeInTheDocument();
+    expect(within(figure).getByRole("link",{name:"Open Title m-guard-red"})).toHaveAttribute("href","/knowledge/m-guard-red");
     fireEvent.click(toggle);
     expect(goal.querySelector('[data-metric="m-guard-red"]')).toBeNull();
+  });
+
+  it("draws a supporting metric with the same card component as a KPI and calls the section Metrics", () => {
+    const {container}=renderMetrics(fixture());
+    const goal=container.querySelector('[data-goal="goal-a"]') as HTMLElement;
+    fireEvent.click(within(goal).getByRole("button",{name:"KPI red"}));
+    const kpiCard=goal.querySelector('[data-kpi="k-red"]') as HTMLElement;
+    const metricCard=goal.querySelector('[data-metric="m-guard-red"]') as HTMLElement;
+    // One component: both carry the same parts (toggle, status pill, mark, big value); only the level differs.
+    expect(kpiCard.getAttribute("data-card")).toBe("kpi");
+    expect(metricCard.getAttribute("data-card")).toBe("metric");
+    const parts=(el:HTMLElement)=>["button[aria-expanded]","span[data-status]","[role=img]","span.tabular-nums"].map(q=>el.querySelector(q)!==null);
+    expect(parts(kpiCard)).toEqual([true,true,true,true]);
+    expect(parts(metricCard)).toEqual(parts(kpiCard));
+    expect(kpiCard.className).toContain("rounded-md border");
+    expect(metricCard.className).toContain("rounded-md border");
+    const section=goal.querySelector('[data-branch="served"]') as HTMLElement;
+    expect(section.querySelector("h4")).toHaveTextContent(/^Metrics$/);
+    // The KPI rows are labelled too: a "KPIs" heading over the list and a KPI tag on each row.
+    expect(kpiCard.parentElement?.parentElement?.querySelector("h4")).toHaveTextContent(/^KPIs$/);
+    expect(kpiCard.textContent).toContain("KPI");
+    // Metrics are metrics: no "Diagnostics" (or any diagnostic label) anywhere in the rendered view.
+    expect(container.textContent).not.toMatch(/diagnostic/i);
+  });
+
+  it("shows a neutral state, not 'No band', for a metric with no target", () => {
+    const data=fixture();
+    const kpi=data.goals.find(g=>g.id==="goal-a")!.kpis.find(k=>k.binding.metricId==="k-red")!;
+    kpi.served=[served("plain","input",null)];
+    const {container}=renderMetrics(data);
+    const goal=container.querySelector('[data-goal="goal-a"]') as HTMLElement;
+    fireEvent.click(within(goal).getByRole("button",{name:"KPI red"}));
+    const row=goal.querySelector('[data-metric="plain"]') as HTMLElement;
+    expect(row.getAttribute("data-status")).toBe("no_band");
+    expect(row.textContent).toContain("No target");
+    expect(row.textContent).not.toContain("No band");
+    // No status pill is drawn for an unjudged, healthy metric: it is not broken.
+    expect(row.querySelector("span[data-status]")).toBeNull();
+    expect(row.textContent).toContain("7");
+    expect(container.textContent).not.toContain("No band");
+  });
+
+  it("restores the statline at the top of Metrics with counts once the read arrives", () => {
+    const {container}=renderMetrics(fixture());
+    const strip=container.querySelector('[data-strip="ready"]') as HTMLElement;
+    const cells=Object.fromEntries([...strip.querySelectorAll("dl > div")].map(c=>[c.querySelector("dt")!.textContent,c.querySelector("dd")!.textContent]));
+    // Two goals bind four KPIs (k-ok, k-ok2 on track or met; k-ok again in goal-a; k-red failing).
+    expect(cells.Goals).toBe("2");
+    expect(cells.KPIs).toBe("4");
+    expect(cells.Failing).toBe("1");
+    expect(cells.Metrics).toBe("10");
+    expect(cells["Serve no KPI"]).toBe("3");
+    expect(strip.compareDocumentPosition(container.querySelector("[data-goal]") as HTMLElement) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // A "Goals" heading sits between the statline and the first goal row.
+    const heading = within(container).getByRole("heading", { level: 2, name: "Goals" });
+    expect(strip.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(heading.compareDocumentPosition(container.querySelector("[data-goal]") as HTMLElement) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("reads a supporting metric's series through the history endpoint only once its card is near the viewport", async () => {
+    const fetchHistory = vi.fn(async (id: string) => trend(id, "items", [3, 4, 5, 6, 7, 8]));
+    const client = { ...createGoalsClient(), fetchHistory };
+    const mount = () => {
+      const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+      const view = render(<QueryClientProvider client={qc}><MetricsBoard client={client} initialData={fixture()} /></QueryClientProvider>);
+      const goal = view.container.querySelector('[data-goal="goal-a"]') as HTMLElement;
+      fireEvent.click(within(goal).getByRole("button", { name: "KPI red" }));
+      return { view, goal, qc };
+    };
+    // No visibility signal (jsdom, SSR): opening the KPI does not fire a read per supporting metric.
+    const first = mount();
+    expect(first.goal.querySelector('[data-metric="m-guard-red"]')).not.toBeNull();
+    expect(fetchHistory.mock.calls.filter(([id]) => id === "m-guard-red")).toHaveLength(0);
+    first.view.unmount();
+    // Near the viewport: the same card reads the same history window the open chart reads.
+    class Visible {
+      constructor(private readonly cb: (e: { isIntersecting: boolean }[]) => void) {}
+      observe() { this.cb([{ isIntersecting: true }]); }
+      disconnect() {}
+    }
+    vi.stubGlobal("IntersectionObserver", Visible);
+    try {
+      const second = mount();
+      await waitFor(() => expect(fetchHistory.mock.calls.some(([id]) => id === "m-guard-red")).toBe(true));
+      const [, window] = fetchHistory.mock.calls.find(([id]) => id === "m-guard-red") as unknown as [string, { step: string }];
+      // One read per card: the 1D window (hourly), the series the 1D chart starts on.
+      expect(window.step).toBe("1h");
+      expect(fetchHistory.mock.calls.filter(([id]) => id === "m-guard-red")).toHaveLength(1);
+      second.qc.clear();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("draws the supporting metric's trace from its one 1D read, or a neutral dashed placeholder when there is nothing to draw", async () => {
+    class Visible {
+      constructor(private readonly cb: (e: { isIntersecting: boolean }[]) => void) {}
+      observe() { this.cb([{ isIntersecting: true }]); }
+      disconnect() {}
+    }
+    vi.stubGlobal("IntersectionObserver", Visible);
+    try {
+      const mount = async (values: (number | null)[]) => {
+        const fetchHistory = vi.fn(async (id: string) => trend(id, "items", values));
+        const client = { ...createGoalsClient(), fetchHistory };
+        const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+        const view = render(<QueryClientProvider client={qc}><MetricsBoard client={client} initialData={fixture()} /></QueryClientProvider>);
+        const goal = view.container.querySelector('[data-goal="goal-a"]') as HTMLElement;
+        fireEvent.click(within(goal).getByRole("button", { name: "KPI red" }));
+        const card = goal.querySelector('[data-metric="m-guard-red"]') as HTMLElement;
+        await waitFor(() => expect(fetchHistory.mock.calls.some(([id]) => id === "m-guard-red")).toBe(true));
+        return { view, card, qc };
+      };
+      // Readings: a line is drawn inside the card's mark.
+      const full = await mount([3, 4, 5, 6, 7, 8]);
+      await waitFor(() => expect(full.card.querySelector('[role="img"] .recharts-area-curve')).not.toBeNull());
+      expect(full.card.querySelector('[data-spark="empty"]')).toBeNull();
+      full.view.unmount();
+      full.qc.clear();
+      // No readings in the window: a dashed placeholder with a title, not a blank slot.
+      const none = await mount(Array.from({ length: 30 }, () => null));
+      await waitFor(() => expect(none.card.querySelector('[data-spark="empty"]')).not.toBeNull());
+      expect(none.card.querySelector('[data-spark="empty"]')).toHaveAttribute("title", expect.stringMatching(/readings/));
+      expect(none.card.querySelector('[role="img"] .recharts-area-curve')).toBeNull();
+      none.qc.clear();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("pages the not-serving group at 20 like a KPI's metrics", () => {
+    const unbound = Array.from({ length: 45 }, (_, i) => ({
+      metric: { id: `loose-${String(i).padStart(2, "0")}`, title: `Loose ${String(i).padStart(2, "0")}`, calculatorId: "work.count@1" },
+      assessment: null,
+      latest: latest(),
+    }));
+    const { container } = renderMetrics(fixture({ orphans: [], unbound }));
+    const group = container.querySelector('[data-group="not-serving"]') as HTMLElement;
+    expect(group.querySelectorAll("[data-metric]")).toHaveLength(20);
+    expect(within(group).getByText("1–20 of 45 loaded")).toBeInTheDocument();
+    fireEvent.click(within(group).getByRole("button", { name: "Next" }));
+    expect(within(group).getByText("21–40 of 45 loaded")).toBeInTheDocument();
   });
 
   it("pages the bounded supporting set in inline pages of20", () => {
@@ -587,6 +743,103 @@ describe("independent immutable measurement evidence", () => {
     }
     if (currentFails) expect(view.getByRole("alert")).toHaveTextContent("Current measurement evidence is unavailable");
     if (!currentFails && !pinnedFails) expect(view.queryByRole("alert")).not.toBeInTheDocument();
+    qc.clear();
+  });
+});
+
+describe("a metric's own page", () => {
+  const reading = {
+    id: "00000000-0000-4000-8000-0000000000aa", metricId: "m-page", definitionRevision: "1", definitionHash: "hash-raw",
+    calculatorVersion: "work.count@1", paramsHash: "p", node: "n", environment: "test", dataScope: "test",
+    window: { start: "2026-11-02T09:00:00Z", end: "2026-11-02T10:00:00Z" }, sourceWatermarks: [],
+    observedAt: "2026-11-02T10:00:00.000Z", status: "ok", value: 8, unit: "items", reason: null, evidenceRefs: [],
+  };
+
+  it("leads with the KPI chart (value, unit, range toggle) and keeps raw evidence behind a collapsed Evidence disclosure", async () => {
+    const fetchMetric = vi.fn(async () => ({
+      definition: { id: "m-page", title: "Page metric", revision: "1", spec: { calculatorId: "work.count@1", params: {}, maxAgeSeconds: 600 } },
+      latestAttempt: reading,
+      lastGood: reading,
+      viewState: "ok",
+      history: [reading],
+    }));
+    const fetchHistory = vi.fn(async () => trend("m-page", "items", [3, 4, 5, 6, 7, 8]));
+    const client = { ...createGoalsClient(), fetchGoals: async () => fixture(), fetchMetric, fetchHistory } as unknown as ReturnType<typeof createGoalsClient>;
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const view = render(<QueryClientProvider client={qc}><GoalsProvider client={client}>
+      <MetricEvidence id="m-page" />
+    </GoalsProvider></QueryClientProvider>);
+    const figure = await view.findByRole("figure");
+    // The same chart a KPI opens: title, big value with unit, and the 1D/1W/1M/3M range toggle.
+    expect(figure).toHaveAttribute("data-chart", "metric");
+    expect(figure).toHaveTextContent("Page metric");
+    expect(figure).toHaveTextContent("8");
+    expect(figure).toHaveTextContent("items");
+    for (const label of ["1D", "1W", "1M", "3M"]) expect(within(figure).getByRole("radio", { name: label })).toBeInTheDocument();
+    await waitFor(() => expect(fetchHistory).toHaveBeenCalled());
+    // Raw ids, hashes and exact times sit behind a collapsed Evidence disclosure that comes after the chart.
+    const evidence = view.container.querySelector("details[data-evidence]") as HTMLElement;
+    expect(evidence).not.toBeNull();
+    expect(evidence.hasAttribute("open")).toBe(false);
+    expect(within(evidence).getByText("Evidence")).toBeInTheDocument();
+    expect(figure.compareDocumentPosition(evidence) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(figure.textContent).not.toContain("hash-raw");
+    expect(figure.textContent).not.toContain(reading.id);
+    expect(evidence.textContent).toContain(`Observation ${reading.id}`);
+    expect(evidence.textContent).toContain("hash-raw");
+    qc.clear();
+  });
+
+  it("gives a KPI's metric and a supporting metric the same header; only the label and links differ", async () => {
+    const readFor = (id: string, serves: { kpi: string; role: "input" } | undefined, bandAssessment?: KpiAssessment) => ({
+      definition: { id, title: `Title ${id}`, revision: "1", spec: { calculatorId: "work.count@1", params: {}, maxAgeSeconds: 600 }, ...(serves ? { serves } : {}) },
+      latestAttempt: reading,
+      lastGood: reading,
+      viewState: "ok",
+      ...(bandAssessment ? { bandAssessment } : {}),
+      history: [reading],
+    });
+    const mount = async (id: string, serves?: { kpi: string; role: "input" }, assessment?: KpiAssessment) => {
+      const client = {
+        ...createGoalsClient(),
+        fetchGoals: async () => fixture(),
+        fetchMetric: async () => readFor(id, serves, assessment),
+        fetchHistory: async () => trend(id, "items", [3, 4, 5, 6, 7, 8]),
+      } as unknown as ReturnType<typeof createGoalsClient>;
+      const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const view = render(<QueryClientProvider client={qc}><GoalsProvider client={client}><MetricEvidence id={id} /></GoalsProvider></QueryClientProvider>);
+      const figure = await view.findByRole("figure");
+      return { view, figure, qc };
+    };
+    const kpi = await mount("k-red");
+    const kpiLabel = await kpi.view.findByText(/KPI of goal/);
+    expect(kpiLabel).toHaveAttribute("data-relation", "kpi");
+    expect(within(kpiLabel).getByRole("link", { name: "Goal A" })).toHaveAttribute("href", "/knowledge/goal-a");
+    const sameParts = (el: HTMLElement) => ["span[data-status]", "[role=group]", "figcaption"].map((q) => el.querySelector(q) !== null);
+    expect(sameParts(kpi.figure)).toEqual([true, true, true]);
+    kpi.view.unmount();
+    kpi.qc.clear();
+
+    const metric = await mount("m-guard-red", { kpi: "k-red", role: "input" }, band("failing", 40));
+    const label = await metric.view.findByText(/Metric serving KPI/);
+    expect(label).toHaveAttribute("data-relation", "serves");
+    expect(within(label).getByRole("link", { name: "KPI red" })).toHaveAttribute("href", "/knowledge/k-red");
+    expect(sameParts(metric.figure)).toEqual(sameParts(kpi.figure));
+    expect(metric.view.container.textContent).not.toMatch(/diagnostic/i);
+    metric.qc.clear();
+  });
+
+  it("opens the Evidence disclosure when the page links one immutable reading", async () => {
+    const fetchMetric = vi.fn(async () => ({ history: [reading] }));
+    const fetchObservation = vi.fn(async () => ({ observation: reading }));
+    const fetchHistory = vi.fn(async () => trend("m-page", "items", [3, 4, 5]));
+    const client = { ...createGoalsClient(), fetchGoals: async () => fixture(), fetchMetric, fetchObservation, fetchHistory } as unknown as ReturnType<typeof createGoalsClient>;
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const view = render(<QueryClientProvider client={qc}><GoalsProvider client={client}>
+      <MetricEvidence id="m-page" observationId={reading.id} />
+    </GoalsProvider></QueryClientProvider>);
+    await view.findByText(/Linked immutable evidence/);
+    expect((view.container.querySelector("details[data-evidence]") as HTMLElement).hasAttribute("open")).toBe(true);
     qc.clear();
   });
 });

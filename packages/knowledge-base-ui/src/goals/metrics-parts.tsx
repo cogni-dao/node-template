@@ -4,131 +4,92 @@
 /**
  * Module: `@cogni/knowledge-base-ui/goals (metrics-parts)`
  * Purpose: The metric-level pieces of the Metrics view (story.0039): one metric
- *   row (title, status, latest value, band meter, age), a KPI's branch of
- *   serving metrics grouped by role, and the flagged "not serving a KPI" group.
- * Scope: Stateless presentation over rows from `./metrics-view.ts`. Links come
- *   from the injected host (`hrefs.metric`, `hrefs.axioms`). No fetching.
- * Invariants: STATUS_NEVER_COLOR_ONLY (symbol + word); UNKNOWN_IS_NOT_ZERO
- *   ("—"); NO_BAND_NO_VERDICT ("No band", never a KPI status); ONE_COLUMN_AT_360
- *   (rows wrap, nothing scrolls sideways); theme tokens only.
- * Side-effects: none
- * Links: ./metrics-view.ts, ./marks.tsx
+ *   (the same card and chart a KPI uses, opened by click), a KPI's list of
+ *   metrics, and the flagged "not serving a KPI" group.
+ * Scope: Stateful presentation over rows from `./metrics-view.ts`, mapped to the
+ *   shared `MetricSubject`. Links come from the injected host (`hrefs.metric`,
+ *   `hrefs.axioms`). The only reads are the history windows the card and chart
+ *   share with every KPI.
+ * Invariants: ONE_SUBJECT_ONE_COMPONENT (no metric-only row or chart); STATUS_
+ *   NEVER_COLOR_ONLY; NO_TARGET_NO_VERDICT; UNKNOWN_IS_NOT_ZERO ("—");
+ *   ONE_COLUMN_AT_360 (rows wrap, nothing scrolls sideways); theme tokens only;
+ *   METRICS_ARE_METRICS (the section is "Metrics"; a role is small metadata).
+ * Side-effects: IO (via GoalsClient.fetchHistory: each open chart, and each card's one 1D read once near the viewport)
+ * Links: ./metric-card.tsx, ./metric-chart.tsx, ./metrics-view.ts
  * @public
  */
 
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import { useGoalsHost } from "./context.js";
-import { ProgressBar, StatusPill } from "./marks.js";
-import {
-  bandFraction,
-  bandText,
-  flagText,
-  formatAge,
-  formatRowValue,
-  groupByRole,
-  type MetricFlag,
-  type MetricRow,
-  metricStatus,
-  notServingRows,
-  readingTitle,
-  ROLE_META,
-  rowValue,
-} from "./metrics-view.js";
+import { MetricCard } from "./metric-card.js";
+import { MetricChart } from "./metric-chart.js";
+import { rowSubject } from "./metric-subject.js";
+import { groupByRole, type MetricRow, notServingRows } from "./metrics-view.js";
 import type { GoalsProgress } from "@cogni-dao/metrics/contracts";
 
-function FlagChip({ flag }: { readonly flag: MetricFlag }) {
-  return (
-    <span
-      data-flag={flag.kind}
-      className="inline-flex max-w-full items-start gap-1 break-words rounded-xl border border-warning/40 bg-warning/15 px-2 py-0.5 font-medium text-[11px] text-warning leading-4 [overflow-wrap:anywhere]"
-    >
-      <span aria-hidden="true">⚑</span>
-      <span className="min-w-0">{flagText(flag)}</span>
-    </span>
-  );
-}
-
-function NoBandPill() {
-  return (
-    <span
-      data-status="no_band"
-      className="inline-flex shrink-0 items-center gap-1 rounded-full border border-border bg-muted/60 px-2 py-0.5 font-medium text-[11px] text-muted-foreground leading-4"
-    >
-      <span aria-hidden="true">–</span>
-      No band
-    </span>
-  );
-}
-
-/** One metric: title and status on the first line; value, band meter and age on the second. */
+/** One metric: the KPI card, opening the KPI chart, with a link to the metric's own page. */
 export function MetricRowView({ row, nowIso }: { readonly row: MetricRow; readonly nowIso: string }) {
-  const { hrefs, Link } = useGoalsHost();
-  const status = metricStatus(row);
-  const { value, unit, observedAt } = rowValue(row);
-  const band = bandText(row);
-  const fraction = bandFraction(row);
-  const number = value === null ? null : formatRowValue(value, unit);
-  const age = observedAt ? formatAge(observedAt, nowIso) : null;
-  // A reading that is not current is muted, like a delayed KPI.
-  const muted =
-    value !== null && (status === "building" || status === "delayed" || (status === "failing" && row.assessment?.reason !== "target_breached"));
-  const label = `${row.title}: ${number ?? "no reading"}${band ? `; band ${band}` : "; no band"}${age ? `; read ${age}` : ""}`;
+  const { hrefs } = useGoalsHost();
+  const [open, setOpen] = useState(false);
+  const chartId = useId();
+  const subject = rowSubject(row);
   return (
-    <li data-metric={row.id} data-status={status}>
-      <Link
-        href={hrefs.metric(row.id)}
-        className="grid min-h-6 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 rounded-sm py-2.5 outline-none hover:bg-muted/30 focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        <span className="min-w-0 break-words font-medium text-sm">{row.title}</span>
-        {status === "no_band" ? <NoBandPill /> : <StatusPill status={status} />}
-        <div className="col-span-2 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-muted-foreground text-xs">
-          <span className={`font-semibold text-sm tabular-nums ${muted || number === null ? "" : "text-foreground"}`}>
-            {number === null ? (
-              <>
-                <span aria-hidden="true">—</span>
-                <span className="sr-only">No reading</span>
-              </>
-            ) : (
-              number
-            )}
-            {number !== null && unit && unit !== "%" ? (
-              <span className="ml-1 font-normal text-muted-foreground text-xs">{unit}</span>
-            ) : null}
-          </span>
-          {band && (
-            <span className="flex min-w-24 flex-1 basis-32 items-center gap-2">
-              <span className="w-24 shrink-0 sm:w-32">
-                <ProgressBar fraction={fraction} label={label} />
-              </span>
-              <span className="whitespace-nowrap tabular-nums">{band}</span>
-            </span>
-          )}
-          {row.latest?.viewState === "pending" && <span>Pending · historical reading</span>}
-          {age && observedAt ? (
-            <span title={readingTitle(observedAt)} className="whitespace-nowrap tabular-nums">
-              {age}
-            </span>
-          ) : (
-            <span className="whitespace-nowrap">No reading</span>
-          )}
-          {row.flags.map((f) => (
-            <FlagChip key={f.kind} flag={f} />
-          ))}
+    <li className="space-y-2" data-metric-block={row.id} {...(row.role ? { "data-role": row.role } : {})}>
+      <MetricCard
+        subject={subject}
+        nowIso={nowIso}
+        open={open}
+        chartId={chartId}
+        wrap
+        variant="row"
+        onToggle={() => setOpen(!open)}
+      />
+      {open && (
+        <div id={chartId} className="pl-3">
+          <MetricChart subject={subject} nowIso={nowIso} href={hrefs.metric(row.id)} />
         </div>
-      </Link>
+      )}
     </li>
   );
 }
 
-/** The metrics that serve one KPI, grouped by role, worst first. */
+const PAGE_SIZE = 20;
+
+/** One inline page of a bounded, already-fetched list. */
+function usePage<T>(items: readonly T[]) {
+  const [page, setPage] = useState(0);
+  const current = Math.min(page, Math.max(0, Math.ceil(items.length / PAGE_SIZE) - 1));
+  const start = current * PAGE_SIZE;
+  return { current, start, setPage, visible: items.slice(start, start + PAGE_SIZE) };
+}
+
+function PageNav({
+  total,
+  current,
+  start,
+  setPage,
+}: {
+  readonly total: number;
+  readonly current: number;
+  readonly start: number;
+  readonly setPage: (page: number) => void;
+}) {
+  if (total <= PAGE_SIZE) return null;
+  return (
+    <nav aria-label="Serving metric pages" className="mt-3 flex flex-wrap items-center gap-3 text-xs">
+      <button type="button" className="min-h-8 rounded-md border px-3 disabled:opacity-50" disabled={current === 0} onClick={() => setPage(current - 1)}>Previous</button>
+      <span className="tabular-nums">{start + 1}–{Math.min(start + PAGE_SIZE, total)} of {total} loaded</span>
+      <button type="button" className="min-h-8 rounded-md border px-3 disabled:opacity-50" disabled={start + PAGE_SIZE >= total} onClick={() => setPage(current + 1)}>Next</button>
+    </nav>
+  );
+}
+
+/** The metrics that serve one KPI, in the fixed role order, worst first inside each role. */
 export function KpiBranch({ rows, nowIso, complete = true }: { readonly rows: readonly MetricRow[]; readonly nowIso: string; readonly complete?: boolean }) {
-  const [page,setPage] = useState(0);
-  const ordered = groupByRole(rows).flatMap(group=>group.rows);
-  const current = Math.min(page,Math.max(0,Math.ceil(ordered.length/20)-1));
-  const start=current*20;
-  const visible=ordered.slice(start,start+20);
+  const ordered = groupByRole(rows).flatMap((group) => group.rows);
+  const { current, start, setPage, visible } = usePage(ordered);
 
   if (rows.length === 0)
     return (
@@ -140,25 +101,16 @@ export function KpiBranch({ rows, nowIso, complete = true }: { readonly rows: re
       </p>
     );
   return (
-    <div data-branch="served" className="min-w-0 border-border/60 border-l-2 pl-3 md:pl-4">
-      {groupByRole(visible).map((g) => (
-        <section key={g.role} data-role={g.role} aria-label={ROLE_META[g.role].label} className="mt-2">
-          <h4 className="text-[11px] text-muted-foreground uppercase tracking-widest">{ROLE_META[g.role].label}</h4>
-          <ul className="divide-y divide-border/60">
-            {g.rows.map((r) => (
-              <MetricRowView key={r.id} row={r} nowIso={nowIso} />
-            ))}
-          </ul>
-        </section>
-      ))}
-      {rows.length > 20 && <nav aria-label="Serving metric pages" className="mt-3 flex flex-wrap items-center gap-3 text-xs">
-        <button type="button" className="min-h-8 rounded-md border px-3 disabled:opacity-50" disabled={current===0} onClick={()=>setPage(current-1)}>Previous</button>
-        <span className="tabular-nums">{start+1}–{Math.min(start+20,rows.length)} of {rows.length} loaded</span>
-        <button type="button" className="min-h-8 rounded-md border px-3 disabled:opacity-50" disabled={start+20>=rows.length} onClick={()=>setPage(current+1)}>Next</button>
-      </nav>}
+    <section data-branch="served" aria-label="Metrics" className="min-w-0 border-border/60 border-l-2 pl-3 md:pl-4">
+      <h4 className="font-medium text-muted-foreground text-xs uppercase tracking-wider">Metrics</h4>
+      <ul className="mt-2 space-y-2">
+        {visible.map((r) => (
+          <MetricRowView key={r.id} row={r} nowIso={nowIso} />
+        ))}
+      </ul>
+      <PageNav total={rows.length} current={current} start={start} setPage={setPage} />
       {!complete && <p role="status" className="mt-2 text-muted-foreground text-xs">More metrics may exist beyond this scan.</p>}
-
-    </div>
+    </section>
   );
 }
 
@@ -166,12 +118,13 @@ export function KpiBranch({ rows, nowIso, complete = true }: { readonly rows: re
 export function NotServingGroup({ data }: { readonly data: GoalsProgress }) {
   const { hrefs, Link } = useGoalsHost();
   const rows = notServingRows(data);
+  const { current, start, setPage, visible } = usePage(rows);
   if (rows.length === 0) return null;
   return (
     <section
       data-group="not-serving"
       aria-label="Metrics that serve no KPI"
-      className="rounded-xl border border-warning/40 border-dashed px-4 pt-3 pb-2"
+      className="rounded-xl border border-warning/40 border-dashed px-4 pt-3 pb-3"
     >
       <h3 className="flex flex-wrap items-center gap-x-2 gap-y-1 font-medium text-sm">
         <span aria-hidden="true" className="text-warning">
@@ -185,11 +138,12 @@ export function NotServingGroup({ data }: { readonly data: GoalsProgress }) {
           why
         </Link>
       </p>
-      <ul className="divide-y divide-border/60">
-        {rows.map((r) => (
+      <ul className="mt-2 space-y-2">
+        {visible.map((r) => (
           <MetricRowView key={r.id} row={r} nowIso={data.asOf} />
         ))}
       </ul>
+      <PageNav total={rows.length} current={current} start={start} setPage={setPage} />
     </section>
   );
 }

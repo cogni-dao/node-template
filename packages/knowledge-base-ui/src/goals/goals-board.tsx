@@ -28,23 +28,21 @@ import { useEffect, useId, useState } from "react";
 
 import { goalsErrorStatus } from "./client.js";
 import { type GoalsHostOptions, GoalsProvider, useGoalsHost } from "./context.js";
-import { cardHint, cardSeries, displayOf, formatValue, progressFraction } from "./display.js";
 import {
-  COMPARATOR_SYMBOL,
   formatDate,
   formatUtcTime,
   type GoalKpi,
   isMeasured,
-  isDeadlineStatus,
-  reasonText,
   STATUS_META,
   summarize,
   worstStatus,
 } from "./presentation.js";
 import { KpiChart } from "./kpi-chart.js";
-import { AvailabilityStrip, ProgressBar, Sparkline, StatusPill } from "./marks.js";
+import { StatusPill } from "./marks.js";
+import { MetricCard } from "./metric-card.js";
+import { kpiSubject } from "./metric-subject.js";
 import { KpiBranch, NotServingGroup } from "./metrics-parts.js";
-import { hasMetricDetail, servedRows, sortGoals, sortKpis } from "./metrics-view.js";
+import { hasMetricDetail, servedRows, sortGoals, sortKpis, summarizeMetrics } from "./metrics-view.js";
 import { GOALS_POLL_MS, useGoalsProgress } from "./use-goals-progress.js";
 
 export { GOALS_POLL_MS };
@@ -108,26 +106,16 @@ function GoalsBoardView({
       aria-busy={!data && query.isPending}
       className="space-y-6"
     >
-      {!goalId && !metrics && data && (
+      {!goalId && (data || !query.isError) && (
         <Strip
+          data={data ?? null}
           goals={goals}
-          asOf={data?.asOf ?? null}
+          metrics={metrics}
           stale={stale}
           signedOut={signedOut}
           onRetry={() => query.refetch()}
           onReload={reload}
         />
-      )}
-      {metrics && data && (signedOut || stale) && (
-        <p role="status" className="text-muted-foreground text-xs">
-          {signedOut ? (
-            <ReloadLink onClick={reload} />
-          ) : (
-            <button type="button" onClick={() => query.refetch()} className="min-h-6 underline underline-offset-2">
-              Stale · {formatUtcTime(data.asOf)}
-            </button>
-          )}
-        </p>
       )}
       {!data ? (
         query.isError ? (
@@ -155,13 +143,18 @@ function GoalsBoardView({
           </Link>
         </p>
       ) : (
-        <ul
-          className={`divide-y divide-border/60 overflow-hidden rounded-xl border border-border/60 ${stale ? "opacity-70" : ""}`}
-        >
-          {goals.map((goal) => (
-            <GoalRow key={goal.id} goal={goal} data={data} metrics={metrics} single={!!goalId} />
-          ))}
-        </ul>
+        <div className="space-y-2">
+          {metrics && (
+            <h2 className="font-medium text-muted-foreground text-xs uppercase tracking-wider">Goals</h2>
+          )}
+          <ul
+            className={`divide-y divide-border/60 overflow-hidden rounded-xl border border-border/60 ${stale ? "opacity-70" : ""}`}
+          >
+            {goals.map((goal) => (
+              <GoalRow key={goal.id} goal={goal} data={data} metrics={metrics} single={!!goalId} />
+            ))}
+          </ul>
+        </div>
       )}
       {metrics && data && <MetricsFooter data={data} />}
     </section>
@@ -191,56 +184,97 @@ function ReloadLink({ onClick }: { readonly onClick: () => void }) {
   );
 }
 
+/** One cell of the statline: a label over a count, or over a placeholder while the first read is pending. */
+interface StripCell {
+  readonly label: string;
+  /** Null while loading: a placeholder, never a zero. */
+  readonly value: number | null;
+  readonly tone: string;
+}
+
+/**
+ * The statline: goals and KPIs counted once each, every status a count of KPIs;
+ * the Metrics view adds the distinct metrics and those serving no KPI. Until the
+ * first read arrives every cell shows a placeholder, never zeros.
+ */
 function Strip({
+  data,
   goals,
-  asOf,
+  metrics,
   stale,
   signedOut,
   onRetry,
   onReload,
 }: {
+  /** The read, or null while the first one is pending. */
+  readonly data: GoalsProgress | null;
   readonly goals: readonly GoalProgress[];
-  readonly asOf: string | null;
+  readonly metrics: boolean;
   readonly stale: boolean;
   readonly signedOut: boolean;
   readonly onRetry: () => void;
   readonly onReload: () => void;
 }) {
-  const s = summarize(goals);
-  const n = (status: keyof typeof STATUS_META) => s.byStatus[status] ?? 0;
-  // Goals and KPIs are counted once each; every status count is a count of KPIs.
-  const cells = [
-    { label: "Goals", value: s.goals, tone: "" },
-    { label: "KPIs", value: s.kpis, tone: "" },
+  const s = data ? summarize(goals) : null;
+  const n = (status: keyof typeof STATUS_META) => (s ? (s.byStatus[status] ?? 0) : null);
+  // A loaded board hides an empty optional status; while loading only the always-present ones hold a place.
+  const optional = (status: keyof typeof STATUS_META, tone: string): StripCell[] =>
+    s && n(status) ? [{ label: STATUS_META[status].short, value: n(status), tone }] : [];
+  const detail = data && metrics && hasMetricDetail(data) ? summarizeMetrics(data) : null;
+  const cells: StripCell[] = [
+    { label: "Goals", value: s?.goals ?? null, tone: "" },
+    { label: "KPIs", value: s?.kpis ?? null, tone: "" },
     { label: STATUS_META.on_track.short, value: n("on_track"), tone: "text-success" },
-    ...(n("met") ? [{ label: STATUS_META.met.short, value: n("met"), tone: "text-success" }] : []),
+    ...optional("met", "text-success"),
     { label: STATUS_META.behind.short, value: n("behind"), tone: "text-warning" },
-    ...(n("missed") ? [{ label: STATUS_META.missed.short, value: n("missed"), tone: "text-destructive" }] : []),
+    ...optional("missed", "text-destructive"),
     { label: STATUS_META.failing.short, value: n("failing"), tone: "text-destructive" },
+    // The Metrics view also counts its metrics; they hold a place while loading and drop out if the read has no detail.
+    ...(metrics && (!data || detail)
+      ? [
+          { label: "Metrics", value: detail?.metrics ?? null, tone: "" },
+          { label: "Serve no KPI", value: detail?.notServing ?? null, tone: "text-warning" },
+        ]
+      : []),
   ];
   return (
-    <div className="flex flex-wrap items-end justify-between gap-3">
-      <dl className="flex flex-wrap gap-px overflow-hidden rounded-lg border border-border/60 bg-border/60">
+    <div data-strip={data ? "ready" : "loading"} className="flex flex-wrap items-end justify-between gap-3">
+      <dl
+        {...(data ? {} : { "aria-busy": true })}
+        className="flex flex-wrap gap-px overflow-hidden rounded-lg border border-border/60 bg-border/60"
+      >
         {cells.map((c) => (
           <div
             key={c.label}
             className="flex min-w-20 flex-1 flex-col gap-1 bg-background px-3 py-3 sm:min-w-24 sm:flex-none sm:px-4"
           >
             <dt className="text-[11px] text-muted-foreground uppercase tracking-widest">{c.label}</dt>
-            <dd className={`font-semibold text-2xl tabular-nums leading-none ${c.value ? c.tone : ""}`}>{c.value}</dd>
+            <dd
+              className={`font-semibold text-2xl tabular-nums leading-none ${c.value ? c.tone : ""}`}
+              {...(c.value === null ? { "data-loading": "" } : {})}
+            >
+              {c.value === null ? (
+                <>
+                  <span aria-hidden="true" className="inline-block h-6 w-8 animate-pulse rounded bg-muted align-middle" />
+                  <span className="sr-only">Loading</span>
+                </>
+              ) : (
+                c.value
+              )}
+            </dd>
           </div>
         ))}
       </dl>
       <p className="text-muted-foreground text-xs" {...(stale ? { role: "status" } : {})}>
         {signedOut ? (
           <ReloadLink onClick={onReload} />
-        ) : stale ? (
-          <button type="button" onClick={onRetry} className="text-warning underline underline-offset-2">
-            Stale · {asOf ? formatUtcTime(asOf) : "—"}
+        ) : !data ? null : stale ? (
+          <button type="button" onClick={onRetry} className="min-h-6 text-warning underline underline-offset-2">
+            Stale · {formatUtcTime(data.asOf)}
           </button>
-        ) : asOf ? (
-          `Updated ${formatUtcTime(asOf)}`
-        ) : null}
+        ) : (
+          `Updated ${formatUtcTime(data.asOf)}`
+        )}
       </p>
     </div>
   );
@@ -279,13 +313,13 @@ function GoalRow({
   const ranked = metrics ? sortKpis(goal.kpis) : goal.kpis.map((kpi, index) => ({ kpi, index }));
   return (
     <li data-goal={goal.id}>
-      <h3 className={`flex items-center ${metrics ? "border-b border-border/60 bg-muted/40" : ""}`}>
+      <h3 className={`flex items-start md:items-center ${metrics ? "border-b border-border/60 bg-muted/40" : ""}`}>
         <button
           type="button"
           aria-expanded={expanded}
           aria-controls={bodyId}
           onClick={() => setChoice(!expanded)}
-          className="flex min-w-0 flex-1 items-center gap-3 py-3 pr-2 pl-4 text-left outline-none hover:bg-muted/30 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+          className="grid min-w-0 flex-1 grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-1 py-3 pr-2 pl-4 text-left outline-none hover:bg-muted/30 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset md:flex"
         >
           <ChevronRight
             aria-hidden="true"
@@ -294,15 +328,18 @@ function GoalRow({
           <span className={`min-w-0 flex-1 ${metrics ? "break-words font-semibold text-lg" : "truncate font-medium text-sm"}`}>
             {goal.title}
           </span>
-          <span className="shrink-0 text-muted-foreground text-xs tabular-nums">
-            {goal.kpis.length ? `${goal.kpis.length} ${goal.kpis.length === 1 ? "KPI" : "KPIs"}` : "No KPIs"}
-          </span>
-          {measured && worst && <StatusPill status={worst} />}
-          {goal.evaluateAt && (
-            <span className="hidden shrink-0 text-muted-foreground text-xs tabular-nums sm:inline">
-              {formatDate(goal.evaluateAt, true)}
+          {/* Below md the meta is a second line under the title; from md it sits beside it. */}
+          <span className="col-start-2 flex flex-wrap items-center gap-x-3 gap-y-1 md:contents">
+            <span className="shrink-0 text-muted-foreground text-xs tabular-nums">
+              {goal.kpis.length ? `${goal.kpis.length} ${goal.kpis.length === 1 ? "KPI" : "KPIs"}` : "No KPIs"}
             </span>
-          )}
+            {measured && worst && <StatusPill status={worst} />}
+            {goal.evaluateAt && (
+              <span className="shrink-0 text-muted-foreground text-xs tabular-nums">
+                {formatDate(goal.evaluateAt, true)}
+              </span>
+            )}
+          </span>
         </button>
         {!single && (
           <Link
@@ -320,14 +357,22 @@ function GoalRow({
         {goal.kpis.length ? (
           metrics ? (
             <div className="space-y-2 border-l border-border/60 pl-3 md:pl-4">
+              <h4 className="font-medium text-muted-foreground text-xs uppercase tracking-wider">KPIs</h4>
               {ranked.map(({ kpi, index }) => {
                 const key = keyOf(kpi, index);
                 const selected = open === key;
                 const detailId = `${chartId}-${index}`;
                 return (
                   <div key={key} data-kpi-block={kpi.binding.metricId}>
-                    <KpiCard kpi={kpi} open={selected} chartId={detailId} wrap variant="row"
-                      onToggle={() => setOpen(selected ? null : key)} />
+                    <MetricCard
+                      subject={kpiSubject(kpi)}
+                      nowIso={nowIso}
+                      open={selected}
+                      chartId={detailId}
+                      wrap
+                      variant="row"
+                      onToggle={() => setOpen(selected ? null : key)}
+                    />
                     {selected && <div id={detailId} className="space-y-4 py-3 pl-3">
                       <KpiChart kpi={kpi} nowIso={nowIso} />
                       {hasMetricDetail(data) ? <KpiBranch rows={servedRows(kpi, data)} nowIso={nowIso} complete={!data.servedTruncated} /> : <p className="text-muted-foreground text-sm">Serving metrics unavailable</p>}
@@ -341,9 +386,10 @@ function GoalRow({
               {ranked.map(({ kpi, index }) => {
                 const key = keyOf(kpi, index);
                 return (
-                  <KpiCard
+                  <MetricCard
                     key={key}
-                    kpi={kpi}
+                    subject={kpiSubject(kpi)}
+                    nowIso={nowIso}
                     open={open === key}
                     chartId={chartId}
                     onToggle={() => setOpen(open === key ? null : key)}
@@ -382,95 +428,5 @@ function MetricsFooter({ data }: { readonly data: GoalsProgress }) {
         </p>
       )}
     </>
-  );
-}
-
-function KpiCard({
-  kpi,
-  open,
-  chartId,
-  wrap = false,
-  variant = "card",
-  onToggle,
-}: {
-  readonly kpi: GoalKpi;
-  readonly open: boolean;
-  readonly chartId: string;
-  /** Metrics view: the title and hint wrap instead of clipping. */
-  readonly wrap?: boolean;
-  readonly variant?: "card" | "row";
-  readonly onToggle: () => void;
-}) {
-  const row = variant === "row";
-  const describedBy = useId();
-  const display = displayOf(kpi);
-  const series = cardSeries(kpi);
-  const hint = row
-    ? `${COMPARATOR_SYMBOL[kpi.binding.comparator]} ${formatValue(kpi.binding.target.value, display, kpi.binding.target.unit)}${display === "slo" ? "" : ` ${kpi.binding.target.unit}`}`
-    : cardHint(kpi, display, series);
-  const a = kpi.assessment;
-  const pending = kpi.viewState === "pending";
-  const status = a.status;
-  const unit = kpi.binding.target.unit;
-  const title = kpi.metric?.title ?? kpi.binding.metricId;
-  const number = a.value === null ? null : formatValue(a.value, display, unit);
-  const reason = reasonText(a.reason);
-  // A breached target is a fresh reading, so it stays at full strength.
-  const muted =
-    a.value !== null && (pending || a.status === "delayed" || (a.status === "failing" && a.reason !== "target_breached"));
-  const markLabel = `${title}: ${number ?? "no reading"}; ${hint}`;
-  return (
-    <div
-      data-kpi={kpi.binding.metricId}
-      data-display={display}
-      className={`relative ${row ? "rounded-md border px-3 py-3" : "flex min-h-40 flex-col gap-3 rounded-xl border bg-muted/10 p-4"} transition-colors hover:bg-muted/30 ${open ? "border-foreground/40" : "border-border/60"}`}
-    >
-      {/* The whole card is the toggle; its visible content stays outside the button. */}
-      <button
-        type="button"
-        aria-expanded={open}
-        aria-controls={open ? chartId : undefined}
-        aria-describedby={describedBy}
-        title={reason ?? undefined}
-        onClick={onToggle}
-        className="absolute inset-0 rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        <span className="sr-only">{title}</span>
-      </button>
-      <span id={describedBy} className="sr-only">
-        {[number ?? "No reading", STATUS_META[status].label, hint, reason].filter(Boolean).join(". ")}
-      </span>
-      <div aria-hidden="true" className={row ? "pointer-events-none grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-2 md:grid-cols-[minmax(0,1fr)_auto_minmax(8rem,12rem)]" : "pointer-events-none flex flex-1 flex-col gap-3"}>
-        <span
-          className={row ? "flex min-w-0 items-center gap-2 break-words font-medium text-sm" : `${wrap ? "break-words" : "line-clamp-1"} font-medium text-muted-foreground text-xs uppercase tracking-wider`}
-        >
-          {row && <ChevronRight aria-hidden="true" className={`size-4 shrink-0 ${open ? "rotate-90" : ""}`} />}
-          {title}
-        </span>
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex min-w-0 items-baseline gap-1.5">
-            <span
-              className={`font-semibold ${row ? "text-xl" : "text-3xl"} tabular-nums tracking-tight ${muted ? "text-muted-foreground" : ""}`}
-            >
-              {number ?? "—"}
-            </span>
-            {number !== null && display !== "slo" && <span className="text-muted-foreground text-xs">{unit}</span>}
-          </div>
-          <StatusPill status={status} />
-        </div>
-        <span className={`${row ? "pl-6" : "-mt-2"} ${wrap ? "" : "whitespace-nowrap"} text-muted-foreground text-xs tabular-nums`}>
-          {pending ? `${hint} · ${isDeadlineStatus(a.status) || a.value === null ? "Pending refresh" : "Pending, historical reading"}` : hint}
-        </span>
-        <div className={row ? "col-span-2 min-w-0 md:col-span-1 md:col-start-3 md:row-span-2 md:row-start-1" : "mt-auto"}>
-          {display === "progress" ? (
-            <ProgressBar fraction={progressFraction(kpi)} label={markLabel} />
-          ) : display === "slo" ? (
-            <AvailabilityStrip series={series} binding={kpi.binding} label={markLabel} />
-          ) : (
-            <Sparkline series={series} label={markLabel} />
-          )}
-        </div>
-      </div>
-    </div>
   );
 }
