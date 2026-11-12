@@ -169,11 +169,11 @@ describe("agent credentials (real Postgres)", () => {
       const key = ok(await upgradeSignedKey(store(), { userId: user }));
       await expect(
         service`INSERT INTO agent_credentials (user_id, token_hash, created_from, expires_at, renew_until)
-          VALUES (${user}, ${await hashAgentKey(key.apiKey)}, 'rotation', now(), now() + interval '1 day')`
+          VALUES (${user}, ${await hashAgentKey(key.apiKey)}, 'key_upgrade', now(), now() + interval '1 day')`
       ).rejects.toThrow(/agent_credentials_token_hash_unique/);
       await expect(
         service`INSERT INTO agent_credentials (user_id, token_hash, created_from, expires_at, renew_until)
-          VALUES (${user}, ${randomUUID()}, 'rotation', now() + interval '2 day', now() + interval '1 day')`
+          VALUES (${user}, ${randomUUID()}, 'key_upgrade', now() + interval '2 day', now() + interval '1 day')`
       ).rejects.toThrow(/agent_credentials_renew_after_expiry/);
     });
 

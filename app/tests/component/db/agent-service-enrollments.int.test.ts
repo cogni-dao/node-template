@@ -14,8 +14,8 @@
  *   - DB_CLOCK: a timestamp moves with UPDATE; nothing reads the app clock.
  *   - CONFIRMED_CODE_STAYS_SPENT: polls waiting on a credential's confirmation/revocation cannot mint a replacement.
  * Side-effects: IO (testcontainers Postgres)
- * Notes: DATABASE_SERVICE_URL = BYPASSRLS; DATABASE_URL = app role with FORCE RLS. Every `setup()` removes ALL enrollment principals first: this file is
- *   the only writer of `agent_principals.service_key`, and the caps (5 open enrollments, 25 agents) are node-wide.
+ * Notes: DATABASE_SERVICE_URL = BYPASSRLS; DATABASE_URL = app role with FORCE RLS. This file owns an isolated migrated Postgres database with app/service RLS roles. Each setup clears its service fixtures;
+ *   global5-open/25-active/250-retained limits cannot race another file's node-wide pending-cap flood.
  * Links: app/src/adapters/server/db/migrations/0041_agent_service_enrollments.sql
  */
 
@@ -24,7 +24,7 @@ import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
-import { PostgreSqlContainer } from "@testcontainers/postgresql";
+import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { randomUUID } from "node:crypto";
 import { AgentRolesError, authorizeCaller, buildNodeAiView, grantRole, revokeRole, createPostgresAgentGrantsStore, type SqlTag } from "@cogni/agent-grants";
 import { type CredentialSql, createPostgresCredentialStore, agentRolesHasRoles, hashAgentKey, confirmCredential, verifyBearer } from "@cogni/agent-grants/credentials";
@@ -37,6 +37,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 describe("agent service enrollments (real Postgres)", () => {
   let service: Sql;
   let app: Sql;
+  let providerContainer: StartedPostgreSqlContainer;
+  let providerServiceUrl: string;
   const admins: string[] = [];
   const client = () => service as unknown as CredentialSql;
 
@@ -57,11 +59,26 @@ describe("agent service enrollments (real Postgres)", () => {
     return id;
   };
 
-  beforeAll(() => {
-    if (!process.env.DATABASE_SERVICE_URL || !process.env.DATABASE_URL) throw new Error("component PostgreSQL required");
-    service = postgres(process.env.DATABASE_SERVICE_URL, { max: 8 });
-    app = postgres(process.env.DATABASE_URL, { max: 2 });
-  });
+  beforeAll(async () => {
+    // Node-wide capacity must not race another file's deliberate50-ask flood. Own this file's database and real RLS roles.
+    providerContainer = await new PostgreSqlContainer("postgres:15-alpine").start();
+    const admin = postgres(providerContainer.getConnectionUri(), { max: 1 });
+    try {
+      await promisify(execFile)(process.execPath, [resolve("../scripts/db/migrate.mjs"), resolve("src/adapters/server/db/migrations")], {
+        env: { ...process.env, DATABASE_URL: providerContainer.getConnectionUri(), NODE_NAME: "node-template-provider-fixture" }, timeout: 90000,
+      });
+      await admin.unsafe("CREATE ROLE provider_app LOGIN PASSWORD 'fixture_app_only' NOSUPERUSER NOBYPASSRLS");
+      await admin.unsafe("CREATE ROLE provider_service LOGIN PASSWORD 'fixture_service_only' NOSUPERUSER BYPASSRLS");
+      await admin.unsafe("GRANT USAGE ON SCHEMA public TO provider_app, provider_service");
+      await admin.unsafe("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO provider_app, provider_service");
+      const uri = new URL(providerContainer.getConnectionUri());
+      uri.username = "provider_service"; uri.password = "fixture_service_only";
+      providerServiceUrl = uri.toString();
+      service = postgres(providerServiceUrl, { max: 8 });
+      uri.username = "provider_app"; uri.password = "fixture_app_only";
+      app = postgres(uri.toString(), { max: 2 });
+    } finally { await admin.end({ timeout: 1 }); }
+  }, 90000);
 
   afterAll(async () => {
     await cleanup();
@@ -69,6 +86,7 @@ describe("agent service enrollments (real Postgres)", () => {
     await service?.unsafe("DELETE FROM users WHERE id = ANY($1)", [admins]);
     await service?.end({ timeout: 1 });
     await app?.end({ timeout: 1 });
+    await providerContainer?.stop();
   });
 
   const enrollmentHarness: EnrollmentConformanceHarness = {
@@ -245,7 +263,7 @@ describe("agent service enrollments (real Postgres)", () => {
       if (issued.state !== "issued") throw new Error(`expected pending issuance: ${issued.state}`);
 
       const applicationName = `enrollment-poll-${randomUUID()}`;
-      const serviceUrl = process.env.DATABASE_SERVICE_URL;
+      const serviceUrl = providerServiceUrl;
       if (!serviceUrl) throw new Error("component PostgreSQL required");
       const pollClient = postgres(serviceUrl, { max: 1, connection: { application_name: applicationName } });
       const pollStore = createPostgresEnrollmentStore(pollClient as unknown as CredentialSql);
@@ -365,7 +383,7 @@ describe("agent service enrollments (real Postgres)", () => {
       const setup = await enrollmentHarness.setup();
       const e = await startEnrollment(setup);
       const admin = await makeAdmin();
-      const serviceUrl = process.env.DATABASE_SERVICE_URL;
+      const serviceUrl = providerServiceUrl;
       if (!serviceUrl) throw new Error("component PostgreSQL required");
       const name = `deadline-writer-${randomUUID()}`;
       const other = postgres(serviceUrl, { max: 1, connection: { application_name: name } });
