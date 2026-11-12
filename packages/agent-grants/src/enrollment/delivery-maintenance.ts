@@ -10,11 +10,11 @@ export async function maintainEnrollmentDelivery(tx: SqlTag): Promise<void> {
   if (typeof observed !== "string") throw new Error("delivery_maintenance_clock_unavailable");
   // Delivery material has logical deadlines even with audit purge disabled. Identity/high-water/confirmation/consent remain untouched.
   const acceptance = await tx`WITH batch AS (SELECT id FROM agent_service_enrollments WHERE operation_id IS NOT NULL AND sealed_acceptance IS NOT NULL
-    AND expires_at<=${observed}::timestamptz ORDER BY expires_at,id LIMIT ${Math.min(5, 20 - budget.operations)} FOR UPDATE SKIP LOCKED)
+    AND expires_at<=${observed}::text::timestamptz ORDER BY expires_at,id LIMIT ${Math.min(5, 20 - budget.operations)} FOR UPDATE SKIP LOCKED)
     UPDATE agent_service_enrollments e SET sealed_acceptance=NULL FROM batch WHERE e.id=batch.id RETURNING e.id`;
   budget.operations += acceptance.length;
   const pending = await tx`WITH batch AS (SELECT id FROM agent_service_enrollments WHERE operation_id IS NOT NULL AND sealed_pending_key IS NOT NULL
-    AND (pending_expires_at<=${observed}::timestamptz OR historical_confirmed_at IS NOT NULL OR status<>'open') ORDER BY pending_expires_at,id LIMIT ${Math.min(5, 20 - budget.operations)} FOR UPDATE SKIP LOCKED)
+    AND (pending_expires_at<=${observed}::text::timestamptz OR historical_confirmed_at IS NOT NULL OR status<>'open') ORDER BY pending_expires_at,id LIMIT ${Math.min(5, 20 - budget.operations)} FOR UPDATE SKIP LOCKED)
     UPDATE agent_service_enrollments e SET sealed_pending_key=NULL FROM batch WHERE e.id=batch.id RETURNING e.id`;
   budget.operations += pending.length;
   await tx`WITH batch AS (SELECT subject,kind,hour FROM agent_service_quotas WHERE hour<floor(extract(epoch FROM clock_timestamp())/3600)::bigint-1

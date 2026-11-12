@@ -11,7 +11,7 @@ export async function maintainRequesterCustody(tx: SqlTag): Promise<void> {
   if (typeof observed !== "string") throw new Error("requester_maintenance_clock_unavailable");
   // No staged reference and no confirm authorization: safe pre-key expiration, serialized with stage by the operation row lock.
   await tx`WITH batch AS (SELECT operation_id FROM agent_service_link_operations WHERE encrypted_secrets IS NOT NULL
-    AND secret_deadline<=${observed}::timestamptz AND staged_connection_id IS NULL AND confirm_authorized_at IS NULL
+    AND secret_deadline<=${observed}::text::timestamptz AND staged_connection_id IS NULL AND confirm_authorized_at IS NULL
     ORDER BY secret_deadline,operation_id LIMIT 5 FOR UPDATE SKIP LOCKED)
     UPDATE agent_service_link_operations o SET encrypted_secrets=NULL,phase=CASE WHEN phase IN ('start_ready','start_unknown','awaiting_consent') THEN 'expired_unknown' ELSE phase END,
       state=jsonb_set(jsonb_set(state,'{phase}',to_jsonb(CASE WHEN phase IN ('start_ready','start_unknown','awaiting_consent') THEN 'expired_unknown' ELSE phase END)),'{nextAction}','"none"'),
@@ -21,7 +21,7 @@ export async function maintainRequesterCustody(tx: SqlTag): Promise<void> {
   // Lock operations before connections, exactly as stage/publication/disconnect do.
   const due =
     await tx`SELECT operation_id,state,staged_connection_id FROM agent_service_link_operations WHERE staged_connection_id IS NOT NULL
-    AND secret_deadline<=${observed}::timestamptz AND COALESCE(state->>'quarantined','false')<>'true'
+    AND secret_deadline<=${observed}::text::timestamptz AND COALESCE(state->>'quarantined','false')<>'true'
     AND phase<>'expired' ORDER BY secret_deadline,operation_id LIMIT 5 FOR UPDATE SKIP LOCKED`;
   for (const row of due) {
     const state =
@@ -52,10 +52,10 @@ async function maintainRequesterAudit(tx: SqlTag, observed: string): Promise<voi
   if (!state[0]) return;
   const cursors = typeof state[0].audit_cursors === "string" ? JSON.parse(state[0].audit_cursors) : state[0].audit_cursors;
   const cursor = cursors.requester;
-  const rows = cursor ? await tx`SELECT *,purge_after::text AS audit_cursor_at FROM agent_service_link_operations WHERE purge_after<=${observed}::timestamptz
-    AND (purge_after,operation_id)>(${cursor.at}::timestamptz,${cursor.id}::uuid)
+  const rows = cursor ? await tx`SELECT *,purge_after::text AS audit_cursor_at FROM agent_service_link_operations WHERE purge_after<=${observed}::text::timestamptz
+    AND (purge_after,operation_id)>(${cursor.at}::text::timestamptz,${cursor.id}::uuid)
     ORDER BY purge_after,operation_id LIMIT 10 FOR UPDATE SKIP LOCKED` : await tx`SELECT *,purge_after::text AS audit_cursor_at FROM agent_service_link_operations
-    WHERE purge_after<=${observed}::timestamptz ORDER BY purge_after,operation_id LIMIT 10 FOR UPDATE SKIP LOCKED`;
+    WHERE purge_after<=${observed}::text::timestamptz ORDER BY purge_after,operation_id LIMIT 10 FOR UPDATE SKIP LOCKED`;
   for (const row of rows) {
     const publicState = typeof row.state === "string" ? JSON.parse(row.state) : row.state;
     if (row.encrypted_secrets != null || publicState.quarantined === true || !row.terminal_at ||

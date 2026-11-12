@@ -52,6 +52,7 @@ export async function maintainAuthorityAudit(tx: SqlTag, batch: AuthorityBatch):
   const state = await tx`SELECT audit_cursors FROM agent_authority_maintenance WHERE id='service-enrollment' FOR UPDATE`;
   if (!state[0]) throw new Error("authority_audit_state_required");
   const cursors: Cursors = typeof state[0].audit_cursors === "string" ? JSON.parse(state[0].audit_cursors) : state[0].audit_cursors;
+  // Native clock/cursor strings bind through text: inferred timestamptz parameters use postgres.js millisecond Date serialization.
   const now = (await tx`SELECT clock_timestamp()::text AS at`)[0]?.at;
   if (typeof now !== "string") throw new Error("audit_clock_unavailable");
   const remember = (kind: keyof Cursors, rows: readonly Record<string, unknown>[]) => {
@@ -61,9 +62,9 @@ export async function maintainAuthorityAudit(tx: SqlTag, batch: AuthorityBatch):
   };
   const c = cursors.credentials;
   const credentials = c ? await tx`SELECT id,user_id,purge_after::text AS cursor_at FROM agent_credentials
-    WHERE purge_after<=${now}::timestamptz AND (purge_after,id)>(${c.at}::timestamptz,${c.id}::uuid)
+    WHERE purge_after<=${now}::text::timestamptz AND (purge_after,id)>(${c.at}::text::timestamptz,${c.id}::uuid)
     ORDER BY purge_after,id LIMIT 5` : await tx`SELECT id,user_id,purge_after::text AS cursor_at FROM agent_credentials
-    WHERE purge_after<=${now}::timestamptz ORDER BY purge_after,id LIMIT 5`;
+    WHERE purge_after<=${now}::text::timestamptz ORDER BY purge_after,id LIMIT 5`;
   for (const candidate of credentials) {
     const id = String(candidate.id), user = String(candidate.user_id);
     if (!(await tryAuditIdentity(tx, batch, user))) continue;
@@ -72,16 +73,16 @@ export async function maintainAuthorityAudit(tx: SqlTag, batch: AuthorityBatch):
     if (refs.length > 20 - batch.operations || refs.some((r) => r.purge_after == null || Date.parse(String(r.purge_after)) > Date.parse(now))) continue;
     let allLocked = true;
     for (const ref of refs) {
-      if (!(await tx`SELECT id FROM agent_service_enrollments WHERE id=${ref.id} AND purge_after<=${now}::timestamptz FOR UPDATE SKIP LOCKED`).length) allLocked = false;
+      if (!(await tx`SELECT id FROM agent_service_enrollments WHERE id=${ref.id} AND purge_after<=${now}::text::timestamptz FOR UPDATE SKIP LOCKED`).length) allLocked = false;
     }
     if (!allLocked) continue;
     const parent = await tx`SELECT c.id,(c.confirmed_at IS NULL OR (p.ever_confirmed AND p.first_confirmed_at<=c.confirmed_at)) AS summary_ready
-      FROM agent_credentials c JOIN agent_principals p ON p.user_id=c.user_id WHERE c.id=${id} AND c.purge_after<=${now}::timestamptz
-      AND c.renew_until<=${now}::timestamptz FOR UPDATE OF c SKIP LOCKED`;
+      FROM agent_credentials c JOIN agent_principals p ON p.user_id=c.user_id WHERE c.id=${id} AND c.purge_after<=${now}::text::timestamptz
+      AND c.renew_until<=${now}::text::timestamptz FOR UPDATE OF c SKIP LOCKED`;
     if (!parent.length) continue;
     if (parent[0]?.summary_ready !== true) throw new Error("confirmation_backfill_incomplete");
     const pending = await tx`SELECT id FROM agent_credentials WHERE predecessor_id=${id} AND confirmed_at IS NULL AND revoked_at IS NULL
-      AND pending_expires_at>${now}::timestamptz LIMIT 1`;
+      AND pending_expires_at>${now}::text::timestamptz LIMIT 1`;
     if (pending.length) continue;
     const children = await tx`SELECT id,user_id,predecessor_provenance_id FROM agent_credentials
       WHERE predecessor_id=${id} AND confirmed_at IS NOT NULL ORDER BY id LIMIT ${20 - counts.edges} FOR UPDATE SKIP LOCKED`;
@@ -105,18 +106,23 @@ export async function maintainAuthorityAudit(tx: SqlTag, batch: AuthorityBatch):
 
   const r = cursors.roles;
   const roles = r ? await tx`SELECT id,principal_user_id,purge_after::text AS cursor_at FROM agent_roles
-    WHERE purge_after<=${now}::timestamptz AND (purge_after,id)>(${r.at}::timestamptz,${r.id}::uuid)
+    WHERE purge_after<=${now}::text::timestamptz AND (purge_after,id)>(${r.at}::text::timestamptz,${r.id}::uuid)
     ORDER BY purge_after,id LIMIT ${Math.min(5, 20 - batch.roles)}` : await tx`SELECT id,principal_user_id,purge_after::text AS cursor_at FROM agent_roles
-    WHERE purge_after<=${now}::timestamptz ORDER BY purge_after,id LIMIT ${Math.min(5, 20 - batch.roles)}`;
+    WHERE purge_after<=${now}::text::timestamptz ORDER BY purge_after,id LIMIT ${Math.min(5, 20 - batch.roles)}`;
   for (const candidate of roles) {
     if (!(await tryAuditIdentity(tx, batch, String(candidate.principal_user_id)))) continue;
-    const rows = await tx`SELECT *,created_at::text AS created_at_exact FROM agent_roles WHERE id=${candidate.id} AND revoked_at IS NOT NULL AND purge_after<=${now}::timestamptz FOR UPDATE SKIP LOCKED`;
+    const rows = await tx`SELECT * FROM agent_roles WHERE id=${candidate.id} AND revoked_at IS NOT NULL AND purge_after<=${now}::text::timestamptz FOR UPDATE SKIP LOCKED`;
     const row = rows[0];
     if (!row) continue;
     const explicit = row.approved_by != null || row.closed_reason == null || !["enrollment_expired", "request_expired"].includes(String(row.closed_reason));
-    if (explicit && !(await tx`SELECT id FROM agent_roles WHERE principal_user_id=${row.principal_user_id} AND scope=${row.scope}
-      AND (approved_by IS NOT NULL OR (approved_by IS NULL AND revoked_at IS NOT NULL AND (closed_reason IS NULL OR closed_reason NOT IN ('enrollment_expired','request_expired'))))
-      AND (created_at,id)>(${row.created_at_exact}::timestamptz,${row.id}::uuid) ORDER BY created_at,id LIMIT 1`).length) continue;
+    if (explicit) {
+      // Select the exact current ID in PostgreSQL; a driver Date round trip loses sub-millisecond decision order.
+      const latest = await tx`SELECT id FROM agent_roles WHERE principal_user_id=${row.principal_user_id} AND scope=${row.scope}
+        AND (approved_by IS NOT NULL OR (approved_by IS NULL AND revoked_at IS NOT NULL AND (closed_reason IS NULL OR closed_reason NOT IN ('enrollment_expired','request_expired'))))
+        ORDER BY created_at DESC,id DESC LIMIT 1`;
+      if (!latest[0]) throw new Error("current_consent_control_unavailable");
+      if (latest[0].id === row.id) continue;
+    }
     counts.roles += (await tx`DELETE FROM agent_roles WHERE id=${row.id} AND revoked_at IS NOT NULL RETURNING id`).length;
     batch.roles++;
   }
@@ -124,13 +130,13 @@ export async function maintainAuthorityAudit(tx: SqlTag, batch: AuthorityBatch):
 
   const e = cursors.enrollments;
   const enrollments = e ? await tx`SELECT id,principal_user_id,purge_after::text AS cursor_at FROM agent_service_enrollments
-    WHERE purge_after<=${now}::timestamptz AND (purge_after,id)>(${e.at}::timestamptz,${e.id}::uuid)
+    WHERE purge_after<=${now}::text::timestamptz AND (purge_after,id)>(${e.at}::text::timestamptz,${e.id}::uuid)
     ORDER BY purge_after,id LIMIT ${Math.min(5, 20 - batch.operations)}` : await tx`SELECT id,principal_user_id,purge_after::text AS cursor_at FROM agent_service_enrollments
-    WHERE purge_after<=${now}::timestamptz ORDER BY purge_after,id LIMIT ${Math.min(5, 20 - batch.operations)}`;
+    WHERE purge_after<=${now}::text::timestamptz ORDER BY purge_after,id LIMIT ${Math.min(5, 20 - batch.operations)}`;
   for (const candidate of enrollments) {
     if (!(await tryAuditIdentity(tx, batch, String(candidate.principal_user_id)))) continue;
     const rows = await tx`SELECT * FROM agent_service_enrollments WHERE id=${candidate.id} AND status<>'open'
-      AND purge_after<=${now}::timestamptz AND COALESCE(original_start_exp,expires_at)<clock_timestamp() FOR UPDATE SKIP LOCKED`;
+      AND purge_after<=${now}::text::timestamptz AND COALESCE(original_start_exp,expires_at)<clock_timestamp() FOR UPDATE SKIP LOCKED`;
     const row = rows[0];
     if (!row || row.credential_id != null || row.sealed_acceptance != null || row.sealed_pending_key != null) continue;
     if (row.operation_id != null && (await tx`SELECT id FROM agent_credentials WHERE service_operation_id=${row.operation_id} LIMIT 1`).length) continue;

@@ -888,11 +888,18 @@ describe("v2 enrollment and requester SQL", () => {
     const oldOff=(await db`SELECT id FROM agent_roles WHERE principal_user_id=${user}`)[0]!.id;
     const latestOff=randomUUID(),dismiss=randomUUID();
     await db`INSERT INTO agent_roles(id,principal_user_id,scope,approved_by,granted_at,created_at,revoked_at)
-      VALUES(${latestOff},${user},'knowledge:read',${admin},clock_timestamp()-interval '120 days',date_trunc('second',clock_timestamp())-interval '110 days'+interval '0.123456 seconds',clock_timestamp()-interval '100 days')`;
-    // Ensure immutable order puts this explicit Off after the original decision despite timestamp reconstruction.
-    await db`UPDATE agent_roles SET created_at=clock_timestamp()-interval '130 days' WHERE id=${oldOff}`;
+      VALUES(${latestOff},${user},'knowledge:read',${admin},clock_timestamp()-interval '120 days',date_trunc('second',clock_timestamp())-interval '110 days'+interval '0.123456 seconds',date_trunc('second',clock_timestamp())-interval '100 days'+interval '0.654321 seconds')`;
+    // Two explicit decisions differ only below JS Date precision; PostgreSQL must own their order.
+    await db`UPDATE agent_roles SET created_at=(SELECT created_at FROM agent_roles WHERE id=${latestOff})-interval '1 microsecond' WHERE id=${oldOff}`;
     await db`INSERT INTO agent_roles(id,principal_user_id,scope,created_at,revoked_at,closed_reason)
-      VALUES(${dismiss},${user},'work:read',clock_timestamp()-interval '110 days',clock_timestamp()-interval '100 days','dismissed')`;
+      VALUES(${dismiss},${user},'work:read',clock_timestamp()-interval '110 days',date_trunc('second',clock_timestamp())-interval '100 days'+interval '0.654321 seconds','dismissed')`;
+    const seeded=await db`SELECT id,approved_by,revoked_at,closed_reason,created_at::text AS at FROM agent_roles WHERE id IN (${latestOff},${dismiss})`;
+    expect(seeded).toHaveLength(2);
+    expect(seeded.find(row=>row.id===latestOff)).toMatchObject({approved_by:admin,closed_reason:null});
+    expect(seeded.find(row=>row.id===dismiss)).toMatchObject({approved_by:null,closed_reason:'dismissed'});
+    expect(seeded.every(row=>row.revoked_at!==null)).toBe(true);
+    const exact=String(seeded.find(row=>row.id===latestOff)!.at);
+    expect((await db`SELECT created_at=${exact}::text::timestamptz AS exact FROM agent_roles WHERE id=${latestOff}`)[0]?.exact).toBe(true);
     const expiredId=randomUUID(),expiredToken=formatRevocableKey(randomBytes(32).toString('base64url'));
     await db.begin(async tx=> {
       await tx.unsafe('ALTER TABLE agent_credentials DISABLE TRIGGER USER');
@@ -910,14 +917,25 @@ describe("v2 enrollment and requester SQL", () => {
         credential_id=${expiredId},historical_confirmed_at=clock_timestamp()-interval '149 days',original_start_exp=clock_timestamp()-interval '101 days' WHERE operation_id=${proof.operationId}`;
       await tx.unsafe('ALTER TABLE agent_service_enrollments ENABLE TRIGGER agent_enrollment_v2_immutable');
     });
-    await qualifyFixtureAudit();for(let i=0;i<5;i++) await auditTick();
+    await qualifyFixtureAudit();for(let i=0;i<5;i++) {
+      await auditTick();
+      expect(await db`SELECT id FROM agent_roles WHERE id IN (${latestOff},${dismiss})`).toHaveLength(2);
+    }
     expect(await db`SELECT id FROM agent_roles WHERE id=${oldOff}`).toHaveLength(0);
     expect(await db`SELECT id FROM agent_roles WHERE id IN (${latestOff},${dismiss})`).toHaveLength(2);
     expect(await db`SELECT id FROM agent_service_enrollments WHERE operation_id=${proof.operationId}`).toHaveLength(0);
-    expect((await db`SELECT current_operation_id,current_generation,current_operation_digest,service_key FROM agent_principals WHERE user_id=${user}`)[0])
-      .toMatchObject({current_operation_id:proof.operationId,current_generation:1,current_operation_digest:proof.intentDigest,service_key:await fullServiceKey(proof.home,proof.service)});
+    const principal=(await db`SELECT current_operation_id,current_generation,current_operation_digest,service_key FROM agent_principals WHERE user_id=${user}`)[0]!;
+    expect(Number(principal.current_generation)).toBe(1);
+    expect(principal).toMatchObject({current_operation_id:proof.operationId,current_operation_digest:proof.intentDigest,service_key:await fullServiceKey(proof.home,proof.service)});
     expect(await db`SELECT id FROM agent_credentials WHERE id=${expiredId}`).toHaveLength(0);
     await expect(db`UPDATE agent_principals SET current_operation_id=NULL,current_generation=0 WHERE user_id=${user}`).rejects.toThrow();
+    // Older audit inserted behind the cursor must be reached after a precise wrap past retained controls.
+    const lateAudit=randomUUID();
+    await db`INSERT INTO agent_roles(id,principal_user_id,scope,approved_by,granted_at,created_at,revoked_at)
+      VALUES(${lateAudit},${user},'knowledge:read',${admin},clock_timestamp()-interval '120 days',clock_timestamp()-interval '130 days',clock_timestamp()-interval '101 days')`;
+    for(let i=0;i<5;i++) await auditTick();
+    expect(await db`SELECT id FROM agent_roles WHERE id=${lateAudit}`).toHaveLength(0);
+    expect(await db`SELECT id FROM agent_roles WHERE id IN (${latestOff},${dismiss})`).toHaveLength(2);
     const grants=createPostgresAgentGrantsStore(db as unknown as SqlTag);
     await grantRole(grants,{principalUserId:user,scope:'knowledge:read',approvedBy:admin,declaredScopes:['knowledge:read']});
     expect(await grants.hasLiveRole(user,'knowledge:read')).toBe(true);
@@ -948,7 +966,8 @@ describe("v2 enrollment and requester SQL", () => {
     await qualifyFixtureAudit();await auditTick();
     expect(await db`SELECT operation_id FROM agent_service_link_operations WHERE operation_id=${obsolete.linkId}`).toHaveLength(0);
     const retained=(await db`SELECT * FROM agent_service_link_operations WHERE operation_id=${compact.linkId}`)[0]!;
-    expect(retained.current).toBe(true);expect(retained.generation).toBe(1);
+    expect(retained.current).toBe(true);expect(Number(retained.generation)).toBe(1);
+    expect((await requester.read({operationId:compact.linkId,key})).generation).toBe(1);
     expect(retained.audit_compacted_at).not.toBeNull();expect(retained.encrypted_secrets).toBeNull();
     expect(Number(retained.revision)).toBeGreaterThan(a.revision);expect(Number(retained.fence)).toBeGreaterThan(0);
     expect((await requester.ensure(key)).linkId).toBe(compact.linkId);

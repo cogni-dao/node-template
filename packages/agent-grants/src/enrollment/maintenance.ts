@@ -74,7 +74,7 @@ export async function maintenanceTick(client: CredentialSql, extra?: (tx: SqlTag
           WHERE status = 'open' AND expires_at <= (SELECT clock_timestamp()) ORDER BY expires_at, id LIMIT ${expiryLimit}`;
         let batch = cursorAt == null ? await firstPage() : await tx`SELECT id, principal_user_id, expires_at::text AS cursor_expires_at
           FROM agent_service_enrollments WHERE status = 'open' AND expires_at <= (SELECT clock_timestamp())
-            AND (expires_at, id) > (${cursorAt}::timestamptz, ${cursorId}::uuid) ORDER BY expires_at, id LIMIT ${expiryLimit}`;
+            AND (expires_at, id) > (${cursorAt}::text::timestamptz, ${cursorId}::uuid) ORDER BY expires_at, id LIMIT ${expiryLimit}`;
         // Wrap only after reaching the end. Both indexed reads are bounded; at most 20 identities are attempted.
         if (batch.length === 0 && cursorAt != null) batch = await firstPage();
         let processed = 0;
@@ -104,7 +104,7 @@ export async function maintenanceTick(client: CredentialSql, extra?: (tx: SqlTag
         const last = batch[batch.length - 1];
         if (last && (typeof last.id !== "string" || typeof last.cursor_expires_at !== "string")) throw new Error("unreadable maintenance cursor");
         await tx`UPDATE agent_authority_maintenance SET oldest_due_at = ${due[0]?.expires_at ?? null},
-          cursor_expires_at = ${last?.cursor_expires_at ?? null}::timestamptz,
+          cursor_expires_at = ${last?.cursor_expires_at ?? null}::text::timestamptz,
           cursor_enrollment_id = ${last?.id ?? null}::uuid WHERE id = 'service-enrollment'`;
         return { processed, due: due.length > 0 };
   }, { processed: 0, due: true });
