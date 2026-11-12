@@ -100,7 +100,7 @@ export {
   summarize,
   worstStatus,
 } from "./goals/presentation.js";
-export { useMetricSeries, useNearViewport } from "./goals/use-metric-series.js";
+export { NEAR_VIEWPORT_MARGIN_PX, useMetricSeries, useMetricSeriesRead, useNearViewport } from "./goals/use-metric-series.js";
 export {
   goalForLabels,
   locateMetric,

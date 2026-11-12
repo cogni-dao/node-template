@@ -30,7 +30,7 @@ import { AvailabilityStrip, ProgressBar, Sparkline, StatusPill } from "./marks.j
 import type { MetricSubject } from "./metric-subject.js";
 import { flagText, formatAge, type MetricFlag, readingTitle, ROLE_META } from "./metrics-view.js";
 import { isDeadlineStatus, reasonText, STATUS_META } from "./presentation.js";
-import { useMetricSeries, useNearViewport } from "./use-metric-series.js";
+import { useMetricSeriesRead, useNearViewport } from "./use-metric-series.js";
 
 /** Why a metric is flagged, as a wrapping chip. */
 export function FlagChip({ flag }: { readonly flag: MetricFlag }) {
@@ -75,7 +75,7 @@ export function MetricCard({
   const { display, unit, title, status, target } = subject;
   // A supporting metric reads its own series, but only once its card is near the viewport.
   const cardRef = useRef<HTMLDivElement>(null);
-  const series = useMetricSeries(subject, nowIso, useNearViewport(cardRef));
+  const { series, pending: seriesPending } = useMetricSeriesRead(subject, nowIso, useNearViewport(cardRef));
   const hint = row ? (targetText(subject) ?? "No target") : subjectHint(subject, series);
   const pending = subject.viewState === "pending";
   const number = subject.value === null ? null : formatValue(subject.value, display, unit);
@@ -181,9 +181,9 @@ export function MetricCard({
           {display === "progress" && !row ? (
             <ProgressBar fraction={subjectFraction(subject)} label={markLabel} />
           ) : display === "slo" ? (
-            <AvailabilityStrip series={series} binding={target} label={markLabel} />
+            <AvailabilityStrip series={series} binding={target} label={markLabel} loading={seriesPending} />
           ) : (
-            <Sparkline series={series} label={markLabel} {...(subject.ownSeries ? { latest: subject } : {})} />
+            <Sparkline series={series} label={markLabel} loading={seriesPending} {...(subject.ownSeries ? { latest: subject } : {})} />
           )}
         </div>
       </div>

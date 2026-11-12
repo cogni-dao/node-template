@@ -90,14 +90,22 @@ export function ProgressBar({ fraction, label }: { readonly fraction: number | n
   );
 }
 
+/** A neutral shimmer where a series is still being read; not a verdict about the readings. */
+function LoadingMark() {
+  return <div data-spark="loading" className="mt-2 h-7 w-full animate-pulse rounded bg-muted/60" />;
+}
+
 /** Volume: gradient area over the series; gaps break the line. */
 export function Sparkline({
   series,
   label,
   latest,
+  loading = false,
 }: {
   readonly series: MetricHistory | null;
   readonly label: string;
+  /** The series' read has not resolved yet: draw a neutral skeleton, never the "not enough readings" mark. */
+  readonly loading?: boolean;
   /** The newest reading, drawn as the last point when it is past the series' last bucket. */
   readonly latest?: LatestReading;
 }) {
@@ -106,8 +114,9 @@ export function Sparkline({
   const values = data.flatMap((d) => (d.v === null ? [] : [d.v]));
   return (
     <div role="img" aria-label={label} className="h-10 w-full">
-      {values.length < 2 && (
-        // Not enough readings to draw a line: a neutral dashed baseline, so the slot never reads as broken.
+      {loading && <LoadingMark />}
+      {!loading && values.length < 2 && (
+        // The read resolved with too few points. Not enough readings to draw a line: a neutral dashed baseline, so the slot never reads as broken.
         <div
           data-spark="empty"
           title="Not enough readings to draw a trace"
@@ -142,17 +151,20 @@ export function AvailabilityStrip({
   series,
   binding,
   label,
+  loading = false,
 }: {
   readonly series: MetricHistory | null;
   readonly binding: Pick<KpiBinding, "comparator" | "target"> | null;
   readonly label: string;
+  readonly loading?: boolean;
 }) {
   const id = useChartId("slo");
   const data = series ? seriesPoints(series) : [];
   const values = data.flatMap((d) => (d.v === null ? [] : [d.v]));
   return (
     <div role="img" aria-label={label} className="h-10 w-full">
-      {values.length > 0 && (
+      {loading && <LoadingMark />}
+      {!loading && values.length > 0 && (
         <ChartContainer config={CHART_CONFIG} className="aspect-auto h-10 w-full">
           <BarChart id={id} data={data} margin={{ top: 2, right: 0, bottom: 0, left: 0 }} barCategoryGap={1}>
             <YAxis hide domain={yDomain("slo", values, binding?.target.value ?? null, binding?.comparator)} allowDataOverflow />

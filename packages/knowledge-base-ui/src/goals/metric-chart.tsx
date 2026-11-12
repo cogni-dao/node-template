@@ -216,7 +216,11 @@ export function MetricChart({
           </div>
         ) : values.length === 0 ? (
           <div className="flex h-full items-center justify-center text-muted-foreground text-sm">
-            {history.isPending ? "" : "No data"}
+            {history.isPending ? (
+              <div role="status" aria-label="Loading history" data-chart="loading" className="h-full w-full animate-pulse rounded-md bg-muted/40" />
+            ) : (
+              "No data"
+            )}
           </div>
         ) : (
           <ChartContainer

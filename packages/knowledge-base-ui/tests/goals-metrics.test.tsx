@@ -557,6 +557,45 @@ describe("MetricsBoard", () => {
     }
   });
 
+  it("shows a neutral loading mark, not the dashed placeholder, until the supporting metric's read resolves (and chart area never blank)", async () => {
+    const open = (client: ReturnType<typeof createGoalsClient>) => {
+      const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+      const view = render(<QueryClientProvider client={qc}><MetricsBoard client={client} initialData={fixture()} /></QueryClientProvider>);
+      const goal = view.container.querySelector('[data-goal="goal-a"]') as HTMLElement;
+      fireEvent.click(within(goal).getByRole("button", { name: "KPI red" }));
+      return { view, goal, qc, card: goal.querySelector('[data-metric="m-guard-red"]') as HTMLElement };
+    };
+    // Never near the viewport (no IntersectionObserver): the read has not fired, so the mark is loading, not "no readings".
+    const idle = open({ ...createGoalsClient(), fetchHistory: vi.fn(async (id: string) => trend(id, "items", [3, 4, 5])) });
+    expect(idle.card.querySelector('[data-spark="loading"]')).not.toBeNull();
+    expect(idle.card.querySelector('[data-spark="empty"]')).toBeNull();
+    idle.view.unmount();
+    idle.qc.clear();
+    class Visible {
+      constructor(private readonly cb: (e: { isIntersecting: boolean }[]) => void) {}
+      observe() { this.cb([{ isIntersecting: true }]); }
+      disconnect() {}
+    }
+    vi.stubGlobal("IntersectionObserver", Visible);
+    try {
+      // Read in flight: skeleton, and the open chart shows its own loading state rather than a blank area.
+      let release: (v: ReturnType<typeof trend>) => void = () => {};
+      const pending = new Promise<ReturnType<typeof trend>>((resolve) => { release = resolve; });
+      const loading = open({ ...createGoalsClient(), fetchHistory: vi.fn(() => pending) });
+      await waitFor(() => expect(loading.card.querySelector('[data-spark="loading"]')).not.toBeNull());
+      expect(loading.card.querySelector('[data-spark="empty"]')).toBeNull();
+      await waitFor(() => expect(loading.goal.querySelector('[data-chart="loading"]')).not.toBeNull());
+      // Resolved with nothing to draw: now, and only now, the dashed placeholder.
+      release(trend("m-guard-red", "items", Array.from({ length: 30 }, () => null)));
+      await waitFor(() => expect(loading.card.querySelector('[data-spark="empty"]')).not.toBeNull());
+      expect(loading.card.querySelector('[data-spark="loading"]')).toBeNull();
+      loading.view.unmount();
+      loading.qc.clear();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("pages the not-serving group at 20 like a KPI's metrics", () => {
     const unbound = Array.from({ length: 45 }, (_, i) => ({
       metric: { id: `loose-${String(i).padStart(2, "0")}`, title: `Loose ${String(i).padStart(2, "0")}`, calculatorId: "work.count@1" },
