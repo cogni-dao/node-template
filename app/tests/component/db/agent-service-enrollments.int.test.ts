@@ -226,7 +226,9 @@ describe("agent service enrollments (real Postgres)", () => {
             const pending = tx(strings, ...values) as ReturnType<SqlTag> & { cancel: () => void };
             const result = (async () => {
             const rows = await pending;
-            if (!paused && strings.join("?").includes("SELECT id, principal_user_id FROM agent_service_enrollments")) {
+            const query = strings.join("?");
+            if (!paused && /SELECT\s+id,\s*principal_user_id,\s*expires_at::text AS cursor_expires_at\s+FROM\s+agent_service_enrollments/i.test(query)
+                && rows.some((row) => row.principal_user_id === enrollment.principalUserId)) {
               paused = true; selected(); await resumed;
             }
             return rows;
