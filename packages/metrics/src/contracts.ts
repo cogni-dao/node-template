@@ -345,12 +345,39 @@ export interface MetricCalculator {
 }
 export interface MetricDefinitionsPort {
 	get(id: string): Promise<MetricDefinition | null>;
+	getMany?(ids: readonly string[]): Promise<MetricDefinition[]>;
 	list(
 		limit: number,
 		after?: string,
 	): Promise<{ items: MetricDefinition[]; nextCursor: string | null }>;
 }
 export interface MetricObservationsPort {
+	predictionReadBatch?(
+		requests: readonly {
+			metricId: string;
+			baselineObservationId: string;
+			evaluationAt: string;
+		}[],
+	): Promise<
+		readonly {
+			baseline: MetricSnapshot | null;
+			latest: MetricObservation | null;
+			lastGood: MetricObservation | null;
+			evaluation: MetricObservation | null;
+		}[]
+	>;
+	workReadBatch?(
+		requests: readonly {
+			metricId: string;
+			definitionHash: string;
+			baselineObservationId: string | null;
+		}[],
+	): Promise<
+		readonly {
+			baseline: MetricSnapshot | null;
+			latest: MetricObservation | null;
+		}[]
+	>;
 	request(
 		metricId: string,
 		requestKey: string,

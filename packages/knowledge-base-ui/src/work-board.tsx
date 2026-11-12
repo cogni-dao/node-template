@@ -23,16 +23,12 @@
 import { rankScore, type WorkItemScores } from "@cogni/work-items";
 import { type ReactElement, type ReactNode, useMemo } from "react";
 
-import {
-  Kanban,
-  KanbanBoard,
-  KanbanColumn,
-  KanbanColumnContent,
-} from "./reui-kanban.js";
+import { Kanban, KanbanBoard, KanbanColumn, KanbanColumnContent } from "./reui-kanban.js";
 import { cn } from "./cn.js";
 import { RelativeTime } from "./relative-time.js";
 import { Button } from "./ui/button.js";
 import { StatusPill, TypeIcon } from "./work-item-icons.js";
+import { WorkMetricSummary, workMetricVerdict, type WorkMetric } from "./work-metrics.js";
 
 /** The structural subset of a work item the board renders. */
 export interface WorkBoardItem {
@@ -44,6 +40,7 @@ export interface WorkBoardItem {
   readonly updatedAt?: string | null | undefined;
   readonly scores?: WorkItemScores | null | undefined;
   readonly projectId?: string | undefined;
+  readonly moves?: readonly WorkMetric[] | undefined;
 }
 
 /** What a node needs to render a card's goal pointer with its own link component. */
@@ -98,9 +95,7 @@ function defaultGoalLink(link: WorkBoardGoalLink): ReactNode {
   );
 }
 
-function firstGoal(
-  labels: readonly string[],
-): { slug: string; label: string } | undefined {
+export function firstGoal(labels: readonly string[]): { slug: string; label: string } | undefined {
   for (const label of labels) {
     const slug = GOAL_LABEL.exec(label)?.[1];
     if (slug) return { slug, label };
@@ -131,9 +126,7 @@ function loadLabel(
 }
 
 function BoardSkeleton({ className }: { readonly className: string }) {
-  return (
-    <div className={cn("animate-pulse rounded-md bg-primary/10", className)} />
-  );
+  return <div className={cn("animate-pulse rounded-md bg-primary/10", className)} />;
 }
 
 export function WorkBoard<TItem extends WorkBoardItem>({
@@ -146,137 +139,140 @@ export function WorkBoard<TItem extends WorkBoardItem>({
 }: WorkBoardProps<TItem>): ReactElement {
   const byStatus = useMemo(
     () =>
-      Object.fromEntries(
-        columns.map((column) => [column.status, [...column.items]]),
-      ) as Record<string, TItem[]>,
+      Object.fromEntries(columns.map((column) => [column.status, [...column.items]])) as Record<
+        string,
+        TItem[]
+      >,
     [columns],
   );
 
   return (
-    <Kanban
-      value={byStatus}
-      onValueChange={() => {}}
-      getItemValue={(item) => item.id}
-    >
+    <Kanban value={byStatus} onValueChange={() => {}} getItemValue={(item) => item.id}>
       <KanbanBoard
         className="flex items-start gap-4 overflow-x-auto pb-4"
         aria-label="Work board"
         role="region"
       >
-        {columns.map(({ status, items: cards, hasMore, isLoadingMore, notStarted, rowsScanned }) => (
-          <KanbanColumn
-            key={status}
-            value={status}
-            disabled
-            className="w-72 shrink-0 gap-3 rounded-xl bg-muted/30 p-3 opacity-100"
-          >
-            <div className="flex items-center justify-between gap-2 px-1">
-              <h2>
-                <StatusPill status={status} className="px-0" />
-              </h2>
-              <span
-                className="font-mono text-muted-foreground text-xs"
-                title={
-                  notStarted && cards.length === 0
-                    ? "Not loaded yet"
+        {columns.map(
+          ({ status, items: cards, hasMore, isLoadingMore, notStarted, rowsScanned }) => (
+            <KanbanColumn
+              key={status}
+              value={status}
+              disabled
+              className="w-72 shrink-0 gap-3 rounded-xl bg-muted/30 p-3 opacity-100"
+            >
+              <div className="flex items-center justify-between gap-2 px-1">
+                <h2>
+                  <StatusPill status={status} className="px-0" />
+                </h2>
+                <span
+                  className="font-mono text-muted-foreground text-xs"
+                  title={
+                    notStarted && cards.length === 0
+                      ? "Not loaded yet"
+                      : hasMore
+                        ? `${cards.length} loaded, more available`
+                        : `${cards.length} items`
+                  }
+                >
+                  {notStarted && cards.length === 0
+                    ? "–"
                     : hasMore
-                      ? `${cards.length} loaded, more available`
-                      : `${cards.length} items`
-                }
-              >
-                {notStarted && cards.length === 0
-                  ? "–"
-                  : hasMore
-                    ? `${cards.length}+`
-                    : cards.length}
-              </span>
-            </div>
-            <KanbanColumnContent value={status} className="min-h-40 gap-3">
-              {isLoading ? (
-                <>
-                  <BoardSkeleton className="h-32 rounded-lg" />
-                  <BoardSkeleton className="h-28 rounded-lg" />
-                </>
-              ) : cards.length === 0 ? (
-                <p className="rounded-lg border border-dashed px-3 py-8 text-center text-muted-foreground text-xs">
-                  {notStarted
-                    ? "Not loaded yet"
-                    : hasMore
-                      ? "No matches in the rows searched so far"
-                      : "No items"}
-                </p>
-              ) : (
-                cards.map((item) => {
-                  const score = rankScore(item.scores);
-                  const goal = firstGoal(item.labels);
-                  return (
-                    <div
-                      key={item.id}
-                      data-slot="kanban-item"
-                      className="relative flex flex-col gap-3 rounded-lg border bg-card p-4 shadow-xs transition-colors focus-within:ring-2 focus-within:ring-ring hover:bg-accent/40"
-                    >
-                      {/* One card, one hover/focus surface: the button stretches over the
-                          whole card; only the goal link sits above it. */}
-                      <button
-                        type="button"
-                        onClick={() => onOpenItem(item)}
-                        className="flex w-full flex-col gap-3 text-left after:absolute after:inset-0 after:rounded-lg focus-visible:outline-none"
-                        aria-label={`${item.id}: ${item.title}`}
+                      ? `${cards.length}+`
+                      : cards.length}
+                </span>
+              </div>
+              <KanbanColumnContent value={status} className="min-h-40 gap-3">
+                {isLoading ? (
+                  <>
+                    <BoardSkeleton className="h-32 rounded-lg" />
+                    <BoardSkeleton className="h-28 rounded-lg" />
+                  </>
+                ) : cards.length === 0 ? (
+                  <p className="rounded-lg border border-dashed px-3 py-8 text-center text-muted-foreground text-xs">
+                    {notStarted
+                      ? "Not loaded yet"
+                      : hasMore
+                        ? "No matches in the rows searched so far"
+                        : "No items"}
+                  </p>
+                ) : (
+                  cards.map((item) => {
+                    const score = rankScore(item.scores);
+                    const goal = firstGoal(item.labels);
+                    return (
+                      <div
+                        key={item.id}
+                        data-slot="kanban-item"
+                        className="relative flex flex-col gap-3 rounded-lg border bg-card p-4 shadow-xs transition-colors focus-within:ring-2 focus-within:ring-ring hover:bg-accent/40"
                       >
-                        <span className="flex w-full items-center justify-between gap-2">
-                          <span
-                            className="shrink-0 font-mono text-muted-foreground text-xs"
-                            title="Rank score"
-                          >
-                            {score === undefined
-                              ? "Unscored"
-                              : `Rank ${score.toFixed(1)}`}
-                          </span>
-                          <span className="flex items-center gap-2">
-                            <TypeIcon type={item.type} />
-                            <span className="font-mono text-muted-foreground text-xs">
-                              {item.id}
+                        {/* One card, one hover/focus surface: the button stretches over the
+                          whole card; only the goal link sits above it. */}
+                        <button
+                          type="button"
+                          onClick={() => onOpenItem(item)}
+                          className="flex w-full flex-col gap-3 text-left after:absolute after:inset-0 after:rounded-lg focus-visible:outline-none"
+                          aria-label={`${item.id}: ${item.title}${item.moves?.[0] ? `, ${item.moves[0].current?.metricTitle ?? item.moves[0].metricId}: ${workMetricVerdict(item.moves[0])}` : ""}`}
+                        >
+                          <span className="flex w-full items-center justify-between gap-2">
+                            <span
+                              className="shrink-0 font-mono text-muted-foreground text-xs"
+                              title="Rank score"
+                            >
+                              {score === undefined ? "Unscored" : `Rank ${score.toFixed(1)}`}
+                            </span>
+                            <span className="flex items-center gap-2">
+                              <TypeIcon type={item.type} />
+                              <span className="font-mono text-muted-foreground text-xs">
+                                {item.id}
+                              </span>
                             </span>
                           </span>
-                        </span>
-                        <span className="line-clamp-3 font-medium text-sm leading-relaxed">
-                          {item.title}
-                        </span>
-                      </button>
-                      <div className="flex items-center justify-between gap-3 text-muted-foreground text-xs">
-                        <span className="flex min-w-0 flex-wrap gap-1">
-                          {goal
-                            ? renderGoalLink({
-                                slug: goal.slug,
-                                label: goal.label,
-                                href: goalHref(goal.slug),
-                                className: GOAL_LINK_CLASS,
-                              })
-                            : null}
-                        </span>
-                        <span className="shrink-0">
-                          Updated <RelativeTime iso={updatedIso(item.updatedAt)} />
-                        </span>
+                          <span className="line-clamp-3 font-medium text-sm leading-relaxed">
+                            {item.title}
+                          </span>
+                          {item.moves?.[0] && <WorkMetricSummary move={item.moves[0]} />}
+                        </button>
+                        <div className="flex items-center justify-between gap-3 text-muted-foreground text-xs">
+                          <span className="flex min-w-0 flex-wrap gap-1">
+                            {goal
+                              ? renderGoalLink({
+                                  slug: goal.slug,
+                                  label: goal.label,
+                                  href: goalHref(goal.slug),
+                                  className: GOAL_LINK_CLASS,
+                                })
+                              : null}
+                          </span>
+                          <span className="shrink-0">
+                            Updated <RelativeTime iso={updatedIso(item.updatedAt)} />
+                          </span>
+                        </div>
                       </div>
-                    </div>
-                  );
-                })
-              )}
-              {!isLoading && (hasMore || notStarted) ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={isLoadingMore === true}
-                  aria-label={`${notStarted ? "Load" : cards.length === 0 ? "Search further" : "Load more"} ${status}`}
-                  onClick={() => onLoadMore(status)}
-                >
-                  {loadLabel(isLoadingMore === true, notStarted === true, cards.length, rowsScanned)}
-                </Button>
-              ) : null}
-            </KanbanColumnContent>
-          </KanbanColumn>
-        ))}
+                    );
+                  })
+                )}
+                {!isLoading && (hasMore || notStarted) ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={isLoadingMore === true}
+                    aria-label={`${notStarted ? "Load" : cards.length === 0 ? "Search further" : "Load more"} ${status}`}
+                    onClick={() => onLoadMore(status)}
+                  >
+                    {loadLabel(
+                      isLoadingMore === true,
+                      notStarted === true,
+                      cards.length,
+                      rowsScanned,
+                    )}
+                  </Button>
+                ) : null}
+              </KanbanColumnContent>
+            </KanbanColumn>
+          ),
+        )}
       </KanbanBoard>
     </Kanban>
   );
