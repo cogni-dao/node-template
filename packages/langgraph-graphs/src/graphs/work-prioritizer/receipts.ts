@@ -14,7 +14,7 @@ import {
 import { z } from "zod";
 
 export const ObservedMoves = z.array(
-  z.object({ metricId: z.string(), direction: z.string() }),
+  z.object({ metricId: z.string(), direction: z.string().nullable() }),
 );
 const Goal = z.object({
   id: z.string(),
