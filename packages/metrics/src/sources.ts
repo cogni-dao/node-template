@@ -801,7 +801,15 @@ const EDIT_COLUMNS = {
 
 /**
  * The window's commits: the hashes in main's history (`dolt_log`) whose commit
- * date is in [start, end), oldest first. Dolt turns a filter on a diff table's
+ * date is in [start, end), oldest first, merge commits left out. A merge
+ * commit's diff rows are taken against its second parent, the contribution
+ * branch's base, so it repeats every main edit since the branch was cut: it
+ * costs a diff of that whole span and adds no edit its branch commits do not
+ * already carry (native Doltgres 0.57.3, 140 merges in 1,700 commits: the
+ * work-item diff took 2.5x as long and returned 3.3x the rows). A merge is a
+ * commit with a second parent in `dolt_commit_ancestors`; a correlated or
+ * `NOT IN` filter there is unusable (minutes, "plan is not resolved"), a LEFT
+ * JOIN to the small second-parent set is not. Dolt turns a filter on a diff table's
  * `to_commit` into an index lookup but never pushes a date filter down, so the
  * diff statement below takes these hashes as a literal list of `to_commit`
  * tests and its cost follows the window, not the whole history. Like the other statements it
@@ -812,7 +820,7 @@ export function noInlineHistoryWindowCommitsSql(window: {
 	start: string;
 	end: string;
 }): string {
-	return `WITH w AS (SELECT l.commit_hash FROM dolt_log l WHERE l.date >= '${doltUtc(window.start)}' AND l.date < '${doltUtc(window.end)}' ORDER BY l.date, l.commit_hash LIMIT ${NO_INLINE_HISTORY_MAX_ROWS + 1}), totals AS (SELECT COUNT(*) AS n FROM w) SELECT NOW() AS as_of, t.n, w.commit_hash FROM totals t LEFT JOIN w ON t.n <= ${NO_INLINE_HISTORY_MAX_ROWS} ORDER BY w.commit_hash`;
+	return `WITH w AS (SELECT l.commit_hash FROM dolt_log l LEFT JOIN (SELECT commit_hash FROM dolt_commit_ancestors WHERE parent_index = 1) m ON m.commit_hash = l.commit_hash WHERE m.commit_hash IS NULL AND l.date >= '${doltUtc(window.start)}' AND l.date < '${doltUtc(window.end)}' ORDER BY l.date, l.commit_hash LIMIT ${NO_INLINE_HISTORY_MAX_ROWS + 1}), totals AS (SELECT COUNT(*) AS n FROM w) SELECT NOW() AS as_of, t.n, w.commit_hash FROM totals t LEFT JOIN w ON t.n <= ${NO_INLINE_HISTORY_MAX_ROWS} ORDER BY w.commit_hash`;
 }
 
 /**
@@ -830,9 +838,12 @@ export function noInlineHistoryWindowCommitsSql(window: {
  * collapses repeats among these in-window rows. Scope and fixture exclusions
  * read the row as of that commit. The log joins are LEFT joins, so a missing
  * commit row never drops a diff row. The inner LIMIT reads one row past the row
- * cap; like the brief statement it counts rows (`n`) and the bytes of its capped
- * text and joins the rows in only while both are inside the caps, so the
- * database never sends a result over a cap.
+ * cap; it counts rows (`n`) and the bytes of its capped text in the same pass
+ * as the rows (window totals; a second reference to the CTE made Doltgres
+ * 0.57.3 evaluate the whole diff twice, about 2x the cost) and sends the rows
+ * only while both are inside the caps. Over a cap it sends the first row alone,
+ * so the totals still arrive and the database never sends a result over a cap.
+ * No diff row at all sends no row: `n` is then 0.
  */
 export function noInlineHistoryEditsSql(
 	table: EditTable,
@@ -876,7 +887,7 @@ export function noInlineHistoryEditsSql(
 			? "LEFT JOIN dolt_log l ON l.commit_hash = d.to_commit"
 			: "LEFT JOIN dolt_log l ON l.commit_hash = d.to_commit LEFT JOIN knowledge_contribution_commits c ON c.commit_hash = d.to_commit";
 	const bytes = text.map((c) => `${c}_bytes`).join(" + ");
-	return `WITH diffs AS (SELECT d.to_id AS id, d.to_commit AS commit_hash, CAST(d.to_commit_date AS TEXT) AS at, d.diff_type, ${reason}, ${text.map(capped).join(", ")}, ${text.map(size).join(", ")}, (${text.map(over).join(" OR ")}) AS oversize FROM ${diff} d ${join} WHERE d.to_commit <> 'WORKING' AND d.diff_type = 'modified' AND (${commits.map((h) => `d.to_commit = '${h}'`).join(" OR ")}) AND (${changed}) AND ${scope} ORDER BY d.to_id, d.to_commit_date LIMIT ${NO_INLINE_HISTORY_MAX_ROWS + 1}), totals AS (SELECT COUNT(*) AS n, CAST(COALESCE(SUM(${bytes}), 0) AS BIGINT) AS bytes FROM diffs) SELECT NOW() AS as_of, t.n, t.bytes, s.id, s.commit_hash, s.at, s.diff_type, s.reason_message, ${text.map((c) => `s.${c}`).join(", ")}, s.oversize FROM totals t LEFT JOIN diffs s ON t.n <= ${NO_INLINE_HISTORY_MAX_ROWS} AND t.bytes <= ${NO_INLINE_HISTORY_MAX_BYTES} ORDER BY s.id, s.at, s.commit_hash`;
+	return `WITH diffs AS (SELECT d.to_id AS id, d.to_commit AS commit_hash, CAST(d.to_commit_date AS TEXT) AS at, d.diff_type, ${reason}, ${text.map(capped).join(", ")}, ${text.map(size).join(", ")}, (${text.map(over).join(" OR ")}) AS oversize FROM ${diff} d ${join} WHERE d.to_commit <> 'WORKING' AND d.diff_type = 'modified' AND (${commits.map((h) => `d.to_commit = '${h}'`).join(" OR ")}) AND (${changed}) AND ${scope} ORDER BY d.to_id, d.to_commit_date LIMIT ${NO_INLINE_HISTORY_MAX_ROWS + 1}), t AS (SELECT s.*, ROW_NUMBER() OVER (ORDER BY s.id, s.at, s.commit_hash) AS rn, COUNT(*) OVER () AS n, CAST(COALESCE(SUM(${bytes}) OVER (), 0) AS BIGINT) AS bytes FROM diffs s) SELECT NOW() AS as_of, t.n, t.bytes, t.id, t.commit_hash, t.at, t.diff_type, t.reason_message, ${text.map((c) => `t.${c}`).join(", ")}, t.oversize FROM t WHERE (t.n <= ${NO_INLINE_HISTORY_MAX_ROWS} AND t.bytes <= ${NO_INLINE_HISTORY_MAX_BYTES}) OR t.rn = 1 ORDER BY t.id, t.at, t.commit_hash`;
 }
 
 /** The class of a thrown value, safe to publish: never its message or any row content. */
@@ -1017,6 +1028,7 @@ async function readEditsOf(
 	table: EditTable,
 	window: { start: string; end: string },
 	commits: string[],
+	windowAsOf: string | null,
 	read: Read,
 	timing?: (update: EditsTimingUpdate) => void,
 ): Promise<EditRead> {
@@ -1036,7 +1048,19 @@ async function readEditsOf(
 		return failed("source_failed", null, [result.error]);
 	const rows = result.rows;
 	const first = rows[0];
-	if (!first) return failed("incomplete_or_invalid_source", null);
+	// The statement sends no row when no diff row qualifies: no edit in this
+	// table. The window read's own `as_of` stands in for the missing row's.
+	if (!first) {
+		try {
+			timing?.({
+				stage: table === "work-items" ? "workDiff" : "knowledgeDiff",
+				phase: "counts",
+				rows: 0,
+				bytes: 0,
+			});
+		} catch {}
+		return { ok: true, edits: [], mergeRepeats: 0, asOf: windowAsOf };
+	}
 	const asOf = first.as_of
 		? new Date(first.as_of as string).toISOString()
 		: null;
@@ -1186,6 +1210,7 @@ export async function readNoInlineHistoryEdits(
 					table,
 					{ start, end },
 					inWindow.commits,
+					inWindow.asOf,
 					read,
 					timing,
 				)

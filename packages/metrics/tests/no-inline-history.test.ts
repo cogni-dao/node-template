@@ -237,8 +237,9 @@ const atomEdit = (id: string, at: string, over: Row = {}): Row => ({
 });
 const IN = "2026-11-05 10:00:00";
 const totals = (rows: Row[], bytes = 1000) =>
+	// The engine sends no row at all when no diff row qualifies.
 	rows.length === 0
-		? [{ as_of: ASOF, n: "0", bytes: "0", id: null }]
+		? []
 		: rows.map((r) => ({ as_of: ASOF, n: String(rows.length), bytes: String(bytes), ...r }));
 
 /** The window statement's answer: one row per commit hash, or the totals row alone for none. */
@@ -453,6 +454,28 @@ describe("no-inline-history@1 edits read", () => {
 			expect((await edits([], [])).sample).toMatchObject({ complete: false, reason: "zero_denominator" });
 		});
 
+		it("reads a statement that sends no row as no edit, with the window read's as_of", async () => {
+			const { sql, queries } = fakeSql((text) => (WINDOW(text) ? windowRows([HASH_A]) : []));
+			const sample = await readNoInlineHistoryEdits(sql, "count", window, read);
+			expect(sample).toMatchObject({ complete: true, value: 0, unit: "edits" });
+			expect(queries).toHaveLength(3);
+			expect(sample.sourceWatermarks).toEqual([
+				{ source: "node.work_items", asOf: new Date(ASOF).toISOString() },
+				{ source: "node.knowledge", asOf: new Date(ASOF).toISOString() },
+			]);
+		});
+
+		it("fails closed on the first row alone that an over-cap statement sends", async () => {
+			const { sql } = fakeSql((text) =>
+				WINDOW(text)
+					? windowRows([HASH_A])
+					: [{ as_of: ASOF, n: String(NO_INLINE_HISTORY_MAX_ROWS + 1), bytes: "10", ...itemEdit("task.1", IN) }],
+			);
+			const sample = await readNoInlineHistoryEdits(sql, "count", window, read);
+			expect(sample).toMatchObject({ complete: false, reason: "incomplete_or_invalid_source" });
+			expect(sample.evidenceRefs.join()).toContain("cap_hit");
+		});
+
 		it("fails closed above the edit cap for either output", async () => {
 			const rows = Array.from({ length: NO_INLINE_HISTORY_MAX_EDITS + 1 }, (_, i) => itemEdit(`task.${i}`, IN));
 			for (const output of ["share", "count"] as const) {
@@ -599,7 +622,13 @@ describe("no-inline-history@1 edits read", () => {
 			expect(text).toContain(`t.bytes <= ${NO_INLINE_HISTORY_MAX_BYTES}`);
 			expect(text).toContain("> 100000 THEN NULL");
 			expect(text).toContain("CAST(COALESCE(SUM(");
-			expect(text).toContain("ORDER BY s.id, s.at, s.commit_hash");
+			// One pass: the totals are window functions over the one reference to the CTE, never a second scan of the diff.
+			expect(text.match(/FROM diffs/g)).toHaveLength(1);
+			expect(text).toContain("COUNT(*) OVER () AS n");
+			expect(text).toContain(") OVER (), 0) AS BIGINT) AS bytes");
+			// Over a cap the first row alone carries the totals.
+			expect(text).toContain("OR t.rn = 1 ORDER BY t.id, t.at, t.commit_hash");
+			expect(text).not.toContain("LEFT JOIN diffs");
 			expect(text).not.toContain(";");
 			expect(text).not.toMatch(/\b(INSERT|UPDATE|DELETE|DROP)\b/i);
 		});
@@ -627,7 +656,9 @@ describe("no-inline-history@1 edits read", () => {
 		it("selects the window's commits from main's log by UTC commit date, one row past the cap", () => {
 			const text = noInlineHistoryWindowCommitsSql(window);
 			expect(text.startsWith("WITH w AS")).toBe(true);
-			expect(text).toContain("FROM dolt_log l WHERE l.date >= '2026-11-02 12:00:00.000' AND l.date < '2026-11-09 12:00:00.000'");
+			expect(text).toContain("FROM dolt_log l LEFT JOIN (SELECT commit_hash FROM dolt_commit_ancestors WHERE parent_index = 1) m ON m.commit_hash = l.commit_hash WHERE m.commit_hash IS NULL AND l.date >= '2026-11-02 12:00:00.000' AND l.date < '2026-11-09 12:00:00.000'");
+			// A merge diffs against the branch base: its cost and rows repeat main's edits. A NOT IN or correlated filter cannot be planned or runs for minutes.
+			expect(text).not.toMatch(/NOT IN|NOT EXISTS/);
 			expect(text).toContain(`LIMIT ${NO_INLINE_HISTORY_MAX_ROWS + 1}`);
 			expect(text).toContain(`t.n <= ${NO_INLINE_HISTORY_MAX_ROWS}`);
 			expect(text).not.toContain("dolt_diff");
@@ -931,7 +962,7 @@ describe("no-inline-history@1 in the goal-metric service", () => {
 		"reports %s errors without leaking messages",
 		async (stage) => {
 			const target = {
-				windowCommits: "dolt_log l WHERE",
+				windowCommits: "dolt_commit_ancestors",
 				workDiff: "dolt_diff_work_items",
 				knowledgeDiff: "dolt_diff_knowledge",
 			}[stage];
@@ -960,7 +991,7 @@ describe("no-inline-history@1 in the goal-metric service", () => {
 					resolve = r;
 				});
 				const needles = {
-					windowCommits: "dolt_log l WHERE",
+					windowCommits: "dolt_commit_ancestors",
 					workDiff: "dolt_diff_work_items",
 					knowledgeDiff: "dolt_diff_knowledge",
 				};
