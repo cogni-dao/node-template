@@ -92,12 +92,23 @@ export async function readGoalsProgress(deps: {
 	// The served annex never fails the goal read: an outage degrades it to unavailable.
 	let serving: Awaited<ReturnType<MetricService["serving"]>> | null = null;
 	let servedUnavailable: string | null = null;
-	// These reads are independent. Keep ownership until both native reads settle.
 	deps.signal?.throwIfAborted();
-	const [goalRead, servedRead] = await Promise.allSettled([
-		deps.goals.listGoals(),
-		deps.metrics?.serving(deps.signal) ?? Promise.resolve(null),
-	]);
+	// Only pooled ports may overlap independent reads; retain both until settled.
+	const readServing = () =>
+		deps.metrics?.serving(deps.signal) ?? Promise.resolve(null);
+	let goalRead: PromiseSettledResult<GoalSubject[]>;
+	let servedRead: PromiseSettledResult<Awaited<ReturnType<typeof readServing>>>;
+	if (deps.pooledGoalReads) {
+		[goalRead, servedRead] = await Promise.allSettled([
+			deps.goals.listGoals(),
+			readServing(),
+		]);
+	} else {
+		[goalRead] = await Promise.allSettled([deps.goals.listGoals()]);
+		if (goalRead.status === "rejected") throw goalRead.reason;
+		deps.signal?.throwIfAborted();
+		[servedRead] = await Promise.allSettled([readServing()]);
+	}
 	if (goalRead.status === "rejected") throw goalRead.reason;
 	const goals = goalRead.value;
 	if (servedRead.status === "fulfilled") serving = servedRead.value;

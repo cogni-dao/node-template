@@ -2265,6 +2265,7 @@ it("retains goal admission until the parallel serving branch settles after goal 
 				knowledge: () => port,
 				metrics: () => ({ serving }) as never,
 				environment: "test",
+				pooledGoalReads: true,
 			});
 		for (let i = 0; i < 4; i++) {
 			const failed = make()().catch((error) => error);
@@ -2321,6 +2322,63 @@ it("stops native active-goal fan-out after the metric deadline", async () => {
 	} finally {
 		vi.useRealTimers();
 	}
+});
+
+it.each([undefined, false, true])(
+	"initial reads respect pooled opt-in %s",
+	async (pooledGoalReads) => {
+		let finish!: (value: never[]) => void;
+		const listGoals = vi.fn(
+			() =>
+				new Promise<never[]>((resolve) => {
+					finish = resolve;
+				}),
+		);
+		const serving = vi.fn(async () => ({
+			items: [],
+			unbound: [],
+			truncated: false,
+		}));
+		const pending = readGoalsProgress({
+			environment: "test",
+			pooledGoalReads,
+			goals: {
+				listGoals,
+				hypotheses: async () => ({ items: [], more: false }),
+			},
+			metrics: { serving } as never,
+		});
+		expect(serving).toHaveBeenCalledTimes(pooledGoalReads ? 1 : 0);
+		finish([]);
+		await pending;
+		expect(serving).toHaveBeenCalledTimes(1);
+	},
+);
+
+it("does not start serving after cancellation of a reserved goal read", async () => {
+	const controller = new AbortController();
+	let finish!: (value: never[]) => void;
+	const serving = vi.fn(async () => ({
+		items: [],
+		unbound: [],
+		truncated: false,
+	}));
+	const pending = readGoalsProgress({
+		environment: "test",
+		signal: controller.signal,
+		goals: {
+			listGoals: () =>
+				new Promise<never[]>((resolve) => {
+					finish = resolve;
+				}),
+			hypotheses: async () => ({ items: [], more: false }),
+		},
+		metrics: { serving } as never,
+	});
+	controller.abort();
+	finish([]);
+	await expect(pending).rejects.toThrow();
+	expect(serving).not.toHaveBeenCalled();
 });
 
 it("bounds pooled goal reads at two, preserves complete order, and settles siblings on failure", async () => {
