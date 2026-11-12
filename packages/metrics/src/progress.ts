@@ -65,6 +65,8 @@ export async function readGoalsProgress(deps: {
 	environment: string;
 	now?: () => Date;
 	signal?: AbortSignal;
+	/** Opt in only for pooled read ports, never a reserved write connection. */
+	pooledGoalReads?: boolean;
 }): Promise<GoalsProgress> {
 	const now = deps.now ?? deps.metrics?.now ?? (() => new Date());
 	const at = now();
@@ -110,7 +112,7 @@ export async function readGoalsProgress(deps: {
 			boundKpis.add(b.metricId);
 	// KPIs a goal binds; `boundKpis` adds the ones only a bet binds, below.
 	const goalKpis = new Set(boundKpis);
-	for (const goal of goals) {
+	const readGoal = async (goal: GoalSubject): Promise<GoalProgress> => {
 		deps.signal?.throwIfAborted();
 		const configured = parseBindings(goal.kpiBindings);
 		const kpis: GoalProgress["kpis"] = [];
@@ -217,7 +219,7 @@ export async function readGoalsProgress(deps: {
 			deps.signal?.throwIfAborted();
 			hypothesesUnavailable = true;
 		}
-		items.push({
+		return {
 			id: goal.id,
 			title: goal.title,
 			evaluateAt: goal.evaluateAt,
@@ -226,7 +228,21 @@ export async function readGoalsProgress(deps: {
 			hypotheses,
 			moreHypotheses,
 			hypothesesUnavailable,
-		});
+		};
+	};
+	// At most two goals own reads concurrently, regardless of list size. Each
+	// retains its KPI order and full hypothesis output. Wait for failed siblings
+	// before releasing the outer native-read admission permit.
+	const width = deps.pooledGoalReads ? 2 : 1;
+	for (let offset = 0; offset < goals.length; offset += width) {
+		deps.signal?.throwIfAborted();
+		const settled = await Promise.allSettled(
+			goals.slice(offset, offset + width).map(readGoal),
+		);
+		for (const result of settled) {
+			if (result.status === "rejected") throw result.reason;
+			items.push(result.value);
+		}
 	}
 	// A metric serving a KPI no goal binds stays visible and assessed: absent is red.
 	const orphans: MetricOrphan[] = [];

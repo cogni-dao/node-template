@@ -14,7 +14,7 @@ export const runtime = "nodejs";
 export const GET = wrapRouteHandlerWithLogging(
 	{ routeId: "metrics.goalsRead", auth: { mode: "required", getSessionUser } },
 	async (ctx, _request, user) => {
-    const started=Date.now();
+		const started = Date.now();
 		if (!user)
 			return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 		try {
@@ -30,12 +30,30 @@ export const GET = wrapRouteHandlerWithLogging(
 						(n, g) => n + g.hypotheses.length,
 						0,
 					),
-					outcome: "success", status: result.status, durationMs: Date.now()-started,
+					outcome: "success",
+					status: result.status,
+					durationMs: Date.now() - started,
 				});
-			} else { logEvent(ctx.log, EVENT_NAMES.GOALS_PROGRESS_READ, { reqId:ctx.reqId, routeId:ctx.routeId, status:result.status, durationMs:Date.now()-started, outcome:"error", errorCode:"metrics_unavailable" }); }
+			} else {
+				logEvent(ctx.log, EVENT_NAMES.GOALS_PROGRESS_READ, {
+					reqId: ctx.reqId,
+					routeId: ctx.routeId,
+					status: result.status,
+					durationMs: Date.now() - started,
+					outcome: "error",
+					errorCode: result.body.error,
+				});
+			}
 			return metricResponse(result);
 		} catch (error) {
-      logEvent(ctx.log, EVENT_NAMES.GOALS_PROGRESS_READ, { reqId:ctx.reqId, routeId:ctx.routeId, status:503, durationMs:Date.now()-started, outcome:"error", errorCode:"metrics_unavailable" });
+			logEvent(ctx.log, EVENT_NAMES.GOALS_PROGRESS_READ, {
+				reqId: ctx.reqId,
+				routeId: ctx.routeId,
+				status: 503,
+				durationMs: Date.now() - started,
+				outcome: "error",
+				errorCode: "metrics_unavailable",
+			});
 			return metricHttpError(error);
 		}
 	},

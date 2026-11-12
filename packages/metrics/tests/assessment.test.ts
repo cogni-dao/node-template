@@ -74,7 +74,13 @@ it("rejects malformed persisted observation times across direct readers", async 
 		store.history("ratio", "h", 1),
 		store.lastGood("ratio", "h"),
 		store.get(fresh.id),
-		store.at("ratio", "h", NOW.toISOString(), 7200),
+		store.at("ratio", "h", NOW.toISOString(), 7200, {
+			calculatorVersion: "work.convergence@1",
+			paramsHash: "p",
+			unit: "ratio",
+			windowSeconds: 0,
+			baselineEnd: null,
+		}),
 		store.snapshot(fresh.id),
 		store.scheduledAttempts("ratio", "h", fresh.window.end),
 	];
@@ -399,7 +405,7 @@ describe("work page database batch", () => {
 				evaluationAt: NOW.toISOString(),
 			},
 		]);
-		expect(batch).toHaveBeenCalledOnce();
+		expect(batch).toHaveBeenCalledTimes(2);
 		expect(result[0]?.assessment).toMatchObject({
 			status: "met",
 			observationId: due.id,
@@ -452,7 +458,7 @@ describe("work page database batch", () => {
 			observationId: null,
 			value: null,
 		});
-		expect(batch).toHaveBeenCalledOnce();
+		expect(batch).toHaveBeenCalledTimes(2);
 	});
 	it("never requests observations for a denied metric", async () => {
 		const definition = {
@@ -2277,4 +2283,60 @@ it("stops native active-goal fan-out after the metric deadline", async () => {
 	} finally {
 		vi.useRealTimers();
 	}
+});
+
+it("bounds pooled goal reads at two, preserves complete order, and settles siblings on failure", async () => {
+	let active = 0,
+		maximum = 0,
+		released = 0;
+	const goals = Array.from({ length: 5 }, (_, i) => ({
+		id: `goal-${i}`,
+		title: `Goal ${i}`,
+		evaluateAt: null,
+		kpiBindings: [],
+	}));
+	const read = await readGoalsProgress({
+		environment: "test",
+		metrics: undefined,
+		pooledGoalReads: true,
+		goals: {
+			listGoals: async () => goals,
+			hypotheses: async () => {
+				active++;
+				maximum = Math.max(maximum, active);
+				await new Promise((resolve) => setTimeout(resolve, 1));
+				active--;
+				released++;
+				return { items: [], more: false };
+			},
+		},
+	});
+	expect(read.goals.map((g) => g.id)).toEqual(goals.map((g) => g.id));
+	expect(maximum).toBe(2);
+	expect(active).toBe(0);
+	expect(released).toBe(5);
+	// Cancellation while two native hypothesis reads are running must await both.
+	const controller = new AbortController();
+	active = 0;
+	released = 0;
+	const pending = readGoalsProgress({
+		environment: "test",
+		metrics: undefined,
+		pooledGoalReads: true,
+		signal: controller.signal,
+		goals: {
+			listGoals: async () => goals,
+			hypotheses: async () => {
+				active++;
+				if (active === 2) controller.abort();
+				await new Promise((resolve) => setTimeout(resolve, 1));
+				active--;
+				released++;
+				return { items: [], more: false };
+			},
+		},
+	});
+	await expect(pending).rejects.toThrow();
+	expect(active).toBe(0);
+	expect(released).toBe(2);
 });

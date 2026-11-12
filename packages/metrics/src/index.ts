@@ -10,6 +10,7 @@ import {
 	selectEvaluation,
 } from "./assess.js";
 import {
+	type DueEvidenceConstraints,
 	displayFits,
 	type EditsSourceTiming,
 	type EditsTimingUpdate,
@@ -591,7 +592,7 @@ export function createMetricService(deps: {
 				(b) =>
 					allowed.has(b.metricId) && b.baselineObservationId && b.evaluationAt,
 			);
-			const rows = await observations.predictionReadBatch(
+			const snapshots = await observations.predictionReadBatch(
 				selected.map((b) => ({
 					metricId: b.metricId,
 					baselineObservationId: b.baselineObservationId as string,
@@ -599,6 +600,61 @@ export function createMetricService(deps: {
 				})),
 				signal,
 			);
+			if (snapshots.length !== selected.length)
+				throw new MetricError("batch_unavailable", 503);
+			// Discover immutable snapshots first, then authorize and derive calculator
+			// constraints before selecting a winner. Both passes retain the 100-row cap.
+			const requests = [];
+			for (let i = 0; i < selected.length; i++) {
+				signal?.throwIfAborted();
+				const b = selected[i],
+					pinned = snapshots[i]?.baseline;
+				let eligibility: DueEvidenceConstraints | undefined;
+				if (b && pinned && pinned.definition.id === b.metricId) {
+					try {
+						await authorize("read", pinned.definition);
+						const shape = calculatorShape(
+							registry.get(pinned.definition.spec.calculatorId),
+							pinned.definition.spec.params,
+						);
+						if (
+							compatibleEvidence(
+								pinned.observation,
+								pinned.definition,
+								scope,
+								shape,
+							) &&
+							pinned.observation.id === b.baselineObservationId &&
+							shape.unit === b.target.unit &&
+							freshEvidenceAt(
+								pinned.observation,
+								pinned.definition,
+								Date.parse(pinned.observation.observedAt ?? ""),
+							) &&
+							Date.parse(pinned.observation.observedAt ?? "") <=
+								Date.parse(b.evaluationAt as string) &&
+							Date.parse(pinned.observation.window.end) <=
+								Date.parse(b.evaluationAt as string)
+						)
+							eligibility = {
+								...shape,
+								calculatorVersion: pinned.definition.spec.calculatorId,
+								paramsHash: hashMetric(pinned.definition.spec.params),
+								baselineEnd: pinned.observation.window.end,
+							};
+					} catch {
+						/* No authorized shape means no due evidence. */
+					}
+				}
+				if (b)
+					requests.push({
+						metricId: b.metricId,
+						baselineObservationId: b.baselineObservationId as string,
+						evaluationAt: b.evaluationAt as string,
+						eligibility,
+					});
+			}
+			const rows = await observations.predictionReadBatch(requests, signal);
 			if (rows.length !== selected.length)
 				throw new MetricError("batch_unavailable", 503);
 			let cursor = 0;
@@ -1195,6 +1251,12 @@ export function createMetricService(deps: {
 									hash,
 									deadline,
 									definition.spec.maxAgeSeconds,
+									{
+										...shape,
+										calculatorVersion: definition.spec.calculatorId,
+										paramsHash: hashMetric(definition.spec.params),
+										baselineEnd: baseline?.window.end ?? null,
+									},
 								)
 							: Promise.resolve(null),
 						options?.latestOnly

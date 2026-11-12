@@ -5,6 +5,7 @@ import type { Fragment, Sql } from "postgres";
 import { z } from "zod";
 import { HISTORY_ORIGIN_MS, metricHistoryRange } from "../assess.js";
 import {
+	type DueEvidenceConstraints,
 	MetricError,
 	type MetricHistoryInput,
 	MetricObservationSchema,
@@ -50,19 +51,40 @@ function dueSourceFreshness(
 	age: number | Fragment,
 ) {
 	return sql`CASE
-		WHEN jsonb_path_exists(jsonb_build_object('v',replace(observation->>'observedAt','Z','+00:00')), '$.v.datetime()', '{}'::jsonb, true)
+		WHEN jsonb_typeof(observation->'observedAt')='string' AND jsonb_path_exists(jsonb_build_object('v',replace(observation->>'observedAt','Z','+00:00')), '$.v.datetime()', '{}'::jsonb, true)
 		AND jsonb_typeof(observation->'sourceWatermarks') = 'array'
 		THEN (observation->>'observedAt')::timestamptz >= evaluation_at
 		AND GREATEST(${due}::timestamptz, (observation->>'observedAt')::timestamptz) - evaluation_at <= (${age} * interval '1 second')
 		AND jsonb_array_length(observation->'sourceWatermarks') > 0
 		AND NOT EXISTS (
 			SELECT 1 FROM jsonb_array_elements(observation->'sourceWatermarks') AS watermark
-			WHERE CASE WHEN jsonb_path_exists(jsonb_build_object('v',replace(watermark->>'asOf','Z','+00:00')), '$.v.datetime()', '{}'::jsonb, true)
+			WHERE jsonb_typeof(watermark->'source') IS DISTINCT FROM 'string' OR jsonb_typeof(watermark->'asOf') IS DISTINCT FROM 'string' OR CASE WHEN jsonb_path_exists(jsonb_build_object('v',replace(watermark->>'asOf','Z','+00:00')), '$.v.datetime()', '{}'::jsonb, true)
 				THEN (watermark->>'asOf')::timestamptz > (observation->>'observedAt')::timestamptz
 					OR GREATEST(${due}::timestamptz, (observation->>'observedAt')::timestamptz) - (watermark->>'asOf')::timestamptz > (${age} * interval '1 second')
 				ELSE true END
 		)
 		ELSE false END`;
+}
+/** Same compatibility predicate for direct and batched due reads. Native casts
+ * are inside CASE so malformed timestamps cannot abort another position. */
+function dueCompatibility(sql: Sql, scope: MetricScope, constraints: Fragment) {
+	return sql`observation->'metricId'=to_jsonb(metric_id) AND observation->'definitionHash'=to_jsonb(definition_hash)
+ AND observation->>'status'='ok'
+ AND CASE WHEN jsonb_typeof(observation->'value')='number' THEN abs((observation->>'value')::numeric)<=1.7976931348623157e308 ELSE false END
+ AND observation->'id'=to_jsonb(id::text) AND jsonb_typeof(observation->'definitionRevision')='string'
+ AND (jsonb_typeof(observation->'reason') IN ('string','null'))
+ AND (NOT observation ? 'scheduledFor' OR jsonb_typeof(observation->'scheduledFor')='string')
+ AND CASE WHEN jsonb_typeof(observation->'evidenceRefs')='array' THEN NOT EXISTS (SELECT 1 FROM jsonb_array_elements(observation->'evidenceRefs') ref WHERE jsonb_typeof(ref)<>'string') ELSE false END
+ AND observation->'node'=to_jsonb(${scope.node}::text) AND observation->'environment'=to_jsonb(${scope.environment}::text) AND observation->'dataScope'=to_jsonb(${scope.dataScope}::text)
+ AND observation->'calculatorVersion'=${constraints}->'calculatorVersion'
+ AND observation->'paramsHash'=${constraints}->'paramsHash'
+ AND observation->'unit'=${constraints}->'unit'
+ AND CASE WHEN jsonb_path_exists(jsonb_build_object('v',replace(observation->'window'->>'start','Z','+00:00')), '$.v.datetime()', '{}'::jsonb, true)
+ AND jsonb_path_exists(jsonb_build_object('v',replace(observation->'window'->>'end','Z','+00:00')), '$.v.datetime()', '{}'::jsonb, true)
+ THEN (observation->'window'->>'end')::timestamptz=evaluation_at
+ AND EXTRACT(EPOCH FROM ((observation->'window'->>'end')::timestamptz-(observation->'window'->>'start')::timestamptz))=(${constraints}->>'windowSeconds')::double precision
+ AND (${constraints}->>'baselineEnd' IS NULL OR evaluation_at>=(${constraints}->>'baselineEnd')::timestamptz)
+ ELSE false END`;
 }
 export class PostgresMetricObservations implements MetricObservationsPort {
 	constructor(
@@ -77,6 +99,7 @@ export class PostgresMetricObservations implements MetricObservationsPort {
 			metricId: string;
 			baselineObservationId: string;
 			evaluationAt: string;
+			eligibility?: DueEvidenceConstraints;
 		}[],
 		signal?: AbortSignal,
 	) {
@@ -90,12 +113,12 @@ export class PostgresMetricObservations implements MetricObservationsPort {
 			signal,
 			(
 				sql,
-			) => sql`WITH requested AS (SELECT ord, value->>'metricId' AS metric_id, value->>'baselineObservationId' AS baseline_id, value->>'evaluationAt' AS due FROM jsonb_array_elements(${JSON.stringify(requests)}::text::jsonb) WITH ORDINALITY AS x(value,ord))
+			) => sql`WITH requested AS (SELECT ord, value->>'metricId' AS metric_id, value->>'baselineObservationId' AS baseline_id, value->>'evaluationAt' AS due, value->'eligibility' AS eligibility FROM jsonb_array_elements(${JSON.stringify(requests)}::text::jsonb) WITH ORDINALITY AS x(value,ord))
 		SELECT b.snapshot AS baseline_definition, b.observation AS baseline_observation, l.observation AS latest_observation, g.observation AS good_observation, e.observation AS evaluation_observation
 		FROM requested r LEFT JOIN metric_observations b ON b.scope=${this.key} AND b.id=CASE WHEN r.baseline_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN r.baseline_id::uuid ELSE NULL END AND b.metric_id=r.metric_id
 		LEFT JOIN LATERAL (SELECT observation FROM metric_observations WHERE scope=${this.key} AND metric_id=r.metric_id AND definition_hash=b.definition_hash ORDER BY evaluation_at DESC,id DESC LIMIT 1) l ON true
 		LEFT JOIN LATERAL (SELECT observation FROM metric_observations WHERE scope=${this.key} AND metric_id=r.metric_id AND definition_hash=b.definition_hash AND status='ok' ORDER BY evaluation_at DESC,id DESC LIMIT 1) g ON true
-		LEFT JOIN LATERAL (SELECT observation FROM metric_observations WHERE scope=${this.key} AND metric_id=r.metric_id AND definition_hash=b.definition_hash AND status='ok' AND observation->'value' IS NOT NULL AND jsonb_typeof(observation->'value')='number' AND evaluation_at <= r.due::timestamptz AND evaluation_at >= r.due::timestamptz - ((b.snapshot->'spec'->>'maxAgeSeconds')::int * interval '1 second') AND CASE WHEN jsonb_path_exists(jsonb_build_object('v',replace(observation->>'observedAt','Z','+00:00')), '$.v.datetime()', '{}'::jsonb, true) THEN (observation->>'observedAt')::timestamptz <= r.due::timestamptz + ((b.snapshot->'spec'->>'maxAgeSeconds')::int * interval '1 second') ELSE true END AND ${dueSourceFreshness(sql, sql`r.due`, sql`(b.snapshot->'spec'->>'maxAgeSeconds')::int`)} ORDER BY evaluation_at DESC,id DESC LIMIT 1) e ON true ORDER BY r.ord`,
+		LEFT JOIN LATERAL (SELECT observation FROM metric_observations WHERE scope=${this.key} AND metric_id=r.metric_id AND definition_hash=b.definition_hash AND CASE WHEN r.eligibility IS NOT NULL THEN ${dueCompatibility(sql, this.scope, sql`r.eligibility`)} AND status='ok' AND observation->'value' IS NOT NULL AND jsonb_typeof(observation->'value')='number' AND evaluation_at <= r.due::timestamptz AND evaluation_at >= r.due::timestamptz - ((b.snapshot->'spec'->>'maxAgeSeconds')::int * interval '1 second') AND CASE WHEN jsonb_path_exists(jsonb_build_object('v',replace(observation->>'observedAt','Z','+00:00')), '$.v.datetime()', '{}'::jsonb, true) THEN (observation->>'observedAt')::timestamptz <= r.due::timestamptz + ((b.snapshot->'spec'->>'maxAgeSeconds')::int * interval '1 second') ELSE true END AND ${dueSourceFreshness(sql, sql`r.due`, sql`(b.snapshot->'spec'->>'maxAgeSeconds')::int`)} ELSE false END ORDER BY evaluation_at DESC,id DESC LIMIT 1) e ON true ORDER BY r.ord`,
 		);
 		return rows.map((row) => {
 			let rollingUnreadable = false;
@@ -287,9 +310,12 @@ export class PostgresMetricObservations implements MetricObservationsPort {
 		definitionHash: string,
 		evaluationAt: string,
 		maxAgeSeconds: number,
+		eligibility?: DueEvidenceConstraints,
 	) {
+		if (!eligibility) return null;
 		const [row] = await this
 			.sql`SELECT observation FROM metric_observations WHERE scope=${this.key} AND metric_id=${metricId} AND definition_hash=${definitionHash}
+      AND ${dueCompatibility(this.sql, this.scope, this.sql`${JSON.stringify(eligibility)}::text::jsonb`)}
       AND status='ok' AND observation->'value' IS NOT NULL AND jsonb_typeof(observation->'value')='number'
       AND evaluation_at <= ${evaluationAt}::timestamptz AND evaluation_at >= ${evaluationAt}::timestamptz - (${maxAgeSeconds} * interval '1 second')
       AND CASE WHEN jsonb_path_exists(jsonb_build_object('v',replace(observation->>'observedAt','Z','+00:00')), '$.v.datetime()', '{}'::jsonb, true) THEN (observation->>'observedAt')::timestamptz <= ${evaluationAt}::timestamptz + (${maxAgeSeconds} * interval '1 second') ELSE true END

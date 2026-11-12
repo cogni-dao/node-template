@@ -355,12 +355,22 @@ export interface MetricDefinitionsPort {
 		signal?: AbortSignal,
 	): Promise<{ items: MetricDefinition[]; nextCursor: string | null }>;
 }
+/** Authorized immutable series shape supplied before due-evidence selection. */
+export interface DueEvidenceConstraints {
+	calculatorVersion: string;
+	paramsHash: string;
+	unit: string;
+	windowSeconds: number;
+	baselineEnd: string | null;
+}
 export interface MetricObservationsPort {
 	predictionReadBatch?(
 		requests: readonly {
 			metricId: string;
 			baselineObservationId: string;
 			evaluationAt: string;
+			/** Absent means snapshot-only discovery, never select due evidence. */
+			eligibility?: DueEvidenceConstraints;
 		}[],
 		signal?: AbortSignal,
 	): Promise<
@@ -426,6 +436,7 @@ export interface MetricObservationsPort {
 		definitionHash: string,
 		evaluationAt: string,
 		maxAgeSeconds: number,
+		eligibility?: DueEvidenceConstraints,
 	): Promise<MetricObservation | null>;
 	/** Aligned, validated half-open buckets; never filled or carried forward. */
 	buckets(

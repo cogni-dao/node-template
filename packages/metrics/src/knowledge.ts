@@ -492,6 +492,8 @@ export function createGoalProgressReader(deps: {
 	metrics: () => MetricService | undefined;
 	knowledge: () => GoalKnowledgeReader | undefined;
 	environment: string;
+	/** Explicitly pooled read-only knowledge port; reserved scopes stay serial. */
+	pooledGoalReads?: boolean;
 }): () => Promise<GoalsProgress> {
 	let inFlight: Promise<GoalsProgress> | undefined;
 	return () => {
@@ -502,6 +504,7 @@ export function createGoalProgressReader(deps: {
 			return readMetricBudget(port, undefined, (signal) =>
 				readGoalsProgress({
 					goals: createGoalSource(port, signal),
+					pooledGoalReads: deps.pooledGoalReads,
 					metrics: deps.metrics(),
 					environment: deps.environment,
 					signal,
