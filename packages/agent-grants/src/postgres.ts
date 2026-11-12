@@ -142,23 +142,24 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
           FROM agent_principals p
           CROSS JOIN unnest(${declaredScopes as string[]}::text[]) s(scope)
           CROSS JOIN LATERAL (
-            SELECT principal_user_id, scope, approved_by, revoked_at, created_at FROM agent_roles
+            SELECT principal_user_id, scope, approved_by, revoked_at, created_at, request_expires_at FROM agent_roles
             WHERE principal_user_id = p.user_id AND scope = s.scope
             ORDER BY created_at DESC NULLS LAST, id DESC NULLS LAST LIMIT 1
           ) r
           JOIN users u ON u.id = p.user_id
-          WHERE p.service_key IS NOT NULL AND (r.approved_by IS NOT NULL OR r.revoked_at IS NULL)
+          WHERE p.service_key IS NOT NULL AND (r.approved_by IS NOT NULL OR
+            r.revoked_at IS NULL AND (r.request_expires_at IS NULL OR r.request_expires_at > clock_timestamp()))
           UNION ALL
           SELECT r.principal_user_id, r.scope, r.approved_by, r.revoked_at, r.created_at,
                  NULL::text AS slug, 'external' AS kind, u.name AS user_name,
                  (SELECT b.external_id FROM user_bindings b WHERE b.user_id = r.principal_user_id AND b.provider = 'github' LIMIT 1), NULL::text
           FROM agent_roles r JOIN users u ON u.id = r.principal_user_id
-          WHERE r.revoked_at IS NULL AND NOT EXISTS (
+          WHERE r.revoked_at IS NULL AND (r.approved_by IS NOT NULL OR r.request_expires_at IS NULL OR r.request_expires_at > clock_timestamp()) AND NOT EXISTS (
             SELECT 1 FROM agent_principals p WHERE p.user_id = r.principal_user_id AND (p.kind = 'internal' OR p.service_key IS NOT NULL)
           )
         ) SELECT * FROM controls
         WHERE (principal_user_id, scope) > (${after?.principalUserId ?? ""}, ${after?.scope ?? ""})
-        ORDER BY principal_user_id, scope LIMIT ${limit + 1}`;
+        ORDER BY principal_user_id, scope LIMIT ${limit + 101}`;
       const page = outside.slice(0, limit);
       const last = page[page.length - 1];
       const nextCursor = outside.length > limit && last ? { principalUserId: str(last.principal_user_id) ?? "", scope: str(last.scope) ?? "" } : null;
@@ -166,8 +167,8 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
         const mapped = toRow(row);
         return mapped ? [mapped] : [];
       });
-      // A lower bound for legacy consumers; cursor-aware consumers continue until nextCursor=null.
-      return { rows, more: nextCursor ? 1 : 0, nextCursor };
+      // A bounded lookahead count (at most101) for legacy consumers; cursor-aware consumers continue until nextCursor=null.
+      return { rows, more: Math.max(0, outside.length - limit), nextCursor };
     },
     async listOwnRoles(principalUserId) {
       const rows = await sql`

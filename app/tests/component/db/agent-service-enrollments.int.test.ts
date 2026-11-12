@@ -170,6 +170,7 @@ describe("agent service enrollments (real Postgres)", () => {
           return fn(observed);
         }),
       }) as CredentialSql;
+      await service`UPDATE agent_authority_maintenance SET next_run_at = clock_timestamp() WHERE id = 'service-enrollment'`;
       const tick = maintenanceTick(delayed);
       try {
         await Promise.race([selection, tick.then(() => { throw new Error("maintenance never selected expired receipt"); })]);

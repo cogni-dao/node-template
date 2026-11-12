@@ -8,8 +8,11 @@ import type { CredentialSql } from "../credentials/postgres";
 export async function maintenanceTick(client: CredentialSql): Promise<{ processed: number; due: boolean }> {
   return client.begin(async (tx) => {
     await tx`SELECT set_config('statement_timeout', '2000', true), set_config('lock_timeout', '100', true)`;
-    const lease = await tx`UPDATE agent_authority_maintenance SET next_run_at = clock_timestamp() + interval '60 seconds'
-      WHERE id = 'service-enrollment' AND backfill_ready AND next_run_at <= clock_timestamp() RETURNING id`;
+    const lease = await tx`WITH candidate AS (
+      SELECT id FROM agent_authority_maintenance WHERE id = 'service-enrollment' AND backfill_ready
+        AND next_run_at <= clock_timestamp() FOR UPDATE SKIP LOCKED
+    ) UPDATE agent_authority_maintenance s SET next_run_at = clock_timestamp() + interval '60 seconds'
+      FROM candidate WHERE s.id = candidate.id RETURNING s.id`;
     if (lease.length === 0) return { processed: 0, due: false };
     const started = Date.now();
     const batch = await tx`SELECT id, principal_user_id FROM agent_service_enrollments
