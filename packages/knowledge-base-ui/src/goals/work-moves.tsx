@@ -112,6 +112,7 @@ function ChainCard({
         chartId={chartId}
         wrap
         variant="row"
+        compact
         onToggle={() => setOpen(!open)}
       />
       {open && (
