@@ -337,6 +337,13 @@
       "when": 1794469395727,
       "tag": "0047_service_enrollment_v2",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1794472837269,
+      "tag": "0048_service_enrollment_review_guards",
+      "breakpoints": true
     }
   ]
 }

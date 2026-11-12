@@ -16,6 +16,7 @@ import {
   canonicalJson,
   connectionKeySchema,
   ENROLLMENT_PROTOCOL,
+  ENROLLMENT_CLOCK_MARGIN_MS,
   type EnrollmentProof,
   type EnrollmentReply,
   enrollmentIntentSchema,
@@ -341,7 +342,8 @@ export function createEnrollmentRequester(options: EnrollmentRequesterOptions) {
         observedAt = remote.observedAt;
       } catch (error) {
         if (!(error instanceof EnrollmentClientError) || !error.observedAt ||
-            ![404, 410].includes(error.status ?? 0)) throw error;
+            !((error.status === 404 && error.refusal === "unknown_operation") ||
+              (error.status === 410 && error.refusal === "terminal_operation"))) throw error;
         disposition = error.status === 404 ? "not_accepted" : "terminal";
         observedAt = error.observedAt;
       }
@@ -387,20 +389,20 @@ export function createEnrollmentRequester(options: EnrollmentRequesterOptions) {
         row =
           (await update(row, { ...row.state, paused: false, attempts: 0 })) ??
           row;
+      let continuationSent = false;
       try {
         if (row.state.nextAction === "start") {
           row = await update(row, { ...row.state, phase: "start_unknown" });
           if (!row) return latest(handle);
           const secrets = await secretsOf(row);
-          const token =
-            now().getTime() < row.state.intent.originalStartExp * 1000
-              ? secrets.token
-              : await continueProof(row);
+          continuationSent = now().getTime() >= row.state.intent.originalStartExp * 1000;
+          const token = continuationSent ? await continueProof(row) : secrets.token;
           await applyProof(
             row,
             await transport.postProof(row.state.key.target.origin, token)
           );
         } else if (row.state.nextAction === "continue") {
+          continuationSent = true;
           await applyProof(
             row,
             await transport.postProof(
@@ -436,8 +438,8 @@ export function createEnrollmentRequester(options: EnrollmentRequesterOptions) {
               Date.parse(envelope.pendingExpiresAt) >
                 Date.parse(s.recoveryExpiresAt ?? "") ||
               Date.parse(envelope.pendingExpiresAt) >
-                now().getTime() + 15 * 60000 ||
-              Date.parse(envelope.expiresAt) > now().getTime() + 30 * DAY ||
+                now().getTime() + 15 * 60000 + ENROLLMENT_CLOCK_MARGIN_MS ||
+              Date.parse(envelope.expiresAt) > now().getTime() + 30 * DAY + ENROLLMENT_CLOCK_MARGIN_MS ||
               Date.parse(envelope.renewUntil) >
                 Date.parse(envelope.expiresAt) + 14 * DAY
             )
@@ -490,8 +492,12 @@ export function createEnrollmentRequester(options: EnrollmentRequesterOptions) {
             answer.expiresAt &&
             answer.renewUntil
           ) {
+            const observed = answer.observedAt ? Date.parse(answer.observedAt) : now().getTime() + ENROLLMENT_CLOCK_MARGIN_MS;
             if (
-              Date.parse(answer.expiresAt) > now().getTime() + 30 * DAY ||
+              !Number.isFinite(observed) ||
+              (answer.observedAt && Math.abs(observed - now().getTime()) > ENROLLMENT_CLOCK_MARGIN_MS) ||
+              !Number.isFinite(Date.parse(answer.expiresAt)) || !Number.isFinite(Date.parse(answer.renewUntil)) ||
+              Date.parse(answer.expiresAt) > observed + 30 * DAY ||
               Date.parse(answer.renewUntil) >
                 Date.parse(answer.expiresAt) + 14 * DAY
             ) {
@@ -511,27 +517,44 @@ export function createEnrollmentRequester(options: EnrollmentRequesterOptions) {
             await store.publish(guardOf(row), {
               expiresAt: answer.expiresAt,
               renewUntil: answer.renewUntil,
+              ...(answer.observedAt ? { observedAt: answer.observedAt } : {}),
             });
           } else {
             // Throttling and transient confirmation responses use the same bounded retry counter while custody stays staged.
             if (answer.status === 429 || answer.status >= 500)
               throw new EnrollmentClientError("origin_unreachable", answer.status);
-            if (answer.status !== 401 && answer.status !== 403)
-              throw new Error("confirmation_protocol_error");
-            await update(
-              row,
-              {
-                ...row.state,
-                attempts: 0,
-                error: answer.status === 403 ? "permission_off" : "unconfirmed",
-                nextAction: answer.status === 401 ? "continue" : "confirm",
-              },
-              { delaySec: 5, release: true }
-            );
+            const permissionOff = answer.status === 403 && answer.refusal === "permission_off";
+            const reconcile = answer.status === 401 || answer.status === 409 &&
+              ["pending_expired", "superseded", "predecessor_revoked"].includes(answer.refusal ?? "");
+            if (!permissionOff && !reconcile) throw new Error("confirmation_protocol_error");
+            await update(row, { ...row.state, attempts: 0,
+              error: permissionOff ? "permission_off" : "unconfirmed",
+              nextAction: reconcile ? "continue" : "confirm",
+            }, { delaySec: 5, release: true });
           }
         }
       } catch (e) {
         if (row) {
+          if (continuationSent && e instanceof EnrollmentClientError &&
+              e.code === "enrollment_rejected" && e.status === 404 && e.refusal === "unknown_operation" && e.observedAt &&
+              Number.isFinite(Date.parse(e.observedAt)) &&
+              Date.parse(e.observedAt) >= row.state.intent.originalStartExp * 1000 &&
+              !row.state.acceptedAt && !row.state.enrollmentId &&
+              !row.state.connectionId && !row.state.credentialId) {
+            // Definitive absence erases only this fenced pre-key intent. It never starts a replacement.
+            await update(row, { ...row.state, nonacceptanceObservedAt: e.observedAt,
+              phase: "expired_unknown", nextAction: "none", attempts: 0, paused: false, error: null,
+            }, { encryptedSecrets: null, release: true });
+            return latest(handle);
+          }
+          if (continuationSent && e instanceof EnrollmentClientError && e.code === "enrollment_rejected" &&
+              e.status === 410 && e.refusal === "terminal_operation" && e.observedAt && Number.isFinite(Date.parse(e.observedAt))) {
+            // Known terminal receipt is distinct from absent intent. Fence publication, retain the staged key's custody bound.
+            await update(row, { ...row.state, terminalObservedAt: e.observedAt,
+              phase: "needs_reenroll", nextAction: "none", attempts: 0, paused: false, error: "unconfirmed",
+            }, { release: true });
+            return latest(handle);
+          }
           const transient = e instanceof EnrollmentClientError;
           const attempts = row.state.attempts + 1;
           // Ambiguous replies retain original intent and staged custody. Even authenticated404 never triggers a fresh operation.

@@ -82,6 +82,8 @@ const UPGRADE_REFUSALS = {
 
 const CONFIRM_REFUSALS = {
   revoked: "superseded",
+  superseded: "superseded",
+  permission_off: "permission_off",
   expired: "pending_expired",
   predecessor_revoked: "predecessor_revoked",
   not_found: "superseded",
@@ -127,13 +129,14 @@ export function credentialHttp(input: CredentialHttpInput): CredentialHttpRespon
     }
     case "confirm": {
       const result = input.result;
-      if (!result.ok) return refuse(409, CONFIRM_REFUSALS[result.reason]);
+      if (!result.ok) return refuse(result.reason === "permission_off" ? 403 : 409, CONFIRM_REFUSALS[result.reason]);
       return ok(
         confirmAgentCredentialOperation.output.parse({
           userId: result.userId,
           credentialId: input.credentialId,
           status: "active",
           replay: result.status === "already_active",
+          ...(result.observedAt ? { observedAt: result.observedAt } : {}),
           expiresAt: result.expiresAt,
           renewUntil: result.renewUntil,
         })

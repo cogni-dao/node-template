@@ -249,11 +249,18 @@ export function createDurableProviderStore(
             const prior =
               await tx`SELECT status, expires_at, historical_confirmed_at FROM agent_service_enrollments WHERE operation_id = ${proof.expectedOperationId} FOR UPDATE`;
             // Explicit replacement only after its operation AND credential lineage cease to be usable.
-            const active =
-              await tx`SELECT 1 FROM agent_credentials WHERE user_id = ${userId} AND revoked_at IS NULL
-              AND ((confirmed_at IS NOT NULL AND renew_until > clock_timestamp()) OR (confirmed_at IS NULL AND pending_expires_at > clock_timestamp())) LIMIT 1`;
+            // One observed native clock is an index range parameter, not a volatile filter over retained audit.
+            // Observe after authority locks; later mutation still rechecks its wall-clock deadline.
+            const observed = await tx`SELECT clock_timestamp()::text AS at`;
+            const liveAt = str(observed[0]?.at);
+            const confirmed = await tx`SELECT 1 FROM agent_credentials WHERE user_id=${userId}
+              AND revoked_at IS NULL AND confirmed_at IS NOT NULL AND renew_until>${liveAt}::timestamptz
+              ORDER BY renew_until DESC LIMIT 1`;
+            const pending = await tx`SELECT 1 FROM agent_credentials WHERE user_id=${userId}
+              AND revoked_at IS NULL AND confirmed_at IS NULL AND pending_expires_at>${liveAt}::timestamptz
+              ORDER BY pending_expires_at DESC LIMIT 1`;
             if (
-              active.length ||
+              confirmed.length || pending.length ||
               (prior[0]?.status === "open" &&
                 new Date(prior[0].expires_at as string).getTime() >
                   Date.parse(at))
@@ -332,7 +339,7 @@ export function createDurableProviderStore(
           const inserted =
             await tx`SELECT * FROM agent_service_enrollments WHERE operation_id = ${proof.operationId}`;
           if (!inserted[0]) throw new Refusal("invalid_token");
-          await tx`UPDATE agent_principals SET current_generation=${proof.generation}, current_operation_id=${proof.operationId}, active_until=${recoveryExpiresAt}
+          await tx`UPDATE agent_principals SET current_generation=${proof.generation}, current_operation_id=${proof.operationId}, active_until=GREATEST(active_until,${recoveryExpiresAt}::timestamptz)
             WHERE user_id=${userId}`;
           await tx`UPDATE agent_roles SET request_expires_at=${recoveryExpiresAt}, enrollment_operation_id=${proof.operationId}
             WHERE principal_user_id=${userId} AND scope=${proof.scopes[0]} AND approved_by IS NULL AND revoked_at IS NULL`;
@@ -361,10 +368,11 @@ export function createDurableProviderStore(
             !e ||
             e.operation_id !== e.current_operation_id ||
             Number(e.generation) !== Number(e.current_generation) ||
-            e.historical_confirmed_at != null ||
-            e.status !== "open"
+            e.historical_confirmed_at != null
           )
             return { ok: false, error: "expired_token" };
+          if (e.status === "denied") return { ok: false, error: "access_denied" };
+          if (e.status !== "open") return { ok: false, error: "expired_token" };
           const clock = await tx`SELECT clock_timestamp() AS at`;
           if (
             new Date(e.expires_at as string).getTime() <=

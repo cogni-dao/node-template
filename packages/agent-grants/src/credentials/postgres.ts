@@ -191,13 +191,11 @@ export function createPostgresCredentialStore(client: CredentialSql, options: Po
           FROM agent_credentials c WHERE c.id = ${credentialId} FOR UPDATE`;
         const row = rows[0];
         if (!row) return { ok: false, reason: "not_found" };
-        const done = (status: "confirmed" | "already_active", r: Record<string, unknown>): ConfirmResult => ({
-          ok: true,
-          status,
-          userId: text(row.user_id),
-          expiresAt: iso(r.expires_at),
-          renewUntil: iso(r.renew_until),
-        });
+        const done = async (status: "confirmed" | "already_active", r: Record<string, unknown>): Promise<ConfirmResult> => {
+          const clock = await tx`SELECT clock_timestamp() AS at`;
+          return { ok: true, status, userId: text(row.user_id),
+            observedAt: iso(clock[0]?.at), expiresAt: iso(r.expires_at), renewUntil: iso(r.renew_until) };
+        };
         switch (row.state) {
           case "revoked":
             return { ok: false, reason: "revoked" };
@@ -219,12 +217,18 @@ export function createPostgresCredentialStore(client: CredentialSql, options: Po
               if (pred[0]?.revoked_at) return { ok: false, reason: "predecessor_revoked" };
             }
             if (link[0].created_from === "service_enrollment") {
-              const eligible = await tx`SELECT 1 FROM agent_service_enrollments e
-                WHERE e.credential_id = ${credentialId} AND e.status = 'open' AND e.expires_at > clock_timestamp()
-                  AND e.historical_confirmed_at IS NULL AND EXISTS (
-                    SELECT 1 FROM agent_roles r WHERE r.principal_user_id = e.principal_user_id AND r.scope = e.scope
-                      AND r.approved_by IS NOT NULL AND r.revoked_at IS NULL)`;
-              if (eligible.length === 0) return { ok: false, reason: "expired" };
+              const eligible = await tx`SELECT e.status,e.expires_at,e.historical_confirmed_at,
+                (e.expires_at>clock_timestamp()) AS timely,
+                EXISTS (SELECT 1 FROM agent_roles r WHERE r.principal_user_id=e.principal_user_id AND r.scope=e.scope
+                  AND r.approved_by IS NOT NULL AND r.revoked_at IS NULL) AS permitted,
+                (p.current_generation=0 OR (c.service_operation_id IS NOT DISTINCT FROM p.current_operation_id AND c.service_generation IS NOT DISTINCT FROM p.current_generation)) AS current_operation
+                FROM agent_service_enrollments e JOIN agent_credentials c ON c.id=e.credential_id
+                JOIN agent_principals p ON p.user_id=e.principal_user_id WHERE e.credential_id=${credentialId}`;
+              const receipt = eligible[0];
+              if (receipt && receipt.current_operation !== true) return { ok: false, reason: "superseded" };
+              if (!receipt || receipt.status !== "open" || !receipt.timely || receipt.historical_confirmed_at != null)
+                return { ok: false, reason: "expired" };
+              if (!receipt.permitted) return { ok: false, reason: "permission_off" };
             }
             const updated = await tx`
               WITH instant AS MATERIALIZED (SELECT clock_timestamp() AS at)
@@ -277,7 +281,16 @@ export function createPostgresCredentialStore(client: CredentialSql, options: Po
     lookup: guard(store.lookup),
     issueUpgrade: issueGuard(store.issueUpgrade),
     issueSuccessor: issueGuard(store.issueSuccessor),
-    confirm: guard(store.confirm),
+    confirm: async (input) => {
+      try { return await guard(store.confirm)(input); }
+      catch (error) {
+        // A final wall-clock guard may lose after the precheck. Its transaction has rolled back before reconciliation.
+        if (typeof error === "object" && error !== null &&
+            (error as { constraint_name?: string }).constraint_name === "agent_service_activation_deadline")
+          return { ok: false, reason: "expired" };
+        throw error;
+      }
+    },
     everConfirmed: guard(store.everConfirmed),
     revoke: guard(store.revoke),
   };

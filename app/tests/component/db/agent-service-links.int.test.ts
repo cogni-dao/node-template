@@ -15,6 +15,8 @@ import {
   agentRolesHasRoles,
   type CredentialSql,
   confirmCredential,
+  credentialHttp,
+  verifyBearer,
   createPostgresCredentialStore,
   hashAgentKey,
 } from "@cogni/agent-grants/credentials";
@@ -23,14 +25,19 @@ import {
   createDurableProviderStore,
   ENROLLMENT_PROTOCOL,
   type EnrollmentProof,
+  type EnrollmentIntent,
   fullServiceKey,
   intentDigestOf,
+  intentOf,
+  canonicalJson,
+  openSealed,
 } from "@cogni/agent-grants/enrollment";
 import {
   type ConnectionKey,
   createCustodyCipher,
   createEnrollmentProofSigner,
   createEnrollmentRequester,
+  createEnrollmentTransport,
   createPostgresRequesterCustody,
   requesterMaintenanceTick,
 } from "@cogni/agent-grants/enrollment-requester";
@@ -82,7 +89,7 @@ async function proofAt(now = Date.now(), ttl = 600) {
     pub = await exportJWK(pair.publicKey);
   const jti = randomUUID(),
     iat = Math.floor(now / 1000);
-  const intent = {
+  const intent: EnrollmentIntent = {
     kind: ENROLLMENT_PROTOCOL,
     operationId: randomUUID(),
     generation: 1,
@@ -302,11 +309,11 @@ describe("v2 enrollment and requester SQL", () => {
     const custody = createPostgresRequesterCustody(client(), {
       cipher, systemPrincipalUserId: COGNI_SYSTEM_PRINCIPAL_USER_ID, readReadyConnection: async () => null,
     });
-    let clock = Date.now() - 26 * 3600000;
+    let clock = Date.now() - 11 * 60000;
     const requester = createEnrollmentRequester({ ...custody, cipher, fetch: discoveryFetch,
       now: () => new Date(clock), signer: createEnrollmentProofSigner({ kid: "fixture", key: signing.privateKey }),
       transport: {
-        postProof: async () => { throw new EnrollmentClientError("enrollment_rejected", 404, new Date().toISOString()); },
+        postProof: async () => { throw new EnrollmentClientError("enrollment_rejected", 404, new Date().toISOString(), "unknown_operation"); },
         pollToken: async () => ({ kind: "authorization_pending" as const }), confirmStaged: async () => ({ status: 503 }),
       },
     });
@@ -316,6 +323,8 @@ describe("v2 enrollment and requester SQL", () => {
     const old = await custody.store.read(oldHandle);
     if (!old) throw new Error("missing expired intent");
     expect(old.encryptedSecrets).toBeNull();
+    expect(old.state.nonacceptanceObservedAt).toBeTruthy();
+    expect(Date.parse(old.secretDeadline)).toBeGreaterThan(Date.now()); // Definitive evidence, not the24h fallback.
     const next = await requester.reenroll(oldHandle, old.revision);
     const replacement = await custody.store.read({ operationId: next.linkId, key });
     if (!replacement) throw new Error("missing replacement");
@@ -378,6 +387,192 @@ describe("v2 enrollment and requester SQL", () => {
     expect((await custody.store.read(handle))?.state.phase).toBe("confirm_unknown");
   }, 10000);
 
+  it("Off after bearer verification is permission_off; On before pending expiry confirms the same real key", async () => {
+    const {proof,privateJwk}=await proofAt(), store=provider(), result=await store.acceptProof(proof,await hashAgentKey('consent-race'));
+    if (!result.ok || !result.reply.sealedAcceptance) throw new Error('missing acceptance');
+    const admin=randomUUID(); await db`INSERT INTO users(id,name) VALUES(${admin},'consent admin')`;
+    const grants=createPostgresAgentGrantsStore(db as unknown as SqlTag);
+    await grants.approvePending({principalUserId:result.principalUserId,scope:'knowledge:read',approvedBy:admin});
+    const receipt=JSON.parse(await openSealed(result.reply.sealedAcceptance,privateJwk)) as {deviceCode:string};
+    const pending=await store.pollStable(await hashAgentKey(receipt.deviceCode));
+    if (!pending.ok) throw new Error('missing pending key');
+    const keyEnvelope=JSON.parse(await openSealed(pending.sealedKey,privateJwk)) as {token:string};
+    expect(await verifyBearer(creds(),keyEnvelope.token,['pending','active'])).toMatchObject({ok:true,credentialId:pending.credentialId});
+    await grants.revokeRole({principalUserId:result.principalUserId,scope:'knowledge:read'});
+    const wire=createEnrollmentTransport({fetch:async () => {
+      const http=credentialHttp({op:'confirm',credentialId:pending.credentialId,result:await confirmCredential(creds(),{credentialId:pending.credentialId})});
+      return Response.json(http.body,{status:http.status,headers:http.headers});
+    }});
+    expect(await wire.confirmStaged(target.origin,keyEnvelope.token)).toEqual({status:403,refusal:'permission_off'});
+    expect((await db`SELECT confirmed_at FROM agent_credentials WHERE id=${pending.credentialId}`)[0]?.confirmed_at).toBeNull();
+    if (!grants.restoreRevoked) throw new Error('missing retained consent restore');
+    expect(await grants.restoreRevoked({principalUserId:result.principalUserId,scope:'knowledge:read',approvedBy:admin})).toBe(true);
+    expect(await wire.confirmStaged(target.origin,keyEnvelope.token)).toMatchObject({status:200,credentialId:pending.credentialId,observedAt:expect.any(String)});
+    expect(await verifyBearer(creds(),keyEnvelope.token,['active'])).toMatchObject({ok:true,credentialId:pending.credentialId});
+  });
+
+  it.each(['expired','revoked'] as const)('a %s winner between bearer verification and confirmation keeps its typed race result', async winner => {
+    const {proof,privateJwk}=await proofAt(), store=provider(), result=await store.acceptProof(proof,await hashAgentKey('confirm-race'));
+    if (!result.ok || !result.reply.sealedAcceptance) throw new Error('missing acceptance');
+    const admin=randomUUID(); await db`INSERT INTO users(id,name) VALUES(${admin},'race admin')`;
+    await createPostgresAgentGrantsStore(db as unknown as SqlTag).approvePending({principalUserId:result.principalUserId,scope:'knowledge:read',approvedBy:admin});
+    const receipt=JSON.parse(await openSealed(result.reply.sealedAcceptance,privateJwk)) as {deviceCode:string};
+    const pending=await store.pollStable(await hashAgentKey(receipt.deviceCode));
+    if (!pending.ok) throw new Error('missing pending key');
+    const envelope=JSON.parse(await openSealed(pending.sealedKey,privateJwk)) as {token:string};
+    expect(await verifyBearer(creds(),envelope.token,['pending','active'])).toMatchObject({ok:true});
+    if (winner==='expired') await db`UPDATE agent_credentials SET pending_expires_at=clock_timestamp()-interval '1 second' WHERE id=${pending.credentialId}`;
+    else await creds().revoke({credentialId:pending.credentialId,userId:result.principalUserId,reason:'fixture',revokedBy:admin});
+    const confirmed=await confirmCredential(creds(),{credentialId:pending.credentialId});
+    expect(confirmed).toEqual({ok:false,reason:winner});
+    expect(credentialHttp({op:'confirm',credentialId:pending.credentialId,result:confirmed})).toMatchObject({status:409,body:{error:winner==='expired'?'pending_expired':'superseded'}});
+  });
+
+  it.each([false,true])('home SQL publication uses receiver time at maximum lifetime (oversized=%s)', async oversized => {
+    const cipher=createCustodyCipher(new Uint8Array(32).fill(8),'fixture-v2'), signing=await generateKeyPair('EdDSA');
+    const custody=createPostgresRequesterCustody(client(),{cipher,systemPrincipalUserId:COGNI_SYSTEM_PRINCIPAL_USER_ID,readReadyConnection:async()=>null});
+    const requester=createEnrollmentRequester({...custody,cipher,fetch:discoveryFetch,signer:createEnrollmentProofSigner({kid:'fixture',key:signing.privateKey}),
+      transport:{postProof:async()=>{throw new Error('unused');},pollToken:async()=>({kind:'authorization_pending' as const}),confirmStaged:async()=>({status:503})}});
+    const view=await requester.ensure(key), handle={operationId:view.linkId,key}, row=await custody.store.read(handle);
+    if (!row) throw new Error('missing intent');
+    const connectionId=randomUUID(),credentialId=randomUUID(),ciphertext=Buffer.from('retained-staged-custody');
+    await db`INSERT INTO connections(id,billing_account_id,provider,credential_type,encrypted_credentials,encryption_key_id,scopes,created_by_user_id,service_identity,service_operation_id,service_credential_id,service_state)
+      VALUES(${connectionId},${key.billingAccountId},'cogni-node','api_key',${ciphertext},'fixture-v2',ARRAY['knowledge:read'],${COGNI_SYSTEM_PRINCIPAL_USER_ID},${JSON.stringify(key)}::text::jsonb,${view.linkId},${credentialId},'staged')`;
+    await db`UPDATE agent_service_link_operations SET phase='confirm_unknown',state=${JSON.stringify({...row.state,phase:'confirm_unknown',nextAction:'confirm',connectionId,credentialId})}::text::jsonb,
+      staged_connection_id=${connectionId},confirm_authorized_at=clock_timestamp() WHERE operation_id=${view.linkId}`;
+    const lease=await custody.store.acquire(handle,randomUUID()); if (!lease?.leaseOwner) throw new Error('missing lease');
+    const native=await db`SELECT clock_timestamp() AS at`, observedAt=new Date(new Date(native[0]?.at as string).getTime()+10000).toISOString();
+    const expiresAt=new Date(Date.parse(observedAt)+(oversized?31:30)*86400000).toISOString(),renewUntil=new Date(Date.parse(expiresAt)+14*86400000).toISOString();
+    const published=await custody.store.publish({...handle,revision:lease.revision,fence:lease.fence,leaseOwner:lease.leaseOwner},{expiresAt,renewUntil,observedAt});
+    if (oversized) expect(published).toBeNull(); else expect(published?.state.phase).toBe('connected');
+    const connection=await db`SELECT encrypted_credentials,service_state FROM connections WHERE id=${connectionId}`;
+    expect(connection[0]?.service_state).toBe(oversized?'staged':'ready');
+    expect(Buffer.from(connection[0]?.encrypted_credentials as Uint8Array)).toEqual(ciphertext);
+  });
+
+  it("authenticated terminal evidence fences real staged custody without erasing or publishing it", async () => {
+    const cipher=createCustodyCipher(new Uint8Array(32).fill(8),'fixture-v2'), signing=await generateKeyPair('EdDSA');
+    const custody=createPostgresRequesterCustody(client(),{cipher,systemPrincipalUserId:COGNI_SYSTEM_PRINCIPAL_USER_ID,readReadyConnection:async()=>null});
+    const requester=createEnrollmentRequester({...custody,cipher,fetch:discoveryFetch,signer:createEnrollmentProofSigner({kid:'fixture',key:signing.privateKey}),
+      transport:{postProof:async()=>{throw new Error('unused');},pollToken:async()=>({kind:'authorization_pending' as const}),confirmStaged:async()=>({status:503})}});
+    const first=await requester.ensure(key), h={operationId:first.linkId,key}, row=await custody.store.read(h);
+    if (!row) throw new Error('missing intent');
+    const connectionId=randomUUID(),credentialId=randomUUID(),ciphertext=Buffer.from('retained-terminal-stage');
+    await db`INSERT INTO connections(id,billing_account_id,provider,credential_type,encrypted_credentials,encryption_key_id,scopes,created_by_user_id,service_identity,service_operation_id,service_credential_id,service_state)
+      VALUES(${connectionId},${key.billingAccountId},'cogni-node','api_key',${ciphertext},'fixture-v2',ARRAY['knowledge:read'],${COGNI_SYSTEM_PRINCIPAL_USER_ID},${JSON.stringify(key)}::text::jsonb,${first.linkId},${credentialId},'staged')`;
+    await db`UPDATE agent_service_link_operations SET phase='confirm_unknown',state=${JSON.stringify({...row.state,phase:'confirm_unknown',nextAction:'continue',connectionId,credentialId})}::text::jsonb,
+      staged_connection_id=${connectionId},confirm_authorized_at=clock_timestamp(),secret_deadline=clock_timestamp()+interval '44 days' WHERE operation_id=${first.linkId}`;
+    const lease=await custody.store.acquire(h,randomUUID()); if (!lease?.leaseOwner) throw new Error('missing lease');
+    const guard={...h,revision:lease.revision,fence:lease.fence,leaseOwner:lease.leaseOwner};
+    const terminal=await custody.store.update(guard,{state:{...lease.state,phase:'needs_reenroll',nextAction:'none',terminalObservedAt:new Date().toISOString()},release:true});
+    expect(terminal?.fence).toBeGreaterThan(lease.fence);
+    expect(terminal?.secretDeadline).toBe(lease.secretDeadline);
+    expect(await custody.store.publish(guard,{expiresAt:new Date(Date.now()+86400000).toISOString(),renewUntil:new Date(Date.now()+2*86400000).toISOString()})).toBeNull();
+    expect(await custody.store.acquire(h,randomUUID())).toBeNull();
+    expect((await db`SELECT encrypted_credentials,service_state FROM connections WHERE id=${connectionId}`)[0])
+      .toMatchObject({encrypted_credentials:ciphertext,service_state:'staged'});
+  });
+
+  it("v2 service-bound alternate origins cannot first-activate outside receipt eligibility", async () => {
+    const { proof } = await proofAt(Date.now() - 2 * 86400000);
+    const user = randomUUID();
+    await db`INSERT INTO users(id,name) VALUES(${user},'retained service')`;
+    await db`INSERT INTO agent_principals(kind,user_id,service_key,current_operation_id,current_generation)
+      VALUES('external',${user},${await fullServiceKey(home,'node-ai')},${proof.operationId},1)`;
+    await db`INSERT INTO agent_service_enrollments(jti,issuer,service,principal_user_id,scope,device_code_hash,cnf_jwk,
+      expires_at,status,operation_id,generation,original_start_iat,original_start_exp,original_token_digest,intent_digest,canonical_intent,created_at)
+      VALUES(${proof.jti},${home.origin},'node-ai',${user},'knowledge:read',${randomUUID()},${JSON.stringify(proof.cnf.jwk)}::text::jsonb,
+        clock_timestamp()-interval '1 day','expired',${proof.operationId},1,to_timestamp(${proof.originalStartIat}),to_timestamp(${proof.originalStartExp}),
+        ${'a'.repeat(64)},${proof.intentDigest},${canonicalJson(intentOf(proof))},clock_timestamp()-interval '2 days')`;
+    for (const origin of ['key_upgrade','spawn_grant','binding_recovery','recovery_grant']) {
+      const rows = await db`INSERT INTO agent_credentials(user_id,token_hash,created_from,service_operation_id,service_generation,
+        pending_expires_at,expires_at,renew_until) VALUES(${user},${randomUUID()},${origin},${proof.operationId},1,
+        clock_timestamp()+interval '5 minutes',clock_timestamp()+interval '1 day',clock_timestamp()+interval '2 days') RETURNING id`;
+      await expect(db`UPDATE agent_credentials SET confirmed_at=clock_timestamp() WHERE id=${rows[0]?.id}`)
+        .rejects.toThrow('unsupported service activation origin');
+      await expect(db`INSERT INTO agent_credentials(user_id,token_hash,created_from,service_operation_id,service_generation,
+        pending_expires_at,expires_at,renew_until,confirmed_at) VALUES(${user},${randomUUID()},${origin},${proof.operationId},1,
+        clock_timestamp()+interval '5 minutes',clock_timestamp()+interval '1 day',clock_timestamp()+interval '2 days',clock_timestamp())`)
+        .rejects.toThrow('unsupported service activation origin');
+    }
+    expect((await db`SELECT id FROM agent_credentials WHERE user_id=${user} AND confirmed_at IS NOT NULL`)).toHaveLength(0);
+    expect(await readFile(resolve('../packages/agent-grants/migrations/agent_service_enrollment_review_guards.sql'),'utf8'))
+      .toBe(await readFile(resolve('src/adapters/server/db/migrations/0048_service_enrollment_review_guards.sql'),'utf8'));
+  });
+
+  it("Dismiss commits terminal denial before the caller returns; continuation, capacity and replacement agree", async () => {
+    const { proof, privateJwk } = await proofAt(), digest = await hashAgentKey('dismiss-start');
+    const store = provider(), accepted = await store.acceptProof(proof,digest);
+    if (!accepted.ok || !accepted.reply.sealedAcceptance) throw new Error('missing acceptance');
+    const receipt = JSON.parse(await openSealed(accepted.reply.sealedAcceptance,privateJwk)) as {deviceCode:string};
+    const grants = createPostgresAgentGrantsStore(db as unknown as SqlTag);
+    expect(await grants.denyPending({principalUserId:accepted.principalUserId,scope:'knowledge:read'})).toBe(true);
+    const denied = await db`SELECT status,terminal_at FROM agent_service_enrollments WHERE operation_id=${proof.operationId}`;
+    expect(denied[0]?.status).toBe('denied'); expect(denied[0]?.terminal_at).not.toBeNull();
+    expect((await db`SELECT id FROM agent_service_enrollments WHERE status='open' AND expires_at>clock_timestamp()`)).toHaveLength(0);
+    expect(await store.pollStable(await hashAgentKey(receipt.deviceCode))).toEqual({ok:false,error:'access_denied'});
+    expect(await store.acceptProof({...proof,op:'continue',originalTokenDigest:digest},'0'.repeat(64)))
+      .toMatchObject({ok:false,reason:'terminal_operation'});
+    const replacement = {...(await proofAt()).proof,generation:2,expectedGeneration:1,expectedOperationId:proof.operationId};
+    replacement.intentDigest = await intentDigestOf(intentOf(replacement));
+    expect(await store.acceptProof(replacement,await hashAgentKey('replacement-after-dismiss')))
+      .toMatchObject({ok:true,principalUserId:accepted.principalUserId,principalCreated:false});
+    expect((await db`SELECT id FROM agent_service_enrollments WHERE status='open' AND expires_at>clock_timestamp()`)).toHaveLength(1);
+    const history = await db`SELECT approved_by,revoked_at FROM agent_roles WHERE enrollment_operation_id=${proof.operationId}`;
+    expect(history[0]?.approved_by).toBeNull(); expect(history[0]?.revoked_at).not.toBeNull();
+  });
+
+  it("replacement proves absence by indexed live ranges despite ten thousand expired unrevoked credentials", async () => {
+    const user = randomUUID();
+    await db`INSERT INTO users(id,name) VALUES(${user},'retained audit')`;
+    await db`INSERT INTO agent_principals(kind,user_id) VALUES('external',${user})`;
+    // Ordinary guarded writes create confirmed history, then shorten its validity; no trigger/authority bypass.
+    await db`INSERT INTO agent_credentials(user_id,token_hash,created_from,pending_expires_at,expires_at,renew_until,confirmed_at)
+      SELECT ${user},'confirmed-audit-'||n,'key_upgrade',clock_timestamp()+interval '5 minutes',
+        clock_timestamp()+interval '1 day',clock_timestamp()+interval '2 days',clock_timestamp() FROM generate_series(1,5000) n`;
+    await db`UPDATE agent_credentials SET expires_at=clock_timestamp()-interval '2 days',renew_until=clock_timestamp()-interval '1 day' WHERE user_id=${user}`;
+    await db`INSERT INTO agent_credentials(user_id,token_hash,created_from,issued_at,pending_expires_at,expires_at,renew_until)
+      SELECT ${user},'pending-audit-'||n,'key_upgrade',clock_timestamp()-interval '2 days',clock_timestamp()-interval '2 days'+interval '5 minutes',
+        clock_timestamp()-interval '1 day',clock_timestamp()-interval '1 hour' FROM generate_series(1,5000) n`;
+    const marker = await fullServiceKey(home,'node-ai');
+    await db`UPDATE agent_principals SET service_key=${marker},home_node_id=${home.nodeId},home_environment=${home.environment},home_origin=${home.origin},home_service='node-ai' WHERE user_id=${user}`;
+    const {proof} = await proofAt(), store = provider();
+    const first = await store.acceptProof(proof,await hashAgentKey('audit-first'));
+    if (!first.ok) throw new Error('missing first operation');
+    await createPostgresAgentGrantsStore(db as unknown as SqlTag).denyPending({principalUserId:user,scope:'knowledge:read'});
+    // Remove only MVCC versions from seeding; all ten thousand retained audit rows remain.
+    await db.unsafe('VACUUM (ANALYZE) agent_credentials');
+    const probes: {query:string;values:string[]}[] = [];
+    // Record the actual production queries and parameters while every call still executes against PostgreSQL.
+    const recording = Object.assign(((strings,...values) => client()(strings,...values)) as SqlTag, {
+      begin: <T>(fn:(tx:SqlTag)=>Promise<T>) => db.begin(async tx => {
+        const tag: SqlTag = (strings,...values) => {
+          if (strings.join('').includes('FROM agent_credentials WHERE user_id=') && strings.join('').includes('ORDER BY')) {
+            probes.push({query:strings.reduce((q,part,n) => q+(n ? '$'+n : '')+part,''),values:values.map(value => {
+              if (typeof value !== 'string') throw new Error('unexpected live-range parameter'); return value;
+            })});
+          }
+          return (tx as unknown as SqlTag)(strings,...values);
+        };
+        return fn(Object.assign(tag,{savepoint:tx.savepoint.bind(tx)}));
+      }),
+    }) as CredentialSql;
+    const replacement = {...(await proofAt()).proof,generation:2,expectedGeneration:1,expectedOperationId:proof.operationId};
+    replacement.intentDigest = await intentDigestOf(intentOf(replacement));
+    expect(await createDurableProviderStore(recording).acceptProof(replacement,await hashAgentKey('audit-replacement'))).toMatchObject({ok:true,principalUserId:user});
+    expect(probes).toHaveLength(2); expect(probes[0]?.values[1]).toBe(probes[1]?.values[1]);
+    for (const [index,probe] of probes.entries()) {
+      const rows = await db.unsafe('EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON) '+probe.query,probe.values);
+      const plan = rows[0]?.['QUERY PLAN'][0].Plan;
+      const text = JSON.stringify(plan);
+      expect(text).toContain(index===0 ? 'agent_credentials_usable_idx' : 'agent_credentials_pending_idx');
+      expect(text).toContain('Index Cond'); expect(text).not.toContain('Seq Scan');
+      expect(plan['Actual Rows']).toBe(0);
+      expect((plan['Shared Hit Blocks']??0)+(plan['Shared Read Blocks']??0)).toBeLessThan(64);
+    }
+    expect((await db`SELECT count(*)::int AS n FROM agent_credentials WHERE user_id=${user} AND revoked_at IS NULL`)[0]?.n).toBe(10000);
+  },30000);
+
   it("verified legacy tuple reconciliation preserves the marker, user and grant and refuses ambiguous environments", async () => {
     const { proof } = await proofAt();
     const user = randomUUID(), admin = randomUUID(), role = randomUUID();
@@ -398,7 +593,11 @@ describe("v2 enrollment and requester SQL", () => {
     const mapped = createDurableProviderStore(client(), {legacyHomes:[{home,services:['node-ai']}]});
     expect(await mapped.acceptProof(proof,digest)).toMatchObject({ok:true,principalUserId:user,principalCreated:false});
     expect(await creds().lookup(await hashAgentKey('legacy-key'))).toMatchObject({credentialId:legacyCredential[0]?.id,userId:user,state:'active'});
-    const principal = await db`SELECT user_id,service_key,home_node_id,home_environment,home_origin,home_service FROM agent_principals WHERE user_id=${user}`;
+    const principal = await db`SELECT user_id,service_key,home_node_id,home_environment,home_origin,home_service,active_until FROM agent_principals WHERE user_id=${user}`;
+    const horizon = await db`SELECT renew_until FROM agent_credentials WHERE id=${legacyCredential[0]?.id}`;
+    expect(new Date(principal[0]?.active_until as string).getTime()).toBeGreaterThanOrEqual(new Date(horizon[0]?.renew_until as string).getTime());
+    const recovery = await db`SELECT expires_at FROM agent_service_enrollments WHERE operation_id=${proof.operationId}`;
+    expect(new Date(principal[0]?.active_until as string).getTime()).toBeGreaterThan(new Date(recovery[0]?.expires_at as string).getTime());
     expect(principal[0]).toMatchObject({user_id:user,service_key:marker,home_node_id:home.nodeId,home_environment:home.environment,home_origin:home.origin,home_service:'node-ai'});
     expect((await db`SELECT id,approved_by FROM agent_roles WHERE principal_user_id=${user} AND scope='knowledge:read'`)).toEqual([expect.objectContaining({id:role,approved_by:admin})]);
     expect((await db`SELECT user_id FROM agent_principals WHERE home_node_id=${home.nodeId} AND home_environment=${home.environment} AND home_origin=${home.origin} AND home_service='node-ai'`)).toHaveLength(1);

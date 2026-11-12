@@ -4,10 +4,12 @@
 /** Behavioral crash/concurrency fixtures; SQL lock/FK proof runs separately in component CI. */
 import { createLocalJWKSet, exportJWK, generateKeyPair } from "jose";
 import { describe, expect, it } from "vitest";
+import { credentialHttp, credentialDenialHttp } from "../src/credentials/http";
 import { mintKey } from "../src/credentials/service";
 import {
   type ConnectionKey,
   createEnrollmentTokenVerifier,
+  durableEnrollmentHttp,
   ENROLLMENT_PROTOCOL,
   type EnrollmentProof,
   sealToJwk,
@@ -17,6 +19,7 @@ import {
   createCustodyCipher,
   createEnrollmentProofSigner,
   createEnrollmentRequester,
+  createEnrollmentTransport,
   createServiceLinkHandlers,
 } from "../src/enrollment/requester";
 import type {
@@ -62,6 +65,9 @@ async function fixture(discovery?: unknown) {
     throttleConfirm = false,
     terminalRemote = false,
     ambiguousRemote = false;
+  let missingAt: string | null = null, receiverSkew = 0, activatedAt: number | null = null;
+  let confirmRefusal: "permission_off" | "expired" | "revoked" | null = null;
+  let confirmAuthFailure = false, untypedTerminal = false, unknownConfirm = false, oversizedConfirm = false;
   const signerKey = await generateKeyPair("EdDSA");
   const signer = createEnrollmentProofSigner({
     kid: "k1",
@@ -81,7 +87,7 @@ async function fixture(discovery?: unknown) {
       createLocalJWKSet({
         keys: [{ ...awaitedPublic, kid: "k1", alg: "EdDSA" }],
       }),
-    now: () => new Date(time),
+    now: () => new Date(time + receiverSkew),
   });
   const awaitedPublic = await exportJWK(signerKey.publicKey);
   const cipher = createCustodyCipher(new Uint8Array(32).fill(7), "test");
@@ -119,6 +125,7 @@ async function fixture(discovery?: unknown) {
         !row ||
         row.operationId !== h.operationId ||
         JSON.stringify(row.state.key) !== JSON.stringify(h.key) ||
+        ["disconnected", "denied", "expired", "expired_unknown", "needs_reenroll"].includes(row.state.phase) ||
         Date.parse(row.nextAttemptAt) > time ||
         Date.parse(row.leaseUntil ?? "") > time
       )
@@ -143,6 +150,7 @@ async function fixture(discovery?: unknown) {
       row = {
         ...row,
         state: clone(change.state),
+        fence: row.fence + ((change.state.nonacceptanceObservedAt && !row.state.nonacceptanceObservedAt) || (change.state.terminalObservedAt && !row.state.terminalObservedAt) ? 1 : 0),
         revision: row.revision + 1,
         encryptedSecrets:
           change.encryptedSecrets === undefined
@@ -173,7 +181,7 @@ async function fixture(discovery?: unknown) {
         },
         leaseOwner: null,
         leaseUntil: null,
-        secretDeadline: new Date(time + 44 * 86400000).toISOString(),
+        secretDeadline: new Date(time + receiverSkew + 44 * 86400000).toISOString(),
       };
       return clone(row);
     },
@@ -228,6 +236,11 @@ async function fixture(discovery?: unknown) {
       return connected ? bearer : null;
     },
   };
+  const refuseProof = (token: string, reason: "unknown_operation" | "terminal_operation", observedAt: string, typed = true) => {
+    const http = durableEnrollmentHttp({ok:false,reason,observedAt});
+    const wire = createEnrollmentTransport({fetch:async () => Response.json(typed ? http.body : {observedAt}, {status:http.status,headers:http.headers})});
+    return wire.postProof(key.target.origin,token);
+  };
   const transport = {
     async postProof(tokenOrigin: string, token: string) {
       expect(tokenOrigin).toBe(key.target.origin);
@@ -235,9 +248,10 @@ async function fixture(discovery?: unknown) {
       const checked = await verifier(token);
       if (!checked.ok) throw new Error("bad proof");
       const p = checked.claims;
+      if (missingAt) return refuseProof(token,"unknown_operation",missingAt);
       if (ambiguousRemote) throw new EnrollmentClientError("origin_unreachable");
       if (accepted && terminalRemote) {
-        if (p.op === "continue") throw new EnrollmentClientError("enrollment_rejected", 410, new Date(time).toISOString());
+        if (p.op === "continue") return refuseProof(token,"terminal_operation",new Date(time+receiverSkew).toISOString(),!untypedTerminal);
         expect(p.expectedOperationId).toBe(accepted.operationId);
         expect(p.expectedGeneration).toBe(accepted.generation);
         accepted = null;
@@ -245,15 +259,11 @@ async function fixture(discovery?: unknown) {
       }
       if (!accepted) {
         if (p.op !== "start")
-          throw new EnrollmentClientError(
-            "enrollment_rejected",
-            404,
-            new Date(time).toISOString()
-          );
+          return refuseProof(token,"unknown_operation",new Date(time+receiverSkew).toISOString());
         if (!p.expectedOperationId) expect(p.expectedGeneration).toBe(0);
         starts++;
         accepted = p;
-        const at = new Date(time).toISOString();
+        const at = new Date(time + receiverSkew).toISOString();
         receipt = await sealToJwk(
           JSON.stringify({
             protocol: ENROLLMENT_PROTOCOL,
@@ -268,7 +278,7 @@ async function fixture(discovery?: unknown) {
             principalUserId: "target-agent",
             deviceCode: "a".repeat(43),
             acceptedAt: at,
-            recoveryExpiresAt: new Date(time + 86400000).toISOString(),
+            recoveryExpiresAt: new Date(time + receiverSkew + 86400000).toISOString(),
             interval: 5,
           }),
           p.cnf.jwk
@@ -313,9 +323,9 @@ async function fixture(discovery?: unknown) {
             principalUserId: "target-agent",
             credentialId,
             token: bearer,
-            pendingExpiresAt: new Date(time + 900000).toISOString(),
-            expiresAt: new Date(time + 30 * 86400000).toISOString(),
-            renewUntil: new Date(time + 44 * 86400000).toISOString(),
+            pendingExpiresAt: new Date(time + receiverSkew + 900000).toISOString(),
+            expiresAt: new Date(time + receiverSkew + 30 * 86400000).toISOString(),
+            renewUntil: new Date(time + receiverSkew + 44 * 86400000).toISOString(),
           }),
           accepted.cnf.jwk
         );
@@ -324,7 +334,7 @@ async function fixture(discovery?: unknown) {
         kind: "issued" as const,
         sealedKey,
         credentialId,
-        pendingExpiresAt: new Date(time + 900000).toISOString(),
+        pendingExpiresAt: new Date(time + receiverSkew + 900000).toISOString(),
       };
     },
     async confirmStaged(origin: string, token: string) {
@@ -334,17 +344,26 @@ async function fixture(discovery?: unknown) {
       expect(row?.state.connectionId).toBe("stage");
       expect(token).toBe(bearer);
       if (throttleConfirm) return { status: 429 };
-      connected = true;
-      if (dropConfirm) {
-        dropConfirm = false;
-        throw new EnrollmentClientError("origin_unreachable");
-      }
-      return {
-        status: 200,
-        credentialId,
-        expiresAt: new Date(time + 29 * 86400000).toISOString(),
-        renewUntil: new Date(time + 43 * 86400000).toISOString(),
-      };
+      const wire = createEnrollmentTransport({ fetch: async (_url, init) => {
+        expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${bearer}`);
+        if (unknownConfirm) return Response.json({}, {status:409});
+        const replay = connected;
+        if (!confirmRefusal && !confirmAuthFailure) {
+          connected = true;
+          activatedAt ??= time + receiverSkew;
+          if (dropConfirm) { dropConfirm = false; throw new TypeError("confirmation reply lost"); }
+        }
+        const http = confirmAuthFailure ? credentialDenialHttp("invalid") : credentialHttp({ op: "confirm", credentialId,
+          result: confirmRefusal ? {ok:false,reason:confirmRefusal} : {
+            ok:true,status:replay ? "already_active" : "confirmed", userId:"target-agent",
+            observedAt:new Date(time+receiverSkew).toISOString(),
+            expiresAt:new Date((activatedAt ?? time) + (oversizedConfirm?31:30)*86400000).toISOString(),
+            renewUntil:new Date((activatedAt ?? time) + (oversizedConfirm?45:44)*86400000).toISOString(),
+          },
+        });
+        return Response.json(http.body,{status:http.status,headers:http.headers});
+      } });
+      return wire.confirmStaged(origin,token);
     },
   };
   const create = () =>
@@ -374,6 +393,13 @@ async function fixture(discovery?: unknown) {
     get bearer() { return bearer; },
     terminalRemote: () => { terminalRemote = true; },
     ambiguousRemote: () => { ambiguousRemote = true; },
+    missingAt: (at: string) => { missingAt = at; },
+    skewTarget: (ms: number) => { receiverSkew = ms; },
+    refuseConfirm: (reason: typeof confirmRefusal) => { confirmRefusal = reason; },
+    rejectConfirmAuth: (on: boolean) => { confirmAuthFailure = on; },
+    untypedTerminal: () => { untypedTerminal = true; },
+    unknownConfirm: () => { unknownConfirm = true; },
+    oversizedConfirm: () => { oversizedConfirm = true; },
     throttle: (on: boolean) => { throttleConfirm = on; },
     step,
     key,
@@ -522,6 +548,38 @@ describe("durable enrollment requester", () => {
     expect(f.row?.encryptedSecrets).toBeNull();
     expect(f.starts).toBe(0);
   });
+  it("serialized continuation404 after original expiry fences and erases pre-key custody before fallback, without automatic restart", async () => {
+    const f = await fixture(), r = f.create();
+    const first = await r.ensure(key), h = { operationId: first.linkId, key };
+    const original = f.row;
+    if (!original) throw new Error("missing intent");
+    f.shift(11 * 60000);
+    const result = await r.advance(h);
+    expect(result.phase).toBe("expired_unknown");
+    expect(f.row?.encryptedSecrets).toBeNull();
+    expect(f.row?.state.nonacceptanceObservedAt).toBeTruthy();
+    expect(f.row?.fence).toBeGreaterThan(original.fence);
+    expect(f.starts).toBe(0);
+    await r.advance(h); expect(f.starts).toBe(0);
+    const next = await r.reenroll(h, result.revision);
+    expect(next.linkId).not.toBe(first.linkId);
+    expect(f.row?.state.intent).toMatchObject({ generation: 1, expectedGeneration: 0, expectedOperationId: null });
+  });
+  it("original-start404 and pre-expiry receiver observations retain encrypted uncertainty", async () => {
+    const f = await fixture(), r = f.create();
+    const first = await r.ensure(key), h = { operationId: first.linkId, key };
+    const original = f.row;
+    if (!original) throw new Error("missing intent");
+    f.missingAt(new Date(original.state.intent.originalStartExp * 1000 + 1000).toISOString());
+    expect((await r.advance(h)).phase).toBe("start_unknown"); // This was a start, not authenticated continuation reconciliation.
+    expect(f.row?.encryptedSecrets).toBe(original.encryptedSecrets);
+    f.shift(11 * 60000);
+    f.missingAt(new Date(original.state.intent.originalStartExp * 1000 - 1000).toISOString());
+    expect((await r.advance(h)).phase).toBe("start_unknown");
+    expect(f.row?.encryptedSecrets).toBe(original.encryptedSecrets);
+    expect(f.row?.state.nonacceptanceObservedAt).toBeUndefined();
+    expect(f.starts).toBe(0);
+  });
   it("explicit reenroll reconciles a never-accepted expired intent without inventing a predecessor", async () => {
     const f = await fixture(); const r = f.create();
     const first = await r.ensure(key);
@@ -585,6 +643,54 @@ describe("durable enrollment requester", () => {
     expect(result.body).toEqual({ "[REDACTED]": { nested: ["[REDACTED]", "[REDACTED]", "[REDACTED]"], title: "Useful rule" } });
     for (const token of [f.bearer, other, legacy]) expect(JSON.stringify(result)).not.toContain(token);
     expect(result.headers["cache-control"]).toBe("no-store");
+  });
+  it("Off between stage and confirm traverses the real HTTP mapping and On confirms the same key", async () => {
+    const f=await fixture(), r=f.create(); await r.ensure(key); await f.step(r); await f.step(r);
+    const staged=f.row?.state.credentialId, token=f.bearer;
+    f.refuseConfirm("permission_off"); await f.step(r);
+    expect(f.row?.state).toMatchObject({phase:"confirm_unknown",error:"permission_off",nextAction:"confirm",attempts:0,paused:false});
+    expect(f.bearer).toBe(token); f.refuseConfirm(null);
+    expect((await f.step(r)).phase).toBe("connected");
+    expect(f.row?.state.credentialId).toBe(staged); expect(f.polls).toBe(1); expect(f.starts).toBe(1);
+  });
+  it.each(["expired","revoked"] as const)("typed %s confirmation race reconciles terminal410 without erasing staged custody", async reason => {
+    const f=await fixture(), r=f.create(); const first=await r.ensure(key); await f.step(r); await f.step(r);
+    const staged=f.row?.state.credentialId, token=f.bearer;
+    f.shift(25*3600000); f.refuseConfirm(reason); await f.step(r);
+    expect(f.row?.state.nextAction).toBe("continue");
+    f.terminalRemote(); expect((await f.step(r)).phase).toBe("needs_reenroll");
+    expect(f.row?.state).toMatchObject({credentialId:staged,connectionId:"stage",nextAction:"none",paused:false});
+    expect(f.row?.state.terminalObservedAt).toBeTruthy(); expect(f.bearer).toBe(token); expect(f.polls).toBe(1);
+    const terminal=f.row; if (!terminal) throw new Error("missing terminal");
+    await r.reenroll({operationId:first.linkId,key},terminal.revision);
+    expect(f.row?.state.intent).toMatchObject({generation:2,expectedGeneration:1,expectedOperationId:first.linkId});
+  });
+  it("untyped proxy410 and unknown409 retain staged uncertainty rather than claiming terminal or Off", async () => {
+    const f=await fixture(), r=f.create(); await r.ensure(key); await f.step(r); await f.step(r);
+    f.refuseConfirm("expired"); await f.step(r); f.terminalRemote(); f.untypedTerminal(); await f.step(r);
+    expect(f.row?.state).toMatchObject({phase:"confirm_unknown",attempts:1});
+    expect(f.row?.state.terminalObservedAt).toBeUndefined(); expect(f.row?.state.connectionId).toBe("stage");
+    const g=await fixture(), s=g.create(); await s.ensure(key); await g.step(s); await g.step(s); g.unknownConfirm(); await g.step(s);
+    expect(g.row?.state).toMatchObject({phase:"confirm_unknown",error:"protocol_error",attempts:1});
+  });
+  it("lost successful confirmation remains status-recoverable after receipt expiry and retries the same key", async () => {
+    const f=await fixture(), r=f.create(); await r.ensure(key); await f.step(r); await f.step(r); f.dropConfirm(); await f.step(r);
+    const token=f.bearer; f.shift(2*86400000); f.rejectConfirmAuth(true); await f.step(r); f.rejectConfirmAuth(false);
+    await f.step(r); expect(f.row?.state.nextAction).toBe("confirm");
+    expect((await f.step(r)).phase).toBe("connected"); expect(f.bearer).toBe(token); expect(f.polls).toBe(1); expect(f.starts).toBe(1);
+  });
+  it("receiver10s ahead can stage and confirm the maximum30d/14d policy without quarantine", async () => {
+    const f=await fixture(), r=f.create(); f.skewTarget(10000); await r.ensure(key); await f.step(r);
+    expect((await f.step(r)).phase).toBe("key_staged");
+    expect((await f.step(r)).phase).toBe("connected");
+    expect(f.row?.state.quarantined).not.toBe(true); expect(f.row?.state.paused).toBe(false);
+  });
+  it("receiver time never excuses an oversized later policy or authorizes custody erasure", async () => {
+    const f=await fixture(), r=f.create(); f.skewTarget(10000); await r.ensure(key); await f.step(r); await f.step(r);
+    const staged=f.row?.state.credentialId, token=f.bearer;
+    f.oversizedConfirm(); await f.step(r);
+    expect(f.row?.state).toMatchObject({phase:"confirm_unknown",paused:true,quarantined:true,error:"protocol_error",credentialId:staged});
+    expect(f.bearer).toBe(token); expect(f.polls).toBe(1);
   });
   it("custody cipher rejects a different service/environment/operation AAD", async () => {
     const f = await fixture();

@@ -259,6 +259,13 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
     },
     async denyPending({ principalUserId, scope }) {
       return mutate(principalUserId, async (sql) => {
+        // V2 Dismiss writes its receipt before the role, under the already-held user authority.
+        // Authority-only adopters have a null current operation and need no v2 receipt columns.
+        const principal = await sql`SELECT current_operation_id FROM agent_principals WHERE user_id=${principalUserId}`;
+        const operation = principal[0]?.current_operation_id;
+        if (typeof operation === "string")
+          await sql`SELECT id FROM agent_service_enrollments WHERE operation_id=${operation}
+            AND principal_user_id=${principalUserId} FOR UPDATE`;
         const rows = await sql`
           UPDATE agent_roles SET revoked_at = clock_timestamp()
           WHERE principal_user_id = ${principalUserId} AND scope = ${scope}

@@ -29,6 +29,10 @@ export interface ReplacementBasis {
 export interface LinkState {
   /** Authenticated accepted-only reconciliation for an explicit local replacement; never an automatic restart. */
   replacementBasis?: ReplacementBasis;
+  /** Receiver-observed serialized continuation404 after original expiry, before any acceptance/stage. */
+  nonacceptanceObservedAt?: string;
+  terminalObservedAt?: string;
+  confirmationObservedAt?: string;
   key: ConnectionKey;
   intent: EnrollmentIntent;
   intentDigest: string;
@@ -122,7 +126,7 @@ export interface RequesterStore {
   ): Promise<LinkRow | null>;
   publish(
     guard: LeaseGuard,
-    deadlines: { expiresAt: string; renewUntil: string }
+    deadlines: { expiresAt: string; renewUntil: string; observedAt?: string }
   ): Promise<LinkRow | null>;
   disconnect(
     handle: LinkHandle,

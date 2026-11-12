@@ -14,6 +14,12 @@ const hashAgentKey = async (value: string): Promise<string> => {
 import { isHttpsOrigin, serviceEnrollmentCnfJwk } from "./claims";
 
 export const ENROLLMENT_PROTOCOL = "service.enrollment.v2";
+/** Clock disagreement accepted by custody, never extra target credential validity or proof expiry tolerance. */
+export const ENROLLMENT_CLOCK_MARGIN_MS = 60000;
+export const enrollmentRefusalSchema = z.enum(["invalid_token", "jwks_unavailable", "invalid_scope", "intent_conflict", "unknown_operation", "terminal_operation", "node_full"]);
+export type EnrollmentRefusal = z.infer<typeof enrollmentRefusalSchema>;
+export const confirmationRefusalSchema = z.enum(["permission_off", "pending_expired", "superseded", "predecessor_revoked", "binding_required", "invalid_token"]);
+export type ConfirmationRefusal = z.infer<typeof confirmationRefusalSchema>;
 export const nodeTupleSchema = z.strictObject({
   nodeId: z.string().uuid(),
   environment: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/),
@@ -192,6 +198,7 @@ export const confirmAgentCredentialOperation = {
     status: z.literal("active"),
     /** True when the credential was already active (a replayed confirm). */
     replay: z.boolean(),
+    observedAt: z.string().datetime().optional(),
     expiresAt: z.string().min(1),
     renewUntil: z.string().min(1),
   }),

@@ -4,7 +4,7 @@
 /** Durable requester + existing connections vault over one injected service transaction. No pool or secret configuration owned here. */
 import type { CredentialSql } from "../../credentials/postgres";
 import type { SqlTag } from "../../postgres";
-import { canonicalJson, connectionKeyDigest } from "../protocol";
+import { canonicalJson, connectionKeyDigest, ENROLLMENT_CLOCK_MARGIN_MS } from "../protocol";
 import { custodyAad } from "./cipher";
 import type {
   CustodyCipher,
@@ -112,15 +112,28 @@ export function createPostgresRequesterCustody(
       r.state.originalTokenDigest !== state.originalTokenDigest
     )
       throw new Error("immutable_link_identity");
+    const definitive = state.nonacceptanceObservedAt !== undefined &&
+      state.nonacceptanceObservedAt !== r.state.nonacceptanceObservedAt;
+    if (definitive &&
+        (!Number.isFinite(Date.parse(state.nonacceptanceObservedAt ?? "")) ||
+         Date.parse(state.nonacceptanceObservedAt ?? "") < r.state.intent.originalStartExp * 1000 ||
+         r.state.acceptedAt || r.state.enrollmentId || r.state.connectionId || r.state.credentialId ||
+         !["start_ready", "start_unknown"].includes(r.state.phase) ||
+         state.phase !== "expired_unknown" || state.nextAction !== "none" || settings.encryptedSecrets !== null))
+      throw new Error("invalid_nonacceptance_transition");
+    const terminalEvidence = state.terminalObservedAt !== undefined && state.terminalObservedAt !== r.state.terminalObservedAt;
+    if (terminalEvidence && (!Number.isFinite(Date.parse(state.terminalObservedAt ?? "")) ||
+        state.phase !== "needs_reenroll" || state.nextAction !== "none")) throw new Error("invalid_terminal_transition");
     const out =
-      await tx`UPDATE agent_service_link_operations SET state=${JSON.stringify(state)}::text::jsonb, phase=${state.phase},revision=revision+1,
+      await tx`UPDATE agent_service_link_operations SET state=${JSON.stringify(state)}::text::jsonb, phase=${state.phase},revision=revision+1,fence=fence+${definitive || terminalEvidence ? 1 : 0},
       encrypted_secrets=${settings.encryptedSecrets === undefined ? r.encryptedSecrets : settings.encryptedSecrets},
       lease_owner=${settings.release ? null : r.leaseOwner},lease_until=${settings.release ? null : r.leaseUntil},
       next_attempt_at=clock_timestamp()+(${settings.delaySec ?? 0}::int*interval '1 second'),
       confirm_authorized_at=CASE WHEN ${state.phase}='confirm_unknown' THEN COALESCE(confirm_authorized_at,clock_timestamp()) ELSE confirm_authorized_at END,
       terminal_at=CASE WHEN ${["disconnected", "denied", "expired", "expired_unknown", "needs_reenroll"].includes(state.phase)} THEN COALESCE(terminal_at,clock_timestamp()) ELSE terminal_at END
       WHERE operation_id=${r.operationId} AND revision=${r.revision} AND fence=${r.fence}
-        AND lease_until>clock_timestamp() AND (secret_deadline>clock_timestamp() OR state->>'quarantined'='true') RETURNING *`;
+        AND lease_until>clock_timestamp() AND (secret_deadline>clock_timestamp() OR state->>'quarantined'='true')
+        AND (NOT ${definitive} OR (staged_connection_id IS NULL AND confirm_authorized_at IS NULL)) RETURNING *`;
     return out[0] ? decode(out[0]) : null;
   }
   // A failed final CAS must abort the transaction containing vault changes.
@@ -283,7 +296,7 @@ export function createPostgresRequesterCustody(
           throw new Error("stage_custody_conflict");
         // Lost confirmation can activate as late as pendingExpiresAt; retain through that maximum44-day validity plus clock margin.
         const retention = new Date(
-          Date.parse(envelope.pendingExpiresAt) + 44 * 86400000 + 60000
+          Date.parse(envelope.pendingExpiresAt) + 44 * 86400000 + ENROLLMENT_CLOCK_MARGIN_MS
         ).toISOString();
         await tx`UPDATE agent_service_link_operations SET staged_connection_id=${connectionId},secret_deadline=${retention} WHERE operation_id=${r.operationId}`;
         return writeCustody(
@@ -321,7 +334,10 @@ export function createPostgresRequesterCustody(
           WHERE id=${r.state.connectionId} AND provider='cogni-node' AND service_identity=${JSON.stringify(g.key)}::text::jsonb AND billing_account_id=${g.key.billingAccountId}
             AND service_operation_id=${r.operationId} AND service_credential_id=${r.state.credentialId} AND service_state IN ('staged','ready')
             AND ${deadlines.expiresAt}::timestamptz>clock_timestamp() AND ${deadlines.renewUntil}::timestamptz<=${deadlines.expiresAt}::timestamptz+interval '14 days'
-            AND ${deadlines.expiresAt}::timestamptz<=clock_timestamp()+interval '30 days' RETURNING id`;
+            AND (${deadlines.observedAt ?? null}::timestamptz IS NULL OR ${deadlines.observedAt ?? null}::timestamptz
+              BETWEEN clock_timestamp()-(${ENROLLMENT_CLOCK_MARGIN_MS}::int*interval '1 millisecond') AND clock_timestamp()+(${ENROLLMENT_CLOCK_MARGIN_MS}::int*interval '1 millisecond'))
+            AND ${deadlines.expiresAt}::timestamptz<=COALESCE(${deadlines.observedAt ?? null}::timestamptz,
+              clock_timestamp()+(${ENROLLMENT_CLOCK_MARGIN_MS}::int*interval '1 millisecond'))+interval '30 days' RETURNING id`;
         if (!p.length) return null;
         await tx`UPDATE agent_service_link_operations SET secret_deadline=${deadlines.renewUntil}::timestamptz+interval '60 seconds' WHERE operation_id=${r.operationId}`;
         return writeCustody(
@@ -329,7 +345,8 @@ export function createPostgresRequesterCustody(
           r,
           {
             ...r.state,
-            ...deadlines,
+            expiresAt: deadlines.expiresAt, renewUntil: deadlines.renewUntil,
+            ...(deadlines.observedAt ? { confirmationObservedAt: deadlines.observedAt } : {}),
             phase: "connected",
             nextAction: "none",
             quarantined: false,

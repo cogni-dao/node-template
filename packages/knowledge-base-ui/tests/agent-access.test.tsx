@@ -115,6 +115,27 @@ const SAVE = /^node-ai: Save notes$/;
 const ASK = /^Helper bot: Update work items$/;
 
 describe("AgentAccessSection: an admin", () => {
+  it("keeps switch and dismiss targets at least24px and usable from the keyboard", async () => {
+    fetchMock.mockImplementation((_url: string, init?: RequestInit) => {
+      if (init?.method === "POST") allowed = true;
+      if (init?.method === "DELETE") asked = false;
+      return json(200, view());
+    });
+    render(<AgentAccessSection endpoints={ENDPOINTS} />);
+    const toggle = await screen.findByRole("switch", { name: SAVE });
+    const dismiss = screen.getByRole("button", { name: /^Dismiss the ask:/ });
+    for (const control of [toggle, dismiss]) {
+      expect(control).toHaveClass("min-h-6", "min-w-6"); // jsdom has no layout: actual rectangle proof remains the browser gate.
+      expect(control.className).toContain("focus-visible:");
+    }
+    toggle.focus(); await userEvent.keyboard(" ");
+    await waitFor(() => expect(screen.getByRole("switch", { name: SAVE })).toHaveAttribute("aria-checked", "true"));
+    await waitFor(() => expect(screen.queryByText("Saving")).toBeNull());
+    screen.getByRole("button", { name: /^Dismiss the ask:/ }).focus(); await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(screen.queryByRole("button", { name: /^Dismiss the ask:/ })).toBeNull());
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method).map(([, init]) => init.method)).toEqual(["POST", "DELETE"]);
+  });
+
   it("forwards cursors, deduplicates recurring rows, and retains later-page Off/On controls after refresh", async () => {
     let laterOn = true;
     const cursor = { principalUserId: "external-a", scope: "knowledge:read" };

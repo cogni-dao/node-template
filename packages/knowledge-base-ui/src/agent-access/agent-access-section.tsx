@@ -212,7 +212,7 @@ export function AgentAccessSection({
                                     type="button"
                                     aria-label={`Dismiss the ask: ${row.who}: ${row.label}`}
                                     aria-disabled={busy !== null || undefined}
-                                    className="px-1 text-muted-foreground hover:text-foreground"
+                                    className="inline-flex min-h-6 min-w-6 items-center justify-center px-1 text-muted-foreground hover:text-foreground focus-visible:outline focus-visible:outline-ring"
                                     onClick={() => {
                                       if (busy === null)
                                         void dismiss(
@@ -259,7 +259,7 @@ function Switch(props: {
         if (!props.locked) props.onToggle();
       }}
       className={cn(
-        "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border border-transparent transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+        "relative inline-flex min-h-6 min-w-6 w-9 shrink-0 items-center rounded-full border border-transparent transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
         props.on ? "bg-primary" : "bg-input"
       )}
     >

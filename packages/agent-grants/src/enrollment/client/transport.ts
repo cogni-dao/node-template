@@ -19,7 +19,7 @@
  */
 
 import { z } from "zod";
-import { confirmAgentCredentialOperation } from "../protocol";
+import { confirmAgentCredentialOperation, confirmationRefusalSchema, enrollmentRefusalSchema, type ConfirmationRefusal, type EnrollmentRefusal } from "../protocol";
 import {
   pollServiceEnrollmentOperation,
   requestServiceEnrollmentOperation,
@@ -53,7 +53,8 @@ export class EnrollmentClientError extends Error {
   constructor(
     readonly code: EnrollmentClientErrorCode,
     readonly status?: number,
-    readonly observedAt?: string
+    readonly observedAt?: string,
+    readonly refusal?: EnrollmentRefusal
   ) {
     super(code);
     this.name = "EnrollmentClientError";
@@ -87,6 +88,8 @@ export interface EnrollmentTransport {
     apiKey: string
   ): Promise<{
     status: number;
+    refusal?: ConfirmationRefusal;
+    observedAt?: string;
     credentialId?: string;
     expiresAt?: string;
     renewUntil?: string;
@@ -192,7 +195,8 @@ export function createEnrollmentTransport(
         throw new EnrollmentClientError(
           "enrollment_rejected",
           status,
-          typeof json.observedAt === "string" ? json.observedAt : undefined
+          typeof json.observedAt === "string" ? json.observedAt : undefined,
+          enrollmentRefusalSchema.safeParse(json.error).data
         );
       const parsed = enrollmentReplySchema.safeParse(json);
       if (!parsed.success)
@@ -203,13 +207,17 @@ export function createEnrollmentTransport(
       const { status, json } = await call(origin, ENROLLMENT_CONFIRM_PATH, {
         bearer: apiKey,
       });
-      if (status !== 200) return { status };
+      if (status !== 200) {
+        const refusal = confirmationRefusalSchema.safeParse(json.error);
+        return { status, ...(refusal.success ? { refusal: refusal.data } : {}) };
+      }
       const parsed = confirmAgentCredentialOperation.output.safeParse(json);
       if (!parsed.success)
         throw new EnrollmentClientError("bad_response", status);
       return {
         status,
         credentialId: parsed.data.credentialId,
+        ...(parsed.data.observedAt ? { observedAt: parsed.data.observedAt } : {}),
         expiresAt: parsed.data.expiresAt,
         renewUntil: parsed.data.renewUntil,
       };
