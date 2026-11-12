@@ -192,6 +192,18 @@ describe("work-prioritizer binds core__work_item_update behind the guard", () =>
     expect(a.writes).toHaveLength(3);
   });
 
+  it("retains a null direction when recording an item for triage", async () => {
+    const a = setup();
+    const moves = [{ metricId: "repair-metric", direction: null }];
+    a.read(item("task.1", { moves }));
+    expect(a.receipts.items.get("task.1")?.moves).toEqual(moves);
+    expect(await a.call(update("task.1", { moves }))).toBe("no_change");
+    expect(
+      await a.call(update("task.1", { status: "needs_implement" })),
+    ).toContain('"revision"');
+    expect(a.writes[0]).toMatchObject({ set: { status: "needs_implement" } });
+  });
+
   it("sets only status, scores, labels and moves", async () => {
     const a = setup();
     a.read(item("task.1", { labels: ["area:ai"] }));

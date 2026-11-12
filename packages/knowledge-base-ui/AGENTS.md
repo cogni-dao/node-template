@@ -26,6 +26,8 @@ Published React components and hooks every node renders for knowledge (Browse, G
 
 ## Public Surface (work, task.0055)
 
+- `WorkMetricSummary`, `WorkMetricDetails`, `WorkExpectations` — shared work metric and recorded EDO presentation; the node injects authenticated expectation reads.
+
 - `WorkBoard` / `WorkBoardView` — render per-status column pages (`columns`, `onLoadMore`); there is no rows-from-an-array mode. Empty capped columns show "Search further (N scanned)"; columns the board budget did not reach show "Load".
 - `useWorkBoard` — one board request, one page per Load more, aborts on change.
 - `useWorkTablePage`, `clampWorkPageSize`, `workPageStackNext` / `workPageStackPrevious` — one table page per cursor; the node keeps the cursor and stack in its URL/history.

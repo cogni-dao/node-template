@@ -32,8 +32,30 @@ const WorkItemScoresDtoSchema = z.record(
 );
 
 const MoveReadingDtoSchema = z.object({
-	value: z.number(),
-	observedAt: z.string(),
+	value: z.number().nullable(),
+	observedAt: z.string().nullable(),
+	id: z.string().optional(),
+	metricId: z.string().optional(),
+	metricTitle: z.string().optional(),
+	definitionRevision: z.string().optional(),
+	definitionHash: z.string().optional(),
+	calculatorVersion: z.string().optional(),
+	paramsHash: z.string().optional(),
+	node: z.string().optional(),
+	environment: z.string().optional(),
+	dataScope: z.string().optional(),
+	window: z.object({ start: z.string(), end: z.string() }).optional(),
+	sourceWatermarks: z
+		.array(z.object({ source: z.string(), asOf: z.string().nullable() }))
+		.optional(),
+	status: z.enum(["pending", "ok", "unavailable", "error"]).optional(),
+	unit: z.string().optional(),
+	reason: z.string().nullable().optional(),
+	evidenceRefs: z.array(z.string()).optional(),
+	maxAgeSeconds: z.number().positive().optional(),
+	viewState: z
+		.enum(["ok", "stale", "pending", "unavailable", "error"])
+		.optional(),
 });
 
 /**
@@ -42,17 +64,22 @@ const MoveReadingDtoSchema = z.object({
  */
 export const WorkItemMoveDtoSchema = z.object({
 	metricId: z.string(),
-	direction: z.enum(["up", "down"]),
+	direction: z.enum(["up", "down"]).nullable(),
 	baselineObservationId: z.string().nullable(),
 	baseline: MoveReadingDtoSchema.nullable().optional(),
 	current: MoveReadingDtoSchema.nullable().optional(),
-	moved: z.enum(["as_declared", "against", "flat", "unknown"]).optional(),
+	moved: z
+		.enum(["as_declared", "against", "flat", "unknown"])
+		.nullable()
+		.optional(),
 	unknownReason: z
 		.enum([
 			"no_baseline",
 			"baseline_unreadable",
 			"no_current",
 			"metric_deprecated",
+			"incompatible_reading",
+			"projection_budget",
 			"metrics_unavailable",
 		])
 		.optional(),
@@ -97,8 +124,17 @@ export type WorkItemDto = z.infer<typeof WorkItemDtoSchema>;
 
 /** Browser list projection; detail and operational fields remain on WorkItemDto. */
 export const WorkItemSummarySchema = WorkItemDtoSchema.pick({
-  id: true, title: true, type: true, status: true, priority: true,
-  scores: true, projectId: true, estimate: true, labels: true,
-  createdAt: true, updatedAt: true,
+	id: true,
+	title: true,
+	type: true,
+	status: true,
+	priority: true,
+	scores: true,
+	projectId: true,
+	estimate: true,
+	labels: true,
+	moves: true,
+	createdAt: true,
+	updatedAt: true,
 });
 export type WorkItemSummary = z.infer<typeof WorkItemSummarySchema>;

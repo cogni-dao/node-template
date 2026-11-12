@@ -17,6 +17,41 @@ import { DoltgresKnowledgeStoreAdapter } from "../src/adapters/doltgres/index.js
 import { FakeKnowledgeStoreAdapter } from "../src/adapters/fake/index.js";
 
 describe("direct citation pages", () => {
+  it("reads tracked EDO entries and outcomes in one bounded query", async () => {
+    const rows = Array.from({ length: 6 }, (_, i) => ({
+      id: `hyp.${i}`,
+      domain: "meta",
+      title: `Hyp ${i}`,
+      content: "expected",
+      entry_type: "hypothesis",
+      source_type: "human",
+      edge_id: `edge.${i}`,
+      outcome_id: `outcome.${i}`,
+      outcome_title: "Observed",
+      outcome_content: "observation id",
+    }));
+    const unsafe = vi
+      .fn()
+      .mockResolvedValueOnce(rows)
+      .mockResolvedValueOnce([
+        {
+          hypothesis_id: "hyp.0",
+          outcome_id: "outcome.0",
+          outcome_title: "Observed",
+          outcome_content: "observation id",
+        },
+      ]);
+    const store = new DoltgresKnowledgeStoreAdapter({ sql: { unsafe } as unknown as Sql });
+    const page = await store.readWorkEdo("task.1");
+    expect(unsafe).toHaveBeenCalledTimes(2);
+    expect(String(unsafe.mock.calls[0]?.[0])).toContain("LIMIT 6");
+    expect(page.items).toHaveLength(5);
+    expect(page.truncated).toBe(true);
+    expect(page.items[0]?.outcomes[0]).toMatchObject({
+      id: "outcome.0",
+      content: "observation id",
+    });
+  });
   it("pages a high-degree root without visiting its neighbors' citations or bodies", async () => {
     const store = new FakeKnowledgeStoreAdapter();
     await store.registerDomain({ id: "meta", name: "Meta" });
@@ -48,7 +83,7 @@ describe("direct citation pages", () => {
           citedId: "atom-13",
           citationType: "supports",
         });
-      }
+      },
     );
     const getBody = vi.spyOn(store, "getKnowledge");
     const ids: string[] = [];
@@ -79,7 +114,7 @@ describe("direct citation pages", () => {
         context: null,
         source_title: "Root",
         target_title: `Atom ${i}`,
-      }))
+      })),
     );
     const store = new DoltgresKnowledgeStoreAdapter({
       sql: { unsafe } as unknown as Sql,
@@ -104,7 +139,7 @@ describe("direct citation pages", () => {
         citing_id: "root",
         cited_id: `task.${5000 + i}`,
         citation_type: "tracks",
-      }))
+      })),
     );
     const store = new DoltgresKnowledgeStoreAdapter({
       sql: { unsafe } as unknown as Sql,

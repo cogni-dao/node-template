@@ -43,7 +43,7 @@ import type {
 } from "@cogni/work-items";
 import type { MoveReadingPort } from "@cogni/work-items";
 import {
-  judgeMoves,
+  judgeMoveSummaries,
   toWorkItemDto,
   toWorkItemId,
   toWorkItemsPatchInput,
@@ -131,7 +131,7 @@ export function createWorkItemCapability(
   ): Promise<readonly WorkItemInfo[]> {
     const only = items.length === 1 ? items[0] : undefined;
     if (!only?.moves?.length) return items;
-    return [{ ...only, moves: await judgeMoves(only.moves, deps.moveReadings) }];
+    return judgeMoveSummaries([only], deps.moveReadings);
   }
 
   return {

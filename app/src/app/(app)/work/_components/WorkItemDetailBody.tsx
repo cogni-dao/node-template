@@ -3,21 +3,25 @@
 
 "use client";
 
-import { hasScores, WorkItemScoresRadar } from "@cogni/knowledge-base-ui";
-import type { WorkItemDto } from "@cogni/node-contracts";
 import {
-	SheetDescription,
-	SheetHeader,
-	SheetTitle,
-} from "@/components/sheet";
+	hasScores,
+	WorkItemScoresRadar,
+	WorkMetricDetails,
+	WorkExpectations,
+	type WorkMetric,
+} from "@cogni/knowledge-base-ui";
+import type { WorkItemDto } from "@cogni/node-contracts";
+import { SheetDescription, SheetHeader, SheetTitle } from "@/components/sheet";
 import type { ReactElement } from "react";
 import { Markdown } from "@/components/markdown";
 
 import { EntityCitationLinks } from "../../_components/EntityCitationLinks";
 import { isWorkItemNotFoundError } from "../_api/fetchWorkItems";
+import { fetchWorkExpectations } from "../_api/fetchWorkExpectations";
 import { StatusPill, TypeIcon } from "./work-item-icons";
 
 type SubjectRef = WorkItemDto["assignees"][number];
+const NO_MOVES: WorkMetric[] = [];
 
 function assigneeLabel(a: SubjectRef): string {
 	switch (a.kind) {
@@ -114,6 +118,17 @@ export function WorkItemDetailBody({
 					</SheetHeader>
 
 					<div className="mt-6 flex flex-col gap-5 px-1">
+						<WorkMetricDetails
+							moves={item.moves ?? []}
+							goal={item.labels.find((label) =>
+								/^goal:(?:goal-)?[a-z0-9]+(?:-[a-z0-9]+)*$/.test(label),
+							)}
+						/>
+						<WorkExpectations
+							itemId={item.id}
+							moves={item.moves ?? NO_MOVES}
+							load={fetchWorkExpectations}
+						/>
 						{/* Status + Priority row */}
 						<div className="flex flex-wrap items-center gap-3">
 							<StatusPill status={item.status} />
