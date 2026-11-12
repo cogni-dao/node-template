@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
-import { ScheduleManageInputSchema } from "@cogni/ai-tools";
+import {
+	ScheduleManageInputSchema,
+	WorkItemQueryInputSchema,
+} from "@cogni/ai-tools";
 import {
 	DynamicStructuredTool,
 	type StructuredToolInterface,
@@ -21,6 +24,11 @@ const lookup = z.object({
 		.refine((value) => value.trim().length > 0),
 });
 const schedules = z.object({ schedules: z.array(z.unknown()) });
+// A narrowed search is useful evidence, but cannot replace the open-work sample.
+const backlogQuery = WorkItemQueryInputSchema.pick({
+	statuses: true,
+	limit: true,
+}).strict();
 const contextReads = [
 	{
 		name: "core__goal_list",
@@ -69,15 +77,13 @@ export class NodeOperatorReceipts {
 		result: { ok: boolean; value?: unknown },
 	) {
 		const expected = contextReads.find((request) => request.name === name);
-		const query = z
-			.object({ statuses: z.array(z.string()), scored: z.boolean().optional() })
-			.safeParse(args);
+		const query = backlogQuery.safeParse(args);
 		const canonical =
 			name !== "core__work_item_query" ||
 			(query.success &&
-				query.data.scored === undefined &&
-				query.data.statuses.length === OPEN_STATUSES.length &&
-				OPEN_STATUSES.every((status) => query.data.statuses.includes(status)));
+				query.data.limit === 50 &&
+				query.data.statuses?.length === OPEN_STATUSES.length &&
+				OPEN_STATUSES.every((status) => query.data.statuses?.includes(status)));
 		if (expected && canonical) {
 			this.contextAttempts.add(name);
 			if (result.ok && expected.schema.safeParse(result.value).success)
@@ -119,6 +125,10 @@ export function createWorkflowGuidancePreflight(
 				.filter((request) => !receipts.contextAttempts.has(request.name))
 				.map(({ name, args }) => ({ name, args }));
 			if (!ids.length && !context.length) return;
+			// Runtime capability denial can happen before host observeTool is called.
+			// Record attempts here; successful-read authority still comes only from the host.
+			for (const id of ids) receipts.attemptedGuidance.add(id);
+			for (const request of context) receipts.contextAttempts.add(request.name);
 			return {
 				messages: await authorizedReadMessages(tools, [
 					...context,

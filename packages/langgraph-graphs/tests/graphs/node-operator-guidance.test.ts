@@ -9,9 +9,9 @@ import {
 	createNodeScheduleGuard,
 	NodeOperatorReceipts,
 } from "../../src/graphs/node-operator/guidance";
+import { OPEN_STATUSES } from "../../src/graphs/work-prioritizer/tools";
 import { createInProcGraphRunner } from "../../src/inproc/runner";
 import type { CompletionFn, ToolExecFn } from "../../src/inproc/types";
-import { OPEN_STATUSES } from "../../src/graphs/work-prioritizer/tools";
 
 const names = [
 	"core__knowledge_read",
@@ -70,7 +70,11 @@ const result = (content: string, call?: { name: string; args: object }) => ({
 	}),
 });
 
-async function run(completionFn: CompletionFn, exec: ToolExecFn) {
+async function run(
+	completionFn: CompletionFn,
+	exec: ToolExecFn,
+	allowed = names,
+) {
 	const runner = createInProcGraphRunner({
 		program: "cogni",
 		createGraph: LANGGRAPH_CATALOG.cogni.graphFactory,
@@ -89,7 +93,7 @@ async function run(completionFn: CompletionFn, exec: ToolExecFn) {
 		request: {
 			runId: "native-coordinator",
 			messages: [{ role: "user", content: "Arrange the duty" }],
-			configurable: { model: "test", toolIds: names },
+			configurable: { model: "test", toolIds: allowed },
 		},
 	});
 	for await (const _ of runner.stream) {
@@ -190,9 +194,66 @@ describe("native coordinator workflow guidance", () => {
 		expect(new Set(reads).size).toBe(reads.length);
 		expect(model).toBe(3);
 	});
+	it("does not repeat native reads denied before the host observer", async () => {
+		let model = 0;
+		let deniedCards = 0;
+		const hostCalls: string[] = [];
+		await run(
+			(request) => {
+				model++;
+				deniedCards = request.messages.filter(
+					(message) =>
+						message.role === "tool" &&
+						String(message.content).includes("policy_denied"),
+				).length;
+				return model === 4
+					? result("Guidance unavailable")
+					: result("", {
+							name: "core__schedule_list",
+							args: { purpose: create.purpose },
+						});
+			},
+			async (name) => {
+				hostCalls.push(name);
+				return contextResult(name) ?? { ok: true, value: { schedules: [] } };
+			},
+			names.filter((name) => name !== "core__knowledge_read"),
+		);
+		expect(model).toBe(4);
+		expect(deniedCards).toBe(2);
+		expect(hostCalls.filter((name) => name === "core__goal_list")).toHaveLength(
+			1,
+		);
+		expect(hostCalls).not.toContain("core__knowledge_read");
+	});
 });
 
 describe("program schedule creation guard", () => {
+	it("does not admit filtered, partial-page or undersized backlog queries", () => {
+		const receipts = new NodeOperatorReceipts();
+		for (const extra of [
+			{ text: "absent" },
+			{ ids: [] },
+			{ scored: false },
+			{ labels: ["tiny-subset"] },
+			{ cursor: "next-page" },
+			{ limit: 1 },
+		]) {
+			receipts.observe(
+				"core__work_item_query",
+				{ statuses: [...OPEN_STATUSES], limit: 50, ...extra },
+				{ ok: true, value: { items: [] } },
+			);
+		}
+		expect(receipts.contextAttempts.has("core__work_item_query")).toBe(false);
+		expect(receipts.contextRead.has("core__work_item_query")).toBe(false);
+		receipts.observe(
+			"core__work_item_query",
+			{ statuses: [...OPEN_STATUSES], limit: 50 },
+			{ ok: true, value: { items: [] } },
+		);
+		expect(receipts.contextRead.has("core__work_item_query")).toBe(true);
+	});
 	it("requires exact host lookup and successful complete selected-card receipts", async () => {
 		const receipts = new NodeOperatorReceipts();
 		let writes = 0;
@@ -217,7 +278,7 @@ describe("program schedule creation guard", () => {
 				receipts.observe(
 					name,
 					name === "core__work_item_query"
-						? { statuses: [...OPEN_STATUSES] }
+						? { statuses: [...OPEN_STATUSES], limit: 50 }
 						: {},
 					result,
 				);
