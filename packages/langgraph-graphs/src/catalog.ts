@@ -35,6 +35,8 @@ import {
 } from "./graphs/work-closeout/receipts";
 import { WORK_PRIORITIZER_GRAPH_NAME } from "./graphs/work-prioritizer/graph";
 import type { CreateGraphFn } from "./inproc/types";
+import type { CreateReactAgentGraphOptions } from "./graphs/types";
+import type { WorkflowGuidance } from "./graphs/node-operator/guidance";
 
 /** Internal agent principal slugs seeded by the node migration (`agent_principals.slug`). */
 export const NODE_AI_PRINCIPAL = "node-ai" as const;
@@ -47,6 +49,8 @@ export const PRIORITIZER_PRINCIPAL = "prioritizer" as const;
  * Providers resolve tools from TOOL_CATALOG using these IDs.
  */
 export interface CatalogEntry {
+	/** Canonical full graph card, required before the coordinator schedules this workflow. */
+	readonly guidanceId?: string;
   /** Trusted catalog program assignment; routes mission-engine graphs to the cogni engine. */
   readonly program?: "cogni" | "work-review" | "work-closeout";
   readonly displayName: string;
@@ -108,6 +112,18 @@ export function graphReportDelta(
 
 export type LangGraphCatalog = Readonly<Record<string, CatalogEntry>>;
 
+/** Bind guidance from the trusted registry; return the native compiled graph directly. */
+function createCatalogCogniGraph(opts: CreateReactAgentGraphOptions) {
+	return createNodeOperatorGraph({ ...opts, workflowGuidance: catalogWorkflowGuidance() });
+}
+function catalogWorkflowGuidance(): WorkflowGuidance[] {
+	return Object.entries(NODE_LANGGRAPH_CATALOG).flatMap(([id, entry]) => {
+		const guidanceId = (entry as CatalogEntry).guidanceId;
+		return guidanceId ? [{ graphId: `langgraph:${id}`, guidanceId }] : [];
+	});
+}
+createCatalogCogniGraph.createRunHooks = createNodeOperatorGraph.createRunHooks;
+
 /**
  * Node runtime LangGraph catalog — the graphs every sovereign node runs: `cogni` (the node
  * operator) and `work-prioritizer` (the scheduled scoring program).
@@ -128,6 +144,7 @@ export const NODE_LANGGRAPH_CATALOG = {
    * and must not file a reflexive EDO.
    */
   [WORK_PRIORITIZER_GRAPH_NAME]: {
+	guidanceId: "graph-work-prioritizer",
     displayName: "Work Prioritizer",
     description: "Triages open work: scores, goal links, status routes and cancels, or changes nothing",
     principal: PRIORITIZER_PRINCIPAL,
@@ -161,12 +178,13 @@ export const NODE_LANGGRAPH_CATALOG = {
     report: { event: "ai.work_closeout.cycle" },
   },
   cogni: {
+	guidanceId: "graph-cogni",
     displayName: "Cogni",
     principal: NODE_AI_PRINCIPAL,
     description:
       "Node operator: reads goals and work, manages authorized recurring jobs, and verifies effects",
     toolIds: NODE_OPERATOR_TOOL_IDS,
-    graphFactory: createNodeOperatorGraph,
+    graphFactory: createCatalogCogniGraph,
     get systemPrompt(): string {
       return nodeOperatorCatalogPrompt(
         Object.entries(NODE_LANGGRAPH_CATALOG).map(([id, entry]) => ({
