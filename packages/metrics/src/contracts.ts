@@ -352,6 +352,7 @@ export interface MetricDefinitionsPort {
 	list(
 		limit: number,
 		after?: string,
+		signal?: AbortSignal,
 	): Promise<{ items: MetricDefinition[]; nextCursor: string | null }>;
 }
 export interface MetricObservationsPort {

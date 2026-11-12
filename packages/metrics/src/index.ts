@@ -19,12 +19,12 @@ import {
 	type MetricAction,
 	type MetricCalculator,
 	type MetricDefinition,
-	type MetricLatest,
 	type MetricDefinitionsPort,
 	type MetricDisplay,
 	MetricError,
 	type MetricHistory,
 	type MetricHistoryInput,
+	type MetricLatest,
 	type MetricObservation,
 	type MetricObservationsPort,
 	type MetricScope,
@@ -230,8 +230,14 @@ export function createMetricService(deps: {
 		}
 		if (!allowed) throw new MetricError("metric_not_found", 404);
 	}
-	async function definitionFor(id: string, action: MetricAction) {
+	async function definitionFor(
+		id: string,
+		action: MetricAction,
+		signal?: AbortSignal,
+	) {
+		signal?.throwIfAborted();
 		const d = await definitions.get(id);
+		signal?.throwIfAborted();
 		if (!d) throw new MetricError("metric_not_found", 404);
 		await authorize(action, d);
 		return d;
@@ -268,7 +274,9 @@ export function createMetricService(deps: {
 			latest: MetricObservation | null;
 			lastGood?: MetricObservation | null;
 		},
+		signal?: AbortSignal,
 	): Promise<ServingRow | null> {
+		signal?.throwIfAborted();
 		try {
 			await authorize("read", d);
 		} catch (e) {
@@ -279,10 +287,14 @@ export function createMetricService(deps: {
 		}
 		try {
 			if (pair.unreadable) throw new MetricError("source_failed", 503);
-      const view = selectMetricView(d, pair.latest ? [pair.latest] : [], now());
-      view.lastGood = pair.lastGood ?? null;
-      const band = await service.bandAssessment(d, {latest: pair.latest ?? undefined, lastGood: view.lastGood});
-      if (band) view.bandAssessment = band;
+			const view = selectMetricView(d, pair.latest ? [pair.latest] : [], now());
+			view.lastGood = pair.lastGood ?? null;
+			const band = await service.bandAssessment(
+				d,
+				{ latest: pair.latest ?? undefined, lastGood: view.lastGood },
+				signal,
+			);
+			if (band) view.bandAssessment = band;
 
 			return {
 				definition: d,
@@ -290,6 +302,7 @@ export function createMetricService(deps: {
 				latest: metricLatest(view),
 			};
 		} catch {
+			signal?.throwIfAborted();
 			// One unreadable metric reads red; it never drops the whole list (absent is red).
 			return {
 				definition: d,
@@ -591,7 +604,10 @@ export function createMetricService(deps: {
 			let cursor = 0;
 			return Promise.all(
 				bindings.map(async (binding) => {
-					const missing = (reason: KpiReason, viewState: MetricView["viewState"] = "unavailable") => ({
+					const missing = (
+						reason: KpiReason,
+						viewState: MetricView["viewState"] = "unavailable",
+					) => ({
 						...binding,
 						viewState,
 						assessment: assessKpi({
@@ -760,7 +776,11 @@ export function createMetricService(deps: {
 							};
 						const row = rows[cursor++];
 						if (row?.unreadable)
-							return { baseline: null, current: null, unknownReason: "metrics_unavailable" };
+							return {
+								baseline: null,
+								current: null,
+								unknownReason: "metrics_unavailable",
+							};
 						let baseline = row?.baseline ?? null;
 						if (baseline) {
 							const observation = baseline.observation;
@@ -838,7 +858,12 @@ export function createMetricService(deps: {
 				if (band) view.bandAssessment = band;
 				return view;
 			} catch {
-				return { definition: d, latestAttempt: null, lastGood: null, viewState: "error" };
+				return {
+					definition: d,
+					latestAttempt: null,
+					lastGood: null,
+					viewState: "error",
+				};
 			}
 		},
 		/**
@@ -851,6 +876,7 @@ export function createMetricService(deps: {
 				latest: MetricObservation | undefined;
 				lastGood: MetricObservation | null;
 			},
+			signal?: AbortSignal,
 		): Promise<KpiAssessment | null> {
 			if (!d.band) return null;
 			return (
@@ -858,6 +884,7 @@ export function createMetricService(deps: {
 					{ metricId: d.id, ...d.band },
 					{
 						latestOnly: true,
+						signal,
 						...(preloaded
 							? { preloaded: { definition: d, ...preloaded } }
 							: {}),
@@ -873,14 +900,18 @@ export function createMetricService(deps: {
 		 * is latest-only: per definition one newest-attempt read and one last-good read
 		 * (the band assessment reuses both). No history range read, no second definition read.
 		 */
-		async serving(): Promise<{
+		async serving(signal?: AbortSignal): Promise<{
 			items: ServingRow[];
 			unbound: ServingRow[];
 			truncated: boolean;
 			/** Request-local reuse of this scan; fixed baselines use the evidence path. */
 			readKpi(
 				binding: KpiBinding,
-				options?: { deadline?: string | null; hypothesis?: boolean },
+				options?: {
+					deadline?: string | null;
+					hypothesis?: boolean;
+					signal?: AbortSignal;
+				},
 			): Promise<GoalKpiResult>;
 		}> {
 			const items: ServingRow[] = [];
@@ -897,12 +928,15 @@ export function createMetricService(deps: {
 				}
 			>();
 			while (scanned < SERVES_SCAN_MAX) {
-				const page = await definitions.list(50, cursor);
+				signal?.throwIfAborted();
+				const page = await definitions.list(50, cursor, signal);
+				signal?.throwIfAborted();
 				scanned += page.items.length;
 				if (!observations.workReadBatch)
 					throw new MetricError("batch_unavailable", 503);
 				const allowed: MetricDefinition[] = [];
 				for (const d of page.items) {
+					signal?.throwIfAborted();
 					try {
 						await authorize("read", d);
 						allowed.push(d);
@@ -911,19 +945,22 @@ export function createMetricService(deps: {
 							throw error;
 					}
 				}
+				signal?.throwIfAborted();
 				const pairs = await observations.workReadBatch(
 					allowed.map((d) => ({
 						metricId: d.id,
 						definitionHash: metricDefinitionHash(d),
 						baselineObservationId: null,
 					})),
+					signal,
 				);
 				if (pairs.length !== allowed.length)
 					throw new MetricError("batch_unavailable", 503);
 				for (let i = 0; i < allowed.length; i++) {
+					signal?.throwIfAborted();
 					const pair = pairs[i];
 					if (!pair) throw new MetricError("batch_unavailable", 503);
-					const row = await servingRow(allowed[i]!, pair);
+					const row = await servingRow(allowed[i]!, pair, signal);
 					if (!row) continue;
 					const d = row.definition;
 					try {
@@ -1013,6 +1050,7 @@ export function createMetricService(deps: {
 			options?: {
 				deadline?: string | null;
 				hypothesis?: boolean;
+				signal?: AbortSignal;
 				/** Skip the trend and recent history queries: one bounded latest-reading read. */
 				latestOnly?: boolean;
 				/**
@@ -1026,6 +1064,7 @@ export function createMetricService(deps: {
 				};
 			},
 		): Promise<GoalKpiResult> {
+			options?.signal?.throwIfAborted();
 			const at = now();
 			const deadline = b.evaluationAt ?? options?.deadline ?? null;
 			const empty: Omit<KpiAssessmentInput, "binding" | "metric"> = {
@@ -1062,13 +1101,16 @@ export function createMetricService(deps: {
 			try {
 				current =
 					options?.preloaded?.definition ??
-					(await definitionFor(b.metricId, "read"));
+					(await definitionFor(b.metricId, "read", options?.signal));
 				if (options?.preloaded) await authorize("read", current);
+				options?.signal?.throwIfAborted();
 				pinned = b.baselineObservationId
 					? await observations.snapshot(b.baselineObservationId)
 					: null;
+				options?.signal?.throwIfAborted();
 				if (pinned) await authorize("read", pinned.definition);
 			} catch (error) {
+				options?.signal?.throwIfAborted();
 				if (!(error instanceof MetricError))
 					return { ...unmeasured("source_failed"), viewState: "error" };
 				return unmeasured(
@@ -1130,6 +1172,7 @@ export function createMetricService(deps: {
 			)
 				return unmeasured("baseline_unavailable_or_incompatible", metric);
 			try {
+				options?.signal?.throwIfAborted();
 				const due = deadline !== null && Date.parse(deadline) <= at.getTime();
 				const dayEnd = floorTo(at.getTime(), "1d") + DAY_MS;
 				const hourEnd = floorTo(at.getTime(), "1h") + HOUR_MS;
@@ -1224,6 +1267,7 @@ export function createMetricService(deps: {
 					viewState: view.viewState,
 				};
 			} catch {
+				options?.signal?.throwIfAborted();
 				return { ...unmeasured("source_failed", metric), viewState: "error" };
 			}
 		},

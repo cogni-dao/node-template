@@ -372,7 +372,7 @@ export function createGoalMetrics(deps: {
 			);
 			return rows[0] ? parse(rows[0]) : null;
 		},
-		async list(limit: number, after?: string) {
+		async list(limit: number, after?: string, signal?: AbortSignal) {
 			const cap = Math.min(50, Math.max(1, Math.floor(limit)));
 			const items: MetricDefinition[] = [];
 			let cursor = after;
@@ -380,6 +380,7 @@ export function createGoalMetrics(deps: {
 			// Invalid rows are skipped, so keep reading until the page is full; the
 			// cursor advances past every examined row so refresh never stalls on one.
 			for (let pass = 0; pass < 20 && more && items.length < cap; pass++) {
+				signal?.throwIfAborted();
 				const need = cap - items.length;
 				const rows = await deps.knowledgeSql.unsafe(
 					`SELECT id,title,metric_spec,updated_at FROM knowledge WHERE metric_spec IS NOT NULL AND status <> 'deprecated' ${cursor ? `AND id > ${literal(cursor)}` : ""} ORDER BY id LIMIT ${need + 1}`,

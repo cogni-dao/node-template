@@ -91,9 +91,10 @@ export async function readGoalsProgress(deps: {
 	let serving: Awaited<ReturnType<MetricService["serving"]>> | null = null;
 	let servedUnavailable: string | null = null;
 	// These reads are independent. Keep ownership until both native reads settle.
+	deps.signal?.throwIfAborted();
 	const [goalRead, servedRead] = await Promise.allSettled([
 		deps.goals.listGoals(),
-		deps.metrics?.serving() ?? Promise.resolve(null),
+		deps.metrics?.serving(deps.signal) ?? Promise.resolve(null),
 	]);
 	if (goalRead.status === "rejected") throw goalRead.reason;
 	const goals = goalRead.value;
@@ -110,6 +111,7 @@ export async function readGoalsProgress(deps: {
 	// KPIs a goal binds; `boundKpis` adds the ones only a bet binds, below.
 	const goalKpis = new Set(boundKpis);
 	for (const goal of goals) {
+		deps.signal?.throwIfAborted();
 		const configured = parseBindings(goal.kpiBindings);
 		const kpis: GoalProgress["kpis"] = [];
 		for (const binding of configured.bindings) {
@@ -128,8 +130,14 @@ export async function readGoalsProgress(deps: {
 				continue;
 			}
 			const r = serving?.readKpi
-				? await serving.readKpi(binding, { deadline: goal.evaluateAt })
-				: await deps.metrics.kpi(binding, { deadline: goal.evaluateAt });
+				? await serving.readKpi(binding, {
+						deadline: goal.evaluateAt,
+						signal: deps.signal,
+					})
+				: await deps.metrics.kpi(binding, {
+						deadline: goal.evaluateAt,
+						signal: deps.signal,
+					});
 			const served: ServedMetric[] = (serving?.items ?? [])
 				.filter((x) => x.definition.serves?.kpi === binding.metricId)
 				.map((x) => ({
@@ -159,6 +167,7 @@ export async function readGoalsProgress(deps: {
 		let moreHypotheses = false;
 		let hypothesesUnavailable = false;
 		try {
+			deps.signal?.throwIfAborted();
 			const page = await deps.goals.hypotheses(goal.id);
 			moreHypotheses = page.more;
 			for (const bet of page.items) {
@@ -183,6 +192,7 @@ export async function readGoalsProgress(deps: {
 					}
 					const r = await deps.metrics.kpi(binding, {
 						deadline: bet.evaluateAt,
+						signal: deps.signal,
 						hypothesis: true,
 					});
 					predictions.push({
@@ -204,6 +214,7 @@ export async function readGoalsProgress(deps: {
 				});
 			}
 		} catch {
+			deps.signal?.throwIfAborted();
 			hypothesesUnavailable = true;
 		}
 		items.push({

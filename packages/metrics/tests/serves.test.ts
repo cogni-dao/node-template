@@ -3,9 +3,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
-	createMetricService,
 	bucketObservations,
-	metricHistoryRange,
+	createMetricService,
 	type GoalSourcePort,
 	GoalsProgressSchema,
 	type KpiBinding,
@@ -18,13 +17,14 @@ import {
 	MetricSpecSchema,
 	MetricViewSchema,
 	metricDefinitionHash,
+	metricHistoryRange,
 	parseStoredMetricSpec,
 	readGoalsProgress,
 	SERVES_SCAN_MAX,
 	StoredMetricSpecSchema,
 } from "../src/index";
-import { hub } from "./fakes";
 import { createGoalProgressReader } from "../src/knowledge";
+import { hub } from "./fakes";
 
 const NOW = new Date("2026-11-10T12:00:00Z");
 const spec = {
@@ -119,28 +119,28 @@ function setup(
 		at: async () => null,
 		snapshot: async () => null,
 	} as unknown as MetricObservationsPort;
-	const service = createMetricService({
-		definitions: {
-			get: async (id) => {
-				calls.get++;
-				return defs.find((d) => d.id === id) ?? null;
-			},
-			list: async (limit, after) => {
-				const rest = defs.filter((d) => !after || d.id > after);
-				return {
-					items: rest.slice(0, limit),
-					nextCursor:
-						rest.length > limit ? (rest[limit - 1]?.id ?? null) : null,
-				};
-			},
+	const definitions = {
+		get: async (id) => {
+			calls.get++;
+			return defs.find((d) => d.id === id) ?? null;
 		},
+		list: async (limit, after) => {
+			const rest = defs.filter((d) => !after || d.id > after);
+			return {
+				items: rest.slice(0, limit),
+				nextCursor: rest.length > limit ? (rest[limit - 1]?.id ?? null) : null,
+			};
+		},
+	};
+	const service = createMetricService({
+		definitions,
 		observations,
 		registry,
 		scope: { node: "n", environment: "test", dataScope: "members" },
 		now: () => NOW,
 		authorize: async (_action, d) => authorize(d),
 	});
-	return { service, calls, observations };
+	return { service, calls, observations, definitions };
 }
 
 describe("serves and band schema (story.0033)", () => {
@@ -828,6 +828,82 @@ describe("goal read lists served metrics under their KPI", () => {
 });
 
 describe("bounded complete goal reads", () => {
+	it("starts no follow-on reads when a native definition page settles after the deadline", async () => {
+		vi.useFakeTimers();
+		try {
+			const authorized = vi.fn(async () => true);
+			const s = setup([definition("kpi")], {}, authorized);
+			let finish!: (page: {
+				items: MetricDefinition[];
+				nextCursor: string | null;
+			}) => void;
+			const list = vi.fn(
+				() =>
+					new Promise<{ items: MetricDefinition[]; nextCursor: string | null }>(
+						(resolve) => {
+							finish = resolve;
+						},
+					),
+			);
+			s.definitions.list = list;
+			const citations = vi.fn(async () => []);
+			const reader = createGoalProgressReader({
+				metrics: () => s.service,
+				knowledge: () => ({
+					listActiveGoals: async () => [],
+					getKnowledge: async () => null,
+					listCitationsByCitedId: citations,
+				}),
+				environment: "test",
+			});
+			const pending = reader();
+			const rejected = expect(pending).rejects.toMatchObject({
+				code: "batch_unavailable",
+				status: 503,
+			});
+			await vi.advanceTimersByTimeAsync(2500);
+			await rejected;
+			expect(list).toHaveBeenCalledTimes(1);
+			finish({ items: [definition("kpi")], nextCursor: "kpi" });
+			await vi.advanceTimersByTimeAsync(0);
+			expect(s.calls.batch).toBe(0);
+			expect(authorized).not.toHaveBeenCalled();
+			expect(citations).not.toHaveBeenCalled();
+			expect(list).toHaveBeenCalledTimes(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("stops after an in-flight authorization and forwards cancellation to batches", async () => {
+		let finish!: (allowed: boolean) => void;
+		const s = setup(
+			[definition("a"), definition("b")],
+			{},
+			() =>
+				new Promise((resolve) => {
+					finish = resolve;
+				}),
+		);
+		const controller = new AbortController();
+		const pending = s.service.serving(controller.signal);
+		await Promise.resolve();
+		await Promise.resolve();
+		controller.abort();
+		finish(true);
+		await expect(pending).rejects.toBeDefined();
+		expect(s.calls.batch).toBe(0);
+
+		const healthy = setup([definition("a")]);
+		const originalBatch = healthy.observations.workReadBatch;
+		if (!originalBatch) throw new Error("batch unavailable");
+		const batch = vi.fn(originalBatch);
+		healthy.observations.workReadBatch = batch;
+		const signal = new AbortController().signal;
+		await healthy.service.serving(signal);
+		expect(batch).toHaveBeenCalledWith(expect.any(Array), signal);
+	});
+
 	it("renders all measurements, charts and seven supports inside the unchanged deadline", async () => {
 		vi.useFakeTimers();
 		try {
