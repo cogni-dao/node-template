@@ -93,3 +93,5 @@ Published React components and hooks every node renders for knowledge (Browse, G
 - Never imports a node's private `@cogni/*` packages (`node-ui-kit`, `node-contracts`); table, menu, popover, button and input primitives live in `src/ui` and `data-table.tsx`.
 - `./goals` imports no router (`next/*`), no `@/` app path and no node UI kit; links are the injected `LinkComponent`. Only `src/goals.ts` reaches `src/goals/`; the root entry never imports `@cogni-dao/metrics` or `recharts`.
 - The root entry never imports `@cogni/knowledge-store` or `react-force-graph-3d`; keep knowledge modules reachable only from `src/knowledge.ts` and the engine only through `src/graph-3d.tsx`'s dynamic import.
+
+Metrics mode reuses KpiCard and KpiChart, preserving values, units, target hints and progress/volume/SLO marks. Serving metrics stay beside each card (below it at narrow widths); selecting a card reveals its chart. Pending attempts show building with an explicitly historical reading; an incomplete serving scan never claims absence.

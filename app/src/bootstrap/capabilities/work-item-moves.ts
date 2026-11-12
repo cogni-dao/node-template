@@ -49,7 +49,7 @@ export function createMoveMetricPorts(getMetrics: () => MetricService | undefine
     readings: {
       async batch(moves, signal) {
         signal.throwIfAborted();
-        const result = await service().workReadBatch(moves.map(({ metricId, baselineObservationId }) => ({ metricId, baselineObservationId })));
+        const result = await service().workReadBatch(moves.map(({ metricId, baselineObservationId }) => ({ metricId, baselineObservationId })), signal);
         signal.throwIfAborted();
         return result;
       },

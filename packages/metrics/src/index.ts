@@ -39,7 +39,7 @@ export * from "./progress.js";
 /** Definitions one goal read scans for `serves`; a cut is reported as `truncated`. */
 export const SERVES_SCAN_MAX = 200;
 /** Definitions one goal read opens at once; reads stay bounded and keep their order. The service pool bounds the real parallelism. */
-const SERVING_CONCURRENCY = 8;
+
 const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
 function canonical(value: unknown): string {
@@ -67,6 +67,50 @@ export function calculatorShape(
 		unit: calculator.unitFor?.(params) ?? calculator.unit,
 		windowSeconds: calculator.windowSeconds?.(params) ?? 0,
 	};
+}
+/** Immutable evidence compatibility and freshness shared by every fixed-target projection. */
+function compatibleEvidence(
+	o: MetricObservation | null | undefined,
+	d: MetricDefinition,
+	scope: MetricScope,
+	shape: ReturnType<typeof calculatorShape>,
+): o is MetricObservation {
+	return (
+		!!o &&
+		o.metricId === d.id &&
+		o.definitionHash === metricDefinitionHash(d) &&
+		o.calculatorVersion === d.spec.calculatorId &&
+		o.paramsHash === hashMetric(d.spec.params) &&
+		o.unit === shape.unit &&
+		Date.parse(o.window.end) - Date.parse(o.window.start) ===
+			shape.windowSeconds * 1000 &&
+		o.node === scope.node &&
+		o.environment === scope.environment &&
+		o.dataScope === scope.dataScope
+	);
+}
+function freshEvidenceAt(
+	o: MetricObservation,
+	d: MetricDefinition,
+	reference: number,
+): boolean {
+	const observed = Date.parse(o.observedAt ?? ""),
+		end = Date.parse(o.window.end),
+		at = Math.max(reference, observed),
+		age = d.spec.maxAgeSeconds * 1000;
+	return (
+		o.status === "ok" &&
+		o.value !== null &&
+		Number.isFinite(o.value) &&
+		Number.isFinite(at) &&
+		observed >= end &&
+		at - end <= age &&
+		o.sourceWatermarks.length > 0 &&
+		o.sourceWatermarks.every(({ asOf }) => {
+			const source = Date.parse(asOf ?? "");
+			return source <= observed && at - source <= age;
+		})
+	);
 }
 export interface GoalKpiResult {
 	binding: KpiBinding;
@@ -213,7 +257,13 @@ export function createMetricService(deps: {
 		};
 	}
 	/** One definition as the goal read lists it; null when this caller may not read it. */
-	async function servingRow(d: MetricDefinition): Promise<ServingRow | null> {
+	async function servingRow(
+		d: MetricDefinition,
+		pair: {
+			latest: MetricObservation | null;
+			lastGood?: MetricObservation | null;
+		},
+	): Promise<ServingRow | null> {
 		try {
 			await authorize("read", d);
 		} catch (e) {
@@ -223,7 +273,11 @@ export function createMetricService(deps: {
 			throw e;
 		}
 		try {
-			const view = await service.viewOf(d);
+      const view = selectMetricView(d, pair.latest ? [pair.latest] : [], now());
+      view.lastGood = pair.lastGood ?? null;
+      const band = await service.bandAssessment(d, {latest: pair.latest ?? undefined, lastGood: view.lastGood});
+      if (band) view.bandAssessment = band;
+
 			return {
 				definition: d,
 				assessment: view.bandAssessment ?? null,
@@ -493,14 +547,18 @@ export function createMetricService(deps: {
 		},
 		/** One scoped definition query and one scoped observation query for a work page. */
 		/** Fixed EDO commitments share one authorized snapshot and due-evidence read. */
-		async predictionBatch(bindings: readonly KpiBinding[]) {
+		async predictionBatch(
+			bindings: readonly KpiBinding[],
+			signal?: AbortSignal,
+		) {
 			if (bindings.length > 100) throw new MetricError("too_many_metrics", 400);
 			if (!definitions.getMany || !observations.predictionReadBatch)
 				throw new MetricError("batch_unavailable", 503);
 			const at = now();
-			const found = await definitions.getMany([
-				...new Set(bindings.map((b) => b.metricId)),
-			]);
+			const found = await definitions.getMany(
+				[...new Set(bindings.map((b) => b.metricId))],
+				signal,
+			);
 			const allowed = new Map<string, MetricDefinition>();
 			for (const d of found) {
 				try {
@@ -520,6 +578,7 @@ export function createMetricService(deps: {
 					baselineObservationId: b.baselineObservationId as string,
 					evaluationAt: b.evaluationAt as string,
 				})),
+				signal,
 			);
 			if (rows.length !== selected.length)
 				throw new MetricError("batch_unavailable", 503);
@@ -581,42 +640,10 @@ export function createMetricService(deps: {
 					} catch {
 						return missing("calculator_unavailable");
 					}
-					const paramsHash = hashMetric(def.spec.params);
 					const compatible = (o: MetricObservation | null | undefined) =>
-						o &&
-						o.metricId === binding.metricId &&
-						o.definitionHash === hash &&
-						o.calculatorVersion === def.spec.calculatorId &&
-						o.paramsHash === paramsHash &&
-						o.unit === shape.unit &&
-						Date.parse(o.window.end) - Date.parse(o.window.start) ===
-							shape.windowSeconds * 1000 &&
-						o.node === scope.node &&
-						o.environment === scope.environment &&
-						o.dataScope === scope.dataScope
-							? o
-							: null;
-					// A fixed prediction keeps evidence that was fresh at its own
-					// observation/evaluation time, even years after the deadline.
-					const freshAt = (o: MetricObservation, reference: number) => {
-						const observed = Date.parse(o.observedAt ?? "");
-						const end = Date.parse(o.window.end);
-						const age = def.spec.maxAgeSeconds * 1000;
-						const at = Math.max(reference, observed);
-						return (
-							o.status === "ok" &&
-							o.value !== null &&
-							Number.isFinite(o.value) &&
-							Number.isFinite(at) &&
-							observed >= end &&
-							at - end <= age &&
-							o.sourceWatermarks.length > 0 &&
-							o.sourceWatermarks.every(({ asOf }) => {
-								const sourceAt = Date.parse(asOf ?? "");
-								return sourceAt <= observed && at - sourceAt <= age;
-							})
-						);
-					};
+						compatibleEvidence(o, def, scope, shape) ? o : null;
+					const freshAt = (o: MetricObservation, reference: number) =>
+						freshEvidenceAt(o, def, reference);
 					const deadline = Date.parse(binding.evaluationAt);
 					if (
 						!compatible(baseline) ||
@@ -663,13 +690,15 @@ export function createMetricService(deps: {
 				metricId: string;
 				baselineObservationId: string | null;
 			}[],
+			signal?: AbortSignal,
 		) {
 			if (requests.length > 300) throw new MetricError("too_many_metrics", 400);
 			if (!definitions.getMany || !observations.workReadBatch)
 				throw new MetricError("batch_unavailable", 503);
-			const found = await definitions.getMany([
-				...new Set(requests.map((r) => r.metricId)),
-			]);
+			const found = await definitions.getMany(
+				[...new Set(requests.map((r) => r.metricId))],
+				signal,
+			);
 			const allowed = new Map<string, MetricDefinition>();
 			for (const definition of found) {
 				try {
@@ -691,6 +720,7 @@ export function createMetricService(deps: {
 					baselineObservationId: r.baselineObservationId,
 					definitionHash: metricDefinitionHash(r.definition),
 				})),
+				signal,
 			);
 			if (rows.length !== selected.length)
 				throw new MetricError("batch_unavailable", 503);
@@ -841,21 +871,39 @@ export function createMetricService(deps: {
 			while (scanned < SERVES_SCAN_MAX) {
 				const page = await definitions.list(50, cursor);
 				scanned += page.items.length;
-				// A page reads in small concurrent chunks; results keep the page's order.
-				for (let i = 0; i < page.items.length; i += SERVING_CONCURRENCY) {
-					const rows = await Promise.all(
-						page.items.slice(i, i + SERVING_CONCURRENCY).map(servingRow),
-					);
-					for (const row of rows) {
-						if (!row) continue;
-						const d = row.definition;
-						if (d.serves || d.annexInvalid?.length) items.push(row);
-						if (
-							!d.serves &&
-							!d.annexInvalid?.some((bad) => bad.field === "serves")
-						)
-							unbound.push(row);
+				if (!observations.workReadBatch)
+					throw new MetricError("batch_unavailable", 503);
+				const allowed: MetricDefinition[] = [];
+				for (const d of page.items) {
+					try {
+						await authorize("read", d);
+						allowed.push(d);
+					} catch (error) {
+						if (!(error instanceof MetricError) || error.status !== 404)
+							throw error;
 					}
+				}
+				const pairs = await observations.workReadBatch(
+					allowed.map((d) => ({
+						metricId: d.id,
+						definitionHash: metricDefinitionHash(d),
+						baselineObservationId: null,
+					})),
+				);
+				if (pairs.length !== allowed.length)
+					throw new MetricError("batch_unavailable", 503);
+				for (let i = 0; i < allowed.length; i++) {
+					const pair = pairs[i];
+          if (!pair) throw new MetricError("batch_unavailable",503);
+          const row = await servingRow(allowed[i]!, pair);
+					if (!row) continue;
+					const d = row.definition;
+					if (d.serves || d.annexInvalid?.length) items.push(row);
+					if (
+						!d.serves &&
+						!d.annexInvalid?.some((bad) => bad.field === "serves")
+					)
+						unbound.push(row);
 				}
 				if (!page.nextCursor) break;
 				cursor = page.nextCursor;
@@ -1006,7 +1054,16 @@ export function createMetricService(deps: {
 				b.baselineObservationId &&
 				!(
 					baseline &&
-					baseline.status === "ok" &&
+					baseline.id === b.baselineObservationId &&
+					compatibleEvidence(baseline, definition, scope, shape) &&
+					freshEvidenceAt(
+						baseline,
+						definition,
+						Date.parse(baseline.observedAt ?? ""),
+					) &&
+					(!b.evaluationAt ||
+						Date.parse(baseline.observedAt ?? "") <=
+							Date.parse(b.evaluationAt)) &&
 					baseline.metricId === b.metricId &&
 					baseline.dataScope === scope.dataScope &&
 					baseline.node === scope.node &&
@@ -1026,7 +1083,7 @@ export function createMetricService(deps: {
 				? options.preloaded.lastGood
 				: await observations.lastGood(b.metricId, hash);
 			const due = deadline !== null && Date.parse(deadline) <= at.getTime();
-			const evaluation = due
+			const candidate = due
 				? await observations.at(
 						b.metricId,
 						hash,
@@ -1034,6 +1091,14 @@ export function createMetricService(deps: {
 						definition.spec.maxAgeSeconds,
 					)
 				: null;
+			const evaluation =
+				candidate &&
+				compatibleEvidence(candidate, definition, scope, shape) &&
+				freshEvidenceAt(candidate, definition, Date.parse(deadline!)) &&
+				(!baseline ||
+					Date.parse(candidate.window.end) >= Date.parse(baseline.window.end))
+					? candidate
+					: null;
 			const dayEnd = floorTo(at.getTime(), "1d") + DAY_MS;
 			const trend = options?.latestOnly
 				? null

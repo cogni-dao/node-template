@@ -277,7 +277,7 @@ function GoalRow({
   const ranked = metrics ? sortKpis(goal.kpis) : goal.kpis.map((kpi, index) => ({ kpi, index }));
   return (
     <li data-goal={goal.id}>
-      <h3 className="flex items-center">
+      <h3 className={`flex items-center ${metrics ? "border-b border-border/60 bg-muted/40" : ""}`}>
         <button
           type="button"
           aria-expanded={expanded}
@@ -315,107 +315,53 @@ function GoalRow({
       <div id={bodyId} hidden={!expanded} className="space-y-3 px-4 pt-1 pb-4">
         {(expanded || !metrics) && (
           <>
-            {goal.kpis.length ? (
-              metrics ? (
-                <div className="divide-y divide-border/60">
-                  {ranked.map(({ kpi, index }) => {
-                    const key = keyOf(kpi, index);
-                    return (
-                      <MetricsKpiRow
-                        key={key}
-                        kpi={kpi}
-                        data={data}
-                        open={open === key}
-                        onToggle={() => setOpen(open === key ? null : key)}
-                      />
-                    );
-                  })}
-                </div>
-              ) : (
-                <div className={CARD_GRID}>
-                  {ranked.map(({ kpi, index }) => {
-                    const key = keyOf(kpi, index);
-                    return (
-                      <KpiCard
-                        key={key}
-                        kpi={kpi}
-                        open={open === key}
-                        chartId={chartId}
-                        onToggle={() => setOpen(open === key ? null : key)}
-                      />
-                    );
-                  })}
-                </div>
-              )
-            ) : (
-              <p className="text-muted-foreground text-sm">No metric bound</p>
-            )}
-            {!metrics && openKpi && open && <KpiChart key={open} id={chartId} kpi={openKpi} nowIso={nowIso} />}
+        {goal.kpis.length ? (
+          metrics ? (
+            <div className="space-y-4">
+              {ranked.map(({ kpi, index }) => {
+                const key = keyOf(kpi, index);
+                return (
+                  <div key={key} data-kpi-block={kpi.binding.metricId} className="grid gap-3 md:grid-cols-[15rem_minmax(0,1fr)] md:items-start">
+                    <KpiCard
+                      kpi={kpi}
+                      open={open === key}
+                      chartId={chartId}
+                      wrap
+                      onToggle={() => setOpen(open === key ? null : key)}
+                    />
+                    {hasMetricDetail(data) ? (
+                      <KpiBranch rows={servedRows(kpi, data)} nowIso={nowIso} complete={!data.servedTruncated} />
+                    ) : (
+                      <p className="text-muted-foreground text-sm">Serving metrics unavailable</p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className={CARD_GRID}>
+              {ranked.map(({ kpi, index }) => {
+                const key = keyOf(kpi, index);
+                return (
+                  <KpiCard
+                    key={key}
+                    kpi={kpi}
+                    open={open === key}
+                    chartId={chartId}
+                    onToggle={() => setOpen(open === key ? null : key)}
+                  />
+                );
+              })}
+            </div>
+          )
+        ) : (
+          <p className="text-muted-foreground text-sm">No metric bound</p>
+        )}
+        {openKpi && open && <KpiChart key={open} id={chartId} kpi={openKpi} nowIso={nowIso} />}
           </>
         )}
       </div>
     </li>
-  );
-}
-
-/** A KPI disclosure and its explicit evidence link are separate, accessible controls. */
-function MetricsKpiRow({
-  kpi,
-  data,
-  open,
-  onToggle,
-}: {
-  readonly kpi: GoalKpi;
-  readonly data: GoalsProgress;
-  readonly open: boolean;
-  readonly onToggle: () => void;
-}) {
-  const { hrefs, Link } = useGoalsHost();
-  const id = useId();
-  const title = kpi.metric?.title ?? kpi.binding.metricId;
-  const value =
-    kpi.assessment.value === null ? "—" : formatValue(kpi.assessment.value, displayOf(kpi), kpi.binding.target.unit);
-  return (
-    <div data-kpi-block={kpi.binding.metricId}>
-      <div className="flex items-center gap-1">
-        <button
-          type="button"
-          aria-expanded={open}
-          aria-controls={open ? id : undefined}
-          onClick={onToggle}
-          className="flex min-h-12 min-w-0 flex-1 flex-wrap items-center gap-3 rounded-md py-3 text-left outline-none hover:bg-muted/30 focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <ChevronRight
-            aria-hidden="true"
-            className={`size-4 shrink-0 transition-transform ${open ? "rotate-90" : ""}`}
-          />
-          <span className="min-w-0 flex-1 break-words font-medium text-sm">{title}</span>
-          <span className="text-sm tabular-nums">
-            {value}
-            {kpi.assessment.value !== null && displayOf(kpi) !== "slo" && kpi.binding.target.unit
-              ? ` ${kpi.binding.target.unit}`
-              : ""}
-          </span>
-          <StatusPill status={kpi.assessment.status} />
-        </button>
-        <Link
-          href={hrefs.metric(kpi.binding.metricId)}
-          aria-label={`Open ${title} evidence`}
-          className="flex min-h-12 min-w-12 items-center justify-center rounded-md outline-none hover:bg-muted/30 focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <ArrowUpRight aria-hidden="true" className="size-4" />
-        </Link>
-      </div>
-      {open && (
-        <div id={id} className="pb-3 pl-4">
-          {hasMetricDetail(data) ? (
-            <KpiBranch rows={servedRows(kpi, data)} nowIso={data.asOf} />
-          ) : (
-            <p className="text-muted-foreground text-sm">Serving metrics unavailable</p>
-          )}
-        </div>
-      )}
-    </div>
   );
 }
 

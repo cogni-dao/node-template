@@ -12,6 +12,7 @@ import {
 	type MetricSnapshot,
 } from "../contracts.js";
 
+import { readMetricBatch } from "./read-budget.js";
 type Row = Record<string, unknown>;
 /** `dolt:head:<32-char hash>@<toISOString()>`; only matching refs are cast to a time. */
 const HEAD_REF =
@@ -33,16 +34,22 @@ export class PostgresMetricObservations implements MetricObservationsPort {
 			baselineObservationId: string;
 			evaluationAt: string;
 		}[],
+		signal?: AbortSignal,
 	) {
 		if (!requests.length) return [];
 		if (requests.length > 100) throw new MetricError("too_many_metrics", 400);
-		const rows = await this
-			.sql`WITH requested AS (SELECT ord, value->>'metricId' AS metric_id, value->>'baselineObservationId' AS baseline_id, value->>'evaluationAt' AS due FROM jsonb_array_elements(${JSON.stringify(requests)}::text::jsonb) WITH ORDINALITY AS x(value,ord))
+		const rows = await readMetricBatch(
+			this.sql,
+			signal,
+			(
+				sql,
+			) => sql`WITH requested AS (SELECT ord, value->>'metricId' AS metric_id, value->>'baselineObservationId' AS baseline_id, value->>'evaluationAt' AS due FROM jsonb_array_elements(${JSON.stringify(requests)}::text::jsonb) WITH ORDINALITY AS x(value,ord))
 		SELECT b.snapshot AS baseline_definition, b.observation AS baseline_observation, l.observation AS latest_observation, g.observation AS good_observation, e.observation AS evaluation_observation
 		FROM requested r LEFT JOIN metric_observations b ON b.scope=${this.key} AND b.id=CASE WHEN r.baseline_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN r.baseline_id::uuid ELSE NULL END AND b.metric_id=r.metric_id
 		LEFT JOIN LATERAL (SELECT observation FROM metric_observations WHERE scope=${this.key} AND metric_id=r.metric_id AND definition_hash=b.definition_hash ORDER BY evaluation_at DESC,id DESC LIMIT 1) l ON true
 		LEFT JOIN LATERAL (SELECT observation FROM metric_observations WHERE scope=${this.key} AND metric_id=r.metric_id AND definition_hash=b.definition_hash AND status='ok' ORDER BY evaluation_at DESC,id DESC LIMIT 1) g ON true
-		LEFT JOIN LATERAL (SELECT observation FROM metric_observations WHERE scope=${this.key} AND metric_id=r.metric_id AND definition_hash=b.definition_hash AND status='ok' AND observation->'value' IS NOT NULL AND jsonb_typeof(observation->'value')='number' AND evaluation_at <= r.due::timestamptz AND evaluation_at >= r.due::timestamptz - ((b.snapshot->'spec'->>'maxAgeSeconds')::int * interval '1 second') AND (observation->>'observedAt')::timestamptz <= r.due::timestamptz + ((b.snapshot->'spec'->>'maxAgeSeconds')::int * interval '1 second') ORDER BY evaluation_at DESC,(observation->>'observedAt')::timestamptz DESC,id DESC LIMIT 1) e ON true ORDER BY r.ord`;
+		LEFT JOIN LATERAL (SELECT observation FROM metric_observations WHERE scope=${this.key} AND metric_id=r.metric_id AND definition_hash=b.definition_hash AND status='ok' AND observation->'value' IS NOT NULL AND jsonb_typeof(observation->'value')='number' AND evaluation_at <= r.due::timestamptz AND evaluation_at >= r.due::timestamptz - ((b.snapshot->'spec'->>'maxAgeSeconds')::int * interval '1 second') AND (observation->>'observedAt')::timestamptz <= r.due::timestamptz + ((b.snapshot->'spec'->>'maxAgeSeconds')::int * interval '1 second') ORDER BY evaluation_at DESC,(observation->>'observedAt')::timestamptz DESC,id DESC LIMIT 1) e ON true ORDER BY r.ord`,
+		);
 		const parse = (value: unknown) =>
 			value ? MetricObservationSchema.parse(json(value)) : null;
 		return rows.map((row) => ({
@@ -151,16 +158,25 @@ export class PostgresMetricObservations implements MetricObservationsPort {
 			definitionHash: string;
 			baselineObservationId: string | null;
 		}[],
+		signal?: AbortSignal,
 	) {
 		if (!requests.length) return [];
 		if (requests.length > 300) throw new MetricError("too_many_metrics", 400);
-		const rows = await this
-			.sql`WITH requested AS (SELECT ord, value->>'metricId' AS "metricId", value->>'definitionHash' AS "definitionHash", value->>'baselineObservationId' AS "baselineObservationId" FROM jsonb_array_elements(${JSON.stringify(requests)}::text::jsonb) WITH ORDINALITY AS x(value,ord))
+		const rows = await readMetricBatch(
+			this.sql,
+			signal,
+			(
+				sql,
+			) => sql`WITH requested AS (SELECT ord, value->>'metricId' AS "metricId", value->>'definitionHash' AS "definitionHash", value->>'baselineObservationId' AS "baselineObservationId" FROM jsonb_array_elements(${JSON.stringify(requests)}::text::jsonb) WITH ORDINALITY AS x(value,ord))
 		SELECT r."metricId" AS metric_id, r."baselineObservationId" AS baseline_id,
-		 b.snapshot AS baseline_definition, b.observation AS baseline_observation, l.observation AS latest_observation
+		 b.snapshot AS baseline_definition, b.observation AS baseline_observation, l.observation AS latest_observation, g.observation AS good_observation
 		FROM requested r LEFT JOIN metric_observations b ON b.scope=${this.key} AND b.id=CASE WHEN r."baselineObservationId" ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN r."baselineObservationId"::uuid ELSE NULL END
-		LEFT JOIN LATERAL (SELECT observation FROM metric_observations WHERE scope=${this.key} AND metric_id=r."metricId" AND definition_hash=r."definitionHash" ORDER BY evaluation_at DESC,id DESC LIMIT 1) l ON true ORDER BY r.ord`;
+		LEFT JOIN LATERAL (SELECT observation FROM metric_observations WHERE scope=${this.key} AND metric_id=r."metricId" AND definition_hash=r."definitionHash" ORDER BY evaluation_at DESC,id DESC LIMIT 1) l ON true LEFT JOIN LATERAL (SELECT observation FROM metric_observations WHERE scope=${this.key} AND metric_id=r."metricId" AND definition_hash=r."definitionHash" AND status='ok' ORDER BY evaluation_at DESC,id DESC LIMIT 1) g ON true ORDER BY r.ord`,
+		);
 		return rows.map((row) => ({
+			lastGood: row.good_observation
+				? MetricObservationSchema.parse(json(row.good_observation))
+				: null,
 			baseline: row.baseline_observation
 				? ({
 						definition: json(row.baseline_definition),

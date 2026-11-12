@@ -9,6 +9,7 @@ export type Row = Record<string, unknown>;
 export function fakeSql(answer: (text: string) => Row[] | Promise<Row[]>) {
 	const queries: string[] = [];
 	const sql = {
+		begin: async (fn: (tx: unknown) => unknown) => fn(sql),
 		unsafe(text: string) {
 			queries.push(text);
 			const p = Promise.resolve().then(() => answer(text));
@@ -23,6 +24,8 @@ export function memoryObservations() {
 	let row: Row | undefined;
 	const sql = ((strings: TemplateStringsArray, ...values: unknown[]) => {
 		const text = strings.join("?");
+		if (text.startsWith("WITH requested AS"))
+			return Promise.resolve(JSON.parse(String(values[0])).map(() => ({})));
 		if (text.startsWith("INSERT INTO execution_requests"))
 			return Promise.resolve([{ run_id: values[2] }]);
 		if (text.startsWith("INSERT INTO metric_observations")) {
@@ -36,12 +39,24 @@ export function memoryObservations() {
 		return Promise.resolve([]);
 	}) as unknown as Sql & { begin: unknown };
 	Object.assign(sql, {
+		unsafe: async () => [],
 		begin: (fn: (tx: Sql) => Promise<unknown>) => fn(sql),
 	});
 	return sql;
 }
-export const noObservations = ((..._args: unknown[]) =>
-	Promise.resolve([])) as unknown as Sql;
+export const noObservations = Object.assign(
+	(strings: TemplateStringsArray, ...values: unknown[]) =>
+		Promise.resolve(
+			strings.join("?").startsWith("WITH requested AS")
+				? JSON.parse(String(values[0])).map(() => ({}))
+				: [],
+		),
+	{
+		unsafe: async () => [],
+		begin: async (fn: (tx: unknown) => unknown): Promise<unknown> =>
+			fn(noObservations),
+	},
+) as unknown as Sql;
 
 /** A hub row that is a metric definition. */
 export const metricRow = (
@@ -68,7 +83,10 @@ export const metricRow = (
  * statement from `answer`. `service` writes observations in memory; `reader`
  * has none, for registry and definition reads.
  */
-export function hub(hubRows: Row[], answer: (text: string) => Row[] = () => []) {
+export function hub(
+	hubRows: Row[],
+	answer: (text: string) => Row[] = () => [],
+) {
 	const events: object[] = [];
 	const knowledge = fakeSql((text) => {
 		if (!/^SELECT id,title,metric_spec,updated_at FROM knowledge/.test(text))
@@ -76,7 +94,8 @@ export function hub(hubRows: Row[], answer: (text: string) => Row[] = () => []) 
 		const one = /WHERE id='([^']+)'/.exec(text)?.[1];
 		if (one)
 			return hubRows.filter(
-				(r) => r.id === one && r.metric_spec != null && r.status !== "deprecated",
+				(r) =>
+					r.id === one && r.metric_spec != null && r.status !== "deprecated",
 			);
 		const after = /AND id > '([^']+)'/.exec(text)?.[1];
 		const limit = Number(/LIMIT (\d+)/.exec(text)?.[1] ?? 50);
@@ -93,7 +112,10 @@ export function hub(hubRows: Row[], answer: (text: string) => Row[] = () => []) 
 		log: (event: object) => events.push(event),
 	};
 	return {
-		service: createGoalMetrics({ ...base, observationsSql: memoryObservations() }),
+		service: createGoalMetrics({
+			...base,
+			observationsSql: memoryObservations(),
+		}),
 		reader: createGoalMetrics({ ...base, observationsSql: noObservations }),
 		events,
 		queries: knowledge.queries,

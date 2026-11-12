@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 import { describe, expect, it, vi } from "vitest";
 import { judgeMoves, type MoveReadingPort } from "../../work-items/src/moves";
+import { readMetricBatch } from "../src/adapters/read-budget";
 import { PostgresMetricObservations } from "../src/adapters/postgres";
 import {
 	assessKpi,
@@ -172,6 +173,10 @@ describe("work page database batch", () => {
 					list: async () => ({ items: [], nextCursor: null }),
 				},
 				observations: {
+					snapshot: async () => ({ definition, observation: baseline }),
+					history: async () => [due],
+					lastGood: async () => due,
+					at: async () => due,
 					predictionReadBatch: async () => [
 						{
 							baseline: { definition, observation: baseline },
@@ -195,6 +200,21 @@ describe("work page database batch", () => {
 					evaluationAt: "2026-10-02T12:00:00.000Z",
 				},
 			]);
+			const binding = {
+				metricId: "ratio",
+				comparator: "gte" as const,
+				target: { value: 2, unit: "ratio" },
+				baselineObservationId: baseline.id,
+				evaluationAt: "2026-10-02T12:00:00.000Z",
+			};
+			const kpi = await service.kpi(binding, {
+				hypothesis: true,
+				latestOnly: true,
+			});
+			const [legacy] = await service.bindings([binding], { hypothesis: true });
+			expect(kpi.assessment).toEqual(result?.assessment);
+			expect(legacy?.assessment).toEqual(result?.assessment);
+
 			expect(result?.assessment).toMatchObject({
 				status,
 				reason,
@@ -427,7 +447,7 @@ describe("work page database batch", () => {
 		const result = await service.workReadBatch([
 			{ metricId: "ratio", baselineObservationId: fresh.id },
 		]);
-		expect(batch).toHaveBeenCalledWith([]);
+		expect(batch).toHaveBeenCalledWith([], undefined);
 		expect(result[0]).toMatchObject({
 			baseline: null,
 			current: null,
@@ -464,10 +484,17 @@ describe("work page database batch", () => {
 			{ baseline: null, current: null, unknownReason: "metric_deprecated" },
 			{ baseline: null, current: null, unknownReason: "metrics_unavailable" },
 		]);
-		expect(batch).toHaveBeenCalledExactlyOnceWith([]);
+		expect(batch).toHaveBeenCalledExactlyOnceWith([], undefined);
 	});
 	it("issues one scoped ordered SQL statement for multiple snapshots", async () => {
-		const sql = vi.fn(async () => [{}, {}]);
+		const sql = Object.assign(
+			vi.fn(async () => [{}, {}]),
+			{
+				unsafe: vi.fn(async () => []),
+				begin: async (fn: (tx: unknown) => unknown): Promise<unknown> =>
+					fn(sql),
+			},
+		);
 		const store = new PostgresMetricObservations(sql as never, {
 			node: "n",
 			environment: "e",
@@ -487,7 +514,14 @@ describe("work page database batch", () => {
 		expect(call.slice(1)).toContain("n/e/d");
 	});
 	it("reads multiple pinned due observations in one scoped statement", async () => {
-		const sql = vi.fn(async () => [{}, {}]);
+		const sql = Object.assign(
+			vi.fn(async () => [{}, {}]),
+			{
+				unsafe: vi.fn(async () => []),
+				begin: async (fn: (tx: unknown) => unknown): Promise<unknown> =>
+					fn(sql),
+			},
+		);
 		const store = new PostgresMetricObservations(sql as never, {
 			node: "n",
 			environment: "e",
@@ -1055,5 +1089,45 @@ describe("ranged history bucketing", () => {
 			start: "2026-11-01T00:00:00.000Z",
 			end: "2026-11-01T01:00:00.000Z",
 		});
+	});
+});
+
+describe("metric batch cancellation admission", () => {
+	it("cancels native reads and retains bounded capacity until settlement", async () => {
+		const set = vi.fn(async () => []);
+		const pool = {
+			begin: vi.fn(async (fn: (tx: unknown) => unknown) => fn({ unsafe: set })),
+		};
+		const controllers = Array.from({ length: 4 }, () => new AbortController());
+		const finishes: (() => void)[] = [];
+		const cancel = vi.fn();
+		const reads = controllers.map((controller) =>
+			readMetricBatch(pool as never, controller.signal, () =>
+				Object.assign(
+					new Promise<number>((resolve) => finishes.push(() => resolve(1))),
+					{ cancel },
+				),
+			).catch((error) => error),
+		);
+		await vi.waitFor(() => expect(finishes).toHaveLength(4));
+		controllers.forEach((controller) => controller.abort());
+		const errors = await Promise.all(reads);
+		expect(errors.every((error) => error.code === "batch_unavailable")).toBe(
+			true,
+		);
+		expect(cancel).toHaveBeenCalledTimes(4);
+		await expect(
+			readMetricBatch(pool as never, undefined, () => Promise.resolve(2)),
+		).rejects.toMatchObject({ code: "batch_unavailable" });
+		expect(pool.begin).toHaveBeenCalledTimes(4);
+		expect(set).toHaveBeenCalledWith("SET LOCAL statement_timeout=2000");
+		finishes.forEach((finish) => finish());
+		await vi.waitFor(async () =>
+			expect(
+				await readMetricBatch(pool as never, undefined, () =>
+					Promise.resolve(2),
+				),
+			).toBe(2),
+		);
 	});
 });

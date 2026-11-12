@@ -72,7 +72,7 @@ export function MetricRowView({ row, nowIso }: { readonly row: MetricRow; readon
   const age = observedAt ? formatAge(observedAt, nowIso) : null;
   // A reading that is not current is muted, like a delayed KPI.
   const muted =
-    value !== null && (status === "delayed" || (status === "failing" && row.assessment?.reason !== "target_breached"));
+    value !== null && (status === "building" || status === "delayed" || (status === "failing" && row.assessment?.reason !== "target_breached"));
   const label = `${row.title}: ${number ?? "no reading"}${band ? `; band ${band}` : "; no band"}${age ? `; read ${age}` : ""}`;
   return (
     <li data-metric={row.id} data-status={status}>
@@ -104,6 +104,7 @@ export function MetricRowView({ row, nowIso }: { readonly row: MetricRow; readon
               <span className="whitespace-nowrap tabular-nums">{band}</span>
             </span>
           )}
+          {row.latest?.viewState === "pending" && <span>Pending · historical reading</span>}
           {age && observedAt ? (
             <span title={readingTitle(observedAt)} className="whitespace-nowrap tabular-nums">
               {age}
@@ -121,14 +122,14 @@ export function MetricRowView({ row, nowIso }: { readonly row: MetricRow; readon
 }
 
 /** The metrics that serve one KPI, grouped by role, worst first. */
-export function KpiBranch({ rows, nowIso }: { readonly rows: readonly MetricRow[]; readonly nowIso: string }) {
+export function KpiBranch({ rows, nowIso, complete = true }: { readonly rows: readonly MetricRow[]; readonly nowIso: string; readonly complete?: boolean }) {
   if (rows.length === 0)
     return (
       <p
         data-branch="empty"
         className="rounded-lg border border-border/60 border-dashed px-3 py-3 text-muted-foreground text-sm"
       >
-        No metric serves this KPI yet
+        {complete ? "No metric serves this KPI yet" : "No serving metrics found in the scanned set"}
       </p>
     );
   return (

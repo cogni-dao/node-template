@@ -77,6 +77,7 @@ export function statusRank(status: KpiStatus): number {
  * red), a stale one is delayed, a pending one is building; a good reading is "no_band".
  */
 export function metricStatus(row: Pick<MetricRow, "assessment" | "latest">): MetricStatus {
+  if (row.latest?.viewState === "pending") return "building";
   if (row.assessment) return row.assessment.status;
   switch (row.latest?.viewState) {
     case "error":

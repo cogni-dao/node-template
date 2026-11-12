@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 import { KpiBindingsSchema } from "@cogni-dao/metrics/contracts";
+import { EVENT_NAMES, logEvent } from "@/shared/observability";
 import { NextResponse } from "next/server";
 import { getWorkItem } from "@/app/_facades/work/items.server";
 import { getSessionUser } from "@/app/_lib/auth/session";
@@ -13,22 +14,28 @@ export const runtime = "nodejs";
 
 export const GET = wrapRouteHandlerWithLogging<{ params: Promise<{ id: string }> }>(
   { routeId: "work.expectations.get", auth: { mode: "required", getSessionUser } },
-  async (_ctx, request, user, context) => {
-    if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  async (ctx, request, user, context) => {
+    const started = Date.now();
+    const reply = (body: unknown, status: number, errorCode?: string) => {
+      logEvent(ctx.log, EVENT_NAMES.WORK_EXPECTATIONS_READ, { reqId: ctx.reqId, routeId: ctx.routeId, status, durationMs: Date.now()-started, outcome: status < 400 ? "success" : "error", ...(errorCode ? {errorCode} : {}) });
+      return NextResponse.json(body, { status, headers: { "Cache-Control": "no-store" } });
+    };
+    try {
+    if (!user) return reply({ error: "unauthorized" }, 401, "unauthorized");
     if (!context) throw new Error("context required");
     const { id } = await context.params;
     const container = getContainer();
     if (!container.knowledgeStorePort?.readWorkEdo)
-      return NextResponse.json({ error: "unavailable" }, { status: 503 });
+      return reply({ error: "unavailable" }, 503, "unavailable");
     const [itemResult, pageResult] = await Promise.allSettled([
       getWorkItem(id),
       container.knowledgeStorePort.readWorkEdo(id, request.signal),
     ]);
     if (itemResult.status !== "fulfilled" || pageResult.status !== "fulfilled")
-      return NextResponse.json({ error: "unavailable" }, { status: 503 });
+      return reply({ error: "unavailable" }, 503, "unavailable");
     const item = itemResult.value,
       page = pageResult.value;
-    if (!item) return NextResponse.json({ error: "not found" }, { status: 404 });
+    if (!item) return reply({ error: "not found" }, 404, "not_found");
     const entries = page.items.map(({ hypothesis, outcomes, truncated }) => ({
       hypothesis,
       outcomes,
@@ -49,7 +56,7 @@ export const GET = wrapRouteHandlerWithLogging<{ params: Promise<{ id: string }>
     );
     const assessments =
       container.goalMetrics && matched.length
-        ? await container.goalMetrics.predictionBatch(matched).catch(() => [])
+        ? await container.goalMetrics.predictionBatch(matched, request.signal).catch(() => [])
         : [];
     let cursor = 0;
     const items = entries.map(({ hypothesis, outcomes, truncated, parsed }) => ({
@@ -85,9 +92,7 @@ export const GET = wrapRouteHandlerWithLogging<{ params: Promise<{ id: string }>
           })
         : [{ metricId: "", expected: "invalid binding", observed: "unresolved" }],
     }));
-    return NextResponse.json(
-      { items, truncated: page.truncated },
-      { headers: { "Cache-Control": "no-store" } },
-    );
+    return reply({ items, truncated: page.truncated }, 200);
+    } catch { return reply({error:"unavailable"},503,"unavailable"); }
   },
 );

@@ -337,7 +337,7 @@ describe("createWorkItemCapability", () => {
         },
       ]);
       expect(service.workReadBatch).toHaveBeenCalledOnce();
-      expect(service.workReadBatch).toHaveBeenCalledWith([{ metricId: "m-1", baselineObservationId: OBS }]);
+      expect(service.workReadBatch).toHaveBeenCalledWith([{ metricId: "m-1", baselineObservationId: OBS }], expect.any(AbortSignal));
     });
 
     it("a page of items returns the stored moves and looks up nothing", async () => {

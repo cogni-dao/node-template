@@ -345,7 +345,10 @@ export interface MetricCalculator {
 }
 export interface MetricDefinitionsPort {
 	get(id: string): Promise<MetricDefinition | null>;
-	getMany?(ids: readonly string[]): Promise<MetricDefinition[]>;
+	getMany?(
+		ids: readonly string[],
+		signal?: AbortSignal,
+	): Promise<MetricDefinition[]>;
 	list(
 		limit: number,
 		after?: string,
@@ -358,6 +361,7 @@ export interface MetricObservationsPort {
 			baselineObservationId: string;
 			evaluationAt: string;
 		}[],
+		signal?: AbortSignal,
 	): Promise<
 		readonly {
 			baseline: MetricSnapshot | null;
@@ -372,10 +376,12 @@ export interface MetricObservationsPort {
 			definitionHash: string;
 			baselineObservationId: string | null;
 		}[],
+		signal?: AbortSignal,
 	): Promise<
 		readonly {
 			baseline: MetricSnapshot | null;
 			latest: MetricObservation | null;
+			lastGood?: MetricObservation | null;
 		}[]
 	>;
 	request(
