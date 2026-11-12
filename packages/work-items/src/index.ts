@@ -237,3 +237,11 @@ export {
   WORK_READ_CLIENT_CLOSED,
   WORK_READ_ERROR_CODES
 } from "./read-handlers.js";
+export {
+  ConfirmedMergeReceiptSchema,
+  DeliverySubmissionSchema,
+  ValidationProofSchema,
+  evaluateConfirmedMerge,
+  evaluateDeliveryDestination,
+  evaluateValidation,
+} from "./delivery-evidence.js";
