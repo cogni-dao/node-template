@@ -161,9 +161,17 @@ export { StatusIcon, StatusPill, TypeIcon } from "./work-item-icons.js";
 export {
   WorkMetricDetails,
   WorkMetricSummary,
+  workMetricArrow,
   workMetricVerdict,
   type WorkMetric,
 } from "./work-metrics.js";
+export {
+  useWorkGoal,
+  type WorkGoalRef,
+  type WorkGoalResolver,
+  WorkGoalsProvider,
+  type WorkGoalSubject,
+} from "./work-goals.js";
 export { WorkExpectations, type WorkExpectation, type WorkExpectationPage } from "./work-edo.js";
 export {
   DataTable,

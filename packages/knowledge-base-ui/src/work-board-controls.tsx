@@ -3,7 +3,7 @@
 
 /**
  * Module: `@cogni/knowledge-base-ui/work-board-controls`
- * Purpose: The work board's sort and filter controls: rank sort + rank range, and sort + facet filter for type, status and project (task.0044).
+ * Purpose: The work board's sort and filter controls: rank sort + rank range, and sort + facet filter for type and status (task.0044; the Project facet became the Goal column, task.0112).
  * Scope: Client components over a TanStack `Column`; they write sort and filter state through the table, so a node maps that state to its own URL or query. No fetching.
  * Invariants:
  *   - HEADER_OWNS_SORT_AND_FILTER: each control pairs a column's sort header with its filter popover.
@@ -52,7 +52,7 @@ export function formatWorkProject(projectId: string): string {
 }
 
 /** The faceted work columns the board filters on, by TanStack column id. */
-export type WorkFacet = "type" | "status" | "projectId";
+export type WorkFacet = "type" | "status";
 
 export function WorkRankControls<TData, TValue>({
   column,
@@ -79,8 +79,7 @@ export function WorkFacetControls<TData, TValue>({
   facet,
   disabled = false,
 }: WorkFacetControlsProps<TData, TValue>): ReactElement {
-  const title =
-    facet === "type" ? "Type" : facet === "status" ? "Status" : "Project";
+  const title = facet === "type" ? "Type" : "Status";
   return (
     <div className="flex items-center">
       <WorkColumnHeader column={column} title={title} disabled={disabled} />
@@ -90,7 +89,7 @@ export function WorkFacetControls<TData, TValue>({
             variant="ghost"
             size="icon"
             className="h-6 min-w-6 px-1.5"
-            aria-label={`Filter ${facet === "projectId" ? "projects" : title.toLowerCase()}`}
+            aria-label={`Filter ${title.toLowerCase()}`}
           >
             <ListFilter
               className={
@@ -104,21 +103,8 @@ export function WorkFacetControls<TData, TValue>({
         <PopoverContent className="w-64" align="start">
           <HeaderFilter
             column={column}
-            options={
-              facet === "type"
-                ? WORK_TYPES
-                : facet === "status"
-                  ? WORK_STATUSES
-                  : []
-            }
-            allowEntry={facet === "projectId"}
-            formatLabel={
-              facet === "status"
-                ? formatWorkStatus
-                : facet === "projectId"
-                  ? formatWorkProject
-                  : (v) => v
-            }
+            options={facet === "type" ? WORK_TYPES : WORK_STATUSES}
+            formatLabel={facet === "status" ? formatWorkStatus : (v) => v}
             showCounts={false}
           />
         </PopoverContent>

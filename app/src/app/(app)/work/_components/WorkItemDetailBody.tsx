@@ -6,10 +6,10 @@
 import {
 	hasScores,
 	WorkItemScoresRadar,
-	WorkMetricDetails,
 	WorkExpectations,
 	type WorkMetric,
 } from "@cogni/knowledge-base-ui";
+import { WorkMoves } from "@cogni/knowledge-base-ui/goals";
 import type { WorkItemDto } from "@cogni/node-contracts";
 import { SheetDescription, SheetHeader, SheetTitle } from "@/components/sheet";
 import type { ReactElement } from "react";
@@ -118,12 +118,7 @@ export function WorkItemDetailBody({
 					</SheetHeader>
 
 					<div className="mt-6 flex flex-col gap-5 px-1">
-						<WorkMetricDetails
-							moves={item.moves ?? []}
-							goal={item.labels.find((label) =>
-								/^goal:(?:goal-)?[a-z0-9]+(?:-[a-z0-9]+)*$/.test(label),
-							)}
-						/>
+						<WorkMoves moves={item.moves ?? NO_MOVES} labels={item.labels} />
 						<WorkExpectations
 							itemId={item.id}
 							moves={item.moves ?? NO_MOVES}

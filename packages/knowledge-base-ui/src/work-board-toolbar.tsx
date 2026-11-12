@@ -36,7 +36,7 @@ import {
 } from "./work-board-controls.js";
 import { workHeaderDisabled } from "./work-column-header.js";
 
-const BOARD_FACETS: readonly WorkFacet[] = ["type", "status", "projectId"];
+const BOARD_FACETS: readonly WorkFacet[] = ["type", "status"];
 const BOARD_SORTS: readonly string[] = ["rankScore", ...BOARD_FACETS];
 /** The board's default sort: highest rank first. */
 export const DEFAULT_WORK_SORT: readonly ColumnSort[] = [

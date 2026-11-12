@@ -46,9 +46,25 @@ export function workMetricVerdict(move: WorkMetric): string {
         : "unknown";
 }
 
+/** The expected direction as a glyph; null when the move names none. */
+export function workMetricArrow(direction: WorkMetric["direction"]): "↑" | "↓" | null {
+  return direction === "up" ? "↑" : direction === "down" ? "↓" : null;
+}
+
+/** The Metric column and board line: the metric's title, its expected direction and the result. */
 export function WorkMetricSummary({ move }: { readonly move: WorkMetric }): ReactElement {
+  const arrow = workMetricArrow(move.direction);
   return (
-    <span className="break-words text-muted-foreground text-xs">
+    <span className="line-clamp-2 break-words text-muted-foreground text-xs">
+      {arrow && (
+        <span
+          role="img"
+          aria-label={move.direction === "up" ? "expected to rise" : "expected to fall"}
+          className="mr-1 font-semibold text-foreground"
+        >
+          {arrow}
+        </span>
+      )}
       {move.current?.metricTitle ?? move.metricId} · {workMetricVerdict(move)}
     </span>
   );

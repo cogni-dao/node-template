@@ -6,7 +6,7 @@
 import "@testing-library/jest-dom/vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { ACTIVE_WORK_STATUSES } from "@cogni/knowledge-base-ui";
+import { ACTIVE_WORK_STATUSES, WorkGoalsProvider } from "@cogni/knowledge-base-ui";
 import type { WorkItemDto, WorkItemSummary } from "@cogni/node-contracts";
 import type { WorkBoardColumns } from "@cogni/work-items";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -95,6 +95,36 @@ function WorkDashboardView({ selectedItemId }: { selectedItemId?: string } = {})
 }
 
 const RouteParamsContext = createContext<URLSearchParams | null>(null);
+
+/** The goals read /work resolves goal titles from: one goal, no KPIs. */
+const goalsRead = {
+  goals: [
+    {
+      id: "goal-alpha",
+      title: "Alpha goal: ship the board",
+      evaluateAt: null,
+      configurationError: false,
+      kpis: [],
+      hypotheses: [],
+      moreHypotheses: false,
+      hypothesesUnavailable: false,
+    },
+  ],
+  asOf: "2026-11-12T00:00:00Z",
+  environment: "test",
+};
+function stubGoalsRead() {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(
+      async () =>
+        new Response(JSON.stringify(goalsRead), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    ),
+  );
+}
 
 const fixture: WorkItemDto[] = Array.from({ length: 5_000 }, (_, index) => ({
   id: `task.${String(index).padStart(4, "0")}`,
@@ -257,9 +287,14 @@ describe("Work Kanban", () => {
       scores: { goal: { v: 3 }, time: { v: 3 }, unblocks: { v: 3 }, ease: { v: 3 }, confidence: { v: 3 }, agent: { v: 3 } },
     };
     const onOpenItem = vi.fn();
-    render(<WorkKanban columns={[{ status: "needs_implement", items: [summary], hasMore: false }]} isLoading={false} onOpenItem={onOpenItem} onLoadMore={() => {}} />);
+    render(
+      <WorkGoalsProvider resolve={(item) => (item.labels.includes("goal:ai-work-converges") ? { id: "goal-ai-work-converges", title: "AI work converges faster than it sprawls" } : null)}>
+        <WorkKanban columns={[{ status: "needs_implement", items: [summary], hasMore: false }]} isLoading={false} onOpenItem={onOpenItem} onLoadMore={() => {}} />
+      </WorkGoalsProvider>,
+    );
     const open = screen.getByRole("button", { name: "task.summary: Projected card" });
-    expect(screen.getByRole("link", { name: "goal:ai-work-converges" })).toHaveAttribute("href", "/knowledge/goal-ai-work-converges");
+    expect(screen.getByRole("link", { name: "AI work converges faster than it sprawls" })).toHaveAttribute("href", "/knowledge/goal-ai-work-converges");
+    expect(screen.queryByText("goal:ai-work-converges")).not.toBeInTheDocument();
     expect(screen.getByText(/^Rank /)).toBeInTheDocument();
     fireEvent.click(open);
     expect(onOpenItem.mock.calls[0]?.[0]).toBe(summary);
@@ -325,7 +360,9 @@ describe("Work Kanban", () => {
       { scroll: false },
     );
   });
-  it("renders one rank, one goal pointer, no project, and safe updated times on one hover surface", async () => {
+  it("renders one rank, one goal title pointer, no project, and safe updated times on one hover surface", async () => {
+    stubGoalsRead();
+    try {
     const item = {
       ...(fixture[0] as WorkItemDto),
       labels: ["goal:alpha", "goal:goal-alpha", "goal:beta", "goal:../unsafe"],
@@ -346,6 +383,9 @@ describe("Work Kanban", () => {
       name: "task.0000: Work item 0",
     });
     const card = open.parentElement as HTMLElement;
+    // The pointer shows the goal's title from the goals read, never the raw label.
+    const goal = await within(card).findByRole("link", { name: "Alpha goal: ship the board" });
+    expect(within(card).queryByText(/^goal:/)).not.toBeInTheDocument();
     expect(card).toHaveAttribute("data-slot", "kanban-item");
     expect(card).not.toHaveAttribute("role", "button");
     expect(card).not.toHaveAttribute("tabindex");
@@ -356,7 +396,6 @@ describe("Work Kanban", () => {
     expect(within(card).getAllByRole("link")).toHaveLength(1);
     expect(card.className).toContain("hover:bg-accent/40");
     expect(open.className).not.toContain("hover:");
-    const goal = within(card).getByRole("link", { name: "goal:alpha" });
     expect(goal).toHaveAttribute("href", "/knowledge/goal-alpha");
     expect(open.contains(goal)).toBe(false);
     goal.focus();
@@ -386,6 +425,9 @@ describe("Work Kanban", () => {
         .getByRole("button", { name: "task.0002: Work item 2" })
         .parentElement?.querySelector("time"),
     ).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("preserves explicit rank bounds and clears them on request", async () => {
@@ -427,7 +469,7 @@ describe("Work Kanban", () => {
     const table = document.querySelector("table[data-work-presync]");
     expect(table).not.toBeNull();
     const ids = (selector: string) => Array.from(table?.querySelectorAll(selector) ?? [], (node) => node.getAttribute("data-work-column"));
-    expect(ids("colgroup col")).toEqual(["priority", "rankScore", "type", "item", "metric", "goal", "status", "projectId", "updatedAt", "estimate"]);
+    expect(ids("colgroup col")).toEqual(["priority", "rankScore", "type", "item", "metric", "goal", "status", "updatedAt", "estimate"]);
     expect(ids("thead th")).toEqual(ids("colgroup col"));
     expect(ids("tbody tr:first-child td")).toEqual(ids("colgroup col"));
   });
@@ -475,17 +517,18 @@ describe("Work Kanban", () => {
   });
 
   it("keeps board controls when their table columns are hidden", async () => {
-    navigation.params = new URLSearchParams("view=table&sort=projectId");
+    navigation.params = new URLSearchParams("view=table");
     const view = mount();
     await userEvent.click(screen.getByRole("button", { name: "Columns" }));
-    for (const label of ["Rank", "Type", "Status", "Project"]) {
+    for (const label of ["Rank", "Type", "Status", "Goal"]) {
       await userEvent.click(screen.getByRole("menuitemcheckbox", { name: label }));
     }
     await userEvent.keyboard("{Escape}");
-    navigation.params = new URLSearchParams("view=board&sort=projectId");
+    navigation.params = new URLSearchParams("view=board");
     view.rerender(view.container.firstChild ? <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><WorkDashboardView /></QueryClientProvider> : <></>);
-    for (const name of ["Filter rank", "Filter type", "Filter status", "Filter projects"]) expect(screen.getByRole("button", { name })).toBeInTheDocument();
-    expect(screen.queryByText(/Sorted by projectId/)).not.toBeInTheDocument();
+    for (const name of ["Filter rank", "Filter type", "Filter status"]) expect(screen.getByRole("button", { name })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Filter projects" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Sorted by/)).not.toBeInTheDocument();
   });
 
   it("navigates only visible board cards and clears selection when columns change", async () => {
@@ -783,21 +826,13 @@ describe("Work Kanban", () => {
     expect(screen.getByPlaceholderText(/Search id/)).toHaveValue("target");
   });
 
-  it("offers project entry in a keyboard-dismissible popover", async () => {
+  it("has no Project facet and ignores a retired project filter in the URL", async () => {
     navigation.params = new URLSearchParams("view=board&project=proj.offpage");
-    const user = userEvent.setup();
     mount();
     await waitFor(() => expect(fetchWorkBoard).toHaveBeenCalled());
-    const trigger = screen.getByRole("button", { name: "Filter projects" });
-    await user.click(trigger);
-    expect(screen.getByRole("button", { name: "offpage" })).toBeInTheDocument();
-    await user.type(screen.getByRole("textbox", { name: "Project ID" }), "proj.other");
-    await user.click(screen.getByRole("button", { name: "Add" }));
-    const url = vi.mocked(navigation.router.replace).mock.lastCall?.[0] as string;
-    expect(new URL(url, "https://example.com").searchParams.get("project")).toBe("proj.offpage,proj.other");
-    await user.keyboard("{Escape}");
-    await waitFor(() => expect(screen.queryByRole("textbox", { name: "Project ID" })).not.toBeInTheDocument());
-    expect(trigger).toHaveFocus();
+    expect(screen.queryByRole("button", { name: "Filter projects" })).not.toBeInTheDocument();
+    const params = vi.mocked(fetchWorkBoard).mock.calls[0]?.[0];
+    expect(params?.has("projectIds")).toBe(false);
   });
 
   it("does not combine an edited filter with an old cursor", async () => {
@@ -892,12 +927,6 @@ describe("Work Kanban", () => {
     await user.click(screen.getByRole("button", { name: "Filter status" }));
     await user.click(screen.getByRole("button", { name: "done", exact: true }));
     await user.keyboard("{Escape}");
-    await user.click(screen.getByRole("button", { name: "Filter projects" }));
-    fireEvent.change(screen.getByRole("textbox", { name: "Project ID" }), {
-      target: { value: "proj.target" },
-    });
-    await user.click(screen.getByRole("button", { name: "Add", exact: true }));
-    await user.keyboard("{Escape}");
     await user.click(screen.getByRole("button", { name: "Board columns" }));
     await user.click(
       screen.getByRole("menuitemcheckbox", { name: "done", exact: true }),
@@ -930,8 +959,8 @@ describe("Work Kanban", () => {
       sort: "rankScore",
       pageSize: "25",
       view: "table",
-      project: "proj.target",
     });
+    expect(url.searchParams.has("project")).toBe(false);
     expect(url.searchParams.get("columns")?.split(",")).toContain("done");
     expect(url.searchParams.get("status")?.split(",")).toContain("done");
     expect(url.searchParams.has("cursor")).toBe(false);

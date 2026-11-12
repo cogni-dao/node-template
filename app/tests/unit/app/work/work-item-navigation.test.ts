@@ -59,13 +59,12 @@ describe("work-item permalink navigation", () => {
         {
           type: ["task"],
           status: ["needs_implement"],
-          project: ["proj.work"],
           sort: "-priority",
           query: "permalink",
         },
       ),
     ).toBe(
-      "/work/items/task.5174?type=task&status=needs_implement&project=proj.work&sort=-priority&q=permalink",
+      "/work/items/task.5174?type=task&status=needs_implement&sort=-priority&q=permalink",
     );
   });
 
@@ -85,7 +84,6 @@ describe("work-item permalink navigation", () => {
     const href = workViewHref(undefined, new URLSearchParams("view=board"), {
       type: [],
       status: ["needs_design"],
-      project: [],
       sort: "-rankScore",
       query: "",
       rankRange: [4, 6],
@@ -100,7 +98,6 @@ describe("work-item permalink navigation", () => {
     const href = workViewHref(undefined, new URLSearchParams("rankMin=4"), {
       type: [],
       status: [],
-      project: [],
       sort: null,
       query: "",
       rankRange: [undefined, undefined],

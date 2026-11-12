@@ -22,6 +22,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -31,6 +32,7 @@ import {
   type WorkExpectationPage,
   createWorkItemColumns,
   type WorkBoardItem,
+  WorkGoalsProvider,
 } from "../src/index.js";
 import { fetchWorkExpectations } from "../../../app/src/app/(app)/work/_api/fetchWorkExpectations";
 
@@ -51,6 +53,21 @@ const item: WorkBoardItem = {
     agent: scored,
   },
 };
+
+/** The resolver a node mounts: here, only `goal:goal-alpha` names a goal the read lists. */
+function WithGoals({ children }: { readonly children: ReactNode }) {
+  return (
+    <WorkGoalsProvider
+      resolve={(subject) =>
+        subject.labels.includes("goal:goal-alpha")
+          ? { id: "goal-alpha", title: "Alpha goal: ship the board" }
+          : null
+      }
+    >
+      {children}
+    </WorkGoalsProvider>
+  );
+}
 
 describe("WorkBoard", () => {
   it("shows the first affected metric and verdict on the card", () => {
@@ -85,15 +102,17 @@ describe("WorkBoard", () => {
   it("renders one plain goal anchor, a rank, and a time without a router", () => {
     const onOpenItem = vi.fn();
     render(
-      <WorkBoard
-        columns={[
-          { status: "needs_implement", items: [item], hasMore: false },
-          { status: "done", items: [], hasMore: false },
-        ]}
-        isLoading={false}
-        onOpenItem={onOpenItem}
-        onLoadMore={() => {}}
-      />,
+      <WithGoals>
+        <WorkBoard
+          columns={[
+            { status: "needs_implement", items: [item], hasMore: false },
+            { status: "done", items: [], hasMore: false },
+          ]}
+          isLoading={false}
+          onOpenItem={onOpenItem}
+          onLoadMore={() => {}}
+        />
+      </WithGoals>,
     );
     const open = screen.getByRole("button", {
       name: "task.0001: Ship the board",
@@ -104,6 +123,9 @@ describe("WorkBoard", () => {
       "href",
       "/knowledge/goal-alpha",
     );
+    // The pointer reads the goal's title, never the raw label.
+    expect(within(card).getByRole("link")).toHaveTextContent("Alpha goal: ship the board");
+    expect(within(card).queryByText(/^goal:/)).toBeNull();
     expect(within(card).getByText(/^Rank /)).toBeInTheDocument();
     expect(card.querySelector("time")).toHaveAttribute(
       "datetime",
@@ -116,26 +138,29 @@ describe("WorkBoard", () => {
 
   it("uses injected goal hrefs and renderers, and shows unscored/missing safely", () => {
     render(
-      <WorkBoard
-        columns={[
-          {
-            status: "needs_implement",
-            items: [{ ...item, scores: undefined, updatedAt: "bad date" }],
-            hasMore: false,
-          },
-        ]}
-        isLoading={false}
-        onOpenItem={() => {}}
-        onLoadMore={() => {}}
-        goalHref={(slug) => `/goals/${slug}`}
-        renderGoalLink={({ href, label }) => (
-          <a href={href} data-testid="goal">
-            {label}
-          </a>
-        )}
-      />,
+      <WithGoals>
+        <WorkBoard
+          columns={[
+            {
+              status: "needs_implement",
+              items: [{ ...item, scores: undefined, updatedAt: "bad date" }],
+              hasMore: false,
+            },
+          ]}
+          isLoading={false}
+          onOpenItem={() => {}}
+          onLoadMore={() => {}}
+          goalHref={(slug) => `/goals/${slug}`}
+          renderGoalLink={({ href, label }) => (
+            <a href={href} data-testid="goal">
+              {label}
+            </a>
+          )}
+        />
+      </WithGoals>,
     );
     expect(screen.getByTestId("goal")).toHaveAttribute("href", "/goals/alpha");
+    expect(screen.getByTestId("goal")).toHaveTextContent("Alpha goal: ship the board");
     expect(screen.getByText("Unscored")).toBeInTheDocument();
     expect(screen.getByText(/Updated/)).toHaveTextContent("Updated —");
     expect(document.querySelector("time")).toBeNull();

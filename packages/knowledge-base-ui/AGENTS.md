@@ -26,7 +26,8 @@ Published React components and hooks every node renders for knowledge (Browse, G
 
 ## Public Surface (work, task.0055)
 
-- `WorkMetricSummary`, `WorkMetricDetails`, `WorkExpectations` — shared work metric and recorded EDO presentation; the node injects authenticated expectation reads.
+- `WorkMetricSummary` (title + ↑/↓ + result), `WorkMetricDetails`, `WorkExpectations` — shared work metric and recorded EDO presentation; the node injects authenticated expectation reads.
+- **A work item leads with the KPI it moves (task.0112).** Goal is inherited, never stored: root `WorkGoalsProvider` / `useWorkGoal` carry one resolver to the table's Goal column and the board's goal pointer (title, one clipped line, never a raw `goal:` label; no provider = "—"; there is no Project column or facet, `projectId` stays in the data). `./goals` supplies the pieces: `WorkGoalsScope` (builds the resolver from the one cached `useGoalsProgress({ poll: false })` read, no per-row reads), `WorkMoves` (detail block: Goal → KPI → supporting metric as `MetricCard variant="row"`, each move's direction, pinned baseline → latest and result; no moves renders "Names no KPI — measurement gap"), and the pure `resolveWorkGoal` / `locateMetric` / `goalForLabels` (moved KPI, else the KPI the metric serves, else a `goal:<slug>` / `goal:goal-<slug>` label).
 
 - `WorkBoard` / `WorkBoardView` — render per-status column pages (`columns`, `onLoadMore`); there is no rows-from-an-array mode. Empty capped columns show "Search further (N scanned)"; columns the board budget did not reach show "Load".
 - `useWorkBoard` — one board request, one page per Load more, aborts on change.
