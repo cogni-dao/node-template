@@ -1509,6 +1509,71 @@ describe("goal reader deadline ownership", () => {
 			vi.useRealTimers();
 		}
 	});
+	it.each([
+		["rejects", () => Promise.reject(new Error("authority down"))],
+		["never answers", () => new Promise<boolean>(() => {})],
+	])("serves nothing stale when the readable check %s: the caller waits for the fresh read", async (_name, check) => {
+		vi.useFakeTimers();
+		try {
+			const definition = {
+				id: "m1",
+				title: "M one",
+				revision: "r1",
+				spec: { calculatorId: "c@1" },
+			};
+			const canRead = vi.fn(async () => true);
+			const metrics = {
+				serving: async () => ({
+					items: [],
+					unbound: [
+						{
+							definition,
+							assessment: null,
+							latest: {
+								viewState: "unavailable",
+								value: null,
+								unit: "x",
+								observedAt: null,
+								reason: null,
+							},
+						},
+					],
+					truncated: false,
+					readKpi: vi.fn(),
+				}),
+				canRead,
+			};
+			const finishes: ((rows: never[]) => void)[] = [];
+			let calls = 0;
+			const read = createGoalProgressReader({
+				knowledge: () => ({
+					listActiveGoals: vi.fn(() =>
+						calls++ === 0
+							? Promise.resolve([] as never[])
+							: new Promise<never[]>((resolve) => finishes.push(resolve)),
+					),
+					getKnowledge: async () => null,
+					listCitationsByCitedId: async () => [],
+				}),
+				metrics: () => metrics as never,
+				environment: "test",
+			});
+			await read();
+			canRead.mockImplementation(check as never);
+			const late = read();
+			let settled = false;
+			void late.then(() => {
+				settled = true;
+			});
+			// Past the check bound and the caller wait, still no stale body.
+			await vi.advanceTimersByTimeAsync(3000);
+			expect(settled).toBe(false);
+			finishes[0]!([]);
+			expect((await late).stale).toBeUndefined();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
 	it("serves nothing stale past ten minutes: the caller waits for the read, then gets a retryable 503", async () => {
 		vi.useFakeTimers();
 		try {

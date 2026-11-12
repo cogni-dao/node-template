@@ -13,7 +13,8 @@
  * Invariants: STATUS_NEVER_COLOR_ONLY (pill = symbol + word); UNKNOWN_IS_NOT_ZERO
  *   ("—", never 0); NO_SENTENCES_ON_CARDS (the reason is the card's accessible
  *   description and hover title); QUIET_REFRESH (a failed poll keeps the data;
- *   repeated failures mark it stale; a 401 says signed out);
+ *   repeated failures, or a response carrying `stale` (metrics >= 0.12.0), mark
+ *   it stale; a 401 says signed out);
  *   POLL_ONLY_WHILE_MOUNTED (30s, never in a background tab); IDS_BEHIND_EVIDENCE.
  * Side-effects: IO (via GoalsClient.fetchGoals)
  * Links: ./kpi-chart.tsx, ./display.ts, packages/metrics/src/contracts.ts

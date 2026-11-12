@@ -499,6 +499,8 @@ export function createGoalSource(
 const GOAL_READ_DEADLINE_MS = 8000;
 /** With a last good result in hand, how long a caller waits for the fresh read. */
 const GOAL_READ_CALLER_WAIT_MS = 2500;
+/** How long the re-authorization of a last good result may take; slower is "not readable". */
+const GOAL_READ_AUTHORIZE_MS = 500;
 /** The oldest last good result a caller may be served instead of a fresh read. */
 const GOAL_READ_MAX_STALE_MS = 10 * 60_000;
 
@@ -593,8 +595,16 @@ export function createGoalProgressReader(deps: {
 		pending: Promise<GoalsProgress>,
 		kept: NonNullable<typeof lastGood>,
 	): Promise<GoalsProgress> {
-		// A metric no longer readable voids the last good result: wait for the fresh read.
-		if (!(await readable(kept))) return pending;
+		// A metric no longer readable, or a check that is not answered in time,
+		// voids the last good result: wait for the fresh read.
+		let checkTimer: ReturnType<typeof setTimeout> | undefined;
+		const checked = await Promise.race([
+			readable(kept),
+			new Promise<boolean>((resolve) => {
+				checkTimer = setTimeout(() => resolve(false), GOAL_READ_AUTHORIZE_MS);
+			}),
+		]).finally(() => clearTimeout(checkTimer));
+		if (!checked) return pending;
 		// The last good result, marked with why it was served and how old it is.
 		const stale = (
 			reason: NonNullable<GoalsProgress["stale"]>["reason"],
