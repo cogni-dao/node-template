@@ -61,16 +61,7 @@ export function triageCompletionEvidence(receipts: RunReceipts) {
 		if (
 			call.name === "core__knowledge_read" &&
 			typeof call.args.id === "string" &&
-			(!Array.isArray(value.entries) ||
-				!value.entries.some((entry) => {
-					const body = row(entry);
-					if (!body) return false;
-					return (
-						body.id === call.args.id &&
-						typeof body.content === "string" &&
-						body.content.trim()
-					);
-				}))
+			!hasKnowledgeBody(value, call.args.id)
 		) {
 			failedTools++;
 			failures.push(
@@ -248,6 +239,22 @@ export function triageCompletionEvidence(receipts: RunReceipts) {
 			unrankedOpen: completed.has("unrankedOpen"),
 		},
 	};
+}
+
+/** True when a knowledge read result carries the complete non-empty body of `id`. */
+export function hasKnowledgeBody(value: unknown, id: string): boolean {
+	const entries = row(value)?.entries;
+	return (
+		Array.isArray(entries) &&
+		entries.some((entry) => {
+			const body = row(entry);
+			return (
+				body?.id === id &&
+				typeof body.content === "string" &&
+				body.content.trim() !== ""
+			);
+		})
+	);
 }
 
 /** Uses the same authorized read tool, at most once per changed item. No model or write call. */

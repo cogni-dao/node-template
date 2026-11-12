@@ -242,6 +242,72 @@ describe("program completion verification", () => {
       expect(modelCalls).toBe(valid ? 1 : 0);
     },
   );
+  it("ends before any model call when a required guide is missing", async () => {
+    const names = [
+      "core__knowledge_read",
+      "core__goal_list",
+      "core__goal_progress",
+      "core__work_item_query",
+    ];
+    const contracts = CORE_TOOL_BUNDLE.filter((tool) =>
+      names.includes(tool.contract.name),
+    ).map((tool) => tool.contract);
+    let modelCalls = 0;
+    const model: CompletionFn = () => {
+      modelCalls++;
+      throw new Error("model must not run without required guidance");
+    };
+    const { stream, final } = createInProcGraphRunner({
+      program: "work-review",
+      createGraph: createWorkPrioritizerGraph,
+      completionFn: model,
+      sourceContext: {
+        nodeId: "local",
+        origin: "https://node.example",
+        mission: { content: "Local mission", sourceRef: "fixture", buildSha: null },
+      },
+      createToolExecFn: () => async (name, args) => {
+        if (name === "core__knowledge_read") {
+          const id = (args as { id: string }).id;
+          return {
+            ok: true,
+            value: {
+              mode: "get",
+              entries:
+                id === "metrics-expert" ? [] : [{ id, content: "Current full guidance." }],
+            },
+          };
+        }
+        if (name === "core__goal_list") return { ok: true, value: { goals: [] } };
+        if (name === "core__work_item_query")
+          return { ok: true, value: { items: [], count: 0 } };
+        return {
+          ok: true,
+          value: {
+            goals: [],
+            asOf: "2026-11-12T00:00:00.000Z",
+            environment: "local",
+            unbound: [],
+            orphans: [],
+          },
+        };
+      },
+      toolContracts: contracts,
+      request: {
+        runId: "missing-guidance",
+        messages: [{ role: "user", content: "triage" }],
+        configurable: { model: "test-model", toolIds: names },
+      },
+    });
+    for await (const _event of stream) {
+      /* Drain native graph events. */
+    }
+    const result = await final;
+    expect(modelCalls).toBe(0);
+    expect(result.ok).toBe(true);
+    expect(result.content).toContain("metrics-expert");
+    expect(result.content).not.toContain("NO_CHANGE");
+  });
   it.each([false, true])(
     "respects cancellation before/during verification (during=%s)",
     async (during) => {
