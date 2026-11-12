@@ -8,15 +8,16 @@ response format.
 
 ## Native delivery
 
-The gitignored `.cogni/.cognition-cache.md` is a last-known complete bundle. The shared
-loader (`scripts/agent/session-cognition.sh`) validates contract completeness before
-admitting a refresh. An unavailable hub or incomplete response preserves a complete
-cache, so a warm session can work offline.
+Every session start fetches the bundle from the node hub through the shared loader
+(`scripts/agent/session-cognition.sh`), which validates contract completeness before
+admitting it. The gitignored `.cogni/.cognition-cache.md` is the last-known complete
+bundle: an unavailable hub or incomplete response presents it instead.
 
-The contract must already be model-visible before normal work: Claude imports the cache
-through `CLAUDE.md`; Codex receives uncapped SessionStart context; supported OpenCode 1.x
-loads it through `opencode.json.instructions`. Do not manually read the cache merely to
-bootstrap; a missing native import is a delivery failure.
+The contract must already be model-visible before normal work: Claude receives it as
+labelled SessionStart parts (`--claude-part`, each under its context-entry limit); Codex
+receives uncapped SessionStart context; supported OpenCode 1.x refreshes the cache in a
+plugin and loads it through `opencode.json.instructions`. Do not manually read the cache
+merely to bootstrap; a missing native delivery is a delivery failure.
 
 ## Recovery when no complete contract is loaded
 
@@ -33,12 +34,7 @@ On first setup, register through `/api/v1/agent/register` and save COGNI_NODE_AP
 the gitignored `.env.cogni`. Operator CI/CD credentials are not cognition credentials.
 Conductor copies the clone root's last complete cache into each new worktree when it
 creates it (`.conductor/settings.toml`, mirrored by the loader into the clone root's
-`settings.local.toml` so any checked-out branch copies it), ahead of the first agent; workspace setup then
-refreshes it from the hub. Claude resolves its imports before its SessionStart hook runs,
-so a boot that started without a cache gets at most a restart notice; restart or resume
-before normal work begins.
-The loader may cache a recovery notice for the next import; that notice is never a
-complete contract.
+`settings.local.toml`), so a session that starts while the hub is down still has it.
 
 ## Local execution safety
 

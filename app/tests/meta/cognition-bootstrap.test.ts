@@ -3,7 +3,7 @@
 
 /**
  * Module: `@tests/meta/cognition-bootstrap`
- * Purpose: Guard the uncapped, single-presenter SessionStart contract (story.5070).
+ * Purpose: Guard fresh, complete session cognition on every harness (story.5070, story.0001).
  * Scope: Repo config plus hermetic loader/legacy-installer subprocesses.
  * Invariants: NATIVE_HARNESS_CHANNELS, NO_CODEX_SPILL, INSTALLER_RECONCILES.
  * Side-effects: Temporary files under the OS temp directory only.
@@ -18,7 +18,6 @@ import {
 	mkdtempSync,
 	readFileSync,
 	rmSync,
-	utimesSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -37,8 +36,6 @@ const CONDUCTOR_SETUP = path.join(
 	REPO_ROOT,
 	"scripts/conductor-worktree-setup.sh",
 );
-// A bundle larger than any harness preview: it must stay whole (story.5070).
-const LARGE_BUNDLE_BYTES = 17 * 1024;
 // A complete bundle as the hub serves it: the contract and its status-contract.
 const LIVE =
 	"live cognition\n<agent-contract>\n<status-contract>\n</status-contract>\n</agent-contract>";
@@ -95,18 +92,16 @@ describe("session cognition hook", () => {
 			env: {
 				...process.env,
 				CODEX_HOME: path.join(root, "no-user-hook"),
-				CODEX_THREAD_ID: "",
+				CODEX_THREAD_ID: "tracked-snapshot",
 				COGNI_NODE_API_KEY: "test-key",
 				PATH: `${bin}:${process.env.PATH ?? ""}`,
+				TMPDIR: root,
 			},
 			encoding: "utf8",
 		});
 
-		// First boot: this session's CLAUDE.md import ran before the file existed.
-		// Claude is told to restart, never handed a partial contract (bug.0018).
-		const notice: string = JSON.parse(output).hookSpecificOutput.additionalContext;
-		expect(notice).toContain("restart or resume");
-		expect(notice).not.toContain("<agent-contract>");
+		// The session presents the hub's bundle, never the committed snapshot.
+		expect(output).toBe(`${LIVE}\n`);
 		expect(readFileSync(cache, "utf8")).toBe(`${LIVE}\n`);
 	});
 
@@ -124,18 +119,36 @@ describe("session cognition hook", () => {
 		expect(config).toContain("additionalContextLimit = 0");
 		expect(config).toContain("git rev-parse --show-toplevel");
 		expect(claude).toContain("@AGENTS.md");
-		expect(claude).toContain("@.cogni/.cognition-cache.md");
+		// Claude's bundle arrives fresh through its hooks; importing the cache too
+		// would duplicate it with an older copy (story.0001).
+		expect(claude).not.toContain(".cognition-cache.md");
 		expect(opencode.instructions).toContain(CACHE_PATH);
-		// No producer-side byte ceiling survives on either channel.
+		// No producer-side byte ceiling survives on any channel.
 		expect(loader).not.toContain("SESSION_COGNITION_MAX_BYTES");
 		expect(loader).not.toContain("bundle_fits_budget");
 		expect(loader).not.toContain("oversized_bundle_notice");
-		// Codex consumes raw stdout; Claude's only bundle channel is the import.
-		// Its hook never sends contract text, so no Claude-side cap exists (bug.0018).
-		expect(loader).toContain("emit_agent_context");
-		expect(loader).toContain("emit_claude_notice");
-		expect(loader).not.toContain("emit_claude_context");
 		expect(loader).not.toContain("CLAUDE_CONTEXT_MAX_CHARS");
+		// One Claude hook per declared part, each delivering one slice.
+		const parts = Number(/^CLAUDE_PARTS=(\d+)$/m.exec(loader)?.[1]);
+		const claudeSettings = JSON.parse(
+			readFileSync(path.join(REPO_ROOT, ".claude/settings.json"), "utf8"),
+		) as { hooks: { SessionStart: { hooks: { command: string }[] }[] } };
+		const commands = claudeSettings.hooks.SessionStart.flatMap((entry) =>
+			entry.hooks.map((hook) => hook.command),
+		);
+		expect(commands).toEqual(
+			Array.from(
+				{ length: parts },
+				(_, i) =>
+					`bash "$(git rev-parse --show-toplevel)/scripts/agent/session-cognition.sh" --claude-part ${i + 1}`,
+			),
+		);
+		// OpenCode refreshes the instruction file before it is resolved.
+		const plugin = readFileSync(
+			path.join(REPO_ROOT, ".opencode/plugin/cogni-cognition.js"),
+			"utf8",
+		);
+		expect(plugin).toContain("scripts/agent/session-cognition.sh --refresh");
 	});
 
 	it("installs the stable user presenter during local Conductor setup", () => {
@@ -187,8 +200,12 @@ describe("session cognition hook", () => {
 		const second = path.join(root, "wt2");
 		execFileSync("git", ["worktree", "add", "-q", "--detach", second], { cwd: clone });
 		writeFileSync(path.join(clone, CACHE_PATH), "map only\n");
-		const recovery = execFileSync("bash", [LOADER], { cwd: second, env, encoding: "utf8" });
-		expect(JSON.parse(recovery).hookSpecificOutput.additionalContext).toContain("could not load bundle");
+		const recovery = execFileSync("bash", [LOADER], {
+			cwd: second,
+			env: { ...env, CODEX_THREAD_ID: "incomplete-root", TMPDIR: root },
+			encoding: "utf8",
+		});
+		expect(recovery).toContain("could not load bundle");
 	});
 
 	it("copies the last complete bundle into every new Conductor worktree (bug.0018)", () => {
@@ -356,128 +373,109 @@ describe("session cognition hook", () => {
 		expect(agents).toContain("model-visible before normal work");
 	});
 
-	it("presents only to Codex while Claude reads the complete cache import (story.5070)", () => {
+	it("presents a freshly fetched bundle, else the last complete cache (story.0001)", () => {
 		const root = fixture();
-		const noUserHook = path.join(root, "no-user-hook");
-		// Hermetic: background refreshes of the hour-old fixtures never reach a hub.
-		const unreachable = path.join(root, "unreachable");
-		mkdirSync(unreachable);
-		writeFileSync(path.join(unreachable, "curl"), "#!/bin/sh\nexit 7\n");
-		chmodSync(path.join(unreachable, "curl"), 0o755);
+		const repo = path.join(root, "repo");
+		mkdirSync(path.join(repo, ".cogni"), { recursive: true });
+		const bin = path.join(root, "bin");
+		mkdirSync(bin);
+		const curl = path.join(bin, "curl");
 		const env = {
 			...process.env,
-			CODEX_HOME: noUserHook,
-			CODEX_THREAD_ID: "",
-			COGNI_NODE_API_KEY: "",
-			PATH: `${unreachable}:${process.env.PATH ?? ""}`,
+			CODEX_HOME: path.join(root, "no-user-hook"),
+			CODEX_THREAD_ID: "fresh-first",
+			COGNI_NODE_API_KEY: "test-key",
+			PATH: `${bin}:${process.env.PATH ?? ""}`,
+			TMPDIR: root,
 		};
+		const cached = "cached\n<agent-contract>\n<status-contract>\n</status-contract>\n</agent-contract>";
+		writeFileSync(path.join(repo, CACHE_PATH), `${cached}\n`);
 
-		const small = path.join(root, "small");
-		mkdirSync(path.join(small, ".cogni"), { recursive: true });
-		writeFileSync(
-			path.join(small, ".cogni/.cognition-cache.md"),
-			"complete cognition\n",
-		);
-		// A warm cache older than this boot: the import already has it.
-		const anHourAgo = new Date(Date.now() - 60 * 60 * 1000);
-		utimesSync(
-			path.join(small, ".cogni/.cognition-cache.md"),
-			anHourAgo,
-			anHourAgo,
-		);
-		// Claude Code path: write-only hook; CLAUDE.md owns presentation.
-		const smallOut = execFileSync("bash", [LOADER], {
-			cwd: small,
-			env,
-			encoding: "utf8",
-		});
-		expect(smallOut).toBe("");
+		// The hub answers: the session gets its bundle and the cache follows it.
+		writeFileSync(curl, `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify({ markdown: LIVE })}'\n`);
+		chmodSync(curl, 0o755);
+		expect(execFileSync("bash", [LOADER], { cwd: repo, env, encoding: "utf8" })).toBe(`${LIVE}\n`);
+		expect(readFileSync(path.join(repo, CACHE_PATH), "utf8")).toBe(`${LIVE}\n`);
 
-		// Codex path: raw stdout verbatim (its spill is disabled in config).
+		// The hub is down or incomplete: the last complete cache is presented.
+		writeFileSync(curl, "#!/bin/sh\nexit 7\n");
+		expect(execFileSync("bash", [LOADER], { cwd: repo, env, encoding: "utf8" })).toBe(`${LIVE}\n`);
+		writeFileSync(curl, "#!/bin/sh\nprintf '%s\\n' '{\"markdown\":\"map only\"}'\n");
+		expect(execFileSync("bash", [LOADER], { cwd: repo, env, encoding: "utf8" })).toBe(`${LIVE}\n`);
+
+		// Only Codex reads stdout; a plain call stays silent.
 		expect(
-			execFileSync("bash", [LOADER], {
-				cwd: small,
-				env: { ...env, CODEX_THREAD_ID: "codex-raw", TMPDIR: root },
-				encoding: "utf8",
-			}),
-		).toBe("complete cognition\n");
-
-		mkdirSync(path.join(root, "cogni-cognition-lock-test.lock"));
-		expect(
-			execFileSync("bash", [LOADER], {
-				cwd: small,
-				env: {
-					...env,
-					CODEX_THREAD_ID: "lock-test",
-					TMPDIR: root,
-				},
-				encoding: "utf8",
-			}),
+			execFileSync("bash", [LOADER], { cwd: repo, env: { ...env, CODEX_THREAD_ID: "" }, encoding: "utf8" }),
 		).toBe("");
 
-		// story.5070 regression: a large bundle remains whole in the cache Claude
-		// imports; the hook never emits a preview.
-		const overCapBytes = LARGE_BUNDLE_BYTES;
-		const large = path.join(root, "large");
-		mkdirSync(path.join(large, ".cogni"), { recursive: true });
-		writeFileSync(
-			path.join(large, ".cogni/.cognition-cache.md"),
-			"x".repeat(overCapBytes),
-		);
-		utimesSync(
-			path.join(large, ".cogni/.cognition-cache.md"),
-			anHourAgo,
-			anHourAgo,
-		);
-		const largeOut = execFileSync("bash", [LOADER], {
-			cwd: large,
-			env,
-			encoding: "utf8",
-		});
-		expect(largeOut).toBe("");
-		expect(readFileSync(path.join(large, CACHE_PATH), "utf8")).toHaveLength(
-			overCapBytes,
-		);
-		expect(largeOut).not.toContain("bundle rejected before injection");
-
-		// A cache written moments ago (Conductor's copy at workspace creation) is
-		// already in Claude's import: the hook adds nothing on any source.
-		const fresh = path.join(root, "fresh");
-		mkdirSync(path.join(fresh, ".cogni"), { recursive: true });
-		writeFileSync(
-			path.join(fresh, CACHE_PATH),
-			"<agent-contract>\n<status-contract>\n</status-contract>\n</agent-contract>\n",
-		);
-		for (const source of ["startup", "resume", "clear", "compact"]) {
-			expect(
-				execFileSync("bash", [LOADER], {
-					cwd: fresh,
-					env,
-					encoding: "utf8",
-					input: JSON.stringify({ hook_event_name: "SessionStart", source }),
-				}),
-			).toBe("");
-		}
-
-		// A first boot that cannot load tells Claude why, through the same channel.
+		// No complete bundle anywhere: an honest notice that names the setup step.
 		const keyless = path.join(root, "keyless");
-		const offline = path.join(keyless, "bin");
-		mkdirSync(offline, { recursive: true });
-		// Hermetic: the fetch fails at once instead of reaching a real hub.
-		writeFileSync(path.join(offline, "curl"), "#!/bin/sh\nexit 22\n");
-		chmodSync(path.join(offline, "curl"), 0o755);
-		const keylessOut = execFileSync("bash", [LOADER], {
-			cwd: keyless,
-			env: {
-				...env,
-				COGNI_NODE_API_KEY: "",
-				PATH: `${offline}:${process.env.PATH ?? ""}`,
-			},
-			encoding: "utf8",
-		});
+		mkdirSync(keyless);
+		writeFileSync(curl, "#!/bin/sh\nexit 22\n");
 		expect(
-			JSON.parse(keylessOut).hookSpecificOutput.additionalContext,
+			execFileSync("bash", [LOADER], { cwd: keyless, env: { ...env, COGNI_NODE_API_KEY: "" }, encoding: "utf8" }),
 		).toContain("no node credentials yet");
+	});
+
+	it("delivers Claude's bundle as labelled parts that fit its context entries (story.0001)", () => {
+		const root = fixture();
+		const repo = path.join(root, "repo");
+		mkdirSync(path.join(repo, ".cogni"), { recursive: true });
+		const bin = path.join(root, "bin");
+		mkdirSync(bin);
+		const curl = path.join(bin, "curl");
+		// A bundle like the hub's: sections, one larger than a whole part.
+		const section = (title: string, lines: number) =>
+			[`## ${title}`, ...Array.from({ length: lines }, (_, i) => `${title} line ${i} ${"x".repeat(60)}`)].join("\n");
+		const bundle = [
+			"# node — Cogni Session Cognition",
+			section("Orientation", 30),
+			"## The agent-contract\n<agent-contract>\n<status-contract>\n</status-contract>\n</agent-contract>",
+			section("Governing index", 200),
+			section("Domains", 40),
+		].join("\n\n");
+		const fixtureJson = path.join(root, "bundle.json");
+		writeFileSync(fixtureJson, JSON.stringify({ markdown: bundle }));
+		writeFileSync(curl, `#!/bin/sh\ncat '${fixtureJson}'\n`);
+		chmodSync(curl, 0o755);
+		const env = {
+			...process.env,
+			CODEX_HOME: path.join(root, "no-user-hook"),
+			CODEX_THREAD_ID: "",
+			COGNI_NODE_API_KEY: "test-key",
+			PATH: `${bin}:${process.env.PATH ?? ""}`,
+			TMPDIR: root,
+		};
+		const input = JSON.stringify({ hook_event_name: "SessionStart", session_id: "claude-1", source: "startup" });
+		const part = (i: number) =>
+			execFileSync("bash", [LOADER, "--claude-part", String(i)], { cwd: repo, env, input, encoding: "utf8" });
+
+		const first = part(1);
+		const outputs = [first, ...[2, 3, 4, 5, 6, 7, 8].map(part)];
+		const contexts = outputs
+			.filter((out) => out !== "")
+			.map((out) => (JSON.parse(out) as { hookSpecificOutput: { additionalContext: string } }).hookSpecificOutput.additionalContext);
+		const total = contexts.length;
+		expect(total).toBeGreaterThan(2);
+		contexts.forEach((context, i) => {
+			// Claude Code keeps an entry inline only up to about 10,000 characters.
+			expect(context.length).toBeLessThan(9500);
+			expect(context).toMatch(new RegExp(`^COGNI COGNITION — part ${i + 1} of ${total} `));
+		});
+		// Lossless: the parts, in order, are the whole bundle.
+		const joined = contexts.map((context) => context.split("\n").slice(2).join("\n")).join("");
+		expect(joined.replace(/\n+$/, "")).toBe(bundle);
+		expect(readFileSync(path.join(repo, CACHE_PATH), "utf8")).toBe(`${bundle}\n`);
+
+		// The hub is down and nothing is cached: part 1 carries the notice alone.
+		rmSync(path.join(repo, CACHE_PATH));
+		writeFileSync(curl, "#!/bin/sh\nexit 7\n");
+		const downInput = JSON.stringify({ hook_event_name: "SessionStart", session_id: "claude-2", source: "startup" });
+		const down = execFileSync("bash", [LOADER, "--claude-part", "1"], { cwd: repo, env, input: downInput, encoding: "utf8" });
+		expect(JSON.parse(down).hookSpecificOutput.additionalContext).toContain("could not load bundle");
+		expect(
+			execFileSync("bash", [LOADER, "--claude-part", "2"], { cwd: repo, env, input: downInput, encoding: "utf8" }),
+		).toBe("");
 	});
 
 	it("reconciles the legacy user hook idempotently", () => {
@@ -513,8 +511,9 @@ describe("session cognition hook", () => {
 		expect(config).toContain('matcher = "startup|resume|clear|compact"');
 		expect(config).toContain("additionalContextLimit = 0");
 		expect(installedHook).toContain("cache_is_repo_tracked");
-		expect(installedHook).toContain(
-			'if [[ -s "$CACHE_FILE" ]] && ! cache_is_repo_tracked; then',
+		// Fresh first: the hub's bundle before any cached one (story.0001).
+		expect(installedHook.indexOf('bundle="$(fetch_bundle)"')).toBeLessThan(
+			installedHook.indexOf('cat "$CACHE_FILE"'),
 		);
 		execFileSync("bash", ["-n", hookPath]);
 
