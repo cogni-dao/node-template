@@ -480,6 +480,10 @@ describe("MetricsBoard", () => {
     expect(cells.Metrics).toBe("10");
     expect(cells["Serve no KPI"]).toBe("3");
     expect(strip.compareDocumentPosition(container.querySelector("[data-goal]") as HTMLElement) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // A "Goals" heading sits between the statline and the first goal row.
+    const heading = within(container).getByRole("heading", { level: 2, name: "Goals" });
+    expect(strip.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(heading.compareDocumentPosition(container.querySelector("[data-goal]") as HTMLElement) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("reads a supporting metric's series through the history endpoint only once its card is near the viewport", async () => {

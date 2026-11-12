@@ -143,13 +143,18 @@ function GoalsBoardView({
           </Link>
         </p>
       ) : (
-        <ul
-          className={`divide-y divide-border/60 overflow-hidden rounded-xl border border-border/60 ${stale ? "opacity-70" : ""}`}
-        >
-          {goals.map((goal) => (
-            <GoalRow key={goal.id} goal={goal} data={data} metrics={metrics} single={!!goalId} />
-          ))}
-        </ul>
+        <div className="space-y-2">
+          {metrics && (
+            <h2 className="font-medium text-muted-foreground text-xs uppercase tracking-wider">Goals</h2>
+          )}
+          <ul
+            className={`divide-y divide-border/60 overflow-hidden rounded-xl border border-border/60 ${stale ? "opacity-70" : ""}`}
+          >
+            {goals.map((goal) => (
+              <GoalRow key={goal.id} goal={goal} data={data} metrics={metrics} single={!!goalId} />
+            ))}
+          </ul>
+        </div>
       )}
       {metrics && data && <MetricsFooter data={data} />}
     </section>
