@@ -306,7 +306,7 @@ function GoalRow({
           <Link
             href={hrefs.goal(goal.id)}
             aria-label={`Open ${goal.title}`}
-            className="shrink-0 rounded-md px-3 py-3 text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+            className="inline-flex min-h-6 min-w-6 shrink-0 items-center justify-center rounded-md px-3 py-3 text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
           >
             <ArrowUpRight aria-hidden="true" className="size-4" />
           </Link>

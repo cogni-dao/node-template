@@ -214,7 +214,7 @@ export function KpiChart({
       </div>
 
       <details className="text-xs">
-        <summary className="cursor-pointer text-muted-foreground">Readings</summary>
+        <summary className="inline-flex min-h-6 min-w-6 cursor-pointer items-center text-muted-foreground">Readings</summary>
         <ul className="mt-2 grid gap-1 sm:grid-cols-2">
           {[...data].reverse().flatMap((d) =>
             d.v === null || !d.observationId
@@ -222,7 +222,11 @@ export function KpiChart({
               : [
                   <li key={d.t} className="flex justify-between gap-3 tabular-nums">
                     <span className="text-muted-foreground">{when(d.t, hourly)}</span>
-                    <Link href={hrefs.observation(metricId, d.observationId)} className="hover:underline">
+                    <Link
+                      href={hrefs.observation(metricId, d.observationId)}
+                      aria-label={`Open ${kpi.metric?.title ?? metricId} reading at ${when(d.t, hourly)}`}
+                      className="inline-flex min-h-6 min-w-6 items-center hover:underline"
+                    >
                       {formatValue(d.v, display, unit)} ↗
                     </Link>
                   </li>,
