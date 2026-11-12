@@ -75,6 +75,11 @@ export interface RouteOnlyCapability {
 export const ROUTE_ONLY_CAPABILITIES: Readonly<
   Record<string, RouteOnlyCapability>
 > = {
+  "agent-access.manage": {
+    requires: { scope: "agent_access:manage", kind: "node", subject: "admin",
+      label: "Manage AI access", description: "Administer AI permissions on this node." },
+    routes: ["agent.access.roles.list", "agent.access.roles.grant", "agent.access.roles.revoke"],
+  },
   "service-link.manage": {
     requires: {
       scope: "service_link:manage",

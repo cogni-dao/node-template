@@ -47,7 +47,9 @@ const NO_STORE = { "cache-control": "no-store" } as const;
 const json = (body: unknown, status = 200) =>
   NextResponse.json(body, { status, headers: NO_STORE });
 
-export function createRoleRoutes(plane: "human" | "ai") {
+type RoleDoors = { list: { routeId: string; sameDoor: "agent-access.manage" }; grant: { routeId: string; sameDoor: "agent-access.manage" }; revoke: { routeId: string; sameDoor: "agent-access.manage" } };
+export function createRoleRoutes(plane: "human" | "ai", doors?: RoleDoors) {
+  if (plane === "ai" && (!doors || doors.list.routeId !== "agent.access.roles.list" || doors.grant.routeId !== "agent.access.roles.grant" || doors.revoke.routeId !== "agent.access.roles.revoke")) throw new Error("agent_access_door_required");
   const refusePlane = (
     request: Request,
     log: Parameters<typeof refuseNonSession>[1]
@@ -68,6 +70,7 @@ export function createRoleRoutes(plane: "human" | "ai") {
     wrapRouteHandlerWithLogging(
       {
         routeId: "agent.access.roles.list",
+        ...(plane === "ai" ? { sameDoor: doors!.list.sameDoor } : {}),
         auth: { mode: "optional", getSessionUser },
       },
       async (ctx, request, sessionUser) => {
@@ -141,7 +144,7 @@ export function createRoleRoutes(plane: "human" | "ai") {
   function writeRoute(routeId: string, write: Writer) {
     return guardPlane(
       wrapRouteHandlerWithLogging(
-        { routeId, auth: { mode: "optional", getSessionUser } },
+        { routeId, ...(plane === "ai" ? { sameDoor: routeId === doors!.grant.routeId ? doors!.grant.sameDoor : doors!.revoke.sameDoor } : {}), auth: { mode: "optional", getSessionUser } },
         async (ctx, request, sessionUser) => {
           const refused = refusePlane(request, ctx.log);
           if (refused) return refused;

@@ -142,9 +142,16 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
           FROM agent_principals p
           CROSS JOIN unnest(${declaredScopes as string[]}::text[]) s(scope)
           CROSS JOIN LATERAL (
-            SELECT principal_user_id, scope, approved_by, revoked_at, created_at, request_expires_at FROM agent_roles
-            WHERE principal_user_id = p.user_id AND scope = s.scope
-            ORDER BY created_at DESC NULLS LAST, id DESC NULLS LAST LIMIT 1
+            SELECT principal_user_id, scope, approved_by, revoked_at, created_at, request_expires_at FROM (
+              (SELECT id, principal_user_id, scope, approved_by, revoked_at, created_at, request_expires_at FROM agent_roles
+                WHERE principal_user_id=p.user_id AND scope=s.scope AND (approved_by IS NOT NULL OR
+                  (approved_by IS NULL AND revoked_at IS NOT NULL AND (closed_reason IS NULL OR closed_reason NOT IN ('enrollment_expired','request_expired'))))
+                ORDER BY created_at DESC NULLS LAST,id DESC NULLS LAST LIMIT 1)
+              UNION ALL
+              (SELECT id, principal_user_id, scope, approved_by, revoked_at, created_at, request_expires_at FROM agent_roles
+                WHERE principal_user_id=p.user_id AND scope=s.scope AND approved_by IS NULL AND revoked_at IS NULL
+                  AND (request_expires_at IS NULL OR request_expires_at > (SELECT clock_timestamp())) LIMIT 1)
+            ) candidates ORDER BY created_at DESC NULLS LAST,id DESC NULLS LAST LIMIT 1
           ) r
           JOIN users u ON u.id = p.user_id
           WHERE p.service_key IS NOT NULL AND (r.approved_by IS NOT NULL OR
@@ -172,10 +179,23 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
     },
     async listOwnRoles(principalUserId) {
       const rows = await sql`
-        SELECT scope, approved_by, revoked_at, created_at FROM agent_roles
-        WHERE principal_user_id = ${principalUserId}
-        ORDER BY created_at DESC
-        LIMIT 200`;
+        WITH RECURSIVE scopes(scope,n) AS (
+          (SELECT scope,1 FROM agent_roles WHERE principal_user_id=${principalUserId} ORDER BY scope LIMIT 1)
+          UNION ALL
+          SELECT next_scope.scope,scopes.n+1 FROM scopes CROSS JOIN LATERAL (
+            SELECT scope FROM agent_roles WHERE principal_user_id=${principalUserId} AND scope>scopes.scope ORDER BY scope LIMIT 1
+          ) next_scope WHERE scopes.n<200
+        ) SELECT r.scope,r.approved_by,r.revoked_at,r.created_at FROM scopes
+        CROSS JOIN LATERAL (
+          SELECT scope,approved_by,revoked_at,created_at FROM (
+            (SELECT id,scope,approved_by,revoked_at,created_at FROM agent_roles WHERE principal_user_id=${principalUserId} AND scope=scopes.scope
+              AND (approved_by IS NOT NULL OR (approved_by IS NULL AND revoked_at IS NOT NULL AND (closed_reason IS NULL OR closed_reason NOT IN ('enrollment_expired','request_expired'))))
+              ORDER BY created_at DESC NULLS LAST,id DESC NULLS LAST LIMIT 1)
+            UNION ALL
+            (SELECT id,scope,approved_by,revoked_at,created_at FROM agent_roles WHERE principal_user_id=${principalUserId} AND scope=scopes.scope
+              AND approved_by IS NULL AND revoked_at IS NULL AND (request_expires_at IS NULL OR request_expires_at>(SELECT clock_timestamp())) LIMIT 1)
+          ) candidates ORDER BY created_at DESC NULLS LAST,id DESC NULLS LAST LIMIT 1
+        ) r ORDER BY r.created_at DESC`;
       const seen = new Set<string>();
       const out: Array<{ scope: string; state: RoleState; at: string }> = [];
       for (const row of rows) {
@@ -234,7 +254,13 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
           ORDER BY created_at DESC NULLS LAST, id DESC NULLS LAST LIMIT 1
         ) latest WHERE approved_by IS NULL AND request_expires_at <= clock_timestamp()
           AND (revoked_at IS NULL OR closed_reason IN ('enrollment_expired', 'request_expired'))`;
-        if (expired.length > 0) throw new AgentRolesError("request_expired", "enrollment approval deadline passed");
+        if (expired.length > 0) {
+          const control = await sql`SELECT approved_by, revoked_at FROM agent_roles WHERE principal_user_id=${principalUserId} AND scope=${scope}
+            AND (approved_by IS NOT NULL OR (approved_by IS NULL AND revoked_at IS NOT NULL AND (closed_reason IS NULL OR closed_reason NOT IN ('enrollment_expired','request_expired'))))
+            ORDER BY created_at DESC NULLS LAST,id DESC NULLS LAST LIMIT 1`;
+          if (control[0]?.approved_by && control[0]?.revoked_at) return false;
+          throw new AgentRolesError("request_expired", "enrollment approval deadline passed");
+        }
         return false;
       }).catch((error: unknown) => {
         if (typeof error === "object" && error !== null && (error as { constraint_name?: unknown }).constraint_name === "agent_role_request_expired")
@@ -245,9 +271,13 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
     async restoreRevoked({ principalUserId, scope, approvedBy }) {
       return mutate(principalUserId, async (tx) => {
         if (principalUserId === approvedBy) return false;
+        await tx`UPDATE agent_roles SET revoked_at=clock_timestamp(),closed_reason='request_expired'
+          WHERE principal_user_id=${principalUserId} AND scope=${scope} AND approved_by IS NULL AND revoked_at IS NULL
+            AND request_expires_at IS NOT NULL AND request_expires_at<=clock_timestamp()`;
         const rows = await tx`
           SELECT id, approved_by, revoked_at FROM agent_roles
           WHERE principal_user_id = ${principalUserId} AND scope = ${scope}
+            AND (approved_by IS NOT NULL OR (approved_by IS NULL AND revoked_at IS NOT NULL AND (closed_reason IS NULL OR closed_reason NOT IN ('enrollment_expired','request_expired'))))
           ORDER BY created_at DESC NULLS LAST, id DESC NULLS LAST LIMIT 1 FOR UPDATE`;
         if (!rows[0]?.approved_by || !rows[0]?.revoked_at) return false;
         const inserted = await tx`

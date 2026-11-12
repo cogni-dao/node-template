@@ -85,6 +85,7 @@ type AuthRequiredOptions = {
 
 type AuthOptionalOptions = {
   routeId: string;
+  sameDoor?: string;
   auth: {
     mode: "optional";
     getSessionUser: () => Promise<SessionUser | null>;

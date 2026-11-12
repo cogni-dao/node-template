@@ -3,12 +3,13 @@
 
 /** Real migration/locks/custody/crash fixtures. CI only; no local SQL prerequisite. */
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
 import {
   createPostgresAgentGrantsStore,
+  grantRole,
   type SqlTag,
 } from "@cogni/agent-grants";
 import {
@@ -19,6 +20,7 @@ import {
   verifyBearer,
   createPostgresCredentialStore,
   hashAgentKey,
+  formatRevocableKey,
 } from "@cogni/agent-grants/credentials";
 import { runDurableEnrollmentConformance } from "@cogni/agent-grants/durable-enrollment-conformance";
 import {
@@ -645,6 +647,73 @@ describe("v2 enrollment and requester SQL", () => {
     expect((await db`SELECT user_id FROM agent_principals WHERE home_node_id=${home.nodeId} AND home_environment=${home.environment} AND home_origin=${home.origin} AND home_service='node-ai'`)).toHaveLength(1);
     // A different operation using the verified tuple reaches this same retained identity even without a legacy mapping.
     expect(await provider().acceptProof(proof,digest)).toMatchObject({ok:true,principalUserId:user,principalCreated:false});
+  });
+
+  it.each(['logical','request_expired','enrollment_expired'] as const)('expired newer ask (%s) preserves earlier Off and ordinary On cannot revive an expired credential', async closure => {
+    const user=randomUUID(), admin=randomUUID(), oldRole=randomUUID(), marker=await fullServiceKey(home,'node-ai');
+    await db`INSERT INTO users(id,name) VALUES(${user},'retained service'),(${admin},'DAO admin')`;
+    await db`INSERT INTO agent_principals(kind,user_id,service_key,home_node_id,home_environment,home_origin,home_service)
+      VALUES('external',${user},${marker},${home.nodeId},${home.environment},${home.origin},'node-ai')`;
+    await db`INSERT INTO agent_roles(id,principal_user_id,scope,approved_by,granted_at,revoked_at,created_at)
+      VALUES(${oldRole},${user},'knowledge:read',${admin},clock_timestamp()-interval '2 days',clock_timestamp()-interval '1 day',clock_timestamp()-interval '3 days')`;
+    const oldToken=formatRevocableKey(randomBytes(32).toString('base64url')),oldHash=await hashAgentKey(oldToken);
+    const credentials=await db`INSERT INTO agent_credentials(user_id,token_hash,created_from,pending_expires_at,expires_at,renew_until,confirmed_at)
+      VALUES(${user},${oldHash},'key_upgrade',clock_timestamp()+interval '5 minutes',clock_timestamp()+interval '1 day',clock_timestamp()+interval '2 days',clock_timestamp()) RETURNING id`;
+    await db`UPDATE agent_credentials SET expires_at=clock_timestamp()-interval '2 days',renew_until=clock_timestamp()-interval '1 day' WHERE id=${credentials[0]?.id}`;
+    const {proof}=await proofAt(), accepted=await provider().acceptProof(proof,await hashAgentKey('new-ask-after-off'));
+    expect(accepted).toMatchObject({ok:true,principalUserId:user,principalCreated:false});
+    const grants=createPostgresAgentGrantsStore(db as unknown as SqlTag);
+    expect((await grants.listRoleRows(100,['knowledge:read'])).rows.find(row=>row.principalUserId===user)?.state).toBe('pending');
+    await db`UPDATE agent_roles SET request_expires_at=clock_timestamp()-interval '1 second' WHERE principal_user_id=${user} AND approved_by IS NULL AND revoked_at IS NULL`;
+    if (closure!=='logical') await db`UPDATE agent_roles SET revoked_at=clock_timestamp(),closed_reason=${closure} WHERE principal_user_id=${user} AND approved_by IS NULL AND revoked_at IS NULL`;
+    expect((await db`SELECT status FROM agent_service_enrollments WHERE operation_id=${proof.operationId}`)[0]?.status).not.toBe('denied');
+    expect((await grants.listRoleRows(100,['knowledge:read'])).rows.find(row=>row.principalUserId===user)?.state).toBe('revoked');
+    expect(await grants.listOwnRoles(user)).toEqual([expect.objectContaining({scope:'knowledge:read',state:'revoked'})]);
+    expect(await grantRole(grants,{principalUserId:user,scope:'knowledge:read',approvedBy:admin,declaredScopes:['knowledge:read']})).toMatchObject({created:true});
+    expect(await grants.hasLiveRole(user,'knowledge:read')).toBe(true);
+    const rows=await db`SELECT approved_by,closed_reason FROM agent_roles WHERE principal_user_id=${user} AND approved_by IS NULL`;
+    expect(rows).toHaveLength(1); expect(rows[0]?.approved_by).toBeNull();
+    expect(['request_expired','enrollment_expired']).toContain(rows[0]?.closed_reason);
+    expect(await verifyBearer(creds(),oldToken,['active'])).toMatchObject({ok:false,reason:'invalid'});
+    expect((await db`SELECT id,approved_by FROM agent_roles WHERE id=${oldRole}`)[0]).toMatchObject({id:oldRole,approved_by:admin});
+  });
+
+  it("explicit Dismiss remains a denial barrier after later automatic expiries", async () => {
+    const user=randomUUID(), admin=randomUUID(), marker=await fullServiceKey(home,'node-ai');
+    await db`INSERT INTO users(id,name) VALUES(${user},'retained service'),(${admin},'DAO admin')`;
+    await db`INSERT INTO agent_principals(kind,user_id,service_key,home_node_id,home_environment,home_origin,home_service)
+      VALUES('external',${user},${marker},${home.nodeId},${home.environment},${home.origin},'node-ai')`;
+    await db`INSERT INTO agent_roles(principal_user_id,scope,approved_by,granted_at,revoked_at,created_at)
+      VALUES(${user},'knowledge:read',${admin},clock_timestamp()-interval '2 days',clock_timestamp()-interval '1 day',clock_timestamp()-interval '3 days')`;
+    const {proof}=await proofAt(); expect(await provider().acceptProof(proof,await hashAgentKey('dismiss-after-off'))).toMatchObject({ok:true});
+    const grants=createPostgresAgentGrantsStore(db as unknown as SqlTag);
+    expect(await grants.denyPending({principalUserId:user,scope:'knowledge:read'})).toBe(true);
+    expect((await db`SELECT status FROM agent_service_enrollments WHERE operation_id=${proof.operationId}`)[0]?.status).toBe('denied');
+    await db`INSERT INTO agent_roles(principal_user_id,scope,created_at,request_expires_at,revoked_at,closed_reason)
+      SELECT ${user},'knowledge:read',clock_timestamp(),clock_timestamp()-interval '1 second',clock_timestamp(),'request_expired' FROM generate_series(1,5000)`;
+    await db`ANALYZE agent_roles`;
+    expect((await grants.listRoleRows(100,['knowledge:read'])).rows.filter(row=>row.principalUserId===user)).toHaveLength(0);
+    expect(await grants.listOwnRoles(user)).toEqual([expect.objectContaining({scope:'knowledge:read',state:'denied'})]);
+    await expect(grantRole(grants,{principalUserId:user,scope:'knowledge:read',approvedBy:admin,declaredScopes:['knowledge:read']})).rejects.toMatchObject({code:'request_expired'});
+    expect(await grants.hasLiveRole(user,'knowledge:read')).toBe(false);
+    const plan=await db`EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON) SELECT id FROM agent_roles WHERE principal_user_id=${user} AND scope='knowledge:read'
+      AND (approved_by IS NOT NULL OR (approved_by IS NULL AND revoked_at IS NOT NULL AND (closed_reason IS NULL OR closed_reason NOT IN ('enrollment_expired','request_expired'))))
+      ORDER BY created_at DESC NULLS LAST,id DESC NULLS LAST LIMIT 1`;
+    expect(JSON.stringify(plan)).toContain('agent_roles_explicit_control_idx');
+  },30000);
+
+  it("a first-ever expired ask cannot invent a previous consent control", async () => {
+    const reference=await readFile(resolve('src/adapters/server/db/migrations/0049_retained_explicit_consent.sql'),'utf8');
+    expect(reference).toContain((await readFile(resolve('../packages/agent-grants/migrations/agent_authority_consent_control.sql'),'utf8')).trim());
+    expect(reference).toContain((await readFile(resolve('../packages/agent-grants/migrations/agent_service_enrollment_consent_expiry.sql'),'utf8')).trim());
+    const user=randomUUID(),admin=randomUUID();
+    await db`INSERT INTO users(id,name) VALUES(${user},'first ask'),(${admin},'admin')`;
+    await db`INSERT INTO agent_principals(kind,user_id,service_key) VALUES('external',${user},${`https://first-${randomUUID()}.example#node-ai`})`;
+    await db`INSERT INTO agent_roles(principal_user_id,scope,request_expires_at) VALUES(${user},'knowledge:read',clock_timestamp()-interval '1 second')`;
+    const grants=createPostgresAgentGrantsStore(db as unknown as SqlTag);
+    expect((await grants.listRoleRows(100,['knowledge:read'])).rows.filter(row=>row.principalUserId===user)).toHaveLength(0);
+    await expect(grantRole(grants,{principalUserId:user,scope:'knowledge:read',approvedBy:admin,declaredScopes:['knowledge:read']})).rejects.toMatchObject({code:'request_expired'});
+    expect(await grants.hasLiveRole(user,'knowledge:read')).toBe(false);
   });
 
   it("staged expiry uses its partial deadline index across terminal retained history", async () => {

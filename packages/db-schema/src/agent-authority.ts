@@ -143,6 +143,9 @@ export const agentRoles = pgTable(
       table.createdAt.desc(),
       table.id.desc()
     ),
+    index("agent_roles_explicit_control_idx")
+      .on(table.principalUserId, table.scope, table.createdAt.desc(), table.id.desc())
+      .where(sql`${table.approvedBy} IS NOT NULL OR (${table.approvedBy} IS NULL AND ${table.revokedAt} IS NOT NULL AND (${table.closedReason} IS NULL OR ${table.closedReason} NOT IN ('enrollment_expired', 'request_expired')))`),
     index("agent_roles_unrevoked_principal_idx")
       .on(table.principalUserId, table.id)
       .where(sql`${table.revokedAt} IS NULL`),

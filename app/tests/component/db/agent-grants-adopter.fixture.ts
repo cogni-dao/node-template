@@ -10,7 +10,7 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres, { type Sql } from "postgres";
 
-const stages = ["agent_authority", "agent_credentials", "agent_service_enrollments", "agent_service_enrollment_maintenance", "agent_authority_foundation", "agent_authority_guard_compatibility", "agent_authority_review_repairs", "agent_authority_maintenance_cursor", "agent_authority_v2_reader"] as const;
+const stages = ["agent_authority", "agent_credentials", "agent_service_enrollments", "agent_service_enrollment_maintenance", "agent_authority_foundation", "agent_authority_guard_compatibility", "agent_authority_review_repairs", "agent_authority_maintenance_cursor", "agent_authority_v2_reader", "agent_authority_consent_control"] as const;
 
 export async function startAgentGrantsAdopter(repairs = true, beforeFoundation?: (db: Sql) => Promise<void>) {
   const container = await new PostgreSqlContainer("postgres:15-alpine").start();
@@ -49,7 +49,7 @@ CREATE TABLE user_bindings (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_
   };
   try {
     if (beforeFoundation) { await apply(4); await beforeFoundation(admin); }
-    await apply(repairs ? stages.length : stages.length - 3);
+    await apply(repairs ? stages.length : stages.length - 4);
   }
   catch (error) { await owner.end(); await app.end(); await service.end(); await admin.end(); await container.stop(); await rm(directory, { recursive: true, force: true }); throw error; }
   return {

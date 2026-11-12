@@ -50,18 +50,22 @@ describe("same-door routes", () => {
     const contracts = new Map([...CORE_TOOL_BUNDLE, ...VCS_TOOL_BUNDLE].map((t) => [t.contract.name, t.contract]));
     for (const tool of Object.keys(SAME_DOOR_ROUTES))
       expect(contracts.get(tool)?.requires?.subject, tool).not.toBe("admin");
-    expect(Object.entries(ROUTE_ONLY_CAPABILITIES).filter(([, cap]) => cap.requires.subject === "admin").map(([id]) => id)).toEqual(["service-link.manage"]);
+    expect(Object.entries(ROUTE_ONLY_CAPABILITIES).filter(([, cap]) => cap.requires.subject === "admin").map(([id]) => id)).toEqual(["agent-access.manage", "service-link.manage"]);
     const roles = new Proxy({} as AgentGrantsStore, { get: (_target, name) => {
       if (name === "hasLiveRole") return async () => true;
       throw new Error(`unexpected role-store read: ${String(name)}`);
     } });
     const check = createAdminCheck(async () => [], { check: async (actor) => actor.userId === "dao-approved-ai" ? { ok: true } : { ok: false, errorCode: "authz_denied" } });
-    const capability = ROUTE_ONLY_CAPABILITIES["service-link.manage"];
-    if (!capability) throw new Error("missing service-link declaration");
-    const requires = capability.requires;
-    expect(await authorizeCaller(roles, check, { userId: "role-only-agent", via: "bearer", requires })).toMatchObject({ decision: "deny", reason: "subject_not_admin" });
-    expect(await authorizeCaller(roles, check, { userId: "dao-approved-ai", via: "bearer", requires })).toMatchObject({ decision: "allow" });
-    expect(await authorizeCaller(roles, async () => "unavailable", { userId: "dao-approved-ai", via: "bearer", requires })).toMatchObject({ decision: "deny", code: "authz_unavailable" });
+    for (const id of ["service-link.manage", "agent-access.manage"]) {
+      const capability = ROUTE_ONLY_CAPABILITIES[id];
+      if (!capability) throw new Error("missing admin declaration");
+      const requires = capability.requires;
+      expect(await authorizeCaller(roles, check, { userId: "role-only-agent", via: "bearer", requires })).toMatchObject({ decision: "deny", reason: "subject_not_admin" });
+      expect(await authorizeCaller(roles, check, { userId: "dao-approved-ai", via: "bearer", requires })).toMatchObject({ decision: "allow" });
+      expect(await authorizeCaller(roles, async () => "unavailable", { userId: "dao-approved-ai", via: "bearer", requires })).toMatchObject({ decision: "deny", code: "authz_unavailable" });
+      const noRole = new Proxy({} as AgentGrantsStore, { get: () => async () => false });
+      expect(await authorizeCaller(noRole, check, { userId: "dao-approved-ai", via: "bearer", requires })).toMatchObject({ decision: "deny", reason: "no_role" });
+    }
     // The admin-subject tools are exactly the allowlisted ones.
     for (const [name, contract] of contracts)
       if (contract.requires?.subject === "admin") expect(name in NO_ROUTE_TWIN, name).toBe(true);

@@ -4,7 +4,11 @@
 import { createRoleRoutes } from "@/app/_lib/agent-access/roles-route";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-const handlers = createRoleRoutes("ai");
+const handlers = createRoleRoutes("ai", {
+  list: { routeId: "agent.access.roles.list", sameDoor: "agent-access.manage" },
+  grant: { routeId: "agent.access.roles.grant", sameDoor: "agent-access.manage" },
+  revoke: { routeId: "agent.access.roles.revoke", sameDoor: "agent-access.manage" },
+});
 export const GET = handlers.GET;
 export const POST = handlers.POST;
 export const DELETE = handlers.DELETE;

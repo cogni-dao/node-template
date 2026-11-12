@@ -81,7 +81,3 @@ Published React components and hooks every node renders for knowledge (Browse, G
 - Never imports a node's private `@cogni/*` packages (`node-ui-kit`, `node-contracts`); table, menu, popover, button and input primitives live in `src/ui` and `data-table.tsx`.
 - `./goals` imports no router (`next/*`), no `@/` app path and no node UI kit; links are the injected `LinkComponent`. Only `src/goals.ts` reaches `src/goals/`; the root entry never imports `@cogni-dao/metrics` or `recharts`.
 - The root entry never imports `@cogni/knowledge-store` or `react-force-graph-3d`; keep knowledge modules reachable only from `src/knowledge.ts` and the engine only through `src/graph-3d.tsx`'s dynamic import.
-
-## Public surface (AI access; root entry, source0.10.1)
-
-`AgentAccessSection({endpoints:{roles},className?})` owns the complete retained permission table, cursor/Load more state, deduplication, later-page refresh and On/Off/Dismiss controls. The host supplies its human-plane roles endpoint/auth composition; it copies no paging or mutation lifecycle. Switch/Dismiss buttons have actual minimum24px dimensions, native keyboard semantics and visible focus. Package fixture drives paging and keyboard controls; actual360/1280 rectangle/layout proof remains a browser gate.0.10.1 is source-only until qualified publication;0.10.0 remains immutable.
