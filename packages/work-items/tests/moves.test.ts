@@ -53,8 +53,9 @@ describe("WorkItemPatchInputSchema moves", () => {
     expect(judgeMove(null, null, null)).toBeNull();
   });
 
-  it("retains a direct affected metric without inventing a direction", () => {
-    expect(parse([{ metricId: "edits-7d", direction: null }]).success).toBe(true);
+  it("reads a directionless association while write activation stays gated", () => {
+    expect(parse([{ metricId: "edits-7d", direction: null }]).success).toBe(false);
+    expect(WorkItemDtoSchema.shape.moves.safeParse([{ metricId: "edits-7d", direction: null, baselineObservationId: OBS_1 }]).success).toBe(true);
     expect(
       parseStoredMoves([{ metricId: "edits-7d", direction: null, baselineObservationId: OBS_1 }]),
     ).toEqual([{ metricId: "edits-7d", direction: null, baselineObservationId: OBS_1 }]);
