@@ -18,6 +18,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+	NO_INLINE_HISTORY_MAX_BYTES,
 	noInlineHistoryEditsSql,
 	noInlineHistoryWindowCommitsSql,
 	readNoInlineHistoryEdits,
@@ -137,7 +138,7 @@ describe("Doltgres 0.57.3 no-inline-history edits read", () => {
 		await commit("atom append", "2026-11-07T10:00:00");
 		// After the window.
 		await sql.unsafe(`UPDATE work_items SET summary = 'later' WHERE id = 'task.1'`);
-		await commit("later", "2026-11-12T10:00:00");
+		await commit("later", "2026-12-31T10:00:00");
 
 		// What the date filter selected: the commits of the diff rows dated in the window.
 		const dated = async (table: string) =>
@@ -189,4 +190,100 @@ describe("Doltgres 0.57.3 no-inline-history edits read", () => {
 			{ complete: true, value: 0 },
 		);
 	});
+	it("keeps merge commits in the window: a contribution's edit can have its diff row at the merge commit only (bug.0030)", async () => {
+		const HOUR = 3_600_000;
+		const DAY = 24 * HOUR;
+		const now = Date.now();
+		const iso = (ms: number) => new Date(ms).toISOString().slice(0, 19);
+		await sql.unsafe(
+			`INSERT INTO work_items (id,type,title,status,node,summary,outcome,labels) VALUES ('task.m1','task','merge one','needs_implement','shared','M1','O1','[]'::jsonb)`,
+		);
+		await sql.unsafe(
+			`INSERT INTO knowledge (id,domain,title,content,source_type) VALUES ('km1','meta','merge atom one','K1','agent'), ('km2','meta','merge atom two','K2','agent')`,
+		);
+		await commit("merge fixtures", iso(now - 30 * DAY));
+		await sql.unsafe(`SELECT dolt_branch('b_in')`);
+		await sql.unsafe(`SELECT dolt_branch('b_old')`);
+		// A contribution branch whose commit is authored inside the window.
+		await sql.unsafe(`SELECT dolt_checkout('b_in')`);
+		await sql.unsafe(`UPDATE knowledge SET content = 'K1 changed' WHERE id = 'km1'`);
+		await commit("branch edit in window", iso(now - HOUR));
+		// A contribution branch whose commit is authored long before the window.
+		await sql.unsafe(`SELECT dolt_checkout('b_old')`);
+		await sql.unsafe(`UPDATE knowledge SET content = 'K2 changed' WHERE id = 'km2'`);
+		await commit("branch edit before window", iso(now - 10 * DAY));
+		// Main moves on, so both merges are real merge commits dated now.
+		await sql.unsafe(`SELECT dolt_checkout('main')`);
+		await sql.unsafe(`UPDATE work_items SET summary = 'M1 changed' WHERE id = 'task.m1'`);
+		await commit("main edit in window", iso(now - 2 * HOUR));
+		await sql.unsafe(`SELECT * FROM dolt_merge('b_in')`);
+		await sql.unsafe(`SELECT * FROM dolt_merge('b_old')`);
+
+		const mergeWindow = {
+			start: new Date(now - 12 * HOUR).toISOString(),
+			end: new Date(now + 12 * HOUR).toISOString(),
+		};
+		const inWindow = (value: string) => value.replace("T", " ").replace("Z", "");
+		const merges = await sql.unsafe(
+			`SELECT commit_hash FROM dolt_log WHERE message LIKE 'Merge branch%' AND date >= '${inWindow(mergeWindow.start)}' AND date < '${inWindow(mergeWindow.end)}'`,
+		);
+		expect(merges).toHaveLength(2);
+		// The window statement lists the merge commits with every other commit dated inside it.
+		const found = await sql.unsafe(noInlineHistoryWindowCommitsSql(mergeWindow));
+		const listed = found.map((r) => String(r.commit_hash));
+		for (const m of merges) expect(listed).toContain(String(m.commit_hash));
+
+		// Three edits, each once: the atom authored in the window, the atom authored before it and merged inside it (counted at the merge date), and the work item. Leaving the merge commits out of the list loses edits.
+		const sample = await readNoInlineHistoryEdits(sql, "count", mergeWindow, read);
+		expect(sample, JSON.stringify(sample)).toMatchObject({ complete: true, value: 3, unit: "edits" });
+		expect(sample.evidenceRefs).toContain("counts:edits=3;appending=0;withReason=0");
+	});
+
+	it("reads a window commit that touches neither edit table as no edit, from a statement that sends no row", async () => {
+		await sql.unsafe(`INSERT INTO domains (id,name) VALUES ('merge-probe','Merge probe')`);
+		await commit("touches no edit table", "2027-03-10T10:00:00");
+		const quiet = {
+			start: "2027-03-09T00:00:00.000Z",
+			end: "2027-03-16T00:00:00.000Z",
+		};
+		const found = await sql.unsafe(noInlineHistoryWindowCommitsSql(quiet));
+		expect(Number(found[0]?.n)).toBe(1);
+		const hashes = found.map((r) => String(r.commit_hash));
+		for (const table of ["work-items", "atoms"] as const)
+			expect(await sql.unsafe(noInlineHistoryEditsSql(table, hashes))).toHaveLength(0);
+		const sample = await readNoInlineHistoryEdits(sql, "count", quiet, read);
+		expect(sample, JSON.stringify(sample)).toMatchObject({ complete: true, value: 0, unit: "edits" });
+		expect(sample.sourceWatermarks.map((w) => w.asOf)).not.toContain(null);
+	});
+
+	it("sends the first row alone, carrying the totals, when the edits are over the byte cap", async () => {
+		const ROWS = 45; // 45 rows x 4 fields x 100,000 chars is over the 16 MiB cap.
+		const field = (c: string) => c.repeat(100_000);
+		for (let i = 0; i < ROWS; i++)
+			await sql.unsafe(
+				`INSERT INTO work_items (id,type,title,status,node,summary,outcome,labels) VALUES ('task.big${i}','task','big ${i}','needs_implement','shared','${field("a")}','${field("a")}','[]'::jsonb)`,
+			);
+		await commit("big fixtures", "2027-03-31T10:00:00");
+		for (let i = 0; i < ROWS; i++) {
+			await sql.unsafe(
+				`UPDATE work_items SET summary = '${field("b")}', outcome = '${field("b")}' WHERE id = 'task.big${i}'`,
+			);
+			await commit(`big edit ${i}`, `2027-04-02T10:${String(i).padStart(2, "0")}:00`);
+		}
+		const big = {
+			start: "2027-04-01T00:00:00.000Z",
+			end: "2027-04-08T00:00:00.000Z",
+		};
+		const found = await sql.unsafe(noInlineHistoryWindowCommitsSql(big));
+		expect(Number(found[0]?.n)).toBe(ROWS);
+		const hashes = found.map((r) => String(r.commit_hash));
+		const rows = await sql.unsafe(noInlineHistoryEditsSql("work-items", hashes));
+		// One row, not the 45: the totals ride on the first row and no text over the cap is sent.
+		expect(rows).toHaveLength(1);
+		expect(Number(rows[0]?.n)).toBe(ROWS);
+		expect(Number(rows[0]?.bytes)).toBeGreaterThan(NO_INLINE_HISTORY_MAX_BYTES);
+		const sample = await readNoInlineHistoryEdits(sql, "count", big, read);
+		expect(sample).toMatchObject({ complete: false, reason: "incomplete_or_invalid_source" });
+		expect(sample.evidenceRefs.join()).toContain("cap_hit");
+	}, 120_000);
 });

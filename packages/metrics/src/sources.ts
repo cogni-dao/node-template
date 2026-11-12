@@ -801,15 +801,7 @@ const EDIT_COLUMNS = {
 
 /**
  * The window's commits: the hashes in main's history (`dolt_log`) whose commit
- * date is in [start, end), oldest first, merge commits left out. A merge
- * commit's diff rows are taken against its second parent, the contribution
- * branch's base, so it repeats every main edit since the branch was cut: it
- * costs a diff of that whole span and adds no edit its branch commits do not
- * already carry (native Doltgres 0.57.3, 140 merges in 1,700 commits: the
- * work-item diff took 2.5x as long and returned 3.3x the rows). A merge is a
- * commit with a second parent in `dolt_commit_ancestors`; a correlated or
- * `NOT IN` filter there is unusable (minutes, "plan is not resolved"), a LEFT
- * JOIN to the small second-parent set is not. Dolt turns a filter on a diff table's
+ * date is in [start, end), oldest first. Dolt turns a filter on a diff table's
  * `to_commit` into an index lookup but never pushes a date filter down, so the
  * diff statement below takes these hashes as a literal list of `to_commit`
  * tests and its cost follows the window, not the whole history. Like the other statements it
@@ -820,7 +812,7 @@ export function noInlineHistoryWindowCommitsSql(window: {
 	start: string;
 	end: string;
 }): string {
-	return `WITH w AS (SELECT l.commit_hash FROM dolt_log l LEFT JOIN (SELECT commit_hash FROM dolt_commit_ancestors WHERE parent_index = 1) m ON m.commit_hash = l.commit_hash WHERE m.commit_hash IS NULL AND l.date >= '${doltUtc(window.start)}' AND l.date < '${doltUtc(window.end)}' ORDER BY l.date, l.commit_hash LIMIT ${NO_INLINE_HISTORY_MAX_ROWS + 1}), totals AS (SELECT COUNT(*) AS n FROM w) SELECT NOW() AS as_of, t.n, w.commit_hash FROM totals t LEFT JOIN w ON t.n <= ${NO_INLINE_HISTORY_MAX_ROWS} ORDER BY w.commit_hash`;
+	return `WITH w AS (SELECT l.commit_hash FROM dolt_log l WHERE l.date >= '${doltUtc(window.start)}' AND l.date < '${doltUtc(window.end)}' ORDER BY l.date, l.commit_hash LIMIT ${NO_INLINE_HISTORY_MAX_ROWS + 1}), totals AS (SELECT COUNT(*) AS n FROM w) SELECT NOW() AS as_of, t.n, w.commit_hash FROM totals t LEFT JOIN w ON t.n <= ${NO_INLINE_HISTORY_MAX_ROWS} ORDER BY w.commit_hash`;
 }
 
 /**
@@ -834,8 +826,12 @@ export function noInlineHistoryWindowCommitsSql(window: {
  * on purpose: `diff_type = 'modified'` already means both sides hold the row,
  * and with the test the planner scans the `to_id` index instead of looking the
  * commits up. A diff row carries its own `from_` and `to_` text, so no wider
- * history is read. A merge commit repeats its branch commit's row; the caller
- * collapses repeats among these in-window rows. Scope and fixture exclusions
+ * history is read. A contribution's edit may have a diff row at its merge
+ * commit only (Doltgres 0.57.3 can omit the row of the branch commit itself),
+ * so merge commits stay in the list: an edit is dated by the commit whose diff
+ * row carries it, a contribution merged inside the window counts at the merge
+ * date even when authored earlier, and a merge repeating its branch commit's
+ * row collapses with it in the caller. Scope and fixture exclusions
  * read the row as of that commit. The log joins are LEFT joins, so a missing
  * commit row never drops a diff row. The inner LIMIT reads one row past the row
  * cap; it counts rows (`n`) and the bytes of its capped text in the same pass
@@ -1088,7 +1084,7 @@ async function readEditsOf(
 		} catch {}
 	}
 	if (n === 0) return { ok: true, edits: [], mergeRepeats: 0, asOf };
-	// Over a cap the statement sends the totals row alone.
+	// Over a cap the statement sends its first row alone, carrying the totals.
 	if (
 		n > NO_INLINE_HISTORY_MAX_ROWS ||
 		bytes > NO_INLINE_HISTORY_MAX_BYTES ||
@@ -1164,6 +1160,8 @@ async function readEditsOf(
  * three source calls (two when the window holds no commit). An edit is
  * one (commit, row id) pair on main that changed a work item's summary or
  * outcome or an atom's content; creation, deletion and fixtures are not edits.
+ * An edit is dated by the commit whose diff row carries it, so a contribution
+ * merged inside the window counts at the merge date.
  * `share` is the percent of edits that did not append history (the count of
  * marker lines did not grow); `count` is the raw number of edits. Under
  * `NO_INLINE_HISTORY_MIN_EDITS` a share is `insufficient_history`; over

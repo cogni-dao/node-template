@@ -656,9 +656,9 @@ describe("no-inline-history@1 edits read", () => {
 		it("selects the window's commits from main's log by UTC commit date, one row past the cap", () => {
 			const text = noInlineHistoryWindowCommitsSql(window);
 			expect(text.startsWith("WITH w AS")).toBe(true);
-			expect(text).toContain("FROM dolt_log l LEFT JOIN (SELECT commit_hash FROM dolt_commit_ancestors WHERE parent_index = 1) m ON m.commit_hash = l.commit_hash WHERE m.commit_hash IS NULL AND l.date >= '2026-11-02 12:00:00.000' AND l.date < '2026-11-09 12:00:00.000'");
-			// A merge diffs against the branch base: its cost and rows repeat main's edits. A NOT IN or correlated filter cannot be planned or runs for minutes.
-			expect(text).not.toMatch(/NOT IN|NOT EXISTS/);
+			expect(text).toContain("FROM dolt_log l WHERE l.date >= '2026-11-02 12:00:00.000' AND l.date < '2026-11-09 12:00:00.000'");
+			// Merge commits stay in the list: a contribution's edit can have its diff row at the merge commit only.
+			expect(text).not.toContain("dolt_commit_ancestors");
 			expect(text).toContain(`LIMIT ${NO_INLINE_HISTORY_MAX_ROWS + 1}`);
 			expect(text).toContain(`t.n <= ${NO_INLINE_HISTORY_MAX_ROWS}`);
 			expect(text).not.toContain("dolt_diff");
@@ -962,7 +962,7 @@ describe("no-inline-history@1 in the goal-metric service", () => {
 		"reports %s errors without leaking messages",
 		async (stage) => {
 			const target = {
-				windowCommits: "dolt_commit_ancestors",
+				windowCommits: "dolt_log l WHERE",
 				workDiff: "dolt_diff_work_items",
 				knowledgeDiff: "dolt_diff_knowledge",
 			}[stage];
@@ -991,7 +991,7 @@ describe("no-inline-history@1 in the goal-metric service", () => {
 					resolve = r;
 				});
 				const needles = {
-					windowCommits: "dolt_commit_ancestors",
+					windowCommits: "dolt_log l WHERE",
 					workDiff: "dolt_diff_work_items",
 					knowledgeDiff: "dolt_diff_knowledge",
 				};
