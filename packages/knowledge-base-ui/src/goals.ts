@@ -103,8 +103,10 @@ export {
 export { NEAR_VIEWPORT_MARGIN_PX, useMetricSeries, useMetricSeriesRead, useNearViewport } from "./goals/use-metric-series.js";
 export {
   goalForLabels,
+  buildMetricGoalIndex,
   goalIdFromLabels,
   locateMetric,
+  type MetricGoalIndex,
   type MoveChain,
   type ResolvedWorkGoal,
   resolveWorkGoal,

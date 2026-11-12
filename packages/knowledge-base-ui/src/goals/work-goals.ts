@@ -69,11 +69,28 @@ export interface ResolvedWorkGoal {
   readonly via: "kpi" | "serves" | "label";
 }
 
-/** The goal an item moves; null when its moves reach no goal and no label names a listed goal. */
-export function resolveWorkGoal(data: GoalsProgress, item: WorkGoalSubject): ResolvedWorkGoal | null {
+/** Each metric's goal, built once per goals read: a KPI binding first (first goal wins), then a KPI's served metrics. */
+export type MetricGoalIndex = ReadonlyMap<string, { readonly goal: GoalProgress; readonly via: "kpi" | "serves" }>;
+
+export function buildMetricGoalIndex(data: GoalsProgress): MetricGoalIndex {
+  const index = new Map<string, { goal: GoalProgress; via: "kpi" | "serves" }>();
+  for (const goal of data.goals)
+    for (const kpi of goal.kpis) if (!index.has(kpi.binding.metricId)) index.set(kpi.binding.metricId, { goal, via: "kpi" });
+  for (const goal of data.goals)
+    for (const kpi of goal.kpis)
+      for (const row of servedRows(kpi, data)) if (!index.has(row.id)) index.set(row.id, { goal, via: "serves" });
+  return index;
+}
+
+/** The goal an item moves; null when its moves reach no goal and no label names a listed goal. Pass the index when resolving many items. */
+export function resolveWorkGoal(
+  data: GoalsProgress,
+  item: WorkGoalSubject,
+  index: MetricGoalIndex = buildMetricGoalIndex(data),
+): ResolvedWorkGoal | null {
   for (const move of item.moves ?? []) {
-    const chain = locateMetric(data, move.metricId);
-    if (chain && chain.kind !== "unserved") return { goal: chain.goal, via: chain.kind };
+    const found = index.get(move.metricId);
+    if (found) return found;
   }
   const goal = goalForLabels(data, item.labels);
   return goal ? { goal, via: "label" } : null;

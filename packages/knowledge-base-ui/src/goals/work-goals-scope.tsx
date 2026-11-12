@@ -19,16 +19,18 @@ import { type ReactNode, useMemo } from "react";
 
 import { type WorkGoalResolver, WorkGoalsProvider } from "../work-goals.js";
 import { useGoalsProgress } from "./use-goals-progress.js";
-import { resolveWorkGoal } from "./work-goals.js";
+import { buildMetricGoalIndex, resolveWorkGoal } from "./work-goals.js";
 
 export function WorkGoalsScope({ children }: { readonly children: ReactNode }) {
   const data = useGoalsProgress({ poll: false }).data;
+  // The metric-to-goal map is built once per goals read; each row then resolves in constant time.
+  const index = useMemo(() => (data ? buildMetricGoalIndex(data) : null), [data]);
   const resolve = useMemo<WorkGoalResolver>(
     () => (item) => {
-      const found = data ? resolveWorkGoal(data, item) : null;
+      const found = data && index ? resolveWorkGoal(data, item, index) : null;
       return found ? { id: found.goal.id, title: found.goal.title } : null;
     },
-    [data],
+    [data, index],
   );
   return <WorkGoalsProvider resolve={resolve}>{children}</WorkGoalsProvider>;
 }

@@ -129,7 +129,7 @@ function MoveEntry({
     staleTime: 30_000,
     retry: 1,
   });
-  const servesKpi = (read.data?.definition as { serves?: { kpi: string } } | undefined)?.serves?.kpi ?? null;
+  const servesKpi = read.data?.definition?.serves?.kpi ?? null;
   const subject: MetricSubject | null = chain
     ? chain.kind === "kpi"
       ? kpiSubject(chain.kpi)
@@ -203,9 +203,9 @@ export function WorkMoveLinks({
   return (
     <section aria-label="Moves" data-work-moves="moves" className="flex flex-col gap-3">
       {heading}
-      {moves.map((move) => (
+      {moves.map((move, i) => (
         <MoveEntry
-          key={move.metricId}
+          key={`${move.metricId}:${i}`}
           move={move}
           labels={labels}
           goals={{ data: goals.data, pending: goals.isPending }}
