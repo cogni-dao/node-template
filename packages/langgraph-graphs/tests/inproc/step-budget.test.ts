@@ -128,19 +128,45 @@ describe("program completion verification", () => {
         "core__knowledge_read",
         "core__goal_list",
         "core__goal_progress",
+        "core__work_item_query",
       ];
       const contracts = CORE_TOOL_BUNDLE.filter((tool) =>
         names.includes(tool.contract.name),
       ).map((tool) => tool.contract);
       const reads: string[] = [];
+      const candidateQueries: unknown[] = [];
       let modelCalls = 0;
       const model: CompletionFn = (params) => {
         modelCalls++;
-        expect(reads).toHaveLength(7);
+        expect(reads).toHaveLength(9);
         expect(reads).toContain("core__knowledge_read:metrics-expert");
         expect(
           params.messages.filter((message) => message.role === "tool"),
-        ).toHaveLength(7);
+        ).toHaveLength(9);
+        expect(candidateQueries).toHaveLength(2);
+        expect(candidateQueries[0]).toEqual({
+          statuses: ["needs_triage"],
+          limit: 50,
+          sortBy: "createdAt",
+          sortDirection: "desc",
+        });
+        expect(candidateQueries[1]).toMatchObject({
+          scored: false,
+          limit: 50,
+          sortBy: "createdAt",
+          sortDirection: "desc",
+        });
+        expect(
+          (candidateQueries[1] as { statuses: string[] }).statuses,
+        ).toEqual([
+          "needs_triage",
+          "needs_research",
+          "needs_design",
+          "needs_implement",
+          "needs_closeout",
+          "needs_merge",
+          "blocked",
+        ]);
         return {
           stream: (async function* (): AsyncIterable<AiEvent> {})(),
           final: Promise.resolve({
@@ -186,6 +212,10 @@ describe("program completion verification", () => {
             };
           if (name === "core__goal_list")
             return { ok: true, value: { goals: [] } };
+          if (name === "core__work_item_query") {
+            candidateQueries.push(args);
+            return { ok: true, value: { items: [], count: 0 } };
+          }
           return {
             ok: true,
             value: {
@@ -208,7 +238,7 @@ describe("program completion verification", () => {
         /* Drain native graph events. */
       }
       expect((await final).ok).toBe(valid);
-      expect(reads).toHaveLength(valid ? 7 : 0);
+      expect(reads).toHaveLength(valid ? 9 : 0);
       expect(modelCalls).toBe(valid ? 1 : 0);
     },
   );

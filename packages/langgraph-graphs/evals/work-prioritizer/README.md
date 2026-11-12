@@ -44,3 +44,10 @@ attributing a better run to a smaller response.
 Keep raw trajectories private. Publish sanitized failure cases and bounded
 verdicts in the owning work item/PR. Local success is not candidate, production,
 autonomous learning, or goal-KPI improvement proof.
+
+The sanitized [clear guidance repair](./clear-guidance-repair.json) case retains a real
+judgment failure: a clear task was routed to research, goal fit inflated time and
+dependency scores, and the applicable metric move was omitted. Use it with the
+quiet-repeat control. Successful reads, writes and repetition do not pass its
+semantic criteria. The native preflight supplies both bounded initial candidate
+pages; a ranked intake item must remain visible independently of scored=false.
