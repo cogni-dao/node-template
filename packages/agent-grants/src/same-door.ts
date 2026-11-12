@@ -3,7 +3,7 @@
 
 /**
  * Module: `@cogni-dao/agent-grants/same-door`
- * Purpose: SAME_DOOR. The one declaration of which agent-reachable write route twins which guarded tool, and the one
+ * Purpose: SAME_DOOR. The one declaration of which agent-reachable route twins which guarded tool, or which read route needs a grant, and the one
  *   check a route calls. An outside agent that calls the route passes the same `authorize()` lock as the node's own AI.
  * Scope: A static map (tool id -> route ids + scope), an allowlist of tools that have no node route, and `authorizeCaller`.
  *   The parity test (packages/langgraph-graphs/tests/same-door-parity.test.ts) fails when a non-read_only tool is in neither.
@@ -49,12 +49,31 @@ export const SAME_DOOR_ROUTES: Readonly<Record<string, SameDoorRoute>> = {
 };
 
 /**
- * Write routes an outside agent may call that no tool twins. They declare their own scope here, once, with the same
+ * Routes an outside agent may call that no tool twins (writes, and the knowledge reads). They declare their own scope here, once, with the same
  * `requires` shape a tool contract uses. A signed-in human passes `member`; a bearer agent needs a live role row.
  */
 export const ROUTE_ONLY_CAPABILITIES: Readonly<
   Record<string, { readonly requires: ToolRequires; readonly routes: readonly string[] }>
 > = {
+  "knowledge.read": {
+    requires: {
+      scope: "knowledge:read",
+      kind: "node",
+      subject: "member",
+      label: "Read the knowledge base",
+      description: "Read this node's published notes. A signed-in person always can; an agent needs an admin's yes.",
+    },
+    routes: [
+      "knowledge.list",
+      "knowledge.get",
+      "knowledge.history",
+      "knowledge.browse",
+      "knowledge.index",
+      "knowledge.graph",
+      "knowledge.domains.list",
+      "knowledge.domains.get",
+    ],
+  },
   "knowledge.contribute": {
     requires: {
       scope: "knowledge:contribute",
