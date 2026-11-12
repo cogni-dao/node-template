@@ -157,6 +157,17 @@ describe("agent service enrollments (real Postgres)", () => {
   };
 
   describe("schema (rows only SQL can prove)", () => {
+    it("fails closed on a partial v2 delivery schema", async () => {
+      const setup = await enrollmentHarness.setup();
+      await adopter.owner`ALTER TABLE agent_service_enrollments ADD COLUMN operation_id uuid`;
+      try {
+        await expect(startEnrollment(setup)).rejects.toThrow();
+        await service`UPDATE agent_authority_maintenance SET next_run_at=clock_timestamp() WHERE id='service-enrollment'`;
+        await expect(maintenanceTick(client())).rejects.toThrow("maintenance_schema_incomplete");
+      } finally {
+        await adopter.owner`ALTER TABLE agent_service_enrollments DROP COLUMN operation_id`;
+      }
+    });
     it.each(["admission", "insert"] as const)("expired proof at %s returns 401 and rolls back every enrollment effect", async (point) => {
       await enrollmentHarness.setup();
       const counts = async () => (await service`SELECT

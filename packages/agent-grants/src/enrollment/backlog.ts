@@ -11,22 +11,29 @@ export async function enrollmentBacklog(
   const observed = (await tx`SELECT clock_timestamp()::text AS at`)[0]?.at;
   if (typeof observed !== "string")
     throw new Error("maintenance_clock_unavailable");
+  // Foundation-only adopters predate the v2 receipt columns. A partial
+  // upgrade is not a known schema and must never be treated as an empty queue.
+  const schema = (await tx`SELECT count(*)::int AS columns FROM pg_attribute
+    WHERE attrelid=to_regclass('agent_service_enrollments') AND attnum>0 AND NOT attisdropped
+      AND attname IN ('operation_id','generation','original_start_iat','original_start_exp',
+        'original_token_digest','intent_digest','canonical_intent','sealed_acceptance',
+        'sealed_pending_key','pending_expires_at','purge_after')`)[0];
+  const columns = schema?.columns;
+  if (columns !== 0 && columns !== 11) throw new Error("maintenance_schema_incomplete");
   // Each queue contributes only its first eligible deadline, using its existing deadline/foreign-key indexes.
-  const deadlines = [
-    ...(await tx`SELECT due_at::text FROM (
-    (SELECT expires_at AS due_at FROM agent_service_enrollments
-      WHERE status='open' AND expires_at<=${observed}::text::timestamptz ORDER BY expires_at,id LIMIT 1)
-    UNION ALL
-    (SELECT expires_at FROM agent_service_enrollments WHERE operation_id IS NOT NULL AND sealed_acceptance IS NOT NULL
+  const deadlines = [...(await tx`SELECT expires_at::text AS due_at FROM agent_service_enrollments
+    WHERE status='open' AND expires_at<=${observed}::text::timestamptz ORDER BY expires_at,id LIMIT 1`)];
+  if (columns === 11) deadlines.push(...(await tx`SELECT due_at::text FROM (
+    (SELECT expires_at AS due_at FROM agent_service_enrollments WHERE operation_id IS NOT NULL AND sealed_acceptance IS NOT NULL
       AND expires_at<=${observed}::text::timestamptz ORDER BY expires_at,id LIMIT 1)
     UNION ALL
     (SELECT LEAST(pending_expires_at,historical_confirmed_at,CASE WHEN status<>'open' THEN terminal_at END)
       FROM agent_service_enrollments WHERE operation_id IS NOT NULL AND sealed_pending_key IS NOT NULL
       AND (pending_expires_at<=${observed}::text::timestamptz OR historical_confirmed_at IS NOT NULL OR status<>'open')
       ORDER BY 1,id LIMIT 1)
-  ) queues`),
-  ];
+  ) queues`));
   const purge = await auditPurgeQualified(tx);
+  if (purge && columns !== 11) throw new Error("maintenance_schema_incomplete");
   if (purge)
     deadlines.push(
       ...(await tx`SELECT due_at::text FROM (
@@ -63,6 +70,7 @@ export async function enrollmentBacklog(
     await tx`SELECT to_regclass('agent_service_link_operations') AS relation`
   )[0]?.relation;
   if (requester != null) {
+    if (columns !== 11) throw new Error("maintenance_schema_incomplete");
     deadlines.push(
       ...(await tx`SELECT due_at::text FROM (
       (SELECT secret_deadline AS due_at FROM agent_service_link_operations WHERE encrypted_secrets IS NOT NULL

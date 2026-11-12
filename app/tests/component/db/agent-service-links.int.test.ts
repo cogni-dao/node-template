@@ -997,6 +997,11 @@ describe("v2 enrollment and requester SQL", () => {
     const grants=createPostgresAgentGrantsStore(db as unknown as SqlTag);
     await grantRole(grants,{principalUserId:user,scope:'knowledge:read',approvedBy:admin,declaredScopes:['knowledge:read']});
     expect(await grants.hasLiveRole(user,'knowledge:read')).toBe(true);
+    // The new approval supersedes the 100-day-old Off control, making it purgeable audit.
+    // Drain that newly due work before testing the unrelated stale-operation verdict.
+    for(let i=0;i<5;i++) await auditTick();
+    expect(await db`SELECT id FROM agent_roles WHERE id=${latestOff}`).toHaveLength(0);
+    expect(await grants.hasLiveRole(user,'knowledge:read')).toBe(true);
     expect((await verifyBearer(creds(),expiredToken,["active"])).ok).toBe(false);
     await expect(assertV1NotSuperseded(creds(),user)).rejects.toThrow();
     const continuation={...proof,op:'continue' as const,jti:randomUUID(),originalTokenDigest:await hashAgentKey(randomUUID())};
