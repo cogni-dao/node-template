@@ -611,10 +611,19 @@ export const GoalProgressSchema = z.object({
 	hypothesesUnavailable: z.boolean(),
 });
 export type GoalProgress = z.infer<typeof GoalProgressSchema>;
+/** Explicit value bounds on the same goal-progress envelope; assessment facts stay complete. */
+export const GoalsProgressReadInputSchema = z.strictObject({
+	history: z.enum(["full", "none"]).default("full"),
+});
+export type GoalsProgressReadInput = z.input<
+	typeof GoalsProgressReadInputSchema
+>;
 export const GoalsProgressSchema = z.object({
 	goals: z.array(GoalProgressSchema),
 	asOf: z.string(),
 	environment: z.string(),
+	/** Chart series may be explicitly omitted; null then means unrequested, not a failed metric read. */
+	historyMode: z.enum(["full", "none"]).optional(),
 	/** Metrics serving a KPI that no goal binds. Absent when metrics are unavailable. */
 	orphans: z.array(MetricOrphanSchema).optional(),
 	/** Metrics that declare no `serves`. Absent when metrics are unavailable. */

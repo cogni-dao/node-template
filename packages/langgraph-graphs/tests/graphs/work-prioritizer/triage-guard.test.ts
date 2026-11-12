@@ -5,10 +5,7 @@
  * The prioritizer binds core__work_item_update (the PATCH route's twin) behind a thin guard (task.0065).
  * Deterministic: a fake host writer records what reaches the ToolRunner; no model runs.
  */
-import {
-  WORK_ITEM_UPDATE_NAME,
-  workItemUpdateContract,
-} from "@cogni/ai-tools";
+import { WORK_ITEM_UPDATE_NAME, workItemUpdateContract } from "@cogni/ai-tools";
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
@@ -19,6 +16,30 @@ import { createTriageGuard } from "../../../src/graphs/work-prioritizer/triage-g
 
 const origin = "https://node.example";
 const source = `${origin}/knowledge/work-item-scores-design`;
+const metricId = "convergence-ratio-7d";
+const metricCatalog = {
+  goals: [],
+  asOf: "2026-11-12T00:00:00.000Z",
+  environment: "local",
+  orphans: [],
+  unbound: [
+    {
+      metric: {
+        id: metricId,
+        title: "Convergence",
+        calculatorId: "work.convergence@1",
+      },
+      assessment: null,
+      latest: {
+        viewState: "unavailable",
+        value: null,
+        unit: "ratio",
+        observedAt: null,
+        reason: "insufficient_history",
+      },
+    },
+  ],
+};
 const item = (id: string, overrides: Record<string, unknown> = {}) => ({
   id,
   type: "task",
@@ -35,20 +56,28 @@ function setup(opts: { guidance?: boolean; goals?: boolean } = {}) {
   const hooks = createPrioritizerRunHooks({ program: "work-review", origin });
   const receipts = hooks.graphOptions.programState as RunReceipts;
   if (opts.goals !== false)
-    hooks.observeTool("core__goal_list", {}, {
-      ok: true,
-      value: {
-        goals: [
-          { id: "goal-delivery", content: "Deliver", sourceUrl: source },
-        ],
+    hooks.observeTool(
+      "core__goal_list",
+      {},
+      {
+        ok: true,
+        value: {
+          goals: [
+            { id: "goal-delivery", content: "Deliver", sourceUrl: source },
+          ],
+        },
       },
-    });
+    );
   if (opts.guidance !== false)
     for (const id of [TRIAGE_GUIDANCE_ID, "work-item-scores-design"])
-      hooks.observeTool("core__knowledge_read", { id }, {
-        ok: true,
-        value: { mode: "get", entries: [{ id, content: `guide ${id}` }] },
-      });
+      hooks.observeTool(
+        "core__knowledge_read",
+        { id },
+        {
+          ok: true,
+          value: { mode: "get", entries: [{ id, content: `guide ${id}` }] },
+        },
+      );
   const writes: Record<string, unknown>[] = [];
   const writer = new DynamicStructuredTool({
     name: WORK_ITEM_UPDATE_NAME,
@@ -72,10 +101,14 @@ function setup(opts: { guidance?: boolean; goals?: boolean } = {}) {
   });
   const guard = createTriageGuard(receipts, writer, [TRIAGE_GUIDANCE_ID]);
   const read = (value: ReturnType<typeof item>) =>
-    hooks.observeTool("core__work_item_read", { id: value.id }, {
-      ok: true,
-      value: { item: value },
-    });
+    hooks.observeTool(
+      "core__work_item_read",
+      { id: value.id },
+      {
+        ok: true,
+        value: { item: value },
+      },
+    );
   const call = (input: Record<string, unknown>) => guard.invoke(input as never);
   return { hooks, receipts, writes, writer, guard, read, call };
 }
@@ -104,6 +137,52 @@ describe("work-prioritizer binds core__work_item_update behind the guard", () =>
     expect(a.guard.schema).toBe(workItemUpdateContract.inputSchema);
   });
 
+  it("returns all missing metric and score evidence together before any write", async () => {
+    const a = setup();
+    a.read(item("task.1"));
+    const input = update("task.1", {
+      moves: [{ metricId, direction: "up" }],
+      scores: { ...scores(5), confidence: { v: 4 }, agent: { v: 5 } },
+    });
+    const refused = await a.call(input);
+    for (const issue of [
+      "metric_catalog:",
+      "metric_not_read:",
+      "metric_goal_evidence:",
+      "goal 5",
+      "confidence 4",
+      "agent 5",
+    ])
+      expect(refused).toContain(issue);
+    expect(a.writes).toHaveLength(0);
+    a.hooks.observeTool(
+      "core__goal_progress",
+      {},
+      { ok: true, value: metricCatalog },
+    );
+    a.hooks.observeTool(
+      "core__knowledge_read",
+      { id: metricId },
+      {
+        ok: true,
+        value: {
+          mode: "get",
+          entries: [{ id: metricId, content: "Share of validated work." }],
+        },
+      },
+    );
+    const fixed = update("task.1", {
+      moves: [{ metricId, direction: "up" }],
+      scores: {
+        ...scores(5, `${origin}/knowledge/${metricId}`),
+        confidence: { v: 4, ev: source },
+        agent: { v: 5, ev: source },
+      },
+    });
+    expect(await a.call(fixed)).toContain('"revision"');
+    expect(a.writes).toHaveLength(1);
+  });
+
   it("writes status, scores and a goal link as one CAS patch, then keeps the new revision", async () => {
     const a = setup();
     a.read(item("task.1", { labels: ["area:ai"] }));
@@ -127,9 +206,9 @@ describe("work-prioritizer binds core__work_item_update behind the guard", () =>
       set: { status: "needs_implement", labels: ["area:ai", "goal:delivery"] },
     });
     // The guard stored revision 8 and the new status: the old revision is stale.
-    expect(
-      await a.call(update("task.1", { scores: scores(2) })),
-    ).toContain("expected_revision");
+    expect(await a.call(update("task.1", { scores: scores(2) }))).toContain(
+      "expected_revision",
+    );
     expect(
       await a.call({
         id: "task.1",
@@ -148,7 +227,11 @@ describe("work-prioritizer binds core__work_item_update behind the guard", () =>
     ).toContain('"revision"');
     expect(
       await a.call(
-        update("task.2", { status: "cancelled" }, { reason: "Superseded by task.9" }),
+        update(
+          "task.2",
+          { status: "cancelled" },
+          { reason: "Superseded by task.9" },
+        ),
       ),
     ).toContain('"revision"');
     expect(await a.call(update("task.3", { status: "done" }))).toContain(
@@ -165,6 +248,22 @@ describe("work-prioritizer binds core__work_item_update behind the guard", () =>
 
   it("writes moves, and a repeat of the same moves writes nothing", async () => {
     const a = setup();
+    a.hooks.observeTool(
+      "core__goal_progress",
+      {},
+      { ok: true, value: metricCatalog },
+    );
+    a.hooks.observeTool(
+      "core__knowledge_read",
+      { id: metricId },
+      {
+        ok: true,
+        value: {
+          mode: "get",
+          entries: [{ id: metricId, content: "Share of validated work." }],
+        },
+      },
+    );
     a.read(item("task.1"));
     const moves = [{ metricId: "convergence-ratio-7d", direction: "up" }];
     expect(await a.call(update("task.1", { moves }))).toContain('"revision"');
@@ -185,11 +284,115 @@ describe("work-prioritizer binds core__work_item_update behind the guard", () =>
     // An item that never declared moves takes `[]` as a real change; a declared `[]` repeats as no change.
     a.read(item("task.3"));
     expect(
-      await a.call(update("task.3", { moves: [] }, { reason: "no metric fits" })),
+      await a.call(
+        update("task.3", { moves: [] }, { reason: "no metric fits" }),
+      ),
     ).toContain('"revision"');
     a.read(item("task.4", { moves: [] }));
-    expect(await a.call(update("task.4", { moves: [] }))).toContain("no_change");
+    expect(await a.call(update("task.4", { moves: [] }))).toContain(
+      "no_change",
+    );
     expect(a.writes).toHaveLength(3);
+  });
+  it("requires canonical metric discovery and the metric body before a new declaration", async () => {
+    const a = setup();
+    a.read(item("task.1"));
+    const input = update("task.1", { moves: [{ metricId, direction: "up" }] });
+    expect(await a.call(input)).toContain("metric_catalog");
+    expect(a.writes).toHaveLength(0);
+    a.hooks.observeTool(
+      "core__goal_progress",
+      {},
+      { ok: true, value: { goals: [] } },
+    );
+    expect(await a.call(input)).toContain("metric_catalog");
+    a.hooks.observeTool(
+      "core__goal_progress",
+      {},
+      { ok: true, value: metricCatalog },
+    );
+    expect(await a.call(input)).toContain("metric_not_read");
+    a.hooks.observeTool(
+      "core__knowledge_read",
+      { id: metricId },
+      {
+        ok: true,
+        value: {
+          mode: "get",
+          entries: [{ id: metricId, content: "Share of validated work." }],
+        },
+      },
+    );
+    expect(
+      await a.call(
+        update("task.1", {
+          moves: [{ metricId, direction: "up" }],
+          scores: { goal: { v: 5, ev: source } },
+        }),
+      ),
+    ).toContain("metric_goal_evidence");
+    expect(
+      await a.call(
+        update("task.1", {
+          moves: [{ metricId, direction: "up" }],
+          scores: { goal: { v: 5, ev: `${origin}/knowledge/${metricId}` } },
+        }),
+      ),
+    ).toContain('"revision"');
+    expect(a.writes).toHaveLength(1);
+  });
+  it("checks retained high goal scores when only moves changes", async () => {
+    const a = setup();
+    a.read(item("task.1", { scores: { goal: { v: 4, ev: source } } }));
+    a.hooks.observeTool(
+      "core__goal_progress",
+      {},
+      { ok: true, value: metricCatalog },
+    );
+    a.hooks.observeTool(
+      "core__knowledge_read",
+      { id: metricId },
+      {
+        ok: true,
+        value: {
+          mode: "get",
+          entries: [{ id: metricId, content: "Share of validated work." }],
+        },
+      },
+    );
+    expect(
+      await a.call(
+        update("task.1", { moves: [{ metricId, direction: "up" }] }),
+      ),
+    ).toContain("metric_goal_evidence");
+    expect(a.writes).toHaveLength(0);
+  });
+  it("cannot declare no fitting metrics from unavailable or partial discovery", async () => {
+    const a = setup();
+    a.read(item("task.1"));
+    a.hooks.observeTool(
+      "core__goal_progress",
+      {},
+      {
+        ok: true,
+        value: {
+          ...metricCatalog,
+          servedUnavailable: "metric_authority_unavailable",
+        },
+      },
+    );
+    expect(await a.call(update("task.1", { moves: [] }))).toContain(
+      "metric_catalog",
+    );
+    a.hooks.observeTool(
+      "core__goal_progress",
+      {},
+      { ok: true, value: { ...metricCatalog, servedTruncated: true } },
+    );
+    expect(await a.call(update("task.1", { moves: [] }))).toContain(
+      "metric_catalog_incomplete",
+    );
+    expect(a.writes).toHaveLength(0);
   });
 
   it("retains a null direction when recording an item for triage", async () => {
@@ -307,18 +510,30 @@ describe("work-prioritizer binds core__work_item_update behind the guard", () =>
 describe("no read-failure latch", () => {
   it("a failed read of an unrelated item does not block a write", async () => {
     const a = setup();
-    a.hooks.observeTool("core__work_item_read", { id: "task.404" }, {
-      ok: false,
-      errorCode: "not_found",
-    });
-    a.hooks.observeTool("core__knowledge_read", { id: "agent-human-boundary" }, {
-      ok: false,
-      errorCode: "not_found",
-    });
-    a.hooks.observeTool("core__work_item_read", { id: "task.5" }, {
-      ok: true,
-      value: { item: null },
-    });
+    a.hooks.observeTool(
+      "core__work_item_read",
+      { id: "task.404" },
+      {
+        ok: false,
+        errorCode: "not_found",
+      },
+    );
+    a.hooks.observeTool(
+      "core__knowledge_read",
+      { id: "agent-human-boundary" },
+      {
+        ok: false,
+        errorCode: "not_found",
+      },
+    );
+    a.hooks.observeTool(
+      "core__work_item_read",
+      { id: "task.5" },
+      {
+        ok: true,
+        value: { item: null },
+      },
+    );
     a.read(item("task.1"));
     expect(
       await a.call(update("task.1", { status: "needs_design" })),
@@ -337,13 +552,19 @@ describe("audit reason, route source and uncertain writes", () => {
     a.read(item("task.1"));
     // The tool schema stops a missing reason first; the guard's own check covers a direct call.
     const direct = (input: Record<string, unknown>) =>
-      (a.guard as unknown as { func: (i: unknown) => Promise<string> }).func(input);
+      (a.guard as unknown as { func: (i: unknown) => Promise<string> }).func(
+        input,
+      );
     for (const reason of [undefined, "", "  "]) {
       const input = update("task.1", { status: "needs_design" });
       expect(await direct({ ...input, reason })).toContain("reason_required");
     }
     await expect(
-      a.call({ id: "task.1", expectedRevision: 7, set: { status: "needs_design" } }),
+      a.call({
+        id: "task.1",
+        expectedRevision: 7,
+        set: { status: "needs_design" },
+      }),
     ).rejects.toThrow(/reason is required/);
     expect(a.writes).toHaveLength(0);
   });
@@ -374,7 +595,11 @@ describe("audit reason, route source and uncertain writes", () => {
     expect(
       await a.call(update("task.needs_merge", { status: "needs_design" })),
     ).toContain("route_source");
-    for (const status of ["needs_research", "needs_design", "needs_implement"]) {
+    for (const status of [
+      "needs_research",
+      "needs_design",
+      "needs_implement",
+    ]) {
       a.read(item(`task.${status}`, { status }));
       expect(
         await a.call(
@@ -403,7 +628,9 @@ describe("audit reason, route source and uncertain writes", () => {
     for (let n = 1; n <= 5; n++) {
       a.read(item(`task.${n}`));
       expect(
-        await guard.invoke(update(`task.${n}`, { status: "needs_design" }) as never),
+        await guard.invoke(
+          update(`task.${n}`, { status: "needs_design" }) as never,
+        ),
       ).toContain("write_result_uncertain");
     }
     a.read(item("task.6"));
@@ -419,7 +646,9 @@ describe("partial scores, DTO receipts and conflicts", () => {
     a.read(item("task.1", { scores: scores(3) }));
     await a.call(update("task.1", { scores: { agent: { v: 1 } } }));
     expect(a.writes).toHaveLength(1);
-    expect((a.writes[0]?.set as { scores: object }).scores).toEqual({
+    expect(
+      (a.writes[0]?.set as { scores: object } | undefined)?.scores,
+    ).toEqual({
       ...scores(3),
       agent: { v: 1 },
     });
@@ -428,9 +657,9 @@ describe("partial scores, DTO receipts and conflicts", () => {
   it("a partial score patch equal to the stored values writes nothing", async () => {
     const a = setup();
     a.read(item("task.1", { scores: scores(3) }));
-    expect(
-      await a.call(update("task.1", { scores: { goal: { v: 3 } } })),
-    ).toBe("no_change");
+    expect(await a.call(update("task.1", { scores: { goal: { v: 3 } } }))).toBe(
+      "no_change",
+    );
     expect(a.writes).toHaveLength(0);
   });
 
@@ -440,7 +669,11 @@ describe("partial scores, DTO receipts and conflicts", () => {
     await a.call(update("task.1", { status: "needs_design" }));
     const stored = a.receipts.items.get("task.1");
     // The fake host returns labels [] and no scores: the receipt follows the DTO.
-    expect(stored).toMatchObject({ revision: 8, status: "needs_design", labels: [] });
+    expect(stored).toMatchObject({
+      revision: 8,
+      status: "needs_design",
+      labels: [],
+    });
     expect(stored?.scores).toBeUndefined();
   });
 
@@ -463,11 +696,16 @@ describe("partial scores, DTO receipts and conflicts", () => {
     for (let n = 1; n <= 6; n++) {
       a.read(item(`task.${n}`));
       expect(
-        await guard.invoke(update(`task.${n}`, { status: "needs_design" }) as never),
+        await guard.invoke(
+          update(`task.${n}`, { status: "needs_design" }) as never,
+        ),
       ).toContain("revision_conflict");
     }
     // Six conflicts: none counted toward the five-item budget, the receipt is unchanged.
-    expect(a.receipts.items.get("task.1")).toMatchObject({ revision: 7, status: "needs_triage" });
+    expect(a.receipts.items.get("task.1")).toMatchObject({
+      revision: 7,
+      status: "needs_triage",
+    });
     expect(
       await guard.invoke(update("task.6", { status: "needs_design" }) as never),
     ).toContain("revision_conflict");
@@ -508,7 +746,11 @@ describe("a landed update counts as changed in the cycle report", () => {
       },
     );
     const report = a.hooks.projectOutput("done") as {
-      telemetry: { changedItemIds: string[]; changeCount: number; toolErrorCount: number };
+      telemetry: {
+        changedItemIds: string[];
+        changeCount: number;
+        toolErrorCount: number;
+      };
     };
     expect(report.telemetry).toMatchObject({
       changedItemIds: ["task.5"],

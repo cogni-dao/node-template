@@ -8,9 +8,11 @@
 import { WORK_ITEM_UPDATE_NAME } from "@cogni/ai-tools";
 import { cogniProfile, createCogniProgram } from "../cogni/graph";
 import type { CreateReactAgentGraphOptions } from "../types";
+import { projectTriageAnswer, verifyTriageEffects } from "./completion";
+import { createTriagePreflight } from "./preflight";
 import {
-  COGNI_READ_PROMPT,
   COGNI_DECIDE_PROMPT,
+  COGNI_READ_PROMPT,
   EVIDENCE_READER_DESCRIPTION,
   EVIDENCE_READER_PROMPT,
   LEDGER_READER_DESCRIPTION,
@@ -19,13 +21,14 @@ import {
 } from "./prompts";
 import { RunReceipts } from "./receipts";
 import { projectMissionCycleReport, projectStepBudgetReport } from "./report";
-import { createTriageGuard } from "./triage-guard";
 import { COGNI_READ_TOOL_IDS } from "./tools";
+import { createTriageGuard } from "./triage-guard";
+
 export {
   cycleScores,
   cycleTelemetry,
-  projectMissionCycleReport,
   type MissionLoopTelemetry,
+  projectMissionCycleReport,
 } from "./report";
 export const WORK_PRIORITIZER_GRAPH_NAME = "work-prioritizer" as const;
 
@@ -33,18 +36,16 @@ export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
   const receipts = opts.programState as RunReceipts | undefined;
   // The program, not the input channel, owns capability: triage programs bind the guarded
   // writer for chat and scheduled runs alike.
-  const readAuthority = new Set<string>(opts.readToolIds ?? COGNI_READ_TOOL_IDS);
+  const readAuthority = new Set<string>(
+    opts.readToolIds ?? COGNI_READ_TOOL_IDS,
+  );
   const readToolIds = opts.tools
     .map((tool) => tool.name)
     .filter(
-      (name) =>
-        name !== WORK_ITEM_UPDATE_NAME &&
-        readAuthority.has(name),
+      (name) => name !== WORK_ITEM_UPDATE_NAME && readAuthority.has(name),
     );
   const deciding = opts.program === "work-review";
-  const writer = opts.tools.find(
-    (tool) => tool.name === WORK_ITEM_UPDATE_NAME,
-  );
+  const writer = opts.tools.find((tool) => tool.name === WORK_ITEM_UPDATE_NAME);
   const requiredGuidanceIds = deciding ? REQUIRED_GUIDANCE_IDS : [];
   const profile = cogniProfile({
     id: opts.program ?? "work-review",
@@ -63,6 +64,13 @@ export function createWorkPrioritizerGraph(opts: CreateReactAgentGraphOptions) {
       : [];
   return createCogniProgram({
     ...opts,
+    programMiddleware: deciding
+      ? [
+          createTriagePreflight(
+            opts.tools.filter((tool) => readToolIds.includes(tool.name)),
+          ),
+        ]
+      : [],
     guardedTools,
     profile,
     children: [
@@ -105,6 +113,15 @@ export function createPrioritizerRunHooks(context: {
   const receipts = new RunReceipts(context.origin ?? "");
   return {
     graphOptions: { programState: receipts },
+    verifyEffects:
+      context.program === "work-review"
+        ? (readTool: Parameters<typeof verifyTriageEffects>[1]) =>
+            verifyTriageEffects(receipts, readTool)
+        : undefined,
+    projectAnswer:
+      context.program === "work-review"
+        ? () => projectTriageAnswer(receipts)
+        : undefined,
     observeTool: (
       name: string,
       args: unknown,

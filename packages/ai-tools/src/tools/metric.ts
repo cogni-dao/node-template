@@ -1,8 +1,13 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 /** Thin node tool bindings over shared contracts. No calculator logic. */
-import type { MetricService } from "@cogni-dao/metrics";
+import {
+	type MetricService,
+	projectGoalsProgressHistory,
+} from "@cogni-dao/metrics";
 import {
 	type GoalsProgress,
+	type GoalsProgressReadInput,
+	GoalsProgressReadInputSchema,
 	GoalsProgressSchema,
 	MetricComputeInputSchema,
 	MetricError,
@@ -17,11 +22,7 @@ import {
 } from "@cogni-dao/metrics/contracts";
 import { z } from "zod";
 import type { CatalogBoundTool } from "../catalog";
-import type {
-	ToolContract,
-	ToolImplementation,
-	ToolRequires,
-} from "../types";
+import type { ToolContract, ToolImplementation, ToolRequires } from "../types";
 /**
  * The node injects its one goal-progress function; history calls the service's
  * historyRange, the same function the HTTP route calls.
@@ -39,14 +40,16 @@ export function createMetricTools(
 		{
 			name: "core__goal_progress",
 			description:
-				"Read every active goal with its KPI bindings, one assessment per KPI (status, enum reason, value, target, deadline, display pace), its display type, 30 daily buckets (plus the last 24 hourly buckets for hourly metrics), the metrics that serve each KPI (served, by role, each with status against its band, latest value and its time), the metrics that serve no KPI (orphans and unbound) and hypotheses. The Metrics page shows this same read. Call before triage/planning and after acting. Unknown is never zero.",
+				"Read every active goal with its KPI bindings and complete assessments (status, reason, value, observation ID, target, deadline and pace), served metrics, orphans, unbound metrics and hypotheses. By default history=none explicitly omits chart series (trend/recent are null, historyMode=none); this is not a failed metric reading. Request history=full for charts or use core__metric_history for a specific range. The public metrics/goals route supports the same history option; its default is full for the Metrics page. Call before triage/planning and after acting. Unknown is never zero.",
 			effect: "read_only" as const,
-			inputSchema: z.strictObject({}),
+			inputSchema: GoalsProgressReadInputSchema.extend({
+				history: GoalsProgressReadInputSchema.shape.history.default("none"),
+			}),
 			outputSchema: GoalsProgressSchema,
-			run: async () => {
+			run: async (input: GoalsProgressReadInput) => {
 				if (!reads?.goalProgress)
 					throw new MetricError("goals_unavailable", 503);
-				return reads.goalProgress();
+				return projectGoalsProgressHistory(await reads.goalProgress(), input);
 			},
 		},
 		{

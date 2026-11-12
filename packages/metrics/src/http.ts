@@ -23,6 +23,7 @@
 
 import {
 	type GoalsProgress,
+	GoalsProgressReadInputSchema,
 	GoalsProgressSchema,
 	KpiBindingsSchema,
 	MetricComputeInputSchema,
@@ -37,6 +38,7 @@ import {
 	MetricViewSchema,
 } from "./contracts.js";
 import type { MetricService } from "./index.js";
+import { projectGoalsProgressHistory } from "./progress.js";
 
 /** Every metrics response is per-caller live data. */
 export const METRIC_HTTP_HEADERS = { "Cache-Control": "no-store" } as const;
@@ -53,7 +55,7 @@ export type MetricHttpResult<T = unknown> =
 			readonly ok: false;
 			readonly status: number;
 			readonly body: MetricHttpErrorBody;
-	  };
+		};
 
 /** The subset of the metric service the routes call. */
 export type MetricRouteService = Pick<
@@ -132,9 +134,17 @@ export function createMetricHttpHandlers(ports: MetricHttpPorts) {
 
 	return {
 		/** GET /api/v1/metrics/goals */
-		goals: guard(async () =>
-			ok(GoalsProgressSchema.parse(await ports.goalProgress())),
-		),
+		goals: guard(async (query: URLSearchParams = new URLSearchParams()) => {
+			const input = GoalsProgressReadInputSchema.safeParse({
+				...(query.has("history") ? { history: query.get("history") } : {}),
+			});
+			if (!input.success) return fail(400, "invalid_input", input.error.issues);
+			return ok(
+				GoalsProgressSchema.parse(
+					projectGoalsProgressHistory(await ports.goalProgress(), input.data),
+				),
+			);
+		}),
 
 		/** GET /api/v1/metrics?limit=&after= */
 		list: guard(async (query: URLSearchParams) => {
@@ -168,8 +178,7 @@ export function createMetricHttpHandlers(ports: MetricHttpPorts) {
 				to: query.get("to") ?? undefined,
 				step: query.get("step") ?? undefined,
 			});
-			if (!input.success)
-				return fail(400, "invalid_input", input.error.issues);
+			if (!input.success) return fail(400, "invalid_input", input.error.issues);
 			return ok(
 				MetricHistorySchema.parse(await service().historyRange(id, input.data)),
 			);
@@ -195,8 +204,7 @@ export function createMetricHttpHandlers(ports: MetricHttpPorts) {
 				return fail(400, "invalid_json");
 			}
 			const input = MetricComputeInputSchema.safeParse(body);
-			if (!input.success)
-				return fail(400, "invalid_input", input.error.issues);
+			if (!input.success) return fail(400, "invalid_input", input.error.issues);
 			const result = MetricObservationSchema.parse(
 				await service().compute(id, input.data),
 			);

@@ -193,6 +193,38 @@ export function createInProcGraphRunner<TTool = unknown>(
     hooks?.observeTool?.(name, args, result, toolCallId);
     return result;
   };
+  const verificationReads = new Set(
+    toolContracts
+      .filter((contract) => contract.effect === "read_only")
+      .map((contract) => contract.name),
+  );
+  const verifyEffects = async () => {
+    if (!hooks?.verifyEffects) return;
+    const signal = request.abortSignal;
+    signal?.throwIfAborted();
+    let onAbort: (() => void) | undefined;
+    const cancelled = new Promise<never>((_resolve, reject) => {
+      onAbort = () => reject(signal?.reason);
+      signal?.addEventListener("abort", onAbort, { once: true });
+    });
+    try {
+      await Promise.race([
+        hooks.verifyEffects(async (name, args, toolCallId) => {
+          signal?.throwIfAborted();
+          if (
+            !verificationReads.has(name) ||
+            !request.configurable.toolIds?.includes(name)
+          )
+            throw new Error("program_verification_read_only");
+          return toolExecFn(name, args, toolCallId);
+        }),
+        cancelled,
+      ]);
+      signal?.throwIfAborted();
+    } finally {
+      if (onAbort) signal?.removeEventListener("abort", onAbort);
+    }
+  };
   const hash = (value: string) =>
     createHash("sha256").update(value).digest("hex");
   const memoryNamespace =
@@ -218,11 +250,12 @@ export function createInProcGraphRunner<TTool = unknown>(
     identityParts.some((part) => !part)
   )
     throw new Error("cogni_trusted_identity_unavailable");
-  const threadId = opts.trustedProgramId && persistence?.checkpointer
-    ? `h1:${hash(identityParts.map((part) => `${Buffer.byteLength(part ?? "", "utf8")}:${part ?? ""}`).join(""))}`
-    : request.configurable.graphId != null
-      ? `${request.configurable.graphId}:${request.runId}`
-      : request.runId;
+  const threadId =
+    opts.trustedProgramId && persistence?.checkpointer
+      ? `h1:${hash(identityParts.map((part) => `${Buffer.byteLength(part ?? "", "utf8")}:${part ?? ""}`).join(""))}`
+      : request.configurable.graphId != null
+        ? `${request.configurable.graphId}:${request.runId}`
+        : request.runId;
   const readSkill = async (id: string) => {
     try {
       const result = await toolExecFn("core__knowledge_read", { id });
@@ -277,7 +310,8 @@ export function createInProcGraphRunner<TTool = unknown>(
     readToolIds: toolContracts
       .filter((contract) => contract.effect === "read_only")
       .map((contract) => contract.name),
-    tierModels: { main: llm,
+    tierModels: {
+      main: llm,
       ...Object.fromEntries(
         Object.entries(createGraph.tierModelIds ?? {}).map(([tier, model]) => [
           tier,
@@ -348,7 +382,10 @@ export function createInProcGraphRunner<TTool = unknown>(
       };
       const result = await invoke();
 
-      const assistantContent = extractAssistantContent(result.messages);
+      await verifyEffects();
+      const modelAnswer = extractAssistantContent(result.messages);
+      const assistantContent =
+        hooks?.projectAnswer?.(modelAnswer) ?? modelAnswer;
 
       // Extract structured response if present (from responseFormat graphs)
       const structuredOutput =
@@ -380,7 +417,8 @@ export function createInProcGraphRunner<TTool = unknown>(
       // Only middleware wrappers may be unwrapped, never arbitrary application causes.
       let cause: unknown = error;
       while (
-        (MiddlewareError.isInstance(cause) || cause instanceof MiddlewareError) &&
+        (MiddlewareError.isInstance(cause) ||
+          cause instanceof MiddlewareError) &&
         "cause" in cause &&
         cause.cause !== undefined &&
         cause.cause !== cause
@@ -413,7 +451,8 @@ export function createInProcGraphRunner<TTool = unknown>(
         (isAiExecutionError(cause) && cause.code === "aborted");
       const code =
         signal?.aborted && cancelled
-          ? isAiExecutionError(signal.reason) && signal.reason.code === "timeout"
+          ? isAiExecutionError(signal.reason) &&
+            signal.reason.code === "timeout"
             ? "timeout"
             : "aborted"
           : normalizeErrorToExecutionCode(cause);

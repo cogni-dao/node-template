@@ -38,6 +38,8 @@ Pure tool definitions for AI agent execution. Defines `ToolContract`, `ToolImple
 
 ## Public Surface
 
+`core__goal_progress` uses the shared `GoalsProgressReadInputSchema` and `projectGoalsProgressHistory` from metrics. Its default `history=none` preserves the response envelope and every assessment/observation/unknown state, with explicit `historyMode=none` and null chart values. `history=full` remains available; the same HTTP route option defaults to full for UI consumers. Do not hand-copy or omit assessment fields to reduce context.
+
 - **Exports:**
   - `ToolContract` - Tool definition interface (name, inputSchema, outputSchema, redact)
   - `ToolImplementation` - Pure execute function interface
