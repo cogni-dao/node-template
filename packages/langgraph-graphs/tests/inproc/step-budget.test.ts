@@ -136,10 +136,11 @@ describe("program completion verification", () => {
       let modelCalls = 0;
       const model: CompletionFn = (params) => {
         modelCalls++;
-        expect(reads).toHaveLength(6);
+        expect(reads).toHaveLength(7);
+        expect(reads).toContain("core__knowledge_read:metrics-expert");
         expect(
           params.messages.filter((message) => message.role === "tool"),
-        ).toHaveLength(6);
+        ).toHaveLength(7);
         return {
           stream: (async function* (): AsyncIterable<AiEvent> {})(),
           final: Promise.resolve({
@@ -165,7 +166,11 @@ describe("program completion verification", () => {
             }
           : undefined,
         createToolExecFn: () => async (name, args) => {
-          reads.push(name);
+          reads.push(
+            name === "core__knowledge_read"
+              ? `${name}:${(args as { id: string }).id}`
+              : name,
+          );
           if (name === "core__knowledge_read")
             return {
               ok: true,
@@ -203,7 +208,7 @@ describe("program completion verification", () => {
         /* Drain native graph events. */
       }
       expect((await final).ok).toBe(valid);
-      expect(reads).toHaveLength(valid ? 6 : 0);
+      expect(reads).toHaveLength(valid ? 7 : 0);
       expect(modelCalls).toBe(valid ? 1 : 0);
     },
   );

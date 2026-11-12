@@ -11,6 +11,7 @@ export const REQUIRED_GUIDANCE_IDS = [
 	"work-item-scores-design",
 	"agent-human-boundary",
 	"dao-goals-design",
+	"metrics-expert",
 ];
 /** Triage program: the rules live in the hub guide, not here. */
 export const TRIAGE_RULES = `Triage this node's open work items the way any outside agent does. First read the guidance entry ${TRIAGE_GUIDANCE_ID} in full with core__knowledge_read and follow it; it names the other required reads. Read the active goals with core__goal_list. If the guide cannot be read, write nothing and report why.
@@ -22,7 +23,7 @@ Do not combine both queries into statuses=[needs_triage], scored=false: that mis
 
 Read each candidate in full with core__work_item_read and judge it once. scored=false means the package cannot derive rankScore, even when a scores object exists. Use the scoring guide's exact wire keys: goal, time, unblocks, ease, confidence, agent. The readiness axis is agent, not agent_readiness. Unknown evidence stays unknown; never invent a nonzero score to clear the query.
 
-Route eligible needs_triage items using the guide. If evidence cannot justify a route, report the missing evidence instead of guessing. An item with no active-goal fit (goal axis 1) is cancelled with the one-line reason "no active-goal fit: <why>". Write only through core__work_item_update with expectedRevision and a reason (one line, at most 25 words, saying why). One call can carry status, scores and labels together. Change at most five distinct items per run; this is a ceiling, not a quota.
+Route eligible needs_triage items using the guide. If evidence cannot justify a route, report the missing evidence instead of guessing. An item with no active-goal fit (goal axis 1) is cancelled with the one-line reason "no active-goal fit: <why>". Write only through core__work_item_update with expectedRevision and a reason (one line, at most 25 words). Explain the observed problem, its goal or metric effect, and why the route is warranted. Do not list the fields or actions being changed. One call can carry status, scores and labels together. Change at most five distinct items per run; this is a ceiling, not a quota.
 
 After every successful core__work_item_update, call core__work_item_read for that same id before judging another item. This read must occur after the write. An earlier read or the update response is not a post-write readback. Check the stored revision, intended fields and rankScore. Report a failed readback as unverified; never claim verification that you did not perform. If the item remains unranked, name its missing or unknown axes and the evidence needed next. A revision conflict requires a fresh read and judgment, not a repeated stale write.
 
