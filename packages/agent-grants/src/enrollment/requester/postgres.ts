@@ -72,9 +72,9 @@ export function createPostgresRequesterCustody(
     const digest = await connectionKeyDigest(h.key);
     const result = lock
       ? await tx`SELECT * FROM agent_service_link_operations WHERE operation_id=${h.operationId} AND key_digest=${digest}
-      AND state->'key'=${JSON.stringify(h.key)}::jsonb AND billing_account_id=${h.key.billingAccountId} AND current FOR UPDATE`
+      AND state->'key'=${JSON.stringify(h.key)}::text::jsonb AND billing_account_id=${h.key.billingAccountId} AND current FOR UPDATE`
       : await tx`SELECT * FROM agent_service_link_operations WHERE operation_id=${h.operationId} AND key_digest=${digest}
-      AND state->'key'=${JSON.stringify(h.key)}::jsonb AND billing_account_id=${h.key.billingAccountId} AND current`;
+      AND state->'key'=${JSON.stringify(h.key)}::text::jsonb AND billing_account_id=${h.key.billingAccountId} AND current`;
     return result[0] ? decode(result[0]) : null;
   }
   async function locked(tx: SqlTag, g: LeaseGuard) {
@@ -113,7 +113,7 @@ export function createPostgresRequesterCustody(
     )
       throw new Error("immutable_link_identity");
     const out =
-      await tx`UPDATE agent_service_link_operations SET state=${JSON.stringify(state)}::jsonb, phase=${state.phase},revision=revision+1,
+      await tx`UPDATE agent_service_link_operations SET state=${JSON.stringify(state)}::text::jsonb, phase=${state.phase},revision=revision+1,
       encrypted_secrets=${settings.encryptedSecrets === undefined ? r.encryptedSecrets : settings.encryptedSecrets},
       lease_owner=${settings.release ? null : r.leaseOwner},lease_until=${settings.release ? null : r.leaseUntil},
       next_attempt_at=clock_timestamp()+(${settings.delaySec ?? 0}::int*interval '1 second'),
@@ -123,10 +123,16 @@ export function createPostgresRequesterCustody(
         AND lease_until>clock_timestamp() AND (secret_deadline>clock_timestamp() OR state->>'quarantined'='true') RETURNING *`;
     return out[0] ? decode(out[0]) : null;
   }
+  // A failed final CAS must abort the transaction containing vault changes.
+  async function writeCustody(tx: SqlTag, r: LinkRow, state: LinkState, settings: Parameters<typeof write>[3]) {
+    const result = await write(tx, r, state, settings);
+    if (!result) throw new Error("custody_fence_expired");
+    return result;
+  }
   async function disable(tx: SqlTag, r: LinkRow) {
     if (!r.state.connectionId || !r.state.credentialId) return;
     await tx`UPDATE connections SET service_state='disabled' WHERE id=${r.state.connectionId} AND provider='cogni-node'
-      AND billing_account_id=${r.state.key.billingAccountId} AND service_identity=${JSON.stringify(r.state.key)}::jsonb
+      AND billing_account_id=${r.state.key.billingAccountId} AND service_identity=${JSON.stringify(r.state.key)}::text::jsonb
       AND service_operation_id=${r.operationId} AND service_credential_id=${r.state.credentialId}`;
   }
   const store: RequesterStore = {
@@ -142,10 +148,10 @@ export function createPostgresRequesterCustody(
         await tx`INSERT INTO agent_service_link_operations(operation_id,key_digest,home_node_id,home_environment,home_origin,service,billing_account_id,
           target_node_id,target_environment,target_origin,generation,phase,state,encrypted_secrets,secret_deadline)
           VALUES(${row.operationId},${digest},${key.home.nodeId},${key.home.environment},${key.home.origin},${key.service},${key.billingAccountId},
-            ${key.target.nodeId},${key.target.environment},${key.target.origin},${row.state.intent.generation},${row.state.phase},${JSON.stringify(row.state)}::jsonb,${row.encryptedSecrets},${row.secretDeadline})
+            ${key.target.nodeId},${key.target.environment},${key.target.origin},${row.state.intent.generation},${row.state.phase},${JSON.stringify(row.state)}::text::jsonb,${row.encryptedSecrets},${row.secretDeadline})
           ON CONFLICT DO NOTHING`;
         const existing =
-          await tx`SELECT * FROM agent_service_link_operations WHERE key_digest=${digest} AND current AND state->'key'=${JSON.stringify(key)}::jsonb`;
+          await tx`SELECT * FROM agent_service_link_operations WHERE key_digest=${digest} AND current AND state->'key'=${JSON.stringify(key)}::text::jsonb`;
         if (!existing[0]) throw new Error("requester_identity_conflict");
         return decode(existing[0]);
       });
@@ -182,7 +188,7 @@ export function createPostgresRequesterCustody(
           await tx`INSERT INTO agent_service_link_operations(operation_id,key_digest,home_node_id,home_environment,home_origin,service,billing_account_id,
           target_node_id,target_environment,target_origin,generation,phase,state,encrypted_secrets,secret_deadline)
           VALUES(${draft.operationId},${await connectionKeyDigest(key)},${key.home.nodeId},${key.home.environment},${key.home.origin},${key.service},${key.billingAccountId},
-            ${key.target.nodeId},${key.target.environment},${key.target.origin},${draft.state.intent.generation},${draft.state.phase},${JSON.stringify(draft.state)}::jsonb,${draft.encryptedSecrets},${draft.secretDeadline}) RETURNING *`;
+            ${key.target.nodeId},${key.target.environment},${key.target.origin},${draft.state.intent.generation},${draft.state.phase},${JSON.stringify(draft.state)}::text::jsonb,${draft.encryptedSecrets},${draft.secretDeadline}) RETURNING *`;
         if (!inserted[0]) throw new Error("replacement_commit_failed");
         return decode(inserted[0]);
       });
@@ -253,10 +259,10 @@ export function createPostgresRequesterCustody(
         await tx`INSERT INTO connections(id,billing_account_id,provider,credential_type,encrypted_credentials,encryption_key_id,scopes,created_by_user_id,
           service_key_digest,service_identity,service_operation_id,service_generation,service_credential_id,service_state,expires_at,renew_until)
           VALUES(${connectionId},${g.key.billingAccountId},'cogni-node','api_key',${encrypted},${cipher.keyId},ARRAY[${envelope.scope}],${systemPrincipalUserId},
-            ${await connectionKeyDigest(g.key)},${JSON.stringify(g.key)}::jsonb,${r.operationId},${envelope.generation},${envelope.credentialId},'staged',${envelope.expiresAt},${envelope.renewUntil})
+            ${await connectionKeyDigest(g.key)},${JSON.stringify(g.key)}::text::jsonb,${r.operationId},${envelope.generation},${envelope.credentialId},'staged',${envelope.expiresAt},${envelope.renewUntil})
           ON CONFLICT (id) DO NOTHING`;
         const saved =
-          await tx`SELECT encrypted_credentials FROM connections WHERE id=${connectionId} AND service_identity=${JSON.stringify(g.key)}::jsonb
+          await tx`SELECT encrypted_credentials FROM connections WHERE id=${connectionId} AND service_identity=${JSON.stringify(g.key)}::text::jsonb
           AND service_operation_id=${r.operationId} AND service_credential_id=${envelope.credentialId} AND service_state='staged'`;
         if (
           !saved[0] ||
@@ -271,7 +277,7 @@ export function createPostgresRequesterCustody(
           Date.parse(envelope.pendingExpiresAt) + 44 * 86400000 + 60000
         ).toISOString();
         await tx`UPDATE agent_service_link_operations SET staged_connection_id=${connectionId},secret_deadline=${retention} WHERE operation_id=${r.operationId}`;
-        return write(
+        return writeCustody(
           tx,
           r,
           {
@@ -303,13 +309,13 @@ export function createPostgresRequesterCustody(
           return null;
         const p =
           await tx`UPDATE connections SET service_state='ready',expires_at=${deadlines.expiresAt},renew_until=${deadlines.renewUntil}
-          WHERE id=${r.state.connectionId} AND provider='cogni-node' AND service_identity=${JSON.stringify(g.key)}::jsonb AND billing_account_id=${g.key.billingAccountId}
+          WHERE id=${r.state.connectionId} AND provider='cogni-node' AND service_identity=${JSON.stringify(g.key)}::text::jsonb AND billing_account_id=${g.key.billingAccountId}
             AND service_operation_id=${r.operationId} AND service_credential_id=${r.state.credentialId} AND service_state IN ('staged','ready')
             AND ${deadlines.expiresAt}::timestamptz>clock_timestamp() AND ${deadlines.renewUntil}::timestamptz<=${deadlines.expiresAt}::timestamptz+interval '14 days'
             AND ${deadlines.expiresAt}::timestamptz<=clock_timestamp()+interval '30 days' RETURNING id`;
         if (!p.length) return null;
         await tx`UPDATE agent_service_link_operations SET secret_deadline=${deadlines.renewUntil}::timestamptz+interval '60 seconds' WHERE operation_id=${r.operationId}`;
-        return write(
+        return writeCustody(
           tx,
           r,
           {
@@ -333,7 +339,7 @@ export function createPostgresRequesterCustody(
         if (!r || r.revision !== expectedRevision) return null;
         await disable(tx, r);
         const result =
-          await tx`UPDATE agent_service_link_operations SET phase='disconnected',state=${JSON.stringify({ ...r.state, phase: "disconnected", nextAction: "none" })}::jsonb,
+          await tx`UPDATE agent_service_link_operations SET phase='disconnected',state=${JSON.stringify({ ...r.state, phase: "disconnected", nextAction: "none" })}::text::jsonb,
           revision=revision+1,fence=fence+1,lease_owner=NULL,lease_until=NULL,terminal_at=COALESCE(terminal_at,clock_timestamp()) WHERE operation_id=${r.operationId} RETURNING *`;
         return result[0] ? decode(result[0]) : null;
       });
@@ -350,7 +356,7 @@ export function createPostgresRequesterCustody(
         )
           return false;
         await disable(tx, r);
-        await tx`UPDATE agent_service_link_operations SET phase='needs_reenroll',state=${JSON.stringify({ ...r.state, phase: "needs_reenroll", nextAction: "none", error: "key_rejected" })}::jsonb,
+        await tx`UPDATE agent_service_link_operations SET phase='needs_reenroll',state=${JSON.stringify({ ...r.state, phase: "needs_reenroll", nextAction: "none", error: "key_rejected" })}::text::jsonb,
           revision=revision+1,fence=fence+1,lease_owner=NULL,lease_until=NULL,terminal_at=COALESCE(terminal_at,clock_timestamp()) WHERE operation_id=${r.operationId}`;
         return true;
       });
@@ -379,7 +385,7 @@ export function createPostgresRequesterCustody(
       }
       const c =
         await tx`SELECT encrypted_credentials,encryption_key_id FROM connections WHERE id=${input.connectionId} AND provider='cogni-node'
-        AND billing_account_id=${input.key.billingAccountId} AND service_identity=${JSON.stringify(input.key)}::jsonb AND service_key_digest=${await connectionKeyDigest(input.key)}
+        AND billing_account_id=${input.key.billingAccountId} AND service_identity=${JSON.stringify(input.key)}::text::jsonb AND service_key_digest=${await connectionKeyDigest(input.key)}
         AND service_operation_id=${input.operationId} AND service_credential_id=${input.credentialId} AND revoked_at IS NULL
         AND service_state=${g ? "staged" : "ready"} AND (CASE WHEN ${Boolean(g)} THEN TRUE ELSE expires_at>clock_timestamp() END)`;
       if (!c[0] || c[0].encryption_key_id !== cipher.keyId) return null;

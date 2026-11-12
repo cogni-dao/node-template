@@ -303,8 +303,8 @@ export function createPostgresEnrollmentStore(
           }
           const key = await tx`
           WITH instant AS MATERIALIZED (SELECT clock_timestamp() AS at)
-          INSERT INTO agent_credentials (user_id, token_hash, created_from, predecessor_id, expires_at, renew_until, pending_expires_at)
-          SELECT ${principalUserId}, ${tokenHash}, 'service_enrollment', NULL,
+          INSERT INTO agent_credentials (user_id, token_hash, created_from, predecessor_id, issued_at, expires_at, renew_until, pending_expires_at)
+          SELECT ${principalUserId}, ${tokenHash}, 'service_enrollment', NULL, instant.at,
             instant.at + (${policy.ttlSec}::int * interval '1 second'),
             instant.at + ((${policy.ttlSec}::int + ${policy.renewWindowSec}::int) * interval '1 second'),
             LEAST(instant.at + (${policy.pendingSec}::int * interval '1 second'), expires_at)

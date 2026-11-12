@@ -178,6 +178,7 @@ export function createDurableProviderStore(
                 (proof.op === "start"
                   ? exactTokenDigest
                   : proof.originalTokenDigest) ||
+              seen[0].intent_digest !== proof.intentDigest ||
               seen[0].canonical_intent !== canonicalJson(intentOf(proof))
             )
               return { ok: false, reason: "intent_conflict", observedAt: at };
@@ -187,7 +188,7 @@ export function createDurableProviderStore(
             return { ok: false, reason: "unknown_operation", observedAt: at };
           const pressure =
             await tx`SELECT 1 FROM agent_authority_maintenance WHERE id = 'service-enrollment' AND backfill_ready
-            AND (oldest_due_at IS NULL OR oldest_due_at >= clock_timestamp() - interval '5 minutes')`;
+            AND NOT EXISTS (SELECT 1 FROM (SELECT expires_at FROM agent_service_enrollments WHERE status = 'open' AND expires_at <= (SELECT clock_timestamp()) ORDER BY expires_at, id LIMIT 1) due WHERE expires_at < clock_timestamp() - interval '5 minutes')`;
           if (!pressure.length)
             throw new Error("maintenance unavailable or overdue");
           const candidates =
@@ -361,8 +362,8 @@ export function createDurableProviderStore(
           const { token, tokenHash } = await mintKey();
           const c =
             await tx`WITH instant AS MATERIALIZED (SELECT clock_timestamp() AS at)
-            INSERT INTO agent_credentials(user_id,token_hash,created_from,service_operation_id,service_generation,expires_at,renew_until,pending_expires_at)
-            SELECT ${e.principal_user_id},${tokenHash},'service_enrollment',${e.operation_id},${e.generation},at+(${policy.ttlSec}::int*interval '1 second'),
+            INSERT INTO agent_credentials(user_id,token_hash,created_from,service_operation_id,service_generation,issued_at,expires_at,renew_until,pending_expires_at)
+            SELECT ${e.principal_user_id},${tokenHash},'service_enrollment',${e.operation_id},${e.generation},at,at+(${policy.ttlSec}::int*interval '1 second'),
               at+((${policy.ttlSec}::int+${policy.renewWindowSec}::int)*interval '1 second'),LEAST(at+(${policy.pendingSec}::int*interval '1 second'),${e.expires_at}::timestamptz)
             FROM instant WHERE at < ${e.expires_at}::timestamptz RETURNING *`;
           if (!c[0]) throw new Refusal("terminal_operation");

@@ -109,7 +109,7 @@ async function compose() {
           .from(connections).where(and(
             eq(connections.id, input.connectionId), eq(connections.billingAccountId, input.key.billingAccountId),
             eq(connections.provider, "cogni-node"), eq(connections.serviceKeyDigest, digest),
-            sql`${connections.serviceIdentity} = ${JSON.stringify(input.key)}::jsonb`,
+            sql`${connections.serviceIdentity} = ${JSON.stringify(input.key)}::text::jsonb`,
             eq(connections.serviceOperationId, input.operationId), eq(connections.serviceCredentialId, input.credentialId),
             eq(connections.serviceState, "ready"), isNull(connections.revokedAt), gt(connections.expiresAt, sql`clock_timestamp()`)
           )).limit(1);

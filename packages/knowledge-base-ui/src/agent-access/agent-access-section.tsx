@@ -103,6 +103,9 @@ export function AgentAccessSection({
               {error}
             </p>
           )}
+          {!state.view.nextCursor && state.view.more > 0 && (
+            <p>{state.view.more} more outside rows are not shown</p>
+          )}
           {state.view.nextCursor && (
             <button
               type="button"

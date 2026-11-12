@@ -35,9 +35,9 @@ const iso = (value: unknown): string => {
 };
 
 /** `https://cognidao.org#git-review` -> `Verified service of cognidao.org`. Plain words only (TOKENLESS_COPY): no path, id or key. */
-function serviceHint(serviceKey: string): string | null {
+function serviceHint(serviceKey: string, homeOrigin: string | null): string | null {
   try {
-    return `Verified service of ${new URL(serviceKey.split("#")[0] ?? "").host}`;
+    return `Verified service of ${new URL(homeOrigin ?? serviceKey.split("#")[0] ?? "").host || (() => { throw new Error("missing host"); })()}`;
   } catch {
     return null;
   }
@@ -117,7 +117,7 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
           internal,
           name: internal ? str(row.slug) : str(row.user_name), // NAMES_ARE_IDENTIFIERS: the slug is the name
           // A proven binding, shown beside the agent's own (unproven) name. A service made by enrollment shows the node that signed for it.
-          hint: serviceKey ? serviceHint(serviceKey) : githubId ? `GitHub id ${githubId}` : null,
+          hint: serviceKey ? serviceHint(serviceKey, str(row.home_origin)) : githubId ? `GitHub id ${githubId}` : null,
           scope,
           state: row.approved_by ? (row.revoked_at ? "revoked" as const : "granted" as const) : "pending" as const,
           at: iso(row.created_at),
@@ -127,7 +127,7 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
       const own = await sql`
         SELECT r.principal_user_id, r.scope, r.approved_by, r.revoked_at, r.created_at,
                p.slug AS slug, p.kind AS kind, u.name AS user_name,
-               NULL::text AS github_id, NULL::text AS service_key
+               NULL::text AS github_id, NULL::text AS service_key, NULL::text AS home_origin
         FROM agent_roles r
         JOIN users u ON u.id = r.principal_user_id
         JOIN agent_principals p ON p.user_id = r.principal_user_id AND p.kind = 'internal'
@@ -138,7 +138,7 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
       const outside = await sql`
         WITH controls AS (
           SELECT r.principal_user_id, r.scope, r.approved_by, r.revoked_at, r.created_at,
-                 NULL::text AS slug, 'external' AS kind, u.name AS user_name, NULL::text AS github_id, p.service_key
+                 NULL::text AS slug, 'external' AS kind, u.name AS user_name, NULL::text AS github_id, p.service_key, p.home_origin
           FROM agent_principals p
           CROSS JOIN unnest(${declaredScopes as string[]}::text[]) s(scope)
           CROSS JOIN LATERAL (
@@ -152,7 +152,7 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
           UNION ALL
           SELECT r.principal_user_id, r.scope, r.approved_by, r.revoked_at, r.created_at,
                  NULL::text AS slug, 'external' AS kind, u.name AS user_name,
-                 (SELECT b.external_id FROM user_bindings b WHERE b.user_id = r.principal_user_id AND b.provider = 'github' LIMIT 1), NULL::text
+                 (SELECT b.external_id FROM user_bindings b WHERE b.user_id = r.principal_user_id AND b.provider = 'github' LIMIT 1), NULL::text, NULL::text
           FROM agent_roles r JOIN users u ON u.id = r.principal_user_id
           WHERE r.revoked_at IS NULL AND (r.approved_by IS NOT NULL OR r.request_expires_at IS NULL OR r.request_expires_at > clock_timestamp()) AND NOT EXISTS (
             SELECT 1 FROM agent_principals p WHERE p.user_id = r.principal_user_id AND (p.kind = 'internal' OR p.service_key IS NOT NULL)

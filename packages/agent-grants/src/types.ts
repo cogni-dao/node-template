@@ -198,7 +198,7 @@ export interface NodeAiPermissionView {
 
 /** The `GET /api/v1/agent-access/roles` body. A non-admin gets `canManage: false` and no rows. */
 export interface NodeAiAccessView {
-  readonly nextCursor?: RoleCursor | null;
+  readonly nextCursor?: RoleCursor | null | undefined;
   readonly canManage: boolean;
   readonly permissions: readonly NodeAiPermissionView[];
   /** Outside rows left out of `permissions` because the list is bounded. 0 when nothing is cut. */

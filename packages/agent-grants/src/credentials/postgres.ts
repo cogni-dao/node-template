@@ -79,11 +79,11 @@ export function createPostgresCredentialStore(client: CredentialSql, options: Po
     assertCredentialPolicy(p);
     const rows = await tx`
       WITH instant AS MATERIALIZED (SELECT clock_timestamp() AS at)
-      INSERT INTO agent_credentials (user_id, token_hash, created_from, predecessor_id, predecessor_provenance_id, service_operation_id, service_generation, expires_at, renew_until, pending_expires_at)
+      INSERT INTO agent_credentials (user_id, token_hash, created_from, predecessor_id, predecessor_provenance_id, service_operation_id, service_generation, issued_at, expires_at, renew_until, pending_expires_at)
       SELECT ${userId}, ${tokenHash}, ${createdFrom}, ${predecessorId}, ${predecessorId},
         (SELECT service_operation_id FROM agent_credentials WHERE id = ${predecessorId}),
         (SELECT service_generation FROM agent_credentials WHERE id = ${predecessorId}),
-        at + (${p.ttlSec}::int * interval '1 second'),
+        at, at + (${p.ttlSec}::int * interval '1 second'),
         at + ((${p.ttlSec}::int + ${p.renewWindowSec}::int) * interval '1 second'),
         at + (${p.pendingSec}::int * interval '1 second') FROM instant
       RETURNING id, pending_expires_at`;

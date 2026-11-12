@@ -88,7 +88,7 @@ function hasMalformedRevocableBearer(req: NextRequest): boolean {
   const authorization = req.headers.get("authorization");
   const bearerPrefix = `Bearer ${REVOCABLE_KEY_PREFIX}`;
   return (
-    authorization?.startsWith(bearerPrefix) &&
+    authorization !== null && authorization.startsWith(bearerPrefix) &&
     !isWellFormedRevocableKey(authorization.slice("Bearer ".length))
   );
 }

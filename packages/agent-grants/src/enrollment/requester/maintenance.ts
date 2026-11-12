@@ -22,8 +22,8 @@ export async function maintainRequesterCustody(tx: SqlTag): Promise<void> {
     const state =
       typeof row.state === "string" ? JSON.parse(row.state) : row.state;
     await tx`UPDATE connections SET encrypted_credentials=decode('','hex'),service_state='disabled' WHERE id=${row.staged_connection_id}
-      AND provider='cogni-node' AND service_operation_id=${row.operation_id} AND service_identity=${JSON.stringify(state.key)}::jsonb AND service_credential_id=${state.credentialId}`;
-    await tx`UPDATE agent_service_link_operations SET encrypted_secrets=NULL,phase='expired',state=${JSON.stringify({ ...state, phase: "expired", nextAction: "none" })}::jsonb,
+      AND provider='cogni-node' AND service_operation_id=${row.operation_id} AND service_identity=${JSON.stringify(state.key)}::text::jsonb AND service_credential_id=${state.credentialId}`;
+    await tx`UPDATE agent_service_link_operations SET encrypted_secrets=NULL,phase='expired',state=${JSON.stringify({ ...state, phase: "expired", nextAction: "none" })}::text::jsonb,
       revision=revision+1,fence=fence+1,lease_owner=NULL,lease_until=NULL,terminal_at=COALESCE(terminal_at,clock_timestamp()) WHERE operation_id=${row.operation_id}`;
   }
   // Delivery material has logical deadlines even with audit purge disabled. Identity/high-water/confirmation/consent remain untouched.

@@ -289,4 +289,52 @@ describe("v2 enrollment and requester SQL", () => {
       original
     );
   });
+  it("publication rolls back ready custody when a connection lock outlives the lease", async () => {
+    const cipher = createCustodyCipher(new Uint8Array(32).fill(8), "fixture-v2");
+    const signing = await generateKeyPair("EdDSA");
+    const custody = createPostgresRequesterCustody(client(), {
+      cipher, systemPrincipalUserId: COGNI_SYSTEM_PRINCIPAL_USER_ID,
+      readReadyConnection: async () => null,
+    });
+    const requester = createEnrollmentRequester({
+      ...custody, cipher, signer: createEnrollmentProofSigner({ kid: "fixture", key: signing.privateKey }),
+      transport: {
+        postProof: async () => { throw new Error("unused"); },
+        pollToken: async () => ({ kind: "authorization_pending" as const }),
+        confirmStaged: async () => ({ status: 503 }),
+      },
+    });
+    const view = await requester.ensure(key);
+    const handle = { operationId: view.linkId, key };
+    const row = await custody.store.read(handle);
+    if (!row) throw new Error("missing operation");
+    const connectionId = randomUUID(), credentialId = randomUUID();
+    await db`INSERT INTO connections(id,billing_account_id,provider,credential_type,encrypted_credentials,encryption_key_id,scopes,created_by_user_id,service_identity,service_operation_id,service_credential_id,service_state)
+      VALUES(${connectionId},${key.billingAccountId},'cogni-node','api_key',${Buffer.from('ciphertext')},'fixture-v2',ARRAY['knowledge:read'],${COGNI_SYSTEM_PRINCIPAL_USER_ID},${JSON.stringify(key)}::text::jsonb,${handle.operationId},${credentialId},'staged')`;
+    const state = { ...row.state, phase: "confirm_unknown", nextAction: "confirm", connectionId, credentialId };
+    await db`UPDATE agent_service_link_operations SET phase='confirm_unknown',state=${JSON.stringify(state)}::text::jsonb,staged_connection_id=${connectionId},confirm_authorized_at=clock_timestamp() WHERE operation_id=${handle.operationId}`;
+    const lease = await custody.store.acquire(handle, randomUUID());
+    if (!lease?.leaseOwner) throw new Error("missing lease");
+    await db`UPDATE agent_service_link_operations SET lease_until=clock_timestamp()+interval '1 second' WHERE operation_id=${handle.operationId}`;
+    let release!: () => void, locked!: () => void;
+    const held = new Promise<void>((resolve) => { locked = resolve; });
+    const holder = second.begin(async (tx) => {
+      await tx`SELECT id FROM connections WHERE id=${connectionId} FOR UPDATE`;
+      locked();
+      await new Promise<void>((resolve) => { release = resolve; });
+    });
+    await held;
+    const delayed = custody.store.publish({ ...handle, revision: lease.revision, fence: lease.fence, leaseOwner: lease.leaseOwner }, {
+      expiresAt: new Date(Date.now()+86400000).toISOString(), renewUntil: new Date(Date.now()+2*86400000).toISOString(),
+    });
+    const verdict = expect(delayed).rejects.toThrow("custody_fence_expired");
+    await db`SELECT pg_sleep(1.2)`;
+    release();
+    await holder;
+    await verdict;
+    const connection = await db`SELECT service_state FROM connections WHERE id=${connectionId}`;
+    expect(connection[0]?.service_state).toBe("staged");
+    expect((await custody.store.read(handle))?.state.phase).toBe("confirm_unknown");
+  }, 10000);
+
 });

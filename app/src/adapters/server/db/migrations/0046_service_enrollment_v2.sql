@@ -96,6 +96,9 @@ BEGIN
     IF NEW.user_id IS DISTINCT FROM OLD.user_id OR NEW.token_hash IS DISTINCT FROM OLD.token_hash OR NEW.created_from IS DISTINCT FROM OLD.created_from THEN
       RAISE EXCEPTION 'credential identity is immutable' USING ERRCODE = 'check_violation';
     END IF;
+    IF NEW.issued_at IS DISTINCT FROM OLD.issued_at OR (OLD.confirmed_at IS NULL AND NEW.pending_expires_at > OLD.pending_expires_at) THEN
+      RAISE EXCEPTION 'pending deadline cannot be extended' USING ERRCODE = 'check_violation';
+    END IF;
     IF OLD.confirmed_at IS NOT NULL AND NEW.confirmed_at IS DISTINCT FROM OLD.confirmed_at THEN
       RAISE EXCEPTION 'confirmation cannot be erased or rewritten' USING ERRCODE = 'check_violation';
     END IF;
@@ -169,7 +172,7 @@ BEGIN
     END IF;
   END IF;
   IF NOT activation THEN RETURN NEW; END IF;
-  IF NEW.revoked_at IS NOT NULL OR NEW.pending_expires_at IS NULL OR NEW.pending_expires_at <= clock_timestamp() OR
+  IF NEW.revoked_at IS NOT NULL OR NEW.pending_expires_at IS NULL OR NEW.pending_expires_at <= clock_timestamp() OR NEW.pending_expires_at > NEW.issued_at + interval '15 minutes' OR
      NEW.expires_at > clock_timestamp() + interval '30 days' OR NEW.renew_until > NEW.expires_at + interval '14 days' THEN
     RAISE EXCEPTION 'ineligible or oversized credential activation' USING ERRCODE = 'check_violation';
   END IF;
@@ -189,7 +192,7 @@ BEGIN
     END IF;
   END IF;
   -- Locks above may have waited beyond the receipt or pending deadline.
-  IF NEW.revoked_at IS NOT NULL OR NEW.pending_expires_at IS NULL OR NEW.pending_expires_at <= clock_timestamp() OR
+  IF NEW.revoked_at IS NOT NULL OR NEW.pending_expires_at IS NULL OR NEW.pending_expires_at <= clock_timestamp() OR NEW.pending_expires_at > NEW.issued_at + interval '15 minutes' OR
      NEW.expires_at > clock_timestamp() + interval '30 days' OR NEW.renew_until > NEW.expires_at + interval '14 days' OR
      (NEW.created_from = 'service_enrollment' AND receipt.expires_at <= clock_timestamp()) THEN
     RAISE EXCEPTION 'activation deadline passed while waiting for authority locks' USING ERRCODE = 'check_violation';
