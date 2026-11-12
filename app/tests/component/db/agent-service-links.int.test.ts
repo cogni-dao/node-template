@@ -522,6 +522,48 @@ describe("v2 enrollment and requester SQL", () => {
     expect(history[0]?.approved_by).toBeNull(); expect(history[0]?.revoked_at).not.toBeNull();
   });
 
+  it.each(['dismiss','approve'] as const)('%s wins the real two-session Dismiss/approval race at the user authority boundary', async winner => {
+    const {proof}=await proofAt(), accepted=await provider().acceptProof(proof,await hashAgentKey('denial-race'));
+    if (!accepted.ok) throw new Error('missing acceptance');
+    const user=accepted.principalUserId, admin=randomUUID(); await db`INSERT INTO users(id,name) VALUES(${admin},'race admin')`;
+    let locked!:()=>void,release!:()=>void,entered!:()=>void,waitingPid=0;
+    const held=new Promise<void>(resolve=>{locked=resolve;}), go=new Promise<void>(resolve=>{release=resolve;}), queued=new Promise<void>(resolve=>{entered=resolve;});
+    const first=db.begin(async tx=>{
+      await tx`SELECT pg_advisory_xact_lock(hashtext(${user}))`;
+      await tx`SELECT user_id FROM agent_principals WHERE user_id=${user} FOR UPDATE`;
+      locked(); await go;
+      const grants=createPostgresAgentGrantsStore(tx as unknown as SqlTag);
+      return winner==='dismiss' ? grants.denyPending({principalUserId:user,scope:'knowledge:read'}) :
+        grants.approvePending({principalUserId:user,scope:'knowledge:read',approvedBy:admin});
+    });
+    await held;
+    const follower=second.begin(async tx=>{
+      const pid=await tx`SELECT pg_backend_pid() AS pid`; waitingPid=Number(pid[0]?.pid); entered();
+      const grants=createPostgresAgentGrantsStore(tx as unknown as SqlTag);
+      return winner==='dismiss' ? grants.approvePending({principalUserId:user,scope:'knowledge:read',approvedBy:admin}) :
+        grants.denyPending({principalUserId:user,scope:'knowledge:read'});
+    });
+    let failure:unknown;
+    try {
+      await queued;
+      let blocked=false; const deadline=Date.now()+2000;
+      while (!blocked && Date.now()<deadline) {
+        blocked=(await db`SELECT 1 FROM pg_locks WHERE pid=${waitingPid} AND locktype='advisory' AND NOT granted`).length>0;
+      }
+      expect(blocked).toBe(true); // Both sessions reached the actual serialized writer, not a timer approximation.
+    } catch(error) { failure=error; } finally { release(); }
+    const results=await Promise.all([first,follower]); if (failure) throw failure;
+    expect(results).toEqual([true,false]);
+    const receipt=await db`SELECT status,terminal_at FROM agent_service_enrollments WHERE operation_id=${proof.operationId}`;
+    const role=await db`SELECT approved_by,revoked_at FROM agent_roles WHERE enrollment_operation_id=${proof.operationId}`;
+    expect(receipt[0]?.status).toBe(winner==='dismiss'?'denied':'open');
+    if (winner==='dismiss') {
+      expect(receipt[0]?.terminal_at).not.toBeNull(); expect(role[0]?.approved_by).toBeNull(); expect(role[0]?.revoked_at).not.toBeNull();
+    } else {
+      expect(receipt[0]?.terminal_at).toBeNull(); expect(role[0]?.approved_by).toBe(admin); expect(role[0]?.revoked_at).toBeNull();
+    }
+  },10000);
+
   it("replacement proves absence by indexed live ranges despite ten thousand expired unrevoked credentials", async () => {
     const user = randomUUID();
     await db`INSERT INTO users(id,name) VALUES(${user},'retained audit')`;
