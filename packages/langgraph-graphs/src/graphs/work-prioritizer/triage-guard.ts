@@ -6,7 +6,7 @@
  * One call carries status, scores and labels together with `expectedRevision`. The guard states only what the triage
  * guide requires. The host ToolRunner still authorizes `work_item:transition`, the same grant and door an outside agent uses.
  *   - the triage guide was read this run, and the item was read this run;
- *   - the call carries the exact revision read, and `set` holds only status, scores and labels;
+ *   - the call carries the exact revision read, and `set` holds only status, scores, labels and moves;
  *   - a score of 4-5 cites a source read this run, never the item's own page;
  *   - at most MAX_CHANGED_ITEMS_PER_RUN distinct items change per run;
  *   - labels keep every existing label and add only a listed goal;
@@ -28,7 +28,7 @@ import {
   type StructuredToolInterface,
 } from "@langchain/core/tools";
 import { z } from "zod";
-import type { ObservedItem, RunReceipts } from "./receipts";
+import { ObservedMoves, type ObservedItem, type RunReceipts } from "./receipts";
 import { MAX_CHANGED_ITEMS_PER_RUN } from "./tools";
 
 const ROUTES = new Set([
@@ -46,7 +46,7 @@ const ROUTABLE_FROM = new Set([
   "needs_implement",
 ]);
 /** The only fields a triage write may set. */
-const TRIAGE_FIELDS = new Set(["status", "scores", "labels"]);
+const TRIAGE_FIELDS = new Set(["status", "scores", "labels", "moves"]);
 const EVIDENCE_FROM = 4;
 
 type Scores = NonNullable<ObservedItem["scores"]>;
@@ -74,6 +74,14 @@ function sameScores(a: Scores | undefined, b: Scores | undefined): boolean {
 const sameLabels = (a: readonly string[], b: readonly string[]) =>
   a.length === b.length && a.every((label) => b.includes(label));
 
+type Moves = NonNullable<ObservedItem["moves"]>;
+/** Same metrics with the same directions; the server-owned baseline never counts. */
+const sameMoves = (a: Moves, b: Moves) =>
+  a.length === b.length &&
+  a.every((m) =>
+    b.some((n) => n.metricId === m.metricId && n.direction === m.direction),
+  );
+
 export function createTriageGuard(
   receipts: RunReceipts,
   writer: StructuredToolInterface,
@@ -100,7 +108,7 @@ export function createTriageGuard(
     if (Object.keys(set).some((key) => !TRIAGE_FIELDS.has(key)))
       return reject(
         "field_not_allowed",
-        "triage sets only status, scores and labels; never priority, rank, summary, outcome or title",
+        "triage sets only status, scores, labels and moves; never priority, rank, summary, outcome or title",
       );
     if (input.expectedRevision !== item.revision)
       return reject(
@@ -170,7 +178,11 @@ export function createTriageGuard(
       (set.scores === null && !item.scores);
     const labels =
       set.labels === undefined || sameLabels(set.labels, item.labels);
-    return status && scores && labels;
+    // An item with no declaration (`moves` absent) is not the same as one that declared `[]`.
+    const moves =
+      set.moves === undefined ||
+      (item.moves !== undefined && sameMoves(set.moves, item.moves));
+    return status && scores && labels && moves;
   }
 
   const run = async (
@@ -252,6 +264,7 @@ export function createTriageGuard(
             status: z.string(),
             labels: z.array(z.string()),
             scores: ObservedScores.optional(),
+            moves: ObservedMoves.optional(),
           })
           .safeParse(JSON.parse(text));
         if (dto.success)
@@ -261,6 +274,7 @@ export function createTriageGuard(
             status: dto.data.status,
             labels: dto.data.labels,
             scores: dto.data.scores,
+            moves: dto.data.moves,
           });
         else receipts.items.delete(item.id);
       }

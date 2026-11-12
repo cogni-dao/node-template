@@ -11,16 +11,21 @@ import {
 	scoreBrief,
 	summarizeBriefs,
 } from "./briefs.js";
-import type { MetricBudget, MetricSample } from "./contracts.js";
+import type {
+	EditsStage,
+	EditsTimingUpdate,
+	MetricBudget,
+	MetricSample,
+} from "./contracts.js";
 import {
 	appendsHistory,
 	approvedLines,
-	scoreNoInlineHistory,
-	summarizeNoInlineHistory,
 	NO_INLINE_HISTORY_MAX_FIELD_CHARS,
 	NO_INLINE_HISTORY_RULES_VERSION,
 	type NoInlineHistorySubject,
 	noInlineHistoryEvidenceRefs,
+	scoreNoInlineHistory,
+	summarizeNoInlineHistory,
 } from "./no-inline-history.js";
 
 export async function readWorkCount(
@@ -678,7 +683,9 @@ const NO_INLINE_HISTORY_SOURCE = {
  * in only while the row and byte caps hold (the same statement the brief
  * calculator sends, so both read one scope).
  */
-export function noInlineHistoryStateSql(subject: NoInlineHistorySubject): string {
+export function noInlineHistoryStateSql(
+	subject: NoInlineHistorySubject,
+): string {
 	return briefConformanceSql(subject === "work-items" ? "items" : "entries");
 }
 
@@ -916,19 +923,37 @@ async function readRows(
 	sql: Sql,
 	text: string,
 	read: Read,
+	stage: EditsStage,
+	timing?: (update: EditsTimingUpdate) => void,
 ): Promise<
-	{ rows: ReadonlyArray<Record<string, unknown>>; error?: undefined } | { error: string }
+	| { rows: ReadonlyArray<Record<string, unknown>>; error?: undefined }
+	| { error: string }
 > {
-	return read(async (signal) => {
+	const report = (update: EditsTimingUpdate) => {
 		try {
-			return { rows: await run(sql, text, signal) };
-		} catch (error) {
-			// A timeout keeps its own failure; every other read error is
-			// source_failed, recorded by class only.
-			if (signal.aborted) throw error;
-			return { error: errorClass(error) };
+			timing?.(update);
+		} catch {
+			/* diagnostics are optional */
 		}
-	});
+	};
+	report({ stage, phase: "start" });
+	try {
+		const result = await read(async (signal) => {
+			try {
+				return { rows: await run(sql, text, signal) };
+			} catch (error) {
+				// A timeout keeps its own failure; every other read error is
+				// source_failed, recorded by class only.
+				if (signal.aborted) throw error;
+				return { error: errorClass(error) };
+			}
+		});
+		report({ stage, phase: result.error === undefined ? "ok" : "error" });
+		return result;
+	} catch (error) {
+		report({ stage, phase: "error" });
+		throw error;
+	}
 }
 
 /** The window's commit hashes, one source call shared by both tables. */
@@ -936,6 +961,7 @@ async function readWindowCommits(
 	sql: Sql,
 	window: { start: string; end: string },
 	read: Read,
+	timing?: (update: EditsTimingUpdate) => void,
 ): Promise<WindowCommitsRead> {
 	const failed = (
 		reason: NonNullable<MetricSample["reason"]>,
@@ -946,6 +972,8 @@ async function readWindowCommits(
 		sql,
 		noInlineHistoryWindowCommitsSql(window),
 		read,
+		"windowCommits",
+		timing,
 	);
 	if (result.error !== undefined)
 		return failed("source_failed", null, [result.error]);
@@ -957,6 +985,16 @@ async function readWindowCommits(
 		: null;
 	const n = Number(first.n);
 	if (!Number.isFinite(n)) return failed("incomplete_or_invalid_source", asOf);
+	if (
+		first.n != null &&
+		String(first.n).trim() !== "" &&
+		Number.isSafeInteger(n) &&
+		n >= 0
+	) {
+		try {
+			timing?.({ stage: "windowCommits", phase: "counts", rows: n });
+		} catch {}
+	}
 	if (n === 0) return { ok: true, commits: [], asOf };
 	// Over the cap the statement sends the totals row alone.
 	if (
@@ -980,6 +1018,7 @@ async function readEditsOf(
 	window: { start: string; end: string },
 	commits: string[],
 	read: Read,
+	timing?: (update: EditsTimingUpdate) => void,
 ): Promise<EditRead> {
 	const failed = (
 		reason: NonNullable<MetricSample["reason"]>,
@@ -990,6 +1029,8 @@ async function readEditsOf(
 		sql,
 		noInlineHistoryEditsSql(table, commits),
 		read,
+		table === "work-items" ? "workDiff" : "knowledgeDiff",
+		timing,
 	);
 	if (result.error !== undefined)
 		return failed("source_failed", null, [result.error]);
@@ -1003,6 +1044,25 @@ async function readEditsOf(
 	const bytes = Number(first.bytes);
 	if (!Number.isFinite(n) || !Number.isFinite(bytes))
 		return failed("incomplete_or_invalid_source", asOf);
+	if (
+		first.n != null &&
+		String(first.n).trim() !== "" &&
+		first.bytes != null &&
+		String(first.bytes).trim() !== "" &&
+		Number.isSafeInteger(n) &&
+		n >= 0 &&
+		Number.isSafeInteger(bytes) &&
+		bytes >= 0
+	) {
+		try {
+			timing?.({
+				stage: table === "work-items" ? "workDiff" : "knowledgeDiff",
+				phase: "counts",
+				rows: n,
+				bytes,
+			});
+		} catch {}
+	}
 	if (n === 0) return { ok: true, edits: [], mergeRepeats: 0, asOf };
 	// Over a cap the statement sends the totals row alone.
 	if (
@@ -1090,6 +1150,7 @@ export async function readNoInlineHistoryEdits(
 	output: "share" | "count",
 	window: { start: string; end: string },
 	read: Read,
+	timing?: (update: EditsTimingUpdate) => void,
 ): Promise<MetricSample> {
 	const unit = output === "share" ? "%" : "edits";
 	const start = new Date(Date.parse(window.start)).toISOString();
@@ -1113,16 +1174,26 @@ export async function readNoInlineHistoryEdits(
 	let mergeRepeats = 0;
 	// One read of the window's commits serves both tables. No commit in the
 	// window means no edit, so the diff statements are not run.
-	const inWindow = await readWindowCommits(sql, { start, end }, read);
+	const inWindow = await readWindowCommits(sql, { start, end }, read, timing);
 	if (!inWindow.ok) {
 		evidenceRefs.push(...inWindow.evidence);
 		return unknown(inWindow.reason);
 	}
 	for (const table of ["work-items", "atoms"] as const) {
 		const part: EditRead = inWindow.commits.length
-			? await readEditsOf(sql, table, { start, end }, inWindow.commits, read)
+			? await readEditsOf(
+					sql,
+					table,
+					{ start, end },
+					inWindow.commits,
+					read,
+					timing,
+				)
 			: { ok: true, edits: [], mergeRepeats: 0, asOf: inWindow.asOf };
-		watermarks.push({ source: NO_INLINE_HISTORY_SOURCE[table], asOf: part.asOf });
+		watermarks.push({
+			source: NO_INLINE_HISTORY_SOURCE[table],
+			asOf: part.asOf,
+		});
 		if (!part.ok) {
 			evidenceRefs.push(...part.evidence);
 			return unknown(part.reason);
@@ -1149,6 +1220,7 @@ export async function readNoInlineHistoryEdits(
 	});
 	if (output === "count") return sample(edits.length);
 	if (edits.length === 0) return unknown("zero_denominator");
-	if (edits.length < NO_INLINE_HISTORY_MIN_EDITS) return unknown("insufficient_history");
+	if (edits.length < NO_INLINE_HISTORY_MIN_EDITS)
+		return unknown("insufficient_history");
 	return sample((100 * (edits.length - appending)) / edits.length);
 }

@@ -32,6 +32,9 @@ export const COGNI_READ_TOOL_IDS = [
 export const FLASH_SUBAGENT_MODEL = "deepseek-v4-flash";
 export const COGNI_DECIDE_TOOL_IDS = [
   GOAL_LIST_NAME,
+  // Triage names the metric an item moves and judges the goal score from its KPI reading (task.0099).
+  "core__goal_progress",
+  "core__metric_list",
   KNOWLEDGE_READ_NAME,
   KNOWLEDGE_SEARCH_NAME,
   WORK_ITEM_QUERY_NAME,

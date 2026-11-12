@@ -13,6 +13,9 @@ import {
 } from "@langchain/core/messages";
 import { z } from "zod";
 
+export const ObservedMoves = z.array(
+  z.object({ metricId: z.string(), direction: z.string() }),
+);
 const Goal = z.object({
   id: z.string(),
   content: z.string(),
@@ -32,6 +35,7 @@ const Item = z.object({
   summary: z.string().optional(),
   specRefs: z.array(z.string()).optional(),
   sourceUrl: z.string().url().optional(),
+  moves: ObservedMoves.optional(),
   scores: z
     .record(
       z.string(),

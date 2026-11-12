@@ -25,12 +25,12 @@ vi.mock("@/shared/observability", () => ({
   makeLogger: () => ({ error: mocks.error }),
 }));
 
-import type { ServiceAccountService } from "@/ports";
 import {
   assertSystemTenantAtBoot,
   resetStartupAssertionsForTest,
   startSystemTenantAssertionOnBoot,
 } from "@/bootstrap/startup-assertions";
+import type { ServiceAccountService } from "@/ports";
 
 const service = {} as ServiceAccountService;
 
@@ -46,11 +46,13 @@ afterEach(() => {
 describe("boot system-tenant assertion (bug.0022)", () => {
   it("exits non-zero and logs critical when verifySystemTenant rejects", async () => {
     mocks.verifySystemTenant.mockRejectedValue(
-      new Error("FATAL: cogni_system billing account missing. Run migrations.")
+      new Error("FATAL: cogni_system billing account missing. Run migrations."),
     );
     const exit = vi.fn();
 
-    await startSystemTenantAssertionOnBoot(service, { exit, force: true });
+    await expect(
+      startSystemTenantAssertionOnBoot(service, { exit, force: true }),
+    ).rejects.toThrow("cogni_system");
 
     expect(mocks.verifySystemTenant).toHaveBeenCalledWith(service);
     expect(exit).toHaveBeenCalledExactlyOnceWith(1);
@@ -59,7 +61,7 @@ describe("boot system-tenant assertion (bug.0022)", () => {
         event: "startup.system_tenant.failed",
         severity: "critical",
       }),
-      expect.stringContaining("exiting")
+      expect.stringContaining("exiting"),
     );
   });
 
@@ -77,7 +79,7 @@ describe("boot system-tenant assertion (bug.0022)", () => {
     mocks.verifySystemTenant.mockRejectedValue(new Error("connection refused"));
 
     await expect(assertSystemTenantAtBoot(service)).rejects.toThrow(
-      "connection refused"
+      "connection refused",
     );
   });
 
@@ -91,13 +93,14 @@ describe("boot system-tenant assertion (bug.0022)", () => {
       force: true,
       timeoutMs: 5000,
     });
+    const rejected = expect(pending).rejects.toThrow("exceeded");
     await vi.advanceTimersByTimeAsync(5000);
-    await pending;
+    await rejected;
 
     expect(exit).toHaveBeenCalledExactlyOnceWith(1);
     expect(mocks.error).toHaveBeenCalledWith(
       expect.objectContaining({ severity: "critical" }),
-      expect.any(String)
+      expect.any(String),
     );
   });
 

@@ -277,6 +277,7 @@ export function createGoalMetrics(deps: {
 				p.output,
 				ctx.window,
 				(source) => ctx.read((signal) => source(signal)),
+				ctx.editsTiming,
 			);
 		},
 	});
