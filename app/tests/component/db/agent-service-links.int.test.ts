@@ -34,6 +34,7 @@ import {
   createPostgresRequesterCustody,
   requesterMaintenanceTick,
 } from "@cogni/agent-grants/enrollment-requester";
+import { EnrollmentClientError } from "@cogni/agent-grants/enrollment-client";
 import {
   COGNI_SYSTEM_BILLING_ACCOUNT_ID,
   COGNI_SYSTEM_PRINCIPAL_USER_ID,
@@ -295,6 +296,40 @@ describe("v2 enrollment and requester SQL", () => {
       original
     );
   });
+  it("explicit never-accepted replacement preserves local fences and the real target initial CAS", async () => {
+    const cipher = createCustodyCipher(new Uint8Array(32).fill(8), "fixture-v2");
+    const signing = await generateKeyPair("EdDSA");
+    const custody = createPostgresRequesterCustody(client(), {
+      cipher, systemPrincipalUserId: COGNI_SYSTEM_PRINCIPAL_USER_ID, readReadyConnection: async () => null,
+    });
+    let clock = Date.now() - 26 * 3600000;
+    const requester = createEnrollmentRequester({ ...custody, cipher, fetch: discoveryFetch,
+      now: () => new Date(clock), signer: createEnrollmentProofSigner({ kid: "fixture", key: signing.privateKey }),
+      transport: {
+        postProof: async () => { throw new EnrollmentClientError("enrollment_rejected", 404, new Date().toISOString()); },
+        pollToken: async () => ({ kind: "authorization_pending" as const }), confirmStaged: async () => ({ status: 503 }),
+      },
+    });
+    const first = await requester.ensure(key), oldHandle = { operationId: first.linkId, key };
+    clock = Date.now();
+    expect((await requester.advance(oldHandle)).phase).toBe("expired_unknown");
+    const old = await custody.store.read(oldHandle);
+    if (!old) throw new Error("missing expired intent");
+    expect(old.encryptedSecrets).toBeNull();
+    const next = await requester.reenroll(oldHandle, old.revision);
+    const replacement = await custody.store.read({ operationId: next.linkId, key });
+    if (!replacement) throw new Error("missing replacement");
+    expect(replacement.state.intent).toMatchObject({ generation: 1, expectedGeneration: 0, expectedOperationId: null });
+    const current = await db`SELECT operation_id,current,fence FROM agent_service_link_operations ORDER BY current`;
+    expect(current.map(r => [r.operation_id, r.current])).toEqual([[first.linkId, false], [next.linkId, true]]);
+    expect(Number(current[0]?.fence)).toBeGreaterThan(old.fence);
+    expect(await custody.store.acquire(oldHandle, randomUUID())).toBeNull();
+    const baseline = (await proofAt()).proof;
+    const proof = { ...baseline, ...replacement.state.intent, intentDigest: replacement.state.intentDigest,
+      jti: replacement.state.intent.originalStartJti, iat: replacement.state.intent.originalStartIat, exp: replacement.state.intent.originalStartExp };
+    expect(await provider().acceptProof(proof, "f".repeat(64))).toMatchObject({ ok: true });
+  });
+
   it("publication rolls back ready custody when a connection lock outlives the lease", async () => {
     const cipher = createCustodyCipher(new Uint8Array(32).fill(8), "fixture-v2");
     const signing = await generateKeyPair("EdDSA");

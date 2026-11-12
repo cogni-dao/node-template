@@ -5,4 +5,4 @@
 import { serviceLinkRoute } from "@/app/_lib/service-links";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-export const POST = serviceLinkRoute("human", "create");
+export const POST = serviceLinkRoute("human", "create", { routeId: "service.links.create", sameDoor: "service-link.manage" });

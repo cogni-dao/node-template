@@ -10,7 +10,8 @@
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { DEFERRED_WRITE_ROUTES, NO_ROUTE_TWIN, OPEN_BY_DESIGN_ROUTES, ROUTE_ONLY_CAPABILITIES, SAME_DOOR_ROUTES } from "@cogni/agent-grants";
+import { authorizeCaller, type AgentGrantsStore, DEFERRED_WRITE_ROUTES, NO_ROUTE_TWIN, OPEN_BY_DESIGN_ROUTES, ROUTE_ONLY_CAPABILITIES, SAME_DOOR_ROUTES } from "@cogni/agent-grants";
+import { createAdminCheck } from "@/bootstrap/agent-authority";
 import { CORE_TOOL_BUNDLE, VCS_TOOL_BUNDLE } from "@cogni/ai-tools";
 import { describe, expect, it } from "vitest";
 
@@ -45,12 +46,22 @@ describe("same-door routes", () => {
     for (const tool of declared) expect(tool && tool in DECLARED, String(tool)).toBe(true);
   });
 
-  it("S4: no route-twin scope is admin-subject until an AI admin check exists (item I2); otherwise any bearer with a role row would pass it", () => {
+  it("S4: admin route capabilities are explicit and bearer authority never comes from a role row alone", async () => {
     const contracts = new Map([...CORE_TOOL_BUNDLE, ...VCS_TOOL_BUNDLE].map((t) => [t.contract.name, t.contract]));
     for (const tool of Object.keys(SAME_DOOR_ROUTES))
       expect(contracts.get(tool)?.requires?.subject, tool).not.toBe("admin");
-    for (const [id, cap] of Object.entries(ROUTE_ONLY_CAPABILITIES))
-      expect(cap.requires.subject, id).not.toBe("admin");
+    expect(Object.entries(ROUTE_ONLY_CAPABILITIES).filter(([, cap]) => cap.requires.subject === "admin").map(([id]) => id)).toEqual(["service-link.manage"]);
+    const roles = new Proxy({} as AgentGrantsStore, { get: (_target, name) => {
+      if (name === "hasLiveRole") return async () => true;
+      throw new Error(`unexpected role-store read: ${String(name)}`);
+    } });
+    const check = createAdminCheck(async () => [], { check: async (actor) => actor.userId === "dao-approved-ai" ? { ok: true } : { ok: false, errorCode: "authz_denied" } });
+    const capability = ROUTE_ONLY_CAPABILITIES["service-link.manage"];
+    if (!capability) throw new Error("missing service-link declaration");
+    const requires = capability.requires;
+    expect(await authorizeCaller(roles, check, { userId: "role-only-agent", via: "bearer", requires })).toMatchObject({ decision: "deny", reason: "subject_not_admin" });
+    expect(await authorizeCaller(roles, check, { userId: "dao-approved-ai", via: "bearer", requires })).toMatchObject({ decision: "allow" });
+    expect(await authorizeCaller(roles, async () => "unavailable", { userId: "dao-approved-ai", via: "bearer", requires })).toMatchObject({ decision: "deny", code: "authz_unavailable" });
     // The admin-subject tools are exactly the allowlisted ones.
     for (const [name, contract] of contracts)
       if (contract.requires?.subject === "admin") expect(name in NO_ROUTE_TWIN, name).toBe(true);

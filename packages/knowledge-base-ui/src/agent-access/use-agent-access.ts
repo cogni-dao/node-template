@@ -77,6 +77,8 @@ export function useAgentAccess(
   const [error, setError] = useState<string | null>(null);
   const alive = useRef(true);
   const seq = useRef(0);
+  // Refresh only the prefix explicitly opened by this human, including after a later-page edit.
+  const loadedPages = useRef(1);
   /** The latest state, readable outside React's updater. */
   const current = useRef<AgentAccessState>({ status: "loading" });
   /** True only after the server said "not an admin" (canManage false, 401 or 403). A transient failure never sets it. */
@@ -95,51 +97,47 @@ export function useAgentAccess(
   const reload = useCallback(async () => {
     const mine = ++seq.current;
     try {
-      const res = await fetch(endpoints.roles, {
-        cache: "no-store",
-        credentials: "same-origin",
-        headers: { accept: "application/json" },
-      });
-      if (!alive.current || mine !== seq.current) return;
-      // 404 means this node has no such route: permanent, so it is confirmed like a 401 or 403 and focus does not retry it.
-      if (res.status === 401 || res.status === 403 || res.status === 404) {
-        confirmedNotAdmin.current = true;
-        return commit({ status: "hidden" });
-      }
-      if (res.status === 503) {
-        confirmedNotAdmin.current = false;
-        return commit({ status: "unavailable" });
-      }
-      if (!res.ok) return transientFailure();
-      let body: unknown;
-      try {
-        body = await res.json();
-      } catch {
-        body = null;
-      }
-      if (!alive.current || mine !== seq.current) return;
-      if (isAdminView(body)) {
-        confirmedNotAdmin.current = false;
-        return commit({
-          status: "ready",
-          view: {
-            ...body,
-            more:
-              typeof (body as { more?: unknown }).more === "number"
-                ? body.more
-                : 0,
-          },
+      let view: NodeAiAccessView | undefined;
+      const pages = loadedPages.current;
+      for (let page = 0; page < pages; page++) {
+        const cursor = view?.nextCursor;
+        const url = cursor ? `${endpoints.roles}?${new URLSearchParams({
+          afterPrincipal: cursor.principalUserId, afterScope: cursor.scope,
+        })}` : endpoints.roles;
+        const res = await fetch(url, {
+          cache: "no-store", credentials: "same-origin", headers: { accept: "application/json" },
         });
+        if (!alive.current || mine !== seq.current) return;
+        // A revoked administrator must lose the whole loaded prefix, including later pages.
+        if (res.status === 401 || res.status === 403 || res.status === 404) {
+          confirmedNotAdmin.current = true;
+          return commit({ status: "hidden" });
+        }
+        if (res.status === 503) {
+          confirmedNotAdmin.current = false;
+          return commit({ status: "unavailable" });
+        }
+        if (!res.ok) return transientFailure();
+        let body: unknown;
+        try { body = await res.json(); } catch { body = null; }
+        if (!alive.current || mine !== seq.current) return;
+        if (!isAdminView(body)) {
+          if (typeof body === "object" && body !== null &&
+              (body as { canManage?: unknown }).canManage === false) {
+            confirmedNotAdmin.current = true;
+            return commit({ status: "hidden" });
+          }
+          return transientFailure();
+        }
+        const controls = new Map((view?.permissions ?? []).map(p => [`${p.principalUserId}|${p.scope}`, p]));
+        for (const permission of body.permissions) controls.set(`${permission.principalUserId}|${permission.scope}`, permission);
+        view = { ...body, more: typeof body.more === "number" ? body.more : 0, permissions: [...controls.values()] };
+        if (!view.nextCursor) break;
       }
-      if (
-        typeof body === "object" &&
-        body !== null &&
-        (body as { canManage?: unknown }).canManage === false
-      ) {
-        confirmedNotAdmin.current = true;
-        return commit({ status: "hidden" });
+      if (view) {
+        confirmedNotAdmin.current = false;
+        commit({ status: "ready", view });
       }
-      transientFailure();
     } catch {
       if (alive.current && mine === seq.current) transientFailure();
     }
@@ -147,6 +145,7 @@ export function useAgentAccess(
 
   useEffect(() => {
     alive.current = true;
+    loadedPages.current = 1;
     void reload();
     // Focus re-checks, except after the server confirmed this caller is not an admin (no wasted admin check). An admin whose
     // first load failed transiently is not "confirmed", so focus retries and the block can appear.
@@ -201,6 +200,7 @@ export function useAgentAccess(
           `${permission.principalUserId}|${permission.scope}`,
           permission
         );
+      loadedPages.current += 1;
       commit({
         status: "ready",
         view: { ...body, permissions: [...controls.values()] },

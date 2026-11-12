@@ -27,11 +27,13 @@ const json = (body: unknown, status: number) =>
   NextResponse.json(body, { status, headers: { "cache-control": "no-store" } });
 export function serviceLinkRoute(
   plane: "human" | "ai",
-  action: "create" | "read" | "knowledge" | "disconnect"
+  action: "create" | "read" | "knowledge" | "disconnect",
+  config: { routeId: string; sameDoor: "service-link.manage" }
 ) {
+  if (config.routeId !== `service.links.${action}`) throw new Error("service_link_route_mismatch");
   return wrapPublicRoute<{
     params: Promise<{ linkId: string; entryId?: string }>;
-  }>({ routeId: `service.links.${action}` }, async (ctx, request, context) => {
+  }>({ routeId: config.routeId, noStore: true }, async (ctx, request, context) => {
     if (plane === "human") {
       const refusal = refuseNonSession(request, ctx.log);
       if (refusal) return refusal;
@@ -50,17 +52,13 @@ export function serviceLinkRoute(
           { error: plane === "ai" ? "not_found" : "unauthorized" },
           plane === "ai" ? 404 : 401
         );
-      // Shared NodeAdminAuthority; a credential supplies identity only, never session fallback or self approval.
-      const authority = getContainer().agentAuthority;
-      const admin = await authority.adminCheck(subject.id);
-      if (admin !== "allow")
-        return json(
-          {
-            error:
-              admin === "unavailable" ? "authz_unavailable" : "authz_denied",
-          },
-          admin === "unavailable" ? 503 : 403
-        );
+      // The declared door checks both the bearer's scoped role and the same DAO admin authority used by humans.
+      const decision = await getContainer().agentAuthority.authorizeRoute({
+        toolId: config.sameDoor, routeId: config.routeId, userId: subject.id,
+        via: plane === "human" ? "session" : "bearer",
+      });
+      if (decision.decision !== "allow")
+        return json({ error: decision.code }, decision.code === "authz_unavailable" ? 503 : 403);
       if (action === "create" && !startLimiter.consume(subject.id))
         return json({ error: "rate_limited" }, 429);
       const shared = createServiceLinkHandlers({

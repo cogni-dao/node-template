@@ -174,13 +174,22 @@ export function createPostgresRequesterCustody(
           return null;
         const current =
           await tx`SELECT 1 FROM agent_service_link_operations WHERE operation_id=${r.operationId} AND current`;
-        if (
-          !current.length ||
-          draft.state.intent.expectedOperationId !== r.operationId ||
-          draft.state.intent.expectedGeneration !== r.state.intent.generation ||
-          canonicalJson(draft.state.key) !== canonicalJson(handle.key)
-        )
-          return null;
+        const basis = draft.state.replacementBasis;
+        if (!basis || basis.operationId !== r.operationId ||
+            basis.intentDigest !== r.state.intentDigest ||
+            !Number.isFinite(Date.parse(basis.observedAt))) return null;
+        const absent = basis.disposition === "not_accepted";
+        if (absent &&
+            (Date.parse(basis.observedAt) < r.state.intent.originalStartExp * 1000 ||
+             r.state.acceptedAt || r.state.enrollmentId ||
+             r.state.connectionId || r.state.credentialId)) return null;
+        const expectedGeneration = absent ? r.state.intent.expectedGeneration : r.state.intent.generation;
+        const expectedOperationId = absent ? r.state.intent.expectedOperationId : r.operationId;
+        if (!current.length ||
+            draft.state.intent.expectedGeneration !== expectedGeneration ||
+            draft.state.intent.expectedOperationId !== expectedOperationId ||
+            draft.state.intent.generation !== expectedGeneration + 1 ||
+            canonicalJson(draft.state.key) !== canonicalJson(handle.key)) return null;
         await disable(tx, r);
         await tx`UPDATE agent_service_link_operations SET current=false,fence=fence+1,revision=revision+1,lease_owner=NULL,lease_until=NULL WHERE operation_id=${r.operationId}`;
         const key = handle.key;

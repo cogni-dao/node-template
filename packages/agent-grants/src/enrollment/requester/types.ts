@@ -20,7 +20,15 @@ export type LinkPhase =
   | "expired"
   | "expired_unknown"
   | "needs_reenroll";
+export interface ReplacementBasis {
+  operationId: string;
+  intentDigest: string;
+  disposition: "not_accepted" | "terminal";
+  observedAt: string;
+}
 export interface LinkState {
+  /** Authenticated accepted-only reconciliation for an explicit local replacement; never an automatic restart. */
+  replacementBasis?: ReplacementBasis;
   key: ConnectionKey;
   intent: EnrollmentIntent;
   intentDigest: string;

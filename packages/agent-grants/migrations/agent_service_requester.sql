@@ -62,6 +62,8 @@ CREATE INDEX "agent_service_links_secret_idx" ON "agent_service_link_operations"
 --> statement-breakpoint
 CREATE UNIQUE INDEX "connections_service_ready_unique" ON "connections" USING btree ("service_key_digest") WHERE "connections"."provider" = 'cogni-node' AND "connections"."service_state" = 'ready';
 --> statement-breakpoint
+DROP INDEX "connections_billing_account_provider_active_idx";
+--> statement-breakpoint
 CREATE UNIQUE INDEX "connections_billing_account_provider_active_idx" ON "connections" USING btree ("billing_account_id","provider") WHERE "connections"."revoked_at" IS NULL AND "connections"."provider" <> 'cogni-node';
 --> statement-breakpoint
 ALTER TABLE "connections" ADD CONSTRAINT "connections_provider_check" CHECK ("connections"."provider" IN ('openai-chatgpt', 'openai-compatible', 'github', 'google', 'bluesky', 'cogni-node'));

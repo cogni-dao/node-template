@@ -41,6 +41,22 @@ const answer = (status: number, body: unknown): ServiceLinkAnswer => ({
   body,
   headers: { "cache-control": "no-store" },
 });
+/** Redact after decoding so escaped JSON values and object keys cannot reconstruct a credential. */
+function redactDecodedKnowledge(value: unknown, bearer: string): unknown {
+  let remaining = 50000;
+  const redact = (text: string) => text.split(bearer).join("[REDACTED]")
+    .replace(new RegExp(REVOCABLE_KEY_SCAN_PATTERN, "g"), "[REDACTED]")
+    .replace(/cogni_ag_sk_v1_[A-Za-z0-9_.-]+/g, "[REDACTED]");
+  const visit = (item: unknown, depth: number): unknown => {
+    if (--remaining < 0 || depth > 64) throw new Error("target_response_too_complex");
+    if (typeof item === "string") return redact(item);
+    if (Array.isArray(item)) return item.map((child) => visit(child, depth + 1));
+    if (item && typeof item === "object")
+      return Object.fromEntries(Object.entries(item).map(([name, child]) => [redact(name), visit(child, depth + 1)]));
+    return item;
+  };
+  return visit(value, 0);
+}
 export function createServiceLinkHandlers(host: ServiceLinkHost) {
   const handle = async (id: string) =>
     z.string().uuid().safeParse(id).success ? host.handleForId(id) : null;
@@ -143,10 +159,7 @@ export function createServiceLinkHandlers(host: ServiceLinkHost) {
         if (!res.ok) return answer(503, { error: "target_unavailable" });
         const body = await readBoundedText(res, 1024 * 1024);
         if (!body.ok) return answer(503, { error: "target_unavailable" });
-        const scrubbed = body.text
-          .replace(new RegExp(REVOCABLE_KEY_SCAN_PATTERN, "g"), "[REDACTED]")
-          .replace(/cogni_ag_sk_v1_[A-Za-z0-9_.-]+/g, "[REDACTED]");
-        return answer(200, JSON.parse(scrubbed));
+        return answer(200, redactDecodedKnowledge(JSON.parse(body.text), bearer));
       } catch {
         return answer(503, { error: "target_unavailable" });
       }

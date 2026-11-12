@@ -115,6 +115,44 @@ const SAVE = /^node-ai: Save notes$/;
 const ASK = /^Helper bot: Update work items$/;
 
 describe("AgentAccessSection: an admin", () => {
+  it("forwards cursors, deduplicates recurring rows, and retains later-page Off/On controls after refresh", async () => {
+    let laterOn = true;
+    const cursor = { principalUserId: "external-a", scope: "knowledge:read" };
+    const later = () => row({ section: "outside", principalUserId: "external-z", who: "Later agent", outside: true,
+      scope: "knowledge:read", label: "Read notes", description: "Read shared notes.", on: laterOn });
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (init?.method) {
+        expect(JSON.parse(init.body as string)).toEqual({ principalUserId: "external-z", scope: "knowledge:read" });
+        laterOn = init.method === "POST";
+        return json(200, { ok: true });
+      }
+      const query = new URL(url, "https://home.example").searchParams;
+      if (query.has("afterPrincipal")) {
+        expect(query.get("afterPrincipal")).toBe(cursor.principalUserId);
+        expect(query.get("afterScope")).toBe(cursor.scope);
+        return json(200, { canManage: true, permissions: [view().permissions[1], later()], more: 0, nextCursor: null });
+      }
+      return json(200, { ...view(), more: 1, nextCursor: cursor });
+    });
+    render(<AgentAccessSection endpoints={ENDPOINTS} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Load more" }));
+    const control = /^Later agent: Read notes$/;
+    expect(await screen.findByRole("switch", { name: control })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getAllByRole("switch", { name: SAVE })).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
+    await userEvent.click(screen.getByRole("switch", { name: control }));
+    await waitFor(() => expect(screen.getByRole("switch", { name: control })).toHaveAttribute("aria-checked", "false"));
+    await waitFor(() => expect(screen.getByRole("switch", { name: control })).toBeEnabled());
+    await userEvent.click(screen.getByRole("switch", { name: control }));
+    await waitFor(() => expect(screen.getByRole("switch", { name: control })).toHaveAttribute("aria-checked", "true"));
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method).map(([, init]) => init.method)).toEqual(["DELETE", "POST"]);
+    for (const [, init] of fetchMock.mock.calls) {
+      expect(init.cache).toBe("no-store");
+      expect(init.credentials).toBe("same-origin");
+      expect(init.headers).not.toHaveProperty("Authorization");
+    }
+  });
+
   it("shows the unavailable state only on a confirmed 503, and retries from the link", async () => {
     fetchMock.mockImplementationOnce(() => json(503, { error: "authz_unavailable" }));
     render(<AgentAccessSection endpoints={ENDPOINTS} />);

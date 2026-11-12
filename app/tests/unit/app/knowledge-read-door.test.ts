@@ -37,6 +37,7 @@ const NOT_STORE = {
   identity: "The caller's own account and agent-access records; reads no knowledge-store content.",
   ops: "Node health/governance/telemetry; reads no knowledge-store content.",
 } as const;
+const SERVICE_LINK_ADMIN = "Host service-link state and outbound bounded target reads; local knowledge-store content is not exposed. The shared route helper enforces service-link.manage via authorizeRoute: a bearer needs its own scoped role plus DAO admin authority; a session needs that same admin authority.";
 const WORK_ITEMS =
   "Work-item plane: its own work.* authorization and ownership checks, not the knowledge notes this door covers. Reads the store; service keys denied by default (the wrapper refuses a service_key principal on any route without the knowledge.read door).";
 
@@ -84,6 +85,11 @@ const EXEMPT: Record<string, { reason: string; readsStore?: true }> = {
   "v1/users/me/route.ts": { reason: NOT_STORE.identity },
   "v1/users/me/ownership/route.ts": { reason: NOT_STORE.identity },
   "v1/agent-access/roles/route.ts": { reason: NOT_STORE.identity },
+  "v1/agent/agent-access/roles/route.ts": { reason: NOT_STORE.identity },
+  "v1/service-links/[linkId]/route.ts": { reason: SERVICE_LINK_ADMIN },
+  "v1/service-links/[linkId]/knowledge/[entryId]/route.ts": { reason: SERVICE_LINK_ADMIN },
+  "v1/agent/service-links/[linkId]/route.ts": { reason: SERVICE_LINK_ADMIN },
+  "v1/agent/service-links/[linkId]/knowledge/[entryId]/route.ts": { reason: SERVICE_LINK_ADMIN },
   "v1/agent/access-requests/route.ts": { reason: NOT_STORE.identity },
   "v1/work/board/route.ts": { reason: WORK_ITEMS, readsStore: true },
   "v1/work/summaries/route.ts": { reason: WORK_ITEMS, readsStore: true },

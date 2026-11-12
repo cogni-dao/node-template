@@ -35,6 +35,7 @@ import {
   linkView,
   type RequesterStore,
   type RequesterVault,
+  type ReplacementBasis,
 } from "./types";
 
 const DAY = 86400000;
@@ -230,7 +231,8 @@ export function createEnrollmentRequester(options: EnrollmentRequesterOptions) {
   }
   async function draft(
     key: ConnectionKey,
-    previous?: LinkRow
+    previous?: LinkRow,
+    basis?: ReplacementBasis
   ): Promise<LinkRow> {
     key = connectionKeySchema.parse(key);
     // Reserve only after the exact signed token/private key are encrypted. An ensure loser never sends its draft.
@@ -238,12 +240,23 @@ export function createEnrollmentRequester(options: EnrollmentRequesterOptions) {
       pair = await generateLinkKeypair(),
       jti = newId(),
       iat = Math.floor(now().getTime() / 1000);
+    const remote = previous
+      ? basis?.disposition === "not_accepted"
+        ? {
+            generation: previous.state.intent.expectedGeneration,
+            operationId: previous.state.intent.expectedOperationId,
+          }
+        : {
+            generation: previous.state.intent.generation,
+            operationId: previous.operationId,
+          }
+      : { generation: 0, operationId: null };
     const intent = enrollmentIntentSchema.parse({
       kind: ENROLLMENT_PROTOCOL,
       operationId,
-      generation: previous ? previous.state.intent.generation + 1 : 1,
-      expectedGeneration: previous?.state.intent.generation ?? 0,
-      expectedOperationId: previous?.operationId ?? null,
+      generation: remote.generation + 1,
+      expectedGeneration: remote.generation,
+      expectedOperationId: remote.operationId,
       home: key.home,
       target: key.target,
       service: key.service,
@@ -280,6 +293,7 @@ export function createEnrollmentRequester(options: EnrollmentRequesterOptions) {
         intent,
         intentDigest,
         originalTokenDigest: await hash(token),
+        ...(basis ? { replacementBasis: basis } : {}),
         phase: "start_ready",
         nextAction: "start",
         attempts: 0,
@@ -309,10 +323,42 @@ export function createEnrollmentRequester(options: EnrollmentRequesterOptions) {
       )
         throw new Error("link_revision_conflict");
       await admitEnrollmentTarget(handle.key, options.fetch);
+      // A fresh signed continuation is read-only and can authenticate after the original JWT/private custody expires.
+      // It distinguishes a missing attempt from an accepted terminal operation before deriving the next target CAS.
+      let disposition: ReplacementBasis["disposition"], observedAt: string;
+      try {
+        const remote = await transport.postProof(
+          handle.key.target.origin, await continueProof(previous)
+        );
+        const terminalOperation = ["denied", "expired", "superseded"].includes(remote.status);
+        const terminalCredential = remote.status === "confirmed" &&
+          ["revoked", "expired"].includes(remote.credentialState ?? "");
+        if (remote.operationId !== previous.operationId ||
+            remote.generation !== previous.state.intent.generation ||
+            !(terminalOperation || terminalCredential))
+          throw new Error("remote_operation_not_terminal");
+        disposition = "terminal";
+        observedAt = remote.observedAt;
+      } catch (error) {
+        if (!(error instanceof EnrollmentClientError) || !error.observedAt ||
+            ![404, 410].includes(error.status ?? 0)) throw error;
+        disposition = error.status === 404 ? "not_accepted" : "terminal";
+        observedAt = error.observedAt;
+      }
+      if (!Number.isFinite(Date.parse(observedAt)) ||
+          (disposition === "not_accepted" &&
+            (Date.parse(observedAt) < previous.state.intent.originalStartExp * 1000 ||
+             previous.state.acceptedAt || previous.state.enrollmentId ||
+             previous.state.connectionId || previous.state.credentialId)))
+        throw new Error("remote_reconciliation_required");
+      const basis: ReplacementBasis = {
+        operationId: previous.operationId, intentDigest: previous.state.intentDigest,
+        disposition, observedAt,
+      };
       const result = await store.replace(
         handle,
         expectedRevision,
-        await draft(handle.key, previous)
+        await draft(handle.key, previous, basis)
       );
       if (!result) throw new Error("link_revision_conflict");
       return linkView(result);
@@ -467,10 +513,16 @@ export function createEnrollmentRequester(options: EnrollmentRequesterOptions) {
               renewUntil: answer.renewUntil,
             });
           } else {
+            // Throttling and transient confirmation responses use the same bounded retry counter while custody stays staged.
+            if (answer.status === 429 || answer.status >= 500)
+              throw new EnrollmentClientError("origin_unreachable", answer.status);
+            if (answer.status !== 401 && answer.status !== 403)
+              throw new Error("confirmation_protocol_error");
             await update(
               row,
               {
                 ...row.state,
+                attempts: 0,
                 error: answer.status === 403 ? "permission_off" : "unconfirmed",
                 nextAction: answer.status === 401 ? "continue" : "confirm",
               },

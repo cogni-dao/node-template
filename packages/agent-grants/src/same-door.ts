@@ -232,15 +232,11 @@ export async function authorizeCaller(
           return { decision: "allow", basis: "agent_without_service_key" };
       }
     }
-    // The bearer IS the principal. `own` data belongs to it, so it is also the subject there. `admin`-subject scopes
-    // pass on the role row alone: a DAO admin wrote that row, and an AI identity has no admin check yet (item I2).
+    // A bearer is its own subject for both own-data and admin locks. A role row never supplies DAO admin authority.
     return authorize(store, adminCheck, {
       principalId: userId,
-      subjectUserId: requires.kind === "own" ? userId : undefined,
-      requires:
-        requires.subject === "admin"
-          ? { ...requires, subject: "member" }
-          : requires,
+      subjectUserId: requires.kind === "own" || requires.subject === "admin" ? userId : undefined,
+      requires,
     });
   }
   if (requires.kind === "account")

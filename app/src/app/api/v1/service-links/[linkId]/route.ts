@@ -5,5 +5,5 @@
 import { serviceLinkRoute } from "@/app/_lib/service-links";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-export const GET = serviceLinkRoute("human", "read");
-export const DELETE = serviceLinkRoute("human", "disconnect");
+export const GET = serviceLinkRoute("human", "read", { routeId: "service.links.read", sameDoor: "service-link.manage" });
+export const DELETE = serviceLinkRoute("human", "disconnect", { routeId: "service.links.disconnect", sameDoor: "service-link.manage" });

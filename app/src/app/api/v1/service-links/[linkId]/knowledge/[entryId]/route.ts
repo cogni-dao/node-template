@@ -5,4 +5,4 @@
 import { serviceLinkRoute } from "@/app/_lib/service-links";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-export const GET = serviceLinkRoute("human", "knowledge");
+export const GET = serviceLinkRoute("human", "knowledge", { routeId: "service.links.knowledge", sameDoor: "service-link.manage" });

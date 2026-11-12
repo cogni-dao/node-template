@@ -4,4 +4,7 @@
 import { createRoleRoutes } from "@/app/_lib/agent-access/roles-route";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-export const { GET, POST, DELETE } = createRoleRoutes("human");
+const handlers = createRoleRoutes("human");
+export const GET = handlers.GET;
+export const POST = handlers.POST;
+export const DELETE = handlers.DELETE;

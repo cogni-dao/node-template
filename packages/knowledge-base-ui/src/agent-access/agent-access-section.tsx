@@ -3,7 +3,7 @@
 
 /**
  * Module: `@cogni/knowledge-base-ui/agent-access/agent-access-section`
- * Purpose: "AI access": one compact table where a DAO admin says yes or no to what each AI can do.
+ * Purpose: Helps a human decide which permissions each AI may use.
  *   Columns: Who · Can do · Until · On. One row = one grant row, in three blocks: asks waiting, this node's AI, outside agents.
  * Scope: Presentation over `useAgentAccess`. Renders nothing for a non-admin.
  * Invariants:
@@ -110,7 +110,7 @@ export function AgentAccessSection({
             <button
               type="button"
               disabled={loadingMore || busy !== null}
-              className="text-foreground underline disabled:opacity-50"
+              className="min-h-6 text-foreground underline focus-visible:outline focus-visible:outline-ring disabled:opacity-50"
               onClick={() => void loadMore()}
             >
               {loadingMore ? "Loading…" : "Load more"}

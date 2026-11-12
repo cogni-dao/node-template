@@ -17,6 +17,7 @@ import {
   createCustodyCipher,
   createEnrollmentProofSigner,
   createEnrollmentRequester,
+  createServiceLinkHandlers,
 } from "../src/enrollment/requester";
 import type {
   LeaseGuard,
@@ -57,7 +58,10 @@ async function fixture(discovery?: unknown) {
     dropConfirm = false,
     dropPublish = false,
     rejectStage = false,
-    failReserve = false;
+    failReserve = false,
+    throttleConfirm = false,
+    terminalRemote = false,
+    ambiguousRemote = false;
   const signerKey = await generateKeyPair("EdDSA");
   const signer = createEnrollmentProofSigner({
     kid: "k1",
@@ -95,6 +99,12 @@ async function fixture(discovery?: unknown) {
       reserves++;
       if (failReserve) throw new Error("disk unavailable");
       row ??= clone(r);
+      return clone(row);
+    },
+    async replace(h, revision, draft) {
+      if (!row || row.operationId !== h.operationId || row.revision !== revision ||
+          JSON.stringify(row.state.key) !== JSON.stringify(h.key)) return null;
+      row = clone(draft);
       return clone(row);
     },
     async read(h) {
@@ -221,10 +231,18 @@ async function fixture(discovery?: unknown) {
   const transport = {
     async postProof(tokenOrigin: string, token: string) {
       expect(tokenOrigin).toBe(key.target.origin);
-      expect(row?.encryptedSecrets).toBeTruthy(); // Intent committed before start/continue while pre-key.
+      if (!row?.state.nextAction || row.state.nextAction !== "none") expect(row?.encryptedSecrets).toBeTruthy(); // Intent committed before the effect; terminal reconciliation needs no erased private key.
       const checked = await verifier(token);
       if (!checked.ok) throw new Error("bad proof");
       const p = checked.claims;
+      if (ambiguousRemote) throw new EnrollmentClientError("origin_unreachable");
+      if (accepted && terminalRemote) {
+        if (p.op === "continue") throw new EnrollmentClientError("enrollment_rejected", 410, new Date(time).toISOString());
+        expect(p.expectedOperationId).toBe(accepted.operationId);
+        expect(p.expectedGeneration).toBe(accepted.generation);
+        accepted = null;
+        terminalRemote = false;
+      }
       if (!accepted) {
         if (p.op !== "start")
           throw new EnrollmentClientError(
@@ -232,6 +250,7 @@ async function fixture(discovery?: unknown) {
             404,
             new Date(time).toISOString()
           );
+        if (!p.expectedOperationId) expect(p.expectedGeneration).toBe(0);
         starts++;
         accepted = p;
         const at = new Date(time).toISOString();
@@ -314,6 +333,7 @@ async function fixture(discovery?: unknown) {
       expect(row?.state.phase).toBe("confirm_unknown");
       expect(row?.state.connectionId).toBe("stage");
       expect(token).toBe(bearer);
+      if (throttleConfirm) return { status: 429 };
       connected = true;
       if (dropConfirm) {
         dropConfirm = false;
@@ -350,6 +370,11 @@ async function fixture(discovery?: unknown) {
     create,
     store,
     cipher,
+    vault,
+    get bearer() { return bearer; },
+    terminalRemote: () => { terminalRemote = true; },
+    ambiguousRemote: () => { ambiguousRemote = true; },
+    throttle: (on: boolean) => { throttleConfirm = on; },
     step,
     key,
     get row() {
@@ -496,6 +521,70 @@ describe("durable enrollment requester", () => {
     expect(result.phase).toBe("expired_unknown");
     expect(f.row?.encryptedSecrets).toBeNull();
     expect(f.starts).toBe(0);
+  });
+  it("explicit reenroll reconciles a never-accepted expired intent without inventing a predecessor", async () => {
+    const f = await fixture(); const r = f.create();
+    const first = await r.ensure(key);
+    f.shift(25 * 3600000);
+    await r.advance({ operationId: first.linkId, key });
+    const revision = f.row!.revision;
+    const next = await r.reenroll({ operationId: first.linkId, key }, revision);
+    expect(next.linkId).not.toBe(first.linkId);
+    expect(f.row!.state.intent).toMatchObject({ generation: 1, expectedGeneration: 0, expectedOperationId: null });
+    expect((await f.step(r)).phase).toBe("awaiting_consent");
+    expect(f.starts).toBe(1);
+  });
+  it("accepted but lost start keeps the authenticated predecessor on explicit reenroll", async () => {
+    const f = await fixture(); const r = f.create();
+    const first = await r.ensure(key); f.dropStart(); await f.step(r);
+    f.shift(25 * 3600000); await r.advance({ operationId: first.linkId, key });
+    f.terminalRemote();
+    await r.reenroll({ operationId: first.linkId, key }, f.row!.revision);
+    expect(f.row!.state.intent).toMatchObject({ generation: 2, expectedGeneration: 1, expectedOperationId: first.linkId });
+    expect((await f.step(r)).phase).toBe("awaiting_consent");
+    expect(f.starts).toBe(2);
+  });
+  it("unknown remote effects and a still-valid original start never authorize a fresh operation", async () => {
+    const f = await fixture(); const r = f.create();
+    const first = await r.ensure(key); const h = { operationId: first.linkId, key };
+    await r.disconnect(h, f.row!.revision);
+    await expect(r.reenroll(h, f.row!.revision)).rejects.toThrow("remote_reconciliation_required");
+    expect(f.row!.operationId).toBe(first.linkId);
+    f.shift(25 * 3600000); f.ambiguousRemote();
+    await expect(r.reenroll(h, f.row!.revision)).rejects.toThrow("origin_unreachable");
+    expect(f.row!.operationId).toBe(first.linkId);
+    expect(f.starts).toBe(0);
+  });
+  it("five confirmation throttles pause and explicit resume confirms the same staged credential", async () => {
+    const f = await fixture(); const r = f.create();
+    const first = await r.ensure(key); await f.step(r); await f.step(r);
+    const credential = f.row!.state.credentialId;
+    f.throttle(true);
+    for (let n = 0; n < 5; n++) await f.step(r);
+    expect(f.row!.state).toMatchObject({ attempts: 5, paused: true, phase: "confirm_unknown", credentialId: credential });
+    await f.step(r); expect(f.confirms).toBe(5);
+    f.throttle(false);
+    expect((await r.advance({ operationId: first.linkId, key }, { resumeRevision: f.row!.revision })).phase).toBe("connected");
+    expect(f.confirms).toBe(6); expect(f.polls).toBe(1); expect(f.starts).toBe(1);
+    expect(f.row!.state.credentialId).toBe(credential);
+  });
+  it("redacts decoded escaped credentials in knowledge values, arrays and property names", async () => {
+    const f = await fixture(); const r = f.create();
+    const first = await r.ensure(key); await f.step(r); await f.step(r); await f.step(r);
+    const other = (await mintKey()).token;
+    const legacy = "cogni_ag_sk_v1_not-a-real-credential";
+    const escaped = JSON.stringify({ [f.bearer]: { nested: [f.bearer, other, legacy], title: "Useful rule" } })
+      .replaceAll("cogni_", "\\u0063ogni_");
+    expect(escaped).not.toContain(f.bearer);
+    const handlers = createServiceLinkHandlers({ requester: r, store: f.store, vault: f.vault,
+      keyForAlias: () => key, handleForId: async () => ({ operationId: first.linkId, key }), allowedEntries: ["rule"],
+      fetch: async (_url, init) => { expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${f.bearer}`); return new Response(escaped); },
+    });
+    const result = await handlers.knowledge(first.linkId, "rule");
+    expect(result.status).toBe(200);
+    expect(result.body).toEqual({ "[REDACTED]": { nested: ["[REDACTED]", "[REDACTED]", "[REDACTED]"], title: "Useful rule" } });
+    for (const token of [f.bearer, other, legacy]) expect(JSON.stringify(result)).not.toContain(token);
+    expect(result.headers["cache-control"]).toBe("no-store");
   });
   it("custody cipher rejects a different service/environment/operation AAD", async () => {
     const f = await fixture();
