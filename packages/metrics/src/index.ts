@@ -69,7 +69,7 @@ export function calculatorShape(
 		windowSeconds: calculator.windowSeconds?.(params) ?? 0,
 	};
 }
-/** Immutable evidence compatibility and freshness shared by every fixed-target projection. */
+/** Immutable evidence compatibility shared by public evidence projections. */
 function compatibleEvidence(
 	o: MetricObservation | null | undefined,
 	d: MetricDefinition,
@@ -838,32 +838,41 @@ export function createMetricService(deps: {
 							if (
 								observation.id !== request.baselineObservationId ||
 								observation.metricId !== request.metricId ||
-								baseline.definition.id !== request.metricId ||
-								observation.node !== scope.node ||
-								observation.environment !== scope.environment ||
-								observation.dataScope !== scope.dataScope ||
-								observation.definitionHash !==
-									metricDefinitionHash(baseline.definition)
+								baseline.definition.id !== request.metricId
 							)
 								baseline = null;
 							else {
 								try {
 									await authorize("read", baseline.definition);
+									if (
+										!compatibleEvidence(
+											observation,
+											baseline.definition,
+											scope,
+											calculatorShape(
+												registry.get(baseline.definition.spec.calculatorId),
+												baseline.definition.spec.params,
+											),
+										)
+									)
+										baseline = null;
 								} catch {
 									baseline = null;
 								}
 							}
 						}
 						const candidate = row?.latest ?? null;
-						const latest =
-							candidate &&
-							candidate.metricId === request.metricId &&
-							candidate.definitionHash === metricDefinitionHash(definition) &&
-							candidate.node === scope.node &&
-							candidate.environment === scope.environment &&
-							candidate.dataScope === scope.dataScope
-								? candidate
-								: null;
+						let latest: MetricObservation | null = null;
+						try {
+							const shape = calculatorShape(
+								registry.get(definition.spec.calculatorId),
+								definition.spec.params,
+							);
+							if (compatibleEvidence(candidate, definition, scope, shape))
+								latest = candidate;
+						} catch {
+							/* unavailable calculator stays unknown */
+						}
 						const view = selectMetricView(
 							definition,
 							latest ? [latest] : [],
@@ -1298,15 +1307,39 @@ export function createMetricService(deps: {
 					settled(latestRead);
 					settled(goodRead);
 				}
-				const latest =
+				const latestCandidate =
 					latestRead.status === "fulfilled" ? latestRead.value : null;
-				const lastGood =
+				const goodCandidate =
 					goodRead.status === "fulfilled" ? goodRead.value : null;
+				const latest = compatibleEvidence(
+					latestCandidate,
+					definition,
+					scope,
+					shape,
+				)
+					? latestCandidate
+					: null;
+				const lastGood = compatibleEvidence(
+					goodCandidate,
+					definition,
+					scope,
+					shape,
+				)
+					? goodCandidate
+					: null;
+				const incompatibleRolling =
+					(!!latestCandidate && !latest) || (!!goodCandidate && !lastGood);
+				if (incompatibleRolling && !due)
+					return {
+						...unmeasured("incomplete_or_invalid_source", metric),
+						viewState: "error",
+					};
 				const candidate = settled(evaluationRead);
 				const trend = settled(trendRead);
 				const recent = settled(recentRead);
 				const view = selectMetricView(definition, latest ? [latest] : [], at);
-				const viewState = rollingFailed ? "error" : view.viewState;
+				const viewState =
+					rollingFailed || incompatibleRolling ? "error" : view.viewState;
 				const evaluation =
 					candidate &&
 					compatibleEvidence(candidate, definition, scope, shape) &&

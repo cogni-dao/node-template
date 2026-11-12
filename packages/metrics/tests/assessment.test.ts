@@ -599,6 +599,8 @@ describe("work page database batch", () => {
 		const baseline = {
 			...fresh,
 			definitionHash: metricDefinitionHash(definition),
+			calculatorVersion: definition.spec.calculatorId,
+			paramsHash: hashMetric(definition.spec.params),
 		};
 		const failed = {
 			...baseline,
@@ -617,6 +619,21 @@ describe("work page database batch", () => {
 		const authorize = vi.fn(
 			async (_: unknown, d: typeof definition) => d.revision !== "old",
 		);
+		const registry = new MetricRegistry();
+		registry.register({
+			id: "work.count@1",
+			unit: "ratio",
+			paramsSchema: z.object({}),
+			budget: {
+				timeoutMs: 1,
+				maxSourceCalls: 1,
+				maxRows: 1,
+				maxResponseBytes: 1,
+			},
+			compute: async () => {
+				throw new Error("unused");
+			},
+		});
 		const service = createMetricService({
 			definitions: {
 				get: async () => definition,
@@ -626,7 +643,7 @@ describe("work page database batch", () => {
 			observations: {
 				workReadBatch: batch,
 			} as unknown as MetricObservationsPort,
-			registry: new MetricRegistry(),
+			registry,
 			scope: { node: "n", environment: "e", dataScope: "d" },
 			now: () => NOW,
 			authorize,
@@ -2339,4 +2356,157 @@ it("bounds pooled goal reads at two, preserves complete order, and settles sibli
 	await expect(pending).rejects.toThrow();
 	expect(active).toBe(0);
 	expect(released).toBe(2);
+});
+
+describe("authorized provenance at public projection boundaries", () => {
+	const definition = {
+		id: "ratio",
+		title: "Ratio",
+		revision: "1",
+		spec: { calculatorId: "work.count@1", params: {}, maxAgeSeconds: 7200 },
+	};
+	const scope = { node: "n", environment: "e", dataScope: "d" };
+	const good = {
+		...fresh,
+		value: 0,
+		definitionHash: metricDefinitionHash(definition),
+		calculatorVersion: definition.spec.calculatorId,
+		paramsHash: hashMetric(definition.spec.params),
+	};
+	const mutations: [string, Partial<MetricObservation>][] = [
+		["calculator", { calculatorVersion: "work.count@2" }],
+		["params", { paramsHash: hashMetric({ other: true }) }],
+		["unit", { unit: "other" }],
+		[
+			"window",
+			{ window: { start: "2026-11-02T10:00:00.000Z", end: fresh.window.end } },
+		],
+	];
+	function setup(observation: MetricObservation, historical = definition) {
+		const registry = new MetricRegistry();
+		registry.register({
+			id: "work.count@1",
+			unit: "ratio",
+			paramsSchema: z.object({}),
+			budget: {
+				timeoutMs: 1,
+				maxSourceCalls: 1,
+				maxRows: 1,
+				maxResponseBytes: 1,
+			},
+			compute: async () => {
+				throw new Error("unused");
+			},
+		});
+		const sql = Object.assign(
+			(strings: TemplateStringsArray, ...values: unknown[]) => {
+				if (strings.join("?").startsWith("WITH requested"))
+					return Promise.resolve(
+						JSON.parse(String(values[0])).map((_: unknown, i: number) => ({
+							baseline_definition: historical,
+							baseline_observation: i === 0 ? observation : good,
+							latest_observation: i === 0 ? observation : good,
+							good_observation: i === 0 ? observation : good,
+						})),
+					);
+				return Promise.resolve([{ observation }]);
+			},
+			{
+				unsafe: async () => [],
+				begin: async (fn: (tx: unknown) => unknown): Promise<unknown> =>
+					fn(sql),
+			},
+		);
+		const observations = new PostgresMetricObservations(sql as never, scope);
+		return createMetricService({
+			definitions: {
+				get: async () => definition,
+				getMany: async () => [definition],
+				list: async () => ({ items: [definition], nextCursor: null }),
+			},
+			observations,
+			registry,
+			scope,
+			now: () => NOW,
+			authorize: async () => true,
+		});
+	}
+	it.each(mutations)(
+		"rejects schema-valid contradictory %s in work reads, retaining a zero sibling",
+		async (_, patch) => {
+			const service = setup({ ...good, ...patch });
+			const rows = await service.workReadBatch(
+				[0, 1].map(() => ({
+					metricId: "ratio",
+					baselineObservationId: good.id,
+				})),
+			);
+			expect(rows[0]?.baseline).toBeNull();
+			expect(rows[0]?.current).toBeNull();
+			expect(
+				assessDirection(
+					"up",
+					rows[0]?.baseline ?? null,
+					rows[0]?.current ?? null,
+				),
+			).toBe("unknown");
+			expect(rows[1]?.current).toMatchObject({ value: 0, viewState: "ok" });
+			expect(
+				assessDirection(
+					"up",
+					rows[1]?.baseline ?? null,
+					rows[1]?.current ?? null,
+				),
+			).toBe("flat");
+		},
+	);
+	it.each(mutations)(
+		"rejects contradictory %s in rolling and preloaded KPI evidence",
+		async (_, patch) => {
+			const bad = { ...good, ...patch };
+			const service = setup(bad);
+			const binding = {
+				metricId: "ratio",
+				comparator: "gte" as const,
+				target: { value: 0, unit: "ratio" },
+			};
+			for (const options of [
+				{ latestOnly: true },
+				{
+					latestOnly: true,
+					preloaded: { definition, latest: bad, lastGood: good },
+				},
+				{
+					latestOnly: true,
+					preloaded: { definition, latest: good, lastGood: bad },
+				},
+			]) {
+				const result = await service.kpi(binding, options);
+				expect(result.assessment.status).not.toBe("on_track");
+				expect(result.assessment.value).toBeNull();
+			}
+			const healthy = await setup(good).kpi(binding, { latestOnly: true });
+			expect(healthy.assessment).toMatchObject({
+				status: "on_track",
+				value: 0,
+			});
+		},
+	);
+	it("keeps a pinned historical snapshot instead of validating it against an edited current definition", async () => {
+		const historical = {
+			...definition,
+			revision: "old",
+			spec: { ...definition.spec, params: { old: true } },
+		};
+		const observation = {
+			...good,
+			definitionHash: metricDefinitionHash(historical),
+			paramsHash: hashMetric(historical.spec.params),
+		};
+		const [row] = await setup(observation, historical).workReadBatch([
+			{ metricId: "ratio", baselineObservationId: good.id },
+		]);
+		expect(row?.baseline).toEqual(observation);
+		expect(row?.current).toBeNull();
+	});
 });
