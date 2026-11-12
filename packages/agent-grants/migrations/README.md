@@ -12,3 +12,9 @@ file, and it must not copy node-template's `DROP TABLE IF EXISTS ... CASCADE`, w
 4. Run `db:check`. The journal `when` must be greater than every earlier entry.
 
 The store needs a BYPASSRLS (service role) connection: the table has no policy, so the app role sees nothing.
+
+The corrected enrollment provider also needs `agent_service_enrollment_maintenance.sql` after the enrollment table exists. These active-set,
+latest-role and child-working-set indexes support bounded maintenance and the existing admin Off/On control. Add the indexes to the adopter's
+own schema and auto-generate its migration; do not edit any exercised enrollment migration or copy a snapshot. Node-template owns this as
+additive migration `0042_service_enrollment_maintenance`. Apply before the corrected provider serves traffic; publishing/adoption stays gated
+on independent review and real-Postgres conformance. Role writers need a begin-capable client or an existing postgres transaction-bound tag.

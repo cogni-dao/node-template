@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
-import { type CredentialPolicy, type CredentialStore } from "../src/credentials";
+import type { CredentialPolicy, CredentialStore } from "../src/credentials";
 import type {
   CreateEnrollmentResult,
   EnrollmentStatus,
@@ -34,6 +34,7 @@ interface RoleRow {
   scope: string;
   approved: boolean;
   revoked: boolean;
+  expiresAt: number;
 }
 
 /**
@@ -50,46 +51,33 @@ export function memoryEnrollmentStore(init: { failing?: boolean } = {}) {
   const guard = () => {
     if (init.failing) throw new Error("db down");
   };
-  const credentialState = (id: string | null) => {
-    const row = credentialRows.find((r) => r.id === id);
-    if (!row) return null;
-    if (row.revokedAt !== null) return "revoked";
-    if (row.confirmedAt === null) return row.pendingExpiresAt > clock.now ? "pending" : "pending_expired";
-    return row.expiresAt > clock.now ? "active" : "expired";
-  };
-
-  const sweepUnredeemed = () => {
-    for (const p of [...principals]) {
-      const stale = p.createdAt < clock.now - 24 * 3600 * 1000;
-      const hasCredential = credentialRows.some((c) => c.userId === p.userId);
-      const approved = roles.some((r) => r.principal === p.userId && r.approved);
-      const open = enrollments.some((e) => e.principalUserId === p.userId && e.status === "open" && e.expiresAt > clock.now);
-      if (stale && !hasCredential && !approved && !open) {
-        for (const list of [enrollments, roles] as Array<Array<{ principalUserId?: string; principal?: string }>>)
-          for (let i = list.length - 1; i >= 0; i--) if ((list[i]?.principalUserId ?? list[i]?.principal) === p.userId) list.splice(i, 1);
-        principals.splice(principals.indexOf(p), 1);
-      }
-    }
+  const maintain = () => {
+    for (const e of enrollments) if (e.status === "open" && e.expiresAt <= clock.now) e.status = "expired";
+    for (const r of roles) if (!r.approved && !r.revoked && r.expiresAt <= clock.now) r.revoked = true;
   };
 
   const store: EnrollmentStore = {
     async createEnrollment(input): Promise<CreateEnrollmentResult> {
       guard();
-      sweepUnredeemed();
+      maintain();
       if (enrollments.some((e) => e.jti === input.claims.jti)) return { ok: false, reason: "replayed_token" };
       for (const e of enrollments) if (e.status === "open" && e.expiresAt <= clock.now) e.status = "expired";
       for (const e of enrollments) if (e.status === "open" && credentialRows.find((c) => c.id === e.credentialId)?.confirmedAt != null) e.status = "redeemed";
       const existing = principals.find((p) => p.serviceKey === input.serviceKey);
       if (enrollments.filter((e) => e.status === "open" && e.principalUserId !== (existing?.userId ?? "")).length >= input.limits.openEnrollments)
         return { ok: false, reason: "too_many_enrollments" };
+      const active = principals.filter((p) => p.userId !== existing?.userId && (
+        enrollments.some((e) => e.principalUserId === p.userId && e.status === "open" && e.expiresAt > clock.now) ||
+        credentialRows.some((c) => c.userId === p.userId && c.revokedAt === null && c.confirmedAt !== null && c.renewUntil > clock.now)
+      ));
+      if (active.length >= input.limits.enrolledAgents) return { ok: false, reason: "too_many_agents" };
       let userId: string;
       if (!existing) {
-        if (principals.length >= input.limits.enrolledAgents) return { ok: false, reason: "too_many_agents" };
+        if (principals.length >= 250) return { ok: false, reason: "too_many_agents" };
         userId = `svc-user-${++seq}`;
         principals.push({ userId, serviceKey: input.serviceKey, createdAt: clock.now });
       } else {
         userId = existing.userId;
-        for (const r of roles) if (r.principal === userId && r.scope === input.scope && !r.revoked) r.revoked = true;
         for (const e of enrollments) if (e.principalUserId === userId && e.status === "open") e.status = "expired";
       }
       const pendingAll = roles.filter((r) => !r.approved && !r.revoked).length;
@@ -98,7 +86,9 @@ export function memoryEnrollmentStore(init: { failing?: boolean } = {}) {
         if (!existing) principals.pop();
         return { ok: false, reason: "node_full" };
       }
-      roles.push({ principal: userId, scope: input.scope, approved: false, revoked: false });
+      const current = roles.find((r) => r.principal === userId && r.scope === input.scope && !r.revoked);
+      if (current && !current.approved) current.expiresAt = clock.now + input.limits.deviceCodeSec * 1000;
+      if (!current) roles.push({ principal: userId, scope: input.scope, approved: false, revoked: false, expiresAt: clock.now + input.limits.deviceCodeSec * 1000 });
       const id = `enrollment-${++seq}`;
       enrollments.push({
         id,
@@ -124,7 +114,7 @@ export function memoryEnrollmentStore(init: { failing?: boolean } = {}) {
       if (e.expiresAt <= clock.now) {
         e.status = "expired";
         for (const r of roles) if (r.principal === e.principalUserId && r.scope === e.scope && !r.approved && !r.revoked) r.revoked = true;
-        sweepUnredeemed();
+        maintain();
         return { state: "expired_token" };
       }
       if (e.lastPolledAt !== null && e.lastPolledAt > clock.now - intervalSec * 1000) return { state: "slow_down" };
@@ -136,17 +126,17 @@ export function memoryEnrollmentStore(init: { failing?: boolean } = {}) {
       }
       if (!role.approved && !role.revoked) return { state: "authorization_pending" };
       if (role.revoked) {
+        if (role.approved) return { state: "access_denied" };
         e.status = "denied";
         return { state: "access_denied" };
       }
       const previous = e.credentialId;
       if (previous) {
-        const state = credentialState(previous);
-        if (state === "active") {
+        const prev = credentialRows.find((c) => c.id === previous);
+        if (prev?.confirmedAt != null) {
           e.status = "redeemed";
           return { state: "expired_token" };
         }
-        const prev = credentialRows.find((c) => c.id === previous);
         if (prev && prev.revokedAt === null && prev.confirmedAt === null) {
           prev.revokedAt = clock.now;
           prev.revokedReason = "superseded";
@@ -161,7 +151,7 @@ export function memoryEnrollmentStore(init: { failing?: boolean } = {}) {
         predecessorId: null,
         expiresAt: clock.now + p.ttlSec * 1000,
         renewUntil: clock.now + (p.ttlSec + p.renewWindowSec) * 1000,
-        pendingExpiresAt: clock.now + p.pendingSec * 1000,
+        pendingExpiresAt: Math.min(clock.now + p.pendingSec * 1000, e.expiresAt),
         confirmedAt: null,
         revokedAt: null,
         revokedReason: null,
@@ -185,6 +175,11 @@ export function memoryEnrollmentStore(init: { failing?: boolean } = {}) {
     async confirm(input) {
       const row = credentialRows.find((r) => r.id === input.credentialId);
       const pending = row?.confirmedAt === null && row.createdFrom === "service_enrollment";
+      if (pending && row) {
+        const e = enrollments.find((e) => e.credentialId === row.id);
+        if (!e || e.status !== "open" || e.expiresAt <= clock.now || !roles.some((r) => r.principal === row.userId && r.scope === e.scope && r.approved && !r.revoked))
+          return { ok: false, reason: "expired" };
+      }
       const result = await creds.store.confirm(input);
       if (pending && row && result.ok && result.status === "confirmed")
         for (const other of credentialRows)
@@ -206,7 +201,7 @@ export function memoryEnrollmentStore(init: { failing?: boolean } = {}) {
     clock,
     approve(userId: string, scope: string) {
       const r = roles.find((x) => x.principal === userId && x.scope === scope && !x.revoked && !x.approved);
-      if (r) r.approved = true;
+      if (r && r.expiresAt > clock.now) r.approved = true;
     },
     dismiss(userId: string, scope: string) {
       const r = roles.find((x) => x.principal === userId && x.scope === scope && !x.revoked && !x.approved);
@@ -215,6 +210,10 @@ export function memoryEnrollmentStore(init: { failing?: boolean } = {}) {
     switchOff(userId: string, scope: string) {
       const r = roles.find((x) => x.principal === userId && x.scope === scope && !x.revoked && x.approved);
       if (r) r.revoked = true;
+    },
+    switchOn(userId: string, scope: string) {
+      const r = [...roles].reverse().find((x) => x.principal === userId && x.scope === scope);
+      if (r?.approved && r.revoked) roles.push({ ...r, revoked: false });
     },
     broken: () => memoryEnrollmentStore({ failing: true }).store,
   };

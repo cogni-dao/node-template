@@ -295,6 +295,27 @@
       "when": 1794425666737,
       "tag": "0041_agent_service_enrollments",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1794438642607,
+      "tag": "0042_service_enrollment_maintenance",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1794443737149,
+      "tag": "0043_service_authority_foundation",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1794445405181,
+      "tag": "0044_service_authority_guard_compatibility",
+      "breakpoints": true
     }
   ]
 }

@@ -207,8 +207,15 @@ describe("the route door (real wrapper, real authorizeRoute)", () => {
     expect(refused.status).toBe(403);
     expect(await refused.json()).toEqual({ error: "service_key_route_denied", code: "service_key_route_denied" });
     expect(handler).not.toHaveBeenCalled();
-    // A door that is not knowledge.read does not open it either (deny by default).
+    // A declared capability uses the same grant decision for a service and an ordinary outside agent.
+    expect((await call("core__work_item_update", user("bearer"))).status).toBe(403);
     state.roles.add(`${AGENT}|work_item:transition`);
+    expect((await call("core__work_item_update", user("bearer"))).status).toBe(200);
+    state.services.delete(AGENT);
+    expect((await call("core__work_item_update", user("bearer"))).status).toBe(200);
+    state.roles.delete(`${AGENT}|work_item:transition`);
+    expect((await call("core__work_item_update", user("bearer"))).status).toBe(403);
+    state.services.add(AGENT);
     expect((await call("core__work_item_update", user("bearer"))).status).toBe(403);
     // The knowledge.read door route: 200 once its role row is On.
     state.roles.add(`${AGENT}|knowledge:read`);
@@ -217,7 +224,7 @@ describe("the route door (real wrapper, real authorizeRoute)", () => {
     expect((await chat(user("bearer", "other-agent"))).status).toBe(200);
     expect((await chat(user("session", "human-1"))).status).toBe(200);
     const denied = log.warn.mock.calls.map(([f]) => f as Record<string, unknown>).filter((f) => f.code === "service_key_route_denied");
-    expect(denied[0]).toEqual({ event: "agent.knowledge_read.denied", principal: AGENT, routeId: "ai.chat", code: "service_key_route_denied", reason: "route_has_no_knowledge_read_door" });
+    expect(denied[0]).toEqual({ event: "agent.knowledge_read.denied", principal: AGENT, routeId: "ai.chat", code: "service_key_route_denied", reason: "route_has_no_capability_door" });
   });
 
   it("the service-key gate is 503 on a store outage, never an allow", async () => {

@@ -85,8 +85,8 @@ export function buildNodeAiView(input: {
     out.push(...rows);
   }
 
-  // 3. Outside agents: live rows for anyone who is not one of this node's AI.
-  for (const row of input.rows.filter((r) => r.state === "granted" && !r.internal)) {
+  // 3. Outside agents: an approved permission keeps its control when Off, so the same credential can be allowed again.
+  for (const row of input.rows.filter((r) => (r.state === "granted" || r.state === "revoked") && !r.internal)) {
     const n = named(row.scope);
     if (!n) continue;
     out.push({
@@ -97,7 +97,7 @@ export function buildNodeAiView(input: {
       hint: row.hint,
       scope: row.scope,
       ...n,
-      on: true,
+      on: row.state === "granted",
       until: null,
     });
   }

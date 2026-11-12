@@ -61,6 +61,7 @@ export type {
   NodeAiAccessView,
   AccessSection,
   NodeAiPermissionView,
+  RoleCursor,
   RoleRow,
   RoleState,
   RunIdentity,

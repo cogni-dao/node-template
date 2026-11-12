@@ -65,7 +65,7 @@ export type PollOutcome =
 export interface EnrollmentStore {
   /**
    * One transaction: refuses a reused `jti`, expires lapsed enrollments, applies the caps, creates the principal (or reuses the one for this
-   * `serviceKey`, soft-revoking its permission so a fresh ask appears and expiring its older open enrollments), writes ONE pending ask for
+   * `serviceKey`, retaining consent and expiring only its older open enrollments), reuses or writes ONE pending ask for
    * the scope and inserts the enrollment with the hash of its device code.
    */
   createEnrollment(input: CreateEnrollmentInput): Promise<CreateEnrollmentResult>;

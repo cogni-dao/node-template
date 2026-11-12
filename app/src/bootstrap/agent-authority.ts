@@ -111,7 +111,7 @@ export interface AgentToolAuthority {
     via: "bearer" | "session";
   }): Promise<AuthzDecision>;
   /**
-   * SERVICE_KEY_DENY_BY_DEFAULT: the wrapper calls this for a bearer on every route that does not declare `sameDoor: "knowledge.read"`.
+   * SERVICE_KEY_DENY_BY_DEFAULT: the wrapper calls this for a bearer on every route without a declared capability gate.
    * A principal made by service enrollment (`service_key` set) is refused there (`service_key_route_denied`); any other bearer is allowed.
    * A store that cannot answer is `authz_unavailable`, never an allow.
    */
@@ -219,7 +219,8 @@ export function createAgentToolAuthority(deps: {
       const scopesByPrincipal: Record<string, string[]> = {};
       for (const entry of Object.values(LANGGRAPH_CATALOG)) {
         if (!entry.principal) continue;
-        const scopes = (scopesByPrincipal[entry.principal] ??= []);
+        const scopes = scopesByPrincipal[entry.principal] ?? [];
+        scopesByPrincipal[entry.principal] = scopes;
         for (const toolId of entry.toolIds) {
           const requires = requiresById[toolId];
           if (requires) scopes.push(requires.scope);
@@ -227,7 +228,7 @@ export function createAgentToolAuthority(deps: {
       }
       const { internal, listed } = await withStore(async (store) => ({
         internal: await store.listInternalPrincipals(),
-        listed: await store.listRoleRows(MAX_ADMIN_OUTSIDE_ROWS),
+        listed: await store.listRoleRows(MAX_ADMIN_OUTSIDE_ROWS, declaredScopes),
       }));
       return {
         permissions: buildNodeAiView({ declarations, scopesByPrincipal, internal, rows: listed.rows }),
@@ -290,7 +291,7 @@ export function createAgentToolAuthority(deps: {
         if (!store.isServicePrincipal)
           return { decision: "deny", code: "service_key_route_denied", reason: "service_kind_unknown" };
         return (await store.isServicePrincipal(userId))
-          ? { decision: "deny", code: "service_key_route_denied", reason: "route_has_no_knowledge_read_door" }
+          ? { decision: "deny", code: "service_key_route_denied", reason: "route_has_no_capability_door" }
           : { decision: "allow" };
       })().catch((): ServiceKeyGateDecision => ({ decision: "deny", code: "authz_unavailable", reason: "store_unavailable" }));
       // Every refusal is one warn (an outage as well as a service key), the same fields the door's refusal carries. No key, no header.
