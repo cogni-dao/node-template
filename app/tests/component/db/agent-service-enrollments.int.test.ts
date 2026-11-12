@@ -28,7 +28,7 @@ import { PostgreSqlContainer } from "@testcontainers/postgresql";
 import { randomUUID } from "node:crypto";
 import { AgentRolesError, authorizeCaller, buildNodeAiView, grantRole, revokeRole, createPostgresAgentGrantsStore, type SqlTag } from "@cogni/agent-grants";
 import { type CredentialSql, assertV1NotSuperseded, createPostgresCredentialStore, agentRolesHasRoles, hashAgentKey, confirmCredential, verifyBearer } from "@cogni/agent-grants/credentials";
-import { maintenanceTick, createPostgresEnrollmentStore, pollServiceEnrollment, requestServiceEnrollment, openSealed, SERVICE_ENROLLMENT_KIND, serviceEnrollmentAudience, type ServiceEnrollmentClaims } from "@cogni/agent-grants/enrollment";
+import { enrollmentHttp, maintenanceTick, createPostgresEnrollmentStore, pollServiceEnrollment, requestServiceEnrollment, openSealed, SERVICE_ENROLLMENT_KIND, serviceEnrollmentAudience, type ServiceEnrollmentClaims } from "@cogni/agent-grants/enrollment";
 import { runEnrollmentConformance, type EnrollmentConformanceHarness } from "@cogni/agent-grants/enrollment-conformance";
 import { generateKeyPair, exportJWK } from "jose";
 import postgres, { type Sql } from "postgres";
@@ -156,6 +156,60 @@ describe("agent service enrollments (real Postgres)", () => {
   };
 
   describe("schema (rows only SQL can prove)", () => {
+    it.each(["admission", "insert"] as const)("expired proof at %s returns 401 and rolls back every enrollment effect", async (point) => {
+      await enrollmentHarness.setup();
+      const counts = async () => (await service`SELECT
+        (SELECT count(*)::int FROM users) AS users,
+        (SELECT count(*)::int FROM agent_principals) AS principals,
+        (SELECT count(*)::int FROM agent_roles) AS roles,
+        (SELECT count(*)::int FROM agent_service_enrollments) AS receipts`)[0];
+      const before = await counts();
+      const pair = await generateKeyPair("ECDH-ES", { crv: "X25519", extractable: true });
+      const jwk = await exportJWK(pair.publicKey);
+      const jti = randomUUID();
+      const serviceName = `expiry-${point}`;
+      const now = Math.floor(Date.now() / 1000);
+      const claims: ServiceEnrollmentClaims = {
+        iss: "https://home.example", aud: serviceEnrollmentAudience("11111111-1111-4111-8111-111111111111"),
+        kind: SERVICE_ENROLLMENT_KIND, jti, iat: now, exp: now + 4,
+        service: serviceName, scopes: ["knowledge:read"], cnf: { jwk: { kty: "OKP", crv: "X25519", x: jwk.x as string } },
+      };
+      let reachedInsert = false;
+      const delayed = Object.assign(client().bind(null), {
+        begin: <T>(fn: (tx: SqlTag) => Promise<T>) => client().begin(async (tx) => {
+          const observed = Object.assign((strings: TemplateStringsArray, ...values: unknown[]) => {
+            if (point !== "insert" || !strings.join("?").includes("INSERT INTO agent_service_enrollments")) return tx(strings, ...values);
+            reachedInsert = true;
+            return (async () => {
+              await tx`SELECT pg_sleep(GREATEST(0, extract(epoch FROM (to_timestamp(${claims.exp}) - clock_timestamp())))::float8 + 0.1)`;
+              return await tx(strings, ...values);
+            })();
+          }, tx);
+          return fn(observed);
+        }),
+      }) as CredentialSql;
+      const request = () => requestServiceEnrollment(createPostgresEnrollmentStore(delayed),
+        async () => ({ ok: true, claims, home: { origin: claims.iss, services: {} } }),
+        { token: "verified", askableScopes: ["knowledge:read"] });
+      let result: Awaited<ReturnType<typeof request>>;
+      if (point === "admission") {
+        let pending!: ReturnType<typeof request>;
+        await service.begin(async (tx) => {
+          await tx`SELECT pg_advisory_xact_lock(hashtext('agent_service_enrollments'))`;
+          pending = request();
+          await expect.poll(async () => Number((await service`SELECT count(*)::int AS n FROM pg_stat_activity
+            WHERE wait_event_type = 'Lock' AND query LIKE '%pg_advisory_xact_lock%'`)[0]?.n), { timeout: 2500 }).toBeGreaterThan(0);
+          await tx`SELECT pg_sleep(GREATEST(0, extract(epoch FROM (to_timestamp(${claims.exp}) - clock_timestamp())))::float8 + 0.1)`;
+        });
+        result = await pending;
+      } else result = await request();
+      if (point === "insert") expect(reachedInsert).toBe(true);
+      expect(result).toEqual({ ok: false, reason: "invalid_token" });
+      expect(enrollmentHttp({ op: "request", result })).toMatchObject({ status: 401, body: { error: "invalid_token" }, headers: { "cache-control": "no-store" } });
+      expect((await service`SELECT count(*)::int AS n FROM agent_service_enrollments WHERE jti = ${jti}`)[0]?.n).toBe(0);
+      expect((await service`SELECT count(*)::int AS n FROM agent_principals WHERE service_key = ${`https://home.example#${serviceName}`}`)[0]?.n).toBe(0);
+      expect(await counts()).toEqual(before);
+    }, 15000);
     it("maintenance locks and rechecks expiry; late approval refuses without erasing identity, consent or replay evidence", async () => {
       const setup = await enrollmentHarness.setup();
       const enrollment = await startEnrollment(setup);

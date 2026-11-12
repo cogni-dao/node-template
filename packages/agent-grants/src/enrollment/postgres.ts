@@ -103,8 +103,7 @@ export function createPostgresEnrollmentStore(
         ${JSON.stringify(claims.cnf.jwk)}, clock_timestamp() + (${input.limits.deviceCodeSec}::int * interval '1 second')
       WHERE to_timestamp(${claims.exp}) > clock_timestamp()
       RETURNING id`;
-    if (rows.length === 0)
-      throw new Error("enrollment proof expired before acceptance");
+    if (rows.length === 0) throw new Refusal("invalid_token");
     return text(rows[0]?.id);
   };
 
@@ -136,7 +135,7 @@ export function createPostgresEnrollmentStore(
             ) due WHERE expires_at < clock_timestamp() - interval '5 minutes')`;
           if (pressure.length === 0) throw new Error("enrollment maintenance unavailable or backlogged");
           const valid = await tx`SELECT to_timestamp(${input.claims.exp}) > clock_timestamp() AS valid`;
-          if (valid[0]?.valid !== true) throw new Error("enrollment proof expired while awaiting admission");
+          if (valid[0]?.valid !== true) throw new Refusal("invalid_token");
           const seen = await tx`SELECT 1 AS used FROM agent_service_enrollments WHERE jti = ${input.claims.jti}`;
           if (seen.length > 0) return { ok: false, reason: "replayed_token" };
           const candidate = await tx`SELECT user_id FROM agent_principals WHERE service_key = ${input.serviceKey}`;

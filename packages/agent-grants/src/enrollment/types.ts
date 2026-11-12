@@ -21,11 +21,7 @@ import type {
 
 export type EnrollmentStatus = "open" | "redeemed" | "denied" | "expired";
 
-export type CreateEnrollmentRefusal =
-  | "replayed_token"
-  | "too_many_enrollments"
-  | "too_many_agents"
-  | "node_full";
+export type CreateEnrollmentRefusal = "invalid_token" | "replayed_token" | "too_many_enrollments" | "too_many_agents" | "node_full";
 
 export interface CreateEnrollmentInput {
   readonly claims: ServiceEnrollmentClaims;

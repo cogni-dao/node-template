@@ -35,6 +35,8 @@ export interface PublicRouteConfig {
   clientKey?: (request: { headers: { get(name: string): string | null } }) => string;
   cacheTtlSeconds?: number; // Default: 60
   staleWhileRevalidateSeconds?: number; // Default: 300
+  /** Apply no-store to every response, including wrapper-generated failures. */
+  noStore?: boolean;
 }
 
 type PublicRouteHandler<TContext = unknown> = (
@@ -90,7 +92,7 @@ export function makeWrapPublicRoute(deps: WrapPublicRouteDeps) {
     const cacheTtl = config.cacheTtlSeconds ?? 60;
     const swr = config.staleWhileRevalidateSeconds ?? 300;
 
-    return wrapRouteHandlerWithLogging<TContext>(
+    const wrapped = wrapRouteHandlerWithLogging<TContext>(
       {
         routeId: config.routeId,
         auth: { mode: "none" },
@@ -151,5 +153,10 @@ export function makeWrapPublicRoute(deps: WrapPublicRouteDeps) {
         return response;
       }
     );
+    return async (request, context) => {
+      const response = await wrapped(request, context);
+      if (config.noStore) response.headers.set("Cache-Control", "no-store");
+      return response;
+    };
   };
 }

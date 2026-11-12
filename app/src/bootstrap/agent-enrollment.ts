@@ -45,7 +45,7 @@ export function getAskableScopes(): readonly string[] {
 export const enrollmentLimiter = new TokenBucketRateLimiter({ maxTokens: 30, refillRate: 30 / 60, burstSize: 0, maxKeys: 10_000 });
 
 /** The wrapper config for the two public routes: their own bucket, keyed on the Cloudflare client IP. */
-export const enrollmentPublicRateLimit = { limiter: enrollmentLimiter, clientKey: extractEdgeClientIp } as const;
+export const enrollmentPublicRateLimit = { limiter: enrollmentLimiter, clientKey: extractEdgeClientIp, noStore: true } as const;
 
 /** The enrolled service's billing account, through the SERVICE adapter (like registration). Idempotent: an existing account is returned. */
 export async function ensureEnrollmentBillingAccount(userId: string, displayName: string): Promise<void> {
