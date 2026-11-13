@@ -19,7 +19,7 @@
   "types": "./dist/index.d.ts",
   "files": [
     "dist",
-    "LICENSE.md"
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsup && tsc -b --force",

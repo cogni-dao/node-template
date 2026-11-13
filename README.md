@@ -70,4 +70,4 @@ Open your generated repository in Claude Code, Codex, or OpenCode and paste:
 Every supported harness receives the node's cognition automatically; contributors do not install or
 copy per-node prompt configuration.
 
-[PolyForm Shield license](LICENSE.md)
+[PolyForm Shield license](packages/knowledge-base/LICENSE)
