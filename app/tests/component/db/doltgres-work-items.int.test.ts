@@ -1103,13 +1103,16 @@ describe("Doltgres 0.57.3 work-item acceptance", () => {
 				.catch(() => undefined);
 			await lockHolder.end({ timeout: 0 });
 		}
-		// Transport failure does not prove that Dolt finished the old statement.
-		// Keep that adapter quarantined, including after the lock-holder exits.
+		// bug.0042: the adapter's own probe never reached the server — it queued
+		// behind a foreign statement when the pool died — so it owns no native
+		// state. The failure stays retryable and nothing is held; the adapter
+		// replaced its writer pool, so the very next write is admitted.
+		expect(adapter.writerHealth()).toEqual({ state: "available" });
 		await expect(
-			adapter.patch({ reason: "test change", id, set: { title: "no replacement" } }, principalId),
-		).rejects.toMatchObject({ code: "work_items_native_capacity_held" });
-		// This owned test can explicitly observe the old native session depart
-		// before constructing a replacement; production needs its own authority.
+			adapter.patch({ reason: "test change", id, set: { title: "fresh writer" } }, principalId),
+		).resolves.toMatchObject({ id, title: "fresh writer" });
+		// The test still waits for the old native session to depart before it
+		// rebuilds the adapter for the remaining scenarios.
 		await expect
 			.poll(
 				async () =>

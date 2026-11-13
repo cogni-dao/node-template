@@ -1216,6 +1216,19 @@ function isConnectionTerminal(error: unknown): boolean {
   );
 }
 
+/**
+ * A transport failure before this operation's first writer-lock request. The
+ * session held no lock and changed nothing, so the writer pool is simply
+ * replaced and the caller may retry (bug.0042).
+ */
+class PreEffectTransportError extends WorkItemsBusyError {
+  constructor(readonly stage: string, options?: { cause?: unknown }) {
+    super("Work-item store connection failed before any write; retry shortly");
+    if (options?.cause !== undefined)
+      Object.defineProperty(this, "cause", { value: options.cause });
+  }
+}
+
 function isServerSqlError(error: unknown): boolean {
   return error instanceof Error && error.name === "PostgresError";
 }
@@ -1332,7 +1345,9 @@ export class DoltgresWorkItemAdapter
     stage: string,
     reason: string
   ): Promise<void> {
-    if (context.abandoned || context.nativeUnknown) {
+    // An abandoned operation that never requested the writer lock owns no
+    // native state, so its session may be replaced like any other (bug.0042).
+    if (context.nativeUnknown || (context.abandoned && context.effectsPossible)) {
       this.holdWriter(context, pool, stage, reason);
       return;
     }
@@ -1464,9 +1479,7 @@ export class DoltgresWorkItemAdapter
       }
       if (transport && context.effectsPossible) throw context.abandoned;
       if (transport || isConnectionTerminal(error))
-        throw new WorkItemsBusyError(
-          "Work-item store connection failed before any write; retry shortly"
-        );
+        throw new PreEffectTransportError(stage, { cause: error });
       throw error;
     } finally {
       clearTimeout(timeoutTimer);
@@ -1955,6 +1968,15 @@ export class DoltgresWorkItemAdapter
         throw new WorkItemsBusyError(
           `Work-item writer admission unavailable: ${error.reason}`
         );
+      }
+      if (error instanceof PreEffectTransportError) {
+        await this.terminateClient(
+          operationPool,
+          context,
+          error.stage,
+          "transport_before_effects"
+        );
+        rawConn = undefined;
       }
       pendingRecovery = error instanceof PendingBranchRecoveryError;
       this.logStage("error", context, "operation", "error", {
