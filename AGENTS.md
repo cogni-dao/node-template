@@ -8,15 +8,16 @@ response format.
 
 ## Native delivery
 
-The gitignored `.cogni/.cognition-cache.md` is a last-known complete bundle. The shared
-loader (`scripts/agent/session-cognition.sh`) validates contract completeness before
-admitting a refresh. An unavailable hub or incomplete response preserves a complete
-cache, so a warm session can work offline.
+Every session start fetches the bundle from the node hub through the shared loader
+(`scripts/agent/session-cognition.sh`), which validates contract completeness before
+admitting it. The gitignored `.cogni/.cognition-cache.md` is the last-known complete
+bundle: an unavailable hub or incomplete response presents it instead.
 
-The contract must already be model-visible before normal work: Claude imports the cache
-through `CLAUDE.md`; Codex receives uncapped SessionStart context; supported OpenCode 1.x
-loads it through `opencode.json.instructions`. Do not manually read the cache merely to
-bootstrap; a missing native import is a delivery failure.
+The contract must already be model-visible before normal work: Claude receives it as
+labelled SessionStart parts (`--claude-part`, each under its context-entry limit); Codex
+receives uncapped SessionStart context; supported OpenCode 1.x refreshes the cache in a
+plugin and loads it through `opencode.json.instructions`. Do not manually read the cache
+merely to bootstrap; a missing native delivery is a delivery failure.
 
 ## Recovery when no complete contract is loaded
 
@@ -31,12 +32,6 @@ without it. Recovery ends only when the native instruction path loads a complete
 
 On first setup, register through `/api/v1/agent/register` and save COGNI_NODE_API_KEY in
 the gitignored `.env.cogni`. Operator CI/CD credentials are not cognition credentials.
-Workspace setup warms the cache, but it may race the first agent. Claude resolves its
-imports before its SessionStart hook can write the cache, so on a boot whose import
-missed it the hook delivers the same complete bundle through Claude's structured
-SessionStart context. If neither arrived, restart or resume before normal work begins.
-The loader may cache a recovery notice for the next import; that notice is never a
-complete contract.
 
 ## Local execution safety
 

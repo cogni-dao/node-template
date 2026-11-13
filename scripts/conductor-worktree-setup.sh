@@ -4,8 +4,8 @@
 
 # Module: scripts/conductor-worktree-setup.sh
 # Purpose: Prepare a Conductor-created node-template worktree for agent development.
-# Side-effects: links shared local auth/secrets when available, warms the session
-#   cognition cache first, refreshes origin/main, installs deps, builds package
+# Side-effects: links shared local auth/secrets when available, refreshes the
+#   session cognition cache first, refreshes origin/main, installs deps, builds package
 #   declarations, and writes a setup proof marker.
 
 set -euo pipefail
@@ -250,29 +250,20 @@ fs.writeFileSync(
 EOF
 }
 
-# Warm the session cognition cache before anything slow. Claude Code resolves
-# the CLAUDE.md @import of .cogni/.cognition-cache.md before its SessionStart
-# hook can write it, so a fresh worktree without a warm cache starts its first
-# agent session with no contract (cognition-substrate-bootstrap: "workspace
-# setup warms complete cognition before the first agent starts").
+# Warm the session cognition cache before anything slow. Every agent session
+# fetches its own bundle when it starts; this cache is only the offline fallback
+# for a session that starts while the hub is down.
 warm_cognition_cache() {
-  local cache=".cogni/.cognition-cache.md" attempt started
+  local attempt started
   started=$(date +%s)
   for attempt in 1 2 3; do
-    bash scripts/agent/session-cognition.sh </dev/null >/dev/null 2>&1 || true
-    # Complete means the contract itself arrived, not just a non-empty map.
-    if [[ -s "$cache" ]] && grep -q "<agent-contract" "$cache" && grep -q "<status-contract" "$cache"; then
-      printf 'cognition cache warmed with a complete contract in %ss (attempt %s)\n' "$(($(date +%s) - started))" "$attempt"
+    if bash scripts/agent/session-cognition.sh --refresh </dev/null >/dev/null 2>&1; then
+      printf 'cognition cache refreshed from the hub in %ss (attempt %s)\n' "$(($(date +%s) - started))" "$attempt"
       return 0
     fi
     [[ "$attempt" -lt 3 ]] && sleep 2
   done
-  if [[ -s "$cache" ]]; then
-    warn "cognition cache has no complete agent-contract; agents start in bootstrap recovery (AGENTS.md)"
-  else
-    warn "cognition cache not warmed; agents start in bootstrap recovery (AGENTS.md)"
-  fi
-  warn "an agent that started before this step must be restarted or resumed to load the contract"
+  warn "cognition hub fetch failed; each agent session retries when it starts"
 }
 
 ensure_auth_root_cogni_env
