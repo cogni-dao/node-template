@@ -426,11 +426,13 @@ export function createInProcGraphRunner<TTool = unknown>(
         cause = cause.cause;
       }
       // Step budget (langgraph-error-handling): a program that owns a report ends with it, not an error.
-      const budget =
-        cause instanceof GraphRecursionError ||
-        (cause instanceof Error && cause.name === "GraphRecursionError")
-          ? hooks?.projectStepBudget?.()
-          : undefined;
+      const stepBudget =
+        (cause instanceof GraphRecursionError ||
+          (cause instanceof Error && cause.name === "GraphRecursionError")) &&
+        hooks?.projectStepBudget !== undefined;
+      // Writes made before the budget hit still get the host's post-run readback.
+      if (stepBudget) await verifyEffects().catch(() => undefined);
+      const budget = stepBudget ? hooks?.projectStepBudget?.() : undefined;
       if (budget) {
         if (opts.program || opts.trustedProgramId)
           emit({ type: "text_delta", delta: budget.answer });
