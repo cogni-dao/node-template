@@ -48,7 +48,7 @@ Shared presentational UI. No business logic, no data fetching. Design tokens and
 
 ## Usage
 
-**IMPORTANT: If you are making any changes to files in this directory, you must read:** [`https://node-template.cognidao.org/knowledge/frontend-development`](https://node-template.cognidao.org/knowledge/frontend-development)
+**IMPORTANT: If you are making any changes to files in this directory, you must read:** [frontend-development](https://node-template.cognidao.org/knowledge/frontend-development)
 
 Minimal local commands:
 
@@ -101,4 +101,4 @@ src/components/
 
 - Promotion policy: colocate → second consumer → promote. Keep root lean.
 - Each file: short header with Purpose, Scope, Invariants. No inline commentary drift.
-- Implementation workflows live in `https://node-template.cognidao.org/knowledge/frontend-development`.
+- Implementation workflows live in [frontend-development](https://node-template.cognidao.org/knowledge/frontend-development).

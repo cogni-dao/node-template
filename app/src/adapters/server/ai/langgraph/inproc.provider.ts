@@ -19,7 +19,7 @@
  *     telemetry is logged as registered events and echoed onto the stream; graphs never touch the logger or ALS.
  * Side-effects: IO (executes graphs via package runner, MCP tool resolution via HTTP)
  * Notes: Discovery is in LangGraphInProcAgentCatalogProvider, not here.
- * Links: https://node-template.cognidao.org/knowledge/graph-execution-invariants, https://node-template.cognidao.org/knowledge/graph-execution-invariants
+ * Links: https://node-template.cognidao.org/knowledge/graph-execution-invariants
  * @internal
  */
 

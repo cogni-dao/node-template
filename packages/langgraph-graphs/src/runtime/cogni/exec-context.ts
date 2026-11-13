@@ -12,7 +12,7 @@
  *   - One context per run — no cross-run leakage
  *   - Throws if accessed outside of runWithCogniExecContext
  * Side-effects: none (AsyncLocalStorage is per-run isolation)
- * Links: https://node-template.cognidao.org/knowledge/graph-execution-invariants, https://node-template.cognidao.org/knowledge/graph-execution-invariants
+ * Links: https://node-template.cognidao.org/knowledge/graph-execution-invariants
  * @public
  */
 

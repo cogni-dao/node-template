@@ -6,6 +6,7 @@ Read the node-template-owned [knowledge-contribution-flow](https://node-template
 
 ```bash
 set -o pipefail
+: "${COGNI_NODE_TEMPLATE_API_KEY:=${COGNI_NODE_API_KEY:-}}"
 : "${COGNI_NODE_TEMPLATE_API_KEY:?Load your saved node-template Cogni API key}"
 curl -fsS --max-time 30 \
   -H "Authorization: Bearer $COGNI_NODE_TEMPLATE_API_KEY" \

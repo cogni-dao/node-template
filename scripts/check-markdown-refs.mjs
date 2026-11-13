@@ -42,6 +42,9 @@ const ALLOWED_MD = [
 ];
 
 const PINNED_GITHUB_URL = /https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/blob\/[0-9a-f]{40}\/\S*/gi;
+// A blob URL on a moving ref (main, staging, a branch) breaks when the Markdown is purged upstream.
+const UNPINNED_GITHUB_DOC =
+  /https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/blob\/(?![0-9a-f]{40}\/)[^\s/]+\/(?:\S*\/)?(?:docs|work)\/\S*?\.md\b/gi;
 const DOC_PATH =
   /(?<![A-Za-z0-9_@~./-])(?:\.{1,2}\/)*(?:[A-Za-z0-9_@-]+\/)*(?:docs|work)\/[A-Za-z0-9_./@-]*\.md\b/g;
 
@@ -78,7 +81,10 @@ for (const file of tracked) {
   if (buf.includes(0)) continue;
   const lines = buf.toString("utf8").split("\n");
   for (let i = 0; i < lines.length; i++) {
-    const scrubbed = lines[i].replace(PINNED_GITHUB_URL, "");
+    for (const match of lines[i].matchAll(UNPINNED_GITHUB_DOC)) {
+      failures.push(`${file}:${i + 1}: unpinned GitHub Markdown URL ${match[0]}`);
+    }
+    const scrubbed = lines[i].replace(PINNED_GITHUB_URL, "").replace(UNPINNED_GITHUB_DOC, "");
     for (const match of scrubbed.matchAll(DOC_PATH)) {
       const hit = match[0].replace(/^(?:\.{1,2}\/)+/, "");
       if (EXCEPTIONS.some((e) => e.file === file && hit.endsWith(e.path))) continue;
