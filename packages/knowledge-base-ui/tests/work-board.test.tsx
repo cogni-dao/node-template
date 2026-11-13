@@ -80,7 +80,7 @@ describe("WorkBoard", () => {
                 ...item,
                 moves: [
                   {
-                    metricId: "edits-7d",
+                    metricId: "items-no-inline-history",
                     direction: null,
                     baselineObservationId: null,
                     moved: null,
@@ -96,7 +96,7 @@ describe("WorkBoard", () => {
         onLoadMore={() => {}}
       />,
     );
-    expect(screen.getByText(/edits-7d.*affected/i)).toBeInTheDocument();
+    expect(screen.getByText(/items-no-inline-history.*affected/i)).toBeInTheDocument();
   });
   it("renders one plain goal anchor, a rank, and a time without a router", () => {
     const onOpenItem = vi.fn();

@@ -294,31 +294,7 @@ export interface MetricSample {
 	/** Why an incomplete sample is unknown, e.g. zero_denominator or history_unavailable. */
 	reason?: KpiReason;
 }
-export type EditsStage = "windowCommits" | "workDiff" | "knowledgeDiff";
-export type EditsTimingUpdate =
-	| { stage: EditsStage; phase: "start" | "ok" | "error" }
-	| { stage: EditsStage; phase: "counts"; rows: number; bytes?: number };
-export interface EditsSourceTiming {
-	windowCommits: {
-		state: "not_started" | "running" | "ok" | "error";
-		durationMs: number | null;
-	};
-	workDiff: {
-		state: "not_started" | "running" | "ok" | "error";
-		durationMs: number | null;
-	};
-	knowledgeDiff: {
-		state: "not_started" | "running" | "ok" | "error";
-		durationMs: number | null;
-	};
-	windowCommitCount: number | null;
-	workRows: number | null;
-	workBytes: number | null;
-	knowledgeRows: number | null;
-	knowledgeBytes: number | null;
-}
 export interface CalculatorContext {
-	editsTiming?(update: EditsTimingUpdate): void;
 	window: MetricObservation["window"];
 	signal: AbortSignal;
 	budget: Readonly<MetricBudget>;

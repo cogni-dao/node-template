@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 /**
  * One refresh tick reads each identical source statement once. Calculators that
- * share a source (convergence ratio, validated and created; edits share and count)
+ * share a source (convergence ratio, validated and created)
  * issue the same static SQL for the same window, so inside a tick scope the first
  * caller runs it and the others await the same rows. Outside a tick scope, and for
  * parameterized statements, every call goes straight to the client.

@@ -11,8 +11,6 @@
  * counts only when one field holds two or more, so one deadline or approval
  * date passes. `Status`, `State`, `Due` and `Owner` are never labels.
  */
-import { toLines } from "./briefs.js";
-
 export const NO_INLINE_HISTORY_RULES_VERSION = "no-inline-history-rules@1";
 export type NoInlineHistorySubject = "work-items" | "atoms";
 
@@ -37,6 +35,41 @@ export const NO_INLINE_HISTORY_FIELDS = {
 export const NO_INLINE_HISTORY_MAX_FIELD_CHARS = 100_000;
 /** A line of 100 characters or fewer that ends with `:` and holds a date is a dated line. */
 const DATED_HEADER_MAX_CHARS = 100;
+
+const LINE_BREAKS = /\r\n?/g;
+const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+
+/** One line of a field, with whether a fence covers it. */
+interface Line {
+	text: string;
+	fenced: boolean;
+}
+
+/** Split a field into lines and mark the ones a closed code fence covers. */
+function toLines(text: string): Line[] {
+	const raw = text.replace(LINE_BREAKS, "\n").split("\n");
+	const lines: Line[] = raw.map((t) => ({ text: t, fenced: false }));
+	for (let i = 0; i < raw.length; i++) {
+		const open = FENCE_OPEN.exec(raw[i] ?? "");
+		if (!open) continue;
+		const marks = open[1] ?? "";
+		const info = open[2] ?? "";
+		// A backtick fence never carries a backtick in its info string.
+		if (marks[0] === "`" && info.includes("`")) continue;
+		const closer = new RegExp(`^ {0,3}\\${marks[0]}{${marks.length},}\\s*$`);
+		let close = -1;
+		for (let j = i + 1; j < raw.length; j++)
+			if (closer.test(raw[j] ?? "")) {
+				close = j;
+				break;
+			}
+		// An unclosed fence is not a fence; its opening line stays prose.
+		if (close < 0) continue;
+		for (let k = i; k <= close; k++) (lines[k] as Line).fenced = true;
+		i = close;
+	}
+	return lines;
+}
 
 const DATE = /\d{4}-\d{2}-\d{2}/;
 /** A label is a whole word, then optional spaces, then `:`, `(` or a digit: `Update 3` yes, `Log4j` no. */
@@ -201,25 +234,6 @@ export function approvedLines(outcome: string | null | undefined): {
 		else if (m) doneWhen = true;
 	}
 	return { goal, doneWhen };
-}
-
-/**
- * Marker lines the changed columns of one edit held before and after it. An
- * edit appends history when the count grows; rewording a marker line, or
- * removing others, is not an append. A column over the cap counts as zero on
- * both sides.
- */
-export function appendsHistory(
-	columns: ReadonlyArray<{ from: string | null; to: string | null }>,
-): boolean {
-	let before = 0;
-	let after = 0;
-	for (const c of columns) {
-		if ((c.from ?? "") === (c.to ?? "")) continue;
-		before += markerLines(c.from).length;
-		after += markerLines(c.to).length;
-	}
-	return after > before;
 }
 
 /** A scored row as the summary reads it. */

@@ -1,6 +1,6 @@
 {
   "name": "@cogni-dao/metrics",
-  "version": "0.14.2",
+  "version": "0.15.0",
   "license": "LicenseRef-PolyForm-Shield-1.0.0",
   "repository": {
     "type": "git",
@@ -19,11 +19,6 @@
       "types": "./dist/adapters/postgres.d.ts",
       "import": "./dist/adapters/postgres.js",
       "default": "./dist/adapters/postgres.js"
-    },
-    "./briefs": {
-      "types": "./dist/briefs.d.ts",
-      "import": "./dist/briefs.js",
-      "default": "./dist/briefs.js"
     },
     "./contracts": {
       "types": "./dist/contracts.d.ts",
