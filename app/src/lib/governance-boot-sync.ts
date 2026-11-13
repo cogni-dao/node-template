@@ -13,7 +13,7 @@
  * Side-effects: IO (HTTP POST to own internal endpoint), structured log
  * Notes: Replaces the deploy-time trigger (removed `scripts/ci/deploy.sh` Step 10.1) with a
  *   node-owned boot trigger so a forked node works without operator/deploy-pipeline help.
- * Links: docs/spec/governance-scheduling.md, src/app/api/internal/ops/governance/schedules/sync/route.ts
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/governance-scheduling.md, src/app/api/internal/ops/governance/schedules/sync/route.ts
  * @public
  */
 

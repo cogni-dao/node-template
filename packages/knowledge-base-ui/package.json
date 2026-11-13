@@ -35,7 +35,7 @@
   "types": "./dist/index.d.ts",
   "files": [
     "dist",
-    "LICENSE.md",
+    "LICENSE",
     "tailwind-source.css"
   ],
   "scripts": {

@@ -9,7 +9,7 @@
  *   - Connection string injected, never from process.env
  *   - Database type preserves drizzle's `$client` accessor for pool control (e.g. `reserve()`)
  * Side-effects: IO (database connections)
- * Links: docs/spec/database-rls.md
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/database-rls.md
  * @internal
  */
 

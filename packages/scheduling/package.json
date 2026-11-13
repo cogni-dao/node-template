@@ -15,7 +15,7 @@
     "./presentation": { "types": "./dist/presentation.d.ts", "import": "./dist/presentation.js", "default": "./dist/presentation.js" }
   },
   "types": "./dist/index.d.ts",
-  "files": ["dist", "LICENSE.md"],
+  "files": ["dist", "LICENSE"],
   "scripts": {
     "build": "tsup && tsc -b --force",
     "typecheck": "tsc --noEmit --emitDeclarationOnly false",

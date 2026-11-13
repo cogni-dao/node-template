@@ -20,7 +20,7 @@
  *   - No FK references to Postgres tables (different database server).
  *   - No RLS — access control via Doltgres roles (knowledge_reader / knowledge_writer).
  * Side-effects: none
- * Links: docs/spec/knowledge-data-plane.md, docs/spec/knowledge-syntropy.md, work/items/task.0425.knowledge-contribution-api.md
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/knowledge-data-plane.md, https://node-template.cognidao.org/knowledge/knowledge-store-schema
  * @public
  */
 
@@ -108,7 +108,7 @@ export const knowledge = pgTable(
     sourceRef: text("source_ref"),
     sourceNode: text("source_node"),
     tags: jsonb("tags").$type<string[]>(),
-    // Hypothesis-loop columns (knowledge-syntropy.md § The Hypothesis Loop)
+    // Hypothesis-loop columns (https://node-template.cognidao.org/knowledge/edo-loop-contract)
     // evaluateAt: REQUIRED for entry_type='hypothesis'; null otherwise.
     // Enforced at the adapter layer (HYPOTHESIS_HAS_EVALUATE_AT).
     evaluateAt: timestamp("evaluate_at", { withTimezone: true }),

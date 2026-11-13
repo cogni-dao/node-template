@@ -10,7 +10,7 @@
  * Scope: Pure registry + readers (sources are injected fakes); does not use a DB.
  * Invariants: KPI_VERIFIER_INDEPENDENT, KPI_RANGE_0_100
  * Side-effects: none
- * Links: src/domain/kpi-reader.ts, docs/design/knowledge-goal-loop.md
+ * Links: src/domain/kpi-reader.ts, https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/design/knowledge-goal-loop.md
  * @internal
  */
 

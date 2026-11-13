@@ -3,13 +3,13 @@
 
 /**
  * Module: `@cogni/work-items/transitions`
- * Purpose: Status transition table derived from docs/spec/development-lifecycle.md.
+ * Purpose: Status transition table derived from https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/development-lifecycle.md.
  * Scope: Pure data constant + validator. Does not perform I/O.
  * Invariants:
  * - TRANSITION_TABLE_COMPLETE: Every WorkItemStatus has an entry.
  * - Matches the mermaid workflow diagram in development-lifecycle.md.
  * Side-effects: none
- * Links: docs/spec/development-lifecycle.md
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/development-lifecycle.md
  * @public
  */
 

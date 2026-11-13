@@ -12,7 +12,7 @@
  *   - SINGLE_IMPLEMENTATION: makeLangChainTools is the single core impl
  *   - Uses contract.inputSchema directly (no separate schema param)
  * Side-effects: none
- * Links: TOOL_USE_SPEC.md, LANGGRAPH_AI.md
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/tool-use.md, https://node-template.cognidao.org/knowledge/graph-execution-invariants
  * @public
  */
 

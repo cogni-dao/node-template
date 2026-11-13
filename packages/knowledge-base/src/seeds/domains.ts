@@ -8,7 +8,7 @@
  * Scope: Seed data definitions only. Does not perform I/O — the migrator (or first-write path on candidate-a) applies these.
  * Invariants: Domain `id`s are stable identifiers. New domains are append-only and registered explicitly per knowledge-syntropy.
  * Side-effects: none
- * Links: docs/spec/knowledge-syntropy.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-store-schema
  * @public
  */
 
@@ -24,7 +24,7 @@ export interface NewDomain {
 // prediction-market; resy: reservations) are seeded by each node's OWN migrator,
 // NEVER here — putting them in the shared base was cross-node contamination.
 // `skills` is intentionally absent: it is an entry_type (skill/guide/playbook),
-// not a domain. See docs/spec/knowledge-domain-registry.md § Seeding.
+// not a domain. See https://node-template.cognidao.org/knowledge/knowledge-domain-management § Seeding.
 export const BASE_DOMAIN_SEEDS: NewDomain[] = [
   {
     id: "meta",

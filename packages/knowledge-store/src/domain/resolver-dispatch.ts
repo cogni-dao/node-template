@@ -11,7 +11,7 @@
  *     `agent`; null/manual ⇒ `manual` (cron skips); anything else ⇒ `unknown`.
  *   - DISPATCH_IS_TOTAL — every input maps to exactly one target.
  * Side-effects: none
- * Links: docs/design/knowledge-goal-loop.md § resolver dispatch
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/design/knowledge-goal-loop.md
  * @public
  */
 

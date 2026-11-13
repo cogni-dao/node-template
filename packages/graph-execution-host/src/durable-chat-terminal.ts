@@ -9,7 +9,7 @@
  *   - TERMINAL_AFTER_PERSIST: a stateful successful run cannot publish terminal done before its transcript is durable; headless runs publish directly
  *   - PURE_LIBRARY: no env vars, no process lifecycle, no `@/` imports — every node-owned concern arrives as an injected function
  * Side-effects: thread persistence and terminal publication, both via injected callbacks
- * Links: docs/spec/packages-architecture.md, https://cognidao.org/knowledge/graph-execution-package-design
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/packages-architecture.md, https://cognidao.org/knowledge/graph-execution-package-design
  * @public
  */
 

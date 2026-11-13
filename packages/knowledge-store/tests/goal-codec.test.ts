@@ -7,7 +7,7 @@
  * Scope: Pure codec only; does not touch Temporal or a DB.
  * Invariants: CODEC_ROUND_TRIPS, GOAL_REQUIRES_METRIC_STRATEGY
  * Side-effects: none
- * Links: src/domain/goal-codec.ts, docs/design/knowledge-goal-loop.md
+ * Links: src/domain/goal-codec.ts, https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/design/knowledge-goal-loop.md
  * @internal
  */
 

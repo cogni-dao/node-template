@@ -7,7 +7,7 @@
  * Scope: Build tooling only. Does not contain runtime code.
  * Invariants: Root entry is platform-neutral (pure types). Adapter entry is platform-node.
  * Side-effects: IO
- * Links: docs/spec/packages-architecture.md
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/packages-architecture.md
  * @internal
  */
 

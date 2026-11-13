@@ -11,7 +11,7 @@
  *   - REGISTRY_SEPARATION: Discovery providers only, never execution providers
  *   - P0_AGENT_GRAPH_IDENTITY: agentId === graphId (one agent per graph)
  * Side-effects: none
- * Links: AGENT_DISCOVERY.md, agent-catalog.port.ts
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/agent-discovery.md, agent-catalog.port.ts
  * @public
  */
 

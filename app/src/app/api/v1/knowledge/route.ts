@@ -7,7 +7,7 @@
  * Scope: Signed-in human, or a bearer agent holding the knowledge:read role (sameDoor `knowledge.read`). Reads via container.knowledgeStorePort: listDomains then per-domain listKnowledge.
  * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, KNOWLEDGE_READ_NEEDS_GRANT.
  * Side-effects: IO (HTTP response, Doltgres reads via container port)
- * Links: docs/spec/knowledge-syntropy.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-write-contract
  * @public
  */
 

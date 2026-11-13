@@ -23,7 +23,6 @@
  *     subsystem table and the domain map; the JSON response keeps the complete
  *     governingIndex for programmatic readers (story.0044).
  * Side-effects: none
- * Links: docs/spec/node-baas-architecture.md
  * @internal
  */
 

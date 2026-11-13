@@ -7,7 +7,7 @@
  * Scope: Fetches credits data via React Query, renders native USDC payment flow, and refreshes balance on success. Does not handle backend payment verification or wallet connection.
  * Invariants: Payment amounts stored as integer cents (no float math).
  * Side-effects: IO (fetch API via React Query).
- * Links: docs/spec/payments-design.md
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/payments-design.md
  * @public
  */
 

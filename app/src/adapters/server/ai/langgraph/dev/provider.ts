@@ -15,7 +15,7 @@
  *   - SECRET_ARGS_NOT_ON_DEV_SERVER: never offers a tool whose contract declares `secretArgs`; the dev server's thread
  *     state would checkpoint the raw argument
  * Side-effects: IO (network calls to langgraph dev server)
- * Links: LANGGRAPH_SERVER.md (MVP section)
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/langgraph-server.md
  * @internal
  */
 

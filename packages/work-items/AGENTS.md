@@ -14,9 +14,9 @@ Work item port interfaces, domain types, and storage adapters for structured wor
 
 ## Pointers
 
-- [Development Lifecycle](../../docs/spec/development-lifecycle.md): Status enum and transition rules
-- [Identity Model](../../docs/spec/identity-model.md): Actor kinds for SubjectRef alignment
-- [Packages Architecture](../../docs/spec/packages-architecture.md): Package conventions
+- [Development Lifecycle](https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/development-lifecycle.md): Status enum and transition rules
+- [Identity Model](https://cognidao.org/knowledge/node-template-identity-model): Actor kinds for SubjectRef alignment
+- [Packages Architecture](https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/packages-architecture.md): Package conventions
 
 ## Boundaries
 

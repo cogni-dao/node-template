@@ -9,7 +9,7 @@
  *   - Contract remains stable; breaking changes require new version
  *   - All consumers use z.infer types
  * Side-effects: none
- * Links: /api/v1/work/items route, docs/spec/work-items-port.md
+ * Links: /api/v1/work/items route, https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/work-items-port.md
  * @internal
  */
 

@@ -14,7 +14,7 @@
  *     client never renders a floating edge. This matches the legacy per-entry
  *     outgoing-citation gather (source was always an entry; target was checked).
  * Side-effects: none
- * Links: docs/spec/knowledge-syntropy.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-store-schema
  * @public
  */
 

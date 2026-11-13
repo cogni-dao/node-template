@@ -5,7 +5,7 @@
 # regenerate both UUIDs:
 #   node_id:  openssl rand -hex 16 | sed 's/\(.\{8\}\)\(.\{4\}\)\(.\{4\}\)\(.\{4\}\)\(.\{12\}\)/\1-\2-\3-\4-\5/'
 #   scope_id: uuidv5(node_id, "default")
-# See docs/spec/identity-model.md, docs/spec/multi-node-tenancy.md.
+# See https://cognidao.org/knowledge/node-template-identity-model, https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/multi-node-tenancy.md.
 
 schema_version: "0.1.4"
 
@@ -57,7 +57,7 @@ payments:
 # Outbound payment config — the human-custodied steward wallet that settles vendor
 # invoices (OpenRouter) via manual USDC checkout. The operator wallet funds this one
 # pinned address via withdrawToSteward; a human then completes each vendor checkout.
-# Default = Derek's admin wallet (he admins all current forks). See docs/design/node-steward-wallet.md.
+# Default = Derek's admin wallet (he admins all current forks). See https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/design/node-steward-wallet.md.
 payments_out:
   steward_wallet:
     address: "0x070075F1389Ae1182aBac722B36CA12285d0c949"

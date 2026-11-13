@@ -12,7 +12,7 @@
  *   - GUARD_COVERS_EVERY_RUNNER_SITE: runtimes pass through agent-grants guardTools. The dev server has
  *     no run scope (no principal, no subject, no store), so every scoped or non-read_only tool is denied.
  * Side-effects: none (events are internal to dev server)
- * Links: TOOL_USE_SPEC.md, LANGGRAPH_SERVER.md
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/tool-use.md, https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/langgraph-server.md
  * @internal
  */
 

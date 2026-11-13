@@ -19,7 +19,7 @@
  *     on its own `graph:execute:{graph}` grant. A charter WITHOUT `graph` keeps the sandbox:openclaw
  *     input, graph id, and governance grant byte-for-byte; LEDGER_INGEST ignores `graph`.
  * Side-effects: IO (Temporal RPC via ScheduleControlPort, grant creation via ensureGovernanceGrant / ensureGraphGrant)
- * Links: docs/spec/scheduler.md, docs/spec/governance-council.md, .cogni/repo-spec.yaml
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/scheduler.md, https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/governance-council.md, .cogni/repo-spec.yaml
  * @public
  */
 

@@ -263,8 +263,7 @@ export interface EdoCapability {
   /**
    * Walk the citation DAG from `rootId`. Read-only; surfaces the EDO chain
    * (hypothesis → decision → outcome + evidence/validates/invalidates edges)
-   * for human and agent rendering. See `docs/spec/knowledge-syntropy.md` §
-   * Chain Read API.
+   * for human and agent rendering. See `https://node-template.cognidao.org/knowledge/edo-loop-contract`.
    */
   getChain(params: GetChainParams): Promise<GetChainResult>;
 }

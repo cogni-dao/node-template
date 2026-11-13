@@ -14,7 +14,7 @@
  *   been issued yet. Security hardening (invitation token) tracked in bug.0297.
  *   The name is the text an admin reads on the access table, so a hidden-character name is 400 and a name that matches an
  *   existing user or one of this node's AI is 409 `name_taken`.
- * Links: docs/spec/security-auth.md, bug.0297
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/security-auth.md, bug.0297
  * @public
  */
 

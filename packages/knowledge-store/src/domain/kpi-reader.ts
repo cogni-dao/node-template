@@ -20,7 +20,7 @@
  *     (smoke tests only). The `independent` flag is the gate; the registry
  *     enforces it so no real goal is ever gated on a self-grading reader.
  * Side-effects: none (sources passed in do the I/O)
- * Links: docs/design/knowledge-goal-loop.md § worker ≠ verifier
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/design/knowledge-goal-loop.md
  * @public
  */
 

@@ -14,7 +14,7 @@
  *   - URL_DRIVEN_MODE; inactive tabs do not start reads.
  *   - Cookie-session merges only — no Bearer header is ever sent from this page.
  * Side-effects: IO (GET /knowledge, GET /knowledge/contributions, POST .../merge, POST .../close).
- * Links: docs/spec/knowledge-syntropy.md, [/work view](../work/view.tsx)
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-write-contract, [/work view](../work/view.tsx)
  * @public
  */
 

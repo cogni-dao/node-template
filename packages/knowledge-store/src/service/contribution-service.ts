@@ -7,7 +7,7 @@
  * Scope: Pure business logic — quotas, idempotency lookup, role gating, confidence cap. Does not contain HTTP, env, or lifecycle code; per-node `route.ts` files adapt these to Next.
  * Invariants: KNOWLEDGE_MERGE_REQUIRES_ADMIN_SESSION; APPEND_AUTHORITY_IS_THE_DOOR (bug.0019: append is gated by authorize() at the route, never by author equality); CONTRIBUTION_OWNER_CAN_CLOSE.
  * Side-effects: none (delegates I/O to KnowledgeContributionPort)
- * Links: docs/design/knowledge-contribution-api.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-contribution-flow
  * @public
  */
 
@@ -96,7 +96,7 @@ export interface ContributionServiceDeps {
    * the operator container to mirror the canonical knowledge branch to a
    * Dolt remote (typically DoltHub). The caller MUST own its own error
    * handling — this service deliberately does not await and does not catch.
-   * Per task.5069 + docs/runbooks/dolthub-remote-bootstrap.md.
+   * Per task.5069 + https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/runbooks/dolthub-remote-bootstrap.md.
    */
   pushMainOnMerge?: () => Promise<void>;
   /**

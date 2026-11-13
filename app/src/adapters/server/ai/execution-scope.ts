@@ -14,7 +14,7 @@
  *     sets the subject; the tool guard binds the principal around each tool call. RLS and user-scoped
  *     capabilities use the subject, else the principal (`scopeUserId`).
  * Side-effects: none (ALS is process-scoped, no I/O)
- * Links: docs/spec/unified-graph-launch.md
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/unified-graph-launch.md
  * @public
  */
 

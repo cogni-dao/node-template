@@ -13,7 +13,7 @@
  *   - P0 uses a no-op span processor and no OTel log exporter (IDs + Langfuse only)
  * Side-effects: IO (OTel SDK global state initialization)
  * Notes: Next.js calls register() once per Node.js process on startup.
- * Links: AI_SETUP_SPEC.md, bootstrap/otel.ts for span helpers
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/ai-setup.md, bootstrap/otel.ts for span helpers
  * @public
  */
 

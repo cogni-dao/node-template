@@ -7,7 +7,7 @@
  * Scope: Re-exports only. Does not contain implementation.
  * Invariants: Single entry point for adapter consumers.
  * Side-effects: none
- * Links: docs/spec/development-lifecycle.md
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/development-lifecycle.md
  * @public
  */
 

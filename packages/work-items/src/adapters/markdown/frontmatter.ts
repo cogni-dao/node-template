@@ -10,7 +10,7 @@
  * - BODY_PRESERVED: Markdown body never modified.
  * - SNAKE_CAMEL_MAP: Adapter maps snake_case frontmatter to camelCase WorkItem fields.
  * Side-effects: none
- * Links: docs/spec/development-lifecycle.md
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/development-lifecycle.md
  * @public
  */
 

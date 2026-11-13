@@ -7,7 +7,7 @@
  * Scope: Public barrel export. Does not contain I/O or adapter code.
  * Invariants: Domain types and injected-port composition; no runtime configuration.
  * Side-effects: none
- * Links: docs/spec/development-lifecycle.md, docs/spec/identity-model.md
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/development-lifecycle.md, https://cognidao.org/knowledge/node-template-identity-model
  * @public
  */
 

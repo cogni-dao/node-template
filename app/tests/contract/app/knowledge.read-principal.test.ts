@@ -12,7 +12,7 @@
  * Invariants: a bearer with the role reads 200; a bearer without it is 403 before any read; link-pulling
  *   (graph edges) is reachable by an agent that holds the role.
  * Side-effects: none (container + auth mocked, fake in-memory store)
- * Links: src/app/api/v1/knowledge, docs/spec/knowledge-syntropy.md
+ * Links: src/app/api/v1/knowledge, https://node-template.cognidao.org/knowledge/knowledge-write-contract
  * @internal
  */
 

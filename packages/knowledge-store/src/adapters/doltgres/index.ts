@@ -13,7 +13,7 @@
  *   - Connection string injected, never from process.env (PACKAGES_NO_ENV).
  *   - Browse/Overview retain native capacity after caller deadline/abort; no snapshot claim.
  * Side-effects: IO (database reads/writes)
- * Links: docs/spec/knowledge-data-plane.md
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/knowledge-data-plane.md
  * @public
  */
 

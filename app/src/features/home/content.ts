@@ -27,7 +27,7 @@
  *
  *  Walk top-to-bottom and replace every placeholder with copy + data that sells
  *  YOUR node's mission. A stranger should understand what this node is for in
- *  five seconds. See `docs/guides/new-node-styling.md` and the `node-styling`
+ *  five seconds. See `https://cognidao.org/knowledge/node-styling-contract` and the `node-styling`
  *  skill for the full playbook.
  * ─────────────────────────────────────────────────────────────────────────────
  */

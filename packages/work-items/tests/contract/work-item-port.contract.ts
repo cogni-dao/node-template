@@ -7,7 +7,7 @@
  * Scope: Tests port invariants. Does not test adapter internals.
  * Invariants: CONTRACT_TESTS_PORTABLE — same tests run against any adapter implementation.
  * Side-effects: IO (via adapter under test)
- * Links: docs/spec/development-lifecycle.md
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/development-lifecycle.md
  * @internal
  */
 

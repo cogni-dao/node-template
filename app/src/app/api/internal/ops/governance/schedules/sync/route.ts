@@ -10,7 +10,7 @@
  *   - DISABLED_IS_NOOP: Returns 204 when GOVERNANCE_SCHEDULES_ENABLED is false
  *   - JOB_DELEGATION_ONLY: Uses runGovernanceSchedulesSyncJob() for all orchestration
  * Side-effects: IO (HTTP request/response, DB advisory lock, Temporal RPC via job)
- * Links: docs/spec/governance-scheduling.md, governance-schedules-sync.internal.v1.contract
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/governance-scheduling.md, governance-schedules-sync.internal.v1.contract
  * @internal
  */
 

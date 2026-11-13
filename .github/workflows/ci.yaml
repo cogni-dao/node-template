@@ -74,6 +74,11 @@ jobs:
       - name: Node declarations check
         run: pnpm check:declarations
 
+      # story.0046: node-template Markdown lives in the hub. Fails on tracked Markdown outside
+      # the bootstrap set and on any repo docs/ or work/ Markdown path reference.
+      - name: Markdown references check
+        run: pnpm check:markdown-refs
+
   unit:
     runs-on: ubuntu-latest
     # No `needs: static`: unit does its own install + packages:build and consumes
