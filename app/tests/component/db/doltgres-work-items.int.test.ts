@@ -3575,4 +3575,56 @@ if (role === 'original') {
 			);
 		}
 	}, 15_000);
+
+	it("frees a destroyed session's advisory lock for a fresh session (bug.0042 fencing premise)", async () => {
+		// Writer settlement treats "a fresh session wins the writer lock" as proof
+		// that the abandoned session holds nothing. Prove Doltgres frees an ended
+		// session's advisory lock, idle or mid-statement.
+		const client = () => postgres(dbUrl, { max: 1, fetch_types: false });
+		const held = (rows: ReadonlyArray<Record<string, unknown>>) => {
+			const value = rows[0]?.locked;
+			const scalar = Array.isArray(value) ? value[0] : value;
+			return scalar === true || scalar === 1 || scalar === "true" || scalar === "t";
+		};
+		const fresh = client();
+		const blocker = client();
+		try {
+			const idle = client();
+			await idle.unsafe("SELECT pg_advisory_lock(9504201)");
+			expect(
+				held(await fresh.unsafe("SELECT pg_try_advisory_lock(9504201) AS locked")),
+			).toBe(false);
+			await idle.end({ timeout: 0 });
+			await expect
+				.poll(
+					async () =>
+						held(await fresh.unsafe("SELECT pg_try_advisory_lock(9504201) AS locked")),
+					{ timeout: 10_000, interval: 100 },
+				)
+				.toBe(true);
+			await fresh.unsafe("SELECT pg_advisory_unlock(9504201)");
+
+			const busy = client();
+			await busy.unsafe("SELECT pg_advisory_lock(9504202)");
+			await blocker.unsafe("SELECT pg_advisory_lock(9504203)");
+			const inflight = busy
+				.unsafe("SELECT pg_advisory_lock(9504203)")
+				.then(() => undefined, (error: unknown) => error);
+			await new Promise((resolve) => setTimeout(resolve, 100));
+			await busy.end({ timeout: 0 });
+			await expect(inflight).resolves.toBeInstanceOf(Error);
+			// Its statement may hold the session until it ends; let it end.
+			await blocker.unsafe("SELECT pg_advisory_unlock(9504203)");
+			await expect
+				.poll(
+					async () =>
+						held(await fresh.unsafe("SELECT pg_try_advisory_lock(9504202) AS locked")),
+					{ timeout: 10_000, interval: 100 },
+				)
+				.toBe(true);
+			await fresh.unsafe("SELECT pg_advisory_unlock(9504202)");
+		} finally {
+			await Promise.all([fresh, blocker].map((c) => c.end({ timeout: 0 })));
+		}
+	}, 30_000);
 });

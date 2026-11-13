@@ -99,7 +99,7 @@ const probe = (id = "task.9998") =>
   ({ reason: "test change", id: toWorkItemId(id), set: { title: "after" } }) as const;
 
 describe("writer recovers from transport failures without a restart (bug.0042)", () => {
-  it("a connect timeout on the pool probe never holds the writer (production 2026-11-13)", async () => {
+  it("a connect timeout on the pool probe holds only until it settles, never as unknown (production 2026-11-13)", async () => {
     let connected = false;
     const { adapter, named, generations, queries } = makeHarness((query) => {
       if (query !== "SELECT 1 AS work_items_ready" || connected) return undefined;
@@ -213,6 +213,61 @@ describe("writer recovers from transport failures without a restart (bug.0042)",
     expect(outcomes[0]).toBe("lock_contended");
     expect(outcomes.at(-1)).toBe("recovered");
     await expect(adapter.patch(probe(), "principal-1")).rejects.toThrow(/not found/);
+  });
+
+  it("refuses every write while settlement runs, even after the held execution unwinds", async () => {
+    let releaseProbe: (() => void) | undefined;
+    let rejectHung: ((error: Error) => void) | undefined;
+    const { adapter, named, queries } = makeHarness((query, generation) => {
+      if (generation.number === 1 && query.includes("pg_try_advisory_lock"))
+        return new Promise<Rows>((_resolve, reject) => {
+          rejectHung = reject;
+        });
+      if (generation.number === 2 && query === "SELECT 1 AS work_items_ready" && !releaseProbe)
+        return new Promise<Rows>((resolve) => {
+          releaseProbe = () => resolve([]);
+        });
+      return undefined;
+    });
+
+    await expect(adapter.patch(probe(), "principal-1")).rejects.toMatchObject({
+      code: "work_items_native_capacity_held",
+    });
+    // The hung execution unwinds as soon as its retired pool ends.
+    await eventually(() => releaseProbe !== undefined);
+    rejectHung?.(transportError("CONNECTION_DESTROYED"));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    expect(adapter.writerHealth()).toMatchObject({ state: "held", settling: true });
+    const before = queries.length;
+    await expect(adapter.patch(probe(), "principal-1")).rejects.toMatchObject({
+      code: "work_items_native_capacity_held",
+    });
+    expect(queries.length).toBe(before);
+
+    releaseProbe?.();
+    await eventually(() => named("writer_recovered").length > 0);
+    await expect(adapter.patch(probe(), "principal-1")).rejects.toThrow(/not found/);
+  });
+
+  it("logs one refusal line per window, with a count, during a long hold", async () => {
+    const { adapter, named } = makeHarness(
+      (query, generation) =>
+        generation.number === 1 && query.includes("pg_try_advisory_lock")
+          ? Promise.reject(transportError("ECONNRESET"))
+          : undefined,
+      { settleBaseMs: 10_000, settleMaxMs: 10_000 }
+    );
+    await expect(adapter.patch(probe(), "principal-1")).rejects.toMatchObject({
+      code: "work_items_native_capacity_held",
+    });
+    for (let attempt = 0; attempt < 5; attempt++)
+      await expect(adapter.patch(probe(), "principal-1")).rejects.toMatchObject({
+        code: "work_items_native_capacity_held",
+      });
+    expect(named("writer_refused")).toEqual([
+      expect.objectContaining({ refused: 1, holdReason: "outcome_unknown" }),
+    ]);
   });
 
   it("settles a half-open session and ignores its late failure", async () => {

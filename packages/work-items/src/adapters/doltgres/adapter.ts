@@ -169,6 +169,8 @@ const SETTLE_MAX_MS = 30_000;
 const SETTLE_GRACE_MS = 15_000;
 /** How long settlement waits for the retired generation's execution to unwind after its pool ends. */
 const SETTLE_WAIT_MS = 5_000;
+/** A multi-hour hold must not log every refused request: one `writer_refused` line per window, with a count. */
+const REFUSAL_LOG_MS = 10_000;
 
 /** Only content commands own a branch session and reconcile interrupted writes. */
 type BranchReconciliation = "required" | "skipped";
@@ -253,6 +255,8 @@ interface OperationContext {
   effectsPossible?: boolean;
   /** Resolves when this operation's execution has fully unwound. */
   settled?: Promise<void>;
+  /** The writer pool generation this operation runs on; a retired one can no longer hold the writer. */
+  pool?: Sql;
   acknowledged?: boolean;
   acknowledge?: (value: unknown) => void;
 }
@@ -274,6 +278,9 @@ interface WriterHold {
   timer?: ReturnType<typeof setTimeout>;
   running?: boolean;
   unavailableLogged?: boolean;
+  /** Refusals since the last `writer_refused` line; one line per REFUSAL_LOG_MS. */
+  refusedSinceLog: number;
+  lastRefusalLogAt?: number;
 }
 
 interface ReadWaiter {
@@ -1478,8 +1485,7 @@ export class DoltgresWorkItemAdapter
         throw context.abandoned;
       }
       if (transport && context.effectsPossible) throw context.abandoned;
-      if (transport || isConnectionTerminal(error))
-        throw new PreEffectTransportError(stage, { cause: error });
+      if (transport) throw new PreEffectTransportError(stage, { cause: error });
       throw error;
     } finally {
       clearTimeout(timeoutTimer);
@@ -1498,6 +1504,16 @@ export class DoltgresWorkItemAdapter
       : new WorkItemsCapacityError(
           context.nativeUnknown ? "unknown" : "pending"
         );
+    // A retired generation's late deadline only fails its own caller: settlement
+    // already replaced that pool and holds nothing on its behalf.
+    if (context.pool && context.pool !== this.sql) {
+      this.logStage("warn", context, stage, "error", {
+        reason: "retired_generation_ignored",
+        holdReason: "caller_abandoned",
+      });
+      context.rejectCaller?.(context.abandoned);
+      return;
+    }
     this.heldWriter = context;
     this.beginHold(context, this.sql, stage, "caller_abandoned", "pending");
     for (const reject of this.queueWaiters) reject();
@@ -1512,21 +1528,21 @@ export class DoltgresWorkItemAdapter
    * refused until settlement proves the writer free (bug.0042).
    */
   writerHealth(): WorkItemWriterHealth {
+    // A pool swap inside terminateClient sets `poisoned` for a few ms; only a
+    // hold is a refusal anyone needs to see.
     const hold = this.hold;
-    if (!hold && !this.poisoned && !this.heldWriter)
-      return { state: "available" };
-    const since = hold?.since ?? Date.now();
+    if (!hold) return { state: "available" };
     return {
       state: "held",
-      nativeState: this.poisoned ? "unknown" : (hold?.nativeState ?? "pending"),
-      since: new Date(since).toISOString(),
-      heldMs: Date.now() - since,
-      reason: hold?.reason ?? "unknown",
-      stage: hold?.stage ?? "unknown",
-      operationId: hold?.operationId ?? this.heldWriter?.operationId ?? "",
-      operation: hold?.operation ?? this.heldWriter?.operation ?? "",
-      settleAttempts: hold?.attempts ?? 0,
-      settling: hold?.running === true,
+      nativeState: hold.nativeState,
+      since: new Date(hold.since).toISOString(),
+      heldMs: Date.now() - hold.since,
+      reason: hold.reason,
+      stage: hold.stage,
+      operationId: hold.operationId,
+      operation: hold.operation,
+      settleAttempts: hold.attempts,
+      settling: hold.running === true,
     };
   }
 
@@ -1570,7 +1586,7 @@ export class DoltgresWorkItemAdapter
         existing.nativeState = "unknown";
         this.logWriter("warn", "writer_held", existing, {
           escalatedBy: reason,
-          stage,
+          escalatedAtStage: stage,
           ...(error ? errorFields(error) : {}),
         });
         if (existing.timer && !existing.running) {
@@ -1593,6 +1609,7 @@ export class DoltgresWorkItemAdapter
       pool,
       nativeState,
       attempts: 0,
+      refusedSinceLog: 0,
     };
     this.hold = hold;
     this.logWriter("warn", "writer_held", hold, {
@@ -1642,11 +1659,22 @@ export class DoltgresWorkItemAdapter
   private refuse(operation: string): WorkItemsCapacityError {
     const nativeState = this.poisoned ? "unknown" : "pending";
     const hold = this.hold;
-    if (hold)
-      this.logWriter("warn", "writer_refused", hold, {
-        operation,
-        settling: hold.running === true,
-      });
+    if (hold) {
+      hold.refusedSinceLog += 1;
+      const now = Date.now();
+      if (
+        hold.lastRefusalLogAt === undefined ||
+        now - hold.lastRefusalLogAt >= REFUSAL_LOG_MS
+      ) {
+        this.logWriter("warn", "writer_refused", hold, {
+          operation,
+          refused: hold.refusedSinceLog,
+          settling: hold.running === true,
+        });
+        hold.lastRefusalLogAt = now;
+        hold.refusedSinceLog = 0;
+      }
+    }
     return new WorkItemsCapacityError(nativeState);
   }
 
@@ -1705,6 +1733,10 @@ export class DoltgresWorkItemAdapter
     let outcome = "failed";
     let executionSettled = true;
     let failure: unknown;
+    // Refuse every caller from the first await: the held execution may unwind
+    // while its pool ends, and nothing new may slip in before the fence.
+    this.poisoned = true;
+    this.heldWriter = context;
     try {
       const retired = hold.pool;
       const held = hold.context;
@@ -1731,9 +1763,11 @@ export class DoltgresWorkItemAdapter
       }
       // The retired pool has ended, so its execution can issue no more SQL;
       // a ticket it never returns must not wedge the FIFO forever.
+      // Safe only because a hold rejected every queued waiter when it began and
+      // refuses new ones until it clears.
       if (!executionSettled) this.operationTail = Promise.resolve();
+      // withGlobalLock refuses while poisoned; heldWriter still refuses callers.
       this.poisoned = false;
-      this.heldWriter = context;
       // Every stage inside has its own budget, but a driver await that never
       // settles (reserve) must not freeze settlement: the next attempt ends
       // this generation too, which unblocks it.
@@ -1746,15 +1780,15 @@ export class DoltgresWorkItemAdapter
             reconcile: "required",
           }),
           new Promise<never>((_resolve, reject) => {
-            attemptTimer = setTimeout(
-              () =>
-                reject(
-                  new WorkItemsBusyError(
-                    `Work-item writer settlement exceeded ${attemptBudgetMs}ms`
-                  )
-                ),
-              attemptBudgetMs
-            );
+            attemptTimer = setTimeout(() => {
+              // Unblock the orphaned attempt; the next one starts on a new pool.
+              void this.sql.end({ timeout: 0 }).catch(() => undefined);
+              reject(
+                new WorkItemsBusyError(
+                  `Work-item writer settlement exceeded ${attemptBudgetMs}ms`
+                )
+              );
+            }, attemptBudgetMs);
           }),
         ]);
       } finally {
@@ -1890,6 +1924,7 @@ export class DoltgresWorkItemAdapter
       );
     }
     const operationPool = this.sql;
+    context.pool = operationPool;
     const reserveStartedAt = Date.now();
     let rawConn: ReservedSql | undefined;
     let connection: WorkItemConnection | undefined;
@@ -1920,7 +1955,10 @@ export class DoltgresWorkItemAdapter
             "Work-item store timed out reserving a connection; retry shortly"
           );
         }
-        throw error;
+        // reserve() takes no lock; a failure here leaves nothing native.
+        throw new PreEffectTransportError("connection.reserve", {
+          cause: error,
+        });
       }
       if (reserveTimedOut) {
         rawConn.release();
