@@ -111,7 +111,9 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
         if (!principalUserId || !scope) return null;
         const internal = row.kind === "internal";
         const githubId = str(row.github_id);
+        const requestId = str(row.id);
         return {
+          ...(requestId ? { requestId } : {}),
           principalUserId,
           slug: internal ? str(row.slug) : null,
           internal,
@@ -128,7 +130,7 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
       };
       // This node's own AI: always all rows (a few principals times a few scopes).
       const own = await sql`
-        SELECT r.principal_user_id, r.scope, r.approved_by, r.created_at,
+        SELECT r.id, r.principal_user_id, r.scope, r.approved_by, r.created_at,
                p.slug AS slug, p.kind AS kind, u.name AS user_name,
                NULL::text AS github_id
         FROM agent_roles r
@@ -138,7 +140,7 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
         ORDER BY r.created_at`;
       // Outside agents: pending asks first, bounded. `more` says how many are cut.
       const outside = await sql`
-        SELECT r.principal_user_id, r.scope, r.approved_by, r.created_at, r.resource_kind, r.expires_at,
+        SELECT r.id, r.principal_user_id, r.scope, r.approved_by, r.created_at, r.resource_kind, r.expires_at,
                NULL::text AS slug, 'external' AS kind, u.name AS user_name,
                op.owner_user_id AS owner_user_id, ou.name AS owner_name,
                (SELECT b.external_id FROM user_bindings b WHERE b.user_id = r.principal_user_id AND b.provider = 'github' LIMIT 1) AS github_id
@@ -384,7 +386,7 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
     },
     async listPersonalRows(ownerUserId) {
       const rows = await sql`
-        SELECT r.principal_user_id, r.scope, r.approved_by, r.expires_at, r.created_at, u.name AS user_name
+        SELECT r.id, r.principal_user_id, r.scope, r.approved_by, r.expires_at, r.created_at, u.name AS user_name
         FROM agent_roles r
         JOIN users u ON u.id = r.principal_user_id
         JOIN agent_principals ap ON ap.user_id = r.principal_user_id AND ap.owner_user_id = r.owner_user_id
@@ -395,10 +397,12 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
       return rows.flatMap((row): PersonalRow[] => {
         const principalUserId = str(row.principal_user_id);
         const scope = str(row.scope);
-        if (!principalUserId || !scope) return [];
+        const requestId = str(row.id);
+        if (!principalUserId || !scope || !requestId) return [];
         const granted = row.approved_by !== null && row.approved_by !== undefined;
         return [
           {
+            requestId,
             principalUserId,
             name: str(row.user_name),
             scope,

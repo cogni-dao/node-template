@@ -37,8 +37,7 @@ export {
 export { agentNameKey, hasHiddenCharacters } from "./names";
 export { buildNodeAiView } from "./node-ai";
 export { buildYourAisView } from "./your-ais";
-export { ADMIN_REQUEST_PATH_PREFIX, approvalPath, OWNER_REQUEST_PATH_PREFIX } from "./approval";
-export { requestViewForAdmin, requestViewForOwner } from "./requests";
+export { ADMIN_PAGE_PATH, approvalPath, claimPath, OWNER_PAGE_PATH } from "./approval";
 export { createPostgresAgentGrantsStore, type SqlTag } from "./postgres";
 export {
   AgentRolesError,
@@ -76,7 +75,6 @@ export type {
   PersonalRow,
   PersonalScopeKind,
   RequestRecord,
-  RequestView,
   RoleRow,
   RoleState,
   RunIdentity,

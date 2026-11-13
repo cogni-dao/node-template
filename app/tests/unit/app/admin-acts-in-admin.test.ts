@@ -50,19 +50,24 @@ const outsideAdmin = files.filter((f) => !ADMIN_DIRS.some((dir) => f.rel.startsW
 const importsOf = (text: string) => text.match(/import[^;]*?from\s*["'][^"']+["']/g) ?? [];
 
 describe("ADMIN_ACTS_IN_ADMIN", () => {
-  it("imports AgentAccessSection and the agent-access endpoints only from the Admin area", () => {
-    const importers = files.filter(
-      (f) => /import[^;]*\bAgentAccessSection\b[^;]*from/.test(f.text) || /from\s+["'][^"']*agent-access-endpoints["']/.test(f.text)
-    );
-    expect(importers.length).toBeGreaterThan(0);
-    expect(importers.map((f) => f.rel).filter((rel) => !ADMIN_DIRS.some((dir) => rel.startsWith(dir)))).toEqual([]);
+  it("imports the admin agent-access endpoints only from the Admin area; AgentAccessSection is shared, and outside Admin it gets owner endpoints only", () => {
+    const endpointImporters = files.filter((f) => /from\s+["'][^"']*agent-access-endpoints["']/.test(f.text));
+    expect(endpointImporters.length).toBeGreaterThan(0);
+    expect(endpointImporters.map((f) => f.rel).filter((rel) => !ADMIN_DIRS.some((dir) => rel.startsWith(dir)))).toEqual([]);
+    const sectionUsers = files.filter((f) => /import[^;]*\bAgentAccessSection\b[^;]*from/.test(f.text));
+    const outside = sectionUsers.filter((f) => !ADMIN_DIRS.some((dir) => f.rel.startsWith(dir)));
+    expect(outside.map((f) => f.rel)).toEqual(["app/(app)/profile/view.tsx"]); // the profile, and only the profile
+    for (const f of outside) {
+      expect(f.text).toContain("endpoints={OWNER_ACCESS_ENDPOINTS}");
+      expect(code(f.text)).not.toMatch(/AGENT_ACCESS_ENDPOINTS|\/api\/v1\/admin\//);
+    }
   });
 
   it("keeps the person's own profile blocks (Your AIs) free of any Admin import or admin control", () => {
     const profile = files.filter((f) => f.rel.startsWith("app/(app)/profile/") || f.rel.startsWith("app/api/v1/agent-access/mine/"));
     expect(profile.length).toBeGreaterThan(1);
     const offenders = profile
-      .filter((f) => importsOf(f.text).some((i) => /\(admin\)|admin-session|node-admin\.port|agent-access-endpoints|\bAgentAccessSection\b/.test(i)) || /\/api\/v1\/admin\//.test(code(f.text)))
+      .filter((f) => importsOf(f.text).some((i) => /\(admin\)|admin-session|node-admin\.port|agent-access-endpoints/.test(i)) || /\/api\/v1\/admin\//.test(code(f.text)))
       .map((f) => f.rel);
     expect(offenders).toEqual([]);
   });

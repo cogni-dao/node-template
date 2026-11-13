@@ -41,18 +41,17 @@ vi.mock("@/bootstrap/agent-credentials", async () => {
 });
 
 import { DELETE as adminDelete, GET as adminGet, POST as adminPost } from "@/app/api/v1/admin/ai-access/route";
-import { GET as adminRequestGet } from "@/app/api/v1/admin/ai-access/requests/[id]/route";
 import { POST as claimStart } from "@/app/api/v1/agent/claim/route";
 import { GET as askList, POST as askCreate } from "@/app/api/v1/agent/access-requests/route";
 import { DELETE as mineDelete, GET as mineGet, POST as minePost } from "@/app/api/v1/agent-access/mine/route";
-import { GET as mineRequestGet, POST as mineRequestPost } from "@/app/api/v1/agent-access/mine/requests/[id]/route";
+import { POST as mineRequestPost } from "@/app/api/v1/agent-access/mine/requests/[id]/route";
 import { GET as claimView, POST as claimComplete } from "@/app/api/v1/profile/ai/claims/[id]/route";
 import { type AgentAuthoritySql, createAgentToolAuthority } from "@/bootstrap/agent-authority";
 import { createNodeAdminPort } from "@/bootstrap/node-admin-port";
 
 const CONTRIBUTE = "knowledge:contribute";
 const ADMIN_WALLET = `0x${randomUUID().replaceAll("-", "").padEnd(40, "b").slice(0, 40)}`;
-const UUID_TAIL = /\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
+const UUID_TAIL = /[?&](?:request|claim)=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
 
 describe("personal grants and claim (real Postgres)", () => {
   let service: Sql;
@@ -99,14 +98,17 @@ describe("personal grants and claim (real Postgres)", () => {
     (await (await askList(req("http://localhost/api/v1/agent/access-requests"), undefined as never)).json()) as {
       requests: Array<{ scope: string; state: string; approvalUrl?: string }>;
     };
-  const ownerView = (id: string) => mineRequestGet(req(`http://localhost/api/v1/agent-access/mine/requests/${id}`), idCtx(id));
+  /** What the owner's profile lists (the shared section's data): the rows of this person's AIs, each with its request id. */
+  const ownerRows = async () =>
+    (await (await mineGet(req("http://localhost/api/v1/agent-access/mine"), undefined as never)).json()) as {
+      permissions: Array<{ requestId: string; who: string; scope: string; label: string; on: boolean; until: string | null }>;
+    };
   const ownerDecide = (id: string, decision: "approve" | "deny", headers: Record<string, string> = {}) =>
     mineRequestPost(req(`http://localhost/api/v1/agent-access/mine/requests/${id}`, { method: "POST", body: { decision }, headers }), idCtx(id));
-  const adminView = (id: string) => adminRequestGet(req(`http://localhost/api/v1/admin/ai-access/requests/${id}`), idCtx(id));
   const adminTable = async () => {
     as(admin, "session");
     return (await (await adminGet(req("http://localhost/api/v1/admin/ai-access"), undefined as never)).json()) as {
-      permissions: Array<{ section: string; principalUserId: string; scope: string; on: boolean }>;
+      permissions: Array<{ section: string; requestId?: string; principalUserId: string; scope: string; on: boolean }>;
     };
   };
   const adminWrite = (handler: typeof adminPost, body: unknown) =>
@@ -148,28 +150,26 @@ describe("personal grants and claim (real Postgres)", () => {
     await service?.end({ timeout: 1 });
   });
 
-  it("the owner click loop: ask -> its own page -> open (nothing changes) -> Approve -> door opens (owner in the log) -> admin sees it read-only and revokes -> door closes", async () => {
+  it("the owner click loop: ask -> deep link to the profile row -> open (nothing changes) -> Approve -> door opens (owner in the log) -> admin sees it read-only and revokes -> door closes", async () => {
     as(agent, "bearer");
     const first = await asked(CONTRIBUTE);
     expect(first.created).toBe(true);
-    expect(first.path).toBe(`/profile/ai/requests/${first.id}`);
+    expect(first.path).toBe(`/profile?request=${first.id}`);
     expect(await rowOf(agent)).toMatchObject({ id: first.id, resource_kind: "delegated", owner_user_id: owner, approved_by: null });
     expect(await door(agent)).toMatchObject({ decision: "deny", reason: "no_role" }); // an Off row opens nothing
     expect((await myAccess()).requests[0]).toMatchObject({ scope: CONTRIBUTE, state: "pending", approvalUrl: expect.stringContaining(first.id) });
     expect((await asked(CONTRIBUTE)).id).toBe(first.id); // asking again is the same page
 
-    // The owner opens the page: only that request, and opening approves nothing.
+    // The owner opens the profile: the row with that id is in their list (the page highlights it), and opening approves nothing. Another person and the admin table do not see it.
     as(owner, "session");
-    const page = await ownerView(first.id);
-    expect(page.status).toBe(200);
-    expect(await page.json()).toMatchObject({ requestId: first.id, who: "Helper bot", owner: "Olive Owner", scope: CONTRIBUTE, state: "pending", label: "Propose changes to the knowledge base" });
+    expect((await ownerRows()).permissions).toEqual([
+      expect.objectContaining({ requestId: first.id, who: "Helper bot", scope: CONTRIBUTE, on: false, label: "Propose changes to the knowledge base" }),
+    ]);
     expect((await rowOf(agent))?.approved_by).toBeNull();
-    // Another person and an admin's page for this id are the same 404; the AI itself cannot decide.
     as(other, "session");
-    expect((await ownerView(first.id)).status).toBe(404);
+    expect((await ownerRows()).permissions.map((p) => p.requestId)).not.toContain(first.id);
     expect((await ownerDecide(first.id, "approve")).status).toBe(404);
-    as(admin, "session");
-    expect((await adminView(first.id)).status).toBe(404);
+    expect((await adminTable()).permissions.map((p) => p.requestId)).not.toContain(first.id);
     as(agent, "bearer");
     expect((await ownerDecide(first.id, "approve")).status).toBe(401);
     expect((await ownerDecide(first.id, "approve", { authorization: "Bearer cogni_ag_sk_v1_x" })).status).toBe(403);
@@ -188,7 +188,7 @@ describe("personal grants and claim (real Postgres)", () => {
     // The profile list shows it On. The admin table lists it read-only (section personal) and may revoke it.
     expect((await (await mineGet(req("http://localhost/api/v1/agent-access/mine"), undefined as never)).json()).permissions[0]).toMatchObject({ scope: CONTRIBUTE, on: true });
     const table = await adminTable();
-    expect(table.permissions.filter((p) => p.principalUserId === agent)).toEqual([expect.objectContaining({ section: "personal", scope: CONTRIBUTE, on: true })]);
+    expect(table.permissions.filter((p) => p.principalUserId === agent)).toEqual([expect.objectContaining({ section: "personal", requestId: first.id, scope: CONTRIBUTE, on: true })]);
     const revoke = await adminWrite(adminDelete, { principalUserId: agent, scope: CONTRIBUTE });
     expect(await revoke.json()).toMatchObject({ changed: true });
     expect(await door(agent)).toMatchObject({ decision: "deny" }); // the kill switch worked
@@ -206,26 +206,23 @@ describe("personal grants and claim (real Postgres)", () => {
     expect(await door(agent)).toMatchObject({ decision: "deny" });
   });
 
-  it("an ownerless agent's ask is an Admin page; an owned agent's ask off the list is one too; only an admin decides them", async () => {
+  it("an ownerless agent's ask is an Admin deep link; an owned agent's ask off the list is one too; only an admin decides them", async () => {
     as(loose, "bearer");
     const node = await asked(CONTRIBUTE);
-    expect(node.path).toBe(`/admin/ai-access/requests/${node.id}`);
+    expect(node.path).toBe(`/admin/ai-access?request=${node.id}`);
     expect(await rowOf(loose)).toMatchObject({ resource_kind: "node", owner_user_id: null });
     as(agent, "bearer");
     const off = await asked("work_item:transition");
-    expect(off.path).toBe(`/admin/ai-access/requests/${off.id}`);
+    expect(off.path).toBe(`/admin/ai-access?request=${off.id}`);
 
-    // The owner and a non-admin cannot open or decide an Admin page; an admin can.
+    // The owner's list never carries an Admin ask, and a non-admin cannot decide one; an admin sees both rows by id and can.
     as(owner, "session");
-    expect((await ownerView(node.id)).status).toBe(404);
-    expect((await adminView(node.id)).status).toBe(403);
+    expect((await ownerRows()).permissions.map((p) => p.requestId)).not.toContain(node.id);
+    expect((await ownerDecide(node.id, "approve")).status).toBe(404);
     expect((await adminWrite(adminPost, { principalUserId: loose, scope: CONTRIBUTE })).status).toBe(403);
     expect(await door(loose)).toMatchObject({ decision: "deny" });
-    as(admin, "session");
-    const view = await adminView(node.id);
-    expect(view.status).toBe(200);
-    expect(await view.json()).toMatchObject({ who: "Loose bot", owner: null, state: "pending", scope: CONTRIBUTE });
-    expect((await adminView(off.id)).status).toBe(200);
+    const pending = (await adminTable()).permissions.filter((p) => p.section === "pending");
+    expect(pending.map((p) => p.requestId)).toEqual(expect.arrayContaining([node.id, off.id]));
     expect((await adminWrite(adminPost, { principalUserId: loose, scope: CONTRIBUTE })).status).toBe(200);
     expect(await door(loose)).toMatchObject({ decision: "allow", basis: "role" });
     await adminWrite(adminDelete, { principalUserId: loose, scope: CONTRIBUTE });
@@ -277,7 +274,7 @@ describe("personal grants and claim (real Postgres)", () => {
     const started = await claimStart(req("http://localhost/api/v1/agent/claim", { method: "POST" }), undefined as never);
     expect(started.status).toBe(201);
     const { claimUrl } = (await started.json()) as { claimUrl: string };
-    expect(claimUrl).toMatch(/\/profile\/ai\/claims\/[0-9a-f-]{36}$/);
+    expect(claimUrl).toMatch(/\/profile\?claim=[0-9a-f-]{36}$/);
     const claimId = claimIdOf(claimUrl);
     expect(await ownerOf(loose)).toBeNull(); // asking changes nothing
 
@@ -310,7 +307,7 @@ describe("personal grants and claim (real Postgres)", () => {
 
     // Now owned: its delegable ask goes to its new owner's profile.
     const personal = await asked("knowledge:read");
-    expect(personal.path).toBe(`/profile/ai/requests/${personal.id}`);
+    expect(personal.path).toBe(`/profile?request=${personal.id}`);
     as(owner, "session");
     expect((await ownerDecide(personal.id, "deny")).status).toBe(200);
   });

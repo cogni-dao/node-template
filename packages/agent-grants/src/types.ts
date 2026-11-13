@@ -101,23 +101,10 @@ export interface RequestRecord {
   readonly at: string;
 }
 
-/** The body of one approval page. Only this request. */
-export interface RequestView {
-  readonly requestId: string;
-  readonly principalUserId: string;
-  readonly scope: string;
-  /** The agent, by its identifier. */
-  readonly who: string;
-  /** The owner's name, or null when the agent has none. */
-  readonly owner: string | null;
-  readonly label: string;
-  readonly description: string;
-  readonly state: RequestRecord["state"];
-  readonly until: string | null;
-}
-
 /** One personal row for the owner's "Your AIs" block: an ask waiting (`pending`) or a live grant (`granted`). */
 export interface PersonalRow {
+  /** The row's id (`?request=<id>` in its approval link). */
+  readonly requestId: string;
   readonly principalUserId: string;
   /** The agent's registered name, or null. */
   readonly name: string | null;
@@ -141,6 +128,8 @@ export interface RoleRow {
   readonly scope: string;
   readonly state: "pending" | "granted";
   readonly at: string;
+  /** The row's id: the `?request=<id>` of its approval link, so a page can highlight it. */
+  readonly requestId?: string | undefined;
   /** True for a personal row (the owner's delegation). The admin sees it read-only, with Revoke (the kill switch). */
   readonly personal?: boolean;
   /** When a personal grant ends (ISO). */
@@ -253,6 +242,8 @@ export type AccessSection = "pending" | "node" | "outside" | "personal";
  */
 export interface NodeAiPermissionView {
   readonly section: AccessSection;
+  /** The row's id (`?request=<id>` in its approval link), so the page can highlight it. Absent for a row of this node's own AI that was never asked. */
+  readonly requestId?: string | undefined;
   /** Opaque to the human; the table sends it back unchanged when the admin clicks. */
   readonly principalUserId: string;
   /** The agent's identifier: the slug for this node's AI, the registered name for an outside agent. Never a vanity label. */
@@ -286,6 +277,8 @@ export interface NodeAiAccessView {
  * `principalUserId` and `scope` are opaque to the human; the block sends them back unchanged when the owner clicks.
  */
 export interface YourAiPermissionView {
+  /** The row's id: the handle of its approval link and of the by-id decision. */
+  readonly requestId: string;
   readonly principalUserId: string;
   /** The AI's registered name, an identifier and never a vanity label. */
   readonly who: string;

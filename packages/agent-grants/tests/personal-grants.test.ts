@@ -26,8 +26,8 @@ import {
   PERSONAL_GRANT_TTL_DAYS,
   personalKindFor,
   requestAccess,
-  requestViewForAdmin,
-  requestViewForOwner,
+  approvalPath,
+  claimPath,
   revokePersonal,
   revokeRole,
   type ScopeDeclaration,
@@ -86,20 +86,20 @@ describe("the ask returns its own approval page", () => {
   it("an owned agent asking a delegable scope gets a personal Off row and the owner's page for THAT request", async () => {
     const s = world();
     const res = await ask(s);
-    expect(res).toEqual({ state: "pending", created: true, approvalPath: `/profile/ai/requests/${s.roles[0]?.id}` });
+    expect(res).toEqual({ state: "pending", created: true, approvalPath: `/profile?request=${s.roles[0]?.id}` });
     expect(s.roles[0]).toMatchObject({ kind: "delegated", owner: OWNER, approvedBy: null });
     expect((await ask(s)).approvalPath).toBe(res.approvalPath); // the same ask, the same page
   });
   it("an ownerless agent, and an owned agent asking a scope off the list, get a node row and the Admin page", async () => {
     const s = world();
     const loose = await ask(s, LOOSE);
-    expect(loose.approvalPath).toBe(`/admin/ai-access/requests/${s.roles[0]?.id}`);
+    expect(loose.approvalPath).toBe(`/admin/ai-access?request=${s.roles[0]?.id}`);
     expect(s.roles[0]).toMatchObject({ kind: "node", owner: null });
     const off = await ask(s, AGENT, "work_item:transition");
-    expect(off.approvalPath).toBe(`/admin/ai-access/requests/${s.roles[1]?.id}`);
+    expect(off.approvalPath).toBe(`/admin/ai-access?request=${s.roles[1]?.id}`);
     expect(s.roles[1]).toMatchObject({ kind: "node" });
     const admin = await ask(s, AGENT, "vcs:merge_pr");
-    expect(admin.approvalPath).toMatch(/^\/admin\//);
+    expect(admin.approvalPath).toMatch(/^\/admin\/ai-access\?request=/);
   });
   it("two asks never share a page", async () => {
     const s = world();
@@ -183,30 +183,29 @@ describe("the approval page: one request, one approver, one atomic decision", ()
   it("Approve by id turns it On once; a second click is not_pending; Deny ends the ask; another person and an unknown id are 404", async () => {
     const s = world();
     const { approvalPath } = await ask(s);
-    const id = approvalPath?.split("/").pop() as string;
+    const id = approvalPath?.split("=").pop() as string;
     await expect(decideAsOwner(s, { ownerUserId: OTHER, requestId: id, decision: "approve" })).rejects.toMatchObject({ code: "principal_not_found" });
     await expect(decideAsOwner(s, { ownerUserId: OWNER, requestId: "nope", decision: "approve" })).rejects.toMatchObject({ code: "principal_not_found" });
     expect(await decideAsOwner(s, { ownerUserId: OWNER, requestId: id, decision: "approve" })).toMatchObject({ changed: true, scope: CONTRIBUTE });
     expect(await lock(s)).toMatchObject({ decision: "allow" });
     await expect(decideAsOwner(s, { ownerUserId: OWNER, requestId: id, decision: "approve" })).rejects.toMatchObject({ code: "not_pending" });
-    const second = (await ask(s, AGENT, READ)).approvalPath?.split("/").pop() as string;
+    const second = (await ask(s, AGENT, READ)).approvalPath?.split("=").pop() as string;
     expect(await decideAsOwner(s, { ownerUserId: OWNER, requestId: second, decision: "deny" })).toMatchObject({ changed: true });
     expect((await listOwnAccess(s, AGENT)).find((r) => r.scope === READ)?.state).toBe("denied");
   });
-  it("the owner's view is theirs only; the admin's view is a node row an admin may decide, never a personal row or an owner's ask", async () => {
+  it("the links are deep links into the two existing pages, and the rows carry the id the page highlights", async () => {
     const s = world();
-    const personal = (await ask(s)).approvalPath?.split("/").pop() as string;
-    const node = (await ask(s, LOOSE)).approvalPath?.split("/").pop() as string;
-    const offList = (await ask(s, AGENT, "work_item:transition")).approvalPath?.split("/").pop() as string;
-    const view = (id: string, who = OWNER) => requestViewForOwner(s, { ownerUserId: who, requestId: id, declarations });
-    expect(await view(personal)).toMatchObject({ who: "Helper bot", owner: "Olive Owner", label: "Propose changes to the knowledge base", state: "pending" });
-    expect(await view(personal, OTHER)).toBeNull();
-    expect(await view(node)).toBeNull(); // a node row is an admin's
-    const admin = (id: string) => requestViewForAdmin(s, { requestId: id, declarations: { ...declarations, "work_item:transition": { label: "Move work items", description: "Change a work item's state." } }, scopes });
-    expect(await admin(node)).toMatchObject({ who: "Unnamed agent", owner: null, state: "pending" });
-    expect(await admin(offList)).toMatchObject({ owner: "Olive Owner" }); // an owned agent's ask off the list is the admin's
-    expect(await admin(personal)).toBeNull(); // an owner's ask is not
-    expect(await admin("unknown")).toBeNull();
+    const personal = (await ask(s)).approvalPath as string;
+    const node = (await ask(s, LOOSE)).approvalPath as string;
+    const id = (path: string) => path.split("=").pop() as string;
+    expect(personal).toBe(approvalPath(id(personal), "personal"));
+    expect(personal.startsWith("/profile?request=")).toBe(true);
+    expect(node.startsWith("/admin/ai-access?request=")).toBe(true);
+    expect(claimPath("abc")).toBe("/profile?claim=abc");
+    expect((await s.listPersonalRows(OWNER)).map((r) => r.requestId)).toEqual([id(personal)]);
+    expect(buildYourAisView({ declarations, rows: await s.listPersonalRows(OWNER) })[0]?.requestId).toBe(id(personal));
+    const pending = buildNodeAiView({ declarations, scopesByPrincipal: {}, internal: [], rows: (await s.listRoleRows(100)).rows }).filter((r) => r.section === "pending");
+    expect(pending.map((r) => r.requestId)).toEqual([id(node)]); // admin sees only its own ask, with its id
   });
 });
 

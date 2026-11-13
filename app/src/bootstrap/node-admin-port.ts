@@ -17,7 +17,6 @@ import type { NodeAdminPort } from "@/ports";
 export function createNodeAdminPort(authority: AgentToolAuthority): NodeAdminPort {
   return {
     listNodeAi: () => authority.listNodeAi(),
-    getAiRequest: (_session, requestId) => authority.adminRequestView(requestId),
     async turnAiPermissionOn(session, { ref, scope }) {
       const { principalUserId, created } = await authority.grantRole({ ...ref, scope, approvedBy: session.userId });
       return { principalUserId, changed: created };

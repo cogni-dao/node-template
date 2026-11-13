@@ -44,6 +44,7 @@ export function buildNodeAiView(input: {
     if (!n) continue;
     out.push({
       section: "pending",
+      ...(row.requestId ? { requestId: row.requestId } : {}),
       principalUserId: row.principalUserId,
       who: row.name ?? NEUTRAL_WHO,
       outside: !row.internal,
@@ -91,6 +92,7 @@ export function buildNodeAiView(input: {
     if (!n) continue;
     out.push({
       section: "outside",
+      ...(row.requestId ? { requestId: row.requestId } : {}),
       principalUserId: row.principalUserId,
       who: row.name ?? NEUTRAL_WHO,
       outside: true,
@@ -107,6 +109,7 @@ export function buildNodeAiView(input: {
     if (!n) continue;
     out.push({
       section: "personal",
+      ...(row.requestId ? { requestId: row.requestId } : {}),
       principalUserId: row.principalUserId,
       who: row.name ?? NEUTRAL_WHO,
       outside: true,

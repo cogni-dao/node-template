@@ -21,6 +21,8 @@ export const agentMineListOperation = {
   output: z.object({
     permissions: z.array(
       z.object({
+        /** The row's id: the handle of its approval link (`/profile?request=<id>`) and of the by-id decision. */
+        requestId: z.string(),
         principalUserId: z.string(),
         who: z.string(),
         scope: z.string(),

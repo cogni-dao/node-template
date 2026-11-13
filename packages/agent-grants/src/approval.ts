@@ -3,20 +3,25 @@
 
 /**
  * Module: `@cogni-dao/agent-grants/approval`
- * Purpose: The unique approval page of ONE ask. An agent hands this URL to the human who decides; the page shows only that request.
- * Scope: Pure path builders. The node's routes own the pages; the package only fixes where each kind of row is decided.
+ * Purpose: The unique approval link of ONE ask, and the claim link of one claim. An agent hands the link to the human who decides.
+ * Scope: Pure path builders. A link is a DEEP LINK into a page that already exists (the owner's profile, or the Admin AI-access page): the page highlights and scrolls to that one row.
+ *   Never a page of its own.
  * Invariants:
  *   - APPROVER_FOLLOWS_RESOURCE: a personal row (the owner's, for an owned agent) is decided on the owner's profile; every other row is a node-admin's, in the Admin area.
- *     Never a generic page: the id in the path is the row.
- *   - The id is the row's random UUID. It names the request and grants nothing: the page still needs the right session.
+ *   - The id in the link is the row's random UUID. It names the request and grants nothing: the page still needs the right session, and lists only what that session may decide.
  * Side-effects: none
  * @public
  */
 
-export const OWNER_REQUEST_PATH_PREFIX = "/profile/ai/requests/" as const;
-export const ADMIN_REQUEST_PATH_PREFIX = "/admin/ai-access/requests/" as const;
+export const OWNER_PAGE_PATH = "/profile" as const;
+export const ADMIN_PAGE_PATH = "/admin/ai-access" as const;
 
-/** The path of one request's approval page. `personal` rows go to the owner's profile; `node` rows go to Admin. */
+/** The link of one request: the owner's profile (`personal`) or the Admin page (`node`), with `?request=<id>`. */
 export function approvalPath(requestId: string, plane: "personal" | "node"): string {
-  return `${plane === "personal" ? OWNER_REQUEST_PATH_PREFIX : ADMIN_REQUEST_PATH_PREFIX}${requestId}`;
+  return `${plane === "personal" ? OWNER_PAGE_PATH : ADMIN_PAGE_PATH}?request=${requestId}`;
+}
+
+/** The link of one claim: the owner's profile with `?claim=<id>`. */
+export function claimPath(claimId: string): string {
+  return `${OWNER_PAGE_PATH}?claim=${claimId}`;
 }

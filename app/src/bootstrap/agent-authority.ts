@@ -42,9 +42,6 @@ import {
   requestAccess,
   type NodeAiPermissionView,
   type OwnRoleRow,
-  requestViewForAdmin,
-  requestViewForOwner,
-  type RequestView,
   resolveInternalPrincipal,
   revokeRole,
   type SqlTag,
@@ -95,11 +92,7 @@ export interface AgentToolAuthority {
   nameTaken(name: string): Promise<boolean>;
   /** The agent's own rows by state. A live account permission also names the account its owner opened to it. */
   listOwnAccess(principalUserId: string): Promise<OwnRoleRow[]>;
-  /** One ask's approval page for its OWNER, or null (unknown, someone else's, or a node row). */
-  ownerRequestView(input: { ownerUserId: string; requestId: string }): Promise<RequestView | null>;
-  /** One ask's approval page for a node-admin, or null (unknown, a personal row, or an ask the owner decides). */
-  adminRequestView(requestId: string): Promise<RequestView | null>;
-  /** The owner decides ONE ask on its own page, by id (Approve or Deny): one atomic write. Throws AgentRolesError. */
+  /** The owner decides ONE ask by id (Approve or Deny): one atomic write. Throws AgentRolesError. */
   decideOwnerRequest(input: { ownerUserId: string; requestId: string; decision: "approve" | "deny" }): Promise<{ principalUserId: string; scope: string; changed: boolean }>;
   /** The person's own AIs' asks and live grants (personal rows only; node rows are Admin's). */
   listYourAis(ownerUserId: string): Promise<YourAiPermissionView[]>;
@@ -235,10 +228,6 @@ export function createAgentToolAuthority(deps: {
       });
       return decision;
     },
-    ownerRequestView: ({ ownerUserId, requestId }) =>
-      withStore((store) => requestViewForOwner(store, { ownerUserId, requestId, declarations })),
-    adminRequestView: (requestId) =>
-      withStore((store) => requestViewForAdmin(store, { requestId, declarations, scopes })),
     async decideOwnerRequest(input) {
       const result = await withStore((store) => decideAsOwner(store, input));
       if (result.changed)

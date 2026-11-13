@@ -3,13 +3,11 @@
 
 /**
  * Module: `@contracts/agent.request.v1`
- * Purpose: Zod contracts for ONE ask's approval page, on the HUMAN plane (session only): the page shows only that request (the AI, its owner, the permission in plain words,
- *   its state) and offers Approve and Deny. The owner reads it at `GET /api/v1/agent-access/mine/requests/{id}`; a node-admin at `GET /api/v1/admin/ai-access/requests/{id}`.
- *   An EXISTING agent becomes its owner's by an agent-initiated claim: `POST /api/v1/agent/claim` (AI plane, bearer) returns a claim page; the person's click claims it.
+ * Purpose: Zod contracts for the owner's decision on ONE ask by id (`POST /api/v1/agent-access/mine/requests/{id}`, HUMAN plane, session only), and for the agent-initiated claim
+ *   of an EXISTING agent: `POST /api/v1/agent/claim` (AI plane, bearer) returns a link into the owner's profile (`/profile?claim=<id>`); the person's click there claims it.
  * Scope: Wire shapes. Authority lives in the routes and `@cogni-dao/agent-grants`.
  * Invariants:
- *   - CONTRACTS_ARE_TRUTH. An answer of "no" (unknown id, someone else's request, a request the caller may not decide) is one 404 `not_found`.
- *   - HUMAN_SURFACE_TOKENLESS: the view holds names and plain text. `principalUserId` and `scope` are the opaque handles the Approve and Deny click sends back.
+ *   - CONTRACTS_ARE_TRUTH. An answer of "no" (unknown id, someone else's request) is one 404 `not_found`.
  * Side-effects: none
  * Links: https://cognidao.org/knowledge/node-capability-grants-standard, https://cognidao.org/work/items/task.5465
  * @public
@@ -17,25 +15,7 @@
 
 import { z } from "zod";
 
-export const agentRequestViewOperation = {
-  id: "agent.request.view.v1",
-  output: z.object({
-    requestId: z.string(),
-    principalUserId: z.string(),
-    scope: z.string(),
-    /** The AI, by its identifier. */
-    who: z.string(),
-    /** The person who owns the AI, or null when it has none. */
-    owner: z.string().nullable(),
-    label: z.string(),
-    description: z.string(),
-    /** `ended` = approved once, now past its end. */
-    state: z.enum(["pending", "granted", "denied", "revoked", "ended"]),
-    until: z.string().nullable(),
-  }),
-} as const;
-
-/** The click on an approval page: `POST /api/v1/agent-access/mine/requests/{id}`. */
+/** The click on an ask in the owner's Your AIs: `POST /api/v1/agent-access/mine/requests/{id}`. */
 export const agentRequestDecisionOperation = {
   id: "agent.request.decision.v1",
   input: z.object({ decision: z.enum(["approve", "deny"]) }),
@@ -47,7 +27,7 @@ export const agentRequestDecisionOperation = {
   }),
 } as const;
 
-/** `POST /api/v1/agent/claim` (AI plane, bearer, no body): an existing agent asks to become its owner's. The answer is the page the person opens. */
+/** `POST /api/v1/agent/claim` (AI plane, bearer, no body): an existing agent asks to become its owner's. The answer is the link the person opens (their profile). */
 export const agentClaimStartOperation = {
   id: "agent.claim.start.v1",
   output: z.object({
@@ -57,7 +37,7 @@ export const agentClaimStartOperation = {
   }),
 } as const;
 
-/** `GET /api/v1/profile/ai/claims/{id}` (human plane): what the claim page shows. `POST` on the same path is the click. */
+/** `GET /api/v1/profile/ai/claims/{id}` (human plane): what the claim row on the profile shows. `POST` on the same path is the click. */
 export const agentClaimViewOperation = {
   id: "agent.claim.view.v1",
   output: z.object({

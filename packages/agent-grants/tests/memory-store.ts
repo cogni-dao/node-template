@@ -123,6 +123,7 @@ export function memoryStore(init?: {
         )
         .map(
           (r): RoleRow => ({
+            requestId: r.id,
             principalUserId: r.principal,
             slug: slugOf(r.principal),
             internal: slugOf(r.principal) !== null,
@@ -265,6 +266,7 @@ export function memoryStore(init?: {
       return roles
         .filter((r) => r.kind !== "node" && r.owner === ownerUserId && !r.revoked && (!r.approvedBy || !ended(r)) && init?.owners?.[r.principal] === ownerUserId)
         .map((r) => ({
+          requestId: r.id,
           principalUserId: r.principal,
           name: init?.names?.[r.principal] ?? null,
           scope: r.scope,

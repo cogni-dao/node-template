@@ -27,6 +27,7 @@ export function buildYourAisView(input: {
     const d = input.declarations[row.scope];
     if (!d?.label || !d.description) continue;
     out.push({
+      requestId: row.requestId,
       principalUserId: row.principalUserId,
       who: row.name?.trim() || NEUTRAL_WHO,
       scope: row.scope,

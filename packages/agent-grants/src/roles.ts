@@ -32,7 +32,6 @@ import type {
   OwnRoleRow,
   PersonalScopeKind,
   RequestRecord,
-  RequestView,
   ScopeKind,
   SubjectRequirement,
 } from "./types";

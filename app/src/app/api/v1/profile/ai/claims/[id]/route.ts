@@ -3,7 +3,7 @@
 
 /**
  * Module: `@app/api/v1/profile/ai/claims/[id]`
- * Purpose: The claim page's data and its click. A signed-in person opens a claim link an existing agent handed them: GET shows the agent and whether the claim can still be used;
+ * Purpose: The claim row's data and its click, in the owner's "Your AIs" on the profile (`/profile?claim=<id>`). GET shows the agent and whether the claim can still be used;
  *   POST (the Claim click) makes the agent theirs.
  * Scope: Session guard, then the spawn store. Opening never claims: only the POST does.
  * Invariants:

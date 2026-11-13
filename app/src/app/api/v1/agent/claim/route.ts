@@ -3,8 +3,8 @@
 
 /**
  * Module: `@app/api/v1/agent/claim`
- * Purpose: AI plane (bearer only). An EXISTING agent with no owner asks to become a person's. It answers with `claimUrl`, a page the agent hands to the person; the person's
- *   click on that page makes the agent theirs. Same principal, same history (ONE_IDENTITY).
+ * Purpose: AI plane (bearer only). An EXISTING agent with no owner asks to become a person's. It answers with `claimUrl` (`/profile?claim=<id>`), a deep link into the person's
+ *   profile that the agent hands over; the person's Claim click there makes the agent theirs. Same principal, same history (ONE_IDENTITY).
  * Scope: Bearer-only plane rule and delegation to the spawn store. No human secret: nothing travels through the person except a link.
  * Invariants:
  *   - KIND_PICKS_THE_PLANE: a browser session (or any identity that is not a verified bearer) gets 404.
@@ -17,6 +17,7 @@
  * @public
  */
 
+import { claimPath } from "@cogni/agent-grants";
 import { CredentialStoreUnavailableError, credentialErrorHttp, startAgentClaim } from "@cogni/agent-grants/credentials";
 import { agentClaimStartOperation } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
@@ -41,7 +42,7 @@ export const POST = wrapRouteHandlerWithLogging(
       if (!started.ok) return started.reason === "already_owned" ? json({ error: "already_owned" }, 409) : json({ error: "not_an_agent" }, 403);
       ctx.log.info({ event: EVENT_NAMES.AGENT_CLAIM_STARTED, agentUserId: sessionUser.id, expiresAt: started.expiresAt }, EVENT_NAMES.AGENT_CLAIM_STARTED);
       return json(
-        agentClaimStartOperation.output.parse({ claimUrl: configuredUrl(`/profile/ai/claims/${started.claimId}`), expiresAt: started.expiresAt }),
+        agentClaimStartOperation.output.parse({ claimUrl: configuredUrl(claimPath(started.claimId)), expiresAt: started.expiresAt }),
         201
       );
     } catch (error) {
