@@ -112,8 +112,27 @@ describe("renderBundleMarkdown", () => {
 			"PATCH https://poly.cognidao.org/api/v1/work/items/{id}",
 		);
 		expect(markdown).toContain(
-			'{"reason":"<why, one line, at most 25 words>","set":{...}}',
+			'{"reason":"<why, at most 25 words>","cites":[{"id":"<atom>"}],"set":{...}}',
 		);
+		expect(markdown).toContain(
+			"GET https://poly.cognidao.org/api/v1/work/items?sortBy=rankScore&sortDirection=desc&limit=5",
+		);
+		for (const status of [
+			"needs_triage",
+			"needs_research",
+			"needs_design",
+			"needs_implement",
+			"needs_closeout",
+			"needs_merge",
+			"done",
+		])
+			expect(markdown).toContain(`| ${status} |`);
+	});
+
+	it("leads the invariants with grounding in node knowledge", () => {
+		expect(SESSION_BOOTSTRAP_INVARIANTS[0]).toMatch(/^GROUND EVERYTHING/);
+		expect(SESSION_BOOTSTRAP_INVARIANTS[0]).toContain("node-template-architect");
+		expect(SESSION_BOOTSTRAP_INVARIANTS[0]).toContain("knowledge refinement");
 	});
 
 	it("renders the current-node orientation entry IN FULL above the tooling invariants", () => {
@@ -211,32 +230,18 @@ describe("renderBundleMarkdown", () => {
 	});
 });
 
-describe("bundle growth — whole indexes below the Markdown budget (task.5309)", () => {
-	// A realistic index past the former 16 KiB ceiling still fits the reviewed
-	// 64 KiB Markdown budget. Larger indexes use the same-node complete-index
-	// fallback covered below; native harness delivery remains unchanged.
-	function indexOf(rows: number, titleLen: number) {
-		return Array.from({ length: rows }, (_, i) => ({
+describe("no flat governing index in the Markdown (story.0044)", () => {
+	it("routes by domains and the architect instead of listing governing rows", () => {
+		const rows = Array.from({ length: 80 }, (_, i) => ({
 			id: `build-compute-entry-${i}`,
-			// Trigger text carries the bulk of each content-free governing row.
-			useWhen: `Build/compute runtime knowledge entry ${i} — ${"detail ".repeat(titleLen)}`,
+			useWhen: `Build/compute runtime knowledge entry ${i}`,
 			entryType: "guide",
 			domain: "infrastructure",
 		}));
-	}
-
-	it("renders a bundle well past the former 16 KB cap, whole and untruncated", () => {
-		const md = renderBundleMarkdown({
-			...baseInput,
-			governingIndex: indexOf(80, 40),
-		});
-		const bytes = new TextEncoder().encode(
-			`${md.replace(/\n+$/, "")}\n`,
-		).byteLength;
-		// Past the old ceiling — which would have thrown here.
-		expect(bytes).toBeGreaterThan(16 * 1024);
-		// The last row is present ⇒ nothing was dropped.
-		expect(md).toContain("build-compute-entry-79");
+		const md = renderBundleMarkdown({ ...baseInput, governingIndex: rows });
+		expect(md).not.toContain("build-compute-entry-");
+		expect(md).not.toContain("## Governing index");
+		expect(md).toContain("## Knowledge domains");
 	});
 });
 
@@ -317,54 +322,6 @@ describe("static platform discovery beside node-owned cognition (task.5309)", ()
 		expect(markdown).toContain("node.flight");
 		expect(markdown).toContain("fresh-node");
 		expect(markdown).not.toContain("Basic ");
-	});
-
-	it("falls back to the same node's complete cognition index while preserving mandatory local bytes", () => {
-		const orientation = `CUSTOM LOCAL MISSION AND OPERATING RULES ${"orientation ".repeat(200)}`;
-		const rows = Array.from({ length: 100 }, (_, i) => ({
-			id: `old-rule-${i}`,
-			domain: "strategy",
-			entryType: "rule",
-			useWhen: `trigger ${i} ${"detail ".repeat(150)}`,
-		}));
-		rows.push({
-			id: "method-rule",
-			domain: "method",
-			entryType: "rule",
-			useWhen: "review a design",
-		});
-		const markdown = renderBundleMarkdown({
-			...baseInput,
-			name: "fresh-node",
-			origin: "https://fresh-node.cognidao.org",
-			governingIndex: rows,
-			orientation: { id: "fresh-node-agent-orientation", content: orientation },
-			goals: {
-				status: "ok",
-				goals: [
-					{
-						id: "goal-local",
-						title: "Local approved goal",
-						content: "LOCAL GOAL BYTES",
-						evaluateAt: null,
-					},
-				],
-			},
-		});
-		expect(markdown).toContain(
-			"GET https://fresh-node.cognidao.org/api/v1/cognition",
-		);
-		expect(markdown).toContain("governingIndex");
-		expect(markdown).toContain("method-rule");
-		expect(markdown).not.toContain("old-rule-99");
-		expect(markdown).toContain(orientation);
-		expect(markdown).toContain("LOCAL GOAL BYTES");
-		expect(markdown).toContain(baseInput.mission);
-		expect(markdown).toContain(baseInput.toolingInvariants[0]);
-		expect(markdown).toContain("node-ai-traces-read");
-		expect(new TextEncoder().encode(markdown).byteLength).toBeLessThanOrEqual(
-			64 * 1024,
-		);
 	});
 });
 
@@ -454,22 +411,12 @@ it("follows the served oversized same-cognition index beyond 1,000 newer rows wi
 		const first = await request(
 			"https://fresh-node.cognidao.org/api/v1/cognition",
 		);
-		expect(first.governingRender.mode).toBe("shelf-pointer");
-		expect(first.governingRender.wholeBytes).toBeGreaterThan(64 * 1024);
+		// The Markdown lists no governing rows; the JSON keeps the complete array.
+		expect(first.markdown).not.toContain("## Governing index");
 		expect(first.markdown).not.toContain(
 			"https://fresh-node.cognidao.org/api/v1/knowledge/index",
 		);
-		const governingSection = first.markdown
-			.split("## Governing index")[1]
-			.split("## Knowledge domains")[0];
-		const fallback =
-			/GET (https:\/\/fresh-node\.cognidao\.org\/api\/v1\/cognition)/.exec(
-				governingSection,
-			);
-		expect(fallback).not.toBeNull();
-		if (!fallback?.[1])
-			throw new Error("Missing served same-cognition fallback");
-		const followed = await request(fallback[1]);
+		const followed = first;
 		// Follow only the delivered complete array; the shared query has already selected membership.
 		const selected = followed.governingIndex.filter(
 			(r: { domain: string }) => r.domain === GOVERNING_FIXTURE_DOMAIN,
@@ -539,32 +486,13 @@ it("follows the served oversized same-cognition index beyond 1,000 newer rows wi
 	}
 });
 
-it("serves mandatory local cognition intact with an explicit over-budget condition", async () => {
+it("serves mandatory local cognition intact, however large", async () => {
 	const content = "MANDATORY ".repeat(8000);
-	const { renderBundle } = await import("@/app/api/v1/cognition/_bundle");
-	const result = renderBundle({
+	const markdown = renderBundleMarkdown({
 		...baseInput,
 		orientation: { id: "custom", content },
 	});
-	expect(result.markdown).toContain(content);
-	expect(result.markdown).toContain("node-ai-traces-read");
-	expect(result.governingRender.overBudget).toBe(true);
-	expect(result.markdown).toContain("preserved whole");
-});
-
-it("falls back again when the method shelf itself is too large, without losing mandatory guidance", () => {
-	const rows = Array.from({ length: 100 }, (_, i) => ({
-		id: `method-${i}`,
-		domain: "method",
-		entryType: "rule",
-		useWhen: "trigger ".repeat(150),
-	}));
-	const markdown = renderBundleMarkdown({ ...baseInput, governingIndex: rows });
-	expect(new TextEncoder().encode(markdown).byteLength).toBeLessThanOrEqual(
-		64 * 1024,
-	);
-	expect(markdown).not.toContain("method-99");
-	expect(markdown).toContain("governingIndex");
+	expect(markdown).toContain(content);
 	expect(markdown).toContain("node-ai-traces-read");
 });
 

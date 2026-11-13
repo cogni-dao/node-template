@@ -18,6 +18,10 @@
  *     the orientation. The section text (zero-goal bootstrap instruction,
  *     `goals unavailable: …`) ships in `@cogni/knowledge-store`'s
  *     `renderGoalsLines`; this file is only the call site (story.5101).
+ *   - ROUTE_BY_DOMAIN_AND_ARCHITECT: the Markdown carries no flat governing
+ *     index. Agents route through the orientation, node-template-architect's
+ *     subsystem table and the domain map; the JSON response keeps the complete
+ *     governingIndex for programmatic readers (story.0044).
  * Side-effects: none
  * Links: docs/spec/node-baas-architecture.md
  * @internal
@@ -41,24 +45,18 @@ import type {
 } from "@cogni/node-contracts";
 
 /**
- * The Markdown projection budgets 64 KiB before falling back to method/shelf
- * pointers. The native response retains the complete governingIndex, and
- * mandatory local orientation, goals and bootstrap are never truncated.
- * Harness delivery channels and the node-local loader remain unchanged.
- */
-
-/**
  * The irreducible session contract. This is the ONLY cognition that is
  * code-owned rather than hub-delivered: it must survive an empty or unreachable
  * hub so every session still bootstraps. Everything expandable (skills, guides,
  * domain expertise) is delivered live from the knowledge hub on top of this.
  */
 export const SESSION_BOOTSTRAP_INVARIANTS: readonly string[] = [
-	"ONE work item + ONE node per session (CI-gated) — it IS your plan. Claim it, write your definition of done as an ordered checklist in `outcome` BEFORE you act, and refine it IN PLACE as rungs land — `outcome` is GET-readable, so a plan or 'path forward' lives THERE, never only in chat. Heartbeat; link your PR; coordination.nextAction is authoritative.",
-	"Recall before you write. Search the hub first — merged (/api/v1/knowledge?domain=) and your own open branch — and refine in place over adding new.",
-	"Ship via PR: same-repo branch → CI green → flight to candidate → merge. The operator is the deploy plane (flight, logs, secrets); code, work, and knowledge live in the node repo + hub. Watch each async gate (CI, flight, deploy) the ONE portable way — see <watch-gate> below.",
-	"Done = validated on candidate, not merged. Flight, exercise the live surface, read your request back from Loki at that SHA, and post a /validate-candidate scorecard — the merge gate.",
-	"Your <slug>-agent-orientation is the operating map: recall it first, refine it as the node changes.",
+	"GROUND EVERYTHING in this node's knowledge, read this run: your `<slug>-agent-orientation`, then `node-template-architect` (its subsystem table names the governing atoms), then those atoms, designs and roadmaps. Acting without governing knowledge is invalid and unethical here: it pushes entropy into every fork. If no atom covers an action, or you deliberately deviate, the same work item ships the knowledge refinement that makes it guided. Every work-item edit sends `cites` for the atoms it used.",
+	"ONE work item + ONE node per session — it IS your plan. Work only a triaged item (scores, `goal:` label, `moves` naming the KPI metric it moves or a recorded measurement gap) that ranks in the top five by rankScore, or that the CEO named. Claim it, keep the approved Done when as an ordered checklist in `outcome`, refine it in place; heartbeat; link your PR.",
+	"Its status gates what you may do (table under Work items). New work enters `needs_triage` and is triaged before anything else happens to it.",
+	"Bias to speed and measurement: the smallest change that moves the KPI, shipped and measured today. ETAs are minutes; iterate on live readings, not deliberation.",
+	"Ship via PR: same-repo branch → CI green → flight to candidate → /validate-candidate → operator merge → promote. Watch each async gate the ONE portable way — see <watch-gate> below.",
+	"Done = a PASS /validate-candidate scorecard at the exact build SHA, then the moved KPI read on production after one metric window against its pinned baseline (`kpi-through-delivery`). Tests are CI hygiene, never proof; green CI, merge or a written artifact is never Done.",
 ];
 
 /**
@@ -76,52 +74,15 @@ export const SESSION_WATCH_GATE = `<watch-gate rule="ONE blocking command; its e
 
 /** Compatibility name; the shared store remains the sole membership-policy owner. */
 export const isCognitionEntry = isGoverningEntryType;
-export const WHOLE_BUNDLE_BUDGET_BYTES = 64 * 1024;
 
 function operatorNavigationLines(): string[] {
 	const { node, operator, legacyOperator } = COGNITION_CREDENTIAL_NAMES;
 	return [
-		"## Operator guidance — explicit reads after local boot",
+		"## Operator guidance — explicit reads",
 		"",
-		...OPERATOR_GUIDANCE_POINTERS.map(
-			(p) =>
-				`- ${p.intent}: \`GET ${OPERATOR_KNOWLEDGE_ORIGIN}/api/v1/knowledge/${p.id}\` (${p.domain}).`,
-		),
-		`- Operator shelves: ${OPERATOR_KNOWLEDGE_SHELVES.join(", ")} — \`GET ${OPERATOR_KNOWLEDGE_ORIGIN}/api/v1/knowledge/index?domain=<shelf>\`. Keep governing rows with a nonblank useWhen and current supersedes semantics; read chosen bodies before acting.`,
-		`- Your local hub uses \`${node}\`. Explicit operator reads use your own operator-issued \`${operator}\`; only if absent, use saved compatibility alias \`${legacyOperator}\`. Canonical wins when both exist. Never retry another key or host on 401/403. These are agent Bearers, not vendor or workload-service keys.`,
-		"- Verify GET /api/v1/agent/me on the operator host you address. grantsAvailable:false means unknown. Request the normal owner-approved developer grant (node.flight); do not self-approve or borrow credentials.",
-		"- Sovereign logical lanes use the production operator reader; own operator preview/candidate use their own serving credential/receipt realm. Follow node-ai-traces-read for exact hosts and query contracts.",
-		"- This navigation never fetches the operator during local boot, copies guide bodies, or seeds your hub. Local mission, goals and orientation remain node-owned.",
-		"",
-	];
-}
-
-function governingLines(
-	rows: readonly CognitionGoverningPointer[],
-	mode: "whole" | "method" | "pointer",
-	origin: string,
-): string[] {
-	const inline =
-		mode === "whole"
-			? rows
-			: mode === "method"
-				? rows.filter((r) => r.domain === "method")
-				: [];
-	return [
-		"## Governing index — pick by use-when, read before acting",
-		"",
-		mode === "whole"
-			? `Read chosen entries with \`GET ${origin}/api/v1/knowledge/{id}\` before acting.`
-			: `The governing index exceeds the 64 KiB Markdown budget. ${mode === "method" ? "Only the method shelf is inline. " : ""}Retrieve the complete \`governingIndex\` from this same node: \`GET ${origin}/api/v1/cognition\`. Select the required shelf locally by filtering that already governed array on \`domain\`, then read chosen entries with \`GET ${origin}/api/v1/knowledge/{id}\`. Do not rebuild membership through another endpoint or selector.`,
-		"",
-		"| entry | type | domain | use when |",
-		"| --- | --- | --- | --- |",
-		...(inline.length
-			? inline.map(
-					(r) =>
-						`| \`${r.id}\` | ${r.entryType} | ${r.domain} | ${escapeCell(r.useWhen)} |`,
-				)
-			: ["| _(none inline)_ | | | |"]),
+		`- ${OPERATOR_GUIDANCE_POINTERS.map((p) => `${p.intent}: \`GET ${OPERATOR_KNOWLEDGE_ORIGIN}/api/v1/knowledge/${p.id}\``).join(" · ")}`,
+		`- Operator shelves (${OPERATOR_KNOWLEDGE_SHELVES.join(", ")}): \`GET ${OPERATOR_KNOWLEDGE_ORIGIN}/api/v1/knowledge/index?domain=<shelf>\`.`,
+		`- Local hub key \`${node}\`; operator reads use \`${operator}\`, else \`${legacyOperator}\`. Never retry another key or host on 401/403. Check grants with GET /api/v1/agent/me; request node.flight, never self-approve.`,
 		"",
 	];
 }
@@ -162,43 +123,11 @@ export interface RenderBundleInput {
  * verbatim to stdout; Claude Code and Codex both inject SessionStart stdout
  * into the model's context.
  */
-export function renderBundle(input: RenderBundleInput) {
-	const whole = renderWith(input, "whole");
-	const wholeBytes = new TextEncoder().encode(whole).byteLength;
-	let markdown = whole;
-	let mode: "whole-index" | "shelf-pointer" = "whole-index";
-	if (wholeBytes > WHOLE_BUNDLE_BUDGET_BYTES) {
-		mode = "shelf-pointer";
-		markdown = renderWith(input, "method");
-		if (
-			new TextEncoder().encode(markdown).byteLength > WHOLE_BUNDLE_BUDGET_BYTES
-		)
-			markdown = renderWith(input, "pointer");
-	}
-	const overBudget =
-		new TextEncoder().encode(markdown).byteLength > WHOLE_BUNDLE_BUDGET_BYTES;
-	if (overBudget)
-		markdown +=
-			"\n_Local cognition still exceeds the 64 KiB budget; preserved whole. The complete governingIndex remains in this response._\n";
-	return {
-		markdown,
-		governingRender: {
-			mode,
-			wholeBytes,
-			servedBytes: new TextEncoder().encode(markdown).byteLength,
-			overBudget,
-		},
-	};
-}
-
 export function renderBundleMarkdown(input: RenderBundleInput): string {
-	return renderBundle(input).markdown;
+	return renderWith(input);
 }
 
-function renderWith(
-	input: RenderBundleInput,
-	mode: "whole" | "method" | "pointer",
-): string {
+function renderWith(input: RenderBundleInput): string {
 	const {
 		node,
 		name,
@@ -275,8 +204,9 @@ function renderWith(
 		SESSION_WATCH_GATE,
 		"",
 		...operatorNavigationLines(),
-		...governingLines(input.governingIndex, mode, origin),
-		"## Knowledge domains — RECALL_BEFORE_WRITE",
+		"## Knowledge domains — recall before you write",
+		"",
+		`Browse \`GET ${origin}/api/v1/knowledge?domain=<domain>\`, read bodies with \`GET ${origin}/api/v1/knowledge/{id}\`. Refine in place over adding new: \`/contribute-knowledge-to-cogni\`.`,
 		"",
 		"| domain | entries | about |",
 		"| --- | --- | --- |",
@@ -284,22 +214,19 @@ function renderWith(
 		"",
 		"## Work items — this node's own ledger",
 		"",
-		`Your items live in THIS node's store (\`${origin}\`) — each node owns its own \`knowledge_<slug>\` database, so there is no central ledger to fall back to. ONE work item + ONE node per session.`,
+		`- Top of the queue: \`GET ${origin}/api/v1/work/items?sortBy=rankScore&sortDirection=desc&limit=5&statuses=needs_triage,needs_research,needs_design,needs_implement,needs_closeout,needs_merge\`. Adopt over create.`,
+		`- File one: \`POST ${origin}/api/v1/work/items\` \`{type,title,summary,outcome,moves}\` — \`type\` ∈ task|bug|story|spike|subtask; the server allocates the id and pins the KPI baseline.`,
+		`- Progress: \`PATCH ${origin}/api/v1/work/items/{id}\` \`{"reason":"<why, at most 25 words>","cites":[{"id":"<atom>"}],"set":{...}}\` — \`reason\` is required and lives in history; the wrapper is \`set\`. Schemas: \`GET ${origin}/.well-known/agent.json\`.`,
 		"",
-		`- Find work: \`GET ${origin}/api/v1/work/items?statuses=needs_implement,needs_design\` — adopt over create.`,
-		`- File one: \`POST ${origin}/api/v1/work/items\` \`{type,title,summary,outcome}\` — \`type\` ∈ task|bug|story|spike|subtask; the server allocates the id, never send one.`,
-		`- Progress: \`PATCH ${origin}/api/v1/work/items/{id}\` \`{"reason":"<why, one line, at most 25 words>","set":{...}}\` — \`reason\` is required (400 without it) and lives in history, never in the item; the wrapper is \`set\`, NOT \`patch\`.`,
-		"- `status` ∈ needs_triage|needs_research|needs_design|needs_implement|needs_closeout|needs_merge|done|blocked|cancelled. There is no `in_progress`.",
-		'- Close with `{"reason":"PR merged","set":{"status":"done"}}` only after the PR merges.',
-		`- Machine schemas for the two writes: \`GET ${origin}/.well-known/agent.json\` → \`actions.createWorkItem\` / \`actions.updateWorkItem\`.`,
-		"",
-		"## Recall + contribute",
-		"",
-		`- Browse a domain: \`GET ${origin}/api/v1/knowledge?domain=<domain>\``,
-		`- Full entry body: \`GET ${origin}/api/v1/knowledge/{id}\``,
-		`- Discovery doc: \`GET ${origin}/.well-known/agent.json\``,
-		"- Contribute durable knowledge: `/contribute-knowledge-to-cogni` (refine in place > write new).",
-		`- Cite an existing entry in your edit: \`POST ${origin}/api/v1/knowledge/contributions/{id}/commits\` with \`{op:"cite", citingId, citedId, citationType}\` — cross-plane cites (target on main) resolve and stay valid post-merge.`,
+		"| status | you may | exit when |",
+		"| --- | --- | --- |",
+		"| needs_triage | score, link goal + `moves`, route or cancel (`work-item-triage`) | routed |",
+		"| needs_research | read and spike; no product code | findings refined into the hub |",
+		"| needs_design | design through a hub inbox citing governing atoms; no product code | design reviewed |",
+		"| needs_implement | branch + PR implementing the approved design | CI green |",
+		"| needs_closeout | flight, `/validate-candidate` | PASS scorecard |",
+		"| needs_merge | operator merge, promote | production SHA live |",
+		"| done | read the KPI after one window, record the result | result in `outcome` |",
 		"",
 	].join("\n");
 }
