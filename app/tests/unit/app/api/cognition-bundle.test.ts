@@ -304,7 +304,8 @@ describe("static platform discovery beside node-owned cognition (task.5309)", ()
 			"agent-evaluation-loop",
 			"langfuse-eval-expert",
 		])
-			expect(markdown).toContain(`https://cognidao.org/api/v1/knowledge/${id}`);
+			expect(markdown).toContain(`\`${id}\``);
+		expect(markdown).toContain("GET https://cognidao.org/api/v1/knowledge/{id}");
 		for (const shelf of [
 			"use-access",
 			"use-ship",

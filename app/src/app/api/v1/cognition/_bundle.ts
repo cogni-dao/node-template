@@ -51,8 +51,8 @@ import type {
  * domain expertise) is delivered live from the knowledge hub on top of this.
  */
 export const SESSION_BOOTSTRAP_INVARIANTS: readonly string[] = [
-	"GROUND EVERYTHING in this node's knowledge, read this run: your `<slug>-agent-orientation`, then `node-template-architect` (its subsystem table names the governing atoms), then those atoms, designs and roadmaps. Acting without governing knowledge is invalid and unethical here: it pushes entropy into every fork. If no atom covers an action, or you deliberately deviate, the same work item ships the knowledge refinement that makes it guided. Every work-item edit sends `cites` for the atoms it used.",
-	"ONE work item + ONE node per session — it IS your plan. Work only a triaged item (scores, `goal:` label, `moves` naming the KPI metric it moves or a recorded measurement gap) that ranks in the top five by rankScore, or that the CEO named. Claim it, keep the approved Done when as an ordered checklist in `outcome`, refine it in place; heartbeat; link your PR.",
+	"GROUND EVERYTHING in this node's knowledge, read this run: orientation → `node-template-architect` (its subsystem table names the governing atoms) → those atoms, designs and roadmaps. Acting without governing knowledge is invalid and unethical: it drives entropy into every fork. An uncovered action or a deliberate deviation ships its knowledge refinement in the same item. Every work-item edit sends `cites` for the atoms it used.",
+	"ONE work item + ONE node per session; it IS your plan. Work only a triaged item (scores, `goal:` label, `moves` or a recorded measurement gap) in the top five by rankScore, or one the CEO named. Claim it; keep Done when as an ordered checklist in `outcome`, refined in place; link your PR.",
 	"Its status gates what you may do (table under Work items). New work enters `needs_triage` and is triaged before anything else happens to it.",
 	"Bias to speed and measurement: the smallest change that moves the KPI, shipped and measured today. ETAs are minutes; iterate on live readings, not deliberation.",
 	"Ship via PR: same-repo branch → CI green → flight to candidate → /validate-candidate → operator merge → promote. Watch each async gate the ONE portable way — see <watch-gate> below.",
@@ -80,7 +80,7 @@ function operatorNavigationLines(): string[] {
 	return [
 		"## Operator guidance — explicit reads",
 		"",
-		`- ${OPERATOR_GUIDANCE_POINTERS.map((p) => `${p.intent}: \`GET ${OPERATOR_KNOWLEDGE_ORIGIN}/api/v1/knowledge/${p.id}\``).join(" · ")}`,
+		`- Guides by intent, read with \`GET ${OPERATOR_KNOWLEDGE_ORIGIN}/api/v1/knowledge/{id}\`: ${OPERATOR_GUIDANCE_POINTERS.map((p) => `${p.intent} → \`${p.id}\``).join(" · ")}.`,
 		`- Operator shelves (${OPERATOR_KNOWLEDGE_SHELVES.join(", ")}): \`GET ${OPERATOR_KNOWLEDGE_ORIGIN}/api/v1/knowledge/index?domain=<shelf>\`.`,
 		`- Local hub key \`${node}\`; operator reads use \`${operator}\`, else \`${legacyOperator}\`. Never retry another key or host on 401/403. Check grants with GET /api/v1/agent/me; request node.flight, never self-approve.`,
 		"",
