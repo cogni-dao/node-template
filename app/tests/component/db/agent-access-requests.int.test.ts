@@ -132,7 +132,7 @@ describe("access requests: an ask is an off row (real Postgres)", () => {
     expect(await door(agent)).toMatchObject({ decision: "deny", reason: "no_role" }); // a pending ask opens nothing
 
     const pending = (await adminView()).permissions.filter((r) => r.section === "pending" && r.principalUserId === agent);
-    expect(pending).toEqual([expect.objectContaining({ who: "Helper bot", outside: true, scope: SCOPE, on: false, hint: expect.stringMatching(/^GitHub id gh-/), principalUserId: agent })]);
+    expect(pending).toEqual([expect.objectContaining({ who: "Helper bot", outside: true, scope: SCOPE, on: false, hint: expect.stringMatching(/^No owner · GitHub id gh-/), principalUserId: agent })]);
 
     const approve = await roles(rolesPost, { principalUserId: agent, scope: SCOPE });
     expect(approve.status).toBe(200);

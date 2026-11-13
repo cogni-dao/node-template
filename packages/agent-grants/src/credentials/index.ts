@@ -21,6 +21,26 @@ export {
   upgradeAgentCredentialOperation,
 } from "./http";
 export { agentRolesHasRoles, createPostgresCredentialStore, type CredentialSql, type PostgresCredentialStoreOptions } from "./postgres";
+export { createPostgresSpawnStore } from "./spawn-postgres";
+export {
+  type GrantState,
+  type IssueGrantResult,
+  isWellFormedSpawnGrant,
+  issueSpawnGrant,
+  listOwnedAgents,
+  MAX_PENDING_SPAWN_GRANTS,
+  type OwnedAgent,
+  type RedeemRefusal,
+  type RedeemResult,
+  redeemSpawnGrant,
+  revokeOwnedAgentKeys,
+  SPAWN_GRANT_PREFIX,
+  SPAWN_GRANT_SCAN_PATTERN,
+  SPAWN_GRANT_TTL_SEC,
+  type SpawnRedeemResult,
+  type SpawnStore,
+  spawnGrantsLeft,
+} from "./spawn";
 export {
   formatRevocableKey,
   isRevocableKey,

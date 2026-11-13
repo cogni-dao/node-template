@@ -61,6 +61,7 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
   - `/api/v1/attribution/settlement-lifecycle` [GET] - settlement and chain-proven publication lifecycle (SIWE auth)
   - `/api/v1/attribution/epochs/[id]/pool-components` [POST] - record pool component (SIWE + approver)
   - `/api/v1/users/me` [GET, PATCH] - current profile
+  - `/api/v1/profile/ai` [GET, POST] and `/api/v1/profile/ai/revoke` [POST] - "Your AIs" on a person's own profile (session only): list the agents the person owns, issue a one-time spawn grant as ONE setup line (the only place the secret is shown), revoke an owned agent's keys
   - `/api/v1/users/me/ownership` [GET] - current ownership summary derived from linked identities
   - `/api/v1/work/summaries` [GET] - one bounded page (default 25, max 100; text scans ≤1000 rows, `pageInfo.rowsScanned`) of projected Work summaries; the route is auth + logging + the published `handleWorkSummariesRequest` (SIWE or agent bearer auth)
   - `/api/v1/work/board` [GET] - first page (≤20) of each visible status column under one deadline and scan budget (unreached columns `not_started`); the route is auth + logging + the published `handleWorkBoardRequest`; column cursors continue through `/summaries` (SIWE or agent bearer auth)
@@ -111,4 +112,5 @@ curl -X POST http://localhost:3000/api/v1/chat/completions \
 ## Notes
 
 - v1 API prefix for versioned product routes
+- `v1/profile/ai*` are PERSON routes, not admin: a signed-in person's own agents (task.5474). They call `requirePersonSession()` (`_lib/auth/person-session.ts`: `refuseNonSession()` then the browser session), key every read on the SESSION user id (OWNER_SEES_ONLY_OWN), return no key, hash or grant in the list, and answer another person's agent with 404. `POST /api/v1/agent/register` accepts an optional `spawnGrant`: with it the agent is owned by the grant's issuer and gets a pending revocable key (confirm once); without it the agent is anonymous and ownerless (retiring that door is bug.0297).
 - `v1/admin/ai-access` is an ADMIN-area route (session only, the only door for node-admin writes): `GET` lists node AI, `POST`/`DELETE` allow or remove a node AI permission for a node-admin, through `requireAdminSession()` and `NodeAdminPort`. `v1/admin/*` has no AI-plane twin; `proxy.ts` refuses any `Authorization` header there. Every human route calls `refuseNonSession()` (`_lib/auth/human-plane.ts`) first: any `Authorization` header gets 403 `human_session_required`. A header that is not a signed or revocable agent bearer, with no session cookie, gets 401 from `proxy.ts` before the route runs; no authority is granted either way.
