@@ -34,6 +34,8 @@ import {
 import { Spinner } from "@cogni/node-ui-kit/shadcn/spinner";
 import { OpenAIIcon } from "@/features/ai/icons/providers/OpenAIIcon";
 
+import { YourAis } from "./YourAis";
+
 /* ─── Types ────────────────────────────────────────────────────────── */
 
 interface LinkedProvider {
@@ -1131,6 +1133,12 @@ export function ProfileView({
           </div>
         </div>
       )}
+
+      {/* ── Your AIs (the person's own agents; node-wide AI permissions are in /admin) ── */}
+
+      <SectionHeading>Your AIs</SectionHeading>
+
+      <YourAis />
 
       {/* ── Ownership ── */}
 

@@ -31,6 +31,10 @@ const iso = (value: unknown): string => {
   return date && !Number.isNaN(date.getTime()) ? date.toISOString() : "";
 };
 
+/** NAMES_ARE_IDENTIFIERS: the owner is shown by their display name; an agent with no owner row says so. */
+const ownerHint = (row: Record<string, unknown>): string =>
+  row.owner_user_id ? `Owner: ${str(row.owner_name)?.trim() || "Unnamed person"}` : "No owner";
+
 export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
   return {
     async hasLiveRole(principalId, scope) {
@@ -90,8 +94,8 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
           slug: internal ? str(row.slug) : null,
           internal,
           name: internal ? str(row.slug) : str(row.user_name), // NAMES_ARE_IDENTIFIERS: the slug is the name
-          // A proven binding, shown beside the agent's own (unproven) name.
-          hint: githubId ? `GitHub id ${githubId}` : null,
+          // The owner (the person who issued the spawn grant) or "No owner", then a proven binding, shown beside the agent's own (unproven) name.
+          hint: internal ? null : [ownerHint(row), githubId ? `GitHub id ${githubId}` : null].filter(Boolean).join(" · "),
           scope,
           state: row.approved_by ? ("granted" as const) : ("pending" as const),
           at: iso(row.created_at),
@@ -111,9 +115,12 @@ export function createPostgresAgentGrantsStore(sql: SqlTag): AgentGrantsStore {
       const outside = await sql`
         SELECT r.principal_user_id, r.scope, r.approved_by, r.created_at,
                NULL::text AS slug, 'external' AS kind, u.name AS user_name,
+               op.owner_user_id AS owner_user_id, ou.name AS owner_name,
                (SELECT b.external_id FROM user_bindings b WHERE b.user_id = r.principal_user_id AND b.provider = 'github' LIMIT 1) AS github_id
         FROM agent_roles r
         JOIN users u ON u.id = r.principal_user_id
+        LEFT JOIN agent_principals op ON op.user_id = r.principal_user_id
+        LEFT JOIN users ou ON ou.id = op.owner_user_id
         WHERE r.revoked_at IS NULL
           AND NOT EXISTS (SELECT 1 FROM agent_principals p WHERE p.user_id = r.principal_user_id AND p.kind = 'internal')
         ORDER BY (r.approved_by IS NULL) DESC, r.created_at DESC

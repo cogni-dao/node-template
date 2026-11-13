@@ -126,7 +126,7 @@ export function AgentAccessSection({ endpoints, className }: AgentAccessSectionP
                                 </span>
                                 <span>&ldquo;{row.who}&rdquo;</span>
                                 <div className="text-muted-foreground text-xs">
-                                  {row.hint ?? "No linked account"}
+                                  {row.hint ?? "No owner"}
                                 </div>
                               </>
                             ) : (

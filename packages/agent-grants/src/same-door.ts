@@ -129,7 +129,7 @@ export const DEFERRED_WRITE_ROUTES: Readonly<Record<string, string>> = {
  */
 export const OPEN_BY_DESIGN_ROUTES: Readonly<Record<string, string>> = {
   "agent.access.requests.create": "the ask door is open by design; NO_SELF_APPROVAL protects activation (only an admin session approves)",
-  "agent.register": "the anonymous onboarding door that mints an agent identity and key (bug.0297, an invitation token is tracked there); an identity alone opens no route: only an admin's yes does",
+  "agent.register": "the onboarding door that mints an agent identity and key: with a spawn grant the agent is owned by the person who issued it; without one it is anonymous and ownerless (bug.0297 tracks retiring that); an identity alone opens no route: only an admin's yes does",
 };
 
 export interface CallerInput {
