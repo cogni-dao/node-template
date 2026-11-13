@@ -42,7 +42,7 @@ const goals: GoalSourcePort = {
 };
 
 function setup(defs: MetricDefinition[], options: { getManyFails?: boolean } = {}) {
-	const calls = { getMany: [] as string[][], history: 0, goalsRead: 0 };
+	const calls = { getMany: [] as string[][], history: 0, buckets: 0, goalsRead: 0 };
 	const registry = new MetricRegistry();
 	registry.register({
 		id: "work.count@1",
@@ -60,7 +60,10 @@ function setup(defs: MetricDefinition[], options: { getManyFails?: boolean } = {
 			return [];
 		},
 		lastGood: async () => null,
-		buckets: async () => [],
+		buckets: async () => {
+			calls.buckets++;
+			return [];
+		},
 		at: async () => null,
 		snapshot: async () => null,
 	} as unknown as MetricObservationsPort;
@@ -140,6 +143,20 @@ describe("readMetricChains (task.0118)", () => {
 		expect(chains.get("work-orphan")?.goal).toBeUndefined();
 	});
 
+	it("a metric serving a goal-bound KPI whose own definition is unreadable is absent (unavailable), not metric-only", async () => {
+		// The goal binds work-validated, but its definition is not among the readable ones.
+		const { metrics, goals } = setup([supporting, lonely]);
+		const chains = await readMetricChains({
+			metrics,
+			goals,
+			metricIds: ["work-open", "work-lonely"],
+		});
+		expect(chains.has("work-open")).toBe(false);
+		// A metric with no goal KPI at all is still a real, metric-only answer.
+		expect(chains.get("work-lonely")?.kpi).toBeUndefined();
+		expect(chains.has("work-lonely")).toBe(true);
+	});
+
 	it("an unknown or unreadable metric is absent, never invented", async () => {
 		const denied = definition("denied");
 		const { metrics, goals } = setup([kpi, denied]);
@@ -170,6 +187,8 @@ describe("readMetricChains (task.0118)", () => {
 		expect(chains.get("work-validated")?.kpi?.status).toBe(direct.assessment.status);
 		// One assessment read one latest attempt, plus the direct one above: nothing walked history.
 		expect(calls.history).toBe(2);
+		// No trend or recent range was read: the bucket reads behind history stay at zero.
+		expect(calls.buckets).toBe(0);
 	});
 
 	it("omits status when the KPI assessment errors, keeping the rest of the chain", async () => {

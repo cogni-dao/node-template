@@ -389,7 +389,7 @@ describe("createWorkItemCapability", () => {
             list: vi.fn().mockResolvedValue({ items: [withMoves], pageInfo: { endCursor: null, hasMore: false } }),
           } as unknown as Pick<WorkItemQueryPort, "list">,
           moveReadings: createMoveMetricPorts(() => service as never, () => goalsPort as never).readings,
-          ...(readLinks ? { readLinks } : {}),
+          ...(readLinks ? { links: { firstPage: readLinks } } : {}),
         });
 
       it("adds readings, the chain and (on request) links; query does not", async () => {

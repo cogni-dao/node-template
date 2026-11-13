@@ -34,7 +34,7 @@ import type {
   WorkSummaryReadOptions,
 } from "@cogni/work-items";
 import {
-  judgeItemMoves,
+  composeItemEnvelope,
   judgeMoveSummaries,
   toWorkItemId,
   toWorkItemsCreateInput,
@@ -46,7 +46,7 @@ import {
   isPrivilegedPriority,
   NodeAdminRequiredError,
 } from "@cogni/knowledge-store";
-import { readItemLinks } from "@/bootstrap/capabilities/citation-links";
+import { createCitationLinksPort } from "@/bootstrap/capabilities/citation-links";
 import { createMoveMetricPorts } from "@/bootstrap/capabilities/work-item-moves";
 import { getContainer } from "@/bootstrap/container";
 import { toHttpWorkItem } from "../read-envelopes.server";
@@ -357,16 +357,20 @@ export interface WorkItemReadOptions extends WorkSummaryReadOptions {
  * unresolved chain reads `context: "unavailable"` and unreadable links read `unavailable`.
  */
 async function withItemEnvelope(dto: WorkItemDto, options?: WorkItemReadOptions): Promise<WorkItemDto> {
-  if (options?.chain === false && !options.includeLinks) return withMoveReadings(dto, options);
   const container = getContainer();
   const readings = container.goalMetrics
     ? createMoveMetricPorts(() => container.goalMetrics, () => container.knowledgeStorePort).readings
     : undefined;
-  const [judged, links] = await Promise.all([
-    judgeItemMoves(dto, readings, options),
-    options?.includeLinks ? readItemLinks(container.knowledgeStorePort, dto.id) : undefined,
-  ]);
-  return links ? { ...judged, links } : judged;
+  // ONE_COMPOSITION: the same `composeItemEnvelope` the agent tool's capability calls.
+  return composeItemEnvelope(
+    dto,
+    {
+      readings,
+      links: createCitationLinksPort(() => container.knowledgeStorePort),
+      log: (event) => container.log.warn(event, "work.items.envelope_degraded"),
+    },
+    options,
+  );
 }
 
 export async function getWorkItem(id: string, options?: WorkItemReadOptions): Promise<WorkItemDto | null> {

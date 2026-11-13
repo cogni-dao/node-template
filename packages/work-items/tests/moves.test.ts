@@ -18,10 +18,10 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { WorkItemDtoSchema, WorkItemSummarySchema } from "../src/contracts.js";
+import { composeItemEnvelope } from "../src/envelope.js";
 import { DoltgresWorkItemAdapter } from "../src/adapters/doltgres/adapter.js";
 import { independentReadPool, makeFakeDoltgresSql } from "./adapters/fake-doltgres-sql.js";
 import {
-  judgeItemMoves,
   judgeMove,
   judgeMoves,
   judgeMoveSummaries,
@@ -609,6 +609,11 @@ describe("bounded summary assessment", () => {
 });
 
 describe("single-item move context (task.0118)", () => {
+  const chainRead = <T extends { id: string; moves?: WorkItemMove[] | undefined }>(
+    item: T,
+    readings: MoveReadingPort | undefined,
+    options: { deadline?: number } = {},
+  ) => composeItemEnvelope(item, { readings }, options);
   const move = { metricId: "m", direction: "up" as const, baselineObservationId: OBS_1 };
   const item = { id: "task.1", moves: [move, { ...move, metricId: "gone" }] };
   const chain = {
@@ -632,7 +637,7 @@ describe("single-item move context (task.0118)", () => {
 
   it("adds the chain to a resolved move and marks an unresolved one unavailable, beside the readings", async () => {
     const context = vi.fn(async () => new Map([["m", chain]]));
-    const out = await judgeItemMoves(item, port(context));
+    const out = await chainRead(item, port(context));
     expect(out.moves?.[0]).toMatchObject({ ...chain, moved: "as_declared", baseline: reading(1) });
     expect(out.moves?.[1]).toMatchObject({ metricId: "gone", context: "unavailable" });
     expect(out.moves?.[1]).not.toHaveProperty("kpi");
@@ -649,14 +654,14 @@ describe("single-item move context (task.0118)", () => {
       port(),
       undefined,
     ]) {
-      const out = await judgeItemMoves(item, readings);
+      const out = await chainRead(item, readings);
       for (const entry of out.moves ?? []) {
         expect(entry.context).toBe("unavailable");
         expect(entry).not.toHaveProperty("metric");
         expect(entry).not.toHaveProperty("kpi");
       }
     }
-    const hung = await judgeItemMoves(item, port(() => new Promise(() => undefined)), {
+    const hung = await chainRead(item, port(() => new Promise(() => undefined)), {
       deadline: Date.now() + 20,
     });
     expect(hung.moves?.map((entry) => entry.context)).toEqual(["unavailable", "unavailable"]);
@@ -664,8 +669,8 @@ describe("single-item move context (task.0118)", () => {
 
   it("leaves an item without moves untouched and never calls the port", async () => {
     const context = vi.fn();
-    expect(await judgeItemMoves({ id: "task.2" }, port(context))).toEqual({ id: "task.2" });
-    expect(await judgeItemMoves({ id: "task.3", moves: [] }, port(context))).toEqual({
+    expect(await chainRead({ id: "task.2" }, port(context))).toEqual({ id: "task.2" });
+    expect(await chainRead({ id: "task.3", moves: [] }, port(context))).toEqual({
       id: "task.3",
       moves: [],
     });

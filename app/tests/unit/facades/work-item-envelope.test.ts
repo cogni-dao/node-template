@@ -167,6 +167,36 @@ describe("single-item envelope (task.0118)", () => {
     expect(failed?.links).toEqual({ items: [], nextCursor: null, unavailable: true });
   });
 
+  it("a hung citations store returns the item with links unavailable at the deadline, and logs once", async () => {
+    const warn = vi.fn();
+    setup([], { listCitationLinks: vi.fn(() => new Promise(() => undefined)) });
+    vi.mocked(getContainer).mockReturnValue({
+      ...vi.mocked(getContainer)(),
+      log: { warn },
+    } as never);
+    const started = Date.now();
+    const result = await getWorkItem("story.0035", { includeLinks: true, deadline: Date.now() + 40 });
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(result?.links).toEqual({ items: [], nextCursor: null, unavailable: true });
+    expect(warn).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledWith(
+      { part: "links", workItemId: "story.0035", reason: "BoundedReadUnavailableError" },
+      "work.items.envelope_degraded",
+    );
+  });
+
+  it("a served KPI whose definition is unreadable marks the move unavailable, not metric-only", async () => {
+    const readable = { ...summaries };
+    delete readable["work-validated"];
+    const { describeMetrics } = setup([{ metricId: "work-open", direction: "up", baselineObservationId: null }], {
+      describe: vi.fn(async (ids: string[]) => ids.flatMap((id) => (readable[id] ? [readable[id]] : []))),
+    });
+    const result = await getWorkItem("story.0035");
+    expect(describeMetrics).toHaveBeenCalledTimes(2);
+    expect(result?.moves?.[0]).toMatchObject({ metricId: "work-open", context: "unavailable" });
+    expect(result?.moves?.[0]).not.toHaveProperty("metric");
+  });
+
   it("chain: false (the EDO expectations read) skips the chain and its reads", async () => {
     const { describeMetrics, knowledgeStorePort } = setup([
       { metricId: "work-validated", direction: "up", baselineObservationId: OBS },

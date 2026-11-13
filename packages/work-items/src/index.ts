@@ -44,6 +44,13 @@ export {
   workItemsHistoryOperation,
 } from "./history-contract.js";
 export type { WorkItemPatchInput } from "./patch-contract.js";
+export { composeItemEnvelope } from "./envelope.js";
+export type {
+  EnvelopeDegradedEvent,
+  ItemEnvelopeDeps,
+  ItemEnvelopeOptions,
+  ItemLinksPort,
+} from "./envelope.js";
 export type {
   JudgedMove,
   MetricBaselinePort,
@@ -57,11 +64,11 @@ export type {
   WorkItemMove,
 } from "./moves.js";
 export {
-  judgeItemMoves,
   judgeMove,
   judgeMoves,
   judgeMoveSummaries,
   readMoveContext,
+  runBounded,
   withMoveContext,
   MOVE_METRIC_ID_MAX,
   MOVE_OBSERVATION_ID_PATTERN,

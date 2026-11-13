@@ -161,7 +161,7 @@ import { createScheduleCapability } from "@/bootstrap/capabilities/schedule";
 import { createGithubReadVcsCapability } from "@/bootstrap/capabilities/vcs";
 import { createWebSearchCapability } from "@/bootstrap/capabilities/web-search";
 import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
-import { readItemLinks } from "@/bootstrap/capabilities/citation-links";
+import { createCitationLinksPort } from "@/bootstrap/capabilities/citation-links";
 import { createMoveMetricPorts } from "@/bootstrap/capabilities/work-item-moves";
 import type { RateLimitBypassConfig } from "@/bootstrap/http/wrapPublicRoute";
 import { localReadinessPreflight } from "@/bootstrap/local-readiness-preflight";
@@ -741,7 +741,8 @@ function createContainer(): Container {
 		workItemCommand: workItemAdapter,
 		moveReadings: moveMetrics.readings,
 		// task.0118: first page of an item's citation links, the same read the UI and the route use.
-		readLinks: (id) => readItemLinks(knowledgeStorePort, id),
+		links: createCitationLinksPort(() => knowledgeStorePort),
+		log: (event) => log.warn(event, "work.items.envelope_degraded"),
 		// QUERY_READS_THE_LIVE_BACKLOG: the AI query tool (and the prioritizer) reads
 		// this node's Doltgres work items; `doltgresWorkItems` is assigned below and
 		// read only at call time.

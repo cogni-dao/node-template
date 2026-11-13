@@ -4,7 +4,8 @@
  * Invariants: CHEAP_READS_ONLY (one active-goals read, one definitions read, a second only to
  * title a KPI the moved metric serves, and one latest-only assessment per distinct KPI: never the
  * goal progress read, no trend and no history range); CHAIN_NEVER_GUESSED (an id with no readable
- * definition is absent from the result; a KPI no active goal binds yields no `kpi` or `goal`);
+ * definition, or whose goal-bound KPI has no readable definition, is absent from the result so the
+ * caller reads it as unavailable; a KPI no active goal binds yields `metric` only);
  * STATUS_ONLY_WHEN_READ (a KPI assessment that errored leaves `status` absent, never a guess).
  */
 import { type KpiBinding, KpiBindingsSchema } from "./contracts.js";
@@ -108,10 +109,14 @@ export async function readMetricChains(deps: {
 		const kpiId = kpiOf(summary);
 		const kpiSummary = kpiId ? summaries.get(kpiId) : undefined;
 		const owner = kpiId ? owners.get(kpiId) : undefined;
-		if (!kpiId || !kpiSummary || !owner) {
+		// No active goal binds a KPI for this metric: it serves no goal KPI, which is an answer.
+		if (!kpiId || !owner) {
 			result.set(summary.id, { metric });
 			continue;
 		}
+		// A goal binds its KPI but the KPI's own definition cannot be read: that is not "no KPI".
+		// The id stays absent so the caller marks the move `context: "unavailable"`.
+		if (!kpiSummary) continue;
 		const status = statuses.get(kpiId);
 		result.set(summary.id, {
 			metric,

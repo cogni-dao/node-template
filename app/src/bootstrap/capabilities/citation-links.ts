@@ -10,8 +10,9 @@
  *   - ONE_LINKS_READ (task.0118): every consumer reads links through `readCitationLinksPage`, so the
  *     UI and agents see the same edges, labels and tones.
  *   - LINKS_BOUNDED: one page of at most five links plus `nextCursor`; the caller pages on.
- *   - LINKS_UNAVAILABLE_NOT_EMPTY: `readItemLinks` reports a failed or absent store as `unavailable`,
- *     never as an empty list.
+ *   - DELIBERATE_NODE_PORT (task.0118): this file is the node-owned implementation of the work-items
+ *     `ItemLinksPort`. The composition, the deadline and the `unavailable` mapping live in
+ *     `@cogni/work-items` (`composeItemEnvelope`); only this store adapter and the citations route are node code.
  * Side-effects: IO (knowledge store read)
  * Links: app/src/app/api/v1/citations/[id]/route.ts, docs/spec/knowledge-syntropy.md
  * @internal
@@ -19,10 +20,7 @@
 
 import { describeCitation, isWorkItemEndpointId } from "@cogni/knowledge-store";
 import type { KnowledgeStorePort } from "@cogni/knowledge-store";
-import {
-  CitationLinksPageSchema,
-  type WorkItemLinks,
-} from "@cogni/work-items";
+import { CitationLinksPageSchema, type ItemLinksPort } from "@cogni/work-items";
 
 /** Canonical human URL for a node-local work item. */
 export function workItemPermalink(id: string): string {
@@ -61,16 +59,20 @@ export async function readCitationLinksPage(
   return CitationLinksPageSchema.parse({ links, nextCursor: page.nextCursor });
 }
 
-/** The item envelope's `links`: the first page, or `unavailable` when it could not be read. */
-export async function readItemLinks(
-  port: Pick<KnowledgeStorePort, "listCitationLinks"> | undefined,
-  id: string,
-): Promise<WorkItemLinks> {
-  if (!port) return { items: [], nextCursor: null, unavailable: true };
-  try {
-    const page = await readCitationLinksPage(port, id);
-    return { items: page.links, nextCursor: page.nextCursor };
-  } catch {
-    return { items: [], nextCursor: null, unavailable: true };
-  }
+/**
+ * The node's implementation of the work-items `ItemLinksPort`: the first citation page of an item.
+ * It throws when the store is absent or fails; `composeItemEnvelope` bounds the call with the
+ * shared deadline and maps any failure to `links.unavailable`, so this adapter stays a plain read.
+ */
+export function createCitationLinksPort(
+  getPort: () => Pick<KnowledgeStorePort, "listCitationLinks"> | undefined,
+): ItemLinksPort {
+  return {
+    async firstPage(id) {
+      const port = getPort();
+      if (!port) throw new Error("knowledge store is not configured");
+      const page = await readCitationLinksPage(port, id);
+      return { items: page.links, nextCursor: page.nextCursor };
+    },
+  };
 }

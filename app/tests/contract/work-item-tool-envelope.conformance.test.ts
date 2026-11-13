@@ -18,6 +18,7 @@ import {
 import { KnowledgeRowSchema } from "@cogni/knowledge-store/contracts";
 import { WorkItemDtoSchema } from "@cogni/work-items";
 import { describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 
 const item: WorkItemInfo = {
   id: "task.0007", type: "task", title: "Read context", status: "needs_implement",
@@ -34,21 +35,65 @@ const capability: WorkItemCapability = { query: vi.fn().mockResolvedValue([item]
  * names it in EXCLUDED with a reason.
  */
 const EXCLUDED_FROM_TOOL = new Set<string>([]);
-const missing = (wire: { shape: object }, tool: { shape: object }) =>
-  Object.keys(wire.shape).filter(
-    (key) => !EXCLUDED_FROM_TOOL.has(key) && !(key in tool.shape),
-  );
+
+/** Peel optional, nullable and array wrappers down to the schema that holds keys (or a non-object). */
+function inner(schema: unknown): { shape?: Record<string, unknown> } {
+  let current = schema as { shape?: Record<string, unknown>; unwrap?: () => unknown; element?: unknown };
+  for (let depth = 0; depth < 8; depth++) {
+    if (current.shape) return current;
+    if (typeof current.unwrap === "function") current = current.unwrap() as typeof current;
+    else if (current.element) current = current.element as typeof current;
+    else return current;
+  }
+  return current;
+}
+
+/** Every key path on the wire schema that the tool schema lacks, descending key by key into nested objects, arrays and optionals. */
+function missingDeep(wire: unknown, tool: unknown, path = ""): string[] {
+  const wireShape = inner(wire).shape;
+  if (!wireShape) return [];
+  const toolShape = inner(tool).shape ?? {};
+  return Object.keys(wireShape).flatMap((key) => {
+    const at = path ? `${path}.${key}` : key;
+    if (EXCLUDED_FROM_TOOL.has(at)) return [];
+    if (!(key in toolShape)) return [at];
+    return missingDeep(wireShape[key], toolShape[key], at);
+  });
+}
 
 describe("exhaustive-minus-exclusion guard (task.0118)", () => {
-  it("the read and query tool items carry every wire key, including nested moves", () => {
-    expect(missing(WorkItemDtoSchema, WorkItemOutputSchema)).toEqual([]);
-    expect(missing(WorkItemDtoSchema.shape.moves.unwrap().element, WorkItemOutputSchema.shape.moves.unwrap().element)).toEqual([]);
-    expect(missing(WorkItemDtoSchema, workItemReadContract.outputSchema.shape.item.unwrap())).toEqual([]);
-    expect(missing(WorkItemOutputSchema, WorkItemDtoSchema)).toEqual(["sourceUrl", "sourceUrlUnavailable"]);
-    // The chain and links this task added are on the one schema, so the guard covers them.
-    expect(Object.keys(WorkItemDtoSchema.shape)).toContain("links");
-    expect(Object.keys(WorkItemDtoSchema.shape.moves.unwrap().element.shape)).toEqual(
-      expect.arrayContaining(["metric", "kpi", "goal", "context"]),
+  it("the read and query tool items carry every wire key, compared key by key through moves, metric, kpi, goal and links", () => {
+    expect(missingDeep(WorkItemDtoSchema, WorkItemOutputSchema)).toEqual([]);
+    expect(missingDeep(WorkItemDtoSchema, workItemReadContract.outputSchema.shape.item)).toEqual([]);
+    expect(missingDeep(WorkItemOutputSchema, WorkItemDtoSchema)).toEqual(["sourceUrl", "sourceUrlUnavailable"]);
+    // The walker really descends: the sub-shapes this task added are on the path list.
+    const paths = (schema: unknown, path = ""): string[] =>
+      Object.entries(inner(schema).shape ?? {}).flatMap(([key, value]) => [
+        `${path}${key}`,
+        ...paths(value, `${path}${key}.`),
+      ]);
+    expect(paths(WorkItemDtoSchema)).toEqual(
+      expect.arrayContaining([
+        "moves.metric.title", "moves.metric.unit", "moves.metric.display",
+        "moves.kpi.comparator", "moves.kpi.target.value", "moves.kpi.status",
+        "moves.goal.id", "moves.context",
+        "links.items.target.href", "links.items.label", "links.nextCursor", "links.unavailable",
+      ]),
+    );
+  });
+  it("mutation proof: a tool that drops one nested key fails the guard", () => {
+    const kpi = WorkItemDtoSchema.shape.moves.unwrap().element.shape.kpi.unwrap();
+    const dropped = WorkItemDtoSchema.extend({
+      moves: z.array(WorkItemDtoSchema.shape.moves.unwrap().element.extend({ kpi: kpi.omit({ status: true }).optional() })).optional(),
+      links: z.object({ items: z.array(z.object({ id: z.string() })), nextCursor: z.string().nullable() }).optional(),
+    });
+    expect(missingDeep(WorkItemDtoSchema, dropped).sort()).toEqual(
+      expect.arrayContaining([
+        "moves.kpi.status",
+        "links.unavailable",
+        "links.items.direction",
+        "links.items.target",
+      ]),
     );
   });
   it("a read carries the chain and links through the tool unchanged", async () => {

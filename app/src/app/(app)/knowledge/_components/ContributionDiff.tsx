@@ -42,7 +42,7 @@ export function diffHasHtmlEntry(
 
 /**
  * Permalink for a citation endpoint: a work item or a knowledge entry.
- * Twin of the href rule in `api/v1/citations/[id]/route.ts` (workItemPermalink).
+ * Twin of the href rule in `bootstrap/capabilities/citation-links.ts` (workItemPermalink), which the citations route and the work item envelope share.
  */
 function citationHref(id: string): string {
 	return isWorkItemEndpointId(id)
