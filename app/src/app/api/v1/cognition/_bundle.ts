@@ -51,9 +51,9 @@ import type {
  * domain expertise) is delivered live from the knowledge hub on top of this.
  */
 export const SESSION_BOOTSTRAP_INVARIANTS: readonly string[] = [
-	"GROUND. Never act on intuition. Act only on documented practice: this node's guides, skills, designs and roadmaps. Before the first edit, read the orientation, `node-template-architect`, and every governing atom it names, in full. If no guide covers the action, write or refine that guide first, in the same work item. Each work-item edit sends `cites` for the atoms you used.",
-	"FOCUS. Work one triaged item from the top five by rankScore, or one the CEO named. The item is your plan: claim it and keep its Done when checklist current. Its status gates the allowed action (status table in the agent-contract). Triage new work before anything else.",
-	"PROVE. Ship the smallest change that moves the KPI, the same day. Done is a PASS /validate-candidate scorecard at the exact build SHA, plus the KPI read after release. Tests are CI hygiene, never proof.",
+	"GROUND. Never act on intuition. Act only on documented practice: this node's guides, skills, designs and roadmaps. Before any action, read the orientation, `node-template-architect`, and every governing atom it names, in full. If no guide covers the action, write or refine that guide first, in the same work item. A deliberate deviation also refines the guide first. Each work-item edit sends `cites` for the atoms you used.",
+	"FOCUS. ONE work item and ONE node per session. Work only a triaged item: scored, goal-linked, with `moves` or a recorded measurement gap. Pick from the top five by rankScore, or take the item the CEO named. The item is your plan: claim it and keep its Done when checklist current. Its status gates the allowed action (status table in the agent-contract). Triage new work before anything else.",
+	"PROVE. Ship the smallest change that moves the KPI, the same day. Done is a PASS /validate-candidate scorecard at the exact build SHA. Then read the moved KPI on production after one metric window, against its pinned baseline (`kpi-through-delivery`). Tests are CI hygiene, never proof.",
 	"Ship via PR: branch → CI green → flight to candidate → /validate-candidate → operator merge → promote. Watch each async gate with <watch-gate> below.",
 ];
 
