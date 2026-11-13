@@ -52,7 +52,7 @@ import { getNodeMission, getNodeName } from "@/shared/config";
 import { serverEnv } from "@/shared/env";
 import {
 	type OrientationEntry,
-	renderBundle,
+	renderBundleMarkdown,
 	SESSION_BOOTSTRAP_INVARIANTS,
 } from "./_bundle";
 
@@ -163,7 +163,7 @@ export const GET = wrapRouteHandlerWithLogging(
 			`and your open contribution branch via GET ${origin}/api/v1/knowledge/contributions/{id}/diff. ` +
 			"Refine in place over writing new (REFINE_OVER_EXTEND).";
 
-		const rendered = renderBundle({
+		const markdown = renderBundleMarkdown({
 			node,
 			name,
 			mission,
@@ -177,15 +177,14 @@ export const GET = wrapRouteHandlerWithLogging(
 			orientation,
 			goals,
 		});
-		const { governingRender, markdown } = rendered;
 
 		ctx.log.info(
 			{
 				node,
 				name,
 				skills: skillsIndex.length,
-				governingMode: governingRender.mode,
-				governingOverBudget: governingRender.overBudget,
+				governing: governingIndex.length,
+				markdownBytes: Buffer.byteLength(markdown),
 				domains: domainPointers.length,
 				orientation: orientation?.id ?? null,
 				goalsStatus: goals.status,
@@ -211,7 +210,6 @@ export const GET = wrapRouteHandlerWithLogging(
 				toolingInvariants,
 				skillsIndex,
 				governingIndex,
-				governingRender,
 				domainPointers,
 				recallProtocol,
 				markdown,

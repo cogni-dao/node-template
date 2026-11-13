@@ -286,7 +286,7 @@ describe("session cognition hook", () => {
 			"# node — Cogni Session Cognition",
 			section("Orientation", 30),
 			"## The agent-contract\n<agent-contract>\n<status-contract>\n</status-contract>\n</agent-contract>",
-			section("Governing index", 200),
+			section("Knowledge domains", 200),
 			section("Domains", 40),
 		].join("\n\n");
 		const fixtureJson = path.join(root, "bundle.json");

@@ -38,8 +38,8 @@ the gitignored `.env.cogni`. Operator CI/CD credentials are not cognition creden
 Heavy local commands default to NO. `pnpm check`, `pnpm check:fast` (and `:fix`),
 `pnpm dev`, and the unfiltered `pnpm test` suite require the human's explicit request
 and consent this session. Lightweight targeted checks run freely: Biome / `pnpm lint`
-on touched paths, `pnpm typecheck`, and at most 1–2 specific test files. Default proof
-is CI plus flight.
+on touched paths, `pnpm typecheck`, and at most 1–2 specific test files. Proof is
+defined by the bundle's tooling invariants, never by local tests.
 
 Work against exactly one node and work item. The operator at https://cognidao.org
 coordinates code, CI, flight, validation, and merge. Subdirectory AGENTS.md files extend
