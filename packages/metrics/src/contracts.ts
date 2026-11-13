@@ -2,8 +2,8 @@
 /**
  * Measurement contracts. Nodes supply sources, authority and persistence.
  * Invariants: HASH_COVERS_SPEC_ONLY (the series hash covers `{id, spec}`;
- * `display`, `serves` and `band` are stored beside the spec and never enter
- * it); ANNEX_NOT_CORE (an invalid `serves` or `band` is ignored and reported,
+ * `display`, `serves`, `band` and `brief` are stored beside the spec and never enter
+ * it); ANNEX_NOT_CORE (an invalid `serves`, `band` or `brief` is ignored and reported,
  * never dropping a metric whose core spec is valid); ONE_ASSESSMENT (a `band` is assessed as a synthetic binding
  * `{metricId, ...band}` through the KPI path, never a second algorithm).
  */
@@ -41,6 +41,24 @@ export const MetricServesSchema = z.strictObject({
 });
 export type MetricServes = z.infer<typeof MetricServesSchema>;
 export type MetricServesRole = MetricServes["role"];
+/**
+ * A metric's five-second read: `summary` says what it is and how it is computed;
+ * `justification` says why it matters and how it accrues to its KPI or goal.
+ * Each is one plain-text line of at most 25 words and 160 characters.
+ * Stored beside the hashed spec like `serves`, so editing it never forks the series.
+ */
+const briefSentence = z
+	.string()
+	.trim()
+	.min(1)
+	.max(160)
+	.refine((s) => !/[\r\n]/.test(s), "one line")
+	.refine((s) => s.split(/\s+/).length <= 25, "at most 25 words");
+export const MetricBriefSchema = z.strictObject({
+	summary: briefSentence,
+	justification: briefSentence,
+});
+export type MetricBrief = z.infer<typeof MetricBriefSchema>;
 /** A display a metric of this unit can honour. */
 export function displayFits(display: MetricDisplay, unit: string): boolean {
 	return display !== "slo" || unit === SLO_UNIT;
@@ -128,29 +146,30 @@ export type KpiAssessment = z.infer<typeof KpiAssessmentSchema>;
 
 /**
  * A stored `metric_spec`: the strict spec plus the author's optional display,
- * `serves` link and health `band`. All three sit beside the spec, so none of
- * them enters the series hash.
+ * `serves` link, health `band` and `brief`. All four sit beside the spec, so none
+ * of them enters the series hash.
  */
 export const StoredMetricSpecSchema = MetricSpecSchema.extend({
 	display: MetricDisplaySchema.optional(),
 	serves: MetricServesSchema.optional(),
 	band: MetricBandSchema.optional(),
+	brief: MetricBriefSchema.optional(),
 });
 /** The core stored spec: the strict spec plus display. An invalid core drops the row. */
 const StoredCoreSpecSchema = MetricSpecSchema.extend({
 	display: MetricDisplaySchema.optional(),
 });
-/** An annex field (`serves` or `band`) that failed its schema, with where it failed. */
+/** An annex field (`serves`, `band` or `brief`) that failed its schema, with where it failed. */
 export const AnnexInvalidSchema = z.object({
-	field: z.enum(["serves", "band"]),
+	field: z.enum(["serves", "band", "brief"]),
 	/** Zod issue locations, e.g. `serves.role:invalid_value`; never the stored values. */
 	issues: z.array(z.string()),
 });
 export type AnnexInvalid = z.infer<typeof AnnexInvalidSchema>;
 /**
  * Parse a stored `metric_spec` in two parts. The core spec (and display) is
- * strict: invalid throws, and the caller skips the row. `serves` and `band`
- * are an annex: an invalid one is ignored and reported in `invalid`, never
+ * strict: invalid throws, and the caller skips the row. `serves`, `band` and
+ * `brief` are an annex: an invalid one is ignored and reported in `invalid`, never
  * dropping the metric, so it still computes and is assessed with its spec.
  */
 export function parseStoredMetricSpec(stored: unknown): {
@@ -158,13 +177,14 @@ export function parseStoredMetricSpec(stored: unknown): {
 	display: MetricDisplay | undefined;
 	serves: MetricServes | undefined;
 	band: MetricBand | undefined;
+	brief: MetricBrief | undefined;
 	invalid: AnnexInvalid[];
 } {
 	const raw =
 		stored && typeof stored === "object" && !Array.isArray(stored)
 			? (stored as Record<string, unknown>)
 			: {};
-	const { serves: rawServes, band: rawBand, ...core } = raw;
+	const { serves: rawServes, band: rawBand, brief: rawBrief, ...core } = raw;
 	const { display, ...spec } = StoredCoreSpecSchema.parse(
 		stored && typeof stored === "object" && !Array.isArray(stored)
 			? core
@@ -172,7 +192,7 @@ export function parseStoredMetricSpec(stored: unknown): {
 	);
 	const invalid: AnnexInvalid[] = [];
 	const annex = <T>(
-		field: "serves" | "band",
+		field: AnnexInvalid["field"],
 		schema: z.ZodType<T>,
 		value: unknown,
 	): T | undefined => {
@@ -192,6 +212,7 @@ export function parseStoredMetricSpec(stored: unknown): {
 		display,
 		serves: annex("serves", MetricServesSchema, rawServes),
 		band: annex("band", MetricBandSchema, rawBand),
+		brief: annex("brief", MetricBriefSchema, rawBrief),
 		invalid,
 	};
 }
@@ -231,6 +252,7 @@ export const MetricViewSchema = z.object({
 		display: MetricDisplaySchema.optional(),
 		serves: MetricServesSchema.optional(),
 		band: MetricBandSchema.optional(),
+		brief: MetricBriefSchema.optional(),
 		/** Annex fields the stored spec carried but that failed their schema; ignored, never silent. */
 		annexInvalid: z.array(AnnexInvalidSchema).optional(),
 	}),
@@ -504,6 +526,7 @@ export const ServedMetricSchema = z.object({
 		title: z.string(),
 		calculatorId: z.string(),
 		role: MetricServesSchema.shape.role,
+		brief: MetricBriefSchema.optional(),
 	}),
 	/** Null when the metric declares no band: it is listed, never judged. */
 	assessment: KpiAssessmentSchema.nullable(),
@@ -519,6 +542,8 @@ export const MetricOrphanSchema = z.object({
 	metricId: z.string(),
 	/** The metric's title. Absent from servers older than 0.10.0. */
 	title: z.string().optional(),
+	/** The metric's five-second read; absent when it declares none. */
+	brief: MetricBriefSchema.optional(),
 	/** The KPI the metric names; null when `serves` is invalid. */
 	kpi: z.string().nullable(),
 	reason: z.enum([
@@ -540,6 +565,7 @@ export const UnboundMetricSchema = z.object({
 		id: z.string(),
 		title: z.string(),
 		calculatorId: z.string(),
+		brief: MetricBriefSchema.optional(),
 	}),
 	/** Null when the metric declares no band: it is listed, never judged. */
 	assessment: KpiAssessmentSchema.nullable(),
@@ -557,6 +583,7 @@ export const GoalKpiSchema = z.object({
 			cadenceSeconds: z.number().int().nullable(),
 			maxAgeSeconds: z.number().int(),
 			display: MetricDisplaySchema.optional(),
+			brief: MetricBriefSchema.optional(),
 		})
 		.nullable(),
 	assessment: KpiAssessmentSchema,

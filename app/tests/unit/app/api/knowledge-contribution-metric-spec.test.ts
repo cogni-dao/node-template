@@ -4,11 +4,12 @@
 /**
  * Module: `@tests/unit/app/api/knowledge-contribution-metric-spec`
  * Purpose: a contribution that inserts a metric row may carry `serves` and `band` beside the spec
- *   (story.0033); a malformed one is a clear 4xx, never a 422 from the strict core spec.
+ *   (story.0033) and must carry a `brief` (task.0125); a malformed or missing annex is a clear 4xx,
+ *   never a 422 from the strict core spec.
  * Scope: handleCreate with a mocked container and a real MetricRegistry. No Doltgres.
  * Invariants: ANNEX_NOT_CORE.
  * Side-effects: none
- * Links: src/app/api/v1/knowledge/contributions/_handlers.ts, story.0033
+ * Links: src/app/api/v1/knowledge/contributions/_handlers.ts, story.0033, task.0125
  * @internal
  */
 
@@ -38,7 +39,11 @@ vi.mock("@/bootstrap/container", () => ({
 import { handleCreate } from "@/app/api/v1/knowledge/contributions/_handlers";
 
 const session = { id: "user-1", walletAddress: "0x070075F1389Ae1182aBac722B36CA12285d0c949", displayName: null } as never;
-const spec = { calculatorId: "work.count@1", params: { mode: "open" }, maxAgeSeconds: 7200 };
+const brief = {
+  summary: "Counts open work items each hour from the node's work-item table.",
+  justification: "Shows whether open scope grows faster than the node closes it.",
+};
+const spec = { calculatorId: "work.count@1", params: { mode: "open" }, maxAgeSeconds: 7200, brief };
 const post = (metricSpec: unknown) =>
   handleCreate(
     new Request("http://x/api/v1/knowledge/contributions", {
@@ -76,12 +81,23 @@ describe("handleCreate metric spec with serves + band (story.0033)", () => {
     ["a malformed band", { band: { comparator: "gte", target: { value: "x", unit: "items" } } }],
     ["a band that names a metricId", { band: { comparator: "gte", target: { value: 1, unit: "items" }, metricId: "x" } }],
     ["a role outside the enum", { serves: { kpi: "k", role: "driver" } }],
+    ["a brief over 25 words", { brief: { ...brief, summary: Array.from({ length: 26 }, () => "word").join(" ") } }],
+    ["a brief on two lines", { brief: { ...brief, justification: "One line.\nTwo lines." } }],
+    ["a brief with an unknown key", { brief: { ...brief, why: "x" } }],
   ])("rejects %s with a 400 naming the issue", async (_n, extra) => {
     const res = await post({ ...spec, ...extra });
     expect(res.status).toBe(400);
     const body = await res.json();
     expect(body.error).toBe("invalid metric definition");
     expect(body.issues.length).toBeGreaterThan(0);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("rejects a metric row without a brief with a 400 naming it", async () => {
+    const { brief: _brief, ...bare } = spec;
+    const res = await post(bare);
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toContain("brief");
     expect(create).not.toHaveBeenCalled();
   });
 

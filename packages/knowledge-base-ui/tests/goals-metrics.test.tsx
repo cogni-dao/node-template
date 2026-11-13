@@ -429,6 +429,51 @@ describe("MetricsBoard", () => {
     expect(goal.querySelector('[data-metric="m-guard-red"]')).toBeNull();
   });
 
+  it("shows the metric's brief when it opens, never on the card face, and says so when it has none (task.0125)", () => {
+    const brief = {
+      summary: "Counts open work items each hour from the node's work-item table.",
+      justification: "Shows whether open scope grows faster than the node closes it.",
+    };
+    const data = fixture();
+    const goalA = data.goals[1]!;
+    const red = goalA.kpis[1]!;
+    const withBrief = GoalsProgressSchema.parse({
+      ...data,
+      goals: [
+        data.goals[0],
+        {
+          ...goalA,
+          kpis: [
+            goalA.kpis[0],
+            {
+              ...red,
+              served: red.served!.map((s) =>
+                s.metric.id === "m-guard-red" ? { ...s, metric: { ...s.metric, brief } } : s,
+              ),
+            },
+          ],
+        },
+      ],
+    });
+    const { container } = renderMetrics(withBrief);
+    const goal = container.querySelector('[data-goal="goal-a"]') as HTMLElement;
+    fireEvent.click(within(goal).getByRole("button", { name: "KPI red" }));
+    const row = goal.querySelector('[data-metric="m-guard-red"]') as HTMLElement;
+    expect(row).not.toHaveTextContent(brief.summary);
+    fireEvent.click(within(row).getByRole("button", { name: "Title m-guard-red" }));
+    const figure = within(row.closest("[data-metric-block]") as HTMLElement).getByRole("figure");
+    const shown = figure.querySelector("[data-brief]") as HTMLElement;
+    expect(within(shown).getByText("What")).toBeInTheDocument();
+    expect(within(shown).getByText(brief.summary)).toBeInTheDocument();
+    expect(within(shown).getByText("Why")).toBeInTheDocument();
+    expect(within(shown).getByText(brief.justification)).toBeInTheDocument();
+    // A metric without a brief says so when opened.
+    const other = goal.querySelector('[data-metric="m-input-ok"]') as HTMLElement;
+    fireEvent.click(within(other).getByRole("button", { name: "Title m-input-ok" }));
+    const otherFigure = within(other.closest("[data-metric-block]") as HTMLElement).getByRole("figure");
+    expect(otherFigure.querySelector('[data-brief="missing"]')).toHaveTextContent("No brief yet");
+  });
+
   it("draws a supporting metric with the same card component as a KPI and calls the section Metrics", () => {
     const {container}=renderMetrics(fixture());
     const goal=container.querySelector('[data-goal="goal-a"]') as HTMLElement;
