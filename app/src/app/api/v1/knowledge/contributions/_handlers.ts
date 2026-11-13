@@ -483,13 +483,19 @@ export async function handleClose(
 
 /**
  * A stored metric spec must parse strictly. The core spec names a registered calculator and
- * carries a display its unit can honour; `serves` and `band` are validated by their own schemas
- * (a malformed one is a 400 here, at authoring) and never reach the strict MetricSpecSchema.
+ * carries a display its unit can honour; `serves`, `band` and `brief` are validated by their own
+ * schemas (a malformed one is a 400 here, at authoring) and never reach the strict MetricSpecSchema.
+ * A written spec must carry its five-second `brief` (metric-foundation-design "Metric brief").
  */
 export function validateMetricSpec(stored: unknown, id: string, title: string): NextResponse | null {
   const parsed = StoredMetricSpecSchema.safeParse(stored);
   if (!parsed.success) return NextResponse.json({ error: "invalid metric definition", issues: parsed.error.issues }, { status: 400 });
-  const { display, serves: _serves, band, ...spec } = parsed.data;
+  const { display, serves: _serves, band, brief, ...spec } = parsed.data;
+  if (!brief)
+    return NextResponse.json(
+      { error: "metric definition needs a brief: {summary, justification}, one sentence of at most 25 words each" },
+      { status: 400 },
+    );
   const registry = getContainer().goalMetrics?.registry;
   try {
     registry?.validate({ id, title, revision: "proposed", spec });

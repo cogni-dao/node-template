@@ -65,7 +65,7 @@ export function createMetricTools(
 		{
 			name: "core__metric_list",
 			description:
-				"List configured metrics and available calculators with stored observations and freshness. Each metric carries serves (the KPI it serves and its role), band and bandAssessment. Pass nextCursor as after to continue; this is the flat list of every metric (core__goal_progress groups them by KPI). Never invent values.",
+				"List configured metrics and available calculators with stored observations and freshness. Each metric carries serves (the KPI it serves and its role), band, bandAssessment and brief (what it is, how it is computed, why it matters and how it accrues). Pass nextCursor as after to continue; this is the flat list of every metric (core__goal_progress groups them by KPI). Never invent values.",
 			effect: "read_only" as const,
 			inputSchema: MetricListInputSchema,
 			outputSchema: MetricListResponseSchema,

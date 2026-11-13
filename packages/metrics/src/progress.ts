@@ -196,6 +196,7 @@ export async function readGoalsProgress(deps: {
 						role: (
 							x.definition.serves as NonNullable<typeof x.definition.serves>
 						).role,
+						...(x.definition.brief ? { brief: x.definition.brief } : {}),
 					},
 					assessment: x.assessment,
 					latest: x.latest,
@@ -292,11 +293,15 @@ export async function readGoalsProgress(deps: {
 	// A metric serving a KPI no goal binds stays visible and assessed: absent is red.
 	const orphans: MetricOrphan[] = [];
 	for (const x of serving?.items ?? []) {
-		const { serves, annexInvalid } = x.definition;
+		const { serves, annexInvalid, brief } = x.definition;
+		const named = {
+			metricId: x.definition.id,
+			title: x.definition.title,
+			...(brief ? { brief } : {}),
+		};
 		if (serves && !goalKpis.has(serves.kpi))
 			orphans.push({
-				metricId: x.definition.id,
-				title: x.definition.title,
+				...named,
 				kpi: serves.kpi,
 				// A bet's KPI is a valid target, but no goal card lists the metric.
 				reason: boundKpis.has(serves.kpi)
@@ -305,10 +310,10 @@ export async function readGoalsProgress(deps: {
 				assessment: x.assessment,
 				latest: x.latest,
 			});
-		for (const bad of annexInvalid ?? [])
+		// A bad brief is reported on the metric view (`annexInvalid`); it breaks no relationship.
+		for (const bad of (annexInvalid ?? []).filter((b) => b.field !== "brief"))
 			orphans.push({
-				metricId: x.definition.id,
-				title: x.definition.title,
+				...named,
 				kpi: serves?.kpi ?? null,
 				reason: bad.field === "serves" ? "serves_invalid" : "band_invalid",
 				issues: bad.issues,
@@ -332,6 +337,9 @@ export async function readGoalsProgress(deps: {
 								id: x.definition.id,
 								title: x.definition.title,
 								calculatorId: x.definition.spec.calculatorId,
+								...(x.definition.brief
+									? { brief: x.definition.brief }
+									: {}),
 							},
 							assessment: x.assessment,
 							latest: x.latest,
