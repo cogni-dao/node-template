@@ -11,12 +11,28 @@
  * @internal
  */
 
+import { serverEnv } from "@/shared/env";
+
 /** The public origin this request reached the node through (behind a proxy, `request.url` shows the pod bind address). */
 export function publicOrigin(request: Request): string {
   const url = new URL(request.url);
   const host = request.headers.get("x-forwarded-host") ?? request.headers.get("host") ?? url.host;
   const proto = request.headers.get("x-forwarded-proto") ?? url.protocol.replace(":", "");
   return `${proto}://${host}`;
+}
+
+/**
+ * The absolute URL of a page on THIS node, from CONFIG (`APP_BASE_URL`), never from the request's Host header: a link an agent hands a human must not be steerable by a
+ * forged header. With no configured origin the answer is the bare path (still unique and still correct on the node the agent called).
+ */
+export function configuredUrl(path: string): string {
+  const configured = serverEnv().APP_BASE_URL;
+  if (!configured) return path;
+  try {
+    return `${new URL(configured).origin}${path}`;
+  } catch {
+    return path;
+  }
 }
 
 export function buildSetupLine(input: { origin: string; grant: string; expiresAt: string }): string {

@@ -1,9 +1,112 @@
 {
-  "id": "9a6dc121-fb58-40d9-9989-76a013b73441",
+  "id": "27a4fbc7-44f8-49cf-84ff-bb6e8777479a",
   "prevId": "762545bf-4128-480d-b08d-2dae48f5c2dc",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
+    "public.agent_claims": {
+      "name": "agent_claims",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "agent_user_id": {
+          "name": "agent_user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "claimed_at": {
+          "name": "claimed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "claimed_by": {
+          "name": "claimed_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "agent_claims_agent_idx": {
+          "name": "agent_claims_agent_idx",
+          "columns": [
+            {
+              "expression": "agent_user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "agent_claims_agent_user_id_users_id_fk": {
+          "name": "agent_claims_agent_user_id_users_id_fk",
+          "tableFrom": "agent_claims",
+          "tableTo": "users",
+          "columnsFrom": [
+            "agent_user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "agent_claims_claimed_by_users_id_fk": {
+          "name": "agent_claims_claimed_by_users_id_fk",
+          "tableFrom": "agent_claims",
+          "tableTo": "users",
+          "columnsFrom": [
+            "claimed_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "agent_claims_claimed_together": {
+          "name": "agent_claims_claimed_together",
+          "value": "(\"agent_claims\".\"claimed_at\" IS NULL) = (\"agent_claims\".\"claimed_by\" IS NULL)"
+        },
+        "agent_claims_claimant_not_agent": {
+          "name": "agent_claims_claimant_not_agent",
+          "value": "\"agent_claims\".\"claimed_by\" IS NULL OR \"agent_claims\".\"claimed_by\" <> \"agent_claims\".\"agent_user_id\""
+        }
+      },
+      "isRLSEnabled": true
+    },
     "public.agent_credentials": {
       "name": "agent_credentials",
       "schema": "",
@@ -504,7 +607,7 @@
       "checkConstraints": {
         "agent_roles_resource_kind_canonical": {
           "name": "agent_roles_resource_kind_canonical",
-          "value": "\"agent_roles\".\"resource_kind\" IN ('node','own','account')"
+          "value": "\"agent_roles\".\"resource_kind\" IN ('node','delegated')"
         },
         "agent_roles_owner_shape": {
           "name": "agent_roles_owner_shape",
@@ -513,6 +616,10 @@
         "agent_roles_personal_approver": {
           "name": "agent_roles_personal_approver",
           "value": "\"agent_roles\".\"resource_kind\" = 'node' OR \"agent_roles\".\"approved_by\" IS NULL OR (\"agent_roles\".\"approved_by\" = \"agent_roles\".\"owner_user_id\" AND \"agent_roles\".\"approved_by\" <> \"agent_roles\".\"principal_user_id\" AND \"agent_roles\".\"expires_at\" IS NOT NULL)"
+        },
+        "agent_roles_personal_scope_delegable": {
+          "name": "agent_roles_personal_scope_delegable",
+          "value": "\"agent_roles\".\"resource_kind\" = 'node' OR \"agent_roles\".\"scope\" IN ('knowledge:read','knowledge:contribute')"
         }
       },
       "isRLSEnabled": true

@@ -14,7 +14,7 @@
  * @public
  */
 
-import type { NodeAiPermissionView, PrincipalRef } from "@cogni/agent-grants";
+import type { NodeAiPermissionView, PrincipalRef, RequestView } from "@cogni/agent-grants";
 
 declare const adminSessionBrand: unique symbol;
 
@@ -37,6 +37,8 @@ export interface AiPermissionChange {
 export interface NodeAdminPort {
   /** The admin table of this node's AI permissions. */
   listNodeAi(session: AdminSession): Promise<{ permissions: NodeAiPermissionView[]; more: number }>;
+  /** One ask's page: only that request, and only when a node-admin may decide it. Null otherwise (the route says 404). */
+  getAiRequest(session: AdminSession, requestId: string): Promise<RequestView | null>;
   /** Turn a node-wide permission On: approve a pending ask, or grant one of this node's AI directly. */
   turnAiPermissionOn(session: AdminSession, target: AiPermissionTarget): Promise<AiPermissionChange>;
   /** Turn a live node-wide permission Off. */

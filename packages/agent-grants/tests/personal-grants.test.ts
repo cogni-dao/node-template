@@ -2,226 +2,273 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 /**
- * Module: `@cogni-dao/agent-grants` personal grants (task.5465)
- * Purpose: `account:read`. An owned agent reads its owner's account only after the owner turns a personal grant On; Off, expired, foreign,
- *   node-row and unowned all answer null (the route's one 404). The ask is an Off row owned by the agent's owner; only that owner turns it On.
- * Scope: Pure logic over the in-memory store, which implements the same live predicate as the SQL (and the RLS function `agent_has_scope`).
+ * Module: `@cogni-dao/agent-grants` personal grants (task.5465, revision 5)
+ * Purpose: An owner delegates `knowledge:read` and `knowledge:contribute` to an agent they own, on their profile. The ask is an Off row owned by the agent's owner and returns the
+ *   path of its own approval page; only that owner turns it On (30 days). A bearer passes the lock on a live node row OR a live owner-approved personal row for a delegable scope, never for
+ *   an admin-subject scope, a non-delegable scope or after Off, an end or a change of owner. Admin sees personal rows read-only apart from Revoke.
+ * Scope: Pure logic over the in-memory store, which implements the same live predicate as the SQL.
  * Side-effects: none
  */
 
 import { describe, expect, it } from "vitest";
 import {
   AgentRolesError,
-  authorizeAccount,
+  authorize,
+  authorizeCaller,
   buildNodeAiView,
   buildYourAisView,
+  decideAsOwner,
+  DELEGABLE_SCOPES,
   grantPersonal,
   grantRole,
   listOwnAccess,
+  MAX_PENDING_PER_OWNER,
   PERSONAL_GRANT_TTL_DAYS,
+  personalKindFor,
   requestAccess,
+  requestViewForAdmin,
+  requestViewForOwner,
   revokePersonal,
-  ROUTE_ONLY_CAPABILITIES,
+  revokeRole,
+  type ScopeDeclaration,
+  type ToolRequires,
 } from "../src";
 import { memoryStore } from "./memory-store";
 
-const SCOPE = "account:read";
-const scopeKinds = { [SCOPE]: "account", "work_item:transition": "node" } as const;
-const declaredScopes = [SCOPE, "work_item:transition"];
-const askableScopes = [SCOPE, "work_item:transition"];
+const CONTRIBUTE = "knowledge:contribute";
+const READ = "knowledge:read";
+const scopes: Record<string, ScopeDeclaration> = {
+  [CONTRIBUTE]: { kind: "node", subject: "member" },
+  [READ]: { kind: "node", subject: "member" },
+  "work_item:transition": { kind: "node", subject: "member" },
+  "vcs:merge_pr": { kind: "node", subject: "admin" },
+};
+const declaredScopes = Object.keys(scopes);
+const askableScopes = declaredScopes;
+const declarations = {
+  [CONTRIBUTE]: { label: "Propose changes to the knowledge base", description: "Suggest new or changed notes." },
+  [READ]: { label: "Read the knowledge base", description: "Read this node's notes." },
+};
+const member = (scope: string): ToolRequires => ({ scope, kind: "node", subject: "member" });
 
 const OWNER = "owner-1";
 const OTHER = "owner-2";
 const AGENT = "agent-1";
-const ACCOUNT = "acct-owner-1";
-const ACCOUNT_OTHER = "acct-owner-2";
+const LOOSE = "ownerless";
 
 const world = (extra?: Parameters<typeof memoryStore>[0]) =>
   memoryStore({
     owners: { [AGENT]: OWNER, "agent-2": OTHER },
-    accounts: { [ACCOUNT]: OWNER, [ACCOUNT_OTHER]: OTHER },
-    names: { [AGENT]: "Helper bot" },
+    names: { [AGENT]: "Helper bot", [OWNER]: "Olive Owner", [OTHER]: "Pat Person" },
+    principals: { "node-ai": "internal-1" },
     ...extra,
   });
-const ask = (s: ReturnType<typeof world>, principalUserId = AGENT) =>
-  requestAccess(s, { principalUserId, scope: SCOPE, declaredScopes, askableScopes, scopeKinds });
-const read = (s: ReturnType<typeof world>, userId: string, accountId: string, via: "bearer" | "session" = "bearer") =>
-  authorizeAccount(s, { userId, via, accountId, scope: SCOPE });
+type World = ReturnType<typeof world>;
+const ask = (s: World, principalUserId = AGENT, scope = CONTRIBUTE) =>
+  requestAccess(s, { principalUserId, scope, declaredScopes, askableScopes, scopes });
+const on = (s: World, scope = CONTRIBUTE, ownerUserId = OWNER, principalUserId = AGENT) =>
+  grantPersonal(s, { ownerUserId, principalUserId, scope, scopes });
+const lock = (s: World, scope = CONTRIBUTE, who = AGENT) => authorize(s, async () => "denied", { principalId: who, requires: member(scope) });
+const door = (s: World, requires: ToolRequires, who = AGENT) => authorizeCaller(s, async () => "denied", { userId: who, via: "bearer", requires });
 
-describe("the declaration", () => {
-  it("account:read is declared once as kind account, route-only, with plain words", () => {
-    const cap = ROUTE_ONLY_CAPABILITIES["account.read"];
-    expect(cap?.requires).toMatchObject({ scope: SCOPE, kind: "account", subject: "member" });
-    expect(cap?.routes).toEqual(["accounts.credits.read"]);
-    expect(cap?.requires.description).toContain(String(PERSONAL_GRANT_TTL_DAYS));
+describe("the delegable list", () => {
+  it("is exactly knowledge:read and knowledge:contribute; only a declared member node scope on it is personal", () => {
+    expect(DELEGABLE_SCOPES).toEqual([READ, CONTRIBUTE]);
+    expect(personalKindFor(CONTRIBUTE, scopes[CONTRIBUTE])).toBe("delegated");
+    expect(personalKindFor("work_item:transition", scopes["work_item:transition"])).toBeNull(); // a member scope, but not on the list
+    expect(personalKindFor(CONTRIBUTE, { kind: "node", subject: "admin" })).toBeNull(); // declared admin: never personal
+    expect(personalKindFor(CONTRIBUTE, { kind: "account", subject: "member" })).toBeNull();
+    expect(personalKindFor(CONTRIBUTE, undefined)).toBeNull();
   });
 });
 
-describe("the ask: an owned agent asks, an unowned agent cannot", () => {
-  it("writes an Off row owned by the agent's owner, and an Off row opens nothing", async () => {
+describe("the ask returns its own approval page", () => {
+  it("an owned agent asking a delegable scope gets a personal Off row and the owner's page for THAT request", async () => {
     const s = world();
-    expect(await ask(s)).toEqual({ state: "pending", created: true });
-    expect(s.roles[0]).toMatchObject({ principal: AGENT, kind: "account", owner: OWNER, approvedBy: null });
-    expect(await read(s, AGENT, ACCOUNT)).toBeNull();
-    expect(await ask(s)).toEqual({ state: "pending", created: false });
+    const res = await ask(s);
+    expect(res).toEqual({ state: "pending", created: true, approvalPath: `/profile/ai/requests/${s.roles[0]?.id}` });
+    expect(s.roles[0]).toMatchObject({ kind: "delegated", owner: OWNER, approvedBy: null });
+    expect((await ask(s)).approvalPath).toBe(res.approvalPath); // the same ask, the same page
   });
-  it("an unowned agent gets needs_owner and nothing is written", async () => {
+  it("an ownerless agent, and an owned agent asking a scope off the list, get a node row and the Admin page", async () => {
     const s = world();
-    await expect(ask(s, "ownerless")).rejects.toMatchObject({ code: "needs_owner" });
-    expect(s.roles).toHaveLength(0);
-  });
-  it("an own-kind scope (schedule:manage) is still an admin's node row: an unowned agent can ask it", async () => {
-    const s = world();
-    const kinds = { "schedule:manage": "own" } as const;
-    expect(await requestAccess(s, { principalUserId: "ownerless", scope: "schedule:manage", declaredScopes: ["schedule:manage"], askableScopes: ["schedule:manage"], scopeKinds: kinds })).toEqual({ state: "pending", created: true });
+    const loose = await ask(s, LOOSE);
+    expect(loose.approvalPath).toBe(`/admin/ai-access/requests/${s.roles[0]?.id}`);
     expect(s.roles[0]).toMatchObject({ kind: "node", owner: null });
-    await expect(grantPersonal(s, { ownerUserId: OWNER, principalUserId: AGENT, scope: "schedule:manage", scopeKinds: kinds })).rejects.toMatchObject({ code: "invalid_scope" });
+    const off = await ask(s, AGENT, "work_item:transition");
+    expect(off.approvalPath).toBe(`/admin/ai-access/requests/${s.roles[1]?.id}`);
+    expect(s.roles[1]).toMatchObject({ kind: "node" });
+    const admin = await ask(s, AGENT, "vcs:merge_pr");
+    expect(admin.approvalPath).toMatch(/^\/admin\//);
   });
-  it("a personal ask does not count toward the node-wide cap", async () => {
+  it("two asks never share a page", async () => {
     const s = world();
-    // the node-wide cap (MAX_PENDING_TOTAL) is full of node asks, yet a personal ask still lands
-    for (let i = 0; i < 50; i += 1) s.roles.push({ principal: `flood-${i}`, scope: "work_item:transition", revoked: false, approvedBy: null, kind: "node", owner: null, expiresAt: null });
-    expect(await ask(s)).toEqual({ state: "pending", created: true });
-    await expect(
-      requestAccess(s, { principalUserId: "someone", scope: "work_item:transition", declaredScopes, askableScopes, scopeKinds })
-    ).rejects.toMatchObject({ code: "too_many_requests" });
+    const a = await ask(s, AGENT, CONTRIBUTE);
+    const b = await ask(s, AGENT, READ);
+    expect(a.approvalPath).not.toBe(b.approvalPath);
+  });
+  it("an ask made before the agent had an owner is retired when the owner's row is asked, and a live admin row is not asked again", async () => {
+    const s = world();
+    s.roles.push({ principal: AGENT, scope: CONTRIBUTE, revoked: false, approvedBy: null, kind: "node", id: "old", owner: null, expiresAt: null });
+    expect((await ask(s)).created).toBe(true);
+    expect(s.roles.find((r) => r.id === "old")?.revoked).toBe(true);
+    const admin = world({ roles: [{ principal: AGENT, scope: READ }] }); // a live node row
+    expect(await ask(admin, AGENT, READ)).toMatchObject({ state: "granted", created: false });
+  });
+  it("caps: 3 open asks per agent and 5 per owner", async () => {
+    const s = world({ owners: { a1: OWNER, a2: OWNER, a3: OWNER } });
+    const lots = [READ, CONTRIBUTE];
+    await ask(s, "a1", READ);
+    await ask(s, "a1", CONTRIBUTE);
+    await ask(s, "a2", READ);
+    await ask(s, "a2", CONTRIBUTE);
+    await ask(s, "a3", READ);
+    expect(s.roles.filter((r) => r.kind === "delegated")).toHaveLength(MAX_PENDING_PER_OWNER);
+    await expect(ask(s, "a3", CONTRIBUTE)).rejects.toMatchObject({ code: "too_many_requests" });
+    expect(lots.length).toBe(2);
   });
 });
 
-describe("the owner turns it On and Off", () => {
-  it("On: the agent reads its owner's account; Off: it does not (revoked)", async () => {
+describe("the owner turns it On and Off; the lock follows", () => {
+  it("On: the bearer passes; the allow names the owner; Off: it fails", async () => {
     const s = world();
     await ask(s);
-    expect(await grantPersonal(s, { ownerUserId: OWNER, principalUserId: AGENT, scope: SCOPE, scopeKinds })).toEqual({ principalUserId: AGENT, created: true });
-    expect(s.roles[0]).toMatchObject({ approvedBy: OWNER, owner: OWNER });
-    expect(await read(s, AGENT, ACCOUNT)).toEqual({ accessKind: "delegated" });
-    expect(await revokePersonal(s, { ownerUserId: OWNER, principalUserId: AGENT, scope: SCOPE, scopeKinds })).toEqual({ principalUserId: AGENT, changed: true });
-    expect(await read(s, AGENT, ACCOUNT)).toBeNull();
+    expect(await lock(s)).toMatchObject({ decision: "deny", reason: "no_role" }); // an Off row opens nothing
+    expect(await on(s)).toEqual({ principalUserId: AGENT, created: true });
+    expect(s.roles[0]).toMatchObject({ approvedBy: OWNER, owner: OWNER, expiresAt: s.clock.now + PERSONAL_GRANT_TTL_DAYS * 86_400_000 });
+    expect(await lock(s)).toEqual({ decision: "allow", basis: "personal_grant", owner: OWNER });
+    expect(await door(s, member(CONTRIBUTE))).toMatchObject({ decision: "allow", owner: OWNER });
+    await revokePersonal(s, { ownerUserId: OWNER, principalUserId: AGENT, scope: CONTRIBUTE, scopes });
+    expect(await lock(s)).toMatchObject({ decision: "deny" });
   });
-  it("the grant ends after the fixed days and the agent can ask again", async () => {
+  it("it ends after the fixed days, and the agent can ask again", async () => {
     const s = world();
     await ask(s);
-    await grantPersonal(s, { ownerUserId: OWNER, principalUserId: AGENT, scope: SCOPE, scopeKinds });
-    const row = s.roles[0];
-    expect(row?.expiresAt).toBe(s.clock.now + PERSONAL_GRANT_TTL_DAYS * 86_400_000);
+    await on(s);
     s.clock.now += (PERSONAL_GRANT_TTL_DAYS + 1) * 86_400_000;
-    expect(await read(s, AGENT, ACCOUNT)).toBeNull(); // expired: 404
-    expect((await listOwnAccess(s, AGENT)).find((r) => r.scope === SCOPE)).toMatchObject({ state: "revoked" });
-    expect(await ask(s)).toEqual({ state: "pending", created: true }); // a new Off row, not stuck behind the old one
-    expect(s.roles.filter((r) => !r.revoked)).toHaveLength(1);
+    expect(await lock(s)).toMatchObject({ decision: "deny" });
+    expect((await listOwnAccess(s, AGENT))[0]).toMatchObject({ scope: CONTRIBUTE, state: "revoked" });
+    expect((await ask(s)).created).toBe(true);
   });
-  it("only the owner decides: another person, the agent itself and a scope never asked all fail", async () => {
+  it("a live NODE row still opens the lock, with no owner in the allow", async () => {
+    const s = world({ roles: [{ principal: LOOSE, scope: CONTRIBUTE }] });
+    expect(await lock(s, CONTRIBUTE, LOOSE)).toEqual({ decision: "allow", basis: "role" });
+  });
+  it("a change of owner closes the lock though the row is untouched", async () => {
+    const moved = world({ owners: { [AGENT]: OTHER }, roles: [{ principal: AGENT, scope: CONTRIBUTE, kind: "delegated", owner: OWNER }] });
+    expect(await lock(moved)).toMatchObject({ decision: "deny" });
+  });
+  it("only the owner decides; a scope off the list is refused on every personal path, even when a row is forced into the store", async () => {
     const s = world();
     await ask(s);
-    await expect(grantPersonal(s, { ownerUserId: OTHER, principalUserId: AGENT, scope: SCOPE, scopeKinds })).rejects.toMatchObject({ code: "principal_not_found" });
-    await expect(grantPersonal(s, { ownerUserId: AGENT, principalUserId: AGENT, scope: SCOPE, scopeKinds })).rejects.toMatchObject({ code: "self_approval" });
-    await expect(grantPersonal(s, { ownerUserId: OWNER, principalUserId: "agent-2", scope: SCOPE, scopeKinds })).rejects.toMatchObject({ code: "principal_not_found" });
-    expect(await read(s, AGENT, ACCOUNT)).toBeNull();
-    const none = world();
-    await expect(grantPersonal(none, { ownerUserId: OWNER, principalUserId: AGENT, scope: SCOPE, scopeKinds })).rejects.toMatchObject({ code: "not_pending" });
-    await expect(grantPersonal(s, { ownerUserId: OWNER, principalUserId: AGENT, scope: "work_item:transition", scopeKinds })).rejects.toMatchObject({ code: "invalid_scope" });
-  });
-  it("another person cannot turn Off or dismiss; the owner can dismiss an ask", async () => {
-    const s = world();
-    await ask(s);
-    await expect(revokePersonal(s, { ownerUserId: OTHER, principalUserId: AGENT, scope: SCOPE, scopeKinds, deny: true })).rejects.toBeInstanceOf(AgentRolesError);
-    expect(await revokePersonal(s, { ownerUserId: OWNER, principalUserId: AGENT, scope: SCOPE, scopeKinds, deny: true })).toMatchObject({ changed: true });
-    expect((await listOwnAccess(s, AGENT)).find((r) => r.scope === SCOPE)?.state).toBe("denied");
-  });
-  it("a live grant lists the account the owner opened, and only then", async () => {
-    const s = world();
-    await ask(s);
-    expect((await listOwnAccess(s, AGENT))[0]).toEqual({ scope: SCOPE, state: "pending", at: expect.any(String) });
-    await grantPersonal(s, { ownerUserId: OWNER, principalUserId: AGENT, scope: SCOPE, scopeKinds });
-    expect((await listOwnAccess(s, AGENT))[0]).toMatchObject({ state: "granted", accountId: ACCOUNT });
+    await expect(on(s, CONTRIBUTE, OTHER)).rejects.toMatchObject({ code: "principal_not_found" });
+    await expect(on(s, CONTRIBUTE, AGENT)).rejects.toMatchObject({ code: "self_approval" });
+    await expect(on(s, "work_item:transition")).rejects.toMatchObject({ code: "invalid_scope" });
+    // forced rows: a personal row for a scope off the list never opens a lock, and the by-id approve refuses it
+    const forced = world({
+      roles: [
+        { principal: AGENT, scope: "work_item:transition", kind: "delegated", owner: OWNER },
+        { principal: AGENT, scope: "vcs:merge_pr", kind: "delegated", owner: OWNER },
+      ],
+    });
+    expect(await lock(forced, "work_item:transition")).toMatchObject({ decision: "deny" });
+    expect(await door(forced, { scope: "vcs:merge_pr", kind: "node", subject: "admin" })).toMatchObject({ decision: "deny" }); // never satisfies an admin-subject scope
+    const pending = world();
+    pending.roles.push({ principal: AGENT, scope: "work_item:transition", revoked: false, approvedBy: null, kind: "delegated", id: "p1", owner: OWNER, expiresAt: null });
+    await expect(decideAsOwner(pending, { ownerUserId: OWNER, requestId: "p1", decision: "approve" })).rejects.toMatchObject({ code: "invalid_scope" });
   });
 });
 
-describe("authorizeAccount: owner | live personal grant | null", () => {
-  const granted = async () => {
+describe("the approval page: one request, one approver, one atomic decision", () => {
+  it("Approve by id turns it On once; a second click is not_pending; Deny ends the ask; another person and an unknown id are 404", async () => {
     const s = world();
-    await ask(s);
-    await grantPersonal(s, { ownerUserId: OWNER, principalUserId: AGENT, scope: SCOPE, scopeKinds });
-    return s;
-  };
-  it("the owner (a person or an agent that owns it) reads their own account with no grant", async () => {
+    const { approvalPath } = await ask(s);
+    const id = approvalPath?.split("/").pop() as string;
+    await expect(decideAsOwner(s, { ownerUserId: OTHER, requestId: id, decision: "approve" })).rejects.toMatchObject({ code: "principal_not_found" });
+    await expect(decideAsOwner(s, { ownerUserId: OWNER, requestId: "nope", decision: "approve" })).rejects.toMatchObject({ code: "principal_not_found" });
+    expect(await decideAsOwner(s, { ownerUserId: OWNER, requestId: id, decision: "approve" })).toMatchObject({ changed: true, scope: CONTRIBUTE });
+    expect(await lock(s)).toMatchObject({ decision: "allow" });
+    await expect(decideAsOwner(s, { ownerUserId: OWNER, requestId: id, decision: "approve" })).rejects.toMatchObject({ code: "not_pending" });
+    const second = (await ask(s, AGENT, READ)).approvalPath?.split("/").pop() as string;
+    expect(await decideAsOwner(s, { ownerUserId: OWNER, requestId: second, decision: "deny" })).toMatchObject({ changed: true });
+    expect((await listOwnAccess(s, AGENT)).find((r) => r.scope === READ)?.state).toBe("denied");
+  });
+  it("the owner's view is theirs only; the admin's view is a node row an admin may decide, never a personal row or an owner's ask", async () => {
     const s = world();
-    expect(await read(s, OWNER, ACCOUNT, "session")).toEqual({ accessKind: "owner" });
-    expect(await read(s, OWNER, ACCOUNT)).toEqual({ accessKind: "owner" });
-  });
-  it("a foreign account, a missing account and a malformed id are the same null, even with a live grant", async () => {
-    const s = await granted();
-    expect(await read(s, AGENT, ACCOUNT_OTHER)).toBeNull();
-    expect(await read(s, AGENT, "no-such-account")).toBeNull();
-    expect(await read(s, AGENT, "../../x")).toBeNull();
-    expect(await read(s, OTHER, ACCOUNT, "session")).toBeNull();
-  });
-  it("a human session never reads another person's account, grant or not", async () => {
-    const s = await granted();
-    expect(await read(s, AGENT, ACCOUNT, "session")).toBeNull();
-  });
-  it("a node role row never opens an account, and an unowned agent holds nothing", async () => {
-    const s = world({ roles: [{ principal: AGENT, scope: SCOPE }, { principal: "ownerless", scope: SCOPE }] }); // node rows
-    expect(await read(s, AGENT, ACCOUNT)).toBeNull();
-    expect(await read(s, "ownerless", ACCOUNT)).toBeNull();
-  });
-  it("a row whose agent no longer belongs to that owner is not live", async () => {
-    const s = await granted();
-    const moved = world({ owners: { [AGENT]: OTHER }, roles: [{ principal: AGENT, scope: SCOPE, kind: "account", owner: OWNER }] });
-    expect(await read(s, AGENT, ACCOUNT)).toEqual({ accessKind: "delegated" });
-    expect(await read(moved, AGENT, ACCOUNT)).toBeNull();
-  });
-  it("a store outage rejects, never allows", async () => {
-    await expect(read(world({ failing: true }), AGENT, ACCOUNT)).rejects.toThrow();
+    const personal = (await ask(s)).approvalPath?.split("/").pop() as string;
+    const node = (await ask(s, LOOSE)).approvalPath?.split("/").pop() as string;
+    const offList = (await ask(s, AGENT, "work_item:transition")).approvalPath?.split("/").pop() as string;
+    const view = (id: string, who = OWNER) => requestViewForOwner(s, { ownerUserId: who, requestId: id, declarations });
+    expect(await view(personal)).toMatchObject({ who: "Helper bot", owner: "Olive Owner", label: "Propose changes to the knowledge base", state: "pending" });
+    expect(await view(personal, OTHER)).toBeNull();
+    expect(await view(node)).toBeNull(); // a node row is an admin's
+    const admin = (id: string) => requestViewForAdmin(s, { requestId: id, declarations: { ...declarations, "work_item:transition": { label: "Move work items", description: "Change a work item's state." } }, scopes });
+    expect(await admin(node)).toMatchObject({ who: "Unnamed agent", owner: null, state: "pending" });
+    expect(await admin(offList)).toMatchObject({ owner: "Olive Owner" }); // an owned agent's ask off the list is the admin's
+    expect(await admin(personal)).toBeNull(); // an owner's ask is not
+    expect(await admin("unknown")).toBeNull();
   });
 });
 
-describe("one row, two planes: node and personal never mix", () => {
-  it("the admin path refuses a personal scope, for an outside agent and for this node's own AI", async () => {
-    const s = world({ principals: { "node-ai": "internal-1" } });
+describe("one grant row, two approvers: node and personal never mix", () => {
+  it("the admin path refuses a delegable scope for an owned agent, and still grants it to an ownerless agent and this node's AI", async () => {
+    const s = world();
     await ask(s);
-    const input = { scope: SCOPE, approvedBy: "admin-1", declaredScopes, personalScopes: [SCOPE] };
+    const input = { scope: CONTRIBUTE, approvedBy: "admin-1", declaredScopes, scopes };
     await expect(grantRole(s, { principalUserId: AGENT, ...input })).rejects.toMatchObject({ code: "personal_scope" });
-    await expect(grantRole(s, { principalSlug: "node-ai", ...input })).rejects.toMatchObject({ code: "personal_scope" });
     expect(s.roles.filter((r) => r.approvedBy)).toHaveLength(0);
+    await ask(s, LOOSE);
+    expect(await grantRole(s, { principalUserId: LOOSE, ...input })).toMatchObject({ created: true });
+    expect(await grantRole(s, { principalSlug: "node-ai", ...input })).toMatchObject({ created: true });
   });
-  it("a personal row does not open a node lock and never reaches the admin view", async () => {
+  it("a personal row does not open a node lock; a node row does not satisfy the personal predicate", async () => {
     const s = world();
     await ask(s);
-    await grantPersonal(s, { ownerUserId: OWNER, principalUserId: AGENT, scope: SCOPE, scopeKinds });
-    expect(await s.hasLiveRole(AGENT, SCOPE)).toBe(false);
-    expect(await s.liveScopes(AGENT, [SCOPE])).toEqual([]);
-    const listed = await s.listRoleRows(100);
-    expect(listed.rows).toEqual([]);
-    const admin = buildNodeAiView({ declarations: { [SCOPE]: { label: "Read", description: "Read" } }, scopesByPrincipal: {}, internal: [], rows: listed.rows });
-    expect(admin).toEqual([]);
+    await on(s);
+    expect(await s.hasLiveRole(AGENT, CONTRIBUTE)).toBe(false);
+    expect(await s.liveScopes(AGENT, [CONTRIBUTE])).toEqual([]);
+    const node = world({ roles: [{ principal: AGENT, scope: CONTRIBUTE }] });
+    expect(await node.hasLiveRole(AGENT, CONTRIBUTE, { kind: "delegated", ownerUserId: OWNER })).toBe(false);
   });
-  it("a node row does not satisfy the personal predicate", async () => {
-    const s = world({ roles: [{ principal: AGENT, scope: "work_item:transition" }] });
-    expect(await s.hasLiveRole(AGENT, "work_item:transition")).toBe(true);
-    expect(await s.hasLiveRole(AGENT, "work_item:transition", { kind: "account", ownerUserId: OWNER })).toBe(false);
+  it("the admin table lists a live personal row read-only, never an owner's pending ask, and the admin may revoke it (kill switch)", async () => {
+    const s = world();
+    await ask(s);
+    const view = async () => buildNodeAiView({ declarations, scopesByPrincipal: {}, internal: [], rows: (await s.listRoleRows(100)).rows });
+    expect(await view()).toEqual([]); // an owner's pending ask is not the admin's
+    await on(s);
+    expect(await view()).toEqual([expect.objectContaining({ section: "personal", who: "Helper bot", on: true, scope: CONTRIBUTE, until: expect.stringMatching(/^2026-12-12T/) })]);
+    expect(await revokeRole(s, { principalUserId: AGENT, scope: CONTRIBUTE })).toEqual({ principalUserId: AGENT, revoked: true });
+    expect(await lock(s)).toMatchObject({ decision: "deny" });
+    expect(await view()).toEqual([]);
+  });
+  it("an own-AI view row set never reads a personal row as a node row", async () => {
+    const s = world();
+    await ask(s);
+    await on(s);
+    expect((await s.listLiveRoles()).length).toBe(0);
   });
 });
 
 describe("Your AIs rows", () => {
-  const declarations = { [SCOPE]: { label: "Read your account balance", description: "See the credit balance of your account." } };
   it("shows an ask as Off and a live grant as On with its end; each person sees only their own AIs", async () => {
     const s = world();
     await ask(s);
     await ask(s, "agent-2");
     const off = buildYourAisView({ declarations, rows: await s.listPersonalRows(OWNER) });
-    expect(off).toEqual([expect.objectContaining({ principalUserId: AGENT, who: "Helper bot", scope: SCOPE, on: false, until: null })]);
-    await grantPersonal(s, { ownerUserId: OWNER, principalUserId: AGENT, scope: SCOPE, scopeKinds });
-    const on = buildYourAisView({ declarations, rows: await s.listPersonalRows(OWNER) });
-    expect(on).toEqual([expect.objectContaining({ on: true, until: expect.stringMatching(/^2026-12-12T/) })]);
+    expect(off).toEqual([expect.objectContaining({ principalUserId: AGENT, who: "Helper bot", scope: CONTRIBUTE, on: false, until: null })]);
+    await on(s);
+    expect(buildYourAisView({ declarations, rows: await s.listPersonalRows(OWNER) })).toEqual([expect.objectContaining({ on: true, until: expect.stringMatching(/^2026-12-12T/) })]);
     expect((await s.listPersonalRows(OTHER)).map((r) => r.principalUserId)).toEqual(["agent-2"]);
   });
   it("leaves out a scope with no declaration and an ended grant", async () => {
     const s = world();
     await ask(s);
-    await grantPersonal(s, { ownerUserId: OWNER, principalUserId: AGENT, scope: SCOPE, scopeKinds });
+    await on(s);
     expect(buildYourAisView({ declarations: {}, rows: await s.listPersonalRows(OWNER) })).toEqual([]);
     s.clock.now += 40 * 86_400_000;
     expect(await s.listPersonalRows(OWNER)).toEqual([]);
+  });
+  it("AgentRolesError is what refusals throw", async () => {
+    await expect(on(world())).rejects.toBeInstanceOf(AgentRolesError);
   });
 });

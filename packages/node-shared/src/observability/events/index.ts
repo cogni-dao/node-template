@@ -64,6 +64,8 @@ export const EVENT_NAMES = {
 	AGENT_SPAWN_GRANT_REDEEMED: "agent.spawn_grant.redeemed",
 	AGENT_SPAWN_GRANT_REFUSED: "agent.spawn_grant.refused",
 	AGENT_OWNER_REVOKED: "agent.owner.revoked",
+	AGENT_CLAIM_STARTED: "agent.claim.started",
+	AGENT_OWNER_CLAIMED: "agent.owner.claimed",
 	/** A revocable key was refused as invalid (unknown, revoked, expired or wrong state): 401. Carries routeId only: no key, hash or prefix. */
 	AGENT_CREDENTIAL_INVALID_DENIED: "agent.credential.invalid_denied",
 	/** A client went over the per-IP limit on credential lookups: 429, no store read. Carries routeId only. */

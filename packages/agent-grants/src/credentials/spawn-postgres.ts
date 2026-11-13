@@ -18,7 +18,10 @@
 
 import type { SqlTag } from "../postgres";
 import { createBypassRlsAssertion, type CredentialSql, insertPendingCredential } from "./postgres";
-import type { GrantState, OwnedAgent, RedeemResult, SpawnStore } from "./spawn";
+import type { ClaimView, CompleteClaimResult, GrantState, OwnedAgent, RedeemResult, SpawnStore, StartClaimResult } from "./spawn";
+import { MAX_OWNED_AGENTS } from "./spawn";
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const iso = (value: unknown): string => {
   const date = value instanceof Date ? value : typeof value === "string" ? new Date(value) : null;
@@ -107,6 +110,10 @@ export function createPostgresSpawnStore(client: CredentialSql): SpawnStore {
             : { ok: false, reason: "already_redeemed" };
         }
 
+        // CAPPED: a person owns at most MAX_OWNED_AGENTS agents. The grant row lock above serializes one grant; the advisory lock serializes one person.
+        await tx`SELECT pg_advisory_xact_lock(hashtext(${`owned:${ownerUserId}`}))`;
+        const owned = await tx`SELECT count(*)::int AS n FROM agent_principals WHERE owner_user_id = ${ownerUserId} AND kind = 'external'`;
+        if (Number(owned[0]?.n ?? 0) >= MAX_OWNED_AGENTS) return { ok: false, reason: "too_many_agents" };
         // The agent's `users` row carries only id and name (no wallet): AGENTS_HOLD_NO_WALLET.
         await tx`INSERT INTO users (id, name) VALUES (${newUserId}, ${name})`;
         await tx`INSERT INTO agent_principals (kind, user_id, owner_user_id) VALUES ('external', ${newUserId}, ${ownerUserId})`;
@@ -115,6 +122,73 @@ export function createPostgresSpawnStore(client: CredentialSql): SpawnStore {
         return key.ok
           ? { ok: true, userId: newUserId, ownerUserId, credentialId: key.credentialId, pendingExpiresAt: key.pendingExpiresAt, retry: false }
           : { ok: false, reason: "already_redeemed" };
+      }),
+
+    startClaim: ({ agentUserId, ttlSec }) =>
+      client.begin(async (tx): Promise<StartClaimResult> => {
+        await tx`SELECT pg_advisory_xact_lock(hashtext(${`claim:${agentUserId}`}))`;
+        const facts = await tx`
+          SELECT p.kind, p.owner_user_id,
+                 (EXISTS (SELECT 1 FROM users u WHERE u.id = ${agentUserId} AND u.wallet_address IS NOT NULL)
+                  OR EXISTS (SELECT 1 FROM user_bindings b WHERE b.user_id = ${agentUserId} AND b.provider = 'wallet')) AS has_wallet
+          FROM agent_principals p WHERE p.user_id = ${agentUserId}`;
+        const fact = facts[0];
+        if (!fact || fact.kind !== "external" || fact.has_wallet === true) return { ok: false, reason: "not_an_agent" };
+        if (fact.owner_user_id !== null && fact.owner_user_id !== undefined) return { ok: false, reason: "already_owned" };
+        // At most one live claim per agent: a new one ends the old.
+        await tx`UPDATE agent_claims SET expires_at = now() WHERE agent_user_id = ${agentUserId} AND claimed_at IS NULL AND expires_at > now()`;
+        const rows = await tx`
+          INSERT INTO agent_claims (agent_user_id, expires_at)
+          VALUES (${agentUserId}, now() + (${ttlSec}::int * interval '1 second'))
+          RETURNING id, expires_at`;
+        return { ok: true, claimId: text(rows[0]?.id), expiresAt: iso(rows[0]?.expires_at) };
+      }),
+
+    async getClaim(claimId): Promise<ClaimView | null> {
+      if (!UUID.test(claimId)) return null;
+      const rows = await client`
+        SELECT c.id, c.claimed_at, c.expires_at, c.expires_at > now() AS live, u.name,
+               (p.owner_user_id IS NOT NULL) AS owned
+        FROM agent_claims c
+        JOIN users u ON u.id = c.agent_user_id
+        LEFT JOIN agent_principals p ON p.user_id = c.agent_user_id
+        WHERE c.id = ${claimId}::uuid`;
+      const row = rows[0];
+      if (!row) return null;
+      const claimed = row.claimed_at !== null && row.claimed_at !== undefined;
+      return {
+        claimId: text(row.id),
+        agentName: typeof row.name === "string" ? row.name : null,
+        state: claimed ? "claimed" : row.live !== true ? "expired" : row.owned === true ? "owned" : "open",
+        expiresAt: iso(row.expires_at),
+      };
+    },
+
+    completeClaim: ({ claimId, ownerUserId, maxOwned }) =>
+      client.begin(async (tx): Promise<CompleteClaimResult> => {
+        if (!UUID.test(claimId)) return { ok: false, reason: "unknown" };
+        const claims = await tx`
+          SELECT c.agent_user_id, c.claimed_at, c.expires_at > now() AS live
+          FROM agent_claims c WHERE c.id = ${claimId}::uuid FOR UPDATE`;
+        const claim = claims[0];
+        if (!claim) return { ok: false, reason: "unknown" };
+        if (claim.claimed_at !== null && claim.claimed_at !== undefined) return { ok: false, reason: "used" };
+        if (claim.live !== true) return { ok: false, reason: "expired" };
+        const agentUserId = text(claim.agent_user_id);
+        // An agent is never an owner, and never its own.
+        const asAgent = await tx`SELECT 1 AS ok FROM agent_principals WHERE user_id = ${ownerUserId}`;
+        if (asAgent.length > 0 || ownerUserId === agentUserId) return { ok: false, reason: "owner_is_agent" };
+        await tx`SELECT pg_advisory_xact_lock(hashtext(${`owned:${ownerUserId}`}))`;
+        const owned = await tx`SELECT count(*)::int AS n FROM agent_principals WHERE owner_user_id = ${ownerUserId} AND kind = 'external'`;
+        if (Number(owned[0]?.n ?? 0) >= maxOwned) return { ok: false, reason: "too_many_agents" };
+        // The ONE guarded write: the owner is set only where it is NULL, on this same principal.
+        const set = await tx`
+          UPDATE agent_principals SET owner_user_id = ${ownerUserId}
+          WHERE user_id = ${agentUserId} AND owner_user_id IS NULL AND kind = 'external'
+          RETURNING user_id`;
+        if (set.length === 0) return { ok: false, reason: "already_owned" };
+        await tx`UPDATE agent_claims SET claimed_at = now(), claimed_by = ${ownerUserId} WHERE id = ${claimId}::uuid`;
+        return { ok: true, agentUserId };
       }),
 
     async listOwned(ownerUserId): Promise<OwnedAgent[]> {
@@ -165,6 +239,9 @@ export function createPostgresSpawnStore(client: CredentialSql): SpawnStore {
     issue: guard(store.issue),
     grantState: guard(store.grantState),
     redeem: guard(store.redeem),
+    startClaim: guard(store.startClaim),
+    getClaim: guard(store.getClaim),
+    completeClaim: guard(store.completeClaim),
     listOwned: guard(store.listOwned),
     countPending: guard(store.countPending),
     liveKeyIds: guard(store.liveKeyIds),

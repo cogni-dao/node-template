@@ -28,6 +28,11 @@ export const agentAccessRequestCreateOperation = {
     state: z.enum(["pending", "granted"]),
     /** false when the ask (or grant) already existed. */
     created: z.boolean(),
+    /**
+     * The link to hand the human who decides THIS ask. Unique to the ask. An owned agent asking for a personal scope gets its owner's profile page
+     * (`/profile/ai/requests/<id>`); any other ask gets the Admin page (`/admin/ai-access/requests/<id>`). Null only when no open row exists.
+     */
+    approvalUrl: z.string().nullable(),
   }),
 } as const;
 
@@ -39,8 +44,8 @@ export const agentAccessRequestListOperation = {
         scope: z.string(),
         state: agentAccessRequestStateSchema,
         at: z.string(),
-        /** Set only on a live account permission: the account its owner opened to this agent. Use it as the path of the read. */
-        accountId: z.string().optional(),
+        /** The link to hand the human who decides this ask. Set on an open ask or live grant. */
+        approvalUrl: z.string().optional(),
       })
     ),
   }),

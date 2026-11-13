@@ -45,6 +45,7 @@ const GRANT_REFUSALS = {
   unknown: [403, "invalid_spawn_grant"],
   expired: [410, "spawn_grant_expired"],
   already_redeemed: [409, "spawn_grant_used"],
+  too_many_agents: [409, "too_many_agents"],
   name_taken: [409, "name_taken"],
 } as const;
 

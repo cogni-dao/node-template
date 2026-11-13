@@ -46,6 +46,8 @@ const BLOCKS: ReadonlyArray<{ section: AccessSection; title: string }> = [
   { section: "pending", title: "Asks waiting" },
   { section: "node", title: "This node's AI" },
   { section: "outside", title: "Outside agents" },
+  // An owner turned these on for their own AI. An admin cannot approve one, only turn it Off (the kill switch).
+  { section: "personal", title: "Delegated by owners" },
 ];
 
 export function AgentAccessSection({ endpoints, className }: AgentAccessSectionProps) {
@@ -139,7 +141,7 @@ export function AgentAccessSection({ endpoints, className }: AgentAccessSectionP
                             <div className="text-muted-foreground text-xs">{row.description}</div>
                           </td>
                           <td className="whitespace-nowrap py-2 pr-3 align-top text-muted-foreground">
-                            {row.section === "pending" ? "—" : (row.until ?? "No end")}
+                            {row.section === "pending" ? "—" : row.until ? (row.section === "personal" ? new Date(row.until).toLocaleDateString() : row.until) : "No end"}
                           </td>
                           <td className="h-10 py-2 text-right align-top">
                             {saving ? (

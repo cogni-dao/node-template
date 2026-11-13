@@ -8,8 +8,8 @@
  * Scope: A static map (tool id -> route ids + scope), an allowlist of tools that have no node route, and `authorizeCaller`.
  *   The parity test (packages/langgraph-graphs/tests/same-door-parity.test.ts) fails when a non-read_only tool is in neither.
  * Invariants:
- *   - SAME_DOOR: a bearer caller is its own principal. It needs a live role row for the scope: the same principal lock the
- *     tool guard runs. A denied bearer gets 403 `policy_denied`; a store outage gets 503 `authz_unavailable`.
+ *   - SAME_DOOR: a bearer caller is its own principal. It needs a live role row for the scope (or, for a member scope, a live personal row its owner approved):
+ *     the same principal lock the tool guard runs. A denied bearer gets 403 `policy_denied`; a store outage gets 503 `authz_unavailable`.
  *   - Humans are subjects, not principals. A signed-in human passes `member`; `admin` needs the node admin check. A human
  *     needs no role row.
  *   - TOOL_HAS_ROUTE_TWIN: every non-read_only tool is in `SAME_DOOR_ROUTES` or in `NO_ROUTE_TWIN` with a reason.
@@ -19,7 +19,6 @@
  */
 
 import { authorize } from "./authorize";
-import { PERSONAL_GRANT_TTL_DAYS } from "./roles";
 import type {
   AdminCheck,
   AgentGrantsStore,
@@ -74,18 +73,6 @@ export const ROUTE_ONLY_CAPABILITIES: Readonly<
       "knowledge.domains.list",
       "knowledge.domains.get",
     ],
-  },
-  // ACCOUNT data, not a node scope: the door is `authorizeAccount()` (the owner, or a live personal grant the owner approved), called by the route itself.
-  // The kind (`account`) tells the ask door to write a personal row owned by the agent's owner. An admin never grants it.
-  "account.read": {
-    requires: {
-      scope: "account:read",
-      kind: "account",
-      subject: "member",
-      label: "Read your account balance",
-      description: `See the credit balance of your account. An AI you made can read it only after you turn this on, and the access ends after ${PERSONAL_GRANT_TTL_DAYS} days.`,
-    },
-    routes: ["accounts.credits.read"],
   },
   "knowledge.contribute": {
     requires: {
@@ -162,11 +149,12 @@ export async function authorizeCaller(
   if (via === "bearer") {
     // The bearer IS the principal. `own` data belongs to it, so it is also the subject there. `admin`-subject scopes
     // pass on the role row alone: a DAO admin wrote that row, and an AI identity has no admin check yet (item I2).
+    // A personal row (the owner's delegation) opens only a `member`-subject scope, so `requires` goes in unchanged and the admin check is waived instead.
     return authorize(store, adminCheck, {
       principalId: userId,
       subjectUserId: requires.kind === "own" ? userId : undefined,
-      requires:
-        requires.subject === "admin" ? { ...requires, subject: "member" } : requires,
+      requires,
+      adminSubjectWaived: true,
     });
   }
   if (requires.kind === "account")

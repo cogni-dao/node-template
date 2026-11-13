@@ -125,7 +125,7 @@ describe("access requests: an ask is an off row (real Postgres)", () => {
     as(agent, "bearer");
     const first = await ask(SCOPE);
     expect(first.status).toBe(201);
-    expect(await first.json()).toEqual({ scope: SCOPE, state: "pending", created: true });
+    expect(await first.json()).toEqual({ scope: SCOPE, state: "pending", created: true, approvalUrl: expect.stringMatching(/\/admin\/ai-access\/requests\/[0-9a-f-]{36}$/) }); // work_item:transition is an admin's scope
     const row = (await service`SELECT approved_by, granted_at, requested_by, revoked_at FROM agent_roles WHERE principal_user_id = ${agent}`)[0];
     expect(row).toMatchObject({ approved_by: null, granted_at: null, requested_by: agent, revoked_at: null }); // an OFF row
 

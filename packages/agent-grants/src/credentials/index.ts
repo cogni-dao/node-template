@@ -23,14 +23,20 @@ export {
 export { agentRolesHasRoles, createPostgresCredentialStore, type CredentialSql, type PostgresCredentialStoreOptions } from "./postgres";
 export { createPostgresSpawnStore } from "./spawn-postgres";
 export {
+  CLAIM_TTL_SEC,
+  type ClaimView,
+  type CompleteClaimResult,
+  completeAgentClaim,
   type GrantState,
   type IssueGrantResult,
   isWellFormedSpawnGrant,
   issueSpawnGrant,
   listOwnedAgents,
+  MAX_OWNED_AGENTS,
   MAX_PENDING_SPAWN_GRANTS,
   type OwnedAgent,
   type RedeemRefusal,
+  readAgentClaim,
   type RedeemResult,
   redeemSpawnGrant,
   revokeOwnedAgentKeys,
@@ -39,6 +45,8 @@ export {
   type SpawnRedeemResult,
   type SpawnStore,
   spawnGrantsLeft,
+  type StartClaimResult,
+  startAgentClaim,
 } from "./spawn";
 export {
   formatRevocableKey,

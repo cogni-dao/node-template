@@ -202,6 +202,9 @@ export function YourAis(): ReactElement {
         <Button variant="outline" disabled={busy !== null || grantsLeft === 0} onClick={() => void add()}>
           Add an AI
         </Button>
+        <p className="pt-2 text-muted-foreground text-xs">
+          Already running an AI? Tell it to claim itself on this node, then open the link it gives you.
+        </p>
       </div>
     </div>
   );

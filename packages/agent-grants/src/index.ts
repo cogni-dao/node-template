@@ -9,7 +9,6 @@
  * @public
  */
 
-export { type AccountAccess, authorizeAccount } from "./account";
 export {
   type AuthorizeInput,
   authorize,
@@ -38,22 +37,29 @@ export {
 export { agentNameKey, hasHiddenCharacters } from "./names";
 export { buildNodeAiView } from "./node-ai";
 export { buildYourAisView } from "./your-ais";
+export { ADMIN_REQUEST_PATH_PREFIX, approvalPath, OWNER_REQUEST_PATH_PREFIX } from "./approval";
+export { requestViewForAdmin, requestViewForOwner } from "./requests";
 export { createPostgresAgentGrantsStore, type SqlTag } from "./postgres";
 export {
   AgentRolesError,
+  decideAsOwner,
+  DELEGABLE_SCOPES,
   denyRequest,
   grantPersonal,
   grantRole,
   listOwnAccess,
   MAX_PENDING_PER_AGENT,
+  MAX_PENDING_PER_OWNER,
   MAX_PENDING_TOTAL,
   PERSONAL_GRANT_TTL_DAYS,
+  personalKindFor,
   type PrincipalRef,
   requestAccess,
   type RolesErrorCode,
   resolveInternalPrincipal,
   revokePersonal,
   revokeRole,
+  type ScopeDeclaration,
 } from "./roles";
 export type {
   AdminCheck,
@@ -69,6 +75,8 @@ export type {
   OwnRoleRow,
   PersonalRow,
   PersonalScopeKind,
+  RequestRecord,
+  RequestView,
   RoleRow,
   RoleState,
   RunIdentity,

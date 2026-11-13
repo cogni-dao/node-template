@@ -97,9 +97,7 @@ export function YourAiAccess(): ReactElement | null {
     <div className="py-3">
       <h3 className="pb-1 font-medium text-foreground text-sm">What your AIs ask to do</h3>
       {notice && (
-        <p className="pb-2 text-destructive text-sm" role="alert">
-          {notice}
-        </p>
+        <p className="pb-2 text-destructive text-sm">{notice}</p>
       )}
       {rows.length > 0 && (
         <table className="w-full text-left text-sm">

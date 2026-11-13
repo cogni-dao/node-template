@@ -12,8 +12,8 @@
  *   - NO_SELF_APPROVAL: the ask writes a row with no approver. It opens no lock. Only an admin session on the human roles
  *     route sets an approver.
  *   - The ask door is open by design: any authenticated bearer may ask with no prior grant (OPEN_BY_DESIGN_ROUTES).
- *   - PERSONAL_NEEDS_AN_OWNER: a scope the node declares as personal (for example `account:read`) writes a row owned by the agent's owner, and only that owner turns it On,
- *     on their profile. An agent with no owner is 400 `needs_owner`.
+ *   - APPROVAL_URL: every answer carries `approvalUrl`, the page of THIS ask. An owned agent asking for a delegable scope (`knowledge:read`, `knowledge:contribute`)
+ *     gets its owner's profile page; every other ask gets the Admin page. The origin comes from config, never from the Host header.
  *   - NODE_DECLARED_SCOPES: an undeclared scope is 400 `invalid_scope`; a scope no route an outside agent can call uses is 400
  *     `no_external_door`. Open asks are capped per agent and across the node (429).
  *   - Idempotent: asking again for a pending or live scope returns 200 with `created: false`.
@@ -29,6 +29,7 @@ import {
 } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
 
+import { configuredUrl } from "@/app/_lib/agent-access/setup-line";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
@@ -59,16 +60,19 @@ export const POST = wrapRouteHandlerWithLogging(
         principalUserId: sessionUser.id,
         scope: parsed.data.scope,
       });
+      const { approvalPath, ...answer } = result;
       return json(
-        agentAccessRequestCreateOperation.output.parse({ scope: parsed.data.scope, ...result }),
+        agentAccessRequestCreateOperation.output.parse({
+          scope: parsed.data.scope,
+          ...answer,
+          approvalUrl: approvalPath ? configuredUrl(approvalPath) : null,
+        }),
         result.created ? 201 : 200
       );
     } catch (error) {
       if (error instanceof AgentRolesError) {
         if (error.code === "invalid_scope") return json({ error: "invalid_scope" }, 400);
         if (error.code === "no_external_door") return json({ error: "no_external_door" }, 400);
-        // A personal permission (a person's own data) is decided by the person who owns the agent. An agent with no owner cannot ask.
-        if (error.code === "needs_owner") return json({ error: "needs_owner" }, 400);
         if (error.code === "too_many_requests") return json({ error: "too_many_requests" }, 429);
       }
       return json({ error: "authz_unavailable" }, 503);
@@ -82,7 +86,11 @@ export const GET = wrapRouteHandlerWithLogging(
     if (sessionUser.via !== "bearer") return json({ error: "not_found" }, 404);
     try {
       const requests = await getContainer().agentAuthority.listOwnAccess(sessionUser.id);
-      return json(agentAccessRequestListOperation.output.parse({ requests }));
+      return json(
+        agentAccessRequestListOperation.output.parse({
+          requests: requests.map(({ approvalPath, ...row }) => ({ ...row, ...(approvalPath ? { approvalUrl: configuredUrl(approvalPath) } : {}) })),
+        })
+      );
     } catch {
       return json({ error: "authz_unavailable" }, 503);
     }

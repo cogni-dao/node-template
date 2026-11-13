@@ -6,26 +6,63 @@
  * Purpose: Principal lookup, the ask (an agent requests a scope for itself), the admin's yes, no and take-back on node rows, and the owner's
  *   yes, no and take-back on personal rows (`grantPersonal`, `revokePersonal`).
  *   The caller already passed the node admin gate for every admin function, and the person session guard for every owner function.
- * Scope: Pure over the store. A node row never grants account data; a personal row is read through `authorizeAccount`.
+ * Scope: Pure over the store. A node row never grants account data.
  * Invariants:
  *   - NODE_DECLARED_SCOPES: an undeclared scope is rejected before any write, on the ask and on the grant.
  *   - REQUEST_IS_AN_OFF_ROW: an ask is a row with no approver. It opens no lock until an admin approves it.
  *   - NO_SELF_APPROVAL: `requestAccess` can only write a pending row for the caller; only `approveRequest` sets an approver,
  *     and it refuses an approver who is the asking principal.
  *   - Revoke is soft: the row stays, `revoked_at` is set. A deny is the same soft write on a row that was never approved.
- *   - PERSONAL_NEEDS_AN_OWNER: the kind of a row comes from the scope's declaration, never from the request. An ask for a personal scope needs an
- *     agent that has an owner (`needs_owner` otherwise); the row stores that owner. The agent cannot name one.
- *   - APPROVER_FOLLOWS_RESOURCE: a personal row is turned On and Off only by its owner, through `grantPersonal` and `revokePersonal`. An agent that is not the
- *     owner's is "principal_not_found" (the route says 404). The admin path never grants a personal scope (`personal_scope`), not even to this node's own AI.
+ *   - PERSONAL_IS_THE_OWNERS: the row's plane comes from the scope's declaration, the delegable list and the agent's owner, never from the request. A scope on the
+ *     delegable list (`DELEGABLE_SCOPES`, subject `member`) is `delegated`: an OWNED agent's ask is a personal row owned by its owner; an ownerless agent's ask, and an ask
+ *     for any other scope, is a node row an admin decides. The row stores the owner; the agent cannot name one.
+ *   - APPROVER_FOLLOWS_RESOURCE: a personal row is turned On and Off only by its owner (`grantPersonal`, `revokePersonal`, `decideAsOwner`). An agent that is not the
+ *     owner's is "principal_not_found" (the route says 404). A scope not on the delegable list is refused (`invalid_scope`) on every personal path. The admin path never grants
+ *     a delegable scope to an agent that has an owner, but may revoke any live row (the kill switch).
+ *   - ASK_RETURNS_ITS_OWN_URL: every ask answers with the path of that ask's own approval page (`approvalPath`): the owner's profile page for a personal row, the Admin page otherwise.
  *   - PERSONAL_GRANT_ENDS: an approved personal row lasts `PERSONAL_GRANT_TTL_DAYS` (30) on the database clock. There is no picker in v0.
  * Side-effects: IO (store writes)
  * @public
  */
 
-import type { AgentGrantsStore, GrantResource, OwnRoleRow, PersonalScopeKind, ScopeKind } from "./types";
+import { approvalPath } from "./approval";
+import type {
+  AgentGrantsStore,
+  GrantResource,
+  OwnRoleRow,
+  PersonalScopeKind,
+  RequestRecord,
+  RequestView,
+  ScopeKind,
+  SubjectRequirement,
+} from "./types";
 
 /** An owner's grant lasts this many days. Friction, when needed, is a shorter number. */
 export const PERSONAL_GRANT_TTL_DAYS = 30;
+
+/** What a scope's declaration says about who decides it. */
+export interface ScopeDeclaration {
+  readonly kind: ScopeKind;
+  readonly subject: SubjectRequirement;
+}
+
+/**
+ * The scopes an owner may delegate to an agent they own. Everything else stays an admin's decision. Add a scope here only when any signed-in member may already
+ * do it (subject `member`) and acting under the owner's delegation cannot touch anyone else's data. Widen one by one.
+ */
+export const DELEGABLE_SCOPES: readonly string[] = ["knowledge:read", "knowledge:contribute"];
+
+/** Open personal asks one owner's agents may hold in all. */
+export const MAX_PENDING_PER_OWNER = 5;
+
+/**
+ * The personal kind of a scope, or null when only an admin may decide it. A personal row exists only for a scope on the delegable list whose DECLARED subject is
+ * `member` and whose kind is a node scope. The declaration is the declared one: a bearer's admin-subject downgrade at the route door never makes a scope personal.
+ */
+export function personalKindFor(scope: string, declaration: ScopeDeclaration | undefined): PersonalScopeKind | null {
+  if (!declaration || declaration.subject !== "member" || declaration.kind !== "node") return null;
+  return DELEGABLE_SCOPES.includes(scope) ? "delegated" : null;
+}
 
 export type RolesErrorCode =
   | "principal_not_found"
@@ -34,7 +71,6 @@ export type RolesErrorCode =
   | "self_approval"
   | "too_many_requests"
   | "no_external_door"
-  | "needs_owner"
   | "personal_scope";
 
 export class AgentRolesError extends Error {
@@ -95,23 +131,21 @@ export async function requestAccess(
     declaredScopes: readonly string[];
     /** Scopes an outside agent can actually use: a route twin it can call. Any other ask is refused (`no_external_door`). */
     askableScopes: readonly string[];
-    /** scope -> its declared kind. A scope not listed is a node scope. A personal kind (`account` today) needs an owned agent. */
-    scopeKinds?: Readonly<Record<string, ScopeKind>>;
+    /** scope -> its declaration. A scope not listed is a node scope an admin decides. */
+    scopes?: Readonly<Record<string, ScopeDeclaration>>;
   }
-): Promise<{ state: "pending" | "granted"; created: boolean }> {
+): Promise<{ state: "pending" | "granted"; created: boolean; approvalPath: string | null }> {
   if (!input.declaredScopes.includes(input.scope))
     throw new AgentRolesError("invalid_scope", "scope is not declared");
   // An ask the admin could approve but that opens nothing is misleading consent: refuse it.
   if (!input.askableScopes.includes(input.scope))
     throw new AgentRolesError("no_external_door", "no route an outside agent can call uses this scope");
-  const kind = input.scopeKinds?.[input.scope] ?? "node";
+  const personal = personalKindFor(input.scope, input.scopes?.[input.scope]);
   let resource: GrantResource = { kind: "node" };
-  // Only `account` is personal in this release. `own` (for example schedule:manage) stays an admin's node row until the S2b step moves it.
-  if (kind === "account") {
-    // The row's kind is the declaration's. An unowned agent (anonymous registration, or one that predates ownership) has no one to ask.
+  if (personal) {
+    // A delegable scope asked by an OWNED agent is its owner's to decide. An ownerless agent has no one else to ask: an admin decides, as before.
     const ownerUserId = await store.agentOwner(input.principalUserId);
-    if (!ownerUserId) throw new AgentRolesError("needs_owner", "an agent with no owner cannot ask for a personal permission");
-    resource = { kind, ownerUserId };
+    if (ownerUserId) resource = { kind: personal, ownerUserId };
   }
   const result = await store.requestRole({
     principalUserId: input.principalUserId,
@@ -122,7 +156,12 @@ export async function requestAccess(
   });
   if (result === "too_many" || result === "node_full")
     throw new AgentRolesError("too_many_requests", result === "node_full" ? "node has too many open requests" : "too many open requests");
-  return { state: result === "granted" ? "granted" : "pending", created: result === "created" };
+  const open = await store.openRequest(input.principalUserId, input.scope);
+  return {
+    state: result === "granted" ? "granted" : "pending",
+    created: result === "created",
+    approvalPath: open ? approvalPath(open.id, open.resourceKind === "node" ? "node" : "personal") : null,
+  };
 }
 
 /** The agent's own rows, by state. */
@@ -143,15 +182,17 @@ export async function grantRole(
     scope: string;
     approvedBy: string;
     declaredScopes: readonly string[];
-    /** Scopes a person decides for their own agent. An admin never grants one: not to an outside agent, not to this node's own AI. */
-    personalScopes?: readonly string[];
+    /** scope -> its declaration. Lets the admin path refuse what the owner decides. */
+    scopes?: Readonly<Record<string, ScopeDeclaration>>;
   }
 ): Promise<{ principalUserId: string; created: boolean }> {
   if (!input.declaredScopes.includes(input.scope))
     throw new AgentRolesError("invalid_scope", "scope is not declared");
-  if (input.personalScopes?.includes(input.scope))
-    throw new AgentRolesError("personal_scope", "a personal permission is turned on by the person who owns the agent");
   const { userId, internal } = await resolveRef(store, input);
+  // APPROVER_FOLLOWS_RESOURCE: an admin never decides what is the owner's. A delegable scope is the owner's to delegate when the agent has one. This node's own AI and
+  // an ownerless agent have no owner, so an admin decides their scopes.
+  if (personalKindFor(input.scope, input.scopes?.[input.scope]) && !internal && (await store.agentOwner(userId)) !== null)
+    throw new AgentRolesError("personal_scope", "this permission is turned on by the person who owns the agent");
   if (userId === input.approvedBy)
     throw new AgentRolesError("self_approval", "an approver cannot approve its own row");
   if (await store.approvePending({ principalUserId: userId, scope: input.scope, approvedBy: input.approvedBy }))
@@ -175,7 +216,12 @@ export async function revokeRole(
   input: PrincipalRef & { scope: string }
 ): Promise<{ principalUserId: string; revoked: boolean }> {
   const { userId } = await resolveRef(store, input);
-  const revoked = await store.revokeRole({ principalUserId: userId, scope: input.scope });
+  let revoked = await store.revokeRole({ principalUserId: userId, scope: input.scope });
+  if (!revoked) {
+    // The kill switch: an admin may end an owner's delegation too. Revoke only; the admin never approves one.
+    const owner = await store.agentOwner(userId);
+    if (owner) revoked = await store.revokeRole({ principalUserId: userId, scope: input.scope, resource: { kind: "delegated", ownerUserId: owner } });
+  }
   return { principalUserId: userId, revoked };
 }
 
@@ -189,12 +235,10 @@ export async function denyRequest(
   return { principalUserId: userId, denied };
 }
 
-/** The scope's personal kind, or an error: an undeclared scope, or a node scope (an admin's, not the owner's). */
-function personalKind(
-  input: { scope: string; scopeKinds: Readonly<Record<string, ScopeKind>> }
-): PersonalScopeKind {
-  const kind = input.scopeKinds[input.scope];
-  if (kind === "account") return kind;
+/** The scope's personal kind, or an error: an undeclared scope, or one not on the delegable list. */
+function personalKind(input: { scope: string; scopes: Readonly<Record<string, ScopeDeclaration>> }): PersonalScopeKind {
+  const kind = personalKindFor(input.scope, input.scopes[input.scope]);
+  if (kind) return kind;
   throw new AgentRolesError("invalid_scope", "scope is not a personal permission");
 }
 
@@ -210,7 +254,7 @@ async function ownedBy(store: AgentGrantsStore, ownerUserId: string, principalUs
  */
 export async function grantPersonal(
   store: AgentGrantsStore,
-  input: { ownerUserId: string; principalUserId: string; scope: string; scopeKinds: Readonly<Record<string, ScopeKind>> }
+  input: { ownerUserId: string; principalUserId: string; scope: string; scopes: Readonly<Record<string, ScopeDeclaration>> }
 ): Promise<{ principalUserId: string; created: boolean }> {
   const kind = personalKind(input);
   if (input.principalUserId === input.ownerUserId)
@@ -239,7 +283,7 @@ export async function revokePersonal(
     ownerUserId: string;
     principalUserId: string;
     scope: string;
-    scopeKinds: Readonly<Record<string, ScopeKind>>;
+    scopes: Readonly<Record<string, ScopeDeclaration>>;
     deny?: boolean;
   }
 ): Promise<{ principalUserId: string; changed: boolean }> {
@@ -252,4 +296,27 @@ export async function revokePersonal(
   };
   const changed = input.deny ? await store.denyPending(target) : await store.revokeRole(target);
   return { principalUserId: input.principalUserId, changed };
+}
+
+/**
+ * The owner decides ONE ask on its own page: Approve or Deny, by the request id. One atomic UPDATE in the store (id AND pending AND this owner AND delegable AND the agent still theirs).
+ * Not found, someone else's and a node row are the same `principal_not_found` (404); a request already decided is `not_pending`; a scope off the delegable list is `invalid_scope`.
+ */
+export async function decideAsOwner(
+  store: AgentGrantsStore,
+  input: { ownerUserId: string; requestId: string; decision: "approve" | "deny" }
+): Promise<{ principalUserId: string; scope: string; changed: boolean }> {
+  const record = await store.getRequest(input.requestId);
+  if (!record || record.resourceKind === "node" || record.ownerUserId !== input.ownerUserId)
+    throw new AgentRolesError("principal_not_found", "no such request");
+  if (!DELEGABLE_SCOPES.includes(record.scope)) throw new AgentRolesError("invalid_scope", "scope is not a personal permission");
+  if (record.principalUserId === input.ownerUserId) throw new AgentRolesError("self_approval", "an approver cannot approve its own row");
+  const changed = await store.decideRequest({
+    requestId: input.requestId,
+    deciderUserId: input.ownerUserId,
+    decision: input.decision,
+    ttlDays: PERSONAL_GRANT_TTL_DAYS,
+  });
+  if (!changed && record.state !== "pending") throw new AgentRolesError("not_pending", "this request was already decided");
+  return { principalUserId: record.principalUserId, scope: record.scope, changed };
 }

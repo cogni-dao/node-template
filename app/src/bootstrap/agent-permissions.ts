@@ -19,6 +19,7 @@ import type { CatalogBoundTool } from "@cogni/ai-tools";
 import {
   ROUTE_ONLY_CAPABILITIES,
   SAME_DOOR_ROUTES,
+  type ScopeDeclaration,
   type ToolRequires,
 } from "@cogni/agent-grants";
 
@@ -38,10 +39,8 @@ export interface PermissionCatalog {
   readonly declarations: Readonly<Record<string, PermissionDeclaration>>;
   readonly declaredScopes: readonly string[];
   readonly askableScopes: readonly string[];
-  /** Every declared scope's kind. The ask door writes a personal row (owned by the agent's owner) for `own` and `account`. */
-  readonly scopeKinds: Readonly<Record<string, ToolRequires["kind"]>>;
-  /** Scopes a person decides for their own agent (kind `account` today). An admin never grants one. */
-  readonly personalScopes: readonly string[];
+  /** Every declared scope's kind and subject. They decide who approves an ask: the agent's owner (a `member` scope, `account:read`) or a node-admin. */
+  readonly scopes: Readonly<Record<string, ScopeDeclaration>>;
   /** Askable scopes with a name and description, by scope. What discovery shows. */
   readonly permissions: readonly GrantablePermission[];
 }
@@ -69,9 +68,7 @@ export function buildPermissionCatalog(
   for (const r of Object.values(requires))
     declarations[r.scope] = { label: r.label, description: r.description };
   const declaredScopes = Object.keys(declarations).sort();
-  const scopeKinds = Object.fromEntries(Object.values(requires).map((r) => [r.scope, r.kind]));
-  // Only `account` is personal in this release; `own` scopes (schedule:manage) stay node rows an admin decides, until the S2b step.
-  const personalScopes = declaredScopes.filter((scope) => scopeKinds[scope] === "account");
+  const scopes = Object.fromEntries(Object.values(requires).map((r) => [r.scope, { kind: r.kind, subject: r.subject }]));
   // The scopes an outside agent can actually use: a route twin it can call. An ask for any other scope would be an approvable
   // row that opens nothing, so it is refused up front.
   const askableScopes = [
@@ -86,5 +83,5 @@ export function buildPermissionCatalog(
       ? [{ scope, label: r.label, description: r.description, kind: r.kind }]
       : [];
   });
-  return { declarations, declaredScopes, askableScopes, scopeKinds, personalScopes, permissions };
+  return { declarations, declaredScopes, askableScopes, scopes, permissions };
 }

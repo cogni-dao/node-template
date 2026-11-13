@@ -4,7 +4,7 @@
 /**
  * Module: `@cogni-dao/agent-grants/node-ai`
  * Purpose: The admin table's rows: Who · Can do · Until · On. One row = one grant row, in three blocks:
- *   asks waiting (pending), this node's AI, and outside agents.
+ *   asks waiting (pending), this node's AI, outside agents, and owners' delegations (read-only apart from Off).
  * Scope: Pure row builder. No I/O, no routes, no copy table.
  * Invariants:
  *   - DECLARED_ONCE_SHOWN_EVERYWHERE: the permission's name and description come only from the declaration
@@ -85,8 +85,8 @@ export function buildNodeAiView(input: {
     out.push(...rows);
   }
 
-  // 3. Outside agents: live rows for anyone who is not one of this node's AI.
-  for (const row of input.rows.filter((r) => r.state === "granted" && !r.internal)) {
+  // 3. Outside agents: live node rows for anyone who is not one of this node's AI.
+  for (const row of input.rows.filter((r) => r.state === "granted" && !r.internal && !r.personal)) {
     const n = named(row.scope);
     if (!n) continue;
     out.push({
@@ -99,6 +99,22 @@ export function buildNodeAiView(input: {
       ...n,
       on: true,
       until: null,
+    });
+  }
+  // 4. Owners' delegations: live personal rows. The admin cannot approve one (the owner did), but may turn it Off: the kill switch.
+  for (const row of input.rows.filter((r) => r.state === "granted" && r.personal)) {
+    const n = named(row.scope);
+    if (!n) continue;
+    out.push({
+      section: "personal",
+      principalUserId: row.principalUserId,
+      who: row.name ?? NEUTRAL_WHO,
+      outside: true,
+      hint: row.hint,
+      scope: row.scope,
+      ...n,
+      on: true,
+      until: row.until ?? null,
     });
   }
   return out;

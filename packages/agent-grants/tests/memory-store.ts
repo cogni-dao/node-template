@@ -1,7 +1,18 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
-import { type AgentGrantsStore, type GrantResource, type OwnRoleRow, PERSONAL_GRANT_TTL_DAYS, type PersonalRow, type RoleRow } from "../src";
+import {
+  type AgentGrantsStore,
+  approvalPath,
+  DELEGABLE_SCOPES,
+  MAX_PENDING_PER_OWNER,
+  type GrantResource,
+  type OwnRoleRow,
+  PERSONAL_GRANT_TTL_DAYS,
+  type PersonalRow,
+  type RequestRecord,
+  type RoleRow,
+} from "../src";
 
 export interface MemoryRole {
   principal: string;
@@ -10,7 +21,8 @@ export interface MemoryRole {
   /** Absent or null = pending (an ask), set = approved. */
   approvedBy?: string | null;
   /** `node` (default) or a personal kind. A personal row names its owner. */
-  kind: "node" | "own" | "account";
+  kind: "node" | "delegated" | "account";
+  id: string;
   owner: string | null;
   /** Epoch ms. Set on an approved personal row. */
   expiresAt: number | null;
@@ -24,7 +36,7 @@ export function memoryStore(init?: {
     scope: string;
     revoked?: boolean;
     pending?: boolean;
-    kind?: "node" | "own" | "account";
+    kind?: "node" | "delegated" | "account";
     /** A personal row's owner; it is also the approver unless `approvedBy` says otherwise. */
     owner?: string;
     approvedBy?: string;
@@ -40,6 +52,8 @@ export function memoryStore(init?: {
   failing?: boolean;
 }): AgentGrantsStore & { roles: MemoryRole[]; clock: { now: number } } {
   const clock = { now: Date.UTC(2026, 10, 12) };
+  let seq = 0;
+  const nextId = () => `00000000-0000-4000-8000-${String(++seq).padStart(12, "0")}`;
   const roles: MemoryRole[] = (init?.roles ?? []).map((r) => {
     const kind = r.kind ?? "node";
     const approvedBy = r.pending ? null : (r.approvedBy ?? (kind === "node" ? "admin" : (r.owner ?? "admin")));
@@ -49,6 +63,7 @@ export function memoryStore(init?: {
       revoked: r.revoked ?? false,
       approvedBy,
       kind,
+      id: nextId(),
       owner: kind === "node" ? null : (r.owner ?? null),
       expiresAt: kind !== "node" && approvedBy ? (r.expiresAt ?? clock.now + 86_400_000) : null,
     };
@@ -59,6 +74,7 @@ export function memoryStore(init?: {
   const live = (r: MemoryRole) => r.kind === "node" && !r.revoked && !!r.approvedBy;
   // The same predicate as the SQL (`hasLiveRole` personal branch / `agent_has_scope`).
   const livePersonal = (r: MemoryRole, resource: { kind: string; ownerUserId: string }) =>
+    DELEGABLE_SCOPES.includes(r.scope) &&
     r.kind === resource.kind &&
     r.owner === resource.ownerUserId &&
     r.approvedBy === r.owner &&
@@ -99,7 +115,12 @@ export function memoryStore(init?: {
     },
     async listRoleRows(limit) {
       const all = roles
-        .filter((r) => !r.revoked && r.kind === "node")
+        .filter(
+          (r) =>
+            !r.revoked &&
+            ((r.kind === "node" && !(!r.approvedBy && DELEGABLE_SCOPES.includes(r.scope) && init?.owners?.[r.principal])) ||
+              (r.kind !== "node" && !!r.approvedBy && !ended(r)))
+        )
         .map(
           (r): RoleRow => ({
             principalUserId: r.principal,
@@ -110,6 +131,7 @@ export function memoryStore(init?: {
             scope: r.scope,
             state: r.approvedBy ? "granted" : "pending",
             at: "2026-11-09T00:00:00.000Z",
+            ...(r.kind !== "node" ? { personal: true, until: r.expiresAt ? new Date(r.expiresAt).toISOString() : null, ownerName: r.owner } : {}),
           })
         );
       // Same contract as the SQL: this node's own AI always in full; outside rows bounded, pending first.
@@ -132,6 +154,7 @@ export function memoryStore(init?: {
           state: granted ? "granted" : approved ? "revoked" : r.revoked ? "denied" : "pending",
           at: "2026-11-09T00:00:00.000Z",
           ...(accountId ? { accountId } : {}),
+          ...(!r.revoked && !ended(r) ? { approvalPath: approvalPath(r.id, r.kind === "node" ? "node" : "personal") } : {}),
         });
       }
       return out;
@@ -139,18 +162,21 @@ export function memoryStore(init?: {
     async requestRole({ principalUserId, scope, maxPending, maxPendingTotal, resource }) {
       guard();
       if (isPersonal(resource)) {
+        if (roles.some((r) => r.principal === principalUserId && r.scope === scope && r.kind === "node" && !r.revoked && r.approvedBy)) return "granted";
+        for (const r of roles) if (r.principal === principalUserId && r.scope === scope && r.kind === "node" && !r.revoked && !r.approvedBy) r.revoked = true;
         for (const r of roles) if (r.principal === principalUserId && r.scope === scope && r.kind !== "node" && !r.revoked && ended(r)) r.revoked = true;
         const open = openRow(principalUserId, scope, resource);
         if (open) return open.approvedBy ? "granted" : "pending";
         if (roles.filter((r) => r.principal === principalUserId && !r.revoked && !r.approvedBy).length >= maxPending) return "too_many";
-        roles.push({ principal: principalUserId, scope, revoked: false, approvedBy: null, kind: resource.kind, owner: resource.ownerUserId, expiresAt: null });
+        if (roles.filter((r) => r.kind !== "node" && r.owner === resource.ownerUserId && !r.revoked && !r.approvedBy).length >= MAX_PENDING_PER_OWNER) return "too_many";
+        roles.push({ principal: principalUserId, scope, revoked: false, approvedBy: null, kind: resource.kind, id: nextId(), owner: resource.ownerUserId, expiresAt: null });
         return "created";
       }
       const open = openRow(principalUserId, scope);
       if (open) return open.approvedBy ? "granted" : "pending";
       if (roles.filter((r) => r.principal === principalUserId && r.kind === "node" && !r.revoked && !r.approvedBy).length >= maxPending) return "too_many";
       if (roles.filter((r) => r.kind === "node" && !r.revoked && !r.approvedBy).length >= maxPendingTotal) return "node_full";
-      roles.push({ principal: principalUserId, scope, revoked: false, approvedBy: null, kind: "node", owner: null, expiresAt: null });
+      roles.push({ principal: principalUserId, scope, revoked: false, approvedBy: null, kind: "node", id: nextId(), owner: null, expiresAt: null });
       return "created";
     },
     async approvePending({ principalUserId, scope, approvedBy, resource, ttlDays }) {
@@ -158,7 +184,7 @@ export function memoryStore(init?: {
       const row = openRow(principalUserId, scope, resource);
       if (!row || row.approvedBy || principalUserId === approvedBy) return false;
       if (isPersonal(resource)) {
-        if (row.owner !== approvedBy) return false; // only the owner approves a personal row
+        if (row.owner !== approvedBy || !DELEGABLE_SCOPES.includes(scope)) return false; // only the owner approves a personal row, and only a delegable scope
         row.expiresAt = clock.now + (ttlDays ?? PERSONAL_GRANT_TTL_DAYS) * 86_400_000;
       }
       row.approvedBy = approvedBy;
@@ -179,7 +205,7 @@ export function memoryStore(init?: {
     async insertRole({ principalUserId, scope, approvedBy }) {
       guard();
       if (openRow(principalUserId, scope)) return false;
-      roles.push({ principal: principalUserId, scope, revoked: false, approvedBy, kind: "node", owner: null, expiresAt: null });
+      roles.push({ principal: principalUserId, scope, revoked: false, approvedBy, kind: "node", id: nextId(), owner: null, expiresAt: null });
       return true;
     },
     async revokeRole({ principalUserId, scope, resource }) {
@@ -188,6 +214,43 @@ export function memoryStore(init?: {
       if (!row || !row.approvedBy) return false;
       row.revoked = true;
       return true;
+    },
+    async decideRequest({ requestId, deciderUserId, decision, ttlDays }) {
+      guard();
+      const r = roles.find((x) => x.id === requestId);
+      if (!r || r.approvedBy || r.revoked || r.kind !== "delegated" || r.owner !== deciderUserId) return false;
+      if (decision === "deny") {
+        r.revoked = true;
+        return true;
+      }
+      if (!DELEGABLE_SCOPES.includes(r.scope) || r.principal === deciderUserId || init?.owners?.[r.principal] !== r.owner) return false;
+      r.approvedBy = deciderUserId;
+      r.expiresAt = clock.now + (ttlDays ?? PERSONAL_GRANT_TTL_DAYS) * 86_400_000;
+      return true;
+    },
+    async openRequest(principalUserId, scope) {
+      guard();
+      const r = roles.find((x) => x.principal === principalUserId && x.scope === scope && !x.revoked);
+      return r ? { id: r.id, resourceKind: r.kind } : null;
+    },
+    async getRequest(id): Promise<RequestRecord | null> {
+      guard();
+      const r = roles.find((x) => x.id === id);
+      if (!r) return null;
+      const slug = slugOf(r.principal);
+      return {
+        id: r.id,
+        principalUserId: r.principal,
+        agentName: slug ?? init?.names?.[r.principal] ?? null,
+        internal: slug !== null,
+        ownerUserId: init?.owners?.[r.principal] ?? null,
+        ownerName: init?.owners?.[r.principal] ? (init?.names?.[init.owners[r.principal] as string] ?? null) : null,
+        scope: r.scope,
+        resourceKind: r.kind,
+        state: r.approvedBy ? (r.revoked ? "revoked" : ended(r) ? "ended" : "granted") : r.revoked ? "denied" : "pending",
+        expiresAt: r.approvedBy && r.expiresAt ? new Date(r.expiresAt).toISOString() : null,
+        at: "2026-11-09T00:00:00.000Z",
+      };
     },
     async agentOwner(principalUserId) {
       guard();

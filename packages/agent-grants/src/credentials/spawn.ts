@@ -20,6 +20,9 @@
  *   - OWNER_SEES_ONLY_OWN: `listOwnedAgents` and `revokeOwnedAgentKeys` answer for agents whose owner is the caller and no others. Another
  *     person's agent, an ownerless agent and an unknown id are the same answer (`not_found`).
  *   - ANONYMOUS_STAYS_OWNERLESS: the node's anonymous door never calls redeem; those agents have no owner and this file never gives them one.
+ *   - CLAIM_KEEPS_THE_IDENTITY (no human-carried secret): an EXISTING ownerless agent starts a claim with its OWN key and gets a claim id (15 min, single use, bound to that
+ *     agent). The signed-in person opens the claim page and clicks Claim: ONE guarded write sets `owner_user_id` on that same principal, only where it is NULL (ONE_IDENTITY, history kept).
+ *     The owner is the person who clicked, never a value the agent names. An agent cannot own itself or own another agent; a person owns at most `MAX_OWNED_AGENTS` agents (a spawn grant counts too).
  *   - STORE_OUTAGE_IS_NOT_A_REFUSAL: every store failure surfaces as `CredentialStoreUnavailableError` (503).
  * Side-effects: none (the store does the IO)
  * Links: https://cognidao.org/knowledge/node-capability-grants-standard (package row 2), https://cognidao.org/work/items/task.5474
@@ -78,7 +81,28 @@ export type GrantState =
       readonly unconfirmed: boolean;
     };
 
-export type RedeemRefusal = "unknown" | "expired" | "already_redeemed";
+export type RedeemRefusal = "unknown" | "expired" | "already_redeemed" | "too_many_agents";
+
+/** Agents one person may own. A spawn grant and a claim past this are refused. */
+export const MAX_OWNED_AGENTS = 25;
+/** A claim lives 15 minutes. */
+export const CLAIM_TTL_SEC = 15 * 60;
+
+export type StartClaimResult =
+  | { readonly ok: true; readonly claimId: string; readonly expiresAt: string }
+  | { readonly ok: false; readonly reason: "already_owned" | "not_an_agent" };
+
+/** What the claim page shows the person: the agent by name and whether the claim can still be used. */
+export interface ClaimView {
+  readonly claimId: string;
+  readonly agentName: string | null;
+  readonly state: "open" | "claimed" | "expired" | "owned";
+  readonly expiresAt: string;
+}
+
+export type CompleteClaimResult =
+  | { readonly ok: true; readonly agentUserId: string }
+  | { readonly ok: false; readonly reason: "unknown" | "expired" | "used" | "already_owned" | "owner_is_agent" | "too_many_agents" };
 
 export type RedeemResult =
   | {
@@ -121,6 +145,18 @@ export interface SpawnStore {
    * it supersedes the unconfirmed key. Anything else is refused.
    */
   redeem(input: { tokenHash: string; name: string; newUserId: string; keyHash: string; policy: CredentialPolicy }): Promise<RedeemResult>;
+  /**
+   * An existing agent starts a claim (no secret leaves it). Refuses an agent that already has an owner, an internal AI, and a user that holds a wallet. A new claim
+   * ends the agent's earlier open claim, so at most one is live.
+   */
+  startClaim(input: { agentUserId: string; ttlSec: number }): Promise<StartClaimResult>;
+  /** One claim by id, or null (unknown or malformed). */
+  getClaim(claimId: string): Promise<ClaimView | null>;
+  /**
+   * The person clicks Claim. Under a row lock on the claim: open, unexpired, unused; the person is not an agent and not the agent; the person owns fewer than `maxOwned` agents; then
+   * ONE guarded write sets the agent's `owner_user_id` only where it is NULL, and the claim is marked used by that person. Anything else changes nothing.
+   */
+  completeClaim(input: { claimId: string; ownerUserId: string; maxOwned: number }): Promise<CompleteClaimResult>;
   /** The agents this person owns, newest first. Bounded. */
   listOwned(ownerUserId: string): Promise<OwnedAgent[]>;
   /** How many unredeemed, unexpired grants this person holds. */
@@ -186,6 +222,21 @@ export async function redeemSpawnGrant(
     store.redeem({ tokenHash, name: input.name, newUserId: input.newUserId, keyHash, policy: input.policy ?? DEFAULT_CREDENTIAL_POLICY })
   );
   return result.ok ? { ...result, apiKey } : result;
+}
+
+/** An existing agent starts a claim with its own key. The returned `claimId` is the path of the page the person opens. */
+export function startAgentClaim(store: SpawnStore, input: { agentUserId: string }): Promise<StartClaimResult> {
+  return viaStore(() => store.startClaim({ agentUserId: input.agentUserId, ttlSec: CLAIM_TTL_SEC }));
+}
+
+/** The claim as the page shows it. Null when unknown. */
+export function readAgentClaim(store: SpawnStore, input: { claimId: string }): Promise<ClaimView | null> {
+  return viaStore(() => store.getClaim(input.claimId));
+}
+
+/** The person clicks Claim. `ownerUserId` is the signed-in person, from the session: never from the request body. */
+export function completeAgentClaim(store: SpawnStore, input: { claimId: string; ownerUserId: string }): Promise<CompleteClaimResult> {
+  return viaStore(() => store.completeClaim({ claimId: input.claimId, ownerUserId: input.ownerUserId, maxOwned: MAX_OWNED_AGENTS }));
 }
 
 /** The agents `ownerUserId` owns. */

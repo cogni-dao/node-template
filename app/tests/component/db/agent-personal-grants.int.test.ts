@@ -3,20 +3,19 @@
 
 /**
  * Module: `@tests/component/db/agent-personal-grants.int.test`
- * Purpose: PERSONAL GRANTS, `account:read` (task.5465), against real Postgres through the real route handlers and the real RLS policies.
- *   The owner click loop: an owned agent asks (an Off row), the owner turns it On on their profile, the agent reads the owner's balance (200), the owner turns it Off,
- *   the agent gets 404. Another person's account, an expired grant, a revoked grant, a node row and an unowned agent are all 404 / 0 rows.
- *   PARITY: in one test the database (RLS, app role, context user = the agent) and `authorizeAccount` agree on every state (live, revoked, expired, owner changed).
- * Scope: Real `agent.access.requests`, `agent-access/mine` and `accounts/{id}/credits` handlers, real wrapper, real `agent-authority`, real migrations (0042) and
- *   the production app role (FORCE RLS). Only the NextAuth/bearer identity decode is replaced (`getSessionUser`).
- * Invariants: ACCOUNT_SCOPE_NEEDS_OWNER_GRANT, NO_SELF_APPROVAL, APPROVER_FOLLOWS_RESOURCE, RLS_BACKSTOP, FAIL_CLOSED_NON_DISCLOSING, HUMAN_ROUTES_SESSION_ONLY.
+ * Purpose: PERSONAL GRANTS and CLAIM (task.5465, revision 5), against real Postgres through the real route handlers.
+ *   The owner click loop: an owned agent asks `knowledge:contribute`, the ask answers with its OWN approval page, the owner opens it (nothing changes) and approves, the agent's door opens (the log
+ *   names the owner), an admin sees the delegation read-only and revokes it (kill switch), the door closes. An ownerless agent's ask answers with an Admin page. A non-delegable scope goes to Admin
+ *   even for an owned agent. An existing ownerless agent claims itself with its own key, and the owner's click makes it theirs (same principal).
+ * Scope: Real `agent.access.requests`, `agent-access/mine`, `agent/claim`, `profile/ai/claims` and admin `ai-access` handlers, real wrapper, real `agent-authority`, real migrations (0042). Only the
+ *   NextAuth/bearer identity decode is replaced (`getSessionUser`).
+ * Invariants: APPROVER_FOLLOWS_RESOURCE, NO_SELF_APPROVAL, FAIL_CLOSED_NON_DISCLOSING, HUMAN_ROUTES_SESSION_ONLY, ONE_IDENTITY, the CHECK constraints.
  * Side-effects: IO (testcontainers or local Postgres)
  */
 
 import { randomUUID } from "node:crypto";
-import { authorizeAccount, createPostgresAgentGrantsStore } from "@cogni/agent-grants";
+import { completeAgentClaim, createPostgresSpawnStore, type CredentialSql, MAX_OWNED_AGENTS, startAgentClaim } from "@cogni/agent-grants/credentials";
 import { CORE_TOOL_BUNDLE } from "@cogni/ai-tools";
-import { toUserId } from "@cogni/ids";
 import { NextRequest } from "next/server";
 import pino from "pino";
 import postgres, { type Sql } from "postgres";
@@ -29,34 +28,48 @@ vi.mock("@/app/_lib/auth/session", () => ({
 const holder = vi.hoisted(() => ({ container: null as unknown }));
 vi.mock("@/bootstrap/container", () => ({
   getContainer: () => holder.container,
+  resolveServiceDb: () => holder.service,
 }));
+vi.mock("@/bootstrap/agent-credentials", async () => {
+  const mod = await import("@cogni/agent-grants/credentials");
+  return {
+    getAgentSpawnStore: () => mod.createPostgresSpawnStore(holder.spawnClient as never),
+    getAgentCredentialStore: () => {
+      throw new Error("not used here");
+    },
+  };
+});
 
-import { UserDrizzleAccountService } from "@/adapters/server/accounts/drizzle.adapter";
-import { getAppDb } from "@/adapters/server/db/client";
-import { GET as creditsGet } from "@/app/api/v1/accounts/[accountId]/credits/route";
+import { DELETE as adminDelete, GET as adminGet, POST as adminPost } from "@/app/api/v1/admin/ai-access/route";
+import { GET as adminRequestGet } from "@/app/api/v1/admin/ai-access/requests/[id]/route";
+import { POST as claimStart } from "@/app/api/v1/agent/claim/route";
 import { GET as askList, POST as askCreate } from "@/app/api/v1/agent/access-requests/route";
 import { DELETE as mineDelete, GET as mineGet, POST as minePost } from "@/app/api/v1/agent-access/mine/route";
+import { GET as mineRequestGet, POST as mineRequestPost } from "@/app/api/v1/agent-access/mine/requests/[id]/route";
+import { GET as claimView, POST as claimComplete } from "@/app/api/v1/profile/ai/claims/[id]/route";
 import { type AgentAuthoritySql, createAgentToolAuthority } from "@/bootstrap/agent-authority";
 import { createNodeAdminPort } from "@/bootstrap/node-admin-port";
 
-const SCOPE = "account:read";
+const CONTRIBUTE = "knowledge:contribute";
+const ADMIN_WALLET = `0x${randomUUID().replaceAll("-", "").padEnd(40, "b").slice(0, 40)}`;
+const UUID_TAIL = /\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
 
-describe("personal grants: account:read (real Postgres, real RLS)", () => {
+describe("personal grants and claim (real Postgres)", () => {
   let service: Sql;
-  let app: Sql;
   const users: string[] = [];
+  let admin: string;
   let owner: string;
   let other: string;
   let agent: string;
   let otherAgent: string;
-  let unowned: string;
-  const account = { owner: `acct-${randomUUID()}`, other: `acct-${randomUUID()}`, agent: `acct-${randomUUID()}` };
+  let loose: string;
   let authority: ReturnType<typeof createAgentToolAuthority>;
   const lines: Array<Record<string, unknown>> = [];
 
-  const mkUser = async (name: string) => {
+  const mkUser = async (name: string, wallet?: string) => {
     const id = randomUUID();
     await service`INSERT INTO users (id, name) VALUES (${id}, ${name})`;
+    if (wallet) await service`INSERT INTO user_bindings (id, user_id, provider, external_id) VALUES (${randomUUID()}, ${id}, 'wallet', ${wallet})`;
     users.push(id);
     return id;
   };
@@ -65,281 +78,254 @@ describe("personal grants: account:read (real Postgres, real RLS)", () => {
     await service`INSERT INTO agent_principals (kind, slug, user_id, owner_user_id) VALUES ('external', NULL, ${id}, ${ownerId})`;
     return id;
   };
-  const mkAccount = (id: string, ownerId: string, balance: number) =>
-    service`INSERT INTO billing_accounts (id, owner_user_id, balance_credits) VALUES (${id}, ${ownerId}, ${balance})`;
-
   const as = (id: string | null, via: "bearer" | "session") =>
-    (session.user = id ? { id, walletAddress: null, displayName: null, avatarColor: null, via } : null);
+    (session.user = id ? { id, walletAddress: id === admin ? ADMIN_WALLET : null, displayName: null, avatarColor: null, via } : null);
   const req = (url: string, init: { method?: string; headers?: Record<string, string>; body?: unknown } = {}) =>
     new NextRequest(url, {
       method: init.method ?? "GET",
       headers: { "content-type": "application/json", ...init.headers },
       ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
     });
-  const ask = () => askCreate(req("http://localhost/api/v1/agent/access-requests", { method: "POST", body: { scope: SCOPE } }), undefined as never);
+  const idCtx = (id: string) => ({ params: Promise.resolve({ id }) }) as never;
+
+  const ask = (scope: string) => askCreate(req("http://localhost/api/v1/agent/access-requests", { method: "POST", body: { scope } }), undefined as never);
+  const asked = async (scope: string) => {
+    const res = await ask(scope);
+    expect([200, 201]).toContain(res.status);
+    const body = (await res.json()) as { approvalUrl: string | null; created: boolean };
+    return { ...body, id: UUID_TAIL.exec(body.approvalUrl ?? "")?.[1] as string, path: (body.approvalUrl ?? "").replace(/^https?:\/\/[^/]+/, "") };
+  };
   const myAccess = async () =>
     (await (await askList(req("http://localhost/api/v1/agent/access-requests"), undefined as never)).json()) as {
-      requests: Array<{ scope: string; state: string; accountId?: string }>;
+      requests: Array<{ scope: string; state: string; approvalUrl?: string }>;
     };
-  const readCredits = (accountId: string) =>
-    creditsGet(req(`http://localhost/api/v1/accounts/${accountId}/credits`), { params: Promise.resolve({ accountId }) } as never);
-  const mine = async () =>
-    (await (await mineGet(req("http://localhost/api/v1/agent-access/mine"), undefined as never)).json()) as {
-      permissions: Array<{ principalUserId: string; who: string; scope: string; label: string; on: boolean; until: string | null }>;
+  const ownerView = (id: string) => mineRequestGet(req(`http://localhost/api/v1/agent-access/mine/requests/${id}`), idCtx(id));
+  const ownerDecide = (id: string, decision: "approve" | "deny", headers: Record<string, string> = {}) =>
+    mineRequestPost(req(`http://localhost/api/v1/agent-access/mine/requests/${id}`, { method: "POST", body: { decision }, headers }), idCtx(id));
+  const adminView = (id: string) => adminRequestGet(req(`http://localhost/api/v1/admin/ai-access/requests/${id}`), idCtx(id));
+  const adminTable = async () => {
+    as(admin, "session");
+    return (await (await adminGet(req("http://localhost/api/v1/admin/ai-access"), undefined as never)).json()) as {
+      permissions: Array<{ section: string; principalUserId: string; scope: string; on: boolean }>;
     };
-  const turn = (handler: typeof minePost, body: unknown, headers: Record<string, string> = {}) =>
-    handler(req("http://localhost/api/v1/agent-access/mine", { method: handler === minePost ? "POST" : "DELETE", body, headers }), undefined as never);
-  const authz = (userId: string, via: "bearer" | "session", accountId: string) =>
-    authorizeAccount(createPostgresAgentGrantsStore(service as never), { userId, via, accountId, scope: SCOPE });
-  /** The database's answer: the app role, the context user set the way the adapter sets it (SET LOCAL app.current_user_id). */
-  const dbSees = async (contextUser: string | null, accountId: string) =>
-    app.begin(async (tx) => {
-      if (contextUser) await tx`SELECT set_config('app.current_user_id', ${contextUser}, true)`;
-      return (await tx`SELECT id FROM billing_accounts WHERE id = ${accountId}`).length;
-    });
-  const rowOf = async (principal: string) =>
-    (await service`SELECT resource_kind, owner_user_id, approved_by, requested_by, revoked_at, expires_at,
+  };
+  const adminWrite = (handler: typeof adminPost, body: unknown) =>
+    handler(req("http://localhost/api/v1/admin/ai-access", { method: handler === adminPost ? "POST" : "DELETE", body }), undefined as never);
+  const door = (userId: string, tool = "knowledge.contribute") =>
+    authority.authorizeRoute({ toolId: tool, routeId: "knowledge.contributions.create", userId, via: "bearer" });
+  const rowOf = async (principal: string, scope = CONTRIBUTE) =>
+    (await service`SELECT id, resource_kind, owner_user_id, approved_by, revoked_at,
         (expires_at > now() + interval '29 days' AND expires_at < now() + interval '31 days') AS thirty_days
-      FROM agent_roles WHERE principal_user_id = ${principal} AND scope = ${SCOPE} ORDER BY created_at DESC LIMIT 1`)[0];
+      FROM agent_roles WHERE principal_user_id = ${principal} AND scope = ${scope} ORDER BY created_at DESC LIMIT 1`)[0];
+  const ownerOf = async (principal: string) => (await service`SELECT owner_user_id FROM agent_principals WHERE user_id = ${principal}`)[0]?.owner_user_id;
+  const claimIdOf = (claimUrl: string) => UUID_TAIL.exec(claimUrl)?.[1] as string;
 
   beforeAll(async () => {
-    if (!process.env.DATABASE_SERVICE_URL || !process.env.DATABASE_URL) throw new Error("component PostgreSQL required");
-    service = postgres(process.env.DATABASE_SERVICE_URL, { max: 4 });
-    app = postgres(process.env.DATABASE_URL, { max: 2 });
+    if (!process.env.DATABASE_SERVICE_URL) throw new Error("component PostgreSQL required");
+    service = postgres(process.env.DATABASE_SERVICE_URL, { max: 6 });
+    holder.spawnClient = service;
+    (holder as unknown as { service: unknown }).service = { $client: service };
+    admin = await mkUser("claim-admin", ADMIN_WALLET);
     owner = await mkUser("Olive Owner");
     other = await mkUser("Pat Person");
     agent = await mkAgent("Helper bot", owner);
     otherAgent = await mkAgent("Pat's bot", other);
-    unowned = await mkAgent("Loose bot", null);
-    await mkAccount(account.owner, owner, 1234);
-    await mkAccount(account.other, other, 777);
-    await mkAccount(account.agent, agent, 5); // an agent has an account of its own; it is not the account it is asking about
+    loose = await mkAgent("Loose bot", null);
     const logger = pino({ level: "info", timestamp: false }, { write: (c: string) => void lines.push(JSON.parse(c)) });
-    const nodeAdmin = { check: async () => ({ ok: false as const, errorCode: "authz_denied" as const }) };
-    authority = createAgentToolAuthority({
-      sql: service as unknown as AgentAuthoritySql,
-      nodeAdmin,
-      log: logger,
-      toolBundle: [...CORE_TOOL_BUNDLE],
-    });
-    holder.container = {
-      log: logger,
-      config: { unhandledErrorPolicy: "rethrow" },
-      agentAuthority: authority,
-      nodeAdmin,
-      nodeAdminPort: createNodeAdminPort(authority),
-      accountsForUser: (userId: string) => new UserDrizzleAccountService(getAppDb(), toUserId(userId)),
+    const nodeAdmin = {
+      check: async (who: { walletAddress?: string | null }) =>
+        who.walletAddress === ADMIN_WALLET ? { ok: true as const } : { ok: false as const, errorCode: "authz_denied" as const },
     };
+    authority = createAgentToolAuthority({ sql: service as unknown as AgentAuthoritySql, nodeAdmin, log: logger, toolBundle: [...CORE_TOOL_BUNDLE] });
+    holder.container = { log: logger, config: { unhandledErrorPolicy: "rethrow" }, agentAuthority: authority, nodeAdmin, nodeAdminPort: createNodeAdminPort(authority) };
   });
   afterAll(async () => {
+    await service?.unsafe("DELETE FROM agent_claims WHERE agent_user_id = ANY($1) OR claimed_by = ANY($1)", [users]);
     await service?.unsafe("DELETE FROM agent_roles WHERE principal_user_id = ANY($1) OR approved_by = ANY($1) OR owner_user_id = ANY($1)", [users]);
-    await service?.unsafe("DELETE FROM billing_accounts WHERE owner_user_id = ANY($1)", [users]);
-    await service?.unsafe("DELETE FROM agent_principals WHERE user_id = ANY($1)", [users]);
+    await service?.unsafe("DELETE FROM agent_principals WHERE user_id = ANY($1) OR owner_user_id = ANY($1)", [users]);
+    await service?.unsafe("DELETE FROM user_bindings WHERE user_id = ANY($1)", [users]);
     await service?.unsafe("DELETE FROM users WHERE id = ANY($1)", [users]);
     await service?.end({ timeout: 1 });
-    await app?.end({ timeout: 1 });
   });
 
-  it("the owner click test: ask -> Off row -> owner On -> agent reads the owner's balance (200) -> owner Off -> 404; another person's account is 404 throughout", async () => {
-    // BEFORE: no ask, no grant. The agent cannot read its owner's account.
+  it("the owner click loop: ask -> its own page -> open (nothing changes) -> Approve -> door opens (owner in the log) -> admin sees it read-only and revokes -> door closes", async () => {
     as(agent, "bearer");
-    expect((await readCredits(account.owner)).status).toBe(404);
+    const first = await asked(CONTRIBUTE);
+    expect(first.created).toBe(true);
+    expect(first.path).toBe(`/profile/ai/requests/${first.id}`);
+    expect(await rowOf(agent)).toMatchObject({ id: first.id, resource_kind: "delegated", owner_user_id: owner, approved_by: null });
+    expect(await door(agent)).toMatchObject({ decision: "deny", reason: "no_role" }); // an Off row opens nothing
+    expect((await myAccess()).requests[0]).toMatchObject({ scope: CONTRIBUTE, state: "pending", approvalUrl: expect.stringContaining(first.id) });
+    expect((await asked(CONTRIBUTE)).id).toBe(first.id); // asking again is the same page
 
-    // The agent asks. The row is OFF, owned by the agent's owner, kind account.
-    const first = await ask();
-    expect(first.status).toBe(201);
-    expect(await first.json()).toEqual({ scope: SCOPE, state: "pending", created: true });
-    expect(await rowOf(agent)).toMatchObject({ resource_kind: "account", owner_user_id: owner, approved_by: null, requested_by: agent });
-    expect((await readCredits(account.owner)).status).toBe(404); // an Off row opens nothing
-    expect((await myAccess()).requests).toEqual([{ scope: SCOPE, state: "pending", at: expect.any(String) }]);
-
-    // The owner sees the ask as Off on their profile; the other person sees nothing of it.
+    // The owner opens the page: only that request, and opening approves nothing.
     as(owner, "session");
-    expect((await mine()).permissions).toEqual([
-      expect.objectContaining({ principalUserId: agent, who: "Helper bot", scope: SCOPE, label: "Read your account balance", on: false, until: null }),
-    ]);
-    as(other, "session");
-    expect((await mine()).permissions).toEqual([]);
-
-    // Another person cannot turn it On (404, the same as an unknown agent). The AI cannot turn itself On (the route is session only).
-    expect((await turn(minePost, { principalUserId: agent, scope: SCOPE })).status).toBe(404);
-    as(agent, "bearer");
-    expect((await turn(minePost, { principalUserId: agent, scope: SCOPE })).status).toBe(401);
-    expect((await readCredits(account.owner)).status).toBe(404);
-
-    // The owner turns it On. The row ends in 30 days and the OWNER is the approver.
-    as(owner, "session");
-    const on = await turn(minePost, { principalUserId: agent, scope: SCOPE });
-    expect(on.status).toBe(200);
-    expect(await on.json()).toEqual({ principalUserId: agent, scope: SCOPE, changed: true });
-    expect(await rowOf(agent)).toMatchObject({ approved_by: owner, owner_user_id: owner, thirty_days: true });
-    expect((await mine()).permissions[0]).toMatchObject({ on: true, until: expect.any(String) });
-
-    // The agent learns the account from its own access list, and reads it: 200.
-    as(agent, "bearer");
-    const granted = (await myAccess()).requests[0];
-    expect(granted).toMatchObject({ scope: SCOPE, state: "granted", accountId: account.owner });
-    const ok = await readCredits(account.owner);
-    expect(ok.status).toBe(200);
-    expect(await ok.json()).toEqual({ accountId: account.owner, balanceCredits: 1234 });
-    // Not the agent's own account named as if it were the owner's, and not another person's account.
-    expect((await readCredits(account.other)).status).toBe(404);
-    expect((await readCredits(`acct-${randomUUID()}`)).status).toBe(404);
-    expect((await readCredits("../../etc/passwd")).status).toBe(404);
-    // A human signed in as someone else never reads this account, and the owner always reads their own.
-    as(other, "session");
-    expect((await readCredits(account.owner)).status).toBe(404);
-    as(owner, "session");
-    expect((await readCredits(account.owner)).status).toBe(200);
-
-    // The owner turns it Off. The agent's very next read is 404.
-    const off = await turn(mineDelete, { principalUserId: agent, scope: SCOPE });
-    expect(off.status).toBe(200);
-    expect(await off.json()).toEqual({ principalUserId: agent, scope: SCOPE, changed: true });
-    as(agent, "bearer");
-    expect((await readCredits(account.owner)).status).toBe(404);
-    expect((await myAccess()).requests[0]).toMatchObject({ scope: SCOPE, state: "revoked" });
-    expect((await rowOf(agent))?.revoked_at).not.toBeNull();
-
-    // The log shows the agent as principal and the decision at each step.
-    const decisions = lines.filter((l) => l.event === "agent_tool.authz" && l.route === "accounts.credits.read" && l.principal === agent);
-    expect(decisions.some((l) => l.decision === "allow" && l.reason === "personal_grant")).toBe(true);
-    expect(decisions.some((l) => l.decision === "deny" && l.reason === "no_access")).toBe(true);
-  });
-
-  it("PARITY: the database (RLS, app role, context user = the agent) and authorizeAccount answer the same in every state", async () => {
-    const grant = async () => {
-      as(agent, "bearer");
-      await ask();
-      as(owner, "session");
-      expect((await turn(minePost, { principalUserId: agent, scope: SCOPE })).status).toBe(200);
-    };
-    const both = async (expected: boolean) => {
-      expect(await dbSees(agent, account.owner), "RLS").toBe(expected ? 1 : 0);
-      expect(!!(await authz(agent, "bearer", account.owner)), "authorizeAccount").toBe(expected);
-    };
-
-    await both(false); // no row yet (the previous test ended Off)
-    await grant();
-    await both(true);
-    // Never more than that one row of someone else's: another person's account and no context user stay hidden.
-    expect(await dbSees(agent, account.other)).toBe(0);
-    expect(await dbSees(null, account.owner)).toBe(0);
-    expect(await dbSees(otherAgent, account.owner)).toBe(0);
-    expect(await dbSees(agent, account.agent)).toBe(1); // its own account is still its own
-    expect(await authz(agent, "bearer", account.other)).toBeNull();
-    // The grant is read-only: the agent cannot write the owner's account.
-    const wrote = await app.begin(async (tx) => {
-      await tx`SELECT set_config('app.current_user_id', ${agent}, true)`;
-      return await tx`UPDATE billing_accounts SET balance_credits = 0 WHERE id = ${account.owner} RETURNING id`;
-    });
-    expect(wrote).toHaveLength(0);
-    expect(Number((await service`SELECT balance_credits FROM billing_accounts WHERE id = ${account.owner}`)[0]?.balance_credits)).toBe(1234);
-
-    // Revoked by the service role: both deny.
-    await service`UPDATE agent_roles SET revoked_at = now() WHERE principal_user_id = ${agent} AND scope = ${SCOPE} AND revoked_at IS NULL`;
-    await both(false);
-
-    // Expired (database clock), not revoked: both deny.
-    await grant();
-    await both(true);
-    await service`UPDATE agent_roles SET expires_at = now() - interval '1 second' WHERE principal_user_id = ${agent} AND scope = ${SCOPE} AND revoked_at IS NULL`;
-    await both(false);
-    as(agent, "bearer");
-    expect((await myAccess()).requests[0]).toMatchObject({ scope: SCOPE, state: "revoked" }); // an ended grant reads as ended
-
-    // The expired row no longer blocks a new ask: a fresh Off row, the old one ended, then On again.
-    as(agent, "bearer");
-    expect((await ask()).status).toBe(201);
-    as(owner, "session");
-    expect((await turn(minePost, { principalUserId: agent, scope: SCOPE })).status).toBe(200);
-    await both(true);
-
-    // The agent no longer belongs to that owner: both deny, though the row is untouched.
-    await service`UPDATE agent_principals SET owner_user_id = ${other} WHERE user_id = ${agent}`;
-    await both(false);
-    await service`UPDATE agent_principals SET owner_user_id = ${owner} WHERE user_id = ${agent}`;
-    await both(true);
-
-    // Leave the agent Off for the tests below.
-    await service`UPDATE agent_roles SET revoked_at = now() WHERE principal_user_id = ${agent} AND scope = ${SCOPE} AND revoked_at IS NULL`;
-    await both(false);
-  });
-
-  it("an unowned agent cannot ask (needs_owner) and holds nothing; another person's AI is that person's to decide", async () => {
-    as(unowned, "bearer");
-    const res = await ask();
-    expect(res.status).toBe(400);
-    expect(await res.json()).toEqual({ error: "needs_owner" });
-    expect(await rowOf(unowned)).toBeUndefined();
-    expect((await readCredits(account.owner)).status).toBe(404);
-
-    as(otherAgent, "bearer");
-    expect((await ask()).status).toBe(201);
-    // Olive sees none of Pat's AI, and cannot turn it On or dismiss its ask.
-    as(owner, "session");
-    expect((await mine()).permissions.map((p) => p.principalUserId)).not.toContain(otherAgent);
-    expect((await turn(minePost, { principalUserId: otherAgent, scope: SCOPE })).status).toBe(404);
-    expect((await turn(mineDelete, { principalUserId: otherAgent, scope: SCOPE, deny: true })).status).toBe(404);
-    expect(await rowOf(otherAgent)).toMatchObject({ approved_by: null, revoked_at: null });
-    // Pat can dismiss it; the agent then sees `denied`.
-    as(other, "session");
-    expect((await mine()).permissions.map((p) => p.principalUserId)).toEqual([otherAgent]);
-    expect((await turn(mineDelete, { principalUserId: otherAgent, scope: SCOPE, deny: true })).status).toBe(200);
-    as(otherAgent, "bearer");
-    expect((await myAccess()).requests[0]).toMatchObject({ scope: SCOPE, state: "denied" });
-  });
-
-  it("the planes hold: a bearer on the owner route is 403 human_session_required, signed out is 401, a bad body is 400, a node scope is 400", async () => {
-    const headers = { authorization: "Bearer cogni_ag_sk_v1_x" };
-    for (const handler of [mineGet as typeof minePost, minePost, mineDelete]) {
-      as(owner, "session");
-      const res = await turn(handler, { principalUserId: agent, scope: SCOPE }, headers);
-      expect(res.status).toBe(403);
-      expect(await res.json()).toMatchObject({ code: "human_session_required" });
-    }
-    as(null, "session");
-    expect((await mineGet(req("http://localhost/api/v1/agent-access/mine"), undefined as never)).status).toBe(401);
-    as(owner, "session");
-    expect((await turn(minePost, { nope: true })).status).toBe(400);
-    expect((await turn(minePost, { principalUserId: agent, scope: "work_item:transition" })).status).toBe(400);
-    expect((await turn(minePost, { principalUserId: agent, scope: SCOPE })).status).toBe(409); // never asked: not pending
-  });
-
-  it("node and personal never mix: the admin sees no personal row, the admin path refuses the scope, and a node row never opens an account", async () => {
-    as(agent, "bearer");
-    expect((await ask()).status).toBe(201);
-    const admin = await authority.listNodeAi();
-    expect(admin.permissions.filter((p) => p.principalUserId === agent)).toEqual([]);
-    await expect(authority.grantRole({ principalUserId: agent, scope: SCOPE, approvedBy: owner })).rejects.toMatchObject({ code: "personal_scope" });
-    await expect(authority.grantRole({ principalSlug: "node-ai", scope: SCOPE, approvedBy: owner })).rejects.toMatchObject({ code: "personal_scope" });
+    const page = await ownerView(first.id);
+    expect(page.status).toBe(200);
+    expect(await page.json()).toMatchObject({ requestId: first.id, who: "Helper bot", owner: "Olive Owner", scope: CONTRIBUTE, state: "pending", label: "Propose changes to the knowledge base" });
     expect((await rowOf(agent))?.approved_by).toBeNull();
-    // A NODE row for the same scope (written by the service role, as an admin grant would be) opens no account.
-    await service`UPDATE agent_roles SET revoked_at = now() WHERE principal_user_id = ${agent} AND scope = ${SCOPE} AND revoked_at IS NULL`;
-    await service`INSERT INTO agent_roles (principal_user_id, scope, approved_by) VALUES (${agent}, ${SCOPE}, ${other})`;
-    expect(await dbSees(agent, account.owner)).toBe(0);
-    expect(await authz(agent, "bearer", account.owner)).toBeNull();
+    // Another person and an admin's page for this id are the same 404; the AI itself cannot decide.
+    as(other, "session");
+    expect((await ownerView(first.id)).status).toBe(404);
+    expect((await ownerDecide(first.id, "approve")).status).toBe(404);
+    as(admin, "session");
+    expect((await adminView(first.id)).status).toBe(404);
     as(agent, "bearer");
-    expect((await readCredits(account.owner)).status).toBe(404);
-    await service`UPDATE agent_roles SET revoked_at = now() WHERE principal_user_id = ${agent} AND scope = ${SCOPE} AND revoked_at IS NULL`;
+    expect((await ownerDecide(first.id, "approve")).status).toBe(401);
+    expect((await ownerDecide(first.id, "approve", { authorization: "Bearer cogni_ag_sk_v1_x" })).status).toBe(403);
+    expect(await door(agent)).toMatchObject({ decision: "deny" });
+
+    // The owner approves: one atomic UPDATE. The OWNER is the approver; it ends in 30 days.
+    as(owner, "session");
+    const approve = await ownerDecide(first.id, "approve");
+    expect(approve.status).toBe(200);
+    expect(await approve.json()).toEqual({ requestId: first.id, decision: "approve", changed: true });
+    expect(await rowOf(agent)).toMatchObject({ approved_by: owner, owner_user_id: owner, thirty_days: true });
+    expect((await ownerDecide(first.id, "approve")).status).toBe(409); // already decided: no second write
+    expect(await door(agent)).toMatchObject({ decision: "allow", basis: "personal_grant", owner });
+    expect(lines.some((l) => l.event === "agent_tool.authz" && l.principal === agent && l.decision === "allow" && l.owner === owner && l.reason === "personal_grant")).toBe(true);
+
+    // The profile list shows it On. The admin table lists it read-only (section personal) and may revoke it.
+    expect((await (await mineGet(req("http://localhost/api/v1/agent-access/mine"), undefined as never)).json()).permissions[0]).toMatchObject({ scope: CONTRIBUTE, on: true });
+    const table = await adminTable();
+    expect(table.permissions.filter((p) => p.principalUserId === agent)).toEqual([expect.objectContaining({ section: "personal", scope: CONTRIBUTE, on: true })]);
+    const revoke = await adminWrite(adminDelete, { principalUserId: agent, scope: CONTRIBUTE });
+    expect(await revoke.json()).toMatchObject({ changed: true });
+    expect(await door(agent)).toMatchObject({ decision: "deny" }); // the kill switch worked
+    expect((await adminWrite(adminPost, { principalUserId: agent, scope: CONTRIBUTE })).status).toBe(400); // the admin never approves a personal row (personal_scope)
+
+    // Asked again, approved again, and the owner turns it Off from the profile.
+    as(agent, "bearer");
+    const again = await asked(CONTRIBUTE);
+    expect(again.created).toBe(true);
+    as(owner, "session");
+    expect((await ownerDecide(again.id, "approve")).status).toBe(200);
+    expect(await door(agent)).toMatchObject({ decision: "allow" });
+    const off = await mineDelete(req("http://localhost/api/v1/agent-access/mine", { method: "DELETE", body: { principalUserId: agent, scope: CONTRIBUTE } }), undefined as never);
+    expect(await off.json()).toMatchObject({ changed: true });
+    expect(await door(agent)).toMatchObject({ decision: "deny" });
   });
 
-  it("the database refuses a personal row the code would never write (CHECK constraints), and a node row keeps its old shape", async () => {
-    const insert = (cols: { kind: string; owner: string | null; approvedBy: string | null; expires: boolean; principal?: string }) =>
+  it("an ownerless agent's ask is an Admin page; an owned agent's ask off the list is one too; only an admin decides them", async () => {
+    as(loose, "bearer");
+    const node = await asked(CONTRIBUTE);
+    expect(node.path).toBe(`/admin/ai-access/requests/${node.id}`);
+    expect(await rowOf(loose)).toMatchObject({ resource_kind: "node", owner_user_id: null });
+    as(agent, "bearer");
+    const off = await asked("work_item:transition");
+    expect(off.path).toBe(`/admin/ai-access/requests/${off.id}`);
+
+    // The owner and a non-admin cannot open or decide an Admin page; an admin can.
+    as(owner, "session");
+    expect((await ownerView(node.id)).status).toBe(404);
+    expect((await adminView(node.id)).status).toBe(403);
+    expect((await adminWrite(adminPost, { principalUserId: loose, scope: CONTRIBUTE })).status).toBe(403);
+    expect(await door(loose)).toMatchObject({ decision: "deny" });
+    as(admin, "session");
+    const view = await adminView(node.id);
+    expect(view.status).toBe(200);
+    expect(await view.json()).toMatchObject({ who: "Loose bot", owner: null, state: "pending", scope: CONTRIBUTE });
+    expect((await adminView(off.id)).status).toBe(200);
+    expect((await adminWrite(adminPost, { principalUserId: loose, scope: CONTRIBUTE })).status).toBe(200);
+    expect(await door(loose)).toMatchObject({ decision: "allow", basis: "role" });
+    await adminWrite(adminDelete, { principalUserId: loose, scope: CONTRIBUTE });
+    await adminWrite(adminDelete, { principalUserId: agent, scope: "work_item:transition", deny: true });
+  });
+
+  it("a personal row never opens an admin-subject scope or a scope off the list, and the database refuses to hold one", async () => {
+    // The door for an admin-subject tool: even a forced personal row does not satisfy it.
+    await service`INSERT INTO agent_roles (principal_user_id, scope, approved_by, resource_kind, owner_user_id, expires_at)
+      VALUES (${otherAgent}, ${CONTRIBUTE}, ${other}, 'delegated', ${other}, now() + interval '1 day')`;
+    expect(await door(otherAgent)).toMatchObject({ decision: "allow" });
+    expect(await door(otherAgent, "core__vcs_merge_pr")).toMatchObject({ decision: "deny" });
+    await service`UPDATE agent_roles SET revoked_at = now() WHERE principal_user_id = ${otherAgent}`;
+
+    const insert = (cols: { scope?: string; kind: string; owner: string | null; approvedBy: string | null; expires: boolean; principal?: string }) =>
       service`INSERT INTO agent_roles (principal_user_id, scope, approved_by, resource_kind, owner_user_id, expires_at)
-        VALUES (${cols.principal ?? otherAgent}, ${`check:${randomUUID()}`}, ${cols.approvedBy}, ${cols.kind}, ${cols.owner},
-          ${cols.expires ? service`now() + interval '1 day'` : null})`;
-    // The agent approving its own row, a stranger approving it, and an approved row that never ends.
-    await expect(insert({ kind: "account", owner: other, approvedBy: otherAgent, expires: true })).rejects.toThrow(/agent_roles_personal_approver/);
-    await expect(insert({ kind: "account", owner: other, approvedBy: owner, expires: true })).rejects.toThrow(/agent_roles_personal_approver/);
-    await expect(insert({ kind: "account", owner: other, approvedBy: other, expires: false })).rejects.toThrow(/agent_roles_personal_approver/);
-    // A personal row needs an owner, a node row has none, and the kind is a known one.
-    await expect(insert({ kind: "account", owner: null, approvedBy: null, expires: false })).rejects.toThrow(/agent_roles_owner_shape/);
+        VALUES (${cols.principal ?? otherAgent}, ${cols.scope ?? CONTRIBUTE}, ${cols.approvedBy}, ${cols.kind}, ${cols.owner}, ${cols.expires ? service`now() + interval '1 day'` : null})`;
+    await expect(insert({ kind: "delegated", owner: other, approvedBy: otherAgent, expires: true })).rejects.toThrow(/agent_roles_personal_approver/); // the agent approving itself
+    await expect(insert({ kind: "delegated", owner: other, approvedBy: owner, expires: true })).rejects.toThrow(/agent_roles_personal_approver/); // a stranger approving
+    await expect(insert({ kind: "delegated", owner: other, approvedBy: other, expires: false })).rejects.toThrow(/agent_roles_personal_approver/); // never ends
+    await expect(insert({ kind: "delegated", owner: null, approvedBy: null, expires: false })).rejects.toThrow(/agent_roles_owner_shape/);
     await expect(insert({ kind: "node", owner: other, approvedBy: null, expires: false })).rejects.toThrow(/agent_roles_owner_shape/);
     await expect(insert({ kind: "galaxy", owner: other, approvedBy: null, expires: false })).rejects.toThrow(/agent_roles_resource_kind_canonical/);
-    // The owner approving their own agent's row, with an end, is the one valid personal approval. A node row with no kind named defaults to `node`.
-    await expect(insert({ kind: "account", owner: other, approvedBy: other, expires: true })).resolves.toBeDefined();
+    await expect(insert({ kind: "delegated", scope: "work_item:transition", owner: other, approvedBy: other, expires: true })).rejects.toThrow(/agent_roles_personal_scope_delegable/);
     const node = (await service`INSERT INTO agent_roles (principal_user_id, scope, approved_by) VALUES (${otherAgent}, ${`node:${randomUUID()}`}, ${owner}) RETURNING resource_kind, owner_user_id, expires_at`)[0];
     expect(node).toEqual({ resource_kind: "node", owner_user_id: null, expires_at: null });
+    await expect(service`INSERT INTO agent_claims (agent_user_id, expires_at, claimed_at, claimed_by) VALUES (${otherAgent}, now() + interval '1 minute', now(), ${otherAgent})`).rejects.toThrow(/agent_claims_claimant_not_agent/);
+    await service`UPDATE agent_roles SET revoked_at = now() WHERE principal_user_id = ${otherAgent}`;
+  });
+
+  it("claim: an existing ownerless agent asks with its own key; the owner's click makes it theirs (same principal); single use, 15 minutes, bound to that agent", async () => {
+    const before = await ownerOf(loose);
+    expect(before).toBeNull();
+    // A person's session or a stranger's call is not the agent's own key.
+    as(owner, "session");
+    expect((await claimStart(req("http://localhost/api/v1/agent/claim", { method: "POST" }), undefined as never)).status).toBe(404);
+    as(loose, "bearer");
+    const started = await claimStart(req("http://localhost/api/v1/agent/claim", { method: "POST" }), undefined as never);
+    expect(started.status).toBe(201);
+    const { claimUrl } = (await started.json()) as { claimUrl: string };
+    expect(claimUrl).toMatch(/\/profile\/ai\/claims\/[0-9a-f-]{36}$/);
+    const claimId = claimIdOf(claimUrl);
+    expect(await ownerOf(loose)).toBeNull(); // asking changes nothing
+
+    // Opening the page claims nothing; a key never claims; signed out is 401.
+    as(null, "session");
+    expect((await claimView(req(`http://localhost/api/v1/profile/ai/claims/${claimId}`), idCtx(claimId))).status).toBe(401);
+    as(loose, "bearer");
+    expect((await claimComplete(req(`http://localhost/api/v1/profile/ai/claims/${claimId}`, { method: "POST" }), idCtx(claimId))).status).toBe(401);
+    expect(
+      (await claimComplete(req(`http://localhost/api/v1/profile/ai/claims/${claimId}`, { method: "POST", headers: { authorization: "Bearer cogni_ag_sk_v1_x" } }), idCtx(claimId))).status
+    ).toBe(403);
+    as(owner, "session");
+    const view = await claimView(req(`http://localhost/api/v1/profile/ai/claims/${claimId}`), idCtx(claimId));
+    expect(await view.json()).toMatchObject({ claimId, agentName: "Loose bot", state: "open" });
+    expect(await ownerOf(loose)).toBeNull();
+
+    // The owner clicks Claim. Same principal, the owner set once; a second click is "used".
+    const click = await claimComplete(req(`http://localhost/api/v1/profile/ai/claims/${claimId}`, { method: "POST" }), idCtx(claimId));
+    expect(click.status).toBe(200);
+    expect(await click.json()).toEqual({ claimed: true });
+    expect(await ownerOf(loose)).toBe(owner);
+    expect((await service`SELECT count(*)::int AS n FROM agent_principals WHERE user_id = ${loose}`)[0]?.n).toBe(1);
+    as(other, "session");
+    const again = await claimComplete(req(`http://localhost/api/v1/profile/ai/claims/${claimId}`, { method: "POST" }), idCtx(claimId));
+    expect(again.status).toBe(409);
+    expect(await again.json()).toEqual({ error: "claim_used" });
+    expect(await ownerOf(loose)).toBe(owner);
+    as(loose, "bearer");
+    expect((await claimStart(req("http://localhost/api/v1/agent/claim", { method: "POST" }), undefined as never)).status).toBe(409); // already owned
+
+    // Now owned: its delegable ask goes to its new owner's profile.
+    const personal = await asked("knowledge:read");
+    expect(personal.path).toBe(`/profile/ai/requests/${personal.id}`);
+    as(owner, "session");
+    expect((await ownerDecide(personal.id, "deny")).status).toBe(200);
+  });
+
+  it("claim limits: expired link 410; an agent never owns (by SQL, not only the route); 25 agents per person", async () => {
+    const spawn = createPostgresSpawnStore(service as unknown as CredentialSql);
+    const stray = await mkAgent("Stray bot", null);
+    const a = await startAgentClaim(spawn, { agentUserId: stray });
+    if (!a.ok) throw new Error("start");
+    await service`UPDATE agent_claims SET expires_at = now() - interval '1 second' WHERE id = ${a.claimId}::uuid`;
+    as(owner, "session");
+    expect((await claimComplete(req("http://localhost/x", { method: "POST" }), idCtx(a.claimId))).status).toBe(410);
+    expect(await ownerOf(stray)).toBeNull();
+
+    const b = await startAgentClaim(spawn, { agentUserId: stray });
+    if (!b.ok) throw new Error("start");
+    expect(await completeAgentClaim(spawn, { claimId: b.claimId, ownerUserId: otherAgent })).toEqual({ ok: false, reason: "owner_is_agent" });
+    expect(await completeAgentClaim(spawn, { claimId: b.claimId, ownerUserId: stray })).toEqual({ ok: false, reason: "owner_is_agent" });
+    expect(await ownerOf(stray)).toBeNull();
+
+    // 25 agents per person.
+    const full = await mkUser("Full Owner");
+    for (let i = 0; i < MAX_OWNED_AGENTS; i += 1) await mkAgent(`owned-${i}`, full);
+    expect(await completeAgentClaim(spawn, { claimId: b.claimId, ownerUserId: full })).toEqual({ ok: false, reason: "too_many_agents" });
+    expect(await ownerOf(stray)).toBeNull();
+    expect(await completeAgentClaim(spawn, { claimId: b.claimId, ownerUserId: other })).toEqual({ ok: true, agentUserId: stray });
+    expect(await ownerOf(stray)).toBe(other);
   });
 });

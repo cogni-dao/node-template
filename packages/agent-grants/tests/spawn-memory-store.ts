@@ -1,7 +1,18 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
-import type { CredentialPolicy, CredentialStore, GrantState, OwnedAgent, RedeemResult, SpawnStore } from "../src/credentials";
+import {
+  type ClaimView,
+  type CompleteClaimResult,
+  type CredentialPolicy,
+  type CredentialStore,
+  type GrantState,
+  MAX_OWNED_AGENTS,
+  type OwnedAgent,
+  type RedeemResult,
+  type SpawnStore,
+  type StartClaimResult,
+} from "../src/credentials";
 
 interface Grant {
   issuer: string;
@@ -22,13 +33,15 @@ interface Key {
  * In-memory spawn store with the same semantics as the Postgres adapter's SQL: one clock (the "database" clock), the pending cap at issue, the
  * one-use redeem with its idempotent retry, owner-scoped reads. The component test (`app/tests/component/db/agent-spawn.int.test.ts`) runs the real SQL.
  */
-export function memorySpawnStore(init: { users: Record<string, { agent?: boolean }>; failing?: boolean }) {
+export function memorySpawnStore(init: { users: Record<string, { agent?: boolean; wallet?: boolean }>; internal?: string[]; failing?: boolean }) {
   const clock = { now: Date.parse("2026-11-12T12:00:00Z") };
   const grants: Grant[] = [];
   const keys: Key[] = [];
   const names = new Map<string, string>();
   const owners = new Map<string, string | null>(); // agent user id -> owner
   const createdAt = new Map<string, number>();
+  const internals = new Set(init.internal ?? []);
+  const claims: Array<{ id: string; agent: string; expiresAt: number; claimedBy: string | null }> = [];
   const outage = { failing: init.failing ?? false };
   let seq = 0;
   const guard = () => {
@@ -74,12 +87,47 @@ export function memorySpawnStore(init: { users: Record<string, { agent?: boolean
         const key = newKey(agent, keyHash);
         return { ok: true, userId: agent, ownerUserId: g.issuer, credentialId: key.id, pendingExpiresAt: new Date(clock.now + 900_000).toISOString(), retry: true };
       }
+      if ([...owners.values()].filter((o) => o === g.issuer).length >= MAX_OWNED_AGENTS) return { ok: false, reason: "too_many_agents" };
       names.set(newUserId, name);
       owners.set(newUserId, g.issuer);
       createdAt.set(newUserId, clock.now);
       const key = newKey(newUserId, keyHash);
       g.redeemedUserId = newUserId;
       return { ok: true, userId: newUserId, ownerUserId: g.issuer, credentialId: key.id, pendingExpiresAt: new Date(clock.now + 900_000).toISOString(), retry: false };
+    },
+    async startClaim({ agentUserId, ttlSec }): Promise<StartClaimResult> {
+      guard();
+      const known = init.users[agentUserId];
+      if (!known || known.wallet || internals.has(agentUserId)) return { ok: false, reason: "not_an_agent" };
+      if (owners.get(agentUserId)) return { ok: false, reason: "already_owned" };
+      for (const c of claims) if (c.agent === agentUserId && c.claimedBy === null && c.expiresAt > clock.now) c.expiresAt = clock.now;
+      const c = { id: `00000000-0000-4000-8000-${String(claims.length + 1).padStart(12, "0")}`, agent: agentUserId, expiresAt: clock.now + ttlSec * 1000, claimedBy: null };
+      claims.push(c);
+      return { ok: true, claimId: c.id, expiresAt: new Date(c.expiresAt).toISOString() };
+    },
+    async getClaim(claimId): Promise<ClaimView | null> {
+      guard();
+      const c = claims.find((x) => x.id === claimId);
+      if (!c) return null;
+      return {
+        claimId: c.id,
+        agentName: names.get(c.agent) ?? c.agent,
+        state: c.claimedBy ? "claimed" : c.expiresAt <= clock.now ? "expired" : owners.get(c.agent) ? "owned" : "open",
+        expiresAt: new Date(c.expiresAt).toISOString(),
+      };
+    },
+    async completeClaim({ claimId, ownerUserId, maxOwned }): Promise<CompleteClaimResult> {
+      guard();
+      const c = claims.find((x) => x.id === claimId);
+      if (!c) return { ok: false, reason: "unknown" };
+      if (c.claimedBy) return { ok: false, reason: "used" };
+      if (c.expiresAt <= clock.now) return { ok: false, reason: "expired" };
+      if (ownerUserId === c.agent || init.users[ownerUserId]?.agent || owners.has(ownerUserId) || internals.has(ownerUserId)) return { ok: false, reason: "owner_is_agent" };
+      if ([...owners.values()].filter((o) => o === ownerUserId).length >= maxOwned) return { ok: false, reason: "too_many_agents" };
+      if (owners.get(c.agent)) return { ok: false, reason: "already_owned" };
+      owners.set(c.agent, ownerUserId);
+      c.claimedBy = ownerUserId;
+      return { ok: true, agentUserId: c.agent };
     },
     async listOwned(ownerUserId): Promise<OwnedAgent[]> {
       guard();

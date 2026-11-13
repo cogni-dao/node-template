@@ -55,7 +55,7 @@ export const agentRolesListOperation = {
     canManage: z.boolean(),
     permissions: z.array(
       z.object({
-        section: z.enum(["pending", "node", "outside"]),
+        section: z.enum(["pending", "node", "outside", "personal"]),
         principalUserId: z.string(),
         who: z.string(),
         outside: z.boolean(),

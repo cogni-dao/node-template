@@ -11,13 +11,16 @@
  */
 
 /**
- * Where a tool's authority lives. `own` data also needs a subject. `account` data is read through `authorizeAccount()`, not
- * `authorize()`: `authorize()` denies any `account` tool with `policy_denied`.
+ * Where a tool's authority lives. `own` data also needs a subject. `account` is reserved: account data is read through a separate door, not
+ * `authorize()`, so `authorize()` denies any `account` tool with `policy_denied`.
  */
 export type ScopeKind = "node" | "own" | "account";
 
-/** A scope kind a person decides for their own agent (not a node scope). */
-export type PersonalScopeKind = "own" | "account";
+/**
+ * The kind of a PERSONAL grant row, the one the person who owns the agent decides: `delegated` = a scope on the delegable list that any signed-in member
+ * may already use, which the owner lets their agent use. A node row (`node`) is an admin's.
+ */
+export type PersonalScopeKind = "delegated";
 
 /**
  * The resource a grant row is about. `node` rows are an admin's decision. A personal row names the person who owns the agent and decides it
@@ -54,7 +57,12 @@ export interface RunIdentity {
 export type DenialCode = "policy_denied" | "authz_unavailable";
 
 export type AuthzDecision =
-  | { readonly decision: "allow"; readonly basis: string }
+  | {
+      readonly decision: "allow";
+      readonly basis: string;
+      /** Set when the allow came from a personal grant: the person who approved it for their agent (shown in the log; the agent stays the principal). */
+      readonly owner?: string;
+    }
   | {
       readonly decision: "deny";
       readonly code: DenialCode;
@@ -66,12 +74,46 @@ export type AuthzDecision =
  */
 export type RoleState = "pending" | "granted" | "denied" | "revoked";
 
-/** One of the agent's own rows. `accountId` is set only on a live account grant: the account the owner opened to it. */
+/** One of the agent's own rows. */
 export interface OwnRoleRow {
   readonly scope: string;
   readonly state: RoleState;
   readonly at: string;
-  readonly accountId?: string;
+  /** The path of this ask's own approval page (`/profile/ai/requests/<id>` for a personal row, `/admin/ai-access/requests/<id>` for a node row). Set on a live ask or grant. */
+  readonly approvalPath?: string;
+}
+
+/** What one grant row is, for its approval page. The human reads names; the ids are handles the page's click sends back. */
+export interface RequestRecord {
+  readonly id: string;
+  readonly principalUserId: string;
+  /** The agent's registered name (its slug for this node's AI), or null. */
+  readonly agentName: string | null;
+  readonly internal: boolean;
+  /** The person who owns the agent, or null (an ownerless agent, or this node's own AI). */
+  readonly ownerUserId: string | null;
+  readonly ownerName: string | null;
+  readonly scope: string;
+  readonly resourceKind: "node" | PersonalScopeKind;
+  /** `ended` = approved, not revoked, and past its end. */
+  readonly state: "pending" | "granted" | "denied" | "revoked" | "ended";
+  readonly expiresAt: string | null;
+  readonly at: string;
+}
+
+/** The body of one approval page. Only this request. */
+export interface RequestView {
+  readonly requestId: string;
+  readonly principalUserId: string;
+  readonly scope: string;
+  /** The agent, by its identifier. */
+  readonly who: string;
+  /** The owner's name, or null when the agent has none. */
+  readonly owner: string | null;
+  readonly label: string;
+  readonly description: string;
+  readonly state: RequestRecord["state"];
+  readonly until: string | null;
 }
 
 /** One personal row for the owner's "Your AIs" block: an ask waiting (`pending`) or a live grant (`granted`). */
@@ -99,6 +141,12 @@ export interface RoleRow {
   readonly scope: string;
   readonly state: "pending" | "granted";
   readonly at: string;
+  /** True for a personal row (the owner's delegation). The admin sees it read-only, with Revoke (the kill switch). */
+  readonly personal?: boolean;
+  /** When a personal grant ends (ISO). */
+  readonly until?: string | null;
+  /** The owner of a personal row, by name. */
+  readonly ownerName?: string | null;
 }
 
 /**
@@ -115,6 +163,15 @@ export interface AgentGrantsStore {
   hasLiveRole(principalId: string, scope: string, resource?: GrantResource): Promise<boolean>;
   /** The subset of `scopes` this principal holds a live role for, in ONE read. Never cached. */
   liveScopes(principalId: string, scopes: readonly string[]): Promise<string[]>;
+  /**
+   * The owner decides ONE personal ask by its id, in ONE atomic UPDATE: the row is this id AND still pending AND owned by the decider AND on the delegable list AND
+   * its agent still belongs to the decider. Approve sets the approver (the owner) and the end (database clock); deny ends the ask. False when nothing matched.
+   */
+  decideRequest(input: { requestId: string; deciderUserId: string; decision: "approve" | "deny"; ttlDays?: number }): Promise<boolean>;
+  /** One grant row by id (any kind, any state), or null. A malformed id is null. */
+  getRequest(id: string): Promise<RequestRecord | null>;
+  /** The agent's open (not revoked) row for this scope: its id and kind, for the ask's approval URL. Null when none. */
+  openRequest(principalUserId: string, scope: string): Promise<{ id: string; resourceKind: "node" | PersonalScopeKind } | null>;
   /** The seeded user id of an internal principal slug, else null. */
   findInternalPrincipal(slug: string): Promise<{ userId: string } | null>;
   /** Every internal principal (user id and slug). The slug is its name. */
@@ -164,8 +221,6 @@ export interface AgentGrantsStore {
   revokeRole(input: { principalUserId: string; scope: string; resource?: GrantResource }): Promise<boolean>;
   /** The person who owns this agent (`agent_principals.owner_user_id`), or null for an ownerless or unknown agent. */
   agentOwner(principalUserId: string): Promise<string | null>;
-  /** The person who owns this billing account, or null when it does not exist. `accountId` must be a UUID. */
-  accountOwner(accountId: string): Promise<string | null>;
   /** The personal rows (asks waiting and live grants) of the agents this person owns. Ended and revoked rows are left out. Never cached. */
   listPersonalRows(ownerUserId: string): Promise<PersonalRow[]>;
 }
@@ -185,10 +240,12 @@ export interface AuthzEvent {
   readonly runId: string | null;
   /** The route id when the decision came from a route (SAME_DOOR), else absent. */
   readonly route?: string | null;
+  /** The owner who approved a personal grant behind an allow, else absent. */
+  readonly owner?: string | null;
 }
 
 /** Which block of the one admin table a row belongs to. */
-export type AccessSection = "pending" | "node" | "outside";
+export type AccessSection = "pending" | "node" | "outside" | "personal";
 
 /**
  * One row of the admin table = one grant row: who, what they can do, until when, on or off.

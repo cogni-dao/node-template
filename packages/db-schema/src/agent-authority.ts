@@ -11,15 +11,17 @@
  *     (a trigger in the migration enforces it).
  *   - ROLE_ROWS_ARE_SOFT_REVOKED: a role row is never deleted; `revoked_at` ends it. One live row per (principal, scope).
  *   - ONE_GRANT_ROW: a node permission and a person's own grant are the same row shape. `resource_kind` says which: `node` (an admin
- *     decides; `owner_user_id` is null) or `own` / `account` (the person who owns the agent decides; `owner_user_id` is that person).
+ *     decides; `owner_user_id` is null) or `delegated` (the person who owns the agent lets it use a scope on the delegable list, `knowledge:read` and `knowledge:contribute`).
+ *     A personal row names its owner in `owner_user_id`; the owner decides. A CHECK keeps a personal row to the delegable list.
  *   - PERSONAL_GRANT_IS_THE_OWNERS_AND_ENDS: a personal row is approved only by its owner (never by the agent) and always has an `expires_at`.
  *     Node rows have none in v0. Both are CHECK constraints, so no code path can write around them.
  *   - TOKEN_HASH_ONLY / STATE_IS_DERIVED: `agent_credentials` stores sha256 of the key and timestamps only; state (pending, active,
  *     renew_only, expired, revoked) is derived by the SQL function `agent_credential_state` (migration), never stored.
- *   - SERVICE_ROLE_ONLY_WRITES: `agent_credentials` and `agent_roles` have ENABLE + FORCE RLS and are written only by a BYPASSRLS service
- *     connection. `agent_credentials` has no policy (deny-all for the app role). `agent_roles` has ONE select policy (hand-written in the migration):
- *     an agent reads its OWN personal rows, so the `agent_has_scope` RLS function can see its grant. Node rows stay deny-all for the app role.
- *     `agent_principals` is readable by every role (its select policy). FORCE is added by hand in the migration.
+ *   - SERVICE_ROLE_ONLY_WRITES: `agent_credentials`, `agent_roles` and `agent_claims` have ENABLE + FORCE RLS and no policy (deny-all for the app role).
+ *     `agent_principals` is readable by every role (its select policy) and writable only by a BYPASSRLS service
+ *     connection. FORCE is added by hand in the migration.
+ *   - CLAIM_IS_AGENT_INITIATED: `agent_claims` holds a claim an EXISTING agent started with its own key (15 minutes, single use, bound to that agent). A signed-in person's click sets
+ *     `agent_principals.owner_user_id` once, only where it is NULL. No secret travels through a human.
  *   - OWNER_IS_THE_ISSUER: an `external` principal made from a spawn grant stores the person who issued that grant in `owner_user_id`.
  *     A principal with no owner (anonymous registration, or an agent that predates ownership) is ownerless. An internal principal never has an owner.
  *   - SPAWN_GRANT_HASH_ONLY: `agent_spawn_grants` stores sha256 of the one-time grant and timestamps. It has ENABLE + FORCE RLS and no policy
@@ -113,7 +115,7 @@ export const agentRoles = pgTable(
       .notNull()
       .defaultNow(),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
-    /** `node` (default; every row before personal grants), or a person's own: `own` | `account`. */
+    /** `node` (default; every row before personal grants), or `delegated`: an owner's grant of a delegable scope to their agent. */
     resourceKind: text("resource_kind").notNull().default("node"),
     /** The person who owns the agent and decides a personal row. Null for a node row. */
     ownerUserId: text("owner_user_id").references(() => users.id),
@@ -123,7 +125,7 @@ export const agentRoles = pgTable(
   (table) => [
     check(
       "agent_roles_resource_kind_canonical",
-      sql`${table.resourceKind} IN ('node','own','account')`
+      sql`${table.resourceKind} IN ('node','delegated')`
     ),
     check(
       "agent_roles_owner_shape",
@@ -132,6 +134,10 @@ export const agentRoles = pgTable(
     check(
       "agent_roles_personal_approver",
       sql`${table.resourceKind} = 'node' OR ${table.approvedBy} IS NULL OR (${table.approvedBy} = ${table.ownerUserId} AND ${table.approvedBy} <> ${table.principalUserId} AND ${table.expiresAt} IS NOT NULL)`
+    ),
+    check(
+      "agent_roles_personal_scope_delegable",
+      sql`${table.resourceKind} = 'node' OR ${table.scope} IN ('knowledge:read','knowledge:contribute')`
     ),
     uniqueIndex("agent_roles_live_unique")
       .on(table.principalUserId, table.scope)
@@ -219,5 +225,34 @@ export const agentSpawnGrants = pgTable(
     ),
     uniqueIndex("agent_spawn_grants_token_hash_unique").on(table.tokenHash),
     index("agent_spawn_grants_issuer_idx").on(table.issuerUserId),
+  ]
+).enableRLS();
+
+/**
+ * One claim: an EXISTING agent asked to become some person's, with its own key. The claim id is the path of the page the person opens (`/profile/ai/claims/<id>`).
+ * Open = `claimed_at IS NULL` and `expires_at > now()`. Single use: the person's click sets `claimed_at` and `claimed_by` together, in the same transaction that sets the owner.
+ */
+export const agentClaims = pgTable(
+  "agent_claims",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    agentUserId: text("agent_user_id")
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    claimedAt: timestamp("claimed_at", { withTimezone: true }),
+    claimedBy: text("claimed_by").references(() => users.id),
+  },
+  (table) => [
+    check(
+      "agent_claims_claimed_together",
+      sql`(${table.claimedAt} IS NULL) = (${table.claimedBy} IS NULL)`
+    ),
+    check(
+      "agent_claims_claimant_not_agent",
+      sql`${table.claimedBy} IS NULL OR ${table.claimedBy} <> ${table.agentUserId}`
+    ),
+    index("agent_claims_agent_idx").on(table.agentUserId),
   ]
 ).enableRLS();

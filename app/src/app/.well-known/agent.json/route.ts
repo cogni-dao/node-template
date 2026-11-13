@@ -37,6 +37,7 @@ import {
 	confirmAgentCredentialOperation,
 	knowledgeHistoryOperation,
 	registerAgentOperation,
+	agentClaimStartOperation,
 	revokeAgentCredentialOperation,
 	rotateAgentCredentialOperation,
 	upgradeAgentCredentialOperation,
@@ -114,13 +115,11 @@ export async function GET(request: Request) {
 			workItemClaims: `${origin}/api/v1/work/items/{id}/claims`,
 			workItemHeartbeat: `${origin}/api/v1/work/items/{id}/heartbeat`,
 			workItemCoordination: `${origin}/api/v1/work/items/{id}/coordination`,
-			// An account's credit balance: yours, or your owner's once they turn the account:read permission On (the account id is in your access list).
-			accountCredits: `${origin}/api/v1/accounts/{accountId}/credits`,
 		},
 		// Scopes an outside agent can ask for (requestPermission). Derived from the declarations, not listed here.
 		permissions,
 		permissionsHow:
-			"Ask with requestPermission; a node admin turns it On on the profile page.",
+			"Ask with requestPermission. The answer carries approvalUrl: hand that link to the person who decides (your owner for knowledge:read and knowledge:contribute, otherwise a node admin).",
 		actions: {
 			register: {
 				method: "POST",
@@ -136,6 +135,14 @@ export async function GET(request: Request) {
 				auth: { type: "bearer" },
 				inputSchema: z.toJSONSchema(z.strictObject({})),
 				outputSchema: z.toJSONSchema(upgradeAgentCredentialOperation.output),
+			},
+			claimOwner: {
+				method: "POST",
+				endpoint: `${origin}/api/v1/agent/claim`,
+				auth: { type: "bearer" },
+				note: "An existing agent with no owner asks to become a person's. The answer is claimUrl: hand it to that person. They open it and click Claim. Nothing secret passes through them.",
+				inputSchema: z.toJSONSchema(z.strictObject({})),
+				outputSchema: z.toJSONSchema(agentClaimStartOperation.output),
 			},
 			confirmCredential: {
 				method: "POST",
