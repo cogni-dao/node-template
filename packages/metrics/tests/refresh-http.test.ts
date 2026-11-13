@@ -79,6 +79,33 @@ describe("refresh tick core", () => {
 		).toMatchObject({ status: 400, body: { error: "grant_required" } });
 		expect(p.receipts.checkIdempotency).not.toHaveBeenCalled();
 	});
+	it("never reads the body before the bearer and key pass", async () => {
+		const p = ports();
+		const readBody = vi.fn(async () => grant);
+		await handleRefreshTick(p.value, input({ authorized: false, readBody }));
+		await handleRefreshTick(p.value, input({ idempotencyKey: null, readBody }));
+		expect(readBody).not.toHaveBeenCalled();
+	});
+	it("holds a raced receipt as pending and rethrows when the race was not a receipt", async () => {
+		const p = ports();
+		p.receipts.createPendingRequest.mockRejectedValue(new Error("unique"));
+		p.receipts.checkIdempotency
+			.mockResolvedValueOnce({ status: "new" })
+			.mockResolvedValueOnce({ status: "pending" } as never);
+		expect(await handleRefreshTick(p.value, input())).toMatchObject({
+			status: 409,
+			body: { error: "dispatch_pending" },
+		});
+		const q = ports();
+		q.receipts.createPendingRequest.mockRejectedValue(new Error("db down"));
+		await expect(handleRefreshTick(q.value, input())).rejects.toThrow("db down");
+		expect(q.run).not.toHaveBeenCalled();
+	});
+	it("takes the receipt path when metrics are not configured", async () => {
+		const p = ports();
+		await handleRefreshTick({ ...p.value, service: undefined }, input());
+		expect(p.run).toHaveBeenCalledTimes(1);
+	});
 	it("answers an idle tick with no receipt and no run", async () => {
 		const p = ports();
 		const r = await handleRefreshTick(

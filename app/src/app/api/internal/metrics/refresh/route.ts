@@ -19,11 +19,15 @@ export const dynamic = "force-dynamic";
 export const POST = wrapRouteHandlerWithLogging(
 	{ routeId: "metrics.refresh.internal", auth: { mode: "none" } },
 	async (ctx, request) => {
-		const container = getContainer();
+		// Getters: the container is touched only after the request is authorized.
 		const result = await handleRefreshTick(
 			{
-				service: container.goalMetrics,
-				receipts: container.executionRequestPort,
+				get service() {
+					return getContainer().goalMetrics;
+				},
+				get receipts() {
+					return getContainer().executionRequestPort;
+				},
 				run: runMetricsRefresh,
 			},
 			{
