@@ -39,6 +39,8 @@ export const agentAccessRequestListOperation = {
         scope: z.string(),
         state: agentAccessRequestStateSchema,
         at: z.string(),
+        /** Set only on a live account permission: the account its owner opened to this agent. Use it as the path of the read. */
+        accountId: z.string().optional(),
       })
     ),
   }),

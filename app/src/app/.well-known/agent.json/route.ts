@@ -114,6 +114,8 @@ export async function GET(request: Request) {
 			workItemClaims: `${origin}/api/v1/work/items/{id}/claims`,
 			workItemHeartbeat: `${origin}/api/v1/work/items/{id}/heartbeat`,
 			workItemCoordination: `${origin}/api/v1/work/items/{id}/coordination`,
+			// An account's credit balance: yours, or your owner's once they turn the account:read permission On (the account id is in your access list).
+			accountCredits: `${origin}/api/v1/accounts/{accountId}/credits`,
 		},
 		// Scopes an outside agent can ask for (requestPermission). Derived from the declarations, not listed here.
 		permissions,

@@ -12,6 +12,7 @@
  *     Add click, in a field the person copies from, and is dropped from memory when they dismiss it or leave.
  *   - Revoke never asks (page rule). Plain `fetch` with `no-store` and the browser session only: no Authorization header.
  *   - A bad or missing answer shows a plain notice and never throws.
+ *   - What an AI asks to do with the person's own data (their personal permissions) is `YourAiAccess`, below the list. Still no node permission here.
  * Side-effects: IO (fetch to /api/v1/profile/ai and /api/v1/profile/ai/revoke)
  * Links: src/app/api/v1/profile/ai/route.ts, https://cognidao.org/knowledge/node-capability-grants-standard
  * @public
@@ -23,6 +24,8 @@ import type { ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
 
 import { Button } from "@/components";
+
+import { YourAiAccess } from "./YourAiAccess";
 
 interface OwnedAi {
   agentId: string;
@@ -192,6 +195,8 @@ export function YourAis(): ReactElement {
       )}
 
       {notice && <p className="pt-2 text-destructive text-sm">{notice}</p>}
+
+      <YourAiAccess />
 
       <div className="pt-3">
         <Button variant="outline" disabled={busy !== null || grantsLeft === 0} onClick={() => void add()}>

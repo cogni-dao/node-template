@@ -19,6 +19,7 @@
  */
 
 import { authorize } from "./authorize";
+import { PERSONAL_GRANT_TTL_DAYS } from "./roles";
 import type {
   AdminCheck,
   AgentGrantsStore,
@@ -73,6 +74,18 @@ export const ROUTE_ONLY_CAPABILITIES: Readonly<
       "knowledge.domains.list",
       "knowledge.domains.get",
     ],
+  },
+  // ACCOUNT data, not a node scope: the door is `authorizeAccount()` (the owner, or a live personal grant the owner approved), called by the route itself.
+  // The kind (`account`) tells the ask door to write a personal row owned by the agent's owner. An admin never grants it.
+  "account.read": {
+    requires: {
+      scope: "account:read",
+      kind: "account",
+      subject: "member",
+      label: "Read your account balance",
+      description: `See the credit balance of your account. An AI you made can read it only after you turn this on, and the access ends after ${PERSONAL_GRANT_TTL_DAYS} days.`,
+    },
+    routes: ["accounts.credits.read"],
   },
   "knowledge.contribute": {
     requires: {

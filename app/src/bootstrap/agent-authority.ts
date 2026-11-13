@@ -13,6 +13,8 @@
  *   - AGENTS_HOLD_NO_WALLET (a payout guard, not an authority rule): an agent user has no wallet binding, so today it fails `adminCheck`.
  *     Admin is any principal the DAO approves (AUTHORITY_IS_NOT_KIND); an approved AI identity is item I2, so none passes yet.
  *   - DECLARED_SCOPES_FROM_CONTRACTS: the scopes a role may name are exactly those the node's tool contracts declare.
+ *   - TWO_DOORS: `authorizeRoute` (tool authority, `authorize()`) and `authorizeAccount` (account data, `authorizeAccount()`). A personal scope (kind `own` or
+ *     `account`) is turned On and Off only by the person who owns the agent (`turnPersonalOn`, `turnPersonalOff`); `grantRole` (the admin) refuses it.
  *   - NO_SECRETS_IN_LOGS: `agent_tool.authz` carries ids, tool, decision and code only.
  * Side-effects: IO (service-role database reads and writes)
  * Links: packages/agent-grants, https://cognidao.org/knowledge/node-capability-grants-standard
@@ -20,10 +22,15 @@
  */
 
 import {
+  type AccountAccess,
   type AdminCheck,
   agentNameKey,
   type AuthzDecision,
+  authorizeAccount,
   authorizeCaller,
+  buildYourAisView,
+  grantPersonal,
+  revokePersonal,
   ROUTE_ONLY_CAPABILITIES,
   type AuthzEvent,
   createPostgresAgentGrantsStore,
@@ -34,13 +41,14 @@ import {
   listOwnAccess,
   type PrincipalRef,
   requestAccess,
-  type RoleState,
   type NodeAiPermissionView,
+  type OwnRoleRow,
   resolveInternalPrincipal,
   revokeRole,
   type SqlTag,
   type ToolRequires,
   type WithStore,
+  type YourAiPermissionView,
 } from "@cogni/agent-grants";
 import type { CatalogBoundTool } from "@cogni/ai-tools";
 import { LANGGRAPH_CATALOG } from "@cogni/langgraph-graphs";
@@ -83,8 +91,26 @@ export interface AgentToolAuthority {
    * registration so an outside agent cannot take a name that looks like this node's AI on the screen where an admin says yes.
    */
   nameTaken(name: string): Promise<boolean>;
-  /** The agent's own rows by state. */
-  listOwnAccess(principalUserId: string): Promise<Array<{ scope: string; state: RoleState; at: string }>>;
+  /** The agent's own rows by state. A live account permission also names the account its owner opened to it. */
+  listOwnAccess(principalUserId: string): Promise<OwnRoleRow[]>;
+  /**
+   * ACCOUNT door (the second of the two): may this caller read this account under this capability's scope? The owner, or an AI the owner approved for it.
+   * `capabilityId` is a route-only capability of kind `account`. Every denial is the same `not_found` (non-disclosing); a store outage is `authz_unavailable`.
+   * Logs `agent_tool.authz` with the route id.
+   */
+  authorizeAccount(input: {
+    capabilityId: string;
+    routeId: string;
+    userId: string;
+    via: "bearer" | "session";
+    accountId: string;
+  }): Promise<{ ok: true; accessKind: AccountAccess["accessKind"] } | { ok: false; code: "not_found" | "authz_unavailable" }>;
+  /** The person's own AIs' asks and live grants (personal rows only; node rows are Admin's). */
+  listYourAis(ownerUserId: string): Promise<YourAiPermissionView[]>;
+  /** The owner turns a personal row ON: approves their own AI's ask. Throws AgentRolesError (`principal_not_found` for an AI that is not theirs). */
+  turnPersonalOn(input: { ownerUserId: string; principalUserId: string; scope: string }): Promise<{ principalUserId: string; created: boolean }>;
+  /** The owner turns a personal row OFF (revoke), or dismisses an ask (`deny`). */
+  turnPersonalOff(input: { ownerUserId: string; principalUserId: string; scope: string; deny?: boolean }): Promise<{ principalUserId: string; changed: boolean }>;
   /**
    * The admin table: one row per grant row, in three blocks. Name and description come from the declarations only.
    * Outside rows are bounded (`MAX_ADMIN_OUTSIDE_ROWS`); `more` counts the ones cut.
@@ -145,7 +171,7 @@ export function createAgentToolAuthority(deps: {
 }): AgentToolAuthority {
   const requiresById = buildRequiresById(deps.toolBundle);
   // Declared once, shown everywhere: one derivation feeds the role routes, the ask door and agent discovery.
-  const { declarations, declaredScopes, askableScopes } =
+  const { declarations, declaredScopes, askableScopes, scopeKinds, personalScopes } =
     buildPermissionCatalog(requiresById);
   const adminCheck = createAdminCheck(deps.sql, deps.nodeAdmin);
 
@@ -213,9 +239,74 @@ export function createAgentToolAuthority(deps: {
       });
       return decision;
     },
+    async authorizeAccount({ capabilityId, routeId, userId, via, accountId }) {
+      const requires = ROUTE_ONLY_CAPABILITIES[capabilityId]?.requires;
+      let outcome: Awaited<ReturnType<AgentToolAuthority["authorizeAccount"]>>;
+      let reason = "no_requires";
+      if (!requires || requires.kind !== "account") {
+        outcome = { ok: false, code: "not_found" };
+      } else {
+        try {
+          const access = await withStore((store) =>
+            authorizeAccount(store, { userId, via, accountId, scope: requires.scope })
+          );
+          outcome = access ? { ok: true, accessKind: access.accessKind } : { ok: false, code: "not_found" };
+          reason = access ? (access.accessKind === "owner" ? "owner" : "personal_grant") : "no_access";
+        } catch {
+          outcome = { ok: false, code: "authz_unavailable" };
+          reason = "store_unavailable";
+        }
+      }
+      onDecision({
+        principal: via === "bearer" ? userId : null,
+        subject: via === "session" ? userId : null,
+        payer: null,
+        tool: capabilityId,
+        decision: outcome.ok ? "allow" : "deny",
+        code: outcome.ok ? "allowed" : outcome.code === "authz_unavailable" ? "authz_unavailable" : "policy_denied",
+        reason,
+        runId: null,
+        route: routeId,
+      });
+      return outcome;
+    },
+    listYourAis: (ownerUserId) =>
+      withStore(async (store) =>
+        buildYourAisView({ declarations, rows: await store.listPersonalRows(ownerUserId) })
+      ),
+    async turnPersonalOn(input) {
+      const result = await withStore((store) => grantPersonal(store, { ...input, scopeKinds }));
+      if (result.created)
+        deps.log.info(
+          {
+            event: EVENT_NAMES.AGENT_ROLE_GRANTED,
+            principalUserId: result.principalUserId,
+            scope: input.scope,
+            approvedBy: input.ownerUserId,
+            resource: "personal",
+          },
+          EVENT_NAMES.AGENT_ROLE_GRANTED
+        );
+      return result;
+    },
+    async turnPersonalOff(input) {
+      const result = await withStore((store) => revokePersonal(store, { ...input, scopeKinds }));
+      if (result.changed)
+        deps.log.info(
+          {
+            event: input.deny ? EVENT_NAMES.AGENT_ROLE_DENIED : EVENT_NAMES.AGENT_ROLE_REVOKED,
+            principalUserId: result.principalUserId,
+            scope: input.scope,
+            ...(input.deny ? { deniedBy: input.ownerUserId } : { revokedBy: input.ownerUserId }),
+            resource: "personal",
+          },
+          input.deny ? EVENT_NAMES.AGENT_ROLE_DENIED : EVENT_NAMES.AGENT_ROLE_REVOKED
+        );
+      return result;
+    },
     async grantRole(input) {
       const result = await withStore((store) =>
-        grantRole(store, { ...input, declaredScopes })
+        grantRole(store, { ...input, declaredScopes, personalScopes })
       );
       if (result.created)
         deps.log.info(
@@ -273,7 +364,7 @@ export function createAgentToolAuthority(deps: {
     },
     async requestAccess(input) {
       const result = await withStore((store) =>
-        requestAccess(store, { ...input, declaredScopes, askableScopes })
+        requestAccess(store, { ...input, declaredScopes, askableScopes, scopeKinds })
       );
       if (result.created)
         deps.log.info(

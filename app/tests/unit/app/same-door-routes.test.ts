@@ -28,9 +28,25 @@ const DECLARED: Record<string, { routes: readonly string[] }> = {
   ...ROUTE_ONLY_CAPABILITIES,
 };
 
+/** An ACCOUNT capability (kind `account`) is not a node scope: its route calls the account door itself, instead of the wrapper's `sameDoor` option. */
+const isAccountCapability = (tool: string): boolean => ROUTE_ONLY_CAPABILITIES[tool]?.requires.kind === "account";
+
 describe("same-door routes", () => {
   for (const [tool, entry] of Object.entries(DECLARED)) {
     for (const routeId of entry.routes) {
+      if (isAccountCapability(tool)) {
+        it(`${routeId} calls the account door for ${tool}`, () => {
+          const declared = sources.some(
+            (s) =>
+              new RegExp(`routeId:\\s*"${routeId.replace(".", "\\.")}"`).test(s) &&
+              s.includes("authorizeAccount(") &&
+              s.includes(`capabilityId: "${tool}"`) &&
+              !/sameDoor:/.test(s)
+          );
+          expect(declared).toBe(true);
+        });
+        continue;
+      }
       it(`${routeId} declares sameDoor: ${tool}`, () => {
         const declared = sources.some((s) =>
           new RegExp(`routeId:\\s*"${routeId.replace(".", "\\.")}",\\s*sameDoor:\\s*"${tool}"`).test(s)

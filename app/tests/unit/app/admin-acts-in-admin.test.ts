@@ -58,6 +58,15 @@ describe("ADMIN_ACTS_IN_ADMIN", () => {
     expect(importers.map((f) => f.rel).filter((rel) => !ADMIN_DIRS.some((dir) => rel.startsWith(dir)))).toEqual([]);
   });
 
+  it("keeps the person's own profile blocks (Your AIs) free of any Admin import or admin control", () => {
+    const profile = files.filter((f) => f.rel.startsWith("app/(app)/profile/") || f.rel.startsWith("app/api/v1/agent-access/mine/"));
+    expect(profile.length).toBeGreaterThan(1);
+    const offenders = profile
+      .filter((f) => importsOf(f.text).some((i) => /\(admin\)|admin-session|node-admin\.port|agent-access-endpoints|\bAgentAccessSection\b/.test(i)) || /\/api\/v1\/admin\//.test(code(f.text)))
+      .map((f) => f.rel);
+    expect(offenders).toEqual([]);
+  });
+
   it("names NodeAdminPort, AdminSession, nodeAdminPort or the admin-session mint only in the Admin area and the explicit port wiring", () => {
     const outside = outsideAdmin
       .filter((f) => !PORT_WIRING.includes(f.rel))

@@ -9,6 +9,7 @@
  * @public
  */
 
+export { type AccountAccess, authorizeAccount } from "./account";
 export {
   type AuthorizeInput,
   authorize,
@@ -36,18 +37,22 @@ export {
 } from "./same-door";
 export { agentNameKey, hasHiddenCharacters } from "./names";
 export { buildNodeAiView } from "./node-ai";
+export { buildYourAisView } from "./your-ais";
 export { createPostgresAgentGrantsStore, type SqlTag } from "./postgres";
 export {
   AgentRolesError,
   denyRequest,
+  grantPersonal,
   grantRole,
   listOwnAccess,
   MAX_PENDING_PER_AGENT,
   MAX_PENDING_TOTAL,
+  PERSONAL_GRANT_TTL_DAYS,
   type PrincipalRef,
   requestAccess,
   type RolesErrorCode,
   resolveInternalPrincipal,
+  revokePersonal,
   revokeRole,
 } from "./roles";
 export type {
@@ -57,9 +62,13 @@ export type {
   AuthzDecision,
   AuthzEvent,
   DenialCode,
+  GrantResource,
   NodeAiAccessView,
   AccessSection,
   NodeAiPermissionView,
+  OwnRoleRow,
+  PersonalRow,
+  PersonalScopeKind,
   RoleRow,
   RoleState,
   RunIdentity,
@@ -67,4 +76,6 @@ export type {
   SubjectRequirement,
   ToolRequires,
   WithStore,
+  YourAiAccessView,
+  YourAiPermissionView,
 } from "./types";
